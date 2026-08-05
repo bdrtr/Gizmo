@@ -1,6 +1,31 @@
+//! Reynolds-style steering behaviours for agent movement.
+//!
+//! Every behaviour in this module takes the agent's current world position and linear
+//! velocity and returns a *steering vector*: `desired_velocity - current_velocity`, with its
+//! magnitude clamped to `max_force`. Positions and radii are in metres, velocities and
+//! `max_speed` in metres per second.
+//!
+//! Dimensionally the result is therefore a velocity difference (m/s), but callers integrate
+//! it as an acceleration — [`crate::system::ai_navigation_system`] does
+//! `velocity += steering * dt` — so `max_force` acts as a per-agent responsiveness budget in
+//! m/s², not a force in newtons. No mass appears anywhere in this module, and no function
+//! takes `dt`: frame-rate independence is entirely the caller's responsibility.
+//!
+//! None of these functions can return a non-finite vector for degenerate input (agent
+//! standing on its target, empty or entirely out-of-range neighbour lists, a neighbour
+//! exactly coincident with the agent, a zero radius). This is a load-bearing property with a
+//! regression test behind it, because a steering vector feeds straight into velocity
+//! integration where a single NaN corrupts the whole simulation.
+
 use gizmo_math::Vec3;
 
-/// Uygulanacak gücü sınırla (Manevra kabiliyeti için performanslı kare kök limiti)
+/// Limits a steering vector's magnitude to `max_force`, leaving its direction untouched.
+///
+/// Shorter vectors are returned unchanged and the comparison is done on squared lengths, so
+/// there is no square root on the common path. [`Vec3::ZERO`] maps to [`Vec3::ZERO`].
+///
+/// `max_force` is expected to be non-negative; only its square is compared, so a negative
+/// value clamps to `|max_force|` *and flips the vector's direction*.
 #[inline]
 pub fn clamp_force(v: Vec3, max_force: f32) -> Vec3 {
     if v.length_squared() > max_force * max_force {
@@ -10,7 +35,18 @@ pub fn clamp_force(v: Vec3, max_force: f32) -> Vec3 {
     }
 }
 
-/// Bir objeyi hedef vektörüne doğru yönlendiren kuvveti hesaplar (Seek Steering)
+/// Steers the agent straight at `target_pos` at full speed.
+///
+/// Returns `normalize(target_pos - current_pos) * max_speed - current_vel`, clamped to
+/// `max_force`.
+///
+/// Seek has no braking term: the desired speed is `max_speed` however close the target is, so
+/// an agent driven by seek alone overshoots and orbits its destination. Use [`arrive`] when it
+/// has to stop there.
+///
+/// Returns [`Vec3::ZERO`] once the agent is within about 3.5e-4 m of the target (the squared
+/// distance falls below `f32::EPSILON`), which is what keeps the `normalize` from producing a
+/// NaN on a zero-length offset.
 pub fn seek(
     current_pos: Vec3,
     target_pos: Vec3,
@@ -28,7 +64,22 @@ pub fn seek(
     clamp_force(steering, max_force)
 }
 
-/// Hedefe yaklaşınca yavaşlayarak duran Steering (Arrive)
+/// Like [`seek`], but ramps the desired speed down inside `slowing_radius` so the agent
+/// settles on the target instead of overshooting it.
+///
+/// The desired speed is `max_speed * (distance / slowing_radius)` while the agent is closer
+/// than `slowing_radius` metres and `max_speed` outside it; the return value is that desired
+/// velocity minus `current_vel`, clamped to `max_force`. The ramp is linear in distance, not in
+/// time: the requested speed only decays asymptotically toward zero, so the ramp alone never
+/// brings the agent to a full stop — the dead zone below does.
+///
+/// Returns [`Vec3::ZERO`] inside a fixed 0.01 m dead zone around the target. That dead zone is
+/// hard-coded and independent of `slowing_radius`, so it also defines the residual position
+/// error the agent can be left with.
+///
+/// A `slowing_radius` of zero (or negative) is safe rather than a division by zero: the dead
+/// zone check runs first and the `distance < slowing_radius` test then always fails, degrading
+/// the behaviour to plain [`seek`].
 pub fn arrive(
     current_pos: Vec3,
     target_pos: Vec3,
@@ -56,8 +107,25 @@ pub fn arrive(
     clamp_force(steering, max_force)
 }
 
-/// Engellerden kaçınma (Obstacle Avoidance) Steering
-/// `obstacles`: tuple array of `(center_position, avoidance_radius)`
+/// Pushes the agent away from every obstacle whose influence sphere it is currently inside.
+///
+/// `obstacles` is a slice of `(center_world_position, avoidance_radius)` in metres. An entry
+/// contributes only while `0 < distance < avoidance_radius`; obstacles outside their own radius
+/// are ignored, so this is a proximity repulsion and not a predictive avoidance — it never
+/// looks ahead along `current_vel` and cannot steer around an obstacle it has not yet reached.
+///
+/// Each contribution is `(agent - center) / distance²`, i.e. an escape direction of magnitude
+/// `1/distance`, and the contributions of overlapping obstacles are summed. The sum's direction
+/// is then kept while its magnitude is remapped to `min(|sum|, 1) * max_speed`, so the escape
+/// speed grows as the agent closes in and saturates at `max_speed`. Because `|sum|` is measured
+/// in inverse metres, that saturation knee sits at a hard-coded 1 m: a single obstacle closer
+/// than 1 m always yields full `max_speed`, and beyond 1 m the response falls off as
+/// `1/distance`. The behaviour is therefore not scale-invariant — on a world built at a very
+/// different unit scale, tune `max_force` and the radii accordingly.
+///
+/// Returns [`Vec3::ZERO`] when no obstacle is in range. An obstacle whose centre coincides with
+/// the agent (distance at or below `f32::EPSILON`) is skipped instead of dividing by zero, so a
+/// dead-centre overlap produces no escape force at all.
 pub fn avoid_obstacles(
     current_pos: Vec3,
     current_vel: Vec3,
@@ -96,7 +164,18 @@ pub fn avoid_obstacles(
     Vec3::ZERO
 }
 
-/// Grup dinamiği: Bireylerin birbirinden uzaklaşması (Separation)
+/// Flocking separation: pushes the agent away from neighbours that are crowding it.
+///
+/// `neighbors` are world-space positions in metres; only those with
+/// `0 < distance < separation_radius` contribute. The accumulation and remapping are identical
+/// to [`avoid_obstacles`]: each neighbour adds `(agent - neighbour) / distance²`, and the sum is
+/// rescaled to `min(|sum|, 1) * max_speed`, which saturates at full `max_speed` for any single
+/// neighbour closer than 1 m.
+///
+/// Returns [`Vec3::ZERO`] when no neighbour is inside `separation_radius`. Neighbours exactly
+/// coincident with the agent (distance at or below `f32::EPSILON`) are skipped rather than
+/// producing a NaN — two agents spawned at the same point will not push each other apart, so
+/// jitter their spawn positions.
 pub fn separate(
     current_pos: Vec3,
     current_vel: Vec3,
@@ -134,7 +213,15 @@ pub fn separate(
     Vec3::ZERO
 }
 
-/// Grup dinamiği: Bireylerin çevresindeki grupların merkezine gitmesi (Cohesion)
+/// Flocking cohesion: steers the agent toward the centroid of the neighbours around it.
+///
+/// Takes the unweighted mean of the positions in `neighbors` that lie within `cohesion_radius`
+/// metres — distance inside the radius does not change a neighbour's influence — and returns
+/// [`seek`] toward that centroid. Because it delegates to `seek` and not [`arrive`], the agent
+/// approaches the group at full `max_speed` and does not decelerate as it gets there.
+///
+/// Neighbours coincident with the agent (distance at or below `f32::EPSILON`) are excluded from
+/// the mean. Returns [`Vec3::ZERO`] when that leaves no neighbour in range.
 pub fn cohesion(
     current_pos: Vec3,
     current_vel: Vec3,
@@ -163,7 +250,17 @@ pub fn cohesion(
     Vec3::ZERO
 }
 
-/// Grup dinamiği: Bireylerin çevresindeki grubun hız/gidişat yönüne ayak uydurması (Alignment)
+/// Flocking alignment: matches the agent's heading to the average heading of its neighbours.
+///
+/// `neighbors` are `(position, linear_velocity)` pairs in metres and m/s; only those within
+/// `alignment_radius` metres of the agent contribute. The mean neighbour velocity is
+/// **normalised** before use, so the agent matches the flock's *direction* at full `max_speed`
+/// however slowly the flock is actually moving — this behaviour copies heading, not speed.
+///
+/// Returns [`Vec3::ZERO`] when no neighbour is in range. When neighbours are in range but their
+/// velocities cancel out (opposing headings, or a stationary flock), the desired velocity is
+/// zero and the result is `-current_vel` clamped to `max_force`: the agent brakes rather than
+/// doing nothing.
 pub fn alignment(
     current_pos: Vec3,
     current_vel: Vec3,
@@ -193,14 +290,60 @@ pub fn alignment(
     Vec3::ZERO
 }
 
+/// Per-behaviour blend weights consumed by [`combined_steering`].
+///
+/// All fields are dimensionless multipliers applied to a behaviour's output before the weighted
+/// sum is clamped to `max_force`. Since the sum is clamped as a whole, they set the *relative*
+/// priority of behaviours competing for one force budget, not their absolute strength — scaling
+/// every weight by the same factor changes almost nothing.
+///
+/// [`combined_steering`] additionally treats most of them as on/off gates and only evaluates a
+/// behaviour whose weight is strictly `> 0.0`, so on a gated behaviour a negative weight
+/// disables it rather than inverting it. [`seek`](Self::seek) is the exception: it is never
+/// gated, and a negative weight there does invert the goal term.
+///
+/// The type is `#[non_exhaustive]`, so from outside this crate build it from [`Default`] and
+/// assign the fields you want to change rather than using a struct literal.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct SteeringWeights {
+    /// Weight on the [`seek`] term toward the optional target. Default `1.0`.
+    ///
+    /// This is the one field [`combined_steering`] does not gate: whenever a target is supplied
+    /// the seek call is made and then multiplied by this weight, so `0.0` still costs the
+    /// evaluation but contributes nothing.
     pub seek: f32,
+
+    /// Intended weight for an arrival/braking term. Default `1.0`.
+    ///
+    /// **Currently dead**: [`combined_steering`] never reads this field and always uses [`seek`]
+    /// toward the target, never [`arrive`], so changing it has no effect on anything in this
+    /// crate. Blend [`arrive`] yourself if you need the agent to stop.
     pub arrive: f32,
+
+    /// Weight on [`avoid_obstacles`]. Default `5.0`.
+    ///
+    /// The largest default: because the weighted sum is clamped to a single `max_force` budget,
+    /// obstacle escape has to outbid the goal-seeking and flocking terms to survive the clamp
+    /// when they pull in opposite directions.
     pub avoid: f32,
+
+    /// Weight on [`separate`]. Default `1.5`, i.e. above the [`cohesion`] weight.
+    ///
+    /// Separation and cohesion pull in opposite directions over the same neighbour set, and this
+    /// higher weight is what stops a flock from collapsing onto its own centroid.
     pub separate: f32,
+
+    /// Weight on [`cohesion`]. Default `1.0`, i.e. below [`separate`].
+    ///
+    /// Raising it above the separation weight inverts that balance, and the flock converges on
+    /// its own centroid instead of spreading out.
     pub cohesion: f32,
+
+    /// Weight on [`alignment`]. Default `1.0`.
+    ///
+    /// Note that [`alignment`] always requests full `max_speed` along the flock's mean heading,
+    /// so this weight scales a full-speed heading correction rather than a small nudge.
     pub alignment: f32,
 }
 
@@ -217,7 +360,30 @@ impl Default for SteeringWeights {
     }
 }
 
-/// Bireysel davranışları dinamik olarak harmanlayan birleşik steering mekanizması
+/// Evaluates the individual behaviours in this module and returns their weighted sum, clamped
+/// once more to `max_force`.
+///
+/// Arguments:
+/// - `target_pos` — `None` drops the goal term entirely. `Some` always runs [`seek`], never
+///   [`arrive`], so this entry point does not brake on arrival.
+/// - `obstacles` — `(center, avoidance_radius)` pairs in metres, forwarded to
+///   [`avoid_obstacles`]; only consulted when the slice is non-empty.
+/// - `neighbors` — `(position, linear_velocity)` pairs in metres and m/s. The positions are
+///   copied into a temporary `Vec` for [`separate`] and [`cohesion`], so this allocates once per
+///   call whenever either of those weights is positive.
+/// - `radii` — `(separation, cohesion, alignment)` radii in metres, in that order. They are
+///   positional and easy to transpose silently. Seek has no radius, and obstacle avoidance takes
+///   its range from each obstacle's own entry rather than from here.
+///
+/// Each behaviour is already clamped to `max_force` on its own and the weighted sum is clamped
+/// again, so the total never exceeds `max_force` and the behaviours compete for a single budget
+/// rather than accumulating. Weights act as gates as described on [`SteeringWeights`].
+///
+/// Returns [`Vec3::ZERO`] when `target_pos` is `None` and both slices are empty.
+///
+/// The engine's own [`crate::system::ai_navigation_system`] does not call this — it composes
+/// [`seek`], [`arrive`] and [`separate`] itself — so this is a building block for user-written
+/// flocking systems rather than a path any built-in system exercises.
 #[allow(clippy::too_many_arguments)]
 pub fn combined_steering(
     current_pos: Vec3,

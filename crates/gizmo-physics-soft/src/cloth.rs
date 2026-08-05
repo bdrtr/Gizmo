@@ -1,3 +1,28 @@
+//! Cloth: a grid of mass points solved with Extended Position Based Dynamics (XPBD).
+//!
+//! [`Cloth`] owns the particles ([`ClothNode`]) and the distance constraints
+//! ([`DistanceConstraint`]) that hold them together; [`Cloth::step`] advances it.
+//! Positions are world-space metres, `dt` is seconds and gravity is m/s².
+//!
+//! Collision is resolved against two things, and is strictly one-way — colliders push the
+//! cloth, the cloth never pushes back on the rigid bodies (`step` takes them by shared
+//! reference and ignores their [`BodyHandle`]s):
+//!
+//! - An implicit infinite floor at world `y = 0`. It is always active and cannot be turned
+//!   off; dynamic nodes are clamped to `y >= Cloth::thickness`. Pinned nodes are exempt
+//!   and may sit below it.
+//! - The colliders passed to [`Cloth::step`], of which only **sphere, box and capsule** are
+//!   understood. Plane, triangle-mesh, convex-hull and compound shapes are silently
+//!   skipped, so cloth falls straight through them.
+//!
+//! Contacts are found by projecting the *current* node and edge positions out of the
+//! collider, not by sweeping the motion between sub-steps. That catches nodes already
+//! *resting* on a surface, which a swept test misses; the trade is that a node crossing a
+//! collider entirely within one sub-step can be missed.
+//!
+//! The solver is single-threaded and uses no randomness or order-dependent reductions:
+//! stepping two equal `Cloth` values with equal inputs yields equal results.
+
 use gizmo_math::Vec3;
 use gizmo_physics_core::{BodyHandle, Collider, ColliderShape, Transform};
 
@@ -111,11 +136,40 @@ pub struct ClothNode {
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 #[non_exhaustive]
 pub struct DistanceConstraint {
+    /// Index of the first endpoint into [`Cloth::nodes`]. Never bounds-checked: an index
+    /// past the end of `nodes` panics inside [`Cloth::step`].
     pub node_a: usize,
+    /// Index of the second endpoint into [`Cloth::nodes`].
+    ///
+    /// The XPBD position correction is applied symmetrically: `+p·inv_mass` to `node_a`,
+    /// `−p·inv_mass` to `node_b`. A constraint with `node_a == node_b` never produces a
+    /// correction: its endpoints coincide, so the solver's zero-length guard always rejects
+    /// it.
     pub node_b: usize,
+    /// Target separation of the two endpoints, in metres.
+    ///
+    /// The constraint is bilateral: it pulls the nodes together when they are farther
+    /// apart than this and pushes them apart when closer, with no slack region. It is
+    /// skipped for a given sub-step when the two endpoints are within 1e-6 m of each other
+    /// (the correction direction would be undefined) or when *both* endpoints are pinned
+    /// (`inv_mass == 0`), since there is then nothing that can move.
     pub rest_length: f32,
-    pub compliance: f32, // Inverse stiffness
-    pub lambda: f32,     // Accumulated XPBD multiplier
+    /// Inverse stiffness, in metres per newton (equivalently s²/kg). `0.0` is a perfectly
+    /// rigid link; larger values stretch more.
+    ///
+    /// [`Cloth::step`] uses it as the XPBD term `compliance / sub_dt²` with
+    /// `sub_dt = dt / sub_steps`, which is what keeps it a material parameter rather than
+    /// a per-timestep fudge factor. [`Cloth::new`] assigns `0.001` to structural links,
+    /// `0.005` to shear diagonals and `0.1` to the deliberately floppier bend links.
+    pub compliance: f32,
+    /// Solver scratch — the XPBD Lagrange multiplier. Not a tuning knob.
+    ///
+    /// [`Cloth::step`] zeroes it at the start of *every* sub-step and updates it once per
+    /// sub-step (the solver makes a single Gauss-Seidel pass), so a value written from
+    /// outside is discarded on the next step and what survives a call is only the final
+    /// sub-step's multiplier. It nonetheless participates in the derived `PartialEq`, so
+    /// two otherwise-identical cloths compare unequal if their last sub-step differed.
+    pub lambda: f32,
 }
 
 /// A cloth sheet simulated with Extended Position Based Dynamics (XPBD).

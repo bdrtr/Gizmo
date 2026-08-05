@@ -1,3 +1,19 @@
+//! ECS systems that move [`NavAgent`] entities along paths found on a [`NavGrid`].
+//!
+//! Both systems are meant to run once per frame, [`ai_navmesh_rebuild_system`] before
+//! [`ai_navigation_system`]. Neither takes `&mut World` — both mutate resources and components
+//! through a shared `&World` reference.
+//!
+//! These systems write `Velocity::linear` directly instead of applying forces. While an agent
+//! has a target the vertical component is forced to exactly zero at the end of every update;
+//! while it has none, the whole velocity is damped toward zero.
+//!
+//! Navigation therefore never contributes vertical velocity of its own — but that is not the
+//! same as the agent staying level. Anything else writing `Velocity::linear.y` between
+//! navigation updates still moves it, gravity integration included, so a NavAgent on a
+//! dynamic body does fall; it just re-zeroes each time this system runs instead of
+//! accelerating. Kinematic agents are the case that stays level.
+
 use crate::components::NavAgent;
 use crate::pathfinding::NavGrid;
 use crate::steering;
@@ -6,21 +22,21 @@ use gizmo_math::Vec3;
 use gizmo_physics_core::Transform;
 use gizmo_physics_rigid::components::Velocity;
 
-/// AI Navigasyon Sistemi — Per-frame ajan güncelleme döngüsü.
+/// Refills the [`NavGrid`] obstacle set from the physics world's non-dynamic colliders, but
+/// only when the grid's `needs_rebuild` flag is set.
 ///
-/// **Borrow Güvenliği Notu:**
-/// Bu fonksiyon eşzamanlı 4 RefCell borrow tutar:
-/// - `NavGrid` (Resource, immutable)
-/// - `NavAgent` (Component, **mutable**)
-/// - `Transform` (Component, immutable)
-/// - `Velocity` (Component, **mutable**)
+/// A rebuild rasterises the world-space AABB of every collider whose body type is not
+/// `Dynamic` into grid cells and **replaces** the obstacle set wholesale, so any cells added
+/// by hand via `NavGrid::add_obstacle_world` are discarded. It then clears `needs_rebuild`, and
+/// no code in this crate ever sets that flag back to `true` — after moving, spawning or
+/// deleting static geometry the owner of the scene must raise it for navigation to notice.
 ///
-/// Bu güvenlidir çünkü her biri **farklı TypeId** ile ayrı `RefCell`'de saklanır.
-/// Ancak bu fonksiyon çalışırken başka bir sistem aynı anda `NavAgent` veya
-/// `Velocity` için `borrow_mut` yaparsa `try_borrow_mut` başarısız olur.
-/// Bu nedenle AI sistemi fizik adım döngüsü **içinde** çağrılmalıdır (main.rs),
-/// NavMesh Yeniden Oluşturma Sistemi
-/// Fizik dünyasındaki statik objeleri NavGrid'e geçirir
+/// Does nothing when either the `NavGrid` or the `PhysicsWorld` resource is absent — a missing
+/// resource means navigation is simply not in use here and is not treated as an error.
+///
+/// `_dt` is ignored — a rebuild does not integrate anything. Run it before
+/// [`ai_navigation_system`] in the frame, otherwise agents plan one frame's worth of paths
+/// against the stale grid.
 pub fn ai_navmesh_rebuild_system(world: &World, _dt: f32) {
     let grid_opt = world.get_resource_mut::<NavGrid>();
     let physics_opt = world.get_resource::<gizmo_physics_rigid::world::PhysicsWorld>();
@@ -36,6 +52,47 @@ pub fn ai_navmesh_rebuild_system(world: &World, _dt: f32) {
     }
 }
 
+/// Advances every [`NavAgent`] one frame: replans its path when needed, steers it toward the
+/// next waypoint and writes the result into `Velocity::linear`. `dt` is the frame time in
+/// seconds.
+///
+/// Requires a [`NavGrid`] resource; without one the system returns immediately and leaves every
+/// agent's velocity untouched. Agents missing a `Transform` or a `Velocity` are skipped.
+///
+/// Per agent, in order:
+///
+/// - **No target.** The linear velocity is damped by `1 - min(dt * 5, 1)` and the state becomes
+///   `Idle`. The clamp means a frame of 0.2 s or longer zeroes the velocity outright rather than
+///   reversing it.
+/// - **Stuck detection.** While the agent stays within 0.05 m of the last position where it was
+///   seen to move, `stuck_timer` accumulates `dt`; past 2 s the state becomes `Stuck` and the
+///   path is cleared, which forces a replan on the same frame. The target is kept, so a stuck
+///   agent keeps retrying rather than giving up.
+/// - **Planar projection.** The target is flattened onto the agent's current Y before
+///   pathfinding, so a target's height is ignored and agents only ever navigate in the XZ plane.
+/// - **Replan** when the path is exhausted, `recalc.timer` has run out (it is reset to
+///   `recalc.interval` seconds), the target has moved more than 2 m from the last planned one,
+///   or nothing has been planned yet. If `NavGrid::find_path` finds nothing — target inside an
+///   obstacle, outside the grid, or unreachable — the path is cleared and the agent falls back to
+///   steering straight at the target with no obstacle awareness at all, rather than stopping.
+/// - **Steering.** [`crate::steering::arrive`] for the final waypoint (slowing radius
+///   `2 * arrival_radius`), [`crate::steering::seek`] for the others, plus
+///   [`crate::steering::separate`] against other agents. A waypoint counts as reached within
+///   `arrival_radius`, or within `2.5 * arrival_radius` if the agent's speed has dropped below
+///   0.2 m/s — the second test is what frees agents wedged against geometry.
+/// - **Integration.** `velocity += steering * dt`, then the speed is clamped to `max_speed` and
+///   the vertical component is forced to zero. On finishing the path the target is cleared and
+///   the state becomes `Reached`.
+///
+/// Neighbour lookup is a brute-force O(N²) scan over all agents with a hard-coded 10 m radius,
+/// separation radius 1.5 m and separation weight 1.5; none of these are configurable per agent,
+/// and the cost grows quadratically with agent count.
+///
+/// # Aliasing
+///
+/// This takes `&World` but mutates `NavAgent` and `Velocity` through unchecked borrows, so the
+/// compiler cannot catch a conflict. It must not run concurrently with any other system that
+/// touches those two component types mutably.
 #[tracing::instrument(skip_all, name = "ai_navigation_system")]
 pub fn ai_navigation_system(world: &World, dt: f32) {
     let grid = match world.get_resource::<NavGrid>() {

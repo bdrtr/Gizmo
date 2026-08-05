@@ -4,9 +4,21 @@ use gizmo_physics_core::BodyHandle;
 /// Represents a single vertex/node in the FEM soft body mesh.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SoftBodyNode {
+    /// Current world-space position, in metres.
     pub position: Vec3,
+
+    /// Current world-space velocity, in metres per second. Explicitly stored (unlike the
+    /// Verlet-style [`crate::rope::RopeNode`]), so it can be read and written directly.
     pub velocity: Vec3,
+
+    /// Mass in kilograms; must be strictly positive for the node to take part in the
+    /// simulation. [`SoftBodyMesh::step`] skips any node whose mass is `<= 0.0` or NaN,
+    /// treating it as immovable rather than dividing force by it and seeding Inf/NaN.
     pub mass: f32,
+
+    /// Pinned. [`SoftBodyMesh::step`] never integrates this node, so its position and
+    /// velocity are held exactly, but it still contributes its position to the deformation
+    /// gradient — and therefore to the elastic forces — of every element that references it.
     pub is_fixed: bool, // For pinning parts of the body (e.g. chassis mounts)
 }
 
@@ -50,7 +62,18 @@ impl Tetrahedron {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct SoftBodyMesh {
+    /// The FEM vertices. A node's position in this vector *is* its identity: it is the index
+    /// [`add_node`](Self::add_node) returns and the one [`Tetrahedron::node_indices`] stores.
+    /// Reordering entries silently rewires the elements, and shortening the vector past an
+    /// index an element still references makes [`step`](Self::step) panic on the
+    /// out-of-bounds lookup.
     pub nodes: Vec<SoftBodyNode>,
+
+    /// The tetrahedral elements; each contributes internal elastic forces to its four nodes
+    /// on every [`step`](Self::step). Rest volume and reference shape are captured when
+    /// [`add_element`](Self::add_element) is called, so the nodes must already be in their
+    /// rest configuration at that point — moving them afterwards reads as deformation, not
+    /// as a new rest shape.
     pub elements: Vec<Tetrahedron>,
 
     // --- Material Properties (Elasto-Plasticity) ---
@@ -71,6 +94,32 @@ pub struct SoftBodyMesh {
 }
 gizmo_core::impl_component!(SoftBodyMesh);
 
+/// Sweeps a single soft-body node along its velocity for `dt` seconds and resolves the first
+/// surface it would hit, returning `(position, velocity, collided)`.
+///
+/// When `collided` is `false` nothing was hit and the input `position`/`velocity` come back
+/// unchanged — the function never integrates, so in that case the caller must advance the
+/// node itself. When it is `true` the returned position has already been moved along the
+/// sweep (never further than the swept distance) and the returned velocity is the
+/// post-impact one; use them in place of your own integrated values.
+///
+/// The swept distance is `velocity.length() * dt` in metres; 1e-5 m or less (a resting or
+/// near-resting node) short-circuits to "no collision", which also covers a zero velocity.
+/// Every entry of `rigid_colliders` is ray-tested — a linear scan, there is no broad-phase —
+/// and only the single *nearest* hit within `swept distance + 0.1 m` is resolved, so a node
+/// facing two adjacent surfaces (a tiled floor, a wall meeting a floor) stops at the first
+/// one instead of being displaced once per collider. The [`BodyHandle`] of the collider that
+/// was hit is not reported back.
+///
+/// The response uses hard-coded, non-configurable coefficients: the node is placed 0.1 m
+/// short of the surface (a fixed skin thickness) and, if it is genuinely approaching that
+/// surface (`velocity · normal < 0`), the normal component of its velocity is reflected and
+/// scaled by a restitution of `0.5` while the tangential component is scaled by `1 - 0.8`
+/// (friction).
+///
+/// This is a swept stop, not a penetration solver: the correction only ever moves the node
+/// *forward* along its own velocity, by `(hit distance − 0.1).max(0.0)` metres. Nothing here
+/// pushes a node back out along the surface normal.
 pub fn resolve_node_collision(
     mut position: Vec3,
     mut velocity: Vec3,
@@ -157,6 +206,16 @@ impl SoftBodyMesh {
         })
     }
 
+    /// Appends a node at `position` (world-space metres) with mass `mass` (kilograms) and
+    /// returns its index — the handle [`add_element`](Self::add_element) expects.
+    ///
+    /// Indices are handed out sequentially from `0` and are plain offsets into
+    /// [`nodes`](Self::nodes), so mutating that vector directly invalidates them. The node
+    /// starts at rest (zero velocity) and unpinned, and is treated as being in its rest
+    /// configuration by any element added after it.
+    ///
+    /// `mass` is stored verbatim and is *not* validated here; a non-positive or NaN mass
+    /// leaves the node inert in [`step`](Self::step) instead of failing loudly.
     pub fn add_node(&mut self, position: Vec3, mass: f32) -> u32 {
         let idx = self.nodes.len() as u32;
         self.nodes.push(SoftBodyNode {
@@ -220,6 +279,27 @@ impl SoftBodyMesh {
     }
 
     /// Advances the FEM simulation by one timestep using a Neo-Hookean hyperelastic model.
+    ///
+    /// `dt` is in seconds and `gravity` is a world-space acceleration in m/s². Each node is
+    /// loaded with `gravity * mass` plus the internal elastic force of every element that
+    /// references it, then integrated with one semi-implicit (symplectic) Euler step —
+    /// velocity first, damped by [`damping`](Self::damping)`.powf(dt)`, and the position
+    /// advanced with that *new* velocity. `dt` is deliberately **not** clamped here: an
+    /// explicit integrator on a stiff material goes unstable for large steps, so bounding
+    /// the timestep is the caller's responsibility.
+    ///
+    /// Nodes that are [`is_fixed`](SoftBodyNode::is_fixed), or whose mass is `<= 0.0` or NaN,
+    /// are skipped outright and stay put. An element is skipped for that step if the
+    /// determinant of its deformation gradient is `<= 1e-4` (inverted or fully collapsed) or
+    /// if it produces a non-finite force; every other element keeps its full stiffness no
+    /// matter how compressed it is.
+    ///
+    /// Each moving node is then swept against `rigid_colliders` with
+    /// [`resolve_node_collision`], and on a hit the swept position and velocity replace the
+    /// integrated ones. Soft-vs-soft and self-collision are not handled at all.
+    ///
+    /// Element forces are computed in parallel (sequentially on `wasm32`) but accumulated in
+    /// element order, so the result is deterministic and independent of thread scheduling.
     pub fn step(
         &mut self,
         dt: f32,

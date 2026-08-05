@@ -1,29 +1,82 @@
+//! A* pathfinding over a uniform obstacle grid ([`NavGrid`]).
+//!
+//! The grid is flat in the world XZ plane, addressed by integer [`GridPos`] cells of
+//! `cell_size` metres; obstacles are normally rasterised from the world AABBs of a physics
+//! world's non-dynamic colliders. Queries return waypoints in world metres — one cell centre
+//! per step, 8-connected, with no smoothing or string-pulling.
+//!
+//! This is the structure the crate's own navigation systems drive: [`crate::system`] keeps a
+//! `NavGrid` resource in sync and steers agents along its paths. The polygon-based
+//! [`crate::navmesh`] is a separate structure that is built and queried independently.
+
 use gizmo_math::Vec3;
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 
+/// Integer cell coordinate on a [`NavGrid`].
+///
+/// The grid is laid out in the world XZ plane: `x` and `z` are the in-plane cell indices
+/// and `y` is a discrete layer index. Movement never changes `y` — [`NavGrid::neighbors`]
+/// only steps in X/Z — so two cells on different layers are mutually unreachable.
+///
+/// Cell `(x, y, z)` covers the half-open world box `[x·cell_size, (x+1)·cell_size)` on each
+/// axis; see [`NavGrid::world_to_grid`] and [`NavGrid::grid_to_world`].
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct GridPos {
+    /// Cell index along world +X, i.e. `floor(world.x / cell_size)`. Negative for negative
+    /// world coordinates, and negative indices are never walkable.
     pub x: i32,
+    /// Layer index, `floor(world.y / cell_size)`. Pathfinding stays within one layer; this
+    /// only selects which horizontal slice of the obstacle set a query sees.
     pub y: i32,
+    /// Cell index along world +Z, i.e. `floor(world.z / cell_size)`. Bounded by
+    /// [`NavGrid::height`], not `width`.
     pub z: i32, // Katman veya yükseklik
 }
 
 impl GridPos {
+    /// Builds a cell coordinate from raw indices. Nothing is validated or clamped: indices
+    /// outside a grid's `width`/`height` are representable and simply never walkable.
     pub fn new(x: i32, y: i32, z: i32) -> Self {
         Self { x, y, z }
     }
 }
 
+/// Uniform obstacle grid for A* pathfinding over the world XZ plane.
+///
+/// The navigable area is the world-space quadrant `[0, width·cell_size) × [0, height·cell_size)`
+/// in X/Z — the grid origin is the world origin, with no offset, so negative world
+/// coordinates are always unwalkable. The `y` layer is unbounded and never range-checked.
+///
+/// Obstacles are held in a plain hash set with no spatial acceleration; the set is normally
+/// filled wholesale by [`NavGrid::update_from_physics_world`].
 pub struct NavGrid {
+    /// Edge length of one cell in metres. Must be greater than zero — it is used as a
+    /// divisor by [`NavGrid::world_to_grid`]. The world extent of the grid, and therefore
+    /// how much of the scene is reachable, scales with it.
     pub cell_size: f32,
+    /// Number of cells along X. Walkable indices are `0..width`; everything else is treated
+    /// as blocked. Not enforced when inserting into `obstacles`.
     pub width: i32,
+    /// Number of cells along **Z**, not Y — despite the name this is the depth of the XZ
+    /// grid. Walkable indices are `0..height`.
     pub height: i32,
+    /// Blocked cells. Membership makes a cell unwalkable regardless of bounds.
+    /// [`NavGrid::update_from_physics_world`] *replaces* this set, so cells placed by hand
+    /// with [`NavGrid::add_obstacle_world`] do not survive a rebuild.
     pub obstacles: HashSet<GridPos>,
+    /// Rebuild request flag: `true` after [`NavGrid::new`], cleared by
+    /// [`NavGrid::update_from_physics_world`]. Nothing in this type acts on it; it is polled
+    /// by this crate's `system::ai_navmesh_rebuild_system`, which runs the rebuild when set.
     pub needs_rebuild: bool,
 }
 
 impl NavGrid {
+    /// Creates an empty grid — no obstacles, `needs_rebuild` already set, so the first run
+    /// of the rebuild system populates it from the physics world.
+    ///
+    /// `cell_size` is in metres and must be greater than zero; `width` and `height` are cell
+    /// counts along X and Z respectively.
     pub fn new(cell_size: f32, width: i32, height: i32) -> Self {
         Self {
             cell_size,
@@ -34,16 +87,29 @@ impl NavGrid {
         }
     }
 
+    /// Blocks the single cell containing `world_pos`.
+    ///
+    /// One cell only — the extent of whatever object sits at that point is not considered,
+    /// so a large obstacle needs one call per cell it covers. No bounds check is performed;
+    /// out-of-range cells can be inserted, which is harmless because they are unwalkable
+    /// anyway. The next [`NavGrid::update_from_physics_world`] discards the entry.
     pub fn add_obstacle_world(&mut self, world_pos: Vec3) {
         let gp = self.world_to_grid(world_pos);
         self.obstacles.insert(gp);
     }
 
+    /// Unblocks the whole cell containing `world_pos` — the position is floored to a cell,
+    /// so this clears a cell, not a point. A no-op if that cell was not blocked.
     pub fn remove_obstacle_world(&mut self, world_pos: Vec3) {
         let gp = self.world_to_grid(world_pos);
         self.obstacles.remove(&gp);
     }
 
+    /// Cell containing a world position (metres), component-wise `floor(pos / cell_size)`.
+    ///
+    /// Rounding is toward negative infinity on every axis, so world `-0.1 m` maps to cell
+    /// `-1`, not `0`. The result is not clamped and may lie outside the `width`/`height`
+    /// bounds.
     pub fn world_to_grid(&self, pos: Vec3) -> GridPos {
         GridPos {
             x: (pos.x / self.cell_size).floor() as i32,
@@ -52,6 +118,13 @@ impl NavGrid {
         }
     }
 
+    /// Centre of a cell in world space (metres): `(index + 0.5) · cell_size` on all three
+    /// axes, including the `y` layer.
+    ///
+    /// Inverse of [`NavGrid::world_to_grid`] up to the cell centre —
+    /// `world_to_grid(grid_to_world(c)) == c`. Waypoints returned by
+    /// [`NavGrid::find_path`] are produced with this, so agents are routed cell centre to
+    /// cell centre rather than along the geometric shortest line.
     pub fn grid_to_world(&self, gp: GridPos) -> Vec3 {
         Vec3::new(
             (gp.x as f32 + 0.5) * self.cell_size,
@@ -60,6 +133,10 @@ impl NavGrid {
         )
     }
 
+    /// Whether a cell can be stood on: inside the X/Z bounds and not in `obstacles`.
+    ///
+    /// Only `x` is checked against `width` and `z` against `height`; the `y` layer has no
+    /// range at all, so any layer is accepted as long as the cell is free.
     pub fn is_walkable(&self, pos: GridPos) -> bool {
         if pos.x < 0 || pos.x >= self.width || pos.z < 0 || pos.z >= self.height {
             return false;
@@ -67,6 +144,16 @@ impl NavGrid {
         !self.obstacles.contains(&pos) // Engel yoksa yürünebilir
     }
 
+    /// Walkable neighbours of `pos` within its own layer — at most 8, and `y` is never
+    /// changed, so this graph has no vertical connectivity.
+    ///
+    /// Ordering is stable: the four orthogonal steps (+X, −X, +Z, −Z) first, then the
+    /// diagonals. A diagonal is emitted only when both flanking orthogonal cells are also
+    /// walkable, so a route can never squeeze through the corner between two obstacles.
+    ///
+    /// `pos` itself is neither required to be walkable nor bounds-checked — only the eight
+    /// candidates are — so a cell just outside the grid still reports the in-bounds cells
+    /// beside it. The result is empty only when every candidate is blocked or out of bounds.
     // Yalnızca X,Z düzleminde Dört yön hareket algılayan komşuluk.
     pub fn neighbors(&self, pos: GridPos) -> Vec<GridPos> {
         let mut neighbors = Vec::with_capacity(8);
@@ -95,6 +182,21 @@ impl NavGrid {
     }
 
     /// Fizik dünyasındaki statik nesneleri tarayıp navigasyon engel ızgarasını (NavMesh) günceller
+    ///
+    /// Rebuilds `obstacles` from scratch out of every non-dynamic body in `physics`:
+    /// each body's world AABB is rasterised into cells on all
+    /// three axes, so a tall box blocks several `y` layers. Dynamic bodies are skipped, and
+    /// the previous contents of `obstacles` — including hand-placed cells — are discarded.
+    /// A world with no static bodies leaves the set empty, making everything in bounds
+    /// walkable.
+    ///
+    /// Cells outside the `width`/`height` bounds are inserted too; they are redundant, since
+    /// out-of-bounds cells are unwalkable regardless.
+    ///
+    /// Clears `needs_rebuild` on completion. Cost grows with the number of cells the static
+    /// AABBs cover — i.e. with the cube of `1/cell_size` for fixed geometry — so this is an
+    /// on-demand rebuild, not a per-frame operation. Native builds rasterise on scoped
+    /// threads, one per chunk of `max(1, entity_count / 8)` bodies.
     #[tracing::instrument(skip_all, name = "navgrid_rebuild")]
     pub fn update_from_physics_world(&mut self, physics: &gizmo_physics_rigid::world::PhysicsWorld) {
         let cell_size = self.cell_size;
@@ -230,6 +332,31 @@ fn heuristic(a: GridPos, b: GridPos) -> u32 {
 
 impl NavGrid {
     /// A* Pathfinding Fonksiyonu
+    ///
+    /// Returns the world-space centre of every cell to step onto, in order. The start cell
+    /// is **excluded** and the destination cell is the last element; when both positions
+    /// fall in the same cell the result is `Some` with an empty vector.
+    ///
+    /// The search stays inside the layer (`GridPos::y`) of `start_world`, because
+    /// [`NavGrid::neighbors`] never changes the layer. A destination whose Y floors to a
+    /// different layer is therefore unreachable and yields `None`.
+    ///
+    /// Step costs are integers — 10 orthogonal, 14 diagonal (10·√2 rounded) — paired with a
+    /// matching octile heuristic, so the route is a shortest 8-connected path under that
+    /// cost model. The waypoints are raw cell centres: no string-pulling or smoothing is
+    /// applied, and the path is not clamped to the grid bounds any tighter than
+    /// [`NavGrid::is_walkable`] already does.
+    ///
+    /// Returns `None` when the start or destination cell is blocked or out of bounds, when
+    /// no connected route exists, or when the search exceeds its hard cap of 25 000 queue
+    /// POPS — the cap makes a huge or heavily fragmented map fail fast instead of stalling the
+    /// frame, and is reported at warn level.
+    ///
+    /// Pops, not expansions: there is no decrease-key, so an improving relaxation pushes a
+    /// duplicate entry (up to one per incoming neighbour) and popping an already-settled cell
+    /// still spends budget. The number of DISTINCT cells reached before the cap trips can
+    /// therefore be several times below 25 000 — do not size a grid against it as if it were
+    /// a cell count.
     #[tracing::instrument(skip_all, name = "navgrid_find_path")]
     pub fn find_path(&self, start_world: Vec3, end_world: Vec3) -> Option<Vec<Vec3>> {
         let start = self.world_to_grid(start_world);

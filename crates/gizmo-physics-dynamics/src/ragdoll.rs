@@ -1,3 +1,18 @@
+//! Ragdoll authoring and spawning: bone definitions, a builder for a stock humanoid
+//! skeleton, and a spawner that turns them into jointed rigid bodies.
+//!
+//! The pipeline is [`RagdollBuilder`] → `Vec<`[`RagdollBoneDef`]`>` → [`spawn_ragdoll`]
+//! → [`RagdollInstance`]. A bone is authored as a parent-relative offset in metres plus
+//! a capsule size, a mass and a joint description; spawning turns each bone into one
+//! dynamic capsule body and each non-root bone into one joint pushed into the
+//! [`PhysicsWorld`] resource.
+//!
+//! Scope: this module only *builds* skeletons. There is no animation blending, no
+//! get-up/recovery behaviour and no pose matching here. Bone-vs-bone contacts are
+//! suppressed only between a bone and the bone it is directly jointed to (those joints
+//! are created with collision disabled); any other pair of bones — e.g. the two thighs —
+//! collides normally.
+
 use std::collections::HashMap;
 
 use gizmo_math::Vec3;
@@ -10,21 +25,52 @@ use gizmo_physics_rigid::joints::{Joint, JointData, JointType};
 use gizmo_physics_rigid::world::PhysicsWorld;
 
 /// Identifies a bone within a humanoid ragdoll skeleton.
+///
+/// The variant is a *label* only — it carries no geometry, mass or joint data (all of
+/// that lives in [`RagdollBoneDef`]). It is the identity key that links a child to its
+/// parent during [`spawn_ragdoll`] and the key [`RagdollInstance::entity_of`] looks up
+/// afterwards, so a bone type should appear at most once per skeleton: with duplicates,
+/// a child attaches to the most recently spawned bone of that type while `entity_of`
+/// keeps returning the first one.
+///
+/// The anatomical relationships named below describe the stock layout built by
+/// [`RagdollBuilder::create_humanoid`] (Y-up, `Left*` bones at negative X and `Right*`
+/// at positive X). A hand-authored skeleton may wire the same variants up any way it
+/// likes — nothing in this module mirrors or validates geometry by side.
 // `Hash` is derived so the type can be used as a `HashMap` key while resolving
 // parent -> child bone world positions in [`spawn_ragdoll`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum RagdollBoneType {
+    /// Skull. A leaf in the stock humanoid, hanging off [`Self::Torso`] through a
+    /// ball-socket "neck".
     Head,
+    /// Chest / upper spine. In the stock humanoid it is the parent of the head and of
+    /// both upper arms, and is itself ball-socketed to [`Self::Pelvis`].
     Torso,
+    /// Hips. The root of the stock humanoid (`parent_type: None`), so it is the bone
+    /// that receives [`RagdollBuilder::new`]'s world position and the only one spawned
+    /// without a joint back to a parent.
     Pelvis,
+    /// Left upper arm (humerus): ball-socketed to the torso at the shoulder.
     LeftUpperArm,
+    /// Left forearm: hinged to [`Self::LeftUpperArm`] at the elbow, limited in the
+    /// stock humanoid to 0..0.8π rad so it bends one way only.
     LeftLowerArm,
+    /// Right upper arm (humerus): ball-socketed to the torso at the shoulder.
     RightUpperArm,
+    /// Right forearm: hinged to [`Self::RightUpperArm`] at the elbow, limited in the
+    /// stock humanoid to 0..0.8π rad so it bends one way only.
     RightLowerArm,
+    /// Left thigh (femur): ball-socketed to the pelvis at the hip.
     LeftUpperLeg,
+    /// Left shin: hinged to [`Self::LeftUpperLeg`] at the knee, limited in the stock
+    /// humanoid to −0.8π..0 rad — the opposite direction from the elbow.
     LeftLowerLeg,
+    /// Right thigh (femur): ball-socketed to the pelvis at the hip.
     RightUpperLeg,
+    /// Right shin: hinged to [`Self::RightUpperLeg`] at the knee, limited in the stock
+    /// humanoid to −0.8π..0 rad — the opposite direction from the elbow.
     RightLowerLeg,
 }
 
@@ -32,16 +78,90 @@ pub enum RagdollBoneType {
 /// connects it to its parent.
 #[derive(Debug, Clone)]
 pub struct RagdollBoneDef {
+    /// Identity of this bone, and the name children give in their
+    /// [`Self::parent_type`]. Should be unique within one skeleton — see
+    /// [`RagdollBoneType`] for what duplicates do.
     pub bone_type: RagdollBoneType,
+
+    /// The bone this one hangs from, or `None` for a root.
+    ///
+    /// A root gets no joint at all (it is a free body) and its [`Self::local_pos`] is
+    /// read as a world position rather than an offset. A named parent must appear
+    /// *earlier* in the definition list: [`spawn_ragdoll`] resolves the skeleton in a
+    /// single forward pass. An unresolved parent is substituted with `Vec3::ZERO`, so the
+    /// bone's [`Self::local_pos`] ends up interpreted as an absolute world position and it
+    /// gets no joint (a `tracing` warning is emitted; the call does not fail).
     pub parent_type: Option<RagdollBoneType>,
-    pub local_pos: Vec3, // Local position relative to the parent
+
+    /// Offset from the parent bone's origin, in metres.
+    ///
+    /// Pure translation in world axes: the parent's rotation is *not* applied (bones
+    /// spawn with identity rotation, and positions are chained as
+    /// `world(child) = world(parent) + local_pos`). For a root bone this field instead
+    /// holds the world position — [`RagdollBuilder::build`] puts it there by adding the
+    /// builder's root position to root bones only.
+    pub local_pos: Vec3,
+
+    /// Capsule radius in metres. It also caps the bone's ends, so the collider's total
+    /// extent along its axis is `length + 2 * radius`.
     pub radius: f32,
+
+    /// Length of the capsule's cylindrical section in metres, along the body's local
+    /// +Y; the hemispherical caps add [`Self::radius`] beyond each end.
+    ///
+    /// [`spawn_ragdoll`] halves it into a half-height and clamps that to at least
+    /// 0.01 m, so zero or negative lengths degenerate into a near-sphere of `radius`
+    /// rather than an invalid collider.
     pub length: f32,
+
+    /// Bone mass in kilograms, clamped to at least 0.01 kg at spawn. The rotational
+    /// inertia is not authored here: it is derived from this mass together with the
+    /// capsule's radius and half-height.
     pub mass: f32,
+
+    /// Constraint attaching this bone to its parent; ignored for root bones.
+    ///
+    /// It also selects how [`Self::joint_axis`] and [`Self::limits`] are read. Variants
+    /// this module does not handle explicitly (`JointType` is `#[non_exhaustive]`) fall
+    /// back to a rigid fixed joint, so the skeleton stays connected — as of this version
+    /// `D6` is the one variant that takes that path, i.e. a `D6` bone is silently rigid
+    /// rather than 6-DOF.
     pub joint_type: JointType,
+
+    /// Joint anchor expressed in the *parent* body's local frame, in metres.
     pub local_anchor_parent: Vec3,
+
+    /// Joint anchor expressed in *this* bone's local frame, in metres.
+    ///
+    /// Together with the parent anchor and [`Self::local_pos`] it fixes the anchor
+    /// separation at the authored rest pose,
+    /// `|local_pos + local_anchor_child - local_anchor_parent|`, which `Spring` and
+    /// `Distance` bones adopt as their rest length / rope length. That is deliberately
+    /// *not* the bone centre-to-centre distance `|local_pos|`.
     pub local_anchor_child: Vec3,
+
+    /// Axis for the joint types that need one: the rotation axis of a `Hinge`, the free
+    /// axis of a `Slider`, and the twist axis of a `BallSocket` cone-twist. Ignored by
+    /// `Fixed`, `Spring` and `Distance`.
+    ///
+    /// Since every bone spawns with identity rotation, the axis starts out coinciding
+    /// with the world axes. It need not be unit length — hinge and slider normalise it
+    /// and substitute +Y if it is ~zero, while a ~zero axis on a ball socket silently
+    /// disables that joint's twist limit.
     pub joint_axis: Vec3,
+
+    /// Optional joint limits, read according to [`Self::joint_type`]:
+    ///
+    /// * `Hinge` — `(lower, upper)` rotation about [`Self::joint_axis`] in radians;
+    ///   `None` leaves the hinge free.
+    /// * `BallSocket` — a single cone half-angle `max(|lower|, |upper|)`, i.e. the
+    ///   largest swing away from the bone's rest orientation, in radians; the pair is
+    ///   *not* used asymmetrically. `None` yields a 1.2 rad (≈69°) default cone. The
+    ///   ±0.6 rad twist limit and the soft-limit compliance applied to ball sockets are
+    ///   fixed and cannot be authored through this field.
+    /// * `Distance` — `(min, max)` anchor separation in metres; `None` yields a rope
+    ///   from 0 to the rest-pose anchor separation.
+    /// * `Fixed`, `Slider`, `Spring` — ignored.
     pub limits: Option<(f32, f32)>,
 }
 
@@ -60,6 +180,12 @@ impl Default for RagdollBuilder {
 }
 
 impl RagdollBuilder {
+    /// Starts an empty builder whose root bones will be placed at `root_pos`
+    /// (world-space metres).
+    ///
+    /// The offset is applied only to bones with `parent_type == None`, and only when
+    /// [`Self::build`] runs; child bones keep their parent-relative offsets and inherit
+    /// the translation through the parent chain. `Default` uses `Vec3::ZERO`.
     pub fn new(root_pos: Vec3) -> Self {
         Self {
             bones: Vec::new(),
@@ -67,11 +193,33 @@ impl RagdollBuilder {
         }
     }
 
+    /// Appends a bone definition and returns `&mut self` for chaining.
+    ///
+    /// Order matters: a bone must be added *after* the bone named by its
+    /// `parent_type`, because [`spawn_ragdoll`] resolves world positions in a single
+    /// forward pass. Nothing is validated here — a dangling or out-of-order parent is
+    /// only diagnosed at spawn time (a `tracing` warning; the bone's `local_pos` is then
+    /// treated as a world position and it is left unjointed), and duplicate bone types are
+    /// not diagnosed at all.
     pub fn add_bone(&mut self, bone: RagdollBoneDef) -> &mut Self {
         self.bones.push(bone);
         self
     }
 
+    /// Appends the stock 11-bone humanoid: a `Pelvis` root carrying a `Torso` → `Head`
+    /// spine, two arms and two legs. It measures ≈1.83 m from the bottom of a lower-leg
+    /// capsule to the top of the head capsule and weighs 75 kg in total, and is
+    /// authored standing upright with its origin at the pelvis.
+    ///
+    /// Spine, neck, shoulders and hips are ball sockets with no authored limits, which
+    /// [`spawn_ragdoll`] turns into cone-twist joints with the default 1.2 rad cone and
+    /// ±0.6 rad twist. Elbows and knees are hinges about local X, limited to
+    /// `0..0.8π` and `-0.8π..0` rad respectively so they fold in opposite directions.
+    ///
+    /// Bones are *appended*, not replaced: calling this twice — or after adding a bone
+    /// of one of the same types — produces duplicate bone types, which
+    /// [`RagdollBoneType`] describes the consequences of. Returns `&mut self` for
+    /// chaining.
     pub fn create_humanoid(&mut self) -> &mut Self {
         self.add_bone(RagdollBoneDef {
             bone_type: RagdollBoneType::Pelvis,
@@ -224,8 +372,19 @@ impl RagdollBuilder {
         self
     }
 
-    /// Consumes the builder, computes initial world positions for root bones,
-    /// and returns the list of bone definitions to be spawned.
+    /// Consumes the builder and returns the bone definitions in the order they were
+    /// added.
+    ///
+    /// The only transformation applied is the root offset from [`Self::new`]: it is added
+    /// to the `local_pos` of every bone with `parent_type == None`, promoting that field
+    /// from an offset to a world position in metres. Child bones are returned untouched —
+    /// their `local_pos` stays parent-relative and is chained onto the parent later, by
+    /// [`spawn_ragdoll`].
+    ///
+    /// Nothing is validated or reordered here: dangling parents, bones listed before their
+    /// parent, and duplicate bone types all pass straight through. A definition list
+    /// containing no root bone at all is likewise returned as authored, which silently
+    /// discards the root position.
     pub fn build(mut self) -> Vec<RagdollBoneDef> {
         for bone in &mut self.bones {
             if bone.parent_type.is_none() {
@@ -235,8 +394,13 @@ impl RagdollBuilder {
         self.bones
     }
 
-    /// Convenience: build the definitions and spawn them into `world` in one
-    /// call. See [`spawn_ragdoll`].
+    /// Builds the definitions and spawns them into `world` in one call — exactly
+    /// `spawn_ragdoll(world, self.build())`. See [`spawn_ragdoll`] for what is created and
+    /// for what happens when `world` holds no [`PhysicsWorld`] resource.
+    ///
+    /// Takes the builder by value, while [`Self::add_bone`] and [`Self::create_humanoid`]
+    /// return `&mut Self`; a chain ending in `.spawn(..)` therefore cannot compile — bind
+    /// the builder to a `let mut` binding first.
     pub fn spawn(self, world: &mut World) -> RagdollInstance {
         spawn_ragdoll(world, self.build())
     }
@@ -245,16 +409,34 @@ impl RagdollBuilder {
 /// A live, simulatable ragdoll: the spawned rigid-body entities (one per bone)
 /// and the indices of the joints that were pushed into the [`PhysicsWorld`]
 /// resource connecting them.
+///
+/// It is a record of what [`spawn_ragdoll`] created, not a handle that owns it: dropping
+/// it leaves the bodies and joints in place, and it has no despawn or teardown method.
+/// The derived `Default` is the empty record (no bones, no joints) that spawning starts
+/// from, and describes no ragdoll at all.
 #[derive(Debug, Clone, Default)]
 pub struct RagdollInstance {
-    /// `(bone type, spawned entity)` for every bone, in spawn order.
+    /// `(bone type, spawned entity)` for every bone, in spawn order — one entry per
+    /// [`RagdollBoneDef`] handed to [`spawn_ragdoll`], so this runs parallel to the
+    /// definition list even where a bone failed to attach to its parent.
+    ///
+    /// Recorded once at spawn and never updated afterwards, so an entry outlives its bone
+    /// being despawned.
     pub bones: Vec<(RagdollBoneType, Entity)>,
-    /// Indices into `PhysicsWorld::joints` for the joints this ragdoll created.
+    /// Indices into `PhysicsWorld::joints` for the joints this ragdoll created, in bone
+    /// order — a contiguous ascending run appended to the end of that vector at spawn
+    /// time, and empty when no [`PhysicsWorld`] resource was present.
     pub joint_indices: Vec<usize>,
 }
 
 impl RagdollInstance {
-    /// Look up the entity that was spawned for a given bone type.
+    /// The entity spawned for `bone_type`, or `None` if this skeleton has no bone of that
+    /// type.
+    ///
+    /// A linear scan of [`Self::bones`] in spawn order, so with duplicate bone types it
+    /// resolves to the *first* one — whereas joints naming that type as a parent were
+    /// wired to the last (see [`RagdollBoneType`]). Cost is O(bones); for a stock humanoid
+    /// that is a scan of 11 entries.
     pub fn entity_of(&self, bone_type: RagdollBoneType) -> Option<Entity> {
         self.bones
             .iter()
@@ -262,12 +444,20 @@ impl RagdollInstance {
             .map(|(_, e)| *e)
     }
 
-    /// Number of spawned bones.
+    /// Number of rigid bodies spawned, which is always exactly the number of
+    /// [`RagdollBoneDef`]s given to [`spawn_ragdoll`]: every definition yields a body even
+    /// when its parent could not be resolved (such a bone is placed at its own `local_pos`,
+    /// read as a world position, and left unjointed). 11 for the stock humanoid.
     pub fn bone_count(&self) -> usize {
         self.bones.len()
     }
 
-    /// Number of joints created for this ragdoll.
+    /// Number of joints registered for this ragdoll — one per non-root bone whose parent
+    /// had already been spawned.
+    ///
+    /// It is therefore `0` for a single-bone skeleton, and also `0` when the world held no
+    /// [`PhysicsWorld`] resource at spawn time — in which case the bodies do exist but
+    /// nothing constrains them into a skeleton. 10 for the stock humanoid.
     pub fn joint_count(&self) -> usize {
         self.joint_indices.len()
     }

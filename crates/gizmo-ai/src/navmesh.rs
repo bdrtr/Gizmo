@@ -1,15 +1,24 @@
-//! NavMesh — Polygon-tabanlı navigasyon mesh üretimi
+//! Polygon navigation mesh: a Recast-style build from static physics colliders, plus queries
+//! over the resulting convex-polygon graph.
 //!
-//! Fizik dünyasındaki statik collider'ların AABB'lerinden yürünebilir
-//! alanları çıkarır ve konveks polygon'lara böler. A* pathfinding
-//! bu polygon'lar üzerinde çalışır.
+//! [`NavMesh::build_from_physics`] runs five stages:
+//! 1. **Voxelisation** — rasterise the world AABB of every non-dynamic collider into a flat
+//!    XZ cell grid and mark those cells blocked.
+//! 2. **Region building** — 4-way flood fill over the unblocked cells inside the configured
+//!    world bounds; regions smaller than four cells are dropped.
+//! 3. **Polygon generation** — greedily carve each region into axis-aligned rectangles, one
+//!    [`NavPoly`] per rectangle.
+//! 4. **Adjacency graph** — link polygons whose edges coincide or partially overlap.
+//! 5. **Query** — [`NavMesh::find_path`] runs A* over that polygon graph.
 //!
-//! ## Mimari
-//! 1. **Voxelization**: Dünyayı grid hücrelere böl, engelleri işaretle
-//! 2. **Region Building**: Yürünebilir hücreleri bağlı bölgelere ayır (flood-fill)
-//! 3. **Polygon Generation**: Her bölgeyi konveks polygon'a dönüştür
-//! 4. **Adjacency Graph**: Polygon'lar arasındaki komşuluk grafını oluştur
-//! 5. **Pathfinding**: Polygon grafı üzerinde A* + funnel algorithm
+//! The representation is 2.5D at best: the grid is flat in XZ and each polygon carries a
+//! single Y, so overlapping floors, ramps, slope limits and agent clearance are **not**
+//! modelled — the `agent_height` and `max_slope` settings are carried on the mesh but never
+//! enforced. There is no funnel / string-pulling stage either; paths come out as the
+//! midpoints of the shared edges they cross.
+//!
+//! This crate's own AI navigation systems in [`crate::system`] drive the simpler grid in
+//! [`crate::pathfinding`], not this module.
 
 use gizmo_math::Vec3;
 use std::collections::{BinaryHeap, HashMap, HashSet};
@@ -19,26 +28,62 @@ use web_time::Instant;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
 
-/// NavMesh'teki tek bir konveks polygon
+/// One convex walkable polygon of a [`NavMesh`], in world space (metres).
+///
+/// Every field is plain data and none of them is recomputed from the others, so a
+/// hand-built polygon has to keep `center`, `normal` and `area` consistent with `vertices`
+/// itself. [`NavMesh::build_from_physics`] only ever emits axis-aligned rectangles lying flat
+/// in XZ.
 #[derive(Debug, Clone)]
 pub struct NavPoly {
-    /// Bu polygon'un benzersiz kimliği
+    /// Identity of this polygon inside its mesh, and the key the adjacency graph is
+    /// expressed in. [`NavMesh::find_path`] resolves neighbours through an id → polygon map,
+    /// so ids must be unique within one mesh or links silently resolve to the wrong polygon.
+    /// A built mesh numbers its polygons `0..polygons.len()` in `polygons` order.
     pub id: u32,
-    /// Polygon köşeleri (üretilen mesh CCW/saat-yönü-tersi sarar, düz yüzey
-    /// varsayımıyla; `contains_point_xz` her iki winding'i de doğru işler).
+    /// Corner positions in world metres, in boundary order (each consecutive pair, plus the
+    /// wrap-around pair, is an edge).
+    ///
+    /// A built mesh emits exactly four corners, all sharing one Y, walking the rectangle as
+    /// (min x, min z) → (max x, min z) → (max x, max z) → (min x, max z). Winding is not
+    /// relied upon: [`NavPoly::contains_point_xz`] accepts either. Fewer than three vertices
+    /// makes the polygon degenerate — containment then always answers `false`.
     pub vertices: Vec<Vec3>,
-    /// Polygon merkez noktası (ağırlık merkezi)
+    /// Representative interior point in world metres — the rectangle centre for a built
+    /// polygon.
+    ///
+    /// This is the position the polygon graph is searched on: A* step cost is the
+    /// centre-to-centre distance between neighbours, and the heuristic is the distance from
+    /// a centre to the goal, so a centre far off the polygon's actual middle distorts route
+    /// choice.
     pub center: Vec3,
-    /// Komşu polygon ID'leri ve paylaşılan kenar bilgisi
+    /// Adjacency links as `(neighbour id, [edge_start, edge_end])`, where the two points are
+    /// the shared — or, after greedy merging, merely overlapping — portion of the boundary in
+    /// world metres.
+    ///
+    /// Links are stored symmetrically: both polygons list each other, with the *same* pair of
+    /// endpoints, so the segment is not oriented with respect to either owner. The midpoint
+    /// of this segment is what [`NavMesh::find_path`] emits as a waypoint when crossing here.
     pub neighbors: Vec<(u32, [Vec3; 2])>, // (neighbor_id, [edge_start, edge_end])
-    /// Bu polygon'un yüzey normali
+    /// Unit up-direction of the walkable surface. A built polygon is always flat, so this is
+    /// always `(0, 1, 0)`; it is descriptive only — no query in this module reads it, and in
+    /// particular neither containment nor pathfinding consults it or `NavMesh::max_slope`.
     pub normal: Vec3,
-    /// Yüzey alanı
+    /// Surface area in square metres, stored rather than derived. Built polygons set it to
+    /// the rectangle's width × depth; [`NavMesh::stats`] sums it to report navigable area, so
+    /// a stale value only misreports statistics — no query uses it.
     pub area: f32,
 }
 
 impl NavPoly {
-    /// Nokta bu polygon'un içinde mi? (XZ düzleminde)
+    /// Tests containment in the XZ plane only — `point.y` is ignored entirely, so a point far
+    /// above or below the polygon still counts as inside.
+    ///
+    /// Valid for **convex** polygons: it asks that the point lie on the same side of every
+    /// edge, which accepts either winding, and counts a point exactly on an edge or vertex as
+    /// inside (so two polygons sharing an edge both claim points on it). A concave polygon
+    /// fails the test almost everywhere, including at genuinely interior points. Returns
+    /// `false` for fewer than three vertices.
     pub fn contains_point_xz(&self, point: Vec3) -> bool {
         let n = self.vertices.len();
         if n < 3 {
@@ -71,7 +116,12 @@ impl NavPoly {
         true
     }
 
-    /// Polygon'un AABB'sini hesaplar
+    /// Axis-aligned bounds of the vertices as `(min, max)` in world metres, over all three
+    /// axes — the Y span is real, not collapsed, even though queries work in XZ.
+    ///
+    /// A polygon with no vertices yields the inverted sentinel box
+    /// `(f32::MAX…, f32::MIN…)`, which intersects nothing; callers must not assume
+    /// `min <= max`.
     pub fn aabb(&self) -> (Vec3, Vec3) {
         let mut min = Vec3::new(f32::MAX, f32::MAX, f32::MAX);
         let mut max = Vec3::new(f32::MIN, f32::MIN, f32::MIN);
@@ -87,32 +137,77 @@ impl NavPoly {
     }
 }
 
-/// Navigasyon mesh — polygon grafı + pathfinding
+/// A navigable surface as a graph of convex polygons, plus the settings it was built with.
+///
+/// Immutable once built: there is no incremental update, so a scene whose static geometry
+/// changes needs a fresh [`NavMesh::build_from_physics`]. All queries are read-only and take
+/// `&self`, so a built mesh can be shared freely across threads.
 #[derive(Debug, Clone)]
 pub struct NavMesh {
-    /// Tüm polygon'lar
+    /// Every polygon of the mesh, in generation order. Adjacency is expressed through
+    /// [`NavPoly::id`], not through this index — the two agree only because a built mesh
+    /// numbers polygons consecutively. Empty when the world had no walkable region of at
+    /// least four cells, in which case every query returns `None`.
     pub polygons: Vec<NavPoly>,
-    /// Hücre boyutu (voxelization hassasiyeti)
+    /// Voxel edge length in metres used during the build, copied from the config. Also the
+    /// tolerance for deciding that two polygon edges coincide, so it bounds the finest
+    /// detail the mesh can represent: gaps narrower than one cell close up, and obstacles are
+    /// conservatively INFLATED outward to whole cells rather than dropped (voxelisation floors
+    /// the AABB min and ceils the max, so a sub-cell obstacle still blocks at least one cell).
     pub cell_size: f32,
-    /// Ajan yüksekliği (clearance kontrolü için)
+    /// Intended agent height in metres, carried from the config for the caller's benefit.
+    /// **Not enforced** — the builder is 2D and performs no headroom or ceiling test, so a
+    /// polygon may sit under an overhang lower than this.
     pub agent_height: f32,
-    /// Ajan yarıçapı (engel kenar boşluğu)
+    /// Intended agent radius in metres, carried from the config. The build does **not** erode
+    /// the walkable area by it — polygons run right up to an obstacle's AABB — so an agent
+    /// following polygon interiors can still clip a wall corner with its body.
     pub agent_radius: f32,
-    /// Yürünebilir maksimum eğim (radyan)
+    /// Maximum walkable incline in **radians**, converted from the config's degrees.
+    /// Descriptive only: the builder emits flat, +Y-facing polygons and no stage of build or
+    /// query compares a surface against it.
     pub max_slope: f32,
-    /// Mesh'in oluşturulma anı
+    /// Wall-clock duration of the [`NavMesh::build_from_physics`] call that produced this
+    /// mesh, in milliseconds. Diagnostic only; meaningless for a hand-assembled mesh.
     pub build_time_ms: f64,
 }
 
-/// NavMesh oluşturma konfigürasyonu
+/// Build settings for [`NavMesh::build_from_physics`].
+///
+/// [`Default`] gives 0.5 m cells, a 2.0 m × 0.5 m agent, a 45° slope limit and a
+/// ±100 m world box in XZ.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct NavMeshConfig {
+    /// Voxel edge length in metres (default `0.5`). Must be greater than zero — it divides
+    /// world coordinates. This is the accuracy/cost dial: the whole `world_min..world_max`
+    /// box is enumerated cell by cell, so halving it quadruples the cell count and also
+    /// tends to split the level into more polygons. See [`NavMesh::build_from_physics`] for
+    /// what dominates build time.
     pub cell_size: f32,
+    /// Agent height in metres (default `2.0`). Recorded on the built mesh but never checked;
+    /// see [`NavMesh::agent_height`].
     pub agent_height: f32,
+    /// Agent radius in metres (default `0.5`). Despite the name, it does not shrink the
+    /// walkable area. Its only build effect is to widen, by `ceil(radius / cell_size)` cells,
+    /// the band around each obstacle whose floor height is sampled — so it influences the Y
+    /// that nearby polygons are placed at, not their extent.
     pub agent_radius: f32,
+    /// Slope limit in **degrees** (default `45.0`), stored on the mesh as radians. Currently
+    /// inert; see [`NavMesh::max_slope`].
     pub max_slope_degrees: f32,
+    /// Lower corner in world metres of the box to voxelise (default `(-100, -10, -100)`).
+    /// Only X and Z are read — the Y component is ignored, as the build is 2D.
+    ///
+    /// Geometry outside this box is still rasterised as an obstacle, but no walkable cell is
+    /// ever created outside it, so the box is the hard limit of where agents can be routed.
     pub world_min: Vec3,
+    /// Upper corner in world metres of the box to voxelise (default `(100, 50, 100)`), with
+    /// the same XZ-only treatment as `world_min`.
+    ///
+    /// Every cell inside the box that no static collider covers becomes walkable — including
+    /// cells with no floor beneath them. Sizing this box to the actual playable area matters
+    /// for both correctness and build cost.
     pub world_max: Vec3,
 }
 
@@ -137,7 +232,39 @@ struct GridCell {
 }
 
 impl NavMesh {
-    /// Fizik dünyasından NavMesh oluşturur (Recast-tarzı pipeline)
+    /// Voxelises the static geometry of `physics` and returns the navigable surface as a
+    /// polygon graph.
+    ///
+    /// Only non-dynamic bodies contribute, and each contributes its
+    /// world AABB rather than its actual shape — a sphere or a rotated box blocks its full
+    /// bounding rectangle in XZ. Walkability is defined negatively: **every** cell of the
+    /// `world_min..world_max` box that no such AABB covers is walkable, so a world with no
+    /// static bodies comes out entirely navigable, and a hole in the floor stays navigable
+    /// because nothing occupies it.
+    ///
+    /// Connected walkable cells are flood-filled with 4-way adjacency, so two areas touching
+    /// only at a diagonal become separate regions; an isolated region of fewer than four
+    /// cells is dropped altogether. Each surviving region is then carved greedily into
+    /// axis-aligned rectangles starting from arbitrarily chosen cells, so the number and
+    /// shape of the polygons is an artefact of hash-set iteration order rather than a
+    /// property of the level. Each `HashSet` is randomly seeded when it is created, not once
+    /// per process, so even two `build_from_physics` calls on the same world inside one run
+    /// can decompose into different polygons with different ids, and paths through open space
+    /// can differ accordingly. Do not persist ids, and do not treat a path as reproducible —
+    /// not across runs, and not between two builds in the same run.
+    ///
+    /// Polygon Y is sampled, not computed: a rectangle takes the highest obstacle top surface
+    /// recorded for the one cell the greedy expansion started from, and falls back to `0.0`
+    /// when no static body was near that cell. Expect the wrong height on multi-level or
+    /// stepped terrain.
+    ///
+    /// Runs single-threaded. Voxelisation and region building are linear in the number of
+    /// cells of the configured world box, but the adjacency stage that follows compares every
+    /// pair of polygons unconditionally — recomputing one polygon's AABB inside the inner
+    /// loop — so the overall cost is quadratic in the polygon count, which depends on how
+    /// cluttered the level is and not only on the size of the box. Treat this as load-time
+    /// work and measure it before calling it anywhere else. The elapsed time lands in
+    /// [`NavMesh::build_time_ms`].
     #[tracing::instrument(skip_all, name = "navmesh_build")]
     pub fn build_from_physics(
         physics: &gizmo_physics_rigid::world::PhysicsWorld,
@@ -479,7 +606,17 @@ impl NavMesh {
         }
     }
 
-    /// Dünya koordinatındaki noktayı içeren polygon'u bul
+    /// Locates the polygon a world position sits on, matching in XZ only (`pos.y` is
+    /// ignored).
+    ///
+    /// **Never fails for a non-empty mesh.** When the point is outside every polygon this
+    /// falls back to the polygon with the nearest `center`, however far away that is, so a
+    /// `Some` result is not evidence that `pos` is on the mesh — check
+    /// [`NavPoly::contains_point_xz`] yourself if that matters. Among polygons that do
+    /// contain the point (they can overlap on shared edges) the nearest centre wins.
+    ///
+    /// Returns `None` only when the mesh has no polygons. Cost is linear in the polygon
+    /// count; there is no spatial index.
     pub fn find_polygon(&self, pos: Vec3) -> Option<&NavPoly> {
         let mut best: Option<(&NavPoly, f32)> = None;
 
@@ -510,7 +647,23 @@ impl NavMesh {
         best.map(|(p, _)| p)
     }
 
-    /// Polygon grafı üzerinde A* pathfinding
+    /// A* over the polygon graph, returning waypoints in world metres.
+    ///
+    /// The result is the midpoint of each shared edge the route crosses, in travel order,
+    /// with `end` appended as the final waypoint. `start` is not included, and the waypoints
+    /// are *not* the geometric shortest path: no funnel or string-pulling stage exists, so
+    /// routes visibly zig-zag through the middle of each portal. Search cost is the distance
+    /// between polygon centres, which is itself only an approximation of travel distance.
+    ///
+    /// When both endpoints resolve to the same polygon the result is `vec![end]` — a single
+    /// straight hop, with no check that the segment stays inside the polygon.
+    ///
+    /// Endpoints are resolved with [`NavMesh::find_polygon`], which snaps to the nearest
+    /// polygon rather than failing, so a `start` or `end` off the mesh silently produces a
+    /// path from or to somewhere else. Returns `None` only for an empty mesh or when the two
+    /// polygons lie in disconnected regions. There is no iteration cap: the search runs to
+    /// exhaustion, which is bounded by the polygon count but can be costly on a large mesh
+    /// with an unreachable target.
     #[tracing::instrument(skip_all, name = "navmesh_find_path")]
     pub fn find_path(&self, start: Vec3, end: Vec3) -> Option<Vec<Vec3>> {
         let start_poly = match self.find_polygon(start) {
@@ -641,7 +794,8 @@ impl NavMesh {
         None
     }
 
-    /// NavMesh istatistikleri
+    /// Summarises the mesh for logging and tuning. Recomputed on each call by walking every
+    /// polygon; nothing is cached.
     pub fn stats(&self) -> NavMeshStats {
         let total_area: f32 = self.polygons.iter().map(|p| p.area).sum();
         let total_edges: usize = self.polygons.iter().map(|p| p.neighbors.len()).sum();
@@ -655,13 +809,30 @@ impl NavMesh {
     }
 }
 
-/// NavMesh istatistikleri
+/// Size and cost summary of a built [`NavMesh`], from [`NavMesh::stats`].
+///
+/// A snapshot of the mesh as it was when taken, not a live view. Its [`Display`] rendering is
+/// a one-line Turkish log summary.
+///
+/// [`Display`]: std::fmt::Display
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct NavMeshStats {
+    /// Number of convex polygons. Driven by `cell_size` and by how well the greedy rectangle
+    /// carving happened to fit the region, so it is a rough proxy for query cost rather than
+    /// a property of the level.
     pub polygon_count: usize,
+    /// Navigable surface in square metres: the sum of every [`NavPoly::area`]. Built
+    /// rectangles tile their region without overlapping, so for a built mesh this is the true
+    /// walkable area — remembering that "walkable" here means only "not covered by a static
+    /// collider".
     pub total_area: f32,
+    /// Number of adjacency links, counted once per pair (the raw neighbour lists hold each
+    /// link twice). Compared against `polygon_count` it indicates fragmentation: far fewer
+    /// edges than polygons means the mesh is split into poorly connected islands.
     pub edge_count: usize,
+    /// Build duration in milliseconds, copied from [`NavMesh::build_time_ms`] — not the cost
+    /// of collecting these statistics.
     pub build_time_ms: f64,
 }
 
