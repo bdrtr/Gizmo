@@ -1,0 +1,1140 @@
+//! Simulation-quality measurement for the contact solver.
+//!
+//! # Why this file exists
+//!
+//! The solver scales its per-island sweep count with island support depth
+//! (`solver/mod.rs`: `n_iterations = min(96, max(cfg, max(28, 1.5·depth)))` when the block
+//! solver is on and `depth >= 5`). `benches/step_bench.rs` measured that this policy, not the
+//! per-contact cost, is ~93% of the solver's super-linear growth on a dense scene — and an
+//! attempt to throttle it made that scene 1.9× faster while buckling the N=24 and N=32 towers
+//! in `soak_resting_stacks_stay_bounded`.
+//!
+//! That attempt was reverted for a reason worth stating plainly: it measured only SPEED. Nobody
+//! measured whether the throttled scene's simulation got WORSE. This file is the missing
+//! measurement — the instrument a sweep-throttling change has to pass before it can ship.
+//!
+//! # The one thing not to forget
+//!
+//! **The failure mode that matters is invisible to per-step residuals.** The root-cause note in
+//! `soak_and_golden.rs` establishes that tall-stack collapse is lateral (Euler) buckling: the
+//! column's lean grows exponentially for *hundreds of frames* while `max|v|` stays under 0.05
+//! and the stack is, at every individual step, essentially at rest and essentially
+//! non-penetrating. A convergence-residual metric therefore reads ~zero through the entire
+//! ramp and only notices once the tower is already falling.
+//!
+//! So a quality suite built only from residuals would have passed the reverted fix. Any metric
+//! here has to carry a term that grows *during* the ramp.
+//!
+//! # What is measured, and how, without new instrumentation
+//!
+//! Everything below is computed from `PhysicsWorld`'s public state after `step`:
+//!
+//! - **Residual penetration** — `collision_events()` carries the solved contact points, and the
+//!   solver never writes `ContactPoint::penetration` back (it reads it once into `pen0`,
+//!   `solver/tgs.rs:302`). So the depth on an event is the narrowphase depth *at the top of that
+//!   substep*, i.e. exactly the overlap the previous substep's solve failed to remove. Events
+//!   accumulate over the frame's four substeps, so the max over a frame is a residual reading
+//!   that needs no solver-internal access and cannot perturb the simulation. This works for any
+//!   geometry, unlike the stacked-box vertical-gap formula in `soak_and_golden.rs`.
+//! - **Lean and tilt** — position and orientation only.
+//! - **Energy** — `calculate_total_energy()`.
+
+use gizmo_math::Vec3;
+use gizmo_physics_core::{BodyHandle, Collider, PhysicsMaterial, Transform};
+use gizmo_physics_rigid::{PhysicsWorld, RigidBody, Velocity};
+
+const DT: f32 = 1.0 / 60.0;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Per-frame observables
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// One frame's quality reading. Every field is derived from public post-step state.
+#[derive(Debug, Clone, Copy, Default)]
+struct Frame {
+    /// `max(|v_lin| + |v_ang|)` over the dynamic bodies — the existing soak's blow-up signal.
+    max_speed: f32,
+    /// Largest positive contact penetration reported this frame. See the module docs: this is
+    /// the depth the previous substep's solve left behind, read back through `collision_events`.
+    max_penetration: f32,
+    /// Mean positive penetration over all contacts this frame — max alone is a single bad
+    /// contact, the mean says whether the whole island is sunk.
+    mean_penetration: f32,
+    /// Contacts contributing to the two figures above.
+    contact_count: usize,
+    /// Largest horizontal distance of any body from its own starting `(x, z)`. For a column
+    /// this is the buckling amplitude; for a raft it is how far the lattice has spread.
+    lean: f32,
+    /// Largest angle (radians) between a body's local +Y and world +Y. Rotation-channel twin of
+    /// `lean`: a column can buckle by tilting boxes without translating their centres much.
+    tilt: f32,
+    /// `calculate_total_energy()` — kinetic plus gravitational potential.
+    energy: f32,
+    /// Dynamic bodies asleep at the end of the frame. A settled scene that never sleeps is a
+    /// quality defect in its own right (and a cost defect).
+    asleep: usize,
+}
+
+/// Read the whole observable set off a stepped world. `origins` is the initial position per
+/// dynamic body, in the same order as `bodies`.
+fn observe(world: &PhysicsWorld, bodies: &[usize], origins: &[Vec3]) -> Frame {
+    let mut f = Frame::default();
+
+    for (&i, &origin) in bodies.iter().zip(origins) {
+        let t = &world.transforms[i];
+        let v = &world.velocities[i];
+        if !t.position.is_finite() || !v.linear.is_finite() || !v.angular.is_finite() {
+            return Frame {
+                max_speed: f32::INFINITY,
+                ..f
+            };
+        }
+        f.max_speed = f.max_speed.max(v.linear.length() + v.angular.length());
+
+        let d = t.position - origin;
+        f.lean = f.lean.max(Vec3::new(d.x, 0.0, d.z).length());
+
+        let up = t.rotation.mul_vec3(Vec3::Y);
+        f.tilt = f.tilt.max(up.dot(Vec3::Y).clamp(-1.0, 1.0).acos());
+
+        if world.rigid_bodies[i].is_sleeping {
+            f.asleep += 1;
+        }
+    }
+
+    let mut sum = 0.0f32;
+    for ev in world.collision_events() {
+        for c in &ev.contact_points {
+            // Negative depth marks a speculative CCD contact, not an overlap — skip those.
+            if c.penetration > 0.0 {
+                f.max_penetration = f.max_penetration.max(c.penetration);
+                sum += c.penetration;
+                f.contact_count += 1;
+            }
+        }
+    }
+    if f.contact_count > 0 {
+        f.mean_penetration = sum / f.contact_count as f32;
+    }
+
+    f.energy = world.calculate_total_energy();
+    f
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Scenes
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Ground half-extent used by every scene here. Matches `soak_and_golden.rs`.
+///
+/// This is not a free choice, and that is a finding in its own right: with 200.0 instead (the
+/// value `benches/step_bench.rs` uses) the N=24 tower buckles at frame ~1140 while the soak's
+/// identical-by-intent tower stays bounded for 1500. Nothing about the solver changes — the
+/// ground is static and its top face is at y=0 either way. Only the float noise of the contact
+/// clip against a 10× larger face changes, and the documented root cause of the instability is
+/// an eigenvalue just above 1 seeded by exactly that kind of noise. See
+/// `ground_extent_flips_the_blow_up` below.
+const GROUND_HALF: f32 = 20.0;
+
+fn add_ground_sized(world: &mut PhysicsWorld, half: f32) {
+    let mut g = RigidBody::new_static();
+    g.wake_up();
+    world.add_body(
+        BodyHandle::from_id(0),
+        g,
+        Transform::new(Vec3::new(0.0, -1.0, 0.0)),
+        Velocity::default(),
+        Collider::box_collider(Vec3::new(half, 1.0, half)),
+    );
+}
+
+fn add_ground(world: &mut PhysicsWorld) {
+    add_ground_sized(world, GROUND_HALF);
+}
+
+fn add_box(world: &mut PhysicsWorld, id: u32, pos: Vec3, half: f32, material: PhysicsMaterial) {
+    let mut rb = RigidBody::new(1.0, true);
+    rb.wake_up();
+    let col = Collider::box_collider(Vec3::splat(half)).with_material(material);
+    rb.update_inertia_from_collider(&col);
+    world.add_body(
+        BodyHandle::from_id(id),
+        rb,
+        Transform::new(pos),
+        Velocity::default(),
+        col,
+    );
+}
+
+/// The `soak_and_golden.rs` tower: `n` restitution-0 boxes stacked at exact contact on the
+/// ground, already at rest. This is the scene whose sweeps demonstrably cannot be cut.
+fn scene_tower(n: usize) -> (PhysicsWorld, Vec<usize>, Vec<Vec3>) {
+    scene_tower_on_ground(n, GROUND_HALF)
+}
+
+fn scene_tower_on_ground(n: usize, ground_half: f32) -> (PhysicsWorld, Vec<usize>, Vec<Vec3>) {
+    let mut world = PhysicsWorld::new();
+    add_ground_sized(&mut world, ground_half);
+    let half = 0.5;
+    let no_bounce = PhysicsMaterial {
+        restitution: 0.0,
+        ..Default::default()
+    };
+    for i in 0..n {
+        let y = half + i as f32 * (2.0 * half);
+        add_box(
+            &mut world,
+            i as u32 + 1,
+            Vec3::new(0.0, y, 0.0),
+            half,
+            no_bounce,
+        );
+    }
+    let bodies: Vec<usize> = (1..=n).collect();
+    let origins = bodies.iter().map(|&i| world.transforms[i].position).collect();
+    (world, bodies, origins)
+}
+
+/// The `step_bench.rs` `dense_contacts` scene: `n` boxes of half-extent 0.5 on a 0.9-spaced
+/// square lattice at y=5, zero gravity, never touching the ground — so the island is
+/// anchor-free and its support depth is the lattice diameter, √n−1. This is the scene whose
+/// sweeps look wasted.
+fn scene_raft(n: u32) -> (PhysicsWorld, Vec<usize>, Vec<Vec3>) {
+    let mut world = PhysicsWorld::new().with_gravity(Vec3::ZERO);
+    add_ground(&mut world);
+    let side = (n as f32).sqrt().ceil() as u32;
+    for i in 0..n {
+        let (x, z) = ((i % side) as f32, (i / side) as f32);
+        add_box(
+            &mut world,
+            i + 1,
+            Vec3::new(x * 0.9, 5.0, z * 0.9),
+            0.5,
+            PhysicsMaterial::default(),
+        );
+    }
+    let bodies: Vec<usize> = (1..=n as usize).collect();
+    let origins = bodies.iter().map(|&i| world.transforms[i].position).collect();
+    (world, bodies, origins)
+}
+
+/// The raft's honest counterpart: the same anchor-free mid-air lattice, but spaced at EXACT
+/// contact instead of 0.1 m overlapped, in zero gravity, at rest.
+///
+/// This scene exists because the benchmark raft cannot answer the quality question. Placing 256
+/// rigid boxes 0.1 m inside each other is not a physical state, the lattice has no
+/// non-overlapping configuration reachable without expanding, and every solver invents
+/// something to escape it — so there is no correct answer to compare against, and
+/// `sweep_ladder_raft` duly shows more sweeps buying *more* invented energy with no way to say
+/// whether that is better or worse.
+///
+/// At exact contact the correct answer is not merely definable, it is trivial: no gravity, no
+/// velocity, no overlap, nothing to solve. **The lattice must not move, at all, forever.** Any
+/// motion is invented by the solver, so the quality scalar is absolute — its ideal value is
+/// zero, not whatever the current build happens to produce.
+///
+/// And it keeps the property the whole question is about: no body touches the ground, so the
+/// island is anchor-free and its support depth is the lattice diameter √n−1, which is exactly
+/// the input that drives the adaptive sweep count on the benchmark scene.
+///
+/// **Measured result, and it is the point of the scene rather than a disappointment:** this
+/// reads exactly 0.0000 on every channel at every sweep count from 1 to 96, and every body is
+/// asleep. In zero gravity with nothing overlapping there is no load for the contacts to carry,
+/// so an anchor-free lattice has literally nothing for the extra sweeps to converge. That is a
+/// real answer to "are the raft's sweeps earned" — for an unloaded anchor-free cluster they are
+/// not — but it is also why this scene cannot be the whole test: it exercises the sleep system
+/// as much as the solver. The loaded anchor-free case is [`scene_compressed_free_chain`].
+fn scene_floating_lattice(n: u32) -> (PhysicsWorld, Vec<usize>, Vec<Vec3>) {
+    let mut world = PhysicsWorld::new().with_gravity(Vec3::ZERO);
+    add_ground(&mut world);
+    let side = (n as f32).sqrt().ceil() as u32;
+    for i in 0..n {
+        let (x, z) = ((i % side) as f32, (i / side) as f32);
+        add_box(
+            &mut world,
+            i + 1,
+            Vec3::new(x, 5.0, z), // spacing 1.0 == 2·half: faces touch, nothing overlaps
+            0.5,
+            PhysicsMaterial::default(),
+        );
+    }
+    let bodies: Vec<usize> = (1..=n as usize).collect();
+    let origins = bodies.iter().map(|&i| world.transforms[i].position).collect();
+    (world, bodies, origins)
+}
+
+/// A `side × height × side` block of crates at exact contact on the ground, under real gravity.
+///
+/// This is the realistic dense scene the benchmark raft is standing in for, and the reason it
+/// is here is to check whether a realistic dense scene reaches the pathological depth at all.
+/// Its bottom layer rests on the ground, so the BFS has anchors and the support depth is the
+/// stack HEIGHT — the quantity the adaptive policy was written for — rather than a lattice
+/// diameter. Ideal answer, again exactly zero: a block at exact contact must stay put.
+fn scene_crate_pile(side: u32, height: u32) -> (PhysicsWorld, Vec<usize>, Vec<Vec3>) {
+    scene_crate_pile_spaced(side, height, 1.0)
+}
+
+/// `lateral_spacing` is the horizontal pitch; at 1.0 (== 2·half) neighbouring columns touch
+/// exactly, above it they start apart. Vertical pitch is always exact contact.
+fn scene_crate_pile_spaced(
+    side: u32,
+    height: u32,
+    lateral_spacing: f32,
+) -> (PhysicsWorld, Vec<usize>, Vec<Vec3>) {
+    let mut world = PhysicsWorld::new();
+    add_ground(&mut world);
+    let no_bounce = PhysicsMaterial {
+        restitution: 0.0,
+        ..Default::default()
+    };
+    let mut id = 1u32;
+    for y in 0..height {
+        for x in 0..side {
+            for z in 0..side {
+                add_box(
+                    &mut world,
+                    id,
+                    Vec3::new(x as f32 * lateral_spacing, 0.5 + y as f32, z as f32 * lateral_spacing),
+                    0.5,
+                    no_bounce,
+                );
+                id += 1;
+            }
+        }
+    }
+    let bodies: Vec<usize> = (1..id as usize).collect();
+    let origins = bodies.iter().map(|&i| world.transforms[i].position).collect();
+    (world, bodies, origins)
+}
+
+/// A row of `n` boxes at exact contact in zero gravity, with the two end boxes given equal and
+/// opposite inward velocities — an anchor-free island that is nevertheless deep AND loaded.
+///
+/// This is the scene the reverted fix would have got wrong, isolated. That fix suppressed the
+/// sweep scaling whenever an island had no static or kinematic anchor, on the reasoning that
+/// without an anchor there is no support chain. This chain has no anchor and is nothing but
+/// support chain: the impulse has to propagate along all `n` bodies, which is precisely the
+/// work the sweeps do. Its support depth is `n−1` (the BFS roots at the lowest-indexed body,
+/// `solver/mod.rs`), the same as a tower of the same height.
+///
+/// Two things are exactly known here rather than blessed from a previous run, which is what
+/// makes it a gate and not a baseline:
+///   - **Momentum.** The initial linear momentum is exactly zero by symmetry and there are no
+///     external forces, so it must stay zero. A contact solver that leaks momentum is wrong,
+///     full stop.
+///   - **Energy.** There is no source of energy, so the kinetic energy must never exceed what
+///     the two end boxes started with. Restitution is 0, so it should fall well below it.
+fn scene_compressed_free_chain(n: usize) -> (PhysicsWorld, Vec<usize>, Vec<Vec3>) {
+    let mut world = PhysicsWorld::new().with_gravity(Vec3::ZERO);
+    add_ground(&mut world); // present but far below; nothing ever reaches it
+    let no_bounce = PhysicsMaterial {
+        restitution: 0.0,
+        ..Default::default()
+    };
+    for i in 0..n {
+        add_box(
+            &mut world,
+            i as u32 + 1,
+            Vec3::new(i as f32, 50.0, 0.0),
+            0.5,
+            no_bounce,
+        );
+    }
+    let bodies: Vec<usize> = (1..=n).collect();
+    world.velocities[bodies[0]].linear = Vec3::new(1.0, 0.0, 0.0);
+    world.velocities[bodies[n - 1]].linear = Vec3::new(-1.0, 0.0, 0.0);
+    let origins = bodies.iter().map(|&i| world.transforms[i].position).collect();
+    (world, bodies, origins)
+}
+
+/// Linear momentum and kinetic energy of the listed bodies.
+fn momentum_and_ke(world: &PhysicsWorld, bodies: &[usize]) -> (Vec3, f32) {
+    let mut p = Vec3::ZERO;
+    let mut ke = 0.0f32;
+    for &i in bodies {
+        let v = &world.velocities[i];
+        let rb = &world.rigid_bodies[i];
+        p += rb.mass * v.linear;
+        ke += 0.5 * rb.mass * v.linear.length_squared()
+            + 0.5 * rb.local_inertia.dot(v.angular * v.angular);
+    }
+    (p, ke)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EXPLORATORY MEASUREMENTS (ignored by default — they print, they do not assert)
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn trace(label: &str, world: &mut PhysicsWorld, bodies: &[usize], origins: &[Vec3], frames: usize) {
+    eprintln!("\n=== {label} ===");
+    eprintln!(
+        "{:>6}  {:>10}  {:>10}  {:>10}  {:>8}  {:>10}  {:>9}  {:>12}  {:>6}",
+        "frame", "max|v|", "lean", "tilt(deg)", "contacts", "pen_max", "pen_mean", "energy", "asleep"
+    );
+    for f in 0..frames {
+        world.step(DT).ok();
+        let o = observe(world, bodies, origins);
+        let report = f < 5 || (f + 1) % (frames / 25).max(1) == 0 || f == frames - 1;
+        if report {
+            eprintln!(
+                "{:>6}  {:>10.5}  {:>10.6}  {:>10.4}  {:>8}  {:>10.6}  {:>9.6}  {:>12.4}  {:>6}",
+                f,
+                o.max_speed,
+                o.lean,
+                o.tilt.to_degrees(),
+                o.contact_count,
+                o.max_penetration,
+                o.mean_penetration,
+                o.energy,
+                o.asleep,
+            );
+        }
+        if !o.max_speed.is_finite() {
+            eprintln!("  non-finite at frame {f} — stopping");
+            break;
+        }
+    }
+}
+
+/// Summary of a whole run — the shape a gate would compare.
+#[derive(Debug, Clone, Copy)]
+struct Run {
+    blew_up_at: Option<usize>,
+    peak_speed: f32,
+    peak_lean: f32,
+    peak_tilt_deg: f32,
+    final_pen_max: f32,
+    /// Largest contact penetration seen while the scene was genuinely settled (past frame 60,
+    /// this frame's `max|v|` under 0.1).
+    ///
+    /// This is the channel nothing else covers. Every other number here is about whether the
+    /// scene stays *stable*; a build that simply lets everything sink 30% deeper and then sits
+    /// there is perfectly stable, perfectly quiet, converges fine, and is wrong. Unlike the
+    /// stacked-box vertical-gap formula in `soak_and_golden.rs` this reads the engine's own
+    /// contact depths, so it works on a block, a pile or a chain rather than only on a column.
+    resting_pen: f32,
+}
+
+fn run(
+    world: &mut PhysicsWorld,
+    bodies: &[usize],
+    origins: &[Vec3],
+    frames: usize,
+    vel_threshold: f32,
+) -> Run {
+    let mut r = Run {
+        blew_up_at: None,
+        peak_speed: 0.0,
+        peak_lean: 0.0,
+        peak_tilt_deg: 0.0,
+        final_pen_max: 0.0,
+        resting_pen: 0.0,
+    };
+    for f in 0..frames {
+        world.step(DT).ok();
+        let o = observe(world, bodies, origins);
+        if !o.max_speed.is_finite() {
+            r.blew_up_at.get_or_insert(f);
+            r.peak_speed = f32::INFINITY;
+            break;
+        }
+        r.peak_speed = r.peak_speed.max(o.max_speed);
+        r.peak_lean = r.peak_lean.max(o.lean);
+        r.peak_tilt_deg = r.peak_tilt_deg.max(o.tilt.to_degrees());
+        r.final_pen_max = o.max_penetration;
+        // Settled only, and only before any collapse: a toppling scene's overlaps are the
+        // collapse, not the resting depth.
+        if f > 60 && o.max_speed < 0.1 && r.blew_up_at.is_none() {
+            r.resting_pen = r.resting_pen.max(o.max_penetration);
+        }
+        if r.blew_up_at.is_none() && o.max_speed >= vel_threshold {
+            r.blew_up_at = Some(f);
+        }
+    }
+    r
+}
+
+/// How much of `soak_resting_stacks_stay_bounded`'s green is the solver, and how much is one
+/// lucky float realisation?
+///
+/// The only difference between the tower this file first measured and the soak's tower was the
+/// static ground's half-extent — 200 m (copied from `benches/step_bench.rs`) versus the soak's
+/// 20 m. The ground is static and its top face sits at y=0 in both cases, so nothing about the
+/// physics being asked for changes; only the floating-point detail of clipping a contact against
+/// a bigger face does. If that alone moves a tower from "bounded for 1500 frames" to "buckled at
+/// ~1140", then a pass/fail-on-blow-up gate is measuring noise as much as quality — which is a
+/// constraint on how the sweep-throttling gate may be built.
+#[test]
+#[ignore = "measurement, not a gate — prints a table"]
+fn ground_extent_flips_the_blow_up() {
+    eprintln!("\n=== blow-up frame vs static ground half-extent (1500 frames, |v| bound 0.5) ===");
+    eprintln!(
+        "{:>3}  {:>10}  {:>12}  {:>10}  {:>10}  {:>12}",
+        "N", "ground", "blew_up_at", "peak|v|", "peak_lean", "peak_tilt_deg"
+    );
+    for n in [16usize, 24, 32] {
+        for ground_half in [20.0f32, 50.0, 100.0, 200.0] {
+            let (mut world, bodies, origins) = scene_tower_on_ground(n, ground_half);
+            let r = run(&mut world, &bodies, &origins, 1500, 0.5);
+            eprintln!(
+                "{:>3}  {:>10.0}  {:>12}  {:>10.3}  {:>10.4}  {:>12.3}",
+                n,
+                ground_half,
+                match r.blew_up_at {
+                    Some(f) => f.to_string(),
+                    None => "-".to_string(),
+                },
+                r.peak_speed,
+                r.peak_lean,
+                r.peak_tilt_deg,
+            );
+        }
+    }
+}
+
+/// Does the buckling ramp show up in anything a per-step residual can see?
+///
+/// Run with:
+/// `cargo test -p gizmo-physics-rigid --release --test solver_quality measure_ -- --ignored --nocapture`
+#[test]
+#[ignore = "measurement, not a gate — prints a trace"]
+fn measure_tower_buckling_channels() {
+    for n in [16usize, 24, 32] {
+        let (mut world, bodies, origins) = scene_tower(n);
+        trace(&format!("tower N={n}"), &mut world, &bodies, &origins, 1500);
+    }
+}
+
+/// What does the floating raft actually do over time, and does anything settle?
+#[test]
+#[ignore = "measurement, not a gate — prints a trace"]
+fn measure_raft_behaviour() {
+    for n in [64u32, 256] {
+        let (mut world, bodies, origins) = scene_raft(n);
+        trace(&format!("raft N={n}"), &mut world, &bodies, &origins, 300);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The sweep ladder
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// `adaptive_iterations = false` is what makes this possible at all: with it on, a deep island's
+// sweep count is `max(iterations, max(28, 1.5·depth))`, so `iterations` can only raise it and
+// the interesting half of the ladder — below the floor — is unreachable.
+
+/// Sweep counts to walk. 20 is the configured default, 28 the adaptive floor, 46 what the
+/// N=1024 raft actually gets, 96 the cap.
+const LADDER: [usize; 8] = [1, 4, 8, 16, 20, 28, 46, 96];
+
+fn solver_with_exact_sweeps(world: &mut PhysicsWorld, sweeps: usize) {
+    world.solver.adaptive_iterations = false;
+    world.solver.iterations = sweeps;
+}
+
+/// Are the tower's sweeps earned? Walk the sweep count down and watch the stack.
+///
+/// Each (N, sweeps) cell is run over three static ground sizes rather than one. That is not
+/// belt-and-braces: `ground_extent_flips_the_blow_up` shows a single trajectory's pass/fail is
+/// flippable by a float perturbation with no physical content, so one run cannot distinguish
+/// "this sweep count is unsafe" from "this seed was unlucky". Three is not a real ensemble
+/// either — it is the smallest number that stops a single flip from reading as a trend.
+#[test]
+#[ignore = "measurement, not a gate — prints a table (~3 min)"]
+fn sweep_ladder_tower() {
+    const GROUNDS: [f32; 3] = [20.0, 100.0, 200.0];
+    eprintln!("\n=== tower: quality vs sweep count (1500 frames, |v| bound 0.5, 3 grounds) ===");
+    eprintln!(
+        "{:>3}  {:>7}  {:>9}  {:>12}  {:>11}  {:>11}  {:>11}",
+        "N", "sweeps", "blew/3", "earliest", "worst|v|", "worst_lean", "worst_pen"
+    );
+    for n in [16usize, 24, 32] {
+        for sweeps in LADDER {
+            let mut blew = 0;
+            let mut earliest: Option<usize> = None;
+            let (mut worst_v, mut worst_lean, mut worst_pen) = (0.0f32, 0.0f32, 0.0f32);
+            for g in GROUNDS {
+                let (mut world, bodies, origins) = scene_tower_on_ground(n, g);
+                solver_with_exact_sweeps(&mut world, sweeps);
+                let r = run(&mut world, &bodies, &origins, 1500, 0.5);
+                if let Some(f) = r.blew_up_at {
+                    blew += 1;
+                    earliest = Some(earliest.map_or(f, |e: usize| e.min(f)));
+                }
+                worst_v = worst_v.max(r.peak_speed);
+                worst_lean = worst_lean.max(r.peak_lean);
+                worst_pen = worst_pen.max(r.final_pen_max);
+            }
+            eprintln!(
+                "{:>3}  {:>7}  {:>9}  {:>12}  {:>11.3}  {:>11.4}  {:>11.6}",
+                n,
+                sweeps,
+                blew,
+                match earliest {
+                    Some(f) => f.to_string(),
+                    None => "-".to_string(),
+                },
+                worst_v,
+                worst_lean,
+                worst_pen,
+            );
+        }
+    }
+}
+
+/// Are the raft's sweeps earned?
+///
+/// The raft is not a settling scene — `measure_raft_behaviour` shows it is an explosion: the
+/// lattice starts 0.1 m overlapped on every axis, the solver depenetrates it by launching
+/// everything outward, and by frame ~215 there are no contacts left. So "does it stay stable"
+/// is not the question. The question a depenetration transient can be asked is how much
+/// KINETIC ENERGY the solver invents to resolve the overlap, and how fast the overlap goes
+/// away. Energy from nothing is the defect; the TGS bias injects it deliberately and the relax
+/// pass is supposed to take it back out, so this reads how well that cycle closes.
+#[test]
+#[ignore = "measurement, not a gate — prints a table"]
+fn sweep_ladder_raft() {
+    eprintln!("\n=== raft: depenetration quality vs sweep count (zero gravity, KE from nothing) ===");
+    eprintln!(
+        "{:>4}  {:>7}  {:>12}  {:>12}  {:>11}  {:>11}  {:>10}",
+        "N", "sweeps", "KE@1", "KE@30", "pen@1", "pen@30", "peak|v|"
+    );
+    for n in [64u32, 256] {
+        for sweeps in LADDER {
+            let (mut world, bodies, origins) = scene_raft(n);
+            solver_with_exact_sweeps(&mut world, sweeps);
+
+            world.step(DT).ok();
+            let first = observe(&world, &bodies, &origins);
+
+            let mut peak_v = first.max_speed;
+            let mut last = first;
+            for _ in 1..30 {
+                world.step(DT).ok();
+                last = observe(&world, &bodies, &origins);
+                peak_v = peak_v.max(last.max_speed);
+            }
+            eprintln!(
+                "{:>4}  {:>7}  {:>12.2}  {:>12.2}  {:>11.6}  {:>11.6}  {:>10.3}",
+                n, sweeps, first.energy, last.energy, first.max_penetration, last.max_penetration, peak_v,
+            );
+        }
+    }
+}
+
+/// The measurement the whole question turns on: on the two scenes whose correct answer is
+/// exactly "nothing moves", how few sweeps still deliver it?
+///
+/// Everything reported here is invented by the solver — the ideal column reads 0.000 all the
+/// way down — so a row is judged against zero, not against the current build.
+#[test]
+#[ignore = "measurement, not a gate — prints a table"]
+fn sweep_ladder_at_rest() {
+    eprintln!("\n=== scenes whose correct answer is EXACTLY zero motion (600 frames) ===");
+    eprintln!(
+        "{:>26}  {:>7}  {:>10}  {:>10}  {:>11}  {:>10}  {:>8}",
+        "scene", "sweeps", "peak|v|", "drift", "tilt(deg)", "KE_end", "asleep"
+    );
+    for (label, n) in [
+        ("floating lattice n=64", 64u32),
+        ("floating lattice n=256", 256),
+    ] {
+        for sweeps in LADDER {
+            let (mut world, bodies, origins) = scene_floating_lattice(n);
+            solver_with_exact_sweeps(&mut world, sweeps);
+            report_at_rest(label, sweeps, &mut world, &bodies, &origins, 600);
+        }
+    }
+    for (label, side, height) in [("crate pile 4x6x4", 4u32, 6u32), ("crate pile 6x6x6", 6, 6)] {
+        for sweeps in LADDER {
+            let (mut world, bodies, origins) = scene_crate_pile(side, height);
+            solver_with_exact_sweeps(&mut world, sweeps);
+            report_at_rest(label, sweeps, &mut world, &bodies, &origins, 600);
+        }
+    }
+}
+
+fn report_at_rest(
+    label: &str,
+    sweeps: usize,
+    world: &mut PhysicsWorld,
+    bodies: &[usize],
+    origins: &[Vec3],
+    frames: usize,
+) {
+    let mut peak_v = 0.0f32;
+    let mut peak_tilt = 0.0f32;
+    let mut drift = 0.0f32;
+    let mut last = Frame::default();
+    for _ in 0..frames {
+        world.step(DT).ok();
+        last = observe(world, bodies, origins);
+        if !last.max_speed.is_finite() {
+            break;
+        }
+        peak_v = peak_v.max(last.max_speed);
+        peak_tilt = peak_tilt.max(last.tilt.to_degrees());
+    }
+    // Total displacement from the starting pose, not just the horizontal lean: a lattice that
+    // slowly inflates is as wrong as one that leans.
+    for (&i, &origin) in bodies.iter().zip(origins) {
+        let d = world.transforms[i].position - origin;
+        if d.is_finite() {
+            drift = drift.max(d.length());
+        }
+    }
+    // KE alone, with gravitational potential removed, so the number is the energy the solver
+    // invented rather than the constant a pile's height contributes.
+    let ke: f32 = bodies
+        .iter()
+        .map(|&i| {
+            let v = &world.velocities[i];
+            let rb = &world.rigid_bodies[i];
+            0.5 * rb.mass * v.linear.length_squared()
+                + 0.5 * rb.local_inertia.dot(v.angular * v.angular)
+        })
+        .sum();
+    eprintln!(
+        "{:>26}  {:>7}  {:>10.4}  {:>10.4}  {:>11.4}  {:>10.4}  {:>8}",
+        label, sweeps, peak_v, drift, peak_tilt, ke, last.asleep,
+    );
+}
+
+/// The loaded anchor-free chain: two conservation laws that hold exactly, walked down the
+/// sweep ladder. `|p|` must stay 0 and `KE` must never exceed the 1.0 J the two end boxes
+/// started with.
+#[test]
+#[ignore = "measurement, not a gate — prints a table"]
+fn sweep_ladder_free_chain() {
+    eprintln!("\n=== compressed free chain: conservation vs sweep count (1800 frames) ===");
+    eprintln!(
+        "{:>4}  {:>7}  {:>12}  {:>10}  {:>10}  {:>14}",
+        "n", "sweeps", "max|p|", "max_KE", "KE_end", "frames_to_rest"
+    );
+    for n in [8usize, 24, 32] {
+        for sweeps in LADDER {
+            let (mut world, bodies, _) = scene_compressed_free_chain(n);
+            solver_with_exact_sweeps(&mut world, sweeps);
+            let c = chain_conservation(&mut world, &bodies, 1800);
+            eprintln!(
+                "{:>4}  {:>7}  {:>12.6}  {:>10.4}  {:>10.4}  {:>14}",
+                n,
+                sweeps,
+                c.max_momentum,
+                c.max_ke,
+                c.ke_end,
+                match c.frames_to_rest {
+                    Some(f) => f.to_string(),
+                    None => "never".to_string(),
+                }
+            );
+        }
+    }
+}
+
+/// What the free chain conserves, and how long it takes to stop.
+#[derive(Debug, Clone, Copy)]
+struct Conservation {
+    /// Largest `|Σ m·v|` over the run. Starts at exactly zero and has no external force acting
+    /// on it, so every unit of this is solver-invented momentum.
+    max_momentum: f32,
+    /// Largest kinetic energy over the run. There is no energy source, so this may never exceed
+    /// what the two end boxes were given.
+    max_ke: f32,
+    /// Kinetic energy at the end of the run.
+    ke_end: f32,
+    /// First frame after which the chain stays below the engine's own resting threshold for the
+    /// remainder of the run. `None` means it never settled.
+    ///
+    /// This is the scalar worth gating on. Its ideal is not a number read off the current build:
+    /// restitution is 0 and nothing feeds the chain, so it *must* come to rest, and how long
+    /// that takes is exactly what a caller who stacks crates cares about. It is also monotone in
+    /// the sweep count, unlike the tower's blow-up frame.
+    frames_to_rest: Option<usize>,
+    /// Whether any body was already asleep at the frame rest was declared.
+    ///
+    /// Without this the metric above is gameable, and not hypothetically: a body sleeps after 60
+    /// consecutive qualifying substeps — 0.25 s, or 15 outer frames — below 0.05 m/s, and a
+    /// sleeping body's velocity reads as zero whether or not the solver earned it. So *anything*
+    /// that makes bodies sleep sooner (lowering the frame requirement, raising the speed
+    /// threshold) would show up as the chain settling faster, with the solver unchanged.
+    /// Settling by dissipation and settling by freezing have to be distinguishable, or the gate
+    /// measures the sleep system.
+    slept_before_rest: bool,
+}
+
+/// The engine's own sleep velocity threshold; a body below it is a candidate for sleeping.
+const REST_SPEED: f32 = 0.05;
+
+fn chain_conservation(world: &mut PhysicsWorld, bodies: &[usize], frames: usize) -> Conservation {
+    let mut c = Conservation {
+        max_momentum: 0.0,
+        max_ke: 0.0,
+        ke_end: 0.0,
+        frames_to_rest: None,
+        slept_before_rest: false,
+    };
+    // Tracks the last frame the chain was still moving; the settle frame is one past it.
+    let mut last_moving: Option<usize> = None;
+    let mut first_sleep: Option<usize> = None;
+    for f in 0..frames {
+        world.step(DT).ok();
+        let (p, ke) = momentum_and_ke(world, bodies);
+        if !p.is_finite() || !ke.is_finite() {
+            c.max_momentum = f32::INFINITY;
+            c.max_ke = f32::INFINITY;
+            return c;
+        }
+        c.max_momentum = c.max_momentum.max(p.length());
+        c.max_ke = c.max_ke.max(ke);
+        c.ke_end = ke;
+
+        if first_sleep.is_none() && bodies.iter().any(|&i| world.rigid_bodies[i].is_sleeping) {
+            first_sleep = Some(f);
+        }
+        let moving = bodies.iter().any(|&i| {
+            let v = &world.velocities[i];
+            v.linear.length() + v.angular.length() >= REST_SPEED
+        });
+        if moving {
+            last_moving = Some(f);
+        }
+    }
+    c.frames_to_rest = match last_moving {
+        Some(f) if f + 1 < frames => Some(f + 1),
+        Some(_) => None,
+        None => Some(0),
+    };
+    c.slept_before_rest = match (first_sleep, c.frames_to_rest) {
+        (Some(s), Some(rest)) => s < rest,
+        _ => false,
+    };
+    c
+}
+
+/// Is the flat floor of 28 sweeps earned by a *shallow* island, or only by a tall one?
+///
+/// `sweep_ladder_tower` shows the floor is calibrated almost exactly right for a 24-high column:
+/// 20 sweeps buckles 2 of 3 grounds, 28 buckles none. But the policy applies that same 28 to
+/// every island of depth ≥ 5, and a realistic game pile is 6 crates high, not 24. If depth 6
+/// converges at 8 sweeps and holds there over a long horizon, the floor is over-provisioned by
+/// 3.5× on by far the most common shape — a much better-founded target than the benchmark raft,
+/// whose quality question turned out to be unanswerable.
+///
+/// 3000 frames, not 600: this repository has already shipped a soak green that was hiding an
+/// explosion at frame ~853, and `sweep_ladder_tower` finds first blow-ups as late as frame 147.
+#[test]
+#[ignore = "measurement, not a gate — long (~5 min)"]
+fn is_the_28_floor_earned_by_a_shallow_pile() {
+    const GROUNDS: [f32; 3] = [20.0, 100.0, 200.0];
+    eprintln!("\n=== does a depth-6 pile need the 28-sweep floor? (3000 frames, 3 grounds) ===");
+    eprintln!(
+        "{:>18}  {:>7}  {:>9}  {:>12}  {:>11}  {:>11}",
+        "scene", "sweeps", "blew/3", "earliest", "worst|v|", "worst_drift"
+    );
+    for sweeps in [4usize, 8, 16, 28] {
+        for (label, side, height) in [("pile 4x6x4", 4u32, 6u32), ("pile 4x12x4", 4, 12)] {
+            let mut blew = 0;
+            let mut earliest: Option<usize> = None;
+            let (mut worst_v, mut worst_lean) = (0.0f32, 0.0f32);
+            for g in GROUNDS {
+                let (mut world, bodies, origins) = scene_crate_pile(side, height);
+                // Rebuild on the requested ground: scene_crate_pile uses the default.
+                world.colliders[0] = Collider::box_collider(Vec3::new(g, 1.0, g));
+                solver_with_exact_sweeps(&mut world, sweeps);
+                let r = run(&mut world, &bodies, &origins, 3000, 0.5);
+                if let Some(f) = r.blew_up_at {
+                    blew += 1;
+                    earliest = Some(earliest.map_or(f, |e: usize| e.min(f)));
+                }
+                worst_v = worst_v.max(r.peak_speed);
+                worst_lean = worst_lean.max(r.peak_lean);
+            }
+            eprintln!(
+                "{:>18}  {:>7}  {:>9}  {:>12}  {:>11.3}  {:>11.4}",
+                label,
+                sweeps,
+                blew,
+                match earliest {
+                    Some(f) => f.to_string(),
+                    None => "-".to_string(),
+                },
+                worst_v,
+                worst_lean,
+            );
+        }
+    }
+}
+
+/// `is_the_28_floor_earned_by_a_shallow_pile` reported that a 4×12×4 crate block collapses on
+/// all three grounds at every sweep count tried, including the 28 the default configuration
+/// actually gives it. That is a claim about the shipped engine, not about the sweep policy, so
+/// it gets verified separately and from more than one angle before it is believed:
+///
+///  - with the genuine default solver rather than a forced sweep count, in case forcing the
+///    count is itself the difference;
+///  - with a 2 cm lateral gap between the columns, so the block's side-by-side boxes are not
+///    all in marginal exactly-touching contact — if the gap fixes it, the defect is in
+///    degenerate face contacts, not in stack stability;
+///  - as a trace, so a settling transient tripping the 0.5 threshold cannot be mistaken for a
+///    collapse.
+#[test]
+#[ignore = "measurement, not a gate — long (~4 min)"]
+fn verify_wide_pile_collapse() {
+    for (label, spacing) in [("exact contact", 1.0f32), ("2cm lateral gap", 1.02)] {
+        let (mut world, bodies, origins) = scene_crate_pile_spaced(4, 12, spacing);
+        eprintln!(
+            "\n--- 4x12x4 crate block, {label}, DEFAULT solver (adaptive on) — sweeps it \
+             actually gets: depth-driven ---"
+        );
+        trace(label, &mut world, &bodies, &origins, 3000);
+    }
+}
+
+/// Is the wide block's collapse a sweep-count problem at all?
+///
+/// If it survives at 46 or 96 sweeps, the adaptive policy is UNDER-provisioning a shape it was
+/// never calibrated for, and the sweep question has a second half nobody has looked at. If it
+/// collapses at 96 too, sweeps are not the lever and this is the known buckling instability
+/// showing up at a height the documentation calls safe.
+#[test]
+#[ignore = "measurement, not a gate"]
+fn can_sweeps_save_the_wide_pile() {
+    eprintln!("\n=== 4x12x4 crate block vs sweep count (3000 frames, ground 20) ===");
+    eprintln!("{:>7}  {:>12}  {:>11}  {:>11}", "sweeps", "blew_up_at", "peak|v|", "peak_lean");
+    for sweeps in [28usize, 46, 96] {
+        let (mut world, bodies, origins) = scene_crate_pile(4, 12);
+        solver_with_exact_sweeps(&mut world, sweeps);
+        let r = run(&mut world, &bodies, &origins, 3000, 0.5);
+        eprintln!(
+            "{:>7}  {:>12}  {:>11.3}  {:>11.4}",
+            sweeps,
+            match r.blew_up_at {
+                Some(f) => f.to_string(),
+                None => "-".to_string(),
+            },
+            r.peak_speed,
+            r.peak_lean
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE GATES
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// These four run in the ordinary test suite. Between them they are what a change to the sweep
+// policy has to pass. Each threshold below is anchored to a physical statement, not to a number
+// read off the current build — the project's own history with blessed thresholds is the reason.
+
+/// The chain's initial kinetic energy: two 1 kg boxes at 1 m/s.
+const CHAIN_INITIAL_KE: f32 = 1.0;
+
+/// Two laws that hold exactly on the compressed free chain, so the bar is physics rather than a
+/// previous measurement.
+///
+/// The chain starts with zero net momentum and has no external force on it, so its momentum
+/// must stay zero; it has no energy source, so its kinetic energy may never exceed what the two
+/// end boxes were given; and its collisions are restitution-0 with friction, so it must come to
+/// rest rather than ringing forever.
+///
+/// Anchoring the bounds: the momentum bound is 1% of the 1 kg·m/s each end box carries — a
+/// solver leaking more than that is losing a hundredth of the scene's momentum to nothing.
+/// The rest deadline is one second of simulated time, against a chain that in practice stops in
+/// 3–4 frames. Both are far looser than what the engine delivers, deliberately: they are here
+/// to catch a change that breaks the physics, and `sweep_throttling_is_visible_to_this_file`
+/// below is what keeps them from being loose enough to catch nothing.
+#[test]
+fn free_chain_conserves_momentum_and_comes_to_rest() {
+    for n in [8usize, 24, 32] {
+        let (mut world, bodies, _) = scene_compressed_free_chain(n);
+        let c = chain_conservation(&mut world, &bodies, 600);
+        assert!(
+            c.max_momentum < 1e-2,
+            "n={n}: solver invented momentum in a closed system \
+             (|p| reached {:.6}, must stay 0): {c:?}",
+            c.max_momentum
+        );
+        assert!(
+            c.max_ke <= CHAIN_INITIAL_KE * 1.05,
+            "n={n}: solver created energy from nothing \
+             (KE reached {:.4} against {CHAIN_INITIAL_KE:.4} available): {c:?}",
+            c.max_ke
+        );
+        assert!(
+            matches!(c.frames_to_rest, Some(f) if f <= 60),
+            "n={n}: a restitution-0 chain with friction did not come to rest within a second \
+             of simulated time: {c:?}"
+        );
+        assert!(
+            !c.slept_before_rest,
+            "n={n}: the chain was recorded as at rest while bodies were already asleep, so the \
+             reading is the sleep system rather than the solver — see Conservation::\
+             slept_before_rest: {c:?}"
+        );
+    }
+}
+
+/// The gate on the gates: this file must be able to SEE a sweep-count cut.
+///
+/// Every other assertion here is only worth its runtime if throttling the solver actually moves
+/// the numbers. It would be easy for that to stop being true without anyone noticing — raise the
+/// sleep threshold, change what counts as at rest, alter the chain scene until it settles
+/// regardless — and then the suite would wave through exactly the change it exists to catch.
+///
+/// So: starve the chain to 4 sweeps and require the damage to be visible. If this test ever
+/// fails, the correct reading is not "throttling became safe", it is "this file went blind and
+/// must not be trusted until it is fixed".
+#[test]
+fn sweep_throttling_is_visible_to_this_file() {
+    let n = 32;
+
+    let (mut default_world, bodies, _) = scene_compressed_free_chain(n);
+    let good = chain_conservation(&mut default_world, &bodies, 600);
+
+    let (mut starved_world, bodies, _) = scene_compressed_free_chain(n);
+    solver_with_exact_sweeps(&mut starved_world, 4);
+    let bad = chain_conservation(&mut starved_world, &bodies, 600);
+
+    let good_rest = good.frames_to_rest.expect("default config must settle the chain");
+    match bad.frames_to_rest {
+        // Either it never settles inside the window, or it takes far longer. Both are visible;
+        // what would be invisible is settling just as fast, and that is the failure.
+        None => {}
+        Some(bad_rest) => assert!(
+            bad_rest > good_rest * 10,
+            "starving the solver from the default sweep count to 4 barely changed how long the \
+             chain took to settle ({good_rest} -> {bad_rest} frames). This file can no longer \
+             see a sweep cut, so its other assertions are not protecting anything.\n  \
+             default: {good:?}\n  starved: {bad:?}"
+        ),
+    }
+    assert!(
+        bad.max_momentum > good.max_momentum * 10.0,
+        "starving the solver barely changed the momentum leak ({:.6} -> {:.6}); this file has \
+         gone blind to sweep count.\n  default: {good:?}\n  starved: {bad:?}",
+        good.max_momentum,
+        bad.max_momentum
+    );
+}
+
+/// A realistic crate stack — 4×4 wide, 6 high, at exact contact — must still be standing after
+/// 25 seconds of simulated time.
+///
+/// The height is not arbitrary: `docs/ENGINE.md` records ≤~12 as the range game structures
+/// actually use, and this sits inside it with margin. The horizon is not arbitrary either —
+/// `is_the_28_floor_earned_by_a_shallow_pile` finds this same block collapsing at frame 1150
+/// when starved to 4 sweeps, so a 600-frame version of this test would pass a solver that had
+/// been throttled into instability.
+#[test]
+fn realistic_crate_stack_stays_standing() {
+    let (mut world, bodies, origins) = scene_crate_pile(4, 6);
+    let r = run(&mut world, &bodies, &origins, 1500, 0.5);
+    assert!(
+        r.blew_up_at.is_none(),
+        "a 4x6x4 crate block at rest collapsed on its own: {r:?}"
+    );
+    assert!(
+        r.peak_lean < 0.5,
+        "a 4x6x4 crate block at rest leaned {:.3} m — it is on its way over even if max|v| \
+         never tripped: {r:?}",
+        r.peak_lean
+    );
+    // The one channel that catches a build which is perfectly stable and quietly wrong. The bar
+    // is the solver's own declared tolerance with room to spare: `ConstraintSolver::slop` is
+    // 0.005 m, contacts are expected to sit at roughly that depth, and 3× it is 1.5 cm of a
+    // 1 m crate — a sixtieth of the box, past which the stack is visibly interpenetrating.
+    assert!(
+        r.resting_pen < 0.015,
+        "a settled 4x6x4 crate block is sinking {:.4} m into itself (3x the 0.005 m solver \
+         slop) — stable, quiet, and wrong: {r:?}",
+        r.resting_pen
+    );
+}
+
+/// Negative control for `realistic_crate_stack_stays_standing`: the same scene, same horizon,
+/// same assertions, with the solver starved to 4 sweeps. It must FAIL.
+///
+/// A gate nobody has watched fail is a gate nobody knows the strength of, and this one is
+/// asserting a negative ("did not collapse") on a 1500-frame horizon that was chosen from a
+/// measurement rather than derived. This is the run that shows the horizon is long enough.
+#[test]
+#[ignore = "negative control — asserts the gate FAILS on a starved solver"]
+fn negative_control_starved_pile_must_fail_the_gate() {
+    let (mut world, bodies, origins) = scene_crate_pile(4, 6);
+    solver_with_exact_sweeps(&mut world, 4);
+    let r = run(&mut world, &bodies, &origins, 1500, 0.5);
+    assert!(
+        r.blew_up_at.is_some() || r.peak_lean >= 0.5 || r.resting_pen >= 0.015,
+        "starving the crate-stack gate's own scene to 4 sweeps did not trip any of its three \
+         assertions inside 1500 frames. The gate is not protecting the thing it claims to: \
+         either the horizon is too short or the criteria are too loose. {r:?}"
+    );
+}
+
+/// **Currently fails. Records a live defect this file found, and is `#[ignore]`d in the same
+/// way `soak_extreme_tower_n48_stays_bounded` is.**
+///
+/// A 4×4-wide, 12-high crate block — inside the ≤~12 envelope `docs/ENGINE.md` calls safe, and
+/// far below the 32-high 1-wide column `soak_resting_stacks_stay_bounded` keeps green —
+/// collapses on its own at around frame 1270 with the default configuration, on three different
+/// ground sizes, with and without a lateral gap between its columns.
+///
+/// It is a sweep-count problem, which is why it lives in this file: the same block survives 3000
+/// frames at 96 sweeps, collapses at frame 2449 at 46, and at frame 1267 at 28 — and 28 is
+/// exactly what the adaptive policy gives it, because the policy reads support depth 12 and
+/// `max(28, 1.5·12) = 28`. So on this shape the policy is not over-spending sweeps, it is
+/// under-spending them by nearly 4×.
+///
+/// What that says about the policy: support depth alone cannot be the input. A 1-wide column of
+/// height 12 and a 4×4-wide block of height 12 both read depth 12, and one needs ~16 sweeps
+/// while the other needs 96. Depth measures how far support has to travel and says nothing about
+/// how much mass is riding on it.
+///
+/// Two frame counts worth remembering: this collapses at ~1270, and
+/// `soak_resting_stacks_stay_bounded` runs for 1500 — the existing soak's horizon would have
+/// caught this, if it had ever been pointed at a block instead of a column.
+#[test]
+#[ignore = "known defect — a 12-high crate block collapses at ~frame 1270 on the default config"]
+fn wide_crate_block_stays_standing() {
+    let (mut world, bodies, origins) = scene_crate_pile(4, 12);
+    let r = run(&mut world, &bodies, &origins, 3000, 0.5);
+    assert!(
+        r.blew_up_at.is_none(),
+        "a 4x12x4 crate block at rest collapsed on its own: {r:?}"
+    );
+}
+
+/// Sanity: the observables read something sane on a scene whose answer is known by hand, so a
+/// broken reader cannot silently make every other measurement look clean. A single box resting
+/// on the ground must end up still, level, barely penetrating, and asleep.
+#[test]
+fn observables_read_a_resting_box_correctly() {
+    let (mut world, bodies, origins) = scene_tower(1);
+    let mut last = Frame::default();
+    for _ in 0..240 {
+        world.step(DT).ok();
+        last = observe(&world, &bodies, &origins);
+    }
+    assert!(last.max_speed < 0.05, "a lone resting box moved: {last:?}");
+    assert!(last.lean < 1e-3, "a lone resting box drifted sideways: {last:?}");
+    assert!(
+        last.tilt.to_degrees() < 1.0,
+        "a lone resting box tilted: {last:?}"
+    );
+    assert!(
+        last.max_penetration < 0.05,
+        "a lone resting box sank into the ground: {last:?}"
+    );
+    assert!(
+        last.energy.is_finite(),
+        "energy readout went non-finite: {last:?}"
+    );
+    // The reader must actually be reading contacts — if `collision_events` were empty the
+    // penetration assertions above would pass vacuously, which is exactly the failure this
+    // sanity test exists to catch.
+    assert!(
+        last.contact_count > 0 || last.asleep == 1,
+        "no contacts observed and the box is not asleep — the reader is blind: {last:?}"
+    );
+}

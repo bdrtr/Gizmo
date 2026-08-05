@@ -907,6 +907,92 @@ eklemekten ibaret.
   >
   > Solver da 24→48 kulede 2× yükseklik için **3.39×** süre veriyor — ENGINE.md'nin
   > "N≥48 kuleler bükülüyor" notuyla aynı yere işaret ediyor.
+
+- ✅ **Kalite ölçütü KURULDU — `tests/solver_quality.rs`** *(2026-08-05)*. Bir önceki oturum
+  düzeltmeyi "yalnız hızı ölçtüm, kaliteyi ölçmedim" diye durdurmuştu. Eksik alet artık var:
+  4 CI kapısı + 7 ölçüm koşusu, hepsi `PhysicsWorld`'ün genel API'sinden, solver'a hiçbir
+  enstrümantasyon eklemeden.
+
+  > **Artık penetrasyon enstrümantasyonsuz okunabiliyor.** Solver `ContactPoint::penetration`'ı
+  > yalnız `pen0`'a okuyup geri yazmıyor (`solver/tgs.rs:302`), yani `collision_events()`'teki
+  > derinlik o substep'in BAŞINDAKİ narrowphase derinliği — tam olarak bir önceki substep'in
+  > çözümünün gideremediği örtüşme. `soak_and_golden.rs`'in eksen-hizalı yığın formülünün
+  > aksine her geometride çalışıyor.
+
+  **Yeni public API: `ConstraintSolver::adaptive_iterations`** (varsayılan `true`). Kapatınca
+  `iterations` her island için TAM sayı oluyor. Bu olmadan merdivenin ilgi çekici yarısı —
+  tabanın altı — erişilemez: adaptif formül `max(cfg, …)` olduğu için `iterations`'ı düşürmek
+  efektif sayıyı düşürmüyor. Varsayılanda davranış-nötr: `EF6E4AC3644BF3BA` kıpırdamadı.
+
+  **ÖLÇÜLEN BULGULAR — beşi de düzeltmenin nasıl yapılacağını değiştiriyor:**
+
+  1. **Artık ölçümler burkulmaya KÖR, ve bu yapısal.** 4×12×4 sandık bloğu, varsayılan
+     konfigürasyonla: 1559 kare boyunca `max|v|` 0.02–0.19, `pen_max` 0.0055'te düz, enerji
+     11.270'te düz, `tilt` 0.1°. Sonra 1679. karede `max|v|`=2.18, 1799'da 16.3 → çökmüş.
+     **26 saniyelik tertemiz okuma, sonra çöküş.** Yalnız artık-yakınsama ölçen bir ölçüt geri
+     alınan düzeltmeyi ONAYLARDI.
+
+  2. **Tek yörüngeli geç/kal kapısı float gürültüsüyle çevrilebiliyor.** Statik zeminin yarı-
+     boyutunu 20 → 200 yapmak (zemin statik, üst yüzü iki halde de y=0; değişen tek şey daha
+     büyük bir yüze karşı temas kırpmanın float ayrıntısı) N=24 kuleyi "1500 kare sınırlı"dan
+     "1140'ta burkuldu"ya çeviriyor. N=16'da 200 m zeminde `peak|v|` = **0.485**, soak'ın 0.5
+     eşiğinin kılpayı altı. → Kapı sürekli bir MARJ olmalı, tek koşunun ikili sonucu değil;
+     ölçümler 3 zemin boyutuyla topluluk olarak koşuyor.
+
+  3. **Sweep sayısında TEKDÜZE DEĞİL.** N=32 kule: 46 sweep 0/3 patlıyor, **96 sweep 3/3
+     patlıyor**. "Daha çok sweep daha güvenli" varsayımı yanlış — hiçbir kısma kuralı buna
+     yaslanamaz.
+
+  4. **Bench'in salı kalite sorusunu CEVAPLAYAMAZ.** Sal bir oturma sahnesi değil, bir patlama:
+     N=256'da ilk karede 3670 J kinetik enerji yaratılıyor, cisimler ~7.8 m/s savruluyor,
+     215. karede temas sayısı sıfır. Başlangıç durumu (0.1 m örtüşen kafes) fiziksel değil ve
+     kafesin genişlemeden ulaşabileceği örtüşmesiz bir konfigürasyon yok → karşılaştırılacak
+     doğru cevap yok. Merdiven bunu doğruluyor: daha çok sweep daha ÇOK icat edilmiş enerji
+     veriyor (103 J @1 sweep → 3780 J @46), hangisinin daha iyi olduğunu söyleyecek bir ölçüt
+     yok. Aynı kafes TAM TEMASTA kurulunca (sahne `scene_floating_lattice`) her sweep sayısında
+     **tam 0.0000** okuyor ve her cisim uyuyor: **yüksüz ankrajsız bir kümede sweep'lerin
+     yakınsayacağı hiçbir şey yok.**
+
+  5. **VE ASIL BULGU — politika sweep'i FAZLA değil, EKSİK veriyor.** 4×4 geniş, 12 yüksek
+     sandık bloğu — ENGINE.md'nin "oyun yapıları ≤~12, o yüzden önemi yok" dediği zarfın
+     İÇİNDE, ve soak'ın yeşil tuttuğu 32'lik 1-genişlikteki kuleden çok daha alçak — kendi
+     kendine çöküyor:
+
+     | sweep | çöküş karesi | peak\|v\| |
+     |---|---|---|
+     | 28 (politikanın verdiği) | 1267 | 217.3 |
+     | 46 | 2449 | 54.3 |
+     | 96 | **çökmüyor** | 0.23 |
+
+     Üç zeminde de, sütunlar arasına 2 cm yanal boşluk koyunca da aynı (yani dejenere yan temas
+     değil). Politika derinlik 12 okuyup `max(28, 1.5·12) = 28` veriyor; blok 96 istiyor.
+
+     > **Bu, aranan ayırt edicinin ne olduğunu değiştiriyor.** Önceki oturum "derinlik bir
+     > destek zinciri mi ölçüyor yoksa bir kafes çapı mı" diye soruyordu. Ölçüm daha temel bir
+     > şey söylüyor: **derinlik TEK BAŞINA yanlış girdi.** 12 yüksek 1-genişlikte kule ile
+     > 12 yüksek 4×4 blok ikisi de derinlik 12 okuyor; biri ~16 sweep'le duruyor, öteki 96
+     > istiyor. Derinlik desteğin ne kadar YOL alacağını ölçüyor, üstünde ne kadar KÜTLE
+     > taşındığını değil.
+     >
+     > **Kapsam boşluğu:** mevcut `soak_resting_stacks_stay_bounded` yalnız 1-genişlikte
+     > kuleleri deniyor. 1500 karelik ufku bu bloğu yakalardı (çöküş ~1270) — hiç bir bloğa
+     > çevrilmiş olsaydı. Kapı olarak `wide_crate_block_stays_standing` eklendi, `#[ignore]`
+     > (tıpkı `soak_extreme_tower_n48` gibi: bilinen, kayıtlı, açık kusur).
+
+  > **Kapıların eşikleri kutsanmadı.** Serbest zincir (sıfır yerçekiminde, iki ucundan içe
+  > itilmiş, ankrajsız ama tamamı destek zinciri olan sıra) tam olarak bilinen iki yasa
+  > taşıyor: net momentum 0 başlıyor ve dış kuvvet yok → 0 kalmalı; enerji kaynağı yok → KE
+  > uçların aldığı 1.0 J'ü aşamaz; restitution 0 → durmalı. Ölçülen: `max|p|` 1 sweep'te
+  > 3.2e-3, 16+ sweep'te ~0; `frames_to_rest` 8→16 sweep arasında **300× diz** (n=32: 178 → 4).
+  > `sweep_throttling_is_visible_to_this_file` aletin KENDİ duyarlılığını sınıyor — 4 sweep'e
+  > aç, hasar görünür olmak ZORUNDA; geçemezse okuma "kısma güvenli oldu" değil, "bu dosya
+  > körleşti"dir. `slept_before_rest` de uyku sistemini solver sanmayı engelliyor (bir cisim
+  > 15 karede uyuyor ve uyuyanın hızı sıfır okunur).
+
+- ⬜ **C2a — efektif sweep sayısını `PhysicsMetrics`'e çıkar** (`solver_sweeps`,
+  `max_island_depth`). Kapılar yeşil yandığında "değişiklik kapıya giren herhangi bir sahneye
+  DOKUNDU mu" sorusunu ancak bu cevaplıyor; sweep'i zorlayan bir merdiven, uyku sayacına ya da
+  island boyutuna göre anahtarlanmış bir kısmayı göremez. Politikayı düzeltmeden önce yapılmalı.
 - ⬜ **C2** — Broadphase refit (`pipeline.rs:145-176` her substep sıfırdan kuruyor, statikler dahil).
 - ⬜ **C3** — `physics-rigid/src/system.rs:149-158` O(N²) writeback → handle→index map.
 - ⬜ **C4** — Temas yolunda `ArrayVec` (`narrowphase/mod.rs:400-407`); rewind geçmişi opt-in
