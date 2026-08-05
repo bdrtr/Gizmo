@@ -917,6 +917,12 @@ fn verify_wide_pile_collapse() {
 /// never calibrated for, and the sweep question has a second half nobody has looked at. If it
 /// collapses at 96 too, sweeps are not the lever and this is the known buckling instability
 /// showing up at a height the documentation calls safe.
+///
+/// **Do not read this run on its own — it uses ONE ground and that is not enough.** It reports
+/// 96 sweeps saving the block, which is true for this shape and false as a general conclusion:
+/// `wide_block_collapse_per_ground` runs two grounds across widths 2, 3 and 4 and finds 96
+/// sweeps rescuing only the 4-wide one. See `height_12_stacks_stay_standing` for what the full
+/// data supports.
 #[test]
 #[ignore = "measurement, not a gate"]
 fn can_sweeps_save_the_wide_pile() {
@@ -1181,6 +1187,150 @@ fn audit_effective_sweeps_per_scene() {
     }
 }
 
+/// The decisive experiment for the policy: at a FIXED height, does the required sweep count
+/// depend on the block's WIDTH?
+///
+/// Support depth is the policy's only input, and depth is the same 12 for a 1-wide column and a
+/// 4-wide block of the same height — `audit_effective_sweeps_per_scene` confirms both are handed
+/// 28 sweeps. `can_sweeps_save_the_wide_pile` shows the 4-wide block needs 96. If the requirement
+/// climbs with width while depth holds still, then depth cannot be the input, and no rule
+/// rewritten in terms of depth alone — anchoring, chain-versus-lattice, eccentricity ratios —
+/// can be correct. That would settle what the previous session was hunting for, in the negative.
+///
+/// Reported as the smallest sweep count on the ladder that survived both grounds.
+///
+/// **Measured, and it does not decide what it was built to decide.** Widths 2 and 3 survive at
+/// no count on the ladder while width 4 survives at 96 — non-monotone in width, which means the
+/// shapes are not stable enough at height 12 for a "required sweep count" to exist. The
+/// follow-ups are `wide_block_collapse_per_ground` and `height_12_stacks_stay_standing`. The
+/// question this was meant to answer — whether support depth can be the policy's input — is
+/// still open, and needs a scene class that stands reliably in the first place.
+#[test]
+#[ignore = "measurement, not a gate — long (~10 min)"]
+fn does_required_sweep_count_depend_on_width() {
+    const GROUNDS: [f32; 2] = [20.0, 200.0];
+    const SWEEPS: [usize; 5] = [8, 16, 28, 46, 96];
+    eprintln!("\n=== required sweeps vs block width at fixed height (3000 frames, 2 grounds) ===");
+    eprintln!(
+        "{:>16}  {:>6}  {:>7}  {:>8}  {:>28}",
+        "block", "depth", "bodies", "policy", "survives from"
+    );
+    for (side, height) in [(1u32, 12u32), (2, 12), (3, 12), (4, 12)] {
+        // What the policy hands this shape, read rather than derived.
+        let (mut probe, _, _) = scene_crate_pile(side, height);
+        for _ in 0..90 {
+            probe.step(DT).ok();
+        }
+        probe.step(DT).ok();
+        let (depth, sweeps, islands) = policy_readout(&probe);
+        let policy = if islands > 0 { sweeps as f32 / islands as f32 } else { 0.0 };
+
+        let mut survives_from: Option<usize> = None;
+        for s in SWEEPS {
+            let all_ok = GROUNDS.iter().all(|&g| {
+                let (mut world, bodies, origins) = scene_crate_pile(side, height);
+                world.colliders[0] = Collider::box_collider(Vec3::new(g, 1.0, g));
+                solver_with_exact_sweeps(&mut world, s);
+                run(&mut world, &bodies, &origins, 3000, 0.5).blew_up_at.is_none()
+            });
+            if all_ok {
+                survives_from = Some(s);
+                break;
+            }
+        }
+        eprintln!(
+            "{:>16}  {:>6}  {:>7}  {:>8.0}  {:>28}",
+            format!("{side}x{height}x{side}"),
+            depth,
+            side * side * height,
+            policy,
+            match survives_from {
+                Some(s) => format!("{s} sweeps"),
+                None => "never (not even 96)".to_string(),
+            }
+        );
+    }
+}
+
+/// Follow-up to `does_required_sweep_count_depend_on_width`, which reported that 2- and 3-wide
+/// 12-high blocks survive at NO sweep count on the ladder while the 4-wide one survives at 96.
+/// Non-monotonic in width, which given `ground_extent_flips_the_blow_up` is exactly what one
+/// unlucky ground would look like. So: report each ground separately, with its blow-up frame,
+/// instead of the all-grounds-survived summary.
+///
+/// What this decides: whether the wide-block collapse is the sweep policy under-spending (fixable
+/// by spending more) or a stability gap sweeps do not close (not a policy question at all).
+#[test]
+#[ignore = "measurement, not a gate — long (~6 min)"]
+fn wide_block_collapse_per_ground() {
+    eprintln!("\n=== wide blocks, each ground reported separately (3000 frames) ===");
+    eprintln!(
+        "{:>16}  {:>7}  {:>8}  {:>12}  {:>11}",
+        "block", "sweeps", "ground", "blew_up_at", "peak|v|"
+    );
+    for (side, height) in [(2u32, 6u32), (3, 6), (2, 12), (3, 12), (4, 12)] {
+        for sweeps in [28usize, 96] {
+            for g in [20.0f32, 200.0] {
+                let (mut world, bodies, origins) = scene_crate_pile(side, height);
+                world.colliders[0] = Collider::box_collider(Vec3::new(g, 1.0, g));
+                solver_with_exact_sweeps(&mut world, sweeps);
+                let r = run(&mut world, &bodies, &origins, 3000, 0.5);
+                eprintln!(
+                    "{:>16}  {:>7}  {:>8.0}  {:>12}  {:>11.3}",
+                    format!("{side}x{height}x{side}"),
+                    sweeps,
+                    g,
+                    match r.blew_up_at {
+                        Some(f) => f.to_string(),
+                        None => "-".to_string(),
+                    },
+                    r.peak_speed
+                );
+            }
+        }
+    }
+}
+
+/// The sharpest form of the wide-block finding: at height 12, a single column stands and two
+/// columns do not.
+///
+/// `does_required_sweep_count_depend_on_width` has 1×12×1 surviving from 8 sweeps while 2×12×2
+/// collapses at 28 and at 96 on both grounds. Widening the base is supposed to make a stack more
+/// stable, not less, so this either is a real defect or is an artefact of the columns being at
+/// exact lateral contact. The lateral-gap arm settles that.
+#[test]
+#[ignore = "measurement, not a gate"]
+fn one_column_stands_and_two_do_not() {
+    eprintln!("\n=== height 12, default solver, one column vs two (3000 frames) ===");
+    eprintln!(
+        "{:>10}  {:>16}  {:>8}  {:>12}  {:>11}",
+        "block", "lateral", "ground", "blew_up_at", "peak|v|"
+    );
+    for (side, spacing, label) in [
+        (1u32, 1.0f32, "n/a"),
+        (2, 1.0, "exact contact"),
+        (2, 1.02, "2cm gap"),
+        (2, 1.2, "20cm gap"),
+    ] {
+        for g in [20.0f32, 200.0] {
+            let (mut world, bodies, origins) = scene_crate_pile_spaced(side, 12, spacing);
+            world.colliders[0] = Collider::box_collider(Vec3::new(g, 1.0, g));
+            let r = run(&mut world, &bodies, &origins, 3000, 0.5);
+            eprintln!(
+                "{:>10}  {:>16}  {:>8.0}  {:>12}  {:>11.3}",
+                format!("{side}x12x{side}"),
+                label,
+                g,
+                match r.blew_up_at {
+                    Some(f) => f.to_string(),
+                    None => "-".to_string(),
+                },
+                r.peak_speed
+            );
+        }
+    }
+}
+
 /// Negative control for `realistic_crate_stack_stays_standing`: the same scene, same horizon,
 /// same assertions, with the solver starved to 4 sweeps. It must FAIL.
 ///
@@ -1204,33 +1354,64 @@ fn negative_control_starved_pile_must_fail_the_gate() {
 /// **Currently fails. Records a live defect this file found, and is `#[ignore]`d in the same
 /// way `soak_extreme_tower_n48_stays_bounded` is.**
 ///
-/// A 4×4-wide, 12-high crate block — inside the ≤~12 envelope `docs/ENGINE.md` calls safe, and
-/// far below the 32-high 1-wide column `soak_resting_stacks_stay_bounded` keeps green —
-/// collapses on its own at around frame 1270 with the default configuration, on three different
-/// ground sizes, with and without a lateral gap between its columns.
+/// A crate stack twelve boxes high does not reliably stand for 3000 frames on the default
+/// configuration — at any width from 1 to 4, with or without a lateral gap, at every sweep count
+/// tried. Twelve is the top of the ≤~12 envelope `docs/ENGINE.md` calls safe, and it is far below
+/// the 32-high column `soak_resting_stacks_stay_bounded` keeps green.
 ///
-/// It is a sweep-count problem, which is why it lives in this file: the same block survives 3000
-/// frames at 96 sweeps, collapses at frame 2449 at 46, and at frame 1267 at 28 — and 28 is
-/// exactly what the adaptive policy gives it, because the policy reads support depth 12 and
-/// `max(28, 1.5·12) = 28`. So on this shape the policy is not over-spending sweeps, it is
-/// under-spending them by nearly 4×.
+/// **What is NOT true, corrected from an earlier reading of this same data.** The first pass ran
+/// only the 4-wide block and only on one ground, saw it survive at 96 sweeps and collapse at 28,
+/// and concluded the adaptive policy was under-spending sweeps by ~4×. Running each ground
+/// separately refutes that:
 ///
-/// What that says about the policy: support depth alone cannot be the input. A 1-wide column of
-/// height 12 and a 4×4-wide block of height 12 both read depth 12, and one needs ~16 sweeps
-/// while the other needs 96. Depth measures how far support has to travel and says nothing about
-/// how much mass is riding on it.
+/// ```text
+///   block     28 sweeps          96 sweeps          (blow-up frame, ground 20 / ground 200)
+///   1x12x1    -    / 2328*       stands at 8 sweeps forced
+///   2x12x2    2451 / 1979        2782 / 2037     <- 96 sweeps does NOT save it
+///   3x12x3    2379 / 1373        2687 / -
+///   4x12x4    1267 / 1447        -    / -        <- the one shape 96 sweeps does save
+///   2x6x2     -    / -           -    / -        <- height 6 is solid
+///   3x6x3     -    / 2670        -    / -
+///   * default config (adaptive, 28 sweeps)
+/// ```
 ///
-/// Two frame counts worth remembering: this collapses at ~1270, and
-/// `soak_resting_stacks_stay_bounded` runs for 1500 — the existing soak's horizon would have
-/// caught this, if it had ever been pointed at a block instead of a column.
+/// Raising the sweep count rescues the 4-wide block and nothing else. So this is not a sweep
+/// *budget* problem, and the sweep policy is not the fix — which also means it is not evidence
+/// that support depth is the wrong policy input, however plausible that remains on other grounds.
+///
+/// **What the data does support** is narrower and worse: at height 12 the outcome is decided by
+/// perturbations with no physical content. Every knob varied flips it non-monotonically — the
+/// static ground's half-extent (20 stands, 200 collapses), the lateral gap between columns
+/// (exact contact stands, 2 cm collapses at frame 70, 20 cm stands), the sweep count (8 forced
+/// sweeps stands where 28 adaptive sweeps collapses), and the width (1 and 2 differ). That is
+/// the signature the root-cause note in `soak_and_golden.rs` already describes: an eigenvalue
+/// just above 1, seeded by float noise. At height 12 it is marginal rather than settled.
+///
+/// **Why the suite never saw it.** `soak_resting_stacks_stay_bounded` tests 1-wide columns, on
+/// one ground, for 1500 frames. Every collapse above except one lands between frames 1979 and
+/// 2782 — past its horizon — and the ones inside it are on a ground size it never builds.
+///
+/// The honest conclusion for the sweep work: the sweep policy cannot be tuned against a scene
+/// class whose stability is this marginal, because any measured improvement is inside the noise.
+/// Height 12 needs the stability gap closed first.
 #[test]
-#[ignore = "known defect — a 12-high crate block collapses at ~frame 1270 on the default config"]
-fn wide_crate_block_stays_standing() {
-    let (mut world, bodies, origins) = scene_crate_pile(4, 12);
-    let r = run(&mut world, &bodies, &origins, 3000, 0.5);
+#[ignore = "known defect — 12-high stacks collapse on the default config past frame ~1979"]
+fn height_12_stacks_stay_standing() {
+    let mut failures = Vec::new();
+    for side in [1u32, 2, 4] {
+        for g in [20.0f32, 200.0] {
+            let (mut world, bodies, origins) = scene_crate_pile(side, 12);
+            world.colliders[0] = Collider::box_collider(Vec3::new(g, 1.0, g));
+            let r = run(&mut world, &bodies, &origins, 3000, 0.5);
+            if r.blew_up_at.is_some() {
+                failures.push(format!("{side}x12x{side} on ground {g}: {r:?}"));
+            }
+        }
+    }
     assert!(
-        r.blew_up_at.is_none(),
-        "a 4x12x4 crate block at rest collapsed on its own: {r:?}"
+        failures.is_empty(),
+        "12-high crate stacks collapsed on their own:\n  {}",
+        failures.join("\n  ")
     );
 }
 
