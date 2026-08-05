@@ -1,3 +1,16 @@
+//! The rigid-body component: body type, mass properties, damping, axis locks and the
+//! sleep bookkeeping that goes with them.
+//!
+//! Units in this module are SI throughout — metres, kilograms, seconds, radians, and
+//! therefore newtons for force and N·m for torque. Vectors are world-space unless a doc
+//! comment explicitly says *body-local*; the two frames are not interchangeable for
+//! [`RigidBody::local_inertia`] / [`RigidBody::center_of_mass`], which are body-local,
+//! versus the force and torque accumulators, which are world-space.
+//!
+//! Everything stored here is plain `f32`/`bool` state and is serialised with the
+//! component, so it takes part in the engine's *same-platform* replay and rollback
+//! bit-equality guarantee. Cross-platform bit-exactness is out of scope.
+
 use gizmo_math::{Mat3, Quat, Vec3};
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "reflect")]
@@ -6,20 +19,72 @@ use bevy_reflect::Reflect;
 use super::Velocity;
 use gizmo_physics_core::{Collider, ColliderShape};
 
+/// How the simulation is allowed to move a body.
+///
+/// The variant decides both which integration phases touch the body and its effective mass
+/// — see [`RigidBody::inv_mass`] for the latter.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "reflect", derive(Reflect))]
 pub enum BodyType {
+    /// Fully simulated: gravity, the force/torque accumulators, damping and contact
+    /// impulses all apply, and the body is a sleep candidate.
     Dynamic,   // Fully simulated
+    /// Driven by user code, never by the solver. Velocity integration is skipped
+    /// entirely (no gravity, no accumulated forces, no damping), but position
+    /// integration still advances the transform from whatever [`Velocity`] you write,
+    /// so a kinematic body pushes dynamic bodies while nothing can push it back.
+    /// Never sleeps — see [`RigidBody::can_sleep`].
     Kinematic, // Moved by user, affects others
+    /// Never moved by the engine: position integration returns early, so writing to a
+    /// static body's [`Velocity`] has no effect. Moving one means writing its
+    /// `Transform` yourself. [`RigidBody::new_static`] additionally parks it as
+    /// sleeping with all six axes locked.
     Static,    // Never moves
 }
 
+/// Mass properties and motion policy of one simulated body.
+///
+/// Pair it with a [`Velocity`], a `Transform` and a `Collider`; friction and restitution
+/// are *not* here, they come from the collider's material (see [`RigidBody::new`]).
+/// Fields are public and unvalidated — nothing recomputes derived state when you assign
+/// to them, so after changing [`mass`](Self::mass) or the collider shape you must refresh
+/// [`local_inertia`](Self::local_inertia) yourself via
+/// [`update_inertia_from_collider`](Self::update_inertia_from_collider).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "reflect", derive(Reflect))]
 pub struct RigidBody {
+    /// Which integration and mass rules apply; see [`BodyType`].
+    ///
+    /// Plain data — flipping it mid-simulation is allowed and takes effect on the next
+    /// step, but it neither recomputes mass properties nor clears
+    /// [`is_sleeping`](Self::is_sleeping).
     pub body_type: BodyType,
+    /// Mass in kilograms.
+    ///
+    /// `0.0` means *infinite mass* (zero inverse mass): a body with it cannot be
+    /// accelerated by forces or contacts, which is why the static/kinematic constructors
+    /// store zero. It is not the whole story for the solver — see
+    /// [`inv_mass`](Self::inv_mass) — but the `calculate_*_inertia` helpers do read this
+    /// field whatever the body type is.
+    /// Never validated or clamped: a negative mass is stored verbatim and yields a
+    /// negative inverse mass the solver is not designed for. Changing it does not
+    /// rescale [`local_inertia`](Self::local_inertia).
     pub mass: f32,
+    /// Exponential decay rate of linear velocity, per second: the integrator multiplies
+    /// linear velocity by `exp(-linear_damping · dt)` each step, so the loss is
+    /// frame-rate independent. `0.0` disables it; the default is a token `0.01`.
+    ///
+    /// This is a crude velocity-*linear* energy sink, not aerodynamic drag — for the
+    /// physical v² law use [`drag_coefficient`](Self::drag_coefficient) /
+    /// [`with_air_drag`](Self::with_air_drag). A NaN here is rejected by velocity
+    /// integration (the body is left untouched and an error is returned) rather than
+    /// silently poisoning the velocity.
     pub linear_damping: f32,
+    /// Same exponential law as [`linear_damping`](Self::linear_damping) but applied to
+    /// angular velocity (rad/s); default `0.05`.
+    ///
+    /// It scales all three components by the same factor, so it cannot damp spin about
+    /// one axis only — use the rotation locks for that.
     pub angular_damping: f32,
     /// Aerodinamik sürükleme katsayısı (Cd). `drag_area` ile birlikte >0 olduğunda
     /// integrator fiziksel hava direnci uygular: F = ½·ρ·Cd·A·|v|², hıza KARŞI. 0 =
@@ -34,20 +99,138 @@ pub struct RigidBody {
     /// >0 olduğunda hava direnci aktif olur.
     #[serde(default)]
     pub drag_area: f32,
+    /// When `false` the gravity term is skipped for this body only; the world's gravity
+    /// vector itself is unchanged for everyone else.
+    ///
+    /// This is not "disable physics": the body still collides and is still accelerated by
+    /// contacts, joints and its own accumulators. Irrelevant for non-dynamic bodies,
+    /// which never run velocity integration at all.
     pub use_gravity: bool,
+    /// Sleep flag. While it is set, **both** velocity and position integration skip the
+    /// body, so writing a velocity or an accumulator on a sleeping body has no visible
+    /// effect and the write is not consumed either — call [`wake_up`](Self::wake_up)
+    /// first (that is why the world's impulse helpers take `&mut RigidBody`).
+    ///
+    /// Set by [`update_sleep_state`](Self::update_sleep_state) after a run of quiet
+    /// steps and cleared by it the moment the body moves again.
+    /// [`new_static`](Self::new_static) starts it `true`, since a static body is
+    /// permanently "asleep".
     pub is_sleeping: bool,
+    /// Opt into continuous collision detection for this body: a fast or thin body that
+    /// would otherwise pass through geometry between two discrete steps.
+    ///
+    /// It has a cost — among other things the broadphase AABB is fattened by the
+    /// expected motion when the body is inserted — so it is off by default for dynamic
+    /// bodies and on for [`new_kinematic`](Self::new_kinematic) ones. It reduces
+    /// tunnelling; it is not a guarantee that tunnelling cannot happen.
     pub ccd_enabled: bool,
+    /// Diagonal of the inertia tensor in the **body-local** frame, kg·m².
+    ///
+    /// Only the diagonal is stored, i.e. the local axes are assumed to be the principal
+    /// axes and all products of inertia are zero. The default `Vec3::splat(1.0)` is a
+    /// placeholder derived from neither [`mass`](Self::mass) nor any collider, so a body
+    /// built by hand spins wrongly until you call
+    /// [`update_inertia_from_collider`](Self::update_inertia_from_collider) or one of the
+    /// `calculate_*_inertia` helpers.
+    ///
+    /// A zero component means "no rotation about that local axis" rather than a division
+    /// by zero, and an infinite component collapses to the same thing — see
+    /// [`inv_local_inertia`](Self::inv_local_inertia).
     pub local_inertia: Vec3,
+    /// Freezes angular velocity about the **world** X axis (not a body-local axis: the
+    /// locked axis does not follow the body as it turns).
+    ///
+    /// Two mechanisms enforce it. [`enforce_locks`](Self::enforce_locks) zeroes
+    /// `Velocity::angular.x`, and [`inv_world_inertia_tensor`](Self::inv_world_inertia_tensor)
+    /// zeroes the X row *and* column of the inverse inertia so solver impulses cannot
+    /// spin the body about it either. It removes rotation *rate* only — a body already
+    /// tilted stays tilted.
     pub lock_rotation_x: bool,
+    /// World **Y** axis counterpart of [`lock_rotation_x`](Self::lock_rotation_x): with
+    /// the engine's default −Y gravity this is the yaw axis.
     pub lock_rotation_y: bool,
+    /// World **Z** axis counterpart of [`lock_rotation_x`](Self::lock_rotation_x). Set
+    /// together with the other two — see [`lock_rotation`](Self::lock_rotation) — this is
+    /// what keeps an upright body (character capsule, standing prop) from toppling.
     pub lock_rotation_z: bool,
+    /// Pins the body on the **world** X axis by zeroing `Velocity::linear.x` in
+    /// [`enforce_locks`](Self::enforce_locks).
+    ///
+    /// A velocity-level constraint only: it never repositions the transform, so a body
+    /// spawned off the intended plane simply stays where it is, and code that writes
+    /// `Transform::position` directly is unaffected.
     pub lock_translation_x: bool,
+    /// World **Y** axis counterpart of
+    /// [`lock_translation_x`](Self::lock_translation_x).
+    ///
+    /// It does not disable gravity: each step still adds `g·dt` and the lock zeroes it
+    /// again at the end of velocity integration, so the body neither falls nor
+    /// accumulates downward speed. [`use_gravity`](Self::use_gravity) expresses the same
+    /// end state more directly.
     pub lock_translation_y: bool,
+    /// World **Z** axis counterpart of
+    /// [`lock_translation_x`](Self::lock_translation_x); combined with locked X/Y
+    /// rotation it is the usual 2.5-D constraint, confining motion to the world XY plane.
     pub lock_translation_z: bool,
+    /// Number of consecutive integration steps in which [`can_sleep`](Self::can_sleep)
+    /// held. [`update_sleep_state`](Self::update_sleep_state) increments it and sets
+    /// [`is_sleeping`](Self::is_sleeping) once it reaches 60; any step that fails the
+    /// test resets it to 0, as does [`wake_up`](Self::wake_up).
+    ///
+    /// The unit is *physics steps*, not rendered frames or seconds: a world that runs
+    /// several fixed sub-steps per frame advances this several times per frame and
+    /// therefore falls asleep proportionally sooner in wall-clock terms. It also stops
+    /// advancing while the body sleeps, since a sleeping body is never integrated.
     pub sleep_counter: u32, // Frames below sleep threshold
+    /// Centre of mass as an offset from the transform's origin, in the **body-local**
+    /// frame, metres. `Vec3::ZERO` (the default) means the origin *is* the centre of
+    /// mass.
+    ///
+    /// The world-space centre is `transform.position + transform.rotation *
+    /// center_of_mass`, and that is the point contact and joint lever arms are measured
+    /// about — measuring them about the transform origin instead was a real bug in this
+    /// engine, and the two only agree while this field is zero.
+    ///
+    /// Position integration is *not* re-centred on it: `Transform::position` still
+    /// advances by the linear velocity and the rotation is applied to the transform as
+    /// it stands. Note also that
+    /// [`update_inertia_from_collider`](Self::update_inertia_from_collider) overwrites
+    /// this field for compound colliders.
     pub center_of_mass: Vec3,
+    /// Optional per-body fracture trigger, compared against the largest solved **normal
+    /// impulse** in a contact manifold this body takes part in — an impulse, not a force,
+    /// so its magnitude depends on mass, `dt` and the sub-step count; tune it empirically
+    /// rather than from a newton figure.
+    ///
+    /// `None` (the default) means the pipeline never fractures this body; the standalone
+    /// destruction pass instead falls back to its own global threshold for bodies with
+    /// `None`. Crossing the threshold only emits a fracture *event* — something else has
+    /// to consume it and actually split the body.
     pub fracture_threshold: Option<f32>, // Impulse threshold for fracturing
+    /// External force queued for the next velocity integration, in newtons, expressed in
+    /// **world** space.
+    ///
+    /// The integrator adds `F · inv_mass · dt` to the linear velocity and then clears the
+    /// accumulator, so one assignment acts for exactly one step: re-set it every step for
+    /// a sustained force. That whole path is skipped for a body that is not dynamic or is
+    /// asleep — velocity integration returns before both the apply and the clear, so the
+    /// queued value survives untouched. A *dynamic* body with `mass == 0.0` is the one case
+    /// that is skipped but still cleared, silently dropping the force.
+    ///
+    /// No engine system currently writes to this field — the `Integrator` force and
+    /// impulse helpers change velocity directly instead — so whatever is in here got
+    /// there from your code.
     pub force_accumulator: Vec3,
+    /// External torque queued for the next velocity integration, N·m, in **world** space
+    /// (not body-local).
+    ///
+    /// It is converted with the world-space inverse inertia `R·I⁻¹·Rᵀ`
+    /// ([`inv_world_inertia_tensor`](Self::inv_world_inertia_tensor)), so it produces the
+    /// correct axis on a rotated or anisotropic body and respects the rotation locks.
+    /// Its lifetime, and what happens to it on a non-dynamic, sleeping or zero-mass body,
+    /// are the same as for
+    /// [`force_accumulator`](Self::force_accumulator); both are dropped together by
+    /// [`clear_forces`](Self::clear_forces).
     pub torque_accumulator: Vec3,
 }
 
@@ -101,6 +284,13 @@ impl RigidBody {
         self
     }
 
+    /// An immovable body for level geometry: zero mass and zero inertia, gravity and
+    /// damping off, all six axes locked, and [`is_sleeping`](Self::is_sleeping) preset so
+    /// the integrator never touches it.
+    ///
+    /// The zeroed mass properties are belt-and-braces — [`inv_mass`](Self::inv_mass)
+    /// reports zero for a static body whatever `mass` holds. Static bodies still collide
+    /// and still take part in queries; only their motion is disabled.
     pub fn new_static() -> Self {
         Self {
             body_type: BodyType::Static,
@@ -120,6 +310,12 @@ impl RigidBody {
         }
     }
 
+    /// A [`BodyType::Kinematic`] body with zero mass and zero inertia.
+    ///
+    /// Unlike the other constructors it turns [`ccd_enabled`](Self::ccd_enabled) **on**,
+    /// because scripted movers (platforms, doors) are the classic tunnelling case. Such a
+    /// body also never sleeps, so its `Velocity` is read every step for as long as it
+    /// exists — see [`can_sleep`](Self::can_sleep).
     pub fn new_kinematic() -> Self {
         Self {
             body_type: BodyType::Kinematic,
@@ -133,6 +329,12 @@ impl RigidBody {
         }
     }
 
+    /// Arms [`fracture_threshold`](Self::fracture_threshold) with `threshold`, replacing
+    /// any previous value. Chainable.
+    ///
+    /// Stored as given, with no clamping: since the comparison is `impulse > threshold`,
+    /// a zero or negative threshold means any contact carrying a positive impulse
+    /// fractures the body.
     pub fn with_fracture_threshold(mut self, threshold: f32) -> Self {
         self.fracture_threshold = Some(threshold);
         self
@@ -173,11 +375,28 @@ impl RigidBody {
         self
     }
 
+    /// Clears the sleep flag and resets [`sleep_counter`](Self::sleep_counter), so the
+    /// body is integrated again next step and must serve the full quiet run before it can
+    /// sleep once more.
+    ///
+    /// Call it whenever you change the velocity, the accumulators or the transform of a
+    /// body that might be asleep, otherwise the change is skipped by the integrator.
+    /// Idempotent on an already-awake body, and it does not look at the body type: on a
+    /// static body it only clears a flag, since such a body is never integrated anyway.
     pub fn wake_up(&mut self) {
         self.is_sleeping = false;
         self.sleep_counter = 0;
     }
 
+    /// Whether the body is quiet enough *this step* to count towards falling asleep.
+    ///
+    /// A pure predicate — it mutates nothing and a `true` does not mean the body is
+    /// asleep; [`update_sleep_state`](Self::update_sleep_state) still requires 60
+    /// consecutive `true`s. Kinematic bodies always answer `false` (user-driven motion
+    /// must never be skipped) and static bodies always `true`, both without looking at
+    /// `velocity` at all. A dynamic body qualifies when its linear speed is below
+    /// 0.05 m/s *and* its angular speed below 0.05 rad/s — fixed thresholds, not
+    /// configurable per body.
     pub fn can_sleep(&self, velocity: &Velocity) -> bool {
         if self.is_kinematic() {
             return false; // Kinematic bodies never sleep — user controls their motion
@@ -193,6 +412,17 @@ impl RigidBody {
             && velocity.angular.length_squared() < SLEEP_ANGULAR_THRESHOLD * SLEEP_ANGULAR_THRESHOLD
     }
 
+    /// Advances the sleep state machine by one step, given this step's `velocity`.
+    ///
+    /// Falling asleep is delayed, waking is immediate: while [`can_sleep`](Self::can_sleep)
+    /// holds the counter grows and [`is_sleeping`](Self::is_sleeping) is set on reaching
+    /// 60 consecutive qualifying steps, but a single failing step resets the counter and
+    /// clears the flag at once.
+    ///
+    /// The 60 is a step count, not a duration — it is one second only at a 60 Hz step
+    /// rate and correspondingly shorter for a world that sub-steps faster. Velocity
+    /// integration calls this for awake dynamic bodies, so an already-sleeping body never
+    /// reaches it and can only be revived by [`wake_up`](Self::wake_up).
     pub fn update_sleep_state(&mut self, velocity: &Velocity) {
         const SLEEP_FRAMES_REQUIRED: u32 = 60; // ~1 second at 60fps
 
@@ -207,21 +437,42 @@ impl RigidBody {
         }
     }
 
+    /// `true` only for [`BodyType::Dynamic`].
+    ///
+    /// This is the condition [`inv_mass`](Self::inv_mass) and
+    /// [`inv_local_inertia`](Self::inv_local_inertia) gate on, so it is also the answer to
+    /// "does the solver treat this body as having finite mass?".
     #[inline]
     pub fn is_dynamic(&self) -> bool {
         matches!(self.body_type, BodyType::Dynamic)
     }
 
+    /// `true` only for [`BodyType::Kinematic`].
+    ///
+    /// The three predicates are mutually exclusive, so `!is_static()` does *not* imply
+    /// the body is simulated — a kinematic body answers `false` to both `is_static` and
+    /// `is_dynamic`.
     #[inline]
     pub fn is_kinematic(&self) -> bool {
         matches!(self.body_type, BodyType::Kinematic)
     }
 
+    /// `true` only for [`BodyType::Static`].
+    ///
+    /// It says nothing about whether the body is asleep:
+    /// [`is_sleeping`](Self::is_sleeping) is an independent flag that
+    /// [`new_static`](Self::new_static) merely happens to preset.
     #[inline]
     pub fn is_static(&self) -> bool {
         matches!(self.body_type, BodyType::Static)
     }
 
+    /// Zeroes the velocity components of every locked **world** axis, in place.
+    ///
+    /// Velocity integration applies it to the stored velocity, and position integration
+    /// applies it again to a private copy, so calling it yourself is safe and idempotent.
+    /// It constrains rates only: the transform is never clamped, and
+    /// `Velocity::pre_linear` / `pre_angular` are left untouched.
     #[inline]
     pub fn enforce_locks(&self, vel: &mut Velocity) {
         if self.lock_translation_x {
@@ -244,6 +495,12 @@ impl RigidBody {
         }
     }
 
+    /// Inverse mass in kg⁻¹, or `0.0` meaning "infinite mass — cannot be accelerated".
+    ///
+    /// Returns zero for any non-dynamic body and for `mass == 0.0`, which makes it the
+    /// reliable way to ask "can an impulse move this body?" — reading
+    /// [`mass`](Self::mass) is not, because a static body may still carry a non-zero one.
+    /// Nothing is guarded beyond that: a negative or NaN mass propagates into the result.
     #[inline]
     pub fn inv_mass(&self) -> f32 {
         if self.mass == 0.0 || !self.is_dynamic() {
@@ -253,6 +510,18 @@ impl RigidBody {
         }
     }
 
+    /// Component-wise inverse of [`local_inertia`](Self::local_inertia), in the
+    /// **body-local** frame (kg⁻¹·m⁻²).
+    ///
+    /// Zero components map to zero instead of infinity, so a zero principal inertia
+    /// reads as "no angular response about that local axis" rather than a division by
+    /// zero; an infinite component divides down to zero and means the same thing. Returns
+    /// `Vec3::ZERO` for non-dynamic bodies and for `mass == 0.0`, mirroring
+    /// [`inv_mass`](Self::inv_mass).
+    ///
+    /// This is the local-frame quantity and ignores the rotation locks — solver code
+    /// wants [`inv_world_inertia_tensor`](Self::inv_world_inertia_tensor), which rotates
+    /// it and applies them.
     #[inline]
     pub fn inv_local_inertia(&self) -> Vec3 {
         if self.mass == 0.0 || !self.is_dynamic() {
@@ -278,19 +547,42 @@ impl RigidBody {
         }
     }
 
-    /// Get inverse world-space inertia tensor
+    /// Get inverse world-space inertia tensor **for an unrotated body** — simply
+    /// `diag(`[`inv_local_inertia`](Self::inv_local_inertia)`)`.
+    ///
+    /// No rotation is applied and, unlike
+    /// [`inv_world_inertia_tensor`](Self::inv_world_inertia_tensor), the rotation locks
+    /// are *not* masked out. It is therefore only correct while the body's rotation is
+    /// identity, or when the inertia is isotropic (`R·I⁻¹·Rᵀ = I⁻¹` for a sphere).
+    /// Anywhere the body may have turned or have locked axes, use the rotation-aware
+    /// version instead.
     pub fn inv_world_inertia_tensor_identity(&self) -> Mat3 {
         Mat3::from_diagonal(self.inv_local_inertia())
     }
 
-    /// Get world-space inertia tensor from local inertia and rotation
+    /// Get world-space inertia tensor from local inertia and rotation:
+    /// `R·diag(local_inertia)·Rᵀ` in kg·m², where `rotation` is the body→world rotation
+    /// and is expected to be normalised (an unnormalised quaternion scales the result).
+    ///
+    /// The forward tensor, unlike its inverse, is unconditional: body type,
+    /// `mass == 0.0` and the rotation locks are all ignored, so a static or fully locked
+    /// body still reports a non-zero tensor here. Mostly useful for analysis (angular
+    /// momentum, kinetic energy); the solver path wants
+    /// [`inv_world_inertia_tensor`](Self::inv_world_inertia_tensor).
     pub fn world_inertia_tensor(&self, rotation: Quat) -> Mat3 {
         let rot_mat = Mat3::from_quat(rotation);
         let local_inertia_mat = Mat3::from_diagonal(self.local_inertia);
         rot_mat * local_inertia_mat * rot_mat.transpose()
     }
 
-    /// Get inverse world-space inertia tensor
+    /// Get inverse world-space inertia tensor: `R·diag(inv_local_inertia)·Rᵀ`, with
+    /// `rotation` the (normalised) body→world rotation. This is the tensor to use for
+    /// any world-space torque or angular impulse.
+    ///
+    /// Returns `Mat3::ZERO` for non-dynamic bodies and for `mass == 0.0` — "no angular
+    /// response at all". Each locked rotation axis then has its whole row *and* column
+    /// zeroed, so the result stays symmetric and a torque about a locked world axis
+    /// yields neither acceleration about that axis nor cross-coupling into the free ones.
     pub fn inv_world_inertia_tensor(&self, rotation: Quat) -> Mat3 {
         if self.mass == 0.0 || !self.is_dynamic() {
             return Mat3::ZERO;
@@ -319,11 +611,26 @@ impl RigidBody {
         inv_world
     }
 
+    /// Drops both accumulators back to `Vec3::ZERO`.
+    ///
+    /// Velocity integration calls this itself once the accumulators have been applied, so
+    /// external code needs it only to *cancel* forces queued earlier in the same step —
+    /// after teleporting a body, say. It does not touch the velocity, so anything already
+    /// integrated is not undone.
     pub fn clear_forces(&mut self) {
         self.force_accumulator = Vec3::ZERO;
         self.torque_accumulator = Vec3::ZERO;
     }
 
+    /// Overwrites [`local_inertia`](Self::local_inertia) with the solid-box tensor for the
+    /// **current** [`mass`](Self::mass): `Ix = m/12·(h²+d²)` and cyclic permutations.
+    ///
+    /// `w`, `h`, `d` are the *full* extents in metres along the body-local X/Y/Z axes —
+    /// not half-extents; passing half-extents under-estimates the inertia fourfold. Set
+    /// the mass first: this reads it and never writes it, and it does not consult the
+    /// body type, so it will happily fill in a tensor for a static body (harmlessly, as
+    /// its inverse is forced to zero). Degenerate input is not rejected: zero extents
+    /// give zero components, which then read as "no rotation about that axis".
     pub fn calculate_box_inertia(&mut self, w: f32, h: f32, d: f32) {
         let m = self.mass;
         self.local_inertia = Vec3::new(
@@ -333,11 +640,33 @@ impl RigidBody {
         );
     }
 
+    /// Overwrites [`local_inertia`](Self::local_inertia) with the *solid, uniform* sphere
+    /// tensor `I = 2/5·m·r²` on all three axes, taking `m` from the current
+    /// [`mass`](Self::mass) and `r` in metres.
+    ///
+    /// The only isotropic case: the tensor is unchanged by rotation, which is why
+    /// [`inv_world_inertia_tensor_identity`](Self::inv_world_inertia_tensor_identity) is
+    /// exact for a sphere at any orientation. A hollow shell (`2/3·m·r²`) is not offered
+    /// — assign [`local_inertia`](Self::local_inertia) directly if you need one.
     pub fn calculate_sphere_inertia(&mut self, r: f32) {
         let i = 0.4 * self.mass * r * r;
         self.local_inertia = Vec3::splat(i);
     }
 
+    /// Overwrites [`local_inertia`](Self::local_inertia) with the solid-capsule tensor for
+    /// a capsule whose axis is the body-local **Y** axis, matching the capsule collider's
+    /// own convention.
+    ///
+    /// `r` is the radius and `half_h` the half-length of the **cylindrical section only**
+    /// — the hemispherical caps add a further `r` at each end, so the total height is
+    /// `2·(half_h + r)`. The current [`mass`](Self::mass) is split between cylinder and
+    /// caps by volume, so the parts sum back to it; Y (the spin axis) gets the smaller
+    /// value and X/Z the equal transverse one.
+    ///
+    /// The caps' parallel-axis transfer deliberately carries **no** extra COM-offset
+    /// term: adding one (a since-fixed bug here) inflates the transverse inertia and
+    /// makes capsules far too reluctant to tip. Zero radius *and* zero half-height leave
+    /// zero inertia rather than dividing by zero.
     pub fn calculate_capsule_inertia(&mut self, r: f32, half_h: f32) {
         let m = self.mass;
         let h = half_h * 2.0;
@@ -369,6 +698,27 @@ impl RigidBody {
         self.local_inertia = Vec3::new(i_xz, i_y, i_xz);
     }
 
+    /// Derives [`local_inertia`](Self::local_inertia) from `collider`'s shape at the
+    /// current [`mass`](Self::mass), which it reads but never changes.
+    ///
+    /// Nothing calls this for you when a body is inserted into `PhysicsWorld` — that path
+    /// stores the mass properties exactly as given — so call it after setting the mass or
+    /// swapping the shape, otherwise the placeholder unit inertia stands. (The facade
+    /// crate's `RigidBodyBundle` does invoke it while spawning.)
+    ///
+    /// Accuracy per shape:
+    /// - **Box, sphere, capsule** — the exact analytic solid tensor.
+    /// - **Plane** — infinite on every axis, i.e. zero inverse: a plane cannot be spun.
+    /// - **ConvexHull** — approximated by the box tensor of the hull's local AABB, each
+    ///   extent floored at 1 mm; an empty vertex list falls back to a 1×1×1 box.
+    /// - **TriMesh** — no shape analysis at all, just a 1×1×1 box tensor. Scale it
+    ///   yourself if the mesh is not roughly unit-sized.
+    /// - **Compound** — mass split over the sub-shapes by volume, then a parallel-axis
+    ///   sum. This branch is the one that also **overwrites**
+    ///   [`center_of_mass`](Self::center_of_mass), with the volume-weighted average of
+    ///   the sub-shape origins. Sub-shape rotations are ignored and each sub-shape's own
+    ///   centre of mass is taken to be its local origin, so expect an approximation for
+    ///   anything but axis-aligned parts; zero total volume falls back to a 1×1×1 box.
     pub fn update_inertia_from_collider(&mut self, collider: &Collider) {
         match &collider.shape {
             ColliderShape::Box(b) => {

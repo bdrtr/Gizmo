@@ -38,6 +38,20 @@ impl Default for Node {
 // Dynamic AABB Tree
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// An incremental BVH over moving bodies: one leaf per entity, internal nodes
+/// holding the merged bounds of their children.
+///
+/// Bodies are keyed by [`BodyHandle::id`] — two handles with the same id are the
+/// same body here — and each leaf stores a **fattened** copy of the AABB it was
+/// given. That margin is the whole point of the structure: a body that moves but
+/// stays inside its fat box costs nothing to "update", and only one that escapes it
+/// pays for a reinsertion. The price is that every query answers against the fat
+/// boxes, so results are a conservative superset of the true overlaps.
+///
+/// Insertion picks its sibling with a branch-and-bound surface-area heuristic and
+/// the tree is rebalanced with AVL rotations, so it stays shallow without a rebuild.
+/// Node slots live in a `Vec` with a free list and are **reused after removal**; no
+/// index into it is exposed, and none should be held.
 pub struct DynamicAabbTree {
     nodes: Vec<Node>,
     root: usize,
@@ -53,6 +67,11 @@ impl Default for DynamicAabbTree {
 }
 
 impl DynamicAabbTree {
+    /// An empty tree with a fattening margin of 0.1 world units (metres) and room
+    /// preallocated for 256 nodes.
+    ///
+    /// Same as `Default`. Use [`with_fat_margin`](Self::with_fat_margin) to pick a
+    /// different margin.
     pub fn new() -> Self {
         Self {
             nodes: Vec::with_capacity(256),
@@ -63,11 +82,24 @@ impl DynamicAabbTree {
         }
     }
 
+    /// Sets how far, in world units (metres), each leaf's stored box is grown on
+    /// every face beyond the AABB it was given.
+    ///
+    /// This is the structure's one tuning knob, and it trades two costs against each
+    /// other: a larger margin means fewer reinsertions as bodies move, but looser
+    /// boxes and so more false-positive pairs for the narrowphase to reject. It only
+    /// affects leaves inserted afterwards — leaves already in the tree keep the box
+    /// they were built with until they are reinserted. A margin of 0 is legal and
+    /// turns every movement into a reinsertion.
     pub fn with_fat_margin(mut self, margin: f32) -> Self {
         self.fat_margin = margin;
         self
     }
 
+    /// Removes every entity and frees every node, leaving an empty tree.
+    ///
+    /// Keeps the allocated node capacity, so refilling costs no reallocation, and
+    /// keeps the configured fat margin.
     pub fn clear(&mut self) {
         self.nodes.clear();
         self.root = NULL;
@@ -75,6 +107,10 @@ impl DynamicAabbTree {
         self.entity_map.clear();
     }
 
+    /// How many distinct entity ids are in the tree — i.e. the number of leaves.
+    ///
+    /// Not the number of nodes: internal nodes roughly double that, and freed slots
+    /// stay allocated. Re-inserting an id already present does not increase it.
     pub fn entity_count(&self) -> usize {
         self.entity_map.len()
     }
@@ -106,6 +142,18 @@ impl DynamicAabbTree {
 
     // ── Ekleme / Güncelleme ──────────────────────────────────────────────────
 
+    /// Adds `entity` with its tight world-space `aabb`, or re-places it if that id is
+    /// already in the tree. There is no separate update call.
+    ///
+    /// The stored box is `aabb` grown by the fat margin on every face. If the id is
+    /// already present and its new tight box still fits inside the fat box already
+    /// stored, this returns immediately and the tree is untouched — that early-out is
+    /// what makes a per-frame "update every body" loop affordable. Otherwise the old
+    /// leaf is removed and a new one inserted, which may rotate the tree.
+    ///
+    /// Nothing validates `aabb`: a non-finite or inverted box is fattened and stored
+    /// as-is, and the merged bounds of its ancestors are then only as meaningful as
+    /// it was.
     pub fn insert(&mut self, entity: BodyHandle, aabb: Aabb) {
         // FIX-1: tight AABB hâlâ fat AABB içindeyse rebuild'den kaçın
         // Skalar karşılaştırma — Vec3A cmpge/cmple trait sorununu önler
@@ -128,6 +176,10 @@ impl DynamicAabbTree {
         self.entity_map.insert(entity.id(), leaf);
     }
 
+    /// Removes the entity's leaf and returns its node slot to the free list.
+    ///
+    /// A no-op if that id is not in the tree. The freed slots are reused by later
+    /// insertions, so nothing outside may retain node indices across this call.
     pub fn remove(&mut self, entity: BodyHandle) {
         if let Some(leaf) = self.entity_map.remove(&entity.id()) {
             self.remove_leaf(leaf);
@@ -396,6 +448,15 @@ impl DynamicAabbTree {
     /// Tüm olası çarpışma çiftlerini döndür.
     /// FIX-2: Dual-tree descent ile garantili duplicate-free, self-pair yok.
     /// Algoritma: her internal node için sol ve sağ alt ağaçları birbirine karşı test et.
+    ///
+    /// Every pair of entities whose **fattened** boxes overlap, each pair reported
+    /// exactly once, never a body with itself. Each tuple is ordered by id
+    /// (`.0.id() < .1.id()`), so it can be used directly as a symmetric key.
+    ///
+    /// Uniqueness is structural rather than filtered: a colliding leaf pair has one
+    /// lowest common ancestor, and only that node emits it, so nothing here
+    /// de-duplicates afterwards. The order of the returned vector follows the tree's
+    /// shape and is an implementation detail.
     pub fn query_pairs(&self) -> Vec<(BodyHandle, BodyHandle)> {
         let mut pairs = Vec::new();
         if self.root == NULL || self.nodes[self.root].is_leaf() {
@@ -485,6 +546,10 @@ impl DynamicAabbTree {
     }
 
     /// Verilen AABB ile örtüşen tüm entity'leri döndür
+    ///
+    /// Entities whose **fattened** boxes overlap `aabb`, touching included. Each
+    /// entity appears at most once; the order is the traversal's and carries no
+    /// meaning.
     pub fn query_aabb(&self, aabb: &Aabb) -> Vec<BodyHandle> {
         let mut result = Vec::new();
         if self.root == NULL {
@@ -510,6 +575,21 @@ impl DynamicAabbTree {
     }
 
     /// Ray ile kesişen entity'leri t değerine göre sıralı döndür
+    ///
+    /// Entities whose **fattened** boxes the ray reaches no later than `max_t`, each
+    /// with the parameter at which the ray enters that box, sorted ascending by it.
+    /// A ray starting inside a box gets `0.0` for it — the value is clamped, never
+    /// negative.
+    ///
+    /// These are box-entry parameters, not surface hits: the real hit on a body lies
+    /// at or beyond the reported `t`. The sort makes near candidates cheap to try
+    /// first, but it does not let a caller stop at the first exact hit — only at one
+    /// that is nearer than the next candidate's entry `t`.
+    ///
+    /// `t` and `max_t` are in units of `dir`'s length; pass a unit vector to work in
+    /// metres. Direction components below 1e-8 become an infinite slab inverse rather
+    /// than a parallel special case, so a ray whose origin sits exactly on such a
+    /// slab boundary is a degenerate case with no promised answer.
     pub fn query_ray(&self, origin: Vec3, dir: Vec3, max_t: f32) -> Vec<(BodyHandle, f32)> {
         let mut result = Vec::new();
         if self.root == NULL {
@@ -555,6 +635,16 @@ impl DynamicAabbTree {
     // ── Debug ────────────────────────────────────────────────────────────────
 
     /// Ağaç geçerliliğini doğrula (test/debug için)
+    ///
+    /// Walks the whole tree asserting its internal invariants: parent back-pointers,
+    /// non-negative heights, every leaf carrying an entity at height 0, and every
+    /// internal node's height being one above its taller child.
+    ///
+    /// **Panics** on the first violation — that is the entire point, it is a debug
+    /// tool, not a predicate. It exists only under `debug_assertions`, so code that
+    /// calls it needs the same `cfg`, and it recurses over the tree's depth.
+    /// Note that it checks structure, not geometry: it does not verify that a
+    /// parent's box actually encloses its children's.
     #[cfg(debug_assertions)]
     pub fn validate(&self) {
         if self.root != NULL {

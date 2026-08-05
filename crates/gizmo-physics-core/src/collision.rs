@@ -1,3 +1,16 @@
+//! Contact data produced by the narrowphase, and the per-step events built from it.
+//!
+//! Two layers live here. [`ContactPoint`] and [`ContactManifold`] are what the
+//! constraint solver consumes: geometry plus the accumulated impulses that survive
+//! from one step to the next (warm-starting), capped at four points per pair.
+//! [`CollisionEvent`], [`TriggerEvent`] and [`FractureEvent`] are the read-only
+//! notifications a game reads afterwards; they carry [`BodyHandle`]s and copies of
+//! the solved contacts, never borrows into the solver's state.
+//!
+//! Lengths in this module are metric (metres). Unless an individual item says
+//! otherwise, a position is world-space and a `normal` points from body A toward
+//! body B.
+
 use crate::BodyHandle;
 use gizmo_math::Vec3;
 
@@ -160,7 +173,18 @@ impl FromIterator<ContactPoint> for ContactPoints {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct ContactManifold {
+    /// The lower-id body of the pair: [`ContactManifold::new`] swaps its two
+    /// arguments when necessary so that `entity_a.id() <= entity_b.id()`, which is
+    /// what lets a cache keyed with either ordering find the same manifold.
+    ///
+    /// `new` normalises the *handles* only. It never inspects or re-orients
+    /// `contacts` (there are none yet at that point), so a producer whose
+    /// narrowphase A/B order differs from the id order has to flip its own
+    /// normals to keep the A→B convention pointing from `entity_a` to `entity_b`.
     pub entity_a: BodyHandle,
+    /// The higher-id body of the pair; see [`entity_a`](Self::entity_a) for the
+    /// ordering rule. Nothing rejects a self-pair: hand `new` the same handle
+    /// twice and both fields hold it.
     pub entity_b: BodyHandle,
     /// At most 4 contact points.
     pub contacts: Vec<ContactPoint>,
@@ -346,8 +370,18 @@ pub enum CollisionEventType {
 /// Emitted every physics step for each solid collision pair.
 #[derive(Debug, Clone)]
 pub struct CollisionEvent {
+    /// One of the two bodies in contact. Unlike [`ContactManifold`], this type has
+    /// no constructor and performs no id normalisation — the pair is stored in
+    /// whatever order the producer used, so do not assume `entity_a.id()` is the
+    /// smaller one.
     pub entity_a: BodyHandle,
+    /// The other body of the pair; see [`entity_a`](Self::entity_a) regarding order.
     pub entity_b: BodyHandle,
+    /// Which phase of the pair's life this event reports.
+    ///
+    /// [`CollisionEventType::Ended`] is emitted for the step in which the pair
+    /// stopped overlapping, so there is nothing left to solve: the engine's own
+    /// pipeline emits those events with an **empty** `contact_points`.
     pub event_type: CollisionEventType,
     /// Solved contact points (populated after constraint resolution).
     pub contact_points: ContactPoints,
@@ -358,15 +392,32 @@ pub struct CollisionEvent {
 pub struct TriggerEvent {
     /// The entity whose collider has `is_trigger = true`.
     pub trigger_entity: BodyHandle,
+    /// The other collider in the overlap. Nothing here says it is *not* itself a
+    /// trigger — when two trigger colliders overlap, which one lands in which
+    /// field is the producer's choice, not a property of this type.
     pub other_entity: BodyHandle,
+    /// Whether the overlap began this step, is continuing, or has just ended.
+    /// A trigger overlap is never solved, so no contact data accompanies it.
     pub event_type: CollisionEventType,
 }
 
 /// Emitted when a rigid body's fracture threshold is exceeded.
 #[derive(Debug, Clone, Copy)]
 pub struct FractureEvent {
+    /// The body that exceeded its own fracture threshold. Both sides of one impact
+    /// can exceed theirs, in which case the engine emits two events for the same
+    /// collision — one per body — rather than a single paired event.
     pub entity: BodyHandle,
+    /// World-space position of the impact, in metres. The engine's producers use
+    /// the position of the pair's strongest contact, not the body's centre.
     pub impact_point: Vec3,
+    /// Strength of the impact, to be compared against the body's fracture threshold.
+    ///
+    /// Despite the name this is an **impulse, not a force**: both producers in
+    /// `gizmo-physics-rigid` (`destruction.rs`, and the pipeline's island loop) fill
+    /// it from [`ContactPoint::normal_impulse`] — newton-seconds accumulated over
+    /// the step — and compare it against `RigidBody::fracture_threshold` in those
+    /// same units. Any threshold you compare it against must be in impulse units too.
     pub impact_force: f32,
 }
 

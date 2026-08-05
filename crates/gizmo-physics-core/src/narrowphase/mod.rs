@@ -32,6 +32,18 @@ use gizmo_math::{Quat, Vec3};
 //  Public API
 // ============================================================================
 
+/// Namespace for the exact shape-pair tests and the dispatcher that routes between
+/// them. It holds no state — every method is an associated function, and nothing
+/// here is cached between calls.
+///
+/// Shapes are positioned by an explicit world-space `pos`/`rot` pair rather than by
+/// a [`Transform`](crate::components::Transform), so no scale is involved anywhere:
+/// a collider's size comes from the shape itself. Contact positions are world-space
+/// metres, penetrations are metres, and a `normal` points from shape A toward shape
+/// B — the argument order of the call, not any id ordering.
+///
+/// Pairs are tested exactly as given; there is no broadphase, no layer filtering and
+/// no self-pair check here.
 pub struct NarrowPhase;
 
 impl NarrowPhase {
@@ -393,10 +405,37 @@ impl NarrowPhase {
         out
     }
 
-    /// Return up to 4 contact points between two shapes.
+    /// Return the contact points between two shapes, empty when they do not
+    /// overlap.
     ///
     /// Compound shapes are handled recursively; each sub-shape pair is
     /// dispatched independently and all resulting contacts are collected.
+    ///
+    /// **The returned count is not capped.** The triangle-mesh path keeps its four deepest
+    /// points; box–box also reduces to four but by a SPREAD heuristic — deepest first, then
+    /// greedily maximising distance from those already chosen — so it can keep a shallow
+    /// far-apart corner over a deeper clustered one. A box against a
+    /// plane emits one contact per penetrating corner — up to eight — and a
+    /// compound concatenates whatever its sub-pairs produced. Feeding the result
+    /// through
+    /// [`ContactManifold::add_contact`](crate::collision::ContactManifold::add_contact)
+    /// applies the manifold's own 4-point reduction.
+    ///
+    /// Each returned contact's `local_point_a`/`local_point_b` are filled in here as
+    /// the plain offsets `point - pos_a` and `point - pos_b`. They are *not* rotated
+    /// into either body's local frame, and they are relative to the position passed in —
+    /// which is the collider's transform origin, not necessarily a centre of mass. A caller
+    /// that wants true body-local coordinates has to apply the inverse rotation itself.
+    ///
+    /// [`ColliderShape::Compound`] is the exception: its branch returns before this fill-in,
+    /// so the offsets are relative to the SUB-PART's derived world position, not to the
+    /// position you passed.
+    ///
+    /// The dispatch order matters and is not arbitrary: plane arms come before the
+    /// triangle-mesh arms, because a plane must never reach
+    /// [`Gjk::support_point`](crate::Gjk::support_point), and the mesh arms come
+    /// before the GJK fallback, because GJK would collide against a mesh's convex
+    /// hull instead of its actual surface.
     pub fn test_collision_manifold(
         shape_a: &ColliderShape,
         pos_a: Vec3,

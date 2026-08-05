@@ -1,22 +1,87 @@
+//! A static bounding-volume hierarchy over a triangle mesh.
+//!
+//! [`BvhTree::build`] partitions a triangle soup with a binned surface-area
+//! heuristic and stores the result as one flat array of [`BvhNode`]s. It is
+//! *static*: there is no insert or remove, so a mesh whose vertices move needs a
+//! fresh build. The incremental counterpart, for whole bodies moving around a
+//! scene, is [`DynamicAabbTree`](crate::broadphase::DynamicAabbTree).
+//!
+//! Two things to keep straight. Node bounds are in the same space as the vertex
+//! slice handed to `build` — the mesh's own local space, since `build` applies no
+//! transform. And triangle numbers reported out of this module address the index
+//! slice **as `build` permuted it**, not the caller's original ordering.
+
 use gizmo_math::{Aabb, Vec3, Vec3A};
 
+/// One node of a [`BvhTree`]: either a leaf owning a contiguous run of triangles,
+/// or an internal node owning exactly two children.
+///
+/// Which it is comes from [`is_leaf`](Self::is_leaf). The distinction is not
+/// cosmetic: [`first_tri_index`](Self::first_tri_index) and
+/// [`tri_count`](Self::tri_count) only describe a real triangle range on a leaf,
+/// because subdivision zeroes `tri_count` when it turns a node into a parent.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BvhNode {
+    /// Bounds of every triangle beneath this node, in the same space as the
+    /// `vertices` slice given to [`BvhTree::build`].
+    ///
+    /// Measured while the node still owned its whole triangle range, so it
+    /// encloses the subtree on internal nodes as well as on leaves. It is a
+    /// bound on the triangles themselves, not a fattened box — nothing is added
+    /// for motion, which is why this tree suits static geometry.
     pub aabb: Aabb,
+    /// Index of the left child in [`BvhTree::nodes`], or `-1` on a leaf.
+    ///
+    /// Children are appended as a pair, so on an internal node
+    /// `right_child == left_child + 1` and both are greater than this node's own
+    /// index — a top-down traversal never has to look backwards.
     pub left_child: i32,
+    /// Index of the right child in [`BvhTree::nodes`], or `-1` on a leaf; see
+    /// [`left_child`](Self::left_child).
+    ///
+    /// `-1` is the only negative value a well-formed tree ever stores here, and
+    /// traversals treat any negative index as "no child" rather than trusting it.
     pub right_child: i32,
+    /// Index of this node's first triangle, counted **in triangles** — multiply by
+    /// 3 to reach the index slice.
+    ///
+    /// It addresses the slice after [`BvhTree::build`] permuted it. Internal nodes
+    /// keep whatever value they had before they were split, so this is only
+    /// meaningful together with a non-zero [`tri_count`](Self::tri_count).
     pub first_tri_index: u32,
+    /// How many triangles this node owns — **zero on an internal node**, so it is
+    /// not a subtree total.
+    ///
+    /// Leaves are not capped at any particular size: subdivision stops at two
+    /// triangles or fewer, at a fixed depth limit, or as soon as the surface-area
+    /// heuristic prefers leaving the node whole, so a leaf over a degenerate
+    /// cluster of triangles can be large. Nor is a leaf guaranteed non-empty — an
+    /// index slice shorter than one full triangle yields a single leaf owning
+    /// zero.
     pub tri_count: u32,
 }
 
 impl BvhNode {
+    /// Whether this node stores triangles rather than children — i.e. whether
+    /// [`left_child`](Self::left_child) is `-1`.
     pub fn is_leaf(&self) -> bool {
         self.left_child == -1
     }
 }
 
+/// An immutable BVH over one triangle mesh: [`build`](Self::build) fills it and
+/// nothing mutates it afterwards.
+///
+/// `Default` (and a build over zero indices) gives the empty tree, which answers
+/// every query with nothing rather than failing.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct BvhTree {
+    /// Every node, root first — a non-empty tree is always rooted at `nodes[0]`.
+    ///
+    /// Child links are indices into this same `Vec`, and a node's children always
+    /// sit at a higher index than the node itself. The vector is empty for
+    /// `Default` and for a [`build`](Self::build) over an empty index slice; any
+    /// other input produces at least a root node.
     pub nodes: Vec<BvhNode>,
 }
 
@@ -34,6 +99,38 @@ fn checked_tri_count(index_count: usize) -> Option<u32> {
 }
 
 impl BvhTree {
+    /// Build a hierarchy over `indices`, read as consecutive triples of positions
+    /// into `vertices`.
+    ///
+    /// `indices` is **reordered in place**: after the call the caller's array is a
+    /// permutation of what it passed, arranged so each node's triangles are
+    /// contiguous. Every triangle number this crate reports afterwards
+    /// ([`BvhNode::first_tri_index`], [`BvhTree::query_aabb`]) refers to the
+    /// permuted array, so a caller that keeps per-triangle side data must permute
+    /// it the same way or key it by vertex instead. `vertices` is only read, and
+    /// never transformed, so all node bounds come out in the mesh's own space.
+    ///
+    /// Splits are chosen by a surface-area heuristic over 8 centroid bins per axis.
+    /// A node stops splitting at two triangles or fewer, at a fixed depth limit,
+    /// or when no candidate split scores better than leaving the node intact.
+    ///
+    /// # Errors
+    ///
+    /// [`GizmoError::BvhBuildFailed`](crate::error::GizmoError::BvhBuildFailed) if any
+    /// entry of `indices` is not a valid position in `vertices`, or if
+    /// `indices.len()` exceeds `u32::MAX` (the node counters are `u32` and would
+    /// truncate silently). Both are checked before any node is allocated, so bad
+    /// input costs an error rather than a panic or a corrupt tree.
+    ///
+    /// # Degenerate input
+    ///
+    /// Empty `indices` is not an error: it returns the empty tree. A length that is
+    /// not a multiple of three is not an error either — the trailing one or two
+    /// indices simply fall outside every leaf and are never visited again.
+    ///
+    /// The build hashes nothing, reads no clock and runs on one thread, so the same
+    /// inputs yield the same tree and the same permutation of `indices` on the same
+    /// platform (this crate makes no cross-platform bit-equality claim).
     #[tracing::instrument(
         skip_all,
         name = "bvh_build",

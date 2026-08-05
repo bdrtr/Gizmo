@@ -66,20 +66,44 @@ impl From<serde_json::Error> for SnapshotError {
     }
 }
 
+/// A world-space volume that bounds a [`GravityField`] or a [`FluidZone`].
+///
+/// All coordinates are world-space metres. Membership is always tested against a
+/// *single point* — the body's `Transform::position`, i.e. its transform origin, which
+/// coincides with the centre of mass only when `RigidBody::center_of_mass` is zero.
+/// The body's collider extents play no part in the test, so a large body is either
+/// wholly in or wholly out depending on where its origin sits.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum ZoneShape {
+    /// Axis-aligned box. It carries no rotation, so a tilted region cannot be expressed
+    /// as one.
     Box {
+        /// Lower corner, world metres. Every component should be ≤ the matching
+        /// component of `max`; if any axis is inverted the box is empty and
+        /// [`contains`](ZoneShape::contains) is never true.
         min: gizmo_math::Vec3,
+        /// Upper corner, world metres. For a [`FluidZone`] this is also the face the
+        /// water surface sits on — see [`FluidZone`].
         max: gizmo_math::Vec3,
     },
+    /// Ball. This is the shape both [`GravityField`] and [`FluidZone`] default to, with
+    /// unit radius at the world origin.
     Sphere {
+        /// Centre in world metres. Moving it moves the whole volume, including — for a
+        /// [`FluidZone`] — the water surface derived from it.
         center: gizmo_math::Vec3,
+        /// Radius in metres. Only its square is ever used, so a negative value behaves
+        /// exactly like its absolute value; `0.0` matches only the exact centre point.
         radius: f32,
     },
 }
 
 impl ZoneShape {
+    /// Whether the world-space point `p` lies inside this volume.
+    ///
+    /// Both variants are closed — a point exactly on the boundary counts as inside.
+    /// Any NaN component in `p` or in the bounds makes the result `false`.
     pub fn contains(&self, p: gizmo_math::Vec3) -> bool {
         match self {
             ZoneShape::Box { min, max } => {
@@ -97,12 +121,42 @@ impl ZoneShape {
     }
 }
 
+/// A volume that replaces the world's default gravity for the bodies inside it.
+///
+/// Resolution is winner-takes-all, once per body per substep: of the fields whose
+/// [`shape`](Self::shape) contains the body's transform origin, the one with the
+/// highest [`priority`](Self::priority) supplies the entire gravity vector. If no
+/// field contains it, `PhysicsWorld::integrator.gravity` applies. Fields never blend
+/// and never sum — exactly one gravity vector is in effect for a given body. Which
+/// field wins when several tie on priority is unspecified; do not rely on it.
+///
+/// `PhysicsWorld::gravity_fields` is part of the rollback snapshot, so editing the
+/// list mid-simulation stays replayable.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct GravityField {
+    /// Region of influence, in world metres; see [`ZoneShape`] for how membership is
+    /// tested.
     pub shape: ZoneShape,
+    /// Acceleration in m/s², world frame. This *replaces* the default rather than
+    /// adding to it, so it must carry the full magnitude — Earth is
+    /// `(0.0, -9.81, 0.0)` and `Vec3::ZERO` means weightless, not "use the default".
+    ///
+    /// A body with `use_gravity == false` does not free-fall under it, but this vector
+    /// still sets the direction and magnitude of that body's buoyancy in any
+    /// overlapping [`FluidZone`] — so an inverted field pushes floating bodies down.
     pub gravity: gizmo_math::Vec3,
+    /// Intended distance-based attenuation radius in metres.
+    ///
+    /// **Currently inert**: no code reads this field, so gravity is uniform across the
+    /// whole `shape` whatever the value. Treat it as unimplemented rather than as a
+    /// knob with a subtle effect.
     pub falloff_radius: f32, // If > 0, gravity drops off
+    /// Tie-break rank among *overlapping* fields; higher wins.
+    ///
+    /// Purely relative to the other fields — it is not compared against anything
+    /// representing the world default, so a very negative priority does not fall back
+    /// to `integrator.gravity`. Any containing field, at any priority, suppresses it.
     pub priority: i32,
 }
 
@@ -120,12 +174,48 @@ impl Default for GravityField {
     }
 }
 
+/// A volume of liquid that applies buoyancy and drag to the bodies inside it, and
+/// supplies the underwater fog a submerged camera should use.
+///
+/// Unlike [`GravityField`], zones do **not** compete: a body whose origin lies in two
+/// overlapping zones receives both zones' buoyancy and both zones' drag, additively.
+/// Submersion is an approximation, not an exact intersected volume — the body's
+/// vertical half-extent is compared against a flat surface plane (`max.y` for a box,
+/// `center.y + radius` for a sphere) to get a ratio in `0.0..=1.0`, and both the
+/// displaced volume and the drag are scaled by it. Rotation is ignored in that
+/// estimate, so a long thin body reports the same submersion whatever its attitude,
+/// and a collider with no vertical extent (a plane) never registers as submerged.
+///
+/// Forces are applied to linear velocity only; a spinning body is not slowed by the
+/// fluid. `PhysicsWorld::fluid_zones` is part of the rollback snapshot.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct FluidZone {
+    /// Region of liquid, in world metres. It fixes both membership (see [`ZoneShape`])
+    /// and the height of the surface plane described above, so moving or resizing the
+    /// zone moves the water surface with it.
     pub shape: ZoneShape,
+    /// Fluid density in kg/m³ (fresh water ≈ 1000, the [`Default`]). Buoyancy is
+    /// `-gravity * submerged_volume * density`, so this scales lift linearly; `0.0`
+    /// removes lift while leaving drag intact, and values above the body's own density
+    /// make it float.
     pub density: f32,        // kg/m^3
+    /// Dynamic viscosity, intended for a Stokes-drag term.
+    ///
+    /// **Currently inert**: the rigid-body pipeline builds drag from
+    /// [`linear_drag`](Self::linear_drag) and [`quadratic_drag`](Self::quadratic_drag)
+    /// only and never reads this field. Setting it has no effect on the simulation.
     pub viscosity: f32,      // dynamic viscosity for Stokes drag
+    /// Coefficient of the speed-proportional drag term.
+    ///
+    /// The drag force magnitude is `(linear_drag * |v| + quadratic_drag * |v|²)`
+    /// scaled by the submerged ratio, directed against the linear velocity. Below
+    /// about `1e-4` m/s no drag is applied at all — the direction would be
+    /// ill-defined. `0.0` (the [`Default`]) means an inviscid zone that only floats
+    /// bodies; nothing damps them and they will bob indefinitely.
     pub linear_drag: f32,    // fallback linear drag
+    /// Coefficient of the `|v|²` term of the same drag force; it dominates
+    /// [`linear_drag`](Self::linear_drag) at high speed and is negligible at low
+    /// speed. Same submerged-ratio scaling and same low-speed cut-off.
     pub quadratic_drag: f32, // fallback quadratic drag
     /// Kamera bu hacimdeyken uygulanan su-altı sis rengi (lineer RGB). Böylece her su hacmi
     /// kendi su-altı görünümünü tanımlar (sığ turkuaz vs derin lacivert). Serde-eksik → [0;3].
@@ -208,79 +298,238 @@ const FIXED_DT: f32 = 1.0 / PHYSICS_HZ;
 /// Sub-step başına maksimum adım sayısı — spiral'i önler
 const MAX_SUBSTEPS: u32 = 64; // Increased from 8 to support larger DTs without losing simulation time
 
+/// Global weather condition carried on the world as a shared setting.
+///
+/// The rigid-body pipeline itself ignores it completely: nothing in integration,
+/// broadphase, narrowphase or the constraint solver reads this value, so changing it
+/// cannot by itself alter a rigid-body trajectory. It lives here only so that one
+/// value can be shared by the subsystems that do care — the vehicle tyre model reads
+/// it to scale the friction-circle limit.
+///
+/// It IS captured by [`PhysicsWorld::snapshot`] and restored by
+/// [`PhysicsWorld::restore_snapshot`] — not because the rigid pipeline needs it, but because
+/// the subsystems that read it do, and it cannot be recomputed from transforms or velocities.
+/// Being `#[non_exhaustive]`, downstream `match`es need a fallback arm; the vehicle model
+/// treats unknown variants as the no-penalty case.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[derive(Default)]
 #[non_exhaustive]
 pub enum Weather {
+    /// Dry conditions and the [`Default`] — the neutral, no-penalty baseline every
+    /// consumer is expected to calibrate against.
     #[default]
     Sunny,
+    /// Wet conditions. The only variant whose grip penalty is speed-dependent in the
+    /// vehicle model (aquaplaning above a threshold speed); the other two are flat.
     Rain,
+    /// Snow or ice — a grip penalty that does not vary with speed.
     Snow,
 }
 
 
 /// A compact snapshot of the physics state for rewinding
+///
+/// Captured once per simulated frame (not per substep) into
+/// [`PhysicsWorld::history`] and consumed by the one-frame debug rewind. It holds
+/// pose and motion **only**: sleep state, contact warm-start impulses, joint latches
+/// and the substep accumulator are all absent, so restoring one gives a plausible
+/// visual state but *not* a bit-exact continuation. Use [`WorldSnapshot`] via
+/// [`PhysicsWorld::snapshot`] when the resimulation has to match.
 #[derive(Debug, Clone)]
 pub struct PhysicsStateSnapshot {
+    /// One entry per body, in the world's SoA row order at capture time. Since that
+    /// order is not stable across body removal, a rewind is refused outright when the
+    /// length no longer matches the world's — restoring would pair poses with the
+    /// wrong bodies.
     pub transforms: Vec<Transform>,
+    /// Linear (m/s) and angular (rad/s) velocity per body, world frame, in the same
+    /// row order as [`transforms`](Self::transforms) and always the same length.
     pub velocities: Vec<Velocity>,
 }
 
 /// Main physics world that manages all physics simulation
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct PhysicsWorld {
+    /// Shared weather setting. Inert for rigid-body simulation — see [`Weather`].
     pub weather: Weather,
 
+    /// Default gravity, air density and wind for bodies that no [`GravityField`]
+    /// covers. Changing `integrator.gravity` retunes the whole world at once.
+    ///
+    /// Not serialized: a world loaded from a JSON snapshot comes back with
+    /// `Integrator::default()` (Earth gravity, sea-level air, no wind), so a scene
+    /// with custom gravity must reapply it after loading.
     #[serde(skip)]
     pub integrator: Integrator,
+    /// Contact-solver tuning: iteration counts, warm-start factor, penetration slop,
+    /// TGS-soft parameters — see [`ConstraintSolver`]. Not serialized; reset to the
+    /// defaults on load.
     #[serde(skip)]
     pub solver: ConstraintSolver,
+    /// Broadphase acceleration structure. Despite the name it is backed by a dynamic
+    /// AABB tree, and the `cell_size` its constructor takes is ignored.
+    ///
+    /// Derived state, not authoritative: every substep clears it and re-inserts every
+    /// body, with the AABB swept along the velocity for CCD-enabled movers. Anything
+    /// you insert or remove by hand is therefore discarded by the next `step`.
     #[serde(skip)]
     pub spatial_hash: SpatialHash,
+    /// Non-trigger contacts observed during the last `step`: `Started` on the first
+    /// substep a pair touches, `Persisting` afterwards, `Ended` on the substep the
+    /// pair separates. Cleared and refilled by `step`, so entries accumulate across
+    /// that frame's substeps: one continuous contact yields one event per substep, not
+    /// one per frame. A paused `step` clears without refilling, but one servicing a
+    /// rewind returns before the clear and leaves the previous frame's entries in
+    /// place. Each event carries at most 4 contact points, whatever the manifold's real
+    /// size. Not serialized.
     #[serde(skip)]
     pub collision_events: Vec<CollisionEvent>,
+    /// Overlaps where at least one collider has `is_trigger` set. Such a pair never
+    /// produces a manifold, so it exchanges no impulse and the bodies pass through
+    /// each other. Same clear-and-refill cadence as
+    /// [`collision_events`](Self::collision_events). Not serialized.
     #[serde(skip)]
     pub trigger_events: Vec<TriggerEvent>,
+    /// Bodies whose solved contact impulse exceeded their `fracture_threshold` during
+    /// the last `step`. Recording the event is all the pipeline does — the body is
+    /// left intact and unchanged; replacing it with chunks is a separate step the
+    /// caller (or the fracture system) performs. Not serialized.
     #[serde(skip)]
     pub fracture_events: Vec<gizmo_physics_core::FractureEvent>,
+    /// Pre-computed shatter chunks keyed by body, so a fracture at runtime is a clone
+    /// of stored geometry instead of a Voronoi decomposition. Meant to be filled ahead
+    /// of time (during loading); it is empty by default, and a body with no entry
+    /// simply misses — what happens then is the caller's choice, not this cache's.
+    /// Not serialized.
     #[serde(skip)]
     pub fracture_cache: crate::fracture::PreFracturedCache,
+    /// Explicit constraints (fixed, hinge, ball-socket, slider, spring, distance, D6),
+    /// solved after contacts in every substep. Joints with `is_broken` set are skipped
+    /// by the solver but stay in the list, and a joint with `collision_enabled == false`
+    /// also suppresses narrowphase between its two bodies.
+    ///
+    /// Not serialized — a JSON snapshot loses them — but they *are* carried by
+    /// [`snapshot`](Self::snapshot)/[`restore_snapshot`](Self::restore_snapshot),
+    /// because the broken latch and the latched reference poses cannot be rederived
+    /// from transforms and velocities.
     #[serde(skip)]
     pub joints: Vec<crate::joints::Joint>,
+    /// Iteration count and correction/bias clamps for the joint pass. Like
+    /// [`solver`](Self::solver) these are simulation inputs, and more iterations trade
+    /// speed for stiffer, less stretchy joints. Not serialized.
     #[serde(skip)]
     pub joint_solver: crate::joints::JointSolver,
 
+    /// Localized gravity overrides; see [`GravityField`] for how overlaps resolve.
+    /// Empty (the default) means every body uses `integrator.gravity`.
     pub gravity_fields: Vec<GravityField>,
+    /// Liquid volumes applying buoyancy and drag; see [`FluidZone`].
     pub fluid_zones: Vec<FluidZone>,
 
     #[serde(skip)]
     pub(crate) contact_cache: FxHashMap<(BodyHandle, BodyHandle), (bool, Option<ContactManifold>)>,
 
+    /// Unspent simulation time in seconds, always less than one fixed substep except
+    /// when the substep ceiling was hit. `step` adds the (clamped) frame delta to it
+    /// and drains it in fixed 1/240 s substeps, which is what decouples the physics
+    /// rate from the frame rate.
+    ///
+    /// Part of the rollback snapshot: it decides how many substeps the next frame
+    /// runs, so restoring poses without it makes the resimulation diverge.
     pub accumulator: f32,
+    /// Interpolation factor for rendering, written at the end of each `step` as
+    /// `accumulator / fixed_dt`: `0.0` means the last substep landed exactly on the
+    /// frame boundary, values near `1.0` mean nearly a full substep of unsimulated
+    /// time is pending. Output only — nothing in the pipeline reads it back.
+    ///
+    /// Normally in `0.0..1.0`, but it can exceed `1.0` on a frame that hit the substep
+    /// ceiling and left real time unspent, so clamp it before use. A `step` that was
+    /// paused or that serviced a rewind returns early and leaves the previous value.
     pub render_alpha: f32,
 
+    /// Per-frame profiling counters — see [`PhysicsMetrics`](crate::island::PhysicsMetrics)
+    /// for the accumulation window and why they cannot perturb the simulation. Read only
+    /// for logging and HUDs. Not serialized.
     #[serde(skip)]
     pub metrics: crate::island::PhysicsMetrics,
 
     // SoA (Structure of Arrays) Memory Layout
+    /// Handle of the body in each SoA row; row `i` of this and of the four arrays
+    /// below describe the same body, and all five always have the same length.
+    ///
+    /// Row order is an implementation detail and is **not** stable: removing a body
+    /// moves the last row into the hole. Never cache a row index across a removal —
+    /// keep the [`BodyHandle`], which is what events, joints and queries refer to.
+    /// (`state_hash` sorts by handle id precisely so that it does not depend on this
+    /// order.)
     pub entities: Vec<BodyHandle>,
+    /// Mass, inertia, damping, body type, lock flags, sleep state and accumulators.
+    /// Mutated in place during a step: forces are drained, sleep counters advance, and
+    /// contacts or joints can wake a body. Part of the rollback snapshot, because the
+    /// sleep flag and its counter cannot be rederived from pose and velocity.
     pub rigid_bodies: Vec<RigidBody>,
+    /// World-space pose per body. `position` is the *transform origin*, not the centre
+    /// of mass — the two coincide only when `RigidBody::center_of_mass` is zero, and
+    /// zone containment ([`GravityField`], [`FluidZone`]) tests the origin. The solver
+    /// writes both the integrated pose and split-impulse position corrections here.
     pub transforms: Vec<Transform>,
+    /// Linear velocity in m/s and angular velocity in rad/s, both in the world frame.
+    /// Written by integration and by the solver.
+    ///
+    /// `RigidBody` axis locks act on this array in place: velocity integration zeroes
+    /// the locked components of the stored velocity rather than masking a copy.
     pub velocities: Vec<Velocity>,
+    /// Shape, material and collision layer per body. A collider with `is_trigger` set
+    /// reports overlaps through [`trigger_events`](Self::trigger_events) and is never
+    /// given a manifold, so it exerts no force.
     pub colliders: Vec<Collider>,
+    /// `BodyHandle::id()` → SoA row index, the reverse of
+    /// [`entities`](Self::entities). It must be kept in lockstep with the arrays: a
+    /// stale entry silently points at whichever body now occupies that row. Lookups
+    /// that miss are treated as "not a rigid body" rather than as an error.
     pub entity_index_map: FxHashMap<u32, usize>,
 
     // Timeline and Debugging
+    /// While set, `step` clears the event lists and returns without simulating, unless
+    /// [`step_once`](Self::step_once) is also set. Time does not accumulate while
+    /// paused, so unpausing does not produce a catch-up burst. Not serialized.
     #[serde(skip)]
     pub is_paused: bool,
+    /// One-shot single-substep advance, mainly to inch a paused world forward. `step`
+    /// consumes it (clearing the flag itself), zeroes the accumulator and runs exactly
+    /// one fixed substep — so the advance is 1/240 s of simulation, not one render
+    /// frame, and any time already banked in the accumulator is discarded. It takes
+    /// effect whether or not the world is paused, overriding the `dt` passed to `step`.
+    /// Not serialized.
     #[serde(skip)]
     pub step_once: bool,
+    /// One-shot request to step back one recorded frame. The next `step` consumes it,
+    /// pops the newest [`history`](Self::history) entry, restores pose and velocity
+    /// from it and returns **without simulating** that frame. The restore is skipped
+    /// with a warning when the body count has changed since capture, and it is silently
+    /// a no-op when the history is empty.
+    ///
+    /// A debugging aid only: since only pose and velocity are restored, the world does
+    /// not resume bit-identically. Not serialized.
     #[serde(skip)]
     pub rewind_requested: bool,
+    /// Ring buffer of end-of-frame [`PhysicsStateSnapshot`]s, newest at the back. One
+    /// entry is pushed per *simulated* `step` — paused and rewinding frames record
+    /// nothing. Not serialized.
     #[serde(skip)]
     pub history: std::collections::VecDeque<PhysicsStateSnapshot>,
+    /// Cap on [`history`](Self::history) length; the oldest entry is dropped once it
+    /// is exceeded. Also the rewind depth, in simulated frames. Cost is two `Vec`s of
+    /// per-body data per retained frame, so on a large scene this is the dominant
+    /// memory knob of the debug timeline. At `0` every snapshot is dropped as soon as
+    /// it is taken, leaving the buffer empty and rewind a no-op — but the per-frame
+    /// clone still happens.
     pub max_history_frames: usize,
 
+    /// Bodies to trace-log during velocity integration, one line per body per substep
+    /// with position and linear velocity. Purely diagnostic — membership never changes
+    /// the simulation. An empty set (the default) short-circuits the check, so leave it
+    /// empty in production. Not serialized.
     #[serde(skip)]
     pub watchlist: std::collections::HashSet<BodyHandle>,
 }

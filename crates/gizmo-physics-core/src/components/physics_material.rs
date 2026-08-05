@@ -4,17 +4,44 @@ use serde::{Deserialize, Serialize};
 // Kombine Fonksiyon: iki malzemenin değerlerini nasıl birleştireceğimizi belirler
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// How the two materials meeting in a contact are merged into one coefficient.
+///
+/// Each material carries its own mode (one for friction, one for restitution), so every
+/// contact has two candidate modes to reconcile. They are resolved by a fixed priority —
+/// `Max` beats `Min` beats `GeometricMean` beats `Average` — and the winner is then applied
+/// to both materials' values; see [`PhysicsMaterial::combine`]. Priority is a property of
+/// the *mode*, not of the values, so a material that asks for `Max` imposes `Max` on every
+/// partner it touches.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
 #[non_exhaustive]
 pub enum CombineMode {
+    /// Arithmetic mean, `(a + b) / 2`. Lowest priority, so it is the pair's mode only when
+    /// *both* materials ask for it — in effect the "no opinion" choice.
     Average, // (a + b) / 2
+    /// Takes the lower of the two coefficients, so one slippery (or dead) surface is enough
+    /// to make the whole contact slippery. Outranked only by `Max`.
     Min,     // a.min(b)
+    /// Takes the higher of the two coefficients. Highest priority, so this is the mode for a
+    /// material that must keep its character regardless of what it lands on — an
+    /// [`ICE`](PhysicsMaterial::ICE) floor does not make [`RUBBER`](PhysicsMaterial::RUBBER)
+    /// slide.
     Max,     // a.max(b)
+    /// Square root of the product — the usual convention for Coulomb friction coefficients.
+    /// For non-negative inputs the result sits between the two operands and never exceeds
+    /// their arithmetic mean, and it collapses to zero as soon as either side is zero.
     #[default]
     GeometricMean, // sqrt(a * b)  — geometric mean (sürtünme için ideal)
 }
 
 impl CombineMode {
+    /// Merge two coefficients under this mode.
+    ///
+    /// Meant for non-negative inputs (friction, restitution). `GeometricMean` clamps the
+    /// product at zero before taking the root, so a single negative operand returns `0.0`
+    /// instead of `NaN` — but two negatives multiply to a positive and come back positive.
+    /// `Min`/`Max` are `f32::min`/`f32::max`, which return the other operand when one is
+    /// `NaN`. Swapping `a` and `b` gives the same result, except that for `Min`/`Max` on
+    /// `+0.0` vs `-0.0` either operand may come back.
     pub fn combine(self, a: f32, b: f32) -> f32 {
         match self {
             CombineMode::Average => (a + b) * 0.5,
@@ -40,17 +67,70 @@ fn resolve_combine_mode(m1: CombineMode, m2: CombineMode) -> CombineMode {
 // PhysicsMaterial
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Surface properties of a collider: how much it grips, how much it bounces, how heavy its
+/// material is, and the rules by which those merge with whatever it touches.
+///
+/// Every coefficient is dimensionless and expected to be non-negative. The `with_*` builders
+/// clamp, but a struct literal is not validated, so a hand-built material can hold values
+/// (negative friction, restitution above 1) that the solver has no sensible answer for.
+///
+/// A material belongs to a collider — [`Collider::material`](crate::components::Collider) —
+/// and reaches the contact solver from there; adding this as a standalone ECS component next
+/// to a body does not give that body a surface. Two materials never negotiate at runtime:
+/// merging is the pure, stateless [`combine`](Self::combine), which makes the contact
+/// coefficients a deterministic function of the pair alone and safe to recompute during
+/// replay or rollback.
+///
+/// [`Default`] is a mid-range surface: friction 0.6/0.5, restitution 0.3, density 1.0,
+/// [`GeometricMean`](CombineMode::GeometricMean) friction and [`Max`](CombineMode::Max)
+/// restitution.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 // NOT `#[non_exhaustive]`: this is a plain value type that users routinely build
 // with `PhysicsMaterial { static_friction: 0.9, ..Default::default() }` to author
 // custom materials (the preset consts only cover a fixed set). Keeping it
 // exhaustive preserves that ergonomic struct-literal API.
 pub struct PhysicsMaterial {
+    /// Coulomb coefficient of *static* friction: the largest tangential force a contact can
+    /// hold without sliding, as a fraction of the normal force. Dimensionless, non-negative,
+    /// and legitimately allowed to exceed 1 (see [`RUBBER`](Self::RUBBER)); 0 means the
+    /// contact resists nothing sideways. Physically it should be at least
+    /// [`dynamic_friction`](Self::dynamic_friction), but nothing enforces that.
     pub static_friction: f32,
+    /// Coulomb coefficient of *kinetic* friction, opposing an already-sliding contact, again
+    /// as a fraction of the normal force. Once merged with the partner's, this is the
+    /// coefficient the rigid-body pipeline stores as a contact manifold's plain `friction`,
+    /// with the static one carried beside it. It shares
+    /// [`friction_combine`](Self::friction_combine) with its static twin, so a pair cannot
+    /// merge the two under different rules.
     pub dynamic_friction: f32,
+    /// Bounciness in `[0, 1]`: 0 is a perfectly inelastic impact, 1 returns the full approach
+    /// speed. The `with_*` builders clamp to that range; a struct literal does not, and above
+    /// 1 each impact injects energy.
+    ///
+    /// It shapes the *impact*, not the resting state: the rigid-body pipeline drops
+    /// restitution to zero for a contact that was already present on the previous step, so a
+    /// bouncy material will not keep a settled stack twitching.
     pub restitution: f32,
+    /// Mass per unit volume on a relative scale where water is about 1.0 — the presets are
+    /// specific gravities (7.8 for steel-like [`METAL`](Self::METAL), 0.6 for
+    /// [`WOOD`](Self::WOOD)), i.e. the g/cm³ figure, not kg/m³. Non-negative; 0 is accepted
+    /// and yields zero derived mass.
+    ///
+    /// It is inert for an ordinary body: nothing multiplies collider volume by it to produce
+    /// a mass, and a rigid body is constructed with an explicit mass instead. The one place
+    /// the engine turns density into mass is fracture, where a chunk's mass is its volume
+    /// times this value — and therefore on the same relative scale, not in kilograms.
     pub density: f32,
+    /// Rule for merging both friction coefficients with a partner material's. Only one of the
+    /// pair's two modes survives — the higher-priority one, see [`CombineMode`] — and it is
+    /// applied to the static and dynamic coefficients alike. Defaults to
+    /// [`GeometricMean`](CombineMode::GeometricMean).
     pub friction_combine: CombineMode,
+    /// Rule for merging [`restitution`](Self::restitution) with a partner material's,
+    /// resolved independently of [`friction_combine`](Self::friction_combine) — a contact can
+    /// take its friction from one material's preference and its bounce from the other's.
+    /// Defaults to [`Max`](CombineMode::Max), which is why a bouncy material stays bouncy
+    /// against a dull one.
     pub restitution_combine: CombineMode,
 }
 
@@ -136,6 +216,11 @@ impl PhysicsMaterial {
 
     // ── Hazır Malzemeler ──────────────────────────────────────────────────────
 
+    /// Grippy and lively: friction 1.0/0.9, restitution 0.8, density 1.1.
+    ///
+    /// Declares [`Max`](CombineMode::Max) on both channels — the top priority — so no partner
+    /// can drag a rubber contact below these numbers: rubber on [`ICE`](Self::ICE) still grips
+    /// at 0.9 dynamic friction, which is intended, not a bug.
     pub const RUBBER: Self = Self {
         static_friction: 1.0,
         dynamic_friction: 0.9,
@@ -145,6 +230,12 @@ impl PhysicsMaterial {
         restitution_combine: CombineMode::Max,
     };
 
+    /// Slippery and dead: friction 0.05/0.03, restitution 0.05, density 0.92 (just under the
+    /// water = 1.0 reference).
+    ///
+    /// Declares [`Min`](CombineMode::Min) on both channels, which outranks everything except
+    /// [`Max`](CombineMode::Max): an ice contact never climbs above these numbers, unless the
+    /// partner asks for `Max` and overrules the rule entirely.
     pub const ICE: Self = Self {
         static_friction: 0.05,
         dynamic_friction: 0.03,
@@ -154,6 +245,13 @@ impl PhysicsMaterial {
         restitution_combine: CombineMode::Min,
     };
 
+    /// Heavy and middling: friction 0.4/0.3, restitution 0.3, density 7.8 — steel on the
+    /// water = 1.0 scale, and the densest preset here.
+    ///
+    /// Its combine rules are the two deferential ones
+    /// ([`GeometricMean`](CombineMode::GeometricMean) friction,
+    /// [`Average`](CombineMode::Average) restitution), so any partner declaring `Min` or
+    /// `Max` decides the contact.
     pub const METAL: Self = Self {
         static_friction: 0.4,
         dynamic_friction: 0.3,
@@ -163,6 +261,9 @@ impl PhysicsMaterial {
         restitution_combine: CombineMode::Average,
     };
 
+    /// Middling and light: friction 0.5/0.4, restitution 0.4, density 0.6 — under the
+    /// water = 1.0 reference, and the lightest preset here. Carries exactly the same combine
+    /// rules as [`METAL`](Self::METAL), so the two differ only in their numbers.
     pub const WOOD: Self = Self {
         static_friction: 0.5,
         dynamic_friction: 0.4,
@@ -172,6 +273,11 @@ impl PhysicsMaterial {
         restitution_combine: CombineMode::Average,
     };
 
+    /// Rough and deadening: friction 0.8/0.7, restitution 0.1, density 2.4.
+    ///
+    /// Friction defers ([`GeometricMean`](CombineMode::GeometricMean)) while restitution
+    /// insists downward ([`Min`](CombineMode::Min)), so concrete kills most bounces — but
+    /// `Min` loses to `Max`, and a [`RUBBER`](Self::RUBBER) ball still comes off it at 0.8.
     pub const CONCRETE: Self = Self {
         static_friction: 0.8,
         dynamic_friction: 0.7,
@@ -181,6 +287,11 @@ impl PhysicsMaterial {
         restitution_combine: CombineMode::Min,
     };
 
+    /// Slick but lively: friction 0.2/0.15, restitution 0.6, density 2.5.
+    ///
+    /// The only preset that pulls in both directions at once — [`Min`](CombineMode::Min)
+    /// friction with [`Max`](CombineMode::Max) restitution — so a glass contact tends to both
+    /// slide and bounce, and both of those preferences beat a deferential partner's.
     pub const GLASS: Self = Self {
         static_friction: 0.2,
         dynamic_friction: 0.15,
@@ -190,6 +301,9 @@ impl PhysicsMaterial {
         restitution_combine: CombineMode::Max,
     };
 
+    /// Road surface: friction 0.75/0.65, restitution 0.05, density 2.3. A slightly less
+    /// grippy [`CONCRETE`](Self::CONCRETE) that swallows impacts harder; the combine rules of
+    /// the two are identical, so a scene can swap one for the other and only the numbers move.
     pub const ASPHALT: Self = Self {
         static_friction: 0.75,
         dynamic_friction: 0.65,
@@ -199,6 +313,12 @@ impl PhysicsMaterial {
         restitution_combine: CombineMode::Min,
     };
 
+    /// Loose ground: friction 0.55/0.45, restitution 0.02 (all but total absorption),
+    /// density 1.6.
+    ///
+    /// The only preset asking for [`Average`](CombineMode::Average) friction — the lowest
+    /// priority — so its friction rule yields to whatever the other material declares, and
+    /// the arithmetic mean is used only when both sides are `Average`.
     pub const SAND: Self = Self {
         static_friction: 0.55,
         dynamic_friction: 0.45,
@@ -212,9 +332,22 @@ impl PhysicsMaterial {
 /// İki malzemenin birleşiminden elde edilen temas parametreleri
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct CombinedMaterial {
+    /// Static Coulomb coefficient for this contact pair: the largest tangential force the
+    /// contact holds without sliding, as a fraction of the normal force. Dimensionless and
+    /// unclamped — above 1 whenever the merged inputs are. See
+    /// [`PhysicsMaterial::combine`] for how the pair's value is reached.
     pub static_friction: f32,
+    /// Sliding friction for the pair, merged under the same mode as
+    /// [`static_friction`](Self::static_friction): the mode is chosen once per contact, so a
+    /// pair cannot end up with geometric-mean sliding friction and, say, max static friction.
     pub dynamic_friction: f32,
+    /// Bounce for the pair, on the same `[0, 1]` scale as
+    /// [`PhysicsMaterial::restitution`] and likewise unclamped here.
     pub restitution: f32,
+    /// Plain arithmetic mean of the two densities: no combine mode is consulted for this
+    /// field, whatever the materials asked for. A contact has no mass of its own, so this is
+    /// informational — the rigid-body contact path reads only the friction and restitution
+    /// fields off this struct.
     pub density: f32,
 }
 

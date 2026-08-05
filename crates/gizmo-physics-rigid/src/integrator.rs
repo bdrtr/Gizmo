@@ -10,6 +10,12 @@ use gizmo_math::{Quat, Vec3};
 /// conservation than explicit Euler at essentially no extra cost.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Integrator {
+    /// Uniform gravitational acceleration in world space, m/s² (default `(0, −9.81, 0)`).
+    ///
+    /// Added as `v += gravity · dt` — an acceleration, so it is mass-independent and
+    /// applies equally to a feather and an anvil. Only awake dynamic bodies with
+    /// `RigidBody::use_gravity` set receive it; static, kinematic and sleeping bodies are
+    /// skipped entirely. `Vec3::ZERO` gives a weightless world.
     pub gravity: Vec3,
     /// Hava yoğunluğu ρ (kg/m³), aerodinamik sürükleme F = ½·ρ·Cd·A·v² için. Deniz
     /// seviyesi ~1.225. Sürükleme yalnız gövdenin `drag_coefficient·drag_area > 0` ise
@@ -32,6 +38,12 @@ impl Default for Integrator {
 }
 
 impl Integrator {
+    /// Integrator with the given world-space [`gravity`](Self::gravity) in m/s²; every
+    /// other setting keeps its default, i.e. sea-level [`air_density`](Self::air_density)
+    /// and still air ([`wind`](Self::wind) zero).
+    ///
+    /// Note that air density alone changes nothing: aerodynamic drag stays off until a
+    /// body opts in with a non-zero `drag_coefficient · drag_area`.
     pub fn new(gravity: Vec3) -> Self {
         Self {
             gravity,

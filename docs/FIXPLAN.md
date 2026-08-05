@@ -853,12 +853,28 @@ eklemekten ibaret.
 - ⬜ **D2** — `ENGINE.md`'yi İngilizce'ye çevir + `///` yorumlarında İngilizce kuralı +
   `CONTRIBUTING.md`. Bus factor = 1'in tek sebebi bu.
 - ⬜ **D3** — Click-to-try WASM demosu (GitHub Pages).
-- 🔄 **D4** — `#![warn(missing_docs)]` Stage A'da. **1. parti bitti (2026-08-05):**
+- ✅ **D4 — `#![warn(missing_docs)]` Stage A'da.** **1. parti bitti (2026-08-05):**
   `gizmo-math`, `gizmo-net`, `gizmo-scene`, `gizmo-animation` sıfır eksik dokümanla ratchet
   altında. **2. parti bitti (2026-08-05):** `gizmo-physics-soft`, `gizmo-physics-dynamics` ve
   `gizmo-ai` de ratchet altında. **3. parti bitti (2026-08-05):** `gizmo-core` de temiz.
-  Kalan: `gizmo-physics-rigid` (303), `gizmo-physics-core` (243) = **546 öğe**.
-  (`gizmo-audio` zaten temizdi.)
+  **4. parti bitti (2026-08-05) — STAGE A TAMAM.** `gizmo-physics-rigid` ve
+  `gizmo-physics-core` da ratchet altında; Stage A'nın **11 crate'inin tamamı** sıfır eksik
+  dokümanda ve `-D warnings` kapısıyla korunuyor. Başlangıç: 1360 öğe.
+
+  > **Dört partinin hata oranı: 0.21 → 0.11 → 0.21 → 0.103.** Üçüncüdeki sıçrama
+  > `gizmo-core`'un yoğunluğundan değil, hataların ŞEKİL DEĞİŞTİRMESİNDEN geldi (uydurma
+  > modüller-arası iddia yerine aşırı kesinlik). Dördüncü parti iki kuralı da birlikte
+  > uyguladı — "kendi sözleşmesini belgele" + "zayıflat, tahmin etme" — ve en yoğun iki fizik
+  > crate'inde en düşük oranı verdi. Doğrulanamayan modüller-arası iddia beş alanın toplamında
+  > **1**'e indi (1. partide kategori olarak 18'di).
+  >
+  > Şemaya eklenen `weakened` alanı da kendini kanıtladı: ajanlar **114 kez** bilinçli olarak
+  > zayıf-ama-doğru iddiayı seçtiklerini bildirdi. Bu, ölçülemeyen bir davranışı ölçülebilir
+  > hale getiriyor.
+  >
+  > **Stage B (D4 kapsamı DIŞI, kayıt için):** `gizmo-renderer` (895), `gizmo-editor` (249),
+  > `gizmo` (153), `gizmo-scripting` (99), `gizmo-studio` (34), `gizmo-analysis` (33),
+  > `gizmo-app` (24), `gizmo-ui` (5). Bunlar 0.y'de kalıyor, ratchet zorunlu değil.
 
   > **3. partide hata oranı yeniden yükseldi (0.11 → 0.21) ve sebebi öğretici.** Doğrulanamayan
   > modüller-arası iddia 18'den 6'ya düştü — kural o eksende tuttu. Ama hatalar **AŞIRI

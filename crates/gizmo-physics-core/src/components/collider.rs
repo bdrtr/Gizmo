@@ -3,12 +3,51 @@ use serde::{Deserialize, Serialize};
 
 use super::{CollisionLayer, PhysicsMaterial, Transform};
 
+/// The collision geometry attached to a body, together with the surface response and
+/// the filtering rules that apply to it.
+///
+/// Everything is metres, in the collider's own frame, whose origin is the body's
+/// [`Transform`] origin — **not** its centre of mass. `Transform::scale` is not applied
+/// to collider geometry anywhere in `gizmo-physics-core` or `gizmo-physics-rigid`, so
+/// resizing means building a new shape, not scaling the entity.
+///
+/// The struct is `#[non_exhaustive]` — see [`Collider::from_shape`] for how to build one
+/// from outside this crate. [`Default`] is a 0.5 m sphere with the default material and
+/// layer and `is_trigger = false`; it is a placeholder to spread with `..`, not a
+/// recommendation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct Collider {
+    /// The geometry, in the collider's local frame.
+    ///
+    /// Nothing re-derives from this behind your back. In particular a rigid body's
+    /// inertia tensor and centre of mass come from an explicit
+    /// `RigidBody::update_inertia_from_collider` call in `gizmo-physics-rigid` (made at
+    /// construction time by its callers), so swapping the shape at runtime leaves those
+    /// stale until you call it again.
     pub shape: ColliderShape,
+    /// Report overlaps, but never push anything.
+    ///
+    /// A pair where *either* side sets this is diverted in the rigid-body pipeline: it
+    /// emits `TriggerEvent`s (`Started` / `Persisting` / `Ended`) and no contact
+    /// manifold is built, so the solver never sees it. Layer filtering still applies
+    /// first — a trigger is not exempt from `collision_layer`.
     pub is_trigger: bool,
+    /// Friction, restitution and density for this collider's surface.
+    ///
+    /// A contact never uses one collider's material on its own: the pair is folded
+    /// through [`PhysicsMaterial::combine`], where the friction and restitution
+    /// [`CombineMode`](crate::components::CombineMode)s of *both* materials are resolved
+    /// against each other (density is averaged unconditionally). So a slippery collider
+    /// does not by itself make a slippery contact.
     pub material: PhysicsMaterial,
+    /// Which layer this collider sits on, and which layers it is willing to touch — see
+    /// [`CollisionLayer`] for the filtering rule and
+    /// [`CollisionLayer::can_collide_with`] for the test itself.
+    ///
+    /// A [`Collider`] built by any of this type's constructors gets
+    /// [`CollisionLayer::default`] — layer 0, mask `u32::MAX` — so filtering is opt-in:
+    /// until you call [`Collider::with_layer`], this field excludes nothing.
     pub collision_layer: CollisionLayer,
 }
 
@@ -54,7 +93,27 @@ impl Collider {
         }
     }
 
-    /// Calculate AABB for this collider at given transform
+    /// Calculate AABB for this collider at given transform.
+    ///
+    /// `position` / `rotation` are the body's [`Transform`] placement — the collider's
+    /// local origin, not its centre of mass — and the returned box is world-space. Scale
+    /// is not a parameter and is never applied.
+    ///
+    /// The box is **conservative**: it always contains the shape, but it is not guaranteed
+    /// to be the tightest such box — a rotated [`ColliderShape::TriMesh`] in particular is
+    /// bounded through the corners of its cached local box (see [`TriMeshShape::local_aabb`])
+    /// rather than through its triangles. That is the safe direction for a broadphase — too
+    /// big loses time, too small loses contacts.
+    ///
+    /// Degenerate cases, none of which panic:
+    /// - a [`ColliderShape::Plane`] is not actually unbounded here; it reports a
+    ///   ±10 000 m cube centred on `position`, which is finite and so, unlike an
+    ///   `INFINITY` bound, still participates in min/max folds and overlap tests;
+    /// - an empty [`ColliderShape::TriMesh`] gives a single point at `position` (a warn
+    ///   is logged), because an inverted `(+inf, -inf)` box would silently overlap
+    ///   nothing at all;
+    /// - an empty [`ColliderShape::ConvexHull`] or [`ColliderShape::Compound`] *does*
+    ///   return that inverted box, and logs a warning — check before feeding it onward.
     pub fn compute_aabb(&self, position: Vec3, rotation: Quat) -> gizmo_math::Aabb {
         match &self.shape {
             ColliderShape::Sphere(s) => {
@@ -166,6 +225,15 @@ impl Collider {
         }
     }
 
+    /// A half-space bounded by the plane `dot(x, normal) == distance`, with `normal`
+    /// pointing out of the solid side.
+    ///
+    /// Both arguments are consumed in **world space**: the plane paths in this crate do
+    /// not apply the body's position or rotation to them (see [`PlaneShape`]), so a
+    /// plane collider does not follow its entity's [`Transform`].
+    ///
+    /// Pass a unit-length `normal` — nothing normalizes it, and `distance` is then
+    /// metres along it from the world origin.
     pub fn plane(normal: Vec3, distance: f32) -> Self {
         Self {
             shape: ColliderShape::Plane(PlaneShape { normal, distance }),
@@ -173,6 +241,11 @@ impl Collider {
         }
     }
 
+    /// A sphere of `radius` metres centred on the collider's local origin.
+    ///
+    /// The cheapest shape in every phase, and its AABB does not depend on the body's
+    /// orientation. `radius` is not validated; zero or negative collapses the shape
+    /// rather than erroring.
     pub fn sphere(radius: f32) -> Self {
         Self {
             shape: ColliderShape::Sphere(SphereShape { radius }),
@@ -180,6 +253,11 @@ impl Collider {
         }
     }
 
+    /// A box centred on the collider's local origin, given as **half**-extents in metres
+    /// — the full size is `2 * half_extents`.
+    ///
+    /// Box–box and box–plane contacts have dedicated analytic paths rather than going
+    /// through GJK/EPA, so this is the shape to prefer for crates, walls and floors.
     pub fn box_collider(half_extents: Vec3) -> Self {
         Self {
             shape: ColliderShape::Box(BoxShape { half_extents }),
@@ -187,6 +265,18 @@ impl Collider {
         }
     }
 
+    /// A box whose centre sits `offset` metres from the collider's local origin, built as
+    /// a one-part [`ColliderShape::Compound`].
+    ///
+    /// Use it when the body's origin has to stay where it is — a wheel hub, a mesh pivot
+    /// at the feet — and the collider belongs somewhere else. `offset` rotates with the
+    /// body.
+    ///
+    /// The offset is not free: `RigidBody::update_inertia_from_collider` in
+    /// `gizmo-physics-rigid` derives a compound's centre of mass from its parts'
+    /// positions, so a single offset part moves the body's centre of mass to `offset`.
+    /// That is usually what you want, and it is why an offset box is not the same thing
+    /// as moving the entity.
     pub fn offset_box(offset: Vec3, half_extents: Vec3) -> Self {
         Self {
             shape: ColliderShape::Compound(vec![(
@@ -197,6 +287,13 @@ impl Collider {
         }
     }
 
+    /// A capsule along the collider's local **+Y** axis, centred on the local origin.
+    ///
+    /// `half_height` is the half-length of the *cylindrical* section only, so the total
+    /// length is `2 * (half_height + radius)` metres. `half_height == 0.0` degenerates to
+    /// a sphere of `radius` rather than to nothing.
+    ///
+    /// The +Y convention is baked in: to lay a capsule on its side, rotate the body.
     pub fn capsule(radius: f32, half_height: f32) -> Self {
         Self {
             shape: ColliderShape::Capsule(CapsuleShape {
@@ -207,6 +304,20 @@ impl Collider {
         }
     }
 
+    /// The convex hull of `points`, computed now via [`crate::quickhull`].
+    ///
+    /// `points` are in the collider's local frame (metres) and need no ordering: interior
+    /// points are discarded, so only hull vertices survive into the shape. Fewer than four
+    /// points — or a degenerate, near-coplanar set — produces a shape with the points but
+    /// **no faces**, which GJK/EPA still works with, while [`crate::raycast::Raycast`]
+    /// falls back to a bounding-box approximation of it.
+    ///
+    /// Quickhull here deliberately uses ordered containers, so a given input produces the
+    /// same vertex and face ordering on every run of the same build. As everywhere in
+    /// this engine, that is a same-platform guarantee only.
+    ///
+    /// The hull is built once, here, and stored behind `Arc`s, so cloning the resulting
+    /// [`Collider`] afterwards does not copy the geometry.
     pub fn convex_hull(points: &[Vec3]) -> Self {
         let hull = crate::quickhull::compute_convex_hull(points);
         Self {
@@ -256,11 +367,20 @@ impl Collider {
         }
     }
 
+    /// Sets [`Collider::is_trigger`] in a builder chain — see that field for what a
+    /// trigger pair does instead of colliding. Takes the flag as an argument rather than
+    /// asserting it, so a caller can forward a config value without branching.
     pub fn with_trigger(mut self, is_trigger: bool) -> Self {
         self.is_trigger = is_trigger;
         self
     }
 
+    /// Replaces the whole [`PhysicsMaterial`] — including `density` and both
+    /// [`CombineMode`](crate::components::CombineMode)s, which the narrower
+    /// [`Collider::with_restitution`] / [`Collider::with_friction`] shortcuts leave
+    /// alone. Call this first if you mean to combine the two.
+    ///
+    /// Unlike those shortcuts, nothing is clamped here: the material is stored verbatim.
     pub fn with_material(mut self, material: PhysicsMaterial) -> Self {
         self.material = material;
         self
@@ -282,27 +402,51 @@ impl Collider {
     }
 
     // Backwards compatibility wrappers
+    /// Back-compatibility alias for [`Collider::box_collider`], kept for older call
+    /// sites. The name is historical and misleading: the shape is an oriented box that
+    /// rotates with the body, not an axis-aligned one.
     pub fn aabb(half_extents: Vec3) -> Self {
         Self::box_collider(half_extents)
     }
 
+    /// Back-compatibility alias for [`Collider::sphere`], identical in every respect.
     pub fn new_sphere(radius: f32) -> Self {
         Self::sphere(radius)
     }
 
+    /// Back-compatibility alias for [`Collider::box_collider`] with the extents spread
+    /// over three arguments. `x`, `y`, `z` are **half**-extents, so this is a box of full
+    /// size `2x × 2y × 2z` — the name reads like full dimensions and is not.
     pub fn new_aabb(x: f32, y: f32, z: f32) -> Self {
         Self::box_collider(Vec3::new(x, y, z))
     }
 
+    /// Back-compatibility alias for [`Collider::capsule`]; same local +Y axis and the
+    /// same cylinder-only `half_height`.
     pub fn new_capsule(radius: f32, half_height: f32) -> Self {
         Self::capsule(radius, half_height)
     }
 
+    /// Replaces both halves of [`Collider::collision_layer`] — the layer this collider
+    /// is on *and* its acceptance mask. To change only one, build the [`CollisionLayer`]
+    /// yourself; the default `CollisionLayer::new(n)` accepts every layer.
     pub fn with_layer(mut self, layer: CollisionLayer) -> Self {
         self.collision_layer = layer;
         self
     }
 
+    /// Volume in cubic metres, used for buoyancy and for weighting the parts of a
+    /// compound when its mass is distributed.
+    ///
+    /// Exact for the primitives (sphere, box, capsule as cylinder + one full sphere).
+    /// **Approximate** for [`ColliderShape::TriMesh`], [`ColliderShape::ConvexHull`] and
+    /// [`ColliderShape::Compound`]: half the volume of the unrotated local AABB, which
+    /// for a compound spans the empty space between its parts as well.
+    ///
+    /// A [`ColliderShape::Plane`] returns `f32::MAX`, not `INFINITY` — a finite sentinel,
+    /// deliberately chosen so downstream arithmetic stays defined where `INFINITY` would
+    /// have produced a `NaN` (`INFINITY * 0.0`). It is not a measurement; a half-space
+    /// has no finite volume.
     pub fn volume(&self) -> f32 {
         match &self.shape {
             ColliderShape::Sphere(s) => (4.0 / 3.0) * std::f32::consts::PI * s.radius.powi(3),
@@ -323,6 +467,22 @@ impl Collider {
         }
     }
 
+    /// Half the shape's extent along the collider's local **Y** axis, in metres.
+    ///
+    /// Orientation is not a parameter and is not accounted for, so this is the *unrotated*
+    /// half-height: a body lying on its side still reports its upright figure. It is what
+    /// the buoyancy path uses to estimate how deep a body is submerged, where the
+    /// approximation is tolerable; it may not be elsewhere.
+    ///
+    /// For the primitives the shape is centred on the local origin, so `y ± extents_y()`
+    /// brackets it. For [`ColliderShape::TriMesh`], [`ColliderShape::ConvexHull`] and
+    /// [`ColliderShape::Compound`] this is half the local AABB's Y span, which need not be
+    /// centred on the origin — an offset compound's true top and bottom are not
+    /// symmetric about it.
+    ///
+    /// A [`ColliderShape::Plane`] reports `0.0`: no thickness. Note that the same shape
+    /// reports `f32::MAX` from [`Collider::volume`] — the two functions do not treat a
+    /// half-space the same way.
     pub fn extents_y(&self) -> f32 {
         match &self.shape {
             ColliderShape::Sphere(s) => s.radius,
@@ -339,6 +499,20 @@ impl Collider {
     }
 }
 
+/// The geometry of a [`Collider`], in the collider's local frame (metres).
+///
+/// Not every variant travels the same road through the narrowphase. Sphere–sphere,
+/// sphere–plane, box–plane and box–box have dedicated analytic paths; every other pair —
+/// `Capsule` and `ConvexHull` included — goes through the generic support-point and
+/// GJK/EPA routes (the module table on [`crate::narrowphase`] lists them). `TriMesh` is
+/// dispatched per triangle, because the GJK fallback would collide against its convex hull
+/// instead of the mesh. `Plane` and `Compound` are handled entirely by dedicated paths, and
+/// reaching [`Gjk::support_point`](crate::gjk::Gjk::support_point) with either is a contract
+/// violation — see [`Gjk`](crate::gjk::Gjk) for what that costs.
+///
+/// Which variant you pick therefore decides more than the silhouette: see
+/// [`Collider::trimesh`] for the one shape that is genuinely concave, and
+/// [`Collider::volume`] for which variants only approximate their own mass.
 // NOT `#[non_exhaustive]`: the engine's own crates (gizmo-physics-rigid) match
 // this exhaustively to compute inertia / AABB / narrowphase dispatch. Adding a
 // new collider shape is inherently a breaking change (it needs solver support),
@@ -346,42 +520,121 @@ impl Collider {
 // compiler flag every site that must handle the new shape.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ColliderShape {
+    /// A sphere about the local origin — the only variant with no orientation of its own,
+    /// so the body's rotation cancels out of its geometry. See [`Collider::sphere`].
     Sphere(SphereShape),
+    /// A box that turns with the body — an oriented box, despite what the
+    /// [`Collider::aabb`] alias name suggests.
     Box(BoxShape),
+    /// A capsule whose axis is the local +Y direction; rotate the body to lay it down.
     Capsule(CapsuleShape),
+    /// An infinite half-space — see [`PlaneShape`] for the frame its two fields live in.
+    /// Its AABB is a large finite box, not an unbounded one.
     Plane(PlaneShape),
+    /// A static triangle mesh — the only variant whose own geometry may be concave,
+    /// which is why it is dispatched per triangle through its BVH instead of as one
+    /// solid. Meant for static bodies; there is no real inertia tensor for it. Build
+    /// with [`Collider::trimesh`].
     TriMesh(TriMeshShape),
+    /// A convex polyhedron, handled by GJK/EPA over its vertices. Build with
+    /// [`Collider::convex_hull`], which discards interior points.
     ConvexHull(ConvexHullShape),
+    /// Several sub-shapes, each placed by a [`Transform`] relative to the *parent
+    /// collider's* origin.
+    ///
+    /// Only `position` and `rotation` of that transform are read — `scale` is ignored,
+    /// as it is everywhere else in collision. The narrowphase and AABB paths recurse
+    /// into each part rather than treating the union as one solid, so a compound is
+    /// never reduced to its convex hull; parts are free to overlap, and where they do,
+    /// each of them can contribute its own contacts.
     Compound(Vec<(Transform, Box<ColliderShape>)>),
 }
 
+/// A sphere centred on the collider's local origin. See [`Collider::sphere`].
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct SphereShape {
+    /// Radius in metres. Not validated at construction or on deserialize: zero and
+    /// negative values are stored as given and yield a degenerate shape rather than an
+    /// error.
     pub radius: f32,
 }
 
+/// A box centred on the collider's local origin, oriented by the body's rotation.
+/// See [`Collider::box_collider`].
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct BoxShape {
+    /// Half the box's size on each local axis, in metres — the box spans
+    /// `-half_extents ..= +half_extents`, so its full size is twice this.
     pub half_extents: Vec3,
 }
 
+/// A capsule aligned with the collider's local +Y axis, centred on the local origin.
+/// See [`Collider::capsule`].
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct CapsuleShape {
+    /// Radius of the cylinder and of the two hemispherical caps, in metres. The caps are
+    /// not extra geometry you can shape independently — this one number rounds both ends.
     pub radius: f32,
+    /// Distance in metres from the local origin to either cap-sphere centre — that is, half
+    /// the cylindrical section, caps excluded; see [`Collider::capsule`] for the total
+    /// length. Not validated at construction or on deserialize.
     pub half_height: f32, // Height of cylindrical part (not including hemispheres)
 }
 
+/// An infinite half-space: everything with `dot(x, normal) < distance` is inside.
+///
+/// Both fields are **world**-space and are read as-is by the plane paths in
+/// [`crate::narrowphase`] and [`crate::raycast`] — the owning body's position and
+/// rotation are not applied to them, so moving or turning the entity does not move the
+/// surface. Build one with [`Collider::plane`].
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct PlaneShape {
+    /// Outward direction of the solid half-space. Assumed unit length: nothing normalizes
+    /// it, and a non-unit normal rescales both the meaning of `distance` and the
+    /// penetration depths reported for contacts against this plane.
     pub normal: Vec3,
+    /// Signed offset of the plane from the world origin along `normal`, in metres — the
+    /// plane is `dot(x, normal) == distance`. A ground plane at y = 0 is `normal = +Y`,
+    /// `distance = 0.0`; raising the ground to y = 2 means `distance = 2.0`.
     pub distance: f32,
 }
 
+/// An indexed triangle mesh with a BVH over it — the one collider shape that is allowed
+/// to be concave. Build it with [`Collider::trimesh`], which is the only way to get the
+/// four fields into a consistent state.
+///
+/// `vertices`, `indices` and `bvh` are a package: the tree addresses `indices`, `indices`
+/// addresses `vertices`, and the build **reorders** `indices` in place. Constructing this
+/// struct by hand from a mesh and a separately-built tree is how you get a mesh that
+/// collides against the wrong triangles.
+///
+/// Everything is stored behind `Arc`, so cloning a mesh collider shares the geometry
+/// rather than copying it. Serialization keeps only `vertices` and `indices`; the tree
+/// and the cached bounds are rebuilt on load.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(into = "TriMeshShapeData", from = "TriMeshShapeData")]
 pub struct TriMeshShape {
+    /// Mesh vertices in the collider's local frame, in metres. Positions only — no
+    /// normals, no UVs; this is collision geometry, not a renderable mesh.
     pub vertices: std::sync::Arc<Vec<Vec3>>,
+    /// Triangle corners, three consecutive entries per triangle, indexing `vertices`.
+    ///
+    /// **Not in the order you passed in.** The BVH build permutes whole triangles so
+    /// each leaf owns a contiguous run, and `bvh`'s leaf ranges are offsets into *this*
+    /// array. Any index `>= vertices.len()` makes the build fail rather than panic
+    /// later, and a length that is not a multiple of three rounds down — the trailing
+    /// one or two entries are left out of the tree.
     pub indices: std::sync::Arc<Vec<u32>>,
+    /// Bounding-volume hierarchy over the triangles, never stored in a scene file and
+    /// rebuilt from `vertices`/`indices` when the shape is deserialized.
+    ///
+    /// An **empty** tree is the failure state, and the two consumers disagree about what
+    /// it means: mesh contact generation queries the tree and so finds nothing at all —
+    /// the mesh collides with nothing — while [`crate::raycast::Raycast`] and
+    /// [`Gjk::support_point`](crate::gjk::Gjk::support_point) notice the empty tree and
+    /// fall back to a linear scan over every triangle or vertex, staying correct but
+    /// losing the acceleration. A mesh that raycasts fine yet nothing lands on is the
+    /// signature of a failed build.
     #[serde(skip)]
     pub bvh: std::sync::Arc<crate::bvh::BvhTree>,
     /// The mesh's bounds in its own space, measured once when the collider is built.
@@ -434,10 +687,33 @@ impl From<TriMeshShape> for TriMeshShapeData {
     }
 }
 
+/// A convex polyhedron: the hull vertices, plus the triangles that bound them.
+///
+/// Build it with [`Collider::convex_hull`] rather than by hand — nothing here checks that
+/// the vertices are actually in convex position, and GJK/EPA will happily produce contacts
+/// for a non-convex vertex set as though it were its own hull.
+///
+/// Serialization keeps only the vertices; the faces are recomputed by re-running
+/// Quickhull on load, which is idempotent for a real hull because re-hulling a hull's own
+/// vertices reproduces them.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(into = "ConvexHullShapeData", from = "ConvexHullShapeData")]
 pub struct ConvexHullShape {
+    /// Hull vertices in the collider's local frame, in metres, with interior points
+    /// already discarded by the hull build.
+    ///
+    /// This is what the narrowphase actually uses: [`crate::gjk`] takes its support point
+    /// by scanning every entry, so contact cost grows with the vertex count. Simplify the
+    /// point cloud before building, not after.
     pub vertices: std::sync::Arc<Vec<Vec3>>,
+    /// Bounding triangles as index triples into `vertices`, wound so the triangle normal
+    /// points out of the hull.
+    ///
+    /// Used only by [`crate::raycast::Raycast`], which needs real triangles to hit;
+    /// GJK/EPA ignores them. **Legitimately empty** for a hull built from fewer than four
+    /// points or from a degenerate (collinear/coplanar) set — the raycast path detects
+    /// that and falls back to the vertices' bounding box, which reports hits on the
+    /// corners of a box the hull does not fill.
     pub faces: std::sync::Arc<Vec<[u32; 3]>>,
 }
 

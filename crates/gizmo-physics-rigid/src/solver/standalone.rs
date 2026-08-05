@@ -8,6 +8,41 @@ impl ConstraintSolver {
     // Tek temas noktası için standalone solver (geriye dönük uyum)
     // ─────────────────────────────────────────────────────────────────────────
 
+    /// Resolve one contact point between two bodies in isolation, applying a single
+    /// normal impulse plus one friction impulse directly to `vel_a` / `vel_b`.
+    ///
+    /// A self-contained convenience path for embedders who do their own collision
+    /// detection and just want a correct impulse response; the world's own stepping never
+    /// calls it. It is a one-shot solve, not a substitute for the island solver: there is
+    /// no warm-starting, no impulse accumulated across calls or iterations, and no
+    /// coupling to the other contacts of the same manifold, so a stack or a resting pile
+    /// solved this way will sag and jitter. Positional error is corrected with Baumgarte
+    /// bias mixed into the velocity, regardless of the split-impulse / TGS-soft settings.
+    ///
+    /// Frames and units:
+    /// - `contact_point` — world space, metres. Lever arms are measured from each body's
+    ///   *centre of mass* (`transform.position` plus the rotated `center_of_mass` offset),
+    ///   not from the transform origin.
+    /// - `normal` — world space, must be unit length, oriented from `rb_a` toward `rb_b`.
+    ///   `rb_a` is pushed along `−normal` and `rb_b` along `+normal`.
+    /// - `penetration` — overlap depth in metres, positive when the shapes intersect. Only
+    ///   the part above `slop` is corrected, and it is clamped at zero, so a negative
+    ///   (speculative, not-yet-touching) value is treated as no penetration rather than as
+    ///   a gap to close.
+    /// - `static_friction` / `dynamic_friction` — dimensionless Coulomb coefficients.
+    /// - `restitution` — bounciness in `0..=1`; ignored (treated as 0) unless the approach
+    ///   speed exceeds [`restitution_velocity_threshold`](Self::restitution_velocity_threshold),
+    ///   which is what keeps resting contacts from micro-bouncing.
+    /// - `dt` — substep duration in seconds; used only to scale the Baumgarte bias. `dt`
+    ///   of zero or less disables that bias instead of dividing by zero.
+    ///
+    /// Does nothing at all when neither body is dynamic, when the pair is already
+    /// separating at this point, or when the combined inverse mass along the normal is
+    /// negligible — the pair is then effectively immovable and the impulse would be
+    /// unbounded. The rigid bodies are taken by `&mut` but are only read — the only
+    /// mutations are to the two velocities. Sleep state is neither checked nor updated, so
+    /// applying this to a sleeping body changes a velocity that the integrator will then
+    /// ignore until something wakes the body.
     #[allow(clippy::too_many_arguments)]
     pub fn solve_contact_constraint(
         &self,
