@@ -1088,6 +1088,17 @@ fn realistic_crate_stack_stays_standing() {
         r.blew_up_at.is_none(),
         "a 4x6x4 crate block at rest collapsed on its own: {r:?}"
     );
+
+    // Twelve high, on the 200 m ground — the exact cell that collapsed at frame 1979 before
+    // sleep became island-collective, and the cheapest single guard against that returning.
+    // The full six-cell version is `height_12_stacks_stay_standing`.
+    let (mut tall, tall_bodies, tall_origins) = scene_crate_pile(2, 12);
+    tall.colliders[0] = Collider::box_collider(Vec3::new(200.0, 1.0, 200.0));
+    let t = run(&mut tall, &tall_bodies, &tall_origins, 3000, 0.5);
+    assert!(
+        t.blew_up_at.is_none(),
+        "a 2x12x2 crate block at rest collapsed on its own: {t:?}"
+    );
     assert!(
         r.peak_lean < 0.5,
         "a 4x6x4 crate block at rest leaned {:.3} m — it is on its way over even if max|v| \
@@ -1137,6 +1148,14 @@ fn the_gated_scenes_reach_the_adaptive_policy() {
 
     for (label, mut world) in cases {
         let configured = world.solver.iterations;
+        // Woken for the probe. A settled scene sleeps as a whole island, and a fully dormant
+        // island is not solved at all — so reading the policy off a settled pile reports depth 0
+        // and says nothing about whether the scene reaches the adaptive branch when it IS solved,
+        // which is the question. (Before islands slept collectively this did not arise, because a
+        // pile never managed to sleep as a unit.)
+        for i in 1..world.entities.len() {
+            world.rigid_bodies[i].wake_up();
+        }
         world.step(DT).ok();
         let (depth, sweeps, islands) = policy_readout(&world);
         assert!(
@@ -2543,23 +2562,110 @@ fn height_6_blocks_on_the_default_config() {
     eprintln!("  collapsed {collapses} of {cells}");
 }
 
-/// Negative control for `realistic_crate_stack_stays_standing`: the same scene, same horizon,
-/// same assertions, with the solver starved to 4 sweeps. It must FAIL.
+/// Does a starved solver's pile survive, or does it merely fall asleep before the damage shows?
 ///
-/// A gate nobody has watched fail is a gate nobody knows the strength of, and this one is
-/// asserting a negative ("did not collapse") on a 1500-frame horizon that was chosen from a
-/// measurement rather than derived. This is the run that shows the horizon is long enough.
+/// This is the question `negative_control_starved_pile_must_fail_the_gate` cannot answer on its
+/// own, and it is the attack a reviewer raised against this whole file: a stability gate can pass
+/// trivially by the scene going quiet. It matters most right after a change to when things sleep.
+///
+/// Three arms on the same starved (4-sweep) scene:
+///   - natural, 1500 frames — what the gate sees
+///   - natural, 6000 frames — is the collapse merely later?
+///   - held awake, 1500 frames — what the solver does when sleep cannot hide anything
+///
+/// If the held-awake arm collapses while the natural one sleeps through it, sleeping is masking a
+/// real defect and the gate must be rebuilt on the awake arm. If neither collapses, the starved
+/// solver genuinely is not damaging this scene any more and the negative control has simply lost
+/// its subject.
 #[test]
-#[ignore = "negative control — asserts the gate FAILS on a starved solver"]
+#[ignore = "measurement, not a gate — long (~4 min)"]
+fn is_the_starved_pile_surviving_or_just_sleeping() {
+    eprintln!("\n=== 4x6x4 at 4 forced sweeps: survival vs sleep ===");
+    eprintln!(
+        "{:>26}  {:>12}  {:>11}  {:>11}  {:>12}",
+        "arm", "blew_up_at", "peak|v|", "peak_lean", "asleep@end"
+    );
+    for (label, frames, force_awake) in [
+        ("natural, 1500", 1500usize, false),
+        ("natural, 6000", 6000, false),
+        ("held awake, 1500", 1500, true),
+    ] {
+        let (mut world, bodies, origins) = scene_crate_pile(4, 6);
+        solver_with_exact_sweeps(&mut world, 1);
+        let mut r_blew: Option<usize> = None;
+        let (mut peak_v, mut peak_lean) = (0.0f32, 0.0f32);
+        let mut asleep = 0usize;
+        for f in 0..frames {
+            if force_awake {
+                for i in 1..world.entities.len() {
+                    world.rigid_bodies[i].wake_up();
+                }
+            }
+            world.step(DT).ok();
+            let o = observe(&world, &bodies, &origins);
+            if !o.max_speed.is_finite() {
+                r_blew.get_or_insert(f);
+                break;
+            }
+            peak_v = peak_v.max(o.max_speed);
+            peak_lean = peak_lean.max(o.lean);
+            asleep = o.asleep;
+            if r_blew.is_none() && o.max_speed >= 0.5 {
+                r_blew = Some(f);
+            }
+        }
+        eprintln!(
+            "{:>26}  {:>12}  {:>11.3}  {:>11.4}  {:>12}",
+            label,
+            match r_blew {
+                Some(f) => f.to_string(),
+                None => "-".to_string(),
+            },
+            peak_v,
+            peak_lean,
+            format!("{}/{}", asleep, bodies.len())
+        );
+    }
+}
+
+/// Retired negative control, kept because its premise turned out to be measuring the bug.
+///
+/// It used to starve `realistic_crate_stack_stays_standing`'s own scene to 4 sweeps and require
+/// the gate to fail, on the reasoning that a gate nobody has watched fail is a gate of unknown
+/// strength. It did fail, so the gate looked well-founded.
+///
+/// Then island-collective sleep landed and this stopped tripping at any sweep count, including 1.
+/// `is_the_starved_pile_surviving_or_just_sleeping` settles what that means, and it is not that
+/// the scene now passes by going quiet:
+///
+/// ```text
+///   4x6x4 at ONE sweep      blew_up_at   peak|v|   peak_lean   asleep@end
+///   before, natural            193        15.426     8.4074      25/96
+///   before, held awake          -          0.159     0.0021       0/96
+///   after,  natural             -          0.159     0.0021      96/96
+///   after,  held awake          -          0.159     0.0021       0/96
+/// ```
+///
+/// Held awake, the pile was ALWAYS fine at one sweep. What destroyed it was the 25 of 96 bodies
+/// that had fallen asleep inside a still-active island. So sweep starvation never damaged this
+/// scene — it only jittered bodies into the partial-sleep regime where the real defect lived.
+/// This control was measuring the bug, not the sweep count.
+///
+/// Sweep sensitivity is still guarded, by `sweep_throttling_is_visible_to_this_file` on the free
+/// chain, which does not depend on sleep. The crate-stack gate is now a stability gate, and the
+/// evidence that its class is real is `height_12_stacks_stay_standing`, which failed before this
+/// change and passes after it.
+#[test]
+#[ignore = "retired — its premise was refuted; see the doc comment"]
 fn negative_control_starved_pile_must_fail_the_gate() {
     let (mut world, bodies, origins) = scene_crate_pile(4, 6);
-    solver_with_exact_sweeps(&mut world, 4);
+    solver_with_exact_sweeps(&mut world, 1);
     let r = run(&mut world, &bodies, &origins, 1500, 0.5);
     assert!(
         r.blew_up_at.is_some() || r.peak_lean >= 0.5 || r.resting_pen >= 0.015,
-        "starving the crate-stack gate's own scene to 4 sweeps did not trip any of its three \
-         assertions inside 1500 frames. The gate is not protecting the thing it claims to: \
-         either the horizon is too short or the criteria are too loose. {r:?}"
+        "starving the crate-stack gate's own scene did not trip any of its three assertions \
+         inside 1500 frames. The gate is not protecting the thing it claims to: either the \
+         horizon is too short or the criteria are too loose. {r:?}"
     );
 }
 
@@ -2607,7 +2713,7 @@ fn negative_control_starved_pile_must_fail_the_gate() {
 /// class whose stability is this marginal, because any measured improvement is inside the noise.
 /// Height 12 needs the stability gap closed first.
 #[test]
-#[ignore = "known defect — 12-high stacks collapse on the default config past frame ~1979"]
+#[ignore = "acceptance test — passes since island-collective sleep; run before shipping a solver change (~10 s)"]
 fn height_12_stacks_stay_standing() {
     let mut failures = Vec::new();
     for side in [1u32, 2, 4] {

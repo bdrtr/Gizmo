@@ -1167,8 +1167,49 @@ eklemekten ibaret.
   > (`pipeline.rs`). Ölçülen tek kusursuz konfigürasyon — her şeyin uyanık tutulması — tam
   > olarak kısmi uykunun var olmadığı durum.
   >
-  > **Sıradaki aday:** bir cisim ancak ADASININ TAMAMI uyuyabildiğinde uyusun. Daha büyük bir
-  > değişiklik (entegrasyon anında ada üyeliği gerekiyor) ama doğru olanı bu görünüyor.
+- ✅ **DÜZELTİLDİ — ADA-KOLEKTİF UYKU** *(2026-08-06)*. Bir cisim ancak temas adasının TAMAMI
+  uygun olduğunda uyuyor. `RigidBody::update_sleep_state` ikiye ayrıldı: sayacı ilerleten ve
+  uyanmayı anında yapan `advance_sleep_counter` (integrator bunu çağırıyor) + `sleep_eligible`.
+  Uyutma kararı `pipeline.rs`'te, çözümden SONRA, ada başına veriliyor. Temassız cisim (yalnız
+  eklemle bağlı olanlar dahil) eskisi gibi kendi sayacıyla uyuyor — o geçiş eklem pasından
+  sonra, çünkü eklem uyandırması `wake_up()` ile sayacı sıfırlıyor.
+
+  | ölçüm | öncesi | sonrası |
+  |---|---|---|
+  | `height_12_stacks_stay_standing` (6 hücre) | **5/6 çöküyor** | **GEÇİYOR** |
+  | `wide_block_collapse_per_ground` (20 hücre) | **10/20 çöküyor** | **0/20** |
+  | yükseklik-6 topluluğu (9 hücre) | 0/9 (lean 0.0018–0.0055) | 0/9 (lean **0.0005–0.0007**) |
+  | 1×12×1 kolon, doğal uyku | lean 0.0104–10.17, 3 çöküş | **0.000106**, çöküş yok |
+  | aynı kolon, zorla uyanık | 0.000106 | 0.000106 — **birebir eşleşiyor** |
+  | 4×6×4 yığın, **1 sweep** | 193. karede patlıyor | duruyor (uyanıkken de) |
+
+  > **Mekanizmanın kesin kanıtı:** düzeltmesiz, 1 sweep'te yığın doğal koşuda 193. karede
+  > patlıyor (25/96 uyuyor) ama **zorla uyanık kolda hiç patlamıyor** (0.159 / 0.0021).
+  > Yani 1-sweep patlaması hiçbir zaman az-çözmeden değil, KISMİ UYKUDAN kaynaklanıyormuş.
+  > Düzeltmeden sonra iki kol da 0.159 / 0.0021.
+
+  > **Determinizm re-bless (gerekçeli):** `EF6E4AC3644BF3BA` → **`46EB56180318E43C`**, 3/3
+  > eşleşiyor. `golden_state.rs::golden_box_settling_on_the_ground`'da `settle vy`
+  > `-0.040_873_3` → `0.0`; o sayı tam bir substep'lik yerçekimiydi (9.81/240) ve substep
+  > oranının değil KUSURUN parmak iziymiş: cisim hız entegrasyonunun sonunda, yerçekimi
+  > uygulanmış ama temas çözümü onu iptal etmemişken uykuya dalıp o çözülmemiş değeri
+  > donduruyordu. `settle y` DEĞİŞMEDİ — dinlenme konumu, buradaki asıl yük taşıyan sayı,
+  > kıpırdamadı.
+
+  > **Yan kazanç, ölçüldü:** `headless_stress_test` 1.62 s → **0.51 s** (3.2×),
+  > `wide_block_collapse_per_ground` 386 s → 43 s (9×), CI kapı seti debug'da 63.5 s → 15.2 s.
+  > Sebep aynı: yerleşmiş yığınlar artık gerçekten topluca uyuyor. Önceden bir yığın hiçbir
+  > zaman tam uyuyamıyordu.
+
+  > **Bedeli:** bir adanın tek bir üyesi bile kıpırdıyorsa ada uyumuyor. Titreyen tek bir kutu
+  > koca bir yığını uyanık tutabilir. Ölçülen sahnelerde bu olmadı (tam tersi oldu), ama
+  > patolojik bir sahnede olabilir.
+
+  > **Ölçüm aracının kendi negatif kontrolü de çürüdü ve bu öğretici:**
+  > `negative_control_starved_pile_must_fail_the_gate` "sweep'i kıs, kapı düşsün" diyordu ve
+  > düşüyordu. Artık 1 sweep'te bile düşmüyor — çünkü o kontrol sweep sayısını değil, KUSURU
+  > ölçüyormuş (açlık cisimleri kısmi-uyku rejimine sokuyordu). Emekliye ayrıldı; sweep
+  > duyarlılığını hâlâ serbest zincirdeki `sweep_throttling_is_visible_to_this_file` koruyor.
 
   > ⚠️ **Denenen ve ÇÜRÜYEN ilk düzeltme (uygulandı, ölçüldü, geri alındı).** "Uyanmayacak
   > uyuyan cisme yazma yapma" (`pipeline.rs` writeback'inde tek koşul). 1×12×1'de üç çöküşü

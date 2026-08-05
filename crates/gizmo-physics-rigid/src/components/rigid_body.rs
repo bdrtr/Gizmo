@@ -420,21 +420,51 @@ impl RigidBody {
     /// clears the flag at once.
     ///
     /// The 60 is a step count, not a duration — it is one second only at a 60 Hz step
-    /// rate and correspondingly shorter for a world that sub-steps faster. Velocity
-    /// integration calls this for awake dynamic bodies, so an already-sleeping body never
-    /// reaches it and can only be revived by [`wake_up`](Self::wake_up).
+    /// rate and correspondingly shorter for a world that sub-steps faster.
+    ///
+    /// **The engine's own pipeline no longer calls this.** It advances the counter with
+    /// [`advance_sleep_counter`](Self::advance_sleep_counter) and then decides whether to
+    /// actually sleep a body per contact ISLAND rather than per body, because a stack that
+    /// sleeps only partway is solved inconsistently — see that method. This one is kept
+    /// because it is public API and is the right thing for a caller driving bodies that are
+    /// not in contact with anything.
     pub fn update_sleep_state(&mut self, velocity: &Velocity) {
-        const SLEEP_FRAMES_REQUIRED: u32 = 60; // ~1 second at 60fps
+        if self.advance_sleep_counter(velocity) {
+            self.is_sleeping = true;
+        }
+    }
 
+    /// Number of consecutive qualifying steps before a body is allowed to sleep.
+    pub const SLEEP_FRAMES_REQUIRED: u32 = 60; // ~1 second at 60fps
+
+    /// Advance the sleep counter by one step and report whether this body is now *eligible* to
+    /// sleep — without putting it to sleep.
+    ///
+    /// Waking still happens here and is still immediate: a single step that fails
+    /// [`can_sleep`](Self::can_sleep) resets the counter and clears
+    /// [`is_sleeping`](Self::is_sleeping).
+    ///
+    /// The split exists because eligibility is a property of one body while sleeping is a
+    /// property of a contact island. A body that stops being simulated in the middle of a stack
+    /// is still solved against — the contact solver reads its mass and exchanges impulses with
+    /// it — but is never integrated, so it takes no share of the reaction and the interface
+    /// stops conserving momentum. Letting only whole islands sleep keeps that from arising.
+    pub fn advance_sleep_counter(&mut self, velocity: &Velocity) -> bool {
         if self.can_sleep(velocity) {
             self.sleep_counter += 1;
-            if self.sleep_counter >= SLEEP_FRAMES_REQUIRED {
-                self.is_sleeping = true;
-            }
+            self.sleep_counter >= Self::SLEEP_FRAMES_REQUIRED
         } else {
             self.sleep_counter = 0;
             self.is_sleeping = false;
+            false
         }
+    }
+
+    /// Whether this body has been slow for long enough to be allowed to sleep, without
+    /// advancing anything. See [`advance_sleep_counter`](Self::advance_sleep_counter).
+    #[inline]
+    pub fn sleep_eligible(&self) -> bool {
+        self.sleep_counter >= Self::SLEEP_FRAMES_REQUIRED
     }
 
     /// `true` only for [`BodyType::Dynamic`].

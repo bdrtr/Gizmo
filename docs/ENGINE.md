@@ -142,15 +142,30 @@ etkin yanal restoring stiffness'i buckling-kritik değerin altındaydı.
 - **AÇIK:** N≥48 aşırı kule hâlâ buckle olur — friction-aware whole-chain direct/global
   solver gerek (`direct_chain_solve` opt-in flag + `solve_island_normals` yalnız normal
   çözüyor, O(n³)). `soak_extreme_tower_n48` #[ignore].
-- ⚠️ **"N≤32 robust kararlı" ve "oyun yapıları ≤~12 → gerek yok" DARALTILDI**
-  *(2026-08-05, `tests/solver_quality.rs`)*. İkisi de aynı dar örneklemin ifadesiydi:
-  1-GENİŞLİKTE kule, TEK zemin boyutu, 1500 kare. Örneklemi genişletince **12 katlı yığınlar
-  3000 karede güvenilir durmuyor** — 1'den 4'e her genişlikte, varsayılan konfigürasyonda,
-  çöküşler 1979–2782 arası (yani 1500'lük ufkun ötesinde). Ve sonuç fiziksel içeriği olmayan
-  pertürbasyonlarla çevriliyor: statik zeminin yarı-boyutu 20→200 tek başına 1×12×1'i
-  "duruyor"dan "2328'de çöküyor"a taşıyor. Sweep sayısını artırmak genel bir çare DEĞİL
-  (2×12×2 96 sweep'te de çöküyor). Yükseklik 6 sağlam. Regresyon:
-  `height_12_stacks_stay_standing` #[ignore]. Ayrıntı: docs/FIXPLAN.md Faz C.
+**Kısmi uyku istifleri bozuyordu — ÇÖZÜLDÜ** *(2026-08-06)*. Bir cisim, temas adasının ortasında
+uykuya dalınca artık ENTEGRE EDİLMİYOR ama hâlâ ÇÖZÜLÜYOR: `solver/tgs.rs` kütlesini uyku
+durumuna bakmadan okuyor, tek kapı `is_dynamic()`. Uyanık komşu tepkinin payını alıyor, uyuyan
+almıyor → o arayüzde momentum korunmuyor. 12 katlı yığınlar bu yüzden 3000 karede güvenilir
+durmuyordu ve statik zeminin yarı-boyutu (20 vs 200) sonucu çeviriyordu.
+- **Fix:** uyutma kararı cisim başına değil **temas ADASI** başına, ve çözümden SONRA
+  (`RigidBody::advance_sleep_counter` + `pipeline.rs` ada pası). Temassız cisim eskisi gibi
+  kendi sayacıyla uyur (o geçiş eklem pasından sonra).
+- **Sonuç:** `wide_block_collapse_per_ground` 10/20 çöküşten **0/20**'ye;
+  `height_12_stacks_stay_standing` (6 hücre, 3000 kare) **geçiyor**; 1×12×1 kolonun doğal
+  uykudaki lean'i 0.0104–10.17'den **0.000106**'ya, yani zorla-uyanık değerle birebir.
+- **Kesin kanıt:** düzeltmesiz, 1 sweep'te yığın doğal koşuda 193. karede patlıyor ama zorla
+  uyanık kolda hiç patlamıyor → patlama az-çözmeden değil, kısmi uykudan.
+- **Yan kazanç:** yerleşmiş yığınlar artık topluca uyuyabildiği için `headless_stress_test`
+  1.62 s → 0.51 s.
+- **Determinizm re-bless:** `EF6E4AC3644BF3BA` → `46EB56180318E43C` (3/3).
+  `golden_state` `settle vy` `-0.0408733` → `0.0`; o sayı bir substep'lik yerçekimiydi ve
+  kusurun parmak iziymiş. `settle y` değişmedi.
+- **Bedeli:** adanın tek üyesi kıpırdıyorsa ada uyumaz; titreyen bir kutu koca yığını uyanık
+  tutabilir. Ölçülen sahnelerde olmadı.
+- ⚠️ **"N≤32 robust kararlı" ve "oyun yapıları ≤~12 → gerek yok" ifadeleri yine de dar
+  örneklemdi** *(2026-08-05'te daraltıldı)*: 1-GENİŞLİKTE kule, TEK zemin boyutu, 1500 kare.
+  Yukarıdaki fix 12 katlı yığınları kurtardı, ama dersin kendisi duruyor — ufuk kadar
+  ÖRNEKLEM de genişletilmeli.
 - **DERS:** soak-testi ufkunu instabilite başlangıcından ÖTEYE seç (eski `n16` testi 600
   frame'di, patlama ~853'te → yeşil ship edip bug'ı gizledi). **Ve ufuk kadar ÖRNEKLEMİ de
   genişlet:** yukarıdaki daralt-ma, ufku yeterli olan bir testin tek bir şekil ve tek bir

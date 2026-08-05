@@ -549,6 +549,12 @@ impl PhysicsWorld {
     pub(crate) fn constraint_solve_step(&mut self, manifolds: Vec<ContactManifold>, dt: f32) {
         let entity_map = &self.entity_index_map;
 
+        // Dynamic bodies the island sleep rule got to decide about this substep. Declared out
+        // here because the sweep for everything else has to run even when there are no contacts
+        // at all — a pair of bodies joined only by a joint has no island and must still be able
+        // to sleep.
+        let mut in_island: FxHashSet<u32> = FxHashSet::default();
+
         // ── Collision constraints ─────────────────────────────────────────
         if !manifolds.is_empty() {
             let is_dynamic = |entity: BodyHandle| -> bool {
@@ -574,6 +580,7 @@ impl PhysicsWorld {
                 Vec<gizmo_physics_core::FractureEvent>,
                 Vec<(BodyHandle, Vec3, Vec3)>,    // split-impulse position corrections (Δlin, Δscaled-axis)
                 crate::solver::SolveStats,        // adaptive sweep count + support depth
+                bool,                             // every dynamic member is eligible to sleep
             );
 
             let results: Vec<IslandResult> = island_groups
@@ -614,6 +621,7 @@ impl PhysicsWorld {
                             Vec::new(),
                             Vec::new(),
                             crate::solver::SolveStats::default(),
+                            false,
                         );
                     }
 
@@ -739,6 +747,17 @@ impl PhysicsWorld {
                         }
                     }
 
+                    // Sleep is decided for the island as a whole, not per body. A body that
+                    // stops being integrated in the middle of a stack is still solved against —
+                    // the contact solver reads its mass and exchanges impulses with it — so a
+                    // partially-asleep island stops conserving momentum across the interfaces
+                    // that touch the sleepers. Requiring the whole island keeps that from
+                    // arising. Eligibility itself is still per body and still counted in
+                    // `advance_sleep_counter`.
+                    let island_can_sleep = island_indices.iter().all(|&idx| {
+                        !rigid_bodies[idx].is_dynamic() || rigid_bodies[idx].sleep_eligible()
+                    });
+
                     (
                         velocity_updates,
                         island_manifolds,
@@ -746,6 +765,7 @@ impl PhysicsWorld {
                         fractures,
                         position_updates,
                         solve_stats,
+                        island_can_sleep,
                     )
                 })
                 .collect();
@@ -761,9 +781,23 @@ impl PhysicsWorld {
 
             let mut total_wakes = 0usize;
             let mut total_fractures = 0usize;
-            for (island_vels, island_manifolds, wake_ups, local_fractures, pos_corrections, stats) in
-                results
+            for (
+                island_vels,
+                island_manifolds,
+                wake_ups,
+                local_fractures,
+                pos_corrections,
+                stats,
+                island_can_sleep,
+            ) in results
             {
+                // Captured before `island_vels` is consumed below; empty unless the whole island
+                // qualifies, so this allocates only on the substep a pile actually settles.
+                let sleepers: Vec<BodyHandle> = if island_can_sleep {
+                    island_vels.iter().map(|(e, _)| *e).collect()
+                } else {
+                    Vec::new()
+                };
                 // Effective sweep count, summed over islands (and, by the caller's accumulation,
                 // over substeps): the number that says whether the adaptive policy was engaged
                 // at all on this scene. Depth is a max, not a sum — it is a property of the
@@ -771,6 +805,7 @@ impl PhysicsWorld {
                 self.metrics.solver_sweeps += stats.iterations;
                 self.metrics.max_island_depth = self.metrics.max_island_depth.max(stats.island_depth);
                 for (entity, vel) in island_vels {
+                    in_island.insert(entity.id());
                     if let Some(&idx) = entity_map.get(&entity.id()) {
                         self.velocities[idx] = vel;
                     }
@@ -791,6 +826,13 @@ impl PhysicsWorld {
                 for entity in wake_ups {
                     if let Some(&idx) = entity_map.get(&entity.id()) {
                         self.rigid_bodies[idx].wake_up();
+                    }
+                }
+                // After the wake pass, so the two can never fight: an island with a mover is
+                // by construction not all-eligible, since a mover's counter was just reset.
+                for entity in sleepers {
+                    if let Some(&idx) = entity_map.get(&entity.id()) {
+                        self.rigid_bodies[idx].is_sleeping = true;
                     }
                 }
                 total_fractures += local_fractures.len();
@@ -938,6 +980,23 @@ impl PhysicsWorld {
                 broken_joints,
                 "joints solved"
             );
+        }
+
+        // ── Sleep, for everything the island rule did not decide ──────────
+        // A dynamic body with no contacts this substep belongs to no island, so the island rule
+        // never reaches it. It sleeps on its own counter, exactly as it always did: the
+        // inconsistency that rule exists to prevent can only arise through a contact, and a pair
+        // of bodies joined only by a joint has to stay able to settle.
+        //
+        // After the joint pass on purpose. A joint-coupled wake calls `wake_up`, which zeroes the
+        // counter, so a body woken there is not eligible and cannot be put straight back to sleep
+        // in the same substep.
+        for i in 0..self.rigid_bodies.len() {
+            let id = self.entities[i].id();
+            let rb = &mut self.rigid_bodies[i];
+            if rb.is_dynamic() && !rb.is_sleeping && rb.sleep_eligible() && !in_island.contains(&id) {
+                rb.is_sleeping = true;
+            }
         }
 
         // Sync pre-velocities with the solver-corrected velocities so that Heun's method
