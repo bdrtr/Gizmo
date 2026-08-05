@@ -54,6 +54,15 @@ const DT: f32 = 1.0 / 60.0;
 struct Frame {
     /// `max(|v_lin| + |v_ang|)` over the dynamic bodies — the existing soak's blow-up signal.
     max_speed: f32,
+    /// The same, but skipping sleeping bodies.
+    ///
+    /// These can differ, and if they do then every blow-up frame in this file is suspect. The
+    /// solver writes velocities back for every dynamic member of an active island without
+    /// checking the sleep flag (`pipeline.rs`), while the integrator skips sleeping bodies
+    /// entirely — so a sleeping body can be left holding a velocity it will never act on and
+    /// never decay. A blow-up detector reading `max_speed` would report that frozen number as
+    /// motion.
+    max_speed_awake: f32,
     /// Largest positive contact penetration reported this frame. See the module docs: this is
     /// the depth the previous substep's solve left behind, read back through `collision_events`.
     max_penetration: f32,
@@ -89,7 +98,11 @@ fn observe(world: &PhysicsWorld, bodies: &[usize], origins: &[Vec3]) -> Frame {
                 ..f
             };
         }
-        f.max_speed = f.max_speed.max(v.linear.length() + v.angular.length());
+        let speed = v.linear.length() + v.angular.length();
+        f.max_speed = f.max_speed.max(speed);
+        if !world.rigid_bodies[i].is_sleeping {
+            f.max_speed_awake = f.max_speed_awake.max(speed);
+        }
 
         let d = t.position - origin;
         f.lean = f.lean.max(Vec3::new(d.x, 0.0, d.z).length());
@@ -433,6 +446,13 @@ struct Run {
     /// stacked-box vertical-gap formula in `soak_and_golden.rs` this reads the engine's own
     /// contact depths, so it works on a block, a pile or a chain rather than only on a column.
     resting_pen: f32,
+    /// The blow-up frame recomputed while ignoring sleeping bodies. If this ever differs from
+    /// [`blew_up_at`](Self::blew_up_at) then the detector is reading the sleep system — see
+    /// [`Frame::max_speed_awake`].
+    blew_up_at_awake: Option<usize>,
+    /// Lean and tilt at the frame the detector tripped, so a topple can be told from a twitch.
+    trip_lean: f32,
+    trip_tilt_deg: f32,
 }
 
 fn run(
@@ -449,6 +469,9 @@ fn run(
         peak_tilt_deg: 0.0,
         final_pen_max: 0.0,
         resting_pen: 0.0,
+        blew_up_at_awake: None,
+        trip_lean: 0.0,
+        trip_tilt_deg: 0.0,
     };
     for f in 0..frames {
         world.step(DT).ok();
@@ -469,6 +492,11 @@ fn run(
         }
         if r.blew_up_at.is_none() && o.max_speed >= vel_threshold {
             r.blew_up_at = Some(f);
+            r.trip_lean = o.lean;
+            r.trip_tilt_deg = o.tilt.to_degrees();
+        }
+        if r.blew_up_at_awake.is_none() && o.max_speed_awake >= vel_threshold {
+            r.blew_up_at_awake = Some(f);
         }
     }
     r
@@ -1303,8 +1331,8 @@ fn wide_block_collapse_per_ground() {
 fn one_column_stands_and_two_do_not() {
     eprintln!("\n=== height 12, default solver, one column vs two (3000 frames) ===");
     eprintln!(
-        "{:>10}  {:>16}  {:>8}  {:>12}  {:>11}",
-        "block", "lateral", "ground", "blew_up_at", "peak|v|"
+        "{:>10}  {:>16}  {:>8}  {:>12}  {:>12}  {:>11}  {:>10}  {:>10}",
+        "block", "lateral", "ground", "blew_up_at", "awake-only", "peak|v|", "trip_lean", "trip_tilt"
     );
     for (side, spacing, label) in [
         (1u32, 1.0f32, "n/a"),
@@ -1317,7 +1345,7 @@ fn one_column_stands_and_two_do_not() {
             world.colliders[0] = Collider::box_collider(Vec3::new(g, 1.0, g));
             let r = run(&mut world, &bodies, &origins, 3000, 0.5);
             eprintln!(
-                "{:>10}  {:>16}  {:>8.0}  {:>12}  {:>11.3}",
+                "{:>10}  {:>16}  {:>8.0}  {:>12}  {:>12}  {:>11.3}  {:>10.4}  {:>10.3}",
                 format!("{side}x12x{side}"),
                 label,
                 g,
@@ -1325,7 +1353,13 @@ fn one_column_stands_and_two_do_not() {
                     Some(f) => f.to_string(),
                     None => "-".to_string(),
                 },
-                r.peak_speed
+                match r.blew_up_at_awake {
+                    Some(f) => f.to_string(),
+                    None => "-".to_string(),
+                },
+                r.peak_speed,
+                r.trip_lean,
+                r.trip_tilt_deg,
             );
         }
     }
@@ -1612,10 +1646,23 @@ fn how_many_points_does_a_settled_interface_carry() {
 /// block solver does with it, and one placed at the edge applies a torque impulse that the
 /// geometry does not call for.
 ///
-/// **This is the mechanism behind the ground-size sensitivity.** A bigger static ground delivers a
-/// bigger off-centre kick on the substep the contact is born, and the buckling mode amplifies
-/// whatever seed it is given. It is not floating-point precision loss, which was the first
-/// hypothesis — it is a geometric defect that scales with the other collider's size.
+/// **What this does NOT explain — corrected.** I first wrote that this was the mechanism behind
+/// the ground-size sensitivity: bigger ground, bigger off-centre kick, earlier collapse. The
+/// offset does grow with the ground; the KICK does not.
+/// `does_a_bigger_ground_deliver_a_bigger_birth_kick` measures it. For a unit cube the angular
+/// velocity a single normal contact at lateral offset `r` imparts is `6r·Δv/(1 + 6r²)`, which is
+/// *maximised* at `r = 1/√6 = 0.408` — exactly where these offsets begin — so pushing the point
+/// further out barely changes it. Measured `|Δω|`: 0.028351 at half-extent 2, 0.030458 at 20,
+/// 0.030636 at 200, 0.030651 at 1000. Between the two ground sizes that decide a stack's fate
+/// that is a **0.58% difference in seed**, and at this repository's measured growth rate (lean
+/// doubling about every 100 frames, λ ≈ 0.0069 per frame) a 0.58% seed difference predicts a
+/// collapse shifted by `ln(1.0058)/λ ≈ 0.8` frames. The observed shift is at least 672. Off by
+/// roughly three orders of magnitude, so this is not the ground-size mechanism.
+///
+/// What survives is the defect on its own terms, and it is worth fixing: every interface in the
+/// engine is born with no tilt stiffness at all and a `Δω ≈ 0.03 rad/s` kick it should not
+/// receive, in a scene whose correct answer is that nothing moves. **The ground-size sensitivity
+/// remains unexplained.**
 ///
 /// **Below half-extent ~1.5 the interface never recovers**, staying one point forever. Consistent
 /// with the same mechanism: at those sizes the GJK point lands at the centre, so it holds the box
@@ -1790,6 +1837,77 @@ fn does_the_fast_collapse_follow_the_warm_start_tolerance() {
 fn is_the_frame_70_event_really_a_collapse() {
     let (mut world, bodies, origins) = scene_crate_pile_spaced(2, 12, 1.02);
     trace("2x12x2, 2cm gap, ground 20", &mut world, &bodies, &origins, 400);
+}
+
+/// Does the off-centre birth contact actually deliver a BIGGER kick on a bigger ground?
+///
+/// `what_does_a_manifold_look_like_when_it_is_born` shows the birth point's lateral offset
+/// growing with the ground's half-extent — 0.400 at 2, 0.4878 at 20, 0.4988 at 200 — and I
+/// concluded from that (commit `b47b3b0`) that a bigger ground delivers a bigger off-centre
+/// torque and therefore an earlier collapse. That step does not follow, and the algebra says so.
+///
+/// For a unit cube (`m = 1`, so `I = 2/12` and `inv_I = 6`) taking one substep of gravity
+/// (`Δv = 9.81/240 = 0.0409 m/s`), a single normal contact at lateral offset `r` needs impulse
+/// `λ = Δv / (1 + 6r²)` and imparts `Δω = 6rλ = 6r·Δv / (1 + 6r²)`. That is **maximised at
+/// `r = 1/√6 = 0.408`** — which is where the measured offsets start, and they only move outward
+/// from there:
+///
+/// ```text
+///   ground H    birth r    predicted Δω
+///        2       0.4000        0.0500
+///       20       0.4878        0.0493
+///      200       0.4988        0.0491
+/// ```
+///
+/// So the kick is essentially FLAT across the whole measured range, and very slightly *smaller*
+/// on the bigger ground. Against a lean that doubles about every 100 frames (λ ≈ 0.0069/frame),
+/// a 0.4% difference in seed moves the collapse by `ln(1.004)/λ ≈ 0.6` frames. The measured gap
+/// between ground 20 and ground 200 for a 1×12×1 column is at least 672 frames.
+///
+/// This measures it rather than trusting the algebra: read the box's angular velocity right after
+/// the birth substep. If Δω is flat in the ground size, the causal claim in `b47b3b0` is refuted
+/// and only the defect itself survives.
+#[test]
+#[ignore = "measurement, not a gate — prints a table"]
+fn does_a_bigger_ground_deliver_a_bigger_birth_kick() {
+    eprintln!("\n=== angular velocity imparted on the substep the contact is born ===");
+    eprintln!(
+        "{:>10}  {:>14}  {:>14}  {:>14}",
+        "ground", "birth |r|", "|Δω| measured", "|Δv| measured"
+    );
+    for h in [1.0f32, 1.5, 2.0, 3.0, 5.0, 20.0, 100.0, 200.0, 1000.0] {
+        let mut world = PhysicsWorld::new();
+        add_ground_sized(&mut world, h);
+        add_box(
+            &mut world,
+            1,
+            Vec3::new(0.0, 0.5, 0.0),
+            0.5,
+            PhysicsMaterial {
+                restitution: 0.0,
+                ..Default::default()
+            },
+        );
+        world.step_once = true;
+        world.step(DT).ok();
+
+        let r = world
+            .collision_events()
+            .iter()
+            .flat_map(|e| e.contact_points.iter())
+            .map(|c| {
+                let d = c.point - world.transforms[1].position;
+                Vec3::new(d.x, 0.0, d.z).length()
+            })
+            .fold(0.0f32, f32::max);
+        eprintln!(
+            "{:>10.1}  {:>14.4}  {:>14.6}  {:>14.6}",
+            h,
+            r,
+            world.velocities[1].angular.length(),
+            world.velocities[1].linear.length()
+        );
+    }
 }
 
 /// Negative control for `realistic_crate_stack_stays_standing`: the same scene, same horizon,
