@@ -36,13 +36,6 @@ fn ackermann_steering_angle(
     }
 }
 
-/// Advances a vehicle by one fixed step.
-///
-/// Runs the drivetrain, aerodynamics, Ackermann steering, suspension raycasts and
-/// combined-slip tire forces, mutating the rigid body and velocity in place.
-/// `all_colliders` must contain every scene collider (static and dynamic); the
-/// entry matching `vehicle_entity` is ignored so the vehicle does not raycast
-/// against itself.
 /// Anti-roll bar (sway bar) corrective vertical force for one wheel on an axle.
 ///
 /// `diff = travel_left - travel_right`, where `travel` is suspension
@@ -94,6 +87,53 @@ pub fn weather_grip_factor(weather: Weather, speed_mps: f32) -> f32 {
 // 8 argüman: all_colliders + weather_grip + dt hepsi per-step ÇEVRE girdisi. CI zaten
 // `too_many_arguments`'ı `-A` ile muaf tutuyor; alternatif küçük bir `VehicleStepCtx` struct'ı
 // (colliders+weather_grip+dt) — ileride çevre girdisi artarsa (rüzgâr, yüzey sıcaklığı) tercih.
+/// Advances one vehicle by a single fixed step of `dt` seconds.
+///
+/// Runs the whole model in order: drivetrain and automatic shifting, aerodynamics, Ackermann
+/// steering, one suspension raycast per wheel, then per-corner spring/damper/bump-stop/
+/// anti-roll forces and combined-slip Pacejka tyre forces.
+///
+/// # What it writes
+///
+/// Every force is accumulated straight into `vehicle_vel` as `force · inv_mass · dt` (and the
+/// matching angular term), so this is an explicit force-to-velocity step and the result is
+/// order- and `dt`-dependent. Two jobs are left to the surrounding pipeline, NOT to the
+/// immediate caller: integrating `vehicle_transform` from the resulting velocity — this
+/// function takes the transform by shared reference and never moves the car — and applying
+/// **gravity**, which is not applied here. In this engine both happen later in the schedule,
+/// in `gizmo-physics-rigid`'s integrator; `vehicle_controller_system` does neither, so do not
+/// add gravity in a system of your own or it is applied twice.
+///
+/// `vehicle` is mutated in place: `engine_rpm`, `current_speed_kmh` and `current_gear` are
+/// recomputed, and on every wheel the `drive_torque`, `brake_torque`, front-wheel
+/// `steering_angle` and all the output state (`is_grounded`, `ground_hit`,
+/// `suspension_length`, `suspension_force`, `surface_friction`, `angular_velocity`,
+/// `rotation_angle`) are overwritten.
+///
+/// `vehicle_rb` is taken by `&mut` **only** to wake the body; its mass, inertia and centre of
+/// mass are read, never modified.
+///
+/// # Parameters
+///
+/// `all_colliders` is what the suspension rays are cast against — anything absent from it is
+/// invisible to the wheels, including terrain. Entries whose handle equals `vehicle_entity`
+/// are skipped, as are triggers, so the car cannot raycast itself; that also means a stale
+/// transform for the vehicle's own entry is harmless, while a stale transform for the ground
+/// is not. Each wheel scans the whole slice, AABB-rejecting first, so cost is
+/// `wheels × colliders`.
+///
+/// `weather_grip` multiplies every tyre force (1.0 = dry, no penalty); see
+/// [`weather_grip_factor`] for the mapping this is normally fed from. It stacks with the
+/// per-wheel surface friction sampled from whatever the ray hit.
+///
+/// # Sleep and early exits
+///
+/// Returns immediately, doing nothing at all, if the body is static.
+///
+/// A sleeping body is woken first, but only when there is throttle, brake or steering input —
+/// waking unconditionally would mean a parked car never sleeps. If the body is *still* asleep
+/// after that check the function returns before touching any force — no suspension, drive or
+/// aero force is accumulated into `vehicle_vel` while the body sleeps.
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(
     skip_all,

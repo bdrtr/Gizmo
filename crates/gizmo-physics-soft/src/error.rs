@@ -13,16 +13,33 @@ pub enum SoftBodyError {
     ///
     /// `index` is the offending node index and `node_count` is the number of
     /// nodes currently present in the mesh.
-    NodeIndexOutOfBounds { index: u32, node_count: u32 },
+    NodeIndexOutOfBounds {
+        /// The rejected node index. All four indices of an element must be
+        /// `< node_count`; this is the first one found that was not.
+        index: u32,
+        /// How many nodes the mesh held at the moment the element was submitted,
+        /// i.e. the exclusive upper bound the index was checked against.
+        node_count: u32,
+    },
 
     /// Poisson's ratio was outside the physically valid range `[0.0, 0.5)`.
     ///
     /// Values `>= 0.5` produce a singular / negative Lamé `lambda`
     /// (incompressible limit) and values `< 0.0` are unsupported here.
-    InvalidPoissonsRatio { value: f32 },
+    InvalidPoissonsRatio {
+        /// The rejected ratio, reported verbatim (dimensionless). Non-finite
+        /// input fails the same check, so this may be NaN or ±inf rather than a
+        /// finite value outside `[0.0, 0.5)`.
+        value: f32,
+    },
 
     /// Young's modulus was not a finite, strictly-positive value.
-    InvalidYoungsModulus { value: f32 },
+    InvalidYoungsModulus {
+        /// The rejected modulus, reported verbatim. Young's modulus is a
+        /// pressure (pascals, N/m²) and must be finite and `> 0`; zero, negative
+        /// values, NaN and ±inf all end up here.
+        value: f32,
+    },
 
     /// A tetrahedral element was (near-)degenerate: its rest volume is not a
     /// finite, strictly-positive value above the acceptance epsilon.
@@ -31,7 +48,17 @@ pub enum SoftBodyError {
     /// deformation gradient and the derived elastic forces are undefined
     /// (near-zero stiffness / NaN propagation). `volume` is the offending rest
     /// volume that was computed.
-    DegenerateTetrahedron { volume: f32 },
+    DegenerateTetrahedron {
+        /// The rest volume computed for the element, in cubic metres. It is an
+        /// unsigned magnitude, so an inverted winding is not what makes it
+        /// small — near-coplanar nodes are.
+        ///
+        /// The element is rejected when this is `<= 1e-6` or NaN — but also when
+        /// the accompanying inverse reference shape matrix came out non-finite.
+        /// So a reported volume comfortably *above* the threshold does not mean
+        /// the volume itself was the problem: the shape matrix was.
+        volume: f32,
+    },
 
     /// The flattened GPU node offset overflowed `u32` (too many nodes across
     /// all soft bodies in a single step).

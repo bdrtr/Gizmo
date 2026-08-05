@@ -12,11 +12,41 @@ use gizmo_math::{Quat, Vec3};
 // F_y = Fy_pure(σy) * Gy(σx)   — yanal weighting
 // ============================================================
 
+/// Magic-Formula tyre coefficients for **one** axis of a tyre.
+///
+/// Evaluates `F(σ, Fz) = d·Fz · sin(c · atan(b·σ − e·(b·σ − atan(b·σ))))`, where `σ` is the
+/// slip on that axis: a dimensionless slip *ratio* for the longitudinal axis, or a slip
+/// *angle* in radians for the lateral one. The same struct is used for both — nothing in it
+/// records which axis it was tuned for, so a longitudinal set silently produces nonsense if
+/// handed to the lateral slot.
+///
+/// The curve is odd in slip (`F(−σ) = −F(σ)`), exactly zero at zero slip, and strictly linear
+/// in the normal load. Its magnitude is bounded by `d · Fz` for any slip whatsoever, which is
+/// the invariant [`pacejka_combined`]'s friction circle is built on top of.
+///
+/// Coefficients are not validated. Negative or NaN values are evaluated as given.
 #[derive(Clone, Debug)]
 pub struct PacejkaParams {
+    /// Stiffness factor B — scales slip on the way into the formula, so it sets the slope of
+    /// the curve at zero slip (the tyre's cornering / longitudinal stiffness, together with
+    /// `c` and `d`) and therefore how *early* the peak arrives. Larger `b` → peak at smaller
+    /// slip. Dimensionless against a slip ratio, per-radian against a slip angle.
+    ///
+    /// The product `b·c·d·Fz` is also used directly as the zero-slip slip stiffness in the
+    /// wheel-spin update, so raising this stiffens that solve as well.
     pub b: f32, // Stiffness factor
+    /// Shape factor C — sets how far around the peak the `sin` is swept, i.e. how much force
+    /// is retained past the peak (the "falloff" of a sliding tyre). It does not change the
+    /// `d·Fz` bound: `|sin| ≤ 1` holds for every `c`.
     pub c: f32, // Shape factor
+    /// Peak factor D — multiplied by the normal load before anything else, so it behaves as a
+    /// dimensionless peak friction coefficient: the force this axis can produce never exceeds
+    /// `d · Fz` newtons. [`pacejka_combined`] sizes its friction circle from
+    /// `max(long.d, lat.d) · 1.2`.
     pub d: f32, // Peak factor (normal load ile ölçeklenir)
+    /// Curvature factor E — shapes the curve immediately around the peak. At exactly `e = 1.0`
+    /// the inner expression collapses to plain `atan(b·slip)`; below 1 the peak is sharper.
+    /// Dimensionless.
     pub e: f32, // Curvature factor
 }
 
@@ -107,9 +137,21 @@ pub fn pacejka_combined(
 // WHEEL & VEHICLE STRUCTS
 // ============================================================
 
+/// Which axle a [`Wheel`] sits on.
+///
+/// This is the only grouping the vehicle model has: the drive-torque split
+/// ([`Drivetrain::drives`]), the brake bias, the steering overwrite and the anti-roll bar
+/// pairing all key off it — see the two variants for what each does. There is no third axle,
+/// so a six-wheeler has to be modelled as two of these groups.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Axle {
+    /// The steered axle. `update_vehicle` overwrites [`Wheel::steering_angle`] on these wheels
+    /// every step from the Ackermann geometry, so any value written by hand is discarded, and
+    /// they receive 60 % of the commanded brake torque.
     Front,
+    /// The unsteered axle. `update_vehicle` never writes [`Wheel::steering_angle`] here, so a
+    /// hand-set angle persists across steps (a crude rear-steer); these wheels take 40 % of
+    /// the commanded brake torque.
     Rear,
 }
 
@@ -136,34 +178,174 @@ impl Drivetrain {
     }
 }
 
+/// One suspension corner: the strut, the tyre on the end of it, and the state
+/// `update_vehicle` carries for it between steps.
+///
+/// Wheels are **not** rigid bodies. Each is a single raycast along its own strut axis from its
+/// attachment point; the spring/damper reaction and the Pacejka tyre force are applied to the
+/// chassis body, and the only wheel state that feeds back into those forces is
+/// [`angular_velocity`] — spin about its own axle. ([`rotation_angle`] is integrated too, but
+/// nothing in the model reads it.) There is no wheel collider, so a wheel cannot hit a wall
+/// side-on.
+///
+/// The fields fall into three groups. Setup (geometry, spring rates, tyre coefficients) is
+/// yours to set. [`drive_torque`] and [`brake_torque`] are recomputed from
+/// [`VehicleController`]'s inputs on every step and cannot be driven directly; so is
+/// [`steering_angle`], but only on [`Axle::Front`] wheels — on [`Axle::Rear`] wheels it is
+/// left alone and a hand-set value persists. The rest are outputs — read them, don't write
+/// them.
+///
+/// [`angular_velocity`]: Wheel::angular_velocity
+/// [`rotation_angle`]: Wheel::rotation_angle
+/// [`drive_torque`]: Wheel::drive_torque
+/// [`brake_torque`]: Wheel::brake_torque
+/// [`steering_angle`]: Wheel::steering_angle
 #[derive(Clone, Debug)]
 pub struct Wheel {
+    /// Where the strut is anchored to the chassis, in metres, in chassis-local space, relative
+    /// to the `Transform` origin. The suspension ray starts here (offset 0.5 m back along the
+    /// ray so the origin cannot end up buried in the ground) and the spring force is applied
+    /// here.
     pub attachment_local_pos: Vec3,
+    /// Direction the strut pushes the wheel, in chassis-local space; `(0, -1, 0)` — straight
+    /// down — by default. Re-normalised every step, so its length is irrelevant, but a zero
+    /// or non-finite vector normalises to NaN and poisons the whole step.
     pub direction_local: Vec3,
+    /// Which axle this corner belongs to; see [`Axle`] for what keys off it.
+    ///
+    /// Free to change between steps, and it takes effect on the next one: a wheel moved to
+    /// [`Axle::Front`] starts having its [`steering_angle`](Wheel::steering_angle) overwritten
+    /// from the Ackermann geometry, and one moved off a driven axle stops receiving drive
+    /// torque. Nothing requires both axles to be populated — with a [`Drivetrain`] whose axle
+    /// carries no wheels, no wheel is driven at all and
+    /// [`engine_rpm`](VehicleController::engine_rpm) sits pinned at
+    /// [`idle_rpm`](VehicleTuning::idle_rpm), because engine speed is derived from the mean
+    /// spin of the driven wheels.
     pub axle_type: Axle,
+    /// Which side of its axle this wheel is on. Chooses the sign of the half-track term in the
+    /// Ackermann geometry (the inner wheel of a turn steers more) and the sign of the
+    /// anti-roll bar force.
+    ///
+    /// `update_vehicle` buckets wheels by `(axle_type, is_left)` into exactly four slots to
+    /// compute the anti-roll compression difference. The four slots are re-zeroed at the top of
+    /// every step, so two wheels sharing a bucket silently overwrite one another, and an axle
+    /// with no `is_left = false` wheel gets its difference measured against zero rather than
+    /// against a real corner — so each axle wants exactly one of each.
     pub is_left: bool,
 
+    /// Loaded tyre radius in metres. It is threaded through most of the step: the reach of the
+    /// suspension ray; the subtraction that turns the ray's hit distance into a strut length;
+    /// the wheel's rotational inertia (`0.5 · wheel_mass · radius²`, a solid disc) and the `r²`
+    /// term of the implicit spin update; the conversion between spin and road speed
+    /// (`angular_velocity · radius`); the tyre reaction torque (`long_force · radius`); and the
+    /// traction-control spin clamp, where it is a divisor.
+    ///
+    /// A radius of 0 does not divide by zero — the inertia is floored at `1e-6` kg·m² — but the
+    /// traction-control spin clamp is skipped entirely below `1e-4` m.
     pub radius: f32,
+    /// Strut length in metres with no load on the spring: the distance from
+    /// [`attachment_local_pos`](Wheel::attachment_local_pos) to the wheel centre at which the
+    /// spring produces zero force. This is the spring's zero point, not a travel limit —
+    /// compression is `suspension_rest_length − suspension_length` and may go negative
+    /// (the strut extending) when the wheel drops into a dip.
     pub suspension_rest_length: f32,
+    /// Travel in metres allowed either side of the rest length; `suspension_length` is clamped
+    /// to `rest ± max_travel`. The last 10 % of the compression stroke engages a bump stop
+    /// eight times stiffer than the main spring, so the effective bottom-out is slightly
+    /// before the clamp. Floored at 1 mm where it is used as a divisor.
     pub suspension_max_travel: f32,
+    /// Spring rate in newtons per metre of compression. With gravity supplying the load, the
+    /// static ride height is roughly `corner_weight / suspension_stiffness` below the rest
+    /// length, so a rate far too low simply parks the car on its bump stops.
     pub suspension_stiffness: f32,
+    /// Damper rate in N·s/m for the **compression** stroke. The rebound stroke uses 2.5× this
+    /// value, and the resulting damper force is floored at `−0.5 ×` the spring force so a
+    /// stiff rebound can never cancel the static spring load: if it could, the normal load
+    /// would reach zero, and with it every Pacejka tyre force (which is proportional to `Fz`).
     pub suspension_damping: f32,
 
+    /// Magic-Formula coefficients for the longitudinal (drive/brake) axis, evaluated against
+    /// the slip ratio `(angular_velocity · radius − v_forward) / max(|v_forward|, 0.5)`.
+    /// `b · c · d · Fz` from this set is additionally used as the slip stiffness that makes
+    /// the wheel-spin update implicit, so it affects spin stability as well as grip.
     pub pacejka_long: PacejkaParams,
+    /// Magic-Formula coefficients for the lateral (cornering) axis, evaluated against the slip
+    /// angle in radians. Independent of [`pacejka_long`](Wheel::pacejka_long) up to the shared
+    /// friction circle, which uses the larger of the two `d` values.
     pub pacejka_lat: PacejkaLat,
+    /// Mass of the wheel + tyre in kilograms, used **only** for its own rotational inertia
+    /// (`0.5 · m · r²`). `update_vehicle` never adds it to the chassis mass and it produces no
+    /// unsprung-mass effects; the whole car's mass lives on the chassis `RigidBody`.
     pub wheel_mass: f32,
 
     // Inputs (set by VehicleController each frame)
+    /// Steer angle in radians about the chassis up axis; positive steers the wheel to the left
+    /// under this engine's `−Z` forward / `+X` right convention.
+    ///
+    /// Recomputed every step for [`Axle::Front`] wheels from the Ackermann geometry, so
+    /// writing it there has no effect — steer via [`VehicleController::steering_input`].
+    /// [`Axle::Rear`] wheels are never written, so a value set here does persist.
     pub steering_angle: f32,
+    /// Drive torque delivered to this wheel in newton-metres, signed (negative in reverse).
+    ///
+    /// Recomputed every step: a driven wheel gets the engine torque times the total ratio,
+    /// divided evenly among the driven wheels; an undriven wheel gets exactly 0. Writing it
+    /// yourself is overwritten before it is used.
     pub drive_torque: f32,
+    /// Brake torque available at this wheel in newton-metres. The sign is chosen at use to
+    /// oppose the current spin, so this is meant to be a magnitude — but nothing enforces that.
+    ///
+    /// Recomputed every step as `brake_input · max_brake_torque · bias`, with `bias` 0.6 on the
+    /// front axle and 0.4 on the rear, and [`brake_input`](VehicleController::brake_input) is
+    /// not clamped: a negative pedal value carries straight through to a negative torque here,
+    /// and both the `brake_torque < 1.0` coast check and the wheel-lock threshold use the value
+    /// as-is, without an `abs()`. Writing it yourself is overwritten.
     pub brake_torque: f32,
 
     // State
+    /// Output: whether this step's suspension ray found a non-trigger collider within reach.
+    ///
+    /// While false the tyre produces no force whatsoever — an airborne wheel only spins up
+    /// under drive/brake torque and bleeds off through a 2 s⁻¹ exponential drag. That spin
+    /// drag is deliberately *not* applied on the ground, where the tyre model owns the wheel.
     pub is_grounded: bool,
+    /// Output: the contact the suspension ray found this step, or `None` when airborne.
+    ///
+    /// `point` is the world-space contact where the tyre force is applied. Note `distance` is
+    /// measured from a ray origin offset 0.5 m back along the ray from the attachment point,
+    /// and the tyre sits on the end of the strut, so it overstates the strut length by
+    /// `0.5 + radius` before the travel clamp — 0.85 m with the default 0.35 m wheel. Use
+    /// [`suspension_length`](Wheel::suspension_length) for the strut, not this.
     pub ground_hit: Option<RaycastHit>,
+    /// Output: current strut length in metres, clamped to
+    /// `suspension_rest_length ± suspension_max_travel`. Snapped back to the rest length (and
+    /// the force zeroed) the moment the wheel leaves the ground, so it never carries a stale
+    /// compression into the next landing.
     pub suspension_length: f32,
+    /// Output: accumulated spin angle in radians, wrapped into `(−τ, τ)` by float remainder —
+    /// it keeps the sign of the spin, so a reversing wheel winds negative.
+    ///
+    /// Purely cosmetic: `update_vehicle` integrates and wraps it, and no force in the model
+    /// reads it back.
     pub rotation_angle: f32,
+    /// Wheel spin in rad/s about its own axle, positive when the wheel is rolling the car
+    /// forwards (`angular_velocity · radius` is compared directly against forward road speed).
+    ///
+    /// The only wheel state whose integration feeds back into the forces, and it is integrated
+    /// *linearly-implicitly* —
+    /// the tyre's slip stiffness is folded into the denominator — because an explicit step is
+    /// unstable for a light, free-rolling wheel. Driven wheels additionally see the flywheel
+    /// inertia reflected through the gearbox. Snapped to exactly 0 once it falls below
+    /// 0.05 rad/s while both drive and brake torque are under 1 N·m, so a coasting car's
+    /// wheels actually come to rest instead of creeping forever.
     pub angular_velocity: f32,
+    /// Output: the strut force in newtons, applied to the chassis along `−direction_local`
+    /// rotated into world space — straight up only while the chassis is level and the strut
+    /// points straight down. Clamped at `≥ 0`, so a strut can push the chassis away from the
+    /// ground but never pull it back. Sum of spring, damper, bump stop and anti-roll bar.
+    ///
+    /// This doubles as the tyre's normal load `Fz` in the Pacejka model, so a corner at 0 N
+    /// produces no grip at all in either axis. Zeroed while airborne.
     pub suspension_force: f32,
     /// Temas edilen zeminin dinamik sürtünmesi (grip çarpanı için). 1. geçiş raycast'inde
     /// çarpılan collider'ın PhysicsMaterial'ından yakalanır; havadayken ASPHALT'a döner.
@@ -202,6 +384,12 @@ impl Default for Wheel {
 
 /// Eski uyum için `pacejka` getter
 impl Wheel {
+    /// Compatibility accessor from before the tyre model was split into separate longitudinal
+    /// and lateral coefficient sets.
+    ///
+    /// Returns the **longitudinal** set only. There is no matching accessor for
+    /// [`Wheel::pacejka_lat`], so code that reads this and assumes it describes the whole tyre
+    /// is reading half of it. Prefer the fields.
     #[inline]
     pub fn pacejka(&self) -> &PacejkaParams {
         &self.pacejka_long
@@ -211,11 +399,44 @@ impl Wheel {
 /// Aerodinamik paket
 #[derive(Clone, Debug)]
 pub struct AeroPackage {
+    /// Dimensionless drag coefficient Cd. Drag is `½ · ρ · Cd · A · v²` with ρ fixed at
+    /// 1.225 kg/m³ (sea-level air; there is no altitude model), directed against the chassis'
+    /// **world** velocity — not against its forward axis, so it also resists sideways slides.
+    /// Below 0.1 m/s the direction is zeroed rather than normalising a near-zero vector, which
+    /// is why a stationary car feels no drag at all. Never scaled by ground effect.
     pub drag_coefficient: f32,     // Cd
+    /// Dimensionless lift coefficient Cl, applied along the chassis' **local up** axis. A
+    /// negative value is therefore downforce, and the default is negative. Because the axis is
+    /// local rather than world, an inverted car gets its downforce pointing at the sky.
+    ///
+    /// Unlike drag, this term is multiplied by the ground-effect factor.
     pub lift_coefficient: f32,     // Cl (negatif = downforce)
+    /// Reference area in square metres, shared by both the drag and the lift term. There is no
+    /// separate wing area — scaling this scales grip and top speed together.
     pub frontal_area: f32,         // m²
+    /// Point the combined drag + lift force is applied at, in metres in chassis-local space,
+    /// measured from the `Transform` origin. Its offset from the centre of mass is what turns
+    /// aero into a pitch/yaw moment rather than a pure translation; land it exactly on the
+    /// centre of mass and aero produces no moment at all.
     pub center_of_pressure: Vec3,  // CoM'dan offset (yerel)
+    /// Nominal ride height in metres at which ground effect would begin.
+    ///
+    /// **Has no effect for any value ≥ 1 mm.** `update_vehicle` does not measure real
+    /// ride height; it synthesises a clearance of `ground_effect_height · (1 − compression)`
+    /// from the mean suspension compression fraction and then divides by
+    /// `ground_effect_height` again, so for any value ≥ 1 mm it cancels exactly and the ramp
+    /// is driven purely by suspension travel. It is still read, so it must stay finite and
+    /// non-negative.
     pub ground_effect_height: f32, // Bu yüksekliğin altında zemin etkisi devreye girer
+    /// Factor the lift term is multiplied by when the suspension is fully compressed; `1.0`
+    /// disables ground effect. The multiplier ramps linearly from 1.0 at full droop to this
+    /// value at full compression, averaged over the **grounded** wheels only — with no wheel
+    /// on the ground it is 1.0, so an airborne car loses its ground effect but keeps its
+    /// static downforce.
+    ///
+    /// This is a feedback loop: more downforce compresses the suspension, which raises the
+    /// multiplier. It is bounded only by the suspension's travel clamp. Values below 1.0 are
+    /// not rejected and invert the effect.
     pub ground_effect_multiplier: f32,
 }
 
@@ -232,22 +453,86 @@ impl Default for AeroPackage {
     }
 }
 
+/// Static setup for a vehicle: engine, gearbox, the chassis geometry the steering and
+/// anti-roll models need, and the aero package.
+///
+/// Nothing here is written by the simulation — `update_vehicle` only reads it — so a tune can
+/// be built once and cloned onto every car of a type. The geometry fields ([`wheelbase`],
+/// [`track_width`]) are *steering-model* numbers and are never cross-checked against where the
+/// wheels are actually attached; the two can disagree and the model will not notice.
+///
+/// [`wheelbase`]: VehicleTuning::wheelbase
+/// [`track_width`]: VehicleTuning::track_width
 #[derive(Clone, Debug)]
 pub struct VehicleTuning {
+    /// Lower bound of the engine speed band, in rpm. The engine speed is clamped into
+    /// `[idle_rpm, max_rpm]` every step, so it never reads below this even with the car
+    /// stationary and the clutch effectively locked.
+    ///
+    /// Must not exceed [`max_rpm`](VehicleTuning::max_rpm): the clamp panics on an inverted
+    /// range.
     pub idle_rpm: f32,
+    /// Upper bound (redline) of the engine speed band, in rpm, and the top of the range the
+    /// built-in bell torque curve is parameterised over.
+    ///
+    /// This is a clamp, not a limiter — there is no fuel cut and no over-rev damage; the
+    /// engine speed simply saturates here while the wheels keep accelerating.
     pub max_rpm: f32,
     /// [0]=Geri, [1]=Nötr, [2..]=İleri vitesler
     pub gear_ratios: Vec<f32>,
+    /// Final-drive (differential) ratio, multiplied onto the selected gear ratio.
+    ///
+    /// The product runs the transmission in both directions — wheel torque is
+    /// `engine_torque · |ratio|`, engine speed is `wheel_rpm · |ratio|` — and its **square**
+    /// scales the flywheel inertia reflected onto each driven wheel. So it trades acceleration
+    /// against top speed and changes throttle response at the same time. A value of 0 leaves
+    /// the car with no drive at all.
     pub final_drive_ratio: f32,
     /// Otomatik vites: upshift RPM eşiği
     pub upshift_rpm: f32,
     /// Otomatik vites: downshift RPM eşiği
     pub downshift_rpm: f32,
+    /// Distance between the front and rear axles in metres. Sets the turn radius
+    /// (`wheelbase / tan(steer_angle)`) and, with the track width, the per-wheel Ackermann
+    /// angles. It does NOT make the car turn more lazily the way a real longer wheelbase
+    /// would: the chassis yaw comes from tyre forces at [`Wheel::attachment_local_pos`], and
+    /// raising this only pulls both front angles toward the nominal steer angle (measured at
+    /// track 1.6, steer 0.4: L=1.5 gives 0.500/0.332, L=8.0 gives 0.416/0.385).
+    ///
+    /// Steering geometry only. The wheels' real positions come from
+    /// [`Wheel::attachment_local_pos`] and are never reconciled with this.
     pub wheelbase: f32,
+    /// **Full** left-to-right wheel spacing in metres; the Ackermann geometry uses half of it
+    /// to offset the inner and outer wheels from the turn centre. At 0 both front wheels get
+    /// the same angle (no Ackermann correction).
+    ///
+    /// Steering geometry only — it does **not** describe the anti-roll bar's lever arm, and is
+    /// never reconciled with [`Wheel::attachment_local_pos`].
     pub track_width: f32,
+    /// Anti-roll (sway) bar rate in newtons per metre, applied on both axles.
+    ///
+    /// Multiplied by the axle's left-minus-right suspension *compression* difference in metres;
+    /// the result is added to the more-compressed corner's suspension force and subtracted from
+    /// the other. 0 disables the bar; raising it reduces body roll.
+    ///
+    /// The subtraction is not guaranteed to match the addition, so this is not a strictly
+    /// zero-sum load transfer. Each corner's total is clamped at `≥ 0`, which swallows whatever
+    /// the bar tried to remove past that point, and the bar term is only computed for a
+    /// *grounded* corner — with one wheel of an axle in the air the other keeps its share and
+    /// nothing cancels it.
     pub anti_roll_stiffness: f32,
+    /// Peak crankshaft torque in newton-metres for the built-in bell curve, reached 40 % of the
+    /// way from [`idle_rpm`](VehicleTuning::idle_rpm) to [`max_rpm`](VehicleTuning::max_rpm)
+    /// and never falling below 5 % of it anywhere in the band.
+    ///
+    /// **Ignored entirely** when [`torque_curve`](VehicleTuning::torque_curve) is non-empty.
     pub max_engine_torque: f32,
+    /// Brake torque in newton-metres commanded at full brake input, **per wheel and before the
+    /// front/rear bias** — a front wheel receives 0.6× this and a rear wheel 0.4×. It is not a
+    /// total for the car, so it does not need dividing by the wheel count.
     pub max_brake_torque: f32,
+    /// Drag, downforce and ground-effect parameters. Aero is applied to the chassis every step
+    /// regardless of whether any wheel is grounded.
     pub aero: AeroPackage,
     /// Ölçülmüş tork eğrisi: `(rpm, N·m)` çiftleri, **devire göre artan** sırada.
     ///
@@ -289,23 +574,112 @@ impl Default for VehicleTuning {
     }
 }
 
+/// A driveable vehicle: its suspension corners, its tune, the driver's inputs, and the
+/// drivetrain state carried between steps.
+///
+/// A `Component`. `update_vehicle` reads the input fields, applies every resulting force to
+/// the single chassis body it is handed, and writes the output fields back. There are no child
+/// entities — the wheels exist only as entries in [`wheels`](VehicleController::wheels).
+///
+/// The three pedal/wheel inputs are yours to set each frame; `engine_rpm`,
+/// `current_speed_kmh` and (with auto-shift on) `current_gear` are outputs recomputed from
+/// the simulation and writing them achieves nothing.
 #[derive(Clone, Debug)]
 pub struct VehicleController {
+    /// Every suspension corner. A wheel's *role* comes from its [`Wheel::axle_type`] and
+    /// [`Wheel::is_left`] rather than from its index, but the order is still load-bearing:
+    /// `update_vehicle` accumulates each corner's suspension and tyre force into the chassis
+    /// velocity as it walks the vector, and the next corner reads that already-updated velocity
+    /// back when it computes its own contact-point velocity. Reordering the vector therefore
+    /// changes the result.
+    ///
+    /// An empty list is legal and yields a chassis with aero and no traction whatsoever.
+    /// Drive torque is divided evenly among the *driven* wheels, so adding a driven wheel
+    /// weakens each of the others rather than adding power.
     pub wheels: Vec<Wheel>,
+    /// This vehicle's own copy of the setup — owned by value, so editing it affects only this
+    /// vehicle and takes effect on the very next step.
+    ///
+    /// Swapping a whole tune in mid-run resets none of the state around it:
+    /// [`current_gear`](VehicleController::current_gear) keeps its value and is re-indexed into
+    /// the new [`gear_ratios`](VehicleTuning::gear_ratios), reading as 0.0 — neutral — if it is
+    /// now out of range.
     pub tuning: VehicleTuning,
 
+    /// Accelerator, 0..1. Only its magnitude is used, so a negative value is **not** reverse —
+    /// use [`set_reverse`](VehicleController::set_reverse) for that. A magnitude above
+    /// `f32::EPSILON` counts as driver input and wakes a sleeping chassis. Not clamped: values above 1 scale the
+    /// engine torque past its peak.
     pub throttle_input: f32, // 0..1
+    /// Brake pedal, 0..1. Scales [`VehicleTuning::max_brake_torque`] through the front/rear
+    /// bias. Above 0.01 it also enables the wheel-lock snap, which zeroes a wheel's spin when
+    /// one step of brake torque would otherwise reverse it — that is what stops the wheels
+    /// juddering backwards under heavy braking. Counts as driver input for the wake check.
     pub brake_input: f32,    // 0..1
+    /// Steering, −1..1, multiplied by [`max_steering_angle`] to give the nominal steer angle.
+    /// Positive steers left under this engine's `−Z` forward / `+X` right convention.
+    ///
+    /// Counts as driver input for the wake check. Not clamped, and there is no steering rate
+    /// limit — snapping this from 0 to 1 in one frame snaps the front wheels with it.
+    ///
+    /// [`max_steering_angle`]: VehicleController::max_steering_angle
     pub steering_input: f32, // -1..1
+    /// Whether reverse is currently engaged. Set it through
+    /// [`set_reverse`](VehicleController::set_reverse) rather than directly — that is what
+    /// keeps [`current_gear`](VehicleController::current_gear) consistent with the flag.
+    /// While true, automatic shifting is suppressed entirely.
     pub reverse_input: bool,
+    /// Whether [`auto_shift_tick`](VehicleController::auto_shift_tick) may change gear.
+    /// `update_vehicle` calls that tick unconditionally, so clearing this holds the gear;
+    /// with it false, `current_gear` is left entirely to the caller. Not the only way in —
+    /// `auto_shift_tick` also returns early while [`Self::reverse_input`] is set, and when
+    /// `gear_ratios` is empty.
     pub auto_shift: bool, // Otomatik vites etkin mi?
 
+    /// Index into [`VehicleTuning::gear_ratios`]: 0 is reverse, 1 is neutral, 2 and up are the
+    /// forward gears.
+    ///
+    /// An out-of-range index does not panic — the ratio reads as 0.0, which behaves as
+    /// neutral. Automatic *downshifting* is floored at 2, so it never drops the car into
+    /// neutral or reverse; the upshift branch has no such floor and is guarded only against
+    /// running past the top gear, so a hand-set gear of 0 or 1 with
+    /// [`reverse_input`](VehicleController::reverse_input) clear can be auto-upshifted into 1
+    /// or 2.
     pub current_gear: usize, // gear_ratios index
+    /// Steer angle in radians at full lock (default ≈ 0.52 rad, 30°). Bounds the *nominal*
+    /// angle only: the Ackermann split then gives the inner wheel of a turn a slightly larger
+    /// angle than this, and the outer wheel a smaller one.
     pub max_steering_angle: f32,
+    /// Seconds remaining before automatic shifting is allowed again; counted down by
+    /// `auto_shift_tick` and armed by it at 0.4 s after an upshift and 0.3 s after a
+    /// downshift. It exists to stop the box hunting between two gears.
+    ///
+    /// The decrement sits AFTER that tick's early returns, so a cooldown armed just before
+    /// [`Self::auto_shift`] is cleared or [`Self::reverse_input`] is set stops counting down
+    /// and stays armed until automatic shifting is re-enabled.
+    ///
+    /// Manual gear changes do not arm it, and it does not block them.
     pub shift_cooldown: f32, // Vites değişimi sonrası bekleme süresi (s)
 
+    /// Output: engine speed in rpm.
+    ///
+    /// Recomputed from scratch every step out of the mean spin of the **driven** wheels times
+    /// the total ratio, then clamped to `[idle_rpm, max_rpm]` — it is not integrated, and the
+    /// clutch is permanently locked, so there is no free-revving engine here and no neutral
+    /// blip. With no driven wheels it sits at idle.
     pub engine_rpm: f32,
+    /// Output: **signed** forward speed in km/h — the chassis velocity projected onto its own
+    /// `−Z` axis. It goes negative in reverse and while sliding backwards, and reads near zero
+    /// in a pure sideways slide, so it is a speedometer reading rather than a speed over
+    /// ground (`Velocity::linear.length()` is that).
     pub current_speed_kmh: f32,
+    /// Combined engine and flywheel rotational inertia in kg·m².
+    ///
+    /// Reflected onto each **driven** wheel through the gearbox as
+    /// `flywheel_inertia · total_ratio²`, which in a low gear dominates the wheel's own
+    /// `0.5·m·r²` by more than an order of magnitude. That is what stops a driven wheel from
+    /// snapping straight to the redline off the line; in a tall gear the ratio shrinks and the
+    /// engine picks up more freely. Undriven wheels never see it.
     pub flywheel_inertia: f32,   // kg·m²
     /// Tahrik düzeni (FWD/RWD/AWD) — tork dağıtımı ve RPM türetimi buna göre.
     pub drivetrain: Drivetrain,
@@ -335,9 +709,21 @@ impl Default for VehicleController {
 }
 
 impl VehicleController {
+    /// A controller with **no wheels**, default tuning, first forward gear (index 2) selected
+    /// and the engine at idle. Identical to `Default::default()`.
+    ///
+    /// Stepping it in this state is harmless but pointless: with no wheels there is no
+    /// suspension and no traction, only aero. Add corners with
+    /// [`add_wheel`](VehicleController::add_wheel) first.
     pub fn new() -> Self {
         Self::default()
     }
+    /// Appends a suspension corner.
+    ///
+    /// Performs no validation. Nothing checks that each axle ends up with exactly one
+    /// `is_left = true` and one `is_left = false` wheel — which the anti-roll bar assumes — nor
+    /// that the attachment points agree with [`VehicleTuning::wheelbase`] and
+    /// [`VehicleTuning::track_width`], nor that the chosen drivetrain has any wheels to drive.
     pub fn add_wheel(&mut self, wheel: Wheel) {
         self.wheels.push(wheel);
     }
@@ -392,6 +778,16 @@ impl VehicleController {
         last.1.max(0.0)
     }
 
+    /// Engages or disengages reverse, keeping [`current_gear`](VehicleController::current_gear)
+    /// consistent with [`reverse_input`](VehicleController::reverse_input).
+    ///
+    /// Engaging always selects gear 0, the reverse ratio. Disengaging selects gear 2, the first
+    /// forward gear — but **only** when the box is currently in gear 0; called with `false`
+    /// while already in a forward gear it leaves that gear alone. The forward gear that was
+    /// selected before reverse is not remembered, so coming out of reverse always lands in 2.
+    ///
+    /// Safe to call every frame from a held input: it is idempotent, and it only emits a log
+    /// line when the flag actually changes.
     pub fn set_reverse(&mut self, on: bool) {
         // set_reverse çağırıcı tarafından her frame çağrılabilir (girdi eşlemesi); yalnız
         // değer GERÇEKTEN değiştiğinde logla — aksi halde per-frame gürültü olur.

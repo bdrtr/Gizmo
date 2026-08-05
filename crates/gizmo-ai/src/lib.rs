@@ -1,3 +1,9 @@
+#![warn(missing_docs)]
+//! (`missing_docs` is a RATCHET, not a suggestion. The CI lint gate runs with `-D warnings`,
+//! so every public item in this crate must carry a doc comment or the build fails. This crate
+//! is Stage A — the dependency-light core that goes to 1.x first — and its documented surface
+//! is part of that promise. Do not silence this with `#[allow]`; write the doc.)
+
 //! AI subsystems for the Gizmo game engine.
 //!
 //! This crate provides the decision-making and navigation building blocks used by
@@ -45,6 +51,17 @@ pub use utility_ai::{
     UtilityCurve,
 };
 
+/// Glob-import target for everyday use of this crate: `use gizmo_ai::prelude::*;`.
+///
+/// Re-exports the behavior-tree, GOAP, utility-AI, steering and navigation items that agent
+/// code normally touches. It is slightly narrower than the crate root: the navmesh detail types
+/// [`crate::navmesh::NavMeshStats`] and [`crate::navmesh::NavPoly`] are omitted here but
+/// available at the root.
+///
+/// Four public items are reachable only through their own modules, from neither this prelude nor
+/// the crate root: [`crate::system::ai_navmesh_rebuild_system`], [`crate::steering::clamp_force`],
+/// [`crate::pathfinding::GridPos`] and [`crate::components::NavAgentRecalcState`] — the last of
+/// which is the type of the public [`crate::components::NavAgent::recalc`] field.
 pub mod prelude {
     pub use super::{
         ai_navigation_system, alignment, arrive, avoid_obstacles, behavior_tree_system, cohesion,

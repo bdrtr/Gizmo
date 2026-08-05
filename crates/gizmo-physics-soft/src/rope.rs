@@ -3,10 +3,31 @@ use gizmo_math::Vec3;
 /// Represents a single particle in the rope or chain.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RopeNode {
+    /// Current world-space position, in metres.
     pub position: Vec3,
+
+    /// World-space position at the start of the previous [`Rope::step`], in metres.
+    ///
+    /// The integrator is Verlet-style: velocity is never stored, it is reconstructed as
+    /// `(position - prev_position) / dt`. Teleporting a node by writing `position` alone
+    /// therefore also gives it a velocity — move `prev_position` with it to keep the node
+    /// at rest.
     pub prev_position: Vec3,
+
+    /// Mass in kilograms. Bookkeeping only: the solver reads
+    /// [`inv_mass`](Self::inv_mass) exclusively, so the two are not kept in sync for you
+    /// when either is written by hand. [`Rope::new`] stores `0.0` here for pinned nodes.
     pub mass: f32,
+
+    /// Inverse mass in kg⁻¹ (`1/mass`) — the weight with which this node accepts its share
+    /// of a link correction. `0.0` means infinite mass: the constraint pass never displaces
+    /// the node, though unless [`is_fixed`](Self::is_fixed) is also set it still integrates
+    /// and falls under gravity.
     pub inv_mass: f32,
+
+    /// Pinned. [`Rope::step`] skips this node in integration, in the constraint pass and in
+    /// the ground clamp, so it stays exactly where it was placed — including at or below
+    /// `y = 0`.
     pub is_fixed: bool,
 }
 
@@ -14,14 +35,54 @@ pub struct RopeNode {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct Rope {
+    /// Particles ordered from the start of the rope to its end. Every consecutive pair
+    /// `(i, i + 1)` forms one distance link, so `n` nodes give `n - 1` links; a vector with
+    /// fewer than two entries simply has nothing to solve. Resizing it between steps is
+    /// supported — [`step`](Self::step) tolerates an empty vector rather than underflowing.
     pub nodes: Vec<RopeNode>,
+
+    /// Rest length of *every* link, in metres; [`Rope::new`] sets it from `segment_length`.
+    /// It is one shared value, so individual links cannot have different rest lengths, and
+    /// changing it retroactively re-targets the whole rope.
     pub link_length: f32,
+
+    /// Number of Gauss-Seidel constraint passes performed per [`step`](Self::step). Cost is
+    /// linear in this value and more passes leave less residual stretch; `0` skips constraint
+    /// solving entirely, leaving the nodes unlinked. Default `10`.
     pub iterations: usize,
+
+    /// Link rigidity in `[0, 1]`, dimensionless, mapped to the XPBD compliance
+    /// `1 - stiffness` (the solver then uses `alpha = compliance / dt²`): `1.0` is a rigid
+    /// link (zero compliance) and lower values are progressively softer. Values above `1.0`
+    /// behave exactly as `1.0`; negative values are *not* clamped up to `0.0` and simply
+    /// yield a compliance above `1`, i.e. an even softer link. Default `1.0`.
     pub stiffness: f32,
+
+    /// Fraction of velocity retained per second, applied as `damping.powf(dt)` so the decay
+    /// is timestep-independent. `1.0` disables damping and `0.0` kills all carried-over
+    /// velocity. Only velocity inherited from the previous step is damped — the current
+    /// step's `gravity * dt` increment is added afterwards, undamped. Default `0.98`.
     pub damping: f32,
 }
 
 impl Rope {
+    /// Builds a straight rope of `num_segments` links — `num_segments + 1` nodes — starting
+    /// at `start_pos` (world-space metres) and marching along `direction`.
+    ///
+    /// Only the orientation of `direction` matters: it is normalized internally and nodes are
+    /// laid out `segment_length` metres apart, which also becomes
+    /// [`link_length`](Self::link_length). A zero-length `direction` normalizes to zero rather
+    /// than NaN, collapsing every node onto `start_pos`; `num_segments == 0` yields a single
+    /// node and no links at all.
+    ///
+    /// `node_mass` is in kilograms and is given to every free node. A `node_mass <= 0.0`
+    /// produces an inverse mass of `0.0`, i.e. a node the link solver cannot displace (it
+    /// still integrates and falls, since it is not pinned). `fix_start` pins node `0` and
+    /// `fix_end` pins node `num_segments`; pinned nodes get `mass = 0.0` *and*
+    /// `inv_mass = 0.0`. For `num_segments == 0` the two flags address the same single node.
+    ///
+    /// Every node starts at rest (`prev_position == position`) and the solver parameters take
+    /// their defaults: `iterations = 10`, `stiffness = 1.0`, `damping = 0.98`.
     pub fn new(
         start_pos: Vec3,
         direction: Vec3,
@@ -61,6 +122,28 @@ impl Rope {
         }
     }
 
+    /// Advances the rope by `dt` seconds under the world-space acceleration `gravity`
+    /// (metres per second squared).
+    ///
+    /// A `dt <= 0.0` is a guarded no-op — the rope is returned untouched. Otherwise the step
+    /// is: integrate every free node (velocity reconstructed from `position - prev_position`,
+    /// scaled by [`damping`](Self::damping)`.powf(dt)`, then `gravity * dt` added undamped),
+    /// relax the link constraints [`iterations`](Self::iterations) times, and finally lift any
+    /// free node that ended below the ground plane back to `y = 0`, zeroing its vertical
+    /// velocity. That implicit plane at `y = 0` is the *only* collision geometry a rope has:
+    /// rigid colliders, other ropes and self-collision are all ignored.
+    ///
+    /// Because velocity is reconstructed as `(position - prev_position) / dt` with the
+    /// *current* `dt`, a varying timestep rescales the inherited velocity; feed a fixed `dt`.
+    ///
+    /// Degenerate input is absorbed rather than propagated: an empty [`nodes`](Self::nodes)
+    /// vector does nothing, a link whose endpoints are closer than 1e-6 m is left alone (no
+    /// division by zero), and a link whose two endpoints have a combined inverse mass of zero
+    /// (both immovable) is skipped. Pinned nodes are never moved, not even by the ground
+    /// clamp, so they may legitimately rest below `y = 0`.
+    ///
+    /// The constraint sweep runs sequentially from the first link to the last, so the step is
+    /// deterministic for a given state and `dt`.
     pub fn step(&mut self, dt: f32, gravity: Vec3) {
         if dt <= 0.0 {
             return;

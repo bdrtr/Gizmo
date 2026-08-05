@@ -1,10 +1,30 @@
+//! Behaviour trees: composable, stateless decision nodes.
+//!
+//! A tree is built from [`Sequence`], [`Selector`] and [`Action`] nodes and evaluated by
+//! calling [`BtNode::tick`] on the root, once per decision update. Each tick walks the tree
+//! from the top and returns a [`BtStatus`]; no node keeps a cursor between ticks, so a
+//! long-running branch re-walks its already-succeeded children every time.
+//!
+//! Nodes take `&World` and a [`gizmo_core::entity::Entity`], so a tree can read the world but
+//! cannot mutate it during the tick — an action that wants to change state records its intent
+//! and lets a system apply it.
+
 use gizmo_core::World;
 
 /// Return status of a Behavior Tree node
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BtStatus {
+    /// The node completed its work during this tick. A [`Sequence`] advances to
+    /// its next child; a [`Selector`] stops there and reports success.
     Success,
+    /// The node could not complete. A [`Sequence`] aborts and restarts from its
+    /// first child on the next tick; a [`Selector`] moves on to its next child.
+    /// This is also what a [`BehaviorTree`] with no root reports.
     Failure,
+    /// The node has not finished and wants to be ticked again next frame.
+    /// [`Sequence`] and [`Selector`] remember which child was running and resume
+    /// there rather than re-ticking earlier siblings; [`Inverter`] passes this
+    /// status through unchanged instead of flipping it.
     Running,
 }
 
@@ -15,18 +35,43 @@ pub enum BtStatus {
 /// built-in [`Sequence`], [`Selector`], [`Inverter`], [`Action`] and
 /// [`Condition`] nodes. It is therefore intentionally **not** sealed.
 pub trait BtNode: Send + Sync {
-    /// Executes the node's logic.
+    /// Advances this node by one frame and reports what happened.
+    ///
+    /// `entity` is the id of the agent that owns the tree. `world` is borrowed
+    /// exclusively, which lets a node read and mutate any component while it runs.
+    /// `dt` is the time elapsed since the previous tick, in seconds.
+    ///
+    /// Returning [`BtStatus::Running`] means "call me again next tick"; any
+    /// progress worth keeping must be stored inside the node itself, as nothing
+    /// re-creates the tree between ticks. Ticking is synchronous and recurses into
+    /// children, so an implementation is expected to return promptly and tree
+    /// depth is bounded only by the stack.
     fn tick(&mut self, entity: u32, world: &mut World, dt: f32) -> BtStatus;
 }
 
-/// Sequence: Runs children in order until one Fails or Runs.
-/// Returns Success if ALL children succeed.
+/// Sequence (logical AND): ticks its children front to back until one fails or is
+/// still running.
+///
+/// Reports [`BtStatus::Success`] once every child has succeeded, so an empty
+/// sequence succeeds immediately. A child's [`BtStatus::Failure`] aborts the whole
+/// sequence and rewinds it, so the next tick starts again from the first child.
+///
+/// This is a *memory* sequence: when a child reports [`BtStatus::Running`] the
+/// position is kept and the next tick resumes at that child, without re-ticking
+/// the children that already succeeded. There is no reset method, so a sequence
+/// abandoned mid-run keeps its resume position until it next fails or completes.
 pub struct Sequence {
     children: Vec<Box<dyn BtNode>>,
     current_idx: usize,
 }
 
 impl Sequence {
+    /// Builds a sequence over `children`, ticked in slice order. The child list is
+    /// fixed here: `Sequence` offers no way to add, remove, replace or inspect a child
+    /// afterwards, so reordering the steps means constructing a new node.
+    ///
+    /// Starts at the first child. An empty `children` vector produces a node that
+    /// succeeds on every tick without doing anything.
     pub fn new(children: Vec<Box<dyn BtNode>>) -> Self {
         Self {
             children,
@@ -57,14 +102,26 @@ impl BtNode for Sequence {
     }
 }
 
-/// Selector (Fallback): Runs children in order until one Succeeds or Runs.
-/// Returns Failure if ALL children fail.
+/// Selector / fallback (logical OR): ticks its children front to back until one
+/// succeeds or is still running.
+///
+/// Reports [`BtStatus::Failure`] only after every child has failed, so an empty
+/// selector fails immediately. Like [`Sequence`] it remembers a running child and
+/// resumes there on the next tick — which means it is **not** a reactive
+/// selector: while a lower-priority child is running, the earlier, higher-priority
+/// children are not re-evaluated, so a condition that becomes true again cannot
+/// preempt the running branch.
 pub struct Selector {
     children: Vec<Box<dyn BtNode>>,
     current_idx: usize,
 }
 
 impl Selector {
+    /// Builds a selector over `children`, ticked in slice order — earlier children
+    /// are the higher-priority alternatives.
+    ///
+    /// Starts at the first child. An empty `children` vector produces a node that
+    /// fails on every tick.
     pub fn new(children: Vec<Box<dyn BtNode>>) -> Self {
         Self {
             children,
@@ -95,12 +152,19 @@ impl BtNode for Selector {
     }
 }
 
-/// Inverter: Inverts Success and Failure. Running stays Running.
+/// Decorator with exactly one child that swaps [`BtStatus::Success`] and
+/// [`BtStatus::Failure`]. [`BtStatus::Running`] passes through untouched, so
+/// inverting a long-running action does not invert its "not finished yet" signal.
+///
+/// The inverter keeps no state of its own; any resume behaviour belongs to the
+/// child.
 pub struct Inverter {
     child: Box<dyn BtNode>,
 }
 
 impl Inverter {
+    /// Takes ownership of `child`. The child cannot be inspected or replaced
+    /// afterwards — rebuild the node to change it.
     pub fn new(child: Box<dyn BtNode>) -> Self {
         Self { child }
     }
@@ -116,7 +180,12 @@ impl BtNode for Inverter {
     }
 }
 
-/// Action Node: A leaf node that performs a concrete action.
+/// Leaf node that runs a closure and reports the closure's [`BtStatus`] verbatim.
+///
+/// The closure is `FnMut`, so it may keep state between ticks — a timer, a
+/// progress counter — which is the usual way to write a long-running action that
+/// returns [`BtStatus::Running`] until it is done. It receives the same
+/// `(entity, &mut World, dt)` triple as [`BtNode::tick`], with `dt` in seconds.
 pub struct Action<F>
 where
     F: FnMut(u32, &mut World, f32) -> BtStatus + Send + Sync,
@@ -128,6 +197,11 @@ impl<F> Action<F>
 where
     F: FnMut(u32, &mut World, f32) -> BtStatus + Send + Sync,
 {
+    /// Wraps `func` by value. `Action<F>` is generic over the closure rather than
+    /// boxing it, so putting one into a composite's `Vec<Box<dyn BtNode>>` needs an
+    /// explicit `Box::new` at the call site. The `Send + Sync` bound sits on the
+    /// closure and therefore on everything it captures — a captured `Rc` or `RefCell`
+    /// will not compile.
     pub fn new(func: F) -> Self {
         Self { func }
     }
@@ -142,7 +216,13 @@ where
     }
 }
 
-/// Condition Node: A leaf node that checks a condition (returns Success or Failure).
+/// Leaf node that evaluates a predicate: `true` becomes [`BtStatus::Success`],
+/// `false` becomes [`BtStatus::Failure`].
+///
+/// A condition can never report [`BtStatus::Running`] — it always resolves within
+/// the tick. Its closure is given `&mut World`, so side effects are possible even
+/// though a condition is meant to be a test; keeping it side-effect free is
+/// advisable, since composites re-tick it on later frames.
 pub struct Condition<F>
 where
     F: FnMut(u32, &mut World) -> bool + Send + Sync,
@@ -154,6 +234,11 @@ impl<F> Condition<F>
 where
     F: FnMut(u32, &mut World) -> bool + Send + Sync,
 {
+    /// Wraps the predicate by value.
+    ///
+    /// Note the closure signature takes no `dt`: the tick's delta time is dropped
+    /// here. A test that needs elapsed time must read it from the world or be
+    /// written as an [`Action`] instead.
     pub fn new(func: F) -> Self {
         Self { func }
     }
@@ -172,8 +257,20 @@ where
     }
 }
 
-/// BehaviorTree Component attached to an Entity
+/// ECS component holding one agent's behavior tree.
+///
+/// Ticked either in bulk by [`behavior_tree_system`] or directly through
+/// [`BehaviorTree::tick`]. Cloning this component does **not** copy the tree; see
+/// the `Clone` implementation below.
 pub struct BehaviorTree {
+    /// Root node of the tree, or `None` for an empty tree, which ticks to
+    /// [`BtStatus::Failure`].
+    ///
+    /// [`behavior_tree_system`] moves the root *out* of this field for the
+    /// duration of a tick and puts it back afterwards, so a node that reaches its
+    /// own entity's `BehaviorTree` while running observes `None` here. If the
+    /// component or its entity disappears during that tick, the root is dropped
+    /// rather than restored.
     pub root: Option<Box<dyn BtNode>>,
 }
 
@@ -195,10 +292,22 @@ impl Clone for BehaviorTree {
 }
 
 impl BehaviorTree {
+    /// Wraps an already-built node as the tree's root, taking ownership of it and
+    /// of the whole subtree hanging off it.
+    ///
+    /// Nodes carry their own resume state, so a node that was already ticked keeps
+    /// that state when it becomes a root here — it is not reset.
     pub fn new(root: Box<dyn BtNode>) -> Self {
         Self { root: Some(root) }
     }
 
+    /// Ticks the root once and returns its status, or [`BtStatus::Failure`] when
+    /// this tree is empty — a missing tree is reported as a failed one, never as
+    /// success.
+    ///
+    /// `dt` is the frame time in seconds and is handed down unchanged to every
+    /// node. The call recurses through the tree; nothing here bounds the depth or
+    /// catches a panic raised by a node.
     pub fn tick(&mut self, entity: u32, world: &mut World, dt: f32) -> BtStatus {
         if let Some(root) = &mut self.root {
             root.tick(entity, world, dt)
@@ -208,7 +317,24 @@ impl BehaviorTree {
     }
 }
 
-/// The System that ticks all BehaviorTrees
+/// Ticks every entity that carries a [`BehaviorTree`] exactly once.
+///
+/// The entity list is snapshotted before any node runs, so trees attached during
+/// this call are not ticked until the next one, and an entity whose component
+/// vanished in the meantime is skipped silently. Iteration order is whatever the
+/// ECS query yields; treat it as unspecified.
+///
+/// For each entity the root node is *moved out* of the component, ticked with
+/// exclusive access to the world, then moved back. That is what allows a node to
+/// mutate arbitrary components, but it has two consequences: during its own tick
+/// the entity's [`BehaviorTree::root`] reads as `None`, and if the node removes
+/// that component or despawns its own entity, the root is dropped instead of
+/// restored and the tree is lost.
+///
+/// `dt` is the frame time in seconds, passed unchanged to every node. Each
+/// entity's status is emitted at `trace` level and also folded into per-frame
+/// counters logged at `debug`; the system itself returns nothing, reports no
+/// errors, and a node's panic propagates out of it.
 #[tracing::instrument(skip_all, name = "behavior_tree_system")]
 pub fn behavior_tree_system(world: &mut World, dt: f32) {
     let entities: Vec<u32> = {
