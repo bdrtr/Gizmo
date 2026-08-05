@@ -253,4 +253,5 @@ impl FighterController {
     }
 }
 
+#[cfg(feature = "ecs")]
 gizmo_core::impl_component!(FighterController);

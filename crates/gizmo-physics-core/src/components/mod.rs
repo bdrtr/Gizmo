@@ -20,6 +20,8 @@ pub mod fluid;
 pub mod character;
 /// Fighting-game state measured in frames rather than seconds: health, block/crouch, the
 /// active move and its frame data, hitstop/hitstun counters.
+/// Requires the `ecs` feature: `FighterController` owns a `gizmo_core` input buffer.
+#[cfg(feature = "ecs")]
 pub mod fighter;
 /// Combat volumes ([`Hitbox`]/[`Hurtbox`]) carried in addition to the physics [`Collider`].
 pub mod hitbox;
@@ -30,6 +32,7 @@ pub use physics_material::{CombineMode, PhysicsMaterial};
 pub use transform::{GlobalTransform, Transform};
 pub use fluid::FluidSimulation;
 pub use character::CharacterController;
+#[cfg(feature = "ecs")]
 pub use fighter::FighterController;
 pub use hitbox::{Hitbox, Hurtbox};
 pub mod gpu_physics_link;

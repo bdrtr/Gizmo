@@ -52,4 +52,5 @@ impl Default for FluidSimulation {
     }
 }
 
+#[cfg(feature = "ecs")]
 gizmo_core::impl_component!(FluidSimulation);

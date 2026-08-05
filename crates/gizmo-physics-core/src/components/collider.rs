@@ -740,6 +740,7 @@ impl From<ConvexHullShape> for ConvexHullShapeData {
     }
 }
 
+#[cfg(feature = "ecs")]
 gizmo_core::impl_component!(Collider);
 
 // ─────────────────────────────────────────────────────────────────────────────

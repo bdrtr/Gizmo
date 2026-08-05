@@ -351,6 +351,7 @@ pub struct CombinedMaterial {
     pub density: f32,
 }
 
+#[cfg(feature = "ecs")]
 gizmo_core::impl_component!(PhysicsMaterial);
 
 // ─────────────────────────────────────────────────────────────────────────────

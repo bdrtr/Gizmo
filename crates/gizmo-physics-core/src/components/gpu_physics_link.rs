@@ -24,4 +24,5 @@ pub struct GpuPhysicsLink {
     /// [`BodyHandle`](crate::BodyHandle).
     pub id: u32,
 }
+#[cfg(feature = "ecs")]
 gizmo_core::impl_component!(GpuPhysicsLink);
