@@ -1049,6 +1049,100 @@ enum'unda `ron 0.8` tipleri var (ENGINE.md §4'ün Stage B kriteri tam da bu).
 
 ---
 
+---
+
+## Doküman turlarında bulunan kusurlar — önceliklendirilmiş backlog
+
+D4 boyunca (4 parti, ~1360 öğe) ajanlar kodu satır satır okurken **doküman dışı** kusurlar da
+buldu. Aşağıdakiler commit mesajlarıyla workflow çıktılarında dağınık kalmasın diye buraya
+toplandı.
+
+> **Doğrulama durumu:** bu maddelerin çoğu AJAN RAPORU, benim elle doğruladıklarım değil.
+> İşaretliler: ✅ elle doğrulandı (probe/test ile), ⚠️ yalnız ajan raporu. CLAUDE.md'nin kuralı
+> burada da geçerli — düzeltmeden önce her birini elle doğrula, bu depoda yanlış pozitif
+> geçmişi var.
+
+### A — Sessiz yanlış davranış (en yüksek değer)
+
+- ✅ **`Schedule` build sonrası eklemede öncekileri düşürüyor** — ayrı madde olarak yukarıda.
+- ⚠️ **`shatter_entity` Box olmayan collider'da kalıcı ölü bırakıyor.** `system.rs:365-381`
+  erken dönüyor ama çağıranlar (`:319-331`, `:504-519`) `breakable.is_broken = true`'yu ÇOKTAN
+  yazmış. Sphere/capsule/hull bir breakable sıfır cana iner, debris üretmez, despawn olmaz, ve
+  sonraki her kontrol `!is_broken && …` olduğu için bir daha hasar da alamaz.
+- ⚠️ **`FrameProfiler::avg_frame_ms` ring wraparound sonrası yanlış kareleri ortalıyor.**
+  `profiler.rs:168-204` `history.iter().rev().take(count)` yapıyor ama `history` bir ring
+  buffer; 300 kareden sonra fiziksel sıra kronolojik değil, dolayısıyla en yeni ve ~300 kare
+  eski veriyi karıştırıyor. `estimated_fps()` de miras alıyor. `last_frame()` doğru (modüler
+  aritmetiği açıkça yapıyor).
+- ⚠️ **`register_serializable` sessizce hiçbir şey yapmıyor olabilir.** `register::<T>("T")`
+  sonrası `register_serializable::<T>("T")` çağrısı, "aynı tip+ad zaten kayıtlı" kısa devresine
+  takılıp `Ok(())` dönüyor ve dört fonksiyon işaretçisi HİÇ kurulmuyor — tip sessizce
+  serileştirilemez kalıyor. `register_reflect` aynı durumu doğru ele alıyor (yerinde upgrade).
+- ⚠️ **`PoolManager::destroy` aynı entity'yi iki kez park edebiliyor** (`pool.rs:117-124`,
+  üyelik/canlılık kontrolü yok) → `instantiate` aynı entity'yi iki çağırana veriyor.
+- ⚠️ **`UtilityAction::evaluate` boş `considerations`'da `base_score`'u KIRPMADAN döndürüyor**
+  (`utility_ai.rs:216`). `base_score = 5.0` her düzgün skorlanmış eylemi yeniyor.
+- ⚠️ **`Input::release_all` `keys_just_pressed`'i temizlemiyor** (`input/mod.rs:115-124`) — o
+  kare boyunca bir tuş hem "just_pressed" hem "just_released" olabiliyor.
+- ⚠️ **`add_bundle`/`spawn_batch` hızlı yolları hook ATEŞLEMİYOR** (`component_ops.rs:29-105`,
+  `entity_lifecycle.rs:189-225`). `World::add_observer` ile kaydedilen gözlemciler bundle ile
+  spawn edilen entity'leri kaçırıyor. `remove_bundle` de yalnız SparseSet bileşenleri için
+  `on_remove` ateşliyor (`:107-190`), Table olanlar arketip göçüyle sessizce kopuyor.
+- ⚠️ **Patlama uyuyan cismi uyandırmıyor** — `physics_explosion_system` yalnız `is_dynamic()`
+  kapısı koyuyor, `wake_up()` çağırmıyor; impuls `Velocity`'ye yazılıp entegrasyonda atılıyor.
+- ⚠️ **Soft-body GPU/CPU `damping` ~100 kat ayrışıyor.** Shader `v *= max(1-damping*dt, 0)`
+  (oran), CPU `v *= damping.powf(dt)` (tutma katsayısı). Varsayılan 0.99 ve dt=1/60'ta
+  0.9835'e karşı 0.99983. Aynı mesh GPU yolunda ~100 kat sert sönümleniyor.
+- ⚠️ **GPU yolunda çarpışmada çift ilerletme** (`gpu_compute.rs:570`): sweep, shader'ın ZATEN
+  entegre ettiği pozisyondan başlıyor; CPU yolu (`soft_body.rs:313`) entegrasyon ÖNCESİNDEN.
+
+### B — Panik / çökme
+
+- ⚠️ **Sıfır eksenli Hinge/Slider NaN üretiyor.** İkisi de `Default` türetiyor, `axis` ZERO
+  kalıyor, `slider.rs:27` çıplak `.normalize()` çağırıyor. Kardeşi `solve_slider_spring`
+  (`:246`) `normalize_or_zero` kullanıp bailing yapıyor. Yalnız `Joint::hinge`/`Joint::slider`
+  yapıcıları `Vec3::Y` koyuyor; `..Default::default()` bunu atlıyor.
+- ✅ **Negatif `max_correction_speed` çözücüyü paniklatıyor** — `bias.clamp(-x, x)` ile
+  min > max. Alanlar public ve doğrulanmıyor.
+- ⚠️ **`add_bundle` flush edilmemiş rezerve entity'de OOB panik** (`component_ops.rs:34-41`).
+- ⚠️ **`solve_joints` `dt == 0`'da her kopabilir eklemi koparıyor** (`impulse/dt` → `inf`).
+
+### C — 1.0'a dondurulacak ÖLÜ public alanlar
+
+- ⚠️ `GravityField::falloff_radius`, `FluidZone::viscosity` — hiçbir yer okumuyor, yorumları
+  var olmayan davranışı anlatıyor.
+- ⚠️ `Explosion::damage_radius` — okunmuyor; hasar `force_radius`'a bakıyor.
+- ⚠️ `Breakable::{max_health, debris_lifetime, break_sound, piece_prefab}` — hiçbiri okunmuyor.
+- ⚠️ `AeroPackage::ground_effect_height` — formülde tam olarak sadeleşiyor (≥1 mm için).
+- ⚠️ `SpatialHash` bir spatial hash DEĞİL (`DynamicAabbTree` sarmalıyor) ve
+  `PhysicsWorld::with_cell_size` argümanını atıyor.
+- ⚠️ `multibody::{base_position, base_rotation}` okunmuyor; `gravity` base koordinatında
+  yorumlanıp `base_rotation` ile hiç döndürülmüyor.
+
+### D — Model doğruluğu
+
+- ⚠️ **`cone_limit_angle` twist'i çifte sayıyor** (`ball_socket.rs:61`): tam sapma
+  quaternion'ının açısını alıyor, swing-twist ayrıştırmasının swing bileşenini değil. Koni ve
+  twist limitleri birlikte açıkken twist, koni bütçesini yiyor.
+- ⚠️ **Swing limitleri sistematik olarak gevşek**: radyan sınır `2·sin(θ/2)` ile
+  karşılaştırılıyor, yazılan 90° limit ~103°'ye kadar devreye girmiyor. `d6.rs:72-75` aynı.
+- ⚠️ **Adaptif iterasyon sayısı SI yolunda ölü** (`solver/mod.rs:370-375` yalnız
+  `solve_contacts_tgs`'e geçiriyor) — CCD içeren island'lar tall-stack stabilizasyonunu
+  kaybediyor.
+- ⚠️ **ABA'da `is_fixed_base == false` yerçekimini sessizce düşürüyor** (`aba.rs:132`).
+- ⚠️ **Navmesh `agent_radius` gerçek clearance vermiyor** — yürünebilir alan hiç aşındırılmıyor.
+
+### E — Performans
+
+- ⚠️ **GOAP `PlanNode::clone` tüm ata zincirini DERİN kopyalıyor** (her atanın `GoapState`
+  HashMap'i dahil) — `build_plan`'de her ardıl için.
+
+### F — Gürültü
+
+- ⚠️ **`resolve_node_collision` her dinlenen düğüm için her adımda `warn!` basıyor**
+  (`soft_body.rs:133`): `Ray::new` `dist > 1e-5` kapısından ÖNCE kuruluyor ve sıfır yön
+  uyarısı veriyor. `Ray::new`'i kapının içine almak davranışı değiştirmeden düzeltir.
+
 ## Kapsam dışı / bilinçli olarak yapılmayacaklar
 - `gizmo-audio`'nun cfg-gate'li `unsafe impl Send/Sync`'i — doğru ve gerekçeli, dokunulmayacak.
 - ENGINE.md §7'deki çürütülmüş false-positive'ler ve non-goal'lar (narrowphase batch-SIMD,
