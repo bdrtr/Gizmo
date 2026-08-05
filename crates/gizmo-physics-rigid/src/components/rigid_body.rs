@@ -802,6 +802,7 @@ impl RigidBody {
     }
 }
 
+#[cfg(feature = "ecs")]
 gizmo_core::impl_component!(RigidBody);
 
 #[cfg(test)]

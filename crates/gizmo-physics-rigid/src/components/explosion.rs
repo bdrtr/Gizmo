@@ -91,4 +91,5 @@ impl Default for Explosion {
     }
 }
 
+#[cfg(feature = "ecs")]
 gizmo_core::impl_component!(Explosion);
