@@ -48,6 +48,11 @@ bevy_reflect = { version = "0.19", features = ["glam"], optional = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
+criterion = "0.8.2"
+
+[[bench]]
+name = "step_bench"
+harness = false
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # rayon needs OS threads → native only; wasm uses `parallel_compat` (sequential).

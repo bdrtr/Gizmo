@@ -836,8 +836,31 @@ yapsın → 5 cihaz 3'e iner. Kısmi, ama `render_frame`'e `&mut Renderer` param
 eklemekten ibaret.
 
 ## Faz C — Performans ve ölçüm
-- ⬜ **C1** — `benches/step_bench.rs` (solver/broadphase/narrowphase) + commit'lenmiş baseline.
-  Şu an bu üçü için **sıfır** benchmark var; ENGINE.md'deki tüm perf sayıları tekrarlanamaz.
+- ✅ **C1 — `benches/step_bench.rs`** *(2026-08-05)*. `gizmo-physics-rigid`'de beş senaryo
+  grubu: broadphase (temassız kafes), narrowphase (üst üste binmiş), solver (oturmuş kule),
+  joints (asılı zincir), full_step (karışık). Her iterasyon sahneyi YENİDEN KURUYOR —
+  `iter_batched`'in setup'ı ölçüme girmiyor, ve tek bir dünyayı bin kez adımlamak her seferinde
+  başka bir simülasyon ölçer (cisimler oturur, uyur, maliyet çöker ve bu hızlanma sanılır).
+
+  **Bu makinedeki baseline** (2026-08-05, `lto=off`/`codegen-units=4` ile — yani TAVAN DEĞİL,
+  ALT SINIR; mutlak sayılar makineye özel, karşılaştırma için aynı makinede önce/sonra koş):
+
+  | senaryo | 64/8 | 256/24 | 1024/48 |
+  |---|---|---|---|
+  | broadphase | 226 µs | 609 µs | 1.73 ms |
+  | narrowphase | 6.96 ms | 27.66 ms | **151.00 ms** |
+  | solver (kule) | 532 µs | 1.20 ms | 4.05 ms |
+  | joints (zincir 8/32/128) | 161 µs | 317 µs | 755 µs |
+  | full_step (128/512) | 635 µs | 2.43 ms | — |
+
+  > **İlk ölçüm iki şey gösterdi.** (1) Narrowphase süper-lineer: 64→256 cisimde süre 3.97×
+  > (lineer), ama 256→1024'te **5.46×**. Throughput 9.2'den 6.8 Kelem/s'ye düşüyor. (2) Aynı
+  > sahnede narrowphase broadphase'in **87 katı** (151 ms'e karşı 1.73 ms). Bu senaryo
+  > kasıtlı en kötü hal — 1024 kutu 0.9 aralıkla, yani hepsi birbirine giriyor; tipik bir
+  > kare değil. Ama C2/C4'ün nereye bakması gerektiğini söyleyen ölçüm bu.
+  >
+  > Solver da 24→48 kulede 2× yükseklik için **3.39×** süre veriyor — ENGINE.md'nin
+  > "N≥48 kuleler bükülüyor" notuyla aynı yere işaret ediyor.
 - ⬜ **C2** — Broadphase refit (`pipeline.rs:145-176` her substep sıfırdan kuruyor, statikler dahil).
 - ⬜ **C3** — `physics-rigid/src/system.rs:149-158` O(N²) writeback → handle→index map.
 - ⬜ **C4** — Temas yolunda `ArrayVec` (`narrowphase/mod.rs:400-407`); rewind geçmişi opt-in
