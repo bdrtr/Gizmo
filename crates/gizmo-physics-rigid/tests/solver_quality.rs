@@ -2209,6 +2209,199 @@ fn is_ground_size_a_mechanism_or_just_a_seed() {
     }
 }
 
+/// The loose end from `does_a_settled_contact_jitter_more_on_a_bigger_ground`: repeat the
+/// precision test on the scene it is actually about.
+///
+/// That measurement found a settled interface bit-stable at every ground size and so refuted
+/// contact-generation precision as the source of the sustained amplitude — but it used a two-box
+/// stack, which reaches an exact fixed point and therefore never exercises the arithmetic under
+/// load. The twelve-high column does not sit still: it rocks at an amplitude that
+/// `is_ground_size_a_mechanism_or_just_a_seed` shows roughly doubling with the ground's size.
+///
+/// The measurement problem is separating numerical jitter from real motion — on a leaning column
+/// the contact points move because the bodies move. `ContactPoint` solves it directly:
+/// `local_point_a` and `local_point_b` are the contact expressed in each body's own frame
+/// (`gizmo-physics-core/src/collision.rs`), so a geometrically stable contact has a constant local
+/// point however much its body travels. Movement there is the contact being re-derived
+/// differently, which is exactly the quantity in question.
+///
+/// The box-to-box interfaces are the built-in control: both bodies are half-extent 0.5 whatever
+/// the ground is, so no size-dependent mechanism can touch them. Only the ground interface sees
+/// the big collider.
+///
+///   - ground-interface jitter scaling with half-extent while box-box jitter stays flat ⇒
+///     precision is back, and it is the amplitude mechanism
+///   - both flat ⇒ the fifth candidate falls too, and the mechanism is in the solver's own state
+///     rather than in the geometry it is fed
+///
+/// # Measured: flat. Precision is refuted on the tall column too.
+///
+/// ```text
+///   ground half-extent    Σ|Δlocal| ground interface
+///                   20                    2.700e-5
+///                   50                    2.700e-5
+///                  100                    2.551e-5
+///                  200                    2.599e-5
+///                  500                    2.301e-5
+/// ```
+///
+/// Twenty-five-fold in the collider's size, no change in how much the contact moves in the body's
+/// own frame — slightly *less*, if anything. The fifth candidate falls with the other four.
+///
+/// The box-to-box control column is NOT reported, because the way it was gathered is invalid:
+/// eleven interfaces contribute four points each, all with local coordinates near ±0.5, and
+/// sorting them into one list mixes points from different interfaces so that any reordering
+/// between frames reads as a huge jump. It produced ~6000 per run, which is six orders of
+/// magnitude above the ground interface's figure and is measurement noise, not physics. Matching
+/// per interface would fix it; the ground pair needs no such fix because it is one interface.
+///
+/// **The incidental finding is the bigger one.** Holding every body awake keeps this column
+/// almost perfectly straight — peak lean 4e-5, against 0.0104 for the same scene left to sleep
+/// naturally (`is_ground_size_a_mechanism_or_just_a_seed`). A factor of 250. Sleeping is supposed
+/// to be an optimisation with no effect on the answer. See
+/// `does_the_column_only_lean_when_it_is_allowed_to_sleep`.
+#[test]
+#[ignore = "measurement, not a gate — prints a table"]
+fn does_the_tall_column_contact_jitter_with_ground_size() {
+    eprintln!("\n=== 1x12x1 held awake, 600 frames: contact drift in BODY-LOCAL coordinates ===");
+    eprintln!(
+        "{:>10}  {:>18}  {:>18}  {:>12}",
+        "ground", "Σ|Δlocal| ground", "Σ|Δlocal| box-box", "peak lean"
+    );
+    for h in [20.0f32, 50.0, 100.0, 200.0, 500.0] {
+        let (mut world, bodies, origins) = scene_tower_on_ground(12, h);
+        let wake = |w: &mut PhysicsWorld| {
+            for i in 1..w.entities.len() {
+                w.rigid_bodies[i].wake_up();
+            }
+        };
+        for _ in 0..240 {
+            wake(&mut world);
+            world.step(DT).ok();
+        }
+
+        // Local-space contact points, split into the ground pair and everything else. Sorted so a
+        // reordering between frames cannot read as drift.
+        let sample = |w: &PhysicsWorld, ground_pair: bool| -> Vec<Vec3> {
+            let mut v: Vec<Vec3> = w
+                .collision_events()
+                .iter()
+                .filter(|e| (e.entity_a.id() == 0 || e.entity_b.id() == 0) == ground_pair)
+                .flat_map(|e| e.contact_points.iter())
+                .map(|c| c.local_point_b)
+                .collect();
+            v.sort_by(|a, b| {
+                (a.x, a.y, a.z)
+                    .partial_cmp(&(b.x, b.y, b.z))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            v
+        };
+
+        let (mut prev_g, mut prev_b) = (sample(&world, true), sample(&world, false));
+        let (mut sum_g, mut sum_b) = (0.0f32, 0.0f32);
+        let mut peak_lean = 0.0f32;
+        for _ in 0..600 {
+            wake(&mut world);
+            world.step(DT).ok();
+            peak_lean = peak_lean.max(observe(&world, &bodies, &origins).lean);
+            for (prev, sum, ground_pair) in [
+                (&mut prev_g, &mut sum_g, true),
+                (&mut prev_b, &mut sum_b, false),
+            ] {
+                let now = sample(&world, ground_pair);
+                if now.len() == prev.len() {
+                    for (a, b) in prev.iter().zip(&now) {
+                        *sum += (*b - *a).length();
+                    }
+                }
+                *prev = now;
+            }
+        }
+        eprintln!(
+            "{:>10.0}  {:>18.6e}  {:>18.6e}  {:>12.5}",
+            h, sum_g, sum_b, peak_lean
+        );
+    }
+}
+
+/// Does the column only lean when it is allowed to sleep?
+///
+/// `does_the_tall_column_contact_jitter_with_ground_size` had to hold every body awake to keep the
+/// contacts being regenerated, and the column it measured stayed 250× straighter than the same
+/// scene left alone. Sleeping is meant to be an optimisation — an island nobody is touching stops
+/// being solved — and an optimisation that changes the answer by 250× is not an optimisation.
+///
+/// There is a concrete mechanism available for it, found while auditing the write-back:
+/// `pipeline.rs` applies the solver's results to **every dynamic member of an active island
+/// without checking the sleep flag** — both `self.velocities[idx] = vel` and the split-impulse
+/// `t.position += dlin` / rotation delta. The integrator then skips sleeping bodies entirely. So a
+/// body that has fallen asleep inside a still-active island keeps being *teleported* by position
+/// corrections while never integrating, never damping, and never re-evaluating whether it should
+/// still be asleep. A partially-sleeping column is being shoved with no velocity feedback.
+///
+/// Partial sleep is not hypothetical here: the traces in `measure_tower_buckling_channels` and
+/// `verify_wide_pile_collapse` show `asleep` counts flickering between 0 and 6 while the stack is
+/// nominally at rest.
+///
+///   - forced-awake stands at every ground size while natural sleep collapses at 140, 150 and 200
+///     ⇒ the sleep path is the mechanism, and the ground size only shuffles *when* things sleep
+///   - both collapse similarly ⇒ the 250× was an artefact of the forced-wake run being a different
+///     trajectory, and this is a dead end
+#[test]
+#[ignore = "measurement, not a gate — long (~4 min)"]
+fn does_the_column_only_lean_when_it_is_allowed_to_sleep() {
+    eprintln!("\n=== 1x12x1, 3000 frames: natural sleep vs every body held awake ===");
+    eprintln!(
+        "{:>10}  {:>26}  {:>26}",
+        "ground", "natural (blew@ / lean)", "forced awake (blew@ / lean)"
+    );
+    for h in [20.0f32, 100.0, 140.0, 150.0, 200.0] {
+        let mut cells = Vec::new();
+        for force_awake in [false, true] {
+            let (mut world, bodies, origins) = scene_tower_on_ground(12, h);
+            let mut r = Run {
+                blew_up_at: None,
+                peak_speed: 0.0,
+                peak_lean: 0.0,
+                peak_tilt_deg: 0.0,
+                final_pen_max: 0.0,
+                resting_pen: 0.0,
+                blew_up_at_awake: None,
+                trip_lean: 0.0,
+                trip_tilt_deg: 0.0,
+            };
+            for f in 0..3000 {
+                if force_awake {
+                    for i in 1..world.entities.len() {
+                        world.rigid_bodies[i].wake_up();
+                    }
+                }
+                world.step(DT).ok();
+                let o = observe(&world, &bodies, &origins);
+                if !o.max_speed.is_finite() {
+                    r.blew_up_at.get_or_insert(f);
+                    break;
+                }
+                r.peak_speed = r.peak_speed.max(o.max_speed);
+                r.peak_lean = r.peak_lean.max(o.lean);
+                if r.blew_up_at.is_none() && o.max_speed >= 0.5 {
+                    r.blew_up_at = Some(f);
+                }
+            }
+            cells.push(format!(
+                "{:>10} / {:<12.6}",
+                match r.blew_up_at {
+                    Some(f) => f.to_string(),
+                    None => "-".to_string(),
+                },
+                r.peak_lean
+            ));
+        }
+        eprintln!("{:>10.0}  {:>26}  {:>26}", h, cells[0], cells[1]);
+    }
+}
+
 /// Negative control for `realistic_crate_stack_stays_standing`: the same scene, same horizon,
 /// same assertions, with the solver starved to 4 sweeps. It must FAIL.
 ///
