@@ -1114,15 +1114,49 @@ eklemekten ibaret.
     > gürültü-tohumlu üstel değil, sürekli bir yetmezlik. Yani **ayrı bir mekanizma**, ve
     > gözlemciler onu 30. kareden itibaren görüyor.
 
-- ⬜ **BÜYÜME HIZI İÇİN EN GÜÇLÜ ADAY (hipotez, doğrulanmadı): teğet kanalında konum terimi YOK.**
+- 🔄 **N1 ÜZERİNE DÖRT ADAY MEKANİZMA ÖLÇÜLDÜ VE ELENDİ** *(2026-08-06)*. Hiçbiri tutmuyor;
+  ama eleme sonucunda N1'in şekli netleşti.
+
+  | aday | ölçüm | sonuç |
+  |---|---|---|
+  | Doğum darbesinin büyüklüğü | `does_a_bigger_ground_deliver_a_bigger_birth_kick` | **ÇÜRÜK** — 20→200 arası %0.58 |
+  | Teğetsel cırcır (birikme) | `is_the_lean_slip_or_rotation` | **ÇÜRÜK** — kayma salınıyor, path/net ≈ 21 |
+  | Birikmiş kaymanın ayırt ediciliği | aynı | **ÇÜRÜK** — hayatta kalanlar DAHA ÇOK biriktiriyor (0.521 vs 0.462) |
+  | Temas hassasiyeti (sürekli gürültü) | `does_a_settled_contact_jitter_more_on_a_bigger_ground` | **ÇÜRÜK** — yerleşmiş temas her boyutta bit-kararlı, 600 karede jitter 0 |
+
+  > **Ve "mekanizma yok, sadece farklı bir örnek" (H-C) de çürük.** Zemini 20.000 → 20.001 →
+  > 20.01 → 20.1 → 21.0 yapmak (40 metrelik statik bir kutuda bir milimetre) sonucu SAÇMIYOR:
+  > hepsi ayakta, peak_lean'ler 0.004 içinde. Kaotik dekorelasyon olsaydı saçardı.
+
+  > **Ama eşik de yok.** Daraltınca: 140 ve 150 çöküyor, 160/175/190 ayakta, 200 çöküyor.
+  > (Ara okumamda "100 ile 200 arasında açılıyor" demiştim — daraltma bunu çürüttü, dağınık
+  > bir başarısızlık bölgesi, anahtar değil.)
+
+  > **Boyutun gerçekte yaptığı şey DİNLENME GENLİĞİNİ yükseltmek**, ve o kısmı düzenli:
+  > peak_lean yarı-boyut 21'e kadar ~0.011, 50'den itibaren ~0.018–0.024 ve orada doyuyor.
+  > Çöküşler yalnız üst bantta beliriyor, o banttaki HANGİ boyutun çökeceği ise kaotik.
+  >
+  > Yani N1 gerçek, boyuta bağlı bir GENLİK etkisi + üstüne binmiş kaotik bir sonuç.
+  > **Genliği neyin yükselttiği hâlâ belirlenmedi.** Hassasiyet yalnız iki-kutulu yığında
+  > çürütüldü; o yığın tam bir sabit noktaya oturduğu için zayıf bir sınav — çekilecek ip bu.
+
+- ⬜ **BÜYÜME HIZI İÇİN ADAY (hipotezin cırcır hâli ÇÜRÜDÜ, kalanı duruyor): teğet kanalında
+  konum terimi YOK.**
   `solver/tgs.rs`'te `Prepared` normal için `pen0` taşıyor ve üç sweep de onu bias'a sürüyor
   (`:580`, `:705`, `:820`) — depenetrasyonu sağlayan ve TGS'i çalıştıran şey bu. **Teğet için
   karşılığı yok:** üç sürtünme çözümü de saf `acc_t − rel·t/k_t` (`:618-627`, `:748-757`,
   `:862-871`), yani yalnız hız düzeyinde. Sürtünme teğetsel HIZA direniyor, teğetsel
   YER DEĞİŞTİRMEYE değil.
 
-  > Bir yığında bunun anlamı: bir kutu yanal olarak δ kadar kaydıktan sonra onu geri çeken
-  > hiçbir şey yok. Her substep'in artık kayması KALICI — cırcır gibi birikiyor.
+  > ⚠️ **"Cırcır gibi birikiyor" kısmı ÖLÇÜLDÜ ve YANLIŞ ÇIKTI.** `is_the_lean_slip_or_rotation`:
+  > birikmiş kayma YOLU tekdüze büyüyor (2200 karede 0.09 → 0.46) ama NET kayma büyümüyor
+  > (0.006–0.022 arası salınıyor) — oran 21:1. Yani arayüzler durmadan mikro-kayıyor ama
+  > ileri-geri; tek yöne birikmiyorlar. Ayrıca kayma ile tilt sabit oranda kilitli, yani
+  > "kayma mı dönme mi" diye sorduğum ayrıştırma yanlış soruymuş: ikisi aynı modun iki ölçümü.
+  >
+  > **Kalan ve hâlâ ayakta olan kısım:** temas hiç KİLİTLENMİYOR. Gerçek statik sürtünme
+  > arayüzü kilitlerdi; burada sonsuza dek mikro-kayma sürüyor, ve konum-düzeyi terim yokluğu
+  > bunu açıklıyor. Ama bu tek başına çöküşü ayırt etmiyor (yukarıdaki tabloya bak).
 
   > **Kayıtlı bütün çürütmelerle tutarlı olması bu adayı öne çıkarıyor:** sürtünmenin
   > KARARLILAŞTIRICI olması (hıza direniyor, o yüzden kaldırınca felaket), buna rağmen
