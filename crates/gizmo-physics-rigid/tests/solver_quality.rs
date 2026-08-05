@@ -1705,6 +1705,93 @@ fn what_does_a_manifold_look_like_when_it_is_born() {
     }
 }
 
+/// Does the frame-70 collapse MOVE when `warm_start_match_tolerance` moves?
+///
+/// `where_is_the_fast_collapse_band` puts the fast collapse in a single cell — gap 0.020 on
+/// ground 20, frame 70, with 0.015 and 0.025 both standing 3000 frames — and 0.020 is exactly
+/// the default `warm_start_match_tolerance`. That is suggestive and it is also exactly the shape
+/// of coincidence this repository has a documented history of believing.
+///
+/// So this is the falsifier rather than more of the same evidence. Raise the tolerance to 0.05
+/// and re-scan the gap.
+///
+///   - If the fast collapse follows the tolerance to gap ≈ 0.05 and gap 0.020 goes quiet, the
+///     warm-start match is the mechanism.
+///   - If it stays at 0.020, or vanishes, or appears somewhere unrelated, it is not — and the
+///     frame-70 cell is one more draw from the chaotic distribution that
+///     `ground_extent_flips_the_blow_up` already showed this scene class has.
+///
+/// **Measured: REFUTED.** The collapse stays at gap 0.020 and at frame 70 for
+/// `warm_start_match_tolerance` of 0.002, 0.02 and 0.05 alike — identical frame, three values
+/// spanning 25×. The warm-start match is not in the causal path here, and the fact that 0.02 is
+/// both the default tolerance and the interesting gap is a coincidence.
+///
+/// `max_linear_correction` is also 0.02 and can be ruled out without a run: it is read only at
+/// `solver/mod.rs:631` and `:787`, both inside the split-impulse path, which the default
+/// configuration does not take (`use_tgs_soft` is on).
+///
+/// What IS at gap 0.020 remains unexplained. See
+/// `is_the_frame_70_event_really_a_collapse` for what the failure actually looks like.
+#[test]
+#[ignore = "measurement, not a gate — long (~4 min)"]
+fn does_the_fast_collapse_follow_the_warm_start_tolerance() {
+    eprintln!("\n=== 2x12x2 on ground 20: collapse frame vs (lateral gap, warm-start tolerance) ===");
+    eprintln!("{:>10}  {:>14}  {:>14}  {:>14}", "gap (m)", "tol 0.02 (def)", "tol 0.05", "tol 0.002");
+    for gap in [0.01f32, 0.015, 0.02, 0.025, 0.03, 0.04, 0.05, 0.06] {
+        let mut cells = Vec::new();
+        for tol in [0.02f32, 0.05, 0.002] {
+            let (mut world, bodies, origins) = scene_crate_pile_spaced(2, 12, 1.0 + gap);
+            world.solver.warm_start_match_tolerance = tol;
+            let r = run(&mut world, &bodies, &origins, 3000, 0.5);
+            cells.push(match r.blew_up_at {
+                Some(f) => f.to_string(),
+                None => "-".to_string(),
+            });
+        }
+        eprintln!(
+            "{:>10.3}  {:>14}  {:>14}  {:>14}",
+            gap, cells[0], cells[1], cells[2]
+        );
+    }
+}
+
+/// Is the frame-70 event a collapse at all, or a transient that grazes the 0.5 threshold?
+///
+/// `run()` records `blew_up_at` at the first frame `max|v|` reaches 0.5, which cannot tell a
+/// topple from a settling twitch. Before any more of this session's budget goes into explaining
+/// the frame-70 cell, it is worth knowing whether there is anything there to explain.
+///
+/// # Measured: both, and the distinction matters
+///
+/// There is a genuine collapse, but it is not at frame 70 — the tower is still standing there and
+/// only topples around frame 200-250. Frame 70 is a single-frame velocity transient that trips a
+/// first-crossing detector. So "two orders of magnitude faster than every other collapse" was an
+/// artefact of the detector; one order is the honest figure.
+///
+/// What is genuinely different is the SIGNATURE, and this is the useful part:
+///
+/// ```text
+///   frame     max|v|      lean   tilt°   pen_max   pen_mean
+///       4    0.05856  0.005243   0.066  0.000457   0.000153
+///      31    0.08401  0.012192   1.068  0.009799   0.000391
+///      95    0.12302  0.021434   3.179  0.016274   0.000764
+///     143    0.45800  0.045185   5.867  0.017525   0.001094
+///     207    2.56732  0.437135  26.112  0.147483   0.006310
+/// ```
+///
+/// The tilt climbs from the first frames and `pen_max` reaches three times the 0.005 slop by
+/// frame 95. Compare the slow buckling of a 4×12×4 block at exact contact, where `pen_max` sits
+/// flat at 0.0055 and everything looks healthy for 1559 frames before a sudden topple. This stack
+/// is progressively sinking and leaning from the start, which is a sustained failure rather than
+/// a noise-seeded exponential — a different mechanism, and one the observables see clearly from
+/// about frame 30 rather than only in hindsight.
+#[test]
+#[ignore = "measurement, not a gate — prints a trace"]
+fn is_the_frame_70_event_really_a_collapse() {
+    let (mut world, bodies, origins) = scene_crate_pile_spaced(2, 12, 1.02);
+    trace("2x12x2, 2cm gap, ground 20", &mut world, &bodies, &origins, 400);
+}
+
 /// Negative control for `realistic_crate_stack_stays_standing`: the same scene, same horizon,
 /// same assertions, with the solver starved to 4 sweeps. It must FAIL.
 ///

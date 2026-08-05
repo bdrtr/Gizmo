@@ -1084,8 +1084,26 @@ eklemekten ibaret.
     tolerans (speculative margin) ver → tam temasta 4 nokta. Tek satır, ama narrowphase'in
     tamamını ve determinizm hash'ini etkiler. Bu oturumun kalite ölçütü tam olarak bunu
     ölçmek için var; ölçmeden uygulanmayacak (bkz. `ba9224b`'deki ders).
-  - ⬜ **N2 (2 cm boşlukta 70. karede çöküş) hâlâ açık.** `where_is_the_fast_collapse_band`
-    yazıldı, koşulmadı.
+  - 🔄 **N2 (2 cm yanal boşlukta hızlı çöküş) — daraltıldı, sebep hâlâ açık.** Boşluk taraması
+    (`where_is_the_fast_collapse_band`, zemin 20): 0.010/0.015/0.025/0.030/0.040/0.050/0.060
+    hepsi 3000 kare duruyor, **yalnız 0.020 çöküyor** — tek hücrelik keskin bir sivri.
+
+    > **`warm_start_match_tolerance` ÇÜRÜTÜLDÜ** (varsayılanı da 0.02 olduğu için baş şüpheliydi).
+    > Toleransı 0.002 / 0.02 / 0.05 yapınca çöküş **aynı boşlukta ve aynı karede** kalıyor —
+    > 25× aralık, sıfır etki. Rastlantıymış.
+    > `max_linear_correction` da 0.02, ama koşmadan eleniyor: yalnız `solver/mod.rs:631` ve
+    > `:787`'de, ikisi de varsayılanın girmediği split-impulse yolunda.
+
+    > **"70. kare" ölçüm aracının kendi kusuruydu, düzeltildi.** `run()`, `max|v|`'nin 0.5'i ilk
+    > geçtiği kareyi yazıyor; 70'te tek karelik bir hız sivrisi var, kule hâlâ ayakta ve gerçek
+    > devrilme ~200-250. Yani "diğerlerinden iki kat büyüklük hızlı" değil, bir kat.
+
+    > **Ama İMZASI gerçekten farklı, ve asıl kullanışlı olan bu.** Tilt ilk karelerden itibaren
+    > düzenli tırmanıyor (95. karede 3.2°) ve `pen_max` 95. karede slop'un 3 katına (0.0163)
+    > çıkıyor. Karşılaştır: tam temastaki 4×12×4 yavaş burkulmasında `pen_max` 1559 kare boyunca
+    > 0.0055'te DÜZ kalıp sonra aniden deviriyor. Bu sahne baştan itibaren batıyor ve yatıyor —
+    > gürültü-tohumlu üstel değil, sürekli bir yetmezlik. Yani **ayrı bir mekanizma**, ve
+    > gözlemciler onu 30. kareden itibaren görüyor.
 
 - ⬜ **C2** — Broadphase refit (`pipeline.rs:145-176` her substep sıfırdan kuruyor, statikler dahil).
 - ⬜ **C3** — `physics-rigid/src/system.rs:149-158` O(N²) writeback → handle→index map.
