@@ -27,3 +27,8 @@ rayon = "1.11.0"
 
 [dev-dependencies]
 proptest = { workspace = true }
+# Parses `soft_body.wgsl` and computes its struct layouts under the WGSL rules, so the
+# CPU-side `#[repr(C)]` records can be checked against the shader WITHOUT a GPU. See
+# `tests/wgsl_layout.rs` — this caught an 80-vs-96 byte stride mismatch that no test,
+# and no CI job, could have caught otherwise.
+naga = { version = "29", features = ["wgsl-in"] }
