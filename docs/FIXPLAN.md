@@ -1114,6 +1114,25 @@ eklemekten ibaret.
     > gürültü-tohumlu üstel değil, sürekli bir yetmezlik. Yani **ayrı bir mekanizma**, ve
     > gözlemciler onu 30. kareden itibaren görüyor.
 
+- ⬜ **BÜYÜME HIZI İÇİN EN GÜÇLÜ ADAY (hipotez, doğrulanmadı): teğet kanalında konum terimi YOK.**
+  `solver/tgs.rs`'te `Prepared` normal için `pen0` taşıyor ve üç sweep de onu bias'a sürüyor
+  (`:580`, `:705`, `:820`) — depenetrasyonu sağlayan ve TGS'i çalıştıran şey bu. **Teğet için
+  karşılığı yok:** üç sürtünme çözümü de saf `acc_t − rel·t/k_t` (`:618-627`, `:748-757`,
+  `:862-871`), yani yalnız hız düzeyinde. Sürtünme teğetsel HIZA direniyor, teğetsel
+  YER DEĞİŞTİRMEYE değil.
+
+  > Bir yığında bunun anlamı: bir kutu yanal olarak δ kadar kaydıktan sonra onu geri çeken
+  > hiçbir şey yok. Her substep'in artık kayması KALICI — cırcır gibi birikiyor.
+
+  > **Kayıtlı bütün çürütmelerle tutarlı olması bu adayı öne çıkarıyor:** sürtünmenin
+  > KARARLILAŞTIRICI olması (hıza direniyor, o yüzden kaldırınca felaket), buna rağmen
+  > instabilitenin sürmesi (konum terimi yok), ve warm-start'ı SIKMANIN durumu KÖTÜLEŞTİRMESİ
+  > (birikmiş teğet impuls, teğet kanalının sahip olduğu tek hafıza).
+
+  Doğrulama: lean büyümesinin birikmiş teğetsel kaymayla ilişkisini ölç; ya da teğete
+  konum-düzeyi bir terim ekleyip büyüme hızının düşüp düşmediğine bak. İkincisi solver
+  cerrahisi ve determinizm hash'ini oynatır.
+
 - ✅ **Ölçüm aracı denetlendi — tablolar geçerli** *(2026-08-06)*. `pipeline.rs` yazma
   geri-dönüşü uyku bayrağına bakmıyor: aktif bir adadaki her dinamik üyenin hızını yazıyor,
   ama integrator uyuyanı atlıyor → uyuyan bir cisim hiç etki etmeyeceği ve hiç sönmeyeceği bir
