@@ -1910,6 +1910,305 @@ fn does_a_bigger_ground_deliver_a_bigger_birth_kick() {
     }
 }
 
+/// Is the lean accumulated SLIDING at the interfaces, or accumulated ROTATION of the boxes?
+///
+/// This decides the leading hypothesis for the growth rate. `solver/tgs.rs` gives the normal
+/// channel a position-level term — `Prepared::pen0`, driven into the bias by all three sweeps —
+/// and gives the tangential channel nothing: every friction solve is plain `acc_t - rel·t/k_t`,
+/// velocity-level only. Numerical slip at a resting contact therefore never gets corrected, so
+/// it should creep and ratchet. If that is the mechanism, the column's lean is the sum of its
+/// interface slips and the boxes stay nearly level.
+///
+/// Against that, the root-cause note in `soak_and_golden.rs` describes the mode as a chain of
+/// relative rotations. If the lean is rotation-dominated instead, the missing tangential position
+/// term is not what is driving it, however real the omission is.
+///
+/// Both cannot be true, so this measures which.
+///
+/// - `slip` = Σ over interfaces of the horizontal offset between consecutive boxes. This is the
+///   lean a pure sliding mode would produce.
+/// - `path` = Σ over interfaces and frames of |change in that offset|. If sliding ratchets one
+///   way, `path ≈ |slip|`; if it oscillates around zero, `path ≫ |slip|`. This is what tells
+///   creep from jitter, and no single-frame reading can.
+/// - `tilt` = Σ of per-box tilt angles × box height. This is the lean a pure rotation mode would
+///   produce.
+/// - `lean` = the top box's actual horizontal displacement, for comparison against the two.
+///
+/// # Measured: the ratchet is refuted, and the decomposition was the wrong question
+///
+/// At 2200 frames on a 1×12×1 column, ground 200: `slip` (net) 0.0216, `path` 0.4622 — a ratio of
+/// 21, so the interfaces micro-slide continuously but back and forth, not one way. `slip` and
+/// `tilt` also track each other at a near-constant ratio (0.0216 / 0.0191), so they are two
+/// measurements of one coupled rocking mode rather than two competing modes.
+///
+/// And `path` does not discriminate: at frame 2200 the SURVIVING realisations have accumulated
+/// *more* of it (0.521 on ground 20, 0.480 for 2×12×2 on ground 20) than the collapsing ones
+/// (0.462, 0.400). What separates them is the sustained amplitude — net lean and tilt are 3–18×
+/// larger on the 200 m ground, already at frame 200, and stay that way for two thousand frames.
+///
+/// What survives of the hypothesis: the contact never LOCKS. Real static friction would hold a
+/// resting interface still; here it micro-slides forever, which is what a tangential channel with
+/// no position-level term does. That is a real defect. It is just not, on its own, what decides
+/// whether the stack falls over.
+#[test]
+#[ignore = "measurement, not a gate — prints a trace"]
+fn is_the_lean_slip_or_rotation() {
+    // The 200 m ground, because that is the realisation that actually collapses (frame 2328) and
+    // the growth is what is being decomposed.
+    // Both grounds for the single column, because the discriminating question is whether the
+    // micro-sliding differs between the realisation that survives (20) and the one that
+    // collapses (200). If the slip path accumulates at the same rate in both, the sliding is a
+    // property of every resting stack rather than the thing that decides its fate.
+    for (label, side, ground) in [
+        ("1x12x1", 1u32, 20.0f32),
+        ("1x12x1", 1, 200.0),
+        ("2x12x2", 2, 20.0),
+        ("2x12x2", 2, 200.0),
+    ] {
+        let (mut world, bodies, origins) = scene_crate_pile(side, 12);
+        world.colliders[0] = Collider::box_collider(Vec3::new(ground, 1.0, ground));
+
+        // One column's worth of body indices, bottom to top: the x=0,z=0 column. scene_crate_pile
+        // lays out y outermost, then x, then z, so the column stride is side*side.
+        let column: Vec<usize> = (0..12).map(|y| bodies[(y * side * side) as usize]).collect();
+
+        eprintln!("\n=== {label} on ground {ground}: lean decomposition ===");
+        eprintln!(
+            "{:>6}  {:>12}  {:>12}  {:>12}  {:>12}  {:>10}",
+            "frame", "lean(top)", "slip(sum)", "slip path", "tilt(sum)", "max|v|"
+        );
+
+        let mut prev_offsets = vec![Vec3::ZERO; column.len() - 1];
+        let mut path = 0.0f32;
+        for f in 0..2400 {
+            world.step(DT).ok();
+
+            let mut slip_sum = 0.0f32;
+            for (k, w) in column.windows(2).enumerate() {
+                let d = world.transforms[w[1]].position - world.transforms[w[0]].position;
+                let off = Vec3::new(d.x, 0.0, d.z);
+                if !off.is_finite() {
+                    break;
+                }
+                slip_sum += off.length();
+                path += (off - prev_offsets[k]).length();
+                prev_offsets[k] = off;
+            }
+
+            // Rotation contribution: each box's tilt tips everything above it by height × angle.
+            let tilt_sum: f32 = column
+                .iter()
+                .map(|&i| {
+                    let up = world.transforms[i].rotation.mul_vec3(Vec3::Y);
+                    up.dot(Vec3::Y).clamp(-1.0, 1.0).acos() // box height is 1.0, so angle == offset
+                })
+                .sum();
+
+            if f % 200 == 0 || f == 2399 {
+                let o = observe(&world, &bodies, &origins);
+                let top = *column.last().unwrap();
+                let d = world.transforms[top].position - origins[(11 * side * side) as usize];
+                eprintln!(
+                    "{:>6}  {:>12.6}  {:>12.6}  {:>12.6}  {:>12.6}  {:>10.4}",
+                    f,
+                    Vec3::new(d.x, 0.0, d.z).length(),
+                    slip_sum,
+                    path,
+                    tilt_sum,
+                    o.max_speed
+                );
+                if !o.max_speed.is_finite() || o.max_speed > 1.0 {
+                    eprintln!("  collapsed — stopping");
+                    break;
+                }
+            }
+        }
+    }
+}
+
+/// Does the SETTLED contact jitter more on a bigger ground?
+///
+/// `is_the_lean_slip_or_rotation` refutes two stories and points at a third. It refutes the
+/// ratchet (accumulated slip path oscillates: 21× more total motion than net displacement) and
+/// it refutes slip path as the discriminator (the SURVIVING realisations accumulate *more* of it
+/// — 0.521 on ground 20 against 0.462 on ground 200 at frame 2200). What separates survival from
+/// collapse is the sustained AMPLITUDE: on the 200 m ground the column's net lean and tilt are
+/// 3–18× larger, and they are already that much larger at frame 200 and stay there for two
+/// thousand frames before it goes over.
+///
+/// A one-time kick cannot set a sustained amplitude, and
+/// `does_a_bigger_ground_deliver_a_bigger_birth_kick` measured the kick as flat anyway. A
+/// sustained amplitude needs a sustained noise source that scales with the ground's size — which
+/// is what the precision hypothesis actually predicts, and which I dropped too early when the
+/// birth-manifold defect turned up. Contact points on a 200 m ground are computed from world
+/// coordinates ten times larger than on a 20 m one, so their absolute rounding error is ten times
+/// larger, every frame, forever.
+///
+/// This measures it where `how_many_points_does_a_settled_interface_carry` could not: not whether
+/// the settled manifold has the right shape, but how much it MOVES frame to frame when nothing
+/// physical is moving. The stack is held awake so the interface keeps being regenerated.
+///
+///   - jitter scaling with the ground's half-extent ⇒ the sustained noise floor is precision, and
+///     that is the ground-size mechanism
+///   - jitter flat in the ground's half-extent ⇒ precision is refuted for good and the sustained
+///     amplitude difference has some other source
+#[test]
+#[ignore = "measurement, not a gate — prints a table"]
+fn does_a_settled_contact_jitter_more_on_a_bigger_ground() {
+    eprintln!("\n=== settled 2-box stack, per-frame jitter of the GROUND interface (600 frames) ===");
+    eprintln!(
+        "{:>10}  {:>16}  {:>16}  {:>16}",
+        "ground", "Σ|Δpoint|", "Σ|Δpenetration|", "max|Δpoint|"
+    );
+    for h in [5.0f32, 20.0, 50.0, 100.0, 200.0, 500.0] {
+        let mut world = PhysicsWorld::new();
+        add_ground_sized(&mut world, h);
+        let no_bounce = PhysicsMaterial {
+            restitution: 0.0,
+            ..Default::default()
+        };
+        add_box(&mut world, 1, Vec3::new(0.0, 0.5, 0.0), 0.5, no_bounce);
+        add_box(&mut world, 2, Vec3::new(0.0, 1.5, 0.0), 0.5, no_bounce);
+
+        // Settle first, awake throughout — a dormant pair skips narrowphase and reports nothing.
+        for _ in 0..240 {
+            for i in 1..world.entities.len() {
+                world.rigid_bodies[i].wake_up();
+            }
+            world.step(DT).ok();
+        }
+
+        let ground_points = |w: &PhysicsWorld| -> Vec<(Vec3, f32)> {
+            let mut v: Vec<(Vec3, f32)> = w
+                .collision_events()
+                .iter()
+                .filter(|e| e.entity_a.id() == 0 || e.entity_b.id() == 0)
+                .flat_map(|e| e.contact_points.iter())
+                .map(|c| (c.point, c.penetration))
+                .collect();
+            v.sort_by(|a, b| {
+                (a.0.x, a.0.z)
+                    .partial_cmp(&(b.0.x, b.0.z))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            v
+        };
+
+        let mut prev = ground_points(&world);
+        let (mut sum_p, mut sum_d, mut max_p) = (0.0f32, 0.0f32, 0.0f32);
+        for _ in 0..600 {
+            for i in 1..world.entities.len() {
+                world.rigid_bodies[i].wake_up();
+            }
+            world.step(DT).ok();
+            let now = ground_points(&world);
+            if now.len() == prev.len() {
+                for (a, b) in prev.iter().zip(&now) {
+                    let d = (b.0 - a.0).length();
+                    sum_p += d;
+                    max_p = max_p.max(d);
+                    sum_d += (b.1 - a.1).abs();
+                }
+            }
+            prev = now;
+        }
+        eprintln!(
+            "{:>10.0}  {:>16.6e}  {:>16.6e}  {:>16.6e}",
+            h, sum_p, sum_d, max_p
+        );
+    }
+}
+
+/// Is the ground's half-extent a mechanism at all, or just a way of drawing a different sample?
+///
+/// Four candidate mechanisms for the ground-size sensitivity have now been measured and refuted:
+/// contact-generation precision (a settled interface is bit-stable at every ground size,
+/// `does_a_settled_contact_jitter_more_on_a_bigger_ground`); the birth kick's magnitude (flat to
+/// 0.58% across 20 → 200, `does_a_bigger_ground_deliver_a_bigger_birth_kick`); a tangential
+/// ratchet (the slip oscillates 21:1, `is_the_lean_slip_or_rotation`); and accumulated slip as
+/// the discriminator (the surviving runs accumulate *more* of it).
+///
+/// What is left is that there is no mechanism: half-extent 20 and 200 are two draws from a
+/// distribution, and the instability is chaotic enough that any perturbation decorrelates them.
+///
+/// This is the test that settles it, and the design matters. Instead of comparing 20 against 200,
+/// compare 20.0 against 20.001 — a one-millimetre change to a 40-metre static box, which no
+/// mechanism proportional to size could possibly notice.
+///
+///   - **If tiny perturbations scatter the outcome as widely as 20 → 200 does**, ground size is
+///     not a mechanism, N1 is a sampling artefact, and the correct way to report anything about
+///     this scene class is a distribution over an ensemble rather than any single run's verdict.
+///   - **If tiny perturbations give consistent outcomes** and only large size changes move them,
+///     there is a mechanism and it is still unidentified.
+///
+/// # Measured: it is BOTH, and neither answer alone was right
+///
+/// ```text
+///  half-extent   blew_up_at   peak_lean        half-extent   blew_up_at   peak_lean
+///       20.000       -          0.0104             128.000       -          0.0182
+///       20.001       -          0.0140             130.000       -          0.0186
+///       20.010       -          0.0098             140.000     2312         10.1681
+///       20.100       -          0.0110             150.000     2875          4.2182
+///       21.000       -          0.0104             160.000       -          0.0178
+///       50.000       -          0.0186             175.000       -          0.0186
+///      100.000       -          0.0142             190.000       -          0.0178
+///      110.000       -          0.0233             200.000     2328         10.0384
+///      120.000       -          0.0239
+/// ```
+///
+/// **A millimetre does not decorrelate anything.** 20.000 through 21.000 give the same outcome and
+/// peak leans within 0.004 of each other. So the instability is not so chaotic that any
+/// perturbation reshuffles it, and H-C — "ground size has no mechanism, it just draws a different
+/// sample" — is refuted.
+///
+/// **But there is no threshold either.** 140 and 150 collapse, 160, 175 and 190 stand, 200
+/// collapses. My own intermediate reading of this table said the mechanism "switches on between
+/// 100 and 200"; bisecting shows a scattered failure region, not a switch.
+///
+/// **What the size actually does is raise the resting amplitude**, and that part is orderly: peak
+/// lean sits near 0.011 up to half-extent 21, and near 0.018–0.024 from 50 upward, where it
+/// saturates. Collapses appear only once the amplitude is in the upper band, and *which* sizes in
+/// that band collapse is chaotic.
+///
+/// So N1 is a real size-dependent effect on the amplitude, with a chaotic outcome layered on top
+/// of it. What raises the amplitude is still unidentified: contact-generation precision is
+/// refuted for a settled interface (`does_a_settled_contact_jitter_more_on_a_bigger_ground`
+/// measures zero jitter at every size), though only on a two-box stack that reaches an exact
+/// fixed point — which is a weaker test than the tall column this is about, and is the loose end
+/// worth pulling next.
+#[test]
+#[ignore = "measurement, not a gate — long (~6 min)"]
+fn is_ground_size_a_mechanism_or_just_a_seed() {
+    eprintln!("\n=== 1x12x1, default solver, 3000 frames: outcome vs tiny ground perturbations ===");
+    eprintln!(
+        "{:>12}  {:>12}  {:>11}  {:>11}",
+        "ground half", "blew_up_at", "peak|v|", "peak_lean"
+    );
+    // The first group is physically indistinguishable — a millimetre on a 40 m box. The second
+    // spans the range that produced the original observation.
+    for h in [
+        20.0f32, 20.001, 20.01, 20.1, 21.0, // "the same" ground
+        50.0, 100.0, // still quiet
+        // Bisecting what first looked like a threshold between 100 and 200. It is not one — see
+        // the table in the doc comment. 128 is in the list because a boundary landing on a power
+        // of two would have pointed at a float exponent; it does not.
+        110.0, 120.0, 128.0, 130.0, 140.0, 150.0, 160.0, 175.0, 190.0, 200.0,
+    ] {
+        let (mut world, bodies, origins) = scene_tower_on_ground(12, h);
+        let r = run(&mut world, &bodies, &origins, 3000, 0.5);
+        eprintln!(
+            "{:>12.3}  {:>12}  {:>11.3}  {:>11.4}",
+            h,
+            match r.blew_up_at {
+                Some(f) => f.to_string(),
+                None => "-".to_string(),
+            },
+            r.peak_speed,
+            r.peak_lean
+        );
+    }
+}
+
 /// Negative control for `realistic_crate_stack_stays_standing`: the same scene, same horizon,
 /// same assertions, with the solver starved to 4 sweeps. It must FAIL.
 ///
