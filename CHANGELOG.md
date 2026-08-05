@@ -211,6 +211,18 @@ Upgrading from `0.8.0`:
   `&mut T` to the same row — undefined behaviour with no panic and no compile error.
   It now panics like the other paths, as does `query_entity` for symmetry.
 
+### Fixed — animation
+
+- **`Track::sample` panicked on a single-keyframe track with a `NaN`.** `idx.clamp(1, len - 1)`
+  becomes `0.clamp(1, 0)` when the track holds one keyframe, and `Ord::clamp` asserts
+  `min <= max`. It is reachable because a `NaN` — in the sampled time or in the track's own
+  timestamps — makes both of `sample`'s early-return comparisons false, so control falls
+  through to the clamp. The inline comment above that line described the clamp as the NaN
+  guard; it was the thing that panicked.
+
+  `Track::new` rejects non-finite timestamps, but `Track`'s fields are public, so a
+  hand-built or deserialized track bypasses it. Found while documenting the crate for D4.
+
 ### Fixed — sleeping
 
 - **Waking now travels a jointed mechanism in one step.** A sleeping body does not integrate,

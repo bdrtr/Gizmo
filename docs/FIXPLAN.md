@@ -876,14 +876,15 @@ eklemekten ibaret.
   > düzeltti (`Hips` kontrolü çözümlenmiş eklemin adında değil, `track.target_node_name`
   > üzerinde) — bu hata modundan kimse muaf değil.
 
-- ⬜ **D4-followup — `Track::sample` tek keyframe + NaN'de PANİKLİYOR.** Doküman turunda
+- ✅ **D4-followup — `Track::sample` tek keyframe + NaN'de PANİKLİYORDU** *(düzeltildi 2026-08-05)*. Doküman turunda
   bulundu, gerçek koda karşı doğrulandı (probe: `single_kf_nan_time panicked=true`,
   `single_nan_timestamp panicked=true`, iki-keyframe kontrolü `false`). `clip.rs:218`
   `idx.clamp(1, len - 1)` yapıyor; `len == 1` ve NaN her iki erken-dönüşü de atlattığında
   bu `0.clamp(1, 0)` oluyor ve `Ord::clamp` `min > max` diye panikliyor. İronik olarak
   `clip.rs:213-215`'teki yorum bu clamp'in NaN koruması olduğunu söylüyor — panikleyen şey o.
-  Şimdilik yalnızca BELGELENDİ (doküman commit'ine davranış değişikliği karıştırmamak için);
-  düzeltme tek satırlık bir `len < 2` erken-dönüşü + regresyon testi.
+  Düzeltme: `len < 2` erken-dönüşü (tek keyframe'in cevabı zaten o keyframe) + 3 regresyon
+  testi. Fix geri alınınca `a_single_keyframe_track_does_not_panic_on_nan` gerçekten
+  `min > max. min = 1, max = 0` ile kırmızıya dönüyor.
 - ✅ **D5 — `glam` 0.29 → 0.32 + `bevy_reflect` 0.15 → 0.19** *(2026-08-04)*. Grafta artık
   TEK glam var (0.32.1). Fizik kıpırdamadı: hash `EF6E4AC3644BF3BA`, `golden_state.rs`'in
   hiçbir değeri yeniden kutsanmadı — bir matematik kütüphanesinin major bump'ı sessiz sayısal

@@ -209,6 +209,15 @@ impl Track {
             return self.get_value(self.keyframe_timestamps.len() - 1);
         }
 
+        // Tek keyframe'de segment YOKTUR, ve buraya ancak bir NaN ile gelinebilir: NaN her
+        // iki karşılaştırmayı da false yaptığı için yukarıdaki iki erken-dönüş atlanır.
+        // Aşağıdaki clamp o durumda `0.clamp(1, 0)` olur ve `Ord::clamp` `min > max` diye
+        // PANİKLER — yani NaN koruması sandığımız satırın kendisi panikleyen şeydi. Tek
+        // keyframe'in cevabı zaten o keyframe.
+        if self.keyframe_timestamps.len() < 2 {
+            return self.get_value(0);
+        }
+
         // Find the segment.
         let idx = self.keyframe_timestamps.partition_point(|&ts| ts <= t);
         // `idx` is in `1..len` here (the t-before-first / t-after-last cases
@@ -668,3 +677,58 @@ mod tests {
     }
 }
 
+
+#[cfg(test)]
+mod nan_sampling {
+    use super::*;
+    use gizmo_math::Vec3;
+
+    fn track(timestamps: Vec<f32>) -> Track {
+        let n = timestamps.len();
+        Track {
+            target_name: "probe".into(),
+            keyframe_timestamps: timestamps,
+            keyframes: Keyframes::Translation(vec![Vec3::ZERO; n]),
+            interpolation: Interpolation::Linear,
+            tangents: None,
+        }
+    }
+
+    /// `Track`'s fields are public, so a caller can build a track `Track::new` would have
+    /// rejected. `sample` was documented as bounds-checking its way out of that — but it
+    /// clamped with `idx.clamp(1, len - 1)`, and `Ord::clamp` itself asserts `min <= max`.
+    /// With a single keyframe that is `0.clamp(1, 0)`, reachable whenever a NaN makes both
+    /// early-return comparisons false.
+    ///
+    /// Both directions matter: a NaN in the sampled time, and a NaN in the track's own
+    /// timestamps (which is how a hand-built or deserialized track arrives broken).
+    #[test]
+    fn a_single_keyframe_track_does_not_panic_on_nan() {
+        assert!(matches!(
+            track(vec![0.0]).sample(f32::NAN),
+            InterpolatedValue::Translation(_)
+        ));
+        assert!(matches!(
+            track(vec![f32::NAN]).sample(0.5),
+            InterpolatedValue::Translation(_)
+        ));
+    }
+
+    /// The multi-keyframe path was never the broken one — pinned so the fix cannot be
+    /// "mistakenly" generalised into an early return that swallows real segments.
+    #[test]
+    fn a_multi_keyframe_track_still_samples_its_segments() {
+        let t = track(vec![0.0, 1.0, 2.0]);
+        assert!(matches!(t.sample(f32::NAN), InterpolatedValue::Translation(_)));
+        assert!(matches!(t.sample(0.5), InterpolatedValue::Translation(_)));
+        assert!(matches!(t.sample(-1.0), InterpolatedValue::Translation(_)));
+        assert!(matches!(t.sample(99.0), InterpolatedValue::Translation(_)));
+    }
+
+    /// An empty track still has no value to give.
+    #[test]
+    fn an_empty_track_still_returns_none() {
+        assert!(matches!(track(vec![]).sample(0.0), InterpolatedValue::None));
+        assert!(matches!(track(vec![]).sample(f32::NAN), InterpolatedValue::None));
+    }
+}
