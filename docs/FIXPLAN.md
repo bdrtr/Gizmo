@@ -1138,7 +1138,37 @@ eklemekten ibaret.
   > o arayüzde momentum ve enerji korunmuyor. Kısmen uyuyan bir kolon tam da bunu yaşıyor
   > (trace'lerde `asleep` 0 ile 6 arasında titriyor).
   >
-  > **Standart çare:** uyuyan cismi çözümde statik gibi (sonsuz kütle) ele almak. ÖLÇÜLMEDİ.
+  > ⚠️ **Standart çare DENENDİ, ÖLÇÜLDÜ, GERİ ALINDI** *(2026-08-06)*. Uyuyan cismi çözümde
+  > statik gibi ele almak (`solve_inv_mass` / `solve_inv_inertia` / `solve_movable`, beş çağrı
+  > yeri). Yükseklik-12'de **iyi görünüyordu:** `height_12_stacks_stay_standing` 5/6 çöküşten
+  > 2/6'ya indi, kalan ikisi ~2× geç çöktü, mevcut soak'ların HEPSİ yeşil kaldı (önceki
+  > denemenin bozduğu `soak_demo_tower_awake_stays_upright` dahil), determinizm yeni hash'te
+  > sağlamdı (`D436C9CF320FAF85`, 3/3).
+  >
+  > **Sonra yükseklik-6 topluluğu** (varsayılan konfigürasyon, 3000 kare, 9 hücre):
+  >
+  > | blok | zemin | düzeltmesiz | düzeltmeli |
+  > |---|---|---|---|
+  > | 2×6×2 | 20 | — | **1249** |
+  > | 4×6×4 | 100 | — | **2724** |
+  > | 4×6×4 | 200 | — | **1851** |
+  > | (kalan 6 hücre) | | — | — |
+  > | **toplam** | | **0/9** | **3/9** |
+  >
+  > Yükseklik-6, motorun şu an GÜVENİLİR taşıdığı sınıf ve ≤~12 zarfının rahatça içinde.
+  > Çalışan bir sınıfı, yükseklik-12'deki kısmi bir iyileşme için takas etmek düzeltme değil.
+  > Geri alındı; motorda değişiklik yok.
+  >
+  > **Neden geri tepiyor (hipotez, devralan için):** kolonun ortasındaki sonsuz kütleli bir
+  > uyuyan, kütle dağılımında bir SÜREKSİZLİK; herhangi bir cisim uyur uymaz yığının dinamiği
+  > birden değişiyor. İki ele alış da yanlış — sonlu kütle + entegrasyonsuz korunumsuz, sonsuz
+  > kütle ise basamak değişimi. Bu da asıl koşulun **yığının KISMEN uyuyabilmesi** olduğunu
+  > gösteriyor. Cisimler `integrator.rs`'te tek tek uykuya dalıyor; yalnız UYANMA ada-kolektif
+  > (`pipeline.rs`). Ölçülen tek kusursuz konfigürasyon — her şeyin uyanık tutulması — tam
+  > olarak kısmi uykunun var olmadığı durum.
+  >
+  > **Sıradaki aday:** bir cisim ancak ADASININ TAMAMI uyuyabildiğinde uyusun. Daha büyük bir
+  > değişiklik (entegrasyon anında ada üyeliği gerekiyor) ama doğru olanı bu görünüyor.
 
   > ⚠️ **Denenen ve ÇÜRÜYEN ilk düzeltme (uygulandı, ölçüldü, geri alındı).** "Uyanmayacak
   > uyuyan cisme yazma yapma" (`pipeline.rs` writeback'inde tek koşul). 1×12×1'de üç çöküşü
