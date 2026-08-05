@@ -855,9 +855,20 @@ eklemekten ibaret.
 - ⬜ **D3** — Click-to-try WASM demosu (GitHub Pages).
 - 🔄 **D4** — `#![warn(missing_docs)]` Stage A'da. **1. parti bitti (2026-08-05):**
   `gizmo-math`, `gizmo-net`, `gizmo-scene`, `gizmo-animation` sıfır eksik dokümanla ratchet
-  altında. Kalan: `gizmo-core` (351), `gizmo-physics-rigid` (303), `gizmo-physics-core` (243),
-  `gizmo-ai` (116), `gizmo-physics-dynamics` (93), `gizmo-physics-soft` (77) = **1183 öğe**.
-  (`gizmo-audio` zaten temizdi.)
+  altında. **2. parti bitti (2026-08-05):** `gizmo-physics-soft`, `gizmo-physics-dynamics` ve
+  `gizmo-ai` de ratchet altında. Kalan: `gizmo-core` (351), `gizmo-physics-rigid` (303),
+  `gizmo-physics-core` (243) = **897 öğe**. (`gizmo-audio` zaten temizdi.)
+
+  > **"Kendi sözleşmesini belgele" kuralı ölçülebilir şekilde işe yaradı.** Hata oranı öğe
+  > başına **0.21 → 0.11**'e düştü (1. parti: 177 öğede 38 yanlışlık; 2. parti: 297 öğede 33).
+  > Yakınsama 3 turdan **2 tura** indi. Şemaya eklediğim hesap-verme alanları da amacına
+  > ulaştı: ajanlar 79 modüller-arası iddia yaptıklarını ve **47'sinden vazgeçtiklerini**
+  > bildirdi — 1. partideki 38 hatanın çoğunu üreten davranış artık görünür ve kendini
+  > sınırlıyor. Onarımdan sonra `physics-soft`'ta doğrulanamayan modüller-arası iddia sıfır.
+  >
+  > Onarım turunun üç kategoriyi FARKLI ele alması belirleyiciydi: doğrulanamayan iddiayı
+  > yeniden doğrulamadan SİL, yanlış iddiayı doğrula-sonra-silmeyi-tercih-et, dolguyu ise
+  > SİLME (lint doküman istiyor) — yerine yük taşıyan bir şey yaz.
 
   > **Fan-out doküman yazmanın başarısızlık modu dolgu yazı DEĞİL.** Anti-filler talimatı
   > tuttu: üç tur boyunca dört crate'te sıfır dolgu bulundu. Bulunan şey **kendinden emin ve
