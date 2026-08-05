@@ -1063,10 +1063,19 @@ eklemekten ibaret.
   | 20.00 | 1 → 4 | −0.4878 |
   | 200.00 | 1 → 4 | −0.4988 |
 
-  > **N1 böyle açıklanıyor:** büyük zemin, temasın DOĞDUĞU substep'te daha büyük bir merkez-dışı
-  > tork darbesi veriyor; burkulma modu da kendisine verilen tohumu üstel olarak büyütüyor.
-  > Yani hedef "büyüme hızı" değil **TOHUM**, ve kayıtlı çalışmaların hepsi büyüme hızına
-  > nişan almıştı.
+  > ⚠️ **N1'i AÇIKLAMIYOR — bu benim düzeltmem.** Önce "büyük zemin → daha büyük merkez-dışı
+  > tork darbesi → daha erken çöküş" yazmıştım. Ofset büyüyor, ama DARBE büyümüyor. Birim küp
+  > için tek normal temasın verdiği açısal hız `6r·Δv/(1+6r²)`, ve bu **`r = 1/√6 = 0.408`'de
+  > MAKSİMUM** — ölçülen ofsetler tam oradan başlıyor, dışarı ittikçe değişmiyor.
+  > Ölçülen `|Δω|`: yarı-boyut 2'de 0.028351, 20'de 0.030458, 200'de 0.030636, 1000'de 0.030651.
+  > Bir yığının kaderini belirleyen iki zemin arasında **%0.58 tohum farkı**; deponun kendi
+  > ölçtüğü büyüme hızıyla (lean ~100 karede ikiye katlanıyor, λ ≈ 0.0069/kare) bu
+  > `ln(1.0058)/λ ≈ 0.8` karelik bir kayma öngörür. Gözlenen kayma en az 672 kare. Üç
+  > büyüklük mertebesi sapma. (`does_a_bigger_ground_deliver_a_bigger_birth_kick`)
+  >
+  > **Kusurun kendisi duruyor ve kendi başına düzeltilmeye değer:** motordaki her arayüz sıfır
+  > tilt sertliğiyle ve hak etmediği `Δω ≈ 0.03 rad/s`'lik bir darbeyle doğuyor — hem de doğru
+  > cevabı "hiçbir şey kıpırdamaz" olan bir sahnede. **N1 hâlâ açıklanmamış.**
 
   > **Yarı-boyut ~1.5'in altında arayüz hiç toparlamıyor** — GJK noktası merkeze düşüyor,
   > kutuyu torksuz tutuyor, kutu hiç batmıyor, `signed_depth` hiç pozitif olmuyor ve kırpma
@@ -1104,6 +1113,21 @@ eklemekten ibaret.
     > 0.0055'te DÜZ kalıp sonra aniden deviriyor. Bu sahne baştan itibaren batıyor ve yatıyor —
     > gürültü-tohumlu üstel değil, sürekli bir yetmezlik. Yani **ayrı bir mekanizma**, ve
     > gözlemciler onu 30. kareden itibaren görüyor.
+
+- ✅ **Ölçüm aracı denetlendi — tablolar geçerli** *(2026-08-06)*. `pipeline.rs` yazma
+  geri-dönüşü uyku bayrağına bakmıyor: aktif bir adadaki her dinamik üyenin hızını yazıyor,
+  ama integrator uyuyanı atlıyor → uyuyan bir cisim hiç etki etmeyeceği ve hiç sönmeyeceği bir
+  hız tutabiliyor. Bir patlama dedektörü bu donmuş sayıyı hareket sanabilirdi.
+  `Frame::max_speed_awake` + `Run::blew_up_at_awake` eklendi ve tüm yükseklik-12 hücreleri
+  yeniden koşuldu: **her hücrede iki sayı birebir aynı**. Yayımlanan tablolar etkilenmemiş.
+  `trip_lean`/`trip_tilt_deg` de eklendi, böylece dedektörün tetiklendiği an bir devrilme mi
+  yoksa bir seğirme mi olduğu okunabiliyor.
+  - ⬜ **Ayrı, küçük kusur:** uyuyan cisme yazılan hız uyandığında uygulanıyor — bayat bir
+    impuls. Tek `if` ile düzelir ama determinizm hash'ini oynatır; bu iş kapsamı dışında.
+
+- ✅ **Bayat doküman düzeltildi:** `ConstraintSolver::support_ordering` yorumu "VARSAYILAN
+  KAPALI" diyordu, `Default` ise `true` veriyor. Yığın kararlılığına bakan biri için önemli:
+  sıralama zaten devrede, "açmayı denesek mi" sorusu kapalı.
 
 - ⬜ **C2** — Broadphase refit (`pipeline.rs:145-176` her substep sıfırdan kuruyor, statikler dahil).
 - ⬜ **C3** — `physics-rigid/src/system.rs:149-158` O(N²) writeback → handle→index map.

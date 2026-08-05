@@ -245,13 +245,19 @@ pub struct ConstraintSolver {
     /// (pair-order-invariant). Bu, incremental-broadphase'in önünü açan uyku-determinizmi
     /// özelliğidir (docs/ENGINE.md §7).
     ///
-    /// VARSAYILAN KAPALI. Başlangıçta yüksek-yığın instabilitesini çözeceği umuluyordu
-    /// (Stage 1 "linchpin"), ancak ampirik ölçüm bunu ÇÜRÜTTÜ: sıralama patlama frame'ini
-    /// pek oynatmıyor (bkz. soak_and_golden.rs kök-neden notu — instabilite bir
-    /// under-convergence değil, metastable rezonans). Instabiliteyi çözmediği ve
-    /// per-substep BFS+sort maliyeti + determinizm çıktısını değiştirdiği için, ölçülmüş
-    /// bir fayda olmadan perf-duyarlı motorda VARSAYILAN AÇILMADI. Hazır ve test edildi;
-    /// incremental-broadphase işi başladığında pair-invariance için açılabilir.
+    /// **VARSAYILAN AÇIK** (`Default` `true` veriyor). Bu yorum uzun süre "VARSAYILAN KAPALI"
+    /// diyordu ve yanlıştı — 2026-08-06'da düzeltildi. Yığın kararlılığını inceleyen biri için
+    /// önemli bir fark: sıralama devrede, yani ada çözümü broadphase pair-emission sırasından
+    /// zaten bağımsız ve "sıralamayı açmayı denesek mi" sorusu kapalı.
+    ///
+    /// Başlangıçta yüksek-yığın instabilitesini çözeceği umuluyordu (Stage 1 "linchpin"), ancak
+    /// ampirik ölçüm bunu ÇÜRÜTTÜ: sıralama patlama frame'ini pek oynatmıyor (bkz.
+    /// soak_and_golden.rs kök-neden notu — instabilite bir under-convergence değil, metastable
+    /// rezonans). Asıl sağladığı şey belirlenimci, pair-emission'dan bağımsız bir toplam sıra;
+    /// incremental-broadphase işinin önünü açan uyku-determinizmi özelliği bu.
+    ///
+    /// Not: kapatmak `island_depth` hesabını KALDIRMAZ — `block_solver` açıkken BFS yine
+    /// koşuyor (yalnız permütasyon uygulanmıyor), çünkü adaptif sweep sayısı derinliğe bağlı.
     pub support_ordering: bool,
 
     /// Dönen ankrajlar (Box2D-v3 tekniği): her sweep'te temas ayrımını (separation) ve
