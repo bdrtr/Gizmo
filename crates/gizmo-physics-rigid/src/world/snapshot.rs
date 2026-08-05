@@ -14,6 +14,7 @@ impl PhysicsWorld {
             gravity_fields: self.gravity_fields.clone(),
             fluid_zones: self.fluid_zones.clone(),
             joints: self.joints.clone(),
+            weather: self.weather,
         }
     }
 
@@ -28,6 +29,7 @@ impl PhysicsWorld {
         self.gravity_fields.clone_from(&snap.gravity_fields);
         self.fluid_zones.clone_from(&snap.fluid_zones);
         self.joints.clone_from(&snap.joints);
+        self.weather = snap.weather;
     }
 
     /// Simülasyon durumunun DETERMINISTIK hash'i — rollback/replay desync tespiti + testler.

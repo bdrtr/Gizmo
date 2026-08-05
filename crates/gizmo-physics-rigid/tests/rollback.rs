@@ -391,3 +391,32 @@ fn rollback_restores_the_latched_joint_reference_pose() {
     );
 }
 
+/// `PhysicsWorld::weather` is a live input to the vehicle tyre model, and it cannot be
+/// recomputed from transforms or velocities — so by the rule written on [`WorldSnapshot`] it
+/// belongs in the snapshot.
+///
+/// It was the same omission as the joint state above, one field further along: gameplay
+/// switching from Sunny to Rain inside a rollback window left the re-simulation running vehicles
+/// under the friction limit of a weather it had already rolled back past. Invisible to
+/// `state_hash`, which hashes only transform/velocity/sleep, and invisible to the rigid
+/// pipeline itself, which never reads the value.
+#[test]
+fn snapshot_restores_the_weather() {
+    use gizmo_physics_rigid::world::Weather;
+
+    let mut world = PhysicsWorld::new();
+    world.weather = Weather::Sunny;
+    let snap = world.snapshot();
+
+    // Gameplay changes the weather after the snapshot, as it could mid-window.
+    world.weather = Weather::Rain;
+    assert_eq!(world.weather, Weather::Rain);
+
+    world.restore_snapshot(&snap);
+    assert_eq!(
+        world.weather,
+        Weather::Sunny,
+        "restore_snapshot must revert the weather — the vehicle tyre model scales its friction \
+         limit from it, so a rollback across a weather change resimulates under the wrong grip"
+    );
+}

@@ -580,4 +580,9 @@ pub struct WorldSnapshot {
     // İkisi de `state_hash`'e girmiyor (o yalnız transform/velocity/sleep karıştırıyor), yani
     // desync hızlara sızana kadar GÖRÜNMEZ — kopuk bir eklemde bu anında ve kalıcı.
     joints: Vec<crate::joints::Joint>,
+    // `weather` girdiği için: rigid pipeline onu okumuyor ama araç lastik modeli okuyor
+    // (sürtünme dairesi limitini ölçekliyor) ve transform/velocity'den TÜRETİLEMİYOR — yani
+    // yukarıdaki ekleme kuralının tam olarak kapsadığı şey. Rollback penceresi içinde hava
+    // değişirse re-simülasyon, çoktan geri alınmış bir havanın tutuşuyla koşuyordu.
+    weather: Weather,
 }
