@@ -40,8 +40,14 @@
 /// `Some(surface_y)` takes a buoyant swim step instead and returns immediately — none of the
 /// land gravity, ground-snap or step-climb logic runs in that branch.
 pub mod character;
+/// Requires the `ecs` feature.
+#[cfg(feature = "ecs")]
 pub mod oxygen;
+/// Requires the `ecs` feature.
+#[cfg(feature = "ecs")]
 pub mod ragdoll;
+/// Requires the `ecs` feature.
+#[cfg(feature = "ecs")]
 pub mod systems;
 /// Vehicle dynamics: a raycast-suspension car model.
 ///
@@ -53,7 +59,10 @@ pub mod vehicle;
 
 // Re-export common traits and structs
 pub use character::*;
+#[cfg(feature = "ecs")]
 pub use oxygen::*;
+#[cfg(feature = "ecs")]
 pub use ragdoll::*;
+#[cfg(feature = "ecs")]
 pub use systems::*;
 pub use vehicle::*;

@@ -3,14 +3,26 @@ name = "gizmo-physics-dynamics"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
-description.workspace = true
+description = "Gameplay dynamics for the Gizmo engine: vehicle model, character controller, ragdolls. Usable without an ECS."
+keywords = ["physics", "vehicle", "character-controller", "ragdoll", "gamedev"]
+categories = ["game-development", "simulation"]
 license.workspace = true
 repository.workspace = true
 readme.workspace = true
 
+[features]
+# Default ON — see `gizmo-physics-core`'s identical feature. OFF drops `gizmo-core` and with it
+# `systems` (the ECS drivers), `oxygen` and `ragdoll` — the last two take a `World` directly,
+# and ragdoll spawning creates entities, so neither is separable from the ECS. What stays is
+# the simulation maths: the vehicle model and the character controller.
+default = ["ecs"]
+ecs = ["dep:gizmo-core", "gizmo-physics-core/ecs", "gizmo-physics-rigid/ecs"]
+
 [dependencies]
-gizmo-core = { path = "../gizmo-core", version = "0.9.0" }
+gizmo-core = { path = "../gizmo-core", version = "0.9.0", optional = true }
 gizmo-math = { path = "../gizmo-math", version = "0.9.0" }
-gizmo-physics-core = { path = "../gizmo-physics-core", version = "0.9.0" }
-gizmo-physics-rigid = { path = "../gizmo-physics-rigid", version = "0.9.0" }
+# `default-features = false` on the physics deps: without it, turning `ecs` off here
+# would still drag `gizmo-core` in through their defaults. The `ecs` feature re-enables it.
+gizmo-physics-core = { path = "../gizmo-physics-core", version = "0.9.0", default-features = false }
+gizmo-physics-rigid = { path = "../gizmo-physics-rigid", version = "0.9.0", default-features = false }
 tracing = "0.1.44"

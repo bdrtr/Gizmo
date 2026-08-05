@@ -685,6 +685,7 @@ pub struct VehicleController {
     pub drivetrain: Drivetrain,
 }
 
+#[cfg(feature = "ecs")]
 impl gizmo_core::component::Component for VehicleController {}
 
 impl Default for VehicleController {

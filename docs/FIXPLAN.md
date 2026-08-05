@@ -853,16 +853,23 @@ eklemekten ibaret.
   description/keywords/categories'i de eklendi. **`gizmo-physics-rigid` bitti:** aynı desen —
   `system.rs` (25 referans, ECS köprüsü) ve 5 `impl_component!` çağrısı `ecs`'in arkasında;
   `PhysicsWorld` zaten ECS'siz olduğu için feature kapalıyken crate `step` çağrılarak
-  sürülen bağımsız bir rigid-body simülatörü olarak kalıyor. Kalan: `-dynamics`, `-soft`.
+  sürülen bağımsız bir rigid-body simülatörü olarak kalıyor. **`-soft` ve `-dynamics` de
+  bitti — D1'in fizik tarafı TAMAM:** dördü de `ecs` kapalıyken `gizmo-core`'u graftan
+  tamamen düşürüyor.
 
   > **Tuzak, kaydedilmeye değer:** `-rigid`'de `ecs`'i kapatmak `gizmo-core`'u tek başına
   > düşürmedi — bağımlılık `gizmo-physics-core` üzerinden geliyordu, çünkü onun kendi
-  > `default = ["ecs"]`'i devredeydi. `default-features = false` ile bildirmek gerekti.
-  > Aynı şey `-dynamics` ve `-soft` için de geçerli olacak.
+  > `default = ["ecs"]`'i devredeydi. Zincirdeki her fizik bağımlılığını
+  > `default-features = false` ile bildirmek gerekti.
 
-  > **Plandaki ölçüm yanlıştı.** "60 dosyadan 5'i `gizmo_core`'a dokunuyor" yalnızca
-  > `gizmo-physics-rigid` için doğru (5/38). Gerçek: `-core` 10/28, `-dynamics` **5/7**,
-  > `-soft` **5/8** — yani dynamics ve soft için bu paketleme değil, ayrıştırma işi.
+  > **Plandaki ölçüm yanlıştı — ama benim düzeltmem de yanlıştı, ve ikincisi daha öğretici.**
+  > Plan "60 dosyadan 5'i" diyordu; ben DOSYA SAYISI ile ölçüp `-dynamics` 5/7, `-soft` 5/8
+  > bulunca "bu paketleme değil, ayrıştırma işi" diye düzelttim. Dosya sayısı yanlış metrikmiş:
+  > `soft_body.rs` 801 satır ama TEK referans, `cloth.rs` 1140 satır TEK referans,
+  > `vehicle/mod.rs` 1268 satır TEK referans — hepsi birer `Component` impl'i. Referans
+  > YOĞUNLUĞUYLA ölçünce planın sonucu benim düzeltmemden daha doğruydu: dördü de paketleme
+  > işiydi. Tek gerçek ayrıştırma `-dynamics`'te `oxygen`/`ragdoll` modüllerini `ecs` arkasına
+  > almaktı (ikisi de `World` alıyor, ragdoll entity spawn ediyor).
   >
   > `-core`'da bağımlılık iki şeye indi: 11 `impl_component!` çağrısı (önemsiz, `#[cfg]`
   > yeterli) ve `FighterController`. İkincisi gerçek bir engeldi: bir `FighterInputBuffer`
