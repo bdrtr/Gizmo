@@ -73,6 +73,8 @@ impl PhysicsWorld {
         self.metrics.integration_ms = 0.0;
         self.metrics.contact_count = 0;
         self.metrics.island_count = 0;
+        self.metrics.solver_sweeps = 0;
+        self.metrics.max_island_depth = 0;
 
         let mut steps = 0u32;
         while self.accumulator >= FIXED_DT && steps < MAX_SUBSTEPS {

@@ -373,6 +373,9 @@ impl ConstraintSolver {
     /// yazar. Eskiden bu düzeltme doğrudan `velocities`'e ekleniyordu; bu, pozisyon
     /// düzeltme hızının kalıcı hıza sızmasına (resting jitter / cisimlerin uyumaması)
     /// yol açıyordu. Çağıran bu deltaları pozisyona uygulamalıdır.
+    ///
+    /// Returns what the adaptive policy decided for this island — see [`SolveStats`]. An island
+    /// with no manifolds is not solved and reports zeroes.
     // İndeks-tabanlı döngüler kasıtlı: `mid`/`cid` aynı anda paralel dizileri
     // (manifolds + rigid_bodies/transforms/velocities/pseudo_vel, hepsi entity
     // indeksiyle hizalı) okuyup `manifolds[mid].contacts[cid]` impulslarını geri
@@ -392,14 +395,14 @@ impl ConstraintSolver {
         // entries (the caller reads back only these) instead of the whole world array.
         island_bodies: &[usize],
         dt: f32,
-    ) {
+    ) -> SolveStats {
         // Pozisyon düzeltme buffer'ını sıfırla — yalnız bu adanın girdileri (buffer çağıran
         // tarafından adalar arası yeniden kullanılıyor; full-world sıfırlama O(n_islands×n_bodies)'ti).
         for &i in island_bodies {
             pos_corrections[i] = (Vec3::ZERO, Vec3::ZERO);
         }
         if manifolds.is_empty() {
-            return;
+            return SolveStats::default();
         }
 
         // ── Support order + island depth ──
@@ -468,7 +471,10 @@ impl ConstraintSolver {
                 n_iterations,
                 dt,
             );
-            return;
+            return SolveStats {
+                island_depth,
+                iterations: n_iterations,
+            };
         }
 
         // ── Split Impulse: pseudo-velocity buffers ────────────────────────
@@ -833,7 +839,36 @@ impl ConstraintSolver {
                 pos_corrections[i] = (pseudo_vel[i].0 * dt, pseudo_vel[i].1 * dt);
             }
         }
+
+        // The split-impulse path sweeps `self.iterations` (see the loop above) and has never
+        // consumed the adaptive count, so reporting `n_iterations` here would be a lie about
+        // work that was not done. An island reaches this path only by containing a CCD-enabled
+        // body or by `use_tgs_soft` being off.
+        SolveStats {
+            island_depth,
+            iterations: self.iterations,
+        }
     }
+}
+
+/// What the solver decided for one island, reported back so a caller can see the sweep count
+/// the adaptive policy actually chose.
+///
+/// The engine folds this into [`PhysicsMetrics`](crate::island::PhysicsMetrics); it is returned
+/// separately because the metrics are per step and this is per island, and because the policy is
+/// exactly the thing a caller tuning solver cost needs visibility into.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct SolveStats {
+    /// The island's support depth — BFS eccentricity of its contact graph from its anchors, or
+    /// from its lowest-indexed body when it has none. Zero for an island with no manifolds.
+    pub island_depth: u32,
+    /// Biased sweeps run for this island. On the TGS path with the block solver on and depth
+    /// ≥ 5 this is the depth-adaptive count rather than
+    /// [`ConstraintSolver::iterations`](ConstraintSolver::iterations); on the split-impulse
+    /// path it is always `iterations`, which is that path's real behaviour and not a rounding
+    /// of it.
+    pub iterations: usize,
 }
 
 #[cfg(test)]

@@ -111,7 +111,7 @@ pub use joints::{
     BallSocketJointData, D6Drive, D6JointData, D6Motion, DistanceJointData, HingeJointData, Joint,
     JointData, JointSolver, JointType, SliderJointData, SpringJointData,
 };
-pub use solver::ConstraintSolver;
+pub use solver::{ConstraintSolver, SolveStats};
 #[cfg(feature = "ecs")]
 pub use system::{physics_explosion_system, physics_fracture_system, physics_step_system};
 pub use world::{PhysicsWorld, SnapshotError, WorldSnapshot};
