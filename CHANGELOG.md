@@ -241,6 +241,20 @@ Upgrading from `0.8.0`:
 
 ### Fixed — rollback
 
+- **`WorldSnapshot` now carries `PhysicsWorld::weather`.** Same omission as the joint state
+  below, one field further along.
+
+  The rigid pipeline never reads `weather`, which is why it was easy to leave out — but the
+  vehicle tyre model scales its friction-circle limit from it, and it cannot be recomputed
+  from transforms or velocities. Gameplay switching weather inside a rollback window therefore
+  left the re-simulation running vehicles under the grip of a weather it had already rolled
+  back past, invisibly: `state_hash` covers only transform, velocity and sleep state.
+
+  Found by applying the inclusion rule written on `WorldSnapshot` when the joint state was
+  added — the criterion is derivability, not size.
+
+### Fixed — rollback
+
 - **`WorldSnapshot` now carries joint state.** Rollback could not un-break a joint.
 
   `Joint::is_broken` is a one-way latch — nothing outside scene load ever sets it back to
