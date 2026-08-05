@@ -19,7 +19,13 @@ struct Tetrahedron {
     inv_rest_matrix_col2: vec3<f32>,
     pad2: f32,
     rest_volume: f32,
-    pad3: vec3<f32>,
+    // `pad3` (a `vec3<f32>` here) KASITLI OLARAK YOK. WGSL'de vec3<f32>'nin hizalaması 16,
+    // dolayısıyla rest_volume 64..68'de bittikten sonra shader onu 68'e DEĞİL 80'e koyuyor ve
+    // struct'ı 96 bayta yuvarlıyordu — CPU tarafının yüklediği 80 bayta karşı. Sonuç sessiz:
+    // 0. indeksten sonraki her tetrahedron yanlış offsetten okunur, hata da panik de yok.
+    // Rust tarafındaki `pad3: [f32; 3]` (hizalama 4) 68..80'i doldurup struct'ı 80'de
+    // tutuyor; buradaki struct'ın hizalaması zaten 16 olduğu için boyut da 80'e yuvarlanıyor.
+    // Bu struct'ın SONUNA vec3 EKLEME — `tests/wgsl_layout.rs` bunu naga ile kontrol ediyor.
 }
 
 struct Parameters {
