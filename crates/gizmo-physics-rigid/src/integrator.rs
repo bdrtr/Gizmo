@@ -160,7 +160,12 @@ impl Integrator {
         }
 
         // ── Sleep bookkeeping ─────────────────────────────────────────────
-        rb.update_sleep_state(vel);
+        // Only the counter advances here, and waking still happens immediately. Whether the body
+        // actually goes to sleep is decided per contact ISLAND, after the solve — a stack that
+        // sleeps only partway is solved inconsistently, because the solver keeps exchanging
+        // impulses with a body the integrator has stopped moving. See
+        // `RigidBody::advance_sleep_counter` and the island pass in `pipeline.rs`.
+        rb.advance_sleep_counter(vel);
 
         Ok(())
     }

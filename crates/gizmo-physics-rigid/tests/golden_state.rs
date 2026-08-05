@@ -107,10 +107,15 @@ fn golden_box_settling_on_the_ground() {
     }
 
     lock("settle y", w.transforms[1].position.y, 0.498_650_88);
-    // The residual downward velocity is one substep of gravity that the contact has not yet
-    // cancelled. It is small, but it is a fingerprint of the substep rate and the solver's
-    // relax pass, so it is worth pinning.
-    lock("settle vy", w.velocities[1].linear.y, -0.040_873_3);
+    // A settled box holds NO residual velocity. This was `-0.040_873_3` until 2026-08-06 —
+    // exactly one substep of gravity, 9.81/240, which the contact had not yet cancelled. That
+    // number was a fingerprint of a defect rather than of the substep rate: a body used to fall
+    // asleep at the end of velocity integration, i.e. after gravity had been applied and BEFORE
+    // the contact solve could cancel it, and then froze holding the unsolved value. Sleep is now
+    // decided after the solve and per island, so the body sleeps holding a solved velocity.
+    // `settle y` is unchanged, so the resting position — the load-bearing number here — did not
+    // move. See docs/FIXPLAN.md, island-collective sleep.
+    lock("settle vy", w.velocities[1].linear.y, 0.0);
 }
 
 /// A box launched at 5 m/s slides to rest under friction. Locks the friction model, the
