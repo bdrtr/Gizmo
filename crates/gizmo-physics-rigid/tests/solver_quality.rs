@@ -1331,6 +1331,380 @@ fn one_column_stands_and_two_do_not() {
     }
 }
 
+/// Does a bigger static ground produce a WORSE contact, or does it only change which way the
+/// dice fall?
+///
+/// `ground_extent_flips_the_blow_up` and `one_column_stands_and_two_do_not` both show the static
+/// ground's half-extent deciding whether a stack survives, with everything physical held fixed.
+/// The obvious mechanism is precision: contact generation clips the box's face against the
+/// ground's, and a 200 m reference face means quantities of order 0.5 get computed as differences
+/// of quantities of order 200, which costs roughly `log2(200/0.5) ≈ 9` bits of an f32's 24.
+///
+/// This tests that WITHOUT simulating: place one box at rest on grounds of different half-extent,
+/// advance a single substep, and compare the contact geometry each one produces. The scene is
+/// numerically identical apart from the ground's size, and the ground is static, so every
+/// difference from the smallest-ground reference is error rather than physics.
+///
+/// The prediction, if precision is the mechanism: the deviation grows roughly linearly with the
+/// half-extent, and it appears in the contact points' LATERAL coordinates — which is what feeds a
+/// torque error, which is what seeds buckling. A deviation that stays at zero, or one that appears
+/// only in the normal direction, refutes it.
+#[test]
+#[ignore = "measurement, not a gate — prints a table"]
+fn does_a_bigger_ground_degrade_the_contact() {
+    /// One substep's worth of contact geometry for a box placed at `pose`, sorted so two runs
+    /// are comparable.
+    fn contacts_after_one_substep(
+        ground_half: f32,
+        pose: (Vec3, gizmo_math::Quat),
+    ) -> Vec<(Vec3, Vec3, f32)> {
+        let mut world = PhysicsWorld::new();
+        add_ground_sized(&mut world, ground_half);
+        add_box(
+            &mut world,
+            1,
+            pose.0,
+            0.5,
+            PhysicsMaterial {
+                restitution: 0.0,
+                ..Default::default()
+            },
+        );
+        world.transforms[1].rotation = pose.1;
+        world.transforms[1].update_local_matrix();
+        // Exactly one 1/240 s substep, so the box's own state is still bit-identical across runs
+        // and the only thing that differs is the clip against a bigger face.
+        world.step_once = true;
+        world.step(DT).ok();
+
+        let mut out: Vec<(Vec3, Vec3, f32)> = world
+            .collision_events()
+            .iter()
+            .flat_map(|e| e.contact_points.iter())
+            .map(|c| (c.point, c.normal, c.penetration))
+            .collect();
+        // Sort by position so point order cannot masquerade as a difference.
+        out.sort_by(|a, b| {
+            (a.0.x, a.0.y, a.0.z)
+                .partial_cmp(&(b.0.x, b.0.y, b.0.z))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        out
+    }
+
+    // Two poses. The first is exact contact, which is how every scene in this file starts. The
+    // second is the SETTLED pose — the box sits a few millimetres into the ground once gravity
+    // and the solver have reached steady state, and that is the state a resting stack actually
+    // lives in. They turn out to behave completely differently, which is the finding.
+    let settled = {
+        let mut w = PhysicsWorld::new();
+        add_ground_sized(&mut w, 1.0);
+        add_box(
+            &mut w,
+            1,
+            Vec3::new(0.0, 0.5, 0.0),
+            0.5,
+            PhysicsMaterial {
+                restitution: 0.0,
+                ..Default::default()
+            },
+        );
+        for _ in 0..240 {
+            w.step(DT).ok();
+        }
+        (w.transforms[1].position, w.transforms[1].rotation)
+    };
+
+    for (pose_label, pose) in [
+        ("exact contact", (Vec3::new(0.0, 0.5, 0.0), gizmo_math::Quat::IDENTITY)),
+        ("settled", settled),
+    ] {
+        let reference = contacts_after_one_substep(1.0, pose);
+        eprintln!(
+            "\n=== contact geometry vs static ground half-extent — box {pose_label} \
+             (1 substep; the scene is identical apart from the ground's size, so every \
+             difference is error) ==="
+        );
+        eprintln!(
+            "reference half-extent 1.0: {} point(s) {:?}",
+            reference.len(),
+            reference.iter().map(|c| c.0).collect::<Vec<_>>()
+        );
+        eprintln!(
+            "{:>12}  {:>8}  {:>14}  {:>14}  {:>14}  {:>34}",
+            "ground", "points", "max Δlateral", "max Δnormal", "max Δpen", "points"
+        );
+        for h in [1.0f32, 5.0, 20.0, 50.0, 100.0, 200.0, 500.0, 1000.0] {
+            let got = contacts_after_one_substep(h, pose);
+            let pts = format!("{:?}", got.iter().map(|c| c.0).collect::<Vec<_>>());
+            let pts = if pts.len() > 34 { format!("{}…", &pts[..33]) } else { pts };
+            if got.len() != reference.len() {
+                eprintln!(
+                    "{:>12.0}  {:>8}  {:>14}  {:>14}  {:>14}  {:>34}",
+                    h, got.len(), "(count differs)", "-", "-", pts
+                );
+                continue;
+            }
+            let (mut d_lat, mut d_nrm, mut d_pen) = (0.0f32, 0.0f32, 0.0f32);
+            for (a, b) in reference.iter().zip(&got) {
+                let dp = b.0 - a.0;
+                // Lateral = perpendicular to the reference contact normal; that is the component
+                // that becomes a lever-arm error and therefore a torque error.
+                let along = dp.dot(a.1) * a.1;
+                d_lat = d_lat.max((dp - along).length());
+                d_nrm = d_nrm.max((b.1 - a.1).length());
+                d_pen = d_pen.max((b.2 - a.2).abs());
+            }
+            eprintln!(
+                "{:>12.0}  {:>8}  {:>14.3e}  {:>14.3e}  {:>14.3e}  {:>34}",
+                h, got.len(), d_lat, d_nrm, d_pen, pts
+            );
+        }
+    }
+}
+
+/// Is the frame-70 collapse localised at a 2 cm gap, or is it a broad band?
+///
+/// `one_column_stands_and_two_do_not` found a 2×12×2 block collapsing at frame 70 with a 2 cm
+/// lateral gap while exact contact and a 20 cm gap both stood — two orders of magnitude faster
+/// than every other collapse measured, which suggests a different mechanism from the slow
+/// buckling and therefore an easier one to find.
+///
+/// 2 cm is also exactly `ConstraintSolver::warm_start_match_tolerance`. If the collapse band is
+/// narrow and sits on that value, that coincidence is the lead. If the band is broad, or centred
+/// somewhere else, it is not.
+#[test]
+#[ignore = "measurement, not a gate — long (~5 min)"]
+fn where_is_the_fast_collapse_band() {
+    eprintln!("\n=== 2x12x2, default solver, collapse frame vs lateral gap (3000 frames) ===");
+    eprintln!(
+        "{:>10}  {:>12}  {:>12}  {:>11}",
+        "gap (m)", "ground 20", "ground 200", "note"
+    );
+    for gap in [0.0f32, 0.005, 0.01, 0.015, 0.02, 0.025, 0.03, 0.05, 0.1, 0.2] {
+        let mut cells = Vec::new();
+        for g in [20.0f32, 200.0] {
+            let (mut world, bodies, origins) = scene_crate_pile_spaced(2, 12, 1.0 + gap);
+            world.colliders[0] = Collider::box_collider(Vec3::new(g, 1.0, g));
+            let r = run(&mut world, &bodies, &origins, 3000, 0.5);
+            cells.push(match r.blew_up_at {
+                Some(f) => f.to_string(),
+                None => "-".to_string(),
+            });
+        }
+        eprintln!(
+            "{:>10.3}  {:>12}  {:>12}  {:>11}",
+            gap,
+            cells[0],
+            cells[1],
+            if (gap - 0.02).abs() < 1e-6 { "= warm-start tol" } else { "" }
+        );
+    }
+}
+
+/// How many contact points does a settled interface actually carry, and where are they?
+///
+/// The block solver's whole premise is that a manifold has up to four coplanar points and that
+/// solving them jointly restores the tilt-resisting torque sequential Gauss-Seidel loses. That
+/// premise is worth checking rather than assuming: a one-point manifold provides no tilt
+/// stiffness at all, however good the block solve is.
+///
+/// Reported for a settled 2-box stack, so both the ground interface and a box-box interface are
+/// visible, across ground sizes.
+#[test]
+#[ignore = "measurement, not a gate — prints a table"]
+fn how_many_points_does_a_settled_interface_carry() {
+    eprintln!("\n=== settled 2-box stack: contact points per interface, last frame ===");
+    for h in [1.0f32, 20.0, 200.0] {
+        let mut world = PhysicsWorld::new();
+        add_ground_sized(&mut world, h);
+        let no_bounce = PhysicsMaterial {
+            restitution: 0.0,
+            ..Default::default()
+        };
+        add_box(&mut world, 1, Vec3::new(0.0, 0.5, 0.0), 0.5, no_bounce);
+        add_box(&mut world, 2, Vec3::new(0.0, 1.5, 0.0), 0.5, no_bounce);
+        // Kept awake throughout: a body sleeps after 15 frames below the rest threshold, and a
+        // pair with both bodies dormant skips narrowphase entirely, so a settled stack reports
+        // no contacts at all. Waking is not a physical change — it only decides whether the
+        // island is solved — but it is the difference between measuring the interface and
+        // measuring nothing.
+        for _ in 0..240 {
+            for i in 1..world.entities.len() {
+                world.rigid_bodies[i].wake_up();
+            }
+            world.step(DT).ok();
+        }
+        for i in 1..world.entities.len() {
+            world.rigid_bodies[i].wake_up();
+        }
+        // One more frame, then report that frame's events. Four substeps run, so each live pair
+        // contributes four events; the per-event point count is what matters here.
+        world.step(DT).ok();
+        eprintln!("\n  ground half-extent {h}:");
+        let mut seen: Vec<(u32, u32, usize)> = Vec::new();
+        for ev in world.collision_events() {
+            let key = (ev.entity_a.id(), ev.entity_b.id(), ev.contact_points.len());
+            if !seen.contains(&key) {
+                seen.push(key);
+                let pts: Vec<String> = ev
+                    .contact_points
+                    .iter()
+                    .map(|c| {
+                        format!(
+                            "({:+.3},{:+.3},{:+.3} d={:+.4})",
+                            c.point.x, c.point.y, c.point.z, c.penetration
+                        )
+                    })
+                    .collect();
+                eprintln!(
+                    "    pair {}-{}: {} point(s)  {}",
+                    key.0,
+                    key.1,
+                    key.2,
+                    pts.join(" ")
+                );
+            }
+        }
+    }
+}
+
+/// What does a contact manifold look like on the substep it is BORN, as opposed to once it has
+/// persisted?
+///
+/// `how_many_points_does_a_settled_interface_carry` shows a settled interface carrying four
+/// corner points, identically at ground half-extent 1, 20 and 200 — so the block solver's premise
+/// holds in steady state and the ground size does not degrade it there.
+///
+/// `does_a_bigger_ground_degrade_the_contact` found something different on a *fresh* pair's first
+/// substep: a single point, whose lateral position depends on the other collider's size and
+/// slides to the resting box's own edge as the ground grows (z = 0 at half-extent 1, −0.4988 at
+/// 200). A one-point manifold carries no tilt-resisting torque, and one placed half a box off
+/// centre applies a torque impulse that should not be there.
+///
+/// This separates the two: it prints every event of the first frame in order, so the birth
+/// substep and the three that follow it are visible side by side.
+///
+/// # Measured, and the mechanism is confirmed in the source
+///
+/// ```text
+///   ground half-extent   birth -> steady   birth point
+///   0.60 … 1.50          1 -> 1            ( 0.0000, 0, +0.0000)   <- never recovers
+///   2.00                 1 -> 4            (-0.4000, 0,  0.0000)
+///   3.00                 1 -> 4            ( 0.0000, 0, -0.4286)
+///   5.00                 1 -> 4            ( 0.0000, 0, -0.4545)
+///  20.00                 1 -> 4            ( 0.0000, 0, -0.4878)
+/// 200.00                 1 -> 4            ( 0.0000, 0, -0.4988)
+/// ```
+///
+/// **Every manifold is born as a single point, at every ground size.** The cause is one line:
+/// `gizmo-physics-core/src/narrowphase/contacts.rs`, in `clip_box_box`, rejects a corner with
+/// `if signed_depth <= 0.0 { return None }`. A box placed at EXACT contact has all four corners
+/// at `signed_depth == 0.0`, so all four are rejected, Sutherland–Hodgman returns empty, the
+/// swapped-reference retry returns empty for the same reason, and the pair falls through to the
+/// GJK/EPA fallback — which returns ONE contact. Note the asymmetry that gives it away: the
+/// lateral slab test right below carries a deliberate `SLAB_TOLERANCE = 1e-3` "to avoid
+/// floating-point edge-case rejections", while the depth test has no tolerance at all.
+///
+/// **And the single point is not at the centre.** Its offset grows with the ground's half-extent
+/// and converges on the resting box's own edge — 0.4 of a box at half-extent 2, 0.4988 at 200
+/// (the values fit `H/(2H+1)`). A one-point manifold carries no tilt-resisting torque whatever the
+/// block solver does with it, and one placed at the edge applies a torque impulse that the
+/// geometry does not call for.
+///
+/// **This is the mechanism behind the ground-size sensitivity.** A bigger static ground delivers a
+/// bigger off-centre kick on the substep the contact is born, and the buckling mode amplifies
+/// whatever seed it is given. It is not floating-point precision loss, which was the first
+/// hypothesis — it is a geometric defect that scales with the other collider's size.
+///
+/// **Below half-extent ~1.5 the interface never recovers**, staying one point forever. Consistent
+/// with the same mechanism: at those sizes the GJK point lands at the centre, so it holds the box
+/// up with no torque, so the box never sinks, so `signed_depth` never becomes positive and the
+/// clip path is never reached again. A crate resting on a small platform therefore has no tilt
+/// stiffness at all.
+///
+/// Every scene in this file and in `soak_and_golden.rs` places its boxes at exact contact, so all
+/// of them are born through this path.
+#[test]
+#[ignore = "measurement, not a gate — prints a trace"]
+fn what_does_a_manifold_look_like_when_it_is_born() {
+    eprintln!("\n=== points per event, box resting on grounds of increasing half-extent ===");
+    eprintln!(
+        "{:>10}  {:>12}  {:>34}  {:>26}",
+        "ground", "birth / then", "birth point", "steady point count"
+    );
+    for h in [0.6f32, 0.75, 1.0, 1.5, 2.0, 3.0, 5.0, 20.0, 200.0] {
+        let mut world = PhysicsWorld::new();
+        add_ground_sized(&mut world, h);
+        add_box(
+            &mut world,
+            1,
+            Vec3::new(0.0, 0.5, 0.0),
+            0.5,
+            PhysicsMaterial {
+                restitution: 0.0,
+                ..Default::default()
+            },
+        );
+        let mut birth: Option<(usize, Vec3)> = None;
+        let mut steady = 0usize;
+        for _ in 0..30 {
+            world.step(DT).ok();
+            for ev in world.collision_events() {
+                if birth.is_none() {
+                    birth = Some((
+                        ev.contact_points.len(),
+                        ev.contact_points.iter().next().map(|c| c.point).unwrap_or(Vec3::ZERO),
+                    ));
+                }
+                steady = ev.contact_points.len();
+            }
+        }
+        let (bn, bp) = birth.unwrap_or((0, Vec3::ZERO));
+        eprintln!(
+            "{:>10.2}  {:>12}  {:>34}  {:>26}",
+            h,
+            format!("{bn} -> {steady}"),
+            format!("({:+.4},{:+.4},{:+.4})", bp.x, bp.y, bp.z),
+            steady
+        );
+    }
+
+    for h in [1.0f32, 200.0] {
+        eprintln!("\n=== box dropped onto a ground of half-extent {h}: first 3 frames, every event ===");
+        let mut world = PhysicsWorld::new();
+        add_ground_sized(&mut world, h);
+        add_box(
+            &mut world,
+            1,
+            Vec3::new(0.0, 0.5, 0.0),
+            0.5,
+            PhysicsMaterial {
+                restitution: 0.0,
+                ..Default::default()
+            },
+        );
+        for f in 0..3 {
+            world.step(DT).ok();
+            for (i, ev) in world.collision_events().iter().enumerate() {
+                let pts: Vec<String> = ev
+                    .contact_points
+                    .iter()
+                    .map(|c| format!("({:+.4},{:+.4},{:+.4})", c.point.x, c.point.y, c.point.z))
+                    .collect();
+                eprintln!(
+                    "  frame {f} event {i} pair {}-{} {:?}: {} point(s)  {}",
+                    ev.entity_a.id(),
+                    ev.entity_b.id(),
+                    ev.event_type,
+                    ev.contact_points.len(),
+                    pts.join(" ")
+                );
+            }
+        }
+    }
+}
+
 /// Negative control for `realistic_crate_stack_stays_standing`: the same scene, same horizon,
 /// same assertions, with the solver starved to 4 sweeps. It must FAIL.
 ///

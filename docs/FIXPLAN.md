@@ -1035,6 +1035,58 @@ eklemekten ibaret.
   hesabına göre anahtarlanmış bir değişiklik sahneleri adaptif daldan sessizce düşürüp her
   iddiayı yeşil bırakabilirdi. Kapı `max_island_depth >= 5` ve ada başına sweep > yapılandırılan
   `iterations` istiyor. Düşerse bu dosyadaki hiçbir sonuç kanıt değildir.
+- 🔄 **Yükseklik-12 kararlılık boşluğu — MEKANİZMA BULUNDU (tohum tarafı)** *(2026-08-06)*.
+  Zemin-boyutu duyarlılığının (N1) sebebi float hassasiyeti DEĞİL; tek satırlık geometrik bir
+  kusur. `gizmo-physics-core/src/narrowphase/contacts.rs`, `clip_box_box`:
+
+  ```rust
+  let signed_depth = ref_face_d - corner.dot(normal);
+  if signed_depth <= 0.0 { return None; }   // <-- toleranssız
+  ```
+
+  **TAM TEMASTA dört köşenin de `signed_depth`'i tam 0.0**, dolayısıyla hepsi eleniyor,
+  Sutherland–Hodgman boş dönüyor, ters-referans yedeği aynı sebeple boş dönüyor ve çift
+  GJK/EPA yedeğine düşüyor — o da **TEK** temas döndürüyor. Ele veren asimetri: hemen altındaki
+  yanal slab testinde bilinçli bir `SLAB_TOLERANCE = 1e-3` var ("floating-point edge-case
+  rejections"ı önlemek için), derinlik testinde hiç yok.
+
+  **Ve tek nokta merkezde değil.** Ofseti zeminin yarı-boyutuyla büyüyüp duran kutunun KENDİ
+  kenarına yakınsıyor (`H/(2H+1)`): yarı-boyut 2'de 0.400, 3'te 0.4286, 5'te 0.4545, 20'de
+  0.4878, 200'de 0.4988. Tek noktalı bir manifold — blok çözücü ne yaparsa yapsın — sıfır
+  tilt-restoring tork taşır; kenara konmuş biri ise geometrinin gerektirmediği bir tork
+  darbesi uygular.
+
+  | zemin yarı-boyutu | doğum → kararlı nokta sayısı | doğum noktası |
+  |---|---|---|
+  | 0.60 … 1.50 | **1 → 1** (hiç toparlamıyor) | merkez |
+  | 2.00 | 1 → 4 | −0.400 |
+  | 20.00 | 1 → 4 | −0.4878 |
+  | 200.00 | 1 → 4 | −0.4988 |
+
+  > **N1 böyle açıklanıyor:** büyük zemin, temasın DOĞDUĞU substep'te daha büyük bir merkez-dışı
+  > tork darbesi veriyor; burkulma modu da kendisine verilen tohumu üstel olarak büyütüyor.
+  > Yani hedef "büyüme hızı" değil **TOHUM**, ve kayıtlı çalışmaların hepsi büyüme hızına
+  > nişan almıştı.
+
+  > **Yarı-boyut ~1.5'in altında arayüz hiç toparlamıyor** — GJK noktası merkeze düşüyor,
+  > kutuyu torksuz tutuyor, kutu hiç batmıyor, `signed_depth` hiç pozitif olmuyor ve kırpma
+  > yoluna bir daha girilmiyor. **Küçük bir platformun üstündeki sandığın tilt sertliği sıfır.**
+
+  > Bu dosyadaki ve `soak_and_golden.rs`'teki HER sahne kutularını tam temasta kuruyor, yani
+  > hepsi bu yoldan doğuyor.
+
+  Ölçümler: `what_does_a_manifold_look_like_when_it_is_born`,
+  `how_many_points_does_a_settled_interface_carry` (yerleşmiş arayüz her zemin boyutunda 4 köşe
+  noktası taşıyor — blok çözücünün varsayımı kararlı halde SAĞLAM, sorun yalnız doğumda),
+  `does_a_bigger_ground_degrade_the_contact`.
+
+  - ⬜ **Aday düzeltme, HENÜZ UYGULANMADI:** derinlik testine slab testindekiyle aynı türden bir
+    tolerans (speculative margin) ver → tam temasta 4 nokta. Tek satır, ama narrowphase'in
+    tamamını ve determinizm hash'ini etkiler. Bu oturumun kalite ölçütü tam olarak bunu
+    ölçmek için var; ölçmeden uygulanmayacak (bkz. `ba9224b`'deki ders).
+  - ⬜ **N2 (2 cm boşlukta 70. karede çöküş) hâlâ açık.** `where_is_the_fast_collapse_band`
+    yazıldı, koşulmadı.
+
 - ⬜ **C2** — Broadphase refit (`pipeline.rs:145-176` her substep sıfırdan kuruyor, statikler dahil).
 - ⬜ **C3** — `physics-rigid/src/system.rs:149-158` O(N²) writeback → handle→index map.
 - ⬜ **C4** — Temas yolunda `ArrayVec` (`narrowphase/mod.rs:400-407`); rewind geçmişi opt-in
