@@ -1,3 +1,9 @@
+#![warn(missing_docs)]
+//! (`missing_docs` is a RATCHET, not a suggestion. The CI lint gate runs with `-D warnings`,
+//! so every public item in this crate must carry a doc comment or the build fails. This crate
+//! is Stage A — the dependency-light core that goes to 1.x first — and its documented surface
+//! is part of that promise. Do not silence this with `#[allow]`; write the doc.)
+
 //! # gizmo-core
 //!
 //! The core of the Gizmo game engine: a pure-Rust, archetype-based Entity
@@ -75,7 +81,27 @@ pub use time::{PhysicsTime, Time};
 pub use window::WindowInfo;
 pub use world::World;
 
+/// Shared read-only view over every entity carrying a single component `T`.
+///
+/// A naming alias for the one-component [`Query`], nothing more — it adds no behaviour and no
+/// runtime cost, and the read-only accessors (`iter`, `get`, `contains`, …) are available
+/// because `&T` is a [`ReadOnlyQuery`]. This is exactly the type [`World::borrow`] returns,
+/// so the two are interchangeable in a signature.
+///
+/// Any number of these may be alive over the same `T` at once; obtaining one only needs
+/// `&World`. Iteration order is the [`Query`] order — reproducible for an identical sequence
+/// of world operations, but not spawn order and not stable across structural edits.
 pub type StorageView<'w, T> = crate::query::Query<'w, &'w T>;
+/// Mutable counterpart of [`StorageView`]: a view over every entity carrying `T`, able to
+/// write it.
+///
+/// An alias for the one-component [`Query`] of [`Mut<T>`](crate::query::Mut), the type
+/// [`World::borrow_mut`] returns. Writing through it goes via `Mut`, so touched components get
+/// change ticks and [`Changed<T>`](crate::query::Changed) filters see them.
+///
+/// Unlike [`StorageView`], constructing one safely requires `&mut World`, and the mutating
+/// accessors take `&mut self` — which is what prevents two live `&mut T` to the same component
+/// from being built without `unsafe`.
 pub type StorageViewMut<'w, T> = crate::query::Query<'w, crate::query::Mut<'w, T>>;
 
 // ──── Prelude ────

@@ -24,9 +24,22 @@ use std::time::Instant;
 /// Tek bir profiling kapsamı (scope) — başlangıç ve bitiş zamanı.
 #[derive(Debug, Clone)]
 pub struct ProfileScope {
+    /// The literal passed to `begin_scope`/`end_scope`. `&'static str` keeps recording
+    /// allocation-free, but names are neither interned nor unique: one frame may hold several
+    /// scopes with the same name, and matching a close to an open is done by name, innermost
+    /// (most recently opened) first.
     pub name: &'static str,
+    /// Open time in nanoseconds since the owning [`FrameProfiler`]'s epoch — the instant that
+    /// profiler was constructed. Not a UNIX timestamp, and not comparable against timings
+    /// taken from a different `FrameProfiler`.
     pub start_ns: u64,
+    /// Close time on the same monotonic clock and epoch as `start_ns`. Always `>= start_ns`,
+    /// because it is sampled strictly later from that clock — the subtraction in
+    /// [`ProfileScope::duration_ms`] relies on this and would underflow otherwise.
     pub end_ns: u64,
+    /// Nesting depth recorded when the scope was *opened*: 0 for a top-level scope, 1 for one
+    /// opened while a scope was already active, and so on. It is a display hint, not a tree
+    /// link — nothing here names the parent scope. Depth restarts at 0 every frame.
     pub depth: u32,
 }
 
@@ -47,8 +60,19 @@ impl ProfileScope {
 /// Tek bir frame'in zamanlama verileri.
 #[derive(Debug, Clone, Default)]
 pub struct FrameProfile {
+    /// Scopes that were *closed* during the frame, in closing order — not sorted by start
+    /// time, and not a tree. With strictly nested begin/end pairs that puts an inner scope
+    /// before the outer one containing it, but nothing enforces that nesting, so treat the
+    /// order as closing order and nothing more. Scopes still open when `end_frame` ran are
+    /// dropped entirely: they are neither reported here nor carried into the next frame.
     pub scopes: Vec<ProfileScope>,
+    /// Zero-based frame index: the profiler's frame counter as it stood *before* the
+    /// `end_frame` call that produced this profile. The first profile is number 0.
     pub frame_number: u64,
+    /// Wall-clock milliseconds from the previous `end_frame` (or from profiler construction,
+    /// for the first frame) to this one — the whole frame, including everything no scope
+    /// covered. Expect it to exceed the sum of the depth-0 scopes; that gap is the
+    /// un-instrumented remainder.
     pub total_ms: f64,
 }
 
@@ -78,6 +102,16 @@ pub struct FrameProfiler {
 const HISTORY_SIZE: usize = 300; // Son 5 saniye @ 60fps
 
 impl FrameProfiler {
+    /// Creates an **enabled** profiler with an empty history, starting both the frame timer
+    /// and the epoch that every `start_ns`/`end_ns` is measured from at this instant.
+    ///
+    /// History is capped at 300 frames (5 seconds at 60 FPS); once full it recycles slots in
+    /// place. Because the frame timer starts here, the first frame's `total_ms` measures
+    /// construction-to-first-`end_frame`, which is usually not a representative frame.
+    ///
+    /// Set `enabled = false` to turn `begin_scope`, `end_scope` and `end_frame` into no-ops —
+    /// while disabled the profiler records nothing at all, so the history simply stops
+    /// growing rather than filling with empty frames.
     pub fn new() -> Self {
         let now = Instant::now();
         Self {

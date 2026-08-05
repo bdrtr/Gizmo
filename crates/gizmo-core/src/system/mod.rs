@@ -1,3 +1,12 @@
+//! Systems, their declared access, and the scheduler that batches them.
+//!
+//! A [`System`] is any function the engine can call with the world and a delta. Each one
+//! reports an [`AccessInfo`] — which components and resources it reads and writes — and the
+//! scheduler packs mutually compatible systems into batches that run in parallel.
+//!
+//! Access declarations control BATCHING, not order. Two systems that conflict are merely kept
+//! out of the same batch; which of them runs first is the batcher's choice. The only ways a
+//! caller picks an order are `before`/`after` labels and [`Phase`].
 use crate::world::World;
 use std::any::TypeId;
 
@@ -5,20 +14,68 @@ use std::any::TypeId;
 // ACCESS INFO (DAG DEPENDENCY GRAPH)
 // ==============================================================
 
+/// What a system touches in the world, and whether it must run on its own.
+///
+/// The scheduler derives one of these per system — from its [`SystemParam`]s, plus anything
+/// declared by hand on the [`SystemConfig`] builder — and uses
+/// [`is_compatible_with`](AccessInfo::is_compatible_with) to decide which systems may share a
+/// parallel batch.
+///
+/// Under-declaring is a soundness bug, not a performance one: state a system touches without
+/// declaring it can be co-scheduled with a writer of that same state and raced on.
+/// Over-declaring only costs parallelism, so err that way.
+///
+/// The four lists are append-only bags of `TypeId`. Entries appear in push order, duplicates
+/// are never removed (a batch's info is literally the concatenation of its members'), and
+/// neither the order nor the multiplicity carries meaning — do not rely on either.
 #[derive(Default, Clone)]
 pub struct AccessInfo {
+    /// Components read through a shared borrow (`&T`).
+    ///
+    /// This also covers components whose *change ticks* are merely inspected — a
+    /// `Changed<T>`/`Added<T>` filter declares a read of `T` even though it yields no `&T`,
+    /// because those ticks are the same memory a `Mut<T>` writer stamps.
     pub component_reads: Vec<TypeId>,
+    /// Components written through `Mut<T>`.
+    ///
+    /// The same `TypeId` may legitimately appear in `component_reads` as well — a merged
+    /// batch info routinely holds both — because an `AccessInfo` is never checked against
+    /// itself, only against another one.
     pub component_writes: Vec<TypeId>,
+    /// Resources read through `Res<T>`.
+    ///
+    /// Resource and component lists are compared separately, so a type used as a component
+    /// and a resource of the same `TypeId` never conflicts across the two categories.
     pub resource_reads: Vec<TypeId>,
+    /// Resources written through `ResMut<T>`.
     pub resource_writes: Vec<TypeId>,
+    /// When true this system tolerates no company: `is_compatible_with` fails against
+    /// *every* other info, even an empty one, so the system ends up alone in its batch and
+    /// no later system can join it.
+    ///
+    /// It is the fallback for systems whose access cannot be introspected — the bare
+    /// `FnMut(&World, f32)` form, and the untyped `run_if(|world| ..)` closure — as well as
+    /// anything the user marks exclusive explicitly.
     pub is_exclusive: bool,
 }
 
 impl AccessInfo {
+    /// An access set that touches nothing and is not exclusive: compatible with every other
+    /// non-exclusive set. Same value as `Default`; the lists are then filled in by pushing.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Whether these two access sets may run concurrently.
+    ///
+    /// Incompatible when either side is exclusive (unconditionally — including against a set
+    /// that touches nothing), or when the same `TypeId` is written by one side and read or
+    /// written by the other. Reads never conflict with reads, components are only checked
+    /// against components and resources against resources, and two empty sets are compatible.
+    ///
+    /// The relation is symmetric, and it is *not* transitive: two systems that are each
+    /// compatible with a third can still conflict with one another. Cost is O(n·m) linear
+    /// scans — the lists hold a handful of types, so no set structure is used.
     pub fn is_compatible_with(&self, other: &AccessInfo) -> bool {
         if self.is_exclusive || other.is_exclusive {
             return false;
@@ -102,7 +159,35 @@ impl Phase {
 
 /// Bir sistem: her frame'de çalıştırılabilir mantık birimi.
 pub trait System: Send + Sync {
+    /// Executes the system once.
+    ///
+    /// `world` is shared, never exclusive: every system of a batch is handed the same
+    /// `&World`, and on native targets they are driven in parallel by rayon. Mutation
+    /// therefore goes through [`SystemParam`]s whose accesses the scheduler proved disjoint
+    /// before starting the batch (component writes via `Query<Mut<T>>`, resources via their
+    /// lock guards), or is deferred through `Commands` and applied after the batch finishes.
+    ///
+    /// `dt` is the delta time in seconds that the schedule was stepped with; the `f32`
+    /// system parameter yields exactly this value.
+    ///
+    /// Ordering: assume nothing about the order of the other systems in the same batch — it
+    /// is a work-stealing detail (on `wasm32` the same batch happens to run sequentially,
+    /// but neither that nor the order it falls into is a contract).
+    ///
+    /// Only two things let a CALLER choose the order: `before`/`after` labels, and a different
+    /// [`Phase`]. A declared access conflict merely keeps the pair out of one batch — which
+    /// side then runs first falls out of insertion order and the batcher's packing, and is not
+    /// something you asked for. Do not use `reads`/`writes` to sequence two systems.
     fn run(&mut self, world: &World, dt: f32);
+
+    /// The world access this system performs, as the scheduler should see it.
+    ///
+    /// Called while the schedule is being built (not per frame), so it may recompute rather
+    /// than cache. It must return a *superset* of what `run` actually touches: anything left
+    /// out can be placed in a batch alongside a writer of that data. Wrapper systems
+    /// consequently return the union of the parts they wrap, and any system whose access
+    /// cannot be introspected must return `is_exclusive = true` — the conservative answer
+    /// that is always sound.
     fn access_info(&self) -> AccessInfo;
 }
 

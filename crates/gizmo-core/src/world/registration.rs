@@ -118,6 +118,15 @@ impl World {
         self.component_infos.len()
     }
 
+    /// Appends a hook fired when `T` becomes newly present on an entity — not when an
+    /// existing value is overwritten. See [`AddHook`] for exactly when in the insert it
+    /// runs.
+    ///
+    /// Hooks accumulate: registering the same closure twice makes it fire twice, and there
+    /// is no unregister. Within a type they run in registration order — except for one
+    /// registered from inside that same type's dispatch, whose position afterwards is not
+    /// guaranteed (see [`ComponentHooks`](crate::world::ComponentHooks)) — and all `on_add`
+    /// hooks precede that insert's `on_set` hooks.
     pub fn register_on_add<T: Component>(&mut self, hook: AddHook) {
         self.component_hooks
             .entry(TypeId::of::<T>())
@@ -126,6 +135,13 @@ impl World {
             .push(hook);
     }
 
+    /// Appends a hook fired when `T` is detached from an entity, whether explicitly or
+    /// because the entity was despawned. Same accumulate-and-never-unregister rules as
+    /// [`World::register_on_add`].
+    ///
+    /// Read [`RemoveHook`] before relying on it: whether the component is still readable
+    /// when the hook runs depends on the removal path and on `T`'s storage type, and
+    /// `World::remove_bundle` does not fire it for Table-storage components at all.
     pub fn register_on_remove<T: Component>(&mut self, hook: RemoveHook) {
         self.component_hooks
             .entry(TypeId::of::<T>())
@@ -134,6 +150,13 @@ impl World {
             .push(hook);
     }
 
+    /// Appends a hook fired on every write of `T`: the initial insert (right after the
+    /// `on_add` hooks) and every later overwrite of the same entity's value. Same
+    /// accumulate-and-never-unregister rules as [`World::register_on_add`].
+    ///
+    /// It is a *write* notification, not a change notification — the hook fires even when
+    /// the new value equals the old one, and it cannot see either value except by reading
+    /// the entity out of the `&mut World` it is handed.
     pub fn register_on_set<T: Component>(&mut self, hook: SetHook) {
         self.component_hooks
             .entry(TypeId::of::<T>())
@@ -142,6 +165,15 @@ impl World {
             .push(hook);
     }
 
+    /// Appends a hook fired once for every entity [`World::despawn`] actually destroys,
+    /// whatever components it carries — the place for teardown that no single component owns.
+    /// Handles that are already dead when despawn reaches them are skipped, so a double
+    /// despawn fires the hook once, not twice.
+    ///
+    /// Unlike the `on_*` hooks this one is global, not keyed by component type. It runs
+    /// before any `on_remove` hook and before the id is freed, so the entity is still alive
+    /// and fully readable. Hooks accumulate and cannot be unregistered; one registered from
+    /// inside a despawn hook does not run for the entity currently being despawned.
     pub fn register_despawn_hook(&mut self, hook: DespawnHook) {
         self.despawn_hooks.push(hook);
     }

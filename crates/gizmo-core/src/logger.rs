@@ -1,18 +1,57 @@
+//! Process-global in-memory log buffer, plus the `tracing` bridge that fills it.
+//!
+//! Records enter either through the [`gizmo_log!`](crate::gizmo_log) macro or, once
+//! [`init_tracing`] has installed [`GizmoTracingLayer`], through any `tracing` event that the
+//! subscriber's filter admits — `init_tracing` adds its `EnvFilter` as a plain layer, which
+//! filters the whole stack, so an event that filter rejects never reaches the layer. Storage
+//! is a single mutex-guarded `static` holding at most 2048 entries; the oldest is evicted
+//! when full.
+//!
+//! Consequences of that being a `static` rather than a `World` resource: the buffer is shared
+//! by every `World`, every plugin and every test in the process, it outlives any one of them,
+//! and concurrent emitters interleave — so a caller can never assume the entry it just wrote
+//! is the last one, and tests asserting on counts must serialise against each other.
+
 use std::sync::Mutex;
 
 /// Log seviyesi.
+///
+/// Severity increases with declaration order and the minimum-level filter compares the
+/// variants *by discriminant* (`level as u8`), not through `Ord` — which is not derived.
+/// Reordering these variants therefore silently changes which records are kept.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LogLevel {
+    /// Routine progress. Discriminant 0, the lowest, so the default minimum level of `Info`
+    /// admits everything. Printed to stdout.
     Info,
+    /// A recoverable problem worth surfacing. Discriminant 1, which makes it the only useful
+    /// middle threshold: `set_min_log_level(LogLevel::Warning)` is how a release build drops
+    /// routine `Info` traffic while still keeping this and `Error`. Printed to stderr with a
+    /// `[WARN]` tag, and it is the level `tracing::Level::WARN` maps to when records arrive
+    /// through [`GizmoTracingLayer`].
     Warning,
+    /// A failure. Discriminant 2, the highest, so setting the minimum level to `Error`
+    /// suppresses every other kind. Printed to stderr.
     Error,
 }
 
 /// Tek bir log kaydı.
 #[derive(Clone)]
 pub struct LogEntry {
+    /// The already-formatted message body: `format!` arguments are expanded at emit time and
+    /// the level, timestamp and source location are *not* prefixed onto it — those live in
+    /// the sibling fields, so a consumer can lay them out however it likes.
     pub message: String,
+    /// Severity this record was emitted at.
+    ///
+    /// It passed the minimum level that was in force *at emit time*. Since that threshold is
+    /// global mutable state, a buffer read later can legitimately contain entries below the
+    /// current minimum — filter again on read if you need consistency.
     pub level: LogLevel,
+    /// Wall-clock time of emission, formatted `HH:MM:SS` — local time on native targets, UTC
+    /// on wasm. Display only: there is no date, no sub-second component and no zone marker,
+    /// so it is not sortable across a midnight boundary and not comparable between records
+    /// produced on different targets.
     pub timestamp: String,
     /// Kaynak dosya yolu (compile-time).
     pub file: &'static str,

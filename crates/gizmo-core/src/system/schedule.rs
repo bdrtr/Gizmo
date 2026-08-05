@@ -6,8 +6,29 @@ use std::collections::HashSet;
 // SCHEDULE — DAG BATCHING & MULTITHREADING
 // ==============================================================
 
+/// A group of systems whose declared accesses do not conflict, so that all of them may run
+/// concurrently against one shared `&World`. Not *disjoint*: two systems that both read the
+/// same type share a batch and share that access.
+///
+/// A candidate joins only if it conflicts with nothing already in the batch (see
+/// [`is_compatible`](Self::is_compatible)). That absence of conflict is the whole safety
+/// argument behind the unchecked queries a system receives: a system holds only `&World`, so nothing
+/// but the batching stops two co-scheduled systems from mutably aliasing the same component
+/// column (see the `SAFETY` note on `SystemParam for Query` in `system/params.rs`).
+///
+/// Batches are produced by [`Schedule::build`]. Constructing one yourself is of little use:
+/// the `systems` vector is crate-private and there is no public accessor, iterator or `run`,
+/// so a `SystemBatch` built outside this crate can be pushed into but never read back.
 pub struct SystemBatch {
     pub(crate) systems: Vec<Box<dyn System>>,
+    /// Union of the accesses of every member — each system's own
+    /// [`System::access_info`] merged with the extra access declared on its
+    /// [`SystemConfig`] (`reads`/`writes`/`reads_res`/`writes_res`/`exclusive`).
+    ///
+    /// Grown with `Vec::extend` and never de-duplicated, so a `TypeId` appears once per
+    /// system that declared it: this is a multiset, not a set, and its length is only an
+    /// upper bound on the number of distinct types touched. `is_exclusive` is the OR over
+    /// the members; once it is set the batch rejects every further candidate.
     pub access_info: AccessInfo,
 }
 
@@ -18,6 +39,12 @@ impl Default for SystemBatch {
 }
 
 impl SystemBatch {
+    /// An empty batch: no systems, no declared access, not exclusive.
+    ///
+    /// Note that an empty batch still answers `false` from
+    /// [`is_compatible`](Self::is_compatible) for an *exclusive* system — exclusivity is
+    /// rejected from either side. That is why [`Schedule::build`] always ends up giving an
+    /// exclusive system a freshly appended batch, where it runs alone.
     pub fn new() -> Self {
         Self {
             systems: Vec::new(),
@@ -25,6 +52,18 @@ impl SystemBatch {
         }
     }
 
+    /// Appends `system` to the batch and folds its access into
+    /// [`access_info`](Self::access_info).
+    ///
+    /// `config_info` is the access declared by hand on the system's [`SystemConfig`]; it is
+    /// merged *on top of* the system's own [`System::access_info`]. The merge is purely
+    /// additive — a manual declaration can only widen what the batch believes is touched,
+    /// never narrow it — and `is_exclusive` is OR-ed in.
+    ///
+    /// No compatibility check happens here. The caller must already have had `true` from
+    /// [`is_compatible`](Self::is_compatible) for this same `system`/`config_info` pair;
+    /// appending a conflicting system creates a data race, because batch members are run in
+    /// parallel over a shared world.
     pub fn add_system(&mut self, system: Box<dyn System>, config_info: AccessInfo) {
         let mut sys_info = system.access_info();
         sys_info.component_reads.extend(config_info.component_reads);
@@ -52,6 +91,20 @@ impl SystemBatch {
         self.systems.push(system);
     }
 
+    /// Whether `system`, widened by the hand-declared `config_info`, can be added to this
+    /// batch without a conflict.
+    ///
+    /// Conflicting means read/write or write/write on the same component or the same
+    /// resource type; two readers of one type are fine, and accesses to different types
+    /// never conflict. `false` is returned unconditionally when either side is exclusive,
+    /// including against an empty batch.
+    ///
+    /// Only *declared* access is examined. Anything a system touches without declaring it —
+    /// interior mutability, a hand-written [`System::access_info`] that under-reports,
+    /// global state — is invisible here and will race if it collides.
+    ///
+    /// Pure query; pass the identical `config_info` to
+    /// [`add_system`](Self::add_system) afterwards, or the answer does not apply.
     pub fn is_compatible(&self, system: &dyn System, config_info: &AccessInfo) -> bool {
         let mut sys_info = system.access_info();
         sys_info
@@ -72,14 +125,57 @@ impl SystemBatch {
     }
 }
 
+/// Ordering and phase constraints applied to every system that declared membership of a
+/// [`SystemSet`] with `in_set::<S>()`.
+///
+/// A `SetConfig` does nothing until it is handed to [`Schedule::configure_set`], and it is
+/// consumed at [`Schedule::build`] time, so it may be registered before or after its member
+/// systems are added. It positions the members relative to other labels, and normally leaves
+/// the members free to batch together and run in parallel.
+///
+/// Normally, not always: [`SystemConfig::in_set`] records the set name as an ordinary LABEL
+/// as well as recording membership, and the set's `before`/`after` lists are appended to each
+/// member's own without excluding fellow members. So if two systems are both in set `A` and
+/// both carry a label that `A`'s own constraints name, they can end up ordered against each
+/// other — and a symmetric case (two systems each in `A` and `B`, with `A.after::<B>()`)
+/// produces a cycle that makes [`Schedule::build`] panic.
 pub struct SetConfig {
+    /// Identity of the set — [`SystemSet::set_name`], which defaults to
+    /// `std::any::type_name::<S>()`.
+    ///
+    /// [`Schedule::configure_set`] keys its map on this string, so configuring the same set
+    /// twice *replaces* the earlier configuration instead of merging with it.
+    /// `SystemConfig::in_set` records the very same string as a label on each member, which
+    /// is how the `before`/`after` constraints below resolve to a set's members.
     pub name: &'static str,
+
+    /// Labels the members of this set must run *before*.
+    ///
+    /// At build time every member gains an ordering edge to every *other* system carrying
+    /// one of these labels, which places the member in a strictly earlier batch. Matching is
+    /// by exact string against system labels; a name that matches no system logs a warning
+    /// and is silently dropped — it is not an error and yields no ordering.
     pub before: Vec<&'static str>,
+
+    /// Labels the members of this set must run *after* — the mirror of the `before` field,
+    /// with the same string matching and the same warn-and-ignore treatment of names that
+    /// match nothing.
     pub after: Vec<&'static str>,
+
+    /// Phase forced onto every member, or `None` to leave each member's own phase alone.
+    ///
+    /// `Some(_)` *overrides* a per-system `in_phase`, because set configs are applied after
+    /// the system list has been collected. If a system belongs to several configured sets,
+    /// the last of its `in_set` declarations that carries a phase wins.
     pub phase: Option<Phase>,
 }
 
 impl SetConfig {
+    /// An unconstrained configuration for set `S`: no ordering edges, no phase override.
+    ///
+    /// Registering it is not pointless — [`Schedule::configure_set`] replaces any previous
+    /// configuration for `S`, so this is also how a set's constraints are cleared. Chain
+    /// `before` / `after` / [`in_phase`](Self::in_phase) to build the constraints up.
     pub fn new<S: SystemSet>() -> Self {
         Self {
             name: S::set_name(),
@@ -88,20 +184,49 @@ impl SetConfig {
             phase: None,
         }
     }
+    /// Constrains this set's members to run before the members of `S`.
+    ///
+    /// Accumulates — call it repeatedly to name several sets. `S` is referenced by
+    /// [`SystemSet::set_name`], which resolves against systems carrying that exact label;
+    /// `in_set::<S>()` is what attaches it. If no system is in `S`, the constraint is
+    /// dropped with a warning at build time.
     pub fn before<S: SystemSet>(mut self) -> Self {
         self.before.push(S::set_name());
         self
     }
+    /// Constrains this set's members to run after the members of `S`. Accumulates, resolves
+    /// and degrades exactly like the `before` constructor above.
     pub fn after<S: SystemSet>(mut self) -> Self {
         self.after.push(S::set_name());
         self
     }
+    /// Forces every member of this set into `phase`, overriding whatever phase the member
+    /// declared for itself.
+    ///
+    /// Naming any phase other than [`Phase::Update`] here is enough to switch the whole
+    /// schedule into phase mode — see [`Schedule::build`].
     pub fn in_phase(mut self, phase: Phase) -> Self {
         self.phase = Some(phase);
         self
     }
 }
 
+/// A set of systems compiled into a fixed sequence of parallel batches, plus the executor
+/// that runs them.
+///
+/// Systems accumulate as unbuilt configs and are turned into batches by
+/// [`build`](Self::build), which [`run`](Self::run) calls lazily. The compiled layout is a
+/// pure function of the order the systems were added in and the access each one declares —
+/// no hash-map iteration enters into it — so the same construction sequence always yields
+/// the same batches. Systems in *different* batches always observe the same relative order;
+/// systems inside one batch have
+/// no order at all (see [`run`](Self::run)).
+///
+/// **Add every system, and register every [`SetConfig`], before the first
+/// `build`/`run`.** Every mutating method invalidates the compiled batches, and because
+/// `build` *moves* the pending configs into those batches, invalidating after a build
+/// discards the systems that were already compiled. Adding one system to a built schedule
+/// therefore leaves a schedule containing only that system.
 pub struct Schedule {
     unbuilt_configs: Vec<SystemConfig>,
     set_configs: std::collections::HashMap<&'static str, SetConfig>,
@@ -116,6 +241,12 @@ pub struct Schedule {
 }
 
 impl Schedule {
+    /// An empty, unbuilt schedule with no systems and no set configurations.
+    ///
+    /// The change-detection reference tick starts at 0. Since a `World` never uses tick 0
+    /// and tick filters test *strictly greater than* the reference, the first
+    /// [`run`](Self::run) reports every component already in the world as both changed and
+    /// added.
     pub fn new() -> Self {
         Self {
             unbuilt_configs: Vec::new(),
@@ -127,32 +258,99 @@ impl Schedule {
         }
     }
 
+    /// Registers ordering/phase constraints for a system set, replacing any configuration
+    /// previously registered under the same [`SetConfig::name`].
+    ///
+    /// Order relative to the `add_*` calls does not matter: the constraints are applied
+    /// when the schedule is built. Configuring a set no system belongs to is silently
+    /// ignored.
+    ///
+    /// Invalidates the compiled batches, so calling it on an already-built schedule throws
+    /// the built systems away and leaves the schedule empty.
     pub fn configure_set(&mut self, config: SetConfig) {
         self.set_configs.insert(config.name, config);
         self.invalidate();
     }
 
+    /// Adds a dependency-injected system: a plain function or closure whose arguments are
+    /// [`SystemParam`]s (up to 12 of them), or a [`SystemConfig`] already decorated with
+    /// `label`/`before`/`after`/`in_set`/`in_phase`/`run_if`.
+    ///
+    /// This is the only `add_*` entry point that preserves ordering constraints, so it is
+    /// the one to use whenever the system is not fully independent. Its component/resource
+    /// access is inferred from the parameter types, which is what lets the batcher run it in
+    /// parallel with others.
+    ///
+    /// Systems are appended, and insertion order is the tie-break used by the topological
+    /// sort — it decides the batch layout whenever the ordering constraints leave a choice.
+    /// Invalidates the compiled batches (see the type-level warning).
     pub fn add_di_system<Params, S: IntoSystemConfig<Params>>(&mut self, system: S) {
         self.unbuilt_configs.push(system.into_config());
         self.invalidate();
     }
 
+    /// Adds a value that already implements [`System`], with no labels, no ordering
+    /// constraints and no hand-declared extra access — batching is decided purely by the
+    /// system's own [`System::access_info`].
+    ///
+    /// Anything needing ordering must go through [`add_di_system`](Self::add_di_system)
+    /// instead; there is no way to attach constraints afterwards.
+    ///
+    /// Beware the blanket `System` impl for `FnMut(&World, f32)`: such a closure reports
+    /// itself as exclusive, so it becomes a full barrier occupying a batch on its own.
+    /// Invalidates the compiled batches (see the type-level warning).
     pub fn add_system<S: System + 'static>(&mut self, system: S) {
         self.unbuilt_configs
             .push(SystemConfig::new(Box::new(system)));
         self.invalidate();
     }
 
+    /// Adds a tuple of up to 8 bare systems (or a single one) in one call.
+    ///
+    /// Each element is added exactly as [`add_system`](Self::add_system) would add it:
+    /// **position in the tuple implies no ordering**, so `add_systems((a, b))` lets `a` and
+    /// `b` run in the same batch, in parallel, in an unspecified order. The tuple form also
+    /// does not accept already-configured [`SystemConfig`]s; use
+    /// [`add_di_system`](Self::add_di_system) one at a time for those.
     pub fn add_systems<T, Configs: IntoSystemConfigs<T>>(&mut self, configs: Configs) {
         configs.into_configs(self);
     }
 
+    /// Adds an already-boxed system — the object-safe entry point, for systems produced at
+    /// runtime or by combinators such as `pipe`/`run_if_sys` that hand back a
+    /// `Box<dyn System>`.
+    ///
+    /// Identical in effect to [`add_system`](Self::add_system): no labels, no ordering, and
+    /// access taken solely from [`System::access_info`].
     pub fn add_system_boxed(&mut self, system: Box<dyn System>) {
         self.unbuilt_configs.push(SystemConfig::new(system));
         self.invalidate();
     }
 
     fn invalidate(&mut self) {
+        // `build()` MOVES the configs out (`mem::take`), so once a schedule is built there is
+        // nothing left to rebuild from — clearing the batches here discards those systems for
+        // good. Adding a system to an already-built schedule therefore keeps only the new one.
+        //
+        // Fixing that properly means changing who owns the configs after a build (see
+        // docs/FIXPLAN.md). Until then the least this can do is stop being SILENT: a schedule
+        // that loses every system between one frame and the next is otherwise indistinguishable
+        // from one whose systems simply do nothing.
+        let discarded: usize = self
+            .phase_batches
+            .iter()
+            .flat_map(|(_, batches)| batches.iter())
+            .chain(self.legacy_batches.iter())
+            .map(|b| b.systems.len())
+            .sum();
+        if discarded > 0 {
+            tracing::error!(
+                discarded_systems = discarded,
+                "Schedule modified after it was built: the {discarded} already-compiled \
+                 system(s) have been DROPPED, not rebuilt. Add every system before the first \
+                 `run()`/`build()`.",
+            );
+        }
         self.phase_batches.clear();
         self.legacy_batches.clear();
     }
@@ -161,6 +359,14 @@ impl Schedule {
         !self.phase_batches.is_empty() || !self.legacy_batches.is_empty()
     }
 
+    /// Compiles the schedule now so that a malformed graph is reported at setup time rather
+    /// than on the first frame. Exactly equivalent to [`build`](Self::build).
+    ///
+    /// # Panics
+    ///
+    /// Panics on a cyclic ordering constraint. Unmatched `before`/`after` labels are *not*
+    /// an error — they are logged as warnings and ignored, so this does not validate that
+    /// the constraints you wrote actually took effect.
     pub fn validate(&mut self) {
         self.build();
     }
@@ -298,6 +504,38 @@ impl Schedule {
         batches
     }
 
+    /// Compiles the pending systems into batches. Idempotent: returns immediately if the
+    /// schedule is already built, and leaves the schedule unbuilt (so that later additions
+    /// still compile) if there is nothing pending.
+    ///
+    /// Three steps:
+    ///
+    /// 1. Each registered [`SetConfig`] is folded into its member systems — the set's
+    ///    `before`/`after` labels are appended to the member's own, and a set phase
+    ///    overwrites the member's phase. Being in a set that was never passed to
+    ///    [`configure_set`](Self::configure_set) contributes nothing here beyond the label
+    ///    that `in_set` already attached.
+    /// 2. If *any* system now sits in a phase other than [`Phase::Update`], the whole
+    ///    schedule switches to phase mode: systems are grouped by phase and each group is
+    ///    batched independently, groups running in ascending phase order (`PreUpdate` →
+    ///    `Update` → `Physics` → `PostUpdate` → `Render`). Otherwise one flat batch list is
+    ///    produced, which is the same thing with a single group. Note there is no ordering
+    ///    edge *between* phases — the separation comes from the groups being executed one
+    ///    after another.
+    /// 3. Within a group, `before`/`after` labels become a DAG which is topologically
+    ///    sorted (Kahn, seeded in insertion order), and the systems are packed greedily: a
+    ///    system goes into the highest-indexed existing batch that is at or after
+    ///    `1 + max(batch index of its predecessors)` and whose access does not conflict with
+    ///    it, or into a new batch appended at the end. Insertion order is the only
+    ///    tie-break, which is what makes the layout deterministic.
+    ///
+    /// A `before`/`after` label matching no system logs a warning (naming the system by its
+    /// index within the group) and is dropped.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the ordering constraints contain a cycle, reporting how many of the
+    /// systems could be sorted before the topological sort stalled.
     pub fn build(&mut self) {
         if self.is_built() {
             return;
@@ -381,6 +619,41 @@ impl Schedule {
         }
     }
 
+    /// Runs every system once, building the schedule first if that has not happened yet.
+    ///
+    /// Execution order: phases in ascending order, batches within a phase in index order,
+    /// and the systems of one batch **concurrently, in an unspecified order** (rayon on
+    /// native targets, a sequential shim on `wasm32`). Co-batched systems are guaranteed to
+    /// have no conflicting declared access, so their interleaving is normally unobservable —
+    /// but side effects outside the access declaration are not ordered. In particular two
+    /// systems taking `Commands` declare only a *read* of the command-queue resource, so
+    /// they may share a batch and enqueue in a non-reproducible order.
+    ///
+    /// The deferred `CommandQueue` is drained and applied **after each batch**, on this
+    /// thread. Structural changes requested by a batch are therefore visible to the next
+    /// batch (and the next phase), never to the rest of the batch that queued them.
+    ///
+    /// `dt` is forwarded unchanged to every system; nothing here sub-steps or rescales it,
+    /// so a fixed-timestep caller passes its own fixed step.
+    ///
+    /// Change detection: the call opens a window by pointing the world's reference tick at
+    /// the tick of this schedule's *previous* run and advancing the world tick by one, so
+    /// `Changed<T>`/`Added<T>` mean "since this schedule last ran". The reference is set
+    /// once, before any batch starts, so parallel systems cannot race on it. It is stored
+    /// per schedule, not per world: two schedules sharing a world each keep their own
+    /// window, and a schedule alternated between two worlds compares against a tick from
+    /// the wrong one. The window is opened even when the schedule holds no systems, so an
+    /// empty `run` still advances the world tick.
+    ///
+    /// Finally, if a `FrameProfiler` resource is present its current frame is closed — which
+    /// is itself a no-op while the profiler is disabled.
+    ///
+    /// # Panics
+    ///
+    /// Panics on a cyclic ordering constraint if the schedule still needs building, and
+    /// propagates a panic raised by a system. Such an unwind skips that batch's command
+    /// flush, every later batch and phase, and the update of the change-detection
+    /// reference — so the next `run` re-opens the same window.
     #[tracing::instrument(skip_all, name = "ecs_update")]
     pub fn run(&mut self, world: &mut World, dt: f32) {
         if !self.is_built() && !self.unbuilt_configs.is_empty() {
@@ -431,3 +704,58 @@ impl Default for Schedule {
     }
 }
 
+
+
+#[cfg(test)]
+mod modify_after_build {
+    use super::*;
+    use crate::world::World;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::Arc;
+
+    /// Adding a system to an already-built schedule silently drops every system already
+    /// compiled into it.
+    ///
+    /// `build()` moves the configs out with `mem::take`, so there is nothing to rebuild from;
+    /// `invalidate()` then clears the batches and the previous systems are gone. Because
+    /// `run()` builds lazily on the first frame, the shape that bites is ordinary: add
+    /// systems, run a frame, then register one more — from a plugin loaded at runtime, the
+    /// editor, or a script — and the schedule is left holding only the newcomer.
+    ///
+    /// This test pins the CURRENT behaviour, which is a bug, not a contract. It exists so the
+    /// eventual fix (see docs/FIXPLAN.md) has something that goes red when the loss stops
+    /// happening — at which point the assertion below should become `2`, not be deleted.
+    #[test]
+    fn adding_a_system_after_the_first_run_drops_the_earlier_ones() {
+        let first = Arc::new(AtomicU32::new(0));
+        let second = Arc::new(AtomicU32::new(0));
+        let (f, s) = (first.clone(), second.clone());
+
+        let mut schedule = Schedule::new();
+        schedule.add_system(move |_w: &World, _dt: f32| {
+            f.fetch_add(1, Ordering::Relaxed);
+        });
+
+        let mut world = World::new();
+        schedule.run(&mut world, 0.016); // builds lazily here
+        assert_eq!(first.load(Ordering::Relaxed), 1, "the first system must run once");
+
+        schedule.add_system(move |_w: &World, _dt: f32| {
+            s.fetch_add(1, Ordering::Relaxed);
+        });
+        schedule.run(&mut world, 0.016);
+
+        assert_eq!(
+            second.load(Ordering::Relaxed),
+            1,
+            "the newly added system must run"
+        );
+        assert_eq!(
+            first.load(Ordering::Relaxed),
+            1,
+            "KNOWN BUG being pinned: the first system was dropped by the rebuild, so it ran \
+             once in total rather than twice. When this starts failing with 2, the ownership \
+             fix has landed — update the expectation, do not delete the test."
+        );
+    }
+}

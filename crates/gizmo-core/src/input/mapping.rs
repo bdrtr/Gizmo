@@ -34,6 +34,11 @@ pub struct ActionMap {
 }
 
 impl ActionMap {
+    /// Creates a map with no bindings at all.
+    ///
+    /// An unbound action is not an error condition: every `is_action_*` query answers `false`
+    /// for a name that was never bound, so a misspelled action name fails silently and
+    /// forever rather than panicking. There is no way to ask whether a name is bound.
     pub fn new() -> Self {
         Self {
             bindings: HashMap::new(),

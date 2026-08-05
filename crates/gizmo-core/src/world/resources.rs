@@ -1,13 +1,32 @@
+//! World resources: singletons keyed by type instead of being attached to an entity.
+//!
+//! Each resource sits behind its own `RwLock`, which is why `&World` suffices to hand out a
+//! *mutable* guard — exclusivity is per resource and enforced at runtime, not by the borrow
+//! checker. All the accessors here are built on the non-blocking `try_*` primitives, so a
+//! request that conflicts with a guard you are still holding returns `None` /
+//! [`ResourceFetchError::BorrowConflict`] rather than deadlocking. The single exception is
+//! [`World::get_resource_mut_or_default`], which takes `&mut World` and does block.
+
 use super::World;
 use std::any::TypeId;
 use std::marker::PhantomData;
 use std::sync::RwLock;
 use std::sync::{RwLockReadGuard, RwLockWriteGuard};
 
+/// Why a typed resource lookup failed.
+///
+/// Both variants carry the *requested* type's `TypeId`. It is included because these errors
+/// come out of generic functions whose `T` is not otherwise recoverable from the value; it
+/// has no printable name, so log `std::any::type_name::<T>()` at the call site instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ResourceFetchError {
+    /// No resource of this type is in the world — never inserted, or removed since.
     NotFound(TypeId),
+    /// The resource exists but its lock could not be taken without waiting: a conflicting
+    /// guard for it is still alive, or an earlier panic while a guard was held poisoned the
+    /// lock. Either way the fetch gives up immediately rather than blocking, so this is
+    /// never a deadlock — but it is also indistinguishable from ordinary contention.
     BorrowConflict(TypeId),
 }
 
@@ -26,6 +45,12 @@ impl std::fmt::Display for ResourceFetchError {
 
 impl std::error::Error for ResourceFetchError {}
 
+/// Shared access to one world resource, valid for as long as the guard lives.
+///
+/// `Deref` only — obtain a [`ResourceWriteGuard`] to mutate. While this guard exists the
+/// resource's read lock is held, so [`World::get_resource_mut`] for the *same* type returns
+/// `None`; other resources are unaffected, each having its own lock. The guard also borrows
+/// the `World` immutably, so no `&mut World` method can run until it is dropped.
 pub struct ResourceReadGuard<'a, T> {
     pub(crate) guard: RwLockReadGuard<'a, Box<dyn std::any::Any + Send + Sync>>,
     pub(crate) _marker: PhantomData<T>,
@@ -38,6 +63,15 @@ impl<'a, T: 'static> std::ops::Deref for ResourceReadGuard<'a, T> {
     }
 }
 
+/// Exclusive access to one world resource, valid for as long as the guard lives.
+///
+/// While it exists the resource's write lock is held, so *every* further fetch of the same
+/// type — read or write — fails with [`ResourceFetchError::BorrowConflict`]; other
+/// resources are unaffected. Note that it is handed out from `&World`, so holding two of
+/// these for two different resources at once is legal and expected.
+///
+/// Dropping it is the only thing that releases the lock: leak one (`std::mem::forget`) and
+/// every later fetch of that type keeps failing with [`ResourceFetchError::BorrowConflict`].
 pub struct ResourceWriteGuard<'a, T> {
     pub(crate) guard: RwLockWriteGuard<'a, Box<dyn std::any::Any + Send + Sync>>,
     pub(crate) _marker: PhantomData<T>,

@@ -14,6 +14,10 @@ use std::any::TypeId;
 /// Bir archetype içindeki tek bir component tipinin özeti.
 #[derive(Debug, Clone)]
 pub struct ComponentSummary {
+    /// The component type's `TypeId` — the key everything else in the ECS is indexed by
+    /// (archetype signatures, hook registration, sparse sets). Meaningful inside this
+    /// process only: `TypeId` values are not stable across compilations, so never
+    /// serialise one. [`Self::name`] carries the already-resolved human-readable name.
     pub type_id: TypeId,
     /// `std::any::type_name` (kayıt anında yakalanan tam yol).
     pub name: &'static str,
@@ -36,7 +40,13 @@ impl ComponentSummary {
 /// Tek bir archetype (aynı component bileşimine sahip entity tablosu) özeti.
 #[derive(Debug, Clone)]
 pub struct ArchetypeSummary {
+    /// The archetype's id, equal to its index in the world's archetype table. Not a stable
+    /// name for a component set across time: [`World::compact`] garbage-collects empty
+    /// archetypes by swap-removing them, renumbering whichever archetype takes the freed
+    /// slot.
     pub id: u32,
+    /// Rows in this archetype — entities holding exactly this component set. Always ≥ 1,
+    /// because [`World::archetype_summaries`] skips empty archetypes entirely.
     pub entity_count: usize,
     /// Bu archetype'ın tüm component sütunlarının toplam baytı.
     pub bytes: usize,

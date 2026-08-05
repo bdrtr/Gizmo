@@ -8,6 +8,18 @@ use crate::world::World;
 /// Converts a value (typically a plain function whose arguments implement
 /// [`SystemParam`]) into a boxed [`System`] that the scheduler can run.
 pub trait IntoSystem<Params> {
+    /// Boxes `self` into a runnable system.
+    ///
+    /// Implemented for `FnMut()` and for functions or closures of 1 to 12 parameters, every
+    /// one of which must be a [`SystemParam`], plus an identity impl for an already-boxed
+    /// `Box<dyn System>`. `Params` is inferred from the signature and only serves to keep
+    /// those impls apart.
+    ///
+    /// Conversion is where the parameter list becomes an [`AccessInfo`]; nothing is fetched
+    /// from the world yet — that happens on every run. The generated runner fetches the
+    /// parameters in declaration order and **panics** if any of them cannot be produced
+    /// (typically a resource that was never inserted); it deliberately does not skip the
+    /// system quietly.
     fn into_system(self) -> Box<dyn System>;
 }
 
@@ -46,6 +58,16 @@ impl System for Box<dyn System> {
     }
 }
 
+/// Two systems fused into one scheduling unit, produced by [`SystemExt::pipe`].
+///
+/// Despite the name, nothing is piped *between* them: both halves are ordinary systems, run
+/// one after the other with the same `&World` and the same `dt`, and no value is handed from
+/// the first to the second — they communicate only through the world. Because the pair is a
+/// single system, deferred `Commands` are not applied in between (that happens between
+/// batches), so the second half does not see entities the first half spawned.
+///
+/// Access is the union of both halves and exclusive if either half is. Fields are private:
+/// build it with [`SystemExt::pipe`].
 pub struct PipeSystem {
     a: Box<dyn System>,
     b: Box<dyn System>,
@@ -69,7 +91,20 @@ impl System for PipeSystem {
     }
 }
 
+/// Chains one system onto another.
 pub trait SystemExt<ParamA> {
+    /// Fuses `self` and `other` into a single system that runs `self` first, then `other` —
+    /// see [`PipeSystem`] for what that implies (same world and `dt`, no value handed over,
+    /// no command flush in between).
+    ///
+    /// This orders two systems without going through labels: the pair is one node in the
+    /// batching graph, so the halves can never be separated or run concurrently with each
+    /// other. Other systems may still run in parallel *alongside* the pair.
+    ///
+    /// The two halves need not be compatible with *each other*: they run sequentially inside
+    /// one system, so fusing a writer of `T` with a reader of `T` is sound where registering
+    /// them separately would have forced them into different batches. The fused access is the
+    /// union of both, so the pair keeps every conflict each half had on its own.
     fn pipe<ParamB, SystemB: IntoSystem<ParamB>>(self, other: SystemB) -> Box<dyn System>;
 }
 
