@@ -2402,6 +2402,68 @@ fn does_the_column_only_lean_when_it_is_allowed_to_sleep() {
     }
 }
 
+/// Does a sleeping stack keep re-deriving DEGENERATE manifolds?
+///
+/// Two findings want to be the same finding. `what_does_a_manifold_look_like_when_it_is_born`
+/// shows a manifold born at exact contact carrying a single off-centre point and a `Δω ≈ 0.03`
+/// kick, because `clip_box_box` rejects every corner at `signed_depth == 0.0`.
+/// `does_the_column_only_lean_when_it_is_allowed_to_sleep` shows a column held awake leaning
+/// 0.000106 and never falling, while the same column left to sleep leans up to 10 and collapses.
+/// If sleeping drops a pair out of narrowphase and waking makes it re-derive its contacts from a
+/// near-zero-penetration state, the two are one mechanism: sleep cycling re-triggers the
+/// degenerate birth over and over.
+///
+/// The prediction is specific and easy to falsify: a naturally-sleeping stack should show
+/// repeated one-point manifolds, and a held-awake one should show none after the first substep.
+/// A first attempt at a fix — skipping the solver write-back for bodies that stay asleep — is
+/// already known NOT to reproduce the held-awake behaviour (it left the lean at 0.0099 against
+/// 0.000106, removed three collapses out of five while adding one to a previously-green test, and
+/// was reverted), so the mechanism is something about sleep other than the stale write-back.
+///
+/// Counted here: events carrying exactly one contact point, and `Started` events, which is what
+/// a genuinely re-born pair emits.
+#[test]
+#[ignore = "measurement, not a gate — prints a table"]
+fn does_sleep_cycling_re_derive_degenerate_manifolds() {
+    eprintln!("\n=== 1x12x1, 1200 frames: degenerate (1-point) manifolds and pair re-births ===");
+    eprintln!(
+        "{:>10}  {:>14}  {:>14}  {:>14}  {:>12}",
+        "ground", "mode", "1-point events", "Started events", "peak lean"
+    );
+    for h in [20.0f32, 200.0] {
+        for force_awake in [false, true] {
+            let (mut world, bodies, origins) = scene_tower_on_ground(12, h);
+            let (mut degenerate, mut started) = (0usize, 0usize);
+            let mut peak_lean = 0.0f32;
+            for _ in 0..1200 {
+                if force_awake {
+                    for i in 1..world.entities.len() {
+                        world.rigid_bodies[i].wake_up();
+                    }
+                }
+                world.step(DT).ok();
+                for ev in world.collision_events() {
+                    if ev.contact_points.len() == 1 {
+                        degenerate += 1;
+                    }
+                    if matches!(ev.event_type, gizmo_physics_core::CollisionEventType::Started) {
+                        started += 1;
+                    }
+                }
+                peak_lean = peak_lean.max(observe(&world, &bodies, &origins).lean);
+            }
+            eprintln!(
+                "{:>10.0}  {:>14}  {:>14}  {:>14}  {:>12.6}",
+                h,
+                if force_awake { "held awake" } else { "natural" },
+                degenerate,
+                started,
+                peak_lean
+            );
+        }
+    }
+}
+
 /// Negative control for `realistic_crate_stack_stays_standing`: the same scene, same horizon,
 /// same assertions, with the solver starved to 4 sweeps. It must FAIL.
 ///
