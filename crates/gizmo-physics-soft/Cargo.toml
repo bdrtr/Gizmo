@@ -3,19 +3,27 @@ name = "gizmo-physics-soft"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
-description.workspace = true
+description = "Soft-body physics for the Gizmo engine: FEM tetrahedral meshes, XPBD cloth and ropes. Usable without an ECS."
+keywords = ["physics", "soft-body", "cloth", "fem", "xpbd"]
+categories = ["game-development", "simulation"]
 license.workspace = true
 repository.workspace = true
 readme.workspace = true
 
 [features]
-default = []
+# Default ON — see `gizmo-physics-core`'s identical feature. OFF drops `gizmo-core` and with
+# it the `system` module (the ECS drivers) plus the `Component` impls. The solvers themselves —
+# `Cloth`, `Rope`, `SoftBodyMesh` and their `step` methods — are ECS-free and stay.
+default = ["ecs"]
+ecs = ["dep:gizmo-core", "gizmo-physics-core/ecs"]
 gpu_physics = ["wgpu", "bytemuck", "pollster"]
 
 [dependencies]
-gizmo-core = { path = "../gizmo-core", version = "0.9.0" }
+gizmo-core = { path = "../gizmo-core", version = "0.9.0", optional = true }
 gizmo-math = { path = "../gizmo-math", version = "0.9.0" }
-gizmo-physics-core = { path = "../gizmo-physics-core", version = "0.9.0" }
+# `default-features = false` on the physics deps: without it, turning `ecs` off here
+# would still drag `gizmo-core` in through their defaults. The `ecs` feature re-enables it.
+gizmo-physics-core = { path = "../gizmo-physics-core", version = "0.9.0", default-features = false }
 wgpu = { version = "29", optional = true }
 bytemuck = { version = "1.14", features = ["derive"], optional = true }
 pollster = { version = "0.3", optional = true }

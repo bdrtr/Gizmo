@@ -92,6 +92,7 @@ pub struct SoftBodyMesh {
     /// Damping factor to prevent infinite oscillation
     pub damping: f32,
 }
+#[cfg(feature = "ecs")]
 gizmo_core::impl_component!(SoftBodyMesh);
 
 /// Sweeps a single soft-body node along its velocity for `dt` seconds and resolves the first

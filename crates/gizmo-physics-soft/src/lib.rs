@@ -50,6 +50,8 @@ pub mod soft_body;
 /// drivers also collect every entity carrying both a `Transform` and a `Collider` into the
 /// collider slice they pass down; the rope driver passes none, since [`rope::Rope`] has no
 /// rigid-collider path at all.
+/// Requires the `ecs` feature — these are the ECS drivers.
+#[cfg(feature = "ecs")]
 pub mod system;
 
 pub use error::SoftBodyError;
@@ -58,4 +60,5 @@ pub use error::SoftBodyError;
 pub use cloth::*;
 pub use rope::*;
 pub use soft_body::*;
+#[cfg(feature = "ecs")]
 pub use system::*;

@@ -575,6 +575,7 @@ impl Cloth {
     }
 }
 
+#[cfg(feature = "ecs")]
 impl gizmo_core::Component for Cloth {}
 
 #[cfg(test)]

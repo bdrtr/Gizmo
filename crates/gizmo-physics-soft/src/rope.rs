@@ -217,6 +217,7 @@ impl Rope {
     }
 }
 
+#[cfg(feature = "ecs")]
 impl gizmo_core::Component for Rope {}
 
 #[cfg(test)]
