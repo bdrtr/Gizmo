@@ -104,6 +104,18 @@ impl World {
         self.archetype_index.entity_archetype.insert(eid, target_arch_id);
     }
 
+    /// Removes every component listed by `B` from `entity` in one archetype migration.
+    ///
+    /// Only `B`'s *type list* is used, never any value, hence the turbofish:
+    /// `world.remove_bundle::<(Transform, Velocity)>(e)`. Components of `B` the entity does
+    /// not have are ignored, and a dead entity is a silent no-op.
+    ///
+    /// The migration swap-removes the entity's old row, so another entity in the source
+    /// archetype may change position (its data is preserved).
+    ///
+    /// Hook asymmetry to know about: `on_remove` fires for `B`'s `SparseSet`-storage
+    /// components, but its Table-storage components are detached by the archetype migration
+    /// with no hook at all. [`World::remove_component`] fires `on_remove` for both.
     pub fn remove_bundle<B: crate::component::Bundle>(&mut self, entity: Entity) {
         if !self.is_alive(entity) { return; }
         let eid = entity.id();
@@ -189,6 +201,26 @@ impl World {
         self.archetype_index.entity_archetype.insert(eid, target_arch_id);
     }
 
+    /// Attaches `component` to `entity`, overwriting any value already there, and registers
+    /// `T`'s runtime metadata with the world as a side effect (so
+    /// [`World::register_component_type`] is never strictly required first).
+    ///
+    /// A dead entity is a silent no-op. An overwrite assigns over the existing slot, which
+    /// drops the previous value — no leak for a `T` that owns a heap allocation. A first
+    /// attach migrates the entity to the archetype with `T` added, swap-removing its old
+    /// row, so another entity in the source archetype may change position.
+    ///
+    /// Hooks: a first attach fires `on_add` then `on_set`; an overwrite fires `on_set`
+    /// only. That holds identically for `Table` and `SparseSet` storage.
+    ///
+    /// One asymmetry to watch for on entities whose id was *reserved* from the allocator but
+    /// never passed to [`World::flush_spawn`]: they are [`World::is_alive`] but have no
+    /// archetype row, so a `Table`-storage component is dropped silently while a `SparseSet`
+    /// one is stored anyway, since sparse sets live outside the archetype.
+    ///
+    /// # Panics
+    /// If the target archetype turns out to lack `T`'s column, which would mean the
+    /// archetype index and the component metadata registry have diverged.
     pub fn add_component<T: Component>(&mut self, entity: Entity, component: T) {
         if !self.is_alive(entity) { return; }
         let eid = entity.id();

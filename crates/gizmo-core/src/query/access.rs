@@ -193,6 +193,18 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
 
     // ── Metadata (no component access → always `&self`) ───────────────────
 
+    /// Total rows held by the matching archetypes — an **upper bound** on what iteration
+    /// yields, not the number of items it will produce.
+    ///
+    /// It sums archetype lengths and never runs a per-row filter, so it is exact only for
+    /// queries whose entire test is archetype-level: Table-stored `&T`/`Mut<T>`/`With`/`Without`
+    /// and tuples of those. It over-counts for `Changed`/`Added`/`Or`, and for `SparseSet`-stored
+    /// operands, which narrow nothing here at all — they match *every* archetype and do their
+    /// real work per row. A tuple still ANDs its operands' archetype tests, so one Table-stored
+    /// operand is enough to keep the count sane; a query whose operands are *all* sparse matches
+    /// every archetype and counts every row in the world.
+    ///
+    /// Cost is O(matching archetypes); rows are not walked.
     #[inline]
     pub fn entity_count(&self) -> usize {
         self.matching_archetypes
@@ -201,11 +213,21 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
             .sum()
     }
 
+    /// Alias of [`Query::entity_count`], carrying the same caveat: it counts *unfiltered* rows,
+    /// so `len()` may exceed the number of items `iter()`/`iter_mut()` actually yields. It is
+    /// not the length of any slice or collection.
     #[inline]
     pub fn len(&self) -> usize {
         self.entity_count()
     }
 
+    /// `true` when no archetype matched, or when every matching archetype is empty.
+    ///
+    /// Derived from [`Query::entity_count`], so it inherits its blind spot in one direction
+    /// only: `is_empty() == true` does guarantee that iteration yields nothing, but
+    /// `is_empty() == false` does **not** guarantee it yields something — a per-row filter
+    /// (`Changed`/`Added`/`Or`, or a sparse operand) can still reject every row. If you need
+    /// the truth, iterate.
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.entity_count() == 0
@@ -216,6 +238,15 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
 // Sound from a shared `&self` because `Q: ReadOnlyQuery` guarantees `Q::Item` is a
 // shared borrow — any number may coexist.
 impl<'w, Q: ReadOnlyQuery> Query<'w, Q> {
+    /// Shared row-by-row iteration, yielding `(entity_id, item)` and skipping rows rejected by
+    /// per-row filters.
+    ///
+    /// Takes `&self`, so several of these may be alive over the same query at once — sound only
+    /// because `Q: ReadOnlyQuery` guarantees no item can be a `&mut T`. For a mutable `Q` use
+    /// [`Query::iter_mut`], which ties the iterator to an exclusive borrow instead.
+    ///
+    /// See [`QueryIter`] for the visit order and for what the yielded `u32` id does and does not
+    /// guarantee.
     pub fn iter<'a>(&'a self) -> QueryIter<'a, 'w, Q> {
         self.iter_inner()
     }
@@ -259,6 +290,13 @@ impl<'w, Q: ReadOnlyQuery> Query<'w, Q> {
         self.get_inner(entity_id).is_some()
     }
 
+    /// The matching entity ids alone, in the same order and with the same per-row filtering as
+    /// [`Query::iter`] — it *is* `iter()` with the item discarded, so a row rejected by
+    /// `Changed`/`Added`/`Or` or by a sparse presence test does not appear here either. This
+    /// makes it a truer count than [`Query::len`], at the cost of walking every row.
+    ///
+    /// Ids are raw `u32` indices without a generation counter; they say nothing about liveness
+    /// once the query is dropped.
     pub fn entities<'a>(&'a self) -> impl Iterator<Item = u32> + 'a {
         self.iter_inner().map(|(id, _)| id)
     }

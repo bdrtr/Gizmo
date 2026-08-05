@@ -5,6 +5,17 @@ use crate::entity::Entity;
 use std::any::TypeId;
 
 impl World {
+    /// Allocates an entity id and materialises it immediately, so the returned handle is
+    /// usable for `add_component` on the very next line.
+    ///
+    /// The new entity has no components and lives in the empty archetype. Ids of despawned
+    /// entities are recycled FIFO — the id freed longest ago comes back first — and each
+    /// recycle bumps the generation, so old handles to that id stop being
+    /// [`World::is_alive`].
+    ///
+    /// # Panics
+    /// If the [`Entities`] resource has been removed from the world, or if the id space
+    /// (`u32::MAX` ids ever allocated) is exhausted.
     pub fn spawn(&mut self) -> Entity {
         let entity = {
             let entities = self
@@ -34,6 +45,15 @@ impl World {
         entity
     }
 
+    /// Gives storage to an id that was already reserved from [`Entities`]: appends it as a
+    /// new row of the empty archetype and records its `EntityLocation`. This is the second
+    /// half of [`World::spawn`], exposed so a deferred spawn can hand out the id from
+    /// `&World` and commit the storage later under `&mut World`.
+    ///
+    /// Call it exactly once per reserved id. It neither consults the allocator nor checks
+    /// for an existing location: a second call pushes another row for the same id into the
+    /// empty archetype and overwrites the recorded location, orphaning whatever storage the
+    /// entity already had.
     pub fn flush_spawn(&mut self, entity: Entity) {
         // Yeni entity'yi boş archetype'a kaydet
         self.archetype_index.on_spawn(entity.id());
@@ -56,6 +76,17 @@ impl World {
 
     // Eski A3 bridge ve rebuild metodları silindi (Archetype artık authoritative).
 
+    /// Rebuilds a handle for a raw id from the allocator alone: `Some` carrying the id's
+    /// *current* generation whenever the id has ever been allocated and is not on the free
+    /// list, `None` otherwise.
+    ///
+    /// Weaker than [`World::entity`], which additionally demands live archetype storage: an
+    /// id reserved through `Commands::spawn` but not yet flushed is `Some` here and `None`
+    /// there. Neither can recover the generation an old handle had — a recycled id resolves
+    /// to its new occupant.
+    ///
+    /// # Panics
+    /// If the [`Entities`] resource has been removed from the world.
     pub fn get_entity(&self, id: u32) -> Option<Entity> {
         let entities = self
             .get_resource::<Entities>()
@@ -151,6 +182,20 @@ impl World {
         Some(new_entities)
     }
 
+    /// Spawns one entity per bundle and yields their handles in input order.
+    ///
+    /// All the work happens eagerly, before the iterator is returned — dropping the result
+    /// unconsumed still leaves every entity spawned. An empty input spawns nothing.
+    ///
+    /// Since every bundle has the same Rust type they all land in one archetype: the first
+    /// is spawned normally to discover it and the rest are appended straight into its
+    /// columns, which is where the win over a loop of [`World::spawn_bundle`] comes from.
+    /// That fast path writes columns directly, so **no `on_add`/`on_set` hooks run for any
+    /// entity after the first**.
+    ///
+    /// A bundle carrying a `SparseSet`-storage component cannot use the fast path (there is
+    /// no archetype column to write) and transparently falls back to per-entity
+    /// [`World::spawn_bundle`] — correct and hook-firing, but without the batching win.
     #[tracing::instrument(skip_all, name = "spawn_batch")]
     pub fn spawn_batch<I>(&mut self, iter: I) -> impl Iterator<Item = Entity>
     where
@@ -238,6 +283,27 @@ impl World {
         tracing::debug!("clear_entities: all entities and archetype rows reset");
     }
 
+    /// Destroys an entity: runs the despawn hooks, then the `on_remove` hooks of every
+    /// component it holds, drops its component data (archetype columns *and* sparse sets),
+    /// and returns the id to the allocator with a bumped generation — which invalidates
+    /// every outstanding handle to it.
+    ///
+    /// Despawning a dead entity is a silent no-op, so double-despawn does not panic; an id
+    /// that was reserved but never flushed is freed without touching storage.
+    ///
+    /// Only this entity goes. Children keep a now-dangling `Parent`; use
+    /// `HierarchyExt::despawn_recursive` to take the subtree with it.
+    ///
+    /// Re-entrant rather than recursive: a `despawn` issued from inside a hook is appended
+    /// to a pending list that the outermost call drains, popping from the back (LIFO).
+    ///
+    /// The row is swap-removed, so the archetype's **last** row moves into the vacated
+    /// slot — survivors keep their data but not their relative iteration order.
+    ///
+    /// Hook timing differs by storage: for Table components `on_remove` runs *before* the
+    /// row is dropped (the value is still readable), for `SparseSet` components *after*.
+    /// The order across component types comes from a `HashMap` and is arbitrary — do not
+    /// depend on it.
     pub fn despawn(&mut self, entity: Entity) {
         self.entities_to_despawn.push(entity);
         if self.is_despawning {
@@ -374,6 +440,16 @@ impl World {
         );
     }
 
+    /// Despawns whichever live entity currently occupies id slot `id`, resolving the
+    /// generation through [`World::get_entity`]. A free or never-allocated slot is a no-op.
+    ///
+    /// Because the generation is resolved at call time this cannot target a *specific*
+    /// incarnation: if the id was recycled since you obtained it, this kills the new
+    /// occupant. Use [`World::despawn`] with a real handle whenever that distinction
+    /// matters.
+    ///
+    /// # Panics
+    /// If the [`Entities`] resource has been removed from the world.
     pub fn despawn_by_id(&mut self, id: u32) {
         if let Some(entity) = self.get_entity(id) {
             self.despawn(entity);
@@ -425,6 +501,20 @@ impl World {
         alive
     }
 
+    /// Generation-checked liveness: `true` only while `entity`'s generation still matches
+    /// the allocator's current generation for that id, so a stale handle to a recycled id
+    /// correctly reports `false`.
+    ///
+    /// "Alive" means *the id is allocated*, not that it has storage — an id reserved via
+    /// `Commands::spawn` and not yet flushed is already alive here while having no
+    /// components and no valid `EntityLocation`. Use [`World::entity_location`] if you need
+    /// to know that storage exists.
+    ///
+    /// Takes the allocator mutex, so despite `#[inline]` this is a lock acquisition, not a
+    /// field read; hoist it out of hot loops.
+    ///
+    /// # Panics
+    /// If the [`Entities`] resource has been removed from the world.
     #[inline]
     pub fn is_alive(&self, entity: Entity) -> bool {
         self.get_resource::<Entities>()

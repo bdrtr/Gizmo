@@ -1,3 +1,11 @@
+//! A resource holding one application state value plus a pending transition.
+//!
+//! [`State<S>`] stores the current value and, separately, whatever was requested via
+//! [`State::set`]; the swap happens at [`State::apply_transitions`], not at the call. That
+//! delay is the point — a system can request a state change without the systems running
+//! beside it in the same batch seeing a torn view.
+//!
+//! [`in_state`] turns a state value into a run condition.
 use crate::world::World;
 
 /// Oyundaki mantıksal durumları yönetmek için kullanılan State yapısı.
@@ -8,6 +16,19 @@ pub struct State<S: Clone + PartialEq + Eq + Send + Sync + 'static> {
 }
 
 impl<S: Clone + PartialEq + Eq + Send + Sync + 'static> State<S> {
+    /// Starts the machine already *in* `initial`, with no transition queued.
+    ///
+    /// Entering the initial state is therefore never reported: the first
+    /// [`State::apply_transitions`] returns `false`, and any one-off setup for `initial` has
+    /// to be run by hand.
+    ///
+    /// This only builds a value; it registers nothing. [`in_state`] looks `State<S>` up as a
+    /// world resource and answers `false` when there is none, so until the machine is inserted
+    /// as a resource every gated system is switched *off*, not on.
+    ///
+    /// Note that nothing in the engine drives this type: no scheduling phase in this workspace
+    /// calls [`State::apply_transitions`], so the application owns that call — typically once
+    /// a frame, before the systems that branch on the state.
     pub fn new(initial: S) -> Self {
         Self {
             current: initial,
@@ -15,10 +36,24 @@ impl<S: Clone + PartialEq + Eq + Send + Sync + 'static> State<S> {
         }
     }
 
+    /// The state that is active *now*.
+    ///
+    /// A [`State::set`] made earlier is not visible here — this keeps answering the old value
+    /// until [`State::apply_transitions`] runs. That delay is the point: between two
+    /// `apply_transitions` calls every reader sees the same state, whichever of them asked
+    /// for the switch and in whatever order they run.
     pub fn get(&self) -> &S {
         &self.current
     }
 
+    /// Queues a switch to `state`, to take effect at the next [`State::apply_transitions`].
+    ///
+    /// Ignored when `state` already equals the current one, so re-asserting the state you are
+    /// in never produces a spurious transition. The comparison is against the *current* state
+    /// only, never against an already queued one, which has two consequences: calling this
+    /// twice before a transition is applied simply keeps the last value (the intermediate
+    /// state is never observed by anyone), and setting the current state back does *not*
+    /// cancel a queued switch — the queued switch still happens.
     pub fn set(&mut self, state: S) {
         if self.current != state {
             self.next = Some(state);

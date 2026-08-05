@@ -9,6 +9,17 @@
 //! - [`Archetype`] — Birden fazla `Column` ve entity listesi barındıran tablo.
 pub mod blob;
 pub mod column;
+/// Internal archetype registry: the sorted-component-set → archetype map, the vector that
+/// owns the archetype tables, the entity → archetype lookup and the query match cache.
+///
+/// Archetype 0 is created up front for the empty component set and is never removed; every
+/// entity starts there on spawn. Every other archetype id is a position in that vector, and
+/// garbage-collecting an emptied archetype swap-removes it — renumbering the archetype that
+/// was last, and patching the entity locations, the set map and the cached
+/// [`ArchetypeEdge`](crate::archetype::ArchetypeEdge)s to match. An archetype id is therefore
+/// an addressing slot, valid only until the next collection, never a durable identity.
+///
+/// Nothing here is part of the public API: every item inside is `pub(crate)` or private.
 pub mod index;
 pub mod sparse_set;
 
@@ -23,23 +34,50 @@ use std::cell::UnsafeCell;
 /// Entity'nin World içindeki fiziksel konumu.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EntityLocation {
+    /// Index of the archetype table holding this entity, as a position in the world's
+    /// archetype vector — an addressing slot, not a durable identity. Compacting the
+    /// archetype list renumbers it, so a location is only meaningful for as long as the
+    /// world's structure is unchanged. `u32::MAX` is the invalid marker (see
+    /// [`EntityLocation::INVALID`]).
     pub archetype_id: u32,
     /// Archetype içindeki satır indeksi
     pub row: u32,
 }
 
 impl EntityLocation {
+    /// Sentinel meaning "this entity occupies no storage slot" — never spawned, or
+    /// despawned. Both fields are `u32::MAX`; write this value when clearing a slot rather
+    /// than invalidating one field, since [`is_valid`](Self::is_valid) only inspects
+    /// `archetype_id`.
     pub const INVALID: Self = Self {
         archetype_id: u32::MAX,
         row: u32::MAX,
     };
 
+    /// True unless `archetype_id` is `u32::MAX`.
+    ///
+    /// Only `archetype_id` is examined: a half-built location with a real archetype but
+    /// `row == u32::MAX` reports valid and will then index out of bounds. Construct
+    /// invalid locations from [`INVALID`](Self::INVALID), never field by field.
     #[inline]
     pub fn is_valid(self) -> bool {
         self.archetype_id != u32::MAX
     }
 }
 
+/// One cached archetype transition, stored in the owning archetype under the `TypeId` of
+/// the component being added or removed.
+///
+/// It memoises the answer to "if I add (or remove) this component type, which archetype do
+/// I become?", letting a repeated `add_component`/`remove_component` skip rebuilding and
+/// re-hashing the sorted component set. Both directions are cached at once: taking an add
+/// edge also records the reverse remove edge on the target archetype.
+///
+/// The two sides are independent — an edge may exist with only one of them populated, so a
+/// hit on the map still has to check the direction actually wanted. `None` means "not
+/// computed yet", never "no such archetype"; `Default` is the empty edge. The values are
+/// indices into the world's archetype vector and are patched (or dropped) when that vector
+/// is compacted.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ArchetypeEdge {
     /// Bu component tipi eklenince hedef archetype

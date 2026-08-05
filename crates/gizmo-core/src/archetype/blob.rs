@@ -1,6 +1,52 @@
+//! Type-erased raw storage: [`BlobVec`], the untyped growable array that backs a single
+//! component column and the dense half of a sparse set.
+//!
+//! Nothing in this module knows what type it is holding. Every element operation is
+//! `unsafe` and carries the same contract: pointers must refer to a value laid out exactly
+//! like the `Layout` the vec was constructed with, and indices must be in range. Bounds are
+//! `debug_assert`ed only — a release build computes an out-of-bounds address instead of
+//! panicking.
+
 use std::alloc::{self, Layout};
 use std::ptr::{self, NonNull};
 
+/// An untyped `Vec`: a manually allocated, contiguous array of elements whose size and
+/// alignment are known only at runtime, with no type parameter and no per-element
+/// bookkeeping.
+///
+/// **Ownership.** [`push`](BlobVec::push) *memcpy*s the bytes and takes ownership of them;
+/// the caller must not drop the source afterwards (`std::mem::forget` it) or the value is
+/// dropped twice. Conversely [`swap_remove_unchecked`](BlobVec::swap_remove_unchecked)
+/// moves a value *out* without dropping it — the receiver of `out` becomes the owner.
+///
+/// The clone-batch pushes are the exception: [`push_cloned_batch`](BlobVec::push_cloned_batch)
+/// and [`push_cloned_batch_from_row`](BlobVec::push_cloned_batch_from_row) *read* their
+/// source (through `clone_fn`, or as a repeated byte copy when there is none) and never
+/// consume it. For `push_cloned_batch` that source is the caller's pointer, so the caller
+/// still owns the value afterwards and is the one who has to drop it;
+/// `push_cloned_batch_from_row` reads a row this vec already owns, so there is nothing on
+/// the caller's side to release.
+///
+/// **Ordering.** New elements are appended at the end, but an index is not a stable handle
+/// on the value stored through it. Removal is swap-remove — removing anything but the last
+/// element moves the last element into the hole — and
+/// [`swap_rows`](BlobVec::swap_rows) permutes two live elements with no removal involved.
+/// Treat an index as valid only until the next mutating call, and keep any parallel arrays
+/// (ticks, entity ids) in step yourself.
+///
+/// **Zero-sized elements** are supported and never allocate — not on construction, not on
+/// `reserve`, and nothing is freed on drop. The data pointer stays at
+/// `NonNull::<u8>::dangling()` (it is never dereferenced, and is not adjusted for an
+/// over-aligned element type). `capacity` carries no meaning in this case: it starts at
+/// `usize::MAX` and is not maintained afterwards, so read `len` and ignore it.
+///
+/// **Growth** is amortised — reserving at least doubles the capacity, with a floor of four
+/// elements — and reallocates in place where the allocator can, so any pointer obtained
+/// before an insertion may dangle after it. If `item_size * capacity` would overflow
+/// `usize` or exceed `isize::MAX`, allocation panics rather than wrapping.
+///
+/// Dropping the vec runs `drop_fn` over the live elements and then frees the block; when
+/// `drop_fn` is `None` (a component that needs no drop glue) the bytes are simply released.
 pub struct BlobVec {
     /// Her elemanın bellek yerleşimi (boyut + hizalama)
     item_layout: Layout,

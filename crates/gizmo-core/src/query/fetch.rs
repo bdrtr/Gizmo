@@ -7,12 +7,54 @@ use std::any::TypeId;
 // FETCH COMPONENT TRAIT
 // =========================================================================
 
+/// The per-component half of the query DSL: how ONE component type is located in storage and
+/// turned into an item.
+///
+/// Implemented only for `&T` (shared) and [`Mut<T>`](Mut) (exclusive, change-tracked). Sealed —
+/// a hand-written impl could hand out two `&mut T` for the same row, so this is not an extension
+/// point. Every `FetchComponent` becomes a [`WorldQuery`](super::WorldQuery) through a blanket
+/// impl, which is why `&T` and `Mut<T>` can be used directly as query operands.
+///
+/// Both impls cover the two storage kinds behind one interface, and the difference leaks into
+/// the parameters of nearly every method: for `StorageType::Table` the fetch is a base pointer
+/// and `row` selects the element, whereas for `StorageType::SparseSet` the fetch is the address
+/// of the world's sparse set, `row` is ignored, and the lookup goes through `entity_id`.
 pub trait FetchComponent: sealed::SealedFetch {
+    /// The component type actually being accessed — `T` for both `&T` and `Mut<T>`. This is the
+    /// identity used for aliasing detection and for the scheduler's access set, which is why
+    /// `&T` and `Mut<T>` collide with each other exactly as they must.
     type Component: 'static;
+    /// Per-archetype resolved access for this one component, produced by
+    /// [`fetch_raw`](FetchComponent::fetch_raw). Concretely it is the archetype column's base
+    /// pointer for `Table` storage, or the address of the world's `ComponentSparseSet` for
+    /// `SparseSet` storage — `Mut<T>` carries the column's `ComponentTicks` pointer and the
+    /// system tick alongside. Which of the two it is stays encoded in the value, so
+    /// `get_item`/`contains_entity`/`get_slice` branch on the fetch itself instead of
+    /// re-reading `T::storage_type()` per row.
+    ///
+    /// The `Copy` bound and the validity rules are those of
+    /// [`WorldQuery::Fetch`](super::WorldQuery::Fetch) and apply unchanged here.
     type Fetch<'w>: Copy; // Raw pointers are Copy
+    /// One row's worth of access: `&'w T` for `&T`, [`Mut<'w, T>`](Mut) for `Mut<T>`. Obtaining
+    /// a `Mut` does not by itself mark the row as changed — only writing through its `DerefMut`
+    /// does.
     type Item<'w>;
+    /// One whole archetype's worth of contiguous access, for chunk iteration: `&'w [T]` for
+    /// `&T`, `&'w mut [T]` for `Mut<T>`. The `Mut<T>` slice is only handed out after
+    /// [`get_slice`](FetchComponent::get_slice) has stamped the current tick onto all `len`
+    /// rows — a raw `&mut [T]` cannot report which elements were written, so every row in it
+    /// counts as changed whether you touch it or not.
+    ///
+    /// See [`WorldQuery::Slice`](super::WorldQuery::Slice) for why a `SparseSet` component has
+    /// no slice form at all.
     type Slice<'w>;
 
+    /// `true` for `Mut<T>`, `false` for `&T`.
+    ///
+    /// Supplies the mutability half of the `(TypeId, is_mut)` pair fed to the query aliasing
+    /// check: two operands naming the same [`Component`](FetchComponent::Component) panic at
+    /// query construction unless both are `false`. The same flag decides whether a system is
+    /// recorded as a reader or a writer of this component for parallel scheduling.
     const IS_MUT: bool;
 
     /// Bir archetype bazında ham pointer fetch hazırlar.
@@ -123,6 +165,17 @@ impl<T> std::ops::DerefMut for Mut<'_, T> {
 }
 
 impl<'a, T> Mut<'a, T> {
+    /// Mutable access that does **not** stamp the change tick, unlike `DerefMut`, which sets
+    /// `ticks.changed` to the current system tick on every single use.
+    ///
+    /// A write made through this handle stays invisible to [`Changed<T>`](super::Changed) until
+    /// something else marks the component. Reserve it for genuinely incidental writes — caches,
+    /// scratch fields, restoring a value you just read; using it for a real state change
+    /// silently starves every system that reacts to `Changed<T>`.
+    ///
+    /// It only suppresses; it cannot un-mark a change already recorded this frame, and it has no
+    /// bearing on [`Added<T>`](super::Added), which reads a separate tick that changes only when
+    /// the row is (re)initialised.
     #[inline]
     pub fn bypass_change_detection(&mut self) -> &mut T {
         self.value

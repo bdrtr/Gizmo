@@ -1,3 +1,10 @@
+//! Entity identity: the id/generation handle and the allocator that recycles it.
+//!
+//! An [`Entity`] is an id plus a generation counter. Reusing an id after a despawn bumps the
+//! generation, so a stale handle compares unequal to the live entity occupying the same slot
+//! instead of silently addressing it — the whole reason the generation exists.
+//!
+//! Anything that stores a bare `u32` id rather than an `Entity` gives that protection up.
 /// ECS Entity tanımlayıcısı — Packed u64 temsili.
 ///
 /// Alt 32 bit = entity ID (slot index), üst 32 bit = generation (yeniden kullanım sayacı).
@@ -162,4 +169,6 @@ mod tests {
         assert_eq!(e, deserialized);
     }
 }
+/// Entity id allocation: hands out [`Entity`] handles, recycles ids through a free list and
+/// keeps the per-slot generation counters that make a stale handle detectable.
 pub mod allocator;

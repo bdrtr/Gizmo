@@ -1,3 +1,8 @@
+//! The [`World`]: entity storage, components, resources, and the operations over them.
+//!
+//! Everything the simulation owns lives here. Structural changes — spawning, despawning,
+//! adding or removing a component — move entities between archetypes and invalidate row
+//! indices, which is why systems that need them defer through `Commands` instead.
 use crate::archetype::index::ArchetypeIndex;
 use crate::archetype::{ComponentInfo, EntityLocation};
 use crate::entity::Entity;
@@ -20,6 +25,23 @@ pub use self::introspect::{short_type_name, ArchetypeSummary, ComponentSummary, 
 pub use self::resources::*;
 pub use crate::entity::allocator::Entities;
 
+/// The ECS container: entity ids, the archetype tables holding their component data, the
+/// sparse-set side storage, the type-keyed resource map, and the change-detection ticks.
+///
+/// Access rules the rest of the engine leans on:
+/// - From `&World` you can build read-only queries and resource guards only. A mutable
+///   query needs `&mut World` ([`World::query_mut`]) or the `unsafe`
+///   [`World::query_unchecked`] escape hatch the parallel scheduler uses.
+/// - Resources are locked individually, so guards for *different* resources coexist
+///   happily; a second conflicting guard for the *same* resource fails rather than blocks.
+///
+/// Iteration order: the sequential query accessors (`iter`, `iter_mut`, `iter_chunks`, …) walk
+/// archetypes in table-index order and rows in storage order; the parallel ones
+/// (`par_for_each`, `par_for_each_mut`) go through a work-stealing pool and define no order.
+/// The sequential order is reproducible for a given sequence of mutations, but it is not spawn
+/// order and it is not stable across mutations — [`World::despawn`] and archetype migration
+/// both swap-remove, moving an archetype's last row into the vacated slot, and
+/// [`World::compact`] renumbers archetypes outright.
 pub struct World {
     // Entity'den bağımsız global veriler (Time, WindowSize, Input vs.)
     resources: HashMap<TypeId, RwLock<Box<dyn std::any::Any + Send + Sync>>>,
@@ -41,6 +63,17 @@ pub struct World {
     entities_to_despawn: Vec<Entity>,
     is_despawning: bool,
     pub(crate) entity_observers: HashMap<TypeId, Box<dyn std::any::Any + Send + Sync>>,
+    /// Frame counter stamped into a component's `ComponentTicks` every time it is written;
+    /// with `change_ref_tick` it is the whole of change detection.
+    ///
+    /// Starts at 1 and is advanced only by [`World::increment_tick`] and
+    /// [`World::begin_change_frame`], both of which wrap on overflow and skip 0 — so 0 is
+    /// never a valid stamp. `Changed<T>`/`Added<T>` compare with a plain `>`, so the single
+    /// frame on which the counter wraps past `u32::MAX` misreports; nothing resets it, so
+    /// reaching that needs ~4.3e9 frames in one session.
+    ///
+    /// It is public so snapshot/restore code can put it back, but writing it without
+    /// restoring `change_ref_tick` to a consistent value desynchronises change detection.
     pub tick: u32,
     /// Değişiklik tespiti (change detection) referans tick'i: `Changed<T>`/`Added<T>`
     /// filtreleri `ticks.changed > change_ref_tick` ile bu değere göre karşılaştırır.
@@ -51,6 +84,15 @@ pub struct World {
 }
 
 impl World {
+    /// Creates an empty world already holding the two resources the rest of the ECS assumes
+    /// are always there: the deferred [`CommandQueue`](crate::commands::CommandQueue) and
+    /// the entity allocator [`Entities`]. `spawn`, `is_alive`, `entity_count`,
+    /// `iter_alive_entities` and friends panic if `Entities` is later removed.
+    ///
+    /// Storage starts with one archetype (id 0) holding no columns — every freshly spawned,
+    /// component-less entity is a row in it. `tick` starts at 1 and `change_ref_tick` at 0,
+    /// so until the first [`World::begin_change_frame`] every component matches both
+    /// `Added<T>` and `Changed<T>`.
     pub fn new() -> Self {
         let mut world = Self {
             resources: HashMap::new(),

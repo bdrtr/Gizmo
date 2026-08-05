@@ -1,3 +1,20 @@
+//! Frame-delayed, double-buffered event queues: [`Events<T>`] plus the [`EventReader`] and
+//! [`EventWriter`] system parameters.
+//!
+//! One queue per event type, held as a world resource. Sends land in a write buffer; reads
+//! come from the buffer that was the write buffer *last* frame. An event is therefore never
+//! visible during the frame that produced it, and it is discarded by the second
+//! [`Events::update`] after it was sent — a one-frame readable window, no more.
+//!
+//! Reading is non-destructive and there is no per-reader cursor: every reader of a type sees
+//! the same whole batch, in send order, however many times it looks. The flip side is that a
+//! system which does not run on a given frame misses that frame's events permanently instead
+//! of catching up later.
+//!
+//! Nothing in this module rotates the buffers by itself. A queue whose owner never calls
+//! [`Events::update`] never becomes readable at all, while its write buffer grows without
+//! bound.
+
 use crate::system::{AccessInfo, Res, ResMut, SystemParam, SystemParamFetchError};
 use crate::world::World;
 
@@ -31,6 +48,12 @@ pub struct Events<T> {
 }
 
 impl<T> Events<T> {
+    /// Creates a queue with both buffers empty and nothing pre-allocated.
+    ///
+    /// A brand-new queue reads as empty even right after a burst of [`send`](Self::send):
+    /// reads come from the *previous* buffer, so the first events become visible only after
+    /// the first [`update`](Self::update). `T` needs no bounds here — only storing the queue
+    /// as a world resource requires `T: Send + Sync + 'static`.
     pub fn new() -> Self {
         Self {
             current: Vec::new(),
@@ -101,6 +124,23 @@ impl<T> Default for Events<T> {
 // EventReader
 // ==============================================================
 
+/// System parameter for reading events of type `T` — a shared borrow of the world's
+/// [`Events<T>`] resource, held for the duration of the system body.
+///
+/// Reading is non-destructive and there is no per-reader cursor: every reader of the same
+/// `T` sees exactly the previous frame's batch, in send order, however many times it looks.
+/// Because it declares a resource *read*, several reader systems may run in the same batch.
+/// The flip side of having no cursor is that a system which does not run on a given frame
+/// misses that frame's events permanently.
+///
+/// Only events already rotated into the readable buffer by [`Events::update`] are visible;
+/// anything sent during the current frame is not. If nobody ever calls `update`, readers
+/// see nothing at all while the send buffer grows without bound.
+///
+/// Fetching the parameter fails — which panics the system — when no `Events<T>` resource was
+/// inserted into the world, or when the same system's parameter list also asks for an
+/// [`EventWriter<T>`] of the same `T`: the two borrows exclude each other, and whichever is
+/// fetched second is the one that fails.
 pub struct EventReader<'w, T: 'static> {
     events: Res<'w, Events<T>>,
 }
@@ -111,10 +151,20 @@ impl<'w, T: 'static> EventReader<'w, T> {
         self.events.iter()
     }
 
+    /// Number of events in the readable batch (the previous frame's).
+    ///
+    /// Does not count anything sent during this frame — those sit in the write buffer until
+    /// the next [`Events::update`]. Stable for the whole system body, since reading consumes
+    /// nothing.
     pub fn len(&self) -> usize {
         self.events.len()
     }
 
+    /// `true` when this frame's readable batch is empty.
+    ///
+    /// Not "no events exist": events written during the current frame land in the *write*
+    /// batch and are invisible until the swap, so a reader can see `true` immediately after
+    /// another system sent one.
     pub fn is_empty(&self) -> bool {
         self.events.is_empty()
     }
@@ -136,6 +186,20 @@ impl<T: 'static> SystemParam for EventReader<'static, T> {
 // EventWriter
 // ==============================================================
 
+/// System parameter for sending events of type `T` — an exclusive borrow of the world's
+/// [`Events<T>`] resource, held for the duration of the system body.
+///
+/// Sends land in the write buffer and are invisible to readers until [`Events::update`]
+/// rotates the buffers, so an event is never observed in the frame that produced it.
+/// Events are appended, so readers see them in the order they were sent.
+///
+/// Declaring one is a resource *write*, so the scheduler will not put this system in the
+/// same batch as any other system taking an `EventReader<T>` or `EventWriter<T>`; the
+/// exclusion is per event type — writers of different `T` do not conflict. Asking
+/// for `EventWriter<T>` twice — or for a writer and a reader of the same `T` — in one
+/// parameter list makes the second fetch fail and panics the system.
+///
+/// Fetching also fails, and panics, when no `Events<T>` resource was inserted.
 pub struct EventWriter<'w, T: 'static> {
     events: ResMut<'w, Events<T>>,
 }

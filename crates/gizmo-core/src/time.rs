@@ -1,3 +1,15 @@
+//! Frame timing: [`Time`], the variable render clock, and [`PhysicsTime`], the fixed-step
+//! accumulator that drives the simulation.
+//!
+//! Neither type reads the system clock. Both are *fed* a delta measured by the caller
+//! ([`Time::update`], [`PhysicsTime::accumulate`]), which is what makes a recorded or
+//! replayed frame sequence reproduce the same stepping as the original run.
+//!
+//! The two types do not know about each other either: `accumulate` banks whatever delta it
+//! is handed, and whether that is [`Time::dt`] — already multiplied by `time_scale` and
+//! capped at `max_dt` — or an independently measured one is the caller's choice, not
+//! something decided here.
+
 /// Motor genelinde zaman yönetimi.
 ///
 /// # Kullanım
@@ -50,6 +62,13 @@ pub struct Time {
 const DEFAULT_MAX_DT: f32 = 1.0 / 20.0;
 
 impl Time {
+    /// Creates a clock sitting at frame 0, with `time_scale = 1.0` and the default 50 ms
+    /// `max_dt` cap (equivalently, a 20 FPS floor on the simulated step).
+    ///
+    /// `dt`, `raw_dt` and `elapsed` all start at exactly zero. That is a deliberate value,
+    /// not a placeholder: a system that runs before the first [`Time::update`] sees *no*
+    /// time passing rather than a guessed frame duration, so it advances nothing instead of
+    /// integrating a fabricated step.
     pub fn new() -> Self {
         Self {
             dt: 0.0,
@@ -147,6 +166,26 @@ impl Default for Time {
 //    `consume_step()` ile accumulator azaltılır.
 //    `alpha()` ile render interpolasyonu yapılır.
 // ═══════════════════════════════════════════════════════════════════════
+/// Fixed-timestep accumulator for the physics clock.
+///
+/// The render loop runs at whatever rate the machine manages; the solver must not. Per frame
+/// the caller adds the elapsed render time with [`PhysicsTime::accumulate`], runs one physics
+/// step for each [`PhysicsTime::should_step`] / [`PhysicsTime::consume_step`] pair, then calls
+/// [`PhysicsTime::compute_alpha`] once before rendering:
+///
+/// ```text
+/// accumulate(dt); while should_step() { step_physics(fixed_dt()); consume_step(); } compute_alpha();
+/// ```
+///
+/// Every step advances the simulation by exactly [`PhysicsTime::fixed_dt`] seconds no matter
+/// what the frame rate did, which is the property the determinism and stability guarantees
+/// rest on. Leftover time below one step stays in the accumulator and surfaces as
+/// [`PhysicsTime::alpha`] for render interpolation.
+///
+/// The accumulator is capped at 8 x `fixed_dt`, so however long a stall lasts (a breakpoint,
+/// a swap-in, a stuttering frame) at most 8 steps are ever queued. Time past the cap is
+/// **dropped**, not deferred: the simulation falls behind wall-clock rather than entering a
+/// spiral of death where each catch-up frame costs more than it recovers.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct PhysicsTime {
     /// Sabit fizik zaman adımı (saniye). Varsayılan: 1/60.

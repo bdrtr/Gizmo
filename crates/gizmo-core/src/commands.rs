@@ -1,3 +1,23 @@
+//! Deferred structural mutation: a lock-free queue of `FnOnce(&mut World)` closures
+//! ([`CommandQueue`]) and the [`Commands`] system parameter that pushes into it.
+//!
+//! A system is only ever handed `&World`, so it cannot spawn, despawn or add/remove
+//! components while it runs. It enqueues the change instead, and the queue is drained later
+//! under `&mut World`, at a point where nothing is iterating — see
+//! [`CommandQueue::apply`] and [`World::apply_commands`].
+//!
+//! What follows from that, and is worth knowing before relying on any of it:
+//!
+//! * Nothing enqueued is observable until the flush — not even to the system that queued it.
+//! * Within one flush, commands are applied in push order, which is why
+//!   `spawn().insert(..)` works.
+//! * Two systems co-scheduled in the same batch hold only a *shared* borrow of the queue —
+//!   that is exactly what lets them share a batch (see [`Commands::queue`]) — so their
+//!   pushes interleave in thread-scheduling order. Anything whose outcome depends on which
+//!   of them landed first is not reproducible run to run and must be split across batches.
+//! * Entity ids from [`Commands::spawn`] are reserved eagerly, from the same shared
+//!   allocator, and carry the same caveat.
+
 use crate::component::Component;
 use crate::entity::Entity;
 use crate::system::{Res, SystemParam};
@@ -16,10 +36,28 @@ pub struct CommandQueue {
 }
 
 impl CommandQueue {
+    /// Creates a queue holding no commands and sharing storage with nothing else.
+    ///
+    /// Cloning a `CommandQueue` clones an `Arc`: every clone pushes into and drains the
+    /// *same* queue. `new()` and the derived `Default` are the only constructors — the
+    /// storage field is private, so every other way of obtaining a `CommandQueue` value is a
+    /// clone, and therefore an alias of an existing queue. A world built by
+    /// [`World::new`] already carries a `CommandQueue` resource, so inserting a fresh one
+    /// replaces that resource and drops whatever commands it still held, unapplied.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Enqueues a closure to be run later against `&mut World`; nothing executes here.
+    ///
+    /// Takes `&self`, which is the whole point: systems holding only a shared borrow of the
+    /// queue can request structural changes while other systems iterate the world. The
+    /// closure is boxed, so pushing allocates. It is retained until an [`apply`](Self::apply)
+    /// drains it — including across frames if nobody flushes — and it runs even if the
+    /// entity it names has been despawned in the meantime.
+    ///
+    /// Ordering: commands pushed from one thread are applied in push order. For pushes from
+    /// systems running concurrently, see the [module docs](crate::commands).
     pub fn push<F>(&self, command: F)
     where
         F: FnOnce(&mut World) + Send + Sync + 'static,
@@ -27,10 +65,26 @@ impl CommandQueue {
         self.queue.push(Box::new(command));
     }
 
+    /// Whether the queue holds no pending commands *at this instant*.
+    ///
+    /// With other threads pushing, the answer can already be stale by the time it is
+    /// returned. It is meant as a cheap way to skip an `apply` — a command missed that way
+    /// is only delayed to the next flush, never lost — not as a synchronisation point.
     pub fn is_empty(&self) -> bool {
         self.queue.is_empty()
     }
 
+    /// Runs every queued command against `world` in push order, on the calling thread, and
+    /// leaves the queue empty.
+    ///
+    /// The drain loop pops until the queue is exhausted, so a command that pushes onto this
+    /// same queue is executed within the same call, after everything already queued — a
+    /// command that unconditionally re-queues itself never terminates. Commands see the
+    /// effects of all commands applied before them, so `spawn` followed by `insert` works.
+    ///
+    /// Each command is `FnOnce`, so it is consumed as it is popped: if one panics, the
+    /// panic propagates out of `apply` and the commands after it stay queued and are applied
+    /// by the next call.
     pub fn apply(&self, world: &mut World) {
         while let Some(command) = self.queue.pop() {
             command(world);
@@ -40,7 +94,18 @@ impl CommandQueue {
 
 /// Sistem imzasında kullanılabilecek `Commands` parametresi.
 pub struct Commands<'w> {
+    /// Shared borrow of the world's [`CommandQueue`] resource — the sink every method on
+    /// `Commands`/[`EntityCommands`] pushes into.
+    ///
+    /// A *shared* borrow is enough because [`CommandQueue::push`] only needs `&self`; that
+    /// is why several systems can each hold a `Commands` and why the scheduler is free to
+    /// run them in one batch (they declare a read, not a write, of this resource).
     pub queue: Res<'w, CommandQueue>,
+    /// Shared borrow of the entity-id allocator, used by [`Commands::spawn`] to reserve an
+    /// id immediately (the allocator locks internally, so `&self` suffices).
+    ///
+    /// The allocator is global to the world, so concurrent reservations are safe — but they
+    /// carry the reproducibility caveat in the [module docs](crate::commands).
     pub entities: Res<'w, crate::entity::allocator::Entities>,
 }
 
@@ -88,6 +153,20 @@ impl<'w> Commands<'w> {
     }
 }
 
+/// Builder for the deferred commands aimed at one entity, produced by
+/// [`Commands::spawn`] or [`Commands::entity`].
+///
+/// Every method only *enqueues*: nothing is observable in the world until the queue is
+/// applied (see [`CommandQueue::apply`]). Calls are enqueued in the order they are made and
+/// applied in that order, so chaining `spawn().insert(..).insert(..)` materialises the entity
+/// before its components.
+///
+/// The target entity is captured by value and never validated. If it is dead by the time
+/// the queue is applied — despawned meanwhile, or a handle from an older generation of a
+/// recycled id — `insert`, `remove` and `despawn` are silent no-ops rather than errors.
+///
+/// It borrows the parent `Commands` mutably, so only one `EntityCommands` may be alive at a
+/// time; finish with one entity before addressing the next.
 pub struct EntityCommands<'a, 'w> {
     entity: Entity,
     commands: &'a mut Commands<'w>,

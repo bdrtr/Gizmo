@@ -1,3 +1,8 @@
+//! Parent/child links between entities, as an extension trait on `World`.
+//!
+//! The hierarchy is two plain components (a parent link and a child list) kept consistent by
+//! [`HierarchyExt`]; there is no separate tree structure. Writing those components directly
+//! bypasses the bookkeeping and can leave a parent whose children do not point back.
 use crate::component::{Children, Parent};
 use crate::entity::Entity;
 use crate::world::World;

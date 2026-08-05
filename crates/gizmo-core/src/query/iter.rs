@@ -6,6 +6,26 @@ use std::marker::PhantomData;
 // QUERY ITERATOR
 // =========================================================================
 
+/// Row-by-row iterator over a [`Query`](super::Query), yielding `(entity_id, item)`.
+///
+/// The `u32` is the raw entity index **without** the generation counter — the same value as
+/// [`Entity::id`](crate::entity::Entity::id). It is only usable with the `u32`-keyed accessors,
+/// which cannot tell a live entity from a despawned slot that has been reused.
+///
+/// Visits archetypes in ascending archetype index and rows in ascending row order, skipping
+/// rows rejected by `filter_row` — so the number of items yielded can be smaller than
+/// [`Query::len`](super::Query::len), which counts rows without filtering. Empty archetypes, and
+/// archetypes for which the fetch cannot be resolved, are skipped silently rather than ending
+/// iteration.
+///
+/// The order is reproducible for an identical sequence of world operations, but it carries no
+/// meaning — it is neither spawn nor id order (see [`Query`](super::Query)). Do not rely on it
+/// as a sort.
+///
+/// `Iterator::for_each` is overridden with a flatter archetype-at-a-time loop that avoids the
+/// resumable per-row state machine of `next`. The override always restarts from the first
+/// matching archetype and does not consult how far `next` has already advanced, so call it on
+/// a *fresh* iterator: on a partially consumed one it replays the items already yielded.
 pub struct QueryIter<'a, 'w, Q: WorldQuery> {
     pub(super) world: &'a World,
     pub(super) archetype_indices: &'a [usize],
@@ -94,6 +114,29 @@ where
 // QUERY CHUNKS ITERATOR
 // =========================================================================
 
+/// Archetype-at-a-time iterator yielding `(&[u32], Q::Slice)` — the entity ids of one whole
+/// archetype paired with that archetype's component data as a contiguous slice, for bulk or
+/// SIMD-friendly work.
+///
+/// At most one item per matching archetype. Within an item the two slices have equal length
+/// and are index-aligned: `ids[i]` owns element `i` of the component slice. Empty archetypes
+/// are skipped, and so is any archetype whose fetch cannot be resolved — so the iterator can
+/// yield nothing even when archetypes matched. Do not rely on the order items come out in.
+///
+/// There is **no per-row filtering** here — a chunk is all-or-nothing. Queries that need it
+/// (`Changed`, `Added`, `Or`, sparse `With`/`Without`) are rejected up front by
+/// [`Query::iter_chunks`](super::Query::iter_chunks), which panics when the iterator is created.
+/// A plain `&T`/`Mut<T>` operand on a `SparseSet`-stored component declares no row filter and so
+/// slips past that check; its data is not contiguous, so it fails later instead — panicking on
+/// the first chunk pulled from this iterator once the world actually holds a sparse-set store
+/// for `T`.
+///
+/// Change detection follows the *operands*, not the constructor that produced the iterator.
+/// Every `Mut<T>` operand conservatively stamps the current tick onto every row of each chunk
+/// it yields, written or not, because a raw `&mut [T]` cannot say which elements were touched.
+/// `&T` operands and filters stamp nothing. So for a mixed `Q` such as `(&A, Mut<B>)` only
+/// `B`'s ticks move, and a chunk query with no `Mut<T>` in it marks nothing even when it came
+/// from [`Query::iter_chunks_mut`](super::Query::iter_chunks_mut).
 pub struct QueryChunksIter<'a, 'w, Q: WorldQuery> {
     pub(super) world: &'a World,
     pub(super) archetype_indices: &'a [usize],

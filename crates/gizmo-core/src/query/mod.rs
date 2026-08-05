@@ -1,3 +1,12 @@
+//! Reading and writing components: [`Query`], its filters, and its iterators.
+//!
+//! A query names the components it touches and the engine derives from that both which
+//! entities match and which other systems it can run beside. Access is checked, so two
+//! aliasing `&mut` views of the same component cannot be built in safe code.
+//!
+//! Filters (`With`, `Without`, `Changed`, `Added`) narrow the match without contributing
+//! data. Note which ones are per-ROW rather than per-archetype: the chunked iterators cannot
+//! serve those and reject them up front.
 use crate::archetype::Archetype;
 use crate::entity::Entity;
 use crate::world::World;
@@ -29,16 +38,83 @@ mod sealed {
 // WORLD QUERY TRAIT
 // =========================================================================
 
+/// One operand — or a tuple of operands — of a [`Query`].
+///
+/// Implemented for `&T`, [`Mut<T>`](Mut), the filters ([`With`], [`Without`], [`Changed`],
+/// [`Added`], [`Or`]) and for tuples of 2 to 12 of those. It is *sealed*: nothing outside this
+/// crate can implement it, and every accessor is `unsafe` and speaks in raw pointers, so it is
+/// an internal DSL rather than an extension point. Being sealed also means methods may be added
+/// in a point release without that counting as a breaking change.
+///
+/// Matching happens in two stages, and the split is the thing to understand before touching an
+/// impl:
+///
+/// 1. [`matches_archetype`](WorldQuery::matches_archetype) — coarse, per archetype, evaluated
+///    once when the query is built. Selects which archetypes are visited at all.
+/// 2. [`filter_row`](WorldQuery::filter_row) — fine, per row, evaluated on every visited row.
+///
+/// Stage 1 is allowed to be *wider* than the truth and stage 2 narrows it. Components stored in
+/// a `SparseSet` live outside archetypes, so their stage 1 answers `true` everywhere and the
+/// real test happens in stage 2. [`has_row_filter`](WorldQuery::has_row_filter) reports whether
+/// stage 2 carries any meaning for this query, which is what lets chunk iteration reject the
+/// queries it cannot honour.
 pub trait WorldQuery: sealed::SealedQuery {
+    /// A `'static` stand-in used as the cache key for this query's archetype-match list
+    /// (see `World::query_cached`). The query machinery never constructs a value of it — only
+    /// `TypeId::of::<Self::StaticType>()` is ever taken — so it is free to name an ordinary
+    /// data-carrying type, and for `&T`/[`Mut<T>`](Mut) it names the component `T` itself.
+    /// Queries that map to the same `StaticType` share one cache entry, so they must have
+    /// identical `matches_archetype` behaviour; `&T` and `Mut<T>` deliberately collapse to the
+    /// same key because their archetype predicates are identical.
     type StaticType: 'static;
+    /// Per-archetype resolved access: the raw pointers (or, for sparse storage, the address of
+    /// the sparse set) that `get_item`/`filter_row`/`get_slice` index into. Produced once per
+    /// archetype by [`fetch_raw`](WorldQuery::fetch_raw).
+    ///
+    /// `Copy` is required because the same fetch is handed to every row of the archetype and is
+    /// copied into each worker task of a parallel iteration. It holds no borrow of its own: it
+    /// is valid only while the `&'w World` it was derived from is still borrowed and the
+    /// archetype has not been structurally modified.
     type Fetch<'w>: Copy;
+    /// What one row yields: `&'w T` for `&T`, [`Mut<'w, T>`](Mut) for `Mut<T>`, and `()` for
+    /// every filter — `With`/`Without`/`Changed`/`Added`/`Or` decide membership but carry no
+    /// data. For a tuple, the tuple of the operands' items; filter operands still occupy their
+    /// `()` slot in it.
     type Item<'w>;
+    /// What one *whole archetype* yields in chunk iteration: `&'w [T]` for `&T`, `&'w mut [T]`
+    /// for `Mut<T>`, `()` for filters. Only Table storage is contiguous — for a `SparseSet`
+    /// component [`get_slice`](WorldQuery::get_slice) panics rather than fabricating a slice.
     type Slice<'w>;
 
     /// # Safety
     /// Archetype geçerli olmalı ve döndürülen fetch pointer'ı archetype'ın yaşam süresi boyunca geçerli kalmalıdır.
     unsafe fn fetch_raw<'w>(world: &'w World, arch: &Archetype, system_tick: u32) -> Option<Self::Fetch<'w>>;
+
+    /// Appends this query's component access to `types` as `(TypeId, is_mut)` pairs, and
+    /// **panics** if the accumulated set would be unsound.
+    ///
+    /// Unsound means: the same `TypeId` appears twice with at least one of the two mutable,
+    /// which would hand out two `&mut T` — or a `&mut T` next to a `&T` — for the same row.
+    /// So `(Mut<A>, Mut<A>)` and `(&A, Mut<A>)` panic, while `(&A, &A)` and `(Mut<A>, Mut<B>)`
+    /// are fine. The panic happens when the query is *constructed*, not when it is iterated.
+    /// This cannot be a compile-time check because `TypeId` equality is not comparable in a
+    /// const context.
+    ///
+    /// Filters must declare their access too, even though they yield no data:
+    /// `Changed<T>`/`Added<T>` declare a *read* of `T` (they read the same `ComponentTicks`
+    /// that `Mut<T>` writes), and `Or` forwards both operands. `With`/`Without` declare
+    /// nothing — they touch no component memory. The same pairs are consumed by the system
+    /// scheduler to classify a system as a reader or writer of each component.
     fn check_aliasing(types: &mut Vec<(TypeId, bool)>);
+
+    /// Coarse, per-archetype admission test. Evaluated once for every archetype when the query
+    /// is built; only archetypes answering `true` are ever visited, and an archetype rejected
+    /// here can never be recovered by a row filter.
+    ///
+    /// It may be deliberately WIDER than the real predicate, and for `SparseSet`-stored
+    /// components it is: their data lives outside archetypes, so those impls answer `true` for
+    /// every archetype and leave the actual membership test to
+    /// [`filter_row`](WorldQuery::filter_row). It must never be narrower than the truth.
     fn matches_archetype(arch: &Archetype) -> bool;
 
     /// # Safety
@@ -82,12 +158,61 @@ pub trait WorldQuery: sealed::SealedQuery {
 //
 // Sealed: only this crate implements it (a wrong impl on a `Mut`-bearing query would
 // reopen the hole), and the supertrait `WorldQuery` keeps it inside the sealed DSL.
+/// Marker for queries that yield **only** shared access — `&T` and the data-less filters,
+/// never [`Mut<T>`](Mut).
+///
+/// This is the bound that makes the shared entry points sound. Because no `&mut T` can escape
+/// such a query, any number of them may coexist over the same `&World`. Accordingly:
+///
+/// - [`World::query`](crate::world::World::query) requires it, so a mutable query cannot be
+///   built from a shared borrow in safe code;
+/// - [`Query`] gates its `&self` accessors (`iter`, `get`, `iter_chunks`, `par_for_each`)
+///   behind it, so mutable access has to go through the `&mut self` variants.
+///
+/// `Mut<T>` is pointedly *not* an implementor. A tuple implements it only when every element
+/// does, and `Or<A, B>` only when both operands do.
+///
+/// Sealed — implementing it for a `Mut`-bearing query would reopen exactly the aliasing hole it
+/// exists to close.
 pub trait ReadOnlyQuery: WorldQuery + sealed::SealedReadOnly {}
 
 // =========================================================================
 // QUERY STRUCT
 // =========================================================================
 
+/// A resolved view over every entity whose components satisfy `Q`.
+///
+/// Constructed by [`World::query`](crate::world::World::query) (shared, `Q: ReadOnlyQuery`),
+/// [`World::query_mut`](crate::world::World::query_mut) (exclusive) or
+/// [`World::query_unchecked`](crate::world::World::query_unchecked) (`unsafe`, for systems that
+/// only hold a `&World`). Construction runs [`WorldQuery::check_aliasing`] — which **panics**
+/// on a `Q` that would alias, e.g. `(Mut<A>, Mut<A>)` — and resolves the set of matching
+/// archetypes once. That set is a snapshot; the query borrows the world for `'w`, so no
+/// archetype can appear, vanish or be reordered while it is alive.
+///
+/// Which accessors exist depends on `Q`. The `&mut self` family (`iter_mut`, `get_mut`,
+/// `iter_chunks_mut`, `par_for_each_mut`) is available for every `Q` and ties each result to
+/// the exclusive borrow of the query, so two live mutable views cannot be obtained from one
+/// query. The `&self` family (`iter`, `get`, `iter_chunks`, `par_for_each`, `contains`,
+/// `entities`) additionally requires `Q: ReadOnlyQuery`. Together those two rules are what
+/// makes duplicate `&mut T` unreachable without `unsafe`.
+///
+/// # Iteration order
+///
+/// The sequential accessors — `iter`, `iter_mut`, `iter_chunks`, `iter_chunks_mut`,
+/// `entities` — visit archetypes in ascending archetype index and, within an archetype, rows
+/// in ascending row order. That much is *reproducible*: an identical sequence of world
+/// operations produces an identical visit order, so repeated runs of the same simulation see
+/// rows in the same order.
+///
+/// `par_for_each`/`par_for_each_mut` promise no order at all. They hand the archetype list, and
+/// each archetype's rows, to a work-stealing pool; visit order is whatever the pool decides and
+/// varies between runs. Only use them for work whose result does not depend on order.
+///
+/// Even where the order is defined it is not *meaningful*. It is neither spawn order nor
+/// entity-id order, and it is not stable across edits to the world: despawning an entity or
+/// adding/removing a component relocates rows by swap-remove, and archetype indices themselves
+/// get renumbered when empty archetypes are collected. Never treat the order as a sort.
 pub struct Query<'w, Q: WorldQuery + ?Sized> {
     world: &'w World,
     matching_archetypes: Vec<usize>,
@@ -382,6 +507,22 @@ impl_presence_filter!(
     false
 );
 
+/// Filter matching a row accepted by **either** operand. Use as a query operand; like the other
+/// filters it yields no data (`Item = ()`).
+///
+/// An archetype is visited when either operand matches it, but the decision is then repeated
+/// per row: an operand may contribute only where its own `matches_archetype` held, and within
+/// that, only where its `filter_row` accepts. So `Or<Changed<A>, Changed<B>>` yields the rows
+/// where A *or* B actually changed — not every row of every archetype that holds A or B.
+///
+/// Because the real test is per row, `Or` always reports [`WorldQuery::has_row_filter`], and
+/// therefore cannot be used with [`Query::iter_chunks`], which panics on such queries.
+///
+/// It propagates both operands' component access to [`WorldQuery::check_aliasing`], so a system
+/// taking `Or<Changed<A>, Changed<B>>` is correctly recorded as reading both A and B and will
+/// not be scheduled in parallel with a writer of either.
+///
+/// Binary only — nest for more operands: `Or<A, Or<B, C>>`.
 pub struct Or<T1, T2>(PhantomData<(T1, T2)>);
 
 impl<T1: WorldQuery, T2: WorldQuery> sealed::SealedQuery for Or<T1, T2> {}

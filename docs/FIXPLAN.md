@@ -856,8 +856,23 @@ eklemekten ibaret.
 - 🔄 **D4** — `#![warn(missing_docs)]` Stage A'da. **1. parti bitti (2026-08-05):**
   `gizmo-math`, `gizmo-net`, `gizmo-scene`, `gizmo-animation` sıfır eksik dokümanla ratchet
   altında. **2. parti bitti (2026-08-05):** `gizmo-physics-soft`, `gizmo-physics-dynamics` ve
-  `gizmo-ai` de ratchet altında. Kalan: `gizmo-core` (351), `gizmo-physics-rigid` (303),
-  `gizmo-physics-core` (243) = **897 öğe**. (`gizmo-audio` zaten temizdi.)
+  `gizmo-ai` de ratchet altında. **3. parti bitti (2026-08-05):** `gizmo-core` de temiz.
+  Kalan: `gizmo-physics-rigid` (303), `gizmo-physics-core` (243) = **546 öğe**.
+  (`gizmo-audio` zaten temizdi.)
+
+  > **3. partide hata oranı yeniden yükseldi (0.11 → 0.21) ve sebebi öğretici.** Doğrulanamayan
+  > modüller-arası iddia 18'den 6'ya düştü — kural o eksende tuttu. Ama hatalar **AŞIRI
+  > KESİNLİĞE** kaydı: kodun daha zayıf söz verdiği yerde doküman spesifik garanti yazıyordu
+  > ("arketipleri artan indekste gezer", "yalnızca erişimleri çakışırsa ayrılırlar", "bir
+  > indeks yalnızca bir sonraki silmeye kadar anlamlıdır"). Üçü de ölçülüp çürütüldü — biri
+  > elle Kahn sıralaması izlenerek, biri `swap_rows`'un üretimde satır permüte ettiği
+  > gösterilerek.
+  >
+  > 3. turun talimatı bu yüzden "daha kesin yaz" değil **"zayıflat ya da sil"** oldu:
+  > *"iteration order is an implementation detail"* BİTMİŞ ve DOĞRU bir dokümandır;
+  > *"visits archetypes in ascending index"* motorun sonsuza kadar tutmak zorunda kalacağı bir
+  > sözdür. Denetime de simetrik kural konuldu (sırayı "implementation detail" demek bulgu
+  > DEĞİLDİR), yoksa denetçi doğru zayıflatmayı hata sanıyordu. 60 → 26 → 11 → elle bitti.
 
   > **"Kendi sözleşmesini belgele" kuralı ölçülebilir şekilde işe yaradı.** Hata oranı öğe
   > başına **0.21 → 0.11**'e düştü (1. parti: 177 öğede 38 yanlışlık; 2. parti: 297 öğede 33).
@@ -886,6 +901,30 @@ eklemekten ibaret.
   > doğrulanmışsa yazılsın. Bir de: kendi yazdığım `evaluate_clip` dokümanını denetim ajanı
   > düzeltti (`Hips` kontrolü çözümlenmiş eklemin adında değil, `track.target_node_name`
   > üzerinde) — bu hata modundan kimse muaf değil.
+
+- ⬜ **D4-followup — `Schedule` build sonrası eklenen sistemde ÖNCEKİLERİ DÜŞÜRÜYOR.**
+  `gizmo-core` doküman turunda bulundu, probe ile doğrulandı (ilk sistemin sayacı ikinci
+  koşudan sonra 2 değil 1'de kalıyor).
+
+  **Mekanizma:** `Schedule::build` config'leri `std::mem::take` ile batch'lere TAŞIYOR;
+  `invalidate()` ise yalnızca `phase_batches`/`legacy_batches`'i `clear()` ediyor. Geri
+  kurulacak config kalmadığı için build sonrası her `add_system` / `add_di_system` /
+  `configure_set` çağrısı, önceden derlenmiş TÜM sistemleri kalıcı olarak atıyor.
+  `run()` ilk frame'de tembel build ettiğinden ısıran kalıp sıradan: sistemleri ekle, bir
+  frame koş, sonra bir tane daha kaydet (çalışma zamanı plugin'i, editör, script) → schedule'da
+  yalnızca sonuncusu kalır. `configure_set` build sonrası çağrılırsa schedule TAMAMEN boşalır.
+
+  **Şimdilik yapılan (düzeltme DEĞİL):** `invalidate()` artık kaç sistemi attığını
+  `tracing::error!` ile bildiriyor — sessiz kayıp en azından görünür. Ve
+  `modify_after_build::adding_a_system_after_the_first_run_drops_the_earlier_ones` mevcut
+  (hatalı) davranışı pinliyor; testin yorumu açıkça diyor ki bu `2` ile kırmızıya döndüğünde
+  düzeltme inmiş demektir, beklenti güncellenmeli, test SİLİNMEMELİ.
+
+  **Gerçek düzeltme** `Schedule`'ın build sonrası sahiplik modelini değiştirmeyi gerektiriyor:
+  ya config'ler build'den sonra da saklanmalı (sistemler batch'lere ödünç verilmeli ya da
+  paylaşılmalı), ya da `invalidate()` batch'lerden sistemleri geri çıkarıp config'e
+  dönüştürmeli — ikincisinde label/ordering meta-verisi build sırasında tüketildiği için
+  kaybolur. Kendi oturumunu hak eden bir refactor.
 
 - ✅ **D4-followup — `Track::sample` tek keyframe + NaN'de PANİKLİYORDU** *(düzeltildi 2026-08-05)*. Doküman turunda
   bulundu, gerçek koda karşı doğrulandı (probe: `single_kf_nan_time panicked=true`,

@@ -1,3 +1,17 @@
+//! Per-frame keyboard and mouse state ([`Input`]), logical action names layered on top of it
+//! ([`ActionMap`]), and the fighting-game motion buffer and replay records
+//! ([`FighterInputBuffer`], [`PlaybackData`]).
+//!
+//! [`Input`] is a snapshot, not a stream. The platform layer pushes events into it with the
+//! `on_*` methods and calls [`Input::begin_frame`] exactly once per frame to roll the
+//! edge-triggered "just pressed" / "just released" sets over; skipping or double-calling
+//! `begin_frame` is what makes edge queries misfire, not the event methods themselves.
+//!
+//! Keys and mouse buttons are opaque `u32` codes. `gizmo-core` has no windowing dependency,
+//! so the mapping from a physical key to a code is entirely the caller's convention — the
+//! examples here spell it `KeyCode as u32` — and it must stay stable, or saved bindings and
+//! recorded replays silently start meaning different keys.
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
@@ -32,6 +46,14 @@ pub struct Input {
 }
 
 impl Input {
+    /// Creates an empty input state: nothing held, no pending edges, zero scroll, and the
+    /// cursor at `(0.0, 0.0)`.
+    ///
+    /// That cursor origin is a real value, not "unknown". [`Input::on_mouse_moved`] derives
+    /// its delta from the previous position, so the very first `on_mouse_moved(x, y)` after
+    /// construction reports a delta of the full `(x, y)` — one large spurious flick, which a
+    /// mouse-look camera will act on. Seed the position with [`Input::set_mouse_position`]
+    /// first when that matters.
     pub fn new() -> Self {
         Self {
             keys_pressed: HashSet::new(),
@@ -241,9 +263,25 @@ impl Default for Input {
 }
 
 /// Fare buton sabitleri
+///
+/// The canonical codes for the three standard mouse buttons — the names to use on both sides
+/// of the API rather than writing the literals.
+///
+/// The set is not exhaustive: `Input` stores a button as an opaque `u32`, so codes outside
+/// this module (side buttons, tilt wheels) work just as well; there is simply no constant for
+/// them here. What matters is that the code the platform layer passes to
+/// `on_mouse_button_pressed` is the same one the game queries with.
 pub mod mouse {
+    /// Primary (left) button.
+    ///
+    /// Its code is `0`, which is also what an uninitialised or defaulted `u32` holds: there is
+    /// no "no button" sentinel in this API, so a button code that was never assigned reads as
+    /// a left click rather than as nothing.
     pub const LEFT: u32 = 0;
+    /// Secondary button — the one a context menu or alternate fire hangs off.
     pub const RIGHT: u32 = 1;
+    /// Wheel click, code `2`. Distinct from wheel *rotation*, which is not a button at all
+    /// and arrives through [`Input::on_mouse_scroll`](super::Input::on_mouse_scroll).
     pub const MIDDLE: u32 = 2;
 }
 

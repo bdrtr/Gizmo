@@ -1,17 +1,97 @@
+//! What makes a type a component, and where its rows are stored.
+//!
+//! [`Component`] is the trait every stored type implements — usually through the
+//! `impl_component!` macro rather than by hand — and [`StorageType`] chooses between the
+//! archetype table (dense, fast to iterate, the default) and a sparse set (cheap to add and
+//! remove on a small fraction of entities).
+//!
+//! The storage choice is not cosmetic: it decides which query operands are legal. Table
+//! storage backs the chunked/contiguous iteration paths; sparse-set components cannot be
+//! served as slices and are rejected — or panic — there.
 use std::any::Any;
 
+/// Which of the world's two backing stores holds the data of a component type.
+///
+/// The choice is a property of the *type*, not of an entity: it comes from
+/// [`Component::storage_type`], which must return the same answer on every call — see there for
+/// what an inconsistent impl breaks. The two stores are disjoint: a component lives in one of
+/// them, never both.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StorageType {
+    /// Inside the archetype, as a contiguous column with one row per entity.
+    ///
+    /// Iteration is a linear scan over that column, and this is the only storage a chunked
+    /// query can hand out as a `&[T]` slice. The price is structural churn: adding or removing
+    /// a table component migrates the entity into a different archetype, which copies all of
+    /// its *other* components into a fresh row and swap-removes the old one (so an unrelated
+    /// entity changes row as a side effect).
+    ///
+    /// The default, and the right answer unless the component is added and removed far more
+    /// often than it is read.
     Table,
+    /// Outside the archetype, in one per-type sparse set keyed by raw entity id.
+    ///
+    /// Adding or removing costs no archetype migration, which is what makes this suitable for
+    /// churny short-lived tags. In exchange: every access is an indirection through the
+    /// id → row table; archetype-level query matching cannot narrow anything, so
+    /// a `With`/`Without` on a sparse component matches *every* archetype and degrades into a
+    /// per-row presence test (unlike the table case, where the archetype test alone settles it);
+    /// and asking a query for a contiguous slice (`iter_chunks`) panics rather than degrading.
+    ///
+    /// Not every code path supports it — the bundle fast path writes archetype columns only,
+    /// so a bundle containing a sparse component is routed component-by-component instead
+    /// (see [`Bundle::apply`]).
     SparseSet,
 }
 
+/// Data that can be attached to an entity.
+///
+/// There is no derive macro in this workspace; write the impl by hand or use
+/// [`impl_component!`](crate::impl_component). Implementing it is the only registration a type
+/// needs — the world records a component's runtime metadata the first time it sees the type.
+///
+/// The supertraits are load-bearing rather than decorative. `'static` because a component's
+/// identity everywhere in the ECS is its `TypeId`, so two distinct components can never share
+/// a type and a component can never borrow. `Send + Sync` because component storage is shared
+/// across worker threads by parallel query iteration. `Clone` because the storage layer records
+/// a clone thunk for every component type at registration; that thunk is what entity cloning
+/// (prefab splicing) uses, and a type that cannot clone cannot be a component.
+///
+/// Zero-sized components are legal and cost no allocation; they are the usual shape for
+/// markers such as [`IsHidden`].
 pub trait Component: 'static + Any + Send + Sync + Clone {
+    /// Where instances of this type are stored; see [`StorageType`].
+    ///
+    /// Answered by the type, not by an instance, so it must be a constant — the value is
+    /// captured into the world's component metadata the first time the type is registered, and
+    /// an impl that returned different values on different calls would leave the storage and
+    /// the metadata disagreeing about where the data lives.
+    ///
+    /// Defaults to [`StorageType::Table`].
     fn storage_type() -> StorageType {
         StorageType::Table
     }
 }
 
+/// Writes an empty [`Component`] impl for one or more types, optionally choosing their
+/// [`StorageType`].
+///
+/// ```ignore
+/// impl_component!(Position, Velocity);                       // default: Table storage
+/// impl_component!(Frozen, Stunned; StorageType::SparseSet);  // explicit storage
+/// ```
+///
+/// The macro only writes the impl: the types must already satisfy `Component`'s supertraits
+/// (`'static + Send + Sync + Clone`), and the expansion is an ordinary trait impl, so the usual
+/// orphan rule applies — outside gizmo-core itself, only types local to the invoking crate can
+/// be passed.
+///
+/// The `; $storage` argument is an expression expanded in the *caller's* scope, so whatever
+/// path it names (`StorageType::SparseSet`, `gizmo_core::component::StorageType::SparseSet`, …)
+/// has to resolve there. Only the storage-less form accepts a trailing comma after the last
+/// type; `impl_component!(A, B,; …)` does not parse.
+///
+/// `#[macro_export]` puts it at the crate root: `gizmo_core::impl_component!`.
 #[macro_export]
 macro_rules! impl_component {
     ($($t:ty),+ $(,)?) => {
@@ -31,34 +111,102 @@ macro_rules! impl_component {
 }
 
 // --- Hiyerarşi (Scene Graph) Bileşenleri ---
+/// Up-link from a child to its parent, carrying the parent's raw
+/// [`Entity::id`](crate::Entity::id) — a slot index with the generation stripped off.
+///
+/// Because the generation is gone the value cannot distinguish a live parent from a recycled
+/// id, and nothing revalidates it when the parent is despawned. Resolve it through
+/// [`World::entity`](crate::World::entity), which returns `None` for an id that is dead or has
+/// no storage, instead of trusting the number.
+///
+/// This is only half of a link: [`Children`] on the parent is the other half. Nothing
+/// synchronises the two halves automatically, so adding or editing this component directly
+/// leaves the parent's `Children` list stale.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Parent(pub u32);
 
+/// Down-link from a parent to its children: raw entity ids (no generations), in the order they
+/// were attached.
+///
+/// The order is stable and meaningful. [`HierarchyExt::add_child`](crate::HierarchyExt::add_child)
+/// appends and skips ids already in the list, and `remove_child` retains, so iteration over a
+/// `Children` list is deterministic across a run — which is what lets hierarchy walks be
+/// replayed. Presence of this component is also what marks an archetype as a candidate for
+/// [`World::sort_archetype_hierarchy`](crate::World::sort_archetype_hierarchy), which permutes
+/// rows to put parents and children next to each other.
+///
+/// Entries are not validated: a child despawned outside `HierarchyExt` leaves a dangling id.
+/// Duplicates and cycles are impossible through `HierarchyExt` (it rejects self-parenting and
+/// any reparent that would close a loop) but perfectly possible via direct component writes or
+/// a hand-edited scene file, so `despawn_recursive` carries a visited set rather than assuming
+/// the graph is acyclic.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Children(pub Vec<u32>);
 
+/// Human-readable label for an entity — for editor lists, logs and scene files.
+///
+/// Purely descriptive: nothing enforces uniqueness, nothing indexes it, and gizmo-core itself
+/// never reads it. Two entities may hold the same name, and an absent `EntityName` is normal
+/// (most entities never get one).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct EntityName(pub String);
 
 impl EntityName {
+    /// Allocates an owned copy of `name`. The field is public, so an already-owned `String` can
+    /// be moved in as `EntityName(s)` instead of paying for a second allocation here.
+    ///
+    /// No validation and no normalisation: empty, blank and already-used names are all accepted.
+    /// That matters because the derived `PartialEq` compares the stored text byte for byte —
+    /// `"Cube"` and `"cube "` are different labels to anything that searches by name.
     pub fn new(name: &str) -> Self {
         Self(name.to_string())
     }
 }
 
+/// Zero-sized marker meaning "do not display this entity".
+///
+/// It carries no data, so visibility is binary and expressed structurally: hide with
+/// `add_component(e, IsHidden)`, show with `remove_component::<IsHidden>(e)`. gizmo-core
+/// attaches no behaviour to it whatsoever. A hidden entity is still alive and still visited by
+/// every query that does not explicitly exclude it.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct IsHidden;
 
+/// Zero-sized marker meaning "soft-deleted": the entity is still alive with its id, handles and
+/// components intact, but is meant to be skipped by processing.
+///
+/// gizmo-core never acts on it. It is a convention for the layers above, which exclude it with
+/// `Without<IsDeleted>` — the rigid-body physics systems do exactly that — and later despawn
+/// the marked entities for real. Because nothing is destroyed when the marker is added,
+/// removing it again restores the entity exactly; that reversibility is the point of the flag.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct IsDeleted;
 
+/// A request to populate this entity from a named prefab, left on the entity until something
+/// fulfils it.
+///
+/// The string is an opaque key: gizmo-core neither resolves nor validates it. No system in this
+/// workspace consumes the component — the Lua scripting bridge is its only in-tree producer —
+/// so it does nothing unless the application runs its own resolver, which must also remove the
+/// component afterwards, since nothing clears it automatically.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PrefabRequest(pub String);
 
 impl PrefabRequest {
+    /// Stores an owned copy of `name` as the request key.
+    ///
+    /// Infallible and unvalidated: gizmo-core holds no prefab catalogue, so an empty or
+    /// misspelled key is indistinguishable here from a good one and can only fail later,
+    /// wherever the application resolves it.
     pub fn new(name: &str) -> Self {
         Self(name.to_string())
     }
+    /// The request key, borrowed from the component — no allocation, no copy.
+    ///
+    /// May be empty, and is never checked against anything (see
+    /// [`new`](PrefabRequest::new)). The tuple field is public, so this is a reading
+    /// convenience rather than encapsulation: `req.0` reaches the same `String` and can
+    /// replace it.
     pub fn name(&self) -> &str {
         &self.0
     }
@@ -70,15 +218,66 @@ impl std::fmt::Display for EntityName {
     }
 }
 
+/// Renderer-independent request for a mesh, as an asset key that the renderer's asset-loading
+/// pass turns into a GPU `Mesh` component.
+///
+/// The key is not simply a file path. The loader recognises the built-in primitives
+/// `"standard_cube"`, `"inverted_cube"`, `"plane"`, `"sphere"` and `"sprite_quad"`, the
+/// `"gltf_mesh_<file>.glb…"` / `"gltf_mesh_<file>.gltf…"` form for a mesh inside a glTF scene,
+/// and `"obj:<path>"`; anything else is treated as an OBJ path. Nothing validates the key when
+/// the component is attached, and a key that fails to load does not fail the frame: the entity
+/// is given a stand-in mesh and the failure is only logged.
+///
+/// Upload happens only while the entity has *no* `Mesh` yet, so this is a one-shot request:
+/// editing the string afterwards changes nothing until the `Mesh` component is removed.
+/// Keeping the key on the entity is also what lets a scene be saved back out.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MeshSource(pub String);
 
+/// Renderer-independent material description, converted into a GPU `Material` by the renderer's
+/// asset-loading pass.
+///
+/// Like [`MeshSource`] this is consumed once — the conversion runs only while the entity has no
+/// `Material` component, so later edits to these fields do not reach the GPU material.
+///
+/// The numeric fields are carried through verbatim: nothing here clamps, normalises or
+/// colour-converts them, so the ranges named below are conventions rather than guarantees.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MaterialSource {
+    /// Base colour and opacity as `[r, g, b, a]`, conventionally `0.0..=1.0` per channel.
+    ///
+    /// The fourth channel is the only opacity control on this struct — there is no separate
+    /// alpha, blend-mode or cutoff field. It is also the one channel group that has a texture
+    /// counterpart: [`texture_source`](Self::texture_source) is an *albedo* map, and no other
+    /// field here can be driven by a texture.
     pub albedo: [f32; 4],
+    /// Microfacet roughness: `0.0` is a perfect mirror, `1.0` fully diffuse.
+    ///
+    /// A shading parameter, not a shading mode — which mode runs is decided solely by
+    /// [`unlit`](Self::unlit), and writing a roughness never changes it.
     pub roughness: f32,
+    /// Metalness: `0.0` for a dielectric, `1.0` for a metal.
+    ///
+    /// Unlike [`roughness`](Self::roughness) this is conceptually two-valued rather than a
+    /// continuum — the two ends are the physical materials, and an intermediate number describes
+    /// a blend between them, which is normally only wanted where a texture crosses from one to
+    /// the other.
     pub metallic: f32,
+    /// Shading mode selector, despite the name and the type: it is a *tri-state* float, not a
+    /// boolean.
+    ///
+    /// The renderer thresholds it — above `1.5` the material becomes a skybox, above `0.5` it
+    /// becomes unlit, and anything else (including `0.0`) is lit PBR. Values in between behave
+    /// like the lower bucket, and negative values are lit like zero.
+    ///
+    /// `MaterialSource` derives no `Default`, so there is no `..Default::default()` shorthand:
+    /// every literal must state this field, and `0.0` is the lit-PBR choice.
     pub unlit: f32,
+    /// Path of the albedo texture to load, or `None` for an untextured material.
+    ///
+    /// `None` and a failed load are handled the same way — the material falls back to the
+    /// shared default white texture — except that a failure also logs a warning, so a
+    /// mistyped path renders as plain white rather than failing loudly.
     pub texture_source: Option<String>,
 }
 
@@ -88,18 +287,90 @@ impl_component!(Parent, Children, EntityName, IsHidden, PrefabRequest, IsDeleted
 //  Bundle Trait
 // ============================================================
 
+/// A group of components that can be attached to an entity as one unit.
+///
+/// Implemented blanket-wise for every [`Component`] (a lone component is a one-element bundle)
+/// and for tuples of bundles up to 16 elements, which nest freely — `(A, (B, C))` is a bundle.
+///
+/// There are two ways into the world and an implementor owns both:
+/// [`apply`](Bundle::apply) inserts the components one at a time through the world, and
+/// [`write_to_archetype`](Bundle::write_to_archetype) blits them directly into archetype
+/// columns. They are not interchangeable — the second cannot store `SparseSet` components at
+/// all — and the caller picks: `World::spawn_bundle` always goes through `apply`;
+/// `World::add_bundle` writes the archetype directly; `World::spawn_batch` spawns its first
+/// entity through `apply` to discover the archetype and appends the rest directly. Whenever
+/// [`get_infos`](Bundle::get_infos) declares a `SparseSet` member, the direct paths give up and
+/// fall back to `apply`.
+///
+/// Since `apply` has a do-nothing default, a hand-written bundle that implements only
+/// `write_to_archetype` compiles and then silently attaches nothing wherever the `apply` path
+/// is used. Implement both.
 pub trait Bundle {
+    /// Runtime metadata for every component this bundle will write, in the order it writes
+    /// them.
+    ///
+    /// A property of the type — it takes no `self` and is called before any data moves — so it
+    /// must describe exactly what `apply`/`write_to_archetype` produce. The world relies on it
+    /// twice: to work out the destination archetype, and to spot `SparseSet` members that make
+    /// the fast path unusable. Nested bundles simply concatenate their infos, and repeated
+    /// component types are *not* deduplicated here; the world folds duplicates away when it
+    /// builds the archetype's sorted type set, but a duplicate still means the same column is
+    /// written twice.
     fn get_infos() -> Vec<crate::archetype::ComponentInfo>;
+    /// Moves the bundle's components straight into `arch`'s columns at `row`, bypassing the
+    /// world.
+    ///
+    /// The fast path, and a narrow one: it can only reach `Table`-storage components, it
+    /// updates no entity location and fires no hooks, and it takes `arch` as given rather than
+    /// choosing it — the caller is responsible for the row belonging to the right entity in the
+    /// right archetype.
+    ///
+    /// Each component is appended when its column is still short of `row`, and otherwise raw-
+    /// written into slot `row` — treating that slot as *uninitialised*, so an already-live value
+    /// there is overwritten without being dropped (a leak for anything owning an allocation).
+    /// Either way the row's ticks are reset to `tick` in both fields, i.e. it reads as freshly
+    /// added, not merely changed.
+    ///
     /// # Safety
     /// `arch`, `Self::get_infos()`'un döndürdüğü bileşen sütunlarını içermeli ve `_row`
     /// bu arketipte ayrılmış geçerli bir satır olmalıdır. Veriler ham olarak kopyalanır;
     /// sahiplik arketipe devredilir.
     unsafe fn write_to_archetype(self, arch: &mut crate::archetype::Archetype, _row: usize, tick: u32);
+    /// Attaches the bundle to an entity that already exists, component by component, through
+    /// `World::add_component`.
+    ///
+    /// The storage-agnostic route: each component reaches whichever store its
+    /// [`StorageType`] says, and the normal `on_add`/`on_set` hooks fire. It is the only route
+    /// that can place a `SparseSet` component, and the slow one — every table component the
+    /// entity does not already have migrates it to another archetype, so an n-component bundle
+    /// can pay n migrations where the direct path pays one.
+    ///
+    /// The default body does nothing at all. It exists so that a bundle which only supports the
+    /// archetype fast path still compiles; an implementor who forgets to override it gets an
+    /// entity with none of the components and no error.
     fn apply(self, _world: &mut crate::world::World, _entity: crate::entity::Entity) where Self: Sized {}
 }
 
+/// A bundle with one extra component appended, as produced by [`BundleExt::with`].
+///
+/// Composition is purely type-level: `get_infos` lists `B`'s components followed by `C`, and
+/// `write_to_archetype` writes `B` first and `C` second. If `C` also occurs in `B` the later
+/// write wins by overwriting the slot in place — without dropping what was there, which leaks
+/// whatever that value owned. An archetype with no column for `C` (a `SparseSet` `C`, or simply
+/// the wrong archetype) is a bare `unwrap` panic, without the explanation the single-component
+/// path prints.
+///
+/// **Known limitation.** This type does not override [`Bundle::apply`], so it inherits the
+/// no-op default: passing a `DynamicBundle` to `World::spawn_bundle` — or to `World::add_bundle`
+/// when it contains a `SparseSet` component — produces an entity with *none* of the components,
+/// silently. Only the direct archetype path (`World::add_bundle` with all-table components)
+/// stores anything. Nothing in this workspace constructs a `DynamicBundle`; treat it as
+/// experimental until `apply` is implemented.
 pub struct DynamicBundle<B: Bundle, C: Component> {
+    /// The base bundle, written before `component` and listed first in `get_infos`.
     pub bundle: B,
+    /// The appended component, written last — so on a type collision with `bundle` this is the
+    /// value that survives.
     pub component: C,
 }
 
@@ -124,7 +395,18 @@ impl<B: Bundle, C: Component> Bundle for DynamicBundle<B, C> {
     }
 }
 
+/// Chaining sugar for growing a bundle one component at a time.
+///
+/// Blanket-implemented for every [`Bundle`], so `a.with(b).with(c)` type-checks for any
+/// components; the result is a nest of [`DynamicBundle`]s, whose limitations apply — read them
+/// before using this.
 pub trait BundleExt: Bundle + Sized {
+    /// Appends `component` to this bundle and returns the combined value.
+    ///
+    /// Pure value construction: nothing touches a world until the result is spawned or added,
+    /// and both operands are moved. It is additive, never a replacement — appending a component
+    /// type the bundle already carries produces a bundle listing that type twice rather than
+    /// substituting the earlier one.
     fn with<C: Component>(self, component: C) -> DynamicBundle<Self, C> {
         DynamicBundle { bundle: self, component }
     }

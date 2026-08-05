@@ -59,13 +59,32 @@ impl std::fmt::Display for RegistryError {
 impl std::error::Error for RegistryError {}
 
 /// Type alias for component serialization function pointers.
+///
+/// The argument is a type-erased `*const T` for the exact type of the [`TypeRegistration`]
+/// this pointer is stored in. The implementations installed by
+/// [`ComponentRegistry::register_serializable`] cast it back without any check, so handing
+/// over a pointer to a different type — or a dangling, misaligned or uninitialised one — is
+/// undefined behaviour, even though the `fn` signature is safe. The result is RON text; the
+/// `Err` string is the serializer's own message, meant for logs, not for matching on.
 pub type SerializeFn = fn(*const u8) -> Result<String, String>;
 /// Type alias for component deserialization function pointers.
+///
+/// Takes RON text and puts the resulting component on `entity`. `Ok(())` reports that the
+/// text parsed, not that the world changed: the installed implementations forward to
+/// `World::add_component`, which replaces any existing component of that type and does
+/// nothing at all when the entity is not alive.
 pub type DeserializeFn =
     fn(&mut crate::world::World, crate::entity::Entity, &str) -> Result<(), String>;
 /// Type alias for component JSON getter function pointers.
+///
+/// Same erased-pointer contract, and the same undefined behaviour on a type mismatch, as
+/// [`SerializeFn`] — only the output format differs.
 pub type GetJsonFn = fn(*const u8) -> Result<serde_json::Value, String>;
 /// Type alias for component JSON setter function pointers.
+///
+/// A whole-component replace, not a field patch: the value has to deserialize into a complete
+/// component, so fields left out of the JSON fail unless the type's `serde` impl defaults
+/// them. Carries the same "`Ok` means parsed" caveat as [`DeserializeFn`].
 pub type SetJsonFn =
     fn(&mut crate::world::World, crate::entity::Entity, serde_json::Value) -> Result<(), String>;
 /// Type alias for reflection-based component insertion function pointers.
@@ -81,11 +100,35 @@ pub type InsertReflectFn = fn(
 /// ECS tabanlı opsiyonel reflection yeteneklerini taşıyan serileştirme yapısı
 #[derive(Debug, Clone)]
 pub struct TypeRegistration {
+    /// Identity of the component type this entry describes.
+    ///
+    /// Always equal to the key this registration is filed under, and it is the type that
+    /// every erased `*const u8` passed to the function pointers below must actually point at.
     pub type_id: TypeId,
+    /// The script- and editor-facing name chosen when the type was registered.
+    ///
+    /// This is what [`ComponentRegistry::get_name_by_id`] returns. Nothing derives it from or
+    /// checks it against the Rust type name; it is whatever string the registration passed,
+    /// and it is compared byte-for-byte, so it is case-sensitive.
     pub name: String,
+    /// Component → RON text, or `None` if this type was registered without serialization
+    /// support (plain [`ComponentRegistry::register`], or `register_reflect`).
+    ///
+    /// [`ComponentRegistry::register_serializable`] installs this and the three fields below
+    /// in one go, so within a registration it produced they are either all `Some` or all
+    /// `None`. See [`SerializeFn`] for the pointer contract — it is unchecked.
     pub serialize_fn: Option<SerializeFn>,
+    /// RON text → component on an entity, parsing the dialect `serialize_fn` emits, so the
+    /// two round-trip. See [`DeserializeFn`] for what it does to an existing component and
+    /// what `Ok(())` does and does not promise.
     pub deserialize_fn: Option<DeserializeFn>,
+    /// Component → `serde_json::Value` — a value tree rather than text, so a caller can walk
+    /// or edit individual fields without re-parsing. Same unchecked erased-pointer contract
+    /// as `serialize_fn`; see [`GetJsonFn`].
     pub get_json_fn: Option<GetJsonFn>,
+    /// `serde_json::Value` → component on an entity: the inverse of `get_json_fn`. See
+    /// [`SetJsonFn`] — in particular for why a caller that edited one field still has to send
+    /// the whole object back.
     pub set_json_fn: Option<SetJsonFn>,
     /// Reflection accessor — only present with the `reflect` feature.
     #[cfg(feature = "reflect")]
@@ -110,6 +153,12 @@ pub struct ComponentRegistry {
 }
 
 impl ComponentRegistry {
+    /// An empty registry.
+    ///
+    /// No component type is registered for you — not even the engine's own — so every lookup
+    /// misses until something calls one of the `register*` methods. Registration is per
+    /// instance and lives in normal memory; there is no process-wide registry behind this,
+    /// so two `ComponentRegistry` values know nothing about each other.
     pub fn new() -> Self {
         Self {
             name_to_type: BTreeMap::new(),
@@ -208,6 +257,22 @@ impl ComponentRegistry {
         }
     }
 
+    /// Registers `T` under `name` *and* installs its RON and JSON accessors.
+    ///
+    /// Everything [`ComponentRegistry::register`] does, plus the four function pointers of
+    /// [`TypeRegistration`], built from `T`'s `serde` impls (RON for
+    /// `serialize_fn`/`deserialize_fn`, `serde_json` for the JSON pair).
+    ///
+    /// # Errors
+    /// - [`RegistryError::NameAlreadyRegistered`] — `name` is taken by a different type
+    /// - [`RegistryError::TypeAlreadyRegistered`] — `T` is already registered under another name
+    ///
+    /// Repeating the same type-name pair is a no-op returning `Ok(())`. That short-circuit is
+    /// blunt, and it bites: if `T` was registered under this same name by plain
+    /// [`ComponentRegistry::register`], this call also returns `Ok(())` and the accessors are
+    /// **never installed** — the registration keeps `serialize_fn: None` and the type stays
+    /// silently unserializable. Use this method from the start for such a type, or
+    /// [`ComponentRegistry::unregister`] it first.
     pub fn register_serializable<
         T: crate::component::Component + serde::Serialize + serde::de::DeserializeOwned,
     >(
@@ -347,6 +412,14 @@ impl ComponentRegistry {
         self.name_to_type.len()
     }
 
+    /// Whether the name table is empty — exactly what [`len`](Self::len) reports as `0`.
+    ///
+    /// It counts *names*, not types. Normally that is the same question, but it is not
+    /// guaranteed to be: a type entry can outlive the name it was filed under, so this can
+    /// report `true` while [`contains_type`](Self::contains_type) still answers `true` for
+    /// some type. Read it as "nothing is reachable by name" — the question the name-keyed
+    /// lookups ([`get_type_id`](Self::get_type_id), [`contains_name`](Self::contains_name),
+    /// [`all_names`](Self::all_names)) actually ask.
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.name_to_type.is_empty()

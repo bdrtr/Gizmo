@@ -1,3 +1,11 @@
+//! Object pooling: reuse despawned entities instead of allocating fresh ones.
+//!
+//! A [`PoolManager`] holds one [`ObjectPool`] per registered prefab and hands out entities
+//! that were returned rather than destroyed. Intended for churn-heavy spawns — bullets,
+//! particles, debris — where the allocation and the component inserts dominate.
+//!
+//! Pooled entities keep whatever components they were left with, so a pool is only as clean
+//! as the code that returns entities to it.
 use crate::entity::Entity;
 use crate::world::World;
 use std::collections::{HashMap, VecDeque};
@@ -9,6 +17,15 @@ pub struct Pooled;
 
 crate::impl_component!(Pooled);
 
+/// One pool's bookkeeping: the entity to clone from, plus the instances currently parked.
+///
+/// Plain data with no invariants of its own — [`PoolManager`] is what keeps it consistent.
+/// Nothing here checks that a parked entity is still alive, that it appears only once, or
+/// that it originally came from this pool.
+///
+/// Note `prefab_id` is a raw id, not an [`Entity`]: it carries no generation, so it neither
+/// keeps the prefab alive nor notices when the prefab is despawned and its id slot recycled.
+/// In that case cloning silently copies whatever entity now occupies the slot.
 pub struct ObjectPool {
     /// Orijinal prefab nesnesi (bu nesne klonlanarak çoğaltılacak)
     pub prefab_id: u32,
@@ -17,6 +34,11 @@ pub struct ObjectPool {
 }
 
 impl ObjectPool {
+    /// An empty pool sourcing from `prefab_id`, so the first instantiate clones the prefab
+    /// instead of reusing anything.
+    ///
+    /// Touches no world state: `prefab_id` is not checked for liveness and the prefab is not
+    /// marked [`Pooled`] — see [`PoolManager::register_pool_hidden`] for that.
     pub fn new(prefab_id: u32) -> Self {
         Self {
             prefab_id,
@@ -39,6 +61,13 @@ impl Default for PoolManager {
 }
 
 impl PoolManager {
+    /// A manager with no pools registered.
+    ///
+    /// Until a name is registered it is simply unknown, and the two accessors disagree about
+    /// what that means: [`instantiate`](Self::instantiate) returns `None`, while
+    /// [`destroy`](Self::destroy) falls back to despawning the entity outright.
+    ///
+    /// Equivalent to `PoolManager::default()`.
     pub fn new() -> Self {
         Self {
             pools: HashMap::new(),

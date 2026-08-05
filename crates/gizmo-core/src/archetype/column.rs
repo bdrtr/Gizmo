@@ -1,15 +1,48 @@
+//! [`Column`] — one component type's slice of an archetype — together with
+//! [`ComponentTicks`] (change detection) and [`ComponentInfo`] (the runtime type record
+//! used to build columns and to drive archetype migration).
+//!
+//! A column is a [`BlobVec`] of component bytes plus a parallel `Vec<ComponentTicks>`.
+//! The two are always the same length and row `i` of one always describes row `i` of the
+//! other; every mutating method here updates both together.
+
 use super::blob::BlobVec;
 use std::alloc::Layout;
 use std::any::TypeId;
 use std::ptr;
 
+/// Change-detection timestamps for a single component instance, stored beside the
+/// component itself — one entry per row, in the same order as the column data.
+///
+/// Both fields hold a *world tick*: a per-frame counter, not a wall-clock time. A tick
+/// filter matches when its field is **strictly greater** than the query's reference tick,
+/// so a component stamped with the reference tick itself does not match. The world counter
+/// starts at 1 and skips 0 on wraparound, which makes 0 usable as a "before everything"
+/// reference — but it *does* wrap, so ticks are only comparable within a window far shorter
+/// than `u32::MAX` frames.
 #[derive(Debug, Clone, Copy)]
 pub struct ComponentTicks {
+    /// Tick at which this component was written into its row.
+    ///
+    /// Nothing in this type advances `added` on its own; it changes only when the whole
+    /// `ComponentTicks` value is replaced, i.e. when the row is (re)initialised. This is
+    /// the field the `Added<T>` filter reads.
     pub added: u32,
+    /// Tick of the most recent write to this component.
+    ///
+    /// Starts equal to [`added`](Self::added) (see [`ComponentTicks::new`]) and is bumped
+    /// on its own afterwards, so `changed >= added` holds for any row that has not been
+    /// reinitialised. This is the field the `Changed<T>` filter reads. Writes made through
+    /// a raw pointer do *not* bump it — only the change-tracking access paths do.
     pub changed: u32,
 }
 
 impl ComponentTicks {
+    /// Ticks for a freshly written component: both fields are set to `tick`, so the row is
+    /// reported by `Added<T>` and `Changed<T>` over exactly the same window.
+    ///
+    /// Pass the current world tick. Passing 0 produces a row that no tick filter will ever
+    /// match, since filters compare strictly greater than a reference tick of at least 0.
     pub fn new(tick: u32) -> Self {
         Self {
             added: tick,
@@ -42,11 +75,24 @@ impl Column {
         }
     }
 
+    /// `TypeId` of the component this column stores.
+    ///
+    /// Fixed at construction — a column never changes type — and it is the *only* type
+    /// information the column carries. Every pointer accessor below is type-erased and
+    /// trusts the caller to cast to this type; nothing here checks.
     #[inline]
     pub fn type_id(&self) -> TypeId {
         self.type_id
     }
 
+    /// Number of rows stored, which is also the number of change-detection tick entries.
+    ///
+    /// Within an archetype this must equal the row count of every *other* column and the
+    /// length of the entity list. That invariant is what makes a row index usable across
+    /// columns; a bundle that writes only some of an archetype's columns breaks it and
+    /// makes query iteration read uninitialised or out-of-bounds memory. It is an
+    /// obligation on the writer, not something the column checks — nothing here validates
+    /// it, in debug builds or otherwise.
     #[inline]
     pub fn len(&self) -> usize {
         self.data.len()
@@ -189,10 +235,42 @@ use crate::component::StorageType;
 /// Column oluştururken ve archetype migration'da kullanılır.
 #[derive(Clone, Copy)]
 pub struct ComponentInfo {
+    /// Identity of the component type, and the key everything else is looked up by:
+    /// archetype column indices, sparse-set registration and the world's component
+    /// registry all hash on it.
+    ///
+    /// It is the one field [`ComponentInfo::of_type_id`] can fill in honestly — an info
+    /// built that way has a real `type_id` and placeholders everywhere else.
     pub type_id: TypeId,
+    /// Size and alignment of one instance.
+    ///
+    /// Every raw copy in the storage layer moves exactly `layout.size()` bytes, so an info
+    /// whose layout disagrees with the real type silently corrupts memory. Zero-sized
+    /// components are legal (`size() == 0`) and are stored without ever allocating.
     pub layout: Layout,
+    /// Drop glue for one instance, called with a pointer to it.
+    ///
+    /// `None` means the type needs no drop glue (`std::mem::needs_drop` was false) and the
+    /// storage may simply release its bytes. Since pushing into a column transfers
+    /// ownership of the bytes, this is the only thing that will ever free a component's
+    /// heap allocations — an info with a wrongly-`None` `drop_fn` leaks instead of crashing.
     pub drop_fn: Option<unsafe fn(*mut u8)>,
+    /// Clone glue: `(src, dst, count)` writes `count` freshly cloned instances into
+    /// consecutive slots starting at `dst`, which must be uninitialised and large enough
+    /// for `count * layout.size()` bytes.
+    ///
+    /// Always `Some` for infos built by [`ComponentInfo::of`], because `Component` requires
+    /// `Clone`; only [`ComponentInfo::of_type_id`] leaves it `None`. When it is `None`,
+    /// `BlobVec::push_cloned_batch` degrades to a raw byte copy (wrong for any type owning
+    /// a heap allocation) and `ComponentSparseSet::clone_entry` refuses and returns `false`.
     pub clone_fn: Option<unsafe fn(*const u8, *mut u8, usize)>,
+    /// Which backing store holds this component: `Table` (an archetype [`Column`], laid out
+    /// contiguously and iterated per archetype) or `SparseSet` (a `ComponentSparseSet` that
+    /// lives outside the archetype and is keyed by entity id).
+    ///
+    /// Taken from `T::storage_type()` and therefore a property of the type, not of the
+    /// entity. The two stores are disjoint: a component is in one or the other, never both,
+    /// and the code paths that read them are separate.
     pub storage_type: StorageType,
     /// İnsan-okunur tip adı (`std::any::type_name`). Analiz/introspection katmanı
     /// (gizmo-analysis) archetype tablolarını component adlarıyla raporlayabilsin diye
