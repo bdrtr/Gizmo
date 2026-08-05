@@ -848,16 +848,31 @@ eklemekten ibaret.
   | senaryo | 64/8 | 256/24 | 1024/48 |
   |---|---|---|---|
   | broadphase | 226 µs | 609 µs | 1.73 ms |
-  | narrowphase | 6.96 ms | 27.66 ms | **151.00 ms** |
+  | dense_contacts (solver-bound) | 6.96 ms | 27.66 ms | **151.00 ms** |
   | solver (kule) | 532 µs | 1.20 ms | 4.05 ms |
   | joints (zincir 8/32/128) | 161 µs | 317 µs | 755 µs |
   | full_step (128/512) | 635 µs | 2.43 ms | — |
 
-  > **İlk ölçüm iki şey gösterdi.** (1) Narrowphase süper-lineer: 64→256 cisimde süre 3.97×
-  > (lineer), ama 256→1024'te **5.46×**. Throughput 9.2'den 6.8 Kelem/s'ye düşüyor. (2) Aynı
-  > sahnede narrowphase broadphase'in **87 katı** (151 ms'e karşı 1.73 ms). Bu senaryo
-  > kasıtlı en kötü hal — 1024 kutu 0.9 aralıkla, yani hepsi birbirine giriyor; tipik bir
-  > kare değil. Ama C2/C4'ün nereye bakması gerektiğini söyleyen ölçüm bu.
+  > **İlk ölçüm benim senaryo adlandırmamı ÇÜRÜTTÜ, ve asıl bulgu bu.** Grubu
+  > `narrowphase_overlapping` diye adlandırmıştım. Motorun kendi `PhysicsMetrics`'iyle faz
+  > kırılımını alınca (1024 cisim): broadphase 25 ms, narrowphase 36 ms, **solver 669 ms** —
+  > yani zamanın **%91'i solver'da**. `step` üzerinden narrowphase'i izole etmek zaten mümkün
+  > değil, çünkü ürettiği her temas sonra çözülüyor. Grup `dense_contacts_solver_bound` olarak
+  > yeniden adlandırıldı; yanlış ad birini yanlış fazı optimize etmeye yollardı.
+  >
+  > **Süper-lineerliğin yeri kesinleşti:** temas SAYISI N ile lineer (her boyutta cisim başına
+  > ~20 temas), ama solver'ın **temas başına** maliyeti sabit kalmıyor:
+  >
+  > | N | temas | solver | temas başına |
+  > |---|---|---|---|
+  > | 64 | 1631 | 33.99 ms | 20.84 µs |
+  > | 256 | 4847 | 104.84 ms | 21.63 µs |
+  > | 1024 | 20754 | 669.47 ms | **32.26 µs** |
+  >
+  > `island_count` boyunca 4'te sabit, yani island büyüyor ve temas başına maliyet onunla
+  > birlikte artıyor. **Adaptif iterasyon sayısı DEĞİL** — o sahne sıfır yerçekiminde koşuyor,
+  > destek derinliği `island_depth >= 5` eşiğinin altında kalıyor ve sweep sayısı sabit.
+  > Sebep henüz belirlenmedi; C2/C4'ün başlaması gereken yer burası.
   >
   > Solver da 24→48 kulede 2× yükseklik için **3.39×** süre veriyor — ENGINE.md'nin
   > "N≥48 kuleler bükülüyor" notuyla aynı yere işaret ediyor.

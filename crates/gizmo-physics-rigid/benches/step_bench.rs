@@ -14,8 +14,12 @@
 //!
 //! - **broadphase** — many bodies far enough apart that no pair ever reaches narrowphase.
 //!   What is being measured is pair-finding over the AABB tree.
-//! - **narrowphase** — the same body count packed so that most pairs DO overlap, so the cost
-//!   difference against the broadphase scene at the same N is the contact-generation work.
+//! - **dense contacts** — the same body count packed so most pairs overlap. NOTE: this does
+//!   NOT isolate narrowphase, and the first run proved it. Measured with the engine's own
+//!   `PhysicsMetrics`, the split at 1024 bodies is broadphase 25 ms, narrowphase 36 ms,
+//!   solver 669 ms — the SOLVER is 91% of it. There is no way to isolate narrowphase through
+//!   `step`, because every contact it generates is then solved. Read this group as
+//!   "solver under a large contact island", which is what it is.
 //! - **solver** — a settled stack, where broad and narrow phases are cheap and stable and the
 //!   iteration count over persistent contacts dominates.
 //! - **joints** — a hanging chain, which has no contacts at all, so it is the joint solver
@@ -30,6 +34,22 @@
 //! same scene before and after a change, on the same machine, and the SHAPE across body
 //! counts: broadphase and narrowphase should scale sub-quadratically, and if one starts
 //! looking quadratic that is the finding.
+//!
+//! # What the first run found
+//!
+//! In the dense-contact scene the contact COUNT scales linearly with N (~20 contacts per body
+//! at every size), but the solver's cost PER CONTACT does not hold constant:
+//!
+//! ```text
+//!   N=64     1631 contacts   20.84 µs/contact
+//!   N=256    4847 contacts   21.63 µs/contact
+//!   N=1024  20754 contacts   32.26 µs/contact
+//! ```
+//!
+//! `island_count` stays at 4 throughout, so the island is getting bigger and per-contact cost
+//! grows with it. Not the adaptive iteration count — that scene runs at zero gravity, so
+//! support depth stays under the `island_depth >= 5` threshold and the sweep count is fixed.
+//! The cause is unidentified; it is where C2/C4 should start.
 //!
 //! Every scene is deterministic — fixed positions, no RNG — so run-to-run variation is the
 //! machine, not the input.
@@ -81,8 +101,10 @@ fn scene_broadphase(n: u32) -> PhysicsWorld {
     world
 }
 
-/// The same `n`, packed so neighbours overlap. The delta against `scene_broadphase` at equal
-/// `n` is the contact-generation cost.
+/// The same `n`, packed so neighbours overlap — roughly 20 contacts per body at every size.
+///
+/// Do not read this as a narrowphase measurement: the engine's own `PhysicsMetrics` puts 91%
+/// of the time in the solver at 1024 bodies. It is the solver under one large contact island.
 fn scene_narrowphase(n: u32) -> PhysicsWorld {
     let mut world = PhysicsWorld::new().with_gravity(Vec3::ZERO);
     ground(&mut world);
@@ -197,8 +219,8 @@ fn broadphase(c: &mut Criterion) {
     g.finish();
 }
 
-fn narrowphase(c: &mut Criterion) {
-    let mut g = c.benchmark_group("narrowphase_overlapping");
+fn dense_contacts(c: &mut Criterion) {
+    let mut g = c.benchmark_group("dense_contacts_solver_bound");
     g.sample_size(30);
     for &n in &[64u32, 256, 1024] {
         g.throughput(Throughput::Elements(n as u64));
@@ -261,5 +283,5 @@ fn full_step(c: &mut Criterion) {
     g.finish();
 }
 
-criterion_group!(benches, broadphase, narrowphase, solver, joints, full_step);
+criterion_group!(benches, broadphase, dense_contacts, solver, joints, full_step);
 criterion_main!(benches);
