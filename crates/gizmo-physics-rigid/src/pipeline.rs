@@ -573,6 +573,7 @@ impl PhysicsWorld {
                 Vec<BodyHandle>,                  // entities to wake up
                 Vec<gizmo_physics_core::FractureEvent>,
                 Vec<(BodyHandle, Vec3, Vec3)>,    // split-impulse position corrections (Δlin, Δscaled-axis)
+                crate::solver::SolveStats,        // adaptive sweep count + support depth
             );
 
             let results: Vec<IslandResult> = island_groups
@@ -606,7 +607,14 @@ impl PhysicsWorld {
                     });
 
                     if !island_active {
-                        return (Vec::new(), island_manifolds, Vec::new(), Vec::new(), Vec::new());
+                        return (
+                            Vec::new(),
+                            island_manifolds,
+                            Vec::new(),
+                            Vec::new(),
+                            Vec::new(),
+                            crate::solver::SolveStats::default(),
+                        );
                     }
 
                     // Gerçek hareketli: eşik üstü hızlı uyanık dinamik VEYA hareketli kinematik.
@@ -653,7 +661,7 @@ impl PhysicsWorld {
                     let mut velocity_updates = Vec::with_capacity(island_indices.len());
                     let mut position_updates = Vec::with_capacity(island_indices.len());
 
-                    VEL_CACHE.with(|cache| {
+                    let solve_stats = VEL_CACHE.with(|cache| {
                         POS_CACHE.with(|pos_cache| {
                             let mut buf = cache.borrow_mut();
                             let mut pos_buf = pos_cache.borrow_mut();
@@ -676,7 +684,7 @@ impl PhysicsWorld {
                             let island_body_vec: Vec<usize> =
                                 island_indices.iter().copied().collect();
 
-                            solver.solve_contacts(
+                            let stats = solver.solve_contacts(
                                 &mut island_manifolds,
                                 rigid_bodies,
                                 transforms,
@@ -697,7 +705,8 @@ impl PhysicsWorld {
                                     }
                                 }
                             }
-                        });
+                            stats
+                        })
                     });
 
                     // Fracture detection.
@@ -730,7 +739,14 @@ impl PhysicsWorld {
                         }
                     }
 
-                    (velocity_updates, island_manifolds, wake_updates, fractures, position_updates)
+                    (
+                        velocity_updates,
+                        island_manifolds,
+                        wake_updates,
+                        fractures,
+                        position_updates,
+                        solve_stats,
+                    )
                 })
                 .collect();
 
@@ -745,7 +761,15 @@ impl PhysicsWorld {
 
             let mut total_wakes = 0usize;
             let mut total_fractures = 0usize;
-            for (island_vels, island_manifolds, wake_ups, local_fractures, pos_corrections) in results {
+            for (island_vels, island_manifolds, wake_ups, local_fractures, pos_corrections, stats) in
+                results
+            {
+                // Effective sweep count, summed over islands (and, by the caller's accumulation,
+                // over substeps): the number that says whether the adaptive policy was engaged
+                // at all on this scene. Depth is a max, not a sum — it is a property of the
+                // deepest island, and summing it would mean nothing.
+                self.metrics.solver_sweeps += stats.iterations;
+                self.metrics.max_island_depth = self.metrics.max_island_depth.max(stats.island_depth);
                 for (entity, vel) in island_vels {
                     if let Some(&idx) = entity_map.get(&entity.id()) {
                         self.velocities[idx] = vel;

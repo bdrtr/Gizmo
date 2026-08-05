@@ -314,8 +314,15 @@ fn scene_crate_pile_spaced(
 /// sweep scaling whenever an island had no static or kinematic anchor, on the reasoning that
 /// without an anchor there is no support chain. This chain has no anchor and is nothing but
 /// support chain: the impulse has to propagate along all `n` bodies, which is precisely the
-/// work the sweeps do. Its support depth is `n−1` (the BFS roots at the lowest-indexed body,
-/// `solver/mod.rs`), the same as a tower of the same height.
+/// work the sweeps do.
+///
+/// It reaches support depth `n−1` — with no anchor the BFS roots at the lowest-indexed body
+/// (`solver/mod.rs`), so a linked chain's eccentricity is its length, the same as a tower of
+/// that height. It does not *start* there: only the two ends are in contact at first, so the
+/// island is fragmented and coalesces as the compression wave travels inward. Measured at n=32
+/// by `audit_effective_sweeps_per_scene` — depth 3 → 7 → 11 → 15 → 31 over frames 0–4, with the
+/// sweep count following at 20 → 26 → 28 → 28 → 46. Read the scene past frame 4 for the
+/// deep-island behaviour.
 ///
 /// Two things are exactly known here rather than blessed from a previous run, which is what
 /// makes it a gate and not a baseline:
@@ -345,6 +352,19 @@ fn scene_compressed_free_chain(n: usize) -> (PhysicsWorld, Vec<usize>, Vec<Vec3>
     world.velocities[bodies[n - 1]].linear = Vec3::new(-1.0, 0.0, 0.0);
     let origins = bodies.iter().map(|&i| world.transforms[i].position).collect();
     (world, bodies, origins)
+}
+
+/// What the adaptive policy actually did on the last step: `(max island support depth, sweeps
+/// summed over islands and substeps, islands)`.
+///
+/// A step at 1/60 s runs four 1/240 s substeps, and both counters accumulate across all of them,
+/// so `sweeps / islands` is the average per-island sweep count for the frame.
+fn policy_readout(world: &PhysicsWorld) -> (u32, usize, usize) {
+    (
+        world.metrics.max_island_depth,
+        world.metrics.solver_sweeps,
+        world.metrics.island_count,
+    )
 }
 
 /// Linear momentum and kinetic energy of the listed bodies.
@@ -1050,6 +1070,115 @@ fn realistic_crate_stack_stays_standing() {
          slop) — stable, quiet, and wrong: {r:?}",
         r.resting_pen
     );
+}
+
+/// The gate that says whether the other gates mean anything: do the scenes in this file
+/// actually reach the adaptive sweep policy?
+///
+/// Everything else here asserts a property of a scene. None of them can tell you the scene ever
+/// engaged the code under test. That matters because a sweep ladder only sees a throttle keyed
+/// on the *sweep count*; a throttle keyed on something else — the sleep counter, island size,
+/// how `island_depth` itself is computed — could leave every assertion green while quietly
+/// dropping the scenes out of the adaptive branch entirely. This reads
+/// `PhysicsMetrics::max_island_depth` and `solver_sweeps` and requires the branch to have fired.
+///
+/// If it fails, no other result in this file is evidence of anything.
+#[test]
+fn the_gated_scenes_reach_the_adaptive_policy() {
+    // (label, world, the depth the policy needs to see)
+    let mut cases: Vec<(&str, PhysicsWorld)> = Vec::new();
+    let (mut pile, _, _) = scene_crate_pile(4, 6);
+    for _ in 0..90 {
+        pile.step(DT).ok(); // let it settle so the island is the resting block, not the drop
+    }
+    cases.push(("crate pile 4x6x4", pile));
+
+    let (mut chain, _, _) = scene_compressed_free_chain(32);
+    for _ in 0..5 {
+        // The chain starts fragmented and links up as the compression wave reaches the middle;
+        // before that it is a pair of shallow islands and would not test the policy.
+        chain.step(DT).ok();
+    }
+    cases.push(("free chain n=32", chain));
+
+    for (label, mut world) in cases {
+        let configured = world.solver.iterations;
+        world.step(DT).ok();
+        let (depth, sweeps, islands) = policy_readout(&world);
+        assert!(
+            depth >= 5,
+            "{label}: support depth is {depth}, below the >= 5 the adaptive sweep policy needs \
+             to engage — this scene is not testing the policy at all"
+        );
+        assert!(
+            islands > 0,
+            "{label}: no islands were solved, so the scene exercised nothing"
+        );
+        let per_island = sweeps as f32 / islands as f32;
+        assert!(
+            per_island > configured as f32,
+            "{label}: averaged {per_island:.1} sweeps per island against a configured \
+             {configured} — the adaptive branch did not raise the count, so this scene is \
+             running the ordinary path and the gates built on it prove nothing about the policy"
+        );
+    }
+}
+
+/// What sweep count does each scene in this file actually receive? The number the whole of
+/// Phase C is about, read directly instead of inferred from a `state_hash` ladder.
+#[test]
+#[ignore = "measurement, not a gate — prints a table"]
+fn audit_effective_sweeps_per_scene() {
+    eprintln!("\n=== what the adaptive policy hands each scene (one frame = 4 substeps) ===");
+    eprintln!(
+        "{:>26}  {:>6}  {:>8}  {:>8}  {:>12}",
+        "scene", "depth", "islands", "sweeps", "per island"
+    );
+    let row = |label: &str, world: &PhysicsWorld| {
+        let (depth, sweeps, islands) = policy_readout(world);
+        eprintln!(
+            "{:>26}  {:>6}  {:>8}  {:>8}  {:>12.1}",
+            label,
+            depth,
+            islands,
+            sweeps,
+            if islands > 0 { sweeps as f32 / islands as f32 } else { 0.0 }
+        );
+    };
+
+    for (label, n) in [("tower N=16", 16usize), ("tower N=24", 24), ("tower N=32", 32)] {
+        let (mut w, _, _) = scene_tower(n);
+        for _ in 0..90 {
+            w.step(DT).ok();
+        }
+        w.step(DT).ok();
+        row(label, &w);
+    }
+    for (label, side, height) in [("pile 4x6x4", 4u32, 6u32), ("pile 4x12x4", 4, 12)] {
+        let (mut w, _, _) = scene_crate_pile(side, height);
+        for _ in 0..90 {
+            w.step(DT).ok();
+        }
+        w.step(DT).ok();
+        row(label, &w);
+    }
+    for n in [64u32, 256] {
+        let (mut w, _, _) = scene_raft(n);
+        w.step(DT).ok();
+        row(&format!("bench raft N={n} (frame 1)"), &w);
+    }
+    for n in [64u32, 256] {
+        let (mut w, _, _) = scene_floating_lattice(n);
+        w.step(DT).ok();
+        row(&format!("exact-contact lattice N={n}"), &w);
+    }
+    for n in [8usize, 24, 32] {
+        let (mut w, _, _) = scene_compressed_free_chain(n);
+        for f in 0..6 {
+            w.step(DT).ok();
+            row(&format!("free chain n={n} @frame {f}"), &w);
+        }
+    }
 }
 
 /// Negative control for `realistic_crate_stack_stays_standing`: the same scene, same horizon,

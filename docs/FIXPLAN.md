@@ -989,10 +989,38 @@ eklemekten ibaret.
   > körleşti"dir. `slept_before_rest` de uyku sistemini solver sanmayı engelliyor (bir cisim
   > 15 karede uyuyor ve uyuyanın hızı sıfır okunur).
 
-- ⬜ **C2a — efektif sweep sayısını `PhysicsMetrics`'e çıkar** (`solver_sweeps`,
-  `max_island_depth`). Kapılar yeşil yandığında "değişiklik kapıya giren herhangi bir sahneye
-  DOKUNDU mu" sorusunu ancak bu cevaplıyor; sweep'i zorlayan bir merdiven, uyku sayacına ya da
-  island boyutuna göre anahtarlanmış bir kısmayı göremez. Politikayı düzeltmeden önce yapılmalı.
+- ✅ **C2a — efektif sweep sayısı artık ölçülebiliyor** *(2026-08-05)*. `PhysicsMetrics`'e iki
+  alan: `solver_sweeps` (ada ve substep boyunca toplanmış GERÇEK biased sweep sayısı) ve
+  `max_island_depth`. `ConstraintSolver::solve_contacts` artık `SolveStats { island_depth,
+  iterations }` döndürüyor. Hash kıpırdamadı (`EF6E4AC3644BF3BA`).
+
+  > **Dürüstlük ayrıntısı:** split-impulse yolu adaptif sayıyı hiç tüketmiyor, `self.iterations`
+  > süpürüyor. `SolveStats` o yolda `iterations` bildiriyor — `n_iterations` bildirmek
+  > yapılmamış işi raporlamak olurdu.
+
+  Bu, geçen oturumun `state_hash` merdiveniyle ÇIKARSADIĞI sayıları artık DOĞRUDAN ölçüyor
+  (`audit_effective_sweeps_per_scene`, bir kare = 4 substep, ada başına ortalama):
+
+  | sahne | depth | ada başına sweep |
+  |---|---|---|
+  | kule N=16 / N=24 / N=32 | 16 / 24 / 32 | 28 / 36 / 48 |
+  | **yığın 4×6×4** | **6** | **28** |
+  | **yığın 4×12×4** | **12** | **28** ← çöktüğü sayı; 96 istiyor |
+  | bench salı N=64 / N=256 | 7 / 15 | 28 / 28 |
+  | tam-temas kafes N=64 / N=256 | 8 / 16 | 28 / 28 |
+  | serbest zincir n=32 (kare 0→4) | 3→7→11→15→**31** | 20→26→28→28→**46** |
+
+  > Zincirin derinliği kademeli: yalnız iki uç temasta başlıyor, sıkışma dalgası ortaya
+  > ilerledikçe ada birleşiyor ve 4. karede aynı yükseklikteki kuleyle birebir aynı sayıya
+  > (46) varıyor. Sahne 4. kareden ÖNCE okunursa politikayı sınamıyor.
+
+  **Ve bu yeni bir kapıyı mümkün kıldı:** `the_gated_scenes_reach_the_adaptive_policy`.
+  Diğer bütün kapılar bir sahnenin özelliğini doğruluyor; hiçbiri o sahnenin test edilen KODA
+  UĞRADIĞINI söyleyemiyor. Sweep'i zorlayan bir merdiven yalnız sweep sayısına göre
+  anahtarlanmış bir kısmayı görür; uyku sayacına, ada boyutuna ya da `island_depth`'in kendi
+  hesabına göre anahtarlanmış bir değişiklik sahneleri adaptif daldan sessizce düşürüp her
+  iddiayı yeşil bırakabilirdi. Kapı `max_island_depth >= 5` ve ada başına sweep > yapılandırılan
+  `iterations` istiyor. Düşerse bu dosyadaki hiçbir sonuç kanıt değildir.
 - ⬜ **C2** — Broadphase refit (`pipeline.rs:145-176` her substep sıfırdan kuruyor, statikler dahil).
 - ⬜ **C3** — `physics-rigid/src/system.rs:149-158` O(N²) writeback → handle→index map.
 - ⬜ **C4** — Temas yolunda `ArrayVec` (`narrowphase/mod.rs:400-407`); rewind geçmişi opt-in

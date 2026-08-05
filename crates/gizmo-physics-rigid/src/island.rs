@@ -217,6 +217,30 @@ pub struct PhysicsMetrics {
     pub contact_count: usize,
     /// Bodies registered in the world after the last substep, all body types included.
     pub body_count: usize,
+    /// Biased contact sweeps the solver actually ran, summed over the step's islands *and*
+    /// substeps. Divide by [`island_count`](Self::island_count) for a per-island average.
+    ///
+    /// This is the *effective* sweep count the depth-adaptive policy handed out, which is not
+    /// [`ConstraintSolver::iterations`](crate::solver::ConstraintSolver::iterations): a deep
+    /// island gets `min(96, max(iterations, max(28, 3·depth/2)))` instead, so the configured
+    /// value is a floor the caller cannot lower unless
+    /// [`adaptive_iterations`](crate::solver::ConstraintSolver::adaptive_iterations) is off.
+    ///
+    /// Read it when you want to know where solver time is going — the sweep count, not the
+    /// per-contact cost, is what makes a large contact island expensive — and when you want to
+    /// know whether a change to the sweep policy touched a given scene at all. A test that
+    /// passes without this number moving has not exercised the policy.
+    pub solver_sweeps: usize,
+    /// Largest island support depth seen this step, over islands and substeps.
+    ///
+    /// Support depth is the BFS eccentricity of the island's contact graph rooted at its
+    /// static/kinematic anchors — or, for an island with no anchor at all, at its lowest-indexed
+    /// body. It is the sole input to the adaptive sweep count above.
+    ///
+    /// Do not read it as a stack height. For a column it is the height, but for a
+    /// mutually-touching cluster it is the cluster's diameter, and for a wide block it is the
+    /// height while saying nothing about the mass riding on it.
+    pub max_island_depth: u32,
 }
 
 impl PhysicsMetrics {
@@ -230,12 +254,15 @@ impl PhysicsMetrics {
             sleeping_count = self.sleeping_count,
             contact_count = self.contact_count,
             body_count = self.body_count,
+            solver_sweeps = self.solver_sweeps,
+            max_island_depth = self.max_island_depth,
             broadphase_ms = self.broadphase_ms,
             narrowphase_ms = self.narrowphase_ms,
             solver_ms = self.solver_ms,
             integration_ms = self.integration_ms,
-            "[Physics Metrics] Islands:{} Sleep:{} Contacts:{} Bodies:{} | Broad:{:.2}ms Narrow:{:.2}ms Solver:{:.2}ms Integrate:{:.2}ms",
+            "[Physics Metrics] Islands:{} Sleep:{} Contacts:{} Bodies:{} Sweeps:{} Depth:{} | Broad:{:.2}ms Narrow:{:.2}ms Solver:{:.2}ms Integrate:{:.2}ms",
             self.island_count, self.sleeping_count, self.contact_count, self.body_count,
+            self.solver_sweeps, self.max_island_depth,
             self.broadphase_ms, self.narrowphase_ms, self.solver_ms, self.integration_ms,
         );
     }
