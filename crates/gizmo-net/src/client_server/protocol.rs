@@ -1,3 +1,16 @@
+//! Wire format for the authoritative client-server architecture: the two message enums each
+//! side sends, the channel table those messages are routed over, and the tick-comparison rule
+//! everything downstream depends on.
+//!
+//! The types here only derive `serde` — framing is the caller's choice. The reference server
+//! (`server/src/main.rs`) and this module's tests use `bincode`, so both ends of a session must
+//! agree on that too; [`PROTOCOL_ID`] gates the netcode handshake, not the payload encoding, so
+//! an encoding mismatch surfaces as messages that quietly fail to decode on a connection that
+//! came up fine.
+//!
+//! Ticks are `u32` counters, not times, and are expected to wrap. Never order them with
+//! `<`/`>`; use [`tick_is_newer`].
+
 use renet::{ChannelConfig, ConnectionConfig, SendType};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -23,10 +36,43 @@ pub struct TransformData {
 /// yeniden simüle edebilmesi (reconciliation) için zorunludur.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct PlayerInput {
+    /// Client simulation tick this input was sampled on, stamped by
+    /// [`ClientPredictor::add_input`](crate::client_server::prediction::ClientPredictor::add_input).
+    ///
+    /// A free-running counter, not a time. It wraps at `u32::MAX` by design, so every
+    /// comparison against it must go through [`tick_is_newer`]. The server echoes the newest
+    /// one it has consumed back as [`ServerMessage::InputAck`].
     pub tick: u32,
+    /// One of the two horizontal movement axes for this tick, conventionally a stick value in
+    /// `-1.0..=1.0` — nothing here clamps or normalises it.
+    ///
+    /// The frame it is interpreted in (world- or camera-relative) and the acceleration it
+    /// implies live entirely in the physics closure handed to
+    /// [`ClientPredictor::reconcile`](crate::client_server::prediction::ClientPredictor::reconcile)
+    /// and in the server's authoritative step. Those two must agree exactly: any difference
+    /// shows up as a correction on *every* reconciliation, not as a one-off glitch.
     pub move_x: f32,
+    /// The other horizontal movement axis, same convention and same caveat as `move_x`.
+    ///
+    /// There is deliberately no `move_y`: movement input spans the ground plane only (this
+    /// engine is Y-up), and vertical motion comes from `jump` plus gravity.
     pub move_z: f32,
+    /// Whether jump was held on this tick — a level, not an edge.
+    ///
+    /// Nothing debounces it, so a held key sends `true` on every tick of the hold; if one
+    /// press should mean one impulse, the physics step has to detect that itself. Because
+    /// reconciliation replays stored inputs verbatim, that detection must be a pure function
+    /// of the state being replayed, or a correction will produce a second jump.
     pub jump: bool,
+    /// Seconds of simulation this one input covers.
+    ///
+    /// It travels on the wire because reconciliation replays the *stored* step rather than
+    /// the current one: re-applying a 16 ms input with whatever `dt` the correction frame
+    /// happens to have would land the player somewhere the server never put them.
+    ///
+    /// Client-supplied and therefore untrusted — sessions here authenticate with
+    /// `ServerAuthentication::Unsecure`, so clamp it to a plausible range before feeding it
+    /// into an authoritative step.
     pub dt: f32,
 }
 
@@ -70,12 +116,35 @@ pub enum ServerMessage {
     WorldStateUpdate {
         /// Sunucunun bu state'i ürettiği otoriter tick — interpolasyon zaman çizelgesi için.
         server_tick: u32,
+        /// One entry per replicated entity, keyed by an application-chosen id.
+        ///
+        /// This key space is **not** the renet `client_id` carried by `PlayerConnected` /
+        /// `PlayerDisconnected`: the reference server fills the map straight from an ECS
+        /// query and keys it by the entity index widened to `u64`. Mapping one space onto
+        /// the other is the application's job.
+        ///
+        /// Broadcast on [`ServerChannel::Unreliable`]. The whole `WorldStateUpdate` is a
+        /// single message, so individual entries never go missing — a loss drops the entire
+        /// map at once, and surviving updates can arrive out of order. Feed them to
+        /// [`SnapshotInterpolator`](crate::client_server::interpolation::SnapshotInterpolator),
+        /// which re-sorts by timestamp, instead of applying them to transforms directly.
         players: HashMap<u64, TransformData>,
     },
     /// Yalnızca ilgili istemciye gönderilen (per-client) reconciliation ACK'i:
     /// sunucunun o istemciden işlediği son girdinin tick'i. İstemci bu tick'e
     /// kadar olan girdileri kuyruğundan siler, kalanları yeniden simüle eder.
     InputAck {
+        /// Tick of the newest input from *this* client that the server has consumed.
+        ///
+        /// Hand it to
+        /// [`ClientPredictor::reconcile`](crate::client_server::prediction::ClientPredictor::reconcile)
+        /// as `server_tick`: everything up to and including it leaves the pending queue, and
+        /// what remains is replayed on top of the authoritative state. The server only ever
+        /// advances this through [`tick_is_newer`], so it stays monotone across wraparound.
+        ///
+        /// Caveat: the reference server reports `0` for a client whose input it has not
+        /// processed yet, which is indistinguishable from "processed tick 0" — so a client's
+        /// very first input can leave the replay queue one ACK early.
         last_processed_input: u32,
     },
 }
@@ -89,6 +158,15 @@ pub enum ServerChannel {
     Unreliable,
 }
 
+/// Lowers the channel to the `channel_id` byte renet routes on.
+///
+/// These numbers are wire contract, not an implementation detail: they must be identical on
+/// both ends and must match the ids registered in [`connection_config`]. The netcode handshake
+/// authenticates on [`PROTOCOL_ID`] alone and never sees the channel table, so renumbering
+/// these without bumping it still lets mismatched builds connect; renet then rejects the first
+/// packet naming an unregistered id by disconnecting
+/// (`DisconnectReason::ReceivedInvalidChannelId`). The failure is a mid-session drop, not a
+/// refused connection.
 impl From<ServerChannel> for u8 {
     fn from(val: ServerChannel) -> Self {
         match val {
@@ -105,6 +183,12 @@ pub enum ClientChannel {
     Command,
 }
 
+/// Lowers the channel to the `channel_id` byte renet routes on.
+///
+/// Client and server channel ids are numbered independently — both start at 0 — so
+/// `ClientChannel::Command` and `ServerChannel::Reliable` share the byte `0` without
+/// colliding. Same contract as the server side: identical on both ends, matching
+/// [`connection_config`].
 impl From<ClientChannel> for u8 {
     fn from(val: ClientChannel) -> Self {
         match val {
@@ -114,6 +198,21 @@ impl From<ClientChannel> for u8 {
 }
 
 /// Builds the renet [`ConnectionConfig`] shared by client and server (channels + bandwidth).
+///
+/// Both ends must build from this one function. Renet routes strictly by `channel_id`: a peer
+/// that registers a different set does not mis-route, it drops the connection — a packet naming
+/// an id the receiver has not registered (or has registered with the other send type) triggers
+/// `DisconnectReason::ReceivedInvalidChannelId`, and sending on an id missing from the local
+/// config panics outright.
+///
+/// The numbers, since they are otherwise invisible: a 1 MiB per-tick send budget, and a 5 MiB
+/// ceiling on the memory any single channel may hold in its queues (the backstop that stops a
+/// stalled peer from eating the process). The server's reliable channel resends after 200 ms.
+///
+/// Player input travels on an *unreliable* channel on purpose: a dropped input must not stall
+/// the ones behind it. That choice is exactly why the client keeps a queue of unacknowledged
+/// inputs and the server acknowledges only the newest tick it has processed
+/// ([`ServerMessage::InputAck`]) rather than every one of them.
 pub fn connection_config() -> ConnectionConfig {
     ConnectionConfig {
         available_bytes_per_tick: 1024 * 1024,

@@ -1,6 +1,34 @@
+/// One sample of an animated channel: a value pinned to a point in time.
+///
+/// `T` is the channel's value type — `Vec3` for translation/scale, `Quat` for rotation.
+/// This type deliberately carries no interpolation maths of its own; blending is supplied
+/// by the closure the caller hands to [`Track::get_interpolated`] / [`Track::sample_cubic`],
+/// which is what lets one keyframe list serve both vectors and quaternions.
+///
+/// Produced by the glTF loader (`gizmo-renderer`'s `asset::loaders::animation`):
+/// [`Keyframe::new`] for `LINEAR`/`STEP` samplers, [`Keyframe::with_tangents`] for
+/// `CUBICSPLINE`.
 #[derive(Clone, Copy, Debug)]
 pub struct Keyframe<T> {
+    /// Timestamp in **seconds**, measured from the start of the owning clip (the glTF
+    /// sampler's input accessor value, copied verbatim — no rebasing to zero).
+    ///
+    /// [`Track::keyframes`] must be sorted ascending on this field: sampling binary-searches
+    /// it, so an out-of-order entry does not error, it silently returns the wrong segment.
+    /// Two keyframes may share a timestamp: in a sorted list the zero-length segment between
+    /// them is never the one sampled, so nothing divides by zero.
     pub time: f32,
+
+    /// The channel value at [`time`](Keyframe::time) — a pose translation in metres, a scale
+    /// factor, or a rotation quaternion, depending on which of [`AnimationClip`]'s track
+    /// lists this keyframe lives in.
+    ///
+    /// Authoritative at the sample points: at or past the first/last keyframe it is returned
+    /// verbatim (no tangent maths), and the Hermite basis reproduces it exactly at the
+    /// segment ends whatever the tangents are. For `CUBICSPLINE` tracks this is the middle
+    /// element of glTF's `[inTangent, value, outTangent]` triple.
+    ///
+    /// [`AnimationClip`]: super::clip::AnimationClip
     pub value: T,
     /// Cubic-spline in-tangent (per-second). `None` for Linear/Step keyframes.
     /// For glTF `CUBICSPLINE` this is the first of the `[inTangent, value, outTangent]`
@@ -41,18 +69,91 @@ enum SegmentPos {
     Interp { i: usize, j: usize, t: f32, dt: f32 },
 }
 
+/// How a [`Track`] blends between two neighbouring keyframes.
+///
+/// Mirrors the glTF animation-sampler modes, and like glTF it is a property of the whole
+/// sampler — a single track cannot switch modes part-way through. The loader maps anything
+/// it does not recognise to `Linear`.
+///
+/// This is the skeletal (GPU-skinning) counterpart of the transform-track
+/// [`crate::clip::Interpolation`]; the two enums are separate only because the two
+/// subsystems are (see [`crate::skeletal`]), and they must stay behaviourally identical.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum InterpolationMode {
+    /// Blend the two bracketing keyframes with the caller-supplied interpolator at the
+    /// normalized segment position — `lerp` for translation/scale, `slerp` for rotation
+    /// in [`crate::skeletal::sample`]. Also what the loader falls back to for any glTF
+    /// sampler mode it does not recognise, so an exotic file animates rather than freezes.
     Linear,
+    /// Hold the earlier keyframe's value for the whole segment; the value jumps at the
+    /// next keyframe's timestamp. The interpolator closure is never called.
     Step,
+    /// Cubic-Hermite through the per-keyframe in/out tangents (glTF Appendix C).
+    ///
+    /// Only [`Track::sample_cubic`] honours it; it needs *both* endpoints of the segment to
+    /// carry tangents ([`Keyframe::with_tangents`]) and otherwise declines, and
+    /// [`Track::get_interpolated`] treats this mode as `Linear` outright. So a
+    /// `CubicSpline` track whose tangents were dropped degrades to a linear blend rather
+    /// than failing — smoother curves are an upgrade, never a hard requirement.
     CubicSpline,
 }
 
+/// One animated channel — translation, rotation *or* scale — for a single glTF node.
+///
+/// Which channel a track drives is not stored here: it is implied by the list it sits in
+/// ([`AnimationClip::translations`] / `rotations` / `scales`), which is also why `T` is
+/// `Vec3` for two of them and `Quat` for the third. A node animated in all three channels
+/// therefore owns three separate `Track`s, each with its own keyframe times and
+/// interpolation mode, exactly as glTF stores them.
+///
+/// Sampling is implemented only for `T: Clone + Copy` (values are copied out of the
+/// keyframe list rather than borrowed), and every sampling method takes `&self` — a track
+/// is read-only data that any number of entities can play at different times at once.
+///
+/// [`AnimationClip::translations`]: super::clip::AnimationClip::translations
 #[derive(Clone, Debug)]
 pub struct Track<T> {
+    /// The glTF **global node index** this channel targets
+    /// (`channel.target().node().index()`) — *not* a bone/joint index into
+    /// [`SkeletonHierarchy::joints`](super::skeleton::SkeletonHierarchy::joints).
+    ///
+    /// [`evaluate_clip`](super::sample::evaluate_clip) resolves it by finding the joint
+    /// whose `node_index` equals this value; that is the fallback used when
+    /// [`target_node_name`](Track::target_node_name) is absent or matches nothing.
+    ///
+    /// Historical bug worth knowing: this used to be indexed straight into the joint array
+    /// (and only when it happened to be `< joints.len()`), which silently mis-targeted or
+    /// dropped tracks on any file where the armature is not the first block of nodes in the
+    /// document — i.e. most Blender exports.
     pub target_node: usize,
+
+    /// The target glTF node's name, when the exporter wrote one. This is the *preferred*
+    /// binding key, tried before [`target_node`](Track::target_node).
+    ///
+    /// [`evaluate_clip`](super::sample::evaluate_clip) first looks for an exact joint-name
+    /// match, then a loose one that strips `/RootNode/`, `mixamorig:` and `mixamorig_` and
+    /// lowercases both sides — which is what lets a Mixamo clip retarget onto a skeleton
+    /// whose bones are named plainly.
+    ///
+    /// It also gates root motion: a translation track is applied only when this name
+    /// contains `Hips`, every other translation track being discarded in favour of the bind
+    /// pose. A `None` here consequently can never contribute root motion, however its node
+    /// index resolves.
     pub target_node_name: Option<String>,
+
+    /// How to blend inside a segment; a whole-track property, as in glTF (see
+    /// [`InterpolationMode`]). Set once by the loader from the channel's sampler and read
+    /// on every sample — nothing in the engine mutates it during playback.
     pub interpolation: InterpolationMode,
+
+    /// The samples, which **must be sorted ascending by [`Keyframe::time`]** — sampling
+    /// binary-searches this list (`partition_point`, O(log N); it was a linear scan once),
+    /// so unsorted input yields wrong values rather than an error.
+    ///
+    /// May be empty, in which case every sampling method returns `None` and callers keep
+    /// the joint's bind pose. A single keyframe is legal and makes the track a constant.
+    /// Times before the first / after the last entry clamp to that entry's value, so a clip
+    /// never extrapolates past its own keyframes.
     pub keyframes: Vec<Keyframe<T>>,
 }
 
@@ -86,6 +187,24 @@ impl<T: Clone + Copy> Track<T> {
         Some(SegmentPos::Interp { i, j, t, dt })
     }
 
+    /// Sample the track at `time` (seconds, same origin as [`Keyframe::time`]) using only
+    /// keyframe values — the tangent-free path, and the one every mode can take.
+    ///
+    /// `interpolator` receives `(earlier_value, later_value, t)` with `t` the normalized
+    /// position in the segment; callers pass `lerp` for vectors and `slerp` for
+    /// quaternions, which is why this module needs no maths of its own. It is called at most
+    /// once per sample, and not at all for `Step` or outside the keyframe range.
+    ///
+    /// Returns `None` **only** when the track has no keyframes; every other case yields a
+    /// value. Times at or beyond the ends clamp to the first/last keyframe value, `Step`
+    /// returns the earlier keyframe's value, and — deliberately — `CubicSpline` is treated
+    /// exactly like `Linear` here. That last point is what makes this a safe fallback for
+    /// [`sample_cubic`](Track::sample_cubic): try the Hermite path, and when it declines
+    /// (no tangents), lerping through here still produces a usable pose.
+    ///
+    /// Duplicate timestamps are safe: the segment picked always starts strictly before the
+    /// query time, so for a sorted list the zero-length segment between two keyframes sharing
+    /// a timestamp is never sampled and nothing divides by zero.
     pub fn get_interpolated(
         &self,
         time: f32,

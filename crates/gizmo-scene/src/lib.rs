@@ -1,3 +1,9 @@
+#![warn(missing_docs)]
+//! (`missing_docs` is a RATCHET, not a suggestion. The CI lint gate runs with `-D warnings`,
+//! so every public item in this crate must carry a doc comment or the build fails. This crate
+//! is Stage A — the dependency-light core that goes to 1.x first — and its documented surface
+//! is part of that promise. Do not silence this with `#[allow]`; write the doc.)
+
 //! Gizmo Scene — scene serialization and management.
 //!
 //! This crate persists and restores ECS [`World`](gizmo_core::World) state:
@@ -9,7 +15,7 @@
 //! - [`registry`]: the [`SceneRegistry`] describing which components can be
 //!   (de)serialized, plus [`default_scene_registry`](registry::default_scene_registry).
 //!
-//! It is used by the editor, Lua scripting, and the runtime.
+//! It is used by the editor and the runtime.
 //!
 //! Scenes are also **hand-authorable**: a RON file (or string) can be written by a
 //! developer and loaded with [`SceneData::load_into`] (or `ron::from_str` +
@@ -18,7 +24,21 @@
 //! `scene::tests::hand_authored_scene_ron_loads_and_spawns` for a copy-paste template.
 
 pub mod error;
+/// Which components a scene or snapshot is allowed to (de)serialize.
+///
+/// [`SceneRegistry`](registry::SceneRegistry) is an alias for `gizmo-core`'s
+/// `ComponentRegistry`; [`default_scene_registry`](registry::default_scene_registry) fills
+/// one with the engine's built-in physics/gameplay components. A component that is *not*
+/// registered is invisible to both save/load and snapshot capture — silently, so a forgotten
+/// registration looks exactly like data loss. Renderer, audio and scripting components are
+/// added a layer up (`gizmo-app`'s `full_scene_registry`).
 pub mod registry;
+/// The on-disk scene and prefab format: [`SceneData`](scene::SceneData) /
+/// [`PrefabData`](scene::PrefabData) written as RON, stamped with
+/// [`CURRENT_SCENE_VERSION`](scene::CURRENT_SCENE_VERSION).
+///
+/// Unlike [`snapshot`], this path also records mesh/material sources and parent links, so it
+/// is the only one that can rebuild a scene's GPU-side resources and hierarchy from nothing.
 pub mod scene;
 mod serde_bridge;
 pub mod snapshot;
@@ -27,7 +47,15 @@ pub mod snapshot;
 pub use error::SceneError;
 /// Re-export of [`registry::SceneRegistry`].
 pub use registry::SceneRegistry;
+/// Re-exports of the RON scene-file types: [`SceneData`](scene::SceneData) is the file root,
+/// [`EntityData`](scene::EntityData) one of its entity rows, and
+/// [`MaterialData`](scene::MaterialData) the PBR parameters (albedo RGBA, roughness,
+/// metallic, unlit, optional texture path) copied out of a row's `MaterialSource` — none of
+/// which the in-memory [`SceneSnapshot`] carries.
 pub use scene::{EntityData, MaterialData, SceneData};
+/// Re-export of [`snapshot::SceneSnapshot`] — the editor's in-memory Play/Stop backup. Same
+/// component registry as the file format, but no disk I/O, no RON file, and no mesh or
+/// material data.
 pub use snapshot::SceneSnapshot;
 /// `ron` is a deliberate, intentional **public dependency**: the scene file format is
 /// RON and [`SceneError`] exposes `ron::error::SpannedError` / `ron::Error` in its public

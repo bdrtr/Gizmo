@@ -667,3 +667,4 @@ mod tests {
         assert_eq!(AnimationClip::default().duration(), 0.0);
     }
 }
+

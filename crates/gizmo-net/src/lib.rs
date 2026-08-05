@@ -1,3 +1,9 @@
+#![warn(missing_docs)]
+//! (`missing_docs` is a RATCHET, not a suggestion. The CI lint gate runs with `-D warnings`,
+//! so every public item in this crate must carry a doc comment or the build fails. This crate
+//! is Stage A — the dependency-light core that goes to 1.x first — and its documented surface
+//! is part of that promise. Do not silence this with `#[allow]`; write the doc.)
+
 //! Gizmo networking — özellik bayraklarıyla (feature flags) seçilen iki bağımsız netcode mimarisi.
 //!
 //! - **`client-server`**: `renet` tabanlı, otoriter sunuculu mimari; istemci tahmini

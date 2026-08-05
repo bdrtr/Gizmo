@@ -3,6 +3,11 @@
 //! Diğer oyuncuların ağ üzerinden gelen konum/dönüş verilerini
 //! akıcı bir şekilde ekrana yansıtmak için geçmiş sunucu Snapshot'ları arasında
 //! interpolasyon (Lerp/Slerp) yapar.
+//!
+//! Nothing in this repository drives this yet — `server/src/main.rs` is the only reference
+//! integration and it is server-side only. The buffer's behaviour is therefore pinned by this
+//! module's unit tests rather than by a live client, so treat it as a library surface for
+//! applications to wire up, not as a path the engine's own demos exercise.
 
 use std::collections::VecDeque;
 
@@ -13,6 +18,14 @@ pub struct TransformSnapshot {
     pub time: f64,
     /// World-space position `[x, y, z]`.
     pub position: [f32; 3],
+    /// Orientation quaternion `[x, y, z, w]` — the same layout the server sends in
+    /// [`TransformData`](crate::client_server::protocol::TransformData), so samples can be
+    /// copied across without reordering.
+    ///
+    /// Expected to be unit length. The sign does not matter: `q` and `-q` name the same
+    /// orientation and consecutive server samples routinely land in opposite hemispheres, so
+    /// [`SnapshotInterpolator::get_interpolated_transform`] flips one of the pair before
+    /// blending. Pass through whatever the server sent, unmodified.
     pub rotation: [f32; 4], // Quaternion (x, y, z, w)
 }
 
@@ -27,6 +40,15 @@ pub struct SnapshotInterpolator {
 
 impl SnapshotInterpolator {
     /// Creates an interpolator with the given render delay in milliseconds.
+    ///
+    /// Converted to seconds on the way in — [`Self::interpolation_delay`] is in seconds, this
+    /// argument is not. The delay is the whole trade-off of the technique: it has to exceed
+    /// the server's snapshot interval plus arrival jitter (100 ms, the field's own example, is
+    /// a reasonable start) or the render cursor keeps running past the newest sample and the
+    /// output clamps; every millisecond of it is latency added to every remote player.
+    ///
+    /// `0.0` disables the delay and renders the newest sample the instant it lands — nothing
+    /// extrapolates to cover the gap.
     pub fn new(interpolation_delay_ms: f64) -> Self {
         Self {
             buffer: VecDeque::new(),
@@ -80,6 +102,20 @@ impl SnapshotInterpolator {
     }
 
     /// O anki zamana göre enterpole edilmiş Transform verisini döner
+    ///
+    /// `current_client_time` is in seconds on the *same clock* as the `time` values passed to
+    /// [`Self::add_snapshot`]; the instant actually rendered is
+    /// `current_client_time - interpolation_delay`. If those two clocks are not aligned the
+    /// result is not visibly wrong so much as permanently pinned to one end of the buffer.
+    ///
+    /// Returns `None` only while no snapshot has ever been added — never mid-stream. At the
+    /// edges it clamps rather than extrapolating: past the newest sample it holds the last
+    /// known transform (a remote player frozen in place is the symptom of a delay too short
+    /// for the current jitter), and before the oldest it holds the first.
+    ///
+    /// Position is lerped; rotation is nlerp'd and renormalised, not slerp'd, so angular speed
+    /// is not perfectly constant between two keyframes. The error grows with the angle between
+    /// the pair and is negligible at realistic snapshot rates.
     pub fn get_interpolated_transform(
         &self,
         current_client_time: f64,

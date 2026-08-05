@@ -15,6 +15,23 @@ pub struct Ray {
 }
 
 impl Ray {
+    /// Builds a ray, normalizing `direction` and repairing a degenerate one.
+    ///
+    /// Because [`Ray`] is `#[non_exhaustive]`, this (and [`Ray::from_ndc`]) is the only
+    /// way an external crate can make one — deliberately, because this is where the
+    /// unit-length invariant that every `intersect_*` method assumes is established.
+    ///
+    /// A zero or near-zero `direction` carries no heading, and a bare `normalize()`
+    /// would turn it into NaN. This used to be guarded by a `debug_assert!`, which
+    /// compiles away in release — so release builds silently produced NaN rays whose
+    /// intersection tests then returned nonsense. The guard is now a runtime one: a
+    /// degenerate direction is replaced by `+X`.
+    ///
+    /// That substitution is **silent and unreported**. Validate the direction yourself if
+    /// that matters. Note also that the `+X` fallback is not shared:
+    /// [`Ray::from_ndc`] falls back to `+Z`, as does
+    /// `gizmo-physics-core`'s separate `Ray` type. None of these are a sentinel you
+    /// should test against.
     #[inline]
     pub fn new(origin: impl Into<Vec3A>, direction: impl Into<Vec3A>) -> Self {
         // normalize() sıfır/yakın-sıfır yönde NaN üretir; release'de debug_assert
@@ -28,9 +45,27 @@ impl Ray {
         }
     }
 
-    /// NDC (Normalized Device Coordinates) uzayından 3B Dünya (World) uzayına bir Ray oluşturur.
-    /// `ndc`: [-1.0, 1.0] aralığında ekran koordinatları.
-    /// `view_proj_inv`: (Projection * View) matrisinin tersi.
+    /// Unprojects a screen point into a world-space picking ray.
+    ///
+    /// `ndc` is Normalized Device Coordinates, x and y in `[-1.0, 1.0]`.
+    /// `view_proj_inv` is the inverse of `Projection * View`.
+    ///
+    /// Depth convention is **WGPU/Vulkan/D3D**: NDC z runs `0.0` (near) → `1.0` (far).
+    /// The origin therefore lands *on the near plane*, not at the camera position, so
+    /// the `t` later returned by `intersect_*` is measured from the near plane. A
+    /// GL-style `[-1, 1]` depth range would need a different near sample.
+    ///
+    /// **Degenerate input is repaired, never reported.** Two cases used to be covered
+    /// only by `debug_assert!` — i.e. not at all in release builds:
+    /// - a singular `view_proj_inv` drives the homogeneous `w` to zero or non-finite,
+    ///   and the perspective divide emitted Inf/NaN. Now returns a ray at the world
+    ///   origin pointing `+Z`.
+    /// - near and far unproject to the same point (e.g. a degenerate orthographic
+    ///   matrix), leaving a zero direction that a bare `normalize()` turned into NaN.
+    ///   Now the direction falls back to `+Z` with the computed origin kept.
+    ///
+    /// Neither repair is reported, so the caller cannot distinguish "bad matrix" from
+    /// "the user really did click along +Z".
     #[inline]
     pub fn from_ndc(ndc: glam::Vec2, view_proj_inv: glam::Mat4) -> Self {
         // WGPU standardında NDC depth 0.0 (near) ile 1.0 (far) arasındadır.
@@ -63,13 +98,22 @@ impl Ray {
         Self::new(origin, direction)
     }
 
-    /// Ray'in dokümante edilen değişmezini (invariant) sağlayıp sağlamadığını
-    /// doğrular: yön birim uzunlukta ve tüm bileşenler sonlu (NaN/Inf değil).
+    /// Checks the documented invariant: origin and direction are all-finite (no
+    /// NaN/Inf) and the direction is unit-length.
     ///
-    /// Alanlar `pub` olduğundan çağıranlar `Ray { .. }` struct literaliyle
-    /// [`Ray::new`]/[`Ray::from_ndc`] guard'larını atlayarak geçersiz (sıfır/
-    /// normalize-edilmemiş/NaN yönlü) bir Ray kurabilir. Böyle bir Ray'e
-    /// güvenmeden önce bu kontrolle doğrulanabilir.
+    /// Needed because the guards in [`Ray::new`] / [`Ray::from_ndc`] are bypassable
+    /// *inside this crate*: the fields are `pub`, so a `Ray { origin, direction }`
+    /// literal can install a zero, unnormalized or NaN direction. (Note
+    /// [`Ray::intersect_obb`] also builds a `Ray` by literal, but its direction is the
+    /// incoming one rotated, so the invariant survives — see its own doc.) Every
+    /// `intersect_*` method
+    /// assumes the invariant and produces garbage without it, so validate any ray whose
+    /// provenance you do not control before trusting a hit distance.
+    ///
+    /// The tolerance is applied to `length_squared() - 1.0` (`< 1e-4`), so it admits a
+    /// length roughly within `5e-5` of 1. Loose on purpose: a direction that has been
+    /// through a chain of `f32` rotations must still pass, not only one straight out of
+    /// `normalize()`.
     #[inline]
     pub fn is_valid(self) -> bool {
         self.origin.is_finite()
@@ -77,23 +121,46 @@ impl Ray {
             && (self.direction.length_squared() - 1.0).abs() < 1e-4
     }
 
-    /// Işının uzayda `t` uzaklığındaki ulaştığı (çarpıştığı) kesin noktayı hesaplar.
+    /// The point reached after travelling `t` along the ray: `origin + direction * t`.
+    ///
+    /// Because the direction is unit-length, `t` is a true distance in world units —
+    /// the same units the `intersect_*` methods return, so `ray.at(hit_t)` is the
+    /// contact point. Negative `t` walks backwards behind the origin; nothing clamps it.
     #[inline]
     pub fn at(self, t: f32) -> Vec3A {
         self.origin + self.direction * t
     }
 
-    /// Bir eksen kısıtlı boundary kutusuyla kesişim testi yapar (Slab Algorithm).
-    /// Kesişiyorsa t_near mesafesini döner, kesişmiyorsa None döner.
+    /// Slab-algorithm intersection against an axis-aligned box given as raw corners.
     ///
-    /// Eksene paralel bir ışın (bir bileşende `direction == 0`) o eksende ayrıca
-    /// ele alınır: kaynak koordinatı [min, max] aralığının DIŞINDAYSA ıska,
-    /// içindeyse (sınır dahil) o eksen kısıt getirmez. Eski vektörleştirilmiş hal
-    /// `(min - origin) * (1/0)` ile `0 * ∞ = NaN` üretiyordu; `Vec3A::min/max`
-    /// (SIMD) NaN'da yanlış operandı yaydığından ışın min-yüzüne tam değerken
-    /// sahte ıska dönüyor, max-yüzünde ise skaler indirgeme NaN'ı yuttuğu için
-    /// isabet dönüyordu — asimetrik ve platforma bağlı. Skaler slab bunu
-    /// deterministik ve simetrik kılar.
+    /// Returns the distance in world units (see [`Ray::at`]) to the **entry** face when
+    /// the origin is outside the box. When the origin is *inside*, entry is behind you,
+    /// so the **exit** distance is returned instead — a raycast started inside a
+    /// collider reports where it leaves, never `0.0`. A box lying entirely behind the
+    /// origin returns `None`.
+    ///
+    /// Edge case worth knowing: the "is entry ahead of me?" test is strict (`tmin >
+    /// 0.0`), so an origin sitting *exactly* on the entry face reports the exit
+    /// distance too, not `0.0`.
+    ///
+    /// Boundary contact counts as a hit throughout (inclusive), matching
+    /// [`Aabb::intersects`](crate::Aabb::intersects).
+    ///
+    /// **Axis-parallel rays are handled scalar-wise, on purpose.** For an axis where
+    /// `|direction| < 1e-8` the slab is skipped entirely: miss if the origin lies
+    /// outside `[min, max]` on that axis, otherwise that axis simply imposes no
+    /// constraint. The previous vectorized version computed `(min - origin) * (1/0)`
+    /// and produced `0 * ∞ = NaN`; `Vec3A::min/max` propagate the *other* operand on
+    /// NaN, so a ray grazing the **min** face returned a phantom miss while the same
+    /// ray on the **max** face hit (the scalar reduction there swallowed the NaN) —
+    /// asymmetric and platform-dependent. The scalar slab makes min and max symmetric
+    /// and deterministic. `test_ray_parallel_grazes_min_and_max_face` is the regression.
+    ///
+    /// `min` and `max` need not be ordered: each slab swaps its two plane distances, so an
+    /// axis handed over back-to-front produces exactly the same interval as the correct
+    /// ordering — an inverted box is silently treated as its well-ordered equivalent, not
+    /// rejected. The axis-parallel branch is the exception: it has no swap, so a ray
+    /// parallel to an inverted axis always misses.
     #[inline]
     pub fn intersect_bounds(self, min: Vec3A, max: Vec3A) -> Option<f32> {
         let o = [self.origin.x, self.origin.y, self.origin.z];
@@ -134,14 +201,40 @@ impl Ray {
         }
     }
 
-    /// Bir Aabb nesnesiyle (Axis-Aligned Bounding Box) doğrudan kesişim testi yapar.
+    /// Convenience wrapper over [`Ray::intersect_bounds`] taking an [`Aabb`](crate::Aabb)
+    /// directly; all of that method's semantics (inside → exit distance, inclusive
+    /// boundaries, axis-parallel handling) apply unchanged.
+    ///
+    /// **Do not feed this an `Aabb::empty()` sentinel** (`min = +∞`, `max = -∞`); it is
+    /// not special-cased and the infinities do not cancel cleanly. A general-direction
+    /// ray comes back `Some(f32::INFINITY)` (every slab degenerates to
+    /// `[-∞, +∞]`), while a ray with any exactly-zero direction component takes the
+    /// axis-parallel branch and comes back `None`. Guard with
+    /// [`Aabb::is_empty`](crate::Aabb::is_empty) before calling if empty boxes can
+    /// reach you — e.g. freshly-initialised BVH nodes.
     #[inline]
     pub fn intersect_aabb(self, aabb: crate::aabb::Aabb) -> Option<f32> {
         self.intersect_bounds(aabb.min, aabb.max)
     }
 
-    /// Möller–Trumbore algoritması kullanarak bir üçgenle hassas kesişim (Mesh Raycasting) testi yapar.
-    /// Kesişiyorsa t_near mesafesini döner, aksi halde None döner.
+    /// Exact ray–triangle intersection (Möller–Trumbore).
+    ///
+    /// Returns the distance in world units to the hit point, or `None`. Winding order
+    /// of `v0, v1, v2` does not matter: the parallel test is `|det| < 1e-8`, i.e.
+    /// **two-sided** — a triangle hit from behind still registers. (Nothing here culls
+    /// backfaces, despite what the inline comment suggests; add your own normal test if
+    /// you need single-sided behaviour.)
+    ///
+    /// Hits nearer than `1e-8` are discarded, which also covers `t <= 0` (behind the
+    /// origin). That epsilon is the shadow-/bounce-ray self-intersection guard: without
+    /// it a ray spawned exactly on a surface re-hits its own triangle at `t ≈ 0`.
+    ///
+    /// The barycentric acceptance is inclusive on the edges (`0 <= u <= 1`,
+    /// `v >= 0`, `u + v <= 1`), so a ray through a shared edge hits **both**
+    /// adjacent triangles — dedupe by nearest `t` if that matters.
+    ///
+    /// Degenerate (zero-area) triangles fall into the `|det| < 1e-8` branch and report
+    /// `None` rather than dividing by zero.
     #[inline]
     pub fn intersect_triangle(
         self,
@@ -187,8 +280,22 @@ impl Ray {
         }
     }
 
-    /// Bir OBB (Oriented Bounding Box) kutusuyla kesişim testi yapar.
-    /// Kesişiyorsa t_near mesafesini döner, kesişmiyorsa None döner.
+    /// Intersection with an Oriented Bounding Box.
+    ///
+    /// `center` and `rotation` place the box in world space (`rotation` maps box-local
+    /// axes to world); `half_extents` are the box's half-sizes **along its own axes**, in
+    /// the same world units as `center`.
+    ///
+    /// Works by pulling the ray into box-local space and reusing
+    /// [`Ray::intersect_bounds`] against `[-half_extents, +half_extents]`, so all of
+    /// that method's semantics carry over — including "origin inside ⇒ exit distance".
+    /// The returned `t` needs no rescaling: a quaternion rotation preserves length, so
+    /// local distance equals world distance.
+    ///
+    /// The local ray is built with a struct literal rather than [`Ray::new`], skipping
+    /// the normalize + degenerate guard. That is safe *only* because the rotation is
+    /// length-preserving and the incoming direction already satisfies the unit-length
+    /// invariant — which is exactly why that invariant is enforced at construction.
     #[inline]
     pub fn intersect_obb(
         self,

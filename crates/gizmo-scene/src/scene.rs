@@ -33,7 +33,30 @@ pub struct SceneData {
     /// which `serde(default)` reads as `0`.
     #[serde(default)]
     pub version: u32,
+    /// One record per saved entity. [`SceneData::save`] emits them in ascending entity-id
+    /// order — that is what `World::iter_alive_entities` yields — which is *not* the same as
+    /// parents-before-children.
+    ///
+    /// Nothing on load depends on the order: it is deliberately two-pass (spawn everything,
+    /// *then* wire [`EntityData::parent_id`]), so a child may legally appear before its parent
+    /// and a hand-written file may list entities in any order at all.
+    ///
+    /// [`SceneData::serialize_entities`] omits entities that would carry nothing at all, plus
+    /// the studio's own scaffolding. The one deliberate exception is a bare group/pivot node
+    /// holding only a [`Children`] list: it is kept, because its children name it through
+    /// their `parent_id` and dropping it detaches the subtree on reload.
     pub entities: Vec<EntityData>,
+    /// Physics joints, copied verbatim out of the
+    /// [`PhysicsWorld`](gizmo_physics_rigid::world::PhysicsWorld) resource.
+    ///
+    /// They live in that resource rather than on entities, which is why they cannot ride along
+    /// inside [`entities`](Self::entities) and get their own list. Endpoints are stored as
+    /// save-time entity ids and re-resolved through the load's id map; a joint whose two bodies
+    /// are not both present in the file is dropped with a warning, and if the target world has
+    /// no `PhysicsWorld` resource the entire list is discarded silently.
+    ///
+    /// `serde(default)`: scene files written before joints were persisted omit the field and
+    /// load as an empty list instead of failing to parse.
     #[serde(default)]
     pub joints: Vec<gizmo_physics_rigid::joints::Joint>,
 }
@@ -84,8 +107,28 @@ pub struct PrefabData {
     /// Format version — see [`CURRENT_SCENE_VERSION`]. Shares the scene numbering.
     #[serde(default)]
     pub version: u32,
+    /// The subtree's root, expressed as its save-time id — an [`EntityData::original_id`]
+    /// inside this same file, never a live world id.
+    ///
+    /// [`SceneData::load_prefab`] looks it up in the load's id map to return the freshly
+    /// spawned root, which is the handle the caller then moves or reparents. So that lookup
+    /// can always succeed, [`SceneData::save_prefab`] re-adds a record for the root whenever
+    /// the skip-filter dropped it. It also clears the root's `parent_id`, so a prefab is
+    /// self-contained and instantiable under any host entity.
     pub root_id: u32,
+    /// The root plus its transitive [`Children`], collected breadth-first from
+    /// [`root_id`](Self::root_id) — a prefab is one subtree, not a whole scene.
+    ///
+    /// The walk carries a visited set: without it a `Children` cycle grew the work list
+    /// without bound, and a child shared by two parents on a diamond hierarchy was emitted
+    /// twice under the same `original_id`, which leaks a duplicate entity on reload.
     pub entities: Vec<EntityData>,
+    /// Only the joints with *both* endpoints inside this subtree.
+    ///
+    /// A joint anchoring the prefab to a body outside it is intentionally dropped: the file has
+    /// no way to name that outside body once the prefab is instantiated into a different world.
+    ///
+    /// `serde(default)`, like [`SceneData::joints`], so pre-joints prefabs still parse.
     #[serde(default)]
     pub joints: Vec<gizmo_physics_rigid::joints::Joint>,
 }
@@ -94,12 +137,78 @@ pub struct PrefabData {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[non_exhaustive]
 pub struct EntityData {
+    /// The entity's id at save time, used as a key *within this file only*.
+    ///
+    /// Load spawns brand-new entities and builds an `original_id → new id` map;
+    /// [`parent_id`](Self::parent_id), [`PrefabData::root_id`] and every joint endpoint are
+    /// resolved through it. The value is never reinstated as a live world id, which is what
+    /// lets two scenes be loaded into one world without collisions.
+    ///
+    /// It must be unique within a file. Two records sharing one `original_id` collide in that
+    /// map and one of the spawned entities is stranded — the reason `save_prefab`'s subtree
+    /// walk de-duplicates.
     pub original_id: u32,
+    /// The entity's [`EntityName`], or `None` for an unnamed entity.
+    ///
+    /// A name is a label, not an identity: nothing enforces uniqueness, and
+    /// [`SceneData::find_entity_by_name`] just returns the first match.
+    ///
+    /// Two name shapes are reserved and never written to disk — anything starting with
+    /// `"Editor "`, and `"Highlight Box"`. Those are the studio's transient scaffolding
+    /// (camera, gizmos, selection outline) and are filtered out at save.
     pub name: Option<String>,
+    /// Asset key for the [`MeshSource`] component, stored verbatim — nothing validates it here.
+    ///
+    /// It is resolved much later and elsewhere, by `gizmo-renderer`'s asset-loading system:
+    /// built-in primitives (`"standard_cube"`, `"inverted_cube"`, `"plane"`, `"sphere"`,
+    /// `"sprite_quad"`), a `"gltf_mesh_<file>.glb…"` key into the glTF cache, an `"obj:<path>"`
+    /// prefix, or otherwise a bare path loaded as OBJ. There is no rejection step: a key that
+    /// matches none of the special forms is simply handed to the OBJ loader as a path, so a
+    /// bad key surfaces at GPU upload time — an `error!` line plus an empty mesh — rather than
+    /// at scene load, and in a headless build it stays inert data.
+    ///
+    /// Note the asymmetry: `MeshSource` is only ever *added* by
+    /// [`SceneData::instantiate_entities`]. Entities handed a GPU `Mesh` directly (the
+    /// `spawner` helpers, glTF import) carry no `MeshSource`, so they save with
+    /// `mesh_source: None` and reload without geometry.
     pub mesh_source: Option<String>,
+    /// The entity's [`MaterialSource`], inlined rather than referenced by name so that a scene
+    /// file is self-contained — colours and roughness survive without an external material
+    /// library alongside it.
+    ///
+    /// `None` means the load attaches no `MaterialSource`, so the renderer never builds the
+    /// GPU `Material` (and its companion `MeshRenderer`) for this entity. The same asymmetry as
+    /// [`mesh_source`](Self::mesh_source) applies: a material created directly as a GPU
+    /// `Material` has no `MaterialSource` to save.
     pub material_source: Option<MaterialData>,
+    /// Save-time id of this entity's parent — an [`original_id`](Self::original_id) inside the
+    /// same file, never a live world id. `serde(default)`; omitted or `None` means a root.
+    ///
+    /// This is the *only* hierarchy edge on disk. [`Children`] is deliberately not serialized;
+    /// load rebuilds every `Children` list from these edges, so the two directions cannot drift
+    /// apart in a saved file.
+    ///
+    /// When the id names an entity absent from this batch — a child of an editor-only parent
+    /// that the save filtered out, say — load falls back to the `root_parent` argument of
+    /// [`SceneData::instantiate_entities`] rather than leaving a dangling parent id. With no
+    /// `root_parent` the entity becomes a root.
     #[serde(default)]
     pub parent_id: Option<u32>,
+    /// Registered component name → that component's value as a RON string, e.g.
+    /// `"Transform" → "(position:(0.0,-0.5,0.0),rotation:(…),scale:(…))"`.
+    ///
+    /// A `BTreeMap` on purpose: sorted iteration makes the emitted file stable, so re-saving an
+    /// unchanged scene produces no spurious diff. `serde(default)` lets a hand-written entity
+    /// omit the field entirely.
+    ///
+    /// The values are opaque to this module — produced and consumed by the crate's serde
+    /// bridge, which routes through `bevy_reflect` under the `reflect` feature and plain
+    /// `serde` otherwise, with both encodings landing in this same map.
+    ///
+    /// Keys are matched against the [`SceneRegistry`](crate::SceneRegistry) handed to load. A
+    /// name the registry does not know is skipped and the entity loads without it — the common
+    /// case being scripting's `Script`, which `gizmo-scene` deliberately does not register.
+    /// Renaming a registration is consequently a breaking change to every scene ever saved.
     #[serde(default)]
     pub components: std::collections::BTreeMap<String, String>,
 }
@@ -108,15 +217,78 @@ pub struct EntityData {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[non_exhaustive]
 pub struct MaterialData {
+    /// Base colour tint as linear RGBA `[r, g, b, a]`, nominally `0.0..=1.0` — nothing on this
+    /// path clamps it.
+    ///
+    /// It is a *tint*, not a replacement: the shader multiplies it component-wise with the
+    /// sampled [`texture_source`](Self::texture_source), so `[1, 1, 1, 1]` means "texture as
+    /// authored" and an untextured material gets the default white texture and shows this
+    /// colour directly.
+    ///
+    /// The alpha channel is the only transparency information a scene file carries —
+    /// `MaterialData` has no explicit transparent flag, and the renderer's asset loader leaves
+    /// the GPU `Material`'s `is_transparent` at its `false` default. Whether `a < 1.0` actually
+    /// renders as transparent therefore depends on the renderer inferring it from alpha, which
+    /// the facade's batcher does (below `0.99`) and the studio's does not.
     pub albedo: [f32; 4],
+    /// PBR roughness, `0.0` mirror-smooth to `1.0` fully diffuse.
+    ///
+    /// Copied straight into the GPU `Material` with **no clamping** on this path — unlike the
+    /// `Material::with_pbr` builder, which does clamp. A scene file can therefore carry an
+    /// out-of-range value into the shader. Ignored whenever [`unlit`](Self::unlit) selects a
+    /// non-PBR material type.
     pub roughness: f32,
+    /// PBR metalness, `0.0` dielectric to `1.0` metal; values in between are physically
+    /// meaningless and normally only appear at texture-blend boundaries.
+    ///
+    /// Same caveats as [`roughness`](Self::roughness): unclamped here, and unused once
+    /// [`unlit`](Self::unlit) picks a non-PBR type.
     pub metallic: f32,
+    /// Shading-path selector — despite the name and the `f32` type, **not** a boolean and not a
+    /// blend factor. The renderer's asset loader reads it with thresholds:
+    ///
+    /// | value | resulting `MaterialType` |
+    /// |---|---|
+    /// | `> 1.5` (i.e. `2.0`) | `Skybox` |
+    /// | `> 0.5` (i.e. `1.0`) | `Unlit` |
+    /// | otherwise (`0.0`) | `Pbr` |
+    ///
+    /// The three magic numbers are the same encoding the per-instance GPU field uses, which is
+    /// why this is a float rather than an enum.
+    ///
+    /// `MaterialType::BakedLit`, `Water` and `Grid` have **no representation here**, and
+    /// nothing derives a `MaterialSource` back from a GPU `Material`, so a material given one
+    /// of those types in code leaves no trace in a scene file. Anything relying on them must
+    /// be rebuilt by code after the scene loads.
     pub unlit: f32,
+    /// Path to the albedo texture, resolved by the renderer's `AssetManager`, or `None` for an
+    /// untextured material.
+    ///
+    /// `None` binds a built-in 1×1 white texture, so [`albedo`](Self::albedo) passes through
+    /// unmodified. A path that fails to load falls back to that same white texture and logs a
+    /// warning — a missing texture degrades the look but never fails the scene load.
     pub texture_source: Option<String>,
 }
 
 impl SceneData {
-    /// Mevcut World durumunu JSON dosyası olarak diske kaydeder
+    /// Write every alive entity in `world`, plus the physics joints, to `file_path`.
+    ///
+    /// The on-disk encoding is **RON**. Missing parent directories are created; a failure to
+    /// create them is only logged, because the write immediately afterwards reports the real
+    /// error with more context.
+    ///
+    /// `registry` decides which dynamic components are captured at all. A component type it
+    /// does not know is not an error — it is simply absent from the file. Pass the same
+    /// registry the matching load will use, or the round trip quietly loses state.
+    ///
+    /// Joints are read from the [`PhysicsWorld`](gizmo_physics_rigid::world::PhysicsWorld)
+    /// resource; a world without that resource saves none. Editor scaffolding and empty
+    /// entities are filtered out — see [`serialize_entities`](Self::serialize_entities) for
+    /// exactly what is dropped.
+    ///
+    /// # Errors
+    /// [`SceneError::Serialize`] if RON encoding fails, [`SceneError::Io`] if the file cannot
+    /// be written.
     #[tracing::instrument(skip_all, name = "scene_save", fields(path = %file_path))]
     pub fn save(
         world: &World,
@@ -186,6 +358,32 @@ impl SceneData {
         Ok(())
     }
 
+    /// Turn a chosen set of entity ids into their on-disk records, without touching the
+    /// filesystem.
+    ///
+    /// The caller picks the set and its order: [`save`](Self::save) passes every alive entity,
+    /// [`save_prefab`](Self::save_prefab) passes one `Children` subtree. Output follows the
+    /// order of `entity_ids`, minus whatever is skipped, so the result is as deterministic as
+    /// the input.
+    ///
+    /// Three things are dropped here, each deliberately:
+    ///
+    /// - the studio's scaffolding — any entity named `"Editor …"` or `"Highlight Box"`;
+    /// - entities that would serialize to nothing (no name, mesh, material, parent or
+    ///   registered component), so an empty scene does not accumulate blank records;
+    /// - components `registry` does not know — skipped with no counter and no log line — and
+    ///   components whose serializer fails, which *are* real data loss and so are counted and
+    ///   reported in a single `warn!` at the end.
+    ///
+    /// A bare group/pivot node — one holding *only* a non-empty [`Children`] list — is the
+    /// exception to the second rule and is always kept: its children point back at it through
+    /// `parent_id`, and dropping it left them referencing a missing id, detaching the subtree.
+    ///
+    /// Dynamic components are looked up with the entity's **real generation**. A fixed
+    /// `Entity::new(id, 0)` used to fail the liveness check for any entity sitting in a recycled
+    /// id slot (despawn → spawn), silently dropping its `Transform`/`RigidBody`/`Collider`
+    /// while name, mesh, material and parent — read by raw id — survived. That partial,
+    /// near-invisible corruption is what the recycled-id regression test guards.
     #[tracing::instrument(skip_all, name = "serialize_entities")]
     pub fn serialize_entities(
         world: &World,
@@ -296,7 +494,27 @@ impl SceneData {
         entities_data
     }
 
-    /// JSON sahne dosyasını okuyup World'e entity olarak yükler
+    /// Read a RON scene file and spawn its contents into `world`.
+    ///
+    /// **Additive** — it never clears `world` first and never reuses the ids stored in the
+    /// file. Every entity is freshly spawned and every reference (`parent_id`, joint endpoints)
+    /// is rewritten through the resulting id map, which is what makes loading two scenes into
+    /// one world safe. A caller wanting "replace the scene" (the editor's Open) despawns the
+    /// old entities itself beforehand.
+    ///
+    /// Joints are appended to the [`PhysicsWorld`](gizmo_physics_rigid::world::PhysicsWorld)
+    /// resource, not swapped in. Without that resource they are dropped silently; individual
+    /// joints whose two bodies are not both in the file are dropped with a warning, since on a
+    /// full scene load that means the file is truncated.
+    ///
+    /// A component only comes back if `registry` knows its name. Unknown names are collected
+    /// and warned about once; a component whose deserializer fails is skipped per entity.
+    /// Neither aborts the load — a partially readable scene is preferred to none.
+    ///
+    /// # Errors
+    /// [`SceneError::Io`] if the file cannot be read, [`SceneError::Parse`] if it is not valid
+    /// RON, and [`SceneError::UnsupportedVersion`] if it was written by a newer engine (see
+    /// [`migrate`](Self::migrate)).
     #[tracing::instrument(skip_all, name = "scene_load", fields(path = %file_path))]
     pub fn load_into(
         file_path: &str,
@@ -369,6 +587,30 @@ impl SceneData {
         Ok(())
     }
 
+    /// Spawn already-parsed [`EntityData`] into `world`, returning the
+    /// `saved id → new entity id` map.
+    ///
+    /// This is the entry point for a scene held in memory rather than on disk: a hand-written
+    /// RON level string parsed with `ron::from_str`, a procedurally built `Vec<EntityData>`, an
+    /// embedded template. Both [`load_into`](Self::load_into) and
+    /// [`load_prefab`](Self::load_prefab) are thin wrappers over it, and the returned map is
+    /// what they use afterwards to remap joint endpoints and the prefab root.
+    ///
+    /// Two passes, on purpose: everything is spawned first, then parented. That is why
+    /// `entities` need not be topologically sorted — a child may precede its parent.
+    ///
+    /// `root_parent` is a fallback parent (typically the host to hang a prefab under), applied
+    /// to every entity whose `parent_id` is absent *or* unresolvable within this batch. Passing
+    /// `None` loads at the world root. The unresolvable case matters: before it fell back here,
+    /// an entity naming a parent that had been filtered out of the save was left with a
+    /// dangling id and silently orphaned.
+    ///
+    /// [`Children`] lists are rebuilt from the `parent_id` edges rather than restored — for a
+    /// parent inside this batch the list is written wholesale, and for a pre-existing
+    /// `root_parent` the new children are appended to whatever it already had.
+    ///
+    /// Infallible by design: an unknown component name or a failed deserialize is logged and
+    /// the entity is spawned without that component.
     #[tracing::instrument(skip_all, name = "instantiate_entities")]
     pub fn instantiate_entities(
         entities: Vec<EntityData>,
@@ -494,7 +736,21 @@ impl SceneData {
         id_map
     }
 
-    /// Prefab kaydet
+    /// Write `root_entity_id` and its [`Children`] subtree to `file_path` as a RON prefab.
+    ///
+    /// The subtree is collected breadth-first with a visited set: without it a `Children`
+    /// cycle grew the work list without bound (hang, then OOM), and a child shared by two
+    /// parents on a diamond hierarchy was emitted twice under one `original_id`, leaking a
+    /// duplicate empty entity on reload.
+    ///
+    /// Two fixups make the result standalone: a record for the root is re-added if the
+    /// skip-filter dropped it — that re-added record is bare, carrying not even the root's
+    /// name — and the root's `parent_id` is cleared so the prefab can be instantiated under
+    /// any host. Joints are written only when *both* endpoints are inside the subtree.
+    ///
+    /// # Errors
+    /// [`SceneError::Serialize`] if RON encoding fails, [`SceneError::Io`] if the file cannot
+    /// be written.
     #[tracing::instrument(skip_all, name = "save_prefab", fields(path = %file_path, root = root_entity_id))]
     pub fn save_prefab(
         world: &World,
@@ -523,8 +779,7 @@ impl SceneData {
             let current = ids_to_save[i];
             if let Some(children_comp) = children_storage.get(current) {
                 for &child_id in &children_comp.0 {
-                    // Guard the BFS with a visited set: a `Children` CYCLE (e.g. the
-                    // studio lets you drag an entity onto its own descendant) would
+                    // Guard the BFS with a visited set: a `Children` CYCLE would
                     // otherwise grow `ids_to_save` forever (hang/OOM), and a SHARED
                     // child on a diamond hierarchy would be emitted twice → duplicate
                     // `EntityData { original_id }` → clobbered/leaked entities on reload.
@@ -612,7 +867,25 @@ impl SceneData {
         Ok(())
     }
 
-    /// Prefab yükle
+    /// Instantiate a RON prefab under `parent_entity`, returning the newly spawned root's id.
+    ///
+    /// `Ok(None)` is a success, not a failure: the subtree was spawned, but the file's
+    /// [`PrefabData::root_id`] did not map to any spawned entity, so there is no handle to
+    /// return — what a prefab saved before [`save_prefab`](Self::save_prefab) learned to
+    /// force-emit a bare group root looks like. Callers that intend to move or reparent the
+    /// instance have to handle it.
+    ///
+    /// Linking the root into `parent_entity`'s [`Children`] is idempotent —
+    /// [`instantiate_entities`](Self::instantiate_entities) may already have added it while
+    /// resolving `root_parent`, and pushing unconditionally used to list the child twice.
+    ///
+    /// Note the asymmetry with [`load_into`](Self::load_into): prefab loading does **not** run
+    /// [`migrate`](Self::migrate), so a prefab from a newer engine is not rejected the way a
+    /// scene is.
+    ///
+    /// # Errors
+    /// [`SceneError::Io`] if the file cannot be read, [`SceneError::Parse`] if it is not valid
+    /// RON.
     #[tracing::instrument(skip_all, name = "load_prefab", fields(path = %file_path))]
     pub fn load_prefab(
         file_path: &str,
@@ -701,7 +974,14 @@ impl SceneData {
         Ok(new_root_id)
     }
 
-    /// Entity listesini döndürür (Lua API'si için)
+    /// Every named entity as `(entity id, name)`.
+    ///
+    /// Order follows the [`EntityName`] storage — neither sorted nor stable across structural
+    /// changes, since adding or removing a component moves the entity between archetypes. Sort
+    /// it yourself before displaying or hashing the result.
+    ///
+    /// Unnamed entities are absent, and names are not unique, so the returned pairs can share a
+    /// name.
     pub fn entity_names(world: &World) -> Vec<(u32, String)> {
         let mut result = Vec::new();
         let names = world.borrow::<EntityName>();
@@ -713,7 +993,14 @@ impl SceneData {
         result
     }
 
-    /// İsme göre entity bul
+    /// The first entity whose [`EntityName`] equals `target_name`, or `None`.
+    ///
+    /// Exact and case-sensitive, and a linear scan over every named entity — fine for an
+    /// occasional lookup, wrong for a per-frame query on a large world.
+    ///
+    /// A name is not an identity: nothing prevents two entities sharing one, and which of them
+    /// wins follows the unsorted storage order, so this returns *an* entity with that name
+    /// rather than *the* one. Resolve once and keep the id rather than re-looking it up.
     pub fn find_entity_by_name(world: &World, target_name: &str) -> Option<u32> {
         let names = world.borrow::<EntityName>();
         for (entity_id, _) in names.iter() {

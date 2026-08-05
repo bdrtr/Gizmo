@@ -7,7 +7,32 @@ use std::f32;
 /// An "empty" AABB has min = +INF, max = -INF and represents no volume.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Aabb {
+    /// Lower corner, in whatever frame the producer used — `Aabb` itself is
+    /// frame-agnostic, so a local-space box and a world-space box are the same type
+    /// (see [`Aabb::transform`] for the local → world step).
+    ///
+    /// Carries `+INFINITY` on every axis in the [`Aabb::empty`] sentinel. That is not
+    /// decoration: it is what makes [`Aabb::extend`] on a fresh empty box collapse
+    /// straight onto the first point with no "is this the first sample?" branch, which
+    /// is how [`Aabb::from_points`] and the BVH/SAH binning loops accumulate bounds.
+    ///
+    /// Nothing enforces `min <= max` — the field is public and [`Aabb::new`] does not
+    /// validate. `min > max` on any axis is precisely the encoding of "empty"
+    /// ([`Aabb::is_empty`]), which the overlap and measurement methods on this type
+    /// ([`Aabb::intersects`], [`Aabb::intersects_exclusive`], [`Aabb::contains_aabb`],
+    /// [`Aabb::volume`], [`Aabb::surface_area`]) test for and reject up front.
+    ///
+    /// That guard is not universal:
+    /// [`Ray::intersect_aabb`](crate::Ray::intersect_aabb) never consults `is_empty` —
+    /// see that method for what it does with an inverted or empty box.
     pub min: Vec3A,
+    /// Upper corner, same frame as [`Aabb::min`]. `-INFINITY` on every axis in the
+    /// [`Aabb::empty`] sentinel, mirroring `min`.
+    ///
+    /// `min == max` on an axis is a *valid* flat box, not an empty one: a point, line
+    /// or plane still overlaps frustums and neighbouring boxes inclusively. Use
+    /// [`Aabb::is_degenerate`] when you need "has zero volume" and [`Aabb::is_empty`]
+    /// when you need "is inverted/uninitialised".
     pub max: Vec3A,
 }
 
