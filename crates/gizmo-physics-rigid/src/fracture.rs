@@ -1,3 +1,15 @@
+//! Voronoi shattering: cutting a box-shaped body into convex debris.
+//!
+//! Only boxes can be shattered — the input is a set of half-extents, not a mesh — and the
+//! geometry stays in the shattered body's local frame throughout. [`voronoi_shatter`] does
+//! the cutting and stops at bare meshes; [`generate_fracture_chunks`] is the level above it,
+//! turning those meshes into ready-to-spawn
+//! `(body, transform, collider, velocity, chunk)` tuples — the chunk mesh comes back with
+//! them — with the parent's mass divided between them by volume and an outward kick applied.
+//!
+//! Debris is simulation state, so every random draw in this module is seeded by the caller —
+//! same-platform reproducibility, in line with the rest of the engine.
+
 use gizmo_math::Vec3;
 use gizmo_physics_core::BodyHandle;
 use rand::{rngs::StdRng, RngExt, SeedableRng};
@@ -7,12 +19,56 @@ use rand::{rngs::StdRng, RngExt, SeedableRng};
 /// / kararsızlık). Hız değişimini bu makul sınıra kırp.
 const MAX_EXPLOSION_DV: f32 = 50.0;
 
+/// One convex piece of a shattered body: a triangle mesh plus the mass properties derived
+/// from it.
+///
+/// Every coordinate is in the **local frame of the body that was shattered** — the same
+/// frame its half-extents were given in, origin at the box centre. The mesh is deliberately
+/// not re-centred on [`center_of_mass`](Self::center_of_mass), which is what lets all the
+/// debris of one break share the original body's transform and differ only in their mass
+/// properties.
+///
+/// The mesh is a render/collision source, not a simulated object: it carries no material,
+/// no colour and no UVs.
 #[derive(Clone, Debug)]
 pub struct ProceduralChunk {
+    /// Vertex positions in metres, in the parent body's local frame, all inside the source
+    /// box up to a roughly millimetre plane tolerance.
+    ///
+    /// Faces do not share vertices — each face pushes its own copy so its flat normal stays
+    /// hard — so this is not a minimal vertex set and geometrically identical positions
+    /// appear several times.
     pub vertices: Vec<Vec3>,
+    /// One outward unit normal per entry of [`vertices`](Self::vertices) (the two lists
+    /// always have equal length), constant across each face: every copy of a face's vertices
+    /// carries that face's plane normal, which is what gives the debris hard edges rather
+    /// than a smoothed look.
     pub normals: Vec<Vec3>,
+    /// Triangle list into [`vertices`](Self::vertices) / [`normals`](Self::normals): three
+    /// consecutive entries per triangle, so the length is always a multiple of three. Each
+    /// face is fan-triangulated, so all of a face's triangles share its first sorted vertex.
+    ///
+    /// Take facing from [`normals`](Self::normals), not from the winding — the fan is
+    /// ordered the opposite way round from the stored normal, and sliver faces are not
+    /// reliably consistent even about that. Mass properties are unaffected either way: they
+    /// only need the winding to be self-consistent and take the absolute value.
     pub indices: Vec<u32>,
+    /// The chunk's volume centroid — the centre of mass of a uniform-density solid — in the
+    /// parent's local frame.
+    ///
+    /// Deliberately **not** the average of [`vertices`](Self::vertices): for an asymmetric
+    /// cell the two differ (a square pyramid's mass sits at h/4, its vertex mean at h/5), and
+    /// feeding the vertex mean to the solver biased the chunk's rotational dynamics. Falls
+    /// back to the vertex average only when the mesh's signed volume is degenerate.
     pub center_of_mass: Vec3,
+    /// Chunk volume in cubic metres, from the same signed-tetrahedron decomposition as
+    /// [`center_of_mass`](Self::center_of_mass) — exact for a mesh that closed up, and off
+    /// by the missing contribution for one that lost a degenerate face to the build
+    /// tolerances.
+    ///
+    /// Floored at `0.001`, so that splitting the parent's mass by volume fraction can never
+    /// divide by zero; a sliver below that floor therefore reports, and is given, more mass
+    /// than its geometry deserves.
     pub volume: f32, // approximated
 }
 
@@ -76,6 +132,36 @@ fn compute_convex_mass_props(vertices: &[Vec3], indices: &[u32]) -> (Vec3, f32) 
     (com, volume)
 }
 
+/// Cut an axis-aligned box into convex Voronoi cells.
+///
+/// `extents` are **half**-extents in metres: the box spans `-extents ..= extents` about the
+/// origin, and every returned [`ProceduralChunk`] stays in that same local frame. Degenerate
+/// axes are made safe rather than rejected — each component is taken absolute and floored to
+/// `1e-3`, so a zero-thickness panel shatters as a millimetre-thick one instead of panicking
+/// inside the RNG's range sampling.
+///
+/// `num_pieces` is the number of Voronoi seed points, i.e. an **upper bound** on the result
+/// length, not a promise: a cell whose half-space intersection yields fewer than four
+/// distinct corners, or no triangles at all, is dropped. The result can be shorter than
+/// asked for and, for `num_pieces == 0`, empty. The cells partition the box between them, so
+/// pieces are not sized independently of each other; the reported
+/// [`ProceduralChunk::volume`] is floored, though, so do not read the returned volumes as an
+/// exact share of the original — see that field.
+///
+/// # Cost
+///
+/// Per cell this intersects every *triple* of that cell's bounding planes — six box planes
+/// plus one bisector for every other seed — and tests each candidate corner against all of
+/// them. The work therefore climbs steeply with `num_pieces`; treat it as a load-time or
+/// precompute routine (see [`PreFracturedCache`]) rather than something a gameplay system
+/// calls per frame.
+///
+/// # Determinism
+///
+/// `seed` is the only source of randomness, so the same `(extents, num_pieces, seed)` yields
+/// the same chunks — that is what lets a fractured scene take part in replay and rollback.
+/// Same-platform only, as everywhere in this engine; do not treat the layout as stable
+/// across platforms, or across versions of this crate or of `rand`.
 pub fn voronoi_shatter(extents: Vec3, num_pieces: u32, seed: u64) -> Vec<ProceduralChunk> {
     // A degenerate half-extent (0 or negative — e.g. a thin panel/floor tile authored as a
     // zero-thickness box) would make `rng.random_range(-e..e)` sample an empty range, which
@@ -420,6 +506,12 @@ pub struct PreFracturedCache {
 }
 
 impl PreFracturedCache {
+    /// An empty cache, identical to [`Default::default`].
+    ///
+    /// Until [`pre_fracture`](Self::pre_fracture) has run for a given handle,
+    /// [`get_fracture_chunks`](Self::get_fracture_chunks) returns `None` for it — the cache
+    /// has no runtime fallback of its own, so the caller decides whether a miss means
+    /// shattering on the spot with [`generate_fracture_chunks`] or not breaking at all.
     pub fn new() -> Self {
         Self {
             cache: std::collections::HashMap::new(),

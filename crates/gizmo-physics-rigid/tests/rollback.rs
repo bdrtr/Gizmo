@@ -390,3 +390,4 @@ fn rollback_restores_the_latched_joint_reference_pose() {
          limit is measured against it, so a stale one silently redefines the joint's rest pose"
     );
 }
+

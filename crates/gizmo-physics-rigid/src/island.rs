@@ -24,6 +24,13 @@ pub struct Island {
 // IslandManager
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Namespace for the island partitioning routines — a zero-sized, stateless type whose
+/// methods are all associated functions.
+///
+/// It deliberately keeps nothing between calls: the partition is recomputed from the
+/// current contact set every substep, so islands never go stale when bodies are added,
+/// removed or re-indexed. Nothing here touches body state; the caller decides what to do
+/// with the returned grouping.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct IslandManager;
 
@@ -171,20 +178,52 @@ impl IslandManager {
 // PhysicsMetrics — Profiling
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Profiling counters for the last completed `PhysicsWorld::step`.
+///
+/// Purely observational: nothing here is read back by the simulation, so the measurement
+/// cannot perturb the result and these values are excluded from the world's serialized
+/// state. They are therefore *not* part of the replay/rollback state either — two runs
+/// that hash identically will still report different timings.
+///
+/// **Accumulation window.** One render frame may run many fixed substeps. The timers and
+/// the contact/island counts are zeroed at the start of a step and summed over every
+/// substep of that step; the body counts are sampled once, after the last substep. A step
+/// whose accumulator had not filled therefore reports zeroed timers with fresh body
+/// counts, while a step that returns before simulating anything — paused, or servicing a
+/// rewind — leaves the whole struct holding the previous frame's numbers.
 #[derive(Debug, Default, Clone)]
 #[non_exhaustive]
 pub struct PhysicsMetrics {
+    /// Wall-clock milliseconds spent updating broadphase proxies and gathering candidate
+    /// pairs.
     pub broadphase_ms: f32,
+    /// Wall-clock milliseconds spent turning candidate pairs into contact manifolds,
+    /// including the collision/trigger event bookkeeping that runs with it.
     pub narrowphase_ms: f32,
+    /// Wall-clock milliseconds spent in the constraint solve — contacts *and* joints are
+    /// one stage here, so a heavy ragdoll shows up in this number and not elsewhere.
     pub solver_ms: f32,
+    /// Wall-clock milliseconds spent in *both* integration stages: velocity integration
+    /// before the solver and position integration plus CCD resolution after it.
     pub integration_ms: f32,
+    /// Islands built, summed over the step's substeps — with several substeps this is a
+    /// multiple of the islands actually present, not the current partition size.
     pub island_count: usize,
+    /// Dynamic bodies asleep after the last substep. Static and kinematic bodies are never
+    /// counted even when they carry the sleeping flag — which static bodies built through
+    /// `RigidBody::new_static` do from the start.
     pub sleeping_count: usize,
+    /// Contact *points* — not manifolds — fed to the solver.
     pub contact_count: usize,
+    /// Bodies registered in the world after the last substep, all body types included.
     pub body_count: usize,
 }
 
 impl PhysicsMetrics {
+    /// Emit the whole set as a single `tracing` event at debug level.
+    ///
+    /// Despite the name nothing is drawn and nothing is printed to stdout — the line only
+    /// materialises if a subscriber is installed and enables debug for this crate.
     pub fn print_hud(&self) {
         tracing::debug!(
             island_count = self.island_count,
@@ -201,6 +240,11 @@ impl PhysicsMetrics {
         );
     }
 
+    /// Sum of the four phase timers, in milliseconds.
+    ///
+    /// A lower bound on the real cost of the step rather than a measurement of it: only
+    /// the four timed phases are included, so per-frame work outside them — the
+    /// rewind-history snapshot, for one — is invisible here.
     pub fn total_ms(&self) -> f32 {
         self.broadphase_ms + self.narrowphase_ms + self.solver_ms + self.integration_ms
     }

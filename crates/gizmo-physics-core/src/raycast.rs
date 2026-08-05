@@ -1,3 +1,16 @@
+//! Ray casting against collider shapes.
+//!
+//! These are the exact per-shape tests, nothing more: no broadphase culling, no
+//! layer filtering, no notion of which bodies exist. A scene query prunes
+//! candidates first and calls [`Raycast::ray_shape`] on the survivors.
+//!
+//! Every function returns the ray parameter `t` at the hit rather than a point.
+//! With the unit direction [`Ray::new`] guarantees, `t` is a distance in metres,
+//! and [`Ray::point_at`] turns it back into a position. The ray and the shape must
+//! be expressed in the same frame; the local-space conversions that `ray_box`,
+//! `ray_capsule` and the mesh/hull arms of `ray_shape` perform internally are not
+//! visible to the caller.
+
 use crate::components::{ColliderShape, Transform};
 use crate::BodyHandle;
 use gizmo_math::Aabb;
@@ -6,7 +19,22 @@ use gizmo_math::Vec3;
 /// Ray for raycasting
 #[derive(Debug, Clone, Copy)]
 pub struct Ray {
+    /// Where the ray starts. Frame-agnostic: the tests in this module read it in
+    /// whatever space the shape they are given lives in, and several of them build
+    /// local-space `Ray`s of this same type internally.
     pub origin: Vec3,
+    /// Direction of travel — unit length whenever the value came from
+    /// [`Ray::new`], which normalises and substitutes `+Z` for a zero or
+    /// non-finite input.
+    ///
+    /// The field is public, so writing to it directly can leave a non-unit
+    /// direction, and nothing in this module compensates for that. A `t` is then
+    /// not a distance in metres, and the tests do not even agree on how it scales
+    /// — [`Raycast::ray_box`] rebuilds a local `Ray` through [`Ray::new`] and so
+    /// renormalises, while [`Raycast::ray_aabb`] does not. Worse,
+    /// [`Raycast::ray_sphere`] and the cylinder branch of
+    /// [`Raycast::ray_capsule`] use quadratics that *assume* unit length and give
+    /// wrong roots — not merely rescaled ones — without it.
     pub direction: Vec3, // Should be normalized
 }
 
@@ -35,6 +63,12 @@ impl Ray {
         }
     }
 
+    /// The point at ray parameter `t`: `origin + direction * t`, in the ray's own
+    /// frame.
+    ///
+    /// Nothing is clamped — a negative `t` walks backwards from the origin — and
+    /// this is the intended way to turn any `t` returned by this module back into a
+    /// position.
     pub fn point_at(&self, t: f32) -> Vec3 {
         self.origin + self.direction * t
     }
@@ -43,9 +77,28 @@ impl Ray {
 /// Result of a raycast hit
 #[derive(Debug, Clone, Copy)]
 pub struct RaycastHit {
+    /// The body that was hit. Nothing in this module produces a `RaycastHit` — the
+    /// scene query that owns the body list fills this in.
     pub entity: BodyHandle,
+    /// World-space hit position, in metres.
+    ///
+    /// The engine's own queries compute it as `ray.point_at(distance)`, so it lies
+    /// exactly on the ray and is a restatement of [`distance`](Self::distance)
+    /// rather than an independently measured point on the surface.
     pub point: Vec3,
+    /// Unit surface normal at the hit, in world space.
+    ///
+    /// Its orientation is whatever the shape test returned, and that is not one
+    /// rule: the plane, mesh and hull arms of [`Raycast::ray_shape`] flip the
+    /// normal to oppose the ray, while the box and sphere tests report the outward
+    /// normal of the face actually crossed — which, for a ray that starts inside,
+    /// is the exit face and points *along* the ray.
     pub normal: Vec3,
+    /// Ray parameter `t` at the hit, measured from [`Ray::origin`] and never
+    /// negative; see [`Ray::direction`] for what it is denominated in.
+    ///
+    /// This is the field to compare when picking the closest of several hits;
+    /// [`point`](Self::point) is derived from it.
     pub distance: f32,
 }
 
@@ -54,6 +107,18 @@ pub struct Raycast;
 
 impl Raycast {
     /// Test ray against AABB
+    ///
+    /// Returns the ray parameter of the **entry** face, or — when the origin is
+    /// already inside the box — of the **exit** face, so the result is never
+    /// negative. `None` when the ray misses the box, or when the whole box lies
+    /// behind the origin.
+    ///
+    /// An axis whose direction component is below 1e-8 is treated as parallel to
+    /// that slab: it can only cause a miss (origin outside the slab), never bound
+    /// `t`. Empty and inverted boxes are *not* rejected — unlike
+    /// [`Aabb::intersects`](gizmo_math::Aabb::intersects) this never consults
+    /// `is_empty`, so a box with `min > max` produces a meaningless answer rather
+    /// than `None`.
     pub fn ray_aabb(ray: &Ray, aabb: &Aabb) -> Option<f32> {
         // tmin gerçek giriş (negatif olabilir), tmax çıkış. (Eskiden tmin=0'dan
         // başlıyordu → ışın kutunun İÇİNDE başlarsa t=0 dönüp `origin` yüzey üstünde
@@ -114,6 +179,20 @@ impl Raycast {
     }
 
     /// Test ray against sphere
+    ///
+    /// Returns the parameter of the nearest intersection strictly in front of the
+    /// origin, together with the outward unit normal there (from `center` through
+    /// the hit point). `center` and `radius` are in the ray's frame, metres.
+    ///
+    /// A ray starting inside the sphere gets the exit root, so its outward normal
+    /// points *along* the ray rather than against it. Only ONE root has to be strictly
+    /// positive: a ray whose origin sits exactly on the surface pointing inward has
+    /// `t1 == 0`, so the entry root is skipped and the exit root is returned. A sphere the
+    /// ray only reaches behind its origin is rejected.
+    ///
+    /// The quadratic is the unit-direction form (see [`Ray::direction`]). If the
+    /// hit point coincides with `center` the normal falls back to `Vec3::Y`
+    /// instead of becoming NaN.
     pub fn ray_sphere(ray: &Ray, center: Vec3, radius: f32) -> Option<(f32, Vec3)> {
         let oc = ray.origin - center;
         let b = oc.dot(ray.direction);
@@ -143,6 +222,18 @@ impl Raycast {
     }
 
     /// Test ray against box (OBB)
+    ///
+    /// `center` and `rotation` place the box; `half_extents` are its half-sizes in
+    /// metres along its **own** local axes, so the full box measures
+    /// `2 * half_extents`.
+    ///
+    /// Returns the ray parameter and the world-space unit face normal. The normal
+    /// is recovered by testing the local hit point against each face within 1e-4,
+    /// which has two consequences: a hit on an edge or corner reports the
+    /// normalised sum of the faces it matched (a diagonal, not a face normal), and
+    /// if no face matches at all the fallback is `Vec3::Y`. As with
+    /// [`ray_aabb`](Self::ray_aabb), a ray starting inside reports the exit face,
+    /// whose outward normal points along the ray.
     pub fn ray_box(
         ray: &Ray,
         center: Vec3,
@@ -186,6 +277,21 @@ impl Raycast {
     }
 
     /// Test ray against capsule
+    ///
+    /// The capsule runs along its **own local Y axis**, and `half_height` is half of
+    /// the *cylindrical* section only — the hemispherical caps sit outside it, so the
+    /// capsule's total length is `2 * (half_height + radius)` metres.
+    ///
+    /// Returns the ray parameter and the world-space unit surface normal. The
+    /// cylinder is tested first and wins outright when it is struck in front of the
+    /// origin within the cylindrical span; otherwise the two caps are tested and the
+    /// nearer positive root is taken, which is also what happens for a ray running
+    /// (near) parallel to the axis.
+    ///
+    /// Only the near root of each branch is considered, so a ray that starts
+    /// **inside** the capsule is not a case this test handles: it may report no
+    /// hit at all, or a spurious hit on the interior of a cap with an
+    /// inward-facing normal.
     pub fn ray_capsule(
         ray: &Ray,
         center: Vec3,
@@ -263,6 +369,28 @@ impl Raycast {
     }
 
     /// Test ray against collider shape
+    ///
+    /// Returns the parameter of the nearest hit and a world-space unit normal, or
+    /// `None`. Two properties of the placement matter more than the dispatch table:
+    ///
+    /// - **`transform.scale` is ignored.** Only `position` and `rotation` are read
+    ///   (composed with the child's local transform for compound parts). Sizes come
+    ///   from the shape itself, so scaling a `Transform` does not scale what this
+    ///   test hits.
+    /// - **A [`ColliderShape::Plane`] ignores `transform` entirely.** Its `normal`
+    ///   and `distance` are used exactly as stored, i.e. they already describe a
+    ///   world-space plane, and moving the collider does not move it. The returned
+    ///   normal is flipped to oppose the ray, so the plane is solid from both sides.
+    ///
+    /// Per shape: sphere and box delegate to [`ray_sphere`](Self::ray_sphere) and
+    /// [`ray_box`](Self::ray_box) and inherit their inside-start behaviour. Triangle
+    /// meshes and convex hulls run Möller–Trumbore over triangles in the shape's own
+    /// space, keep the nearest, and flip that triangle's normal to oppose the ray; a
+    /// mesh whose BVH is empty falls back to scanning every triangle. A hull whose
+    /// `faces` list is empty — what
+    /// [`compute_convex_hull`](crate::quickhull::compute_convex_hull) returns for
+    /// degenerate input — is approximated by its AABB instead, which reports hits the
+    /// real hull would miss. A compound returns its nearest sub-shape hit.
     #[tracing::instrument(skip_all, level = "trace", name = "ray_shape")]
     pub fn ray_shape(
         ray: &Ray,

@@ -1,8 +1,30 @@
+//! Turning a step's collision events into fracture requests.
+//!
+//! [`DestructionSystem::process_impacts`] converts the [`PhysicsWorld`]'s collision events
+//! into `FractureEvent`s — body, impact point, impact force — which is the shape
+//! [`crate::fracture`] wants as input. Nothing breaks until the caller acts on them.
+//!
+//! Two details of the conversion are worth knowing: only *newly started* collisions are
+//! considered, so a body pinned under a heavy load is not ground down by the same contact
+//! frame after frame; and both bodies of a qualifying collision are reported, each judged
+//! against its own threshold, so one impact can yield two events.
+//!
+//! The ECS-driven alternative is `physics_fracture_system` in [`crate::system`], which works
+//! off the [`Breakable`](crate::components::Breakable) component and does spawn the debris
+//! itself. The two are independent paths, not layers of one.
+
 use crate::world::PhysicsWorld;
 
 /// The DestructionSystem handles runtime breaking of objects based on impacts.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DestructionSystem {
+    /// Fallback fracture threshold, as a contact normal impulse in N·s, applied to bodies
+    /// that do not carry a `RigidBody::fracture_threshold` of their own.
+    ///
+    /// A per-body threshold **replaces** this rather than being bounded by it, so a body can
+    /// legitimately ask to be more fragile — or tougher — than the system default. The
+    /// comparison is strict: an impact exactly equal to the threshold does not break.
+    /// [`Default`] uses `50.0`.
     pub impact_threshold: f32,
 }
 
@@ -15,6 +37,12 @@ impl Default for DestructionSystem {
 }
 
 impl DestructionSystem {
+    /// System whose fallback threshold is `impact_threshold` — see
+    /// [the field](Self::impact_threshold).
+    ///
+    /// That value is the system's whole state: nothing else is configurable, and nothing is
+    /// carried over between [`process_impacts`](Self::process_impacts) calls, so one system
+    /// can serve any number of worlds and any number of steps.
     pub fn new(impact_threshold: f32) -> Self {
         Self { impact_threshold }
     }

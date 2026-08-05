@@ -1,13 +1,55 @@
 use serde::{Deserialize, Serialize};
 
+/// The layer a default-constructed [`CollisionLayer`] sits on, and so the one a collider that
+/// was never configured ends up with. The default mask also contains its bit, which is why
+/// two untouched colliders collide.
 pub const LAYER_DEFAULT: u32 = 0;
+
+/// Suggested index for player bodies. A naming convention and nothing more: the engine
+/// attaches no behaviour to any particular index, so this is worth exactly what your game's
+/// own masks make of it.
 pub const LAYER_PLAYER: u32 = 1;
+
+/// Suggested index for enemy bodies — the counterpart to [`LAYER_PLAYER`] in the two-sided
+/// setup collision filtering requires, where each side's mask names the other's bit.
 pub const LAYER_ENEMY: u32 = 2;
+
+/// Suggested index for trigger volumes. It does **not** make a collider a trigger:
+/// pass-through-and-report behaviour comes from
+/// [`Collider::is_trigger`](crate::components::Collider), and a collider parked on this layer
+/// with that flag unset is an ordinary solid.
 pub const LAYER_TRIGGER: u32 = 3;
 
+/// Which of the 32 collision layers a collider sits on, and which layers it is willing to
+/// collide with.
+///
+/// Filtering is *mutual*: a pair survives only when each side's [`mask`](Self::mask) contains
+/// the other side's [`layer`](Self::layer) bit, so either collider can veto the pair on its
+/// own — see [`can_collide_with`](Self::can_collide_with). Scene queries are filtered the
+/// other way round, one-directionally, and consult only a collider's `layer`.
+///
+/// This is applied late in the rigid-body pipeline — at narrowphase and at the CCD sweep
+/// backstop, not in the broadphase — so a masked-out pair is still generated as a broadphase
+/// candidate and only then discarded. Layers are a correctness filter, not a way to keep
+/// pairs out of the broadphase.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct CollisionLayer {
+    /// Index of the layer this collider belongs to, valid in `0..=31` — it is used as a shift
+    /// into a 32-bit mask, which is the hard cap on the number of layers.
+    ///
+    /// Out-of-range values are not wrapped here: a `debug_assert!` fires in debug builds, and
+    /// in release the shift yields no bit at all, so such a collider silently collides with
+    /// nothing. Other parts of the engine handle an oversized index differently (scene query
+    /// filtering masks it down with `& 31`), which is a further reason to keep it in range.
     pub layer: u32, // Which layer this object is on (0-31)
+    /// Bitfield of the layers this collider accepts: bit *i* set means "I am willing to
+    /// collide with layer *i*". Defaults to `u32::MAX`, i.e. everything including its own
+    /// layer.
+    ///
+    /// Zero is a total veto — the collider collides with nothing, even with colliders whose
+    /// masks accept it. What is tested against this field is the *other* collider's `layer`,
+    /// never its mask, and scene queries ignore this field entirely: they match the query's
+    /// own mask against this collider's `layer`.
     pub mask: u32,  // Which layers this object collides with (bitfield)
 }
 
@@ -21,6 +63,12 @@ impl Default for CollisionLayer {
 }
 
 impl CollisionLayer {
+    /// Put a collider on `layer` with a mask that accepts every layer, its own included.
+    ///
+    /// `layer` is not validated; see [`layer`](Self::layer) for the `0..=31` requirement.
+    /// The permissive mask is the intended starting point — narrow it with
+    /// [`with_mask`](Self::with_mask) — so a half-configured collider errs toward colliding
+    /// rather than toward passing through the world unnoticed.
     pub fn new(layer: u32) -> Self {
         Self {
             layer,
@@ -28,21 +76,45 @@ impl CollisionLayer {
         }
     }
 
+    /// Alias for [`new`](Self::new): same result, all-ones mask included. Nothing is
+    /// converted or validated on the way through.
     pub fn from_layer(layer: u32) -> Self {
         Self::new(layer)
     }
 
+    /// Set the acceptance mask and return `self`, for chaining onto [`new`](Self::new).
+    ///
+    /// This replaces the mask outright rather than OR-ing into it, and it does not re-add the
+    /// collider's own layer bit: two colliders on the same layer whose mask omits that layer
+    /// will pass straight through each other.
     pub fn with_mask(mut self, mask: u32) -> Self {
         self.mask = mask;
         self
     }
 
+    /// OR together `1 << l` for each listed layer, producing a mask that accepts exactly
+    /// those layers.
+    ///
+    /// Returns the raw bitfield, not a `CollisionLayer` — pass it to
+    /// [`with_mask`](Self::with_mask). Repeated entries are harmless, an empty slice gives
+    /// `0` (a mask that accepts nothing), and entries `>= 32` are silently dropped instead of
+    /// wrapping around to a low bit or panicking.
     pub fn mask_from_layers(layers: &[u32]) -> u32 {
         layers
             .iter()
             .fold(0u32, |acc, &l| acc | (1u32.checked_shl(l).unwrap_or(0)))
     }
 
+    /// Whether this pair is allowed to collide: true only when each side's mask holds the
+    /// other side's layer bit. Consent is mutual, so one refusal drops the pair, and the
+    /// predicate is exactly symmetric — `a.can_collide_with(&b)` and `b.can_collide_with(&a)`
+    /// always agree, which means the caller need not care which collider it started from.
+    ///
+    /// A pure bit test on the two components: no world access, no allocation, and no
+    /// dependence on iteration order, so it does not perturb replay.
+    ///
+    /// If either layer is `>= 32` the shift produces no bit and the answer is `false` in
+    /// release builds; in debug a `debug_assert!` fires first.
     #[inline]
     pub fn can_collide_with(&self, other: &CollisionLayer) -> bool {
         debug_assert!(

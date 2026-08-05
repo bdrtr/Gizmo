@@ -29,12 +29,71 @@ pub(crate) mod row {
     pub const MOTOR: usize = 9;
 }
 
+/// Sequential-impulse (Gauss–Seidel) solver for a world's joint array.
+///
+/// Configuration only: every field is a tuning scalar, which is why the type is `Copy` and
+/// why one instance can solve any number of joints — the accumulated impulses of a pass are
+/// stored on each [`Joint`] and reset at the start of every [`Self::solve_joints`] call.
+///
+/// The rows of one joint are applied one after another and each sees the velocities the
+/// previous row already wrote (that is what makes it Gauss–Seidel rather than a block
+/// solve), so a chain of joints converges over [`Self::iterations`] sweeps instead of being
+/// satisfied exactly, and the answer depends on the order of the joint slice.
+///
+/// Every field is simulation input: changing one changes the solved velocities, so a replay
+/// or a rollback must run with the same values that were recorded with. Bit-equality is
+/// same-platform only.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct JointSolver {
+    /// Gauss–Seidel sweeps over the whole joint array per [`Self::solve_joints`] call
+    /// (default 10).
+    ///
+    /// Velocity-level rows only. The force-based contributions — the Spring joint, the
+    /// slider suspension and hinge torsional springs, the D6 drives — are applied once per
+    /// call outside this loop, so raising the count does not multiply a spring force, nor
+    /// the force a joint reports for breaking (see [`Self::solve_joints`] § Breaking;
+    /// `tests/joint_break.rs` guards it).
+    ///
+    /// A quality knob, not a physical one: more sweeps buy a closer approach to the rigid
+    /// answer at linear cost. `0` is legal and skips constraint solving entirely, while the
+    /// force-based pass and the break check still run.
     pub iterations: usize,
+    /// Ceiling on the positional-repair velocity of a LINEAR row, in metres per second
+    /// (default 5).
+    ///
+    /// It clamps the bias term only — the part of the target velocity that comes from
+    /// position error — and never the row's response to actual relative velocity, so it is
+    /// not a cap on the impulse a joint may apply. On a rigid row (`compliance == 0`), with
+    /// the defaults and the world's 1/240 s substep, it starts to bind at roughly 7 cm of
+    /// error (`max_correction_speed · dt / position_bias`); below that it is inert.
+    ///
+    /// Must be ≥ 0: it is used as `bias.clamp(-self, self)`, which panics outright when the
+    /// value is negative. `0` leaves the linear rows as pure velocity constraints that hold
+    /// the error where it is but never work it off. Motor and drive rows do not pass through
+    /// this clamp at all.
     pub max_correction_speed: f32,
+    /// The angular counterpart of [`Self::max_correction_speed`], in radians per second
+    /// (default 5), applied to every angular row: the Fixed 3-axis lock, hinge axis
+    /// alignment, the ball-socket cone/twist/swing limits and the D6 angular DOFs.
+    ///
+    /// Same non-negativity requirement, same bias-only reach. It bounds the angular error a
+    /// row can work off in one substep by roughly `max_angular_speed · dt`, so a joint that
+    /// starts far from its target orientation rotates into place over several substeps
+    /// rather than snapping.
     pub max_angular_speed: f32,
+    /// Baumgarte factor β for the rigid rows — dimensionless, default 0.3.
+    ///
+    /// A row with positional error `C` is given the target velocity `β·C/dt` (then clamped
+    /// by the two ceilings above), so once the row converges roughly the fraction β of the
+    /// remaining error is worked off over that substep. `0` turns every rigid row into a
+    /// pure velocity constraint: the error stops growing but is never removed. `1` asks for
+    /// all of it inside a single substep.
+    ///
+    /// Rows with `compliance > 0` derive their bias from the compliance instead and ignore
+    /// this. The hinge and slider POSITION SERVOS, however, reuse it as their proportional
+    /// gain when converting a target angle/offset into a target velocity — retuning β
+    /// retunes how hard those servos chase their target.
     pub position_bias: f32,
     /// `compliance > 0` olan satırların sönüm oranı ζ (yumuşak kısıt yay-damper'ının).
     /// 1.0 = kritik sönüm: yay hedefe salınmadan oturur. Rijit satırlar (compliance = 0)
@@ -55,6 +114,12 @@ impl Default for JointSolver {
 }
 
 impl JointSolver {
+    /// A solver running `iterations` sweeps per call, with every other knob left at its
+    /// [`Default`] value (5 m/s and 5 rad/s bias ceilings, β = 0.3, ζ = 1).
+    ///
+    /// `iterations` is not validated — see the field for what `0` means. Since the struct is
+    /// `#[non_exhaustive]`, this and `Default` are the only ways to build one from outside
+    /// the crate; the remaining knobs are then set by assigning to the public fields.
     pub fn new(iterations: usize) -> Self {
         Self {
             iterations,
@@ -62,6 +127,54 @@ impl JointSolver {
         }
     }
 
+    /// Solve every joint for one substep, writing the result into `velocities`.
+    ///
+    /// `dt` is the substep length in SECONDS and must be > 0: it divides the Baumgarte bias
+    /// (`β·C/dt`) and converts accumulated impulses back into the forces and torques that
+    /// are compared against the break thresholds. `transforms` is read-only — positions are
+    /// integrated later in the step — so the positional error is frozen for the duration of
+    /// the call and the correction only becomes visible after integration.
+    ///
+    /// `rigid_bodies`, `transforms` and `velocities` are parallel arrays over the same index
+    /// space, and `entity_index_map` maps a [`BodyHandle`](gizmo_physics_core::BodyHandle)
+    /// id to that index. A joint is skipped in silence when it is already broken, when
+    /// either endpoint is absent from the map, or when both endpoints resolve to the same
+    /// index; a mapped index that is out of range for the slices panics.
+    ///
+    /// Three phases, in order:
+    ///
+    /// 1. [`Self::iterations`] Gauss–Seidel sweeps of the velocity-level rows, in joint
+    ///    order.
+    /// 2. One pass of the force-based contributions — the Spring joint, the slider
+    ///    suspension and hinge torsional springs, the D6 drives. These depend on position
+    ///    rather than velocity, so running them inside the loop above would apply them
+    ///    `iterations` times over.
+    /// 3. One break check per joint.
+    ///
+    /// Only the velocities of DYNAMIC bodies are written; static and kinematic ones act as
+    /// boundary conditions and are read but never modified. Sleep state is not consulted: a
+    /// sleeping dynamic body's velocity is written like any other, and taking `&[RigidBody]`
+    /// means this cannot wake it — the caller has to, otherwise position integration skips
+    /// the body and the correction is discarded.
+    ///
+    /// # Breaking
+    ///
+    /// Break is judged once per call on the pass's NET impulse: `‖Σ λᵢnᵢ‖ / dt` against
+    /// `break_force` in newtons, and the angular equivalent against `break_torque` in N·m.
+    /// Because it is the vector sum and not a sum of row magnitudes, the three orthogonal
+    /// linear rows of a Fixed joint carrying one diagonal load report that load rather than
+    /// up to √3 times it (`tests/joint_break.rs` guards the diagonal case). Constraint
+    /// rows and the force-based springs feed the sum; motors and D6 drives deliberately do
+    /// not, an actuator being an input rather than an external load. A joint that breaks is
+    /// marked and skipped by every later call — nothing here un-breaks it.
+    ///
+    /// # Determinism
+    ///
+    /// The accumulated impulses are cleared at the start of every call, so a pass never
+    /// inherits them from the previous one. The latched state on the joints themselves does
+    /// carry over — `is_broken` and the reference poses survive every call. The map is only
+    /// ever looked up in, never iterated, so its hash order does not reach the result; the
+    /// order of `joints` does. Single-threaded and same-platform bit-reproducible only.
     pub fn solve_joints(
         &self,
         joints: &mut [Joint],

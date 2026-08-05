@@ -179,6 +179,26 @@ fn support_order_manifolds(
 // Konfigürasyon
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Tuning for the contact constraint solver.
+///
+/// This is configuration, not state: it is `Copy` and carries nothing from one substep to
+/// the next. The accumulated normal/tangent impulses live on the contact points inside the
+/// manifolds, which is what makes it safe to hand the same solver value to every island
+/// being solved in parallel.
+///
+/// Two solve paths are selected by these settings — the default TGS-soft path
+/// ([`ConstraintSolver::use_tgs_soft`]) and the older split-impulse sequential-impulse
+/// path, which also takes over for any island containing a CCD-enabled body. Several
+/// fields are finished-but-gated experiments; each says so in its own documentation, so
+/// read the field before flipping it because it sounded useful.
+///
+/// The values are simulation *inputs*: a replay or a rollback only reproduces the original
+/// trajectory if the solver is configured identically. They are not captured in the
+/// world's serialized state or in a rollback snapshot, so keeping them in sync is the
+/// caller's job.
+///
+/// `#[non_exhaustive]`: start from [`Default`] or [`ConstraintSolver::new`] and adjust
+/// individual fields.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct ConstraintSolver {
@@ -306,6 +326,15 @@ impl Default for ConstraintSolver {
 }
 
 impl ConstraintSolver {
+    /// Solver with a custom base sweep count; every other field keeps its default, so the
+    /// TGS-soft path and the manifold block solver stay enabled.
+    ///
+    /// `iterations` counts sweeps per substep, not per rendered frame, and it is a base
+    /// count rather than an exact one: on the TGS-soft path with the block solver enabled,
+    /// a deep (stacked) island instead gets a sweep count derived from its depth, which
+    /// can be more than the value passed here or — past an internal ceiling on adaptive
+    /// iterations — fewer. Passing 0 is accepted — it is not a division-by-zero hazard —
+    /// but it leaves ordinary islands' contacts unsolved.
     pub fn new(iterations: usize) -> Self {
         Self {
             iterations,

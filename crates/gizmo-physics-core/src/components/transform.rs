@@ -1,23 +1,80 @@
+//! Transform components: an entity's authored local placement, and the world matrix
+//! composed from it.
+//!
+//! [`Transform`] holds position/rotation/scale plus a cached `S·R·T` matrix and is the
+//! transform the rigid-body integrator advances each step. [`GlobalTransform`] holds the
+//! world matrix a hierarchy-propagation pass composes from those locals. [`TransformData`]
+//! is only the serialized form of `Transform` — the cached matrix is derived data and is
+//! rebuilt on load rather than persisted.
+
 use gizmo_math::{Mat4, Quat, Vec3};
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "reflect")]
 use bevy_reflect::Reflect;
 
+/// Serialized form of [`Transform`]: the three authored fields, without the derived matrix.
+///
+/// [`Transform`] is declared `#[serde(from = "TransformData")]`, so every deserialization
+/// lands here first and then goes through `From<TransformData>`, which rebuilds
+/// [`Transform::local_matrix`] from scale/rotation/translation. That is why a scene file
+/// never has to store — or be trusted about — the matrix. Serializing a `Transform` skips
+/// the matrix as well, so both types have the same field set on the wire.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "reflect", derive(Reflect))]
 pub struct TransformData {
+    /// Copied verbatim into [`Transform::position`] (metres). The conversion neither
+    /// validates nor rescales it.
     pub position: Vec3,
+    /// Copied verbatim into [`Transform::rotation`]. It is *not* renormalised on the way
+    /// in, so a non-unit quaternion in the source data reaches the rebuilt matrix and skews
+    /// it.
     pub rotation: Quat,
+    /// Copied verbatim into [`Transform::scale`]. A zero component is accepted and leaves
+    /// the rebuilt matrix singular.
     pub scale: Vec3,
 }
 
+/// An entity's local placement, together with a cached local-to-parent matrix.
+///
+/// # Cache invariant
+///
+/// [`local_matrix`](Self::local_matrix) is derived from `position`/`rotation`/`scale` and is
+/// refreshed only by the methods on this type ([`set_position`](Self::set_position),
+/// [`with_scale`](Self::with_scale), [`translate`](Self::translate), …). Those three fields
+/// are public, so writing one directly leaves the matrix stale until
+/// [`update_local_matrix`](Self::update_local_matrix) runs — and
+/// [`world_matrix`](Self::world_matrix) reads the cache, not the fields.
+///
+/// # Determinism
+///
+/// `position` and `rotation` are part of the simulation state the rigid-body world mixes
+/// into its state hash bit-for-bit (via `f32::to_bits`) to detect replay/rollback desync;
+/// `scale` and the cached matrix are not. As everywhere in this engine, that guarantee is
+/// same-platform only — cross-platform bit-exactness is out of scope.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "reflect", derive(Reflect))]
 #[serde(from = "TransformData")]
 pub struct Transform {
+    /// Translation in metres, expressed in the parent's space when the entity is parented
+    /// and in world space otherwise.
     pub position: Vec3,
+    /// Orientation, expected to be a unit quaternion. The `rotate_*` helpers multiply onto
+    /// it without renormalising, so a long chain of incremental rotations drifts off unit
+    /// length; renormalise yourself if that matters.
     pub rotation: Quat,
+    /// Per-axis multipliers (dimensionless), applied before rotation and translation.
+    /// Non-uniform and negative values are stored as given.
+    ///
+    /// The physics crates do not feed `scale` into collision or solver math — a body's
+    /// extents come from its [`Collider`](crate::components::Collider) shape — so scaling a
+    /// transform does not resize the collider that moves with it.
     pub scale: Vec3,
+    /// Cached local-to-parent matrix: `Mat4::from_scale_rotation_translation(scale,
+    /// rotation, position)` as of the last refresh.
+    ///
+    /// Excluded from serialization and from `reflect` because it is derived — a load
+    /// rebuilds it from the other three fields (see [`TransformData`]) instead of restoring
+    /// stored bytes.
     #[serde(skip)]
     #[cfg_attr(feature = "reflect", reflect(ignore))]
     pub local_matrix: Mat4,
@@ -43,6 +100,10 @@ impl Default for Transform {
 }
 
 impl Transform {
+    /// Places the transform at `position` (metres) with identity rotation and unit scale.
+    ///
+    /// The matrix cache is built before returning, so the value handed back is never in the
+    /// stale state described on the type.
     pub fn new(position: Vec3) -> Self {
         let mut t = Self {
             position,
@@ -54,34 +115,50 @@ impl Transform {
         t
     }
 
+    /// Moves the transform to `position` (metres) and refreshes the matrix cache. Builder
+    /// counterpart of [`set_position`](Self::set_position).
     pub fn with_position(mut self, position: Vec3) -> Self {
         self.position = position;
         self.update_local_matrix();
         self
     }
 
+    /// Sets the per-axis scale and refreshes the matrix cache.
+    ///
+    /// Every builder call rebuilds the matrix from all three fields rather than
+    /// post-multiplying onto it, so chaining these in a different order gives the same
+    /// result.
     pub fn with_scale(mut self, scale: Vec3) -> Self {
         self.scale = scale;
         self.update_local_matrix();
         self
     }
 
+    /// Replaces the orientation — it does *not* compose with the current one, unlike
+    /// [`rotate_y`](Self::rotate_y) — and refreshes the matrix cache.
     pub fn with_rotation(mut self, rotation: Quat) -> Self {
         self.rotation = rotation;
         self.update_local_matrix();
         self
     }
 
+    /// Teleports the transform to `pos` (metres, same frame as
+    /// [`position`](Self::position)) and refreshes the matrix cache. Prefer this over
+    /// assigning the field, which leaves the cache stale.
     pub fn set_position(&mut self, pos: Vec3) {
         self.position = pos;
         self.update_local_matrix();
     }
 
+    /// Overwrites the orientation with `rot` and refreshes the matrix cache. `rot` is stored
+    /// exactly as given — no normalisation happens here.
     pub fn set_rotation(&mut self, rot: Quat) {
         self.rotation = rot;
         self.update_local_matrix();
     }
 
+    /// Overwrites the per-axis scale and refreshes the matrix cache. A zero component is
+    /// accepted and makes the cached matrix singular.
     pub fn set_scale(&mut self, scale: Vec3) {
         self.scale = scale;
         self.update_local_matrix();
@@ -115,11 +192,25 @@ impl Transform {
         self.update_local_matrix();
     }
 
+    /// Rebuilds the cached matrix from the current fields, composing scale, then rotation,
+    /// then translation.
+    ///
+    /// Idempotent, and the only way to publish direct field writes into
+    /// [`local_matrix`](Self::local_matrix) — call it once after mutating the fields in bulk.
     pub fn update_local_matrix(&mut self) {
         self.local_matrix =
             Mat4::from_scale_rotation_translation(self.scale, self.rotation, self.position);
     }
 
+    /// Composes this transform under an optional parent and returns the resulting matrix.
+    ///
+    /// Exactly **one** level is composed: the parent contributes its own local matrix, so a
+    /// grandparent's transform is not folded in. With `None` the local matrix is returned
+    /// unchanged. Both inputs are the *cached* matrices, so a stale cache on either
+    /// transform propagates straight into the result.
+    ///
+    /// Deeper hierarchies are the job of the engine's transform-propagation pass, which
+    /// writes [`GlobalTransform`] instead of using this method.
     pub fn world_matrix(&self, parent: Option<&Transform>) -> Mat4 {
         match parent {
             Some(p) => p.world_matrix(None) * self.local_matrix,
@@ -130,8 +221,19 @@ impl Transform {
 
 gizmo_core::impl_component!(Transform);
 
+/// The composed world matrix of an entity, produced by the engine's transform-propagation
+/// pass.
+///
+/// A root entity's world matrix is simply its own [`Transform::local_matrix`]; a child's is
+/// `parent_world * child_local`. Because it is a published result rather than a live view, it
+/// lags any edit to the local [`Transform`] until that pass runs again.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct GlobalTransform {
+    /// Local-to-world matrix as of the last propagation, in metres.
+    ///
+    /// Skipped by serde: a round-tripped `GlobalTransform` comes back as `Mat4::IDENTITY`
+    /// (glam's `Default` for `Mat4`) rather than the saved pose, and stays there until
+    /// propagation recomputes it from the entity's [`Transform`].
     #[serde(skip)]
     pub matrix: Mat4,
 }
@@ -145,6 +247,10 @@ impl Default for GlobalTransform {
 }
 
 impl GlobalTransform {
+    /// Returns the stored matrix by value.
+    ///
+    /// Despite the name it computes nothing: if the local [`Transform`] has changed since
+    /// the last propagation, this hands back the stale pose.
     pub fn compute_matrix(&self) -> Mat4 {
         self.matrix
     }

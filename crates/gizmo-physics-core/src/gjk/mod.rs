@@ -1,3 +1,16 @@
+//! GJK and EPA: convex overlap tests, contact generation and swept queries.
+//!
+//! Everything here reaches a shape only through its support function
+//! ([`Gjk::support_point`]), which is what makes one implementation serve spheres,
+//! boxes, capsules and hulls alike — and also what makes it strictly a **convex**
+//! algorithm. A triangle mesh answers support queries with its convex hull, so a
+//! concave mesh must not be collided through this module; the narrowphase splits it
+//! into individual triangles first, each of which is convex.
+//!
+//! The routines are split across submodules but all hang off the one [`Gjk`] type:
+//! overlap and contact here, the simplex machinery and the swept queries in
+//! `simplex`, expansion in `epa`, per-shape support in `support`.
+
 use crate::collision::ContactPoint;
 use crate::components::{BoxShape, CapsuleShape, ColliderShape, SphereShape};
 use gizmo_math::Vec3;
@@ -19,10 +32,23 @@ pub(crate) struct SupportPoint {
     b: Vec3,
 }
 
+/// Stateless namespace for the GJK/EPA routines. Shapes are positioned by explicit
+/// world-space `pos`/`rot` arguments and no scale is involved.
+///
+/// **[`ColliderShape::Plane`] is not supported.** A plane is unbounded and has no
+/// support point in the direction of its own normal, so handing one to
+/// [`support_point`](Self::support_point) is a contract violation: it logs an error,
+/// trips a `debug_assert!`, and in release returns `Vec3::ZERO`, which quietly
+/// corrupts the result. Planes have dedicated analytic paths in the narrowphase.
 pub struct Gjk;
 
 impl Gjk {
     /// Test if two shapes are colliding using GJK
+    ///
+    /// Overlap only — no contact data, and cheaper for it, since EPA never runs.
+    /// The search is bounded at 32 iterations and a run that exhausts them is
+    /// reported as "no collision", so a pathologically ill-conditioned pair fails
+    /// toward `false` rather than looping.
     pub fn test_collision(
         shape_a: &ColliderShape,
         pos_a: Vec3,
@@ -41,6 +67,18 @@ impl Gjk {
     }
 
     /// Get contact information using GJK + EPA
+    ///
+    /// `None` when the shapes do not overlap. Otherwise a single deepest contact:
+    /// world-space point, unit normal pointing from A toward B, and a positive
+    /// penetration in metres.
+    ///
+    /// There is a failure mode worth knowing about. When GJK finds an overlap but
+    /// EPA cannot expand the simplex — a degenerate or near-degenerate configuration
+    /// — this does not return `None`, because the shapes demonstrably do intersect.
+    /// It returns a **fabricated** contact instead: the midpoint of the two
+    /// positions, a normal along `pos_b - pos_a`, and a fixed token penetration of
+    /// 0.01 m. That keeps triggers firing and the solver fed, but the geometry is a
+    /// placeholder rather than a measurement.
     pub fn get_contact(
         shape_a: &ColliderShape,
         pos_a: Vec3,

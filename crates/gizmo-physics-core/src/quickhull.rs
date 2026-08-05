@@ -1,16 +1,67 @@
+//! Quickhull: the convex hull of a point cloud, as vertices plus triangles.
+//!
+//! [`compute_convex_hull`] is the entry point and [`HullFace`] is the working face
+//! record it builds hulls out of. Degenerate input never panics and never errors —
+//! it comes back with an empty face list, which callers must test for.
+//!
+//! Where the algorithm has a free choice (which horizon edge first, which vertex
+//! gets which output index) it resolves it through ordered containers rather than
+//! hash iteration. That is deliberate: hull geometry becomes collider geometry, so
+//! a run-to-run change in the output would break same-platform replay and rollback.
+
 use gizmo_math::Vec3;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 const EPSILON: f32 = 1e-4;
 
+/// A candidate hull face during a Quickhull build: one triangle, plus the input
+/// points still known to lie outside it.
+///
+/// The build ends when no face has anything left in its
+/// [`outside_set`](Self::outside_set).
 #[derive(Clone, Debug)]
 pub struct HullFace {
+    /// The triangle's three corners, as indices into the `points` slice passed to
+    /// [`new`](Self::new) and [`distance`](Self::distance) — **not** into
+    /// [`ConvexHull::vertices`], which is renumbered only once the build is over.
+    ///
+    /// The order is the winding that [`normal`](Self::normal) was derived from, so
+    /// permuting it invalidates the stored normal.
     pub v: [usize; 3],
+    /// Unit normal from the right-hand rule on `v[0] → v[1] → v[2]`.
+    ///
+    /// A degenerate triangle — repeated or collinear corners, i.e. a cross product
+    /// shorter than 1e-8 — is given `Vec3::Y` instead. That keeps the value finite
+    /// rather than NaN, at the cost of it being unrelated to the triangle, so
+    /// [`distance`](Self::distance) against such a face means nothing.
+    ///
+    /// Nothing in [`new`](Self::new) orients this outward — it only follows the
+    /// winding it was given. [`compute_convex_hull`] orients its four starting faces
+    /// itself, by testing the remaining tetrahedron point and rebuilding the face
+    /// with a reversed winding when that point turned out to be in front.
     pub normal: Vec3,
+    /// Indices — into the same `points` slice as [`v`](Self::v) — of points still
+    /// in front of this face's plane.
+    ///
+    /// Left empty by [`new`](Self::new); the build fills it, assigning each point
+    /// to the single face it is farthest in front of, and only counts a point as
+    /// outside beyond a tolerance of 1e-4. An empty set does not mean the face
+    /// survives: a processed point deletes *every* face it is more than that
+    /// tolerance in front of, while it was only ever assigned to one of them.
     pub outside_set: Vec<usize>,
 }
 
 impl HullFace {
+    /// Build a face from three indices into `points`, taking its plane normal from
+    /// the winding `a → b → c`.
+    ///
+    /// [`outside_set`](Self::outside_set) starts empty — assigning points to it is
+    /// the caller's job. A degenerate triangle yields the `Vec3::Y` fallback normal
+    /// described on [`normal`](Self::normal) rather than NaN.
+    ///
+    /// # Panics
+    ///
+    /// If `a`, `b` or `c` is out of bounds of `points`.
     pub fn new(a: usize, b: usize, c: usize, points: &[Vec3]) -> Self {
         let pa = points[a];
         let pb = points[b];
@@ -31,6 +82,17 @@ impl HullFace {
         }
     }
 
+    /// Signed distance from this face's plane to `p`, positive on the
+    /// [`normal`](Self::normal) side (outside the hull under construction).
+    ///
+    /// The plane is taken through `points[v[0]]`, so `points` must be the same
+    /// slice the face was built from — pass a different one and the answer is
+    /// silently about a different plane. `normal` is unit length, so this is a true
+    /// perpendicular distance in the point cloud's own units, not a scaled one.
+    ///
+    /// # Panics
+    ///
+    /// If `v[0]` is out of bounds of `points`.
     pub fn distance(&self, p: Vec3, points: &[Vec3]) -> f32 {
         (p - points[self.v[0]]).dot(self.normal)
     }
@@ -40,11 +102,52 @@ impl HullFace {
 /// (indices into `vertices`) that bound the hull.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ConvexHull {
+    /// The hull's corner points, in the input's own coordinate frame — no transform
+    /// is applied and no point is invented, every entry is a point from the input.
+    ///
+    /// Points strictly inside the hull are dropped, so this is usually shorter than
+    /// the input. Its order is deterministic for a given input but is not the
+    /// input's order and should be treated as an implementation detail; use
+    /// [`faces`](Self::faces) to say anything about which vertex is which.
+    ///
+    /// In every degenerate case (see [`compute_convex_hull`]) this instead holds the
+    /// collapsed remains of the input — one point, two, or a planar set — and
+    /// `faces` is empty.
     pub vertices: Vec<Vec3>,
+    /// The bounding triangles, as index triples into [`vertices`](Self::vertices).
+    ///
+    /// **Empty whenever the input could not form a solid** — fewer than four points,
+    /// or points that are all coincident, collinear or coplanar. An empty face list
+    /// with a non-empty vertex list is therefore the normal degenerate result, not a
+    /// bug, and consumers have to handle it:
+    /// [`Raycast::ray_shape`](crate::Raycast::ray_shape) falls back to the hull's
+    /// AABB in that case, which is a strictly looser shape.
     pub faces: Vec<[u32; 3]>,
 }
 
 /// Computes an exact 3D Convex Hull using the Quickhull algorithm.
+///
+/// The result's vertices are input points, unchanged and in the input's coordinate
+/// frame; points strictly inside the hull are discarded, except in the degenerate
+/// cases below, where the input is passed through instead.
+///
+/// # Degenerate input
+///
+/// This never panics and never returns an error. Every input that cannot bound a
+/// volume comes back with **empty [`faces`](ConvexHull::faces)** and a reduced
+/// vertex list, so callers must test `faces.is_empty()` instead of assuming a
+/// surface exists:
+///
+/// - fewer than 4 points → the input verbatim;
+/// - all points coincident (within roughly 1e-4) → a single vertex;
+/// - collinear → the two endpoints of the segment;
+/// - coplanar → the roughly deduplicated planar points.
+///
+/// # Determinism
+///
+/// The same input yields the same output on the same platform: the build resolves
+/// its free choices through ordered containers rather than hash iteration, which is
+/// what keeps a hull-derived collider identical across a replay or a rollback.
 #[tracing::instrument(skip_all, name = "convex_hull", fields(point_count = points.len()))]
 pub fn compute_convex_hull(points: &[Vec3]) -> ConvexHull {
     if points.len() < 4 {
