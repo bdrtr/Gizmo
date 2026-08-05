@@ -129,5 +129,7 @@ impl Hurtbox {
     }
 }
 
+#[cfg(feature = "ecs")]
 gizmo_core::impl_component!(Hitbox);
+#[cfg(feature = "ecs")]
 gizmo_core::impl_component!(Hurtbox);

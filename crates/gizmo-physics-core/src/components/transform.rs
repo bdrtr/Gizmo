@@ -219,6 +219,7 @@ impl Transform {
     }
 }
 
+#[cfg(feature = "ecs")]
 gizmo_core::impl_component!(Transform);
 
 /// The composed world matrix of an entity, produced by the engine's transform-propagation
@@ -256,6 +257,7 @@ impl GlobalTransform {
     }
 }
 
+#[cfg(feature = "ecs")]
 gizmo_core::impl_component!(GlobalTransform);
 
 // ─────────────────────────────────────────────────────────────────────────────

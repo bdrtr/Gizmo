@@ -3,19 +3,36 @@ name = "gizmo-physics-core"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
-description.workspace = true
+# Own description/keywords rather than the workspace's: this crate is publishable on its own
+# merits — with `default-features = false` it is a dependency-light collision and geometry
+# library, and the workspace blurb ("A custom ECS and physics engine…") would be misleading
+# for someone who wants exactly that.
+description = "Collision detection and geometry for the Gizmo engine: shapes, GJK/EPA, BVH, broadphase and raycasts. Usable without an ECS."
+keywords = ["collision-detection", "physics", "gjk", "bvh", "geometry"]
+categories = ["game-development", "algorithms"]
 license.workspace = true
 repository.workspace = true
 readme.workspace = true
 
 [features]
+# Default ON: the engine and every in-tree consumer want the ECS integration, and turning it
+# off is opt-out packaging, not a supported "lite" mode with different behaviour.
+#
+# OFF drops the `gizmo-core` dependency, so this crate becomes a standalone collision /
+# geometry library: shapes, GJK/EPA, BVH, broadphase, raycast, materials. What goes with it is
+# the ECS surface — the `Component` impls on every component type, and `components::fighter`,
+# whose `FighterController` owns a `FighterInputBuffer` that is driven by `gizmo-core`'s input
+# system (`Input` + `ActionMap`) and so cannot be separated from it without moving input too.
+default = ["ecs"]
+ecs = ["dep:gizmo-core"]
+
 # Optional `bevy_reflect` integration (see `gizmo-core`'s `reflect` feature).
 # OFF by default so `bevy_reflect` is absent from the public API at 1.0.
-reflect = ["dep:bevy_reflect", "gizmo-core/reflect"]
+reflect = ["dep:bevy_reflect", "ecs", "gizmo-core/reflect"]
 
 [dependencies]
 serde = { version = "1.0.228", features = ["derive"] }
-gizmo-core = { path = "../gizmo-core", version = "0.9.0" }
+gizmo-core = { path = "../gizmo-core", version = "0.9.0", optional = true }
 gizmo-math = { path = "../gizmo-math", version = "0.9.0" }
 arrayvec = "0.7.6"
 rustc-hash = "2"

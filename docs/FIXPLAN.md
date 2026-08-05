@@ -847,9 +847,21 @@ eklemekten ibaret.
 - ⬜ **C6** — Index buffer (`components/mesh.rs:8-9`) + mipmap + anizotropik filtreleme.
 
 ## Faz D — Ekosistem ve 1.0
-- ⬜ **D1** — `gizmo-core`'u fizik crate'lerinde opsiyonel yap (`ecs` feature'ı) + 4 fizik
-  crate'ine kendi README/description/keywords. `PhysicsWorld` **zaten ECS'siz** (60 dosyadan
-  5'i `gizmo_core`'a dokunuyor) → bu bir paketleme işi, yeniden yazım değil. 80 crate → ~40.
+- 🔄 **D1** — `gizmo-core`'u fizik crate'lerinde opsiyonel yap (`ecs` feature'ı).
+  **`gizmo-physics-core` bitti (2026-08-05):** `default = ["ecs"]`, kapatınca `gizmo-core`
+  graftan tamamen düşüyor (kalan: `gizmo-math`, `arrayvec`, `serde`, `tracing`). Kendi
+  description/keywords/categories'i de eklendi. Kalan: `-rigid`, `-dynamics`, `-soft`.
+
+  > **Plandaki ölçüm yanlıştı.** "60 dosyadan 5'i `gizmo_core`'a dokunuyor" yalnızca
+  > `gizmo-physics-rigid` için doğru (5/38). Gerçek: `-core` 10/28, `-dynamics` **5/7**,
+  > `-soft` **5/8** — yani dynamics ve soft için bu paketleme değil, ayrıştırma işi.
+  >
+  > `-core`'da bağımlılık iki şeye indi: 11 `impl_component!` çağrısı (önemsiz, `#[cfg]`
+  > yeterli) ve `FighterController`. İkincisi gerçek bir engeldi: bir `FighterInputBuffer`
+  > tutuyor ve o tipin `update`'i `&Input` + `&ActionMap` alıyor, yani girdi alt-sistemine
+  > bağlı. Taşımak tüm input sistemini taşımak demekti (ve workspace'te tek tüketicisi bu),
+  > o yüzden `components::fighter` modülü `ecs`'in arkasına alındı. `ecs` kapalıyken
+  > `FighterController` yok — kayıtlı ve kabul edilmiş bir ödün.
 - ⬜ **D2** — `ENGINE.md`'yi İngilizce'ye çevir + `///` yorumlarında İngilizce kuralı +
   `CONTRIBUTING.md`. Bus factor = 1'in tek sebebi bu.
 - ⬜ **D3** — Click-to-try WASM demosu (GitHub Pages).

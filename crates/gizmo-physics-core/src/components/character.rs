@@ -158,4 +158,5 @@ impl Default for CharacterController {
     }
 }
 
+#[cfg(feature = "ecs")]
 gizmo_core::impl_component!(CharacterController);
