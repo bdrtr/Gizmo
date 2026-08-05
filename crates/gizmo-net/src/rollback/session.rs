@@ -15,7 +15,26 @@ use std::collections::HashMap;
 
 /// Ağ taşıma soyutlaması — gerçek UDP ile test loopback'i aynı oturum kodunu kullanır.
 pub trait Transport {
+    /// Hands one packet to the network, best effort. Delivery, ordering and uniqueness
+    /// are all unguaranteed and failures are not reported back to the caller — by design:
+    /// [`RollbackSession`] absorbs loss by re-sending its last few local inputs (a
+    /// `tick-8..=tick` window) on every tick instead of asking for retransmission.
+    ///
+    /// Implementations must not block; this runs inline in the fixed-step loop. The
+    /// `UdpTransport` impl folds send errors into a `tracing::warn!`, and while its
+    /// `remote_addr` is still `None` (no peer known yet) it discards the packet without
+    /// even that — a session started before the peer is known simply loses its opening
+    /// ticks, which the resend window then papers over.
     fn send(&mut self, packet: &NetworkPacket);
+
+    /// Drains everything that has arrived since the last call and returns it in arrival
+    /// order; an empty `Vec` means nothing was waiting. Must never block — a poll that
+    /// waits for the peer stalls the simulation and defeats the point of rollback.
+    ///
+    /// Each packet is yielded exactly once; a second poll will not repeat it.
+    /// [`RollbackSession::advance`] calls this exactly once per tick, so poll cadence
+    /// *is* the tick rate — [`LoopbackTransport`] leans on that and uses the poll count
+    /// itself as the clock for its lag simulation.
     fn poll(&mut self) -> Vec<NetworkPacket>;
 }
 
@@ -44,6 +63,25 @@ pub struct LoopbackTransport {
 }
 
 impl LoopbackTransport {
+    /// Builds two connected endpoints: whatever one sends, the *other* polls. Each
+    /// endpoint is one-directional — a sender never receives its own packets — and both
+    /// are created with the same `lag` / `drop_modulo` settings, so the simulated link is
+    /// symmetric.
+    ///
+    /// `lag` is counted in **`poll()` calls on the receiving endpoint**, not seconds and
+    /// not ticks: with `lag = 2` a packet first surfaces on the receiver's third poll.
+    /// Since [`RollbackSession`] polls exactly once per tick, inside a session that does
+    /// amount to "N ticks of latency".
+    ///
+    /// `drop_modulo` discards every Nth packet **sent by that endpoint** (counted from 1,
+    /// tracked per endpoint); `0` disables loss entirely. Packets that survive keep their
+    /// send order.
+    ///
+    /// Deterministic by construction — no RNG, no wall clock — which is what lets the
+    /// convergence test assert exact `state_hash` equality against a ground-truth run
+    /// under lag *and* loss. Single-threaded only: the two queues are shared through
+    /// `Rc<RefCell<_>>`, so both endpoints must be driven from the same thread. This is
+    /// test scaffolding, not a shippable transport.
     pub fn pair(lag: u32, drop_modulo: u32) -> (Self, Self) {
         use std::cell::RefCell;
         use std::collections::VecDeque;
@@ -86,7 +124,26 @@ pub type ApplyInput = dyn Fn(&mut PhysicsWorld, u32, &PlayerInput);
 
 /// İki-oyunculu deterministik rollback oturumu (PhysicsWorld otoriter durum).
 pub struct RollbackSession<T: Transport> {
+    /// The authoritative simulation state. Public so gameplay and rendering can read it
+    /// (and so it can be seeded before the first tick), but [`RollbackSession::advance`]
+    /// may rewind and re-simulate it in place — anything read out of it belongs to a
+    /// *predicted* frontier and can change retroactively once the remote input for that
+    /// tick lands.
+    ///
+    /// The body set must stay fixed for the life of the session. Rollback restores
+    /// transforms/velocities/bodies/contacts/joints **by array index** and assumes
+    /// `entities` and `colliders` are untouched, so adding or removing a body mid-session
+    /// misaligns the SoA arrays and corrupts every subsequent restore.
     pub world: PhysicsWorld,
+
+    /// Ticks simulated so far, and therefore the tick `advance` will simulate next.
+    /// Starts at 0 and increments once per `advance`, after the step.
+    ///
+    /// A rollback never moves it backwards: re-simulation replays *up to* this tick
+    /// rather than rewinding the frontier, so the counter is monotonic. Ticks, not
+    /// seconds — simulated time is `tick * fixed_dt`. Nor is it a shared clock: each peer
+    /// advances its own and the session never stalls waiting for remote input (it
+    /// predicts instead), so two peers' tick counters drift apart in wall time.
     pub tick: u64,
     transport: T,
     local_id: u32,
@@ -102,6 +159,33 @@ pub struct RollbackSession<T: Transport> {
 }
 
 impl<T: Transport> RollbackSession<T> {
+    /// Wraps an already-populated `world` and a transport into a session that starts at
+    /// tick 0.
+    ///
+    /// Both peers must start from **bit-identical** worlds (same bodies, added in the
+    /// same order, same `fixed_dt`). Nothing here negotiates or verifies that, and a
+    /// mismatch never raises an error — it only shows up as `state_hash` values that
+    /// never converge. `local_id` / `remote_id` are opaque tags passed straight through
+    /// to the [`ApplyInput`] callback, and the two peers must mirror them: if A is
+    /// `(0, 1)`, B is `(1, 0)`.
+    ///
+    /// `max_rollback` is a count of **ticks** of snapshot history (at 60 Hz, `120` ≈ 2 s).
+    /// It is the hard limit on how late a corrected remote input may arrive: a
+    /// misprediction older than the window has no snapshot left to rewind to, so
+    /// `advance` can only log the desync and keep going — recovering from that needs a
+    /// [`NetworkPacket::FullState`] resync, which this type does not implement. It is
+    /// also the memory knob, since one full `WorldSnapshot` (all transforms, velocities,
+    /// rigid bodies, the contact warm-start cache and every joint) is retained per tick
+    /// in the window.
+    ///
+    /// `fixed_dt` is **seconds of simulated time per tick**, handed straight to
+    /// `PhysicsWorld::step`. The world sub-steps it internally at 240 Hz and carries the
+    /// remainder in an accumulator that is itself part of the snapshot, so a `dt` that is
+    /// not a whole multiple of 1/240 s still rewinds exactly.
+    ///
+    /// Input history is sized to `max(max_rollback + 8, 64)` ticks so it always outlives
+    /// the snapshot window — an input can never expire while a snapshot that needs it is
+    /// still around.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         world: PhysicsWorld,

@@ -24,7 +24,7 @@ pub enum Intersection {
 /// Points where `normal · X + distance > 0` are on the "positive" side.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Plane {
-    /// Unit-length outward normal.
+    /// Unit-length plane normal.
     pub normal: Vec3A,
     /// Signed distance from the origin along the normal.
     pub distance: f32,
@@ -91,7 +91,8 @@ impl Plane {
 /// For OpenGL (Z ∈ [−1, 1]) swap the near-plane extraction (see comments).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Frustum {
-    /// `[left, right, bottom, top, near, far]` — all outward-facing.
+    /// `[left, right, bottom, top, near, far]` — normals point into the frustum, so a
+    /// point inside is on the positive side of all six.
     pub planes: [Plane; 6],
 }
 

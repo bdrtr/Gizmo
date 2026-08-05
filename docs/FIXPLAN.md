@@ -853,7 +853,37 @@ eklemekten ibaret.
 - ⬜ **D2** — `ENGINE.md`'yi İngilizce'ye çevir + `///` yorumlarında İngilizce kuralı +
   `CONTRIBUTING.md`. Bus factor = 1'in tek sebebi bu.
 - ⬜ **D3** — Click-to-try WASM demosu (GitHub Pages).
-- ⬜ **D4** — `#![warn(missing_docs)]` Stage A'da (public API'nin %53'ü belgesiz).
+- 🔄 **D4** — `#![warn(missing_docs)]` Stage A'da. **1. parti bitti (2026-08-05):**
+  `gizmo-math`, `gizmo-net`, `gizmo-scene`, `gizmo-animation` sıfır eksik dokümanla ratchet
+  altında. Kalan: `gizmo-core` (351), `gizmo-physics-rigid` (303), `gizmo-physics-core` (243),
+  `gizmo-ai` (116), `gizmo-physics-dynamics` (93), `gizmo-physics-soft` (77) = **1183 öğe**.
+  (`gizmo-audio` zaten temizdi.)
+
+  > **Fan-out doküman yazmanın başarısızlık modu dolgu yazı DEĞİL.** Anti-filler talimatı
+  > tuttu: üç tur boyunca dört crate'te sıfır dolgu bulundu. Bulunan şey **kendinden emin ve
+  > yanlış** dokümanlardı — 38 → 16 → 9, her turda düşerek. Örnekler: "`cos(0)` ONE'a eşit
+  > değil" (eşit, 65536 == 65536), "hiçbir zaman JSON değildi" (f6ab53b'de serde_json),
+  > "wasm'da UdpSocket yok" (derleniyor), "Lua API ve editör kullanıyor" (ikisi de yok).
+  >
+  > Ortak paydası: iddiaların neredeyse tamamı **modüller arası** — "renderer şunu normalize
+  > eder", "X çağırır", "SAP broadphase'le paylaşılır". Tek dosyaya bakan bir ajanın
+  > doğrulayamayacağı, dolayısıyla uyduracağı tür. 3. turun talimatı bu yüzden
+  > "belirsizse SİL, yeniden yazma" oldu ve yakınsamayı hızlandırdı.
+  >
+  > **Sonraki partiler için kural:** öğenin KENDİ sözleşmesini belgele (birim, aralık, yerel
+  > invaryant, fonksiyonun kendi davranışı). Uzak tüketici hakkında iddia, ancak elle
+  > doğrulanmışsa yazılsın. Bir de: kendi yazdığım `evaluate_clip` dokümanını denetim ajanı
+  > düzeltti (`Hips` kontrolü çözümlenmiş eklemin adında değil, `track.target_node_name`
+  > üzerinde) — bu hata modundan kimse muaf değil.
+
+- ⬜ **D4-followup — `Track::sample` tek keyframe + NaN'de PANİKLİYOR.** Doküman turunda
+  bulundu, gerçek koda karşı doğrulandı (probe: `single_kf_nan_time panicked=true`,
+  `single_nan_timestamp panicked=true`, iki-keyframe kontrolü `false`). `clip.rs:218`
+  `idx.clamp(1, len - 1)` yapıyor; `len == 1` ve NaN her iki erken-dönüşü de atlattığında
+  bu `0.clamp(1, 0)` oluyor ve `Ord::clamp` `min > max` diye panikliyor. İronik olarak
+  `clip.rs:213-215`'teki yorum bu clamp'in NaN koruması olduğunu söylüyor — panikleyen şey o.
+  Şimdilik yalnızca BELGELENDİ (doküman commit'ine davranış değişikliği karıştırmamak için);
+  düzeltme tek satırlık bir `len < 2` erken-dönüşü + regresyon testi.
 - ✅ **D5 — `glam` 0.29 → 0.32 + `bevy_reflect` 0.15 → 0.19** *(2026-08-04)*. Grafta artık
   TEK glam var (0.32.1). Fizik kıpırdamadı: hash `EF6E4AC3644BF3BA`, `golden_state.rs`'in
   hiçbir değeri yeniden kutsanmadı — bir matematik kütüphanesinin major bump'ı sessiz sayısal

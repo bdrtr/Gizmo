@@ -8,7 +8,12 @@ pub struct PlayerInput {
     pub tick: u64,
     /// Bitmask of pressed buttons.
     pub buttons: u32,
-    pub joystick_x: i8, // -127 to 127
+    /// Horizontal analog-stick axis, range -127..=127.
+    ///
+    /// Quantised to a byte on purpose: rollback re-simulates from stored inputs, so the input
+    /// itself has to be exactly reproducible. A float axis would make the replay depend on the
+    /// sender's rounding.
+    pub joystick_x: i8,
     /// Vertical analog-stick axis, range -127..=127.
     pub joystick_y: i8,
 }

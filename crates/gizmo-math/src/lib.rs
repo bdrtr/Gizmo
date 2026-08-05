@@ -1,3 +1,9 @@
+#![warn(missing_docs)]
+//! (`missing_docs` is a RATCHET, not a suggestion. The CI lint gate runs with `-D warnings`,
+//! so every public item in this crate must carry a doc comment or the build fails. This crate
+//! is Stage A — the dependency-light core that goes to 1.x first — and its documented surface
+//! is part of that promise. Do not silence this with `#[allow]`; write the doc.)
+
 //! # Gizmo Math
 //!
 //! Gizmo Engine'nin temel matematik altyapısını ve render/fizik veri tiplerini barındırır.
@@ -21,12 +27,51 @@
 //!
 //! Consequence for semver: a `glam` **major** version bump is a breaking change
 //! for `gizmo-math` (and thus a deliberate, documented `gizmo-math` bump).
-//! Currently pinned to the `0.29` line.
+//! Currently pinned to the `0.32` line.
 
+/// Axis-aligned bounding boxes — the engine's universal "cheap bound".
+///
+/// Lives down here in `gizmo-math` because the same [`Aabb`] type is used by both the
+/// physics and the rendering crates rather than belonging to any one consumer.
 pub mod aabb;
+
+/// **Experimental** Q16.16 fixed-point arithmetic ([`Fp32`], [`FpVec3`]). **The
+/// simulation does not use it.**
+///
+/// Physics state (transforms, velocities, the solver) runs entirely on `glam`/`f32`;
+/// the determinism guarantee this engine actually ships is *same-platform* replay and
+/// rollback bit-equality, not cross-platform bit-exactness. This module is groundwork
+/// for a possible future lock-step / cross-platform-deterministic mode and is currently
+/// referenced by nothing outside `gizmo-math` itself. It has unit tests but no coverage
+/// from the physics soak/determinism gates — treat it as a sketch, not production maths.
 pub mod fixed;
+
+/// View-frustum plane extraction and volume classification for culling.
+///
+/// Produces six half-spaces from a `Projection × View` matrix (Gribb–Hartmann) and
+/// classifies an [`Aabb`] as `Inside` / `Partial` / `Outside`.
+/// The three-way answer is the point: a hierarchy node that comes back `Inside` lets
+/// the whole subtree skip plane tests. Assumes WGPU/Vulkan/D3D NDC depth (Z ∈ [0, 1]).
+///
+/// The plane normals point *into* the frustum, so a visible point has a non-negative
+/// [`Plane::signed_distance`] against all six.
 pub mod frustum;
+
+/// Ray casting against analytic primitives (AABB, OBB, triangle).
+///
+/// This is the *rendering/tooling* ray — `Vec3A`-based, with an NDC unprojection
+/// constructor for camera picking. The physics scene queries use their own `Ray` type in
+/// `gizmo-physics-core` (`Vec3`-based, different degenerate-direction fallback); the
+/// two are deliberately separate and must not be assumed interchangeable.
 pub mod ray;
+
+/// Plücker (6-D "spatial") vectors, matrices and inertias for Featherstone-style
+/// articulated-body dynamics.
+///
+/// **Consumed only by the experimental `experimental-multibody` feature of
+/// `gizmo-physics-rigid`** (the ABA solver). The mainline rigid-body pipeline —
+/// broadphase, narrowphase, TGS-Soft sequential impulses — never touches these types,
+/// so changes here cannot perturb the `headless_stress_test` determinism gate.
 pub mod spatial;
 
 /// The engine's vector-math vocabulary, re-exported **directly from `glam`**

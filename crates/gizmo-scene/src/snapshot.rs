@@ -1,13 +1,33 @@
-//! SceneSnapshot — Play/Stop Modu için in-memory sahne yedeği
+//! In-memory scene backup for the editor's Play/Stop mode.
 //!
-//! Editörde "Play" butonuna basıldığında tüm sahne durumu (entity'ler, fizik
-//! bileşenleri, transform'lar) belleğe snapshot olarak alınır. "Stop"
-//! butonuna basıldığında bu snapshot'tan geri yükleme yapılır.
+//! Pressing **Play** captures the editable part of the world
+//! ([`SceneSnapshot::capture`]); pressing **Stop** writes it back
+//! ([`SceneSnapshot::restore`]). Nothing goes through the filesystem and no RON *file* is
+//! produced, so a capture costs microseconds and can be taken every single time the user
+//! starts the simulation. The in-tree caller is `gizmo-studio`'s `render_studio`, which
+//! parks the snapshot in `EditorState::play_snapshot` for the duration of Play.
 //!
-//! Avantajlar:
-//! - Disk I/O yok → anlık snapshot/restore (~mikrosaniye)
-//! - Fizik state korunur (velocity, angular_velocity, sleep state)
-//! - Serileştirme gerektirmeyen bileşenler de yedeklenir
+//! Why this exists next to [`SceneData`](crate::scene::SceneData), which can already
+//! round-trip a world through disk:
+//!
+//! - No file I/O and no RON *file* to write or parse on a path the user hits constantly.
+//!   Individual components are still RON-encoded per entity, in both directions — see
+//!   [`RestoreResult::duration`].
+//! - [`restore`](SceneSnapshot::restore) **overwrites entities in place** instead of
+//!   clearing the scene and respawning it, so everything the
+//!   [`SceneRegistry`](crate::SceneRegistry) does *not* know about — mesh and material
+//!   handles, hierarchy links, renderer-side state — survives Stop. Until 2026-05-14 restore
+//!   really did despawn every non-protected entity and re-spawn bare copies, and objects
+//!   visually vanished the moment the user pressed Stop.
+//!
+//! What it is **not**: a save format, and not a physics rollback.
+//! [`SceneSnapshot`] holds an `Instant` and is deliberately not `Serialize`; only the
+//! components in the registry handed to `capture` are stored (so no `MeshSource`,
+//! `MaterialSource` or `Parent`, unlike [`EntityData`](crate::scene::EntityData)); the
+//! `PhysicsWorld` resource — joints, contact caches, broadphase — is touched by neither
+//! half; and `#[serde(skip)]` fields inside captured components (e.g. `Velocity`'s
+//! `pre_linear`/`pre_angular` integrator history) come back at their `Default`, not at
+//! their Play-time values.
 
 use gizmo_core::World;
 
@@ -16,26 +36,101 @@ use web_time::Instant;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
 
-/// Tek bir entity'nin in-memory yedeği
+/// One entity's captured state: its name plus every registry-known component, each already
+/// serialized to a RON string.
+///
+/// Only [`SceneSnapshot::capture`] produces these, and it drops three groups on the floor:
+/// protected ids, the editor's own scaffolding, and entities that would produce an empty row
+/// (no name and no registered component). The first two are skipped again by
+/// [`SceneSnapshot::restore`] and so survive untouched; the third is not — a row-less entity
+/// is indistinguishable from one Play created, and Stop despawns it.
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
 pub struct EntitySnapshot {
+    /// Raw ECS entity id (the `u32` slot), with the generation deliberately dropped.
+    ///
+    /// Restore matches on this id alone. If a live entity still occupies the slot its
+    /// components are overwritten in place — that is what keeps mesh/material handles alive
+    /// across Play→Stop; if the slot is free, a replacement is spawned and, because the
+    /// allocator's free list is FIFO, it may come back under a *different* id. Two
+    /// consequences follow: raw ids held elsewhere (`Parent` links) can dangle after Stop,
+    /// and a Play-time entity that happens to sit on a captured id is not despawned but
+    /// written over.
     pub entity_id: u32,
+    /// Copy of the entity's [`EntityName`](gizmo_core::EntityName) at capture time, `None`
+    /// for unnamed entities.
+    ///
+    /// The only state captured outside the registry, and the reason a bare marker/group
+    /// entity is snapshotted at all — the capture filter keeps a row when it has a name *or*
+    /// at least one component. Restore re-adds it through `EntityName::new`, so the name
+    /// returns even on a respawned entity, unlike its mesh or its place in the hierarchy.
+    /// Names are also the editor filter: an entity called `"Editor …"` or `"Highlight Box"`
+    /// is never captured in the first place.
     pub name: Option<String>,
+    /// Registered components keyed by their [`SceneRegistry`](crate::SceneRegistry) name
+    /// (`"Transform"`, `"RigidBody"`, …), each value the component serialized to a RON
+    /// string — through `bevy_reflect` when the `reflect` feature is on, through plain
+    /// `serde` otherwise.
+    ///
+    /// A `BTreeMap`, so restore re-inserts components in name order rather than in the
+    /// archetype order they were read in: deterministic, but not the original insertion
+    /// order. Only what the registry passed to `capture` knows about lands here; anything
+    /// else (renderer handles, `Parent`/`Children`) is simply absent. A component whose
+    /// serializer fails is dropped from this map and counted in the `tracing::warn!` that
+    /// capture emits — that state is gone at Stop, and the warning is the only trace of it.
     pub components: std::collections::BTreeMap<String, String>,
 }
 
-/// Tüm sahnenin in-memory snapshot'ı
+/// A whole scene held in memory, ready to be put back by [`restore`](Self::restore).
+///
+/// Cheap to take and cheap to hold — a `Vec` of per-entity maps of short RON strings — which
+/// is why the editor keeps one alive for the entire Play session. It describes one specific
+/// `World`: restoring into a different world would overwrite whatever entities happen to
+/// occupy the same ids.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct SceneSnapshot {
+    /// The captured entities in ascending entity-id order (`World::iter_alive_entities`
+    /// walks id slots `0..next_entity_id`), minus protected/editor entities and entities
+    /// with neither a name nor a registered component. Position in this `Vec` is *not* an
+    /// id — read [`EntitySnapshot::entity_id`] for that.
     pub entities: Vec<EntitySnapshot>,
+    /// Monotonic clock reading taken when `capture` finished (`web_time::Instant` on wasm32,
+    /// `std::time::Instant` everywhere else).
+    ///
+    /// Only [`age`](Self::age) reads it, and nothing about restore depends on it — a
+    /// snapshot never goes stale. It is also why this type is not `Serialize`: an `Instant`
+    /// is meaningless outside the process that took it, which keeps the snapshot honestly
+    /// memory-only.
     pub timestamp: Instant,
 }
 
 impl SceneSnapshot {
-    /// Mevcut World durumunu in-memory snapshot olarak yakalar.
-    /// `protected_ids`: Editor kamerası, highlight box gibi korunacak entity'ler
+    /// Captures the current world into an in-memory snapshot — the Play half of Play/Stop.
+    ///
+    /// Every component `registry` knows about is read off every live entity and serialized
+    /// to a RON string; nothing touches the disk. Three groups are deliberately skipped:
+    ///
+    /// - ids in `protected_ids` — the editor camera, gizmos and their whole subtree; the
+    ///   caller collects them (`gizmo-studio::collect_protected_ids` walks `Children`
+    ///   breadth-first). Protected entities keep running through Play/Stop untouched.
+    /// - entities whose name starts with `"Editor "` or equals `"Highlight Box"`, i.e. the
+    ///   editor's name-tagged scaffolding even when it is not in the explicit set.
+    /// - entities that would produce an empty row: no name and no registered component.
+    ///
+    /// Components that fail to serialize are skipped, counted, and reported via
+    /// `tracing::warn!` — a component dropped here is state that Play→Stop will silently
+    /// lose, so that warning is the only signal you get. The whole call is traced as
+    /// `snapshot_capture` with entity/component counts and a duration in ms.
+    ///
+    /// Cost is O(live entities × components on them) plus one RON encode per component;
+    /// editor-sized scenes land in the microsecond range.
+    ///
+    /// A bug worth not reintroducing: the lookup used to fabricate `Entity::new(id, 0)`.
+    /// For any entity sitting on a recycled id slot (despawn→spawn, generation ≥ 1) the
+    /// generation check then failed, `entity_component_types` returned empty, and every
+    /// dynamic component — `Transform`, `RigidBody`, `Collider` — vanished from the snapshot
+    /// without a word. Pinned by `capture_preserves_components_for_recycled_id_entity`.
     #[tracing::instrument(skip_all, name = "snapshot_capture")]
     pub fn capture(
         world: &World,
@@ -120,12 +215,47 @@ impl SceneSnapshot {
         snapshot
     }
 
-    /// Snapshot'tan geri yükleme yapar. Mevcut entity'leri siler (korunanlar hariç)
-    /// ve snapshot'taki entity'leri yeniden oluşturur.
+    /// Puts the snapshot back — the Stop half of Play/Stop — and reports what it did in a
+    /// [`RestoreResult`].
     ///
-    /// **Not:** Mesh ve Material gibi GPU kaynaklarını restore etmek için
-    /// tam sahne yüklemesi yapılmalıdır. Bu fonksiyon yalnızca fizik/transform
-    /// bileşenlerini geri yükler.
+    /// Two phases, in order:
+    ///
+    /// 1. Every entity that is *not* in the snapshot is despawned — in practice mostly the
+    ///    entities Play created (bullets, debris, fracture fragments), but NOT exactly that
+    ///    set: `capture` only records an entity that has a name or at least one
+    ///    registry-known component, so a row-less entity that predated Play is absent from
+    ///    the snapshot too and is deleted here. See [`EntitySnapshot`] for that caveat — a
+    ///    bare `Children`-only group node with no name is the realistic case.
+    ///    `protected_ids` and the same
+    ///    `"Editor …"` / `"Highlight Box"` name filter capture uses are applied again here, so
+    ///    pass the *current* protected set: an editor entity missing from it would be deleted,
+    ///    since it is not in the snapshot either.
+    /// 2. For each snapshot row the name and the registered components are written **on top
+    ///    of** whatever entity still holds that id; a replacement is spawned only when the
+    ///    id slot has gone free.
+    ///
+    /// Overwriting instead of clear-and-respawn is the whole point. Mesh/material handles
+    /// and hierarchy are not in the snapshot (the registry does not carry them), so an entity
+    /// that is despawned and rebuilt comes back invisible — which is precisely what Stop did
+    /// until 2026-05-14.
+    ///
+    /// Consequences of that design, all intentional:
+    ///
+    /// - Restore only adds and overwrites, it never removes. A component gained during Play
+    ///   (a `Collider` attached at runtime, say) is still attached after Stop.
+    /// - An entity deleted during Play returns with its name and registered components only:
+    ///   mesh, material and parent link are gone, and `World::spawn` may hand it a different
+    ///   id (the free list is FIFO).
+    /// - The `PhysicsWorld` resource — joints, contact caches, broadphase — is not touched.
+    ///   Only components are restored; joints created during Play stay.
+    ///
+    /// Per-component failures (a deserialize error, or a name this registry does not know)
+    /// do not abort the restore: they are counted and logged with `tracing::warn!`, because
+    /// the entity then silently comes back carrying less state than it had at Play. The
+    /// `let _ = …` that used to swallow those errors is exactly how that went unnoticed.
+    ///
+    /// To bring GPU-side resources back as well, reload the scene from disk with
+    /// [`SceneData::load_into`](crate::scene::SceneData::load_into) instead.
     #[tracing::instrument(skip_all, name = "snapshot_restore")]
     pub fn restore(
         &self,
@@ -241,26 +371,62 @@ impl SceneSnapshot {
         result
     }
 
-    /// Snapshot'taki entity sayısı
+    /// How many entities this snapshot will write back — deliberately *not* the world's
+    /// entity count: protected ids, editor scaffolding and entities with nothing worth
+    /// saving were filtered out at capture time.
+    ///
+    /// The editor reports it in its "▶ Play: N entity…" line, and it is also exactly what
+    /// [`RestoreResult::restored`] will come back as, since restore counts rows processed
+    /// rather than rows that fully succeeded.
     pub fn entity_count(&self) -> usize {
         self.entities.len()
     }
 
-    /// Snapshot'ın alındığı zamandan bu yana geçen süre
+    /// Time elapsed on the monotonic clock since [`capture`](Self::capture) finished.
+    ///
+    /// A convenience for editor UI ("snapshot taken 12 s ago"). Nothing in the engine reads
+    /// it today, and it has no bearing on [`restore`](Self::restore) — a snapshot does not
+    /// expire.
     pub fn age(&self) -> std::time::Duration {
         self.timestamp.elapsed()
     }
 }
 
-/// Geri yükleme sonucu istatistikleri
+/// What one [`SceneSnapshot::restore`] actually did — the numbers the editor prints in its
+/// status line after Stop.
+///
+/// Counters only. Per-component failures are not represented here (they go to
+/// `tracing::warn!`), so a restore whose counts look perfect can still have lost state.
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
 pub struct RestoreResult {
+    /// Entities despawned in phase 1 because they were alive in the world but absent from
+    /// the snapshot. Mostly what Play spawned, but see [`SceneSnapshot::restore`]: an entity
+    /// that `capture` skipped for having neither a name nor a registry-known component is
+    /// also absent, and so is counted here. Protected ids and editor scaffolding are
+    /// filtered out before the despawn list is built, so they can never appear in this
+    /// count.
     pub despawned: u32,
+    /// Snapshot rows applied in phase 2, counting entities overwritten in place and
+    /// respawned ones alike.
+    ///
+    /// Incremented once per row unconditionally, so it always equals
+    /// [`SceneSnapshot::entity_count`]: it means "the snapshot was applied", not "every
+    /// component came back". Component-level losses only show up in the log.
     pub restored: u32,
+    /// Wall-clock duration of the whole `restore` call, taken from the monotonic clock and
+    /// covering the despawn pass plus every RON decode. Sub-millisecond for editor-sized
+    /// scenes; the [`Display`](std::fmt::Display) impl renders it in milliseconds.
     pub duration: std::time::Duration,
 }
 
+/// Turkish one-line summary of a restore:
+/// `"Restore: {despawned} entity silindi, {restored} entity geri yüklendi ({ms:.2}ms)"`.
+///
+/// Nothing in the engine formats a `RestoreResult` this way — `gizmo-studio` builds its own
+/// Stop line out of the fields — so the only consumer is
+/// `restore_result_display_formats_counts_and_millis`, which asserts on both counts and the
+/// two-decimal millisecond formatting.
 impl std::fmt::Display for RestoreResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -470,8 +636,8 @@ mod tests {
         );
     }
 
-    // `RestoreResult`'s Display is surfaced in the editor status line; its formatting
-    // (counts + milliseconds to 2 dp) is a stable contract.
+    // `RestoreResult`'s Display formatting (counts + milliseconds to 2 dp) is a stable
+    // contract.
     #[test]
     fn restore_result_display_formats_counts_and_millis() {
         let result = RestoreResult {

@@ -2,35 +2,96 @@ use crate::{Mat3, Vec3};
 use std::ops::{Add, Mul, Sub};
 use serde::{Deserialize, Serialize};
 
-/// Plücker Coordinate (Spatial Vector)
-/// Temsil ettiği kavrama göre:
-/// - Hız (Velocity): [angular_velocity, linear_velocity]
-/// - Kuvvet (Force): [moment, force]
-/// - İvme (Acceleration): [angular_acceleration, linear_acceleration]
+/// A Plücker coordinate — a 6-D "spatial" vector held as two `Vec3` halves, **angular
+/// first**.
+///
+/// One type carries three different physical quantities in Featherstone's formulation,
+/// and the units follow from which one you are holding:
+///
+/// | Read as | `w` (angular half) | `v` (linear half) |
+/// |---|---|---|
+/// | Motion — velocity     | angular velocity, rad/s   | linear velocity, m/s |
+/// | Motion — acceleration | angular accel., rad/s²    | linear accel., m/s²  |
+/// | Force                 | moment / torque, N·m      | force, N             |
+///
+/// Nothing in the type system separates a motion vector from a force vector, so pairing
+/// them correctly is the caller's job: [`SpatialVector::cross_motion`] is the
+/// motion×motion operator (`v×`), [`SpatialVector::cross_force`] the motion×force
+/// operator (`v×*`), and substituting one for the other compiles and silently produces
+/// wrong Coriolis terms. [`SpatialVector::dot`] is the dual pairing, so
+/// `force.dot(motion)` is power in watts.
+///
+/// Only the experimental `experimental-multibody` ABA solver uses this — see the module
+/// docs.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 pub struct SpatialVector {
+    /// Angular half, stored **first**: angular velocity (rad/s), angular acceleration
+    /// (rad/s²) or moment (N·m) depending on interpretation.
+    ///
+    /// The `[angular; linear]` ordering is not cosmetic — it is what makes the block
+    /// layout of [`SpatialMatrix`] line up (`m00`/`m01` act on `w`) and what
+    /// [`SpatialInertia::to_matrix`] assumes. Swapping the convention would silently
+    /// transpose every 6×6 in the solver.
     pub w: Vec3, // Angular part (w)
+    /// Linear half: linear velocity (m/s), linear acceleration (m/s²) or force (N).
+    ///
+    /// For a *motion* vector this is the velocity of the body-fixed point currently
+    /// coincident with the **frame origin**, not of the centre of mass — which is why a
+    /// body in pure rotation about a distant origin still has a non-zero `v`, and why
+    /// [`SpatialInertia`] has to carry a COM offset at all.
     pub v: Vec3, // Linear part (v)
 }
 
 impl SpatialVector {
-    /// The zero spatial vector (both angular and linear parts are zero).
+    /// Both halves zero — the additive identity, and the meaningful "no motion / no
+    /// load" state for every interpretation in the table above.
+    ///
+    /// ABA leans on it in two distinct ways: as the motionless-base state (an articulated
+    /// tree's default base velocity and acceleration, and the bias acceleration `c` of a
+    /// fixed-base root link), and as the *result* of a `Fixed` joint's motion subspace `S`.
+    /// The latter is why `S = ZERO` must not be treated as "uninitialised": it drives
+    /// `D = SᵀI^A S` to zero, which the solver reads as a locked joint and handles by
+    /// propagating the child's full inertia to the parent.
     pub const ZERO: Self = Self {
         w: Vec3::ZERO,
         v: Vec3::ZERO,
     };
 
-    /// Creates a spatial vector from an angular part `w` and a linear part `v`.
+    /// Assembles a spatial vector from its angular part `w` and linear part `v`, in
+    /// that order.
+    ///
+    /// Argument order is the trap: for a **force** the angular slot holds the moment
+    /// and the linear slot the force, so a torque-only load is `new(torque, Vec3::ZERO)`
+    /// — the opposite of how one usually says "force and torque".
     pub fn new(w: Vec3, v: Vec3) -> Self {
         Self { w, v }
     }
 
-    /// Dot çarpımı (Force * Velocity = Power)
+    /// The dual pairing of the two Plücker halves: `w·w' + v·v'`.
+    ///
+    /// Physically meaningful when one operand is a **force** and the other a **motion**,
+    /// in which case the result is power in watts (`τ·ω + f·v`). The solver also uses it
+    /// as `Sᵀ p` (joint force projected onto the motion subspace, N·m or N) and as
+    /// `Sᵀ U` to form the articulated joint inertia `D`.
+    ///
+    /// Applying it to two motion vectors is just the Euclidean 6-norm and carries no
+    /// physical meaning — the tests do so only to check the arithmetic.
     pub fn dot(self, other: Self) -> f32 {
         self.w.dot(other.w) + self.v.dot(other.v)
     }
 
-    /// Cross product for Spatial Velocities (Motion x Motion)
+    /// Spatial motion cross product `self × other` (Featherstone's `v×`), for combining
+    /// two **motion** vectors.
+    ///
+    /// The angular halves cross as usual while the linear half picks up both coupling
+    /// terms, which is what turns a parent's velocity plus a joint's velocity into the
+    /// Coriolis/centrifugal bias acceleration `c = v × v_J` in ABA's first pass.
+    /// `x.cross_motion(x)` is the zero vector in both halves: the two coupling terms
+    /// `w×v` and `v×w` are formed from the same pairwise products, so they cancel
+    /// exactly rather than merely to within rounding.
+    ///
+    /// Passing a force vector as either operand is a silent modelling error; use
+    /// [`SpatialVector::cross_force`] instead.
     pub fn cross_motion(self, other: Self) -> Self {
         Self {
             w: self.w.cross(other.w),
@@ -38,7 +99,14 @@ impl SpatialVector {
         }
     }
 
-    /// Cross product for Spatial Forces (Motion x Force)
+    /// Spatial force cross product (Featherstone's `v×*`): `self` must be a **motion**
+    /// vector, `f` a **force** vector, and the result is a force.
+    ///
+    /// This is the dual operator to [`SpatialVector::cross_motion`], not a re-ordering
+    /// of it — the coupling terms land in the other half, because a force's angular slot
+    /// is a moment rather than an angular rate. ABA uses it once per link to build the
+    /// velocity-product bias force `p^A = v ×* (I v)`, i.e. the gyroscopic/centrifugal
+    /// term that must be cancelled before the joint accelerations can be solved.
     pub fn cross_force(self, f: Self) -> Self {
         Self {
             w: self.w.cross(f.w) + self.v.cross(f.v),
@@ -46,7 +114,17 @@ impl SpatialVector {
         }
     }
 
-    /// U * U^T = 6x6 Spatial Matrix
+    /// Outer product `self · otherᵀ`, expanding two 6-vectors into a rank-1 6×6
+    /// [`SpatialMatrix`].
+    ///
+    /// Each block is the 3×3 outer product of the corresponding halves
+    /// (`m00 = w⊗w'`, `m01 = w⊗v'`, `m10 = v⊗w'`, `m11 = v⊗v'`), so element `(i, j)` is
+    /// `self[i] * other[j]`.
+    ///
+    /// Exists for exactly one caller: ABA's backward pass forms `U D⁻¹ Uᵀ` as
+    /// `u_vec.outer_product(u_vec).mul_scalar(1.0 / d)` and subtracts it from the
+    /// articulated inertia. That subtraction is only taken when `D` is non-singular
+    /// (`d > 1e-6`); a fixed or singular joint keeps the full inertia instead.
     pub fn outer_product(self, other: Self) -> SpatialMatrix {
         let outer = |a: Vec3, b: Vec3| -> Mat3 { Mat3::from_cols(a * b.x, a * b.y, a * b.z) };
         SpatialMatrix {
@@ -88,17 +166,50 @@ impl Mul<f32> for SpatialVector {
     }
 }
 
-/// 6x6 Spatial Matrix (Articulated Body Inertia)
+/// A dense 6×6 spatial matrix, stored as four 3×3 blocks.
+///
+/// Blocked to match [`SpatialVector`]'s `[angular; linear]` ordering:
+///
+/// ```text
+/// | m00  m01 |   | w |
+/// | m10  m11 | · | v |
+/// ```
+///
+/// In the ABA solver this is the **articulated-body inertia** `I^A` — the effective
+/// inertia a link presents to its parent once its whole subtree is folded in — and the
+/// rank-1 term `U D⁻¹ Uᵀ` subtracted from it.
+///
+/// It is a plain container with no invariants: a physical articulated inertia is
+/// symmetric (`m01 == m10ᵀ`), but nothing here enforces or checks that, and the solver
+/// rebuilds the blocks by hand when transforming a child's inertia into its parent's
+/// frame.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 pub struct SpatialMatrix {
+    /// Angular-out / angular-in block. For an inertia built by
+    /// [`SpatialInertia::to_matrix`] this is the rotational inertia **about the frame
+    /// origin** (kg·m²), i.e. the COM tensor with the parallel-axis shift already
+    /// applied — not the same thing as [`SpatialInertia::rot`].
     pub m00: Mat3,
+    /// Angular-out / linear-in block. For an inertia this is `m·[c]×` (kg·m), the
+    /// coupling that vanishes exactly when the centre of mass sits on the frame origin.
     pub m01: Mat3,
+    /// Linear-out / angular-in block. For an inertia this is `m·[c]×ᵀ`, which by skew
+    /// symmetry equals `−m·[c]×`, i.e. `m01ᵀ`
+    /// (`spatial_inertia_to_matrix_skew_symmetric` pins that relationship).
     pub m10: Mat3,
+    /// Linear-out / linear-in block. For an inertia this is just `m·I₃` — mass in
+    /// kilograms on the diagonal, no coupling.
     pub m11: Mat3,
 }
 
 impl SpatialMatrix {
-    /// The zero 6x6 spatial matrix (all four 3x3 blocks are zero).
+    /// All four blocks zero — the additive identity.
+    ///
+    /// Not a usable inertia on its own: applied to any motion it yields zero force, and
+    /// the resulting `D` is singular, so a link whose `I^A` comes out zero gets `q̈ = 0`
+    /// from the solver's `d_val > 1e-6` guard rather than a division by zero. It is not
+    /// the ABA accumulator seed either — the backward pass accumulates into each link's
+    /// own rigid-body inertia (`inertia.to_matrix()`), not into `ZERO`.
     pub const ZERO: Self = Self {
         m00: Mat3::ZERO,
         m01: Mat3::ZERO,
@@ -106,7 +217,13 @@ impl SpatialMatrix {
         m11: Mat3::ZERO,
     };
 
-    /// Multiplies this 6x6 spatial matrix by a spatial vector.
+    /// Applies the 6×6 to a spatial vector, blockwise.
+    ///
+    /// When `self` is an inertia this maps a **motion** vector to a **force** vector:
+    /// a velocity in gives spatial momentum out (angular half N·m·s, linear half N·s),
+    /// an acceleration in gives moment/force out (N·m and N). The result is *not*
+    /// interchangeable with the input — see [`SpatialVector`] on why that distinction is
+    /// unchecked.
     pub fn mul_vec(self, v: SpatialVector) -> SpatialVector {
         SpatialVector {
             w: self.m00 * v.w + self.m01 * v.v,
@@ -114,7 +231,12 @@ impl SpatialMatrix {
         }
     }
 
-    /// Scales every block of the spatial matrix by `scalar`.
+    /// Scales all four blocks by `scalar`.
+    ///
+    /// The ABA backward pass calls this with `1.0 / d_val` to finish the `U D⁻¹ Uᵀ`
+    /// projection; the reciprocal is taken by the caller, which is also where the
+    /// `d_val > 1e-6` singularity guard lives. Nothing is guarded here, so a `scalar` of
+    /// `inf`/`NaN` propagates straight into the inertia.
     pub fn mul_scalar(self, scalar: f32) -> Self {
         Self {
             m00: self.m00 * scalar,
@@ -149,18 +271,56 @@ impl Sub for SpatialMatrix {
     }
 }
 
-/// Spatial Inertia Tensor (6x6 Matris Karşılığı)
-/// Bir RigidBody modelinin eylemsizlik profilidir.
+/// The inertia profile of one rigid body, in the compact form ABA wants: mass,
+/// COM-relative rotational inertia, and a centre-of-mass offset — the parameters of a
+/// 6×6 spatial inertia rather than the 6×6 itself.
+///
+/// Keeping it factored means the parallel-axis (Steiner) shift stays explicit and is
+/// applied at the point of use: [`SpatialInertia::to_matrix`] expands to the full
+/// [`SpatialMatrix`], [`SpatialInertia::mul_vec`] applies the same operator without
+/// materialising it, and `Add` merges two bodies by shifting both onto their combined
+/// COM. The first two must agree — `spatial_inertia_mul_vec_matches_to_matrix` compares
+/// `mul_vec` against `to_matrix().mul_vec` to keep them honest.
+///
+/// `Default` gives an all-zero (massless) inertia, which is a legal accumulator seed but
+/// not a physical body: `to_matrix()` on it is the zero matrix and `D` will be singular.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 pub struct SpatialInertia {
+    /// Rotational inertia tensor in kg·m², taken **about this body's own centre of
+    /// mass** and expressed on the body-frame axes.
+    ///
+    /// This is the load-bearing invariant of the struct. Both [`SpatialInertia::to_matrix`]
+    /// and the `Add` impl assume it and apply the parallel-axis shift themselves —
+    /// `to_matrix` from the COM out to the frame origin, `Add` from each body's COM to
+    /// the merged COM. Handing in a tensor already measured about the frame origin
+    /// double-counts that shift and inflates the body's rotational inertia, silently.
     pub rot: Mat3, // Angular Inertia (I)
+    /// Mass in kilograms.
+    ///
+    /// `Add` reads it to form the mass-weighted combined centre of mass, and a combined
+    /// mass of exactly `0.0` short-circuits to a zero inertia rather than dividing by
+    /// zero — note that path **discards both `rot` tensors**, so summing massless bodies
+    /// loses their rotational inertia.
     pub mass: f32, // Linear Mass (m)
+    /// Centre of mass in metres, as an offset from the **frame origin** — for an ABA
+    /// link that origin is the joint frame, not the body's centroid.
+    ///
+    /// Zero means the frame already sits on the COM and every Steiner term drops out.
+    /// Non-zero is what populates the off-diagonal `m01`/`m10` blocks of
+    /// [`SpatialInertia::to_matrix`], coupling linear and angular motion.
     pub com: Vec3, // Center of Mass (c) - Origin'e göre offset
 }
 
 impl SpatialInertia {
-    /// Creates a spatial inertia from a mass, a rotational inertia tensor, and a
-    /// center-of-mass offset relative to the origin.
+    /// Assembles an inertia from mass (kg), the COM-relative rotational inertia tensor
+    /// (kg·m², see [`SpatialInertia::rot`]) and the COM offset from the frame origin (m).
+    ///
+    /// Note the argument order is `(mass, rot, com)` while the fields are declared
+    /// `(rot, mass, com)` — the two do not line up, so a struct literal cannot be
+    /// mechanically converted into a `new` call by position.
+    ///
+    /// Nothing is validated: a negative mass or a non-positive-definite `rot_inertia`
+    /// will be accepted and will produce a non-physical articulated inertia downstream.
     pub fn new(mass: f32, rot_inertia: Mat3, com_offset: Vec3) -> Self {
         Self {
             rot: rot_inertia,
@@ -169,7 +329,12 @@ impl SpatialInertia {
         }
     }
 
-    /// Creates a spatial inertia with a zero center-of-mass offset.
+    /// Inertia for a body whose centre of mass sits exactly on the frame origin
+    /// (`com = 0`).
+    ///
+    /// The common case for a link whose joint frame is already at its centroid, and the
+    /// cheap one: with `com = 0` every Steiner term is zero, so `to_matrix()` reduces to
+    /// `[[inertia, 0], [0, m·I₃]]` with no linear/angular coupling at all.
     pub fn from_mass_inertia(mass: f32, inertia: Mat3) -> Self {
         Self {
             rot: inertia,
@@ -178,7 +343,24 @@ impl SpatialInertia {
         }
     }
 
-    /// I * v (Spatial Inertia tensor times Spatial Velocity = Spatial Momentum)
+    /// Applies the inertia to a **motion** vector, producing a **force** vector, without
+    /// building the 6×6.
+    ///
+    /// A velocity in gives spatial momentum out (angular half N·m·s, linear half N·s);
+    /// an acceleration in gives moment/force out (N·m and N). Numerically
+    /// equivalent to `self.to_matrix().mul_vec(v)` — that equivalence is the contract,
+    /// and `spatial_inertia_mul_vec_matches_to_matrix` enforces it.
+    ///
+    /// **The parallel-axis (Steiner) correction is applied unconditionally**, even when
+    /// `com` is zero and the term provably vanishes. That looks like waste and is not: the
+    /// previous version skipped it behind a `com.length_squared() > 1e-12` threshold, which
+    /// disagreed with `to_matrix()` for a tiny-but-non-zero COM.
+    /// `spatial_inertia_mul_vec_matches_to_matrix_tiny_com` is the regression test.
+    ///
+    /// The two paths agree to `vec3_approx` tolerance, not bit-for-bit: they are different
+    /// expression trees (this one subtracts nothing and scales before multiplying; the matrix
+    /// path folds the correction into `rot` first), so their f32 rounding differs in the last
+    /// place or two. The sibling test uses an epsilon comparison for exactly that reason.
     pub fn mul_vec(self, v: SpatialVector) -> SpatialVector {
         // [ rot_shifted , mass * [com]x^T ] [ w ]
         // [ mass * [com]x , mass * I_3 ]     [ v ]
@@ -228,7 +410,22 @@ impl Add for SpatialInertia {
 }
 
 impl SpatialInertia {
-    /// Converts the Rigid Body Inertia to a full 6x6 Spatial Matrix.
+    /// Expands the factored rigid-body inertia into the full 6×6 [`SpatialMatrix`],
+    /// referred to the **frame origin** rather than the centre of mass:
+    ///
+    /// ```text
+    /// | I_com − m·[c]×[c]×   m·[c]×  |
+    /// | (m·[c]×)ᵀ            m·I₃    |
+    /// ```
+    ///
+    /// where `[c]×` is the skew-symmetric matrix of the COM offset. The `−m·[c]×[c]×`
+    /// term is the parallel-axis shift (it equals `m(|c|²E − c cᵀ)`), which is why
+    /// [`SpatialInertia::rot`] must be the COM tensor and not the origin tensor.
+    ///
+    /// ABA calls this once per link per step to seed each link's articulated inertia
+    /// `I^A`, which the backward pass then accumulates into. Use
+    /// [`SpatialInertia::mul_vec`] instead when you only need to apply the inertia to
+    /// one vector — same result, no 6×6 materialised.
     pub fn to_matrix(self) -> SpatialMatrix {
         let m = self.mass;
         let c = self.com;

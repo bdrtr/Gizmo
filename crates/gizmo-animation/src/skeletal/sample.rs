@@ -33,6 +33,21 @@ fn sample_quat(track: &Track<Quat>, time: f32) -> Option<Quat> {
         .or_else(|| track.get_interpolated(time, |a: Quat, b: Quat, t| a.slerp(b, t)))
 }
 
+/// Sample `clip` at `time` into one local-space TRS per joint of `hierarchy`, in joint order.
+///
+/// The returned vector always has `hierarchy.joints.len()` entries: a joint the clip does not
+/// animate keeps its bind pose, so the result is a complete pose rather than a sparse patch.
+///
+/// Tracks are matched to joints by name first — exactly, then loosely, tolerating the
+/// `mixamorig:` / `mixamorig_` prefixes and `/RootNode/` segments that fbx2gltf emits — and
+/// only then by node index. A track that matches nothing is dropped; the count is aggregated
+/// and reported once at `debug!`, deliberately not `warn!`, because this runs per skinned
+/// entity per frame and a persistent retarget mismatch would flood the log.
+///
+/// **Translation is applied only when the track's own target node name contains `Hips`.**
+/// Every other translation track is sampled and discarded, so a clip cannot slide limbs off
+/// the skeleton; root motion has to come through the hips. Rotation and scale are applied to
+/// every joint.
 #[tracing::instrument(skip_all, name = "evaluate_clip", level = "trace")]
 pub fn evaluate_clip(
     clip: &AnimationClip,
@@ -186,6 +201,17 @@ pub fn blend_poses(
         .collect()
 }
 
+/// Split an affine matrix back into `(translation, rotation, scale)`.
+///
+/// Each basis length becomes a scale component and is floored at `1e-6` before the rotation
+/// basis is divided through by it, so a fully collapsed axis yields a finite rotation instead
+/// of a NaN one. That floor also means the decomposition is lossy for degenerate input: the
+/// zero is not recoverable from the result.
+///
+/// Assumes no shear — the rotation is read straight from the normalised basis, so a sheared
+/// matrix silently decomposes into the nearest unsheared one. Negative determinants (mirrored
+/// transforms) are likewise not represented: the lengths are unsigned, so a mirror comes back
+/// as a rotation.
 #[allow(dead_code)]
 pub fn decompose_mat4(m: Mat4) -> (Vec3, Quat, Vec3) {
     let t = Vec3::new(m.w_axis.x, m.w_axis.y, m.w_axis.z);

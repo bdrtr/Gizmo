@@ -1,3 +1,19 @@
+//! Wire format: the one envelope every rollback peer sends and receives.
+//!
+//! Everything that crosses the network is a [`NetworkPacket`] serialized with `bincode`
+//! (see `UdpTransport::send_packet`), which encodes the variant as a leading index. So
+//! the variant *order* is part of the wire format: appending a variant is safe for old
+//! peers' existing traffic, but an old build that receives the new index fails to
+//! deserialize and `UdpTransport::poll_events` logs the datagram and drops it. Both peers
+//! must therefore run the same build — there is no version handshake. Separately, the enum
+//! carries `#[non_exhaustive]` from the workspace-wide 1.0 semver pass (adding a variant must
+//! not break downstream crates), so downstream `match`es need a wildcard arm.
+//!
+//! Only `Input` is actually driven by this crate. `RollbackSession::advance` matches
+//! `Input` and ignores every other variant, and nothing here emits a `Ping`, answers one
+//! with a `Pong`, or acts on a `FullState`: those variants exist so an application (or a
+//! future resync path) can carry them over the same socket.
+
 use serde::{Deserialize, Serialize};
 use super::input_buffer::PlayerInput;
 use super::snapshot::PhysicsStateSnapshot;
@@ -11,10 +27,26 @@ pub enum NetworkPacket {
     Input(PlayerInput),
 
     /// İki bilgisayar arasındaki gecikmeyi ölçmek için.
-    Ping { timestamp: u64 },
+    Ping {
+        /// The sender's clock reading when the ping left, to be echoed back verbatim in
+        /// the matching [`NetworkPacket::Pong`]; subtracting it from the sender's clock
+        /// on arrival of the pong gives the round trip.
+        ///
+        /// The unit is whatever the application stamps — nothing in this crate writes or
+        /// interprets it, so both peers must agree on a scale (milliseconds is the usual
+        /// choice). It is *not* a simulation tick and has no relation to
+        /// [`PlayerInput::tick`].
+        timestamp: u64,
+    },
 
     /// Ping'e verilen cevap.
-    Pong { timestamp: u64 },
+    Pong {
+        /// The originating [`NetworkPacket::Ping`]'s `timestamp`, copied through
+        /// unchanged. A responder that re-stamps it with its own clock makes the
+        /// round-trip measurement meaningless, and worse, silently so — the two peers'
+        /// clocks share no epoch.
+        timestamp: u64,
+    },
 
     /// Nadiren, eğer oyun çok fazla asenkron (desync) olursa
     /// veya yeni bir oyuncu odaya katılırsa tüm sahne gönderilir.
