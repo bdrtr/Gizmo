@@ -136,13 +136,25 @@ etkin yanal restoring stiffness'i buckling-kritik değerin altındaydı.
   3 DOF) → **Tikhonov reg** (`block_regularization=0.1`) şart; blok **RİJİT** kalmalı
   (soft ölçekleme zayıflatır). (2) **Tam warm-start** (`warm_start_factor` 0.85→1.0) —
   kısmi warm-start her substep %15 impuls atıp re-konverjansta marjinal enerji enjekte
-  ediyordu; tam warm-start kapatır. **Sonuç: N≤32 robust kararlı** (3000 frame).
+  ediyordu; tam warm-start kapatır. **Sonuç: 1-genişlikte N≤32 kule kararlı** (3000 frame,
+  tek zemin boyutu) — aşağıdaki daraltmaya bak, bu cümle eskiden koşulsuz yazılmıştı.
   Determinizm re-bless YOK. Regresyon: `soak_resting_stacks_stay_bounded` (N∈{2,5,16,24,32}).
 - **AÇIK:** N≥48 aşırı kule hâlâ buckle olur — friction-aware whole-chain direct/global
   solver gerek (`direct_chain_solve` opt-in flag + `solve_island_normals` yalnız normal
-  çözüyor, O(n³)). `soak_extreme_tower_n48` #[ignore]. Oyun yapıları ≤~12 → gerek yok.
+  çözüyor, O(n³)). `soak_extreme_tower_n48` #[ignore].
+- ⚠️ **"N≤32 robust kararlı" ve "oyun yapıları ≤~12 → gerek yok" DARALTILDI**
+  *(2026-08-05, `tests/solver_quality.rs`)*. İkisi de aynı dar örneklemin ifadesiydi:
+  1-GENİŞLİKTE kule, TEK zemin boyutu, 1500 kare. Örneklemi genişletince **12 katlı yığınlar
+  3000 karede güvenilir durmuyor** — 1'den 4'e her genişlikte, varsayılan konfigürasyonda,
+  çöküşler 1979–2782 arası (yani 1500'lük ufkun ötesinde). Ve sonuç fiziksel içeriği olmayan
+  pertürbasyonlarla çevriliyor: statik zeminin yarı-boyutu 20→200 tek başına 1×12×1'i
+  "duruyor"dan "2328'de çöküyor"a taşıyor. Sweep sayısını artırmak genel bir çare DEĞİL
+  (2×12×2 96 sweep'te de çöküyor). Yükseklik 6 sağlam. Regresyon:
+  `height_12_stacks_stay_standing` #[ignore]. Ayrıntı: docs/FIXPLAN.md Faz C.
 - **DERS:** soak-testi ufkunu instabilite başlangıcından ÖTEYE seç (eski `n16` testi 600
-  frame'di, patlama ~853'te → yeşil ship edip bug'ı gizledi).
+  frame'di, patlama ~853'te → yeşil ship edip bug'ı gizledi). **Ve ufuk kadar ÖRNEKLEMİ de
+  genişlet:** yukarıdaki daralt-ma, ufku yeterli olan bir testin tek bir şekil ve tek bir
+  zemin boyutu denediği için kaçırdığı bir kusurdu.
 
 **Fizik perf (N² darboğazları) — ÇÖZÜLDÜ.** broadphase `query_pairs` çift-üretimi
 (O(P²)→O(P)), TGS per-island scratch'i tüm-dünya yerine ada-boyutunda, per-contact TGS

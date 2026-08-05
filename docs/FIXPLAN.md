@@ -953,31 +953,45 @@ eklemekten ibaret.
      **tam 0.0000** okuyor ve her cisim uyuyor: **yüksüz ankrajsız bir kümede sweep'lerin
      yakınsayacağı hiçbir şey yok.**
 
-  5. **VE ASIL BULGU — politika sweep'i FAZLA değil, EKSİK veriyor.** 4×4 geniş, 12 yüksek
-     sandık bloğu — ENGINE.md'nin "oyun yapıları ≤~12, o yüzden önemi yok" dediği zarfın
-     İÇİNDE, ve soak'ın yeşil tuttuğu 32'lik 1-genişlikteki kuleden çok daha alçak — kendi
-     kendine çöküyor:
+  5. **VE ASIL BULGU — 12 KATLI YIĞINLAR GÜVENİLİR DURMUYOR.** 3000 karede, varsayılan
+     konfigürasyonla, 1'den 4'e her genişlikte, boşluklu ya da boşluksuz, denenen her sweep
+     sayısında. 12, ENGINE.md'nin "oyun yapıları ≤~12, o yüzden önemi yok" dediği zarfın TAM
+     TEPESİ, ve soak'ın yeşil tuttuğu 32'lik kuleden çok daha alçak.
 
-     | sweep | çöküş karesi | peak\|v\| |
+     | blok | 28 sweep (zemin 20 / 200) | 96 sweep (20 / 200) |
      |---|---|---|
-     | 28 (politikanın verdiği) | 1267 | 217.3 |
-     | 46 | 2449 | 54.3 |
-     | 96 | **çökmüyor** | 0.23 |
+     | 1×12×1 | — / **2328** *(varsayılan)* | 8 zorlanmış sweep'te duruyor |
+     | 2×12×2 | 2451 / 1979 | **2782 / 2037** — 96 KURTARMIYOR |
+     | 3×12×3 | 2379 / 1373 | 2687 / — |
+     | 4×12×4 | 1267 / 1447 | — / — ← 96'nın kurtardığı TEK şekil |
+     | 2×6×2 | — / — | — / — ← yükseklik 6 sağlam |
+     | 3×6×3 | — / 2670 | — / — |
 
-     Üç zeminde de, sütunlar arasına 2 cm yanal boşluk koyunca da aynı (yani dejenere yan temas
-     değil). Politika derinlik 12 okuyup `max(28, 1.5·12) = 28` veriyor; blok 96 istiyor.
+     > ⚠️ **BU BİR DÜZELTME.** İlk okumada yalnız 4-genişlikteki bloğu ve yalnız TEK zemini
+     > koşup "politika sweep'i ~4× eksik veriyor, derinlik tek başına yanlış girdi" yazmıştım
+     > (commit `ce26c52`). Zeminleri ayrı ayrı koşunca çürüyor: **96 sweep yalnız 4-genişliği
+     > kurtarıyor, 2-genişlikte hiç yardım etmiyor.** Yani bu bir sweep BÜTÇESİ sorunu değil,
+     > sweep politikası da düzeltmesi değil — ve dolayısıyla "derinlik yanlış girdi"nin KANITI
+     > da değil (o iddia hâlâ makul, ama bu veriyle desteklenmiyor).
 
-     > **Bu, aranan ayırt edicinin ne olduğunu değiştiriyor.** Önceki oturum "derinlik bir
-     > destek zinciri mi ölçüyor yoksa bir kafes çapı mı" diye soruyordu. Ölçüm daha temel bir
-     > şey söylüyor: **derinlik TEK BAŞINA yanlış girdi.** 12 yüksek 1-genişlikte kule ile
-     > 12 yüksek 4×4 blok ikisi de derinlik 12 okuyor; biri ~16 sweep'le duruyor, öteki 96
-     > istiyor. Derinlik desteğin ne kadar YOL alacağını ölçüyor, üstünde ne kadar KÜTLE
-     > taşındığını değil.
-     >
-     > **Kapsam boşluğu:** mevcut `soak_resting_stacks_stay_bounded` yalnız 1-genişlikte
-     > kuleleri deniyor. 1500 karelik ufku bu bloğu yakalardı (çöküş ~1270) — hiç bir bloğa
-     > çevrilmiş olsaydı. Kapı olarak `wide_crate_block_stays_standing` eklendi, `#[ignore]`
+     > **Verinin gerçekten desteklediği şey daha dar ve daha kötü:** yükseklik 12'de sonucu
+     > fiziksel içeriği olmayan pertürbasyonlar belirliyor. Oynatılan her düğme sonucu
+     > TEKDÜZE OLMAYAN biçimde çeviriyor — statik zeminin yarı-boyutu (20 duruyor, 200
+     > çöküyor), sütunlar arası yanal boşluk (tam temas duruyor, 2 cm 70. karede çöküyor,
+     > 20 cm duruyor), sweep sayısı (8 zorlanmış sweep duruyor, 28 adaptif sweep çöküyor),
+     > genişlik (1 ile 2 farklı). Bu tam olarak `soak_and_golden.rs` kök-neden notunun tarif
+     > ettiği imza: 1'in biraz üstünde bir özdeğer, float gürültüsüyle tohumlanmış. Yükseklik
+     > 12'de mesele yerleşmiş değil, MARJİNAL.
+
+     > **Test seti bunu neden hiç görmedi:** `soak_resting_stacks_stay_bounded` 1-genişlikte
+     > kuleleri, TEK zeminde, 1500 kare koşuyor. Yukarıdaki çöküşlerin biri hariç hepsi
+     > 1979–2782 arasında — ufkunun ötesinde — ve ufkunun içinde kalanlar hiç kurmadığı bir
+     > zemin boyutunda. `height_12_stacks_stay_standing` olarak `#[ignore]`'lu eklendi
      > (tıpkı `soak_extreme_tower_n48` gibi: bilinen, kayıtlı, açık kusur).
+
+     > **Sweep işi için dürüst sonuç:** kararlılığı bu kadar marjinal bir sahne sınıfına karşı
+     > sweep politikası ayarlanamaz, çünkü ölçülen her iyileşme gürültünün içinde kalır.
+     > Önce yükseklik-12 kararlılık boşluğu kapanmalı.
 
   > **Kapıların eşikleri kutsanmadı.** Serbest zincir (sıfır yerçekiminde, iki ucundan içe
   > itilmiş, ankrajsız ama tamamı destek zinciri olan sıra) tam olarak bilinen iki yasa
