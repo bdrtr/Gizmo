@@ -2464,6 +2464,85 @@ fn does_sleep_cycling_re_derive_degenerate_manifolds() {
     }
 }
 
+/// The height-6 class, on the DEFAULT configuration, over a ground ensemble.
+///
+/// Height 6 has been the solid ground of every table in this file — `wide_block_collapse_per_ground`
+/// found 2×6×2 standing in all four of its cells and 3×6×3 in three of four. That makes it the
+/// right place to check a solver change for damage, because a regression here is a regression
+/// inside the envelope `docs/ENGINE.md` calls safe, not out at the marginal edge.
+///
+/// Forced sweep counts are deliberately NOT used: the question is what ships.
+///
+/// # This is the measurement that killed the sleeping-as-static fix
+///
+/// Treating a sleeping body as infinite-mass inside the solve — the standard remedy for the
+/// non-conserving interface documented in `solver/mod.rs` — looked good on height 12: the
+/// `height_12_stacks_stay_standing` ensemble went from 5 of 6 cells collapsing to 2, the two
+/// survivors collapsed about twice as late, every existing soak stayed green (including
+/// `soak_demo_tower_awake_stays_upright`, which a previous attempt had broken), and determinism
+/// held at a new hash.
+///
+/// Then this ensemble:
+///
+/// ```text
+///   block    ground   without the fix     with the fix
+///   2x6x2       20          -                1249
+///   2x6x2      100          -                   -
+///   2x6x2      200          -                   -
+///   3x6x3    20/100/200      -                   -
+///   4x6x4       20          -                   -
+///   4x6x4      100          -                2724
+///   4x6x4      200          -                1851
+///                        0 of 9            3 of 9
+/// ```
+///
+/// Height 6 is the class the engine currently carries reliably and is well inside the ≤~12
+/// envelope. Trading it for a partial improvement at height 12 is not a fix, so the change was
+/// reverted.
+///
+/// Why it probably backfires, as a hypothesis for whoever picks this up: an infinitely massive
+/// sleeper in the middle of a column is a discontinuity in the mass distribution, and the stack's
+/// dynamics change abruptly the moment any body falls asleep. Both treatments are wrong — finite
+/// mass with no integration is non-conserving, infinite mass is a step change — which points at
+/// the real condition being that a stack is allowed to sleep PARTIALLY at all. Bodies fall asleep
+/// individually in `integrator.rs`; only waking is island-collective (`pipeline.rs`). Holding
+/// everything awake, which is exactly the state where no partial sleep exists, is the one
+/// configuration measured that behaves perfectly.
+#[test]
+#[ignore = "measurement, not a gate — long (~5 min)"]
+fn height_6_blocks_on_the_default_config() {
+    eprintln!("\n=== height-6 blocks, DEFAULT solver, 3000 frames, ground ensemble ===");
+    eprintln!(
+        "{:>10}  {:>8}  {:>12}  {:>11}  {:>11}",
+        "block", "ground", "blew_up_at", "peak|v|", "peak_lean"
+    );
+    let mut collapses = 0;
+    let mut cells = 0;
+    for side in [2u32, 3, 4] {
+        for g in [20.0f32, 100.0, 200.0] {
+            let (mut world, bodies, origins) = scene_crate_pile(side, 6);
+            world.colliders[0] = Collider::box_collider(Vec3::new(g, 1.0, g));
+            let r = run(&mut world, &bodies, &origins, 3000, 0.5);
+            cells += 1;
+            if r.blew_up_at.is_some() {
+                collapses += 1;
+            }
+            eprintln!(
+                "{:>10}  {:>8.0}  {:>12}  {:>11.3}  {:>11.4}",
+                format!("{side}x6x{side}"),
+                g,
+                match r.blew_up_at {
+                    Some(f) => f.to_string(),
+                    None => "-".to_string(),
+                },
+                r.peak_speed,
+                r.peak_lean
+            );
+        }
+    }
+    eprintln!("  collapsed {collapses} of {cells}");
+}
+
 /// Negative control for `realistic_crate_stack_stays_standing`: the same scene, same horizon,
 /// same assertions, with the solver starved to 4 sweeps. It must FAIL.
 ///
