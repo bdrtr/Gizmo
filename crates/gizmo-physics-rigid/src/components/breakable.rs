@@ -75,4 +75,5 @@ impl Default for Breakable {
     }
 }
 
+#[cfg(feature = "ecs")]
 gizmo_core::impl_component!(Breakable);

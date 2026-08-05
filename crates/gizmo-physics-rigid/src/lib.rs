@@ -92,6 +92,8 @@ pub mod solver;
 /// ECS glue between a `gizmo-core` `World` and the [`PhysicsWorld`] resource: stepping the
 /// simulation and writing the results back, spawning fracture debris, and applying
 /// explosion impulses.
+/// Requires the `ecs` feature — this is the ECS bridge.
+#[cfg(feature = "ecs")]
 pub mod system;
 /// The [`PhysicsWorld`] container: construction and body management, fixed-substep
 /// stepping, scene queries and rollback snapshots. Bodies live in parallel
@@ -110,5 +112,6 @@ pub use joints::{
     JointData, JointSolver, JointType, SliderJointData, SpringJointData,
 };
 pub use solver::ConstraintSolver;
+#[cfg(feature = "ecs")]
 pub use system::{physics_explosion_system, physics_fracture_system, physics_step_system};
 pub use world::{PhysicsWorld, SnapshotError, WorldSnapshot};

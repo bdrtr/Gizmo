@@ -3,15 +3,24 @@ name = "gizmo-physics-rigid"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
-description.workspace = true
+description = "Rigid-body dynamics for the Gizmo engine: TGS-Soft solver, joints, islands, CCD, fracture. Usable without an ECS."
+keywords = ["physics", "rigid-body", "simulation", "solver", "gamedev"]
+categories = ["game-development", "simulation"]
 license.workspace = true
 repository.workspace = true
 readme.workspace = true
 
 [features]
+# Default ON — see `gizmo-physics-core`'s identical feature for the rationale. OFF drops
+# `gizmo-core` and with it the `system` module (the ECS bridge: `physics_step_system` and
+# friends) plus the `Component` impls. `PhysicsWorld` itself is ECS-free and stays: with the
+# feature off this crate is a standalone rigid-body simulator driven by calling `step`.
+default = ["ecs"]
+ecs = ["dep:gizmo-core", "gizmo-physics-core/ecs"]
+
 # Optional `bevy_reflect` integration (see `gizmo-core`'s `reflect` feature).
 # OFF by default so `bevy_reflect` is absent from the public API at 1.0.
-reflect = ["dep:bevy_reflect", "gizmo-physics-core/reflect", "gizmo-core/reflect"]
+reflect = ["ecs", "dep:bevy_reflect", "gizmo-physics-core/reflect", "gizmo-core/reflect"]
 
 # Featherstone ABA articulated-body forward dynamics (`multibody` module).
 # EXPERIMENTAL and OFF by default: the solver is a correct fixed-base forward-
@@ -23,9 +32,11 @@ experimental-multibody = []
 
 [dependencies]
 serde = { version = "1.0.228", features = ["derive"] }
-gizmo-core = { path = "../gizmo-core", version = "0.9.0" }
+gizmo-core = { path = "../gizmo-core", version = "0.9.0", optional = true }
 gizmo-math = { path = "../gizmo-math", version = "0.9.0" }
-gizmo-physics-core = { path = "../gizmo-physics-core", version = "0.9.0" }
+# `default-features = false`: without it, turning `ecs` off here would still drag
+# `gizmo-core` in through this crate's own default. The `ecs` feature re-enables it.
+gizmo-physics-core = { path = "../gizmo-physics-core", version = "0.9.0", default-features = false }
 wide = "1.2.0"
 rustc-hash = "2"
 rand = "0.10.1"

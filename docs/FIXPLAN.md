@@ -850,7 +850,15 @@ eklemekten ibaret.
 - 🔄 **D1** — `gizmo-core`'u fizik crate'lerinde opsiyonel yap (`ecs` feature'ı).
   **`gizmo-physics-core` bitti (2026-08-05):** `default = ["ecs"]`, kapatınca `gizmo-core`
   graftan tamamen düşüyor (kalan: `gizmo-math`, `arrayvec`, `serde`, `tracing`). Kendi
-  description/keywords/categories'i de eklendi. Kalan: `-rigid`, `-dynamics`, `-soft`.
+  description/keywords/categories'i de eklendi. **`gizmo-physics-rigid` bitti:** aynı desen —
+  `system.rs` (25 referans, ECS köprüsü) ve 5 `impl_component!` çağrısı `ecs`'in arkasında;
+  `PhysicsWorld` zaten ECS'siz olduğu için feature kapalıyken crate `step` çağrılarak
+  sürülen bağımsız bir rigid-body simülatörü olarak kalıyor. Kalan: `-dynamics`, `-soft`.
+
+  > **Tuzak, kaydedilmeye değer:** `-rigid`'de `ecs`'i kapatmak `gizmo-core`'u tek başına
+  > düşürmedi — bağımlılık `gizmo-physics-core` üzerinden geliyordu, çünkü onun kendi
+  > `default = ["ecs"]`'i devredeydi. `default-features = false` ile bildirmek gerekti.
+  > Aynı şey `-dynamics` ve `-soft` için de geçerli olacak.
 
   > **Plandaki ölçüm yanlıştı.** "60 dosyadan 5'i `gizmo_core`'a dokunuyor" yalnızca
   > `gizmo-physics-rigid` için doğru (5/38). Gerçek: `-core` 10/28, `-dynamics` **5/7**,

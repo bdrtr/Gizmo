@@ -87,4 +87,5 @@ impl Default for Velocity {
     }
 }
 
+#[cfg(feature = "ecs")]
 gizmo_core::impl_component!(Velocity);
