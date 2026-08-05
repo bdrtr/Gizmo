@@ -1114,8 +1114,48 @@ eklemekten ibaret.
     > gürültü-tohumlu üstel değil, sürekli bir yetmezlik. Yani **ayrı bir mekanizma**, ve
     > gözlemciler onu 30. kareden itibaren görüyor.
 
-- 🔄 **N1 ÜZERİNE DÖRT ADAY MEKANİZMA ÖLÇÜLDÜ VE ELENDİ** *(2026-08-06)*. Hiçbiri tutmuyor;
-  ama eleme sonucunda N1'in şekli netleşti.
+- 🔄 **N1 KAPANDI — mekanizma UYKU YOLU, zemin boyutu yalnız ne zaman uyunduğunu kaydırıyor**
+  *(2026-08-06)*. Her cismi zorla uyanık tutunca her şey kayboluyor:
+
+  | zemin yarı-boyutu | doğal uyku (çöküş / peak lean) | zorla uyanık |
+  |---|---|---|
+  | 20 | — / 0.010417 | — / **0.000106** |
+  | 100 | — / 0.014219 | — / **0.000106** |
+  | 140 | **2312** / 10.168 | — / **0.000106** |
+  | 150 | **2875** / 4.218 | — / **0.000106** |
+  | 200 | **2328** / 10.038 | — / **0.000106** |
+
+  Aynı anda üç şey: lean ~100× küçülüyor, ÜÇ çöküşün üçü de kayboluyor, ve **zemin-boyutu
+  bağımlılığı tamamen yok oluyor** (beş boyutta birebir 0.000106). Beş aday mekanizmanın
+  arka arkaya düşmesinin sebebi buymuş: hepsi geometriye ve solver'a bakıyordu, etki ise
+  ikisinde de değil.
+
+  > **KOD DÜZEYİNDEKİ KUSUR (doğrulandı, hipotez değil).** `solver/tgs.rs:167-172` bir cismin
+  > `inv_mass()` ve `inv_world_inertia_tensor()`'ını UYKU DURUMUNA BAKMADAN kullanıyor; tek
+  > kapı `is_dynamic()`. Yani uyuyan dinamik bir cisim impuls alışverişine **sonlu** ters
+  > kütlesiyle giriyor — solver onun hareket edeceğini varsayıyor — ama `integrator.rs` onu
+  > hiç entegre etmiyor. Uyanık komşu tepkinin kendi payını alıyor, uyuyan payını almıyor:
+  > o arayüzde momentum ve enerji korunmuyor. Kısmen uyuyan bir kolon tam da bunu yaşıyor
+  > (trace'lerde `asleep` 0 ile 6 arasında titriyor).
+  >
+  > **Standart çare:** uyuyan cismi çözümde statik gibi (sonsuz kütle) ele almak. ÖLÇÜLMEDİ.
+
+  > ⚠️ **Denenen ve ÇÜRÜYEN ilk düzeltme (uygulandı, ölçüldü, geri alındı).** "Uyanmayacak
+  > uyuyan cisme yazma yapma" (`pipeline.rs` writeback'inde tek koşul). 1×12×1'de üç çöküşü
+  > de kaldırdı — ama zorla-uyanık davranışını **yeniden üretmedi** (lean 0.0099 vs 0.000106),
+  > `height_12_stacks_stay_standing`'de 6 hücrenin hâlâ 4'ü düşüyordu (öncesi 5), ve YEŞİL bir
+  > testi bozdu: `soak_demo_tower_awake_stays_upright` 532. karede patladı. Geri alındı.
+  > Sebebi de netleşti: yazmayı kesmek, uyuyan cismin çözüme sonlu kütleyle GİRMESİNİ
+  > engellemiyor — asıl tutarsızlık orada.
+
+  > ⚠️ **Ve birleştirme denemesi de ÇÜRÜDÜ.** "Uyku, çifti narrowphase'den düşürüyor, uyanınca
+  > manifold yeniden doğuyor, doğum teması da tek noktalı ve merkez-dışı" hikâyesi çekiciydi ve
+  > iki bulguyu birleştirecekti. Ölçüldü: dejenere (1 noktalı) olay sayısı doğal uykuda da
+  > zorla uyanıkta da, iki zeminde de **birebir 13**. Uyku döngüsü dejenere manifold ÜRETMİYOR.
+  > (`Started` olayları 18 vs 12, yani yeniden doğum var — ama dejenere değil.)
+
+- 🔄 **N1 üzerine ÖNCE elenen beş aday** *(2026-08-06)*. Hiçbiri tutmadı;
+  eleme sonucunda N1'in şekli netleşti ve yukarıdaki cevaba giden yol açıldı.
 
   | aday | ölçüm | sonuç |
   |---|---|---|
