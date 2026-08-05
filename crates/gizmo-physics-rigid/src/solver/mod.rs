@@ -279,6 +279,26 @@ pub struct ConstraintSolver {
     /// yine ardışık. Varsayılan kapalı (A/B + doğrulama); çalışırsa default açılacak.
     pub block_solver: bool,
 
+    /// Let the block solver pick its own sweep count from the island's support depth instead of
+    /// always using [`iterations`](Self::iterations).
+    ///
+    /// With this on (the default) a block-solved island of support depth ≥ 5 is swept
+    /// `min(96, max(iterations, max(28, 3·depth/2)))` times. The floor of 28 is *above* the
+    /// default `iterations` of 20, so on the default configuration the adaptive count is the
+    /// only one a deep island ever sees, and lowering `iterations` cannot lower it.
+    ///
+    /// Turning it off makes `iterations` mean exactly what it says for every island. That is
+    /// what a measurement harness needs — a sweep count it can actually set, including below
+    /// the floor (see `tests/solver_quality.rs`) — and it is also the escape hatch for a caller
+    /// who has measured their own scene and wants the budget back.
+    ///
+    /// Do not turn it off casually for a scene with tall stacks. The sweep count is not just a
+    /// convergence level: the TGS path derives its inner position-integration step from it
+    /// (`h = dt / n_iterations`, `solver/tgs.rs`), so fewer sweeps is also a coarser temporal
+    /// discretisation inside the substep, and a stacked column needs the sweeps for support to
+    /// reach its top.
+    pub adaptive_iterations: bool,
+
     /// Block-solver Tikhonov regularizasyonu (manifoldun ortalama normal efektif kütlesinin
     /// oranı). 4-coplanar temas bloğunun rank-eksikliğini giderir; fiziksel tilt-restoring
     /// modlarını sert bırakacak kadar küçük olmalı.
@@ -319,6 +339,7 @@ impl Default for ConstraintSolver {
             rotating_anchors: false,
             warm_start_match_tolerance: 0.02,
             block_solver: true,
+            adaptive_iterations: true,
             block_regularization: 0.1,
             direct_chain_solve: false,
         }
@@ -333,8 +354,9 @@ impl ConstraintSolver {
     /// count rather than an exact one: on the TGS-soft path with the block solver enabled,
     /// a deep (stacked) island instead gets a sweep count derived from its depth, which
     /// can be more than the value passed here or — past an internal ceiling on adaptive
-    /// iterations — fewer. Passing 0 is accepted — it is not a division-by-zero hazard —
-    /// but it leaves ordinary islands' contacts unsolved.
+    /// iterations — fewer. Clear [`adaptive_iterations`](Self::adaptive_iterations) to make
+    /// it exact. Passing 0 is accepted — it is not a division-by-zero hazard — but it leaves
+    /// ordinary islands' contacts unsolved.
     pub fn new(iterations: usize) -> Self {
         Self {
             iterations,
@@ -396,7 +418,7 @@ impl ConstraintSolver {
         // (buckling) until support propagates to its top, which needs sweeps that scale
         // with D. Shallow islands (D<5, no buckling) keep the base count; bucklable stacks
         // get max(FLOOR, 1.5·D) sweeps (empirically: D=5 needs ≥24, D=32 needs ~48), capped.
-        let n_iterations = if self.block_solver && island_depth >= 5 {
+        let n_iterations = if self.adaptive_iterations && self.block_solver && island_depth >= 5 {
             let target = (island_depth as usize * 3 / 2).max(Self::BLOCK_ITERS_FLOOR);
             self.iterations.max(target).min(Self::BLOCK_ITERS_CAP)
         } else {
