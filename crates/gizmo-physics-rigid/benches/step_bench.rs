@@ -47,9 +47,29 @@
 //! ```
 //!
 //! `island_count` stays at 4 throughout, so the island is getting bigger and per-contact cost
-//! grows with it. Not the adaptive iteration count — that scene runs at zero gravity, so
-//! support depth stays under the `island_depth >= 5` threshold and the sweep count is fixed.
-//! The cause is unidentified; it is where C2/C4 should start.
+//! grows with it.
+//!
+//! **It IS the adaptive iteration count** — an earlier revision of this comment said it was
+//! not, on the reasoning that zero gravity keeps stacks short. That reasoning is wrong:
+//! `island_depth` is not a stack height, it is the BFS eccentricity of the CONTACT GRAPH.
+//! `support_order_manifolds` roots its BFS at static/kinematic anchors; this scene's boxes
+//! float at y=5 and never reach the ground, so the anchor-free fallback roots at a lattice
+//! corner and the depth becomes the lattice diameter — sqrt(N)-1, or 7 / 15 / 31 here.
+//!
+//! `n_iterations = min(96, max(cfg, max(28, 1.5*depth)))` then gives 28 / 28 / 46 sweeps.
+//! Measured bit-exactly with no instrumentation at all: on the TGS path the post-step state
+//! is a pure function of the sweep count, so the largest configured `iterations` whose
+//! `state_hash` still matches `iterations = 1` IS the effective count. That knee comes out
+//! 28 / 28 / 46 for this scene and 1 / 1 / 1 for the same raft lowered onto the ground.
+//!
+//! The sweep count accounts for ~93% of the growth; per-contact-per-sweep cost is nearly flat.
+//! So this group measures the ADAPTIVE ITERATION POLICY as much as the solver.
+//!
+//! Whether the policy is wrong here is a separate question, and NOT settled — see
+//! docs/FIXPLAN.md. Suppressing the scaling for anchor-free islands looks obvious and is not:
+//! a tall tower that separates from the ground by a hair is also anchor-free for that substep,
+//! and it genuinely needs the sweeps. Measured — `soak_resting_stacks_stay_bounded` buckles at
+//! N=24 and N=32 with that change in place.
 //!
 //! Every scene is deterministic — fixed positions, no RNG — so run-to-run variation is the
 //! machine, not the input.

@@ -870,9 +870,40 @@ eklemekten ibaret.
   > | 1024 | 20754 | 669.47 ms | **32.26 µs** |
   >
   > `island_count` boyunca 4'te sabit, yani island büyüyor ve temas başına maliyet onunla
-  > birlikte artıyor. **Adaptif iterasyon sayısı DEĞİL** — o sahne sıfır yerçekiminde koşuyor,
-  > destek derinliği `island_depth >= 5` eşiğinin altında kalıyor ve sweep sayısı sabit.
-  > Sebep henüz belirlenmedi; C2/C4'ün başlaması gereken yer burası.
+  > birlikte artıyor.
+
+- ✅ **Sebep bulundu: adaptif iterasyon sayısı** *(2026-08-05, 18 ajanlık soruşturma)*.
+  **Ve elediğim gerekçe yanlıştı.** "Sıfır yerçekimi → yığın yok → derinlik < 5" demiştim.
+  `island_depth` yığın yüksekliği DEĞİL, **temas grafının BFS eksantrikliği**.
+  `support_order_manifolds` BFS'i statik/kinematik anchor'lardan kökler; o sahnedeki kutular
+  y=5'te yüzüyor ve zemine hiç değmiyor, dolayısıyla anchor'suz yedek yol kafesin bir
+  köşesinden kök alıyor ve derinlik kafes çapı oluyor: **√N−1 = 7 / 15 / 31**.
+
+  `n_iterations = min(96, max(cfg, max(28, 1.5·derinlik)))` → **28 / 28 / 46** sweep.
+  Büyümenin **~%93'ü** bu; sweep başına temas maliyeti neredeyse düz.
+
+  > **Enstrümantasyonsuz, bit-eş doğrulama** (altı ajanın altısı bağımsız aynı sonuca vardı,
+  > düşman yargıç bunu sıfır kaynak düzenlemesiyle tekrarladı, ben de elle tekrarladım): TGS
+  > yolunda adım sonrası durum sweep sayısının saf fonksiyonu, yani `iterations = 1` ile aynı
+  > `state_hash`'i veren en büyük `iterations` efektif sayının ta kendisi. Diz: havadaki sal
+  > için **28 / 28 / 46**, aynı sal zemine indirilince **1 / 1 / 1**.
+
+- ⏸️ **Düzeltme AÇIK — "anchor'suz island'da ölçekleme yapma" DENENDİ ve YANLIŞ ÇIKTI.**
+  Bariz görünüyordu: anchor yoksa destek zinciri yok, ekstra sweep hiçbir şeye yakınsamıyor.
+  Uyguladım, sahnede solver 669 → 360 ms'ye indi ve temas başına maliyet düzleşti
+  (20.84/21.63/32.26 → 17.03/17.91/17.77). **Ama `soak_resting_stacks_stay_bounded` N=24 ve
+  N=32'de patladı.** Sebep ölçüldü: uzun bir kule zeminden bir kıl payı ayrıldığında island
+  anchor'suz kalıyor (24 cisimlik kule için 37 kez, 32 için 13 kez, max_depth 23/31) — ama
+  içsel destek zincirini koruyor ve sweep'lere gerçekten ihtiyacı var. Değişiklik geri alındı.
+
+  > **Ayırt edici ölçüt anchor'lanma DEĞİL.** Aranan şey "derinlik bir destek zinciri mi
+  > ölçüyor yoksa bir kafes çapı mı" — 1B zincirde eksantriklik N−1 ve anlamlı, 2B salda √N ve
+  > (en azından yüksüz/sıfır-yerçekimi halinde) anlamsız. Ayrıca salın sweep'i kısılınca
+  > SİMÜLASYON KALİTESİNİN bozulup bozulmadığını ölçmedim; yalnız hızı ölçtüm. Düzeltme,
+  > kalite ölçütü olmadan yapılmamalı.
+  >
+  > Yan bulgu: `BLOCK_ITERS_FLOOR = 28` varsayılan `iterations = 20`'den BÜYÜK, yani derinliği
+  > ≥5 olan her island çağıranın indiremeyeceği bir tabana çarpıyor (24 → 32 sweep).
   >
   > Solver da 24→48 kulede 2× yükseklik için **3.39×** süre veriyor — ENGINE.md'nin
   > "N≥48 kuleler bükülüyor" notuyla aynı yere işaret ediyor.
