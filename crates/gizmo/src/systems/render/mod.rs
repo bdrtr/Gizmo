@@ -543,26 +543,6 @@ pub use shared::{collect_scene_lights, SceneLights};
 mod golden_render_tests {
     use super::default_render_pass;
 
-    /// Serialises every test in this module that touches the GPU.
-    ///
-    /// Each of these tests calls `Renderer::new_headless`, which requests its own wgpu
-    /// adapter and device. `cargo test` runs the tests in a binary **in parallel**, so
-    /// without this lock two threads race to create devices on the same adapter — which on
-    /// Linux/Mesa shows up as a `SIGSEGV` in the driver rather than a Rust panic, taking the
-    /// whole test binary (and the workspace run) down with it. The failure is load-dependent
-    /// and therefore intermittent: the same binary passes in isolation and crashes under
-    /// `cargo test --workspace`.
-    ///
-    /// Holding one process-wide mutex for the duration of each GPU test is the cheap fix.
-    /// It costs wall-clock (these tests become sequential) and buys determinism.
-    ///
-    /// The guard deliberately ignores poisoning: if one GPU test panics, the others should
-    /// still get a chance to run and report their own results rather than cascading.
-    fn gpu_lock() -> std::sync::MutexGuard<'static, ()> {
-        static GPU: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        GPU.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
-
     use crate::bundles::{CameraBundle, DirectionalLightBundle};
     use crate::core::World;
     use crate::math::{Vec3, Vec4};
@@ -573,7 +553,7 @@ mod golden_render_tests {
 
     #[test]
     fn default_render_pass_draws_a_cube_distinct_from_background() {
-        let _gpu = gpu_lock();
+        let _gpu = crate::test_gpu::gpu_lock();
         if !pollster::block_on(Renderer::headless_adapter_available()) {
             eprintln!(
                 "skipping default_render_pass_draws_a_cube_distinct_from_background: \
@@ -880,7 +860,7 @@ mod golden_render_tests {
     /// appeared on screen".
     #[test]
     fn an_indexed_mesh_renders_byte_identically_to_the_flat_one() {
-        let _gpu = gpu_lock();
+        let _gpu = crate::test_gpu::gpu_lock();
         if !pollster::block_on(Renderer::headless_adapter_available()) {
             eprintln!(
                 "skipping an_indexed_mesh_renders_byte_identically_to_the_flat_one: \
@@ -958,7 +938,7 @@ mod golden_render_tests {
     /// we assert monotonic increase, not an exact 2x.)
     #[test]
     fn camera_exposure_brightens_the_frame() {
-        let _gpu = gpu_lock();
+        let _gpu = crate::test_gpu::gpu_lock();
         if !pollster::block_on(Renderer::headless_adapter_available()) {
             eprintln!("skipping camera_exposure_brightens_the_frame: no GPU adapter available");
             return;
@@ -988,7 +968,7 @@ mod golden_render_tests {
     /// rather than in someone's screenshot.
     #[test]
     fn skipping_the_point_shadow_passes_changes_no_pixel() {
-        let _gpu = gpu_lock();
+        let _gpu = crate::test_gpu::gpu_lock();
         if !pollster::block_on(Renderer::headless_adapter_available()) {
             eprintln!("skipping skipping_the_point_shadow_passes_changes_no_pixel: no GPU adapter");
             return;

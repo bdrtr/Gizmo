@@ -182,9 +182,6 @@ mod tests {
 
     #[test]
     fn native_compose_keeps_shadows_and_groups() {
-        // Guard testin tamamı boyunca: aynı anda birden fazla canlı cihaz sürücüyü
-        // düşürüyor (bkz. `crate::test_gpu`).
-        let _gpu = crate::test_gpu::gpu_lock();
         let native = compose_wgsl(SHADER_SRC, "shader.wgsl", native_render_defs());
         assert!(
             !native.contains("#import") && !native.contains("#ifdef") && !native.contains("#{"),

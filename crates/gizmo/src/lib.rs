@@ -77,6 +77,8 @@ pub mod prelude;
 #[cfg(all(feature = "render", feature = "physics"))]
 pub mod spawner;
 pub mod systems;
+#[cfg(test)]
+mod test_gpu;
 
 // === Motor Alt Sistemleri ===
 pub use gizmo_ai as ai;
