@@ -91,6 +91,8 @@ pub struct DrawItem {
     pub(super) ibuf: Option<std::sync::Arc<wgpu::Buffer>>,
     /// `ibuf` `Some` iken çizilecek indeks sayısı.
     pub(super) index_count: u32,
+    /// `ibuf`'un eleman genişliği — mesh'ten olduğu gibi taşınır, türetilmez.
+    pub(super) index_format: wgpu::IndexFormat,
     pub(super) bind_group: std::sync::Arc<wgpu::BindGroup>,
     pub(super) unlit: bool,
     /// Baked lighting + the sun's cascade term: casts shadows and skips the G-buffer.
@@ -133,11 +135,10 @@ impl DrawItem {
         pass.set_vertex_buffer(0, self.vbuf.slice(..));
         match &self.ibuf {
             Some(ibuf) => {
-                // `Uint32`: indeksler `meshopt::generate_vertex_remap`'ten geliyor ve o
-                // `u32` üretiyor. Küçük mesh'lerde `Uint16`'ya düşürmek bant kazandırırdı
-                // ama vertex sayısına bağlı bir seçim, ve iki formatı karıştırmak
-                // `set_index_buffer` başına ayrı bir karar demek → ayrı iş.
-                pass.set_index_buffer(ibuf.slice(..), wgpu::IndexFormat::Uint32);
+                // Format mesh'ten geliyor: `Mesh::new_indexed` 65536 tekil vertex'e kadar
+                // `Uint16` yazıyor. Türetmek değil TAŞIMAK önemli — tamponu yazıldığından
+                // farklı bir formatta bağlamak çökmez, sessizce yanlış üçgen çizer.
+                pass.set_index_buffer(ibuf.slice(..), self.index_format);
                 pass.draw_indexed(0..self.index_count, 0, instances);
             }
             None => pass.draw(0..self.vertex_count, instances),
@@ -195,6 +196,7 @@ pub(crate) struct BatchData {
     vbuf: std::sync::Arc<wgpu::Buffer>,
     ibuf: Option<std::sync::Arc<wgpu::Buffer>>,
     index_count: u32,
+    index_format: wgpu::IndexFormat,
     bind_group: std::sync::Arc<wgpu::BindGroup>,
     vertex_count: u32,
     unlit: bool,
@@ -318,10 +320,10 @@ pub(super) fn collect_draw_items(
                 // yani mesh'in indeksleri tam çözünürlüklü vertex dizisine göre ve LOD1
                 // aktifken GEÇERSİZ. Onları burada düşürmek, karışık bir mesh'i indeksli
                 // sanıp yanlış üçgenler çizmenin tek engeli.
-                let (active_ibuf, active_index_count) = if use_lod1 {
-                    (None, 0)
+                let (active_ibuf, active_index_count, active_index_format) = if use_lod1 {
+                    (None, 0, wgpu::IndexFormat::Uint32)
                 } else {
-                    ($mesh.ibuf.clone(), $mesh.index_count)
+                    ($mesh.ibuf.clone(), $mesh.index_count, $mesh.index_format)
                 };
 
                 let packed_params = pack_pbr_params($mat.anisotropy, $mat.clear_coat, $mat.subsurface);
@@ -369,6 +371,7 @@ pub(super) fn collect_draw_items(
                     vbuf: active_vbuf.clone(),
                     ibuf: active_ibuf.clone(),
                     index_count: active_index_count,
+                    index_format: active_index_format,
                     bind_group: $mat.bind_group.clone(),
                     vertex_count: active_vertex_count,
                     unlit,
@@ -445,6 +448,7 @@ pub(super) fn collect_draw_items(
                 vertex_count: batch.vertex_count,
                 ibuf: batch.ibuf.clone(),
                 index_count: batch.index_count,
+                index_format: batch.index_format,
                 bind_group: batch.bind_group.clone(),
                 unlit: batch.unlit,
                 baked_lit: batch.baked_lit,

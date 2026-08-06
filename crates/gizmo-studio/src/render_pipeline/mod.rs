@@ -356,6 +356,7 @@ pub fn execute_render_pipeline(
                         // taşınabilir. Ana boru hattındaki düşürme kuralı buraya UYMAZ.
                         ibuf: active_mesh.ibuf.clone(),
                         index_count: active_mesh.index_count,
+                        index_format: active_mesh.index_format,
                         bind_group: mat.bind_group.clone(),
                         skeleton_bg: skel_bg,
                         instances: vec_pool.pop().unwrap_or_else(|| Vec::with_capacity(32)),
@@ -423,6 +424,7 @@ pub fn execute_render_pipeline(
                         vertex_count: batch.vertex_count,
                         ibuf: batch.ibuf,
                         index_count: batch.index_count,
+                        index_format: batch.index_format,
                         bind_group: batch.bind_group,
                         skeleton_bg: batch.skeleton_bg,
                         start_instance: start,

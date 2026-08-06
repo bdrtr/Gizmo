@@ -33,6 +33,8 @@ pub(super) struct BatchData {
     pub(super) ibuf: Option<std::sync::Arc<wgpu::Buffer>>,
     /// `ibuf` `Some` iken çizilecek indeks sayısı.
     pub(super) index_count: u32,
+    /// `ibuf`'un eleman genişliği — mesh'ten olduğu gibi taşınır.
+    pub(super) index_format: wgpu::IndexFormat,
     pub(super) bind_group: std::sync::Arc<wgpu::BindGroup>,
     pub(super) skeleton_bg: std::sync::Arc<wgpu::BindGroup>,
     pub(super) instances: Vec<gizmo::renderer::InstanceRaw>,
@@ -56,6 +58,8 @@ pub(super) struct FlatBatchData {
     pub(super) ibuf: Option<std::sync::Arc<wgpu::Buffer>>,
     /// `ibuf` `Some` iken çizilecek indeks sayısı.
     pub(super) index_count: u32,
+    /// `ibuf`'un eleman genişliği — mesh'ten olduğu gibi taşınır.
+    pub(super) index_format: wgpu::IndexFormat,
     pub(super) bind_group: std::sync::Arc<wgpu::BindGroup>,
     pub(super) skeleton_bg: std::sync::Arc<wgpu::BindGroup>,
     pub(super) start_instance: u32,
@@ -85,7 +89,7 @@ impl FlatBatchData {
         pass.set_vertex_buffer(0, self.vbuf.slice(..));
         match &self.ibuf {
             Some(ibuf) => {
-                pass.set_index_buffer(ibuf.slice(..), wgpu::IndexFormat::Uint32);
+                pass.set_index_buffer(ibuf.slice(..), self.index_format);
                 pass.draw_indexed(0..self.index_count, 0, instances);
             }
             None => pass.draw(0..self.vertex_count, instances),

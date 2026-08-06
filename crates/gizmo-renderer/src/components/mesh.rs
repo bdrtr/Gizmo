@@ -18,6 +18,10 @@ pub struct Mesh {
     /// `ibuf`'taki indeks sayısı — çizilecek eleman sayısı budur, `vertex_count` değil.
     /// `ibuf` `None` iken anlamsız (0).
     pub index_count: u32,
+    /// `ibuf`'un eleman genişliği. Tampon hangi formatta YAZILDIYSA `set_index_buffer`'a da
+    /// o verilmeli — 16-bit bir tamponu 32-bit diye bağlamak çökmez, **yanlış üçgen çizer**.
+    /// Bu yüzden türetilmiyor, taşınıyor. `ibuf` `None` iken anlamsız.
+    pub index_format: wgpu::IndexFormat,
     /// Geometrinin ağırlık merkezini orijine taşımak için kullanılan ofset değeri.
     /// Render aşamasında model matrisine uygulanabilir.
     /// AABB sınırlarını doğrudan etkilemez (sınırlar ham vertex verisinden hesaplanır).
@@ -116,6 +120,7 @@ impl Mesh {
             vertex_count,
             ibuf: None,
             index_count: 0,
+            index_format: wgpu::IndexFormat::Uint32,
             center_offset,
             source,
             bounds,
@@ -170,9 +175,30 @@ impl Mesh {
             contents: bytemuck::cast_slice(&unique_vertices),
             usage: wgpu::BufferUsages::VERTEX,
         });
+        // 16-bit indeksler, sığdığı sürece: indeks tamponunun bandını ve belleğini yarıya
+        // indiriyor, ve motorun ürettiği her şey rahatça sığıyor (en büyük primitif torus,
+        // 561 tekil vertex). `meshopt` `u32` üretiyor, daraltma burada yapılıyor.
+        //
+        // Eşik `<= 65536`: `u16`'nın taşıyabildiği en büyük indeks 65535, dolayısıyla o kadar
+        // TEKİL VERTEX adreslenebilir. Sınırı `< 65536` yazmak son vertex'i boşuna kaybederdi;
+        // `<= 65537` yazmak sessizce sarardı.
+        let (index_format, index_bytes): (wgpu::IndexFormat, Vec<u8>) = if unique_count <= 65536 {
+            let narrow: Vec<u16> = indices.iter().map(|&i| i as u16).collect();
+            (
+                wgpu::IndexFormat::Uint16,
+                bytemuck::cast_slice(&narrow).to_vec(),
+            )
+        } else {
+            (
+                wgpu::IndexFormat::Uint32,
+                bytemuck::cast_slice(&indices).to_vec(),
+            )
+        };
         let ibuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some(&format!("IBuf: {source}")),
-            contents: bytemuck::cast_slice(&indices),
+            // `create_buffer_init` boyutu `COPY_BUFFER_ALIGNMENT`'a kendisi yuvarlıyor, yani
+            // tek sayıda `u16` indeks (2 bayt hizası, 4 değil) sorun değil.
+            contents: &index_bytes,
             usage: wgpu::BufferUsages::INDEX,
         });
 
@@ -187,6 +213,7 @@ impl Mesh {
             source,
         );
         mesh.index_count = indices.len() as u32;
+        mesh.index_format = index_format;
         mesh.ibuf = Some(Arc::new(ibuf));
 
         // `cpu_vertices` ORİJİNAL üçgen listesine geri alınıyor. Tekilleştirilmiş diziyi
@@ -207,6 +234,7 @@ impl Mesh {
             vertex_count: 0,
             ibuf: None,
             index_count: 0,
+            index_format: wgpu::IndexFormat::Uint32,
             center_offset: Vec3::ZERO,
             source,
             bounds: gizmo_math::Aabb::empty(),
