@@ -551,22 +551,7 @@ mod tests {
     use super::SmokeVolume;
 
     async fn setup_headless_gpu() -> Option<(wgpu::Device, wgpu::Queue)> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::all(),
-            flags: wgpu::InstanceFlags::default(),
-            memory_budget_thresholds: Default::default(),
-            backend_options: Default::default(),
-            display: None,
-        });
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: None,
-                force_fallback_adapter: false,
-            })
-            .await
-            .ok()?;
-        adapter.request_device(&wgpu::DeviceDescriptor::default()).await.ok()
+        crate::test_gpu::headless_device().await
     }
 
     async fn read_f32(device: &wgpu::Device, queue: &wgpu::Queue, buffer: &wgpu::Buffer) -> Vec<f32> {
@@ -617,6 +602,9 @@ mod tests {
     // inverse passed to render() it fills ~15%. A regression to the bad inverse fails here.
     #[test]
     fn raymarch_renders_the_volume_not_a_sliver() {
+        // Guard testin tamamı boyunca: aynı anda birden fazla canlı cihaz sürücüyü
+        // düşürüyor (bkz. `crate::test_gpu`).
+        let _gpu = crate::test_gpu::gpu_lock();
         use bytemuck::Zeroable;
         use gizmo_math::{Mat4, Vec3};
         use wgpu::util::DeviceExt;
@@ -771,6 +759,9 @@ mod tests {
     // right, so this is discriminating.
     #[test]
     fn smoke_conforms_to_and_does_not_cross_a_wall() {
+        // Guard testin tamamı boyunca: aynı anda birden fazla canlı cihaz sürücüyü
+        // düşürüyor (bkz. `crate::test_gpu`).
+        let _gpu = crate::test_gpu::gpu_lock();
         pollster::block_on(async {
             let Some((device, queue)) = setup_headless_gpu().await else {
                 eprintln!("no GPU adapter — skipping smoke obstacle test");
@@ -841,6 +832,9 @@ mod tests {
     // tests is `set_obstacle_boxes`, and it flips that region from full to empty.
     #[test]
     fn without_an_obstacle_the_wall_region_fills() {
+        // Guard testin tamamı boyunca: aynı anda birden fazla canlı cihaz sürücüyü
+        // düşürüyor (bkz. `crate::test_gpu`).
+        let _gpu = crate::test_gpu::gpu_lock();
         pollster::block_on(async {
             let Some((device, queue)) = setup_headless_gpu().await else {
                 eprintln!("no GPU adapter — skipping smoke control test");
@@ -886,6 +880,9 @@ mod tests {
     // and mechanism than the vertical-wall test).
     #[test]
     fn smoke_pools_under_a_ceiling() {
+        // Guard testin tamamı boyunca: aynı anda birden fazla canlı cihaz sürücüyü
+        // düşürüyor (bkz. `crate::test_gpu`).
+        let _gpu = crate::test_gpu::gpu_lock();
         pollster::block_on(async {
             let Some((device, queue)) = setup_headless_gpu().await else {
                 eprintln!("no GPU adapter — skipping smoke ceiling test");
@@ -946,6 +943,9 @@ mod tests {
     // is a watertight ≥1-cell layer and nothing crosses. (Reverting either fix fails this test.)
     #[test]
     fn thin_wall_blocks_voxelization_and_tunneling_leaks() {
+        // Guard testin tamamı boyunca: aynı anda birden fazla canlı cihaz sürücüyü
+        // düşürüyor (bkz. `crate::test_gpu`).
+        let _gpu = crate::test_gpu::gpu_lock();
         pollster::block_on(async {
             let Some((device, queue)) = setup_headless_gpu().await else {
                 eprintln!("no GPU adapter — skipping thin-wall test");
@@ -1023,6 +1023,9 @@ mod tests {
     // nowhere" gap — a regression that froze smoke at every face would fail the flow-through half.
     #[test]
     fn smoke_flows_through_a_doorway_but_not_the_solid_wall() {
+        // Guard testin tamamı boyunca: aynı anda birden fazla canlı cihaz sürücüyü
+        // düşürüyor (bkz. `crate::test_gpu`).
+        let _gpu = crate::test_gpu::gpu_lock();
         pollster::block_on(async {
             let Some((device, queue)) = setup_headless_gpu().await else {
                 eprintln!("no GPU adapter — skipping doorway test");
@@ -1108,6 +1111,9 @@ mod tests {
     // the volume. Reverting the shader to `* P.source.w` fails this test.
     #[test]
     fn smoke_density_is_frame_rate_independent() {
+        // Guard testin tamamı boyunca: aynı anda birden fazla canlı cihaz sürücüyü
+        // düşürüyor (bkz. `crate::test_gpu`).
+        let _gpu = crate::test_gpu::gpu_lock();
         async fn total_after_3s(
             device: &wgpu::Device,
             queue: &wgpu::Queue,

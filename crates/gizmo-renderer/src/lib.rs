@@ -46,6 +46,8 @@ pub mod ssao;
 pub mod ssgi;
 pub mod ssr;
 pub mod taa;
+#[cfg(test)]
+mod test_gpu;
 mod texture_quality;
 pub mod volumetric;
 pub mod web_profile;
