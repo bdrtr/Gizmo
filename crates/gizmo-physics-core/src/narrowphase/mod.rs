@@ -7,7 +7,7 @@
 //! |--------------|--------------|----------------------------------|
 //! | Sphere       | Sphere       | Analytic                         |
 //! | Sphere       | Plane        | Analytic                         |
-//! | Box          | Plane        | Corner test (4 points)           |
+//! | Box          | Plane        | Corner test (up to 8 points)     |
 //! | Box          | Box          | SAT + Sutherland-Hodgman clip    |
 //! | Any          | Plane        | GJK support-point                |
 //! | Any          | Any          | GJK + EPA                        |
@@ -20,8 +20,10 @@
 //!
 //! * [`NarrowPhase::test_collision`] — returns the single deepest contact, used
 //!   for overlap queries and soft-body node tests.
-//! * [`NarrowPhase::test_collision_manifold`] — returns up to 4 contacts for
-//!   the constraint solver; Box-Box and Box-Plane produce multiple points.
+//! * [`NarrowPhase::test_collision_manifold`] — returns the contact manifold for
+//!   the constraint solver; Box-Box and Box-Plane produce multiple points. The
+//!   count is **not** capped at 4 — see that method's own docs for the per-arm
+//!   bounds, and do not design against a 4-point assumption.
 
 use crate::collision::ContactPoint;
 use crate::components::ColliderShape;
@@ -86,9 +88,10 @@ impl NarrowPhase {
         Some(mk_contact(point, -plane_n, r - signed_dist))
     }
 
-    /// Box–Plane contact.  Returns up to 4 corner contacts (one per
-    /// penetrating corner).  Normal in each contact points from the box toward
-    /// the plane (`-plane_n`).
+    /// Box–Plane contact.  Returns up to **8** corner contacts — one per penetrating
+    /// corner, with no reduction step; a box lying flat gives 4, one resting on a
+    /// face-diagonal tilt can give more, and a fully submerged box gives all 8.
+    /// Normal in each contact points from the box toward the plane (`-plane_n`).
     pub fn box_plane(
         bpos: Vec3,
         brot: Quat,
@@ -369,9 +372,31 @@ impl NarrowPhase {
         }
 
         let mut out: Vec<ContactPoint> = Vec::new();
-        let mut verts = Vec::with_capacity(3);
+
+        // The triangle-as-a-hull wrapper is built ONCE and refilled per triangle. It used to be
+        // constructed inside the loop, which cost three allocations per candidate triangle, per
+        // pair, per substep: `Arc::new(verts.clone())` is the Vec plus the ArcInner, and
+        // `Arc::new(Vec::new())` a third for a list that is never read. That made this the
+        // densest allocation site in the narrowphase — and one no container swap can fix, since
+        // `ConvexHullShape` holds `Arc<Vec<_>>` by definition. Hoisting is the fix.
+        //
+        // `faces` stays empty for the reason it always did: the support function only reads
+        // `vertices`, so a face list would be carried per triangle for nothing.
+        let mut face = ColliderShape::ConvexHull(crate::components::ConvexHullShape {
+            vertices: std::sync::Arc::new(Vec::with_capacity(3)),
+            faces: std::sync::Arc::new(Vec::new()),
+        });
+
         for tri in tris {
             let base = tri as usize * 3;
+
+            // `make_mut` rather than `get_mut`: the refcount is 1 throughout (`Gjk::get_contact`
+            // takes `&ColliderShape` and no path clones the Arc), so this never actually clones —
+            // but unlike `get_mut` it cannot silently skip a triangle if that ever stops holding.
+            let ColliderShape::ConvexHull(hull) = &mut face else {
+                unreachable!("`face` is constructed as a ConvexHull above and never reassigned")
+            };
+            let verts = std::sync::Arc::make_mut(&mut hull.vertices);
             verts.clear();
             let mut ok = true;
             for k in 0..3 {
@@ -388,13 +413,6 @@ impl NarrowPhase {
             if !ok {
                 continue;
             }
-            // A triangle as a three-point hull. `faces` stays empty because the support function
-            // only reads `vertices`; a face list would be carried per triangle per frame for
-            // nothing.
-            let face = ColliderShape::ConvexHull(crate::components::ConvexHullShape {
-                vertices: std::sync::Arc::new(verts.clone()),
-                faces: std::sync::Arc::new(Vec::new()),
-            });
             if let Some(c) = Gjk::get_contact(shape, pos, rot, &face, mesh_pos, mesh_rot) {
                 out.push(c);
             }
@@ -416,10 +434,16 @@ impl NarrowPhase {
     /// greedily maximising distance from those already chosen — so it can keep a shallow
     /// far-apart corner over a deeper clustered one. A box against a
     /// plane emits one contact per penetrating corner — up to eight — and a
-    /// compound concatenates whatever its sub-pairs produced. Feeding the result
-    /// through
+    /// compound concatenates whatever its sub-pairs produced.
+    ///
+    /// **Nothing downstream launders that count.** An earlier version of this paragraph
+    /// said the result could be fed through
     /// [`ContactManifold::add_contact`](crate::collision::ContactManifold::add_contact)
-    /// applies the manifold's own 4-point reduction.
+    /// to get the manifold's 4-point reduction. That method has no production callers:
+    /// this crate's own tests are its only ones, and `gizmo-physics-rigid`'s pipeline
+    /// assigns the returned buffer to [`ContactManifold::contacts`] directly, after which
+    /// the solver consumes every point in it. Treat the count as uncapped, and do not size
+    /// a fixed-capacity buffer from a 4-point assumption.
     ///
     /// Each returned contact's `local_point_a`/`local_point_b` are filled in here as
     /// the plain offsets `point - pos_a` and `point - pos_b`. They are *not* rotated

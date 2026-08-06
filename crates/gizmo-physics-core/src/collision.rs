@@ -186,7 +186,15 @@ pub struct ContactManifold {
     /// ordering rule. Nothing rejects a self-pair: hand `new` the same handle
     /// twice and both fields hold it.
     pub entity_b: BodyHandle,
-    /// At most 4 contact points.
+    /// The contact points, conventionally at most 4.
+    ///
+    /// Four is what [`add_contact`](Self::add_contact) enforces and what the solver is
+    /// tuned for — but it is a convention here, not an invariant. `gizmo-physics-rigid`'s
+    /// pipeline assigns the narrowphase's buffer to this field directly rather than going
+    /// through `add_contact`, and that buffer is uncapped: box–plane emits one point per
+    /// penetrating corner (up to 8) and a compound collider concatenates its sub-pairs.
+    /// The solver handles the surplus — it chunks by contact count rather than assuming 4 —
+    /// so read this field's length, never assume it.
     pub contacts: Vec<ContactPoint>,
     /// Combined dynamic friction coefficient (geometric mean of both materials).
     pub friction: f32,
@@ -211,7 +219,14 @@ impl ContactManifold {
         Self {
             entity_a,
             entity_b,
-            contacts: Vec::with_capacity(4),
+            // Deliberately NOT `with_capacity(4)`. The one production caller
+            // (`gizmo-physics-rigid`'s pipeline) hands the narrowphase's own contact buffer
+            // straight into `contacts` by move, so a pre-allocation here would be malloc'd and
+            // then dropped unread on every colliding pair, every substep. The remaining callers
+            // push afterwards, and the first push on an empty `Vec<ContactPoint>` lands on
+            // capacity 4 anyway (`RawVec::MIN_NON_ZERO_CAP` is 4 for element sizes above one
+            // byte), so they are unaffected. `Vec::new()` itself does not allocate.
+            contacts: Vec::new(),
             // Sensible defaults; overwritten by the pipeline using
             // PhysicsMaterial::combine before the solver runs.
             friction: 0.5,
