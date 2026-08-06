@@ -2070,7 +2070,7 @@ eklemekten ibaret.
   > düzeltti (`Hips` kontrolü çözümlenmiş eklemin adında değil, `track.target_node_name`
   > üzerinde) — bu hata modundan kimse muaf değil.
 
-- ⬜ **D4-followup — `Schedule` build sonrası eklenen sistemde ÖNCEKİLERİ DÜŞÜRÜYOR.**
+- ✅ **D4-followup — `Schedule` build sonrası eklenen sistemde ÖNCEKİLERİ DÜŞÜRÜYORDU** *(düzeltildi 2026-08-07)*.
   `gizmo-core` doküman turunda bulundu, probe ile doğrulandı (ilk sistemin sayacı ikinci
   koşudan sonra 2 değil 1'de kalıyor).
 
@@ -2088,11 +2088,39 @@ eklemekten ibaret.
   (hatalı) davranışı pinliyor; testin yorumu açıkça diyor ki bu `2` ile kırmızıya döndüğünde
   düzeltme inmiş demektir, beklenti güncellenmeli, test SİLİNMEMELİ.
 
-  **Gerçek düzeltme** `Schedule`'ın build sonrası sahiplik modelini değiştirmeyi gerektiriyor:
-  ya config'ler build'den sonra da saklanmalı (sistemler batch'lere ödünç verilmeli ya da
-  paylaşılmalı), ya da `invalidate()` batch'lerden sistemleri geri çıkarıp config'e
-  dönüştürmeli — ikincisinde label/ordering meta-verisi build sırasında tüketildiği için
-  kaybolur. Kendi oturumunu hak eden bir refactor.
+  **Yapılan düzeltme — ikinci seçenek, ve "meta-veri tüketiliyor" varsayımı yanlıştı.**
+  Buraya "`invalidate()` batch'lerden sistemleri geri çıkarsın, ama label/ordering meta-verisi
+  build sırasında TÜKETİLDİĞİ için kaybolur" yazmıştım. Meta-veri tüketilmiyor: `build_batches_for`
+  onu yalnız DAG'ı hesaplamak için **okuyor**, sonra `Box<dyn System>` batch'e taşınırken config
+  ile birlikte düşüyor. Yani veri yok olmuyor, atılıyor — ve bu, düzeltmeyi arena/`Arc` refactor'ü
+  olmaktan çıkarıyor.
+
+  `SystemBatch` artık her sistemin yanında meta-verisini de taşıyor (`metas`, aynı uzunluk aynı
+  sıra), `invalidate()` batch'leri boşaltıp `SystemConfig`'leri geri kuruyor. Sahiplik batch'lerde
+  KALDI — bilerek: batch içi koşum `par_iter_mut` ile rayon üzerinde, ve sistemleri merkezî bir
+  arenaya taşıyıp indeksle erişmek o paralelliği ya kırardı ya da `unsafe` isterdi.
+
+  > **Tuzak, kaydedilmeye değer:** `build()` config'leri MUTASYONA uğratıyor (set config'lerinin
+  > `before`/`after`'ını `extend` ediyor, `phase`'i ezebiliyor). Meta-veri build'den SONRA
+  > alınsaydı her rebuild aynı kısıtları yeniden ekler ve vektörler sınırsız büyürdü. Snapshot
+  > bu yüzden set katlamasından **önce** alınıyor (`pristine_meta`).
+  >
+  > **Sıra uyarısı:** sistemler batch sırasında geri geliyor, kayıt sırasında değil. Bildirilmiş
+  > her `before`/`after`/set kısıtı korunuyor (DAG aynı label'lardan yeniden kuruluyor), ama
+  > aralarında kısıt OLMAYAN iki sistem farklı batch'lere düşebilir. Bu, scheduler'ın zaten
+  > verdiği sözün içinde ("bir batch'in sistemleri belirsiz sırada, eşzamanlı koşar) ve yalnız
+  > rebuild'de oluyor.
+
+  **Pinlenmiş test talimatına uyuldu:** `adding_a_system_after_the_first_run_drops_the_earlier_ones`
+  "2 ile kırmızıya döndüğünde düzeltme inmiş demektir, beklentiyi güncelle, testi SİLME" diyordu.
+  Tam olarak öyle oldu; test adı ve beklentisi düzeltilmiş davranışa çevrildi. Yanına iki test
+  daha eklendi: **sıralama kısıtları rebuild'den sağ çıkıyor mu** (meta-veri boş dönseydi
+  sistemler yine ÇALIŞIR, yani ilk test yeşil kalırken `before`/`after` sessizce ölürdü) ve
+  **`configure_set` sonrası schedule boşalmıyor mu** (en kötü şekildi: hiçbir şey eklemeden
+  invalidate ediyordu).
+
+  > **Üçünün de boş olmadığı doğrulandı:** `invalidate()` eski davranışa sabote edilince üçü
+  > birden kırmızıya döndü; sabotaj geri alındı.
 
 - ✅ **D4-followup — `Track::sample` tek keyframe + NaN'de PANİKLİYORDU** *(düzeltildi 2026-08-05)*. Doküman turunda
   bulundu, gerçek koda karşı doğrulandı (probe: `single_kf_nan_time panicked=true`,

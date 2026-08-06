@@ -21,6 +21,13 @@ use std::collections::HashSet;
 /// so a `SystemBatch` built outside this crate can be pushed into but never read back.
 pub struct SystemBatch {
     pub(crate) systems: Vec<Box<dyn System>>,
+    /// The metadata each system in `systems` was registered with, same length and same order.
+    ///
+    /// A batch owns its systems, so without this the metadata would be gone the moment
+    /// `build` moved a system in here — which is exactly why a rebuild used to be impossible.
+    /// Kept as the caller declared it, BEFORE set-config folding; see
+    /// [`SystemConfig::snapshot_meta`].
+    pub(crate) metas: Vec<crate::system::config::SystemMeta>,
     /// Union of the accesses of every member — each system's own
     /// [`System::access_info`] merged with the extra access declared on its
     /// [`SystemConfig`] (`reads`/`writes`/`reads_res`/`writes_res`/`exclusive`).
@@ -48,6 +55,7 @@ impl SystemBatch {
     pub fn new() -> Self {
         Self {
             systems: Vec::new(),
+            metas: Vec::new(),
             access_info: AccessInfo::new(),
         }
     }
@@ -64,7 +72,12 @@ impl SystemBatch {
     /// [`is_compatible`](Self::is_compatible) for this same `system`/`config_info` pair;
     /// appending a conflicting system creates a data race, because batch members are run in
     /// parallel over a shared world.
-    pub fn add_system(&mut self, system: Box<dyn System>, config_info: AccessInfo) {
+    pub(crate) fn add_system_with_meta(
+        &mut self,
+        system: Box<dyn System>,
+        config_info: AccessInfo,
+        meta: crate::system::config::SystemMeta,
+    ) {
         let mut sys_info = system.access_info();
         sys_info.component_reads.extend(config_info.component_reads);
         sys_info
@@ -89,6 +102,7 @@ impl SystemBatch {
         self.access_info.is_exclusive = self.access_info.is_exclusive || sys_info.is_exclusive;
 
         self.systems.push(system);
+        self.metas.push(meta);
     }
 
     /// Whether `system`, widened by the hand-declared `config_info`, can be added to this
@@ -327,32 +341,50 @@ impl Schedule {
         self.invalidate();
     }
 
+    /// Takes a built schedule apart, returning every compiled system to `unbuilt_configs` so the
+    /// next [`build`](Self::build) can compile them again alongside whatever was just added.
+    ///
+    /// This used to DROP them. `build` moves each system out of its config into a batch, and the
+    /// metadata went with the dropped config, so there was nothing to rebuild from — clearing the
+    /// batches discarded the systems for good. The pattern that bit was ordinary: add systems,
+    /// run a frame, then register one more (a runtime plugin, the editor, a script) and only the
+    /// newest survived; `configure_set` after a build emptied the schedule outright.
+    ///
+    /// Batches now carry each system's metadata beside it (`SystemBatch::metas`), which is what
+    /// makes the round trip possible.
+    ///
+    /// **Order caveat, worth knowing:** systems come back in batch order, not in their original
+    /// registration order. Every declared `before`/`after`/set constraint is preserved — the DAG
+    /// is rebuilt from the same labels — but two systems with NO constraint between them may be
+    /// examined in a different order than the first time, so which batch each lands in can
+    /// differ. That is within what the scheduler has always promised (a batch's systems run
+    /// "concurrently, in an unspecified order"), and it only happens on a rebuild.
     fn invalidate(&mut self) {
-        // `build()` MOVES the configs out (`mem::take`), so once a schedule is built there is
-        // nothing left to rebuild from — clearing the batches here discards those systems for
-        // good. Adding a system to an already-built schedule therefore keeps only the new one.
-        //
-        // Fixing that properly means changing who owns the configs after a build (see
-        // docs/FIXPLAN.md). Until then the least this can do is stop being SILENT: a schedule
-        // that loses every system between one frame and the next is otherwise indistinguishable
-        // from one whose systems simply do nothing.
-        let discarded: usize = self
-            .phase_batches
-            .iter()
-            .flat_map(|(_, batches)| batches.iter())
-            .chain(self.legacy_batches.iter())
-            .map(|b| b.systems.len())
-            .sum();
-        if discarded > 0 {
-            tracing::error!(
-                discarded_systems = discarded,
-                "Schedule modified after it was built: the {discarded} already-compiled \
-                 system(s) have been DROPPED, not rebuilt. Add every system before the first \
-                 `run()`/`build()`.",
+        let phase_batches = std::mem::take(&mut self.phase_batches);
+        let legacy_batches = std::mem::take(&mut self.legacy_batches);
+
+        let mut recovered = 0usize;
+        for batch in phase_batches
+            .into_iter()
+            .flat_map(|(_, batches)| batches)
+            .chain(legacy_batches)
+        {
+            // `systems` and `metas` are pushed together by `add_system_with_meta` and never
+            // touched apart, so `zip` pairs each system with its own metadata.
+            debug_assert_eq!(batch.systems.len(), batch.metas.len());
+            for (system, meta) in batch.systems.into_iter().zip(batch.metas) {
+                self.unbuilt_configs
+                    .push(SystemConfig::from_parts(system, meta));
+                recovered += 1;
+            }
+        }
+
+        if recovered > 0 {
+            tracing::debug!(
+                recovered_systems = recovered,
+                "Schedule modified after it was built: {recovered} already-compiled system(s)                  returned to the pending list and will be rebuilt on the next run.",
             );
         }
-        self.phase_batches.clear();
-        self.legacy_batches.clear();
     }
 
     fn is_built(&self) -> bool {
@@ -476,6 +508,9 @@ impl Schedule {
 
         for &idx in &sorted_indices {
             let config = dummy_configs[idx].take().unwrap();
+            // Snapshotted in `build` before set folding, so a rebuild sees what the caller
+            // declared rather than the folded-in copy.
+            let meta = config.pristine_meta.clone().unwrap_or_else(|| config.snapshot_meta());
 
             let earliest = predecessors[idx]
                 .iter()
@@ -488,12 +523,12 @@ impl Schedule {
                 .find(|&bidx| batches[bidx].is_compatible(&*config.system, &config.added_info));
 
             let batch_idx = if let Some(bidx) = placed {
-                batches[bidx].add_system(config.system, config.added_info);
+                batches[bidx].add_system_with_meta(config.system, config.added_info, meta);
                 bidx
             } else {
                 let new_idx = batches.len();
                 let mut new_batch = SystemBatch::new();
-                new_batch.add_system(config.system, config.added_info);
+                new_batch.add_system_with_meta(config.system, config.added_info, meta);
                 batches.push(new_batch);
                 new_idx
             };
@@ -546,6 +581,14 @@ impl Schedule {
             return;
         }
         let system_count = configs.len();
+
+        // Snapshot each config's metadata BEFORE folding sets in, so `invalidate` can put the
+        // configs back exactly as the caller declared them. Folding appends to `before`/`after`
+        // and can overwrite `phase`; snapshotting after it would make every rebuild re-append the
+        // same constraints.
+        for config in &mut configs {
+            config.pristine_meta = Some(config.snapshot_meta());
+        }
 
         // Apply SetConfigs to systems
         for config in &mut configs {
@@ -716,17 +759,21 @@ mod modify_after_build {
     /// Adding a system to an already-built schedule silently drops every system already
     /// compiled into it.
     ///
-    /// `build()` moves the configs out with `mem::take`, so there is nothing to rebuild from;
-    /// `invalidate()` then clears the batches and the previous systems are gone. Because
-    /// `run()` builds lazily on the first frame, the shape that bites is ordinary: add
-    /// systems, run a frame, then register one more — from a plugin loaded at runtime, the
-    /// editor, or a script — and the schedule is left holding only the newcomer.
+    /// Registering a system after the schedule has run keeps the systems already compiled.
     ///
-    /// This test pins the CURRENT behaviour, which is a bug, not a contract. It exists so the
-    /// eventual fix (see docs/FIXPLAN.md) has something that goes red when the loss stops
-    /// happening — at which point the assertion below should become `2`, not be deleted.
+    /// `build()` moves each system out of its config and into a batch. It used to drop the
+    /// config's metadata at that moment, so `invalidate()` had nothing to rebuild from and
+    /// clearing the batches lost those systems for good. Because `run()` builds lazily on the
+    /// first frame, the shape that bit was ordinary: add systems, run a frame, then register one
+    /// more — from a plugin loaded at runtime, the editor, or a script — and the schedule was
+    /// left holding only the newcomer.
+    ///
+    /// This test was written to pin that bug, with a note saying that when it started failing
+    /// with `2` the ownership fix had landed and the expectation should be updated rather than
+    /// the test deleted. That is what happened: batches now carry each system's metadata
+    /// (`SystemBatch::metas`) and `invalidate()` reassembles the configs.
     #[test]
-    fn adding_a_system_after_the_first_run_drops_the_earlier_ones() {
+    fn a_system_added_after_the_first_run_does_not_drop_the_earlier_ones() {
         let first = Arc::new(AtomicU32::new(0));
         let second = Arc::new(AtomicU32::new(0));
         let (f, s) = (first.clone(), second.clone());
@@ -752,10 +799,79 @@ mod modify_after_build {
         );
         assert_eq!(
             first.load(Ordering::Relaxed),
-            1,
-            "KNOWN BUG being pinned: the first system was dropped by the rebuild, so it ran \
-             once in total rather than twice. When this starts failing with 2, the ownership \
-             fix has landed — update the expectation, do not delete the test."
+            2,
+            "the system registered BEFORE the first run must survive the rebuild and run again; \
+             1 here means `invalidate()` dropped it, which is the bug this test was written for"
+        );
+    }
+    /// Ordering constraints survive a rebuild — the part of the fix that is easy to get wrong.
+    ///
+    /// Returning the systems is not enough on its own: if the metadata came back empty, every
+    /// system would still RUN, so the test above would pass while `before`/`after` silently
+    /// stopped being honoured. Here the two systems record the order they ran in, and the
+    /// constraint is checked again after a system is added post-build.
+    #[test]
+    fn ordering_constraints_survive_a_rebuild() {
+        let log: Arc<std::sync::Mutex<Vec<&'static str>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (l1, l2) = (log.clone(), log.clone());
+
+        let mut schedule = Schedule::new();
+        schedule.add_di_system(
+            (move || { l1.lock().unwrap().push("late"); })
+                .label("late")
+                .after("early"),
+        );
+        schedule.add_di_system(
+            (move || { l2.lock().unwrap().push("early"); })
+                .label("early"),
+        );
+
+        let mut world = World::new();
+        schedule.run(&mut world, 0.016);
+        assert_eq!(*log.lock().unwrap(), vec!["early", "late"], "before the rebuild");
+
+        log.lock().unwrap().clear();
+        schedule.add_system(|_w: &World, _dt: f32| {});
+        schedule.run(&mut world, 0.016);
+        assert_eq!(
+            *log.lock().unwrap(),
+            vec!["early", "late"],
+            "after the rebuild the `after(\"early\")` edge must still hold; an empty or lost \
+             metadata round-trip would let these run in either order"
+        );
+    }
+
+    /// `configure_set` after a build was the worst shape of the same bug: it invalidated the
+    /// schedule without adding anything, so every compiled system was dropped and the next
+    /// `run()` did nothing at all.
+    #[test]
+    fn configuring_a_set_after_the_first_run_keeps_the_systems() {
+        let ran = Arc::new(AtomicU32::new(0));
+        let r = ran.clone();
+
+        let mut schedule = Schedule::new();
+        schedule.add_system(move |_w: &World, _dt: f32| {
+            r.fetch_add(1, Ordering::Relaxed);
+        });
+
+        let mut world = World::new();
+        schedule.run(&mut world, 0.016);
+        assert_eq!(ran.load(Ordering::Relaxed), 1);
+
+        schedule.configure_set(SetConfig {
+            name: "a_set_nothing_belongs_to",
+            before: Vec::new(),
+            after: Vec::new(),
+            phase: None,
+        });
+        schedule.run(&mut world, 0.016);
+
+        assert_eq!(
+            ran.load(Ordering::Relaxed),
+            2,
+            "configuring a set must not empty the schedule; 1 here means the rebuild dropped \
+             every system it had already compiled"
         );
     }
 }
