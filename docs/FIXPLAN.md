@@ -1458,8 +1458,48 @@ eklemekten ibaret.
   > `PhysicsWorld` sürüyor, ECS köprüsünden (`physics_step_system`) hiç geçmiyor. Yani motorun
   > ECS tarafının HİÇ benchmark'ı yok. Bu değişiklik saf karmaşıklık düzeltmesi (O(N²)→O(N),
   > semantiği birebir aynı) olarak duruyor; hızlanma iddiası yok.
-  - ⬜ **Takip:** ECS köprüsü için bir benchmark. C3'ün etkisini ancak o gösterir, ve köprü
-    şu an motorun ölçülmeyen tek büyük parçası.
+  - ✅ **Takip yapıldı: `benches/ecs_bridge_bench.rs`** *(2026-08-06)*. Köprünün ilk benchmark'ı.
+
+    **Tasarım — köprüyü İZOLE etmek:** aynı sahne iki kez ölçülüyor, `ecs_bridge`
+    (`physics_step_system`: ECS sorgusu → collider toplama → `sync_bodies` → step → ECS'e geri
+    yazma) ve `physics_world_direct` (aynı gövde kümesiyle doğrudan `PhysicsWorld::step`, ECS yok).
+    **Aradaki fark köprünün kendisi** — çözücü, broadphase ve entegratör iki tarafta da aynı
+    olduğu için sadeleşiyorlar. Sahne temassız (gövdeler birbirine değmeyecek kadar seyrek) ve
+    yerçekimi altında serbest düşüşte: temas yok ki çözücü köprüyü boğmasın (`dense_contacts`'ın
+    %91 çözücü çıkması tam bu hataydı), ve hiç durmuyorlar ki uyku yolu ölçümü yutmasın.
+
+    **Köprünün payı — temassız karede** (HEAD, 2. koşu):
+
+    | N | `ecs_bridge` | `physics_world_direct` | köprü | köprünün payı |
+    |---|---|---|---|---|
+    | 64 | 676 µs | 430 µs | 246 µs | %36 |
+    | 256 | 1.549 ms | 892 µs | 657 µs | %42 |
+    | 1024 | 3.512 ms | 2.085 ms | 1.43 ms | %41 |
+    | 4096 | 12.49 ms | 6.22 ms | 6.27 ms | **%50** |
+
+    > Bu bir **üst sınır**, tipik kare değil: temaslı gerçek bir sahnede çözücü baskın olur ve
+    > köprünün payı düşer. Ama "köprü ölçülmeyen bir parça" artık doğru değil.
+
+    **C3'ün kazancı — nihayet ölçüldü.** HEAD'in kopyasında YALNIZ C3 hunk'ı geri alındı
+    (ağaçlar arası başka fark yok), aynı bench:
+
+    | N | C3 öncesi | C3 ile | değişim | köprü-only değişim |
+    |---|---|---|---|---|
+    | 64 | 643 µs | 676 µs | +5% | −11% |
+    | 256 | 1.552 ms | 1.549 ms | ~0 | +30% |
+    | 1024 | 3.893 ms | 3.512 ms | −10% | −10% |
+    | 4096 | 21.35 ms | 12.49 ms | **−41%** | **−60%** |
+
+    > **Şekil tam olarak O(N²)→O(N) imzası:** 1024'ün altında fark gürültünün içinde, 4096'da
+    > keskin. C3'ün commit mesajındaki "birkaç bin cisimde kare başına milyonlarca karşılaştırma"
+    > iddiası bu tabloyla doğrulandı; o commit hız iddiası yapmamıştı, artık yapabilir.
+    >
+    > ⚠️ **Makine gürültüsü ±%20 ve bunu saklamıyorum.** İlk HEAD koşumda
+    > `physics_world_direct/4096` 1.80 ms çıktı, ikincisinde 6.22 ms — C3'ün DOKUNMADIĞI bir
+    > grupta 3× fark. Bu yüzden ilk koşuyu attım ve iki ölçümü arka arkaya aldım; yukarıdaki
+    > tablolarda kontrol grubu (`physics_world_direct`) da veriliyor ki okuyan kendi
+    > kararını verebilsin. C3 koşusunda kontrol biraz DAHA YAVAŞ (6.22 vs 5.54 ms), yani
+    > 4096'daki −%41 eğer bir yöne sapıyorsa küçümsenmiş yöne sapıyor.
 
 - ✅ **C2 — Broadphase artık ARTIMLI** *(2026-08-06)*. `broadphase_step` her substep
   `spatial_hash.clear()` çağırıp her cismi yeniden ekliyordu. Yapı zaten şişman-marjlı bir
