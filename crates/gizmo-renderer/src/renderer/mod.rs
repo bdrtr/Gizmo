@@ -483,6 +483,9 @@ mod tests {
 
     #[test]
     fn test_headless_mipmap_generation() {
+        // Bu test kendi wgpu cihazını kuruyor. Guard testin TAMAMI boyunca tutulur —
+        // yalnız yaratımı serileştirmek ölçüldü ve yetmedi (bkz. `crate::test_gpu`).
+        let _gpu = crate::test_gpu::gpu_lock();
         pollster::block_on(async {
             let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
                 backends: wgpu::Backends::all(),
@@ -559,6 +562,9 @@ mod tests {
 
     #[test]
     fn new_headless_builds_all_subsystems_and_renders_offscreen() {
+        // Bu test kendi wgpu cihazını kuruyor. Guard testin TAMAMI boyunca tutulur —
+        // yalnız yaratımı serileştirmek ölçüldü ve yetmedi (bkz. `crate::test_gpu`).
+        let _gpu = crate::test_gpu::gpu_lock();
         if !pollster::block_on(Renderer::headless_adapter_available()) {
             eprintln!(
                 "skipping new_headless_builds_all_subsystems_and_renders_offscreen: \

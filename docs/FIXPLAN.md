@@ -803,7 +803,53 @@ hiçbiri snapshot'lanmıyor, yani rollback bugün de bir eklemi "kırılmamış"
 `tests/rollback.rs`'te joint içeren sahne YOK → bu commit `build_scene`'e bir tane eklemeli;
 yoksa desync yeşil ışıkta geçer ve `state_hash` (yalnız transform/velocity/sleep) onu göremez.
 
-### ⬜ GPU test flake'i — kısmen çözüldü, kalanı ölçüldü
+### ✅ GPU test flake'i — `gizmo-renderer` tarafı da kapandı *(2026-08-06)*
+> Aşağıdaki madde `gizmo`'nun golden testlerini anlatıyor ve "kilit sonrası, binary izole →
+> 8/8 temiz" diyor. **`gizmo-renderer` için bu hiç doğru olmadı: orada `gpu_lock` yoktu.**
+> O binary izole koşuda 3/3 SIGSEGV veriyordu ve `cargo test --workspace`'i tek başına
+> kırmızı tutuyordu — yani bu oturumda koşturulan her kapı, workspace testi zaten kırıkken
+> koşuyordu.
+>
+> **Ölçüm — çökme eşzamanlılığa bağlı, ve eşik keskin** (bu makine, 16 çekirdek):
+>
+> | `--test-threads` | sonuç |
+> |---|---|
+> | 1 | segfault yok |
+> | 2 | **temiz, 147/147, 6.4 s** |
+> | 4 | SIGSEGV |
+> | 8 | SIGSEGV |
+> | 16 (varsayılan) | SIGSEGV, 3/3 |
+>
+> Hiçbir test değişmeden 2 thread temiz, 4 thread çöküyor → sorun tek bir testte değil.
+>
+> ⚠️ **İLK DÜZELTMEM ÇÜRÜDÜ, kayda geçiyor.** Aşağıdaki madde çökmeyi *cihaz yaratımı*
+> yarışına bağlıyor, ben de önce yalnız **yaratımı** serileştirdim (paylaşılan bir
+> `headless_device()` içinde kilit, testler GPU işini paralel yapmaya devam ediyor).
+> **5/5 hâlâ çöktü.** Yani dar iddia yanlış: sürücünün kaldıramadığı şey cihazların
+> yapıldığı AN değil, aynı anda birden fazla cihazın **canlı ve kullanımda** olması.
+> Guard bu yüzden testin tamamı boyunca tutuluyor.
+>
+> **Yapılan:** yeni `crates/gizmo-renderer/src/test_gpu.rs` (`#[cfg(test)]`) — process-genelinde
+> tek `gpu_lock()` + paylaşılan `headless_device()`. **Beş ayrı modüldeki `setup_headless_gpu`
+> kopyası** (gpu_smoke, gpu_physics::fem_tests, gpu_particles::system, gpu_fluid::system,
+> pipeline::shaders) tek yardımcıya delege edildi ve **20 GPU testi** guard'ı alıyor
+> (16 helper üzerinden + 4 satır-içi cihaz kuran test).
+>
+> **`gpu_fluid::fluid_tests` bilinçli olarak DIŞARIDA:** o ~20 test saf CPU matematiği, hiç
+> cihaz yaratmıyor. Kilide sokmak bedava wall-clock kaybı olurdu.
+>
+> **Eksiksizlik önemliydi:** ilk taramam beş modülden ÜÇÜNÜ buldu; `gpu_fluid/system/mod.rs`
+> ve `pipeline/shaders.rs` ancak "kilitsiz `request_device` kaldı mı" kontrolüyle çıktı.
+> Kısmi bir düzeltme, bilinen bir çökmeyi aralıklı bir çökmeye çevirirdi — daha kötüsü.
+>
+> **Doğrulama:** `cargo test -p gizmo-renderer --lib` varsayılan paralellikte **6/6 temiz**
+> (147/147), `cargo test --workspace` **2/2 exit 0**, tam CI clippy temiz.
+>
+> - ⬜ **Kalan:** `gpu_fluid::fluid_tests::test_performance_10k_particles` tek-thread'de bir kez
+>   düştü (duvar-saati iddiası olan bir süre testi, makine yükü altında). Ayrı sorun,
+>   ölçülmedi.
+
+### ⬜ GPU test flake'i — kısmen çözüldü, kalanı ölçüldü *(önceki tur; `gizmo` tarafı)*
 `crates/gizmo/src/systems/render/mod.rs`'teki golden-image testleri her biri kendi wgpu
 cihazını açıyordu ve `cargo test` bir binary'nin testlerini paralel koşturuyor → eşzamanlı
 cihaz oluşturma sürücüde **SIGSEGV**'e dönüyor, tüm workspace koşusunu düşürüyordu.

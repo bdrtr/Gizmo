@@ -327,6 +327,9 @@ mod tests {
     /// WGSL'i geçersiz kılmadığını doğrular. GPU adapter yoksa graceful atlanır.
     #[test]
     fn core_shaders_compile() {
+        // Bu test kendi wgpu cihazını kuruyor. Guard testin TAMAMI boyunca tutulur —
+        // yalnız yaratımı serileştirmek ölçüldü ve yetmedi (bkz. `crate::test_gpu`).
+        let _gpu = crate::test_gpu::gpu_lock();
         pollster::block_on(async {
             let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
                 backends: wgpu::Backends::all(),
@@ -447,6 +450,9 @@ mod tests {
 
     #[test]
     fn test_dynamic_instance_buffer_resize() {
+        // Bu test kendi wgpu cihazını kuruyor. Guard testin TAMAMI boyunca tutulur —
+        // yalnız yaratımı serileştirmek ölçüldü ve yetmedi (bkz. `crate::test_gpu`).
+        let _gpu = crate::test_gpu::gpu_lock();
         pollster::block_on(async {
             let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
                 backends: wgpu::Backends::all(),

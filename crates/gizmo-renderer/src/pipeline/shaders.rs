@@ -182,6 +182,9 @@ mod tests {
 
     #[test]
     fn native_compose_keeps_shadows_and_groups() {
+        // Guard testin tamamı boyunca: aynı anda birden fazla canlı cihaz sürücüyü
+        // düşürüyor (bkz. `crate::test_gpu`).
+        let _gpu = crate::test_gpu::gpu_lock();
         let native = compose_wgsl(SHADER_SRC, "shader.wgsl", native_render_defs());
         assert!(
             !native.contains("#import") && !native.contains("#ifdef") && !native.contains("#{"),
@@ -198,22 +201,7 @@ mod tests {
     }
 
     async fn setup_headless_gpu() -> Option<(wgpu::Device, wgpu::Queue)> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::all(),
-            flags: wgpu::InstanceFlags::default(),
-            memory_budget_thresholds: Default::default(),
-            backend_options: Default::default(),
-            display: None,
-        });
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: None,
-                force_fallback_adapter: false,
-            })
-            .await
-            .ok()?;
-        adapter.request_device(&wgpu::DeviceDescriptor::default()).await.ok()
+        crate::test_gpu::headless_device().await
     }
 
     async fn read_mat_cols(device: &wgpu::Device, queue: &wgpu::Queue, buffer: &wgpu::Buffer) -> [f32; 16] {
@@ -248,6 +236,9 @@ mod tests {
     // when no GPU adapter is available. Reintroducing the bad formula fails the assert below.
     #[test]
     fn inverse_mat4_matches_glam_on_gpu() {
+        // Guard testin tamamı boyunca: aynı anda birden fazla canlı cihaz sürücüyü
+        // düşürüyor (bkz. `crate::test_gpu`).
+        let _gpu = crate::test_gpu::gpu_lock();
         use gizmo_math::{Mat4, Vec3};
         use wgpu::util::DeviceExt;
 

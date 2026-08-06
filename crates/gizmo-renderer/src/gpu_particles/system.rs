@@ -490,25 +490,7 @@ mod tests {
     use crate::gpu_particles::types::GpuParticle;
 
     async fn setup_headless_gpu() -> Option<(wgpu::Device, wgpu::Queue)> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::all(),
-            flags: wgpu::InstanceFlags::default(),
-            memory_budget_thresholds: Default::default(),
-            backend_options: Default::default(),
-            display: None,
-        });
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: None,
-                force_fallback_adapter: false,
-            })
-            .await
-            .ok()?;
-        adapter
-            .request_device(&wgpu::DeviceDescriptor::default())
-            .await
-            .ok()
+        crate::test_gpu::headless_device().await
     }
 
     async fn read_buffer<T: bytemuck::Pod>(
@@ -567,6 +549,9 @@ mod tests {
     // leave it untouched).
     #[test]
     fn test_spawn_explosion_particles_are_born_alive() {
+        // Guard testin tamamı boyunca: aynı anda birden fazla canlı cihaz sürücüyü
+        // düşürüyor (bkz. `crate::test_gpu`).
+        let _gpu = crate::test_gpu::gpu_lock();
         pollster::block_on(async {
             let Some((device, queue)) = setup_headless_gpu().await else {
                 tracing::info!("Skipping GPU test: no wgpu adapter found");

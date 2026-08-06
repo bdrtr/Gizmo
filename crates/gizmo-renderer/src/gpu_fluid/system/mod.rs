@@ -403,25 +403,7 @@ mod gpu_dispatch_tests {
     use super::*;
 
     async fn setup_headless_gpu() -> Option<(wgpu::Device, wgpu::Queue)> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::all(),
-            flags: wgpu::InstanceFlags::default(),
-            memory_budget_thresholds: Default::default(),
-            backend_options: Default::default(),
-            display: None,
-        });
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: None,
-                force_fallback_adapter: false,
-            })
-            .await
-            .ok()?;
-        adapter
-            .request_device(&wgpu::DeviceDescriptor::default())
-            .await
-            .ok()
+        crate::test_gpu::headless_device().await
     }
 
     async fn read_u32s(device: &wgpu::Device, queue: &wgpu::Queue, buffer: &wgpu::Buffer) -> Vec<u32> {
@@ -459,6 +441,9 @@ mod gpu_dispatch_tests {
     // offset-mapped set are one population.
     #[test]
     fn test_compute_pass_syncs_active_particle_count() {
+        // Guard testin tamamı boyunca: aynı anda birden fazla canlı cihaz sürücüyü
+        // düşürüyor (bkz. `crate::test_gpu`).
+        let _gpu = crate::test_gpu::gpu_lock();
         pollster::block_on(async {
             let Some((device, queue)) = setup_headless_gpu().await else {
                 tracing::info!("Skipping GPU test: no wgpu adapter found");
@@ -510,6 +495,9 @@ mod gpu_dispatch_tests {
     // sub-rectangle. `resize` must recreate them at the new dimensions.
     #[test]
     fn test_resize_recreates_ssfr_textures() {
+        // Guard testin tamamı boyunca: aynı anda birden fazla canlı cihaz sürücüyü
+        // düşürüyor (bkz. `crate::test_gpu`).
+        let _gpu = crate::test_gpu::gpu_lock();
         pollster::block_on(async {
             let Some((device, queue)) = setup_headless_gpu().await else {
                 tracing::info!("Skipping GPU test: no wgpu adapter found");

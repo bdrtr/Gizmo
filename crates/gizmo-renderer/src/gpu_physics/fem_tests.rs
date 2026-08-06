@@ -4,27 +4,7 @@ mod tests {
 
     // Helper to setup a headless wgpu device
     async fn setup_headless_gpu() -> Option<(wgpu::Device, wgpu::Queue)> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::all(),
-            flags: wgpu::InstanceFlags::default(),
-            memory_budget_thresholds: Default::default(),
-            backend_options: Default::default(),
-            display: None,
-        });
-
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: None,
-                force_fallback_adapter: false,
-            })
-            .await
-            .ok()?;
-
-        adapter
-            .request_device(&wgpu::DeviceDescriptor::default())
-            .await
-            .ok()
+        crate::test_gpu::headless_device().await
     }
 
     // Helper to read back a buffer
@@ -86,6 +66,9 @@ mod tests {
 
     #[test]
     fn test_fem_compute_clear_forces() {
+        // Guard testin tamamı boyunca: aynı anda birden fazla canlı cihaz sürücüyü
+        // düşürüyor (bkz. `crate::test_gpu`).
+        let _gpu = crate::test_gpu::gpu_lock();
         pollster::block_on(async {
             let Some((device, queue)) = setup_headless_gpu().await else {
                 tracing::info!("Skipping GPU test: no wgpu adapter found");
@@ -149,6 +132,9 @@ mod tests {
 
     #[test]
     fn test_fem_compute_integration_and_collision() {
+        // Guard testin tamamı boyunca: aynı anda birden fazla canlı cihaz sürücüyü
+        // düşürüyor (bkz. `crate::test_gpu`).
+        let _gpu = crate::test_gpu::gpu_lock();
         pollster::block_on(async {
             let Some((device, queue)) = setup_headless_gpu().await else {
                 tracing::info!("Skipping GPU test: no wgpu adapter found");
@@ -246,6 +232,9 @@ mod tests {
 
     #[test]
     fn test_fem_compute_stress() {
+        // Guard testin tamamı boyunca: aynı anda birden fazla canlı cihaz sürücüyü
+        // düşürüyor (bkz. `crate::test_gpu`).
+        let _gpu = crate::test_gpu::gpu_lock();
         pollster::block_on(async {
             let Some((device, queue)) = setup_headless_gpu().await else {
                 tracing::info!("Skipping GPU test: no wgpu adapter found");
@@ -362,6 +351,9 @@ mod tests {
     // accumulator. The sign-preserving clamp keeps F^-T correctly oriented.
     #[test]
     fn test_fem_inverted_element_signed_stress() {
+        // Guard testin tamamı boyunca: aynı anda birden fazla canlı cihaz sürücüyü
+        // düşürüyor (bkz. `crate::test_gpu`).
+        let _gpu = crate::test_gpu::gpu_lock();
         pollster::block_on(async {
             let Some((device, queue)) = setup_headless_gpu().await else {
                 tracing::info!("Skipping GPU test: no wgpu adapter found");
