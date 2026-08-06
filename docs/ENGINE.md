@@ -189,6 +189,27 @@ durmuyordu ve statik zeminin yarı-boyutu (20 vs 200) sonucu çeviriyordu.
   genişlet:** yukarıdaki daralt-ma, ufku yeterli olan bir testin tek bir şekil ve tek bir
   zemin boyutu denediği için kaçırdığı bir kusurdu.
 
+**Fizik perf, ikinci tur — ÇÖZÜLDÜ** *(2026-08-06)*. Üç kalem, hepsi ölçülü:
+- **Broadphase artımlı** (C2): ağaç substep'ler arasında korunuyor. Şişman-marjlı AABB ağacının
+  `insert`'ü kutusundan çıkmamış cisim için zaten erken çıkışlı; `clear()` o kazancı çöpe
+  atıyordu. `DynamicAabbTree::retain` ile silmeler uzlaştırılıyor. **Determinizm hash'i
+  kıpırdamadı** — artımlı ağaç farklı sırada çift yayar, ve bunun simülasyonu değiştirmemesi
+  "pair-emission invariance" özelliğinin ampirik kanıtı.
+- **ECS köprüsündeki O(N²) writeback** (C3) → handle→index map. (Köprünün benchmark'ı yok;
+  saf karmaşıklık düzeltmesi.)
+- **Rewind geçmişi opt-in** (C4a): `max_history_frames` 600 → 0. Kare başına 160 B/cisim; eski
+  varsayılan 2000 kutuluk stress sahnesinde 192 MB resident tutuyordu.
+
+| senaryo | 2026-08-05 | 2026-08-06 |
+|---|---|---|
+| `broadphase/1024` | 1.73 ms | **564 µs** |
+| `solver_settled_stack/48` | 4.05 ms | **115 µs** |
+| `full_step_mixed/512` | 2.43 ms | **1.64 ms** |
+| `headless_stress_test` | 1.62 s | **392 ms** |
+
+Yerleşmiş yığındaki büyük düşüş ada-kolektif uykudan, broadphase ve full_step'teki artımlı
+ağaçtan geliyor.
+
 **Fizik perf (N² darboğazları) — ÇÖZÜLDÜ.** broadphase `query_pairs` çift-üretimi
 (O(P²)→O(P)), TGS per-island scratch'i tüm-dünya yerine ada-boyutunda, per-contact TGS
 sabitlerinin 24-sweep döngüsünden HOIST'i → en kötü frame 262→46ms (~5.7×), bit-eş

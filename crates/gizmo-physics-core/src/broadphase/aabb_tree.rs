@@ -187,6 +187,30 @@ impl DynamicAabbTree {
         }
     }
 
+    /// Drops every entity whose id `keep` rejects, and reports how many went.
+    ///
+    /// This is what lets a caller hold the tree across frames instead of clearing and refilling
+    /// it: refreshing the bodies that are still present is what [`insert`](Self::insert) already
+    /// does cheaply, and this closes the other half by evicting the ones that are gone.
+    ///
+    /// Ids are visited in a `FxHashMap`'s iteration order, but the result does not depend on it —
+    /// removal is commutative here, since each eviction only detaches its own leaf.
+    pub fn retain(&mut self, keep: impl Fn(u32) -> bool) -> usize {
+        let stale: Vec<u32> = self
+            .entity_map
+            .keys()
+            .copied()
+            .filter(|&id| !keep(id))
+            .collect();
+        for id in &stale {
+            if let Some(leaf) = self.entity_map.remove(id) {
+                self.remove_leaf(leaf);
+                self.free_node(leaf);
+            }
+        }
+        stale.len()
+    }
+
     // ── Yaprak Ekleme / Çıkarma ──────────────────────────────────────────────
 
     fn insert_leaf(&mut self, leaf: usize) {
