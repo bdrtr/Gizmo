@@ -1,8 +1,6 @@
 use crate::components::Mesh;
 use crate::renderer::Vertex;
 use gizmo_math::Vec3;
-use std::sync::Arc;
-use wgpu::util::DeviceExt;
 
 impl crate::asset::AssetManager {
     /// Basit, yatay bir düzlem (Plane) üretir.
@@ -36,15 +34,8 @@ impl crate::asset::AssetManager {
 
     pub fn create_plane(device: &wgpu::Device, size: f32) -> Mesh {
         let vertices = Self::plane_data(size);
-        let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Plane VBuf"),
-            contents: bytemuck::cast_slice(&vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
-        Mesh::new(
+        Mesh::new_indexed(
             device,
-            Arc::new(vbuf),
             &vertices,
             Vec3::ZERO,
             format!("plane_{}", size),
@@ -92,15 +83,8 @@ impl crate::asset::AssetManager {
 
     pub fn create_circle(device: &wgpu::Device, radius: f32, segments: u32) -> Mesh {
         let vertices = Self::circle_data(radius, segments);
-        let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Circle VBuf"),
-            contents: bytemuck::cast_slice(&vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
-        Mesh::new(
+        Mesh::new_indexed(
             device,
-            Arc::new(vbuf),
             &vertices,
             Vec3::ZERO,
             format!("circle_{}_{}", radius, segments),
@@ -131,15 +115,8 @@ impl crate::asset::AssetManager {
             });
         }
 
-        let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Editor Infinite Grid VBuf"),
-            contents: bytemuck::cast_slice(&vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
-        Mesh::new(
+        Mesh::new_indexed(
             device,
-            Arc::new(vbuf),
             &vertices,
             Vec3::ZERO,
             "editor_grid".to_string(),
@@ -206,15 +183,8 @@ impl crate::asset::AssetManager {
             },
         ];
 
-        let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Sprite Quad VBuf"),
-            contents: bytemuck::cast_slice(&vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
-        Mesh::new(
+        Mesh::new_indexed(
             device,
-            Arc::new(vbuf),
             &vertices,
             Vec3::ZERO,
             "sprite_quad".to_string(),

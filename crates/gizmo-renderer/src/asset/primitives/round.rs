@@ -1,8 +1,6 @@
 use crate::components::Mesh;
 use crate::renderer::Vertex;
 use gizmo_math::Vec3;
-use std::sync::Arc;
-use wgpu::util::DeviceExt;
 
 impl crate::asset::AssetManager {
     /// Programatik UV Küre (Sphere) üretir.
@@ -134,15 +132,8 @@ impl crate::asset::AssetManager {
 
     pub fn create_sphere(device: &wgpu::Device, radius: f32, stacks: u32, slices: u32) -> Mesh {
         let vertices = Self::sphere_data(radius, stacks, slices);
-        let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Sphere VBuf"),
-            contents: bytemuck::cast_slice(&vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
-        Mesh::new(
+        Mesh::new_indexed(
             device,
-            Arc::new(vbuf),
             &vertices,
             Vec3::ZERO,
             format!("sphere_{}_{}_{}", radius, stacks, slices),
@@ -201,8 +192,7 @@ impl crate::asset::AssetManager {
 
     pub fn create_cylinder(device: &wgpu::Device, radius: f32, height: f32, radial_segments: u32) -> Mesh {
         let vertices = Self::cylinder_data(radius, height, radial_segments);
-        let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("Cylinder VBuf"), contents: bytemuck::cast_slice(&vertices), usage: wgpu::BufferUsages::VERTEX });
-        Mesh::new(device, Arc::new(vbuf), &vertices, Vec3::ZERO, format!("cylinder_{}_{}", radius, height))
+        Mesh::new_indexed(device, &vertices, Vec3::ZERO, format!("cylinder_{}_{}", radius, height))
     }
 
     /// Koni köşeleri (yan + taban), dış-yüzey CCW sarımlı. Saf veri.
@@ -251,8 +241,7 @@ impl crate::asset::AssetManager {
 
     pub fn create_cone(device: &wgpu::Device, radius: f32, height: f32, radial_segments: u32) -> Mesh {
         let vertices = Self::cone_data(radius, height, radial_segments);
-        let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("Cone VBuf"), contents: bytemuck::cast_slice(&vertices), usage: wgpu::BufferUsages::VERTEX });
-        Mesh::new(device, Arc::new(vbuf), &vertices, Vec3::ZERO, format!("cone_{}_{}", radius, height))
+        Mesh::new_indexed(device, &vertices, Vec3::ZERO, format!("cone_{}_{}", radius, height))
     }
 
     pub fn create_torus(device: &wgpu::Device, radius: f32, tube_radius: f32, radial_segments: u32, tubular_segments: u32) -> Mesh {
@@ -298,8 +287,7 @@ impl crate::asset::AssetManager {
             }
         }
 
-        let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("Torus VBuf"), contents: bytemuck::cast_slice(&vertices), usage: wgpu::BufferUsages::VERTEX });
-        Mesh::new(device, Arc::new(vbuf), &vertices, Vec3::ZERO, format!("torus_{}_{}", radius, tube_radius))
+        Mesh::new_indexed(device, &vertices, Vec3::ZERO, format!("torus_{}_{}", radius, tube_radius))
     }
 
     /// Kapsül köşeleri (tüp + iki yarıküre), dış-yüzey CCW sarımlı. Saf veri.
@@ -396,8 +384,7 @@ impl crate::asset::AssetManager {
 
     pub fn create_capsule(device: &wgpu::Device, radius: f32, depth: f32, latitudes: u32, longitudes: u32) -> Mesh {
         let vertices = Self::capsule_data(radius, depth, latitudes, longitudes);
-        let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("Capsule VBuf"), contents: bytemuck::cast_slice(&vertices), usage: wgpu::BufferUsages::VERTEX });
-        Mesh::new(device, Arc::new(vbuf), &vertices, Vec3::ZERO, format!("capsule_{}_{}", radius, depth))
+        Mesh::new_indexed(device, &vertices, Vec3::ZERO, format!("capsule_{}_{}", radius, depth))
     }
 
 }

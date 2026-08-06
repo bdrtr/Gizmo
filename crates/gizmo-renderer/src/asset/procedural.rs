@@ -1,8 +1,6 @@
 use crate::components::Mesh;
 use crate::renderer::Vertex;
 use gizmo_math::Vec3;
-use std::sync::Arc;
-use wgpu::util::DeviceExt;
 
 impl super::AssetManager {
     /// Tetrahedron köşeleri (dış-yüzey CCW sarımlı). Saf veri.
@@ -43,13 +41,7 @@ impl super::AssetManager {
 
     pub fn create_tetrahedron(device: &wgpu::Device, size: f32) -> Mesh {
         let vertices = Self::tetrahedron_data(size);
-        let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Tetrahedron VBuf"),
-            contents: bytemuck::cast_slice(&vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
-        Mesh::new(device, Arc::new(vbuf), &vertices, Vec3::ZERO, "tetrahedron".to_string())
+        Mesh::new_indexed(device, &vertices, Vec3::ZERO, "tetrahedron".to_string())
     }
 
     /// Kesik koni (konik frustum) köşeleri, dış-yüzey CCW sarımlı. Saf veri.
@@ -107,13 +99,7 @@ impl super::AssetManager {
 
     pub fn create_conical_frustum(device: &wgpu::Device, radius_bottom: f32, radius_top: f32, height: f32, radial_segments: u32) -> Mesh {
         let vertices = Self::conical_frustum_data(radius_bottom, radius_top, height, radial_segments);
-        let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Conical Frustum VBuf"),
-            contents: bytemuck::cast_slice(&vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
-        Mesh::new(device, Arc::new(vbuf), &vertices, Vec3::ZERO, "conical_frustum".to_string())
+        Mesh::new_indexed(device, &vertices, Vec3::ZERO, "conical_frustum".to_string())
     }
 
     pub fn create_convex_extrusion(device: &wgpu::Device, points_2d: &[[f32; 2]], depth: f32) -> Mesh {
@@ -172,13 +158,7 @@ impl super::AssetManager {
             vertices.push(Vertex { position: v1_bot, normal: [0.0, -1.0, 0.0], tex_coords: [0.5 + p1[0], 0.5 + p1[1]], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
         }
 
-        let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Extrusion VBuf"),
-            contents: bytemuck::cast_slice(&vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
-        Mesh::new(device, Arc::new(vbuf), &vertices, Vec3::ZERO, "extrusion".to_string())
+        Mesh::new_indexed(device, &vertices, Vec3::ZERO, "extrusion".to_string())
     }
 
     pub fn create_ring_extrusion(device: &wgpu::Device, inner_points: &[[f32; 2]], outer_points: &[[f32; 2]], depth: f32) -> Mesh {
@@ -252,12 +232,6 @@ impl super::AssetManager {
             vertices.push(Vertex { position: v_i1_b, normal: n_bot, tex_coords: [i1[0], i1[1]], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
         }
 
-        let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Ring Extrusion VBuf"),
-            contents: bytemuck::cast_slice(&vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
-        Mesh::new(device, Arc::new(vbuf), &vertices, Vec3::ZERO, "ring_extrusion".to_string())
+        Mesh::new_indexed(device, &vertices, Vec3::ZERO, "ring_extrusion".to_string())
     }
 }

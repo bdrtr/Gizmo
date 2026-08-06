@@ -1,8 +1,6 @@
 use crate::components::Mesh;
 use crate::renderer::Vertex;
 use gizmo_math::Vec3;
-use std::sync::Arc;
-use wgpu::util::DeviceExt;
 
 impl crate::asset::AssetManager {
     pub fn create_terrain(
@@ -117,15 +115,8 @@ impl crate::asset::AssetManager {
             final_vertices.push(v2);
         }
 
-        let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some(&format!("Terrain ({})", heightmap_path)),
-            contents: bytemuck::cast_slice(&final_vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
-        let mesh = Mesh::new(
+        let mesh = Mesh::new_indexed(
             device,
-            Arc::new(vbuf),
             &final_vertices,
             Vec3::ZERO,
             format!("terrain:{}", heightmap_path),

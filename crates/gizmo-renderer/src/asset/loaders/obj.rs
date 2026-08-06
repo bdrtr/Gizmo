@@ -14,14 +14,8 @@ impl crate::asset::AssetManager {
         vertices: Vec<Vertex>,
         _aabb: gizmo_math::Aabb,
     ) -> Mesh {
-        let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some(&format!("OBJ VBuf: {file_path}")),
-            contents: bytemuck::cast_slice(&vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-        let mesh = Mesh::new(
+        let mesh = Mesh::new_indexed(
             device,
-            Arc::new(vbuf),
             &vertices,
             Vec3::ZERO,
             format!("obj:{file_path}"),

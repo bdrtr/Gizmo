@@ -652,15 +652,8 @@ impl AssetManager {
             }
         }
 
-        let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Async loading placeholder"),
-            contents: bytemuck::cast_slice(&vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
-        Mesh::new(
+        Mesh::new_indexed(
             device,
-            Arc::new(vbuf),
             &vertices,
             Vec3::ZERO,
             "__async_loading__".to_string(),

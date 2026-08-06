@@ -1650,11 +1650,39 @@ eklemekten ibaret.
     >    onu ham listeye geri alıyor; bellek gerilemesi değil, alan zaten tam listeyi tutuyordu.
     >    Alanın sözleşmesi artık yazılı: `vbuf` ile indeks-indeks eşleşme garanti DEĞİL.
 
-    - ⬜ **Kalan:** yalnız glTF indeksli üretiyor. Prosedürel geometri ve `asset/primitives/`
-      (küp, küre, silindir, torus, kapsül, terrain — ~15 çağrı yeri) hâlâ düz; her biri
-      `new_indexed`'e çevrilebilir ama ayrı doğrulama ister.
-    - ⬜ İndeksler daima `Uint32`. Küçük mesh'lerde `Uint16` bandı yarıya indirirdi, ama
-      vertex sayısına bağlı bir seçim ve `set_index_buffer` başına ayrı bir karar demek.
+    - ✅ **Prosedürel geometri ve primitifler de indekslendi** *(2026-08-06)*. **19 çağrı yeri**
+      (`procedural.rs` 4, `primitives/{flat,round,cuboid,terrain}.rs` 13, `asset/mod.rs` 1,
+      `loaders/obj.rs` 1) `Mesh::new_indexed`'e geçti; hepsi yalnız `BufferUsages::VERTEX`
+      kullanıyordu, yani `update_vertices` ile güncellenen bir tampon yoktu ve çevirmek güvenliydi.
+      `obj.rs`'in `Mesh::empty` fallback'i kendi tamponuyla olduğu gibi kaldı.
+
+      > **Bu, maddeyi ilk kez GERÇEKTEN çalışır kıldı.** İndeks tamponu bir önceki commit'te
+      > eklendi ama tek üretici glTF yükleyicisiydi ve bu repoda `.glb` yok — yani sahada
+      > indekslenen mesh sayısı **sıfırdı**. Artık motorun ürettiği her primitif indeksli, ve
+      > mevcut golden testler de (küpü `create_cube`'dan alıyorlar) indeksli yoldan geçiyor.
+
+      **Ölçüldü** (geçici bir `mesh_census` örneğiyle: her primitifi kurup `cpu_vertices.len()`
+      ile `vertex_count`'u karşılaştır):
+
+      | primitif | düz | tekil | indeks | kazanç |
+      |---|---|---|---|---|
+      | `cube` | 36 | 24 | 36 | −33.3% |
+      | `plane` | 6 | 4 | 6 | −33.3% |
+      | `sphere` (16×32) | 2880 | 559 | 2880 | **−80.6%** |
+      | `cylinder` (32) | 384 | 134 | 384 | −65.1% |
+      | `cone` (32) | 192 | 99 | 192 | −48.4% |
+      | `torus` (32×16) | 3072 | 561 | 3072 | **−81.7%** |
+      | `capsule` (16×16) | 1536 | 321 | 1536 | −79.1% |
+      | `tetrahedron` | 12 | 12 | 12 | 0% |
+
+      > `tetrahedron`'un **%0'ı bir kusur değil, kontrol**: dört yüzün her biri kendi normalini
+      > taşıyor ve hiçbir köşe iki yüzde aynı değil, yani tekilleştirilecek bir şey yok.
+      > Tekilleştirmenin yüzler arasında YANLIŞLIKLA birleştirmediğini de bu gösteriyor —
+      > birleştirseydi 12 → 4 olurdu ve düz gölgelendirme bozulurdu.
+
+    - ⬜ İndeksler daima `Uint32`. Yukarıdaki tekil sayıların hepsi 65536'nın altında, yani
+      `Uint16` indeks bandını yarıya indirirdi — ama seçim vertex sayısına bağlı ve iki formatı
+      karıştırmak `set_index_buffer` başına ayrı bir karar demek.
 
   > **DOĞRULAMA DURUMU — C6'nın tamamı için.** Geçen: `cargo check --workspace`,
   > `cargo check -p gizmo-renderer --target wasm32-unknown-unknown`, ve tam CI clippy
