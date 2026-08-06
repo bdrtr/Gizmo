@@ -37,7 +37,8 @@ pub struct GpuCompute {
 
     /// Pass 2 — the `integrate` entry point of `soft_body.wgsl`, dispatched with one
     /// invocation per node (workgroup size 64). It turns the accumulated force into an
-    /// acceleration, adds gravity, applies damping, takes one semi-implicit Euler step,
+    /// acceleration, adds gravity, applies damping as `pow(damping, dt)` (the CPU reference's
+    /// expression — see [`GpuParameters::damping`]), takes one semi-implicit Euler step,
     /// resolves a ground plane hard-coded at y = 0.1 m, and finally zeroes that node's force
     /// accumulators for the next step. The ground contact is not a bare clamp: a node whose
     /// step would end below the plane keeps its new x/z, has its y pinned to 0.1, and gets
@@ -261,10 +262,12 @@ impl GpuCompute {
     /// silently.
     ///
     /// After readback, each node that is not [`crate::soft_body::SoftBodyNode::is_fixed`] is
-    /// swept through [`crate::soft_body::resolve_node_collision`] against every entry of
+    /// swept through [`crate::soft_body::resolve_swept_step`] against every entry of
     /// `rigid_colliders` (so the CPU part of the step is O(nodes × colliders)); on a hit the
-    /// swept position and reflected velocity replace the GPU result, and note the sweep
-    /// starts from the position the GPU has *already* integrated. Fixed nodes are skipped
+    /// swept position and reflected velocity replace the GPU result. The sweep starts from the
+    /// node's PRE-step position, matching [`crate::soft_body::SoftBodyMesh::step`] — it used to
+    /// start from the position the GPU had already integrated, which advanced a colliding node
+    /// twice in one step. Fixed nodes are skipped
     /// entirely and keep their CPU state — the integrate pass does not move them either.
     /// Independently of `rigid_colliders`, the integrate pass holds every free node it writes
     /// at y ≥ 0.1 m, with restitution (`velocity.y *= -0.1`) and friction
@@ -566,21 +569,35 @@ impl GpuCompute {
                 let integrated_pos = gizmo_math::Vec3::from(out_node.position);
                 let integrated_vel = gizmo_math::Vec3::from(out_node.velocity);
 
-                let (new_pos, new_vel, collided) = crate::soft_body::resolve_node_collision(
+                // The sweep must start from where the node was at the START of the step, NOT
+                // from `integrated_pos`. The `integrate` pass has already advanced the node by
+                // v·dt, and `resolve_node_collision` advances its input along the velocity
+                // again on a hit — so passing `integrated_pos` moved a colliding node TWICE in
+                // one step (up to 2·|v|·dt) and could bounce it off a surface up to |v|·dt
+                // beyond its actual reach. The CPU reference (`SoftBodyMesh::step`) never did
+                // this; both paths now go through the same helper.
+                //
+                // `node.position` still holds the pre-step value at this point: it is exactly
+                // what was flattened into `gpu_nodes` at the top of this call, and the write
+                // below is the first thing to touch it.
+                //
+                // Uncertain, unverified without an adapter: when the shader's hard-coded
+                // y = 0.1 ground plane fires, `integrated_vel` is the POST-bounce velocity
+                // (vy flipped, vx/vz scaled), so the sweep direction for that one step is the
+                // rebound direction rather than the approach direction. That is an artifact of
+                // the shader owning a ground plane the CPU path does not have, not of this
+                // call; the non-collided branch still keeps the shader's clamped position.
+                let (position, velocity) = crate::soft_body::resolve_swept_step(
+                    node.position,
                     integrated_pos,
                     integrated_vel,
                     dt,
                     rigid_colliders,
                 );
 
-                if collided {
-                    node.position = new_pos;
-                    node.velocity = new_vel;
-                    // Note: This modifies the CPU side. Next substep will upload this fixed position to GPU.
-                } else {
-                    node.position = integrated_pos;
-                    node.velocity = integrated_vel;
-                }
+                // This writes the CPU side; the next step re-uploads it to the GPU.
+                node.position = position;
+                node.velocity = velocity;
             }
         }
 
@@ -696,12 +713,15 @@ pub struct GpuParameters {
     /// volume term — it penalizes `J = det(F)` straying from 1.
     pub lambda: f32,
 
-    /// Velocity damping *rate* in 1/s: the integrate pass scales velocity by
-    /// `max(1 − damping·dt, 0)` once per step, so `damping ≥ 1/dt` stops the body dead and
-    /// 0 leaves it undamped. [`GpuCompute::step_soft_bodies`] copies
-    /// [`crate::soft_body::SoftBodyMesh::damping`] in verbatim, but the CPU integrator reads
-    /// that same field as a per-second *retention factor* (`v *= damping.powf(dt)`) — with
-    /// the default 0.99 the two paths therefore damp very differently.
+    /// Velocity damping as a per-second *retention factor*, copied verbatim from
+    /// [`crate::soft_body::SoftBodyMesh::damping`]: the integrate pass scales velocity by
+    /// `pow(damping, dt)` once per step, so 1.0 leaves the body undamped and 0.0 stops it
+    /// dead. This is the same expression the CPU integrator
+    /// [`crate::soft_body::SoftBodyMesh::step`] uses, and it has to stay that way — the shader
+    /// previously applied `max(1 − damping·dt, 0)`, reading the field as a *rate* in 1/s,
+    /// which at the default 0.99 damped ~99x harder than the CPU (effective decay rate
+    /// 0.998/s against 0.01005/s at dt = 1/60). `tests/cpu_gpu_parity.rs` asserts the shader
+    /// keeps the `pow` form.
     pub damping: f32,
 
     /// World-space gravitational acceleration in m/s², added to every free node's

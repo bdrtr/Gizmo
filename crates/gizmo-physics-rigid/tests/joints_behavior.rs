@@ -519,3 +519,233 @@ fn d6_angular_drive_reaches_target_angle() {
     let angle = 2.0 * q.z.atan2(q.w);
     assert!((angle - 0.8).abs() < 0.15, "D6 angular drive should reach target 0.8, got {angle}");
 }
+
+// ─────────────────────────────────────────────────────────────────────────────────────────
+// Degenerate joint axes, and what the ball-socket limits actually measure.
+// ─────────────────────────────────────────────────────────────────────────────────────────
+
+/// **A slider with no axis must not latch NaN into its public state.**
+///
+/// `SliderJointData::axis` is a public field and the derived `Default` leaves it at
+/// `Vec3::ZERO` — only `Joint::slider` substitutes `Vec3::Y`, and `..Default::default()` or a
+/// direct field assignment walks straight past that. The solver normalised it bare, so
+/// `axis_w` was a NaN vector and `current_position` — a public field, read by the servo —
+/// was NaN on every pass.
+///
+/// Nothing worse happened, and that is the point: every downstream consumer is a `>`
+/// comparison (`err.abs() > 1e-4`, `along < lower_limit`, `k > 1e-10`), and NaN loses all of
+/// them. The containment was an accident of IEEE semantics, not a design. `current_position`
+/// is the one place it escaped, so it is the one place a test can see it.
+#[test]
+fn slider_with_no_axis_reports_a_finite_position() {
+    let mut world = PhysicsWorld::new().with_gravity(Vec3::ZERO);
+    anchor(&mut world, 1, Vec3::ZERO);
+    dyn_box(&mut world, 2, Vec3::new(0.5, 0.0, 0.0), Vec3::ZERO, Vec3::ZERO, false);
+    let mut j = Joint::slider(
+        BodyHandle::from_id(1),
+        BodyHandle::from_id(2),
+        Vec3::ZERO,
+        Vec3::ZERO,
+        Vec3::Y,
+    );
+    if let JointData::Slider(ref mut d) = j.data {
+        // Exactly what `SliderJointData { .. }` + `Default` hands the solver.
+        d.axis = Vec3::ZERO;
+        d.use_limits = true; // and the limit rows must stay inert rather than compare to NaN
+        d.lower_limit = -1.0;
+        d.upper_limit = 1.0;
+    }
+    world.joints.push(j);
+    for _ in 0..60 {
+        world.step(1.0 / 60.0).ok();
+    }
+
+    let pos = match world.joints[0].data {
+        JointData::Slider(d) => d.current_position,
+        _ => unreachable!(),
+    };
+    assert!(
+        pos.is_finite(),
+        "a zero slider axis must not put NaN in `current_position` (got {pos}) — \
+         `(rot * ZERO).normalize()` is a NaN vector"
+    );
+
+    // The bodies staying finite passes with or without the fix (NaN never reached them),
+    // so this is a contract guard, NOT the discriminator. Keeping it honest: it is here to
+    // catch a future gate rewritten as `!(x <= eps)`, which WOULD release the NaN.
+    assert!(
+        world.transforms[1].position.is_finite() && world.velocities[1].linear.is_finite(),
+        "a degenerate axis must never reach a body"
+    );
+}
+
+/// **A cone limit must not stop a pure twist — that is the twist limit's job.**
+///
+/// `cone_limit_angle` measured the angle of the *whole* deviation quaternion, so roll about
+/// `twist_axis` spent the cone's budget even though the axis had not tipped at all: a ragdoll
+/// limb rolling 30° about its own bone was 30° into a 45° cone it had never entered. The cone
+/// now measures the SWING half of the swing–twist decomposition about `twist_axis`.
+///
+/// B is spun about `twist_axis` itself, so its swing is identically zero and the cone must
+/// never engage. The old code clamped it at ~0.5 rad; free, it reaches ~2 rad in 1 s.
+#[test]
+fn cone_limit_ignores_pure_twist() {
+    let spin = 2.0_f32;
+    let steps = 240; // 1 s at 240 Hz ⇒ ~2 rad, comfortably under π (no wrap in the measure)
+
+    let peak_twist = |use_cone: bool, use_twist: bool| -> f32 {
+        let mut world = PhysicsWorld::new().with_gravity(Vec3::ZERO);
+        anchor(&mut world, 1, Vec3::ZERO);
+        // Anchors at both origins ⇒ the point constraint exerts no torque, so B's spin is
+        // governed by the limit rows alone.
+        dyn_box(&mut world, 2, Vec3::ZERO, Vec3::ZERO, Vec3::new(0.0, spin, 0.0), false);
+        let mut j = Joint::ball_socket(
+            BodyHandle::from_id(1),
+            BodyHandle::from_id(2),
+            Vec3::ZERO,
+            Vec3::ZERO,
+        );
+        if let JointData::BallSocket(ref mut d) = j.data {
+            d.twist_axis = Vec3::Y; // == the spin axis: pure twist, zero swing
+            d.use_cone_limit = use_cone;
+            d.cone_limit_angle = 0.5;
+            d.use_twist_limit = use_twist;
+            d.twist_lower = -0.5;
+            d.twist_upper = 0.5;
+        }
+        world.joints.push(j);
+        let mut peak = 0f32;
+        for _ in 0..steps {
+            world.step(1.0 / 240.0).ok();
+            let q = world.transforms[1].rotation; // A is static ⇒ this IS the deviation
+            peak = peak.max((2.0 * q.y.atan2(q.w)).abs());
+        }
+        peak
+    };
+
+    let cone_only = peak_twist(true, false);
+    assert!(
+        cone_only > 1.5,
+        "a cone limit must not clamp a roll about its own axis (reached {cone_only} rad, \
+         expected ~{spin}) — the cone was measuring the full deviation, twist included"
+    );
+
+    // Not vacuous in either direction: the twist limit DOES stop the same motion…
+    let twist_only = peak_twist(false, true);
+    assert!(
+        twist_only < 0.7,
+        "the twist limit must clamp this roll at 0.5 rad, got {twist_only}"
+    );
+
+    // …and the cone still stops a genuine SWING (a spin perpendicular to `twist_axis`), so
+    // the first assertion is "the cone ignores twist", not "the cone is dead".
+    let mut world = PhysicsWorld::new().with_gravity(Vec3::ZERO);
+    anchor(&mut world, 1, Vec3::ZERO);
+    dyn_box(&mut world, 2, Vec3::ZERO, Vec3::ZERO, Vec3::new(0.0, 0.0, spin), false);
+    let mut j = Joint::ball_socket(
+        BodyHandle::from_id(1),
+        BodyHandle::from_id(2),
+        Vec3::ZERO,
+        Vec3::ZERO,
+    );
+    if let JointData::BallSocket(ref mut d) = j.data {
+        d.twist_axis = Vec3::Y;
+        d.use_cone_limit = true;
+        d.cone_limit_angle = 0.5;
+    }
+    world.joints.push(j);
+    let mut peak_swing = 0f32;
+    for _ in 0..steps {
+        world.step(1.0 / 240.0).ok();
+        peak_swing = peak_swing.max(quat_angle(world.transforms[1].rotation));
+    }
+    assert!(
+        peak_swing < 0.7,
+        "the cone must still clamp a real swing at 0.5 rad, got {peak_swing}"
+    );
+}
+
+/// **A swing limit written in radians must engage at that angle.**
+///
+/// The per-axis swing rows resolved `2·q.xyz` onto each perpendicular — the quaternion vector
+/// part, i.e. `2·sin(θ/2)`, a CHORD — and compared it against a bound in radians. The chord
+/// is always ≤ θ and saturates at 2.0, so every bound was too loose by a margin that grows
+/// with it: a limit written as π/2 first engaged at `2·asin(π/4)` ≈ 1.80 rad ≈ 103°, and any
+/// bound ≥ 2 rad could never engage at all.
+///
+/// The gap only opens up at large bounds, which is why the 0.3 rad limits elsewhere in this
+/// file looked correct (0.30 vs 0.301). At π/2 it is 15°, and 1.70 rad sits between the two
+/// answers: this test fails on the old code by measuring ~1.81 rad.
+#[test]
+fn swing_limit_engages_at_the_angle_it_is_written_in() {
+    let limit = std::f32::consts::FRAC_PI_2;
+    let mut world = PhysicsWorld::new().with_gravity(Vec3::ZERO);
+    anchor(&mut world, 1, Vec3::ZERO);
+    // Spin about Z. `perpendiculars(Y)` yields (−Z, −X), so this is a pure swing about the
+    // FIRST perpendicular and `swing_limit_1` is the bound under test.
+    dyn_box(&mut world, 2, Vec3::ZERO, Vec3::ZERO, Vec3::new(0.0, 0.0, 1.0), false);
+    let mut j = Joint::ball_socket(
+        BodyHandle::from_id(1),
+        BodyHandle::from_id(2),
+        Vec3::ZERO,
+        Vec3::ZERO,
+    );
+    if let JointData::BallSocket(ref mut d) = j.data {
+        d.use_swing_limits = true;
+        d.twist_axis = Vec3::Y;
+        d.swing_limit_1 = limit;
+        d.swing_limit_2 = std::f32::consts::PI; // the other perpendicular: unconstrained
+    }
+    world.joints.push(j);
+    let mut peak = 0f32;
+    for _ in 0..600 {
+        world.step(1.0 / 240.0).ok();
+        let q = world.transforms[1].rotation;
+        peak = peak.max((2.0 * q.z.atan2(q.w)).abs());
+    }
+
+    assert!(
+        peak < 1.70,
+        "a swing limit of π/2 = {limit:.4} rad must engage near π/2, got {peak} — the old \
+         code compared the chord 2·sin(θ/2) against it and only engaged at ~1.80 rad"
+    );
+    assert!(
+        peak > 1.40,
+        "…and it must still let the body swing UP to the limit (got {peak}); a limit that \
+         engages far too early would pass the assertion above for the wrong reason"
+    );
+}
+
+/// The same chord-vs-radian defect on the D6's angular limits, which `D6Motion::Limited`
+/// documents in radians. `Locked` axes are deliberately NOT converted — a lock is driven to
+/// zero, where the quaternion vector part IS the standard error term and the two measures
+/// agree to third order.
+///
+/// Fails on the old code at ~1.81 rad, the angle at which `2·sin(θ/2)` first exceeds π/2.
+#[test]
+fn d6_angular_limit_engages_at_the_angle_it_is_written_in() {
+    let limit = std::f32::consts::FRAC_PI_2;
+    let mut world = PhysicsWorld::new().with_gravity(Vec3::ZERO);
+    anchor(&mut world, 1, Vec3::ZERO);
+    dyn_box(&mut world, 2, Vec3::ZERO, Vec3::ZERO, Vec3::new(0.0, 0.0, 1.0), false);
+    let mut j = Joint::d6(BodyHandle::from_id(1), BodyHandle::from_id(2), Vec3::ZERO, Vec3::ZERO);
+    if let JointData::D6(ref mut d) = j.data {
+        // Z limited, X and Y left Locked (so the spin stays a pure Z rotation).
+        d.angular[2] = D6Motion::Limited { lower: -limit, upper: limit };
+    }
+    world.joints.push(j);
+    let mut peak = 0f32;
+    for _ in 0..600 {
+        world.step(1.0 / 240.0).ok();
+        let q = world.transforms[1].rotation;
+        peak = peak.max((2.0 * q.z.atan2(q.w)).abs());
+    }
+    assert!(
+        peak < 1.70,
+        "a D6 angular limit of π/2 = {limit:.4} rad must engage near π/2, got {peak}"
+    );
+    assert!(
+        peak > 1.40,
+        "…and must still allow rotation up to it, got {peak}"
+    );
+}

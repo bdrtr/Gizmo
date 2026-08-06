@@ -195,3 +195,133 @@ fn a_suspension_spring_reports_its_load_to_break_force() {
     );
 }
 
+/// A static anchor at the origin and a 1 kg box at `offset`, joined by `make` with the
+/// anchors at both bodies' origins — so the joint's positional error IS `offset` and its
+/// linear rows all carry a real, non-zero error.
+fn offset_pair(
+    offset: Vec3,
+    break_force: f32,
+    make: fn(BodyHandle, BodyHandle, Vec3, Vec3) -> Joint,
+) -> PhysicsWorld {
+    let mut world = PhysicsWorld::new().with_gravity(Vec3::ZERO);
+
+    let mut anchor = RigidBody::new_static();
+    anchor.wake_up();
+    world.add_body(
+        BodyHandle::from_id(1),
+        anchor,
+        Transform::new(Vec3::ZERO),
+        Velocity::default(),
+        Collider::sphere(0.1),
+    );
+
+    let mut rb = RigidBody::new(1.0, true);
+    rb.wake_up();
+    let col = Collider::box_collider(Vec3::splat(0.2));
+    rb.update_inertia_from_collider(&col);
+    world.add_body(
+        BodyHandle::from_id(2),
+        rb,
+        Transform::new(offset),
+        Velocity::default(),
+        col,
+    );
+
+    let mut j = make(
+        BodyHandle::from_id(1),
+        BodyHandle::from_id(2),
+        Vec3::ZERO,
+        Vec3::ZERO,
+    );
+    j.break_force = break_force;
+    j.break_torque = f32::MAX;
+    world.joints.push(j);
+    world
+}
+
+/// One direct solver pass at a caller-chosen `dt`. `PhysicsWorld::step` always substeps at
+/// `FIXED_DT`, so this — the embedding API, `JointSolver` being public — is the only way a
+/// `dt` of zero reaches the joint solver, and it is the way a paused frame does.
+fn solve_once(world: &mut PhysicsWorld, dt: f32) {
+    world.joint_solver.solve_joints(
+        &mut world.joints,
+        &world.entity_index_map,
+        &world.rigid_bodies,
+        &world.transforms,
+        &mut world.velocities,
+        dt,
+    );
+}
+
+/// **A zero-length step must leave the world exactly as it found it.**
+///
+/// Everything the joint solver computes is a rate. `break_force` is compared against
+/// `‖Σλᵢnᵢ‖ / dt`, which at `dt == 0` is `x/0` = `+inf` for a joint carrying any load at
+/// all — and `inf > break_force` holds for EVERY finite threshold, so one call with a zero
+/// dt snapped every breakable joint in the world at once, irreversibly (nothing clears
+/// `is_broken`). Only a joint left at the constructor's `f32::INFINITY` survived, since
+/// `inf > inf` is false.
+///
+/// The Baumgarte term `position_bias·error/dt` fails the same way one level down: on a row
+/// whose error is exactly ZERO it is `0/0`, and the NaN λ that follows is multiplied into the
+/// row direction and written straight into the body's velocity. The two failures need
+/// different scenes, so this test uses two:
+///
+/// * a **ball-socket**, which is three linear rows and no angular ones (`solve_fixed_joint`'s
+///   angular lock is gated to real Fixed joints), so every row is loaded, the pass impulse
+///   stays finite and it is purely the division by dt that decides the break;
+/// * a **Fixed** joint, which adds three angular rows at exactly zero error — the `0/0`.
+///
+/// Keeping them apart matters: on the weld the NaN reaches the linear rows through the body's
+/// angular velocity by the second iteration, the reported force becomes NaN, and `NaN >
+/// break_force` is FALSE. A weld therefore does NOT break at `dt == 0`, and asserting that it
+/// does not would have passed on the broken code for the wrong reason.
+#[test]
+fn a_zero_length_step_breaks_nothing_and_writes_no_nan() {
+    // ── (a) the break check ──
+    let mut w = offset_pair(Vec3::splat(0.5), f32::MAX, Joint::ball_socket);
+    let before = w.velocities.clone();
+
+    solve_once(&mut w, 0.0);
+
+    assert!(
+        !w.joints[0].is_broken,
+        "dt == 0: no time passed, so no impulse was delivered and nothing can have broken — \
+         `‖Σλn‖/0` = +inf cleared even an f32::MAX threshold"
+    );
+    assert_eq!(
+        w.velocities, before,
+        "dt == 0 must not move a velocity at all — the Baumgarte term saturates at \
+         max_correction_speed instead of vanishing, so a zero-length step kicked the body"
+    );
+
+    // …and the threshold really is live at a real dt, or the assertions above prove nothing:
+    // the same joint under the same error carries ~520 N, which a 1 N threshold must trip.
+    let mut live = offset_pair(Vec3::splat(0.5), 1.0, Joint::ball_socket);
+    solve_once(&mut live, 1.0 / 60.0);
+    assert!(
+        live.joints[0].is_broken,
+        "control: this joint is breakable and loaded — a 1 N threshold must trip at a real dt"
+    );
+
+    // …and an f32::MAX threshold survives that same real step, so "did not break" above is a
+    // statement about dt, not about the load.
+    let mut strong = offset_pair(Vec3::splat(0.5), f32::MAX, Joint::ball_socket);
+    solve_once(&mut strong, 1.0 / 60.0);
+    assert!(
+        !strong.joints[0].is_broken,
+        "control: an f32::MAX threshold must survive the load at a real dt"
+    );
+
+    // ── (b) the 0/0 rows ──
+    let mut weld = offset_pair(Vec3::splat(0.5), f32::INFINITY, Joint::fixed);
+    solve_once(&mut weld, 0.0);
+    assert!(
+        weld.velocities[1].linear.is_finite() && weld.velocities[1].angular.is_finite(),
+        "dt == 0 must not write NaN into a body — a Fixed joint's angular rows carry exactly \
+         zero error, so `position_bias·0/0` is NaN and λ with it: got linear {:?} angular {:?}",
+        weld.velocities[1].linear,
+        weld.velocities[1].angular
+    );
+}
+

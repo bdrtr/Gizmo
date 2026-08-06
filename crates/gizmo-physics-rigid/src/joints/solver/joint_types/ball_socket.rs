@@ -45,47 +45,77 @@ impl JointSolver {
         };
 
         // Rotation of B away from its initial orientation, in A's frame.
-        let swing_quat = initial_rot.inverse() * relative_rot;
+        let deviation = initial_rot.inverse() * relative_rot;
+        // Canonicalise to w ≥ 0 once — a quaternion and its negation are the same rotation,
+        // and all three blocks below assumed it separately before.
+        let q = if deviation.w < 0.0 { -deviation } else { deviation };
 
-        // ── Cone (swing) limit — clamps how far B rotates from its initial pose ──
-        if data.use_cone_limit {
-            // Angular-error DIRECTION from the small-angle approximation (2·quat.xyz).
-            let swing_err_local = if swing_quat.w >= 0.0 {
-                Vec3::new(swing_quat.x, swing_quat.y, swing_quat.z) * 2.0
-            } else {
-                -Vec3::new(swing_quat.x, swing_quat.y, swing_quat.z) * 2.0
-            };
-            // TRUE swing angle θ = 2·acos(|w|) (the chord length saturates at 2.0, so it
-            // cannot be compared to a radian limit directly).
-            let swing_mag = swing_err_local.length();
-            let swing_angle = 2.0 * swing_quat.w.abs().clamp(0.0, 1.0).acos();
-            if swing_angle > data.cone_limit_angle && swing_mag >= 1e-6 {
-                let excess = swing_angle - data.cone_limit_angle;
-                let swing_dir_world = transforms[idx_a].rotation * (swing_err_local / swing_mag);
-                self.apply_angular_constraint_soft(
-                        rigid_bodies,
-                        transforms,
-                        velocities,
-                        idx_a,
-                        idx_b,
-                        swing_dir_world,
-                        -excess,
-                        dt,
-                        f32::NEG_INFINITY,
-                        0.0,
-                        data.compliance,
-                        &mut joint.scratch, row::ANG,
-                    );
-            }
+        // ── Swing–twist decomposition about `twist_axis` ──────────────────────────
+        // The cone and the per-axis swing limits both need the SWING alone. Measuring the
+        // whole deviation made twist eat the cone's budget: a limb rolling 30° about its own
+        // bone, with its axis not tipped at all, spent 30° of the cone. `twist_axis` is the
+        // axis the cone is *around*, so it is the axis to decompose about; when it is unset
+        // (the derived `Default`) `swing_about` returns the whole deviation, which is the
+        // total-angle measure the cone had before and the only thing an axis-less cone can
+        // mean. The twist row below is untouched: `2·atan2(v·a, w)` is already exactly the
+        // angle of the decomposition's twist factor, so the two halves agree by construction.
+        let cone_axis = if data.twist_axis.length_squared() > 1e-6 {
+            data.twist_axis.normalize()
+        } else {
+            Vec3::ZERO
+        };
+        let swing_quat = Self::swing_about(q, cone_axis);
+        // Direction of the swing: the quaternion vector part, which points along the swing
+        // axis. Its LENGTH is the chord 2·|sin(θ/2)|, kept only as the "is there a direction
+        // at all" gate it always was — never as an angle (see below).
+        let swing_err_local = Vec3::new(swing_quat.x, swing_quat.y, swing_quat.z) * 2.0;
+        let swing_mag = swing_err_local.length();
+        let swing_axis = if swing_mag >= 1e-6 {
+            swing_err_local / swing_mag
+        } else {
+            Vec3::ZERO
+        };
+        // TRUE swing angle θ = 2·acos(|w|), in RADIANS. The chord saturates at 2.0, so it
+        // cannot be compared to a radian limit at all — and where it does not saturate it is
+        // still 2·sin(θ/2) < θ, i.e. systematically permissive.
+        let needs_swing = data.use_cone_limit || data.use_swing_limits;
+        let swing_angle = if needs_swing {
+            2.0 * swing_quat.w.abs().clamp(0.0, 1.0).acos()
+        } else {
+            0.0
+        };
+        // The swing as a rotation VECTOR (axis · angle, radians) — the quantity the per-axis
+        // swing rows resolve onto the two perpendiculars.
+        let swing_rot_vec = swing_axis * swing_angle;
+
+        // ── Cone (swing) limit — clamps how far B's axis tips away from its initial pose ──
+        if data.use_cone_limit && swing_angle > data.cone_limit_angle && swing_mag >= 1e-6 {
+            let excess = swing_angle - data.cone_limit_angle;
+            let swing_dir_world = transforms[idx_a].rotation * swing_axis;
+            self.apply_angular_constraint_soft(
+                rigid_bodies,
+                transforms,
+                velocities,
+                idx_a,
+                idx_b,
+                swing_dir_world,
+                -excess,
+                dt,
+                f32::NEG_INFINITY,
+                0.0,
+                data.compliance,
+                &mut joint.scratch, row::ANG,
+            );
         }
 
-        // ── Twist (roll) limit — swing-twist decomposition about twist_axis ──
+        // ── Twist (roll) limit — the twist half of the same decomposition ──
         // Isolate the roll about `twist_axis`: project the quaternion's vector part onto
         // the axis; the twist angle is 2·atan2(proj, w). Two-sided clamp like a hinge limit.
+        // This reads the FULL deviation `q`, never `swing_quat` — the swing is by
+        // construction the part with no roll about this axis, so measuring the twist on it
+        // would always report ≈0 and the row would never engage.
         if data.use_twist_limit && data.twist_axis.length_squared() > 1e-6 {
             let axis_local = data.twist_axis.normalize();
-            // Canonicalise to w ≥ 0 (a quaternion and its negation are the same rotation).
-            let q = if swing_quat.w < 0.0 { -swing_quat } else { swing_quat };
             let proj = Vec3::new(q.x, q.y, q.z).dot(axis_local);
             let twist_angle = 2.0 * proj.atan2(q.w);
             let axis_world = transforms[idx_a].rotation * axis_local;
@@ -128,14 +158,19 @@ impl JointSolver {
         if data.use_swing_limits && data.twist_axis.length_squared() > 1e-6 {
             let axis_local = data.twist_axis.normalize();
             let (perp1, perp2) = Self::perpendiculars(axis_local);
-            // Swing rotation vector (small-angle: 2·xyz), canonicalised to w ≥ 0.
-            let q = if swing_quat.w < 0.0 { -swing_quat } else { swing_quat };
-            let rvec = 2.0 * Vec3::new(q.x, q.y, q.z);
             for (i, (perp, limit)) in [(perp1, data.swing_limit_1), (perp2, data.swing_limit_2)]
                 .into_iter()
                 .enumerate()
             {
-                let a = rvec.dot(perp); // swing angle about this perpendicular
+                // Swing angle about this perpendicular, in RADIANS, resolved from the swing
+                // ROTATION VECTOR. It used to resolve `2·q.xyz` — the quaternion vector part
+                // of the whole deviation, which is `2·sin(θ/2)` along the axis, not θ. Being
+                // a chord it is always ≤ θ and saturates at 2.0, so every bound was too
+                // permissive by a margin that grows with the bound: a limit written as π/2
+                // (90°) first engaged at 2·asin(π/4) ≈ 1.80 rad ≈ 103°, and any bound ≥ 2 rad
+                // could never be reached at all. Below ~0.3 rad the two agree to ~0.4%, which
+                // is why small ragdoll limits looked right.
+                let a = swing_rot_vec.dot(perp);
                 let perp_world = transforms[idx_a].rotation * perp;
                 if a > limit {
                     self.apply_angular_constraint_soft(

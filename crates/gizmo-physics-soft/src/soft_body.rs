@@ -89,7 +89,16 @@ pub struct SoftBodyMesh {
     /// Shear Modulus (mu) - derived
     pub mu: f32,
 
-    /// Damping factor to prevent infinite oscillation
+    /// Velocity damping as a per-SECOND RETENTION FACTOR, not a rate: [`step`](Self::step)
+    /// applies `velocity *= damping.powf(dt)` once per step, so `damping` is the fraction of
+    /// velocity a node keeps over one second regardless of how that second is subdivided.
+    /// 1.0 is undamped, 0.0 stops the body dead; the default is 0.99 (1% of the velocity bled
+    /// off per second). Values outside `[0, 1]` are not validated and amplify.
+    ///
+    /// The `gpu_compute` shader reads this same field and **must** apply the same
+    /// `pow(damping, dt)`; it used to apply `max(1 - damping*dt, 0)` instead, which reads the
+    /// field as a rate in 1/s and damped ~99x harder at the default. `tests/cpu_gpu_parity.rs`
+    /// pins both halves.
     pub damping: f32,
 }
 #[cfg(feature = "ecs")]
@@ -187,6 +196,48 @@ pub fn resolve_node_collision(
     }
 
     (position, velocity, collided)
+}
+
+/// Picks the `(position, velocity)` to store for a node that has ALREADY been integrated,
+/// resolving it against `rigid_colliders` with [`resolve_node_collision`].
+///
+/// This is the whole post-integration half of a soft-body step, factored out because the two
+/// integrators got it *differently*. [`SoftBodyMesh::step`] swept from the node's pre-step
+/// position — correct: the sweep's own correction is what advances a colliding node, so total
+/// displacement stays bounded by the swept distance. The GPU readback in
+/// `gpu_compute::GpuCompute::step_soft_bodies` swept from the position the compute shader had
+/// *already* advanced, so a colliding node was moved twice in one step (up to `2·|v|·dt`) and
+/// could even bounce off a surface it never reached. Both now call this.
+///
+/// - `pre_step_position` — where the node was at the START of the step. This is the sweep
+///   origin, and it is the reason the result never travels further than `|integrated_velocity|
+///   · dt` from it.
+/// - `integrated_position` — where the integrator put the node. Returned verbatim when nothing
+///   was hit, discarded when something was (the sweep supersedes it).
+/// - `integrated_velocity` — the post-force, post-damping velocity. It is both the sweep
+///   direction and the input to the bounce/friction response.
+///
+/// See [`resolve_node_collision`] for the sweep itself, its `dist + 0.1 m` search window and
+/// its hard-coded response coefficients.
+pub fn resolve_swept_step(
+    pre_step_position: Vec3,
+    integrated_position: Vec3,
+    integrated_velocity: Vec3,
+    dt: f32,
+    rigid_colliders: &[(
+        BodyHandle,
+        gizmo_physics_core::Transform,
+        gizmo_physics_core::Collider,
+    )],
+) -> (Vec3, Vec3) {
+    let (swept_position, swept_velocity, collided) =
+        resolve_node_collision(pre_step_position, integrated_velocity, dt, rigid_colliders);
+
+    if collided {
+        (swept_position, swept_velocity)
+    } else {
+        (integrated_position, integrated_velocity)
+    }
 }
 
 impl SoftBodyMesh {
@@ -405,20 +456,29 @@ impl SoftBodyMesh {
             let acceleration = forces[i] / node.mass;
             node.velocity += acceleration * dt;
 
-            // Apply damping normalized by dt
+            // `damping` is a per-SECOND retention factor, so it is applied as `damping^dt` —
+            // that is what makes the decay independent of how the second is subdivided. This
+            // is the REFERENCE expression; `soft_body.wgsl`'s `integrate` pass must apply the
+            // same `pow(damping, dt)` (it once applied `max(1 - damping*dt, 0)`, a rate
+            // reading, which damped ~99x harder at the 0.99 default). Pinned on both sides by
+            // `tests/cpu_gpu_parity.rs`.
             node.velocity *= self.damping.powf(dt);
 
             let next_pos = node.position + node.velocity * dt;
 
-            let (new_pos, new_vel, collided) =
-                resolve_node_collision(node.position, node.velocity, dt, rigid_colliders);
-
-            if collided {
-                node.position = new_pos;
-                node.velocity = new_vel;
-            } else {
-                node.position = next_pos;
-            }
+            // Same values, same order as the inlined form this replaced (sweep from the
+            // PRE-step position, fall back to `next_pos` when nothing is hit, leave the
+            // velocity alone in that case) — this is a pure extraction and changes no result.
+            // It exists so the GPU readback path cannot drift away from it again.
+            let (position, velocity) = resolve_swept_step(
+                node.position,
+                next_pos,
+                node.velocity,
+                dt,
+                rigid_colliders,
+            );
+            node.position = position;
+            node.velocity = velocity;
         }
     }
 }

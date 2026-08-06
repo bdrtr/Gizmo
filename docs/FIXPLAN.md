@@ -2219,7 +2219,20 @@ toplandı.
 - ⚠️ **GPU yolunda çarpışmada çift ilerletme** (`gpu_compute.rs:570`): sweep, shader'ın ZATEN
   entegre ettiği pozisyondan başlıyor; CPU yolu (`soft_body.rs:313`) entegrasyon ÖNCESİNDEN.
 
-### B — Panik / çökme
+### ✅ B — Panik / çökme — **DALGA 2'de kapandı** *(2026-08-07)*
+> ✅ **Sıfır eksenli Hinge/Slider NaN** — `normalize_or_zero` + eksen gerektiren satırların
+> kapılanması. **Denetimin geniş iddiası ÇÜRÜTÜLDÜ:** NaN cisimlere ULAŞMIYOR; her tüketici bir
+> `>` karşılaştırması ve NaN hepsini kaybediyor. Gerçek gözlenebilir zarar `SliderJointData::current_position`
+> (public alan) NaN yazılmasıydı. Hinge tarafı için **test YAZILMADI ve sebebi söylendi**: orada
+> NaN hiçbir yere ulaşmadığı için boş olmayan bir test yazılamıyordu — yeşil bir test uydurmak
+> yerine bu kaydedildi.
+>
+> ✅ **`solve_joints` `dt == 0`'da her kopabilir eklemi koparıyor** — erken dönüş eklendi.
+> **Senaryo düzeltmesi:** `PhysicsWorld::step` sabit 1/240 alt-adım kullandığı ve duraklatılmış
+> dünya erken döndüğü için bu yol oradan ERİŞİLEBİLİR DEĞİL; public `JointSolver::solve_joints`
+> üzerinden erişiliyor. İkinci bir şekil de bulundu: hata terimi sıfır olan satırlarda (Fixed
+> joint'in açısal satırları) `0/0` → NaN, yani weld kopmuyor, NaN'e gidiyor.
+
 
 - ⚠️ **Sıfır eksenli Hinge/Slider NaN üretiyor.** İkisi de `Default` türetiyor, `axis` ZERO
   kalıyor, `slider.rs:27` çıplak `.normalize()` çağırıyor. Kardeşi `solve_slider_spring`
@@ -2256,7 +2269,28 @@ toplandı.
 - ⚠️ `multibody::{base_position, base_rotation}` okunmuyor; `gravity` base koordinatında
   yorumlanıp `base_rotation` ile hiç döndürülmüyor.
 
-### D — Model doğruluğu
+### 🔄 D — Model doğruluğu — **üçü kapandı, ikisi açık** *(2026-08-07)*
+> ✅ **`cone_limit_angle` twist'i çifte sayıyordu** — gerçek bir **swing–twist ayrışması**
+> yazıldı (`JointSolver::swing_about`). Eskiden koni, sapma quaternion'unun TAMAMININ açısını
+> ölçüyordu: `twist_axis` etrafında 30°'lik saf bir yuvarlanma, uzuv hiç eğilmemişken 45°'lik
+> koninin bütçesinin 30°'sini yiyordu. Twist satırı dokunulmadı — onun `2·atan2(v·a, w)`'si
+> zaten ayrışmanın twist açısı, yani iki yarı yapısal olarak uyuşuyor.
+>
+> ✅ **Swing limitleri sistematik olarak gevşekti** — ve bu, koniden **AYRI bir blok** çıktı
+> (koninin birimleri daha önceki bir turda düzeltilmişti). Per-eksen satırları `2·q.xyz` yani
+> `2·sin(θ/2)` **kirişini** radyan sınırla karşılaştırıyordu: π/2'lik bir sınır ancak
+> 103.5°'de devreye giriyordu.
+>
+> ✅ **Patlama uyuyan cismi uyandırmıyordu** — artık uyandırıyor, ve **yarıçap testi
+> uyandırmadan ÖNCE** koşuyor (patlamanın ulaşmadığını uyandırmak kendi başına hata olurdu).
+>
+> ⬜ **Adaptif iterasyon sayısı SI yolunda ölü — DOĞRULANDI ama bilerek DEĞİŞTİRİLMEDİ.**
+> `n_iterations` yalnız iki yerde okunuyor ve ikisi de TGS dalında. Ama sweep sayısını o yolda
+> körlemesine yükseltmek her CCD testinin sonucunu değiştirir; sessizce yanlış ama kararlı bir
+> çözücü kör bir değişiklikle iyileşmez. Kendi ölçüm turunu istiyor.
+> ⬜ **ABA `is_fixed_base == false` yerçekimini sessizce düşürüyor** — bu turda ele alınmadı.
+
+### D-eski — Model doğruluğu (özgün liste)
 
 - ⚠️ **`cone_limit_angle` twist'i çifte sayıyor** (`ball_socket.rs:61`): tam sapma
   quaternion'ının açısını alıyor, swing-twist ayrıştırmasının swing bileşenini değil. Koni ve

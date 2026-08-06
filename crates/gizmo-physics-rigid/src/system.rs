@@ -544,7 +544,7 @@ pub fn physics_explosion_system(world: &World, dt: f32) {
     };
     if let Some(rb_query) = &mut rb_query_opt {
         for (_exp_entity, explosion, exp_pos) in &active_explosions {
-            for (id, (rb, transform, mut vel, _)) in rb_query.iter_mut() {
+            for (id, (mut rb, transform, mut vel, _)) in rb_query.iter_mut() {
                 if !rb.is_dynamic() || shattered.contains(&id) {
                     continue;
                 }
@@ -552,6 +552,8 @@ pub fn physics_explosion_system(world: &World, dt: f32) {
                 let diff = transform.position - *exp_pos;
                 let dist_sq = diff.length_squared();
 
+                // The radius test gates the WAKE below as well as the impulse — it must stay
+                // ahead of it, since waking a body the blast never reached would be its own bug.
                 if dist_sq < explosion.force_radius * explosion.force_radius && dist_sq > 0.001 {
                     let dist = dist_sq.sqrt();
                     let dir = diff / dist;
@@ -561,7 +563,32 @@ pub fn physics_explosion_system(world: &World, dt: f32) {
                     let impulse_mag = explosion.force * intensity;
 
                     // Apply instantaneous velocity change
-                    vel.linear += dir * impulse_mag * rb.inv_mass();
+                    let delta_v = dir * impulse_mag * rb.inv_mass();
+                    vel.linear += delta_v;
+
+                    // …and WAKE, or that write is swallowed whole. A sleeping body is skipped
+                    // by both integration stages (`Integrator::integrate_velocities` and
+                    // `integrate_positions` return early on `is_sleeping`, and `pipeline.rs`
+                    // skips it again before calling either), and an island whose members are
+                    // all asleep is not even solved (`island_active`, pipeline.rs) — so the
+                    // velocity would sit in the component, unspent, and move nothing. The
+                    // visible symptom was a settled stack beside a blast that simply did not
+                    // react: it looked like the explosion had not happened. This is the same
+                    // contract the world's own impulse helpers keep — see
+                    // `world/query.rs::apply_impulse`, which takes `&mut RigidBody` for
+                    // exactly this reason.
+                    //
+                    // Scoped deliberately to bodies the blast actually MOVES. Out-of-range
+                    // bodies never reach here (radius test above), and a zero `delta_v` — a
+                    // dynamic body with `mass == 0`, or one sitting where the falloff has
+                    // decayed to nothing — is not moved, so waking it would only spend
+                    // simulation on a body the blast did not touch. Sleeping neighbours the
+                    // blast did not reach are woken afterwards by the contact path instead,
+                    // island by island, once a woken body starts moving (`pipeline.rs`,
+                    // `island_has_mover` → `wake_updates`).
+                    if delta_v != gizmo_math::Vec3::ZERO {
+                        rb.wake_up();
+                    }
                 }
             }
         }

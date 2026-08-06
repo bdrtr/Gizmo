@@ -165,8 +165,29 @@ fn integrate(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let acceleration = force * inv_mass + params.gravity;
 
     node.velocity += acceleration * params.dt;
-    node.velocity *= max(1.0 - params.damping * params.dt, 0.0);
-    
+
+    // `damping` is a per-SECOND RETENTION FACTOR (SoftBodyMesh::damping, default 0.99 =
+    // "keep 99% of the velocity per second"), NOT a rate in 1/s. The CPU reference
+    // integrator — `SoftBodyMesh::step` in soft_body.rs, the one the test suite covers —
+    // applies it as `v *= damping.powf(dt)`, so this pass must apply exactly `pow(damping, dt)`.
+    //
+    // This line used to read `max(1.0 - params.damping * params.dt, 0.0)`, i.e. it read the
+    // same field as a rate. Measured divergence at the default damping = 0.99, comparing the
+    // effective continuous decay rate -ln(factor)/dt of the two expressions:
+    //   dt=1/240 -> CPU 0.0100503/s vs GPU 0.9920/s  (98.7x)
+    //   dt=1/60  -> CPU 0.0100503/s vs GPU 0.9983/s  (99.3x)
+    //   dt=1/30  -> CPU 0.0100503/s vs GPU 1.0067/s  (100.2x)   <- soft_body_step_system's clamp
+    // The ratio is ~ -0.99/ln(0.99) = 98.5 in the small-dt limit and grows slowly with dt, so
+    // the audit's "~100x" holds. Concretely at dt=1/60 the per-step retention here was 0.98350
+    // against the CPU's 0.99983; after one simulated second a body kept 36.9% of its velocity
+    // on the GPU against 99.0% on the CPU.
+    //
+    // Caveat, unmeasured: WGSL leaves `pow` indeterminate for a negative base and for
+    // pow(0, 0), where `f32::powf` is defined (powf(0,0) == 1). Neither path validates
+    // `damping`, but values outside [0, 1] are meaningless for both, so this is not narrowed
+    // here — it is only a difference in what happens to already-invalid input.
+    node.velocity *= pow(params.damping, params.dt);
+
     // Simple ground collision at Y=0.1
     let next_pos = node.position + node.velocity * params.dt;
     if (next_pos.y < 0.1) {
