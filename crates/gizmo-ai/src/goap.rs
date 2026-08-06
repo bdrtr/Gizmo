@@ -10,6 +10,7 @@
 //! states; see [`GoapPlanner::plan`] for its optimality conditions and its cost.
 
 use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::rc::Rc;
 
 /// A world state as the planner sees it: a set of named boolean symbols.
 ///
@@ -243,7 +244,17 @@ struct PlanNode {
     g_cost: f32, // Path cost
     h_cost: f32, // Heuristic cost
     action: Option<GoapAction>,
-    parent: Option<Box<PlanNode>>,
+    /// Shared, not owned. With `Box<PlanNode>` here the derived `Clone` recursed
+    /// down the whole ancestor chain, so `build_plan` copied every ancestor's
+    /// `GoapState` (a `HashMap<String, bool>`, one allocation per key) into every
+    /// successor it generated — see the expansion loop for the cost shape. `Rc`
+    /// makes a successor share its parent instead; siblings then point at one
+    /// copy, and the chain is freed when the last node referencing it goes.
+    ///
+    /// `Rc` (not `Arc`) is deliberate: `PlanNode` is private to this module, never
+    /// escapes `build_plan` (which returns `Vec<GoapAction>`), and the planner is
+    /// stateless, so nothing here crosses a thread boundary.
+    parent: Option<Rc<PlanNode>>,
 }
 
 impl PartialEq for PlanNode {
@@ -372,14 +383,15 @@ impl GoapPlanner {
             // Hedefe ulaşıldı mı?
             if current.state.meets_conditions(goal_state) {
                 let mut plan = Vec::new();
-                let mut node = &current;
-                while let Some(action) = &node.action {
-                    plan.push(action.clone());
-                    if let Some(parent) = &node.parent {
-                        node = parent;
-                    } else {
-                        break;
+                // Walk the (now shared) parent chain back to the start node, which is
+                // the only one with `action: None`.
+                let mut cursor = Some(&current);
+                while let Some(node) = cursor {
+                    match &node.action {
+                        Some(action) => plan.push(action.clone()),
+                        None => break,
                     }
+                    cursor = node.parent.as_deref();
                 }
                 plan.reverse();
                 tracing::debug!(
@@ -391,10 +403,14 @@ impl GoapPlanner {
                 return Some(plan);
             }
 
-            // Durumu serialize edip set'e ekle (aynı state loop'a girmemek için)
-            let mut state_keys: Vec<_> = current.state.values.iter().collect();
-            state_keys.sort_by_key(|(k, _)| *k);
-            let state_hash = format!("{:?}", state_keys);
+            // Durumu serialize edip set'e ekle (aynı state loop'a girmemek için).
+            // Scoped so the borrow of `current.state` is provably over before
+            // `current` is moved into the `Rc` below.
+            let state_hash = {
+                let mut state_keys: Vec<_> = current.state.values.iter().collect();
+                state_keys.sort_by_key(|(k, _)| *k);
+                format!("{:?}", state_keys)
+            };
 
             if closed_list.contains(&state_hash) {
                 continue;
@@ -402,18 +418,34 @@ impl GoapPlanner {
             closed_list.insert(state_hash);
             nodes_expanded += 1;
 
-            // Uygulanabilir aksiyonları bul
+            // Hand `current` to its successors by reference count instead of by deep
+            // copy. Cost shape of the old `Some(Box::new(current.clone()))`: cloning a
+            // node at depth d cloned d+1 nodes, hence d+1 `GoapState` HashMaps (each
+            // key its own `String` allocation), and it happened once per applicable
+            // action — so expanding one node cost A*(d+1) map clones, and every entry
+            // waiting in the open list privately owned its whole ancestry, making the
+            // live heap O(nodes * depth * symbols) instead of O(nodes * symbols).
+            //
+            // UNMEASURED: no benchmark was run (cargo is not available in this
+            // session), and grepping the workspace finds no caller of
+            // `GoapPlanner::plan` outside this module's own tests, so the wall-clock
+            // saving on a real agent load is unknown — only the asymptotics above are
+            // established. The change is allocation-only: the nodes pushed, their
+            // costs and the pop order are bit-identical, so the returned plan is too.
+            let current = Rc::new(current);
             for action in actions {
                 if current.state.meets_conditions(&action.preconditions) {
                     let mut new_state = current.state.clone();
                     new_state.apply_effects(&action.effects);
 
                     let next_node = PlanNode {
-                        state: new_state.clone(),
+                        // `new_state` moves in; it used to be cloned into the node and
+                        // then dropped unused, one extra map copy per successor.
+                        state: new_state,
                         g_cost: current.g_cost + action.cost,
                         h_cost: 0.0, // Dijkstra — see the start node above.
                         action: Some(action.clone()),
-                        parent: Some(Box::new(current.clone())),
+                        parent: Some(Rc::clone(&current)),
                     };
 
                     open_list.push(next_node);
@@ -542,6 +574,36 @@ mod tests {
         let total: f32 = plan.iter().map(|a| a.cost).sum();
         assert_eq!(total, 2.0, "planner returned a suboptimal plan (cost {total}, expected 2.0): {:?}",
             plan.iter().map(|a| a.name.as_str()).collect::<Vec<_>>());
+    }
+
+    // NOT a regression test, and deliberately labelled as such: switching the parent
+    // link from `Box` to `Rc` is allocation-only, so no assertion can distinguish the
+    // two versions by observable behaviour (the only difference — how many
+    // `GoapState` maps get copied — is invisible from outside, and a timing or
+    // stack-depth oracle would need a chain far deeper than the old quadratic clone
+    // could reach in test time). What this DOES cover is the one part of that change
+    // that could break: the rewritten walk back up the shared parent chain. Depth 8
+    // vs. the depth-2 chain the other tests reach.
+    #[test]
+    fn long_chain_reconstructs_in_execution_order() {
+        const N: usize = 8;
+        let mut actions = Vec::new();
+        for i in 0..N {
+            let mut a = GoapAction::new(&format!("step{i}"), 1.0);
+            if i > 0 {
+                a = a.add_precondition(&format!("s{}", i - 1), true);
+            }
+            a = a.add_effect(&format!("s{i}"), true);
+            actions.push(a);
+        }
+
+        let goal_key = format!("s{}", N - 1);
+        let plan = GoapPlanner::plan(&state(&[]), &actions, &single_goal(&[(&goal_key, true)]))
+            .expect("the chain is satisfiable");
+
+        let names: Vec<String> = plan.iter().map(|a| a.name.clone()).collect();
+        let expected: Vec<String> = (0..N).map(|i| format!("step{i}")).collect();
+        assert_eq!(names, expected, "every ancestor must appear exactly once, in order");
     }
 
     #[test]

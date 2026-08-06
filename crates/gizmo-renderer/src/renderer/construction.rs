@@ -218,7 +218,14 @@ impl Renderer {
             format: surface_format,
             width: size.width,
             height: size.height,
-            // VSync tercihi: Mailbox (uncapped FPS) varsa kullan, yoksa Fifo (VSync)
+            // Uncapped presentation by default. The comment here used to claim "use Mailbox if
+            // available, otherwise Fifo" — the code has never done that; it picks `AutoNoVsync`
+            // unconditionally and lets wgpu resolve it against what the surface supports.
+            //
+            // This is a DEFAULT, not a fixed property: `Renderer::set_present_mode` switches it
+            // at runtime (FIXPLAN B6). It stays uncapped here because the engine's own
+            // benchmarks and the `full_step_mixed` frame-pacing work assume frames are not
+            // waiting on the display; a game that wants vsync asks for it.
             present_mode: wgpu::PresentMode::AutoNoVsync,
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],

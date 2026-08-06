@@ -499,7 +499,16 @@ client-server mesajları round-trip testleriyle birlikte taşınmalı.
   aşağıdaki **B4 bölümüne** bak. Kalan: `break_force` yeniden kalibrasyonu (commit 3),
   motor satırları (commit 4), substep'ler arası warm-start + rollback (commit 5), ve
   joint'lerin island kurulumuna dahil edilmesi (`pipeline.rs:560`).
-- ⬜ **B5** — Gamepad girdisi. ⬜ **B6** — `PresentMode` yapılandırılabilir.
+- ⬜ **B5** — Gamepad girdisi.
+- ✅ **B6 — `PresentMode` yapılandırılabilir** *(2026-08-06)*. `Renderer::set_present_mode` +
+  `present_mode()` eklendi; varsayılan `AutoNoVsync` olarak KALIYOR (motorun kendi bench'leri ve
+  kare-tempolama işi karelerin ekranı beklemediğini varsayıyor), ama artık çalışma zamanında
+  değiştirilebiliyor — vsync isteyen oyun istiyor.
+
+  > Yolda bir doküman yalanı da düzeltildi: `construction.rs`'teki yorum "Mailbox varsa kullan,
+  > yoksa Fifo" diyordu; **kod bunu hiç yapmadı**, koşulsuz `AutoNoVsync` seçip çözümü wgpu'ya
+  > bırakıyor. Headless yolda `present_mode` zaten ölü (surface yok) — setter orada config'i
+  > güncelleyip çıkıyor ki sonradan surface takılırsa alan tutarlı kalsın.
   ⬜ **B7** — Cylinder + Heightfield collider.
 - 🔄 **B8** — iki parçası vardı:
   - ✅ **Boş point-shadow pass'leri** (2026-08-04, `af6f168`): `record_shadow_passes` artık
@@ -1725,8 +1734,7 @@ eklemekten ibaret.
   >
   > Determinizm hash'i değişmedi (`A462C9EB8A09D5CA`, 3/3): codegen-units FP semantiğini
   > değiştirmiyor. `cargo test --workspace` exit 0.
-- 🔄 **C6** — üç parçasının **üçü de yazıldı** *(2026-08-06)*, ama **görsel olarak doğrulanmadı**;
-  kapılar koşana kadar açık kalıyor.
+- ✅ **C6** — üç parçası da yazıldı VE doğrulandı *(2026-08-06)*.
 
   > **Mipmap üreteci ZATEN VARDI ve motorun asıl doku yolları onu çağırmıyordu.**
   > `Renderer::generate_mipmaps` + `shaders/mipmap.wgsl` yerinde duruyordu, ama `pub(super)`
@@ -1849,7 +1857,7 @@ eklemekten ibaret.
   > `cargo check -p gizmo-renderer --target wasm32-unknown-unknown`, ve tam CI clippy
   > komutu `--workspace --all-features --all-targets` (0 uyarı).
   >
-  > **Golden render testleri KOŞTURULDU ve geçti** (`gizmo-engine --lib golden`, 3/3):
+  > **DOĞRULAMA — sonradan koşturuldu, madde o zaman kapandı.** Golden render testleri geçti (`gizmo-engine --lib golden`, 3/3):
   > `default_render_pass_draws_a_cube_distinct_from_background`,
   > `skipping_the_point_shadow_passes_changes_no_pixel`, `camera_exposure_brightens_the_frame`.
   > Bunlar gerçek piksel kapıları, yani mipmap/aniso değişikliği golden kareleri **bozmadı**
@@ -2140,6 +2148,45 @@ toplandı.
 
 ### A — Sessiz yanlış davranış (en yüksek değer)
 
+> **DALGA 1 KAPANDI** *(2026-08-07)* — bu bölümün ECS/AI tarafındaki maddeleri düzeltildi,
+> her biri **düzeltme olmadan düşen** bir regresyon testiyle. Fizik davranışını değiştirecek
+> olanlar (patlama uyuyanı uyandırmıyor, GPU/CPU damping ayrışması, GPU çift ilerletme)
+> bilerek dışarıda bırakıldı: determinizm hash'ini oynatırlar ve kendi yeniden-bless turunu
+> hak ediyorlar. Bu turda hash **değişmedi** (`A462C9EB8A09D5CA`, 3/3).
+>
+> ✅ `Input::release_all` artık `keys_just_pressed`'i de temizliyor. **Denetimin belirttiği
+> semptom yanlıştı** ("aynı frame'de hem just_pressed hem just_released" — o kasıtlı bir
+> özellik, `test_fast_tap_preserves_pressed_for_one_frame` onu koruyor). Gerçek kusur
+> `just_pressed ⊆ pressed` invaryantının kırılmasıydı, ve gözlenebilir: `begin_frame`
+> redraw'ın SONUNDA çağrıldığı için odak kaybında tek-seferlik aksiyon o frame tetikleniyordu.
+>
+> ✅ `add_bundle` flush edilmemiş rezerve entity'de artık paniklemiyor — `add_component`'in
+> zaten belgelenmiş sessiz-no-op sözleşmesine hizalandı. **Denetimin verdiği satır aralığı
+> yanlıştı** (:34-41 fallback, panik iki adım sonraki ham indeksleme). İkinci bir şekil de
+> bulundu: geri dönüştürülmüş id'de panik yerine `row = u32::MAX` sessizce çözücüye gidiyordu.
+>
+> ✅ `PoolManager::destroy` aynı entity'yi iki kez park etmiyor, ölü entity'yi hiç park etmiyor.
+> ✅ `FrameProfiler::avg_frame_ms` ring sarmasından sonra doğru kareleri ortalıyor —
+> `avg_scope_ms` de aynı kusuru taşıyordu, o da düzeltildi (madde bunu adlandırmıyordu).
+> ✅ `UtilityAction::evaluate` boş `considerations`'da da 0..1'e kırpıyor.
+> ✅ GOAP `PlanNode::clone` artık ata zincirini derin kopyalamıyor.
+>
+> ⬜ **`add_bundle`/`spawn_batch` hook ATEŞLEMİYOR — doğrulandı ama BİLEREK değiştirilmedi.**
+> Davranış gerçek, ama üç ayrı yerde *kasıtlı* olarak belgelenmiş (`world/hooks.rs:56-65`
+> hook'suz yolları tek tek sayıyor). Yani bu bir hata değil, gözden geçirilecek bir tasarım
+> kararı; sessizce çevirmek belgelenmiş bir sözleşmeyi kırardı.
+>
+> ✅ **`register_serializable` sessiz no-op — ÇÜRÜTÜLDÜ, B3 zaten kapatmış.** Registry artık
+> her giriş noktasına parametre olarak geçiyor. *(Kalan asimetri:* `T` daha önce düz
+> `register::<T>` ile kaydedilmişse `register_serializable` erişimcileri kurmadan `Ok(())`
+> dönüyor, oysa `register_reflect` yerinde yükseltiyor — `registry.rs:284-287`. Küçük ve ayrı.)
+>
+> ⬜ **Navmesh `agent_radius` — ERTELENDİ, yarım bırakılmadı.** Kod iddiası doğru (`margin`
+> yalnız döngü sınırlarını genişletiyor, `blocked.insert` hâlâ gerçek AABB'ye kapılı), ama
+> erozyon gerçek bir algoritma: builder'ın ürettiği HER poligonu değiştirir, yani bütün
+> navmesh testleri yeniden bless ister. Dokümantasyon yarısı da çürütüldü — sınır zaten üç
+> yerde tam olarak yazılmış.
+
 - ✅ **`Schedule` build sonrası eklemede öncekileri düşürüyor** — ayrı madde olarak yukarıda.
 - ⚠️ **`shatter_entity` Box olmayan collider'da kalıcı ölü bırakıyor.** `system.rs:365-381`
   erken dönüyor ama çağıranlar (`:319-331`, `:504-519`) `breakable.is_broken = true`'yu ÇOKTAN
@@ -2183,7 +2230,21 @@ toplandı.
 - ⚠️ **`add_bundle` flush edilmemiş rezerve entity'de OOB panik** (`component_ops.rs:34-41`).
 - ⚠️ **`solve_joints` `dt == 0`'da her kopabilir eklemi koparıyor** (`impulse/dt` → `inf`).
 
-### C — 1.0'a dondurulacak ÖLÜ public alanlar
+### ✅ C — 1.0'a dondurulacak ÖLÜ public alanlar — **BÖLÜM BAYAT ÇIKTI** *(2026-08-07)*
+> Bu bölümün istediği iş (alanların dokümanını dürüstleştirmek) **daha önceki bir turda zaten
+> yapılmış.** On bir alanın hepsi tek tek tarandı (`demo/`, `cradle/`, `demo-web/` dahil):
+> ölülük iddiaları tutuyor, ama her birinin doküman yorumu zaten "**Currently inert**", ne
+> kullanılması gerektiği (`Explosion::damage_radius` → `force_radius`, `SpatialHash::new` →
+> `DynamicAabbTree::with_fat_margin`) ve neden öyle olduğu yazılmış durumda. Kod DEĞİŞMEDİ —
+> public alan silmek kırıcı ve o karar 1.0 kapsamında.
+>
+> ⚠️ **Bir iddia da YANLIŞ çıktı:** `AeroPackage::ground_effect_height` "formülde tam olarak
+> sadeleşiyor" diyordu. **Alan okunuyor** (`vehicle/dynamics.rs:277-278`) ve cebir kontrol
+> edildi: `h` yalnız `clearance = h·(1−avg_frac)` ile `t = 1 − clearance/h` birlikte
+> sadeleşiyor, yani etkisi `avg_frac` üzerinden var. Mevcut doküman, denetimin bu maddesinden
+> daha doğruymuş.
+>
+> Aşağıdaki liste kayıt olarak duruyor; hiçbiri aksiyon gerektirmiyor.
 
 - ⚠️ `GravityField::falloff_radius`, `FluidZone::viscosity` — hiçbir yer okumuyor, yorumları
   var olmayan davranışı anlatıyor.
@@ -2213,7 +2274,7 @@ toplandı.
 - ⚠️ **GOAP `PlanNode::clone` tüm ata zincirini DERİN kopyalıyor** (her atanın `GoapState`
   HashMap'i dahil) — `build_plan`'de her ardıl için.
 
-### F — Gürültü
+### ✅ F — Gürültü *(2026-08-07)*
 
 - ⚠️ **`resolve_node_collision` her dinlenen düğüm için her adımda `warn!` basıyor**
   (`soft_body.rs:133`): `Ray::new` `dist > 1e-5` kapısından ÖNCE kuruluyor ve sıfır yön
