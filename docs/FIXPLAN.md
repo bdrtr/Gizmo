@@ -1784,9 +1784,31 @@ eklemekten ibaret.
       > Tekilleştirmenin yüzler arasında YANLIŞLIKLA birleştirmediğini de bu gösteriyor —
       > birleştirseydi 12 → 4 olurdu ve düz gölgelendirme bozulurdu.
 
-    - ⬜ İndeksler daima `Uint32`. Yukarıdaki tekil sayıların hepsi 65536'nın altında, yani
-      `Uint16` indeks bandını yarıya indirirdi — ama seçim vertex sayısına bağlı ve iki formatı
-      karıştırmak `set_index_buffer` başına ayrı bir karar demek.
+    - ✅ **`Uint16` indeksler** *(2026-08-06)*. `Mesh::new_indexed` 65536 tekil vertex'e kadar
+      16-bit indeks yazıyor; format `Mesh` → `DrawItem`/`BatchData` → `record_draw` boyunca
+      **taşınıyor, türetilmiyor**. Eşik `<= 65536`: `u16`'nın taşıdığı en büyük indeks 65535,
+      yani o kadar tekil vertex adreslenebilir.
+
+      > **Türetmek yerine taşımanın sebebi:** tamponu yazıldığından farklı bir formatta
+      > bağlamak wgpu'da hata vermiyor — sessizce **yanlış üçgen** çiziyor. İki yerde ayrı
+      > hesaplanan bir değer bir gün ayrışır; tek kaynak mesh'in kendisi.
+
+      **Kazanç, motorun ürettiği geometride** (indeks tamponu baytları yarıya iner):
+
+      | primitif | indeks | `Uint32` | `Uint16` |
+      |---|---|---|---|
+      | `cube` | 36 | 144 B | 72 B |
+      | `cylinder` | 384 | 1.5 KB | 768 B |
+      | `sphere` | 2880 | 11.5 KB | 5.8 KB |
+      | `torus` | 3072 | 12.3 KB | 6.1 KB |
+
+      > **Doğrulama bedavaya geldi:** golden testteki küp 24 tekil vertex, yani zaten dar
+      > yoldan geçiyor — `an_indexed_mesh_renders_byte_identically_to_the_flat_one` artık
+      > 16-bit indeksleri sınıyor. Teste `index_format == Uint16` iddiası da eklendi ki
+      > mesh bir gün eşiğin üstüne çıkarsa test sessizce yalnız 32-bit'i sınamaya dönmesin.
+      >
+      > **Testin yakaladığı doğrulandı:** `record_draw`'da formatı geçici olarak `Uint32`'ye
+      > sabitleyince (tampon u16 iken) test kırmızıya döndü; sabotaj geri alındı.
 
   > **DOĞRULAMA DURUMU — C6'nın tamamı için.** Geçen: `cargo check --workspace`,
   > `cargo check -p gizmo-renderer --target wasm32-unknown-unknown`, ve tam CI clippy

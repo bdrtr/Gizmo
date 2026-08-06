@@ -904,6 +904,16 @@ mod golden_render_tests {
                      (deduplication did not run, or merged across faces)",
                     mesh.vertex_count
                 );
+                // 24 unique vertices is far below the 65536 that `Uint16` can address, so this
+                // mesh MUST take the narrow path — which is what makes the frame comparison
+                // below a test of 16-bit indices rather than only of 32-bit ones. A buffer
+                // written as u16 and bound as u32 does not crash; it draws the wrong triangles,
+                // and only the byte comparison would catch it.
+                assert_eq!(
+                    mesh.index_format,
+                    wgpu::IndexFormat::Uint16,
+                    "a 24-vertex mesh must use 16-bit indices"
+                );
                 mesh
             })
             .await;
