@@ -4,8 +4,11 @@
 //!
 //! `cargo test -p gizmo-renderer --lib` died with a **SIGSEGV** — not a Rust panic, so no test
 //! name was ever reported and the whole binary (and with it the workspace run) went down.
-//! Nineteen tests across five modules each requested their own wgpu adapter and device, and
-//! `cargo test` runs a binary's tests in parallel.
+//! Nineteen tests, spread over **seven** test modules in six files, each requested their own
+//! wgpu adapter and device, and `cargo test` runs a binary's tests in parallel. The module
+//! count is worth stating precisely: `gpu_fluid::fluid_tests` is pure CPU and stays out, but
+//! `gpu_fluid::system::gpu_dispatch_tests` is a DIFFERENT module in the same subtree and is
+//! GPU — it was nearly missed for exactly that reason.
 //!
 //! Measured on this machine (16 cores, so the default is 16 test threads):
 //!

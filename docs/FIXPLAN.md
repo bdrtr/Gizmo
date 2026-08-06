@@ -832,8 +832,13 @@ yoksa desync yeşil ışıkta geçer ve `state_hash` (yalnız transform/velocity
 > **Yapılan:** yeni `crates/gizmo-renderer/src/test_gpu.rs` (`#[cfg(test)]`) — process-genelinde
 > tek `gpu_lock()` + paylaşılan `headless_device()`. **Beş ayrı modüldeki `setup_headless_gpu`
 > kopyası** (gpu_smoke, gpu_physics::fem_tests, gpu_particles::system, gpu_fluid::system,
-> pipeline::shaders) tek yardımcıya delege edildi ve **20 GPU testi** guard'ı alıyor
-> (16 helper üzerinden + 4 satır-içi cihaz kuran test).
+> pipeline::shaders) tek yardımcıya delege edildi ve **19 GPU testi** guard'ı alıyor
+> (15 helper üzerinden + 4 satır-içi cihaz kuran test); yedi test modülüne yayılıyorlar.
+>
+> ⚠️ **İlk turda BİR FAZLA kilit koymuştum:** `pipeline::shaders`'ın
+> `native_compose_keeps_shadows_and_groups` testi saf CPU (`compose_wgsl`), ama kilidi
+> ekleyen script'im testin gövde dilimi içinde **helper'ın TANIMINI** görüp onu da GPU
+> testi sandı. Geri alındı; kalan dört dosya elden tarandı, başka uyumsuzluk yok.
 >
 > **`gpu_fluid::fluid_tests` bilinçli olarak DIŞARIDA:** o ~20 test saf CPU matematiği, hiç
 > cihaz yaratmıyor. Kilide sokmak bedava wall-clock kaybı olurdu.
