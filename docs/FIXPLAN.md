@@ -1362,6 +1362,13 @@ eklemekten ibaret.
   KAPALI" diyordu, `Default` ise `true` veriyor. Yığın kararlılığına bakan biri için önemli:
   sıralama zaten devrede, "açmayı denesek mi" sorusu kapalı.
 
+- ⚠️ **Faz sayaçlarının sınırları — yanlış okumamak için.** `broadphase_ms` YALNIZ
+  `broadphase_step`'i kapsıyor (`world/step.rs`'te `t1`); `spatial_hash.query_pairs()`
+  `pipeline.rs:219`'da, yani `narrowphase_ms`'in (`t2`) içinde. Dolayısıyla aşağıdaki
+  tablolarda "broad" sütunu %100 **tazeleme döngüsü** (`compute_aabb` + ağaç insert, cisim
+  başına substep başına), çift bulma ise "narrow" sütununda saklı. "Gevşek sahneler
+  broadphase-bağımlı" tespiti bu dar anlamda doğru.
+
 - ✅ **BENCH YENİDEN ÖLÇÜLDÜ** *(2026-08-06)* — bu oturumun iki fizik düzeltmesinden sonra.
   C1'in tablosu artık bayat; aynı makinede, aynı bench:
 
@@ -1446,9 +1453,20 @@ eklemekten ibaret.
   > onu ölçmek wgpu+egui'yi LTO altında linklemek demek ve RAM geçersiz-kılması tam olarak
   > bunu önlemek için var. Ölçülmemiş bir kazanç için ayar eklenmedi.
 
-  > Bu makinede hiçbir şey değişmiyor: `.cargo/config.toml`'un `rustflags`'ı
-  > (`-C codegen-units=4 -C lto=off`) profil ayarlarını yeniyor. Yani buradaki tüm perf
-  > sayıları hâlâ ALT SINIR.
+  > ⚠️ **DÜZELTME — profil şu an HER YERDE ETKİSİZ.** İlk commit'te "CI ve yayımlanan crate'ler
+  > için" yazmıştım; iki yarısı da yanlış. `rustflags` profil bayraklarından SONRA ekleniyor ve
+  > rustc son `-C`'yi alıyor; `.cargo/config.toml` **git'e işlenmiş**, dolayısıyla CI de miras
+  > alıyor (release profilini kullanan iki job — `determinism` ve `benchmarks` — ikisi de
+  > `ubuntu-latest`). Cargo ayrıca bir BAĞIMLILIĞIN manifest'indeki `[profile.*]`'ı yok sayar,
+  > yani crates.io'dan `gizmo-engine` kullanan da görmüyor; kendi workspace'inde ayarlaması
+  > gerekiyor.
+  >
+  > **Etkili kılmak için** o `rustflags` satırından `codegen-units=4` token'ını düşürmek
+  > gerekiyor — ama o, makinenin belgelenmiş RAM koruması, sessizce değiştirilecek bir şey
+  > değil. Eldeki kanıt: fizik bench'i `codegen-units=1`'de sorunsuz derleniyor (31.5 s),
+  > `gizmo-renderer` derlemesi 4 paralel rustc'de 2.78 GB zirve yaptı (13 GB'de) — ama en ağır
+  > bağımlılıkları (wgpu, naga) önbellekten geldi, yani demo-binary durumunu çözmüyor.
+  > **Karar kullanıcının.**
 - ⬜ **C6** — Index buffer (`components/mesh.rs:8-9`) + mipmap + anizotropik filtreleme.
 
 ## Faz D — Ekosistem ve 1.0

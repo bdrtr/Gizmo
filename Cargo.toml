@@ -43,9 +43,21 @@ proptest = "1"
 # machine with the local override lifted: codegen-units = 1 alone is -8.4% and -7.5% on
 # full_step_mixed/128 and /512, -5..-7% on broadphase, -20% on the dense-contact scene.
 #
-# `.cargo/config.toml` on the development machine passes `-C codegen-units=4 -C lto=off` as
-# rustflags, which win over these settings, so this section changes nothing there — it is for CI
-# and for anyone depending on the published crates, who until now got the cargo defaults.
+# CURRENTLY INERT EVERYWHERE, and that is worth knowing before trusting it. rustflags are
+# appended after profile-derived flags and rustc takes the last `-C`, so the
+# `rustflags = ["-C", "codegen-units=4", "-C", "lto=off"]` in `.cargo/config.toml` wins — and
+# that file is checked into git, so CI inherits it too (both release-profile jobs, `determinism`
+# and `benchmarks`, run on ubuntu-latest). Cargo also ignores `[profile.*]` in a dependency's
+# manifest, so someone depending on `gizmo-engine` from crates.io never sees this either; they
+# have to set it in their own workspace.
+#
+# What this section IS: the right value, recorded with its measurement, ready for the day the
+# machine override is narrowed. Making it effective here means dropping the `codegen-units=4`
+# token from that rustflags line — which is the machine's documented RAM guard, so it is not a
+# change to make silently. Evidence so far: the physics bench builds fine at codegen-units = 1
+# (31.5 s), and a gizmo-renderer build peaked at 2.78 GB across four concurrent rustc against
+# ~13 GB of RAM — but its heaviest dependencies (wgpu, naga) were cached, so that number does
+# not settle the demo-binary case.
 #
 # LTO is deliberately NOT set. `lto = "thin"` was measured on top of codegen-units = 1 and added
 # nothing on this workload: full_step_mixed/128 -0.07% and /512 +2.7%, neither significant, and
