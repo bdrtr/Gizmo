@@ -102,6 +102,18 @@ impl InputBuffer {
 
 #[cfg(test)]
 mod tests {
+
+    /// bincode 2 with the LEGACY config — the same encoding `rollback::transport` puts on the
+    /// wire. Using 2.x's `standard()` default here would round-trip perfectly while testing an
+    /// encoding no peer ever sees.
+    fn enc<T: serde::Serialize>(v: &T) -> Vec<u8> {
+        bincode::serde::encode_to_vec(v, bincode::config::legacy()).unwrap()
+    }
+    fn dec<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> T {
+        bincode::serde::decode_from_slice::<T, _>(bytes, bincode::config::legacy())
+            .unwrap()
+            .0
+    }
     use super::*;
 
     fn input(tick: u64, buttons: u32) -> PlayerInput {
@@ -208,8 +220,8 @@ mod tests {
             joystick_x: -127,
             joystick_y: 120,
         };
-        let bytes = bincode::serialize(&original).unwrap();
-        let back: PlayerInput = bincode::deserialize(&bytes).unwrap();
+        let bytes = enc(&original);
+        let back: PlayerInput = dec(&bytes);
         assert_eq!(back, original);
     }
 }

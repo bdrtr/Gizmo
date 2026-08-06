@@ -22,7 +22,11 @@ rollback = [
 
 [dependencies]
 # Ortak (her iki mimari de kullanır)
-bincode = "1.3.3"
+# 2.x, not 1.x: bincode 1 is unmaintained and was this crate's only direct `cargo deny`
+# advisory (FIXPLAN A6-followup). The wire format is preserved exactly — see
+# `rollback::transport::encode_packet`, which pins `config::legacy()`, and `tests/wire_format.rs`,
+# whose expected bytes were captured from 1.3.3 before the swap.
+bincode = { version = "2", features = ["serde"] }
 serde = { version = "1.0.228", features = ["derive"] }
 tracing = "0.1.44"
 

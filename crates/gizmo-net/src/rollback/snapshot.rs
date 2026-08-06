@@ -180,6 +180,18 @@ impl RollbackBuffer {
 
 #[cfg(test)]
 mod tests {
+
+    /// bincode 2 with the LEGACY config — the same encoding `rollback::transport` puts on the
+    /// wire. Using 2.x's `standard()` default here would round-trip perfectly while testing an
+    /// encoding no peer ever sees.
+    fn enc<T: serde::Serialize>(v: &T) -> Vec<u8> {
+        bincode::serde::encode_to_vec(v, bincode::config::legacy()).unwrap()
+    }
+    fn dec<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> T {
+        bincode::serde::decode_from_slice::<T, _>(bytes, bincode::config::legacy())
+            .unwrap()
+            .0
+    }
     use super::*;
     use gizmo_physics_core::components::transform::Transform;
     use gizmo_physics_rigid::components::rigid_body::RigidBody;
@@ -296,8 +308,8 @@ mod tests {
         world.add_component(e, Velocity::new(Vec3::new(7.0, 8.0, 9.0)));
         let original = PhysicsStateSnapshot::capture(&world, 99);
 
-        let bytes = bincode::serialize(&original).unwrap();
-        let back: PhysicsStateSnapshot = bincode::deserialize(&bytes).unwrap();
+        let bytes = enc(&original);
+        let back: PhysicsStateSnapshot = dec(&bytes);
 
         assert_eq!(back.tick, 99);
         assert_eq!(back.states.len(), 1);
