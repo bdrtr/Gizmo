@@ -2784,6 +2784,49 @@ fn does_block_regularization_drive_the_convergence_cost() {
     }
 }
 
+/// What does the debug rewind buffer cost a scene that never rewinds?
+///
+/// `PhysicsWorld::max_history_frames` defaults to 600 — five seconds at 120 Hz — and every frame
+/// clones the full transform and velocity arrays into it. `rewind_requested` is documented as a
+/// debugging aid, so most scenes pay for a feature they never use, in both time and a resident
+/// buffer that scales with bodies × 600.
+#[test]
+#[ignore = "measurement, not a gate — prints a table"]
+fn what_does_the_rewind_history_cost() {
+    eprintln!("\n=== 600 frames of a settling pile: wall time vs rewind history depth ===");
+    eprintln!(
+        "{:>8}  {:>16}  {:>14}  {:>16}  {:>12}",
+        "bodies", "history frames", "wall time", "resident snapshots", "resident"
+    );
+    eprintln!(
+        "  one body-frame = {} B (Transform {} + Velocity {})",
+        std::mem::size_of::<Transform>() + std::mem::size_of::<Velocity>(),
+        std::mem::size_of::<Transform>(),
+        std::mem::size_of::<Velocity>()
+    );
+    for (side, height) in [(4u32, 6u32), (8, 6)] {
+        for depth in [600usize, 0] {
+            let (mut world, _, _) = scene_crate_pile(side, height);
+            world.max_history_frames = depth;
+            let n = world.entities.len() - 1;
+            let start = std::time::Instant::now();
+            for _ in 0..600 {
+                world.step(DT).ok();
+            }
+            let elapsed = start.elapsed();
+            let per_body = std::mem::size_of::<Transform>() + std::mem::size_of::<Velocity>();
+            eprintln!(
+                "{:>8}  {:>16}  {:>14.2?}  {:>16}  {:>12}",
+                n,
+                depth,
+                elapsed,
+                world.history.len(),
+                format!("{:.1} MB", (world.history.len() * n * per_body) as f64 / 1.0e6)
+            );
+        }
+    }
+}
+
 /// Retired negative control, kept because its premise turned out to be measuring the bug.
 ///
 /// It used to starve `realistic_crate_stack_stays_standing`'s own scene to 4 sweeps and require

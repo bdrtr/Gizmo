@@ -519,11 +519,16 @@ pub struct PhysicsWorld {
     #[serde(skip)]
     pub history: std::collections::VecDeque<PhysicsStateSnapshot>,
     /// Cap on [`history`](Self::history) length; the oldest entry is dropped once it
-    /// is exceeded. Also the rewind depth, in simulated frames. Cost is two `Vec`s of
-    /// per-body data per retained frame, so on a large scene this is the dominant
-    /// memory knob of the debug timeline. At `0` every snapshot is dropped as soon as
-    /// it is taken, leaving the buffer empty and rewind a no-op — but the per-frame
-    /// clone still happens.
+    /// is exceeded. Also the rewind depth, in simulated frames.
+    ///
+    /// **Defaults to `0`, so rewind is off until you ask for it** (changed 2026-08-06; it used
+    /// to default to 600). One retained frame costs 160 bytes per body — `Transform` 112 plus
+    /// `Velocity` 48 — so the old default was 37 MB resident on a 384-body pile and 192 MB on
+    /// this engine's own 2000-box stress scene, for a debugging aid most scenes never use. Set
+    /// it to the number of frames you actually want to be able to step back.
+    ///
+    /// At `0` nothing is recorded and no clone is taken, so the timeline costs exactly nothing;
+    /// [`rewind_requested`](Self::rewind_requested) then finds an empty buffer and is a no-op.
     pub max_history_frames: usize,
 
     /// Bodies to trace-log during velocity integration, one line per body per substep
