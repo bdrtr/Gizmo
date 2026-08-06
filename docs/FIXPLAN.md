@@ -1361,7 +1361,34 @@ eklemekten ibaret.
   - ⬜ **Takip:** ECS köprüsü için bir benchmark. C3'ün etkisini ancak o gösterir, ve köprü
     şu an motorun ölçülmeyen tek büyük parçası.
 
-- ⬜ **C2** — Broadphase refit (`pipeline.rs:145-176` her substep sıfırdan kuruyor, statikler dahil).
+- ✅ **C2 — Broadphase artık ARTIMLI** *(2026-08-06)*. `broadphase_step` her substep
+  `spatial_hash.clear()` çağırıp her cismi yeniden ekliyordu. Yapı zaten şişman-marjlı bir
+  dinamik AABB ağacı, yani `insert` kutusundan çıkmamış cisim için ZATEN erken çıkışlı —
+  temizlemek o kazancı çöpe atıp her cisim için tam iniş + düğüm ayırma + refit ödüyordu,
+  kare başına dört kez.
+
+  Ağaç artık substep'ler arasında korunuyor. Yeni gereken tek şey silmelerin uzlaştırılması:
+  `DynamicAabbTree::retain` eklendi, ve yalnız cisim sayısı uyuşmadığında çağrılıyor.
+
+  | senaryo | C1 (2026-08-05) | şimdi | değişim |
+  |---|---|---|---|
+  | `broadphase/64` | 226 µs | 120 µs | **−46.8%** |
+  | `broadphase/256` | 609 µs | 257 µs | **−57.8%** |
+  | `broadphase/1024` | 1.73 ms | 564 µs | **−67.4%** |
+  | `solver_settled_stack/8` | 532 µs | 82.6 µs | −84.5% |
+  | `solver_settled_stack/24` | 1.20 ms | 93.4 µs | −92.2% |
+  | `solver_settled_stack/48` | 4.05 ms | 115 µs | **−97.2%** |
+  | `joints/8 / 32 / 128` | 161 / 317 / 755 µs | 144 / 278 / 675 µs | −11 / −12 / −11% |
+  | `dense_contacts/1024` | 151.0 ms | 146.1 ms | −3.2% |
+  | `full_step_mixed/128` | 635 µs | 517 µs | **−18.6%** |
+  | `full_step_mixed/512` | 2.43 ms | 1.64 ms | **−32.5%** |
+  | `headless_stress_test` | 1.62 s | **392 ms** | **−75.8%** |
+
+  > **Determinizm hash'i KIPIRDAMADI** (`15D4FD6845119D8B`). Bu beklenen değil, KANIT:
+  > artımlı kurulan bir ağaç, sıfırdan kurulandan FARKLI sırada çift yayar, ve simülasyonun
+  > bit-eş aynı kalması ENGINE.md'nin "pair-emission invariance incremental broadphase'in
+  > önünü açar" notunu ampirik olarak doğruluyor. `support_ordering` varsayılan açık olduğu
+  > için ada çözümü çift sırasına bağlı değil.
 - ⬜ **C4** — Temas yolunda `ArrayVec` (`narrowphase/mod.rs:400-407`); rewind geçmişi opt-in
   (`world/step.rs:122-128` her frame tam klon).
 - ⬜ **C5** — `[profile.release]` (`lto="thin"`, `codegen-units=1`). Kökte yok; `.cargo/config.toml`

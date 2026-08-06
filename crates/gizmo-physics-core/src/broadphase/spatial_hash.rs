@@ -65,6 +65,17 @@ impl SpatialHash {
         self.tree.remove(entity);
     }
 
+    /// Drops every entity whose id `keep` rejects, and reports how many went. Forwards to
+    /// [`DynamicAabbTree::retain`] — see it for why a caller wants this.
+    pub fn retain(&mut self, keep: impl Fn(u32) -> bool) -> usize {
+        self.tree.retain(keep)
+    }
+
+    /// Number of entities currently in the broadphase.
+    pub fn entity_count(&self) -> usize {
+        self.tree.entity_count()
+    }
+
     /// Candidate collision pairs, ordered by id (`.0.id() < .1.id()`) so a tuple
     /// works as a symmetric cache key. See [`DynamicAabbTree::query_pairs`] for the
     /// guarantees in full.
