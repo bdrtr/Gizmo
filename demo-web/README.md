@@ -5,6 +5,20 @@ same high-level `SimpleAppExt` API and the same engine core, compiled to
 `wasm32-unknown-unknown`. The scene drops a stack of physics cubes onto a
 ground disk so the live simulation loop is visible.
 
+## Live demo
+
+**https://bdrtr.github.io/Gizmo/** — no toolchain needed, just a WebGPU browser.
+
+Published by `.github/workflows/pages.yml` on every push to `main` (and on
+`workflow_dispatch`): it runs exactly the build below, then uploads
+`index.html` + `pkg/` as a Pages artifact. The workflow pins `wasm-bindgen-cli`
+to the version read out of the committed `Cargo.lock`, for the version-lock
+reason described under Requirements.
+
+> The link only serves once Pages is enabled for the repository
+> (Settings → Pages → Source: **GitHub Actions**); until then the workflow
+> builds fine and the deploy step fails at the API call.
+
 ## Requirements
 
 - The `wasm32-unknown-unknown` Rust target (`rustup target add wasm32-unknown-unknown`)
