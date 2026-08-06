@@ -1422,8 +1422,33 @@ eklemekten ibaret.
   > için ada çözümü çift sırasına bağlı değil.
 - ⬜ **C4** — Temas yolunda `ArrayVec` (`narrowphase/mod.rs:400-407`); rewind geçmişi opt-in
   (`world/step.rs:122-128` her frame tam klon).
-- ⬜ **C5** — `[profile.release]` (`lto="thin"`, `codegen-units=1`). Kökte yok; `.cargo/config.toml`
-  bu makinede `lto=off` zorluyor → tüm perf sayıları alt sınır.
+- ✅ **C5 — `[profile.release]` eklendi: `codegen-units = 1`** *(2026-08-06)*. Kökte hiç
+  `[profile.release]` yoktu, yani CI ve **crates.io'dan bağımlı olan herkes** cargo
+  varsayılanlarını alıyordu (`lto = false`, `codegen-units = 16`). Sıcak yol küçük
+  fonksiyonların crate sınırları boyunca (gizmo-math → -physics-core → -physics-rigid) kare
+  başına binlerce kez çağrılmasından ibaret, yani crate-arası inline etmek önemli.
+
+  Ölçüm için makine geçersiz-kılması **geçici olarak kaldırıldı, sonra birebir geri yüklendi**
+  (`.cargo/config.toml` HEAD ile aynı):
+
+  | senaryo | `codegen-units=1` kazancı |
+  |---|---|
+  | `full_step_mixed/128` | **−8.4%** |
+  | `full_step_mixed/512` | **−7.5%** |
+  | `broadphase/64 / 256 / 1024` | −5.5% / −7.3% / −6.5% |
+  | `dense_contacts/64 / 256` | −21.8% / −19.2% |
+  | `solver_settled_stack/24 / 48` | −8.6% / −10.0% |
+
+  > **LTO bilinçli olarak KONMADI.** `lto = "thin"`, `codegen-units=1`'in üstüne ölçüldü ve bu
+  > iş yükünde hiçbir şey eklemedi: `full_step_mixed/128` −0.07%, `/512` +2.7% (ikisi de
+  > anlamsız), `solver_settled_stack/48` +18.2%. Derleme süresi maliyeti var, ölçülmüş kazancı
+  > yok. Çok daha fazla crate linkleyen bir **oyun binary'sinde** hâlâ işe yarayabilir — ama
+  > onu ölçmek wgpu+egui'yi LTO altında linklemek demek ve RAM geçersiz-kılması tam olarak
+  > bunu önlemek için var. Ölçülmemiş bir kazanç için ayar eklenmedi.
+
+  > Bu makinede hiçbir şey değişmiyor: `.cargo/config.toml`'un `rustflags`'ı
+  > (`-C codegen-units=4 -C lto=off`) profil ayarlarını yeniyor. Yani buradaki tüm perf
+  > sayıları hâlâ ALT SINIR.
 - ⬜ **C6** — Index buffer (`components/mesh.rs:8-9`) + mipmap + anizotropik filtreleme.
 
 ## Faz D — Ekosistem ve 1.0
