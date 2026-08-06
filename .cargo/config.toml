@@ -5,9 +5,25 @@
 [build]
 jobs = 4
 
-# Linker RAM kullanımını azalt
+# NOT: `codegen-units=4` BURADAN KALDIRILDI, `[profile.dev]`'e taşındı (kök `Cargo.toml`).
+#
+# Sebep: rustflags bütün profillere birden uygulanıyor ve profil bayraklarından SONRA
+# ekleniyor; rustc son `-C`'yi aldığı için `[profile.release] codegen-units = 1` HER YERDE
+# etkisizdi — yerelde de, CI'da da (bu dosya git'e işli), ve bunun farkına varılması iki
+# oturum aldı. Dev tarafındaki koruma birebir aynı değerle profile taşındı; değişen tek şey
+# release'in artık kendi ayarını alması.
+#
+# Ölçüldü, çünkü buradaki gerekçe RAM'di: aynı 20 crate'i (wgpu, naga, egui, winit dahil)
+# `jobs = 4` altında yeniden derlerken toplam rustc RSS zirvesi codegen-units=4'te 996 MB,
+# codegen-units=1'de 985 MB — 13 GB'lık makinede fark yok. Maliyet bellek değil derleme
+# süresi: 38.1 s → 45.2 s (+%19).
+#
+# `lto=off` KALIYOR ve bilinçli: hiçbir profil LTO istemiyor (ölçüldü, bu iş yükünde kazanç
+# yok — bkz. Cargo.toml'daki `[profile.release]` notu) ve bu satır onu garanti altına alıyor.
+# Aynı "profili ezer" tuzağı lto için de geçerli; farkı, orada ezilen değerin ZATEN istenen
+# değer olması.
 [target.x86_64-unknown-linux-gnu]
-rustflags = ["-C", "codegen-units=4", "-C", "lto=off"]
+rustflags = ["-C", "lto=off"]
 
 # WASM (browser): `getrandom` 0.3/0.4 (rand 0.10 → getrandom 0.4, uuid) needs an
 # explicit web backend. The `wasm_js` cargo feature (enabled on the getrandom deps)
