@@ -24,9 +24,34 @@ impl JointSolver {
             transforms[idx_a].position + transforms[idx_a].rotation * joint.local_anchor_a;
         let anchor_b =
             transforms[idx_b].position + transforms[idx_b].rotation * joint.local_anchor_b;
-        let axis_w = (transforms[idx_a].rotation * data.axis).normalize();
+        // `axis` is a public field and `SliderJointData::default()` leaves it at `Vec3::ZERO`
+        // — only `Joint::slider` substitutes `Vec3::Y`, and `..Default::default()` walks
+        // straight past that — so a zero axis is a reachable input, not a theoretical one.
+        // A bare `.normalize()` on it returns a NaN vector (glam's `glam_assert!` is compiled
+        // out; this workspace does not enable that feature), which then flowed into
+        // `current_position` — a public field — on every pass. Nothing worse happened only
+        // because NaN loses every `>` comparison downstream (`err.abs() > 1e-4`,
+        // `along < lower_limit`, `k > 1e-10`), i.e. containment by accident of IEEE
+        // semantics rather than by design; the first gate rewritten as `!(x <= eps)` would
+        // have released it into every body this joint touches.
+        //
+        // Contract: no axis ⇒ the rows that NEED one are skipped (off-axis, travel limits,
+        // motor) and the ones that do not keep running (the angular lock below, and the point
+        // rows of whatever else is attached). That is the rule the siblings in this module
+        // already follow — `solve_slider_spring` below, `solve_hinge_spring`,
+        // `apply_angular_constraint_soft`'s direction gate, the ball-socket twist/swing rows.
+        // Substituting `Vec3::Y` here was rejected: at CONSTRUCTION a fallback repairs an
+        // argument the user meant to supply, but in the solver it would silently pin two axes
+        // the caller never named — inventing a constraint is worse than applying none.
+        //
+        // `normalize_or_zero` computes the identical `self * self.length_recip()` product for
+        // every axis that does normalise, so a valid slider is bit-for-bit unchanged.
+        let axis_w = (transforms[idx_a].rotation * data.axis).normalize_or_zero();
+        let has_axis = axis_w.length_squared() > 0.5; // unit or exactly zero — nothing between
 
         let delta = anchor_b - anchor_a;
+        // With no axis this is `delta.dot(ZERO)` = exactly 0.0, not NaN: no axis, no travel
+        // along it. (See `SliderJointData::current_position`.)
         let along = delta.dot(axis_w);
         let off_axis = anchor_a - (anchor_b - axis_w * along); // error = target - current
 
@@ -36,11 +61,14 @@ impl JointSolver {
         let r_b = Self::lever_arm(rigid_bodies, transforms, idx_b, anchor_b);
 
         // 1. Off-axis constraint: project onto two perpendicular directions
-        let (perp1, perp2) = Self::perpendiculars(axis_w);
+        // Gated: `perpendiculars` itself normalises a cross product, so calling it with a
+        // zero axis is where the next NaN would be minted.
+        if has_axis {
+            let (perp1, perp2) = Self::perpendiculars(axis_w);
 
-        let err1 = off_axis.dot(perp1);
-        if err1.abs() > 1e-4 {
-            self.apply_linear_constraint(
+            let err1 = off_axis.dot(perp1);
+            if err1.abs() > 1e-4 {
+                self.apply_linear_constraint(
                     rigid_bodies,
                     transforms,
                     velocities,
@@ -55,11 +83,11 @@ impl JointSolver {
                     f32::INFINITY,
                     &mut joint.scratch, row::LIN,
                 );
-        }
+            }
 
-        let err2 = off_axis.dot(perp2);
-        if err2.abs() > 1e-4 {
-            self.apply_linear_constraint(
+            let err2 = off_axis.dot(perp2);
+            if err2.abs() > 1e-4 {
+                self.apply_linear_constraint(
                     rigid_bodies,
                     transforms,
                     velocities,
@@ -74,6 +102,7 @@ impl JointSolver {
                     f32::INFINITY,
                     &mut joint.scratch, row::LIN + 1,
                 );
+            }
         }
 
         // 2. Angular lock — full 3-DOF rotation constraint using quaternion error
@@ -113,7 +142,7 @@ impl JointSolver {
         // pozitif lambda → clamp (0, +∞); üst-limit ihlali (err < 0) −eksene iter →
         // negatif lambda → clamp (−∞, 0). (Eskiden ikisi de TERSTİ → limit hiç tutmuyordu;
         // 5 m/s'lik cisim 1 m'lik üst limiti delip 19 m'ye gidiyordu.)
-        if data.use_limits {
+        if data.use_limits && has_axis {
             if along < data.lower_limit {
                 let err = data.lower_limit - along; // positive
                 self.apply_linear_constraint(
@@ -153,7 +182,7 @@ impl JointSolver {
 
 
         // 4. Motor — velocity along axis
-        if data.use_motor {
+        if data.use_motor && has_axis {
             // Bütçe geçişin TOPLAMINA uygulanır — bkz. hinge motoru.
             let max_impulse = data.motor_max_force * dt;
 

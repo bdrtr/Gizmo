@@ -1,7 +1,7 @@
 use super::data::*;
 use gizmo_physics_core::components::Transform;
 use crate::components::{RigidBody, Velocity};
-use gizmo_math::Vec3;
+use gizmo_math::{Quat, Vec3};
 
 /// Birikmiş-λ yuvaları ([`JointScratch`]).
 ///
@@ -141,6 +141,13 @@ impl JointSolver {
     /// either endpoint is absent from the map, or when both endpoints resolve to the same
     /// index; a mapped index that is out of range for the slices panics.
     ///
+    /// `dt` must be finite and strictly positive. A zero, negative, infinite or NaN `dt`
+    /// clears the accumulated impulses and returns without touching a velocity or a break
+    /// flag — no time passed, so no impulse was delivered and nothing can have broken. (It
+    /// used to run the whole solve: the break check's `impulse/dt` was `+inf`, which exceeds
+    /// every finite `break_force`, so one zero-length call snapped every breakable joint in
+    /// the world at once.)
+    ///
     /// Three phases, in order:
     ///
     /// 1. [`Self::iterations`] Gauss–Seidel sweeps of the velocity-level rows, in joint
@@ -194,6 +201,36 @@ impl JointSolver {
         // (bkz. `PhysicsWorld::WorldSnapshot`'taki contact_cache gerekçesi).
         for joint in joints.iter_mut() {
             joint.scratch = JointScratch::default();
+        }
+
+        // A non-positive (or NaN) step is not a step, and every quantity below is a RATE:
+        // the Baumgarte term is `error/dt`, a motor budget is `max_force·dt`, and the break
+        // check divides the pass's impulse by dt. At `dt == 0` those are `x/0` and `0/0`, not
+        // "small". The break check was the one that did real damage: `‖Σλᵢnᵢ‖ / 0` is `+inf`
+        // for a joint carrying ANY load, and `inf > break_force` holds for every FINITE
+        // threshold — so a single call with `dt == 0` snapped every breakable joint in the
+        // world at once, irreversibly (nothing ever clears `is_broken`). Only a joint left at
+        // the constructor default `f32::INFINITY` survived, because `inf > inf` is false.
+        //
+        // `PhysicsWorld::step` cannot reach this: it substeps at `FIXED_DT` and a paused world
+        // returns before the accumulator (`world/step.rs`). But `JointSolver` is public, the
+        // crate advertises the physics as embeddable, and `solve_joints` uses the dt it is
+        // handed — which is how an embedder's paused/zero-length frame gets here.
+        //
+        // Doing nothing is the only answer that cannot be wrong: no time passed, so no impulse
+        // was delivered and nothing can have broken. The scratch is cleared FIRST so the
+        // documented "impulses are cleared at the start of every call" stays true and a reader
+        // of `joint.scratch` sees this pass's honest zero instead of the previous pass's total.
+        //
+        // NOT fixed here, and worth knowing: a very small POSITIVE dt has the same shape of
+        // problem. `position_bias` saturates at `max_correction_speed`, so λ stops shrinking
+        // with dt while `λ/dt` keeps growing — a joint's reported force diverges as dt → 0⁺.
+        // That is a calibration question about the speed clamp, not a degenerate-input one.
+        //
+        // (`dt <= 0.0` is false for NaN, hence the second half; an infinite dt is rejected on
+        // the same grounds — a motor budget of `max_force·∞` is not a step either.)
+        if dt <= 0.0 || !dt.is_finite() {
+            return;
         }
 
         for _ in 0..self.iterations {
@@ -352,6 +389,35 @@ impl JointSolver {
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────
+
+    /// The SWING half of the swing–twist decomposition of `q` about the unit axis `a`
+    /// (both expressed in the same frame): the factor whose rotation axis is PERPENDICULAR
+    /// to `a`, i.e. how far `a` itself has been tipped, with the roll about `a` divided out.
+    ///
+    /// Construction (the standard one): write `q = (v, w)` and project the vector part onto
+    /// the axis, `p = (v·a)a`. Then `twist = (p, w)/‖(p, w)‖` is a rotation about `a`, and
+    /// `swing = q · twist⁻¹` satisfies `q = swing · twist`. The `a`-component of `swing`'s
+    /// vector part cancels exactly — for `a = ẑ` it is `zc − ws` with `c = w/‖(p,w)‖` and
+    /// `s = z/‖(p,w)‖`, which is zero — so `swing` really is a pure tip and carries no roll.
+    /// The same algebra gives `swing.w = ‖(p, w)‖ ≥ 0` whenever `q.w ≥ 0`, so a canonicalised
+    /// input yields a canonicalised swing and `2·acos(swing.w)` is the swing angle in `[0, π]`.
+    ///
+    /// Two inputs have no decomposition and both return `q` unchanged, i.e. "it is all swing":
+    ///
+    /// * `a == ZERO` — no axis to decompose about. This is the fallback the ball-socket cone
+    ///   relies on when `twist_axis` was never set: measuring the whole deviation is the only
+    ///   thing a cone with no axis can mean, and it is exactly what the cone did before.
+    /// * `‖(p, w)‖ ≈ 0` — a swing of π with no roll component, where the twist is genuinely
+    ///   undefined rather than merely small.
+    #[inline]
+    pub(crate) fn swing_about(q: Quat, a: Vec3) -> Quat {
+        let p = a * Vec3::new(q.x, q.y, q.z).dot(a);
+        let twist = Quat::from_xyzw(p.x, p.y, p.z, q.w);
+        if twist.length_squared() < 1e-12 {
+            return q;
+        }
+        q * twist.normalize().conjugate()
+    }
 
     /// Two unit vectors perpendicular to `v`.
     fn perpendiculars(v: Vec3) -> (Vec3, Vec3) {
@@ -950,6 +1016,61 @@ mod tests {
             "aynı girdiyle ikinci geçiş aynı λ'yı üretmeli; birikim geçişler arasında taşınmış"
         );
         assert_eq!(v2, v1, "…ve dolayısıyla aynı hızları");
+    }
+
+    /// The decomposition's defining properties, on a rotation that mixes both parts.
+    ///
+    /// Not a regression test — `swing_about` is new, so nothing here can fail on the old
+    /// code. It exists because the ball-socket cone now trusts three claims about it, and a
+    /// wrong decomposition would be invisible in a behavioural test that happens to use a
+    /// pure swing or a pure twist. The claims: the swing carries NO roll about the axis, it
+    /// leaves a pure swing untouched, and it leaves nothing at all of a pure twist.
+    #[test]
+    fn swing_about_removes_the_roll_and_nothing_else() {
+        let axis = Vec3::new(0.3, -0.5, 0.81).normalize();
+        // A genuine swing tips the axis, so its own axis must be PERPENDICULAR to it.
+        let swing_axis = axis.cross(Vec3::X).normalize();
+        let swing_in = Quat::from_axis_angle(swing_axis, 0.7);
+        let twist_in = Quat::from_axis_angle(axis, 1.1);
+
+        // Mixed: `q = swing·twist` must decompose back to exactly `swing`, and that swing must
+        // carry no component along the axis.
+        let swing = JointSolver::swing_about(swing_in * twist_in, axis);
+        let roll = Vec3::new(swing.x, swing.y, swing.z).dot(axis);
+        assert!(
+            roll.abs() < 1e-5,
+            "the swing must carry no roll about the axis, got {roll}"
+        );
+        assert!(
+            (2.0 * swing.w.abs().clamp(0.0, 1.0).acos() - 0.7).abs() < 1e-4,
+            "…and it must be the swing that went in (0.7 rad), got {}",
+            2.0 * swing.w.abs().clamp(0.0, 1.0).acos()
+        );
+
+        // A pure twist is ALL twist: nothing is left for the cone to clamp. This is the whole
+        // point of the change — the cone used to see 1.1 rad here.
+        let none = JointSolver::swing_about(twist_in, axis);
+        let none_angle = 2.0 * none.w.abs().clamp(0.0, 1.0).acos();
+        assert!(
+            none_angle < 1e-3,
+            "a pure twist must decompose to zero swing, got {none_angle} rad"
+        );
+
+        // …and a pure swing survives whole, so the cone did not become permissive in general.
+        let all = JointSolver::swing_about(swing_in, axis);
+        let all_angle = 2.0 * all.w.abs().clamp(0.0, 1.0).acos();
+        assert!(
+            (all_angle - 0.7).abs() < 1e-4,
+            "a pure swing must decompose to itself, got {all_angle} rad (expected 0.7)"
+        );
+
+        // No axis ⇒ no decomposition: the whole deviation is reported as swing, which is the
+        // fallback `cone_limit_angle` relies on when `twist_axis` was never set.
+        let whole = JointSolver::swing_about(twist_in, Vec3::ZERO);
+        assert!(
+            (whole.w - twist_in.w).abs() < 1e-6,
+            "a zero axis must return the input unchanged"
+        );
     }
 
     #[test]

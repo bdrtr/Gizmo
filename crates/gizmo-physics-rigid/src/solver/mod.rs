@@ -289,9 +289,19 @@ pub struct ConstraintSolver {
     /// always using [`iterations`](Self::iterations).
     ///
     /// With this on (the default) a block-solved island of support depth ≥ 5 is swept
-    /// `min(96, max(iterations, max(28, 3·depth/2)))` times. The floor of 28 is *above* the
-    /// default `iterations` of 20, so on the default configuration the adaptive count is the
-    /// only one a deep island ever sees, and lowering `iterations` cannot lower it.
+    /// `min(96, max(iterations, max(16, 3·depth/2)))` times. The floor of 16 sits *below* the
+    /// default `iterations` of 20, so on the default configuration it constrains nobody: a
+    /// deep island gets more than `iterations` only once `3·depth/2` exceeds it (depth ≥ 14),
+    /// and a caller who lowers `iterations` below 16 gets the floor instead.
+    /// (This paragraph said 28 until 2026-08-07. The floor was measured down from 28 to 16 on
+    /// 2026-08-06 — see `BLOCK_ITERS_FLOOR` in `solver/tgs.rs` for the ensembles — and the
+    /// claim that a caller "cannot lower it" went stale with that change.)
+    ///
+    /// It is also a TGS-path policy: the gate includes
+    /// [`block_solver`](Self::block_solver), which only `solver/tgs.rs` reads, so an island
+    /// that falls to the split-impulse path (any island holding a CCD-enabled body, or any
+    /// island at all with [`use_tgs_soft`](Self::use_tgs_soft) off) sweeps `iterations`
+    /// whatever its depth. See the note at the computation site in `solve_contacts`.
     ///
     /// Turning it off makes `iterations` mean exactly what it says for every island. That is
     /// what a measurement harness needs — a sweep count it can actually set, including below
@@ -438,6 +448,33 @@ impl ConstraintSolver {
         // (buckling) until support propagates to its top, which needs sweeps that scale
         // with D. Shallow islands (D<5, no buckling) keep the base count; bucklable stacks
         // get max(FLOOR, 1.5·D) sweeps (empirically: D=5 needs ≥24, D=32 needs ~48), capped.
+        //
+        // TGS PATH ONLY, and knowingly so — `n_iterations` is consumed by the TGS branch
+        // below (and by the trace) and by nothing else; the split-impulse fallback sweeps
+        // `self.iterations` (see its `for iter in 0..self.iterations` loop) and derives its
+        // position pass from the same field. An island falls to that path by containing a
+        // CCD-enabled body or by `use_tgs_soft` being off, and it then gets the base count
+        // however deep it is. `SolveStats` reports that honestly rather than papering over it
+        // (see the note above the `SolveStats` returned at the end of this function).
+        //
+        // Whether it SHOULD carry over is open, and is a measurement question, not a
+        // one-line change (audit item, 2026-08-07 — verified true, deliberately not acted on):
+        //   • The gate is keyed on `block_solver`, which only `solver/tgs.rs` ever reads. On
+        //     the split-impulse path that flag means nothing, so the condition is currently
+        //     testing a feature the path does not have.
+        //   • The buckling argument itself is solver-agnostic — Gauss-Seidel needs O(D)
+        //     sweeps to propagate support up a column whichever velocity law it applies —
+        //     which is why extending it looks right on paper.
+        //   • But the numbers behind FLOOR/CAP were measured on TGS+block only (see
+        //     `BLOCK_ITERS_FLOOR` in solver/tgs.rs and tests/solver_quality.rs). Nothing has
+        //     been measured for split-impulse, whose position correction is a separate
+        //     pseudo-velocity pass — more biased sweeps there is not obviously more stable.
+        //   • Blast radius if it were extended, on the DEFAULT config: none below depth 14.
+        //     `iterations` is 20 and FLOOR is 16, so `max(20, max(16, 3D/2))` is still 20 for
+        //     every D ≤ 13; only D ≥ 14 would change (D=14 → 21, saturating at 96). It is NOT
+        //     a no-op for a caller who lowered `iterations` below 16 — those get the floor.
+        //     Both `tests/ccd.rs` and `tests/ccd_analytical.rs` run on this path and are the
+        //     regression surface that such a change has to be re-blessed against.
         let n_iterations = if self.adaptive_iterations && self.block_solver && island_depth >= 5 {
             let target = (island_depth as usize * 3 / 2).max(Self::BLOCK_ITERS_FLOOR);
             self.iterations.max(target).min(Self::BLOCK_ITERS_CAP)

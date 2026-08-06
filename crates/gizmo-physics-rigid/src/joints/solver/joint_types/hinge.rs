@@ -57,10 +57,27 @@ impl JointSolver {
         }
 
         // 3. Track current angle
+        // `axis` is public and `HingeJointData::default()` leaves it at `Vec3::ZERO` (only
+        // `Joint::hinge` substitutes `Vec3::Y`), so both crosses below are ZERO and the bare
+        // `.normalize()` returned a NaN reference direction — as it also does for an axis so
+        // small that the cross product underflows to a subnormal.
+        //
+        // That NaN never escaped: `normalize_or_zero` on the projections plus the
+        // `length_squared() > 0.01` gate turned it into "skip", exactly as a zero reference
+        // direction does. So this is a containment fix, not a behaviour fix — `normalize_or_zero`
+        // returns the identical `self * self.length_recip()` product wherever `normalize`
+        // already produced a finite one, and produces the ZERO that the existing gate was
+        // already handling wherever it did not. Bit-for-bit unchanged for every axis.
+        //
+        // Contract for a zero axis (unchanged, now explicit): every axis-dependent row is
+        // inert — the alignment row at step 2 has `ang_err = ZERO×ZERO`, this block's gate
+        // fails, and the motor's `k` is 0 — so the hinge degrades to the point constraint
+        // `solve_fixed_joint` already applied, and `current_angle` is left stale, which is the
+        // documented behaviour when the measurement collapses (`HingeJointData::current_angle`).
         let ref_local = if data.axis.cross(Vec3::X).length() > 0.1 {
-            data.axis.cross(Vec3::X).normalize()
+            data.axis.cross(Vec3::X).normalize_or_zero()
         } else {
-            data.axis.cross(Vec3::Y).normalize()
+            data.axis.cross(Vec3::Y).normalize_or_zero()
         };
 
         let rot_a = transforms[idx_a].rotation;

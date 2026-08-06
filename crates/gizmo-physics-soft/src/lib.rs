@@ -41,8 +41,10 @@ pub mod rope;
 /// Volumetric soft bodies. A [`soft_body::SoftBodyMesh`] is a tetrahedral mesh with a
 /// Neo-Hookean material; each element captures its rest shape when it is added, so the nodes
 /// must already be in their rest configuration at that point. This module also holds
-/// [`soft_body::resolve_node_collision`], the per-node swept collider test that both the CPU
-/// step and the `gpu_compute` path use to keep nodes out of rigid bodies.
+/// [`soft_body::resolve_node_collision`], the per-node swept collider test that keeps nodes
+/// out of rigid bodies, and [`soft_body::resolve_swept_step`], the post-integration wrapper
+/// around it that both the CPU step and the `gpu_compute` readback go through — sharing it is
+/// what keeps the two from drifting apart on which position the sweep starts from.
 pub mod soft_body;
 /// ECS driver systems that step every soft-body component found in a `World`.
 ///

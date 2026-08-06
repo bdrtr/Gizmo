@@ -222,8 +222,10 @@ impl From<&JointData> for JointType {
 /// Revolute-joint parameters: one rotational DOF about [`axis`](Self::axis), with the two
 /// anchors held together by the same point constraint a Fixed joint uses.
 ///
-/// The derived `Default` leaves `axis` at zero, which is degenerate for the solver — prefer
-/// [`Joint::hinge`], which normalises the axis and seeds a usable limit range.
+/// The derived `Default` leaves `axis` at zero. The solver then has no axis to align, to
+/// measure an angle about or to drive, so every one of those rows is inert and the hinge
+/// degrades to the bare point constraint — prefer [`Joint::hinge`], which normalises the
+/// axis and seeds a usable limit range.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
 #[non_exhaustive]
 pub struct HingeJointData {
@@ -324,13 +326,20 @@ pub struct BallSocketJointData {
     /// Gate for [`cone_limit_angle`](Self::cone_limit_angle). With this and both other limit
     /// gates off, the joint stays a pure point constraint and no rest pose is latched at all.
     pub use_cone_limit: bool,
-    /// Half-angle of the allowed cone, in radians: the largest angle by which B may deviate
-    /// from the rest pose.
+    /// Half-angle of the allowed cone, in radians: the largest angle by which
+    /// [`twist_axis`](Self::twist_axis) may be tipped away from where it sits in the rest
+    /// pose. [`Joint::ball_socket`] seeds `π`, i.e. effectively unlimited.
     ///
-    /// The measured quantity is the *full* rotation angle away from
-    /// `initial_relative_rotation`, so twist about `twist_axis` counts toward it as well as
-    /// swing; use `use_twist_limit` when twist needs its own range.
-    /// [`Joint::ball_socket`] seeds `π`, i.e. effectively unlimited.
+    /// The measured quantity is the SWING angle of the swing–twist decomposition of the
+    /// deviation from `initial_relative_rotation` about `twist_axis` — roll about the axis
+    /// itself is divided out and left to [`use_twist_limit`](Self::use_twist_limit), so the
+    /// two limits are independent. Until 2026-08 it was the *full* deviation angle instead,
+    /// which meant twist spent the cone's budget: a limb rolled 30° about its own bone, with
+    /// its axis not tipped at all, was 30° into a cone it had never entered.
+    ///
+    /// When `twist_axis` is left at the derived `Default`'s zero there is no axis to
+    /// decompose about and the measure falls back to that full deviation angle — the only
+    /// thing a cone with no axis can mean.
     pub cone_limit_angle: f32,
     /// Twist (roll about `twist_axis`) limit — the second half of a cone-twist joint.
     /// The cone limits SWING (how far the axis tips); this limits TWIST (spin about it),
@@ -341,9 +350,11 @@ pub struct BallSocketJointData {
     /// the asymmetric swing rows are skipped outright when it is near zero — which is what
     /// the derived `Default` leaves it as ([`Joint::ball_socket`] seeds `Vec3::Y`).
     ///
-    /// It also fixes the two perpendicular directions the swing limits act about, so
-    /// re-aiming it re-aims [`swing_limit_1`](Self::swing_limit_1) and
-    /// [`swing_limit_2`](Self::swing_limit_2) with it.
+    /// It is the axis of ALL THREE limit groups, not just the twist one: it is the axis the
+    /// cone opens around, the axis whose roll [`twist_lower`](Self::twist_lower)/
+    /// [`twist_upper`](Self::twist_upper) bound, and the axis whose two perpendiculars
+    /// [`swing_limit_1`](Self::swing_limit_1) and [`swing_limit_2`](Self::swing_limit_2) act
+    /// about. Re-aiming it re-aims all of them together.
     pub twist_axis: Vec3,
     /// Lower twist bound in radians about `twist_axis`, measured from the rest pose — so
     /// `0.0` is "no twist relative to the latched pose", and this value is normally negative.
@@ -360,10 +371,14 @@ pub struct BallSocketJointData {
     /// Symmetric swing bound in radians about the first perpendicular of `twist_axis`: the
     /// allowed range is `±swing_limit_1`, there is no separate negative bound. Seeded `π`.
     ///
-    /// The quantity compared against it is the small-angle rotation-vector component
-    /// (`2·sin(θ/2)` for a pure swing), so the bound is accurate near zero and increasingly
-    /// permissive as the angle grows — treat values approaching `π/2` and beyond as
-    /// approximate.
+    /// The quantity compared against it is the component of the swing's ROTATION VECTOR
+    /// (axis · angle, radians) along that perpendicular, so for a pure swing about it the
+    /// bound is the angle you wrote, over the whole range. Until 2026-08 the code resolved
+    /// the quaternion vector part instead — `2·sin(θ/2)`, a chord — and every bound was
+    /// therefore too loose by a margin that grew with it: `π/2` first engaged at ≈1.80 rad
+    /// (103°), and anything ≥ 2 rad could not engage at all. A swing that is not purely about
+    /// one perpendicular still splits between the two rows, which is an approximation of an
+    /// elliptical cone, not an exact one.
     pub swing_limit_1: f32,
     /// The same symmetric bound about the second perpendicular of `twist_axis`, with the
     /// same measure and seed as [`swing_limit_1`](Self::swing_limit_1).
@@ -399,16 +414,19 @@ pub struct BallSocketJointData {
 /// two off-axis translations pinned and relative rotation fully locked to the pose latched
 /// in [`initial_relative_rotation`](Self::initial_relative_rotation).
 ///
-/// The derived `Default` leaves `axis` at zero, which the main solver path does not guard
-/// against — build one with [`Joint::slider`], which substitutes `Vec3::Y` for a near-zero
-/// axis.
+/// The derived `Default` leaves `axis` at zero. The solver treats that as "no axis" and
+/// skips every row that needs one — the off-axis pins, the travel limits and the motor — so
+/// a defaulted slider is a bare rotation lock, not a slider. Build one with
+/// [`Joint::slider`], which substitutes `Vec3::Y` for a near-zero axis.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
 #[non_exhaustive]
 pub struct SliderJointData {
-    /// Sliding direction, expected **unit length**, in **A's** local frame only — B's
-    /// orientation never enters, since B's rotation is locked to A's anyway. [`Joint::slider`]
-    /// normalises the argument (falling back to `Vec3::Y` when it is shorter than ~1e-3);
-    /// assigning this field afterwards does not re-normalise it.
+    /// Sliding direction, in **A's** local frame only — B's orientation never enters, since
+    /// B's rotation is locked to A's anyway. [`Joint::slider`] normalises the argument
+    /// (falling back to `Vec3::Y` when it is shorter than ~1e-3); assigning this field
+    /// afterwards does not, but the solver normalises whatever it finds, so any non-zero
+    /// length works. A zero axis means "no axis": the off-axis pins, the travel limits and
+    /// the motor are all skipped and only the angular lock runs.
     pub axis: Vec3,
     /// Gate for the travel limits. When `false` (the default) travel along the axis is
     /// unbounded and the limit row is not built; [`Joint::slider`] seeds the bounds to ±10 m
@@ -467,6 +485,8 @@ pub struct SliderJointData {
     /// Solver **output** in metres: the along-axis component of (anchor B − anchor A),
     /// rewritten on every solver pass and read by the servo. `#[serde(skip)]` runtime state;
     /// the suspension spring recomputes the same quantity itself rather than reading this.
+    /// With no [`axis`](Self::axis) there is no along-axis component and this reads `0.0`
+    /// (it used to read NaN — normalising a zero axis — and latch that into public state).
     #[serde(skip)]
     pub current_position: f32,
     /// Relative rotation (`rot_a⁻¹ · rot_b`) latched on the first solve and then held as the

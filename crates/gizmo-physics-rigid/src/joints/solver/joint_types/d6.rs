@@ -69,15 +69,33 @@ impl JointSolver {
         };
         let swing = initial.inverse() * relative_rot;
         let q = if swing.w < 0.0 { -swing } else { swing };
+        // `rvec` is the quaternion vector part doubled: `2·sin(θ/2)` along the rotation axis.
+        // The two modes below need DIFFERENT things from it, which is why only one of them
+        // converts.
         let rvec = 2.0 * Vec3::new(q.x, q.y, q.z);
         for (i, mode) in data.angular.iter().enumerate() {
             let axis_local = data.frame * unit[i];
-            let angle = rvec.dot(axis_local);
             let axis_w = rot_a * axis_local;
             let (error, lo_clamp, hi_clamp) = match *mode {
                 D6Motion::Free => continue,
-                D6Motion::Locked => (-angle, f32::NEG_INFINITY, f32::INFINITY),
+                // Driven to ZERO, so the quantity only has to vanish with the error — this is
+                // the standard angular-lock Jacobian term, and it agrees with the true angle
+                // to third order exactly where a lock operates. Deliberately left as-is.
+                D6Motion::Locked => (-rvec.dot(axis_local), f32::NEG_INFINITY, f32::INFINITY),
+                // Compared against a BOUND, and `D6Motion::Limited` documents its rotational
+                // bounds in radians — so this one has to be radians. `rvec` is a chord: always
+                // ≤ θ and saturating at 2.0, so every bound engaged later than it was written
+                // (π/2 first bit at 2·asin(π/4) ≈ 1.80 rad ≈ 103°) and any bound ≥ 2 rad could
+                // not engage at all. Converted by rescaling the chord to the axis-angle
+                // rotation vector, θ·n; same defect and same fix as
+                // `BallSocketJointData::swing_limit_1`.
                 D6Motion::Limited { lower, upper } => {
+                    let rvec_len = rvec.length();
+                    let angle = if rvec_len > 1e-9 {
+                        rvec.dot(axis_local) * (2.0 * q.w.clamp(-1.0, 1.0).acos() / rvec_len)
+                    } else {
+                        rvec.dot(axis_local) // θ ≈ chord below ~1e-9 rad; the ratio is 1
+                    };
                     if angle > upper {
                         (upper - angle, f32::NEG_INFINITY, 0.0)
                     } else if angle < lower {
