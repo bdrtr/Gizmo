@@ -16,15 +16,20 @@
   </style>
 </head>
 <body>
-  <div id="boot">Gizmo Engine yükleniyor… (WebGPU gerektirir)</div>
+  <!-- Sayfa GitHub Pages'te (bdrtr.github.io/Gizmo/) da yayınlanıyor, yani okuyucu
+       kitlesi iki dilli: kullanıcıya görünen her metin TR + EN. #boot'ta
+       `white-space: pre-line` var, satır sonu olduğu gibi render edilir. -->
+  <div id="boot">Gizmo Engine yükleniyor… (WebGPU gerektirir)
+Loading Gizmo Engine… (requires WebGPU)</div>
   <script type="module">
     const boot = document.getElementById('boot');
     const fail = (msg) => {
       // Sadece ilk hata gösterilir; sonrakiler bastırılır (panik ardıl olayları).
       if (boot.classList.contains('err')) return;
       boot.classList.add('err');
-      boot.textContent = 'Başlatılamadı.\n' + msg +
-        '\n\nWebGPU destekli güncel bir tarayıcı (Chrome/Edge) gerekir.';
+      boot.textContent = 'Başlatılamadı. / Failed to start.\n' + msg +
+        '\n\nWebGPU destekli güncel bir tarayıcı (Chrome/Edge) gerekir.' +
+        '\nA current WebGPU-capable browser (Chrome/Edge) is required.';
     };
 
     // Motorun async WebGPU init'i wasm-bindgen start() DÖNDÜKTEN SONRA,
@@ -35,7 +40,7 @@
     window.addEventListener('unhandledrejection', (e) => fail(String(e.reason)));
 
     if (!navigator.gpu) {
-      fail('Tarayıcıda WebGPU (navigator.gpu) yok.');
+      fail('Tarayıcıda WebGPU (navigator.gpu) yok. / No WebGPU (navigator.gpu) in this browser.');
     } else {
       try {
         const { default: init } = await import('./pkg/demo_web.js');
@@ -50,7 +55,8 @@
           if (cv && cv.width > 1 && cv.height > 1) {
             boot.remove();
           } else if (performance.now() - start > 15000) {
-            fail('Render 15 sn içinde başlamadı (WebGPU adapter alınamadı olabilir).');
+            fail('Render 15 sn içinde başlamadı (WebGPU adapter alınamadı olabilir).' +
+              '\nRendering did not start within 15 s (the WebGPU adapter may be unavailable).');
           } else {
             requestAnimationFrame(waitCanvas);
           }

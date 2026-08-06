@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Gizmo Engine — a pure-Rust, ECS-driven 3D game engine and physics simulator with **zero external physics dependencies**. Cargo workspace of ~20 crates at uniform version `0.8.0`, published to crates.io (the facade crate `crates/gizmo` is published as **`gizmo-engine`**). Aimed at large-scale, deterministic physics simulation + a WGPU renderer that also runs in the browser via WASM/WebGPU.
+Gizmo Engine — a pure-Rust, ECS-driven 3D game engine and physics simulator with **zero external physics dependencies**. Cargo workspace of ~20 crates at uniform version `0.9.0`, published to crates.io (the facade crate `crates/gizmo` is published as **`gizmo-engine`**). Aimed at large-scale, deterministic physics simulation + a WGPU renderer that also runs in the browser via WASM/WebGPU.
 
 ## Build, test, run
 
@@ -89,5 +89,5 @@ The simulation state (Transform/Velocity/solver) runs entirely on **glam/f32**. 
 
 ## Docs & conventions
 
-- **`docs/ENGINE.md`** is the single internal engineering doc: architecture, live roadmap, release strategy (staged 1.0), determinism/migration contracts, closed research. **Written in Turkish**, as are many inline code comments. `README.md` = user-facing intro, `CHANGELOG.md` = version history.
+- **`docs/ENGINE.md`** is the single internal engineering doc: architecture, live roadmap, release strategy (staged 1.0), determinism/migration contracts, closed research. **Written in English** (translated 2026-08-06 — the bus-factor item D2); many inline code comments are still Turkish. `README.md` = user-facing intro, `CHANGELOG.md` = version history.
 - Public API hardening for 1.0 is in progress: 96 types are `#[non_exhaustive]`, errors are enums + `Result`. `glam` is a deliberate permanent public dep; `bevy_reflect` is behind the default-off `reflect` feature; `wgpu`/`winit`/`egui` leak intentionally during 0.x.

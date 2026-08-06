@@ -1,0 +1,150 @@
+name: Web Demo (GitHub Pages)
+
+# Deploys `demo-web/` (the WebGPU/WASM browser demo) to
+# https://bdrtr.github.io/Gizmo/ so the engine is one click away instead of a
+# 20-minute, version-locked local setup.
+#
+# Deliberately a SEPARATE workflow from ci.yml: the gates (test/clippy/miri/…)
+# and the demo deployment must be able to fail independently — a red deploy
+# should never look like a red test run, and a Pages outage should not block a
+# merge. ci.yml already *compiles* `-p demo-web` for wasm32; this workflow is
+# the only thing that also runs wasm-bindgen and publishes the result.
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+# Least privilege by default; `pages`/`id-token` are granted only to the job
+# that actually deploys (below). id-token is what deploy-pages uses to mint
+# its OIDC deployment token — without it the deploy fails at the API call.
+permissions:
+  contents: read
+
+# Pages allows one in-flight deployment per site. Queue rather than cancel:
+# cancelling a half-finished deployment can leave the site on the previous
+# build with no obvious signal.
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  # ── Build: cargo → wasm32 → wasm-bindgen → static site directory ──────────
+  build:
+    name: Build demo-web (wasm32)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+
+      # The wasm-bindgen CLI and the `wasm-bindgen` crate share a version-locked
+      # ABI (the generated JS shim carries a schema hash). A mismatch fails the
+      # bindgen step with a "schema version mismatch" error, so installing
+      # "latest" is guaranteed to break the moment upstream releases and this
+      # lockfile has not been bumped.
+      #
+      # Read the pin out of the committed Cargo.lock instead of hardcoding it,
+      # so a `cargo update` can never silently desync CI from the source tree.
+      # This is the same answer as the `cargo metadata` recipe in
+      # demo-web/README.md, minus the dependency resolution — the lockfile is
+      # authoritative and every other job builds with `--locked`.
+      # At the time of writing this resolves to 0.2.126.
+      - name: Resolve the pinned wasm-bindgen version from Cargo.lock
+        id: wasm_bindgen
+        run: |
+          set -euo pipefail
+          ver=$(awk '
+            /^name = "wasm-bindgen"$/ { found = 1; next }
+            found && /^version = / { gsub(/"/, "", $3); print $3; exit }
+          ' Cargo.lock)
+          if [ -z "$ver" ]; then
+            echo "::error::could not read the wasm-bindgen version from Cargo.lock"
+            exit 1
+          fi
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "wasm-bindgen pinned to $ver (from Cargo.lock)"
+
+      # taiki-e/install-action is already the workspace's tool installer
+      # (cargo-hack, cargo-deny in ci.yml). The `with: tool:` form is used here
+      # rather than ci.yml's `@<tool>` ref shorthand because the version is
+      # computed above and the shorthand cannot take one. It fetches a prebuilt
+      # binary (seconds); if the manifest has no binary for this exact version
+      # it falls back to cargo-binstall, which can still build it from source
+      # (slow, but never silently the wrong version).
+      - name: Install wasm-bindgen-cli (exact lockfile version)
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen@${{ steps.wasm_bindgen.outputs.version }}
+
+      # No RUSTFLAGS env var anywhere in this workflow, on purpose: an env
+      # RUSTFLAGS *replaces* the `[target.wasm32-unknown-unknown]` rustflags in
+      # the committed .cargo/config.toml, which carry
+      # `--cfg getrandom_backend="wasm_js"`. Dropping it breaks the getrandom
+      # web backend and the wasm build fails to link.
+      #
+      # No apt system deps either: alsa/udev are native-only paths — ci.yml's
+      # wasm job builds this same crate without them.
+      - name: Build demo-web for wasm32 (release)
+        run: cargo build --locked --release -p demo-web --target wasm32-unknown-unknown
+
+      # Identical to the manual recipe in demo-web/README.md, so a failure here
+      # is reproducible locally by copy-paste.
+      - name: Generate JS bindings (wasm-bindgen --target web)
+        run: |
+          wasm-bindgen --target web --no-typescript \
+            --out-dir demo-web/pkg \
+            target/wasm32-unknown-unknown/release/demo_web.wasm
+
+      # Stage only what the browser actually fetches.
+      #  - index.html loads `./pkg/demo_web.js` relatively, and the generated
+      #    shim resolves the .wasm against import.meta.url — both stay correct
+      #    under the /Gizmo/ subpath, so no <base> tag or rewrite is needed.
+      #  - demo-web/assets/beep.wav is `include_bytes!`d into the wasm at
+      #    compile time; it is not fetched at runtime and is not shipped.
+      #  - demo-web/test.html is a headless harness that reports results back to
+      #    the serving process; meaningless on a static host, so it is excluded.
+      #  - No .nojekyll needed: upload-pages-artifact/deploy-pages publish the
+      #    tarball as-is, Jekyll never runs.
+      - name: Stage the site
+        run: |
+          set -euo pipefail
+          mkdir -p _site
+          cp demo-web/index.html _site/index.html
+          cp -R demo-web/pkg _site/pkg
+          du -h _site/pkg/* | sort -h
+
+      # v3 + deploy-pages@v5 is the pairing GitHub itself ships in
+      # starter-workflows/pages/static.yml, checked 2026-08-06. (upload-pages-artifact
+      # v5 exists; not taken because this pair is the tested one and v4 changed
+      # dotfile handling. `_site` has no dotfiles either way.)
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  # ── Deploy: publish the artifact to the github-pages environment ──────────
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      # No actions/configure-pages step: it exists to hand a base_path to static
+      # site generators (and to auto-enable Pages). index.html needs neither —
+      # its only URL is the relative `./pkg/demo_web.js` — and enabling Pages is
+      # a one-time human step in Settings → Pages (Source: GitHub Actions).
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v5

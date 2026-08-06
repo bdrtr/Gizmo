@@ -3,9 +3,19 @@ name = "gizmo-ui"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
-description.workspace = true
+# Deliberately NOT `description.workspace = true`. The workspace description
+# ("A custom ECS and physics engine...") would let a crates.io visitor assume
+# this is a usable UI toolkit. It is not: the crate computes taffy layout and
+# pointer hit-testing and emits no vertices or draw calls, and the engine has no
+# text rendering at all. This string is the first thing crates.io shows, so it
+# is the right place to say so. See README.md / the crate-level docs.
+description = "EXPERIMENTAL: flexbox/grid UI layout (taffy) and pointer hit-testing for the Gizmo engine's ECS. Computes box geometry and hover/press state only — it renders nothing, and there is no text rendering yet."
 license.workspace = true
 repository.workspace = true
+# Crate-local, unlike the other crates' `readme.workspace = true` (which resolves
+# to the workspace root README): the experimental status needs to be on this
+# crate's own crates.io page, not buried in the engine-wide one.
+readme = "README.md"
 
 [package.metadata.docs.rs]
 all-features = true

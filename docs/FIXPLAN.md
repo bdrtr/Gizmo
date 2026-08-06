@@ -1895,7 +1895,13 @@ eklemekten ibaret.
   > (bir süre testi) düşüyor — ayrı ve muhtemelen yük-duyarlı bir sorun.
 
 ## Faz D — Ekosistem ve 1.0
-- 🔄 **D1** — `gizmo-core`'u fizik crate'lerinde opsiyonel yap (`ecs` feature'ı).
+- ✅ **D1** — `gizmo-core`'u fizik crate'lerinde opsiyonel yap (`ecs` feature'ı). **KAPANDI
+  (2026-08-06), iddia elden doğrulandı:** `cargo tree --no-default-features -e normal` dört
+  fizik crate'inin de grafında `gizmo-core`'u **0 referansla** gösteriyor (varsayılanlarla
+  sırasıyla 1 / 2 / 2 / 3). Yani "graftan tamamen düşüyor" bir tahmin değil, ölçüm.
+  Her dördünün kendi `description`/`keywords`/`categories`'i de var; `readme` workspace'in
+  kök README'sine çözülüyor (crate başına ayrı README yazılmadı — bilinçli, tek bir
+  giriş noktası daha az bakım).
   **`gizmo-physics-core` bitti (2026-08-05):** `default = ["ecs"]`, kapatınca `gizmo-core`
   graftan tamamen düşüyor (kalan: `gizmo-math`, `arrayvec`, `serde`, `tracing`). Kendi
   description/keywords/categories'i de eklendi. **`gizmo-physics-rigid` bitti:** aynı desen —
@@ -1925,9 +1931,44 @@ eklemekten ibaret.
   > bağlı. Taşımak tüm input sistemini taşımak demekti (ve workspace'te tek tüketicisi bu),
   > o yüzden `components::fighter` modülü `ecs`'in arkasına alındı. `ecs` kapalıyken
   > `FighterController` yok — kayıtlı ve kabul edilmiş bir ödün.
-- ⬜ **D2** — `ENGINE.md`'yi İngilizce'ye çevir + `///` yorumlarında İngilizce kuralı +
-  `CONTRIBUTING.md`. Bus factor = 1'in tek sebebi bu.
-- ⬜ **D3** — Click-to-try WASM demosu (GitHub Pages).
+- 🔄 **D2** — `ENGINE.md` **İngilizce'ye çevrildi** *(2026-08-06)*, 243 → 255 satır.
+  `CONTRIBUTING.md` zaten A6'da yazılmıştı.
+
+  > Çeviri tam sadakatle yapıldı: özetleme/kısaltma yok, başlık düzeni, tablolar ve kod
+  > blokları birebir. **Korunum elden doğrulandı:** beş determinizm hash'i de aynı sayıda
+  > (`AAC365945335779E`, `598E315D0E7499FF`, `EF6E4AC3644BF3BA`, `46EB56180318E43C` ×2,
+  > `15D4FD6845119D8B`), ve dosyada Türkçe yapı kelimesi kalmadı (0 eşleşme).
+  > Epistemik işaretler (SOLVED / OPEN / REJECTED / "DO NOT RETRY", "do not re-chase these",
+  > OBSOLETE etiketi) aynı vurguyla taşındı — bu dokümanın değeri neyin çürütüldüğünü
+  > kaydetmesinde, o yüzden hedge'ler hedge kaldı.
+  >
+  > **Üç yerde `<!-- TRANSLATOR NOTE -->` var ve bunlar bilerek bırakıldı** — kaynak metin
+  > orada belirsiz, tahmin etmek yerine soru işaretlendi: §2'de "davranış-bitişik" terimi,
+  > §3'te fiilsiz bir madde ("İnsan-gözü A/B gated: ..."), ve §7'de **kaynağın kendi
+  > tutarsızlığı** (başlık "6 latent bug ... HEPSİ DÜZELTİLDİ" diyor ama beş tanesi
+  > listelenmiş). Sonuncusu bir çeviri sorunu değil, dokümanın kendi hatası; uydurmamak için
+  > çözülmemiş işaretlendi.
+  >
+  > `CLAUDE.md` de düzeltildi: ENGINE.md'yi "Written in Turkish" diye tarif ediyordu ve
+  > sürümü `0.8.0` yazıyordu.
+
+  - ⬜ **Kalan:** `///` yorumlarında İngilizce kuralı. Kod içi yorumların büyük kısmı hâlâ
+    Türkçe (bu FIXPLAN dahil) — bus factor hedefi gerçekten isteniyorsa asıl yüzey orası,
+    ve tek oturumda çevrilecek hacimde değil.
+- 🔄 **D3** — Click-to-try WASM demosu (GitHub Pages). **Workflow yazıldı** *(2026-08-06)*:
+  `.github/workflows/pages.yml` (build → deploy), `push: main` + `workflow_dispatch`,
+  modern Pages akışı (`upload-pages-artifact` + `deploy-pages`, `pages`/`id-token` izinleri,
+  `github-pages` ortamı). `ci.yml`'ın konvansiyonlarına uyduruldu.
+
+  > **`wasm-bindgen` sürümü `Cargo.lock`'tan TÜRETİLİYOR, sabit yazılmıyor** — CLAUDE.md
+  > CLI'ın crate ile birebir eşleşmesi gerektiğini söylüyor, ve sabit yazılırsa bir
+  > `cargo update` CI'ı sessizce desenkronize ederdi. Bugün `0.2.126`'ya çözülüyor
+  > (lockfile'a karşı elden doğrulandı). YAML geçerliliği de doğrulandı (jobs: build, deploy).
+
+  - ⬜ **İNSAN ADIMI GEREKİYOR, workflow tek başına yetmez:** repo ayarlarında
+    Settings → Pages → Source = "GitHub Actions" seçilmeli. Bu yapılmadan workflow koşar ve
+    deploy adımında düşer. Ayrıca deploy'un kendisi hiç koşturulmadı — bu makinede
+    doğrulanabilir olan kısım YAML ve sürüm türetmesiydi, gerçek build+deploy değil.
 - ✅ **D4 — `#![warn(missing_docs)]` Stage A'da.** **1. parti bitti (2026-08-05):**
   `gizmo-math`, `gizmo-net`, `gizmo-scene`, `gizmo-animation` sıfır eksik dokümanla ratchet
   altında. **2. parti bitti (2026-08-05):** `gizmo-physics-soft`, `gizmo-physics-dynamics` ve
@@ -2048,7 +2089,32 @@ eklemekten ibaret.
   > şey söylemiyorlar. `ecs_bench/` (20 dosya) ise gerçekten `gizmo_core`'u ölçüyor.
   > Silme kararı senin — bu commit yalnızca göç ettirdi.
 - ⬜ **D6** — İki yönlü soft↔rigid coupling (`soft_body.rs:74-120` impulsu hesaplayıp atıyor).
-- ⬜ **D7** — `gizmo-ui` metin render'ı, ya da crate'i dürüstçe "deneysel" işaretle
+- ✅ **D7** — `gizmo-ui` dürüstçe "deneysel" işaretlendi *(2026-08-06)*. İki seçenekten
+  küçük olanı alındı; metin render'ı ayrı ve büyük bir iş.
+
+  > **Denetimin "hiçbir şey çizmiyor" iddiası ÖNCE DOĞRULANDI, sonra etiket konuldu** —
+  > çalışan bir crate'i deneysel diye işaretlemek de bir yanlış olurdu. Kanıt: crate'te
+  > `wgpu|vertex|shader|texture|glyph|draw|font` için sıfır eşleşme; bağımlılıkları
+  > `gizmo-core`, `gizmo-math`, `taffy` ve (opsiyonel) default-features'sız `gizmo-app` —
+  > renderer graftan hiç geçmiyor. Workspace'te tek "tüketici" facade'ın
+  > `pub use gizmo_ui as ui` re-export'u. `BackgroundColor` yazılıyor ve **hiçbir yerde
+  > okunmuyor**. Yanlış iz de elendi: `hill_climb`'in `set_ui`'si yerel bir egui modülü.
+  >
+  > Ne YAPTIĞI da kayda geçti: taffy ile layout + fare hit-test'i, 18 birim testiyle.
+  > Yani crate işe yaramaz değil — "geometri ve etkileşim durumu hesaplar, pikselleri sen
+  > çizersin" ürünü. Doküman görünür bir HUD isteyeni `egui` entegrasyonuna yönlendiriyor.
+  >
+  > **Okurken iki ek boşluk daha bulundu ve belgelendi:** z-sırası yok (üst üste iki eleman
+  > birden `Hovered` bildiriyor), ve `Parent`'ı stilli olmayan bir UI entity'si hiç layout
+  > almıyor. İkincisi "koddan okundu, ölçülmedi — testi yok" diye işaretlendi.
+  >
+  > `description` artık workspace'ten miras değil, kendi metni ("experimental" crates.io'da
+  > görünüyor) + kendi `README.md`'si var. Kod değişmedi: `#[deprecated]` yok, silinen yok.
+  >
+  > **Ajanın doğrulayamadığı yer gerçekten kırıktı:** iki intra-doc link `UiPlugin`'e
+  > gidiyordu, ama o tip `#[cfg(feature = "app")]` arkasında ve `default = []` — varsayılan
+  > `cargo doc` bunları çözemiyordu. Kod-span'e çevrildi; rustdoc artık `app` açıkken de
+  > kapalıyken de 0 uyarı.
   (şu an hiçbir şey çizmiyor: `gizmo-ui/src/lib.rs:39-52`).
 
 ## Faz E — 1.0
