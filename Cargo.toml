@@ -68,6 +68,14 @@ proptest = "1"
 codegen-units = 1
 
 [profile.dev]
+# Makinenin RAM koruması, ARTIK BURADA. Eskiden `.cargo/config.toml`'daki
+# `rustflags = ["-C", "codegen-units=4", ...]` ile geliyordu; o satır bütün profillere birden
+# uygulandığı için release profilinin `codegen-units = 1`'ini de eziyordu (rustflags profil
+# bayraklarından SONRA ekleniyor, rustc son `-C`'yi alır). Token oradan kaldırılırken bu
+# değerin dev tarafında AYNEN korunması gerekiyordu: cargo'nun dev varsayılanı 256'dır, yani
+# token'ı sadece silmek korumayı kaldırmakla kalmaz, dev'i eskisinden daha paralel bir
+# codegen'e taşırdı — korumanın tam olarak engellemek için var olduğu yön.
+codegen-units = 4
 # Backtrace/panik için dosya:satır çözümünü korur, değişken-seviyesi DWARF'ı atar (binary'nin
 # en büyük parçası). Bunu bırakmak derlemeyi hafif hızlandırır.
 debug = "line-tables-only"

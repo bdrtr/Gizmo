@@ -1676,20 +1676,55 @@ eklemekten ibaret.
   > onu ölçmek wgpu+egui'yi LTO altında linklemek demek ve RAM geçersiz-kılması tam olarak
   > bunu önlemek için var. Ölçülmemiş bir kazanç için ayar eklenmedi.
 
-  > ⚠️ **DÜZELTME — profil şu an HER YERDE ETKİSİZ.** İlk commit'te "CI ve yayımlanan crate'ler
-  > için" yazmıştım; iki yarısı da yanlış. `rustflags` profil bayraklarından SONRA ekleniyor ve
-  > rustc son `-C`'yi alıyor; `.cargo/config.toml` **git'e işlenmiş**, dolayısıyla CI de miras
-  > alıyor (release profilini kullanan iki job — `determinism` ve `benchmarks` — ikisi de
-  > `ubuntu-latest`). Cargo ayrıca bir BAĞIMLILIĞIN manifest'indeki `[profile.*]`'ı yok sayar,
-  > yani crates.io'dan `gizmo-engine` kullanan da görmüyor; kendi workspace'inde ayarlaması
-  > gerekiyor.
+  > ⚠️ **DÜZELTME — profil bir süre HER YERDE ETKİSİZDİ.** İlk commit'te "CI ve yayımlanan
+  > crate'ler için" yazmıştım; iki yarısı da yanlıştı. `rustflags` profil bayraklarından SONRA
+  > ekleniyor ve rustc son `-C`'yi alıyor; `.cargo/config.toml` **git'e işlenmiş**, dolayısıyla
+  > CI de miras alıyordu. Cargo ayrıca bir BAĞIMLILIĞIN manifest'indeki `[profile.*]`'ı yok
+  > sayar, yani crates.io'dan `gizmo-engine` kullanan da görmüyor; kendi workspace'inde
+  > ayarlaması gerekiyor (bu kısım hâlâ geçerli).
+
+  > ✅ **ETKİLİ KILINDI** *(2026-08-06)* — ve token silinerek değil, **kapsamı daraltılarak**.
   >
-  > **Etkili kılmak için** o `rustflags` satırından `codegen-units=4` token'ını düşürmek
-  > gerekiyor — ama o, makinenin belgelenmiş RAM koruması, sessizce değiştirilecek bir şey
-  > değil. Eldeki kanıt: fizik bench'i `codegen-units=1`'de sorunsuz derleniyor (31.5 s),
-  > `gizmo-renderer` derlemesi 4 paralel rustc'de 2.78 GB zirve yaptı (13 GB'de) — ama en ağır
-  > bağımlılıkları (wgpu, naga) önbellekten geldi, yani demo-binary durumunu çözmüyor.
-  > **Karar kullanıcının.**
+  > **Kararı ölçüm verdi.** Buradaki gerekçe RAM'di ("makinenin belgelenmiş RAM koruması,
+  > sessizce değiştirilecek bir şey değil"). Ölçtüm: aynı 20 crate'i — wgpu, naga, egui, winit
+  > dahil — `jobs = 4` altında sıfırdan derlerken **toplam rustc RSS zirvesi**
+  >
+  > | ayar | zirve RSS | süre |
+  > |---|---|---|
+  > | `codegen-units=4` | 996 MB | 38.1 s |
+  > | `codegen-units=1` | **985 MB** | 45.2 s |
+  >
+  > 13 GB'lık makinede (ölçüm anında 8.7 GB boş) **bellek farkı yok**. Maliyet RAM değil,
+  > derleme süresi: +%19. Yani token'ın release tarafında koruduğu bir şey yoktu.
+  >
+  > **Ama token'ı SİLMEK yanlış olurdu, ve bu ölçümden çıkmadı — koddan çıktı.** `rustflags`
+  > bütün profillere uygulanıyor ve `[profile.dev]`'de `codegen-units` **yoktu**; token
+  > silinseydi dev cargo'nun varsayılanı olan **256**'ya çıkardı — korumanın tam olarak
+  > engellemek için var olduğu yön. Doğru hareket kapsamak: `codegen-units = 4`
+  > `[profile.dev]`'e taşındı, `rustflags`'ten çıkarıldı. Dev davranışı **birebir aynı**,
+  > release nihayet kendi ayarını alıyor.
+  >
+  > **Doğrulandı, iddia edilmedi:** `cargo build -v` çıktısında release artık yalnız
+  > `codegen-units=1` (21 çağrı, ezen `=4` yok), dev yalnız `codegen-units=4` (340 çağrı).
+  > Öncesinde release'e ikisi birden gidiyordu ve son gelen kazanıyordu.
+  >
+  > **Kazanç yeniden ölçüldü, arka arkaya, ve C1'in tablosunu kısmen ÇÜRÜTTÜ:**
+  >
+  > | senaryo | `=4` | `=1` etkili | criterion |
+  > |---|---|---|---|
+  > | `full_step_mixed/128` | 730.8 µs | 647.2 µs | **−%13.4** (p=0.00) |
+  > | `full_step_mixed/512` | 1.968 ms | 1.944 ms | +%1.3 (p=0.73, **anlamsız**) |
+  >
+  > /128'deki kazanç gerçek ve yukarıda kayıtlı −%8.4'ten büyük; ama /512'de kayıtlı olan
+  > **−%7.5 tekrarlanmadı** — bu makinede bu bench ±%20 oynuyor (bkz. ECS köprüsü ölçümündeki
+  > aynı sorun). Tek koşuluk eski tablo bu yüzden fazla kesin yazılmıştı.
+  >
+  > **`lto=off` rustflags'te KALDI** ve bilinçli: hiçbir profil LTO istemiyor, satır onu garanti
+  > ediyor. Aynı "profili ezer" tuzağı lto için de geçerli — farkı, orada ezilen değerin zaten
+  > istenen değer olması.
+  >
+  > Determinizm hash'i değişmedi (`A462C9EB8A09D5CA`, 3/3): codegen-units FP semantiğini
+  > değiştirmiyor. `cargo test --workspace` exit 0.
 - 🔄 **C6** — üç parçasının **üçü de yazıldı** *(2026-08-06)*, ama **görsel olarak doğrulanmadı**;
   kapılar koşana kadar açık kalıyor.
 
