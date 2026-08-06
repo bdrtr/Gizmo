@@ -198,23 +198,43 @@ impl FrameProfiler {
         self.history.get(idx)
     }
 
+    /// The `count` most recent frames, newest first.
+    ///
+    /// `history.iter().rev()` is NOT this. `history` is a ring buffer: once it holds
+    /// `HISTORY_SIZE` frames the physical `Vec` order stops being chronological — the slot at
+    /// `write_idx` is the OLDEST frame, and everything before it is newer. Plain `rev()`
+    /// therefore walks backwards from a frame that may be ~`HISTORY_SIZE` frames stale and
+    /// wraps into the newest ones only at the far end. [`Self::last_frame`] always did this
+    /// modular step by hand; the averaging functions did not, which is the bug this helper
+    /// exists to fix in one place.
+    ///
+    /// While the ring is still filling, `write_idx == history.len()`, so the index reduces to
+    /// `len - 1 - i` — exactly what `rev()` gave. The wrap is the only regime that changed.
+    fn recent(&self, count: usize) -> impl Iterator<Item = &FrameProfile> + '_ {
+        let len = self.history.len();
+        let write_idx = self.write_idx;
+        // `count.min(len)` keeps `write_idx + len - 1 - i` from underflowing, and guards the
+        // `% len` against len == 0 (the range is then empty and the closure never runs).
+        (0..count.min(len)).map(move |i| &self.history[(write_idx + len - 1 - i) % len])
+    }
+
     /// Son N frame'in toplam süre ortalaması (ms).
+    ///
+    /// "Son N" ring buffer'ın KRONOLOJİK son N'i — fiziksel `Vec` sırası değil (bkz.
+    /// `recent`). [`Self::estimated_fps`] bunu miras alır.
     pub fn avg_frame_ms(&self, n: usize) -> f64 {
         let count = n.min(self.history.len());
         if count == 0 {
             return 0.0;
         }
-        let sum: f64 = self
-            .history
-            .iter()
-            .rev()
-            .take(count)
-            .map(|p| p.total_ms)
-            .sum();
+        let sum: f64 = self.recent(count).map(|p| p.total_ms).sum();
         sum / count as f64
     }
 
     /// Son N frame boyunca belirli bir scope'un ortalama süresi (ms).
+    ///
+    /// Aynı kronolojik-sıra düzeltmesi burada da geçerli (bkz. `recent`): bu fonksiyon
+    /// denetim maddesinde adı geçmiyordu ama birebir aynı `iter().rev()` kusurunu taşıyordu.
     pub fn avg_scope_ms(&self, name: &str, n: usize) -> f64 {
         let count = n.min(self.history.len());
         if count == 0 {
@@ -222,7 +242,7 @@ impl FrameProfiler {
         }
         let mut total = 0.0;
         let mut found = 0;
-        for profile in self.history.iter().rev().take(count) {
+        for profile in self.recent(count) {
             for scope in &profile.scopes {
                 if scope.name == name {
                     total += scope.duration_ms();
@@ -238,6 +258,9 @@ impl FrameProfiler {
     }
 
     /// Tüm history'deki frame profilleri (ring buffer sırasıyla).
+    ///
+    /// FİZİKSEL sıra — ring sarmaladıktan sonra kronolojik DEĞİL: `write_idx`'teki slot en
+    /// eski frame'dir. Kronolojik gezinmek isteyen `frame_number` alanına bakmalı.
     pub fn history(&self) -> &[FrameProfile] {
         &self.history
     }
@@ -353,6 +376,74 @@ mod tests {
 
         // FPS should be very high (frames are almost instant)
         assert!(profiler.estimated_fps() > 100.0);
+    }
+
+    /// After the ring wraps, physical `Vec` order is no longer chronological — the slot at
+    /// `write_idx` holds the OLDEST frame — so `history.iter().rev().take(n)` averaged the
+    /// wrong frames. With 350 frames recorded (`write_idx == 50`) it averaged frames
+    /// 240..=299 instead of the newest 60, i.e. data ~50 frames stale: a spike shows up in
+    /// the HUD roughly a second late, and `estimated_fps` inherits it.
+    ///
+    /// The timings are stamped by hand after recording: `end_frame` samples a real clock, so
+    /// the only deterministic way to assert WHICH frames were averaged is to give every
+    /// frame a `total_ms` (and scope duration) equal to its own `frame_number`. The test
+    /// module lives in `profiler.rs`, so the private ring is reachable.
+    #[test]
+    fn avg_over_ring_uses_newest_frames_after_wrap() {
+        let mut profiler = FrameProfiler::new();
+        for _ in 0..350 {
+            profiler.begin_scope("s");
+            profiler.end_scope("s");
+            profiler.end_frame();
+        }
+        assert_eq!(profiler.history.len(), HISTORY_SIZE);
+        assert_eq!(profiler.write_idx, 350 % HISTORY_SIZE);
+
+        for p in &mut profiler.history {
+            let n = p.frame_number;
+            p.total_ms = n as f64;
+            for s in &mut p.scopes {
+                // duration_ms() == frame_number
+                s.end_ns = s.start_ns + n * 1_000_000;
+            }
+        }
+
+        // Newest 60 frames are 290..=349 → mean 319.5.
+        // Pre-fix `iter().rev().take(60)` read physical 299..=240, i.e. frames 240..=299 → 269.5.
+        assert!(
+            (profiler.avg_frame_ms(60) - 319.5).abs() < 1e-9,
+            "avg_frame_ms averaged the wrong frames: {}",
+            profiler.avg_frame_ms(60)
+        );
+        assert!(
+            (profiler.avg_scope_ms("s", 60) - 319.5).abs() < 1e-9,
+            "avg_scope_ms averaged the wrong frames: {}",
+            profiler.avg_scope_ms("s", 60)
+        );
+        // estimated_fps() is defined as avg_frame_ms(60) inverted.
+        assert!((profiler.estimated_fps() - 1000.0 / 319.5).abs() < 1e-9);
+
+        // Whole ring: order-independent, so this held before the fix too — it pins the
+        // clamp (n > len) rather than the ordering. Frames 50..=349 → mean 199.5.
+        assert!((profiler.avg_frame_ms(1000) - 199.5).abs() < 1e-9);
+    }
+
+    /// NOT the regression test for the wrap bug — it passes with or without the fix. It
+    /// fences the other branch of `recent()`: while the ring is still filling
+    /// (`write_idx == len`) the chronological order must stay what plain `rev()` gave.
+    #[test]
+    fn avg_frame_ms_before_wrap_is_unchanged() {
+        let mut profiler = FrameProfiler::new();
+        for _ in 0..10 {
+            profiler.end_frame();
+        }
+        for p in &mut profiler.history {
+            p.total_ms = p.frame_number as f64;
+        }
+        // Newest 3 frames are 7, 8, 9 → mean 8.0.
+        assert!((profiler.avg_frame_ms(3) - 8.0).abs() < 1e-9);
+        // Fewer frames than requested → clamps to all 10 (0..=9 → 4.5).
+        assert!((profiler.avg_frame_ms(60) - 4.5).abs() < 1e-9);
     }
 
     #[test]

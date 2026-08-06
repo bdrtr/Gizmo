@@ -134,6 +134,10 @@ impl Input {
     /// sonsuza dek "basılı" kalır ve kamera/karakter kayıp gider. Bu, tüm
     /// basılı durumları temizler; hâlâ fiziksel olarak basılı bir tuş, odak
     /// geri gelince yeni bir key-down ile yeniden kaydolur.
+    ///
+    /// Henüz tüketilmemiş "just pressed" kenarları da iptal edilir — bu frame'de basılan
+    /// bir tuş odak kaybından sonra tek-seferlik aksiyonu (zıplama/ateş) tetiklemez.
+    /// Bırakma kenarı (`is_key_just_released`) ise raporlanır: metodun amacı budur.
     pub fn release_all(&mut self) {
         for k in self.keys_pressed.drain() {
             self.keys_just_released.insert(k);
@@ -141,6 +145,20 @@ impl Input {
         for b in self.mouse_buttons_pressed.drain() {
             self.mouse_buttons_just_released.insert(b);
         }
+        // Bekleyen BASMA kenarları da gitmeli, yalnız basılı durum değil. Diğer tüm
+        // yollarda `just_pressed ⊆ pressed` tutar (`on_key_pressed` kenarı yalnız
+        // `keys_pressed`'e ekleme YENİ ise kaydeder; fast-tap ertelemesi de tuşu
+        // `keys_pressed`'de tutar). Yalnız `keys_pressed`'i boşaltmak bu değişmezi
+        // kırıyordu: son `begin_frame`'den beri basılan tuş için `is_key_just_pressed()`
+        // true kalırken `is_key_pressed()` false oluyordu.
+        //
+        // Bu durum teorik değil, gözlemleniyor: pencereli döngü `begin_frame()`'i redraw
+        // işleyicisinin SONUNDA çağırıyor (gizmo-app windowed/event.rs:692), yani
+        // key-down'dan sonra gelen `Focused(false)` → `release_all()` bir SONRAKİ frame'in
+        // sistemleri tarafından görülüyor ve odağın kaybedildiği frame'de tek-seferlik
+        // aksiyon tetikleniyordu — release_all'ın amacının tam tersi.
+        self.keys_just_pressed.clear();
+        self.mouse_buttons_just_pressed.clear();
         self.mouse_delta = (0.0, 0.0);
         self.mouse_scroll_delta = 0.0;
     }
@@ -451,6 +469,42 @@ mod tests {
         assert_eq!(input.mouse_delta(), (0.0, 0.0));
         // Bırakma bu frame'de just_released olarak görünür (temiz kenar).
         assert!(input.is_key_just_released(65));
+    }
+
+    /// Odak kaybı BEKLEYEN basma kenarlarını da iptal etmeli, yalnız basılı durumu değil.
+    ///
+    /// `begin_frame()` frame'in SONUNDA çağrılıyor (gizmo-app windowed/event.rs:692), bu
+    /// yüzden "key-down, ardından `Focused(false)`" dizisinde tuş bir sonraki frame'in
+    /// sistemleri koştuğunda hâlâ `keys_just_pressed` içindeydi: pencerenin kaybedildiği
+    /// frame'de zıplama/ateş tetikleniyordu. Ayrıca `just_pressed == true` iken
+    /// `pressed == false` bırakıyordu — başka hiçbir yolun üretemeyeceği bir durum
+    /// (fast-tap ertelemesinde tuş `keys_pressed`'de KALIR, bkz. yukarıdaki test).
+    #[test]
+    fn release_all_cancels_pending_just_pressed_edges() {
+        let mut input = Input::new();
+        input.on_key_pressed(32); // Space — bu frame içinde basıldı, henüz tüketilmedi
+        input.on_mouse_button_pressed(mouse::LEFT);
+        assert!(input.is_key_just_pressed(32));
+        assert!(input.is_mouse_button_just_pressed(mouse::LEFT));
+
+        input.release_all(); // odak kaybı, frame'in sistemleri daha koşmadan
+
+        assert!(
+            !input.is_key_just_pressed(32),
+            "odak kaybı bekleyen basma kenarını iptal etmeli"
+        );
+        assert!(
+            !input.is_mouse_button_just_pressed(mouse::LEFT),
+            "fare düğmesi için de aynısı"
+        );
+        assert!(!input.is_key_pressed(32));
+        // Bırakma kenarı RAPORLANMALI — release_all'ın amacı bu.
+        assert!(input.is_key_just_released(32));
+        assert!(input.is_mouse_button_just_released(mouse::LEFT));
+
+        // Odak geri gelince fiziksel olarak basılı tuş yeni bir key-down ile TAZE kenar alır.
+        input.on_key_pressed(32);
+        assert!(input.is_key_pressed(32) && input.is_key_just_pressed(32));
     }
 
     // ──── Scroll Testleri ────

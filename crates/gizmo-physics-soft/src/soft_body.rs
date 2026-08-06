@@ -106,6 +106,9 @@ gizmo_core::impl_component!(SoftBodyMesh);
 ///
 /// The swept distance is `velocity.length() * dt` in metres; 1e-5 m or less (a resting or
 /// near-resting node) short-circuits to "no collision", which also covers a zero velocity.
+/// That path does no work and emits no diagnostics — a settled soft body costs nothing and
+/// logs nothing, however many nodes it has.
+///
 /// Every entry of `rigid_colliders` is ray-tested — a linear scan, there is no broad-phase —
 /// and only the single *nearest* hit within `swept distance + 0.1 m` is resolved, so a node
 /// facing two adjacent surfaces (a tiled floor, a wall meeting a floor) stops at the first
@@ -132,10 +135,27 @@ pub fn resolve_node_collision(
     )],
 ) -> (Vec3, Vec3, bool) {
     let mut collided = false;
-    let ray = gizmo_physics_core::raycast::Ray::new(position, velocity.normalize_or_zero());
     let dist = velocity.length() * dt;
 
     if dist > 1e-5 {
+        // The `Ray` is built INSIDE the gate on purpose (it used to be built before it).
+        //
+        // `Ray::new` `warn!`s when it cannot normalise the direction and falls back to +Z,
+        // and `velocity.normalize_or_zero()` returns exactly `Vec3::ZERO` for a velocity that
+        // is zero — or merely subnormal, since `length_recip()` is then `inf` and the
+        // fallback kicks in. A node in force equilibrium is damped geometrically toward zero
+        // every step (`velocity *= damping.powf(dt)`), so it lands in exactly that state and
+        // stays there: one WARN per settled node per step, drowning the log of any scene with
+        // a soft body resting on the ground.
+        //
+        // The warn itself is correct where it lives — a zero direction genuinely is a caller
+        // bug — so it is neither downgraded nor made once-only. What was wrong is that this
+        // caller asked for a ray it was never going to use. Nothing below reads `ray` when
+        // `dist <= 1e-5`, so the sweep, the nearest-hit pick and the response are bit-for-bit
+        // unchanged; only the spurious log line goes away. A genuinely broken velocity
+        // (infinite: `dist` is then `inf`, so the gate opens) still warns, as it should.
+        let ray = gizmo_physics_core::raycast::Ray::new(position, velocity.normalize_or_zero());
+
         // Resolve against the SINGLE nearest hit. The old loop applied the position
         // snap once PER collider within range, so a node facing two adjacent surfaces
         // (a tiled floor, a wall meeting a floor) was advanced twice — launching it
@@ -737,6 +757,94 @@ mod tests {
         assert!(p.x < 1.5, "node must stop before the surface, got x = {}", p.x);
         assert!(v.x < 0.0, "inward velocity must reflect (bounce), got vx = {}", v.x);
         assert!(p.is_finite() && v.is_finite());
+    }
+
+    /// Counts the WARN-level `tracing` events dispatched on the current thread.
+    ///
+    /// Hand-rolled because this crate has no `tracing-subscriber` dev-dependency and the test
+    /// below needs nothing more than a tally. `tracing::subscriber::with_default` installs it
+    /// per-thread, so a concurrently running test cannot contribute to the count.
+    struct WarnCounter(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+    impl tracing::Subscriber for WarnCounter {
+        fn enabled(&self, _meta: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, _attrs: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+        fn event(&self, event: &tracing::Event<'_>) {
+            if *event.metadata().level() == tracing::Level::WARN {
+                self.0
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+        fn enter(&self, _span: &tracing::span::Id) {}
+        fn exit(&self, _span: &tracing::span::Id) {}
+    }
+
+    /// A node that is not going anywhere must resolve **silently**.
+    ///
+    /// `Ray::new` warns (correctly) when it cannot normalise a direction. This function used
+    /// to build its `Ray` before the `dist > 1e-5` short-circuit, so every settled node fed it
+    /// `Vec3::ZERO` and drew one WARN per node per step — the log of any scene with a soft
+    /// body lying on the ground was unreadable. The ray is now built inside the gate.
+    ///
+    /// The positive control below is deliberate: it fires the exact callsite under test, so a
+    /// harness that silently observed nothing (a mis-wired subscriber, a filtered callsite)
+    /// fails here instead of turning the real assertion into a vacuous one.
+    #[test]
+    fn resting_node_sweep_logs_nothing() {
+        use gizmo_physics_core::{BodyHandle, Collider, Transform};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        // A floor right under the node — the collider list is non-empty so the test exercises
+        // the same shape of call a real resting soft body makes.
+        let colliders = vec![(
+            BodyHandle::from_id(1),
+            Transform::new(Vec3::new(0.0, -1.0, 0.0)),
+            Collider::sphere(0.5),
+        )];
+        let rest_pos = Vec3::new(0.0, 0.4, 0.0);
+        let dt = 1.0 / 60.0;
+
+        let seen = Arc::new(AtomicUsize::new(0));
+        let counter = WarnCounter(Arc::clone(&seen));
+
+        tracing::subscriber::with_default(counter, || {
+            // Positive control: this IS the callsite the regression is about.
+            let fallback = gizmo_physics_core::raycast::Ray::new(Vec3::ZERO, Vec3::ZERO);
+            assert_eq!(
+                fallback.direction,
+                Vec3::Z,
+                "Ray::new must still fall back to +Z on a zero direction"
+            );
+            assert_eq!(
+                seen.swap(0, Ordering::Relaxed),
+                1,
+                "the counter must observe Ray::new's warn, or the assertion below proves nothing"
+            );
+
+            // Exactly zero, and subnormal — the two velocities `normalize_or_zero` maps to
+            // `Vec3::ZERO`. Geometric damping walks an equilibrium node through both.
+            for velocity in [Vec3::ZERO, Vec3::new(0.0, -1e-40, 0.0)] {
+                for _ in 0..64 {
+                    let (p, v, hit) = resolve_node_collision(rest_pos, velocity, dt, &colliders);
+                    assert!(!hit, "a resting node must not register a collision");
+                    assert_eq!(p, rest_pos, "position must come back untouched");
+                    assert_eq!(v, velocity, "velocity must come back untouched");
+                }
+            }
+        });
+
+        let warns = seen.load(Ordering::Relaxed);
+        assert_eq!(
+            warns, 0,
+            "a resting node must resolve silently; got {warns} WARN(s) over 128 sweeps"
+        );
     }
 
     // ---------------------------------------------------------------------

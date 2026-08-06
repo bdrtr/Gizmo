@@ -154,12 +154,12 @@ pub struct UtilityAction<T> {
     /// Evaluation short-circuits on the first veto, so scorers later in the
     /// vector may not run at all — do not rely on them for side effects.
     ///
-    /// While this is empty the action scores exactly `base_score`.
+    /// While this is empty the action scores `base_score`, clamped into 0..=1.
     pub considerations: Vec<UtilityConsideration<T>>,
     /// Starting value of the multiplicative chain, i.e. the action's standing
-    /// priority before context is taken into account. Expected in 0..=1: as
-    /// soon as one consideration is present the product is clamped into 0..=1,
-    /// so a larger `base_score` buys no extra headroom.
+    /// priority before context is taken into account. Expected in 0..=1:
+    /// [`UtilityAction::evaluate`] clamps into that band on every path, with or
+    /// without considerations, so a larger `base_score` buys no extra headroom.
     ///
     /// `0.0` makes the action permanently unselectable: the product stays zero,
     /// and [`UtilityBrain::decide`] only ever returns a strictly positive score.
@@ -168,7 +168,7 @@ pub struct UtilityAction<T> {
 
 impl<T> UtilityAction<T> {
     /// Creates an action with no considerations, which means it scores a flat
-    /// `base_score` until you attach some with
+    /// `base_score` — clamped into 0..=1 — until you attach some with
     /// [`add_consideration`](Self::add_consideration).
     ///
     /// `name` is copied into an owned `String`.
@@ -206,15 +206,22 @@ impl<T> UtilityAction<T> {
     ///   many considerations, so each factor is inflated by the classic
     ///   "make-up value" term: `s + (1 - s) * s * (1 - 1/n)`, with `n` the
     ///   number of considerations. With `n == 1` this is exactly `s`.
-    /// - **Empty.** With no considerations the raw `base_score` is returned
-    ///   *unclamped* — a `base_score` above `1.0` or below `0.0` escapes here,
-    ///   whereas every other path clamps into 0..=1.
+    /// - **Empty.** With no considerations the result is `base_score` clamped
+    ///   into 0..=1, the same band every other path guarantees.
     /// - **NaN.** A NaN factor neither trips the veto nor is clamped away; it
     ///   poisons the product, and the action then loses every comparison in
     ///   [`UtilityBrain::decide`], so it can never be selected.
     pub fn evaluate(&self, context: &T) -> f32 {
         if self.considerations.is_empty() {
-            return self.base_score;
+            // Clamp here too. Utility scores are only comparable to each other
+            // because every one of them lives in 0..=1; this early return used to
+            // hand back `base_score` raw, so `base_score = 5.0` on an action with
+            // no considerations beat every properly scored action in
+            // `UtilityBrain::decide` — and a negative one produced a score the
+            // documented range says cannot happen. `clamp` propagates NaN exactly
+            // like the clamp at the end of the loop path, so the NaN semantics
+            // above stay identical on both paths.
+            return self.base_score.clamp(0.0, 1.0);
         }
 
         // Çarpımsal skorlama sistemi (compensation factor ile)
@@ -348,5 +355,42 @@ mod tests {
         assert_eq!(action.evaluate(&0.0), 0.0, "veto must zero the action score");
         let brain = UtilityBrain::new().add_action(action);
         assert!(brain.decide(&0.0).is_none(), "a fully-vetoed action must not be chosen");
+    }
+
+    // REGRESSION: the empty-`considerations` early return in `evaluate` skipped the
+    // clamp that the scored path applies, so an out-of-range `base_score` escaped
+    // 0..=1. Utility scores are only comparable to one another *because* they all
+    // live in that band, so the escape let a made-up number outrank a real one.
+    //
+    // Fails without the fix on all three assertions: 5.0 > 1.0, "inflated" wins the
+    // brain, and the negative action evaluates to -1.0 instead of 0.0.
+    #[test]
+    fn an_action_without_considerations_is_still_clamped_into_0_1() {
+        assert_eq!(
+            UtilityAction::<f32>::new("inflated", 5.0).evaluate(&0.0),
+            1.0,
+            "base_score above 1.0 must saturate, not escape the utility band"
+        );
+        assert_eq!(
+            UtilityAction::<f32>::new("negative", -1.0).evaluate(&0.0),
+            0.0,
+            "base_score below 0.0 must saturate at the veto value, not go negative"
+        );
+
+        // The consequence that matters: a perfectly scored action (every
+        // consideration at full utility → exactly 1.0) must not be beaten by an
+        // action that simply declared a big number and no considerations. Insertion
+        // order puts the scored one first, so at the correct 1.0/1.0 tie it wins;
+        // pre-fix the inflated action scored 5.0 and took it.
+        let scorer: ContextScorer<f32> = Arc::new(|_: &f32| 1.0);
+        let cons = UtilityConsideration::new(scorer, Box::new(LinearCurve::new(1.0, 0.0)), 1.0);
+        let scored = UtilityAction::<f32>::new("scored", 1.0).add_consideration(cons);
+        let brain = UtilityBrain::new()
+            .add_action(scored)
+            .add_action(UtilityAction::<f32>::new("inflated", 5.0));
+
+        let (name, score) = brain.decide(&0.0).expect("a decision");
+        assert_eq!(name, "scored", "an unclamped base_score must not outrank a real score");
+        assert!(score <= 1.0, "decide must never report a score above 1.0, got {score}");
     }
 }

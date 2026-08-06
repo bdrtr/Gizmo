@@ -234,6 +234,36 @@ impl Renderer {
         }
     }
 
+    /// Switches the swapchain's present mode — vsync on or off — at runtime.
+    ///
+    /// The engine builds its surface with [`wgpu::PresentMode::AutoNoVsync`], i.e. frames are
+    /// presented as fast as they are produced. That is the right default for a benchmark and the
+    /// wrong one for a laptop on battery, and until now it was not reachable at all: the value
+    /// was hard-coded at construction (FIXPLAN B6).
+    ///
+    /// `AutoVsync` is the usual opposite choice. Anything the surface does not support falls back
+    /// inside wgpu rather than failing here, so this cannot make the swapchain invalid.
+    ///
+    /// Headless renderers have no surface; the call updates the stored config and returns without
+    /// doing anything else, which keeps `config` truthful if a surface is ever attached later.
+    ///
+    /// Cheap but NOT free: it rebuilds the swapchain. Call it when the user changes a setting,
+    /// not every frame.
+    pub fn set_present_mode(&mut self, mode: wgpu::PresentMode) {
+        if self.config.present_mode == mode {
+            return;
+        }
+        self.config.present_mode = mode;
+        if let Some(ref surface) = self.surface {
+            surface.configure(&self.device, &self.config);
+        }
+    }
+
+    /// The swapchain's current present mode. See [`set_present_mode`](Self::set_present_mode).
+    pub fn present_mode(&self) -> wgpu::PresentMode {
+        self.config.present_mode
+    }
+
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
         // Web'de dahili render çözünürlüğünü aynı cap'ten geçir (native no-op).
         // Bu olmadan ilk `Resized` olayı — tarayıcı canvas'ı CSS %100 ile

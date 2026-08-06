@@ -7,6 +7,18 @@ use std::any::TypeId;
 
 impl World {
     /// Sisteme component ekleme — Veriyi archetype sütununa taşır.
+    ///
+    /// A dead entity is a silent no-op, and so is an entity whose id was *reserved* from the
+    /// allocator but never handed to [`World::flush_spawn`] (what `Commands::spawn` produces
+    /// before its queue is applied): it is [`World::is_alive`] yet owns no archetype row, so
+    /// there is nowhere to write. That mirrors [`World::add_component`]'s documented
+    /// behaviour for the same entity state.
+    ///
+    /// Hooks: an all-`Table` bundle takes the block-move fast path and fires **no**
+    /// `on_add`/`on_set` hooks — observers registered with [`World::add_observer`] do not see
+    /// it. A bundle carrying a `SparseSet` component is routed through
+    /// [`crate::component::Bundle::apply`] instead and does fire them per component. See
+    /// [`crate::world::hooks::ComponentHooks`] for the full list of hook-free paths.
     pub fn add_bundle<B: crate::component::Bundle>(&mut self, entity: Entity, bundle: B) {
         if !self.is_alive(entity) { return; }
         let eid = entity.id();
@@ -30,11 +42,32 @@ impl World {
             self.component_infos.entry(info.type_id).or_insert_with(|| *info);
         }
 
+        // An id RESERVED from the allocator but never flushed (`Commands::spawn` hands one
+        // out before its queued `flush_spawn` runs) is `is_alive` yet owns no archetype row.
+        // Every path below indexes `entity_locations[eid]` raw, so such an entity panicked:
+        // out of bounds when the slot was never allocated, or — for a recycled id, whose
+        // slot exists but holds `EntityLocation::INVALID` — it fed `row == u32::MAX` into
+        // `move_entity_to`. Bail out instead, which is exactly what `add_component` and
+        // `Bundle::apply` already do for Table components on such an entity.
+        //
+        // Flushing here instead would be WRONG: `Commands::spawn` has already queued a
+        // `flush_spawn` for this id and `flush_spawn` must run exactly once — a second call
+        // pushes another empty-archetype row and overwrites the location, orphaning storage.
+        if !self.entity_location(eid).is_valid() {
+            tracing::warn!(
+                entity = eid,
+                "add_bundle: entity has no archetype row (reserved but not flushed); bundle dropped"
+            );
+            return;
+        }
+
         // Table bazlı block move:
         let old_arch_id = match self.archetype_index.entity_archetype.get(&eid) {
             Some(&id) => id,
             None => {
-                // Eğer entity önceden bomboşsa (sadece spawn edilmişse)
+                // Unreachable for a live, flushed entity: `flush_spawn` → `on_spawn` always
+                // inserts `entity_archetype[eid] = 0`, so even a component-less entity takes
+                // the `Some(0)` arm. Kept as a defensive fallback to the empty archetype.
                 let _arch = &mut self.archetype_index.archetypes[0];
                 0
             }
@@ -726,5 +759,66 @@ mod tests {
         assert_eq!(world.borrow::<Pos>().get(e1.id()).unwrap().0, 1);
         assert_eq!(world.borrow::<Pos>().get(e2.id()).unwrap().0, 2);
         assert!(world.borrow::<Vel>().get(e1.id()).is_none());
+    }
+
+    /// `add_bundle` on a reserved-but-unflushed id must not panic.
+    ///
+    /// `Commands::spawn` reserves the id immediately and only queues `flush_spawn`, so
+    /// between those two moments the entity is `is_alive` with NO `entity_locations` slot —
+    /// the same legal state `despawn_reserved_but_unflushed_entity_does_not_panic` covers.
+    /// `add_bundle` indexed that slot raw and panicked with "index out of bounds".
+    /// `add_component` on the same entity is a documented silent no-op; the bundle path now
+    /// matches it instead of crashing.
+    #[test]
+    fn add_bundle_on_reserved_but_unflushed_entity_does_not_panic() {
+        let mut world = World::new();
+        let reserved = {
+            let entities = world
+                .get_resource::<crate::entity::allocator::Entities>()
+                .expect("Entities resource");
+            entities.reserve_entity()
+        };
+        assert!(world.is_alive(reserved), "a reserved entity is considered alive");
+
+        world.add_bundle(reserved, (Pos(1), Vel(2))); // panicked here (entity_locations OOB)
+
+        assert!(
+            world.entity_component_types(reserved).is_empty(),
+            "no storage exists for an unflushed id, so nothing can have been attached"
+        );
+        // The world must still be usable — the dropped bundle left no half-built archetype.
+        let ok = world.spawn();
+        world.add_component(ok, Pos(7));
+        assert_eq!(world.borrow::<Pos>().get(ok.id()).unwrap().0, 7);
+    }
+
+    /// The recycled-id half of the same defect: here the `entity_locations` slot EXISTS
+    /// (despawn wrote `EntityLocation::INVALID` into it), so the raw index did not trip —
+    /// it read `row == u32::MAX` and handed that to `move_entity_to` as a source row, which
+    /// is worse than a panic. The liveness/validity guard covers both shapes.
+    #[test]
+    fn add_bundle_on_recycled_unflushed_id_does_not_corrupt() {
+        let mut world = World::new();
+        let victim = world.spawn();
+        world.add_component(victim, Pos(1));
+        let survivor = world.spawn();
+        world.add_component(survivor, Pos(2));
+        world.despawn(victim); // frees the id; its location slot becomes INVALID
+
+        // The allocator hands the freed id straight back, un-flushed.
+        let recycled = {
+            let entities = world
+                .get_resource::<crate::entity::allocator::Entities>()
+                .expect("Entities resource");
+            entities.reserve_entity()
+        };
+        assert_eq!(recycled.id(), victim.id(), "id was recycled as expected");
+        assert!(!world.entity_location(recycled.id()).is_valid());
+
+        world.add_bundle(recycled, (Pos(3), Vel(4)));
+
+        // Survivor untouched: no bogus row move happened.
+        assert_eq!(world.borrow::<Pos>().get(survivor.id()).unwrap().0, 2);
+        assert!(world.entity_component_types(recycled).is_empty());
     }
 }
