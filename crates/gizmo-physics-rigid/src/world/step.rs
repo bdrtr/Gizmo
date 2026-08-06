@@ -120,13 +120,20 @@ impl PhysicsWorld {
         // Alpha: render interpolasyonu için (0 = önceki adım, 1 = mevcut adım)
         self.render_alpha = self.accumulator / FIXED_DT;
 
-        // Record history snapshot at the end of the frame
-        self.history.push_back(PhysicsStateSnapshot {
-            transforms: self.transforms.clone(),
-            velocities: self.velocities.clone(),
-        });
-        if self.history.len() > self.max_history_frames {
-            self.history.pop_front();
+        // Record history snapshot at the end of the frame.
+        //
+        // Skipped entirely at `max_history_frames == 0`. The push/pop pair below left the buffer
+        // empty either way, so the two clones were pure waste — two full per-body arrays copied
+        // every frame for a rewind depth of zero. Behaviour is unchanged: an empty history is an
+        // empty history.
+        if self.max_history_frames > 0 {
+            self.history.push_back(PhysicsStateSnapshot {
+                transforms: self.transforms.clone(),
+                velocities: self.velocities.clone(),
+            });
+            if self.history.len() > self.max_history_frames {
+                self.history.pop_front();
+            }
         }
 
         Ok(())

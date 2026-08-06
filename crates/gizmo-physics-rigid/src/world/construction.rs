@@ -50,7 +50,11 @@ impl PhysicsWorld {
             step_once: false,
             rewind_requested: false,
             history: std::collections::VecDeque::new(),
-            max_history_frames: 600, // 5 seconds of history at 120Hz
+            // Rewind is OPT-IN — see `PhysicsWorld::max_history_frames`. It used to default to
+            // 600 frames, which costs 160 B per body per frame: 37 MB on a 384-body pile and
+            // 192 MB on this engine's own 2000-box stress scene, resident, for a debugging aid
+            // most scenes never use.
+            max_history_frames: 0,
             watchlist: std::collections::HashSet::new(),
         }
     }
