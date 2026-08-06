@@ -888,6 +888,37 @@ eklemekten ibaret.
   > `state_hash`'i veren en büyük `iterations` efektif sayının ta kendisi. Diz: havadaki sal
   > için **28 / 28 / 46**, aynı sal zemine indirilince **1 / 1 / 1**.
 
+- ✅ **FAZ C'NİN İLK SORUSU CEVAPLANDI: politika FAZLA harcıyordu, ve iki kusuru telafi
+  ediyormuş** *(2026-08-06)*. `BLOCK_ITERS_FLOOR` **28 → 16**.
+
+  Soru bir gün boyunca cevaplanamadı çünkü düşük sweep'te her koşu çöküyordu — kıyaslanacak
+  bir şey yoktu. Çöküşlerin sebebi az-çözme değil, **kısmi uyku** ve **dejenere manifold**
+  çıktı. İkisi de köklerinden düzeltilince tablo tamamen değişti:
+
+  | | düzeltmelerden önce | sonra |
+  |---|---|---|
+  | 1-genişlik kule N=16/24/32 × 8 sweep × 3 zemin (72 hücre) | N=24: 1/4/8/16 sweep'te 3/3 çöküyor | **72/72 ayakta**, peak_lean her hücrede 0.0000 |
+  | gerçekçi yığın (4×6×4, 8×6×8, 4×12×4) × 4 sweep × 2 zemin | ölçülemiyordu | **24/24 ayakta** |
+
+  Kalite farkı milimetre altı: 4 → 28 sweep arasında peak_lean 0.0005 → 0.0001,
+  resting_pen 0.0004 → 0 (slop 0.005'in çok altı). Maliyet ise 3×.
+
+  > **Neden 16, daha düşük değil:** en dipte marj daralıyor — N=32 kule 1 sweep'te 0.486 m/s
+  > tepe yapıyor, eşik 0.5. 16'da 0.215. Ayrıca 16, varsayılan `iterations = 20`'nin ALTINDA,
+  > yani FIXPLAN'ın kaydettiği kusur da kapanıyor: taban artık çağıranın indiremeyeceği bir
+  > değer dayatmıyor.
+
+  > **Kazanç, ölçüldü** (`where_does_a_frame_go_now`, yerleşmiş ama uyanık kare):
+  > 4×6×4 solver 7.12 → **5.15 ms**, 8×6×8 solver 33.58 → **24.13 ms** (−28%);
+  > kare toplamı 37.5 → 27.7 ms.
+
+  > **Determinizm re-bless:** `15D4FD6845119D8B` → **`A462C9EB8A09D5CA`** (3/3).
+
+  > Ve `the_gated_scenes_reach_the_adaptive_policy` de düzeltildi: "sayı yükseldi mi" ölçütü,
+  > taban `iterations`'ın altına inince geçerli bir vekil olmaktan çıktı (sığ island artık
+  > doğru biçimde yapılandırılan sayıyı koruyor). Kapı politikanın gerçek kuralına bağlandı:
+  > yükseltme yalnız `max(16, 1.5·derinlik) > iterations` olduğunda bekleniyor.
+
 - ⏸️ **Düzeltme AÇIK — "anchor'suz island'da ölçekleme yapma" DENENDİ ve YANLIŞ ÇIKTI.**
   Bariz görünüyordu: anchor yoksa destek zinciri yok, ekstra sweep hiçbir şeye yakınsamıyor.
   Uyguladım, sahnede solver 669 → 360 ms'ye indi ve temas başına maliyet düzleşti

@@ -50,9 +50,26 @@ struct BlockGroup {
 }
 
 impl ConstraintSolver {
-    /// Adaptive iterations (block solver): minimum sweeps for any bucklable stack (D≥5).
-    /// Even a short stack needs ~this many block sweeps to stay below the buckling limit.
-    pub(super) const BLOCK_ITERS_FLOOR: usize = 28;
+    /// Adaptive iterations (block solver): minimum sweeps for a deep island (D≥5).
+    ///
+    /// **28 → 16 (2026-08-06), measured.** The old value was calibrated against an instability
+    /// that has since been fixed at its root — partial island sleep and the degenerate
+    /// single-point manifold — and it was compensating for both. It also exceeded the default
+    /// `iterations` of 20, so a caller could not lower the sweep count of a deep island at all,
+    /// which docs/FIXPLAN.md recorded as a defect.
+    ///
+    /// What the ensembles say now (`tests/solver_quality.rs`): 1-wide towers of N = 16, 24 and 32
+    /// stand at EVERY sweep count from 1 to 96 on three ground sizes — 72 cells, zero collapses,
+    /// peak lean 0.0000 throughout — where before the fixes N=24 collapsed on all three grounds
+    /// at 1, 4, 8 and 16 sweeps. Realistic piles (4×6×4, 8×6×8, 4×12×4) likewise stand at 4
+    /// sweeps upward, with resting penetration reaching zero by 16 and peak lean differing by
+    /// half a millimetre across the whole range.
+    ///
+    /// 16 rather than lower because the data still shows margin shrinking at the very bottom —
+    /// an N=32 tower peaks at 0.486 m/s at one sweep against a 0.5 blow-up threshold, and 0.215
+    /// at sixteen. The floor now sits below the default `iterations`, so it constrains nobody
+    /// who has not already lowered that.
+    pub(super) const BLOCK_ITERS_FLOOR: usize = 16;
     /// Cap on adaptive iterations — an extreme tower is bounded; short piles never reach it.
     pub(super) const BLOCK_ITERS_CAP: usize = 96;
 
