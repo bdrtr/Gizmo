@@ -73,10 +73,25 @@ proptest! {
         for c in &contacts {
             prop_assert!(c.normal.is_finite(), "normal NaN/Inf");
             prop_assert!((c.normal.length() - 1.0).abs() < 1e-3, "normal birim değil: {:?}", c.normal);
-            prop_assert!(c.penetration.is_finite() && c.penetration > 0.0,
+            // Köşe BAŞINA sıfır derinlik meşru, ve bu bilinçli bir tasarım: `clip_box_box`
+            // referans yüzeyin tam üstündeki köşeleri `DEPTH_TOLERANCE` ile kabul edip
+            // derinliği `max(0.0)` ile kırpıyor. O tolerans tam temastaki yığınları düzelten
+            // değişikliğin kendisi — onsuz dört köşe de eleniyor, manifold GJK'nın tek
+            // noktasına çöküyor ve yığın tork alamıyor (bkz. contacts.rs'teki DEPTH_TOLERANCE
+            // yorumu). Bu iddia eskiden `> 0.0` idi ve o toleranstan ÖNCEYE aitti; proptest
+            // 2026-08-07'de bunu yakaladı (seed .proptest-regressions'a işlendi).
+            prop_assert!(c.penetration.is_finite() && c.penetration >= 0.0,
                 "penetrasyon geçersiz: {}", c.penetration);
             prop_assert!(c.point.is_finite(), "temas noktası NaN/Inf");
         }
+        // Ama testin ASIL iddiası duruyor, manifold seviyesinde: kutular gerçekten örtüşüyor
+        // (merkez ofseti her yarı-kenardan küçük), dolayısıyla en az bir temas o örtüşmeyi
+        // BİLDİRMEK zorunda. Sadece köşe-başına gevşetip burayı eklememek, hepsi sıfır gelen
+        // bir manifoldu — gerçek bir hata — sessizce geçirirdi.
+        prop_assert!(
+            contacts.iter().any(|c| c.penetration > 0.0),
+            "manifoldun tamamı sıfır derinlik bildirdi; kutular örtüşürken en az biri pozitif olmalı"
+        );
     }
 
     /// AYRIK: bounding-sphere yarıçapları toplamından daha uzakta duran iki kutu
