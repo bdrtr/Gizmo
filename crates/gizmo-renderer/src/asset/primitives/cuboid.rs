@@ -1,8 +1,6 @@
 use crate::components::Mesh;
 use crate::renderer::Vertex;
 use gizmo_math::Vec3;
-use std::sync::Arc;
-use wgpu::util::DeviceExt;
 
 impl crate::asset::AssetManager {
     /// İçi boş ters yüzlü küp (Skybox) mesh üretir.
@@ -122,15 +120,8 @@ impl crate::asset::AssetManager {
             }
         }
 
-        let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Skybox Inverted Cube VBuf"),
-            contents: bytemuck::cast_slice(&vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
-        Mesh::new(
+        Mesh::new_indexed(
             device,
-            Arc::new(vbuf),
             &vertices,
             Vec3::ZERO,
             "inverted_cube".to_string(),
@@ -251,15 +242,8 @@ impl crate::asset::AssetManager {
             }
         }
 
-        let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Standard Cube VBuf"),
-            contents: bytemuck::cast_slice(&vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
-        Mesh::new(
+        Mesh::new_indexed(
             device,
-            Arc::new(vbuf),
             &vertices,
             Vec3::ZERO,
             "standard_cube".to_string(),
@@ -327,15 +311,8 @@ impl crate::asset::AssetManager {
             }
         }
 
-        let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Gizmo Arrow VBuf"),
-            contents: bytemuck::cast_slice(&vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
-        Mesh::new(
+        Mesh::new_indexed(
             device,
-            Arc::new(vbuf),
             &vertices,
             Vec3::ZERO,
             "gizmo_arrow".to_string(),

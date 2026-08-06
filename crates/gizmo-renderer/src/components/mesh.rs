@@ -135,16 +135,29 @@ impl Mesh {
     /// paylaşılan köşeleri komşu üçgen sayısı kadar aza iner — hem yükleme bandı hem
     /// vertex shader çağrısı olarak.
     ///
-    /// `meshopt` native-only olduğundan WASM'da tekilleştirme yapılmaz: mesh düz kalır ve
-    /// `ibuf` `None` döner. Çağıran her iki durumu da desteklemek zorunda — zaten
-    /// `ibuf: Option` olmasının sebebi bu değil (bkz. alanın dokümanı), ama sonucu aynı.
-    #[cfg(not(target_arch = "wasm32"))]
+    /// **Her hedefte çağrılabilir.** `meshopt` native-only olduğundan WASM'da tekilleştirme
+    /// yapılmaz; mesh düz kalır ve `ibuf` `None` döner. Bu bir çağıran yükü DEĞİL: çizim yolu
+    /// zaten iki durumu da taşıyor (`record_draw`), dolayısıyla `cfg` dallanması burada bir
+    /// kez yapılıyor, her çağrı yerinde değil.
     pub fn new_indexed(
         device: &wgpu::Device,
         vertices: &[crate::gpu_types::Vertex],
         center_offset: Vec3,
         source: String,
     ) -> Self {
+        #[cfg(target_arch = "wasm32")]
+        {
+            use wgpu::util::DeviceExt;
+            let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some(&format!("VBuf (flat, no meshopt): {source}")),
+                contents: bytemuck::cast_slice(vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+            return Mesh::new(device, Arc::new(vbuf), vertices, center_offset, source);
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
         let (unique_count, indices) = meshopt::generate_vertex_remap(vertices, None);
 
         let mut unique_vertices = vec![crate::gpu_types::Vertex::default(); unique_count];
@@ -183,6 +196,7 @@ impl Mesh {
         // bu bir gerileme de değil: bu alan zaten tam listeyi tutuyordu.
         mesh.cpu_vertices = Arc::new(vertices.iter().map(|v| Vec3::from(v.position)).collect());
         mesh
+        }
     }
 
     /// Dosya yüklenememesi gibi durumlarda motorun çökmemesi için
