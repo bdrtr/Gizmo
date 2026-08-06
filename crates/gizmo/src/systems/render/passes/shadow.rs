@@ -39,17 +39,16 @@ pub fn record_shadow_passes(
                 .as_ref()
                 .unwrap_or(&renderer.scene.dummy_skeleton_bind_group);
             shadow_pass.set_bind_group(1, skel_bg.as_ref(), &[]);
-            shadow_pass.set_vertex_buffer(0, item.vbuf.slice(..));
             // Two-region instance layout (see collect_draw_items): the camera-visible
             // instances (region A) and the off-screen shadow-only casters (region B) are no
             // longer contiguous, so cast shadows from BOTH ranges with a draw each. Empty
             // ranges (e.g. a batch with no off-screen casters) draw 0 instances = no-op.
-            shadow_pass.draw(
-                0..item.vertex_count,
+            item.record_draw(
+                &mut shadow_pass,
                 item.camera_instance_range(uploaded_instances),
             );
-            shadow_pass.draw(
-                0..item.vertex_count,
+            item.record_draw(
+                &mut shadow_pass,
                 item.shadow_instance_range(uploaded_instances),
             );
         }

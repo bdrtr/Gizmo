@@ -350,6 +350,12 @@ pub fn execute_render_pipeline(
                     .or_insert_with(|| BatchData {
                         vbuf: active_mesh.vbuf.clone(),
                         vertex_count: active_mesh.vertex_count,
+                        // Studio'nun LOD'u ayrı bir `Mesh` seçiyor (`lods` bileşeni), motorun
+                        // `lod_vbufs` düzleştirilmiş tamponları değil — dolayısıyla seçilen
+                        // mesh'in indeksleri kendi vertex dizisine göre geçerli ve olduğu gibi
+                        // taşınabilir. Ana boru hattındaki düşürme kuralı buraya UYMAZ.
+                        ibuf: active_mesh.ibuf.clone(),
+                        index_count: active_mesh.index_count,
                         bind_group: mat.bind_group.clone(),
                         skeleton_bg: skel_bg,
                         instances: vec_pool.pop().unwrap_or_else(|| Vec::with_capacity(32)),
@@ -415,6 +421,8 @@ pub fn execute_render_pipeline(
                     flat_b.push(FlatBatchData {
                         vbuf: batch.vbuf,
                         vertex_count: batch.vertex_count,
+                        ibuf: batch.ibuf,
+                        index_count: batch.index_count,
                         bind_group: batch.bind_group,
                         skeleton_bg: batch.skeleton_bg,
                         start_instance: start,

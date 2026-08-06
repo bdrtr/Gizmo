@@ -114,16 +114,14 @@ pub fn record_forward_and_fluid(
                 render_pass.set_pipeline(pipeline);
                 render_pass.set_bind_group(1, &*item.bind_group, &[]);
                 render_pass.set_bind_group(BG_SKELETON, skel_bg.as_ref(), &[]);
-                render_pass.set_vertex_buffer(0, item.vbuf.slice(..));
-                render_pass.draw(0..item.vertex_count, inst_start..inst_end);
+                item.record_draw(&mut render_pass, inst_start..inst_end);
             }
 
             if draw_wire {
                 render_pass.set_pipeline(&renderer.scene.wireframe_pipeline);
                 render_pass.set_bind_group(1, &*item.bind_group, &[]);
                 render_pass.set_bind_group(BG_SKELETON, skel_bg.as_ref(), &[]);
-                render_pass.set_vertex_buffer(0, item.vbuf.slice(..));
-                render_pass.draw(0..item.vertex_count, inst_start..inst_end);
+                item.record_draw(&mut render_pass, inst_start..inst_end);
             }
         }
 

@@ -1,8 +1,12 @@
-//! Texture creation + mipmap generation methods on [`Renderer`].
+//! Texture creation methods on [`Renderer`].
 //!
-//! Cached convenience textures (checkerboard/white), disk texture loading, and
-//! the runtime mipmap-blit chain. Split out of `renderer.rs` for navigability —
-//! no logic change.
+//! Cached convenience textures (checkerboard/white), disk texture loading, and the
+//! hand-supplied-RGBA path. Split out of `renderer.rs` for navigability.
+//!
+//! The mipmap blitter used to live here as `Renderer::generate_mipmaps`, where the asset
+//! pipeline could not reach it — which is why two of the engine's three texture upload paths
+//! shipped without mips. It is [`crate::texture_quality::MipmapBlitter`] now, together with the
+//! sampler policy that decides when a mip chain is actually sampled.
 
 use std::sync::Arc;
 
@@ -47,7 +51,7 @@ impl Renderer {
     }
 
     pub fn create_texture(&self, rgba_bytes: &[u8], width: u32, height: u32) -> wgpu::BindGroup {
-        let mip_level_count = width.max(height).ilog2() + 1;
+        let mip_level_count = crate::texture_quality::mip_level_count(width, height);
         let size = wgpu::Extent3d {
             width,
             height,
@@ -60,9 +64,7 @@ impl Renderer {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_DST
-                | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            usage: crate::texture_quality::MIPPED_TEXTURE_USAGE,
             view_formats: &[],
         });
         self.queue.write_texture(
@@ -81,23 +83,24 @@ impl Renderer {
             size,
         );
 
-        Self::generate_mipmaps(
+        crate::texture_quality::MipmapBlitter::new(
             &self.device,
-            &self.queue,
-            &texture,
             wgpu::TextureFormat::Rgba8UnormSrgb,
-            mip_level_count,
-        );
+        )
+        .generate(&self.device, &self.queue, &texture, mip_level_count);
+
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let sampler = self.device.create_sampler(&wgpu::SamplerDescriptor {
-            address_mode_u: wgpu::AddressMode::Repeat,
-            address_mode_v: wgpu::AddressMode::Repeat,
-            address_mode_w: wgpu::AddressMode::Repeat,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::MipmapFilterMode::Linear,
-            ..Default::default()
-        });
+        // Bu yol mip'i zaten üretiyordu ama anizotropi istemiyordu (`..Default::default()`
+        // → `anisotropy_clamp: 1`), yani eğik yüzeylerde trilinear'da kalıyordu.
+        let sampler = crate::texture_quality::material_sampler(
+            &self.device,
+            "texture_sampler",
+            wgpu::AddressMode::Repeat,
+            wgpu::AddressMode::Repeat,
+            wgpu::FilterMode::Linear,
+            wgpu::FilterMode::Linear,
+            mip_level_count > 1,
+        );
         // Fill the auxiliary textured-PBR slots (normal/MR/emissive/AO/params) with
         // the shared neutral defaults so this bind group matches the 7-entry layout.
         self.asset_manager
@@ -144,125 +147,4 @@ impl Renderer {
         })
     }
 
-    #[tracing::instrument(skip_all, level = "debug")]
-    pub(super) fn generate_mipmaps(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        texture: &wgpu::Texture,
-        format: wgpu::TextureFormat,
-        mip_level_count: u32,
-    ) {
-        if mip_level_count <= 1 {
-            return;
-        }
-
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Mipmap Blit Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/mipmap.wgsl").into()),
-        });
-
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Mipmap Blit Pipeline"),
-            layout: None,
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
-
-        let bind_group_layout = pipeline.get_bind_group_layout(0);
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-            ..Default::default()
-        });
-
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Mipmap Encoder"),
-        });
-
-        let views: Vec<wgpu::TextureView> = (0..mip_level_count)
-            .map(|mip| {
-                texture.create_view(&wgpu::TextureViewDescriptor {
-                    label: Some(&format!("Mip {}", mip)),
-                    format: None,
-                    dimension: None,
-                    usage: None,
-                    aspect: wgpu::TextureAspect::All,
-                    base_mip_level: mip,
-                    mip_level_count: Some(1),
-                    base_array_layer: 0,
-                    array_layer_count: None,
-                })
-            })
-            .collect();
-
-        for target_mip in 1..mip_level_count as usize {
-            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                layout: &bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&views[target_mip - 1]),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&sampler),
-                    },
-                ],
-                label: None,
-            });
-
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: None,
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &views[target_mip],
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(&pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
-            pass.draw(0..3, 0..1);
-        }
-
-        queue.submit(Some(encoder.finish()));
-        tracing::debug!(
-            mip_levels = mip_level_count,
-            ?format,
-            "[Renderer] generated mipmap chain"
-        );
-    }
 }

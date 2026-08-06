@@ -716,6 +716,20 @@ mod golden_render_tests {
     /// `point_shadows` sets [`Renderer::point_shadows_enabled`], which gates both the six
     /// point-shadow face passes and the shader's lookup into the cubemap they write.
     async fn render_frame(exposure: f32, point_shadows: bool) -> Vec<u8> {
+        render_frame_with_mesh(exposure, point_shadows, AssetManager::create_cube).await
+    }
+
+    /// As [`render_frame`], but the caller supplies the geometry.
+    ///
+    /// The seam exists so two frames can differ **only** in how the same triangles reach the
+    /// GPU — flat vertex list versus deduplicated vertices plus an index buffer. Everything
+    /// downstream (camera, light, material, passes, readback) stays byte-for-byte the same
+    /// code path, which is what makes an equality assertion on the two frames meaningful.
+    async fn render_frame_with_mesh(
+        exposure: f32,
+        point_shadows: bool,
+        make_mesh: impl FnOnce(&wgpu::Device) -> crate::renderer::components::Mesh,
+    ) -> Vec<u8> {
         const W: u32 = 128;
         const H: u32 = 128;
         const BPP: u32 = 4;
@@ -725,7 +739,7 @@ mod golden_render_tests {
         let mut asset_manager = AssetManager::new();
         let mut world = World::new();
 
-        let mesh = AssetManager::create_cube(&renderer.device);
+        let mesh = make_mesh(&renderer.device);
         let tex = asset_manager.create_white_texture(
             &renderer.device,
             &renderer.queue,
@@ -799,6 +813,135 @@ mod golden_render_tests {
         let data = slice.get_mapped_range();
 
         data.to_vec()
+    }
+
+    /// A unit cube as a flat triangle list: 36 vertices, six per face, each face carrying its
+    /// own normal — so the only true duplicates are the two shared corners *within* a face,
+    /// and a correct dedup lands on 24.
+    ///
+    /// Written out here rather than reusing [`AssetManager::create_cube`] because this test
+    /// needs the VERTICES and that function only hands back a finished `Mesh`.
+    fn cube_vertices() -> Vec<crate::renderer::gpu_types::Vertex> {
+        const CORNERS: [[f32; 3]; 8] = [
+            [-1.0, -1.0, -1.0],
+            [1.0, -1.0, -1.0],
+            [1.0, 1.0, -1.0],
+            [-1.0, 1.0, -1.0],
+            [-1.0, -1.0, 1.0],
+            [1.0, -1.0, 1.0],
+            [1.0, 1.0, 1.0],
+            [-1.0, 1.0, 1.0],
+        ];
+        // (two triangles as corner indices, face normal)
+        const FACES: [([usize; 6], [f32; 3]); 6] = [
+            ([1, 0, 3, 1, 3, 2], [0.0, 0.0, -1.0]),
+            ([4, 5, 6, 4, 6, 7], [0.0, 0.0, 1.0]),
+            ([0, 4, 7, 0, 7, 3], [-1.0, 0.0, 0.0]),
+            ([5, 1, 2, 5, 2, 6], [1.0, 0.0, 0.0]),
+            ([3, 7, 6, 3, 6, 2], [0.0, 1.0, 0.0]),
+            ([0, 1, 5, 0, 5, 4], [0.0, -1.0, 0.0]),
+        ];
+        const UVS: [[f32; 2]; 6] = [
+            [0.0, 1.0],
+            [1.0, 1.0],
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [1.0, 0.0],
+            [0.0, 0.0],
+        ];
+
+        let mut out = Vec::with_capacity(36);
+        for (corner_indices, normal) in FACES {
+            for (k, corner) in corner_indices.into_iter().enumerate() {
+                out.push(crate::renderer::gpu_types::Vertex {
+                    position: CORNERS[corner],
+                    color: [1.0, 1.0, 1.0],
+                    normal,
+                    tex_coords: UVS[k],
+                    ..Default::default()
+                });
+            }
+        }
+        out
+    }
+
+    /// The indexed draw path must produce the same picture as the flat one, to the byte.
+    ///
+    /// This is the only test that executes `draw_indexed` at all. Until it existed, both
+    /// `Mesh::new_indexed`'s deduplication and the `record_draw` index branch were code that
+    /// compiled and had never once run: the engine's only producer of indexed meshes is the
+    /// glTF loader, and this repository ships no `.glb` (see `assets/README.md` — the models
+    /// are third-party licensed and uncommitted), so every mesh in every other test is flat.
+    ///
+    /// Byte equality rather than a similarity threshold is the point. A wrong index buffer
+    /// does not draw *nothing* — it draws the same triangle count from the wrong corners, and
+    /// at 128×128 with one lit cube that can still look plausible. Only exact equality
+    /// distinguishes "the geometry survived the round trip" from "something reasonable
+    /// appeared on screen".
+    #[test]
+    fn an_indexed_mesh_renders_byte_identically_to_the_flat_one() {
+        let _gpu = gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available()) {
+            eprintln!(
+                "skipping an_indexed_mesh_renders_byte_identically_to_the_flat_one: \
+                 no GPU adapter available"
+            );
+            return;
+        }
+        pollster::block_on(async {
+            let vertices = cube_vertices();
+            assert_eq!(vertices.len(), 36, "cube_vertices is meant to be a flat triangle list");
+
+            let flat_verts = vertices.clone();
+            let flat = render_frame_with_mesh(1.0, false, move |device| {
+                crate::renderer::components::Mesh::from_vertices(device, &flat_verts, "flat_cube")
+            })
+            .await;
+
+            let indexed_verts = vertices.clone();
+            let indexed = render_frame_with_mesh(1.0, false, move |device| {
+                let mesh = crate::renderer::components::Mesh::new_indexed(
+                    device,
+                    &indexed_verts,
+                    Vec3::ZERO,
+                    "indexed_cube".to_string(),
+                );
+                // Guard against a vacuous pass: if `new_indexed` ever stopped producing an
+                // index buffer (or stopped deduplicating), the frames below would still match
+                // — because both would be flat — and this test would silently stop testing
+                // anything at all.
+                assert!(
+                    mesh.ibuf.is_some(),
+                    "new_indexed produced no index buffer; the frame comparison would be vacuous"
+                );
+                assert_eq!(
+                    mesh.index_count, 36,
+                    "every original vertex must still be referenced exactly once"
+                );
+                assert_eq!(
+                    mesh.vertex_count, 24,
+                    "a cube with per-face normals has 24 distinct vertices; got {} \
+                     (deduplication did not run, or merged across faces)",
+                    mesh.vertex_count
+                );
+                mesh
+            })
+            .await;
+
+            assert_eq!(flat.len(), indexed.len(), "frame sizes differ");
+            let differing = flat
+                .iter()
+                .zip(indexed.iter())
+                .filter(|(a, b)| a != b)
+                .count();
+            assert_eq!(
+                differing,
+                0,
+                "{differing} of {} bytes differ between the flat and indexed renders of the \
+                 same cube — the index buffer, its format, or the draw_indexed range is wrong",
+                flat.len()
+            );
+        });
     }
 
     /// The mean of every RGB byte in a frame (alpha excluded).

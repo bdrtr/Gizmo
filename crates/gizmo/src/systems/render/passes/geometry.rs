@@ -39,15 +39,8 @@ pub fn record_deferred_geometry(
                 .unwrap_or(&renderer.scene.dummy_skeleton_bind_group);
             z_pass.set_bind_group(3, skel_bg.as_ref(), &[]);
             z_pass.set_bind_group(1, &*item.bind_group, &[]);
-            z_pass.set_vertex_buffer(0, item.vbuf.slice(..));
-            z_pass.draw(
-                0..item.vertex_count,
-                // Main pass: camera-visible instances only.
-                item.first_instance
-                    ..(item.first_instance + item.camera_count)
-                        .min(uploaded_instances)
-                        .max(item.first_instance),
-            );
+            // Main pass: camera-visible instances only.
+            item.record_draw(&mut z_pass, item.camera_instance_range(uploaded_instances));
         }
     }
 
@@ -119,15 +112,8 @@ pub fn record_deferred_geometry(
                 .unwrap_or(&renderer.scene.dummy_skeleton_bind_group);
             gbuf_pass.set_bind_group(3, skel_bg.as_ref(), &[]);
             gbuf_pass.set_bind_group(1, &*item.bind_group, &[]);
-            gbuf_pass.set_vertex_buffer(0, item.vbuf.slice(..));
-            gbuf_pass.draw(
-                0..item.vertex_count,
-                // Main pass: camera-visible instances only.
-                item.first_instance
-                    ..(item.first_instance + item.camera_count)
-                        .min(uploaded_instances)
-                        .max(item.first_instance),
-            );
+            // Main pass: camera-visible instances only.
+            item.record_draw(&mut gbuf_pass, item.camera_instance_range(uploaded_instances));
         }
     }
 

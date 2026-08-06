@@ -140,8 +140,7 @@ pub(super) fn record_studio_shadow_passes(
                 );
                 shadow_pass.set_bind_group(1, &*batch.skeleton_bg, &[]);
                 shadow_pass.set_bind_group(2, &renderer.scene.instance_bind_group, &[]);
-                shadow_pass.set_vertex_buffer(0, batch.vbuf.slice(..));
-                shadow_pass.draw(0..batch.vertex_count, batch.start_instance..safe_end);
+                batch.record_draw(&mut shadow_pass, batch.start_instance..safe_end);
             }
         }
 }
@@ -202,8 +201,7 @@ pub(super) fn record_studio_main_pass(
                 render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
                 render_pass.set_bind_group(3, &*batch.skeleton_bg, &[]);
                 render_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
-                render_pass.set_vertex_buffer(0, batch.vbuf.slice(..));
-                render_pass.draw(0..batch.vertex_count, batch.start_instance..safe_end);
+                batch.record_draw(&mut render_pass, batch.start_instance..safe_end);
             }
 
             // 2. ÇİFT YÖNLÜ OPAQUE OBJELER (Kumaşlar, cull_mode = None)
@@ -227,8 +225,7 @@ pub(super) fn record_studio_main_pass(
                 render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
                 render_pass.set_bind_group(3, &*batch.skeleton_bg, &[]);
                 render_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
-                render_pass.set_vertex_buffer(0, batch.vbuf.slice(..));
-                render_pass.draw(0..batch.vertex_count, batch.start_instance..safe_end);
+                batch.record_draw(&mut render_pass, batch.start_instance..safe_end);
             }
 
             // --- DRAW GPU PHYSICS SPHERES (Katı Obje olarak farz ediliyor) ---
@@ -253,8 +250,7 @@ pub(super) fn record_studio_main_pass(
                 render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]); // sky.wgsl içinde boş da olsa bağlı kalması gerek
                 render_pass.set_bind_group(3, &*batch.skeleton_bg, &[]);
                 render_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
-                render_pass.set_vertex_buffer(0, batch.vbuf.slice(..));
-                render_pass.draw(0..batch.vertex_count, batch.start_instance..safe_end);
+                batch.record_draw(&mut render_pass, batch.start_instance..safe_end);
             }
 
             // 4. TRANSPARENT OBJELERİ ÇİZ (Depth yazması kapalı, Opaque'nin üstüne blend olur)
@@ -274,8 +270,7 @@ pub(super) fn record_studio_main_pass(
                 render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
                 render_pass.set_bind_group(3, &*batch.skeleton_bg, &[]);
                 render_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
-                render_pass.set_vertex_buffer(0, batch.vbuf.slice(..));
-                render_pass.draw(0..batch.vertex_count, batch.start_instance..safe_end);
+                batch.record_draw(&mut render_pass, batch.start_instance..safe_end);
             }
 
             // 5. GRID ÇİZİMİ (Play modunda gizle — Game View temiz görünsün)
@@ -299,8 +294,7 @@ pub(super) fn record_studio_main_pass(
                     render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
                     render_pass.set_bind_group(3, &*batch.skeleton_bg, &[]);
                     render_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
-                    render_pass.set_vertex_buffer(0, batch.vbuf.slice(..));
-                    render_pass.draw(0..batch.vertex_count, batch.start_instance..safe_end);
+                    batch.record_draw(&mut render_pass, batch.start_instance..safe_end);
                 }
             }
 

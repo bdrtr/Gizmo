@@ -120,6 +120,16 @@ pub(super) fn upload_gltf_images(
 ) -> Vec<GpuImage> {
     let mut out = Vec::with_capacity(images.len());
 
+    // Bütün dosyanın mip blit'leri TEK komut tamponunda toplanıyor, ve blitter'lar (dolayısıyla
+    // pipeline derlemeleri) format başına BİR kez kuruluyor. Doku başına encoder + pipeline,
+    // yüzlerce dokulu bir sahnede yükleme süresinin kendisi olurdu.
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("glTF mipmap encoder"),
+    });
+    let mut srgb_blitter: Option<crate::texture_quality::MipmapBlitter> = None;
+    let mut linear_blitter: Option<crate::texture_quality::MipmapBlitter> = None;
+    let mut recorded_any = false;
+
     for (i, image) in images.iter().enumerate() {
         let (width, height) = (image.width, image.height);
         let rgba: Vec<u8> = convert_image_to_rgba8(image, i, file_path);
@@ -136,13 +146,15 @@ pub(super) fn upload_gltf_images(
             wgpu::TextureFormat::Rgba8Unorm
         };
 
+        let mip_level_count = crate::texture_quality::mip_level_count(width, height);
+
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             size: texture_size,
-            mip_level_count: 1,
+            mip_level_count,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            usage: crate::texture_quality::MIPPED_TEXTURE_USAGE,
             label: Some(&format!("{file_path}_tex_{i}")),
             view_formats: &[],
         });
@@ -163,8 +175,30 @@ pub(super) fn upload_gltf_images(
             texture_size,
         );
 
+        if mip_level_count > 1 {
+            let blitter = if format == wgpu::TextureFormat::Rgba8UnormSrgb {
+                &mut srgb_blitter
+            } else {
+                &mut linear_blitter
+            };
+            blitter
+                .get_or_insert_with(|| crate::texture_quality::MipmapBlitter::new(device, format))
+                .record(device, &mut encoder, &texture, mip_level_count);
+            recorded_any = true;
+        }
+
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         out.push(GpuImage { texture, view });
+    }
+
+    // Boş bir komut tamponunu submit etmek zararsız ama gereksiz; 1×1 doku dizilerinde
+    // (mip zinciri yok) hiç iş kaydedilmemiş oluyor.
+    if recorded_any {
+        queue.submit(Some(encoder.finish()));
+        tracing::debug!(
+            images = out.len(),
+            "[Asset] glTF doku mip zincirleri üretildi"
+        );
     }
 
     out
