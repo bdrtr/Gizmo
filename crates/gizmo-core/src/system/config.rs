@@ -49,6 +49,62 @@ pub struct SystemConfig {
     pub(crate) in_sets: Vec<&'static str>,
     pub(crate) added_info: AccessInfo,
     pub(crate) phase: Phase,
+    /// Metadata as the CALLER declared it, snapshotted by `Schedule::build` before it folds in
+    /// any `SetConfig`. `None` until then. See [`SystemConfig::snapshot_meta`].
+    pub(crate) pristine_meta: Option<SystemMeta>,
+}
+
+/// Everything a [`SystemConfig`] carries except the system itself.
+///
+/// This exists so a built schedule can be taken apart again. [`Schedule::build`] moves each
+/// system out of its config and into a batch; before this type, the metadata went with the
+/// dropped config, which is why adding a system after the first `run()` silently discarded every
+/// system already compiled — there was nothing left to rebuild them from.
+///
+/// A batch now stores one of these beside each system, so
+/// [`Schedule::invalidate`](crate::system::Schedule) can put the configs back together.
+#[derive(Clone)]
+pub(crate) struct SystemMeta {
+    pub(crate) labels: Vec<&'static str>,
+    pub(crate) before: Vec<&'static str>,
+    pub(crate) after: Vec<&'static str>,
+    pub(crate) in_sets: Vec<&'static str>,
+    pub(crate) added_info: AccessInfo,
+    pub(crate) phase: Phase,
+}
+
+impl SystemConfig {
+    /// Snapshots this config's metadata.
+    ///
+    /// Taken BEFORE `build` folds in any [`SetConfig`], deliberately: set folding appends to
+    /// `before`/`after` and can overwrite `phase`, so snapshotting afterwards would make every
+    /// rebuild re-append the same constraints and grow those vectors without bound. The DAG
+    /// would still come out the same — edges are de-duplicated — but the config would drift
+    /// further from what the caller actually declared on each pass.
+    pub(crate) fn snapshot_meta(&self) -> SystemMeta {
+        SystemMeta {
+            labels: self.labels.clone(),
+            before: self.before.clone(),
+            after: self.after.clone(),
+            in_sets: self.in_sets.clone(),
+            added_info: self.added_info.clone(),
+            phase: self.phase,
+        }
+    }
+
+    /// Rebuilds a config from a system and the metadata it was registered with.
+    pub(crate) fn from_parts(system: Box<dyn System>, meta: SystemMeta) -> Self {
+        Self {
+            system,
+            labels: meta.labels,
+            before: meta.before,
+            after: meta.after,
+            in_sets: meta.in_sets,
+            added_info: meta.added_info,
+            phase: meta.phase,
+            pristine_meta: None,
+        }
+    }
 }
 
 impl SystemConfig {
@@ -68,6 +124,7 @@ impl SystemConfig {
             in_sets: Vec::new(),
             added_info: AccessInfo::new(),
             phase: Phase::default(),
+            pristine_meta: None,
         }
     }
 
