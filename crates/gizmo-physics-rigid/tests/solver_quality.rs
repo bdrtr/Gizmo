@@ -641,6 +641,69 @@ fn sweep_ladder_tower() {
     }
 }
 
+/// The same tower ladder, on the SPLIT-IMPULSE path — the measurement `solver/mod.rs`'s
+/// adaptive-iterations comment says is missing.
+///
+/// The adaptive sweep count (`max(iterations, max(FLOOR, 1.5·depth))`) is consumed by the TGS
+/// branch and by nothing else. An island falls to split-impulse by containing a CCD-enabled body
+/// or by `use_tgs_soft` being off, and then gets the base count however deep it is. Whether that
+/// is a defect is a measurement question: the FLOOR/CAP numbers were fitted on TGS+block, and
+/// split-impulse corrects position through a separate pseudo-velocity pass, where more biased
+/// sweeps is not obviously more stable.
+///
+/// This walks the identical ladder with `use_tgs_soft = false`, so the two tables differ in the
+/// solver and in nothing else — same scenes, same grounds, same bound, same frame count. Read it
+/// beside `sweep_ladder_tower`.
+///
+/// What would justify extending the adaptive count: SI blowing up at 20 sweeps where it survives
+/// at 28/46. What would refute it: SI blowing up regardless (more sweeps do not help, so the
+/// fix is elsewhere) or surviving at 20 (nothing to fix). Note the blast radius either way is
+/// depth ≥ 14 on the default config — below that, `max(20, max(16, 3D/2))` is already 20.
+#[test]
+#[ignore = "measurement, not a gate — prints a table (~3 min)"]
+fn sweep_ladder_tower_split_impulse() {
+    const GROUNDS: [f32; 3] = [20.0, 100.0, 200.0];
+    eprintln!("\n=== tower on SPLIT-IMPULSE: quality vs sweep count (1500 frames, |v| bound 0.5) ===");
+    eprintln!(
+        "{:>3}  {:>7}  {:>9}  {:>12}  {:>11}  {:>11}  {:>11}",
+        "N", "sweeps", "blew/3", "earliest", "worst|v|", "worst_lean", "worst_pen"
+    );
+    for n in [16usize, 24, 32] {
+        for sweeps in LADDER {
+            let mut blew = 0;
+            let mut earliest: Option<usize> = None;
+            let (mut worst_v, mut worst_lean, mut worst_pen) = (0.0f32, 0.0f32, 0.0f32);
+            for g in GROUNDS {
+                let (mut world, bodies, origins) = scene_tower_on_ground(n, g);
+                solver_with_exact_sweeps(&mut world, sweeps);
+                // The only difference from `sweep_ladder_tower`.
+                world.solver.use_tgs_soft = false;
+                let r = run(&mut world, &bodies, &origins, 1500, 0.5);
+                if let Some(f) = r.blew_up_at {
+                    blew += 1;
+                    earliest = Some(earliest.map_or(f, |e: usize| e.min(f)));
+                }
+                worst_v = worst_v.max(r.peak_speed);
+                worst_lean = worst_lean.max(r.peak_lean);
+                worst_pen = worst_pen.max(r.final_pen_max);
+            }
+            eprintln!(
+                "{:>3}  {:>7}  {:>9}  {:>12}  {:>11.3}  {:>11.4}  {:>11.6}",
+                n,
+                sweeps,
+                blew,
+                match earliest {
+                    Some(f) => f.to_string(),
+                    None => "-".to_string(),
+                },
+                worst_v,
+                worst_lean,
+                worst_pen,
+            );
+        }
+    }
+}
+
 /// Are the raft's sweeps earned?
 ///
 /// The raft is not a settling scene — `measure_raft_behaviour` shows it is an explosion: the

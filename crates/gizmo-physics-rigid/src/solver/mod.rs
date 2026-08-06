@@ -457,8 +457,29 @@ impl ConstraintSolver {
         // however deep it is. `SolveStats` reports that honestly rather than papering over it
         // (see the note above the `SolveStats` returned at the end of this function).
         //
-        // Whether it SHOULD carry over is open, and is a measurement question, not a
-        // one-line change (audit item, 2026-08-07 — verified true, deliberately not acted on):
+        // Whether it SHOULD carry over was open. It is now MEASURED and the answer is no —
+        // `tests/solver_quality.rs::sweep_ladder_tower_split_impulse` walks the same ladder as
+        // `sweep_ladder_tower` with `use_tgs_soft = false`, so the two tables differ in the
+        // solver and nothing else. At N = 32 (well past the depth ≥ 14 where the adaptive count
+        // would change anything at all on the default config):
+        //
+        //     sweeps   TGS blew/3, lean   SI blew/3, lean
+        //          8        0,  0.0000        0,  0.0096
+        //         20        0,  0.0000        0,  0.0028   <- the default
+        //         28        0,  0.0000        0,  0.0014
+        //         46        0,  0.0000        0,  0.0033
+        //
+        // Split-impulse does not blow up at the default sweep count at ANY depth tested (16, 24,
+        // 32 — three ground sizes each); it is stable from 8 sweeps upward. So the dead adaptive
+        // count is not leaving this path under-solved, and extending it would buy lean, not
+        // stability, at a real per-island CPU cost.
+        //
+        // And it would not even buy lean reliably: the SI column is NOT monotonic — 46 sweeps
+        // (0.0033) is worse than 28 (0.0014). That is the suspicion in the third bullet below,
+        // confirmed: on a path that corrects position through a separate pseudo-velocity pass,
+        // more biased sweeps is not simply more stable.
+        //
+        // Left as it is, deliberately and now with evidence. The reasoning that was open:
         //   • The gate is keyed on `block_solver`, which only `solver/tgs.rs` ever reads. On
         //     the split-impulse path that flag means nothing, so the condition is currently
         //     testing a feature the path does not have.
