@@ -36,6 +36,25 @@ proptest = "1"
 # linker'ı çökertiyordu). Aşağıdaki iki ayar SADECE debug bilgisini etkiler; kod üretimini
 # (yani ÇALIŞMA HIZINI) belirleyen opt-level'a DOKUNULMADI → runtime performansı birebir aynı,
 # derleme/linkleme ise biraz daha hızlı. Tek ödün: debugger'da değişken-seviyesi inceleme.
+[profile.release]
+# Cross-crate inlining matters a lot here: the hot path is small functions calling across
+# gizmo-math -> gizmo-physics-core -> gizmo-physics-rigid thousands of times per frame, and
+# cargo's defaults (lto = false, codegen-units = 16) leave that on the table. Measured on this
+# machine with the local override lifted: codegen-units = 1 alone is -8.4% and -7.5% on
+# full_step_mixed/128 and /512, -5..-7% on broadphase, -20% on the dense-contact scene.
+#
+# `.cargo/config.toml` on the development machine passes `-C codegen-units=4 -C lto=off` as
+# rustflags, which win over these settings, so this section changes nothing there — it is for CI
+# and for anyone depending on the published crates, who until now got the cargo defaults.
+#
+# LTO is deliberately NOT set. `lto = "thin"` was measured on top of codegen-units = 1 and added
+# nothing on this workload: full_step_mixed/128 -0.07% and /512 +2.7%, neither significant, and
+# solver_settled_stack/48 came out +18%. It costs build time for no measured gain here. It may
+# still pay for a whole game binary linking far more crates than the physics bench does — that
+# needs a measurement this machine cannot safely run, since lifting the RAM override to link
+# wgpu and egui under LTO is what the override exists to prevent.
+codegen-units = 1
+
 [profile.dev]
 # Backtrace/panik için dosya:satır çözümünü korur, değişken-seviyesi DWARF'ı atar (binary'nin
 # en büyük parçası). Bunu bırakmak derlemeyi hafif hızlandırır.
