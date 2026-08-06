@@ -133,7 +133,8 @@ etkin yanal restoring stiffness'i buckling-kritik değerin altındaydı.
 - **Fix (2 katman):** (1) manifold **BLOCK solver** (`solver/block.rs` + `tgs.rs::
   tgs_sweep_block`) — bir manifoldun ≤4 KOPLANAR normal impulsunu BİRLİKTE çözer
   (regularize aktif-küme LCP). İki kritik detay: 4-coplanar blok RANK-EKSİK (4 temas,
-  3 DOF) → **Tikhonov reg** (`block_regularization=0.1`) şart; blok **RİJİT** kalmalı
+  3 DOF) → **Tikhonov reg** (`block_regularization`, bugün 0.05 — aşağıdaki narrowphase
+  düzeltmesi 0.1'i fazla yumuşatma hâline getirdi) şart; blok **RİJİT** kalmalı
   (soft ölçekleme zayıflatır). (2) **Tam warm-start** (`warm_start_factor` 0.85→1.0) —
   kısmi warm-start her substep %15 impuls atıp re-konverjansta marjinal enerji enjekte
   ediyordu; tam warm-start kapatır. **Sonuç: 1-genişlikte N≤32 kule kararlı** (3000 frame,
