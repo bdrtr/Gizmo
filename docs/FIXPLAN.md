@@ -535,10 +535,21 @@ client-server mesajları round-trip testleriyle birlikte taşınmalı.
 > hâlâ yok, ama test bunu artık kanıtlıyor, gizlemiyor.
 >
 > **Determinizm:** `headless_stress_test` hash'i pre-session temel değerimle aynı
-> (`EF6E4AC3644BF3BA`). Bu anlamlı bir kanıt: `RigidBody::new` varsayılanı
-> `ccd_enabled: true`, yani kuledeki 200 kutunun CCD'si AÇIK — değişiklik onları
-> etkileyebilirdi. Engage kapısı (`travel <= min_half`) düşen bir kutu için hiç
-> tetiklenmediği için etkilemiyor. Cross-process determinizm testi de geçiyor.
+> (`EF6E4AC3644BF3BA`). Cross-process determinizm testi de geçiyor.
+>
+> ⚠️ **DÜZELTME (2026-08-06, C4-followup sırasında bulundu).** Burada "bu anlamlı bir kanıt:
+> `RigidBody::new` varsayılanı `ccd_enabled: true`, yani kuledeki 200 kutunun CCD'si AÇIK"
+> yazıyordu. **Yanlış.** `RigidBody::new` (`components/rigid_body.rs:270`) `..Default::default()`
+> kullanıyor ve `Default` `ccd_enabled: false` veriyor (`:248`, blame: 2026-05-02 — yani bu
+> cümle yazıldığında da yanlıştı). `true` olan tek constructor `new_kinematic` (`:326`).
+> Sonuç ayakta — hash gerçekten değişmedi — ama **gerekçe çürük**: kulenin CCD'si kapalı
+> olduğu için değişikliğin onu etkilemesi zaten mümkün değildi, dolayısıyla değişmeyen hash
+> o turda bir şey KANITLAMIYORDU. Değişikliğin güvenliği Rung 7/8 senaryolarına dayanıyor,
+> bu hash'e değil.
+>
+> Yan sonuç, C4-followup için önemliydi: `ccd_enabled` varsayılanı kapalı olduğu için
+> `solver/mod.rs:478`'deki `use_tgs_soft && !has_ccd` kapısı sıradan sahnelerde AÇIK ve
+> gerçekten koşan çözücü TGS.
 >
 > **UYARI (analizden, kayda değer):** `headless_stress_test` **davranışı kilitlemiyor**.
 > Üç koşuyu birbiriyle karşılaştırıyor (`hashes[0]==hashes[1]==hashes[2]`), hiçbir sabitle
@@ -1500,13 +1511,43 @@ eklemekten ibaret.
   > Workspace yeşil, clippy temiz (tam CI komutu, 0 uyarı). `cargo test --workspace` ilk koşumda
   > `gizmo-engine --lib`'de bir kez düştü, tek başına ve tekrar koşumda geçti — yukarıdaki
   > **GPU test flake'i** maddesiyle tutarlı, bu değişiklikle ilgisi yok.
-- ⬜ **C4-followup — çözücüdeki `Vec<Vec<f32>>` scratch.** `solver/tgs.rs:151` her çağrıda
-  manifold başına bir iç `Vec` ayırıyor (`manifolds.iter().map(|m| vec![0.0f32; m.contacts.len()])`),
-  yani ada başına substep başına `1 + N_manifold` ayırma — narrowphase'in tamamıyla aynı payda,
-  ama reponun kare zamanının %87-91'ini ölçtüğü fazda. Saf scratch: bir kez yazılıyor
-  (`:171`), bir kez okunuyor (`:320`). Düzeltmesi tek düz `Vec<f32>` + offset tablosu.
-  `ArrayVec` OLAMAZ: `m.contacts.len()` capped değil ve `ArrayVec` taşmada panikler.
-  Ham ayırma sayısıyla bu, C4'ün tamamından büyük — ve `alloc_census` artık ölçebilir durumda.
+- ✅ **C4-followup — çözücüdeki `Vec<Vec<f32>>` scratch düzleştirildi** *(2026-08-06)*.
+  `solver/tgs.rs:151` her çağrıda manifold başına bir iç `Vec` ayırıyordu
+  (`manifolds.iter().map(|m| vec![0.0f32; m.contacts.len()])`), yani ada başına substep başına
+  `1 + N_manifold` ayırma. Artık tek düz `Vec<f32>` + offset tablosu; yazma (`:171`) ve okuma
+  (`:320`) `vn0_off[mid] + cid` ile indeksleniyor — eski `vn0[mid][cid]`'ye birebir bijeksiyon.
+  `ArrayVec` olamazdı: `m.contacts.len()` capped değil ve `ArrayVec` taşmada büyümek yerine
+  panikler.
+
+  **Yolun gerçekten koştuğu doğrulandı.** TGS yolu `use_tgs_soft && !has_ccd` kapısının arkasında
+  (`solver/mod.rs:478`) ve `has_ccd` island'daki herhangi bir cismin `ccd_enabled`'ına bakıyor.
+  `RigidBody::new` → `..Default::default()` → **`ccd_enabled: false`** (`rigid_body.rs:248`,
+  2026-05-02'den beri böyle), yani sıradan sahnelerde kapı açık ve düzelttiğim satır sıcak.
+
+  | senaryo | C4 sonrası | +followup | değişim | **HEAD `d42f287`'ye göre toplam** |
+  |---|---|---|---|---|
+  | `stack/8` (uyanık) | 161.9 | 154.4 | −4.6% | **−9.4%** |
+  | `stack/24` (uyanık) | 416.6 | 384.4 | −7.7% | **−14.6%** |
+  | `stack/24` (yerleşmiş) | 132.1 | 132.1 | 0% | 0% |
+  | `raft/64` | 2996.4 | 2728.0 | −9.0% | **−18.9%** |
+  | `raft/256` | 10902.8 | 10182.9 | −6.6% | **−14.0%** |
+
+  > **Takas, dürüstçe: ayırma SAYISI düştü, bayt biraz ARTTI.** Offset tablosu manifold başına
+  > 8 bayt ek scratch. `raft/256`'da bayt/adım 3.33 MB → 3.39 MB (**+%1.9**), aynı senaryoda
+  > ayırma sayısı −%6.6. Artışın büyüklüğü tablo boyutuyla tutarlı (aritmetiği tuttu — bu da
+  > sayacın doğru şeyi ölçtüğünün ikinci kanıtı). Maliyet malloc/free yolunda ve
+  > parçalanmada, birkaç KB scratch'te değil, o yüzden takas doğru yönde; ama sayı kaydedilsin.
+  >
+  > Yığın senaryolarında bayt da düştü (`stack/24` 147362 → 146836), çünkü orada manifold sayısı
+  > küçük ve kaybolan iç-`Vec` başlıkları tabloyu geçiyor.
+  >
+  > **Determinizm hash'i değişmedi** (`A462C9EB8A09D5CA`, 3/3). Workspace yeşil, clippy temiz.
+
+  - ⬜ **Aynı desen soğuk yolda duruyor:** `solver/mod.rs:755` (`acc_pseudo`, split-impulse
+    pozisyon pass'i) birebir aynı `Vec<Vec<f32>>` ayırmasını yapıyor. **Bilerek dokunulmadı:**
+    o yol yalnız `has_ccd` veya `use_tgs_soft = false` iken koşuyor, yani `headless_stress_test`
+    ve golden fixture'ların HİÇBİRİ oradan geçmiyor — bir hata yapsam kapılar sessiz kalırdı.
+    Kendi doğrulama senaryosunu hak ediyor.
 - ✅ **C5 — `[profile.release]` eklendi: `codegen-units = 1`** *(2026-08-06)*. Kökte hiç
   `[profile.release]` yoktu, yani CI ve **crates.io'dan bağımlı olan herkes** cargo
   varsayılanlarını alıyordu (`lto = false`, `codegen-units = 16`). Sıcak yol küçük

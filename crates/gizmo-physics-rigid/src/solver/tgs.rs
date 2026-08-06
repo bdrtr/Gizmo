@@ -148,10 +148,23 @@ impl ConstraintSolver {
         };
 
         // ── 0) Restitution için başlangıç yaklaşma hızı (warm-start ÖNCESİ) ──
-        let mut vn0: Vec<Vec<f32>> = manifolds
-            .iter()
-            .map(|m| vec![0.0f32; m.contacts.len()])
-            .collect();
+        // Tek düz tampon + offset tablosu. Eskiden `map(|m| vec![0.0f32; m.contacts.len()])`
+        // ile manifold başına bir iç `Vec` ayrılıyordu, yani ada başına substep başına
+        // `1 + N_manifold` ayırma — narrowphase'in tamamıyla aynı payda, ama kare zamanının
+        // büyük çoğunluğunu tutan fazda. Saf scratch: yalnız aşağıda bir kez yazılıyor,
+        // `Prepared` kurulurken bir kez okunuyor.
+        //
+        // `ArrayVec` OLAMAZ: `m.contacts.len()` capped değil (bkz. `ContactManifold::contacts`
+        // — box–plane 8 köşe verebilir, compound sınırsız) ve `ArrayVec` taşmada büyümek
+        // yerine panikler; step döngüsünden çağrılan bir çözücüde bu çökme demek.
+        let mut vn0_off: Vec<usize> = Vec::with_capacity(manifolds.len() + 1);
+        vn0_off.push(0);
+        let mut vn0_total = 0usize;
+        for m in manifolds.iter() {
+            vn0_total += m.contacts.len();
+            vn0_off.push(vn0_total);
+        }
+        let mut vn0 = vec![0.0f32; vn0_total];
         for mid in 0..manifolds.len() {
             let (idx_a, idx_b) = match (
                 entity_index_map.get(&manifolds[mid].entity_a.id()),
@@ -168,7 +181,7 @@ impl ConstraintSolver {
                 let r_b = ct.point - com_b;
                 let va = velocities[idx_a].linear + velocities[idx_a].angular.cross(r_a);
                 let vb = velocities[idx_b].linear + velocities[idx_b].angular.cross(r_b);
-                vn0[mid][cid] = (vb - va).dot(ct.normal);
+                vn0[vn0_off[mid] + cid] = (vb - va).dot(ct.normal);
             }
         }
 
@@ -317,7 +330,7 @@ impl ConstraintSolver {
                     static_friction,
                     restitution,
                     pen0: ct.penetration,
-                    vn0: vn0[mid][cid],
+                    vn0: vn0[vn0_off[mid] + cid],
                     mid,
                     cid,
                     acc_n: ct.normal_impulse,
