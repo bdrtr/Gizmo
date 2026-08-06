@@ -54,6 +54,10 @@ criterion = "0.8.2"
 name = "step_bench"
 harness = false
 
+[[bench]]
+name = "ecs_bridge_bench"
+harness = false
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # rayon needs OS threads → native only; wasm uses `parallel_compat` (sequential).
 rayon = "1.11.0"
