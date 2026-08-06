@@ -408,7 +408,7 @@ impl PhysicsWorld {
         let mut soft_rigid_pairs = Vec::new();
         let mut soft_soft_pairs = Vec::new();
 
-        for (entity_a, entity_b, contacts, is_trigger_a, is_trigger_b, mat_a, mat_b, is_soft) in
+        for (entity_a, entity_b, mut contacts, is_trigger_a, is_trigger_b, mat_a, mat_b, is_soft) in
             narrowphase_results
         {
             if is_soft {
@@ -454,6 +454,14 @@ impl PhysicsWorld {
                 manifold.static_friction = combined.static_friction;
                 manifold.restitution = combined.restitution;
 
+                // Snapshot the event's points from the RAW narrowphase output, BEFORE the
+                // warm-start pass below. This used to be taken at the end, and was pristine for
+                // free: the loop copied each point out with `iter().copied()` and pushed the
+                // modified COPY into the manifold, never touching `contacts`. Now that the buffer
+                // is moved into the manifold and warm-started in place, taking the snapshot late
+                // would start shipping accumulated impulses in `CollisionEvent.contact_points`.
+                let event_points: ContactPoints = contacts.iter().copied().take(4).collect();
+
                 // Warm-start: reuse impulses from the previous frame's manifold.
                 if let Some((_, Some(old_manifold))) = self.contact_cache.get(&pair) {
                     manifold.lifetime = old_manifold.lifetime + 1;
@@ -464,7 +472,7 @@ impl PhysicsWorld {
                     // Suppress it once a contact has persisted so stacks can settle.
                     manifold.restitution = 0.0;
                     let ws_tol_sq = self.solver.warm_start_match_tolerance.powi(2);
-                    for mut contact in contacts.iter().copied() {
+                    for contact in contacts.iter_mut() {
                         if let Some(old) = old_manifold
                             .contacts
                             .iter()
@@ -473,11 +481,16 @@ impl PhysicsWorld {
                             contact.normal_impulse = old.normal_impulse;
                             contact.tangent_impulse = old.tangent_impulse;
                         }
-                        manifold.contacts.push(contact);
                     }
-                } else {
-                    manifold.contacts.extend(contacts.iter().copied());
                 }
+
+                // The narrowphase's buffer IS the manifold's buffer — moved, not copied. This is
+                // one of the per-pair-per-substep heap allocations docs/AUDIT-2026-08.md counted
+                // in the contact path: `ContactManifold::new` used to malloc a second Vec and this
+                // arm memcpy'd the first one into it. Owning the Vec removes the allocation; no
+                // inline container is involved, because the narrowphase's return type is public
+                // and its count is deliberately uncapped.
+                manifold.contacts = contacts;
 
                 current_cache.insert(pair, (false, Some(manifold.clone())));
 
@@ -490,7 +503,7 @@ impl PhysicsWorld {
                     entity_a,
                     entity_b,
                     event_type,
-                    contact_points: contacts.into_iter().take(4).collect(),
+                    contact_points: event_points,
                 });
 
                 manifolds.push(manifold);

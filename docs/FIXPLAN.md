@@ -1427,8 +1427,86 @@ eklemekten ibaret.
   > bit-eş aynı kalması ENGINE.md'nin "pair-emission invariance incremental broadphase'in
   > önünü açar" notunu ampirik olarak doğruluyor. `support_ordering` varsayılan açık olduğu
   > için ada çözümü çift sırasına bağlı değil.
-- ⬜ **C4** — Temas yolunda `ArrayVec` (`narrowphase/mod.rs:400-407`); rewind geçmişi opt-in
-  (`world/step.rs:122-128` her frame tam klon).
+- ✅ **C4 — temas yolundaki ayırmalar** *(2026-08-06)*. İki yarısı vardı:
+  - **C4a — rewind geçmişi opt-in** *(ab1405e)*: `max_history_frames` varsayılanı 600 → 0,
+    ve 0'da kare başına klon tamamen atlanıyor. **Bu commit'lendi ama bu satır güncellenmedi**,
+    dolayısıyla C4 iki oturum boyunca yapılmamış göründü. Kayda geçiyor.
+  - **C4b — `ArrayVec` yarısı**: aşağıdaki gibi, ve **denetimin teşhisi büyük ölçüde yanlıştı.**
+
+  > **DENETİM BU MADDEDE YANILDI — kayda geçiyor.** Bulgu şuydu: "temas çifti başına substep
+  > başına 2-3 heap ayırma — `ArrayVec` tipi var, sıcak yolda kullanılmıyor"
+  > (`narrowphase/mod.rs:400-407`). Sayı doğru, **çözüm yanlış.** `clip_box_box`'ın tamponunu
+  > `ArrayVec<ContactPoint, 8>` yapmak **sıfır** ayırma siler: `box_box` da
+  > `test_collision_manifold` da `Vec<ContactPoint>` döndürüyor ve ikisi de public, yani inline
+  > tampon o sınırda tekrar `Vec`'e `collect` edilmek zorunda — malloc silinmiyor, yer
+  > değiştiriyor. `ArrayVec`'in bir ayırma silebilmesinin tek yolu **public dönüş tipini
+  > değiştirmek**, o da 0.9.0'da semver kırıcı ve doğrudan "sayı capped DEĞİL" sözleşmesine
+  > çarpıyor.
+  >
+  > **Denetimin neden öyle gördüğü de bulundu:** denetim commit'inde (`6d9c2b1`) o satırlar
+  > `test_collision_manifold`'un imzasıydı ve dokümanı "Return up to 4 contact points" diyordu.
+  > Denetçi bunu okuyup `collision.rs`'te kullanılmadan duran `ContactPoints`'i
+  > (`ArrayVec<_,4>`) görünce drop-in swap sandı. Doküman o zamandan beri düzeltilmiş
+  > ("**The returned count is not capped.**") — yani madde, reponun kendi geri aldığı bir
+  > iddiaya dayanıyordu.
+
+  **Yapılan — ayırma bir taşımayla silindi, inline tiple değil:**
+  1. **`manifold.contacts = contacts`** (`pipeline.rs`). `ContactManifold::new`
+     `Vec::with_capacity(4)` ile ikinci bir tampon malloc'luyor, boru hattı da narrowphase'in
+     tamponunu onun içine memcpy'liyordu. Artık narrowphase'in tamponu **manifold'un tamponu**.
+     `new` içindeki `with_capacity(4)` → `Vec::new()` (ayırmıyor), yoksa taşıma taze malloc'lanmış
+     bir bloğu düşürürdü ve değişiklik net zarar olurdu.
+     - Sıralama tuzağı: `CollisionEvent.contact_points` artık warm-start'tan **önce**
+       anlık görüntüleniyor. Eskiden bedavaya temizdi (döngü `iter().copied()` ile kopya üzerinde
+       çalışıp `contacts`'a hiç dokunmuyordu); yerinde warm-start'la birlikte geç alınsaydı
+       olaya birikmiş impulslar sızardı.
+  2. **`select_4_contacts`** (`narrowphase/contacts.rs`) — `vec![i0]` (+ ilk push'ta 1→4 realloc)
+     ve sondaki `collect()` gitti: indeks kümesi `ArrayVec<usize, 4>`, sonuç girdi tamponuna
+     geri dolduruluyor. Maddenin adını hak eden tek yer burası (`ContactPoints` zaten
+     `ArrayVec`'ti). Sadece >4 köşe hayatta kaldığında ateşliyor.
+  3. **`shape_trimesh`** (`narrowphase/mod.rs`) — üçgen-as-hull sarmalayıcısı döngüden
+     **çıkarıldı**. İçeride `Arc::new(verts.clone())` (Vec + ArcInner) ve `Arc::new(Vec::new())`
+     ile **aday üçgen başına 3 ayırma** yapıyordu — dosyadaki en yoğun ayırma noktası, ve
+     hiçbir container swap'in düzeltemeyeceği bir tanesi (`ConvexHullShape` tanımı gereği
+     `Arc<Vec<_>>` tutuyor). Şimdi bir kez kurulup `Arc::make_mut` ile yerinde dolduruluyor.
+  4. **Beş bayat doküman satırı düzeltildi** — hepsi kodun uygulamadığı bir 4-nokta tavanı
+     iddia ediyordu. En tehlikelisi: "sonucu `ContactManifold::add_contact`'ten geçir, 4-nokta
+     indirgemesini uygular." **`add_contact`'in üretimde hiç çağıranı yok** (yalnız kendi
+     `#[cfg(test)]` bloğu); boru hattı `manifold.contacts`'a doğrudan yazıyor ve çözücü hepsini
+     tüketiyor. O cümleden yola çıkıp cap-4 bir tampon boyutlandıran biri, `tgs.rs:345-352`'nin
+     yorumunun bizzat anlattığı hatayı geri getirirdi.
+
+  **Ölçüldü — `examples/alloc_census.rs` ile** (yeni; sayan bir global allocator, adım başına
+  ayırma sayar). Wall-clock'la ölçülemez: hiçbir commit'li senaryo narrowphase'i izole etmiyor
+  (`step_bench.rs`'in kendi başlığı söylüyor — 1024 cisimde bölüşüm broadphase 25 / narrowphase
+  36 / solver 669 ms), ama ayırma **sayısı** tam olarak değişen şey ve koşumdan koşuma birebir
+  tekrarlanabilir. HEAD (`d42f287`) temiz kopyasına karşı:
+
+  | senaryo | önce (ayırma/adım) | sonra | değişim | bayt/adım değişimi |
+  |---|---|---|---|---|
+  | `stack/8` (uyanık) | 170.4 | 161.9 | **−5.0%** | −5.0% |
+  | `stack/24` (uyanık) | 450.2 | 416.6 | **−7.5%** | −5.8% |
+  | `stack/24` (yerleşmiş) | 132.1 | 132.1 | 0% | 0% |
+  | `raft/64` | 3362.0 | 2996.4 | **−10.9%** | −9.7% |
+  | `raft/256` | 11836.2 | 10902.8 | **−7.9%** | −8.5% |
+
+  > Yerleşmiş yığındaki **sıfır** bir kusur değil, aracın doğru ölçtüğünün kanıtı: ada-kolektif
+  > uykudan sonra dormant çiftler narrowphase'i tamamen atlıyor, yani silinecek ayırma yok.
+  >
+  > **Determinizm hash'i değişmedi** (`A462C9EB8A09D5CA`, 3/3). Beklenen: hiçbir değer, sıra veya
+  > aritmetik değişmiyor — yalnız noktaların hangi heap bloğunda durduğu. Yığın senaryosu %100
+  > box-box olduğu için (2) yanlış yapılsa hash bunu yakalardı.
+  >
+  > Workspace yeşil, clippy temiz (tam CI komutu, 0 uyarı). `cargo test --workspace` ilk koşumda
+  > `gizmo-engine --lib`'de bir kez düştü, tek başına ve tekrar koşumda geçti — yukarıdaki
+  > **GPU test flake'i** maddesiyle tutarlı, bu değişiklikle ilgisi yok.
+- ⬜ **C4-followup — çözücüdeki `Vec<Vec<f32>>` scratch.** `solver/tgs.rs:151` her çağrıda
+  manifold başına bir iç `Vec` ayırıyor (`manifolds.iter().map(|m| vec![0.0f32; m.contacts.len()])`),
+  yani ada başına substep başına `1 + N_manifold` ayırma — narrowphase'in tamamıyla aynı payda,
+  ama reponun kare zamanının %87-91'ini ölçtüğü fazda. Saf scratch: bir kez yazılıyor
+  (`:171`), bir kez okunuyor (`:320`). Düzeltmesi tek düz `Vec<f32>` + offset tablosu.
+  `ArrayVec` OLAMAZ: `m.contacts.len()` capped değil ve `ArrayVec` taşmada panikler.
+  Ham ayırma sayısıyla bu, C4'ün tamamından büyük — ve `alloc_census` artık ölçebilir durumda.
 - ✅ **C5 — `[profile.release]` eklendi: `codegen-units = 1`** *(2026-08-06)*. Kökte hiç
   `[profile.release]` yoktu, yani CI ve **crates.io'dan bağımlı olan herkes** cargo
   varsayılanlarını alıyordu (`lto = false`, `codegen-units = 16`). Sıcak yol küçük

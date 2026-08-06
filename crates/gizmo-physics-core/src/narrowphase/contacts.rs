@@ -77,7 +77,7 @@ pub(super) fn mk_contact(point: Vec3, normal: Vec3, penetration: f32) -> Contact
 
 /// Reduce `contacts` to the 4 points that best represent the contact patch:
 /// deepest point first, then 3 more selected for maximum area coverage.
-fn select_4_contacts(contacts: Vec<ContactPoint>) -> Vec<ContactPoint> {
+fn select_4_contacts(mut contacts: Vec<ContactPoint>) -> Vec<ContactPoint> {
     if contacts.len() <= 4 {
         return contacts;
     }
@@ -89,13 +89,17 @@ fn select_4_contacts(contacts: Vec<ContactPoint>) -> Vec<ContactPoint> {
         .max_by(|&a, &b| contacts[a].penetration.total_cmp(&contacts[b].penetration))
         .unwrap();
 
-    let mut chosen = vec![i0];
+    // Inline, because this branch keeps exactly 4 out of more than 4 — the index set cannot
+    // outgrow the array. `vec![i0]` allocated for a single `usize` and then reallocated 1 -> 4
+    // on the first push below, two allocations per reduced contact set per substep.
+    //
+    // The `chosen.len() == n` guard the loop used to carry is gone with it: `n > 4` on this
+    // branch and the capacity is 4, so it could never fire.
+    let mut chosen: arrayvec::ArrayVec<usize, 4> = arrayvec::ArrayVec::new();
+    chosen.push(i0);
 
     // Steps 2-4 — greedily maximise minimum distance to already-chosen set.
     for _ in 0..3 {
-        if chosen.len() == n {
-            break;
-        }
         let next = (0..n).filter(|i| !chosen.contains(i)).max_by(|&a, &b| {
             let da = chosen
                 .iter()
@@ -112,7 +116,21 @@ fn select_4_contacts(contacts: Vec<ContactPoint>) -> Vec<ContactPoint> {
         }
     }
 
-    chosen.iter().map(|&i| contacts[i]).collect()
+    // Refill the input buffer instead of collecting into a fresh one. It holds more than 4
+    // elements on this branch, so it already has the capacity for the at-most-4 we keep and
+    // `extend_from_slice` after `clear` provably cannot reallocate.
+    //
+    // Staging through a stack array is not optional: the kept order is CHOSEN order — deepest
+    // first, then the three greedy spread picks — not ascending index order, so the points
+    // cannot be compacted in place with a retain-style sweep without changing the output.
+    let mut picked = [ContactPoint::default(); 4];
+    for (slot, &i) in chosen.iter().enumerate() {
+        picked[slot] = contacts[i];
+    }
+    let kept = chosen.len();
+    contacts.clear();
+    contacts.extend_from_slice(&picked[..kept]);
+    contacts
 }
 
 /// Sutherland–Hodgman box-vs-box clip.
