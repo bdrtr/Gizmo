@@ -751,11 +751,20 @@ impl ConstraintSolver {
         // Bu pass penetrasyon düzeltmesini velocity kanalından ayırır.
         // Birikimli pseudo-impulse takibi ile over-correction engellenir.
         if self.split_impulse_enabled {
-            // Per-contact birikimli pseudo-impulse (PGS clamping için)
-            let mut acc_pseudo: Vec<Vec<f32>> = manifolds
-                .iter()
-                .map(|m| vec![0.0f32; m.contacts.len()])
-                .collect();
+            // Per-contact birikimli pseudo-impulse (PGS clamping için).
+            //
+            // Tek düz tampon + offset tablosu; `solve_contacts_tgs`'in `vn0`'ıyla aynı düzeltme
+            // (C4-followup). Eskiden manifold başına bir iç `Vec` ayrılıyordu, yani ada başına
+            // substep başına `1 + N_manifold` ayırma. `ArrayVec` olamaz: `m.contacts.len()`
+            // capped değil ve `ArrayVec` taşmada panikler.
+            let mut acc_off: Vec<usize> = Vec::with_capacity(manifolds.len() + 1);
+            acc_off.push(0);
+            let mut acc_total = 0usize;
+            for m in manifolds.iter() {
+                acc_total += m.contacts.len();
+                acc_off.push(acc_total);
+            }
+            let mut acc_pseudo = vec![0.0f32; acc_total];
 
             let pos_iterations = (self.iterations / 2).max(4);
             for _ in 0..pos_iterations {
@@ -831,10 +840,11 @@ impl ConstraintSolver {
                         let delta_p = (-pv_rel + bias) / k_n;
 
                         // Birikimli clamp: toplam pseudo-impulse ≥ 0 (çekme yok)
-                        let old_acc = acc_pseudo[mid][cid];
+                        let acc_i = acc_off[mid] + cid;
+                        let old_acc = acc_pseudo[acc_i];
                         let new_acc = (old_acc + delta_p).max(0.0);
                         let actual_delta = new_acc - old_acc;
-                        acc_pseudo[mid][cid] = new_acc;
+                        acc_pseudo[acc_i] = new_acc;
 
                         let imp_p = normal * actual_delta;
                         if dyn_a {

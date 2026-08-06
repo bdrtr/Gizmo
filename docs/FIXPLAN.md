@@ -1634,11 +1634,24 @@ eklemekten ibaret.
   >
   > **Determinizm hash'i değişmedi** (`A462C9EB8A09D5CA`, 3/3). Workspace yeşil, clippy temiz.
 
-  - ⬜ **Aynı desen soğuk yolda duruyor:** `solver/mod.rs:755` (`acc_pseudo`, split-impulse
-    pozisyon pass'i) birebir aynı `Vec<Vec<f32>>` ayırmasını yapıyor. **Bilerek dokunulmadı:**
-    o yol yalnız `has_ccd` veya `use_tgs_soft = false` iken koşuyor, yani `headless_stress_test`
-    ve golden fixture'ların HİÇBİRİ oradan geçmiyor — bir hata yapsam kapılar sessiz kalırdı.
-    Kendi doğrulama senaryosunu hak ediyor.
+  - ✅ **Aynı desen soğuk yolda da düzeltildi** *(2026-08-06)*. `solver/mod.rs:755`
+    (`acc_pseudo`, split-impulse pozisyon pass'i) birebir aynı `Vec<Vec<f32>>` ayırmasını
+    yapıyordu; aynı düzleştirme uygulandı (`acc_off[mid] + cid`).
+
+    > ⚠️ **BURADA YAZDIĞIM GEREKÇE YANLIŞTI, düzeltiyorum.** "Bilerek dokunulmadı: o yol yalnız
+    > `has_ccd` veya `use_tgs_soft = false` iken koşuyor, yani `headless_stress_test` ve golden
+    > fixture'ların HİÇBİRİ oradan geçmiyor — bir hata yapsam kapılar sessiz kalırdı" demiştim.
+    > **Kapı var.** Ölçtüm: o satıra geçici bir `panic!` koyup varsayılan test paketini
+    > koşturdum — `tests/ccd.rs` (8 test, hiçbiri `#[ignore]` değil) ve `ccd_analytical.rs`
+    > (9 test) doğrudan oradan geçiyor, çünkü CCD'li gövde içeren island `has_ccd` kapısıyla
+    > SI yoluna düşüyor. Yani yol kapı altındaydı; ben yanlış varsaymışım.
+    >
+    > `use_tgs_soft = false` örtüsü gerçekten yalnız `#[ignore]`'lı bir tanı taramasında
+    > (`soak_and_golden.rs::sweep_resting_stack_configs`) — ilk notumu yazarken muhtemelen
+    > ona bakıp genellemişim. CCD yolu aklıma gelmemiş.
+    >
+    > **Doğrulama:** `tests/ccd` 8/8 + `ccd_analytical` 9/9, determinizm hash'i değişmedi
+    > (`A462C9EB8A09D5CA`, 3/3), `cargo test --workspace` exit 0, clippy temiz.
 - ✅ **C5 — `[profile.release]` eklendi: `codegen-units = 1`** *(2026-08-06)*. Kökte hiç
   `[profile.release]` yoktu, yani CI ve **crates.io'dan bağımlı olan herkes** cargo
   varsayılanlarını alıyordu (`lto = false`, `codegen-units = 16`). Sıcak yol küçük
