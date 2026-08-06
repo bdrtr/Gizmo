@@ -240,6 +240,20 @@ pub fn connection_config() -> ConnectionConfig {
 
 #[cfg(test)]
 mod tests {
+
+    /// Test-local codec, mirroring `rollback::transport`'s: bincode 2 with the LEGACY config, so
+    /// these round-trips exercise the same encoding the wire uses rather than 2.x's varint
+    /// default. Kept here rather than shared because `client_server` and `rollback` are separate
+    /// protocols behind separate features — one accidentally following the other's config change
+    /// is precisely the failure this comment exists to prevent.
+    fn enc<T: serde::Serialize>(v: &T) -> Vec<u8> {
+        bincode::serde::encode_to_vec(v, bincode::config::legacy()).unwrap()
+    }
+    fn dec<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> T {
+        bincode::serde::decode_from_slice::<T, _>(bytes, bincode::config::legacy())
+            .unwrap()
+            .0
+    }
     use super::*;
 
     #[test]
@@ -260,15 +274,15 @@ mod tests {
     #[test]
     fn client_input_roundtrip() {
         let input = PlayerInput { tick: 42, move_x: 1.0, move_z: -0.5, jump: true, dt: 0.016 };
-        let bytes = bincode::serialize(&ClientMessage::Input(input)).unwrap();
-        let ClientMessage::Input(back) = bincode::deserialize(&bytes).unwrap();
+        let bytes = enc(&ClientMessage::Input(input));
+        let ClientMessage::Input(back) = dec(&bytes);
         assert_eq!(back, input);
     }
 
     #[test]
     fn input_ack_roundtrip() {
-        let bytes = bincode::serialize(&ServerMessage::InputAck { last_processed_input: 7 }).unwrap();
-        match bincode::deserialize::<ServerMessage>(&bytes).unwrap() {
+        let bytes = enc(&ServerMessage::InputAck { last_processed_input: 7 });
+        match dec::<ServerMessage>(&bytes) {
             ServerMessage::InputAck { last_processed_input } => assert_eq!(last_processed_input, 7),
             other => panic!("beklenmeyen varyant: {other:?}"),
         }
@@ -278,8 +292,8 @@ mod tests {
     fn world_state_roundtrip() {
         let mut players = HashMap::new();
         players.insert(1u64, TransformData { position: [1.0, 2.0, 3.0], rotation: [0.0, 0.0, 0.0, 1.0] });
-        let bytes = bincode::serialize(&ServerMessage::WorldStateUpdate { server_tick: 100, players }).unwrap();
-        match bincode::deserialize::<ServerMessage>(&bytes).unwrap() {
+        let bytes = enc(&ServerMessage::WorldStateUpdate { server_tick: 100, players });
+        match dec::<ServerMessage>(&bytes) {
             ServerMessage::WorldStateUpdate { server_tick, players } => {
                 assert_eq!(server_tick, 100);
                 assert_eq!(players[&1].position, [1.0, 2.0, 3.0]);
@@ -290,8 +304,8 @@ mod tests {
 
     #[test]
     fn player_connected_roundtrip() {
-        let bytes = bincode::serialize(&ServerMessage::PlayerConnected { client_id: 77 }).unwrap();
-        match bincode::deserialize::<ServerMessage>(&bytes).unwrap() {
+        let bytes = enc(&ServerMessage::PlayerConnected { client_id: 77 });
+        match dec::<ServerMessage>(&bytes) {
             ServerMessage::PlayerConnected { client_id } => assert_eq!(client_id, 77),
             other => panic!("beklenmeyen varyant: {other:?}"),
         }
@@ -302,8 +316,8 @@ mod tests {
     fn player_disconnected_roundtrip_preserves_full_64bit_id() {
         let big = 0x1234_5678_9ABC_DEF0u64;
         let bytes =
-            bincode::serialize(&ServerMessage::PlayerDisconnected { client_id: big }).unwrap();
-        match bincode::deserialize::<ServerMessage>(&bytes).unwrap() {
+            enc(&ServerMessage::PlayerDisconnected { client_id: big });
+        match dec::<ServerMessage>(&bytes) {
             ServerMessage::PlayerDisconnected { client_id } => assert_eq!(client_id, big),
             other => panic!("beklenmeyen varyant: {other:?}"),
         }
@@ -334,8 +348,8 @@ mod tests {
         players.insert(1u64, TransformData { position: [1.0, 2.0, 3.0], rotation: [0.1, 0.2, 0.3, 0.9] });
         players.insert(9u64, TransformData { position: [-4.0, 5.5, 6.0], rotation: [0.0, 0.0, 1.0, 0.0] });
         let bytes =
-            bincode::serialize(&ServerMessage::WorldStateUpdate { server_tick: 42, players }).unwrap();
-        match bincode::deserialize::<ServerMessage>(&bytes).unwrap() {
+            enc(&ServerMessage::WorldStateUpdate { server_tick: 42, players });
+        match dec::<ServerMessage>(&bytes) {
             ServerMessage::WorldStateUpdate { server_tick, players } => {
                 assert_eq!(server_tick, 42);
                 assert_eq!(players.len(), 2);

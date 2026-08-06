@@ -235,9 +235,37 @@ gizliyor ama fizik crate'lerini bağımsız paketlemeyi (D1) zorlaştırıyor ve
 > grafik yığını (wgpu/winit/egui/naga) tek PR'da gruplanıyor — MSRV'yi birlikte etkiliyorlar;
 > `glam` major'ı ise bilinçli olarak **ignore** (public dep, D5 ile planlı yapılacak).
 
-### ⬜ A6-followup — `bincode` 1.x → 2.x (gizmo-net)
-Bakımsız ve doğrudan bağımlılık. Wire formatı değiştiği için rollback snapshot'ı ve
-client-server mesajları round-trip testleriyle birlikte taşınmalı.
+### 🔄 A6-followup — `bincode` 1.x → 2.x *(2026-08-07)*: **geçiş yapıldı, ama uyarı KAPANMADI**
+
+**Maddenin varsayımı yanlıştı ve bunu ancak ölçünce gördüm.** "2.x'e geç, `cargo deny` sussun"
+diyordu. RUSTSEC-2025-0141 "bincode 1.x eski" demiyor: bincode ekibi geliştirmeyi **kalıcı olarak
+durdurdu**, yani uyarı crate'in TAMAMINI kapsıyor. `cargo deny` `bincode 2.0.1`'i de birebir aynı
+şekilde işaretliyor ve uyarının kendi metni "**No safe upgrade is available**" diyor. Önerdiği
+alternatifler (postcard, bitcode, rkyv, wincode) sürüm değil, **başka serializer'lar**.
+
+Muafiyet bu yüzden `deny.toml`'da KALDI — ama gerekçesi düzeltildi; eskisi "çözüm 2.x'e geçmek"
+diyordu ve bu yanlıştı.
+
+**Yine de geçiş yapıldı, çünkü kendi başına kazanç:** bakımı sürdürülen sürüm hattı (2.0.1),
+daha iyi API, ve 1.x'in kendi sorunları. `gizmo-net` **ve `server`** geçirildi — `server/`
+ilk taramamda gözden kaçmıştı ve bincode 1'i grafta tek başına tutuyordu; ancak muafiyeti
+kaldırıp `cargo deny`'ın düşmesiyle ortaya çıktı.
+
+> **Wire formatı bayt bayt korundu, ve bu ölçüldü.** Kritik ayrıntı: bincode 2'nin
+> `config::standard()`'ı **varint** kullanıyor, yani aynı paketi farklı baytlara çeviriyor ve iki
+> eş sessizce anlaşamaz hâle gelirdi. `config::legacy()` 1.x'i birebir üretiyor.
+>
+> **Round-trip testleri bu ikisini AYIRT EDEMEZ** — ikisinde de encode/decode başarılı. O yüzden
+> önce bincode 1 ile `tests/wire_format.rs`'e **altın bayt vektörleri** yakalandı, sonra geçiş
+> yapıldı; aynı baytlar hâlâ çıkıyor. Test dosyası bir de kesik datagram reddini pinliyor:
+> bincode 1'in `deserialize`'ı artık baytı reddediyordu, 2.x'in `decode_from_slice`'ı kaç bayt
+> okuduğunu döndürüp kuyruğa razı oluyor — katılık `decode_packet` içinde elle geri kondu.
+>
+> Config artık tek bir yerde (`transport::WIRE_CONFIG`); iki çağrı yerinin kendi config'ini
+> seçmesi wire formatının sessizce kayması demek.
+
+- ⬜ **Kalan karar:** bincode'dan tamamen çıkmak (postcard/bitcode/rkyv). Wire kırılması,
+  kendi benchmark'ı ve kendi turunu isteyen ayrı bir karar.
 
 ### ✅ A9 — 0.9.0 sürüm bump'ı
 > **Bitti (2026-08-04).** `0.8.1` değil **`0.9.0`**: bu turda üç public imza değişti

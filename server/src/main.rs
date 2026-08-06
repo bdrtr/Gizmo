@@ -52,7 +52,7 @@ pub fn server_network_system(world: &World, dt: f32) {
                 .receive_message(client_id, ClientChannel::Command)
             {
                 if let Ok(ClientMessage::Input(input)) =
-                    bincode::deserialize::<ClientMessage>(&message)
+                    bincode::serde::decode_from_slice::<ClientMessage, _>(&message, WIRE_CONFIG).map(|(v, _)| v)
                 {
                     // Otoriter fizik burada uygulanır (demo: no-op).
                     // Bu istemciden işlenen son girdi tick'ini ACK olarak kaydet.
@@ -70,7 +70,7 @@ pub fn server_network_system(world: &World, dt: f32) {
         }
 
         for msg in messages_to_broadcast {
-            if let Ok(serialized) = bincode::serialize(&msg) {
+            if let Ok(serialized) = bincode::serde::encode_to_vec(&msg, WIRE_CONFIG) {
                 server_res
                     .server
                     .broadcast_message(ServerChannel::Reliable, serialized);
@@ -107,9 +107,9 @@ pub fn server_network_system(world: &World, dt: f32) {
                 .collect()
         };
         for (cid, last_processed_input) in acks {
-            if let Ok(serialized) = bincode::serialize(&ServerMessage::InputAck {
+            if let Ok(serialized) = bincode::serde::encode_to_vec(&ServerMessage::InputAck {
                 last_processed_input,
-            }) {
+            }, WIRE_CONFIG) {
                 server_res
                     .server
                     .send_message(cid, ServerChannel::Reliable, serialized);
@@ -122,10 +122,10 @@ pub fn server_network_system(world: &World, dt: f32) {
             st.tick = st.tick.wrapping_add(1);
             st.tick
         };
-        if let Ok(serialized) = bincode::serialize(&ServerMessage::WorldStateUpdate {
+        if let Ok(serialized) = bincode::serde::encode_to_vec(&ServerMessage::WorldStateUpdate {
             server_tick,
             players: players_map,
-        }) {
+        }, WIRE_CONFIG) {
             server_res
                 .server
                 .broadcast_message(ServerChannel::Unreliable, serialized);
@@ -134,6 +134,14 @@ pub fn server_network_system(world: &World, dt: f32) {
         server_res.send_packets();
     }
 }
+
+/// Same wire configuration as `gizmo_net::rollback::transport::WIRE_CONFIG`: bincode 2 with the
+/// LEGACY layout, not 2.x's varint `standard()`. The bytes are therefore byte-identical to what
+/// bincode 1 produced, so a client built before this migration still understands this server.
+const WIRE_CONFIG: bincode::config::Configuration<
+    bincode::config::LittleEndian,
+    bincode::config::Fixint,
+> = bincode::config::legacy();
 
 fn main() {
     println!("--- Gizmo Server: Başlatılıyor (Veloren Headless Modeli) ---");

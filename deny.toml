@@ -44,13 +44,23 @@ ignore = [
   { id = "RUSTSEC-2026-0194", reason = "quick-xml: DoS on hostile XML; pinned by wayland-scanner, which parses build-time protocol files" },
   { id = "RUSTSEC-2026-0195", reason = "quick-xml: as above — same crate, same unreachable-upgrade situation" },
 
-  # ── Unmaintained, OURS to fix ─────────────────────────────────────────────
-  # `bincode 1.3.3` is a DIRECT dependency of gizmo-net (Cargo.toml) and is the wire
-  # format for rollback snapshots and client-server messages. bincode 2.x exists, but
-  # changing a netcode serializer is a wire-compat break that needs its own change and
-  # its own round-trip tests — it is tracked in docs/FIXPLAN.md rather than smuggled
-  # into a supply-chain commit. This is the one entry here that is a real to-do.
-  { id = "RUSTSEC-2025-0141", reason = "bincode 1.x unmaintained; direct dep of gizmo-net, migration to 2.x tracked in docs/FIXPLAN.md" },
+  # ── Unmaintained, and NOT fixable by an upgrade ───────────────────────────
+  # RUSTSEC-2025-0141 is not "bincode 1.x is old". The bincode team stopped development
+  # permanently, so the advisory covers the WHOLE crate — cargo deny flags `bincode 2.0.1`
+  # exactly as it flagged 1.3.3, and the advisory itself says "No safe upgrade is available".
+  # Its suggested alternatives (postcard, bitcode, rkyv, wincode) are different serializers,
+  # not versions.
+  #
+  # This entry used to say the fix was migrating to 2.x. That was WRONG, and finding out cost
+  # a round trip: gizmo-net and server DID move to 2.x on 2026-08-07 (a real improvement — the
+  # maintained release line, a better API, and the wire format preserved byte-for-byte by
+  # `config::legacy()`, pinned in gizmo-net/tests/wire_format.rs), and the advisory did not
+  # move at all.
+  #
+  # Leaving bincode is therefore a separate decision about which serializer this project wants,
+  # with its own wire break and its own benchmarks — tracked in docs/FIXPLAN.md, not smuggled
+  # into a supply-chain commit.
+  { id = "RUSTSEC-2025-0141", reason = "bincode is unmaintained at every version; no in-family upgrade clears it. Migrated 1.x -> 2.x anyway; leaving the crate entirely is a separate decision (see FIXPLAN A6-followup)" },
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────
