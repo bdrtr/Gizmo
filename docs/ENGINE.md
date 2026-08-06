@@ -142,6 +142,24 @@ etkin yanal restoring stiffness'i buckling-kritik değerin altındaydı.
 - **AÇIK:** N≥48 aşırı kule hâlâ buckle olur — friction-aware whole-chain direct/global
   solver gerek (`direct_chain_solve` opt-in flag + `solve_island_normals` yalnız normal
   çözüyor, O(n³)). `soak_extreme_tower_n48` #[ignore].
+**Tam temasta manifold TEK NOKTAYA düşüyordu — ÇÖZÜLDÜ** *(2026-08-06)*.
+`narrowphase/contacts.rs::clip_box_box` derinlik testi toleranssızdı (`signed_depth <= 0.0`).
+Tam temasta dört köşenin de derinliği tam sıfır → hepsi elenip kırpma boş dönüyor → çift
+GJK'nın **tek nokta** yedeğine düşüyordu. Tek noktalı manifold sıfır tilt-restoring tork taşır
+(blok çözücünün varlık sebebi tam da bu) ve GJK'nın döndürdüğü nokta merkezde değil: ofseti
+karşı çarpışıcının boyutuyla büyüyüp duran kutunun kenarına varıyor, hak edilmemiş bir tork
+darbesi uyguluyordu. Yarı-boyutu ≲1.5 desteklerde arayüz hiç toparlamıyordu (merkezdeki nokta
+kutuyu torksuz tutuyor → hiç batmıyor → kırpma yoluna bir daha girilmiyor).
+- **Fix:** slab testinin zaten taşıdığı türden bir tolerans (`DEPTH_TOLERANCE = 1e-4`).
+- **Sonuç:** her destek boyutunda doğumda da kararlı halde de 4 köşe noktası; doğum darbesi
+  0.03 rad/s → **0**; küçük platformdaki 12 katlı kulenin lean'i 0.024 → **0.0000**.
+- **Ortaya çıkardığı yakınsama bedeli:** `block_regularization` 0.1 → **0.05**. Maliyet
+  4-noktalı arayüzün kendisinde ve hep oradaydı (1 mm örtüşen zincir birebir aynı yavaşlıkta);
+  tolerans onu gizleyen dejenere noktayı kaldırdı. Bir Tikhonov terimi aynı zamanda bir
+  yumuşatmadır ve 0.1, terimin hiç uygulanmadığı dönemde seçilmişti. 0.05'te sıkıştırılmış
+  zincir 379 kare yerine 0. karede dinleniyor ve momentum sızıntısı 5.4e-4 → 4e-6.
+- **Determinizm re-bless:** `46EB56180318E43C` → `15D4FD6845119D8B` (3/3).
+
 **Kısmi uyku istifleri bozuyordu — ÇÖZÜLDÜ** *(2026-08-06)*. Bir cisim, temas adasının ortasında
 uykuya dalınca artık ENTEGRE EDİLMİYOR ama hâlâ ÇÖZÜLÜYOR: `solver/tgs.rs` kütlesini uyku
 durumuna bakmadan okuyor, tek kapı `is_dynamic()`. Uyanık komşu tepkinin payını alıyor, uyuyan

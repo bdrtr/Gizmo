@@ -1089,10 +1089,48 @@ eklemekten ibaret.
   noktası taşıyor — blok çözücünün varsayımı kararlı halde SAĞLAM, sorun yalnız doğumda),
   `does_a_bigger_ground_degrade_the_contact`.
 
-  - ⬜ **Aday düzeltme, HENÜZ UYGULANMADI:** derinlik testine slab testindekiyle aynı türden bir
-    tolerans (speculative margin) ver → tam temasta 4 nokta. Tek satır, ama narrowphase'in
-    tamamını ve determinizm hash'ini etkiler. Bu oturumun kalite ölçütü tam olarak bunu
-    ölçmek için var; ölçmeden uygulanmayacak (bkz. `ba9224b`'deki ders).
+  - ✅ **DÜZELTİLDİ** *(2026-08-06)*. `clip_box_box`'ın derinlik testine, hemen altındaki slab
+    testinin zaten taşıdığı türden bir tolerans verildi: `signed_depth <= 0.0` →
+    `signed_depth < -DEPTH_TOLERANCE` (1e-4). Sonuç **her destek boyutunda doğumda da kararlı
+    halde de 4 köşe noktası**, ve dejenere tek nokta tamamen ortadan kalktı.
+
+    | ölçüm | öncesi | sonrası |
+    |---|---|---|
+    | doğum darbesi \|Δω\| (destek 2 → 1000) | 0.0284 → 0.0307 | **tam 0.000000, hepsinde** |
+    | kalıcı tek nokta (destek ≤ 1.5) | var | **yok** |
+    | küçük platform, 12 katlı kule lean | destek 1.5'te 0.0240, 20'de 0.0001 | **her destekte 0.0000** |
+    | yükseklik-6 / yükseklik-12 / geniş blok | 0/9, geçiyor, 20/20 | 0/9, geçiyor, **20/20** |
+
+  - ✅ **Ve ortaya çıkardığı yakınsama bedeli de çözüldü: `block_regularization` 0.1 → 0.05.**
+    Düzeltme serbest zinciri yavaşlattı (n=24, varsayılan sweep: 3 → 379 kare, momentum
+    sızıntısı 3e-6 → 5.4e-4). Sebep ölçüldü ve **benim değişikliğim değildi**: 1 mm ÖRTÜŞEN
+    zincir — ki o zaten hep 4 noktalıydı — birebir aynı yavaşlığı gösteriyor
+    (`is_the_chain_slow_because_of_four_points_or_zero_penetration`). Yani maliyet 4-noktalı
+    arayüzün kendisinde ve hep oradaydı; tolerans yalnızca onu gizleyen dejenere tek noktayı
+    kaldırdı. "Öncesi"ndeki 3 kare artefaktmış.
+
+    > Kaldıraç `block_regularization` çıktı: 4-koplanar blok rank-eksik olduğu için Tikhonov
+    > terimi alıyor, ve bir regülarizasyon terimi aynı zamanda bir YUMUŞATMADIR. Tek noktalı
+    > manifoldda rank eksikliği yoktu, dolayısıyla terim hiç uygulanmıyordu — 0.1 o dönemde
+    > seçilmişti. Süpürme (`does_block_regularization_drive_the_convergence_cost`):
+    >
+    > | reg | zincir n=24 (dinlenme / \|p\|) | zincir n=32 | 12 katlı yığın |
+    > |---|---|---|---|
+    > | 0.100 | **379** / 5.4e-4 | 0 / 2.1e-4 | 0/6 çöktü |
+    > | **0.050** | **0** / **4e-6** | 0 / 8e-6 | 0/6 |
+    > | 0.020 | 0 / 4e-6 | 0 / 1.3e-5 | 0/6 |
+    > | 0.010 | 0 / 7e-6 | 0 / 4.3e-5 | 0/6 |
+    > | 0.002 | 0 / 2.1e-5 | 0 / 1.1e-5 | 0/6 |
+    >
+    > 0.05'ten 0.002'ye kadar hepsi aynı; **en BÜYÜĞÜ** seçildi, çünkü rank-eksikliğine karşı
+    > en çok sayısal payı bırakan o. Momentum korunumu düzeltme öncesi baz çizgisinden de iyi.
+
+    > **Yan etki, ve doğru olan bu:** zincir artık sıkışmayı TEK karede çözüyor (0. karede
+    > depth 31, 0. karede dinlenme, 2. karede uykuda). Eskiden kare kare kilitleniyordu
+    > (depth 3→7→11→15→31). `the_gated_scenes_reach_the_adaptive_policy` bu yüzden zinciri
+    > artık ilk karesinde okuyor.
+
+    > **Determinizm re-bless:** `46EB56180318E43C` → **`15D4FD6845119D8B`** (3/3).
   - 🔄 **N2 (2 cm yanal boşlukta hızlı çöküş) — daraltıldı, sebep hâlâ açık.** Boşluk taraması
     (`where_is_the_fast_collapse_band`, zemin 20): 0.010/0.015/0.025/0.030/0.040/0.050/0.060
     hepsi 3000 kare duruyor, **yalnız 0.020 çöküyor** — tek hücrelik keskin bir sivri.
