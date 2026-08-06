@@ -145,12 +145,20 @@ pub fn physics_step_system(world: &World, dt: f32) {
         return;
     }
 
-    // Sync back to rigid_bodies so vehicles/ECS writeback works
+    // Sync back to rigid_bodies so vehicles/ECS writeback works.
+    //
+    // Through an index built once, not a linear `find` per body. The scan was O(N²) — at a few
+    // thousand bodies that is millions of comparisons every frame, spent entirely on the bridge
+    // rather than on simulating anything. Entity ids are unique, so the map finds exactly what
+    // the scan's first match found.
+    let ecs_index: rustc_hash::FxHashMap<u32, usize> = rigid_bodies
+        .iter()
+        .enumerate()
+        .map(|(idx, (handle, ..))| (handle.id(), idx))
+        .collect();
     for i in 0..physics_world.entities.len() {
-        let entity_id = physics_world.entities[i].id();
-        if let Some((_, rb, trans, vel, _)) =
-            rigid_bodies.iter_mut().find(|(e, ..)| e.id() == entity_id)
-        {
+        if let Some(&idx) = ecs_index.get(&physics_world.entities[i].id()) {
+            let (_, rb, trans, vel, _) = &mut rigid_bodies[idx];
             *rb = physics_world.rigid_bodies[i];
             *trans = physics_world.transforms[i];
             *vel = physics_world.velocities[i];

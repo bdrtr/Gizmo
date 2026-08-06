@@ -1331,8 +1331,37 @@ eklemekten ibaret.
   KAPALI" diyordu, `Default` ise `true` veriyor. Yığın kararlılığına bakan biri için önemli:
   sıralama zaten devrede, "açmayı denesek mi" sorusu kapalı.
 
+- ✅ **BENCH YENİDEN ÖLÇÜLDÜ** *(2026-08-06)* — bu oturumun iki fizik düzeltmesinden sonra.
+  C1'in tablosu artık bayat; aynı makinede, aynı bench:
+
+  | senaryo | C1 (2026-08-05) | şimdi | değişim |
+  |---|---|---|---|
+  | `solver_settled_stack/8` | 532 µs | 94.7 µs | **−82.1%** |
+  | `solver_settled_stack/24` | 1.20 ms | 116 µs | **−90.4%** |
+  | `solver_settled_stack/48` | 4.05 ms | 199 µs | **−95.1%** |
+  | `dense_contacts/1024` | 151.0 ms | 147.0 ms | −2.6% |
+  | `broadphase/1024` | 1.73 ms | 1.78 ms | +1.7% (p=0.24, anlamsız) |
+  | `full_step_mixed/512` | 2.43 ms | 2.53 ms | +4.3% |
+  | `headless_stress_test` | 1.62 s | **0.50 s** | **−69%** |
+
+  > Yerleşmiş yığındaki 10–20×'in tamamı ada-kolektif uykudan: yığınlar ilk kez gerçekten
+  > topluca uyuyor. `dense_contacts` kıpırdamıyor çünkü o sahne patlayan sal — hiç uyumuyor,
+  > ve zaten fiziksel olmayan bir başlangıçtan gelen bir geçici (bkz. yukarısı).
+
+- ✅ **C3 — ECS köprüsündeki O(N²) writeback düzeltildi** *(2026-08-06)*.
+  `system.rs`: her fizik cismi için `rigid_bodies` üzerinde lineer `find` yapılıyordu. Bir kez
+  kurulan `FxHashMap<u32, usize>` ile değiştirildi; entity id'leri benzersiz olduğu için harita
+  taramanın ilk eşleşmesiyle aynı şeyi buluyor. Birkaç bin cisimde kare başına milyonlarca
+  karşılaştırma, tamamı köprüde.
+
+  > **Ölçülmedi, ve sebebi kaydedilmeye değer bir boşluk:** `benches/step_bench.rs` doğrudan
+  > `PhysicsWorld` sürüyor, ECS köprüsünden (`physics_step_system`) hiç geçmiyor. Yani motorun
+  > ECS tarafının HİÇ benchmark'ı yok. Bu değişiklik saf karmaşıklık düzeltmesi (O(N²)→O(N),
+  > semantiği birebir aynı) olarak duruyor; hızlanma iddiası yok.
+  - ⬜ **Takip:** ECS köprüsü için bir benchmark. C3'ün etkisini ancak o gösterir, ve köprü
+    şu an motorun ölçülmeyen tek büyük parçası.
+
 - ⬜ **C2** — Broadphase refit (`pipeline.rs:145-176` her substep sıfırdan kuruyor, statikler dahil).
-- ⬜ **C3** — `physics-rigid/src/system.rs:149-158` O(N²) writeback → handle→index map.
 - ⬜ **C4** — Temas yolunda `ArrayVec` (`narrowphase/mod.rs:400-407`); rewind geçmişi opt-in
   (`world/step.rs:122-128` her frame tam klon).
 - ⬜ **C5** — `[profile.release]` (`lto="thin"`, `codegen-units=1`). Kökte yok; `.cargo/config.toml`
