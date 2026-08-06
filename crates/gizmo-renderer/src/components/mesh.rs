@@ -7,12 +7,30 @@ use wgpu::util::DeviceExt;
 pub struct Mesh {
     pub vbuf: Arc<wgpu::Buffer>,
     pub vertex_count: u32,
+    /// İndeks tamponu, varsa. `None` ise mesh düz üçgen listesi olarak çizilir
+    /// (`draw`), `Some` ise `draw_indexed` ile.
+    ///
+    /// Opsiyonel olmasının sebebi geçiş değil, **LOD**: `lod_vbufs` düzleştirilmiş
+    /// tamponlar tutuyor, yani bir LOD seviyesi aktifken indeks tamponu geçerli
+    /// DEĞİL (indeksler tam çözünürlüklü vertex dizisine göre). Batching bu durumda
+    /// indeksi düşürüyor.
+    pub ibuf: Option<Arc<wgpu::Buffer>>,
+    /// `ibuf`'taki indeks sayısı — çizilecek eleman sayısı budur, `vertex_count` değil.
+    /// `ibuf` `None` iken anlamsız (0).
+    pub index_count: u32,
     /// Geometrinin ağırlık merkezini orijine taşımak için kullanılan ofset değeri.
     /// Render aşamasında model matrisine uygulanabilir.
     /// AABB sınırlarını doğrudan etkilemez (sınırlar ham vertex verisinden hesaplanır).
     pub center_offset: Vec3,
     pub source: String,
     pub bounds: gizmo_math::Aabb,
+    /// Geometrinin CPU tarafındaki kopyası, **düz üçgen listesi olarak**: ardışık her üçlü
+    /// bir üçgendir.
+    ///
+    /// `vbuf` ile indeks-indeks eşleşmesi GARANTİ DEĞİL — indeksli bir mesh'te (`ibuf`
+    /// `Some`) vertex tamponu tekilleştirilmiştir, bu alan ise üçgen listesi olarak kalır.
+    /// Sözleşme budur çünkü tüketiciler burayı üçlü gruplar hâlinde yürüyor; GPU tamponuna
+    /// karşılık gelen sırayı isteyen bir çağıran `ibuf`'u okumalı.
     pub cpu_vertices: Arc<Vec<Vec3>>,
     pub lod_vbufs: Vec<Arc<wgpu::Buffer>>,
     pub lod_vertex_counts: Vec<u32>,
@@ -96,6 +114,8 @@ impl Mesh {
         Self {
             vbuf,
             vertex_count,
+            ibuf: None,
+            index_count: 0,
             center_offset,
             source,
             bounds,
@@ -105,12 +125,74 @@ impl Mesh {
         }
     }
 
+    /// [`Mesh::new`] gibi, ama vertex'leri **tekilleştirip** bir indeks tamponu da kurar,
+    /// ve vertex tamponunu kendisi oluşturur (çağıran hazır bir `vbuf` vermez).
+    ///
+    /// Motorun tekilleştirme makinesi zaten vardı ve çıktısı atılıyordu: [`Mesh::new`],
+    /// 20000'den fazla vertex'te LOD üretmek için `meshopt::generate_vertex_remap` çağırıp
+    /// bir indeks dizisi kuruyor, sonra `unique_vertices[idx]`'i düz bir diziye geri açıyor
+    /// ("Gizmo renderer flat bekliyor"). Bir küpün 36 vertex'i 8'e, bir glTF sahnesinin
+    /// paylaşılan köşeleri komşu üçgen sayısı kadar aza iner — hem yükleme bandı hem
+    /// vertex shader çağrısı olarak.
+    ///
+    /// `meshopt` native-only olduğundan WASM'da tekilleştirme yapılmaz: mesh düz kalır ve
+    /// `ibuf` `None` döner. Çağıran her iki durumu da desteklemek zorunda — zaten
+    /// `ibuf: Option` olmasının sebebi bu değil (bkz. alanın dokümanı), ama sonucu aynı.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn new_indexed(
+        device: &wgpu::Device,
+        vertices: &[crate::gpu_types::Vertex],
+        center_offset: Vec3,
+        source: String,
+    ) -> Self {
+        let (unique_count, indices) = meshopt::generate_vertex_remap(vertices, None);
+
+        let mut unique_vertices = vec![crate::gpu_types::Vertex::default(); unique_count];
+        for (i, &new_idx) in indices.iter().enumerate() {
+            unique_vertices[new_idx as usize] = vertices[i];
+        }
+
+        let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some(&format!("VBuf (indexed): {source}")),
+            contents: bytemuck::cast_slice(&unique_vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let ibuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some(&format!("IBuf: {source}")),
+            contents: bytemuck::cast_slice(&indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+
+        // `Mesh::new`'e TEKİLLEŞTİRİLMİŞ diziyi veriyoruz — `vertex_count` ile `vbuf.size()`
+        // arasındaki debug_assert ancak böyle tutar, ve `bounds` iki durumda da aynı nokta
+        // kümesinden çıkıyor.
+        let mut mesh = Mesh::new(
+            device,
+            Arc::new(vbuf),
+            &unique_vertices,
+            center_offset,
+            source,
+        );
+        mesh.index_count = indices.len() as u32;
+        mesh.ibuf = Some(Arc::new(ibuf));
+
+        // `cpu_vertices` ORİJİNAL üçgen listesine geri alınıyor. Tekilleştirilmiş diziyi
+        // orada bırakmak sessiz bir bozulma olurdu: alanın tüketicileri onu üçlü gruplar
+        // hâlinde yürüyor (`demo/src/bin/wind_tunnel.rs:535` — `i, i+1, i+2`, adım 3), ve
+        // tekilleştirilmiş bir dizide ardışık üçlüler artık üçgen DEĞİL. Bellek açısından
+        // bu bir gerileme de değil: bu alan zaten tam listeyi tutuyordu.
+        mesh.cpu_vertices = Arc::new(vertices.iter().map(|v| Vec3::from(v.position)).collect());
+        mesh
+    }
+
     /// Dosya yüklenememesi gibi durumlarda motorun çökmemesi için
     /// 0 vertex'li, boş bir yer tutucu (fallback) Mesh oluşturur.
     pub fn empty(vbuf: Arc<wgpu::Buffer>, source: String) -> Self {
         Self {
             vbuf,
             vertex_count: 0,
+            ibuf: None,
+            index_count: 0,
             center_offset: Vec3::ZERO,
             source,
             bounds: gizmo_math::Aabb::empty(),

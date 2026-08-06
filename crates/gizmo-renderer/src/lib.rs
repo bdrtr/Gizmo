@@ -46,6 +46,7 @@ pub mod ssao;
 pub mod ssgi;
 pub mod ssr;
 pub mod taa;
+mod texture_quality;
 pub mod volumetric;
 pub mod web_profile;
 pub mod asset_loading;

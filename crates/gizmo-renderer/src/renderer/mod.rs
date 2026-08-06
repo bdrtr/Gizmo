@@ -544,13 +544,11 @@ mod tests {
             });
 
             // This should compile the WGSL and execute without panicking or creating wgpu validation errors
-            Renderer::generate_mipmaps(
+            crate::texture_quality::MipmapBlitter::new(
                 &device,
-                &queue,
-                &texture,
                 wgpu::TextureFormat::Rgba8UnormSrgb,
-                mip_level_count,
-            );
+            )
+            .generate(&device, &queue, &texture, mip_level_count);
 
             let _ = device.poll(wgpu::PollType::Wait {
                 submission_index: None,

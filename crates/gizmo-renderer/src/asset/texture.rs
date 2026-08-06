@@ -3,28 +3,6 @@ use super::error::AssetError;
 use std::sync::Arc;
 
 // ============================================================================
-//  Shared sampler descriptors
-// ============================================================================
-
-/// Standard sampler for real textures: bilinear, repeating.
-/// Mipmap filter is Nearest because we only allocate one mip level —
-/// using Linear here would trigger a wgpu validation warning.
-const SAMPLER_LINEAR_REPEAT: wgpu::SamplerDescriptor<'static> = wgpu::SamplerDescriptor {
-    label: Some("linear_repeat_sampler"),
-    address_mode_u: wgpu::AddressMode::Repeat,
-    address_mode_v: wgpu::AddressMode::Repeat,
-    address_mode_w: wgpu::AddressMode::Repeat,
-    mag_filter: wgpu::FilterMode::Linear,
-    min_filter: wgpu::FilterMode::Linear,
-    mipmap_filter: wgpu::MipmapFilterMode::Nearest, // single mip — must be Nearest
-    lod_min_clamp: 0.0,
-    lod_max_clamp: 0.0,
-    compare: None,
-    anisotropy_clamp: 1,
-    border_color: None,
-};
-
-// ============================================================================
 //  AssetManager — texture methods
 // ============================================================================
 
@@ -99,13 +77,15 @@ impl super::AssetManager {
             depth_or_array_layers: 1,
         };
 
+        let mip_level_count = crate::texture_quality::mip_level_count(width, height);
+
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             size: texture_size,
-            mip_level_count: 1,
+            mip_level_count,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            usage: crate::texture_quality::MIPPED_TEXTURE_USAGE,
             label: Some(cache_key),
             view_formats: &[],
         });
@@ -126,8 +106,21 @@ impl super::AssetManager {
             texture_size,
         );
 
+        if mip_level_count > 1 {
+            crate::texture_quality::MipmapBlitter::new(device, wgpu::TextureFormat::Rgba8UnormSrgb)
+                .generate(device, queue, &texture, mip_level_count);
+        }
+
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let sampler = device.create_sampler(&SAMPLER_LINEAR_REPEAT);
+        let sampler = crate::texture_quality::material_sampler(
+            device,
+            "linear_repeat_sampler",
+            wgpu::AddressMode::Repeat,
+            wgpu::AddressMode::Repeat,
+            wgpu::FilterMode::Linear,
+            wgpu::FilterMode::Linear,
+            mip_level_count > 1,
+        );
         let bg = self
             .assemble_single_texture_bind_group(device, queue, layout, &view, &sampler, cache_key);
         self.texture_cache.insert(cache_key.to_string(), bg.clone());

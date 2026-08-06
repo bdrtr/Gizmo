@@ -177,24 +177,35 @@ impl crate::asset::AssetManager {
                     compute_flat_normals(&mut all_vertices);
                 }
 
-                let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some(&format!("GLTF VBuf: {file_name}_prim{prim_i}")),
-                    contents: bytemuck::cast_slice(&all_vertices),
-                    usage: wgpu::BufferUsages::VERTEX,
-                });
-
                 // Use a deterministic cache key that doesn't depend on Debug formatting.
                 let mesh_source = format!(
                     "gltf_mesh_{file_name}_{}_p{prim_i}",
                     node.name().unwrap_or("<unnamed>")
                 );
-                let mesh_comp = Mesh::new(
-                    device,
-                    Arc::new(vbuf),
-                    &all_vertices,
-                    Vec3::ZERO,
-                    mesh_source.clone(),
-                );
+
+                // Indexed on native: glTF geometri burada düz üçgen listesi olarak
+                // açılıyor (`all_vertices`, primitive indekslerinden birebir genişletilmiş),
+                // yani paylaşılan her köşe komşu üçgen sayısı kadar tekrarlanıyor.
+                // `new_indexed` onu geri toplar. WASM'da `meshopt` yok → eski düz yol.
+                #[cfg(not(target_arch = "wasm32"))]
+                let mesh_comp =
+                    Mesh::new_indexed(device, &all_vertices, Vec3::ZERO, mesh_source.clone());
+
+                #[cfg(target_arch = "wasm32")]
+                let mesh_comp = {
+                    let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some(&format!("GLTF VBuf: {file_name}_prim{prim_i}")),
+                        contents: bytemuck::cast_slice(&all_vertices),
+                        usage: wgpu::BufferUsages::VERTEX,
+                    });
+                    Mesh::new(
+                        device,
+                        Arc::new(vbuf),
+                        &all_vertices,
+                        Vec3::ZERO,
+                        mesh_source.clone(),
+                    )
+                };
                 self.mesh_cache.insert(mesh_source, mesh_comp.clone());
 
                 let mat_opt = primitive

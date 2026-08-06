@@ -1586,7 +1586,124 @@ eklemekten ibaret.
   > `gizmo-renderer` derlemesi 4 paralel rustc'de 2.78 GB zirve yaptı (13 GB'de) — ama en ağır
   > bağımlılıkları (wgpu, naga) önbellekten geldi, yani demo-binary durumunu çözmüyor.
   > **Karar kullanıcının.**
-- ⬜ **C6** — Index buffer (`components/mesh.rs:8-9`) + mipmap + anizotropik filtreleme.
+- 🔄 **C6** — üç parçasının **üçü de yazıldı** *(2026-08-06)*, ama **görsel olarak doğrulanmadı**;
+  kapılar koşana kadar açık kalıyor.
+
+  > **Mipmap üreteci ZATEN VARDI ve motorun asıl doku yolları onu çağırmıyordu.**
+  > `Renderer::generate_mipmaps` + `shaders/mipmap.wgsl` yerinde duruyordu, ama `pub(super)`
+  > olduğu için asset pipeline'ından erişilemiyordu. Üç yükleme yolu üç farklı şey yapıyordu:
+  >
+  > | yol | mip | mipmap filtresi | aniso |
+  > |---|---|---|---|
+  > | `asset::loaders::images` — **glTF**, yani arabaların ve Bayview'ın bütün dokuları | 1 | Nearest | kapalı |
+  > | `asset::texture::install_decoded_material_texture` — disk / streaming / prosedürel | 1 | Nearest | kapalı |
+  > | `Renderer::create_texture` — elle RGBA | tam zincir | Linear | **kapalı** |
+  >
+  > Yani oyunun gerçekten gördüğü iki yol mipmap'siz, üçü de anizotropisizdi. Eğik açıdan
+  > bakılan her yüzey minification aliasing'i yaşıyordu.
+
+  **Yapılan:** politika tek bir modülde toplandı (`texture_quality.rs`) ve üç yol da ona bağlandı.
+  - `MipmapBlitter` — eski serbest fonksiyon **her çağrıda shader modülünü ve pipeline'ı yeniden
+    derliyordu.** Tek dokuda görünmez, yüzlerce dokulu bir glTF sahnesinde doku başına bir
+    pipeline derlemesi demekti. Artık kurulup yeniden kullanılıyor; glTF yolunda bütün dosyanın
+    blit'leri **tek komut tamponunda** toplanıp bir kez submit ediliyor.
+  - `material_sampler` — mip varsa `mipmap_filter: Linear` + `lod_max_clamp: 32` + aniso 16.
+    Materyalin kendi `Nearest` tercihi (pixel-art dokular) korunuyor: wgpu `anisotropy_clamp > 1`
+    için üç filtrenin de `Linear` olmasını şart koştuğundan, o durumda aniso kapatılıyor —
+    dayatmak validation hatası olurdu.
+  - `MIPPED_TEXTURE_USAGE` — üreteç her seviyeye ÇİZEREK indirdiği için doku `RENDER_ATTACHMENT`
+    olmak zorunda; bunu unutmak yükleme anında validation hatası veriyor, o yüzden bayrak da
+    politikayla birlikte duruyor.
+
+  > **Yan kazanç:** blit `Rgba8UnormSrgb` hedefe yazıyor, yani okurken sRGB→lineer, yazarken
+  > lineer→sRGB dönüşümü donanımda oluyor. İndirgeme lineer uzayda yapılıyor — gamma-doğru
+  > mip üretimi, elle yapılsa ayrıca yazılması gereken şey.
+  >
+  > **Maliyet, dürüstçe:** tam mip zinciri doku belleğini ~%33 artırır. Bayview ölçeğinde bu
+  > ölçülmedi ve ölçülmeli — VRAM sınırına yakın bir sahnede takas tersine dönebilir.
+
+  - ✅ **Index buffer** *(2026-08-06)*. `Mesh` artık `ibuf: Option<Arc<Buffer>>` + `index_count`
+    taşıyor; `Mesh::new_indexed` `meshopt::generate_vertex_remap` ile tekilleştirip iki tamponu
+    da kuruyor, ve glTF yükleyicisi onu kullanıyor.
+
+    > ⚠️ **KENDİ SAYIM YANLIŞTI, düzeltiyorum.** Bir önceki turda "motorda 13 `draw` çağrısı var"
+    > yazmıştım. O 13'ün **hiçbiri mesh çizmiyor** — hepsi fullscreen üçgen (`0..3`), parçacık
+    > quad'ı (`0..4`) veya debug çizgisi. Gerçek mesh çizimi başka yerde ve iki ayrı boru
+    > hattına yayılmış: `gizmo/systems/render/passes/{geometry,shadow,forward}.rs`'te **8**,
+    > `gizmo-studio/render_pipeline/passes.rs`'te **6**. Yani iş, saydığımın iki katı yerde ve
+    > editörün kendi boru hattını da kapsıyordu — orayı atlamak indeksli mesh'lerin editörde
+    > bozuk çizilmesi demekti.
+
+    **Karar tek yerde:** `DrawItem::record_draw` ve studio'da `FlatBatchData::record_draw`.
+    14 noktaya `if` dağıtmak, birini atlayınca sessiz bir hata (nesnesine uymayan bir gölge)
+    üretirdi.
+
+    > **İki tuzak, ikisi de kodda belgelendi:**
+    >
+    > 1. **LOD tamponları düzleştirilmiş.** Motorun `lod_vbufs`'ı `meshopt` çıktısını geri
+    >    açıyor, yani LOD1 aktifken mesh'in indeksleri GEÇERSİZ (tam çözünürlüklü diziye göre).
+    >    `collect_draw_items` o durumda indeksi düşürüyor. Studio'da kural TERS: onun LOD'u
+    >    `lods` bileşeninden ayrı bir `Mesh` seçiyor, dolayısıyla indeks geçerli ve taşınıyor.
+    > 2. **`cpu_vertices` bir üçgen listesi ve öyle kalmalı.** `wind_tunnel.rs:535` onu üçlü
+    >    gruplar hâlinde yürüyor (`i, i+1, i+2`, adım 3). Tekilleştirilmiş diziyi oraya
+    >    bırakmak ardışık üçlüleri üçgen olmaktan çıkarır — sessiz bozulma. `new_indexed`
+    >    onu ham listeye geri alıyor; bellek gerilemesi değil, alan zaten tam listeyi tutuyordu.
+    >    Alanın sözleşmesi artık yazılı: `vbuf` ile indeks-indeks eşleşme garanti DEĞİL.
+
+    - ⬜ **Kalan:** yalnız glTF indeksli üretiyor. Prosedürel geometri ve `asset/primitives/`
+      (küp, küre, silindir, torus, kapsül, terrain — ~15 çağrı yeri) hâlâ düz; her biri
+      `new_indexed`'e çevrilebilir ama ayrı doğrulama ister.
+    - ⬜ İndeksler daima `Uint32`. Küçük mesh'lerde `Uint16` bandı yarıya indirirdi, ama
+      vertex sayısına bağlı bir seçim ve `set_index_buffer` başına ayrı bir karar demek.
+
+  > **DOĞRULAMA DURUMU — C6'nın tamamı için.** Geçen: `cargo check --workspace`,
+  > `cargo check -p gizmo-renderer --target wasm32-unknown-unknown`, ve tam CI clippy
+  > komutu `--workspace --all-features --all-targets` (0 uyarı).
+  >
+  > **Golden render testleri KOŞTURULDU ve geçti** (`gizmo-engine --lib golden`, 3/3):
+  > `default_render_pass_draws_a_cube_distinct_from_background`,
+  > `skipping_the_point_shadow_passes_changes_no_pixel`, `camera_exposure_brightens_the_frame`.
+  > Bunlar gerçek piksel kapıları, yani mipmap/aniso değişikliği golden kareleri **bozmadı**
+  > ve yeniden bless gerekmedi (test sahnesi prosedürel, disk dokusu yüklemiyor).
+  >
+  > **Uygulama da koşturuldu:** `bevy_3d_scene` native Wayland'de açılıyor, çiziyor
+  > (küp + zemin, temiz kenarlar) ve temiz çıkıyor. Çizim yolu refactor'ü (`record_draw`)
+  > gerçek karede sağlam.
+  >
+  > **`draw_indexed` artık gerçekten çalışıyor — ve kendi testi var.**
+  > `an_indexed_mesh_renders_byte_identically_to_the_flat_one`: aynı küp önce düz üçgen
+  > listesi, sonra `Mesh::new_indexed` ile çiziliyor ve iki kare **bayt bayt eşit** olmak
+  > zorunda. Bu gerekliydi çünkü indeksli mesh üreten tek yer glTF yükleyicisi ve bu repoda
+  > **gerçek `.glb` yok** (`assets/` yalnız `.meta` taşıyor — A8, modeller lisans nedeniyle
+  > commit'li değil), yani `new_indexed`'in tekilleştirmesi de `record_draw`'un indeks dalı da
+  > o ana kadar **bir kez bile yürütülmemişti**; derlenmişlerdi, o kadar.
+  >
+  > Eşitlik ölçütü bilinçli: yanlış bir indeks tamponu HİÇBİR ŞEY çizmez değil, aynı üçgen
+  > sayısını YANLIŞ köşelerden çizer, ve 128×128'de tek bir aydınlatılmış küpte bu hâlâ makul
+  > görünebilir. Test ayrıca `ibuf.is_some()`, `index_count == 36` ve `vertex_count == 24`
+  > iddia ediyor — `new_indexed` bir gün tekilleştirmeyi bıraksa iki kare yine eşleşirdi
+  > (ikisi de düz olurdu) ve test sessizce hiçbir şey sınamaz hâle gelirdi.
+  >
+  > **Testin düşebildiği doğrulandı:** `draw_indexed`'in `base_vertex`'i geçici olarak
+  > 1 yapıldığında 65536 baytın 4717'si farklılaştı ve test kırmızıya döndü; sabotaj geri alındı.
+
+  > ⚠️ **WASM BUILD'İ BİR ARA KIRILDI — kayda geçiyor.** Geçitleri `camera_instance_range`
+  > yardımcısına çevirince `gizmo-engine`'in wasm derlemesi düştü: o yardımcı
+  > `#[cfg(not(target_arch = "wasm32"))]` ile kapılıydı (yalnız gölge geçitleri kullanıyordu,
+  > web'de gölge yok) ama z-pass ve G-buffer wasm'da da derleniyor. **Native clippy, native
+  > testler ve golden testlerin hepsi yeşilken wasm kırmızıydı** — kapı kaldırıldı ve
+  > `-p gizmo-engine` + `-p demo-web` wasm hedefinde doğrulandı. Gölge kardeşi
+  > (`shadow_instance_range`) kapılı kalıyor.
+
+  > **Yan bulgu — GPU test çöküşü belgelenenden GENİŞ.** `cargo test --workspace`,
+  > `gizmo-renderer --lib`'de SIGSEGV ile düşüyor. Yukarıdaki *GPU test flake'i* maddesi
+  > "kilit sonrası, binary izole → 8/8 temiz" diyor; **bu artık `gizmo-renderer` için doğru
+  > değil**: izole koşuda 3/3 çöküyor. `git archive HEAD` ile çıkarılan temiz kopyada
+  > **birebir aynı çöküş** görüldü, yani C6 ile ilgisi yok — ama madde `gizmo`'nun golden
+  > testlerini tarif ediyor, oysa `gizmo-renderer`'ın kendi binary'sinde de çok sayıda GPU
+  > testi var (`gpu_fluid`, `gpu_physics::fem_tests`) ve `gpu_lock` oraya uygulanmamış.
+  > Tek-thread'de çöküş yok, onun yerine `gpu_fluid::test_performance_10k_particles`
+  > (bir süre testi) düşüyor — ayrı ve muhtemelen yük-duyarlı bir sorun.
 
 ## Faz D — Ekosistem ve 1.0
 - 🔄 **D1** — `gizmo-core`'u fizik crate'lerinde opsiyonel yap (`ecs` feature'ı).

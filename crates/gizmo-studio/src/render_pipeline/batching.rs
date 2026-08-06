@@ -24,6 +24,15 @@ pub(super) type BatchKey = (
 pub(super) struct BatchData {
     pub(super) vbuf: std::sync::Arc<wgpu::Buffer>,
     pub(super) vertex_count: u32,
+    /// `Some` ise batch `draw_indexed` ile çizilir.
+    ///
+    /// Ana boru hattının `DrawItem`'ından farklı olarak burada LOD yüzünden düşürme YOK:
+    /// studio'nun LOD'u `lods` bileşeninden ayrı bir `Mesh` seçiyor, motorun düzleştirilmiş
+    /// `lod_vbufs` tamponlarını değil, dolayısıyla seçilen mesh'in indeksleri kendi vertex
+    /// dizisine göre zaten geçerli.
+    pub(super) ibuf: Option<std::sync::Arc<wgpu::Buffer>>,
+    /// `ibuf` `Some` iken çizilecek indeks sayısı.
+    pub(super) index_count: u32,
     pub(super) bind_group: std::sync::Arc<wgpu::BindGroup>,
     pub(super) skeleton_bg: std::sync::Arc<wgpu::BindGroup>,
     pub(super) instances: Vec<gizmo::renderer::InstanceRaw>,
@@ -38,6 +47,15 @@ pub(super) struct BatchData {
 pub(super) struct FlatBatchData {
     pub(super) vbuf: std::sync::Arc<wgpu::Buffer>,
     pub(super) vertex_count: u32,
+    /// `Some` ise batch `draw_indexed` ile çizilir.
+    ///
+    /// Ana boru hattının `DrawItem`'ından farklı olarak burada LOD yüzünden düşürme YOK:
+    /// studio'nun LOD'u `lods` bileşeninden ayrı bir `Mesh` seçiyor, motorun düzleştirilmiş
+    /// `lod_vbufs` tamponlarını değil, dolayısıyla seçilen mesh'in indeksleri kendi vertex
+    /// dizisine göre zaten geçerli.
+    pub(super) ibuf: Option<std::sync::Arc<wgpu::Buffer>>,
+    /// `ibuf` `Some` iken çizilecek indeks sayısı.
+    pub(super) index_count: u32,
     pub(super) bind_group: std::sync::Arc<wgpu::BindGroup>,
     pub(super) skeleton_bg: std::sync::Arc<wgpu::BindGroup>,
     pub(super) start_instance: u32,
@@ -51,6 +69,28 @@ pub(super) struct FlatBatchData {
     pub(super) is_skybox: bool,
     pub(super) is_grid: bool,
     pub(super) is_unlit: bool,
+}
+
+impl FlatBatchData {
+    /// Bu batch'in geometrisini bağlar ve `instances` için çizim çağrısını yapar.
+    ///
+    /// Motorun `DrawItem::record_draw`'unun studio karşılığı, ve aynı sebeple var: bu
+    /// dosyanın geçitlerinde altı çizim noktası var (gölge, opak, çift-yüzlü, şeffaf,
+    /// grid, skybox) ve birinde indeksli, ötekinde düz çizmek tutarsız kare üretir.
+    pub(super) fn record_draw(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        instances: std::ops::Range<u32>,
+    ) {
+        pass.set_vertex_buffer(0, self.vbuf.slice(..));
+        match &self.ibuf {
+            Some(ibuf) => {
+                pass.set_index_buffer(ibuf.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..self.index_count, 0, instances);
+            }
+            None => pass.draw(0..self.vertex_count, instances),
+        }
+    }
 }
 
 pub(super) struct PipelineCache {

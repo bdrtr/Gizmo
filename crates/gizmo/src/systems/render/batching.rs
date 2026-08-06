@@ -86,6 +86,11 @@ pub struct DrawItem {
     // `passes/` recorders can still read them now that DrawItem lives here, not in mod.rs.
     pub(super) vbuf: std::sync::Arc<wgpu::Buffer>,
     pub(super) vertex_count: u32,
+    /// `Some` ise bu batch `draw_indexed` ile çizilir; `None` ise düz `draw` ile.
+    /// Bir LOD seviyesi aktifken daima `None` — bkz. `collect_draw_items`.
+    pub(super) ibuf: Option<std::sync::Arc<wgpu::Buffer>>,
+    /// `ibuf` `Some` iken çizilecek indeks sayısı.
+    pub(super) index_count: u32,
     pub(super) bind_group: std::sync::Arc<wgpu::BindGroup>,
     pub(super) unlit: bool,
     /// Baked lighting + the sun's cascade term: casts shadows and skips the G-buffer.
@@ -114,10 +119,39 @@ pub struct DrawItem {
 }
 
 impl DrawItem {
+    /// Bu öğenin geometrisini bağlar ve `instances` için çizim çağrısını yapar.
+    ///
+    /// Indexed/düz kararının TEK yeri burası. Motorda sekiz mesh çizim noktası var
+    /// (z-pass, G-buffer, iki gölge geçidi, forward'da iki dal) ve bir öğeyi birinde
+    /// indeksli, ötekinde düz çizmek tutarsız kare üretir — en görünür hâli, nesnesine
+    /// uymayan bir gölge. Dallanma dağıtılırsa bir noktayı atlamak sessiz bir hata olur.
+    pub(super) fn record_draw(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        instances: std::ops::Range<u32>,
+    ) {
+        pass.set_vertex_buffer(0, self.vbuf.slice(..));
+        match &self.ibuf {
+            Some(ibuf) => {
+                // `Uint32`: indeksler `meshopt::generate_vertex_remap`'ten geliyor ve o
+                // `u32` üretiyor. Küçük mesh'lerde `Uint16`'ya düşürmek bant kazandırırdı
+                // ama vertex sayısına bağlı bir seçim, ve iki formatı karıştırmak
+                // `set_index_buffer` başına ayrı bir karar demek → ayrı iş.
+                pass.set_index_buffer(ibuf.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..self.index_count, 0, instances);
+            }
+            None => pass.draw(0..self.vertex_count, instances),
+        }
+    }
+
     /// Camera-visible instance range (region A), clamped to what actually fit the GPU
     /// instance buffer (`uploaded`). `.max(start)` keeps the range non-reversed when this
     /// batch's region was entirely truncated (an empty range = a 0-instance no-op draw).
-    #[cfg(not(target_arch = "wasm32"))]
+    ///
+    /// **Not gated on the target**, unlike its shadow sibling below: the z-pass and the
+    /// G-buffer pass call it too, and those compile on wasm. It used to be shadow-only —
+    /// the geometry passes inlined the same expression — so the gate went unnoticed until
+    /// they were switched to this helper and only the wasm build failed.
     pub(super) fn camera_instance_range(&self, uploaded: u32) -> std::ops::Range<u32> {
         self.first_instance
             ..(self.first_instance + self.camera_count)
@@ -159,6 +193,8 @@ pub(crate) struct BatchKey {
 
 pub(crate) struct BatchData {
     vbuf: std::sync::Arc<wgpu::Buffer>,
+    ibuf: Option<std::sync::Arc<wgpu::Buffer>>,
+    index_count: u32,
     bind_group: std::sync::Arc<wgpu::BindGroup>,
     vertex_count: u32,
     unlit: bool,
@@ -278,6 +314,15 @@ pub(super) fn collect_draw_items(
                 } else {
                     $mesh.vertex_count
                 };
+                // LOD tamponları DÜZLEŞTİRİLMİŞ (`Mesh::new` meshopt çıktısını geri açıyor),
+                // yani mesh'in indeksleri tam çözünürlüklü vertex dizisine göre ve LOD1
+                // aktifken GEÇERSİZ. Onları burada düşürmek, karışık bir mesh'i indeksli
+                // sanıp yanlış üçgenler çizmenin tek engeli.
+                let (active_ibuf, active_index_count) = if use_lod1 {
+                    (None, 0)
+                } else {
+                    ($mesh.ibuf.clone(), $mesh.index_count)
+                };
 
                 let packed_params = pack_pbr_params($mat.anisotropy, $mat.clear_coat, $mat.subsurface);
 
@@ -322,6 +367,8 @@ pub(super) fn collect_draw_items(
 
                 let batch = cache.batches.entry(key).or_insert_with(|| BatchData {
                     vbuf: active_vbuf.clone(),
+                    ibuf: active_ibuf.clone(),
+                    index_count: active_index_count,
                     bind_group: $mat.bind_group.clone(),
                     vertex_count: active_vertex_count,
                     unlit,
@@ -396,6 +443,8 @@ pub(super) fn collect_draw_items(
             local_draw_items.push(DrawItem {
                 vbuf: batch.vbuf.clone(),
                 vertex_count: batch.vertex_count,
+                ibuf: batch.ibuf.clone(),
+                index_count: batch.index_count,
                 bind_group: batch.bind_group.clone(),
                 unlit: batch.unlit,
                 baked_lit: batch.baked_lit,

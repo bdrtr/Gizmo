@@ -61,16 +61,20 @@ fn min_to_wgpu(f: Option<gltf::texture::MinFilter>) -> wgpu::FilterMode {
 }
 
 fn create_gltf_sampler(device: &wgpu::Device, key: SamplerKey) -> wgpu::Sampler {
-    device.create_sampler(&wgpu::SamplerDescriptor {
-        label: Some("gltf_material_sampler"),
-        address_mode_u: key.wrap_u,
-        address_mode_v: key.wrap_v,
-        address_mode_w: wgpu::AddressMode::Repeat,
-        mag_filter: key.mag,
-        min_filter: key.min,
-        mipmap_filter: wgpu::MipmapFilterMode::Nearest, // single mip level
-        ..Default::default()
-    })
+    // `has_mips = true`: `loaders::images` artık her glTF dokusunu tam mip zinciriyle
+    // yüklüyor. Buradaki eski yorum ("single mip level") o zincir üretilmeden önce
+    // doğruydu; sampler `Nearest` kaldığı sürece zincir üretilse bile hiç örneklenmezdi.
+    // Materyalin kendi `Nearest` tercihi korunuyor — `material_sampler` o durumda
+    // anizotropiyi kapatıyor (wgpu üç filtrenin de `Linear` olmasını şart koşuyor).
+    crate::texture_quality::material_sampler(
+        device,
+        "gltf_material_sampler",
+        key.wrap_u,
+        key.wrap_v,
+        key.mag,
+        key.min,
+        true,
+    )
 }
 
 /// Resolve which sampler configuration a material's maps should use.
