@@ -308,6 +308,17 @@ pub struct ConstraintSolver {
     /// Block-solver Tikhonov regularizasyonu (manifoldun ortalama normal efektif kütlesinin
     /// oranı). 4-coplanar temas bloğunun rank-eksikliğini giderir; fiziksel tilt-restoring
     /// modlarını sert bırakacak kadar küçük olmalı.
+    ///
+    /// **0.1'den 0.05'e indirildi (2026-08-06).** 0.1, arayüzlerin çoğunun DEJENERE tek noktalı
+    /// olduğu — yani rank-eksikliği hiç oluşmadığı, dolayısıyla bu terimin hiç uygulanmadığı —
+    /// dönemde seçilmişti. `clip_box_box` derinlik toleransı 4-noktalı bloğu norm hâline
+    /// getirince 0.1 fazla yumuşatma oldu: bir regülarizasyon terimi aynı zamanda bir
+    /// yumuşatmadır ve yumuşak arayüz yavaş yakınsar. Ölçüldü — sıkıştırılmış serbest zincir
+    /// (n=24, varsayılan sweep) 0.1'de 379 karede dinleniyor ve 5.4e-4 momentum sızdırıyor,
+    /// 0.05'te 0. karede dinleniyor ve 4e-6 sızdırıyor: 135× daha iyi korunum. 0.05'ten
+    /// 0.002'ye kadar her değer aynı; en BÜYÜĞÜ seçildi, çünkü rank-eksikliğine karşı en çok
+    /// sayısal payı bırakan o. 12 katlı yığınlar (6 hücre) her değerde ayakta.
+    /// (`tests/solver_quality.rs::does_block_regularization_drive_the_convergence_cost`)
     pub block_regularization: f32,
 
     /// Whole-CHAIN direct solve: yüksek (support-depth≥5), yeterince küçük chain adalarının
@@ -346,7 +357,7 @@ impl Default for ConstraintSolver {
             warm_start_match_tolerance: 0.02,
             block_solver: true,
             adaptive_iterations: true,
-            block_regularization: 0.1,
+            block_regularization: 0.05,
             direct_chain_solve: false,
         }
     }

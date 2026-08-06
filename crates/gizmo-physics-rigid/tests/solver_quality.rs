@@ -345,6 +345,17 @@ fn scene_crate_pile_spaced(
 ///   - **Energy.** There is no source of energy, so the kinetic energy must never exceed what
 ///     the two end boxes started with. Restitution is 0, so it should fall well below it.
 fn scene_compressed_free_chain(n: usize) -> (PhysicsWorld, Vec<usize>, Vec<Vec3>) {
+    scene_compressed_free_chain_spaced(n, 1.0)
+}
+
+/// `pitch` is the centre-to-centre spacing; 1.0 is exact contact, below it the boxes start
+/// overlapped. The overlapped variant is a control: it produced four contact points per interface
+/// even before `clip_box_box` grew a depth tolerance, so it separates "four points converge more
+/// slowly" from "zero-penetration contacts converge more slowly".
+fn scene_compressed_free_chain_spaced(
+    n: usize,
+    pitch: f32,
+) -> (PhysicsWorld, Vec<usize>, Vec<Vec3>) {
     let mut world = PhysicsWorld::new().with_gravity(Vec3::ZERO);
     add_ground(&mut world); // present but far below; nothing ever reaches it
     let no_bounce = PhysicsMaterial {
@@ -355,7 +366,7 @@ fn scene_compressed_free_chain(n: usize) -> (PhysicsWorld, Vec<usize>, Vec<Vec3>
         add_box(
             &mut world,
             i as u32 + 1,
-            Vec3::new(i as f32, 50.0, 0.0),
+            Vec3::new(i as f32 * pitch, 50.0, 0.0),
             0.5,
             no_bounce,
         );
@@ -1138,12 +1149,12 @@ fn the_gated_scenes_reach_the_adaptive_policy() {
     }
     cases.push(("crate pile 4x6x4", pile));
 
-    let (mut chain, _, _) = scene_compressed_free_chain(32);
-    for _ in 0..5 {
-        // The chain starts fragmented and links up as the compression wave reaches the middle;
-        // before that it is a pair of shallow islands and would not test the policy.
-        chain.step(DT).ok();
-    }
+    // Read on its FIRST frame. The chain used to link up gradually — depth 3 -> 7 -> 11 -> 15 ->
+    // 31 over frames 0-4 — so this stepped past that ramp before reading. Since `clip_box_box`
+    // grew a depth tolerance the interfaces are four-point from the start, the impulse crosses
+    // all 32 bodies in one frame (depth 31 at frame 0), the chain is at rest immediately and
+    // asleep by frame 2. Stepping first now reads a sleeping scene, which is no island at all.
+    let (chain, _, _) = scene_compressed_free_chain(32);
     cases.push(("free chain n=32", chain));
 
     for (label, mut world) in cases {
@@ -2624,6 +2635,151 @@ fn is_the_starved_pile_surviving_or_just_sleeping() {
             peak_v,
             peak_lean,
             format!("{}/{}", asleep, bodies.len())
+        );
+    }
+}
+
+/// Does the permanent one-point manifold on a small platform actually break stacking?
+///
+/// `what_does_a_manifold_look_like_when_it_is_born` finds that a box resting on a support of
+/// half-extent 1.5 or less never gets past a single contact point: `clip_box_box` rejects every
+/// corner at `signed_depth == 0.0`, GJK's one-point fallback lands at the centre, that point holds
+/// the box up with no torque, so the box never sinks, so `signed_depth` never turns positive and
+/// the clip path is never reached again. A one-point manifold has no tilt-resisting torque at
+/// all, which is precisely what the block solver exists to provide.
+///
+/// A crate on a small platform is an ordinary game scene, so the question is whether this is a
+/// curiosity or a defect users hit. Compare a stack on supports either side of the threshold.
+///
+/// Predicted if it matters: the ≤1.5 supports should be markedly less stable at the same height,
+/// because the bottom interface — the one carrying the whole column — provides no tilt stiffness.
+#[test]
+#[ignore = "measurement, not a gate — long (~5 min)"]
+fn does_a_small_platform_destabilise_a_stack() {
+    eprintln!("\n=== stacks on supports either side of the 1-point / 4-point threshold ===");
+    eprintln!(
+        "{:>8}  {:>10}  {:>8}  {:>12}  {:>11}  {:>11}",
+        "height", "support", "manifold", "blew_up_at", "peak|v|", "peak_lean"
+    );
+    for height in [4usize, 8, 12] {
+        for h in [0.6f32, 1.0, 1.5, 2.0, 20.0] {
+            let (mut world, bodies, origins) = scene_tower_on_ground(height, h);
+            let r = run(&mut world, &bodies, &origins, 3000, 0.5);
+            eprintln!(
+                "{:>8}  {:>10.2}  {:>8}  {:>12}  {:>11.3}  {:>11.4}",
+                height,
+                h,
+                if h <= 1.5 { "1-point" } else { "4-point" },
+                match r.blew_up_at {
+                    Some(f) => f.to_string(),
+                    None => "-".to_string(),
+                },
+                r.peak_speed,
+                r.peak_lean
+            );
+        }
+    }
+}
+
+/// Why does the free chain need more sweeps since `clip_box_box` grew a depth tolerance?
+///
+/// Two candidates, and they are separable. Either four contact points per interface simply take
+/// more Gauss-Seidel sweeps to converge than one did — in which case the slowdown was always
+/// there and the tolerance merely stopped hiding it behind a degenerate single point — or there
+/// is something specific to contacts at ZERO penetration.
+///
+/// The control is a chain built slightly overlapped. That produced four points per interface
+/// before the tolerance existed and still does, so if it converges quickly the four-point count is
+/// not the problem.
+#[test]
+#[ignore = "measurement, not a gate — prints a table"]
+fn is_the_chain_slow_because_of_four_points_or_zero_penetration() {
+    eprintln!("\n=== free chain n=24, 1800 frames: convergence vs initial interface state ===");
+    eprintln!(
+        "{:>18}  {:>7}  {:>12}  {:>10}  {:>14}",
+        "interface", "sweeps", "max|p|", "KE_end", "frames_to_rest"
+    );
+    for (label, pitch) in [
+        ("exact contact", 1.0f32),
+        ("1 mm overlap", 0.999),
+        ("5 mm overlap", 0.995),
+        ("2 cm overlap", 0.98),
+    ] {
+        for sweeps in [16usize, 34, 46] {
+            let (mut world, bodies, _) = scene_compressed_free_chain_spaced(24, pitch);
+            solver_with_exact_sweeps(&mut world, sweeps);
+            let c = chain_conservation(&mut world, &bodies, 1800);
+            eprintln!(
+                "{:>18}  {:>7}  {:>12.6}  {:>10.4}  {:>14}",
+                label,
+                sweeps,
+                c.max_momentum,
+                c.ke_end,
+                match c.frames_to_rest {
+                    Some(f) => f.to_string(),
+                    None => "never".to_string(),
+                }
+            );
+        }
+    }
+}
+
+/// Is the four-point interface's convergence cost the block solver's Tikhonov term?
+///
+/// `is_the_chain_slow_because_of_four_points_or_zero_penetration` shows the cost belongs to the
+/// four-point interface itself, not to zero penetration — a 1 mm overlapped chain, which had four
+/// points all along, converges exactly as slowly. So the cost predates the `clip_box_box` depth
+/// tolerance; that change only stopped hiding it behind a degenerate single point.
+///
+/// The obvious suspect is `ConstraintSolver::block_regularization`. A manifold's four coplanar
+/// normals span only three degrees of freedom, so the block LCP is rank-deficient and gets a
+/// Tikhonov term of `0.1 x` the mean diagonal. That term is also a softening, and a softer
+/// interface converges more slowly. A one-point manifold has no rank deficiency and took no
+/// regularisation at all, which is part of why the degenerate case looked fast.
+///
+/// Swept against the stack scenes as well as the chain, because lowering it trades numerical
+/// safety for stiffness and the stacks are what the regularisation exists to protect.
+#[test]
+#[ignore = "measurement, not a gate — long (~5 min)"]
+fn does_block_regularization_drive_the_convergence_cost() {
+    eprintln!("\n=== block_regularization sweep, default sweep counts ===");
+    eprintln!(
+        "{:>8}  {:>22}  {:>22}  {:>20}",
+        "reg", "chain n=24 (rest/|p|)", "chain n=32 (rest/|p|)", "12-high stacks"
+    );
+    for reg in [0.1f32, 0.05, 0.02, 0.01, 0.002] {
+        let mut cells = Vec::new();
+        for n in [24usize, 32] {
+            let (mut world, bodies, _) = scene_compressed_free_chain(n);
+            world.solver.block_regularization = reg;
+            let c = chain_conservation(&mut world, &bodies, 1800);
+            cells.push(format!(
+                "{:>9} / {:<9.6}",
+                match c.frames_to_rest {
+                    Some(f) => f.to_string(),
+                    None => "never".to_string(),
+                },
+                c.max_momentum
+            ));
+        }
+        // The stacks the regularisation exists to protect: 1/2/4 wide, 12 high, two grounds.
+        let mut collapses = 0;
+        for side in [1u32, 2, 4] {
+            for g in [20.0f32, 200.0] {
+                let (mut world, bodies, origins) = scene_crate_pile(side, 12);
+                world.colliders[0] = Collider::box_collider(Vec3::new(g, 1.0, g));
+                world.solver.block_regularization = reg;
+                if run(&mut world, &bodies, &origins, 3000, 0.5).blew_up_at.is_some() {
+                    collapses += 1;
+                }
+            }
+        }
+        eprintln!(
+            "{:>8.3}  {:>22}  {:>22}  {:>20}",
+            reg,
+            cells[0],
+            cells[1],
+            format!("{collapses} of 6 collapsed")
         );
     }
 }

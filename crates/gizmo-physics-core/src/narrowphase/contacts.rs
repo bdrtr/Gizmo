@@ -171,12 +171,30 @@ pub(super) fn clip_box_box(
     // Tolerance to avoid floating-point edge-case rejections.
     const SLAB_TOLERANCE: f32 = 1e-3;
 
+    /// The same idea as `SLAB_TOLERANCE`, for the depth test, and it was missing.
+    ///
+    /// The test used to be `signed_depth <= 0.0`, which rejects a corner that is EXACTLY on the
+    /// reference face. Two boxes placed at exact contact — every stack in this engine's tests and
+    /// a perfectly ordinary way to build a scene — have all four corners at `signed_depth == 0.0`,
+    /// so all four were rejected, Sutherland–Hodgman returned empty, the swapped-reference retry
+    /// returned empty for the same reason, and the pair fell through to the GJK/EPA fallback,
+    /// which returns ONE contact. A one-point manifold carries no tilt-resisting torque whatever
+    /// the block solver does with it, and the point GJK returns is not at the centre: its offset
+    /// grows with the other collider's size, reaching the resting box's own edge, so it delivers a
+    /// torque impulse the geometry does not call for (measured at about 0.03 rad/s for a unit
+    /// cube). Below a support half-extent of about 1.5 the interface never recovered at all — the
+    /// centred one-point contact held the box up without torque, so it never sank, so
+    /// `signed_depth` never became positive and the clip path was never reached again.
+    ///
+    /// See `gizmo-physics-rigid/tests/solver_quality.rs::what_does_a_manifold_look_like_when_it_is_born`.
+    const DEPTH_TOLERANCE: f32 = 1e-4;
+
     let contacts: Vec<ContactPoint> = box_corners(inc_pos, inc_rot, inc_h)
         .iter()
         .filter_map(|&corner| {
             // 1. Corner must be on or behind the reference face (depth along `normal`).
             let signed_depth = ref_face_d - corner.dot(normal);
-            if signed_depth <= 0.0 {
+            if signed_depth < -DEPTH_TOLERANCE {
                 return None;
             } // in front of reference face
 
