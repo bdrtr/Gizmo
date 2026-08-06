@@ -2340,10 +2340,34 @@ toplandı.
 > ✅ **Patlama uyuyan cismi uyandırmıyordu** — artık uyandırıyor, ve **yarıçap testi
 > uyandırmadan ÖNCE** koşuyor (patlamanın ulaşmadığını uyandırmak kendi başına hata olurdu).
 >
-> ⬜ **Adaptif iterasyon sayısı SI yolunda ölü — DOĞRULANDI ama bilerek DEĞİŞTİRİLMEDİ.**
-> `n_iterations` yalnız iki yerde okunuyor ve ikisi de TGS dalında. Ama sweep sayısını o yolda
-> körlemesine yükseltmek her CCD testinin sonucunu değiştirir; sessizce yanlış ama kararlı bir
-> çözücü kör bir değişiklikle iyileşmez. Kendi ölçüm turunu istiyor.
+> ✅ **Adaptif iterasyon sayısı SI yolunda ölü — ÖLÇÜLDÜ, ve YAPILMAMASI gerektiği çıktı**
+> *(2026-08-07)*. Madde "ölçüm turunu hak ediyor" diyordu; tur koşturuldu.
+>
+> `tests/solver_quality.rs::sweep_ladder_tower_split_impulse` eklendi — mevcut
+> `sweep_ladder_tower` merdiveninin birebir aynısı, tek farkı `use_tgs_soft = false`. İki tablo
+> yalnız çözücüde farklı: aynı sahneler, aynı üç zemin boyutu, aynı 1500 kare, aynı sınır.
+>
+> **N = 32'de** (adaptif sayının varsayılan config'de bir şey değiştirdiği D ≥ 14 eşiğinin çok
+> üstünde):
+>
+> | sweep | TGS patlama/3, lean | SI patlama/3, lean |
+> |---|---|---|
+> | 8 | 0, 0.0000 | 0, 0.0096 |
+> | **20** (varsayılan) | 0, 0.0000 | **0, 0.0028** |
+> | 28 | 0, 0.0000 | 0, 0.0014 |
+> | 46 | 0, 0.0000 | **0, 0.0033** |
+>
+> **Split-impulse test edilen HİÇBİR derinlikte (16/24/32) varsayılan sweep sayısında
+> patlamıyor** — N=32'de 8 sweep'ten itibaren stabil. Yani ölü adaptif sayı bu yolu
+> az-çözülmüş bırakmıyor; uzatmak kararlılık değil yalnız lean satın alırdı, ada başına
+> gerçek CPU maliyetiyle.
+>
+> **Ve lean'i bile güvenilir şekilde satın almazdı: SI sütunu MONOTON DEĞİL** — 46 sweep
+> (0.0033), 28'den (0.0014) daha kötü. Kod yorumundaki "ayrı bir pseudo-velocity pass'inde daha
+> fazla bias'lı sweep bariz şekilde daha kararlı değil" şüphesi böylece doğrulandı.
+>
+> Ölçüm testi `#[ignore]`'lu kalıyor (kapı değil, ölçüm) ki ileride biri sayıları yeniden
+> üretebilsin.
 > ⬜ **ABA `is_fixed_base == false` yerçekimini sessizce düşürüyor** — bu turda ele alınmadı.
 
 ### D-eski — Model doğruluğu (özgün liste)

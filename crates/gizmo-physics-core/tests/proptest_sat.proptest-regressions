@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 458b3911181e6a500c1786ad29a9b1cb416eeea0f8f0dd5dcfee00aedfb8452c # shrinks to rot_a = Quat(0.3246019, 0.75602084, -0.22267364, -0.5229556), rot_b = Quat(-0.49853113, 0.4519248, -0.03492433, 0.7389256), ox = -0.023629948, oy = -0.21391477, oz = -0.011868901, hax = 0.90450454, hay = 0.6934673, haz = 0.8137197
