@@ -266,8 +266,8 @@ fn swept_step_does_not_advance_a_node_twice() {
     // What an integrator produces — the CPU's `next_pos`, or the shader's written-back node.
     let integrated = pre_step + velocity * dt; // x ≈ 1.0
 
-    let (position, out_velocity) =
-        resolve_swept_step(pre_step, integrated, velocity, dt, &colliders);
+    let out = resolve_swept_step(pre_step, integrated, velocity, 1.0, dt, &colliders, &[]);
+    let (position, out_velocity) = (out.position, out.velocity);
 
     assert!(
         (position.x - integrated.x).abs() < 1e-5,
@@ -291,8 +291,8 @@ fn swept_step_does_not_advance_a_node_twice() {
     // from the ALREADY-integrated position. From x ≈ 1.0 the wall is 0.5 m ahead, inside the
     // sweep window, so the node is advanced a further 0.4 m to x ≈ 1.4 — 1.4 m of travel in a
     // 1.0 m step — and its velocity is reflected off a wall it never got to.
-    let (bad_position, bad_velocity, bad_hit) =
-        resolve_node_collision(integrated, velocity, dt, &colliders);
+    let bad = resolve_node_collision(integrated, velocity, 1.0, dt, &colliders, &[]);
+    let (bad_position, bad_velocity, bad_hit) = (bad.position, bad.velocity, bad.collided());
     assert!(
         bad_hit,
         "control: sweeping from the integrated position must find the wall, or this \
@@ -322,8 +322,8 @@ fn swept_step_still_resolves_a_real_collision() {
     let colliders = vec![wall(0.55)];
     let integrated = pre_step + velocity * dt;
 
-    let (position, out_velocity) =
-        resolve_swept_step(pre_step, integrated, velocity, dt, &colliders);
+    let out = resolve_swept_step(pre_step, integrated, velocity, 1.0, dt, &colliders, &[]);
+    let (position, out_velocity) = (out.position, out.velocity);
 
     assert!(
         (position.x - 0.4).abs() < 1e-4,

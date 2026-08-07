@@ -24,6 +24,19 @@
 #[cfg(target_arch = "wasm32")]
 mod parallel_compat;
 pub mod cloth;
+/// Two-way soft↔rigid coupling: the data types that carry a rigid body's mass properties
+/// *into* the soft-body collision response and the reaction impulse back *out* of it.
+///
+/// [`soft_body::resolve_node_collision`] used to reflect a node off every collider as though
+/// the collider could not move, and discard both the identity of what was hit and the impulse
+/// it had just computed — so a soft body could not shove a light crate. The types here close
+/// that loop: [`coupling::RigidReaction`] going in, [`coupling::NodeImpact`] and
+/// [`coupling::RigidImpulse`] coming back.
+///
+/// Everything in this module is plain data and this crate never applies it — it does not know
+/// what a rigid body is. The ECS driver [`system::soft_body_step_system`] does the applying
+/// when the `rigid-coupling` feature is on.
+pub mod coupling;
 pub mod error;
 /// WGPU compute-shader path for stepping [`soft_body::SoftBodyMesh`] on the GPU.
 ///
@@ -52,6 +65,10 @@ pub mod soft_body;
 /// drivers also collect every entity carrying both a `Transform` and a `Collider` into the
 /// collider slice they pass down; the rope driver passes none, since [`rope::Rope`] has no
 /// rigid-collider path at all.
+///
+/// With the default `rigid-coupling` feature the soft-body driver additionally reads the
+/// rigid bodies' mass properties and **spends the reaction impulses back on them**, so a soft
+/// body can shove a light crate. Cloth and rope remain one-way.
 /// Requires the `ecs` feature — these are the ECS drivers.
 #[cfg(feature = "ecs")]
 pub mod system;
@@ -60,6 +77,7 @@ pub use error::SoftBodyError;
 
 // Re-export common traits and structs
 pub use cloth::*;
+pub use coupling::*;
 pub use rope::*;
 pub use soft_body::*;
 #[cfg(feature = "ecs")]
