@@ -587,17 +587,28 @@ impl GpuCompute {
                 // rebound direction rather than the approach direction. That is an artifact of
                 // the shader owning a ground plane the CPU path does not have, not of this
                 // call; the non-collided branch still keeps the shader's clamped position.
-                let (position, velocity) = crate::soft_body::resolve_swept_step(
+                //
+                // The empty reaction table is deliberate and is a KNOWN GAP: this path has no
+                // access to rigid-body mass properties, so every collider is treated as
+                // immovable and the reaction impulses the CPU path now hands back
+                // (`SoftBodyMesh::step_coupled`) are not produced here. That keeps the two
+                // paths numerically identical — which is what `tests/cpu_gpu_parity.rs`
+                // asserts — at the price of no two-way coupling on the GPU path. Closing it
+                // means threading a `&[(BodyHandle, RigidReaction)]` and an impulse sink
+                // through `step_soft_bodies`.
+                let swept = crate::soft_body::resolve_swept_step(
                     node.position,
                     integrated_pos,
                     integrated_vel,
+                    node.mass,
                     dt,
                     rigid_colliders,
+                    &[],
                 );
 
                 // This writes the CPU side; the next step re-uploads it to the GPU.
-                node.position = position;
-                node.velocity = velocity;
+                node.position = swept.position;
+                node.velocity = swept.velocity;
             }
         }
 

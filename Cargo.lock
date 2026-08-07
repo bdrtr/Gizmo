@@ -2846,6 +2846,7 @@ dependencies = [
  "gizmo-core",
  "gizmo-math",
  "gizmo-physics-core",
+ "gizmo-physics-rigid",
  "naga",
  "pollster 0.3.0",
  "proptest",

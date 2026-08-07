@@ -1,6 +1,8 @@
 use gizmo_math::{Mat3, Vec3};
 use gizmo_physics_core::BodyHandle;
 
+use crate::coupling::{accumulate_impulse, reaction_for, NodeCollision, NodeImpact, RigidImpulse, RigidReaction};
+
 /// Represents a single vertex/node in the FEM soft body mesh.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SoftBodyNode {
@@ -104,14 +106,31 @@ pub struct SoftBodyMesh {
 #[cfg(feature = "ecs")]
 gizmo_core::impl_component!(SoftBodyMesh);
 
-/// Sweeps a single soft-body node along its velocity for `dt` seconds and resolves the first
-/// surface it would hit, returning `(position, velocity, collided)`.
+/// Restitution of the node↔surface response: the fraction of the approach speed that comes
+/// back out along the normal. Hard-coded and non-configurable, as it has always been.
+const BOUNCE: f32 = 0.5;
+
+/// Fraction of the *relative* tangential slip removed at the contact. Not a Coulomb
+/// coefficient — there is no `μ·j_n` cone here, the tangential impulse is whatever it takes
+/// to remove 80% of the slip. Preserved verbatim from the pre-coupling response; putting a
+/// friction cone on it is a separate, behaviour-changing change.
+const FRICTION: f32 = 0.8;
+
+/// Sweeps a single soft-body node along its velocity for `dt` seconds, resolves the first
+/// surface it would hit, and reports the reaction that surface's body is owed.
 ///
-/// When `collided` is `false` nothing was hit and the input `position`/`velocity` come back
-/// unchanged — the function never integrates, so in that case the caller must advance the
-/// node itself. When it is `true` the returned position has already been moved along the
-/// sweep (never further than the swept distance) and the returned velocity is the
-/// post-impact one; use them in place of your own integrated values.
+/// # What comes back
+///
+/// A [`NodeCollision`]. When [`impact`](NodeCollision::impact) is `None` nothing was hit and
+/// the input `position`/`velocity` come back unchanged — the function never integrates, so in
+/// that case the caller must advance the node itself. When it is `Some` the returned position
+/// has already been moved along the sweep (never further than the swept distance) and the
+/// returned velocity is the post-impact one; use them in place of your own integrated values.
+/// The [`NodeImpact`] additionally names the [`BodyHandle`] that was hit and carries the
+/// **equal and opposite** impulse owed to it — the omission the previous version of this
+/// comment recorded, and the reason a soft body could not push a crate.
+///
+/// # The sweep
 ///
 /// The swept distance is `velocity.length() * dt` in metres; 1e-5 m or less (a resting or
 /// near-resting node) short-circuits to "no collision", which also covers a zero velocity.
@@ -121,81 +140,219 @@ gizmo_core::impl_component!(SoftBodyMesh);
 /// Every entry of `rigid_colliders` is ray-tested — a linear scan, there is no broad-phase —
 /// and only the single *nearest* hit within `swept distance + 0.1 m` is resolved, so a node
 /// facing two adjacent surfaces (a tiled floor, a wall meeting a floor) stops at the first
-/// one instead of being displaced once per collider. The [`BodyHandle`] of the collider that
-/// was hit is not reported back.
-///
-/// The response uses hard-coded, non-configurable coefficients: the node is placed 0.1 m
-/// short of the surface (a fixed skin thickness) and, if it is genuinely approaching that
-/// surface (`velocity · normal < 0`), the normal component of its velocity is reflected and
-/// scaled by a restitution of `0.5` while the tangential component is scaled by `1 - 0.8`
-/// (friction).
+/// one instead of being displaced once per collider.
 ///
 /// This is a swept stop, not a penetration solver: the correction only ever moves the node
-/// *forward* along its own velocity, by `(hit distance − 0.1).max(0.0)` metres. Nothing here
-/// pushes a node back out along the surface normal.
+/// *forward* along its own velocity, by `(hit distance − 0.1).max(0.0)` metres — a fixed
+/// 0.1 m skin. Nothing here pushes a node back out along the surface normal.
+///
+/// # The response
+///
+/// `reactions` supplies the mass properties and velocity of the bodies behind the colliders,
+/// looked up by handle with [`reaction_for`]; anything not in the table is
+/// [`RigidReaction::IMMOVABLE`]. **Passing `&[]` reproduces the pre-coupling behaviour bit for
+/// bit** (see below), which is what every caller without a rigid solver does.
+///
+/// With `n` the outward surface normal, `m` the node's mass, `r` the lever arm from the body's
+/// centre of mass to the contact point, and `v_rel = v_node − (v_body + ω × r)` the relative
+/// velocity *at the contact point*, the normal impulse is the textbook two-body one:
+///
+/// ```text
+/// k_n = 1/m + 1/M + n · ((I⁻¹ (r × n)) × r)     [RigidReaction::effective_mass]
+/// j_n = −(1 + e)·(v_rel · n) / k_n              ≥ 0, applied only while v_rel·n < 0
+/// ```
+///
+/// and the tangential one removes a fixed fraction of the *relative* slip through the same
+/// effective-mass denominator taken along the slip direction `t`:
+///
+/// ```text
+/// j_t = −f·|v_rel − n(v_rel·n)| / k_t
+/// ```
+///
+/// The total impulse `J = j_n·n + j_t·t` is then applied to **both** sides:
+/// `v_node += J/m` here, and `−J` (plus `r × −J` about the centre of mass) is handed back in
+/// the [`NodeImpact`] for the caller to spend on the body. Because the two halves are the same
+/// `J`, total linear momentum is conserved by construction, and so is angular momentum about
+/// any fixed point — up to the 0.1 m skin, since the node is parked short of the contact point
+/// whose lever arm the body's share was computed with.
+///
+/// This is *not* the old response plus a push. The old response reflected the node as though
+/// the surface could not move; adding a body push on top of that would have **created**
+/// momentum, because the node kept the velocity change of an infinitely heavy collision while
+/// the body took a second, unpaid one. Here the same `J` is what the node gets and what the
+/// body is owed, so the exchange nets to zero however light the body is.
+///
+/// # Bodies that cannot react
+///
+/// A static or kinematic body, or a dynamic one with `mass == 0`, reports
+/// [`can_react`](RigidReaction::can_react)` == false` and is handed a **zero** impulse — it is
+/// never pushed. Its velocity still enters `v_rel`, though, so a moving kinematic platform now
+/// kicks a node it sweeps into; before coupling every collider was assumed to be at rest.
+///
+/// # Exactness of the immovable path
+///
+/// When the resolved reaction is **inert** — [`can_react`](RigidReaction::can_react) is false
+/// *and* the body is at rest — the node update takes a separate branch that evaluates the
+/// *original* expression, operation for operation. The general formula agrees with it
+/// analytically (`k_n` collapses to `1/m`, so `J/m` is exactly `−(1+e)(v·n)n − f·v_t`), but not
+/// to the last bit — `j·(1/m)` rounds where the direct form does not, and `v_t − f·|v_t|·t`
+/// rounds differently from `v_t·(1 − f)`. Keeping the old arithmetic means existing scenes
+/// standing on level geometry are bit-for-bit unchanged. `tests/soft_rigid_coupling.rs` pins
+/// the two forms against each other so they cannot silently diverge.
+///
+/// The branch is chosen on that *behaviour*, not on equality with
+/// [`RigidReaction::IMMOVABLE`]. With both `inv_mass` and `inv_inertia` zero and both
+/// velocities zero, [`velocity_at`](RigidReaction::velocity_at) returns `Vec3::ZERO` and
+/// [`effective_mass`](RigidReaction::effective_mass) returns exactly `1/m` whatever
+/// `center_of_mass` holds, so every such reaction is numerically indistinguishable from
+/// `IMMOVABLE` and gets the legacy arithmetic.
+/// That is what keeps a **stationary kinematic platform** (a door, a lift parked at a floor)
+/// from drifting a ULP away from the pre-coupling engine merely because the driver now reports
+/// its centre of mass. A kinematic body that is actually *moving* is not inert and takes the
+/// general branch, which is the whole point of feeding its velocity in.
+///
+/// # `node_mass`
+///
+/// Kilograms, and the mass the impulse is divided by. A non-positive or non-finite mass has no
+/// meaningful two-body solution, so such a node falls back to the immovable (one-sided)
+/// response and the body is owed nothing; [`SoftBodyMesh::step`] never integrates such a node
+/// in the first place.
 pub fn resolve_node_collision(
     mut position: Vec3,
     mut velocity: Vec3,
+    node_mass: f32,
     dt: f32,
     rigid_colliders: &[(
         BodyHandle,
         gizmo_physics_core::Transform,
         gizmo_physics_core::Collider,
     )],
-) -> (Vec3, Vec3, bool) {
-    let mut collided = false;
+    reactions: &[(BodyHandle, RigidReaction)],
+) -> NodeCollision {
     let dist = velocity.length() * dt;
+    if dist <= 1e-5 {
+        return NodeCollision::miss(position, velocity);
+    }
 
-    if dist > 1e-5 {
-        // The `Ray` is built INSIDE the gate on purpose (it used to be built before it).
-        //
-        // `Ray::new` `warn!`s when it cannot normalise the direction and falls back to +Z,
-        // and `velocity.normalize_or_zero()` returns exactly `Vec3::ZERO` for a velocity that
-        // is zero — or merely subnormal, since `length_recip()` is then `inf` and the
-        // fallback kicks in. A node in force equilibrium is damped geometrically toward zero
-        // every step (`velocity *= damping.powf(dt)`), so it lands in exactly that state and
-        // stays there: one WARN per settled node per step, drowning the log of any scene with
-        // a soft body resting on the ground.
-        //
-        // The warn itself is correct where it lives — a zero direction genuinely is a caller
-        // bug — so it is neither downgraded nor made once-only. What was wrong is that this
-        // caller asked for a ray it was never going to use. Nothing below reads `ray` when
-        // `dist <= 1e-5`, so the sweep, the nearest-hit pick and the response are bit-for-bit
-        // unchanged; only the spurious log line goes away. A genuinely broken velocity
-        // (infinite: `dist` is then `inf`, so the gate opens) still warns, as it should.
-        let ray = gizmo_physics_core::raycast::Ray::new(position, velocity.normalize_or_zero());
+    // The `Ray` is built INSIDE the gate on purpose (it used to be built before it).
+    //
+    // `Ray::new` `warn!`s when it cannot normalise the direction and falls back to +Z,
+    // and `velocity.normalize_or_zero()` returns exactly `Vec3::ZERO` for a velocity that
+    // is zero — or merely subnormal, since `length_recip()` is then `inf` and the
+    // fallback kicks in. A node in force equilibrium is damped geometrically toward zero
+    // every step (`velocity *= damping.powf(dt)`), so it lands in exactly that state and
+    // stays there: one WARN per settled node per step, drowning the log of any scene with
+    // a soft body resting on the ground.
+    //
+    // The warn itself is correct where it lives — a zero direction genuinely is a caller
+    // bug — so it is neither downgraded nor made once-only. What was wrong is that this
+    // caller asked for a ray it was never going to use. Nothing below reads `ray` when
+    // `dist <= 1e-5`, so the sweep, the nearest-hit pick and the response are bit-for-bit
+    // unchanged; only the spurious log line goes away. A genuinely broken velocity
+    // (infinite: `dist` is then `inf`, so the gate opens) still warns, as it should.
+    let ray = gizmo_physics_core::raycast::Ray::new(position, velocity.normalize_or_zero());
 
-        // Resolve against the SINGLE nearest hit. The old loop applied the position
-        // snap once PER collider within range, so a node facing two adjacent surfaces
-        // (a tiled floor, a wall meeting a floor) was advanced twice — launching it
-        // straight PAST the geometry instead of stopping at the first surface.
-        let mut nearest: Option<(f32, Vec3)> = None;
-        for (_, col_trans, col) in rigid_colliders {
-            if let Some((d, n)) =
-                gizmo_physics_core::raycast::Raycast::ray_shape(&ray, &col.shape, col_trans)
-            {
-                if d <= dist + 0.1 && nearest.is_none_or(|(nd, _)| d < nd) {
-                    nearest = Some((d, n));
-                }
+    // Resolve against the SINGLE nearest hit. The old loop applied the position
+    // snap once PER collider within range, so a node facing two adjacent surfaces
+    // (a tiled floor, a wall meeting a floor) was advanced twice — launching it
+    // straight PAST the geometry instead of stopping at the first surface.
+    let mut nearest: Option<(f32, Vec3, BodyHandle)> = None;
+    for (handle, col_trans, col) in rigid_colliders {
+        if let Some((d, n)) =
+            gizmo_physics_core::raycast::Raycast::ray_shape(&ray, &col.shape, col_trans)
+        {
+            if d <= dist + 0.1 && nearest.is_none_or(|(nd, _, _)| d < nd) {
+                nearest = Some((d, n, *handle));
             }
-        }
-
-        if let Some((d, n)) = nearest {
-            let bounce = 0.5;
-            let friction = 0.8;
-
-            let vn = velocity.dot(n);
-            if vn < 0.0 {
-                let vt = velocity - n * vn;
-                velocity = vt * (1.0 - friction) - n * (vn * bounce);
-            }
-
-            position += ray.direction * (d - 0.1).max(0.0);
-            collided = true;
         }
     }
 
-    (position, velocity, collided)
+    let Some((d, n, body)) = nearest else {
+        return NodeCollision::miss(position, velocity);
+    };
+
+    let reaction = reaction_for(reactions, body);
+    // The contact point is on the SURFACE. The node itself is parked 0.1 m short of it (the
+    // skin), but the body's lever arm has to be measured where the push actually lands.
+    let point = ray.origin + ray.direction * d;
+
+    // "Inert" = cannot take an impulse AND is not moving. Such a reaction is numerically
+    // indistinguishable from `RigidReaction::IMMOVABLE` — `velocity_at` is `Vec3::ZERO` and
+    // `effective_mass` is exactly `1/m` however the centre of mass is placed — so it takes the
+    // legacy branch and stays bit-for-bit identical to the pre-coupling engine. Testing the
+    // behaviour rather than `reaction == IMMOVABLE` is what keeps a *stationary* kinematic
+    // platform from drifting a ULP just because the driver now reports its COM.
+    let inert = !reaction.can_react()
+        && reaction.linear == Vec3::ZERO
+        && reaction.angular == Vec3::ZERO;
+
+    // `node_mass <= 0` has no two-body solution (1/m is Inf/NaN). `SoftBodyMesh::step` never
+    // feeds one — it skips such nodes entirely — but this is a public entry point.
+    let two_body = !inert && node_mass > 0.0 && node_mass.is_finite();
+
+    let mut impact = NodeImpact {
+        body,
+        point,
+        normal: n,
+        impulse: Vec3::ZERO,
+        angular_impulse: Vec3::ZERO,
+    };
+
+    if two_body {
+        let inv_m = 1.0 / node_mass;
+        let r = point - reaction.center_of_mass;
+        let v_rel = velocity - reaction.velocity_at(point);
+        let vn = v_rel.dot(n);
+
+        // Only a node genuinely CLOSING on the surface is resolved. Measured on the relative
+        // velocity, not the node's own: a node drifting slower than the surface it sits on is
+        // separating, and pulling it back would be the classic sticky-contact bug.
+        if vn < 0.0 {
+            let mut j = Vec3::ZERO;
+
+            let k_n = reaction.effective_mass(inv_m, r, n);
+            if k_n > 0.0 {
+                j += n * (-(1.0 + BOUNCE) * vn / k_n);
+            }
+
+            let vt = v_rel - n * vn;
+            let vt_len = vt.length();
+            if vt_len > 1e-6 {
+                let t = vt / vt_len;
+                let k_t = reaction.effective_mass(inv_m, r, t);
+                if k_t > 0.0 {
+                    j += t * (-FRICTION * vt_len / k_t);
+                }
+            }
+
+            velocity += j * inv_m;
+
+            // The other half. Withheld entirely from a body that cannot take it, so
+            // "static/kinematic bodies are never pushed" is a property of this function and
+            // not of whoever spends the result.
+            if reaction.can_react() {
+                impact.impulse = -j;
+                impact.angular_impulse = r.cross(-j);
+            }
+        }
+    } else {
+        // Inert surface (or an unusable node mass): the ORIGINAL expression, verbatim.
+        // Analytically this is the `1/M → 0, I⁻¹ → 0, v_body → 0` limit of the branch above;
+        // kept as written so the float result is bit-identical to the pre-coupling engine.
+        let vn = velocity.dot(n);
+        if vn < 0.0 {
+            let vt = velocity - n * vn;
+            velocity = vt * (1.0 - FRICTION) - n * (vn * BOUNCE);
+        }
+    }
+
+    position += ray.direction * (d - 0.1).max(0.0);
+
+    NodeCollision {
+        position,
+        velocity,
+        impact: Some(impact),
+    }
 }
 
 /// Picks the `(position, velocity)` to store for a node that has ALREADY been integrated,
@@ -217,26 +374,36 @@ pub fn resolve_node_collision(
 /// - `integrated_velocity` — the post-force, post-damping velocity. It is both the sweep
 ///   direction and the input to the bounce/friction response.
 ///
-/// See [`resolve_node_collision`] for the sweep itself, its `dist + 0.1 m` search window and
-/// its hard-coded response coefficients.
+/// See [`resolve_node_collision`] for the sweep itself, its `dist + 0.1 m` search window, its
+/// hard-coded response coefficients and the meaning of `node_mass` / `reactions`. The
+/// [`NodeImpact`] is passed straight through, so this is also where the caller picks up the
+/// reaction owed to the rigid body.
 pub fn resolve_swept_step(
     pre_step_position: Vec3,
     integrated_position: Vec3,
     integrated_velocity: Vec3,
+    node_mass: f32,
     dt: f32,
     rigid_colliders: &[(
         BodyHandle,
         gizmo_physics_core::Transform,
         gizmo_physics_core::Collider,
     )],
-) -> (Vec3, Vec3) {
-    let (swept_position, swept_velocity, collided) =
-        resolve_node_collision(pre_step_position, integrated_velocity, dt, rigid_colliders);
+    reactions: &[(BodyHandle, RigidReaction)],
+) -> NodeCollision {
+    let swept = resolve_node_collision(
+        pre_step_position,
+        integrated_velocity,
+        node_mass,
+        dt,
+        rigid_colliders,
+        reactions,
+    );
 
-    if collided {
-        (swept_position, swept_velocity)
+    if swept.collided() {
+        swept
     } else {
-        (integrated_position, integrated_velocity)
+        NodeCollision::miss(integrated_position, integrated_velocity)
     }
 }
 
@@ -372,6 +539,11 @@ impl SoftBodyMesh {
     ///
     /// Element forces are computed in parallel (sequentially on `wasm32`) but accumulated in
     /// element order, so the result is deterministic and independent of thread scheduling.
+    ///
+    /// **Every collider is treated as immovable and at rest**, and the reaction the bodies
+    /// behind them are owed is discarded. That is what this method has always done and it is
+    /// left exactly so, bit for bit; [`step_coupled`](Self::step_coupled) is the two-way
+    /// version.
     pub fn step(
         &mut self,
         dt: f32,
@@ -381,6 +553,57 @@ impl SoftBodyMesh {
             gizmo_physics_core::Transform,
             gizmo_physics_core::Collider,
         )],
+    ) {
+        let mut sink = Vec::new();
+        self.step_coupled(dt, gravity, rigid_colliders, &[], &mut sink);
+        debug_assert!(
+            sink.is_empty(),
+            "an empty reaction table can only produce immovable contacts"
+        );
+    }
+
+    /// [`step`](Self::step), but the rigid bodies feel it.
+    ///
+    /// `reactions` describes the bodies behind `rigid_colliders` — mass, inverse world
+    /// inertia, centre of mass and current velocity — keyed by the same [`BodyHandle`] the
+    /// collider list carries. Anything absent from it is [`RigidReaction::IMMOVABLE`], so
+    /// `&[]` is exactly [`step`](Self::step).
+    ///
+    /// Every impulse the nodes owe the bodies this step is **appended** to `out_impulses`,
+    /// summed per body in first-touch order (see [`accumulate_impulse`]). The caller spends
+    /// them:
+    ///
+    /// ```text
+    /// v += inv_mass  · impulse.linear
+    /// ω += inv_inertia · impulse.angular
+    /// ```
+    ///
+    /// …and must WAKE any sleeping body it does so to, or the write is skipped by the
+    /// integrator and swallowed — the same trap `physics_explosion_system` fell into. A body
+    /// only appears in the list when it was actually pushed, which is the scope the wake
+    /// should use.
+    ///
+    /// # Within-step staleness
+    ///
+    /// Every node of every soft body sees the *same* rigid-body velocity — the one in
+    /// `reactions`, sampled before the step. This is a Jacobi-style exchange, not
+    /// Gauss-Seidel: the second node to hit a crate does not see the velocity the first node
+    /// just gave it. That costs accuracy for a many-node impact (the exchange is slightly
+    /// over-counted, so the contact is a little too bouncy) but **not** conservation: each
+    /// node's `+J` and the body's `−J` are the same number whatever velocity `J` was computed
+    /// from, so the sum is zero regardless. The conservation oracle in
+    /// `tests/soft_rigid_coupling.rs` therefore holds for a multi-node impact too.
+    pub fn step_coupled(
+        &mut self,
+        dt: f32,
+        gravity: Vec3,
+        rigid_colliders: &[(
+            BodyHandle,
+            gizmo_physics_core::Transform,
+            gizmo_physics_core::Collider,
+        )],
+        reactions: &[(BodyHandle, RigidReaction)],
+        out_impulses: &mut Vec<RigidImpulse>,
     ) {
         let mut forces: Vec<Vec3> = self.nodes.iter().map(|n| gravity * n.mass).collect();
 
@@ -470,15 +693,23 @@ impl SoftBodyMesh {
             // PRE-step position, fall back to `next_pos` when nothing is hit, leave the
             // velocity alone in that case) — this is a pure extraction and changes no result.
             // It exists so the GPU readback path cannot drift away from it again.
-            let (position, velocity) = resolve_swept_step(
+            let swept = resolve_swept_step(
                 node.position,
                 next_pos,
                 node.velocity,
+                node.mass,
                 dt,
                 rigid_colliders,
+                reactions,
             );
-            node.position = position;
-            node.velocity = velocity;
+            node.position = swept.position;
+            node.velocity = swept.velocity;
+
+            // The half of the exchange the rigid body is owed. Accumulated in node order, so
+            // the sum — and therefore the body's velocity next step — is replay-stable.
+            if let Some(impact) = &swept.impact {
+                accumulate_impulse(out_impulses, impact);
+            }
         }
     }
 }
@@ -596,8 +827,9 @@ mod tests {
         // Near faces at x = 0.50 and x = 0.60 (both within the dist+0.1 window).
         let colliders = vec![thin(0.55), thin(0.65)];
 
-        let (pos, _v, hit) = resolve_node_collision(node, vel, dt, &colliders);
-        assert!(hit, "the node should register a collision");
+        let out = resolve_node_collision(node, vel, 1.0, dt, &colliders, &[]);
+        let pos = out.position;
+        assert!(out.collided(), "the node should register a collision");
         // Nearest surface is at x=0.50 → snap to ~0.40. The old per-collider sum
         // pushed it to ~0.90, past BOTH boxes (which end at x=0.70) — a tunnel.
         assert!(
@@ -779,10 +1011,10 @@ mod tests {
             Collider::sphere(1.0),
         )];
         let pos = Vec3::new(0.0, 1.0, 0.0);
-        let (p, v, hit) = resolve_node_collision(pos, Vec3::ZERO, 1.0 / 60.0, &colliders);
-        assert!(!hit);
-        assert_eq!(p, pos);
-        assert_eq!(v, Vec3::ZERO);
+        let out = resolve_node_collision(pos, Vec3::ZERO, 1.0, 1.0 / 60.0, &colliders, &[]);
+        assert!(!out.collided());
+        assert_eq!(out.position, pos);
+        assert_eq!(out.velocity, Vec3::ZERO);
     }
 
     /// A surface beyond the node's swept distance (plus the small margin) is ignored: no
@@ -796,9 +1028,20 @@ mod tests {
             Collider::sphere(0.5),
         )];
         // Slow node: dist = 1 * (1/60) ≈ 0.017, far short of the x=1.5 surface.
-        let (p, _v, hit) = resolve_node_collision(Vec3::ZERO, Vec3::new(1.0, 0.0, 0.0), 1.0 / 60.0, &colliders);
-        assert!(!hit, "surface out of sweep range must not collide");
-        assert_eq!(p, Vec3::ZERO, "position must be untouched when nothing is hit");
+        let out = resolve_node_collision(
+            Vec3::ZERO,
+            Vec3::new(1.0, 0.0, 0.0),
+            1.0,
+            1.0 / 60.0,
+            &colliders,
+            &[],
+        );
+        assert!(!out.collided(), "surface out of sweep range must not collide");
+        assert_eq!(
+            out.position,
+            Vec3::ZERO,
+            "position must be untouched when nothing is hit"
+        );
     }
 
     /// A node sweeping into a sphere stops just short of the surface and reflects its inward
@@ -812,11 +1055,29 @@ mod tests {
             Collider::sphere(0.5), // near surface at x = 1.5
         )];
         // dist = 120 * (1/60) = 2 > 1.5 → the ray reaches the surface.
-        let (p, v, hit) = resolve_node_collision(Vec3::ZERO, Vec3::new(120.0, 0.0, 0.0), 1.0 / 60.0, &colliders);
-        assert!(hit, "the node must register the sphere hit");
+        let out = resolve_node_collision(
+            Vec3::ZERO,
+            Vec3::new(120.0, 0.0, 0.0),
+            1.0,
+            1.0 / 60.0,
+            &colliders,
+            &[],
+        );
+        let (p, v) = (out.position, out.velocity);
+        let impact = out.impact.expect("the node must register the sphere hit");
         assert!(p.x < 1.5, "node must stop before the surface, got x = {}", p.x);
         assert!(v.x < 0.0, "inward velocity must reflect (bounce), got vx = {}", v.x);
         assert!(p.is_finite() && v.is_finite());
+        // The sweep now names the collider it hit — the omission this function's doc comment
+        // used to record. With no reaction data the surface is immovable, so it is owed
+        // nothing.
+        assert_eq!(impact.body, BodyHandle::from_id(1));
+        assert_eq!(impact.impulse, Vec3::ZERO);
+        assert!(
+            (impact.point.x - 1.5).abs() < 1e-4,
+            "the contact point is on the SURFACE (x = 1.5), not where the node parked; got {}",
+            impact.point.x
+        );
     }
 
     /// Counts the WARN-level `tracing` events dispatched on the current thread.
@@ -892,10 +1153,10 @@ mod tests {
             // `Vec3::ZERO`. Geometric damping walks an equilibrium node through both.
             for velocity in [Vec3::ZERO, Vec3::new(0.0, -1e-40, 0.0)] {
                 for _ in 0..64 {
-                    let (p, v, hit) = resolve_node_collision(rest_pos, velocity, dt, &colliders);
-                    assert!(!hit, "a resting node must not register a collision");
-                    assert_eq!(p, rest_pos, "position must come back untouched");
-                    assert_eq!(v, velocity, "velocity must come back untouched");
+                    let out = resolve_node_collision(rest_pos, velocity, 1.0, dt, &colliders, &[]);
+                    assert!(!out.collided(), "a resting node must not register a collision");
+                    assert_eq!(out.position, rest_pos, "position must come back untouched");
+                    assert_eq!(out.velocity, velocity, "velocity must come back untouched");
                 }
             }
         });

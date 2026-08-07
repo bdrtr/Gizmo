@@ -14,8 +14,23 @@ readme.workspace = true
 # Default ON — see `gizmo-physics-core`'s identical feature. OFF drops `gizmo-core` and with
 # it the `system` module (the ECS drivers) plus the `Component` impls. The solvers themselves —
 # `Cloth`, `Rope`, `SoftBodyMesh` and their `step` methods — are ECS-free and stay.
-default = ["ecs"]
+default = ["ecs", "rigid-coupling"]
 ecs = ["dep:gizmo-core", "gizmo-physics-core/ecs"]
+# Two-way soft↔rigid coupling in the ECS driver: `soft_body_step_system` reads the mass
+# properties of the rigid bodies behind the colliders, and spends the reaction impulses the
+# soft bodies owe them (waking any sleeper it pushes). Without it the driver still runs the
+# same solver, but with an empty reaction table — every collider immovable, every impulse
+# discarded, i.e. the pre-coupling behaviour.
+#
+# It needs `gizmo-physics-rigid` because `RigidBody`/`Velocity` live there and nothing lower
+# in the stack can describe a body's mass properties. That is a NEW edge in the dependency
+# graph (soft → rigid); it introduces no cycle (rigid does not depend on soft, and
+# `gizmo-physics-dynamics` already takes the same edge), and `publish_all.sh` already ships
+# rigid before soft. The *solver* is untouched by this flag and stays ECS-free and
+# rigid-free: `coupling.rs` is plain data and `SoftBodyMesh::step_coupled` takes it as an
+# argument. Turn the feature off (or `default-features = false`) to get the standalone
+# soft-body crate back, dependency-for-dependency.
+rigid-coupling = ["ecs", "dep:gizmo-physics-rigid"]
 gpu_physics = ["wgpu", "bytemuck", "pollster"]
 
 [dependencies]
@@ -24,6 +39,10 @@ gizmo-math = { path = "../gizmo-math", version = "0.9.0" }
 # `default-features = false` on the physics deps: without it, turning `ecs` off here
 # would still drag `gizmo-core` in through their defaults. The `ecs` feature re-enables it.
 gizmo-physics-core = { path = "../gizmo-physics-core", version = "0.9.0", default-features = false }
+# Only for the `rigid-coupling` ECS write-back — see the feature comment above. `ecs` is
+# requested explicitly because `rigid-coupling` implies it and `default-features = false`
+# would otherwise leave `RigidBody`/`Velocity` without their `Component` impls.
+gizmo-physics-rigid = { path = "../gizmo-physics-rigid", version = "0.9.0", default-features = false, features = ["ecs"], optional = true }
 wgpu = { version = "29", optional = true }
 bytemuck = { version = "1.14", features = ["derive"], optional = true }
 pollster = { version = "0.3", optional = true }
@@ -35,6 +54,13 @@ rayon = "1.11.0"
 
 [dev-dependencies]
 proptest = { workspace = true }
+# `tests/soft_rigid_coupling.rs` drives the ECS coupling end-to-end: it spawns real
+# `RigidBody`/`Velocity` entities in a real `World` and asserts the crate is woken and moved.
+# Both crates are OPTIONAL normal dependencies, and an optional dependency is not linked into
+# a test target, so they are declared again here. Dev-dependencies do not reach downstream
+# consumers or the published dependency graph.
+gizmo-core = { path = "../gizmo-core", version = "0.9.0" }
+gizmo-physics-rigid = { path = "../gizmo-physics-rigid", version = "0.9.0" }
 # Parses `soft_body.wgsl` and computes its struct layouts under the WGSL rules, so the
 # CPU-side `#[repr(C)]` records can be checked against the shader WITHOUT a GPU. See
 # `tests/wgsl_layout.rs` — this caught an 80-vs-96 byte stride mismatch that no test,

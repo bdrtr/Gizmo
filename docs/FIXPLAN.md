@@ -2152,7 +2152,51 @@ eklemekten ibaret.
   > ölçüyorlar. Her bevy yükseltmesinde kırılıyorlar ve motorun performansı hakkında hiçbir
   > şey söylemiyorlar. `ecs_bench/` (20 dosya) ise gerçekten `gizmo_core`'u ölçüyor.
   > Silme kararı senin — bu commit yalnızca göç ettirdi.
-- ⬜ **D6** — İki yönlü soft↔rigid coupling (`soft_body.rs:74-120` impulsu hesaplayıp atıyor).
+- ✅ **D6 — İki yönlü soft↔rigid coupling** *(2026-08-07)*. Rijit cisim artık soft body'nin
+  darbesini hissediyor; momentum korunuyor.
+
+  > **Naif çözüm momentum YARATIRDI, ve sayısı hesaplandı.** "Aynı impulsu kasaya da uygula"
+  > demek, düğümün hızının zaten *hareketsiz duvar* varsayımıyla hesaplandığını görmezden
+  > gelmek: efektif restitution `e + (1+e)·κ` oluyor, 1 kg düğüm + 1 kg kasa için **2.0**, yani
+  > darbe başına **2.5× kinetik enerji**. Doğru olan iki-cisim impulsu:
+  > `j = −(1+e)·v_rel·n / (1/m_düğüm + 1/m_cisim + açısal terim)`.
+  >
+  > **Güzel olan:** mevcut kod zaten bunun `1/m_cisim = 0` hâli. Yani normal bileşen analitik
+  > olarak eski davranışa dejenere oluyor — migrasyon temiz, ve
+  > `the_heavy_body_limit_reproduces_the_immovable_response` bunu sınıyor.
+
+  **Mimari engel ve çözümü:** `gizmo-physics-soft`, `gizmo-physics-rigid`'e bağımlı DEĞİLDİ,
+  yani `RigidBody`/`Velocity` o crate'ten erişilemiyordu. Tepki, sınırı **düz veri** olarak
+  geçiyor (`coupling.rs`: `RigidReaction` girer, `NodeImpact`/`RigidImpulse` çıkar). ECS
+  sürücüsü için gereken kenar (`soft → rigid`) opsiyonel `rigid-coupling` feature'ının arkasında.
+
+  > **D1 bozulmadı, ölçüldü:** `--no-default-features` ile `gizmo-physics-soft`'un grafında
+  > `gizmo-core` **0**, `gizmo-physics-rigid` **0**. Döngü de yok: `rigid → soft` **0**.
+  > Çözücünün kendisi rigid'siz kalıyor; `SoftBodyMesh::step` boş tabloyla delege ediyor ve
+  > eski davranışla bit-eş (`a_static_surface_is_never_pushed_and_the_node_response_is_unchanged`
+  > `assert_eq!` ile pinliyor).
+
+  **17 test, ve ikisi sahte-reddedici** — bu maddede kritikti, çünkü "kasa artık hareket ediyor"
+  taklit etmesi kolay bir iddia:
+  - `momentum_oracle_rejects_the_inconsistent_halves_variant` — naif tek-taraflı varyantı çalıştırıp
+    oracle'ın onu REDDETTİĞİNİ gösteriyor.
+  - `restitution_identity_rejects_the_momentum_conserving_fake` — momentumu koruyan ama
+    restitution'ı yanlış bir uygulamayı yakalıyor. Momentum korunumu **tek başına** yeterli
+    oracle değil; bu ayrımı yapmaları iyi.
+  - Ayrıca açısal momentum korunumu, kapalı-form 1-B çözümüyle karşılaştırma, ECS uçtan uca,
+    uyuyan kasayı uyandırma, ve bit-determinizm.
+
+  > **Ben de sınadım:** `accumulate_impulse` tepkiyi düşürecek şekilde sabote edilince **8 test
+  > birden** kırmızıya döndü (üç koruma oracle'ı, kapalı-form, ECS uçtan uca, determinizm dahil).
+  > Sabotaj geri alındı. Determinizm hash'i `A462C9EB8A09D5CA` — beklendiği gibi, çünkü kapı
+  > sahnesinde soft body yok.
+
+  - ⬜ **Kapsam bilinçli olarak DAR: yalnız normal bileşen değiş tokuş ediliyor.** Teğetsel
+    yasa bir Coulomb impulsu değil ("teğetsel hızın %80'ini sil"), `j_n`'e hiç referans vermiyor
+    ve koniye uymuyor; olduğu gibi yansıtmak rijit cisme sınırsız teğetsel tekme verirdi.
+  - ⬜ Kalan bilinen sınırlar: dinlenme temasında restitution eşiği yok (uyumuyor), çözüm
+    Jacobi (aynı karede ikinci düğüm birincinin verdiği hızı görmüyor), ve düğümün payı
+    0.1 m'lik deri kalınlığı yüzünden temas noktasında değil park noktasında kitaplanıyor.
 - ✅ **D7** — `gizmo-ui` dürüstçe "deneysel" işaretlendi *(2026-08-06)*. İki seçenekten
   küçük olanı alındı; metin render'ı ayrı ve büyük bir iş.
 
