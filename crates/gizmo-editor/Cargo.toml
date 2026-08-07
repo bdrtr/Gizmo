@@ -14,14 +14,14 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
-egui = "0.34"
+egui = "0.35"
 gizmo-core = { path = "../gizmo-core" , version = "0.9.0" }
 gizmo-math = { path = "../gizmo-math" , version = "0.9.0" }
 gizmo-physics-core = { path = "../gizmo-physics-core" , version = "0.9.0" }
 gizmo-physics-rigid = { path = "../gizmo-physics-rigid" , version = "0.9.0" }
 gizmo-renderer = { path = "../gizmo-renderer" , version = "0.9.0" }
 gizmo-ai = { path = "../gizmo-ai" , version = "0.9.0" }
-egui_dock = { version = "0.19", features = ["serde"] }
+egui_dock = { version = "0.20", features = ["serde"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 toml = "0.8"
