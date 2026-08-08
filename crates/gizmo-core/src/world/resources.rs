@@ -95,7 +95,7 @@ impl World {
     // RESOURCE SİSTEMİ (GLOBAL VERİLER)
     // ==========================================================
 
-    /// Sisteme global bir Resource ekler veya üzerine yazar.
+    /// Adds a global Resource to the system, or overwrites it.
     pub fn insert_resource<T: Send + Sync + 'static>(&mut self, resource: T) {
         let type_id = TypeId::of::<T>();
         let replaced = self
@@ -109,17 +109,17 @@ impl World {
         );
     }
 
-    /// Global bir Resource'u okumak için çağrılır (Immutable Borrow)
+    /// Called in order to read a global Resource (Immutable Borrow)
     pub fn get_resource<T: 'static>(&self) -> Option<ResourceReadGuard<'_, T>> {
         self.try_get_resource::<T>().ok()
     }
 
-    /// Global bir Resource'u değiştirmek için çağrılır (Mutable Borrow)
+    /// Called in order to modify a global Resource (Mutable Borrow)
     pub fn get_resource_mut<T: 'static>(&self) -> Option<ResourceWriteGuard<'_, T>> {
         self.try_get_resource_mut::<T>().ok()
     }
 
-    /// `get_resource` ile aynı işlev, ama hata sebebini `Result` ile taşır.
+    /// The same function as `get_resource`, but it carries the failure reason via `Result`.
     pub fn try_get_resource<T: 'static>(
         &self,
     ) -> Result<ResourceReadGuard<'_, T>, ResourceFetchError> {
@@ -137,7 +137,7 @@ impl World {
         })
     }
 
-    /// `get_resource_mut` ile aynı işlev, ama hata sebebini `Result` ile taşır.
+    /// The same function as `get_resource_mut`, but it carries the failure reason via `Result`.
     pub fn try_get_resource_mut<T: 'static>(
         &self,
     ) -> Result<ResourceWriteGuard<'_, T>, ResourceFetchError> {
@@ -155,8 +155,8 @@ impl World {
         })
     }
 
-    /// Global bir Resource yoksa Default olarak oluşturur, ardından Mutable Borrow döndürür.
-    /// World mutable borrow gerektirir, böylece hashmap'e güvenle kayıt yapılabilir.
+    /// If a global Resource does not exist it creates it as Default, then returns a Mutable Borrow.
+    /// It requires a World mutable borrow, so that the registration into the hashmap is safe.
     pub fn get_resource_mut_or_default<T: Default + Send + Sync + 'static>(
         &mut self,
     ) -> ResourceWriteGuard<'_, T> {
@@ -186,7 +186,7 @@ impl World {
         }
     }
 
-    /// Global bir Resource'u ECS'ten tamamen çıkartır ve sahipliğini döndürür
+    /// Removes a global Resource from the ECS entirely and returns its ownership
     pub fn remove_resource<T: 'static>(&mut self) -> Option<T> {
         let type_id = TypeId::of::<T>();
         let Some(cell) = self.resources.remove(&type_id) else {
@@ -223,15 +223,29 @@ impl World {
         }
     }
 
-    /// Bir resource'u geçici olarak world'den çıkarıp closure'a geçirir ve sonra geri koyar.
-    /// Bu, resource'un içindeyken `&mut World` kullanmanız gerektiğinde borrow checker'ı
-    /// mutlu etmenin en temiz yoludur (Bevy'deki `resource_scope` benzeri).
+    /// Temporarily takes a resource out of the world, passes it to a closure, and then puts it
+    /// back. This is the cleanest way to keep the borrow checker happy when you need to use
+    /// `&mut World` while inside the resource (similar to `resource_scope` in Bevy).
     ///
-    /// # Örnek
-    /// ```ignore
-    /// world.resource_scope::<PoolManager, ()>(|world, pool| {
+    /// # Example
+    /// ```
+    /// # use gizmo_core::prelude::*;
+    /// # #[derive(Clone)] struct Enemy;
+    /// # gizmo_core::impl_component!(Enemy);
+    /// # let mut world = World::new();
+    /// # let prefab = world.spawn();
+    /// # world.add_component(prefab, Enemy);
+    /// # let mut pools = PoolManager::new();
+    /// # pools.register_pool("enemy", prefab);
+    /// # world.insert_resource(pools);
+    /// // The third parameter is the closure's own type, so it can only be `_`.
+    /// world.resource_scope::<PoolManager, (), _>(|world, pool| {
     ///     pool.instantiate(world, "enemy");
     /// });
+    ///
+    /// // The resource went back into the world, and the pool cloned the prefab -> prefab + clone = 2 Enemy.
+    /// assert!(world.get_resource::<PoolManager>().is_some());
+    /// assert_eq!(world.query::<&Enemy>().unwrap().iter().count(), 2);
     /// ```
     pub fn resource_scope<T: Send + Sync + 'static, U, F>(&mut self, f: F) -> Option<U>
     where
@@ -380,7 +394,7 @@ mod tests {
         assert_eq!(hp.get(e.id()).unwrap().0, 50);
     }
 
-    /// Aynı component türü iki kez eklenince archetype migration'da veri güncellenmeli.
+    /// When the same component type is added twice the data must be updated in archetype migration.
     #[test]
     fn test_double_add_component_despawn_safe() {
         let mut world = World::new();

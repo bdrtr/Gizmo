@@ -123,14 +123,14 @@ pub struct CharacterController {
     pub jump_buffer_timer: f32,
 
     // ── Su / yüzme ──────────────────────────────────────────
-    /// Batıkken yukarı net kaldırma ivmesi (m/s²). 0 = nötr yüzerlik, >0 yüzeye çıkar; drag ile
-    /// terminal yükseliş hızına oturur.
+    /// Net upward lift acceleration while submerged (m/s²). 0 = neutral buoyancy, >0 rises to the
+    /// surface; together with drag it settles at a terminal ascent speed.
     pub buoyancy: f32,
-    /// Sudaki lineer sürüklenme katsayısı (her adım `vel *= 1 - water_drag*dt`). Suyu ağdalı yapar.
+    /// Linear drag coefficient in water (each step `vel *= 1 - water_drag*dt`). Makes water viscous.
     pub water_drag: f32,
-    /// Yüzme itişinin `target_velocity`'ye ne hızla yaklaştığı (su tepkiselliği).
+    /// How fast the swim thrust approaches `target_velocity` (water responsiveness).
     pub swim_acceleration: f32,
-    /// Runtime: karakter şu an bir su hacminde mi (yüzme modu aktif). Serileştirilmez.
+    /// Runtime: is the character currently inside a water volume (swim mode active). Not serialised.
     #[serde(skip)]
     pub is_submerged: bool,
 }

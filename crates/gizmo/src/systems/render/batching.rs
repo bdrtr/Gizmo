@@ -28,15 +28,15 @@ pub fn clear_render_cache() {
     });
 }
 
-/// anisotropy/clear_coat/subsurface'i tek bir f32'ye ondalık-basamak paketleme ile sıkıştırır
-/// (InstanceRaw'da ayrı alan yok). gbuffer.wgsl fs_main'deki unpack ile EŞLEŞMELİDİR:
+/// Compresses anisotropy/clear_coat/subsurface into a single f32 with decimal-digit packing
+/// (no separate field in InstanceRaw). It MUST MATCH the unpack in gbuffer.wgsl fs_main:
 ///   subsurface = floor(w/1e6)/100 · clear_coat = floor((w mod 1e6)/1e3)/1e3
 ///   anisotropy = (w mod 1e3)/1e3
-/// anisotropy ve clear_coat 3-haneli alanlardır (0..999). `floor(1.0*1000)=1000` bir hane
-/// fazladır ve komşu alana TAŞAR (yasal clamp'li `1.0` uçları için) → alanı .min(999.0) ile
-/// sınırla; `1.0` artık `0.999` olarak okunur (fark edilmez) yerine komşuyu bozar.
-/// (Uzun vadeli sağlam çözüm: ayrı InstanceRaw alanları — bu şema f32'de 2^24 üstünde
-/// tamsayı hassasiyetini de kaybeder.)
+/// anisotropy and clear_coat are 3-digit fields (0..999). `floor(1.0*1000)=1000` is one digit
+/// too many and OVERFLOWS into the neighboring field (for the legal clamped `1.0` endpoints) →
+/// bound the field with .min(999.0); `1.0` is now read as `0.999` (unnoticeable) instead of
+/// corrupting the neighbor. (Long-term robust fix: separate InstanceRaw fields — this scheme
+/// also loses integer precision above 2^24 in f32.)
 /// Representative camera distance of an instanced batch: distance from `cam_pos` to the
 /// centroid of the batch's instance world positions (the translation column of each
 /// `InstanceRaw::model`). Used to order transparent batches back-to-front. Per-batch (not
@@ -86,12 +86,12 @@ pub struct DrawItem {
     // `passes/` recorders can still read them now that DrawItem lives here, not in mod.rs.
     pub(super) vbuf: std::sync::Arc<wgpu::Buffer>,
     pub(super) vertex_count: u32,
-    /// `Some` ise bu batch `draw_indexed` ile çizilir; `None` ise düz `draw` ile.
-    /// Bir LOD seviyesi aktifken daima `None` — bkz. `collect_draw_items`.
+    /// If `Some`, this batch is drawn with `draw_indexed`; if `None`, with a plain `draw`.
+    /// Always `None` while a LOD level is active — see `collect_draw_items`.
     pub(super) ibuf: Option<std::sync::Arc<wgpu::Buffer>>,
-    /// `ibuf` `Some` iken çizilecek indeks sayısı.
+    /// The number of indices to draw while `ibuf` is `Some`.
     pub(super) index_count: u32,
-    /// `ibuf`'un eleman genişliği — mesh'ten olduğu gibi taşınır, türetilmez.
+    /// The element width of `ibuf` — carried over from the mesh as-is, not derived.
     pub(super) index_format: wgpu::IndexFormat,
     pub(super) bind_group: std::sync::Arc<wgpu::BindGroup>,
     pub(super) unlit: bool,
@@ -108,7 +108,7 @@ pub struct DrawItem {
     /// Start of this batch's SHADOW-ONLY casters in region B (all camera instances of all
     /// batches come first, then all shadow-only casters — see `collect_draw_items`). These
     /// are NOT contiguous with the camera range, so shadow passes draw them as a separate
-    /// range. (Yalnız shadow geçitleri okur — web'de gölge yok, alanlar orada ölü.)
+    /// range. (Only the shadow passes read it — no shadows on web, the fields are dead there.)
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(super) shadow_first_instance: u32,
     /// Number of shadow-only casters (region B) for this batch.
@@ -121,12 +121,13 @@ pub struct DrawItem {
 }
 
 impl DrawItem {
-    /// Bu öğenin geometrisini bağlar ve `instances` için çizim çağrısını yapar.
+    /// Binds this item's geometry and issues the draw call for `instances`.
     ///
-    /// Indexed/düz kararının TEK yeri burası. Motorda sekiz mesh çizim noktası var
-    /// (z-pass, G-buffer, iki gölge geçidi, forward'da iki dal) ve bir öğeyi birinde
-    /// indeksli, ötekinde düz çizmek tutarsız kare üretir — en görünür hâli, nesnesine
-    /// uymayan bir gölge. Dallanma dağıtılırsa bir noktayı atlamak sessiz bir hata olur.
+    /// This is the ONE place where the indexed/plain decision is made. The engine has eight
+    /// mesh draw sites (z-pass, G-buffer, two shadow passes, two branches in forward), and
+    /// drawing an item indexed at one and plain at another produces an inconsistent frame — its
+    /// most visible form is a shadow that does not match its object. If the branching is spread
+    /// out, skipping one site becomes a silent bug.
     pub(super) fn record_draw(
         &self,
         pass: &mut wgpu::RenderPass<'_>,

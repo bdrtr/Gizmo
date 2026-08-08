@@ -1,31 +1,31 @@
-//! Uzaklığa dayalı Doku Akış (Texture Streaming) Sistemi
+//! Distance-based Texture Streaming System
 //!
-//! Açık dünya oyunlarında VRAM sınırlarını aşmamak için:
-//! Kamera objelere uzaktayken kaplamaların yüksek çözünürlüklü versiyonunu tutmaz,
-//! yaklaştıkça asenkron olarak (AsyncAssetLoader) yüksek çözünürlüklü dokuları decode edip
-//! VRAM'e yükler ve ilgili materyallere uygular.
+//! So as not to exceed VRAM limits in open-world games:
+//! while the camera is far from the objects it does not keep the high-resolution version of the
+//! textures; as it gets closer it asynchronously (AsyncAssetLoader) decodes the high-resolution
+//! textures, uploads them to VRAM and applies them to the relevant materials.
 //!
-//! İki aşama, her frame:
-//!  1. **Apply**: `asset_server_update_system`'in biriktirdiği bitmiş decode'ları
-//!     ([`AssetServer::completed_textures`]) GPU'ya yükle ve entity'lerin
-//!     `Material.bind_group`'unu güncelle. (Eskiden bu aşama YOKTU → decode edilen
-//!     texture atılıyordu, streaming görsel olarak no-op'tu.)
-//!  2. **Request**: birincil kameraya yakın (≤50 m) materyaller için texture yeniden-yükleme
-//!     iste (frame başına en çok [`MAX_REQUESTS_PER_FRAME`]).
+//! Two stages, every frame:
+//!  1. **Apply**: upload the finished decodes accumulated by `asset_server_update_system`
+//!     ([`AssetServer::completed_textures`]) to the GPU and update the entities'
+//!     `Material.bind_group`. (Formerly this stage DID NOT EXIST → the decoded texture was
+//!     discarded, streaming was visually a no-op.)
+//!  2. **Request**: request a texture reload for materials near (≤50 m) the primary camera
+//!     (at most [`MAX_REQUESTS_PER_FRAME`] per frame).
 
 use gizmo_core::system::{AccessInfo, System};
 use gizmo_core::World;
 use gizmo_physics_core::Transform;
 use gizmo_renderer::components::{Camera, Material};
 
-/// VRAM ani-yüklenmesini sınırlamak için frame başına maksimum yeni istek.
+/// Maximum new requests per frame, to limit a sudden VRAM load.
 const MAX_REQUESTS_PER_FRAME: usize = 3;
-/// Bu mesafenin (m) içindeki dokular yüksek çözünürlüklü yüklenir.
+/// Textures within this distance (m) are loaded at high resolution.
 const STREAM_IN_DISTANCE: f32 = 50.0;
 
-/// Texture streaming'i her frame süren sistem (apply + request). [`AssetServerPlugin`]
-/// tarafından schedule'a eklenir. Materyalleri (mut) ve `AssetServer`/`Renderer`
-/// kaynaklarını kullandığından **exclusive**.
+/// The system that drives texture streaming every frame (apply + request). Added to the
+/// schedule by [`AssetServerPlugin`]. **exclusive**, because it uses the materials (mut) and
+/// the `AssetServer`/`Renderer` resources.
 pub struct TextureStreamingSystem;
 
 impl System for TextureStreamingSystem {
@@ -41,8 +41,9 @@ impl System for TextureStreamingSystem {
     }
 }
 
-/// Decode'u biten streaming texture'ları GPU'ya yükle ve entity materyallerine uygula.
-/// Kaynak borrow'ları ardışık kapsamlanır (aynı anda çakışan mutable borrow yok).
+/// Upload the streaming textures whose decode has finished to the GPU and apply them to the
+/// entity materials. Resource borrows are scoped consecutively (no clashing mutable borrows at
+/// the same time).
 fn apply_completed_textures(world: &World) {
     // 1) Biriken bitmiş decode'ları al (AssetServer borrow'u burada biter).
     let completions = {
@@ -106,7 +107,8 @@ fn apply_completed_textures(world: &World) {
     }
 }
 
-/// Birincil kameraya yakın, `texture_source`'lu materyaller için asenkron yükleme iste.
+/// Request an asynchronous load for materials with a `texture_source` that are near the
+/// primary camera.
 fn request_nearby_textures(world: &World) {
     // Birincil kamera pozisyonu (yoksa: ilk kamera; hiç kamera yoksa çık).
     let cam_pos = {
@@ -183,14 +185,14 @@ mod tests {
     use gizmo_renderer::async_assets::TextureReloadCompletion;
     use gizmo_renderer::Renderer;
 
-    /// GPU adapter yoksa (headless CI) testi atla — Material/Renderer GPU'ya bağlı.
-    /// (golden_render_tests ile aynı probe; ekstra `wgpu::Instance` sızdırmaz.)
+    /// If there is no GPU adapter (headless CI) skip the test — Material/Renderer depend on the
+    /// GPU. (The same probe as golden_render_tests; it does not leak an extra `wgpu::Instance`.)
     fn gpu_available() -> bool {
         pollster::block_on(Renderer::headless_adapter_available())
     }
 
-    /// Headless Renderer + AssetServer + birincil kamera (orijinde) + `dummy.png`
-    /// texture_source'lu, kameraya yakın (1 m) bir Material entity. `mat_id` döner.
+    /// Headless Renderer + AssetServer + a primary camera (at the origin) + a Material entity
+    /// with a `dummy.png` texture_source, close (1 m) to the camera. Returns `mat_id`.
     fn setup() -> (World, u32) {
         let renderer = pollster::block_on(Renderer::new_headless(64, 64, None));
         let mut world = World::new();
@@ -210,13 +212,13 @@ mod tests {
         (world, ent.id())
     }
 
-    /// Tek test, tek headless Renderer: hem request (yakın materyal → texture_source
-    /// temizlenir) hem apply (biten decode → bind_group yeni texture ile değişir +
-    /// idempotentlik) yolunu doğrular. NOT: tek testte tutuluyor çünkü test-başına
-    /// ekstra headless GPU context'i, aynı süreçteki diğer GPU testleriyle birlikte
-    /// amdgpu teardown'ında segfault eşiğini aşıyor; ayrıca `world` sonda
-    /// `mem::forget` ile bırakılıyor (wgpu device + AsyncAssetLoader thread teardown'ını
-    /// atlar — süreç zaten çıkışta, işletim sistemi geri alır).
+    /// One test, one headless Renderer: verifies both the request path (nearby material →
+    /// texture_source is cleared) and the apply path (finished decode → bind_group changes to
+    /// the new texture + idempotence). NOTE: it is kept in a single test because an extra
+    /// headless GPU context per test, together with the other GPU tests in the same process,
+    /// crosses the segfault threshold in amdgpu teardown; also, `world` is released at the end
+    /// with `mem::forget` (skips the wgpu device + AsyncAssetLoader thread teardown — the
+    /// process is exiting anyway, the operating system reclaims it).
     #[test]
     fn texture_streaming_requests_nearby_and_applies_completed() {
         // Bu test kendi headless `Renderer`'ını (tam bir wgpu cihazı) kuruyor ve uzun süre

@@ -51,7 +51,7 @@ impl ComponentTicks {
     }
 }
 
-/// Archetype içindeki tek bir component tipinin sütunu.
+/// The column of a single component type within the archetype.
 pub struct Column {
     pub(crate) data: BlobVec,
     pub(crate) ticks: Vec<ComponentTicks>,
@@ -60,7 +60,7 @@ pub struct Column {
 }
 
 impl Column {
-    /// Yeni boş sütun oluşturur.
+    /// Creates a new empty column.
     pub fn new(
         type_id: TypeId,
         item_layout: Layout,
@@ -104,74 +104,74 @@ impl Column {
         self.data.is_empty()
     }
 
-    /// Belirtilen satırdaki component'a immutable pointer döndürür.
+    /// Returns an immutable pointer to the component at the specified row.
     ///
     /// # Safety
-    /// - `row < self.len()` olmalıdır
-    /// - Dönen pointer geçerli bir `T` tipindeki veriye işaret eder
+    /// - `row < self.len()` must hold
+    /// - The returned pointer points to valid data of type `T`
     #[inline]
     pub unsafe fn get_ptr(&self, row: usize) -> *const u8 {
         self.data.get_unchecked(row)
     }
 
-    /// Sütun verisinin başlangıç pointer'ını döndürür.
+    /// Returns the start pointer of the column data.
     #[inline]
     pub fn data_ptr(&self) -> *const u8 {
         self.data.as_ptr()
     }
 
-    /// Sütun verisinin başlangıç pointer'ını döndürür (mutable).
+    /// Returns the start pointer of the column data (mutable).
     #[inline]
     pub fn data_ptr_mut(&mut self) -> *mut u8 {
         self.data.as_mut_ptr()
     }
 
-    /// Sütunun ComponentTick verilerinin başlangıç adresi.
+    /// The start address of the column's ComponentTick data.
     #[inline]
     pub fn ticks_ptr(&self) -> *const ComponentTicks {
         self.ticks.as_ptr()
     }
 
-    /// Sütunun ComponentTick verilerinin başlangıç adresi (mutable).
+    /// The start address of the column's ComponentTick data (mutable).
     #[inline]
     pub fn ticks_ptr_mut(&mut self) -> *mut ComponentTicks {
         self.ticks.as_mut_ptr()
     }
 
-    /// Belirtilen satırdaki component'a mutable pointer döndürür.
+    /// Returns a mutable pointer to the component at the specified row.
     ///
     /// # Safety
-    /// - `row < self.len()` olmalıdır
-    /// - Dönen pointer geçerli bir `T` tipindeki veriye işaret eder
+    /// - `row < self.len()` must hold
+    /// - The returned pointer points to valid data of type `T`
     #[inline]
     pub unsafe fn get_mut_ptr(&self, row: usize) -> *mut u8 {
         self.data.get_unchecked_mut(row)
     }
 
-    /// Sütun içindeki iki satırı takas eder.
+    /// Swaps two rows within the column.
     ///
     /// # Safety
-    /// - `a < self.len()` ve `b < self.len()` olmalıdır
+    /// - `a < self.len()` and `b < self.len()` must hold
     #[inline]
     pub unsafe fn swap_rows(&mut self, a: usize, b: usize) {
         self.data.swap_rows(a, b);
         self.ticks.swap(a, b);
     }
 
-    /// Ham bayt olarak yeni bir değer ekler.
+    /// Adds a new value as raw bytes.
     ///
     /// # Safety
-    /// `value` pointer'ı bu sütunun tip boyutu kadar okunabilir belleğe işaret etmelidir.
+    /// The `value` pointer must point to memory readable for this column's type size.
     #[inline]
     pub unsafe fn push_raw(&mut self, value: *const u8, tick: u32) {
         self.data.push(value);
         self.ticks.push(ComponentTicks::new(tick));
     }
 
-    /// Bir component referansını alıp arka arkaya N kez kopyalar (Batch Prefab Cloning).
+    /// Takes a component reference and copies it N times back to back (Batch Prefab Cloning).
     ///
     /// # Safety
-    /// - `src` pointer'ı bu sütunun tip boyutu kadar okunabilir belleğe işaret etmelidir
+    /// - The `src` pointer must point to memory readable for this column's type size
     #[inline]
     pub unsafe fn push_cloned_batch(&mut self, src: *const u8, count: usize, tick: u32) {
         self.data.push_cloned_batch(src, count, self.clone_fn);
@@ -179,10 +179,10 @@ impl Column {
             .resize(self.ticks.len() + count, ComponentTicks::new(tick));
     }
 
-    /// Bir component'i bulunduğu satırdan kopyalar (realloc safety).
+    /// Copies a component from the row it sits at (realloc safety).
     ///
     /// # Safety
-    /// - `row < self.len()` olmalıdır
+    /// - `row < self.len()` must hold
     #[inline]
     pub unsafe fn push_cloned_batch_from_row(&mut self, row: usize, count: usize, tick: u32) {
         self.data
@@ -191,34 +191,34 @@ impl Column {
             .resize(self.ticks.len() + count, ComponentTicks::new(tick));
     }
 
-    /// Belirtilen satırı swap-remove ile çıkarır ve düşürür.
+    /// Removes the specified row via swap-remove and drops it.
     ///
     /// # Safety
-    /// `row < self.len()` olmalıdır.
+    /// `row < self.len()` must hold.
     #[inline]
     pub unsafe fn swap_remove_and_drop(&mut self, row: usize) {
         self.data.swap_remove_and_drop(row);
         self.ticks.swap_remove(row);
     }
 
-    /// Belirtilen satırı swap-remove ile çıkarır, değeri `out`'a taşır.
+    /// Removes the specified row via swap-remove, moves the value into `out`.
     ///
     /// # Safety
-    /// - `row < self.len()` olmalıdır
-    /// - `out` pointer'ı yeterli boyutta yazılabilir belleğe işaret etmelidir
+    /// - `row < self.len()` must hold
+    /// - The `out` pointer must point to writable memory of sufficient size
     #[inline]
     pub unsafe fn swap_remove_move(&mut self, row: usize, out: *mut u8) {
         self.data.swap_remove_unchecked(row, out);
         self.ticks.swap_remove(row);
     }
 
-    /// Sütun belleğini sıkıştırır.
+    /// Compacts the column memory.
     pub fn shrink_to_fit(&mut self) {
         self.data.shrink_to_fit();
         self.ticks.shrink_to_fit();
     }
 
-    /// Sütundaki tüm verileri temizler (hafızayı serbest bırakmadan).
+    /// Clears all the data in the column (without releasing the memory).
     pub fn clear(&mut self) {
         self.data.clear();
         self.ticks.clear();
@@ -231,8 +231,8 @@ impl Column {
 
 use crate::component::StorageType;
 
-/// Bir component tipinin runtime'daki meta bilgileri.
-/// Column oluştururken ve archetype migration'da kullanılır.
+/// The runtime metadata of a component type.
+/// Used when creating a Column and during archetype migration.
 #[derive(Clone, Copy)]
 pub struct ComponentInfo {
     /// Identity of the component type, and the key everything else is looked up by:
@@ -272,14 +272,14 @@ pub struct ComponentInfo {
     /// entity. The two stores are disjoint: a component is in one or the other, never both,
     /// and the code paths that read them are separate.
     pub storage_type: StorageType,
-    /// İnsan-okunur tip adı (`std::any::type_name`). Analiz/introspection katmanı
-    /// (gizmo-analysis) archetype tablolarını component adlarıyla raporlayabilsin diye
-    /// kayıt anında yakalanır. TypeId'den sonradan geri elde EDİLEMEZ, bu yüzden burada.
+    /// Human-readable type name (`std::any::type_name`). Captured at registration time so
+    /// that the analysis/introspection layer (gizmo-analysis) can report archetype tables
+    /// with component names. It CANNOT be recovered from a TypeId afterwards, hence it is here.
     pub type_name: &'static str,
 }
 
 impl ComponentInfo {
-    /// Belirtilen Rust tipi için ComponentInfo oluşturur.
+    /// Creates a ComponentInfo for the specified Rust type.
     pub fn of<T: crate::component::Component>() -> Self {
         Self {
             type_id: TypeId::of::<T>(),
@@ -301,7 +301,7 @@ impl ComponentInfo {
         }
     }
 
-    /// Sadece TypeId biliniyorsa (registry durumları), kısıtlı bir ComponentInfo oluşturur.
+    /// If only the TypeId is known (registry situations), creates a restricted ComponentInfo.
     pub fn of_type_id(type_id: TypeId) -> Self {
         Self {
             type_id,

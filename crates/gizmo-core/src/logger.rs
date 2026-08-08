@@ -14,7 +14,7 @@
 
 use std::sync::Mutex;
 
-/// Log seviyesi.
+/// Log level.
 ///
 /// Severity increases with declaration order and the minimum-level filter compares the
 /// variants *by discriminant* (`level as u8`), not through `Ord` — which is not derived.
@@ -35,7 +35,7 @@ pub enum LogLevel {
     Error,
 }
 
-/// Tek bir log kaydı.
+/// A single log record.
 #[derive(Clone)]
 pub struct LogEntry {
     /// The already-formatted message body: `format!` arguments are expanded at emit time and
@@ -53,29 +53,29 @@ pub struct LogEntry {
     /// so it is not sortable across a midnight boundary and not comparable between records
     /// produced on different targets.
     pub timestamp: String,
-    /// Kaynak dosya yolu (compile-time).
+    /// Source file path (compile-time).
     pub file: &'static str,
-    /// Kaynak satır numarası (compile-time).
+    /// Source line number (compile-time).
     pub line: u32,
 }
 
-/// Maksimum log kapasitesi — ring buffer gibi davranır.
+/// Maximum log capacity — behaves like a ring buffer.
 const MAX_LOG_ENTRIES: usize = 2048;
 
-/// Minimum log seviyesi — bu seviyenin altındaki loglar kaydedilmez.
-/// Release build'de Info loglarını bastırmak için bu değer değiştirilebilir.
+/// Minimum log level — logs below this level are not recorded.
+/// This value can be changed in order to suppress Info logs in a release build.
 static MIN_LOG_LEVEL: Mutex<LogLevel> = Mutex::new(LogLevel::Info);
 
 // Global logger. Mutex poisoning durumunda into_inner() ile kurtarma yapılır.
 static GLOBAL_LOGS: Mutex<Vec<LogEntry>> = Mutex::new(Vec::new());
 static LOG_VERSION: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
-/// Logların değişip değişmediğini anlamak için versiyon numarası döner
+/// Returns a version number for telling whether the logs have changed
 pub fn log_version() -> usize {
     LOG_VERSION.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-/// Mutex lock'u güvenli şekilde alan yardımcı — poisoned olsa bile veriyi kurtarır.
+/// Helper that takes the mutex lock safely — recovers the data even if it is poisoned.
 fn lock_logs() -> std::sync::MutexGuard<'static, Vec<LogEntry>> {
     match GLOBAL_LOGS.lock() {
         Ok(guard) => guard,
@@ -94,7 +94,7 @@ fn lock_min_level() -> std::sync::MutexGuard<'static, LogLevel> {
     }
 }
 
-/// Log kaydı ekler. **Doğrudan çağırmayın** — `gizmo_log!` makrosunu kullanın.
+/// Adds a log record. **Do not call directly** — use the `gizmo_log!` macro.
 #[doc(hidden)]
 pub fn log_message(level: LogLevel, msg: String, file: &'static str, line: u32) {
     // Seviye filtresi
@@ -143,8 +143,8 @@ pub fn log_message(level: LogLevel, msg: String, file: &'static str, line: u32) 
 
 // ──── Public API ────
 
-/// Tüm logların snapshot'ını alır (okuma için).
-/// Editor console gibi tüketiciler bu fonksiyonu kullanmalıdır.
+/// Takes a snapshot of all the logs (for reading).
+/// Consumers such as the editor console should use this function.
 pub fn get_logs<F, R>(f: F) -> R
 where
     F: FnOnce(&[LogEntry]) -> R,
@@ -153,37 +153,51 @@ where
     f(&logs)
 }
 
-/// Tüm log kayıtlarını temizler.
+/// Clears all log records.
 pub fn clear_logs() {
     lock_logs().clear();
     LOG_VERSION.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 }
 
-/// Tüm log kayıtlarını alır ve kuyruktan siler (drain).
+/// Takes all log records and deletes them from the queue (drain).
 pub fn drain_logs() -> Vec<LogEntry> {
     let drained = lock_logs().drain(..).collect();
     LOG_VERSION.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     drained
 }
 
-/// Log entry sayısını döndürür.
+/// Returns the log entry count.
 pub fn log_count() -> usize {
     lock_logs().len()
 }
 
-/// Minimum log seviyesini ayarlar.
-/// Bu seviyenin altındaki loglar kaydedilmez ve konsola yazılmaz.
+/// Sets the minimum log level.
+/// Logs below this level are not recorded and are not written to the console.
 pub fn set_min_log_level(level: LogLevel) {
     *lock_min_level() = level;
 }
 
-/// Global Logger Makrosu — kaynak konum bilgisi otomatik eklenir.
+/// Global Logger Macro — source location information is added automatically.
 ///
-/// # Kullanım
-/// ```rust,ignore
-/// gizmo_log!(Info, "Sistem başlatıldı: {}", sistem_adi);
-/// gizmo_log!(Warning, "FPS düşük: {:.1}", fps);
-/// gizmo_log!(Error, "Dosya bulunamadı: {}", path);
+/// # Usage
+/// ```
+/// use gizmo_core::gizmo_log;
+/// use gizmo_core::logger::{get_logs, LogLevel};
+/// # let subsystem = "renderer";
+/// # let fps = 12.34_f32;
+/// # let path = "assets/level.ron";
+/// gizmo_log!(Info, "subsystem started: {}", subsystem);
+/// gizmo_log!(Warning, "FPS low: {:.1}", fps);
+/// gizmo_log!(Error, "file not found: {}", path);
+///
+/// // The message is formatted at emit time; the level and the call site's file/line live in
+/// // separate fields.
+/// let entry = get_logs(|entries| {
+///     entries.iter().find(|e| e.message == "FPS low: 12.3").cloned()
+/// })
+/// .expect("the entry is in the global buffer");
+/// assert_eq!(entry.level, LogLevel::Warning);
+/// assert_eq!(entry.file, file!());
 /// ```
 #[macro_export]
 macro_rules! gizmo_log {
@@ -284,7 +298,7 @@ mod tests {
 
     static TEST_LOCK: Mutex<()> = Mutex::new(());
 
-    /// Her test öncesi logları temizle
+    /// Clear the logs before every test
     fn setup() -> MutexGuard<'static, ()> {
         let guard = TEST_LOCK.lock().expect("logger test lock poisoned");
         clear_logs();

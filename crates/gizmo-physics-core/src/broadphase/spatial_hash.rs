@@ -4,8 +4,8 @@ use super::*;
 // SpatialHash uyumluluk katmanı
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Eski SpatialHash API'sini Dynamic BVH üzerine köprüler.
-/// FIX-4: clear artık &mut self alıyor.
+/// Bridges the old SpatialHash API onto the Dynamic BVH.
+/// FIX-4: clear now takes &mut self.
 ///
 /// A compatibility shim: the name is left over from a uniform-grid broadphase, but
 /// every call forwards to a [`DynamicAabbTree`] and there are no cells any more —
@@ -40,7 +40,7 @@ impl SpatialHash {
         }
     }
 
-    /// FIX-4: &self yerine &mut self
+    /// FIX-4: &mut self instead of &self
     pub fn clear(&mut self) {
         self.tree.clear();
     }

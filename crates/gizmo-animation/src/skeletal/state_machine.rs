@@ -160,7 +160,22 @@ impl ActiveBlend {
 /// ECS component — full animation state machine with cross-fade blending.
 ///
 /// # Usage
-/// ```ignore
+/// ```
+/// use std::sync::Arc;
+/// use gizmo_animation::skeletal::{
+///     AnimationClip, AnimationState, AnimationStateMachine, AnimationTransition,
+/// };
+/// # fn clip(name: &str, duration: f32) -> AnimationClip {
+/// #     AnimationClip {
+/// #         name: name.into(),
+/// #         duration,
+/// #         translations: Vec::new(),
+/// #         rotations: Vec::new(),
+/// #         scales: Vec::new(),
+/// #     }
+/// # }
+/// # let clips: Arc<[AnimationClip]> =
+/// #     Arc::from(vec![clip("idle", 1.0), clip("run", 0.8), clip("jump", 0.6)]);
 /// let mut fsm = AnimationStateMachine::new(
 ///     "idle",
 ///     clips,
@@ -176,6 +191,19 @@ impl ActiveBlend {
 ///     ],
 /// );
 /// fsm.trigger("run");
+///
+/// // Queued, not applied: only the driver moves the machine, so the state, the
+/// // (absent) cross-fade and the playhead are all still where `new` left them.
+/// assert_eq!(fsm.current_state, "idle");
+/// assert!(fsm.active_blend.is_none());
+/// assert_eq!(fsm.current_time, 0.0);
+/// assert_eq!(fsm.drain_triggers(), ["run"]);
+///
+/// // What the driver will do with that trigger — first matching rule, in order.
+/// assert_eq!(
+///     fsm.find_transition("idle", Some("run"), false).map(|t| t.to.as_str()),
+///     Some("run")
+/// );
 /// ```
 #[derive(Clone)]
 pub struct AnimationStateMachine {

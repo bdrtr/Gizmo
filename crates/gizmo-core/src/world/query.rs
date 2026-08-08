@@ -6,15 +6,17 @@ impl World {
     // ERGONOMİK SORGULAR (QUERY API)
     // ==========================================================
 
-    /// Salt-okunur bir [`Query`](crate::query::Query) oluşturur (paylaşımlı component erişimi).
+    /// Creates a read-only [`Query`](crate::query::Query) (shared component access).
     ///
-    /// `Q: ReadOnlyQuery` bağlı olduğundan bu giriş noktası `&mut T` ÜRETEMEZ — `&self`'ten
-    /// istenildiği kadar oluşturulabilir, hepsi aynı anda canlı olabilir, hiçbiri UB değildir.
-    /// Mutable erişim için [`World::query_mut`] (`&mut World` ister; güvenli) veya — paralel
-    /// scheduler içindeki sistemler için — [`World::query_unchecked`] (`unsafe`) kullanın.
+    /// Because it is bounded by `Q: ReadOnlyQuery`, this entry point CANNOT PRODUCE `&mut T` —
+    /// as many as you like can be created from `&self`, all of them may be alive at the same
+    /// time, and none of them is UB. For mutable access use [`World::query_mut`] (requires
+    /// `&mut World`; safe) or — for systems inside the parallel scheduler —
+    /// [`World::query_unchecked`] (`unsafe`).
     ///
-    /// Bu ayrım, denetimin "tek en zayıf noktası" olan dual-`Mut` aliasing UB'sini **güvenli
-    /// koddan ULAŞILAMAZ** kılar: `&World`'ten mutable query yalnızca `unsafe` ile alınır.
+    /// This distinction makes the dual-`Mut` aliasing UB, which is the audit's "single weakest
+    /// point", **UNREACHABLE from safe code**: a mutable query from `&World` is obtained only
+    /// with `unsafe`.
     ///
     /// # Examples
     /// Shared reads compose freely:
@@ -54,13 +56,13 @@ impl World {
         crate::query::Query::new(self)
     }
 
-    /// Mutable bir [`Query`](crate::query::Query) oluşturur. `&mut self` aldığından dönen
-    /// query World'ü ÖZEL olarak ödünç alır → ikinci bir (mutable VEYA okuma) query aynı anda
-    /// derlenemez. Bu, iki canlı `Mut` query'sinin aynı belleği alias'lamasını tip düzeyinde
-    /// imkânsız kılan güvenli yoldur.
+    /// Creates a mutable [`Query`](crate::query::Query). Because it takes `&mut self` the
+    /// returned query borrows the World EXCLUSIVELY → a second (mutable OR read) query cannot
+    /// compile at the same time. This is the safe way that makes two live `Mut` queries
+    /// aliasing the same memory impossible at the type level.
     ///
-    /// World'e özel erişimi olan uygulama kodu (oyun döngüsü, editör, exclusive sistemler)
-    /// için tercih edilen mutable giriş noktasıdır.
+    /// It is the preferred mutable entry point for application code that has exclusive access
+    /// to the World (game loop, editor, exclusive systems).
     ///
     /// # Examples
     /// ```
@@ -129,34 +131,35 @@ impl World {
         crate::query::Query::new(self)
     }
 
-    /// `&World`'ten mutable bir query oluşturan KAÇIŞ KAPISI. Paralel scheduler içindeki
-    /// sistemler (`System::run(&World)`) için — onların `&mut World`'ü yoktur ama disjoint
-    /// erişimleri `AccessInfo`/`is_compatible_with` tarafından zamanlama anında doğrulanır.
+    /// The ESCAPE HATCH that creates a mutable query from `&World`. For systems inside the
+    /// parallel scheduler (`System::run(&World)`) — they have no `&mut World`, but their
+    /// disjoint accesses are validated at scheduling time by `AccessInfo`/`is_compatible_with`.
     ///
     /// # Safety
-    /// Çağıran, bu query'nin canlı olduğu süre boyunca, AYNI component'lere mutable dokunan
-    /// başka HİÇBİR query'nin (bu World üzerinde, bu veya başka bir thread'de) canlı
-    /// olmamasını GARANTİ etmelidir. Motorda bu garanti şuralardan gelir:
-    /// - paralel batch'lerde her sistemin `AccessInfo`'su `is_compatible_with` ile
-    ///   çakışmayacak şekilde gruplanır (disjoint component erişimi), ve
-    /// - `is_exclusive` sistemler tek başına çalışır.
+    /// For as long as this query is alive, the caller must GUARANTEE that NO other query that
+    /// touches the SAME components mutably (on this World, on this or another thread) is
+    /// alive. In the engine this guarantee comes from:
+    /// - in parallel batches every system's `AccessInfo` is grouped via `is_compatible_with`
+    ///   so that they do not conflict (disjoint component access), and
+    /// - `is_exclusive` systems run on their own.
     ///
-    /// Bu sözleşme ihlal edilirse iki `&mut T` alias oluşur → tanımsız davranış. Özel erişimin
-    /// varsa bunun yerine güvenli [`World::query_mut`]'i kullan.
+    /// If this contract is violated two `&mut T` aliases are formed → undefined behaviour. If
+    /// you have exclusive access, use the safe [`World::query_mut`] instead.
     pub unsafe fn query_unchecked<'w, Q: crate::query::WorldQuery>(
         &'w self,
     ) -> Option<crate::query::Query<'w, Q>> {
         crate::query::Query::new(self)
     }
 
-    /// Geriye uyumluluk için StorageView alternatifi (`&T` paylaşımlı erişim — daima sağlam).
+    /// StorageView alternative for backwards compatibility (`&T` shared access — always sound).
     #[inline]
     pub fn borrow<'w, T: Component>(&'w self) -> crate::query::Query<'w, &'w T> {
         self.query::<&T>().expect("Failed to create borrow Query")
     }
 
-    /// Tek bir component için mutable query (`Mut<T>`) — güvenli, `&mut self` ister.
-    /// [`World::query_mut`]'in ergonomik kısaltması; aynı tip-düzeyi aliasing güvencesini taşır.
+    /// Mutable query for a single component (`Mut<T>`) — safe, requires `&mut self`.
+    /// An ergonomic shorthand for [`World::query_mut`]; carries the same type-level aliasing
+    /// guarantee.
     #[inline]
     pub fn borrow_mut<'w, T: Component>(
         &'w mut self,
@@ -164,12 +167,12 @@ impl World {
         self.query_mut::<crate::query::Mut<T>>().expect("Failed to create borrow_mut Query")
     }
 
-    /// [`World::borrow_mut`]'in `unsafe` kaçış-kapısı sürümü — `&World`'ten `Mut<T>` query'si
-    /// kuran paralel-scheduler sistemleri için.
+    /// The `unsafe` escape-hatch version of [`World::borrow_mut`] — for parallel-scheduler
+    /// systems that build a `Mut<T>` query from `&World`.
     ///
     /// # Safety
-    /// [`World::query_unchecked`] ile aynı sözleşme: bu query canlıyken `T`'ye mutable dokunan
-    /// başka bir query canlı olmamalı (scheduler disjointness'i garanti eder).
+    /// The same contract as [`World::query_unchecked`]: while this query is alive no other
+    /// query that touches `T` mutably may be alive (the scheduler guarantees disjointness).
     #[inline]
     pub unsafe fn borrow_mut_unchecked<'w, T: Component>(
         &'w self,
@@ -178,22 +181,22 @@ impl World {
             .expect("Failed to create borrow_mut_unchecked Query")
     }
 
-    /// Cache'li query — archetype indeks cache'ini kullanır.
-    /// &mut self gerektirdiği için sadece World sahibiyken çağrılabilir.
+    /// Cached query — uses the archetype index cache.
+    /// Because it requires &mut self it can only be called when you own the World.
     pub fn query_cached<'w, Q: crate::query::WorldQuery>(
         &'w mut self,
     ) -> Option<crate::query::Query<'w, Q>> {
         crate::query::Query::new_cached(self)
     }
 
-    /// **Ham `u32` id ile — generation kontrolü yapmaz.** Despawn+reuse sonrası yanlış
-    /// entity'nin verisi dönebilir; canlılık kritikse önce [`World::is_alive`] çağırın.
+    /// **By raw `u32` id — it does not check the generation.** After a despawn+reuse the wrong
+    /// entity's data may be returned; if liveness is critical, call [`World::is_alive`] first.
     ///
     /// # Panics
     ///
-    /// `Q` aynı component'e iki mutable erişim isterse (ör. `(Mut<T>, Mut<T>)`) veya bir
-    /// mutable ile bir shared erişimi karıştırırsa panikler — aynı satır için iki `&mut T`
-    /// üretmek UB olurdu. [`World::query_mut`] ile birebir aynı kural.
+    /// Panics if `Q` asks for two mutable accesses to the same component (e.g.
+    /// `(Mut<T>, Mut<T>)`) or mixes a mutable with a shared access — producing two `&mut T` for
+    /// the same row would be UB. Exactly the same rule as [`World::query_mut`].
     pub fn query_entity_mut<'w, Q: crate::query::WorldQuery>(
         &'w mut self,
         entity_id: u32,
@@ -222,12 +225,12 @@ impl World {
         }
     }
 
-    /// Tek bir entity üzerinde read-only `Query` çalıştırıp anında sonuç almanızı sağlar.
+    /// Lets you run a read-only `Query` on a single entity and get the result immediately.
     ///
-    /// `Q: ReadOnlyQuery` bağlı (paylaşımlı `&self`'ten mutable sonuç dönemez); mutable tekil
-    /// erişim için [`World::query_entity_mut`] (`&mut self`).
+    /// Bounded by `Q: ReadOnlyQuery` (it cannot return a mutable result from a shared `&self`);
+    /// for mutable single access see [`World::query_entity_mut`] (`&mut self`).
     ///
-    /// **Ham `u32` id ile — generation kontrolü yapmaz** (bkz. [`World::query_entity_mut`]).
+    /// **By raw `u32` id — it does not check the generation** (see [`World::query_entity_mut`]).
     pub fn query_entity<'w, Q: crate::query::ReadOnlyQuery>(
         &'w self,
         entity_id: u32,

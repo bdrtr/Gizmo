@@ -1,19 +1,29 @@
-//! Hafif in-game profiler — Frame bazlı zamanlama verileri toplar.
+//! A lightweight in-game profiler — collects frame-based timing data.
 //!
-//! # Kullanım
-//! ```ignore
-//! // Kayıt
-//! let mut profiler = world.get_resource_mut::<FrameProfiler>().unwrap();
-//! profiler.begin_scope("physics");
-//! // ... fizik hesabı ...
-//! profiler.end_scope("physics");
-//! profiler.end_frame();
+//! # Usage
+//! ```
+//! use gizmo_core::prelude::*;
 //!
-//! // Okuma (UI panelinde)
-//! let profiler = world.get_resource::<FrameProfiler>().unwrap();
-//! for scope in profiler.current_frame_scopes() {
-//!     tracing::info!("{}: {:.2}ms", scope.name, scope.duration_ms());
+//! let mut world = World::new();
+//! world.insert_resource(FrameProfiler::new());
+//!
+//! // Recording
+//! {
+//!     let mut profiler = world.get_resource_mut::<FrameProfiler>().unwrap();
+//!     profiler.begin_scope("physics");
+//!     // ... physics work ...
+//!     profiler.end_scope("physics");
+//!     profiler.end_frame();
 //! }
+//!
+//! // Reading (in a UI panel) — the data only appears in `last_frame()` after `end_frame`.
+//! let profiler = world.get_resource::<FrameProfiler>().unwrap();
+//! let frame = profiler.last_frame().expect("a frame was closed");
+//! assert_eq!(frame.frame_number, 0);
+//! assert_eq!(frame.scopes.len(), 1);
+//! assert_eq!(frame.scopes[0].name, "physics");
+//! assert_eq!(frame.scopes[0].depth, 0);
+//! assert!(frame.scopes[0].duration_ms() >= 0.0);
 //! ```
 
 #[cfg(target_arch = "wasm32")]
@@ -21,7 +31,7 @@ use web_time::Instant;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
 
-/// Tek bir profiling kapsamı (scope) — başlangıç ve bitiş zamanı.
+/// A single profiling scope — its start and end time.
 #[derive(Debug, Clone)]
 pub struct ProfileScope {
     /// The literal passed to `begin_scope`/`end_scope`. `&'static str` keeps recording
@@ -44,20 +54,20 @@ pub struct ProfileScope {
 }
 
 impl ProfileScope {
-    /// Kapsamın süresi (milisaniye).
+    /// The scope's duration (milliseconds).
     #[inline]
     pub fn duration_ms(&self) -> f64 {
         (self.end_ns - self.start_ns) as f64 / 1_000_000.0
     }
 
-    /// Kapsamın süresi (mikrosaniye).
+    /// The scope's duration (microseconds).
     #[inline]
     pub fn duration_us(&self) -> f64 {
         (self.end_ns - self.start_ns) as f64 / 1_000.0
     }
 }
 
-/// Tek bir frame'in zamanlama verileri.
+/// A single frame's timing data.
 #[derive(Debug, Clone, Default)]
 pub struct FrameProfile {
     /// Scopes that were *closed* during the frame, in closing order — not sorted by start
@@ -76,26 +86,26 @@ pub struct FrameProfile {
     pub total_ms: f64,
 }
 
-/// Ring-buffer tabanlı frame profiler.
-/// Son `HISTORY_SIZE` frame'in verilerini saklar.
+/// A ring-buffer based frame profiler.
+/// It stores the data of the last `HISTORY_SIZE` frames.
 pub struct FrameProfiler {
-    /// Tamamlanan frame profilleri (ring buffer).
+    /// The completed frame profiles (ring buffer).
     history: Vec<FrameProfile>,
-    /// Ring buffer yazma indeksi.
+    /// The ring buffer write index.
     write_idx: usize,
-    /// Toplam frame sayısı.
+    /// The total frame count.
     frame_count: u64,
-    /// Şu anki frame'in açık scope'ları.
+    /// The current frame's open scopes.
     active_scopes: Vec<(&'static str, u64, u32)>, // (name, start_ns, depth)
-    /// Şu anki frame'in tamamlanan scope'ları.
+    /// The current frame's completed scopes.
     current_scopes: Vec<ProfileScope>,
-    /// Mevcut derinlik (iç içe scope'lar için).
+    /// The current depth (for nested scopes).
     current_depth: u32,
-    /// Frame başlangıç anı.
+    /// The frame's starting instant.
     frame_start: Instant,
-    /// Profiler referans zamanı (monotonic clock başlangıcı).
+    /// The profiler's reference time (the start of the monotonic clock).
     epoch: Instant,
-    /// Profiler aktif mi? (false ise hiçbir şey kaydetmez)
+    /// Is the profiler active? (if false it records nothing at all)
     pub enabled: bool,
 }
 
@@ -127,7 +137,7 @@ impl FrameProfiler {
         }
     }
 
-    /// Yeni bir profiling scope başlatır.
+    /// Starts a new profiling scope.
     #[inline]
     pub fn begin_scope(&mut self, name: &'static str) {
         if !self.enabled {
@@ -138,7 +148,7 @@ impl FrameProfiler {
         self.current_depth += 1;
     }
 
-    /// Aktif scope'u kapatır ve zamanlama verisini kaydeder.
+    /// Closes the active scope and records the timing data.
     #[inline]
     pub fn end_scope(&mut self, name: &'static str) {
         if !self.enabled {
@@ -159,7 +169,7 @@ impl FrameProfiler {
         }
     }
 
-    /// Frame'i bitirir ve mevcut verileri history ring buffer'a yazar.
+    /// Ends the frame and writes the current data into the history ring buffer.
     pub fn end_frame(&mut self) {
         if !self.enabled {
             return;
@@ -185,7 +195,7 @@ impl FrameProfiler {
         self.current_depth = 0;
     }
 
-    /// Son tamamlanan frame'in scope verilerini döndürür.
+    /// Returns the scope data of the last completed frame.
     pub fn last_frame(&self) -> Option<&FrameProfile> {
         if self.history.is_empty() {
             return None;
@@ -218,10 +228,10 @@ impl FrameProfiler {
         (0..count.min(len)).map(move |i| &self.history[(write_idx + len - 1 - i) % len])
     }
 
-    /// Son N frame'in toplam süre ortalaması (ms).
+    /// The average of the total durations of the last N frames (ms).
     ///
-    /// "Son N" ring buffer'ın KRONOLOJİK son N'i — fiziksel `Vec` sırası değil (bkz.
-    /// `recent`). [`Self::estimated_fps`] bunu miras alır.
+    /// "The last N" is the ring buffer's CHRONOLOGICALLY last N — not the physical `Vec`
+    /// order (see `recent`). [`Self::estimated_fps`] inherits this.
     pub fn avg_frame_ms(&self, n: usize) -> f64 {
         let count = n.min(self.history.len());
         if count == 0 {
@@ -231,10 +241,10 @@ impl FrameProfiler {
         sum / count as f64
     }
 
-    /// Son N frame boyunca belirli bir scope'un ortalama süresi (ms).
+    /// The average duration of a particular scope over the last N frames (ms).
     ///
-    /// Aynı kronolojik-sıra düzeltmesi burada da geçerli (bkz. `recent`): bu fonksiyon
-    /// denetim maddesinde adı geçmiyordu ama birebir aynı `iter().rev()` kusurunu taşıyordu.
+    /// The same chronological-order correction applies here too (see `recent`): this function
+    /// was not named in the audit item but carried the very same `iter().rev()` defect.
     pub fn avg_scope_ms(&self, name: &str, n: usize) -> f64 {
         let count = n.min(self.history.len());
         if count == 0 {
@@ -257,20 +267,21 @@ impl FrameProfiler {
         }
     }
 
-    /// Tüm history'deki frame profilleri (ring buffer sırasıyla).
+    /// The frame profiles in the whole history (in ring buffer order).
     ///
-    /// FİZİKSEL sıra — ring sarmaladıktan sonra kronolojik DEĞİL: `write_idx`'teki slot en
-    /// eski frame'dir. Kronolojik gezinmek isteyen `frame_number` alanına bakmalı.
+    /// PHYSICAL order — NOT chronological once the ring has wrapped: the slot at `write_idx`
+    /// is the oldest frame. Whoever wants to walk chronologically must look at the
+    /// `frame_number` field.
     pub fn history(&self) -> &[FrameProfile] {
         &self.history
     }
 
-    /// Toplam frame sayısı.
+    /// The total frame count.
     pub fn frame_count(&self) -> u64 {
         self.frame_count
     }
 
-    /// Tahmini FPS (son 60 frame ortalaması).
+    /// The estimated FPS (the average of the last 60 frames).
     pub fn estimated_fps(&self) -> f64 {
         let avg = self.avg_frame_ms(60);
         if avg > 0.0 {
@@ -287,8 +298,8 @@ impl Default for FrameProfiler {
     }
 }
 
-/// RAII scope guard — drop edilince otomatik olarak scope'u kapatır.
-/// Kullanım: `let _guard = profiler.scope_guard("physics");`
+/// An RAII scope guard — when dropped it closes the scope automatically.
+/// Usage: `let _guard = profiler.scope_guard("physics");`
 pub struct ProfileGuard<'a> {
     profiler: &'a mut FrameProfiler,
     name: &'static str,
@@ -301,7 +312,7 @@ impl<'a> Drop for ProfileGuard<'a> {
 }
 
 impl FrameProfiler {
-    /// RAII scope guard oluşturur — drop edilince scope otomatik kapanır.
+    /// Creates an RAII scope guard — when dropped the scope closes automatically.
     pub fn scope_guard(&mut self, name: &'static str) -> ProfileGuard<'_> {
         self.begin_scope(name);
         ProfileGuard {

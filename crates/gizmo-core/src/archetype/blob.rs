@@ -48,15 +48,15 @@ use std::ptr::{self, NonNull};
 /// Dropping the vec runs `drop_fn` over the live elements and then frees the block; when
 /// `drop_fn` is `None` (a component that needs no drop glue) the bytes are simply released.
 pub struct BlobVec {
-    /// Her elemanın bellek yerleşimi (boyut + hizalama)
+    /// The memory layout of each element (size + alignment)
     item_layout: Layout,
-    /// Destructor fonksiyonu — None ise drop gerekmez (Copy tipler)
+    /// Destructor function — if None, no drop is needed (Copy types)
     drop_fn: Option<unsafe fn(*mut u8)>,
-    /// Tahsis edilmiş bellek bloğunun başlangıcı
+    /// The start of the allocated memory block
     data: NonNull<u8>,
-    /// Mevcut eleman sayısı
+    /// The current element count
     pub(crate) len: usize,
-    /// Tahsis edilmiş kapasite (eleman cinsinden)
+    /// The allocated capacity (in elements)
     pub(crate) capacity: usize,
 }
 
@@ -66,10 +66,10 @@ pub struct BlobVec {
 unsafe impl Send for BlobVec {}
 unsafe impl Sync for BlobVec {}
 
-/// `item_size * count` çarpımını taşma güvenli şekilde bir `Layout`'a dönüştürür.
+/// Converts the `item_size * count` product into a `Layout` in an overflow-safe way.
 ///
-/// Çarpım `usize`'ı taşarsa veya `isize::MAX`'ı aşarsa (ki bu Rust'ın izin verdiği
-/// azami tahsis boyutudur), sarma/panik yerine `None` döner.
+/// If the product overflows `usize` or exceeds `isize::MAX` (which is the maximum
+/// allocation size Rust permits), it returns `None` instead of wrapping/panicking.
 #[inline]
 fn checked_array_layout(item_size: usize, count: usize, align: usize) -> Option<Layout> {
     let total = item_size.checked_mul(count)?;
@@ -77,11 +77,11 @@ fn checked_array_layout(item_size: usize, count: usize, align: usize) -> Option<
 }
 
 impl BlobVec {
-    /// Yeni boş BlobVec oluşturur.
+    /// Creates a new empty BlobVec.
     ///
     /// # Arguments
-    /// * `item_layout` — Her elemanın Layout'u (boyut + hizalama)
-    /// * `drop_fn` — Eleman düşürme fonksiyonu. `None` ise drop çağrılmaz.
+    /// * `item_layout` — The Layout of each element (size + alignment)
+    /// * `drop_fn` — The element-dropping function. If `None`, drop is not called.
     pub fn new(item_layout: Layout, drop_fn: Option<unsafe fn(*mut u8)>) -> Self {
         // ZST (zero-sized type) kontrolü
         let (data, capacity) = if item_layout.size() == 0 {
@@ -99,22 +99,22 @@ impl BlobVec {
         }
     }
 
-    /// Mevcut eleman sayısı
+    /// The current element count
     #[inline]
     pub fn len(&self) -> usize {
         self.len
     }
 
-    /// Boş mu?
+    /// Is it empty?
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
 
-    /// Belirtilen indeksteki elemanın ham pointer'ını döndürür.
+    /// Returns the raw pointer of the element at the specified index.
     ///
     /// # Safety
-    /// `index < self.len` olmalıdır.
+    /// `index < self.len` must hold.
     #[inline]
     pub unsafe fn get_unchecked(&self, index: usize) -> *const u8 {
         debug_assert!(
@@ -126,10 +126,10 @@ impl BlobVec {
         self.data.as_ptr().add(index * self.item_layout.size())
     }
 
-    /// Belirtilen indeksteki elemanın mutable ham pointer'ını döndürür.
+    /// Returns the mutable raw pointer of the element at the specified index.
     ///
     /// # Safety
-    /// `index < self.len` olmalıdır.
+    /// `index < self.len` must hold.
     #[inline]
     pub unsafe fn get_unchecked_mut(&self, index: usize) -> *mut u8 {
         debug_assert!(
@@ -141,10 +141,10 @@ impl BlobVec {
         self.data.as_ptr().add(index * self.item_layout.size())
     }
 
-    /// Yeni bir eleman ekler.
+    /// Adds a new element.
     ///
     /// # Safety
-    /// `value` pointer'ı `item_layout.size()` bayt okunabilir belleğe işaret etmelidir.
+    /// The `value` pointer must point to memory readable for `item_layout.size()` bytes.
     pub unsafe fn push(&mut self, value: *const u8) {
         if self.item_layout.size() == 0 {
             self.len += 1;
@@ -156,10 +156,10 @@ impl BlobVec {
         self.len += 1;
     }
 
-    /// Bir component'ı clone fonksiyonunu kullanarak N kere çoğaltır ve arkaya ekler.
+    /// Duplicates a component N times using the clone function and appends them at the end.
     ///
     /// # Safety
-    /// `src` pointer'ı `item_layout.size()` bayt okunabilir belleğe işaret etmelidir.
+    /// The `src` pointer must point to memory readable for `item_layout.size()` bytes.
     pub unsafe fn push_cloned_batch(
         &mut self,
         src: *const u8,
@@ -190,11 +190,11 @@ impl BlobVec {
         self.len += count;
     }
 
-    /// Bir component'i bulunduğu indeksten alıp N kere çoğaltarak arkaya ekler.
-    /// Realloc sırasında src pointer'ının dangling olmasını engeller.
+    /// Takes a component from the index it sits at, duplicates it N times and appends at the end.
+    /// Prevents the src pointer from being dangling during realloc.
     ///
     /// # Safety
-    /// `row < self.len` olmalıdır.
+    /// `row < self.len` must hold.
     pub unsafe fn push_cloned_batch_from_row(
         &mut self,
         row: usize,
@@ -227,11 +227,11 @@ impl BlobVec {
         self.len += count;
     }
 
-    /// İki satırın ham bellek içeriğini takas eder (Swap).
-    /// Hiyerarşi gibi önbellek-dostu (cache-friendly) bellek kaydırmaları için oldukça etkilidir.
+    /// Swaps the raw memory contents of two rows (Swap).
+    /// It is quite effective for cache-friendly memory shifts such as those in the hierarchy.
     ///
     /// # Safety
-    /// `a < self.len` ve `b < self.len` olmalıdır.
+    /// `a < self.len` and `b < self.len` must hold.
     pub unsafe fn swap_rows(&mut self, a: usize, b: usize) {
         if a == b || self.item_layout.size() == 0 {
             return;
@@ -243,20 +243,21 @@ impl BlobVec {
         ptr::swap_nonoverlapping(ptr_a, ptr_b, size);
     }
 
-    /// Veri alanının ham pointer'ını döndürür.
+    /// Returns the raw pointer of the data area.
     pub fn as_ptr(&self) -> *const u8 {
         self.data.as_ptr()
     }
 
-    /// Veri alanının mutable ham pointer'ını döndürür.
+    /// Returns the mutable raw pointer of the data area.
     pub fn as_mut_ptr(&mut self) -> *mut u8 {
         self.data.as_ptr()
     }
 
-    /// Son elemanı swap-and-pop ile belirtilen indeksten çıkarır ve eski değeri düşürür.
+    /// Removes the element at the specified index by swap-and-pop (the last element is moved
+    /// into its place) and drops the old value.
     ///
     /// # Safety
-    /// `index < self.len` olmalıdır.
+    /// `index < self.len` must hold.
     pub unsafe fn swap_remove_and_drop(&mut self, index: usize) {
         debug_assert!(index < self.len);
         let last = self.len - 1;
@@ -281,11 +282,12 @@ impl BlobVec {
         self.len -= 1;
     }
 
-    /// Son elemanı swap-and-pop ile çıkarır, eski değeri `out` pointer'ına taşır (düşürmez).
+    /// Removes the element at the specified index by swap-and-pop (the last element is moved
+    /// into its place), moving the old value out to the `out` pointer (does not drop it).
     ///
     /// # Safety
-    /// - `index < self.len` olmalıdır
-    /// - `out` pointer'ı `item_layout.size()` bayt yazılabilir belleğe işaret etmelidir
+    /// - `index < self.len` must hold
+    /// - The `out` pointer must point to memory writable for `item_layout.size()` bytes
     pub unsafe fn swap_remove_unchecked(&mut self, index: usize, out: *mut u8) {
         debug_assert!(index < self.len);
         let last = self.len - 1;
@@ -304,7 +306,7 @@ impl BlobVec {
         self.len -= 1;
     }
 
-    /// Yeterli kapasite yoksa büyüt.
+    /// Grow if there is not enough capacity.
     pub(crate) fn reserve(&mut self, additional: usize) {
         let required = self.len + additional;
         if required <= self.capacity {
@@ -315,7 +317,7 @@ impl BlobVec {
         self.grow(new_capacity);
     }
 
-    /// Kapasiteyi belirtilen değere büyüt.
+    /// Grow the capacity to the specified value.
     fn grow(&mut self, new_capacity: usize) {
         assert!(new_capacity > self.capacity);
         let item_size = self.item_layout.size();
@@ -342,7 +344,7 @@ impl BlobVec {
         self.capacity = new_capacity;
     }
 
-    /// Küçültme (Defragmentation) operasyonu. BlobVec'in capacity değerini len değerine eşitler.
+    /// Shrink (Defragmentation) operation. Makes the BlobVec's capacity value equal to its len value.
     pub fn shrink_to_fit(&mut self) {
         if self.capacity == self.len {
             return;
@@ -375,7 +377,7 @@ impl BlobVec {
         self.capacity = self.len;
     }
 
-    /// Tüm elemanları düşürür (belleği serbest bırakmadan).
+    /// Drops all elements (without releasing the memory).
     #[inline]
     pub fn clear(&mut self) {
         if let Some(drop_fn) = self.drop_fn {

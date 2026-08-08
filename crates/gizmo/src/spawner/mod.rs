@@ -1,14 +1,22 @@
+//! Bevy-like Command API — for spawning an object in a single line inside the setup closure.
+//!
+//! ```no_run
+//! use gizmo::prelude::*;
+//! # use gizmo::spawner::Commands;
+//! App::<()>::new("demo", 1280, 720)
+//!     .set_setup(|world, renderer| {
+//!         let mut cmd = Commands::new(world, renderer);
+//!         cmd.spawn_cube(Vec3::new(0.0, 0.0, -10.0), Color::RED).with_name("Player");
+//!         cmd.spawn_camera(Vec3::new(0.0, 2.0, 5.0));
+//!     })
+//!     .run()
+//!     .unwrap();
+//! ```
+//!
+//! `no_run` because `App::run` opens a winit window and creates a wgpu surface: it cannot
+//! execute in a doc-test, and would never return if it could.
+
 use crate::color::Color;
-/// Bevy benzeri Command API — setup closure içinde tek satırla nesne spawn etmek için.
-///
-/// # Örnek
-/// ```rust,ignore
-/// .set_setup(|world, renderer| {
-///     let mut cmd = Commands::new(world, renderer);
-///     cmd.spawn_cube(Vec3::new(0.0, 0.0, -10.0), Color::RED).with_name("Oyuncu");
-///     cmd.spawn_camera(Vec3::new(0.0, 2.0, 5.0));
-/// })
-/// ```
 use gizmo_core::{Entity, EntityName, World};
 use gizmo_math::{Quat, Vec3};
 use gizmo_physics_core::{Collider, Transform};
@@ -21,28 +29,28 @@ use gizmo_renderer::{
 
 // ─── Hata Tipleri ───────────────────────────────────────────────────────────
 
-/// GLTF/GLB spawn işlemlerinde oluşabilecek hatalar.
+/// Errors that can arise during GLTF/GLB spawn operations.
 ///
-/// 1.0 hata kontratı: stringly-typed hata yerine somut, `match` edilebilir tip.
+/// 1.0 error contract: a concrete, `match`-able type instead of a stringly-typed error.
 ///
-/// `#[non_exhaustive]`: alt katmandaki yükleyici (`gizmo-renderer`) somut hata
-/// tipine geçtikçe burada yeni varyantlar (Io, Parse, GpuUpload, …) eklenebilir;
-/// bu yüzden tüketiciler `_ =>` kolu bulundurmalıdır.
+/// `#[non_exhaustive]`: as the loader in the lower layer (`gizmo-renderer`) moves to
+/// a concrete error type, new variants (Io, Parse, GpuUpload, …) may be added here;
+/// for that reason consumers must keep a `_ =>` arm.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum GltfLoadError {
-    /// Alttaki yükleyici (`AssetManager::load_gltf_scene` /
-    /// `load_gltf_from_import`) bir hata döndürdü. `path`, yüklenmeye çalışılan
-    /// dosya yolu; `source`, alt katmanın hata açıklamasıdır.
+    /// The underlying loader (`AssetManager::load_gltf_scene` /
+    /// `load_gltf_from_import`) returned an error. `path` is the file path that was
+    /// being loaded; `source` is the lower layer's error description.
     ///
-    /// Not: alt katman henüz `Result<_, String>` döndürdüğü için kaynak burada
-    /// bir `String` olarak taşınır; alt katman somut bir `Error` tipine
-    /// geçtiğinde bu varyant `#[source]` ile zincirlenecek şekilde
-    /// güncellenecektir.
+    /// Note: because the lower layer still returns `Result<_, String>`, the source
+    /// is carried here as a `String`; when the lower layer moves to a concrete
+    /// `Error` type this variant will be updated so that it chains with
+    /// `#[source]`.
     Load {
-        /// Yüklenmeye çalışılan dosya yolu.
+        /// The file path that was being loaded.
         path: String,
-        /// Alt katmandan gelen hata açıklaması.
+        /// The error description coming from the lower layer.
         source: String,
     },
 }
@@ -87,7 +95,7 @@ impl<'a> Commands<'a> {
 
     // ── Primitifler ────────────────────────────────────────────────────────────
 
-    /// Tek satırda renkli bir küp spawn eder. Builder zinciriyle `.with_name()` eklenebilir.
+    /// Spawns a colored cube in a single line. `.with_name()` can be added via the builder chain.
     pub fn spawn_cube(&mut self, pos: Vec3, color: Color) -> EntityBuilder<'_, 'a> {
         let mesh = AssetManager::create_cube(&self.renderer.device);
         let bg = self.asset_manager.as_mut().unwrap().create_white_texture(
@@ -103,7 +111,7 @@ impl<'a> Commands<'a> {
         }
     }
 
-    /// Tek satırda renkli bir küre spawn eder.
+    /// Spawns a colored sphere in a single line.
     pub fn spawn_sphere(&mut self, pos: Vec3, radius: f32, color: Color) -> EntityBuilder<'_, 'a> {
         let mesh = AssetManager::create_sphere(&self.renderer.device, radius, 20, 20);
         let bg = self.asset_manager.as_mut().unwrap().create_white_texture(
@@ -119,7 +127,7 @@ impl<'a> Commands<'a> {
         }
     }
 
-    /// Tek satırda düzlemsel bir zemin spawn eder.
+    /// Spawns a planar ground in a single line.
     pub fn spawn_plane(&mut self, pos: Vec3, size: f32, color: Color) -> EntityBuilder<'_, 'a> {
         let mesh = AssetManager::create_plane(&self.renderer.device, size);
         let bg = self.asset_manager.as_mut().unwrap().create_white_texture(
@@ -135,7 +143,7 @@ impl<'a> Commands<'a> {
         }
     }
 
-    /// Diskten bir .obj modeli yükler ve spawn eder.
+    /// Loads an .obj model from disk and spawns it.
     pub fn spawn_model(&mut self, pos: Vec3, path: &str) -> EntityBuilder<'_, 'a> {
         tracing::debug!(path, ?pos, "spawn_model: diskten .obj model yükleniyor");
         let mesh = self
@@ -158,8 +166,8 @@ impl<'a> Commands<'a> {
 
     // ── Kamera ────────────────────────────────────────────────────────────────
 
-    /// Birincil (primary) 3D perspektif kamera spawn eder.
-    /// `yaw = -π/2` (−X'e bakıyor), `pitch = 0` (düz).
+    /// Spawns the primary 3D perspective camera.
+    /// `yaw = -π/2` (looking towards −X), `pitch = 0` (level).
     pub fn spawn_camera(&mut self, pos: Vec3) -> EntityBuilder<'_, 'a> {
         if let Some(mut cameras) = self.world.query_mut::<gizmo_core::prelude::Mut<Camera>>() {
             for (_, mut c) in cameras.iter_mut() {
@@ -189,7 +197,7 @@ impl<'a> Commands<'a> {
         }
     }
 
-    /// `fov` (derece), `near`, `far` özelleştirilebilir kamera.
+    /// Camera with customizable `fov` (degrees), `near`, `far`.
     pub fn spawn_camera_with(
         &mut self,
         pos: Vec3,
@@ -227,7 +235,7 @@ impl<'a> Commands<'a> {
 
     // ── Işıklar ─────────────────────────────────────────────────────────────────────────
 
-    /// Point light (nokta ışık) spawn eder.
+    /// Spawns a point light.
     pub fn spawn_point_light(
         &mut self,
         pos: Vec3,
@@ -252,8 +260,8 @@ impl<'a> Commands<'a> {
         }
     }
 
-    /// Directional light (güneş/ay) spawn eder.
-    /// `direction`: normallenmiş ışık yönü (aşağı bakan = negatif Y).
+    /// Spawns a directional light (sun/moon).
+    /// `direction`: the normalized light direction (pointing downwards = negative Y).
     pub fn spawn_sun(
         &mut self,
         _direction: Vec3,
@@ -281,7 +289,8 @@ impl<'a> Commands<'a> {
 
     // ── Sahne Yardımcıları ────────────────────────────────────────────────────────────
 
-    /// Skybox spawn eder (ters yüzlü çok büyük küp). Renk arka plan rengini belirler.
+    /// Spawns a skybox (a very large cube with inverted faces). The color determines the
+    /// background color.
     pub fn spawn_skybox(&mut self, color: Color) -> EntityBuilder<'_, 'a> {
         // Skip existing check since is_skybox is removed
 
@@ -310,8 +319,8 @@ impl<'a> Commands<'a> {
 
     // ── Fizik Spawn ─────────────────────────────────────────────────────────────────────────
 
-    /// Fizik simulasyonuna katılan dinamik bir küp spawn eder.
-    /// `half_extents`: Her eksende yarı boyut. `mass`: kg cinsinden kütle (0 = statik).
+    /// Spawns a dynamic cube that participates in the physics simulation.
+    /// `half_extents`: Half size on each axis. `mass`: mass in kg (0 = static).
     pub fn spawn_rigid_cube(
         &mut self,
         pos: Vec3,
@@ -353,7 +362,7 @@ impl<'a> Commands<'a> {
         }
     }
 
-    /// Fizik simulasyonuna katılan dinamik bir küre spawn eder.
+    /// Spawns a dynamic sphere that participates in the physics simulation.
     pub fn spawn_rigid_sphere(
         &mut self,
         pos: Vec3,
@@ -387,7 +396,7 @@ impl<'a> Commands<'a> {
         }
     }
 
-    /// Statik (hareket etmeyen) zemin düzlemi spawn eder.
+    /// Spawns a static (non-moving) ground plane.
     pub fn spawn_static_plane(
         &mut self,
         pos: Vec3,
@@ -415,7 +424,7 @@ impl<'a> Commands<'a> {
 
     // ── Görsel Yardımcılar ──────────────────────────────────────────────────────────────────────
 
-    /// Textureli bir materyal yükler ve bir küpe uygular.
+    /// Loads a textured material and applies it to a cube.
     pub fn spawn_textured_cube(&mut self, pos: Vec3, texture_path: &str) -> EntityBuilder<'_, 'a> {
         let mesh = AssetManager::create_cube(&self.renderer.device);
         let bg = match self.asset_manager.as_mut().unwrap().load_material_texture(
@@ -448,7 +457,7 @@ impl<'a> Commands<'a> {
         }
     }
 
-    /// Textureli bir materyal yükler ve bir düzleme uygular.
+    /// Loads a textured material and applies it to a plane.
     pub fn spawn_textured_plane(
         &mut self,
         pos: Vec3,
@@ -490,14 +499,15 @@ impl<'a> Commands<'a> {
 
 // ─── EntityBuilder — Zincir API ───────────────────────────────────────────────
 
-/// Spawn edilen entity'e ek bileşenler eklemek için zincir builder.
+/// Chain builder for adding extra components to a spawned entity.
 pub struct EntityBuilder<'b, 'a> {
     commands: &'b mut Commands<'a>,
     entity: Entity,
 }
 
 impl<'b, 'a> EntityBuilder<'b, 'a> {
-    /// Entity'e bir isim (tag) ata. Update içinde `world.entity_named("...")` ile bulunabilir.
+    /// Assign a name (tag) to the entity. It can be found inside update with
+    /// `world.entity_named("...")`.
     pub fn with_name(self, name: &str) -> Self {
         self.commands
             .world
@@ -505,13 +515,13 @@ impl<'b, 'a> EntityBuilder<'b, 'a> {
         self
     }
 
-    /// Herhangi bir ek bileşen ekle.
+    /// Add any extra component.
     pub fn with<C: gizmo_core::Component + 'static>(self, component: C) -> Self {
         self.commands.world.add_component(self.entity, component);
         self
     }
 
-    /// Entity ID'sini tüket ve döndür.
+    /// Consume and return the Entity ID.
     pub fn id(self) -> Entity {
         self.entity
     }
@@ -549,24 +559,36 @@ pub(super) fn spawn_mesh_entity(
 
 // ─── WorldExt Trait — Update içinde kısa sorgular ─────────────────────────────
 
-/// World üzerine eklenen kolaylık metodları.
-/// `use gizmo::prelude::*;` ile otomatik içeri alınır.
+/// Convenience methods added on top of World.
+/// Brought in automatically with `use gizmo::prelude::*;`.
 pub trait WorldExt {
-    /// İsme göre Entity ID'sini (u32) bul.
+    /// Find the Entity ID (u32) by name.
     fn entity_named(&self, name: &str) -> Option<u32>;
 
-    /// İsme göre entity'nin Transform'unu değiştir. Transform matrisi otomatik güncellenir.
+    /// Modify an entity's Transform by name. The Transform matrix is updated automatically.
     fn move_entity_named<F: FnMut(&mut gizmo_physics_core::Transform)>(&mut self, name: &str, f: F);
 
-    /// İsme göre entity'nin dünya pozisyonunu al.
+    /// Get an entity's world position by name.
     fn position_of(&self, name: &str) -> Option<Vec3>;
 
-    /// İsme göre herhangi bir bileşeni değiştir.
+    /// Modify any component by name.
     ///
-    /// # Örnek
-    /// ```rust,ignore
-    /// world.modify::<Camera>("Kamera", |cam| { cam.fov = 90.0_f32.to_radians(); });
-    /// world.modify::<Material>("Top", |mat| { mat.albedo = Color::BLUE.to_vec4(); });
+    /// # Example
+    /// ```
+    /// use gizmo::prelude::*;
+    /// # #[derive(Clone)] struct Health(u32);
+    /// # gizmo::core::impl_component!(Health);
+    /// # let mut world = World::new();
+    /// # let e = world.spawn();
+    /// # world.add_component(e, EntityName("Player".to_string()));
+    /// # world.add_component(e, Health(100));
+    /// // The second type parameter is the closure's own, so it can only be `_`.
+    /// world.modify::<Health, _>("Player", |h| h.0 -= 30);
+    /// assert_eq!(world.borrow::<Health>().get(e.id()).unwrap().0, 70);
+    ///
+    /// // An unknown name is a silent no-op, not a panic.
+    /// world.modify::<Health, _>("Nobody", |h| h.0 = 0);
+    /// assert_eq!(world.borrow::<Health>().get(e.id()).unwrap().0, 70);
     /// ```
     fn modify<T: gizmo_core::Component + 'static, F: FnMut(&mut T)>(&mut self, name: &str, f: F);
 }
@@ -650,22 +672,35 @@ impl WorldExt for World {
 // ─── InputExt Trait — KeyCode doğrudan kabul eden kısaltmalar ─────────────────
 // gizmo-core'da winit bağımlılığı olmadığı için bu trait gizmo crate'inde tanımlıdır.
 
-/// `Input` üzerine eklenen ergonomik metodlar.
-/// `use gizmo::prelude::*;` ile otomatik içeri alınır.
+/// Ergonomic methods added on top of `Input`.
+/// Brought in automatically with `use gizmo::prelude::*;`.
 ///
-/// # Örnek
-/// ```rust,ignore
-/// if input.pressed(Key::KeyW) { trans.position.z -= 5.0 * dt; }
-/// if input.just_pressed(Key::Space) { player.jump(); }
+/// # Example
+/// ```
+/// use gizmo::prelude::*;
+/// # use gizmo::core::input::Input;
+/// # use winit::keyboard::KeyCode as Key;
+/// # let mut input = Input::new();
+/// # input.on_key_pressed(Key::KeyW as u32);
+/// # input.on_key_pressed(Key::Space as u32);
+/// let mut z = 0.0_f32;
+/// let dt = 1.0 / 60.0;
+/// if input.pressed(Key::KeyW) { z -= 5.0 * dt; }
+/// let jumped = input.just_pressed(Key::Space);
+///
+/// assert!(z < 0.0 && jumped);
+/// // `just_pressed` is edge-triggered: it is false on the next frame, `pressed` is not.
+/// # input.begin_frame();
+/// assert!(input.pressed(Key::KeyW) && !input.just_pressed(Key::Space));
 /// ```
 pub trait InputExt {
-    /// Tuş basılı mı? `Key::KeyW`, `Key::Space` gibi `KeyCode` varyantlarını doğrudan alır.
+    /// Is the key held down? Takes `KeyCode` variants like `Key::KeyW`, `Key::Space` directly.
     fn pressed(&self, keycode: winit::keyboard::KeyCode) -> bool;
 
-    /// Tuş bu frame'de ilk kez mi basıldı? (tek seferlik tetikleme)
+    /// Was the key pressed for the first time this frame? (one-shot trigger)
     fn just_pressed(&self, keycode: winit::keyboard::KeyCode) -> bool;
 
-    /// Tuş bu frame'de mi bırakıldı?
+    /// Was the key released this frame?
     fn just_released(&self, keycode: winit::keyboard::KeyCode) -> bool;
 }
 

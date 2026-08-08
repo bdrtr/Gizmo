@@ -24,9 +24,9 @@ pub(crate) use std::time::Instant as FrameInstant;
 #[cfg(target_arch = "wasm32")]
 pub(crate) use web_time::Instant as FrameInstant;
 
-/// WASM: `resumed` içinde başlatılan async GPU init'in el-değiştirme durumu.
-/// Tek-thread'li web ortamında `Rc<RefCell<…>>` yeterli; `spawn_local` future'ı
-/// renderer'ı slota bırakıp `request_redraw` ile event loop'u uyandırır.
+/// WASM: the hand-over state of the async GPU init started inside `resumed`.
+/// In the single-threaded web environment `Rc<RefCell<…>>` is enough; the `spawn_local` future
+/// drops the renderer into the slot and wakes the event loop with `request_redraw`.
 #[cfg(target_arch = "wasm32")]
 struct PendingWebInit {
     window: Arc<winit::window::Window>,
@@ -128,9 +128,9 @@ pub struct App<State: 'static = ()> {
     #[cfg(feature = "egui")]
     editor: Option<EguiContext>,
     app_state: Option<State>,
-    /// WASM: `resumed` bloklayamaz — `Renderer::new` (async WebGPU init)
-    /// `spawn_local`'da koşar, sonucu bu slot üzerinden ilk uyanışta
-    /// `finish_initialize`'a teslim edilir.
+    /// WASM: `resumed` cannot block — `Renderer::new` (async WebGPU init)
+    /// runs in `spawn_local`, and its result is handed over to `finish_initialize`
+    /// through this slot on the first wake-up.
     #[cfg(target_arch = "wasm32")]
     pending_web_init: Option<PendingWebInit>,
     last_frame_time: Option<FrameInstant>,

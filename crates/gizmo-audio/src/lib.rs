@@ -225,7 +225,7 @@ impl AudioManager {
         }
     }
 
-    /// Sesi diske gidip okuyarak byte array olarak RAM'e kaydeder
+    /// Goes to disk, reads the sound and stores it in RAM as a byte array
     pub fn load_sound(&mut self, name: &str, path: &str) -> Result<(), AudioError> {
         let mut file =
             File::open(Path::new(path)).map_err(|_| AudioError::NotFound(path.to_string()))?;
@@ -247,23 +247,24 @@ impl AudioManager {
         self.sound_buffers.insert(name.to_string(), bytes.into());
     }
 
-    /// Update çağrıldığında biten sesleri temizler
+    /// Cleans up the finished sounds when update is called
     pub fn update(&mut self) {
         self.clean_dead_sinks();
     }
 
     // ── Su-altı ses boğma (underwater muffle) ────────────────────────────────
-    /// Su altındayken hacim çarpanı (kısılır).
+    /// Volume multiplier while underwater (turned down).
     const UW_VOLUME_MUL: f32 = 0.4;
-    /// Su altındayken oynatma hızı = pitch (hafif düşürülür → "boğuk/uzak" his).
+    /// Playback speed = pitch while underwater (lowered slightly → a "muffled/distant" feel).
     const UW_SPEED: f32 = 0.85;
 
-    /// Su-altı "boğma" modunu aç/kapa. Aktifken tüm sesler kısılır + hafif düşük pitch'e iner
-    /// (rodio `Sink` canlı alçak-geçiren filtre desteklemediğinden gerçek low-pass yerine bu
-    /// dampening kullanılır — "muffled" hissi verir). İDEMPOTENT: yalnız durum DEĞİŞİNCE uygular,
-    /// bu yüzden her frame güvenle çağrılabilir. NOT: hacim çarpanla geri alındığından, su
-    /// altındayken oyun tarafı `set_volume` çağırırsa yüzeye çıkışta hafif sapma olabilir
-    /// (sürekli ambient sesler için sorun değil).
+    /// Turn the underwater "muffle" mode on/off. While active every sound is turned down +
+    /// drops to a slightly lower pitch (since rodio's `Sink` does not support a live low-pass
+    /// filter, this dampening is used instead of a real low-pass — it gives a "muffled" feel).
+    /// IDEMPOTENT: it applies only when the state CHANGES, so it can safely be called every
+    /// frame. NOTE: because the volume is undone with a multiplier, if the game side calls
+    /// `set_volume` while underwater there may be a slight drift on surfacing (not a problem
+    /// for continuous ambient sounds).
     pub fn set_underwater(&mut self, on: bool) {
         if on == self.underwater {
             return;
@@ -284,13 +285,13 @@ impl AudioManager {
         }
     }
 
-    /// Su-altı boğma modu şu an aktif mi.
+    /// Is the underwater muffle mode currently active.
     #[inline]
     pub fn is_underwater(&self) -> bool {
         self.underwater
     }
 
-    /// Yeni oluşturulan bir normal `Sink`'e, o an su altındaysak boğmayı uygular.
+    /// Applies the muffle to a newly created normal `Sink` if we are underwater at that moment.
     fn apply_underwater_to(sink: &Sink, underwater: bool) {
         if underwater {
             sink.set_volume(sink.volume() * Self::UW_VOLUME_MUL);
@@ -298,7 +299,7 @@ impl AudioManager {
         }
     }
 
-    /// Normal (Global/Stereo) bir ses oynatır (tek seferlik)
+    /// Plays a normal (Global/Stereo) sound (one-shot)
     ///
     /// # Errors
     ///
@@ -309,7 +310,7 @@ impl AudioManager {
         self.play_internal(name, false)
     }
 
-    /// Normal (Global/Stereo) bir sesi döngüsel oynatır
+    /// Plays a normal (Global/Stereo) sound in a loop
     ///
     /// # Errors
     ///
@@ -342,7 +343,7 @@ impl AudioManager {
         Ok(id)
     }
 
-    /// 3D Uzamsal (Spatial) bir ses oynatır (tek seferlik)
+    /// Plays a 3D Spatial sound (one-shot)
     ///
     /// # Errors
     ///
@@ -359,7 +360,7 @@ impl AudioManager {
         self.play_3d_internal(name, emitter_pos, left_ear, right_ear, false)
     }
 
-    /// 3D Uzamsal bir sesi döngüsel oynatır
+    /// Plays a 3D Spatial sound in a loop
     ///
     /// # Errors
     ///
@@ -493,7 +494,7 @@ impl AudioManager {
         }
     }
 
-    /// Çalan bitmiş sesleri (Sinks) Garbage Collector gibi temizler
+    /// Cleans up the playing sounds that have finished (Sinks) like a Garbage Collector
     pub fn clean_dead_sinks(&mut self) {
         self.active_spatial_sinks.retain(|_, sink| !sink.empty());
         self.active_sinks.retain(|_, sink| !sink.empty());

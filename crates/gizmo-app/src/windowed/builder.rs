@@ -76,8 +76,8 @@ impl<State: 'static> App<State> {
         self
     }
 
-    /// Sisteme yeni bir Olay (Event) türü kaydeder.
-    /// Bu işlem sayesinde her kare bitişinde çift-buffer `update()` otomatik çalışır.
+    /// Registers a new Event type with the system.
+    /// Thanks to this, the double-buffer `update()` runs automatically at the end of every frame.
     pub fn add_event<T: 'static + Send + Sync>(mut self) -> Self {
         tracing::debug!(event = %std::any::type_name::<T>(), "[App] event type registered");
         self.world
@@ -137,7 +137,7 @@ impl<State: 'static> App<State> {
         self
     }
 
-    /// Yeni, basit Render fonksiyonunu (RenderContext) ekler
+    /// Adds the new, simple Render function (RenderContext)
     pub fn set_simple_render<F>(mut self, f: F) -> Self
     where
         F: for<'a> FnMut(&mut World, &State, &mut RenderContext<'a>) + 'static,

@@ -1,15 +1,15 @@
-//! Utility AI Sistemi
+//! Utility AI System
 //!
-//! AAA kalitesinde esnek karar verme sistemi. Ajanın durumunu analiz eder ve
-//! çeşitli eylemlerin faydasını (utility) matematiksel eğriler (curves) ile hesaplayarak
-//! en yüksek skora sahip eylemi seçer.
+//! A AAA-quality, flexible decision-making system. It analyzes the agent's state and,
+//! by computing the utility of the various actions with mathematical curves,
+//! selects the action with the highest score.
 
 use std::sync::Arc;
 
-/// Değerlendirme fonksiyonu tipi (Örn: Ajanın canını 0.0 - 1.0 aralığına normalize eder)
+/// Evaluation function type (e.g.: normalizes the agent's health into the 0.0 - 1.0 range)
 pub type ContextScorer<T> = Arc<dyn Fn(&T) -> f32 + Send + Sync>;
 
-/// Eğri değerlendirme arayüzü (Normalize edilmiş 0-1 değerini, 0-1 arası fayda skoruna dönüştürür)
+/// Curve evaluation interface (converts a normalized 0-1 value into a 0-1 utility score)
 ///
 /// This trait is a deliberate **extension point**: users are expected to
 /// implement their own response curves in addition to the built-in
@@ -20,7 +20,7 @@ pub trait UtilityCurve: Send + Sync {
     fn evaluate(&self, x: f32) -> f32;
 }
 
-/// Basit Doğrusal Eğri (y = m*x + b)
+/// Simple Linear Curve (y = m*x + b)
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LinearCurve {
     /// Slope, in utility per unit of normalized input. A negative slope inverts
@@ -53,7 +53,7 @@ impl UtilityCurve for LinearCurve {
     }
 }
 
-/// Lojistik (Sigmoid) Eğri — S şeklinde geçişler için (örn: can %50'nin altına inince aciliyetin hızla artması)
+/// Logistic (Sigmoid) Curve — for S-shaped transitions (e.g. urgency rising fast once health drops below 50%)
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LogisticCurve {
     /// Steepness of the transition, per unit of normalized input. Positive
@@ -91,7 +91,7 @@ impl UtilityCurve for LogisticCurve {
     }
 }
 
-/// Bir aksiyonun skorlanmasında kullanılan bir girdi faktörü
+/// An input factor used in the scoring of an action
 pub struct UtilityConsideration<T> {
     /// Reads one fact out of the context and normalizes it to 0..=1 (e.g.
     /// `hp / max_hp`, `1 - distance / range`). Returns outside that range are
@@ -143,7 +143,7 @@ impl<T> UtilityConsideration<T> {
     }
 }
 
-/// Ajanın seçebileceği bir eylem ve onun skorlama kuralları
+/// An action the agent can choose and its scoring rules
 pub struct UtilityAction<T> {
     /// Free-form label handed back by [`UtilityBrain::decide`]; the caller
     /// dispatches on it. Uniqueness is not enforced, and a duplicate name makes
@@ -193,7 +193,7 @@ impl<T> UtilityAction<T> {
         self
     }
 
-    /// Eylemin toplam fayda skorunu hesaplar (Çarpımsal - biri 0 ise tüm eylem 0 olur)
+    /// Computes the action's total utility score (multiplicative - if one is 0 the whole action is 0)
     ///
     /// Computes the action's total utility as a product: `base_score` times one
     /// factor per consideration, taken in insertion order.
@@ -243,7 +243,7 @@ impl<T> UtilityAction<T> {
     }
 }
 
-/// Ajanın eylemleri seçmesini yöneten ana karar verici
+/// The main decision maker that governs how the agent selects actions
 pub struct UtilityBrain<T> {
     /// Candidate actions, all of them scored on every [`decide`] call — there is
     /// no pruning, so cost grows linearly with the number of actions times their
@@ -280,7 +280,7 @@ impl<T> UtilityBrain<T> {
         self
     }
 
-    /// Bağlama (context) göre en yüksek skora sahip eylemin adını döner
+    /// Returns the name of the action with the highest score for the given context
     ///
     /// Scores every action against `context` and returns the winner's name and
     /// score. The brain is stateless: nothing is remembered between calls, so

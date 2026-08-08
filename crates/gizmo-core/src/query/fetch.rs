@@ -57,35 +57,35 @@ pub trait FetchComponent: sealed::SealedFetch {
     /// recorded as a reader or a writer of this component for parallel scheduling.
     const IS_MUT: bool;
 
-    /// Bir archetype bazında ham pointer fetch hazırlar.
+    /// Prepares a raw pointer fetch on a per-archetype basis.
     ///
     /// # Safety
-    /// Archetype geçerli olmalı ve döndürülen fetch pointer'ı archetype'ın yaşam süresi boyunca geçerli kalmalıdır.
+    /// The archetype must be valid and the returned fetch pointer must stay valid for the whole lifetime of the archetype.
     unsafe fn fetch_raw<'w>(world: &'w World, arch: &Archetype, system_tick: u32) -> Option<Self::Fetch<'w>>;
 
-    /// Ham pointer'dan veriyi getirir.
+    /// Fetches the data from the raw pointer.
     ///
     /// # Safety
-    /// `row` değeri archetype'ın eleman sayısından küçük olmalıdır.
+    /// The `row` value must be smaller than the archetype's element count.
     unsafe fn get_item<'w>(fetch: Self::Fetch<'w>, row: usize, entity_id: u32) -> Self::Item<'w>;
 
-    /// Chunk olarak ardışık belleği Slice şeklinde getirir (SIMD).
+    /// Fetches contiguous memory as a chunk, in Slice form (SIMD).
     ///
     /// # Safety
-    /// `len` değeri archetype'ın eleman sayısını aşmamalıdır.
+    /// The `len` value must not exceed the archetype's element count.
     unsafe fn get_slice<'w>(fetch: Self::Fetch<'w>, len: usize) -> Self::Slice<'w>;
 
-    /// `entity_id`'in bu bileşeni gerçekten taşıyıp taşımadığını döndürür.
+    /// Returns whether `entity_id` really carries this component.
     ///
-    /// `Table` depolamada bu DAİMA `true`'dur: `matches_archetype` zaten iterasyonu
-    /// bileşeni içeren arketiplere kısıtlamıştır. `SparseSet` depolamada ise
-    /// `matches_archetype` bilinçli olarak GENİŞTİR (her arketip için `true` döner),
-    /// bu yüzden satır-başı varlık kontrolü BURADA yapılmalıdır — aksi halde `get_item`,
-    /// bileşeni OLMAYAN entity'ler için sparse set'i sınır-dışı indeksler (güvenli koddan
-    /// ulaşılabilen panik veya — tombstone slot'unda — release derlemede UB).
+    /// In `Table` storage this is ALWAYS `true`: `matches_archetype` has already restricted
+    /// iteration to the archetypes that contain the component. In `SparseSet` storage, however,
+    /// `matches_archetype` is deliberately WIDE (it returns `true` for every archetype),
+    /// which is why the per-row presence check must be done HERE — otherwise `get_item`
+    /// indexes the sparse set out of bounds for entities that do NOT have the component (a
+    /// panic reachable from safe code or — on a tombstone slot — UB in a release build).
     ///
     /// # Safety
-    /// `fetch`, iterlenen dünya için `fetch_raw`'dan gelmelidir.
+    /// `fetch` must come from `fetch_raw` for the world being iterated.
     unsafe fn contains_entity<'w>(fetch: Self::Fetch<'w>, entity_id: u32) -> bool {
         let _ = (fetch, entity_id);
         true
@@ -136,12 +136,12 @@ impl<T: crate::component::Component> FetchComponent for &T {
     }
 }
 
-/// Bir component'e değiştirme-takipli (`Changed<T>`) mutable erişim.
+/// Change-tracked (`Changed<T>`) mutable access to a component.
 ///
 /// **Aliasing:** `world.query::<Mut<T>>()` / [`World::borrow_mut`](crate::world::World::borrow_mut)
-/// `&self`'ten `&mut T` verir; aynı `T` için iki *canlı* `Mut` query'si (veya bir `Mut`
-/// ile bir `&T`) aynı anda UB'dir. Çağıran sözleşmesi ve güvenli alternatifler için
-/// [`World::query`](crate::world::World::query) aliasing bölümüne bakın.
+/// hands out `&mut T` from `&self`; two *live* `Mut` queries for the same `T` (or one `Mut`
+/// together with a `&T`) at the same time are UB. For the caller contract and for safe
+/// alternatives see the aliasing section of [`World::query`](crate::world::World::query).
 pub struct Mut<'a, T: 'static> {
     value: &'a mut T,
     ticks: &'a mut crate::archetype::ComponentTicks,

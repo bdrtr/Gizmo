@@ -146,35 +146,35 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
     // views from one query can't coexist. Combined with `query_mut`/`query_unchecked`
     // gating creation, this closes the dual-`Mut` aliasing hole for safe code.
 
-    /// Eleman-başına `Mut<T>` veren mutable iterasyon. `&mut self` aldığından aynı query
-    /// üzerinde ikinci bir canlı mutable iterasyon derleme zamanında engellenir.
+    /// Mutable iteration yielding a per-element `Mut<T>`. Because it takes `&mut self`, a second
+    /// live mutable iteration over the same query is blocked at compile time.
     pub fn iter_mut<'a>(&'a mut self) -> QueryIter<'a, 'w, Q> {
         self.iter_inner()
     }
 
-    /// **Toplu (bulk) yazma** için mutable chunk iterasyonu (`&mut [T]` döndürür).
+    /// Mutable chunk iteration for **bulk writes** (returns `&mut [T]`).
     ///
-    /// Ham bir dilim verdiği için hangi elemanların yazıldığını izleyemez; bu yüzden
-    /// **verilen tüm satırları temkinli (conservative) olarak "changed" işaretler.**
-    /// Bu, gerçek bir değişikliği asla KAÇIRMAZ (change detection için güvenli taraf),
-    /// ama yalnızca bir kısmını yazarsanız yazılmayanları da "changed" gösterir
-    /// (false positive). Doğru aracı seçin:
-    /// - Sadece okuyacaksanız → [`Query::iter_chunks`] (işaretlemez).
-    /// - Bir kısmını hassas işaretleyerek yazacaksanız → `iter_mut` (eleman başına `Mut`).
-    /// - Hepsini yazacaksanız → bu metot (hepsini işaretlemek zaten doğru).
+    /// Because it hands out a raw slice it cannot track which elements were written; therefore it
+    /// **conservatively marks all the rows it hands out as "changed".**
+    /// This never MISSES a real change (the safe side for change detection),
+    /// but if you write only some of them it shows the unwritten ones as "changed" too
+    /// (false positive). Choose the right tool:
+    /// - If you will only read → [`Query::iter_chunks`] (does not mark).
+    /// - If you will write some of them with precise marking → `iter_mut` (per-element `Mut`).
+    /// - If you will write all of them → this method (marking all of them is already correct).
     pub fn iter_chunks_mut<'a>(&'a mut self) -> QueryChunksIter<'a, 'w, Q> {
         self.iter_chunks_inner()
     }
 
-    /// Ham `u32` id ile mutable erişim — generation kontrolü yapmaz (bkz. [`Query::get`]).
-    /// `&mut self` aldığından dönen `Mut` query'yi özel olarak ödünç alır; aynı anda ikinci
-    /// bir `get_mut`/`iter_mut` derlenmez.
+    /// Mutable access by raw `u32` id — does not check the generation (see [`Query::get`]).
+    /// Because it takes `&mut self` the returned `Mut` borrows the query exclusively; a second
+    /// simultaneous `get_mut`/`iter_mut` does not compile.
     #[inline]
     pub fn get_mut(&mut self, entity_id: u32) -> Option<Q::Item<'_>> {
         self.get_inner(entity_id)
     }
 
-    /// Generation-doğrulamalı mutable erişim (bkz. [`Query::get_entity`]).
+    /// Generation-validated mutable access (see [`Query::get_entity`]).
     #[inline]
     pub fn get_mut_entity(&mut self, entity: Entity) -> Option<Q::Item<'_>> {
         if !self.world.is_alive(entity) {
@@ -183,7 +183,7 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
         self.get_inner(entity.id())
     }
 
-    /// İş parçacığı havuzu (Work-Stealing) ile çalışan lock-free paralel mutable iterasyon.
+    /// Lock-free parallel mutable iteration running on the thread pool (Work-Stealing).
     pub fn par_for_each_mut<F>(&mut self, func: F)
     where
         F: Fn((u32, Q::Item<'_>)) + Send + Sync,
@@ -251,31 +251,31 @@ impl<'w, Q: ReadOnlyQuery> Query<'w, Q> {
         self.iter_inner()
     }
 
-    /// Salt-okunur SIMD-dostu chunk iterasyonu (`&[T]` döndürür). Değişiklik tespitini
-    /// (change detection) ETKİLEMEZ — bileşenleri okumak için kullanın.
+    /// Read-only SIMD-friendly chunk iteration (returns `&[T]`). It does NOT AFFECT change
+    /// detection — use it for reading components.
     ///
     /// # Panics
-    /// Satır-başı filtre GEREKTİREN bir query'de (SparseSet `With`/`Without`,
-    /// `Changed`/`Added`, `Or`) panikler: chunk iterasyonu arketipin TÜM bitişik dilimini
-    /// döndürür, bu filtreler ise satır-başı seçer (bkz. [`WorldQuery::has_row_filter`]).
-    /// Sessizce filtrelenmemiş sonuç döndürmek yerine yüksek sesle reddeder — bunun yerine
-    /// [`Query::iter`]/[`Query::iter_mut`] kullanın. (Tablo `With`/`Without` güvenlidir.)
+    /// Panics on a query that REQUIRES a per-row filter (SparseSet `With`/`Without`,
+    /// `Changed`/`Added`, `Or`): chunk iteration returns the archetype's ENTIRE contiguous slice,
+    /// whereas those filters select per row (see [`WorldQuery::has_row_filter`]).
+    /// Rather than silently returning an unfiltered result it refuses loudly — use
+    /// [`Query::iter`]/[`Query::iter_mut`] instead. (Table `With`/`Without` is safe.)
     pub fn iter_chunks<'a>(&'a self) -> QueryChunksIter<'a, 'w, Q> {
         self.iter_chunks_inner()
     }
 
-    /// Ham `u32` id ile erişim. **DİKKAT: generation kontrolü YAPMAZ.** Despawn edilip
-    /// slotu yeniden kullanılan bir id verilirse, o slottaki YENİ entity'nin verisi
-    /// döner (use-after-free benzeri sessiz hata). Elinizde bir [`Entity`] handle'ı varsa
-    /// [`Query::get_entity`] kullanın — o, generation'ı doğrular.
+    /// Access by raw `u32` id. **CAUTION: it does NOT check the generation.** If an id is given
+    /// that was despawned and whose slot has been reused, the data of the NEW entity in that
+    /// slot is returned (a silent use-after-free-like bug). If you hold an [`Entity`] handle,
+    /// use [`Query::get_entity`] — that one validates the generation.
     #[inline]
     pub fn get(&self, entity_id: u32) -> Option<Q::Item<'_>> {
         self.get_inner(entity_id)
     }
 
-    /// Generation-doğrulamalı erişim: `entity` artık canlı değilse (despawn edilmiş veya
-    /// slotu başka bir entity'ye verilmiş) `None` döner. Stale-handle ile yanlış entity'nin
-    /// verisini okumayı engeller. Elinizde bir [`Entity`] handle'ı varsa bunu tercih edin.
+    /// Generation-validated access: returns `None` if `entity` is no longer alive (despawned or
+    /// its slot handed to another entity). Prevents reading the wrong entity's data through a
+    /// stale handle. If you hold an [`Entity`] handle, prefer this one.
     #[inline]
     pub fn get_entity(&self, entity: Entity) -> Option<Q::Item<'_>> {
         if !self.world.is_alive(entity) {
@@ -284,7 +284,7 @@ impl<'w, Q: ReadOnlyQuery> Query<'w, Q> {
         self.get_inner(entity.id())
     }
 
-    /// Belirli bir entity'nin bu query'ye ait olup olmadığını kontrol eder.
+    /// Checks whether a given entity belongs to this query.
     #[inline]
     pub fn contains(&self, entity_id: u32) -> bool {
         self.get_inner(entity_id).is_some()
@@ -301,7 +301,7 @@ impl<'w, Q: ReadOnlyQuery> Query<'w, Q> {
         self.iter_inner().map(|(id, _)| id)
     }
 
-    /// İş parçacığı havuzu (Work-Stealing) ile çalışan lock-free paralel iterasyon
+    /// Lock-free parallel iteration running on the thread pool (Work-Stealing)
     pub fn par_for_each<F>(&self, func: F)
     where
         F: Fn((u32, Q::Item<'_>)) + Send + Sync,

@@ -1,30 +1,46 @@
-//! Otomatik KUTU-COLLIDER — boyutu `Transform.scale`'den türet (boyutu İKİ KEZ yazma).
+//! Automatic BOX-COLLIDER — derive the size from `Transform.scale` (do NOT write the size TWICE).
 //!
-//! Bir kutu spawn'larken geliştirici bugüne kadar boyutu iki kez yazmak zorundaydı: bir kez
-//! görsel ölçek (`Transform::with_scale(half)`), bir kez de eşleşen collider
-//! (`Collider::box_collider(half)`). İkisi ayrışırsa fizik ile görsel sessizce birbirinden
-//! kopar. Bu, kullanıcının işaret ettiği "geliştiriciyi düşük-seviye tekrara zorlama"nın tam
-//! örneği.
+//! When spawning a box the developer has until now had to write the size twice: once as the
+//! visual scale (`Transform::with_scale(half)`), once as the matching collider
+//! (`Collider::box_collider(half)`). If the two diverge, physics and the visual silently come
+//! apart from each other. This is the perfect example of "forcing the developer into low-level
+//! repetition" that the user pointed out.
 //!
-//! Çözüm — [`Spin`](crate::systems::spin) / [`LifetimeSystem`](crate::systems::lifetime)
-//! idiomunu izleyen opt-in bir işaret: bir [`AutoBoxCollider`] komponenti (+ yer-tutucu kutu
-//! collider) ekle, [`PhysicsPlugin`](crate::plugins::PhysicsPlugin) sistemi otomatik
-//! çalıştırsın. [`AutoBoxColliderSystem`] ilk fizik adımından ÖNCE her taze işareti bir kez
-//! çözer: `Transform.scale · base` → collider yarı-genişliği, atalet yeniden türetilir, sonra
-//! işaret kaldırılır. Boyut yalnız BİR KEZ (Transform.scale olarak) yazılır.
+//! Solution — an opt-in marker that follows the [`Spin`](crate::systems::spin) /
+//! [`LifetimeSystem`](crate::systems::lifetime) idiom: add an [`AutoBoxCollider`] component (+ a
+//! placeholder box collider) and let [`PhysicsPlugin`](crate::plugins::PhysicsPlugin) run the
+//! system automatically. [`AutoBoxColliderSystem`] resolves every fresh marker once, BEFORE the
+//! first physics step: `Transform.scale · base` → collider half-extents, inertia is re-derived,
+//! then the marker is removed. The size is written only ONCE (as Transform.scale).
 //!
-//! `Prefab` için senkron bir kısa-yol da var ([`Prefab::auto_box_collider`](crate::bundles::Prefab::auto_box_collider)):
-//! `Prefab::spawn` transform'u zaten elinde tuttuğu için collider'ı spawn anında çözer (bir-frame
-//! gecikmesi yok). Her iki yol da aynı saf [`derived_box_half_extents`] yardımcısını kullanır.
+//! There is also a synchronous short-cut for `Prefab`
+//! ([`Prefab::auto_box_collider`](crate::bundles::Prefab::auto_box_collider)): since
+//! `Prefab::spawn` already holds the transform in hand, it resolves the collider at spawn time
+//! (no one-frame delay). Both paths use the same pure [`derived_box_half_extents`] helper.
 //!
-//! ```ignore
-//! // Ham (Prefab'sız) yol — herhangi bir spawn kanalıyla çalışır:
-//! world.spawn_bundle((
-//!     Transform::new(pos).with_scale(Vec3::new(4.0, 0.4, 1.0)), // boyut BİR kez
-//!     mesh, mat, MeshRenderer::new(),
-//!     RigidBodyBundle::dynamic(3.0).with_collider(Collider::box_collider(Vec3::ONE)), // yer-tutucu
-//!     AutoBoxCollider::new(),  // ilk fizik adımından önce (4.0,0.4,1.0)'e çözülür
-//! ));
+//! ```
+//! use gizmo::prelude::*;
+//! # use gizmo::core::system::System;
+//! # use gizmo::systems::auto_collider::AutoBoxColliderSystem;
+//! # use gizmo_physics_core::ColliderShape;
+//! # let mut world = World::new();
+//! // The raw (Prefab-less) path — works through any spawn channel:
+//! let plank = world.spawn();
+//! world.add_component(
+//!     plank,
+//!     Transform::new(Vec3::ZERO).with_scale(Vec3::new(4.0, 0.4, 1.0)), // the size, written ONCE
+//! );
+//! world.add_component(plank, Collider::box_collider(Vec3::ONE)); // placeholder
+//! world.add_component(plank, AutoBoxCollider::new()); // resolved before the first physics step
+//!
+//! AutoBoxColliderSystem.run(&world, 1.0 / 60.0);
+//! world.apply_commands();
+//!
+//! let colliders = world.borrow::<Collider>();
+//! let shape = &colliders.get(plank.id()).unwrap().shape;
+//! assert!(matches!(shape, ColliderShape::Box(b) if b.half_extents == Vec3::new(4.0, 0.4, 1.0)));
+//! // …and the marker is gone, so the resolution happens exactly once.
+//! assert!(world.borrow::<AutoBoxCollider>().get(plank.id()).is_none());
 //! ```
 
 use gizmo_core::world::World;
@@ -32,54 +48,57 @@ use gizmo_math::Vec3;
 use gizmo_physics_core::{BoxShape, Collider, ColliderShape, Transform};
 use gizmo_physics_rigid::components::RigidBody;
 
-/// Dejenere (sıfır) ölçek eksenini kırpan minimum yarı-genişlik — sıfır-kalınlık kutu
-/// (broadphase/narrowphase'de dejenere manifold / NaN) oluşmasını önler.
+/// Minimum half-extent that clamps a degenerate (zero) scale axis — prevents a zero-thickness
+/// box (a degenerate manifold / NaN in broadphase/narrowphase) from forming.
 pub const MIN_HE: f32 = 1e-4;
 
-/// Ölçek + taban çarpanından kutu YARI-GENİŞLİĞİ türetir — boyut matematiğinin TEK kaynağı
-/// (hem [`AutoBoxColliderSystem`] hem `Prefab` bunu çağırır, böylece iki yol asla ayrışmaz).
-/// `.abs()` negatif ölçeğe karşı korur; `.max(MIN_HE)` dejenere ekseni kırpar. GPU'suz →
-/// headless test edilebilir.
+/// Derives the box HALF-EXTENTS from scale + base factor — the SINGLE source of the size math
+/// (both [`AutoBoxColliderSystem`] and `Prefab` call this, so the two paths never diverge).
+/// `.abs()` guards against negative scale; `.max(MIN_HE)` clamps a degenerate axis. No GPU →
+/// headless testable.
 pub fn derived_box_half_extents(scale: Vec3, base: Vec3) -> Vec3 {
     (scale * base).abs().max(Vec3::splat(MIN_HE))
 }
 
-/// Opt-in İŞARET komponenti: "kutu collider'ımı `Transform.scale`'den boyutlandır."
+/// Opt-in MARKER component: "size my box collider from `Transform.scale`."
 ///
-/// Bir yer-tutucu kutu [`Collider`] ile birlikte ekle; [`AutoBoxColliderSystem`] ilk fizik
-/// adımından ÖNCE çözer. `base` per-site çarpandır: mesh yarı-genişliği == ölçek olan
-/// `create_cube` için [`AutoBoxCollider::new`] (base = `Vec3::ONE`); 0.5-faktörlü mesh ailesi
-/// için [`AutoBoxCollider::scaled`]`(Vec3::splat(0.5))`.
+/// Add it together with a placeholder box [`Collider`]; [`AutoBoxColliderSystem`] resolves it
+/// BEFORE the first physics step. `base` is the per-site factor: [`AutoBoxCollider::new`]
+/// (base = `Vec3::ONE`) for `create_cube`, whose mesh half-extent == scale;
+/// [`AutoBoxCollider::scaled`]`(Vec3::splat(0.5))` for the 0.5-factor mesh family.
 ///
-/// NOT (hiyerarşi tuzağı): yerel `Transform.scale` okunur, birleşik dünya ölçeği DEĞİL — sıfır
-/// olmayan ölçekli bir ebeveynin altındaki kutu yanlış boyutlanır (fiziğin geri kalanıyla
-/// tutarlı: yerel Transform dünya kabul edilir). Ayrıca **çözüm bir kez** yapılır; spawn'dan
-/// sonra `Transform.scale`'i değiştirirsen collider bayatlar (warm-start/blok-solver'ı her
-/// frame perturbe etmemek için kasıtlı).
+/// NOTE (hierarchy trap): the local `Transform.scale` is read, NOT the composed world scale — a
+/// box under a parent with a non-zero scale is sized incorrectly (consistent with the rest of
+/// the physics: the local Transform is taken to be the world one). Also, **resolution happens
+/// once**; if you change `Transform.scale` after spawn the collider goes stale (deliberate, in
+/// order not to perturb the warm-start/block-solver every frame).
 ///
-/// ⚠️ ZAMANLAMA TUZAĞI: bu marker, fizik adımından ÖNCE çalışan [`AutoBoxColliderSystem`] ile
-/// `Added<T>` geçidinden çözülür. Windowed app döngüsünde `update` hook'u fizik `schedule.run`'
-/// undan SONRA çalışır → **update hook'unda spawn'lanan** bir marker'ın `added_tick`'i bir
-/// sonraki frame'in `change_ref_tick`'ine eşit olur ve strict `>` olan `Added` onu KAÇIRIR →
-/// marker HİÇ çözülmez (collider yer-tutucuda kalır). Bu yüzden marker yolu YALNIZCA setup'ta
-/// veya `physics_step`'ten önce çalışan bir SİSTEM içinde spawn'lanan varlıklar için güvenlidir.
-/// Runtime (update-hook) spawn'ları için SENKRON yolu kullan:
-/// [`Prefab::auto_box_collider`](crate::bundles::Prefab::auto_box_collider) veya açık
-/// `Collider::box_collider(scale)`. Regresyon testi:
+/// NOTE(translation): the original says "non-zero scale" here; the intended sense is most likely
+/// "non-unit scale" (a scale other than 1). Translated literally rather than corrected.
+///
+/// ⚠️ TIMING TRAP: this marker is resolved through the `Added<T>` gate by
+/// [`AutoBoxColliderSystem`], which runs BEFORE the physics step. In the windowed app loop the
+/// `update` hook runs AFTER the physics `schedule.run` → the `added_tick` of a marker
+/// **spawned in the update hook** ends up equal to the next frame's `change_ref_tick`, and
+/// `Added`, which is a strict `>`, MISSES it → the marker is NEVER resolved (the collider stays
+/// at the placeholder). Therefore the marker path is safe ONLY for entities spawned in setup or
+/// inside a SYSTEM that runs before `physics_step`. For runtime (update-hook) spawns use the
+/// SYNCHRONOUS path: [`Prefab::auto_box_collider`](crate::bundles::Prefab::auto_box_collider) or
+/// an explicit `Collider::box_collider(scale)`. Regression test:
 /// `marker_spawned_after_schedule_run_is_missed_by_added_gate`.
 #[derive(Debug, Clone, Copy)]
 pub struct AutoBoxCollider {
-    /// Ölçekle çarpılan per-eksen taban çarpanı (genelde `Vec3::ONE`).
+    /// Per-axis base factor multiplied by the scale (usually `Vec3::ONE`).
     pub base: Vec3,
 }
 
 impl AutoBoxCollider {
-    /// `base = Vec3::ONE` — mesh yarı-genişliği == `Transform.scale` (ör. `create_cube`).
+    /// `base = Vec3::ONE` — mesh half-extent == `Transform.scale` (e.g. `create_cube`).
     pub fn new() -> Self {
         Self { base: Vec3::ONE }
     }
 
-    /// Özel per-eksen taban çarpanı (ör. `Vec3::splat(0.5)` → yarı-genişlik = ölçek/2).
+    /// Custom per-axis base factor (e.g. `Vec3::splat(0.5)` → half-extent = scale/2).
     pub fn scaled(base: Vec3) -> Self {
         Self { base }
     }
@@ -93,11 +112,11 @@ impl Default for AutoBoxCollider {
 
 gizmo_core::impl_component!(AutoBoxCollider);
 
-/// Taze [`AutoBoxCollider`] işaretli varlıkların kutu collider'ını `Transform.scale`'den
-/// boyutlandırır ve ataleti yeniden türetir; sonra işareti kaldırır. `Added<AutoBoxCollider>`
-/// ile geçitlendiği için işaret başına TAM BİR KEZ çalışır (işaret kaldırılamasa bile). İşarete
-/// dokunulmayan varlıklarla eşleşmez → determinizm-nötr. [`PhysicsPlugin`] bunu
-/// `physics_step`'ten ÖNCE otomatik ekler.
+/// Sizes the box collider of entities carrying a fresh [`AutoBoxCollider`] marker from
+/// `Transform.scale` and re-derives the inertia; then removes the marker. Because it is gated
+/// with `Added<AutoBoxCollider>` it runs EXACTLY ONCE per marker (even if the marker cannot be
+/// removed). It does not match entities whose marker is untouched → determinism-neutral.
+/// [`PhysicsPlugin`] adds it automatically BEFORE `physics_step`.
 ///
 /// [`PhysicsPlugin`]: crate::plugins::PhysicsPlugin
 pub struct AutoBoxColliderSystem;
@@ -242,12 +261,12 @@ mod tests {
         fn run(&mut self, _w: &World, _dt: f32) {}
     }
 
-    /// TUZAK BELGESİ: bir marker fizik `schedule.run`'ından SONRA (ör. update hook'unda)
-    /// spawn'lanırsa, `added_tick`'i bir sonraki frame'in `change_ref_tick`'ine EŞİT olur →
-    /// strict `>` olan `Added` onu KAÇIRIR → marker HİÇ çözülmez. Bu yüzden update-hook'ta
-    /// spawn'lanan yük-taşıyan statikler marker yoluyla DEĞİL, senkron yol (Prefab veya açık
-    /// collider) ile boyutlanmalı. (yikim_ustasi bölüm-geçişi bu yüzden statikleri açık
-    /// collider ile spawn'lar.)
+    /// TRAP DOCUMENT: if a marker is spawned AFTER the physics `schedule.run` (e.g. in the update
+    /// hook), its `added_tick` becomes EQUAL to the next frame's `change_ref_tick` →
+    /// `Added`, which is a strict `>`, MISSES it → the marker is NEVER resolved. Therefore
+    /// load-bearing statics spawned in the update hook must be sized NOT via the marker path but
+    /// via the synchronous path (Prefab or an explicit collider). (This is why the yikim_ustasi
+    /// level transition spawns its statics with an explicit collider.)
     #[test]
     fn marker_spawned_after_schedule_run_is_missed_by_added_gate() {
         use gizmo_core::system::{Schedule, SystemConfig};
@@ -288,9 +307,10 @@ mod tests {
         }
     }
 
-    /// Ordering-edge: resolver `.before("physics_step")` ile bağlanmalı → "physics_step"
-    /// etiketli sistem çalıştığında collider ZATEN ölçekli kutu olmalı (ilk fizik adımı
-    /// yer-tutucu birim kutuyla geçmez). Yanlış/eksik etiket sessizce düşse bu test kırılır.
+    /// Ordering-edge: the resolver must be wired with `.before("physics_step")` → by the time the
+    /// system labeled "physics_step" runs the collider must ALREADY be a scaled box (the first
+    /// physics step never runs with the placeholder unit box). If a wrong or missing label
+    /// silently dropped the ordering, this test would break.
     #[test]
     fn resolver_runs_before_physics_step_label() {
         use gizmo_core::system::{Schedule, SystemConfig};
@@ -321,8 +341,8 @@ mod tests {
         );
     }
 
-    /// Spawn bir kutu + Transform.scale + işaret; sistem collider'ı ölçeğe eşitlemeli, ataleti
-    /// aynı ölçekli kutunun ataletiyle bire bir eşleştirmeli, işareti kaldırmalı.
+    /// Spawn a box + Transform.scale + marker; the system must match the collider to the scale,
+    /// match the inertia one-to-one with the inertia of the same scaled box, and remove the marker.
     #[test]
     fn resolves_box_from_scale_and_derives_inertia() {
         let mut world = world_with_commands();
@@ -353,7 +373,7 @@ mod tests {
         assert!(world.borrow::<AutoBoxCollider>().get(e.id()).is_none());
     }
 
-    /// base = 0.5 → yarı-genişlik = ölçek / 2 (0.5-faktörlü mesh ailesi).
+    /// base = 0.5 → half-extent = scale / 2 (the 0.5-factor mesh family).
     #[test]
     fn base_factor_halves_extents() {
         let mut world = world_with_commands();
@@ -374,8 +394,8 @@ mod tests {
         }
     }
 
-    /// Added geçidi: işaret KALDIRILMASA bile (Commands yok) sistem ikinci frame'de yeniden
-    /// boyutlandırmamalı — idempotentlik işaretin varlığına değil, Added'a dayanır.
+    /// Added gate: even if the marker is NOT REMOVED (no Commands) the system must not re-size on
+    /// the second frame — idempotency rests on Added, not on the presence of the marker.
     #[test]
     fn runs_once_via_added_gate_without_commands() {
         let mut world = World::new(); // CommandQueue YOK → işaret kalır
@@ -409,7 +429,7 @@ mod tests {
         }
     }
 
-    /// Kutu-olmayan collider (küre) işaretli olsa bile DEĞİŞTİRİLMEMELİ.
+    /// A non-box collider (sphere) MUST NOT BE CHANGED even if it carries the marker.
     #[test]
     fn non_box_collider_is_skipped() {
         let mut world = world_with_commands();
@@ -427,7 +447,7 @@ mod tests {
         assert!(matches!(col.shape, ColliderShape::Sphere(_)), "küre korunmalı");
     }
 
-    /// Dejenere (sıfır) ölçek ekseni MIN_HE'ye kırpılmalı — sıfır-kalınlık kutu yok.
+    /// A degenerate (zero) scale axis must be clamped to MIN_HE — no zero-thickness box.
     #[test]
     fn degenerate_scale_is_clamped() {
         let mut world = world_with_commands();
@@ -451,7 +471,7 @@ mod tests {
         }
     }
 
-    /// Collider material (sürtünme/sekme) yeniden boyutlandırmada HAYATTA KALMALI.
+    /// The collider material (friction/bounce) MUST SURVIVE the re-size.
     #[test]
     fn resize_preserves_material() {
         let mut world = world_with_commands();
@@ -479,7 +499,7 @@ mod tests {
         assert_eq!(col.material.restitution, 0.3);
     }
 
-    /// Trigger-only (RigidBody'siz) varlık: collider boyutlanmalı, Pass 2 panik atmamalı.
+    /// Trigger-only (RigidBody-less) entity: the collider must be sized, Pass 2 must not panic.
     #[test]
     fn trigger_only_without_rigidbody_no_panic() {
         let mut world = world_with_commands();
@@ -502,7 +522,7 @@ mod tests {
         assert!(col.is_trigger, "trigger bayrağı korunmalı");
     }
 
-    /// Statik gövde: collider boyutlanmalı, atalet yazımı zararsız (panik yok).
+    /// Static body: the collider must be sized, the inertia write is harmless (no panic).
     #[test]
     fn static_body_resizes_without_panic() {
         let mut world = world_with_commands();
@@ -526,7 +546,7 @@ mod tests {
         }
     }
 
-    /// Saf yardımcı: negatif ölçek mutlaklanır, base çarpılır, dejenere kırpılır.
+    /// Pure helper: negative scale is made absolute, base is multiplied in, degenerate is clamped.
     #[test]
     fn derived_helper_is_pure_and_guards() {
         assert_eq!(

@@ -1,17 +1,17 @@
-//! Dünya (World) introspection / analiz yüzeyi.
+//! World introspection / analysis surface.
 //!
-//! Salt-okunur, davranış değiştirmeyen erişimciler. Amaç: dışarıdaki analiz katmanının
-//! (gizmo-analysis) çalışan bir motorun ECS durumunun **en ufak ayrıntısına** — hangi
-//! archetype'ta hangi component'lerden kaç tane var, kaç bayt tutuyor — erişebilmesi.
+//! Read-only accessors that do not change behaviour. The goal: for the analysis layer on the
+//! outside (gizmo-analysis) to be able to reach the **smallest detail** of a running engine's
+//! ECS state — how many of which components are in which archetype, how many bytes they hold.
 //!
-//! Bu modül `world` modülünün alt-modülü olduğundan `World`'ün private alanlarına
-//! (archetype_index, component_infos, sparse_sets, resources) erişebilir; hiçbirini
-//! değiştirmez, yalnız okur.
+//! Since this module is a sub-module of the `world` module it can reach `World`'s private
+//! fields (archetype_index, component_infos, sparse_sets, resources); it changes none of them,
+//! it only reads.
 
 use super::World;
 use std::any::TypeId;
 
-/// Bir archetype içindeki tek bir component tipinin özeti.
+/// Summary of a single component type inside an archetype.
 #[derive(Debug, Clone)]
 pub struct ComponentSummary {
     /// The component type's `TypeId` — the key everything else in the ECS is indexed by
@@ -19,25 +19,25 @@ pub struct ComponentSummary {
     /// process only: `TypeId` values are not stable across compilations, so never
     /// serialise one. [`Self::name`] carries the already-resolved human-readable name.
     pub type_id: TypeId,
-    /// `std::any::type_name` (kayıt anında yakalanan tam yol).
+    /// `std::any::type_name` (the full path captured at registration time).
     pub name: &'static str,
-    /// Tek bir instance'ın bayt boyutu (`Layout::size`).
+    /// The byte size of a single instance (`Layout::size`).
     pub item_size: usize,
-    /// Bu archetype'taki instance sayısı (= archetype'ın entity sayısı).
+    /// The number of instances in this archetype (= the archetype's entity count).
     pub count: usize,
     /// `item_size * count`.
     pub bytes: usize,
 }
 
 impl ComponentSummary {
-    /// Tip adının son segmenti (`a::b::Transform` → `Transform`). Generic'lerde
-    /// baştaki yolu kırpar ama `<...>` içini bırakır.
+    /// The last segment of the type name (`a::b::Transform` → `Transform`). For generics it
+    /// trims the leading path but leaves the inside of `<...>` alone.
     pub fn short_name(&self) -> &str {
         short_type_name(self.name)
     }
 }
 
-/// Tek bir archetype (aynı component bileşimine sahip entity tablosu) özeti.
+/// Summary of a single archetype (the entity table with the same component composition).
 #[derive(Debug, Clone)]
 pub struct ArchetypeSummary {
     /// The archetype's id, equal to its index in the world's archetype table. Not a stable
@@ -48,34 +48,34 @@ pub struct ArchetypeSummary {
     /// Rows in this archetype — entities holding exactly this component set. Always ≥ 1,
     /// because [`World::archetype_summaries`] skips empty archetypes entirely.
     pub entity_count: usize,
-    /// Bu archetype'ın tüm component sütunlarının toplam baytı.
+    /// The total bytes of all of this archetype's component columns.
     pub bytes: usize,
-    /// Component'ler bayt kullanımına göre azalan sırada.
+    /// The components in descending order of byte usage.
     pub components: Vec<ComponentSummary>,
 }
 
-/// Dünyanın üst-düzey sayaçları — tek bakışta durum.
+/// The world's top-level counters — the state at a glance.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct WorldStats {
-    /// Canlı entity sayısı (tüm archetype'lardaki satırların toplamı).
+    /// Live entity count (the sum of the rows in all archetypes).
     pub entities: usize,
-    /// Toplam archetype sayısı (boşlar dahil).
+    /// Total archetype count (empty ones included).
     pub archetypes: usize,
-    /// İçinde en az bir entity olan archetype sayısı.
+    /// The number of archetypes with at least one entity in them.
     pub non_empty_archetypes: usize,
-    /// Kayıtlı (görülmüş) component tipi sayısı.
+    /// The number of registered (seen) component types.
     pub registered_components: usize,
-    /// Sparse-set depolamalı component tipi sayısı.
+    /// The number of component types with sparse-set storage.
     pub sparse_set_components: usize,
-    /// Kayıtlı resource sayısı.
+    /// The number of registered resources.
     pub resources: usize,
-    /// Archetype sütunlarındaki toplam component baytı (yaklaşık canlı ECS belleği).
+    /// The total component bytes in the archetype columns (approximately the live ECS memory).
     pub component_bytes: usize,
-    /// Dünya tick'i.
+    /// The world tick.
     pub tick: u32,
 }
 
-/// `a::b::c::Type<x::y::Z>` → `Type<Z>` benzeri kısa ad. Sığ ama pratik.
+/// A short name along the lines of `a::b::c::Type<x::y::Z>` → `Type<Z>`. Shallow but practical.
 pub fn short_type_name(full: &str) -> &str {
     // Generic argümanların başlangıcından önceki son `::`'yi bul.
     let head_end = full.find('<').unwrap_or(full.len());
@@ -87,9 +87,9 @@ pub fn short_type_name(full: &str) -> &str {
 }
 
 impl World {
-    /// Archetype tablolarındaki toplam canlı satır sayısı. (`World::entity_count`
-    /// zaten allocator tarafından tanımlı; bu, depolama tarafından görülen sayıdır —
-    /// normalde eşittirler.)
+    /// The total number of live rows in the archetype tables. (`World::entity_count`
+    /// is already defined by the allocator; this is the count as seen by the storage —
+    /// normally they are equal.)
     #[inline]
     pub fn stored_entity_count(&self) -> usize {
         self.archetype_index
@@ -99,25 +99,25 @@ impl World {
             .sum()
     }
 
-    /// Toplam archetype sayısı.
+    /// The total archetype count.
     #[inline]
     pub fn archetype_count(&self) -> usize {
         self.archetype_index.archetypes.len()
     }
 
-    /// Kayıtlı resource sayısı.
+    /// The number of registered resources.
     #[inline]
     pub fn resource_count(&self) -> usize {
         self.resources.len()
     }
 
-    /// Bir component tipinin insan-okunur adı (kayıtlıysa).
+    /// The human-readable name of a component type (if it is registered).
     #[inline]
     pub fn component_type_name(&self, type_id: TypeId) -> Option<&'static str> {
         self.component_infos.get(&type_id).map(|i| i.type_name)
     }
 
-    /// Üst-düzey dünya istatistikleri.
+    /// Top-level world statistics.
     pub fn world_stats(&self) -> WorldStats {
         let mut entities = 0usize;
         let mut non_empty = 0usize;
@@ -149,8 +149,8 @@ impl World {
         }
     }
 
-    /// Boş olmayan her archetype için ayrıntılı özet (component adları + bayt + sayı).
-    /// Sonuç entity sayısına göre azalan sırada.
+    /// A detailed summary for every non-empty archetype (component names + bytes + count).
+    /// The result is in descending order of entity count.
     pub fn archetype_summaries(&self) -> Vec<ArchetypeSummary> {
         let mut out = Vec::new();
 

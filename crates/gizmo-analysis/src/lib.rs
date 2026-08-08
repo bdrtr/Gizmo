@@ -17,16 +17,32 @@
 //!   [`Analyzer::to_chrome_trace`] (Perfetto/`chrome://tracing`).
 //!
 //! ## Hızlı kullanım (headless)
-//! ```ignore
-//! use gizmo_analysis::Analyzer;
-//! let mut analyzer = Analyzer::new();          // FrameProfiler + EcsCollector yerleşik
-//! world.insert_resource(gizmo_core::FrameProfiler::new());
-//! loop {
-//!     schedule.run(&mut world, dt);            // motor bir frame ilerler
+//! ```
+//! use gizmo_analysis::{profile_scope, Analyzer, FrameProfiler};
+//! use gizmo_core::{Schedule, World};
+//!
+//! let mut world = World::new();
+//! world.insert_resource(FrameProfiler::new());
+//! let mut schedule = Schedule::new();          // gerçek motorda sistemlerle dolu
+//! let mut analyzer = Analyzer::new();          // EcsCollector yerleşik; span'leri
+//!                                              // world'deki FrameProfiler'dan okur
+//!
+//! for _ in 0..3 {
+//!     {
+//!         profile_scope!(&world, "simulate");  // sistemlerin ölçtüğü span'ler
+//!     }
+//!     schedule.run(&mut world, 1.0 / 60.0);    // motor bir frame ilerler (+ end_frame)
 //!     analyzer.collect(&world);                // o frame'i analiz et
 //! }
-//! println!("{}", analyzer.report_text());
-//! std::fs::write("trace.json", analyzer.to_chrome_trace()).unwrap();
+//!
+//! // Her `collect` bir frame'i kaydeder; span'ler `span.<ad>` metrik serisine de düşer.
+//! assert_eq!(analyzer.frame(), 3);
+//! assert_eq!(analyzer.stats("span.simulate").unwrap().count, 3);
+//! assert!(analyzer.report_text().contains("Gizmo Analysis"));
+//!
+//! // Alev-grafiği: `std::fs::write("trace.json", trace)` → chrome://tracing / Perfetto.
+//! let trace = analyzer.to_chrome_trace();
+//! assert!(trace.contains("\"name\":\"simulate\""));
 //! ```
 //!
 //! `app` özelliğiyle [`AnalysisPlugin`] tüm bunları App/Plugin schedule'ına otomatik bağlar.

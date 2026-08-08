@@ -11,8 +11,8 @@ use crate::archetype::column::ComponentInfo;
 use crate::archetype::ComponentTicks;
 use std::cell::UnsafeCell;
 
-/// Bir SparseSet, bileşen verilerini Entity ID'lerine göre hızlıca dışarıdan yönetmeyi sağlar.
-/// Archetype tablosuna girmeden doğrudan ekleme/silme yapılabilmesi için tasarlanmıştır.
+/// A SparseSet makes it possible to manage component data from the outside, quickly, by Entity ID.
+/// It is designed so that adding/deleting can be done directly without entering the archetype table.
 pub struct ComponentSparseSet {
     /// Runtime type record of the single component type this set stores.
     ///
@@ -26,12 +26,12 @@ pub struct ComponentSparseSet {
     /// at the same length. Removal is a swap-remove, so rows move: never cache a row index
     /// (or a pointer into `dense`) across an `insert` or `remove`.
     pub dense: BlobVec,
-    /// Değişiklik-tespiti tick'leri. `UnsafeCell` ile içsel-değişebilir — tıpkı
-    /// `dense: BlobVec`'in ham-pointer'lı iç değişebilirliği gibi: `Mut<T>` sorgu
-    /// yolu (`query::fetch::get_item`) set'e PAYLAŞIMLI `&self` ile erişip ayrık
-    /// satırları yazar (paralel `par_for_each_mut` için gerekli). Düz `Vec<_>`
-    /// olsaydı `as_ptr(&self)` yalnız-okuma provenance verir → `&mut *ticks_ptr`
-    /// aliasing UB olurdu (güvenli koddan ulaşılabilir). Cell üzerinden yazma sağlam.
+    /// Change-detection ticks. Interior-mutable via `UnsafeCell` — just like
+    /// the raw-pointer interior mutability of `dense: BlobVec`: the `Mut<T>` query
+    /// path (`query::fetch::get_item`) accesses the set through a SHARED `&self` and
+    /// writes disjoint rows (necessary for parallel `par_for_each_mut`). Were it a
+    /// plain `Vec<_>`, `as_ptr(&self)` would give read-only provenance → `&mut *ticks_ptr`
+    /// would be aliasing UB (reachable from safe code). Writing through the Cell is sound.
     pub ticks: Vec<UnsafeCell<ComponentTicks>>,
     /// Owner of each dense row: `entities[row]` is the entity id stored at that row.
     ///
@@ -73,12 +73,13 @@ impl ComponentSparseSet {
         }
     }
 
-    /// Bir entity için veriyi SparseSet'e yazar. (Ekler veya üzerine yazar).
+    /// Writes the data for an entity into the SparseSet. (Adds it or overwrites it).
     ///
     /// # Safety
-    /// `data_ptr`, bu set'in `info.layout` değeriyle uyumlu, geçerli ve hizalanmış
-    /// bir bileşen örneğini göstermelidir. İşaretçinin sahipliği SparseSet'e devredilir
-    /// (çağıran taraf, kopyalanan değeri ayrıca `drop` etmemeli — bkz. `std::mem::forget`).
+    /// `data_ptr` must point to a valid and aligned component instance compatible with
+    /// this set's `info.layout` value. Ownership of the pointer is transferred to the
+    /// SparseSet (the caller must not additionally `drop` the copied value — see
+    /// `std::mem::forget`).
     pub unsafe fn insert(&mut self, entity: u32, data_ptr: *const u8, tick: u32) {
         let e = entity as usize;
         if e >= self.sparse.len() {
@@ -112,7 +113,7 @@ impl ComponentSparseSet {
         }
     }
 
-    /// Bir entity'nin verisini O(1) hızında siler.
+    /// Deletes an entity's data at O(1) speed.
     pub fn remove(&mut self, entity: u32) -> bool {
         let e = entity as usize;
         if e >= self.sparse.len() || self.sparse[e] == u32::MAX {
@@ -149,8 +150,8 @@ impl ComponentSparseSet {
         e < self.sparse.len() && self.sparse[e] != u32::MAX
     }
 
-    /// Bir entity'nin değişiklik-tespiti tick'lerini döndürür (yoksa `None`).
-    /// `Changed<T>`/`Added<T>` filtreleri SparseSet bileşenleri için bunu kullanır.
+    /// Returns an entity's change-detection ticks (`None` if absent).
+    /// The `Changed<T>`/`Added<T>` filters use this for SparseSet components.
     #[inline]
     pub fn ticks_for(&self, entity: u32) -> Option<&ComponentTicks> {
         let e = entity as usize;

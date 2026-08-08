@@ -1,12 +1,12 @@
 //! # Archetype Storage
 //!
-//! Aynı component bileşimine sahip entity'leri, sütun bazlı (SoA) bitişik bellekte
-//! depolayan yüksek performanslı ECS depolama katmanı.
+//! A high-performance ECS storage layer that stores entities having the same component
+//! composition in column-based (SoA) contiguous memory.
 //!
-//! ## Yapılar
-//! - [`BlobVec`]  — Tip-silinmiş, hizalanmış vektör. Tek bir component sütunu için ham bellek.
-//! - [`Column`]   — `BlobVec` + `TypeId` sarmalayıcı.
-//! - [`Archetype`] — Birden fazla `Column` ve entity listesi barındıran tablo.
+//! ## Structures
+//! - [`BlobVec`]  — Type-erased, aligned vector. Raw memory for a single component column.
+//! - [`Column`]   — `BlobVec` + `TypeId` wrapper.
+//! - [`Archetype`] — A table hosting more than one `Column` plus the entity list.
 pub mod blob;
 pub mod column;
 /// Internal archetype registry: the sorted-component-set → archetype map, the vector that
@@ -31,7 +31,7 @@ use std::any::TypeId;
 use std::collections::HashMap;
 use std::cell::UnsafeCell;
 
-/// Entity'nin World içindeki fiziksel konumu.
+/// The entity's physical location within the World.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EntityLocation {
     /// Index of the archetype table holding this entity, as a position in the world's
@@ -40,7 +40,7 @@ pub struct EntityLocation {
     /// world's structure is unchanged. `u32::MAX` is the invalid marker (see
     /// [`EntityLocation::INVALID`]).
     pub archetype_id: u32,
-    /// Archetype içindeki satır indeksi
+    /// Row index within the archetype
     pub row: u32,
 }
 
@@ -80,9 +80,9 @@ impl EntityLocation {
 /// is compacted.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ArchetypeEdge {
-    /// Bu component tipi eklenince hedef archetype
+    /// The target archetype when this component type is added
     pub add: Option<u32>,
-    /// Bu component tipi çıkarılınca hedef archetype
+    /// The target archetype when this component type is removed
     pub remove: Option<u32>,
 }
 
@@ -90,19 +90,19 @@ pub struct ArchetypeEdge {
 // ARCHETYPE — Sütun tablosu
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// Aynı component bileşimine sahip entity'lerin sütun bazlı depolama tablosu.
+/// Column-based storage table for entities having the same component composition.
 pub struct Archetype {
-    /// Bu archetype'ın global indeks numarası
+    /// This archetype's global index number
     pub id: u32,
-    /// Component tipi → sütun indeksi (columns vektöründeki)
+    /// Component type → column index (in the columns vector)
     column_indices: HashMap<TypeId, usize>,
-    /// Sütunların vektörü — her biri bir component tipinin verisi.
-    /// UnsafeCell ile sarmalandı çünkü motorun Scheduler'ı (DAG) paralel erişim
-    /// güvenliğini çalışma zamanında (RwLock) değil derleme/planlama zamanında garanti eder.
+    /// The vector of columns — each one the data of a single component type.
+    /// Wrapped in UnsafeCell because the engine's Scheduler (DAG) guarantees parallel access
+    /// safety at compile/planning time, not at run time (RwLock).
     columns: Vec<UnsafeCell<Column>>,
-    /// Bu archetype'taki entity ID'leri (sıra = satır indeksi)
+    /// The entity IDs in this archetype (order = row index)
     entities: Vec<u32>,
-    /// Component ekleme/çıkarma geçiş cache'i
+    /// Component add/remove transition cache
     /// TypeId → ArchetypeEdge
     pub(crate) edges: HashMap<TypeId, ArchetypeEdge>,
 }
@@ -111,7 +111,7 @@ unsafe impl Send for Archetype {}
 unsafe impl Sync for Archetype {}
 
 impl Archetype {
-    /// Belirtilen component tipleri için yeni boş archetype oluşturur.
+    /// Creates a new empty archetype for the specified component types.
     pub fn new(id: u32, component_infos: &[ComponentInfo]) -> Self {
         let mut column_indices = HashMap::with_capacity(component_infos.len());
         let mut columns = Vec::with_capacity(component_infos.len());
@@ -135,16 +135,16 @@ impl Archetype {
         }
     }
 
-    /// Bu archetype'taki entity sayısı
+    /// The number of entities in this archetype
     #[inline]
     pub fn len(&self) -> usize {
         self.entities.len()
     }
 
-    /// Debug-only değişmez kontrolü: her sütun uzunluğu entity sayısına eşit olmalı.
-    /// `write_to_archetype` sözleşmesi: bir bundle, arketipin TÜM sütunlarını yazmalı;
-    /// aksi halde `entities.len() != column.len()` desync'i oluşur ve sorgu iterasyonu
-    /// sınır-dışı/initialize-edilmemiş bellek okur. Bu yardımcı o değişmezi kilitler.
+    /// Debug-only invariant check: every column length must equal the entity count.
+    /// The `write_to_archetype` contract: a bundle must write ALL of the archetype's columns;
+    /// otherwise an `entities.len() != column.len()` desync occurs and query iteration
+    /// reads out-of-bounds/uninitialized memory. This helper locks that invariant down.
     #[cfg(debug_assertions)]
     pub(crate) fn debug_assert_consistent(&self) {
         let n = self.entities.len();
@@ -157,13 +157,13 @@ impl Archetype {
         }
     }
 
-    /// Boş mu?
+    /// Is it empty?
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.entities.is_empty()
     }
 
-    /// Belirtilen iki satırın (row) verilerini ve entity kimliğini fiziksel olarak takaslar.
+    /// Physically swaps the data and the entity identity of the two specified rows.
     pub(crate) unsafe fn swap_rows(&mut self, a: usize, b: usize) {
         if a == b {
             return;
@@ -176,31 +176,31 @@ impl Archetype {
         self.entities.swap(a, b);
     }
 
-    /// Entity ID listesine referans
+    /// A reference to the entity ID list
     #[inline]
     pub fn entities(&self) -> &[u32] {
         &self.entities
     }
 
-    /// Bu archetype belirtilen component tipini içeriyor mu?
+    /// Does this archetype contain the specified component type?
     #[inline]
     pub fn has_component(&self, type_id: TypeId) -> bool {
         self.column_indices.contains_key(&type_id)
     }
 
-    /// Bu archetype'taki component tiplerinin listesi
+    /// The list of component types in this archetype
     pub fn component_types(&self) -> Vec<TypeId> {
         self.column_indices.keys().cloned().collect()
     }
 
-    /// Sıralanmış component tipleri (archetype kimliği olarak kullanılır)
+    /// Sorted component types (used as the archetype identity)
     pub fn sorted_component_types(&self) -> Vec<TypeId> {
         let mut types = self.component_types();
         types.sort();
         types
     }
 
-    /// Belirtilen component tipinin sütununa raw pointer erişimi
+    /// Raw pointer access to the column of the specified component type
     #[inline]
     pub fn get_column(&self, type_id: TypeId) -> Option<&Column> {
         self.column_indices
@@ -208,14 +208,14 @@ impl Archetype {
             .map(|&idx| unsafe { &*self.columns[idx].get() })
     }
 
-    /// Belirtilen component tipinin sütununa mutable erişim (`UnsafeCell` üzerinden iç-değişebilirlik).
+    /// Mutable access to the column of the specified component type (interior mutability via `UnsafeCell`).
     ///
     /// # Safety
-    /// `&self` üzerinden `&mut Column` döndürür: bu kasıtlı bir ECS desenidir ve güvenlik,
-    /// aynı sütun için aynı anda birden fazla `&mut` üretilmemesine bağlıdır. Bu değişmezlik
-    /// (disjoint erişim) çağıran tarafça — pratikte query zamanlayıcısının arketip-bazlı
-    /// ayrık erişim garantisiyle — sağlanmalıdır. Aynı `type_id` için iki canlı `&mut`
-    /// elde etmek tanımsız davranıştır.
+    /// Returns a `&mut Column` through `&self`: this is a deliberate ECS pattern, and safety
+    /// depends on more than one `&mut` never being produced for the same column at the same
+    /// time. This invariant (disjoint access) must be upheld by the caller — in practice by
+    /// the query scheduler's archetype-based disjoint access guarantee. Obtaining two live
+    /// `&mut` for the same `type_id` is undefined behavior.
     // `mut_from_ref`: imza şekli (&self -> &mut) kasıtlı iç-değişebilirlik; güvenlik
     // `unsafe` kontratıyla çağırana devredildiği için lint bastırılıyor.
     #[allow(clippy::mut_from_ref)]
@@ -226,8 +226,8 @@ impl Archetype {
             .map(|&idx| unsafe { &mut *self.columns[idx].get() })
     }
 
-    /// Yeni bir entity satırı ekler. Tüm sütunlara veri zaten push edilmiş olmalıdır.
-    /// Eklenen satır indeksini döndürür.
+    /// Adds a new entity row. Data must already have been pushed into all columns.
+    /// Returns the index of the added row.
     #[inline]
     pub(crate) fn push_entity(&mut self, entity_id: u32) -> u32 {
         let row = self.entities.len() as u32;
@@ -235,9 +235,9 @@ impl Archetype {
         row
     }
 
-    /// Belirtilen satırdaki entity'yi swap-remove ile çıkarır.
-    /// Taşınan entity'nin (eski son satırdaki) ID'sini döndürür.
-    /// Eğer çıkarılan zaten son sıradaysa None döndürür.
+    /// Removes the entity at the specified row via swap-remove.
+    /// Returns the ID of the moved entity (the one previously in the last row).
+    /// If the removed one was already in the last position, returns None.
     pub(crate) fn swap_remove_entity(&mut self, row: usize) -> Option<u32> {
         let last = self.entities.len() - 1;
 
@@ -259,10 +259,10 @@ impl Archetype {
         }
     }
 
-    /// Bir entity'nin verilerini bir archetype'tan diğerine taşır (Migration).
-    /// `source_row`: Kaynak archetype'taki satır.
-    /// `target`: Hedef archetype.
-    /// Dönen değer: Hedef archetype'taki yeni satır indeksi.
+    /// Moves an entity's data from one archetype to another (Migration).
+    /// `source_row`: The row in the source archetype.
+    /// `target`: The target archetype.
+    /// Return value: The new row index in the target archetype.
     pub(crate) unsafe fn move_entity_to(
         &mut self,
         source_row: usize,
@@ -318,13 +318,13 @@ impl Archetype {
         (new_row, moved_entity)
     }
 
-    /// Edge cache'den belirtilen tipten geçiş hedefini al
+    /// Get the transition target for the specified type from the edge cache
     #[inline]
     pub fn get_edge(&self, type_id: TypeId) -> Option<&ArchetypeEdge> {
         self.edges.get(&type_id)
     }
 
-    /// Edge cache'e yeni geçiş hedefi ekle
+    /// Add a new transition target to the edge cache
     #[inline]
     pub fn set_add_edge(&mut self, type_id: TypeId, target: u32) {
         let edge = self.edges.entry(type_id).or_insert(ArchetypeEdge {
@@ -334,7 +334,7 @@ impl Archetype {
         edge.add = Some(target);
     }
 
-    /// Edge cache'e çıkarma geçiş hedefi ekle
+    /// Add a removal transition target to the edge cache
     #[inline]
     pub fn set_remove_edge(&mut self, type_id: TypeId, target: u32) {
         let edge = self.edges.entry(type_id).or_insert(ArchetypeEdge {
@@ -344,7 +344,7 @@ impl Archetype {
         edge.remove = Some(target);
     }
 
-    /// Bir entity'nin bulunduğu satırı N kez kopyalar ve yeni entity kimliklerini ilişkilendirir.
+    /// Copies the row an entity occupies N times and associates the new entity identities.
     pub(crate) unsafe fn batch_clone_row(
         &mut self,
         row: usize,
@@ -368,7 +368,7 @@ impl Archetype {
         new_rows
     }
 
-    /// Bellek boyutlarını (kapasite) aktif varlık sayısına göre daraltır.
+    /// Shrinks the memory sizes (capacity) down to the number of active entities.
     pub fn shrink_to_fit(&mut self) {
         self.entities.shrink_to_fit();
         for col_cell in &self.columns {
@@ -380,7 +380,7 @@ impl Archetype {
         self.column_indices.shrink_to_fit();
     }
 
-    /// Bu archetype tablosundaki tüm satır verilerini hızlıca temizler.
+    /// Quickly clears all row data in this archetype table.
     pub fn clear(&mut self) {
         for col_cell in &mut self.columns {
             unsafe {

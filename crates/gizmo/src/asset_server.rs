@@ -9,10 +9,10 @@ pub struct AssetServer {
     _material_paths: std::collections::HashMap<String, Handle<Material>>,
     pub completed_gltfs: Vec<crate::renderer::async_assets::GltfImportCompletion>,
     pub completed_gltf_errors: Vec<crate::renderer::async_assets::GltfImportError>,
-    /// Arka planda decode'u tamamlanan streaming texture'ları. `asset_server_update_system`
-    /// bunları `drain_completed`'dan buraya biriktirir; `TextureStreamingSystem` her frame
-    /// tüketip GPU'ya yükler ve ilgili entity'lerin `Material.bind_group`'unu günceller.
-    /// (Eskiden `completed.textures` sessizce ATILIYORDU → streaming görsel olarak no-op'tu.)
+    /// Streaming textures whose background decode has completed. `asset_server_update_system`
+    /// accumulates them here from `drain_completed`; `TextureStreamingSystem` consumes them each
+    /// frame, uploads them to the GPU and updates the relevant entities' `Material.bind_group`.
+    /// (Formerly `completed.textures` was silently DISCARDED → streaming was visually a no-op.)
     pub completed_textures: Vec<crate::renderer::async_assets::TextureReloadCompletion>,
     #[cfg(all(feature = "render", not(target_arch = "wasm32")))]
     pub watcher: Option<crate::renderer::hot_reload::AssetWatcher>,

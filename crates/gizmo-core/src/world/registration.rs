@@ -7,8 +7,8 @@ use std::any::TypeId;
 use std::collections::HashMap;
 
 impl World {
-    /// Belirli bir component turunun runtime metadata'sini kaydeder.
-    /// Archetype storage migration asamalarinda column olusturma icin kullanilir.
+    /// Registers the runtime metadata of a given component type.
+    /// It is used to create columns during the archetype storage migration stages.
     #[inline]
     pub fn register_component_type<T: Component>(&mut self) {
         let type_id = TypeId::of::<T>();
@@ -38,7 +38,7 @@ impl World {
         self
     }
 
-    /// Özel EntityEvent'ler için Entity bazlı Observer kaydı
+    /// Entity-based Observer registration for custom EntityEvents
     pub fn observe<E: crate::observer::EntityEvent, F>(&mut self, entity: Entity, listener: F) -> &mut Self
     where
         F: FnMut(crate::observer::On<E>) + Send + Sync + 'static,
@@ -53,7 +53,7 @@ impl World {
         self
     }
 
-    /// Bir Event'i tetikler ve hiyerarşide yukarı doğru yayar (bubble-up)
+    /// Triggers an Event and propagates it upwards through the hierarchy (bubble-up)
     pub fn trigger<E: crate::observer::EntityEvent>(&mut self, event: E) {
         use crate::component::Parent;
         let mut current_entity = event.target();
@@ -106,13 +106,13 @@ impl World {
         }
     }
 
-    /// Belirli bir component turu kayitli mi?
+    /// Is a given component type registered?
     #[inline]
     pub fn is_component_registered<T: Component>(&self) -> bool {
         self.component_infos.contains_key(&TypeId::of::<T>())
     }
 
-    /// Kayitli component metadata sayisi.
+    /// The number of registered component metadata entries.
     #[inline]
     pub fn registered_component_count(&self) -> usize {
         self.component_infos.len()

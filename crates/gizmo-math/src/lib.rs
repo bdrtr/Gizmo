@@ -6,16 +6,16 @@
 
 //! # Gizmo Math
 //!
-//! Gizmo Engine'nin temel matematik altyapısını ve render/fizik veri tiplerini barındırır.
+//! Houses Gizmo Engine's fundamental maths infrastructure and its render/physics data types.
 //!
-//! ## Konvansiyonlar (Conventions)
-//! - **Koordinat Sistemi**: Sağ-Elli (Right-Handed, RH).
-//! - **Yukarı Ekseni**: Y-Up (0.0, 1.0, 0.0).
-//! - **İleri Ekseni**: -Z (Kamera her zaman eksi Z eksenine doğru bakar).
-//! - **Matris Düzeni**: Column-Major (glam mimarisi ile uyumlu).
+//! ## Conventions
+//! - **Coordinate System**: Right-Handed (RH).
+//! - **Up Axis**: Y-Up (0.0, 1.0, 0.0).
+//! - **Forward Axis**: -Z (the camera always looks towards the negative Z axis).
+//! - **Matrix Layout**: Column-Major (compatible with the glam architecture).
 //!
-//! Normal matrisi hesaplamaları için yapılandırılmış `Mat3`, ve 3B uzay sınırları
-//! hesaplamaları için boyut optimize edilmiş `Aabb`, `Frustum`, `Ray` yapıları barındırır.
+//! Houses `Mat3`, structured for normal-matrix computations, and the size-optimised
+//! `Aabb`, `Frustum`, `Ray` structures for 3D space-bounds computations.
 //!
 //! ## Public dependency: `glam`
 //!

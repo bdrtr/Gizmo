@@ -6,7 +6,7 @@ use crate::entity::Entity;
 use std::any::TypeId;
 
 impl World {
-    /// Sisteme component ekleme — Veriyi archetype sütununa taşır.
+    /// Adding a component to the system — moves the data into the archetype column.
     ///
     /// A dead entity is a silent no-op, and so is an entity whose id was *reserved* from the
     /// allocator but never handed to [`World::flush_spawn`] (what `Commands::spawn` produces
@@ -410,7 +410,7 @@ impl World {
         }
     }
 
-    /// Raw Component Pointer alma (Reflection/Editor için)
+    /// Getting a raw Component Pointer (for Reflection/Editor)
     pub fn get_component_ptr(&self, entity: Entity, type_id: TypeId) -> Option<*const u8> {
         // SparseSet components live outside the archetype — otherwise type-erased
         // access (reflection, scene serialization) can't see them.
@@ -428,7 +428,7 @@ impl World {
         Some(unsafe { col.get_ptr(loc.row as usize) })
     }
 
-    /// Mut mutable Component pointer alma (HierarchyExt vs için)
+    /// Getting a Mut mutable Component pointer (for HierarchyExt etc.)
     pub fn get_component_mut_ptr(&mut self, entity: Entity, type_id: TypeId) -> Option<*mut u8> {
         if let Some(set) = self.sparse_sets.get_mut(&type_id) {
             if let Some(p) = set.get_ptr_mut(entity.id()) {
@@ -445,7 +445,7 @@ impl World {
         Some(unsafe { col.get_mut_ptr(loc.row as usize) })
     }
 
-    /// Sistemden component silme
+    /// Deleting a component from the system
     pub fn remove_component<T: Component>(&mut self, entity: Entity) {
         if !self.is_alive(entity) { return; }
         let eid = entity.id();
@@ -517,16 +517,22 @@ impl World {
         });
     }
 
-    /// Tek bir entity üzerinde `Query` çalıştırıp anında sonuç almanızı sağlar.
+    /// Batch component insertion. It reduces the O(N) archetype lookup cost to O(1).
     ///
-    /// # Örnek
-    /// ```ignore
-    /// if let Some((mut t, mut v)) = world.query_entity_mut::<(Mut<Transform>, Mut<Velocity>)>(id) {
-    ///     t.position += v.linear * dt;
-    /// }
+    /// # Example
     /// ```
+    /// # use gizmo_core::prelude::*;
+    /// # #[derive(Clone, Copy)] struct Health(u32);
+    /// # #[derive(Clone, Copy)] struct Team(u8);
+    /// # gizmo_core::impl_component!(Health, Team);
+    /// # let mut world = World::new();
+    /// let ids: Vec<Entity> = (0..3).map(|_| world.spawn_bundle(Health(100))).collect();
+    /// world.insert_batch(&ids, Team(2)); // one archetype lookup for the whole group
     ///
-    /// Toplu (Batch) component ekleme. O(N) archetype lookup maliyetini O(1)'e düşürür.
+    /// let q = world.query::<&Team>().unwrap();
+    /// assert_eq!(q.iter().count(), 3);
+    /// assert_eq!(q.get(ids[2].id()).unwrap().0, 2);
+    /// ```
     #[tracing::instrument(skip_all, name = "insert_batch")]
     pub fn insert_batch<T: Component + Clone>(&mut self, entities: &[Entity], component: T) {
         if T::storage_type() == crate::component::StorageType::SparseSet {
@@ -640,7 +646,7 @@ impl World {
         }
     }
 
-    /// Toplu (Batch) component çıkarma
+    /// Batch component removal
     #[tracing::instrument(skip_all, name = "remove_batch")]
     pub fn remove_batch<T: Component>(&mut self, entities: &[Entity]) {
         if T::storage_type() == crate::component::StorageType::SparseSet {

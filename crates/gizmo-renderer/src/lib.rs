@@ -4,14 +4,30 @@
 //!
 //! The renderer does not iterate entities; **your render loop** should build the instance list.
 //! Before pushing each [`InstanceRaw`](gpu_types::InstanceRaw), skip meshes outside the camera
-//! frustum using the same `view * projection` matrix you upload in [`SceneUniforms`](gpu_types::SceneUniforms):
+//! frustum using the same `view_proj` (`projection * view`) matrix you upload in
+//! [`SceneUniforms`](gpu_types::SceneUniforms):
 //!
-//! ```ignore
-//! use gizmo_renderer::{Frustum, visible_in_frustum};
+//! ```
+//! # use gizmo_math::{Aabb, Mat4, Vec3};
+//! use gizmo_renderer::{visible_in_frustum, Frustum};
+//!
+//! # let view_proj = Mat4::perspective_rh(std::f32::consts::FRAC_PI_4, 1.0, 0.1, 100.0)
+//! #     * Mat4::look_at_rh(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO, Vec3::Y);
+//! # // Stands in for `mesh.bounds`: a unit cube in local space.
+//! # let bounds = Aabb::new(Vec3::splat(-0.5), Vec3::splat(0.5));
+//! # let mut instances = 0;
 //! let frustum = Frustum::from_matrix(&view_proj);
-//! if !visible_in_frustum(&frustum, &model_matrix, &mesh.bounds) {
-//!     continue;
+//! for model_matrix in [
+//!     Mat4::from_translation(Vec3::new(0.0, 0.0, -10.0)), // in front of the camera
+//!     Mat4::from_translation(Vec3::new(0.0, 0.0, 50.0)),  // behind it
+//! ] {
+//!     if !visible_in_frustum(&frustum, &model_matrix, bounds) {
+//!         continue;
+//!     }
+//! #   instances += 1;
+//!     // ...push an `InstanceRaw` for this mesh.
 //! }
+//! # assert_eq!(instances, 1, "the box behind the camera is culled, not instanced");
 //! ```
 //!
 //! [`Mesh`](components::Mesh) carries a local-space [`Aabb`](gizmo_math::Aabb) (`bounds`);

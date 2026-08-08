@@ -1,6 +1,6 @@
 use gizmo_math::Vec4;
 
-/// Bevy benzeri renk tipi. RGBA float değerleri (0.0 - 1.0) tutar.
+/// Bevy-like color type. Holds RGBA float values (0.0 - 1.0).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Color(pub Vec4);
 
@@ -21,19 +21,19 @@ impl Color {
 
     // ─── Yapıcılar ────────────────────────────────────────────────────────────
 
-    /// RGB float değerleriyle oluştur (0.0 - 1.0 arası).
+    /// Construct from RGB float values (between 0.0 - 1.0).
     #[inline]
     pub const fn rgb(r: f32, g: f32, b: f32) -> Self {
         Color(Vec4::new(r, g, b, 1.0))
     }
 
-    /// RGBA float değerleriyle oluştur (0.0 - 1.0 arası).
+    /// Construct from RGBA float values (between 0.0 - 1.0).
     #[inline]
     pub const fn rgba(r: f32, g: f32, b: f32, a: f32) -> Self {
         Color(Vec4::new(r, g, b, a))
     }
 
-    /// 0-255 arasında RGB tam sayı değerleriyle oluştur.
+    /// Construct from RGB integer values between 0-255.
     #[inline]
     pub fn rgb8(r: u8, g: u8, b: u8) -> Self {
         Color(Vec4::new(
@@ -44,7 +44,7 @@ impl Color {
         ))
     }
 
-    /// Hex string ile oluştur. Örnek: `Color::hex("#FF5733")`, `Color::hex("FF5733")` veya RGBA `#FF5733AA`.
+    /// Construct from a hex string. Example: `Color::hex("#FF5733")`, `Color::hex("FF5733")` or RGBA `#FF5733AA`.
     pub fn hex(s: &str) -> Self {
         let s = s.trim_start_matches('#');
         let bytes = s.as_bytes();
@@ -61,7 +61,7 @@ impl Color {
         }
     }
 
-    /// Rengi Hex formatına dönüştürüp döndürür. Örnek: "#FF5733"
+    /// Converts the color to Hex format and returns it. Example: "#FF5733"
     pub fn to_hex(self) -> String {
         let r = (self.0.x.clamp(0.0, 1.0) * 255.0).round() as u8;
         let g = (self.0.y.clamp(0.0, 1.0) * 255.0).round() as u8;
@@ -75,7 +75,7 @@ impl Color {
         }
     }
 
-    /// İki renk arasında lineer interpolasyon (karıştırma) yapar.
+    /// Performs linear interpolation (blending) between two colors.
     pub fn lerp(self, other: Color, t: f32) -> Color {
         let t = t.clamp(0.0, 1.0);
         Color(Vec4::new(
@@ -86,14 +86,14 @@ impl Color {
         ))
     }
 
-    /// Alfa (şeffaflık) ile birleştir.
+    /// Merge with an alpha (transparency).
     #[inline]
     pub fn with_alpha(mut self, a: f32) -> Self {
         self.0.w = a;
         self
     }
 
-    /// İç Vec4 değerini döndür.
+    /// Return the inner Vec4 value.
     #[inline]
     pub fn to_vec4(self) -> Vec4 {
         self.0
@@ -101,7 +101,7 @@ impl Color {
 }
 
 impl Default for Color {
-    /// Varsayılan renk: opak beyaz (`Color::WHITE`).
+    /// Default color: opaque white (`Color::WHITE`).
     fn default() -> Self {
         Color::WHITE
     }

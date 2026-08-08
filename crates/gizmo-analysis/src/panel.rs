@@ -5,11 +5,17 @@
 //! metriklerin istatistik + mini-sparkline tablosu. Editör'deki `profiler_panel`'i
 //! tamamlar (o yalnız FrameProfiler'a bakar; bu, tüm Analyzer verisini gösterir).
 //!
-//! Çağrım (app'in `set_ui` closure'ından):
-//! ```ignore
-//! egui::SidePanel::right("analysis").show(ctx, |ui| {
-//!     gizmo_analysis::panel::analysis_ui_world(ui, world);
+//! Çağrım (app'in `set_ui` closure'ında kurduğunuz kök `Ui`'nin içine):
+//! ```
+//! # let ctx = egui::Context::default();
+//! # let mut world = gizmo_core::world::World::new();
+//! # world.insert_resource(gizmo_analysis::Analyzer::new());
+//! # let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+//! egui::Panel::right("analysis").show_inside(ui, |ui| {
+//!     gizmo_analysis::panel::analysis_ui_world(ui, &world);
 //! });
+//! # });
+//! # assert!(!out.shapes.is_empty(), "panel her durumda bir şeyler çizer");
 //! ```
 
 use crate::analyzer::Analyzer;

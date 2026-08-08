@@ -7,20 +7,20 @@ pub const CHUNK_LOAD_RADIUS: i32 = 2; // Oyuncunun etrafındaki 5x5'lik grid yü
 
 pub type ChunkCoord = (i32, i32);
 
-/// Hangi Entity'nin hangi Chunk'a ait olduğunu tutan Bileşen (Component)
+/// Component that holds which Entity belongs to which Chunk
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ChunkEntity {
     pub coord: ChunkCoord,
 }
 
-/// Tüm harita yükleme/silme işlemlerini yöneten Sistem Kaynağı (Resource)
+/// System Resource that manages all map loading/deletion operations
 #[derive(Debug, Clone)]
 pub struct ChunkManager {
-    /// O an RAM'de yüklü olan Chunk'ların koordinatları
+    /// Coordinates of the Chunks loaded in RAM at that moment
     pub active_chunks: HashSet<ChunkCoord>,
-    /// Hangi Chunk'ta hangi Entity'lerin olduğu (Silmek için kullanacağız)
+    /// Which Entities are in which Chunk (we will use this for deleting)
     pub chunk_entities: HashMap<ChunkCoord, Vec<u64>>,
-    /// Oyuncunun bir önceki frame'deki konumu (Sadece Chunk değiştiğinde işlem yapmak için)
+    /// The player's position in the previous frame (Only to do work when the Chunk changes)
     pub last_player_chunk: ChunkCoord,
 }
 
@@ -50,7 +50,7 @@ impl ChunkManager {
         )
     }
 
-    /// Bir Entity oluşturulduğunda onu Chunk sistemine kaydeder
+    /// Registers an Entity into the Chunk system when it is created
     pub fn register_entity(&mut self, coord: ChunkCoord, entity_id: u64) {
         self.chunk_entities
             .entry(coord)
@@ -59,9 +59,9 @@ impl ChunkManager {
     }
 }
 
-/// Bu sistem her frame çağrılır. Oyuncunun pozisyonunu kontrol eder.
-/// Eğer oyuncu yeni bir Chunk sınırından geçtiyse, eski Chunk'ları silip yenilerini yükler.
-/// `load_callback` fonksiyonu: Yeni yüklenen her Chunk için kullanıcının obje spawn etmesini sağlar.
+/// This system is called every frame. It checks the player's position.
+/// If the player crossed a new Chunk boundary, it deletes the old Chunks and loads the new ones.
+/// The `load_callback` function: lets the user spawn objects for every newly loaded Chunk.
 pub fn open_world_chunk_system<F, U>(
     world: &mut World,
     player_pos: Vec3,

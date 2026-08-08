@@ -21,12 +21,24 @@ mod textures;
 /// Kullanıcı kodunun doğrudan `wgpu::CommandEncoder` veya `wgpu::TextureView`
 /// görmesine gerek kalmadan render işlemi yapmasını sağlayan bağlam nesnesi.
 ///
-/// ```ignore
+/// `gizmo_app`'in `set_simple_render` çağrısının beklediği imza budur:
+///
+/// ```
+/// # use gizmo_core::World;
+/// # use gizmo_renderer::RenderContext;
+/// # struct GameState;
 /// fn render(world: &mut World, _state: &GameState, ctx: &mut RenderContext) {
 ///     ctx.disable_gpu_compute();           // GPU Compute kapalı
-///     ctx.default_render(world);           // Varsayılan render pipeline
+///     let _light_time = ctx.light_time();  // sahne verisi — ham wgpu tipi görünmüyor
+/// #   let _ = world;
 /// }
+/// # // `set_simple_render` bağı: for<'a> FnMut(&mut World, &State, &mut RenderContext<'a>)
+/// # let _: fn(&mut World, &GameState, &mut RenderContext<'_>) = render;
 /// ```
+///
+/// Varsayılan render pipeline'ını tek satırda sürmek için facade'daki
+/// `RenderContextExt::default_render` uzantısı kullanılır (`gizmo` crate'i,
+/// `use gizmo::prelude::*`); bu crate'in kendisi o uzantıyı tanımlamaz.
 pub struct RenderContext<'a> {
     pub(crate) encoder: &'a mut wgpu::CommandEncoder,
     pub(crate) view: &'a wgpu::TextureView,

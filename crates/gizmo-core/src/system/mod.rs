@@ -111,28 +111,28 @@ impl AccessInfo {
 // PHASE (SYSTEM SET GROUPING)
 // ==============================================================
 
-/// Fizik motoru tarzı faz sıralaması.
-/// Sistemler bir faza atanır ve fazlar sabit sırada çalışır:
+/// Physics-engine style phase ordering.
+/// Systems are assigned to a phase and the phases run in a fixed order:
 /// `PreUpdate → Update → Physics → PostUpdate → Render`
 ///
-/// Aynı faz içindeki sistemler DAG batching ile paralel çalıştırılır.
+/// Systems within the same phase are run in parallel with DAG batching.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub enum Phase {
-    /// Input polling, zaman güncellemesi, olay temizliği
+    /// Input polling, time update, event cleanup
     PreUpdate = 0,
-    /// Oyun mantığı, AI, scripting
+    /// Game logic, AI, scripting
     #[default]
     Update = 1,
-    /// Fizik simülasyonu (fixed timestep ile)
+    /// Physics simulation (with a fixed timestep)
     Physics = 2,
     /// Transform propagation, cleanup
     PostUpdate = 3,
-    /// Rendering hazırlığı
+    /// Rendering preparation
     Render = 4,
 }
 
 impl Phase {
-    /// Tüm fazları sıralı olarak döndürür.
+    /// Returns all the phases in order.
     pub const ALL: [Phase; 5] = [
         Phase::PreUpdate,
         Phase::Update,
@@ -141,7 +141,7 @@ impl Phase {
         Phase::Render,
     ];
 
-    /// Faz adını döndürür (tracing span'ları için).
+    /// Returns the phase name (for tracing spans).
     pub const fn name(&self) -> &'static str {
         match self {
             Phase::PreUpdate => "pre_update",
@@ -157,7 +157,7 @@ impl Phase {
 // SYSTEM TRAIT
 // ==============================================================
 
-/// Bir sistem: her frame'de çalıştırılabilir mantık birimi.
+/// A system: a unit of logic that can be run every frame.
 pub trait System: Send + Sync {
     /// Executes the system once.
     ///

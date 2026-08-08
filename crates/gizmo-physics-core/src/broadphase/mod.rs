@@ -1,25 +1,25 @@
 /// AAA Broadphase: Dynamic AABB Tree (Incremental BVH)
 ///
-/// Özellikler:
-/// - SAH (Surface Area Heuristic) ile O(log N) ekleme
-/// - Fattened AABB ile gereksiz rebuild yok
-/// - AVL rotasyonlu yükseklik dengesi
-/// - SIMD AABB overlap testi (x86_64)
-/// - Raycast / AABB sorgusu O(log N)
-/// - query_pairs: duplicate-free, self-pair yok
+/// Features:
+/// - O(log N) insertion with SAH (Surface Area Heuristic)
+/// - No unnecessary rebuild with fattened AABB
+/// - Height balance with AVL rotations
+/// - SIMD AABB overlap test (x86_64)
+/// - Raycast / AABB query O(log N)
+/// - query_pairs: duplicate-free, no self-pair
 ///
-/// Düzeltmeler (orijinal koda göre):
-/// FIX-1  insert: tight_aabb kontrolünde cmpge/cmple yerine skalar karşılaştırma
-///         (Vec3A/Vec3 farkından kaynaklanan derleme hatası riski)
-/// FIX-2  query_pairs: "iki aşamalı stack" yaklaşımı yanlış duplicate üretiyordu;
-///         recursive dual-tree traversal ile replace edildi → garantili duplicate-free
-/// FIX-3  balance: rotasyon sonrası f/g parent pointer güncellenmiyordu (silent bug)
-/// FIX-4  SpatialHash::clear: &self alıyordu, artık &mut self
-/// FIX-5  ray_aabb: tmin başlangıcı 0.0 yerine f32::NEG_INFINITY → negatif yönlerde miss
-/// FIX-6  query_pairs SIMD yolu: orijinal kodda SIMD kullanılmıyordu; leaf batch'ler için eklendi
-/// FIX-7  find_best_sibling: inherited_cost hesabında yanlış node SA kullanılıyordu
-/// FIX-8  remove_leaf → free_node çağrısı parent'ı serbest bırakıyordu ama
-///         parent'ın entity/aabb alanları temizlenmiyordu → free_node düzeltildi
+/// Fixes (relative to the original code):
+/// FIX-1  insert: scalar comparison instead of cmpge/cmple in the tight_aabb check
+///         (risk of a compile error stemming from the Vec3A/Vec3 difference)
+/// FIX-2  query_pairs: the "two-phase stack" approach was producing wrong duplicates;
+///         it was replaced with a recursive dual-tree traversal → guaranteed duplicate-free
+/// FIX-3  balance: the f/g parent pointer was not updated after a rotation (silent bug)
+/// FIX-4  SpatialHash::clear: it took &self, now &mut self
+/// FIX-5  ray_aabb: tmin start is f32::NEG_INFINITY instead of 0.0 → miss in negative directions
+/// FIX-6  query_pairs SIMD path: SIMD was not used in the original code; added for leaf batches
+/// FIX-7  find_best_sibling: the wrong node SA was used in the inherited_cost computation
+/// FIX-8  remove_leaf → the free_node call was releasing the parent but
+///         the parent's entity/aabb fields were not cleared → free_node was fixed
 use crate::BodyHandle;
 use gizmo_math::{Aabb, Vec3};
 
@@ -30,8 +30,8 @@ use gizmo_math::{Aabb, Vec3};
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 
-/// SIMD: target AABB'i 4 AABB ile aynı anda test et.
-/// Dönen bitmask'te bit i, target'ın others[i] ile örtüşüp örtüşmediğini gösterir.
+/// SIMD: test the target AABB against 4 AABBs at the same time.
+/// In the returned bitmask, bit i indicates whether the target overlaps with others[i].
 #[cfg(target_arch = "x86_64")]
 #[inline]
 pub fn aabb_overlaps_simd4(target: &Aabb, others: [&Aabb; 4]) -> u8 {
@@ -114,7 +114,7 @@ pub fn aabb_overlaps_simd4(target: &Aabb, others: [&Aabb; 4]) -> u8 {
     mask
 }
 
-/// Scalar AABB overlap testi
+/// Scalar AABB overlap test
 #[inline]
 fn aabb_overlaps(a: &Aabb, b: &Aabb) -> bool {
     a.min.x <= b.max.x
@@ -125,14 +125,14 @@ fn aabb_overlaps(a: &Aabb, b: &Aabb) -> bool {
         && b.min.z <= a.max.z
 }
 
-/// AABB surface area (SAH için)
+/// AABB surface area (for SAH)
 #[inline]
 fn surface_area(a: &Aabb) -> f32 {
     let d = Vec3::new(a.max.x - a.min.x, a.max.y - a.min.y, a.max.z - a.min.z);
     2.0 * (d.x * d.y + d.y * d.z + d.z * d.x)
 }
 
-/// AABB birleştirme
+/// AABB merge
 #[inline]
 fn merge_aabb(a: &Aabb, b: &Aabb) -> Aabb {
     Aabb {
@@ -151,7 +151,7 @@ fn merge_aabb(a: &Aabb, b: &Aabb) -> Aabb {
     }
 }
 
-/// AABB'i her yönde margin kadar büyüt
+/// Grow the AABB by margin in every direction
 #[inline]
 fn fatten(aabb: &Aabb, margin: f32) -> Aabb {
     Aabb {
@@ -170,8 +170,8 @@ fn fatten(aabb: &Aabb, margin: f32) -> Aabb {
     }
 }
 
-/// a, b'nin içinde mi? (her eksende)
-/// FIX-1: Vec3A cmpge/cmple yerine açık skalar karşılaştırma
+/// Is a inside b? (on every axis)
+/// FIX-1: explicit scalar comparison instead of Vec3A cmpge/cmple
 #[inline]
 fn aabb_contains(outer: &Aabb, inner: &Aabb) -> bool {
     inner.min.x >= outer.min.x

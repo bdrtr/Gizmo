@@ -1,9 +1,10 @@
-//! Genel amaçlı GÖRSEL DÖNME bileşeni + sistemi.
+//! General-purpose VISUAL ROTATION component + system.
 //!
-//! Bir mesh'i (ECS `Transform`) sabit bir eksende, sabit bir açısal hızla döndürür.
-//! Tekerlek, pervane, fan, türbin, gezegen, dönen platform... hepsi için tek çözüm —
-//! artık demoların her frame elle `transform.rotation = ...` yazması GEREKMEZ. Bileşeni
-//! ekle, [`SpinPlugin`]'i (veya doğrudan [`SpinSystem`]) çalıştır, motor döndürsün.
+//! Rotates a mesh (the ECS `Transform`) about a fixed axis at a fixed angular velocity.
+//! Wheel, propeller, fan, turbine, planet, rotating platform... a single solution for all of
+//! them — the demos are NO LONGER REQUIRED to write `transform.rotation = ...` by hand every
+//! frame. Add the component, run [`SpinPlugin`] (or [`SpinSystem`] directly), let the engine
+//! do the rotating.
 //!
 //! ```
 //! use gizmo::prelude::*;
@@ -13,38 +14,38 @@
 //! let mut world = World::new();
 //! let wheel = world.spawn();
 //! world.add_component(wheel, Transform::new(Vec3::ZERO));
-//! // 30 rad/s, X ekseni etrafında.
+//! // 30 rad/s, about the X axis.
 //! world.add_component(wheel, Spin::new(Vec3::X, 30.0));
 //!
-//! // Bir uygulamada `app.add_plugin(SpinPlugin)` bunu her frame çalıştırır;
-//! // burada tek adımı elle sürüyoruz.
+//! // In an application `app.add_plugin(SpinPlugin)` runs this every frame;
+//! // here we drive a single step by hand.
 //! SpinSystem.run(&world, 0.1);
 //!
 //! let rotated = world.query::<&Transform>().unwrap().get(wheel.id()).unwrap().rotation;
-//! assert!(rotated.angle_between(Quat::IDENTITY) > 0.0, "Spin dönüşü uygulamalı");
+//! assert!(rotated.angle_between(Quat::IDENTITY) > 0.0, "Spin must have applied a rotation");
 //! ```
 
 use gizmo_core::world::World;
 use gizmo_math::{Quat, Vec3};
 use gizmo_physics_core::Transform;
 
-/// Bir `Transform`'u `axis` ekseninde `angular_velocity` (rad/s) hızıyla döndürür.
-/// Dönüş `rest_rotation`'ın (modelin yazar-duruşu) ÜZERİNE biner. `angular_velocity`
-/// her frame değiştirilebilir (ör. tekerlek hızını araç hızına bağla).
+/// Rotates a `Transform` about the `axis` axis at `angular_velocity` (rad/s).
+/// The rotation rides ON TOP OF `rest_rotation` (the model's authored pose).
+/// `angular_velocity` can be changed every frame (e.g. tie wheel speed to vehicle speed).
 #[derive(Debug, Clone, Copy)]
 pub struct Spin {
-    /// Dönme ekseni (gövde-yerel), normalize edilir.
+    /// Rotation axis (body-local), gets normalized.
     pub axis: Vec3,
-    /// Açısal hız, rad/s. Runtime'da değiştirilebilir.
+    /// Angular velocity, rad/s. Can be changed at runtime.
     pub angular_velocity: f32,
-    /// Modelin dönmeden önceki (yazar) rotasyonu — dönüş bunun üzerine uygulanır.
+    /// The model's (authored) rotation before spinning — the rotation is applied on top of it.
     pub rest_rotation: Quat,
-    /// Biriken açı (rad) — sistem tarafından yönetilir.
+    /// Accumulated angle (rad) — managed by the system.
     pub angle: f32,
 }
 
 impl Spin {
-    /// `axis` ekseninde `angular_velocity` (rad/s) ile dönen bileşen.
+    /// Component that rotates about the `axis` axis at `angular_velocity` (rad/s).
     pub fn new(axis: Vec3, angular_velocity: f32) -> Self {
         let axis = if axis.length_squared() > 1e-9 {
             axis.normalize()
@@ -59,8 +60,8 @@ impl Spin {
         }
     }
 
-    /// Modelin yazar-duruş rotasyonunu koru (GLTF tekerleği gibi önceden döndürülmüş
-    /// mesh'lerde şart — yoksa duruş bozulur). Zincirlenebilir.
+    /// Preserve the model's authored-pose rotation (essential on pre-rotated meshes such as a
+    /// GLTF wheel — otherwise the pose is broken). Chainable.
     pub fn with_rest_rotation(mut self, rest: Quat) -> Self {
         self.rest_rotation = rest;
         self
@@ -69,8 +70,8 @@ impl Spin {
 
 gizmo_core::impl_component!(Spin);
 
-/// Her frame tüm [`Spin`]'leri ilerletip `Transform.rotation`'a uygular. [`SpinPlugin`]
-/// bunu schedule'a ekler; el ile `SpinSystem.run(world, dt)` da çağrılabilir.
+/// Advances every [`Spin`] each frame and applies it to `Transform.rotation`. [`SpinPlugin`]
+/// adds this to the schedule; `SpinSystem.run(world, dt)` can also be called by hand.
 pub struct SpinSystem;
 
 impl gizmo_core::system::System for SpinSystem {
@@ -98,8 +99,8 @@ impl gizmo_core::system::System for SpinSystem {
     }
 }
 
-/// [`SpinSystem`]'i uygulamanın schedule'ına ekler → [`Spin`] bileşenli her mesh
-/// otomatik döner.
+/// Adds [`SpinSystem`] to the application's schedule → every mesh with a [`Spin`] component
+/// rotates automatically.
 pub struct SpinPlugin;
 
 impl<State: 'static> crate::app::Plugin<State> for SpinPlugin {

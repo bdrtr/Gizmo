@@ -76,9 +76,19 @@ pub trait Component: 'static + Any + Send + Sync + Clone {
 /// Writes an empty [`Component`] impl for one or more types, optionally choosing their
 /// [`StorageType`].
 ///
-/// ```ignore
+/// ```
+/// # #[derive(Clone)] struct Position; #[derive(Clone)] struct Velocity;
+/// # #[derive(Clone)] struct Frozen;   #[derive(Clone)] struct Stunned;
+/// // Neither is in the prelude: `StorageType` has to be nameable in *your* scope for the
+/// // `; $storage` argument below, and `Component` for `storage_type()`.
+/// use gizmo_core::component::{Component, StorageType};
+/// use gizmo_core::impl_component;
+///
 /// impl_component!(Position, Velocity);                       // default: Table storage
 /// impl_component!(Frozen, Stunned; StorageType::SparseSet);  // explicit storage
+///
+/// assert_eq!(Position::storage_type(), StorageType::Table);
+/// assert_eq!(Frozen::storage_type(), StorageType::SparseSet);
 /// ```
 ///
 /// The macro only writes the impl: the types must already satisfy `Component`'s supertraits
@@ -332,9 +342,9 @@ pub trait Bundle {
     /// added, not merely changed.
     ///
     /// # Safety
-    /// `arch`, `Self::get_infos()`'un döndürdüğü bileşen sütunlarını içermeli ve `_row`
-    /// bu arketipte ayrılmış geçerli bir satır olmalıdır. Veriler ham olarak kopyalanır;
-    /// sahiplik arketipe devredilir.
+    /// `arch` must contain the component columns that `Self::get_infos()` returns, and `_row`
+    /// must be a valid row reserved in this archetype. The data is copied raw; ownership is
+    /// transferred to the archetype.
     unsafe fn write_to_archetype(self, arch: &mut crate::archetype::Archetype, _row: usize, tick: u32);
     /// Attaches the bundle to an entity that already exists, component by component, through
     /// `World::add_component`.

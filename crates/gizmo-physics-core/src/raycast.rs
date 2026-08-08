@@ -39,14 +39,14 @@ pub struct Ray {
 }
 
 impl Ray {
-    /// Yeni bir ışın oluşturur. `direction` içeride normalize edilir.
+    /// Creates a new ray. `direction` is normalised internally.
     ///
-    /// Sıfır-uzunlukta (veya non-finite) bir yön vektörü verilirse, glam'in
-    /// `normalize()` çağrısı sessizce NaN/Inf üreterek bozuk bir Ray yaratır ve
-    /// sonraki tüm raycast'ler sahte sonuç döndürür. Bunu önlemek için
-    /// `try_normalize()` kullanılır ve normalize edilemeyen yönlerde güvenli bir
-    /// varsayılan (`Vec3::Z`) seçilir; böylece Ray her zaman geçerli, sonlu bir
-    /// birim yöne sahip olur. Geçerli (sıfır olmayan) yönlerde davranış değişmez.
+    /// If a zero-length (or non-finite) direction vector is given, glam's
+    /// `normalize()` call silently produces NaN/Inf, creating a broken Ray, and
+    /// every subsequent raycast returns a bogus result. To prevent this,
+    /// `try_normalize()` is used and a safe default (`Vec3::Z`) is chosen for
+    /// directions that cannot be normalised; the Ray therefore always has a valid,
+    /// finite unit direction. For valid (non-zero) directions the behaviour does not change.
     pub fn new(origin: Vec3, direction: Vec3) -> Self {
         Self {
             origin,
@@ -712,8 +712,8 @@ mod tests {
         assert_eq!(result.unwrap().1, -Vec3::Z); // Should be flipped since ray hits the backface
     }
 
-    /// İçeriden başlayan ışın geçerli bir çıkış-yüzeyi normali vermeli (eskiden t=0'da
-    /// `origin` yüzey üstünde olmadığından sahte +Y dönüyordu).
+    /// A ray starting from the inside must give a valid exit-surface normal (previously, at
+    /// t=0, since `origin` was not on the surface, it returned a bogus +Y).
     #[test]
     fn ray_box_from_inside_returns_valid_exit_normal() {
         use gizmo_math::Quat;
@@ -727,8 +727,8 @@ mod tests {
         );
     }
 
-    /// ConvexHull raycast'i AABB değil GERÇEK hull'a karşı olmalı: AABB köşesinden geçip
-    /// hull'ı ıskalayan ışın None dönmeli.
+    /// The ConvexHull raycast must be against the REAL hull, not the AABB: a ray passing
+    /// through an AABB corner and missing the hull must return None.
     #[test]
     fn convex_hull_raycast_is_exact_not_aabb() {
         use crate::components::collider::ConvexHullShape;

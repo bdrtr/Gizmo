@@ -181,7 +181,8 @@ impl NavGrid {
         neighbors
     }
 
-    /// Fizik dünyasındaki statik nesneleri tarayıp navigasyon engel ızgarasını (NavMesh) günceller
+    /// Scans the static objects in the physics world and updates the navigation obstacle grid
+    /// (NavMesh)
     ///
     /// Rebuilds `obstacles` from scratch out of every non-dynamic body in `physics`:
     /// each body's world AABB is rasterised into cells on all
@@ -322,7 +323,7 @@ impl PartialOrd for AStarNode {
     }
 }
 
-/// Octile mesafe tahmini (Çapraz harekete uygun)
+/// Octile distance estimate (suited to diagonal movement)
 fn heuristic(a: GridPos, b: GridPos) -> u32 {
     let dx = (a.x - b.x).unsigned_abs();
     let dz = (a.z - b.z).unsigned_abs();
@@ -331,7 +332,7 @@ fn heuristic(a: GridPos, b: GridPos) -> u32 {
 }
 
 impl NavGrid {
-    /// A* Pathfinding Fonksiyonu
+    /// A* Pathfinding Function
     ///
     /// Returns the world-space centre of every cell to step onto, in order. The start cell
     /// is **excluded** and the destination cell is the last element; when both positions
