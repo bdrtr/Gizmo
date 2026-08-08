@@ -624,7 +624,22 @@ impl ConstraintSolver {
             } else {
                 0.0
             };
-            let delta_n = (m_scale * (target_vn - vel_norm + bias) - i_scale * p.acc_n) / p.k_n;
+            // `i_scale·acc_n` is NOT divided by `k_n`. It is a relaxation of the ACCUMULATED
+            // impulse, not a velocity error to be converted into one, so it carries no mass
+            // factor — this is Box2D v3's `-normalMass·massScale·(vn + bias) − impulseScale·λ`,
+            // and the same conclusion `ConstraintSolver::soft_coefficients` reached for joints.
+            //
+            // Dividing it makes the recursion `λ_{n+1} = λ_n·(1 − i_scale/k_n) + …`, whose
+            // factor leaves the unit disc once `m_eff > 2/i_scale` (≈34.6 at the shipped
+            // softness). Contacts do not blow up the way the joint rows did, because
+            // `max(0.0)` truncates every negative half-cycle — but the response stops being
+            // mass-invariant, which a soft constraint parameterised by hertz and damping must
+            // be. Measured on a box resting in 0.2 m of penetration, final height by mass:
+            //   divided:     1 kg 0.4733 · 100 kg 0.4092 · 300 kg 0.4084 · 1000 kg 0.4872
+            //   not divided: 0.471068 at every mass from 1 kg to 5000 kg
+            // The divided column is both mass-dependent and non-monotonic; see
+            // `tests/contact_soft_stability.rs`.
+            let delta_n = m_scale * (target_vn - vel_norm + bias) / p.k_n - i_scale * p.acc_n;
             let new_acc_n = (p.acc_n + delta_n).max(0.0);
             let actual_n = new_acc_n - p.acc_n;
             p.acc_n = new_acc_n;
@@ -923,31 +938,83 @@ impl ConstraintSolver {
 
 #[cfg(test)]
 mod tests {
-    // Regression for the TGS soft-constraint impulse ordering. The impulse-scale
-    // penalty term (`i_scale * acc_n`) must be applied *inside* the effective-mass
-    // division, i.e. `(m_scale*(...) - i_scale*acc_n) / k_n`, not after it
-    // (`m_scale*(...)/k_n - i_scale*acc_n`). The two disagree whenever both an
-    // impulse-scale penalty and a non-unit effective mass (k_n != 1) are present.
+    // The TGS soft-constraint impulse ordering. `i_scale * acc_n` is applied AFTER the
+    // effective-mass division — `m_scale*(...)/k_n - i_scale*acc_n` — because it relaxes the
+    // accumulated impulse rather than converting a velocity error into one.
+    //
+    // A commit once claimed the opposite and moved the term inside the division, pinned by an
+    // arithmetic test that only showed the two orderings DIFFER, never that the inside form is
+    // the right one. It is not: it is Box2D v3's formula turned inside out, and it costs
+    // mass-invariance. The test below asserts the property that decides between them.
     #[test]
-    fn soft_constraint_impulse_scale_applied_before_division() {
+    fn the_impulse_scale_penalty_carries_no_mass_factor() {
         // Representative soft-constraint values (bias_rate>0, use_tgs_soft path).
         let m_scale = 0.75_f32;
         let i_scale = 0.25_f32;
         let target_vn = 0.0_f32;
         let vel_norm = -2.0_f32;
         let bias = 1.5_f32;
-        let k_n = 4.0_f32; // non-unit effective mass exposes the ordering bug
         let acc_n = 0.6_f32;
 
-        // Correct (post-fix) ordering.
-        let correct = (m_scale * (target_vn - vel_norm + bias) - i_scale * acc_n) / k_n;
-        // Buggy (pre-fix) ordering.
-        let buggy = m_scale * (target_vn - vel_norm + bias) / k_n - i_scale * acc_n;
+        // The driving term scales with the effective mass; the penalty term must not. Doubling
+        // `k_n` must therefore halve the first and leave the second untouched.
+        let delta = |k_n: f32| m_scale * (target_vn - vel_norm + bias) / k_n - i_scale * acc_n;
+        let drive = m_scale * (target_vn - vel_norm + bias);
+        assert!((delta(4.0) - (drive / 4.0 - i_scale * acc_n)).abs() < 1e-9);
+        assert!(
+            ((delta(4.0) + i_scale * acc_n) - 2.0 * (delta(8.0) + i_scale * acc_n)).abs() < 1e-6,
+            "only the driving half may scale with 1/k_n"
+        );
 
-        // They must differ, and the current code must match the correct form.
-        assert!((correct - buggy).abs() > 1e-6, "orderings must differ for this case");
+        // The ordering the old code used, for contrast — it puts the penalty inside.
+        let inside = (m_scale * (target_vn - vel_norm + bias) - i_scale * acc_n) / 4.0;
+        assert!(
+            (delta(4.0) - inside).abs() > 1e-6,
+            "the two orderings must differ here, or this test proves nothing"
+        );
+    }
 
-        let delta_n = (m_scale * (target_vn - vel_norm + bias) - i_scale * acc_n) / k_n;
-        assert!((delta_n - correct).abs() < 1e-9);
+    /// Why the inside form is not merely different but unstable: it turns the λ update into
+    /// `λ_{n+1} = λ_n·(1 − i_scale/k_n) + …`, and that factor leaves the unit disc once
+    /// `k_n < i_scale/2`, i.e. `m_eff > 2/i_scale`. At the shipped contact softness
+    /// (`hertz = 30`, `ζ = 10`, substep 1/240) `i_scale ≈ 0.0577`, so the bound is `m_eff ≈ 34.6`.
+    ///
+    /// Contacts survive it only because `max(0.0)` truncates the negative half of every cycle —
+    /// the same recursion in a joint's ±∞-clamped equality row dropped a body 331 m. This test
+    /// runs the bare recursion, with and without the clamp, so the mechanism is visible rather
+    /// than asserted in prose.
+    #[test]
+    fn the_inside_ordering_diverges_above_its_mass_bound() {
+        let i_scale = 0.0577_f32;
+        let k_n = 0.001_f32; // m_eff = 1000, far past the 34.6 bound
+        let drive = 1.0_f32;
+
+        let mut unclamped = 0.0_f32;
+        let mut clamped = 0.0_f32;
+        for _ in 0..40 {
+            unclamped += (drive - i_scale * unclamped) / k_n;
+            clamped = (clamped + (drive - i_scale * clamped) / k_n).max(0.0);
+        }
+        assert!(
+            !unclamped.is_finite() || unclamped.abs() > 1e6,
+            "the inside ordering must run away here: got {unclamped}"
+        );
+        assert!(
+            clamped.is_finite() && clamped < 1e5,
+            "the non-negativity clamp is what contains it for contacts: got {clamped}"
+        );
+
+        // The shipped ordering is a contraction for ANY effective mass, since
+        // `i_scale ∈ (0, 1]`. Its rate is `1 − i_scale`, so it needs more than the 40 steps
+        // the divergent case needs to make its point — at 40 it is still 9% short.
+        let mut outside = 0.0_f32;
+        for _ in 0..400 {
+            outside = outside + drive / k_n - i_scale * outside;
+        }
+        assert!(
+            outside.is_finite() && (outside - drive / (k_n * i_scale)).abs() < 1.0,
+            "the shipped ordering must converge to drive/(k_n·i_scale) = {}, got {outside}",
+            drive / (k_n * i_scale)
+        );
     }
 }
