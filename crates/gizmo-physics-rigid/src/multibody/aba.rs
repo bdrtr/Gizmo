@@ -129,7 +129,16 @@ pub fn compute_aba(tree: &mut ArticulatedTree, gravity: Vec3) {
             if tree.is_fixed_base {
                 x_i.inverse_transform_motion(a_grav) // Root attached to world, transformed gravity to local frame
             } else {
-                x_i.inverse_transform_motion(tree.base_acceleration) // Free floating base
+                // Free floating base. `base_acceleration` ADDS to the fictitious gravity
+                // acceleration; it used to replace it, which silently zeroed gravity for the
+                // whole tree — a floating-base pendulum with the default zero base acceleration
+                // simply did not fall, and `gravity` was accepted and discarded.
+                //
+                // Both branches are the same formula: gravity enters as the root's parent
+                // acceleration `a_grav`, and a prescribed base acceleration is superposed on it.
+                // Setting `base_acceleration = -a_grav` (a base in free fall) reproduces the old
+                // weightless behaviour — but now only for a base that is actually falling.
+                x_i.inverse_transform_motion(a_grav + tree.base_acceleration)
             }
         } else {
             let p_idx = tree.links[i].parent_index;
@@ -268,6 +277,112 @@ mod tests {
             tree.links[0].q_ddot.abs() > 1.0 && tree.links[0].q_ddot.is_finite(),
             "kök kilitli çocuğun torkuyla ivmelenmeli: {}",
             tree.links[0].q_ddot
+        );
+    }
+
+    /// The horizontal pendulum of `test_single_pendulum_aba`, reusable with any base setup.
+    /// Analytic joint acceleration under gravity `g`: torque `m·g·l` over `D = I_zz + m·l² = 2`.
+    fn horizontal_pendulum() -> ArticulatedTree {
+        let mut tree = ArticulatedTree::default();
+        tree.links.push(ArticulatedLink {
+            parent_index: usize::MAX,
+            joint_type: JointType::Revolute(Vec3::Z),
+            transform_to_parent: Vec3::ZERO,
+            rotation_to_parent: Quat::IDENTITY,
+            inertia: SpatialInertia::new(1.0, Mat3::IDENTITY, Vec3::new(0.0, -1.0, 0.0)),
+            q: std::f32::consts::PI / 2.0,
+            q_dot: 0.0,
+            q_ddot: 0.0,
+            joint_force: 0.0,
+            v: SpatialVector::ZERO,
+            a: SpatialVector::ZERO,
+            c: SpatialVector::ZERO,
+            i_a: SpatialMatrix::ZERO,
+            p_a: SpatialVector::ZERO,
+            S: SpatialVector::ZERO,
+            u: 0.0,
+            d_val: 0.0,
+            u_vec: SpatialVector::ZERO,
+        });
+        tree
+    }
+
+    const GRAVITY: Vec3 = Vec3::new(0.0, -9.81, 0.0);
+
+    /// A floating base does not mean a weightless one.
+    ///
+    /// `base_acceleration` used to *replace* the fictitious `-gravity` root acceleration
+    /// instead of adding to it, so the whole `gravity` argument was discarded for every
+    /// `is_fixed_base = false` tree: the default zero base acceleration left a pendulum
+    /// hanging in mid-air with `q̈ = 0`. Nothing in the workspace sets the flag, which is
+    /// why no test caught it.
+    ///
+    /// With the base at rest the tree is kinematically identical to the fixed-base one, so
+    /// the assertion is the strong form — the SAME analytic value, not merely non-zero.
+    #[test]
+    fn a_resting_floating_base_feels_gravity_like_a_fixed_one() {
+        let mut floating = horizontal_pendulum();
+        floating.is_fixed_base = false;
+        compute_aba(&mut floating, GRAVITY);
+
+        let mut fixed = horizontal_pendulum();
+        fixed.is_fixed_base = true;
+        compute_aba(&mut fixed, GRAVITY);
+
+        let expected = -9.81_f32 / 2.0; // m·g·l / (I_zz + m·l²)
+        assert!(
+            (floating.links[0].q_ddot - expected).abs() < 0.05,
+            "a floating-base pendulum must fall like any other: expected {expected}, got {} \
+             (0.0 is the pre-fix value — gravity was dropped entirely)",
+            floating.links[0].q_ddot
+        );
+        assert_eq!(
+            floating.links[0].q_ddot, fixed.links[0].q_ddot,
+            "a base at rest is not observable from joint space; the two paths must agree exactly"
+        );
+    }
+
+    /// …and the weightless case is still reachable — by a base that is actually in free fall.
+    ///
+    /// This is the discriminating half: it pins that `base_acceleration` is superposed on
+    /// gravity rather than ignored in the other direction. `-a_grav` is `(0, +g)`, the base
+    /// accelerating downwards at exactly g, which cancels the fictitious term.
+    ///
+    /// I expected this one to pass on the pre-fix code as well — weightless for the wrong
+    /// reason — and it does not, which is worth recording. Pre-fix this input made the root's
+    /// parent acceleration `-a_grav` rather than zero, and the pendulum swung UP: measured
+    /// `+4.9049997`, the exact negation of the correct `-4.905` fall. The old branch was not
+    /// merely dropping gravity — fed a non-zero base acceleration it inverted the response.
+    #[test]
+    fn a_base_in_free_fall_makes_the_tree_weightless() {
+        let mut tree = horizontal_pendulum();
+        tree.is_fixed_base = false;
+        // a_grav = (0, -gravity) = (0, +9.81); its negation is the base falling at g.
+        tree.base_acceleration = SpatialVector::new(Vec3::ZERO, GRAVITY);
+        compute_aba(&mut tree, GRAVITY);
+
+        assert!(
+            tree.links[0].q_ddot.abs() < 1e-4,
+            "a base falling at g leaves the joint weightless: got {}",
+            tree.links[0].q_ddot
+        );
+    }
+
+    /// The fixed-base branch keeps ignoring `base_acceleration`, which is what its doc
+    /// promises. Guards against "unify the two branches" as the tempting simplification.
+    #[test]
+    fn a_fixed_base_still_ignores_the_base_acceleration() {
+        let mut quiet = horizontal_pendulum();
+        compute_aba(&mut quiet, GRAVITY);
+
+        let mut driven = horizontal_pendulum();
+        driven.base_acceleration = SpatialVector::new(Vec3::new(3.0, -2.0, 1.0), Vec3::splat(7.0));
+        compute_aba(&mut driven, GRAVITY);
+
+        assert!(quiet.is_fixed_base && driven.is_fixed_base);
+        assert_eq!(
+            quiet.links[0].q_ddot, driven.links[0].q_ddot,
+            "a welded root cannot accelerate, so the field must stay unread on this branch"
         );
     }
 }

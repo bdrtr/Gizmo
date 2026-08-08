@@ -18,7 +18,8 @@
 //! - **Fixed-base only.** Floating-base integration is unfinished: the base
 //!   acceleration is not propagated back from the ABA passes (see
 //!   [`system::step_articulated_trees`]), so `is_fixed_base = false` trees do
-//!   not translate/rotate their root.
+//!   not translate/rotate their root. Their *joints* are solved correctly and
+//!   do feel gravity — that half was broken through 0.9.0 and is fixed.
 //!
 //! Wiring these into the engine (component + scheduled system + world-transform
 //! export + rigid-body collision coupling + floating base) is tracked as a
@@ -419,19 +420,23 @@ pub struct ArticulatedTree {
     ///
     /// A pure input on that path: the solver never writes it back, and
     /// [`system::step_articulated_trees`] does not integrate it into `base_velocity`.
-    /// It also *replaces* the gravity term rather than adding to it — the fictitious
-    /// `-gravity` root acceleration is applied on the fixed-base branch only — so
-    /// leaving this at zero means the tree feels no gravity at all, as if in free fall.
+    /// It is *superposed on* the gravity term, not a substitute for it — the fictitious
+    /// `-gravity` root acceleration is applied on both branches — so leaving this at zero
+    /// gives a floating-base tree the same joint accelerations a fixed-base one would have.
+    /// Set it to `(0, +gravity)`, i.e. a base in free fall, to get a weightless tree.
+    ///
+    /// Through 0.9.0 it *replaced* gravity: a floating-base tree left at the default zero was
+    /// weightless whatever the `gravity` argument said, and one given a non-zero base
+    /// acceleration got the response with gravity omitted entirely rather than superposed.
     pub base_acceleration: SpatialVector, // (w, v)
     /// `true` (and the `Default`) welds the root to the world: the base pose, velocity
     /// and acceleration fields are all ignored, and gravity enters as a fictitious
     /// `-gravity` acceleration at the root. This is the only fully implemented mode.
     ///
     /// `false` selects the unfinished floating-base path. `base_velocity` and
-    /// `base_acceleration` are then consumed as given, but nothing propagates the
-    /// resulting base acceleration back out, so the base never actually translates or
-    /// rotates and gravity is not applied for you — see `base_acceleration` and the
-    /// module docs.
+    /// `base_acceleration` are then consumed as given, and gravity still applies, but
+    /// nothing propagates the resulting base acceleration back out — so the base itself
+    /// never translates or rotates. See `base_acceleration` and the module docs.
     pub is_fixed_base: bool,
 }
 
