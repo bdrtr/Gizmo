@@ -8,8 +8,8 @@ use super::*;
 impl<'a> Commands<'a> {
     // ── GLTF Yükleme ─────────────────────────────────────────────────────────────────────────────
 
-    /// GLTF/GLB dosyasını yükler ve dünya içinde spawn eder.
-    /// Animasyon ve iskelet hiyerarşisi otomatik oluşturulur.
+    /// Loads a GLTF/GLB file and spawns it inside the world.
+    /// The animation and skeleton hierarchy are created automatically.
     pub fn spawn_gltf(
         &mut self,
         pos: Vec3,
@@ -106,7 +106,7 @@ impl<'a> Commands<'a> {
         }
     }
 
-    /// Asenkron GLTF yükleme tamamlandığında çağrılacak metot.
+    /// The method to be called when asynchronous GLTF loading completes.
     pub fn spawn_gltf_async_completed(
         &mut self,
         completion: gizmo_renderer::async_assets::GltfImportCompletion,

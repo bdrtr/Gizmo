@@ -18,17 +18,17 @@ use gizmo_math::Vec3;
 const EPA_TOLERANCE: f32 = 0.001;
 const EPA_MAX_ITERATIONS: usize = 32;
 
-/// GJK/EPA simpleksindeki tek bir köşe: Minkowski-fark noktası ve onu üreten
-/// her iki şekildeki destek (witness) noktaları. Witness'ler EPA sonunda doğru
-/// temas noktasını barycentric olarak geri kurmak için taşınır — aksi halde
-/// temas noktası yanlış özelliğe (ör. tekerlek merkezine) düşebiliyordu.
+/// A single vertex in the GJK/EPA simplex: the Minkowski-difference point and the support
+/// (witness) points on both shapes that produced it. The witnesses are carried so that the
+/// correct contact point can be reconstructed barycentrically at the end of EPA — otherwise
+/// the contact point could land on the wrong feature (e.g. the wheel centre).
 #[derive(Clone, Copy)]
 pub(crate) struct SupportPoint {
-    /// Minkowski farkı: support_a(d) - support_b(-d)
+    /// Minkowski difference: support_a(d) - support_b(-d)
     v: Vec3,
-    /// A şekli üzerindeki destek noktası (witness)
+    /// The support point on shape A (witness)
     a: Vec3,
-    /// B şekli üzerindeki destek noktası (witness)
+    /// The support point on shape B (witness)
     b: Vec3,
 }
 

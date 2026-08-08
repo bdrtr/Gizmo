@@ -69,7 +69,7 @@ impl PlaybackData {
 
 // ==================== FIGHTER INPUT BUFFER ====================
 
-/// Her frame için tuş durumlarını tutan yapı.
+/// The struct that holds the key states for each frame.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FrameActions {
     /// Action names held during this frame (level, not edge).
@@ -91,8 +91,9 @@ pub struct FrameActions {
     pub just_released: HashSet<String>,
 }
 
-/// Dövüş oyunları (Gizmo Fight) için özel olarak tasarlanmış Girdi Belleği (Input Buffer).
-/// Son N karedeki tüm tuş hareketlerini hafızada tutarak kombo (Hadouken vb.) algılamayı sağlar.
+/// An Input Buffer designed specifically for fighting games (Gizmo Fight).
+/// By holding all the key movements of the last N frames in memory, it enables combo
+/// (Hadouken etc.) detection.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FighterInputBuffer {
     /// Recorded frames, **newest first**: `frames[0]` is the frame most recently pushed by
@@ -119,7 +120,7 @@ pub struct FighterInputBuffer {
 }
 
 impl FighterInputBuffer {
-    /// 60 kare (1 saniye) standart bir buffer boyutu dövüş oyunları için idealdir.
+    /// 60 frames (1 second), a standard buffer size, is ideal for fighting games.
     pub fn new(max_frames: usize) -> Self {
         Self {
             frames: std::collections::VecDeque::with_capacity(max_frames),
@@ -127,7 +128,7 @@ impl FighterInputBuffer {
         }
     }
 
-    /// Her oyun karesinde çağrılıp buffer'ı günceller.
+    /// Called on every game frame and updates the buffer.
     pub fn update(&mut self, input: &Input, action_map: &ActionMap, actions_to_track: &[&str]) {
         let mut frame = FrameActions {
             pressed: HashSet::new(),
@@ -153,10 +154,10 @@ impl FighterInputBuffer {
         }
     }
 
-    /// Verilen kombo diziliminin son karelerde gerçekleşip gerçekleşmediğini kontrol eder.
-    /// `sequence`: Sırasıyla basılması gereken tuşlar dizisi. Örn: ["Down", "Right", "Punch"]
-    /// `max_gap`: İki tuş basımı arasında geçebilecek maksimum kare sayısı (Hata toleransı).
-    /// Dövüş oyunlarında genellikle 10-15 kare tolerans verilir.
+    /// Checks whether the given combo sequence took place in the last frames or not.
+    /// `sequence`: Sequence of keys that must be pressed in order. E.g.: ["Down", "Right", "Punch"]
+    /// `max_gap`: Maximum number of frames that may pass between two key presses (Error tolerance).
+    /// In fighting games a tolerance of 10-15 frames is usually given.
     pub fn check_combo_strict(&self, sequence: &[&str], max_gap: usize) -> bool {
         if sequence.is_empty() || self.frames.is_empty() {
             return false;

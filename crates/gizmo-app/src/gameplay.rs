@@ -42,9 +42,41 @@ pub fn register_gameplay_physics_systems(schedule: &mut Schedule) {
 /// Plugin that registers the gameplay physics systems (see
 /// [`register_gameplay_physics_systems`]).
 ///
-/// ```ignore
-/// let app = App::new("game", 1280, 720)
+/// ```
+/// use gizmo_app::gameplay::GameplayPhysicsPlugin;
+/// use gizmo_app::App;
+/// # use gizmo_core::entity::Entity;
+/// # use gizmo_core::world::World;
+/// # use gizmo_math::Vec3;
+/// # use gizmo_physics_core::components::CharacterController;
+/// # use gizmo_physics_core::{BoxShape, Collider, ColliderShape, Transform};
+/// # use gizmo_physics_rigid::components::Velocity;
+/// # fn spawn_character(world: &mut World, at: Vec3) -> Entity {
+/// #     let e = world.spawn();
+/// #     world.add_component(e, CharacterController::default());
+/// #     world.add_component(e, Transform::new(at));
+/// #     world.add_component(e, Velocity::default());
+/// #     world.add_component(e, Collider::from_shape(ColliderShape::Box(BoxShape {
+/// #         half_extents: Vec3::new(0.3, 0.9, 0.3),
+/// #     })));
+/// #     e
+/// # }
+/// let mut app = App::<()>::new("game", 1280, 720)
 ///     .add_plugin(GameplayPhysicsPlugin);
+/// # // `App::new` installs `setup_panic_hook`, which on a `window` build pops a BLOCKING
+/// # // rfd modal on any panic. Restore the default hook so a failed assert below reports
+/// # // as an ordinary doc-test failure instead of hanging `cargo test` on a dialog.
+/// # let _ = std::panic::take_hook();
+///
+/// // `character_controller_system` now runs in the app's physics phase, so driving
+/// // the schedule is enough to make a kinematic character with nothing under it fall.
+/// let player = spawn_character(&mut app.world, Vec3::new(0.0, 10.0, 0.0));
+/// for _ in 0..60 {
+///     app.schedule.run(&mut app.world, 1.0 / 60.0);
+/// }
+///
+/// let y = app.world.query::<&Transform>().unwrap().get(player.id()).unwrap().position.y;
+/// assert!(y < 10.0, "the registered controller must have applied its gravity");
 /// ```
 #[derive(Debug, Default, Clone, Copy)]
 pub struct GameplayPhysicsPlugin;

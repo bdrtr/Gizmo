@@ -10,33 +10,33 @@
 //! capped at `max_dt` — or an independently measured one is the caller's choice, not
 //! something decided here.
 
-/// Motor genelinde zaman yönetimi.
+/// Engine-wide time management.
 ///
-/// # Kullanım
+/// # Usage
 /// ```
 /// use gizmo_core::time::Time;
 ///
 /// let mut time = Time::new();
 ///
-/// // Her frame başında:
+/// // At the start of every frame:
 /// time.update(1.0 / 60.0);
 ///
 /// assert_eq!(time.frame(), 1);
 /// assert!((time.dt() - 1.0 / 60.0).abs() < 1e-6);
 /// assert!((time.raw_dt() - 1.0 / 60.0).abs() < 1e-6);
 ///
-/// // Zaman ölçeği dt'yi ölçekler, raw_dt'yi ETKİLEMEZ.
+/// // The time scale scales dt and does NOT affect raw_dt.
 /// time.set_time_scale(0.5); // slow motion
 /// time.update(1.0 / 60.0);
 /// assert!((time.dt() - 0.5 / 60.0).abs() < 1e-6);
 /// assert!((time.raw_dt() - 1.0 / 60.0).abs() < 1e-6);
 ///
-/// time.set_time_scale(0.0); // pause: dt sıfırlanır, frame saymaya devam eder
+/// time.set_time_scale(0.0); // pause: dt goes to zero, the frame counter keeps running
 /// time.update(1.0 / 60.0);
 /// assert_eq!(time.dt(), 0.0);
 /// assert_eq!(time.frame(), 3);
 ///
-/// // Uzun bir takılma (spike) clamp'lenir — fizik tek karede patlamasın.
+/// // A long stall (spike) is clamped — so physics does not explode in a single frame.
 /// time.set_time_scale(1.0);
 /// time.update(5.0);
 /// assert!(time.dt() <= 0.05 + 1e-6, "dt max_dt'ye clamp'lenmeli");
@@ -44,21 +44,21 @@
 /// ```
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Time {
-    /// Clamped delta time (saniye). `time_scale` uygulanmış.
+    /// Clamped delta time (seconds). `time_scale` applied.
     dt: f32,
-    /// Ham (raw) delta time — clamp ve scale uygulanmamış.
+    /// Raw delta time — clamp and scale not applied.
     raw_dt: f32,
-    /// Toplam geçen süre (saniye, f64 hassasiyetinde).
+    /// Total elapsed time (seconds, at f64 precision).
     elapsed: f64,
-    /// Frame sayacı.
+    /// Frame counter.
     frame_count: u64,
-    /// Zaman ölçeği. 1.0 = normal, 0.5 = slow motion, 0.0 = pause.
+    /// Time scale. 1.0 = normal, 0.5 = slow motion, 0.0 = pause.
     time_scale: f32,
-    /// Maksimum dt cap (saniye). Varsayılan: 1/20 = 50ms.
+    /// Maximum dt cap (seconds). Default: 1/20 = 50ms.
     max_dt: f32,
 }
 
-/// Varsayılan max dt: 50ms (20 FPS minimum).
+/// Default max dt: 50ms (20 FPS minimum).
 const DEFAULT_MAX_DT: f32 = 1.0 / 20.0;
 
 impl Time {
@@ -80,8 +80,8 @@ impl Time {
         }
     }
 
-    /// Ham dt'yi alır, clamp + scale uygular ve tüm zamansal değerleri günceller.
-    /// Her frame başında bir kez çağrılmalıdır.
+    /// Takes the raw dt, applies clamp + scale and updates all time values.
+    /// Must be called once at the start of every frame.
     pub fn update(&mut self, raw_dt: f32) {
         self.raw_dt = raw_dt.max(0.0); // Negatif dt'yi engelle
         self.dt = (self.raw_dt * self.time_scale).min(self.max_dt);
@@ -91,40 +91,40 @@ impl Time {
 
     // ──── Getter'lar ────
 
-    /// Clamped ve scaled delta time (saniye).
-    /// Fizik, hareket, animasyon gibi sistemler bunu kullanmalıdır.
+    /// Clamped and scaled delta time (seconds).
+    /// Systems such as physics, movement and animation should use this.
     #[inline]
     pub fn dt(&self) -> f32 {
         self.dt
     }
 
-    /// Ham (raw) delta time — clamp ve scale uygulanmamış.
-    /// Gerçek wall-clock zamanına ihtiyaç duyan sistemler için (ör: FPS sayacı).
+    /// Raw delta time — clamp and scale not applied.
+    /// For systems that need real wall-clock time (e.g. the FPS counter).
     #[inline]
     pub fn raw_dt(&self) -> f32 {
         self.raw_dt
     }
 
-    /// Toplam geçen süre (saniye, f64 hassasiyetinde).
-    /// Uzun oturumlarda bile hassasiyetini korur.
+    /// Total elapsed time (seconds, at f64 precision).
+    /// Retains its precision even in long sessions.
     #[inline]
     pub fn elapsed(&self) -> f64 {
         self.elapsed
     }
 
-    /// Toplam frame sayısı.
+    /// Total frame count.
     #[inline]
     pub fn frame(&self) -> u64 {
         self.frame_count
     }
 
-    /// Mevcut zaman ölçeği.
+    /// Current time scale.
     #[inline]
     pub fn time_scale(&self) -> f32 {
         self.time_scale
     }
 
-    /// Mevcut FPS (1/raw_dt). raw_dt = 0 ise 0.0 döner.
+    /// Current FPS (1/raw_dt). Returns 0.0 if raw_dt = 0.
     #[inline]
     pub fn fps(&self) -> f32 {
         if self.raw_dt > 0.0 {
@@ -136,12 +136,12 @@ impl Time {
 
     // ──── Setter'lar ────
 
-    /// Zaman ölçeğini ayarlar. 0.0 = durdur, 0.5 = ağır çekim, 1.0 = normal, 2.0 = hızlı.
+    /// Sets the time scale. 0.0 = stop, 0.5 = slow motion, 1.0 = normal, 2.0 = fast.
     pub fn set_time_scale(&mut self, scale: f32) {
         self.time_scale = scale.max(0.0);
     }
 
-    /// Maksimum dt cap'ini ayarlar (saniye).
+    /// Sets the maximum dt cap (seconds).
     pub fn set_max_dt(&mut self, max: f32) {
         self.max_dt = max.max(0.001); // En az ~1ms
     }
@@ -188,23 +188,23 @@ impl Default for Time {
 /// spiral of death where each catch-up frame costs more than it recovers.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct PhysicsTime {
-    /// Sabit fizik zaman adımı (saniye). Varsayılan: 1/60.
+    /// Fixed physics timestep (seconds). Default: 1/60.
     fixed_dt: f32,
-    /// Birikmiş süre — henüz fizik adımı olarak harcanmamış zaman.
+    /// Accumulated time — time not yet spent as a physics step.
     accumulator: f32,
-    /// Maksimum birikim limiti (spiral of death koruması).
+    /// Maximum accumulation limit (spiral of death protection).
     max_accumulator: f32,
-    /// Toplam fizik adım sayısı.
+    /// Total physics step count.
     step_count: u64,
-    /// Toplam fizik süresi (f64 hassasiyetinde).
+    /// Total physics time (at f64 precision).
     physics_elapsed: f64,
-    /// İnterpolasyon katsayısı: 0.0..1.0 arası.
-    /// Render sırasında `lerp(prev_state, curr_state, alpha)` için kullanılır.
+    /// Interpolation coefficient: between 0.0..1.0.
+    /// Used during rendering for `lerp(prev_state, curr_state, alpha)`.
     alpha: f32,
 }
 
 impl PhysicsTime {
-    /// Yeni PhysicsTime oluşturur. `hz` = fizik güncellenme hızı (örn: 60, 120, 240).
+    /// Creates a new PhysicsTime. `hz` = physics update rate (e.g. 60, 120, 240).
     pub fn new(hz: u32) -> Self {
         let fixed_dt = 1.0 / hz as f32;
         Self {
@@ -217,8 +217,8 @@ impl PhysicsTime {
         }
     }
 
-    /// Render frame dt'sini biriktiriciye ekler.
-    /// Her frame başında bir kez çağrılır.
+    /// Adds the render frame dt to the accumulator.
+    /// Called once at the start of every frame.
     pub fn accumulate(&mut self, render_dt: f32) {
         self.accumulator += render_dt;
         // Spiral of death koruması
@@ -227,54 +227,54 @@ impl PhysicsTime {
         }
     }
 
-    /// Bir fizik adımı için yeterli süre birikmiş mi?
+    /// Has enough time accumulated for one physics step?
     #[inline]
     pub fn should_step(&self) -> bool {
         self.accumulator >= self.fixed_dt
     }
 
-    /// Bir fizik adımını "tüketir" — accumulator'dan fixed_dt düşer.
-    /// Her fizik step'inden sonra çağrılır.
+    /// "Consumes" one physics step — subtracts fixed_dt from the accumulator.
+    /// Called after every physics step.
     pub fn consume_step(&mut self) {
         self.accumulator -= self.fixed_dt;
         self.step_count += 1;
         self.physics_elapsed += self.fixed_dt as f64;
     }
 
-    /// İnterpolasyon alpha'sını hesaplar.
-    /// Tüm fizik adımları bittikten sonra, render'dan önce çağrılır.
+    /// Computes the interpolation alpha.
+    /// Called after all physics steps are finished, before rendering.
     pub fn compute_alpha(&mut self) {
         self.alpha = self.accumulator / self.fixed_dt;
     }
 
     // ──── Getter'lar ────
 
-    /// Sabit fizik dt'si (saniye).
+    /// Fixed physics dt (seconds).
     #[inline]
     pub fn fixed_dt(&self) -> f32 {
         self.fixed_dt
     }
 
-    /// İnterpolasyon katsayısı (0.0 .. 1.0).
+    /// Interpolation coefficient (0.0 .. 1.0).
     /// `render_pos = lerp(prev_physics_pos, curr_physics_pos, alpha)`
     #[inline]
     pub fn alpha(&self) -> f32 {
         self.alpha
     }
 
-    /// Toplam fizik adım sayısı.
+    /// Total physics step count.
     #[inline]
     pub fn step_count(&self) -> u64 {
         self.step_count
     }
 
-    /// Toplam fizik süresi (f64 hassasiyetinde).
+    /// Total physics time (at f64 precision).
     #[inline]
     pub fn physics_elapsed(&self) -> f64 {
         self.physics_elapsed
     }
 
-    /// Birikmiş süre (debug amaçlı).
+    /// Accumulated time (for debugging purposes).
     #[inline]
     pub fn accumulator(&self) -> f32 {
         self.accumulator
@@ -282,7 +282,7 @@ impl PhysicsTime {
 
     // ──── Setter'lar ────
 
-    /// Fizik hızını değiştirir (Hz). Dikkat: birikmiş süre sıfırlanmaz.
+    /// Changes the physics rate (Hz). Caution: accumulated time is not reset.
     pub fn set_hz(&mut self, hz: u32) {
         self.fixed_dt = 1.0 / hz.max(1) as f32;
         self.max_accumulator = self.fixed_dt * 8.0;

@@ -1,7 +1,7 @@
 use super::World;
 
 impl World {
-    /// Belirli bir Archetype içindeki iki satırı güvenli bir şekilde takaslar ve entity lokasyonlarını günceller.
+    /// Safely swaps two rows inside a given Archetype and updates the entity locations.
     pub fn swap_archetype_rows(&mut self, arch_id: u32, row_a: usize, row_b: usize) {
         if row_a == row_b {
             return;
@@ -24,7 +24,7 @@ impl World {
         self.entity_locations[entity_b as usize].row = row_a as u32;
     }
 
-    /// Aynı archetype'da bulunan ebeveyn ve çocuk düğümleri bellekte sırt sırta verecek şekilde kümelendirir. O(N) cache swap.
+    /// Clusters parent and child nodes that are in the same archetype so that they sit back to back in memory. O(N) cache swap.
     pub fn sort_archetype_hierarchy(&mut self) {
         let type_id = std::any::TypeId::of::<crate::component::Children>();
         let mut arches_to_sort: Vec<usize> = Vec::new();

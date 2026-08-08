@@ -15,15 +15,33 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
-/// Ergonomik input soyutlama katmanı.
+/// Ergonomic input abstraction layer.
 ///
-/// Kullanım:
-/// ```rust,ignore
-/// if input.is_key_pressed(KeyCode::KeyW as u32) { /* ileri git */ }
-/// if input.is_key_just_pressed(KeyCode::Space as u32) { /* zıpla (tek sefer) */ }
-/// if input.is_mouse_button_pressed(mouse::LEFT) { /* ateş et */ }
-/// let (dx, dy) = input.mouse_delta(); /* fare hareketi */
-/// let scroll = input.mouse_scroll(); /* tekerlek */
+/// Usage:
+/// ```
+/// use gizmo_core::prelude::*;
+/// // Key codes are the caller's convention — on desktop, winit's `KeyCode as u32`.
+/// # enum KeyCode { KeyW = 17, Space = 57 }
+///
+/// // The platform layer forwards the events:
+/// let mut input = Input::new();
+/// input.on_key_pressed(KeyCode::KeyW as u32);
+/// input.on_key_pressed(KeyCode::Space as u32);
+/// input.on_mouse_button_pressed(mouse::LEFT);
+/// input.on_mouse_delta(3.0, -2.0);
+/// input.on_mouse_scroll(1.0);
+///
+/// assert!(input.is_key_pressed(KeyCode::KeyW as u32)); // ileri git
+/// assert!(input.is_key_just_pressed(KeyCode::Space as u32)); // jump (one-shot)
+/// assert!(input.is_mouse_button_pressed(mouse::LEFT)); // fire
+/// assert_eq!(input.mouse_delta(), (3.0, -2.0)); // fare hareketi
+/// assert_eq!(input.mouse_scroll(), 1.0); // tekerlek
+///
+/// // `begin_frame` only clears the edge-triggered queries; a held key stays held.
+/// input.begin_frame();
+/// assert!(input.is_key_pressed(KeyCode::KeyW as u32));
+/// assert!(!input.is_key_just_pressed(KeyCode::Space as u32));
+/// assert_eq!(input.mouse_delta(), (0.0, 0.0));
 /// ```
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Input {
@@ -70,13 +88,14 @@ impl Input {
 
     // ==================== FRAME YAŞAM DÖNGÜSÜ ====================
 
-    /// Her frame başında çağrılmalı — "just pressed/released" setlerini temizler
-    /// ve deferred tuş bırakmalarını gerçekleştirir.
+    /// Must be called at the start of every frame — clears the "just pressed/released" sets
+    /// and performs the deferred key releases.
     ///
-    /// Mantık:
-    /// - `on_key_released()` aynı frame'de basılıp bırakılan tuşlar için `keys_pressed`'den
-    ///   silmeyi erteliyordu (fast-tap koruması). `begin_frame()` bu deferred silmeleri gerçekleştirir.
-    /// - Ardından just_pressed ve just_released setleri temizlenir, fare deltaları sıfırlanır.
+    /// Logic:
+    /// - `on_key_released()` has deferred the removal from `keys_pressed` for keys pressed
+    ///   and released in the same frame (fast-tap protection). `begin_frame()` performs
+    ///   these deferred removals.
+    /// - Then the just_pressed and just_released sets are cleared, the mouse deltas are zeroed.
     pub fn begin_frame(&mut self) {
         // Deferred removal: aynı frame'de basılıp bırakılan tuşları artık kaldır
         for k in &self.keys_just_released {
@@ -96,12 +115,12 @@ impl Input {
 
     // ==================== TUŞ GİRDİSİ ====================
 
-    /// Basılı tüm tuşları döndürür (Debug için)
+    /// Returns all pressed keys (for Debug)
     pub fn pressed_keys(&self) -> Vec<u32> {
         self.keys_pressed.iter().copied().collect()
     }
 
-    /// Tuş basıldığında çağır (winit KeyCode'un scan code'u)
+    /// Call when a key is pressed (winit KeyCode's scan code)
     pub fn on_key_pressed(&mut self, key: u32) {
         // Cancel a pending fast-tap deferral: if the key was released and re-pressed
         // within the SAME frame, `begin_frame` would otherwise honor the earlier
@@ -113,11 +132,12 @@ impl Input {
         }
     }
 
-    /// Tuş bırakıldığında çağır.
+    /// Call when a key is released.
     ///
-    /// Eğer tuş aynı frame'de basılıp bırakıldıysa (`keys_just_pressed` içindeyse),
-    /// `keys_pressed`'den silmeyi `begin_frame()`'e erteler. Böylece oyun bu "fast tap"ı
-    /// kaçırmaz — hem `is_key_pressed` hem `is_key_just_pressed` o frame boyunca true döner.
+    /// If the key was pressed and released in the same frame (if it is in `keys_just_pressed`),
+    /// it defers the removal from `keys_pressed` to `begin_frame()`. This way the game does not
+    /// miss this "fast tap" — both `is_key_pressed` and `is_key_just_pressed` return true
+    /// throughout that frame.
     pub fn on_key_released(&mut self, key: u32) {
         self.keys_just_released.insert(key);
         if !self.keys_just_pressed.contains(&key) {
@@ -127,17 +147,18 @@ impl Input {
         // else: fast-tap — begin_frame()'de silinecek
     }
 
-    /// Basılı tüm tuş ve fare düğmelerini bırakılmış sayar (odak kaybı için).
+    /// Counts all pressed keys and mouse buttons as released (for focus loss).
     ///
-    /// Pencere/canvas odağı kaybettiğinde (Alt-Tab, tarayıcı sekmesi değişimi)
-    /// işletim sistemi artık key-up olayı GÖNDERMEZ → o an basılı olan tuşlar
-    /// sonsuza dek "basılı" kalır ve kamera/karakter kayıp gider. Bu, tüm
-    /// basılı durumları temizler; hâlâ fiziksel olarak basılı bir tuş, odak
-    /// geri gelince yeni bir key-down ile yeniden kaydolur.
+    /// When the window/canvas loses focus (Alt-Tab, browser tab change) the
+    /// operating system NO LONGER SENDS a key-up event → the keys pressed at
+    /// that moment stay "pressed" forever and the camera/character drifts
+    /// away. This clears all pressed states; a key that is still physically
+    /// pressed registers again with a new key-down when focus comes back.
     ///
-    /// Henüz tüketilmemiş "just pressed" kenarları da iptal edilir — bu frame'de basılan
-    /// bir tuş odak kaybından sonra tek-seferlik aksiyonu (zıplama/ateş) tetiklemez.
-    /// Bırakma kenarı (`is_key_just_released`) ise raporlanır: metodun amacı budur.
+    /// Not-yet-consumed "just pressed" edges are cancelled too — a key pressed on this frame
+    /// does not trigger the one-shot action (jump/fire) after the focus loss.
+    /// The release edge (`is_key_just_released`), on the other hand, is reported: that is the
+    /// method's purpose.
     pub fn release_all(&mut self) {
         for k in self.keys_pressed.drain() {
             self.keys_just_released.insert(k);
@@ -163,19 +184,19 @@ impl Input {
         self.mouse_scroll_delta = 0.0;
     }
 
-    /// Tuş şu an basılı mı? (sürekli kontrol)
+    /// Is the key pressed right now? (continuous check)
     #[inline]
     pub fn is_key_pressed(&self, key: u32) -> bool {
         self.keys_pressed.contains(&key)
     }
 
-    /// Tuş bu frame'de mi basıldı? (tek seferlik tetikleme)
+    /// Was the key pressed on this frame? (one-shot trigger)
     #[inline]
     pub fn is_key_just_pressed(&self, key: u32) -> bool {
         self.keys_just_pressed.contains(&key)
     }
 
-    /// Tuş bu frame'de mi bırakıldı?
+    /// Was the key released on this frame?
     #[inline]
     pub fn is_key_just_released(&self, key: u32) -> bool {
         self.keys_just_released.contains(&key)
@@ -183,7 +204,7 @@ impl Input {
 
     // ==================== FARE GİRDİSİ ====================
 
-    /// Fare butonu basıldığında çağır (0=Left, 1=Right, 2=Middle)
+    /// Call when a mouse button is pressed (0=Left, 1=Right, 2=Middle)
     pub fn on_mouse_button_pressed(&mut self, button: u32) {
         // See `on_key_pressed`: a re-press cancels a same-frame fast-tap deferral.
         self.mouse_buttons_just_released.remove(&button);
@@ -192,7 +213,7 @@ impl Input {
         }
     }
 
-    /// Fare butonu bırakıldığında çağır
+    /// Call when a mouse button is released
     pub fn on_mouse_button_released(&mut self, button: u32) {
         self.mouse_buttons_just_released.insert(button);
         if !self.mouse_buttons_just_pressed.contains(&button) {
@@ -200,19 +221,19 @@ impl Input {
         }
     }
 
-    /// Fare butonu basılı mı?
+    /// Is the mouse button pressed?
     #[inline]
     pub fn is_mouse_button_pressed(&self, button: u32) -> bool {
         self.mouse_buttons_pressed.contains(&button)
     }
 
-    /// Fare butonu bu frame'de mi basıldı?
+    /// Was the mouse button pressed on this frame?
     #[inline]
     pub fn is_mouse_button_just_pressed(&self, button: u32) -> bool {
         self.mouse_buttons_just_pressed.contains(&button)
     }
 
-    /// Fare butonu bu frame'de mi bırakıldı?
+    /// Was the mouse button released on this frame?
     #[inline]
     pub fn is_mouse_button_just_released(&self, button: u32) -> bool {
         self.mouse_buttons_just_released.contains(&button)
@@ -220,39 +241,39 @@ impl Input {
 
     // ==================== FARE POZİSYONU ====================
 
-    /// Fare ekran pozisyonu değiştiğinde çağır.
-    /// Pozisyon farkından delta biriktirilir — `DeviceEvent::MouseMotion`
-    /// olmayan platformlarda (web, bazı Linux konfigürasyonları) fallback sağlar.
+    /// Call when the mouse screen position changes.
+    /// The delta is accumulated from the position difference — it provides a fallback on
+    /// platforms without `DeviceEvent::MouseMotion` (web, some Linux configurations).
     pub fn on_mouse_moved(&mut self, x: f32, y: f32) {
         self.mouse_delta.0 += x - self.mouse_position.0;
         self.mouse_delta.1 += y - self.mouse_position.1;
         self.mouse_position = (x, y);
     }
 
-    /// Fare ekran pozisyonunu günceller — delta BİRİKTİRMEZ.
-    /// `DeviceEvent::MouseMotion` sağlayan platformlarda (masaüstü) delta o kanaldan
-    /// (`on_mouse_delta`) gelir; `CursorMoved` yalnızca mutlak pozisyonu taşımalı,
-    /// aksi halde ikisi birden delta'yı İKİ KEZ sayar (2× fare-bakış hassasiyeti).
+    /// Updates the mouse screen position — DOES NOT ACCUMULATE a delta.
+    /// On platforms that provide `DeviceEvent::MouseMotion` (desktop) the delta comes from
+    /// that channel (`on_mouse_delta`); `CursorMoved` must carry only the absolute position,
+    /// otherwise the two of them together count the delta TWICE (2× mouse-look sensitivity).
     pub fn set_mouse_position(&mut self, x: f32, y: f32) {
         self.mouse_position = (x, y);
     }
 
-    /// Fare delta hareketi (DeviceEvent::MouseMotion).
-    /// `on_mouse_moved` zaten delta biriktirdiği için, bu metot yalnızca
-    /// platform `DeviceEvent::MouseMotion` veriyorsa ek doğruluk sağlar.
-    /// İkisi birlikte çağrılmamalı — platform'a göre birini kullanın.
+    /// Mouse delta movement (DeviceEvent::MouseMotion).
+    /// Since `on_mouse_moved` already accumulates the delta, this method only
+    /// provides extra accuracy if the platform supplies `DeviceEvent::MouseMotion`.
+    /// The two must not be called together — use one of them according to the platform.
     pub fn on_mouse_delta(&mut self, dx: f32, dy: f32) {
         self.mouse_delta.0 += dx;
         self.mouse_delta.1 += dy;
     }
 
-    /// Fare ekran pozisyonu
+    /// Mouse screen position
     #[inline]
     pub fn mouse_position(&self) -> (f32, f32) {
         self.mouse_position
     }
 
-    /// Bu frame'deki fare hareketi (delta)
+    /// The mouse movement on this frame (delta)
     #[inline]
     pub fn mouse_delta(&self) -> (f32, f32) {
         self.mouse_delta
@@ -260,14 +281,14 @@ impl Input {
 
     // ==================== FARE TEKERLEK (SCROLL) ====================
 
-    /// Fare tekerleği hareket ettiğinde çağır.
-    /// Pozitif = yukarı/ileri, negatif = aşağı/geri.
+    /// Call when the mouse wheel moves.
+    /// Positive = up/forward, negative = down/back.
     pub fn on_mouse_scroll(&mut self, delta: f32) {
         self.mouse_scroll_delta += delta;
     }
 
-    /// Bu frame'deki fare tekerlek deltası.
-    /// Pozitif = yukarı/ileri, negatif = aşağı/geri.
+    /// The mouse wheel delta on this frame.
+    /// Positive = up/forward, negative = down/back.
     #[inline]
     pub fn mouse_scroll(&self) -> f32 {
         self.mouse_scroll_delta
@@ -280,7 +301,7 @@ impl Default for Input {
     }
 }
 
-/// Fare buton sabitleri
+/// Mouse button constants
 ///
 /// The canonical codes for the three standard mouse buttons — the names to use on both sides
 /// of the API rather than writing the literals.
@@ -471,14 +492,14 @@ mod tests {
         assert!(input.is_key_just_released(65));
     }
 
-    /// Odak kaybı BEKLEYEN basma kenarlarını da iptal etmeli, yalnız basılı durumu değil.
+    /// Focus loss must cancel PENDING press edges too, not just the pressed state.
     ///
-    /// `begin_frame()` frame'in SONUNDA çağrılıyor (gizmo-app windowed/event.rs:692), bu
-    /// yüzden "key-down, ardından `Focused(false)`" dizisinde tuş bir sonraki frame'in
-    /// sistemleri koştuğunda hâlâ `keys_just_pressed` içindeydi: pencerenin kaybedildiği
-    /// frame'de zıplama/ateş tetikleniyordu. Ayrıca `just_pressed == true` iken
-    /// `pressed == false` bırakıyordu — başka hiçbir yolun üretemeyeceği bir durum
-    /// (fast-tap ertelemesinde tuş `keys_pressed`'de KALIR, bkz. yukarıdaki test).
+    /// `begin_frame()` is called at the END of the frame (gizmo-app windowed/event.rs:692), so
+    /// in the "key-down, then `Focused(false)`" sequence the key was still inside
+    /// `keys_just_pressed` when the next frame's systems ran: jump/fire was being triggered on
+    /// the frame where the window was lost. Moreover, while `just_pressed == true` it left
+    /// `pressed == false` — a state no other path could produce (in the fast-tap deferral the
+    /// key STAYS in `keys_pressed`, see the test above).
     #[test]
     fn release_all_cancels_pending_just_pressed_edges() {
         let mut input = Input::new();

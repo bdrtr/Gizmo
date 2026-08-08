@@ -1,14 +1,15 @@
-//! Bevy tarzı önceden tanımlanmış Bundle yapıları.
+//! Bevy-style predefined Bundle structures.
 //!
-//! Bir entity'ye birden fazla bileşeni tek seferde eklemek için kullanılır.
+//! Used to add more than one component to an entity in a single go.
 //!
-//! ```ignore
-//! world.spawn_bundle(CameraBundle {
-//!     position: Vec3::new(0.0, 3.0, 10.0),
-//!     fov: 60.0_f32.to_radians(),
-//!     ..default()
-//! });
-//! ```
+//! Working examples live on the bundles' own pages: `CameraBundle`, `MeshBundle`,
+//! `Prefab`.
+
+// The examples deliberately live on the items, not here: this module is gated
+// `any(render, physics)` while every individual bundle needs only one half of that gate, so a
+// module-level doctest naming any of them fails to compile under a single-feature build
+// (`--no-default-features --features physics`). On the item, the doctest is cfg'd out with the
+// item itself.
 
 use crate::core::{Bundle, Entity, EntityName, World};
 use crate::math::{Quat, Vec3, Vec4};
@@ -24,7 +25,7 @@ use crate::renderer::components::{
 //  DirectionalLightBundle
 // ============================================================
 
-/// Yönlü ışık (güneş) için hazır bundle.
+/// Ready-made bundle for a directional light (the sun).
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg(feature = "render")]
 pub struct DirectionalLightBundle {
@@ -67,7 +68,7 @@ impl Bundle for DirectionalLightBundle {
 //  PointLightBundle
 // ============================================================
 
-/// Nokta ışığı için hazır bundle.
+/// Ready-made bundle for a point light.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg(feature = "render")]
 pub struct PointLightBundle {
@@ -107,7 +108,7 @@ impl Bundle for PointLightBundle {
 //  SpotLightBundle
 // ============================================================
 
-/// Spot ışığı için hazır bundle.
+/// Ready-made bundle for a spot light.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg(feature = "render")]
 pub struct SpotLightBundle {
@@ -162,7 +163,23 @@ impl Bundle for SpotLightBundle {
 //  CameraBundle
 // ============================================================
 
-/// Kamera için hazır bundle.
+/// Ready-made bundle for a camera.
+///
+/// ```
+/// # use gizmo::prelude::*;
+/// # let mut world = World::new();
+/// let cam = world.spawn_bundle(CameraBundle {
+///     position: Vec3::new(0.0, 3.0, 10.0),
+///     fov: 60.0_f32.to_radians(),
+///     ..Default::default()
+/// });
+/// // A single call attaches Transform + GlobalTransform + Camera together.
+/// assert_eq!(
+///     world.borrow::<Transform>().get_entity(cam).unwrap().position,
+///     Vec3::new(0.0, 3.0, 10.0)
+/// );
+/// assert!(world.borrow::<Camera>().get_entity(cam).unwrap().primary);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg(feature = "render")]
 pub struct CameraBundle {
@@ -216,14 +233,27 @@ impl Bundle for CameraBundle {
 //  MeshBundle
 // ============================================================
 
-/// Mesh + Material + MeshRenderer için hazır bundle.
+/// Ready-made bundle for Mesh + Material + MeshRenderer.
 ///
-/// ```ignore
-/// world.spawn_bundle(
-///     MeshBundle::new(renderer.create_cube(), my_material)
+/// `mesh`/`material` are each a [`Handle`](crate::core::asset::Handle) — not the mesh/material
+/// ITSELF: register it with [`Assets::add`](crate::core::asset::Assets::add) and give the
+/// returned handle here.
+///
+/// ```
+/// # use gizmo::prelude::*;
+/// # let mut world = World::new();
+/// # let cube: Handle<Mesh> = Handle::default();
+/// # let my_material: Handle<Material> = Handle::default();
+/// let player = world.spawn_bundle(
+///     MeshBundle::new(cube, my_material)
 ///         .with_name("Oyuncu")
 ///         .at(Vec3::new(0.0, 5.0, 0.0))
 /// );
+/// assert_eq!(
+///     world.borrow::<Transform>().get_entity(player).unwrap().position,
+///     Vec3::new(0.0, 5.0, 0.0)
+/// );
+/// assert_eq!(world.borrow::<EntityName>().get_entity(player).unwrap().0, "Oyuncu");
 /// ```
 #[cfg(feature = "render")]
 pub struct MeshBundle {
@@ -237,7 +267,7 @@ pub struct MeshBundle {
 
 #[cfg(feature = "render")]
 impl MeshBundle {
-    /// Yeni bir MeshBundle oluşturur (mesh ve material zorunlu).
+    /// Creates a new MeshBundle (mesh and material are mandatory).
     pub fn new(
         mesh: crate::core::asset::Handle<Mesh>,
         material: crate::core::asset::Handle<Material>,
@@ -252,25 +282,25 @@ impl MeshBundle {
         }
     }
 
-    /// Pozisyon ayarlar.
+    /// Sets the position.
     pub fn at(mut self, position: Vec3) -> Self {
         self.position = position;
         self
     }
 
-    /// Rotasyon ayarlar.
+    /// Sets the rotation.
     pub fn with_rotation(mut self, rotation: Quat) -> Self {
         self.rotation = rotation;
         self
     }
 
-    /// Ölçek ayarlar.
+    /// Sets the scale.
     pub fn with_scale(mut self, scale: Vec3) -> Self {
         self.scale = scale;
         self
     }
 
-    /// İsim verir.
+    /// Gives a name.
     pub fn with_name(mut self, name: &str) -> Self {
         self.name = Some(name.to_string());
         self
@@ -306,8 +336,8 @@ use gizmo_physics_core::{BoxShape, Collider, ColliderShape};
 #[cfg(feature = "physics")]
 use gizmo_physics_rigid::components::{RigidBody, Velocity};
 
-/// Fizik nesnesi oluşturmak için sıfır-yük (zero-overhead) Bundle.
-/// Velocity veya Collider eklemeyi unutma hatalarını önler.
+/// Zero-overhead Bundle for creating a physics object.
+/// Prevents the mistakes of forgetting to add Velocity or Collider.
 #[cfg(feature = "physics")]
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct RigidBodyBundle {
@@ -363,53 +393,53 @@ impl RigidBodyBundle {
         self
     }
 
-    /// Fiziksel hava direnci (½·ρ·Cd·A·v²) açar → düşen/uçan cisim doğal terminal hıza
-    /// oturur. `cd` sürükleme katsayısı (küre ~0.47, küp ~1.05), `area` frontal alan (m²).
-    /// Örn: `RigidBodyBundle::dynamic(2.0).with_air_drag(0.47, 0.5)`.
+    /// Turns on physical air drag (½·ρ·Cd·A·v²) → a falling/flying body settles at its natural
+    /// terminal velocity. `cd` is the drag coefficient (sphere ~0.47, cube ~1.05), `area` the
+    /// frontal area (m²). E.g.: `RigidBodyBundle::dynamic(2.0).with_air_drag(0.47, 0.5)`.
     pub fn with_air_drag(mut self, cd: f32, area: f32) -> Self {
         self.rigid_body = self.rigid_body.with_air_drag(cd, area);
         self
     }
 
-    /// Collider'ın zıplaklığını (restitution) ayarlar.
-    /// Örn: `RigidBodyBundle::dynamic(1.0).with_collider(Collider::sphere(0.5)).with_restitution(0.9)`.
+    /// Sets the collider's bounciness (restitution).
+    /// E.g.: `RigidBodyBundle::dynamic(1.0).with_collider(Collider::sphere(0.5)).with_restitution(0.9)`.
     pub fn with_restitution(mut self, restitution: f32) -> Self {
         self.collider = self.collider.with_restitution(restitution);
         self
     }
 
-    /// Collider'ın sürtünmesini ayarlar (statik = dinamik).
+    /// Sets the collider's friction (static = dynamic).
     pub fn with_friction(mut self, friction: f32) -> Self {
         self.collider = self.collider.with_friction(friction);
         self
     }
 
-    /// Lineer + açısal sönümü ayarlar (kaba enerji kaybı). Gerçekçi hava direnci için
+    /// Sets linear + angular damping (coarse energy loss). For realistic air drag use
     /// `with_air_drag`.
     pub fn with_damping(mut self, linear: f32, angular: f32) -> Self {
         self.rigid_body = self.rigid_body.with_damping(linear, angular);
         self
     }
 
-    /// Yerçekimini aç/kapat.
+    /// Turn gravity on/off.
     pub fn with_gravity(mut self, enabled: bool) -> Self {
         self.rigid_body = self.rigid_body.with_gravity(enabled);
         self
     }
 
-    /// Kütle merkezini (gövde-yerel) ayarlar.
+    /// Sets the center of mass (body-local).
     pub fn with_center_of_mass(mut self, com: Vec3) -> Self {
         self.rigid_body = self.rigid_body.with_center_of_mass(com);
         self
     }
 
-    /// Üç dönme eksenini kilitler — cisim devrilmez (karakter, dik nesneler).
+    /// Locks the three rotation axes — the body does not topple (characters, upright objects).
     pub fn lock_rotation(mut self) -> Self {
         self.rigid_body = self.rigid_body.lock_rotation();
         self
     }
 
-    /// Başlangıç açısal hızı verir (rad/s).
+    /// Gives an initial angular velocity (rad/s).
     pub fn with_angular_velocity(mut self, angular: Vec3) -> Self {
         self.velocity.angular = angular;
         self
@@ -511,21 +541,25 @@ mod tests {
 //  Prefab — reusable spawn blueprint
 // ============================================================
 
-/// Yeniden kullanılabilir SPAWN BLUEPRINT'i: bir mesh + material + (opsiyonel) fizik
-/// gövdesini BİR KEZ tanımla, `transform`/renk ile ÇOK KEZ spawn'la — demoların her nesne
-/// için `spawn_bundle((Transform, mesh.clone(), material, MeshRenderer, RigidBodyBundle…))`
-/// zincirini elle tekrarlamasını önler. Mesh/Material Arc-destekli → klon ucuz.
+/// Reusable SPAWN BLUEPRINT: define a mesh + material + (optional) physics body ONCE, spawn it
+/// MANY TIMES with a `transform`/color — it prevents the demos from repeating the
+/// `spawn_bundle((Transform, mesh.clone(), material, MeshRenderer, RigidBodyBundle…))` chain by
+/// hand for every object. Mesh/Material are Arc-backed → clone is cheap.
 ///
-/// ```ignore
-/// // Bir kez tanımla (fizik config'i dahil):
+/// ```no_run
+/// # use gizmo::prelude::*;
+/// # fn build(renderer: &Renderer, stone_mat: Material, positions: Vec<Vec3>, color: Vec4) {
+/// # let mut world = World::new();
+/// // Define it once (physics config included):
 /// let block = Prefab::new(renderer.create_cube(), stone_mat)
 ///     .with_body(RigidBodyBundle::dynamic(1.0)
 ///         .with_collider(Collider::box_collider(Vec3::splat(0.5)))
 ///         .with_friction(0.85));
-/// // Çok kez spawn'la (yalnız konum + renk değişir):
+/// // Spawn it many times (only position + colour change):
 /// for pos in positions {
 ///     block.clone().with_pbr(color, 0.8, 0.05).spawn(&mut world, Transform::new(pos));
 /// }
+/// # }
 /// ```
 /// Reusable mesh+material(+body) template. Renderer-backed, hence gated on `render`;
 /// `RigidBodyBundle` above is the renderer-free half of this module.
@@ -535,14 +569,14 @@ pub struct Prefab {
     mesh: Mesh,
     material: Material,
     body: Option<RigidBodyBundle>,
-    /// `Some(base)` ise kutu collider'ı SPAWN anında `transform.scale · base`'den türetilir
-    /// (boyutu iki kez yazma). Bkz. [`auto_box_collider`](Self::auto_box_collider).
+    /// If `Some(base)`, the box collider is derived at SPAWN time from `transform.scale · base`
+    /// (don't write the size twice). See [`auto_box_collider`](Self::auto_box_collider).
     auto_box: Option<Vec3>,
 }
 
 #[cfg(all(feature = "render", feature = "physics"))]
 impl Prefab {
-    /// Görsel-only prefab (fizik yok). Fizik için [`with_body`](Self::with_body) zincirle.
+    /// Visual-only prefab (no physics). For physics, chain [`with_body`](Self::with_body).
     pub fn new(mesh: Mesh, material: Material) -> Self {
         Self {
             mesh,
@@ -552,51 +586,51 @@ impl Prefab {
         }
     }
 
-    /// Fizik gövdesi ekle (`RigidBodyBundle`: dynamic/static + collider + friction…). Prefab
-    /// klonlandığında gövde config'i de klonlanır (her instance kendi rigid body'sini alır).
+    /// Add a physics body (`RigidBodyBundle`: dynamic/static + collider + friction…). When the
+    /// prefab is cloned the body config is cloned too (each instance gets its own rigid body).
     pub fn with_body(mut self, body: RigidBodyBundle) -> Self {
         self.body = Some(body);
         self
     }
 
-    /// Material rengini/PBR'ını değiştir (per-instance tint — base texture korunur). Aynı
-    /// blueprint'i farklı renklerle spawn'lamak için `prefab.clone().with_pbr(...)`.
+    /// Change the material's color/PBR (per-instance tint — the base texture is preserved). To
+    /// spawn the same blueprint with different colors, `prefab.clone().with_pbr(...)`.
     pub fn with_pbr(mut self, albedo: Vec4, roughness: f32, metallic: f32) -> Self {
         self.material = self.material.clone().with_pbr(albedo, roughness, metallic);
         self
     }
 
-    /// Kutu collider'ını her spawn'da `transform.scale`'den türet (base = `Vec3::ONE`, mesh
-    /// yarı-genişliği == ölçek olan `create_cube` için) — böylece TEK blueprint her boyutta
-    /// bloğu kapsar ve boyutu iki kez yazmazsın. [`with_body`](Self::with_body)'deki
-    /// collider bir yer-tutucudur; spawn'da ölçeğe göre EZİLİR (material/friction korunur).
-    /// Prefab'ın gövdesi kutu-DIŞI bir collider'a set edilmişse yine kutuyla değiştirilir
-    /// (bu builder anlamca "bu prefab bir kutudur" der).
+    /// Derive the box collider from `transform.scale` on every spawn (base = `Vec3::ONE`, for
+    /// `create_cube`, whose mesh half-width == the scale) — so a SINGLE blueprint covers a block
+    /// of any size and you don't write the size twice. The collider in
+    /// [`with_body`](Self::with_body) is a placeholder; at spawn it is OVERWRITTEN according to
+    /// the scale (material/friction are preserved). If the prefab's body was set to a NON-box
+    /// collider it is still replaced with a box (this builder means "this prefab is a box").
     pub fn auto_box_collider(self) -> Self {
         self.auto_box_collider_scaled(Vec3::ONE)
     }
 
-    /// [`auto_box_collider`](Self::auto_box_collider) ama özel per-eksen taban çarpanıyla
-    /// (ör. 0.5-faktörlü mesh ailesi için `Vec3::splat(0.5)` → yarı-genişlik = ölçek/2).
+    /// [`auto_box_collider`](Self::auto_box_collider) but with a custom per-axis base multiplier
+    /// (e.g. `Vec3::splat(0.5)` for a 0.5-factor mesh family → half-width = scale/2).
     pub fn auto_box_collider_scaled(mut self, base: Vec3) -> Self {
         self.auto_box = Some(base);
         self
     }
 
-    /// Bir örnek `transform` konumunda spawn et; entity'yi döndür (ör. isim/işaret bileşeni
-    /// eklemek için).
+    /// Spawn one instance at the `transform` position; return the entity (e.g. to add a
+    /// name/marker component).
     pub fn spawn(&self, world: &mut World, transform: Transform) -> Entity {
         self.spawn_inner(world, transform, None)
     }
 
-    /// Kolaylık: verilen konumda (varsayılan rotasyon/ölçek) spawn et.
+    /// Convenience: spawn at the given position (default rotation/scale).
     pub fn spawn_at(&self, world: &mut World, position: Vec3) -> Entity {
         self.spawn(world, Transform::new(position))
     }
 
-    /// [`spawn`](Self::spawn) ama bu örneğe özel kütle ile — atalet, ölçekli kutu + yeni
-    /// kütleden otomatik yeniden türetilir. Aynı blueprint'ten farklı kütleli örnekler
-    /// (ör. hafif blok vs ağır kiriş) spawn'lamak için.
+    /// [`spawn`](Self::spawn) but with a mass specific to this instance — the inertia is
+    /// automatically re-derived from the scaled box + the new mass. For spawning instances of
+    /// differing mass from the same blueprint (e.g. a light block vs a heavy beam).
     pub fn spawn_with_mass(&self, world: &mut World, transform: Transform, mass: f32) -> Entity {
         self.spawn_inner(world, transform, Some(mass))
     }

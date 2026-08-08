@@ -28,8 +28,8 @@ use crossbeam_queue::SegQueue;
 
 type BoxedCommand = Box<dyn FnOnce(&mut World) + Send + Sync>;
 
-/// Otonom iterasyonlar ve sistemler içerisinden güvenli bir şekilde `World`e
-/// müdahale etmeyi (spawn, despawn, bileşen ekleme/çıkarma) sağlayan kilitsiz komut kuyruğu.
+/// The lock-free command queue that makes it possible to intervene in the `World` safely
+/// (spawn, despawn, adding/removing components) from within autonomous iterations and systems.
 #[derive(Default, Clone)]
 pub struct CommandQueue {
     queue: Arc<SegQueue<BoxedCommand>>,
@@ -92,7 +92,7 @@ impl CommandQueue {
     }
 }
 
-/// Sistem imzasında kullanılabilecek `Commands` parametresi.
+/// The `Commands` parameter that can be used in a system signature.
 pub struct Commands<'w> {
     /// Shared borrow of the world's [`CommandQueue`] resource — the sink every method on
     /// `Commands`/[`EntityCommands`] pushes into.
@@ -130,7 +130,7 @@ impl SystemParam for Commands<'static> {
 }
 
 impl<'w> Commands<'w> {
-    /// Yeni bir entity oluşturur ve onun üzerine eklentiler yapmak için `EntityCommands` döndürür.
+    /// Creates a new entity and returns an `EntityCommands` for making additions on top of it.
     pub fn spawn(&mut self) -> EntityCommands<'_, 'w> {
         let entity = self.entities.reserve_entity();
 
@@ -144,7 +144,7 @@ impl<'w> Commands<'w> {
         }
     }
 
-    /// Var olan bir entity üzerinde işlemler yapmak için `EntityCommands` alır.
+    /// Gets an `EntityCommands` for performing operations on an existing entity.
     pub fn entity(&mut self, entity: Entity) -> EntityCommands<'_, 'w> {
         EntityCommands {
             entity,
@@ -173,12 +173,13 @@ pub struct EntityCommands<'a, 'w> {
 }
 
 impl<'a, 'w> EntityCommands<'a, 'w> {
-    /// Bu komut tamponunun hedeflendiği native Entity ID'sini döndürür.
+    /// Returns the native Entity ID this command buffer is aimed at.
     pub fn id(&self) -> Entity {
         self.entity
     }
 
-    /// Entity'ye yeni bir bileşen ekler (Entity o an veya sonradan oluşur olsun fark etmez)
+    /// Adds a new component to the Entity (it makes no difference whether the Entity comes
+    /// into being at that moment or later)
     pub fn insert<T: Component>(&mut self, component: T) -> &mut Self {
         let e = self.entity;
         self.commands.queue.push(move |world| {
@@ -187,7 +188,7 @@ impl<'a, 'w> EntityCommands<'a, 'w> {
         self
     }
 
-    /// Entity'den bir bileşen çıkarır
+    /// Removes a component from the Entity
     pub fn remove<T: Component>(&mut self) -> &mut Self {
         let e = self.entity;
         self.commands.queue.push(move |world| {
@@ -196,7 +197,7 @@ impl<'a, 'w> EntityCommands<'a, 'w> {
         self
     }
 
-    /// Entity'yi tamamen yok eder
+    /// Destroys the Entity entirely
     pub fn despawn(&mut self) {
         let e = self.entity;
         self.commands.queue.push(move |world| {
@@ -204,7 +205,7 @@ impl<'a, 'w> EntityCommands<'a, 'w> {
         });
     }
 
-    /// Entity'yi ve altındaki tüm çocukları yok eder (recursive)
+    /// Destroys the Entity and all the children beneath it (recursive)
     pub fn despawn_recursive(&mut self) {
         use crate::hierarchy::HierarchyExt;
         let e = self.entity;
@@ -213,7 +214,7 @@ impl<'a, 'w> EntityCommands<'a, 'w> {
         });
     }
 
-    /// Bu entity'ye bir çocuk ekler
+    /// Adds a child to this entity
     pub fn add_child(&mut self, child: Entity) -> &mut Self {
         use crate::hierarchy::HierarchyExt;
         let p = self.entity;
@@ -223,7 +224,7 @@ impl<'a, 'w> EntityCommands<'a, 'w> {
         self
     }
 
-    /// Bu entity'den bir çocuğu koparır
+    /// Detaches a child from this entity
     pub fn remove_child(&mut self, child: Entity) -> &mut Self {
         use crate::hierarchy::HierarchyExt;
         let p = self.entity;

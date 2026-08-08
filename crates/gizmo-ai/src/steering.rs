@@ -452,8 +452,8 @@ mod tests {
     use super::*;
     use gizmo_math::Vec3;
 
-    /// Zero başlangıç hızıyla üretilen steering büyüklüğü, arzu edilen kaçış
-    /// hızının büyüklüğüne eşittir; bu yüzden farklı mesafeler farklı büyüklük vermelidir.
+    /// The steering magnitude produced with a zero initial velocity equals the magnitude of
+    /// the desired escape velocity; different distances must therefore give different magnitudes.
     #[test]
     fn avoid_obstacles_scales_with_proximity() {
         let obs = Vec3::ZERO;

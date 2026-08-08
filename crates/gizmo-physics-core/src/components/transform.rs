@@ -164,28 +164,28 @@ impl Transform {
         self.update_local_matrix();
     }
 
-    /// X ekseni etrafında döndürür (radyan).
+    /// Rotates around the X axis (radians).
     #[inline]
     pub fn rotate_x(&mut self, angle: f32) {
         self.rotation *= Quat::from_rotation_x(angle);
         self.update_local_matrix();
     }
 
-    /// Y ekseni etrafında döndürür (radyan).
+    /// Rotates around the Y axis (radians).
     #[inline]
     pub fn rotate_y(&mut self, angle: f32) {
         self.rotation *= Quat::from_rotation_y(angle);
         self.update_local_matrix();
     }
 
-    /// Z ekseni etrafında döndürür (radyan).
+    /// Rotates around the Z axis (radians).
     #[inline]
     pub fn rotate_z(&mut self, angle: f32) {
         self.rotation *= Quat::from_rotation_z(angle);
         self.update_local_matrix();
     }
 
-    /// Mevcut pozisyona bir delta ekler.
+    /// Adds a delta to the current position.
     #[inline]
     pub fn translate(&mut self, delta: Vec3) {
         self.position += delta;

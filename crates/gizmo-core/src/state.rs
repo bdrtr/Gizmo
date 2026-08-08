@@ -8,7 +8,7 @@
 //! [`in_state`] turns a state value into a run condition.
 use crate::world::World;
 
-/// Oyundaki mantıksal durumları yönetmek için kullanılan State yapısı.
+/// The State struct used to manage the logical states in the game.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct State<S: Clone + PartialEq + Eq + Send + Sync + 'static> {
     current: S,
@@ -60,7 +60,7 @@ impl<S: Clone + PartialEq + Eq + Send + Sync + 'static> State<S> {
         }
     }
 
-    /// Bir sonraki durumu aktif duruma geçirir. (Genellikle PreUpdate fazında çalıştırılır).
+    /// Switches the next state over to being the active one. (Usually run in the PreUpdate phase).
     pub fn apply_transitions(&mut self) -> bool {
         if let Some(next) = self.next.take() {
             self.current = next;
@@ -71,7 +71,7 @@ impl<S: Clone + PartialEq + Eq + Send + Sync + 'static> State<S> {
     }
 }
 
-/// Sistemin sadece belirli bir state'teyken çalışmasını sağlayan "Run Condition" fonksiyonu.
+/// The "Run Condition" function that makes a system run only while in a particular state.
 pub fn in_state<S>(state: S) -> impl FnMut(&World) -> bool + Send + Sync + 'static
 where
     S: Clone + PartialEq + Eq + Send + Sync + 'static,

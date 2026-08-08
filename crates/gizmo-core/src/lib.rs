@@ -105,7 +105,7 @@ pub type StorageView<'w, T> = crate::query::Query<'w, &'w T>;
 pub type StorageViewMut<'w, T> = crate::query::Query<'w, crate::query::Mut<'w, T>>;
 
 // ──── Prelude ────
-/// Tek bir `use gizmo_core::prelude::*;` ile tüm temel tiplere erişim.
+/// Access to all the basic types with a single `use gizmo_core::prelude::*;`.
 pub mod prelude {
     pub use super::input::mouse;
     pub use super::{

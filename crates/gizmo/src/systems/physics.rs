@@ -255,9 +255,10 @@ pub fn physics_debug_system(world: &crate::core::World) {
     }
 }
 
-/// ECS'deki yeni yaratılmış Fiziksel Objeleri (RigidBody + Transform + Collider)
-/// GPU Physics çekirdeğinin otoyoluna (GpuPhysicsSystem::spheres_buffer) kaydeder.
-/// Statik collider'lar için ayrı sayaç. İlk 3 slot başlangıç collider'larına ayrılmıştır.
+/// Registers the newly created Physical Objects in the ECS (RigidBody + Transform + Collider)
+/// onto the highway of the GPU Physics core (GpuPhysicsSystem::spheres_buffer).
+/// A separate counter for static colliders. The first 3 slots are reserved for the initial
+/// colliders.
 static NEXT_STATIC_COLLIDER_SLOT: std::sync::atomic::AtomicU32 =
     std::sync::atomic::AtomicU32::new(3);
 
@@ -366,8 +367,8 @@ pub fn gpu_physics_submit_system(world: &mut crate::core::World, renderer: &Rend
     }
 }
 
-/// GPU'dan Asenkron (0ms) çekilen devasa Fizik lokasyon durumlarını,
-/// Ekrandaki objelerin render edilmesi için ECS'deki Transform'larına kopyalar.
+/// Copies the enormous Physics location states pulled Asynchronously (0 ms) from the GPU
+/// into their Transforms in the ECS, so that the objects on screen can be rendered.
 #[cfg(feature = "render")]
 pub fn gpu_physics_readback_system(world: &mut crate::core::World, renderer: &Renderer) {
     if let Some(physics) = &renderer.gpu_physics {

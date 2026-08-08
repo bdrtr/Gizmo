@@ -6,13 +6,38 @@
 //! and applies those commands at a controlled point in the frame.
 //!
 //! ## Usage
-//! ```rust,ignore
+//! ```
+//! use gizmo_core::input::Input;
+//! use gizmo_core::World;
+//! use gizmo_math::Vec3;
+//! use gizmo_physics_core::Transform;
+//! use gizmo_scripting::ScriptEngine;
+//!
+//! let mut world = World::new();
+//! let player = world.spawn();
+//! world.add_component(player, Transform::new(Vec3::ZERO));
+//! # // Stand-in for `scripts/player.lua`, written where the doc test can read it:
+//! # //   function on_update(ctx) entity.set_position(<player>, 1, 2, 3) end
+//! # let script = std::env::temp_dir().join(format!("gizmo_doc_player_{}.lua", std::process::id()));
+//! # std::fs::write(
+//! #     &script,
+//! #     format!("function on_update(ctx)\n  entity.set_position({}, 1.0, 2.0, 3.0)\nend\n", player.id()),
+//! # )
+//! # .unwrap();
+//! # let script_path = script.to_string_lossy().into_owned();
+//!
 //! let mut script_engine = ScriptEngine::new().unwrap();
-//! script_engine.load_script("scripts/player.lua").unwrap();
+//! script_engine.load_script(&script_path).unwrap(); // e.g. "scripts/player.lua"
 //!
 //! // Each frame:
-//! script_engine.update(&world, &input, dt).unwrap();
-//! script_engine.flush_commands(&mut world);
+//! let (input, dt) = (Input::default(), 1.0 / 60.0);
+//! script_engine.update(&world, &input, dt).unwrap(); // runs `on_update`; commands are queued
+//! script_engine.flush_commands(&mut world, dt);      // the queue is applied to the World here
+//! # std::fs::remove_file(&script).ok();
+//!
+//! // Lua never touched the World itself — the command it enqueued did, at flush time.
+//! let pos = world.borrow::<Transform>().get(player.id()).unwrap().position;
+//! assert_eq!(pos, Vec3::new(1.0, 2.0, 3.0));
 //! ```
 //!
 //! ## Lua API surface

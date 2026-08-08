@@ -87,7 +87,7 @@ pub trait WorldQuery: sealed::SealedQuery {
     type Slice<'w>;
 
     /// # Safety
-    /// Archetype geçerli olmalı ve döndürülen fetch pointer'ı archetype'ın yaşam süresi boyunca geçerli kalmalıdır.
+    /// The archetype must be valid and the returned fetch pointer must stay valid for the whole lifetime of the archetype.
     unsafe fn fetch_raw<'w>(world: &'w World, arch: &Archetype, system_tick: u32) -> Option<Self::Fetch<'w>>;
 
     /// Appends this query's component access to `types` as `(TypeId, is_mut)` pairs, and
@@ -118,24 +118,24 @@ pub trait WorldQuery: sealed::SealedQuery {
     fn matches_archetype(arch: &Archetype) -> bool;
 
     /// # Safety
-    /// `row` değeri archetype'ın eleman sayısından küçük olmalıdır.
+    /// The `row` value must be smaller than the archetype's element count.
     unsafe fn get_item<'w>(fetch: Self::Fetch<'w>, row: usize, entity_id: u32) -> Self::Item<'w>;
 
     /// # Safety
-    /// Geçerli bir fetch ve archetype sınırları içinde bir `row` sağlanmalıdır.
+    /// A valid fetch and a `row` within the archetype's bounds must be supplied.
     unsafe fn filter_row<'w>(fetch: Self::Fetch<'w>, row: usize, entity_id: u32, system_tick: u32) -> bool;
 
     /// # Safety
-    /// `len` değeri archetype'ın eleman sayısını aşmamalıdır.
+    /// The `len` value must not exceed the archetype's element count.
     unsafe fn get_slice<'w>(fetch: Self::Fetch<'w>, len: usize) -> Self::Slice<'w>;
 
-    /// Bu query satır-başı (`filter_row`) daraltma GEREKTİRİYOR mu — yani
-    /// `matches_archetype` bilinçli olarak GENİŞ mi ve gerçek test `filter_row`'da mı?
-    /// SparseSet `With`/`Without` (matches her arketipte true) ile `Changed`/`Added`/`Or`
-    /// (doğası gereği satır-başı) için `true`. `iter_chunks` arketipin TÜM bitişik
-    /// dilimini döndürdüğünden bu filtreleri ONURLANDIRAMAZ → bu tür query'leri reddeder
-    /// (bkz. [`Query::iter_chunks`]). Tablo `With`/`Without` için `false` (matches_archetype
-    /// yeterli) → onlarla chunk iterasyonu güvenli.
+    /// Does this query REQUIRE per-row (`filter_row`) narrowing — that is, is
+    /// `matches_archetype` deliberately WIDE and the real test in `filter_row`?
+    /// `true` for SparseSet `With`/`Without` (matches is true on every archetype) and for
+    /// `Changed`/`Added`/`Or` (per-row by their nature). Since `iter_chunks` returns the
+    /// archetype's ENTIRE contiguous slice it CANNOT HONOUR these filters → it rejects such
+    /// queries (see [`Query::iter_chunks`]). `false` for Table `With`/`Without`
+    /// (matches_archetype suffices) → chunk iteration with them is safe.
     fn has_row_filter() -> bool {
         false
     }
@@ -224,19 +224,19 @@ pub struct Query<'w, Q: WorldQuery + ?Sized> {
 // ALIASING & IMPLS
 // =========================================================================
 
-/// Mutable aliasing kontrolü — aynı `TypeId`'ye iki mutable erişim varsa **UB** olur.
+/// Mutable aliasing check — if there are two mutable accesses to the same `TypeId` it is **UB**.
 ///
 /// # Invariant
-/// Bir query içinde aynı component tipine birden fazla mutable erişim (`Mut<T>`)
-/// **kesinlikle yasaktır**. `Query<(Mut<Position>, Mut<Position>)>` gibi bir kullanım
-/// çalışma zamanında panic atar. Bu kontrol compile-time'da yapılamaz çünkü Rust'ın
-/// tip sistemi `TypeId` eşitliğini const-context'te karşılaştıramaz.
+/// More than one mutable access (`Mut<T>`) to the same component type within a single query
+/// is **strictly forbidden**. A use such as `Query<(Mut<Position>, Mut<Position>)>` panics at
+/// run time. This check cannot be done at compile-time because Rust's type system cannot
+/// compare `TypeId` equality in a const-context.
 ///
-/// # Güvenli Kullanım
-/// - `Query<(&Position, Mut<Velocity>)>` → ✅ (farklı tipler)
-/// - `Query<(Mut<Position>, Mut<Velocity>)>` → ✅ (farklı tipler)
+/// # Safe Usage
+/// - `Query<(&Position, Mut<Velocity>)>` → ✅ (different types)
+/// - `Query<(Mut<Position>, Mut<Velocity>)>` → ✅ (different types)
 /// - `Query<(Mut<Position>, Mut<Position>)>` → ❌ PANIC!
-/// - `Query<(&Position, &Position)>` → ✅ (ikisi de immutable — aliasing güvenli)
+/// - `Query<(&Position, &Position)>` → ✅ (both immutable — aliasing safe)
 #[inline]
 fn check(tid: TypeId, is_mut: bool, types: &mut Vec<(TypeId, bool)>) {
     for &(existing_tid, existing_mut) in types.iter() {

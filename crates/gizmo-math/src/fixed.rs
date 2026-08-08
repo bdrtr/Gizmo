@@ -1,9 +1,9 @@
-//! Fixed-Point (Sabit Noktalı) Matematik Kütüphanesi
+//! Fixed-Point Maths Library
 //!
-//! Kayan noktalı (Floating-Point / f32, f64) sayılar farklı CPU mimarilerinde (x86, ARM)
-//! veya farklı derleyici optimizasyonlarında farklı yuvarlama hataları verebilir.
-//! Bu kütüphane, Multiplayer, eSpor, Lock-step RTS oyunlarında %100 Bit-Exact
-//! Cross-Platform Determinism sağlamak için Q16.16 ve Q32.32 sabit noktalı yapıları içerir.
+//! Floating-point (f32, f64) numbers can give different rounding errors on different CPU
+//! architectures (x86, ARM) or under different compiler optimisations.
+//! This library contains the Q16.16 and Q32.32 fixed-point structures in order to provide
+//! 100% Bit-Exact Cross-Platform Determinism in Multiplayer, eSports and Lock-step RTS games.
 //!
 //! ## Status: EXPERIMENTAL — the simulation does not use this module
 //!
@@ -47,9 +47,9 @@
 use serde::{Deserialize, Serialize};
 use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
-/// Q16.16 Sabit Noktalı Sayı (32-bit)
+/// Q16.16 Fixed-Point Number (32-bit)
 ///
-/// 16 bit tam sayı kısmı, 16 bit ondalık kısmı temsil eder.
+/// 16 bits represent the integer part, 16 bits the fractional part.
 ///
 /// A signed 32-bit fixed-point scalar: the stored integer is the real value scaled by
 /// 2^16. Range `[-32768.0, 32767.99998]`, resolution `2^-16 ≈ 1.526e-5` — *uniform* across
@@ -227,7 +227,7 @@ impl Fp32 {
         Self(self.0.saturating_abs())
     }
 
-    /// Bit-exact Karekök (Sqrt) - Newton-Raphson veya Integer Sqrt algoritması
+    /// Bit-exact Square Root (Sqrt) - Newton-Raphson or Integer Sqrt algorithm
     ///
     /// Restoring (digit-by-digit) integer square root. Every step is a shift, compare, add
     /// or subtract on `u32` — no floats anywhere — so the result is identical on every
@@ -271,7 +271,7 @@ impl Fp32 {
         Self((res << 8) as i32)
     }
 
-    /// Taylor Serisi veya Bhaskara Approximation ile Bit-exact Sinüs
+    /// Bit-exact Sine via Taylor Series or Bhaskara Approximation
     ///
     /// Takes an angle in **radians** of any magnitude. It is first folded into `[0, 2π)`
     /// with a raw integer `%` — plus one `+= TWO_PI`, because Rust's remainder keeps the sign
@@ -591,8 +591,8 @@ impl Div<Fp32> for FpVec3 {
 mod tests {
     use super::*;
 
-    /// Fixed-point tolerans: Q16.16'da 1 LSB = 1/65536 ≈ 0.0000153
-    /// Trigonometrik yaklaşımlar için daha geniş tolerans kullanıyoruz.
+    /// Fixed-point tolerance: in Q16.16, 1 LSB = 1/65536 ≈ 0.0000153
+    /// We use a wider tolerance for the trigonometric approximations.
     const FP_EPS: f32 = 0.01; // ~%1 tolerans (Bhaskara max error ~%1.9)
 
     fn fp_approx(a: Fp32, expected: f32) -> bool {

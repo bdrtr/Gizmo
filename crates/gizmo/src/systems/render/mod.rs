@@ -50,21 +50,28 @@ fn ensure_global_transforms(world: &mut World) {
     propagate.run(world, 0.0);
 }
 
-/// Manuel App (`set_setup`/`set_update`/`set_ui`) için TEK-SATIR sahne render kurulumu.
+/// ONE-LINE scene render setup for a manual App (`set_setup`/`set_update`/`set_ui`).
 ///
-/// KÖK-TUZAK ÇÖZÜMÜ: manuel App, `set_render` verilmezse 3B sahneyi ÇİZMEZ (egui HUD
-/// görünür ama sahne SİYAH kalır — sessizce). `with_simple_scene` bunu kendi yapar;
-/// manuel App için bu uzantı aynısını tek satırda sağlar (ağır/opsiyonel pass'leri —
-/// SSR/SSGI/volumetric/TAA + GPU sıvı/fizik — kapatarak; GPU parçacık açık kalır).
+/// ROOT-FOOTGUN SOLUTION: a manual App DOES NOT DRAW the 3D scene if `set_render` is not
+/// given (the egui HUD is visible but the scene stays BLACK — silently). `with_simple_scene`
+/// does this itself; for a manual App this extension provides the same in one line (by
+/// turning the heavy/optional passes — SSR/SSGI/volumetric/TAA + GPU fluid/physics — off;
+/// GPU particles stay on).
 ///
-/// ```ignore
+/// ```no_run
+/// use gizmo::prelude::*;
 /// use gizmo::systems::AppSceneRenderExt;
-/// App::<S>::new(..).add_plugin(TransformPlugin).set_setup(..).set_update(..)
+///
+/// App::<()>::new("Demo", 1280, 720)
+///     .add_plugin(TransformPlugin)
+///     .set_setup(|_world, _renderer| {})
+///     .set_update(|_world, _state, _dt, _input| {})
 ///     .with_scene_render()   // <- bu olmadan ekran siyah
 ///     .run()
+///     .expect("the application failed to run");
 /// ```
 pub trait AppSceneRenderExt {
-    /// Sahneyi [`default_render_pass`] ile çizecek şekilde `set_render`'ı kurar.
+    /// Sets `set_render` up so that the scene is drawn with [`default_render_pass`].
     fn with_scene_render(self) -> Self;
 }
 
@@ -82,9 +89,10 @@ impl<State: 'static> AppSceneRenderExt for gizmo_app::App<State> {
     }
 }
 
-/// Bevy'nin DefaultPlugins davranisini taklit eden, sadece modelleri
-/// isiklandirip hizlica ekrana basmaya yarayan kutudan cikmis Render Motoru.
-/// Yeni acilan `tut` gibi bos projelerde yuzlerce satir kod yazmamak icin kullanilir.
+/// An out-of-the-box Render Engine that mimics Bevy's DefaultPlugins behavior, serving only
+/// to light the models and put them on screen quickly.
+/// It is used to avoid writing hundreds of lines of code in freshly opened, empty projects
+/// like `tut`.
 #[tracing::instrument(skip_all, name = "render_system")]
 pub fn default_render_pass(
     world: &mut World,
@@ -502,17 +510,21 @@ pub fn default_render_pass(
 //  `ctx.default_render(world)` ile varsayılan pipeline çalışır.
 // ============================================================
 
-/// `RenderContext` üzerine eklenen kolaylık metodları.
-/// `use gizmo::prelude::*;` ile otomatik olarak dahil edilir.
+/// Convenience methods added on top of `RenderContext`.
+/// Automatically included with `use gizmo::prelude::*;`.
 pub trait RenderContextExt {
-    /// Motorun varsayılan render pipeline'ını çalıştırır.
-    /// Deferred rendering, gölgeler, SSAO, SSR, TAA ve post-processing dahildir.
+    /// Runs the engine's default render pipeline.
+    /// Deferred rendering, shadows, SSAO, SSR, TAA and post-processing are included.
     ///
-    /// ```ignore
+    /// ```
+    /// use gizmo::prelude::*;
+    /// # struct GameState;
     /// fn render(world: &mut World, _state: &GameState, ctx: &mut RenderContext) {
     ///     ctx.disable_gpu_compute();
     ///     ctx.default_render(world);
     /// }
+    /// # // The `App::set_simple_render` bound: for<'a> FnMut(&mut World, &State, &mut RenderContext<'a>)
+    /// # let _: fn(&mut World, &GameState, &mut RenderContext<'_>) = render;
     /// ```
     fn default_render(&mut self, world: &mut crate::core::World);
 }

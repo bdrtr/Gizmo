@@ -409,10 +409,10 @@ mod tests {
         assert!(t_miss.is_none());
     }
 
-    /// Regresyon: eksene paralel bir ışın, kaynağı tam olarak MIN yüzeyi üstündeyken
-    /// isabet etmeli. Eski hal `0 * ∞ = NaN` üretip `Vec3A::min/max` (SIMD) yanlış
-    /// operandı yaydığından sahte ıska dönüyordu (max yüzü ise skaler indirgeme
-    /// NaN'ı yuttuğu için çalışıyordu → asimetri). Min ve max yüzü artık simetrik.
+    /// Regression: a ray parallel to an axis must hit when its origin is exactly on the MIN
+    /// face. The old state produced `0 * ∞ = NaN` and, because `Vec3A::min/max` (SIMD) propagated
+    /// the wrong operand, returned a bogus miss (whereas the max face worked because the scalar
+    /// reduction swallowed the NaN → asymmetry). The min and max faces are now symmetric.
     #[test]
     fn test_ray_parallel_grazes_min_and_max_face() {
         let aabb = crate::aabb::Aabb::new(Vec3::new(-1.0, -1.0, -1.0), Vec3::new(1.0, 1.0, 1.0));

@@ -4,15 +4,15 @@ use std::any::TypeId;
 use std::collections::HashMap;
 
 pub(crate) struct ArchetypeIndex {
-    /// Sıralı component set → archetype indeksi
+    /// Sorted component set → archetype index
     pub(crate) set_to_id: HashMap<Vec<TypeId>, usize>,
-    /// Archetype depolama tabloları (Gerçek veriler burada)
+    /// Archetype storage tables (the actual data is here)
     pub(crate) archetypes: Vec<Archetype>,
-    /// Entity ID → mevcut archetype indeksi
+    /// Entity ID → current archetype index
     pub(crate) entity_archetype: HashMap<u32, usize>,
-    /// Query sonuç cache'i — query tiplerinin TypeId'si → eşleşen archetype indeksleri
+    /// Query result cache — TypeId of the query types → matching archetype indices
     query_cache: HashMap<TypeId, Vec<usize>>,
-    /// Cache'in geçerliliği — component ekleme/çıkarma sırasında true olur
+    /// Validity of the cache — becomes true during component addition/removal
     cache_dirty: bool,
 }
 
@@ -32,14 +32,14 @@ impl ArchetypeIndex {
         }
     }
 
-    /// Entity spawn — boş archetype'a ekle
+    /// Entity spawn — add to the empty archetype
     pub(crate) fn on_spawn(&mut self, entity_id: u32) {
         self.archetypes[0].push_entity(entity_id);
         self.entity_archetype.insert(entity_id, 0);
     }
 
-    /// Component ekleme — entity'yi yeni archetype'a taşı
-    /// NOT: Veri taşıma işlemi World tarafından yapılır, bu metod sadece yapısal geçişi takip eder.
+    /// Component addition — move the entity to the new archetype
+    /// NOTE: The data move is performed by the World, this method only tracks the structural transition.
     #[allow(dead_code)]
     pub(crate) fn get_or_create_archetype(&mut self, infos: &[ComponentInfo]) -> usize {
         let mut new_types: Vec<TypeId> = infos.iter().map(|i| i.type_id).collect();
@@ -150,7 +150,7 @@ impl ArchetypeIndex {
         Some(new_arch_id)
     }
 
-    /// Entity despawn — archetype'dan çıkar
+    /// Entity despawn — remove from the archetype
     #[allow(dead_code)]
     pub(crate) fn on_despawn(&mut self, entity_id: u32) {
         if let Some(_arch_id) = self.entity_archetype.remove(&entity_id) {
@@ -161,8 +161,8 @@ impl ArchetypeIndex {
         }
     }
 
-    /// Belirtilen mantıksal query filtresini sağlayan archetype'ların indekslerini döndürür.
-    /// Query sistemi tarafından kullanılır.
+    /// Returns the indices of the archetypes satisfying the specified logical query filter.
+    /// Used by the query system.
     pub(crate) fn matching_archetypes(
         &mut self,
         query_type_id: TypeId,
@@ -188,8 +188,8 @@ impl ArchetypeIndex {
         self.query_cache.get(&query_type_id).unwrap()
     }
 
-    /// Belirtilen mantıksal query filtresini sağlayan archetype'ların indekslerini döndürür.
-    /// Immutable versiyon — cache kullanmaz.
+    /// Returns the indices of the archetypes satisfying the specified logical query filter.
+    /// Immutable version — does not use the cache.
     pub(crate) fn matching_archetypes_readonly(
         &self,
         predicate: fn(&Archetype) -> bool,
@@ -203,14 +203,14 @@ impl ArchetypeIndex {
         result
     }
 
-    /// Toplam archetype sayısı
+    /// Total archetype count
     #[inline]
     #[allow(dead_code)]
     pub(crate) fn archetype_count(&self) -> usize {
         self.archetypes.len()
     }
 
-    /// Entity'nin mevcut archetype indeksini döndürür
+    /// Returns the entity's current archetype index
     #[inline]
     #[allow(dead_code)]
     pub(crate) fn entity_archetype_id(&self, entity_id: u32) -> Option<usize> {

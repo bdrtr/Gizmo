@@ -46,14 +46,14 @@ pub struct World {
     // Entity'den bağımsız global veriler (Time, WindowSize, Input vs.)
     resources: HashMap<TypeId, RwLock<Box<dyn std::any::Any + Send + Sync>>>,
 
-    /// Entity ID → archetype konumu. Hızlı O(1) lookup sağlar.
-    /// entity_id indeks olarak kullanılır.
+    /// Entity ID → archetype location. Provides a fast O(1) lookup.
+    /// entity_id is used as the index.
     entity_locations: Vec<EntityLocation>,
 
-    /// Archetype tabanlı depolama — tüm component verileri burada tutulur.
+    /// Archetype-based storage — all component data is held here.
     pub(crate) archetype_index: ArchetypeIndex,
 
-    /// Runtime component metadata cache'i. Archetype sütunları oluşturmak için gereklidir.
+    /// The runtime component metadata cache. It is required in order to create archetype columns.
     component_infos: HashMap<TypeId, ComponentInfo>,
 
     pub(crate) component_hooks: HashMap<TypeId, ComponentHooks>,
@@ -75,11 +75,11 @@ pub struct World {
     /// It is public so snapshot/restore code can put it back, but writing it without
     /// restoring `change_ref_tick` to a consistent value desynchronises change detection.
     pub tick: u32,
-    /// Değişiklik tespiti (change detection) referans tick'i: `Changed<T>`/`Added<T>`
-    /// filtreleri `ticks.changed > change_ref_tick` ile bu değere göre karşılaştırır.
-    /// Schedule, her frame başında bunu bir önceki frame'in tick'ine ayarlar; böylece
-    /// "son frame'den beri değişenler" doğru raporlanır. (Eskiden `== tick` idi ve tick
-    /// hiç ilerlemediği için ya hiçbir şeyi ya da her şeyi eşliyordu.)
+    /// The change detection reference tick: the `Changed<T>`/`Added<T>` filters compare
+    /// against this value with `ticks.changed > change_ref_tick`.
+    /// At the start of every frame the Schedule sets it to the previous frame's tick; that way
+    /// "the ones changed since the last frame" are reported correctly. (It used to be
+    /// `== tick`, and since the tick never advanced it matched either nothing or everything.)
     pub change_ref_tick: u32,
 }
 
@@ -145,11 +145,11 @@ impl World {
         self.sort_archetype_hierarchy();
     }
 
-    /// Frame başında değişiklik-tespiti penceresini açar: bu frame'in karşılaştırma
-    /// referansını `ref_tick`'e (bir önceki çalıştırmanın tick'i) ayarlar ve dünya
-    /// tick'ini bu frame için ilerletir. `Changed<T>`/`Added<T>` filtreleri
-    /// `ticks.changed > change_ref_tick` ile karşılaştırır. Yeni tick'i döndürür.
-    /// (Sort yan-etkisi olan `increment_tick`'ten farklı olarak yalnızca sayaç ilerler.)
+    /// Opens the change-detection window at the start of a frame: sets this frame's
+    /// comparison reference to `ref_tick` (the previous run's tick) and advances the world
+    /// tick for this frame. The `Changed<T>`/`Added<T>` filters compare with
+    /// `ticks.changed > change_ref_tick`. Returns the new tick.
+    /// (Unlike `increment_tick`, which has a sort side-effect, only the counter advances.)
     pub fn begin_change_frame(&mut self, ref_tick: u32) -> u32 {
         self.change_ref_tick = ref_tick;
         self.tick = self.tick.wrapping_add(1);
@@ -160,8 +160,8 @@ impl World {
         self.tick
     }
 
-    /// Ertelenmiş komut kuyruğunu (CommandQueue) işler.
-    /// Entity ekleme/çıkarma işlemleri bu sayede kilitlenme (deadlock) yaşamadan batch halinde uygulanır.
+    /// Processes the deferred command queue (CommandQueue).
+    /// Entity add/remove operations are thereby applied in batch without suffering a deadlock.
     pub fn apply_commands(&mut self) {
         let queue_opt = self
             .get_resource::<crate::commands::CommandQueue>()

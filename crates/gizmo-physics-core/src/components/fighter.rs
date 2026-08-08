@@ -224,12 +224,12 @@ impl FighterController {
         }
     }
     
-    /// Karakter hasar yediğinde veya blokladığında hitstop (donma) uygula
+    /// Apply hitstop (freeze) when the character takes damage or blocks
     pub fn apply_hitstop(&mut self, frames: u32) {
         self.hitstop_frames = frames;
     }
 
-    /// Sersemletme uygula
+    /// Apply stun
     pub fn apply_hitstun(&mut self, frames: u32) {
         self.hitstun_frames = frames;
         self.active_move = None;
@@ -237,12 +237,12 @@ impl FighterController {
         self.is_blocking = false;
     }
 
-    /// Karakter şu an kilitli mi (animasyon donmuş veya sersemlemiş)
+    /// Is the character currently locked (animation frozen or stunned)
     pub fn is_locked(&self) -> bool {
         self.hitstop_frames > 0 || self.hitstun_frames > 0
     }
 
-    /// Aktif saldırının 'Hasar Veren' (Active) kareleri içinde miyiz?
+    /// Are we inside the active attack's 'Damage-Dealing' (Active) frames?
     pub fn is_in_active_window(&self) -> bool {
         if let Some(move_data) = &self.active_move {
             let fd = &move_data.frame_data;

@@ -1,19 +1,31 @@
-/// WASM Optimizasyon Profil Sistemi
-///
-/// Oyun türüne göre otomatik GPU kaynak yönetimi sağlar.
-/// Tarayıcı ortamında maksimum performans için gereksiz
-/// subsistemler otomatik devre dışı bırakılır.
-///
-/// # Kullanım
-/// ```rust,ignore
-/// let profile = WebProfile::fighter(); // Dövüş oyunu preset'i
-/// let profile = WebProfile::racing();  // Yarış oyunu preset'i
-/// let profile = WebProfile::sandbox(); // Açık dünya / sandbox
-/// let profile = WebProfile::custom()   // Özel konfigürasyon
-///     .with_particles(true, 5000)
-///     .with_shadows(true)
-///     .with_post_processing(PostProcessLevel::Medium);
-/// ```
+//! WASM Optimizasyon Profil Sistemi
+//!
+//! Oyun türüne göre otomatik GPU kaynak yönetimi sağlar.
+//! Tarayıcı ortamında maksimum performans için gereksiz
+//! subsistemler otomatik devre dışı bırakılır.
+//!
+//! # Kullanım
+//! ```
+//! use gizmo_renderer::{PostProcessLevel, ShadowQuality, WebProfile};
+//!
+//! let fighter = WebProfile::fighter(); // Dövüş oyunu preset'i
+//! assert_eq!(fighter.shadow_quality, ShadowQuality::Off);
+//! assert!(fighter.gpu_particles_enabled && !fighter.gpu_fluid_enabled);
+//!
+//! let racing = WebProfile::racing();   // Yarış oyunu preset'i
+//! let sandbox = WebProfile::sandbox(); // Açık dünya / sandbox
+//! assert!(racing.max_instances < sandbox.max_instances);
+//!
+//! let profile = WebProfile::custom()   // Özel konfigürasyon
+//!     .with_particles(true, 5000)
+//!     .with_shadows(ShadowQuality::Medium)
+//!     .with_post_processing(PostProcessLevel::Medium);
+//! assert_eq!(profile.gpu_particles_max, 5000);
+//! assert_eq!(profile.post_process_level, PostProcessLevel::Medium);
+//! // `custom()` minimal tabandan başlar: dokunulmayan her şey kapalı kalır.
+//! assert!(!profile.gpu_physics_enabled && !profile.ssao_enabled);
+//! ```
+
 /// Post-processing kalite seviyesi
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]

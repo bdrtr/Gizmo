@@ -1,11 +1,16 @@
-//! Component Registry — Runtime'da tip adı ↔ TypeId eşlemesi
+//! Component Registry — type name ↔ TypeId mapping at runtime
 //!
-//! Lua scriptleri ve Editor'ün component'lere isme göre erişmesini sağlar.
+//! It lets Lua scripts and the Editor reach components by name.
 //!
-//! ```rust,ignore
+//! ```
+//! use gizmo_core::registry::ComponentRegistry;
+//! use std::any::TypeId;
+//! # struct Transform;
+//! # struct Camera;
+//!
 //! let mut registry = ComponentRegistry::new();
-//! registry.register::<Transform>("Transform");
-//! registry.register::<Camera>("Camera");
+//! registry.register::<Transform>("Transform").unwrap();
+//! registry.register::<Camera>("Camera").unwrap();
 //!
 //! assert_eq!(registry.get_name::<Transform>(), Some("Transform"));
 //! assert_eq!(registry.get_type_id("Camera"), Some(TypeId::of::<Camera>()));
@@ -14,24 +19,24 @@
 use std::any::TypeId;
 use std::collections::BTreeMap;
 
-/// Component Registry kayıt işlemlerinde oluşabilecek hatalar.
+/// The errors that can arise during Component Registry registration operations.
 ///
-/// Bu hatalar programatik (kurtarılabilir) çakışmaları temsil eder; script/editor
-/// entegrasyonunda kullanıcı girdisiyle tetiklenebileceği için panic yerine
-/// `Result` ile yüzeylenir.
+/// These errors represent programmatic (recoverable) conflicts; since they can be triggered
+/// by user input in the script/editor integration they are surfaced with a `Result` instead
+/// of a panic.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum RegistryError {
-    /// Aynı isim zaten farklı bir tipe atanmış.
+    /// The same name is already assigned to a different type.
     NameAlreadyRegistered {
-        /// Çakışan isim.
+        /// The conflicting name.
         name: String,
     },
-    /// Aynı tip zaten farklı bir isimle kayıtlı.
+    /// The same type is already registered under a different name.
     TypeAlreadyRegistered {
-        /// Tipin mevcut kayıtlı ismi.
+        /// The type's existing registered name.
         existing_name: String,
-        /// Kayıt edilmeye çalışılan yeni isim.
+        /// The new name that was attempted to be registered.
         attempted_name: String,
     },
 }
@@ -97,7 +102,7 @@ pub type InsertReflectFn = fn(
     &dyn bevy_reflect::PartialReflect,
 ) -> Result<(), String>;
 
-/// ECS tabanlı opsiyonel reflection yeteneklerini taşıyan serileştirme yapısı
+/// The serialization struct that carries the optional ECS-based reflection capabilities
 #[derive(Debug, Clone)]
 pub struct TypeRegistration {
     /// Identity of the component type this entry describes.
@@ -138,16 +143,16 @@ pub struct TypeRegistration {
     pub insert_reflect_fn: Option<InsertReflectFn>,
 }
 
-/// Component tiplerini isme göre sorgulama ve yönetim kaydı.
+/// The registry for querying and managing component types by name.
 ///
-/// İki yönlü eşleme tutar: isim → TypeId ve TypeId → TypeRegistration.
-/// `register()` çift kayıt ve desync'i önler.
+/// It keeps a two-way mapping: name → TypeId and TypeId → TypeRegistration.
+/// `register()` prevents double registration and desync.
 pub struct ComponentRegistry {
-    /// İsim → TypeId eşlemesi (sıralı — deterministic iterasyon)
+    /// Name → TypeId mapping (ordered — deterministic iteration)
     name_to_type: BTreeMap<String, TypeId>,
-    /// TypeId → Reflection & Serialization Kaydı
+    /// TypeId → Reflection & Serialization Registration
     type_to_reg: BTreeMap<TypeId, TypeRegistration>,
-    /// Bevy Reflect tabanlı tip kayıtları — only present with the `reflect` feature.
+    /// Bevy Reflect based type registrations — only present with the `reflect` feature.
     #[cfg(feature = "reflect")]
     pub reflect_registry: bevy_reflect::TypeRegistry,
 }
@@ -168,13 +173,13 @@ impl ComponentRegistry {
         }
     }
 
-    /// Yeni bir component tipini isme göre kaydet.
+    /// Register a new component type by name.
     ///
     /// # Errors
-    /// - [`RegistryError::NameAlreadyRegistered`] — Aynı isim farklı bir tipe zaten atanmışsa
-    /// - [`RegistryError::TypeAlreadyRegistered`] — Aynı tip farklı bir isimle zaten kayıtlıysa
+    /// - [`RegistryError::NameAlreadyRegistered`] — if the same name is taken by a different type
+    /// - [`RegistryError::TypeAlreadyRegistered`] — if the same type is registered under another name
     ///
-    /// Aynı tip-isim çifti ile tekrar kayıt yapmak güvenlidir (no-op, `Ok(())`).
+    /// Registering again with the same type-name pair is safe (a no-op, `Ok(())`).
     pub fn register<T: 'static>(&mut self, name: &str) -> Result<(), RegistryError> {
         let type_id = TypeId::of::<T>();
 
@@ -214,7 +219,7 @@ impl ComponentRegistry {
         Ok(())
     }
 
-    /// Yeni bir component tipini isme göre ve Reflection (serde) yeteneği ile kaydet.
+    /// Register a new component type by name and with the Reflection (serde) capability.
     ///
     /// Only available with the `reflect` feature.
     #[cfg(feature = "reflect")]
@@ -346,8 +351,8 @@ impl ComponentRegistry {
         Ok(())
     }
 
-    /// Bir tipin kaydını siler. İsim ve TypeId eşlemesi birlikte kaldırılır.
-    /// Kayıtlı değilse false döner.
+    /// Deletes a type's registration. The name and the TypeId mapping are removed together.
+    /// Returns false if it is not registered.
     pub fn unregister<T: 'static>(&mut self) -> bool {
         let type_id = TypeId::of::<T>();
         if let Some(reg) = self.type_to_reg.remove(&type_id) {
@@ -358,7 +363,7 @@ impl ComponentRegistry {
         }
     }
 
-    /// İsim ile bir tipin kaydını siler.
+    /// Deletes a type's registration by name.
     pub fn unregister_by_name(&mut self, name: &str) -> bool {
         if let Some(type_id) = self.name_to_type.remove(name) {
             self.type_to_reg.remove(&type_id);
@@ -370,43 +375,43 @@ impl ComponentRegistry {
 
     // ──── Sorgulama ────
 
-    /// İsimden TypeId'ye dönüşüm
+    /// Conversion from name to TypeId
     pub fn get_type_id(&self, name: &str) -> Option<TypeId> {
         self.name_to_type.get(name).copied()
     }
 
-    /// TypeId'den isime dönüşüm (generic — derleme zamanı tip bilgisiyle)
+    /// Conversion from TypeId to name (generic — with compile-time type information)
     pub fn get_name<T: 'static>(&self) -> Option<&str> {
         self.get_name_by_id(TypeId::of::<T>())
     }
 
-    /// TypeId'den isime dönüşüm (runtime TypeId ile)
+    /// Conversion from TypeId to name (with a runtime TypeId)
     pub fn get_name_by_id(&self, type_id: TypeId) -> Option<&str> {
         self.type_to_reg.get(&type_id).map(|reg| reg.name.as_str())
     }
 
-    /// İlgili TypeId için (varsa) Serialization metodlarını yutar
+    /// Holds the Serialization methods (if any) for the TypeId in question
     pub fn get_registration(&self, type_id: TypeId) -> Option<&TypeRegistration> {
         self.type_to_reg.get(&type_id)
     }
 
-    /// İsim kayıtlı mı?
+    /// Is the name registered?
     pub fn contains_name(&self, name: &str) -> bool {
         self.name_to_type.contains_key(name)
     }
 
-    /// Tip kayıtlı mı?
+    /// Is the type registered?
     pub fn contains_type<T: 'static>(&self) -> bool {
         self.type_to_reg.contains_key(&TypeId::of::<T>())
     }
 
-    /// Kayıtlı tüm component isimlerini sıralı olarak döndürür.
-    /// BTreeMap kullanıldığı için sıra her zaman alfabetik ve deterministiktir.
+    /// Returns all the registered component names in order.
+    /// Because a BTreeMap is used the order is always alphabetical and deterministic.
     pub fn all_names(&self) -> Vec<&str> {
         self.name_to_type.keys().map(|s| s.as_str()).collect()
     }
 
-    /// Kayıtlı component sayısı
+    /// The number of registered components
     #[inline]
     pub fn len(&self) -> usize {
         self.name_to_type.len()

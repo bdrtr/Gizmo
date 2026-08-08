@@ -164,25 +164,25 @@ pub use gizmo_net as net;
 // === 3. Parti Re-Export (Kullanıcının ayrıca eklemesine gerek kalmasın) ===
 pub use gizmo_core::gizmo_log;
 
-/// 1.0 kontratı: aşağıdaki dış grafik/pencere tipleri (`wgpu`, `bytemuck`,
-/// `egui`, `winit`) bilinçli olarak public API'nin parçasıdır. Sürümleri ilgili
-/// renderer/window crate'inin semver'ine bağlıdır; bu dış crate'lerde yapılan
-/// bir major sürüm yükseltmesi facade için de kırıcı (breaking) sayılır.
+/// 1.0 contract: the external graphics/window types below (`wgpu`, `bytemuck`,
+/// `egui`, `winit`) are deliberately part of the public API. Their versions
+/// depend on the semver of the relevant renderer/window crate; a major version
+/// bump in these external crates counts as breaking for the facade too.
 #[cfg(feature = "render")]
 pub use bytemuck;
 
-/// 1.0 kontratı: bu dış grafik tipi bilinçli olarak public API'nin parçasıdır;
-/// sürümü ilgili UI crate'inin semver'ine bağlıdır. `egui` feature'ı ile
-/// (overlay UI / editör) açılır.
+/// 1.0 contract: this external graphics type is deliberately part of the public
+/// API; its version depends on the semver of the relevant UI crate. It is enabled
+/// with the `egui` feature (overlay UI / editor).
 #[cfg(feature = "egui")]
 pub use egui;
 
-/// 1.0 kontratı: bu dış grafik tipi bilinçli olarak public API'nin parçasıdır;
-/// sürümü renderer crate'inin semver'ine bağlıdır.
+/// 1.0 contract: this external graphics type is deliberately part of the public
+/// API; its version depends on the semver of the renderer crate.
 #[cfg(feature = "render")]
 pub use wgpu;
 
-/// 1.0 kontratı: bu dış pencere tipi bilinçli olarak public API'nin parçasıdır;
-/// sürümü window crate'inin semver'ine bağlıdır.
+/// 1.0 contract: this external window type is deliberately part of the public
+/// API; its version depends on the semver of the window crate.
 #[cfg(feature = "window")]
 pub use winit;

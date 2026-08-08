@@ -18,32 +18,42 @@
 use crate::system::{AccessInfo, Res, ResMut, SystemParam, SystemParamFetchError};
 use crate::world::World;
 
-/// Gizmo ECS Event System — Double-buffered olay kuyruğu.
+/// Gizmo ECS Event System — double-buffered event queue.
 ///
-/// Her frame'de `update()` çağrıldığında, önceki frame'in eventleri atılır ve
-/// mevcut frame'in eventleri "önceki" konumuna taşınır. Bu sayede:
-/// - Yazarlar (`send`) her zaman `current` buffer'a yazar.
-/// - Okuyucular (`iter`) her zaman `previous` buffer'dan okur (non-destructive).
-/// - Birden fazla sistem aynı eventleri bağımsız olarak okuyabilir.
+/// When `update()` is called each frame, the previous frame's events are discarded and the
+/// current frame's events are moved into the "previous" position. Thanks to this:
+/// - Writers (`send`) always write to the `current` buffer.
+/// - Readers (`iter`) always read from the `previous` buffer (non-destructive).
+/// - More than one system can read the same events independently.
 ///
-/// # Kullanım
-/// ```rust,ignore
-/// // Kayıt (App seviyesinde):
-/// app.add_event::<CollisionEvent>();
+/// # Usage
+/// ```
+/// use gizmo_core::prelude::*;
+/// struct CollisionEvent(u32);
 ///
-/// // Olay gönderme (herhangi bir sistem):
-/// world.get_resource_mut::<Events<CollisionEvent>>().unwrap().send(CollisionEvent(..));
+/// // Registration: at App level `app.add_event::<CollisionEvent>()` both inserts this
+/// // resource and calls `update()` every frame. Setting it up by hand:
+/// let mut world = World::new();
+/// world.insert_resource(Events::<CollisionEvent>::new());
 ///
-/// // Olay okuma (herhangi bir sistem, non-destructive):
+/// // Sending an event (from any system):
+/// world.get_resource_mut::<Events<CollisionEvent>>().unwrap().send(CollisionEvent(7));
+///
+/// // Not readable yet in the frame it was sent:
+/// assert_eq!(world.get_resource::<Events<CollisionEvent>>().unwrap().len(), 0);
+///
+/// // Frame sonu rotasyonu:
+/// world.get_resource_mut::<Events<CollisionEvent>>().unwrap().update();
+///
+/// // Reading events (any system, non-destructive — every reader sees the same batch):
 /// let events = world.get_resource::<Events<CollisionEvent>>().unwrap();
-/// for event in events.iter() {
-///     tracing::info!("Çarpışma oldu: {:?}", event);
-/// }
+/// assert_eq!(events.iter().map(|e| e.0).collect::<Vec<_>>(), vec![7]);
+/// assert_eq!(events.iter().count(), 1);
 /// ```
 pub struct Events<T> {
-    /// Bu frame'e yazılan eventler.
+    /// The events written in this frame.
     current: Vec<T>,
-    /// Önceki frame'den kalan, okunabilir eventler.
+    /// The readable events left over from the previous frame.
     previous: Vec<T>,
 }
 
@@ -61,54 +71,55 @@ impl<T> Events<T> {
         }
     }
 
-    /// Yeni bir event gönderir (mevcut frame'in buffer'ına yazar).
+    /// Sends a new event (writes into the current frame's buffer).
     #[inline]
     pub fn send(&mut self, event: T) {
         self.current.push(event);
     }
 
-    /// Geriye dönük uyumluluk — `send()` ile aynı.
+    /// Backward compatibility — same as `send()`.
     #[inline]
     pub fn push(&mut self, event: T) {
         self.send(event);
     }
 
-    /// Frame sonu: önceki frame'in eventlerini temizler, mevcut frame'i önceki konuma taşır.
+    /// End of frame: clears the previous frame's events, moves the current frame into the
+    /// previous position.
     ///
-    /// Bu metot her frame sonunda **bir kez** çağrılmalıdır — `App::add_event()` bunu
-    /// otomatik olarak yapar.
+    /// This method must be called **once** at the end of every frame — `App::add_event()` does
+    /// this automatically.
     pub fn update(&mut self) {
         self.previous.clear();
         std::mem::swap(&mut self.current, &mut self.previous);
     }
 
-    /// Önceki frame'in eventlerini okumak için non-destructive iterator.
-    /// Birden fazla sistem aynı eventleri bağımsız olarak okuyabilir.
+    /// Non-destructive iterator for reading the previous frame's events.
+    /// More than one system can read the same events independently.
     pub fn iter(&self) -> impl Iterator<Item = &T> {
         self.previous.iter()
     }
 
-    /// Önceki frame'deki event sayısı.
+    /// The number of events in the previous frame.
     #[inline]
     pub fn len(&self) -> usize {
         self.previous.len()
     }
 
-    /// Önceki frame'de event var mı?
+    /// Are there any events in the previous frame?
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.previous.is_empty()
     }
 
-    /// Tüm eventleri (hem mevcut hem önceki) temizler.
+    /// Clears all events (both current and previous).
     pub fn clear(&mut self) {
         self.current.clear();
         self.previous.clear();
     }
 
-    /// Eventleri tüketmek için destructive iterator.
-    /// **Dikkat:** Bu metot tüm eventleri (önceki frame) tüketir. Birden fazla okuyucu
-    /// varsa diğer okuyucular eventleri kaçırır. Mümkünse `iter()` tercih edin.
+    /// Destructive iterator for consuming the events.
+    /// **Caution:** This method consumes all the events (the previous frame). If there is more
+    /// than one reader, the other readers miss the events. Prefer `iter()` when possible.
     pub fn drain(&mut self) -> std::vec::IntoIter<T> {
         self.previous.drain(..).collect::<Vec<_>>().into_iter()
     }
@@ -146,7 +157,7 @@ pub struct EventReader<'w, T: 'static> {
 }
 
 impl<'w, T: 'static> EventReader<'w, T> {
-    /// Olayları okumak için iterator döndürür (önceki frame'in eventleri).
+    /// Returns an iterator for reading the events (the previous frame's events).
     pub fn iter(&self) -> impl Iterator<Item = &T> {
         self.events.iter()
     }
@@ -205,12 +216,12 @@ pub struct EventWriter<'w, T: 'static> {
 }
 
 impl<'w, T: 'static> EventWriter<'w, T> {
-    /// Yeni bir olay fırlatır (mevcut frame'in buffer'ına yazar).
+    /// Fires a new event (writes into the current frame's buffer).
     pub fn send(&mut self, event: T) {
         self.events.send(event);
     }
 
-    /// Birden fazla olay fırlatır.
+    /// Fires more than one event.
     pub fn send_batch(&mut self, events: impl IntoIterator<Item = T>) {
         for event in events {
             self.events.send(event);

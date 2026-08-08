@@ -1,9 +1,9 @@
-//! Otomatik-despawn YAŞAM-DÖNGÜSÜ komponentleri + sistemi.
+//! Auto-despawn LIFECYCLE components + system.
 //!
-//! "N saniye sonra sil" ve "kill-plane'in altına düşünce sil" gibi geçici-varlık
-//! temizliği HEMEN her oyunda tekrarlanır — demolar bunu her frame elle `Vec<Entity>`
-//! tutup, süre/konum kontrol edip `despawn` döngüsü yazarak yapar. Bir komponent ekle,
-//! [`LifetimePlugin`]'i çalıştır, motor silsin (tıpkı [`Spin`](crate::systems::spin) gibi).
+//! Temporary-entity cleanup like "delete after N seconds" and "delete when it falls below the
+//! kill-plane" repeats in ALMOST every game — the demos do it by hand every frame by keeping a
+//! `Vec<Entity>`, checking time/position and writing a `despawn` loop. Add one component, run
+//! [`LifetimePlugin`], let the engine delete (just like [`Spin`](crate::systems::spin)).
 //!
 //! ```
 //! use gizmo::prelude::*;
@@ -20,32 +20,32 @@
 //! world.add_component(ball, Transform::new(Vec3::new(0.0, -100.0, 0.0)));
 //! world.add_component(ball, DespawnBelowY::new(-60.0));
 //!
-//! // Bir uygulamada `app.add_plugin(LifetimePlugin)` bunu her frame çalıştırır.
+//! // In an application `app.add_plugin(LifetimePlugin)` runs this every frame.
 //! let mut sys = LifetimeSystem;
 //! sys.run(&world, 1.0);
 //! world.apply_commands();
-//! assert!(world.is_alive(spark), "1 sn sonra kıvılcım hâlâ yaşıyor");
-//! assert!(!world.is_alive(ball), "eşiğin altındaki top hemen silinmeli");
+//! assert!(world.is_alive(spark), "after 1 s the spark is still alive");
+//! assert!(!world.is_alive(ball), "the ball below the threshold must be despawned at once");
 //!
 //! sys.run(&world, 1.5); // toplam 2.5 sn > 2.0
 //! world.apply_commands();
-//! assert!(!world.is_alive(spark), "süresi dolan kıvılcım silinmeli");
+//! assert!(!world.is_alive(spark), "the expired spark must be despawned");
 //! ```
 
 use gizmo_core::world::World;
 use gizmo_physics_core::Transform;
 
-/// Entity'yi `remaining` saniye sonra otomatik despawn eder. Sistem her frame
-/// `remaining`'i `dt` kadar azaltır; ≤ 0 olunca varlık silinir. (Mermi izi, kıvılcım,
-/// konfeti, geçici ses/efekt kaynağı… için.)
+/// Automatically despawns the entity after `remaining` seconds. Every frame the system
+/// decreases `remaining` by `dt`; when it is ≤ 0 the entity is deleted. (For bullet trails,
+/// sparks, confetti, a temporary sound/effect source…)
 #[derive(Debug, Clone, Copy)]
 pub struct DespawnAfter {
-    /// Kalan ömür (saniye). Runtime'da değiştirilebilir (ör. ömrü uzat).
+    /// Remaining lifetime (seconds). Can be changed at runtime (e.g. extend the lifetime).
     pub remaining: f32,
 }
 
 impl DespawnAfter {
-    /// `secs` saniye sonra despawn olacak komponent.
+    /// Component that will despawn after `secs` seconds.
     pub fn secs(secs: f32) -> Self {
         Self { remaining: secs }
     }
@@ -53,16 +53,17 @@ impl DespawnAfter {
 
 gizmo_core::impl_component!(DespawnAfter);
 
-/// Entity'nin dünya-y konumu `y`'nin ALTINA inince otomatik despawn eder (kill-plane).
-/// Uçuruma/boşluğa düşen gülleleri, saçılan enkazı elle izlemek yerine kullan.
+/// Automatically despawns once the entity's world-y position drops BELOW `y` (kill-plane).
+/// Use it instead of hand-tracking cannonballs falling into a chasm/the void, or scattered
+/// debris.
 #[derive(Debug, Clone, Copy)]
 pub struct DespawnBelowY {
-    /// Bu y-değerinin altına inen varlık silinir.
+    /// An entity that drops below this y value is deleted.
     pub y: f32,
 }
 
 impl DespawnBelowY {
-    /// `y`'nin altına inince despawn olacak komponent.
+    /// Component that will despawn once it drops below `y`.
     pub fn new(y: f32) -> Self {
         Self { y }
     }
@@ -70,9 +71,10 @@ impl DespawnBelowY {
 
 gizmo_core::impl_component!(DespawnBelowY);
 
-/// Süresi dolan ([`DespawnAfter`]) veya kill-plane'i geçen ([`DespawnBelowY`]) varlıkları
-/// despawn eder. [`LifetimePlugin`] bunu schedule'a ekler; el ile `LifetimeSystem.run` da
-/// çağrılabilir. Silme `Commands` ile ERTELENİR (schedule batch'ler arası flush eder).
+/// Despawns entities whose time has run out ([`DespawnAfter`]) or that have crossed the
+/// kill-plane ([`DespawnBelowY`]). [`LifetimePlugin`] adds this to the schedule;
+/// `LifetimeSystem.run` can also be called by hand. Deletion is DEFERRED via `Commands`
+/// (the schedule flushes between batches).
 pub struct LifetimeSystem;
 
 impl gizmo_core::system::System for LifetimeSystem {
@@ -143,8 +145,8 @@ impl gizmo_core::system::System for LifetimeSystem {
     }
 }
 
-/// [`LifetimeSystem`]'i uygulamanın schedule'ına ekler → [`DespawnAfter`] /
-/// [`DespawnBelowY`] komponentli varlıklar otomatik silinir.
+/// Adds [`LifetimeSystem`] to the application's schedule → entities with a [`DespawnAfter`] /
+/// [`DespawnBelowY`] component are deleted automatically.
 pub struct LifetimePlugin;
 
 impl<State: 'static> crate::app::Plugin<State> for LifetimePlugin {

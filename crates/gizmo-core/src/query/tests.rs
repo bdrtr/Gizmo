@@ -17,8 +17,8 @@ struct Velocity {
 }
 impl_component!(Velocity);
 
-/// `Query<(Mut<Position>, Mut<Position>)>` gibi aynı tipe çift mutable erişim
-/// denemesi panic ile engellenmeli.
+/// An attempt at double mutable access to the same type, such as
+/// `Query<(Mut<Position>, Mut<Position>)>`, must be blocked with a panic.
 #[test]
 #[should_panic(expected = "Query aliasing UB detected")]
 fn test_same_type_mut_mut_panics() {
@@ -29,8 +29,8 @@ fn test_same_type_mut_mut_panics() {
     check(TypeId::of::<Position>(), true, &mut types);
 }
 
-/// `Query<(&Position, Mut<Position>)>` — bir immutable, bir mutable aynı tipe erişim:
-/// Bu da panic olmalı çünkü &T + &mut T alias oluşturur.
+/// `Query<(&Position, Mut<Position>)>` — one immutable, one mutable access to the same type:
+/// this must panic too, because &T + &mut T forms an alias.
 #[test]
 #[should_panic(expected = "Query aliasing UB detected")]
 fn test_same_type_ref_mut_panics() {
@@ -39,7 +39,7 @@ fn test_same_type_ref_mut_panics() {
     check(TypeId::of::<Position>(), true, &mut types); // Mut<Position> — PANIC!
 }
 
-/// `Query<(Mut<Position>, Mut<Velocity>)>` — farklı tipler, sorunsuz çalışmalı.
+/// `Query<(Mut<Position>, Mut<Velocity>)>` — different types, must work without problems.
 #[test]
 fn test_different_types_mut_mut_ok() {
     let mut types = Vec::new();
@@ -48,7 +48,7 @@ fn test_different_types_mut_mut_ok() {
     assert_eq!(types.len(), 2);
 }
 
-/// `Query<(&Position, &Position)>` — aynı tipe çift immutable erişim güvenlidir.
+/// `Query<(&Position, &Position)>` — double immutable access to the same type is safe.
 #[test]
 fn test_same_type_ref_ref_ok() {
     let mut types = Vec::new();
@@ -57,7 +57,7 @@ fn test_same_type_ref_ref_ok() {
     assert_eq!(types.len(), 2);
 }
 
-/// World üzerinden Query oluşturulduğunda aliasing kontrolünün çalıştığını doğrular.
+/// Verifies that the aliasing check runs when a Query is created through the World.
 #[test]
 fn test_query_new_with_valid_types() {
     let mut world = crate::World::new();
@@ -72,8 +72,8 @@ fn test_query_new_with_valid_types() {
     assert!(q.is_some());
 }
 
-/// `Changed<T>`/`Added<T>` artık referans tick'e (son çalıştırma) göre çalışır,
-/// `== current_tick` değil. Kareler arası doğru raporlama doğrulanır.
+/// `Changed<T>`/`Added<T>` now work relative to the reference tick (the last run),
+/// not `== current_tick`. Correct reporting across frames is verified.
 #[test]
 fn change_detection_is_relative_to_ref_tick() {
     let mut world = crate::World::new();
@@ -105,9 +105,9 @@ fn change_detection_is_relative_to_ref_tick() {
     assert_eq!(world.query::<Changed<Position>>().unwrap().iter().count(), 1);
 }
 
-/// `get_entity` generation'ı doğrular: despawn edilip slotu yeniden kullanılan bir
-/// entity'nin eski handle'ı `None` döner; ham `get(id)` ise (footgun) yeni entity'nin
-/// verisini döndürür.
+/// `get_entity` validates the generation: the old handle of an entity that was despawned and
+/// had its slot reused returns `None`; raw `get(id)` on the other hand (footgun) returns the
+/// new entity's data.
 #[test]
 fn get_entity_rejects_stale_handle_after_despawn_reuse() {
     let mut world = crate::World::new();
@@ -134,8 +134,8 @@ fn get_entity_rejects_stale_handle_after_despawn_reuse() {
     assert_eq!(q.get_entity(e2).map(|p| p.x), Some(2.0));
 }
 
-/// `iter_chunks_mut` ile yapılan toplu yazma, değişiklik tespitini tetiklemeli
-/// (temkinli işaretleme → gerçek yazmayı asla kaçırmaz, false negative yok).
+/// A bulk write made with `iter_chunks_mut` must trigger change detection
+/// (conservative marking → never misses a real write, no false negative).
 #[test]
 fn iter_chunks_mut_triggers_change_detection() {
     let mut world = crate::World::new();
@@ -163,8 +163,8 @@ fn iter_chunks_mut_triggers_change_detection() {
     assert_eq!(world.query::<&Position>().unwrap().get(e.id()).map(|p| p.x), Some(11.0));
 }
 
-/// SparseSet bileşenlerinde `Changed`/`Added` artık gerçek tick takibi yapar
-/// (eskiden her zaman `true` idi). Tablo bileşenleriyle aynı kareler-arası semantik.
+/// On SparseSet components `Changed`/`Added` now do real tick tracking
+/// (formerly they were always `true`). The same across-frames semantics as Table components.
 #[test]
 fn sparse_set_change_detection_tracks_ticks() {
     #[derive(Clone, Debug, PartialEq)]

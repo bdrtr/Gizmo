@@ -3,13 +3,20 @@
 //! Motorun HER `#[tracing::instrument]` / `span!` span'ini otomatik yakalar — collector'ların
 //! göremediği paralel/çapraz-thread ayrıntıyı da. Kaydı `chrome://tracing`/Perfetto için
 //! alev-grafiğine aktarır. Kurulum:
-//! ```ignore
+//! ```
 //! use gizmo_analysis::trace::{GizmoTraceLayer, TraceSink};
 //! use tracing_subscriber::prelude::*;
+//!
 //! let sink = TraceSink::new();
 //! tracing_subscriber::registry().with(GizmoTraceLayer::new(sink.clone())).init();
+//!
 //! // ... motoru çalıştır ...
-//! std::fs::write("engine_trace.json", sink.to_chrome_trace()).unwrap();
+//! tracing::info_span!("ecs_update").in_scope(|| { /* bir frame */ });
+//!
+//! // Kapanan her span bir kayıt olur; dosyaya:
+//! // `std::fs::write("engine_trace.json", sink.to_chrome_trace())`.
+//! assert_eq!(sink.len(), 1);
+//! assert!(sink.to_chrome_trace().contains("\"name\":\"ecs_update\""));
 //! ```
 
 use std::sync::{Arc, Mutex};

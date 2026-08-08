@@ -117,7 +117,7 @@ impl<ParamA, SystemA: IntoSystem<ParamA>> SystemExt<ParamA> for SystemA {
     }
 }
 
-/// 1-8 parametreli IntoSystem implementasyonlarını üretir.
+/// Generates the IntoSystem implementations for 1-8 parameters.
 macro_rules! impl_into_system {
     ($($P:ident),+) => {
         #[allow(non_snake_case)]

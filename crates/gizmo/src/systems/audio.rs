@@ -4,25 +4,27 @@ use gizmo_math::Vec3;
 use gizmo_physics_core::Transform;
 use gizmo_physics_rigid::components::Velocity;
 
-/// Bu 3B kaynak bu frame otomatik başlatılmalı mı? Yalnızca henüz otomatik-başlatılmamış
-/// (`!has_played`) ve canlı bir sink'i olmayan 3B kaynaklar için `true`.
+/// Should this 3D source be auto-started this frame? `true` only for 3D sources that have not
+/// yet been auto-started (`!has_played`) and have no live sink.
 ///
-/// `has_played` mandalı KRİTİK: tek-atışlık bir ses bitince sistem `_internal_sink_id`'yi
-/// `None`'a çeker; bu mandal olmadan guard ertesi frame yeniden tetiklenir → sonsuz tekrar.
+/// The `has_played` latch is CRITICAL: when a one-shot sound finishes the system sets
+/// `_internal_sink_id` back to `None`; without this latch the guard re-triggers the next frame →
+/// infinite repetition.
 fn should_autostart(source: &AudioSource) -> bool {
     source.is_3d && !source.has_played && source._internal_sink_id.is_none()
 }
 
-/// Gelişmiş 3D Uzamsal Ses (Spatial Audio) ve Doppler Etkisi Sistemi
+/// Advanced 3D Spatial Audio and Doppler Effect System
 ///
-/// Bu sistem her frame çalışır ve:
-/// 1. `AudioSource` bileşenine sahip tüm objelerin 3D pozisyonlarını ses motoruna yollar.
-/// 2. Mesafe tabanlı ses zayıflamasını (Distance Attenuation) uygular.
-/// 3. Hızları (`Velocity`) hesaba katarak Doppler Etkisi (Pitch Shift) hesaplar.
+/// This system runs every frame and:
+/// 1. Sends the 3D positions of all objects with an `AudioSource` component to the audio engine.
+/// 2. Applies distance-based sound attenuation (Distance Attenuation).
+/// 3. Computes the Doppler Effect (Pitch Shift) taking velocities (`Velocity`) into account.
 ///
-/// **Opt-in:** `DefaultPlugins` bunu otomatik kaydetmez — çalışması bir `AudioManager`
-/// kaynağı + ses çıkış cihazı gerektirir; her oyun uzamsal ses istemez. Kullanmak için
-/// oyununuzun schedule'ına elle ekleyin, ör. `schedule.add_system(Phase::Update, audio_spatial_system)`.
+/// **Opt-in:** `DefaultPlugins` does not register this automatically — running it requires an
+/// `AudioManager` resource + an audio output device; not every game wants spatial audio. To use
+/// it, add it to your game's schedule by hand, e.g.
+/// `schedule.add_system(Phase::Update, audio_spatial_system)`.
 pub fn audio_spatial_system(world: &mut World, _dt: f32) {
     let audio_opt = world.get_resource_mut::<AudioManager>();
     let mut audio = match audio_opt {

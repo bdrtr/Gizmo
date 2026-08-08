@@ -148,9 +148,9 @@ impl Default for PhysicsMaterial {
 }
 
 impl PhysicsMaterial {
-    /// Yalnız zıplaklığı (restitution) verilmiş malzeme kısayolu. `restitution_combine`
-    /// varsayılan `Max` olduğundan bu malzeme, karşı yüzey mat olsa bile zıplar.
-    /// Örn: `Collider::sphere(r).with_material(PhysicsMaterial::bouncy(0.9))`.
+    /// Shortcut for a material given only bounciness (restitution). Since `restitution_combine`
+    /// defaults to `Max`, this material bounces even when the opposing surface is non-bouncy.
+    /// E.g.: `Collider::sphere(r).with_material(PhysicsMaterial::bouncy(0.9))`.
     pub fn bouncy(restitution: f32) -> Self {
         Self {
             restitution: restitution.clamp(0.0, 1.0),
@@ -158,13 +158,13 @@ impl PhysicsMaterial {
         }
     }
 
-    /// Zıplaklığı (0=inelastik, 1=tam elastik) ayarlar. Zincirlenebilir.
+    /// Sets bounciness (0=inelastic, 1=fully elastic). Chainable.
     pub fn with_restitution(mut self, restitution: f32) -> Self {
         self.restitution = restitution.clamp(0.0, 1.0);
         self
     }
 
-    /// Sürtünmeyi ayarlar (statik = dinamik = `friction`). Zincirlenebilir.
+    /// Sets friction (static = dynamic = `friction`). Chainable.
     pub fn with_friction(mut self, friction: f32) -> Self {
         let f = friction.max(0.0);
         self.static_friction = f;
@@ -172,7 +172,7 @@ impl PhysicsMaterial {
         self
     }
 
-    /// Sürtünmesiz malzeme kısayolu (buz gibi kaygan; restitution varsayılan).
+    /// Shortcut for a frictionless material (slippery like ice; restitution stays at its default).
     pub fn frictionless() -> Self {
         Self {
             static_friction: 0.0,
@@ -181,13 +181,13 @@ impl PhysicsMaterial {
         }
     }
 
-    /// Yoğunluğu (kütle/ hacim hesapları için) ayarlar. Zincirlenebilir.
+    /// Sets density (for mass/volume computations). Chainable.
     pub fn with_density(mut self, density: f32) -> Self {
         self.density = density.max(0.0);
         self
     }
 
-    /// İki malzemenin temas özelliklerini birleştir
+    /// Combine the contact properties of two materials
     pub fn combine(a: &PhysicsMaterial, b: &PhysicsMaterial) -> CombinedMaterial {
         let f_mode = resolve_combine_mode(a.friction_combine, b.friction_combine);
         let r_mode = resolve_combine_mode(a.restitution_combine, b.restitution_combine);
@@ -329,7 +329,7 @@ impl PhysicsMaterial {
     };
 }
 
-/// İki malzemenin birleşiminden elde edilen temas parametreleri
+/// The contact parameters obtained from the combination of two materials
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct CombinedMaterial {
     /// Static Coulomb coefficient for this contact pair: the largest tangential force the

@@ -280,7 +280,7 @@ impl DynamicAabbTree {
         }
     }
 
-    /// Verilen node'dan kök'e kadar height + AABB güncelle, AVL dengele
+    /// Update height + AABB from the given node up to the root, AVL-balance
     fn refit_ancestors(&mut self, mut index: usize) {
         while index != NULL {
             let left = self.nodes[index].left;
@@ -296,8 +296,8 @@ impl DynamicAabbTree {
 
     // ── SAH Sibling Seçimi ───────────────────────────────────────────────────
 
-    /// FIX-7: inherited_cost doğru hesaplanıyor.
-    /// Her node için:
+    /// FIX-7: inherited_cost is computed correctly.
+    /// For every node:
     ///   direct_cost    = SA(merge(leaf, node))
     ///   inherited_cost = inherited cost from ancestors (delta SA propagated up)
     fn find_best_sibling(&self, leaf_aabb: &Aabb) -> usize {
@@ -342,7 +342,7 @@ impl DynamicAabbTree {
 
     // ── AVL Rotasyonu ────────────────────────────────────────────────────────
 
-    /// FIX-3: rotasyon sonrası taşınan child'ın parent pointer'ı güncelleniyor
+    /// FIX-3: the parent pointer of the child moved after a rotation is now updated
     fn balance(&mut self, a: usize) -> usize {
         if self.nodes[a].is_leaf() || self.nodes[a].height < 2 {
             return a;
@@ -365,7 +365,7 @@ impl DynamicAabbTree {
         a
     }
 
-    /// A'nın sağ çocuğu C'yi yukarı çek (left rotation)
+    /// Pull A's right child C upwards (left rotation)
     fn rotate_left(&mut self, a: usize, b: usize, c: usize) -> usize {
         let f = self.nodes[c].left;
         let g = self.nodes[c].right;
@@ -417,7 +417,7 @@ impl DynamicAabbTree {
         c
     }
 
-    /// A'nın sol çocuğu B'yi yukarı çek (right rotation)
+    /// Pull A's left child B upwards (right rotation)
     fn rotate_right(&mut self, a: usize, b: usize, c: usize) -> usize {
         let d = self.nodes[b].left;
         let e = self.nodes[b].right;
@@ -469,9 +469,9 @@ impl DynamicAabbTree {
 
     // ── Sorgular ─────────────────────────────────────────────────────────────
 
-    /// Tüm olası çarpışma çiftlerini döndür.
-    /// FIX-2: Dual-tree descent ile garantili duplicate-free, self-pair yok.
-    /// Algoritma: her internal node için sol ve sağ alt ağaçları birbirine karşı test et.
+    /// Return all possible collision pairs.
+    /// FIX-2: guaranteed duplicate-free with dual-tree descent, no self-pair.
+    /// Algorithm: for every internal node, test the left and right subtrees against each other.
     ///
     /// Every pair of entities whose **fattened** boxes overlap, each pair reported
     /// exactly once, never a body with itself. Each tuple is ordered by id
@@ -505,8 +505,8 @@ impl DynamicAabbTree {
         pairs
     }
 
-    /// Her internal node'un sol ve sağ çocuklarını birbirine karşı test et
-    /// (aynı subtree içindeki çiftler için)
+    /// Test every internal node's left and right children against each other
+    /// (for the pairs within the same subtree)
     fn collect_internal_pairs(&self, pairs: &mut Vec<(BodyHandle, BodyHandle)>) {
         if self.root == NULL {
             return;
@@ -569,7 +569,7 @@ impl DynamicAabbTree {
         }
     }
 
-    /// Verilen AABB ile örtüşen tüm entity'leri döndür
+    /// Return all entities that overlap the given AABB
     ///
     /// Entities whose **fattened** boxes overlap `aabb`, touching included. Each
     /// entity appears at most once; the order is the traversal's and carries no
@@ -598,7 +598,7 @@ impl DynamicAabbTree {
         result
     }
 
-    /// Ray ile kesişen entity'leri t değerine göre sıralı döndür
+    /// Return the entities intersected by the ray, sorted by the t value
     ///
     /// Entities whose **fattened** boxes the ray reaches no later than `max_t`, each
     /// with the parameter at which the ray enters that box, sorted ascending by it.
@@ -658,7 +658,7 @@ impl DynamicAabbTree {
 
     // ── Debug ────────────────────────────────────────────────────────────────
 
-    /// Ağaç geçerliliğini doğrula (test/debug için)
+    /// Verify the tree's validity (for test/debug)
     ///
     /// Walks the whole tree asserting its internal invariants: parent back-pointers,
     /// non-negative heights, every leaf carrying an entity at height 0, and every
@@ -703,8 +703,8 @@ impl DynamicAabbTree {
 // Ray-AABB kesişim (precomputed inv_dir ile)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// FIX-5: tmin f32::NEG_INFINITY'den başlar, negatif yönlü raylar doğru çalışır.
-/// inv_dir önceden hesaplanmış olmalı (sorgu başına bir kez).
+/// FIX-5: tmin starts from f32::NEG_INFINITY, rays with negative directions work correctly.
+/// inv_dir must have been precomputed (once per query).
 #[inline]
 fn ray_aabb_inv(origin: Vec3, inv_dir: Vec3, aabb: &Aabb, max_t: f32) -> Option<f32> {
     let tx1 = (aabb.min.x - origin.x) * inv_dir.x;

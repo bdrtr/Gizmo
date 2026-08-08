@@ -244,13 +244,13 @@ impl SetConfig {
 pub struct Schedule {
     unbuilt_configs: Vec<SystemConfig>,
     set_configs: std::collections::HashMap<&'static str, SetConfig>,
-    /// Her faz için ayrı batch listesi. Fazlar sıralı çalışır, faz içi batch'ler paralel.
+    /// A separate batch list for each phase. Phases run in order, batches within a phase in parallel.
     pub(crate) phase_batches: Vec<(Phase, Vec<SystemBatch>)>,
-    /// Geriye dönük uyumluluk: faz kullanılmadığında eski düz batch listesi.
+    /// Backwards compatibility: the old flat batch list, for when phases are not used.
     pub(crate) legacy_batches: Vec<SystemBatch>,
     pub(crate) uses_phases: bool,
-    /// Bu schedule'ın en son çalıştığı dünya tick'i — değişiklik tespiti (change
-    /// detection) için referans. Her `run`'da bir önceki değerle karşılaştırma yapılır.
+    /// The world tick on which this schedule most recently ran — the reference for change
+    /// detection. On every `run` the comparison is made against the previous value.
     last_run_tick: u32,
 }
 
@@ -403,7 +403,7 @@ impl Schedule {
         self.build();
     }
 
-    /// Tek bir faz grubuna ait config'leri DAG-batch'le.
+    /// DAG-batch the configs belonging to a single phase group.
     fn build_batches_for(configs: Vec<SystemConfig>) -> Vec<SystemBatch> {
         let count = configs.len();
         if count == 0 {
@@ -639,7 +639,7 @@ impl Schedule {
         );
     }
 
-    /// Batch listesini çalıştırır (faz-içi veya legacy).
+    /// Runs the batch list (within-phase or legacy).
     fn run_batches(batches: &mut [SystemBatch], world: &mut World, dt: f32) {
         #[cfg(not(target_arch = "wasm32"))]
         use rayon::prelude::*;
@@ -730,7 +730,7 @@ impl Schedule {
         }
     }
 
-    /// Toplam batch sayısı (debug / test amaçlı)
+    /// The total batch count (for debug / test purposes)
     #[cfg(test)]
     pub(crate) fn total_batch_count(&self) -> usize {
         if self.uses_phases {

@@ -4,8 +4,8 @@ use gizmo_physics_rigid::world::PhysicsWorld;
 
 use crate::math::Vec3;
 
-/// Gizmo Engine Fizik Eklentisi (Plugin).
-/// Eklendiğinde fizik dünyasını (PhysicsWorld) başlatır.
+/// Gizmo Engine Physics Plugin.
+/// When added, it initializes the physics world (PhysicsWorld).
 #[non_exhaustive]
 #[cfg(feature = "physics")]
 pub struct PhysicsPlugin {
@@ -23,12 +23,12 @@ impl Default for PhysicsPlugin {
 
 #[cfg(feature = "physics")]
 impl PhysicsPlugin {
-    /// Varsayılan yerçekimi ile yeni bir PhysicsPlugin oluşturur.
+    /// Creates a new PhysicsPlugin with the default gravity.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Yerçekimi vektörünü ayarlar (zincirlenebilir).
+    /// Sets the gravity vector (chainable).
     pub fn with_gravity(mut self, gravity: Vec3) -> Self {
         self.gravity = gravity;
         self
@@ -69,7 +69,7 @@ impl<State: 'static> Plugin<State> for PhysicsPlugin {
     }
 }
 
-/// Transform (hiyerarşi ve senkronizasyon) sistemlerini başlatan eklenti.
+/// The plugin that starts the Transform (hierarchy and synchronization) systems.
 #[cfg(feature = "physics")]
 pub struct TransformPlugin;
 

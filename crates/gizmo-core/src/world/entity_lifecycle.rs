@@ -28,16 +28,23 @@ impl World {
         entity
     }
 
-    /// Bir `Bundle`'ı tek seferde spawn eder — entity oluşturur ve tüm
-    /// bileşenleri ekler.
+    /// Spawns a `Bundle` in one go — creates the entity and adds all of its
+    /// components.
     ///
-    /// ```ignore
-    /// let player = world.spawn_bundle(MeshBundle {
-    ///     mesh: renderer.create_cube(),
-    ///     material: Material::pbr(Color::BLUE, 0.5, 0.0),
-    ///     name: "Oyuncu",
-    ///     ..default()
-    /// });
+    /// ```
+    /// # use gizmo_core::prelude::*;
+    /// # #[derive(Clone)] struct Health(u32);
+    /// # gizmo_core::impl_component!(Health);
+    /// # let mut world = World::new();
+    /// // Any `Bundle` will do: a tuple of components, or a named bundle struct from the
+    /// // layers above, such as `MeshBundle`.
+    /// let player = world.spawn_bundle((EntityName("Player".to_string()), Health(100)));
+    ///
+    /// assert_eq!(
+    ///     world.query::<&EntityName>().unwrap().get(player.id()).unwrap().0.as_str(),
+    ///     "Player"
+    /// );
+    /// assert_eq!(world.query::<&Health>().unwrap().get(player.id()).unwrap().0, 100);
     /// ```
     pub fn spawn_bundle<B: crate::component::Bundle>(&mut self, bundle: B) -> Entity {
         let entity = self.spawn();
@@ -98,8 +105,8 @@ impl World {
         None
     }
 
-    /// Derin kopyalama (O(1) Prefab Splicing) işlemi.
-    /// Var olan bir Entity'nin bulunduğu archetype tablosunda tamamen bitişik olarak N adet yeni kopyasını çıkarır.
+    /// The deep-copy (O(1) Prefab Splicing) operation.
+    /// Produces N new copies of an existing Entity, fully contiguous, in the archetype table it is in.
     #[tracing::instrument(skip_all, name = "clone_entity")]
     pub fn clone_entity(&mut self, source_id: u32, count: usize) -> Option<Vec<Entity>> {
         if count == 0 {
@@ -270,7 +277,7 @@ impl World {
         entities.into_iter()
     }
 
-    /// Tüm entityleri temizler.
+    /// Clears all entities.
     pub fn clear_entities(&mut self) {
         self.archetype_index.clear_entities();
         self.entity_locations.clear();
@@ -403,9 +410,9 @@ impl World {
         self.is_despawning = false;
     }
 
-    /// Hafızadaki boşlukları sıkıştırır ve kullanılmayan (boş) Archetype tablolarını silerek
-    /// RAM'i ve sistem performansını ilk baştaki defregmante (temiz) haline getirir.
-    /// Yükleme (Loading) ekranlarında veya düşük yoğunluklu anlarda çağrılması önerilir.
+    /// Compacts the gaps in memory and, by deleting the unused (empty) Archetype tables, brings
+    /// RAM and system performance back to their initial defragmented (clean) state.
+    /// Calling it on Loading screens or at low-intensity moments is recommended.
     #[tracing::instrument(skip_all, name = "compact")]
     pub fn compact(&mut self) {
         // 1. Önce eski, kullanılmayan boş archetype'ları silelim (GC)
@@ -456,16 +463,27 @@ impl World {
         }
     }
 
-    /// `C` bileşenine sahip TÜM entity'leri despawn eder; silinen sayısını döndürür.
-    /// "Bu sahneyi/grubu topluca temizle" (ör. bölüm yeniden yüklenince tüm `LevelEntity`'ler)
-    /// ya da "tüm mermileri sil" gibi yaygın işlemleri tek satıra indirir — geliştirici artık
-    /// `Vec<Entity>` tutup elle döngüyle silmez. Bir marker bileşeni ekle, bunu çağır.
+    /// Despawns ALL entities that have the `C` component; returns the number deleted.
+    /// It reduces common operations such as "clear this scene/group wholesale" (e.g. every
+    /// `LevelEntity` when the level is reloaded) or "delete all the bullets" to a single line —
+    /// the developer no longer keeps a `Vec<Entity>` and deletes by hand in a loop. Add a marker
+    /// component, call this.
     ///
-    /// ```ignore
+    /// ```
+    /// # use gizmo_core::prelude::*;
+    /// # let mut world = World::new();
     /// #[derive(Clone, Copy)] struct Bullet;
     /// gizmo_core::impl_component!(Bullet);
-    /// // …mermilere Bullet ekle…
+    ///
+    /// for _ in 0..3 {
+    ///     let b = world.spawn();
+    ///     world.add_component(b, Bullet);
+    /// }
+    /// let survivor = world.spawn(); // Bullet yok → dokunulmaz
+    ///
     /// let cleared = world.despawn_all_with::<Bullet>();
+    /// assert_eq!(cleared, 3);
+    /// assert!(world.is_alive(survivor));
     /// ```
     pub fn despawn_all_with<C: crate::component::Component>(&mut self) -> usize {
         // Önce id'leri topla (query &self ödünç alır), sonra despawn et (&mut self).
@@ -485,8 +503,8 @@ impl World {
         n
     }
 
-    /// Yaşayan (despawn olmamış) tüm Entity'leri döndüren iterator.
-    /// Uyarı: İterasyon boyunca Entities mutex kilidi tutulur!
+    /// An iterator returning all the Entities that are alive (not despawned).
+    /// Warning: the Entities mutex lock is held for the duration of the iteration!
     pub fn iter_alive_entities(&self) -> Vec<Entity> {
         let entities = self
             .get_resource::<Entities>()
@@ -522,7 +540,7 @@ impl World {
             .is_alive(entity)
     }
 
-    /// Entity üzerindeki tüm bileşenlerin TypeId'lerini döndürür.
+    /// Returns the TypeIds of all the components on the Entity.
     pub fn entity_component_types(&self, entity: Entity) -> Vec<TypeId> {
         if !self.is_alive(entity) {
             return Vec::new();
@@ -569,7 +587,7 @@ impl World {
         self.entity(id)
     }
 
-    /// Entity'nin archetype konumunu döndürür — O(1) lookup.
+    /// Returns the Entity's archetype location — O(1) lookup.
     #[inline]
     pub fn entity_location(&self, entity_id: u32) -> EntityLocation {
         let loc_idx = entity_id as usize;
@@ -580,7 +598,7 @@ impl World {
         }
     }
 
-    /// Toplam yaşayan entity sayısı
+    /// The total number of living entities
     #[inline]
     pub fn entity_count(&self) -> u32 {
         let entities = self

@@ -1,16 +1,40 @@
-//! Birinci-şahıs BAKIŞ denetleyici — fare-look (+ opsiyonel WASD uçuş hareketi).
+//! First-person LOOK controller — mouse-look (+ optional WASD flight movement).
 //!
-//! Standart bir FP / serbest-uçuş kamerası neredeyse her oyunda ve araçta gerekir; ama
-//! demolar bunu her frame ELLE yazar: `mouse_delta → yaw/pitch`, pitch clamp, WASD →
-//! konum, sonra `Camera` + `Transform` senkronu (bkz. yikim_ustasi'nin elle kamera
-//! döngüsü). `FpsLook` komponentini kamera entity'sine ekle, [`FpsLookPlugin`]'i çalıştır;
-//! motor fareyle baktırsın (ve `move_speed>0` ise WASD ile gezdirsin). Nişan/atış yönü:
-//! [`FpsLook::forward`] — "front" matematiğini kopyalamana gerek yok.
+//! A standard FP / free-flight camera is needed in almost every game and tool; but the
+//! demos write it out BY HAND every frame: `mouse_delta → yaw/pitch`, pitch clamp, WASD →
+//! position, then the `Camera` + `Transform` sync (see yikim_ustasi's hand-written camera
+//! loop). Add the `FpsLook` component to the camera entity, run [`FpsLookPlugin`]; let the
+//! engine do the looking with the mouse (and the moving with WASD if `move_speed>0`).
+//! Aim/fire direction: [`FpsLook::forward`] — you don't need to copy the "front" maths.
 //!
-//! ```ignore
-//! world.add_component(cam, FpsLook::new().with_move_speed(8.0)); // fare-look + WASD uçuş
-//! app.add_plugin(FpsLookPlugin);
-//! // ateş ederken:  let dir = look.forward();
+//! ```
+//! use gizmo::prelude::*;
+//! use gizmo::core::system::System;
+//! use gizmo::systems::fps_look::FpsLookSystem;
+//!
+//! let mut world = World::new();
+//! let cam = world.spawn();
+//! world.add_component(cam, Transform::new(Vec3::ZERO));
+//! world.add_component(cam, Camera::new(1.0, 0.1, 100.0, 0.0, 0.0, true));
+//! world.add_component(cam, FpsLook::new().with_move_speed(8.0)); // mouse-look + WASD flight
+//!
+//! // In an application `app.add_plugin(FpsLookPlugin)` drives the system every frame; here
+//! // we drive a single frame by hand: the mouse moves 100 pixels RIGHT.
+//! let mut input = Input::new();
+//! input.on_mouse_delta(100.0, 0.0);
+//! world.insert_resource(input);
+//! FpsLookSystem.run(&world, 1.0 / 60.0);
+//!
+//! let looks = world.borrow::<FpsLook>();
+//! let look = looks.get_entity(cam).unwrap();
+//! assert!((look.yaw - 100.0 * look.sensitivity).abs() < 1e-6); // mouse right -> yaw+
+//! // The camera view stays in sync: the renderer uses `Camera.yaw/pitch`.
+//! let cams = world.borrow::<Camera>();
+//! assert_eq!(cams.get_entity(cam).unwrap().yaw, look.yaw);
+//!
+//! // when firing:
+//! let dir = look.forward();
+//! assert!((dir.length() - 1.0).abs() < 1e-5); // unit aim vector
 //! ```
 
 use gizmo_core::input::Input;
@@ -20,22 +44,23 @@ use gizmo_physics_core::Transform;
 use gizmo_renderer::components::Camera;
 use winit::keyboard::KeyCode;
 
-/// Bir kamera entity'sine eklenen fare-look denetleyicisi. `yaw`/`pitch` bu komponentte
-/// TUTULUR (tek doğruluk kaynağı); sistem her frame fare/WASD'yi işleyip `Camera` +
-/// `Transform`'a yazar. Nişan yönü [`forward`](Self::forward) ile okunur.
+/// The mouse-look controller added to a camera entity. `yaw`/`pitch` are HELD in this
+/// component (the single source of truth); every frame the system processes the mouse/WASD
+/// and writes to `Camera` + `Transform`. The aim direction is read with
+/// [`forward`](Self::forward).
 #[derive(Debug, Clone, Copy)]
 pub struct FpsLook {
-    /// Yatay bakış açısı (rad).
+    /// Horizontal look angle (rad).
     pub yaw: f32,
-    /// Dikey bakış açısı (rad); `±pitch_limit`'e clamp'lenir.
+    /// Vertical look angle (rad); clamped to `±pitch_limit`.
     pub pitch: f32,
-    /// Fare duyarlılığı (rad / piksel).
+    /// Mouse sensitivity (rad / pixel).
     pub sensitivity: f32,
-    /// WASD hareket hızı (birim/sn). 0 → yalnız bakış (kamera sabit durur).
+    /// WASD movement speed (units/s). 0 → look only (the camera stays put).
     pub move_speed: f32,
-    /// Pitch bu değere (rad) ± clamp'lenir (tepetaklak olmayı önler).
+    /// Pitch is clamped to ± this value (rad) (prevents going upside-down).
     pub pitch_limit: f32,
-    /// false → sistem bu kamerayı ATLAR (menü, ara sahne, autoplay için).
+    /// false → the system SKIPS this camera (for menus, cutscenes, autoplay).
     pub enabled: bool,
 }
 
@@ -53,45 +78,45 @@ impl Default for FpsLook {
 }
 
 impl FpsLook {
-    /// Varsayılan fare-look denetleyici (hareketsiz — yalnız bakış).
+    /// Default mouse-look controller (no movement — look only).
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// WASD uçuş hareketini `speed` birim/sn ile aç. Zincirlenebilir.
+    /// Turn on WASD flight movement at `speed` units/s. Chainable.
     pub fn with_move_speed(mut self, speed: f32) -> Self {
         self.move_speed = speed;
         self
     }
 
-    /// Fare duyarlılığını ayarla (rad/piksel). Zincirlenebilir.
+    /// Set the mouse sensitivity (rad/pixel). Chainable.
     pub fn with_sensitivity(mut self, s: f32) -> Self {
         self.sensitivity = s;
         self
     }
 
-    /// Başlangıç yaw/pitch'i (rad). Zincirlenebilir.
+    /// Initial yaw/pitch (rad). Chainable.
     pub fn looking(mut self, yaw: f32, pitch: f32) -> Self {
         self.yaw = yaw;
         self.pitch = pitch;
         self
     }
 
-    /// Bir fare-delta'sını (piksel) yaw/pitch'e uygula (fare sağ → yaw+, fare yukarı →
-    /// pitch+); pitch `±pitch_limit`'e clamp'lenir. Saf/test edilebilir (sistem bunu
-    /// gerçek fare-delta'sıyla çağırır).
+    /// Apply a mouse delta (pixels) to yaw/pitch (mouse right → yaw+, mouse up →
+    /// pitch+); pitch is clamped to `±pitch_limit`. Pure/testable (the system calls
+    /// this with the real mouse delta).
     pub fn apply_look(&mut self, mouse_dx: f32, mouse_dy: f32) {
         self.yaw += mouse_dx * self.sensitivity;
         self.pitch -= mouse_dy * self.sensitivity;
         self.pitch = self.pitch.clamp(-self.pitch_limit, self.pitch_limit);
     }
 
-    /// Dünya-uzayı ileri (nişan) yön vektörü — [`Camera::forward_from`] ile aynı.
+    /// World-space forward (aim) direction vector — the same as [`Camera::forward_from`].
     pub fn forward(&self) -> Vec3 {
         Camera::forward_from(self.yaw, self.pitch)
     }
 
-    /// Dünya-uzayı sağ yön vektörü (yatay).
+    /// World-space right direction vector (horizontal).
     pub fn right(&self) -> Vec3 {
         Camera::right_from(self.yaw)
     }
@@ -99,8 +124,8 @@ impl FpsLook {
 
 gizmo_core::impl_component!(FpsLook);
 
-/// Her frame [`FpsLook`] kameralarını fare + WASD ile sürer ve `Camera`/`Transform`'a
-/// yazar. [`FpsLookPlugin`] bunu schedule'a ekler.
+/// Drives the [`FpsLook`] cameras with the mouse + WASD every frame and writes to
+/// `Camera`/`Transform`. [`FpsLookPlugin`] adds this to the schedule.
 pub struct FpsLookSystem;
 
 impl gizmo_core::system::System for FpsLookSystem {
@@ -174,8 +199,8 @@ impl gizmo_core::system::System for FpsLookSystem {
     }
 }
 
-/// [`FpsLookSystem`]'i uygulamanın schedule'ına ekler → [`FpsLook`] komponentli kameralar
-/// fareyle bakar (ve WASD ile gezer).
+/// Adds [`FpsLookSystem`] to the application's schedule → cameras with a [`FpsLook`]
+/// component look around with the mouse (and move around with WASD).
 pub struct FpsLookPlugin;
 
 impl<State: 'static> crate::app::Plugin<State> for FpsLookPlugin {

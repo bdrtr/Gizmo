@@ -92,7 +92,7 @@ pub use crate::core::input::Input;
 
 #[cfg(feature = "window")]
 pub use winit::event::{ElementState, MouseButton};
-/// `input.key(Key::W)` kısaltması için `KeyCode` alias'ı.
+/// `KeyCode` alias for the `input.key(Key::W)` shorthand.
 #[cfg(feature = "window")]
 pub use winit::keyboard::KeyCode as Key;
 #[cfg(feature = "window")]

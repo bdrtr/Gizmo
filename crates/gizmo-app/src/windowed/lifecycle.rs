@@ -221,9 +221,9 @@ impl<State: 'static> App<State> {
 
 #[cfg(target_arch = "wasm32")]
 impl<State: 'static> App<State> {
-    /// Web: `resumed`'da başlatılan async renderer init'i tamamlandıysa kalan
-    /// senkron kurulumu koşar. Renderer henüz hazır değilse hiçbir şey yapmaz
-    /// (init bitene dek `handle_event` `self.window == None` ile erken döner).
+    /// Web: if the async renderer init started in `resumed` has completed, runs the
+    /// remaining synchronous setup. Does nothing if the renderer is not ready yet
+    /// (until init finishes, `handle_event` returns early with `self.window == None`).
     fn try_finish_web_init(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
             self.pending_web_init = None;

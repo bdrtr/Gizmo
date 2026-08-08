@@ -5,11 +5,11 @@
 //! instead of silently addressing it — the whole reason the generation exists.
 //!
 //! Anything that stores a bare `u32` id rather than an `Entity` gives that protection up.
-/// ECS Entity tanımlayıcısı — Packed u64 temsili.
+/// The ECS Entity identifier — a packed u64 representation.
 ///
-/// Alt 32 bit = entity ID (slot index), üst 32 bit = generation (yeniden kullanım sayacı).
-/// Generation, aynı slot'a (ID'ye) yeni bir entity atandığında artırılır ve eski referansların
-/// (dangling entity) güvenli şekilde tespit edilmesini sağlar.
+/// The low 32 bits = the entity ID (slot index), the high 32 bits = the generation (reuse counter).
+/// The generation is incremented when a new entity is assigned to the same slot (ID), and it makes
+/// it possible to detect old references (dangling entities) safely.
 ///
 /// # Layout
 /// ```text
@@ -22,8 +22,8 @@
 pub struct Entity(u64);
 
 impl Entity {
-    /// Geçersiz / null entity sentinel değeri.
-    /// `Option<Entity>` yerine kullanılabilir (ergonomi ve cache dostu).
+    /// The invalid / null entity sentinel value.
+    /// It can be used instead of `Option<Entity>` (ergonomic and cache friendly).
     pub const INVALID: Self = Self(u64::MAX);
 
     /// Builds an `Entity` handle from an explicit `id` + `generation`.
@@ -40,32 +40,32 @@ impl Entity {
         Self(((generation as u64) << 32) | id as u64)
     }
 
-    /// Entity'nin slot indeksini (ID) döndürür.
+    /// Returns the Entity's slot index (ID).
     #[inline]
     pub fn id(self) -> u32 {
         self.0 as u32
     }
 
-    /// Entity'nin generation (nesil) sayacını döndürür.
+    /// Returns the Entity's generation counter.
     #[inline]
     pub fn generation(self) -> u32 {
         (self.0 >> 32) as u32
     }
 
-    /// Bu entity'nin geçerli (INVALID olmayan) olup olmadığını kontrol eder.
+    /// Checks whether this entity is valid (i.e. not INVALID).
     #[inline]
     pub fn is_valid(self) -> bool {
         self != Self::INVALID
     }
 
-    /// Entity'yi ham u64 bit temsiline dönüştürür.
-    /// Serializasyon, network sync ve hash key olarak kullanılabilir.
+    /// Converts the Entity into its raw u64 bit representation.
+    /// It can be used for serialization, network sync and as a hash key.
     #[inline]
     pub fn to_bits(self) -> u64 {
         self.0
     }
 
-    /// Ham u64 bit temsilinden Entity oluşturur.
+    /// Creates an Entity from a raw u64 bit representation.
     #[inline]
     pub fn from_bits(bits: u64) -> Self {
         Self(bits)

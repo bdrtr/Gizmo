@@ -10,8 +10,8 @@ use crate::entity::Entity;
 use crate::world::World;
 use std::collections::{HashMap, VecDeque};
 
-/// Havuzda tutulacak nesnelerin durumunu belirten marker component.
-/// Bu nesneler aktif değildir, yeniden kullanılmayı beklerler.
+/// The marker component that indicates the state of objects to be kept in the pool.
+/// These objects are not active, they are waiting to be reused.
 #[derive(Clone, Copy)]
 pub struct Pooled;
 
@@ -27,9 +27,9 @@ crate::impl_component!(Pooled);
 /// keeps the prefab alive nor notices when the prefab is despawned and its id slot recycled.
 /// In that case cloning silently copies whatever entity now occupies the slot.
 pub struct ObjectPool {
-    /// Orijinal prefab nesnesi (bu nesne klonlanarak çoğaltılacak)
+    /// The original prefab object (this object will be multiplied by cloning)
     pub prefab_id: u32,
-    /// Kullanılmayan, havuzdaki boş nesnelerin listesi
+    /// The list of unused, idle objects in the pool
     pub inactive: VecDeque<Entity>,
 }
 
@@ -47,9 +47,9 @@ impl ObjectPool {
     }
 }
 
-/// Nesne Havuzu Yönetim Sistemi
-/// Mermiler, partiküller veya düşmanlar gibi sık yaratılıp yok edilen nesneleri
-/// her seferinde tahsis etmek yerine tekrar kullanmanızı sağlar.
+/// The Object Pool Management System
+/// It lets you reuse objects that are frequently created and destroyed — such as bullets,
+/// particles or enemies — instead of allocating them every single time.
 pub struct PoolManager {
     pools: HashMap<String, ObjectPool>,
 }
@@ -74,23 +74,23 @@ impl PoolManager {
         }
     }
 
-    /// Bir prefab nesnesini kaynak göstererek yeni bir havuz oluşturur.
-    /// Prefab otomatik olarak `Pooled` ile işaretlenir, böylece render ve fizik sistemleri onu atlar.
+    /// Creates a new pool using a prefab object as its source.
+    /// The prefab is automatically marked with `Pooled`, so the render and physics systems skip it.
     pub fn register_pool(&mut self, name: &str, prefab_entity: Entity) {
         self.pools
             .insert(name.to_string(), ObjectPool::new(prefab_entity.id()));
     }
 
-    /// `register_pool` ile aynı, ama ek olarak prefab entity'yi `Pooled` ile işaretler.
-    /// Bu sayede prefab asla render edilmez ve fizik sistemi tarafından simüle edilmez.
+    /// The same as `register_pool`, but it additionally marks the prefab entity with `Pooled`.
+    /// This way the prefab is never rendered and is not simulated by the physics system.
     pub fn register_pool_hidden(&mut self, world: &mut World, name: &str, prefab_entity: Entity) {
         world.add_component(prefab_entity, Pooled);
         self.pools
             .insert(name.to_string(), ObjectPool::new(prefab_entity.id()));
     }
 
-    /// Bir bundle (MeshBundle vb.) ve zincirlenmiş bileşenleri doğrudan havuza kaydeder.
-    /// Bundle anında spawn edilir ve çıkan Entity havuz referansı olarak kullanılır.
+    /// Registers a bundle (MeshBundle etc.) and its chained components directly into the pool.
+    /// The bundle is spawned immediately and the resulting Entity is used as the pool reference.
     pub fn register<B: crate::component::Bundle>(
         &mut self,
         world: &mut World,
@@ -101,7 +101,7 @@ impl PoolManager {
         self.register_pool(name, prefab);
     }
 
-    /// Havuzdan bir nesne alır. Havuz boşsa prefab'ı klonlayarak yeni bir nesne üretir.
+    /// Takes an object from the pool. If the pool is empty it produces a new object by cloning the prefab.
     pub fn instantiate(&mut self, world: &mut World, name: &str) -> Option<Entity> {
         let pool = self.pools.get_mut(name)?;
 
@@ -121,7 +121,7 @@ impl PoolManager {
         }
     }
 
-    /// Bir nesneyi tamamen yok etmek (despawn) yerine havuza geri gönderir.
+    /// Instead of destroying an object outright (despawn), sends it back to the pool.
     ///
     /// Parking is idempotent: an entity already sitting in the pool, and an entity that is
     /// no longer alive, are both ignored (a `tracing::debug!` records it). Without that,
