@@ -6,10 +6,35 @@
 /// gated on that threshold, so a breakable is immune to anything below it however often it
 /// is hit.
 ///
-/// Only **box** colliders actually shatter: the fracture path reads the box half-extents to
-/// seed the Voronoi cells and bails out on every other shape. A non-box breakable still
-/// loses health and still latches [`is_broken`](Self::is_broken) when it runs out, but no
-/// debris is spawned and the original entity stays in the scene — inert rather than broken.
+/// Every **bounded** collider shatters — sphere, box, capsule, convex hull and compound. The
+/// Voronoi cells are cut out of the collider's local bounding box, so the debris field has the
+/// silhouette of that box rather than of the shape itself: a sphere breaks like the cube around
+/// it. That is the same order of approximation as the debris already carries, since each cell is
+/// then replaced by a sphere of matching volume whatever its real geometry.
+///
+/// [`Plane`](gizmo_physics_core::ColliderShape::Plane) and
+/// [`TriMesh`](gizmo_physics_core::ColliderShape::TriMesh) do **not** shatter: the first is an
+/// infinite half-space with no finite body to cut up, the second is the static concave variant,
+/// which convex debris cannot represent. Such a body keeps taking damage and its
+/// [`current_health`](Self::current_health) keeps falling — possibly far below zero — but
+/// [`is_broken`](Self::is_broken) never latches and the entity stays whole.
+///
+/// The debris **layout** is seeded from the entity's own ECS id, so two objects broken under
+/// identical conditions come apart differently while any one object comes apart the same way on
+/// every run — which is what lets a fractured scene replay. Two consequences worth knowing: the
+/// pattern is a property of the id, not of the break, so a body restored from a save
+/// (`is_broken` is `#[serde(skip)]`) re-shatters exactly as it did before; and a breakable
+/// spawned into a recycled id slot inherits the previous occupant's pattern.
+///
+/// Determinism is necessary for rollback but **not sufficient, and fracture does not have the
+/// rest**: rollback restores component values, not structural changes, so a shatter that
+/// despawned the body and spawned debris cannot be undone today — the body is not resurrected
+/// and the debris is not removed. Treat a break as a point of no return across a rollback
+/// window.
+///
+/// Through 0.9.0 only boxes shattered, and the other shapes latched `is_broken` anyway: they hit
+/// zero health, spawned no debris, were never despawned, and — because every damage path is
+/// gated on `!is_broken` — could never be damaged or broken again.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Breakable {
     /// How many Voronoi seed points to cut the body into — an *upper bound* on the debris
