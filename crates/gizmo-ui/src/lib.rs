@@ -1,4 +1,4 @@
-//! **Experimental.** Flexbox/grid UI *layout* and pointer *hit-testing* for the
+//! **Experimental.** Flexbox UI *layout* and pointer *hit-testing* for the
 //! Gizmo ECS — this crate computes geometry and interaction state, and draws
 //! nothing at all.
 //!
@@ -6,6 +6,13 @@
 //! UI elements are entities carrying components such as [`Style`] (layout),
 //! [`Node`] (computed geometry), [`BackgroundColor`] and [`Interaction`].
 //! Spawn them via the [`NodeBundle`] and [`ButtonBundle`] bundles.
+//!
+//! [`taffy`] is an **implementation detail**: no taffy type appears in this
+//! crate's API. [`Style`] is our own plain-old-data type built from [`Val`]
+//! lengths and [`UiRect`]s, and it is translated into a taffy style in exactly
+//! one place, inside [`UiContext`]. (Before 0.9 `Style` was a newtype that
+//! deref'd to `taffy::style::Style`, and the prelude glob-re-exported taffy's
+//! `style` and `geometry` modules; both are gone.)
 //!
 //! Add `UiPlugin` to an `App` to register the components and run the layout
 //! and interaction systems each frame, or call [`register`] to do the same on a
@@ -20,18 +27,19 @@
 //! Two systems, and they do what their names say:
 //!
 //! - `ui_layout_system` (`system.rs`) mirrors every entity carrying a [`Style`]
-//!   into a [`taffy`] tree, computes layout for each root against the current
-//!   `WindowInfo` size, and writes the result back into [`Node`] as **absolute**
-//!   window-pixel `position` + `size` (ancestor offsets are accumulated; taffy's
-//!   own locations are parent-relative). Entities that lose their [`Style`] have
-//!   their taffy node reclaimed.
+//!   into the layout tree held by [`UiContext`], computes layout for each root
+//!   against the current `WindowInfo` size, and writes the result back into
+//!   [`Node`] as **absolute** window-pixel `position` + `size` (ancestor offsets
+//!   are accumulated; the engine's own locations are parent-relative). Entities
+//!   that lose their [`Style`] have their layout node reclaimed.
 //! - `ui_interaction_system` (`interaction.rs`) hit-tests the mouse position
 //!   from `Input` against each [`Node`]'s half-open `[pos, pos + size)` box and
 //!   sets [`Interaction`] to `None` / `Hovered` / `Pressed`.
 //!
-//! The crate carries 18 unit tests covering exactly those two things: layout
-//! write-back, taffy node lifecycle, the hit-test predicate and the interaction
-//! state machine. That is the part you can rely on.
+//! The crate carries 27 unit tests covering exactly those two things plus the
+//! [`Style`] → taffy conversion: layout write-back, node lifecycle, length
+//! conversion, the hit-test predicate and the interaction state machine. That
+//! is the part you can rely on.
 //!
 //! # What does NOT work
 //!
@@ -55,11 +63,15 @@
 //! - **No click/focus events, no keyboard handling, no scrolling, no clipping,
 //!   no text input.** [`Interaction`] is a per-frame recomputed state, not an
 //!   event stream.
+//! - **No CSS Grid.** [`Style`] models the flexbox/block surface only; taffy's
+//!   grid algorithm is compiled in but unreachable, because there is no way to
+//!   express `display: grid` or a track template. The full list of taffy
+//!   properties this crate does not model is in the [`Style`] docs.
 //! - A UI entity whose `Parent` is *not* itself a styled UI entity gets no
 //!   layout: root selection is "has no `Parent` component", and only styled
-//!   parents get their children attached to the taffy tree, so such a subtree is
-//!   in no root's layout pass and its [`Node`] stays stale. Read from the code,
-//!   not measured — no test covers it.
+//!   parents get their children attached to the layout tree, so such a subtree
+//!   is in no root's layout pass and its [`Node`] stays stale. Read from the
+//!   code, not measured — no test covers it.
 //!
 //! # What it is good for, and what to use instead
 //!
@@ -145,15 +157,20 @@ impl<State: 'static> gizmo_app::Plugin<State> for UiPlugin {
     }
 }
 
-/// Re-exports of the most commonly used UI types, including the relevant
-/// `taffy` style and geometry items.
+/// Re-exports of the most commonly used UI types.
+///
+/// Everything here is defined by this crate. `taffy`'s style and geometry
+/// modules used to be glob-re-exported from this prelude, which made a
+/// third-party layout engine part of the public API; the POD [`Style`] type
+/// replaced them and the globs are gone.
 pub mod prelude {
     pub use crate::{
-        components::{Style, Node, Interaction, BackgroundColor, UiRoot},
+        components::{
+            AlignContent, AlignItems, AlignSelf, BackgroundColor, Display, FlexDirection,
+            FlexWrap, Interaction, JustifyContent, Node, PositionType, Style, UiRect, UiRoot, Val,
+        },
         bundles::{NodeBundle, ButtonBundle},
     };
     #[cfg(feature = "app")]
     pub use crate::UiPlugin;
-    pub use taffy::style::*;
-    pub use taffy::geometry::*;
 }
