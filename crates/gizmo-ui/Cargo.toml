@@ -9,7 +9,7 @@ authors.workspace = true
 # pointer hit-testing and emits no vertices or draw calls, and the engine has no
 # text rendering at all. This string is the first thing crates.io shows, so it
 # is the right place to say so. See README.md / the crate-level docs.
-description = "EXPERIMENTAL: flexbox/grid UI layout (taffy) and pointer hit-testing for the Gizmo engine's ECS. Computes box geometry and hover/press state only — it renders nothing, and there is no text rendering yet."
+description = "EXPERIMENTAL: flexbox UI layout and pointer hit-testing for the Gizmo engine's ECS. Computes box geometry and hover/press state only — it renders nothing, and there is no text rendering yet."
 license.workspace = true
 repository.workspace = true
 # Crate-local, unlike the other crates' `readme.workspace = true` (which resolves
@@ -28,14 +28,23 @@ rustdoc-args = ["--cfg", "docsrs"]
 gizmo-app = { version = "0.9.0", path = "../gizmo-app", default-features = false, optional = true }
 gizmo-core = { version = "0.9.0", path = "../gizmo-core" }
 gizmo-math = { path = "../gizmo-math", version = "0.9.0" }
-# `calc` KASITLI OLARAK KAPALI (taffy'nin varsayılanında açıktır).
-# taffy'nin `CompactLength`'i 64-bit'te tag+değer+pointer'ı tek bir `*const ()`
-# içine paketler → `taffy::Style` yapısal olarak `!Send + !Sync`. Ama pointer
-# varyantını üreten TEK public constructor `CompactLength::calc`'tır ve o
-# `#[cfg(feature = "calc")]` ile kapılıdır. Feature kapalıyken union yalnızca
-# f32+tag taşıyabilir (ham veri) → `Style`/`UiContext` için elle yazılan
-# `unsafe impl Send/Sync` KANITLANABİLİR olur. Bkz. components.rs / layout.rs.
-# Bu satırı `calc` ekleyerek geri açarsan o iki impl unsound olur.
+# taffy bir İMPLEMENTASYON DETAYIDIR: public API'de hiçbir taffy tipi görünmez.
+# `Style` artık kendi POD tipimiz (components.rs); taffy'ye çeviri yalnızca
+# `UiContext::to_taffy_style` içinde yapılır (layout.rs). A3-followup, 2026-08-08.
+#
+# `calc` KASITLI OLARAK KAPALI (taffy'nin varsayılanında açıktır). taffy'nin
+# `CompactLength`'i 64-bit'te tag+değer+pointer'ı tek bir `*const ()` içine
+# paketler → `taffy::Style` yapısal olarak `!Send + !Sync`, dolayısıyla onu
+# barındıran `TaffyTree`, yani `UiContext`, de öyle. `UiContext`'teki iki
+# `unsafe impl` bu yüzden DURUYOR — ama artık bu feature satırına DEĞİL, kendi
+# çevirimize dayanıyor: `to_taffy_style` sadece `length/percent/auto` üretir,
+# `calc()` üretmez, ve public `Val` tipinde calc varyantı yoktur. Yani feature
+# birleştirmesi `calc`'ı açsa bile ağaçtaki hiçbir değer pointer taşıyamaz
+# (`no_length_conversion_produces_a_calc_tagged_value` testi bunu doğrular).
+# Feature'ı yine de kapalı tutuyoruz: derlenmeyen kod yanlışlıkla çağrılamaz.
+#
+# `grid` açık ama `Style` grid'i modellemiyor (bkz. Style dokümanındaki "Not
+# modelled" listesi) — grid'i geri açmak isteyen önce bir track tipi tanımlamalı.
 taffy = { version = "0.10.1", default-features = false, features = [
     "std",
     "taffy_tree",
