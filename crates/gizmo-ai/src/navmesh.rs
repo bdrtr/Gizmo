@@ -3,7 +3,7 @@
 //!
 //! [`NavMesh::build_from_physics`] runs five stages:
 //! 1. **Voxelisation** — rasterise the world AABB of every non-dynamic collider into a flat
-//!    XZ cell grid and mark those cells blocked.
+//!    XZ cell grid and mark those cells blocked, plus an `agent_radius` skirt around them.
 //! 2. **Region building** — 4-way flood fill over the unblocked cells inside the configured
 //!    world bounds; regions smaller than four cells are dropped.
 //! 3. **Polygon generation** — greedily carve each region into axis-aligned rectangles, one
@@ -12,10 +12,11 @@
 //! 5. **Query** — [`NavMesh::find_path`] runs A* over that polygon graph.
 //!
 //! The representation is 2.5D at best: the grid is flat in XZ and each polygon carries a
-//! single Y, so overlapping floors, ramps, slope limits and agent clearance are **not**
-//! modelled — the `agent_height` and `max_slope` settings are carried on the mesh but never
-//! enforced. There is no funnel / string-pulling stage either; paths come out as the
-//! midpoints of the shared edges they cross.
+//! single Y, so overlapping floors, ramps and slope limits are **not** modelled — the
+//! `agent_height` and `max_slope` settings are carried on the mesh but never enforced.
+//! `agent_radius` is the exception: voxelisation erodes the walkable area by it, so lateral
+//! clearance IS modelled (to whole-cell resolution). There is no funnel / string-pulling stage
+//! either; paths come out as the midpoints of the shared edges they cross.
 //!
 //! This crate's own AI navigation systems in [`crate::system`] drive the simpler grid in
 //! [`crate::pathfinding`], not this module.
@@ -159,9 +160,12 @@ pub struct NavMesh {
     /// **Not enforced** — the builder is 2D and performs no headroom or ceiling test, so a
     /// polygon may sit under an overhang lower than this.
     pub agent_height: f32,
-    /// Intended agent radius in metres, carried from the config. The build does **not** erode
-    /// the walkable area by it — polygons run right up to an obstacle's AABB — so an agent
-    /// following polygon interiors can still clip a wall corner with its body.
+    /// Agent radius in metres, carried from the config and **enforced** by the build: every
+    /// obstacle's blocked cells are grown by `ceil(radius / cell_size)` cells, so no polygon
+    /// comes within that many cells of an obstacle's AABB. Clearance is therefore quantised
+    /// upwards to whole cells — the real gap is at least the radius, and up to one cell more.
+    ///
+    /// Through 0.9.0 this was descriptive only and polygons ran right up to the AABB.
     pub agent_radius: f32,
     /// Maximum walkable incline in **radians**, converted from the config's degrees.
     /// Descriptive only: the builder emits flat, +Y-facing polygons and no stage of build or
@@ -188,10 +192,15 @@ pub struct NavMeshConfig {
     /// Agent height in metres (default `2.0`). Recorded on the built mesh but never checked;
     /// see [`NavMesh::agent_height`].
     pub agent_height: f32,
-    /// Agent radius in metres (default `0.5`). Despite the name, it does not shrink the
-    /// walkable area. Its only build effect is to widen, by `ceil(radius / cell_size)` cells,
-    /// the band around each obstacle whose floor height is sampled — so it influences the Y
-    /// that nearby polygons are placed at, not their extent.
+    /// Agent radius in metres (default `0.5`). Erodes the walkable area: each obstacle blocks
+    /// its own cells plus a `ceil(radius / cell_size)`-cell skirt, so an agent that stays
+    /// inside polygon interiors keeps its body clear of walls.
+    ///
+    /// It also positions the band whose floor height is sampled — that band is the same width
+    /// and now sits just outside the eroded skirt, so it still supplies the Y of the polygons
+    /// nearest each obstacle. Note both effects are quantised to whole cells, so raising this
+    /// above a multiple of `cell_size` costs a full extra cell of walkable area on every side
+    /// of every obstacle.
     pub agent_radius: f32,
     /// Slope limit in **degrees** (default `45.0`), stored on the mesh as radians. Currently
     /// inert; see [`NavMesh::max_slope`].
@@ -224,7 +233,7 @@ impl Default for NavMeshConfig {
     }
 }
 
-/// 2D grid hücresi (voxelization sonucu)
+/// A 2D grid cell (the result of voxelisation)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct GridCell {
     x: i32,
@@ -259,7 +268,10 @@ impl NavMesh {
     /// stepped terrain.
     ///
     /// Runs single-threaded. Voxelisation and region building are linear in the number of
-    /// cells of the configured world box, but the adjacency stage that follows compares every
+    /// cells of the configured world box — voxelisation walks each obstacle's footprint grown
+    /// by twice the `agent_radius` skirt (the erosion, plus the height-sampling band beyond
+    /// it), so a radius comparable to an obstacle's own size dominates that stage's cost for
+    /// it. The adjacency stage that follows compares every
     /// pair of polygons unconditionally — recomputing one polygon's AABB inside the inner
     /// loop — so the overall cost is quadratic in the polygon count, which depends on how
     /// cluttered the level is and not only on the size of the box. Treat this as load-time
@@ -292,16 +304,27 @@ impl NavMesh {
             let min_z = (aabb.min.z / cell_size).floor() as i32;
             let max_z = (aabb.max.z / cell_size).ceil() as i32;
 
-            // Ajan yarıçapı kadar kenar boşluğu
+            // Erozyon: engelin hücreleri ajan yarıçapı kadar dışa taşırılıp bloklanıyor.
+            // Eskiden `margin` YALNIZ döngü sınırlarını genişletiyordu; `blocked.insert`
+            // gerçek AABB'ye kapılı olduğu için `agent_radius` hiç clearance üretmiyordu ve
+            // polygonlar duvarın dibine kadar geliyordu.
             let margin = (config.agent_radius / cell_size).ceil() as i32;
+            let bx0 = min_x - margin;
+            let bx1 = max_x + margin;
+            let bz0 = min_z - margin;
+            let bz1 = max_z + margin;
 
-            for x in (min_x - margin)..=(max_x + margin) {
-                for z in (min_z - margin)..=(max_z + margin) {
+            // Yükseklik örnekleme bandı, erozyon sınırının DIŞINDA ve genişliği eskisiyle
+            // aynı (`margin` hücre). Bandı yerinde bırakmak onu bloklu bölgenin içine
+            // gömerdi: `walkable_y`'ye yazan tek yol bu band olduğu için her polygon
+            // Y = 0.0 fallback'ine düşerdi.
+            for x in (bx0 - margin)..=(bx1 + margin) {
+                for z in (bz0 - margin)..=(bz1 + margin) {
                     let cell = GridCell { x, z };
 
-                    // Gerçek AABB içindeki hücreler engel
-                    if x >= min_x && x <= max_x && z >= min_z && z <= max_z {
+                    if x >= bx0 && x <= bx1 && z >= bz0 && z <= bz1 {
                         blocked.insert(cell);
+                        continue;
                     }
 
                     // Engelin üst yüzeyini yürünebilir zemin olarak kaydet
@@ -482,7 +505,7 @@ impl NavMesh {
         }
     }
 
-    /// Komşuluk grafını oluştur (kenar paylaşımı tespiti)
+    /// Build the adjacency graph (detection of shared edges)
     fn build_adjacency(polygons: &mut [NavPoly], tolerance: f32) {
         let n = polygons.len();
         let mut adjacency: Vec<Vec<(u32, [Vec3; 2])>> = vec![Vec::new(); n];
@@ -518,8 +541,8 @@ impl NavMesh {
         }
     }
 
-    /// İki polygon arasında paylaşılan/örtüşen kenarı bul
-    /// Greedy merge sonucunda kenarlar tam eşleşmeyebilir — kısmi örtüşme yeterli
+    /// Find the shared/overlapping edge between two polygons
+    /// As a result of the greedy merge the edges may not match exactly — partial overlap is enough
     fn find_shared_edge(verts_a: &[Vec3], verts_b: &[Vec3], tolerance: f32) -> Option<[Vec3; 2]> {
         let tol_sq = tolerance * tolerance;
 
@@ -550,7 +573,7 @@ impl NavMesh {
         None
     }
 
-    /// İki kenar parçasının kollineer olup olmadığını ve örtüşüp örtüşmediğini kontrol eder.
+    /// Checks whether two edge segments are collinear and whether they overlap.
     fn check_edge_overlap(
         a1: Vec3,
         a2: Vec3,
@@ -928,6 +951,105 @@ mod tests {
         // Açık alandaki bir nokta bir polygon'a düşmeli
         let poly = mesh.find_polygon(Vec3::new(-5.0, 0.0, -5.0));
         assert!(poly.is_some(), "Polygon bulunmalı");
+    }
+
+    /// A world with ONE obstacle and no floor. `create_test_world`'s ground is itself a static
+    /// collider, so the builder blocks the entire floor and the only walkable cells are the
+    /// ones off its edge — useless for measuring clearance around the obstacle.
+    fn world_with_one_obstacle(half_extents: Vec3) -> gizmo_physics_rigid::world::PhysicsWorld {
+        let mut world = gizmo_physics_rigid::world::PhysicsWorld::new();
+        world.add_body(
+            BodyHandle::from_id(1),
+            RigidBody::new_static(),
+            gizmo_physics_core::Transform::new(Vec3::new(0.0, 1.0, 0.0)),
+            Velocity::default(),
+            Collider::box_collider(half_extents),
+        );
+        world
+    }
+
+    fn config_with_radius(agent_radius: f32) -> NavMeshConfig {
+        NavMeshConfig {
+            cell_size: 1.0,
+            agent_radius,
+            world_min: Vec3::new(-10.0, -5.0, -10.0),
+            world_max: Vec3::new(10.0, 10.0, 10.0),
+            ..Default::default()
+        }
+    }
+
+    /// Does any polygon actually cover this point? `find_polygon` is not usable as the oracle
+    /// here — it falls back to the nearest polygon CENTRE when containment fails, so it answers
+    /// `Some` for points that are nowhere on the mesh.
+    fn covered(mesh: &NavMesh, p: Vec3) -> bool {
+        mesh.polygons.iter().any(|poly| poly.contains_point_xz(p))
+    }
+
+    /// `agent_radius` must remove walkable area next to an obstacle, not just describe it.
+    ///
+    /// The 2×2×2 m obstacle at the origin occupies cells x,z ∈ [-1, 1] after the builder's
+    /// floor/ceil inflation. With `cell_size = 1` and `agent_radius = 1`, one more cell each
+    /// way must go: the point at x = 1.5 sits in cell x = 1 — inside the obstacle's own
+    /// footprint — and x = 2.5 sits in cell 2, the eroded skirt. Both must be off the mesh,
+    /// and the pre-fix build covers the second one.
+    #[test]
+    fn agent_radius_erodes_the_walkable_area() {
+        let world = world_with_one_obstacle(Vec3::splat(1.0));
+        let mesh = NavMesh::build_from_physics(&world, &config_with_radius(1.0));
+
+        assert!(
+            !covered(&mesh, Vec3::new(1.5, 0.0, 0.0)),
+            "the obstacle's own cells must never be walkable"
+        );
+        assert!(
+            !covered(&mesh, Vec3::new(2.5, 0.0, 0.0)),
+            "a cell within one agent radius of the obstacle must be eroded away — this is the \
+             clearance `agent_radius` promises, and the pre-fix build leaves it walkable"
+        );
+        assert!(
+            covered(&mesh, Vec3::new(3.5, 0.0, 0.0)),
+            "erosion must stop at the radius: the next cell out is still walkable"
+        );
+    }
+
+    /// …and it is proportional, not a blanket one-cell skirt: with a zero radius the polygons
+    /// run right up to the obstacle's AABB, which is the pre-fix extent for every radius.
+    #[test]
+    fn a_zero_agent_radius_erodes_nothing() {
+        let world = world_with_one_obstacle(Vec3::splat(1.0));
+        let mesh = NavMesh::build_from_physics(&world, &config_with_radius(0.0));
+
+        assert!(
+            !covered(&mesh, Vec3::new(1.5, 0.0, 0.0)),
+            "the obstacle itself is still blocked"
+        );
+        assert!(
+            covered(&mesh, Vec3::new(2.5, 0.0, 0.0)),
+            "with no radius there is no skirt to erode"
+        );
+    }
+
+    /// The floor-height band survives the erosion.
+    ///
+    /// `walkable_y` is written only by that band, so leaving it inside the newly blocked skirt
+    /// silently drops every polygon to the `0.0` fallback — measured, not assumed: that variant
+    /// puts this polygon at `y = 0`. The band is moved outward instead, keeping its width, so
+    /// the first walkable cell past the skirt still reports the obstacle's top surface,
+    /// `y = 1 + 1 = 2`.
+    #[test]
+    fn the_height_sampling_band_moves_outside_the_eroded_skirt() {
+        let world = world_with_one_obstacle(Vec3::splat(1.0));
+        let mesh = NavMesh::build_from_physics(&world, &config_with_radius(1.0));
+
+        let poly = mesh
+            .polygons
+            .iter()
+            .find(|p| p.contains_point_xz(Vec3::new(3.5, 0.0, 0.0)))
+            .expect("the first cell past the skirt is walkable");
+        assert_eq!(
+            poly.center.y, 2.0,
+            "that polygon must still take the obstacle's top surface as its floor height"
+        );
     }
 
     fn unit_square(vertices: Vec<Vec3>) -> NavPoly {
