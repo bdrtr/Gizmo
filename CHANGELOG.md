@@ -62,6 +62,148 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Every bounded collider shape now shatters, and the ones that cannot no longer disable the
+  entity.** *Behavioural for any non-box `Breakable`.*
+
+  `shatter_entity` only ever read box half-extents and returned early on everything else — but
+  all three call sites had already set `Breakable::is_broken`. A sphere, capsule or hull
+  breakable that ran out of health therefore spawned no debris, was never despawned, and,
+  because every damage path is gated on `!is_broken` and nothing in the engine clears that
+  flag, could never be damaged or broken again. It stayed in the scene at zero health,
+  permanently inert. The bail-out did not mean "unsupported shape does nothing"; it meant
+  "unsupported shape destroys the entity in place".
+
+  Sphere, capsule, convex hull and compound now shatter through the collider's **local
+  bounding box**, so a sphere breaks like the cube around it. That is the approximation the
+  debris already carried — each Voronoi cell is replaced by a volume-matched sphere whatever
+  its real geometry — so the bound is not the weak link. `Plane` (an infinite half-space,
+  whose AABB is a ±10 km cube that would have shattered the floor into kilometre-wide
+  boulders) and `TriMesh` (static and concave, which convex debris cannot represent) still do
+  not shatter; `shatter_entity` reports that to its callers, which now latch `is_broken` only
+  on a real break, leaving such a body damageable instead of frozen.
+
+  **The box path is unchanged, and that was measured rather than argued:** the debris field of
+  a 0.5 m box is pinned bit-for-bit in `tests/breakable_shatter.rs`, and those numbers were
+  read off the pre-fix build. Running the new test file against pre-fix `system.rs` turns five
+  of its six tests red and leaves exactly that one green.
+
+- **`gizmo-ui`'s `Style` no longer holds a `taffy::Style`.** *Breaking for `gizmo-ui`, which is
+  marked experimental.*
+
+  The component is now a plain `Copy` POD built on a crate-owned `Val { Auto, Px, Percent }`,
+  and taffy is reached only inside `UiContext` at layout time. That deletes both
+  `unsafe impl Send/Sync` — the component derives them now — whose soundness had rested on
+  taffy's `calc` feature staying off, and closes the `pub use taffy::style::*` /
+  `pub use taffy::geometry::*` leak, so no taffy type appears in a public signature, field or
+  re-export any more. Every taffy field the new type does not model is named in its docs, the
+  CSS Grid family included, so the omissions are stated rather than silent.
+
+- **Debris patterns differ per object.** *Behavioural (visual) for anything with `Breakable`.*
+
+  `shatter_entity` seeded the Voronoi cut with a literal `42`, so every object in a scene broke
+  into the identical pattern. The seed is now derived from the entity's ECS id through a
+  SplitMix64 finalizer.
+
+  Deliberately **not** mixed with a frame counter, though the plan called for one: the engine
+  has no rollback-safe counter to use — `PhysicsWorld` carries no tick, neither snapshot
+  restores one, and `Time::frame_count` counts wall-clock-driven render frames. Any of them
+  would make a rolled-back-and-resimulated break produce different debris than the original.
+  Nothing is lost by leaving it out, since `is_broken` latches on the first shatter and the seed
+  therefore never has to tell two occasions apart, only two entities.
+
+- **The Stage A crates' public documentation is in English.** *Documentation only — no
+  behavioural change.*
+
+  `gizmo-core`, `gizmo` (the facade), `gizmo-physics-core`, `gizmo-math`, `gizmo-ai`,
+  `gizmo-audio`, `gizmo-app` and `gizmo-scene` had 1286 Turkish `///` / `//!` lines between
+  them; 8 remain, of which 7 are false positives of the detector (Plücker, Möller–Trumbore, and
+  a line of English *about* Turkish casing) and the eighth is a doc quoting a Turkish log format
+  string that a test asserts on. Translated sentence for sentence, with hedges left as hedges
+  and emphasis left where it was — the same standard `docs/ENGINE.md` was held to. No
+  intra-doc link broke: the rustdoc warning count is unchanged at 71.
+
+  Comments inside doc examples were translated too, including the assertions that quote the
+  messages they check. Plain `//` inline comments are still Turkish across the workspace — a
+  larger surface, tracked separately.
+
+- **Every doc example now compiles and runs.** *Documentation only — no behavioural change.*
+
+  The workspace had 30 `​```ignore` fences, i.e. 31 doc-tests that rustdoc collected and then
+  skipped. There are now **zero**: `cargo test --workspace --doc` goes from 17 passing / 31
+  ignored to **45 passing / 0 ignored**. None of them needed `no_run` and none turned out to be
+  irreducible pseudo-code, so all 30 became real tests — and they assert the documented
+  contract rather than merely linking.
+
+  Un-ignoring them surfaced defects the fences had been hiding, all now fixed:
+  `World::spawn_bundle`'s example used `MeshBundle` / `Material::pbr` / `Color::BLUE`, none of
+  which `gizmo-core` can even name; a doc comment in `component_ops.rs` was attached to the
+  wrong function (it documented `query_entity_mut` while sitting on `insert_batch`, whose own
+  summary was stranded at the bottom of the block); `web_profile.rs`'s module blurb was written
+  with `///` and so documented the next item instead, and its example passed a `bool` where
+  `with_shadows` takes a `ShadowQuality`; `gizmo-renderer`'s crate docs described the frustum
+  matrix as `view * projection` when `camera.rs` builds `projection * view`; and
+  `resource_scope`'s example could not compile at all, since its turbofish supplied two of
+  three generic arguments and the third is an unnameable closure type.
+
+- **The contact solver's soft-constraint penalty term no longer carries a mass factor.**
+  *Behavioural only for `block_solver = false`; the default path never reaches this line.*
+
+  `impulse_scale·λ` relaxes the accumulated impulse — it is not a velocity error to be
+  converted into one — so it belongs outside the effective-mass division, as in Box2D v3's
+  `-normalMass·massScale·(vn + bias) − impulseScale·λ`. It had been moved inside, making the
+  update `λ_{n+1} = λ_n·(1 − impulse_scale/k_n) + …`, whose factor leaves the unit disc once
+  `m_eff > 2/impulse_scale` (≈34.6 at the shipped `hertz = 30`, `ζ = 10`).
+
+  Contacts never blew up the way the joint rows did — `max(0.0)` truncates the negative half of
+  every cycle — so the symptom was quieter: penetration recovery stopped being mass-invariant,
+  which is precisely what a constraint parameterised by hertz and damping must be. A box
+  resting in 0.2 m of penetration finished at `1 kg 0.4733 · 100 kg 0.4092 · 300 kg 0.4084 ·
+  1000 kg 0.4872` — 0.06 m of spread, and not even monotonic. Undivided it is 0.471068 at every
+  mass from 1 kg to 5000.
+
+  This reverses a change that had been landed as a bug fix with an arithmetic test showing only
+  that the two orderings *differ*, never which one is right. That test is replaced by one
+  asserting the property that decides it, plus a recursion test that exhibits the divergence
+  and shows the clamp containing it. Determinism is unchanged (`A462C9EB8A09D5CA`) because the
+  block solver, on by default, discards `impulse_scale` outright — asserted by a test so the
+  scope claim cannot rot.
+
+- **`NavMeshConfig::agent_radius` now erodes the walkable area.** *Behavioural for every
+  navmesh built with a non-zero radius, i.e. the default.*
+
+  The voxeliser computed a `ceil(radius / cell_size)` margin and used it only to widen the
+  loop bounds — `blocked.insert` stayed gated on the obstacle's real AABB, so the setting
+  produced no clearance at all and polygons ran right up to the wall. Each obstacle's blocked
+  cells are now grown by that margin, so an agent that stays inside polygon interiors keeps
+  its body clear. Clearance is quantised upwards to whole cells: at least the radius, up to
+  one cell more.
+
+  The floor-height sampling band moves outward with it rather than being swallowed by the new
+  skirt. That band is the only writer of `walkable_y`, and blocking it in place drops every
+  polygon to the `0.0` fallback — measured on that variant, not assumed. It keeps its old
+  width and now sits just outside the skirt, so polygons near an obstacle still take their Y
+  from its top surface.
+
+  The three pre-existing navmesh build tests pass unchanged: they assert structure, not
+  polygon coordinates, so nothing needed re-blessing. Three tests were added; the erosion one
+  fails on the old build.
+
+- **A floating-base articulated tree feels gravity.** *Behavioural for
+  `ArticulatedTree { is_fixed_base: false }`, behind `experimental-multibody`.*
+
+  In pass 3 of the ABA the root's parent acceleration is where gravity enters, as the
+  fictitious `a_grav = (0, -gravity)`. The floating-base branch used `base_acceleration`
+  *instead of* that term rather than in addition to it, so the `gravity` argument was accepted
+  and discarded for the whole tree: with the default zero base acceleration a pendulum hung in
+  mid-air at `q̈ = 0`. Both branches now share one formula — gravity, plus whatever base
+  acceleration the caller prescribed — so a base at rest gives exactly the fixed-base answer,
+  and a base falling at g (`base_acceleration = (0, +g)`) gives the weightless one.
+
+  Fed a non-zero base acceleration the old branch did worse than drop gravity: it inverted the
+  response. The free-fall input above produced `+4.9049997` where the correct answer is `0`,
+  the exact negation of the `-4.905` fall. Nothing in the workspace sets `is_fixed_base = false`
+  — every test and every default is fixed-base — which is why this survived property testing.
+
 - **`glam` 0.29 → 0.32, `bevy_reflect` 0.15 → 0.19.** *No behavioural change — see below.*
 
   `glam` is the one deliberate permanent public dependency, so its major version is part of

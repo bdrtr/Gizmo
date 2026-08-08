@@ -40,7 +40,23 @@
 > `unsafe impl Send` tamamen kaldırıldı — derleyici otomatik türetti (mlua `send` feature'ı).
 > Crate dışında çağıran yoktu, dolayısıyla çağrı yeri değişikliği sıfır.
 
-### ⬜ A3-followup — `taffy::Style` bağımlılığını component'ten çıkar
+### ✅ A3-followup — `taffy::Style` bağımlılığını component'ten çıkar — **KAPANDI** *(2026-08-09)*
+> `Style` artık `Val { Auto, Px, Percent }` üzerine kurulu, `Copy` türeten kendi POD tipimiz;
+> taffy'ye dönüşüm yalnız `UiContext` sınırında. **İki `unsafe impl Send/Sync` SİLİNDİ** (taşınmadı
+> — Send/Sync artık türetiliyor), `pub use taffy::style::*` / `geometry::*` sızıntıları kapandı,
+> ve crate dışında hiçbir public imza/alan/re-export taffy tipi adlandırmıyor.
+>
+> Modellenmeyen taffy alanları tip dokümanında tek tek sayılıyor (grid ailesi dahil), yani
+> eksiklik sessiz değil beyan edilmiş. Dönüşüm alan-alan doğrulandı: 24 POD alanının hepsi
+> taffy'ye bağlanıyor, `gap.width→column / gap.height→row` eşlemesi taffy'nin
+> `constants.gap.main(dir)`'ına göre doğru.
+>
+> İncelemenin bulduğu iki kusur düzeltildi: eski test `UiContext`'in Send+Sync'ini de iddia
+> ediyordu, yeniden yazımda sessizce daralmıştı (geri kondu — `UiContext`'in kendi iki
+> `unsafe impl`'i duruyor, o ayrı ve gerekçeli); ve "modellenmiyor" listesinde
+> `justify_items`/`justify_self` eksikti.
+
+### ⬜ (özgün madde) A3-followup — `taffy::Style` bağımlılığını component'ten çıkar
 `Style(pub taffy::style::Style)` bir ECS component'i olduğu için `Send+Sync` zorunlu, ama
 taffy'nin tipi yapısal olarak değil. Şu an feature-gate'e dayanıyoruz (yukarıdaki kalan risk).
 Kalıcı çözüm: component'te kendi POD layout tipimizi tut, `taffy::Style`'a yalnız layout
@@ -76,10 +92,33 @@ hesabı sırasında `UiContext` içinde dönüştür. Bu aynı zamanda `lib.rs:7
 > seed'li olduğunu kanıtlayan test (yalnız `voronoi_shatter`'ı seed'leyip jitter'ı entropy'de
 > bırakan kısmi düzeltmeyi yakalar).
 
-### ⬜ A5-followup — `shatter_entity` sabit seed 42 kullanıyor
+### ✅ A5-followup — `shatter_entity` sabit seed 42 kullanıyor — **KAPANDI** *(2026-08-09)*
 Determinizm ihlali DEĞİL, kalite sorunu: her nesne her kırıldığında **aynı** parça deseni
 çıkıyor. Doğrusu entity id + frame sayacından deterministik türetmek — hem çeşitlilik hem
 tekrarlanabilirlik. Davranış (görsel) değiştirdiği için Faz A kapsamına alınmadı.
+
+> Seed artık `shatter_seed(entity.id())` — SplitMix64 finalizer'lı, kendi domain sabitiyle.
+
+> **"Frame sayacı" kısmı BİLEREK YAPILMADI, ve sebebi ölçüldü.** Üç aday da rollback-güvenli
+> değil: `PhysicsWorld`'de adım/tick sayacı YOK (alan listesi tarandı), `WorldSnapshot` ve
+> `gizmo_net`'in rollback snapshot'ı sayaç taşımıyor, `Time::frame_count` ise duvar saatinden
+> beslenen RENDER karesi (aynı sim adımı farklı kare hızında farklı değere düşer). Herhangi
+> biri, geri sarılıp yeniden simüle edilen bir kırılmanın ORİJİNALDEN farklı debris üretmesi
+> demekti — tam da sessiz desync. Ve kaybedilen bir şey yok: `is_broken` mandalı ilk kırılmada
+> kapandığı için seed'in iki *olayı* değil yalnız iki *nesneyi* ayırması yeterli.
+>
+> **Golden yeniden ölçüldü** (`the_box_path_is_bit_identical`, 6 parça, id 0). İnceleyici bunu
+> bağımsız doğruladı: rand 0.10.1'in `seed_from_u64` PCG32 genişletmesini, `StdRng` = ChaCha12'yi
+> ve `voronoi_shatter`'ı Python'da f32 ile yeniden yazıp **hem yeni hem eski altı değeri
+> bit-bit** üretti. Yani sayılar tahmin değil.
+>
+> `two_different_entities_shatter_into_different_debris` düzeltmesiz kırmızı. Eşi olan
+> reprodüksiyon testi ise **kanıt değil bekçi** olarak etiketlendi ve sebebi yazıldı: sabit seed
+> zaten tekrarlanabilir olduğu için o yarının failing-first hâli yazılamıyor.
+>
+> Doküman dürüstlüğü: ilk metin "replay ve rollback'e katılmasını sağlar" diyordu; rollback
+> yapısal değişikliği geri almadığı için kırılma bir rollback penceresinde geri alınamaz —
+> düzeltildi.
 
 ### ✅ A1 — README iddia düzeltmesi
 > **Bitti (2026-08-04).** Kaldırılan/düzeltilen yanlış iddialar: "Sweep and Prune (SAP)
@@ -159,8 +198,50 @@ crate'inde duruyor. `gizmo-physics-core`'un facade'da zorunlu olması bunu şimd
 gizliyor ama fizik crate'lerini bağımsız paketlemeyi (D1) zorlaştırıyor ve
 "transform istiyorum ama fizik istemiyorum" tüketicisini imkânsız kılıyor.
 
-### 🔄 A7 — Doc-test'ler gerçekten çalışsın
-> **Kısmen bitti (2026-08-04).** Çalışan doc-test: **7 → 12**. Kalan 30 `ignore`.
+### ✅ A7 — Doc-test'ler gerçekten çalışsın — **KAPANDI** *(2026-08-08)*
+> **Workspace'te sıfır `ignore` kaldı.** Çalışan doc-test: **17 → 45**, 0 başarısız,
+> 0 `ignore`. `grep -rn '```[a-z_,]*ignore' crates demo cradle server` artık **0** eşleşme
+> veriyor.
+>
+> | crate | önce (koşan/ignore) | sonra |
+> |---|---|---|
+> | gizmo-core | 8 / 11 | **19** / 0 |
+> | gizmo (facade) | 4 / 13 | **14** / 0 |
+> | gizmo-renderer | 0 / 3 | **3** / 0 |
+> | gizmo-analysis | 0 / 1 | **1** / 0 |
+> | gizmo-app | 1 / 1 | **2** / 0 |
+> | gizmo-{animation,scripting} | 0 / 1'er | **1**'er / 0 |
+>
+> **Politikanın üç kovasından yalnız biri kullanıldı: hepsi GERÇEK doc-test oldu.** Ne `no_run`
+> ne ` ```text ` gerekti — hiçbir örnek derlenmek için GPU/pencere/ses aygıtı istemiyordu ve
+> hiçbiri kurtarılamaz sözde-kod değildi. Örnekler smoke değil, sözleşme iddia ediyor
+> (`assert_eq!`/`assert!` ile).
+>
+> **`ignore` kalkınca ortaya çıkan gerçek kusurlar** — hepsi derlenmediği için gizlenmişti:
+> - `World::spawn_bundle` örneği `MeshBundle`/`Material::pbr`/`Color::BLUE`/`renderer.create_cube()`
+>   kullanıyordu; bunların HİÇBİRİ `gizmo-core`'dan erişilebilir değil (aşağı katman yukarıyı
+>   göremez). Tuple `Bundle` üzerine yeniden yazıldı.
+> - `component_ops.rs`'te bir doc yorumu **YANLIŞ FONKSİYONA** bağlıydı: özet satırı ve örneği
+>   `query_entity_mut`'u anlatıyordu, oysa yorum `insert_batch`'in üstündeydi ve `insert_batch`'in
+>   kendi cümlesi bloğun EN ALTINA sıkışmıştı. Doğru fonksiyona bağlandı; kaybolan özet satırı
+>   `query_entity_mut`'un kendi tanımına (`world/query.rs`) taşındı.
+> - `web_profile.rs`'in modül tanıtımı `///` ile yazıldığından aslında bir SONRAKİ item'ı
+>   (`PostProcessLevel`) dokümanlıyordu; `//!` yapıldı. Örneğindeki `with_shadows(true)` de
+>   yanlış tipteydi (`ShadowQuality` alıyor).
+> - `gizmo-renderer/src/lib.rs` prose'u frustum matrisini `view * projection` diye yazıyordu;
+>   `camera.rs:154` `projection * view` kuruyor. Metin düzeltildi.
+> - `resource_scope` örneğindeki turbofish `::<PoolManager, ()>` derlenmiyor (3 generic parametre
+>   var, kapalı `F` adlandırılamaz) — `::<PoolManager, (), _>` oldu. **Bunu ajan değil cargo
+>   yakaladı**: dönüşüm turunun tek derleme hatasıydı.
+>
+> **Yöntem:** 7 paralel ajan (ayrık dosya grupları) + her gruba bir düşman gözüyle inceleyici;
+> ajanlara cargo koşturmak YASAKLANDI (bu makinede ~13 GB RAM, paralel cargo OOM eder) ve bütün
+> doğrulama burada seri koşturuldu. Kapılar: doc-test 45/45, `cargo test --workspace` exit 0
+> (129 suite), CI clippy exit 0, `cargo doc` uyarı sayısı artmadı (kalan uyarıların hepsinin
+> metni HEAD'de de var).
+>
+> ---
+> **Eski durum (2026-08-04).** Çalışan doc-test: **7 → 12**. Kalan 30 `ignore`.
 >
 > **Ölçüm düzeltmesi:** ilk denetimde "20 hedefin 19'unda 0 çalışan test" doğruydu ama
 > bunu "tüm doc örnekleri ignore" diye özetlemek fazla genişti — `gizmo-core`'un 7 tanesi
@@ -180,10 +261,9 @@ gizliyor ama fizik crate'lerini bağımsız paketlemeyi (D1) zorlaştırıyor ve
 > Düzeltme `[lib] name = "gizmo"` eklemek (tek satır, docs'u doğru kılar) ama crate yolu
 > public API olduğu için sürüm kararıyla birlikte alınmalı → **A7-followup**.
 
-- [ ] Kalan 30 `ignore`: `gizmo-engine` 13, `gizmo-core` 10, `gizmo-renderer` 3,
-      `gizmo-{analysis,animation,app,scripting}` 1'er. Derlenebilir olanları gerçek örneğe
-      çevir; GPU/pencere gerektirenleri `no_run` yap (derlenir, koşmaz); gerçekten
-      sözde-kod olanları ` ```text ` işaretle ve örnek iddiasını bırak.
+- [x] Kalan 30 `ignore` — **hepsi kapandı** *(2026-08-08)*. Sayım notu: `gizmo-engine`'de 10
+      fence vardı ama rustdoc 13 test sayıyordu; `spawner/mod.rs`'in modül bloğu birden çok
+      re-export'a (Entity/EntityName/World/spawner) ayrı ayrı atfediliyor.
 
 ### ✅ A7-followup — `[lib] name = "gizmo"` eklendi
 > **Bitti (2026-08-04), 0.9.0'a dahil.** `crates/gizmo/Cargo.toml`'a `[lib] name = "gizmo"`.
@@ -705,6 +785,12 @@ satıra yazardı). Clamp artık artıma değil geçiş boyunca birikmiş TOPLAMA
 > HEAD ile bit-eş (2.014287 / 6.078255 / 27.403154) — yani "birikim tek başına compliant
 > eklemleri rijitleştirir" uyarısı da bu şemada geçerli değil. Terim, kırpma rejimiyle
 > BİRLİKTE ele alınmalı; compliance'ın iterasyon-sayısına bağımlılığı o zamana kadar açık.
+>
+> **↑ BU NOT ARTIK BAYAT** *(2026-08-08'de fark edildi)*. "Kırpma rejimiyle birlikte ele
+> alınmalı" koşulu `d49bedb` ile sağlandı: CFM tamamen bırakılıp temas çözücüsünün soft-constraint
+> formülasyonuna geçildi, `c` bölen olmaktan çıkıp çarpan oldu, kırpma hiç ısırmıyor ve
+> compliance'ın iterasyon bağımlılığı kapandı (5/10/20/40 iterasyonda aynı). Ayrıntı aşağıda,
+> "Derin düzeltmeler" bölümündeki `compliance gerçek bir ters-sertlik oldu` maddesinde.
 
 **✅ commit 3 — `break_force` net tepkiden hesaplanıyor.** Sekiz iterasyon-içi kontrol tek
 bir geçiş-sonrası kontrole indi; ölçülen şey artık `‖Σ λᵢ·nᵢ‖ / dt`. `JointRows`,
@@ -820,13 +906,48 @@ warm-start sweep'i, bir satırın aktivasyon kapısı kapandığı substep'te λ
 (gevşemiş halat yeniden çekmemeli), ve `tests/rollback.rs`'e yüksek-kütle-oranlı bir zincir
 sahnesi.
 
-### ⬜ Ölçülecek: temas çözücüsünde de aynı bölme var mı?
+### ✅ Ölçüldü: temas çözücüsünde de aynı bölme VARDI *(2026-08-08)*
 
-`solver/tgs.rs:597` `impulse_scale` terimini `/ k_n` ile bölüyor — eklemlerde 4 kg'da
+`solver/tgs.rs:597` `impulse_scale` terimini `/ k_n` ile bölüyordu — eklemlerde 4 kg'da
 kısıtı boşaltan yapının aynısı. Oradaki `impulse_scale` çok daha küçük (contact_hertz = 30,
-ζ = 10 → ≈0.058), yani kararlılık sınırı `m_eff ≈ 34`'e çıkıyor ve mevcut soak sahnelerinde
-ısırmıyor. **Körlemesine değiştirilecek bir şey değil** — önce ağır cisimli bir temas sahnesi
-kurup ölçmek gerekiyor.
+ζ = 10 → ≈0.058), yani kararlılık sınırı `m_eff ≈ 34.6`'ya çıkıyor. Madde "körlemesine
+değiştirilecek bir şey değil, önce ağır cisimli bir temas sahnesi kurup ölçmek gerekiyor"
+diyordu. Sahne kuruldu (`tests/contact_soft_stability.rs`), ölçüldü, ve **terim düzeltildi.**
+
+> **İlk tablom sahteydi ve bunu fark ettim.** Kutuyu tam temasta park edip kütleyi 1'den
+> 5000 kg'a taradım: bütün satırlar birebir aynı çıktı. Sebep, yumuşak/bias'lı dalın —
+> `impulse_scale`'in sıfırdan farklı olduğu TEK yer — `penetration > slop` (0.005 m)
+> istemesi; sıfır penetrasyonda o dal hiç koşmuyor. Testler artık başlangıç penetrasyonunu
+> parametre alıyor.
+>
+> **Gerçek tablo (0.2 m penetrasyonda dinlenen kutunun bitiş yüksekliği):**
+>
+> | kütle | bölünen (eski) | bölünmeyen (yeni) |
+> |---|---|---|
+> | 1 kg | 0.4733 | 0.471068 |
+> | 100 kg | 0.4092 | 0.471068 |
+> | 300 kg | 0.4084 | 0.471068 |
+> | 1000 kg | **0.4872** | 0.471068 |
+>
+> Eski sütun hem kütleye bağlı (0.06 m yayılım) hem de MONOTON DEĞİL. Yeni sütun 1 kg'dan
+> 5000 kg'a birebir sabit — hertz/sönümle parametrize edilmiş bir yumuşak kısıttan beklenen
+> tam da bu, ve testin oracle'ı bu: `penetration_recovery_does_not_depend_on_mass`.
+>
+> **Eklemlerdeki gibi PATLAMIYOR, ve sebebi de ölçüldü:** `new_acc_n = max(0.0)` her
+> negatif yarı-döngüyü kesiyor. Aynı yineleme eklemin ±∞ clamp'li eşitlik satırında cismi
+> 331 m düşürmüştü. `the_inside_ordering_diverges_above_its_mass_bound` çıplak yinelemeyi
+> clamp'li ve clamp'siz koşturup mekanizmayı görünür kılıyor.
+>
+> **Bu bir GERİ ALMA:** `7b88d60` bunu "wrong order" diye bug-fix olarak indirmiş, ama
+> pinlediği test yalnız iki sıralamanın FARKLI olduğunu gösteriyordu, hangisinin doğru
+> olduğunu değil. Doğru olan Box2D v3'ünki
+> (`-normalMass·massScale·(vn+bias) − impulseScale·λ`) ve eklem çözücüsünün `soft_coefficients`
+> dokümanının bağımsız olarak vardığı sonuç. O test, kararı veren özelliği iddia eden bir
+> testle değiştirildi.
+>
+> **Kapsam dar ve bu da testle pinli:** blok çözücü (VARSAYILAN) `impulse_scale`'i tamamen
+> atıyor, yani satır yalnız `block_solver = false` ile koşuluyor. Determinizm `A462C9EB8A09D5CA`
+> — bu sefer öngörü ölçümden ÖNCE yazıldı ve tuttu.
 
 **⬜ commit 5 — warm-start + rollback (en riskli, en sonda).** İterasyon 0'dan ÖNCE ayrı bir
 sweep'te `dir * λ_önceki` uygulanması (temas çözücüsündeki `solver/mod.rs:458-476` yapısının
@@ -1988,9 +2109,38 @@ eklemekten ibaret.
   > `CLAUDE.md` de düzeltildi: ENGINE.md'yi "Written in Turkish" diye tarif ediyordu ve
   > sürümü `0.8.0` yazıyordu.
 
-  - ⬜ **Kalan:** `///` yorumlarında İngilizce kuralı. Kod içi yorumların büyük kısmı hâlâ
-    Türkçe (bu FIXPLAN dahil) — bus factor hedefi gerçekten isteniyorsa asıl yüzey orası,
-    ve tek oturumda çevrilecek hacimde değil.
+  - 🔄 **Kalan:** `///` yorumlarında İngilizce kuralı. **Stage A çekirdeği + facade bitti**
+    *(2026-08-08)*: `gizmo-core`, `gizmo` (facade), `gizmo-physics-core`, `gizmo-math`,
+    `gizmo-ai`, `gizmo-audio`, `gizmo-app`, `gizmo-scene` — **1286 → 8 satır**, ve kalan 8'in
+    7'si ölçüt hatası (Plücker, Möller–Trumbore, ve Türkçe *hakkında* İngilizce yazan
+    `cvar.rs`), 1'i de Türkçe bir log format string'ini alıntılayan doküman (`snapshot.rs`;
+    string'i değiştirmek kaynak değişikliği olurdu ve testi var).
+
+    > **Ölçüm uyarısı — ilk sayımım 18889'du ve TAMAMEN YANLIŞTI.** Python'un `re.I`'si `İ`'yi
+    > ASCII `i`'ye katlıyor, yani `[şğıçöüŞĞİÇÖÜ]` deseni harf `i` geçen HER satıra uyuyordu.
+    > Doğru rakam 3369 satır / 248 dosya. Bu turda kapanan 1286 satır o rakamın parçası;
+    > kalan ~2100 satır `demo`, `gizmo-renderer`, `gizmo-editor`, `gizmo-net`,
+    > `gizmo-scripting`, `gizmo-physics-{rigid,dynamics,soft}` ve `tests/` dizinlerinde.
+
+    > **Yöntem ve bir REGRESYON:** 7 paralel çeviri ajanı (ayrık alt ağaçlar) + 7 inceleyici,
+    > fidelity kuralıyla (özetleme yok, hedge hedge kalır, ALL-CAPS korunur). Sözleşme tuttu:
+    > değişen tek şey `///`/`//!` satırları, rustdoc uyarı sayısı 71 → 71 (hiçbir intra-doc
+    > link kırılmadı).
+    >
+    > **Ama `facade-spawner` ajanı, aynı oturumda A7 için yapılmış doc-test dönüşümünü EZDİ**
+    > — `spawner/mod.rs` (3 örnek) ve `systems/auto_collider.rs` (1 örnek) `ignore`'a geri
+    > döndü ve doc-test sayısı 45/0'dan 41/7'ye düştü. Kapı yakaladı; dördü de elle yeniden
+    > yazıldı (modül bloğu ayrıca **özel bir `use` deyimine bağlıydı**, o yüzden rustdoc onu
+    > dört ayrı teste kopyalıyordu — artık `//!` modül dokümanı). Ders: iki ayrı workflow aynı
+    > dosyaya dokunuyorsa ikincisi birincinin işini görmeden yazabiliyor.
+
+    > **Doc örneklerinin İÇİNDEKİ Türkçe yorumlar da çevrildi** (ajanlara fence içine dokunmak
+    > yasaklanmıştı, o yüzden bu kısmı elle yaptım): `logger.rs`'in assert'i emit edilen mesaj
+    > string'iyle birlikte çevrildi, `fps_look`/`spin`/`lifetime`/`time`/`profiler`/`event`/
+    > `input`/`bundles` örneklerinin yorumları da. Doc-test 45/45 yeşil kaldı.
+
+    Kod içi düz `//` yorumları hâlâ Türkçe — bus factor hedefi gerçekten isteniyorsa asıl
+    yüzey orası, ve tek oturumda çevrilecek hacimde değil.
 - 🔄 **D3** — Click-to-try WASM demosu (GitHub Pages). **Workflow yazıldı** *(2026-08-06)*:
   `.github/workflows/pages.yml` (build → deploy), `push: main` + `workflow_dispatch`,
   modern Pages akışı (`upload-pages-artifact` + `deploy-pages`, `pages`/`id-token` izinleri,
@@ -2248,6 +2398,10 @@ toplandı.
 
 ### A — Sessiz yanlış davranış (en yüksek değer)
 
+> **DALGA 1 + 2 KAPANDI** *(2026-08-07)* — aşağıdaki "bilerek dışarıda bırakıldı" cümlesi
+> yalnız DALGA 1 için geçerliydi; o üç fizik maddesi (patlama uyandırma, GPU/CPU damping,
+> GPU çift ilerletme) aynı gün DALGA 2'de kapandı, listede ✅ olarak işaretli.
+>
 > **DALGA 1 KAPANDI** *(2026-08-07)* — bu bölümün ECS/AI tarafındaki maddeleri düzeltildi,
 > her biri **düzeltme olmadan düşen** bir regresyon testiyle. Fizik davranışını değiştirecek
 > olanlar (patlama uyuyanı uyandırmıyor, GPU/CPU damping ayrışması, GPU çift ilerletme)
@@ -2281,17 +2435,58 @@ toplandı.
 > `register::<T>` ile kaydedilmişse `register_serializable` erişimcileri kurmadan `Ok(())`
 > dönüyor, oysa `register_reflect` yerinde yükseltiyor — `registry.rs:284-287`. Küçük ve ayrı.)
 >
-> ⬜ **Navmesh `agent_radius` — ERTELENDİ, yarım bırakılmadı.** Kod iddiası doğru (`margin`
-> yalnız döngü sınırlarını genişletiyor, `blocked.insert` hâlâ gerçek AABB'ye kapılı), ama
-> erozyon gerçek bir algoritma: builder'ın ürettiği HER poligonu değiştirir, yani bütün
-> navmesh testleri yeniden bless ister. Dokümantasyon yarısı da çürütüldü — sınır zaten üç
-> yerde tam olarak yazılmış.
+> ✅ **Navmesh `agent_radius`** — kapandı *(2026-08-08)*. Kod iddiası doğruydu (`margin`
+> yalnız döngü sınırlarını genişletiyor, `blocked.insert` hâlâ gerçek AABB'ye kapılı).
+> Dokümantasyon yarısı çürük kalıyor: sınır zaten üç yerde tam olarak yazılmıştı, yani
+> "sessiz" değildi; şimdi üçü de gerçeğe çekildi.
+>
+> **Ertelemenin gerekçesi ölçünce çürüdü:** "bütün navmesh testleri yeniden bless ister"
+> diyordu. Gerçekte navmesh'in üç build testi de **yapısal** (polygon boş değil, yol bulundu,
+> nokta bir polygona düşüyor) — tek bir golden koordinat yok, üçü de değişmeden geçti.
+>
+> **Asıl zorluk başka yerdeymiş ve ölçüldü:** `walkable_y`'ye yazan TEK yol engel çevresindeki
+> yükseklik bandı. Naif erozyon o bandı yeni bloklu deriye gömüyor ve her polygon `0.0`
+> fallback'ine düşüyor — varsayım değil, o varyant koşturuldu, polygon Y'si **0** çıktı.
+> Çözüm: band aynı genişlikte kalıp derinin DIŞINA kaydırıldı.
+>
+> Üç yeni test (`navmesh.rs`): erozyon (düzeltmesiz kırmızı), `agent_radius = 0`'da erozyon
+> yok (deriyi koşulsuz bir hücreye sabitlemeye karşı bekçi), ve bandın hayatta kalması.
+>
+> **Kapsam dışı bırakılan komşu kusur:** builder her statik collider'ı engel sayıyor, zeminler
+> dahil — `create_test_world`'ün zemini bütün tabanı bloklu yapıyor. Bu ayrı ve büyük bir iş
+> (yürünebilir yüzey tespiti); modül dokümanı zaten dürüstçe söylüyor.
 
 - ✅ **`Schedule` build sonrası eklemede öncekileri düşürüyor** — ayrı madde olarak yukarıda.
-- ⚠️ **`shatter_entity` Box olmayan collider'da kalıcı ölü bırakıyor.** `system.rs:365-381`
+- ✅ **`shatter_entity` Box olmayan collider'da kalıcı ölü bırakıyor.** `system.rs:365-381`
   erken dönüyor ama çağıranlar (`:319-331`, `:504-519`) `breakable.is_broken = true`'yu ÇOKTAN
   yazmış. Sphere/capsule/hull bir breakable sıfır cana iner, debris üretmez, despawn olmaz, ve
   sonraki her kontrol `!is_broken && …` olduğu için bir daha hasar da alamaz.
+  **Elle doğrulandı ve kapandı** *(2026-08-08)*.
+
+  > **İddia birebir tuttu** — nadir bir şey, bu depoda. Üç çağrı yeri de latch'i çağrıdan ÖNCE
+  > yazıyordu; erken dönüş "desteklenmeyen şekil hiçbir şey yapmaz" değil, "desteklenmeyen
+  > şekil entity'yi yerinde imha eder" demekti.
+  >
+  > **Düzeltme iki parçalı, çünkü tek başına her biri yanlış kalıyordu:** (a) sınırlı her şekil
+  > artık collider'ın YEREL KUŞATICI KUTUSUNDAN kırılıyor (sphere/capsule/hull/compound), (b)
+  > `shatter_entity` artık `bool` döndürüyor ve çağıranlar yalnız gerçekten kırıldıysa latch'liyor.
+  > Yalnız (a) yapılsaydı `Plane`/`TriMesh` hâlâ donardı; yalnız (b) yapılsaydı hiçbir küre hâlâ
+  > kırılmazdı.
+  >
+  > **`Plane` bilerek dışarıda:** yarım-uzay ve `compute_aabb` ona ±10 km'lik bir küp veriyor —
+  > jenerik kola bırakılsaydı zemini kilometrelik kayalara bölerdi. `TriMesh` de dışarıda
+  > (statik + içbükey, konveks debris temsil edemez). İkisi de artık latch YEMİYOR, yani
+  > hasar almaya devam ediyorlar.
+  >
+  > **Kutu yolu bit-eş, ve bu ARGÜMAN DEĞİL ÖLÇÜM:** golden sayılar düzeltme ÖNCESİ derlemeden
+  > okundu. Yeni test dosyası (`tests/breakable_shatter.rs`, 6 test) HEAD'in `system.rs`'ine
+  > karşı koşturulduğunda **5'i kırmızı**, yeşil kalan tek test tam da `the_box_path_is_bit_identical`.
+  > Determinizm hash'i `A462C9EB8A09D5CA` (3/3) — kapı sahnesinde breakable yok, o yüzden
+  > kanıt değil, regresyon-yok kontrolü.
+  >
+  > Kayda geçen ve DOKUNULMAYAN komşu kusur: `RigidBody::new(chunk.volume * density, true)`,
+  > hacmi ~0 olan bir parça için sonsuz kütleli dinamik cisim üretiyor. Bu kutu yolunda da
+  > vardı (sıfır kalınlıklı panel), yani bu maddenin kapsamı değil.
 - ⚠️ **`FrameProfiler::avg_frame_ms` ring wraparound sonrası yanlış kareleri ortalıyor.**
   `profiler.rs:168-204` `history.iter().rev().take(count)` yapıyor ama `history` bir ring
   buffer; 300 kareden sonra fiziksel sıra kronolojik değil, dolayısıyla en yeni ve ~300 kare
@@ -2311,13 +2506,22 @@ toplandı.
   `entity_lifecycle.rs:189-225`). `World::add_observer` ile kaydedilen gözlemciler bundle ile
   spawn edilen entity'leri kaçırıyor. `remove_bundle` de yalnız SparseSet bileşenleri için
   `on_remove` ateşliyor (`:107-190`), Table olanlar arketip göçüyle sessizce kopuyor.
-- ⚠️ **Patlama uyuyan cismi uyandırmıyor** — `physics_explosion_system` yalnız `is_dynamic()`
+- ✅ **Patlama uyuyan cismi uyandırmıyor** — `physics_explosion_system` yalnız `is_dynamic()`
   kapısı koyuyor, `wake_up()` çağırmıyor; impuls `Velocity`'ye yazılıp entegrasyonda atılıyor.
-- ⚠️ **Soft-body GPU/CPU `damping` ~100 kat ayrışıyor.** Shader `v *= max(1-damping*dt, 0)`
+  *DALGA 2'de kapandı (`8ee9d29`)*; yarıçap testi uyandırmadan önce koşuyor.
+- ✅ **Soft-body GPU/CPU `damping` ~100 kat ayrışıyor.** Shader `v *= max(1-damping*dt, 0)`
   (oran), CPU `v *= damping.powf(dt)` (tutma katsayısı). Varsayılan 0.99 ve dt=1/60'ta
   0.9835'e karşı 0.99983. Aynı mesh GPU yolunda ~100 kat sert sönümleniyor.
-- ⚠️ **GPU yolunda çarpışmada çift ilerletme** (`gpu_compute.rs:570`): sweep, shader'ın ZATEN
+  *DALGA 2'de kapandı (`8ee9d29`)*: `soft_body.wgsl:189` artık `pow(params.damping, params.dt)`.
+- ✅ **GPU yolunda çarpışmada çift ilerletme** (`gpu_compute.rs:570`): sweep, shader'ın ZATEN
   entegre ettiği pozisyondan başlıyor; CPU yolu (`soft_body.rs:313`) entegrasyon ÖNCESİNDEN.
+  *DALGA 2'de kapandı (`8ee9d29`)*: sweep adım BAŞINDAKİ pozisyondan başlıyor.
+
+> **Bu üç satır 2026-08-08'e kadar ⚠️ (açık) görünüyordu ve YANLIŞTI.** Dalga 2'nin özeti bu
+> bölümün başlığına değil yalnız B bölümününkine yazılmıştı; oysa commit mesajı üçünü de
+> sayıyor. Kanıt: `tests/cpu_gpu_parity.rs` altı test — ikisi shader'ı naga ile ayrıştırıp
+> `pow`'u ve `damping * dt`'nin YOKLUĞUNU iddia ediyor, biri eski çağrıyı bilerek koşturup
+> onun hâlâ anlaşmadığını gösteriyor (yoksa test boşalırdı). 6/6 yeşil.
 
 ### ✅ B — Panik / çökme — **DALGA 2'de kapandı** *(2026-08-07)*
 > ✅ **Sıfır eksenli Hinge/Slider NaN** — `normalize_or_zero` + eksen gerektiren satırların
@@ -2369,7 +2573,7 @@ toplandı.
 - ⚠️ `multibody::{base_position, base_rotation}` okunmuyor; `gravity` base koordinatında
   yorumlanıp `base_rotation` ile hiç döndürülmüyor.
 
-### 🔄 D — Model doğruluğu — **üçü kapandı, ikisi açık** *(2026-08-07)*
+### ✅ D — Model doğruluğu — **beşi de kapandı** *(2026-08-08)*
 > ✅ **`cone_limit_angle` twist'i çifte sayıyordu** — gerçek bir **swing–twist ayrışması**
 > yazıldı (`JointSolver::swing_about`). Eskiden koni, sapma quaternion'unun TAMAMININ açısını
 > ölçüyordu: `twist_axis` etrafında 30°'lik saf bir yuvarlanma, uzuv hiç eğilmemişken 45°'lik
@@ -2412,7 +2616,29 @@ toplandı.
 >
 > Ölçüm testi `#[ignore]`'lu kalıyor (kapı değil, ölçüm) ki ileride biri sayıları yeniden
 > üretebilsin.
-> ⬜ **ABA `is_fixed_base == false` yerçekimini sessizce düşürüyor** — bu turda ele alınmadı.
+> ✅ **ABA `is_fixed_base == false` yerçekimini sessizce düşürüyor** — kapandı *(2026-08-08)*.
+>
+> İddia tuttu: pass 3'te yerçekimi köke `a_grav = (0, -gravity)` olarak giriyor, serbest
+> tabanlı kol ise `base_acceleration`'ı bunun YERİNE koyuyordu. Artık iki kol tek formül:
+> `a_grav + base_acceleration`. Duran taban → birebir sabit-taban cevabı; g ile düşen taban
+> (`base_acceleration = (0, +g)`) → ağırlıksız.
+>
+> **Beklentimden kötü çıktı ve bu ölçüldü:** madde "yerçekimini düşürüyor" diyordu, oysa sıfır
+> olmayan bir taban ivmesinde eski kol CEVABIN İŞARETİNİ ÇEVİRİYORDU — serbest düşüş girdisinde
+> doğru cevap 0 iken `+4.9049997`, yani doğru düşüşün (`-4.905`) tam negatifi. Testin doküman
+> yorumu bu sayıyı taşıyor; "ağırlıksız testi eski kodda da geçer" tahminim yanlış çıktı ve
+> düzeltildi.
+>
+> Üç birim testi (`aba.rs`): duran serbest taban sabit tabanla **bit-eş**, düşen taban
+> ağırlıksız, ve sabit taban `base_acceleration`'ı okumamaya devam ediyor (iki kolu
+> "sadeleştirip" birleştirmeye karşı bekçi). İlk ikisi düzeltmesiz kırmızı.
+>
+> Neden property testleri kaçırmıştı: **workspace'te `is_fixed_base = false` yazan tek bir yer
+> yok** — `Default` true ve bütün testler true kuruyor. Modül zaten `experimental-multibody`
+> arkasında ve deneysel işaretli; determinizm kapısına dokunmuyor.
+>
+> Hâlâ açık ve modül dokümanında yazılı olan asıl eksik: taban ivmesi ABA'dan geri
+> beslenmediği için taban gerçekten ötelenip dönmüyor. Bu maddenin kapsamı eklem uzayıydı.
 
 ### D-eski — Model doğruluğu (özgün liste)
 
@@ -2424,8 +2650,10 @@ toplandı.
 - ⚠️ **Adaptif iterasyon sayısı SI yolunda ölü** (`solver/mod.rs:370-375` yalnız
   `solve_contacts_tgs`'e geçiriyor) — CCD içeren island'lar tall-stack stabilizasyonunu
   kaybediyor.
-- ⚠️ **ABA'da `is_fixed_base == false` yerçekimini sessizce düşürüyor** (`aba.rs:132`).
-- ⚠️ **Navmesh `agent_radius` gerçek clearance vermiyor** — yürünebilir alan hiç aşındırılmıyor.
+- ✅ **ABA'da `is_fixed_base == false` yerçekimini sessizce düşürüyor** (`aba.rs:132`).
+  Kapandı *(2026-08-08)* — ayrıntı yukarıdaki D bölümünde.
+- ✅ **Navmesh `agent_radius` gerçek clearance vermiyor** — yürünebilir alan hiç aşındırılmıyor.
+  Kapandı *(2026-08-08)* — ayrıntı yukarıdaki D bölümünde.
 
 ### E — Performans
 
