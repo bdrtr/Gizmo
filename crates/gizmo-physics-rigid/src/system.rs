@@ -325,9 +325,8 @@ pub fn physics_fracture_system(world: &World, dt: f32) {
                 if !breakable.is_broken && max_impulse > breakable.threshold {
                     breakable.current_health -= max_impulse;
                     if breakable.current_health <= 0.0 {
-                        breakable.is_broken = true;
-                        shattered.insert(event.entity_a.id());
-                        shatter_entity(
+                        // Latch only if it really broke — see `shatter_entity`.
+                        let broke = shatter_entity(
                             &mut commands,
                             Entity::new(event.entity_a.id(), 0),
                             &breakable,
@@ -337,6 +336,10 @@ pub fn physics_fracture_system(world: &World, dt: f32) {
                             -impact_normal,
                             impact_point,
                         );
+                        if broke {
+                            breakable.is_broken = true;
+                            shattered.insert(event.entity_a.id());
+                        }
                     }
                 }
             }
@@ -350,9 +353,7 @@ pub fn physics_fracture_system(world: &World, dt: f32) {
                 if !breakable.is_broken && max_impulse > breakable.threshold {
                     breakable.current_health -= max_impulse;
                     if breakable.current_health <= 0.0 {
-                        breakable.is_broken = true;
-                        shattered.insert(event.entity_b.id());
-                        shatter_entity(
+                        let broke = shatter_entity(
                             &mut commands,
                             Entity::new(event.entity_b.id(), 0),
                             &breakable,
@@ -362,6 +363,10 @@ pub fn physics_fracture_system(world: &World, dt: f32) {
                             impact_normal,
                             impact_point,
                         );
+                        if broke {
+                            breakable.is_broken = true;
+                            shattered.insert(event.entity_b.id());
+                        }
                     }
                 }
             }
@@ -370,6 +375,114 @@ pub fn physics_fracture_system(world: &World, dt: f32) {
     drop(query);
 }
 
+/// The local-space box the Voronoi cells are cut out of: `(center, half_extents)`.
+///
+/// `None` means the shape has no finite solid to shatter, and the caller must leave the body
+/// alone entirely — see [`shatter_entity`] for why that is not the same as "do nothing here".
+///
+/// Every bounded shape is shattered through its **local bounding box**, which is coarser than
+/// its real silhouette: a sphere breaks like the cube around it. That matches what the debris
+/// already is — [`shatter_entity`] approximates each Voronoi cell with a sphere of matching
+/// volume regardless of the cell's actual geometry — so the bound is not the weak link.
+///
+/// `Box` keeps its own arm rather than going through the AABB. Numerically the two agree
+/// (an identity rotation folds min/max over ±components and gives back the half-extents
+/// exactly), but this is the only pre-existing shatter path and it must stay bit-identical,
+/// which is easier to state than to re-derive.
+fn shatter_bounds(collider: &Collider) -> Option<(gizmo_math::Vec3, gizmo_math::Vec3)> {
+    use gizmo_physics_core::ColliderShape;
+
+    match &collider.shape {
+        ColliderShape::Box(b) => Some((gizmo_math::Vec3::ZERO, b.half_extents)),
+
+        // A `Plane` is a half-space: `compute_aabb` hands back a ±10 km cube for it, so going
+        // through the generic arm would "shatter" the floor into multi-kilometre boulders.
+        // A `TriMesh` is the concave, static variant — no inertia tensor, and the convex debris
+        // this path spawns cannot represent it.
+        ColliderShape::Plane(_) | ColliderShape::TriMesh(_) => None,
+
+        // Sphere / Capsule / ConvexHull / Compound. The AABB is taken at the origin with no
+        // rotation, i.e. in the collider's own frame; the caller re-applies the body transform.
+        _ => {
+            let aabb = collider.compute_aabb(gizmo_math::Vec3::ZERO, gizmo_math::Quat::IDENTITY);
+            // An empty hull or compound reports the inverted `(+inf, -inf)` box (documented on
+            // `compute_aabb`), which would reach `voronoi_shatter` as a NaN extent.
+            if aabb.is_empty() {
+                return None;
+            }
+            // `Aabb` carries `Vec3A`; the rest of this path is plain `Vec3`.
+            let half_extents = ((aabb.max - aabb.min) * 0.5).into();
+            Some((((aabb.min + aabb.max) * 0.5).into(), half_extents))
+        }
+    }
+}
+
+/// Domain separator for [`shatter_seed`], so this path's RNG stream cannot line up with any
+/// other stream in the crate that happens to be keyed off the same entity id. The bytes spell
+/// `SHATTER\0`; the value carries no meaning beyond being fixed and non-zero.
+const SHATTER_SEED_DOMAIN: u64 = 0x5348_4154_5445_5200;
+
+/// The Voronoi seed a shattering entity gets: a pure function of its **ECS id**.
+///
+/// # Why the id, and only the id
+///
+/// This used to be a literal `42`, so every object in the game broke into the exact same
+/// debris pattern — a quality bug, not a determinism one. The seed has to distinguish
+/// *entities* from each other while staying reproducible for a given entity, and the id is
+/// the only thing in scope that does both.
+///
+/// A frame/tick counter was the obvious second ingredient and is deliberately **not** used.
+/// There is no rollback-safe one to use:
+///
+/// * [`PhysicsWorld`] has no step counter at all — its
+///   [`WorldSnapshot`](crate::world::WorldSnapshot) restores transforms, velocities, bodies,
+///   the contact cache, the sub-step `accumulator`, zones, joints and weather, and nothing
+///   that counts;
+/// * `gizmo_net`'s ECS rollback snapshot restores only per-entity position/rotation/velocity/
+///   sleep, so anything else a re-simulated frame reads is whatever the *original* run left
+///   behind, not what that frame saw the first time;
+/// * `gizmo_core::time::Time::frame_count` is neither restored by either of those nor tied to
+///   the fixed step — it counts render frames fed from the wall clock, so the same sim tick
+///   lands on a different count at a different frame rate.
+///
+/// Mixing any of those in would make the debris of a rolled-back-and-resimulated break differ
+/// from the debris of the original break: a silent replay desync, which is worse than the
+/// uniform pattern being fixed here. And nothing is lost by leaving them out, because a
+/// breakable can only shatter **once** —
+/// [`Breakable::is_broken`](crate::components::Breakable::is_broken) latches on the first
+/// successful shatter and nothing in the engine ever clears it — so the seed never has to tell
+/// two *occasions* apart, only two *entities*.
+///
+/// The entity **generation** is left out for the same reason: it is allocator state, not
+/// simulation state, and no snapshot restores it. (It is not even in scope — two of the three
+/// call sites hand this function an `Entity::new(id, 0)` built from a collision event.) The
+/// price is that a breakable spawned into a recycled id slot repeats the debris of whatever
+/// occupied that slot before it, which is a repeat nobody can observe side by side.
+///
+/// # Why it is mixed rather than passed straight through
+///
+/// Today's `StdRng` is ChaCha12 and `SeedableRng::seed_from_u64` already expands the `u64`
+/// through PCG32 before seeding it, so consecutive ids would in fact produce independent
+/// streams as-is. That is a property of the generator `rand` currently ships, though, and
+/// `rand` documents `StdRng` as replaceable at will; `voronoi_shatter`'s `seed` is public API
+/// besides. A SplitMix64 finalizer costs three multiplies and makes `id -> seed` avalanche on
+/// its own, so the debris variety does not quietly depend on which PRNG is underneath.
+fn shatter_seed(entity_id: u32) -> u64 {
+    // SplitMix64's finalizer (the `fmix64`-style avalanche), applied to the domain-shifted id.
+    let mut z = (entity_id as u64).wrapping_add(SHATTER_SEED_DOMAIN);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+/// Despawns `entity` and spawns its debris, returning whether it actually shattered.
+///
+/// **The return value is load-bearing.** All three call sites used to latch
+/// [`Breakable::is_broken`](crate::components::Breakable::is_broken) *before* calling this, and
+/// nothing in the engine ever clears that flag again — so a bail-out here left the body in the
+/// scene at zero health, undamageable (every damage path is gated on `!is_broken`) and
+/// unbreakable. Not "unsupported shape does nothing": unsupported shape *permanently disabled the
+/// entity*. Callers must therefore latch only on `true`, which is why they now latch afterwards.
 fn shatter_entity(
     commands: &mut gizmo_core::commands::Commands,
     entity: Entity,
@@ -379,20 +492,20 @@ fn shatter_entity(
     vel: &Velocity,
     impact_direction: gizmo_math::Vec3,
     _impact_point: gizmo_math::Vec3,
-) {
+) -> bool {
     use crate::fracture::voronoi_shatter;
 
-    // We only support shattering boxes for now
-    let extents = match &collider.shape {
-        gizmo_physics_core::ColliderShape::Box(b) => b.half_extents,
-        _ => return, // Cannot shatter non-boxes easily with our voronoi yet
+    let Some((center, extents)) = shatter_bounds(collider) else {
+        return false;
     };
 
     // Despawn the original entity
     commands.entity(entity).despawn();
 
-    // Generate chunks
-    let chunks = voronoi_shatter(extents, breakable.max_pieces, 42);
+    // Generate chunks. The seed is derived from the entity id rather than being a constant, so
+    // two objects breaking under identical conditions produce different debris while a given
+    // object still breaks the same way on every replay — see `shatter_seed`.
+    let chunks = voronoi_shatter(extents, breakable.max_pieces, shatter_seed(entity.id()));
 
     for chunk in chunks {
         // Create new convex hull colliders or approximated boxes for the chunks.
@@ -400,8 +513,10 @@ fn shatter_entity(
         // A full implementation would use ConvexHull shapes.
         let radius = (chunk.volume * 0.1).powf(1.0 / 3.0).max(0.1);
 
-        // Offset chunk center by parent's transform
-        let world_offset = transform.rotation * chunk.center_of_mass;
+        // Offset chunk center by parent's transform. `center` is where the shatter box sits in
+        // the collider's own frame — zero for every shape whose geometry is built about the
+        // origin, non-zero only for an off-centre hull or compound.
+        let world_offset = transform.rotation * (center + chunk.center_of_mass);
         let mut new_transform = *transform;
         new_transform.position += world_offset;
 
@@ -421,6 +536,8 @@ fn shatter_entity(
             .insert(new_transform)
             .insert(new_vel);
     }
+
+    true
 }
 
 /// System that checks for Explosion components and applies outward forces
@@ -510,12 +627,10 @@ pub fn physics_explosion_system(world: &World, dt: f32) {
                     if impulse_mag > breakable.threshold {
                         breakable.current_health -= explosion.damage * intensity;
                         if breakable.current_health <= 0.0 {
-                            breakable.is_broken = true;
-                            shattered.insert(id);
                             let dir = diff / dist;
                             let mut exp_vel = *vel;
                             exp_vel.linear += dir * impulse_mag * 0.1; // Estimate mass
-                            shatter_entity(
+                            let broke = shatter_entity(
                                 &mut commands,
                                 Entity::new(id, 0),
                                 &breakable,
@@ -525,6 +640,10 @@ pub fn physics_explosion_system(world: &World, dt: f32) {
                                 dir,
                                 transform.position,
                             );
+                            if broke {
+                                breakable.is_broken = true;
+                                shattered.insert(id);
+                            }
                         }
                     }
                 }

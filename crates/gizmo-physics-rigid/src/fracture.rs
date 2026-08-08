@@ -1,7 +1,10 @@
 //! Voronoi shattering: cutting a box-shaped body into convex debris.
 //!
-//! Only boxes can be shattered — the input is a set of half-extents, not a mesh — and the
-//! geometry stays in the shattered body's local frame throughout. [`voronoi_shatter`] does
+//! This module cuts up a **box** and nothing else — the input is a set of half-extents, not a
+//! mesh. That is not the same as "only box colliders break": the ECS fracture path feeds every
+//! bounded collider's local bounding box through here, so a sphere breaks like the cube around
+//! it (see [`Breakable`](crate::components::Breakable) for which shapes are excluded and why).
+//! The geometry stays in the shattered body's local frame throughout. [`voronoi_shatter`] does
 //! the cutting and stops at bare meshes; [`generate_fracture_chunks`] is the level above it,
 //! turning those meshes into ready-to-spawn
 //! `(body, transform, collider, velocity, chunk)` tuples — the chunk mesh comes back with
