@@ -12,6 +12,7 @@ use rustc_hash::FxHashMap;
 use std::path::PathBuf;
 
 mod construction;
+mod entity_index_map;
 mod query;
 mod scene_query;
 mod snapshot;
@@ -20,6 +21,7 @@ mod step;
 #[allow(clippy::field_reassign_with_default)] // testlerde Default sonrası alan atama okunabilirlik için
 mod tests;
 
+pub use entity_index_map::EntityIndexMap;
 pub use scene_query::{QueryFilter, ShapeCastHit};
 
 /// Errors that can occur while writing a physics-world diagnostic snapshot
@@ -495,7 +497,14 @@ pub struct PhysicsWorld {
     /// [`entities`](Self::entities). It must be kept in lockstep with the arrays: a
     /// stale entry silently points at whichever body now occupies that row. Lookups
     /// that miss are treated as "not a rigid body" rather than as an error.
-    pub entity_index_map: FxHashMap<u32, usize>,
+    ///
+    /// No longer a `rustc_hash::FxHashMap` — see [`EntityIndexMap`] for the read API
+    /// (`get`, `contains_key`, `len`, `is_empty`, unchanged in behaviour) and for why the
+    /// hash map is sealed away. Individual entries can no longer be edited from outside
+    /// the crate (`insert`/`remove`/`clear` are `pub(crate)`), but the field itself is
+    /// still `pub`: assigning a whole new map over it is possible and still breaks the
+    /// lockstep invariant, so that invariant remains a convention, not an enforcement.
+    pub entity_index_map: EntityIndexMap,
 
     // Timeline and Debugging
     /// While set, `step` clears the event lists and returns without simulating, unless

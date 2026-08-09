@@ -111,8 +111,10 @@ The staging itself:
 
 - **Stage A (may go 1.x):** dependency-light crates whose surface we own —
   gizmo-math, -core, -physics-{core,rigid,dynamics,soft}, -scene, -net, -audio, -ai,
-  -animation. "May go" is a candidacy, not a clearance: **gizmo-physics-rigid is BLOCKED** until
-  the `rustc-hash` leak in the contract below is sealed.
+  -animation. "May go" is a candidacy, not a clearance. **gizmo-physics-rigid was BLOCKED on the
+  `rustc-hash` leak; that block was CLEARED 2026-08-09** by the `EntityIndexMap` seal in the
+  contract below, so the crate is now a candidate on the same footing as the rest — which still
+  means the accepted `glam` cost, not a clean surface.
 - **Stage B (stays 0.y):** graphics/integration — gizmo-renderer, -window, -editor, -ui,
   -app, -scripting + the `gizmo` facade (until wgpu/winit/egui settle — by criterion 1 that means
   a slow major cadence, NOT merely a version number ≥ 1.0; wgpu is already at 29).
@@ -195,28 +197,71 @@ its precision, and a section that silently rewrites itself cannot be checked.
   transitive path through the public `Handle::tracker`. The dependency itself stays — it is
   genuinely used by `asset.rs` and `commands.rs`; the seal hides it, it does not remove it.
 
-- **`rustc-hash` — STILL ON THE DEFAULT PUBLIC SURFACE of `gizmo-physics-rigid`. NOT sealed, and
-  it was missed by the 2026-08-09 audit entirely.** Found by the adversarial review of that
-  audit's own change sets. `FxHashMap<K, V>` is a type *alias*, `HashMap<K, V, FxBuildHasher>`,
-  so the hasher — a `rustc-hash` type, resolved at **2.1.2** — travels with every use of it, and
-  a type alias hides nothing: it is exactly criterion 2's "an associated type nobody had to write
-  down", one level of indirection further out. Three reachable sites, all default-feature, all in
-  a Stage A crate:
-  - `world/mod.rs:498` — `PhysicsWorld::entity_index_map` is a **public field** of a publicly
-    re-exported struct.
-  - `solver/mod.rs:419` — `ConstraintSolver::solve_contacts(.., &rustc_hash::FxHashMap<u32, usize>, ..)`,
-    a `pub fn` on a crate-root re-export.
-  - `joints/solver/mod.rs:232` — `solve_joints(.., &rustc_hash::FxHashMap<u32, usize>, ..)`, same shape.
+- **`rustc-hash` — sealed out of `gizmo-physics-rigid`'s public API (2026-08-09). THE EARLIER
+  ENTRY HERE IS SUPERSEDED, and it is worth keeping why it existed.** It read: "STILL ON THE
+  DEFAULT PUBLIC SURFACE of `gizmo-physics-rigid`. NOT sealed, and it was missed by the
+  2026-08-09 audit entirely… Until this is sealed, `gizmo-physics-rigid` cannot honestly go 1.0."
+  That was accurate when written — the leak was found by the adversarial review of the audit's
+  own change sets, not by the audit. `FxHashMap<K, V>` is a type *alias*,
+  `HashMap<K, V, FxBuildHasher>`, so the hasher — a `rustc-hash` type, resolved at **2.1.2** —
+  travelled with every use of it, and a type alias hides nothing: it is exactly criterion 2's
+  "an associated type nobody had to write down", one level of indirection further out. The
+  cadence argument is what made it urgent rather than theoretical: rustc-hash 1.x → 2.0 **changed
+  exactly this type**, from `HashMap<K, V, BuildHasherDefault<FxHasher>>` to
+  `HashMap<K, V, FxBuildHasher>`, so the precedent for a rustc-hash 3.0 breaking us was the last
+  major it shipped. Both 1.1.0 and 2.1.2 are still in `Cargo.lock` (something else in the graph
+  wants 1.x).
 
-  The cadence argument is the one that matters here: rustc-hash 1.x → 2.0 **changed exactly this
-  type**, from `HashMap<K, V, BuildHasherDefault<FxHasher>>` to `HashMap<K, V, FxBuildHasher>`, so
-  the precedent for a rustc-hash 3.0 breaking us is the last major it shipped, not a hypothetical.
-  Both 1.1.0 and 2.1.2 are in `Cargo.lock` today (something else in the graph still wants 1.x).
-  Sealing it is a newtype with the two or three accessors the callers actually use, over **57
-  sites in `src/`** plus one integration-test caller (`tests/joint_break.rs`) — bigger than any
-  of the four seals above, and it needs its own pass with a compiler. `gizmo-physics-core` uses
-  `FxHashMap` too but only behind `pub(crate)` (`broadphase/aabb_tree.rs:59`), so that crate is
-  clean. **Until this is sealed, `gizmo-physics-rigid` cannot honestly go 1.0.**
+  What is true now: `world::EntityIndexMap` is an opaque newtype over the map — private field, no
+  `Deref`/`DerefMut`/`AsRef`/`Borrow`/`From`/`Into`, no public accessor, and a hand-written
+  `Debug` (the `AssetDropQueue` precedent above; a derive would have printed the entries in hash
+  order, which is non-deterministic output from a type inside a determinism-critical struct). It
+  is `#[serde(transparent)]`, so `PhysicsWorld`'s snapshot JSON is byte-identical to before. All
+  three reachable sites now name it instead:
+  - `world/mod.rs` — `PhysicsWorld::entity_index_map` stays a **public field**, retyped. Read
+    access was deliberately kept rather than privatised: `get`, `contains_key`, `len` and
+    `is_empty` mirror the `HashMap` methods exactly, so the ~57 in-crate call sites and any
+    downstream reader compile unchanged.
+  - `solver/mod.rs` — `ConstraintSolver::solve_contacts(.., &world::EntityIndexMap, ..)`.
+  - `joints/solver/mod.rs` — `JointSolver::solve_joints(.., &world::EntityIndexMap, ..)`.
+
+  Two sites the audit list also flagged, `solver/mod.rs:48` (`support_order_manifolds`) and
+  `solver/tgs.rs:115` (`solve_contacts_tgs`), were checked and are **private** and `pub(super)`
+  respectively — not reachable, so they still take the bare `FxHashMap` and are handed it by a
+  `pub(crate) raw()` on the newtype. `rustc-hash` itself stays as the implementation detail it
+  always should have been.
+  **Capabilities, stated as costs rather than glossed:** *editing a world's map entry by entry*
+  from outside the crate is gone (`insert`/`remove`/`clear` are `pub(crate)`) — it was never safe,
+  since the map has to stay in lockstep with the SoA arrays, and
+  `add_body`/`remove_body_at`/`sync_bodies`/`clear_bodies` are the supported routes. Note the
+  narrowness, because an earlier draft of this entry overclaimed it: the field stays `pub` and
+  `Default`/`Clone`/`FromIterator`/`Deserialize` are public, so `world.entity_index_map = …` still
+  replaces the map wholesale and still breaks lockstep. The invariant is a convention, exactly as
+  it was before the seal; only the hasher was sealed. Enforcing it would mean privatising the
+  field, which this entry deliberately does not do. *Iterating* it is gone too, and deliberately: hash
+  order is not in the determinism contract (§5) and nothing in the crate iterates it, so the
+  omission is free — iterate the `Vec` `PhysicsWorld::entities` and look each handle up.
+  *Constructing* one is NOT gone: `impl FromIterator<(u32, usize)>` keeps the bare
+  `solve_joints`/`solve_contacts` embedding path (no `PhysicsWorld` involved) open without naming
+  the hasher. This is a **breaking change** for anyone who read the field as a `HashMap`; see the
+  CHANGELOG migration note.
+  The seal is guarded by five `compile_fail` doc-tests compiled as an external consumer
+  (`src/world/entity_index_map.rs`): no `insert`, no `iter`, no coercion to
+  `&HashMap<u32, usize, _>` — that third one is the `Deref` trap — no `AsRef`, and no `raw()`.
+  Note that this
+  toolchain's rustdoc **ignores the expected error code** on a `compile_fail` fence (verified
+  2026-08-09 on rustc 1.97.1: `compile_fail,E0999` against an actual E0624 still passes), so the
+  fences are bare and the observed diagnostic is recorded in prose next to each of the first four
+  (the fifth is marked as read off the signature, not observed). Three of the
+  five compile under the pre-seal shape and so are proofs; `AsRef` failed before the seal too, and
+  `raw()` did not exist before it, so those two are forward guards only. The `raw()` fence was
+  added by the review pass afterwards: `raw()` is `pub(crate)` and widening it to `pub` is the
+  likeliest future regression, and none of the other four fire on it — `insert` stays private,
+  `iter` stays absent, and the wrapper still does not coerce.
+  `gizmo-physics-core` uses `FxHashMap` too but only behind `pub(crate)`
+  (`broadphase/aabb_tree.rs:59`), and the transitive path through
+  `PhysicsWorld::spatial_hash` → `SpatialHash` → `DynamicAabbTree::entity_map` was re-checked
+  and is closed at both hops, so that crate stays clean.
 
 - **`serde` / `serde_json` — on Stage A public surfaces, accepted under criterion 1, listed here
   because the contract claims one entry per dependency that is on such a surface.** `serde` is
@@ -225,7 +270,10 @@ its precision, and a section that silently rewrites itself cannot be checked.
   by the public `ComponentRegistry::{get_json_fn, set_json_fn}` fields — which `gizmo-scene`
   re-exports as `SceneRegistry`. `gizmo-physics-rigid`'s `SnapshotError::Serialize(serde_json::Error)`
   is a public variant payload: the identical shape to `SceneError::Parse(ron::…)` that was sealed
-  above, left unsealed on purpose. Both crates are at 1.0 with a years-long major cadence, which
+  above, left unsealed on purpose — and, found by the 2026-08-09 rustc-hash sweep and added here
+  because this list claims to be complete, so is the `impl From<serde_json::Error> for
+  SnapshotError` beside it, the same shape as the two ron `From` impls kept on `SceneError`.
+  Both crates are at 1.0 with a years-long major cadence, which
   is the whole content of criterion 1 — but note the asymmetry is a *judgement about cadence*, not
   a difference in shape, and it should be re-checked rather than assumed at 1.0 time.
 
@@ -238,7 +286,20 @@ its precision, and a section that silently rewrites itself cannot be checked.
   private fields and locals; the `SceneSnapshot` field was the only public one. `wide`, `dashmap`
   and `crossbeam-queue` in `gizmo-physics-rigid`, and `uuid` in `gizmo-core` (declared twice) and
   `getrandom` in `gizmo-math`, have **zero** source references — dead dependencies, not leaks, but
-  they should be dropped in a separate build-graph pass.
+  they should be dropped in a separate build-graph pass. (Re-confirmed for `gizmo-physics-rigid`
+  on 2026-08-09 during the rustc-hash seal.)
+
+- **`gizmo-physics-rigid` swept for the other two shapes of criterion 2, 2026-08-09** — the two
+  the audit demonstrably nearly missed, done while the rustc-hash seal was open. **Nothing found.**
+  The crate declares **no `pub type` alias at all** (so the `FxHashMap` shape had no siblings) and
+  **no associated type in any trait impl** (so no repeat of `<ContactPoints as IntoIterator>::IntoIter`;
+  the only `IntoIterator`-ish code in the crate is the wasm-only `parallel_compat` module, which is
+  private). Every trait implemented on a public type is either `std` (`Default`, `From`, `Debug`,
+  `Display`, `Error`, and the new `FromIterator` on `EntityIndexMap`) or already contracted above
+  (`serde` derives; `bevy_reflect::Reflect` behind default-off `reflect`). Method used, recorded so
+  it can be repeated: `cargo doc --no-deps` then grep the rendered HTML for every dependency name —
+  the only foreign hits on the default surface are `glam`, `serde_json` in `SnapshotError`, and
+  prose.
 
 - **`tracing-subscriber` vs `tracing` — the same project, weighted differently on purpose; this is
   criterion 1 in both directions inside one crate.** `tracing-subscriber` (0.3.23) is behind

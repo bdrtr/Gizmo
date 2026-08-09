@@ -134,6 +134,44 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   carried `web-time` 1.1.0 by way of `winit`/`egui`/`bevy_platform`, so the old pin was
   forcing a second, duplicate build of a dead major; 0.2.4 is now gone from the lock.
 
+- **`gizmo-physics-rigid` no longer exposes `rustc-hash`.** *Breaking for anyone who read or
+  wrote `PhysicsWorld::entity_index_map` as a `HashMap`, or who called `solve_contacts` /
+  `solve_joints` directly; nothing behavioural — not one simulated value changes.*
+
+  This was the last thing blocking `gizmo-physics-rigid` from `1.x`, and like the three seals
+  above it is impossible after 1.0 because the seal is itself the breaking change. It also
+  survived the surface audit that produced those three, for an instructive reason:
+  `FxHashMap<u32, usize>` is a type *alias* for `HashMap<u32, usize, FxBuildHasher>`, so the
+  foreign hasher rode along on our public surface without anyone ever writing its name — and
+  `rustc-hash` 1.x → 2.0 changed precisely that alias, so a `rustc-hash` 3.0 forcing our 2.0 was
+  a repeat, not a hypothetical.
+
+  `world::EntityIndexMap` is a new opaque newtype over the handle→row-index map: private field,
+  no `Deref`, no `AsRef`, no accessor, and a hand-written `Debug` that prints only the length
+  (a derived one would have printed every entry in hash order). Three sites now name it —
+  the `PhysicsWorld::entity_index_map` field, `ConstraintSolver::solve_contacts` and
+  `JointSolver::solve_joints`. The field stays `pub`: `get`, `contains_key`, `len` and
+  `is_empty` mirror the `HashMap` methods exactly, so **the four common reads need no change**.
+  Serialization is `transparent`, so `trigger_snapshot`'s JSON is byte-identical.
+
+  **Migration.** Reading — `world.entity_index_map.get(&id)`, `.contains_key(&id)`, `.len()`,
+  `.is_empty()` are unchanged, references and all. The rest of the `HashMap` read surface is
+  *not* carried over and does need a change: `map[&id]` (no `Index`), `==` between two maps (no
+  `PartialEq`), `get_key_value`, `keys`/`values`, `capacity` and `hasher` are all gone. Say so if
+  you need one back — every one of them is an additive impl, so it can be restored after 1.0
+  without a major. Writing — `insert`, `remove` and `clear` are
+  now crate-private; use `add_body`, `remove_body_at`, `sync_bodies` or `clear_bodies`, which is
+  what you wanted anyway, since the map has to stay in lockstep with the parallel arrays and a
+  stale entry silently points at whichever body now occupies that row. (The field is still `pub`,
+  so assigning a whole new map over it compiles — that is not a supported route, it just is not
+  something a newtype can prevent without privatising the field.) Iterating — there is no
+  iterator, on purpose: hash order is not part of the determinism contract. Iterate
+  `PhysicsWorld::entities` (a `Vec`, so it has a defined order) and look each handle up.
+  Building one for a bare `solve_joints` / `solve_contacts` call that has no `PhysicsWorld`
+  behind it — `let map: EntityIndexMap = pairs.into_iter().collect();` (`FromIterator<(u32,
+  usize)>`), which replaces `let map: FxHashMap<u32, usize> = pairs.into_iter().collect();`
+  and needs no `rustc-hash` dependency of your own.
+
 - **The joint solver no longer writes into a sleeping mechanism.** *Behavioural for any jointed
   mechanism that falls asleep; bit-identical for everything else.*
 

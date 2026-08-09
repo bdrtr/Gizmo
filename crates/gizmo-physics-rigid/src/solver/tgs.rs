@@ -112,6 +112,9 @@ impl ConstraintSolver {
         transforms: &[Transform],
         velocities: &mut [Velocity],
         pos_corrections: &mut [(Vec3, Vec3)],
+        // Bare `FxHashMap` and not the opaque `EntityIndexMap`: `pub(super)` keeps this off
+        // the public surface, so it is not a `rustc-hash` leak (docs/ENGINE.md §4). The
+        // public caller (`solve_contacts`) unwraps with the `pub(crate)` `raw()`.
         entity_index_map: &rustc_hash::FxHashMap<u32, usize>,
         // Distinct GLOBAL body indices referenced by THIS island's manifolds. All the
         // per-body scratch (dp) and loops are sized/iterated by this island-local set
