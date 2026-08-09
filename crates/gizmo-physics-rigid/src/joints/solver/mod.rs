@@ -229,7 +229,7 @@ impl JointSolver {
     pub fn solve_joints(
         &self,
         joints: &mut [Joint],
-        entity_index_map: &rustc_hash::FxHashMap<u32, usize>,
+        entity_index_map: &crate::world::EntityIndexMap,
         rigid_bodies: &[RigidBody],
         transforms: &[Transform],
         velocities: &mut [Velocity],
@@ -1048,7 +1048,7 @@ mod tests {
             Transform::new(Vec3::ZERO),
             Transform::new(Vec3::new(0.0, -3.0, 0.0)), // halat gergin (max 2.0)
         ];
-        let map: rustc_hash::FxHashMap<u32, usize> =
+        let map: crate::world::EntityIndexMap =
             [(1u32, 0usize), (2u32, 1usize)].into_iter().collect();
         let fresh = || {
             vec![Joint::rope(

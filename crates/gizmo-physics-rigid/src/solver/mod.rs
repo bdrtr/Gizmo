@@ -42,6 +42,10 @@ mod tgs;
 /// nearest anchor) — used to scale the block solver's iteration count so a tall stack
 /// gets enough sweeps for support to propagate up the column. When `reorder` is true,
 /// also permutes `manifolds` into support order in place.
+// The bare `FxHashMap` here is deliberate and is NOT a leak: this fn is private to the
+// module, so `rustc-hash` never reaches the public surface through it (docs/ENGINE.md §4).
+// `ConstraintSolver::solve_contacts` is the public entry point and takes the opaque
+// `EntityIndexMap`, unwrapping it with the `pub(crate)` `raw()` on the way in.
 fn support_order_manifolds(
     manifolds: &mut [ContactManifold],
     rigid_bodies: &[RigidBody],
@@ -416,7 +420,7 @@ impl ConstraintSolver {
         transforms: &[Transform],
         velocities: &mut [Velocity],
         pos_corrections: &mut [(Vec3, Vec3)],
-        entity_index_map: &rustc_hash::FxHashMap<u32, usize>,
+        entity_index_map: &crate::world::EntityIndexMap,
         // Distinct GLOBAL body indices in this island. The shared `pos_corrections`
         // buffer is thread-local-reused across islands, so we clear only THIS island's
         // entries (the caller reads back only these) instead of the whole world array.
@@ -440,7 +444,12 @@ impl ConstraintSolver {
         // height for support to reach the top, so with the block solver we scale the sweep
         // count with depth (short piles keep the base count → no perf cost).
         let island_depth = if self.support_ordering || self.block_solver {
-            support_order_manifolds(manifolds, rigid_bodies, entity_index_map, self.support_ordering)
+            support_order_manifolds(
+                manifolds,
+                rigid_bodies,
+                entity_index_map.raw(),
+                self.support_ordering,
+            )
         } else {
             0
         };
@@ -540,7 +549,7 @@ impl ConstraintSolver {
                 transforms,
                 velocities,
                 pos_corrections,
-                entity_index_map,
+                entity_index_map.raw(),
                 island_bodies,
                 island_depth,
                 n_iterations,

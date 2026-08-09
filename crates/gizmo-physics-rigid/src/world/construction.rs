@@ -45,7 +45,7 @@ impl PhysicsWorld {
             transforms: Vec::new(),
             velocities: Vec::new(),
             colliders: Vec::new(),
-            entity_index_map: FxHashMap::default(),
+            entity_index_map: crate::world::EntityIndexMap::default(),
             is_paused: false,
             step_once: false,
             rewind_requested: false,
