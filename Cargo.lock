@@ -800,7 +800,7 @@ dependencies = [
  "spin",
  "wasm-bindgen",
  "wasm-bindgen-futures",
- "web-time 1.1.0",
+ "web-time",
  "windows-sys 0.61.2",
 ]
 
@@ -2037,7 +2037,7 @@ dependencies = [
  "profiling",
  "thiserror 2.0.18",
  "type-map",
- "web-time 1.1.0",
+ "web-time",
  "wgpu",
 ]
 
@@ -2054,7 +2054,7 @@ dependencies = [
  "objc2-ui-kit 0.3.2",
  "profiling",
  "raw-window-handle",
- "web-time 1.1.0",
+ "web-time",
  "webbrowser",
  "winit",
 ]
@@ -2609,7 +2609,7 @@ dependencies = [
  "gizmo-physics-rigid",
  "serde",
  "tracing",
- "web-time 0.2.4",
+ "web-time",
 ]
 
 [[package]]
@@ -2667,7 +2667,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
- "web-time 0.2.4",
+ "web-time",
  "wgpu",
  "winit",
 ]
@@ -2701,7 +2701,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
- "web-time 0.2.4",
+ "web-time",
 ]
 
 [[package]]
@@ -2725,7 +2725,7 @@ dependencies = [
  "toml",
  "tracing",
  "transform-gizmo-egui",
- "web-time 0.2.4",
+ "web-time",
 ]
 
 [[package]]
@@ -2834,7 +2834,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tracing",
- "web-time 0.2.4",
+ "web-time",
  "wide",
 ]
 
@@ -2882,7 +2882,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
- "web-time 0.2.4",
+ "web-time",
  "wgpu",
  "winit",
 ]
@@ -2899,7 +2899,7 @@ dependencies = [
  "ron 0.12.2",
  "serde",
  "tracing",
- "web-time 0.2.4",
+ "web-time",
 ]
 
 [[package]]
@@ -6542,16 +6542,6 @@ dependencies = [
 
 [[package]]
 name = "web-time"
-version = "0.2.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aa30049b1c872b72c89866d458eae9f20380ab280ffd1b1e18df2d3e2d98cfe0"
-dependencies = [
- "js-sys",
- "wasm-bindgen",
-]
-
-[[package]]
-name = "web-time"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
@@ -7221,7 +7211,7 @@ dependencies = [
  "wayland-protocols",
  "wayland-protocols-plasma",
  "web-sys",
- "web-time 1.1.0",
+ "web-time",
  "windows-sys 0.52.0",
  "x11-dl",
  "x11rb",

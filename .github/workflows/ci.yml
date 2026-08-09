@@ -80,6 +80,23 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Test Stage A crates with `reflect`
         run: cargo test --locked -p gizmo-core -p gizmo-physics-core -p gizmo-physics-rigid -p gizmo-scene --features reflect
+      # `tracing-layer` is gizmo-core's other default-off seal (the `tracing_subscriber::Layer`
+      # impl), and it needs BOTH halves run here, in this job, on purpose.
+      #
+      # The negative half — a `compile_fail` doc-test emitted only under
+      # `not(feature = "tracing-layer")` — cannot be proved by the `test` job. That job runs
+      # `cargo test --workspace`, and `gizmo-studio` is a workspace member that enables
+      # `gizmo-engine/tracing-layer`; resolver-v2 feature unification therefore compiles
+      # gizmo-core WITH the feature there, and the doc-test does not exist in that build. The
+      # `lint` job is `--all-features`, so it cannot prove it either. Only a package-scoped
+      # invocation that excludes gizmo-studio sees the default surface — hence this step.
+      - name: Test gizmo-core at DEFAULT features (proves the subscriber bridge is absent)
+        run: cargo test --locked -p gizmo-core
+      # The positive half: with the feature on, the layer must still build and still forward
+      # events (this is what catches a `#[cfg]` placed so that the type survives but the
+      # `Layer` impl does not).
+      - name: Test gizmo-core with `tracing-layer` (subscriber bridge, off by default)
+        run: cargo test --locked -p gizmo-core --features tracing-layer
       - name: Test experimental multibody (ABA) — opt-in, off by default
         run: cargo test --locked -p gizmo-physics-rigid --features experimental-multibody
 

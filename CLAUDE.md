@@ -20,6 +20,7 @@ cargo test -p gizmo-physics-rigid <test_name>
 # Feature-gated tests that CI runs separately (not covered by --workspace defaults):
 cargo test -p gizmo-net --features client-server,rollback
 cargo test -p gizmo-core -p gizmo-physics-core -p gizmo-physics-rigid -p gizmo-scene --features reflect
+cargo test -p gizmo-core --features tracing-layer   # the tracing_subscriber bridge, off by default
 cargo test -p gizmo-physics-rigid --features experimental-multibody
 
 # Demos live in demo/src/bin/ (39 of them). ALWAYS use --release for physics demos —
@@ -90,4 +91,4 @@ The simulation state (Transform/Velocity/solver) runs entirely on **glam/f32**. 
 ## Docs & conventions
 
 - **`docs/ENGINE.md`** is the single internal engineering doc: architecture, live roadmap, release strategy (staged 1.0), determinism/migration contracts, closed research. **Written in English** (translated 2026-08-06 — the bus-factor item D2); many inline code comments are still Turkish. `README.md` = user-facing intro, `CHANGELOG.md` = version history.
-- Public API hardening for 1.0 is in progress: 96 types are `#[non_exhaustive]`, errors are enums + `Result`. `glam` is a deliberate permanent public dep; `bevy_reflect` is behind the default-off `reflect` feature; `wgpu`/`winit`/`egui` leak intentionally during 0.x.
+- Public API hardening for 1.0 is in progress: 96 types are `#[non_exhaustive]`, errors are enums + `Result`. **docs/ENGINE.md §4 is the authority on what may appear on a Stage A public surface — read it before adding a dependency type to any `pub` signature, field, associated type or trait impl.** In short: `glam` is a deliberate permanent public dep; `bevy_reflect` is behind the default-off `reflect` feature and `tracing-subscriber` behind the default-off `tracing-layer` feature (`tracing` 0.1 itself is unconditional — it is frozen and leaves no type in our signatures); `crossbeam-queue` is sealed out of `gizmo-core` by the opaque `asset::AssetDropQueue`, `arrayvec` out of `gizmo-physics-core` by `ContactPoints` + `collision::ContactPointsIter`, and `ron`/`web-time` out of `gizmo-scene` by `error::{ParseError, SerializeError}` + a private `SceneSnapshot::timestamp` (no `pub use ron;`, no `gizmo::ron`); `wgpu`/`winit`/`egui` leak intentionally during 0.x. **Known unsealed:** `rustc-hash` is still on `gizmo-physics-rigid`'s default public surface (`PhysicsWorld::entity_index_map`, `solve_contacts`, `solve_joints`) — that crate is blocked from 1.0 until it is dealt with.

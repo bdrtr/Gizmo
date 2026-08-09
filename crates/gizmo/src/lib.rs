@@ -116,8 +116,14 @@ pub use gizmo_scripting as scripting;
 
 #[cfg(feature = "scene")]
 pub use gizmo_scene as scene;
-#[cfg(feature = "scene")]
-pub use gizmo_scene::ron;
+// `pub use gizmo_scene::ron;` used to sit here. It went away with `gizmo-scene`'s own
+// re-export (2026-08-09): the RON parser is an implementation detail of the scene file
+// format, not API. What it was there for — turning a hand-written RON level string into a
+// scene — is `scene::SceneData::from_ron_str` / `to_ron_string` now. This facade is Stage B
+// and could have kept leaking the parser (docs/ENGINE.md §4), but only by taking a direct
+// dependency on it and pinning that pin in lock-step with `gizmo-scene`'s, where a drift
+// between the two would hand callers a parser type the `From` impls in `gizmo-scene` do not
+// accept.
 
 /// A [`scene::registry::SceneRegistry`] holding every component the enabled feature set
 /// can round-trip — not just the physics ones.

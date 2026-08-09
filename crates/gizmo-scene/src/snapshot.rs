@@ -87,6 +87,27 @@ pub struct EntitySnapshot {
 /// is why the editor keeps one alive for the entire Play session. It describes one specific
 /// `World`: restoring into a different world would overwrite whatever entities happen to
 /// occupy the same ids.
+///
+/// # The capture instant is not public
+///
+/// The monotonic reading taken at capture is a private field; [`age`](Self::age) is the only
+/// way to it, and it answers in a `std::time::Duration`. On `wasm32` the clock type behind it
+/// is a `0.x` crate's `Instant` (the `std` one panics in a browser), and that type was on this
+/// struct — on the DEFAULT surface, selected by target rather than by feature, so no caller
+/// could opt out of it. `gizmo-scene` is Stage A (docs/ENGINE.md §4), so that had to go before
+/// 1.0. Nothing is lost: an `Instant` from another process's clock is meaningless anyway, and
+/// the field had exactly one reader in the whole workspace — `age` itself.
+///
+/// ```compile_fail
+/// fn taken_at(s: &gizmo_scene::SceneSnapshot) {
+///     let _ = &s.timestamp;
+/// }
+/// ```
+// The `compile_fail` example above is this seal's regression test: it compiled while the
+// field was `pub` (verified by running it unmarked against the old struct, where it passed as
+// an ordinary doc-test). `compile_fail` alone only asserts *some* error and this toolchain's
+// rustdoc ignores a `compile_fail,E0nnn` code, so the code is recorded by hand — un-mark it
+// and the diagnostic is E0616: field `timestamp` of struct `SceneSnapshot` is private.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct SceneSnapshot {
@@ -98,11 +119,11 @@ pub struct SceneSnapshot {
     /// Monotonic clock reading taken when `capture` finished (`web_time::Instant` on wasm32,
     /// `std::time::Instant` everywhere else).
     ///
-    /// Only [`age`](Self::age) reads it, and nothing about restore depends on it — a
-    /// snapshot never goes stale. It is also why this type is not `Serialize`: an `Instant`
-    /// is meaningless outside the process that took it, which keeps the snapshot honestly
-    /// memory-only.
-    pub timestamp: Instant,
+    /// **Private on purpose** — see the type-level note. Only [`age`](Self::age) reads it, and
+    /// nothing about restore depends on it — a snapshot never goes stale. It is also why this
+    /// type is not `Serialize`: an `Instant` is meaningless outside the process that took it,
+    /// which keeps the snapshot honestly memory-only.
+    timestamp: Instant,
 }
 
 impl SceneSnapshot {
@@ -442,6 +463,30 @@ impl std::fmt::Display for RestoreResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The capture instant is private now, so `age()` is the ONLY way to it. This pins the
+    // capability the seal had to preserve: a real reading off the same monotonic clock, in a
+    // `std::time::Duration` that names no dependency type. (A guard, not a proof — it would
+    // have compiled before the field went private too; the proof is the `compile_fail`
+    // doc-test on `SceneSnapshot`.)
+    #[test]
+    fn age_reads_the_capture_instant() {
+        let world = World::new();
+        let registry = crate::registry::SceneRegistry::new();
+        let protected = std::collections::HashSet::new();
+
+        let snapshot = SceneSnapshot::capture(&world, &registry, &protected);
+        let first = snapshot.age();
+        let second = snapshot.age();
+        assert!(second >= first, "age must not run backwards: {second:?} < {first:?}");
+        // Sanity bound: a snapshot taken microseconds ago is not hours old — catches a
+        // timestamp that was never set from the clock at all (e.g. a `Default`).
+        assert!(
+            snapshot.age() < std::time::Duration::from_secs(60),
+            "age of a just-taken snapshot is nonsense: {:?}",
+            snapshot.age(),
+        );
+    }
 
     #[test]
     fn test_scene_snapshot_capture_empty_world() {

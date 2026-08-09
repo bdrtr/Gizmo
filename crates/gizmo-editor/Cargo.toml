@@ -35,4 +35,4 @@ tracing = "0.1.44"
 gizmo-scripting = { version = "0.9.0", path = "../gizmo-scripting" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-web-time = "0.2"
+web-time = "1"
