@@ -88,7 +88,7 @@ fn make_cloth(segments: usize) -> (Cloth, usize) {
     (cloth, grid)
 }
 
-fn push_tri(verts: &mut Vec<Vertex>, a: Vec3, b: Vec3, c: Vec3, col: [f32; 3]) {
+fn push_tri(verts: &mut Vec<Vertex>, a: Vec3, b: Vec3, c: Vec3, col: [f32; 4]) {
     let n = (b - a).cross(c - a).normalize_or_zero();
     let mk = |p: Vec3, nn: Vec3| Vertex {
         position: [p.x, p.y, p.z],
@@ -115,9 +115,9 @@ fn build_cloth_mesh(device: &gizmo::wgpu::Device, cloth: &Cloth, grid: usize) ->
     for z in 0..grid - 1 {
         for x in 0..grid - 1 {
             let col = if (x + z).is_multiple_of(2) {
-                [0.85, 0.22, 0.24]
+                [0.85, 0.22, 0.24, 1.0]
             } else {
-                [0.96, 0.92, 0.90]
+                [0.96, 0.92, 0.90, 1.0]
             };
             let (p00, p10, p11, p01) = (
                 node(x, z),

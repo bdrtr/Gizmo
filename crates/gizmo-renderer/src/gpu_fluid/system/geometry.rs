@@ -54,7 +54,7 @@ pub(super) fn alloc_sphere_verts(radius: f32, stacks: u32, slices: u32) -> Vec<V
 
             vertices.push(Vertex {
                 position: p1,
-                color: [1.0; 3],
+                color: [1.0; 4],
                 normal: n1,
                 tex_coords: [0.0; 2],
                 joint_indices: [0; 4],
@@ -63,7 +63,7 @@ pub(super) fn alloc_sphere_verts(radius: f32, stacks: u32, slices: u32) -> Vec<V
             });
             vertices.push(Vertex {
                 position: p2,
-                color: [1.0; 3],
+                color: [1.0; 4],
                 normal: n2,
                 tex_coords: [0.0; 2],
                 joint_indices: [0; 4],
@@ -72,7 +72,7 @@ pub(super) fn alloc_sphere_verts(radius: f32, stacks: u32, slices: u32) -> Vec<V
             });
             vertices.push(Vertex {
                 position: p3,
-                color: [1.0; 3],
+                color: [1.0; 4],
                 normal: n3,
                 tex_coords: [0.0; 2],
                 joint_indices: [0; 4],
@@ -81,7 +81,7 @@ pub(super) fn alloc_sphere_verts(radius: f32, stacks: u32, slices: u32) -> Vec<V
             });
             vertices.push(Vertex {
                 position: p1,
-                color: [1.0; 3],
+                color: [1.0; 4],
                 normal: n1,
                 tex_coords: [0.0; 2],
                 joint_indices: [0; 4],
@@ -90,7 +90,7 @@ pub(super) fn alloc_sphere_verts(radius: f32, stacks: u32, slices: u32) -> Vec<V
             });
             vertices.push(Vertex {
                 position: p3,
-                color: [1.0; 3],
+                color: [1.0; 4],
                 normal: n3,
                 tex_coords: [0.0; 2],
                 joint_indices: [0; 4],
@@ -99,7 +99,7 @@ pub(super) fn alloc_sphere_verts(radius: f32, stacks: u32, slices: u32) -> Vec<V
             });
             vertices.push(Vertex {
                 position: p4,
-                color: [1.0; 3],
+                color: [1.0; 4],
                 normal: n4,
                 tex_coords: [0.0; 2],
                 joint_indices: [0; 4],

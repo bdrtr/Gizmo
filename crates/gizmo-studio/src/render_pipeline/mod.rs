@@ -258,18 +258,29 @@ pub fn execute_render_pipeline(
                 // lockstep (camera-visible → main passes; off-screen caster inside a
                 // cascade → shadow maps only; else skip). Culls against the game camera
                 // in edit mode (culling_frustum).
-                let camera_visible = match gizmo::renderer::classify_visibility(
-                    &culling_frustum,
-                    &cascade_frusta,
-                    &model,
-                    mesh.bounds,
-                    mat.material_type,
-                    mat.is_transparent,
-                    mat.albedo.w,
-                ) {
-                    gizmo::renderer::Visibility::Culled => continue,
-                    gizmo::renderer::Visibility::Camera => true,
-                    gizmo::renderer::Visibility::ShadowOnly => false,
+                // A camera-locked backdrop is exempt from the frustum test. It is drawn AROUND
+                // the viewer by construction (`backdrop.wgsl` adds the camera position), so
+                // its authored matrix says nothing about where it lands — and unlike the game
+                // path, this one cannot simply cull against the locked transform instead:
+                // `culling_frustum` is deliberately the GAME camera's while the shader locks
+                // to the ACTIVE (editor) camera, and in edit mode those are different places.
+                // There is no matrix that makes the test meaningful here, so it is skipped.
+                let camera_visible = if gizmo::renderer::is_camera_locked(mat.material_type) {
+                    true
+                } else {
+                    match gizmo::renderer::classify_visibility(
+                        &culling_frustum,
+                        &cascade_frusta,
+                        &model,
+                        mesh.bounds,
+                        mat.material_type,
+                        mat.is_transparent,
+                        mat.albedo.w,
+                    ) {
+                        gizmo::renderer::Visibility::Culled => continue,
+                        gizmo::renderer::Visibility::Camera => true,
+                        gizmo::renderer::Visibility::ShadowOnly => false,
+                    }
                 };
 
                 // Culling'i geçen objelerin Bounding Box'larını debug çizimi için kaydet.
@@ -279,6 +290,9 @@ pub fn execute_render_pipeline(
                     && !matches!(
                         mat.material_type,
                         gizmo::renderer::components::MaterialType::Skybox
+                            // Same reason as Skybox: a backdrop wraps the whole view, and its
+                            // AABB is drawn at the authored position the GPU never uses.
+                            | gizmo::renderer::components::MaterialType::Backdrop
                             | gizmo::renderer::components::MaterialType::Grid
                     )
                 {
@@ -303,18 +317,23 @@ pub fn execute_render_pipeline(
 
                 let packed_params = (mat.anisotropy * 1000.0).floor() + 1000.0 * (mat.clear_coat * 1000.0).floor() + 1000000.0 * (mat.subsurface * 100.0).floor() ;
 
-                let instance_data = InstanceRaw {
-                    model: model.to_cols_array_2d(),
-                    albedo_color: [mat.albedo.x, mat.albedo.y, mat.albedo.z, mat.albedo.w],
-                    roughness: mat.roughness,
-                    metallic: mat.metallic,
-                    unlit: match mat.material_type {
+                let instance_data = InstanceRaw::new(
+                    model.to_cols_array_2d(),
+                    [mat.albedo.x, mat.albedo.y, mat.albedo.z, mat.albedo.w],
+                    mat.roughness,
+                    mat.metallic,
+                    match mat.material_type {
                         gizmo::renderer::components::MaterialType::Skybox => 2.0,
                         gizmo::renderer::components::MaterialType::Unlit => 1.0,
+                        // `backdrop.wgsl` never reads this field (it has its own pipeline);
+                        // 1.0 keeps it on the "not deferred PBR" side regardless.
+                        gizmo::renderer::components::MaterialType::Backdrop => 1.0,
                         _ => 0.0,
                     },
-                    _padding: packed_params,
-                };
+                    packed_params,
+                    mat.ambient.to_array(),
+                    mat.emissive.to_array(),
+                );
 
                 // --- SKELETON (KEMİK) ARAMASI ---
                 // Skeleton bind group, skinned mesh'ler spawn edilirken doğrudan entity'ye önbelleklenmelidir.
@@ -336,6 +355,8 @@ pub fn execute_render_pipeline(
                 let is_grid = mat.material_type == gizmo::renderer::components::MaterialType::Grid;
                 let is_unlit =
                     mat.material_type == gizmo::renderer::components::MaterialType::Unlit;
+                let is_backdrop =
+                    mat.material_type == gizmo::renderer::components::MaterialType::Backdrop;
 
                 let batches = if mat.is_transparent {
                     &mut *transparent_batches
@@ -346,7 +367,7 @@ pub fn execute_render_pipeline(
                 };
 
                 let batch = batches
-                    .entry((vbuf_ptr, bg_ptr, skel_ptr, is_skybox, is_grid, is_unlit))
+                    .entry((vbuf_ptr, bg_ptr, skel_ptr, is_skybox, is_grid, is_unlit, is_backdrop))
                     .or_insert_with(|| BatchData {
                         vbuf: active_mesh.vbuf.clone(),
                         vertex_count: active_mesh.vertex_count,
@@ -364,6 +385,7 @@ pub fn execute_render_pipeline(
                         is_skybox,
                         is_grid,
                         is_unlit,
+                        is_backdrop,
                     });
 
                 if camera_visible {
@@ -435,6 +457,7 @@ pub fn execute_render_pipeline(
                         is_skybox: batch.is_skybox,
                         is_grid: batch.is_grid,
                         is_unlit: batch.is_unlit,
+                        is_backdrop: batch.is_backdrop,
                     });
                 }
             };

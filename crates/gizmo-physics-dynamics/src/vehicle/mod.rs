@@ -2,7 +2,7 @@ use gizmo_physics_core::{Collider, Transform};
 use gizmo_physics_core::components::PhysicsMaterial;
 use gizmo_physics_rigid::components::{RigidBody, Velocity};
 use gizmo_physics_rigid::world::Weather;
-use gizmo_physics_core::raycast::{Ray, Raycast, RaycastHit};
+use gizmo_physics_core::raycast::{Ray, RaycastHit};
 use gizmo_physics_core::BodyHandle;
 use gizmo_math::{Quat, Vec3};
 
@@ -849,6 +849,11 @@ impl VehicleController {
 // ============================================================
 mod dynamics;
 pub use dynamics::*;
+
+// The wheel's view of the scene — one ray, one nearest surface — and its two answers
+// (linear scan / broadphase scene query).
+mod ground_query;
+pub use ground_query::{ColliderListQuery, WheelGroundHit, WheelGroundQuery};
 
 #[cfg(test)]
 mod tests {

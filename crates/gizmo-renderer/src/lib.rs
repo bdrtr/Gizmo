@@ -40,6 +40,7 @@
 
 pub mod asset;
 pub mod async_assets;
+pub mod backdrop;
 pub mod components;
 pub mod csm;
 pub mod debug_renderer;
@@ -69,6 +70,10 @@ pub mod volumetric;
 pub mod web_profile;
 pub mod asset_loading;
 
+pub use backdrop::{
+    backdrop_clip_position, backdrop_rgba, camera_locked_model, is_camera_locked,
+    BACKDROP_NDC_DEPTH,
+};
 pub use frustum_cull::{classify_visibility, visible_in_frustum, Frustum, Visibility};
 pub use web_profile::{PostProcessLevel, ShadowQuality, WebProfile};
 
@@ -94,7 +99,8 @@ pub use components::{
 };
 pub use csm::{
     cascade_split_distances, compute_directional_cascades, directional_cascade_view_projs,
-    ShadowCascades, CASCADE_COUNT, CASCADE_LAMBDA, SHADOW_DISTANCE, SHADOW_MAP_RES,
+    shadow_distance_fade, ShadowCascades, CASCADE_COUNT, CASCADE_LAMBDA, SHADOW_DISTANCE,
+    SHADOW_FADE_FRACTION, SHADOW_MAP_RES,
 };
 pub use debug_renderer::{GizmoRendererSystem, Gizmos};
 pub use decal::DecalState;

@@ -13,7 +13,7 @@ impl crate::asset::AssetManager {
         let def_w = [0.0; 4];
         let vtx = |position: [f32; 3], tex_coords: [f32; 2]| Vertex {
             position,
-            color: [1.0, 1.0, 1.0],
+            color: [1.0, 1.0, 1.0, 1.0],
             normal: [0.0, 1.0, 0.0],
             tex_coords,
             joint_indices: def_j,
@@ -53,7 +53,7 @@ impl crate::asset::AssetManager {
         let def_w = [0.0; 4];
         let vtx = |position: [f32; 3], tex_coords: [f32; 2]| Vertex {
             position,
-            color: [1.0, 1.0, 1.0],
+            color: [1.0, 1.0, 1.0, 1.0],
             normal,
             tex_coords,
             joint_indices: def_j,
@@ -107,7 +107,7 @@ impl crate::asset::AssetManager {
         for i in indices {
             vertices.push(Vertex {
                 position: v[i],
-                color: [1.0, 1.0, 1.0],
+                color: [1.0, 1.0, 1.0, 1.0],
                 normal: [0.0, 1.0, 0.0],
                 tex_coords: [0.0, 0.0],
                 joint_indices: [0; 4],
@@ -135,7 +135,7 @@ impl crate::asset::AssetManager {
         let vertices = [
             Vertex {
                 position: [-hw, -hh, 0.0],
-                color: [1.0, 1.0, 1.0],
+                color: [1.0, 1.0, 1.0, 1.0],
                 normal: [0.0, 0.0, 1.0],
                 tex_coords: [0.0, 1.0],
                 joint_indices: def_j,
@@ -143,7 +143,7 @@ impl crate::asset::AssetManager {
             },
             Vertex {
                 position: [hw, -hh, 0.0],
-                color: [1.0, 1.0, 1.0],
+                color: [1.0, 1.0, 1.0, 1.0],
                 normal: [0.0, 0.0, 1.0],
                 tex_coords: [1.0, 1.0],
                 joint_indices: def_j,
@@ -151,7 +151,7 @@ impl crate::asset::AssetManager {
             },
             Vertex {
                 position: [hw, hh, 0.0],
-                color: [1.0, 1.0, 1.0],
+                color: [1.0, 1.0, 1.0, 1.0],
                 normal: [0.0, 0.0, 1.0],
                 tex_coords: [1.0, 0.0],
                 joint_indices: def_j,
@@ -159,7 +159,7 @@ impl crate::asset::AssetManager {
             },
             Vertex {
                 position: [hw, hh, 0.0],
-                color: [1.0, 1.0, 1.0],
+                color: [1.0, 1.0, 1.0, 1.0],
                 normal: [0.0, 0.0, 1.0],
                 tex_coords: [1.0, 0.0],
                 joint_indices: def_j,
@@ -167,7 +167,7 @@ impl crate::asset::AssetManager {
             },
             Vertex {
                 position: [-hw, hh, 0.0],
-                color: [1.0, 1.0, 1.0],
+                color: [1.0, 1.0, 1.0, 1.0],
                 normal: [0.0, 0.0, 1.0],
                 tex_coords: [0.0, 0.0],
                 joint_indices: def_j,
@@ -175,7 +175,7 @@ impl crate::asset::AssetManager {
             },
             Vertex {
                 position: [-hw, -hh, 0.0],
-                color: [1.0, 1.0, 1.0],
+                color: [1.0, 1.0, 1.0, 1.0],
                 normal: [0.0, 0.0, 1.0],
                 tex_coords: [0.0, 1.0],
                 joint_indices: def_j,

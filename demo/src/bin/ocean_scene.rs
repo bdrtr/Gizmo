@@ -448,7 +448,7 @@ fn render(
                     let normal = chunk.normals[*idx as usize];
                     gpu_vertices.push(gizmo::renderer::gpu_types::Vertex {
                         position: [pos.x, pos.y, pos.z],
-                        color: [1.0, 1.0, 1.0],
+                        color: [1.0, 1.0, 1.0, 1.0],
                         normal: [normal.x, normal.y, normal.z],
                         tangent: [0.0, 0.0, 0.0, 1.0],
                         tex_coords: [0.0, 0.0],

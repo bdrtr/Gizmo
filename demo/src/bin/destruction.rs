@@ -214,7 +214,7 @@ fn render(
                 let n = chunk.normals[i];
                 vertices.push(Vertex {
                     position: [local_pos.x, local_pos.y, local_pos.z],
-                    color: [0.8, 0.7, 0.6],
+                    color: [0.8, 0.7, 0.6, 1.0],
                     normal: [n.x, n.y, n.z],
                     tangent: [0.0, 0.0, 0.0, 1.0],
                     tex_coords: [0.0, 0.0],

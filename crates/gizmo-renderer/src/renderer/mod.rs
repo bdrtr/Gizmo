@@ -472,7 +472,7 @@ mod tests {
         assert_eq!(std::mem::size_of::<crate::gpu_types::SceneUniforms>(), 1168, "SceneUniforms size shifted from target 1168 bytes!");
         assert_eq!(std::mem::size_of::<crate::gpu_types::LightData>(), 64, "LightData size shifted from target 64 bytes!");
         assert_eq!(std::mem::size_of::<crate::gpu_types::PostProcessUniforms>(), 64, "PostProcessUniforms size shifted from target 64 bytes (underwater+fog eklendi)!");
-        assert_eq!(std::mem::size_of::<crate::gpu_types::InstanceRaw>(), 96, "InstanceRaw size shifted from target 96 bytes!");
+        assert_eq!(std::mem::size_of::<crate::gpu_types::InstanceRaw>(), 128, "InstanceRaw size shifted from target 128 bytes!");
         // Textured-PBR per-material params: three std140 vec4 slots.
         assert_eq!(std::mem::size_of::<crate::gpu_types::MaterialParams>(), 48, "MaterialParams size shifted from target 48 bytes!");
         assert_eq!(std::mem::align_of::<crate::gpu_types::MaterialParams>(), 4, "MaterialParams alignment unexpected!");
@@ -486,13 +486,14 @@ mod tests {
         // bozulur ama toplam boyut değişmeyebilir — bu yüzden offset'leri de kilitle.
         use crate::gpu_types::Vertex;
         assert_eq!(std::mem::offset_of!(Vertex, position), 0);
+        // color is RGBA (16 bytes), so everything after it sits 4 bytes later than it used to.
         assert_eq!(std::mem::offset_of!(Vertex, color), 12);
-        assert_eq!(std::mem::offset_of!(Vertex, normal), 24);
-        assert_eq!(std::mem::offset_of!(Vertex, tex_coords), 36);
-        assert_eq!(std::mem::offset_of!(Vertex, joint_indices), 44);
-        assert_eq!(std::mem::offset_of!(Vertex, joint_weights), 60);
-        assert_eq!(std::mem::offset_of!(Vertex, tangent), 76);
-        assert_eq!(std::mem::size_of::<Vertex>(), 92, "Vertex size/layout shifted!");
+        assert_eq!(std::mem::offset_of!(Vertex, normal), 28);
+        assert_eq!(std::mem::offset_of!(Vertex, tex_coords), 40);
+        assert_eq!(std::mem::offset_of!(Vertex, joint_indices), 48);
+        assert_eq!(std::mem::offset_of!(Vertex, joint_weights), 64);
+        assert_eq!(std::mem::offset_of!(Vertex, tangent), 80);
+        assert_eq!(std::mem::size_of::<Vertex>(), 96, "Vertex size/layout shifted!");
     }
 
     /// Regression for M7.0a: the SSGI-apply pass runs at full-res but samples a

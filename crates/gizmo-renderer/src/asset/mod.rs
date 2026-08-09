@@ -142,7 +142,7 @@ pub fn decode_obj_vertices_for_async(
                 position,
                 normal,
                 tex_coords,
-                color: [1.0, 1.0, 1.0],
+                color: [1.0, 1.0, 1.0, 1.0],
                 joint_indices: [0; 4],
                 joint_weights: [0.0; 4],
                 ..Default::default()
@@ -632,7 +632,7 @@ impl AssetManager {
             [3, 1, 5],
             [0, 3, 5],
         ];
-        const COLOR: [f32; 3] = [0.95, 0.45, 0.95]; // magenta
+        const COLOR: [f32; 4] = [0.95, 0.45, 0.95, 1.0]; // magenta
 
         let mut vertices = Vec::with_capacity(TRIANGLES.len() * 3);
 

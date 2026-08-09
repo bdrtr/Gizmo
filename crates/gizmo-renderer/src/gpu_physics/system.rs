@@ -825,7 +825,7 @@ fn create_cube() -> (Vec<crate::gpu_types::Vertex>, Vec<u32>) {
         for &p in corners {
             vertices.push(crate::gpu_types::Vertex {
                 position: p,
-                color: [1.0, 1.0, 1.0],
+                color: [1.0, 1.0, 1.0, 1.0],
                 normal: *normal,
                 tex_coords: [0.0, 0.0],
                 joint_indices: [0; 4],

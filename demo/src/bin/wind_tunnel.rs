@@ -392,7 +392,7 @@ fn append_ribbon(verts: &mut Vec<Vertex>, line: &[Vec3], view_dir: Vec3, width: 
         let b = flow_brightness(uv[1], phase);
         Vertex {
             position: [p.x, p.y, p.z],
-            color: [b * 0.95, b * 0.97, b],
+            color: [b * 0.95, b * 0.97, b, 1.0],
             normal: [0.0, 1.0, 0.0],
             tex_coords: uv,
             joint_indices: [0; 4],

@@ -160,6 +160,41 @@ mod tests {
     // t_shadow). If someone reintroduces a shadow use outside `#ifdef SHADOWS`, the web
     // variant fails to compose here and this test catches it.
 
+    // `compose_wgsl` runs naga's validator and panics on failure, so composing a shader IS
+    // type-checking it — without an adapter, and so without the GPU-test serialisation the
+    // existing `core_shaders_compile` needs. Every shader touched by the baked-lit work is
+    // checked under BOTH schemas, because the web one drops the shadow group and is where a
+    // fade added outside `#ifdef SHADOWS` would come apart.
+    #[test]
+    fn baked_lit_path_shaders_type_check_under_both_schemas() {
+        let web_capable: &[(&str, &str)] = &[
+            ("baked_lit.wgsl", include_str!("../shaders/baked_lit.wgsl")),
+            ("shader.wgsl", include_str!("../shaders/shader.wgsl")),
+            ("unlit.wgsl", include_str!("../shaders/unlit.wgsl")),
+            ("water.wgsl", include_str!("../shaders/water.wgsl")),
+            ("sky.wgsl", include_str!("../shaders/sky.wgsl")),
+            // The painted backdrop. Its whole job is a vertex transform and a texture fetch,
+            // so type-checking it under both schemas is most of what a GPU would tell us —
+            // and it is the only stage of that shader this crate can reach without one.
+            ("backdrop.wgsl", include_str!("../shaders/backdrop.wgsl")),
+            ("grid.wgsl", include_str!("../shaders/grid.wgsl")),
+        ];
+        for (name, src) in web_capable {
+            compose_wgsl(src, name, native_render_defs());
+            compose_wgsl(src, name, web_render_defs());
+        }
+        // Native-only (no web schema): the deferred pass and the two shadow passes.
+        let native_only: &[(&str, &str)] = &[
+            ("deferred_lighting.wgsl", include_str!("../shaders/deferred_lighting.wgsl")),
+            ("gbuffer.wgsl", include_str!("../shaders/gbuffer.wgsl")),
+            ("shadow.wgsl", include_str!("../shaders/shadow.wgsl")),
+            ("point_shadow.wgsl", include_str!("../shaders/point_shadow.wgsl")),
+        ];
+        for (name, src) in native_only {
+            compose_wgsl(src, name, native_render_defs());
+        }
+    }
+
     #[test]
     fn web_compose_strips_shadows_and_shifts_groups() {
         let web = compose_wgsl(SHADER_SRC, "shader.wgsl", web_render_defs());

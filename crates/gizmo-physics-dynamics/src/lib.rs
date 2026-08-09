@@ -28,6 +28,13 @@
 //! Each update function operates on borrowed ECS components plus a slice of all
 //! scene colliders, so callers are responsible for gathering collider data each
 //! frame and feeding it in.
+//!
+//! The vehicle model is the exception, and the direction the rest is headed:
+//! [`update_vehicle_with_query`] takes a [`WheelGroundQuery`] instead of a slice, so its
+//! suspension rays can be answered by a broadphase — a `PhysicsWorld` implements that trait —
+//! rather than by a full scan of a list the caller had to clone. [`vehicle_controller_system`]
+//! routes through it; see its docs for the (real, stated) change in what a wheel may rest on.
+//! [`character_controller_system`] still takes the slice.
 
 /// Kinematic character controller.
 ///

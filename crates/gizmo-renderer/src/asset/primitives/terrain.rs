@@ -54,7 +54,7 @@ impl crate::asset::AssetManager {
 
                 vertices.push(Vertex {
                     position: [world_x, world_y, world_z],
-                    color: [1.0, 1.0, 1.0],
+                    color: [1.0, 1.0, 1.0, 1.0],
                     normal: [0.0, 1.0, 0.0], // İlk başta düz yukarı
                     tex_coords: [uv_x, uv_y],
                     joint_indices: [0; 4],

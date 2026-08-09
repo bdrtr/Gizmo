@@ -30,7 +30,12 @@ pub enum Visibility {
 /// against the *AABB*, and the "is this a shadow caster" predicate differed — so a
 /// fix to one silently missed the other. This uses the tighter AABB test for the
 /// camera and every cascade, and one caster predicate: a caster is opaque
-/// (`!is_transparent`, `albedo_alpha >= 0.99`) and lit (not `Unlit`/`Skybox`/`Grid`).
+/// (`!is_transparent`, `albedo_alpha >= 0.99`) and lit (not `Unlit`/`Skybox`/`Backdrop`/`Grid`).
+///
+/// **`model` must be the transform the geometry is actually DRAWN with.** For a camera-locked
+/// material that is not the authored matrix — put it through
+/// [`camera_locked_model`](crate::backdrop::camera_locked_model) first, or this culls a
+/// backdrop that is on screen.
 pub fn classify_visibility(
     camera_frustum: &Frustum,
     cascade_frusta: &[Frustum],
@@ -49,6 +54,9 @@ pub fn classify_visibility(
             material_type,
             crate::components::MaterialType::Unlit
                 | crate::components::MaterialType::Skybox
+                // A backdrop is scenery painted at infinity. Casting from it would drop the
+                // whole world into its shadow.
+                | crate::components::MaterialType::Backdrop
                 | crate::components::MaterialType::Grid
         );
     if is_caster
@@ -159,14 +167,49 @@ mod tests {
             classify_visibility(&cam, &[cascade], &behind, unit_aabb(), MaterialType::Pbr, false, 0.5),
             Visibility::Culled
         );
-        // Unlit / Skybox / Grid materials never cast.
-        for mt in [MaterialType::Unlit, MaterialType::Skybox, MaterialType::Grid] {
+        // Unlit / Skybox / Backdrop / Grid materials never cast.
+        for mt in [
+            MaterialType::Unlit,
+            MaterialType::Skybox,
+            MaterialType::Backdrop,
+            MaterialType::Grid,
+        ] {
             assert_eq!(
                 classify_visibility(&cam, &[cascade], &behind, unit_aabb(), mt, false, 1.0),
                 Visibility::Culled,
                 "{mt:?} must not be a shadow caster"
             );
         }
+    }
+
+    // A camera-locked backdrop is authored around the origin but DRAWN around the camera. Cull
+    // it with the authored matrix and it disappears the moment the player drives away from the
+    // middle of the map — the geometry fills the screen and the frustum test says it is gone.
+    // `camera_locked_model` is the fix, and it is the caller's job to apply it, so this pins
+    // both halves: the raw matrix culls, the locked one does not.
+    #[test]
+    fn a_camera_locked_backdrop_must_be_culled_against_its_locked_transform() {
+        let eye = Vec3::new(0.0, 0.0, 905.0);
+        let cam = cam_frustum(eye);
+        // The backdrop dome, authored 10 units in front of the origin.
+        let authored = Mat4::from_translation(Vec3::new(0.0, 0.0, -10.0));
+        let bounds = Aabb::new(Vec3::splat(-2.0), Vec3::splat(2.0));
+
+        // Raw: the camera is 915 units away from where the matrix says it is → culled.
+        assert_eq!(
+            classify_visibility(&cam, &[], &authored, bounds, MaterialType::Backdrop, false, 1.0),
+            Visibility::Culled,
+            "premise: the authored transform really is outside this camera's frustum"
+        );
+
+        // Locked: the transform the vertex shader actually uses → on screen.
+        let drawn = crate::backdrop::camera_locked_model(MaterialType::Backdrop, &authored, eye);
+        assert_eq!(
+            classify_visibility(&cam, &[], &drawn, bounds, MaterialType::Backdrop, false, 1.0),
+            Visibility::Camera,
+            "a camera-locked backdrop is always in front of the camera; culling it away is \
+             how 191 backdrop meshes never reach the screen"
+        );
     }
 
     #[test]

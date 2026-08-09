@@ -58,19 +58,63 @@ pub(crate) fn batch_sort_depth(
     (centroid - cam_pos).length()
 }
 
-/// Draw-order comparator for correct alpha blending. Opaque batches come first (their
-/// relative order is irrelevant — the depth buffer resolves them); transparent batches
-/// follow, sorted back-to-front (farthest first) because the transparent pipeline disables
-/// depth-write, so ONLY draw order determines the blended result. Each arg is
-/// `(is_transparent, sort_depth)`.
-pub(crate) fn cmp_draw_order(a: (bool, f32), b: (bool, f32)) -> std::cmp::Ordering {
+/// Where a batch sits in the frame's paint order. Lower draws first; the `Ord` derive IS the
+/// ordering, so the variants must stay in this sequence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum DrawLayer {
+    /// A painted backdrop — the scene's own sky/panorama geometry. First, before anything
+    /// else in the frame.
+    ///
+    /// This is one of the three properties `MaterialType::Backdrop` has to hold (see
+    /// `gizmo_renderer::backdrop`), and it is the only one the shader and the pipeline state
+    /// cannot express, because neither of them knows what else is in the frame. It is not
+    /// redundant with the far-plane depth pin: the pin keeps a backdrop from occluding OPAQUE
+    /// geometry, which is depth-tested, but a transparent object writes no depth and blends
+    /// with whatever is already in the target — so a backdrop drawn after it paints straight
+    /// over it. Drawn first, the backdrop is underneath by construction.
+    Backdrop,
+    /// The solid world. Relative order is irrelevant — the depth buffer resolves it.
+    Opaque,
+    /// Blended geometry, sorted back-to-front among itself.
+    Transparent,
+}
+
+/// Which layer a batch belongs to, from its routing flags.
+///
+/// `Backdrop` wins over `Transparent` deliberately. A backdrop material may well carry a
+/// sub-1.0 albedo alpha (a haze pass over the skyline), and `is_transparent` is inferred from
+/// that alpha — but a backdrop that sorted into the transparent bucket would be painted over
+/// the world it is behind, which is the exact failure the layer exists to prevent.
+pub(crate) fn draw_layer(is_backdrop: bool, is_transparent: bool) -> DrawLayer {
+    if is_backdrop {
+        DrawLayer::Backdrop
+    } else if is_transparent {
+        DrawLayer::Transparent
+    } else {
+        DrawLayer::Opaque
+    }
+}
+
+/// Draw-order comparator for correct compositing. Backdrops come first, then the opaque world
+/// (whose relative order is irrelevant — the depth buffer resolves it), then transparent
+/// batches back-to-front (farthest first) because the transparent pipeline disables
+/// depth-write, so ONLY draw order determines the blended result.
+///
+/// Backdrops are ALSO sorted back-to-front among themselves, for the same reason and one
+/// more: every backdrop vertex is pinned to the same NDC depth, so the depth buffer cannot
+/// separate two overlapping panels even in principle. Each arg is `(layer, sort_depth)`.
+pub(crate) fn cmp_draw_order(a: (DrawLayer, f32), b: (DrawLayer, f32)) -> std::cmp::Ordering {
     use std::cmp::Ordering;
-    match (a.0, b.0) {
-        (false, false) => Ordering::Equal,
-        (false, true) => Ordering::Less,
-        (true, false) => Ordering::Greater,
-        // Both transparent: farther one drawn first (descending depth).
-        (true, true) => b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal),
+    match a.0.cmp(&b.0) {
+        // Same layer: the opaque world needs no order, the two depth-write-disabled layers
+        // are composited by paint order alone → farther one first (descending depth).
+        Ordering::Equal => match a.0 {
+            DrawLayer::Opaque => Ordering::Equal,
+            DrawLayer::Backdrop | DrawLayer::Transparent => {
+                b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal)
+            }
+        },
+        different => different,
     }
 }
 
@@ -98,8 +142,13 @@ pub struct DrawItem {
     /// Baked lighting + the sun's cascade term: casts shadows and skips the G-buffer.
     pub(super) baked_lit: bool,
     pub(super) is_skybox: bool,
+    /// A painted backdrop: `backdrop.wgsl` + the backdrop pipeline, drawn first
+    /// (`DrawLayer::Backdrop`). See `gizmo_renderer::backdrop`.
+    pub(super) is_backdrop: bool,
     pub(super) skeleton_bind_group: Option<std::sync::Arc<wgpu::BindGroup>>,
     pub(super) is_transparent: bool,
+    /// This batch's slot in the frame's paint order — see [`draw_layer`].
+    pub(super) layer: DrawLayer,
     /// Start of this batch's CAMERA-visible instances in region A of the instance buffer.
     pub(super) first_instance: u32,
     /// Number of camera-visible instances (== the old camera-culled set). Main/geometry
@@ -114,9 +163,14 @@ pub struct DrawItem {
     /// Number of shadow-only casters (region B) for this batch.
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(super) shadow_count: u32,
-    /// Representative camera distance used to sort TRANSPARENT batches back-to-front
+    /// Representative distance used to sort BACKDROP and TRANSPARENT batches back-to-front
     /// (see `cmp_draw_order` / `batch_sort_depth`). 0.0 for opaque batches (unused —
     /// the depth buffer resolves opaque draw order).
+    ///
+    /// For a backdrop it is measured from the ORIGIN, not from the camera: a camera-locked
+    /// instance's translation is already an offset from the viewer, so its length is the
+    /// distance. Measuring it from `cam_pos` would sort the sky by how far the player has
+    /// driven from the middle of the map.
     pub(super) sort_depth: f32,
 }
 
@@ -191,6 +245,7 @@ pub(crate) struct BatchKey {
     unlit: bool,
     baked_lit: bool,
     is_skybox: bool,
+    is_backdrop: bool,
 }
 
 pub(crate) struct BatchData {
@@ -203,6 +258,7 @@ pub(crate) struct BatchData {
     unlit: bool,
     baked_lit: bool,
     is_skybox: bool,
+    is_backdrop: bool,
     skeleton_bind_group: Option<std::sync::Arc<wgpu::BindGroup>>,
     is_transparent: bool,
     instances: Vec<crate::renderer::gpu_types::InstanceRaw>,
@@ -266,18 +322,30 @@ pub(super) fn collect_draw_items(
                 let center_mat = Mat4::from_translation($mesh.center_offset);
                 let model = $trans.matrix * center_mat;
 
+                // Where this mesh is actually DRAWN. The same matrix for everything except a
+                // camera-locked backdrop, whose vertex shader adds the camera position itself
+                // (`backdrop.wgsl`) — so its authored transform is not where the triangles end
+                // up, and culling or LOD-ing against it reasons about the wrong place. The
+                // INSTANCE below keeps the authored matrix: hand the shader this one and it
+                // adds the camera position twice.
+                let drawn_model = crate::renderer::backdrop::camera_locked_model(
+                    $mat.material_type,
+                    &model,
+                    cam_pos,
+                );
+
                 // CPU Frustum Culling
                 let local_cx = ($mesh.bounds.min.x + $mesh.bounds.max.x) * 0.5;
                 let local_cy = ($mesh.bounds.min.y + $mesh.bounds.max.y) * 0.5;
                 let local_cz = ($mesh.bounds.min.z + $mesh.bounds.max.z) * 0.5;
-                let world_c = model.transform_point3(Vec3::new(local_cx, local_cy, local_cz));
+                let world_c = drawn_model.transform_point3(Vec3::new(local_cx, local_cy, local_cz));
                 let hx = ($mesh.bounds.max.x - $mesh.bounds.min.x) * 0.5;
                 let hy = ($mesh.bounds.max.y - $mesh.bounds.min.y) * 0.5;
                 let hz = ($mesh.bounds.max.z - $mesh.bounds.min.z) * 0.5;
                 let local_r = (hx * hx + hy * hy + hz * hz).sqrt();
-                let sx = model.x_axis.truncate().length();
-                let sy = model.y_axis.truncate().length();
-                let sz = model.z_axis.truncate().length();
+                let sx = drawn_model.x_axis.truncate().length();
+                let sy = drawn_model.y_axis.truncate().length();
+                let sz = drawn_model.z_axis.truncate().length();
                 let world_r = local_r * sx.max(sy).max(sz);
 
                 // Camera-visible → main passes; an off-screen shadow caster inside a
@@ -288,7 +356,7 @@ pub(super) fn collect_draw_items(
                 let camera_visible = match crate::renderer::classify_visibility(
                     &frustum,
                     &cascade_frusta,
-                    &model,
+                    &drawn_model,
                     $mesh.bounds,
                     $mat.material_type,
                     $mat.is_transparent,
@@ -329,21 +397,30 @@ pub(super) fn collect_draw_items(
 
                 let packed_params = pack_pbr_params($mat.anisotropy, $mat.clear_coat, $mat.subsurface);
 
-                let instance_data = crate::renderer::gpu_types::InstanceRaw {
-                    model: model.to_cols_array_2d(),
-                    albedo_color: [$mat.albedo.x, $mat.albedo.y, $mat.albedo.z, $mat.albedo.w],
-                    roughness: $mat.roughness,
-                    metallic: $mat.metallic,
-                    unlit: match $mat.material_type {
+                let instance_data = crate::renderer::gpu_types::InstanceRaw::new(
+                    model.to_cols_array_2d(),
+                    [$mat.albedo.x, $mat.albedo.y, $mat.albedo.z, $mat.albedo.w],
+                    $mat.roughness,
+                    $mat.metallic,
+                    match $mat.material_type {
                         crate::renderer::components::MaterialType::Skybox => 2.0,
                         crate::renderer::components::MaterialType::Unlit => 1.0,
                         // Baked-lit reads the same attributes the unlit shader does; the flag is
                         // only what the *forward* shader branches on, and it has its own pipeline.
                         crate::renderer::components::MaterialType::BakedLit => 1.0,
+                        // Backdrop has its own pipeline too and `backdrop.wgsl` never reads
+                        // this field; 1.0 keeps it on the "not deferred PBR" side for anything
+                        // that inspects the instance buffer generically.
+                        crate::renderer::components::MaterialType::Backdrop => 1.0,
                         _ => 0.0,
                     },
-                    _padding: packed_params,
-                };
+                    packed_params,
+                    // The two `Material` lighting knobs. Zero unless the material sets them,
+                    // and the shader's `(lit + ambient) * base + emissive` then collapses to
+                    // exactly the multiply chain it was before they existed.
+                    $mat.ambient.to_array(),
+                    $mat.emissive.to_array(),
+                );
                 let skel_bg = $skeleton.map(|s: &crate::renderer::components::Skeleton| s.bind_group.clone());
 
                 // Compute the pass-routing flags up front so they can be part of the
@@ -351,10 +428,15 @@ pub(super) fn collect_draw_items(
                 let is_skybox = $mat.material_type == crate::renderer::components::MaterialType::Skybox;
                 let baked_lit =
                     $mat.material_type == crate::renderer::components::MaterialType::BakedLit;
+                let is_backdrop =
+                    $mat.material_type == crate::renderer::components::MaterialType::Backdrop;
                 // `unlit` means "not in the deferred path", which baked-lit also is not. The two
-                // part company in the shadow pass, where baked-lit casts and unlit does not.
+                // part company in the shadow pass, where baked-lit casts and unlit does not. A
+                // backdrop rides the same flag, and that is what keeps it out of the z-prepass,
+                // the G-buffer and both shadow passes without any further edit to them.
                 let unlit = is_skybox
                     || baked_lit
+                    || is_backdrop
                     || $mat.material_type == crate::renderer::components::MaterialType::Unlit;
                 let is_transparent = $mat.is_transparent || $mat.albedo.w < 0.99;
 
@@ -366,6 +448,7 @@ pub(super) fn collect_draw_items(
                     unlit,
                     baked_lit,
                     is_skybox,
+                    is_backdrop,
                 };
 
                 let batch = cache.batches.entry(key).or_insert_with(|| BatchData {
@@ -378,6 +461,7 @@ pub(super) fn collect_draw_items(
                     unlit,
                     baked_lit,
                     is_skybox,
+                    is_backdrop,
                     skeleton_bind_group: skel_bg,
                     is_transparent,
                     instances: Vec::new(),
@@ -437,8 +521,13 @@ pub(super) fn collect_draw_items(
         for batch in &batches {
             let first_instance = local_instances.len() as u32;
             let camera_count = batch.instances.len() as u32;
-            // Depth key only matters for transparent batches (opaque are depth-buffer sorted).
-            let sort_depth = if batch.is_transparent {
+            // Depth key matters for the two layers the depth buffer cannot sort: transparent
+            // (no depth write) and backdrop (no depth write AND every vertex pinned to the
+            // same depth). A backdrop's instances are camera-RELATIVE offsets, so their
+            // distance is measured from the origin — see `DrawItem::sort_depth`.
+            let sort_depth = if batch.is_backdrop {
+                batch_sort_depth(&batch.instances, Vec3::ZERO)
+            } else if batch.is_transparent {
                 batch_sort_depth(&batch.instances, cam_pos)
             } else {
                 0.0
@@ -454,8 +543,10 @@ pub(super) fn collect_draw_items(
                 unlit: batch.unlit,
                 baked_lit: batch.baked_lit,
                 is_skybox: batch.is_skybox,
+                is_backdrop: batch.is_backdrop,
                 skeleton_bind_group: batch.skeleton_bind_group.clone(),
                 is_transparent: batch.is_transparent,
+                layer: draw_layer(batch.is_backdrop, batch.is_transparent),
                 first_instance,
                 camera_count,
                 shadow_first_instance: 0,
@@ -475,16 +566,16 @@ pub(super) fn collect_draw_items(
             item.shadow_count = batch.shadow_instances.len() as u32;
         }
 
-        // Order draw items for correct alpha blending: opaque first, then transparent
-        // back-to-front. MUST run after region B backfill (which indexes draw items by batch
-        // order); reordering here is safe because the instance ranges are baked-in indices,
-        // independent of draw-item order, and every pass filters by its own flags. The
-        // forward transparent pass draws these in order, and its pipeline disables depth-write
-        // so this order is the only thing that makes overlapping transparents blend correctly
-        // (previously they were drawn in arbitrary HashMap order). Stable sort keeps opaque
-        // batches in their build order.
+        // Order draw items for correct compositing: backdrops first, then the opaque world,
+        // then transparent back-to-front. MUST run after region B backfill (which indexes draw
+        // items by batch order); reordering here is safe because the instance ranges are
+        // baked-in indices, independent of draw-item order, and every pass filters by its own
+        // flags. The forward pass draws these in order, and the backdrop and transparent
+        // pipelines both disable depth-write, so this order is the only thing that composites
+        // them correctly (previously they were drawn in arbitrary HashMap order). Stable sort
+        // keeps opaque batches in their build order.
         local_draw_items
-            .sort_by(|a, b| cmp_draw_order((a.is_transparent, a.sort_depth), (b.is_transparent, b.sort_depth)));
+            .sort_by(|a, b| cmp_draw_order((a.layer, a.sort_depth), (b.layer, b.sort_depth)));
 
         cache.instances = local_instances;
         cache.draw_items = local_draw_items;
@@ -533,6 +624,7 @@ mod batch_key_tests {
             unlit: false,
             baked_lit: false,
             is_skybox: false,
+            is_backdrop: false,
         };
         let transparent = BatchKey {
             is_transparent: true,
@@ -547,10 +639,20 @@ mod batch_key_tests {
             is_skybox: true,
             ..base.clone()
         };
+        // A backdrop shares the `unlit` routing flag with a plain unlit material (both skip
+        // the deferred path) and, if it is untextured, the cached white-texture bind group as
+        // well — so without `is_backdrop` in the key the two collide, and whichever the ECS
+        // iterated first decides whether a wall is camera-locked.
+        let backdrop = BatchKey {
+            unlit: true,
+            is_backdrop: true,
+            ..base.clone()
+        };
 
         assert_ne!(base, transparent, "opaque and transparent must be separate batches");
         assert_ne!(base, unlit, "PBR and unlit must be separate batches");
         assert_ne!(base, skybox, "PBR and skybox must be separate batches");
+        assert_ne!(unlit, backdrop, "unlit and backdrop must be separate batches");
 
         // Identical routing + shared texture/mesh → same batch (instancing preserved).
         assert_eq!(base, base.clone(), "identical materials must still batch together");
@@ -601,9 +703,11 @@ mod pbr_pack_tests {
 
 #[cfg(test)]
 mod transparent_order_tests {
-    use super::{batch_sort_depth, cmp_draw_order, Vec3};
+    use super::{batch_sort_depth, cmp_draw_order, draw_layer, DrawLayer, Vec3};
     use crate::renderer::gpu_types::InstanceRaw;
     use bytemuck::Zeroable;
+
+    use DrawLayer::{Backdrop, Opaque, Transparent};
 
     fn inst_at(x: f32, y: f32, z: f32) -> InstanceRaw {
         let mut i = InstanceRaw::zeroed();
@@ -634,16 +738,22 @@ mod transparent_order_tests {
     #[test]
     fn opaque_first_then_transparent_back_to_front() {
         let mut items = vec![
-            (true, 5.0),   // near transparent
-            (false, 0.0),  // opaque
-            (true, 20.0),  // far transparent
-            (false, 0.0),  // opaque
-            (true, 12.0),  // mid transparent
+            (Transparent, 5.0),  // near transparent
+            (Opaque, 0.0),
+            (Transparent, 20.0), // far transparent
+            (Opaque, 0.0),
+            (Transparent, 12.0), // mid transparent
         ];
         items.sort_by(|a, b| cmp_draw_order(*a, *b));
         assert_eq!(
             items,
-            vec![(false, 0.0), (false, 0.0), (true, 20.0), (true, 12.0), (true, 5.0)]
+            vec![
+                (Opaque, 0.0),
+                (Opaque, 0.0),
+                (Transparent, 20.0),
+                (Transparent, 12.0),
+                (Transparent, 5.0)
+            ]
         );
     }
 
@@ -651,11 +761,103 @@ mod transparent_order_tests {
     // (nondeterministic HashMap) insertion order.
     #[test]
     fn transparent_order_independent_of_input_order() {
-        let mut a = vec![(true, 3.0), (true, 9.0), (true, 1.0)];
-        let mut b = vec![(true, 1.0), (true, 3.0), (true, 9.0)];
+        let mut a = vec![(Transparent, 3.0), (Transparent, 9.0), (Transparent, 1.0)];
+        let mut b = vec![(Transparent, 1.0), (Transparent, 3.0), (Transparent, 9.0)];
         a.sort_by(|x, y| cmp_draw_order(*x, *y));
         b.sort_by(|x, y| cmp_draw_order(*x, *y));
         assert_eq!(a, b);
-        assert_eq!(a, vec![(true, 9.0), (true, 3.0), (true, 1.0)]);
+        assert_eq!(a, vec![(Transparent, 9.0), (Transparent, 3.0), (Transparent, 1.0)]);
+    }
+
+    // ── ITEM 7, property (1): "drawn before the world" ─────────────────────────────────────
+
+    // The backdrop layer is the whole of that property. It has to beat BOTH other layers,
+    // whatever their depths say: the near-far ordering inside a layer must never promote an
+    // opaque or transparent batch ahead of a backdrop.
+    #[test]
+    fn backdrops_are_drawn_before_everything_else() {
+        let mut items = vec![
+            (Transparent, 900.0), // a distant blended object — the farthest thing in the frame
+            (Opaque, 0.0),
+            (Backdrop, 300.0),
+            (Opaque, 0.0),
+            (Backdrop, 1200.0),
+            (Transparent, 4.0),
+        ];
+        items.sort_by(|a, b| cmp_draw_order(*a, *b));
+        assert_eq!(
+            items,
+            vec![
+                // Backdrops first, farthest of them first…
+                (Backdrop, 1200.0),
+                (Backdrop, 300.0),
+                // …then the world…
+                (Opaque, 0.0),
+                (Opaque, 0.0),
+                // …then the blended layer, back-to-front.
+                (Transparent, 900.0),
+                (Transparent, 4.0),
+            ],
+            "a backdrop drawn after a transparent object paints over it — the transparent \
+             pipeline writes no depth, so nothing else can put the backdrop underneath"
+        );
+    }
+
+    // Two overlapping backdrop panels are the one case the depth buffer provably cannot
+    // resolve: both are pinned to the same NDC depth AND neither writes depth. Their order
+    // must therefore come from the comparator and be independent of how the batch HashMap
+    // happened to drain this frame.
+    #[test]
+    fn overlapping_backdrops_composite_in_a_deterministic_order() {
+        let mut a = vec![(Backdrop, 80.0), (Backdrop, 500.0), (Backdrop, 200.0)];
+        let mut b = vec![(Backdrop, 200.0), (Backdrop, 80.0), (Backdrop, 500.0)];
+        a.sort_by(|x, y| cmp_draw_order(*x, *y));
+        b.sort_by(|x, y| cmp_draw_order(*x, *y));
+        assert_eq!(a, b, "backdrop order must not depend on insertion order");
+        assert_eq!(a, vec![(Backdrop, 500.0), (Backdrop, 200.0), (Backdrop, 80.0)]);
+    }
+
+    // A backdrop material with a sub-1.0 alpha is still a backdrop. `is_transparent` is
+    // inferred from that alpha, so if it took precedence a hazy skyline would sort into the
+    // transparent bucket and be painted over the world instead of behind it.
+    #[test]
+    fn a_transparent_backdrop_is_still_a_backdrop() {
+        assert_eq!(draw_layer(true, true), Backdrop);
+        assert_eq!(draw_layer(true, false), Backdrop);
+        assert_eq!(draw_layer(false, true), Transparent);
+        assert_eq!(draw_layer(false, false), Opaque);
+    }
+
+    // A camera-locked batch's instance translations are offsets FROM THE VIEWER, so the
+    // distance that orders them is measured from the origin. Measured from `cam_pos` instead,
+    // the sky's paint order would depend on where in the map the player is standing — the
+    // panels would swap over as the camera drove past the origin.
+    #[test]
+    fn backdrop_sort_depth_is_measured_from_the_camera_locked_origin() {
+        let near_panel = [inst_at(0.0, 0.0, -100.0)];
+        let far_panel = [inst_at(0.0, 0.0, -400.0)];
+
+        for cam in [Vec3::ZERO, Vec3::new(0.0, 0.0, -900.0), Vec3::new(650.0, 20.0, 480.0)] {
+            // The measure the batcher uses for a backdrop ignores `cam` entirely…
+            let near = batch_sort_depth(&near_panel, Vec3::ZERO);
+            let far = batch_sort_depth(&far_panel, Vec3::ZERO);
+            assert!((near - 100.0).abs() < 1e-3 && (far - 400.0).abs() < 1e-3);
+            assert_eq!(
+                cmp_draw_order((Backdrop, far), (Backdrop, near)),
+                std::cmp::Ordering::Less,
+                "the far panel must paint first"
+            );
+
+            // …whereas the camera-relative measure does not, and at cam.z = -900 it even
+            // reverses: that is the ordering flip this avoids.
+            let _ = batch_sort_depth(&near_panel, cam);
+        }
+        let flipped_near = batch_sort_depth(&near_panel, Vec3::new(0.0, 0.0, -900.0));
+        let flipped_far = batch_sort_depth(&far_panel, Vec3::new(0.0, 0.0, -900.0));
+        assert!(
+            flipped_near > flipped_far,
+            "premise: from a camera at z=-900 the 'near' panel is the farther one ({flipped_near} \
+             vs {flipped_far}) — which is why a backdrop must not be sorted from the camera"
+        );
     }
 }

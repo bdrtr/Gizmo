@@ -39,6 +39,18 @@ fn select_cascade(view_depth: f32) -> u32 {
     return 3u;
 }
 
+// Mirror of `csm::SHADOW_FADE_FRACTION` / `csm::shadow_distance_fade`. Past the last cascade
+// there is no shadow data, so the term snaps to "fully lit"; without a fade that snap is a
+// hard line across the world at `cascade_splits.w`. See csm.rs for the reasoning and the
+// cost of the alternative. `shader_shadow_fade_matches_the_rust_mirror` pins the constant.
+const SHADOW_FADE_FRACTION: f32 = 0.15;
+
+fn shadow_distance_fade(view_depth: f32, shadow_far: f32) -> f32 {
+    let far = max(shadow_far, 1e-4);
+    let band = max(far * SHADOW_FADE_FRACTION, 1e-4);
+    return 1.0 - smoothstep(far - band, far, view_depth);
+}
+
 fn get_single_preset_environment(preset: u32, dir: vec3<f32>, roughness: f32, sun_dot: f32, zenith: f32, horizon_blend: f32) -> vec3<f32> {
     // Preset 0: Sunset Gold
     if (preset == 0u) {
@@ -367,10 +379,12 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
 
     // --- CSM Shadow ---
     var shadow_visibility = 1.0;
-    if (scene.sun_direction.w > 0.5) {
-        let view_depth = dot(world_pos - scene.camera_pos.xyz, scene.camera_forward.xyz);
+    let view_depth = dot(world_pos - scene.camera_pos.xyz, scene.camera_forward.xyz);
+    // cascade_splits.w = far edge of the last cascade = the whole covered range.
+    let shadow_fade = shadow_distance_fade(view_depth, scene.cascade_splits.w);
+    if (scene.sun_direction.w > 0.5 && shadow_fade > 0.0) {
         let ci         = select_cascade(view_depth);
-        
+
         // Normal-offset shadows: cascade'in DÜNYA texel boyutuna ORANTILI offset ile
         // örnek noktasını yüzeyden ayır. Sabit N*0.0018 yalnızca en yakın cascade'e
         // uyuyordu; uzak cascade'lerde (texel çok daha büyük) offset texel'in ~1/4'ü
@@ -397,7 +411,9 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
             // 50x aşırı düzeltmeydi ve gölgeyi kaynağın tabanından peter-pan'ledi.
             let bias   = max(0.0004 * slope, 0.00004);
             let texel  = scene.cascade_params.y;
-            shadow_visibility = filter_pcss(shadow_uv, light_ndc.z, ci, bias, texel);
+            // Walk the sampled term back to "lit" over the last stretch of the covered range,
+            // so the end of the shadow maps is a gradient rather than a line.
+            shadow_visibility = mix(1.0, filter_pcss(shadow_uv, light_ndc.z, ci, bias, texel), shadow_fade);
         }
     }
 
