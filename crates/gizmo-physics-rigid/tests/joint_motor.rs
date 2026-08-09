@@ -93,6 +93,22 @@ fn loaded_arm(motor_max_force: f32, servo: bool, iterations: usize) -> (f32, f32
 /// With the budget on the accumulated total, all three are settled by 20 iterations and 40
 /// reproduces them exactly. A user raising `iterations` for stability is asking for a better
 /// answer to the same problem, not a different problem.
+///
+/// # The tolerance was 1e-6 until 2026-08-09
+///
+/// Rigid joint rows became soft constraints at `JointSolver::rigid_hertz`, and the hinge's
+/// point rows are rigid ones. Two of the three regimes still settle to the last bit; the
+/// saturated velocity motor does not quite —
+///
+/// ```text
+///   tail angle, hz = 200:  20 -0.34664080   40 -0.34664220   80 -0.34664255   160 -0.34664220
+///   step-to-step delta:            1.40e-6          3.58e-7          3.58e-7
+/// ```
+///
+/// The residual stops shrinking at 3.6e-7 (≈12 f32 ulps at 0.35 rad) and stays there through
+/// 160 iterations, so it is the noise floor and not an unconverged answer. 5e-6 is set above
+/// that floor and still catches the bug this file was written for by 48× — the old
+/// `/ iterations` budget drifted the same number by 2.4e-4 between 5 and 40 iterations.
 #[test]
 fn a_force_limited_motor_converges_as_iterations_rise() {
     // Three regimes: reaching its target with force to spare, stalled under load, and a
@@ -106,12 +122,12 @@ fn a_force_limited_motor_converges_as_iterations_rise() {
         let (peak_40, tail_40) = loaded_arm(force, servo, 40);
 
         assert!(
-            (peak_20 - peak_40).abs() < 1e-6,
+            (peak_20 - peak_40).abs() < 5e-6,
             "{name}: peak angle moved when iterations doubled 20 -> 40 \
              ({peak_20:.8} vs {peak_40:.8}) — `iterations` must refine the answer, not change it"
         );
         assert!(
-            (tail_20 - tail_40).abs() < 1e-6,
+            (tail_20 - tail_40).abs() < 5e-6,
             "{name}: final angle moved when iterations doubled 20 -> 40 \
              ({tail_20:.8} vs {tail_40:.8})"
         );

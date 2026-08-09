@@ -76,9 +76,20 @@ fn run(world: &mut PhysicsWorld, steps: usize) -> bool {
 /// orthogonal, so there is no bound on the overstatement.
 ///
 /// Written as a property rather than an absolute number: the true reaction here is not
-/// simply `m·g` (the Baumgarte bias contributes, and the measured threshold is ≈22.6 N),
-/// so an absolute assertion would be pinning a solver detail. The DIRECTION-independence is
-/// the physics.
+/// simply `m·g` — the measured threshold is **≈26.0 N** (≈22.6 N before 2026-08-09) — so an
+/// absolute assertion would be pinning a solver detail. The DIRECTION-independence is the
+/// physics.
+///
+/// Where the 2.65× over `m·g` comes from, because it is NOT the bias term inflating λ: at true
+/// steady state the row drives the error to its static value and `λ = m·g·dt` exactly. It is a
+/// duty cycle of the `err_len >= 1e-4` gate in `joints/solver/joint_types/fixed.rs` — the body
+/// free-falls until the anchors separate by 1e-4 m, the row then fires against a velocity that
+/// several substeps of gravity built up, and the PEAK pass force is what `break_force` sees
+/// while the AVERAGE is pinned at 9.81 N by momentum balance. Soft rigid rows raised the peak
+/// (22.6 → 26.0 N) because the repair rate at the gate threshold went from `β/dt` = 72 s⁻¹ to
+/// 173.7 s⁻¹; the gate itself is unchanged and is tracked as its own follow-up in
+/// `docs/FIXPLAN.md` B4. **The 30 N bracket below now has 13% of margin, not 33%** — a further
+/// rise in `rigid_hertz` is what would flip it.
 #[test]
 fn break_force_measures_the_net_reaction_not_the_sum_of_axis_magnitudes() {
     let aligned = Vec3::new(0.0, -9.81, 0.0);
@@ -88,7 +99,7 @@ fn break_force_measures_the_net_reaction_not_the_sum_of_axis_magnitudes() {
         "the two gravities must be the same magnitude, or the test proves nothing"
     );
 
-    // Above the load: both survive. Old code broke the diagonal one (√3 × 22.6 ≈ 39 N > 30).
+    // Above the load: both survive. Old code broke the diagonal one (√3 × 26.0 ≈ 45 N > 30).
     for (name, g) in [("aligned", aligned), ("diagonal", diagonal)] {
         let mut w = welded_load(30.0, 10, g);
         assert!(

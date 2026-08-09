@@ -64,9 +64,11 @@ pub struct JointSolver {
     ///
     /// It clamps the bias term only — the part of the target velocity that comes from
     /// position error — and never the row's response to actual relative velocity, so it is
-    /// not a cap on the impulse a joint may apply. On a rigid row (`compliance == 0`), with
-    /// the defaults and the world's 1/240 s substep, it starts to bind at roughly 7 cm of
-    /// error (`max_correction_speed · dt / position_bias`); below that it is inert.
+    /// not a cap on the impulse a joint may apply. It binds at `max_correction_speed /
+    /// bias_rate` of error, whatever produced that rate: **≈2.9 cm** on the default soft
+    /// rigid path ([`Self::rigid_hertz`] = 200 at the world's 1/240 s substep, bias rate
+    /// 173.7 s⁻¹), and 6.9 cm on the legacy Baumgarte path (`β/dt` = 72 s⁻¹). Below that it
+    /// is inert.
     ///
     /// Must be ≥ 0: it is used as `bias.clamp(-self, self)`, which panics outright when the
     /// value is negative. `0` leaves the linear rows as pure velocity constraints that hold
@@ -80,25 +82,117 @@ pub struct JointSolver {
     /// Same non-negativity requirement, same bias-only reach. It bounds the angular error a
     /// row can work off in one substep by roughly `max_angular_speed · dt`, so a joint that
     /// starts far from its target orientation rotates into place over several substeps
-    /// rather than snapping.
+    /// rather than snapping. Binding threshold, as above: **≈1.65°** on the default soft
+    /// rigid path, 4.0° on the legacy Baumgarte path.
     pub max_angular_speed: f32,
-    /// Baumgarte factor β for the rigid rows — dimensionless, default 0.3.
+    /// Baumgarte factor β of the LEGACY rigid path — dimensionless, default 0.3.
     ///
-    /// A row with positional error `C` is given the target velocity `β·C/dt` (then clamped
-    /// by the two ceilings above), so once the row converges roughly the fraction β of the
-    /// remaining error is worked off over that substep. `0` turns every rigid row into a
-    /// pure velocity constraint: the error stops growing but is never removed. `1` asks for
-    /// all of it inside a single substep.
+    /// Two live roles, and neither is a deprecation stub:
     ///
-    /// Rows with `compliance > 0` derive their bias from the compliance instead and ignore
-    /// this. The hinge and slider POSITION SERVOS, however, reuse it as their proportional
-    /// gain when converting a target angle/offset into a target velocity — retuning β
-    /// retunes how hard those servos chase their target.
+    /// 1. **The legacy rigid path**, selected by setting [`Self::rigid_hertz`] to `0`. A row
+    ///    with positional error `C` is given the target velocity `β·C/dt` (then clamped by
+    ///    the two ceilings above), so once the row converges roughly the fraction β of the
+    ///    remaining error is worked off over that substep. `0` turns every rigid row into a
+    ///    pure velocity constraint: the error stops growing but is never removed. `1` asks
+    ///    for all of it inside a single substep. This is the supported rollback lever for
+    ///    the soft rigid rows — `golden_state.rs` locks a scene against it.
+    /// 2. **The hinge and slider POSITION SERVOS** reuse it as their proportional gain when
+    ///    converting a target angle/offset into a target velocity, on BOTH paths — retuning
+    ///    β retunes how hard those servos chase their target.
+    ///
+    /// Rows with `compliance > 0`, and rigid rows on the default `rigid_hertz > 0` path,
+    /// derive their bias rate from a frequency instead and ignore role 1.
     pub position_bias: f32,
-    /// `compliance > 0` olan satırların sönüm oranı ζ (yumuşak kısıt yay-damper'ının).
-    /// 1.0 = kritik sönüm: yay hedefe salınmadan oturur. Rijit satırlar (compliance = 0)
-    /// bu alanı hiç görmez — onlar Baumgarte yolunda kalır.
+    /// Damping ratio ζ of EVERY soft row's spring–damper, default 1.0 (critical damping: the
+    /// row settles on its target without overshoot).
+    ///
+    /// Named for compliance because that is where it started, but since rigid rows became
+    /// soft rows parameterised by [`Self::rigid_hertz`] it governs them too — the field name
+    /// is now narrower than its reach, and renaming it would be a breaking change on a
+    /// `#[non_exhaustive]` struct mid-hardening for nothing but a nicer identifier.
+    ///
+    /// It does NOT enter a row's static stiffness (that is `ω²` alone); it divides both the
+    /// feedback term and the repair rate. Copying the contact solver's ζ = 10 onto joints at
+    /// its `contact_hertz` = 30 would give `ω²` = 3.6e4 — a 1 kg rope sagging 2.8e-4 m and a
+    /// 16-link chain sagging 1.8 m. That naive mirror is why the two subsystems differ here.
     pub compliance_damping_ratio: f32,
+    /// Soft-constraint frequency of the RIGID rows (`compliance == 0`), in hertz — default
+    /// 200, clamped to `1/dt`. `0` (or negative) selects the legacy Baumgarte path.
+    ///
+    /// A rigid row is not solved as a hard equality with a Baumgarte push; it is solved as a
+    /// very stiff spring–damper at this frequency, the same Box2D-v3 soft formulation the
+    /// contact solver uses (see `soft_coefficients` below and `solver/tgs.rs`). The
+    /// observable contract is a closed form:
+    ///
+    /// ```text
+    /// static constraint error = a / ω²,   ω = 2π · min(rigid_hertz, 1/dt)
+    /// ```
+    ///
+    /// where `a` is the acceleration the row has to hold off (`g` for a hanging load). At the
+    /// default 200 Hz that is 6.2 µm per `g` — **mass-, iteration- and (below the clamp)
+    /// dt-independent**, none of which a Baumgarte row or a compliance can express.
+    ///
+    /// **"Below the clamp" is load-bearing for EMBEDDERS.** [`PhysicsWorld`](crate::PhysicsWorld)
+    /// always substeps at 1/240 s, so 200 Hz is under its `1/dt` = 240 and the law holds as
+    /// written. Calling [`Self::solve_joints`] directly at a coarser step does not get the same
+    /// joint: at `dt = 1/60` the row runs at 60 Hz and the static error is `(200/60)² ≈ 11×`
+    /// larger. The old Baumgarte row had no such cliff (it converged to zero error at every
+    /// `dt`), so this is new. Step at 1/240 or lower `rigid_hertz` deliberately.
+    ///
+    /// **Why it exists.** The hard path has no `−impulse_scale·λ` feedback term. That is what
+    /// destroyed joint warm start at its natural factor of 1.0 (a 16-link chain with a 200 kg
+    /// tip settled at 4.83 m against a converged 16.00, with 44 m/s of residual motion) while
+    /// the identical chain at `compliance = 1e-6` stayed stable. See `docs/FIXPLAN.md`, B4
+    /// commit 5.
+    ///
+    /// Be careful with the mechanism, because the obvious story is wrong and was believed here
+    /// for a while: it is NOT that a row accumulates its own Baumgarte residual pass after
+    /// pass. Write the update as `λ' = (1 − mass_scale − impulse_scale)·λ + mass_scale·(b − v₀)/k`,
+    /// where `v₀` is the relative velocity this row is not responsible for. On the hard path
+    /// `mass_scale = 1, impulse_scale = 0`, so the coefficient on `λ` is already ZERO — a hard
+    /// row re-derives its λ from scratch every iteration and has no memory of its own. The
+    /// memory that blows up lives in `v₀`, i.e. in the Gauss–Seidel coupling between rows of an
+    /// ill-conditioned chain. What the feedback term buys is a converged system of
+    /// `J·v = b − (impulse_scale/mass_scale)·k·λ` — CFM with `α̃ = k·impulse_scale/mass_scale`,
+    /// a compliance proportional to the row's own `k`, which is what makes it a constant-
+    /// FREQUENCY softening and is why a frequency is the honest way to parameterise it.
+    ///
+    /// **It deliberately diverges from [`ConstraintSolver`](crate::ConstraintSolver)'s
+    /// contact settings** — 200 Hz not 30, ζ = 1 not 10, and the ceiling is `1/dt` not
+    /// `0.25/dt`. A contact carries roughly its own body's weight; a joint can carry 400×
+    /// that, so the same numbers would sag visibly. The reasoning is at `rigid_coefficients`.
+    ///
+    /// **Cost, stated plainly:** a rigid row is now a spring, so it is strictly softer than
+    /// the Baumgarte row was, which converged to zero error given enough iterations. On the
+    /// 200 kg chain this raises the converged floor by ≈39 mm and no iteration count removes
+    /// it. `tests/joint_rigid_stiffness.rs` is what bounds the loss.
+    pub rigid_hertz: f32,
+    /// Fraction of the previous substep's λ injected before iteration 0, default **0.0 (off)**.
+    ///
+    /// **Whether to ship this on is NOT yet decided.** It is committed at `0.0` so the
+    /// measurement phase can sweep it without a throwaway patch; the default is inert and
+    /// every committed scene runs cold. Do not raise it in library code.
+    ///
+    /// A warm start hands the solver the answer it converged to last substep, so ten warm
+    /// sweeps land far closer to the rigid answer than ten cold ones on an ill-conditioned
+    /// chain. It previously destroyed such a chain at factor 1.0; [`Self::rigid_hertz`] is
+    /// the fix that diagnosis pointed at, and this knob is how that is measured.
+    ///
+    /// Injection is a SEPARATE sweep before iteration 0, never in place: this solver clamps
+    /// the accumulated TOTAL, so `λ_prev + (−Jv_pre − k·λ_prev + bias)/k = (−Jv_pre + bias)/k`
+    /// — in-place injection cancels exactly and is an algebraic no-op (measured; see
+    /// `docs/FIXPLAN.md`). With a non-zero factor the λ of a pass becomes carried simulation
+    /// state, which `WorldSnapshot` already covers (it clones the joints).
+    ///
+    /// Two things the injection sweep does NOT cover, both harmless and both worth knowing
+    /// before reading a measurement: the MOTOR rows are hand-rolled and call `accumulate`
+    /// directly rather than going through the shared helpers, so they simply run a normal
+    /// solve during the injection sweep — i.e. a warm-started motor gets `iterations + 1`
+    /// refining sweeps of the same budgeted total, not a multiplied force
+    /// (`tests/joint_motor.rs` is what holds that). And the force-based pass — Spring, slider
+    /// suspension, hinge torsional, D6 drives — sits outside the loop entirely and is
+    /// untouched.
+    pub warm_start_factor: f32,
 }
 
 impl Default for JointSolver {
@@ -109,6 +203,8 @@ impl Default for JointSolver {
             max_angular_speed: 5.0,
             position_bias: 0.3,
             compliance_damping_ratio: 1.0,
+            rigid_hertz: 200.0,
+            warm_start_factor: 0.0,
         }
     }
 }
@@ -162,9 +258,10 @@ impl JointSolver {
 
     /// Solve every joint for one substep, writing the result into `velocities`.
     ///
-    /// `dt` is the substep length in SECONDS and must be > 0: it divides the Baumgarte bias
-    /// (`β·C/dt`) and converts accumulated impulses back into the forces and torques that
-    /// are compared against the break thresholds. `transforms` is read-only — positions are
+    /// `dt` is the substep length in SECONDS and must be > 0: it sets every row's soft
+    /// coefficients (and, on the legacy path, divides the Baumgarte bias `β·C/dt`) and
+    /// converts accumulated impulses back into the forces and torques that are compared
+    /// against the break thresholds. `transforms` is read-only — positions are
     /// integrated later in the step — so the positional error is frozen for the duration of
     /// the call and the correction only becomes visible after integration.
     ///
@@ -195,7 +292,8 @@ impl JointSolver {
     /// Three phases, in order:
     ///
     /// 1. [`Self::iterations`] Gauss–Seidel sweeps of the velocity-level rows, in joint
-    ///    order.
+    ///    order — preceded by one λ-injection sweep when [`Self::warm_start_factor`] is
+    ///    non-zero (it is zero by default).
     /// 2. One pass of the force-based contributions — the Spring joint, the slider
     ///    suspension and hinge torsional springs, the D6 drives. These depend on position
     ///    rather than velocity, so running them inside the loop above would apply them
@@ -222,8 +320,10 @@ impl JointSolver {
     /// # Determinism
     ///
     /// The accumulated impulses are cleared at the start of every call, so a pass never
-    /// inherits them from the previous one. The latched state on the joints themselves does
-    /// carry over — `is_broken` and the reference poses survive every call. The map is only
+    /// inherits them from the previous one — unless [`Self::warm_start_factor`] is non-zero,
+    /// which is exactly what makes λ carried simulation state (`WorldSnapshot` clones the
+    /// joints, so a rollback already carries it). The latched state on the joints themselves
+    /// does carry over regardless — `is_broken` and the reference poses survive every call. The map is only
     /// ever looked up in, never iterated, so its hash order does not reach the result; the
     /// order of `joints` does. Single-threaded and same-platform bit-reproducible only.
     pub fn solve_joints(
@@ -239,12 +339,23 @@ impl JointSolver {
         // bu birikimi yakınsatır. Geçiş başında sıfırla — döngünün İÇİNDE sıfırlamak tüm
         // değişikliği no-op'a indirir.
         //
-        // λ adımlar arasında TAŞINMADIĞI için `WorldSnapshot`'a girmesi gerekmez: rollback
-        // restore'undan sonraki ilk `solve_joints` onu zaten sıfırdan kurar. Substep'ler
-        // arası warm-start eklendiği gün bu tersine döner ve snapshot'a girmesi ZORUNLU olur
-        // (bkz. `PhysicsWorld::WorldSnapshot`'taki contact_cache gerekçesi).
+        // `warm_start_factor == 0` (VARSAYILAN) iken λ adımlar arasında TAŞINMAZ: rollback
+        // restore'undan sonraki ilk `solve_joints` onu zaten sıfırdan kurar. Faktör sıfırdan
+        // büyükse geçen geçişin λ'sı `prev_rows`'ta saklanıyor ve gerçek taşınan durum
+        // oluyor — `WorldSnapshot` `joints`'i klonladığı için bu kendiliğinden kapsanıyor.
+        //
+        // Sıfır uzunluklu adım `prev_rows`'a DOKUNMAZ, ama bunu geçmişin hayatta kaldığı
+        // şeklinde okuma: sonraki gerçek geçişin `begin_pass`'i `prev_rows`'u, az önce
+        // sıfırlanmış olan `rows`'tan yeniden yazar, yani warm start bir geçiş SOĞUK başlar.
+        // Bilinçli bir kabul; ayrıntı `JointScratch::clear_pass`'ta. `rows`/`impulse_*` her
+        // iki yolda da sıfırlanıyor, yani faktör 0'da ayrım gözlemlenemez.
+        let steppable = dt > 0.0 && dt.is_finite();
         for joint in joints.iter_mut() {
-            joint.scratch = JointScratch::default();
+            if steppable {
+                joint.scratch.begin_pass();
+            } else {
+                joint.scratch.clear_pass();
+            }
         }
 
         // A non-positive (or NaN) step is not a step, and every quantity below is a RATE:
@@ -273,11 +384,19 @@ impl JointSolver {
         //
         // (`dt <= 0.0` is false for NaN, hence the second half; an infinite dt is rejected on
         // the same grounds — a motor budget of `max_force·∞` is not a step either.)
-        if dt <= 0.0 || !dt.is_finite() {
+        if !steppable {
             return;
         }
 
-        for _ in 0..self.iterations {
+        // Warm start AÇIKSA iterasyonların önüne fazladan bir süpürme konur ve o süpürmede
+        // her satır λ hesaplamak yerine `factor · λ_prev` enjekte eder. Ayrı süpürme olması
+        // ŞART: satırın kendi yerinde enjeksiyon cebirsel bir no-op (bkz.
+        // [`Self::warm_start_factor`]). Faktör 0'da `passes == iterations`, `warm_factor`
+        // hiç yazılmıyor ve yol bit-aynı.
+        let warm = self.warm_start_factor > 0.0;
+        let passes = self.iterations + usize::from(warm);
+        for pass in 0..passes {
+            let injecting = warm && pass == 0;
             for joint in joints.iter_mut() {
                 if joint.is_broken {
                     continue;
@@ -299,6 +418,10 @@ impl JointSolver {
                 // `waking_travels_the_whole_chain_in_one_step` is what would break.
                 if joint_is_inert(rigid_bodies, velocities, idx_a, idx_b) {
                     continue;
+                }
+
+                if injecting {
+                    joint.scratch.set_warm_injection(self.warm_start_factor);
                 }
 
                 // Dispatch on the JointType enum (a Copy value derived from joint.data via
@@ -363,6 +486,10 @@ impl JointSolver {
                     // inside the iteration loop would apply the force ~iterations times.
                     // It is applied once per step outside the loop (see below).
                     JointType::Spring => {}
+                }
+
+                if injecting {
+                    joint.scratch.set_warm_injection(0.0);
                 }
             }
         }
@@ -556,9 +683,85 @@ impl JointSolver {
     /// `impulse_scale` çok daha küçük — contact_hertz=30, ζ=10 ile ≈0.058 — bu yüzden sınır
     /// `m_eff ≈ 34`'e çıkıyor ve mevcut soak sahnelerinde ısırmıyor. Ölçülmesi gereken ayrı
     /// bir konu; bkz. docs/FIXPLAN.md.)
+    ///
+    /// # Kırpma rejimi sorusu KAPANDI
+    ///
+    /// Bu doküman "compliance'ın iterasyon bağımlılığı kırpma rejimiyle birlikte ele
+    /// alınacak" diye açık bir soru bırakmıştı. Cevap: yumuşak formülasyon **çarpan**
+    /// rejiminde ve kırpma dengeyi ısırmıyor. Kimlik şu —
+    ///
+    /// ```text
+    /// ω² = mass_scale · bias_rate / (impulse_scale · dt)
+    /// statik hata C* = a / ω²,   denge bias'ı b* = impulse_scale · a · dt / mass_scale
+    /// ```
+    ///
+    /// — ve `mass_scale + impulse_scale ≡ 1` olduğundan denge λ'sı tam olarak `a·dt·m_eff`,
+    /// yani gerçek yük; kırpmaya hiç bağlı değil. Süitin en ağır sahnesinde bile gereken
+    /// bias tavanın 21 katı altında (ayrıntı: [`Self::rigid_coefficients`]). Rijit satırlar
+    /// da artık bu yolda; oradaki tek fark ω'nın nereden geldiği.
     #[inline]
     fn soft_coefficients(&self, compliance: f32, k: f32, dt: f32) -> (f32, f32, f32) {
         let omega = (k / compliance).sqrt();
+        let denom = 2.0 * self.compliance_damping_ratio + dt * omega;
+        if denom <= 1e-9 {
+            return (0.0, 1.0, 0.0);
+        }
+        let c = dt * omega * denom;
+        (omega / denom, c / (1.0 + c), 1.0 / (1.0 + c))
+    }
+
+    /// Soft-constraint coefficients of a RIGID row (`compliance == 0`):
+    /// `(bias_rate, mass_scale, impulse_scale)`.
+    ///
+    /// Same Box2D-v3 arithmetic as [`Self::soft_coefficients`], but ω comes from a FREQUENCY
+    /// ([`Self::rigid_hertz`]) rather than from `√(k/α)` — which is undefined at
+    /// `compliance == 0`. It does not depend on `k`, so every rigid row in the world shares
+    /// one triple; it is recomputed per row anyway because hoisting it would mean threading a
+    /// triple through 25 call sites to save ~8 flops next to the inverse-inertia matrix
+    /// products already in the same function.
+    ///
+    /// # Neden bu satır artık YUMUŞAK
+    ///
+    /// Rijit satır bugüne kadar `mass_scale = 1, impulse_scale = 0` ile koşuyordu: Baumgarte
+    /// β·C/dt + hız kırpması, geri besleme terimi YOK. Az-yakınsamış bir geçiş Baumgarte
+    /// artığını λ'ya entegre ediyor ve geri sızdıracak hiçbir şey yok. Warm-start'ı doğal
+    /// f=1.0 değerinde yıkan buydu (16 halkalı zincir, 200 kg uç: 4.83 m, 44 m/s artık
+    /// hareket), aynı zincir `compliance = 1e-6` ile KARARLIYKEN. Bkz. docs/FIXPLAN.md B4.
+    ///
+    /// # Kırpma rejimi: ÇARPAN, bölme değil — ama bu bir PAY, kurgusal bir garanti değil
+    ///
+    /// Denge bias'ı `b* = impulse_scale·a·dt/mass_scale` — varsayılanlarda `1.099e-4·a`.
+    /// 1 kg'lık halatta 1.1e-3 m/s (tavanın 4500 katı altında); süitin en ağır sahnesinde,
+    /// 200 kg uçlu zincirin çapa satırında (`a ≈ 2109 m/s²`) 0.232 m/s — 5 m/s tavanının
+    /// **21 katı** altında. CFM'deki felaket `λ = bias/α̃` bir BÖLME olduğu içindi ve gereken
+    /// bias kırpmanın ~14 katıydı; burada `c` bir çarpan ve gereken bias 4500 kat altında.
+    ///
+    /// Yine de ISIRIRSA ne olacağı yazılmalı, çünkü eski yoldan DAHA kötü. `b_max < b*` iken
+    /// kararlı duruma ulaşmak imkânsızdır: kalan hız `b* − b_max` sabit kalır ve hata zamanda
+    /// DOĞRUSAL büyür — kısıt boşalır. Eski Baumgarte yolunda kırpma yalnızca onarımı
+    /// yavaşlatıyordu (`v_son = kırpılmış bias`, hata sınırlı). Eşik
+    /// `a > max_correction_speed·c/dt ≈ 45 000 m/s²`; ölçülen en ağır sahnede 21× pay var,
+    /// ama pay `rigid_hertz` düşürüldükçe (küçük `c`) daralır, `1/dt`'ye dayanmış bir
+    /// `hertz`'te `c ≤ 52` ile eşik ≈ 62 000 m/s²'ye çıkar. Bir sahne bu bölgeye girerse
+    /// çare `max_correction_speed`'i yükseltmektir, `rigid_hertz`'i değil.
+    ///
+    /// # `hertz` ve ζ neden temas çözücüsünden FARKLI
+    ///
+    /// `solve_contacts_tgs` 30 Hz / ζ=10 kullanıyor. Aynı sayılar burada `ω² = 3.6e4` verir:
+    /// 1 kg'lık halat 2.8e-4 m sarkar (mevcut 1e-4 sınırına karşı KIRMIZI) ve zincir 1.8 m.
+    /// Sebep yapısal: bir temas kabaca kendi cisminin ağırlığını taşır, bir eklem 400 katını
+    /// taşıyabilir. 200 Hz / ζ=1, ölçülmüş `compliance = 1e-6` kontrolünün her iki eksenini
+    /// de yeniden üretir (`impulse_scale` 0.0257 ↔ ölçülen bant 0.021–0.037, `bias_rate`
+    /// 173.7 ↔ 179) ve o doğrulanmış bandın içinde kalan EN SERT ayardır.
+    #[inline]
+    fn rigid_coefficients(&self, dt: f32) -> (f32, f32, f32) {
+        // Kırpma temas çözücüsünün `0.25/dt`'siyle TERS gerekçeye sahip. Orada amaç ω·dt'yi
+        // küçük tutmak; burada amaç `impulse_scale`'in çökmesini engellemek — hertz büyüdükçe
+        // satır geri besleme terimi olmayan sert Baumgarte'a, yani düzeltmek için var olduğu
+        // hataya geri dejenere olur. `1/dt` ω·dt ≤ 2π'yi pinler, dolayısıyla
+        // `impulse_scale ≥ 0.0189`.
+        let hertz = self.rigid_hertz.min(1.0 / dt);
+        let omega = 2.0 * std::f32::consts::PI * hertz;
         let denom = 2.0 * self.compliance_damping_ratio + dt * omega;
         if denom <= 1e-9 {
             return (0.0, 1.0, 0.0);
@@ -583,6 +786,8 @@ impl JointSolver {
             // ve compliance = 0 olan EŞİTLİK satırları — Fixed, D6 Locked, slider'ın dik
             // eksenleri ve açısal kilidi, hinge eksen hizalaması — bugünküyle BİT-AYNI
             // kalır. Davranış değişimi yalnızca gerçekten bir sınıra dayanan satırlarda.
+            // (Bu iddia KIRPMA DALI hakkında; hâlâ doğru. Rijit satırların `delta`sı ayrıca
+            // `rigid_hertz` ile değişti — o başka bir yerde, çağıranda.)
             *accum = total;
             delta
         } else {
@@ -592,7 +797,7 @@ impl JointSolver {
         }
     }
 
-    /// Apply a 1-DOF angular velocity constraint along `direction` (hard).
+    /// Apply a 1-DOF angular velocity constraint along `direction` at zero compliance.
     /// `error` is the positional error in radians (positive = bodies need to rotate apart).
     #[allow(clippy::too_many_arguments)]
     fn apply_angular_constraint(
@@ -616,11 +821,19 @@ impl JointSolver {
         )
     }
 
-    /// Soft (compliant) form of [`Self::apply_angular_constraint`]. `compliance` ≥ 0 is the
-    /// inverse stiffness (CFM): the effective mass is regularised by `compliance/dt²`, so a
-    /// larger value yields a springier constraint that gives under load (0 = fully rigid,
-    /// identical to the hard path). Lets a specific limit/weld be soft without changing the
-    /// global Baumgarte factor.
+    /// Compliant form of [`Self::apply_angular_constraint`]. `compliance` ≥ 0 is the inverse
+    /// stiffness: a row at `α > 0` obeys Hooke's law, `F = C/α`, with its frequency derived
+    /// from `√(k/α)`. Lets a specific limit/weld be soft without touching the global tuning.
+    ///
+    /// `compliance == 0` no longer means "hard": it means the row's frequency comes from
+    /// [`Self::rigid_hertz`] instead (200 Hz by default, a static error of `a/ω²`), and only
+    /// `rigid_hertz <= 0` restores the Baumgarte path.
+    ///
+    /// **One exception, and it is a correctness one:** a row with `error == 0.0` has no
+    /// position term, so nothing would ever take back the `impulse_scale · v` a soft row
+    /// leaves behind and the angle would drift linearly without bound. Such a row stays a
+    /// hard velocity constraint on every path. `fixed.rs`'s 3-axis angular lock is the only
+    /// structurally velocity-only caller in the crate; see the comment on the branch.
     #[allow(clippy::too_many_arguments)]
     fn apply_angular_constraint_soft(
         &self,
@@ -655,35 +868,54 @@ impl JointSolver {
         }
         let vel_err = (w_b - w_a).dot(direction);
 
-        // İki rejim. `compliance == 0` → RİJİT: Baumgarte bias + hız kırpması, bit-aynı
-        // korunuyor (motorun bugüne kadar doğru çalışan yolu bu). `compliance > 0` → YUMUŞAK:
-        // temas çözücüsüyle aynı soft-constraint formülasyonu, bkz. `soft_coefficients`.
-        let (position_bias, mass_scale, impulse_scale) = if compliance > 0.0 {
+        // Üç kol. `compliance > 0` → YUMUŞAK, ω = √(k/α) (Hooke). `compliance == 0`,
+        // `rigid_hertz > 0` ve satırın bir KONUM terimi VAR → yine YUMUŞAK ama ω bir
+        // FREKANSTAN geliyor; bkz. `rigid_coefficients`. Aksi hâlde → sert hız kısıtı.
+        //
+        // `error == 0.0` neden yumuşak OLAMAZ — bu bir mikro-optimizasyon değil, DOĞRULUK:
+        // yumuşak bir satır geriye `impulse_scale · v` bırakır ve o artığı geri alan şey
+        // satırın konum terimidir. Konum terimi olmayan bir satırda geri alacak hiçbir şey
+        // yoktur, artık hız sabit kalır ve AÇI ZAMANDA DOĞRUSAL, SINIRSIZ sürüklenir:
+        // `ω_artık = α·dt/c` (varsayılanlarda 1.10e-4 rad/s, her 1 rad/s²'lik dış açısal
+        // ivme için). Ölçüldü: 10 rad/s² altındaki bir kaynak 40 s'de 0.127 rad (7.3°).
+        //
+        // Yapısal olarak konum terimsiz TEK çağrı yeri `fixed.rs`'in 3 eksenli açısal kilidi
+        // (`error` orada HARFİ HARFİNE `0.0`); diğer açısal çağrı yerlerinin hepsi gerçek bir
+        // hata taşıyor ve sıkı eşitsizliklerle kapılı (`err_mag > 1e-6`, `swing_angle >
+        // limit`, …), yani bu dala yalnızca o kilit — ve teğet geçen bir D6 `Locked` satırı —
+        // düşer. Konum terimi olmayan satırda Baumgarte artığı da yoktur, dolayısıyla
+        // `rigid_hertz`'in düzeltmek için var olduğu warm-start teşhisi buraya UYGULANMAZ:
+        // `λ_{n+1} = (bias − v₀)/k` sert biçimde de hafızasızdır, enjeksiyondan bağımsızdır.
+        let (bias, mass_scale, impulse_scale) = if compliance > 0.0 {
             let (bias_rate, m, i) = self.soft_coefficients(compliance, k, dt);
-            (
-                (bias_rate * error).clamp(-self.max_angular_speed, self.max_angular_speed),
-                m,
-                i,
-            )
+            (bias_rate * error, m, i)
+        } else if self.rigid_hertz > 0.0 && error != 0.0 {
+            let (bias_rate, m, i) = self.rigid_coefficients(dt);
+            (bias_rate * error, m, i)
         } else {
-            (
-                (self.position_bias * error / dt)
-                    .clamp(-self.max_angular_speed, self.max_angular_speed),
-                1.0,
-                0.0,
-            )
+            // ESKİ Baumgarte — ve `error == 0.0` olan hız-kilidi satırı, ki ikisi tam olarak
+            // ÇAKIŞIR (`β·0/dt == 0`), bu yüzden ayrı bir kol yazılmadı.
+            //
+            // İfade HARFİ HARFİNE korunuyor, ortak bir `bias_rate * error` üzerinden yeniden
+            // yazılmıyor: f32'de `(β·error)/dt` ile `(β/dt)·error` farklı yuvarlanır ve bu
+            // kolun bir işi de değişiklik öncesiyle bit-aynı olmak.
+            (self.position_bias * error / dt, 1.0, 0.0)
         };
-        // Doğru terim odur — yumuşak bir satırın denge noktası Jv + α̃·λ_toplam = bias'tır —
-        // ama `position_bias` bu çözücüde `max_correction_speed`/`max_angular_speed` ile
-        // HIZ-KIRPILI. Kırpma ısırdığı anda denge λ_toplam = bias_max/α̃ değerine tavanlanır;
-        // bu, taşınması gereken yükün çok altında kalır ve kısıt sessizce boşalır. Ölçüldü:
-        // compliance=0.03, 1 kg yük, dt=1/240 → 2 m'lik halat 600 adımda 27.4 m'ye uzuyor
-        // (yani serbest düşüş), oysa doğru statik uzama α·m·g/β = 0.98 m. Kırpmayı 5000'e
-        // çekince ölçüm 1.007 m — terim doğru, kırpmayla ETKİLEŞİMİ yanlış.
-        // Bu yüzden compliance'ın iterasyon-sayısına bağımlılığı burada KAPANMIYOR; kırpma
-        // rejimiyle birlikte ele alınacak (bkz. docs/FIXPLAN.md, B4 sonrası).
-        // `impulse_scale` terimi BÖLÜNMEZ — gerekçe `soft_coefficients`'ta (kararlılık).
-        let delta = mass_scale * (-vel_err + position_bias) / k - impulse_scale * *scratch.row(slot);
+        let position_bias = bias.clamp(-self.max_angular_speed, self.max_angular_speed);
+        // Kırpma hikâyesinin tamamı `soft_coefficients`'ta: CFM'de `λ = bias/α̃` bir BÖLME
+        // olduğu için kırpma ısırdığı an kısıt boşalıyordu (2 m'lik halat 600 adımda 27.4 m);
+        // yumuşak formülasyonda `c` bir ÇARPAN ve denge bias'ı tavanın en az 21 katı altında.
+        // `impulse_scale` terimi BÖLÜNMEZ — gerekçe yine `soft_coefficients`'ta (kararlılık).
+        //
+        // Warm start açıkken (`warm_start_factor > 0`) ilk süpürme λ hesaplamaz: geçen
+        // substep'in λ'sını ölçekleyip ENJEKTE eder. Enjeksiyonun kendi süpürmesinde olması
+        // ŞART — satırın kendi yerinde yapılan enjeksiyon cebirsel bir no-op'tur, çünkü clamp
+        // burada TOPLAM üzerinden çalışıyor ve λ_prev sadeleşiyor (bkz. `warm_start_factor`).
+        let delta = if let Some(factor) = scratch.warm_injection() {
+            factor * scratch.prev_row_value(slot)
+        } else {
+            mass_scale * (-vel_err + position_bias) / k - impulse_scale * *scratch.row(slot)
+        };
         let lambda = Self::accumulate(scratch.row(slot), delta, lambda_min, lambda_max);
         // Geçişin NET açısal impulse'ı — `break_torque` bundan hesaplanır. Artımların
         // VEKTÖR toplamı: eş-doğrusal olmayan satırların büyüklüklerini toplamak (eski
@@ -713,7 +945,8 @@ impl JointSolver {
         lambda
     }
 
-    /// Apply a 1-DOF linear velocity constraint along `direction` at the anchor points (hard).
+    /// Apply a 1-DOF linear velocity constraint along `direction` at the anchor points, at
+    /// zero compliance.
     #[allow(clippy::too_many_arguments)]
     fn apply_linear_constraint(
         &self,
@@ -738,9 +971,9 @@ impl JointSolver {
         )
     }
 
-    /// Soft (compliant) form of [`Self::apply_linear_constraint`]. See
-    /// [`Self::apply_angular_constraint_soft`] — `compliance/dt²` regularises the effective
-    /// mass (0 ⇒ rigid).
+    /// Compliant form of [`Self::apply_linear_constraint`]. See
+    /// [`Self::apply_angular_constraint_soft`] — `α > 0` gives Hooke's law, `α == 0` gives a
+    /// row at [`Self::rigid_hertz`].
     #[allow(clippy::too_many_arguments)]
     fn apply_linear_constraint_soft(
         &self,
@@ -783,24 +1016,25 @@ impl JointSolver {
         }
         let rel_vel = (v_b - v_a).dot(direction);
 
-        // İki rejim — gerekçe `apply_angular_constraint_soft`'ta.
-        let (position_bias, mass_scale, impulse_scale) = if compliance > 0.0 {
+        // Üç kol — gerekçe `apply_angular_constraint_soft`'ta.
+        let (bias, mass_scale, impulse_scale) = if compliance > 0.0 {
             let (bias_rate, m, i) = self.soft_coefficients(compliance, k, dt);
-            (
-                (bias_rate * error).clamp(-self.max_correction_speed, self.max_correction_speed),
-                m,
-                i,
-            )
+            (bias_rate * error, m, i)
+        } else if self.rigid_hertz > 0.0 {
+            let (bias_rate, m, i) = self.rigid_coefficients(dt);
+            (bias_rate * error, m, i)
         } else {
-            (
-                (self.position_bias * error / dt)
-                    .clamp(-self.max_correction_speed, self.max_correction_speed),
-                1.0,
-                0.0,
-            )
+            // ESKİ Baumgarte, harfi harfine (bit-aynılık için — açısal eşe bak).
+            (self.position_bias * error / dt, 1.0, 0.0)
         };
+        let position_bias = bias.clamp(-self.max_correction_speed, self.max_correction_speed);
         // `impulse_scale` terimi BÖLÜNMEZ — gerekçe `soft_coefficients`'ta (kararlılık).
-        let delta = mass_scale * (-rel_vel + position_bias) / k - impulse_scale * *scratch.row(slot);
+        // Warm-start enjeksiyon süpürmesi — gerekçe `apply_angular_constraint_soft`'ta.
+        let delta = if let Some(factor) = scratch.warm_injection() {
+            factor * scratch.prev_row_value(slot)
+        } else {
+            mass_scale * (-rel_vel + position_bias) / k - impulse_scale * *scratch.row(slot)
+        };
         let lambda = Self::accumulate(scratch.row(slot), delta, lambda_min, lambda_max);
         // Geçişin NET doğrusal impulse'ı — `break_force` bundan hesaplanır (bkz. açısal eş).
         scratch.impulse_lin += direction * lambda;
@@ -878,13 +1112,22 @@ mod tests {
         }
     }
 
-    /// 1-DOF doğrusal hız kısıtı, DOĞRU efektif kütleyle tek uygulamada ankor
-    /// noktalarındaki bağıl hızı tam olarak sıfırlar (λ = -Jv/k, yeni Jv = Jv + kλ = 0).
-    /// Yanlış `k` ile (eski `((I⁻¹r)×n)×r·n`) over/undershoot olur ve bağıl hız ≠ 0 kalır;
-    /// bu test bu yüzden doğru çapraz-çarpım sırasını ayırt eder.
+    /// 1-DOF doğrusal hız kısıtı, DOĞRU efektif kütleyle tek uygulamada bağıl hızın tam
+    /// olarak `mass_scale` katını siler ve geriye `impulse_scale·v` bırakır
+    /// (λ = mass_scale·(-Jv)/k, yeni Jv = Jv + kλ = impulse_scale·Jv).
+    ///
+    /// Yanlış `k` ile (eski `((I⁻¹r)×n)×r·n`) silinen miktar `k_doğru/k_yanlış` ile
+    /// ölçeklenir ve kalan bu değeri IŞKALAR; test bu yüzden hâlâ doğru çapraz-çarpım
+    /// sırasını ayırt ediyor — üstelik eskisinden DAHA keskin, çünkü artık sıfıra karşı
+    /// değil hesaplanmış bir sabite karşı ölçüyor.
+    ///
+    /// Kalan sıfır DEĞİL, çünkü rijit satır artık `rigid_hertz` frekansında yumuşak: bir
+    /// geçişte 10 uygulama var, `impulse_scale ≈ 0.019` üstel olarak sönüyor. Bedeli bu,
+    /// karşılığında satır geri besleme terimini kazanıyor.
     #[test]
     fn linear_constraint_zeroes_relative_velocity_with_correct_effective_mass() {
         let solver = JointSolver::default();
+        let (_, mass_scale, _) = solver.rigid_coefficients(1.0 / 60.0);
 
         let body = || {
             let mut rb = RigidBody::new(1.0, false);
@@ -923,9 +1166,11 @@ mod tests {
         let v_a = vels[0].linear + vels[0].angular.cross(r_a);
         let v_b = vels[1].linear + vels[1].angular.cross(r_b);
         let rel_n = (v_b - v_a).dot(direction);
+        let expected = (1.0 - mass_scale) * 1.0; // impulse_scale · v_pre
         assert!(
-            rel_n.abs() < 1e-5,
-            "tek uygulamada bağıl hız sıfırlanmalı; kalan = {rel_n} (yanlış efektif kütle?)"
+            (rel_n - expected).abs() < 1e-5,
+            "tek uygulama bağıl hızın mass_scale katını silmeli: beklenen kalan {expected}, \
+             ölçülen {rel_n} (yanlış efektif kütle?)"
         );
     }
 
@@ -968,7 +1213,14 @@ mod tests {
         );
         assert!(first < 0.0, "çeken satır negatif λ uygulamalı, uyguladığı = {first}");
         let rel = |v: &[Velocity; 2]| (v[1].linear - v[0].linear).dot(Vec3::Y);
-        assert!(rel(&vels).abs() < 1e-6, "ilk çağrı bağıl hızı sıfırlamalı: {}", rel(&vels));
+        // Yumuşak satır bir uygulamada `impulse_scale·v` bırakır (bkz. yukarıdaki test).
+        let (_, mass_scale, _) = solver.rigid_coefficients(1.0 / 60.0);
+        let leak = 1.0 - mass_scale;
+        assert!(
+            (rel(&vels) - leak).abs() < 1e-6,
+            "ilk çağrı bağıl hızın mass_scale katını silmeli, kalan = {}",
+            rel(&vels)
+        );
 
         // 2) Başka bir satır (burada elle) cisimleri BİRBİRİNE yaklaştırıyor. Satırın artık
         //    daha az çekmesi gerekiyor: doğru davranış, uyguladığının bir kısmını geri vermek.
@@ -989,9 +1241,13 @@ mod tests {
             "satır kendi impulse'ını geri vermeli (pozitif artım); uyguladığı = {second} \
              — iterasyon-başına clamp'te bu 0'a kırpılırdı"
         );
+        // Birikmiş toplam tam olarak 0'a kırpıldı — satır uyguladığının HEPSİNİ geri verdi —
+        // dolayısıyla kalan, birinci çağrının kalanının aynadaki görüntüsü: `-impulse_scale·v`.
+        assert_eq!(*scratch.row(row::LIMIT), 0.0, "toplam üst sınıra dönmeli");
         assert!(
-            rel(&vels).abs() < 1e-6,
-            "geri verdikten sonra bağıl hız yine sıfır olmalı, kalan = {}",
+            (rel(&vels) - (-leak)).abs() < 1e-6,
+            "geri verdikten sonra kalan bağıl hız {} olmalı, ölçülen = {}",
+            -leak,
             rel(&vels)
         );
     }
@@ -1073,11 +1329,30 @@ mod tests {
         v2 = start;
         solver.solve_joints(&mut joints, &map, &bodies, &transforms, &mut v2, 1.0 / 60.0);
 
-        assert_eq!(
-            joints[0].scratch, lambda_after_one,
-            "aynı girdiyle ikinci geçiş aynı λ'yı üretmeli; birikim geçişler arasında taşınmış"
-        );
+        for slot in 0..JointScratch::LEN {
+            assert_eq!(
+                joints[0].scratch.row_value(slot),
+                lambda_after_one.row_value(slot),
+                "yuva {slot}: aynı girdiyle ikinci geçiş aynı λ'yı üretmeli; birikim geçişler \
+                 arasında taşınmış"
+            );
+        }
         assert_eq!(v2, v1, "…ve dolayısıyla aynı hızları");
+
+        // `prev_rows` KARŞILAŞTIRILMIYOR, ve bu bilinçli: geçen geçişin λ'sını taşımak onun
+        // TEK işi (warm start'ın girdisi). Onu da eşit istemek "birikim sızmasın" iddiasını
+        // "hiçbir şey taşınmasın"a çevirirdi — `warm_start_factor` varsayılan 0'da bu ayrım
+        // gözlemlenemez, ve `rows` üzerindeki döngü tam olarak gözlemlenebilir olanı pinler.
+        assert_eq!(
+            lambda_after_one.prev_row_value(row::LIMIT),
+            0.0,
+            "ilk geçişin öncesinde taşınacak λ yok"
+        );
+        assert_ne!(
+            joints[0].scratch.prev_row_value(row::LIMIT),
+            0.0,
+            "üçüncü geçiş ikincinin λ'sını taşımalı — warm start'ın okuduğu şey bu"
+        );
     }
 
     /// The decomposition's defining properties, on a rotation that mixes both parts.

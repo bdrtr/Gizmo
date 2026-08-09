@@ -18,6 +18,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`JointSolver::warm_start_factor`, default `0.0` — OFF, and whether to ship it on is not
+  yet decided.** It is committed inert so the measurement phase can sweep it without a
+  throwaway patch. A non-zero factor injects that fraction of the previous substep's λ in a
+  separate sweep before iteration 0 (in-place injection is an exact algebraic no-op in this
+  solver) and makes λ carried simulation state, which `WorldSnapshot` already covers. Do not
+  raise it in library code.
+
 - **A per-frame `Update` schedule.** `App` now carries two: `schedule` still runs `0..N`
   times per rendered frame at a constant `dt` (physics, unchanged — nothing moved out of
   it), and the new `update_schedule` runs **exactly once** per frame with the real frame
@@ -61,6 +68,52 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the query layer does not wait on it.
 
 ### Changed
+
+- **Rigid joint rows are soft constraints now, parameterised by FREQUENCY.** *Behavioural: every
+  joint scene moves. New `JointSolver::rigid_hertz` (default 200 Hz); `0` restores the previous
+  Baumgarte behaviour exactly.*
+
+  A joint row with `compliance == 0` used to be solved as a hard equality with a Baumgarte push
+  (`β·C/dt`, velocity-clamped) and **no `−impulse_scale·λ` feedback term**. That missing term is
+  a measured defect, not a stylistic one — though not for the reason first written down here: a
+  hard row does not accumulate its own residual (with `mass_scale = 1, impulse_scale = 0` the
+  coefficient on λ in its update is already zero), the memory lives in the Gauss–Seidel coupling
+  between the rows of an ill-conditioned chain. What the term buys is a genuine compliance
+  proportional to the row's own effective mass. Its absence is what destroyed
+  joint warm start at its natural factor of 1.0 — the value the contact solver runs its own warm
+  start at — while the identical scene at `compliance = 1e-6` was stable (`docs/FIXPLAN.md`, B4
+  commit 5). Rigid rows now take the same Box2D-v3 soft formulation the contact solver uses,
+  with ω from a frequency rather than from `√(k/α)`, which is undefined at zero compliance.
+
+  The observable contract is a closed form: **static constraint error = `a/ω²`**, `ω = 2π ·
+  min(rigid_hertz, 1/dt)` — 6.2 µm per `g`, and **independent of the mass, the iteration count
+  and (below the clamp) the substep rate**. Neither Baumgarte nor a compliance can express any
+  of the three. `tests/joint_rigid_stiffness.rs` asserts each one.
+
+  Deliberately NOT the contact solver's numbers: 200 Hz not 30, ζ = 1 not 10. A contact carries
+  roughly its own body's weight, a joint up to 400× that, and the naive mirror sags a 1 kg rope
+  by 2.8e-4 m and a 16-link chain by 1.8 m.
+
+  **What it costs.** Baumgarte converged to zero error given enough iterations; a spring does
+  not. On a 16-link chain with a 200 kg tip the converged floor rises from 11 mm to 39 mm of
+  constraint error and no iteration count removes it — though the *shipped* 10-iteration answer
+  improves, from 154 mm to 95 mm.
+
+  **One row class is deliberately NOT softened.** A soft row leaves `impulse_scale · v` behind
+  and what takes it back is the row's position term, so a row that has none would drift linearly
+  and without bound — measured at 7.3° in 40 s on a weld under a sustained 10 rad/s². The only
+  such row in the crate is `JointData::Fixed`'s 3-axis angular lock (it passes a literal zero
+  error, because a `Fixed` joint carries no reference pose to servo toward), and it stays a hard
+  velocity constraint on every path. An offset anchor does not mitigate this and never did:
+  rotating a body about a pinned anchor leaves that anchor coincident, so the linear rows see
+  nothing. Every other angular row — the slider's quaternion lock, D6 `Locked`, the hinge's axis
+  alignment — carries a real error and gets the bounded `a/ω²` droop instead.
+
+  Also changed: `max_correction_speed`/`max_angular_speed` bind at 2.9 cm / 1.65° of error
+  instead of 6.9 cm / 4.0°, since the bias rate went from 72 s⁻¹ to 173.7 s⁻¹.
+  `compliance_damping_ratio` now governs rigid rows too. `position_bias` keeps two live roles —
+  the legacy path selected by `rigid_hertz = 0`, and the hinge/slider servo P-gain, unchanged on
+  both paths.
 
 - **`gizmo-core` no longer exposes `crossbeam-queue` or `tracing-subscriber`.** *Breaking for
   anyone who called the asset-handle constructors or used the tracing bridge; nothing

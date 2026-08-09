@@ -89,6 +89,16 @@ impl JointSolver {
         // to real Fixed joints (which allow no relative DOF). Velocity-level lock: the
         // solver runs every sub-step before integration, so no relative rotation
         // accumulates; the joint stays welded.
+        //
+        // The literal `0.0` below is LOAD-BEARING, and `apply_angular_constraint_soft` keys
+        // off it: a row with no position term must stay a HARD velocity constraint even when
+        // `rigid_hertz > 0`, because a soft row leaves `impulse_scale · v` behind and there
+        // is no restoring term here to take it back — the weld angle would then integrate
+        // linearly and without bound under any sustained torque (measured at 7.3° in 40 s
+        // under 10 rad/s² before that branch existed). `JointData::Fixed` carries no
+        // reference pose to servo toward, which is why this is a velocity lock in the first
+        // place; giving it one is a breaking change to a public enum and is tracked in
+        // docs/FIXPLAN.md rather than done here.
         if matches!(joint.data, JointData::Fixed) {
             for (i, axis) in [Vec3::X, Vec3::Y, Vec3::Z].into_iter().enumerate() {
                 self.apply_angular_constraint(

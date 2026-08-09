@@ -257,10 +257,19 @@ fn golden_hinge_pendulum_swing() {
         w.step(1.0 / 60.0).expect("step");
     }
 
-    lock("pendulum x", w.transforms[1].position.x, 1.892_767);
-    lock("pendulum y", w.transforms[1].position.y, 4.351_293);
-    lock("pendulum vx", w.velocities[1].linear.x, 1.100_116_5);
-    lock("pendulum vy", w.velocities[1].linear.y, 3.208_478_7);
+    // RE-BLESSED 2026-08-09 — rigid joint rows became soft constraints at
+    // `JointSolver::rigid_hertz` (200 Hz). Old → new:
+    //   x     1.892_767   → 1.895_446_8   (+2.7e-3)
+    //   y     4.351_293   → 4.360_516     (+9.2e-3)
+    //   vx    1.100_116_5 → 1.084_893_6   (-1.5e-2)
+    //   vy    3.208_478_7 → 3.196_372_5   (-1.2e-2)
+    //   arm error x1000  0.846_624_4 → 0.414_609_9  (the error nearly HALVED — see below)
+    // `golden_hinge_pendulum_swing_legacy_baumgarte` keeps the five old values under the
+    // `rigid_hertz = 0` lever, so nothing here was thrown away.
+    lock("pendulum x", w.transforms[1].position.x, 1.895_446_8);
+    lock("pendulum y", w.transforms[1].position.y, 4.360_516);
+    lock("pendulum vx", w.velocities[1].linear.x, 1.084_893_6);
+    lock("pendulum vy", w.velocities[1].linear.y, 3.196_372_5);
 
     // The arm length is the joint's whole job, and its ERROR is the sharpest instrument in
     // this file. Scaled by 1000 on purpose: the raw length is 2.0008, so an absolute 1e-3
@@ -271,15 +280,87 @@ fn golden_hinge_pendulum_swing() {
     // Measured sensitivity: dropping the solver's Baumgarte factor from 0.3 to 0.25 moves
     // this by 0.226 — 226 tolerances — while it moves `pendulum x` by 1.0e-3, which barely
     // clears the tolerance at all. This is the line that will catch a joint regression.
+    //
+    // That sensitivity is also what PREDICTED the re-blessing, before it was measured. The
+    // arm error here is repair-rate limited (`C ∝ 1/bias_rate`), not load limited — the load
+    // term contributes only `8.9/ω² = 5.7e-6 m`, i.e. 0.006 on this scale. Soft rigid rows
+    // raise the bias rate from `β/dt` = 72 s⁻¹ to 173.7 s⁻¹, so the prediction was a DROP to
+    // 0.25–0.45. Measured: 0.4146. The sharpest instrument in this file therefore reads
+    // BETTER after the change, and had it come back near 0.85 the model behind it would have
+    // been wrong.
     let arm = (w.transforms[1].position - Vec3::new(0.0, 5.0, 0.0)).length();
-    lock("pendulum arm error x1000", (arm - 2.0) * 1000.0, 0.846_624_4);
+    lock("pendulum arm error x1000", (arm - 2.0) * 1000.0, 0.414_609_9);
 
     // …and independently of every golden value above: whatever those numbers become after a
     // deliberate re-blessing, a hinge that lets the bob drift off its arm is broken, not
-    // merely different.
+    // merely different. Tightened 0.02 → 0.005 with the re-blessing (48× margin → 12×): the
+    // loose bound was sized for an unknown, and the unknown is now measured.
     assert!(
-        (arm - 2.0).abs() < 0.02,
+        (arm - 2.0).abs() < 0.005,
         "the hinge must hold the 2 m arm, got {arm}"
+    );
+}
+
+/// The same scene under the rollback lever, locking the five PRE-CHANGE constants unchanged.
+///
+/// `JointSolver::rigid_hertz = 0` selects the legacy Baumgarte path, and this is what says it
+/// is still bit-for-bit the solver that shipped before 2026-08-09 — every one of the five
+/// values below is the constant `golden_hinge_pendulum_swing` carried until that day, pasted
+/// across untouched. The legacy arm keeps `β·error/dt` written literally rather than routed
+/// through a shared `bias_rate · error`, because in f32 those round differently; this test is
+/// what would catch that refactor.
+///
+/// Two jobs beyond the lock: it means the re-blessing above threw nothing away, and it is the
+/// bisection tool — a future joint regression that reproduces on BOTH paths is not in the soft
+/// formulation.
+#[test]
+fn golden_hinge_pendulum_swing_legacy_baumgarte() {
+    let mut w = PhysicsWorld::new();
+    w.joint_solver.rigid_hertz = 0.0;
+
+    let mut anchor = RigidBody::new_static();
+    anchor.wake_up();
+    w.add_body(
+        BodyHandle::from_id(1),
+        anchor,
+        Transform::new(Vec3::new(0.0, 5.0, 0.0)),
+        Velocity::default(),
+        Collider::sphere(0.1),
+    );
+
+    let mut rb = RigidBody::new(1.0, true);
+    rb.wake_up();
+    let c = Collider::box_collider(Vec3::splat(0.2));
+    rb.update_inertia_from_collider(&c);
+    w.add_body(
+        BodyHandle::from_id(2),
+        rb,
+        Transform::new(Vec3::new(2.0, 5.0, 0.0)),
+        Velocity::default(),
+        c,
+    );
+
+    w.joints.push(gizmo_physics_rigid::Joint::hinge(
+        BodyHandle::from_id(1),
+        BodyHandle::from_id(2),
+        Vec3::ZERO,
+        Vec3::new(-2.0, 0.0, 0.0),
+        Vec3::Z,
+    ));
+
+    for _ in 0..180 {
+        w.step(1.0 / 60.0).expect("step");
+    }
+
+    lock("legacy pendulum x", w.transforms[1].position.x, 1.892_767);
+    lock("legacy pendulum y", w.transforms[1].position.y, 4.351_293);
+    lock("legacy pendulum vx", w.velocities[1].linear.x, 1.100_116_5);
+    lock("legacy pendulum vy", w.velocities[1].linear.y, 3.208_478_7);
+    let arm = (w.transforms[1].position - Vec3::new(0.0, 5.0, 0.0)).length();
+    lock(
+        "legacy pendulum arm error x1000",
+        (arm - 2.0) * 1000.0,
+        0.846_624_4,
     );
 }
 
