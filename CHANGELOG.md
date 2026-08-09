@@ -62,6 +62,41 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The joint solver no longer writes into a sleeping mechanism.** *Behavioural for any jointed
+  mechanism that falls asleep; bit-identical for everything else.*
+
+  `JointSolver::solve_joints` now skips a joint whose two ends are both inert — a sleeping
+  dynamic body, or a static/kinematic one that is not moving. There was previously not a single
+  `is_sleeping` reference anywhere in the joint solver: it wrote velocities into sleeping bodies
+  that position integration then discarded. `PhysicsWorld` runs its joint-graph wake pass
+  immediately before the solve, so any component containing a mover is already awake when the
+  gate is evaluated and nothing that should be simulated is skipped
+  (`tests/joint_sleep.rs::waking_a_component_is_solved_on_the_same_step_it_wakes` pins that
+  ordering). Two user-visible consequences: an embedder calling `solve_joints` without a wake
+  pass of its own now gets nothing solved for an all-asleep mechanism, and a joint whose bodies
+  fall asleep stops reporting load and can therefore no longer break — which is what already
+  happens when a contact island sleeps.
+
+  `state_hash` also mixes the joint array now (endpoint pair, `is_broken`, and the solver's λ
+  slots), so a rollback desync in joint state is caught directly instead of only once it has
+  bled into velocities. `tests/rollback.rs` gains a 16-link chain with a 200 kg tip — the
+  hardest-loaded joint scene in the suite — as a snapshot-completeness probe.
+
+  **Warm start was built, measured, and NOT shipped.** The mechanism works as an accelerator:
+  ten warm iterations land far closer to the converged answer than ten cold ones on that chain.
+  But at the natural factor of 1.0 — the value the contact solver's own warm start uses — it
+  destroys the mechanism, and not only at high mass ratios: a 16-link chain with a *1 kg* tip
+  ends up at 17.54 m and 30 m/s against a converged 16.000. The cause is structural. A rigid row
+  (`compliance == 0`) has no `−α̃·λ` feedback term, so an under-converged pass integrates the
+  Baumgarte residual into λ substep after substep; the identical chain at `compliance = 1e-6`
+  is stable at factor 1.0 and better than cold, which is also why the contact solver — TGS-soft
+  throughout — can run its own warm start at 1.0. The only working setting was a tuned 0.5 with
+  a cliff 1.75× above it, measured on three chain scenes and never on a ragdoll, vehicle or D6,
+  so it was reverted rather than shipped behind a public knob defaulting to inert. The
+  measurements and the named blocker are in `docs/FIXPLAN.md`; the sequencing is now: give the
+  rigid rows the soft reformulation `soft_coefficients` already records as open, then the warm
+  start needs no tuned constant at all.
+
 - **Every bounded collider shape now shatters, and the ones that cannot no longer disable the
   entity.** *Behavioural for any non-box `Breakable`.*
 

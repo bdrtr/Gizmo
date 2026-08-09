@@ -113,6 +113,39 @@ impl Default for JointSolver {
     }
 }
 
+/// Both ends of this joint are immobile, so the joint has nothing to solve this pass.
+///
+/// A DYNAMIC body is inert when it is asleep; anything else (static, kinematic) when it is not
+/// moving. The threshold is deliberately the same `1e-8` the joint-graph wake pass in
+/// `pipeline.rs` uses for a kinematic mover, so the two agree about what "moving" means.
+///
+/// NOT a plain `is_sleeping` on both ends: [`RigidBody::new_static`] presets `is_sleeping`, and
+/// essentially every scene in this repo calls `anchor.wake_up()` on its static anchor, so
+/// `is_sleeping(a) && is_sleeping(b)` would never fire on the one joint that matters — the
+/// anchor↔first-link joint of a sleeping chain.
+///
+/// Stable for the duration of a `solve_joints` call: the joint solver never writes a
+/// non-dynamic body's velocity and never touches `is_sleeping`, so every phase re-evaluating
+/// this predicate gets the same answer.
+#[inline]
+fn joint_is_inert(
+    rigid_bodies: &[RigidBody],
+    velocities: &[Velocity],
+    idx_a: usize,
+    idx_b: usize,
+) -> bool {
+    let inert = |i: usize| -> bool {
+        let rb = &rigid_bodies[i];
+        if rb.is_dynamic() {
+            rb.is_sleeping
+        } else {
+            velocities[i].linear.length_squared() <= 1e-8
+                && velocities[i].angular.length_squared() <= 1e-8
+        }
+    };
+    inert(idx_a) && inert(idx_b)
+}
+
 impl JointSolver {
     /// A solver running `iterations` sweeps per call, with every other knob left at its
     /// [`Default`] value (5 m/s and 5 rad/s bias ceilings, β = 0.3, ζ = 1).
@@ -140,6 +173,17 @@ impl JointSolver {
     /// id to that index. A joint is skipped in silence when it is already broken, when
     /// either endpoint is absent from the map, or when both endpoints resolve to the same
     /// index; a mapped index that is out of range for the slices panics.
+    ///
+    /// It is skipped too when BOTH ends are inert — a sleeping dynamic body, or a
+    /// static/kinematic body that is not moving. The solver used to write velocities into
+    /// sleeping bodies that position integration then discarded, so this costs nothing that
+    /// was reaching the simulation, but two consequences are user-visible. An embedder calling
+    /// this without a wake pass of its own now gets *nothing* solved for a mechanism whose
+    /// bodies are all asleep — [`PhysicsWorld`](crate::PhysicsWorld) runs a joint-graph wake
+    /// pass immediately before this call, so any component containing a mover is already awake
+    /// when the gate is evaluated, but a bare `solve_joints` user has to arrange that. And a
+    /// joint whose bodies fall asleep stops reporting load, so it can no longer break — which
+    /// matches what already happens when a contact island sleeps.
     ///
     /// `dt` must be finite and strictly positive. A zero, negative, infinite or NaN `dt`
     /// clears the accumulated impulses and returns without touching a velocity or a break
@@ -247,6 +291,15 @@ impl JointSolver {
                 if idx_a == idx_b {
                     continue;
                 }
+                // Both ends immobile → nothing to solve. `PhysicsWorld` runs its joint-graph
+                // wake pass immediately BEFORE this call and wakes every dynamic body in a
+                // component containing a mover, so this gate is a strictly weaker test
+                // evaluated after it and cannot swallow a component that was just woken.
+                // Nothing in the type system holds that ordering —
+                // `waking_travels_the_whole_chain_in_one_step` is what would break.
+                if joint_is_inert(rigid_bodies, velocities, idx_a, idx_b) {
+                    continue;
+                }
 
                 // Dispatch on the JointType enum (a Copy value derived from joint.data via
                 // the compile-forced From impl), not the &str — so a new JointData variant
@@ -328,6 +381,15 @@ impl JointSolver {
                 continue;
             };
             if idx_a == idx_b {
+                continue;
+            }
+            // Same gate as the velocity phase, and it does real work here: a sleeping slider's
+            // suspension spring would otherwise keep writing velocities that position
+            // integration discards, AND keep reporting load — `solve_spring_joint`,
+            // `solve_slider_spring` and `solve_hinge_spring` all add to `impulse_*` before
+            // testing `dyn_a`/`dyn_b`, so a spring between two immobile bodies can trip
+            // `break_force`.
+            if joint_is_inert(rigid_bodies, velocities, idx_a, idx_b) {
                 continue;
             }
             // Force-based contributions: Spring is always force-based; Slider/Hinge carry

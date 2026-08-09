@@ -63,6 +63,29 @@ impl PhysicsWorld {
             // Uyku durumu da state'in parçası (rollback'te tutarlı olmalı).
             h.write_u8(self.rigid_bodies[i].is_sleeping as u8);
         }
+
+        // Joint solver state. `is_broken` and the endpoint pair are CARRIED state: a broken
+        // joint cannot be recomputed from transforms and velocities, and a restore that
+        // dropped it would resimulate with a joint the continuous run no longer had.
+        //
+        // The λ slots are NOT carried state — `solve_joints` zeroes them at the start of every
+        // pass — so hashing them buys something weaker but still useful: a tripwire. They hold
+        // the last substep's accumulated impulses, so two runs that have already diverged in
+        // the solver but not yet in the integrated velocities are distinguished here, one
+        // substep earlier than they otherwise would be. If the warm start ever lands (see
+        // docs/FIXPLAN.md, B4 commit 5), λ becomes carried state and this stops being optional.
+        //
+        // Walked in ARRAY order, deliberately: `solve_joints`' answer already depends on the
+        // order of the joint slice (Gauss–Seidel), and `restore_snapshot` restores that order,
+        // so array order is the canonical one here in a way it is not for bodies.
+        for j in &self.joints {
+            h.write_u32(j.entity_a.id());
+            h.write_u32(j.entity_b.id());
+            h.write_u8(j.is_broken as u8);
+            for s in 0..crate::joints::data::JointScratch::LEN {
+                h.write_u32(j.scratch.row_value(s).to_bits());
+            }
+        }
         h.finish()
     }
 

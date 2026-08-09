@@ -96,6 +96,48 @@ fn waking_travels_the_whole_chain_in_one_step() {
     );
 }
 
+/// The joint solver now skips a joint whose two ends are both inert, so it never writes into a
+/// sleeping mechanism (`JointSolver::solve_joints`). That gate is only safe because the
+/// joint-graph wake pass runs immediately BEFORE the solve, in the same substep — nothing in
+/// the type system enforces that ordering, and a refactor that moved the wake pass after the
+/// solver would cost a woken chain one whole substep of being unconstrained while its bodies
+/// integrate. That is what this test catches: the chain must be both awake AND solved on the
+/// step it is disturbed.
+///
+/// Measured against the property rather than a constant: an unconstrained link falls
+/// `g·(1/60)² ≈ 2.7 mm` in the step, and the joints hold it to a small fraction of that.
+#[test]
+fn waking_a_component_is_solved_on_the_same_step_it_wakes() {
+    let mut w = sleeping_chain();
+    let last = LINKS as usize;
+    w.rigid_bodies[last].wake_up();
+    w.velocities[last].linear = Vec3::new(6.0, 0.0, 0.0);
+
+    let before: Vec<Vec3> = (1..=last).map(|i| w.transforms[i].position).collect();
+    w.step(1.0 / 60.0).ok();
+
+    // Every link is 1 m below the one above it and the ropes are exactly 1 m: any link that
+    // integrated a substep without its joints being solved separates measurably.
+    for i in 1..=last {
+        let above = if i == 1 {
+            w.transforms[0].position
+        } else {
+            w.transforms[i - 1].position
+        };
+        let span = (w.transforms[i].position - above).length();
+        assert!(
+            span <= 1.002,
+            "link {i} is {span:.5} m from the one above it after one step — the chain woke but \
+             was not solved, so it integrated unconstrained. The joint-graph wake pass must \
+             stay BEFORE `solve_joints`, not after it."
+        );
+    }
+    assert!(
+        before[last - 1] != w.transforms[last].position,
+        "precondition: the disturbed link must actually have moved"
+    );
+}
+
 /// The converse, so the fix cannot be "wake everything". A chain nobody touches stays asleep:
 /// waking must propagate from a real mover, not from the mere presence of a joint.
 #[test]
