@@ -68,12 +68,18 @@ impl PhysicsWorld {
         // joint cannot be recomputed from transforms and velocities, and a restore that
         // dropped it would resimulate with a joint the continuous run no longer had.
         //
-        // The λ slots are NOT carried state — `solve_joints` zeroes them at the start of every
-        // pass — so hashing them buys something weaker but still useful: a tripwire. They hold
-        // the last substep's accumulated impulses, so two runs that have already diverged in
-        // the solver but not yet in the integrated velocities are distinguished here, one
-        // substep earlier than they otherwise would be. If the warm start ever lands (see
-        // docs/FIXPLAN.md, B4 commit 5), λ becomes carried state and this stops being optional.
+        // The λ slots are not carried state at the DEFAULT `JointSolver::warm_start_factor`
+        // of 0 — `solve_joints` zeroes them at the start of every pass — so hashing them buys
+        // something weaker but still useful: a tripwire. They hold the last substep's
+        // accumulated impulses, so two runs that have already diverged in the solver but not
+        // yet in the integrated velocities are distinguished here, one substep earlier than
+        // they otherwise would be.
+        //
+        // With a NON-ZERO warm start factor they become genuinely carried state, and this
+        // block already covers it exactly: the next pass warm starts from `rows`, which is
+        // what is hashed here. (`JointScratch::prev_rows` is deliberately NOT hashed — between
+        // steps it holds the pass BEFORE last, which nothing will ever read again.) The
+        // restore side needs nothing either: `snapshot()` clones `joints` whole.
         //
         // Walked in ARRAY order, deliberately: `solve_joints`' answer already depends on the
         // order of the joint slice (Gauss–Seidel), and `restore_snapshot` restores that order,

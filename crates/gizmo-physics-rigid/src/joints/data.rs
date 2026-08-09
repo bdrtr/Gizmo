@@ -12,11 +12,19 @@ use serde::{Deserialize, Serialize};
 /// yeniden pompalıyor, hiç geri vermiyordu — tek yönlü bir cırcır.
 ///
 /// `is_broken` gibi `#[serde(skip)]`: sahne dosyası formatının parçası değil. Her
-/// `solve_joints` geçişinin başında sıfırlanır, yani adımlar arasında TAŞINMAZ — bu yüzden
-/// `WorldSnapshot`'a da girmesi gerekmez (bkz. `JointSolver::solve_joints`).
+/// `solve_joints` geçişinin başında sıfırlanır, yani `warm_start_factor = 0` (VARSAYILAN)
+/// iken adımlar arasında TAŞINMAZ. Warm start açıldığında `prev_rows` geçen geçişin
+/// λ'sını taşır ve gerçek simülasyon durumu olur — `WorldSnapshot` `joints`'i olduğu gibi
+/// klonladığı için bu zaten kapsanıyor (bkz. `JointSolver::solve_joints`).
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct JointScratch {
     rows: [f32; JointScratch::LEN],
+    /// Bir ÖNCEKİ `solve_joints` geçişinin λ'sı — yalnızca warm start okur.
+    prev_rows: [f32; JointScratch::LEN],
+    /// Enjeksiyon süpürmesi sırasında warm-start faktörü, aksi hâlde 0. Katsayı yerine
+    /// scratch'te durmasının sebebi tamamen pratik: scratch zaten 25 `apply_*` çağrı yerinin
+    /// hepsine geçiyor, çözücü modu ise geçmiyordu.
+    warm_factor: f32,
     /// Geçişin NET doğrusal impulse'ı, `Σ λᵢ·nᵢ` (dünya uzayı). `break_force` bundan
     /// hesaplanır: taşınan gerçek tepki kuvvetinin büyüklüğü `‖Σ λᵢ·nᵢ‖ / dt`.
     pub(crate) impulse_lin: Vec3,
@@ -48,6 +56,52 @@ impl JointScratch {
     #[inline]
     pub(crate) fn row_value(&self, slot: usize) -> f32 {
         self.rows[slot]
+    }
+
+    /// Previous pass's λ for a row — the warm start's only input.
+    #[inline]
+    pub(crate) fn prev_row_value(&self, slot: usize) -> f32 {
+        self.prev_rows[slot]
+    }
+
+    /// `Some(factor)` only while the warm-start injection sweep is running.
+    #[inline]
+    pub(crate) fn warm_injection(&self) -> Option<f32> {
+        (self.warm_factor != 0.0).then_some(self.warm_factor)
+    }
+
+    /// Arm/disarm the injection sweep. Set to `0.0` again before the real iterations run.
+    #[inline]
+    pub(crate) fn set_warm_injection(&mut self, factor: f32) {
+        self.warm_factor = factor;
+    }
+
+    /// Begin a solver pass that WILL run: this pass's λ and net impulses go to zero, and the
+    /// λ the previous pass converged to is retained for the warm start.
+    #[inline]
+    pub(crate) fn begin_pass(&mut self) {
+        self.prev_rows = self.rows;
+        self.clear_pass();
+    }
+
+    /// Clear a pass that will NOT run (a zero-length step): the same visible zeroing as
+    /// [`Self::begin_pass`], leaving `prev_rows` alone.
+    ///
+    /// Note what that does and does not buy, because it is easy to read as more than it is.
+    /// `prev_rows` survives THIS call, but the next real pass's [`Self::begin_pass`] overwrites
+    /// it with `rows`, which this call just zeroed — so a zero-length step still costs the
+    /// warm start its history and the next real pass starts cold. That is a deliberate
+    /// non-goal, not a property: making the history survive would mean latching it at the END
+    /// of a real pass instead, and a knob that is off by default (and undecided) does not
+    /// justify moving state that `PhysicsWorld::state_hash` reads. What this method IS for is
+    /// keeping the zeroing identical on both paths, so that at the default
+    /// `JointSolver::warm_start_factor` of 0 the distinction is unobservable.
+    #[inline]
+    pub(crate) fn clear_pass(&mut self) {
+        self.rows = [0.0; Self::LEN];
+        self.warm_factor = 0.0;
+        self.impulse_lin = Vec3::ZERO;
+        self.impulse_ang = Vec3::ZERO;
     }
 }
 
@@ -173,6 +227,14 @@ pub enum JointData {
     /// all three axes. Carries no parameters — the orientation it holds is whatever the two
     /// bodies had, because the angular lock zeroes relative angular *velocity* every
     /// sub-step rather than servoing toward a stored pose.
+    ///
+    /// That makes it the crate's only **velocity-only** row class, and the solver treats it as
+    /// one: a soft row leaves a residual velocity that its position term takes back, and this
+    /// one has no position term, so it is exempted from `JointSolver::rigid_hertz` and stays a
+    /// hard constraint. Softening it made the weld angle drift linearly and without bound
+    /// under sustained torque. Giving `Fixed` a latched reference pose — the way
+    /// [`SliderJointData`] has one — would remove the exemption, and is a breaking change to
+    /// this enum rather than a solver tweak.
     Fixed,
     /// One rotational DOF about a shared local axis, anchors pinned. Optional angle limits,
     /// motor/servo and torsional spring — see [`HingeJointData`].

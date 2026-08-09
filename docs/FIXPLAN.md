@@ -603,10 +603,11 @@ kaldırıp `cargo deny`'ın düşmesiyle ortaya çıktı.
   > animasyon/araç bileşenleri (`BoneAttachment` dışında serileştirilebilir olan yok),
   > ve gerçek bir migrasyon zinciri sınandığında 0→1'in ötesi.
 
-- 🔄 **B4 — Joint çözücüsü.** Dört maddesi vardı; ikisi bitti, ikisi sırada. Ayrıntı için
-  aşağıdaki **B4 bölümüne** bak. Kalan: `break_force` yeniden kalibrasyonu (commit 3),
-  motor satırları (commit 4), substep'ler arası warm-start + rollback (commit 5), ve
-  joint'lerin island kurulumuna dahil edilmesi (`pipeline.rs:560`).
+- 🔄 **B4 — Joint çözücüsü.** Ayrıntı için aşağıdaki **B4 bölümüne** bak. Rijit satırların
+  yumuşak formülasyonu 2026-08-09'da indi (`JointSolver::rigid_hertz`) ve warm-start'ın
+  f=1.0'da zinciri yıkması bitti. Kalan: `break_force` yeniden kalibrasyonu + `err_len >= 1e-4`
+  kapısı (commit 3, tek iş), warm-start'ın açılıp açılmayacağı kararı (`warm_start_factor`
+  atıl olarak indi), ve joint'lerin island kurulumuna dahil edilmesi (`pipeline.rs:560`).
 - ⬜ **B5** — Gamepad girdisi.
 - ✅ **B6 — `PresentMode` yapılandırılabilir** *(2026-08-06)*. `Renderer::set_present_mode` +
   `present_mode()` eklendi; varsayılan `AutoNoVsync` olarak KALIYOR (motorun kendi bench'leri ve
@@ -997,6 +998,82 @@ diyordu. Sahne kuruldu (`tests/contact_soft_stability.rs`), ölçüldü, ve **te
 > `total = λ_prev + (−Jv_pre − k·λ_prev + bias)/k = (−Jv_pre + bias)/k` — λ_prev sadeleşiyor,
 > yumuşak satırlarda da (`1 − impulse_scale = mass_scale` tam eşitliği). Warm-start'a yeniden
 > girecek olan bunu bilsin: enjeksiyon ayrı bir sweep'te olmak ZORUNDA.
+
+**✅ commit 5 devamı — rijit satırların yumuşak formülasyonu İNDİ.** *(2026-08-09)* Yukarıdaki
+maddenin "doğru sıra" dediği şey yapıldı: `JointSolver::rigid_hertz` (varsayılan 200 Hz, ζ = 1;
+`0` eski Baumgarte yolunu BİREBİR geri getiriyor). Rijit satır artık `mass_scale = 1,
+impulse_scale = 0` değil — geri besleme terimi var.
+
+> **Sözleşme kapalı formda:** `statik kısıt hatası = a/ω²`, `ω = 2π·min(rigid_hertz, 1/dt)`.
+> Kütleden, `iterations`'tan ve (kırpmanın altında) `dt`'den BAĞIMSIZ. Öngörü 6.212e-6 m,
+> ölçüm **6.199e-6 m** — %0.2. Üç bağımsızlık de ayrı testte (`tests/joint_rigid_stiffness.rs`).
+>
+> **Temas çözücüsünün sayıları bilinçli olarak KOPYALANMADI.** 30 Hz / ζ=10 burada ω² = 3.6e4
+> verir: 1 kg'lık halat 2.8e-4 m sarkar, zincir 1.8 m. Bir temas kabaca kendi cisminin
+> ağırlığını taşır, bir eklem 400 katını. Naif ayna koşulmadan çürütüldü.
+>
+> **Kabul ölçümü — warm-start artık f=1.0'da zinciri YIKMIYOR** (10 iterasyon, 4000 substep,
+> halkalar uyanık tutuldu):
+>
+> | | eski yol (hz=0) | yumuşak yol (hz=200) |
+> |---|---|---|
+> | 200 kg, f=0.0 | 16.1768 | 16.0953 |
+> | 200 kg, f=0.875 | 7.6868 / max\|v\| 5.16 **dağıldı** | 16.0407 / 0.0074 |
+> | 200 kg, f=1.0 | 4.0098 / max\|v\| 13.99 **dağıldı** | 16.0886 / 0.2714 |
+> | 1 kg, f=1.0 | max\|v\| 1.0421 (çınlıyor) | max\|v\| 0.0001 |
+> | 200 kg, 160 iter (yakınsak) | 16.0112 | 16.0387 |
+>
+> **Ama f=1.0 hâlâ ideal değil, ve bunu söylemek gerekiyor.** 16k substep'e uzatınca f=0.875
+> tam oturuyor (16.0458 / max\|v\| 0.0001, yakınsak cevaba 7 mm) ama f=1.0 oturmuyor:
+> max\|v\| 0.27 → 0.34 → 0.48 (4k → 8k → 16k) — sınırlı ama yavaş büyüyen bir limit-döngüsü.
+>
+> **Hertz cephesi ölçüldü ve keskin** (200 kg, warm f=1.0, 16k substep):
+>
+> | rigid_hertz | soğuk@10 | yakınsak@160 | warm 1.0 @16k |
+> |---|---|---|---|
+> | 100 | 16.1935 | 16.1544 | **16.1547 / 0.0000** |
+> | 150 | 16.1209 | 16.0687 | **16.0688 / 0.0000** |
+> | 200 | 16.0953 | 16.0387 | 15.9811 / 0.4758 |
+> | 300 | 16.0856 | 16.0269 | 13.5976 / 4.98 **dağıldı** |
+>
+> Yani warm-start'ı 1.0'da AÇMAK isteyen 150 Hz'e inmeli: orada f=1.0 yakınsak cevabı BİREBİR
+> veriyor, artık hız sıfır. Bedeli 30 mm daha zincir sarkması ve 1 kg'lık halatta 1.1e-5 m
+> (1.5e-5 sınırının hâlâ altında). Varsayılan 200 Hz KALIYOR çünkü warm-start kapalı geliyor
+> ve 200 Hz doğrulanmış bandın en serti; ikisi birlikte karar verilmeli.
+>
+> **Maliyet dürüstçe:** yakınsak taban 16.0112 → 16.0387 (39 mm), ve "iterasyonu yükselt"
+> tavsiyesi ~16.04'ten sonra işlemiyor. Buna karşılık GÖNDERİLEN 10-iterasyon cevabı
+> 16.1535 → 16.0775 iyileşti. Sarkaç golden'ının "arm error x1000"ü 0.8466 → 0.4146:
+> hata onarım-hızı sınırlı (`C ∝ 1/bias_rate`), bias_rate 72 → 173.7.
+>
+> **`warm_start_factor` geri geldi ama VARSAYILAN 0.0** — ölçüm fazının süpürebilmesi için,
+> atıl olarak. Açılıp açılmayacağı ayrı bir karar.
+>
+> **Denetimde bulundu ve DÜZELTİLDİ — hız-kilidi satırları yumuşatılamaz.** *(2026-08-09,
+> adversarial review)* `solve_fixed_joint`'in 3 eksenli açısal kilidi `error = 0.0` geçiyor:
+> konum terimi OLMAYAN tek satır sınıfı. Yumuşak satır geriye `impulse_scale·v` bırakır ve o
+> artığı geri alan şey konum terimidir; olmayınca artık hız sabit kalır ve açı **zamanda
+> doğrusal, sınırsız** sürüklenir — `ω_artık = α·dt/c` = 1.10e-4 rad/s (her 1 rad/s² için),
+> ölçülen 10 rad/s² altında 40 s'de **0.127 rad (7.3°)**, eski yolda tam sıfır. İlk teslimde
+> bu "1.8× paylı, 5 s'de 5.44 mrad" diye raporlanmıştı; 5 saniyelik bir bar doğrusal bir
+> sürüklenmeyi ölçemez (ENGINE.md §8'in "ufku başlangıcın ötesinde seç" maddesi). Ayrıca
+> "ankor COM'dan kaydıysa doğrusal satırlar sınırlar" gerekçesi YANLIŞ: cisim pinlenmiş
+> ankorun ETRAFINDA döndüğünde ankor çakışık kalır, doğrusal satırlar hiçbir şey görmez.
+> Düzeltme: `apply_angular_constraint_soft` `error == 0.0` satırını her yolda SERT tutuyor.
+> `rigid_hertz`'in düzelttiği teşhis oraya ulaşmıyor — bias yoksa λ'ya entegre olacak
+> Baumgarte artığı da yoktur. `JointData::Fixed`'e referans poz vermek (slider'ın yaptığı gibi)
+> daha ilkeli olurdu ama public enum'da kırıcı bir değişiklik; ayrı iş olarak duruyor.
+>
+> **Yeni açık iş — `err_len >= 1e-4` kapısı BİLİNÇLİ olarak bu commit'in dışında.**
+> (`fixed.rs:29`, `slider.rs:70/89`.) Bir kaynağın 9.81 N'luk yükü `break_force`'a **26.0 N**
+> diye rapor ediyor (değişiklikten önce 22.6 N), ve sebebi Baumgarte'ın λ'yı şişirmesi DEĞİL:
+> gerçek kararlı durumda `λ = m·g·dt` tam. Sebep kapının duty cycle'ı — cisim ankorlar 1e-4 m
+> ayrılana kadar serbest düşüyor, satır sonra birikmiş hıza karşı ateşliyor, `break_force`
+> TEPE geçiş kuvvetini görüyor, ortalama ise momentum dengesiyle 9.81 N'a çivili. Yumuşak
+> satır tepeyi yükseltti çünkü kapı eşiğindeki onarım hızı 72 → 173.7 s⁻¹ oldu.
+> `joint_break.rs`'in 15/30 N parantezi hâlâ yeşil ama **payı %33'ten %13'e düştü**. Kapıyı
+> 1e-6'ya çekmek `break_force` yeniden kalibrasyonunu (commit 3) beraberinde getirir; ikisi
+> tek iş.
 
 ### ✅ GPU test flake'i — `gizmo-renderer` tarafı da kapandı *(2026-08-06)*
 > Aşağıdaki madde `gizmo`'nun golden testlerini anlatıyor ve "kilit sonrası, binary izole →

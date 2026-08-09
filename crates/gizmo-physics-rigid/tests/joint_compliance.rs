@@ -118,13 +118,24 @@ fn compliance_does_not_depend_on_the_iteration_count() {
     }
 }
 
-/// The rigid path must be untouched by all of this. `compliance == 0` takes the original
-/// Baumgarte branch, and a rigid rope still holds its length to well under a millimetre.
+/// A joint that was rigid must still LOOK rigid.
+///
+/// `compliance == 0` no longer takes a Baumgarte branch — it is a spring at
+/// `JointSolver::rigid_hertz`, 200 Hz by default, whose static error is `a/ω²`
+/// (`tests/joint_rigid_stiffness.rs` is what asserts that law; this is the bar on what it
+/// costs). Baumgarte converged to ZERO error here, so the change is a pure stiffness loss on
+/// this scene and the number below is how much of one is acceptable.
+///
+/// **Tightened 6.7× on 2026-08-09, from 1e-4 to 1.5e-5**, and the tightening is the point: the
+/// predicted sag is 6.2e-6 m and the measured one 6.199e-6, against an f32 noise floor of
+/// ~2.4e-7 on a 2 m length. At 1e-4 this test would have accepted a rigid rope sagging 16× more
+/// than it does — including the naive mirror of the contact solver's settings
+/// (`contact_hertz = 30, ζ = 10`), which sags 2.8e-4 m. It is red below ≈129 Hz.
 #[test]
 fn zero_compliance_is_still_rigid() {
     let stretch = hanging_rope_stretch(0.0, 1.0, 10);
     assert!(
-        stretch.abs() < 1e-4,
+        stretch.abs() < 1.5e-5,
         "a rope with no compliance must hold its length, stretched {stretch:.8} m"
     );
     // And it is stiffer than every compliant case by orders of magnitude, so the two
