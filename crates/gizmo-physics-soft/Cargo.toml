@@ -43,7 +43,7 @@ gizmo-physics-core = { path = "../gizmo-physics-core", version = "0.9.0", defaul
 # requested explicitly because `rigid-coupling` implies it and `default-features = false`
 # would otherwise leave `RigidBody`/`Velocity` without their `Component` impls.
 gizmo-physics-rigid = { path = "../gizmo-physics-rigid", version = "0.9.0", default-features = false, features = ["ecs"], optional = true }
-wgpu = { version = "29", optional = true }
+wgpu = { version = "30", optional = true }
 bytemuck = { version = "1.14", features = ["derive"], optional = true }
 pollster = { version = "0.3", optional = true }
 tracing = "0.1.44"
@@ -65,4 +65,4 @@ gizmo-physics-rigid = { path = "../gizmo-physics-rigid", version = "0.9.0" }
 # CPU-side `#[repr(C)]` records can be checked against the shader WITHOUT a GPU. See
 # `tests/wgsl_layout.rs` — this caught an 80-vs-96 byte stride mismatch that no test,
 # and no CI job, could have caught otherwise.
-naga = { version = "29", features = ["wgsl-in"] }
+naga = { version = "30", features = ["wgsl-in"] }
