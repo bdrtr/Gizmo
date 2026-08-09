@@ -353,11 +353,14 @@ pub(super) fn collect_draw_items(
                 // `camera_count`, shadow passes the full range); otherwise skip. Shared
                 // with the studio path so the cull test + caster predicate can't drift —
                 // now the tighter AABB test (was a bounding sphere here).
-                let camera_visible = match crate::renderer::classify_visibility(
+                // ONE `Aabb::transform` for the whole decision. `classify_visibility` used to
+                // redo it per frustum — 5× here, once for the camera and once per cascade —
+                // for the same box and the same answer.
+                let drawn_world_aabb = $mesh.bounds.transform(&drawn_model);
+                let camera_visible = match crate::renderer::classify_visibility_world(
                     &frustum,
                     &cascade_frusta,
-                    &drawn_model,
-                    $mesh.bounds,
+                    drawn_world_aabb,
                     $mat.material_type,
                     $mat.is_transparent,
                     $mat.albedo.w,

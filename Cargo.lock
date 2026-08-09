@@ -2860,6 +2860,7 @@ name = "gizmo-renderer"
 version = "0.9.0"
 dependencies = [
  "bytemuck",
+ "criterion 0.8.2",
  "getrandom 0.3.4",
  "gizmo-animation",
  "gizmo-core",

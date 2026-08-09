@@ -44,6 +44,12 @@ meshopt = "0.6.2"
 
 [dev-dependencies]
 pollster = "0.3"
+criterion = "0.8.2"
+
+# CPU-only: builds `Frustum`/`Aabb`/`Mat4` scenes and runs the cull, no wgpu adapter.
+[[bench]]
+name = "visibility_bench"
+harness = false
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
