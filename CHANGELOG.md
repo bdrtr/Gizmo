@@ -62,6 +62,78 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`gizmo-core` no longer exposes `crossbeam-queue` or `tracing-subscriber`.** *Breaking for
+  anyone who called the asset-handle constructors or used the tracing bridge; nothing
+  behavioural.*
+
+  Two seals on a Stage A crate, both impossible after 1.0 because the seal is itself the
+  breaking change:
+
+  - `asset::AssetDropQueue` is a new opaque newtype around the concurrent queue that strong
+    `Handle`s report their death to — no public constructor, no accessor, no public field.
+    `Handle::new` and `Handle::make_strong` take it instead of `Arc<SegQueue<usize>>`, and
+    `HandleIdTracker::drop_queue` is private, which also closes the transitive path through
+    the public `Handle::tracker`. Because the newtype cannot be constructed from outside the
+    crate, those two constructors are effectively in-crate only now.
+  - `GizmoTracingLayer` and `logger::init_tracing()` moved behind the new default-OFF
+    `tracing-layer` feature (mirrored on the `gizmo-engine` facade). `tracing` itself stays an
+    unconditional dependency — 0.1 is frozen and leaves no type in our signatures; it is the
+    `Layer` impl, a foreign trait on a public type of ours, that carries the semver cost.
+
+  **Migration:** build handles with `Assets::add`, which mints the id and binds the queue —
+  there was never a supported way to obtain the queue anyway, and a handle bound to a
+  privately-built one leaks its asset instead of collecting it. For the tracing bridge, add
+  `features = ["tracing-layer"]` to your `gizmo-engine` (or `gizmo-core`) dependency;
+  `gizmo-studio` does. `gizmo_log!` fills the in-memory buffer either way.
+
+- **`gizmo-physics-core` no longer exposes `arrayvec` — and the earlier claim that it had
+  stopped was wrong.** *Breaking only for code that named the by-value iterator type.*
+
+  0.2.0 made the `ArrayVec` storage field of `ContactPoints` private and the changelog recorded
+  that accurately, but `<ContactPoints as IntoIterator>::IntoIter` went on reading
+  `arrayvec::IntoIter<ContactPoint, 4>` — a 0.7.x type on the default surface of a Stage A
+  crate, and an associated type nobody has to write down to be bound by. It is the opaque
+  `collision::ContactPointsIter` now (private field; `Iterator`, `DoubleEndedIterator`,
+  `ExactSizeIterator` forwarded, `FusedIterator` asserted by us because arrayvec 0.7 omits it),
+  re-exported at the crate root beside `ContactPoints`. The by-ref impl already yielded
+  `std::slice::Iter` and is unchanged. Both associated types are now pinned by always-on
+  `const _` fn-pointer coercions, so a future widening fails the build rather than the review.
+
+  **Migration:** nothing, unless you spelled `arrayvec::IntoIter<ContactPoint, 4>` in a
+  signature or a struct field — write `ContactPointsIter` there instead. Iterating, collecting
+  and `for` loops are unaffected.
+
+- **`gizmo-scene` no longer exposes `ron` or `web-time`.** *Breaking for anyone who reached
+  through them; nothing behavioural.*
+
+  `gizmo-scene` is a Stage A crate — it goes to `1.x`, where 1.0 means no breaking change
+  without a 2.0 — so a `0.x` dependency's type on its public surface would have handed that
+  dependency the power to force our 2.0. Three seals, all of which are impossible after 1.0
+  because the seal is itself the breaking change:
+
+  - `pub use ron;` is gone. It re-exported the parser's *entire* surface as
+    `gizmo_scene::ron`, so a `ron` 0.13 broke us whether or not our own types moved.
+  - `SceneError::Parse` / `::Serialize` now carry `error::ParseError` / `error::SerializeError`
+    — types we own, with private payloads, forwarding `Display` and `Error::source` verbatim
+    so a printed error chain is unchanged. The one thing the transparent payload gave you,
+    the failure position, comes back as `ParseError::line()` / `::column()`. The two `From`
+    impls stay, so `?` on a parser call still lands in the right variant.
+  - `SceneSnapshot::timestamp` is private. On `wasm32` that field was a `web_time::Instant`
+    on the *default* surface — target-selected, not feature-gated, so no caller could opt
+    out. `age() -> std::time::Duration` was already its only reader anywhere in the workspace.
+
+  **Migration:** `ron::from_str::<SceneData>(s)` → `SceneData::from_ron_str(s)`, and
+  `ron::ser::to_string_pretty(&scene, …)` → `scene.to_ron_string()`. Unlike a bare parse,
+  `from_ron_str` also runs `migrate`, so a string from a newer engine is refused instead of
+  silently truncated. Reading `err.position.line` off a parse error → `p.line()` / `p.column()`.
+  Reading `snapshot.timestamp` → `snapshot.age()`. The facade's `gizmo::ron` re-export went
+  with it; `gizmo::scene::SceneData::from_ron_str` replaces it.
+
+  Separately, the `web-time` pin in the seven crates that use it (`scene`, `core`,
+  `physics-rigid`, `ai`, `app`, `editor`, `renderer`) moves `0.2` → `1`. The lock already
+  carried `web-time` 1.1.0 by way of `winit`/`egui`/`bevy_platform`, so the old pin was
+  forcing a second, duplicate build of a dead major; 0.2.4 is now gone from the lock.
+
 - **The joint solver no longer writes into a sleeping mechanism.** *Behavioural for any jointed
   mechanism that falls asleep; bit-identical for everything else.*
 

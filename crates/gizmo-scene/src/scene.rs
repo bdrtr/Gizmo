@@ -72,6 +72,60 @@ impl Default for SceneData {
 }
 
 impl SceneData {
+    /// Parse a scene out of a RON **string** — the in-memory counterpart of
+    /// [`load_into`](Self::load_into), for a level that is embedded in the binary, fetched
+    /// over the network or hand-written in a test rather than read off disk.
+    ///
+    /// Pair it with [`instantiate_entities`](Self::instantiate_entities) to spawn the result;
+    /// that is the whole "declarative level, no `load_level()`" workflow, minus the file.
+    ///
+    /// Like `load_into` — and unlike a bare parse — this runs [`migrate`](Self::migrate), so a
+    /// string written by a newer engine is rejected instead of silently losing the fields this
+    /// build cannot see, and a pre-versioning string is brought up to
+    /// [`CURRENT_SCENE_VERSION`]. Nothing is spawned and no `World` is touched.
+    ///
+    /// # Errors
+    /// [`SceneError::Parse`] if the string is not valid scene RON, and
+    /// [`SceneError::UnsupportedVersion`] if it declares a newer format version.
+    ///
+    /// ```
+    /// use gizmo_scene::SceneData;
+    ///
+    /// let scene = SceneData::from_ron_str("(version: 1, entities: [])")?;
+    /// assert_eq!(scene.entities.len(), 0);
+    ///
+    /// // A scene from a newer engine is refused rather than silently truncated.
+    /// assert!(SceneData::from_ron_str("(version: 99, entities: [])").is_err());
+    /// # Ok::<(), gizmo_scene::SceneError>(())
+    /// ```
+    pub fn from_ron_str(ron_str: &str) -> Result<Self, SceneError> {
+        let mut scene: SceneData = ron::from_str(ron_str)?;
+        // No path to name — `migrate`'s `source` is only ever used for the error message and
+        // the log line, so say plainly where this one came from.
+        scene.migrate("<RON string>")?;
+        Ok(scene)
+    }
+
+    /// Encode this scene as a RON string — what [`save`](Self::save) writes, without the file.
+    ///
+    /// The same pretty-printed formatting a saved `.scene` file gets, so a string produced
+    /// here can be written out later and loaded by [`load_into`](Self::load_into) unchanged.
+    ///
+    /// Note it encodes `self` verbatim: [`version`](Self::version) is whatever the value in
+    /// this struct is, not necessarily [`CURRENT_SCENE_VERSION`]. `save` builds a fresh
+    /// [`SceneData`] and always stamps the current version; a `SceneData` you assembled by
+    /// hand is your own business.
+    ///
+    /// # Errors
+    /// [`SceneError::Serialize`] if RON encoding fails — in practice a component whose
+    /// `Serialize` impl fails.
+    pub fn to_ron_string(&self) -> Result<String, SceneError> {
+        Ok(ron::ser::to_string_pretty(
+            self,
+            ron::ser::PrettyConfig::default(),
+        )?)
+    }
+
     /// Bring a freshly parsed scene up to [`CURRENT_SCENE_VERSION`].
     ///
     /// Returns an error for a file from a *newer* engine: the fields this build does not
@@ -591,8 +645,8 @@ impl SceneData {
     /// `saved id → new entity id` map.
     ///
     /// This is the entry point for a scene held in memory rather than on disk: a hand-written
-    /// RON level string parsed with `ron::from_str`, a procedurally built `Vec<EntityData>`, an
-    /// embedded template. Both [`load_into`](Self::load_into) and
+    /// RON level string parsed with [`from_ron_str`](Self::from_ron_str), a procedurally built
+    /// `Vec<EntityData>`, an embedded template. Both [`load_into`](Self::load_into) and
     /// [`load_prefab`](Self::load_prefab) are thin wrappers over it, and the returned map is
     /// what they use afterwards to remap joint endpoints and the prefab root.
     ///

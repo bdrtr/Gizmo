@@ -55,6 +55,11 @@ pub struct ContactPoint {
 /// deliberately *not* part of the public API, so it can change without a
 /// breaking release. Interact with it through the inherent methods,
 /// `IntoIterator` (by value or by reference), `FromIterator`, or indexing.
+///
+/// That promise covers the iterators too, which is the part that is easy to leak:
+/// iterating by reference yields [`std::slice::Iter`] (std's own type, so nothing
+/// third-party escapes), and iterating by value yields the equally opaque
+/// [`ContactPointsIter`]. Neither names the backing container.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ContactPoints(arrayvec::ArrayVec<ContactPoint, 4>);
 
@@ -132,12 +137,66 @@ impl<'a> IntoIterator for &'a ContactPoints {
 
 impl IntoIterator for ContactPoints {
     type Item = ContactPoint;
-    type IntoIter = arrayvec::IntoIter<ContactPoint, 4>;
+    type IntoIter = ContactPointsIter;
     #[inline]
     fn into_iter(self) -> Self::IntoIter {
-        self.0.into_iter()
+        ContactPointsIter(self.0.into_iter())
     }
 }
+
+/// By-value iterator over a [`ContactPoints`] set, yielding the points in insertion
+/// order. Created by `ContactPoints`' [`IntoIterator`] impl.
+///
+/// Opaque for the same reason [`ContactPoints`] is: naming the backing container's
+/// own by-value iterator here would put a third-party type back on this crate's
+/// public surface, and an associated type cannot be changed after 1.0 without a 2.0.
+///
+/// Implements [`DoubleEndedIterator`], [`ExactSizeIterator`] and
+/// [`FusedIterator`](std::iter::FusedIterator).
+#[derive(Debug, Clone)]
+pub struct ContactPointsIter(arrayvec::IntoIter<ContactPoint, 4>);
+
+impl Iterator for ContactPointsIter {
+    type Item = ContactPoint;
+    #[inline]
+    fn next(&mut self) -> Option<ContactPoint> {
+        self.0.next()
+    }
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.0.size_hint()
+    }
+}
+
+impl DoubleEndedIterator for ContactPointsIter {
+    #[inline]
+    fn next_back(&mut self) -> Option<ContactPoint> {
+        self.0.next_back()
+    }
+}
+
+// `size_hint` above is forwarded from the backing iterator, which reports an exact
+// (len, Some(len)) — so the default `len()` is correct and needs no override.
+impl ExactSizeIterator for ContactPointsIter {}
+
+// The backing iterator does not *declare* `FusedIterator` (arrayvec 0.7 omits the impl),
+// but it behaves that way: its cursor only advances and its length only shrinks, so once
+// it has returned `None` it returns `None` forever. This impl is therefore ours to assert
+// rather than to forward, and `contact_points_iter_is_fused` pins the behaviour down.
+impl std::iter::FusedIterator for ContactPointsIter {}
+
+// ── Seal assertions (compile-time) ──────────────────────────────────────────
+//
+// Each coerces the trait's own function item to a fn pointer with the return type spelled
+// out, so it type-checks only while the associated `IntoIter` is exactly the named type.
+// Checked on every build of the crate, not only under `cfg(test)`.
+//
+// By value: the iterator must be OURS. This is the seal — the line used to read
+// `arrayvec::IntoIter<ContactPoint, 4>`, a 0.x type on the default public surface.
+const _: fn(ContactPoints) -> ContactPointsIter = <ContactPoints as IntoIterator>::into_iter;
+// By reference: already std's `slice::Iter`, so no newtype is needed — verified, not assumed.
+const _: fn(&'static ContactPoints) -> std::slice::Iter<'static, ContactPoint> =
+    <&'static ContactPoints as IntoIterator>::into_iter;
 
 impl FromIterator<ContactPoint> for ContactPoints {
     #[inline]
@@ -455,6 +514,78 @@ mod tests {
             penetration: pen,
             ..Default::default()
         }
+    }
+
+    // ── ContactPoints iterators (public-surface seal) ─────────────────────
+
+    /// Static proof that the by-value `IntoIter` is a type this crate owns.
+    ///
+    /// Not a behavioural test: the assertion is the *signature*. `collect()` picks its
+    /// output type from the annotation, so this only compiles while
+    /// `<ContactPoints as IntoIterator>::IntoIter` is exactly `ContactPointsIter` —
+    /// before the seal it was `arrayvec::IntoIter<ContactPoint, 4>` and this body would
+    /// not have compiled at all. The two `const _` assertions next to the impl itself
+    /// are the always-on version of the same check.
+    #[test]
+    fn contact_points_into_iter_type_is_ours() {
+        let points: ContactPoints = [pt(0.0, 0.0, 1.0)].into_iter().collect();
+        let it: ContactPointsIter = points.into_iter();
+        // Same claim from the other direction: the trait's associated type, spelled out.
+        let _: <ContactPoints as IntoIterator>::IntoIter = it;
+    }
+
+    /// Guard (not a proof of the seal): the forwarded iterator still yields every point
+    /// in insertion order, and reports its length exactly.
+    #[test]
+    fn contact_points_into_iter_yields_all_in_order() {
+        let src = [
+            pt(0.0, 0.0, 1.0),
+            pt(1.0, 0.0, 2.0),
+            pt(2.0, 0.0, 3.0),
+            pt(3.0, 0.0, 4.0),
+        ];
+        let points: ContactPoints = src.into_iter().collect();
+
+        let it = points.clone().into_iter();
+        assert_eq!(it.len(), 4, "ExactSizeIterator::len must be exact");
+        assert_eq!(it.size_hint(), (4, Some(4)));
+
+        let collected: Vec<ContactPoint> = points.clone().into_iter().collect();
+        assert_eq!(collected, src, "by-value iteration must preserve order");
+
+        // DoubleEndedIterator forwards too.
+        let reversed: Vec<ContactPoint> = points.into_iter().rev().collect();
+        let mut expected = src;
+        expected.reverse();
+        assert_eq!(reversed, expected, "rev() must walk the points backwards");
+    }
+
+    /// Guard for the hand-written `FusedIterator` impl: arrayvec does not declare that
+    /// trait, so `ContactPointsIter` asserts it on the backing iterator's behalf. If the
+    /// backing iterator ever stopped returning `None` forever after exhaustion, that impl
+    /// would be a lie — this catches it.
+    #[test]
+    fn contact_points_iter_is_fused() {
+        let points: ContactPoints = [pt(0.0, 0.0, 1.0)].into_iter().collect();
+        let mut it = points.into_iter();
+        assert!(it.next().is_some());
+        for _ in 0..3 {
+            assert!(it.next().is_none(), "exhausted iterator must stay exhausted");
+            assert_eq!(it.len(), 0);
+        }
+    }
+
+    /// The by-ref impl needed no change; this pins that down the same way — the
+    /// annotation is the assertion.
+    #[test]
+    fn contact_points_by_ref_iter_is_std_slice_iter() {
+        let points: ContactPoints = [pt(0.0, 0.0, 1.0)].into_iter().collect();
+        // UFCS on purpose: this must go through the `&ContactPoints` impl, not `iter()`.
+        let by_ref: std::slice::Iter<'_, ContactPoint> =
+            <&ContactPoints as IntoIterator>::into_iter(&points);
+        assert_eq!(by_ref.len(), 1);
+        let inherent: std::slice::Iter<'_, ContactPoint> = points.iter();
+        assert_eq!(inherent.len(), 1);
     }
 
     // ── Entity ordering ───────────────────────────────────────────────────

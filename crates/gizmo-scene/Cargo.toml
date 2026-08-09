@@ -31,4 +31,4 @@ tracing = "0.1.44"
 bevy_reflect = { version = "0.19", features = ["glam"], optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-web-time = "0.2"
+web-time = "1"

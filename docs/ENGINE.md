@@ -74,25 +74,216 @@ renderer/WASM/editor) are **DONE**. Remaining:
 
 ## 4. Release Strategy — Staged 1.0
 
-1.0 = the hard promise of "no breaking change without a 2.0". A crate that re-exports a 0.x
-dependency (wgpu/winit/egui, bevy_reflect) in its public API cannot make that promise → a
-lock-step 1.0 either freezes the engine on old deps or burns the 1.0 at the first dep bump.
-The solution is **staged**:
+1.0 = the hard promise of "no breaking change without a 2.0". What decides whether a crate can
+make that promise is not our own code but our loudest dependency: if a foreign type is reachable
+from our public API, that dependency's next major is our next major. A lock-step 1.0 across all
+crates would therefore either freeze the engine on old deps or burn the 1.0 at the first dep bump.
+The solution is **staged**.
+
+**The Stage A criterion — RESTATED 2026-08-09.** This used to read: "a crate that re-exports a 0.x
+dependency (wgpu/winit/egui, bevy_reflect) in its public API cannot make that promise." That
+literal test is wrong in three ways, and the eleven-crate surface audit of 2026-08-09 found what
+it had been letting through:
+
+1. **It is the CADENCE that disqualifies, not the version number.** The property being tested for
+   is *a history of frequent majors*; `0.x` is the common case, not the definition. `wgpu` is the
+   counter-example the old sentence named as its own archetype and then failed to catch: it
+   resolves at **29.0.3**, so it passes a literal "is it 0.x?" test, and it has historically
+   shipped on the order of a major per quarter — this engine's own 0.2.0 upgrade crossed
+   **0.20 → 29** in one release (§6). A version number ≥ 1.0 buys nothing when the next integer is
+   a quarter away. The converse holds too: a frozen 0.x costs nothing, which is why `tracing` 0.1
+   is an unconditional dependency below.
+2. **"Re-exports" is too narrow — the test is REACHABILITY.** A foreign type is on the surface if
+   a downstream crate can be handed it or forced to name it: `pub use`, yes, but equally a public
+   field, a parameter or return type, an associated type in one of our trait impls, or a foreign
+   trait implemented on one of our public types. `arrayvec` was declared clean in 0.2.0 on the
+   strength of the storage field having been made private, while
+   `<ContactPoints as IntoIterator>::IntoIter` went on reading `arrayvec::IntoIter<ContactPoint, 4>`
+   — an associated type nobody had to write down, and one that could not be changed after 1.0
+   either. That is the leak the old wording let through, and it survived until 2026-08-09.
+3. **The promise is per FEATURE CONFIGURATION — the old rule did not mention features at all.**
+   1.0 covers the DEFAULT feature set. A feature may put a fast-moving dependency back on the
+   surface, but only if it is default-OFF *and* named in the contract below as an explicit opt-out
+   of the stability promise for that crate. Today those are `reflect`, `tracing-layer`,
+   `gpu_physics` and `client-server`.
+
+The staging itself:
 
 - **Stage A (may go 1.x):** dependency-light crates whose surface we own —
   gizmo-math, -core, -physics-{core,rigid,dynamics,soft}, -scene, -net, -audio, -ai,
-  -animation.
+  -animation. "May go" is a candidacy, not a clearance: **gizmo-physics-rigid is BLOCKED** until
+  the `rustc-hash` leak in the contract below is sealed.
 - **Stage B (stays 0.y):** graphics/integration — gizmo-renderer, -window, -editor, -ui,
-  -app, -scripting + the `gizmo` facade (until wgpu/winit/egui are pinned to 1.0).
+  -app, -scripting + the `gizmo` facade (until wgpu/winit/egui settle — by criterion 1 that means
+  a slow major cadence, NOT merely a version number ≥ 1.0; wgpu is already at 29).
 - **Consequence:** once staging begins the crates no longer share a SINGLE workspace version
   (`publish_all.sh` + the version-inheritance assumption must be updated).
 
-**External-type contract (permanent):** `glam` = a permanent, DELIBERATE public dep (gizmo-math
-re-exports it). `bevy_reflect` = sealed behind the default-OFF `reflect` feature (with a serde
-fallback). `wgpu`/`winit`/`egui` = a deliberate leak that carries no semver cost during 0.x.
-`ron` = a public dep of gizmo-scene (the RON file format + the SceneError API).
-96 public types are `#[non_exhaustive]`; 13 Error enums + fn→Result conversions; `arrayvec` was
-removed from the public API (opaque `ContactPoints`).
+**External-type contract (permanent).** One entry per dependency that is, was, or could be on a
+Stage A public surface. Where an entry corrects an earlier claim of this document, the earlier
+claim is quoted and marked wrong rather than quietly overwritten — the value of this section is
+its precision, and a section that silently rewrites itself cannot be checked.
+
+- **`glam` — a permanent, DELIBERATE public dep, and the largest semver liability in Stage A.**
+  `gizmo-math` re-exports it; resolved version **0.32.1**, i.e. 0.x, and the `.32` says plainly
+  how often it breaks. The 2026-08-09 audit put it on the DEFAULT public surface of **8 of the 11
+  Stage A crates** — all of them except `gizmo-core`, `gizmo-audio` and `gizmo-net` (audio does
+  not depend on `gizmo-math` at all; net reaches it only through the optional, default-off
+  `rollback` feature). Stated as the cost rather than as the intent: **a glam 0.33 is a breaking
+  change for eight Stage A crates at once**, and under the 1.0 promise that means eight 2.0s
+  released together. We accept it — the alternative is our own vector/quat types plus a conversion
+  layer at every boundary, which is worse for users and for the determinism contract (§5) — but it
+  is an accepted cost, not a neutral one, and it is the one item in this list that sealing cannot
+  fix.
+
+- **`arrayvec` — sealed 2026-08-09. THE EARLIER CLAIM HERE WAS FALSE.** This section used to say
+  "`arrayvec` was removed from the public API (opaque `ContactPoints`)", and §6 listed "`arrayvec`
+  left the public surface" among the 0.2.0 API breakers. Neither was true. 0.2.0 made the
+  `ArrayVec` storage field of `ContactPoints` private — that is what those sentences were written
+  from — but `impl IntoIterator for ContactPoints` still declared
+  `type IntoIter = arrayvec::IntoIter<ContactPoint, 4>`: a 0.7.x type on the default surface of a
+  Stage A crate, reached by criterion 2 above and not by criterion "re-export". What is true now:
+  the by-value iterator is the opaque `collision::ContactPointsIter` (private field; `Iterator`,
+  `DoubleEndedIterator`, `ExactSizeIterator` forwarded, `FusedIterator` asserted by us because
+  arrayvec 0.7 omits it), re-exported at the crate root beside `ContactPoints`. The by-ref impl
+  was verified rather than assumed — it already yielded `std::slice::Iter`. Both associated types
+  are pinned by always-on `const _` fn-pointer coercions in `collision.rs`, so a future widening
+  fails the build rather than the review. `arrayvec` itself stays as a private implementation
+  detail (the fixed-capacity storage).
+
+- **`ron` — sealed out of gizmo-scene's public API (2026-08-09); the earlier entry UNDERSTATED the
+  leak.** It was recorded here as "the RON file format + the `SceneError` API". In fact
+  `pub use ron;` re-exported the parser's ENTIRE surface as `gizmo_scene::ron`, and the facade
+  re-exported that again as `gizmo::ron` — so a ron 0.13 broke us whether or not `SceneError`
+  moved. Now the two RON-shaped failures are the opaque `error::ParseError` /
+  `error::SerializeError` (private payloads, `Display` and `Error::source` forwarded verbatim,
+  `line()`/`column()` handed back), and `SceneData::from_ron_str` /
+  `to_ron_string` replace the "call `ron::from_str` yourself" workflow. **"No capability is lost"
+  was the claim here and it is too strong — corrected 2026-08-09 by review:** the position comes
+  back, but the parser's error *kind* (its `code` enum, matchable before), the *end* of the error
+  span, and `Clone`/`PartialEq` on the payload do not, and `source().downcast_ref::<ron::…>()`
+  stops matching. All four are accepted costs — every replacement for them would put a parser
+  type back on the surface — and they are now spelled out on `ParseError` itself rather than
+  glossed. `gizmo::ron` went with it
+  (Stage B, but keeping it would have meant a second ron pin to hold in lock-step). The only
+  remaining mention of ron in the surface is the two `From` impls on `SceneError` that make `?`
+  work inside `scene.rs` — deliberately kept, because they force no ron type into any caller's own
+  signature: the cost of a ron major is rewriting two `from` bodies here, not everyone's error
+  handling. Resolved at 0.12.2.
+  **The condition the seal was accepted under, and it is a promise rather than a note:** *1.0
+  freezes the Rust API; it does NOT freeze the RON scene format.* The file format is versioned
+  separately, through the existing mechanism — `scene::CURRENT_SCENE_VERSION` plus
+  `SceneData::migrate`, which brings an older file forward and REFUSES a file written by a newer
+  engine with `SceneError::UnsupportedVersion` instead of silently truncating it. Without this
+  sentence the seal would buy a 1.0 that quietly reserves the right to change its own on-disk
+  format underneath a frozen API.
+
+- **`web-time` — removed from gizmo-scene's public API 2026-08-09; it was MISSING from this
+  contract entirely** and nobody had noticed it before the audit. `SceneSnapshot::timestamp` was
+  `pub`, and on `wasm32` the type of that field is `web_time::Instant`, not `std::time::Instant`.
+  Because the substitution is target-gated rather than feature-gated it sat on the default wasm
+  surface with no way to opt out — precisely the shape the old rule was blind to, since nothing
+  was re-exported and nothing looked 0.x at the call site. The field is now private;
+  `age() -> std::time::Duration` was already its only reader anywhere in the workspace, so no
+  capability was lost. In the same pass the pin went `0.2` → `1` in all seven crates that declare
+  it, which also dropped the duplicate 0.2.4 build; **1.1.0** is now the only version resolved.
+
+- **`crossbeam-queue` — sealed out of gizmo-core's public API (2026-08-09).** Opaque
+  `asset::AssetDropQueue` newtype: no public constructor, no accessor, no public field, and a
+  hand-written `Debug` so the wrapped type does not surface in rendered docs or in any containing
+  `{:?}`. `HandleIdTracker::drop_queue` is private and typed as the newtype, which also closes the
+  transitive path through the public `Handle::tracker`. The dependency itself stays — it is
+  genuinely used by `asset.rs` and `commands.rs`; the seal hides it, it does not remove it.
+
+- **`rustc-hash` — STILL ON THE DEFAULT PUBLIC SURFACE of `gizmo-physics-rigid`. NOT sealed, and
+  it was missed by the 2026-08-09 audit entirely.** Found by the adversarial review of that
+  audit's own change sets. `FxHashMap<K, V>` is a type *alias*, `HashMap<K, V, FxBuildHasher>`,
+  so the hasher — a `rustc-hash` type, resolved at **2.1.2** — travels with every use of it, and
+  a type alias hides nothing: it is exactly criterion 2's "an associated type nobody had to write
+  down", one level of indirection further out. Three reachable sites, all default-feature, all in
+  a Stage A crate:
+  - `world/mod.rs:498` — `PhysicsWorld::entity_index_map` is a **public field** of a publicly
+    re-exported struct.
+  - `solver/mod.rs:419` — `ConstraintSolver::solve_contacts(.., &rustc_hash::FxHashMap<u32, usize>, ..)`,
+    a `pub fn` on a crate-root re-export.
+  - `joints/solver/mod.rs:232` — `solve_joints(.., &rustc_hash::FxHashMap<u32, usize>, ..)`, same shape.
+
+  The cadence argument is the one that matters here: rustc-hash 1.x → 2.0 **changed exactly this
+  type**, from `HashMap<K, V, BuildHasherDefault<FxHasher>>` to `HashMap<K, V, FxBuildHasher>`, so
+  the precedent for a rustc-hash 3.0 breaking us is the last major it shipped, not a hypothetical.
+  Both 1.1.0 and 2.1.2 are in `Cargo.lock` today (something else in the graph still wants 1.x).
+  Sealing it is a newtype with the two or three accessors the callers actually use, over **57
+  sites in `src/`** plus one integration-test caller (`tests/joint_break.rs`) — bigger than any
+  of the four seals above, and it needs its own pass with a compiler. `gizmo-physics-core` uses
+  `FxHashMap` too but only behind `pub(crate)` (`broadphase/aabb_tree.rs:59`), so that crate is
+  clean. **Until this is sealed, `gizmo-physics-rigid` cannot honestly go 1.0.**
+
+- **`serde` / `serde_json` — on Stage A public surfaces, accepted under criterion 1, listed here
+  because the contract claims one entry per dependency that is on such a surface.** `serde` is
+  everywhere (derives on public types; a derive of a foreign trait is criterion-2 reachable).
+  `serde_json::Value` is named outright by `gizmo-core`'s `pub type GetJsonFn` / `SetJsonFn` and
+  by the public `ComponentRegistry::{get_json_fn, set_json_fn}` fields — which `gizmo-scene`
+  re-exports as `SceneRegistry`. `gizmo-physics-rigid`'s `SnapshotError::Serialize(serde_json::Error)`
+  is a public variant payload: the identical shape to `SceneError::Parse(ron::…)` that was sealed
+  above, left unsealed on purpose. Both crates are at 1.0 with a years-long major cadence, which
+  is the whole content of criterion 1 — but note the asymmetry is a *judgement about cadence*, not
+  a difference in shape, and it should be re-checked rather than assumed at 1.0 time.
+
+- **Verified clean, recorded so the next audit does not re-derive it (2026-08-09 review).**
+  `rodio` 0.17 in `gizmo-audio` — 0.x and fast-moving, but every `Sink`/`OutputStream`/`SpatialSink`
+  is a private field and `AudioError` carries only `String`/`io::Error`, so nothing is reachable.
+  `bincode` 2 in `gizmo-net` — the `Configuration` const is private and both `encode_packet` /
+  `decode_packet` return `std::io::Result`. `rand` 0.10 and `chrono` 0.4 — locals inside function
+  bodies only. `web-time` in `gizmo-core` (`profiler.rs`) and `gizmo-ai`/`gizmo-physics-rigid` —
+  private fields and locals; the `SceneSnapshot` field was the only public one. `wide`, `dashmap`
+  and `crossbeam-queue` in `gizmo-physics-rigid`, and `uuid` in `gizmo-core` (declared twice) and
+  `getrandom` in `gizmo-math`, have **zero** source references — dead dependencies, not leaks, but
+  they should be dropped in a separate build-graph pass.
+
+- **`tracing-subscriber` vs `tracing` — the same project, weighted differently on purpose; this is
+  criterion 1 in both directions inside one crate.** `tracing-subscriber` (0.3.23) is behind
+  gizmo-core's default-OFF `tracing-layer` feature, because `impl Layer<S> for GizmoTracingLayer`
+  is a foreign trait on a public type of ours and a trait impl cannot be hidden — it constrains us
+  exactly as a public field would, so a tracing-subscriber 0.4 would force a gizmo-core 2.0.
+  `tracing` itself (0.1.44) stays an UNCONDITIONAL dep: 0.1 has been frozen for years, and neither
+  `info!` nor `#[instrument]` leaves a `tracing` type in any signature of ours, so the low version
+  number costs the contract nothing. `gizmo-studio` opts the feature in so `init_tracing()` still
+  exists for the editor console; CI runs `cargo test -p gizmo-core --features tracing-layer`.
+
+- **`bevy_reflect` — sealed behind the default-OFF `reflect` feature** (with a serde fallback).
+  Unchanged; the archetype for criterion 3.
+
+- **`wgpu` in `gizmo-physics-soft` — an explicit CARVE-OUT from the 1.0 promise.**
+  `gizmo-physics-soft` is a Stage A crate, but its default-OFF `gpu_physics` feature compiles
+  `pub mod gpu_compute`, whose `GpuCompute` holds `wgpu::Device` / `Queue` / `ComputePipeline` /
+  `BindGroupLayout` / `Buffer` in public fields. Nothing in this workspace enables it. Therefore,
+  said explicitly rather than left to be inferred: **enabling `gpu_physics` opts that crate out of
+  the 1.0 stability promise.** With the feature on, a wgpu major is a breaking change for
+  `gizmo-physics-soft` and will ship as a minor bump, not as a 2.0. This is the weakest of the
+  carve-outs — default-off, unused in-tree, and the module is a compute path rather than an API
+  anyone builds on — but the promise has to name it, because a 1.0 that is silently
+  conditional on features is not a promise. (The feature also pulls `bytemuck` and `pollster`;
+  wgpu is the one with the cadence.)
+
+- **`renet` in `gizmo-net` — a second feature carve-out, NOT part of the 2026-08-09 audit.**
+  Found while writing this section up, so it is recorded as unverified by that audit and needs its
+  own confirmation pass. `gizmo-net` is Stage A with `default = []`; its default-off
+  `client-server` feature compiles `pub mod client_server`, and there `NetworkClient`/
+  `NetworkServer` carry `renet::RenetClient` / `RenetServer` and the two `renet_netcode`
+  transports in public fields, with `protocol::connection_config() -> renet::ConnectionConfig` on
+  top. renet is at 2.0.0 — major-versioned, and by criterion 1 that settles nothing on its own.
+  Same treatment as `gpu_physics` therefore: **enabling `client-server` opts `gizmo-net` out of
+  the 1.0 stability promise.** The `rollback` feature is a different matter — it pulls only our
+  own crates (and `gizmo-math`, i.e. glam) and stays inside the promise.
+
+- **`wgpu`/`winit`/`egui` in Stage B — a deliberate leak that carries no semver cost while the
+  crates that leak them stay at 0.y themselves.** This is the entire reason staging exists; see
+  the Stage B list above. Note that only `winit` (0.30.13) and `egui` (0.34.3) are 0.x here —
+  `wgpu` is 29.0.3, and it is on the Stage B surface not because of its version number but because
+  of its cadence. The leak turns into a cost only if Stage B is ever taken to 1.0, which is gated
+  on all three of them settling in the criterion-1 sense.
+
+96 public types are `#[non_exhaustive]`; 13 Error enums + fn→Result conversions.
 
 ---
 
@@ -118,9 +309,15 @@ The "1.0-readiness hardening + graphics upgrade" breaking release (2026-06-25):
   (+ egui-wgpu/winit 0.34.3, egui_dock 0.19.1, transform-gizmo-egui 0.9.0), naga 29.
   The determinism hash (598E315D0E7499FF) did not change across the whole upgrade.
 - **API breakers:** the `glam` re-export was made official; `bevy_reflect` was moved behind the
-  `reflect` feature; `arrayvec` left the public surface; 96 types became `#[non_exhaustive]`;
-  Error enums + Result returns. For the detailed 11-item migration steps, see the git history
-  (the 0.2.0 commits).
+  `reflect` feature; ~~`arrayvec` left the public surface~~ (**wrong — corrected below**);
+  96 types became `#[non_exhaustive]`; Error enums + Result returns. For the detailed 11-item
+  migration steps, see the git history (the 0.2.0 commits).
+  - **CORRECTION (2026-08-09), kept here rather than deleted:** arrayvec did NOT leave the public
+    surface in 0.2.0. That release made the `ArrayVec` storage field of `ContactPoints` private,
+    which is all anyone checked, but `<ContactPoints as IntoIterator>::IntoIter` went on reading
+    `arrayvec::IntoIter<ContactPoint, 4>`. The by-value iterator was sealed only later, by the
+    opaque `ContactPointsIter` — see the arrayvec entry in §4, and criterion 2 there for why the
+    rule in force at the time could not see it.
 - **Code decision (explains the current code):** winit 0.30 still offers the deprecated
   `EventLoop::run(closure)` → gizmo-app's ~600-line closure event loop was moved to
   `ApplicationHandler` DELIBERATELY (see `crates/gizmo-app/src/windowed/`).

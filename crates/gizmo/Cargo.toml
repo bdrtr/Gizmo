@@ -53,6 +53,12 @@ animation = ["dep:gizmo-animation"]
 # Derin analiz/observability modülü (per-frame metrik, ECS introspection, trace export).
 # Opt-in — varsayılan yapıyı etkilemez. `physics` collector'ı da dahil eder.
 analysis = ["dep:gizmo-analysis", "gizmo-analysis/app", "gizmo-analysis/physics"]
+# Forwards `tracing` events into gizmo-core's in-memory log buffer (what the editor console
+# reads) and enables `gizmo::core::logger::init_tracing`. Default-OFF because it is
+# gizmo-core's `tracing-layer`, which puts a `tracing_subscriber::Layer` impl — and therefore
+# `tracing-subscriber` 0.3 — on a Stage A crate's public surface. Applications opt in;
+# `gizmo-studio` does.
+tracing-layer = ["gizmo-core/tracing-layer"]
 
 [dependencies]
 gizmo-core = { path = "../gizmo-core" , version = "0.9.0" }

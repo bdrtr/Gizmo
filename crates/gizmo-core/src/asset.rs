@@ -48,6 +48,91 @@ impl HandleId {
     }
 }
 
+/// Opaque binding to the collection queue of one [`Assets`] map.
+///
+/// A strong [`Handle`] reports its own death by pushing its id in here, and
+/// [`Assets::process_drops`] is the only thing that ever drains it. The queue inside is
+/// deliberately unreachable: this type has no public constructor, no public accessor and no
+/// public field, so the only values that can exist are the ones an [`Assets`] map hands to
+/// the handles it mints. That keeps the concurrent-queue crate behind it — a `0.x`
+/// dependency — off this crate's public surface, where a breaking release of *that* crate
+/// would otherwise become a breaking release of *this* one.
+///
+/// The consequence for callers outside this crate is that [`Handle::new`] and
+/// [`Handle::make_strong`] can no longer be called at all, because their queue argument
+/// cannot be obtained. Nothing of value is lost: the only queue an outside caller could ever
+/// build was a private one that no map drains, and a handle bound to that leaks its asset
+/// instead of collecting it. [`Assets::add`] is the supported path — it mints the id, stores
+/// the asset and binds the handle to the right queue.
+///
+/// # Evidence that the seal holds
+///
+/// The two constructors below took a bare `Arc<_>` before this type existed, so these
+/// examples used to compile. They are the regression tests for the seal.
+///
+/// ```compile_fail
+/// use gizmo_core::asset::{Handle, HandleId};
+/// use std::sync::Arc;
+/// // No `Arc<_>` is an `AssetDropQueue`, and no public path produces one.
+/// let _h: Handle<u32> = Handle::new(HandleId::new(), Arc::new(Default::default()));
+/// ```
+///
+/// ```compile_fail
+/// use gizmo_core::asset::{Handle, HandleId};
+/// use std::sync::Arc;
+/// let mut h = Handle::<u32>::weak(HandleId::new());
+/// h.make_strong(Arc::new(Default::default()));
+/// ```
+///
+/// And the queue is not reachable through a live handle's tracker either — the field that
+/// used to expose it is private now:
+///
+/// ```compile_fail
+/// use gizmo_core::asset::Assets;
+/// let mut assets = Assets::<u32>::new();
+/// let handle = assets.add(7u32);
+/// let tracker = handle.tracker.as_ref().expect("`add` mints a strong handle");
+/// let _queue = &tracker.drop_queue;
+/// ```
+// The three `compile_fail` examples above are the seal's regression tests: every one of them
+// compiled before this newtype existed. `compile_fail` on its own only asserts *some* error,
+// and this toolchain's rustdoc silently ignores a `compile_fail,E0nnn` error code (verified:
+// a deliberately wrong code still passes), so the codes are asserted here by hand instead.
+// Un-marking the blocks and reading the diagnostics gives, in order:
+//   1. E0308 mismatched types — expected `AssetDropQueue`, found `Arc<_>`   (`Handle::new`)
+//   2. E0308 mismatched types — expected `AssetDropQueue`, found `Arc<_>`   (`make_strong`)
+//   3. E0616 field `drop_queue` of struct `HandleIdTracker` is private      (`Handle::tracker`)
+#[derive(Clone)]
+pub struct AssetDropQueue(Arc<SegQueue<usize>>);
+
+impl AssetDropQueue {
+    /// A fresh, empty queue shared with nothing — the collection identity of one
+    /// [`Assets`] map.
+    fn new() -> Self {
+        Self(Arc::new(SegQueue::new()))
+    }
+
+    /// Reports `id` as unreachable. Nothing is freed here; [`Assets::process_drops`] acts
+    /// on it later, or never, if the map is never polled.
+    fn push(&self, id: usize) {
+        self.0.push(id);
+    }
+
+    /// Takes one reported id, or `None` once the queue is drained.
+    fn pop(&self) -> Option<usize> {
+        self.0.pop()
+    }
+}
+
+impl std::fmt::Debug for AssetDropQueue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Deliberately opaque — a derived impl would print the wrapped queue's type name
+        // into the rendered docs and into every `{:?}` of a containing struct, which is the
+        // leak this newtype exists to prevent.
+        f.write_str("AssetDropQueue(..)")
+    }
+}
+
 /// Sentinel that reports one asset id as unreachable once the last strong [`Handle`]
 /// sharing it goes away.
 ///
@@ -55,6 +140,9 @@ impl HandleId {
 /// so `drop` runs exactly once — when the final clone of that group dies. Dropping it only
 /// pushes the id onto a queue; it does not touch the asset map, so nothing is actually
 /// freed until someone calls [`Assets::process_drops`].
+///
+/// Not constructible outside this module: the queue field is private, and so is the only
+/// type that could fill it. That is deliberate — see [`AssetDropQueue`].
 pub struct HandleIdTracker {
     /// The [`HandleId`] payload to report. Must equal `Handle::id.0` of every handle
     /// holding this tracker — a mismatch collects a different, innocent asset.
@@ -62,7 +150,11 @@ pub struct HandleIdTracker {
     /// Queue owned by the [`Assets`] map that stores `id`. Pushing into a queue belonging
     /// to some other map, or into one nobody drains, leaks the asset instead of collecting
     /// it: the notice is delivered to a collector that has nothing to remove.
-    pub drop_queue: Arc<SegQueue<usize>>,
+    ///
+    /// Private, and the reason the whole struct is: [`Handle::tracker`] is public, so a
+    /// public field here would put the queue's implementation type back on the public
+    /// surface transitively.
+    drop_queue: AssetDropQueue,
 }
 
 impl Drop for HandleIdTracker {
@@ -129,7 +221,11 @@ impl<T> Handle<T> {
     /// authoritative strong handle. Calling this a second time for an id that already has a
     /// strong handle starts a second, independent refcount group — see [`Handle::tracker`]
     /// for why that collects early.
-    pub fn new(id: HandleId, drop_queue: Arc<SegQueue<usize>>) -> Self {
+    ///
+    /// Reachable from inside this crate only: [`AssetDropQueue`] has no public constructor,
+    /// so there is no way to spell the second argument from another crate. See that type for
+    /// why the queue is sealed and why nothing usable was lost.
+    pub fn new(id: HandleId, drop_queue: AssetDropQueue) -> Self {
         Self {
             id,
             tracker: Some(Arc::new(HandleIdTracker {
@@ -178,7 +274,10 @@ impl<T> Handle<T> {
     /// clone made *after* this call are gone — even if those older weak clones are still in
     /// use. Upgrading an id that another strong group already owns has the early-collection
     /// hazard described on [`Handle::tracker`].
-    pub fn make_strong(&mut self, drop_queue: Arc<SegQueue<usize>>) {
+    ///
+    /// Reachable from inside this crate only, for the same reason as [`Handle::new`]:
+    /// [`AssetDropQueue`] cannot be constructed from outside.
+    pub fn make_strong(&mut self, drop_queue: AssetDropQueue) {
         if self.tracker.is_none() {
             self.tracker = Some(Arc::new(HandleIdTracker {
                 id: self.id.0,
@@ -249,14 +348,14 @@ pub struct Assets<T> {
     /// not reproducible from run to run: never let an iteration over `data` decide the order
     /// of anything the simulation hashes or replays.
     pub data: HashMap<HandleId, T>,
-    drop_queue: Arc<SegQueue<usize>>,
+    drop_queue: AssetDropQueue,
 }
 
 impl<T> Default for Assets<T> {
     fn default() -> Self {
         Self {
             data: HashMap::new(),
-            drop_queue: Arc::new(SegQueue::new()),
+            drop_queue: AssetDropQueue::new(),
         }
     }
 }
@@ -343,5 +442,97 @@ impl<T> Assets<T> {
         while let Some(dropped_id) = self.drop_queue.pop() {
             self.data.remove(&HandleId(dropped_id));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Static assertion, not a behavioural test: the sealed queue newtype must stay
+    /// thread-shareable, because it is reached through `Handle<T>`, which is a `Component`
+    /// and therefore travels across threads. Swapping the wrapped type for something
+    /// non-`Sync` would silently make every strong `Handle` non-`Send`; this fails at
+    /// compile time instead.
+    #[test]
+    fn asset_drop_queue_is_send_and_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<AssetDropQueue>();
+        assert_send_sync::<HandleIdTracker>();
+        assert_send_sync::<Handle<u32>>();
+    }
+
+    /// Guard, not a proof of the seal: routing the queue through the newtype must not change
+    /// what collection does. Dropping the last strong handle queues the id, and only
+    /// `process_drops` acts on it.
+    #[test]
+    fn strong_handle_drop_collects_on_next_process_drops() {
+        let mut assets = Assets::<u32>::new();
+        let handle = assets.add(7);
+        let id = handle.id;
+
+        assets.process_drops();
+        assert_eq!(assets.data.get(&id), Some(&7), "a live handle collects nothing");
+
+        drop(handle);
+        assert_eq!(
+            assets.data.get(&id),
+            Some(&7),
+            "dropping only reports the id — the entry survives until it is processed"
+        );
+
+        assets.process_drops();
+        assert!(!assets.data.contains_key(&id), "the reported id is erased");
+    }
+
+    /// Guard: cloning a strong handle shares one tracker, so the id is reported once, when
+    /// the last clone dies — not once per handle.
+    #[test]
+    fn clones_share_one_tracker() {
+        let mut assets = Assets::<u32>::new();
+        let handle = assets.add(1);
+        let id = handle.id;
+        let clone = handle.clone();
+
+        drop(handle);
+        assets.process_drops();
+        assert_eq!(assets.data.get(&id), Some(&1), "one clone is still alive");
+
+        drop(clone);
+        assets.process_drops();
+        assert!(!assets.data.contains_key(&id));
+    }
+
+    /// Guard: a weak handle carries no tracker, so it can never report anything.
+    #[test]
+    fn weak_handle_never_collects() {
+        let mut assets = Assets::<u32>::new();
+        let handle = Handle::<u32>::weak(HandleId::new());
+        assets.insert(&handle, 3);
+        let id = handle.id;
+
+        drop(handle);
+        assets.process_drops();
+        assert_eq!(assets.data.get(&id), Some(&3));
+    }
+
+    /// Guard: `make_strong` still binds an upgraded handle to the map's own queue, which is
+    /// the whole point of the argument the seal changed the type of.
+    #[test]
+    fn make_strong_binds_to_this_maps_queue() {
+        let mut assets = Assets::<u32>::new();
+        let mut handle = Handle::<u32>::weak(HandleId::new());
+        assets.insert(&handle, 5);
+        let id = handle.id;
+
+        handle.make_strong(assets.drop_queue.clone());
+        assert!(!handle.is_weak());
+
+        drop(handle);
+        assets.process_drops();
+        assert!(
+            !assets.data.contains_key(&id),
+            "the upgraded handle reported to this map"
+        );
     }
 }
