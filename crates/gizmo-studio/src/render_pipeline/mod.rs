@@ -265,14 +265,16 @@ pub fn execute_render_pipeline(
                 // `culling_frustum` is deliberately the GAME camera's while the shader locks
                 // to the ACTIVE (editor) camera, and in edit mode those are different places.
                 // There is no matrix that makes the test meaningful here, so it is skipped.
+                // One `Aabb::transform` for the camera test AND every cascade test (and the
+                // debug-AABB push below reuses it) — `classify_visibility` redid it per frustum.
+                let world_aabb = mesh.bounds.transform(&model);
                 let camera_visible = if gizmo::renderer::is_camera_locked(mat.material_type) {
                     true
                 } else {
-                    match gizmo::renderer::classify_visibility(
+                    match gizmo::renderer::classify_visibility_world(
                         &culling_frustum,
                         &cascade_frusta,
-                        &model,
-                        mesh.bounds,
+                        world_aabb,
                         mat.material_type,
                         mat.is_transparent,
                         mat.albedo.w,
@@ -296,7 +298,7 @@ pub fn execute_render_pipeline(
                             | gizmo::renderer::components::MaterialType::Grid
                     )
                 {
-                    debug_aabbs.push(mesh.bounds.transform(&model));
+                    debug_aabbs.push(world_aabb);
                 }
 
                 // --- LOD (Level of Detail) SEÇİMİ ---

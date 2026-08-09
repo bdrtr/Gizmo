@@ -45,7 +45,41 @@ pub fn classify_visibility(
     is_transparent: bool,
     albedo_alpha: f32,
 ) -> Visibility {
-    if visible_in_frustum(camera_frustum, model, local_aabb) {
+    classify_visibility_world(
+        camera_frustum,
+        cascade_frusta,
+        local_aabb.transform(model),
+        material_type,
+        is_transparent,
+        albedo_alpha,
+    )
+}
+
+/// [`classify_visibility`] for a caller that already holds the **world-space** box.
+///
+/// Same decision, same caster predicate, same result — the difference is arithmetic that is
+/// not repeated. [`classify_visibility`] used to reach `visible_in_frustum` once per frustum,
+/// and each of those re-ran [`Aabb::transform`] on the local box: with one camera and four
+/// shadow cascades that is 5 Arvo transforms of the same box to produce the same 5 answers.
+/// For 8 192 meshes it was ~40 600 `Aabb::transform` calls a frame where 8 192 would do.
+///
+/// It also matters for correctness of anything built on top: a spatial index stores a
+/// world-space box, and passing that same value here means the index's box and the exact
+/// test's box are literally the same `Aabb`, so "the index says skip ⇒ the exact test would
+/// have culled" is a statement about one number rather than two independently rounded ones.
+///
+/// **`world_aabb` must be the box of the transform the geometry is actually DRAWN with.** For
+/// a camera-locked material that is not the authored matrix — see
+/// [`camera_locked_model`](crate::backdrop::camera_locked_model).
+pub fn classify_visibility_world(
+    camera_frustum: &Frustum,
+    cascade_frusta: &[Frustum],
+    world_aabb: Aabb,
+    material_type: crate::components::MaterialType,
+    is_transparent: bool,
+    albedo_alpha: f32,
+) -> Visibility {
+    if camera_frustum.intersects_aabb(world_aabb) {
         return Visibility::Camera;
     }
     let is_caster = !is_transparent
@@ -62,7 +96,7 @@ pub fn classify_visibility(
     if is_caster
         && cascade_frusta
             .iter()
-            .any(|f| visible_in_frustum(f, model, local_aabb))
+            .any(|f| f.intersects_aabb(world_aabb))
     {
         Visibility::ShadowOnly
     } else {
@@ -210,6 +244,71 @@ mod tests {
             "a camera-locked backdrop is always in front of the camera; culling it away is \
              how 191 backdrop meshes never reach the screen"
         );
+    }
+
+    /// The world-space entry point is not an approximation of the local-space one — it is the
+    /// same decision with the transform hoisted out of the loop. Anything that culls through a
+    /// spatial index goes through `classify_visibility_world`, so a divergence here would show
+    /// up as geometry that appears or disappears depending on which path a frame took.
+    ///
+    /// **Read this as a tripwire, not as evidence.** `classify_visibility` currently *delegates*
+    /// to `classify_visibility_world`, so as written the two cannot disagree and this test
+    /// cannot fail. It earns its place only if someone re-inlines the local-space body — which
+    /// is exactly the change that would reintroduce the divergence. Do not cite it as proof
+    /// that the classification is right; the thing it pins is that there is one of it.
+    #[test]
+    fn the_world_space_entry_point_decides_exactly_what_the_local_space_one_does() {
+        let cam = cam_frustum(Vec3::new(0.0, 0.0, 5.0));
+        let cascades = [
+            cam_frustum(Vec3::new(0.0, 0.0, 60.0)),
+            cam_frustum(Vec3::new(300.0, 0.0, 5.0)),
+        ];
+        let mats = [
+            MaterialType::Pbr,
+            MaterialType::Unlit,
+            MaterialType::Water,
+            MaterialType::Backdrop,
+            MaterialType::Skybox,
+            MaterialType::Grid,
+            MaterialType::BakedLit,
+        ];
+        // A spread of placements: on screen, behind, off to the side, in a cascade, and
+        // scaled/rotated so `Aabb::transform`'s Arvo path is genuinely exercised.
+        let models = [
+            Mat4::from_translation(Vec3::new(0.0, 0.0, -10.0)),
+            Mat4::from_translation(Vec3::new(0.0, 0.0, 50.0)),
+            Mat4::from_translation(Vec3::new(305.0, 0.0, 0.0)),
+            Mat4::from_scale_rotation_translation(
+                Vec3::new(3.0, 0.5, 2.0),
+                gizmo_math::Quat::from_rotation_y(0.7),
+                Vec3::new(0.0, 0.0, 55.0),
+            ),
+            Mat4::from_scale_rotation_translation(
+                Vec3::splat(40.0),
+                gizmo_math::Quat::from_rotation_x(1.1),
+                Vec3::ZERO,
+            ),
+        ];
+        for m in &models {
+            for mt in mats {
+                for transparent in [false, true] {
+                    for alpha in [1.0f32, 0.99, 0.5] {
+                        let local = classify_visibility(
+                            &cam, &cascades, m, unit_aabb(), mt, transparent, alpha,
+                        );
+                        let world = classify_visibility_world(
+                            &cam,
+                            &cascades,
+                            unit_aabb().transform(m),
+                            mt,
+                            transparent,
+                            alpha,
+                        );
+                        assert_eq!(local, world, "{mt:?} transparent={transparent} alpha={alpha}");
+                    }
+                }
+            }
+        }
     }
 
     #[test]
