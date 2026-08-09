@@ -120,7 +120,12 @@ pub fn weather_grip_factor(weather: Weather, speed_mps: f32) -> f32 {
 /// are skipped, as are triggers, so the car cannot raycast itself; that also means a stale
 /// transform for the vehicle's own entry is harmless, while a stale transform for the ground
 /// is not. Each wheel scans the whole slice, AABB-rejecting first, so cost is
-/// `wheels × colliders`.
+/// `wheels × colliders` — which is why
+/// [`update_vehicle_with_query`] exists and why the ECS driver
+/// [`vehicle_controller_system`](crate::systems::vehicle_controller_system) no longer calls
+/// this entry point when it has a broadphase to query. This one is unchanged, and stays: it
+/// is the ECS-free API, and the only way to put a wheel on a collider the rigid pipeline does
+/// not simulate.
 ///
 /// `weather_grip` multiplies every tyre force (1.0 = dry, no penalty); see
 /// [`weather_grip_factor`] for the mapping this is normally fed from. It stacks with the
@@ -148,6 +153,48 @@ pub fn update_vehicle(
     vehicle_transform: &Transform,
     vehicle_vel: &mut Velocity,
     all_colliders: &[(BodyHandle, Transform, Collider)],
+    weather_grip: f32,
+    dt: f32,
+) {
+    update_vehicle_with_query(
+        vehicle_entity,
+        vehicle,
+        vehicle_rb,
+        vehicle_transform,
+        vehicle_vel,
+        &ColliderListQuery::new(all_colliders),
+        weather_grip,
+        dt,
+    );
+}
+
+/// [`update_vehicle`], with the suspension rays answered by an arbitrary
+/// [`WheelGroundQuery`] instead of a collider list.
+///
+/// This is the same simulation — identical drivetrain, aero, suspension and tyre maths, and
+/// identical wheel state written back. The *only* difference is who answers "what is under
+/// this wheel": `update_vehicle` scans a slice, this asks `ground`, and a [`PhysicsWorld`] is
+/// a [`WheelGroundQuery`] that answers through the broadphase.
+///
+/// One call per wheel, per step. `ground` sees a ray whose length already includes the
+/// half-metre origin offset the suspension model adds (see the body), so an implementation
+/// must not add its own margin.
+///
+/// [`PhysicsWorld`]: gizmo_physics_rigid::world::PhysicsWorld
+#[allow(clippy::too_many_arguments)]
+#[tracing::instrument(
+    skip_all,
+    level = "trace",
+    name = "update_vehicle_with_query",
+    fields(entity = ?vehicle_entity, weather_grip)
+)]
+pub fn update_vehicle_with_query(
+    vehicle_entity: BodyHandle,
+    vehicle: &mut VehicleController,
+    vehicle_rb: &mut RigidBody,
+    vehicle_transform: &Transform,
+    vehicle_vel: &mut Velocity,
+    ground: &dyn WheelGroundQuery,
     weather_grip: f32,
     dt: f32,
 ) {
@@ -336,43 +383,19 @@ pub fn update_vehicle(
             + ray_origin_offset;
         let ray = Ray::new(ray_start, ray_dir);
 
-        // Raycast
-        let mut closest_hit: Option<RaycastHit> = None;
-        let mut closest_dist = ray_max;
-        // Çarpılan zeminin sürtünmesini de yakala (grip çarpanı için). RaycastHit lastik-agnostik
-        // olduğundan materyali ayrı tut; collider zaten elde → imza/veri değişikliği gerekmez.
-        let mut closest_friction = PhysicsMaterial::ASPHALT.dynamic_friction;
-
-        for (other_ent, other_trans, other_col) in all_colliders {
-            if *other_ent == vehicle_entity || other_col.is_trigger {
-                continue;
-            }
-            let aabb = other_col.compute_aabb(other_trans.position, other_trans.rotation);
-            if Raycast::ray_aabb(&ray, &aabb).is_none() {
-                continue;
-            }
-            if let Some((dist, normal)) = Raycast::ray_shape(&ray, &other_col.shape, other_trans) {
-                if dist < closest_dist {
-                    closest_dist = dist;
-                    closest_friction = other_col.material.dynamic_friction;
-                    closest_hit = Some(RaycastHit {
-                        entity: *other_ent,
-                        point: ray.point_at(dist),
-                        normal,
-                        distance: dist,
-                    });
-                }
-            }
-        }
-
+        // Süspansiyon raycast'i — TEK sorgu, tekerlek başına. `ground` bir `PhysicsWorld` ise
+        // bu, BVH üzerinden `raycast_filtered`; bir `ColliderListQuery` ise eski lineer tarama.
+        // İki durumda da kasa (`vehicle_entity`) ve trigger'lar hariç, en yakın isabet döner.
+        // Çarpılan zeminin sürtünmesi de aynı sorgudan gelir (grip çarpanı için): `RaycastHit`
+        // lastik-agnostik olduğundan materyal ayrı taşınır.
         let was_grounded = wheel.is_grounded;
-        if let Some(hit) = closest_hit {
+        if let Some(ground_hit) = ground.cast_wheel_ray(&ray, ray_max, vehicle_entity) {
             wheel.is_grounded = true;
-            wheel.ground_hit = Some(hit);
-            wheel.surface_friction = closest_friction;
+            wheel.surface_friction = ground_hit.dynamic_friction;
 
             // Gerçek mesafe için eklediğimiz offseti çıkarıyoruz
-            let actual_dist = closest_dist - ray_origin_offset;
+            let actual_dist = ground_hit.hit.distance - ray_origin_offset;
+            wheel.ground_hit = Some(ground_hit.hit);
 
             // Süspansiyon sıkışması: yay uzunluğu = çarpma mesafesi - tekerlek yarıçapı
             let raw_len = (actual_dist - wheel.radius).clamp(

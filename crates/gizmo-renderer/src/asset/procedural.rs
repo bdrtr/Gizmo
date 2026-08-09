@@ -32,9 +32,9 @@ impl super::AssetManager {
             let n = (vc - va).cross(vb - va).normalize();
             let normal = [n.x, n.y, n.z];
 
-            vertices.push(Vertex { position: a, color: [1.0; 3], normal, tex_coords: [0.0, 0.0], joint_indices: def_j, joint_weights: def_w, ..Default::default() });
-            vertices.push(Vertex { position: c, color: [1.0; 3], normal, tex_coords: [0.5, 1.0], joint_indices: def_j, joint_weights: def_w, ..Default::default() });
-            vertices.push(Vertex { position: b, color: [1.0; 3], normal, tex_coords: [1.0, 0.0], joint_indices: def_j, joint_weights: def_w, ..Default::default() });
+            vertices.push(Vertex { position: a, color: [1.0; 4], normal, tex_coords: [0.0, 0.0], joint_indices: def_j, joint_weights: def_w, ..Default::default() });
+            vertices.push(Vertex { position: c, color: [1.0; 4], normal, tex_coords: [0.5, 1.0], joint_indices: def_j, joint_weights: def_w, ..Default::default() });
+            vertices.push(Vertex { position: b, color: [1.0; 4], normal, tex_coords: [1.0, 0.0], joint_indices: def_j, joint_weights: def_w, ..Default::default() });
         }
         vertices
     }
@@ -52,7 +52,7 @@ impl super::AssetManager {
         let half_h = height / 2.0;
 
         let def_j = [0; 4]; let def_w = [0.0; 4];
-        let col = [1.0; 3];
+        let col = [1.0; 4];
 
         let y_normal = (radius_bottom - radius_top) / height;
 
@@ -106,7 +106,7 @@ impl super::AssetManager {
         let mut vertices = Vec::new();
         let half_d = depth / 2.0;
         let def_j = [0; 4]; let def_w = [0.0; 4];
-        let col = [1.0; 3];
+        let col = [1.0; 4];
 
         let count = points_2d.len();
         
@@ -165,7 +165,7 @@ impl super::AssetManager {
         let mut vertices = Vec::new();
         let half_d = depth / 2.0;
         let def_j = [0; 4]; let def_w = [0.0; 4];
-        let col = [1.0; 3];
+        let col = [1.0; 4];
 
         let count = outer_points.len();
 

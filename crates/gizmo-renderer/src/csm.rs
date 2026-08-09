@@ -27,6 +27,43 @@ pub const SHADOW_DISTANCE: f32 = 100.0;
 /// Single-sourced so the game and studio renderers can't pick different values.
 pub const CASCADE_LAMBDA: f32 = 0.75;
 
+/// Width of the band, as a fraction of the covered shadow range, over which the sampled
+/// shadow term is faded back to "fully lit".
+///
+/// Without a fade the shadow term steps at the edge of the last cascade: inside it a fully
+/// occluded fragment keeps whatever floor the shading applies (the baked-lit path floors it
+/// at `1 - sun_share` = 0.55), one metre further out there is no cascade to sample so the
+/// term is 1.0 — a 1/0.55 = 1.82x brightness jump along a line across the world. Fading
+/// instead spends the last 15% of the range (15 m at the default [`SHADOW_DISTANCE`])
+/// walking the term to 1.0, so the discontinuity becomes a gradient no edge detector — or
+/// eye — can pick out.
+///
+/// The alternative fix is to push [`SHADOW_DISTANCE`] out past anything the camera can see.
+/// That costs texel density everywhere: the same 4 x [`SHADOW_MAP_RES`]² texels would be
+/// spread over a longer range, which is exactly the blocky near-camera shadow the
+/// `SHADOW_DISTANCE` cap exists to prevent. The fade costs one `smoothstep` + one `mix` per
+/// shadowed fragment and no memory.
+pub const SHADOW_FADE_FRACTION: f32 = 0.15;
+
+/// How much of the sampled shadow term survives at `view_depth` (distance along the camera
+/// forward axis, the same measure [`cascade_split_distances`] is expressed in).
+///
+/// `1.0` = use the cascade's sampled value verbatim; `0.0` = fully lit, which is what the
+/// shaders fall back to anyway once a fragment projects outside the last cascade. Shaders
+/// apply it as `mix(1.0, sampled, fade)`.
+///
+/// This is the CPU mirror of `shadow_distance_fade` in `shaders/baked_lit.wgsl` and
+/// `shaders/deferred_lighting.wgsl` — the maths lives here so it can be tested without a
+/// GPU, and `shader_shadow_fade_matches_the_rust_mirror` pins the shader copies to the same
+/// constant.
+pub fn shadow_distance_fade(view_depth: f32, shadow_far: f32) -> f32 {
+    let far = shadow_far.max(1e-4);
+    let band = (far * SHADOW_FADE_FRACTION).max(1e-4);
+    let t = ((view_depth - (far - band)) / band).clamp(0.0, 1.0);
+    // smoothstep(far - band, far, view_depth), inverted.
+    1.0 - t * t * (3.0 - 2.0 * t)
+}
+
 /// The directional shadow cascades for one frame: the split distances and the
 /// per-cascade light clip matrices, ready to upload.
 pub struct ShadowCascades {
@@ -255,6 +292,151 @@ mod tests {
         let r0 = log[1] / log[0];
         let r1 = log[2] / log[1];
         assert!((r0 - r1).abs() < 1e-3, "log splits not geometric: {log:?}");
+    }
+
+    // ── Shadow-distance fade (the cure for the hard brightness step at SHADOW_DISTANCE) ──
+    //
+    // The step is visual and this crate cannot render, so what is tested here is the maths the
+    // shaders evaluate: `shadow_distance_fade` is the CPU mirror of the WGSL function, and
+    // `baked_lit_shadow_term` below reproduces the exact expression `baked_lit.wgsl` builds
+    // from it. Continuity of THAT expression is the property the bug report is about.
+
+    /// The multiplier `baked_lit.wgsl` applies to the baked colour, for a fragment the sun
+    /// cannot see at all (`vis` = 0 — the worst case, and the one that produced the band).
+    ///
+    /// Mirrors the shader exactly:
+    ///   `vis_faded = mix(1.0, vis, fade)` then `1 - sun_share + sun_share * vis_faded`.
+    fn baked_lit_shadow_term(view_depth: f32, shadow_far: f32, vis: f32) -> f32 {
+        const SUN_SHARE: f32 = 0.45; // baked_lit.wgsl `sun_share`
+        let sampled = if view_depth <= shadow_far { vis } else { 1.0 };
+        let fade = shadow_distance_fade(view_depth, shadow_far);
+        let vis_faded = 1.0 + (sampled - 1.0) * fade;
+        1.0 - SUN_SHARE + SUN_SHARE * vis_faded
+    }
+
+    #[test]
+    fn shadow_fade_is_inert_until_the_last_stretch_of_the_range() {
+        let far = SHADOW_DISTANCE;
+        // Everything up to (1 - SHADOW_FADE_FRACTION) of the range samples the cascade verbatim.
+        for d in [0.0f32, 1.0, 25.0, 50.0, 84.9] {
+            assert_eq!(
+                shadow_distance_fade(d, far),
+                1.0,
+                "fade must not touch the shadow term at {d} m (band starts at \
+                 {})",
+                far * (1.0 - SHADOW_FADE_FRACTION)
+            );
+        }
+        // …and nothing survives at or past the end of the covered range.
+        for d in [far, far + 1.0, far * 10.0] {
+            assert_eq!(shadow_distance_fade(d, far), 0.0, "fade must be spent by {d} m");
+        }
+    }
+
+    #[test]
+    fn shadow_fade_is_monotonic_and_bounded() {
+        let far = SHADOW_DISTANCE;
+        let mut prev = shadow_distance_fade(0.0, far);
+        let mut d = 0.0f32;
+        while d <= far * 1.2 {
+            let f = shadow_distance_fade(d, far);
+            assert!((0.0..=1.0).contains(&f), "fade out of range at {d} m: {f}");
+            assert!(f <= prev + 1e-6, "fade must never increase with distance ({d} m: {prev} → {f})");
+            prev = f;
+            d += 0.05;
+        }
+    }
+
+    // THE regression test for the reported band. Before the fade, `baked_lit_shadow_term` was
+    // 0.55 for every shadowed fragment inside the range and 1.0 for every one outside it: a
+    // 1.82x brightness jump across a single boundary, with no distance falloff anywhere in
+    // between. Sweeping the term in 5 cm steps and bounding the largest adjacent difference
+    // catches that step (0.45) and anything like it.
+    #[test]
+    fn shadowed_brightness_has_no_step_at_the_shadow_distance() {
+        let far = SHADOW_DISTANCE;
+        let step_m = 0.05f32;
+        let mut worst_delta = 0.0f32;
+        let mut worst_at = 0.0f32;
+        let mut d = 0.0f32;
+        while d < far * 1.2 {
+            let a = baked_lit_shadow_term(d, far, 0.0);
+            let b = baked_lit_shadow_term(d + step_m, far, 0.0);
+            let delta = (b - a).abs();
+            if delta > worst_delta {
+                worst_delta = delta;
+                worst_at = d;
+            }
+            d += step_m;
+        }
+        // A 0.45 jump (the pre-fix step) is ten times this bound; the fade spreads the same
+        // 0.45 over SHADOW_FADE_FRACTION x SHADOW_DISTANCE = 15 m, so no 5 cm slice moves far.
+        assert!(
+            worst_delta < 0.005,
+            "shadow term still steps: {worst_delta} over {step_m} m at {worst_at} m \
+             (pre-fix this was 0.45 at {far} m)"
+        );
+        // And the endpoints are still the values the shading intends.
+        assert!(
+            (baked_lit_shadow_term(0.0, far, 0.0) - 0.55).abs() < 1e-6,
+            "a fully shadowed fragment in front of the camera must keep the 0.55 floor"
+        );
+        assert!(
+            (baked_lit_shadow_term(far + 5.0, far, 0.0) - 1.0).abs() < 1e-6,
+            "past the covered range the term must be fully lit"
+        );
+    }
+
+    #[test]
+    fn shadow_fade_leaves_a_lit_fragment_untouched() {
+        // `vis` = 1 (nothing occluding) must stay 1 at every distance: the fade may only ever
+        // move the term TOWARD lit, never away from it.
+        let far = SHADOW_DISTANCE;
+        for d in [0.0f32, 50.0, 90.0, 99.9, 100.0, 250.0] {
+            assert!(
+                (baked_lit_shadow_term(d, far, 1.0) - 1.0).abs() < 1e-6,
+                "unoccluded fragment darkened at {d} m"
+            );
+        }
+    }
+
+    #[test]
+    fn shadow_fade_survives_a_degenerate_range() {
+        // A camera whose far plane is tiny caps shadow_far below SHADOW_DISTANCE; a zero or
+        // negative one must not divide by zero.
+        for far in [0.0f32, -1.0, 1e-6, 0.5] {
+            for d in [0.0f32, 0.25, 10.0] {
+                let f = shadow_distance_fade(d, far);
+                assert!(f.is_finite(), "fade not finite for far={far}, d={d}: {f}");
+                assert!((0.0..=1.0).contains(&f), "fade out of range for far={far}, d={d}: {f}");
+            }
+        }
+    }
+
+    // The WGSL copies of the fade are text, so nothing else can catch them drifting from the
+    // Rust mirror above. Adapter-free: it reads the shader sources, it does not compile them.
+    #[test]
+    fn shader_shadow_fade_matches_the_rust_mirror() {
+        let shaders = [
+            ("baked_lit.wgsl", include_str!("shaders/baked_lit.wgsl")),
+            ("deferred_lighting.wgsl", include_str!("shaders/deferred_lighting.wgsl")),
+        ];
+        let expected = format!("const SHADOW_FADE_FRACTION: f32 = {SHADOW_FADE_FRACTION:?};");
+        for (name, src) in shaders {
+            assert!(
+                src.contains(&expected),
+                "{name} must declare `{expected}` — the shader fade band has drifted from \
+                 csm::SHADOW_FADE_FRACTION"
+            );
+            assert!(
+                src.contains("fn shadow_distance_fade("),
+                "{name} lost its shadow_distance_fade mirror"
+            );
+            assert!(
+                src.contains("shadow_distance_fade(view_depth"),
+                "{name} declares the fade but never applies it to the sampled shadow term"
+            );
+        }
     }
 
     #[test]

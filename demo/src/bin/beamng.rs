@@ -273,7 +273,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> BeamNGState {
     let v0 = Vertex {
         position: [-r, 0.0, r],
         tex_coords: [0.0, uvs],
-        color: [1.0, 1.0, 1.0],
+        color: [1.0, 1.0, 1.0, 1.0],
         normal: [0.0, 1.0, 0.0],
         tangent: [0.0, 0.0, 0.0, 1.0],
         joint_indices: [0; 4],
@@ -282,7 +282,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> BeamNGState {
     let v1 = Vertex {
         position: [r, 0.0, r],
         tex_coords: [uvs, uvs],
-        color: [1.0, 1.0, 1.0],
+        color: [1.0, 1.0, 1.0, 1.0],
         normal: [0.0, 1.0, 0.0],
         tangent: [0.0, 0.0, 0.0, 1.0],
         joint_indices: [0; 4],
@@ -291,7 +291,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> BeamNGState {
     let v2 = Vertex {
         position: [r, 0.0, -r],
         tex_coords: [uvs, 0.0],
-        color: [1.0, 1.0, 1.0],
+        color: [1.0, 1.0, 1.0, 1.0],
         normal: [0.0, 1.0, 0.0],
         tangent: [0.0, 0.0, 0.0, 1.0],
         joint_indices: [0; 4],
@@ -300,7 +300,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> BeamNGState {
     let v3 = Vertex {
         position: [-r, 0.0, -r],
         tex_coords: [0.0, 0.0],
-        color: [1.0, 1.0, 1.0],
+        color: [1.0, 1.0, 1.0, 1.0],
         normal: [0.0, 1.0, 0.0],
         tangent: [0.0, 0.0, 0.0, 1.0],
         joint_indices: [0; 4],

@@ -1001,6 +1001,13 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> CarDe
     world.add_component(ice, MeshRenderer::new());
     world.add_component(ice, Collider::box_collider(Vec3::new(20.0, 0.05, 20.0)));
     world.add_component(ice, gizmo::physics::components::PhysicsMaterial::ICE);
+    // RigidBody + Velocity ZORUNLU, sadece `phys_world.add_body` YETMEZ: `physics_step_system`
+    // her adımda `sync_bodies`'i ECS'teki (RigidBody + Transform + Velocity + Collider) listesiyle
+    // çağırıyor ve o listede OLMAYAN her gövdeyi dünyadan SİLİYOR. Bu iki bileşen olmadan buz
+    // yaması ilk adımda phys_world'den düşüyordu; süspansiyon ışınları broadphase'e taşındığından
+    // (0.10) tekerlekler de onu artık göremez ve araç buzun içinden geçip asfalta basardı.
+    world.add_component(ice, RigidBody::new_static());
+    world.add_component(ice, Velocity::default());
     phys_world.add_body(
         gizmo::physics::BodyHandle::from_id(ice.id()),
         RigidBody::new_static(),
@@ -1021,6 +1028,9 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> CarDe
     world.add_component(sand, MeshRenderer::new());
     world.add_component(sand, Collider::box_collider(Vec3::new(20.0, 0.05, 20.0)));
     world.add_component(sand, gizmo::physics::components::PhysicsMaterial::SAND);
+    // Buz yamasıyla aynı sebep — bkz. yukarıdaki not.
+    world.add_component(sand, RigidBody::new_static());
+    world.add_component(sand, Velocity::default());
     phys_world.add_body(
         gizmo::physics::BodyHandle::from_id(sand.id()),
         RigidBody::new_static(),

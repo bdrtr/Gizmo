@@ -99,7 +99,7 @@ impl crate::asset::AssetManager {
                 let def_w = [0.0; 4];
                 let vtx = |position: [f32; 3], normal: [f32; 3], tex_coords: [f32; 2]| Vertex {
                     position,
-                    color: [1.0; 3],
+                    color: [1.0; 4],
                     normal,
                     tex_coords,
                     joint_indices: def_j,
@@ -146,7 +146,7 @@ impl crate::asset::AssetManager {
         let mut vertices = Vec::new();
         let pi = std::f32::consts::PI;
         let half_h = height / 2.0;
-        let def_j = [0; 4]; let def_w = [0.0; 4]; let col = [1.0; 3];
+        let def_j = [0; 4]; let def_w = [0.0; 4]; let col = [1.0; 4];
         let vtx = |position: [f32; 3], normal: [f32; 3], tex_coords: [f32; 2]| Vertex {
             position, color: col, normal, tex_coords, joint_indices: def_j, joint_weights: def_w, ..Default::default()
         };
@@ -201,7 +201,7 @@ impl crate::asset::AssetManager {
         let mut vertices = Vec::new();
         let pi = std::f32::consts::PI;
         let half_h = height / 2.0;
-        let def_j = [0; 4]; let def_w = [0.0; 4]; let col = [1.0; 3];
+        let def_j = [0; 4]; let def_w = [0.0; 4]; let col = [1.0; 4];
         let vtx = |position: [f32; 3], normal: [f32; 3], tex_coords: [f32; 2]| Vertex {
             position, color: col, normal, tex_coords, joint_indices: def_j, joint_weights: def_w, ..Default::default()
         };
@@ -275,7 +275,7 @@ impl crate::asset::AssetManager {
                 let p_11 = pos(t2, p2); let n_11 = norm(t2, p2);
 
                 let def_j = [0; 4]; let def_w = [0.0; 4];
-                let col = [1.0; 3];
+                let col = [1.0; 4];
 
                 vertices.push(Vertex { position: p_00, normal: n_00, tex_coords: [u1, v1], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
                 vertices.push(Vertex { position: p_01, normal: n_01, tex_coords: [u1, v2], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
@@ -326,7 +326,7 @@ impl crate::asset::AssetManager {
                     let n1 = [phi1.cos(), 0.0, phi1.sin()];
                     let n2 = [phi2.cos(), 0.0, phi2.sin()];
 
-                    let def_j = [0; 4]; let def_w = [0.0; 4]; let col = [1.0; 3];
+                    let def_j = [0; 4]; let def_w = [0.0; 4]; let col = [1.0; 4];
 
                     // Tüp dıştan CCW (eskiden ters → culllanıyordu).
                     // Tri 1: p1_top → p2_bot → p1_bot
@@ -358,7 +358,7 @@ impl crate::asset::AssetManager {
                     let n3 = [theta2.sin() * phi2.cos(), theta2.cos(), theta2.sin() * phi2.sin()];
                     let n4 = [theta1.sin() * phi2.cos(), theta1.cos(), theta1.sin() * phi2.sin()];
 
-                    let def_j = [0; 4]; let def_w = [0.0; 4]; let col = [1.0; 3];
+                    let def_j = [0; 4]; let def_w = [0.0; 4]; let col = [1.0; 4];
 
                     // Yarıküre bantları dıştan CCW (eskiden ters → culllanıyordu).
                     // Kutup satırlarında çakışan köşeli DEJENERE üçgen atlanır (sphere ile aynı).

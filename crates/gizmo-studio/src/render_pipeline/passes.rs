@@ -121,7 +121,12 @@ pub(super) fn record_studio_shadow_passes(
                 // here, so without this filter the editor grid / a skybox / transparent
                 // objects would cast shadows (grid → ground-coplanar self-shadow acne,
                 // skybox → shadows the whole scene).
-                if batch.is_transparent || batch.is_skybox || batch.is_grid || batch.is_unlit {
+                if batch.is_transparent
+                    || batch.is_skybox
+                    || batch.is_grid
+                    || batch.is_unlit
+                    || batch.is_backdrop
+                {
                     continue;
                 }
                 if batch.start_instance >= renderer.scene.instance_capacity as u32 {
@@ -184,12 +189,42 @@ pub(super) fn record_studio_main_pass(
             multiview_mask: None,
             });
 
+            // 0. PAINTED BACKDROPS — FIRST, before any world geometry.
+            //
+            // The pass ordering here is not the depth pin's job: the pin keeps a backdrop from
+            // occluding depth-tested geometry, but the transparent loop further down writes no
+            // depth and blends, so a backdrop drawn after it would paint over it. Drawing them
+            // first puts them underneath by construction. (`gizmo_renderer::backdrop`; the game
+            // path expresses the same rule as `DrawLayer::Backdrop` in its draw-order sort.)
+            render_pass.set_pipeline(&renderer.scene.backdrop_pipeline);
+            for batch in flat_batches {
+                if !batch.is_backdrop {
+                    continue;
+                }
+                if batch.start_instance >= renderer.scene.instance_capacity as u32 {
+                    continue;
+                }
+                let safe_end =
+                    std::cmp::min(batch.end_instance, renderer.scene.instance_capacity as u32);
+
+                render_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
+                render_pass.set_bind_group(1, &*batch.bind_group, &[]);
+                render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
+                render_pass.set_bind_group(3, &*batch.skeleton_bg, &[]);
+                render_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
+                batch.record_draw(&mut render_pass, batch.start_instance..safe_end);
+            }
+
             render_pass.set_pipeline(&renderer.scene.render_pipeline);
             for batch in flat_batches {
-                if batch.is_transparent || batch.is_double_sided || batch.is_skybox || batch.is_grid
+                if batch.is_transparent
+                    || batch.is_double_sided
+                    || batch.is_skybox
+                    || batch.is_grid
+                    || batch.is_backdrop
                 {
                     continue;
-                } // Şeffafları, Skybox'ı, Çift Yönlüleri ve Grid'i atla
+                } // Şeffafları, Skybox'ı, Çift Yönlüleri, Grid'i ve Backdrop'u atla
                 if batch.start_instance >= renderer.scene.instance_capacity as u32 {
                     continue;
                 }
@@ -211,6 +246,7 @@ pub(super) fn record_studio_main_pass(
                     || !batch.is_double_sided
                     || batch.is_skybox
                     || batch.is_grid
+                    || batch.is_backdrop
                 {
                     continue;
                 }
@@ -256,9 +292,9 @@ pub(super) fn record_studio_main_pass(
             // 4. TRANSPARENT OBJELERİ ÇİZ (Depth yazması kapalı, Opaque'nin üstüne blend olur)
             render_pass.set_pipeline(&renderer.scene.transparent_pipeline);
             for batch in flat_batches {
-                if !batch.is_transparent || batch.is_grid {
+                if !batch.is_transparent || batch.is_grid || batch.is_backdrop {
                     continue;
-                } // Sadece saydamları çiz
+                } // Sadece saydamları çiz (backdrop kendi geçişinde, en başta çizildi)
                 if batch.start_instance >= renderer.scene.instance_capacity as u32 {
                     continue;
                 }

@@ -50,6 +50,10 @@ struct InstanceData {
     model_matrix_3: vec4<f32>,
     albedo_color: vec4<f32>,
     pbr: vec4<f32>,
+    // Mirrors `gpu_types::InstanceRaw`. Only `baked_lit.wgsl` reads these two, but every
+    // shader indexing this buffer must declare them or its element stride is wrong.
+    ambient: vec4<f32>,
+    emissive: vec4<f32>,
 };
 
 @group(#{INSTANCE_GROUP}) @binding(0)

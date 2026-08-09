@@ -67,7 +67,153 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   signalling penetration, so it concludes nothing was hit. Fixing it is tracked separately;
   the query layer does not wait on it.
 
+- **`Material::ambient` and `Material::emissive` — the two knobs `MaterialType::BakedLit` was
+  missing.** It was a bare multiply chain (vertex colour × instance albedo × texture, plus the
+  sun's shadow term) with nothing in it that adds, so content authored dark could not be lifted
+  from anywhere: the material had no term for it, and the ACES toe downstream
+  (`aces(x) ≈ 0.214·x` as `x → 0`) takes back most of what a small lift would have gained.
+
+  `ambient` is incident light and joins the baked term **before** the albedo/texture multiply,
+  so a lifted surface keeps its own colour instead of flooding toward grey. `emissive` is the
+  surface emitting and is added **after**, so a black wall can still carry a lit window — the
+  relationship glTF's `emissiveFactor` has to base colour. The full expression is
+
+  ```text
+  rgb = (baked · (1 − 0.45 + 0.45 · sun_visibility) + ambient) · albedo · texture + emissive
+  ```
+
+  Both default to zero and both are floored at zero on the way to the GPU (the fields are
+  `pub`, so the builders are not the enforcement point). With the defaults the expression is
+  `baked · shade · albedo · texture` — the same bits as before, checked by
+  `zero_knobs_reproduce_the_old_expression_exactly` rather than assumed.
+
+  Exposure was already reachable and did not need a new knob: `Camera::exposure` is the single
+  exposure applied over the whole composited HDR (the `1.15` in `post_process.rs` is only the
+  buffer's initial content, overwritten every frame from the active camera; `Camera`'s default
+  is `1.0`). `camera_exposure_brightens_the_frame` covers that end to end.
+
+  Neither knob is scene-serializable, because `MaterialType::BakedLit` itself has no
+  representation in `SceneData` — a pre-existing gap, documented on `MaterialSource::unlit`.
+
+- **`MaterialType::Backdrop` — the scene's OWN painted sky/panorama geometry.** The engine had
+  two materials that each got half of it. `Skybox` gets the depth right and then throws the mesh
+  away: `sky.wgsl` contains no `textureSample` at all and never reads the vertex colour, so it
+  paints a procedural gradient over whatever was drawn. `Unlit` gets the pixels right but is
+  ordinary world geometry — it writes depth and does not follow the camera, so a backdrop panel
+  stands *in front of* the world it is meant to sit behind, and a backdrop authored near the
+  origin is left behind (and frustum-culled) once the camera drives away from it.
+
+  `Material::with_backdrop(tint)` selects it. Four things travel together and are not separately
+  settable, because seven of the eight combinations of them are bugs:
+
+  * drawn **before** the world — `DrawLayer::Backdrop` in the game batcher's draw-order sort, a
+    dedicated first loop in the studio pass. Not redundant with the depth pin: a transparent draw
+    writes no depth, so a backdrop drawn after one would paint over it.
+  * **locked to the camera** — `backdrop.wgsl` adds `scene.camera_pos` before the view transform,
+    which cancels the view's translation exactly and keeps its rotation (`V·(x+c) = R·x`).
+  * **never writes depth**, and every vertex is pinned to NDC `0.99999`, so it also cannot win
+    the depth test against geometry the deferred pass has already put in the depth buffer.
+  * the **mesh's own pixels**: `vertex colour × instance albedo × texture`, alpha included, with
+    no lighting and nothing second-guessing a black vertex colour.
+
+  Because the authored transform is not where the triangles land, culling and LOD go through
+  `gizmo_renderer::backdrop::camera_locked_model` first; `classify_visibility`'s doc now says so,
+  and a `Backdrop` never casts a shadow. Rendered evidence, not just state assertions:
+  `a_backdrop_shows_the_meshs_own_pixels_and_stays_behind_the_world`,
+  `a_backdrops_texture_reaches_the_screen` and `a_backdrop_is_locked_to_the_camera` drive the
+  real `default_render_pass` into an offscreen target and read the pixels back, each with an
+  `Unlit`/`Skybox` arm that reproduces the old behaviour.
+
+  `SceneState` gains `backdrop_pipeline` (and `baked_lit_transparent_pipeline`); like
+  `BakedLit`, `Water` and `Grid`, `Backdrop` has **no representation in a scene file** — the
+  `MaterialData::unlit` encoding has no free slot — so a backdrop must be rebuilt by code after
+  a scene loads.
+
 ### Changed
+
+- **Vertex colour is RGBA.** *Breaking for code that builds `gpu_types::Vertex` by hand:
+  `color` is `[f32; 4]`, not `[f32; 3]`, and `Vertex`'s stride is 96 bytes (was 92).*
+
+  The alpha channel existed nowhere: the attribute was `Float32x3`, so a decal or skid-mark
+  layer's soft edge never reached the GPU and the layer drew as opaque geometry over the road.
+  Widening the attribute is half the fix — the other half is that `BakedLit` now has a
+  **transparent pipeline variant** (alpha blending, no depth write, no culling) chosen by
+  `Material::is_transparent`. Every other stage already routed such a material as transparent
+  (sorted back-to-front, skipped by the z-prepass and the shadow pass); only the pipeline
+  disagreed, and `blend: None` discarded the alpha the shader had been computing all along.
+  Opaque baked-lit geometry keeps exactly the state it had.
+
+  Shaders that do not want the alpha still declare `@location(1) color: vec3<f32>` — a vertex
+  format may supply more components than the shader consumes (wgpu checks only the scalar
+  *kind* for a vertex input) — so every shader reading the attribute except `baked_lit.wgsl`
+  and the new `backdrop.wgsl` is untouched.
+
+- **`BakedLit` takes the vertex colour at face value.** It used to rewrite a near-zero colour
+  to white (`if length(baked) < 0.0001`), so that an importer which never set the attribute
+  could not black out a model. Whether the attribute *exists* is a property of the vertex
+  layout, not of a pixel value, and this engine has one layout that always has it: a source
+  file with no colours is normalised to opaque white **at import**, which is the only place
+  that knows it was absent. The consequence of the old test was that a surface an author
+  painted black came out white. No in-tree mesh source produces a zero vertex colour, so no
+  shipped scene changes; a project that relied on the rewrite must set white explicitly.
+
+- **`InstanceRaw` carries `ambient` and `emissive`** — 128 bytes, was 96, and the instance
+  storage buffer grows with it (~1.0 MB at the default 8192-instance capacity, was 786 KB).
+  All ten shaders that index the buffer declare the two new slots; a missed one is a wrong
+  element stride, so `every_instance_shader_declares_the_full_struct` checks all ten.
+  `InstanceRaw::new` is the one place a `Material` becomes instance bytes, shared by the game
+  and studio render paths.
+
+- **Vehicle suspension rays go through the broadphase.** *Behavioural: a wheel can now only rest
+  on a body the rigid pipeline simulates. Read the second half of this entry before upgrading a
+  scene whose drivable surfaces are bare `Collider`s.*
+
+  `vehicle_controller_system` used to clone **every** `(Transform, Collider)` entity in the ECS
+  into an owned `Vec`, every step, and then scan all of it once per wheel. It now casts one
+  `PhysicsWorld::raycast_filtered` per wheel, excluding the chassis — the scene-query layer added
+  above, which existed precisely because this code had nothing to call.
+
+  Measured on 4 098 colliders and one car, `--release`
+  (`wheel_query_cost_scan_vs_broadphase`, `#[ignore]`d):
+
+  | per step | linear scan | broadphase |
+  | --- | --- | --- |
+  | `Collider` clones | 4 098 | 0 |
+  | colliders visited (4 rays) | 16 392 | 8 |
+  | `vehicle_controller_system` | 0.434 ms | 0.002 ms |
+
+  What a wheel can rest on changed, and the change is not cosmetic:
+
+  * **Only bodies the solver knows about.** A `PhysicsWorld` holds what `physics_step_system`
+    syncs into it — `RigidBody` + `Transform` + `Velocity` + `Collider`, minus `Pooled` and
+    `IsDeleted`. A `Collider` + `Transform` entity with no `RigidBody` used to hold a car up
+    while the chassis fell straight through it; now the wheels agree with the solver and ignore
+    it. Every vehicle demo in this repo already gives its ground a `RigidBody::new_static()` and
+    a `Velocity`, so none of them move. If yours does not, add them — or keep calling
+    `update_vehicle` (unchanged, and still the ECS-free entry point) with your own collider list.
+  * **One step of latency on newly spawned geometry**, which becomes visible to wheels after the
+    next `physics_step_system`. Before the world's first step the system falls back to the old
+    ECS scan, so "spawn a car, read `is_grounded`, then start stepping" is unaffected.
+  * **The wheel sees the solver's collider**: the entity's shape merged with its children into a
+    `Compound`, carrying its `PhysicsMaterial`. Consequently an ECS trigger volume that also has
+    a `RigidBody` is now drivable, because `physics_step_system` drops `is_trigger` (and
+    `collision_layer`) when it rebuilds the collider for the solver — a pre-existing defect in
+    that bridge, not in the query filter, which does exclude triggers. For the solver that volume
+    was already solid; the wheels have stopped disagreeing with it.
+  * **Unchanged**: the chassis never hits itself, no layer mask is applied, dynamic bodies are
+    still drivable, the nearest hit wins, and surface friction still comes from the hit collider.
+
+  New public API in `gizmo-physics-dynamics`: `WheelGroundQuery` (one ray, one nearest surface),
+  `WheelGroundHit`, `ColliderListQuery` (the old linear scan, as an implementation) and
+  `update_vehicle_with_query`. `PhysicsWorld` implements `WheelGroundQuery`. On a scene both
+  implementations can see, they are asserted bit-identical down to the resulting `Velocity`.
+
+  **`character_controller_system` still has this defect and is deliberately not fixed here.** It
+  is the twin the scene-query changelog entry named, but it is not the same fix: the KCC wants a
+  *capsule sweep* (`cast_shape`) rather than a ray — its three centre-line rays walk through
+  anything that misses the centre line — and it is routinely run against `Collider`-only entities
+  that never enter a `PhysicsWorld`, including in its own tests. It also does not skip triggers
+  today, so a character can stand on one. Follow-up.
 
 - **Rigid joint rows are soft constraints now, parameterised by FREQUENCY.** *Behavioural: every
   joint scene moves. New `JointSolver::rigid_hertz` (default 200 Hz); `0` restores the previous
@@ -501,6 +647,31 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   determinism was never at risk — `PhysicsWorld::step` substeps internally at 240 Hz — but
   the cadence and the wasted work were real.
 
+### Fixed
+
+- **The hard brightness step at the end of the shadow cascades.** Past `SHADOW_DISTANCE`
+  (100 m) there is no cascade to sample, so the shadow term snapped to "fully lit". With the
+  baked-lit path flooring a shadowed fragment at `1 − 0.45 = 0.55`, crossing that boundary was
+  a **1.82× brightness jump** — a bright band across the world, a couple of degrees below the
+  horizon from a chase camera, with no distance falloff anywhere before it.
+
+  The term now fades to unshadowed over the last `SHADOW_FADE_FRACTION` (15%) of the covered
+  range instead of stepping, in both `baked_lit.wgsl` and `deferred_lighting.wgsl`. The maths
+  lives in `csm::shadow_distance_fade` so it can be tested without a GPU, and the shader
+  copies are pinned to the same constant. Cost: one `smoothstep` and one `mix` per shadowed
+  fragment, no memory. The alternative — pushing `SHADOW_DISTANCE` out past anything the
+  camera can see — spreads the same 4 × 3072² texels over a longer range and blurs exactly the
+  near-camera contact shadows the cap exists to keep crisp.
+
+  *Behavioural:* a fully shadowed fragment between 85 m and 100 m is now lighter than it was.
+  That is the fix, not a side effect.
+
+- **`baked_lit.wgsl` measured cascade depth radially.** It used `length(world_pos − camera_pos)`
+  where `cascade_splits` and `select_cascade` are both defined along the camera's forward axis,
+  as `deferred_lighting.wgsl` already had it. Radial distance overstates the depth of anything
+  off-axis, so the shader picked a too-far cascade at the screen edges and put the end of the
+  shadow range on a sphere rather than a plane — which would also have made the new fade band
+  bend away from the cascade boundary it is supposed to hide.
 
 ## [0.9.0] — 2026-08-04
 

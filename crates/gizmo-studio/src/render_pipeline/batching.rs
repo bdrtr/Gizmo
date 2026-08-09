@@ -19,6 +19,7 @@ pub(super) type BatchKey = (
     bool, // is_skybox
     bool, // is_grid
     bool, // is_unlit
+    bool, // is_backdrop
 );
 
 pub(super) struct BatchData {
@@ -44,6 +45,9 @@ pub(super) struct BatchData {
     pub(super) is_skybox: bool,
     pub(super) is_grid: bool,
     pub(super) is_unlit: bool,
+    /// A painted backdrop (`gizmo_renderer::backdrop`): drawn FIRST, from the mesh's own
+    /// texture and vertex colour, locked to the camera and writing no depth.
+    pub(super) is_backdrop: bool,
 }
 
 pub(super) struct FlatBatchData {
@@ -73,6 +77,9 @@ pub(super) struct FlatBatchData {
     pub(super) is_skybox: bool,
     pub(super) is_grid: bool,
     pub(super) is_unlit: bool,
+    /// See [`BatchData::is_backdrop`]. Every other draw loop in `passes.rs` must skip these;
+    /// the backdrop loop draws them before anything else in the frame.
+    pub(super) is_backdrop: bool,
 }
 
 impl FlatBatchData {
@@ -152,19 +159,21 @@ mod tests {
     use gizmo::prelude::Vec3;
 
     fn inst_at(x: f32, y: f32, z: f32) -> InstanceRaw {
-        InstanceRaw {
-            model: [
+        InstanceRaw::new(
+            [
                 [1.0, 0.0, 0.0, 0.0],
                 [0.0, 1.0, 0.0, 0.0],
                 [0.0, 0.0, 1.0, 0.0],
                 [x, y, z, 1.0],
             ],
-            albedo_color: [1.0, 1.0, 1.0, 1.0],
-            roughness: 0.5,
-            metallic: 0.0,
-            unlit: 0.0,
-            _padding: 0.0,
-        }
+            [1.0, 1.0, 1.0, 1.0],
+            0.5,
+            0.0,
+            0.0,
+            0.0,
+            [0.0; 3],
+            [0.0; 3],
+        )
     }
 
     #[test]

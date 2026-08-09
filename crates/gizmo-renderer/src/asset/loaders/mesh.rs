@@ -140,7 +140,7 @@ impl crate::asset::AssetManager {
                         position: pos,
                         normal,
                         tex_coords: uv,
-                        color: [1.0, 1.0, 1.0],
+                        color: [1.0, 1.0, 1.0, 1.0],
                         joint_indices: j,
                         joint_weights: w,
                         tangent,

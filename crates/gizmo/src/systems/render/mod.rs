@@ -722,9 +722,10 @@ mod golden_render_tests {
         point_shadows: bool,
         make_mesh: impl FnOnce(&wgpu::Device) -> crate::renderer::components::Mesh,
     ) -> Vec<u8> {
+        // The offscreen target `render_world` renders into is the same size; these size the
+        // renderer itself.
         const W: u32 = 128;
         const H: u32 = 128;
-        const BPP: u32 = 4;
 
         let mut renderer = Renderer::new_headless(W, H, None).await;
         renderer.point_shadows_enabled = point_shadows;
@@ -755,6 +756,19 @@ mod golden_render_tests {
         });
         world.spawn_bundle(DirectionalLightBundle::default());
 
+        render_world(&mut renderer, &mut world).await
+    }
+
+    /// Drive the REAL [`default_render_pass`] over `world` into a 128×128 offscreen target and
+    /// read the frame back as RGBA8 bytes.
+    ///
+    /// Extracted so every golden test renders through byte-for-byte the same code path — the
+    /// point of comparing two frames is that nothing between the scene and the bytes differs.
+    async fn render_world(renderer: &mut Renderer, world: &mut World) -> Vec<u8> {
+        const W: u32 = 128;
+        const H: u32 = 128;
+        const BPP: u32 = 4;
+
         let format = renderer.config.format;
         let target = renderer.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("frame-target"),
@@ -770,7 +784,7 @@ mod golden_render_tests {
         let mut encoder = renderer
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        default_render_pass(&mut world, &mut encoder, &view, &mut renderer);
+        default_render_pass(world, &mut encoder, &view, renderer);
 
         let staging = renderer.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("frame-readback"),
@@ -847,7 +861,7 @@ mod golden_render_tests {
             for (k, corner) in corner_indices.into_iter().enumerate() {
                 out.push(crate::renderer::gpu_types::Vertex {
                     position: CORNERS[corner],
-                    color: [1.0, 1.0, 1.0],
+                    color: [1.0, 1.0, 1.0, 1.0],
                     normal,
                     tex_coords: UVS[k],
                     ..Default::default()
@@ -942,6 +956,352 @@ mod golden_render_tests {
                 "{differing} of {} bytes differ between the flat and indexed renders of the \
                  same cube — the index buffer, its format, or the draw_indexed range is wrong",
                 flat.len()
+            );
+        });
+    }
+
+    // ── ITEM 7: the painted-backdrop path, rendered ────────────────────────────────────────
+    //
+    // These are the only tests in the tree that can see what a backdrop actually looks like.
+    // Everything else about `MaterialType::Backdrop` is pinned as arithmetic or as pipeline
+    // state (`gizmo_renderer::backdrop`, `batching::cmp_draw_order`); this drives the real
+    // `default_render_pass` and reads the pixels back.
+
+    /// How the full-screen test panel is materialised. The three arms are the three answers
+    /// the engine can give to "draw my sky geometry", and the test compares them directly.
+    #[derive(Clone, Copy, PartialEq, Debug)]
+    enum PanelKind {
+        /// The new path: the mesh's own pixels, camera-locked, behind everything.
+        Backdrop,
+        /// What the game ships with today's engine when it wants the artwork: correct pixels,
+        /// but ordinary world geometry — it writes depth and stands in front of the world.
+        Unlit,
+        /// The other half of the report: correct depth, but the mesh's texture and vertex
+        /// colour are discarded for an invented gradient.
+        Skybox,
+    }
+
+    /// A screen-filling quad in the YZ plane (its normal points down −X, at a camera looking
+    /// along +X), 8 units across, carrying `colour` as its VERTEX colour and a full 0..1 UV
+    /// span.
+    ///
+    /// The colour rides the vertex attribute rather than the material albedo on purpose: it is
+    /// the channel `sky.wgsl` throws away, so a green pixel on screen is evidence the mesh's
+    /// own data survived to the framebuffer.
+    fn panel_vertices(colour: [f32; 4]) -> Vec<crate::renderer::gpu_types::Vertex> {
+        const R: f32 = 4.0;
+        let v = |y: f32, z: f32, u: f32, w: f32| crate::renderer::gpu_types::Vertex {
+            position: [0.0, y, z],
+            color: colour,
+            normal: [-1.0, 0.0, 0.0],
+            tex_coords: [u, w],
+            ..Default::default()
+        };
+        vec![
+            v(-R, -R, 0.0, 1.0),
+            v(-R, R, 1.0, 1.0),
+            v(R, R, 1.0, 0.0),
+            v(-R, -R, 0.0, 1.0),
+            v(R, R, 1.0, 0.0),
+            v(R, -R, 0.0, 0.0),
+        ]
+    }
+
+    /// The full-screen test panel: how it is drawn, what texture it carries, and — for the
+    /// world-space kinds only — where it is nailed down.
+    #[derive(Clone, Copy)]
+    struct Panel {
+        kind: PanelKind,
+        /// `false` = the 1×1 white texture, `true` = the 256² checkerboard.
+        checkered: bool,
+        /// The world point the panel sits two units in front of.
+        ///
+        /// Ignored for [`PanelKind::Backdrop`], whose transform is camera-relative BY
+        /// CONSTRUCTION — that asymmetry is the property under test, not an oversight. Pass
+        /// the camera position to put a world-space panel where a backdrop would appear;
+        /// pass a fixed point to leave one behind as the camera drives away.
+        anchor: Vec3,
+    }
+
+    /// The standard red world cube (optional) plus a green screen-filling panel (optional),
+    /// rendered from `camera_pos` looking along +X.
+    async fn render_panel_scene(
+        camera_pos: Vec3,
+        with_cube: bool,
+        panel: Option<Panel>,
+    ) -> Vec<u8> {
+        const W: u32 = 128;
+        const H: u32 = 128;
+
+        let mut renderer = Renderer::new_headless(W, H, None).await;
+        // Screen-space filters off. Each of them re-derives world positions and ray
+        // directions from the camera, so each makes the final image depend on where the
+        // camera IS — which would drown out the question these tests ask, namely whether the
+        // BACKDROP moved. None of them touches the backdrop's own shading: they read the
+        // G-buffer, which a backdrop never writes to.
+        renderer.taa = None;
+        renderer.ssr = None;
+        renderer.ssgi = None;
+        renderer.ssao = None;
+        let mut asset_manager = AssetManager::new();
+        let mut world = World::new();
+
+        let white = asset_manager.create_white_texture(
+            &renderer.device,
+            &renderer.queue,
+            &renderer.scene.texture_bind_group_layout,
+        );
+
+        if with_cube {
+            let cube = world.spawn();
+            world.add_component(cube, Transform::new(Vec3::ZERO));
+            world.add_component(cube, GlobalTransform::default());
+            world.add_component(cube, AssetManager::create_cube(&renderer.device));
+            world.add_component(
+                cube,
+                Material::new(white.clone()).with_pbr(Vec4::new(0.9, 0.15, 0.15, 1.0), 0.0, 1.0),
+            );
+            world.add_component(cube, MeshRenderer::new());
+        }
+
+        if let Some(Panel { kind, checkered, anchor }) = panel {
+            let tex = if checkered {
+                asset_manager.create_checkerboard_texture(
+                    &renderer.device,
+                    &renderer.queue,
+                    &renderer.scene.texture_bind_group_layout,
+                )
+            } else {
+                white.clone()
+            };
+            let mat = match kind {
+                PanelKind::Backdrop => Material::new(tex).with_backdrop(Vec4::ONE),
+                PanelKind::Unlit => Material::new(tex).with_unlit(Vec4::ONE),
+                // Exactly what `Commands::spawn_skybox` builds.
+                PanelKind::Skybox => Material::new(tex).with_unlit(Vec4::ONE).with_skybox(),
+            };
+            // Two units along the camera's forward axis. For a backdrop that offset IS the
+            // transform (the shader adds the camera position); for the world-space kinds it is
+            // measured from `anchor`.
+            let offset = Vec3::new(2.0, 0.0, 0.0);
+            let pos = match kind {
+                PanelKind::Backdrop => offset,
+                PanelKind::Unlit | PanelKind::Skybox => anchor + offset,
+            };
+            let panel_entity = world.spawn();
+            world.add_component(panel_entity, Transform::new(pos));
+            world.add_component(panel_entity, GlobalTransform::default());
+            world.add_component(
+                panel_entity,
+                crate::renderer::components::Mesh::from_vertices(
+                    &renderer.device,
+                    &panel_vertices([0.0, 1.0, 0.0, 1.0]),
+                    "backdrop_panel",
+                ),
+            );
+            world.add_component(panel_entity, mat);
+            world.add_component(panel_entity, MeshRenderer::new());
+        }
+
+        world.spawn_bundle(CameraBundle {
+            position: camera_pos,
+            yaw: 0.0,
+            pitch: 0.0,
+            primary: true,
+            ..Default::default()
+        });
+        world.spawn_bundle(DirectionalLightBundle::default());
+
+        render_world(&mut renderer, &mut world).await
+    }
+
+    /// The pixel at `(x, y)` of a 128×128 RGBA8 frame.
+    fn px(frame: &[u8], x: u32, y: u32) -> [u8; 4] {
+        let i = ((y * 128 + x) * 4) as usize;
+        [frame[i], frame[i + 1], frame[i + 2], frame[i + 3]]
+    }
+
+    /// Green is the dominant channel by a clear margin — i.e. this pixel is the panel's own
+    /// colour and not a tone-mapped sky gradient or a red cube.
+    fn is_green(p: [u8; 4]) -> bool {
+        p[1] as i32 > p[0] as i32 + 20 && p[1] as i32 > p[2] as i32 + 20
+    }
+
+    /// Both halves of the report, in one frame each: the backdrop must show the MESH's pixels
+    /// (which `Skybox` discards) AND stay behind the world (which `Unlit` does not).
+    ///
+    /// The scene is a red PBR cube 6 units from the camera with a green screen-filling panel
+    /// at 2 units — squarely between the camera and the cube. So the centre pixel answers
+    /// "did the panel occlude the world?" and a corner pixel answers "did the panel reach the
+    /// screen, with its own colour?".
+    #[test]
+    fn a_backdrop_shows_the_meshs_own_pixels_and_stays_behind_the_world() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available()) {
+            eprintln!(
+                "skipping a_backdrop_shows_the_meshs_own_pixels_and_stays_behind_the_world: \
+                 no GPU adapter available"
+            );
+            return;
+        }
+        pollster::block_on(async {
+            let cam = Vec3::new(-6.0, 0.0, 0.0);
+            // Anchored at the camera, so all three kinds put the panel on the same pixels and
+            // the frames differ only in HOW it is drawn.
+            let at = |kind| Panel { kind, checkered: false, anchor: cam };
+            let no_panel = render_panel_scene(cam, true, None).await;
+            let backdrop = render_panel_scene(cam, true, Some(at(PanelKind::Backdrop))).await;
+            let unlit = render_panel_scene(cam, true, Some(at(PanelKind::Unlit))).await;
+            let skybox = render_panel_scene(cam, true, Some(at(PanelKind::Skybox))).await;
+
+            // Premise: without a panel the corner is background and the centre is the cube.
+            assert!(
+                !is_green(px(&no_panel, 8, 8)),
+                "premise broken: the empty background is already green"
+            );
+            let bare_centre = px(&no_panel, 64, 64);
+            assert!(
+                !is_green(bare_centre),
+                "premise broken: the red cube renders green ({bare_centre:?})"
+            );
+
+            // (a) The backdrop reaches the screen carrying the mesh's OWN vertex colour.
+            let corner = px(&backdrop, 8, 8);
+            assert!(
+                is_green(corner),
+                "the backdrop did not reach the screen with the mesh's own colour ({corner:?})"
+            );
+
+            // (b) …and it did NOT occlude the world 4 units behind it.
+            let centre = px(&backdrop, 64, 64);
+            assert!(
+                !is_green(centre),
+                "the backdrop painted over the cube ({centre:?}) — it is writing depth or \
+                 winning the depth test"
+            );
+
+            // The `Unlit` arm is the reported symptom: same geometry, same place, and the
+            // panel stands in front of the world.
+            let unlit_centre = px(&unlit, 64, 64);
+            assert!(
+                is_green(unlit_centre),
+                "premise broken: an `Unlit` panel 2 units from the camera is SUPPOSED to \
+                 occlude a cube at 6 ({unlit_centre:?}); if it no longer does, this test is no \
+                 longer distinguishing the two materials"
+            );
+
+            // The `Skybox` arm is the other reported half: correct depth, but the mesh's own
+            // pixels are thrown away for an invented gradient.
+            let sky_corner = px(&skybox, 8, 8);
+            assert!(
+                !is_green(sky_corner),
+                "premise broken: `Skybox` is supposed to DISCARD the mesh's vertex colour and \
+                 generate a gradient, but the corner came out green ({sky_corner:?})"
+            );
+            assert_ne!(
+                sky_corner, corner,
+                "the backdrop and the skybox produced the same pixel — one of them is not \
+                 running its own shader"
+            );
+        });
+    }
+
+    /// The texture half, which the vertex-colour test above cannot see: swap the panel's
+    /// texture and nothing else. `backdrop.wgsl` samples it, so the frames must differ; with
+    /// `sky.wgsl` (zero `textureSample` calls) they would be byte-identical.
+    #[test]
+    fn a_backdrops_texture_reaches_the_screen() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available()) {
+            eprintln!("skipping a_backdrops_texture_reaches_the_screen: no GPU adapter available");
+            return;
+        }
+        pollster::block_on(async {
+            let cam = Vec3::new(-6.0, 0.0, 0.0);
+            let with_tex = |checkered| Panel { kind: PanelKind::Backdrop, checkered, anchor: cam };
+            let plain = render_panel_scene(cam, false, Some(with_tex(false))).await;
+            let checkered = render_panel_scene(cam, false, Some(with_tex(true))).await;
+
+            let differing = plain.iter().zip(checkered.iter()).filter(|(a, b)| a != b).count();
+            assert!(
+                differing > plain.len() / 10,
+                "only {differing} of {} bytes changed when the backdrop's TEXTURE was swapped \
+                 for a checkerboard — the shader is not sampling it",
+                plain.len()
+            );
+
+            // The same swap under `Skybox`, which is the measurement the report made by
+            // grepping (`grep -c textureSample sky.wgsl` → 0), taken here in pixels: the
+            // texture makes no difference at all, because nothing ever reads it.
+            let sky = |checkered| Panel { kind: PanelKind::Skybox, checkered, anchor: cam };
+            let sky_plain = render_panel_scene(cam, false, Some(sky(false))).await;
+            let sky_checkered = render_panel_scene(cam, false, Some(sky(true))).await;
+            assert_eq!(
+                sky_plain, sky_checkered,
+                "premise broken: `Skybox` is supposed to ignore the mesh's texture entirely, \
+                 so swapping it must change nothing — if it now does, this test is no longer \
+                 measuring what distinguishes the two materials"
+            );
+        });
+    }
+
+    /// The largest single-channel difference between two frames.
+    fn max_channel_delta(a: &[u8], b: &[u8]) -> u8 {
+        a.iter().zip(b.iter()).map(|(x, y)| x.abs_diff(*y)).max().unwrap_or(0)
+    }
+
+    /// Property (2): locked to the camera. Two cameras with the same orientation, 900 units
+    /// apart, over a scene whose only content is the backdrop — so any real difference in the
+    /// frame is the backdrop having moved.
+    ///
+    /// The bar is two 8-bit levels rather than byte equality, and the reason is arithmetic,
+    /// not slack. The lock adds the camera position in world space and the view matrix
+    /// subtracts it again, both in f32: at 900 units that round trip loses a few ULPs of
+    /// mantissa. (The alternative — uploading a translation-free view-projection alongside
+    /// `view_proj` — buys exactness for another 64 bytes in `SceneUniforms` and a field every
+    /// construction site must fill; at a relative error of ~1e-7 on scenery painted at
+    /// infinity, it is not worth it.)
+    ///
+    /// Two levels is a strong bound here, not a loose one: the panel wears a checkerboard
+    /// whose own light/dark step is ~150 levels, so geometry that had genuinely SHIFTED — even
+    /// by a fraction of a pixel — would move checker edges by tens of levels, and an unlocked
+    /// panel leaves the frame altogether. The premise arm below measures that.
+    #[test]
+    fn a_backdrop_is_locked_to_the_camera() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available()) {
+            eprintln!("skipping a_backdrop_is_locked_to_the_camera: no GPU adapter available");
+            return;
+        }
+        pollster::block_on(async {
+            let here = Vec3::new(-6.0, 0.0, 0.0);
+            let far_away = Vec3::new(-6.0, 0.0, 900.0);
+            // `anchor` is unread for a backdrop — the transform is camera-relative, which is
+            // precisely what makes the two frames comparable.
+            let bd = Panel { kind: PanelKind::Backdrop, checkered: true, anchor: here };
+
+            let a = render_panel_scene(here, false, Some(bd)).await;
+            let b = render_panel_scene(far_away, false, Some(bd)).await;
+            let delta = max_channel_delta(&a, &b);
+            assert!(
+                delta <= 2,
+                "the frame changed by up to {delta} levels when the camera moved 900 units — \
+                 the backdrop is not locked to it (f32 cancellation alone cannot exceed 2)"
+            );
+
+            // Premise: the SAME panel as ordinary world geometry does not survive the move. It
+            // is nailed to `here` in both frames, so once the camera has driven 900 units away
+            // it is nowhere near the view — which is exactly the failure a camera lock exists
+            // to prevent, and the reason the game's 500-unit skybox cube runs out.
+            let unlit = Panel { kind: PanelKind::Unlit, checkered: true, anchor: here };
+            let ua = render_panel_scene(here, false, Some(unlit)).await;
+            let ub = render_panel_scene(far_away, false, Some(unlit)).await;
+            let unlocked_delta = max_channel_delta(&ua, &ub);
+            assert!(
+                unlocked_delta > 20,
+                "premise broken: an unlocked panel is supposed to be left behind when the \
+                 camera drives away from it, but the frame only moved by {unlocked_delta} \
+                 levels — so the {delta}-level bar above is not distinguishing anything"
             );
         });
     }

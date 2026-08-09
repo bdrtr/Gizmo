@@ -28,7 +28,15 @@ pub struct SceneState {
     pub unlit_pipeline: wgpu::RenderPipeline,
     /// Baked lighting × texture, with the sun's cascade term. See `shaders/baked_lit.wgsl`.
     pub baked_lit_pipeline: wgpu::RenderPipeline,
+    /// The same shader with alpha blending and no depth write, for a `BakedLit` material
+    /// marked transparent — a decal or skid-mark layer, which the opaque variant would paint
+    /// over the road as solid geometry no matter what alpha the shader produced.
+    pub baked_lit_transparent_pipeline: wgpu::RenderPipeline,
     pub sky_pipeline: wgpu::RenderPipeline,
+    /// The scene's OWN painted sky/panorama geometry: `shaders/backdrop.wgsl`, no depth write,
+    /// camera-locked. Unlike `sky_pipeline` it draws the mesh's texture and vertex colour
+    /// instead of an invented gradient. See [`crate::backdrop`].
+    pub backdrop_pipeline: wgpu::RenderPipeline,
     pub water_pipeline: wgpu::RenderPipeline,
     pub shadow_pipeline: wgpu::RenderPipeline,
     pub wireframe_pipeline: wgpu::RenderPipeline,
@@ -249,7 +257,9 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         wireframe_pipeline: core_pipelines.wireframe,
         unlit_pipeline: core_pipelines.unlit,
         baked_lit_pipeline: core_pipelines.baked_lit,
+        baked_lit_transparent_pipeline: core_pipelines.baked_lit_transparent,
         sky_pipeline: core_pipelines.sky,
+        backdrop_pipeline: core_pipelines.backdrop,
         water_pipeline: core_pipelines.water,
         transparent_pipeline: core_pipelines.transparent,
         grid_pipeline: core_pipelines.grid,
@@ -308,7 +318,9 @@ pub fn rebuild_pipelines(renderer: &mut crate::Renderer) {
     renderer.scene.wireframe_pipeline = core_pipelines.wireframe;
     renderer.scene.unlit_pipeline = core_pipelines.unlit;
     renderer.scene.baked_lit_pipeline = core_pipelines.baked_lit;
+    renderer.scene.baked_lit_transparent_pipeline = core_pipelines.baked_lit_transparent;
     renderer.scene.sky_pipeline = core_pipelines.sky;
+    renderer.scene.backdrop_pipeline = core_pipelines.backdrop;
     renderer.scene.water_pipeline = core_pipelines.water;
     renderer.scene.transparent_pipeline = core_pipelines.transparent;
     renderer.scene.grid_pipeline = core_pipelines.grid;
@@ -382,6 +394,7 @@ mod tests {
                 ("volumetric.wgsl", include_str!("../shaders/volumetric.wgsl")),
                 ("volumetric_apply.wgsl", include_str!("../shaders/volumetric_apply.wgsl")),
                 ("sky.wgsl", include_str!("../shaders/sky.wgsl")),
+                ("backdrop.wgsl", include_str!("../shaders/backdrop.wgsl")),
                 ("unlit.wgsl", include_str!("../shaders/unlit.wgsl")),
                 ("baked_lit.wgsl", include_str!("../shaders/baked_lit.wgsl")),
                 ("grid.wgsl", include_str!("../shaders/grid.wgsl")),
@@ -412,7 +425,15 @@ mod tests {
             // is verified — the web variant strips `#ifdef SHADOWS` and remaps
             // `@group(#{SKELETON_GROUP/INSTANCE_GROUP})`, which is exactly where a bad #ifdef
             // (e.g. a shadow binding used outside the guard) would surface as an undefined id.
-            let web_path = ["shader.wgsl", "unlit.wgsl", "baked_lit.wgsl", "water.wgsl", "sky.wgsl", "grid.wgsl"];
+            let web_path = [
+                "shader.wgsl",
+                "unlit.wgsl",
+                "baked_lit.wgsl",
+                "water.wgsl",
+                "sky.wgsl",
+                "backdrop.wgsl",
+                "grid.wgsl",
+            ];
 
             let mut failures: Vec<String> = Vec::new();
             for (name, src) in shaders {

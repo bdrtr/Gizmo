@@ -111,7 +111,7 @@ impl crate::asset::AssetManager {
             for i in 0..6 {
                 vertices.push(Vertex {
                     position: positions[face.indices[i]],
-                    color: [1.0, 1.0, 1.0],
+                    color: [1.0, 1.0, 1.0, 1.0],
                     normal: face.normal,
                     tex_coords: face.uvs[i],
                     joint_indices: [0; 4],
@@ -233,7 +233,7 @@ impl crate::asset::AssetManager {
             for i in 0..6 {
                 vertices.push(Vertex {
                     position: positions[face.indices[i]],
-                    color: [1.0, 1.0, 1.0],
+                    color: [1.0, 1.0, 1.0, 1.0],
                     normal: face.normal,
                     tex_coords: face.uvs[i],
                     joint_indices: [0; 4],
@@ -302,7 +302,7 @@ impl crate::asset::AssetManager {
             for idx in indices {
                 vertices.push(Vertex {
                     position: positions[idx],
-                    color: [1.0, 1.0, 1.0],
+                    color: [1.0, 1.0, 1.0, 1.0],
                     normal,
                     tex_coords: [0.0, 0.0],
                     joint_indices: [0; 4],

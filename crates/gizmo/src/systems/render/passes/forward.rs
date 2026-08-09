@@ -76,7 +76,10 @@ pub fn record_forward_and_fluid(
 
         for item in draw_items {
             let mut draw_solid = false;
-            let draw_wire = show_wireframes && !item.is_skybox;
+            // Neither the sky nor a backdrop is world geometry a wireframe overlay is about,
+            // and the wireframe pipeline is `shader.wgsl`: it neither camera-locks nor pins
+            // depth, so a backdrop's wireframe would be drawn somewhere the backdrop is not.
+            let draw_wire = show_wireframes && !item.is_skybox && !item.is_backdrop;
 
             if item.is_skybox || item.unlit || renderer.deferred.is_none() || item.is_transparent {
                 draw_solid = true;
@@ -100,10 +103,27 @@ pub fn record_forward_and_fluid(
                 .unwrap_or(&renderer.scene.dummy_skeleton_bind_group);
 
             if draw_solid {
-                let pipeline = if item.is_skybox {
+                let pipeline = if item.is_backdrop {
+                    // FIRST, ahead of the `unlit` and `is_transparent` branches below: a
+                    // backdrop sets `unlit` (that is what keeps it out of the deferred and
+                    // shadow passes) and may well be transparent, and either of those
+                    // pipelines would draw it as ordinary world geometry — writing depth, not
+                    // camera-locked, in front of the world. The draw items reach this loop
+                    // already sorted with `DrawLayer::Backdrop` first.
+                    &renderer.scene.backdrop_pipeline
+                } else if item.is_skybox {
                     &renderer.scene.sky_pipeline
                 } else if item.baked_lit {
-                    &renderer.scene.baked_lit_pipeline
+                    // A baked-lit material that declared itself transparent gets the blended
+                    // variant. Every other stage already routes it as transparent (sorted
+                    // back-to-front here, skipped by the z-prepass and the shadow pass); the
+                    // opaque pipeline was the one place that ignored the declaration, and it
+                    // discarded the fragment alpha with it.
+                    if item.is_transparent {
+                        &renderer.scene.baked_lit_transparent_pipeline
+                    } else {
+                        &renderer.scene.baked_lit_pipeline
+                    }
                 } else if item.unlit {
                     &renderer.scene.unlit_pipeline
                 } else if item.is_transparent {

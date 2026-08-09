@@ -310,7 +310,7 @@ pub struct MaterialData {
     /// The three magic numbers are the same encoding the per-instance GPU field uses, which is
     /// why this is a float rather than an enum.
     ///
-    /// `MaterialType::BakedLit`, `Water` and `Grid` have **no representation here**, and
+    /// `MaterialType::BakedLit`, `Backdrop`, `Water` and `Grid` have **no representation here**, and
     /// nothing derives a `MaterialSource` back from a GPU `Material`, so a material given one
     /// of those types in code leaves no trace in a scene file. Anything relying on them must
     /// be rebuilt by code after the scene loads.

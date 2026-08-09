@@ -31,7 +31,9 @@ pub fn draw_material_section(
                                     ui.selectable_value(&mut current_type, gizmo_renderer::components::MaterialType::Pbr, "PBR (Physically Based)");
                                     ui.selectable_value(&mut current_type, gizmo_renderer::components::MaterialType::Unlit, "Unlit (No Lighting)");
                                     ui.selectable_value(&mut current_type, gizmo_renderer::components::MaterialType::Water, "Water (Fluid Surface)");
-                                    ui.selectable_value(&mut current_type, gizmo_renderer::components::MaterialType::Skybox, "Skybox");
+                                    ui.selectable_value(&mut current_type, gizmo_renderer::components::MaterialType::Skybox, "Skybox (Procedural Sky)");
+                                    // Boyalı arka plan: mesh'in kendi dokusu/vertex rengi, kameraya kilitli, derinlik yazmaz.
+                                    ui.selectable_value(&mut current_type, gizmo_renderer::components::MaterialType::Backdrop, "Backdrop (Painted Sky/Panorama)");
                                     ui.selectable_value(&mut current_type, gizmo_renderer::components::MaterialType::Grid, "Grid");
                                 });
                             mat.material_type = current_type;
