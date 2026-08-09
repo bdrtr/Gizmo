@@ -565,8 +565,17 @@ impl Default for PhysicsWorld {
 ///
 /// **Ekleme kuralı:** buraya bir alanın girip girmeyeceğinin ölçütü "büyük mü" değil,
 /// *`transforms`/`velocities`'ten türetilebiliyor mu*. Türetilemiyorsa girmek ZORUNDA — ve
-/// eksikliği `state_hash` ile YAKALANAMAZ, çünkü o yalnız transform/velocity/sleep karıştırır.
-/// Eklem durumu tam bu yüzden yıllarca sessizce eksik kaldı.
+/// eksikliği çoğu alan için `state_hash` ile YAKALANAMAZ. Eklem durumu tam bu yüzden yıllarca
+/// sessizce eksik kaldı.
+///
+/// `state_hash` bugün transform/velocity/sleep'e EK OLARAK eklem başına şunları karıştırıyor:
+/// uç handle çifti, `is_broken`, ve `JointScratch`'in on λ yuvası. Yalnız ilk ikisi TAŞINAN
+/// durum; λ her geçişin başında sıfırlandığı için orada bir tel-tuzağı olarak duruyor (çözücüde
+/// ayrışmış ama henüz hızlara sızmamış iki koşuyu bir substep erken ayırıyor).
+/// Karıştırmadıkları hâlâ var ve kural onlar için değişmedi: `initial_relative_rotation`,
+/// `current_angle`, `current_position` ve genel olarak `JointData`'nın geri kalanı snapshot'ta
+/// taşınıyor ama hash'te GÖRÜNMÜYOR — bayat bir referans pozu ancak hızlara sızdıktan sonra
+/// fark edilir.
 #[derive(Debug, Clone)]
 pub struct WorldSnapshot {
     transforms: Vec<Transform>,
@@ -590,8 +599,10 @@ pub struct WorldSnapshot {
     //     (ball-socket / slider / D6). Bütün koni/twist/swing limitleri ona göre ölçülüyor,
     //     dolayısıyla bayat bir referans eklemin dinlenme pozunu sessizce yeniden tanımlar.
     //
-    // İkisi de `state_hash`'e girmiyor (o yalnız transform/velocity/sleep karıştırıyor), yani
-    // desync hızlara sızana kadar GÖRÜNMEZ — kopuk bir eklemde bu anında ve kalıcı.
+    // `is_broken` artık `state_hash`'e giriyor (uç handle çifti ve `JointScratch`'in λ
+    // yuvalarıyla birlikte), yani ondaki bir desync anında görünür.
+    // `initial_relative_rotation` GİRMİYOR: snapshot onu taşıyor ama hash görmüyor, dolayısıyla
+    // bayat bir referans pozu ancak limit hesabından hızlara sızdıktan sonra fark edilir.
     joints: Vec<crate::joints::Joint>,
     // `weather` girdiği için: rigid pipeline onu okumuyor ama araç lastik modeli okuyor
     // (sürtünme dairesi limitini ölçekliyor) ve transform/velocity'den TÜRETİLEMİYOR — yani

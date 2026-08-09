@@ -37,6 +37,18 @@ impl JointScratch {
     pub(crate) fn row(&mut self, slot: usize) -> &mut f32 {
         &mut self.rows[slot]
     }
+
+    /// Read-only view of a row's accumulated λ — the joint block of
+    /// [`PhysicsWorld::state_hash`](crate::PhysicsWorld::state_hash) and the crate's tests.
+    ///
+    /// This is per-PASS scratch, not carried state: it holds whatever the most recent
+    /// `solve_joints` left. Hashing it is an early-warning tripwire (a desync shows up in the
+    /// solver before it has bled into velocities), not a record of something a rollback would
+    /// otherwise lose.
+    #[inline]
+    pub(crate) fn row_value(&self, slot: usize) -> f32 {
+        self.rows[slot]
+    }
 }
 
 /// A constraint between two rigid bodies: the pair of bodies, where it grips them, when it
@@ -117,8 +129,13 @@ pub struct Joint {
     /// collisions disabled leaves its two bodies still passing through each other.
     #[serde(skip)]
     pub is_broken: bool,
-    /// Çözücü scratch'i — bu geçişteki satır-başına birikmiş λ ve net impulse. `is_broken`
-    /// gibi serialize EDİLMEZ ve her geçişin başında sıfırlanır.
+    /// Solver scratch — the per-row accumulated λ plus this pass's net impulse.
+    ///
+    /// Not serialized (like [`is_broken`](Self::is_broken)): a saved scene must not resurrect
+    /// mid-solve. It IS cloned, however, and therefore travels in `WorldSnapshot` — the λ rows
+    /// now cross the pass boundary as the solver's warm start, so a rollback that dropped them
+    /// would resimulate from a colder solver than the continuous run. See [`JointScratch`] for
+    /// which parts persist and which are cleared every pass.
     #[serde(skip)]
     pub(crate) scratch: JointScratch,
     /// Whether the two joined bodies may still generate contacts *with each other*.
@@ -136,7 +153,9 @@ pub struct Joint {
     /// Kind-local runtime state lives in here too — the reference pose a
     /// ball-socket/slider/D6 latches on its first solve, and the hinge's tracked angle — so
     /// replacing this value with a freshly built one also discards that latch, and the next
-    /// pass re-captures it from the bodies' current pose.
+    /// pass re-captures it from the bodies' current pose. It does NOT discard the solver's
+    /// accumulated warm-start λ, which belongs to the rows the old payload defined — call
+    /// [`reset_warm_start`](Self::reset_warm_start) as well when you reconfigure a joint.
     pub data: JointData,
 }
 
@@ -1002,6 +1021,18 @@ impl Joint {
     pub fn with_collision(mut self, enabled: bool) -> Self {
         self.collision_enabled = enabled;
         self
+    }
+
+    /// Discard the solver's accumulated warm-start impulses for this joint, so the next pass
+    /// starts cold.
+    ///
+    /// Call it after assigning [`data`](Self::data): replacing the payload discards the latched
+    /// reference pose, but the λ accumulated by the OLD configuration's rows stays in the
+    /// scratch and would be replayed along the new configuration's directions on the next
+    /// pass. Nothing else needs it — a joint whose gate closes has its row pruned
+    /// automatically at the end of the pass.
+    pub fn reset_warm_start(&mut self) {
+        self.scratch = JointScratch::default();
     }
 
     /// Latches [`is_broken`](Self::is_broken) when `applied_force` (newtons) exceeds

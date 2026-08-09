@@ -949,17 +949,54 @@ diyordu. Sahne kuruldu (`tests/contact_soft_stability.rs`), ölçüldü, ve **te
 > atıyor, yani satır yalnız `block_solver = false` ile koşuluyor. Determinizm `A462C9EB8A09D5CA`
 > — bu sefer öngörü ölçümden ÖNCE yazıldı ve tuttu.
 
-**⬜ commit 5 — warm-start + rollback (en riskli, en sonda).** İterasyon 0'dan ÖNCE ayrı bir
-sweep'te `dir * λ_önceki` uygulanması (temas çözücüsündeki `solver/mod.rs:458-476` yapısının
-aynısı). Aynı commit'te ZORUNLU: iki-uç-uykuda kapısı (bugün `joints/` içinde tek bir
-`is_sleeping` referansı yok); bir satırın aktivasyon kapısı kapandığı substep'te λ'sının
-sıfırlanması (gevşemiş halat yeniden çekmemeli); ve joint durumunun `WorldSnapshot`'a
-eklenmesi. λ substep sınırını geçtiği an bu ŞART olur — `WorldSnapshot`'ın kendi Türkçe
-gerekçesi (`world/mod.rs:294-301`) tam olarak bunu söylüyor. Aynı fırsatta bugün de var olan
-delik kapanır: `is_broken`, `initial_relative_rotation`, `current_angle`/`current_position`
-hiçbiri snapshot'lanmıyor, yani rollback bugün de bir eklemi "kırılmamış" hâline döndüremiyor.
-`tests/rollback.rs`'te joint içeren sahne YOK → bu commit `build_scene`'e bir tane eklemeli;
-yoksa desync yeşil ışıkta geçer ve `state_hash` (yalnız transform/velocity/sleep) onu göremez.
+**🔄 commit 5 — warm-start + rollback (en riskli, en sonda).** *(2026-08-09)* Dört parçanın
+**üçü indi, warm-start'ın kendisi ÖLÇÜLDÜ ve GÖNDERİLMEDİ.**
+
+**İnen üç parça:**
+- **İki-uç-uykuda kapısı.** `joints/` içinde tek bir `is_sleeping` referansı yoktu; çözücü
+  uyuyan cisimlere hız yazıyor, `position_integration_step` onları atıyordu. Kapı `is_sleeping(a)
+  && is_sleeping(b)` DEĞİL: `RigidBody::new_static` `is_sleeping`'i önceden set ediyor ve bu
+  depodaki hemen her sahne statik çapasına `wake_up()` çağırıyor, yani o naif hâl asıl önemli
+  eklemde (uyuyan zincirin çapa↔ilk-halka eklemi) hiç ateşlemezdi. Dinamik cisim uykudaysa,
+  diğerleri hareketsizse atıl sayılıyor; eşik `pipeline.rs`'in wake pass'iyle aynı `1e-8`.
+- **`state_hash`'e eklem bloğu** — uç handle çifti, `is_broken` ve λ yuvaları.
+- **`tests/rollback.rs`'e 200 kg uçlu 16 halkalı zincir** — süitteki en ağır yüklü eklem sahnesi.
+
+> **Warm-start neden gönderilmedi.** Operatör çalışıyor: 200 kg uçlu zincirde 10 sıcak iterasyon
+> 10 soğuğa göre yakınsak cevaba çok daha yakın. Ama **doğal değer olan f=1.0'da** — temas
+> çözücüsünün kendi warm-start'ında kullandığı değer — mekanizma dağılıyor, ve **yalnız yüksek
+> kütle oranında değil**: 1 kg uçlu sıradan bir zincir 17.54 m'ye ve 30 m/s'ye çıkıyor
+> (yakınsak cevap 16.000). Maddenin "risk ve kazanç aynı yerde" önermesi böylece çürüdü.
+>
+> | faktör | sarkma (200 kg) | max\|v\| | 160-iter cevabına kapanan boşluk |
+> |---|---|---|---|
+> | 0.0 | 16.1653 | 0.04 | %0 |
+> | 0.5 | 16.0820 | 0.05 | %54 |
+> | 0.75 | 16.0515 | 0.20 | %74 |
+> | 0.875 | 13.9800 | 7.13 | dağıldı |
+> | 1.0 | 4.8323 | 44.41 | dağıldı |
+>
+> **Sebep yapısal ve adı kondu:** rijit satırda (`compliance == 0`) `−α̃·λ` geri besleme terimi
+> yok, o yüzden az-yakınsamış geçiş Baumgarte artığını λ'ya entegre ediyor. Aynı zincir
+> `compliance = 1e-6` ile f=1.0'da KARARLI ve soğuktan iyi — temas çözücüsünün baştan sona
+> TGS-soft olduğu için 1.0'da koşabilmesinin sebebi de bu.
+>
+> Çalışan tek ayar 0.5'ti: uçurumun 1.75 katı altında, üç zincir sahnesinden süpürülmüş,
+> ragdoll/vehicle/D6'da hiç ölçülmemiş ayarlanmış bir sabit. 1.0 için sertleşen bir crate'in
+> public yüzeyine, varsayılanı atıl olan ve doğrulanmayan bir `f32` knob eklemek yerine geri
+> alındı. (Düşman-gözü inceleme de bağımsız olarak `do-not-ship` dedi ve gerekçesi buydu.)
+>
+> **Doğru sıra artık belli: önce rijit satırların yumuşak formülasyonu** — `soft_coefficients`
+> dokümanı bunu zaten açık bir soru olarak kaydediyor — sonra warm-start ayarlanmış sabit
+> olmadan, 1.0'da gelir. Bugünkü kullanıcı için ara çözüm dürüst: 200:1 sahnede iterasyonu
+> yükseltmek sarkmayı 16.1657'den 16.0106'ya indiriyor, sıradan kütle oranlarında sapma zaten
+> 16 metrede 6.6 mm.
+>
+> **Bir yan bulgu daha, tasarım panelinden:** "λ_prev'i satırın kendi yerinde enjekte et"
+> yaklaşımı cebirsel olarak TAM BİR NO-OP. Bu çözücüde clamp toplam üzerinden çalıştığı için
+> `total = λ_prev + (−Jv_pre − k·λ_prev + bias)/k = (−Jv_pre + bias)/k` — λ_prev sadeleşiyor,
+> yumuşak satırlarda da (`1 − impulse_scale = mass_scale` tam eşitliği). Warm-start'a yeniden
+> girecek olan bunu bilsin: enjeksiyon ayrı bir sweep'te olmak ZORUNDA.
 
 ### ✅ GPU test flake'i — `gizmo-renderer` tarafı da kapandı *(2026-08-06)*
 > Aşağıdaki madde `gizmo`'nun golden testlerini anlatıyor ve "kilit sonrası, binary izole →

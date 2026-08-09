@@ -228,9 +228,11 @@ fn snapshot_restores_gravity_and_fluid_zones() {
 //   * `initial_relative_rotation` is the reference pose latched on a joint's FIRST solve
 //     (ball-socket, slider, D6). Every limit is measured against it.
 //
-// Neither is visible to `state_hash`, which hashes only transform/velocity/sleep — so the
-// desync stays invisible until it bleeds into velocities, which for a broken joint is
-// immediately and permanently.
+// Neither was visible to `state_hash` when this test was written, so the desync stayed
+// invisible until it bled into velocities — which for a broken joint is immediately and
+// permanently. `state_hash` now mixes the joint array's handle pairs, `is_broken` and the
+// solver's λ, so the first of the two IS caught directly; `initial_relative_rotation` still
+// is not, and this test remains the only thing standing behind it.
 
 /// Measured: the rope goes taut at tick 38 and its peak reaction sits between 1200 and
 /// 2000 N, so this threshold breaks it at tick 38 — after the snapshot at 20 and before the
@@ -398,8 +400,9 @@ fn rollback_restores_the_latched_joint_reference_pose() {
 /// It was the same omission as the joint state above, one field further along: gameplay
 /// switching from Sunny to Rain inside a rollback window left the re-simulation running vehicles
 /// under the friction limit of a weather it had already rolled back past. Invisible to
-/// `state_hash`, which hashes only transform/velocity/sleep, and invisible to the rigid
-/// pipeline itself, which never reads the value.
+/// `state_hash` — which mixes transform/velocity/sleep plus the joint array's handle pairs,
+/// `is_broken` and solver λ, and nothing else — and invisible to the rigid pipeline itself,
+/// which never reads the value.
 #[test]
 fn snapshot_restores_the_weather() {
     use gizmo_physics_rigid::world::Weather;
@@ -418,5 +421,141 @@ fn snapshot_restores_the_weather() {
         Weather::Sunny,
         "restore_snapshot must revert the weather — the vehicle tyre model scales its friction \
          limit from it, so a rollback across a weather change resimulates under the wrong grip"
+    );
+}
+
+// ── Rollback over a heavily loaded joint chain ───────────────────────────────
+//
+// The scene is deliberately the ill-conditioned one — a 16-link chain with a 200 kg tip, the
+// case `docs/FIXPLAN.md` measured joint warm-start against. It is where the joint solver works
+// hardest and where an incomplete restore diverges fastest, which makes it the sharpest probe
+// for snapshot completeness that this crate has.
+//
+// It was written for a warm start that did not ship (B4 commit 5: the operator works, but at
+// its natural factor it pumps energy into rigid rows — see docs/FIXPLAN.md). Under the shipped
+// solver λ is rebuilt from zero every pass, so what this pins today is the rest of the joint
+// state: the handle pairs, `is_broken`, and the latched reference poses inside `JointData`.
+// When the warm start does land, λ becomes carried state and this scene is already here to
+// catch a restore that drops it.
+
+const CHAIN_LINKS: u32 = 16;
+
+/// A rope chain hanging from a static anchor, 1 kg per link and 200 kg on the tip.
+///
+/// Built separately from [`build_scene`] on purpose: mutating that one would quietly replace
+/// the existing contact-only rollback coverage with a joint scene instead of adding to it.
+fn heavy_tip_chain() -> PhysicsWorld {
+    let mut world = PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0));
+
+    let mut anchor = RigidBody::new_static();
+    anchor.wake_up();
+    world.add_body(
+        BodyHandle::from_id(0),
+        anchor,
+        Transform::new(Vec3::new(0.0, 16.0, 0.0)),
+        Velocity::default(),
+        Collider::sphere(0.1),
+    );
+    for i in 1..=CHAIN_LINKS {
+        let mass = if i == CHAIN_LINKS { 200.0 } else { 1.0 };
+        let mut rb = RigidBody::new(mass, true);
+        let col = Collider::box_collider(Vec3::splat(0.1));
+        rb.update_inertia_from_collider(&col);
+        rb.wake_up();
+        world.add_body(
+            BodyHandle::from_id(i),
+            rb,
+            Transform::new(Vec3::new(0.0, 16.0 - i as f32, 0.0)),
+            Velocity::default(),
+            col,
+        );
+    }
+    for i in 1..=CHAIN_LINKS {
+        world.joints.push(gizmo_physics_rigid::Joint::rope(
+            BodyHandle::from_id(i - 1),
+            BodyHandle::from_id(i),
+            Vec3::ZERO,
+            Vec3::ZERO,
+            1.0,
+        ));
+    }
+    world
+}
+
+/// Rollback across a loaded joint chain must reproduce the continuous run bit for bit.
+///
+/// The chain is loaded hard enough that any state the restore drops shows up fast.
+#[test]
+fn rollback_matches_continuous_on_a_heavy_tipped_chain() {
+    {
+        let warm = "shipped";
+        // Ground truth: 120 ticks straight through.
+        let mut gt = heavy_tip_chain();
+        for _ in 0..120 {
+            gt.step(DT).ok();
+        }
+        let truth = gt.state_hash();
+
+        let mut w = heavy_tip_chain();
+        for _ in 0..40 {
+            w.step(DT).ok();
+        }
+
+        // Preconditions, or the test is vacuous: the chain must be AWAKE at the snapshot point
+        // (the joint solver skips a mechanism whose ends are all inert, which would make λ
+        // irrelevant), and it must be carrying load (a slack rope has no λ to lose).
+        assert!(
+            (1..=CHAIN_LINKS as usize).any(|i| !w.rigid_bodies[i].is_sleeping),
+            "warm={warm}: precondition — the chain must still be awake at the snapshot point"
+        );
+        let carrying = (1..=CHAIN_LINKS as usize)
+            .filter(|&i| w.velocities[i].linear.length_squared() > 0.0)
+            .count();
+        assert!(
+            carrying > 0,
+            "warm={warm}: precondition — the chain must be in motion at the snapshot point"
+        );
+
+        let snap = w.snapshot();
+        for _ in 40..120 {
+            w.step(DT).ok();
+        }
+        assert_eq!(
+            w.state_hash(),
+            truth,
+            "warm={warm}: control — the continuous sim is not deterministic"
+        );
+
+        w.restore_snapshot(&snap);
+        for _ in 40..120 {
+            w.step(DT).ok();
+        }
+        assert_eq!(
+            w.state_hash(),
+            truth,
+            "warm={warm}: rollback + resim != continuous on a loaded joint chain — the joint \
+             solver's accumulated λ is simulation state and the restore has to carry it"
+        );
+    }
+}
+
+/// `state_hash` must see a joint's `is_broken`, or the test above is green partly for a reason
+/// it does not check: a snapped joint that the restore failed to un-snap would otherwise stay
+/// invisible until it had bled into velocities, several substeps later and attributed to
+/// something else.
+#[test]
+fn state_hash_sees_the_joint_state() {
+    let mut w = heavy_tip_chain();
+    for _ in 0..40 {
+        w.step(DT).ok();
+    }
+    let before = w.state_hash();
+    w.joints[8].is_broken = true;
+    assert_ne!(
+        before,
+        w.state_hash(),
+        "breaking a joint must change `state_hash` — `is_broken` is carried state that cannot \
+         be recomputed from transforms and velocities, so a rollback desync in it has to be \
+         detectable directly"
     );
 }
