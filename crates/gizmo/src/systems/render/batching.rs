@@ -400,8 +400,18 @@ pub(super) fn collect_draw_items(
 
                 let packed_params = pack_pbr_params($mat.anisotropy, $mat.clear_coat, $mat.subsurface);
 
+                // What the shader is handed, which is not always what was authored: a PLACED
+                // backdrop rides the same pipeline as a locked one, and that pipeline adds the
+                // camera position in the vertex shader. `instance_model` takes it back out so
+                // the two cancel and the geometry lands where the level put it. Identity for
+                // everything else. See `renderer::backdrop`.
+                let upload_model = crate::renderer::backdrop::instance_model(
+                    $mat.material_type,
+                    &model,
+                    cam_pos,
+                );
                 let instance_data = crate::renderer::gpu_types::InstanceRaw::new(
-                    model.to_cols_array_2d(),
+                    upload_model.to_cols_array_2d(),
                     [$mat.albedo.x, $mat.albedo.y, $mat.albedo.z, $mat.albedo.w],
                     $mat.roughness,
                     $mat.metallic,
@@ -414,7 +424,8 @@ pub(super) fn collect_draw_items(
                         // Backdrop has its own pipeline too and `backdrop.wgsl` never reads
                         // this field; 1.0 keeps it on the "not deferred PBR" side for anything
                         // that inspects the instance buffer generically.
-                        crate::renderer::components::MaterialType::Backdrop => 1.0,
+                        crate::renderer::components::MaterialType::Backdrop
+                        | crate::renderer::components::MaterialType::BackdropPlaced => 1.0,
                         _ => 0.0,
                     },
                     packed_params,
@@ -432,7 +443,7 @@ pub(super) fn collect_draw_items(
                 let baked_lit =
                     $mat.material_type == crate::renderer::components::MaterialType::BakedLit;
                 let is_backdrop =
-                    $mat.material_type == crate::renderer::components::MaterialType::Backdrop;
+                    crate::renderer::backdrop::is_backdrop($mat.material_type);
                 // `unlit` means "not in the deferred path", which baked-lit also is not. The two
                 // part company in the shadow pass, where baked-lit casts and unlit does not. A
                 // backdrop rides the same flag, and that is what keeps it out of the z-prepass,

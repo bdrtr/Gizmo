@@ -65,6 +65,35 @@ pub fn is_camera_locked(material_type: MaterialType) -> bool {
     matches!(material_type, MaterialType::Backdrop)
 }
 
+/// Whether this material draws through the backdrop path at all — locked or placed.
+///
+/// The predicate every caller that means "is this a backdrop" wants, so adding a third variant
+/// later is one edit here rather than a grep for `== Backdrop` across three crates.
+#[inline]
+pub fn is_backdrop(material_type: MaterialType) -> bool {
+    matches!(material_type, MaterialType::Backdrop | MaterialType::BackdropPlaced)
+}
+
+/// The model matrix to **upload**, which is not always the one the mesh was authored with.
+///
+/// `shaders/backdrop.wgsl` adds the camera position to every vertex it transforms — that single
+/// addition is the camera lock. A [`MaterialType::BackdropPlaced`] wants the rest of the backdrop
+/// path and not that, so this hands the shader a matrix with the camera position already taken
+/// out: `T(−c) · M`, whose vertices the shader then puts back at `M · v`. The authored place,
+/// through the same pipeline, with no second shader to keep in step with the first.
+///
+/// It is the counterpart of [`camera_locked_model`] and the two must be read together —
+/// that one says *where the triangles land* (for culling and LOD), this one says *what to send*.
+/// For every material type exactly one of them is the identity.
+#[inline]
+pub fn instance_model(material_type: MaterialType, model: &Mat4, camera_pos: Vec3) -> Mat4 {
+    if matches!(material_type, MaterialType::BackdropPlaced) {
+        Mat4::from_translation(-camera_pos) * *model
+    } else {
+        *model
+    }
+}
+
 /// The model matrix the vertex shader effectively draws with — the authored one for ordinary
 /// geometry, and the authored one shifted to the camera for a camera-locked material.
 ///
@@ -84,6 +113,9 @@ pub fn camera_locked_model(material_type: MaterialType, model: &Mat4, camera_pos
 
 /// CPU mirror of `vs_main` in `shaders/backdrop.wgsl`: where a local-space backdrop vertex
 /// lands in clip space.
+///
+/// `model` is what was **uploaded** — run an authored matrix through [`instance_model`] first, or
+/// this answers for a draw the GPU never makes.
 ///
 /// `view_proj` is `projection · view` as uploaded in
 /// [`SceneUniforms`](crate::gpu_types::SceneUniforms), and `camera_pos` the same struct's
@@ -162,6 +194,56 @@ mod tests {
     /// Present so the tests below can show the property is actually being tested.
     fn unlocked_clip(vp: &Mat4, model: &Mat4, local: Vec3) -> Vec4 {
         *vp * model.transform_point3(local).extend(1.0)
+    }
+
+    // ── a placed backdrop stays where it was authored ──────────────────────────────────────
+
+    /// The property `MaterialType::BackdropPlaced` exists for: the vertex lands at the authored
+    /// world position, **through the same shader** that adds the camera position to everything.
+    ///
+    /// This is the whole design in one assertion. If `instance_model` and the shader's addition
+    /// ever stop cancelling, a placed backdrop slides with the viewer and the test fails.
+    #[test]
+    fn a_placed_backdrop_lands_where_it_was_authored() {
+        let authored = Mat4::from_translation(Vec3::new(-1200.0, 40.0, 800.0));
+        let local = Vec3::new(3.0, -2.0, 11.0);
+        let want = authored.transform_point3(local);
+
+        for eye in [Vec3::ZERO, Vec3::new(800.0, 12.0, -450.0), Vec3::new(-3000.0, 0.0, 3000.0)] {
+            let upload = instance_model(MaterialType::BackdropPlaced, &authored, eye);
+            // `backdrop_clip_position` re-adds the camera position, exactly as `vs_main` does.
+            let world = upload.transform_point3(local) + eye;
+            assert!(
+                (world - want).length() < 1e-3,
+                "placed backdrop moved with the camera at {eye:?}: {world:?} != {want:?}"
+            );
+        }
+    }
+
+    /// And the locked one still moves with the camera — the two must not collapse into each
+    /// other, which is what a wrong `matches!` in either helper would do.
+    #[test]
+    fn a_locked_backdrop_still_follows_the_camera_and_a_placed_one_does_not() {
+        let authored = Mat4::from_translation(Vec3::new(0.0, 0.0, -50.0));
+        let local = Vec3::ZERO;
+        let a = Vec3::ZERO;
+        let b = Vec3::new(500.0, 0.0, 0.0);
+
+        let locked = |eye: Vec3| {
+            instance_model(MaterialType::Backdrop, &authored, eye).transform_point3(local) + eye
+        };
+        let placed = |eye: Vec3| {
+            instance_model(MaterialType::BackdropPlaced, &authored, eye).transform_point3(local)
+                + eye
+        };
+        assert!((locked(b) - locked(a)).length() > 499.0, "the lock stopped locking");
+        assert!((placed(b) - placed(a)).length() < 1e-3, "the placed variant is following");
+
+        // And the CPU's "where does it land" answer agrees with each.
+        assert_eq!(camera_locked_model(MaterialType::BackdropPlaced, &authored, b), authored);
+        assert_ne!(camera_locked_model(MaterialType::Backdrop, &authored, b), authored);
+        assert!(is_backdrop(MaterialType::BackdropPlaced));
+        assert!(!is_camera_locked(MaterialType::BackdropPlaced));
     }
 
     // ── (2) locked to the camera ───────────────────────────────────────────────────────────

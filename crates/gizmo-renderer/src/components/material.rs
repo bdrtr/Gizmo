@@ -23,6 +23,23 @@ pub enum MaterialType {
     /// ignores the mesh entirely and generates an atmospheric gradient from the sun colour,
     /// which is right for "there is no sky asset" and wrong for "here is the sky asset".
     Backdrop,
+    /// A painted backdrop that stays **where it was authored**.
+    ///
+    /// Everything [`Backdrop`](Self::Backdrop) is — drawn before the world, never writing depth,
+    /// its own texture and vertex colour — minus the camera lock. It exists because the lock is
+    /// right for exactly one authoring convention and wrong for the other, and the two are not
+    /// distinguishable from inside the renderer:
+    ///
+    /// - A backdrop authored as a **shell around the origin** (a sky dome, a cube) is meant to
+    ///   follow the viewer. That is [`Backdrop`](Self::Backdrop).
+    /// - A backdrop authored as **distant geometry placed in the level** — a panorama ring at the
+    ///   edge of the map, silhouette panels on the horizon, a matte painting hung behind a set —
+    ///   is meant to stay put and to be approached, parallaxed and passed. Locking it to the
+    ///   camera drags a kilometre-wide panel onto the lens. That is this.
+    ///
+    /// The depth treatment is the same and is what makes both safe: pinned to the far plane, so
+    /// whatever is in front wins, however near the panel physically is.
+    BackdropPlaced,
     Water,
     Grid,
 }
@@ -201,6 +218,21 @@ impl Material {
     pub fn with_backdrop(mut self, albedo: gizmo_math::Vec4) -> Self {
         self.albedo = albedo;
         self.material_type = MaterialType::Backdrop;
+        self
+    }
+
+    /// Configures this material as a painted backdrop that stays where it was authored — see
+    /// [`MaterialType::BackdropPlaced`].
+    ///
+    /// Same three-line contract as [`with_backdrop`](Self::with_backdrop) — drawn before the
+    /// world, its own pixels, no depth write — except that the geometry keeps its place instead
+    /// of following the camera. Reach for it when the backdrop is *in* the level rather than
+    /// *around* the viewer.
+    ///
+    /// Kameraya kilitlenmeyen boyalı arka plan: dünyada durduğu yerde çizilir.
+    pub fn with_backdrop_placed(mut self, albedo: gizmo_math::Vec4) -> Self {
+        self.albedo = albedo;
+        self.material_type = MaterialType::BackdropPlaced;
         self
     }
 

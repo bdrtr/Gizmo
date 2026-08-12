@@ -142,7 +142,7 @@ pub mod web_profile;
 pub mod asset_loading;
 
 pub use backdrop::{
-    backdrop_clip_position, backdrop_rgba, camera_locked_model, is_camera_locked,
+    backdrop_clip_position, backdrop_rgba, camera_locked_model, instance_model, is_camera_locked,
     BACKDROP_NDC_DEPTH,
 };
 pub use frustum_cull::{

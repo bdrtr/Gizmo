@@ -89,8 +89,11 @@ pub fn classify_visibility_world(
             crate::components::MaterialType::Unlit
                 | crate::components::MaterialType::Skybox
                 // A backdrop is scenery painted at infinity. Casting from it would drop the
-                // whole world into its shadow.
+                // whole world into its shadow. True whether it follows the camera or stays
+                // where it was authored — what disqualifies it is being a painting, not where
+                // the painting hangs.
                 | crate::components::MaterialType::Backdrop
+                | crate::components::MaterialType::BackdropPlaced
                 | crate::components::MaterialType::Grid
         );
     if is_caster

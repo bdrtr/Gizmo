@@ -293,8 +293,12 @@ pub fn execute_render_pipeline(
                         mat.material_type,
                         gizmo::renderer::components::MaterialType::Skybox
                             // Same reason as Skybox: a backdrop wraps the whole view, and its
-                            // AABB is drawn at the authored position the GPU never uses.
+                            // AABB is drawn at the authored position the GPU never uses. A
+                            // PLACED backdrop is at its authored position — but it is still a
+                            // painting pinned to the far plane, so it is skipped here for the
+                            // same reason and not for that one.
                             | gizmo::renderer::components::MaterialType::Backdrop
+                            | gizmo::renderer::components::MaterialType::BackdropPlaced
                             | gizmo::renderer::components::MaterialType::Grid
                     )
                 {
@@ -329,7 +333,8 @@ pub fn execute_render_pipeline(
                         gizmo::renderer::components::MaterialType::Unlit => 1.0,
                         // `backdrop.wgsl` never reads this field (it has its own pipeline);
                         // 1.0 keeps it on the "not deferred PBR" side regardless.
-                        gizmo::renderer::components::MaterialType::Backdrop => 1.0,
+                        gizmo::renderer::components::MaterialType::Backdrop
+                        | gizmo::renderer::components::MaterialType::BackdropPlaced => 1.0,
                         _ => 0.0,
                     },
                     packed_params,
@@ -358,7 +363,7 @@ pub fn execute_render_pipeline(
                 let is_unlit =
                     mat.material_type == gizmo::renderer::components::MaterialType::Unlit;
                 let is_backdrop =
-                    mat.material_type == gizmo::renderer::components::MaterialType::Backdrop;
+                    gizmo::renderer::backdrop::is_backdrop(mat.material_type);
 
                 let batches = if mat.is_transparent {
                     &mut *transparent_batches

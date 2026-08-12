@@ -34,6 +34,8 @@ pub fn draw_material_section(
                                     ui.selectable_value(&mut current_type, gizmo_renderer::components::MaterialType::Skybox, "Skybox (Procedural Sky)");
                                     // Boyalı arka plan: mesh'in kendi dokusu/vertex rengi, kameraya kilitli, derinlik yazmaz.
                                     ui.selectable_value(&mut current_type, gizmo_renderer::components::MaterialType::Backdrop, "Backdrop (Painted Sky/Panorama)");
+                                    // Aynısı ama kameraya kilitsiz: seviyeye yerleştirilmiş uzak geometri.
+                                    ui.selectable_value(&mut current_type, gizmo_renderer::components::MaterialType::BackdropPlaced, "Backdrop Placed (Stays In World)");
                                     ui.selectable_value(&mut current_type, gizmo_renderer::components::MaterialType::Grid, "Grid");
                                 });
                             mat.material_type = current_type;
