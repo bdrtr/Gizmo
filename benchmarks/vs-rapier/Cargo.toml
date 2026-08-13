@@ -1,0 +1,21 @@
+[package]
+name = "vs-rapier"
+version = "0.9.0"
+edition = "2021"
+publish = false
+description = "Gizmo'nun sert-cisim fiziğini Rapier3D ile aynı sahnelerde karşılaştırır."
+
+# **Workspace'in DIŞINDA** (kök `Cargo.toml`'da `exclude`): rakip motor, motorun kendi
+# bağımlılık grafiğine girmesin. `cargo build --workspace` bunu görmez; kıyas isteyen
+# bu dizine girip kendisi koşar.
+[dependencies]
+gizmo-math = { path = "../../crates/gizmo-math" }
+gizmo-physics-core = { path = "../../crates/gizmo-physics-core" }
+gizmo-physics-rigid = { path = "../../crates/gizmo-physics-rigid" }
+# `profiler` faz zamanlayıcılarını açar (varsayılanda kapalı, sayılar sıfır çıkar).
+# `parallel` simetri için: Gizmo broadphase'de Rayon kullanıyor, Rapier varsayılanda tek
+# çekirdek — eşitlemeden ölçmek kendimizi kayırmak olur.
+rapier3d = { version = "0.35", features = ["profiler", "parallel"] }
+
+[profile.release]
+opt-level = 3

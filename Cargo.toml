@@ -7,6 +7,9 @@ members = [
     "demo-web",
     "cradle",
 ]
+# Rakip motorla kıyas düzeneği. Üye DEĞİL: `rapier3d` motorun bağımlılık grafiğine
+# girmesin diye. `benchmarks/vs-rapier` içine girip `cargo run --release` ile koşulur.
+exclude = ["benchmarks"]
 
 [workspace.package]
 version = "0.9.0"
