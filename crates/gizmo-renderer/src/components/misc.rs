@@ -64,13 +64,61 @@ impl LodGroup {
     }
 
     pub fn select_mesh(&self, distance: f32) -> Option<&super::mesh::Mesh> {
-        for level in &self.levels {
-            if distance <= level.max_distance {
-                return Some(&level.mesh);
-            }
-        }
-        // Eğer uzaklık en uzak LOD sınırını bile geçiyorsa CULL et (None dön).
-        None
+        self.select_level(distance).map(|i| &self.levels[i].mesh)
+    }
+
+    /// Which level a distance falls in, or `None` past the last one.
+    ///
+    /// The policy on its own, separated from the mesh it picks. A [`super::mesh::Mesh`] owns
+    /// `wgpu::Buffer`s and cannot be built without a device, so [`Self::select_mesh`] is not
+    /// testable off a GPU — and this decision is worth testing, because the engine's own render
+    /// pass now depends on it: the bounds decide what is drawn, and the `None` decides what is
+    /// not drawn at all.
+    #[must_use]
+    pub fn select_level(&self, distance: f32) -> Option<usize> {
+        Self::level_for(self.levels.iter().map(|l| l.max_distance), distance)
+    }
+
+    /// [`Self::select_level`] over bare bounds, so it can be tested without a GPU.
+    ///
+    /// The bounds are ascending — [`Self::new`] sorts them — so the first one the distance is
+    /// within is the finest level that still covers it.
+    fn level_for(bounds: impl Iterator<Item = f32>, distance: f32) -> Option<usize> {
+        bounds
+            .enumerate()
+            .find(|(_, bound)| distance <= *bound)
+            .map(|(i, _)| i)
+    }
+}
+
+#[cfg(test)]
+mod lod_tests {
+    use super::*;
+
+    fn pick(bounds: &[f32], distance: f32) -> Option<usize> {
+        LodGroup::level_for(bounds.iter().copied(), distance)
+    }
+
+    /// Bands are closed at the top: a distance exactly on a bound belongs to that level, not the
+    /// next one.
+    #[test]
+    fn a_distance_inside_a_band_picks_that_band() {
+        let bands = [10.0, 50.0, 200.0];
+        assert_eq!(pick(&bands, 0.0), Some(0));
+        assert_eq!(pick(&bands, 9.9), Some(0));
+        assert_eq!(pick(&bands, 10.0), Some(0), "a bound belongs to its own level");
+        assert_eq!(pick(&bands, 10.1), Some(1));
+        assert_eq!(pick(&bands, 200.0), Some(2));
+    }
+
+    #[test]
+    fn past_the_last_band_is_culled_rather_than_drawn_coarsest() {
+        assert_eq!(
+            pick(&[10.0, 50.0, 200.0], 200.1),
+            None,
+            "past the last bound the object is culled — drawing the coarsest level instead would \
+             make a LOD group a thing that can never disappear"
+        );
     }
 }
 

@@ -492,8 +492,45 @@ pub(super) fn collect_draw_items(
 
         let skeletons = world.borrow::<crate::renderer::components::Skeleton>();
 
+        // **`LodGroup` is honoured here, not only in `gizmo-studio`.** The components and
+        // `LodGroup::select_mesh` have always existed, but the only thing that looked at them was
+        // studio's own render pipeline — this pass borrowed `Mesh`, `GlobalTransform` and
+        // `Material` and never asked. For anyone using the engine's out-of-the-box pass the
+        // feature was therefore inert: a scene carrying three detail levels for a building drew
+        // all three of them, at every distance, for ever.
+        //
+        // Same semantics as studio's, deliberately, because two answers to "which mesh is this
+        // entity" is worse than either: a `LodGroup` **overrides** the entity's own `Mesh`, and a
+        // distance past the last level means cull rather than draw the coarsest.
+        //
+        // Distance is to the entity's world translation rather than to the drawn mesh's centre.
+        // Studio measures to the centre of the *base* mesh, which is circular here — the centre
+        // belongs to the mesh being chosen — and the offset is metres against LOD bands that are
+        // tens or hundreds, so it cannot change a band.
+        let lod_groups = world.borrow::<crate::renderer::components::LodGroup>();
+        // Written as a `fn` rather than a closure: the returned reference borrows from either the
+        // caller's mesh or the LOD group, and a closure cannot name the one lifetime that covers
+        // both.
+        fn lod_pick<'a>(
+            group: Option<&'a crate::renderer::components::LodGroup>,
+            mesh: &'a Mesh,
+            trans: &gizmo_physics_core::components::GlobalTransform,
+            cam_pos: Vec3,
+        ) -> Option<&'a Mesh> {
+            match group {
+                Some(lod) => {
+                    let at = trans.matrix.w_axis;
+                    lod.select_mesh(cam_pos.distance(Vec3::new(at.x, at.y, at.z)))
+                }
+                None => Some(mesh),
+            }
+        }
+
         if let Some(mut q) = world.query::<(&Mesh, &gizmo_physics_core::components::GlobalTransform, &Material)>() {
             for (e, (mesh, trans, mat)) in q.iter_mut() {
+                let Some(mesh) = lod_pick(lod_groups.get(e), mesh, trans, cam_pos) else {
+                    continue;
+                };
                 process_mesh!(e, mesh, trans, mat, skeletons.get(e));
             }
         }
@@ -505,6 +542,9 @@ pub(super) fn collect_draw_items(
             if let Some(mut q) = world.query::<(&gizmo_core::asset::Handle<Mesh>, &gizmo_physics_core::components::GlobalTransform, &gizmo_core::asset::Handle<Material>)>() {
                 for (e, (h_mesh, trans, h_mat)) in q.iter_mut() {
                     if let (Some(mesh), Some(mat)) = (meshes.get(h_mesh), materials.get(h_mat)) {
+                        let Some(mesh) = lod_pick(lod_groups.get(e), mesh, trans, cam_pos) else {
+                            continue;
+                        };
                         process_mesh!(e, mesh, trans, mat, skeletons.get(e));
                     }
                 }
