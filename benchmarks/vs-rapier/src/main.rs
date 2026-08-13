@@ -530,7 +530,77 @@ fn allocation_cost() {
     }
 }
 
+/// **Zaman profili, motoru değiştirmeden: ablasyon.**
+///
+/// `perf` yok ve motorun içine yeni zamanlayıcı gömmek hem semver hem determinizm
+/// sorusudur. Ama çözücünün kolları zaten dışarıdan açılıp kapanıyor — her birini kapatıp
+/// süreyi ölçmek zamanı özelliklere doğrudan atfeder. Fark, o kolun maliyetidir.
+///
+/// Not: kapatılan kol yalnız hız değil DAVRANIŞ da değiştirir (yığın kararlılığı bunlara
+/// bağlı), yani bu bir "kapatalım gitsin" listesi değil, nereye bakılacağının haritası.
+fn ablation() {
+    const N: usize = 10;
+    let cases: [(&str, fn(&mut PhysicsWorld)); 6] = [
+        ("hepsi açık (varsayılan)", |_w| {}),
+        ("support_ordering kapalı", |w| w.solver.support_ordering = false),
+        ("block_solver kapalı", |w| w.solver.block_solver = false),
+        ("adaptive_iterations kapalı", |w| w.solver.adaptive_iterations = false),
+        ("iterations 20 → 8", |w| w.solver.iterations = 8),
+        ("use_tgs_soft kapalı", |w| w.solver.use_tgs_soft = false),
+    ];
+    println!("\n── Ablasyon: {} kutu, 300 kare ──", N * N * N);
+    for (label, apply) in cases {
+        let mut w = PhysicsWorld::new();
+        w.integrator.gravity = GVec3::new(0.0, -9.81, 0.0);
+        apply(&mut w);
+        let (half, gap) = (0.4f32, 1.2f32);
+        let mut ground = GRigidBody::new_static();
+        ground.wake_up();
+        w.add_body(
+            BodyHandle::from_id(999_999),
+            ground,
+            GTransform::new(GVec3::new(0.0, -1.0, 0.0)),
+            GVelocity::default(),
+            GCollider::box_collider(GVec3::new(200.0, 1.0, 200.0)).with_material(plain()),
+        );
+        let mut id = 0u32;
+        for x in 0..N {
+            for y in 0..N {
+                for z in 0..N {
+                    let mut rb = GRigidBody::new(1.0, true);
+                    rb.wake_up();
+                    w.add_body(
+                        BodyHandle::from_id(id),
+                        rb,
+                        GTransform::new(GVec3::new(
+                            (x as f32 - N as f32 * 0.5) * gap,
+                            1.0 + y as f32 * gap,
+                            (z as f32 - N as f32 * 0.5) * gap,
+                        )),
+                        GVelocity::default(),
+                        GCollider::box_collider(GVec3::new(half, half, half)).with_material(plain()),
+                    );
+                    id += 1;
+                }
+            }
+        }
+        let t0 = Instant::now();
+        for _ in 0..300 {
+            let _ = w.step(DT);
+        }
+        let ms = t0.elapsed().as_secs_f64() * 1000.0 / 300.0;
+        let n = N * N * N;
+        let mean_y: f32 = (0..n).map(|i| w.transforms[i].position.y).sum::<f32>() / n as f32;
+        let awake = (0..n).filter(|&i| !w.rigid_bodies[i].is_sleeping).count();
+        println!("   {label:<28} {ms:>6.3} ms/kare · uyanık {awake:>4}/{n} · ort y {mean_y:>5.2}");
+    }
+}
+
 fn main() {
+    if std::env::var("ABLATION").is_ok() {
+        ablation();
+        return;
+    }
     if std::env::var("ALLOCCOST").is_ok() {
         allocation_cost();
         return;

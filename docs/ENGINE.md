@@ -492,6 +492,28 @@ vehicle point-velocity COM, narrowphase incident-corner. *Remaining minor:* PBR 
 decimal-packed into a single f32 (precision drops above 2²⁴) — long term, a separate slot.
 <!-- TRANSLATOR NOTE: the heading says 6 bugs but only 5 are listed; the sixth may be the "remaining minor" PBR-params item, or an entry lost in an earlier edit — unverified, please check. -->
 
+**The solver carries no fat (2026-08-13, `benchmarks/vs-rapier` with `ABLATION=1`).** With
+no profiler available, the solver's own switches were used as one: turn each off, measure
+the thousand-box pile, and the difference is what that feature costs. **Every switch is
+load-bearing, and turning any of them off makes the frame slower, not faster.**
+
+    all on (default)              2.065 ms/frame   1/1000 awake   mean y 3.98
+    support_ordering off          2.481            1/1000         3.98
+    adaptive_iterations off       2.381            1/1000         3.98
+    iterations 20 -> 8            2.438            1/1000         3.98
+    block_solver off             17.418         1000/1000         1.54
+    use_tgs_soft off             36.135         1000/1000         1.56
+
+The last two columns are the explanation: without the block solver or TGS-soft the pile
+never settles — a thousand bodies stay awake and the stack collapses from a mean height of
+3.98 to 1.54 — and an unsettled pile costs far more than the feature that settles it. The
+block solver repays itself fifteen times over, TGS-soft thirty-four. Even the small knobs
+go the same way: *fewer* solver iterations is **more expensive**, because convergence gets
+worse and the pile takes longer to come to rest.
+
+So the ~2.5× per-substep gap against Rapier is not optional work that could be switched
+off, and anyone tempted to trim iterations for speed should read this table first.
+
 **NON-GOAL: cutting contact-path allocations.** Investigated, REJECTED (2026-08-13) — and
 rejected for the same reason as the SIMD item below, in a different currency. A comparison
 against Rapier3D (`benchmarks/vs-rapier`) showed us allocating **8158 heap allocations per
