@@ -26,6 +26,9 @@
 //! ## Kontroller
 //!   * **Sol tık + sürükle** — bir topu yakala, ark üzerinde sürükle, bırak → salınır.
 //!   * **R** — sahneyi sıfırla: toplar ev pozuna, hızlar sıfır, açılış salınımı yeniden.
+//!   * **1..5** — en soldaki topu 10/20/40/80/160 m/s ile fırlat (ip teğeti boyunca).
+//!     Fare ile "hızlı sallamak" tekrarlanabilir değil; bu tuşlar aynı olayı aynı şiddette
+//!     kurar ve sürüklemenin 15 m/s kelepçesinin üstüne çıkar.
 
 use std::f32::consts::{FRAC_PI_2, FRAC_PI_3};
 
@@ -44,6 +47,9 @@ const L: f32 = 4.0; // ip uzunluğu (pivot → top merkezi)
 const PIVOT_Y: f32 = 6.0; // asma yüksekliği
 const MASS: f32 = 1.0;
 const GAP: f32 = 0.01; // toplar dinlenirken sadece değsin
+/// Girişim ölçerinin tuttuğu kare sayısı. Yarım saniyelik pencere: yaklaşmanın tamamını
+/// kapsar, konsolu boğacak kadar uzun değil.
+const HISTORY: usize = 30;
 
 /// Elastik (mükemmel yansıyan, sürtünmesiz) çarpışma malzemesi.
 fn elastic() -> PhysicsMaterial {
@@ -74,6 +80,10 @@ struct Cradle {
     /// suçlu olamaz: `PhysicsWorld::step` tavana vurunca adımı büyütmez, zamanı düşürür.
     /// Geriye gerçek koşuda ölçmek kaldı, o yüzden bu satır burada.
     worst_overlap: f32,
+    /// Son karelerin konum/hız kaydı — olayın kendisi kadar öncesi de lazım.
+    history: std::collections::VecDeque<(f32, Vec<Vec3>, Vec<Vec3>)>,
+    /// Döküm bir kez yazılır; sonraki rekorlar aynı olayın devamıdır.
+    dumped: bool,
 }
 
 // --------------------------------------------------------------- setup
@@ -183,6 +193,8 @@ fn setup(world: &mut World, renderer: &Renderer) -> Cradle {
         cam_pos,
         dragging: None,
         worst_overlap: 0.0,
+        history: std::collections::VecDeque::new(),
+        dumped: false,
     }
 }
 
@@ -193,6 +205,35 @@ fn update(world: &mut World, state: &mut Cradle, _dt: f32, input: &Input) {
     // aşağıdaki raycast ise artık ışınlanmış (ev pozundaki) toplara bakar.
     if input.is_key_just_pressed(KeyCode::KeyR as u32) {
         reset(world, state);
+    }
+
+    // ── 1..5 = ölçülü fırlatma ───────────────────────────────────────────────
+    // Fare ile "çok hızlı sallamak" tekrarlanabilir değil: her denemede başka bir hız
+    // çıkar ve bir olayı iki kez aynı şiddette kurmak imkânsız. Tuşlar en soldaki topa
+    // ipin teğeti yönünde bilinen bir hız verir — ip gergin kalır, yani verilen şey hız
+    // olur, ipin sert yakalayışı değil. Sürükleme servosunun 15 m/s kelepçesini de
+    // aşarlar, ki asıl merak edilen aralık orası.
+    for (k, speed) in [(KeyCode::Digit1, 10.0f32), (KeyCode::Digit2, 20.0), (KeyCode::Digit3, 40.0),
+                       (KeyCode::Digit4, 80.0), (KeyCode::Digit5, 160.0)] {
+        if input.is_key_just_pressed(k as u32) {
+            let idx = 0;
+            let id = state.balls[idx];
+            let (pivot, at) = {
+                let ts = world.borrow::<Transform>();
+                (state.pivots[idx], ts.get(id).map(|t| t.position).unwrap_or(state.pivots[idx]))
+            };
+            // İpe dik yön, salınım düzleminde: (pivot→top) vektörünü 90° çevir.
+            let along = (at - pivot).normalize_or_zero();
+            let tangent = Vec3::new(-along.y, along.x, 0.0).normalize_or_zero();
+            // Diğer topların bulunduğu yana doğru: sağa.
+            let dir = if tangent.x < 0.0 { -tangent } else { tangent };
+            let mut vs = world.borrow_mut::<Velocity>();
+            if let Some(mut v) = vs.get_mut(id) {
+                v.linear = dir * speed;
+                v.angular = Vec3::ZERO;
+            }
+            println!("fırlatma: top {idx} → {speed:.0} m/s (ip teğeti boyunca)");
+        }
     }
 
     // ── Fare ile sürükle-bırak ───────────────────────────────────────────────
@@ -286,11 +327,21 @@ fn update(world: &mut World, state: &mut Cradle, _dt: f32, input: &Input) {
     // şüpheliler onlar.
     {
         let vs = world.borrow::<Velocity>();
-        let fastest = state
+        let vels: Vec<Vec3> = state
             .balls
             .iter()
-            .filter_map(|&b| vs.get(b).map(|v| v.linear.length()))
-            .fold(0.0f32, f32::max);
+            .map(|&b| vs.get(b).map(|v| v.linear).unwrap_or(Vec3::ZERO))
+            .collect();
+        let fastest = vels.iter().fold(0.0f32, |a, v| a.max(v.length()));
+
+        // Son kareler, halka tampon. Bir kez olan bir şeyi başsız olarak yeniden kurabilmek
+        // için tek satır yetmez: olayın kendisi kadar ÖNCESİ de lazım — hangi hızla girildi,
+        // kare süresi sıçradı mı, hangi çift yaklaşıyordu.
+        state.history.push_back((_dt, centers.clone(), vels));
+        while state.history.len() > HISTORY {
+            state.history.pop_front();
+        }
+
         for i in 0..centers.len() {
             for j in (i + 1)..centers.len() {
                 let overlap = 2.0 * R - (centers[i] - centers[j]).length();
@@ -304,6 +355,23 @@ fn update(world: &mut World, state: &mut Cradle, _dt: f32, input: &Input) {
                         _dt * 1000.0,
                         if overlap >= 2.0 * R { "  ← TAM GEÇİŞ" } else { "" }
                     );
+                    // Gerçek bir olay (5 cm üstü) tek satırla anlaşılmaz; öncesini de dök.
+                    // Bir kez yazar — sonraki rekorlar aynı olayın devamı olur ve dökümü
+                    // tekrarlamak onu okunmaz yapardı.
+                    if overlap > 0.05 && !state.dumped {
+                        state.dumped = true;
+                        println!("  son {} kare (kare süresi · top {i} ve {j}: konum / hız):", state.history.len());
+                        for (k, (fdt, pos, vel)) in state.history.iter().enumerate() {
+                            println!(
+                                "  {k:>3}  {:>5.1} ms  {}: ({:>7.2},{:>6.2}) v=({:>6.1},{:>6.1})  \
+                                 {}: ({:>7.2},{:>6.2}) v=({:>6.1},{:>6.1})  aralık {:>5.3}",
+                                fdt * 1000.0,
+                                i, pos[i].x, pos[i].y, vel[i].x, vel[i].y,
+                                j, pos[j].x, pos[j].y, vel[j].x, vel[j].y,
+                                (pos[i] - pos[j]).length()
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -334,6 +402,8 @@ fn reset(world: &mut World, state: &mut Cradle) {
     state.dragging = None;
     // Ölçer de sıfırlanır: R'den sonraki rekor, R'den ÖNCEKİ denemenin kalıntısı olmamalı.
     state.worst_overlap = 0.0;
+    state.history.clear();
+    state.dumped = false;
 
     {
         let mut ts = world.borrow_mut::<Transform>();
