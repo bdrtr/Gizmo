@@ -16,6 +16,18 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Removed
+
+- **`gizmo_renderer::components::Sprite` — BREAKING.** An exported component that nothing could
+  draw. Nothing in the workspace referenced it: not `default_render_pass`, not any engine system,
+  not `gizmo-studio`, not the editor, not a demo, not even `gizmo-app`'s scene registry, which
+  registers its sibling `Camera2D`. Attaching one to an entity rendered nothing and always had.
+  Wiring it would have meant writing a 2D sprite pipeline — billboarding, layer sorting, atlas UVs,
+  transparency — which is a feature rather than a fix, and one nothing in the engine or its
+  consumers asked for. An exported component that cannot be drawn is a promise the API does not
+  keep, and the 1.0 surface is the wrong place to keep it. Found by the sweep recorded in
+  `docs/ENGINE.md` ("Written, exported, and not wired to anything").
+
 ### Added
 
 - **`JointSolver::warm_start_factor`, default `0.0` — OFF, and whether to ship it on is not
@@ -648,6 +660,26 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the cadence and the wasted work were real.
 
 ### Fixed
+
+- **Skeletal animation is advanced by the engine now.** `animation_update_system` and
+  `animation_state_machine_update_system` existed in `gizmo-renderer` and nothing ever called
+  them: `current_time += dt · speed` appeared nowhere else in the workspace, no schedule, plugin,
+  app or demo invoked either, and `collect_draw_items` meanwhile read `Skeleton` for its skinning
+  matrices every frame. A skinned mesh therefore rendered its bind pose for ever. `default_render_pass`
+  now calls both, guarded by a golden render test that fails if the call is removed. The reason
+  they were never scheduled is almost certainly their signature: both need a `wgpu::Queue` to
+  upload skin matrices, which no ordinary system has.
+- **`ParticleEmitter` entities emit.** The rest of the particle path was already wired —
+  `default_render_pass` ran `update_params` and `compute_pass`, `passes/forward` drew the result —
+  but the step that reads emitters and spawns from them lived only in `gizmo-studio`, so the engine
+  stepped and drew a particle set that no scene ever populated. Now `systems::render::spawn_from_emitters`,
+  called from the pass. Its jitter is a private seeded xorshift rather than `rand`, so replays
+  reproduce their particles as exactly as their physics and the facade gains no dependency.
+- **`LodGroup` is honoured by the engine's own render pass.** `collect_draw_items` consults it in
+  both its component and asset-handle queries, with `gizmo-studio`'s semantics: the group overrides
+  the entity's `Mesh`, and a distance past the last level culls rather than falling back to the
+  coarsest. Previously only studio's pipeline looked, so a scene carrying three detail levels drew
+  all three at every distance.
 
 - **The hard brightness step at the end of the shadow cascades.** Past `SHADOW_DISTANCE`
   (100 m) there is no cascade to sample, so the shadow term snapped to "fully lit". With the

@@ -630,7 +630,7 @@ for rather than meeting one at a time. What the sweep found:
 |---|---|---|
 | **skeletal animation** | **FIXED 2026-08-14.** `animation_update_system` and `animation_state_machine_update_system` lived in `gizmo-renderer` with `current_time += dt · speed` appearing nowhere else in the workspace, and nothing in the facade, in `gizmo-app` or in any demo ever called either. `default_render_pass` now calls both, before the draw path reads `Skeleton` | the draw path *consumes* `Skeleton` (skinning matrices in `collect_draw_items`), so the engine rendered a pose it never advanced — a clock with no hands, and everything downstream of it looked wired |
 | **`ParticleEmitter`** | **FIXED 2026-08-14.** The component, the GPU pipeline and the draw call were all present — `default_render_pass` already ran `update_params` and `compute_pass`, and `passes/forward` already drew the result. Nothing ever *put anything in it*: the emitter→GPU bridge lived only in `gizmo-studio`. It is now `systems::render::spawn_from_emitters`, called from the pass | exactly `LodGroup`'s shape: the whole path present, one link missing, and the link living in studio |
-| **`Sprite`** | defined in `components/sprite.rs`, re-exported from `lib.rs`, and referenced by **nothing else in the workspace** — not studio, not the editor, not a demo | dead. Wire it or delete it; an exported component that nothing can draw is a promise the API does not keep |
+| **`Sprite`** | **DELETED 2026-08-14.** Referenced by nothing in the workspace — not studio, not the editor, not a demo, not even `gizmo-app`'s scene registry, which registers its sibling `Camera2D` | dead, and unlike the other three there was no link to restore: wiring it meant writing a 2D pipeline (billboarding, layer sort, atlas UVs, transparency), which is a feature nothing asked for. An exported component that cannot be drawn is a promise the API does not keep, and the 1.0 surface is the wrong place to keep it |
 | **`gizmo-ai`'s systems** | `behavior_tree_system`, `ai_navigation_system`, `ai_navmesh_rebuild_system` are re-exported and never scheduled | the same shape, but plausibly deliberate: when AI ticks is a game's decision, not an engine's. Left alone, and named here so the next sweep does not re-find it as news |
 
 **Why it was never wired, and what the fix cost.** Both systems take `(&mut World, dt, &wgpu::Queue)`
@@ -662,6 +662,14 @@ while studio's pipeline holds a live read borrow across the whole block. A `&Wor
 serve both, but its soundness would depend on what borrows the caller happens to hold — a
 conditionally-safe public API is a worse trade than one duplicated loop. The duplication is
 written down at both ends instead of hidden.
+
+**Where the sweep ended.** Three of the four were the same defect — a link missing from an
+otherwise complete path — and all three are fixed. The fourth was not a missing link but a missing
+feature, and it was removed instead. The lesson worth carrying is the one animation taught: every
+policy in that path had tests, and every one of them passed for as long as the policy was
+unreachable. **A test of a policy is not a test that the policy is reached**, and the three fixes
+are each guarded accordingly — `default_render_pass_advances_skeletal_animation` fails with the
+call removed, and it was checked that way rather than assumed.
 
 Two things this is **not** saying. A public function with no in-tree caller is not a defect — a
 library's surface exists to be called from outside, and a sweep on that basis returns most of

@@ -5,7 +5,6 @@ pub mod light;
 pub mod material;
 pub mod mesh;
 pub mod misc;
-pub mod sprite;
 
 pub use animation::*;
 pub use camera::*;
@@ -14,7 +13,6 @@ pub use light::*;
 pub use material::*;
 pub use mesh::*;
 pub use misc::*;
-pub use sprite::*;
 
 gizmo_core::impl_component!(
     Mesh,
@@ -22,7 +20,6 @@ gizmo_core::impl_component!(
     Skeleton,
     MeshRenderer,
     Camera,
-    Sprite,
     Camera2D,
     PointLight,
     Terrain,

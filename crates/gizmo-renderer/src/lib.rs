@@ -171,7 +171,7 @@ pub use async_assets::{
 };
 pub use components::{
     Camera, Camera2D, DirectionalLight, LodGroup, LodLevel, Material, Mesh, MeshRenderer,
-    PointLight, SpotLight, Sprite,
+    PointLight, SpotLight,
 };
 pub use csm::{
     cascade_split_distances, compute_directional_cascades, directional_cascade_view_projs,
