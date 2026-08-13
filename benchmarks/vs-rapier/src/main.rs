@@ -10,7 +10,30 @@
 //! başına ne ödüyor), ama "adım başına iş" olarak okunmamalı — Gizmo dört katı iş
 //! yapıyor. Sayılar bu notla birlikte anlamlı.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
+
+/// Kare başına heap tahsisi sayacı.
+///
+/// Narrowphase'in çift başına `Vec<ContactPoint>` döndürdüğü görüldü; bunun ölçülen
+/// farkın ne kadarını açıkladığı **tahmin edilmemeli**. Aynı süreçte, aynı tahsisatçıyla,
+/// iki motor için de sayılır.
+struct Counting;
+
+static ALLOCS: AtomicUsize = AtomicUsize::new(0);
+
+unsafe impl std::alloc::GlobalAlloc for Counting {
+    unsafe fn alloc(&self, l: std::alloc::Layout) -> *mut u8 {
+        ALLOCS.fetch_add(1, Ordering::Relaxed);
+        unsafe { std::alloc::System.alloc(l) }
+    }
+    unsafe fn dealloc(&self, p: *mut u8, l: std::alloc::Layout) {
+        unsafe { std::alloc::System.dealloc(p, l) }
+    }
+}
+
+#[global_allocator]
+static A: Counting = Counting;
 
 use gizmo_math::Vec3 as GVec3;
 use gizmo_physics_core::{
@@ -285,6 +308,7 @@ fn throughput(n_side: usize, sphere: bool, roll: f32, frames: usize) {
     // son kareyi ölçmek "her şey sıfır" der ve bu, işin bittiğini değil ölçünün yanlış
     // yerde durduğunu gösterir. Bir kez öyle ölçüldü ve sıfırlar ele verdi.
     let (mut g_bp, mut g_np, mut g_sv, mut g_it) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+    let a0 = ALLOCS.load(Ordering::Relaxed);
     let t0 = Instant::now();
     for _ in 0..frames {
         let _ = w.step(DT);
@@ -294,6 +318,7 @@ fn throughput(n_side: usize, sphere: bool, roll: f32, frames: usize) {
         g_it += w.metrics.integration_ms as f64;
     }
     let g_ms = t0.elapsed().as_secs_f64() * 1000.0 / frames as f64;
+    let g_alloc = (ALLOCS.load(Ordering::Relaxed) - a0) / frames;
     // **Uyku, kıyasın en sinsi çarpıtması.** Uyuyan cisim çözücüye uğramaz; bir motor
     // sahneyi erken uyutuyorsa "hızlı" görünür, oysa daha az iş yapmıştır. İkisinin de
     // kaç cismi uyanık bitirdiği yazılmadan ms/kare okunmamalı. Yığının ortalama
@@ -353,6 +378,7 @@ fn throughput(n_side: usize, sphere: bool, roll: f32, frames: usize) {
         }
     }
     let (mut r_bp, mut r_np, mut r_sv, mut r_it) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+    let a0 = ALLOCS.load(Ordering::Relaxed);
     let t0 = Instant::now();
     for _ in 0..frames {
         rp.step();
@@ -362,6 +388,7 @@ fn throughput(n_side: usize, sphere: bool, roll: f32, frames: usize) {
         r_it += rp.pipeline.counters.stages.update_time.time_ms();
     }
     let r_ms = t0.elapsed().as_secs_f64() * 1000.0 / frames as f64;
+    let r_alloc = (ALLOCS.load(Ordering::Relaxed) - a0) / frames;
     let r_awake = rp.bodies.iter().filter(|(_, b)| b.is_dynamic() && !b.is_sleeping()).count();
     let r_mean_y: f32 = rp.bodies.iter().filter(|(_, b)| b.is_dynamic())
         .map(|(_, b)| b.translation().y).sum::<f32>() / n as f32;
@@ -376,8 +403,8 @@ fn throughput(n_side: usize, sphere: bool, roll: f32, frames: usize) {
         }
     }
 
-    println!("   gizmo : {g_ms:>7.3} ms/kare (4 alt-adım) · uyanık {g_awake:>4}/{n} · ort y {g_mean_y:>5.2} · yayılma {g_spread:>5.1} m · en derin girişim {g_overlap:>5.3}\n            hız: medyan doğrusal {g_lin_med:>6.3} m/s · medyan açısal {g_ang_med:>6.3} rad/s · eşik altında {g_under}/{n}");
-    println!("   rapier: {r_ms:>7.3} ms/kare (1 adım)      · uyanık {r_awake:>4}/{n} · ort y {r_mean_y:>5.2} · yayılma {r_spread:>5.1} m · en derin girişim {r_overlap:>5.3}");
+    println!("   gizmo : {g_ms:>7.3} ms/kare (4 alt-adım) · uyanık {g_awake:>4}/{n} · ort y {g_mean_y:>5.2} · yayılma {g_spread:>5.1} m · en derin girişim {g_overlap:>5.3} · tahsis/kare {g_alloc}\n            hız: medyan doğrusal {g_lin_med:>6.3} m/s · medyan açısal {g_ang_med:>6.3} rad/s · eşik altında {g_under}/{n}");
+    println!("   rapier: {r_ms:>7.3} ms/kare (1 adım)      · uyanık {r_awake:>4}/{n} · ort y {r_mean_y:>5.2} · yayılma {r_spread:>5.1} m · en derin girişim {r_overlap:>5.3} · tahsis/kare {r_alloc}");
     println!("   oran  : gizmo {:.2}× {}", (g_ms / r_ms).max(r_ms / g_ms), if g_ms > r_ms { "daha yavaş" } else { "daha hızlı" });
 
     // ── Faz dökümü ───────────────────────────────────────────────────────────
