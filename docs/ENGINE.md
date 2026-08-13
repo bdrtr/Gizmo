@@ -492,6 +492,30 @@ vehicle point-velocity COM, narrowphase incident-corner. *Remaining minor:* PBR 
 decimal-packed into a single f32 (precision drops above 2²⁴) — long term, a separate slot.
 <!-- TRANSLATOR NOTE: the heading says 6 bugs but only 5 are listed; the sixth may be the "remaining minor" PBR-params item, or an entry lost in an earlier edit — unverified, please check. -->
 
+**NON-GOAL: cutting contact-path allocations.** Investigated, REJECTED (2026-08-13) — and
+rejected for the same reason as the SIMD item below, in a different currency. A comparison
+against Rapier3D (`benchmarks/vs-rapier`) showed us allocating **8158 heap allocations per
+frame against Rapier's 60** on a settled thousand-box pile, which looked like the obvious
+lever. Three changes cut it 42 % — dormant cache entries moved instead of cloned, the cached
+manifold's buffer reused, and `support_order_manifolds`' per-body `Vec`s moved to a
+thread-local scratch (that last one alone was 32 % of all allocations, found with a sampling
+allocation profile, `PROFILE=1` in that benchmark). **Frame time did not move.** The reason,
+measured: a small `Vec` allocate-and-drop costs **8 ns**, so 22 833 allocations a frame are
+**0.183 ms of a 9.5 ms frame — 1.9 %.** Removing every one would buy 2 %. The three changes
+are kept (they are correct, and behaviour-identical: hash `A462C9EB8A09D5CA` throughout), but
+do not spend more here. An allocation *count* is not a frame time.
+
+**Where the Rapier gap actually is (2026-08-13).** Same harness, both engines multi-threaded,
+identical scenes and `dt`. Quality is level — the 20-box tower drifts 0.000 m against their
+0.010, an analytic elastic collision comes out 4.950 against their 5.000 — and the thousand-box
+pile costs 1.7 ms against 0.17. That splits in two: **~4× is the substep multiplier**
+(`PHYSICS_HZ = 240` runs the whole pipeline, collision detection included, four times per
+rendered frame — deliberate, and it is what makes 0.5 m spheres survive 320 m/s without
+tunnelling, measured), and **~2.5× is genuine per-substep cost spread across every phase**
+rather than concentrated in one. Neither is allocations. The next honest step is a *time*
+profile at function granularity; the box-scene phase timings only localise it to "all of
+them".
+
 **NON-GOAL: narrowphase batch-SIMD.** Investigated, REJECTED (2026-07-14). Measurement
 (wide_scene, 2000 boxes, ~30ms frame): box-box SAT compute is only **~3.3%**; narrowphase
 post-processing cannot be batched; both per-pair SIMD attempts regressed (the scalar code is
