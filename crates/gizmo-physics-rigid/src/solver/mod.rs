@@ -46,6 +46,37 @@ mod tgs;
 // module, so `rustc-hash` never reaches the public surface through it (docs/ENGINE.md §4).
 // `ConstraintSolver::solve_contacts` is the public entry point and takes the opaque
 // `EntityIndexMap`, unwrapping it with the `pub(crate)` `raw()` on the way in.
+/// Scratch buffers for [`support_order_manifolds`], kept per thread.
+///
+/// The function allocated **one `Vec` per body in the island, plus seven** on every call —
+/// and it is called once per island per substep, so a thousand-body island cost about four
+/// thousand allocations a frame. An allocation profile put it at **32 % of all
+/// allocations** in an awake scene, the single largest source, and well ahead of the
+/// contact plumbing that looked like the obvious suspect.
+///
+/// Thread-local rather than a field on the solver because `solve_contacts` takes `&self`
+/// (islands are solved in parallel from a shared configuration value, deliberately), so
+/// there is nowhere on the solver to put mutable scratch without changing that contract.
+///
+/// The buffers never shrink: a scratch buffer's whole job is to keep the high-water mark.
+#[derive(Default)]
+struct OrderScratch {
+    local: rustc_hash::FxHashMap<usize, u32>,
+    global: Vec<usize>,
+    is_anchor: Vec<bool>,
+    medges: Vec<Option<(u32, u32)>>,
+    adj: Vec<Vec<u32>>,
+    depth: Vec<u32>,
+    queue: std::collections::VecDeque<u32>,
+    order: Vec<usize>,
+    pos: Vec<usize>,
+}
+
+thread_local! {
+    static ORDER_SCRATCH: std::cell::RefCell<OrderScratch> =
+        std::cell::RefCell::new(OrderScratch::default());
+}
+
 fn support_order_manifolds(
     manifolds: &mut [ContactManifold],
     rigid_bodies: &[RigidBody],
@@ -61,10 +92,17 @@ fn support_order_manifolds(
     // `medges[i]` = local endpoints of manifold i (None if an endpoint isn't mapped —
     // those keep last, deterministically by entity pair, matching the solver's own
     // `continue` on an unmapped manifold).
-    let mut local: rustc_hash::FxHashMap<usize, u32> = rustc_hash::FxHashMap::default();
-    let mut global: Vec<usize> = Vec::new(); // local idx → global body idx
-    let mut is_anchor: Vec<bool> = Vec::new(); // local idx → non-dynamic (static/kinematic)?
-    let mut medges: Vec<Option<(u32, u32)>> = Vec::with_capacity(n);
+    ORDER_SCRATCH.with(|sc| {
+    let sc = &mut *sc.borrow_mut();
+    let local = &mut sc.local;
+    let global = &mut sc.global;
+    let is_anchor = &mut sc.is_anchor;
+    let medges = &mut sc.medges;
+    local.clear();
+    global.clear();
+    is_anchor.clear();
+    medges.clear();
+    medges.reserve(n);
 
     for m in manifolds.iter() {
         let (ga, gb) = match (
@@ -94,7 +132,15 @@ fn support_order_manifolds(
     }
 
     let v = global.len();
-    let mut adj: Vec<Vec<u32>> = vec![Vec::new(); v];
+    // Dış vektör asla küçültülmez ve iç vektörler `clear` edilir: kapasiteleri korunur,
+    // yani kalıcı durumda düğüm başına tahsis sıfır.
+    let adj = &mut sc.adj;
+    if adj.len() < v {
+        adj.resize_with(v, Vec::new);
+    }
+    for a in adj[..v].iter_mut() {
+        a.clear();
+    }
     for &(a, b) in medges.iter().flatten() {
         adj[a as usize].push(b);
         adj[b as usize].push(a);
@@ -104,8 +150,11 @@ fn support_order_manifolds(
     // BFS yields the min graph distance regardless of visitation order, so `depth` is a
     // deterministic function of the island's contact graph.
     const INF: u32 = u32::MAX;
-    let mut depth: Vec<u32> = vec![INF; v];
-    let mut queue: std::collections::VecDeque<u32> = std::collections::VecDeque::new();
+    let depth = &mut sc.depth;
+    depth.clear();
+    depth.resize(v, INF);
+    let queue = &mut sc.queue;
+    queue.clear();
     for li in 0..v {
         if is_anchor[li] {
             depth[li] = 0;
@@ -159,12 +208,16 @@ fn support_order_manifolds(
             None => (INF, INF, ida, idb),
         }
     };
-    let mut order: Vec<usize> = (0..n).collect();
+    let order = &mut sc.order;
+    order.clear();
+    order.extend(0..n);
     order.sort_unstable_by_key(|&i| key_of(i));
 
     // ── 4) Apply the permutation to `manifolds` in place (no clone of the Vec-bearing
     // ContactManifold). `pos[orig] = destination slot`; cycle-swap into place. ──
-    let mut pos: Vec<usize> = vec![0; n];
+    let pos = &mut sc.pos;
+    pos.clear();
+    pos.resize(n, 0);
     for (slot, &orig) in order.iter().enumerate() {
         pos[orig] = slot;
     }
@@ -177,6 +230,7 @@ fn support_order_manifolds(
     }
 
     max_depth
+    })
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

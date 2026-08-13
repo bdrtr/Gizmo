@@ -507,7 +507,34 @@ fn throughput(n_side: usize, sphere: bool, roll: f32, frames: usize) {
     );
 }
 
+/// **Bir tahsis kaça mal oluyor?**
+///
+/// Tahsis sayısını düşürmek üç commit boyunca kare süresini kıpırdatmadı. Sayı ile süre
+/// arasındaki dönüşümü ölçmeden devam etmek, ölçebildiğimi optimize edip önemli olanı
+/// ıskalamak olur. Sahnedeki tahsisler küçük ve kısa ömürlü (temas vektörleri), o yüzden
+/// ölçü de öyle.
+fn allocation_cost() {
+    const N: usize = 200_000;
+    let t0 = Instant::now();
+    let mut sink = 0usize;
+    for i in 0..N {
+        let v: Vec<u32> = Vec::with_capacity(4 + (i & 3));
+        sink += v.capacity();
+        drop(v);
+    }
+    let ns = t0.elapsed().as_secs_f64() * 1e9 / N as f64;
+    println!("\n── Tahsis maliyeti ──");
+    println!("   küçük Vec tahsis+bırak: {ns:.1} ns  (sink {sink})");
+    for (label, per_frame) in [("gizmo küre", 22833.0f64), ("gizmo kutu", 4700.0), ("rapier", 54.0)] {
+        println!("   {label:<12} {per_frame:>7.0} tahsis/kare → {:.3} ms/kare", per_frame * ns / 1e6);
+    }
+}
+
 fn main() {
+    if std::env::var("ALLOCCOST").is_ok() {
+        allocation_cost();
+        return;
+    }
     if std::env::var("PROFILE").is_ok() {
         allocation_sites();
         return;
