@@ -510,6 +510,17 @@ pub fn execute_render_pipeline(
             gpu_particles.update_params(&renderer.queue, delta_time, 0.0); // time (curl-noise) studio'da kullanılmıyor
 
             // --- YENİ PARTİCÜL SPAWNLAMA (CPU -> GPU) ---
+            //
+            // Bu blok yıllarca YALNIZCA burada durdu, yani motorun kendi geçidini kullanan bir
+            // oyunda `ParticleEmitter` hiçbir şey yaymıyordu. Motor tarafı artık kendi kopyasını
+            // taşıyor: `gizmo::systems::render::spawn_from_emitters` (2026-08-14).
+            //
+            // Buradan ONA çağrı yapılamıyor ve sebebi teknik: o fonksiyon `&mut World` alıyor —
+            // ödünçleme önkoşulu olmayan, sağlam bir imza — oysa bu boru hattı blok boyunca canlı
+            // bir okuma ödünçlemesi (`_is_hidden_guard`, satır ~34) tutuyor. `&World` alan bir
+            // varyant ikisini de idare ederdi ama çağıranın hangi ödünçlemeleri tuttuğuna bağlı,
+            // koşullu güvenli bir genel API olurdu; o takas bu tekrardan kötü. Tekrar burada
+            // yazılı duruyor ki gizli kalmasın: ikisi birlikte değişmeli.
             // Collect emitter entities up front through a read borrow that is dropped at the
             // end of this statement, so the mutable ParticleEmitter query below never coexists
             // with a same-type read borrow.

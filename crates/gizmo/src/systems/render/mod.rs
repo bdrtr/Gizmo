@@ -464,6 +464,11 @@ pub fn default_render_pass(
             .map(|t| (t.dt(), t.elapsed() as f32))
             .unwrap_or((0.016, 0.0));
         particles.update_params(&renderer.queue, dt, time); // time → curl-noise evrimi
+        // Fill it from the scene. Without this the engine steps and draws a particle set that
+        // nothing ever puts anything into: the emitter-to-GPU bridge existed only inside
+        // `gizmo-studio`, so a `ParticleEmitter` on an entity emitted nothing for anyone using
+        // this pass. See `particles.rs`.
+        spawn_from_emitters(world, particles, &renderer.queue, dt);
         particles.compute_pass(encoder, active_parts);
     }
 
@@ -566,6 +571,9 @@ mod batching;
 pub use batching::{clear_render_cache, DrawItem, RenderCache};
 
 mod passes;
+
+mod particles;
+pub use particles::spawn_from_emitters;
 
 mod shared;
 pub use shared::{collect_scene_lights, SceneLights};
