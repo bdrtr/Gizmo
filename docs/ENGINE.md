@@ -492,6 +492,29 @@ vehicle point-velocity COM, narrowphase incident-corner. *Remaining minor:* PBR 
 decimal-packed into a single f32 (precision drops above 2²⁴) — long term, a separate slot.
 <!-- TRANSLATOR NOTE: the heading says 6 bugs but only 5 are listed; the sixth may be the "remaining minor" PBR-params item, or an entry lost in an earlier edit — unverified, please check. -->
 
+**Sub-phase timers (2026-08-13).** `PhysicsMetrics` now carries six finer fields —
+`solver_{order,prepare,sweep,relax}_ms` and `narrowphase_{dispatch,manifold}_ms` — fed by
+module-level atomics in `profile.rs`. Globals rather than fields because `solve_contacts`
+takes `&self` so islands can be solved in parallel from one `Copy` config; every scope wraps
+per-island or per-substep work, never per-contact. Determinism-neutral by the same argument
+the existing phase timers make: written and read, never branched on — hash `A462C9EB8A09D5CA`
+is unchanged with them in. **Islands are solved in parallel, so these are CPU-time shares and
+can sum past wall-clock; read them as proportions.**
+
+What they say, and it is the same answer in both scenes:
+
+    1000 boxes, settled   solver 3.95 CPU-ms   order 2%  prepare 4%  SWEEP 79%  relax 16%
+                          narrow 0.51          maths 55%  plumbing 45%
+    1000 spheres, awake   solver 8.63          order 7%  prepare 5%  SWEEP 74%  relax 14%
+                          narrow 2.56          maths 75%  plumbing 25%
+
+**Three quarters of the solver is the sweep** — the constraint iteration itself, not the
+scaffolding around it. Taken with the ablation below (fewer iterations is *slower*, because
+the pile settles later) that locates the Rapier gap precisely: we run far more constraint
+iteration per frame than they do — up to `iterations`×4 substeps, adaptively more for deep
+islands — and we need it to settle. The gap is a convergence-per-iteration difference, not
+waste, and closing it means a better-converging sweep rather than a cheaper one.
+
 **The solver carries no fat (2026-08-13, `benchmarks/vs-rapier` with `ABLATION=1`).** With
 no profiler available, the solver's own switches were used as one: turn each off, measure
 the thousand-box pile, and the difference is what that feature costs. **Every switch is

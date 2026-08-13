@@ -498,6 +498,7 @@ impl ConstraintSolver {
         // height for support to reach the top, so with the block solver we scale the sweep
         // count with depth (short piles keep the base count → no perf cost).
         let island_depth = if self.support_ordering || self.block_solver {
+            let _t = crate::profile::Scope::new(&crate::profile::PHASES.order);
             support_order_manifolds(
                 manifolds,
                 rigid_bodies,

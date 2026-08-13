@@ -364,6 +364,9 @@ fn throughput(n_side: usize, sphere: bool, roll: f32, frames: usize) {
     // Temas sayısı da toplanır: "tahsis ≈ çift sayısı" bir ARİTMETİK çıkarımdı, ölçüm
     // değil. Tahsisler çiftle mi yoksa cisimle mi ölçekleniyor — ikisi bambaşka adres.
     let mut g_contacts = 0u64;
+    // Alt-fazlar da kare kare toplanır. Son kareyi okumak kutu sahnesinde sıfır veriyordu:
+    // yığın o noktada uyumuş, hiç ada çözülmemiş. Aynı hatayı faz dökümünde bir kez yapmıştım.
+    let mut sub = [0.0f64; 6];
     let a0 = ALLOCS.load(Ordering::Relaxed);
     let t0 = Instant::now();
     for _ in 0..frames {
@@ -373,6 +376,16 @@ fn throughput(n_side: usize, sphere: bool, roll: f32, frames: usize) {
         g_sv += w.metrics.solver_ms as f64;
         g_it += w.metrics.integration_ms as f64;
         g_contacts += w.metrics.contact_count as u64;
+        for (acc, v) in sub.iter_mut().zip([
+            w.metrics.solver_order_ms,
+            w.metrics.solver_prepare_ms,
+            w.metrics.solver_sweep_ms,
+            w.metrics.solver_relax_ms,
+            w.metrics.narrowphase_dispatch_ms,
+            w.metrics.narrowphase_manifold_ms,
+        ]) {
+            *acc += v as f64;
+        }
     }
     let g_ms = t0.elapsed().as_secs_f64() * 1000.0 / frames as f64;
     let g_alloc = (ALLOCS.load(Ordering::Relaxed) - a0) / frames;
@@ -497,6 +510,33 @@ fn throughput(n_side: usize, sphere: bool, roll: f32, frames: usize) {
     println!(
         "   {:<12} {:>9.3} {:>9.3}",
         "entegrasyon", g_it / frames as f64, r_it / frames as f64
+    );
+    // Alt-faz dökümü: dört faz "hangi çeyrek" der, bunlar "ne" der. Son karenin değerleri
+    // — sahne o noktada oturmuş olabilir, o yüzden yanında uyanık sayısı okunmalı.
+    // **Adalar paralel çözülüyor**, yani ada başına ölçülen süreler toplanınca duvar
+    // saatini aşabilir — bunlar CPU-zamanı payları, kare süresinin dilimleri değil. Oran
+    // olarak okunmalı, mutlak olarak değil.
+    let f = frames as f64;
+    let solver_cpu: f64 = sub[0] + sub[1] + sub[2] + sub[3];
+    println!(
+        "   ── alt-faz (kare başına, CPU-ms; adalar paralel olduğundan toplam > duvar saati) ──"
+    );
+    println!(
+        "   çözücü {:>6.3}: sıralama {:>5.3} ({:>2.0}%) · hazırlık {:>5.3} ({:>2.0}%) · \
+         süpürme {:>5.3} ({:>2.0}%) · relax {:>5.3} ({:>2.0}%)",
+        solver_cpu / f,
+        sub[0] / f, 100.0 * sub[0] / solver_cpu.max(1e-9),
+        sub[1] / f, 100.0 * sub[1] / solver_cpu.max(1e-9),
+        sub[2] / f, 100.0 * sub[2] / solver_cpu.max(1e-9),
+        sub[3] / f, 100.0 * sub[3] / solver_cpu.max(1e-9)
+    );
+    let np_cpu = sub[4] + sub[5];
+    println!(
+        "   narrowphase {:>6.3}: çarpışma matematiği {:>5.3} ({:>2.0}%) · \
+         manifold/önbellek/olay {:>5.3} ({:>2.0}%)",
+        np_cpu / f,
+        sub[4] / f, 100.0 * sub[4] / np_cpu.max(1e-9),
+        sub[5] / f, 100.0 * sub[5] / np_cpu.max(1e-9)
     );
     println!(
         "   toplam: gizmo {:>6.3}  rapier {:>6.3}  (ölçülen kare {:>6.3} / {:>6.3})",

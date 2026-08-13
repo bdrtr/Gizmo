@@ -48,6 +48,8 @@
 // Sequential fallback for rayon on wasm (no OS threads); native uses rayon.
 #[cfg(target_arch = "wasm32")]
 mod parallel_compat;
+/// Sub-phase timers behind [`island::PhysicsMetrics`]'s finer fields.
+mod profile;
 /// ECS components describing a simulated body: [`RigidBody`] (body type, mass in kg,
 /// damping, axis locks, sleep bookkeeping and the per-step force/torque accumulators),
 /// [`Velocity`] (linear m/s, angular rad/s as a scaled axis, plus the previous-substep

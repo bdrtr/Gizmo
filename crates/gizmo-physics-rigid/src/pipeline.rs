@@ -318,6 +318,7 @@ impl PhysicsWorld {
                         let transform_a = &self.transforms[idx_a];
                         let transform_b = &self.transforms[idx_b];
 
+                        let _t = crate::profile::Scope::new(&crate::profile::PHASES.dispatch);
                         let mut contacts = NarrowPhase::test_collision_manifold(
                             &collider_a.shape,
                             transform_a.position,
@@ -405,6 +406,7 @@ impl PhysicsWorld {
         let mut manifolds = Vec::with_capacity(narrowphase_results.len());
         let mut current_cache =
             FxHashMap::with_capacity_and_hasher(self.contact_cache.len(), Default::default());
+        let _mani = crate::profile::Scope::new(&crate::profile::PHASES.manifold);
         let mut soft_rigid_pairs = Vec::new();
         let mut soft_soft_pairs = Vec::new();
 

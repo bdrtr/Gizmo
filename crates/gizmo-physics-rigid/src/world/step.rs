@@ -75,6 +75,9 @@ impl PhysicsWorld {
         self.metrics.island_count = 0;
         self.metrics.solver_sweeps = 0;
         self.metrics.max_island_depth = 0;
+        // Alt-faz sayaçları da aynı pencerede: adım başında sıfırlanır, alt-adımlar
+        // boyunca birikir, adım sonunda okunur.
+        crate::profile::PHASES.reset();
 
         let mut steps = 0u32;
         while self.accumulator >= FIXED_DT && steps < MAX_SUBSTEPS {
@@ -118,6 +121,18 @@ impl PhysicsWorld {
         }
 
         // Alpha: render interpolasyonu için (0 = önceki adım, 1 = mevcut adım)
+        // Alt-faz sayaçlarını metriklere aktar. Atomikler adalar arası paralel yazılıyor;
+        // burada tek iş parçacığı okuyor, yani tutarlı bir kesit.
+        {
+            use crate::profile::{Phases, PHASES};
+            self.metrics.solver_order_ms = Phases::ms(&PHASES.order);
+            self.metrics.solver_prepare_ms = Phases::ms(&PHASES.prepare);
+            self.metrics.solver_sweep_ms = Phases::ms(&PHASES.sweep);
+            self.metrics.solver_relax_ms = Phases::ms(&PHASES.relax);
+            self.metrics.narrowphase_dispatch_ms = Phases::ms(&PHASES.dispatch);
+            self.metrics.narrowphase_manifold_ms = Phases::ms(&PHASES.manifold);
+        }
+
         self.render_alpha = self.accumulator / FIXED_DT;
 
         // Record history snapshot at the end of the frame.

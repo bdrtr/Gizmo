@@ -304,6 +304,7 @@ impl ConstraintSolver {
         // davranışı korunur: iki-statik manifold ve k_n<1e-8 temaslar hiç eklenmez, dolayısıyla
         // her sweep'te atlanmış olurlar. Impulse birikimcileri (acc_n/acc_t) manifold'dan
         // tohumlanır, sweep'lerde yerinde güncellenir, sonda geri yazılır.
+        let _prep = crate::profile::Scope::new(&crate::profile::PHASES.prepare);
         let mut prepared: Vec<Prepared> = Vec::with_capacity(manifolds.len());
         for mid in 0..manifolds.len() {
             let (idx_a, idx_b) = match (
@@ -398,6 +399,7 @@ impl ConstraintSolver {
             }
         }
 
+        drop(_prep);
         // ── Block-solver groups (Stage: manifold block normal solve) ──
         // Each manifold's contacts are CONTIGUOUS in `prepared` (built mid-outer, cid-inner),
         // all sharing the same body pair. Precompute, once, the N×N normal Delassus matrix A
@@ -538,6 +540,7 @@ impl ConstraintSolver {
             // Her iterasyondan sonra pozisyon-delta'sı güncel hızla ilerletilir; bir sonraki
             // iterasyonun bias'ı GÜNCEL penetrasyonu görür → düzeltme yığın boyunca yayılır
             // (SI'nin yapamadığı; uzun/çarpan yığınları ayakta tutan temel mekanizma).
+            let _sweep = crate::profile::Scope::new(&crate::profile::PHASES.sweep);
             for iter in 0..n_iterations {
                 if use_direct {
                     self.tgs_sweep_island(
@@ -565,6 +568,8 @@ impl ConstraintSolver {
             }
 
             // ── 4) RELAX (bias=0) — soft bias hızını temizle + restitution ──
+            drop(_sweep);
+            let _relax = crate::profile::Scope::new(&crate::profile::PHASES.relax);
             for iter in 0..self.relax_iterations {
                 if use_direct {
                     self.tgs_sweep_island(

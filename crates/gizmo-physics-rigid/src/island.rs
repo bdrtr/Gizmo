@@ -203,6 +203,28 @@ pub struct PhysicsMetrics {
     /// Wall-clock milliseconds spent in the constraint solve — contacts *and* joints are
     /// one stage here, so a heavy ragdoll shows up in this number and not elsewhere.
     pub solver_ms: f32,
+    /// Of [`solver_ms`](Self::solver_ms): support-ordering the island and finding its depth.
+    ///
+    /// These four break the solver quarter down at function granularity. They are a strict
+    /// subset of `solver_ms` and need not sum to it — what is left over is the work between
+    /// them (island assembly, the position-correction write-back).
+    pub solver_order_ms: f32,
+    /// Of [`solver_ms`](Self::solver_ms): building the per-contact constraint rows.
+    pub solver_prepare_ms: f32,
+    /// Of [`solver_ms`](Self::solver_ms): the biased sweeps, the main iteration.
+    pub solver_sweep_ms: f32,
+    /// Of [`solver_ms`](Self::solver_ms): the relax pass that applies restitution.
+    pub solver_relax_ms: f32,
+    /// Of [`narrowphase_ms`](Self::narrowphase_ms): the collision maths itself — shape
+    /// dispatch, SAT, GJK.
+    ///
+    /// Worth having beside its twin below: `docs/ENGINE.md` §7 records that box-box SAT is
+    /// ~3 % of a frame, and the pair of numbers is what keeps that claim checkable rather
+    /// than remembered.
+    pub narrowphase_dispatch_ms: f32,
+    /// Of [`narrowphase_ms`](Self::narrowphase_ms): everything around the maths — material
+    /// combination, warm-starting, the contact cache, collision events.
+    pub narrowphase_manifold_ms: f32,
     /// Wall-clock milliseconds spent in *both* integration stages: velocity integration
     /// before the solver and position integration plus CCD resolution after it.
     pub integration_ms: f32,
