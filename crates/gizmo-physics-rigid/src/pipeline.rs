@@ -264,6 +264,13 @@ impl PhysicsWorld {
             gizmo_physics_core::PhysicsMaterial,
             gizmo_physics_core::PhysicsMaterial,
             bool, // is_soft_pair
+            // Warm-start outcome, computed in parallel with the collision maths rather than in the
+            // sequential assembly below: `Some(lifetime)` when this pair persisted from the last
+            // frame, and the impulses in `contacts` have already been carried across. It is pure
+            // per-pair work over immutable state (`contact_cache`, the match tolerance), so it
+            // belongs on the worker that produced the contacts, not on the one thread that has to
+            // build the cache and the event list in order.
+            Option<u32>,
         );
 
         let default_material = gizmo_physics_core::PhysicsMaterial::default();
@@ -282,6 +289,13 @@ impl PhysicsWorld {
             })
             .collect();
 
+        // Kapsam paralel bölümün TAMAMINI sarar, çift başına değil. Eskiden çift başınaydı:
+        // kare başına ~7300 `Instant::now()` + paylaşılan tek atomiğe `fetch_add`, hem
+        // `profile.rs`'in kendi sözleşmesini ("asla temas ya da cisim başına") ihlal ediyor hem de
+        // ölçtüğü şeye maliyet ekliyordu. Ölçüldü: dar fazın %3'ü. Küçük, ama gönderilen bir
+        // motorda kimsenin okumadığı bir sayaç için kalıcı bir vergi, ve buradan okunan sayı
+        // (duvar saati) zaten daha kullanışlı — CPU-ms yerine fazın gerçekte ne kadar sürdüğü.
+        let _t = crate::profile::Scope::new(&crate::profile::PHASES.dispatch);
         let narrowphase_results: Vec<NpResult> = active_pairs
             .par_iter()
             .filter_map(|&(entity_a, entity_b)| {
@@ -318,7 +332,6 @@ impl PhysicsWorld {
                         let transform_a = &self.transforms[idx_a];
                         let transform_b = &self.transforms[idx_b];
 
-                        let _t = crate::profile::Scope::new(&crate::profile::PHASES.dispatch);
                         let mut contacts = NarrowPhase::test_collision_manifold(
                             &collider_a.shape,
                             transform_a.position,
@@ -359,6 +372,27 @@ impl PhysicsWorld {
                             return None;
                         }
 
+                        // Warm-start here, on the worker. Triggers carry no impulses, so the same
+                        // condition the sequential loop used still gates it.
+                        let mut warm = None;
+                        if !collider_a.is_trigger && !collider_b.is_trigger {
+                            if let Some((_, Some(old_manifold))) =
+                                self.contact_cache.get(&(entity_a, entity_b))
+                            {
+                                warm = Some(old_manifold.lifetime + 1);
+                                let ws_tol_sq =
+                                    self.solver.warm_start_match_tolerance.powi(2);
+                                for contact in contacts.iter_mut() {
+                                    if let Some(old) = old_manifold.contacts.iter().find(|o| {
+                                        (o.point - contact.point).length_squared() < ws_tol_sq
+                                    }) {
+                                        contact.normal_impulse = old.normal_impulse;
+                                        contact.tangent_impulse = old.tangent_impulse;
+                                    }
+                                }
+                            }
+                        }
+
                         Some((
                             entity_a,
                             entity_b,
@@ -368,6 +402,7 @@ impl PhysicsWorld {
                             collider_a.material,
                             collider_b.material,
                             false,
+                            warm,
                         ))
                     }
 
@@ -382,6 +417,7 @@ impl PhysicsWorld {
                         default_material,
                         default_material,
                         true,
+                        None,
                     )),
 
                     // ── Soft vs Soft ──────────────────────────────────────
@@ -394,6 +430,7 @@ impl PhysicsWorld {
                         default_material,
                         default_material,
                         true,
+                        None,
                     )),
                 }
             })
@@ -410,8 +447,17 @@ impl PhysicsWorld {
         let mut soft_rigid_pairs = Vec::new();
         let mut soft_soft_pairs = Vec::new();
 
-        for (entity_a, entity_b, mut contacts, is_trigger_a, is_trigger_b, mat_a, mat_b, is_soft) in
-            narrowphase_results
+        for (
+            entity_a,
+            entity_b,
+            contacts,
+            is_trigger_a,
+            is_trigger_b,
+            mat_a,
+            mat_b,
+            is_soft,
+            warm,
+        ) in narrowphase_results
         {
             if is_soft {
                 let is_a_rigid = entity_map.contains_key(&entity_a.id());
@@ -465,26 +511,17 @@ impl PhysicsWorld {
                 // would start shipping accumulated impulses in `CollisionEvent.contact_points`.
                 let event_points: ContactPoints = contacts.iter().copied().take(4).collect();
 
-                // Warm-start: reuse impulses from the previous frame's manifold.
-                if let Some((_, Some(old_manifold))) = self.contact_cache.get(&pair) {
-                    manifold.lifetime = old_manifold.lifetime + 1;
+                // Warm-start: the impulses were already carried across on the worker that found
+                // these contacts (see `NpResult`'s last field). What is left is the part that
+                // touches the manifold rather than the contacts.
+                if let Some(lifetime) = warm {
+                    manifold.lifetime = lifetime;
                     // Persisting contact ⇒ resting / stacking, not a fresh impact.
                     // Restitution is only physically meaningful on the FIRST frame of
                     // contact; re-applying it every frame (and, at 240 Hz, on each of
                     // the 4 sub-steps) keeps pumping energy into a settled stack.
                     // Suppress it once a contact has persisted so stacks can settle.
                     manifold.restitution = 0.0;
-                    let ws_tol_sq = self.solver.warm_start_match_tolerance.powi(2);
-                    for contact in contacts.iter_mut() {
-                        if let Some(old) = old_manifold
-                            .contacts
-                            .iter()
-                            .find(|o| (o.point - contact.point).length_squared() < ws_tol_sq)
-                        {
-                            contact.normal_impulse = old.normal_impulse;
-                            contact.tangent_impulse = old.tangent_impulse;
-                        }
-                    }
                 }
 
                 // The narrowphase's buffer IS the manifold's buffer — moved, not copied. This is
@@ -519,7 +556,7 @@ impl PhysicsWorld {
                 cached.restitution = manifold.restitution;
                 cached.rolling_friction = manifold.rolling_friction;
                 cached.lifetime = manifold.lifetime;
-                current_cache.insert(pair, (false, Some(cached)));
+current_cache.insert(pair, (false, Some(cached)));
 
                 let event_type = if existed {
                     CollisionEventType::Persisting

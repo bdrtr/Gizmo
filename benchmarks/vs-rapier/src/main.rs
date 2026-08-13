@@ -383,16 +383,24 @@ fn throughput(n_side: usize, sphere: bool, roll: f32, frames: usize) {
         let before = Instant::now();
         let _ = w.step(DT);
         let took = before.elapsed().as_secs_f64() * 1000.0;
-        if (0..n).filter(|&i| !w.rigid_bodies[i].is_sleeping).count() * 100 >= n {
+        // **Fazlar da yalnız uyanık karelerden.** Kayıtlı faz dökümü 300 kare üzerinden alınmıştı
+        // ve dörtte üçü uykuydu; uyuyan bir karede çözücü hiç çalışmaz, dolayısıyla o ortalama
+        // çözücünün payını olduğundan küçük, geniş fazınkini büyük gösterir. Aynı hata bir kez
+        // "süpürme karenin %86'sı değil" sonucunu üretmişti.
+        let awake = (0..n).filter(|&i| !w.rigid_bodies[i].is_sleeping).count() * 100 >= n;
+        if awake {
             g_awake_ms += took;
             g_awake_frames += 1;
+            g_bp += w.metrics.broadphase_ms as f64;
+            g_np += w.metrics.narrowphase_ms as f64;
+            g_sv += w.metrics.solver_ms as f64;
+            g_it += w.metrics.integration_ms as f64;
         }
-        g_bp += w.metrics.broadphase_ms as f64;
-        g_np += w.metrics.narrowphase_ms as f64;
-        g_sv += w.metrics.solver_ms as f64;
-        g_it += w.metrics.integration_ms as f64;
         g_contacts += w.metrics.contact_count as u64;
         g_sweeps += w.metrics.solver_sweeps as u64;
+        if !awake {
+            continue;
+        }
         for (acc, v) in sub.iter_mut().zip([
             w.metrics.solver_order_ms,
             w.metrics.solver_prepare_ms,
@@ -477,11 +485,11 @@ fn throughput(n_side: usize, sphere: bool, roll: f32, frames: usize) {
         {
             r_awake_ms += took;
             r_awake_frames += 1;
+            r_bp += rp.pipeline.counters.cd.broad_phase_time.time_ms();
+            r_np += rp.pipeline.counters.cd.narrow_phase_time.time_ms();
+            r_sv += rp.pipeline.counters.stages.solver_time.time_ms();
+            r_it += rp.pipeline.counters.stages.update_time.time_ms();
         }
-        r_bp += rp.pipeline.counters.cd.broad_phase_time.time_ms();
-        r_np += rp.pipeline.counters.cd.narrow_phase_time.time_ms();
-        r_sv += rp.pipeline.counters.stages.solver_time.time_ms();
-        r_it += rp.pipeline.counters.stages.update_time.time_ms();
     }
     let r_ms = t0.elapsed().as_secs_f64() * 1000.0 / frames as f64;
     let r_alloc = (ALLOCS.load(Ordering::Relaxed) - a0) / frames;
@@ -522,22 +530,27 @@ fn throughput(n_side: usize, sphere: bool, roll: f32, frames: usize) {
     // konu mimaridir. İki motor da kendi zamanlayıcısını taşıyor, o yüzden bu tahmin
     // değil ölçüm. Gizmo'nunki son KAREnin dört alt-adımının toplamı, Rapier'ınki son
     // adımın; ikisi de "bir 1/60 karesi" demek.
-    println!("   ── faz dökümü (kare başına ortalama, ms) ──");
+    // Bölenler kare sayısı değil UYANIK kare sayısı, ve iki taraf için ayrı: motorlar farklı
+    // karelerde uyuyor (bu sahnede rapier 116, gizmo 75), yani ortak bir bölen ikisinden birini
+    // yanlış ölçekler.
+    let gf64 = g_awake_frames.max(1) as f64;
+    let rf64 = r_awake_frames.max(1) as f64;
+    println!("   ── faz dökümü (UYANIK kare başına ortalama, ms) ──");
     println!(
         "   {:<12} {:>9} {:>9}",
         "", "gizmo", "rapier"
     );
     println!(
         "   {:<12} {:>9.3} {:>9.3}",
-        "broadphase", g_bp / frames as f64, r_bp / frames as f64
+        "broadphase", g_bp / gf64, r_bp / rf64
     );
     println!(
         "   {:<12} {:>9.3} {:>9.3}",
-        "narrowphase", g_np / frames as f64, r_np / frames as f64
+        "narrowphase", g_np / gf64, r_np / rf64
     );
     println!(
         "   {:<12} {:>9.3} {:>9.3}",
-        "çözücü", g_sv / frames as f64, r_sv / frames as f64
+        "çözücü", g_sv / gf64, r_sv / rf64
     );
     println!(
         "   {:<12} {:>9.3} {:>9.3}",
@@ -548,7 +561,7 @@ fn throughput(n_side: usize, sphere: bool, roll: f32, frames: usize) {
     // **Adalar paralel çözülüyor**, yani ada başına ölçülen süreler toplanınca duvar
     // saatini aşabilir — bunlar CPU-zamanı payları, kare süresinin dilimleri değil. Oran
     // olarak okunmalı, mutlak olarak değil.
-    let f = frames as f64;
+    let f = gf64;
     let solver_cpu: f64 = sub[0] + sub[1] + sub[2] + sub[3];
     println!(
         "   ── alt-faz (kare başına, CPU-ms; adalar paralel olduğundan toplam > duvar saati) ──"
@@ -572,10 +585,10 @@ fn throughput(n_side: usize, sphere: bool, roll: f32, frames: usize) {
     );
     println!(
         "   toplam: gizmo {:>6.3}  rapier {:>6.3}  (ölçülen kare {:>6.3} / {:>6.3})",
-        (g_bp + g_np + g_sv + g_it) / frames as f64,
-        (r_bp + r_np + r_sv + r_it) / frames as f64,
-        g_ms,
-        r_ms
+        (g_bp + g_np + g_sv + g_it) / gf64,
+        (r_bp + r_np + r_sv + r_it) / rf64,
+        g_awake_ms / gf64,
+        r_awake_ms / rf64
     );
 }
 

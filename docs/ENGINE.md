@@ -560,6 +560,40 @@ frames against Rapier 0.504 ms × 116 — they stay awake longer, so on total wo
 
 The lever is the middle row, or the top one at a price. It is not the sweep.
 
+**Where the middle row is, phase by phase (2026-08-14, awake frames only).** The recorded phase
+table was also a 300-frame average and so also three quarters sleep; read over the frames that
+have work in them, and divided by four so a substep is compared against Rapier's step:
+
+| phase | Gizmo / awake frame | per substep | Rapier / step | ratio |
+|---|---|---|---|---|
+| broadphase | 0.439 | 0.110 | 0.046 | 2.4× |
+| **narrowphase** | **1.032** | **0.258** | **0.064** | **4.2×** |
+| solver | 2.479 | 0.620 | 0.297 | 2.1× |
+| integration | 0.114 | 0.029 | 0.028 | 1.0× |
+
+**The narrowphase is the worst ratio in the engine** — 4.2× per substep, a quarter of the awake
+frame — and it splits into a parallel section (the collision maths, 0.80 ms) and a **sequential**
+assembly of manifolds, contact cache and events (0.36 ms, 8% of the awake frame, on one thread
+while the rest idle). That sequential 8% is the concrete target the "per-substep pipeline" row
+resolves to.
+
+**But it has no single lever, measured.** The warm-start pass was pure per-pair work over
+immutable state and has been moved onto the worker that produced the contacts (behaviour-identical
+— hash `A462C9EB8A09D5CA` unchanged, since the per-pair computation is order-independent). It was
+**10%** of the sequential loop. The contact-cache inserts, the next obvious suspect, measure
+**0.02 ms — 5%**. The remainder is manifold construction and copying, spread thin. This is the
+same shape as the allocation investigation: a real cost with no concentrated win in it, and it
+should be treated the same way — do not spend more here without a measurement that names a
+specific 30%+ of that 0.36 ms.
+
+Two instrumentation corrections came out of the same work, both worth knowing about because both
+had already produced a wrong number. The `dispatch` scope was **per-pair** — ~7300 `Instant::now()`
+plus a `fetch_add` on one shared counter per frame, violating `profile.rs`'s own stated rule and
+costing 3% of the phase it measured; it now wraps the whole parallel section and reports wall
+time. And every phase timer in the benchmark now accumulates on awake frames only, per engine,
+because the two engines sleep at different frames (Rapier 116, us 75) and a shared divisor
+mis-scales one of them.
+
 **The solver carries no fat (2026-08-13, `benchmarks/vs-rapier` with `ABLATION=1`).** With
 no profiler available, the solver's own switches were used as one: turn each off, measure
 the thousand-box pile, and the difference is what that feature costs. **Every switch is

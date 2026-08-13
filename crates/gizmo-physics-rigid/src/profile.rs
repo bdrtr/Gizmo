@@ -40,7 +40,13 @@ pub(crate) struct Phases {
     pub sweep: AtomicU64,
     /// The relax pass, where restitution is applied.
     pub relax: AtomicU64,
-    /// Narrowphase shape dispatch: the actual collision maths.
+    /// The parallel narrowphase section, wall-clock: broadphase pairs in, contact manifolds out.
+    ///
+    /// Wall rather than CPU, and deliberately. It was per-*pair* once, which measured the collision
+    /// maths alone and nothing else — but at ~7300 scopes a frame, each an `Instant::now()` and a
+    /// `fetch_add` on one shared counter from every worker thread, it cost 3% of the phase it was
+    /// measuring and broke this module's own rule two paragraphs down. Wrapping the whole section
+    /// costs nothing per pair and answers the question that is actually asked of it.
     pub dispatch: AtomicU64,
     /// Turning narrowphase output into manifolds: materials, warm-start, cache, events.
     pub manifold: AtomicU64,
