@@ -22,9 +22,62 @@ struct Counting;
 
 static ALLOCS: AtomicUsize = AtomicUsize::new(0);
 
+thread_local! {
+    /// Backtrace yakalamak kendisi tahsis yapar; bu bayrak olmadan tahsisatçı kendini
+    /// çağırır ve yığın taşar.
+    static IN_PROBE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Örnekleme aralığı — her N'inci tahsiste bir çağrı yığını alınır. Hepsini almak
+/// koşuyu dakikalarca sürdürür ve dağılımı değiştirmez.
+static SAMPLE: AtomicUsize = AtomicUsize::new(0);
+static PROFILING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static SITES: std::sync::Mutex<Option<std::collections::HashMap<String, usize>>> =
+    std::sync::Mutex::new(None);
+
+fn record_site() {
+    IN_PROBE.with(|g| {
+        if g.get() {
+            return;
+        }
+        g.set(true);
+        let mut name = String::from("?");
+        let mut depth = 0usize;
+        backtrace::trace(|frame| {
+            depth += 1;
+            // İlk kareler tahsisatçının kendisi; motorun içine inen ilk kareyi al.
+            if depth < 4 {
+                return true;
+            }
+            let mut found = false;
+            backtrace::resolve_frame(frame, |sym| {
+                if let Some(n) = sym.name() {
+                    let n = format!("{n}");
+                    if n.contains("gizmo") || n.contains("rapier") || n.contains("parry") {
+                        name = n;
+                        found = true;
+                    }
+                }
+            });
+            !found && depth < 24
+        });
+        if let Ok(mut m) = SITES.lock() {
+            if let Some(map) = m.as_mut() {
+                *map.entry(name).or_insert(0) += 1;
+            }
+        }
+        g.set(false);
+    });
+}
+
 unsafe impl std::alloc::GlobalAlloc for Counting {
     unsafe fn alloc(&self, l: std::alloc::Layout) -> *mut u8 {
         ALLOCS.fetch_add(1, Ordering::Relaxed);
+        if PROFILING.load(Ordering::Relaxed)
+            && SAMPLE.fetch_add(1, Ordering::Relaxed) % 64 == 0
+        {
+            record_site();
+        }
         unsafe { std::alloc::System.alloc(l) }
     }
     unsafe fn dealloc(&self, p: *mut u8, l: std::alloc::Layout) {
@@ -455,6 +508,10 @@ fn throughput(n_side: usize, sphere: bool, roll: f32, frames: usize) {
 }
 
 fn main() {
+    if std::env::var("PROFILE").is_ok() {
+        allocation_sites();
+        return;
+    }
     println!("Gizmo (yerel) ↔ Rapier3D 0.35 — aynı sahneler, aynı dt=1/60");
     accuracy_elastic();
     stability_tower();
@@ -516,4 +573,69 @@ fn empty_baseline(n: usize) {
         (ALLOCS.load(Ordering::Relaxed) - a0) / 120,
         contacts / 120
     );
+}
+
+/// Uyanık sahnede tahsislerin ÇAĞRI YERİNE göre dağılımı.
+///
+/// Sayaç "ne kadar" diyordu, bu "nereden" diyor. Aritmetikle bölerek adres üretmek bu
+/// soruşturmada tekrar tekrar yanlış çıktı; burada her 64'üncü tahsisin yığını alınıp
+/// motorun içine inen ilk kareye göre gruplanıyor.
+fn allocation_sites() {
+    const N: usize = 10;
+    println!("\n── Tahsis profili: {} küre, uyanık ──", N * N * N);
+    let mut w = PhysicsWorld::new();
+    w.integrator.gravity = GVec3::new(0.0, -9.81, 0.0);
+    let (half, gap) = (0.4f32, 1.2f32);
+    let mut ground = GRigidBody::new_static();
+    ground.wake_up();
+    w.add_body(
+        BodyHandle::from_id(999_999),
+        ground,
+        GTransform::new(GVec3::new(0.0, -1.0, 0.0)),
+        GVelocity::default(),
+        GCollider::box_collider(GVec3::new(200.0, 1.0, 200.0)).with_material(plain()),
+    );
+    let mut id = 0u32;
+    for x in 0..N {
+        for y in 0..N {
+            for z in 0..N {
+                let mut rb = GRigidBody::new(1.0, true);
+                rb.wake_up();
+                w.add_body(
+                    BodyHandle::from_id(id),
+                    rb,
+                    GTransform::new(GVec3::new(
+                        (x as f32 - N as f32 * 0.5) * gap,
+                        1.0 + y as f32 * gap,
+                        (z as f32 - N as f32 * 0.5) * gap,
+                    )),
+                    GVelocity::default(),
+                    GCollider::sphere(half).with_material(plain()),
+                );
+                id += 1;
+            }
+        }
+    }
+    // Sahne yerleşsin; profil, yığın hâlâ hareket ederken alınmalı.
+    for _ in 0..120 {
+        let _ = w.step(DT);
+    }
+    *SITES.lock().unwrap() = Some(std::collections::HashMap::new());
+    PROFILING.store(true, Ordering::Relaxed);
+    let a0 = ALLOCS.load(Ordering::Relaxed);
+    for _ in 0..60 {
+        let _ = w.step(DT);
+    }
+    let total = ALLOCS.load(Ordering::Relaxed) - a0;
+    PROFILING.store(false, Ordering::Relaxed);
+    let map = SITES.lock().unwrap().take().unwrap_or_default();
+    let mut v: Vec<_> = map.into_iter().collect();
+    v.sort_by_key(|(_, c)| std::cmp::Reverse(*c));
+    let sampled: usize = v.iter().map(|(_, c)| *c).sum();
+    println!("   {} tahsis / 60 kare · örneklenen {sampled}", total);
+    for (name, count) in v.into_iter().take(12) {
+        let parts: Vec<&str> = name.split("::").collect();
+        let short = parts[parts.len().saturating_sub(3)..].join("::");
+        println!("   {:>5.1}%  {}", 100.0 * count as f64 / sampled.max(1) as f64, short);
+    }
 }
