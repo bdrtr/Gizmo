@@ -620,6 +620,27 @@ shows this scene is insensitive to the count between 1 and 8. `iterations 20 →
 here is a real effect of a different kind — it is the *adaptive* path and the settle time moving,
 not convergence failing.
 
+**Written, exported, and not wired to anything (2026-08-14 survey).** `LodGroup` turned out to be
+a capability the engine's own default path could not reach — the components existed, `select_mesh`
+existed, and only `gizmo-studio` ever looked. That was the second one (`Frustum::test_aabb_masked`
+sat at zero callers until `gizmo-renderer::visibility` found it), so the class was worth sweeping
+for rather than meeting one at a time. What the sweep found:
+
+| what | state | shape |
+|---|---|---|
+| **skeletal animation** | `animation_update_system` and `animation_state_machine_update_system` live in `gizmo-renderer`, and `current_time += dt · speed` appears **nowhere else in the workspace**. Nothing in the facade, in `gizmo-app`, or in any demo schedules either of them, and no demo uses `AnimationPlayer`/`AnimationClip`/`Skeleton` at all | the draw path *consumes* `Skeleton` (skinning matrices in `collect_draw_items`), so the engine renders a pose that the engine never advances. Not caller's-choice — a clock with no hands |
+| **`ParticleEmitter`** | the component exists, the GPU pipeline exists (`gpu_particles`), and `default_render_pass` draws `renderer.gpu_particles`. The bridge that reads emitter entities and feeds the pipeline exists **only in `gizmo-studio`** | exactly `LodGroup`'s shape |
+| **`Sprite`** | defined in `components/sprite.rs`, re-exported from `lib.rs`, and referenced by **nothing else in the workspace** — not studio, not the editor, not a demo | dead. Wire it or delete it; an exported component that nothing can draw is a promise the API does not keep |
+| **`gizmo-ai`'s systems** | `behavior_tree_system`, `ai_navigation_system`, `ai_navmesh_rebuild_system` are re-exported and never scheduled | the same shape, but plausibly deliberate: when AI ticks is a game's decision, not an engine's. Left alone, and named here so the next sweep does not re-find it as news |
+
+Two things this is **not** saying. A public function with no in-tree caller is not a defect — a
+library's surface exists to be called from outside, and a sweep on that basis returns most of
+`gizmo-core`. And a system a game is meant to schedule itself is not unwired. The class that
+matters is narrower: **the engine's own default path depends on state that the engine's own loop
+never produces**, or a component the engine exports and nothing anywhere can draw. Animation and
+`Sprite` are those. `ParticleEmitter` is one step out — nothing is broken, but the feature is only
+reachable by reimplementing studio's bridge.
+
 **NON-GOAL: cutting contact-path allocations.** Investigated, REJECTED (2026-08-13) — and
 rejected for the same reason as the SIMD item below, in a different currency. A comparison
 against Rapier3D (`benchmarks/vs-rapier`) showed us allocating **8158 heap allocations per
