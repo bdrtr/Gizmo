@@ -108,6 +108,32 @@ pub fn default_render_pass(
     // transform systems every frame.
     ensure_global_transforms(world);
 
+    // **Advance skeletal animation.** `collect_draw_items` below reads `Skeleton` for its skinning
+    // matrices, and until this call nothing in the engine ever advanced the pose it reads: the two
+    // systems live in `gizmo-renderer`, `current_time += dt · speed` appears nowhere else in the
+    // workspace, and no schedule, plugin or demo invoked either of them. The engine was drawing a
+    // pose it never stepped.
+    //
+    // They are called from the render pass rather than from a schedule because of their
+    // signatures: both need a `wgpu::Queue` to upload the skin matrices, which no ordinary system
+    // has, and that is very likely why they were never wired anywhere. Here is the one place that
+    // holds the world, the queue, and a position before the draw path reads the result.
+    //
+    // Player first, state machine second: an entity carrying both is a caller error, and if one
+    // has to win it should be the higher-level driver.
+    let animation_dt = world
+        .get_resource::<gizmo_core::time::Time>()
+        .map(|t| t.dt())
+        .unwrap_or(0.0);
+    if animation_dt > 0.0 {
+        crate::renderer::animation_update_system(world, animation_dt, &renderer.queue);
+        crate::renderer::animation_state_machine_update_system(
+            world,
+            animation_dt,
+            &renderer.queue,
+        );
+    }
+
     // Post-process params are written AFTER the active camera is resolved (below), so the
     // single exposure knob can be the camera's exposure — see the update_post_process call
     // after camera selection. Exposure is applied ONCE here, over the whole composited HDR
@@ -562,6 +588,123 @@ mod golden_render_tests {
     use crate::renderer::asset::AssetManager;
     use crate::renderer::components::{Material, MeshRenderer};
     use crate::renderer::Renderer;
+
+    /// The pass advances skeletal animation.
+    ///
+    /// It did not until 2026-08-14, and nothing noticed for a long time. `animation_update_system`
+    /// and `animation_state_machine_update_system` were written, exported and documented as the
+    /// thing that steps a player's clock, and no schedule, plugin, app or demo ever called either
+    /// of them — `current_time += dt · speed` appears nowhere else in the workspace, so a skinned
+    /// mesh rendered its bind pose for ever. The draw path *reads* `Skeleton` for its skinning
+    /// matrices, which is what made the omission invisible: everything looked wired.
+    ///
+    /// So this asserts the wiring rather than the arithmetic. The arithmetic already has tests
+    /// (`gizmo-renderer`'s `normalize_anim_time` covers looping, clamping and zero duration) and
+    /// they all passed the entire time the feature was dead.
+    #[test]
+    fn default_render_pass_advances_skeletal_animation() {
+        use crate::renderer::components::{AnimationClip, AnimationPlayer, SkeletonHierarchy};
+        use gizmo_animation::skeletal::SkeletonJoint;
+        use std::sync::Arc;
+
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available()) {
+            eprintln!(
+                "skipping default_render_pass_advances_skeletal_animation: no GPU adapter"
+            );
+            return;
+        }
+        pollster::block_on(async {
+            let mut renderer = Renderer::new_headless(64, 64, None).await;
+            let mut world = World::new();
+
+            // A clock with a real delta. The pass reads `Time::dt()`, and a world without the
+            // resource reads 0.0 and advances nothing — which is correct, and would also make
+            // this test pass for the wrong reason if the resource were left out.
+            let mut time = crate::core::time::Time::new();
+            time.update(1.0 / 60.0);
+            world.insert_resource(time);
+
+            // One joint, one clip, one second long, empty tracks: the pose it evaluates to does
+            // not matter here, only that the clock moves.
+            let hierarchy = Arc::new(SkeletonHierarchy {
+                joints: vec![SkeletonJoint {
+                    name: "root".into(),
+                    node_index: 0,
+                    inverse_bind_matrix: crate::math::Mat4::IDENTITY,
+                    parent_index: None,
+                    local_bind_transform: crate::math::Mat4::IDENTITY,
+                    bind_translation: Vec3::ZERO,
+                    bind_rotation: crate::math::Quat::IDENTITY,
+                    bind_scale: Vec3::ONE,
+                }],
+                root_transform: crate::math::Mat4::IDENTITY,
+            });
+            let clip = AnimationClip {
+                name: "idle".into(),
+                duration: 1.0,
+                translations: Vec::new(),
+                rotations: Vec::new(),
+                scales: Vec::new(),
+            };
+            let rig = world.spawn();
+            world.add_component(rig, Transform::new(Vec3::ZERO));
+            world.add_component(rig, renderer.create_skeleton(hierarchy));
+            world.add_component(
+                rig,
+                AnimationPlayer {
+                    current_time: 0.0,
+                    active_animation: 0,
+                    loop_anim: true,
+                    speed: 1.0,
+                    animations: Arc::from(vec![clip]),
+                    blend_time: 0.0,
+                    blend_duration: 0.0,
+                    prev_animation: None,
+                    prev_time: 0.0,
+                },
+            );
+
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(-6.0, 0.0, 0.0),
+                primary: true,
+                ..Default::default()
+            });
+
+            let target = renderer.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("anim_target"),
+                size: wgpu::Extent3d {
+                    width: 64,
+                    height: 64,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: renderer.config.format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+            let mut encoder = renderer
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+
+            default_render_pass(&mut world, &mut encoder, &view, &mut renderer);
+            renderer.queue.submit(Some(encoder.finish()));
+
+            let advanced = world
+                .borrow::<AnimationPlayer>()
+                .get(rig.id())
+                .expect("the player is still there")
+                .current_time;
+            assert!(
+                advanced > 0.0,
+                "default_render_pass left current_time at {advanced} — nothing is advancing \
+                 skeletal animation, which is the state the engine shipped in until this test"
+            );
+        });
+    }
 
     #[test]
     fn default_render_pass_draws_a_cube_distinct_from_background() {

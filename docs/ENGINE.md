@@ -628,10 +628,24 @@ for rather than meeting one at a time. What the sweep found:
 
 | what | state | shape |
 |---|---|---|
-| **skeletal animation** | `animation_update_system` and `animation_state_machine_update_system` live in `gizmo-renderer`, and `current_time += dt · speed` appears **nowhere else in the workspace**. Nothing in the facade, in `gizmo-app`, or in any demo schedules either of them, and no demo uses `AnimationPlayer`/`AnimationClip`/`Skeleton` at all | the draw path *consumes* `Skeleton` (skinning matrices in `collect_draw_items`), so the engine renders a pose that the engine never advances. Not caller's-choice — a clock with no hands |
+| **skeletal animation** | **FIXED 2026-08-14.** `animation_update_system` and `animation_state_machine_update_system` lived in `gizmo-renderer` with `current_time += dt · speed` appearing nowhere else in the workspace, and nothing in the facade, in `gizmo-app` or in any demo ever called either. `default_render_pass` now calls both, before the draw path reads `Skeleton` | the draw path *consumes* `Skeleton` (skinning matrices in `collect_draw_items`), so the engine rendered a pose it never advanced — a clock with no hands, and everything downstream of it looked wired |
 | **`ParticleEmitter`** | the component exists, the GPU pipeline exists (`gpu_particles`), and `default_render_pass` draws `renderer.gpu_particles`. The bridge that reads emitter entities and feeds the pipeline exists **only in `gizmo-studio`** | exactly `LodGroup`'s shape |
 | **`Sprite`** | defined in `components/sprite.rs`, re-exported from `lib.rs`, and referenced by **nothing else in the workspace** — not studio, not the editor, not a demo | dead. Wire it or delete it; an exported component that nothing can draw is a promise the API does not keep |
 | **`gizmo-ai`'s systems** | `behavior_tree_system`, `ai_navigation_system`, `ai_navmesh_rebuild_system` are re-exported and never scheduled | the same shape, but plausibly deliberate: when AI ticks is a game's decision, not an engine's. Left alone, and named here so the next sweep does not re-find it as news |
+
+**Why it was never wired, and what the fix cost.** Both systems take `(&mut World, dt, &wgpu::Queue)`
+— they upload the skin matrices themselves — and no ordinary system has a queue, so there was no
+schedule they *could* be added to. That is very likely the whole story: the signature does not fit
+the slot, so they were exported and left. `default_render_pass` is the one place holding the world,
+the queue, and a position before `collect_draw_items` reads the result, so they are called from
+there, with `dt` from the `Time` resource.
+
+The guard is `golden_render_tests::default_render_pass_advances_skeletal_animation`, which drives
+the real pass over a one-joint rig and asserts the clock moved — and it was checked against a
+build with the call removed, where it fails. It deliberately asserts the *wiring* and not the
+arithmetic: `normalize_anim_time` already had tests for looping, clamping and zero duration, and
+every one of them passed throughout the years the feature did not run. A test of a policy is not a
+test that the policy is reached.
 
 Two things this is **not** saying. A public function with no in-tree caller is not a defect — a
 library's surface exists to be called from outside, and a sweep on that basis returns most of
