@@ -493,9 +493,33 @@ impl PhysicsWorld {
                 // and its count is deliberately uncapped.
                 manifold.contacts = contacts;
 
-                current_cache.insert(pair, (false, Some(manifold.clone())));
+                // **Kalıcı tampon.** Bu çiftin bir önceki girdisi hâlâ elimizde; onun
+                // `Vec<ContactPoint>`'ini geri kullanmak, `manifold.clone()`'un her
+                // alt-adımda yaptığı tahsisi kalıcı durumda tamamen ortadan kaldırır —
+                // aynı çiftler devam ettiği sürece tahsisatçıya hiç inilmez. Kopyalanan
+                // veri birebir aynı; değişen yalnız belleğin nereden geldiği.
+                //
+                // `remove` ÖNCE yapılamaz: aşağıdaki olay türü kararı önbellekte girdi
+                // olup olmadığına bakıyor, o yüzden varlık burada yakalanır.
+                let existed = self.contact_cache.contains_key(&pair);
+                let mut cached = match self.contact_cache.remove(&pair) {
+                    Some((_, Some(mut old))) => {
+                        old.contacts.clear();
+                        old.contacts.extend_from_slice(&manifold.contacts);
+                        old
+                    }
+                    _ => manifold.clone(),
+                };
+                cached.entity_a = manifold.entity_a;
+                cached.entity_b = manifold.entity_b;
+                cached.friction = manifold.friction;
+                cached.static_friction = manifold.static_friction;
+                cached.restitution = manifold.restitution;
+                cached.rolling_friction = manifold.rolling_friction;
+                cached.lifetime = manifold.lifetime;
+                current_cache.insert(pair, (false, Some(cached)));
 
-                let event_type = if self.contact_cache.contains_key(&pair) {
+                let event_type = if existed {
                     CollisionEventType::Persisting
                 } else {
                     CollisionEventType::Started
