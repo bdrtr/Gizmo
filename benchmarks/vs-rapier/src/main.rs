@@ -308,6 +308,9 @@ fn throughput(n_side: usize, sphere: bool, roll: f32, frames: usize) {
     // son kareyi ölçmek "her şey sıfır" der ve bu, işin bittiğini değil ölçünün yanlış
     // yerde durduğunu gösterir. Bir kez öyle ölçüldü ve sıfırlar ele verdi.
     let (mut g_bp, mut g_np, mut g_sv, mut g_it) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+    // Temas sayısı da toplanır: "tahsis ≈ çift sayısı" bir ARİTMETİK çıkarımdı, ölçüm
+    // değil. Tahsisler çiftle mi yoksa cisimle mi ölçekleniyor — ikisi bambaşka adres.
+    let mut g_contacts = 0u64;
     let a0 = ALLOCS.load(Ordering::Relaxed);
     let t0 = Instant::now();
     for _ in 0..frames {
@@ -316,6 +319,7 @@ fn throughput(n_side: usize, sphere: bool, roll: f32, frames: usize) {
         g_np += w.metrics.narrowphase_ms as f64;
         g_sv += w.metrics.solver_ms as f64;
         g_it += w.metrics.integration_ms as f64;
+        g_contacts += w.metrics.contact_count as u64;
     }
     let g_ms = t0.elapsed().as_secs_f64() * 1000.0 / frames as f64;
     let g_alloc = (ALLOCS.load(Ordering::Relaxed) - a0) / frames;
@@ -403,7 +407,15 @@ fn throughput(n_side: usize, sphere: bool, roll: f32, frames: usize) {
         }
     }
 
-    println!("   gizmo : {g_ms:>7.3} ms/kare (4 alt-adım) · uyanık {g_awake:>4}/{n} · ort y {g_mean_y:>5.2} · yayılma {g_spread:>5.1} m · en derin girişim {g_overlap:>5.3} · tahsis/kare {g_alloc}\n            hız: medyan doğrusal {g_lin_med:>6.3} m/s · medyan açısal {g_ang_med:>6.3} rad/s · eşik altında {g_under}/{n}");
+    println!(
+        "   gizmo : {g_ms:>7.3} ms/kare (4 alt-adım) · uyanık {g_awake:>4}/{n} · ort y {g_mean_y:>5.2} · \
+         yayılma {g_spread:>5.1} m · en derin girişim {g_overlap:>5.3}\n            \
+         tahsis/kare {g_alloc} · temas/kare {c} · tahsis/temas {r:>5.2}\n            \
+         hız: medyan doğrusal {g_lin_med:>6.3} m/s · medyan açısal {g_ang_med:>6.3} rad/s · \
+         eşik altında {g_under}/{n}",
+        c = g_contacts / frames as u64,
+        r = g_alloc as f64 / (g_contacts as f64 / frames as f64).max(1.0)
+    );
     println!("   rapier: {r_ms:>7.3} ms/kare (1 adım)      · uyanık {r_awake:>4}/{n} · ort y {r_mean_y:>5.2} · yayılma {r_spread:>5.1} m · en derin girişim {r_overlap:>5.3} · tahsis/kare {r_alloc}");
     println!("   oran  : gizmo {:.2}× {}", (g_ms / r_ms).max(r_ms / g_ms), if g_ms > r_ms { "daha yavaş" } else { "daha hızlı" });
 
@@ -446,9 +458,62 @@ fn main() {
     println!("Gizmo (yerel) ↔ Rapier3D 0.35 — aynı sahneler, aynı dt=1/60");
     accuracy_elastic();
     stability_tower();
-    throughput(10, false, 0.0, 300);
-    // Yuvarlanma direnci süpürmesi: 0 eski davranış, sonrası yeni satır.
-    for r in [0.0f32, 0.05, 0.1, 0.2, 0.5] {
+    println!("\n── Tahsis: temassız taban çizgisi ──");
+    for n in [64usize, 216, 512, 1000] {
+        empty_baseline(n);
+    }
+    // Ölçek testi: tahsis çiftle mi cisimle mi büyüyor?
+    for side in [4usize, 6, 8, 10] {
+        throughput(side, false, 0.0, 300);
+    }
+    for r in [0.0f32, 0.05] {
         throughput(10, true, r, 300);
     }
+}
+
+/// **Temassız taban çizgisi.** Yığındaki tahsislerin ne kadarı temasla ilgili, ne kadarı
+/// her alt-adımda dönen makine? Cisimler yerçekimsiz boşlukta, birbirinden uzak: broadphase
+/// yine koşar, narrowphase yine çağrılır, ama tek bir temas üretilmez. Aradaki fark adresi
+/// verir — biri narrowphase işi, öteki boru hattı işi.
+fn empty_baseline(n: usize) {
+    let mut w = PhysicsWorld::new();
+    w.integrator.gravity = GVec3::ZERO;
+    let side = (n as f32).cbrt().ceil() as usize;
+    let mut id = 0u32;
+    for x in 0..side {
+        for y in 0..side {
+            for z in 0..side {
+                if id as usize >= n {
+                    break;
+                }
+                let mut rb = GRigidBody::new(1.0, false);
+                rb.wake_up();
+                w.add_body(
+                    BodyHandle::from_id(id),
+                    rb,
+                    // 20 m aralık: hiçbir çift temas etmez, hatta broadphase hücresini
+                    // bile paylaşmaz.
+                    GTransform::new(GVec3::new(
+                        x as f32 * 20.0,
+                        y as f32 * 20.0,
+                        z as f32 * 20.0,
+                    )),
+                    GVelocity::new(GVec3::new(0.001, 0.0, 0.0)),
+                    GCollider::box_collider(GVec3::new(0.4, 0.4, 0.4)),
+                );
+                id += 1;
+            }
+        }
+    }
+    let a0 = ALLOCS.load(Ordering::Relaxed);
+    let mut contacts = 0u64;
+    for _ in 0..120 {
+        let _ = w.step(DT);
+        contacts += w.metrics.contact_count as u64;
+    }
+    println!(
+        "   temassız {n:>5} cisim → tahsis/kare {:>6} · temas/kare {}",
+        (ALLOCS.load(Ordering::Relaxed) - a0) / 120,
+        contacts / 120
+    );
 }
