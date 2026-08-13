@@ -364,18 +364,35 @@ fn throughput(n_side: usize, sphere: bool, roll: f32, frames: usize) {
     // Temas sayısı da toplanır: "tahsis ≈ çift sayısı" bir ARİTMETİK çıkarımdı, ölçüm
     // değil. Tahsisler çiftle mi yoksa cisimle mi ölçekleniyor — ikisi bambaşka adres.
     let mut g_contacts = 0u64;
+    // **Kaç iterasyon çalıştığı, iterasyonun kaça mal olduğundan önce gelir.** "Substep başına
+    // 2,5×" iki zıt şeyle açıklanabilir — aynı sayıda pahalı iterasyon, ya da çok sayıda ucuz
+    // iterasyon — ve ikisi zıt düzeltme ister. `solver_sweeps` bunu doğrudan sayar; Rapier'ın
+    // karşılığı `num_solver_iterations` (varsayılan 4, alt adım yok).
+    let mut g_sweeps = 0u64;
     // Alt-fazlar da kare kare toplanır. Son kareyi okumak kutu sahnesinde sıfır veriyordu:
     // yığın o noktada uyumuş, hiç ada çözülmemiş. Aynı hatayı faz dökümünde bir kez yapmıştım.
     let mut sub = [0.0f64; 6];
+    // **Uyanıkken ve uyurken ayrı ayrı.** Her iki motor da bu sahneyi ~75. karede uyutuyor, yani
+    // 300 karelik ortalamanın dörtte üçü "uyuyan sahne" maliyetidir. Çözücü hakkında bir şey
+    // söyleyen tek pencere, cisimlerin hâlâ hareket ettiği penceredir — ve iki taraf için de aynı
+    // şekilde ayrılmazsa kıyas, kimin daha erken uyuduğunu ölçer.
+    let (mut g_awake_ms, mut g_awake_frames) = (0.0f64, 0u32);
     let a0 = ALLOCS.load(Ordering::Relaxed);
     let t0 = Instant::now();
     for _ in 0..frames {
+        let before = Instant::now();
         let _ = w.step(DT);
+        let took = before.elapsed().as_secs_f64() * 1000.0;
+        if (0..n).filter(|&i| !w.rigid_bodies[i].is_sleeping).count() * 100 >= n {
+            g_awake_ms += took;
+            g_awake_frames += 1;
+        }
         g_bp += w.metrics.broadphase_ms as f64;
         g_np += w.metrics.narrowphase_ms as f64;
         g_sv += w.metrics.solver_ms as f64;
         g_it += w.metrics.integration_ms as f64;
         g_contacts += w.metrics.contact_count as u64;
+        g_sweeps += w.metrics.solver_sweeps as u64;
         for (acc, v) in sub.iter_mut().zip([
             w.metrics.solver_order_ms,
             w.metrics.solver_prepare_ms,
@@ -448,10 +465,19 @@ fn throughput(n_side: usize, sphere: bool, roll: f32, frames: usize) {
         }
     }
     let (mut r_bp, mut r_np, mut r_sv, mut r_it) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+    let (mut r_awake_ms, mut r_awake_frames) = (0.0f64, 0u32);
     let a0 = ALLOCS.load(Ordering::Relaxed);
     let t0 = Instant::now();
     for _ in 0..frames {
+        let before = Instant::now();
         rp.step();
+        let took = before.elapsed().as_secs_f64() * 1000.0;
+        if rp.bodies.iter().filter(|(_, b)| b.is_dynamic() && !b.is_sleeping()).count() * 100
+            >= n
+        {
+            r_awake_ms += took;
+            r_awake_frames += 1;
+        }
         r_bp += rp.pipeline.counters.cd.broad_phase_time.time_ms();
         r_np += rp.pipeline.counters.cd.narrow_phase_time.time_ms();
         r_sv += rp.pipeline.counters.stages.solver_time.time_ms();
@@ -474,15 +500,21 @@ fn throughput(n_side: usize, sphere: bool, roll: f32, frames: usize) {
     }
 
     println!(
-        "   gizmo : {g_ms:>7.3} ms/kare (4 alt-adım) · uyanık {g_awake:>4}/{n} · ort y {g_mean_y:>5.2} · \
+        "   gizmo : {g_ms:>7.3} ms/kare (4 alt-adım, uyanıkken {ga:>6.3} × {gf} kare) · uyanık {g_awake:>4}/{n} · ort y {g_mean_y:>5.2} · \
          yayılma {g_spread:>5.1} m · en derin girişim {g_overlap:>5.3}\n            \
          tahsis/kare {g_alloc} · temas/kare {c} · tahsis/temas {r:>5.2}\n            \
          hız: medyan doğrusal {g_lin_med:>6.3} m/s · medyan açısal {g_ang_med:>6.3} rad/s · \
-         eşik altında {g_under}/{n}",
+         eşik altında {g_under}/{n}\n            \
+         süpürme/kare {sw} (rapier 4) · süpürme başına {per:>6.4} ms",
+        ga = g_awake_ms / g_awake_frames.max(1) as f64,
+        gf = g_awake_frames,
         c = g_contacts / frames as u64,
+        sw = g_sweeps / frames as u64,
+        per = g_ms / (g_sweeps as f64 / frames as f64).max(1.0),
         r = g_alloc as f64 / (g_contacts as f64 / frames as f64).max(1.0)
     );
-    println!("   rapier: {r_ms:>7.3} ms/kare (1 adım)      · uyanık {r_awake:>4}/{n} · ort y {r_mean_y:>5.2} · yayılma {r_spread:>5.1} m · en derin girişim {r_overlap:>5.3} · tahsis/kare {r_alloc}");
+    println!("   rapier: {r_ms:>7.3} ms/kare (1 adım, uyanıkken {ra:>6.3} × {rf} kare)      · uyanık {r_awake:>4}/{n} · ort y {r_mean_y:>5.2} · yayılma {r_spread:>5.1} m · en derin girişim {r_overlap:>5.3} · tahsis/kare {r_alloc}",
+        ra = r_awake_ms / r_awake_frames.max(1) as f64, rf = r_awake_frames);
     println!("   oran  : gizmo {:.2}× {}", (g_ms / r_ms).max(r_ms / g_ms), if g_ms > r_ms { "daha yavaş" } else { "daha hızlı" });
 
     // ── Faz dökümü ───────────────────────────────────────────────────────────
@@ -636,7 +668,117 @@ fn ablation() {
     }
 }
 
+/// What the iteration budget actually buys.
+///
+/// The ablation next door says cutting `iterations` 20 → 8 makes the frame *slower*, and reads
+/// that as "the count is load-bearing". It is one point, and one point cannot tell a floor from a
+/// slope. Rapier settles the same pile with **4 solver iterations per island per frame** while we
+/// run 4 substeps × 20 = **80**, so the question is not whether 8 is worse than 20 but where the
+/// curve actually turns. (The substep multiplier is the other half of that 80 and cannot be swept
+/// from here — `PHYSICS_HZ` is a private constant with no knob on the world.)
+///
+/// Settling time is reported alongside the frame cost because it is the mechanism the ablation
+/// invoked without measuring: a lower count is supposed to cost more by settling later. If a
+/// setting settles at the same frame and costs less, that explanation does not hold there.
+fn iteration_curve() {
+    const N: usize = 10;
+    let n = N * N * N;
+    println!("\n── İterasyon eğrisi: {n} kutu, 300 kare ──");
+    println!("   (rapier: ada başına kare başına 4 iterasyon, alt adım yok)");
+    // **İki geçiş, çünkü ilki kendi kendini sabote etti.** `adaptive_iterations` derin adalarda
+    // taban sayıyı `max(28, 1.5·D)` ile eziyor: 10 kutu yüksekliğindeki yığın, `iterations` 2'ye
+    // çekilse bile 28 süpürme alıyor. İlk geçişte eğri bu yüzden düz göründü, ve düzlüğü ele veren
+    // şey ms değil süpürme sütunu oldu — 20 → 2 sayıyı ancak yarıya indirdi.
+    for (iters, adaptive) in [32usize, 20, 8, 4, 2, 1]
+        .into_iter()
+        .flat_map(|i| [(i, true), (i, false)])
+    {
+        let mut w = PhysicsWorld::new();
+        w.integrator.gravity = GVec3::new(0.0, -9.81, 0.0);
+        w.solver.iterations = iters;
+        w.solver.adaptive_iterations = adaptive;
+        let (half, gap) = (0.4f32, 1.2f32);
+        let mut ground = GRigidBody::new_static();
+        ground.wake_up();
+        w.add_body(
+            BodyHandle::from_id(999_999),
+            ground,
+            GTransform::new(GVec3::new(0.0, -1.0, 0.0)),
+            GVelocity::default(),
+            GCollider::box_collider(GVec3::new(200.0, 1.0, 200.0)).with_material(plain()),
+        );
+        let mut id = 0u32;
+        for x in 0..N {
+            for y in 0..N {
+                for z in 0..N {
+                    let mut rb = GRigidBody::new(1.0, true);
+                    rb.wake_up();
+                    w.add_body(
+                        BodyHandle::from_id(id),
+                        rb,
+                        GTransform::new(GVec3::new(
+                            (x as f32 - N as f32 * 0.5) * gap,
+                            1.0 + y as f32 * gap,
+                            (z as f32 - N as f32 * 0.5) * gap,
+                        )),
+                        GVelocity::default(),
+                        GCollider::box_collider(GVec3::new(half, half, half)).with_material(plain()),
+                    );
+                    id += 1;
+                }
+            }
+        }
+        let mut settled_at = None;
+        let mut sweeps = 0u64;
+        // **Uyanık kareleri ayrı tut.** Sahne 75. kare civarında uyuyor, yani 300 karelik bir
+        // ortalamanın dörtte üçü uyuyan bir sahnenin maliyetidir ve çözücüyle hiç ilgisi yoktur.
+        // Bir kez öyle okundu ve "taban maliyet %86" gibi bir sonuç verdi; gerçekte ölçülen şey
+        // uykuydu. İterasyon bütçesi hakkında bir şey söyleyebilecek tek pencere, cisimlerin
+        // hâlâ hareket ettiği penceredir.
+        let mut awake_ms = 0.0f64;
+        let mut awake_frames = 0u32;
+        let t0 = Instant::now();
+        for f in 0..300 {
+            let before = Instant::now();
+            let _ = w.step(DT);
+            let took = before.elapsed().as_secs_f64() * 1000.0;
+            sweeps += w.metrics.solver_sweeps as u64;
+            let up = (0..n).filter(|&i| !w.rigid_bodies[i].is_sleeping).count();
+            if up * 100 >= n {
+                awake_ms += took;
+                awake_frames += 1;
+            }
+            if settled_at.is_none() && up * 100 < n {
+                settled_at = Some(f);
+            }
+        }
+        let ms = t0.elapsed().as_secs_f64() * 1000.0 / 300.0;
+        let ams = awake_ms / awake_frames.max(1) as f64;
+        let mean_y: f32 = (0..n).map(|i| w.transforms[i].position.y).sum::<f32>() / n as f32;
+        let awake = (0..n).filter(|&i| !w.rigid_bodies[i].is_sleeping).count();
+        let deepest = (0..n)
+            .map(|i| w.transforms[i].position.y)
+            .fold(f32::MAX, f32::min);
+        println!(
+            "   {iters:>2} iterasyon {a}  {ms:>6.3} ms/kare (uyanıkken {ams:>6.3}) · \
+             uyanık {awake:>4}/{n} · ort y {mean_y:>5.2} · en alt {deepest:>5.2} · \
+             %99 uyudu {} · süpürme/kare {}",
+            settled_at.map_or("hiç".to_string(), |f| format!("{f:>3}. kare")),
+            sweeps / 300,
+            a = if adaptive { "adaptif" } else { "sabit  " },
+        );
+    }
+}
+
 fn main() {
+    if std::env::var("ITERCURVE").is_ok() {
+        iteration_curve();
+        return;
+    }
+    if std::env::var("ITER").is_ok() {
+        iteration_budget();
+        return;
+    }
     if std::env::var("ABLATION").is_ok() {
         ablation();
         return;
@@ -775,4 +917,17 @@ fn allocation_sites() {
         let short = parts[parts.len().saturating_sub(3)..].join("::");
         println!("   {:>5.1}%  {}", 100.0 * count as f64 / sampled.max(1) as f64, short);
     }
+}
+
+// ── ITER=1: how much constraint iteration each engine actually runs ──────────────────────
+//
+// The recorded conclusion is that the ~2.5× per-substep gap is a convergence-per-iteration
+// difference. That is an inference, and it has a rival that wants the opposite fix: the same
+// iteration count at 2.5× the cost each. Counting what both engines actually run separates them.
+fn iteration_budget() {
+    let p = rapier3d::dynamics::IntegrationParameters::default();
+    println!("rapier defaults: num_solver_iterations {:?}, internal pgs {:?}, \
+              internal stabilization {:?}",
+        p.num_solver_iterations, p.num_internal_pgs_iterations,
+        p.num_internal_stabilization_iterations);
 }

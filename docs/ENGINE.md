@@ -509,11 +509,56 @@ What they say, and it is the same answer in both scenes:
                           narrow 2.56          maths 75%  plumbing 25%
 
 **Three quarters of the solver is the sweep** — the constraint iteration itself, not the
-scaffolding around it. Taken with the ablation below (fewer iterations is *slower*, because
-the pile settles later) that locates the Rapier gap precisely: we run far more constraint
-iteration per frame than they do — up to `iterations`×4 substeps, adaptively more for deep
-islands — and we need it to settle. The gap is a convergence-per-iteration difference, not
-waste, and closing it means a better-converging sweep rather than a cheaper one.
+scaffolding around it.
+
+That reading led to a conclusion recorded here for a day and **since refuted by measurement**:
+that the gap is a convergence-per-iteration difference and closing it means a better-converging
+sweep. See "What the iteration budget is actually worth" below. Three quarters of the *solver*
+is not three quarters of the frame, and the sweep turns out to be the smallest of the three
+factors in the Rapier gap rather than the whole of it.
+
+**What the iteration budget is actually worth (2026-08-14, `benchmarks/vs-rapier` with
+`ITERCURVE=1`).** Rapier's default is `num_solver_iterations: 4` per island per frame with no
+substepping; we run four substeps of `iterations` (20), with `adaptive_iterations` raising deep
+islands to `max(28, 1.5·D)` regardless of the base. So we run about **20× the constraint
+iteration per island per frame** — and, at 9× the total frame cost, each of our iterations is
+therefore about **2× cheaper than theirs**. The gap was never in what an iteration costs.
+
+Nor is it in how many we run. Sweeping the count on the thousand-box pile, `adaptive_iterations`
+off so the setting is actually honoured, and reading **only the frames where bodies are still
+moving** (see the trap below):
+
+    iterations   awake ms/frame   sweeps/frame   99% asleep at
+    32           5.029            2346           frame 74
+    20 (default) 4.431            1586           frame 75
+     8           3.627             712           frame 77
+     2           3.644             176           frame 78
+     1           3.636              97           frame 84
+
+**The entire variable cost of the constraint iteration is 0.795 ms of a 4.431 ms awake frame —
+18%**, and below eight sweeps it is flat. A solver that converged perfectly in a single sweep
+would make this scene 18% faster and nothing more. It cannot close a 9× gap, and neither can any
+amount of work on how well the sweep converges.
+
+Two traps this measurement had to get past, both of which had already produced a wrong number
+once. **The 300-frame average is mostly sleep** — the pile settles around frame 75, so three
+quarters of it measures a sleeping scene and says nothing about the solver; the first version of
+this table read a "floor" of 86% that was very largely sleep. And **the base count is overridden
+for deep islands**, so with `adaptive_iterations` on, taking `iterations` from 20 to 4 cuts sweeps
+only 40% and buys 1% of frame — the first curve looked flat for that reason, and it was the sweep
+*count* column, not the milliseconds, that gave it away.
+
+So the honest decomposition of the gap, measured on awake frames only (Gizmo 4.340 ms × 75 awake
+frames against Rapier 0.504 ms × 116 — they stay awake longer, so on total work done the gap is
+**5.6×**, not the 9.2× the all-frames average reports):
+
+| factor | measured | is it optional? |
+|---|---|---|
+| substep multiplier | **4×** | deliberate — it is what survives 320 m/s without tunnelling |
+| per-substep pipeline outside the sweep | **1.8×** | open — broadphase, narrowphase, prepare, integrate, run four times |
+| the constraint iteration itself | **1.2×** | 18% ceiling, measured above |
+
+The lever is the middle row, or the top one at a price. It is not the sweep.
 
 **The solver carries no fat (2026-08-13, `benchmarks/vs-rapier` with `ABLATION=1`).** With
 no profiler available, the solver's own switches were used as one: turn each off, measure
@@ -534,8 +579,12 @@ block solver repays itself fifteen times over, TGS-soft thirty-four. Even the sm
 go the same way: *fewer* solver iterations is **more expensive**, because convergence gets
 worse and the pile takes longer to come to rest.
 
-So the ~2.5× per-substep gap against Rapier is not optional work that could be switched
-off, and anyone tempted to trim iterations for speed should read this table first.
+So nothing in this table is waste to be reclaimed. But note what it does **not** say, because it
+was once read as saying it: that the iteration count is load-bearing. One point cannot tell a
+floor from a slope, and the curve measured in "What the iteration budget is actually worth" above
+shows this scene is insensitive to the count between 1 and 8. `iterations 20 → 8` costing more
+here is a real effect of a different kind — it is the *adaptive* path and the settle time moving,
+not convergence failing.
 
 **NON-GOAL: cutting contact-path allocations.** Investigated, REJECTED (2026-08-13) — and
 rejected for the same reason as the SIMD item below, in a different currency. A comparison
@@ -557,9 +606,9 @@ pile costs 1.7 ms against 0.17. That splits in two: **~4× is the substep multip
 (`PHYSICS_HZ = 240` runs the whole pipeline, collision detection included, four times per
 rendered frame — deliberate, and it is what makes 0.5 m spheres survive 320 m/s without
 tunnelling, measured), and **~2.5× is genuine per-substep cost spread across every phase**
-rather than concentrated in one. Neither is allocations. The next honest step is a *time*
-profile at function granularity; the box-scene phase timings only localise it to "all of
-them".
+rather than concentrated in one. Neither is allocations. That next step was taken — sub-phase timers, then the iteration curve
+above — and it moved the answer: of the ~2.5×, the constraint iteration is 1.2× and the rest of
+the per-substep pipeline is 1.8×.
 
 **NON-GOAL: narrowphase batch-SIMD.** Investigated, REJECTED (2026-07-14). Measurement
 (wide_scene, 2000 boxes, ~30ms frame): box-box SAT compute is only **~3.3%**; narrowphase
