@@ -14,14 +14,18 @@
 //!   * **Görsel ip = fiziksiz ince çubuk** — her kare topun konumuna göre gerilir.
 //!   * **Sürükleme = `Camera::screen_to_ray` + fizik `raycast`** — sol tıkla topu seç,
 //!     KİNEMATİK yap (komşuları iter), bırakınca DİNAMİK'e dön ve servo hızını taşı.
+//!   * **Sıfırlama = YERİNDE restore + `Joint::reset_warm_start`** — despawn/respawn DEĞİL:
+//!     ip eklemleri entity-id tutar, varlıkları yeniden yaratmak eklemleri koparırdı.
+//!     Kenar-tespiti motorun `is_key_just_pressed` API'sinden (elle `prev_r` takibi yok).
 //!   * **Sahne render = `default_render_pass` DOĞRUDAN** — `with_scene_render()` kısayolu
 //!     SSR/SSGI/volumetric/TAA'yı kapatırdı; bu sahne yansımaları/keskinliği ister.
 //!
-//! Bu demoda geçici/uçan varlık (mermi/konfeti) ve sahne sıfırlama yok → dolayısıyla
-//! `DespawnAfter`/`despawn_all_with` idiomları uygulanmaz.
+//! Bu demoda geçici/uçan varlık (mermi/konfeti) yok ve sıfırlama yerinde yapılır →
+//! dolayısıyla `DespawnAfter`/`despawn_all_with` idiomları uygulanmaz.
 //!
 //! ## Kontroller
 //!   * **Sol tık + sürükle** — bir topu yakala, ark üzerinde sürükle, bırak → salınır.
+//!   * **R** — sahneyi sıfırla: toplar ev pozuna, hızlar sıfır, açılış salınımı yeniden.
 
 use std::f32::consts::{FRAC_PI_2, FRAC_PI_3};
 
@@ -52,14 +56,24 @@ fn elastic() -> PhysicsMaterial {
     }
 }
 
-/// Statik ön-görünüm kamerası + sürükleme durumu.
+/// Statik ön-görünüm kamerası + sürükleme durumu + sıfırlama için ev pozları.
 struct Cradle {
     balls: Vec<u32>,
     ropes: Vec<u32>, // her topa karşılık gelen görsel ip (fiziksiz ince çubuk)
     pivots: Vec<Vec3>,
+    homes: Vec<Transform>, // topların kuruluş pozu — R ile buraya dönülür
     cam: Camera,
     cam_pos: Vec3,
     dragging: Option<usize>, // balls içindeki index
+    /// Şimdiye kadar görülen en derin top-top girişimi (metre).
+    ///
+    /// **Tanı, mekanizma değil.** "Hızlı sallayınca toplar birbirinin içinden geçiyor"
+    /// başsız harness'ta ÜRETİLEMEDİ: iki küre 320 m/s'ye kadar, değen beşli zincir
+    /// 320 m/s'ye kadar, ipli tam sarkaç doğal salınımda (≤10 m/s) ve kinematik
+    /// sürükleme ipe bağlı komşulara karşı — hiçbirinde girişim yok. Kare takılması da
+    /// suçlu olamaz: `PhysicsWorld::step` tavana vurunca adımı büyütmez, zamanı düşürür.
+    /// Geriye gerçek koşuda ölçmek kaldı, o yüzden bu satır burada.
+    worst_overlap: f32,
 }
 
 // --------------------------------------------------------------- setup
@@ -104,6 +118,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> Cradle {
     let mut balls = Vec::new();
     let mut ropes = Vec::new();
     let mut pivots = Vec::new();
+    let mut homes = Vec::new();
 
     for i in 0..N {
         let pivot = Vec3::new(start_x + i as f32 * spacing, PIVOT_Y, 0.0);
@@ -124,8 +139,10 @@ fn setup(world: &mut World, renderer: &Renderer) -> Cradle {
         };
 
         // Küre gövde: collider'dan atalet otomatik türetilir, malzeme elastik.
+        // `home` hem spawn pozu hem de R ile dönülecek hedef — tek kaynaktan, ikisi ayrışamaz.
+        let home = Transform::new(center).with_rotation(rot);
         let ball = world.spawn_bundle((
-            Transform::new(center).with_rotation(rot),
+            home,
             sphere.clone(),
             Material::new(tex.clone()).with_pbr(color, 0.9, 0.2),
             MeshRenderer::new(),
@@ -152,6 +169,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> Cradle {
         balls.push(ball.id());
         ropes.push(rope.id());
         pivots.push(pivot);
+        homes.push(home);
     }
 
     world.insert_resource(phys);
@@ -160,14 +178,23 @@ fn setup(world: &mut World, renderer: &Renderer) -> Cradle {
         balls,
         ropes,
         pivots,
+        homes,
         cam,
         cam_pos,
         dragging: None,
+        worst_overlap: 0.0,
     }
 }
 
 // --------------------------------------------------------------- update
 fn update(world: &mut World, state: &mut Cradle, _dt: f32, input: &Input) {
+    // ── R = sıfırla ──────────────────────────────────────────────────────────
+    // Sürükleme bloğundan ÖNCE: sıfırlama yarım kalmış bir sürüklemeyi de iptal eder,
+    // aşağıdaki raycast ise artık ışınlanmış (ev pozundaki) toplara bakar.
+    if input.is_key_just_pressed(KeyCode::KeyR as u32) {
+        reset(world, state);
+    }
+
     // ── Fare ile sürükle-bırak ───────────────────────────────────────────────
     let viewport = world
         .get_resource::<WindowInfo>()
@@ -248,6 +275,40 @@ fn update(world: &mut World, state: &mut Cradle, _dt: f32, input: &Input) {
             .map(|&b| ts.get(b).map(|t| t.position).unwrap_or(Vec3::ZERO))
             .collect()
     };
+    // ── Girişim ölçeri ───────────────────────────────────────────────────────
+    // Her kare, merkezler arası mesafeden gerçek girişimi hesapla. Merkez mesafesi
+    // 2R'nin altına inerse toplar birbirinin İÇİNDE demektir — ve bunu x sırasına
+    // bakarak ölçmek yanlış olurdu: yeterince hızlı bir top ipin üstünden pivotun
+    // tepesini aşar, o sırada x'i komşusunu geçer ama hiç temas yoktur.
+    //
+    // Yalnız yeni bir rekor kırıldığında yazar: her kare yazmak konsolu boğar ve
+    // aranan şey zaten en kötü an. Yanına hızı ve kare süresini de koyar, çünkü
+    // şüpheliler onlar.
+    {
+        let vs = world.borrow::<Velocity>();
+        let fastest = state
+            .balls
+            .iter()
+            .filter_map(|&b| vs.get(b).map(|v| v.linear.length()))
+            .fold(0.0f32, f32::max);
+        for i in 0..centers.len() {
+            for j in (i + 1)..centers.len() {
+                let overlap = 2.0 * R - (centers[i] - centers[j]).length();
+                // 1 cm'in altı çözücünün normal nefes payı; onu gürültü olarak geç.
+                if overlap > 0.01 && overlap > state.worst_overlap + 0.005 {
+                    state.worst_overlap = overlap;
+                    println!(
+                        "girişim {overlap:.3} m (2R={:.2}) · toplar {i}-{j} · en hızlı top \
+                         {fastest:>5.1} m/s · kare {:.1} ms{}",
+                        2.0 * R,
+                        _dt * 1000.0,
+                        if overlap >= 2.0 * R { "  ← TAM GEÇİŞ" } else { "" }
+                    );
+                }
+            }
+        }
+    }
+
     let mut ts = world.borrow_mut::<Transform>();
     for (i, &rope) in state.ropes.iter().enumerate() {
         let pivot = state.pivots[i];
@@ -260,6 +321,50 @@ fn update(world: &mut World, state: &mut Cradle, _dt: f32, input: &Input) {
             tr.rotation = Quat::from_rotation_arc(Vec3::Y, dir);
             tr.scale = Vec3::new(0.03, len * 0.5, 0.03);
             tr.update_local_matrix();
+        }
+    }
+}
+
+/// Sahneyi kuruluş anına döndürür: toplar ev pozunda, hızlar sıfır, salınım baştan.
+///
+/// Gövdeler YERİNDE sıfırlanır — despawn/respawn yok: ip eklemleri topların entity-id'sini
+/// tutar, varlıkları yeniden yaratmak eklemleri koparırdı.
+fn reset(world: &mut World, state: &mut Cradle) {
+    // Sürükleme iptal; gövde tipi zaten aşağıda Dynamic'e döndürülüyor.
+    state.dragging = None;
+    // Ölçer de sıfırlanır: R'den sonraki rekor, R'den ÖNCEKİ denemenin kalıntısı olmamalı.
+    state.worst_overlap = 0.0;
+
+    {
+        let mut ts = world.borrow_mut::<Transform>();
+        for (&b, home) in state.balls.iter().zip(state.homes.iter()) {
+            if let Some(mut t) = ts.get_mut(b) {
+                *t = *home; // `home` matris önbelleğiyle birlikte kuruldu → bayat kalmaz
+            }
+        }
+    }
+    {
+        let mut vs = world.borrow_mut::<Velocity>();
+        for &b in &state.balls {
+            if let Some(mut v) = vs.get_mut(b) {
+                *v = Velocity::default();
+            }
+        }
+    }
+    {
+        let mut rbs = world.borrow_mut::<RigidBody>();
+        for &b in &state.balls {
+            if let Some(mut rb) = rbs.get_mut(b) {
+                rb.body_type = BodyType::Dynamic; // sürükleme yarıda kaldıysa kinematikten dön
+                rb.wake_up(); // uyuyan gövde ışınlanmayı yoksayardı (integratör atlıyor)
+            }
+        }
+    }
+    // Işınlanma eklemlerin eski yapılandırmada biriktirdiği λ'yı geçersiz kılar; atılmazsa
+    // bir sonraki geçiş onları YENİ ip doğrultularında tekrar oynatır → ev pozunda fiske.
+    if let Some(mut phys) = world.get_resource_mut::<PhysicsWorld>() {
+        for joint in phys.joints.iter_mut() {
+            joint.reset_warm_start();
         }
     }
 }
