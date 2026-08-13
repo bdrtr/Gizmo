@@ -355,6 +355,29 @@ impl RigidBody {
     }
 
     /// Sürekli Çarpışma Tespiti'ni (CCD) açar — hızlı/ince cisimler tünellemez. Zincirlenebilir.
+    ///
+    /// **Bedeli var ve ölçüldü: CCD'li cisim sekmeyi kaybeder.** Eşit kütleli, `restitution = 1`,
+    /// kafa kafaya bir çarpışma CCD kapalıyken doğru davranır (vuran durur, vurulan hızı alır:
+    /// 0,000 / 4,950 m/s) ama CCD açıkken **2,475 / 2,475** verir — yani tam esnek çarpışma tam
+    /// esnek OLMAYANA döner. Sebep iki adımlı: (1) adada CCD'li bir cisim varsa çözücü
+    /// `use_tgs_soft && !has_ccd` koşuluyla modern TGS-soft yolundan **eski split-impulse yoluna
+    /// düşer**, (2) o yol spekülatif temasta restitution uygulamaz — ki CCD'nin ürettiği temas
+    /// tam olarak odur. Spekülatif kısıt yaklaşma hızını yer, gerçek temas oluştuğunda geri
+    /// sektirecek bir şey kalmaz.
+    ///
+    /// Ve bu bir gözden kaçma değil, **tasarımın varsaydığı cismin sonucu**: o istisnanın
+    /// yanındaki gerekçe "CCD cisimleri (mermiler) nadir ve genelde izole" diyor. Yani CCD
+    /// mermi için tasarlandı — tek, yalnız, ve *sekmesi beklenmeyen* bir cisim. Bir Newton
+    /// sarkacı bu varsayımın üçünü de çiğner: beş cisim de CCD'li olur, hepsi tek island'da
+    /// buluşur, ve hepsinden sekmesi beklenir.
+    ///
+    /// Yani sekmesi *gereken* cisimlerde (bilardo topu, Newton sarkacı) tünellemeyi bununla
+    /// çözmeye kalkmak sahnenin asıl davranışını sessizce yok eder — üstelik çoğu zaman
+    /// gereksiz yere: 0,5 m yarıçaplı toplar 1/240 s alt-adımda 320 m/s'de bile tünellemiyor
+    /// (ölçüm aşağıdaki testte). Tünelleme şüphesi varsa **önce ölçülmeli**; CCD'yi ihtiyaten
+    /// açmak bedava değil.
+    ///
+    /// Ölçen test: `gizmo-physics-rigid/tests/cradle_passthrough.rs::ccd_makes_a_bounce_a_thud`.
     pub fn with_ccd(mut self) -> Self {
         self.ccd_enabled = true;
         self

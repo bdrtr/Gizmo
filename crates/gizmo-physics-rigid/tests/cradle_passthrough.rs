@@ -156,12 +156,29 @@ fn the_cradle_keeps_its_balls_apart() {
 /// speed. It does — until CCD is switched on, and then the two share the momentum
 /// equally, which is a perfectly *inelastic* collision.
 ///
-/// Measured: 0.000 / 4.950 m/s with CCD off against **2.475 / 2.475** with it on, and the
-/// same halving at 12 m/s. The cause is deliberate and written down at `solver/tgs.rs` —
-/// restitution is applied only on a real contact, never on a speculative one — but the
-/// consequence is not written down at [`RigidBody::with_ccd`], whose documentation
-/// promises only that fast bodies will not tunnel. Anyone who reaches for CCD to stop a
-/// Newton's cradle tunnelling silently loses the bounce the scene exists to show.
+/// Measured: 0.000 / 4.950 m/s with CCD off against **2.475 / 2.475** with it on, each
+/// taking exactly half, and the same halving at 12 m/s.
+///
+/// **The cause is two steps, and the second one is the surprising half.** Enabling CCD on
+/// a body does not only add the geometric backstop: at `solver/mod.rs` the island is
+/// solved by `if self.use_tgs_soft && !has_ccd`, so **one CCD body drops its whole island
+/// off the modern TGS-soft solver onto the older split-impulse path**. That path then
+/// refuses restitution on a speculative contact — deliberately, with the reason written
+/// beside it: a speculative contact is a gap-closing *limit*, and bouncing off it makes
+/// the body decelerate inconsistently between substeps and overshoot the surface on the
+/// last one. But CCD is exactly what creates speculative contacts, so the two rules meet
+/// and the impact loses its bounce: the speculative constraint eats the approach velocity,
+/// and by the time the contact is real there is nothing left to reflect.
+///
+/// Neither consequence is written down at [`RigidBody::with_ccd`], whose documentation
+/// promises only that fast bodies will not tunnel. It matters most exactly here: reaching
+/// for CCD to stop a Newton's cradle tunnelling silently removes the bounce the scene
+/// exists to show.
+///
+/// Fixing it is not a one-line gate — moving the gate in `tgs.rs` changes nothing, because
+/// a CCD island never reaches that file. It is either restitution on speculative contacts
+/// in the split-impulse path (against a documented objection) or letting a CCD island keep
+/// the TGS-soft solver (an architectural call with a determinism contract attached).
 #[test]
 #[ignore = "documents the CCD-loses-restitution limitation; un-ignore when it is fixed"]
 fn ccd_makes_a_bounce_a_thud() {
