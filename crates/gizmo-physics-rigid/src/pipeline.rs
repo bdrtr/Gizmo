@@ -453,6 +453,7 @@ impl PhysicsWorld {
                 manifold.friction = combined.dynamic_friction;
                 manifold.static_friction = combined.static_friction;
                 manifold.restitution = combined.restitution;
+                manifold.rolling_friction = combined.rolling_friction;
 
                 // Snapshot the event's points from the RAW narrowphase output, BEFORE the
                 // warm-start pass below. This used to be taken at the end, and was pristine for

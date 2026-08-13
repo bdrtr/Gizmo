@@ -31,6 +31,10 @@ struct Prepared {
     k_t2: f32,
     friction: f32,
     static_friction: f32,
+    /// Coulomb-form bound on the rolling row, as a fraction of the normal impulse. Zero
+    /// disables the row entirely, which is the default and the behaviour that existed
+    /// before it.
+    rolling: f32,
     restitution: f32,
     pen0: f32,
     vn0: f32,
@@ -38,6 +42,51 @@ struct Prepared {
     cid: usize,
     acc_n: f32,
     acc_t: Vec3,
+    /// Accumulated rolling (torque) impulse, kept for the same reason `acc_t` is: the
+    /// Coulomb bound is on the *total* impulse over the sweep, not on each increment.
+    acc_r: Vec3,
+}
+
+/// Rolling-resistance row: oppose the pair's relative spin with a torque impulse, bounded
+/// like friction by the normal impulse.
+///
+/// **Why sliding friction cannot do this.** In pure rolling the contact point is
+/// instantaneously at rest, so a tangential Coulomb force does no work there however large
+/// the coefficient — measured in `benchmarks/vs-rapier`, a thousand-sphere pile is still
+/// rolling after fifty seconds and has spread to a 39.6 m radius. What stops a real ball is
+/// the deformation of the surfaces under it, and that is this row.
+///
+/// It resists the whole relative angular velocity rather than only its component about the
+/// normal: a ball rolling on a plane spins about a *tangential* axis, so a normal-only row
+/// would leave exactly the case this exists for untouched.
+fn apply_rolling(p: &mut Prepared, velocities: &mut [Velocity]) {
+    if p.rolling <= 0.0 || p.acc_n <= 0.0 {
+        return;
+    }
+    let w_rel = velocities[p.idx_b].angular - velocities[p.idx_a].angular;
+    let len = w_rel.length();
+    if len < 1e-8 {
+        return;
+    }
+    let axis = w_rel / len;
+    // Effective angular mass along the spin axis, the rotational twin of `k_n`.
+    let k = axis.dot(p.inv_i_a.mul_vec3(axis)) + axis.dot(p.inv_i_b.mul_vec3(axis));
+    if k < 1e-12 {
+        return;
+    }
+    let mut acc = p.acc_r - axis * (len / k);
+    let max = p.rolling * p.acc_n;
+    if acc.length() > max {
+        acc = acc.normalize_or_zero() * max;
+    }
+    let applied = acc - p.acc_r;
+    p.acc_r = acc;
+    if p.dyn_a {
+        velocities[p.idx_a].angular -= p.inv_i_a.mul_vec3(applied);
+    }
+    if p.dyn_b {
+        velocities[p.idx_b].angular += p.inv_i_b.mul_vec3(applied);
+    }
 }
 
 /// One contact manifold's contiguous run in `prepared`, plus its precomputed N×N normal
@@ -278,6 +327,7 @@ impl ConstraintSolver {
             let friction = manifolds[mid].friction;
             let static_friction = manifolds[mid].static_friction;
             let restitution = manifolds[mid].restitution;
+            let rolling = manifolds[mid].rolling_friction;
             let n_contacts = manifolds[mid].contacts.len();
             for cid in 0..n_contacts {
                 let ct = manifolds[mid].contacts[cid];
@@ -331,6 +381,7 @@ impl ConstraintSolver {
                     k_t2,
                     friction,
                     static_friction,
+                    rolling,
                     restitution,
                     pen0: ct.penetration,
                     vn0: vn0[vn0_off[mid] + cid],
@@ -338,6 +389,11 @@ impl ConstraintSolver {
                     cid,
                     acc_n: ct.normal_impulse,
                     acc_t: ct.tangent_impulse,
+                    // Not warm-started from the contact: the manifold carries no rolling
+                    // impulse field, so the row starts cold each substep. Rolling resistance
+                    // is a slow, dissipative effect rather than a stiff constraint, so the
+                    // cost of a cold start is a fraction of one substep's decay.
+                    acc_r: Vec3::ZERO,
                 });
             }
         }
@@ -691,6 +747,7 @@ impl ConstraintSolver {
                 velocities[p.idx_b].linear += imp_t * p.inv_m_b;
                 velocities[p.idx_b].angular += p.inv_i_b.mul_vec3(rb.cross(imp_t));
             }
+            apply_rolling(p, velocities);
         }
     }
 
@@ -821,6 +878,7 @@ impl ConstraintSolver {
                     velocities[p.idx_b].linear += imp_t * p.inv_m_b;
                     velocities[p.idx_b].angular += p.inv_i_b.mul_vec3(p.r_b.cross(imp_t));
                 }
+                apply_rolling(p, velocities);
             }
         }
     }
@@ -935,6 +993,7 @@ impl ConstraintSolver {
                 velocities[p.idx_b].linear += imp_t * p.inv_m_b;
                 velocities[p.idx_b].angular += p.inv_i_b.mul_vec3(p.r_b.cross(imp_t));
             }
+            apply_rolling(p, velocities);
         }
     }
 }

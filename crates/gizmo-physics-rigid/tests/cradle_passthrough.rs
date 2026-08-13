@@ -11,6 +11,14 @@
 //! a perfectly elastic collision into a perfectly inelastic one.** That is the first thing
 //! anyone reaches for against tunnelling, and in a Newton's cradle it destroys the only
 //! behaviour the scene exists to show.
+//!
+//! The cause of the original report — a dragged ball made *kinematic*, and therefore
+//! impossible to push back — is **not** pinned here, and that is deliberate. It was found
+//! and fixed with a meter in the running demo (0.572 m of burial before, 0.086 m after,
+//! same hands), but this harness cannot tell the two apart: driven in a straight line by a
+//! servo, kinematic buries 0.056 m and dynamic 0.051 m. A hand at a mouse does something
+//! this loop does not, and a test that cannot distinguish the thing it names is worse than
+//! no test.
 
 use gizmo_math::Vec3;
 use gizmo_physics_core::{
@@ -193,91 +201,4 @@ fn ccd_makes_a_bounce_a_thud() {
     let (mover, target) = (world.velocities[0].linear.x, world.velocities[1].linear.x);
     assert!(mover.abs() < 0.1, "an elastic hit should stop the mover, left it at {mover}");
     assert!(target > v * 0.9, "an elastic hit should pass the speed on, target got {target}");
-}
-
-/// **The reproduction, from a live run's own numbers.** Dragging — not speed, not a
-/// frame hitch — is what buries the balls in each other. Measured in the demo: eight
-/// overlap events, the deepest **0.272 m of a 1.00 m diameter**, at frame times of
-/// 3.8-5.4 ms (200 fps, nothing stalling) and a top speed of exactly **15.0 m/s**, which
-/// is the drag servo's own `clamp_length_max(15.0)`. No fling key was ever pressed.
-///
-/// The mechanism is the drag's design meeting its limit. While held, the ball is made
-/// **kinematic** so that it pushes its neighbours — and a kinematic body is not pushed
-/// back by anything. The servo sets `v = (target - here) * gain` every frame, so while
-/// the ball is blocked the error stays large and it keeps being driven into the
-/// obstruction at the clamp speed, indefinitely. The neighbour it is pushing hangs from a
-/// rope and can only escape along its own arc.
-///
-/// An earlier attempt at this test drove the kinematic body in a straight line at a
-/// constant velocity and found nothing, because that body stops caring once it has
-/// arrived. What reproduces it is a *servo whose target is on the far side of the chain*.
-#[test]
-fn dragging_a_ball_into_the_others_buries_it() {
-    const N: usize = 5;
-    const GAP: f32 = 0.01;
-    const L: f32 = 4.0;
-    const PIVOT_Y: f32 = 6.0;
-    const DRAG_GAIN: f32 = 18.0;
-    const DRAG_CLAMP: f32 = 15.0;
-
-    let mut world = PhysicsWorld::new();
-    world.integrator.gravity = Vec3::new(0.0, -9.81, 0.0);
-    let spacing = 2.0 * R + GAP;
-    let start_x = -((N as f32 - 1.0) / 2.0) * spacing;
-
-    let mut beam = RigidBody::new_static();
-    beam.wake_up();
-    world.add_body(
-        BodyHandle::from_id(100),
-        beam,
-        Transform::new(Vec3::new(0.0, PIVOT_Y, 0.0)),
-        Velocity::default(),
-        Collider::box_collider(Vec3::new(N as f32 * spacing, 0.075, 0.075)),
-    );
-
-    for i in 0..N {
-        let pivot = Vec3::new(start_x + i as f32 * spacing, PIVOT_Y, 0.0);
-        let mut rb = if i == 0 { RigidBody::new_kinematic() } else { RigidBody::new(1.0, true) };
-        rb.use_gravity = i != 0;
-        rb.wake_up();
-        world.add_body(
-            BodyHandle::from_id(i as u32),
-            rb,
-            Transform::new(pivot - Vec3::new(0.0, L, 0.0)),
-            Velocity::default(),
-            Collider::sphere(R).with_material(elastic()),
-        );
-        world.joints.push(Joint::rope(
-            BodyHandle::from_id(100),
-            BodyHandle::from_id(i as u32),
-            pivot - Vec3::new(0.0, PIVOT_Y, 0.0),
-            Vec3::ZERO,
-            L,
-        ));
-    }
-
-    // **The hand does not hold still — it swings.** A fixed target only buries the ball by
-    // 0.061 m, a quarter of what the live run showed; what the report described was
-    // swinging the ball about, which drags it back and forth *through* the row rather than
-    // pressing it against one side. Modelled as the mouse sweeping across the cradle at a
-    // couple of hertz, which is roughly a hand's pace.
-    let left = Vec3::new(start_x - spacing, PIVOT_Y - L, 0.0);
-    let right = Vec3::new(start_x + 3.0 * spacing, PIVOT_Y - L, 0.0);
-    let mut deepest = 0.0f32;
-    for frame in 0..300 {
-        let phase = (frame as f32 * DT * 2.0 * std::f32::consts::PI * 1.5).sin();
-        let target = left.lerp(right, phase.mul_add(0.5, 0.5));
-        let here = world.transforms[1].position;
-        world.velocities[1].linear = ((target - here) * DRAG_GAIN).clamp_length_max(DRAG_CLAMP);
-        world.velocities[1].angular = Vec3::ZERO;
-        let _ = world.step(DT);
-        for i in 1..=N {
-            for j in (i + 1)..=N {
-                let d = (world.transforms[i].position - world.transforms[j].position).length();
-                deepest = deepest.max((2.0 * R - d).max(0.0));
-            }
-        }
-    }
-    println!("held-and-shoved: deepest overlap {deepest:.3} m of 2R={:.2}", 2.0 * R);
-    assert!(deepest > 0.1, "expected the live run's burial, got only {deepest:.3} m");
 }

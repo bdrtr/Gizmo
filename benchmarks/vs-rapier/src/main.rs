@@ -229,15 +229,12 @@ fn stability_tower() {
 //
 // N kutu ızgaraya dizilip düşürülür. Ölçülen: kare başına milisaniye. Yukarıdaki adalet
 // notu burada geçerli — Gizmo çağrı başına dört alt-adım atıyor.
-fn throughput(n_side: usize, sphere: bool, ang_damp: Option<f32>, frames: usize) {
+fn throughput(n_side: usize, sphere: bool, roll: f32, frames: usize) {
     let n = n_side * n_side * n_side;
     println!(
         "\n── 3. Hız: {n} {}, {frames} kare{} ──",
         if sphere { "küre" } else { "kutu" },
-        match ang_damp {
-            Some(d) => format!(" · açısal sönümleme {d}"),
-            None => String::new(),
-        }
+        if roll > 0.0 { format!(" · yuvarlanma direnci {roll}") } else { String::new() }
     );
     let half = 0.4f32;
     let gap = 1.2f32;
@@ -261,9 +258,6 @@ fn throughput(n_side: usize, sphere: bool, ang_damp: Option<f32>, frames: usize)
                 // Yuvarlanma direnci modeli yok; sorunun sönümlemeyle çözülüp çözülmediğini
                 // ölçmeden tam bir model yazmak, bugün beş kez düştüğüm tuzağa altıncı kez
                 // düşmek olurdu.
-                if let Some(d) = ang_damp {
-                    rb.angular_damping = d;
-                }
                 rb.wake_up();
                 w.add_body(
                     BodyHandle::from_id(id),
@@ -274,11 +268,13 @@ fn throughput(n_side: usize, sphere: bool, ang_damp: Option<f32>, frames: usize)
                         (z as f32 - n_side as f32 * 0.5) * gap,
                     )),
                     GVelocity::default(),
-                    if sphere {
-                        GCollider::sphere(half).with_material(plain())
-                    } else {
-                        GCollider::box_collider(GVec3::new(half, half, half))
-                            .with_material(plain())
+                    {
+                        let m = PhysicsMaterial { rolling_friction: roll, ..plain() };
+                        if sphere {
+                            GCollider::sphere(half).with_material(m)
+                        } else {
+                            GCollider::box_collider(GVec3::new(half, half, half)).with_material(m)
+                        }
                     },
                 );
                 id += 1;
@@ -423,10 +419,9 @@ fn main() {
     println!("Gizmo (yerel) ↔ Rapier3D 0.35 — aynı sahneler, aynı dt=1/60");
     accuracy_elastic();
     stability_tower();
-    throughput(10, false, None, 300);
-    throughput(10, true, None, 300);
-    // **Pencere yeterli mi?** Yığın 300 karede hâlâ çöküyor olabilir; bitmemiş bir geçici
-    // rejime "durmuyor" demek, olmayan bir kusura özellik yazdırır.
-    throughput(10, true, None, 1200);
-    throughput(10, true, None, 3000);
+    throughput(10, false, 0.0, 300);
+    // Yuvarlanma direnci süpürmesi: 0 eski davranış, sonrası yeni satır.
+    for r in [0.0f32, 0.05, 0.1, 0.2, 0.5] {
+        throughput(10, true, r, 300);
+    }
 }

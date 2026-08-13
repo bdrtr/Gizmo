@@ -261,6 +261,9 @@ pub struct ContactManifold {
     pub static_friction: f32,
     /// Combined coefficient of restitution (max of both materials).
     pub restitution: f32,
+    /// Combined resistance to rolling for the pair. Zero unless a material asks for it, and
+    /// zero is exactly the behaviour that existed before it.
+    pub rolling_friction: f32,
     /// Number of consecutive physics frames this manifold has been alive.
     /// Incremented by the pipeline each frame; reset when the collision ends.
     pub lifetime: u32,
@@ -291,6 +294,10 @@ impl ContactManifold {
             friction: 0.5,
             static_friction: 0.5,
             restitution: 0.3,
+            // Zero, unlike its neighbours: those defaults stand in for a real material and
+            // this one has no old behaviour to stand in for. A manifold that never reaches
+            // `PhysicsMaterial::combine` must roll exactly as it did before the field existed.
+            rolling_friction: 0.0,
             lifetime: 0,
         }
     }

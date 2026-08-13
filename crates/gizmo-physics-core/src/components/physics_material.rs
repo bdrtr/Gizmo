@@ -111,6 +111,24 @@ pub struct PhysicsMaterial {
     /// restitution to zero for a contact that was already present on the previous step, so a
     /// bouncy material will not keep a settled stack twitching.
     pub restitution: f32,
+    /// Resistance to **rolling**, as a fraction of the normal force, in the same Coulomb
+    /// form as [`dynamic_friction`](Self::dynamic_friction) but bounding a *torque* rather
+    /// than a tangential force. Zero by default, which is exactly the old behaviour.
+    ///
+    /// **Sliding friction cannot stop a rolling ball, however large it is.** In pure rolling
+    /// the contact point is instantaneously at rest, so Coulomb friction does no work there —
+    /// what stops a real ball is the deformation of the surfaces under it, and that is a
+    /// separate effect. Measured in `benchmarks/vs-rapier` on a thousand-sphere pile: the
+    /// spheres roll without slipping (`ω·r = 0.397` against 0.473 m/s of translation) and at
+    /// fifty seconds they are still going, having spread to a **39.6 m** radius and still
+    /// growing. Angular damping is not a substitute — raised fortyfold it halves the spin and
+    /// leaves the translation nearly untouched, because damping acts everywhere while what
+    /// stops a rolling ball acts at the contact.
+    ///
+    /// It shares [`friction_combine`](Self::friction_combine) with the two sliding
+    /// coefficients: a pair cannot merge its rolling and sliding resistance under different
+    /// rules.
+    pub rolling_friction: f32,
     /// Mass per unit volume on a relative scale where water is about 1.0 — the presets are
     /// specific gravities (7.8 for steel-like [`METAL`](Self::METAL), 0.6 for
     /// [`WOOD`](Self::WOOD)), i.e. the g/cm³ figure, not kg/m³. Non-negative; 0 is accepted
@@ -140,6 +158,9 @@ impl Default for PhysicsMaterial {
             static_friction: 0.6,
             dynamic_friction: 0.5,
             restitution: 0.3,
+            // Zero, so that adding this field changes no existing simulation by a single
+            // bit — the determinism contract is kept and the feature is opt-in.
+            rolling_friction: 0.0,
             density: 1.0,
             friction_combine: CombineMode::GeometricMean,
             restitution_combine: CombineMode::Max,
@@ -181,6 +202,12 @@ impl PhysicsMaterial {
         }
     }
 
+    /// Sets resistance to rolling (0 = a ball that never stops). Chainable.
+    pub fn with_rolling_friction(mut self, rolling: f32) -> Self {
+        self.rolling_friction = rolling.max(0.0);
+        self
+    }
+
     /// Sets density (for mass/volume computations). Chainable.
     pub fn with_density(mut self, density: f32) -> Self {
         self.density = density.max(0.0);
@@ -196,6 +223,7 @@ impl PhysicsMaterial {
             static_friction: f_mode.combine(a.static_friction, b.static_friction),
             dynamic_friction: f_mode.combine(a.dynamic_friction, b.dynamic_friction),
             restitution: r_mode.combine(a.restitution, b.restitution),
+            rolling_friction: f_mode.combine(a.rolling_friction, b.rolling_friction),
             density: CombineMode::Average.combine(a.density, b.density),
         };
 
@@ -225,6 +253,10 @@ impl PhysicsMaterial {
         static_friction: 1.0,
         dynamic_friction: 0.9,
         restitution: 0.8,
+        // Hazır malzemeler de 0,0 ile gelir: bu alanın eklenmesi HİÇBİR mevcut
+        // sahneyi değiştirmesin. Fizikçe RUBBER'ın sıfırdan büyük olması gerekir ve
+        // bu ayrı, ölçülerek verilecek bir karardır.
+        rolling_friction: 0.0,
         density: 1.1,
         friction_combine: CombineMode::Max,
         restitution_combine: CombineMode::Max,
@@ -240,6 +272,10 @@ impl PhysicsMaterial {
         static_friction: 0.05,
         dynamic_friction: 0.03,
         restitution: 0.05,
+        // Hazır malzemeler de 0,0 ile gelir: bu alanın eklenmesi HİÇBİR mevcut
+        // sahneyi değiştirmesin. Fizikçe RUBBER'ın sıfırdan büyük olması gerekir ve
+        // bu ayrı, ölçülerek verilecek bir karardır.
+        rolling_friction: 0.0,
         density: 0.92,
         friction_combine: CombineMode::Min,
         restitution_combine: CombineMode::Min,
@@ -256,6 +292,10 @@ impl PhysicsMaterial {
         static_friction: 0.4,
         dynamic_friction: 0.3,
         restitution: 0.3,
+        // Hazır malzemeler de 0,0 ile gelir: bu alanın eklenmesi HİÇBİR mevcut
+        // sahneyi değiştirmesin. Fizikçe RUBBER'ın sıfırdan büyük olması gerekir ve
+        // bu ayrı, ölçülerek verilecek bir karardır.
+        rolling_friction: 0.0,
         density: 7.8,
         friction_combine: CombineMode::GeometricMean,
         restitution_combine: CombineMode::Average,
@@ -268,6 +308,10 @@ impl PhysicsMaterial {
         static_friction: 0.5,
         dynamic_friction: 0.4,
         restitution: 0.4,
+        // Hazır malzemeler de 0,0 ile gelir: bu alanın eklenmesi HİÇBİR mevcut
+        // sahneyi değiştirmesin. Fizikçe RUBBER'ın sıfırdan büyük olması gerekir ve
+        // bu ayrı, ölçülerek verilecek bir karardır.
+        rolling_friction: 0.0,
         density: 0.6,
         friction_combine: CombineMode::GeometricMean,
         restitution_combine: CombineMode::Average,
@@ -282,6 +326,10 @@ impl PhysicsMaterial {
         static_friction: 0.8,
         dynamic_friction: 0.7,
         restitution: 0.1,
+        // Hazır malzemeler de 0,0 ile gelir: bu alanın eklenmesi HİÇBİR mevcut
+        // sahneyi değiştirmesin. Fizikçe RUBBER'ın sıfırdan büyük olması gerekir ve
+        // bu ayrı, ölçülerek verilecek bir karardır.
+        rolling_friction: 0.0,
         density: 2.4,
         friction_combine: CombineMode::GeometricMean,
         restitution_combine: CombineMode::Min,
@@ -296,6 +344,10 @@ impl PhysicsMaterial {
         static_friction: 0.2,
         dynamic_friction: 0.15,
         restitution: 0.6,
+        // Hazır malzemeler de 0,0 ile gelir: bu alanın eklenmesi HİÇBİR mevcut
+        // sahneyi değiştirmesin. Fizikçe RUBBER'ın sıfırdan büyük olması gerekir ve
+        // bu ayrı, ölçülerek verilecek bir karardır.
+        rolling_friction: 0.0,
         density: 2.5,
         friction_combine: CombineMode::Min,
         restitution_combine: CombineMode::Max,
@@ -308,6 +360,10 @@ impl PhysicsMaterial {
         static_friction: 0.75,
         dynamic_friction: 0.65,
         restitution: 0.05,
+        // Hazır malzemeler de 0,0 ile gelir: bu alanın eklenmesi HİÇBİR mevcut
+        // sahneyi değiştirmesin. Fizikçe RUBBER'ın sıfırdan büyük olması gerekir ve
+        // bu ayrı, ölçülerek verilecek bir karardır.
+        rolling_friction: 0.0,
         density: 2.3,
         friction_combine: CombineMode::GeometricMean,
         restitution_combine: CombineMode::Min,
@@ -323,6 +379,10 @@ impl PhysicsMaterial {
         static_friction: 0.55,
         dynamic_friction: 0.45,
         restitution: 0.02,
+        // Hazır malzemeler de 0,0 ile gelir: bu alanın eklenmesi HİÇBİR mevcut
+        // sahneyi değiştirmesin. Fizikçe RUBBER'ın sıfırdan büyük olması gerekir ve
+        // bu ayrı, ölçülerek verilecek bir karardır.
+        rolling_friction: 0.0,
         density: 1.6,
         friction_combine: CombineMode::Average,
         restitution_combine: CombineMode::Min,
@@ -344,6 +404,10 @@ pub struct CombinedMaterial {
     /// Bounce for the pair, on the same `[0, 1]` scale as
     /// [`PhysicsMaterial::restitution`] and likewise unclamped here.
     pub restitution: f32,
+    /// Resistance to rolling for the pair, merged under the same mode as the two sliding
+    /// coefficients. Bounds a *torque* rather than a tangential force — see
+    /// [`PhysicsMaterial::rolling_friction`] for why sliding friction cannot do this job.
+    pub rolling_friction: f32,
     /// Plain arithmetic mean of the two densities: no combine mode is consulted for this
     /// field, whatever the materials asked for. A contact has no mass of its own, so this is
     /// informational — the rigid-body contact path reads only the friction and restitution
