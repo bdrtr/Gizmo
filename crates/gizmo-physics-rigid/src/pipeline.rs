@@ -520,10 +520,22 @@ impl PhysicsWorld {
             if current_cache.contains_key(&pair) {
                 continue;
             }
-            if let Some(entry) = self.contact_cache.get(&pair) {
-                current_cache.insert(pair, entry.clone());
-            } else if let Some(entry) = self.contact_cache.get(&(pair.1, pair.0)) {
-                current_cache.insert((pair.1, pair.0), entry.clone());
+            // **Taşı, kopyalama.** Girdi buradan değiştirilmeden ileri geçiyor ve
+            // `self.contact_cache` birkaç satır aşağıda tümden `current_cache` ile
+            // değiştiriliyor — yani kopyanın ömrü zaten bu blok kadar. `ContactManifold`
+            // bir `Vec<ContactPoint>` sahibi olduğundan her `clone()` bir heap tahsisiydi:
+            // dormant çift başına, ALT-ADIM başına. Oturmuş bir yığında çiftlerin neredeyse
+            // tamamı dormant olduğu için temas yolundaki tahsislerin çoğu buradan geliyordu
+            // (ölçüm: 8.160/kare, temassız taban çizgisi 20/kare).
+            //
+            // Aşağıdaki "biten çarpışma" döngüsü `self.contact_cache`'i tarayıp
+            // `current_cache`'te olmayanları "bitti" sayar; buradan çıkardığımız her girdi
+            // aynı anda `current_cache`'e girdiğinden o döngü onları zaten atlıyordu.
+            // Kaldırmak sonucu değiştirmez.
+            if let Some(entry) = self.contact_cache.remove(&pair) {
+                current_cache.insert(pair, entry);
+            } else if let Some(entry) = self.contact_cache.remove(&(pair.1, pair.0)) {
+                current_cache.insert((pair.1, pair.0), entry);
             }
         }
 
