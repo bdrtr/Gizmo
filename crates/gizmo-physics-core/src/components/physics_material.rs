@@ -128,6 +128,17 @@ pub struct PhysicsMaterial {
     /// It shares [`friction_combine`](Self::friction_combine) with the two sliding
     /// coefficients: a pair cannot merge its rolling and sliding resistance under different
     /// rules.
+    ///
+    /// **Do not pick this value the way you would pick a rolling-resistance coefficient.** It is
+    /// not one, and choosing it for physical realism gets the wrong answer at both ends. Swept
+    /// against a rolling ball and against a settling pile (the table lives in
+    /// `tests/rolling_and_settling.rs`): a pile needs about **0.05** to come to rest inside ten
+    /// seconds, while a hard ball on hard ground has a real coefficient of 0.001-0.01 — a
+    /// physically chosen value is an order of magnitude too weak to stabilise anything. And what
+    /// it costs is consistently *above* the textbook `c·g`, around 1.5× at that settling end.
+    /// Treat it as a stabiliser with a physical flavour: start at 0.05 for things that must
+    /// settle, leave it at 0 for everything else, and measure rather than reason if the value
+    /// matters to how a scene feels.
     pub rolling_friction: f32,
     /// Mass per unit volume on a relative scale where water is about 1.0 — the presets are
     /// specific gravities (7.8 for steel-like [`METAL`](Self::METAL), 0.6 for
