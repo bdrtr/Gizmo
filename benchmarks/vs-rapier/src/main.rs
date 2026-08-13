@@ -74,7 +74,7 @@ unsafe impl std::alloc::GlobalAlloc for Counting {
     unsafe fn alloc(&self, l: std::alloc::Layout) -> *mut u8 {
         ALLOCS.fetch_add(1, Ordering::Relaxed);
         if PROFILING.load(Ordering::Relaxed)
-            && SAMPLE.fetch_add(1, Ordering::Relaxed) % 64 == 0
+            && SAMPLE.fetch_add(1, Ordering::Relaxed).is_multiple_of(64)
         {
             record_site();
         }
