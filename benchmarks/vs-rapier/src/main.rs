@@ -229,9 +229,16 @@ fn stability_tower() {
 //
 // N kutu ızgaraya dizilip düşürülür. Ölçülen: kare başına milisaniye. Yukarıdaki adalet
 // notu burada geçerli — Gizmo çağrı başına dört alt-adım atıyor.
-fn throughput(n_side: usize, sphere: bool) {
+fn throughput(n_side: usize, sphere: bool, ang_damp: Option<f32>, frames: usize) {
     let n = n_side * n_side * n_side;
-    println!("\n── 3. Hız: {n} {}, 300 kare ──", if sphere { "küre" } else { "kutu" });
+    println!(
+        "\n── 3. Hız: {n} {}, {frames} kare{} ──",
+        if sphere { "küre" } else { "kutu" },
+        match ang_damp {
+            Some(d) => format!(" · açısal sönümleme {d}"),
+            None => String::new(),
+        }
+    );
     let half = 0.4f32;
     let gap = 1.2f32;
 
@@ -251,6 +258,12 @@ fn throughput(n_side: usize, sphere: bool) {
         for y in 0..n_side {
             for z in 0..n_side {
                 let mut rb = GRigidBody::new(1.0, true);
+                // Yuvarlanma direnci modeli yok; sorunun sönümlemeyle çözülüp çözülmediğini
+                // ölçmeden tam bir model yazmak, bugün beş kez düştüğüm tuzağa altıncı kez
+                // düşmek olurdu.
+                if let Some(d) = ang_damp {
+                    rb.angular_damping = d;
+                }
                 rb.wake_up();
                 w.add_body(
                     BodyHandle::from_id(id),
@@ -277,14 +290,14 @@ fn throughput(n_side: usize, sphere: bool) {
     // yerde durduğunu gösterir. Bir kez öyle ölçüldü ve sıfırlar ele verdi.
     let (mut g_bp, mut g_np, mut g_sv, mut g_it) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
     let t0 = Instant::now();
-    for _ in 0..300 {
+    for _ in 0..frames {
         let _ = w.step(DT);
         g_bp += w.metrics.broadphase_ms as f64;
         g_np += w.metrics.narrowphase_ms as f64;
         g_sv += w.metrics.solver_ms as f64;
         g_it += w.metrics.integration_ms as f64;
     }
-    let g_ms = t0.elapsed().as_secs_f64() * 1000.0 / 300.0;
+    let g_ms = t0.elapsed().as_secs_f64() * 1000.0 / frames as f64;
     // **Uyku, kıyasın en sinsi çarpıtması.** Uyuyan cisim çözücüye uğramaz; bir motor
     // sahneyi erken uyutuyorsa "hızlı" görünür, oysa daha az iş yapmıştır. İkisinin de
     // kaç cismi uyanık bitirdiği yazılmadan ms/kare okunmamalı. Yığının ortalama
@@ -295,6 +308,18 @@ fn throughput(n_side: usize, sphere: bool) {
     // birlikte okunmalı: yuvarlanıp dağılan küreler geniş ama temiz bir yığın verir,
     // birbirinin içine giren küreler ise dar ve çakışık. Tek başına "ortalama yükseklik
     // düştü" ikisini ayırmaz.
+    // **Uyumuyorlar mı, yoksa hâlâ hareket mi ediyorlar?** İkisi bambaşka: eşiğin
+    // altındayken uyutulmayan cisim uyku mantığının sorunudur, eşiğin üstünde olan ise
+    // fiziğin. Uyku eşikleri 0,05 m/s ve 0,05 rad/s.
+    let mut lin: Vec<f32> = (0..n).map(|i| w.velocities[i].linear.length()).collect();
+    let mut ang: Vec<f32> = (0..n).map(|i| w.velocities[i].angular.length()).collect();
+    lin.sort_by(f32::total_cmp);
+    ang.sort_by(f32::total_cmp);
+    let g_lin_med = lin[n / 2];
+    let g_ang_med = ang[n / 2];
+    let g_under = (0..n)
+        .filter(|&i| lin[i] < 0.05 && ang[i] < 0.05)
+        .count();
     let g_spread = (0..n)
         .map(|i| (w.transforms[i].position.x.powi(2) + w.transforms[i].position.z.powi(2)).sqrt())
         .fold(0.0f32, f32::max);
@@ -333,14 +358,14 @@ fn throughput(n_side: usize, sphere: bool) {
     }
     let (mut r_bp, mut r_np, mut r_sv, mut r_it) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
     let t0 = Instant::now();
-    for _ in 0..300 {
+    for _ in 0..frames {
         rp.step();
         r_bp += rp.pipeline.counters.cd.broad_phase_time.time_ms();
         r_np += rp.pipeline.counters.cd.narrow_phase_time.time_ms();
         r_sv += rp.pipeline.counters.stages.solver_time.time_ms();
         r_it += rp.pipeline.counters.stages.update_time.time_ms();
     }
-    let r_ms = t0.elapsed().as_secs_f64() * 1000.0 / 300.0;
+    let r_ms = t0.elapsed().as_secs_f64() * 1000.0 / frames as f64;
     let r_awake = rp.bodies.iter().filter(|(_, b)| b.is_dynamic() && !b.is_sleeping()).count();
     let r_mean_y: f32 = rp.bodies.iter().filter(|(_, b)| b.is_dynamic())
         .map(|(_, b)| b.translation().y).sum::<f32>() / n as f32;
@@ -355,7 +380,7 @@ fn throughput(n_side: usize, sphere: bool) {
         }
     }
 
-    println!("   gizmo : {g_ms:>7.3} ms/kare (4 alt-adım) · uyanık {g_awake:>4}/{n} · ort y {g_mean_y:>5.2} · yayılma {g_spread:>5.1} m · en derin girişim {g_overlap:>5.3}");
+    println!("   gizmo : {g_ms:>7.3} ms/kare (4 alt-adım) · uyanık {g_awake:>4}/{n} · ort y {g_mean_y:>5.2} · yayılma {g_spread:>5.1} m · en derin girişim {g_overlap:>5.3}\n            hız: medyan doğrusal {g_lin_med:>6.3} m/s · medyan açısal {g_ang_med:>6.3} rad/s · eşik altında {g_under}/{n}");
     println!("   rapier: {r_ms:>7.3} ms/kare (1 adım)      · uyanık {r_awake:>4}/{n} · ort y {r_mean_y:>5.2} · yayılma {r_spread:>5.1} m · en derin girişim {r_overlap:>5.3}");
     println!("   oran  : gizmo {:.2}× {}", (g_ms / r_ms).max(r_ms / g_ms), if g_ms > r_ms { "daha yavaş" } else { "daha hızlı" });
 
@@ -371,24 +396,24 @@ fn throughput(n_side: usize, sphere: bool) {
     );
     println!(
         "   {:<12} {:>9.3} {:>9.3}",
-        "broadphase", g_bp / 300.0, r_bp / 300.0
+        "broadphase", g_bp / frames as f64, r_bp / frames as f64
     );
     println!(
         "   {:<12} {:>9.3} {:>9.3}",
-        "narrowphase", g_np / 300.0, r_np / 300.0
+        "narrowphase", g_np / frames as f64, r_np / frames as f64
     );
     println!(
         "   {:<12} {:>9.3} {:>9.3}",
-        "çözücü", g_sv / 300.0, r_sv / 300.0
+        "çözücü", g_sv / frames as f64, r_sv / frames as f64
     );
     println!(
         "   {:<12} {:>9.3} {:>9.3}",
-        "entegrasyon", g_it / 300.0, r_it / 300.0
+        "entegrasyon", g_it / frames as f64, r_it / frames as f64
     );
     println!(
         "   toplam: gizmo {:>6.3}  rapier {:>6.3}  (ölçülen kare {:>6.3} / {:>6.3})",
-        (g_bp + g_np + g_sv + g_it) / 300.0,
-        (r_bp + r_np + r_sv + r_it) / 300.0,
+        (g_bp + g_np + g_sv + g_it) / frames as f64,
+        (r_bp + r_np + r_sv + r_it) / frames as f64,
         g_ms,
         r_ms
     );
@@ -398,6 +423,10 @@ fn main() {
     println!("Gizmo (yerel) ↔ Rapier3D 0.35 — aynı sahneler, aynı dt=1/60");
     accuracy_elastic();
     stability_tower();
-    throughput(10, false);
-    throughput(10, true);
+    throughput(10, false, None, 300);
+    throughput(10, true, None, 300);
+    // **Pencere yeterli mi?** Yığın 300 karede hâlâ çöküyor olabilir; bitmemiş bir geçici
+    // rejime "durmuyor" demek, olmayan bir kusura özellik yazdırır.
+    throughput(10, true, None, 1200);
+    throughput(10, true, None, 3000);
 }
