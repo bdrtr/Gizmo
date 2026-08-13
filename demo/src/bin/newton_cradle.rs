@@ -12,8 +12,13 @@
 //!   * **İp = `Joint::rope` (motorda birinci-sınıf)** — esnemez ama gevşeyebilir
 //!     (dist ≤ L). Ankor A = kiriş pivotu, B = top merkezi. Elle konum kırpma HİLESİ yok.
 //!   * **Görsel ip = fiziksiz ince çubuk** — her kare topun konumuna göre gerilir.
-//!   * **Sürükleme = `Camera::screen_to_ray` + fizik `raycast`** — sol tıkla topu seç,
-//!     KİNEMATİK yap (komşuları iter), bırakınca DİNAMİK'e dön ve servo hızını taşı.
+//!   * **Sürükleme = `Camera::screen_to_ray` + fizik `raycast` + hız servosu** — sol tıkla
+//!     topu seç ve hedefe doğru sür. Gövde **DİNAMİK kalır**: eskiden kinematik yapılırdı
+//!     ("komşuları itsin" diye) ve bu ölçülerek çürüdü — kinematik cisim geri itilemediği
+//!     için servo tıkalıyken bile ısrar ediyor, toplar birbirine 0,572 m gömülüyordu (çap
+//!     1,00 m; çakışan çift 0-2, yani aradaki topun içinden geçilmiş) ve çözücü o girişimi
+//!     çözerken sahneyi 20-27 m/s'ye savuruyordu. Dinamikte servo yine iter, ama temas ona
+//!     karşı koyabilir.
 //!   * **Sıfırlama = YERİNDE restore + `Joint::reset_warm_start`** — despawn/respawn DEĞİL:
 //!     ip eklemleri entity-id tutar, varlıkları yeniden yaratmak eklemleri koparırdı.
 //!     Kenar-tespiti motorun `is_key_just_pressed` API'sinden (elle `prev_r` takibi yok).
@@ -82,8 +87,10 @@ struct Cradle {
     worst_overlap: f32,
     /// Son karelerin konum/hız kaydı — olayın kendisi kadar öncesi de lazım.
     history: std::collections::VecDeque<(f32, Vec<Vec3>, Vec<Vec3>)>,
-    /// Döküm bir kez yazılır; sonraki rekorlar aynı olayın devamıdır.
-    dumped: bool,
+    /// En son hangi derinlikte döküm yazıldı. Rekor katlandıkça yeniden yazılır.
+    dumped_at: f32,
+    /// Beklenmedik hız için döküm bir kez yazılır.
+    dumped_fast: bool,
 }
 
 // --------------------------------------------------------------- setup
@@ -194,7 +201,8 @@ fn setup(world: &mut World, renderer: &Renderer) -> Cradle {
         dragging: None,
         worst_overlap: 0.0,
         history: std::collections::VecDeque::new(),
-        dumped: false,
+        dumped_at: 0.0,
+        dumped_fast: false,
     }
 }
 
@@ -257,7 +265,17 @@ fn update(world: &mut World, state: &mut Cradle, _dt: f32, input: &Input) {
             .map(|h| h.entity.id());
         if let Some(idx) = hit_id.and_then(|id| state.balls.iter().position(|&b| b == id)) {
             state.dragging = Some(idx);
-            set_body_type(world, state.balls[idx], BodyType::Kinematic);
+            // **Tutulan top DİNAMİK kalır.** Eskiden kinematik yapılırdı, gerekçesi de
+            // makuldü — "komşuları itsin" — ama kinematik cisim tanım gereği **geri
+            // itilemez**, ve servo hedefe varamadığı sürece her kare aynı hızı yeniden
+            // dayattığı için tıkalıyken bile ısrarla ileri sürer. Sonucu ölçüldü: canlı
+            // koşuda toplar birbirine **0,572 m** gömüldü (çap 1,00 m), üstelik çakışan
+            // çift 0-2 idi — yani 0, aradaki 1'in İÇİNDEN geçmişti. Ardından çözücü o
+            // girişimi çözmeye çalışırken tek karede 19,4 m/s'lik düzeltmeler üretti ve
+            // sahne 20-27 m/s'lik hızlara savruldu; demonun kendi kelepçeleri 15 ve 12.
+            //
+            // Dinamik kalınca servo yine iter — ama temaslar ona karşı koyabilir, ki
+            // "topu ötekinin içine sokamamak" bir kısıtlama değil, sahnenin doğrusu.
         }
     }
 
@@ -278,9 +296,9 @@ fn update(world: &mut World, state: &mut Cradle, _dt: f32, input: &Input) {
                 };
 
                 let id = state.balls[idx];
-                // Hedefe SABİT-KAZANÇLI hız servosu ile sür (dt'ye bölme YOK). Kinematik cisim
-                // konumu hızından entegre eder → komşularla çarpışıp onları iter. Sabit ılımlı
-                // kazanç dt tutarsızlığına bağışık ve pürüzsüz takip eder.
+                // Hedefe SABİT-KAZANÇLI hız servosu ile sür (dt'ye bölme YOK). Sabit ılımlı
+                // kazanç dt tutarsızlığına bağışık ve pürüzsüz takip eder. Gövde DİNAMİK
+                // olduğu için bu bir *istek*: temas ona karşı koyabilir, ve koymalıdır.
                 let cur = world
                     .borrow::<Transform>()
                     .get(id)
@@ -296,9 +314,9 @@ fn update(world: &mut World, state: &mut Cradle, _dt: f32, input: &Input) {
             }
         }
     } else if let Some(idx) = state.dragging.take() {
-        // Bırakma: dinamiğe dön; servo hızı doğal fiske olarak kalır (patlama yok).
+        // Bırakma: gövde tipi zaten Dynamic (artık kinematiğe hiç geçilmiyor); yalnız servo
+        // hızı doğal bir fiske olarak bırakılır, kelepçeyle.
         let id = state.balls[idx];
-        set_body_type(world, id, BodyType::Dynamic);
         let mut vs = world.borrow_mut::<Velocity>();
         if let Some(mut v) = vs.get_mut(id) {
             v.linear = v.linear.clamp_length_max(12.0);
@@ -337,11 +355,27 @@ fn update(world: &mut World, state: &mut Cradle, _dt: f32, input: &Input) {
         // Son kareler, halka tampon. Bir kez olan bir şeyi başsız olarak yeniden kurabilmek
         // için tek satır yetmez: olayın kendisi kadar ÖNCESİ de lazım — hangi hızla girildi,
         // kare süresi sıçradı mı, hangi çift yaklaşıyordu.
-        state.history.push_back((_dt, centers.clone(), vels));
+        state.history.push_back((_dt, centers.clone(), vels.clone()));
         while state.history.len() > HISTORY {
             state.history.pop_front();
         }
 
+        // **Beklenmedik hız.** Demonun kendi kolları hızı 15 m/s (sürükleme servosu) ve
+        // 12 m/s (bırakma) ile kelepçeliyor, doğal sarkaç da 10'u geçmiyor. Canlı koşunun
+        // dökümünde bir top tek karede 0,6'dan **26,5 m/s**'ye çıktı — yani bir yerden
+        // kelepçelerin üstünde enerji giriyor ve bunun nereden geldiği ölçülmedi. Eşik
+        // 20: her kolun üstünde, gürültünün dışında.
+        if fastest > 20.0 && !state.dumped_fast {
+            state.dumped_fast = true;
+            let who = vels.iter().position(|v| v.length() == fastest).unwrap_or(0);
+            println!("BEKLENMEDİK HIZ: top {who} → {fastest:.1} m/s (sürükleme kelepçesi 15, bırakma 12)");
+            for (k, (fdt, pos, vel)) in state.history.iter().enumerate() {
+                println!(
+                    "  {k:>3}  {:>5.1} ms  top {who}: ({:>7.2},{:>6.2}) v=({:>6.1},{:>6.1}) |v|={:>5.1}",
+                    fdt * 1000.0, pos[who].x, pos[who].y, vel[who].x, vel[who].y, vel[who].length()
+                );
+            }
+        }
         for i in 0..centers.len() {
             for j in (i + 1)..centers.len() {
                 let overlap = 2.0 * R - (centers[i] - centers[j]).length();
@@ -356,10 +390,15 @@ fn update(world: &mut World, state: &mut Cradle, _dt: f32, input: &Input) {
                         if overlap >= 2.0 * R { "  ← TAM GEÇİŞ" } else { "" }
                     );
                     // Gerçek bir olay (5 cm üstü) tek satırla anlaşılmaz; öncesini de dök.
-                    // Bir kez yazar — sonraki rekorlar aynı olayın devamı olur ve dökümü
-                    // tekrarlamak onu okunmaz yapardı.
-                    if overlap > 0.05 && !state.dumped {
-                        state.dumped = true;
+                    //
+                    // **"Bir kez yaz" yanlıştı ve bunu kullanım gösterdi.** İlk sürümde
+                    // döküm tek seferlikti; canlı koşuda ilk olay 6 cm'de yakalandı, sonra
+                    // girişim 27 cm'ye tırmandı ve o derin olayların HİÇBİRİ dökülmedi —
+                    // yani tam gereken veriyi eleyen şey ölçenin kendisiydi. Artık rekor
+                    // her KATLANDIĞINDA yeniden yazar: sığ olay bir kez, derinleşen olay
+                    // her kademede, ve konsol yine dolmaz.
+                    if overlap > 0.05 && overlap > state.dumped_at * 2.0 {
+                        state.dumped_at = overlap;
                         println!("  son {} kare (kare süresi · top {i} ve {j}: konum / hız):", state.history.len());
                         for (k, (fdt, pos, vel)) in state.history.iter().enumerate() {
                             println!(
@@ -403,7 +442,8 @@ fn reset(world: &mut World, state: &mut Cradle) {
     // Ölçer de sıfırlanır: R'den sonraki rekor, R'den ÖNCEKİ denemenin kalıntısı olmamalı.
     state.worst_overlap = 0.0;
     state.history.clear();
-    state.dumped = false;
+    state.dumped_at = 0.0;
+    state.dumped_fast = false;
 
     {
         let mut ts = world.borrow_mut::<Transform>();
@@ -425,7 +465,7 @@ fn reset(world: &mut World, state: &mut Cradle) {
         let mut rbs = world.borrow_mut::<RigidBody>();
         for &b in &state.balls {
             if let Some(mut rb) = rbs.get_mut(b) {
-                rb.body_type = BodyType::Dynamic; // sürükleme yarıda kaldıysa kinematikten dön
+                rb.body_type = BodyType::Dynamic; // tip zaten bu; sıfırlama onu da garantiye alır
                 rb.wake_up(); // uyuyan gövde ışınlanmayı yoksayardı (integratör atlıyor)
             }
         }
@@ -439,15 +479,6 @@ fn reset(world: &mut World, state: &mut Cradle) {
     }
 }
 
-fn set_body_type(world: &mut World, id: u32, bt: BodyType) {
-    let mut rbs = world.borrow_mut::<RigidBody>();
-    if let Some(mut rb) = rbs.get_mut(id) {
-        rb.body_type = bt;
-        if bt == BodyType::Dynamic {
-            rb.wake_up();
-        }
-    }
-}
 
 // --------------------------------------------------------------- render + main
 // `default_render_pass` DOĞRUDAN: SSR/SSGI/volumetric/TAA'yı AÇIK tutar
