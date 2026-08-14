@@ -229,10 +229,12 @@ fn fs_main(in: VertexOutput) -> GBufferOut {
     albedo = albedo * ao + emissive;
 
     // Unpack anisotropy, clear_coat, and subsurface from in.inst_pbr.w (packed_params)
-    let subsurface_raw = floor(in.inst_pbr.w / 1000000.0) / 100.0;
-    let rem_packed = in.inst_pbr.w - floor(in.inst_pbr.w / 1000000.0) * 1000000.0;
-    let clear_coat_raw = floor(rem_packed / 1000.0) / 1000.0;
-    let anisotropy_raw = (rem_packed - floor(rem_packed / 1000.0) * 1000.0) / 1000.0;
+    // Two digits per field — see `pack_pbr_params`. Three needed nine digits, which an f32
+    // cannot hold as an exact integer, and the low field carried into its neighbour above 2^24.
+    let subsurface_raw = floor(in.inst_pbr.w / 10000.0) / 100.0;
+    let rem_packed = in.inst_pbr.w - floor(in.inst_pbr.w / 10000.0) * 10000.0;
+    let clear_coat_raw = floor(rem_packed / 100.0) / 100.0;
+    let anisotropy_raw = (rem_packed - floor(rem_packed / 100.0) * 100.0) / 100.0;
 
     let packed_tangent_w = sign(in.world_tangent.w) * (0.01 + 0.99 * clear_coat_raw);
 

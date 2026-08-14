@@ -679,6 +679,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   reads as fully lit. The sphere fit costs resolution and the figure is recorded next to it:
   texels grow **1.44-1.52x** (4.3 mm/texel on the nearest cascade, 59 mm on the farthest), which
   is the right way round — a crawling edge is far more visible than a texel half again as wide.
+- **Full anisotropy read back as none whenever subsurface was above 0.16.** The three PBR extras
+  ride in one `f32` as three-digit decimal fields, and nine digits do not fit: an `f32` is exact on
+  integers only to 2^24 = 16 777 216. Past that the step exceeds 1, so anisotropy's clamped 999
+  rounded to 1000 and **carried into the clear-coat field** — anisotropy 0.0 plus a phantom
+  clear-coat, and with clear-coat also at its endpoint the carry reached subsurface. That is the
+  exact overflow the existing `.min()` clamps and their regression test were written to stop; f32
+  rounding reintroduced it higher up the range, where the test — which only ever tried subsurface
+  0 — was not looking. The fields are two digits now: packed values top out at 999 999, seventeen
+  times under the limit, exact for every combination, at the 1 % resolution subsurface always had.
 - **The G-buffer's albedo target was linear 8-bit, so dark materials collapsed together.** Linear
   `Rgba8Unorm` spends its codes where the eye has least: the perceptual range 0–32/255 gets **4
   codes** against an sRGB target's 32, and the first linear code already sits at a perceptual

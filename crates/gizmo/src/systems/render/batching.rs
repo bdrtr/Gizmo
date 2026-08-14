@@ -119,9 +119,20 @@ pub(crate) fn cmp_draw_order(a: (DrawLayer, f32), b: (DrawLayer, f32)) -> std::c
 }
 
 pub(crate) fn pack_pbr_params(anisotropy: f32, clear_coat: f32, subsurface: f32) -> f32 {
-    (anisotropy * 1000.0).floor().min(999.0)
-        + 1000.0 * (clear_coat * 1000.0).floor().min(999.0)
-        + 1_000_000.0 * (subsurface * 100.0).floor()
+    // Two decimal digits per field, not three, and that is a correctness bound rather than taste.
+    // An `f32` holds integers exactly only up to 2^24 = 16 777 216 — eight digits, and not even
+    // all of those. Three fields of three digits needs nine, and past the limit the step exceeds
+    // 1, so the low field rounds *into* its neighbour: with the old layout, anisotropy 1.0
+    // (clamped to 999) and any subsurface ≥ 0.16 rounded 999 up to 1000 and carried, reading back
+    // as anisotropy **0.0** with a phantom clear_coat. Which is precisely the overflow the
+    // `.min()` clamps were added to stop — f32 rounding simply reintroduced it further up the
+    // range, where the endpoint test was not looking.
+    //
+    // Six digits caps the packed value at 999 999, seventeen times under the limit, and the round
+    // trip is exact for every combination at the 1 % resolution the subsurface field always had.
+    (anisotropy * 100.0).floor().min(99.0)
+        + 100.0 * (clear_coat * 100.0).floor().min(99.0)
+        + 10_000.0 * (subsurface * 100.0).floor().min(99.0)
 }
 
 #[derive(Debug, Clone)]
@@ -719,10 +730,10 @@ mod pbr_pack_tests {
 
     // Mirror gbuffer.wgsl fs_main's unpack of packed_params (in.inst_pbr.w) exactly.
     fn unpack(w: f32) -> (f32, f32, f32) {
-        let subsurface = (w / 1_000_000.0).floor() / 100.0;
-        let rem = w - (w / 1_000_000.0).floor() * 1_000_000.0;
-        let clear_coat = (rem / 1000.0).floor() / 1000.0;
-        let anisotropy = (rem - (rem / 1000.0).floor() * 1000.0) / 1000.0;
+        let subsurface = (w / 10_000.0).floor() / 100.0;
+        let rem = w - (w / 10_000.0).floor() * 10_000.0;
+        let clear_coat = (rem / 100.0).floor() / 100.0;
+        let anisotropy = (rem - (rem / 100.0).floor() * 100.0) / 100.0;
         (anisotropy, clear_coat, subsurface)
     }
 
@@ -749,9 +760,37 @@ mod pbr_pack_tests {
     #[test]
     fn mid_range_values_round_trip() {
         let (aniso, cc, ss) = unpack(pack_pbr_params(0.3, 0.7, 0.05));
-        assert!((aniso - 0.3).abs() < 0.002, "aniso {aniso}");
-        assert!((cc - 0.7).abs() < 0.002, "clear_coat {cc}");
-        assert!((ss - 0.05).abs() < 0.02, "subsurface {ss}");
+        assert!((aniso - 0.3).abs() <= 0.011, "aniso {aniso}");
+        assert!((cc - 0.7).abs() <= 0.011, "clear_coat {cc}");
+        assert!((ss - 0.05).abs() <= 0.011, "subsurface {ss}");
+    }
+
+    /// The endpoint test above only ever tried subsurface 0, and that is where this hid.
+    ///
+    /// Every field must survive every combination of the other two, which the old three-digit
+    /// layout did not: `anisotropy = 1.0` with `subsurface ≥ 0.16` pushed the packed value past
+    /// 2^24, where an f32's step exceeds 1, so the clamped 999 rounded to 1000 and carried into
+    /// the clear-coat field. Anisotropy read back as **0.0** — full anisotropy rendering as none.
+    /// Swept rather than spot-checked, because a spot check is exactly what missed it.
+    #[test]
+    fn every_combination_round_trips() {
+        for i in 0..=100 {
+            for j in (0..=100).step_by(5) {
+                for k in (0..=100).step_by(5) {
+                    let (a, c, s) = (i as f32 / 100.0, j as f32 / 100.0, k as f32 / 100.0);
+                    let (da, dc, ds) = unpack(pack_pbr_params(a, c, s));
+                    for (got, want, name) in
+                        [(da, a, "anisotropy"), (dc, c, "clear_coat"), (ds, s, "subsurface")]
+                    {
+                        assert!(
+                            (got - want).abs() <= 0.011,
+                            "{name} {want} came back as {got} (a={a} c={c} s={s}) — a field is \
+                             carrying into its neighbour"
+                        );
+                    }
+                }
+            }
+        }
     }
 }
 
