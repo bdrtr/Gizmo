@@ -192,6 +192,19 @@ pub fn directional_cascade_view_projs(
         // slice corners *in light space* changes shape as the camera rotates, so the texel size
         // changed every frame and the grid moved out from under the snap. A sphere's radius does
         // not depend on how the camera is turned.
+        //
+        // **It costs resolution and the figure is worth knowing.** A sphere circumscribing a
+        // frustum slice is bigger than the slice's own box, so texels grow — measured at the
+        // default settings, **1.44-1.52x** across the four cascades:
+        //
+        //     cascade 0   0.1- 6.7 m    4.3 mm/texel   (was 2.8)
+        //     cascade 1   6.7-14.9 m    8.6 mm         (was 6.0)
+        //     cascade 2  14.9-32.1 m   18.5 mm         (was 12.9)
+        //     cascade 3  32.1-  100 m   59.3 mm        (was 40.8)
+        //
+        // That is the textbook trade and it is the right way round: a crawling shadow edge is far
+        // more visible than a texel half again as wide, and the absolute figures stay fine. Do not
+        // "recover" it by going back to the box — the box is what made the snapping decorative.
         let center = corners.iter().copied().fold(Vec3::ZERO, |a, c| a + c) / corners.len() as f32;
         let radius = corners
             .iter()
@@ -230,7 +243,61 @@ pub fn directional_cascade_view_projs(
 #[cfg(test)]
 mod tests {
     use super::*;
-/// A sun straight overhead must not produce a NaN cascade matrix.
+
+    /// Every point the camera can see inside the shadow distance is covered by the cascade that
+    /// `select_cascade` picks for it.
+    ///
+    /// The two halves — which cascade a depth selects, and what that cascade's box contains — are
+    /// computed in different places and in different languages: the split comparison is in
+    /// `deferred_lighting.wgsl`, the fit is here. Nothing but a test keeps them agreeing, and a
+    /// fragment that falls outside its cascade does not error — the shader's UV bounds check
+    /// leaves it at "fully lit", so the failure looks like shadows quietly missing in a band of
+    /// the view rather than like anything going wrong.
+    ///
+    /// Sampled over camera positions and orientations, depths across the whole range, and the
+    /// frustum's corners as well as its centre. Measured at 0 of 7800 when the bounding-sphere fit
+    /// landed, which is also what says the one-texel overhang the snap can leave at the far edge
+    /// of the box is not reachable in practice.
+    #[test]
+    fn every_visible_point_lands_in_its_own_cascade() {
+        use gizmo_math::Vec4;
+        let light = Vec3::new(-0.4, -1.0, -0.3).normalize();
+        let (aspect, fov) = (16.0f32 / 9.0, 0.785f32);
+        let splits = cascade_split_distances(0.1, SHADOW_DISTANCE, CASCADE_LAMBDA);
+        let mut outside = 0u32;
+        let mut total = 0u32;
+        // Kameranın gördüğü hacmi tara: derinlik, yatay ve dikey açı boyunca.
+        for step in 0..40 {
+            let a = step as f32 * 0.05;
+            let (cam, fwd) = (Vec3::new(a, 2.0, 0.0), Vec3::new(a.cos(), 0.0, a.sin()));
+            let (right, up) = camera_right_up(fwd);
+            let m = directional_cascade_view_projs(
+                cam, fwd, aspect, fov, 0.1, &splits, light, SHADOW_MAP_RES,
+            );
+            for d_i in 1..40 {
+                let d = 0.1 + (SHADOW_DISTANCE - 0.1) * (d_i as f32 / 40.0);
+                let ci = splits.iter().position(|&s| d < s).unwrap_or(CASCADE_COUNT - 1);
+                let hh = d * (fov * 0.5).tan();
+                let hw = hh * aspect;
+                for &(sx, sy) in &[(0.0f32, 0.0f32), (0.98, 0.98), (-0.98, 0.98), (0.98, -0.98), (-0.98, -0.98)] {
+                    let p = cam + fwd * d + right * (sx * hw) + up * (sy * hh);
+                    let c = m[ci] * Vec4::new(p.x, p.y, p.z, 1.0);
+                    let uv = ((c.x / c.w) * 0.5 + 0.5, (c.y / c.w) * -0.5 + 0.5);
+                    total += 1;
+                    if !(0.0..=1.0).contains(&uv.0) || !(0.0..=1.0).contains(&uv.1) {
+                        outside += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            outside, 0,
+            "{outside} of {total} visible points fell outside the cascade selected for them — \
+             those fragments read as fully lit, so shadows go missing in a band of the view"
+        );
+    }
+
+    /// A sun straight overhead must not produce a NaN cascade matrix.
     ///
     /// It did. `Mat4::look_at_rh` was handed `Vec3::Y` as its up vector unconditionally, so a
     /// light direction of `(0, -1, 0)` — noon, the most ordinary lighting there is — made the

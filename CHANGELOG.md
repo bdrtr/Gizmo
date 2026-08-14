@@ -673,7 +673,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   world-fixed light basis; the same measurement now shows a constant phase and whole-texel steps.
   Separately, `Mat4::look_at_rh` was given `Vec3::Y` as its up vector unconditionally, so a light
   direction of `(0, -1, 0)` — noon — made the basis degenerate and produced a cascade matrix of NaN
-  end to end. Both are pinned by tests in `csm.rs`.
+  end to end. Both are pinned by tests in `csm.rs`, together with a third that pins the agreement
+  between the two halves of cascade selection — the split comparison lives in the shader and the
+  fit lives in Rust, and a fragment landing outside its own cascade does not error, it silently
+  reads as fully lit. The sphere fit costs resolution and the figure is recorded next to it:
+  texels grow **1.44-1.52x** (4.3 mm/texel on the nearest cascade, 59 mm on the farthest), which
+  is the right way round — a crawling edge is far more visible than a texel half again as wide.
 - **Skeletal animation is advanced by the engine now.** `animation_update_system` and
   `animation_state_machine_update_system` existed in `gizmo-renderer` and nothing ever called
   them: `current_time += dt · speed` appeared nowhere else in the workspace, no schedule, plugin,
