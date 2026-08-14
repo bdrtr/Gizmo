@@ -939,8 +939,22 @@ Kök kayıtlı ("The root the sweep could not see"). Beş kesim:
 
    **Bekçinin kendi boşluğu da kapandı.** Dünkü yetenek envanteri bunu göremezdi: özneleri bileşen
    *tipleri*ydi, bu ise `Material`'ın bir *alanı* — ve `Material` iki yolda da her renk okuyan
-   satırda geçiyor. Envanter artık `Material`'ın public alanlarını da özne sayıyor. Kırılabildiği
-   doğrulandı (tek yola bağlı yeni bir alan kondu, kırmızıya düştü).
+   satırda geçiyor. Envanter artık `Material` ve `Mesh`'in public alanlarını da özne sayıyor, ve
+   alanları **erişim** olarak eşleştiriyor (`.ad`) çünkü çıplak ad `radius`/`color` gibi yerel
+   değişkenlerle çakışıyor. Neden yalnız bu iki struct: entity başına yetenek malzemede ya da
+   mesh'te oturuyor; `Camera::primary` ya da `PointLight::color` ortak toplayıcılardan okunuyor ve
+   yalnızca iki farklı struct'ın aynı alan adını taşıması yüzünden işaretlenirdi — daha da
+   genişletmek, tarayıcı sınırını tasarım kararıymış gibi kaydeden istisnalar üretirdi. Ölçüldü:
+   bütün bileşenlere açılsa 13 asimetrinin ~4'ü bu türden yanlış pozitif. Kırılabildiği doğrulandı
+   (paylaşılan bir alan tek yola indirildi + bir istisnanın yönü ters çevrildi; ikisi de kırmızı).
+
+7. **Frustum culling — sürüklenme yok, kayda geçsin.** Sıradaki aday buydu; bakınca iki yol da
+   zaten `classify_visibility_world`'ü paylaşıyor, AABB'yi bir kez dönüştürüyor ve farklarını
+   gerekçesiyle yazmış: editör oyun kamerasının frustum'una göre kırpıyor (edit modunda culling'i
+   sınayabilmek için) ve kameraya-kilitli backdrop'u testten muaf tutuyor — çünkü onun shader'ı
+   *aktif* kameraya kilitlenirken culling frustum'u *oyun* kamerasınınki, yani testi anlamlı kılan
+   bir matris yok. Motor bunun yerine kilitli matrise göre kırpıyor. Bu iyi durum; bir daha
+   "bakılacak" listesine girmesin diye yazıldı.
 
 Açık kalan: çizim listesi hâlâ iki ayrı uygulama. Tek tek ortak kararlar (routing, uniform bloğu,
 kurulum, LOD, paketleme, çift-yüzlülük) tek kaynağa indi; `collect_draw_items` ile studio'nun

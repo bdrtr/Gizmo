@@ -320,8 +320,18 @@ fn neither_draw_loop_answers_the_shared_per_entity_questions_itself() {
 /// an entry that has stopped being true must be deleted, or the list becomes the same rotting
 /// hand-count as the tests this file replaced.
 ///
-/// A name mentioned only in a comment counts as known. That is deliberate — a path that says in
-/// writing why it does not handle something has considered it, which is all this test asks.
+/// Subjects come at two granularities, because the first miss was at the second. Component
+/// **types** are matched as words; the public **fields of `Material` and `Mesh`** are matched as
+/// field *accesses* (`.name`), which is what distinguishes `mat.is_double_sided` from a local
+/// called `radius`. Those two structs and not every component: a per-entity capability lives on
+/// the material or the mesh, while `Camera::primary` or `PointLight::color` are read through
+/// shared collectors and would be flagged only because two different structs share a field name.
+/// Widening further would mean exception entries that record a scanner limitation as though it
+/// were a design decision, which is the worst kind of entry to have in this list.
+///
+/// A name mentioned only in a comment counts as known for a type, and does not for a field — a
+/// path that says in writing why it does not handle something has considered it, and for a field
+/// the access is the only unambiguous evidence either way.
 #[test]
 fn every_render_capability_is_known_to_both_draw_paths() {
     /// Declared asymmetries: (component, which path, why).
@@ -342,6 +352,16 @@ fn every_render_capability_is_known_to_both_draw_paths() {
             "GameRenderTarget",
             Path::EditorOnly,
             "the play-mode preview texture inside the editor, for the same reason.",
+        ),
+        (
+            "lod_vbufs",
+            Path::GameOnly,
+            "mesh-INTERNAL level of detail: alternative vertex buffers flattened into one Mesh,              switched by distance in the engine's batcher. The editor's LOD is the `LodGroup`              component, which selects a different `Mesh` outright, so these buffers have nothing              to select between there. The consequence is that the viewport always shows the              highest detail — which is what an editor wants, and is why this stays one-sided.",
+        ),
+        (
+            "lod_vertex_counts",
+            Path::GameOnly,
+            "the second half of `lod_vbufs` — a buffer without its vertex count is not usable,              so the two are one capability and are declined together.",
         ),
     ];
 
@@ -375,27 +395,35 @@ fn every_render_capability_is_known_to_both_draw_paths() {
             }
         }
     }
-    // …and every public FIELD of `Material`, because a capability does not have to be a whole
-    // component. `is_double_sided` was a field, honoured by the editor and ignored by the engine's
-    // deferred path for as long as both existed, and this test at component granularity could not
-    // see it: `Material` itself is named by both paths on every line that reads a colour.
-    let material = std::fs::read_to_string(comp_dir.join("material.rs")).unwrap_or_default();
-    let body = material
-        .split_once("pub struct Material {")
-        .and_then(|(_, rest)| rest.split_once("\n}"))
-        .map(|(body, _)| body.to_string())
-        .expect("Material struct");
-    for line in body.lines() {
-        if let Some(rest) = line.trim_start().strip_prefix("pub ") {
-            let name: String = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
-            if !name.is_empty() && rest[name.len()..].starts_with(':') {
-                components.push(name);
+    components.sort();
+    components.dedup();
+    assert!(components.len() > 15, "only {} components scanned", components.len());
+
+    // …and the public FIELDS of `Material` and `Mesh`, because a capability does not have to be a
+    // whole component. `is_double_sided` was a field, honoured by the editor and ignored by the
+    // engine's deferred path for as long as both existed, and this test at component granularity
+    // could not see it: `Material` itself is named by both paths on every line that reads a colour.
+    let mut fields = Vec::new();
+    for (file, ty) in [("material.rs", "Material"), ("mesh.rs", "Mesh")] {
+        let src = std::fs::read_to_string(comp_dir.join(file)).unwrap_or_default();
+        let body = src
+            .split_once(&format!("pub struct {ty} {{"))
+            .and_then(|(_, rest)| rest.split_once("\n}"))
+            .map(|(body, _)| body.to_string())
+            .unwrap_or_else(|| panic!("{ty} struct"));
+        for line in body.lines() {
+            if let Some(rest) = line.trim_start().strip_prefix("pub ") {
+                let name: String =
+                    rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+                if !name.is_empty() && rest[name.len()..].starts_with(':') {
+                    fields.push(name);
+                }
             }
         }
     }
-    components.sort();
-    components.dedup();
-    assert!(components.len() > 20, "only {} subjects scanned", components.len());
+    fields.sort();
+    fields.dedup();
+    assert!(fields.len() > 10, "only {} fields scanned", fields.len());
 
     // `shared.rs` sits inside the game path's directory but belongs to both, so a component named
     // there is named by neither in particular.
@@ -422,10 +450,28 @@ fn every_render_capability_is_known_to_both_draw_paths() {
         })
     }
 
+    /// A field ACCESS, which a local variable of the same name cannot fake.
+    fn accesses(haystack: &str, field: &str) -> bool {
+        haystack.match_indices(&format!(".{field}")).any(|(i, _)| {
+            let after = haystack[i + field.len() + 1..].chars().next();
+            !after.is_some_and(|c| c.is_alphanumeric() || c == '_')
+        })
+    }
+
+    let subjects: Vec<(&String, bool)> = components
+        .iter()
+        .map(|c| (c, false))
+        .chain(fields.iter().map(|f| (f, true)))
+        .collect();
+
     let mut undeclared = Vec::new();
     let mut stale = Vec::new();
-    for name in &components {
-        let (g, e) = (names(&game, name), names(&editor, name));
+    for (name, is_field) in subjects {
+        let (g, e) = if is_field {
+            (accesses(&game, name), accesses(&editor, name))
+        } else {
+            (names(&game, name), names(&editor, name))
+        };
         let asymmetry = match (g, e) {
             (true, false) => Some(Path::GameOnly),
             (false, true) => Some(Path::EditorOnly),
