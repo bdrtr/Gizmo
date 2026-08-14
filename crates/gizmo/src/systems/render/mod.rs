@@ -1184,6 +1184,110 @@ mod golden_render_tests {
         render_world(&mut renderer, &mut world).await
     }
 
+    /// Two overlapping transparent surfaces of the SAME material blend the same way whichever
+    /// order they were spawned in.
+    ///
+    /// They did not. The transparent pipeline writes no depth, so for blended geometry the draw
+    /// order *is* the result — and while this path sorted transparent **batches** back-to-front, it
+    /// appended each batch's instances in collection order. Two panes of one material are one
+    /// batch, so their compositing was decided by ECS iteration order: a row of windows, a stack
+    /// of glass, any blended prop instanced more than once. `gizmo-studio` sorted them and the
+    /// engine did not, which is why the editor was right and the game was arbitrary.
+    ///
+    /// Spawn order is the probe because it is the thing that must not matter. Two renders of the
+    /// same picture, built near-first and far-first, have to agree pixel for pixel.
+    #[test]
+    fn overlapping_transparents_of_one_material_do_not_depend_on_spawn_order() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available()) {
+            eprintln!("skipping overlapping_transparents_of_one_material: no GPU");
+            return;
+        }
+        pollster::block_on(async {
+            let near_first = render_two_panes(true).await;
+            let far_first = render_two_panes(false).await;
+
+            let differing = near_first
+                .iter()
+                .zip(far_first.iter())
+                .filter(|(a, b)| a.abs_diff(**b) > 2)
+                .count();
+            assert_eq!(
+                differing, 0,
+                "{differing} bytes differ between the two spawn orders — the blend of two \
+                 same-material transparents is being decided by iteration order"
+            );
+            // And the picture is not simply empty, which would make the comparison vacuous.
+            let background = near_first[0];
+            assert!(
+                near_first.iter().filter(|b| **b != background).count() > 500,
+                "the panes did not reach the framebuffer, so agreeing proves nothing"
+            );
+        });
+    }
+
+    /// Two overlapping semi-transparent quads sharing one material, spawned near-first or
+    /// far-first. Same scene either way.
+    async fn render_two_panes(near_first: bool) -> Vec<u8> {
+        const W: u32 = 128;
+        const H: u32 = 128;
+        let mut renderer = Renderer::new_headless(W, H, None).await;
+        let mut asset_manager = AssetManager::new();
+        let mut world = World::new();
+
+        let mesh = AssetManager::create_cube(&renderer.device);
+        let tex = asset_manager.create_white_texture(
+            &renderer.device,
+            &renderer.queue,
+            &renderer.scene.texture_bind_group_layout,
+        );
+        // DIFFERENT colours, one batch. The batch key is the material's *texture* bind group,
+        // which both share because both were built from the same texture — so these two land in a
+        // single batch and only their instance order can separate them. Two panes of the SAME
+        // colour would prove nothing: `c over (c over bg)` is the same expression either way,
+        // which is how the first version of this test passed with the fix removed.
+        let green = Material::new(tex.clone())
+            .with_pbr(Vec4::new(0.1, 0.9, 0.2, 0.5), 0.2, 0.0)
+            .with_transparent(true);
+        let red = Material::new(tex)
+            .with_pbr(Vec4::new(0.9, 0.1, 0.1, 0.5), 0.2, 0.0)
+            .with_transparent(true);
+
+        // Flattened cubes standing in for panes, overlapping along the view axis.
+        let spawn = |z: f32, mat: &Material, world: &mut World| {
+            let e = world.spawn();
+            world.add_component(
+                e,
+                Transform::new(Vec3::new(0.0, 0.0, z)).with_scale(Vec3::new(3.0, 3.0, 0.05)),
+            );
+            world.add_component(e, GlobalTransform::default());
+            world.add_component(e, mesh.clone());
+            world.add_component(e, mat.clone());
+            world.add_component(e, MeshRenderer::new());
+        };
+        if near_first {
+            spawn(2.0, &green, &mut world);
+            spawn(-2.0, &red, &mut world);
+        } else {
+            spawn(-2.0, &red, &mut world);
+            spawn(2.0, &green, &mut world);
+        }
+
+        world.spawn_bundle(CameraBundle {
+            position: Vec3::new(0.0, 0.0, 12.0),
+            yaw: -std::f32::consts::FRAC_PI_2,
+            pitch: 0.0,
+            primary: true,
+            ..Default::default()
+        });
+        world.spawn_bundle(DirectionalLightBundle::default());
+
+        super::batching::clear_render_cache();
+        let frame = render_world(&mut renderer, &mut world).await;
+        super::batching::clear_render_cache();
+        frame
+    }
+
     /// A scene larger than the instance buffer grows the buffer instead of losing geometry.
     ///
     /// `Renderer::ensure_instance_capacity` has existed, and been unit-tested, since the buffer

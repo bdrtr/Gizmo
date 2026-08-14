@@ -42,22 +42,6 @@ pub fn clear_render_cache() {
 /// `InstanceRaw::model`). Used to order transparent batches back-to-front. Per-batch (not
 /// per-instance) granularity — coarse for a batch spread across depth, but far better than
 /// the arbitrary HashMap order it replaces, and exact for the common single-instance case.
-pub(crate) fn batch_sort_depth(
-    instances: &[crate::renderer::gpu_types::InstanceRaw],
-    cam_pos: Vec3,
-) -> f32 {
-    if instances.is_empty() {
-        return 0.0;
-    }
-    let mut centroid = Vec3::ZERO;
-    for inst in instances {
-        // InstanceRaw::model is column-major [[f32;4];4]; column 3 is the translation.
-        centroid += Vec3::new(inst.model[3][0], inst.model[3][1], inst.model[3][2]);
-    }
-    centroid /= instances.len() as f32;
-    (centroid - cam_pos).length()
-}
-
 /// Where a batch sits in the frame's paint order. Lower draws first; the `Ord` derive IS the
 /// ordering, so the variants must stay in this sequence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -560,6 +544,16 @@ pub(super) fn collect_draw_items(
         // never starves on-screen geometry. The two ranges are non-contiguous, so DrawItem
         // carries both (first_instance/camera_count and shadow_first_instance/shadow_count)
         // and the shadow pass draws them separately.
+        // Blending is paint order — the transparent pipeline writes no depth — so a transparent
+        // batch's instances have to be far-to-near too, not just the batches relative to each
+        // other. Only the editor did this; the engine appended them in collection order, so two
+        // overlapping panes of the SAME material composited by ECS iteration order.
+        for batch in cache.batches.values_mut() {
+            if batch.is_transparent || batch.is_backdrop {
+                crate::renderer::sort_back_to_front(&mut batch.instances, cam_pos);
+            }
+        }
+
         let batches: Vec<&BatchData> = cache
             .batches
             .values()
@@ -576,9 +570,9 @@ pub(super) fn collect_draw_items(
             // same depth). A backdrop's instances are camera-RELATIVE offsets, so their
             // distance is measured from the origin — see `DrawItem::sort_depth`.
             let sort_depth = if batch.is_backdrop {
-                batch_sort_depth(&batch.instances, Vec3::ZERO)
+                crate::renderer::batch_depth(&batch.instances, Vec3::ZERO)
             } else if batch.is_transparent {
-                batch_sort_depth(&batch.instances, cam_pos)
+                crate::renderer::batch_depth(&batch.instances, cam_pos)
             } else {
                 0.0
             };
@@ -728,7 +722,8 @@ mod batch_key_tests {
 
 #[cfg(test)]
 mod transparent_order_tests {
-    use super::{batch_sort_depth, cmp_draw_order, draw_layer, DrawLayer, Vec3};
+    use super::{cmp_draw_order, draw_layer, DrawLayer, Vec3};
+    use crate::renderer::batch_depth as batch_sort_depth;
     use crate::renderer::gpu_types::InstanceRaw;
     use bytemuck::Zeroable;
 

@@ -117,6 +117,7 @@ pub mod csm;
 pub mod debug_renderer;
 pub mod decal;
 pub mod deferred;
+pub mod draw_order;
 pub mod frame_uniforms;
 pub mod frustum_cull;
 pub mod fxaa;
@@ -187,6 +188,7 @@ pub use csm::{
 };
 pub use debug_renderer::{GizmoRendererSystem, Gizmos};
 pub use decal::DecalState;
+pub use draw_order::{batch_depth, sort_back_to_front};
 pub use deferred::{
     DeferredState, GBUFFER_ALBEDO_METALLIC_FORMAT, GBUFFER_NORMAL_ROUGHNESS_FORMAT,
     GBUFFER_WORLD_POSITION_FORMAT, GBUFFER_WORLD_TANGENT_FORMAT,

@@ -137,24 +137,9 @@ thread_local! {
 /// order, but batches drain from a HashMap in arbitrary order, so overlapping transparents
 /// of different materials (= different batches) blended wrongly without this. Returns 0 for
 /// an empty batch. Mirrors the game path's `batch_sort_depth`.
-pub(super) fn batch_centroid_depth(
-    instances: &[gizmo::renderer::InstanceRaw],
-    cam_pos: Vec3,
-) -> f32 {
-    if instances.is_empty() {
-        return 0.0;
-    }
-    let mut centroid = Vec3::ZERO;
-    for inst in instances {
-        centroid += Vec3::new(inst.model[3][0], inst.model[3][1], inst.model[3][2]);
-    }
-    centroid /= instances.len() as f32;
-    cam_pos.distance(centroid)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::batch_centroid_depth;
+    use gizmo::renderer::batch_depth as batch_centroid_depth;
     use gizmo::renderer::InstanceRaw;
     use gizmo::prelude::Vec3;
 

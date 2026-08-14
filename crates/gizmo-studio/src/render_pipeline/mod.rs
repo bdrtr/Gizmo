@@ -367,20 +367,12 @@ pub fn execute_render_pipeline(
                 let mut drained: Vec<BatchData> = batches.drain().map(|(_, b)| b).collect();
                 if is_transparent {
                     for batch in &mut drained {
-                        batch.instances.sort_by(|a, b| {
-                            let pos_a = Vec3::new(a.model[3][0], a.model[3][1], a.model[3][2]);
-                            let pos_b = Vec3::new(b.model[3][0], b.model[3][1], b.model[3][2]);
-                            // Uzak olanlar ÖNCE çizilmeli (Azalan sıralama).
-                            cam_pos
-                                .distance_squared(pos_b)
-                                .partial_cmp(&cam_pos.distance_squared(pos_a))
-                                .unwrap_or(std::cmp::Ordering::Equal)
-                        });
+                        gizmo::renderer::sort_back_to_front(&mut batch.instances, cam_pos);
                     }
                     // Inter-batch: compute each batch's centroid depth once, farthest first.
                     let mut keyed: Vec<(f32, BatchData)> = drained
                         .into_iter()
-                        .map(|b| (batch_centroid_depth(&b.instances, cam_pos), b))
+                        .map(|b| (gizmo::renderer::batch_depth(&b.instances, cam_pos), b))
                         .collect();
                     keyed.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
                     drained = keyed.into_iter().map(|(_, b)| b).collect();

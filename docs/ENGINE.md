@@ -964,7 +964,24 @@ Kök kayıtlı ("The root the sweep could not see"). Beş kesim:
    sınırsız ve editörle aynı: 200 000 instans isteyen bir kare 25 MB tampon alır; HashMap'in en
    sona koyduğu mesh'lerin kaybolduğu bir resim yerine.
 
-9. **Frustum culling — sürüklenme yok, kayda geçsin.** Sıradaki aday buydu; bakınca iki yol da
+9. **Harmanlama sırası: motor batch içini sıralamıyordu (2026-08-15).** `gizmo-renderer::draw_order`.
+   Saydam boru hattı derinlik yazmıyor, yani harmanlanan geometride **çizim sırası sonucun
+   kendisi**. Motor batch'leri sıralıyordu ama her batch'in instanslarını toplandıkları sırayla
+   ekliyordu; editör ikisini de sıralıyordu. Aynı malzemeden iki üst üste saydam yüzey — bir
+   binadaki pencere sırası, üst üste camlar, birden çok kez instans'lanan herhangi bir saydam prop
+   — oyunda **ECS gezinme sırasına** göre harmanlanıyordu, editörde doğru. Bir de ikiz vardı:
+   batch'in temsili derinliği motorda `batch_sort_depth`, studio'da `batch_centroid_depth` —
+   harfi harfine aynı hesap, iki isim, iki test. İkisi de tek modüle indi.
+   **Kanıt:** iki üst üste saydam pane, **farklı renklerde** ama tek batch'te (batch anahtarı
+   malzemenin *doku* bind group'u, ikisi de aynı dokudan); sahne bir kez yakın-önce bir kez
+   uzak-önce kuruluyor ve iki kare bayt bayt eşit olmak zorunda. Düzeltme kaldırılınca 7 143 bayt
+   farklı.
+   **Not:** bu testin ilk hâli **boştu** — iki pane aynı renkti, `c over (c over bg)` iki sırada da
+   aynı ifade, yani düzeltme kaldırıldığında da geçiyordu. §8'deki "bekçinin kırılabildiğini
+   gör" alışkanlığı tam olarak bunu yakaladı; olmasa yeşil ama hiçbir şey ölçmeyen bir test
+   commit edilmişti.
+
+10. **Frustum culling — sürüklenme yok, kayda geçsin.** Sıradaki aday buydu; bakınca iki yol da
    zaten `classify_visibility_world`'ü paylaşıyor, AABB'yi bir kez dönüştürüyor ve farklarını
    gerekçesiyle yazmış: editör oyun kamerasının frustum'una göre kırpıyor (edit modunda culling'i
    sınayabilmek için) ve kameraya-kilitli backdrop'u testten muaf tutuyor — çünkü onun shader'ı
