@@ -117,6 +117,7 @@ pub mod csm;
 pub mod debug_renderer;
 pub mod decal;
 pub mod deferred;
+pub mod frame_uniforms;
 pub mod frustum_cull;
 pub mod fxaa;
 pub mod gi;
@@ -145,6 +146,9 @@ pub mod asset_loading;
 pub use backdrop::{
     backdrop_clip_position, backdrop_rgba, camera_locked_model, instance_model, is_camera_locked,
     BACKDROP_NDC_DEPTH,
+};
+pub use frame_uniforms::{
+    CameraFrame, EnvironmentFrame, SceneFrame, ShadowFrame, SunFrame, UnderwaterFog, MAX_LIGHTS,
 };
 pub use frustum_cull::{
     classify_visibility, classify_visibility_world, visible_in_frustum, Frustum, Visibility,

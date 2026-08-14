@@ -5,7 +5,17 @@
 use super::*;
 use super::batching::FlatBatchData;
 
-pub(super) fn sync_editor_settings(world: &gizmo::core::World, renderer: &mut gizmo::renderer::Renderer) -> (f32, u32, bool) {
+/// Mirror egui state into the renderer, and return what the caller still has to place: the
+/// viewport aspect, the debug shading mode, the collider toggle, and the post-process block.
+///
+/// The post block is **returned rather than uploaded** because two of its fields — `cam_near` and
+/// `cam_far` — belong to the active camera, and the camera is not resolved until after this runs
+/// (its projection needs the aspect this function computes). Uploading here is what left the
+/// editor's DoF linearising depth against a hardcoded 0.1/2000 range.
+pub(super) fn sync_editor_settings(
+    world: &gizmo::core::World,
+    renderer: &mut gizmo::renderer::Renderer,
+) -> (f32, u32, bool, gizmo::renderer::PostProcessUniforms) {
     let mut aspect = if renderer.size.height > 0 {
         renderer.size.width as f32 / renderer.size.height as f32
     } else {
@@ -18,9 +28,10 @@ pub(super) fn sync_editor_settings(world: &gizmo::core::World, renderer: &mut gi
     let mut ed_ssao_strength = 0.8;
     let mut show_colliders = false;
     
-    let mut post_params = gizmo::renderer::renderer::PostProcessUniforms {
-        bloom_intensity: 0.8,
-        bloom_threshold: 0.85,
+    // The editor's look before `EditorState` overrides it: the renderer's neutral default, minus
+    // the film grain (it reads as noise on a static viewport) and with a mild aberration and a
+    // real DoF blur, which are the editor's own taste. Everything unnamed is the default.
+    let mut post_params = gizmo::renderer::PostProcessUniforms {
         exposure: 1.0,
         vignette_intensity: 0.2,
         chromatic_aberration: 0.005,
@@ -28,13 +39,7 @@ pub(super) fn sync_editor_settings(world: &gizmo::core::World, renderer: &mut gi
         dof_focus_dist: 10.0,
         dof_focus_range: 20.0,
         dof_blur_size: 2.0,
-        cam_near: 0.1,
-        cam_far: 2000.0,
-        underwater: 0.0,
-        fog_r: 0.0,
-        fog_g: 0.0,
-        fog_b: 0.0,
-        fog_density: 0.0,
+        ..Default::default()
     };
 
     if let Some(ed_state) = world.get_resource::<gizmo::editor::EditorState>() {
@@ -61,8 +66,6 @@ pub(super) fn sync_editor_settings(world: &gizmo::core::World, renderer: &mut gi
         }
     }
 
-    renderer.update_post_process(&renderer.queue, post_params);
-
     if let Some(ref mut fxaa) = renderer.fxaa {
         if fxaa.enabled != ed_fxaa_enabled {
             fxaa.enabled = ed_fxaa_enabled;
@@ -75,7 +78,7 @@ pub(super) fn sync_editor_settings(world: &gizmo::core::World, renderer: &mut gi
         ssao.set_strength(&renderer.queue, actual_strength);
     }
 
-    (aspect, ed_shading_mode, show_colliders)
+    (aspect, ed_shading_mode, show_colliders, post_params)
 }
 
 // execute_render_pipeline'ten çıkarılan render geçişleri (Tier 3: mega-fn bölmesi).

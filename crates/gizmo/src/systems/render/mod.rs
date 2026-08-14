@@ -210,11 +210,6 @@ pub fn default_render_pass(
         }
     }
 
-    // Update post-process params now that the active camera (hence its exposure) is known.
-    // `exposure` is the SINGLE exposure knob: the camera's exposure, applied once in the
-    // post composite over the entire HDR. (Previously the deferred pass baked cam.exposure
-    // into geometry AND post multiplied by a separate 1.15, which compounded and skipped
-    // sky/unlit; folding both into one post-stage exposure fixes that.)
     // ── Su-altı atmosferi: kamera bir fluid zone içindeyse derinlik-bazlı sis uygula (W3+W4).
     // W1 `water_at` sorgusu tekrar kullanılır (aynı su hacimleri hem buoyancy hem yüzme hem bu
     // sisi sürer). Sis rengi/yoğunluğu deniz için makul sabitler — demolarda tunable yapılabilir.
@@ -224,37 +219,12 @@ pub fn default_render_pass(
     // world; without the `physics` feature there are no fluid volumes, so the scene simply
     // never renders as submerged.
     #[cfg(feature = "physics")]
-    let (uw, fog_r, fog_g, fog_b, fog_density) = match world
+    let underwater = world
         .get_resource::<crate::physics::world::PhysicsWorld>()
         .and_then(|pw| pw.water_at(cam_pos))
-    {
-        Some(s) => (1.0, s.fog_color[0], s.fog_color[1], s.fog_color[2], s.fog_density),
-        None => (0.0, 0.0, 0.0, 0.0, 0.0),
-    };
+        .map(|s| crate::renderer::UnderwaterFog { color: s.fog_color, density: s.fog_density });
     #[cfg(not(feature = "physics"))]
-    let (uw, fog_r, fog_g, fog_b, fog_density) = (0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32);
-
-    renderer.update_post_process(
-        &renderer.queue,
-        crate::renderer::gpu_types::PostProcessUniforms {
-            bloom_intensity: renderer.bloom_intensity,
-            bloom_threshold: renderer.bloom_threshold,
-            exposure: cam_exposure,
-            chromatic_aberration: renderer.chromatic_aberration,
-            vignette_intensity: 0.25,
-            film_grain_intensity: renderer.film_grain_intensity,
-            dof_focus_dist: renderer.dof_focus_dist,
-            dof_focus_range: renderer.dof_focus_range,
-            dof_blur_size: if renderer.dof_enabled { renderer.dof_blur_size } else { 0.0 },
-            cam_near,
-            cam_far,
-            underwater: uw,
-            fog_r,
-            fog_g,
-            fog_b,
-            fog_density,
-        },
-    );
+    let underwater: Option<crate::renderer::UnderwaterFog> = None;
 
     // Save unjittered projection before applying TAA offset (needed for reprojection next frame).
     let unjittered_proj = proj;
@@ -275,6 +245,40 @@ pub fn default_render_pass(
 
     let view_proj = proj * view_mat; // jittered — used for SceneUniforms
     let unjittered_view_proj = unjittered_proj * view_mat; // clean    — stored in TaaState for next frame
+
+    // The active camera, in the one form both uniform blocks are built from. Assembled after the
+    // TAA jitter so `view_proj` is the matrix this frame actually rasterises with.
+    let camera = crate::renderer::CameraFrame {
+        view_proj,
+        position: cam_pos,
+        forward: cam_forward,
+        near: cam_near,
+        far: cam_far,
+        exposure: cam_exposure,
+    };
+
+    // Post-process params, now that the active camera (hence its exposure and depth range) is
+    // known. `exposure` is the SINGLE exposure knob: the camera's exposure, applied once in the
+    // post composite over the entire HDR. (Previously the deferred pass baked cam.exposure into
+    // geometry AND post multiplied by a separate 1.15, which compounded and skipped sky/unlit;
+    // folding both into one post-stage exposure fixes that.) Everything not named here is the
+    // renderer's neutral default.
+    renderer.update_post_process(
+        &renderer.queue,
+        crate::renderer::PostProcessUniforms {
+            bloom_intensity: renderer.bloom_intensity,
+            bloom_threshold: renderer.bloom_threshold,
+            exposure: cam_exposure,
+            chromatic_aberration: renderer.chromatic_aberration,
+            film_grain_intensity: renderer.film_grain_intensity,
+            dof_focus_dist: renderer.dof_focus_dist,
+            dof_focus_range: renderer.dof_focus_range,
+            dof_blur_size: if renderer.dof_enabled { renderer.dof_blur_size } else { 0.0 },
+            ..Default::default()
+        }
+        .with_camera(&camera)
+        .with_underwater(underwater),
+    );
 
     // Lights (point + spot + sun) — collected via the shared setup helper so the
     // game and studio renderers can never drift apart on light handling again.
@@ -335,40 +339,33 @@ pub fn default_render_pass(
         .get_resource::<gizmo_core::time::Time>()
         .map(|t| t.elapsed() as f32)
         .unwrap_or(0.0);
-    let scene_uniform_data = crate::renderer::gpu_types::SceneUniforms {
-        view_proj: view_proj.to_cols_array_2d(),
-        camera_pos: [cam_pos.x, cam_pos.y, cam_pos.z, 1.0],
-        // w = "sun present" flag (1.0 / 0.0). Was hardcoded 1.0, which left the deferred
-        // shader evaluating the sun branch + a full CSM shadow lookup (against cascades
-        // built for a bogus down-vector) even in a scene with no sun. Gate it on has_sun,
-        // exactly like the studio path already does.
-        sun_direction: [sun_dir.x, sun_dir.y, sun_dir.z, if scene_lights.has_sun { 1.0 } else { 0.0 }],
-        sun_color: [sun_col.x, sun_col.y, sun_col.z, sun_col.w],
+    let scene_uniform_data = crate::renderer::SceneUniforms::new(&crate::renderer::SceneFrame {
+        camera,
+        sun: crate::renderer::SunFrame {
+            direction: sun_dir,
+            color: [sun_col.x, sun_col.y, sun_col.z, sun_col.w],
+            // Was hardcoded "present", which left the deferred shader evaluating the sun branch
+            // + a full CSM lookup (against cascades built for a bogus down-vector) in a scene
+            // with no sun.
+            present: scene_lights.has_sun,
+        },
         lights: lights_data,
-        light_view_proj: light_view_projs,
-        cascade_splits,
-        camera_forward: [cam_forward.x, cam_forward.y, cam_forward.z, 0.0],
-        // w = point-shadow caster index + 1 (0 = none); the deferred shader samples the
-        // single point-shadow cube only for this light.
-        cascade_params: [
-            0.1,
-            1.0 / crate::renderer::SHADOW_MAP_RES as f32,
-            elapsed_time,
-            (scene_lights.shadow_point_index + 1).max(0) as f32,
-        ],
         num_lights,
-        exposure: cam_exposure,
-        _pre_align_pad: [0; 2],
-        _align_pad: [0; 3],
-        environment_blend_t: renderer.environment_blend_t,
-        environment_preset: renderer.environment_preset,
-        point_shadows_enabled: renderer.point_shadows_enabled as u32,
-        environment_preset_2: renderer.environment_preset_2,
-        shading_mode: renderer.shading_mode,
-        // inverse of the same view_proj written above; hoists the per-fragment 4×4 inverse
-        // out of the volumetric/particle fullscreen passes into one CPU compute per frame.
-        inv_view_proj: view_proj.inverse().to_cols_array_2d(),
-    };
+        shadows: crate::renderer::ShadowFrame {
+            cascade_view_projs: cascade_vp,
+            cascade_splits,
+            // The deferred shader samples the single point-shadow cube only for this light.
+            point_caster: u32::try_from(scene_lights.shadow_point_index).ok(),
+            point_shadows_enabled: renderer.point_shadows_enabled,
+        },
+        environment: crate::renderer::EnvironmentFrame {
+            preset: renderer.environment_preset,
+            preset_2: renderer.environment_preset_2,
+            blend_t: renderer.environment_blend_t,
+            shading_mode: renderer.shading_mode,
+        },
+        elapsed_time,
+    });
     renderer.queue.write_buffer(
         &renderer.scene.global_uniform_buffer,
         0,

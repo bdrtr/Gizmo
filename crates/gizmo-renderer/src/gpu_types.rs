@@ -96,12 +96,28 @@ impl Vertex {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Debug, Pod, Zeroable)]
+#[derive(Copy, Clone, Debug, PartialEq, Pod, Zeroable)]
 pub struct LightData {
     pub position: [f32; 4],  // xyz=pos, w=intensity
     pub color: [f32; 4],     // rgb=color, a=radius
     pub direction: [f32; 4], // xyz=direction (spot), w=inner_cutoff_cos
     pub params: [f32; 4], // x=outer_cutoff_cos, y=light_type (0=point,1=spot,2=directional), zw=unused
+}
+
+impl Default for LightData {
+    /// An unlit slot: zero intensity, zero radius, pointing down.
+    ///
+    /// The array is fixed-length and `SceneUniforms::num_lights` says how much of it is live, so
+    /// the tail is never read — but it is uploaded, and a light array padded with garbage is one
+    /// shader bug away from being visible.
+    fn default() -> Self {
+        Self {
+            position: [0.0; 4],
+            color: [0.0; 4],
+            direction: [0.0, -1.0, 0.0, 0.0],
+            params: [0.0; 4],
+        }
+    }
 }
 
 #[repr(C)]

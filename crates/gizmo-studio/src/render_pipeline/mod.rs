@@ -22,7 +22,8 @@ pub fn execute_render_pipeline(
     let mut bone_att = gizmo::systems::transform::BoneAttachmentSystem;
     gizmo::core::system::System::run(&mut bone_att, world, delta_time);
 
-    let (aspect, ed_shading_mode, show_colliders) = sync_editor_settings(world, renderer);
+    let (aspect, ed_shading_mode, show_colliders, post_params) =
+        sync_editor_settings(world, renderer);
 
     let mut proj = Mat4::perspective_rh(std::f32::consts::FRAC_PI_4, aspect, 0.1, 2000.0);
     let mut view_mat = Mat4::from_translation(Vec3::ZERO);
@@ -116,18 +117,11 @@ pub fn execute_render_pipeline(
         shadow_dir.unwrap_or(Vec3::new(0.0, -1.0, 0.0)),
     );
     let cascade_splits = cascades.splits;
-    let identity_m = Mat4::IDENTITY.to_cols_array_2d();
-    let mut light_view_proj_cascades = [identity_m; 4];
     // No light → leave cascades at identity (the shared helper still gives correct
     // splits for the SceneUniforms, but the matrices are unused this frame).
-    if shadow_dir.is_some() {
-        for (dst, src) in light_view_proj_cascades
-            .iter_mut()
-            .zip(cascades.view_projs.iter())
-        {
-            *dst = src.to_cols_array_2d();
-        }
-    }
+    let cascade_mats: [Mat4; 4] =
+        if shadow_dir.is_some() { cascades.view_projs } else { [Mat4::IDENTITY; 4] };
+    let light_view_proj_cascades = cascade_mats.map(|m| m.to_cols_array_2d());
 
     // z = elapsed time for fluid caustics/wave animation (fluid_composite.wgsl reads it);
     // was hardcoded 0.0 → frozen water (same bug as the gizmo runtime path).
@@ -135,36 +129,50 @@ pub fn execute_render_pipeline(
         .get_resource::<gizmo::core::time::Time>()
         .map(|t| t.elapsed() as f32)
         .unwrap_or(0.0);
-    let cascade_params = [
-        cam_near,
-        1.0 / gizmo::renderer::SHADOW_MAP_RES as f32,
-        elapsed_time,
-        0.0,
-    ];
-    let camera_forward_u = [cam_forward.x, cam_forward.y, cam_forward.z, 0.0];
 
-    // Global Uniforms (Her frame sadece 1 kere gönderilir)
-    let scene_uniform_data = gizmo::renderer::renderer::SceneUniforms {
-        view_proj: view_proj.to_cols_array_2d(),
-        camera_pos: [cam_pos.x, cam_pos.y, cam_pos.z, 1.0],
-        sun_direction: sun_dir,
-        sun_color: sun_col,
-        lights: lights_data,
-        light_view_proj: light_view_proj_cascades,
-        cascade_splits,
-        camera_forward: camera_forward_u,
-        cascade_params,
-        num_lights,
-        exposure: 1.0,
-        _pre_align_pad: [0; 2],
-        _align_pad: [0; 3],
-        environment_blend_t: 0.0,
-        environment_preset: 0,
-        point_shadows_enabled: 0,
-        environment_preset_2: 0,
-        shading_mode: ed_shading_mode,
-        inv_view_proj: view_proj.inverse().to_cols_array_2d(),
+    // The active camera, in the form both uniform blocks are built from. The post block gets it
+    // too — its `cam_near`/`cam_far` were hardcoded 0.1/2000 here, which mis-linearised depth for
+    // DoF on any editor or game camera with a different range.
+    let camera = gizmo::renderer::CameraFrame {
+        view_proj,
+        position: cam_pos,
+        forward: cam_forward,
+        near: cam_near,
+        far: cam_far,
+        // Exposure reaches the picture through the post block, which the editor drives from its
+        // own slider; the scene block's copy is unread (see `SceneUniforms::new`).
+        exposure: post_params.exposure,
     };
+    renderer.update_post_process(&renderer.queue, post_params.with_camera(&camera));
+
+    // Global Uniforms (Her frame sadece 1 kere gönderilir) — the same constructor the game path
+    // uses, so a field added to the block reaches both viewports. What the editor deliberately
+    // does differently is the arguments below, each with its reason.
+    let scene_uniform_data = gizmo::renderer::SceneUniforms::new(&gizmo::renderer::SceneFrame {
+        camera,
+        sun: gizmo::renderer::SunFrame {
+            direction: scene_lights.sun_dir,
+            color: sun_col,
+            present: scene_lights.has_sun,
+        },
+        lights: lights_data,
+        num_lights,
+        shadows: gizmo::renderer::ShadowFrame {
+            cascade_view_projs: cascade_mats,
+            cascade_splits,
+            // The editor path records no point-shadow cube pass, so there is no cube to sample;
+            // enabling the lookup would read whatever the game path left in it.
+            point_caster: None,
+            point_shadows_enabled: false,
+        },
+        // The editor renders the scene as authored: no environment preset blend, and the shading
+        // mode comes from the viewport's debug dropdown rather than from the renderer.
+        environment: gizmo::renderer::EnvironmentFrame {
+            shading_mode: ed_shading_mode,
+            ..Default::default()
+        },
+        elapsed_time,
+    });
     renderer.queue.write_buffer(
         &renderer.scene.global_uniform_buffer,
         0,

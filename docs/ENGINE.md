@@ -714,6 +714,41 @@ What this deliberately does **not** do is merge the two paths. The deferred and 
 recorders genuinely differ, that difference is the part with no automated coverage, and §3 gates it
 on human-eye A/B. Single-sourcing the *semantics* is the half that pays.
 
+**Second cut taken: `gizmo-renderer::frame_uniforms`.** The two uniform blocks — `SceneUniforms`
+(18 fields) and `PostProcessUniforms` (16) — were hand-filled as exhaustive struct literals at
+**six** sites: both draw loops, the renderer's two initial buffers, and three demos with custom
+render callbacks. An exhaustive literal *looks* like the safe form, because omitting a field does
+not compile; what it actually checks is "was every field filled", and all six passed that. The
+question nobody was asking is "which field differs, and why":
+
+- `PostProcessUniforms::cam_near`/`cam_far` exist because DoF linearises depth with them, and the
+  field comment says a hardcoded range miscalibrates the circle of confusion. **Five of six sites
+  hardcoded `0.1`/`2000.0` anyway** — including studio, so the editor viewport's DoF was
+  miscalibrated for exactly the cameras the field was added for. This is the one live bug the cut
+  fixes, and it is a viewport change nothing can test.
+- `SceneUniforms::cascade_params.x` is documented in `common.wgsl` as the camera's z-near. Studio
+  sent `cam_near`, the engine sent a literal `0.1`. They had disagreed for as long as both paths
+  existed **and it cost nothing**, because no shader reads `.x` today. `SceneUniforms::exposure` is
+  dead in the same way (the post composite owns exposure; `deferred_lighting.wgsl` says so next to
+  the field it no longer reads) and had drifted the same way: camera's in the engine, `1.0` in
+  studio.
+
+Two dead fields drifting is not the finding. The finding is that a *live* field drifts by the same
+mechanism and is just as invisible — `cam_near` is the same class of mistake, and it was live.
+
+Derived work (the inverse view-projection, the packed `cascade_params` slots, the `w` flags, the
+padding, the shadow texel size) now happens once in `SceneUniforms::new(&SceneFrame)`; what the two
+paths legitimately disagree about is arguments at a call site with the reason next to them —
+studio's identity cascades when nothing casts, its point-shadow lookup left off because it records
+no cube pass, its exposure from the editor slider. The engine path is byte-identical (12 golden
+render tests, hashes unchanged) except for the two dead fields.
+
+The guard is `no_hand_filled_uniform_literals_outside_the_constructor`, and it **walks the
+workspace** instead of naming the files it knows about — deliberately, because that is the flaw in
+the shader mirror tests below: each hand-counts its subjects, so a new shader is invisible to the
+test that exists to police it. A partial literal (`..Default::default()`) is the sanctioned escape;
+an exhaustive one is a test failure the day it is written. Verified by reintroducing one.
+
 Two things this is **not** saying. A public function with no in-tree caller is not a defect — a
 library's surface exists to be called from outside, and a sweep on that basis returns most of
 `gizmo-core`. And a system a game is meant to schedule itself is not unwired. The class that
@@ -773,23 +808,36 @@ olanı** ve **bir daha kovalanmaması gerekeni** taşır.
 
 ### Devam eden: iki render yolu
 
-Kök kayıtlı ("The root the sweep could not see"). İlk kesim yapıldı — `gizmo-renderer::routing`,
-malzeme tipinin anlamı tek ve tüketici bir `match`'te. Kalan iki adım, incelemenin fiyatlandırdığı
-hâliyle:
+Kök kayıtlı ("The root the sweep could not see"). İki kesim yapıldı:
 
-- **Tek uniform kurucu (küçük, ~1 gün).** `SceneUniforms` ve `PostProcessUniforms` iki yerde elle
-  doldurulan struct literalleri. Studio `exposure: 1.0`, `point_shadows_enabled: 0` gibi değerleri
-  sabit yazıyor, motor ise aktif kameradan. Ortak kurucu + editörün açık geçersiz kılmaları, "her
-  alan dolduruldu mu" denetimini "hangi alan neden farklı" farkına çevirir.
+1. `gizmo-renderer::routing` — malzeme tipinin anlamı tek ve tüketici bir `match`'te.
+2. `gizmo-renderer::frame_uniforms` (**2026-08-14**) — iki uniform bloğunun kurucusu. Literaller
+   tahmin edilenden çoktu: iki çizim döngüsü değil **altı** yer (renderer'ın iki başlangıç tamponu
+   ve kendi render callback'i olan üç demo da elle dolduruyordu). Ayrıntısı §7'de; özeti şu:
+   sürüklenen üç alandan ikisi ölü (`cascade_params.x`, `scene.exposure` — kimse okumuyor), biri
+   canlıydı. Canlı olan **studio'nun DoF'u**: `cam_near`/`cam_far` altı yerin beşinde `0.1`/`2000`
+   sabitiydi, yani editör viewport'u tam da bu alanın eklenme sebebi olan kameralarda yanlış
+   kalibreydi. Motor yolu (ölü iki alan dışında) bayt-aynı; 12 golden render testi değişmedi.
+   Bekçi `no_hand_filled_uniform_literals_outside_the_constructor`: dosya listesi tutmuyor,
+   **workspace'i tarıyor** — yani yedinci çağrı yeri yazıldığı gün kırmızı. Kırılabildiği
+   doğrulandı (literal geri konup test kırmızıya düşürüldü, sonra geri alındı).
+
+Kalan adım:
+
 - **Studio'ya lib hedefi + parite testi (orta, ~2-3 gün, satır başına en yüksek değer).**
   `gizmo-studio` bugün `publish = false` ve **lib hedefi yok**, yani render yolu hiçbir test
   koşumundan erişilemiyor; iki yol arasındaki tek çapraz denetim insan gözü. Doğrulayıcı bu adımın
   fiyatını "türde doğru, ölçekte iyimser" buldu: mekanik kısım kolay, `StudioState`/`EditorState`'i
   headless kurmak değil.
 
-Daha ucuz alternatif de kayıtta: iki çizim döngüsünü **metin olarak** okuyup bir isim envanterinin
-ikisinde de geçtiğini (ya da gerekçeli bir istisna listesinde olduğunu) iddia eden ~60 satırlık bir
-test. Mimariye dokunmadan bu haftaki her örneği yazıldığı gün yakalardı.
+Daha ucuz alternatifin bir kısmı artık ödendi: kaynak-metin taraması gerçek bir bekçi olarak
+çalışıyor (yukarıdaki ratchet). Kalanı hâlâ kayıtta: iki çizim döngüsünün **isim envanterini**
+karşılaştıran ~60 satırlık test — `frame_uniforms` uniform bloklarını kapatıyor, ama draw-list
+kurma adımındaki (LOD, particle, animasyon) ayrışmayı değil.
+
+**Bu kesimin insan gözü isteyen tek yeri:** editör viewport'unda DoF artık kameranın gerçek
+near/far'ıyla lineerleşiyor. Varsayılan kamera (0.1/2000) için fark yok; farklı far düzlemli bir
+sahnede odak mesafesi doğru yere kayacak. Test edecek bir koşum yok — §3'ün A/B kapısına düşer.
 
 ### Doğrulanmış ama henüz el atılmamış kökler
 

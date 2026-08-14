@@ -703,13 +703,7 @@ fn main() {
                     dof_focus_dist: state.dof_focus_dist,
                     dof_focus_range: state.dof_focus_range,
                     dof_blur_size: state.dof_blur_size,
-                    cam_near: 0.1,
-                    cam_far: 2000.0,
-                    underwater: 0.0,
-                    fog_r: 0.0,
-                    fog_g: 0.0,
-                    fog_b: 0.0,
-                    fog_density: 0.0,
+                    ..Default::default()
                 },
             );
 

@@ -15,13 +15,14 @@ use crate::core::World;
 use crate::math::{Vec3, Vec4};
 use crate::renderer::components::{DirectionalLight, LightRole, PointLight, SpotLight};
 use crate::renderer::gpu_types::LightData;
+use crate::renderer::MAX_LIGHTS;
 use gizmo_physics_core::components::{GlobalTransform, Transform};
 
 /// Point + spot + sun lights collected from the world for one frame, ready to be
 /// dropped into `SceneUniforms`.
 pub struct SceneLights {
-    /// Up to 10 point/spot lights (the shader's fixed light array).
-    pub lights: [LightData; 10],
+    /// Up to [`MAX_LIGHTS`] point/spot lights (the shader's fixed light array).
+    pub lights: [LightData; MAX_LIGHTS],
     pub num_lights: u32,
     /// Direction the sun points along (normalized). Default down-vector when the
     /// scene has no `LightRole::Sun`.
@@ -63,19 +64,14 @@ pub fn collect_scene_lights(world: &World) -> SceneLights {
             .or_else(|| locals.get(e).map(|t| (t.position, t.rotation)))
     };
 
-    let mut lights = [LightData {
-        position: [0.0; 4],
-        color: [0.0; 4],
-        direction: [0.0, -1.0, 0.0, 0.0],
-        params: [0.0; 4],
-    }; 10];
+    let mut lights = [LightData::default(); MAX_LIGHTS];
     let mut num_lights = 0usize;
     // The first collected point light owns the single point-shadow cube.
     let mut shadow_point_index: i32 = -1;
 
     if let Some(q) = world.query::<&PointLight>() {
         for (e, light) in q.iter() {
-            if num_lights >= 10 {
+            if num_lights >= MAX_LIGHTS {
                 break;
             }
             let Some((pos, _)) = world_tf(e) else { continue };
@@ -94,7 +90,7 @@ pub fn collect_scene_lights(world: &World) -> SceneLights {
 
     if let Some(q) = world.query::<&SpotLight>() {
         for (e, light) in q.iter() {
-            if num_lights >= 10 {
+            if num_lights >= MAX_LIGHTS {
                 break;
             }
             let Some((pos, rot)) = world_tf(e) else { continue };

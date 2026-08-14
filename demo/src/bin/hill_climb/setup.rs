@@ -403,7 +403,6 @@ pub(super) fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
         camera_offset: Vec3::new(0.0, 5.0, 30.0),
         post_process: gizmo::renderer::gpu_types::PostProcessUniforms {
             bloom_intensity: 1.5,
-            bloom_threshold: 0.85,
             exposure: 1.2,
             chromatic_aberration: 0.005,
             vignette_intensity: 0.4,
@@ -411,13 +410,7 @@ pub(super) fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
             dof_focus_dist: 30.0,
             dof_focus_range: 20.0,
             dof_blur_size: 1.0,
-            cam_near: 0.1,
-            cam_far: 2000.0,
-            underwater: 0.0,
-            fog_r: 0.0,
-            fog_g: 0.0,
-            fog_b: 0.0,
-            fog_density: 0.0,
+            ..Default::default()
         },
         pending_particles: std::cell::RefCell::new(Vec::new()),
         show_car: true,

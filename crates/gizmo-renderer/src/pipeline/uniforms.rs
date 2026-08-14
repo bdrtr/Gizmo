@@ -1,42 +1,14 @@
 //! Global uniform buffer ve shadow doku/görünüm kaynaklarının oluşturulması.
 
 use crate::csm::SHADOW_MAP_RES;
-use crate::gpu_types::{LightData, SceneUniforms};
+use crate::frame_uniforms::SceneFrame;
+use crate::gpu_types::SceneUniforms;
 use wgpu::util::DeviceExt;
 
 pub(super) fn build_global_uniforms(device: &wgpu::Device) -> wgpu::Buffer {
-    let id4 = [
-        [1.0f32, 0.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0, 0.0],
-        [0.0, 0.0, 1.0, 0.0],
-        [0.0, 0.0, 0.0, 1.0],
-    ];
-    let initial_uniforms = SceneUniforms {
-        view_proj: [[0.0; 4]; 4],
-        camera_pos: [0.0; 4],
-        sun_direction: [0.0, -1.0, 0.0, 0.0],
-        sun_color: [1.0, 1.0, 1.0, 0.0],
-        lights: [LightData {
-            position: [0.0; 4],
-            color: [0.0; 4],
-            direction: [0.0, -1.0, 0.0, 0.0],
-            params: [0.0; 4],
-        }; 10],
-        light_view_proj: [id4; 4],
-        cascade_splits: [1.0, 10.0, 50.0, 500.0],
-        camera_forward: [0.0, 0.0, -1.0, 0.0],
-        cascade_params: [0.1, 1.0 / SHADOW_MAP_RES as f32, 0.0, 0.0],
-        num_lights: 0,
-        exposure: 1.0,
-        _pre_align_pad: [0; 2],
-        _align_pad: [0; 3],
-        environment_blend_t: 0.0,
-        environment_preset: 0,
-        point_shadows_enabled: 0,
-        environment_preset_2: 0,
-        shading_mode: 0,
-        inv_view_proj: [[0.0; 4]; 4], // overwritten every frame before first use
-    };
+    // Contents are overwritten every frame before first use; what matters here is that the buffer
+    // is the right size and holds a coherent block rather than whatever the driver hands back.
+    let initial_uniforms = SceneUniforms::new(&SceneFrame::default());
     device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Global Uniform Buffer"),
         contents: bytemuck::cast_slice(&[initial_uniforms]),

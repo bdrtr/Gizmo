@@ -288,38 +288,29 @@ fn fluid_only_render_pass(
     }
 
     let view_proj = proj * view_mat;
-    let id = Mat4::IDENTITY.to_cols_array_2d();
-    let scene_uniform_data = SceneUniforms {
-        view_proj: view_proj.to_cols_array_2d(),
-        camera_pos: [cam_pos.x, cam_pos.y, cam_pos.z, 1.0],
-        sun_direction: [0.3, -0.8, 0.2, 1.0],
-        sun_color: [1.0, 0.95, 0.9, 1.0],
-        lights: [gizmo::renderer::gpu_types::LightData {
-            position: [0.0; 4],
-            color: [0.0; 4],
-            direction: [0.0, -1.0, 0.0, 0.0],
-            params: [0.0; 4],
-        }; 10],
-        light_view_proj: [id; 4],
-        cascade_splits: [10.0, 50.0, 200.0, 2000.0],
-        camera_forward: [cam_forward.x, cam_forward.y, cam_forward.z, 0.0],
-        cascade_params: [
-            0.1,
-            1.0 / gizmo::renderer::SHADOW_MAP_RES as f32,
-            state.total_time,
-            0.0,
-        ],
-        num_lights: 0,
-        exposure: 1.0,
-        _pre_align_pad: [0; 2],
-        _align_pad: [0; 3],
-        environment_blend_t: 0.0,
-        environment_preset: 0,
-        point_shadows_enabled: 0,
-        environment_preset_2: 0,
-        shading_mode: 0,
-        inv_view_proj: view_proj.inverse().to_cols_array_2d(),
-    };
+    // This demo drives the renderer itself rather than going through `default_render_pass`, so it
+    // fills the scene block by hand — but through the shared constructor, which means the fields
+    // it has no opinion about (lights, cascade matrices, environment) come from the default.
+    let scene_uniform_data = SceneUniforms::new(&gizmo::renderer::SceneFrame {
+        camera: gizmo::renderer::CameraFrame {
+            view_proj,
+            position: cam_pos,
+            forward: cam_forward,
+            ..Default::default()
+        },
+        sun: gizmo::renderer::SunFrame {
+            direction: Vec3::new(0.3, -0.8, 0.2),
+            color: [1.0, 0.95, 0.9, 1.0],
+            present: true,
+        },
+        shadows: gizmo::renderer::ShadowFrame {
+            cascade_splits: [10.0, 50.0, 200.0, 2000.0],
+            ..Default::default()
+        },
+        // Drives the caustics and wave animation in fluid_composite.wgsl.
+        elapsed_time: state.total_time,
+        ..Default::default()
+    });
     renderer.queue.write_buffer(
         &renderer.scene.global_uniform_buffer,
         0,
