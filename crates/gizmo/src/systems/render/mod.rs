@@ -391,7 +391,7 @@ pub fn default_render_pass(
             let jx = jp[0] * 2.0 / renderer.size.width as f32;
             let jy = jp[1] * 2.0 / renderer.size.height as f32;
             let alpha = if taa.frame_index == 0 { 1.0f32 } else { 0.1f32 };
-            taa.update_params(&renderer.queue, [jx, jy], alpha);
+            taa.update_params(&renderer.queue, [jx, jy], alpha, cam_pos.to_array());
             taa.store_prev_vp(unjittered_view_proj.to_cols_array_2d());
         }
     }
@@ -753,6 +753,90 @@ mod golden_render_tests {
         });
         world.spawn_bundle(DirectionalLightBundle::default());
         render_world(&mut renderer, &mut world).await
+    }
+
+    /// A still camera on a still scene shimmers no more than the jitter sequence itself explains.
+    ///
+    /// This is what temporal anti-aliasing is *for*, so it is worth asserting rather than assuming.
+    /// It caught a live regression: making the world-position G-buffer camera-relative broke TAA's
+    /// reprojection, because that shader binds the same target under the name `t_position` and was
+    /// not among the readers found by grepping for `t_world_position`. The history was then sampled
+    /// from wherever the camera happened to be relative to the origin, so it never matched and the
+    /// neighbourhood clamp dragged it back to the jittered current frame every frame. Measured on
+    /// this scene: **4 918 bytes moving frame to frame, peaking at 33/255**, against 1 785 and 9
+    /// once the reprojection was corrected — and zero with TAA switched off entirely, which is what
+    /// established that TAA was the sole source rather than SSAO, SSGI or SSR.
+    ///
+    /// **The residual is not zero and this test does not pretend otherwise.** Even with the
+    /// reprojection correct, the peak inter-frame swing on this scene is **18/255** — an
+    /// eight-frame jitter sequence resolved through a hard min/max neighbourhood clamp cycles
+    /// rather than converging, because the clamp keeps binding on edge pixels. That is a real
+    /// open question and not what this guards; the bar is set to separate a working resolve
+    /// (18) from a broken one (33–35), not to claim convergence.
+    ///
+    /// Variance clipping — mean ± σ instead of the min/max box — was the obvious candidate for
+    /// the residual and is **refuted**: measured twice, once against the broken reprojection and
+    /// once against the fixed one, it made the shimmer slightly *worse* (1 060 bytes against 942
+    /// with the blend on pure history). The box stays.
+    #[test]
+    fn a_still_scene_shimmers_no_worse_than_its_own_jitter() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available()) {
+            eprintln!("skipping a_still_camera_on_a_still_scene_settles: no GPU adapter");
+            return;
+        }
+        if pollster::block_on(Renderer::headless_adapter_is_software()) {
+            eprintln!("skipping a_still_camera_on_a_still_scene_settles: software adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut renderer = Renderer::new_headless(128, 128, None).await;
+            let mut asset_manager = AssetManager::new();
+            let mut world = World::new();
+            let mesh = AssetManager::create_cube(&renderer.device);
+            let tex = asset_manager.create_white_texture(
+                &renderer.device,
+                &renderer.queue,
+                &renderer.scene.texture_bind_group_layout,
+            );
+            let mat = Material::new(tex).with_pbr(Vec4::new(0.9, 0.15, 0.15, 1.0), 0.0, 1.0);
+            let cube = world.spawn();
+            world.add_component(cube, Transform::new(Vec3::ZERO));
+            world.add_component(cube, mesh);
+            world.add_component(cube, mat);
+            world.add_component(cube, MeshRenderer::new());
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(-6.0, 0.0, 0.0),
+                primary: true,
+                ..Default::default()
+            });
+            world.spawn_bundle(DirectionalLightBundle::default());
+
+            // Warm up first: the opening frames are the history filling and say nothing about
+            // whether the resolve settles. Eight is past the jitter sequence's own period.
+            let mut prev = render_world(&mut renderer, &mut world).await;
+            for _ in 0..8 {
+                prev = render_world(&mut renderer, &mut world).await;
+            }
+            let mut worst = 0u8;
+            for _ in 0..6 {
+                let cur = render_world(&mut renderer, &mut world).await;
+                worst = prev
+                    .iter()
+                    .zip(cur.iter())
+                    .map(|(a, b)| a.abs_diff(*b))
+                    .max()
+                    .unwrap_or(0)
+                    .max(worst);
+                prev = cur;
+            }
+            assert!(
+                worst <= 24,
+                "nothing moved and the picture swung by {worst}/255 between frames — at this size \
+                 the temporal resolve is not resolving, it is replaying its own jitter (a broken \
+                 reprojection measured 33–35 here, a correct one 18, and TAA switched off 0)"
+            );
+        });
     }
 
     /// Every pipeline this engine builds compiles on whatever backend is present.

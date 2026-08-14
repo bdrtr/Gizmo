@@ -9,6 +9,13 @@ struct TaaParamsGpu {
     jitter: [f32; 2],              // 8 bytes  (NDC-space subpixel offset)
     alpha: f32,                    // 4 bytes  (blend: 0=full history, 1=full current)
     _pad: f32,                     // 4 bytes
+    /// The camera position the world-position G-buffer was written relative to. That target holds
+    /// camera-relative coordinates, and reprojection multiplies by a *world* matrix, so this is
+    /// what puts them back. Without it the history is sampled from wherever the camera happens to
+    /// be away from the origin — which is exactly the regression a static-scene convergence probe
+    /// caught, at 3 400 bytes of a 65 536-byte frame moving every frame with the blend set to
+    /// pure history.
+    camera_pos: [f32; 4],          // 16 bytes (offset 80, already 16-aligned)
 }
 
 // ── TaaState ──────────────────────────────────────────────────────────────────
@@ -221,12 +228,19 @@ impl TaaState {
     }
 
     /// Upload TaaParams uniform: uses self.prev_vp for reprojection.
-    pub fn update_params(&self, queue: &wgpu::Queue, jitter: [f32; 2], alpha: f32) {
+    pub fn update_params(
+        &self,
+        queue: &wgpu::Queue,
+        jitter: [f32; 2],
+        alpha: f32,
+        camera_pos: [f32; 3],
+    ) {
         let data = TaaParamsGpu {
             prev_view_proj: self.prev_vp,
             jitter,
             alpha,
             _pad: 0.0,
+            camera_pos: [camera_pos[0], camera_pos[1], camera_pos[2], 0.0],
         };
         queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&data));
     }

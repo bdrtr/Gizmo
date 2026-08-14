@@ -700,6 +700,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   own fraction landed in anisotropy's slot. Not noise but inversion: subsurface 0.234 with
   anisotropy **0** decoded as **0.82**, and with anisotropy **1** as **0**. A material with no
   anisotropy rendered as though it were fully anisotropic.
+- **TAA's reprojection read the world-position G-buffer without putting it back into world space.**
+  Introduced by the camera-relative change above and caught by a new convergence test rather than by
+  eye: `taa.wgsl` binds that target as `t_position`, not `t_world_position`, so it was not among the
+  readers the change updated. The history was sampled from wherever the camera stood relative to the
+  origin, never matched, and the neighbourhood clamp dragged it back to the jittered current frame
+  every frame — a completely still scene swung **33–35/255** between frames, against 18 with the
+  reprojection correct and **0** with TAA switched off.
 - **The G-buffer held absolute world positions in half floats, so rendering degraded with distance
   from the world origin.** f16 quantises to 6 cm at 100 m, 50 cm at 1 km and a full metre at 2 km,
   against a nearest-cascade shadow texel of 4.3 mm — a city-sized level sampled its shadows, view

@@ -9,6 +9,11 @@ struct TaaParams {
     jitter:         vec2<f32>,   // current frame subpixel offset (NDC)
     alpha:          f32,         // temporal blend weight (0=full history, 1=full current)
     _pad:           f32,
+    // The world-position G-buffer is stored **relative to the camera** (see gbuffer.wgsl), so it
+    // has to be put back into world space before a previous frame's view-projection can be applied
+    // to it. This binding is named `t_position` rather than `t_world_position`, which is how it
+    // was missed when that target's convention changed.
+    camera_pos:     vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> params:     TaaParams;
@@ -40,7 +45,8 @@ fn fs_resolve(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32
     var history_uv = uv; // fallback: no movement
     let pos_samp = textureLoad(t_position, iuv, 0);
     if (pos_samp.w >= 0.5) {
-        let prev_clip = params.prev_view_proj * vec4(pos_samp.xyz, 1.0);
+        let prev_clip =
+            params.prev_view_proj * vec4(pos_samp.xyz + params.camera_pos.xyz, 1.0);
         if (prev_clip.w > 0.001) {
             let ndc = prev_clip.xy / prev_clip.w;
             history_uv = vec2(ndc.x * 0.5 + 0.5, ndc.y * -0.5 + 0.5);
