@@ -29,6 +29,10 @@ pub struct ScriptEngine {
     /// and makes the order a property of the scripts' paths instead of of the allocator.
     loaded_scripts: BTreeMap<String, (String, RegistryKey)>,
     command_queue: Arc<CommandQueue>,
+    /// Hook ticks left for the Lua call currently running; see [`ScriptEngine::arm_budget`].
+    budget: Arc<std::sync::atomic::AtomicU32>,
+    /// Ticks handed out per call. `instructions / HOOK_INSTRUCTION_STEP`.
+    budget_ticks: u32,
     elapsed_time: f32,
     /// Log messages emitted from Lua (`print`), stored as `(level, message)` pairs.
     pub log_queue: Arc<std::sync::Mutex<Vec<(String, String)>>>, // (Level, Message)
@@ -126,6 +130,26 @@ pub struct ScriptResult {
 }
 
 impl ScriptEngine {
+    /// Instructions between two hook firings. The hook itself is an atomic load and a compare, so
+    /// this is not about the hook's cost — it is the resolution of the budget, and 10 000
+    /// instructions is far below one frame's worth of anything sane.
+    const HOOK_INSTRUCTION_STEP: u32 = 10_000;
+
+    /// Default ceiling for a single call into Lua: `on_update` for one script, one entity hook,
+    /// or the top level of a script being loaded.
+    ///
+    /// Two million instructions is generously above what a per-frame script should ever execute
+    /// and far below "the window stopped responding". It is a runaway guard, not a performance
+    /// budget: a script that trips it has a bug, and the alternative to tripping it was hanging
+    /// the process, because `while true do end` in a Lua VM the host has no timeout on is
+    /// unrecoverable — no signal, no watchdog, and the frame never ends.
+    pub const DEFAULT_INSTRUCTION_BUDGET: u32 = 2_000_000;
+
+    /// Default ceiling on the VM's heap. Reached, an allocation fails as a catchable Lua error
+    /// instead of the process growing until the OOM killer decides which program dies — which on
+    /// a machine running an editor and a game is not necessarily this one.
+    pub const DEFAULT_MEMORY_LIMIT: usize = 64 * 1024 * 1024;
+
     pub fn new() -> Result<Self, LuaError> {
         let lua = Lua::new();
         let command_queue = Arc::new(CommandQueue::new());
@@ -141,6 +165,33 @@ impl ScriptEngine {
         lua.globals().set("debug", LuaNil)?;
         lua.globals().set("loadstring", LuaNil)?;
         lua.globals().set("load", LuaNil)?;
+
+        // === RUNAWAY GUARD: instruction budget + memory ceiling ===
+        // Without these a script is unbounded in both time and space, and the host has no way to
+        // take control back: `while true do end` never yields, mlua's `call` never returns, and
+        // the frame — the window, the editor, the game — is simply over. The budget is armed per
+        // call (see `arm_budget`), so one runaway script loses its own frame and the scripts
+        // ordered after it still run.
+        let budget = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let hook_budget = budget.clone();
+        lua.set_hook(
+            mlua::HookTriggers::new().every_nth_instruction(Self::HOOK_INSTRUCTION_STEP),
+            move |_lua, _debug| {
+                // Not `fetch_sub` alone: at zero that wraps to `u32::MAX` and the guard silently
+                // stops guarding. Load-then-store is safe here because the VM is single-threaded
+                // by construction — every method that reaches it takes `&mut self`.
+                let left = hook_budget.load(std::sync::atomic::Ordering::Relaxed);
+                if left == 0 {
+                    return Err(LuaError::RuntimeError(
+                        "script exceeded its instruction budget for this call (infinite loop?)"
+                            .to_string(),
+                    ));
+                }
+                hook_budget.store(left - 1, std::sync::atomic::Ordering::Relaxed);
+                Ok(())
+            },
+        );
+        lua.set_memory_limit(Self::DEFAULT_MEMORY_LIMIT)?;
 
         // === TEMEL PRINT FONKSİYONU ===
         let lq_clone1 = log_queue.clone();
@@ -266,9 +317,32 @@ impl ScriptEngine {
             lua,
             loaded_scripts: BTreeMap::new(),
             command_queue,
+            budget,
+            budget_ticks: Self::DEFAULT_INSTRUCTION_BUDGET / Self::HOOK_INSTRUCTION_STEP,
             elapsed_time: 0.0,
             log_queue,
         })
+    }
+
+    /// Hand the next call into Lua a fresh instruction budget.
+    ///
+    /// Per CALL, not per frame: `update` runs every loaded script, and a budget shared across them
+    /// would let the first script to misbehave spend everyone's — which is the same failure the
+    /// error-isolation fix removed from this loop, in a different currency.
+    fn arm_budget(&self) {
+        self.budget
+            .store(self.budget_ticks, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Change the per-call instruction ceiling. Rounded down to a multiple of the hook step, and
+    /// never to zero — a budget of zero would fail every script on its first hook.
+    pub fn set_instruction_budget(&mut self, instructions: u32) {
+        self.budget_ticks = (instructions / Self::HOOK_INSTRUCTION_STEP).max(1);
+    }
+
+    /// Change the VM's heap ceiling in bytes. Returns the previous limit.
+    pub fn set_memory_limit(&mut self, bytes: usize) -> Result<usize, LuaError> {
+        self.lua.set_memory_limit(bytes)
     }
 
     #[tracing::instrument(skip_all, name = "script_load", fields(path = %path))]
@@ -288,6 +362,7 @@ impl ScriptEngine {
         env.set_metatable(Some(meta));
 
         // Script'i İzole env içinde çalıştır
+        self.arm_budget();
         self.lua
             .load(&content)
             .set_environment(env.clone())
@@ -360,6 +435,7 @@ impl ScriptEngine {
                 }
             };
             if let Ok(func) = env.get::<_, LuaFunction>("on_update") {
+                self.arm_budget();
                 if let Err(e) = func.call::<_, ()>(ctx_table.clone()) {
                     warn!(path = %path, error = %e, "[Scripting] on_update çalışma-zamanı hatası");
                     failures.push(format!("Lua on_update hatası ({path}): {e}"));
@@ -388,6 +464,7 @@ impl ScriptEngine {
 
             // on_entity_update(entity_id, dt) çağır (varsa)
             if let Ok(func) = env.get::<_, LuaFunction>("on_entity_update") {
+                self.arm_budget();
                 func.call::<_, ()>((entity_id, dt)).map_err(|e| {
                     warn!(entity_id, script_path, error = %e, "[Scripting] on_entity_update çalışma-zamanı hatası");
                     format!(
@@ -799,6 +876,7 @@ ScriptCommand::PlayAnimation { id, name, blend, loop_anim } => {
             .map_err(|e| e.to_string())?;
         ctx_table.set("input", input).map_err(|e| e.to_string())?;
 
+        self.arm_budget();
         let result_table: LuaTable = func.call(ctx_table).map_err(|e| {
             warn!(path, func_name, error = %e, "[Scripting] run_entity_update: Lua çalışma-zamanı hatası");
             format!("Lua runtime: {}", e)
@@ -904,6 +982,96 @@ mod soundness {
 
 #[cfg(test)]
 mod tests {
+
+    /// A script that never returns must lose its frame, not the process.
+    ///
+    /// `while true do end` in a Lua VM the host has no timeout on is unrecoverable: the call never
+    /// returns, so the frame never ends, so the window never redraws and never processes the
+    /// close event either. There is no signal to catch and no watchdog thread that could help —
+    /// only the VM can interrupt itself, which is what the instruction hook is for.
+    #[test]
+    fn an_infinite_loop_ends_the_call_instead_of_the_process() {
+        let dir = std::env::temp_dir().join(format!("gizmo_budget_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("runaway.lua");
+        std::fs::write(&path, "function on_update(ctx)\n  while true do end\nend\n").unwrap();
+
+        let mut engine = ScriptEngine::new().unwrap();
+        // Small enough to trip in milliseconds; the default is a runaway guard, not a stopwatch.
+        engine.set_instruction_budget(200_000);
+        engine.load_script(path.to_str().unwrap()).unwrap();
+
+        let world = World::new();
+        let input = Input::default();
+        let started = std::time::Instant::now();
+        let err = engine.update(&world, &input, 0.016).unwrap_err();
+        let took = started.elapsed();
+
+        assert!(err.contains("instruction budget"), "unexpected error: {err}");
+        assert!(took.as_secs() < 5, "the guard took {took:?} — that is a hang with extra steps");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The budget is per call, so the runaway script loses its own frame and the next one still
+    /// runs — the same isolation the error handling already gives a script that throws.
+    #[test]
+    fn a_runaway_script_does_not_spend_another_scripts_budget() {
+        let dir = std::env::temp_dir().join(format!("gizmo_budget2_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // `a_` sorts before `b_`, and the script map is ordered by path, so the runaway runs first.
+        let runaway = dir.join("a_runaway.lua");
+        let neighbour = dir.join("b_neighbour.lua");
+        std::fs::write(&runaway, "function on_update(ctx)\n  while true do end\nend\n").unwrap();
+        // Observable through the log queue rather than a new accessor: `print` already routes
+        // into it, so the test needs no API the engine would not otherwise have.
+        std::fs::write(&neighbour, "function on_update(ctx)\n  print('neighbour ran')\nend\n")
+            .unwrap();
+
+        let mut engine = ScriptEngine::new().unwrap();
+        engine.set_instruction_budget(200_000);
+        engine.load_script(runaway.to_str().unwrap()).unwrap();
+        engine.load_script(neighbour.to_str().unwrap()).unwrap();
+
+        let world = World::new();
+        let input = Input::default();
+        let err = engine.update(&world, &input, 0.016).unwrap_err();
+        assert!(err.contains("instruction budget"), "unexpected error: {err}");
+
+        let logged = engine
+            .log_queue
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(_, m)| m.contains("neighbour ran"));
+        assert!(logged, "the second script never got its turn");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A script that allocates without bound hits a Lua error, not the OOM killer.
+    #[test]
+    fn runaway_allocation_fails_as_a_lua_error() {
+        let dir = std::env::temp_dir().join(format!("gizmo_mem_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("hungry.lua");
+        std::fs::write(
+            &path,
+            "function on_update(ctx)\n  local t = {}\n  while true do t[#t+1] = string.rep('x', 1024) end\nend\n",
+        )
+        .unwrap();
+
+        let mut engine = ScriptEngine::new().unwrap();
+        engine.set_memory_limit(4 * 1024 * 1024).unwrap();
+        // Generous, so the memory ceiling is what stops it rather than the instruction budget.
+        engine.set_instruction_budget(500_000_000);
+        engine.load_script(path.to_str().unwrap()).unwrap();
+
+        let err = engine.update(&World::new(), &Input::default(), 0.016).unwrap_err();
+        assert!(
+            err.to_lowercase().contains("memory"),
+            "expected a memory error, got: {err}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
     use super::*;
     use gizmo_math::{Quat, Vec3};
     use gizmo_physics_core::{Collider, ColliderShape, Transform};
