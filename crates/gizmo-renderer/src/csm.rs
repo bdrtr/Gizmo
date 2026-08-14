@@ -2,7 +2,7 @@
 //! several cascades, each rendered to a layer of a `depth2d_array` with its own light
 //! orthographic projection (tighter texel density near the camera).
 
-use gizmo_math::{Mat4, Vec3, Vec4};
+use gizmo_math::{Mat4, Vec3};
 
 /// Must match `texture_depth_2d_array` layer count and `SceneUniforms.light_view_proj` length.
 pub const CASCADE_COUNT: usize = 4;
@@ -169,6 +169,16 @@ pub fn directional_cascade_view_projs(
 ) -> [Mat4; CASCADE_COUNT] {
     let light_dir = light_dir_world.normalize();
     let (right, up) = camera_right_up(cam_forward);
+    // The light basis needs an up vector that is not parallel to it. `Vec3::Y` unconditionally
+    // meant a sun straight overhead — noon, the most ordinary configuration there is — produced a
+    // degenerate `look_at_rh` and a cascade matrix of **NaN** end to end, so every shadow lookup
+    // that frame sampled nothing. Measured, not guessed: `an_overhead_sun_does_not_produce_nan`.
+    let light_up = if light_dir.y.abs() > 0.99 { Vec3::Z } else { Vec3::Y };
+    // **One light basis for every cascade, fixed in the world.** It used to be rebuilt per cascade
+    // around `slice_center`, which follows the camera — and a snap grid expressed in a space whose
+    // origin moves with the camera moves with the camera too, which is most of why the snapping
+    // below never worked. Only the rotation matters for that grid; the translation is arbitrary.
+    let light_view = Mat4::look_at_rh(-light_dir, Vec3::ZERO, light_up);
     let mut prev_z = z_near;
     let mut mats = [Mat4::IDENTITY; CASCADE_COUNT];
 
@@ -176,34 +186,41 @@ pub fn directional_cascade_view_projs(
         let zf = splits[i];
         let corners =
             frustum_slice_corners(cam_pos, cam_forward, right, up, aspect, fov_y, prev_z, zf);
-        let mid_dist = (prev_z + zf) * 0.5;
-        let slice_center = cam_pos + cam_forward * mid_dist;
-        let light_pos = slice_center - light_dir * 250.0;
-        let light_view = Mat4::look_at_rh(light_pos, slice_center, Vec3::Y);
 
-        let mut min_b = Vec3::splat(f32::MAX);
-        let mut max_b = Vec3::splat(f32::MIN);
+        // **Bounding sphere, not a bounding box.** The extent of the ortho box is the texel size,
+        // and the texel size has to be constant or snapping to it is meaningless. An AABB of the
+        // slice corners *in light space* changes shape as the camera rotates, so the texel size
+        // changed every frame and the grid moved out from under the snap. A sphere's radius does
+        // not depend on how the camera is turned.
+        let center = corners.iter().copied().fold(Vec3::ZERO, |a, c| a + c) / corners.len() as f32;
+        let radius = corners
+            .iter()
+            .fold(0.0f32, |m, c| m.max((*c - center).length()));
+        // Quantised so that float wobble in the corner set cannot nudge the texel size either.
+        let radius = (radius * 16.0).ceil() / 16.0;
+
+        let center_ls = light_view.transform_point3(center);
+        let texel = 2.0 * radius / shadow_map_size as f32;
+
+        // Now the snap does what it is for: the box is a fixed size on a fixed grid, so a static
+        // world point keeps the same sub-texel phase while the camera moves, and shadow edges stop
+        // crawling. `a_static_point_keeps_its_sub_texel_phase` measures exactly that.
+        let min_x = ((center_ls.x - radius) / texel).floor() * texel;
+        let min_y = ((center_ls.y - radius) / texel).floor() * texel;
+        let (max_x, max_y) = (min_x + 2.0 * radius, min_y + 2.0 * radius);
+
+        // Depth range from the same corners, in the same space. The margins keep casters that sit
+        // behind the slice (and receivers just past it) inside the map.
+        let (mut min_z, mut max_z) = (f32::MAX, f32::MIN);
         for c in corners {
-            let v = light_view * Vec4::new(c.x, c.y, c.z, 1.0);
-            debug_assert!(v.w.abs() > 1e-6, "CSM corner projection: v.w ≈ 0 — degenerate light view matrix");
-            let p = Vec3::new(v.x, v.y, v.z) / v.w;
-            min_b = min_b.min(p);
-            max_b = max_b.max(p);
+            let p = light_view.transform_point3(c);
+            min_z = min_z.min(p.z);
+            max_z = max_z.max(p.z);
         }
-        min_b.z -= 40.0;
-        max_b.z += 60.0;
+        min_z -= 40.0;
+        max_z += 60.0;
 
-        // Light-space texel snap (reduces edge swimming)
-        let world_units_per_texel_x = (max_b.x - min_b.x) / shadow_map_size as f32;
-        let world_units_per_texel_y = (max_b.y - min_b.y) / shadow_map_size as f32;
-        if world_units_per_texel_x > 1e-8 && world_units_per_texel_y > 1e-8 {
-            min_b.x = (min_b.x / world_units_per_texel_x).floor() * world_units_per_texel_x;
-            min_b.y = (min_b.y / world_units_per_texel_y).floor() * world_units_per_texel_y;
-            max_b.x = min_b.x + world_units_per_texel_x * shadow_map_size as f32;
-            max_b.y = min_b.y + world_units_per_texel_y * shadow_map_size as f32;
-        }
-
-        let ortho = Mat4::orthographic_rh(min_b.x, max_b.x, min_b.y, max_b.y, -max_b.z, -min_b.z);
+        let ortho = Mat4::orthographic_rh(min_x, max_x, min_y, max_y, -max_z, -min_z);
         mats[i] = ortho * light_view;
         prev_z = zf;
     }
@@ -213,6 +230,106 @@ pub fn directional_cascade_view_projs(
 #[cfg(test)]
 mod tests {
     use super::*;
+/// A sun straight overhead must not produce a NaN cascade matrix.
+    ///
+    /// It did. `Mat4::look_at_rh` was handed `Vec3::Y` as its up vector unconditionally, so a
+    /// light direction of `(0, -1, 0)` — noon, the most ordinary lighting there is — made the
+    /// basis degenerate and every one of the sixteen matrix entries NaN. Nothing crashed; the
+    /// shadow lookup simply sampled a NaN UV and the shadow term became undefined.
+    #[test]
+    fn an_overhead_sun_does_not_produce_nan() {
+        let splits = cascade_split_distances(0.1, SHADOW_DISTANCE, CASCADE_LAMBDA);
+        for light in [
+            Vec3::new(0.0, -1.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.001, -1.0, 0.0).normalize(),
+        ] {
+            let mats = directional_cascade_view_projs(
+                Vec3::new(0.0, 2.0, 0.0),
+                Vec3::X,
+                16.0 / 9.0,
+                0.785,
+                0.1,
+                &splits,
+                light,
+                SHADOW_MAP_RES,
+            );
+            for (i, m) in mats.iter().enumerate() {
+                assert!(
+                    m.to_cols_array().iter().all(|v| v.is_finite()),
+                    "cascade {i} is not finite for light {light:?}"
+                );
+            }
+        }
+    }
+
+    /// A world point that does not move keeps the same **sub-texel phase** in the shadow map while
+    /// the camera does.
+    ///
+    /// This is the whole purpose of texel snapping and it was not happening. The cascade follows
+    /// the camera, so a static point is expected to travel across the shadow map — but in *whole
+    /// texels*, so that the sampling grid stays fixed relative to the world. Measured before the
+    /// fix, the fractional part of the texel coordinate changed on every step (.188, .872, .554,
+    /// .234, …) and the steps themselves were fractional (−2.3162, −2.3179, …). That is shadow
+    /// edges crawling as the camera moves.
+    ///
+    /// Two things had to change for this to hold, and the test covers both because it exercises
+    /// translation and rotation: the ortho extent comes from a bounding **sphere** (an AABB of the
+    /// same corners changes size as the camera turns, so the texel size changed with it), and the
+    /// light basis is fixed in the world rather than rebuilt around a camera-following centre (a
+    /// grid expressed in a moving space moves).
+    #[test]
+    fn a_static_point_keeps_its_sub_texel_phase() {
+        use gizmo_math::Vec4;
+        let point = Vec3::new(3.0, 0.0, 0.0);
+        let light = Vec3::new(-0.4, -1.0, -0.3).normalize();
+        let splits = cascade_split_distances(0.1, SHADOW_DISTANCE, CASCADE_LAMBDA);
+
+        let phase_at = |cam: Vec3, fwd: Vec3| -> (f32, f32) {
+            let m = directional_cascade_view_projs(
+                cam,
+                fwd,
+                16.0 / 9.0,
+                0.785,
+                0.1,
+                &splits,
+                light,
+                SHADOW_MAP_RES,
+            );
+            let c = m[0] * Vec4::new(point.x, point.y, point.z, 1.0);
+            let uv = (
+                (c.x / c.w) * 0.5 + 0.5,
+                (c.y / c.w) * -0.5 + 0.5,
+            );
+            let res = SHADOW_MAP_RES as f32;
+            ((uv.0 * res).fract(), (uv.1 * res).fract())
+        };
+
+        // Distance between two phases on the unit circle — 0.999 and 0.001 are adjacent, not
+        // opposite, and a naive difference would call that a whole-texel error.
+        let apart = |a: f32, b: f32| {
+            let d = (a - b).abs();
+            d.min(1.0 - d)
+        };
+
+        let base = phase_at(Vec3::new(-10.0, 2.0, 0.0), Vec3::X);
+        for k in 1..8 {
+            let slid = phase_at(Vec3::new(-10.0 + k as f32 * 0.01, 2.0, 0.0), Vec3::X);
+            assert!(
+                apart(slid.0, base.0) < 0.01 && apart(slid.1, base.1) < 0.01,
+                "sliding the camera moved the sub-texel phase from {base:?} to {slid:?} — the \
+                 snap grid is not fixed in the world, so shadow edges crawl"
+            );
+            let a = k as f32 * 0.002;
+            let turned = phase_at(Vec3::new(-10.0, 2.0, 0.0), Vec3::new(a.cos(), 0.0, a.sin()));
+            assert!(
+                apart(turned.0, base.0) < 0.01 && apart(turned.1, base.1) < 0.01,
+                "turning the camera moved the sub-texel phase from {base:?} to {turned:?} — the \
+                 texel size is changing with the camera's orientation"
+            );
+        }
+    }
+
 
     // Pure, deterministic, GPU-free coverage of the CSM cascade math (the CPU core of the
     // directional-shadow path). Complements the headless golden render test, which can't

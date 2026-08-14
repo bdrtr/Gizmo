@@ -661,6 +661,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Cascaded shadow maps: texel snapping did not stabilise anything, and an overhead sun produced
+  NaN.** Two defects in `directional_cascade_view_projs`, both found by measuring rather than
+  reading. The snap worked on an **AABB of the frustum-slice corners in light space**, whose extent
+  changes as the camera turns — so the texel size changed every frame and the grid moved out from
+  under the snap — and it was expressed in a light basis rebuilt per cascade around a
+  camera-following centre, so the grid translated with the camera as well. Measured on a static
+  world point: its sub-texel phase changed on every frame (`.188`, `.872`, `.554`, `.234`, …) and
+  it moved in fractional steps (−2.3162, −2.3179, …), which is shadow edges crawling. The fit is
+  now a bounding **sphere** (rotation-invariant, so the texel size is constant) in a single
+  world-fixed light basis; the same measurement now shows a constant phase and whole-texel steps.
+  Separately, `Mat4::look_at_rh` was given `Vec3::Y` as its up vector unconditionally, so a light
+  direction of `(0, -1, 0)` — noon — made the basis degenerate and produced a cascade matrix of NaN
+  end to end. Both are pinned by tests in `csm.rs`.
 - **Skeletal animation is advanced by the engine now.** `animation_update_system` and
   `animation_state_machine_update_system` existed in `gizmo-renderer` and nothing ever called
   them: `current_time += dt · speed` appeared nowhere else in the workspace, no schedule, plugin,
