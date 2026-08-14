@@ -749,6 +749,34 @@ the shader mirror tests below: each hand-counts its subjects, so a new shader is
 test that exists to police it. A partial literal (`..Default::default()`) is the sanctioned escape;
 an exhaustive one is a test failure the day it is written. Verified by reintroducing one.
 
+**The same flaw, on the shader side: `gizmo-renderer::shader_contract` (2026-08-14).** `common.wgsl`
+opens by declaring itself the single source of truth for the scene uniform layout. It is — for the
+shaders that `#import` it, and **seven still declare their own `SceneUniforms`**, because whether a
+shader shares the definition depends on whether its Rust call site reached for
+`load_shader_composed` rather than `load_shader`. Nothing in the shader says which it is. The seven
+are legitimate — each is a *prefix* of the block, truncated after the last field it reads, which is
+how a shader avoids declaring 1168 bytes to read a view-projection — but nothing checked the
+prefix, and the tests that looked like they did could not: one pins Rust's struct sizes while
+calling itself "a contract with the WGSL side" without opening a `.wgsl` file, and the other reads
+ten shaders **from a hand-written list** and counts `vec4<f32>` occurrences rather than checking
+where the fields land.
+
+The replacement takes its subjects from the shader directory and its answer from naga: every shader
+declaring `SceneUniforms`, `InstanceRaw`/`InstanceData` or `LightData` is parsed, and each named
+field's byte offset is compared against `offset_of!` on the Rust struct that fills it. Padding is
+ignored by name — its effect is entirely visible in where the named fields land — and types are not
+compared, which is what lets `gbuffer.wgsl` keep its deliberate `array<vec4<f32>, 40>` in place of
+ten `LightData` while a field that *moved* still fails. No drift was found; the eight declarations
+agree today. Verified by reordering two fields in one copy and dropping one from another, and
+watching the two tests name the file, the field and both offsets.
+
+This also closes the "`compose_wgsl` builds a `naga::Module`, validates it and throws it away"
+entry, and closes it honestly rather than by refactoring for its own sake: `compose_module` now
+returns the validated module, `compose_wgsl` is the thin text wrapper over it, and the contract
+tests are the consumer that needed it — the composed shaders substitute bind-group indices inline
+(`@group(#{INSTANCE_GROUP})`), so naga alone cannot read them and only the real composition path
+can.
+
 Two things this is **not** saying. A public function with no in-tree caller is not a defect — a
 library's surface exists to be called from outside, and a sweep on that basis returns most of
 `gizmo-core`. And a system a game is meant to schedule itself is not unwired. The class that
@@ -841,16 +869,23 @@ sahnede odak mesafesi doğru yere kayacak. Test edecek bir koşum yok — §3'ü
 
 ### Doğrulanmış ama henüz el atılmamış kökler
 
-- **Sözleşmeler (çare sağlam, küçük).** `common.wgsl` kendini sahne uniform düzeninin tek doğruluk
-  kaynağı ilan ediyor; **27 tüketicinin 20'si** için doğru. Ayrımı yapan hiçbir şey yok, çünkü
-  paylaşım `load_shader_composed` çağrılıp çağrılmamasına bağlı. Ayna testleri doğru desen ama her
-  biri **öznelerini elle sayıyor**, üçünden ikisi bayat — yani yeni bir shader, onu denetlemek için
-  var olan teste görünmez.
-- **Shader boru hattı.** `compose_wgsl` bir `naga::Module` kurup doğruluyor ve **atıyor**, `String`
-  döndürüyor. Rust, kendi struct'larını shader'ın gördüğü düzenle karşılaştıramıyor.
 - **Determinizm çevresi (çare sağlam).** `snapshot.rs` iki elle yazılmış 9 alanlık liste taşıyor,
   oysa `PhysicsWorld`'ün 28 alanı var; yeni bir alan sessizce anlık görüntünün dışında kalır.
 - **Crate grafiği / Stage A.** `gizmo-animation` Stage A listesinde ama pratikte öyle değil.
+
+Kapatılanlar (**2026-08-14**), ayrıntısı §7'de:
+
+- **Sözleşmeler** → `gizmo-renderer::shader_contract`. Kendi `SceneUniforms`'unu bildiren yedi
+  shader'ın hepsi bloğun bir **ön eki**; meşru, ama ön eki kimse denetlemiyordu. Yeni testler
+  öznelerini shader dizininden, cevaplarını **naga**'dan alıyor: her adlandırılmış alanın bayt
+  ofseti Rust'taki `offset_of!` ile karşılaştırılıyor. Bugün sürüklenme yok — sekiz bildirim de
+  uyuşuyor. Elle özne sayan eski ayna testi silindi (kapsamı yenisinde), yanlış iddia eden
+  yorumu düzeltildi. Kırılabildiği doğrulandı: bir kopyada iki alan yer değiştirdi, bir başkasında
+  kuyruk alanı silindi; ikisi de dosya/alan/ofset vererek kırmızıya düştü.
+- **Shader boru hattı** → `compose_module` artık doğrulanmış modülü döndürüyor, `compose_wgsl` onun
+  üstünde ince bir metin sarmalayıcı. Refaktör kendisi için değil: derlenen shader'lar bind-group
+  indekslerini satır içi yerleştiriyor (`@group(#{INSTANCE_GROUP})`), yani onları yalnız naga
+  okuyamıyor — sözleşme testinin gerçek kompozisyon yoluna ihtiyacı vardı.
 
 ### Scripting
 

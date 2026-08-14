@@ -5,7 +5,9 @@
 
 mod layouts;
 mod pipelines;
-mod shaders;
+// `pub(crate)` for `compose_module`: the layout contract tests parse what the pipeline composes,
+// which is the point of them — see `crate::shader_contract`.
+pub(crate) mod shaders;
 mod uniforms;
 
 pub use shaders::load_shader;

@@ -340,10 +340,13 @@ impl UvTransform {
 mod tests {
     use super::*;
 
-    // These byte sizes are contracts with the WGSL side: `common.wgsl` and the
-    // partial SceneUniforms copies in other shaders assume this exact std140
-    // layout, and bytemuck::Pod requires no interior/trailing padding. If any of
-    // these drift the shaders read garbage (or bytemuck::cast_slice panics).
+    // These sizes are the Rust half of the GPU layout: bytemuck::Pod requires no interior or
+    // trailing padding, and a size that moves means every shader indexing the buffer reads
+    // shifted memory. It is only half — this test never opens a `.wgsl` file, and used to claim
+    // it was "a contract with the WGSL side" while checking nothing on that side. The other half
+    // is `crate::shader_contract`, which parses the shaders and compares their field offsets to
+    // `offset_of!` on these structs. Keep both: this one fails first and reads clearly, that one
+    // says which shader disagreed.
     #[test]
     fn gpu_struct_sizes_match_the_shader_layout() {
         // 96 (was 92) since the vertex colour became RGBA.
@@ -470,44 +473,11 @@ mod tests {
         assert_eq!(Vertex::default().color, [1.0, 1.0, 1.0, 1.0]);
     }
 
-    // The instance storage buffer's element stride comes from the Rust struct; each shader
-    // re-declares the struct in WGSL and indexes `instances[i]` with ITS idea of the stride.
-    // If one shader is missed when a field is added, every instance after the first reads
-    // shifted memory — silently, and only in that one pipeline. Adapter-free string check.
-    #[test]
-    fn every_instance_shader_declares_the_full_struct() {
-        let shaders: &[(&str, &str)] = &[
-            ("shader.wgsl", include_str!("shaders/shader.wgsl")),
-            ("unlit.wgsl", include_str!("shaders/unlit.wgsl")),
-            ("baked_lit.wgsl", include_str!("shaders/baked_lit.wgsl")),
-            ("water.wgsl", include_str!("shaders/water.wgsl")),
-            ("sky.wgsl", include_str!("shaders/sky.wgsl")),
-            ("backdrop.wgsl", include_str!("shaders/backdrop.wgsl")),
-            ("grid.wgsl", include_str!("shaders/grid.wgsl")),
-            ("gbuffer.wgsl", include_str!("shaders/gbuffer.wgsl")),
-            ("shadow.wgsl", include_str!("shaders/shadow.wgsl")),
-            ("point_shadow.wgsl", include_str!("shaders/point_shadow.wgsl")),
-        ];
-        // 8 vec4 slots: 4 model columns, albedo, pbr, ambient, emissive.
-        let expected_vec4s = std::mem::size_of::<InstanceRaw>() / 16;
-        for (name, src) in shaders {
-            let start = src
-                .find("struct InstanceRaw {")
-                .or_else(|| src.find("struct InstanceData {"))
-                .unwrap_or_else(|| panic!("{name} indexes the instance buffer but declares no struct"));
-            let end = start + src[start..].find("};").unwrap_or_else(|| panic!("{name}: unterminated struct"));
-            let body = &src[start..end];
-            let vec4s = body.matches("vec4<f32>").count();
-            assert_eq!(
-                vec4s, expected_vec4s,
-                "{name} declares {vec4s} vec4 instance fields, InstanceRaw has {expected_vec4s} \
-                 — `instances[i]` in this shader reads the wrong offsets for every i > 0"
-            );
-            for field in ["albedo_color", "pbr", "ambient", "emissive"] {
-                assert!(body.contains(field), "{name}'s instance struct is missing `{field}`");
-            }
-        }
-    }
+    // The instance buffer's element stride used to be policed here, by a hand-written list of ten
+    // shader files and a count of `vec4<f32>` occurrences. It now lives in
+    // `crate::shader_contract::every_instance_declaration_matches_the_bytes_rust_uploads`, which
+    // takes its subjects from the shader directory and its answer from the offsets naga computes —
+    // an eleventh shader is covered the day it is added, which a list cannot do.
 
     #[test]
     fn material_params_new_packs_fields_into_documented_slots() {

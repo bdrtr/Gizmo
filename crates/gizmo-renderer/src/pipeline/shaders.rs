@@ -41,18 +41,17 @@ pub(crate) fn web_render_defs() -> HashMap<String, ShaderDefValue> {
     ])
 }
 
-/// Compose a shader source (`#import gizmo::common`, `#ifdef`, `#{DEF}`) into flat WGSL text
-/// under the given `shader_defs`.
+/// Compose and validate a shader source, returning the `naga::Module` itself.
 ///
-/// We resolve with naga_oil then emit WGSL (rather than handing wgpu a `naga::Module`)
-/// because wgpu 29 here is built without the `naga-ir` feature. All web/native divergence is
-/// expressed via `shader_defs` on the SOURCE, so nothing depends on how naga's WGSL backend
-/// reformats output.
-pub(crate) fn compose_wgsl(
+/// This used to be inlined in [`compose_wgsl`], which built the module, validated it, and dropped
+/// it on the floor — so the only thing the rest of the crate could see was text, and Rust had no
+/// way to ask what layout the shader actually ended up with. `crate::shader_contract` asks exactly
+/// that, and this is how.
+pub(crate) fn compose_module(
     source: &str,
     label: &str,
     shader_defs: HashMap<String, ShaderDefValue>,
-) -> String {
+) -> Result<(naga::Module, naga::valid::ModuleInfo), String> {
     use naga_oil::compose::{
         ComposableModuleDescriptor, Composer, NagaModuleDescriptor, ShaderLanguage,
     };
@@ -65,7 +64,7 @@ pub(crate) fn compose_wgsl(
             language: ShaderLanguage::Wgsl,
             ..Default::default()
         })
-        .unwrap_or_else(|e| panic!("composing common.wgsl failed: {e}"));
+        .map_err(|e| format!("composing common.wgsl failed: {e}"))?;
     // pbr_ext imports gizmo::common, so it must be registered after common. Only shaders that
     // `#import gizmo::pbr_ext` pull it in; registering it here is otherwise inert.
     composer
@@ -75,7 +74,7 @@ pub(crate) fn compose_wgsl(
             language: ShaderLanguage::Wgsl,
             ..Default::default()
         })
-        .unwrap_or_else(|e| panic!("composing pbr_ext.wgsl failed: {e}"));
+        .map_err(|e| format!("composing pbr_ext.wgsl failed: {e}"))?;
 
     let module = composer
         .make_naga_module(NagaModuleDescriptor {
@@ -84,14 +83,32 @@ pub(crate) fn compose_wgsl(
             shader_defs,
             ..Default::default()
         })
-        .unwrap_or_else(|e| panic!("naga_oil compose of '{label}' failed: {e}"));
+        .map_err(|e| format!("naga_oil compose of '{label}' failed: {e}"))?;
 
     let info = naga::valid::Validator::new(
         naga::valid::ValidationFlags::all(),
         naga::valid::Capabilities::all(),
     )
     .validate(&module)
-    .unwrap_or_else(|e| panic!("validating composed '{label}' failed: {e:?}"));
+    .map_err(|e| format!("validating composed '{label}' failed: {e:?}"))?;
+
+    Ok((module, info))
+}
+
+/// Compose a shader source (`#import gizmo::common`, `#ifdef`, `#{DEF}`) into flat WGSL text
+/// under the given `shader_defs`.
+///
+/// We resolve with naga_oil then emit WGSL (rather than handing wgpu a `naga::Module`)
+/// because wgpu 29 here is built without the `naga-ir` feature. All web/native divergence is
+/// expressed via `shader_defs` on the SOURCE, so nothing depends on how naga's WGSL backend
+/// reformats output.
+pub(crate) fn compose_wgsl(
+    source: &str,
+    label: &str,
+    shader_defs: HashMap<String, ShaderDefValue>,
+) -> String {
+    let (module, info) = compose_module(source, label, shader_defs)
+        .unwrap_or_else(|e| panic!("{e}"));
 
     naga::back::wgsl::write_string(&module, &info, naga::back::wgsl::WriterFlags::empty())
         .unwrap_or_else(|e| panic!("emitting WGSL for '{label}' failed: {e}"))

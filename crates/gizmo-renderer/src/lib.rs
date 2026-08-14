@@ -136,6 +136,8 @@ pub mod ssgi;
 pub mod ssr;
 pub mod taa;
 #[cfg(test)]
+mod shader_contract;
+#[cfg(test)]
 mod test_gpu;
 mod texture_quality;
 pub mod visibility;
