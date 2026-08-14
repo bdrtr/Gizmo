@@ -861,22 +861,34 @@ Kök kayıtlı ("The root the sweep could not see"). İki kesim yapıldı:
    **workspace'i tarıyor** — yani yedinci çağrı yeri yazıldığı gün kırmızı. Kırılabildiği
    doğrulandı (literal geri konup test kırmızıya düşürüldü, sonra geri alındı).
 
-Kalan adım:
+3. **Studio lib hedefi + parite testi (2026-08-15).** `gizmo-studio` artık lib hedefi taşıyor
+   (`publish = false` aynen duruyor — amaç yayımlamak değil, editörün render yoluna testten
+   erişebilmek) ve `tests/render_parity.rs` iki yolun ilk otomatik çapraz denetimi.
+   Doğrulayıcının "ölçekte iyimser" dediği yer doğruydu: `StudioState`/`EditorState`'i headless
+   kurmak hâlâ pahalı. O yüzden test **kurulumu** hedefliyor, pass kaydını değil — asıl iş
+   `collect_scene_setup`: ışık toplama ve cascade orkestrasyonu zaten ortaktı, ama etraflarındaki
+   kırk satır (güneş-var bayrağı, cascade'ın hangi ışığı takip edeceği, ışıksız sahnede identity
+   geri düşüşü, point-shadow caster indeksi) iki dosyada ayrı ayrı yazılıydı. İki yol arasındaki
+   fark artık **adlandırılmış bir politika**: `ShadowCaster::SunOnly` (oyun) ve `SunOrFirstLight`
+   (editör). Test aynı dünya için iki argüman setini yan yana koyup bloğun **dünyanın karar
+   verdiği** her alanında eşitlik, yalnız her yolun ilan ettiği üç alanda fark arıyor. Yanına iki
+   bekçi: hiçbir render yolu `collect_scene_lights`/`compute_directional_cascades`'i doğrudan
+   çağıramaz (çağırırsa parite testi o yolu kapsamıyor demektir), ve her yolun hangi politikayı
+   geçtiği kaynakta sabitli — yoksa test kimsenin kullanmadığı iki argüman setini karşılaştırıp
+   sonsuza kadar yeşil kalırdı. Motor yolu bayt-aynı (12 golden render testi), determinizm hash'i
+   değişmedi. Kırılabildiği doğrulandı: "dünyanın kararı" bir politikaya bağlandı ve studio'ya
+   doğrudan bir çağrı kondu; ikisi de kırmızıya düştü.
 
-- **Studio'ya lib hedefi + parite testi (orta, ~2-3 gün, satır başına en yüksek değer).**
-  `gizmo-studio` bugün `publish = false` ve **lib hedefi yok**, yani render yolu hiçbir test
-  koşumundan erişilemiyor; iki yol arasındaki tek çapraz denetim insan gözü. Doğrulayıcı bu adımın
-  fiyatını "türde doğru, ölçekte iyimser" buldu: mekanik kısım kolay, `StudioState`/`EditorState`'i
-  headless kurmak değil.
+Kalanı hâlâ kayıtta: iki çizim döngüsünün **isim envanterini** karşılaştıran test —
+`frame_uniforms` + `collect_scene_setup` sahne bloğunu ve kurulumu kapatıyor, ama draw-list kurma
+adımındaki (LOD, particle, animasyon) ayrışmayı değil. Bir sonraki doğal adım orası: `SceneSetup`
+şu an sahne bloğunu taşıyor, çizim listesini değil.
 
-Daha ucuz alternatifin bir kısmı artık ödendi: kaynak-metin taraması gerçek bir bekçi olarak
-çalışıyor (yukarıdaki ratchet). Kalanı hâlâ kayıtta: iki çizim döngüsünün **isim envanterini**
-karşılaştıran ~60 satırlık test — `frame_uniforms` uniform bloklarını kapatıyor, ama draw-list
-kurma adımındaki (LOD, particle, animasyon) ayrışmayı değil.
-
-**Bu kesimin insan gözü isteyen tek yeri:** editör viewport'unda DoF artık kameranın gerçek
-near/far'ıyla lineerleşiyor. Varsayılan kamera (0.1/2000) için fark yok; farklı far düzlemli bir
-sahnede odak mesafesi doğru yere kayacak. Test edecek bir koşum yok — §3'ün A/B kapısına düşer.
+**İnsan gözü isteyen iki yer:** (1) editör viewport'unda DoF artık kameranın gerçek near/far'ıyla
+lineerleşiyor — varsayılan kamerada (0.1/2000) fark yok, farklı far düzlemli sahnede odak doğru
+yere kayacak. (2) Editörün sahne bloğunda `cascade_params.w` artık 0 yerine gerçek caster indeksi
+taşıyor; editörün forward shader'ı bu yuvayı okumuyor (`point_shadows_enabled` de 0), yani
+görünür bir etki beklenmiyor — ama ikisini de test edecek koşum yok, §3'ün A/B kapısına düşer.
 
 ### Doğrulanmış ama henüz el atılmamış kökler
 

@@ -68,61 +68,6 @@ pub fn execute_render_pipeline(
     // Event: Spawning moved to spawner_update_system.
     // Event: Texture Loading moved to main render loop pass before execute_render_pipeline.
 
-    // Işık kaynakları (point + spot + sun) — game renderer ile ORTAK setup
-    // helper'ından. Eskiden burada elle-yazılmış üç ışık döngüsü vardı (ham
-    // Transform okuyordu → parented ışıklar yanlış yerleşiyordu, mesh'ler ise
-    // GlobalTransform kullanıyordu = tutarsız). Artık iki renderer tek koddan
-    // besleniyor; ışık mantığı bir daha ayrışamaz. sun'ı studio'nun `[f32;4]`
-    // (w = güneş-var-flag) temsiline çeviriyoruz.
-    let scene_lights = gizmo::systems::render::collect_scene_lights(world);
-    let lights_data = scene_lights.lights;
-    let num_lights = scene_lights.num_lights;
-    let sun_dir = [
-        scene_lights.sun_dir.x,
-        scene_lights.sun_dir.y,
-        scene_lights.sun_dir.z,
-        if scene_lights.has_sun { 1.0 } else { 0.0 }, // w=1.0: güneş tanımlı
-    ];
-    let sun_col = [
-        scene_lights.sun_col.x,
-        scene_lights.sun_col.y,
-        scene_lights.sun_col.z,
-        scene_lights.sun_col.w,
-    ];
-
-    // Pick the shadow-casting direction: the sun if the scene has one, else fall
-    // back to the first point light aimed at the origin (studio-only fallback — the
-    // game always casts from the sun). Cascade orchestration itself is the shared
-    // helper, so game and studio can't drift on the SHADOW_DISTANCE cap / lambda.
-    let shadow_dir = if sun_dir[3] > 0.5 {
-        Some(Vec3::new(sun_dir[0], sun_dir[1], sun_dir[2]).normalize())
-    } else if num_lights > 0 {
-        let l_pos = Vec3::new(
-            lights_data[0].position[0],
-            lights_data[0].position[1],
-            lights_data[0].position[2],
-        );
-        Some((Vec3::ZERO - l_pos).normalize())
-    } else {
-        None
-    };
-
-    let cascades = gizmo::renderer::compute_directional_cascades(
-        cam_pos,
-        cam_forward,
-        aspect,
-        cam_fov,
-        cam_near,
-        cam_far,
-        shadow_dir.unwrap_or(Vec3::new(0.0, -1.0, 0.0)),
-    );
-    let cascade_splits = cascades.splits;
-    // No light → leave cascades at identity (the shared helper still gives correct
-    // splits for the SceneUniforms, but the matrices are unused this frame).
-    let cascade_mats: [Mat4; 4] =
-        if shadow_dir.is_some() { cascades.view_projs } else { [Mat4::IDENTITY; 4] };
-    let light_view_proj_cascades = cascade_mats.map(|m| m.to_cols_array_2d());
-
     // z = elapsed time for fluid caustics/wave animation (fluid_composite.wgsl reads it);
     // was hardcoded 0.0 → frozen water (same bug as the gizmo runtime path).
     let elapsed_time = world
@@ -145,34 +90,36 @@ pub fn execute_render_pipeline(
     };
     renderer.update_post_process(&renderer.queue, post_params.with_camera(&camera));
 
-    // Global Uniforms (Her frame sadece 1 kere gönderilir) — the same constructor the game path
-    // uses, so a field added to the block reaches both viewports. What the editor deliberately
-    // does differently is the arguments below, each with its reason.
-    let scene_uniform_data = gizmo::renderer::SceneUniforms::new(&gizmo::renderer::SceneFrame {
-        camera,
-        sun: gizmo::renderer::SunFrame {
-            direction: scene_lights.sun_dir,
-            color: sun_col,
-            present: scene_lights.has_sun,
-        },
-        lights: lights_data,
-        num_lights,
-        shadows: gizmo::renderer::ShadowFrame {
-            cascade_view_projs: cascade_mats,
-            cascade_splits,
-            // The editor path records no point-shadow cube pass, so there is no cube to sample;
+    // Lights, cascades and the scene block — the SAME helper the game path calls. Everything the
+    // editor does differently is an argument here, with its reason, and `tests/render_parity.rs`
+    // holds the two argument sets side by side. This block used to be forty lines of light
+    // conversion, shadow-direction choice and cascade fallback written out a second time.
+    let setup = gizmo::systems::render::collect_scene_setup(
+        world,
+        &gizmo::systems::render::SceneSetupInputs {
+            camera,
+            aspect,
+            cam_fov,
+            // A scene being lit by hand often has no sun yet, and an editor viewport with no
+            // shadows at all reads as broken rather than as unlit.
+            shadow_caster: gizmo::systems::render::ShadowCaster::SunOrFirstLight,
+            // The editor renders the scene as authored: no environment preset blend, and the
+            // shading mode comes from the viewport's debug dropdown, not from the renderer.
+            environment: gizmo::renderer::EnvironmentFrame {
+                shading_mode: ed_shading_mode,
+                ..Default::default()
+            },
+            // The editor records no point-shadow cube pass, so there is no cube to sample;
             // enabling the lookup would read whatever the game path left in it.
-            point_caster: None,
             point_shadows_enabled: false,
+            elapsed_time,
         },
-        // The editor renders the scene as authored: no environment preset blend, and the shading
-        // mode comes from the viewport's debug dropdown rather than from the renderer.
-        environment: gizmo::renderer::EnvironmentFrame {
-            shading_mode: ed_shading_mode,
-            ..Default::default()
-        },
-        elapsed_time,
-    });
+    );
+    let cascade_mats = setup.cascade_view_projs;
+    let light_view_proj_cascades = cascade_mats.map(|m| m.to_cols_array_2d());
+
+    // Global Uniforms (Her frame sadece 1 kere gönderilir).
+    let scene_uniform_data = gizmo::renderer::SceneUniforms::new(&setup.frame);
     renderer.queue.write_buffer(
         &renderer.scene.global_uniform_buffer,
         0,

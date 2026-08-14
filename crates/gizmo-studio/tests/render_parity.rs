@@ -1,0 +1,276 @@
+//! The first automated cross-check between the engine's render path and the editor's.
+//!
+//! # What this is for
+//!
+//! The engine has two renderers — the game's deferred path (`gizmo::systems::render`) and the
+//! editor's forward one (`gizmo_studio::render_pipeline`) — and until this file the only thing
+//! comparing them was a person looking at two windows. Everything that drifted between them was
+//! found by reading: `BakedLit` routed by one path and defaulted by the other, a light array read
+//! from the raw `Transform` here and `GlobalTransform` there, spot cone angles passed as radians
+//! to a shader expecting cosines, the editor's depth-of-field linearising depth against a
+//! hardcoded range. Each was a fix in two places, applied to one.
+//!
+//! The pass recording genuinely differs and is not the target. What must not differ is the
+//! *setup*: what the world says is in it. That now lives in one function,
+//! [`collect_scene_setup`](gizmo::systems::render::collect_scene_setup), and the two paths reach
+//! it with different arguments — so this file holds the two argument sets side by side and pins
+//! the difference to exactly what each path declares.
+//!
+//! These tests need no GPU: setup is a pure function of the world and the camera.
+
+use gizmo::core::World;
+use gizmo::math::Vec3;
+use gizmo::renderer::components::{DirectionalLight, LightRole, PointLight};
+use gizmo::renderer::{CameraFrame, EnvironmentFrame, SceneUniforms};
+use gizmo::systems::render::{collect_scene_setup, SceneSetup, SceneSetupInputs, ShadowCaster};
+use gizmo::prelude::GlobalTransform;
+
+fn a_camera() -> CameraFrame {
+    CameraFrame {
+        view_proj: gizmo::math::Mat4::perspective_rh(0.8, 1.6, 0.3, 900.0),
+        position: Vec3::new(4.0, 6.0, 12.0),
+        forward: Vec3::new(0.0, 0.0, -1.0),
+        near: 0.3,
+        far: 900.0,
+        exposure: 1.25,
+    }
+}
+
+/// The arguments the **game** path passes: cascades from the sun only, environment presets and
+/// debug shading from the renderer, point-shadow cube rendered.
+fn game_inputs() -> SceneSetupInputs {
+    SceneSetupInputs {
+        camera: a_camera(),
+        aspect: 1.6,
+        cam_fov: 0.8,
+        shadow_caster: ShadowCaster::SunOnly,
+        // Live renderer state in the real call; the values themselves are not the subject here.
+        environment: EnvironmentFrame { preset: 2, preset_2: 3, blend_t: 0.5, shading_mode: 0 },
+        point_shadows_enabled: true,
+        elapsed_time: 7.5,
+    }
+}
+
+/// The arguments the **editor** path passes: a shadow-casting fallback so a sunless scene still
+/// shows shadows, no environment blend, debug shading from the viewport dropdown, and no
+/// point-shadow cube because it records no such pass.
+fn editor_inputs() -> SceneSetupInputs {
+    SceneSetupInputs {
+        camera: a_camera(),
+        aspect: 1.6,
+        cam_fov: 0.8,
+        shadow_caster: ShadowCaster::SunOrFirstLight,
+        environment: EnvironmentFrame { shading_mode: 4, ..Default::default() },
+        point_shadows_enabled: false,
+        elapsed_time: 7.5,
+    }
+}
+
+fn sunlit_scene() -> World {
+    let mut world = World::new();
+    let sun = world.spawn();
+    world.add_component(sun, GlobalTransform::default());
+    world.add_component(
+        sun,
+        DirectionalLight { color: Vec3::new(1.0, 0.95, 0.9), intensity: 3.0, role: LightRole::Sun },
+    );
+    let lamp = world.spawn();
+    world.add_component(lamp, GlobalTransform::default());
+    world.add_component(lamp, PointLight::new(Vec3::new(0.2, 0.4, 1.0), 800.0, 25.0));
+    world
+}
+
+fn both_ways(world: &World) -> (SceneSetup, SceneSetup) {
+    (collect_scene_setup(world, &game_inputs()), collect_scene_setup(world, &editor_inputs()))
+}
+
+/// The heart of it: for one world and one camera, the two paths must agree about **everything the
+/// world decides** — which lights exist, where they are, whether there is a sun, how the cascades
+/// are split, what time it is — and may differ only where each path has said it differs.
+///
+/// The comparison is on the uploaded block rather than on the Rust struct, because the block is
+/// what the shaders read; a divergence that survives into bytes is one the picture can show.
+#[test]
+fn the_two_paths_agree_on_everything_the_world_decides() {
+    let world = sunlit_scene();
+    let (game, editor) = both_ways(&world);
+    let g = SceneUniforms::new(&game.frame);
+    let e = SceneUniforms::new(&editor.frame);
+
+    // ── The world's answer. Any disagreement here is a bug in one of the two paths. ──
+    assert_eq!(g.lights, e.lights, "the two paths collected different lights");
+    assert_eq!(g.num_lights, e.num_lights);
+    assert_eq!(g.sun_direction, e.sun_direction, "sun direction, and the sun-present flag with it");
+    assert_eq!(g.sun_color, e.sun_color);
+    assert_eq!(g.cascade_splits, e.cascade_splits, "cascade splits come from the camera, not the path");
+    assert_eq!(
+        g.light_view_proj, e.light_view_proj,
+        "this scene has a sun, so both paths fit the cascades to the same direction"
+    );
+    assert_eq!(g.cascade_params[0], e.cascade_params[0], "camera z-near");
+    assert_eq!(g.cascade_params[1], e.cascade_params[1], "shadow texel size");
+    assert_eq!(g.cascade_params[2], e.cascade_params[2], "elapsed time");
+    assert_eq!(
+        g.cascade_params[3], e.cascade_params[3],
+        "the point-shadow caster index is the same light; only `point_shadows_enabled` decides \
+         whether the shader looks at it"
+    );
+    assert_eq!(g.view_proj, e.view_proj);
+    assert_eq!(g.camera_pos, e.camera_pos);
+    assert_eq!(g.camera_forward, e.camera_forward);
+    assert_eq!(g.inv_view_proj, e.inv_view_proj);
+    assert_eq!(g.exposure, e.exposure);
+
+    // ── The declared differences, asserted as differences so that removing one is also a test
+    //    failure — a silent convergence is as much a surprise as a silent divergence. ──
+    assert_eq!(g.point_shadows_enabled, 1, "the game renders the cube");
+    assert_eq!(e.point_shadows_enabled, 0, "the editor records no cube pass");
+    assert_ne!(g.shading_mode, e.shading_mode, "debug shading is the viewport's, not the scene's");
+    assert_eq!(
+        (e.environment_preset, e.environment_preset_2, e.environment_blend_t),
+        (0, 0, 0.0),
+        "the editor renders the scene as authored, with no environment preset blend"
+    );
+
+    // And nothing else. Every field of the block is either compared above or named here.
+    assert_eq!(g._pre_align_pad, e._pre_align_pad);
+    assert_eq!(g._align_pad, e._align_pad);
+    assert_eq!(
+        std::mem::size_of::<SceneUniforms>(),
+        1168,
+        "a field was added to the block — decide here whether the two paths should agree on it"
+    );
+}
+
+/// The editor's one real policy difference, and the reason it exists: a scene someone is still
+/// lighting has no sun yet, and a viewport with no shadows at all reads as broken.
+#[test]
+fn the_editor_casts_from_a_light_when_the_scene_has_no_sun() {
+    let mut world = World::new();
+    let lamp = world.spawn();
+    world.add_component(lamp, GlobalTransform::default());
+    world.add_component(lamp, PointLight::new(Vec3::ONE, 900.0, 30.0));
+
+    let (game, editor) = both_ways(&world);
+    assert!(!game.lights.has_sun && !editor.lights.has_sun, "neither may claim a sun");
+    assert_eq!(
+        SceneUniforms::new(&game.frame).sun_direction[3],
+        0.0,
+        "no sun means the shader skips the sun branch in both paths"
+    );
+    assert_ne!(
+        game.cascade_view_projs, editor.cascade_view_projs,
+        "the editor fits its cascades to the lamp; the game leaves them on the default \
+         down-vector because nothing will sample them"
+    );
+}
+
+/// With nothing to cast from, the editor leaves the matrices at identity rather than shipping a
+/// fit to a placeholder direction — the splits stay real, because the shadow-distance fade reads
+/// them whether or not anything casts.
+#[test]
+fn an_unlit_scene_leaves_the_editor_cascades_at_identity() {
+    let world = World::new();
+    let (game, editor) = both_ways(&world);
+
+    assert_eq!(editor.cascade_view_projs, [gizmo::math::Mat4::IDENTITY; 4]);
+    assert_ne!(game.cascade_view_projs, [gizmo::math::Mat4::IDENTITY; 4], "the game always fits");
+    let e = SceneUniforms::new(&editor.frame);
+    assert!(e.cascade_splits.iter().all(|s| *s > 0.0), "splits stay real for the distance fade");
+    assert_eq!(e.sun_direction[3], 0.0);
+    assert_eq!(e.num_lights, 0);
+}
+
+/// The parity above is only worth anything while both paths actually go through the shared
+/// helper. This is the ratchet: a render path that collects its own lights or fits its own
+/// cascades has left the comparison, and no assertion in this file would notice.
+#[test]
+fn neither_render_path_builds_its_own_scene_setup() {
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("crates/gizmo-studio sits two levels below the workspace root")
+        .to_path_buf();
+
+    // The two render paths, and only them: `collect_scene_lights` is public API that a game with
+    // its own renderer is meant to call, so this is not a workspace-wide ban.
+    let paths = [
+        workspace.join("crates/gizmo/src/systems/render"),
+        workspace.join("crates/gizmo-studio/src/render_pipeline"),
+    ];
+
+    let mut offenders = Vec::new();
+    let mut scanned = 0;
+    for dir in &paths {
+        let mut files = Vec::new();
+        collect_rs(dir, &mut files);
+        assert!(!files.is_empty(), "no sources under {}", dir.display());
+        for file in files {
+            // `shared.rs` is where the helper lives; it is supposed to call them.
+            if file.file_name().is_some_and(|n| n == "shared.rs") {
+                continue;
+            }
+            scanned += 1;
+            let text = std::fs::read_to_string(&file).unwrap_or_default();
+            for (i, line) in text.lines().enumerate() {
+                if line.trim_start().starts_with("//") {
+                    continue;
+                }
+                for call in ["collect_scene_lights(", "compute_directional_cascades("] {
+                    if line.contains(call) {
+                        offenders.push(format!(
+                            "{}:{} — calls `{call}` directly instead of `collect_scene_setup`",
+                            file.strip_prefix(&workspace).unwrap_or(&file).display(),
+                            i + 1
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    assert!(scanned >= 5, "only {scanned} render-path sources scanned");
+    assert!(
+        offenders.is_empty(),
+        "a render path stepped outside the shared setup, so the parity tests in this file no \
+         longer cover it:\n  {}",
+        offenders.join("\n  ")
+    );
+
+    // The argument sets above are this file's claim about what each path passes. Pin the one
+    // argument that is a policy rather than a live value, so the claim cannot quietly stop being
+    // true — a test comparing two argument sets nobody uses would pass forever.
+    let sources = |dir: &std::path::Path| {
+        let mut files = Vec::new();
+        collect_rs(dir, &mut files);
+        files
+            .iter()
+            // `shared.rs` happens to sit inside the game path's directory and is where the enum
+            // is *defined*, so it names both variants; only call sites are the subject here.
+            .filter(|f| f.file_name().is_some_and(|n| n != "shared.rs"))
+            .map(|f| std::fs::read_to_string(f).unwrap_or_default())
+            .collect::<String>()
+    };
+    let game = sources(&paths[0]);
+    let editor = sources(&paths[1]);
+    assert!(
+        game.contains("ShadowCaster::SunOnly") && !game.contains("ShadowCaster::SunOrFirstLight"),
+        "the game path no longer casts from the sun only — `game_inputs()` above is now fiction"
+    );
+    assert!(
+        editor.contains("ShadowCaster::SunOrFirstLight") && !editor.contains("ShadowCaster::SunOnly"),
+        "the editor path no longer falls back to a light — `editor_inputs()` above is now fiction"
+    );
+}
+
+fn collect_rs(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_rs(&path, out);
+        } else if path.extension().is_some_and(|e| e == "rs") {
+            out.push(path);
+        }
+    }
+}

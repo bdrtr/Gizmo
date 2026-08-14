@@ -139,6 +139,133 @@ pub fn collect_scene_lights(world: &World) -> SceneLights {
     }
 }
 
+/// Which light the directional cascades are fitted to. The two render paths answer differently,
+/// and this is the whole of the difference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShadowCaster {
+    /// The sun, and nothing else — the game's rule. A scene with no sun still gets cascades
+    /// (fitted to the collector's default down-vector) but `SunFrame::present` is false, so the
+    /// shader never samples them.
+    SunOnly,
+    /// The sun if there is one, otherwise the first collected light, aimed at the origin — the
+    /// editor's rule. A scene being lit by hand often has no sun yet, and a viewport with no
+    /// shadows at all reads as broken rather than as unlit.
+    ///
+    /// "First collected light" is what the code does; the comment it replaced said "first point
+    /// light", which is the same thing only while the scene has one — [`collect_scene_lights`]
+    /// fills points before spots, so a scene of nothing but spotlights casts from a spot.
+    SunOrFirstLight,
+}
+
+/// What the two render paths derive from the world for one frame.
+pub struct SceneSetup {
+    /// Ready for `SceneUniforms::new`.
+    pub frame: crate::renderer::SceneFrame,
+    /// The cascade matrices the frame carries, kept as `Mat4` because the shadow pass writes them
+    /// to its own per-cascade uniform buffers.
+    pub cascade_view_projs: [gizmo_math::Mat4; 4],
+    /// The collected lights. The caller needs `shadow_point_index` (and that light's position and
+    /// radius) to decide whether to render the point-shadow cube and where to put it.
+    pub lights: SceneLights,
+}
+
+/// The per-frame inputs that are *not* the world: the camera, and the handful of decisions each
+/// render path makes for itself.
+pub struct SceneSetupInputs {
+    pub camera: crate::renderer::CameraFrame,
+    /// Viewport aspect and the camera's vertical FOV — the cascade fit needs the frustum, and
+    /// [`crate::renderer::CameraFrame`] carries the matrix rather than the angles it came from.
+    pub aspect: f32,
+    pub cam_fov: f32,
+    pub shadow_caster: ShadowCaster,
+    pub environment: crate::renderer::EnvironmentFrame,
+    /// Whether this path renders the point-shadow cube. A path that does not must leave it off:
+    /// the lookup would sample whatever the cube held on the last frame that did.
+    pub point_shadows_enabled: bool,
+    pub elapsed_time: f32,
+}
+
+/// Build one frame's scene state, for either render path.
+///
+/// # Why this is one function
+///
+/// Light collection and the cascade orchestration were single-sourced here after each had been
+/// fixed twice; what sat *around* them — the sun-present flag, which light the cascades follow,
+/// the identity-matrix fallback, the point-shadow caster index — was still written out twice, in
+/// two files, by whoever last touched one of them. That is the same shape of bug in a smaller
+/// package: nothing forces the two to be compared, so they diverge in the direction of whichever
+/// path someone was debugging.
+///
+/// Now the only difference between the two callers is the arguments they pass, which is a thing a
+/// test can hold side by side — see `gizmo-studio/tests/render_parity.rs`. What deliberately stays
+/// out of here is everything downstream: the deferred G-buffer recorder and the editor's forward
+/// recorder genuinely differ, and merging those is not the goal.
+pub fn collect_scene_setup(world: &World, inputs: &SceneSetupInputs) -> SceneSetup {
+    use gizmo_math::Mat4;
+
+    let lights = collect_scene_lights(world);
+
+    let shadow_dir = match inputs.shadow_caster {
+        // Always fits, sun or not. `sun_dir` is the collector's down-vector default when the
+        // scene has no sun, and the cascades built from it are simply never sampled.
+        ShadowCaster::SunOnly => Some(lights.sun_dir),
+        ShadowCaster::SunOrFirstLight => {
+            if lights.has_sun {
+                Some(lights.sun_dir)
+            } else if lights.num_lights > 0 {
+                let p = lights.lights[0].position;
+                Some((Vec3::ZERO - Vec3::new(p[0], p[1], p[2])).normalize())
+            } else {
+                None
+            }
+        }
+    };
+
+    let cascades = crate::renderer::compute_directional_cascades(
+        inputs.camera.position,
+        inputs.camera.forward,
+        inputs.aspect,
+        inputs.cam_fov,
+        inputs.camera.near,
+        inputs.camera.far,
+        shadow_dir.unwrap_or(Vec3::new(0.0, -1.0, 0.0)),
+    );
+    // Nothing to cast from → identity, and the splits stay meaningful for the shadow-distance
+    // fade. Only the editor's policy can reach this; the game's always has a direction.
+    let cascade_view_projs =
+        if shadow_dir.is_some() { cascades.view_projs } else { [Mat4::IDENTITY; 4] };
+
+    SceneSetup {
+        frame: crate::renderer::SceneFrame {
+            camera: inputs.camera,
+            sun: crate::renderer::SunFrame {
+                direction: lights.sun_dir,
+                color: [
+                    lights.sun_col.x,
+                    lights.sun_col.y,
+                    lights.sun_col.z,
+                    lights.sun_col.w,
+                ],
+                present: lights.has_sun,
+            },
+            lights: lights.lights,
+            num_lights: lights.num_lights,
+            shadows: crate::renderer::ShadowFrame {
+                cascade_view_projs,
+                cascade_splits: cascades.splits,
+                // Inert unless `point_shadows_enabled` is also set — the shader tests both — so
+                // both paths can carry the same index and only the flag decides.
+                point_caster: u32::try_from(lights.shadow_point_index).ok(),
+                point_shadows_enabled: inputs.point_shadows_enabled,
+            },
+            environment: inputs.environment,
+            elapsed_time: inputs.elapsed_time,
+        },
+        cascade_view_projs,
+        lights,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

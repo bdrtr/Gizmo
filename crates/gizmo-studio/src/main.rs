@@ -1,33 +1,23 @@
-//! Gizmo Studio: the standalone editor application for the Gizmo game engine.
+//! Gizmo Studio's entry point: boots an [`gizmo::App`] window, wires the engine's
+//! setup/update/UI/render hooks, and renders the egui-based editor on top of the live scene.
+//! Run it with `cargo run -p gizmo-studio`; the `editor`, `scene`, `audio` and `scripting`
+//! engine features are enabled by default.
 //!
-//! This is a binary crate (not a published library). It boots an [`gizmo::App`]
-//! window, wires the engine's setup/update/UI/render hooks, and renders the
-//! egui-based editor on top of the live scene. Run it with `cargo run -p
-//! gizmo-studio`; the `editor`, `scene`, `audio` and `scripting` engine
-//! features are enabled by default.
+//! Everything below `main` lives in the library target (`lib.rs`) so that the editor's render
+//! path is reachable from a test — see that file for why an application has one.
 
 use gizmo::editor::EditorState;
 use gizmo::prelude::*;
+use gizmo_studio::{render, setup, update, StudioState};
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
-
-pub mod render;
-pub mod render_pipeline;
-pub mod setup;
-pub mod state;
-pub mod studio_input;
-pub mod systems;
-pub mod update;
-
-pub use state::{DebugAssets, StudioState};
-pub use studio_input::*;
 
 fn main() {
     gizmo::core::logger::init_tracing();
     let mut app = App::<StudioState>::new("Gizmo Studio", 1600, 900)
         .with_icon(include_bytes!("../media/logo.png"))
-        .add_event::<crate::state::ShaderReloadEvent>()
+        .add_event::<gizmo_studio::state::ShaderReloadEvent>()
         .add_plugin(gizmo::asset_server::AssetServerPlugin);
 
     app = app.set_setup(setup::setup_studio_scene);

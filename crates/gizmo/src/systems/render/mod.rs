@@ -280,24 +280,37 @@ pub fn default_render_pass(
         .with_underwater(underwater),
     );
 
-    // Lights (point + spot + sun) — collected via the shared setup helper so the
-    // game and studio renderers can never drift apart on light handling again.
-    let scene_lights = collect_scene_lights(world);
-    let sun_dir = scene_lights.sun_dir;
-    let sun_col = scene_lights.sun_col;
+    // Elapsed time drives fluid caustics/wave animation in fluid_composite.wgsl
+    // (it reads cascade_params.z); this slot was hardcoded to 0.0 → frozen water.
+    let elapsed_time = world
+        .get_resource::<gizmo_core::time::Time>()
+        .map(|t| t.elapsed() as f32)
+        .unwrap_or(0.0);
 
-    // Directional shadow cascades via the shared orchestration helper (SHADOW_DISTANCE
-    // cap + CASCADE_LAMBDA + cascade math), so the game and studio paths can't drift on
-    // shadow setup. The game always casts from the sun; the studio has its own fallback.
-    let cascades =
-        crate::renderer::compute_directional_cascades(cam_pos, cam_forward, aspect, cam_fov, cam_near, cam_far, sun_dir);
-    let cascade_splits = cascades.splits;
-    let cascade_vp = cascades.view_projs;
-    let light_view_projs: [[[f32; 4]; 4]; 4] = cascade_vp.map(|m| m.to_cols_array_2d());
-
-    // Dinamik ışıklar (point + spot) shared helper'dan geldi.
+    // Lights, cascades and the whole scene block — via the shared setup helper, so the game and
+    // studio renderers can only differ in what they pass it. The game always casts from the sun;
+    // the editor's fallback to a point light is the other `ShadowCaster`.
+    let setup = collect_scene_setup(
+        world,
+        &SceneSetupInputs {
+            camera,
+            aspect,
+            cam_fov,
+            shadow_caster: ShadowCaster::SunOnly,
+            environment: crate::renderer::EnvironmentFrame {
+                preset: renderer.environment_preset,
+                preset_2: renderer.environment_preset_2,
+                blend_t: renderer.environment_blend_t,
+                shading_mode: renderer.shading_mode,
+            },
+            point_shadows_enabled: renderer.point_shadows_enabled,
+            elapsed_time,
+        },
+    );
+    let scene_lights = &setup.lights;
+    let light_view_projs: [[[f32; 4]; 4]; 4] =
+        setup.cascade_view_projs.map(|m| m.to_cols_array_2d());
     let lights_data = scene_lights.lights;
-    let num_lights = scene_lights.num_lights;
 
     #[allow(unused_assignments)]
     let mut point_light_view_projs = [gizmo_math::Mat4::IDENTITY; 6];
@@ -333,39 +346,7 @@ pub fn default_render_pass(
     }
 
 
-    // Elapsed time drives fluid caustics/wave animation in fluid_composite.wgsl
-    // (it reads cascade_params.z); this slot was hardcoded to 0.0 → frozen water.
-    let elapsed_time = world
-        .get_resource::<gizmo_core::time::Time>()
-        .map(|t| t.elapsed() as f32)
-        .unwrap_or(0.0);
-    let scene_uniform_data = crate::renderer::SceneUniforms::new(&crate::renderer::SceneFrame {
-        camera,
-        sun: crate::renderer::SunFrame {
-            direction: sun_dir,
-            color: [sun_col.x, sun_col.y, sun_col.z, sun_col.w],
-            // Was hardcoded "present", which left the deferred shader evaluating the sun branch
-            // + a full CSM lookup (against cascades built for a bogus down-vector) in a scene
-            // with no sun.
-            present: scene_lights.has_sun,
-        },
-        lights: lights_data,
-        num_lights,
-        shadows: crate::renderer::ShadowFrame {
-            cascade_view_projs: cascade_vp,
-            cascade_splits,
-            // The deferred shader samples the single point-shadow cube only for this light.
-            point_caster: u32::try_from(scene_lights.shadow_point_index).ok(),
-            point_shadows_enabled: renderer.point_shadows_enabled,
-        },
-        environment: crate::renderer::EnvironmentFrame {
-            preset: renderer.environment_preset,
-            preset_2: renderer.environment_preset_2,
-            blend_t: renderer.environment_blend_t,
-            shading_mode: renderer.shading_mode,
-        },
-        elapsed_time,
-    });
+    let scene_uniform_data = crate::renderer::SceneUniforms::new(&setup.frame);
     renderer.queue.write_buffer(
         &renderer.scene.global_uniform_buffer,
         0,
@@ -405,7 +386,7 @@ pub fn default_render_pass(
     // CPU batched instancing (replaces the GPU cull): walk the world, frustum-cull, group into
     // instanced batches and upload the instance buffer. Lives in `batching.rs`.
     let (draw_items, uploaded_instances) =
-        batching::collect_draw_items(world, renderer, unjittered_view_proj, cascade_vp, cam_pos);
+        batching::collect_draw_items(world, renderer, unjittered_view_proj, setup.cascade_view_projs, cam_pos);
 
     if let Some(physics) = &renderer.gpu_physics {
         // Her frame başında sıradaki state'i çekmek için WGPU CommandEncoder'a asenkron mapping iste.
@@ -580,7 +561,10 @@ mod particles;
 pub use particles::spawn_from_emitters;
 
 mod shared;
-pub use shared::{collect_scene_lights, SceneLights};
+pub use shared::{
+    collect_scene_lights, collect_scene_setup, SceneLights, SceneSetup, SceneSetupInputs,
+    ShadowCaster,
+};
 
 /// Golden render test: drive the REAL [`default_render_pass`] over a minimal scene
 /// (one lit cube + a camera + a sun) into an offscreen target and assert that geometry
