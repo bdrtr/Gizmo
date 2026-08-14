@@ -633,10 +633,23 @@ for rather than meeting one at a time. What the sweep found:
 | **`Sprite`** | **DELETED 2026-08-14.** Referenced by nothing in the workspace — not studio, not the editor, not a demo, not even `gizmo-app`'s scene registry, which registers its sibling `Camera2D` | dead, and unlike the other three there was no link to restore: wiring it meant writing a 2D pipeline (billboarding, layer sort, atlas UVs, transparency), which is a feature nothing asked for. An exported component that cannot be drawn is a promise the API does not keep, and the 1.0 surface is the wrong place to keep it |
 | **`gizmo-ai`'s systems** | `behavior_tree_system`, `ai_navigation_system`, `ai_navmesh_rebuild_system` are re-exported and never scheduled | the same shape, but plausibly deliberate: when AI ticks is a game's decision, not an engine's. Left alone, and named here so the next sweep does not re-find it as news |
 
-**Why it was never wired, and what the fix cost.** Both systems take `(&mut World, dt, &wgpu::Queue)`
-— they upload the skin matrices themselves — and no ordinary system has a queue, so there was no
-schedule they *could* be added to. That is very likely the whole story: the signature does not fit
-the slot, so they were exported and left. `default_render_pass` is the one place holding the world,
+**Why it was never wired — and the first explanation here was wrong.** This section originally said
+both systems take `(&mut World, dt, &wgpu::Queue)`, that no ordinary system has a queue, and that
+"there was no schedule they *could* be added to — that is very likely the whole story". It is not.
+`gizmo-studio/src/render_pipeline/mod.rs:20` was **already calling `animation_update_system` with
+exactly that signature**, from exactly the position the fix now uses: holding the world and the
+queue, before the draw. The signature was never the obstacle.
+
+The real reason is structural and is the same one behind `LodGroup` and `ParticleEmitter`: **render
+wiring happened in `gizmo-studio`, and the engine's own `default_render_pass` is a second,
+independently-maintained copy of the same job.** A capability wired into studio still has an in-tree
+consumer, so the obvious check — "does anything read this component, does anything call this
+system?" — answers *yes*, and the gap is invisible to precisely the sweep you would run to find it.
+That is why the sweep below, which looked for zero callers, found `Sprite` and missed these.
+
+The drift runs both ways, which is the proof it is structural rather than a backlog: the fix landed
+on the engine path only, so `animation_state_machine_update_system` is now engine-only exactly as
+`BoneAttachmentSystem` is studio-only. `default_render_pass` is the one place holding the world,
 the queue, and a position before `collect_draw_items` reads the result, so they are called from
 there, with `dt` from the `Time` resource.
 
