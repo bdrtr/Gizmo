@@ -679,6 +679,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   reads as fully lit. The sphere fit costs resolution and the figure is recorded next to it:
   texels grow **1.44-1.52x** (4.3 mm/texel on the nearest cascade, 59 mm on the farthest), which
   is the right way round — a crawling edge is far more visible than a texel half again as wide.
+- **Point-light shadow bias grew as the square of the distance from the light.** The cube lookup
+  compares a *perspective* depth, whose derivative falls off as 1/d², so the fixed `0.0005` NDC
+  bias was 5 mm a metre from the light, 50 cm at the edge of a 10 m light, **1.99 m** at the edge
+  of a 20 m one and **12.5 m** at the edge of a 50 m one — surfaces out near a large light's range
+  received no shadow at all, because the comparison sat metres past every caster. Now expressed in
+  metres and converted with the local derivative, using the same constant as the cascade path:
+  it is the same physical question and one engine should not answer it two ways. (Point shadows
+  are off by default, so this changes nothing until `point_shadows_enabled` is set.)
 - **Tall shadow casters stopped casting as the sun climbed.** The cascade projection reserved 60 m
   of depth in front of its slice, so a caster rising above a receiver was clipped by the shadow
   projection's near plane and never reached the map — measured at **65 m with the sun 75° up**,

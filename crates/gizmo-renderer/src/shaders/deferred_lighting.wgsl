@@ -528,8 +528,26 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
                     // `if (N.y > 0.99) { bias = max(bias, 0.01); }` was the same 200x
                     // over-correction the CSM path already dropped — it peter-panned the
                     // shadow off a flat receiver's contact point.
+                    //
+                    // **Metres, converted — and here the NDC form was far worse than it was for
+                    // the cascades.** `clip_z` above is a perspective depth, so its derivative
+                    // falls off as 1/d²: a fixed NDC bias therefore grows as the *square* of the
+                    // distance from the light. Worked out for the old 0.0005 — 5 mm a metre from
+                    // the light, 50 cm at the edge of a 10 m light, **1.99 m** at the edge of a
+                    // 20 m one and **12.5 m** at the edge of a 50 m one. Surfaces out near a large
+                    // light's range simply stop receiving shadow, because the comparison has been
+                    // pushed metres past every caster.
+                    //
+                    // d(clip_z)/d(z_val) = z_far·z_near / (z_val²·(z_far − z_near)), so multiplying
+                    // a metre figure by it gives the NDC bias that means that many metres *here*.
+                    // The constant is the cascades' own SHADOW_BIAS_METRES: it is the same
+                    // physical question — how far to push a depth comparison to clear a surface —
+                    // and one engine answering it two ways is worse than either answer.
                     let slope = 1.0 - max(dot(N, normalize(dir_from_light)), 0.0);
-                    let bias = max(0.0005 * slope, 0.00005);
+                    let ndc_per_metre =
+                        (z_far * z_near) / max(z_val * z_val * (z_far - z_near), 1e-6);
+                    let bias = max(SHADOW_BIAS_METRES * slope, SHADOW_BIAS_METRES_MIN)
+                        * ndc_per_metre;
                     let shadow_vis = textureSampleCompareLevel(t_point_shadow, s_shadow, dir_from_light, clip_z - bias);
                     atten *= shadow_vis;
                 }
