@@ -679,6 +679,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   reads as fully lit. The sphere fit costs resolution and the figure is recorded next to it:
   texels grow **1.44-1.52x** (4.3 mm/texel on the nearest cascade, 59 mm on the farthest), which
   is the right way round — a crawling edge is far more visible than a texel half again as wide.
+- **The G-buffer's albedo target was linear 8-bit, so dark materials collapsed together.** Linear
+  `Rgba8Unorm` spends its codes where the eye has least: the perceptual range 0–32/255 gets **4
+  codes** against an sRGB target's 32, and the first linear code already sits at a perceptual
+  12.7/255. Measured through the real pipeline, albedo 0.004 and 0.0045 rendered **byte-identically**
+  — the same material as far as the renderer was concerned. The target is `Rgba8UnormSrgb` now:
+  same four bytes, hardware transfer function on write and read, alpha (metallic) untouched.
 - **Subsurface and anisotropy were not separable where they share a G-buffer channel.** `.w` of the
   world-position target carries subsurface in its integer part and anisotropy in its fraction, and
   the pack omitted the `floor` — so unless `100 · subsurface` happened to be an integer, subsurface's

@@ -10,7 +10,15 @@ use crate::pipeline::{load_shader, load_shader_composed, SceneState};
 // is drawn. A stray `Rgba16Float` on the decal pipeline caused exactly that
 // crash (see decal.rs). Reference these constants instead of the raw literals so
 // the formats can never silently drift apart again.
-pub const GBUFFER_ALBEDO_METALLIC_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+// Albedo is **sRGB**, and the difference is not cosmetic. What is written here is linear light,
+// and linear 8-bit spends its codes where the eye has least: the perceptual range 0–32/255 gets
+// **4 codes** in a linear target against 32 in an sRGB one, and the first linear code already
+// sits at a perceptual 12.7/255. Measured through the real pipeline, albedo 0.004 and 0.0045
+// rendered **byte-identically** before this changed. That range is not a corner case for this
+// engine — its flagship level is a night city whose frame medians sit at 1–14/255. Alpha carries
+// metallic and is untouched by the transfer function, and the byte budget is unchanged, so this
+// costs nothing. Guarded by `golden_render_tests::two_different_dark_materials_do_not_render_identically`.
+pub const GBUFFER_ALBEDO_METALLIC_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 pub const GBUFFER_NORMAL_ROUGHNESS_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 // World position is Rgba16Float and CANNOT be upgraded to Rgba32Float: the four G-buffer
 // MRTs share a `max_color_attachment_bytes_per_sample` budget of 32 (the WebGPU-guaranteed

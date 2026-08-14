@@ -688,6 +688,73 @@ mod golden_render_tests {
         render_world(&mut renderer, &mut world).await
     }
 
+    /// Two different dark materials must not render identically.
+    ///
+    /// They did. The G-buffer's albedo target was `Rgba8Unorm` holding **linear** albedo, and
+    /// linear 8-bit has almost no resolution where the eye has most: the whole perceptual range
+    /// 0–32/255 gets **4 codes** in a linear target against 32 in an sRGB one, and the very first
+    /// linear code already sits at a perceptual 12.7/255. Albedo 0.004 and 0.0045 both landed on
+    /// code 1 and came out **byte-identical**, which is what this test measured before the format
+    /// changed: `0 bytes differ`. It matters here more than it would in most engines — this one's
+    /// flagship level is a night city whose frame medians sit at 1–14/255, i.e. entirely inside
+    /// the range those four codes have to cover.
+    ///
+    /// The obvious version of this test does not work, and it is worth saying why: comparing two
+    /// albedos the linear format *can* separate (0.004 and 0.006) makes the **linear** target look
+    /// better, 2923 differing bytes against sRGB's 1649. That is not signal. Linear rounds 0.004
+    /// down and 0.006 up, so it renders them two codes apart when they are one and a half apart —
+    /// the extra difference is quantisation error, not detail. Only a pair the old format could
+    /// not separate at all distinguishes precision from noise.
+    #[test]
+    fn two_different_dark_materials_do_not_render_identically() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available()) {
+            eprintln!("skipping two_different_dark_materials_do_not_render_identically: no GPU");
+            return;
+        }
+        if pollster::block_on(Renderer::headless_adapter_is_software()) {
+            eprintln!("skipping two_different_dark_materials_do_not_render_identically: software");
+            return;
+        }
+        pollster::block_on(async {
+            let a = render_dark(0.004).await;
+            let b = render_dark(0.0045).await;
+            let differing = a.iter().zip(b.iter()).filter(|(x, y)| x != y).count();
+            assert!(
+                differing > 0,
+                "albedo 0.004 and 0.0045 rendered byte-identically — the G-buffer cannot hold the \
+                 difference, so every dark material in this range is the same material"
+            );
+        });
+    }
+
+    async fn render_dark(albedo: f32) -> Vec<u8> {
+        const W: u32 = 128;
+        const H: u32 = 128;
+        let mut renderer = Renderer::new_headless(W, H, None).await;
+        let mut asset_manager = AssetManager::new();
+        let mut world = World::new();
+        let mesh = AssetManager::create_cube(&renderer.device);
+        let tex = asset_manager.create_white_texture(
+            &renderer.device,
+            &renderer.queue,
+            &renderer.scene.texture_bind_group_layout,
+        );
+        let mat = Material::new(tex).with_pbr(Vec4::new(albedo, albedo, albedo, 1.0), 0.0, 1.0);
+        let cube = world.spawn();
+        world.add_component(cube, Transform::new(Vec3::ZERO));
+        world.add_component(cube, mesh);
+        world.add_component(cube, mat);
+        world.add_component(cube, MeshRenderer::new());
+        world.spawn_bundle(CameraBundle {
+            position: Vec3::new(-6.0, 0.0, 0.0),
+            primary: true,
+            ..Default::default()
+        });
+        world.spawn_bundle(DirectionalLightBundle::default());
+        render_world(&mut renderer, &mut world).await
+    }
+
     /// Every pipeline this engine builds compiles on whatever backend is present.
     ///
     /// **Deliberately has no software-adapter guard, unlike every other test in this module.**
