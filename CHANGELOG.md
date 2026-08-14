@@ -679,6 +679,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   reads as fully lit. The sphere fit costs resolution and the figure is recorded next to it:
   texels grow **1.44-1.52x** (4.3 mm/texel on the nearest cascade, 59 mm on the farthest), which
   is the right way round — a crawling edge is far more visible than a texel half again as wide.
+- **Tall shadow casters stopped casting as the sun climbed.** The cascade projection reserved 60 m
+  of depth in front of its slice, so a caster rising above a receiver was clipped by the shadow
+  projection's near plane and never reached the map — measured at **65 m with the sun 75° up**,
+  90 m at 45°, 188 m at a low 20°. A building losing its shadow at noon is exactly backwards. The
+  reserve is now a named `CASTER_REACH` of 500 m, which an orthographic projection can afford:
+  shadow depth is linear, and `Depth32Float` over a kilometre still resolves a tenth of a
+  millimetre. **The shaders' depth bias moved to metres in the same change and for the same
+  reason** — it was an NDC constant, so it meant a different world distance in every cascade and
+  would have grown from 4.2 cm to 22 cm of peter-panning as the range widened. It is now converted
+  with the cascade matrix's own z gradient, exactly as the normal offset already used its x
+  gradient.
 - **Skeletal animation is advanced by the engine now.** `animation_update_system` and
   `animation_state_machine_update_system` existed in `gizmo-renderer` and nothing ever called
   them: `current_time += dt · speed` appeared nowhere else in the workspace, no schedule, plugin,

@@ -45,6 +45,28 @@ pub const CASCADE_LAMBDA: f32 = 0.75;
 /// shadowed fragment and no memory.
 pub const SHADOW_FADE_FRACTION: f32 = 0.15;
 
+/// How far **above** a cascade's own slice, along the light, a shadow caster may sit and still be
+/// rendered into that cascade's map, in metres.
+///
+/// It used to be 60, and 60 is not much. Measured against a caster rising above the middle of each
+/// slice, the height at which it stopped casting was **65 m with the sun 75° up**, 90 m at 45°, and
+/// 188 m at a low 20° — so a tall building simply loses its shadow as the sun climbs, which is
+/// exactly backwards from what a player would expect. Nothing errors; the caster is clipped by the
+/// shadow projection's near plane and never reaches the map.
+///
+/// **Raising it is close to free here and would not be under a perspective projection.** The
+/// cascade projection is orthographic, so shadow-map depth is linear: `Depth32Float` over a
+/// kilometre still resolves a tenth of a millimetre. The one real cost is that a depth bias
+/// expressed in NDC units becomes a larger *world* distance as the range grows — at the old range
+/// the shader's `0.0004` was 4.2 cm, and at this reach it would have been 22 cm of peter-panning.
+/// That is why the shaders now express the bias in metres and convert it with the cascade's own z
+/// gradient; this constant and that change belong together.
+pub const CASTER_REACH: f32 = 500.0;
+
+/// The matching margin on the far side of the slice, in metres — for receivers just past it rather
+/// than casters in front of it, which is why it is much smaller and can afford to be.
+pub const RECEIVER_MARGIN: f32 = 40.0;
+
 /// How much of the sampled shadow term survives at `view_depth` (distance along the camera
 /// forward axis, the same measure [`cascade_split_distances`] is expressed in).
 ///
@@ -230,8 +252,8 @@ pub fn directional_cascade_view_projs(
             min_z = min_z.min(p.z);
             max_z = max_z.max(p.z);
         }
-        min_z -= 40.0;
-        max_z += 60.0;
+        min_z -= RECEIVER_MARGIN;
+        max_z += CASTER_REACH;
 
         let ortho = Mat4::orthographic_rh(min_x, max_x, min_y, max_y, -max_z, -min_z);
         mats[i] = ortho * light_view;
@@ -243,6 +265,55 @@ pub fn directional_cascade_view_projs(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A tall caster still casts, at any sun angle.
+    ///
+    /// It did not. With [`CASTER_REACH`] at its old 60 m, a caster rising above the middle of a
+    /// slice stopped being rendered into the cascade at **65 m with the sun 75° up**, 90 m at 45°
+    /// and 188 m at a low 20° — so a building lost its shadow as the sun climbed, which is the
+    /// opposite of what anyone would expect. It is a clip, not an error: the caster falls outside
+    /// the shadow projection's near plane and never reaches the map.
+    ///
+    /// The bar is 300 m, well inside the 500 m reach and well past any plausible building, and the
+    /// steep sun is the case that matters because it is the one that used to fail first.
+    #[test]
+    fn a_tall_caster_still_casts_at_any_sun_angle() {
+        use gizmo_math::Vec4;
+        let splits = cascade_split_distances(0.1, SHADOW_DISTANCE, CASCADE_LAMBDA);
+        for (name, light) in [
+            ("alçak güneş 20°", Vec3::new(-0.94, -0.34, 0.0).normalize()),
+            ("orta 45°", Vec3::new(-0.7, -0.7, 0.0).normalize()),
+            ("tepeye yakın 75°", Vec3::new(-0.26, -0.97, 0.0).normalize()),
+        ] {
+            let (cam, fwd) = (Vec3::new(0.0, 2.0, 0.0), Vec3::X);
+            let m = directional_cascade_view_projs(
+                cam, fwd, 16.0 / 9.0, 0.785, 0.1, &splits, light, SHADOW_MAP_RES,
+            );
+            // Dilimin ortasındaki bir noktanın üstünde yükselen bir yayıcı.
+            let mut limits = Vec::new();
+            for ci in 0..CASCADE_COUNT {
+                let d = if ci == 0 { splits[0] * 0.5 } else { (splits[ci - 1] + splits[ci]) * 0.5 };
+                let base = cam + fwd * d;
+                let mut last_ok = 0.0f32;
+                for h_i in 0..400 {
+                    let h = h_i as f32 * 1.0;
+                    let p = Vec3::new(base.x, base.y + h, base.z);
+                    let c = m[ci] * Vec4::new(p.x, p.y, p.z, 1.0);
+                    let z = c.z / c.w;
+                    if (0.0..=1.0).contains(&z) { last_ok = h; } else { break; }
+                }
+                limits.push(last_ok);
+            }
+            for (ci, limit) in limits.iter().enumerate() {
+                assert!(
+                    *limit >= 300.0,
+                    "{name}: a caster above cascade {ci} stops casting at {limit} m — it is being \
+                     clipped by the shadow projection's near plane, so tall geometry silently \
+                     loses its shadow"
+                );
+            }
+        }
+    }
 
     /// Every point the camera can see inside the shadow distance is covered by the cascade that
     /// `select_cascade` picks for it.
