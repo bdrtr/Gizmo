@@ -730,6 +730,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   metres and converted with the local derivative, using the same constant as the cascade path:
   it is the same physical question and one engine should not answer it two ways. (Point shadows
   are off by default, so this changes nothing until `point_shadows_enabled` is set.)
+- **Two more shadow paths still carried a raw NDC bias, and widening the caster reach quadrupled
+  what it meant.** `baked_lit.wgsl` — the path the flagship city is drawn with — and
+  `volumetric.wgsl` both sampled the cascades with a flat `0.0015`. Raising `CASTER_REACH` from
+  60 m to 500 m took the projection's depth range from ~105 m to ~545 m, and with it that bias
+  from **0.16 m of peter-panning to 0.82 m**. Both now express it in metres and convert with the
+  cascade matrix's z gradient, restoring what the constant was worth at the range it was chosen
+  under. All four shadow-sampling paths are on the same footing.
 - **Tall shadow casters stopped casting as the sun climbed.** The cascade projection reserved 60 m
   of depth in front of its slice, so a caster rising above a receiver was clipped by the shadow
   projection's near plane and never reached the map — measured at **65 m with the sun 75° up**,

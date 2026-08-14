@@ -113,12 +113,20 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             let view_depth = dot(current_pos - cam_pos, scene.camera_forward.xyz);
             let ci = select_cascade(view_depth);
             
-            let light_clip = scene.light_view_proj[ci] * vec4<f32>(current_pos, 1.0);
+            let m = scene.light_view_proj[ci];
+            let light_clip = m * vec4<f32>(current_pos, 1.0);
             let light_ndc = light_clip.xyz / light_clip.w;
             let shadow_uv = vec2<f32>(light_ndc.x * 0.5 + 0.5, light_ndc.y * -0.5 + 0.5);
             
             if (shadow_uv.x >= 0.0 && shadow_uv.x <= 1.0 && shadow_uv.y >= 0.0 && shadow_uv.y <= 1.0 && light_ndc.z <= 1.0) {
-                let bias = 0.0015;
+                // Metres, not NDC — the fourth and last path that sampled the cascades with a
+                // flat constant. See `baked_lit.wgsl` for the reasoning and what widening
+                // `CASTER_REACH` did to it: the same 0.0015 went from 0.16 m of world depth to
+                // 0.82 m. Ray-marched scattering is more forgiving than a surface shadow, but a
+                // bias that changes meaning when an unrelated constant moves is not something to
+                // leave in four places and fix in three.
+                let sz = length(vec3<f32>(m[0][2], m[1][2], m[2][2]));
+                let bias = 0.16 * sz;
                 let shadow_val = textureSampleCompareLevel(t_shadow, s_shadow, shadow_uv, ci, light_ndc.z - bias);
                 
                 if (shadow_val > 0.0) {

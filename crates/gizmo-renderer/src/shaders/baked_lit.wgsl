@@ -150,7 +150,16 @@ fn sun_visibility(world_pos: vec3<f32>, world_normal: vec3<f32>, view_depth: f32
     }
 
     let texel = scene.cascade_params.y;
-    let bias = 0.0015;
+    // **Metres, converted with the cascade's own z gradient** — the same treatment the deferred and
+    // forward paths got, and this one needed it more than either. It was a flat `0.0015` in NDC,
+    // which is a different world distance in every cascade and moves whenever the projection's
+    // depth range does. Widening `CASTER_REACH` from 60 m to 500 m (so tall buildings would stop
+    // losing their shadows at noon) quadrupled the range, and with it this bias: **0.16 m of
+    // peter-panning became 0.82 m**, in the material path the city itself is drawn with. The third
+    // row of the cascade matrix is NDC-z per world metre; 0.16 is what the old constant was worth
+    // at the range it was chosen under, so this restores that behaviour rather than retuning it.
+    let sz = length(vec3<f32>(m[0][2], m[1][2], m[2][2]));
+    let bias = 0.16 * sz;
     var sum = 0.0;
     for (var x = -1; x <= 1; x++) {
         for (var y = -1; y <= 1; y++) {
