@@ -15,6 +15,12 @@ jobs:
   test:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # Every job carries a timeout. Without one a hang runs to GitHub's 6-hour default, and one
+    # did: fixing the D3D12 shader error let the Windows GPU tests get *past* pipeline creation
+    # and start actually rendering — on a runner whose adapter is WARP, software-rasterising a
+    # 3072² × 4 shadow-map array. It was still going at 5.5 hours against ubuntu's 6 minutes.
+    # A timeout does not fix that; it turns it into a report instead of a burnt runner.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -37,6 +43,7 @@ jobs:
   lint:
     name: Lint (fmt + clippy)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -72,6 +79,7 @@ jobs:
   features:
     name: Features (reflect)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -113,6 +121,7 @@ jobs:
   feature-powerset:
     name: Feature powerset (facade + app)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -149,6 +158,7 @@ jobs:
   supply-chain:
     name: Supply chain (cargo-deny)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -160,6 +170,7 @@ jobs:
   msrv:
     name: MSRV (1.92)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.92.0
@@ -173,6 +184,7 @@ jobs:
   determinism:
     name: Determinism & Stability
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -192,6 +204,7 @@ jobs:
   benchmarks:
     name: Benchmarks (run-once smoke)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -211,6 +224,7 @@ jobs:
   wasm:
     name: WASM (wasm32-unknown-unknown)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -239,6 +253,7 @@ jobs:
   miri:
     name: Miri (ECS soundness)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly

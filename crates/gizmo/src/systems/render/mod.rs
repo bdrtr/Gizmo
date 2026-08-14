@@ -597,6 +597,39 @@ mod golden_render_tests {
     use crate::renderer::components::{Material, MeshRenderer};
     use crate::renderer::Renderer;
 
+    /// Every pipeline this engine builds compiles on whatever backend is present.
+    ///
+    /// **Deliberately has no software-adapter guard, unlike every other test in this module.**
+    /// That is the whole point of it. A backend compiles naga's generated target language with
+    /// its own compiler — FXC on D3D12, the Metal compiler on macOS — and those reject things
+    /// that are perfectly good WGSL. On 2026-08-14 the shadow PCF's `textureSampleCompare`, an
+    /// implicit-derivative sample inside a conditional branch, was "gradient instruction used in
+    /// a loop with varying iteration" to FXC, and the Deferred Lighting pipeline never built: the
+    /// engine drew nothing at all on Windows. `gizmo-renderer`'s shader tests had been green
+    /// throughout, because they type-check WGSL through naga and never reach a backend compiler.
+    ///
+    /// The only thing that catches this is creating the pipelines on that backend, and creating
+    /// them is fast even on WARP — it is *rendering* through them that a software rasteriser
+    /// cannot finish, which is why the rest of this module skips and this does not.
+    #[test]
+    fn every_pipeline_compiles_on_this_backend() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available()) {
+            eprintln!("skipping every_pipeline_compiles_on_this_backend: no GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            // Constructing the renderer is what builds them: deferred, gbuffer, both shadow
+            // passes, forward, post-process, ssao/ssr/ssgi, the particle and fluid compute
+            // pipelines. A backend rejecting any one of them fails here.
+            let renderer = Renderer::new_headless(64, 64, None).await;
+            assert!(
+                renderer.surface.is_none(),
+                "the headless renderer must have no surface"
+            );
+        });
+    }
+
     /// The pass advances skeletal animation.
     ///
     /// It did not until 2026-08-14, and nothing noticed for a long time. `animation_update_system`
@@ -620,6 +653,15 @@ mod golden_render_tests {
             eprintln!(
                 "skipping default_render_pass_advances_skeletal_animation: no GPU adapter"
             );
+            return;
+        }
+        // WARP and friends can create these pipelines in seconds and cannot finish
+        // rendering through them: `windows-latest` spent five and a half hours on this
+        // file once the D3D12 shader fix let it get this far. Pipeline compilation is
+        // the coverage that matters on such a runner and it is kept by
+        // `every_pipeline_compiles_on_this_backend`, which builds the whole renderer.
+        if pollster::block_on(Renderer::headless_adapter_is_software()) {
+            eprintln!("skipping default_render_pass_advances_skeletal_animation: software adapter — see the note above");
             return;
         }
         pollster::block_on(async {
@@ -722,6 +764,15 @@ mod golden_render_tests {
                 "skipping default_render_pass_draws_a_cube_distinct_from_background: \
                  no GPU adapter available (headless render requires a GPU)"
             );
+            return;
+        }
+        // WARP and friends can create these pipelines in seconds and cannot finish
+        // rendering through them: `windows-latest` spent five and a half hours on this
+        // file once the D3D12 shader fix let it get this far. Pipeline compilation is
+        // the coverage that matters on such a runner and it is kept by
+        // `every_pipeline_compiles_on_this_backend`, which builds the whole renderer.
+        if pollster::block_on(Renderer::headless_adapter_is_software()) {
+            eprintln!("skipping default_render_pass_draws_a_cube_distinct_from_background: software adapter — see the note above");
             return;
         }
         pollster::block_on(async {
@@ -1045,6 +1096,15 @@ mod golden_render_tests {
             );
             return;
         }
+        // WARP and friends can create these pipelines in seconds and cannot finish
+        // rendering through them: `windows-latest` spent five and a half hours on this
+        // file once the D3D12 shader fix let it get this far. Pipeline compilation is
+        // the coverage that matters on such a runner and it is kept by
+        // `every_pipeline_compiles_on_this_backend`, which builds the whole renderer.
+        if pollster::block_on(Renderer::headless_adapter_is_software()) {
+            eprintln!("skipping an_indexed_mesh_renders_byte_identically_to_the_flat_one: software adapter — see the note above");
+            return;
+        }
         pollster::block_on(async {
             let vertices = cube_vertices();
             assert_eq!(vertices.len(), 36, "cube_vertices is meant to be a flat triangle list");
@@ -1295,6 +1355,15 @@ mod golden_render_tests {
             );
             return;
         }
+        // WARP and friends can create these pipelines in seconds and cannot finish
+        // rendering through them: `windows-latest` spent five and a half hours on this
+        // file once the D3D12 shader fix let it get this far. Pipeline compilation is
+        // the coverage that matters on such a runner and it is kept by
+        // `every_pipeline_compiles_on_this_backend`, which builds the whole renderer.
+        if pollster::block_on(Renderer::headless_adapter_is_software()) {
+            eprintln!("skipping a_backdrop_shows_the_meshs_own_pixels_and_stays_behind_the_world: software adapter — see the note above");
+            return;
+        }
         pollster::block_on(async {
             let cam = Vec3::new(-6.0, 0.0, 0.0);
             // Anchored at the camera, so all three kinds put the panel on the same pixels and
@@ -1367,6 +1436,12 @@ mod golden_render_tests {
             eprintln!("skipping a_backdrops_texture_reaches_the_screen: no GPU adapter available");
             return;
         }
+        // Software adapters build these pipelines in seconds and cannot finish rendering
+        // through them — see the longer note on the first of these tests.
+        if pollster::block_on(Renderer::headless_adapter_is_software()) {
+            eprintln!("skipping a_backdrops_texture_reaches_the_screen: software adapter");
+            return;
+        }
         pollster::block_on(async {
             let cam = Vec3::new(-6.0, 0.0, 0.0);
             let with_tex = |checkered| Panel { kind: PanelKind::Backdrop, checkered, anchor: cam };
@@ -1424,6 +1499,12 @@ mod golden_render_tests {
             eprintln!("skipping a_backdrop_is_locked_to_the_camera: no GPU adapter available");
             return;
         }
+        // Software adapters build these pipelines in seconds and cannot finish rendering
+        // through them — see the longer note on the first of these tests.
+        if pollster::block_on(Renderer::headless_adapter_is_software()) {
+            eprintln!("skipping a_backdrop_is_locked_to_the_camera: software adapter");
+            return;
+        }
         pollster::block_on(async {
             let here = Vec3::new(-6.0, 0.0, 0.0);
             let far_away = Vec3::new(-6.0, 0.0, 900.0);
@@ -1476,6 +1557,12 @@ mod golden_render_tests {
             eprintln!("skipping camera_exposure_brightens_the_frame: no GPU adapter available");
             return;
         }
+        // Software adapters build these pipelines in seconds and cannot finish rendering
+        // through them — see the longer note on the first of these tests.
+        if pollster::block_on(Renderer::headless_adapter_is_software()) {
+            eprintln!("skipping camera_exposure_brightens_the_frame: software adapter");
+            return;
+        }
         pollster::block_on(async {
             let dim = render_mean_brightness(1.0).await;
             let bright = render_mean_brightness(2.0).await;
@@ -1504,6 +1591,12 @@ mod golden_render_tests {
         let _gpu = crate::test_gpu::gpu_lock();
         if !pollster::block_on(Renderer::headless_adapter_available()) {
             eprintln!("skipping skipping_the_point_shadow_passes_changes_no_pixel: no GPU adapter");
+            return;
+        }
+        // Software adapters build these pipelines in seconds and cannot finish rendering
+        // through them — see the longer note on the first of these tests.
+        if pollster::block_on(Renderer::headless_adapter_is_software()) {
+            eprintln!("skipping skipping_the_point_shadow_passes_changes_no_pixel: software adapter");
             return;
         }
         pollster::block_on(async {

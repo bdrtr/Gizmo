@@ -259,6 +259,36 @@ impl Renderer {
             .is_ok()
     }
 
+    /// Whether the adapter that [`Self::new_headless`] would pick rasterises on the CPU.
+    ///
+    /// A test that only needs the *pipelines* built — which is what catches a backend's shader
+    /// compiler rejecting generated HLSL or MSL — should build the renderer and go no further on
+    /// one of these. A test that renders and reads pixels back should not run at all.
+    ///
+    /// The difference is not academic. `windows-latest` has no GPU and reports WARP, and once the
+    /// D3D12 shader fix let the golden render tests get past pipeline creation, that job went from
+    /// failing in twelve minutes to **still rendering at five and a half hours** — a 3072² × 4
+    /// shadow-map array, software-rasterised, per test. Pipeline creation on the same runner takes
+    /// seconds, so the split keeps the coverage that matters and drops the part that cannot finish.
+    pub async fn headless_adapter_is_software() -> bool {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::all(),
+            flags: wgpu::InstanceFlags::default(),
+            memory_budget_thresholds: Default::default(),
+            backend_options: Default::default(),
+            display: None,
+        });
+        instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                compatible_surface: None,
+                force_fallback_adapter: false,
+            })
+            .await
+            .map(|a| a.get_info().device_type == wgpu::DeviceType::Cpu)
+            .unwrap_or(false)
+    }
+
     /// Constructs a Renderer with **no window/surface** — every render target is an
     /// offscreen texture. Enables headless GPU servers, CI rendering and
     /// deterministic render harnesses. Shares [`Renderer::finish_construction`] with
