@@ -26,13 +26,24 @@ pub fn record_deferred_geometry(
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        z_pass.set_pipeline(&def.z_prepass_pipeline);
         z_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
         z_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
         z_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
+        // The cull mode is baked into the pipeline, so a double-sided material needs its own.
+        // Tracked and set only on change rather than per item: the batches are not sorted by this
+        // flag and a scene is overwhelmingly one-sided, so this is a handful of switches at most.
+        let mut two_sided_bound: Option<bool> = None;
         for item in draw_items {
             if item.unlit || item.is_skybox || item.is_transparent {
                 continue;
+            }
+            if two_sided_bound != Some(item.is_double_sided) {
+                z_pass.set_pipeline(if item.is_double_sided {
+                    &def.z_prepass_double_sided_pipeline
+                } else {
+                    &def.z_prepass_pipeline
+                });
+                two_sided_bound = Some(item.is_double_sided);
             }
             let skel_bg = item
                 .skeleton_bind_group
@@ -99,13 +110,21 @@ pub fn record_deferred_geometry(
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        gbuf_pass.set_pipeline(&def.gbuffer_pipeline);
         gbuf_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
         gbuf_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
         gbuf_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
+        let mut two_sided_bound: Option<bool> = None;
         for item in draw_items {
             if item.unlit || item.is_transparent {
                 continue;
+            }
+            if two_sided_bound != Some(item.is_double_sided) {
+                gbuf_pass.set_pipeline(if item.is_double_sided {
+                    &def.gbuffer_double_sided_pipeline
+                } else {
+                    &def.gbuffer_pipeline
+                });
+                two_sided_bound = Some(item.is_double_sided);
             }
             let skel_bg = item
                 .skeleton_bind_group

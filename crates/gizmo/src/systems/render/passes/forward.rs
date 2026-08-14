@@ -127,7 +127,12 @@ pub fn record_forward_and_fluid(
                 } else if item.unlit {
                     &renderer.scene.unlit_pipeline
                 } else if item.is_transparent {
+                    // No two-sided variant of the blended pipeline exists, and the editor does not
+                    // have one either — a transparent double-sided surface is single-sided in both
+                    // paths. Recorded rather than invented here.
                     &renderer.scene.transparent_pipeline
+                } else if item.is_double_sided {
+                    &renderer.scene.render_double_sided_pipeline
                 } else {
                     &renderer.scene.render_pipeline
                 };

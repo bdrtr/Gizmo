@@ -375,9 +375,27 @@ fn every_render_capability_is_known_to_both_draw_paths() {
             }
         }
     }
+    // …and every public FIELD of `Material`, because a capability does not have to be a whole
+    // component. `is_double_sided` was a field, honoured by the editor and ignored by the engine's
+    // deferred path for as long as both existed, and this test at component granularity could not
+    // see it: `Material` itself is named by both paths on every line that reads a colour.
+    let material = std::fs::read_to_string(comp_dir.join("material.rs")).unwrap_or_default();
+    let body = material
+        .split_once("pub struct Material {")
+        .and_then(|(_, rest)| rest.split_once("\n}"))
+        .map(|(body, _)| body.to_string())
+        .expect("Material struct");
+    for line in body.lines() {
+        if let Some(rest) = line.trim_start().strip_prefix("pub ") {
+            let name: String = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+            if !name.is_empty() && rest[name.len()..].starts_with(':') {
+                components.push(name);
+            }
+        }
+    }
     components.sort();
     components.dedup();
-    assert!(components.len() > 15, "only {} components scanned", components.len());
+    assert!(components.len() > 20, "only {} subjects scanned", components.len());
 
     // `shared.rs` sits inside the game path's directory but belongs to both, so a component named
     // there is named by neither in particular.

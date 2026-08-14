@@ -1184,6 +1184,85 @@ mod golden_render_tests {
         render_world(&mut renderer, &mut world).await
     }
 
+    /// A double-sided material shows its back faces to the game, not only to the editor.
+    ///
+    /// `Material::with_double_sided` and its `is_double_sided` field have been public for as long
+    /// as materials have, and until 2026-08-15 the only thing that read them was `gizmo-studio`'s
+    /// forward pipeline. The engine's own path — the z-prepass and the G-buffer pass — culled back
+    /// faces unconditionally, so a cloth, a leaf card or any open surface authored double-sided
+    /// showed both faces in the editor viewport and lost one of them in the game. The class the
+    /// architectural review named exactly: the engine exports a capability its own default path
+    /// does not act on.
+    ///
+    /// The scene is a camera INSIDE a cube, which is the cheapest way to see nothing but back
+    /// faces: with culling on the frame is empty, with the flag honoured the interior is drawn.
+    /// Reverting either pipeline selection in `passes::geometry` makes the two frames identical
+    /// again and fails here.
+    #[test]
+    fn a_double_sided_material_is_drawn_from_behind() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available()) {
+            eprintln!("skipping a_double_sided_material_is_drawn_from_behind: no GPU");
+            return;
+        }
+        pollster::block_on(async {
+            let one_sided = render_from_inside_a_cube(false).await;
+            let two_sided = render_from_inside_a_cube(true).await;
+
+            let differing = one_sided
+                .iter()
+                .zip(two_sided.iter())
+                .filter(|(a, b)| a.abs_diff(**b) > 8)
+                .count();
+            let ratio = differing as f32 / one_sided.len() as f32;
+            assert!(
+                ratio > 0.5,
+                "only {:.1}% of the frame changed when the material was made double-sided — the \
+                 engine's deferred path is culling the back faces it was told to keep",
+                100.0 * ratio
+            );
+        });
+    }
+
+    /// The cube of [`render_frame_with_mesh`], with the camera inside it, so every visible
+    /// triangle is a back face.
+    async fn render_from_inside_a_cube(double_sided: bool) -> Vec<u8> {
+        const W: u32 = 128;
+        const H: u32 = 128;
+        let mut renderer = Renderer::new_headless(W, H, None).await;
+        let mut asset_manager = AssetManager::new();
+        let mut world = World::new();
+
+        let mesh = AssetManager::create_cube(&renderer.device);
+        let tex = asset_manager.create_white_texture(
+            &renderer.device,
+            &renderer.queue,
+            &renderer.scene.texture_bind_group_layout,
+        );
+        let mat = Material::new(tex)
+            .with_pbr(Vec4::new(0.9, 0.15, 0.15, 1.0), 0.0, 1.0)
+            .with_double_sided(double_sided);
+        let cube = world.spawn();
+        // Big enough that the camera at the origin sits well inside it and the walls clear the
+        // near plane.
+        world.add_component(cube, Transform::new(Vec3::ZERO).with_scale(Vec3::splat(8.0)));
+        world.add_component(cube, GlobalTransform::default());
+        world.add_component(cube, mesh);
+        world.add_component(cube, mat);
+        world.add_component(cube, MeshRenderer::new());
+
+        world.spawn_bundle(CameraBundle {
+            position: Vec3::ZERO,
+            yaw: 0.0,
+            pitch: 0.0,
+            primary: true,
+            ..Default::default()
+        });
+        world.spawn_bundle(DirectionalLightBundle::default());
+
+        render_world(&mut renderer, &mut world).await
+    }
+
     /// Drive the REAL [`default_render_pass`] over `world` into a 128×128 offscreen target and
     /// read the frame back as RGBA8 bytes.
     ///

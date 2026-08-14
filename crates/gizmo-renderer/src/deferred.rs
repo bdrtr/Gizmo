@@ -61,9 +61,22 @@ pub struct DeferredState {
 
     // Geometry pass (writes to 4 MRTs)
     pub gbuffer_pipeline: wgpu::RenderPipeline,
+    /// The same pipeline with back-face culling off, for a material that declared itself
+    /// [`double-sided`](crate::components::Material::is_double_sided).
+    ///
+    /// The flag and its builder have existed all along and only `gizmo-studio` acted on them, so
+    /// a cloth or a leaf authored double-sided showed both faces in the editor and lost its back
+    /// faces in the game — the deferred path culled unconditionally. Two pipelines rather than a
+    /// per-draw state because wgpu bakes the cull mode into the pipeline.
+    pub gbuffer_double_sided_pipeline: wgpu::RenderPipeline,
 
     // Z-Prepass (Depth only)
     pub z_prepass_pipeline: wgpu::RenderPipeline,
+    /// Depth for double-sided geometry. Needed alongside the G-buffer variant, not instead of it:
+    /// the prepass owns the depth these fragments are tested against, so culling here would
+    /// discard the back face's depth and leave the G-buffer pass drawing it against whatever was
+    /// behind.
+    pub z_prepass_double_sided_pipeline: wgpu::RenderPipeline,
 
     // Lighting pass (fullscreen triangle → HDR texture)
     pub lighting_pipeline: wgpu::RenderPipeline,
@@ -103,8 +116,14 @@ impl DeferredState {
             &gbuf_sampler,
         );
 
-        let z_prepass_pipeline = Self::create_z_prepass_pipeline(device, scene);
-        let gbuffer_pipeline = Self::create_gbuffer_pipeline(device, scene);
+        let z_prepass_pipeline =
+            Self::create_z_prepass_pipeline(device, scene, Some(wgpu::Face::Back), "Z-Prepass Pipeline");
+        let z_prepass_double_sided_pipeline =
+            Self::create_z_prepass_pipeline(device, scene, None, "Z-Prepass TwoSided Pipeline");
+        let gbuffer_pipeline =
+            Self::create_gbuffer_pipeline(device, scene, Some(wgpu::Face::Back), "GBuffer Pipeline");
+        let gbuffer_double_sided_pipeline =
+            Self::create_gbuffer_pipeline(device, scene, None, "GBuffer TwoSided Pipeline");
         let lighting_pipeline =
             Self::create_lighting_pipeline(device, scene, &gbuffer_bind_group_layout);
 
@@ -118,7 +137,9 @@ impl DeferredState {
             world_tangent_tex,
             world_tangent_view,
             gbuffer_pipeline,
+            gbuffer_double_sided_pipeline,
             z_prepass_pipeline,
+            z_prepass_double_sided_pipeline,
             lighting_pipeline,
             gbuffer_bind_group_layout,
             gbuffer_bind_group,
@@ -317,7 +338,12 @@ impl DeferredState {
         })
     }
 
-    fn create_gbuffer_pipeline(device: &wgpu::Device, scene: &SceneState) -> wgpu::RenderPipeline {
+    fn create_gbuffer_pipeline(
+        device: &wgpu::Device,
+        scene: &SceneState,
+        cull_mode: Option<wgpu::Face>,
+        label: &str,
+    ) -> wgpu::RenderPipeline {
         let shader = load_shader(
             device,
             "demo/assets/shaders/gbuffer.wgsl",
@@ -338,7 +364,7 @@ impl DeferredState {
         });
 
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("GBuffer Pipeline"),
+            label: Some(label),
             layout: Some(&layout),
             vertex: wgpu::VertexState {
                 module: &shader,
@@ -380,7 +406,7 @@ impl DeferredState {
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Back),
+                cull_mode,
                 ..Default::default()
             },
             depth_stencil: Some(wgpu::DepthStencilState {
@@ -399,6 +425,8 @@ impl DeferredState {
     fn create_z_prepass_pipeline(
         device: &wgpu::Device,
         scene: &SceneState,
+        cull_mode: Option<wgpu::Face>,
+        label: &str,
     ) -> wgpu::RenderPipeline {
         let shader = load_shader(
             device,
@@ -420,7 +448,7 @@ impl DeferredState {
         });
 
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Z-Prepass Pipeline"),
+            label: Some(label),
             layout: Some(&layout),
             vertex: wgpu::VertexState {
                 module: &shader,
@@ -432,7 +460,7 @@ impl DeferredState {
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Back),
+                cull_mode,
                 ..Default::default()
             },
             depth_stencil: Some(wgpu::DepthStencilState {

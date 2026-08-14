@@ -921,10 +921,34 @@ Kök kayıtlı ("The root the sweep could not see"). Beş kesim:
    Bekçi: iki çizim döngüsü `select_mesh`'i doğrudan çağıramaz ve `packed_pbr_params`'ı elle
    yazamaz. Kırılabildiği doğrulandı.
 
+6. **Çift-yüzlü malzeme — motorda hiç bağlı değilmiş (2026-08-15).** Batch anahtarlarını yan yana
+   koyunca çıktı: studio'nun anahtarında `is_double_sided` var, motorunkinde yok — çünkü motor bu
+   alanı **hiç okumuyordu**. `Material::with_double_sided` her zaman public'ti, ama yalnız
+   editörün forward hattı ona bakıyordu; motorun Z-prepass'i ve G-buffer'ı koşulsuz arka yüz
+   kırpıyordu. Yani çift-yüzlü yazılmış bir kumaş/yaprak **editörde iki yüzlü, oyunda tek yüzlü**
+   görünüyordu. İncelemenin adını koyduğu sınıf: motorun dışa verdiği bir yetenek, motorun kendi
+   varsayılan yolunun okumadığı bir durum (`Sprite`, `LodGroup`, `ParticleEmitter` ile aynı raf).
+   Bağlandı: iki yeni boru hattı varyantı (`gbuffer_double_sided`, `z_prepass_double_sided` —
+   kırpma modu wgpu'da boru hattına gömülü), batch anahtarına bayrak, üç geçişte seçim. Forward
+   yolda zaten kullanılmadan duran `render_double_sided_pipeline` da bağlandı.
+   **Kanıt:** yeni golden render testi — kamera bir küpün içinde, yani her görünür üçgen arka yüz;
+   tek-yüzlüyle kare boş, çift-yüzlüyle iç yüzey çiziliyor. Düzeltme geri alınınca test "karenin
+   %0.0'ı değişti" diyerek kırılıyor.
+   **Bağlanmayan, kayda geçen:** saydam çift-yüzlü yüzey iki yolda da tek yüzlü (harmanlı boru
+   hattının iki-yüzlü varyantı yok, editörde de yok) ve gölge geçişi ön-yüz kırpmayı sürdürüyor.
+
+   **Bekçinin kendi boşluğu da kapandı.** Dünkü yetenek envanteri bunu göremezdi: özneleri bileşen
+   *tipleri*ydi, bu ise `Material`'ın bir *alanı* — ve `Material` iki yolda da her renk okuyan
+   satırda geçiyor. Envanter artık `Material`'ın public alanlarını da özne sayıyor. Kırılabildiği
+   doğrulandı (tek yola bağlı yeni bir alan kondu, kırmızıya düştü).
+
 Açık kalan: çizim listesi hâlâ iki ayrı uygulama. Tek tek ortak kararlar (routing, uniform bloğu,
-kurulum, LOD, paketleme) tek kaynağa indi; `collect_draw_items` ile studio'nun batching'i **tek
-koda** inmedi ve inmesi de kendi başına bir karar — pass kaydı gerçekten ayrı, ayıran çizgi
-"dünyayı okuyan kısım ortak, komut kaydeden kısım ayrı" olarak tutuluyor.
+kurulum, LOD, paketleme, çift-yüzlülük) tek kaynağa indi; `collect_draw_items` ile studio'nun
+batching'i **tek koda** inmedi ve inmesi de kendi başına bir karar — pass kaydı gerçekten ayrı,
+ayıran çizgi "dünyayı okuyan kısım ortak, komut kaydeden kısım ayrı" olarak tutuluyor. Anahtarların
+kalan farkı da kayıtta: studio `is_grid`'i anahtarlıyor (motorda grid boru hattı yok), motor
+`is_transparent`/`baked_lit`'i anahtarlıyor (studio bunları ayrı HashMap'lerle ayırıyor) — ikisi de
+mekanizma farkı, sürüklenme değil.
 
 **İnsan gözü isteyen iki yer:** (1) editör viewport'unda DoF artık kameranın gerçek near/far'ıyla
 lineerleşiyor — varsayılan kamerada (0.1/2000) fark yok, farklı far düzlemli sahnede odak doğru

@@ -139,6 +139,9 @@ pub struct DrawItem {
     /// A painted backdrop: `backdrop.wgsl` + the backdrop pipeline, drawn first
     /// (`DrawLayer::Backdrop`). See `gizmo_renderer::backdrop`.
     pub(super) is_backdrop: bool,
+    /// The material asked for both faces (`Material::with_double_sided`). Selects the cull-off
+    /// variant of whichever pipeline this item lands in; see `passes::geometry`.
+    pub(super) is_double_sided: bool,
     pub(super) skeleton_bind_group: Option<std::sync::Arc<wgpu::BindGroup>>,
     pub(super) is_transparent: bool,
     /// This batch's slot in the frame's paint order — see [`draw_layer`].
@@ -240,6 +243,11 @@ pub(crate) struct BatchKey {
     baked_lit: bool,
     is_skybox: bool,
     is_backdrop: bool,
+    /// In the key for the same reason as the routing flags: the cull mode is baked into the
+    /// pipeline, so two materials that differ only in this must not share a batch — the batch
+    /// would inherit whichever entity the ECS iteration reached first, and a double-sided cloth
+    /// would lose its back faces (or a solid wall gain interior ones) depending on the frame.
+    is_double_sided: bool,
 }
 
 pub(crate) struct BatchData {
@@ -253,6 +261,7 @@ pub(crate) struct BatchData {
     baked_lit: bool,
     is_skybox: bool,
     is_backdrop: bool,
+    is_double_sided: bool,
     skeleton_bind_group: Option<std::sync::Arc<wgpu::BindGroup>>,
     is_transparent: bool,
     instances: Vec<crate::renderer::gpu_types::InstanceRaw>,
@@ -439,6 +448,11 @@ pub(super) fn collect_draw_items(
                 // shadow passes without any further edit to them.
                 let unlit = routing.skips_deferred;
                 let is_transparent = $mat.is_transparent || $mat.albedo.w < 0.99;
+                // Honoured by this path since 2026-08-15. `Material::with_double_sided` has been
+                // public all along and only the editor acted on it, so a cloth or a leaf authored
+                // double-sided showed both faces in the viewport and lost its back faces in the
+                // game.
+                let is_double_sided = $mat.is_double_sided;
 
                 let key = BatchKey {
                     vbuf_id: std::sync::Arc::as_ptr(&active_vbuf) as usize,
@@ -449,6 +463,7 @@ pub(super) fn collect_draw_items(
                     baked_lit,
                     is_skybox,
                     is_backdrop,
+                    is_double_sided,
                 };
 
                 let batch = cache.batches.entry(key).or_insert_with(|| BatchData {
@@ -462,6 +477,7 @@ pub(super) fn collect_draw_items(
                     baked_lit,
                     is_skybox,
                     is_backdrop,
+                    is_double_sided,
                     skeleton_bind_group: skel_bg,
                     is_transparent,
                     instances: Vec::new(),
@@ -573,6 +589,7 @@ pub(super) fn collect_draw_items(
                 baked_lit: batch.baked_lit,
                 is_skybox: batch.is_skybox,
                 is_backdrop: batch.is_backdrop,
+                is_double_sided: batch.is_double_sided,
                 skeleton_bind_group: batch.skeleton_bind_group.clone(),
                 is_transparent: batch.is_transparent,
                 layer: draw_layer(batch.is_backdrop, batch.is_transparent),
@@ -654,6 +671,7 @@ mod batch_key_tests {
             baked_lit: false,
             is_skybox: false,
             is_backdrop: false,
+            is_double_sided: false,
         };
         let transparent = BatchKey {
             is_transparent: true,
@@ -677,6 +695,11 @@ mod batch_key_tests {
             is_backdrop: true,
             ..base.clone()
         };
+
+        // The cull mode is a pipeline, not a per-draw state, so a cloth batched with a wall
+        // takes the wall's culling — or the wall takes the cloth's, depending on iteration order.
+        let two_sided = BatchKey { is_double_sided: true, ..base.clone() };
+        assert_ne!(base, two_sided, "one-sided and double-sided must be separate batches");
 
         assert_ne!(base, transparent, "opaque and transparent must be separate batches");
         assert_ne!(base, unlit, "PBR and unlit must be separate batches");
