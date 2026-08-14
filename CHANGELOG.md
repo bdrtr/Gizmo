@@ -700,7 +700,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   own fraction landed in anisotropy's slot. Not noise but inversion: subsurface 0.234 with
   anisotropy **0** decoded as **0.82**, and with anisotropy **1** as **0**. A material with no
   anisotropy rendered as though it were fully anisotropic.
-- **TAA's reprojection read the world-position G-buffer without putting it back into world space.**
+- **Three shaders read the world-position G-buffer without putting it back into world space** —
+  TAA's reprojection, SSAO's kernel projection and distance comparisons, and SSGI's temporal
+  reprojection. All three bound that target as `t_position` rather than `t_world_position`, so none
+  was among the readers the camera-relative change updated. The binding is now called
+  `t_position_rel_camera` in every shader that takes it, so the convention is in the name and the
+  next change to it can be found by grep rather than by luck.
   Introduced by the camera-relative change above and caught by a new convergence test rather than by
   eye: `taa.wgsl` binds that target as `t_position`, not `t_world_position`, so it was not among the
   readers the change updated. The history was sampled from wherever the camera stood relative to the

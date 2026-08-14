@@ -4,7 +4,7 @@
 
 @group(0) @binding(0) var<uniform> scene: SceneUniforms;
 
-@group(1) @binding(0) var t_world_position: texture_2d<f32>;
+@group(1) @binding(0) var t_position_rel_camera: texture_2d<f32>;
 
 struct DecalUniforms {
     inv_model: mat4x4<f32>,
@@ -33,7 +33,7 @@ fn vs_main(@location(0) pos: vec3<f32>) -> VertexOutput {
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let tex_coord = vec2<i32>(in.position.xy);
-    let world_pos_val = textureLoad(t_world_position, tex_coord, 0);
+    let world_pos_val = textureLoad(t_position_rel_camera, tex_coord, 0);
     
     if (world_pos_val.w == 0.0) {
         discard;

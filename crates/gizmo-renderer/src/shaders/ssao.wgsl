@@ -13,7 +13,7 @@ struct SsaoKernel {
 @group(0) @binding(0) var<uniform> scene: SceneUniforms;
 
 @group(1) @binding(0) var t_normal:   texture_2d<f32>;
-@group(1) @binding(1) var t_position: texture_2d<f32>;
+@group(1) @binding(1) var t_position_rel_camera: texture_2d<f32>;
 @group(1) @binding(2) var t_noise:    texture_2d<f32>;
 @group(1) @binding(3) var s_gbuf:     sampler;
 @group(1) @binding(4) var s_noise:    sampler;
@@ -29,13 +29,18 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
 fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let iuv = vec2<i32>(i32(frag_coord.x) * 2, i32(frag_coord.y) * 2);
 
-    let pos_samp = textureLoad(t_position, iuv, 0);
+    let pos_samp = textureLoad(t_position_rel_camera, iuv, 0);
     if (pos_samp.w < 0.5) { return vec4(1.0); } // sky / unlit → fully lit
 
-    let world_pos = pos_samp.xyz;
+    // The G-buffer stores position relative to the camera (see gbuffer.wgsl). Everything below
+    // — the kernel offset, the `view_proj` projection, the distance comparisons — is world-space
+    // maths, so it goes back into world space here. This shader binds that target as `t_position_rel_camera`
+    // rather than `t_position_rel_camera`, which is how it, and `taa.wgsl`, were missed when the
+    // convention changed.
+    let world_pos = pos_samp.xyz + scene.camera_pos.xyz;
     let N = normalize(textureLoad(t_normal, iuv, 0).xyz);
 
-    let dims = vec2<f32>(textureDimensions(t_position));
+    let dims = vec2<f32>(textureDimensions(t_position_rel_camera));
 
     // Tile the 4×4 noise texture across the screen for random hemisphere rotation
     let noise_uv  = (frag_coord.xy * 2.0) / 4.0;
@@ -63,15 +68,18 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
 
         // Look up the actual geometry at that screen position
         let siuv     = vec2<i32>(i32(suv.x * dims.x), i32(suv.y * dims.y));
-        let occ_samp = textureLoad(t_position, siuv, 0);
+        let occ_samp = textureLoad(t_position_rel_camera, siuv, 0);
         if (occ_samp.w < 0.5) { continue; }
 
-        // Compare camera distances to detect occlusion
-        let occ_dist = length(occ_samp.xyz - scene.camera_pos.xyz);
+        // Compare camera distances to detect occlusion. `occ_samp` is camera-relative, so its
+        // own length already *is* the camera distance — subtracting the camera again would count
+        // it twice.
+        let occ_pos  = occ_samp.xyz + scene.camera_pos.xyz;
+        let occ_dist = length(occ_samp.xyz);
         let s_dist   = length(w_samp       - scene.camera_pos.xyz);
 
         // Range falloff: ignore occluders farther than sampling radius
-        let range = smoothstep(0.0, 1.0, radius / max(length(world_pos - occ_samp.xyz), 0.001));
+        let range = smoothstep(0.0, 1.0, radius / max(length(world_pos - occ_pos), 0.001));
         if (occ_dist <= s_dist - bias) {
             occlusion += range;
         }

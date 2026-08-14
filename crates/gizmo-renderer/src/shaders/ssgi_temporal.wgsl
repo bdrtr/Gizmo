@@ -14,15 +14,19 @@ struct SsgiTemporalParams {
     // NOTE: three scalar pads (NOT a vec3) — a vec3 has align-16 and would push the
     // struct to 96 bytes while the Rust `[f32; 3]` mirror is 80, tripping the uniform
     // min_binding_size validation. Scalars keep both sides at 80 bytes.
-    _pad0:          f32,
-    _pad1:          f32,
-    _pad2:          f32,
+    // Was three pads. They now carry the camera position, because the world-position G-buffer is
+    // stored relative to it (see gbuffer.wgsl) and the reprojection below multiplies by a *world*
+    // matrix. Still three scalars for the reason above: a `vec3` would align to 16 and break the
+    // 80-byte mirror.
+    camera_x:       f32,
+    camera_y:       f32,
+    camera_z:       f32,
 };
 
 @group(0) @binding(0) var<uniform> params: SsgiTemporalParams;
 @group(0) @binding(1) var t_current:  texture_2d<f32>;  // raw SSGI this frame     (half-res)
 @group(0) @binding(2) var t_history:  texture_2d<f32>;  // accumulated SSGI last frame (half-res)
-@group(0) @binding(3) var t_position: texture_2d<f32>;  // world-position G-buffer (full-res)
+@group(0) @binding(3) var t_position_rel_camera: texture_2d<f32>;  // world-position G-buffer (full-res)
 @group(0) @binding(4) var s_linear:   sampler;          // bilinear — for history reprojection
 
 @vertex
@@ -41,7 +45,7 @@ fn fs_resolve(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32
     // World position for THIS half-res pixel comes from the full-res G-buffer at the
     // matching texel — the raymarch reads it the same way (iuv = frag_coord * 2).
     let iuv_full = iuv_half * 2;
-    let pos_samp = textureLoad(t_position, iuv_full, 0);
+    let pos_samp = textureLoad(t_position_rel_camera, iuv_full, 0);
 
     // ── Reproject: where did this world point project last frame? ────────────────
     // NO early returns before the textureSample below — WGSL requires derivative-taking
@@ -49,7 +53,8 @@ fn fs_resolve(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32
     // it into the blend weight at the end.
     var history_uv = frag_coord.xy / half_dims;   // fallback: same pixel
     var history_valid = pos_samp.w >= 0.5;        // sky / unwritten → no GI history
-    let prev_clip = params.prev_view_proj * vec4(pos_samp.xyz, 1.0);
+    let camera_pos = vec3<f32>(params.camera_x, params.camera_y, params.camera_z);
+    let prev_clip = params.prev_view_proj * vec4(pos_samp.xyz + camera_pos, 1.0);
     if (prev_clip.w > 0.001) {
         let ndc = prev_clip.xy / prev_clip.w;
         history_uv = vec2(ndc.x * 0.5 + 0.5, ndc.y * -0.5 + 0.5);

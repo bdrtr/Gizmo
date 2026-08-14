@@ -8,7 +8,8 @@ use crate::pipeline::{load_shader, load_shader_composed, SceneState};
 struct SsgiTemporalParams {
     prev_view_proj: [[f32; 4]; 4],
     alpha: f32,
-    _pad: [f32; 3],
+    /// The camera the world-position G-buffer was written relative to — see the WGSL mirror.
+    camera_pos: [f32; 3],
 }
 
 pub struct SsgiState {
@@ -247,11 +248,11 @@ impl SsgiState {
     /// Upload the temporal-resolve uniform: `self.prev_vp` (last frame's unjittered
     /// view-proj) drives reprojection; `alpha` is the blend weight (1.0 = ignore
     /// history, used on the first frame / after a reset).
-    pub fn update_params(&self, queue: &wgpu::Queue, alpha: f32) {
+    pub fn update_params(&self, queue: &wgpu::Queue, alpha: f32, camera_pos: [f32; 3]) {
         let data = SsgiTemporalParams {
             prev_view_proj: self.prev_vp,
             alpha,
-            _pad: [0.0; 3],
+            camera_pos,
         };
         queue.write_buffer(&self.temporal_params_buffer, 0, bytemuck::bytes_of(&data));
     }

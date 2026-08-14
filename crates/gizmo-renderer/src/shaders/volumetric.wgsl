@@ -9,7 +9,7 @@
 @group(1) @binding(0) var t_shadow: texture_depth_2d_array;
 @group(1) @binding(1) var s_shadow: sampler_comparison;
 
-@group(2) @binding(0) var t_world_position: texture_2d<f32>;
+@group(2) @binding(0) var t_position_rel_camera: texture_2d<f32>;
 @group(2) @binding(1) var s_linear: sampler;
 
 struct VertexOutput {
@@ -57,9 +57,9 @@ fn phase_function(g: f32, cos_theta: f32) -> f32 {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let tex_size = textureDimensions(t_world_position);
+    let tex_size = textureDimensions(t_position_rel_camera);
     let iuv = vec2<i32>(in.screen_uv * vec2<f32>(tex_size));
-    let pos_sample = textureLoad(t_world_position, iuv, 0);
+    let pos_sample = textureLoad(t_position_rel_camera, iuv, 0);
     let cam_pos = scene.camera_pos.xyz;
     
     // ── Ray Direction Reconstruction ──

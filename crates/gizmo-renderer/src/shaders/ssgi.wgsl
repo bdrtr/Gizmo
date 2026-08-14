@@ -6,7 +6,7 @@
 
 @group(1) @binding(0) var t_hdr: texture_2d<f32>;
 @group(1) @binding(1) var t_normal_roughness: texture_2d<f32>;
-@group(1) @binding(2) var t_world_position: texture_2d<f32>;
+@group(1) @binding(2) var t_position_rel_camera: texture_2d<f32>;
 @group(1) @binding(3) var s_nearest: sampler;
 @group(1) @binding(4) var t_albedo: texture_2d<f32>;
 
@@ -46,7 +46,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let tex_dim = vec2<f32>(textureDimensions(t_hdr));
 
     let normal_roughness = textureLoad(t_normal_roughness, iuv, 0);
-    let pos_sample = textureLoad(t_world_position, iuv, 0);
+    let pos_sample = textureLoad(t_position_rel_camera, iuv, 0);
 
     // Skip sky/unwritten pixels
     if (pos_sample.w < 0.5) {
@@ -101,7 +101,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
             let screen_uv = vec2(ndc.x * 0.5 + 0.5, 1.0 - (ndc.y * 0.5 + 0.5));
             let sample_iuv = vec2<i32>(i32(screen_uv.x * tex_dim.x), i32(screen_uv.y * tex_dim.y));
             
-            let scene_pos = textureLoad(t_world_position, sample_iuv, 0);
+            let scene_pos = textureLoad(t_position_rel_camera, sample_iuv, 0);
             
             // Depth check
             if (scene_pos.w > 0.5) {

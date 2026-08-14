@@ -17,7 +17,7 @@
 
 @group(2) @binding(0) var t_albedo_metallic:  texture_2d<f32>;
 @group(2) @binding(1) var t_normal_roughness: texture_2d<f32>;
-@group(2) @binding(2) var t_world_position:   texture_2d<f32>;
+@group(2) @binding(2) var t_position_rel_camera:   texture_2d<f32>;
 @group(2) @binding(3) var s_gbuf: sampler;
 @group(2) @binding(4) var t_world_tangent:    texture_2d<f32>;
 
@@ -310,7 +310,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
 
     let albedo_metallic  = textureLoad(t_albedo_metallic,  iuv, 0);
     let normal_roughness = textureLoad(t_normal_roughness, iuv, 0);
-    let pos_sample       = textureLoad(t_world_position,   iuv, 0);
+    let pos_sample       = textureLoad(t_position_rel_camera,   iuv, 0);
     let tangent_sample   = textureLoad(t_world_tangent,    iuv, 0);
 
     // Unwritten pixels (skipped geometry, unlit objects) — render clean dark grey background (Bevy parity)

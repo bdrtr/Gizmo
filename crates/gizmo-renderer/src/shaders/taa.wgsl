@@ -11,7 +11,7 @@ struct TaaParams {
     _pad:           f32,
     // The world-position G-buffer is stored **relative to the camera** (see gbuffer.wgsl), so it
     // has to be put back into world space before a previous frame's view-projection can be applied
-    // to it. This binding is named `t_position` rather than `t_world_position`, which is how it
+    // to it. This binding is named `t_position_rel_camera` rather than `t_position_rel_camera`, which is how it
     // was missed when that target's convention changed.
     camera_pos:     vec4<f32>,
 };
@@ -19,7 +19,7 @@ struct TaaParams {
 @group(0) @binding(0) var<uniform> params:     TaaParams;
 @group(0) @binding(1) var t_current:  texture_2d<f32>;  // jittered current HDR frame
 @group(0) @binding(2) var t_history:  texture_2d<f32>;  // previous TAA output
-@group(0) @binding(3) var t_position: texture_2d<f32>;  // world-position G-buffer
+@group(0) @binding(3) var t_position_rel_camera: texture_2d<f32>;  // world-position G-buffer
 @group(0) @binding(4) var s_linear:   sampler;          // bilinear — for history
 @group(0) @binding(5) var s_nearest:  sampler;          // nearest — for current / position
 
@@ -43,7 +43,7 @@ fn fs_resolve(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32
 
     // ── Reproject: find where this world-space point was last frame ───────────
     var history_uv = uv; // fallback: no movement
-    let pos_samp = textureLoad(t_position, iuv, 0);
+    let pos_samp = textureLoad(t_position_rel_camera, iuv, 0);
     if (pos_samp.w >= 0.5) {
         let prev_clip =
             params.prev_view_proj * vec4(pos_samp.xyz + params.camera_pos.xyz, 1.0);

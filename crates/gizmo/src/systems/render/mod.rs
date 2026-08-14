@@ -401,7 +401,7 @@ pub fn default_render_pass(
     // reset so there is no stale history to reproject. Denoises the 1-spp raymarch grain.
     if let Some(ref mut ssgi) = renderer.ssgi {
         let alpha = if ssgi.frame_index == 0 { 1.0f32 } else { 0.1f32 };
-        ssgi.update_params(&renderer.queue, alpha);
+        ssgi.update_params(&renderer.queue, alpha, cam_pos.to_array());
         ssgi.store_prev_vp(unjittered_view_proj.to_cols_array_2d());
     }
 
