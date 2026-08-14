@@ -684,6 +684,36 @@ unreachable. **A test of a policy is not a test that the policy is reached**, an
 are each guarded accordingly — `default_render_pass_advances_skeletal_animation` fails with the
 call removed, and it was checked that way rather than assumed.
 
+**The root the sweep could not see (2026-08-14, architectural review).** The sweep above looked for
+*zero callers* and found `Sprite`. It could not have found `LodGroup`, `ParticleEmitter` or the
+animation systems, and the reason is structural: **`gizmo-studio` is a workspace member, so a
+capability wired only into its render pipeline still has an in-tree consumer.** The obvious check —
+does any system read this component? — answers *yes*, and the gap is invisible to precisely the
+question you would ask.
+
+Underneath that is the real shape: `collect_draw_items` and `gizmo-studio`'s
+`execute_render_pipeline` are two independent implementations of *world → draw list*, and only the
+pass recording after that genuinely needs to differ. `shared.rs` says as much in its own header —
+light collection and cascades were single-sourced *after* each had to be fixed twice. Everything
+that has not yet caused a visible bug is still duplicated, so the default state of any new
+capability is "lives in exactly one path". The drift runs both ways, which is what makes it
+structural: `animation_state_machine_update_system` is now engine-only exactly as
+`BoneAttachmentSystem` is studio-only.
+
+**First cut taken: `gizmo-renderer::routing`.** Both loops decided what every `MaterialType` means
+with a `match … { _ => 0.0 }`, and the two wildcards disagreed — `BakedLit` was routed by the engine
+path and defaulted by studio's, so a baked-lit level shaded one way in the game and another in the
+editor; `Grid` was the reverse. `MaterialType` is `#[non_exhaustive]`, so a wildcard is *obligatory*
+in any downstream crate and a ninth variant could never have been a compile error in either file.
+The decision now lives in the crate that defines the enum, where the match is exhaustive: one
+compile error there instead of two silent misroutes out here. The engine path is behaviour-identical
+(12 golden render tests, hash unchanged); studio's `BakedLit` flag goes 0.0 → 1.0, which is the fix
+and is a visible change to a viewport nothing can test.
+
+What this deliberately does **not** do is merge the two paths. The deferred and editor-forward
+recorders genuinely differ, that difference is the part with no automated coverage, and §3 gates it
+on human-eye A/B. Single-sourcing the *semantics* is the half that pays.
+
 Two things this is **not** saying. A public function with no in-tree caller is not a defect — a
 library's surface exists to be called from outside, and a sweep on that basis returns most of
 `gizmo-core`. And a system a game is meant to schedule itself is not unwired. The class that
