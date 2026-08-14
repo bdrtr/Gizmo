@@ -243,6 +243,25 @@ jobs:
             --no-default-features --features render,physics,scene
           cargo build --locked --target wasm32-unknown-unknown -p demo-web
 
+      # This target was BUILT and never LINTED, and the difference is not academic: the lint
+      # config is crate-wide (`deny(missing_docs)`, `-D warnings`) but which code exists is
+      # per-target, so every `#[cfg(not(target_arch = "x86_64"))]` arm and every wasm-only branch
+      # was outside every gate the project had. It was holding an undocumented public function and
+      # a `return` that is needless once the other arm is stripped — neither visible to the native
+      # job, both real failures of the rules this repo already set for itself.
+      - name: Clippy wasm32 (the arms the native lint job cannot see)
+        run: |
+          cargo clippy --locked --target wasm32-unknown-unknown \
+            -p gizmo-math -p gizmo-core -p gizmo-physics-core -p gizmo-physics-rigid \
+            -p gizmo-physics-soft -p gizmo-ai -p gizmo-animation -p gizmo-scene \
+            -p gizmo-renderer \
+            -- -D warnings -A clippy::too_many_arguments -A clippy::type_complexity
+          cargo clippy --locked --target wasm32-unknown-unknown -p gizmo-app \
+            --no-default-features --features render,physics,scene \
+            -- -D warnings -A clippy::too_many_arguments -A clippy::type_complexity
+          cargo clippy --locked --target wasm32-unknown-unknown -p demo-web \
+            -- -D warnings -A clippy::too_many_arguments -A clippy::type_complexity
+
   # ── Miri: the ECS unsafe surface must be free of undefined behaviour ───────
   # Runs the pointer/aliasing-heavy gizmo-core modules under Miri (Tree Borrows).
   # This fences the archetype-migration disjoint-borrow invariant: taking two

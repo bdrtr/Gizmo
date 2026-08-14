@@ -102,6 +102,16 @@ pub fn aabb_overlaps_simd4(target: &Aabb, others: [&Aabb; 4]) -> u8 {
     }
 }
 
+/// Test the target AABB against 4 AABBs at the same time. In the returned bitmask, bit i
+/// indicates whether the target overlaps with `others[i]`.
+///
+/// The scalar fallback for every target without SSE — wasm32 among them. Same signature, same
+/// answer, four sequential tests instead of one vector op; the name keeps `simd4` because the
+/// callers batch by four either way and the batching is what the x86 build needs.
+///
+/// It had no doc comment at all, which this crate's `deny(missing_docs)` should have caught the
+/// day it was written. It did not, because the only build that compiles this arm is a
+/// cross-compile, and CI *built* wasm32 without ever linting it.
 #[cfg(not(target_arch = "x86_64"))]
 #[inline]
 pub fn aabb_overlaps_simd4(target: &Aabb, others: [&Aabb; 4]) -> u8 {

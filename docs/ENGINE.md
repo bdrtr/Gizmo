@@ -847,6 +847,12 @@ already auto-vectorized). DO NOT RETRY without passing the step-0 gate again. (T
   -A type_complexity` (the two grandfathered architectural lints). The entry crate is
   `gizmo-engine` (NOT `-p gizmo`); `| tail` masks cargo's exit code — check the exit status
   separately.
+- **The same gate runs against `wasm32-unknown-unknown`** (2026-08-15). Not redundant: the lint
+  config is crate-wide but which code *exists* is per-target, so every
+  `#[cfg(not(target_arch = "x86_64"))]` arm and every wasm-only branch sat outside every gate the
+  project had. CI built that target and never linted it, and it was holding an undocumented public
+  function in a crate that denies `missing_docs`, plus a `return` that is needless once the other
+  arm is stripped. A green native lint says nothing about the arms it did not compile.
 
 ## Nerede kaldık (2026-08-14 → 15)
 

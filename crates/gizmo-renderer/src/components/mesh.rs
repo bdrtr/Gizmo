@@ -158,7 +158,10 @@ impl Mesh {
                 contents: bytemuck::cast_slice(vertices),
                 usage: wgpu::BufferUsages::VERTEX,
             });
-            return Mesh::new(device, Arc::new(vbuf), vertices, center_offset, source);
+            // Tail expression, not a `return`: on wasm the block below is stripped, so this
+            // block IS the function body and a `return` here reads as needless — which only the
+            // wasm lint can see, and only since CI started linting that target.
+            Mesh::new(device, Arc::new(vbuf), vertices, center_offset, source)
         }
 
         #[cfg(not(target_arch = "wasm32"))]

@@ -54,6 +54,12 @@ cargo clippy --workspace --all-features --all-targets -- -D warnings \
 cargo build -p demo-web --target wasm32-unknown-unknown --release
 # then wasm-bindgen (CLI version must EXACTLY match the resolved wasm-bindgen crate — it is
 # version-locked) + `python3 -m http.server -d demo-web 8080`. See demo-web/README.md.
+
+# The wasm target is LINTED too (CI gate, added 2026-08-15). It is a separate gate because which
+# code exists is per-target: every `#[cfg(not(target_arch = "x86_64"))]` arm and every wasm-only
+# branch is invisible to the native clippy job, and two real violations were living there.
+cargo clippy --target wasm32-unknown-unknown -p demo-web \
+  -- -D warnings -A clippy::too_many_arguments -A clippy::type_complexity
 ```
 
 ## Environment / machine constraints
