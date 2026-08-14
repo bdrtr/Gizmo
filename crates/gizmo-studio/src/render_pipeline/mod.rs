@@ -274,8 +274,16 @@ pub fn execute_render_pipeline(
                     None => continue, // CULL edildi!
                 };
 
+                // What the shader is HANDED, which is not always what was authored: the backdrop
+                // pipeline's vertex shader adds the camera position, so a PLACED backdrop needs it
+                // taken back out here or the two do not cancel and it rides the camera like a
+                // locked one. The engine's path has always done this; this one uploaded the raw
+                // matrix, so a backdrop the level placed drifted with the editor camera and sat
+                // still in the game. Identity for every other material type.
+                let upload_model =
+                    gizmo::renderer::instance_model(mat.material_type, &model, cam_pos);
                 let instance_data = InstanceRaw::new(
-                    model.to_cols_array_2d(),
+                    upload_model.to_cols_array_2d(),
                     [mat.albedo.x, mat.albedo.y, mat.albedo.z, mat.albedo.w],
                     mat.roughness,
                     mat.metallic,

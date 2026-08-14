@@ -279,6 +279,11 @@ fn neither_draw_loop_answers_the_shared_per_entity_questions_itself() {
     let (game, editor) = draw_path_sources();
     let mut offenders = Vec::new();
     for (path, text) in [("game", &game), ("editor", &editor)] {
+        // In CODE, not in a comment — a path that deleted the call and kept the note explaining it
+        // would otherwise pass, which is the failure mode a comment-tolerant scan invites.
+        let runs_instance_model = text
+            .lines()
+            .any(|l| !l.trim_start().starts_with("//") && l.contains("instance_model("));
         for (i, line) in text.lines().enumerate() {
             if line.trim_start().starts_with("//") {
                 continue;
@@ -289,6 +294,14 @@ fn neither_draw_loop_answers_the_shared_per_entity_questions_itself() {
                 offenders.push(format!(
                     "{path} path line {}: calls `select_mesh` directly — use `LodGroup::pick`, \
                      which also decides the no-group and past-the-last-level cases",
+                    i + 1
+                ));
+            }
+            if line.contains("InstanceRaw::new(") && !runs_instance_model {
+                offenders.push(format!(
+                    "{path} path line {}: builds instances without running the authored matrix \
+                     through `backdrop::instance_model` — a PLACED backdrop then rides the camera, \
+                     because the backdrop shader adds the camera position and nothing took it out",
                     i + 1
                 ));
             }

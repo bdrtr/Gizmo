@@ -981,7 +981,17 @@ Kök kayıtlı ("The root the sweep could not see"). Beş kesim:
    gör" alışkanlığı tam olarak bunu yakaladı; olmasa yeşil ama hiçbir şey ölçmeyen bir test
    commit edilmişti.
 
-10. **Frustum culling — sürüklenme yok, kayda geçsin.** Sıradaki aday buydu; bakınca iki yol da
+10. **Yerleştirilmiş backdrop editörde kameraya yapışıyormuş (2026-08-15).** Studio
+    `backdrop::instance_model`'ı hiç çağırmıyordu. Backdrop boru hattının vertex shader'ı kamera
+    konumunu ekliyor; `MaterialType::BackdropPlaced` için bu eklemenin CPU'da geri alınması gerek
+    ki ikisi sadeleşsin ve backdrop seviyenin koyduğu yerde kalsın. Motor bunu hep yapıyordu,
+    studio ham matrisi yüklüyordu — yani seviyeye yerleştirilen bir backdrop **editörde kamerayla
+    sürükleniyor, oyunda duruyordu.** Kuralın kendisi zaten `gizmo-renderer::backdrop`'ta yazılı ve
+    testli (`a_placed_backdrop_lands_where_it_was_authored`); eksik olan tek şey çağrıydı.
+    Bekçi: iki çizim döngüsü de yazdığı matrisi `instance_model`'dan geçirmek zorunda — ve bekçi
+    **yorumu saymıyor**, yoksa çağrıyı silip açıklamayı bırakmak testi geçerdi.
+
+11. **Frustum culling — sürüklenme yok, kayda geçsin.** Sıradaki aday buydu; bakınca iki yol da
    zaten `classify_visibility_world`'ü paylaşıyor, AABB'yi bir kez dönüştürüyor ve farklarını
    gerekçesiyle yazmış: editör oyun kamerasının frustum'una göre kırpıyor (edit modunda culling'i
    sınayabilmek için) ve kameraya-kilitli backdrop'u testten muaf tutuyor — çünkü onun shader'ı
