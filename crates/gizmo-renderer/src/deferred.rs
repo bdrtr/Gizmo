@@ -16,10 +16,22 @@ pub const GBUFFER_NORMAL_ROUGHNESS_FORMAT: wgpu::TextureFormat = wgpu::TextureFo
 // MRTs share a `max_color_attachment_bytes_per_sample` budget of 32 (the WebGPU-guaranteed
 // limit). Current cost: 4 (albedo Rgba8) + 8 (normal Rgba16F) + 8 (position Rgba16F) +
 // 8 (tangent Rgba16F) = 28 ≤ 32. Rgba32Float position would make it 36 > 32 and wgpu
-// rejects the pipeline. Half-float world position therefore trades some precision far from
-// the origin (shadow swimming, and the packed subsurface+anisotropy in .w can quantise the
-// anisotropy fraction when subsurface > 0) for fitting the budget — a deliberate tradeoff,
-// not an oversight. (The gbuffer.wgsl header comment claiming Rgba32Float was stale.)
+// rejects the pipeline. (The gbuffer.wgsl header comment claiming Rgba32Float was stale.)
+//
+// **The precision this used to cost is no longer paid, and the way out was not a wider format.**
+// The budget is about the bytes, not about what goes in them. Absolute coordinates in f16
+// quantise to 6 cm at 100 m from the origin, 50 cm at 1 km and a full metre at 2 km — against a
+// nearest-cascade shadow texel of 4.3 mm, so a city-sized level sampled its shadows, view vector
+// and fog from a position rounded to the nearest half-metre. Measured: moving an entire scene
+// 2 km from the origin changed **9.7 %** of the frame. `gbuffer.wgsl` now writes the position
+// relative to the camera and every reader adds it back, which keeps the same eight bytes and puts
+// the stored values at view scale, where f16 is good to centimetres anywhere in the world.
+// `golden_render_tests::a_scene_renders_the_same_two_kilometres_from_the_origin` is the guard,
+// and it was checked against the old form, where it fails.
+//
+// Still true and still a real limit: the packed subsurface+anisotropy in `.w` quantises the
+// anisotropy fraction when subsurface > 0, because that packing puts a 0..1 value in the low
+// digits of a number above 100. That one is untouched.
 pub const GBUFFER_WORLD_POSITION_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 pub const GBUFFER_WORLD_TANGENT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 

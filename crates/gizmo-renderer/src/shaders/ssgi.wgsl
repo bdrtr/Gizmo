@@ -53,7 +53,8 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         return vec4(0.0);
     }
 
-    let world_pos = pos_sample.xyz;
+    // G-buffer position is camera-relative (see gbuffer.wgsl); put it back in world space.
+    let world_pos = pos_sample.xyz + scene.camera_pos.xyz;
     let normal = normalize(normal_roughness.xyz);
     let view_dir = normalize(world_pos - scene.camera_pos.xyz);
     
@@ -104,7 +105,8 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
             
             // Depth check
             if (scene_pos.w > 0.5) {
-                let scene_z = length(scene_pos.xyz - scene.camera_pos.xyz);
+                // Already camera-relative, so its length IS the camera distance.
+                let scene_z = length(scene_pos.xyz);
                 let current_z = length(current_pos - scene.camera_pos.xyz);
                 let depth_diff = current_z - scene_z;
                 

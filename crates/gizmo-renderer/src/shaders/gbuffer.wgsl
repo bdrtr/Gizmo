@@ -239,7 +239,15 @@ fn fs_main(in: VertexOutput) -> GBufferOut {
     var out: GBufferOut;
     out.albedo_metallic  = vec4<f32>(albedo, metallic);
     out.normal_roughness = vec4<f32>(N, roughness);
-    out.world_position   = vec4<f32>(in.world_position, (0.5 + 0.49 * anisotropy_raw) + 100.0 * subsurface_raw);
+    // **Stored relative to the camera, not in absolute world coordinates.** The four G-buffer
+    // targets share a 32-byte-per-sample budget (4 + 8 + 8 + 8 = 28), so this one cannot be
+    // Rgba32Float — but the budget is about the *bytes*, not about what goes in them. Absolute
+    // coordinates in f16 quantise to 6 cm at 100 m from the origin, 50 cm at 1 km and a full
+    // metre at 2 km, against a nearest-cascade shadow texel of 4.3 mm; a city-sized level was
+    // therefore sampling its shadows from a position rounded to the nearest half-metre. Storing
+    // the offset from the camera keeps the same 8 bytes and the values stay view-scale, where f16
+    // is good to centimetres anywhere in the world. Every reader adds `camera_pos` back.
+    out.world_position   = vec4<f32>(in.world_position - scene.camera_pos.xyz, (0.5 + 0.49 * anisotropy_raw) + 100.0 * subsurface_raw);
     out.world_tangent    = vec4<f32>(T, packed_tangent_w);
     return out;
 }

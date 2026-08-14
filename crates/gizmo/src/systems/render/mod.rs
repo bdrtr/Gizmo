@@ -517,7 +517,14 @@ pub fn default_render_pass(
     // `load_shader_web` ile sökülür) — depth-only CSM/point geçitleri boşa GPU olur.
     #[cfg(not(target_arch = "wasm32"))]
     passes::record_shadow_passes(encoder, renderer, &draw_items, uploaded_instances);
-    passes::record_deferred_geometry(encoder, renderer, world, &draw_items, uploaded_instances);
+    passes::record_deferred_geometry(
+        encoder,
+        renderer,
+        world,
+        &draw_items,
+        uploaded_instances,
+        cam_pos,
+    );
     passes::record_ssao(encoder, renderer);
     // CPU-computed inverse of the (unjittered) view-projection for the volumetric smoke raymarch
     // (the WGSL inverse_mat4 returns a wrong inverse for the perspective matrix).
@@ -596,6 +603,90 @@ mod golden_render_tests {
     use crate::renderer::asset::AssetManager;
     use crate::renderer::components::{Material, MeshRenderer};
     use crate::renderer::Renderer;
+
+    /// The same scene renders the same whether it sits at the world origin or two kilometres away.
+    ///
+    /// It did not. The G-buffer's world-position target is `Rgba16Float`, and it held **absolute**
+    /// coordinates: f16 quantises to 6 cm at 100 m from the origin, 50 cm at 1 km and a full metre
+    /// at 2 km, against a nearest-cascade shadow texel of 4.3 mm. A city-sized level was therefore
+    /// sampling its shadows, its view vector and its fog from a position rounded to the nearest
+    /// half-metre — invisible near the origin, which is where every other test in this file sits,
+    /// and worse the further out you built.
+    ///
+    /// The target cannot be widened: the four G-buffer attachments share a 32-byte-per-sample
+    /// budget and are at 28. But the budget is about the bytes, not about what goes in them, so
+    /// the position is stored relative to the camera now and every reader adds it back. Same eight
+    /// bytes, values at view scale, centimetres anywhere in the world.
+    ///
+    /// Two kilometres is chosen to be where f16 costs a whole metre. The tolerance is loose on
+    /// purpose — this asks whether the picture *survives the translation*, not whether two GPU
+    /// runs are bit-identical.
+    #[test]
+    fn a_scene_renders_the_same_two_kilometres_from_the_origin() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available()) {
+            eprintln!("skipping a_scene_renders_the_same_two_kilometres_from_the_origin: no GPU");
+            return;
+        }
+        if pollster::block_on(Renderer::headless_adapter_is_software()) {
+            eprintln!("skipping a_scene_renders_the_same_two_kilometres_from_the_origin: software");
+            return;
+        }
+        pollster::block_on(async {
+            let near = render_translated(Vec3::ZERO).await;
+            let far = render_translated(Vec3::new(2000.0, 0.0, 2000.0)).await;
+            assert_eq!(near.len(), far.len(), "same target size");
+
+            let differing = near
+                .iter()
+                .zip(far.iter())
+                .filter(|(a, b)| a.abs_diff(**b) > 8)
+                .count();
+            let ratio = differing as f32 / near.len() as f32;
+            assert!(
+                ratio < 0.02,
+                "{:.1}% of the frame changed when the whole scene moved 2 km from the origin — \
+                 the renderer is reading positions whose precision depends on where the level was \
+                 built",
+                100.0 * ratio
+            );
+        });
+    }
+
+    /// The cube scene of [`render_frame_with_mesh`], with everything — camera, cube and all —
+    /// shifted by `offset`. Shifting *both* is what makes the comparison about world-origin
+    /// distance and nothing else: the camera sees exactly the same thing either way.
+    async fn render_translated(offset: Vec3) -> Vec<u8> {
+        const W: u32 = 128;
+        const H: u32 = 128;
+        let mut renderer = Renderer::new_headless(W, H, None).await;
+        let mut asset_manager = AssetManager::new();
+        let mut world = World::new();
+
+        let mesh = AssetManager::create_cube(&renderer.device);
+        let tex = asset_manager.create_white_texture(
+            &renderer.device,
+            &renderer.queue,
+            &renderer.scene.texture_bind_group_layout,
+        );
+        let mat = Material::new(tex).with_pbr(Vec4::new(0.9, 0.15, 0.15, 1.0), 0.0, 1.0);
+        let cube = world.spawn();
+        world.add_component(cube, Transform::new(offset));
+        world.add_component(cube, mesh);
+        world.add_component(cube, mat);
+        world.add_component(cube, MeshRenderer::new());
+
+        world.spawn_bundle(CameraBundle {
+            position: Vec3::new(-6.0, 0.0, 0.0) + offset,
+            yaw: 0.0,
+            pitch: 0.0,
+            primary: true,
+            ..Default::default()
+        });
+        world.spawn_bundle(DirectionalLightBundle::default());
+
+        render_world(&mut renderer, &mut world).await
+    }
 
     /// Every pipeline this engine builds compiles on whatever backend is present.
     ///

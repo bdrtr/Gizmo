@@ -73,7 +73,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let near_world = near_h.xyz / near_h.w;
     let ray_dir_reconstructed = normalize(near_world - cam_pos);
 
-    var target_pos = pos_sample.xyz;
+    // G-buffer position is camera-relative (see gbuffer.wgsl); put it back in world space.
+    var target_pos = pos_sample.xyz + scene.camera_pos.xyz;
     var ray_dir = ray_dir_reconstructed;
     var max_dist = 100.0; // Default far clip for skybox God Rays
     

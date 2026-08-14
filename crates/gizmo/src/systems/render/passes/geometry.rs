@@ -6,6 +6,7 @@ pub fn record_deferred_geometry(
     world: &World,
     draw_items: &[DrawItem],
     uploaded_instances: u32,
+    cam_pos: gizmo_math::Vec3,
 ) {
 
     // ── Z-Prepass (Depth Only) ────────────────────────────────────────────────
@@ -127,7 +128,12 @@ pub fn record_deferred_geometry(
         for (id, decal) in decals.iter() {
             if let Some(trans) = transforms.get(id) {
                 let model = trans.local_matrix;
-                let inv_model = model.inverse();
+                // The G-buffer stores position relative to the camera (see gbuffer.wgsl), and the
+                // decal shader multiplies whatever it reads by this matrix. Folding the camera
+                // translation in here is what keeps that multiplication correct without giving the
+                // decal shader a uniform it does not otherwise need: `inv_model · T(camera)` maps a
+                // camera-relative position exactly where `inv_model` mapped an absolute one.
+                let inv_model = model.inverse() * gizmo_math::Mat4::from_translation(cam_pos);
 
                 uniform_data.push(crate::renderer::decal::DecalUniforms {
                     inv_model: inv_model.to_cols_array(),

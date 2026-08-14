@@ -322,7 +322,8 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let metallic  = albedo_metallic.a;
     let N         = normalize(normal_roughness.xyz);
     let roughness = normal_roughness.a;
-    let world_pos = pos_sample.xyz;
+    // G-buffer position is camera-relative (see gbuffer.wgsl); put it back in world space.
+    let world_pos = pos_sample.xyz + scene.camera_pos.xyz;
 
     let min_roughness = max(roughness, 0.05);
     let f0            = mix(vec3<f32>(0.04), albedo, metallic);

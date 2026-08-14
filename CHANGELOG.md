@@ -679,6 +679,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   reads as fully lit. The sphere fit costs resolution and the figure is recorded next to it:
   texels grow **1.44-1.52x** (4.3 mm/texel on the nearest cascade, 59 mm on the farthest), which
   is the right way round — a crawling edge is far more visible than a texel half again as wide.
+- **The G-buffer held absolute world positions in half floats, so rendering degraded with distance
+  from the world origin.** f16 quantises to 6 cm at 100 m, 50 cm at 1 km and a full metre at 2 km,
+  against a nearest-cascade shadow texel of 4.3 mm — a city-sized level sampled its shadows, view
+  vector and height fog from a position rounded to the nearest half-metre. Measured: translating an
+  entire scene 2 km from the origin changed **9.7 %** of the frame. The target cannot be widened
+  (the four attachments share a 32-byte-per-sample budget and are at 28), but the budget is about
+  the bytes, not what goes in them: the position is stored **relative to the camera** now and every
+  reader adds it back, which keeps the same eight bytes and puts the values at view scale, where
+  f16 is good to centimetres anywhere in the world. No uniform changed — the decal pass folds the
+  camera translation into its inverse-model matrix instead.
 - **Point-light shadow bias grew as the square of the distance from the light.** The cube lookup
   compares a *perspective* depth, whose derivative falls off as 1/d², so the fixed `0.0005` NDC
   bias was 5 mm a metre from the light, 50 cm at the edge of a 10 m light, **1.99 m** at the edge
