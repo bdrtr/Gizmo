@@ -330,6 +330,8 @@ pub(super) fn collect_draw_items(
                     continue;
                 }
 
+                let routing = crate::renderer::routing::route($mat.material_type);
+
                 let center_mat = Mat4::from_translation($mesh.center_offset);
                 let model = $trans.matrix * center_mat;
 
@@ -426,19 +428,7 @@ pub(super) fn collect_draw_items(
                     [$mat.albedo.x, $mat.albedo.y, $mat.albedo.z, $mat.albedo.w],
                     $mat.roughness,
                     $mat.metallic,
-                    match $mat.material_type {
-                        crate::renderer::components::MaterialType::Skybox => 2.0,
-                        crate::renderer::components::MaterialType::Unlit => 1.0,
-                        // Baked-lit reads the same attributes the unlit shader does; the flag is
-                        // only what the *forward* shader branches on, and it has its own pipeline.
-                        crate::renderer::components::MaterialType::BakedLit => 1.0,
-                        // Backdrop has its own pipeline too and `backdrop.wgsl` never reads
-                        // this field; 1.0 keeps it on the "not deferred PBR" side for anything
-                        // that inspects the instance buffer generically.
-                        crate::renderer::components::MaterialType::Backdrop
-                        | crate::renderer::components::MaterialType::BackdropPlaced => 1.0,
-                        _ => 0.0,
-                    },
+                    routing.instance_flag,
                     packed_params,
                     // The two `Material` lighting knobs. Zero unless the material sets them,
                     // and the shader's `(lit + ambient) * base + emissive` then collapses to
@@ -450,19 +440,21 @@ pub(super) fn collect_draw_items(
 
                 // Compute the pass-routing flags up front so they can be part of the
                 // batch key (see BatchKey docs) — not just read from the first material.
-                let is_skybox = $mat.material_type == crate::renderer::components::MaterialType::Skybox;
-                let baked_lit =
-                    $mat.material_type == crate::renderer::components::MaterialType::BakedLit;
-                let is_backdrop =
-                    crate::renderer::backdrop::is_backdrop($mat.material_type);
-                // `unlit` means "not in the deferred path", which baked-lit also is not. The two
-                // part company in the shadow pass, where baked-lit casts and unlit does not. A
-                // backdrop rides the same flag, and that is what keeps it out of the z-prepass,
-                // the G-buffer and both shadow passes without any further edit to them.
-                let unlit = is_skybox
-                    || baked_lit
-                    || is_backdrop
-                    || $mat.material_type == crate::renderer::components::MaterialType::Unlit;
+                //
+                // What each material type *means* is decided once, in `gizmo-renderer::routing`,
+                // because this loop and `gizmo-studio`'s each used to decide it with a wildcard
+                // match and the wildcards disagreed: `BakedLit` was routed here and defaulted
+                // there, `Grid` the other way round. `MaterialType` is `#[non_exhaustive]`, so a
+                // wildcard is obligatory *here* and a ninth variant could never be a compile error
+                // in this file — which is why the decision moved to the crate that defines it.
+                let is_skybox = routing.is_skybox;
+                let baked_lit = routing.baked_lit;
+                let is_backdrop = routing.is_backdrop;
+                // "Not in the deferred path", which baked-lit also is not. The two part company in
+                // the shadow pass, where baked-lit casts and unlit does not. A backdrop rides the
+                // same flag, and that is what keeps it out of the z-prepass, the G-buffer and both
+                // shadow passes without any further edit to them.
+                let unlit = routing.skips_deferred;
                 let is_transparent = $mat.is_transparent || $mat.albedo.w < 0.99;
 
                 let key = BatchKey {

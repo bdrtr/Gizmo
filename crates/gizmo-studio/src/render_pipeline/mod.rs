@@ -268,6 +268,7 @@ pub fn execute_render_pipeline(
                 // One `Aabb::transform` for the camera test AND every cascade test (and the
                 // debug-AABB push below reuses it) — `classify_visibility` redid it per frustum.
                 let world_aabb = mesh.bounds.transform(&model);
+                let routing = gizmo::renderer::routing::route(mat.material_type);
                 let camera_visible = if gizmo::renderer::is_camera_locked(mat.material_type) {
                     true
                 } else {
@@ -328,15 +329,7 @@ pub fn execute_render_pipeline(
                     [mat.albedo.x, mat.albedo.y, mat.albedo.z, mat.albedo.w],
                     mat.roughness,
                     mat.metallic,
-                    match mat.material_type {
-                        gizmo::renderer::components::MaterialType::Skybox => 2.0,
-                        gizmo::renderer::components::MaterialType::Unlit => 1.0,
-                        // `backdrop.wgsl` never reads this field (it has its own pipeline);
-                        // 1.0 keeps it on the "not deferred PBR" side regardless.
-                        gizmo::renderer::components::MaterialType::Backdrop
-                        | gizmo::renderer::components::MaterialType::BackdropPlaced => 1.0,
-                        _ => 0.0,
-                    },
+                    routing.instance_flag,
                     packed_params,
                     mat.ambient.to_array(),
                     mat.emissive.to_array(),
@@ -357,13 +350,16 @@ pub fn execute_render_pipeline(
                 // Routing flags — part of the batch key (see BatchKey docs) so a
                 // shared cached texture bind group can't merge materials that route
                 // or cast shadows differently.
-                let is_skybox =
-                    mat.material_type == gizmo::renderer::components::MaterialType::Skybox;
-                let is_grid = mat.material_type == gizmo::renderer::components::MaterialType::Grid;
-                let is_unlit =
-                    mat.material_type == gizmo::renderer::components::MaterialType::Unlit;
-                let is_backdrop =
-                    gizmo::renderer::backdrop::is_backdrop(mat.material_type);
+                // One decision, in `gizmo-renderer::routing`, shared with the engine's own draw
+                // loop. This match used to be written out here with a `_ => 0.0` arm, and the
+                // engine's copy had a different set of arms: `BakedLit` was routed there and fell
+                // through the wildcard here, so a baked-lit level shaded one way in the game and
+                // another in this editor. Reading the shared answer is what fixes that — and it is
+                // a **visible change to this viewport**, which nothing here can test.
+                let is_skybox = routing.is_skybox;
+                let is_grid = routing.is_grid;
+                let is_unlit = routing.unlit_material;
+                let is_backdrop = routing.is_backdrop;
 
                 let batches = if mat.is_transparent {
                     &mut *transparent_batches
