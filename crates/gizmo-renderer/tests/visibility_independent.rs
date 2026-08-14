@@ -926,7 +926,14 @@ fn objects_straddling_node_and_frustum_boundaries_are_selected_identically() {
 /// maintenance step would do.
 #[test]
 fn the_differential_catches_a_leaf_box_that_is_too_small() {
-    let scene = Scene::city(600, 0xFA11_5E00);
+    // **The town has to be bigger than the frusta or this test proves nothing.** It used
+    // `Scene::city(600, …)`, whose extent works out at ~191 m — comfortably inside a 400 m shadow
+    // range, so once the cascade fit moved to a bounding sphere (2026-08-14, csm.rs) the boxes grew
+    // by ~1.45x and swallowed the whole scene. With nothing straddling a frustum plane, a shrunken
+    // leaf box loses nothing and the assertion below failed for a reason that had nothing to do
+    // with the index. The fault is real either way; the scene simply stopped being able to express
+    // it. 700 m puts a good part of the town outside, and the shrink stays at the same 40 %.
+    let scene = Scene::city_extent(600, 0xFA11_5E00, 700.0);
     let frusta = scene.all_frusta();
 
     let mut good = RenderAabbTree::with_fat_margin(0.0);
