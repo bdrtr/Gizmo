@@ -12,6 +12,9 @@
 //! examples here spell it `KeyCode as u32` — and it must stay stable, or saved bindings and
 //! recorded replays silently start meaning different keys.
 
+pub mod keys;
+pub use keys::{code_from_name, NAMED_KEYS};
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 

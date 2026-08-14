@@ -21,51 +21,47 @@ pub fn register_input_api(lua: &Lua) -> Result<(), LuaError> {
     input_table.set("_mouse_right", false)?;
     input_table.set("_mouse_middle", false)?;
 
+    // The name → key-code table comes from `gizmo_core::input::NAMED_KEYS`, not from a copy
+    // written here. The copy this replaces held USB HID usage codes (`w = 17`, `space = 44`)
+    // while the engine stores winit `KeyCode` discriminants, so EVERY entry was wrong — and
+    // `down`/`right` held each other's codes, which meant a script reading the arrow keys moved
+    // the player right when they pressed down. `gizmo-app` carries the test that proves the
+    // table, because it is the crate that can see the enum.
+    let key_map = lua.create_table()?;
+    for (name, code) in gizmo_core::input::NAMED_KEYS {
+        key_map.set(*name, *code)?;
+    }
+    input_table.set("_key_map", key_map)?;
+
     lua.globals().set("input", input_table)?;
 
     // Lua helper fonksiyonlarını tanımla
     lua.load(
         r#"
-        -- Tuş adından KeyCode'a eşleme tablosu
-        local key_map = {
-            w = 17, a = 4, s = 22, d = 7,
-            q = 20, e = 8, r = 21, f = 9,
-            z = 29, x = 27, c = 6, v = 25,
-            space = 44, lshift = 225, rshift = 229,
-            lctrl = 224, rctrl = 228,
-            tab = 43, escape = 41, enter = 40,
-            up = 82, down = 81, left = 80, right = 79,
-            ["1"] = 30, ["2"] = 31, ["3"] = 32, ["4"] = 33,
-            ["5"] = 34, ["6"] = 35, ["7"] = 36, ["8"] = 37,
-            ["9"] = 38, ["0"] = 39,
-            i = 12, j = 13, k = 14, l = 15,
-            b = 5, n = 18, m = 16,
-        }
-        
         function input.is_pressed(key_name)
-            local code = key_map[string.lower(key_name)]
+            local code = input._key_map[string.lower(key_name)]
             if code and input._keys[code] then
                 return true
             end
             return false
         end
-        
+
         function input.is_just_pressed(key_name)
-            local code = key_map[string.lower(key_name)]
+            local code = input._key_map[string.lower(key_name)]
             if code and input._just_keys[code] then
                 return true
             end
             return false
         end
-        
+
         function input.mouse_position()
             return { x = input._mouse_x, y = input._mouse_y }
         end
-        
+
         function input.mouse_delta()
             return { x = input._mouse_dx, y = input._mouse_dy }
         end
-        
+
         function input.is_mouse_pressed(button)
             if button == "left" then return input._mouse_left
             elseif button == "right" then return input._mouse_right
@@ -129,72 +125,129 @@ pub fn update_input_api(lua: &Lua, input: &Input) -> Result<(), LuaError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gizmo_core::input::code_from_name;
 
-    /// Regression: 'n' ve 'w' aynı keycode'a (17) eşlenmemeli.
-    /// Sadece 'w' basılıyken input.is_pressed("n") false dönmeli.
+    /// Marks exactly the named keys as held, by looking their codes up the same way the API does.
+    ///
+    /// The codes are NOT written out here. They were, and that is how these tests went on passing
+    /// while every one of them described the wrong keyboard: the table under test and the table in
+    /// the test were the same transcription of USB HID codes, so they agreed with each other and
+    /// with nothing else.
+    fn press(lua: &Lua, held: &[&str], just: &[&str]) {
+        let entries = |names: &[&str]| {
+            names
+                .iter()
+                .map(|n| format!("[{}] = true", code_from_name(n).expect("known key")))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        lua.load(format!(
+            "input._keys = {{ {} }} input._just_keys = {{ {} }}",
+            entries(held),
+            entries(just)
+        ))
+        .exec()
+        .unwrap();
+    }
+
+    /// Regression: 'n' and 'w' must not share a code, and each must answer on its own.
     #[test]
     fn n_and_w_keys_do_not_collide() {
         let lua = Lua::new();
         register_input_api(&lua).unwrap();
 
-        // Yalnızca keycode 17 (w) basılı olarak işaretle.
+        press(&lua, &["w"], &[]);
         lua.load(
             r#"
-            input._keys = { [17] = true }
-            assert(input.is_pressed("w") == true, "w basılı olmalı")
-            assert(input.is_pressed("n") == false, "n basılı OLMAMALI (w ile çakışma)")
+            assert(input.is_pressed("w") == true, "w basili olmali")
+            assert(input.is_pressed("n") == false, "n basili OLMAMALI (w ile cakisma)")
             "#,
         )
         .exec()
         .unwrap();
 
-        // Ayrıca 'n' kendi keycode'unda çalışmalı.
+        press(&lua, &["n"], &[]);
         lua.load(
             r#"
-            input._keys = { [18] = true }
-            assert(input.is_pressed("n") == true, "n kendi keycode'unda basılı olmalı")
-            assert(input.is_pressed("w") == false, "w basılı OLMAMALI")
+            assert(input.is_pressed("n") == true, "n kendi keycode'unda basili olmali")
+            assert(input.is_pressed("w") == false, "w basili OLMAMALI")
             "#,
         )
         .exec()
         .unwrap();
     }
 
-    /// is_just_pressed _just_keys tablosundan okumalı ve _keys'ten BAĞIMSIZ olmalı:
-    /// sürekli basılı (_keys) ama bu frame basılmamış (_just_keys yok) → is_just_pressed false.
+    /// The arrow keys, because the old table had `down` and `right` holding each other's codes —
+    /// a script reading them moved the player right when the player pressed down.
+    ///
+    /// This checks the *plumbing*: that a name reaches the slot it looked up. It cannot check that
+    /// the numbers are right, because it gets them from the same table the API does — that is
+    /// `gizmo-app`'s `key_convention` test, which compares them against the winit enum.
+    #[test]
+    fn the_arrow_keys_are_not_swapped() {
+        let lua = Lua::new();
+        register_input_api(&lua).unwrap();
+
+        press(&lua, &["down"], &[]);
+        lua.load(
+            r#"
+            assert(input.is_pressed("down") == true, "asagi basili")
+            assert(input.is_pressed("right") == false, "sag basili DEGIL")
+            assert(input.is_pressed("up") == false and input.is_pressed("left") == false)
+            "#,
+        )
+        .exec()
+        .unwrap();
+
+        press(&lua, &["right"], &[]);
+        lua.load(
+            r#"
+            assert(input.is_pressed("right") == true, "sag basili")
+            assert(input.is_pressed("down") == false, "asagi basili DEGIL")
+            "#,
+        )
+        .exec()
+        .unwrap();
+    }
+
+    /// `is_just_pressed` reads `_just_keys` and is independent of `_keys`: a key held from an
+    /// earlier frame is pressed but not just-pressed.
     #[test]
     fn is_just_pressed_is_independent_from_held() {
         let lua = Lua::new();
         register_input_api(&lua).unwrap();
+
+        press(&lua, &["space"], &[]);
         lua.load(
             r#"
-            input._keys = { [44] = true }        -- space sürekli basılı
-            input._just_keys = {}                -- ama bu frame basılmadı
-            assert(input.is_pressed("space") == true, "space sürekli basılı")
-            assert(input.is_just_pressed("space") == false, "space bu frame basılmadı")
-
-            input._just_keys = { [44] = true }   -- şimdi bu frame basıldı
-            assert(input.is_just_pressed("space") == true, "space bu frame basıldı")
+            assert(input.is_pressed("space") == true, "space surekli basili")
+            assert(input.is_just_pressed("space") == false, "space bu frame basilmadi")
             "#,
         )
         .exec()
         .unwrap();
+
+        press(&lua, &["space"], &["space"]);
+        lua.load(r#"assert(input.is_just_pressed("space") == true, "space bu frame basildi")"#)
+            .exec()
+            .unwrap();
     }
 
-    /// Tuş adları büyük/küçük harf duyarsız olmalı; bilinmeyen ad false dönmeli;
-    /// rakam tuşları ("1".."0") kendi keycode'larına eşlenmeli.
+    /// Names are case-insensitive, an unknown name is false rather than an error, and the digit
+    /// row answers on its own codes.
     #[test]
     fn key_name_casing_unknown_and_digits() {
         let lua = Lua::new();
         register_input_api(&lua).unwrap();
+
+        press(&lua, &["w", "1"], &[]);
         lua.load(
             r#"
-            input._keys = { [17] = true, [30] = true }  -- w ve "1"
-            assert(input.is_pressed("W") == true, "büyük harf W basılı sayılmalı")
-            assert(input.is_pressed("w") == true, "küçük harf w basılı")
-            assert(input.is_pressed("1") == true, "rakam tuşu 1 (keycode 30)")
+            assert(input.is_pressed("W") == true, "buyuk harf W basili sayilmali")
+            assert(input.is_pressed("w") == true, "kucuk harf w basili")
+            assert(input.is_pressed("1") == true, "rakam tusu 1")
             assert(input.is_pressed("bilinmeyen_tus") == false, "haritada olmayan ad false")
-            assert(input.is_pressed("2") == false, "basılmayan rakam false")
+            assert(input.is_pressed("2") == false, "basilmayan rakam false")
             "#,
         )
         .exec()
@@ -241,7 +294,7 @@ mod tests {
         register_input_api(&lua).unwrap();
 
         let mut input = Input::default();
-        input.on_key_pressed(17); // 'w'
+        input.on_key_pressed(code_from_name("w").unwrap());
         input.set_mouse_position(200.0, 100.0);
         input.on_mouse_delta(5.0, -2.0);
         input.on_mouse_button_pressed(mouse::RIGHT);
