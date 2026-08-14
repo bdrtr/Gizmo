@@ -104,6 +104,29 @@ pub struct LightData {
     pub params: [f32; 4], // x=outer_cutoff_cos, y=light_type (0=point,1=spot,2=directional), zw=unused
 }
 
+/// Pack the anisotropy/clear-coat/subsurface triple into the one spare `InstanceRaw` slot.
+///
+/// Private on purpose: [`InstanceRaw::new`] is the only producer, because `gbuffer.wgsl`'s decoder
+/// is the only consumer and the two must agree digit for digit. When this was a helper each render
+/// path called for itself, they stopped agreeing — see the constructor's docs.
+///
+/// Two decimal digits per field, not three, and that is a correctness bound rather than taste. An
+/// `f32` holds integers exactly only up to 2^24 = 16 777 216 — eight digits, and not even all of
+/// those. Three fields of three digits needs nine, and past the limit the step exceeds 1, so the
+/// low field rounds *into* its neighbour: with the old layout, anisotropy 1.0 (clamped to 999) and
+/// any subsurface ≥ 0.16 rounded 999 up to 1000 and carried, reading back as anisotropy **0.0**
+/// with a phantom clear_coat. Which is precisely the overflow the `.min()` clamps were added to
+/// stop — f32 rounding simply reintroduced it further up the range, where the endpoint test was
+/// not looking.
+///
+/// Six digits caps the packed value at 999 999, seventeen times under the limit, and the round
+/// trip is exact for every combination at the 1 % resolution the subsurface field always had.
+fn pack_pbr_params(anisotropy: f32, clear_coat: f32, subsurface: f32) -> f32 {
+    (anisotropy * 100.0).floor().min(99.0)
+        + 100.0 * (clear_coat * 100.0).floor().min(99.0)
+        + 10_000.0 * (subsurface * 100.0).floor().min(99.0)
+}
+
 impl Default for LightData {
     /// An unlit slot: zero intensity, zero radius, pointing down.
     ///
@@ -201,7 +224,11 @@ pub struct InstanceRaw {
     pub roughness: f32,
     pub metallic: f32,
     pub unlit: f32,
-    pub _padding: f32,
+    /// The anisotropy/clear-coat/subsurface triple, packed into one f32 — the `.w` of the
+    /// shader's `pbr` vec4. Called `_padding` until 2026-08-15, which is part of how two render
+    /// paths came to pack it two different ways: a slot named "padding" reads as a slot nobody
+    /// has to get right. Written only by [`InstanceRaw::new`].
+    pub packed_pbr_params: f32,
     /// xyz = ambient light reaching this surface regardless of the sun (linear, added to the
     /// baked/vertex term BEFORE the albedo multiply, so it tints with the surface); w unused.
     ///
@@ -226,22 +253,32 @@ impl InstanceRaw {
     /// `Material` owns a `wgpu::BindGroup`, so taking one would put this mapping out of reach
     /// of any test that does not open a GPU adapter.
     ///
-    /// `packed_params` is the anisotropy/clear-coat/subsurface triple packed into one f32 by
-    /// the caller (`gbuffer.wgsl` unpacks it); `unlit` is the shading-route flag
-    /// (0 = deferred PBR, 1 = unlit/baked-lit, 2 = skybox).
+    /// The anisotropy/clear-coat/subsurface triple is packed into one f32 slot **here**, by
+    /// [`pack_pbr_params`], rather than by the caller. It was the caller's job until the two
+    /// paths were compared: the engine packed two decimal digits per field and studio still
+    /// packed three, which is the layout the engine abandoned because it overflows `f32`'s
+    /// exact-integer range. `gbuffer.wgsl` decodes the two-digit layout, so studio's instances
+    /// would have decoded as a different material entirely — inert only because the editor's
+    /// forward pipeline never reaches that shader. A value with one producer and one consumer
+    /// should not be assembled at the call site.
+    ///
+    /// `unlit` is the shading-route flag (0 = deferred PBR, 1 = unlit/baked-lit, 2 = skybox).
     ///
     /// `ambient` and `emissive` are floored at zero here, not only in the `Material` builders:
     /// the fields on `Material` are `pub`, so a builder-side clamp is not an enforcement
     /// point. Light that subtracts is always a mistake, and it would drive the shader's
     /// `lit + ambient` negative. (`f32::max` also drops NaN, which would otherwise poison the
     /// whole fragment.)
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         model: [[f32; 4]; 4],
         albedo_color: [f32; 4],
         roughness: f32,
         metallic: f32,
         unlit: f32,
-        packed_params: f32,
+        anisotropy: f32,
+        clear_coat: f32,
+        subsurface: f32,
         ambient: [f32; 3],
         emissive: [f32; 3],
     ) -> Self {
@@ -251,7 +288,7 @@ impl InstanceRaw {
             roughness,
             metallic,
             unlit,
-            _padding: packed_params,
+            packed_pbr_params: pack_pbr_params(anisotropy, clear_coat, subsurface),
             ambient: [ambient[0].max(0.0), ambient[1].max(0.0), ambient[2].max(0.0), 0.0],
             emissive: [emissive[0].max(0.0), emissive[1].max(0.0), emissive[2].max(0.0), 0.0],
         }
@@ -395,7 +432,10 @@ mod tests {
             0.5,
             0.6,
             1.0,
-            777.0,
+            // Distinct per field so a swapped pair cannot pass the packed round trip below.
+            0.77,
+            0.055,
+            0.33,
             [0.01, 0.02, 0.03],
             [4.0, 5.0, 6.0],
         );
@@ -404,7 +444,11 @@ mod tests {
         assert_eq!(i.roughness, 0.5);
         assert_eq!(i.metallic, 0.6);
         assert_eq!(i.unlit, 1.0);
-        assert_eq!(i._padding, 777.0, "packed pbr params ride the old _padding slot");
+        assert_eq!(
+            i.packed_pbr_params,
+            pack_pbr_params(0.77, 0.055, 0.33),
+            "the constructor packs the triple; no call site may assemble this slot"
+        );
         // Distinct values on both sides so a swapped pair cannot pass.
         assert_eq!(i.ambient, [0.01, 0.02, 0.03, 0.0], "ambient must not pick up emissive");
         assert_eq!(i.emissive, [4.0, 5.0, 6.0, 0.0], "emissive must not pick up ambient");
@@ -423,6 +467,8 @@ mod tests {
             0.0,
             0.0,
             0.0,
+            0.0,
+            0.0,
             [0.0; 3],
             [0.0; 3],
         );
@@ -437,6 +483,8 @@ mod tests {
         let i = InstanceRaw::new(
             [[0.0; 4]; 4],
             [1.0; 4],
+            0.0,
+            0.0,
             0.0,
             0.0,
             0.0,
@@ -512,5 +560,100 @@ mod tests {
         assert!(!UvTransform { scale: [1.0, 2.0], ..Default::default() }.is_identity());
         // A non-unit scale of exactly 0 is still "not identity".
         assert!(!UvTransform { scale: [0.0, 0.0], ..Default::default() }.is_identity());
+    }
+}
+
+#[cfg(test)]
+mod pbr_pack_tests {
+    use super::pack_pbr_params;
+    use super::InstanceRaw;
+
+    // Mirror gbuffer.wgsl fs_main's unpack of packed_params (in.inst_pbr.w) exactly.
+    fn unpack(w: f32) -> (f32, f32, f32) {
+        let subsurface = (w / 10_000.0).floor() / 100.0;
+        let rem = w - (w / 10_000.0).floor() * 10_000.0;
+        let clear_coat = (rem / 100.0).floor() / 100.0;
+        let anisotropy = (rem - (rem / 100.0).floor() * 100.0) / 100.0;
+        (anisotropy, clear_coat, subsurface)
+    }
+
+    /// The packer is private and the constructor is its only caller, so the round trip that
+    /// actually ships is the one through `InstanceRaw::new` — including that the three values
+    /// arrive in the right order. A swapped pair here is a material that shades as a different
+    /// material, which is what the editor's own copy of this packing was doing.
+    #[test]
+    fn the_constructor_packs_what_the_shader_decodes() {
+        let i = InstanceRaw::new(
+            [[0.0; 4]; 4],
+            [1.0; 4],
+            0.5,
+            0.0,
+            0.0,
+            0.3,
+            0.7,
+            0.05,
+            [0.0; 3],
+            [0.0; 3],
+        );
+        let (aniso, cc, ss) = unpack(i.packed_pbr_params);
+        assert!((aniso - 0.3).abs() <= 0.011, "anisotropy {aniso}");
+        assert!((cc - 0.7).abs() <= 0.011, "clear_coat {cc}");
+        assert!((ss - 0.05).abs() <= 0.011, "subsurface {ss}");
+    }
+
+    // Regression: the legal clamped endpoint 1.0 must NOT overflow its 3-digit field into
+    // the neighbour. Before the clamp, clear_coat=1.0 packed as floor(1000)*1000
+    // which carried into the subsurface field (three-digit layout, since abandoned) → clear_coat read back as 0 and a phantom
+    // subsurface≈0.01 appeared. Symmetric for anisotropy=1.0.
+    #[test]
+    fn endpoint_one_does_not_overflow_into_neighbours() {
+        // clear_coat = 1.0, others 0 → clear_coat must survive (~0.999), no phantom subsurface.
+        let (aniso, cc, ss) = unpack(pack_pbr_params(0.0, 1.0, 0.0));
+        assert!(cc >= 0.99, "clear_coat=1.0 lost (got {cc})");
+        assert_eq!(ss, 0.0, "clear_coat=1.0 leaked a phantom subsurface ({ss})");
+        assert_eq!(aniso, 0.0, "clear_coat=1.0 leaked into anisotropy ({aniso})");
+
+        // anisotropy = 1.0 → survives, no leak into clear_coat.
+        let (aniso, cc, ss) = unpack(pack_pbr_params(1.0, 0.0, 0.0));
+        assert!(aniso >= 0.99, "anisotropy=1.0 lost (got {aniso})");
+        assert_eq!(cc, 0.0, "anisotropy=1.0 leaked into clear_coat ({cc})");
+        assert_eq!(ss, 0.0, "anisotropy=1.0 leaked into subsurface ({ss})");
+    }
+
+    // Ordinary mid-range values round-trip within the decimal-packing resolution.
+    #[test]
+    fn mid_range_values_round_trip() {
+        let (aniso, cc, ss) = unpack(pack_pbr_params(0.3, 0.7, 0.05));
+        assert!((aniso - 0.3).abs() <= 0.011, "aniso {aniso}");
+        assert!((cc - 0.7).abs() <= 0.011, "clear_coat {cc}");
+        assert!((ss - 0.05).abs() <= 0.011, "subsurface {ss}");
+    }
+
+    /// The endpoint test above only ever tried subsurface 0, and that is where this hid.
+    ///
+    /// Every field must survive every combination of the other two, which the old three-digit
+    /// layout did not: `anisotropy = 1.0` with `subsurface ≥ 0.16` pushed the packed value past
+    /// 2^24, where an f32's step exceeds 1, so the clamped 999 rounded to 1000 and carried into
+    /// the clear-coat field. Anisotropy read back as **0.0** — full anisotropy rendering as none.
+    /// Swept rather than spot-checked, because a spot check is exactly what missed it.
+    #[test]
+    fn every_combination_round_trips() {
+        for i in 0..=100 {
+            for j in (0..=100).step_by(5) {
+                for k in (0..=100).step_by(5) {
+                    let (a, c, s) = (i as f32 / 100.0, j as f32 / 100.0, k as f32 / 100.0);
+                    let (da, dc, ds) = unpack(pack_pbr_params(a, c, s));
+                    for (got, want, name) in
+                        [(da, a, "anisotropy"), (dc, c, "clear_coat"), (ds, s, "subsurface")]
+                    {
+                        assert!(
+                            (got - want).abs() <= 0.011,
+                            "{name} {want} came back as {got} (a={a} c={c} s={s}) — a field is \
+                             carrying into its neighbour"
+                        );
+                    }
+                }
+            }
+        }
     }
 }

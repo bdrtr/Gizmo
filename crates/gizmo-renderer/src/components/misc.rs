@@ -67,6 +67,31 @@ impl LodGroup {
         self.select_level(distance).map(|i| &self.levels[i].mesh)
     }
 
+    /// Which mesh an entity draws this frame: the LOD level for `distance` if it has a group,
+    /// its own [`Mesh`](super::mesh::Mesh) if it does not, and `None` — cull — past the last
+    /// level.
+    ///
+    /// Both render paths ask this question and each answered it inline, in eight lines that had
+    /// to agree on all three cases: that a group **overrides** the entity's own mesh rather than
+    /// competing with it, and that running off the end of the levels means "do not draw" rather
+    /// than "draw the coarsest". They did agree, which is the good case and not a durable one —
+    /// `LodGroup` was honoured only by the editor for a long time, so the engine's copy of this
+    /// is younger than the feature.
+    ///
+    /// Takes the distance rather than the positions: the two paths reach the entity's world
+    /// translation by different routes (a `GlobalTransform` here, the assembled model matrix
+    /// there) and that part is genuinely theirs.
+    pub fn pick<'a>(
+        group: Option<&'a Self>,
+        own_mesh: &'a super::mesh::Mesh,
+        distance: f32,
+    ) -> Option<&'a super::mesh::Mesh> {
+        match group {
+            Some(lod) => lod.select_mesh(distance),
+            None => Some(own_mesh),
+        }
+    }
+
     /// Which level a distance falls in, or `None` past the last one.
     ///
     /// The policy on its own, separated from the mesh it picks. A [`super::mesh::Mesh`] owns

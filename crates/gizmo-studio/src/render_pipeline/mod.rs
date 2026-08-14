@@ -262,22 +262,17 @@ pub fn execute_render_pipeline(
                 }
 
                 // --- LOD (Level of Detail) SEÇİMİ ---
-                // Eğer entity'de LodGroup varsa, kameraya mesafeye göre düşük/yüksek detay mesh seç
-                let lods = &lod_groups;
-                let active_mesh_opt = if let Some(lod) = lods.get(e) {
-                    let world_pos = Vec3::new(model.w_axis.x, model.w_axis.y, model.w_axis.z);
-                    let dist = cam_pos.distance(world_pos);
-                    lod.select_mesh(dist)
-                } else {
-                    Some(mesh)
-                };
-
-                let active_mesh = match active_mesh_opt {
+                // Hangi mesh çizilecek sorusunun cevabı ortak (`LodGroup::pick`); bize ait olan
+                // yalnız mesafenin nereden ölçüldüğü — burada birleştirilmiş model matrisinden.
+                let dist = cam_pos.distance(Vec3::new(model.w_axis.x, model.w_axis.y, model.w_axis.z));
+                let active_mesh = match gizmo::renderer::components::LodGroup::pick(
+                    lod_groups.get(e),
+                    mesh,
+                    dist,
+                ) {
                     Some(m) => m,
                     None => continue, // CULL edildi!
                 };
-
-                let packed_params = (mat.anisotropy * 1000.0).floor() + 1000.0 * (mat.clear_coat * 1000.0).floor() + 1000000.0 * (mat.subsurface * 100.0).floor() ;
 
                 let instance_data = InstanceRaw::new(
                     model.to_cols_array_2d(),
@@ -285,7 +280,9 @@ pub fn execute_render_pipeline(
                     mat.roughness,
                     mat.metallic,
                     routing.instance_flag,
-                    packed_params,
+                    mat.anisotropy,
+                    mat.clear_coat,
+                    mat.subsurface,
                     mat.ambient.to_array(),
                     mat.emissive.to_array(),
                 );

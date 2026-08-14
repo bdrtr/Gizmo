@@ -889,10 +889,34 @@ Kök kayıtlı ("The root the sweep could not see"). İki kesim yapıldı:
    `GameRenderTarget` yalnız editörde (tanımı gereği). Kırılabildiği doğrulandı: yeni bir bileşen
    eklenip tek yola bağlandı, bir de bayat istisna kondu; ikisi de kırmızıya düştü.
 
-Bu kökün kayıtlı adımlarının hepsi kapandı. Açık kalan gerçek iş, testin *ölçüp* kapatamadığı şey:
-çizim listesi hâlâ iki ayrı uygulama (`collect_draw_items` ve studio'nun batching'i), ve
-`SceneSetup` sahne bloğunu taşıyor, çizim listesini değil. Envanter yeni bir yeteneğin tek yolda
-kalmasını yakalar; ikisini tek koda indirmez.
+5. **Çizim listesindeki iki ortak karar (2026-08-15).** Envanter "hangi yetenek hangi yolda"yı
+   ölçüyor; asıl ayrışma ise iki döngünün **aynı soruya ayrı ayrı cevap vermesi**. İkisi bulundu,
+   biri gerçekten kopmuştu:
+   - **PBR paketleme — canlı sürüklenme.** Anizotropi/clear-coat/subsurface üçlüsü tek bir f32
+     yuvasına paketleniyor. Motor alan başına **iki** ondalık hane kullanıyor; studio hâlâ **üç**
+     kullanıyordu — yani motorun *terk ettiği* düzen: dokuz hane `f32`'nin tam-tamsayı sınırını
+     (2^24) aşıyor ve alt alan komşusuna taşıyor. `gbuffer.wgsl` iki haneyi çözüyor, dolayısıyla
+     studio'nun instance'ları **başka bir malzeme** olarak çözülürdü. Bugün etkisiz, çünkü
+     editörün forward hattı o shader'a hiç uğramıyor — `cascade_params.x` ile aynı sınıf: gerçek
+     sürüklenme, bedeli şimdilik sıfır. Paketleme artık `InstanceRaw::new`'un içinde ve fonksiyon
+     **private**; çağrı yerinde yazılamıyor. Yuvanın adı da düzeltildi: `_padding` → 
+     `packed_pbr_params` ("padding" diye anılan bir yuva, kimsenin doğru yapmak zorunda olmadığı
+     bir yuva gibi okunuyor — iki yolun ayrı paketlemesinin bir sebebi bu).
+   - **LOD seçimi.** "Bu entity hangi mesh'i çiziyor" üç durumlu bir cevap (grup entity'nin kendi
+     mesh'ini *ezer*; son seviyeyi geçen mesafe **cull** demek, en kaba seviyeyi çizmek değil) ve
+     iki yerde satır içi yazılıydı. Uyuşuyorlardı — iyi durum, ama kalıcı değil: `LodGroup` uzun
+     süre yalnız editörde onurlandırıldı, motorun kopyası özellikten genç. Artık
+     `LodGroup::pick`; mesafenin nereden ölçüldüğü (biri `GlobalTransform`, öteki birleştirilmiş
+     model matrisi) her yolun kendi işi olarak kalıyor. Motordaki "studio mesh merkezine ölçüyor"
+     yorumu da yanlıştı, silindi.
+
+   Bekçi: iki çizim döngüsü `select_mesh`'i doğrudan çağıramaz ve `packed_pbr_params`'ı elle
+   yazamaz. Kırılabildiği doğrulandı.
+
+Açık kalan: çizim listesi hâlâ iki ayrı uygulama. Tek tek ortak kararlar (routing, uniform bloğu,
+kurulum, LOD, paketleme) tek kaynağa indi; `collect_draw_items` ile studio'nun batching'i **tek
+koda** inmedi ve inmesi de kendi başına bir karar — pass kaydı gerçekten ayrı, ayıran çizgi
+"dünyayı okuyan kısım ortak, komut kaydeden kısım ayrı" olarak tutuluyor.
 
 **İnsan gözü isteyen iki yer:** (1) editör viewport'unda DoF artık kameranın gerçek near/far'ıyla
 lineerleşiyor — varsayılan kamerada (0.1/2000) fark yok, farklı far düzlemli sahnede odak doğru

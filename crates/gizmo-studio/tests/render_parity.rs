@@ -263,6 +263,47 @@ fn neither_render_path_builds_its_own_scene_setup() {
     );
 }
 
+/// The two per-entity decisions the draw loops used to answer for themselves.
+///
+/// Both are settled now — `LodGroup::pick` decides which mesh an entity draws, `InstanceRaw::new`
+/// packs the anisotropy/clear-coat/subsurface triple — and both were re-derived inline before
+/// that. The packing is the one that had actually come apart: the engine packs two decimal digits
+/// per field, studio still packed three, and three is the layout the engine abandoned because nine
+/// digits exceed `f32`'s exact-integer range. `gbuffer.wgsl` decodes two digits, so studio's
+/// instances would have decoded as a different material — inert only because the editor's forward
+/// pipeline never reaches that shader.
+///
+/// A path that reaches past these answers is out of the comparison again, so it fails here.
+#[test]
+fn neither_draw_loop_answers_the_shared_per_entity_questions_itself() {
+    let (game, editor) = draw_path_sources();
+    let mut offenders = Vec::new();
+    for (path, text) in [("game", &game), ("editor", &editor)] {
+        for (i, line) in text.lines().enumerate() {
+            if line.trim_start().starts_with("//") {
+                continue;
+            }
+            // `select_mesh` is public API a game may call; inside a draw loop it means the
+            // three-case answer (override / fall back / cull) is being rewritten.
+            if line.contains(".select_mesh(") {
+                offenders.push(format!(
+                    "{path} path line {}: calls `select_mesh` directly — use `LodGroup::pick`, \
+                     which also decides the no-group and past-the-last-level cases",
+                    i + 1
+                ));
+            }
+            if line.contains("packed_pbr_params") {
+                offenders.push(format!(
+                    "{path} path line {}: assembles the packed PBR slot — `InstanceRaw::new` \
+                     packs it, and it must agree with gbuffer.wgsl's decoder digit for digit",
+                    i + 1
+                ));
+            }
+        }
+    }
+    assert!(offenders.is_empty(), "draw loops answering shared questions again:\n  {}", offenders.join("\n  "));
+}
+
 /// The capability inventory: a render component the engine exports must be known to **both** draw
 /// paths, or be named below with the reason it is not.
 ///
@@ -397,6 +438,33 @@ fn every_render_capability_is_known_to_both_draw_paths() {
         undeclared.join("\n  "),
         stale.join("\n  ")
     );
+}
+
+/// The two render paths' sources as text, `(game, editor)`.
+///
+/// `shared.rs` sits inside the game path's directory but belongs to both, so it is not either
+/// path's own code and is left out.
+fn draw_path_sources() -> (String, String) {
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("workspace root")
+        .to_path_buf();
+    let read_all = |dir: std::path::PathBuf| {
+        let mut files = Vec::new();
+        collect_rs(&dir, &mut files);
+        assert!(!files.is_empty(), "no sources under {}", dir.display());
+        files
+            .iter()
+            .filter(|f| f.file_name().is_some_and(|n| n != "shared.rs"))
+            .map(|f| std::fs::read_to_string(f).unwrap_or_default())
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    (
+        read_all(workspace.join("crates/gizmo/src/systems/render")),
+        read_all(workspace.join("crates/gizmo-studio/src/render_pipeline")),
+    )
 }
 
 fn collect_rs(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
