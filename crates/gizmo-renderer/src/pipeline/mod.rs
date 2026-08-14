@@ -337,6 +337,20 @@ mod tests {
     /// Çekirdek WGSL shader'ları headless device'ta naga ile derlenebilmeli.
     /// shader.wgsl/gbuffer.wgsl düzenlemelerinin (skinned-normal inverse-transpose vb.)
     /// WGSL'i geçersiz kılmadığını doğrular. GPU adapter yoksa graceful atlanır.
+    ///
+    /// **Geçmesi, shader'ın her arka uçta derleneceği anlamına GELMEZ — ve bu bir kez pahalıya
+    /// mal oldu.** Burada olan şey bir `create_shader_module`: naga WGSL'i doğrular. Oysa gerçek
+    /// derleme, naga'nın hedef dili üretip (D3D12'de HLSL) o dilin derleyicisinin (FXC) kabul
+    /// etmesiyle tamamlanır, ve o derleyicinin bu katmanın hiç bilmediği kısıtları vardır.
+    /// 2026-08-14: gölge PCF döngüsü `textureSampleCompare` çağırıyordu — örtük türev — ve
+    /// koşullu bir dalın içindeydi. WGSL'e göre kusursuz, FXC'ye göre *"gradient instruction used
+    /// in a loop with varying iteration"*, ve **Deferred Lighting pipeline'ı Windows'ta hiç
+    /// kurulamıyordu**: D3D12'de motor hiçbir şey çizmiyordu. Bu testin dokuz ay boyunca yeşil
+    /// kaldığı bir kusur.
+    ///
+    /// Arka uca özgü derlemeyi yakalayan tek şey, o arka uçta gerçekten **pipeline kuran** bir
+    /// test: `gizmo`'nun `golden_render_tests`'i, CI'nin üç platformunda üç ayrı arka uç sürüyor.
+    /// Buradaki liste bir tip denetimidir; oradaki liste kapsama.
     #[test]
     fn core_shaders_compile() {
         // Bu test kendi wgpu cihazını kuruyor. Guard testin TAMAMI boyunca tutulur —
