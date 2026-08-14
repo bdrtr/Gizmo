@@ -29,9 +29,13 @@ pub const GBUFFER_NORMAL_ROUGHNESS_FORMAT: wgpu::TextureFormat = wgpu::TextureFo
 // `golden_render_tests::a_scene_renders_the_same_two_kilometres_from_the_origin` is the guard,
 // and it was checked against the old form, where it fails.
 //
-// Still true and still a real limit: the packed subsurface+anisotropy in `.w` quantises the
-// anisotropy fraction when subsurface > 0, because that packing puts a 0..1 value in the low
-// digits of a number above 100. That one is untouched.
+// The other half of that `.w` slot turned out to be worse than quantisation and is now fixed:
+// subsurface goes in the integer part and anisotropy in the fraction, so the pack has to `floor`
+// the integer part or subsurface's own fraction lands in anisotropy's slot. It did not, and the
+// result was not noise but inversion — subsurface 0.234 with anisotropy 0 decoded as 0.82, and
+// the same subsurface with anisotropy 1 decoded as 0. Pinned by
+// `gbuffer_packing_tests::subsurface_and_anisotropy_survive_the_round_trip`, which fails on the
+// old form. Subsurface is still quantised to 1 %, which the `/100` decode always implied.
 pub const GBUFFER_WORLD_POSITION_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 pub const GBUFFER_WORLD_TANGENT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
@@ -487,5 +491,50 @@ impl DeferredState {
             multiview_mask: None,
             cache: None,
         })
+    }
+}
+
+#[cfg(test)]
+mod gbuffer_packing_tests {
+    /// Mirror of `gbuffer.wgsl`'s `packed_ss_aniso`.
+    fn pack(subsurface: f32, anisotropy: f32) -> f32 {
+        (0.5 + 0.49 * anisotropy) + (100.0 * subsurface).floor()
+    }
+
+    /// Mirror of `deferred_lighting.wgsl`'s decode of `pos_sample.w`.
+    fn unpack(w: f32) -> (f32, f32) {
+        let subsurface = w.floor() / 100.0;
+        let anisotropy = ((w - w.floor() - 0.5) / 0.49).clamp(0.0, 1.0);
+        (subsurface, anisotropy)
+    }
+
+    /// The two values packed into the world-position target's `.w` come back out independently.
+    ///
+    /// They did not. The pack was `100.0 * subsurface` without the `floor`, and the decode reads
+    /// the integer part as subsurface and the fraction as anisotropy — which only works when
+    /// `100 · subsurface` is *already* an integer. When it is not, subsurface's own fraction lands
+    /// in anisotropy's slot: subsurface 0.234 with anisotropy 0 decoded as 0.82, and the same
+    /// subsurface with anisotropy 1 decoded as 0. Exactly inverted, which is worse than noise —
+    /// a material with no anisotropy rendered as though it were fully anisotropic.
+    ///
+    /// This is a mirror test, in the same spirit as `csm`'s `shader_shadow_fade_matches_the_rust
+    /// _mirror`: the arithmetic lives in WGSL and cannot be reached from here, so it is restated
+    /// and pinned. Change one side and change the other.
+    #[test]
+    fn subsurface_and_anisotropy_survive_the_round_trip() {
+        for &s in &[0.0f32, 0.07, 0.234, 0.5, 0.777, 0.999, 1.0] {
+            for &a in &[0.0f32, 0.25, 0.5, 1.0] {
+                let (ds, da) = unpack(pack(s, a));
+                // Subsurface is deliberately quantised to 1 % — the `/100` decode always was.
+                assert!(
+                    (ds - s).abs() <= 0.011,
+                    "subsurface {s} came back as {ds} (anisotropy {a})"
+                );
+                assert!(
+                    (da - a).abs() <= 0.02,
+                    "anisotropy {a} came back as {da} — subsurface {s} is leaking into its slot"
+                );
+            }
+        }
     }
 }

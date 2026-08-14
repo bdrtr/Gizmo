@@ -247,7 +247,16 @@ fn fs_main(in: VertexOutput) -> GBufferOut {
     // therefore sampling its shadows from a position rounded to the nearest half-metre. Storing
     // the offset from the camera keeps the same 8 bytes and the values stay view-scale, where f16
     // is good to centimetres anywhere in the world. Every reader adds `camera_pos` back.
-    out.world_position   = vec4<f32>(in.world_position - scene.camera_pos.xyz, (0.5 + 0.49 * anisotropy_raw) + 100.0 * subsurface_raw);
+    // **`floor` before packing, or the two values are not separable.** `.w` carries subsurface in
+    // its integer part and anisotropy in its fraction, and the decoder recovers them with
+    // `floor(w)/100` and `frac(w)`. That only works if `100·subsurface` is already an integer.
+    // It usually is not, and then subsurface's own fraction lands in anisotropy's slot: measured,
+    // subsurface 0.234 with anisotropy **0** decoded as **0.82**, and with anisotropy **1** as
+    // **0**, i.e. exactly inverted. Rounding the integer part here costs the 1 % of subsurface
+    // resolution the `/100` decode was always going to quantise away anyway, and makes the
+    // fraction mean only what it is supposed to.
+    let packed_ss_aniso = (0.5 + 0.49 * anisotropy_raw) + floor(100.0 * subsurface_raw);
+    out.world_position   = vec4<f32>(in.world_position - scene.camera_pos.xyz, packed_ss_aniso);
     out.world_tangent    = vec4<f32>(T, packed_tangent_w);
     return out;
 }

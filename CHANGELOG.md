@@ -679,6 +679,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   reads as fully lit. The sphere fit costs resolution and the figure is recorded next to it:
   texels grow **1.44-1.52x** (4.3 mm/texel on the nearest cascade, 59 mm on the farthest), which
   is the right way round — a crawling edge is far more visible than a texel half again as wide.
+- **Subsurface and anisotropy were not separable where they share a G-buffer channel.** `.w` of the
+  world-position target carries subsurface in its integer part and anisotropy in its fraction, and
+  the pack omitted the `floor` — so unless `100 · subsurface` happened to be an integer, subsurface's
+  own fraction landed in anisotropy's slot. Not noise but inversion: subsurface 0.234 with
+  anisotropy **0** decoded as **0.82**, and with anisotropy **1** as **0**. A material with no
+  anisotropy rendered as though it were fully anisotropic.
 - **The G-buffer held absolute world positions in half floats, so rendering degraded with distance
   from the world origin.** f16 quantises to 6 cm at 100 m, 50 cm at 1 km and a full metre at 2 km,
   against a nearest-cascade shadow texel of 4.3 mm — a city-sized level sampled its shadows, view
