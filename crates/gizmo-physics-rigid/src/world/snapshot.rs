@@ -4,32 +4,112 @@ use std::path::PathBuf;
 
 impl PhysicsWorld {
     /// Deterministik rollback/replay için TAM durum anlık görüntüsü al (bkz [`WorldSnapshot`]).
+    ///
+    /// # Why this destructures instead of reading fields
+    ///
+    /// The pair below used to be two hand-written nine-line lists against a **28-field** struct,
+    /// and every field in [`WorldSnapshot`] carries a comment explaining the divergence that
+    /// earned it a place — gravity fields, joints and weather were each added *after* a
+    /// resimulation ran under state the continuous run no longer had. That is the shape of the
+    /// problem: leaving a field out is not an error, just a rollback that restores less than it
+    /// claims, and the symptom appears somewhere else entirely.
+    ///
+    /// So both directions destructure exhaustively, with **no `..` arm**. Adding a field to
+    /// `PhysicsWorld` (or to `WorldSnapshot`) now fails to compile *here*, which forces the one
+    /// question nobody was being asked: is this carried simulation state, or is it not — and why?
+    /// The `_`-bound names below are that answer, written down.
     pub fn snapshot(&self) -> WorldSnapshot {
+        let PhysicsWorld {
+            // ── Carried state: cannot be rederived from what is kept, so it must travel ──
+            transforms,
+            velocities,
+            rigid_bodies,
+            contact_cache,
+            accumulator,
+            gravity_fields,
+            fluid_zones,
+            joints,
+            weather,
+
+            // ── Configuration. The caller's settings, not the simulation's state: restoring
+            //    them would silently undo a change made since the snapshot was taken.
+            integrator: _,
+            solver: _,
+            joint_solver: _,
+            max_history_frames: _,
+            watchlist: _,
+
+            // ── Derived, and rebuilt before it is read again. The broadphase tree is refreshed
+            //    for every body each substep; a tree still shaped by the rolled-back future is
+            //    only a different pair *order*, which the island solve is invariant to
+            //    (`support_ordering`). The index map is a function of `entities`, which a
+            //    restore requires to be unchanged anyway.
+            spatial_hash: _,
+            entity_index_map: _,
+
+            // ── Output of the last step. Nothing in the pipeline reads these back, and `step`
+            //    clears and refills the event lists.
+            collision_events: _,
+            trigger_events: _,
+            fracture_events: _,
+            metrics: _,
+            render_alpha: _,
+
+            // ── Structure. A restore is index-aligned and therefore *requires* these to be
+            //    identical already; carrying them would hide a caller error rather than fix it.
+            entities: _,
+            colliders: _,
+
+            // ── The caller's control flags, the rollback machinery itself (snapshotting the
+            //    history inside a snapshot), and a preloaded asset cache.
+            is_paused: _,
+            step_once: _,
+            rewind_requested: _,
+            history: _,
+            fracture_cache: _,
+        } = self;
+
         WorldSnapshot {
-            transforms: self.transforms.clone(),
-            velocities: self.velocities.clone(),
-            rigid_bodies: self.rigid_bodies.clone(),
-            contact_cache: self.contact_cache.clone(),
-            accumulator: self.accumulator,
-            gravity_fields: self.gravity_fields.clone(),
-            fluid_zones: self.fluid_zones.clone(),
-            joints: self.joints.clone(),
-            weather: self.weather,
+            transforms: transforms.clone(),
+            velocities: velocities.clone(),
+            rigid_bodies: rigid_bodies.clone(),
+            contact_cache: contact_cache.clone(),
+            accumulator: *accumulator,
+            gravity_fields: gravity_fields.clone(),
+            fluid_zones: fluid_zones.clone(),
+            joints: joints.clone(),
+            weather: *weather,
         }
     }
 
     /// Anlık görüntüyü geri yükle (rollback). entities/colliders aynı kalmalı (aksi halde
     /// indeks hizası bozulur). Sonraki `step` çağrıları bu durumdan deterministik ilerler.
+    ///
+    /// Destructures the snapshot exhaustively for the reason given on [`Self::snapshot`]: a field
+    /// added to [`WorldSnapshot`] and not restored is a snapshot that carries state nothing puts
+    /// back, which is the same silence in the other direction.
     pub fn restore_snapshot(&mut self, snap: &WorldSnapshot) {
-        self.transforms.clone_from(&snap.transforms);
-        self.velocities.clone_from(&snap.velocities);
-        self.rigid_bodies.clone_from(&snap.rigid_bodies);
-        self.contact_cache.clone_from(&snap.contact_cache);
-        self.accumulator = snap.accumulator;
-        self.gravity_fields.clone_from(&snap.gravity_fields);
-        self.fluid_zones.clone_from(&snap.fluid_zones);
-        self.joints.clone_from(&snap.joints);
-        self.weather = snap.weather;
+        let WorldSnapshot {
+            transforms,
+            velocities,
+            rigid_bodies,
+            contact_cache,
+            accumulator,
+            gravity_fields,
+            fluid_zones,
+            joints,
+            weather,
+        } = snap;
+
+        self.transforms.clone_from(transforms);
+        self.velocities.clone_from(velocities);
+        self.rigid_bodies.clone_from(rigid_bodies);
+        self.contact_cache.clone_from(contact_cache);
+        self.accumulator = *accumulator;
+        self.gravity_fields.clone_from(gravity_fields);
+        self.fluid_zones.clone_from(fluid_zones);
+        self.joints.clone_from(joints);
+        self.weather = *weather;
     }
 
     /// Simülasyon durumunun DETERMINISTIK hash'i — rollback/replay desync tespiti + testler.

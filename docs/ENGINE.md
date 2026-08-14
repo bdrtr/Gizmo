@@ -358,6 +358,17 @@ its precision, and a section that silently rewrites itself cannot be checked.
   experimental). It may become an optional feature after 1.0.
 - The historical hashes appearing in this document (AAC365945335779E etc.) are point-in-time;
   they were superseded by later fixes — historical.
+- **What the snapshot carries is a compile-time decision (2026-08-14).** `snapshot()` and
+  `restore_snapshot()` were two hand-written nine-field lists against a 28-field `PhysicsWorld`,
+  and every field in `WorldSnapshot` carries a comment naming the divergence that earned it a
+  place — gravity fields, joints and weather were each added *after* a resimulation ran under
+  state the continuous run no longer had. Omitting a field is not an error, just a rollback that
+  restores less than it claims, and the symptom surfaces somewhere else. Both directions now
+  destructure exhaustively with **no `..` arm**, so a new `PhysicsWorld` (or `WorldSnapshot`)
+  field fails to compile there until someone answers "carried state, or not — and why"; the
+  `_`-bound names are that answer written down. Behaviour is unchanged: the same nine fields
+  travel, `headless_stress_test` gives three matching hashes, and the guard was verified by
+  adding a field and watching `E0027` land on the pattern.
 
 ---
 
@@ -869,8 +880,6 @@ sahnede odak mesafesi doğru yere kayacak. Test edecek bir koşum yok — §3'ü
 
 ### Doğrulanmış ama henüz el atılmamış kökler
 
-- **Determinizm çevresi (çare sağlam).** `snapshot.rs` iki elle yazılmış 9 alanlık liste taşıyor,
-  oysa `PhysicsWorld`'ün 28 alanı var; yeni bir alan sessizce anlık görüntünün dışında kalır.
 - **Crate grafiği / Stage A.** `gizmo-animation` Stage A listesinde ama pratikte öyle değil.
 
 Kapatılanlar (**2026-08-14**), ayrıntısı §7'de:
@@ -886,6 +895,12 @@ Kapatılanlar (**2026-08-14**), ayrıntısı §7'de:
   üstünde ince bir metin sarmalayıcı. Refaktör kendisi için değil: derlenen shader'lar bind-group
   indekslerini satır içi yerleştiriyor (`@group(#{INSTANCE_GROUP})`), yani onları yalnız naga
   okuyamıyor — sözleşme testinin gerçek kompozisyon yoluna ihtiyacı vardı.
+- **Determinizm çevresi** → `snapshot()`/`restore_snapshot()` artık `..` içermeyen **tam yıkım**
+  (destructure) yapıyor: `PhysicsWorld`'e (ya da `WorldSnapshot`'a) eklenen bir alan orada derleme
+  hatası. `_` ile bağlanan 19 alanın her biri gerekçesiyle yazılı — yapılandırma, türetilmiş,
+  çıktı, yapı, kontrol bayrakları. Davranış aynı: aynı dokuz alan taşınıyor,
+  `headless_stress_test` üç eşleşen hash veriyor. Bekçi doğrulandı (alan eklendi, `E0027` desenin
+  üstüne düştü). Ayrıntısı §5'te.
 
 ### Scripting
 
