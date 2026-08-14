@@ -155,7 +155,7 @@ fn sun_visibility(world_pos: vec3<f32>, world_normal: vec3<f32>, view_depth: f32
     for (var x = -1; x <= 1; x++) {
         for (var y = -1; y <= 1; y++) {
             let o = vec2<f32>(f32(x), f32(y)) * texel;
-            sum += textureSampleCompare(t_shadow, s_shadow, shadow_uv + o, ci, ndc.z - bias);
+            sum += textureSampleCompareLevel(t_shadow, s_shadow, shadow_uv + o, ci, ndc.z - bias);
         }
     }
     // Walk the sampled term back to "lit" over the last stretch of the covered range, so the

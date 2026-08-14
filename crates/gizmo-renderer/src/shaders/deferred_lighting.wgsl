@@ -224,7 +224,12 @@ fn filter_pcss(
     for (var x = -grid_size; x <= grid_size; x++) {
         for (var y = -grid_size; y <= grid_size; y++) {
             let offset = vec2<f32>(f32(x), f32(y)) * step;
-            shadow_sum += textureSampleCompare(t_shadow, s_shadow, shadow_uv + offset, ci, receiver_depth - bias);
+            // `textureSampleCompareLevel`, not `textureSampleCompare`: the latter takes implicit
+            // derivatives, and this loop sits inside the non-uniform `shadow_uv` bounds branch. On
+            // D3D12 that is a "gradient instruction used in a loop with varying iteration" and FXC
+            // fails the whole pipeline — the Deferred Lighting pipeline did not compile on Windows
+            // at all, so nothing rendered. A shadow map has no mips, so level 0 is what was meant.
+            shadow_sum += textureSampleCompareLevel(t_shadow, s_shadow, shadow_uv + offset, ci, receiver_depth - bias);
         }
     }
 
@@ -525,7 +530,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
                     // shadow off a flat receiver's contact point.
                     let slope = 1.0 - max(dot(N, normalize(dir_from_light)), 0.0);
                     let bias = max(0.0005 * slope, 0.00005);
-                    let shadow_vis = textureSampleCompare(t_point_shadow, s_shadow, dir_from_light, clip_z - bias);
+                    let shadow_vis = textureSampleCompareLevel(t_point_shadow, s_shadow, dir_from_light, clip_z - bias);
                     atten *= shadow_vis;
                 }
             }

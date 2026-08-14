@@ -116,8 +116,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # This job needs more than the others. The feature powerset turns on `window`, which pulls
+      # winit's Linux backends in, and `wayland-sys`' build script fails outright when pkg-config
+      # cannot find libwayland — "failed to run custom build command", with no mention of a
+      # missing package. Every other job builds a feature set that never reaches winit, which is
+      # why only this one needed them.
       - name: Install Linux dependencies
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev pkg-config
+          libwayland-dev libxkbcommon-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@cargo-hack
       # No `--locked` here on purpose: `--no-dev-deps` rewrites the manifest to drop

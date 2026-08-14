@@ -193,7 +193,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             for (var x = -1; x <= 1; x++) {
                 for (var y = -1; y <= 1; y++) {
                     let offset = vec2<f32>(f32(x), f32(y)) * texel_size;
-                    pcf_visibility += textureSampleCompare(
+                    pcf_visibility += textureSampleCompareLevel(
                         t_shadow, s_shadow,
                         shadow_uv + offset,
                         ci,

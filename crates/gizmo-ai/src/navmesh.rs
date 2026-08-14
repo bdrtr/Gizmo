@@ -22,7 +22,7 @@
 //! [`crate::pathfinding`], not this module.
 
 use gizmo_math::Vec3;
-use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet};
 
 #[cfg(target_arch = "wasm32")]
 use web_time::Instant;
@@ -234,7 +234,7 @@ impl Default for NavMeshConfig {
 }
 
 /// A 2D grid cell (the result of voxelisation)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 struct GridCell {
     x: i32,
     z: i32,
@@ -255,12 +255,18 @@ impl NavMesh {
     /// only at a diagonal become separate regions; an isolated region of fewer than four
     /// cells is dropped altogether. Each surviving region is then carved greedily into
     /// axis-aligned rectangles starting from arbitrarily chosen cells, so the number and
-    /// shape of the polygons is an artefact of hash-set iteration order rather than a
-    /// property of the level. Each `HashSet` is randomly seeded when it is created, not once
-    /// per process, so even two `build_from_physics` calls on the same world inside one run
-    /// can decompose into different polygons with different ids, and paths through open space
-    /// can differ accordingly. Do not persist ids, and do not treat a path as reproducible —
-    /// not across runs, and not between two builds in the same run.
+    /// shape of the polygons follow the order those cells are visited in.
+    ///
+    /// **That order used to be a randomly-seeded `HashSet`'s**, which made the decomposition
+    /// differ between two `build_from_physics` calls on the same world *inside one run* — ids,
+    /// polygon shapes and therefore paths, all unreproducible. It cost a CI failure that could
+    /// not be reproduced locally: `the_height_sampling_band_moves_outside_the_eroded_skirt`
+    /// asked for the polygon covering a point and got one whose floor had been sampled from a
+    /// cell near the obstacle (2.0) or from one that was not (0.0), depending on where the
+    /// greedy expansion happened to start that run. The cell-keyed containers are `BTreeSet` /
+    /// `BTreeMap` now, so a given world decomposes the same way every time. Ids are still not
+    /// worth persisting across a *rebuild* — they follow the geometry, and the geometry follows
+    /// the level — but they no longer change under you for no reason.
     ///
     /// Polygon Y is sampled, not computed: a rectangle takes the highest obstacle top surface
     /// recorded for the one cell the greedy expansion started from, and falls back to `0.0`
@@ -286,8 +292,8 @@ impl NavMesh {
         let cell_size = config.cell_size;
 
         // 1. Voxelization: Statik collider'ları grid'e yaz
-        let mut blocked: HashSet<GridCell> = HashSet::new();
-        let mut walkable_y: HashMap<GridCell, f32> = HashMap::new();
+        let mut blocked: BTreeSet<GridCell> = BTreeSet::new();
+        let mut walkable_y: BTreeMap<GridCell, f32> = BTreeMap::new();
 
         for i in 0..physics.entities.len() {
             let rb = &physics.rigid_bodies[i];
@@ -345,7 +351,7 @@ impl NavMesh {
         let world_min_z = (config.world_min.z / cell_size).floor() as i32;
         let world_max_z = (config.world_max.z / cell_size).ceil() as i32;
 
-        let mut all_walkable: HashSet<GridCell> = HashSet::new();
+        let mut all_walkable: BTreeSet<GridCell> = BTreeSet::new();
         for x in world_min_x..=world_max_x {
             for z in world_min_z..=world_max_z {
                 let cell = GridCell { x, z };
@@ -355,8 +361,8 @@ impl NavMesh {
             }
         }
 
-        let mut visited: HashSet<GridCell> = HashSet::new();
-        let mut regions: Vec<HashSet<GridCell>> = Vec::new();
+        let mut visited: BTreeSet<GridCell> = BTreeSet::new();
+        let mut regions: Vec<BTreeSet<GridCell>> = Vec::new();
 
         for &cell in &all_walkable {
             if visited.contains(&cell) {
@@ -364,7 +370,7 @@ impl NavMesh {
             }
 
             // Flood fill
-            let mut region = HashSet::new();
+            let mut region = BTreeSet::new();
             let mut stack = vec![cell];
 
             while let Some(current) = stack.pop() {
@@ -406,7 +412,7 @@ impl NavMesh {
         let mut poly_id = 0u32;
 
         for region in &regions {
-            let mut remaining: HashSet<GridCell> = region.clone();
+            let mut remaining: BTreeSet<GridCell> = region.clone();
 
             while !remaining.is_empty() {
                 // İlk hücreyi al

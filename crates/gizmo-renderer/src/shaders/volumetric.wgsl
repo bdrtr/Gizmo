@@ -118,7 +118,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             
             if (shadow_uv.x >= 0.0 && shadow_uv.x <= 1.0 && shadow_uv.y >= 0.0 && shadow_uv.y <= 1.0 && light_ndc.z <= 1.0) {
                 let bias = 0.0015;
-                let shadow_val = textureSampleCompare(t_shadow, s_shadow, shadow_uv, ci, light_ndc.z - bias);
+                let shadow_val = textureSampleCompareLevel(t_shadow, s_shadow, shadow_uv, ci, light_ndc.z - bias);
                 
                 if (shadow_val > 0.0) {
                     total_scatter += sun_intensity * sun_phase * shadow_val * step_size;
