@@ -236,7 +236,12 @@ fn fs_main(in: VertexOutput) -> GBufferOut {
     let clear_coat_raw = floor(rem_packed / 100.0) / 100.0;
     let anisotropy_raw = (rem_packed - floor(rem_packed / 100.0) * 100.0) / 100.0;
 
-    let packed_tangent_w = sign(in.world_tangent.w) * (0.01 + 0.99 * clear_coat_raw);
+    // `select`, not `sign`: `sign(0.0)` is 0, which would zero the clear-coat magnitude as well as
+    // the handedness for any mesh whose tangent w is 0. The decoder already resolves 0 to +1
+    // (`tangent_sample.w >= 0.0`); this makes the encoder agree, instead of leaving the two ends
+    // with different ideas about the same edge case.
+    let handedness = select(-1.0, 1.0, in.world_tangent.w >= 0.0);
+    let packed_tangent_w = handedness * (0.01 + 0.99 * clear_coat_raw);
 
     var out: GBufferOut;
     out.albedo_metallic  = vec4<f32>(albedo, metallic);
