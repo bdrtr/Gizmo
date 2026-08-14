@@ -879,10 +879,20 @@ Kök kayıtlı ("The root the sweep could not see"). İki kesim yapıldı:
    değişmedi. Kırılabildiği doğrulandı: "dünyanın kararı" bir politikaya bağlandı ve studio'ya
    doğrudan bir çağrı kondu; ikisi de kırmızıya düştü.
 
-Kalanı hâlâ kayıtta: iki çizim döngüsünün **isim envanterini** karşılaştıran test —
-`frame_uniforms` + `collect_scene_setup` sahne bloğunu ve kurulumu kapatıyor, ama draw-list kurma
-adımındaki (LOD, particle, animasyon) ayrışmayı değil. Bir sonraki doğal adım orası: `SceneSetup`
-şu an sahne bloğunu taşıyor, çizim listesini değil.
+4. **Yetenek envanteri (2026-08-15).** Kayıttaki "~60 satırlık isim envanteri" testi de yazıldı,
+   aynı dosyada. Özneler `gizmo-renderer/src/components`'ten **taranıyor** (yarın eklenen bir
+   bileşen aynı gün envanterde), yalnız istisnalar elle — ve **bayat istisna da kırmızı**: iki yol
+   da tanımaya başlamışsa kayıt silinmek zorunda, yoksa liste tam da yerine geçtiği çürüyen elle
+   sayıma dönüşür. Bugünkü asimetri ölçüldü, tahmin edilmedi: **`Decal` yalnız oyun yolunda**
+   (decal geçişi G-buffer'a harmanlıyor, editörün yolu forward — yapısal, ama sonucu gerçek:
+   editörde yerleştirilen bir decal oyun koşana kadar görünmüyor), `EditorRenderTarget` ve
+   `GameRenderTarget` yalnız editörde (tanımı gereği). Kırılabildiği doğrulandı: yeni bir bileşen
+   eklenip tek yola bağlandı, bir de bayat istisna kondu; ikisi de kırmızıya düştü.
+
+Bu kökün kayıtlı adımlarının hepsi kapandı. Açık kalan gerçek iş, testin *ölçüp* kapatamadığı şey:
+çizim listesi hâlâ iki ayrı uygulama (`collect_draw_items` ve studio'nun batching'i), ve
+`SceneSetup` sahne bloğunu taşıyor, çizim listesini değil. Envanter yeni bir yeteneğin tek yolda
+kalmasını yakalar; ikisini tek koda indirmez.
 
 **İnsan gözü isteyen iki yer:** (1) editör viewport'unda DoF artık kameranın gerçek near/far'ıyla
 lineerleşiyor — varsayılan kamerada (0.1/2000) fark yok, farklı far düzlemli sahnede odak doğru

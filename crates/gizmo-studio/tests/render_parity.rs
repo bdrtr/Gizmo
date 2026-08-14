@@ -263,6 +263,142 @@ fn neither_render_path_builds_its_own_scene_setup() {
     );
 }
 
+/// The capability inventory: a render component the engine exports must be known to **both** draw
+/// paths, or be named below with the reason it is not.
+///
+/// This is the other half of the root these tests come from. The uniform block is shared and the
+/// setup is shared, but what each loop *draws* is still two implementations, and the default state
+/// of a new capability is "lives in exactly one path" — `LodGroup` and `ParticleEmitter` each
+/// spent a while editor-only, `animation_state_machine_update_system` is engine-only, and the
+/// sweep that went looking for unwired capabilities could not see any of them, because
+/// `gizmo-studio` is a workspace member and a capability wired only into its pipeline still has an
+/// in-tree consumer.
+///
+/// The subjects are **scanned** from the component modules, so a component added tomorrow is in
+/// the inventory the same day. Only the exceptions are written by hand, and a stale one fails too:
+/// an entry that has stopped being true must be deleted, or the list becomes the same rotting
+/// hand-count as the tests this file replaced.
+///
+/// A name mentioned only in a comment counts as known. That is deliberate — a path that says in
+/// writing why it does not handle something has considered it, which is all this test asks.
+#[test]
+fn every_render_capability_is_known_to_both_draw_paths() {
+    /// Declared asymmetries: (component, which path, why).
+    const EXCEPTIONS: &[(&str, Path, &str)] = &[
+        (
+            "Decal",
+            Path::GameOnly,
+            "the decal pass blends into the G-BUFFER, and the editor's path is forward — there is \
+             no surface there to blend into. Structural, not an oversight, but the consequence is \
+             real and unfixed: a decal placed in the editor is invisible until the game runs.",
+        ),
+        (
+            "EditorRenderTarget",
+            Path::EditorOnly,
+            "the editor's own viewport texture; a game has no second viewport to render into.",
+        ),
+        (
+            "GameRenderTarget",
+            Path::EditorOnly,
+            "the play-mode preview texture inside the editor, for the same reason.",
+        ),
+    ];
+
+    #[derive(PartialEq, Debug, Clone, Copy)]
+    enum Path {
+        GameOnly,
+        EditorOnly,
+    }
+
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("workspace root")
+        .to_path_buf();
+
+    // Subjects: every component type the renderer exports.
+    let mut components = Vec::new();
+    let comp_dir = workspace.join("crates/gizmo-renderer/src/components");
+    let mut comp_files = Vec::new();
+    collect_rs(&comp_dir, &mut comp_files);
+    for file in &comp_files {
+        for line in std::fs::read_to_string(file).unwrap_or_default().lines() {
+            for kw in ["pub struct ", "pub enum "] {
+                if let Some(rest) = line.strip_prefix(kw) {
+                    let name: String =
+                        rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+                    if !name.is_empty() {
+                        components.push(name);
+                    }
+                }
+            }
+        }
+    }
+    components.sort();
+    components.dedup();
+    assert!(components.len() > 15, "only {} components scanned", components.len());
+
+    // `shared.rs` sits inside the game path's directory but belongs to both, so a component named
+    // there is named by neither in particular.
+    let read_all = |dir: std::path::PathBuf| {
+        let mut files = Vec::new();
+        collect_rs(&dir, &mut files);
+        files
+            .iter()
+            .filter(|f| f.file_name().is_some_and(|n| n != "shared.rs"))
+            .map(|f| std::fs::read_to_string(f).unwrap_or_default())
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let game = read_all(workspace.join("crates/gizmo/src/systems/render"));
+    let editor = read_all(workspace.join("crates/gizmo-studio/src/render_pipeline"));
+
+    // Whole-word: `Mesh` must not match `MeshRenderer`.
+    fn names(haystack: &str, needle: &str) -> bool {
+        haystack.match_indices(needle).any(|(i, _)| {
+            let before = haystack[..i].chars().next_back();
+            let after = haystack[i + needle.len()..].chars().next();
+            let word = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+            !word(before) && !word(after)
+        })
+    }
+
+    let mut undeclared = Vec::new();
+    let mut stale = Vec::new();
+    for name in &components {
+        let (g, e) = (names(&game, name), names(&editor, name));
+        let asymmetry = match (g, e) {
+            (true, false) => Some(Path::GameOnly),
+            (false, true) => Some(Path::EditorOnly),
+            // Known to both, or to neither. "Neither" is a different question — nothing anywhere
+            // draws it — and not one this test can answer from these two directories.
+            _ => None,
+        };
+        let declared = EXCEPTIONS.iter().find(|(c, _, _)| c == name).map(|(_, p, _)| *p);
+        match (asymmetry, declared) {
+            (Some(actual), None) => undeclared.push(format!(
+                "{name}: known to the {} path only. Wire it into the other, or add it to \
+                 EXCEPTIONS with why it cannot be.",
+                if actual == Path::GameOnly { "game" } else { "editor" }
+            )),
+            (Some(actual), Some(want)) if actual != want => undeclared.push(format!(
+                "{name}: declared {want:?}, actually {actual:?} — the asymmetry flipped direction."
+            )),
+            (None, Some(want)) => stale.push(format!(
+                "{name}: declared {want:?} but both paths know it now — delete the entry."
+            )),
+            _ => {}
+        }
+    }
+
+    assert!(
+        undeclared.is_empty() && stale.is_empty(),
+        "render capability inventory:\n  {}\n  {}",
+        undeclared.join("\n  "),
+        stale.join("\n  ")
+    );
+}
+
 fn collect_rs(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
     for entry in entries.flatten() {
