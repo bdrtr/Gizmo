@@ -765,3 +765,61 @@ already auto-vectorized). DO NOT RETRY without passing the step-0 gate again. (T
   -A type_complexity` (the two grandfathered architectural lints). The entry crate is
   `gizmo-engine` (NOT `-p gizmo`); `| tail` masks cargo's exit code — check the exit status
   separately.
+
+## Nerede kaldık (2026-08-14)
+
+Bir günde bulunup düzeltilen kusurlar aşağıda kendi bölümlerinde duruyor. Bu bölüm yalnız **açık
+olanı** ve **bir daha kovalanmaması gerekeni** taşır.
+
+### Devam eden: iki render yolu
+
+Kök kayıtlı ("The root the sweep could not see"). İlk kesim yapıldı — `gizmo-renderer::routing`,
+malzeme tipinin anlamı tek ve tüketici bir `match`'te. Kalan iki adım, incelemenin fiyatlandırdığı
+hâliyle:
+
+- **Tek uniform kurucu (küçük, ~1 gün).** `SceneUniforms` ve `PostProcessUniforms` iki yerde elle
+  doldurulan struct literalleri. Studio `exposure: 1.0`, `point_shadows_enabled: 0` gibi değerleri
+  sabit yazıyor, motor ise aktif kameradan. Ortak kurucu + editörün açık geçersiz kılmaları, "her
+  alan dolduruldu mu" denetimini "hangi alan neden farklı" farkına çevirir.
+- **Studio'ya lib hedefi + parite testi (orta, ~2-3 gün, satır başına en yüksek değer).**
+  `gizmo-studio` bugün `publish = false` ve **lib hedefi yok**, yani render yolu hiçbir test
+  koşumundan erişilemiyor; iki yol arasındaki tek çapraz denetim insan gözü. Doğrulayıcı bu adımın
+  fiyatını "türde doğru, ölçekte iyimser" buldu: mekanik kısım kolay, `StudioState`/`EditorState`'i
+  headless kurmak değil.
+
+Daha ucuz alternatif de kayıtta: iki çizim döngüsünü **metin olarak** okuyup bir isim envanterinin
+ikisinde de geçtiğini (ya da gerekçeli bir istisna listesinde olduğunu) iddia eden ~60 satırlık bir
+test. Mimariye dokunmadan bu haftaki her örneği yazıldığı gün yakalardı.
+
+### Doğrulanmış ama henüz el atılmamış kökler
+
+- **Sözleşmeler (çare sağlam, küçük).** `common.wgsl` kendini sahne uniform düzeninin tek doğruluk
+  kaynağı ilan ediyor; **27 tüketicinin 20'si** için doğru. Ayrımı yapan hiçbir şey yok, çünkü
+  paylaşım `load_shader_composed` çağrılıp çağrılmamasına bağlı. Ayna testleri doğru desen ama her
+  biri **öznelerini elle sayıyor**, üçünden ikisi bayat — yani yeni bir shader, onu denetlemek için
+  var olan teste görünmez.
+- **Shader boru hattı.** `compose_wgsl` bir `naga::Module` kurup doğruluyor ve **atıyor**, `String`
+  döndürüyor. Rust, kendi struct'larını shader'ın gördüğü düzenle karşılaştıramıyor.
+- **Determinizm çevresi (çare sağlam).** `snapshot.rs` iki elle yazılmış 9 alanlık liste taşıyor,
+  oysa `PhysicsWorld`'ün 28 alanı var; yeni bir alan sessizce anlık görüntünün dışında kalır.
+- **Crate grafiği / Stage A.** `gizmo-animation` Stage A listesinde ama pratikte öyle değil.
+
+### Scripting
+
+32 doğrulanmış kusurdan üçü düzeltildi: script sırası (`HashMap` → `BTreeMap`, proses başına
+rastgeleydi), on altı komutun sessizce yutulması, ve bir script'in hatasının ötekileri iptal etmesi.
+Açık kalanlar: yürütme/bellek limiti yok (sonsuz Lua döngüsü prosesi asar), NaN/sonsuz doğrulaması
+yok, tek yönlü sandbox (`_G`), tuş haritası her girdisinde yanlış.
+
+**Teşhis sondası köprüsünün önündeki asıl engel:** `send` özelliğiyle `create_function`'ın kapanışı
+`Send + 'static` olmak zorunda, yani bir Lua callback'i **`&World` yakalayamaz**. Bütün okuma yolu bu
+yüzden kare başına anlık görüntü. Parametreli sorgu (şu (x,z)'de zemin kotu) anlık görüntüyle ifade
+edilemez; çağrı-anı erişim mekanizması gerekiyor (`Lua::scope` ya da ömrü belgelenmiş userdata). Bu,
+ince bir köprü değil gerçek bir tasarım kararı.
+
+### Bir daha kovalanmasın
+
+- Animasyonun zamanlanmamasının sebebi **imza değildi** — studio onu tam o imzayla zaten çağırıyordu.
+- Süpürme sayısını kesmek yakınsamayı iyileştirmez: 9 kat az süpürme %17 kazandırıyor ve tavanı o.
+- Varyans kırpması TAA kalıntısını düzeltmiyor; iki kez ölçüldü, ikisinde de biraz kötüleşti.
+
