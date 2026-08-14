@@ -948,7 +948,23 @@ Kök kayıtlı ("The root the sweep could not see"). Beş kesim:
    bütün bileşenlere açılsa 13 asimetrinin ~4'ü bu türden yanlış pozitif. Kırılabildiği doğrulandı
    (paylaşılan bir alan tek yola indirildi + bir istisnanın yönü ters çevrildi; ikisi de kırmızı).
 
-7. **Frustum culling — sürüklenme yok, kayda geçsin.** Sıradaki aday buydu; bakınca iki yol da
+8. **Instans tamponu: motor kırpıyordu, editör büyütüyordu (2026-08-15).** Gölge-caster
+   yerleşimini karşılaştırırken çıktı. Motor instans yüklemesini `instance_capacity`'ye kırpıp
+   kaç tanesinin GPU'ya ulaştığını döndürüyor; **`Renderer::ensure_instance_capacity` ise var,
+   birim testi de var, ve tek çağıranı studio.** Yani 8 192 instans'ı aşan bir sahne oyunda
+   geometri kaybediyor, aynı sahne editörde tam çiziliyordu. `is_double_sided` ile birebir aynı
+   sınıf: motorun dışa verdiği bir yetenek, motorun kendi yolunun kullanmadığı.
+   İki bölgeli yerleşim (A = bütün batch'lerin kamera instansları, B = bütün gölge-caster'lar)
+   bu kırpmanın **zarif bozulması** için yapılmıştı — artık bozulacak bir şey yok, ama tampon
+   büyütmeyi reddederse diye bekçi olarak duruyor. Studio'nun batch-başına `[kamera][gölge]`
+   yerleşimi motorun terk ettiği düzen ama zararsız, çünkü tam da tamponu büyüttüğü için hiç
+   kırpmıyor — kayda geçti.
+   **Kanıt:** 9 000 küp, tek batch; GPU'ya ulaşan sayı ölçülüyor. Büyütme çağrısı kaldırılınca
+   test "9 000'in 8 192'si ulaştı" diyor — motorun düne kadarki davranışı. Büyüme kasıtlı olarak
+   sınırsız ve editörle aynı: 200 000 instans isteyen bir kare 25 MB tampon alır; HashMap'in en
+   sona koyduğu mesh'lerin kaybolduğu bir resim yerine.
+
+9. **Frustum culling — sürüklenme yok, kayda geçsin.** Sıradaki aday buydu; bakınca iki yol da
    zaten `classify_visibility_world`'ü paylaşıyor, AABB'yi bir kez dönüştürüyor ve farklarını
    gerekçesiyle yazmış: editör oyun kamerasının frustum'una göre kırpıyor (edit modunda culling'i
    sınayabilmek için) ve kameraya-kilitli backdrop'u testten muaf tutuyor — çünkü onun shader'ı

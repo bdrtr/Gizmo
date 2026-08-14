@@ -304,6 +304,25 @@ fn neither_draw_loop_answers_the_shared_per_entity_questions_itself() {
     assert!(offenders.is_empty(), "draw loops answering shared questions again:\n  {}", offenders.join("\n  "));
 }
 
+/// Both paths size the instance buffer for the frame they are about to draw.
+///
+/// `Renderer::ensure_instance_capacity` existed, was unit-tested, and had exactly one caller —
+/// the editor. The engine's path clamped its upload to whatever the buffer already held and
+/// reported the truncated count, so past 8 192 instances a game dropped geometry while the editor
+/// showed the same scene whole. The engine side has a real test now (9 000 cubes, counted at the
+/// GPU); this is the cheap half that covers the editor too, and fails if either path stops asking.
+#[test]
+fn both_paths_size_the_instance_buffer_for_the_frame() {
+    let (game, editor) = draw_path_sources();
+    for (path, text) in [("game", &game), ("editor", &editor)] {
+        assert!(
+            text.contains("ensure_instance_capacity"),
+            "the {path} path uploads instances without asking for room — past the buffer's \
+             capacity it will drop geometry rather than grow"
+        );
+    }
+}
+
 /// The capability inventory: a render component the engine exports must be known to **both** draw
 /// paths, or be named below with the reason it is not.
 ///

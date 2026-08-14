@@ -1184,6 +1184,90 @@ mod golden_render_tests {
         render_world(&mut renderer, &mut world).await
     }
 
+    /// A scene larger than the instance buffer grows the buffer instead of losing geometry.
+    ///
+    /// `Renderer::ensure_instance_capacity` has existed, and been unit-tested, since the buffer
+    /// could grow at all — with `gizmo-studio` as its only caller. The engine's own path clamped
+    /// the upload to `instance_capacity` and returned the truncated count, so past 8 192 instances
+    /// a game dropped whatever the region split sacrificed while the editor, showing the same
+    /// scene, drew all of it. The two-region layout was built to make that truncation degrade
+    /// gracefully; it degrades nothing now, and stays as the guard for the day something refuses
+    /// to grow.
+    ///
+    /// Asserted on the count that reaches the GPU rather than on pixels: the failure is geometry
+    /// that never got uploaded, and 9 000 overlapping cubes look much the same either way.
+    #[test]
+    fn a_scene_past_the_instance_capacity_grows_the_buffer_instead_of_dropping_meshes() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available()) {
+            eprintln!("skipping a_scene_past_the_instance_capacity_grows_the_buffer: no GPU");
+            return;
+        }
+        pollster::block_on(async {
+            let mut renderer = Renderer::new_headless(64, 64, None).await;
+            let start_capacity = renderer.scene.instance_capacity;
+            // One more than the buffer holds is enough to prove the point; 9 000 keeps the test
+            // honest if the starting capacity is ever raised to 8 192 exactly.
+            let count = start_capacity + 808;
+
+            let mut asset_manager = AssetManager::new();
+            let mut world = World::new();
+            let mesh = AssetManager::create_cube(&renderer.device);
+            let tex = asset_manager.create_white_texture(
+                &renderer.device,
+                &renderer.queue,
+                &renderer.scene.texture_bind_group_layout,
+            );
+            let mat = Material::new(tex).with_pbr(Vec4::new(0.8, 0.8, 0.8, 1.0), 0.5, 0.0);
+            // All in front of the camera and all sharing mesh + material, so they land in ONE
+            // batch and the instance count is the only thing under test.
+            for i in 0..count {
+                let e = world.spawn();
+                let x = (i % 100) as f32 * 0.05;
+                let y = (i / 100) as f32 * 0.05;
+                world.add_component(e, Transform::new(Vec3::new(x, y, -20.0)));
+                world.add_component(e, GlobalTransform::default());
+                world.add_component(e, mesh.clone());
+                world.add_component(e, mat.clone());
+                world.add_component(e, MeshRenderer::new());
+            }
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.0, 0.0, 40.0),
+                yaw: 0.0,
+                pitch: 0.0,
+                primary: true,
+                ..Default::default()
+            });
+
+            super::batching::clear_render_cache();
+            let view_proj = gizmo_math::Mat4::perspective_rh(1.0, 1.0, 0.1, 500.0)
+                * gizmo_math::Mat4::look_at_rh(
+                    Vec3::new(0.0, 0.0, 40.0),
+                    Vec3::new(0.0, 0.0, -20.0),
+                    Vec3::Y,
+                );
+            let (_items, uploaded) = super::batching::collect_draw_items(
+                &world,
+                &mut renderer,
+                view_proj,
+                [gizmo_math::Mat4::IDENTITY; 4],
+                Vec3::new(0.0, 0.0, 40.0),
+            );
+
+            assert!(
+                count as u32 > start_capacity as u32,
+                "the scene must exceed the starting capacity for this test to mean anything"
+            );
+            assert_eq!(
+                uploaded, count as u32,
+                "{} of {count} instances reached the GPU — the engine truncated instead of growing",
+                uploaded
+            );
+            assert!(renderer.scene.instance_capacity >= count);
+            super::batching::clear_render_cache();
+        });
+    }
+
     /// A double-sided material shows its back faces to the game, not only to the editor.
     ///
     /// `Material::with_double_sided` and its `is_double_sided` field have been public for as long

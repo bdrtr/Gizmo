@@ -275,10 +275,15 @@ pub(crate) struct BatchData {
 /// The caller passes the UNJITTERED view-proj and the cascade view-projs so culling uses
 /// clean (non-TAA-jittered) frusta — camera-visible instances feed the main passes, off-screen
 /// casters inside a cascade's light frustum feed the shadow maps only. Returns the draw list and
-/// the number of instances that actually fit `instance_capacity` (draw ranges clamp to it).
+/// the number of instances that actually reached the GPU buffer (draw ranges clamp to it).
+///
+/// Takes the renderer mutably to GROW the instance buffer for what the frame needs. It did not
+/// until 2026-08-15: `Renderer::ensure_instance_capacity` has existed, and been unit-tested, with
+/// `gizmo-studio` as its only caller — so the editor drew a 20 000-instance scene whole while the
+/// game silently stopped at 8 192 and the region split below decided which geometry survived.
 pub(super) fn collect_draw_items(
     world: &World,
-    renderer: &Renderer,
+    renderer: &mut Renderer,
     unjittered_view_proj: Mat4,
     cascade_vp: [Mat4; 4],
     cam_pos: Vec3,
@@ -625,6 +630,16 @@ pub(super) fn collect_draw_items(
 
         cache.instances = local_instances;
         cache.draw_items = local_draw_items;
+
+        // Grow the buffer to what this frame actually needs — the same call the editor has always
+        // made. The clamp below stays as the guard it was: capacity is now always sufficient, so
+        // it truncates nothing, but a slice bound is cheaper than trusting that to stay true.
+        //
+        // Growth is unbounded, deliberately and in step with the editor: a frame that wants
+        // 200 000 instances gets 25 MB of instance buffer rather than a picture missing whichever
+        // meshes the HashMap ordered last. A scene pathological enough for that to matter has a
+        // budget problem the renderer should not be papering over by dropping geometry.
+        renderer.ensure_instance_capacity(cache.instances.len());
 
         // Instance limiti kontrolü (Taşmaları önlemek için capaciteyi zorla)
         let max_instances = renderer.scene.instance_capacity;
