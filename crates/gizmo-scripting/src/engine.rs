@@ -2,7 +2,7 @@ use gizmo_core::input::Input;
 use gizmo_core::World;
 use mlua::prelude::*;
 use mlua::RegistryKey;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use tracing::{debug, error, info, trace, warn};
 
@@ -20,7 +20,14 @@ use crate::commands::{CommandQueue, ScriptCommand};
 /// Lua Scripting Motoru — Genişletilmiş API ile oyun mantığını yönetir
 pub struct ScriptEngine {
     lua: Lua,
-    loaded_scripts: HashMap<String, (String, RegistryKey)>,
+    /// Loaded scripts, keyed by path — **ordered**, and that is load-bearing rather than tidy.
+    ///
+    /// This was a `std::collections::HashMap`, whose `RandomState` is seeded per process, so the
+    /// order `update` ran scripts in changed from run to run. Two scripts pushing commands that
+    /// touch the same entity therefore resolved in a random order, and this engine's headline
+    /// contract is same-platform bit-identical replay. A `BTreeMap` costs a comparison per lookup
+    /// and makes the order a property of the scripts' paths instead of of the allocator.
+    loaded_scripts: BTreeMap<String, (String, RegistryKey)>,
     command_queue: Arc<CommandQueue>,
     elapsed_time: f32,
     /// Log messages emitted from Lua (`print`), stored as `(level, message)` pairs.
@@ -257,7 +264,7 @@ impl ScriptEngine {
         info!("[Scripting] ScriptEngine başlatıldı — Lua 5.4 sandbox aktif, API modülleri kayıtlı");
         Ok(Self {
             lua,
-            loaded_scripts: HashMap::new(),
+            loaded_scripts: BTreeMap::new(),
             command_queue,
             elapsed_time: 0.0,
             log_queue,
@@ -338,17 +345,35 @@ impl ScriptEngine {
             .set("elapsed", self.elapsed_time)
             .map_err(|e| e.to_string())?;
 
+        // **One script's failure must not cancel the others.** This loop used to `?` on the first
+        // runtime error, so a single throwing script silently stopped every script ordered after it
+        // for that frame — and with the map now ordered by path, "after it" is a stable and
+        // therefore reliably silent set. Errors are collected and reported together instead; a
+        // broken script loses its own frame and nobody else's.
+        let mut failures = Vec::new();
         for (path, (_, key)) in &self.loaded_scripts {
-            let env: mlua::Table = self.lua.registry_value(key).map_err(|e| e.to_string())?;
+            let env: mlua::Table = match self.lua.registry_value(key) {
+                Ok(env) => env,
+                Err(e) => {
+                    failures.push(format!("{path}: env okunamadı: {e}"));
+                    continue;
+                }
+            };
             if let Ok(func) = env.get::<_, LuaFunction>("on_update") {
-                func.call::<_, ()>(ctx_table.clone()).map_err(|e| {
+                if let Err(e) = func.call::<_, ()>(ctx_table.clone()) {
                     warn!(path = %path, error = %e, "[Scripting] on_update çalışma-zamanı hatası");
-                    format!("Lua on_update hatası ({}): {}", path, e)
-                })?;
+                    failures.push(format!("Lua on_update hatası ({path}): {e}"));
+                }
             }
         }
 
-        Ok(())
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            // Every failure, not just the first: a caller that logs this sees the whole frame's
+            // damage rather than one arbitrary script's share of it.
+            Err(failures.join(" | "))
+        }
     }
 
     /// Per-entity script güncelleme — Script component'i olan entity'ler için izole ortamda çalıştırır
@@ -534,9 +559,12 @@ impl ScriptEngine {
                     }
                 }
 
-                ScriptCommand::SetVehicleEngineForce(_id, _force) => {}
-                ScriptCommand::SetVehicleSteering(_id, _angle) => {}
-                ScriptCommand::SetVehicleBrake(_id, _force) => {}
+                // The three vehicle commands used to be matched here with empty bodies: Lua could
+                // call them, they queued, and they vanished without a word. Applying them properly
+                // needs `VehicleController`, which lives in `gizmo-physics-dynamics` and is not a
+                // dependency of this crate — adding one to reach three commands is the wrong trade,
+                // and the host that flushes these does have it. So they fall through to `unhandled`
+                // like everything else this crate cannot apply itself, and the host is told.
 
                 ScriptCommand::SpawnEntity { name, position } => {
                     let entity = world.spawn();
@@ -653,21 +681,11 @@ ScriptCommand::PlayAnimation { id, name, blend, loop_anim } => {
                         trace!(entity = id, frames, "[Scripting] ApplyHitstun: hedefte FighterController yok, komut atlandı");
                     }
                 }
-                ScriptCommand::SaveScene(_)
-                | ScriptCommand::ShowDialogue { .. }
-                | ScriptCommand::HideDialogue
-                | ScriptCommand::TriggerCutscene(_)
-                | ScriptCommand::EndCutscene
-                | ScriptCommand::AddCheckpoint { .. }
-                | ScriptCommand::ActivateCheckpoint(_)
-                | ScriptCommand::StartRace
-                | ScriptCommand::FinishRace { .. }
-                | ScriptCommand::ResetRace
-                | ScriptCommand::SetCameraTarget(_)
-                | ScriptCommand::SetCameraFov(_)
-                | ScriptCommand::SetFightCamera { .. } => {
-                    // Bu komutlar flush_commands'ın dönüş değerinde (unhandled) zaten yer alacak
-                }
+                // The scene, dialogue, race and camera commands used to be matched here by an
+                // arm whose body was empty and whose comment said they would "already appear in
+                // unhandled". They could not: this arm consumed them, so the `other` catch-all
+                // below never saw them and the host was never told. Deleting the arm is the whole
+                // fix — they now fall through and are returned, which is what the comment claimed.
                 other => {
                     unhandled.push(other);
                 }
@@ -1196,10 +1214,16 @@ mod tests {
         }
     }
 
-    /// flush_commands ses ve LoadScene komutlarını demo katmanına 'unhandled' olarak
-    /// döndürmeli; SaveScene ve araç komutlarını ise tüketmeli (döndürmemeli).
+    /// Uygulanmayan her komut çağırana geri döndürülmeli — sessizce yutulmamalı.
+    ///
+    /// **Bu test eskiden kusuru sabitliyordu.** Adı `..._but_consumes_savescene_and_vehicle` idi ve
+    /// `SaveScene` ile araç komutlarının *dönmemesini* iddia ediyordu. Oysa onları yutan kol,
+    /// yorumunda "bunlar zaten unhandled'a düşecek" diyordu — düşemezlerdi, çünkü kolun kendisi
+    /// onları tüketiyordu. Lua tarafında canlı fonksiyonları olan bir komutun hiçbir iz bırakmadan
+    /// kaybolması, bir script yazarının teşhis edemeyeceği tek şeydir. Artık iddia niyet: bu crate
+    /// uygulayamadığı komutu ev sahibine verir.
     #[test]
-    fn flush_returns_audio_and_loadscene_but_consumes_savescene_and_vehicle() {
+    fn flush_returns_everything_it_cannot_apply_itself() {
         let engine = ScriptEngine::new().unwrap();
         let mut world = World::new();
 
@@ -1213,13 +1237,56 @@ mod tests {
 
         let unhandled = engine.flush_commands(&mut world, 0.016);
 
-        assert_eq!(unhandled.len(), 4, "yalnız ses(3) + LoadScene(1) döndürülmeli");
+        assert_eq!(unhandled.len(), 6, "ses(3) + LoadScene + SaveScene + araç(1) — hepsi dönmeli");
         assert!(unhandled.iter().any(|c| matches!(c, ScriptCommand::PlaySound(n) if n == "boom")));
         assert!(unhandled.iter().any(|c| matches!(c, ScriptCommand::PlaySound3D(n, _) if n == "bird")));
         assert!(unhandled.iter().any(|c| matches!(c, ScriptCommand::StopSound(n) if n == "music")));
         assert!(unhandled.iter().any(|c| matches!(c, ScriptCommand::LoadScene(n) if n == "level.scene")));
-        assert!(!unhandled.iter().any(|c| matches!(c, ScriptCommand::SaveScene(_))));
-        assert!(!unhandled.iter().any(|c| matches!(c, ScriptCommand::SetVehicleBrake(..))));
+        assert!(
+            unhandled.iter().any(|c| matches!(c, ScriptCommand::SaveScene(n) if n == "slot.scene")),
+            "SaveScene sessizce yutulmamalı"
+        );
+        assert!(
+            unhandled.iter().any(|c| matches!(c, ScriptCommand::SetVehicleBrake(1, _))),
+            "araç komutları sessizce yutulmamalı — bu crate onları uygulayamıyor, ev sahibi uygular"
+        );
+    }
+
+    /// Scriptler her koşuda aynı sırada çalışmalı.
+    ///
+    /// `loaded_scripts` bir `std::collections::HashMap` idi, ve `RandomState` proses başına
+    /// tohumlanır — yani `update`'in scriptleri çalıştırma sırası koşudan koşuya değişiyordu. Aynı
+    /// varlığa dokunan iki script çeliştiğinde sonucu ekleme sırası belirler, ve bu motorun manşet
+    /// sözleşmesi aynı-platform bit-birebir tekrar oynatma. Sıra artık scriptlerin yollarının bir
+    /// özelliği, ayırıcının değil.
+    #[test]
+    fn scripts_run_in_a_stable_order() {
+        let mut engine = ScriptEngine::new().unwrap();
+        let dir = std::env::temp_dir();
+        // Loaded in an order that is not the sorted one, so a map that preserved insertion order
+        // would also fail this.
+        let mut written = Vec::new();
+        for stem in ["zebra", "alpha", "midori", "beta"] {
+            let path = dir
+                .join(format!("gizmo_order_{stem}.lua"))
+                .to_string_lossy()
+                .into_owned();
+            std::fs::write(&path, "function on_update(ctx) end\n").unwrap();
+            engine.load_script(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
+            written.push(path);
+        }
+
+        let order: Vec<String> = engine.loaded_scripts.keys().cloned().collect();
+        let mut sorted = order.clone();
+        sorted.sort();
+        assert_eq!(
+            order, sorted,
+            "çalışma sırası yola göre sabit olmalı — bir HashMap'te bu proses başına değişirdi"
+        );
+
+        for path in written {
+            let _ = std::fs::remove_file(path);
+        }
     }
 
     /// flush_commands kuyruğu tüketmeli (drain): çağrı sonrası kuyruk boş olmalı.

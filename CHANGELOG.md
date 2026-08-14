@@ -661,6 +661,24 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Scripting: script execution order was randomised per process.** `ScriptEngine::loaded_scripts`
+  was a `std::collections::HashMap`, whose `RandomState` is seeded per process, so `update` ran
+  scripts in a different order on every run. Two scripts touching the same entity therefore resolved
+  in an order the allocator chose — under an engine whose headline contract is same-platform
+  bit-identical replay. It is a `BTreeMap` now, so the order is a property of the scripts' paths.
+- **Scripting: sixteen commands were accepted from Lua and silently discarded.** Thirteen scene,
+  dialogue, race and camera variants were matched by an arm whose body was empty and whose comment
+  said they would "already appear in `unhandled`" — they could not, because that arm consumed them
+  before the catch-all could see them. The three vehicle commands had empty bodies of their own.
+  All sixteen now fall through and are returned to the host, which is what the comment always
+  claimed. Applying the vehicle ones needs `VehicleController` from `gizmo-physics-dynamics`, which
+  this crate deliberately does not depend on; the host that flushes them does.
+- **Scripting: one script's runtime error cancelled every script after it.** The update loop
+  propagated the first `Err` with `?`, so a single throwing script silently stopped the rest for
+  that frame — and now that the order is stable, "the rest" is a stable and therefore reliably
+  silent set. Failures are collected and reported together; a broken script loses its own frame and
+  nobody else's.
+
 - **Cascaded shadow maps: texel snapping did not stabilise anything, and an overhead sun produced
   NaN.** Two defects in `directional_cascade_view_projs`, both found by measuring rather than
   reading. The snap worked on an **AABB of the frustum-slice corners in light space**, whose extent
