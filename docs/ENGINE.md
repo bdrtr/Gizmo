@@ -835,19 +835,27 @@ already auto-vectorized). DO NOT RETRY without passing the step-0 gate again. (T
   choose the soak horizon beyond the onset of instability.
 - On bug-hunt rounds use subagent fan-out, then verify every finding BY HAND
   (sieve out the false positives).
+- **A guard that has never failed is not known to work.** When a change lands a test whose job is
+  to catch a class of mistake — a scan, a ratchet, an exhaustive destructure — reintroduce the
+  mistake, watch it go red, and put that in the commit message. Two of this repo's mirror tests
+  passed for months while checking nothing, and both looked exactly like tests that worked.
+- **Prefer a scanned subject list to a written one.** A test that names the ten files it polices
+  cannot see the eleventh, and that is the file the bug will be in. Take subjects from the
+  directory, the component modules, the workspace; keep only the *exceptions* by hand, and fail on
+  a stale exception too, or the list rots the same way.
 - CI: `cargo clippy --all-features --all-targets -- -D warnings -A too_many_arguments
   -A type_complexity` (the two grandfathered architectural lints). The entry crate is
   `gizmo-engine` (NOT `-p gizmo`); `| tail` masks cargo's exit code — check the exit status
   separately.
 
-## Nerede kaldık (2026-08-14)
+## Nerede kaldık (2026-08-14 → 15)
 
-Bir günde bulunup düzeltilen kusurlar aşağıda kendi bölümlerinde duruyor. Bu bölüm yalnız **açık
-olanı** ve **bir daha kovalanmaması gerekeni** taşır.
+Bulunup düzeltilen kusurlar aşağıda kendi bölümlerinde duruyor. Bu bölüm yalnız **açık olanı** ve
+**bir daha kovalanmaması gerekeni** taşır.
 
-### Devam eden: iki render yolu
+### İki render yolu — kayıtlı adımların hepsi kapandı
 
-Kök kayıtlı ("The root the sweep could not see"). İki kesim yapıldı:
+Kök kayıtlı ("The root the sweep could not see"). Beş kesim:
 
 1. `gizmo-renderer::routing` — malzeme tipinin anlamı tek ve tüketici bir `match`'te.
 2. `gizmo-renderer::frame_uniforms` (**2026-08-14**) — iki uniform bloğunun kurucusu. Literaller
