@@ -847,6 +847,15 @@ already auto-vectorized). DO NOT RETRY without passing the step-0 gate again. (T
   -A type_complexity` (the two grandfathered architectural lints). The entry crate is
   `gizmo-engine` (NOT `-p gizmo`); `| tail` masks cargo's exit code — check the exit status
   separately.
+- **A GPU test must refuse a software adapter** unless it says why not. The Windows runner's
+  adapter is WARP; a deferred frame there software-rasterises a 3072² × 4 shadow-map array, and
+  the job that first let those tests render was still going at 5.5 hours against ubuntu's six
+  minutes. Every CI job carries `timeout-minutes: 45` for that, but a timeout is a report, not a
+  fix — the runner still burns the 45 minutes. `every_gpu_test_refuses_a_software_adapter` reads
+  the test file and fails on any test that opens an adapter without the
+  `headless_adapter_is_software` guard; the one deliberate exception (pipeline compilation, whose
+  whole subject is the backend) is named there with its reason, and a stale exception fails too.
+  Added after three tests written on 2026-08-15 checked only that an adapter existed.
 - **The same gate runs against `wasm32-unknown-unknown`** (2026-08-15). Not redundant: the lint
   config is crate-wide but which code *exists* is per-target, so every
   `#[cfg(not(target_arch = "x86_64"))]` arm and every wasm-only branch sat outside every gate the

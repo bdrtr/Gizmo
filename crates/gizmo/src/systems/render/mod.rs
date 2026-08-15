@@ -1203,6 +1203,15 @@ mod golden_render_tests {
             eprintln!("skipping overlapping_transparents_of_one_material: no GPU");
             return;
         }
+        // Software adapters need not apply. On the Windows runner the adapter is WARP, and a
+        // deferred frame there means software-rasterising a 3072² × 4 shadow-map array: the job
+        // that fixed the D3D12 shader error and let these tests actually render was still going
+        // at 5.5 hours against ubuntu's 6 minutes. The per-job `timeout-minutes` turns that into a
+        // report rather than a burnt runner; this turns it into a skip.
+        if pollster::block_on(Renderer::headless_adapter_is_software()) {
+            eprintln!("skipping overlapping_transparents_of_one_material: software adapter");
+            return;
+        }
         pollster::block_on(async {
             let near_first = render_two_panes(true).await;
             let far_first = render_two_panes(false).await;
@@ -1288,6 +1297,87 @@ mod golden_render_tests {
         frame
     }
 
+    /// Every GPU test either refuses a software adapter or says why it does not.
+    ///
+    /// The Windows runner's adapter is WARP. A deferred frame there software-rasterises a
+    /// 3072² × 4 shadow-map array, and the job that first let these tests render was still going
+    /// at 5.5 hours against ubuntu's 6 minutes. Each job carries `timeout-minutes` for exactly
+    /// that, but a timeout is a report, not a fix: the runner still burns 45 minutes and the job
+    /// still fails.
+    ///
+    /// So the skip belongs next to the work, and this makes sure it stays there. It reads this
+    /// file rather than trusting review — three tests added on 2026-08-15 checked only for the
+    /// presence of an adapter, and would have taken the whole 45 minutes each.
+    #[test]
+    fn every_gpu_test_refuses_a_software_adapter() {
+        /// Tests that deliberately run on WARP, and why.
+        const DELIBERATE: &[(&str, &str)] = &[(
+            "every_pipeline_compiles_on_this_backend",
+            "its whole subject is whether the pipelines compile on THIS backend, so a software \
+             adapter is coverage rather than cost — and it compiles rather than renders. It is \
+             also the test that caught the D3D12 shader error.",
+        )];
+
+        let src = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/systems/render/mod.rs"),
+        )
+        .expect("this file");
+
+        // Split into per-test bodies: from one `fn` to the next.
+        let mut starts: Vec<(usize, String)> = Vec::new();
+        for (i, _) in src.match_indices("#[test]") {
+            let Some(fn_at) = src[i..].find("fn ") else { continue };
+            let after = &src[i + fn_at + 3..];
+            let name: String =
+                after.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+            starts.push((i, name));
+        }
+        assert!(starts.len() > 10, "only {} tests found", starts.len());
+
+        let mut offenders = Vec::new();
+        let mut checked = 0;
+        for (n, (pos, name)) in starts.iter().enumerate() {
+            let end = starts.get(n + 1).map_or(src.len(), |(p, _)| *p);
+            let body = &src[*pos..end];
+            // Only tests that open an adapter are in scope.
+            if !body.contains("headless_adapter_available") {
+                continue;
+            }
+            checked += 1;
+            if body.contains("headless_adapter_is_software") {
+                continue;
+            }
+            if DELIBERATE.iter().any(|(n, _)| n == name) {
+                continue;
+            }
+            offenders.push(name.clone());
+        }
+
+        assert!(checked >= 12, "only {checked} GPU tests scanned");
+        // A stale exemption is a failure too: a test that grew a software check should lose its
+        // entry, or the list becomes a place things go to stop being looked at.
+        for (name, _) in DELIBERATE {
+            let Some((pos, _)) = starts.iter().find(|(_, n)| n == name) else {
+                panic!("`{name}` is exempted here and no longer exists");
+            };
+            let end = starts
+                .iter()
+                .find(|(p, _)| p > pos)
+                .map_or(src.len(), |(p, _)| *p);
+            assert!(
+                !src[*pos..end].contains("headless_adapter_is_software"),
+                "`{name}` now refuses software adapters — delete its exemption"
+            );
+        }
+
+        assert!(
+            offenders.is_empty(),
+            "these GPU tests would run on WARP and take the runner's whole 45 minutes:\n  {}\n\
+             Add the `headless_adapter_is_software` guard, or exempt them here with a reason.",
+            offenders.join("\n  ")
+        );
+    }
+
     /// A scene larger than the instance buffer grows the buffer instead of losing geometry.
     ///
     /// `Renderer::ensure_instance_capacity` has existed, and been unit-tested, since the buffer
@@ -1305,6 +1395,15 @@ mod golden_render_tests {
         let _gpu = crate::test_gpu::gpu_lock();
         if !pollster::block_on(Renderer::headless_adapter_available()) {
             eprintln!("skipping a_scene_past_the_instance_capacity_grows_the_buffer: no GPU");
+            return;
+        }
+        // Software adapters need not apply. On the Windows runner the adapter is WARP, and a
+        // deferred frame there means software-rasterising a 3072² × 4 shadow-map array: the job
+        // that fixed the D3D12 shader error and let these tests actually render was still going
+        // at 5.5 hours against ubuntu's 6 minutes. The per-job `timeout-minutes` turns that into a
+        // report rather than a burnt runner; this turns it into a skip.
+        if pollster::block_on(Renderer::headless_adapter_is_software()) {
+            eprintln!("skipping a_scene_past_the_instance_capacity_grows_the_buffer: software adapter");
             return;
         }
         pollster::block_on(async {
@@ -1391,6 +1490,15 @@ mod golden_render_tests {
         let _gpu = crate::test_gpu::gpu_lock();
         if !pollster::block_on(Renderer::headless_adapter_available()) {
             eprintln!("skipping a_double_sided_material_is_drawn_from_behind: no GPU");
+            return;
+        }
+        // Software adapters need not apply. On the Windows runner the adapter is WARP, and a
+        // deferred frame there means software-rasterising a 3072² × 4 shadow-map array: the job
+        // that fixed the D3D12 shader error and let these tests actually render was still going
+        // at 5.5 hours against ubuntu's 6 minutes. The per-job `timeout-minutes` turns that into a
+        // report rather than a burnt runner; this turns it into a skip.
+        if pollster::block_on(Renderer::headless_adapter_is_software()) {
+            eprintln!("skipping a_double_sided_material_is_drawn_from_behind: software adapter");
             return;
         }
         pollster::block_on(async {
