@@ -516,6 +516,8 @@ pub fn execute_render_pipeline(
             record_studio_main_pass(
                 encoder, renderer, world, flat_batches.as_slice(), game_view_proj, &debug_aabbs, show_colliders,
             );
+            // After the main pass, because it needs a pass with no depth attachment of its own.
+            record_studio_particle_pass(encoder, renderer);
     }); // Cikis: CACHE.with bloğu
 
     // Çizilen Gizmo'ları sonraki frame için temizle
