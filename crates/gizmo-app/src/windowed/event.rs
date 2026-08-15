@@ -352,12 +352,14 @@ impl<State: 'static> App<State> {
                                 
                                 if rollback_needed {
                                     let target_tick = rm.as_ref().unwrap().latest_tick;
-                                    
-                                    // Desync'i temizlemek için fiziği World'den zorla kopyalattır
-                                    #[cfg(feature = "physics")]
-                                    if let Some(mut pw) = self.world.get_resource_mut::<gizmo_physics_rigid::world::PhysicsWorld>() {
-                                        pw.clear_bodies();
-                                    }
+
+                                    // The `clear_bodies()` that used to be here is gone. It threw
+                                    // the physics world away so `sync_bodies` would rebuild it
+                                    // from the ECS — a resync that made sense while the ECS was
+                                    // the only thing being restored. `begin_frame` now restores
+                                    // the physics world itself (joints, accumulator, contact
+                                    // cache), and clearing it afterwards would discard exactly
+                                    // that.
                                     
                                     let fixed_dt = self
                                         .world
@@ -377,12 +379,12 @@ impl<State: 'static> App<State> {
                                         // Ama physics_step_system RollbackManager'i kullanmıyor!
                                         self.schedule.run(&mut self.world, fixed_dt);
 
-                                        // Yeni geçmiş karesini hafızaya al
+                                        // Yeni geçmiş karesini hafızaya al. `record_resimulated_tick`
+                                        // captures BOTH halves — this loop used to inline the wire
+                                        // half only, which is how the physics snapshot came to be
+                                        // missing from the catch-up path as well as the rewind.
                                         if let Some(ref mut manager) = rm {
-                                            let snapshot = gizmo_net::rollback::PhysicsStateSnapshot::capture(&self.world, manager.current_tick);
-                                            manager.state_buffer.save(snapshot);
-                                            manager.current_tick += 1;
-                                            // latest_tick güncellenmeyecek çünkü zaten eskiyi simüle ediyoruz
+                                            manager.record_resimulated_tick(&self.world);
                                         }
                                         catchup_steps += 1;
                                     }

@@ -1138,6 +1138,39 @@ Kırılabildiği doğrulandı: fonksiyon kurulmayınca test kırmızı.
 Yani sonda köprüsü artık bir tasarım kararı beklemiyor; mekanizma kurulu ve tek tüketicisi var.
 Kalanı sıradan iş: hangi sorguların sunulacağı.
 
+### Rollback: iki uygulama, biri eksik (2026-08-15)
+
+`gizmo-net`'te iki rollback var. `RollbackSession` `PhysicsWorld`'ü otoriter sayıp tam
+`WorldSnapshot` ile yedekliyor; **windowed app'in bağladığı** `RollbackManager` ise ECS'i otoriter
+sayıp entity başına altı sayı tutuyor: konum, dönüş, iki hız, uyku bayrağı.
+
+Aradaki fark, fizik crate'inin "transform ve hızdan **türetilemez**" diye belgelediği her şey:
+substep accumulator, contact cache'in warm-start impulse'ları, eklemlerin tek yönlü `is_broken`
+mandalı ve mandallanmış referans pozları, oyunun kare içinde değiştirebildiği kuvvet alanları ve
+sıvı hacimleri. Üstelik app, rollback'ten sonra `pw.clear_bodies()` çağırıp fizik dünyasını ECS'ten
+yeniden kurduruyordu.
+
+**Önce yanlış ölçtüm, kayda o da geçsin.** İlk testim "ıraksıyor" dedi (C9C742C6… ≠ 992A5D82…) ama
+ıraksamayı üreten şey testimdeki bir fazla adımdı: `end_frame` tick'i adımdan *sonra* kaydediyor,
+yani tick T'ye dönmek "T+1 adım atılmış" duruma dönmek. Hesap düzeltilince o senaryo — dört düşen
+kutu — **düzeltmeyle de düzeltmesiz de** geçiyor. İki uygulamayı ayırt edemeyen bir test hiçbiri
+hakkında kanıt değil.
+
+Ayırt eden senaryo: **pencere içinde kopan bir eklem.** `is_broken` yalnız `PhysicsWorld`'de yaşayan
+tek yönlü bir mandal, yani bileşen geri yüklemesiyle geri alınamaz — re-simülasyon, kesintisiz
+koşunun hâlâ sahip olduğu bir eklem olmadan devam ediyordu. Test tick 12'de kopacak şekilde
+ayarlı (hedef 8, geri sarma 20) ve kopmanın pencere içinde olduğunu ayrıca doğruluyor; düzeltme
+kapatılınca "eklem hâlâ kopuk" diyerek kırılıyor.
+
+Düzeltme, denetlenmiş uygulamayı yeniden kullanıyor: `RollbackManager` artık tick başına
+`PhysicsWorld::snapshot()`'ı da **yerel** olarak tutuyor (tel formatı `PhysicsStateSnapshot` aynen
+kalıyor — `WorldSnapshot` contact manifold ve eklem taşıyor, ağa gitmez). Geri yükleme fizik
+dünyasını kurup satırlarını ECS'e de yazıyor, çünkü bir sonraki adımda `sync_bodies` ECS'ten
+kopyalayıp düzeltilen satırları ezerdi — fonksiyonun kendi dokümanının uyardığı şey. App'in
+`clear_bodies()`'i kalktı (artık geri yüklenen durumu atardı) ve fast-forward döngüsü
+`record_resimulated_tick`'i çağırıyor; o döngü `end_frame`'i satır içi tekrar yazdığı için fizik
+yarısı oradan da eksikti.
+
 ### Bir daha kovalanmasın
 
 - Animasyonun zamanlanmamasının sebebi **imza değildi** — studio onu tam o imzayla zaten çağırıyordu.
