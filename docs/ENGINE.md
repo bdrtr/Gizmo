@@ -1326,3 +1326,21 @@ bedeli `setup.rs`'te duruyordu: dokuz varlığa elle eklenmiş `GlobalTransform:
   gösteriyor, tek normal tek gölge veriyor — 153.6..153.6, doğru çıktı, ama "aydınlatma ulaşmıyor"
   ile birebir aynı görünüyor. Küp döndürüldü; gerekçe testin içinde, yoksa biri "gereksiz" diye
   siler.
+
+#### Editör hattında taranan öteki özellikler (2026-08-15)
+
+Piksel koşumu kurulunca aynı mercek motorun golden testlerinin kapsadığı öteki özelliklere
+tutuldu. Sonuçlar, negatifler dahil:
+
+| Özellik | Sonuç |
+|---|---|
+| Instance kapasitesi | **Sorun yok.** Studio `ensure_instance_capacity` çağırıyor; pass'lerdeki beş `instance_capacity` kırpması bu yüzden ölü savunma, mesh düşmüyor. |
+| Gölge dökme | **Çalışıyor**, artık testli. Bkz. `the_editor_casts_a_shadow_onto_the_ground`. |
+| `GlobalTransform` doldurma | **Kusurluydu**, düzeltildi (yukarıdaki bölüm). |
+| SSAO onay kutusu + şiddet kaydırıcısı | **Ölüydü**, kontrol kapatıldı. |
+| Inspector'daki post kaydırıcıları (bloom, grain, exposure, vignette, aberration, DoF) | Hepsi `post_params`'a akıyor, canlı. |
+
+Gölge yolu az kalsın yanlışlıkla "ölü" diye kaydediliyordu: forward shader'da `shadow_visibility`
+1.0'a zorlandığında örneklenen piksel sıfır değişmişti. Sebep gölgenin çalışmaması değil, örnek
+noktanın aydınlık bir yüzde olmasıydı. Tek pikselden çıkarılan olumsuz sonuç, sahne o soruyu
+soracak biçimde kurulmadıkça hiçbir şey kanıtlamıyor.
