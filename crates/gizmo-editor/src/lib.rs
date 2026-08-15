@@ -55,13 +55,13 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
         match tab {
             EditorTab::Hierarchy => "Hierarchy".into(),
             EditorTab::Inspector => "Inspector".into(),
-            EditorTab::AssetBrowser => "Asset Browser".into(),
+            EditorTab::AssetBrowser => "Assets".into(),
             EditorTab::SceneView => "Scene".into(),
             EditorTab::GameView => "Game".into(),
             EditorTab::Console => "Console".into(),
             EditorTab::Settings => "Ayarlar".into(),
             EditorTab::ScriptEditor => "Script Editor".into(),
-            EditorTab::Profiler => "⚡ Profiler".into(),
+            EditorTab::Profiler => "Profiler".into(),
         }
     }
 
@@ -179,18 +179,39 @@ pub fn draw_editor(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
 
     let mut viewer = EditorTabViewer { world, state };
 
+    // The dock frames every panel, so it was the loudest thing still off-palette: six hardcoded
+    // cool greys and two blue separators in the middle of a warm scheme, predating `theme.rs`.
     let mut dock_style = egui_dock::Style::from_egui(ctx.global_style().as_ref());
-    dock_style.separator.width = 2.0;
-    dock_style.separator.color_idle = egui::Color32::from_rgb(20, 20, 22);
-    dock_style.separator.color_hovered = egui::Color32::from_rgb(64, 120, 240);
-    dock_style.separator.color_dragged = egui::Color32::from_rgb(80, 140, 255);
-    
-    // Tab styling
-    dock_style.tab_bar.bg_fill = egui::Color32::from_rgb(22, 22, 24);
-    dock_style.tab.active.bg_fill = egui::Color32::from_rgb(34, 34, 36);
-    dock_style.tab.inactive.bg_fill = egui::Color32::from_rgb(28, 28, 30);
-    dock_style.tab.active.text_color = egui::Color32::WHITE;
-    dock_style.tab.inactive.text_color = egui::Color32::from_rgb(150, 150, 150);
+    {
+        use crate::theme::palette::*;
+        dock_style.separator.width = 2.0; // the system's "strong 2px rules between sections"
+        dock_style.separator.color_idle = BORDER;
+        dock_style.separator.color_hovered = BORDER_HOT;
+        dock_style.separator.color_dragged = ACCENT;
+
+        dock_style.tab_bar.bg_fill = CHROME;
+        dock_style.tab_bar.height = 25.0; // the prototype's tab bar
+        dock_style.tab.active.bg_fill = SURFACE;
+        dock_style.tab.inactive.bg_fill = CHROME;
+        dock_style.tab.focused.bg_fill = SURFACE;
+        dock_style.tab.hovered.bg_fill = SURFACE;
+        dock_style.tab.active.text_color = TEXT_BRIGHT;
+        dock_style.tab.inactive.text_color = TEXT_MUTED;
+        dock_style.tab.focused.text_color = TEXT_BRIGHT;
+        dock_style.tab.hovered.text_color = TEXT_BRIGHT;
+
+        // Square, like everything else. `Style::from_egui` copies the global corner radius, which
+        // this theme already zeroes — but the tab styles carry their own and would keep whatever
+        // egui_dock's default is.
+        for t in [
+            &mut dock_style.tab.active,
+            &mut dock_style.tab.inactive,
+            &mut dock_style.tab.focused,
+            &mut dock_style.tab.hovered,
+        ] {
+            t.corner_radius = egui::CornerRadius::ZERO;
+        }
+    }
 
     // Dock fills the central region left by the panels above (egui_dock 0.19
     // `show_inside`, composed into the same root `Ui`).

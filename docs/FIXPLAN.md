@@ -2798,3 +2798,63 @@ toplandı.
 - ENGINE.md §7'deki çürütülmüş false-positive'ler ve non-goal'lar (narrowphase batch-SIMD,
   cross-platform bit-determinizm, N≥48 kule) — yeniden kovalanmayacak.
 - Denetimde **düşmanca doğrulamayı geçemeyen 9 iddia** rapordan çıkarıldı, burada da yok.
+
+## Editör tasarımı: prototipte olup motorda karşılığı olmayanlar (2026-08-15)
+
+`Gizmo Editor Prototype` uygulanırken çıkan boşluk listesi. Her madde **bakılarak** işaretlendi
+(grep + kaynak okuma), iddia edilerek değil; hangi bilginin nereden geldiği yazıyor. Üç öbek, ve
+öbek ayrımı iş büyüklüğünü belirlediği için önemli: bir şeyin "yok" olması, motorda verisinin de
+yok olması demek değil.
+
+### A. Verisi VAR, yalnız arayüzü yok (en ucuzu, en yüksek getiri)
+
+- ⬜ **ANIMATION timeline'ı.** Prototipte track'ler (Gate_Left → position.x / rotation.z),
+  keyframe elmasları, zaman cetveli, oynatma çizgisi, `frame 42/120 · 30 fps`, Auto-key.
+  Motorda `gizmo_animation::clip::Track { target_name, keyframe_timestamps: Vec<f32>, keyframes,
+  interpolation, tangents }` zaten tam — yani bir timeline'ın çizmesi gereken her şey duruyor.
+  Editörde yalnız `inspector/misc.rs:19`'daki "Animation Player" bölümü ve bir Loop onay kutusu
+  var. **Bu bir arayüz işi, motor özelliği değil.** (Daha önce bunu "büyük özellik" diye
+  kaydetmiştim; kaynağa bakınca yanlış olduğu görüldü.)
+- ⬜ **Profiler grafiği.** Prototipte kare-çubuğu grafiği + 16.6 ms bütçe çizgisi + scope tablosu.
+  Motorda `gizmo_core::profiler::FrameProfiler` scope'ları ve kare geçmişini zaten tutuyor
+  (`history()`, `avg_scope_ms`), editörde `profiler_panel.rs` var; eksik olan grafik biçimi.
+- ⬜ **Console filtre çipleri** (All / Warn / Error + sayılar). Sayılar `state.console`'da var.
+- ⬜ **Varlık tipi filtresi** (All / Mesh / Material / Texture / Audio) ve üç sütunlu tarayıcı
+  (klasör ağacı + ızgara + detay paneli).
+- ⬜ **Inspector'da `RigidBody::body_type`** (Static/Dynamic/Kinematic segmenti). Alan
+  `rigid_body.rs:61`'de duruyor, editörde **hiç arayüzü yok** — prototipin en göze çarpan
+  segmentli kontrolü ve tek satırlık veri erişimiyle yapılabilir.
+
+### B. Motorda VERİSİ de yok (önce motor tarafı gerekiyor)
+
+- ⬜ **Nesne başına gölge dökme anahtarı** (prototip: `Cast shadow  On / Off / Only`). Motorda
+  gölge dökme materyal yönlendirmesinden türüyor (unlit/skybox/grid hariç tutuluyor); nesne başına
+  bir bayrak yok.
+- ⬜ **LOD bias** (prototip: `LOD bias 1.0`). `LodGroup` var ama bias kavramı yok.
+- ⬜ **Varlık GUID'i ve meta verisi** (prototipin detay paneli: type / size / detail / folder /
+  guid). Motor varlıkları yol ile tanıyor; kalıcı bir kimlik yok.
+- ⬜ **Script'in dışa açtığı özellikler** (prototip: SCRIPT bölümünde `open_speed 2.400`,
+  `locked true/false`). Lua tarafında bir özellik yansıtma (reflection) mekanizması yok.
+- ⬜ **VRAM ölçümü.** RENDER STATS'ta prototipin gösterdiği satır; wgpu bunu kolayca vermiyor ve
+  bu yüzden tablodan çıkarıldı — makul görünen bir sayı basmaktansa satır olmasın.
+
+### C. Sıfırdan özellik
+
+- ⬜ **Shader Graph.** Prototipte kendi sekmesi var (`4 nodes · 3 links · wgsl 214 instructions`).
+  Motorda node grafiği namına hiçbir şey yok: bir node editörü + WGSL üretimi demek. Listedeki en
+  büyük kalem, ve tek başına bir proje.
+- ⬜ **Viewport view-cube / eksen gizmo'su** (sağ üst köşe).
+- ⬜ **Hiyerarşide klasör grupları** (Environment / Town / Gameplay). Parent/Children ile temsil
+  edilebilir ama "klasör" kavramı — çizim yapmayan, yalnız gruplayan varlık — yok.
+
+### Uygulanmış olanlar (aynı taramadan)
+
+Palet ve geometri, iki satırlı üst çubuk, viewport çipleri + ölçülmüş RENDER STATS, hiyerarşi satır
+anatomisi + gerçek bileşen rozetleri, Inspector'ın vurgu renkli bölüm başlıkları, segmentli kontrol
+ve tek hücreli anahtar, alt dock'un doğru yere inmesi ve palete oturması.
+
+### Prototipin isteyip egui 0.34'ün veremediği dördü
+
+`gizmo_editor::theme::UNIMPLEMENTED_SYSTEM_RULES` altında yazılı: sola dayalı düğme etiketleri,
+Lucide ikonları, bölümler arası 2px ayraç, offsetli odak halkası. Bunlar kusur değil, araç seti
+sınırı — birer kusur olarak yeniden keşfedilmesinler diye kodda duruyorlar.
