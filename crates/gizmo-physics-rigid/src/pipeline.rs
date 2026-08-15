@@ -19,6 +19,45 @@ use rayon::prelude::*;
 use crate::parallel_compat::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 
+
+/// The fracture events one manifold's strongest contact produces.
+///
+/// Only the largest normal impulse in the manifold is considered: a manifold is one collision, and
+/// four contact points sharing it should not fracture a body four times over. Each endpoint is
+/// tested separately because they can carry different thresholds — a crate hitting a wall breaks
+/// the crate.
+///
+/// Lifted out of `constraint_solve_step`, where it was the deepest code in the crate at nesting
+/// level ten. It also carried a vestigial `(entity, entity)` tuple with a `let _ = …; // suppress
+/// unused warning` next to it — a second element that was never anything but the first, silenced
+/// rather than deleted.
+fn collect_fracture_events(
+    manifold: &ContactManifold,
+    rigid_bodies: &[crate::RigidBody],
+    entity_map: &crate::world::EntityIndexMap,
+    out: &mut Vec<gizmo_physics_core::FractureEvent>,
+) {
+    let Some(contact) = manifold
+        .contacts
+        .iter()
+        .max_by(|a, b| a.normal_impulse.partial_cmp(&b.normal_impulse).unwrap())
+    else {
+        return;
+    };
+
+    for entity in [manifold.entity_a, manifold.entity_b] {
+        let Some(&idx) = entity_map.get(&entity.id()) else { continue };
+        let Some(threshold) = rigid_bodies[idx].fracture_threshold else { continue };
+        if contact.normal_impulse > threshold {
+            out.push(gizmo_physics_core::FractureEvent {
+                entity,
+                impact_point: contact.point,
+                impact_force: contact.normal_impulse,
+            });
+        }
+    }
+}
+
 impl PhysicsWorld {
     // ================================================================== //
     //  Stage 0 — Velocity integration                                     //
@@ -828,34 +867,13 @@ current_cache.insert(pair, (false, Some(cached)));
                         })
                     });
 
-                    // Fracture detection.
+                    // Fracture detection. Its own function: it is a question about the solved
+                    // impulses ("did this break anything?") rather than a step of solving them,
+                    // and answering it inline put five `if`s at nesting depth ten inside the
+                    // engine's hottest loop — the deepest point in the crate.
                     let mut fractures = Vec::new();
                     for m in &island_manifolds {
-                        let max_impulse_contact = m.contacts.iter().max_by(|a, b| {
-                            a.normal_impulse.partial_cmp(&b.normal_impulse).unwrap()
-                        });
-
-                        if let Some(contact) = max_impulse_contact {
-                            let impulse = contact.normal_impulse;
-                            let point = contact.point;
-
-                            for &(entity, manifold_ent) in
-                                &[(m.entity_a, m.entity_a), (m.entity_b, m.entity_b)]
-                            {
-                                let _ = manifold_ent; // suppress unused warning
-                                if let Some(&idx) = entity_map.get(&entity.id()) {
-                                    if let Some(threshold) = rigid_bodies[idx].fracture_threshold {
-                                        if impulse > threshold {
-                                            fractures.push(gizmo_physics_core::FractureEvent {
-                                                entity,
-                                                impact_point: point,
-                                                impact_force: impulse,
-                                            });
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                        collect_fracture_events(m, rigid_bodies, entity_map, &mut fractures);
                     }
 
                     // Sleep is decided for the island as a whole, not per body. A body that
