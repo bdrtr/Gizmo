@@ -73,10 +73,14 @@ pub(super) fn sync_editor_settings(
         }
     }
 
-    if let Some(ref mut ssao) = renderer.ssao {
-        let actual_strength = if ed_ssao_enabled { ed_ssao_strength } else { 0.0 };
-        ssao.set_strength(&renderer.queue, actual_strength);
-    }
+    // The editor's SSAO strength used to be uploaded here, every frame, into a uniform no pass in
+    // this pipeline reads: studio records no SSAO pass, and `post_process.wgsl` samples no AO
+    // texture. `Ssao::new` binds `deferred.normal_roughness_view`, which the forward path does not
+    // produce — so the write was not merely redundant, it could never become live by accident.
+    // The widgets it served are disabled with that reason in `gizmo_editor::windows`.
+    //
+    // Restoring this line is not what turns SSAO on here; a depth-normal prepass is.
+    let _ = (ed_ssao_enabled, ed_ssao_strength);
 
     (aspect, ed_shading_mode, show_colliders, post_params)
 }

@@ -183,10 +183,28 @@ pub fn ui_settings_window(ui: &mut egui::Ui, state: &mut EditorState) {
                 
                 ui.separator();
                 ui.heading("SSAO (Ekran Uzayı Ortam Gölgeleme)");
-                ui.checkbox(&mut state.post_process.ssao_enabled, "SSAO Aktif");
-                if state.post_process.ssao_enabled {
-                    ui.add(egui::Slider::new(&mut state.post_process.ssao_strength, 0.0..=5.0).text("Gölgelendirme Şiddeti"));
-                }
+                // Disabled because it does nothing here, and a control that silently does nothing
+                // is worse than one that explains itself.
+                //
+                // `Ssao::new` binds the deferred G-buffer's normal target; the editor viewport
+                // draws through the forward pipeline, which produces no such target. Studio was
+                // writing the strength into the SSAO uniform every frame and never recording a
+                // pass to read it, so both widgets have always been inert — the checkbox and a
+                // slider up to 5.0, neither changing a pixel. Making them live means giving the
+                // forward path a depth-normal prepass: a feature, not a fix.
+                //
+                // Kapalı: editör viewport'u forward hattan çiziliyor, SSAO ise deferred
+                // G-buffer'ının normal hedefine bağlı. Açıldığında hiçbir piksel değişmiyordu.
+                ui.add_enabled_ui(false, |ui| {
+                    ui.checkbox(&mut state.post_process.ssao_enabled, "SSAO Aktif")
+                        .on_disabled_hover_text(
+                            "Studio'nun her iki görünümü de (Scene ve Game) forward hattan \
+                             çiziliyor; SSAO ise deferred G-buffer'ın normal hedefini istiyor. \
+                             Bu ayarın burada etkisi yok.\n\n\
+                             Both studio views render through the forward path; SSAO needs the \
+                             deferred G-buffer's normal target, so this setting does nothing here.",
+                        );
+                });
                 
                 ui.separator();
                 ui.heading("Bloom (Parlama)");
