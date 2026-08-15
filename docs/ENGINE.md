@@ -1408,3 +1408,32 @@ var.
 Tarayıcı test yalnızca **üretim kodunu** okuyor: bir testin "bu filtrelendi" derken dizeyi anması
 sonucu denetlemektir, kararı yeniden vermek değil — `gizmo-scene`'in kayıt testi tam olarak bunu
 yapıyor ve haklı.
+### Editör kontrolleri taraması: beş şüpheli, ikisi yanlış teşhis (2026-08-15)
+
+SSAO bulgusundan sonra arayüzün yazdığı **30 alanın** hepsi tarandı: her birinin gerçek bir
+tüketicisi var mı? Beşi şüpheli çıktı. Paralel bir inceleme koşturuldu ve dört soruşturmacıdan
+biri **iddiayı çürütmekle** görevlendirildi. İyi ki öyle yapıldı:
+
+| Kontrol | İlk teşhis | Gerçek |
+|---|---|---|
+| `snap_translate` | ölü | **YANLIŞ — canlı.** `scene_view.rs:204` varlık sürükle-bırakta okuyup yuvarlıyor. |
+| `snap_rotate_deg` | ölü | **YANLIŞ — atıl.** Config'e geçiyor, `config.snapping` kapalı olduğu için kütüphane okumuyor. |
+| `show_grid` | ölü | Doğru. |
+| `snap_scale` | ölü | Doğru (config'e hiç geçmiyordu). |
+| `gizmo_size` | ölü | Doğru. |
+
+**Denetimin kusuru neydi:** okuyucuları sayarken `gizmo-editor`'ın kendi dosyaları elenmişti
+("arayüzün kendisi yazıyor" varsayımıyla), oysa `scene_view.rs` o crate'in içinde ve gerçek bir
+tüketici. Filtre, aradığı şeyi tanımıyla dışarıda bırakıyordu. Bu, tarama testleri yazarken tekrar
+edilebilecek bir hata: kapsam dışı bırakılan yer, aranan şeyin yaşadığı yer olabilir.
+
+`snapping` alanı ise tek satırlık ama üç ayarı birden ölü gösteren cinsten: `transform-gizmo`
+`snap_distance`/`snap_angle`/`snap_scale`'i **yalnız** `if config.snapping` içinde okuyor, o alan
+hiç atanmamıştı, ve `..Default::default()` `false` veriyordu. Ctrl modifier'ı bile yıllardır
+kuruluymuş ve kimse fark etmemiş — çünkü hepsi hesaplanıp atılıyordu.
+
+Grid anahtarının testi iki şey birden tutuyor: fark sayısı **ve yönü**. Yalnız "kareler farklı"
+denseydi bayrak ters dönse de test geçerdi. Snapping'de piksel testi mümkün değil (egui sürüklemesi
+gerekir), o yüzden karar `snap_active` saf fonksiyonuna çıkarıldı; XOR'un asıl sınanmaya değer
+satırı ikincisi: tercih açıkken Ctrl snapping'i **askıya alır**. Oraya `||` yazmak tuşu zamanın
+yarısında işlevsiz bırakır ve hiçbir şey fark etmez.
