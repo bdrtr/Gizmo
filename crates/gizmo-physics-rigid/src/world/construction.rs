@@ -181,7 +181,32 @@ impl PhysicsWorld {
                 // Update existing body without dropping/allocating mappings
                 self.rigid_bodies[idx] = *rb;
                 self.transforms[idx] = *trans;
-                self.velocities[idx] = *vel;
+
+                // A velocity written to a **sleeping dynamic** body is dropped rather than stored.
+                //
+                // Nothing reads it while the body sleeps: `advance_sleep_counter` — the only thing
+                // that could wake a body because of its own speed — is called from inside
+                // `integrate_velocities`, below its `is_sleeping` early return, so the sleep state
+                // machine never runs on a sleeper. The number therefore does not move the body, is
+                // not damped, and is not spent. It waits. Whenever something else wakes the body —
+                // an ended collision, an island mover, a joint, the editor's button — position
+                // integration picks the stored value up and applies it in full, on that substep,
+                // as a stale impulse from an event the player may have forgotten.
+                //
+                // The engine already fixed one instance of exactly this (the explosion system,
+                // `system.rs`, with `tests/explosion.rs` pinning it) by waking at the writer. That
+                // is the contract `RigidBody::wake_up` states: change a velocity, wake the body.
+                // This guard makes the contract enforceable instead of advisory — a writer that
+                // forgets now loses its write immediately and visibly, rather than banking it.
+                //
+                // Dynamic only, deliberately: `new_static` presets `is_sleeping = true`, and a
+                // kinematic body is *driven* by the velocity written here. Both must keep syncing
+                // exactly as before.
+                let sleeping_dynamic =
+                    self.rigid_bodies[idx].is_sleeping && self.rigid_bodies[idx].is_dynamic();
+                if !sleeping_dynamic {
+                    self.velocities[idx] = *vel;
+                }
 
                 // Shapes use Arc internally, so clone is cheap
                 self.colliders[idx] = col.clone();

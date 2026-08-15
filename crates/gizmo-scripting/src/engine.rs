@@ -6,6 +6,24 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use tracing::{debug, error, info, trace, warn};
 
+
+/// Wakes the body a script just wrote a velocity to.
+///
+/// Required, not defensive. `PhysicsWorld::sync_bodies` **drops** a velocity written to a sleeping
+/// dynamic body, because storing one makes a stale impulse: nothing reads it while the body
+/// sleeps, and whatever wakes the body later applies it in full. `RigidBody::wake_up`'s own doc
+/// states the contract — change a velocity, wake the body — and these four commands were the
+/// scripting half of the engine ignoring it. A script that pushed a settled crate saw nothing
+/// happen, and then saw the crate leap when something unrelated disturbed the stack.
+///
+/// Called after the `Velocity` borrow is released, because this takes its own on `RigidBody`.
+fn wake_after_velocity_write(world: &mut World, id: u32) {
+    let mut rbs = world.borrow_mut::<gizmo_physics_rigid::components::RigidBody>();
+    if let Some(mut rb) = rbs.get_mut(id) {
+        rb.wake_up();
+    }
+}
+
 use crate::api_ai;
 use crate::api_audio;
 use crate::api_entity;
@@ -538,19 +556,33 @@ impl ScriptEngine {
                     }
                 }
                 ScriptCommand::SetVelocity(id, vel) => {
-                    let mut velocities = world.borrow_mut::<gizmo_physics_rigid::components::Velocity>();
-                    if let Some(mut v) = velocities.get_mut(id) {
-                        v.linear = vel;
-                    } else {
-                        trace!(entity = id, "[Scripting] SetVelocity: hedefte Velocity yok, komut atlandı");
+                    let mut written = false;
+                    {
+                        let mut velocities = world.borrow_mut::<gizmo_physics_rigid::components::Velocity>();
+                        if let Some(mut v) = velocities.get_mut(id) {
+                            v.linear = vel;
+                            written = true;
+                        } else {
+                            trace!(entity = id, "[Scripting] SetVelocity: hedefte Velocity yok, komut atlandı");
+                        }
+                    }
+                    if written {
+                        wake_after_velocity_write(world, id);
                     }
                 }
                 ScriptCommand::SetAngularVelocity(id, ang_vel) => {
-                    let mut velocities = world.borrow_mut::<gizmo_physics_rigid::components::Velocity>();
-                    if let Some(mut v) = velocities.get_mut(id) {
-                        v.angular = ang_vel;
-                    } else {
-                        trace!(entity = id, "[Scripting] SetAngularVelocity: hedefte Velocity yok, komut atlandı");
+                    let mut written = false;
+                    {
+                        let mut velocities = world.borrow_mut::<gizmo_physics_rigid::components::Velocity>();
+                        if let Some(mut v) = velocities.get_mut(id) {
+                            v.angular = ang_vel;
+                            written = true;
+                        } else {
+                            trace!(entity = id, "[Scripting] SetAngularVelocity: hedefte Velocity yok, komut atlandı");
+                        }
+                    }
+                    if written {
+                        wake_after_velocity_write(world, id);
                     }
                 }
                 ScriptCommand::ApplyForce(id, force) => {
@@ -575,11 +607,14 @@ impl ScriptEngine {
                                     );
                                 }
                             }
-                            let mut vels =
-                                world.borrow_mut::<gizmo_physics_rigid::components::Velocity>();
-                            if let Some(mut v) = vels.get_mut(id) {
-                                v.linear += accel * dt;
+                            {
+                                let mut vels =
+                                    world.borrow_mut::<gizmo_physics_rigid::components::Velocity>();
+                                if let Some(mut v) = vels.get_mut(id) {
+                                    v.linear += accel * dt;
+                                }
                             }
+                            wake_after_velocity_write(world, id);
                         }
                     } else {
                         trace!(entity = id, "[Scripting] ApplyForce: hedefte RigidBody yok, kuvvet yok sayıldı");
@@ -607,11 +642,14 @@ impl ScriptEngine {
                                     );
                                 }
                             }
-                            let mut vels =
-                                world.borrow_mut::<gizmo_physics_rigid::components::Velocity>();
-                            if let Some(mut v) = vels.get_mut(id) {
-                                v.linear += delta_v;
+                            {
+                                let mut vels =
+                                    world.borrow_mut::<gizmo_physics_rigid::components::Velocity>();
+                                if let Some(mut v) = vels.get_mut(id) {
+                                    v.linear += delta_v;
+                                }
                             }
+                            wake_after_velocity_write(world, id);
                         }
                     } else {
                         trace!(entity = id, "[Scripting] ApplyImpulse: hedefte RigidBody yok, impuls yok sayıldı");

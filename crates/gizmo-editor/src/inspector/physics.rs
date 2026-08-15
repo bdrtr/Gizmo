@@ -14,6 +14,14 @@ pub fn draw_velocity_section(
 ) {
     // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
     let mut velocities = unsafe { world.borrow_mut_unchecked::<Velocity>() };
+    // Set when any velocity field is dragged, so the body can be woken below.
+    //
+    // Without this the field is a lie: `PhysicsWorld::sync_bodies` drops a velocity written to a
+    // sleeping dynamic body, so dragging X on a settled crate did nothing at all — and before that
+    // guard existed it did something worse, banking the number until an unrelated event fired it.
+    // The "Uyandır" button lower down is not a substitute: it is in a different collapsing
+    // section, and nobody types a velocity expecting to then hunt for a second control.
+    let mut velocity_edited = false;
     {
         if let Some(mut v) = velocities.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new("💨 Velocity")
@@ -21,42 +29,63 @@ pub fn draw_velocity_section(
                 .show(ui, |ui| {
                     ui.label("Doğrusal:");
                     ui.horizontal(|ui| {
-                        ui.add(
-                            egui::DragValue::new(&mut v.linear.x)
-                                .speed(0.1)
-                                .prefix("X: "),
-                        );
-                        ui.add(
-                            egui::DragValue::new(&mut v.linear.y)
-                                .speed(0.1)
-                                .prefix("Y: "),
-                        );
-                        ui.add(
-                            egui::DragValue::new(&mut v.linear.z)
-                                .speed(0.1)
-                                .prefix("Z: "),
-                        );
+                        velocity_edited |= ui
+                            .add(
+                                egui::DragValue::new(&mut v.linear.x)
+                                    .speed(0.1)
+                                    .prefix("X: "),
+                            )
+                            .changed();
+                        velocity_edited |= ui
+                            .add(
+                                egui::DragValue::new(&mut v.linear.y)
+                                    .speed(0.1)
+                                    .prefix("Y: "),
+                            )
+                            .changed();
+                        velocity_edited |= ui
+                            .add(
+                                egui::DragValue::new(&mut v.linear.z)
+                                    .speed(0.1)
+                                    .prefix("Z: "),
+                            )
+                            .changed();
                     });
                     ui.label("Açısal:");
                     ui.horizontal(|ui| {
-                        ui.add(
-                            egui::DragValue::new(&mut v.angular.x)
-                                .speed(0.1)
-                                .prefix("X: "),
-                        );
-                        ui.add(
-                            egui::DragValue::new(&mut v.angular.y)
-                                .speed(0.1)
-                                .prefix("Y: "),
-                        );
-                        ui.add(
-                            egui::DragValue::new(&mut v.angular.z)
-                                .speed(0.1)
-                                .prefix("Z: "),
-                        );
+                        velocity_edited |= ui
+                            .add(
+                                egui::DragValue::new(&mut v.angular.x)
+                                    .speed(0.1)
+                                    .prefix("X: "),
+                            )
+                            .changed();
+                        velocity_edited |= ui
+                            .add(
+                                egui::DragValue::new(&mut v.angular.y)
+                                    .speed(0.1)
+                                    .prefix("Y: "),
+                            )
+                            .changed();
+                        velocity_edited |= ui
+                            .add(
+                                egui::DragValue::new(&mut v.angular.z)
+                                    .speed(0.1)
+                                    .prefix("Z: "),
+                            )
+                            .changed();
                     });
                 });
             ui.separator();
+        }
+    }
+
+    // After the `Velocity` borrow is released, because this takes one on `RigidBody`.
+    if velocity_edited {
+        // SAFETY: same single-threaded egui draw as the borrow above, which has ended.
+        let mut rigid_bodies = unsafe { world.borrow_mut_unchecked::<RigidBody>() };
+        if let Some(mut rb) = rigid_bodies.get_mut(entity_id.id()) {
+            rb.wake_up();
         }
     }
 }
