@@ -3,6 +3,8 @@ use super::*;
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Hash, Debug)]
 #[non_exhaustive]
 pub enum EditorTab {
+    /// The ANIMATION timeline — tracks and keyframes for the selected entity's player.
+    Animation,
     Hierarchy,
     Inspector,
     AssetBrowser,

@@ -269,7 +269,12 @@ fn create_default_dock_state() -> egui_dock::DockState<EditorTab> {
     let [_scene, _bottom] = surface.split_below(
         center,
         0.78,
-        vec![EditorTab::AssetBrowser, EditorTab::Console, EditorTab::Profiler],
+        vec![
+            EditorTab::AssetBrowser,
+            EditorTab::Animation,
+            EditorTab::Console,
+            EditorTab::Profiler,
+        ],
     );
 
     state

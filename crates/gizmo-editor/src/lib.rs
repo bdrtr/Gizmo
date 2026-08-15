@@ -16,6 +16,8 @@
 //! - **Game View** — runtime/play viewport
 
 /// The editor's visual design (palette, geometry, type scale).
+/// The ANIMATION timeline panel.
+pub mod animation_panel;
 pub mod theme;
 pub mod asset_browser;
 pub mod console;
@@ -62,6 +64,7 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
             EditorTab::Settings => "Ayarlar".into(),
             EditorTab::ScriptEditor => "Script Editor".into(),
             EditorTab::Profiler => "Profiler".into(),
+            EditorTab::Animation => "Animation".into(),
         }
     }
 
@@ -76,6 +79,7 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
             EditorTab::Settings => windows::ui_settings_window(ui, self.state),
             EditorTab::ScriptEditor => windows::ui_script_editor(ui, self.state),
             EditorTab::Profiler => profiler_panel::ui_profiler(ui, self.world, self.state),
+            EditorTab::Animation => animation_panel::ui_animation(ui, self.world, self.state),
         }
     }
 }
