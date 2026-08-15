@@ -312,3 +312,170 @@ fn albedo_reaches_the_editors_pixels() {
          editor's instance data is not carrying the material through"
     );
 }
+
+/// The editor casts shadows onto the world, not just into a shadow map.
+///
+/// `record_studio_shadow_passes` renders four cascades every frame; nothing checked that a single
+/// pixel of the result reaches the screen. It nearly went down as broken during the viewport
+/// investigation: forcing `shadow_visibility = 1.0` in the forward shader changed the sampled
+/// pixel by zero, which reads like a dead shadow path. It was not — the sample was on a lit face.
+/// The scene below puts the question where it can be answered.
+///
+/// Measured on this path: shadowed ground luma 172.7 against 223.8 lit, and the shadow is warm
+/// (195,168,153) because what survives it is the hemisphere ambient, which is warm by design. The
+/// threshold sits at 0.90 — far above "no shadow" (1.0) and far below what was measured.
+#[test]
+fn the_editor_casts_a_shadow_onto_the_ground() {
+    let _gpu = gpu_lock();
+    if !pollster::block_on(Renderer::headless_adapter_available()) {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    }
+    if pollster::block_on(Renderer::headless_adapter_is_software()) {
+        eprintln!("skipping: software adapter");
+        return;
+    }
+
+    const S: u32 = 256;
+    let frame = pollster::block_on(async {
+        let mut renderer = Renderer::new_headless(S, S, None).await;
+        let mut am = AssetManager::new();
+        let mut world = World::new();
+        let tex = am.create_white_texture(
+            &renderer.device,
+            &renderer.queue,
+            &renderer.scene.texture_bind_group_layout,
+        );
+
+        // A wide, rough, near-white floor two units down: one normal everywhere, so the only thing
+        // that can make part of it darker than the rest is a shadow.
+        let ground = world.spawn();
+        world.add_component(ground, Transform::new(Vec3::new(0.0, -2.0, 0.0)));
+        world.add_component(ground, AssetManager::create_plane(&renderer.device, 40.0));
+        world.add_component(
+            ground,
+            Material::new(tex.clone()).with_pbr(Vec4::new(0.8, 0.8, 0.8, 1.0), 0.9, 0.0),
+        );
+        world.add_component(ground, MeshRenderer::new());
+
+        let cube = world.spawn();
+        world.add_component(cube, Transform::new(Vec3::ZERO));
+        world.add_component(cube, AssetManager::create_cube(&renderer.device));
+        world.add_component(
+            cube,
+            Material::new(tex).with_pbr(Vec4::new(0.9, 0.25, 0.25, 1.0), 0.6, 0.0),
+        );
+        world.add_component(cube, MeshRenderer::new());
+
+        let cam = world.spawn();
+        world.add_component(cam, Transform::new(Vec3::new(0.0, 10.0, 10.0)));
+        world.add_component(
+            cam,
+            gizmo::renderer::components::Camera::new(
+                std::f32::consts::FRAC_PI_4,
+                0.1,
+                1000.0,
+                -std::f32::consts::FRAC_PI_2,
+                -0.6,
+                true,
+            ),
+        );
+
+        // Tilted so the shadow lands beside the cube rather than under it, where the cube's own
+        // pixels would be measured instead.
+        world.spawn_bundle(gizmo::prelude::DirectionalLightBundle {
+            rotation: gizmo::math::Quat::from_rotation_z(-0.9)
+                * gizmo::math::Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2),
+            ..Default::default()
+        });
+
+        let state = StudioState {
+            current_fps: 60.0,
+            actual_dt: 1.0 / 60.0,
+            editor_camera: cam.id(),
+            game_camera: 4242,
+            do_raycast: false,
+            physics_accumulator: 0.0,
+            asset_watcher: None,
+            gc_timer: 0.0,
+            autosave_timer: 0.0,
+            visible_entity_count: 0,
+            draw_call_count: 0,
+        };
+
+        let format = renderer.config.format;
+        let target = renderer.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("studio-shadow-target"),
+            size: wgpu::Extent3d { width: S, height: S, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut enc = renderer
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        execute_render_pipeline(&mut world, &state, &mut enc, &view, &mut renderer, 0.0);
+
+        // S * 4 = 1024, already 256-aligned.
+        let staging = renderer.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("studio-shadow-readback"),
+            size: u64::from(S * S * BPP),
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        enc.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &target,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(S * BPP),
+                    rows_per_image: Some(S),
+                },
+            },
+            wgpu::Extent3d { width: S, height: S, depth_or_array_layers: 1 },
+        );
+        renderer.queue.submit(std::iter::once(enc.finish()));
+
+        let slice = staging.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        let _ = renderer
+            .device
+            .poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        rx.recv().expect("readback channel").expect("readback");
+        let pixels = slice.get_mapped_range().to_vec();
+        staging.unmap();
+        (pixels, matches!(format.remove_srgb_suffix(), wgpu::TextureFormat::Bgra8Unorm))
+    });
+
+    let (pixels, bgra) = frame;
+    let luma = |x: u32, y: u32| {
+        let i = ((y * S + x) * BPP) as usize;
+        let (a, b, c) = (pixels[i], pixels[i + 1], pixels[i + 2]);
+        let (r, g, bl) = if bgra { (c, b, a) } else { (a, b, c) };
+        0.2126 * f32::from(r) + 0.7152 * f32::from(g) + 0.0722 * f32::from(bl)
+    };
+
+    let shadow = luma(75, 215);
+    let lit = luma(200, 215);
+    assert!(
+        lit > 150.0,
+        "the control patch is not lit ground ({lit:.1}) — the scene framing moved and this test is          measuring something else"
+    );
+    assert!(
+        shadow < lit * 0.90,
+        "no shadow on the ground: the shadowed patch ({shadow:.1}) is not meaningfully darker than          the lit one ({lit:.1}). The editor records four cascades every frame; this is the only          check that any of it reaches a pixel"
+    );
+}
