@@ -65,6 +65,7 @@ pub fn ui_inspector(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
         }
 
         transform::draw_transform_section(ui, world, entity_id, state);
+        misc::draw_mesh_renderer_section(ui, world, entity_id, state);
         physics::draw_velocity_section(ui, world, entity_id, state);
         physics::draw_rigidbody_section(ui, world, entity_id, state);
         physics::draw_collider_section(ui, world, entity_id, state);

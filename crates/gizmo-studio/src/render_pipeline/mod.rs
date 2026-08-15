@@ -289,6 +289,11 @@ pub fn execute_render_pipeline(
                 // Editor furniture, so the game view can leave it out. Not derivable from the
                 // material: a light icon is an ordinary unlit cube.
                 let is_editor_only = editor_only.get(e).is_some();
+                // Per-object shadow casting. `MeshRenderer` is guaranteed present — the loop above
+                // skips entities without one.
+                let shadows = renderers.get(e).map(|r| r.shadows).unwrap_or_default();
+                let casts_shadows = shadows.casts();
+                let visible_in_camera = shadows.visible();
 
                 let batches = if mat.is_transparent {
                     &mut *transparent_batches
@@ -308,6 +313,8 @@ pub fn execute_render_pipeline(
                         is_unlit,
                         is_backdrop,
                         is_editor_only,
+                        casts_shadows,
+                        visible_in_camera,
                     ))
                     .or_insert_with(|| BatchData {
                         vbuf: active_mesh.vbuf.clone(),
@@ -328,6 +335,8 @@ pub fn execute_render_pipeline(
                         is_unlit,
                         is_backdrop,
                         is_editor_only,
+                        casts_shadows,
+                        visible_in_camera,
                     });
 
                 if camera_visible {
@@ -393,6 +402,8 @@ pub fn execute_render_pipeline(
                         is_unlit: batch.is_unlit,
                         is_backdrop: batch.is_backdrop,
                         is_editor_only: batch.is_editor_only,
+                        casts_shadows: batch.casts_shadows,
+                        visible_in_camera: batch.visible_in_camera,
                     });
                 }
             };

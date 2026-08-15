@@ -839,3 +839,191 @@ fn render_grid_scene(show_grid: bool) -> Option<Vec<u8>> {
         Some(pixels)
     })
 }
+
+/// `ShadowCasting::Off` removes the shadow and keeps the object; `Only` does the reverse.
+///
+/// The engine decided shadow casting from the *material* — unlit, skybox and grid were excluded and
+/// everything else cast — so two objects sharing a material could not differ. This is the per-object
+/// answer, and the three states are only meaningful if each one changes the picture in its own way,
+/// which is what the three renders below compare.
+#[test]
+fn per_object_shadow_casting_controls_the_shadow_and_the_object() {
+    use gizmo::renderer::components::ShadowCasting;
+
+    let _gpu = gpu_lock();
+    if !pollster::block_on(Renderer::headless_adapter_available()) {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    }
+    if pollster::block_on(Renderer::headless_adapter_is_software()) {
+        eprintln!("skipping: software adapter");
+        return;
+    }
+
+    let on = shadow_scene(ShadowCasting::On).expect("On");
+    let off = shadow_scene(ShadowCasting::Off).expect("Off");
+    let only = shadow_scene(ShadowCasting::Only).expect("Only");
+
+    // Sample points established by the existing shadow test: (75,215) sits in the cast shadow,
+    // (200,215) on lit ground, and the cube covers the centre.
+    let at = |px: &[u8], x: u32, y: u32| {
+        let i = ((y * 256 + x) * BPP) as usize;
+        let (a, b, c) = (px[i], px[i + 1], px[i + 2]);
+        let (r, g, bl) = (c, b, a); // this surface is BGRA; the exact channel order is irrelevant
+                                    // to a luma comparison, but keep it consistent
+        0.2126 * f32::from(r) + 0.7152 * f32::from(g) + 0.0722 * f32::from(bl)
+    };
+
+    let shadow_on = at(&on, 75, 215);
+    let lit_on = at(&on, 200, 215);
+    assert!(shadow_on < lit_on * 0.90, "the control render has no shadow to remove");
+
+    // Off: that patch is now lit like the rest of the floor.
+    let shadow_off = at(&off, 75, 215);
+    assert!(
+        shadow_off > shadow_on * 1.10,
+        "ShadowCasting::Off did not remove the shadow ({shadow_on:.1} → {shadow_off:.1})"
+    );
+
+    // Only: the shadow is back, and the cube itself is gone from the picture.
+    let shadow_only = at(&only, 75, 215);
+    assert!(
+        shadow_only < lit_on * 0.90,
+        "ShadowCasting::Only lost the shadow ({shadow_only:.1})"
+    );
+    // Counted, not sampled: a single point is a guess about where the cube landed, and the first
+    // version of this assertion guessed wrong — it picked a spot that was floor in both renders and
+    // reported "Only still drew the cube" from two identical background pixels.
+    let cube_pixels_changed = on
+        .chunks_exact(BPP as usize)
+        .zip(only.chunks_exact(BPP as usize))
+        .filter(|(a, b)| a != b)
+        .count();
+    assert!(
+        cube_pixels_changed > 200,
+        "ShadowCasting::Only changed only {cube_pixels_changed} pixels — the cube is still being \
+         drawn into the camera's picture"
+    );
+}
+
+/// The shadow scenario from `the_editor_casts_a_shadow_onto_the_ground`, with the cube's casting
+/// mode as a parameter. Returns the frame as raw bytes.
+fn shadow_scene(mode: gizmo::renderer::components::ShadowCasting) -> Option<Vec<u8>> {
+    const S: u32 = 256;
+    Some(pollster::block_on(async {
+        let mut renderer = Renderer::new_headless(S, S, None).await;
+        let mut am = AssetManager::new();
+        let mut world = World::new();
+        let tex = am.create_white_texture(
+            &renderer.device,
+            &renderer.queue,
+            &renderer.scene.texture_bind_group_layout,
+        );
+
+        let ground = world.spawn();
+        world.add_component(ground, Transform::new(Vec3::new(0.0, -2.0, 0.0)));
+        world.add_component(ground, AssetManager::create_plane(&renderer.device, 40.0));
+        world.add_component(
+            ground,
+            Material::new(tex.clone()).with_pbr(Vec4::new(0.8, 0.8, 0.8, 1.0), 0.9, 0.0),
+        );
+        world.add_component(ground, MeshRenderer::new());
+
+        let cube = world.spawn();
+        world.add_component(cube, Transform::new(Vec3::ZERO));
+        world.add_component(cube, AssetManager::create_cube(&renderer.device));
+        world.add_component(
+            cube,
+            Material::new(tex).with_pbr(Vec4::new(0.9, 0.25, 0.25, 1.0), 0.6, 0.0),
+        );
+        world.add_component(cube, MeshRenderer::new().with_shadows(mode));
+
+        let cam = world.spawn();
+        world.add_component(cam, Transform::new(Vec3::new(0.0, 10.0, 10.0)));
+        world.add_component(
+            cam,
+            gizmo::renderer::components::Camera::new(
+                std::f32::consts::FRAC_PI_4,
+                0.1,
+                1000.0,
+                -std::f32::consts::FRAC_PI_2,
+                -0.6,
+                true,
+            ),
+        );
+        world.spawn_bundle(gizmo::prelude::DirectionalLightBundle {
+            rotation: gizmo::math::Quat::from_rotation_z(-0.9)
+                * gizmo::math::Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2),
+            ..Default::default()
+        });
+
+        let state = StudioState {
+            current_fps: 60.0,
+            actual_dt: 1.0 / 60.0,
+            editor_camera: cam.id(),
+            game_camera: 4242,
+            do_raycast: false,
+            physics_accumulator: 0.0,
+            asset_watcher: None,
+            gc_timer: 0.0,
+            autosave_timer: 0.0,
+            visible_entity_count: 0,
+            draw_call_count: 0,
+        };
+
+        let format = renderer.config.format;
+        let target = renderer.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("shadow-mode-target"),
+            size: wgpu::Extent3d { width: S, height: S, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut enc = renderer
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        execute_render_pipeline(&mut world, &state, &mut enc, &view, &mut renderer, 0.0);
+
+        let staging = renderer.device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: u64::from(S * S * BPP),
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        enc.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &target,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(S * BPP),
+                    rows_per_image: Some(S),
+                },
+            },
+            wgpu::Extent3d { width: S, height: S, depth_or_array_layers: 1 },
+        );
+        renderer.queue.submit(std::iter::once(enc.finish()));
+
+        let slice = staging.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        let _ = renderer
+            .device
+            .poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        rx.recv().expect("channel").expect("map");
+        let px = slice.get_mapped_range().to_vec();
+        staging.unmap();
+        px
+    }))
+}

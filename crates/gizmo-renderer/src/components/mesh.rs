@@ -280,11 +280,53 @@ impl Mesh {
 /// Bir entity'nin ekrana çizilebilir bir Mesh olduğunu belirten ECS marker bileşenidir.
 /// Hiçbir ek alan içermez; sadece entity'nin render sistemine dahil edilmesini sağlar.
 #[derive(Clone)]
-pub struct MeshRenderer;
+pub struct MeshRenderer {
+    /// Whether this object casts a shadow, and whether it is drawn at all.
+    ///
+    /// Per-object rather than per-material, which is where the engine used to decide it: shadow
+    /// casting fell out of the material's routing (unlit/skybox/grid were excluded and everything
+    /// else cast), so two crates sharing one material could not differ. A light fixture's glowing
+    /// panel and the wall behind it often want opposite answers.
+    pub shadows: ShadowCasting,
+}
+
+/// What an object contributes to the shadow maps and to the picture.
+///
+/// The third state is not a curiosity: a low-poly stand-in that casts for an expensive mesh, or a
+/// blocker that shapes a light without appearing, both need "cast but do not draw". It is the
+/// prototype's `On / Off / Only`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ShadowCasting {
+    /// Drawn, and casts. The default, and what every object did before this existed.
+    #[default]
+    On,
+    /// Drawn, casts nothing.
+    Off,
+    /// Casts, but is not drawn.
+    Only,
+}
+
+impl ShadowCasting {
+    /// Does this object go into the shadow maps?
+    pub fn casts(self) -> bool {
+        matches!(self, Self::On | Self::Only)
+    }
+
+    /// Does this object go into the camera's picture?
+    pub fn visible(self) -> bool {
+        matches!(self, Self::On | Self::Off)
+    }
+}
 
 impl MeshRenderer {
     pub fn new() -> Self {
-        Self
+        Self { shadows: ShadowCasting::On }
+    }
+
+    /// Builder form: `MeshRenderer::new().with_shadows(ShadowCasting::Only)`.
+    pub fn with_shadows(mut self, shadows: ShadowCasting) -> Self {
+        self.shadows = shadows;
+        self
     }
 }
 

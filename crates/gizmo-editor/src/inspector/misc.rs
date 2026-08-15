@@ -670,3 +670,42 @@ pub fn draw_fighter_controller_section(
             });
     }
 }
+
+/// The prototype's MESH RENDERER section — for now, the one control on it that the engine can
+/// answer: whether this object casts a shadow, and whether it is drawn.
+///
+/// The prototype also shows the mesh and material asset names and an LOD bias. Those need asset
+/// identities and a bias field that do not exist yet (`docs/FIXPLAN.md`, group B), and a section
+/// that displayed them as blanks would be worse than one that shows what it has.
+pub fn draw_mesh_renderer_section(
+    ui: &mut egui::Ui,
+    world: &World,
+    entity_id: gizmo_core::entity::Entity,
+    _state: &mut EditorState,
+) {
+    use gizmo_renderer::components::{MeshRenderer, ShadowCasting};
+
+    // SAFETY: the editor UI runs single-threaded inside the egui draw; no concurrent World access.
+    let mut renderers = unsafe { world.borrow_mut_unchecked::<MeshRenderer>() };
+    let Some(mut renderer) = renderers.get_mut(entity_id.id()) else {
+        return;
+    };
+
+    egui::CollapsingHeader::new(crate::theme::section_title("Mesh Renderer"))
+        .default_open(true)
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Cast shadow:");
+                crate::theme::segmented(
+                    ui,
+                    &mut renderer.shadows,
+                    &[
+                        (ShadowCasting::On, "On"),
+                        (ShadowCasting::Off, "Off"),
+                        (ShadowCasting::Only, "Only"),
+                    ],
+                );
+            });
+        });
+    ui.separator();
+}

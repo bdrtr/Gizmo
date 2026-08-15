@@ -136,6 +136,12 @@ pub(super) fn record_studio_shadow_passes(
                 {
                     continue;
                 }
+                // Per-object opt-out. The material-derived rules above still hold — they exclude
+                // things that cannot sensibly cast at all — and this is the object's own answer on
+                // top of them.
+                if !batch.casts_shadows {
+                    continue;
+                }
                 if batch.start_instance >= renderer.scene.instance_capacity as u32 {
                     continue;
                 }
@@ -244,6 +250,9 @@ pub(super) fn record_studio_main_pass(
                 {
                     continue;
                 } // Şeffafları, Skybox'ı, Çift Yönlüleri, Grid'i ve Backdrop'u atla
+                if !batch.visible_in_camera {
+                    continue; // ShadowCasting::Only — casts, is not drawn
+                }
                 if batch.start_instance >= renderer.scene.instance_capacity as u32 {
                     continue;
                 }

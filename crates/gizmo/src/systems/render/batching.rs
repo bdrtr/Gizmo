@@ -126,6 +126,11 @@ pub struct DrawItem {
     /// The material asked for both faces (`Material::with_double_sided`). Selects the cull-off
     /// variant of whichever pipeline this item lands in; see `passes::geometry`.
     pub(super) is_double_sided: bool,
+    /// Per-object shadow casting (`MeshRenderer::shadows`). Two objects sharing a mesh and a
+    /// material can answer differently, so it belongs in the key.
+    pub(super) casts_shadows: bool,
+    /// Per-object visibility (`ShadowCasting::Only` casts without being drawn).
+    pub(super) visible_in_camera: bool,
     pub(super) skeleton_bind_group: Option<std::sync::Arc<wgpu::BindGroup>>,
     pub(super) is_transparent: bool,
     /// This batch's slot in the frame's paint order — see [`draw_layer`].
@@ -232,6 +237,11 @@ pub(crate) struct BatchKey {
     /// would inherit whichever entity the ECS iteration reached first, and a double-sided cloth
     /// would lose its back faces (or a solid wall gain interior ones) depending on the frame.
     is_double_sided: bool,
+    /// Per-object shadow casting (`MeshRenderer::shadows`) — in the key for exactly the reason
+    /// above: two objects sharing a mesh and a material can answer differently.
+    casts_shadows: bool,
+    /// Per-object visibility; `ShadowCasting::Only` casts without being drawn.
+    visible_in_camera: bool,
 }
 
 pub(crate) struct BatchData {
@@ -246,6 +256,8 @@ pub(crate) struct BatchData {
     is_skybox: bool,
     is_backdrop: bool,
     is_double_sided: bool,
+    casts_shadows: bool,
+    visible_in_camera: bool,
     skeleton_bind_group: Option<std::sync::Arc<wgpu::BindGroup>>,
     is_transparent: bool,
     instances: Vec<crate::renderer::gpu_types::InstanceRaw>,
@@ -442,6 +454,11 @@ pub(super) fn collect_draw_items(
                 // double-sided showed both faces in the viewport and lost its back faces in the
                 // game.
                 let is_double_sided = $mat.is_double_sided;
+                // Honoured by BOTH paths from the start, unlike `is_double_sided` above — a flag
+                // the editor obeys and the game ignores makes the viewport lie about the build.
+                let shadows = renderers.get($e).map(|r| r.shadows).unwrap_or_default();
+                let casts_shadows = shadows.casts();
+                let visible_in_camera = shadows.visible();
 
                 let key = BatchKey {
                     vbuf_id: std::sync::Arc::as_ptr(&active_vbuf) as usize,
@@ -453,6 +470,8 @@ pub(super) fn collect_draw_items(
                     is_skybox,
                     is_backdrop,
                     is_double_sided,
+                    casts_shadows,
+                    visible_in_camera,
                 };
 
                 let batch = cache.batches.entry(key).or_insert_with(|| BatchData {
@@ -467,6 +486,8 @@ pub(super) fn collect_draw_items(
                     is_skybox,
                     is_backdrop,
                     is_double_sided,
+                    casts_shadows,
+                    visible_in_camera,
                     skeleton_bind_group: skel_bg,
                     is_transparent,
                     instances: Vec::new(),
@@ -589,6 +610,8 @@ pub(super) fn collect_draw_items(
                 is_skybox: batch.is_skybox,
                 is_backdrop: batch.is_backdrop,
                 is_double_sided: batch.is_double_sided,
+                casts_shadows: batch.casts_shadows,
+                visible_in_camera: batch.visible_in_camera,
                 skeleton_bind_group: batch.skeleton_bind_group.clone(),
                 is_transparent: batch.is_transparent,
                 layer: draw_layer(batch.is_backdrop, batch.is_transparent),
@@ -669,6 +692,33 @@ mod batch_key_tests {
     // opaque, or a PBR object routed through the unlit path). The routing flags
     // are part of the key precisely to keep these apart while still batching
     // identical materials together.
+    /// Per-object shadow casting is part of the key, so two objects with the same mesh and material
+    /// but different `MeshRenderer::shadows` do not merge.
+    ///
+    /// Without this the batch inherits whichever entity the ECS reached first, and the answer flips
+    /// between frames — the same failure the routing flags above are keyed for.
+    #[test]
+    fn shadow_casting_distinguishes_batches_sharing_a_material() {
+        let base = BatchKey {
+            vbuf_id: 1,
+            mat_id: 42,
+            skeleton_id: None,
+            is_transparent: false,
+            unlit: false,
+            baked_lit: false,
+            is_skybox: false,
+            is_backdrop: false,
+            is_double_sided: false,
+            casts_shadows: true,
+            visible_in_camera: true,
+        };
+        let no_cast = BatchKey { casts_shadows: false, ..base.clone() };
+        let shadow_only = BatchKey { visible_in_camera: false, ..base.clone() };
+        assert_ne!(base, no_cast, "ShadowCasting::Off must not batch with On");
+        assert_ne!(base, shadow_only, "ShadowCasting::Only must not batch with On");
+        assert_ne!(no_cast, shadow_only, "Off and Only are different batches");
+    }
+
     #[test]
     fn routing_flags_distinguish_batches_sharing_a_texture() {
         let base = BatchKey {
@@ -681,6 +731,8 @@ mod batch_key_tests {
             is_skybox: false,
             is_backdrop: false,
             is_double_sided: false,
+            casts_shadows: true,
+            visible_in_camera: true,
         };
         let transparent = BatchKey {
             is_transparent: true,

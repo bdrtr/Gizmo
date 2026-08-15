@@ -24,6 +24,10 @@ pub(super) type BatchKey = (
     // and one more: the game view skips these batches, so a light icon sharing a batch with a
     // scene mesh would drag the scene mesh out of the game picture with it.
     bool, // is_editor_only
+    // Per-object shadow casting: two objects with the same mesh and material can now answer
+    // differently, so they cannot share a batch.
+    bool, // casts_shadows
+    bool, // visible_in_camera
 );
 
 pub(super) struct BatchData {
@@ -55,6 +59,10 @@ pub(super) struct BatchData {
     /// The editor's own furniture — see [`gizmo::renderer::components::EditorOnly`]. Drawn into
     /// the scene view, never into the game view.
     pub(super) is_editor_only: bool,
+    /// Goes into the shadow maps (`ShadowCasting::On | Only`).
+    pub(super) casts_shadows: bool,
+    /// Goes into the camera's picture (`ShadowCasting::On | Off`).
+    pub(super) visible_in_camera: bool,
 }
 
 #[derive(Clone)]
@@ -90,6 +98,10 @@ pub(super) struct FlatBatchData {
     pub(super) is_backdrop: bool,
     /// See [`BatchData::is_editor_only`].
     pub(super) is_editor_only: bool,
+    /// See [`BatchData::casts_shadows`].
+    pub(super) casts_shadows: bool,
+    /// See [`BatchData::visible_in_camera`].
+    pub(super) visible_in_camera: bool,
 }
 
 impl FlatBatchData {

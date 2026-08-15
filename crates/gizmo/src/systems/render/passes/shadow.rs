@@ -28,6 +28,11 @@ pub fn record_shadow_passes(
         shadow_pass.set_bind_group(0, &renderer.scene.shadow_pass_bind_groups[i], &[]);
         shadow_pass.set_bind_group(2, &renderer.scene.instance_bind_group, &[]);
         for item in draw_items {
+            // Per-object opt-out, on top of the material rules: `MeshRenderer::shadows`. A flag
+            // the editor obeys and the game ignores would make the viewport lie about the build.
+            if !item.casts_shadows {
+                continue;
+            }
             // Baked-lit geometry casts. It is `unlit` in the sense of skipping the deferred path,
             // but it is a solid world and a world that does not occlude the sun has no shadows in
             // it at all.
@@ -90,6 +95,8 @@ pub fn record_shadow_passes(
         shadow_pass.set_bind_group(0, &renderer.scene.point_shadow_pass_bind_groups[i], &[]);
         shadow_pass.set_bind_group(2, &renderer.scene.instance_bind_group, &[]);
         for item in draw_items {
+            // Per-object opt-out (`MeshRenderer::shadows`), same as the cascade pass above.
+            if !item.casts_shadows { continue; }
             if (item.unlit && !item.baked_lit) || item.is_transparent { continue; }
             let skel_bg = item
                 .skeleton_bind_group

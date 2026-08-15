@@ -34,6 +34,12 @@ pub fn record_deferred_geometry(
         // flag and a scene is overwhelmingly one-sided, so this is a handful of switches at most.
         let mut two_sided_bound: Option<bool> = None;
         for item in draw_items {
+            // `ShadowCasting::Only`: casts, is not drawn. Checked in the z-prepass as well as the
+            // G-buffer below, or the object would still write depth and punch a hole in whatever
+            // stands behind it.
+            if !item.visible_in_camera {
+                continue;
+            }
             if item.unlit || item.is_skybox || item.is_transparent {
                 continue;
             }
@@ -115,6 +121,9 @@ pub fn record_deferred_geometry(
         gbuf_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
         let mut two_sided_bound: Option<bool> = None;
         for item in draw_items {
+            if !item.visible_in_camera {
+                continue; // ShadowCasting::Only
+            }
             if item.unlit || item.is_transparent {
                 continue;
             }
