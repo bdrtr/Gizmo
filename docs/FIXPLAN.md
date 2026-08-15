@@ -2834,8 +2834,15 @@ yok olması demek değil.
 - ⬜ **LOD bias** (prototip: `LOD bias 1.0`). `LodGroup` var ama bias kavramı yok.
 - ⬜ **Varlık GUID'i ve meta verisi** (prototipin detay paneli: type / size / detail / folder /
   guid). Motor varlıkları yol ile tanıyor; kalıcı bir kimlik yok.
-- ⬜ **Script'in dışa açtığı özellikler** (prototip: SCRIPT bölümünde `open_speed 2.400`,
-  `locked true/false`). Lua tarafında bir özellik yansıtma (reflection) mekanizması yok.
+- ✅ **Script'in dışa açtığı özellikler** (2026-08-16). Script `properties = { open_speed = 2.4,
+  locked = false }` diye bildiriyor; motor bunu script'in kendi env'inden geri okuyor
+  (`declared_properties`) ve editör satırları oradan listeliyor. Varlık başına değerler
+  `Script.properties`'te duruyor ve `on_entity_update`'e ÜÇÜNCÜ argüman olarak gidiyor.
+  Neden bileşende: script'ler YOLA göre yükleniyor, yani aynı dosyayı koşturan iki varlık tek bir
+  Lua env'i paylaşıyor ve oraya konan değer ikinci varlıkta ezilir — test tam olarak bunu tutuyor.
+  Sayı/bool/metin dışındaki bildirimler (iç içe tablo) atlanıyor: onlar script'in kendi işi, satır
+  değil. Türü bildirimle uyuşmayan eski bir override zorlanmıyor, yok sayılıyor.
+  ⬜ Kalan: script'e özellik EKLEME arayüzü yok (bildirimden gelmeyeni editörden yaratmak).
 - ✅ **GPU bellek ölçümü** (2026-08-16). `Device::generate_allocator_report()` varmış:
   `total_allocated_bytes` gerçek bir sayı ve desteklemeyen backend'de dürüstçe `None` döndürüyor.
   RENDER STATS'ta artık `gpu mem` satırı var — "vram" değil, çünkü ölçülen şey bu sürecin

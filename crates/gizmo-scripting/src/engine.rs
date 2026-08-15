@@ -104,12 +104,48 @@ impl std::fmt::Debug for ScriptEngine {
     }
 }
 
+/// One value a script exposes to the editor.
+///
+/// Three kinds, because those are the three a property inspector can edit without inventing a
+/// widget: a number, a flag, and a name. A script that needs more structure than this wants a
+/// table it manages itself, not an inspector row.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum ScriptValue {
+    Num(f64),
+    Bool(bool),
+    Text(String),
+}
+
+impl ScriptValue {
+    /// The label the inspector shows for this kind, and what a mismatched override is checked
+    /// against — an override whose kind differs from the declaration is ignored rather than
+    /// coerced, because silently turning `true` into `1` is how a script starts misbehaving in a
+    /// way nobody can trace to the editor.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Num(_) => "number",
+            Self::Bool(_) => "bool",
+            Self::Text(_) => "text",
+        }
+    }
+}
+
 /// ECS Componenti: Varlığın üzerine hangi Lua script'inin takılı olduğunu tutar
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Script {
     pub file_path: String,
     #[serde(default, skip)]
     pub initialized: bool, // on_init çağrıldı mı?
+    /// Per-entity overrides for the properties this script declares.
+    ///
+    /// Scripts are loaded once per PATH — two entities running the same file share one Lua
+    /// environment — so a per-entity value cannot live in that environment. It lives here and is
+    /// handed to `on_entity_update` as its third argument.
+    ///
+    /// A `BTreeMap` for the same reason the loaded-script map is one: this crate's contract is
+    /// same-platform bit-identical replay, and a `HashMap`'s iteration order is seeded per process.
+    #[serde(default)]
+    pub properties: std::collections::BTreeMap<String, ScriptValue>,
 }
 
 impl Script {
@@ -117,6 +153,7 @@ impl Script {
         Self {
             file_path: path.to_string(),
             initialized: false,
+            properties: std::collections::BTreeMap::new(),
         }
     }
 }
@@ -496,19 +533,92 @@ impl ScriptEngine {
     }
 
     /// Per-entity script güncelleme — Script component'i olan entity'ler için izole ortamda çalıştırır
+    /// The properties a script DECLARES, read from its `properties` table.
+    ///
+    /// The convention is a plain assignment at the top of the file:
+    ///
+    /// ```lua
+    /// properties = { open_speed = 2.4, locked = false }
+    /// ```
+    ///
+    /// which lands in the script's own environment (`_G` is that environment — see `load_script`).
+    /// This is the schema and the defaults: the editor lists these names, and an entity that has
+    /// not overridden one runs with the declared value.
+    ///
+    /// Anything that is not a number, boolean or string is skipped rather than guessed at — a
+    /// nested table is a script's own business and not an inspector row.
+    pub fn declared_properties(
+        &self,
+        script_path: &str,
+    ) -> std::collections::BTreeMap<String, ScriptValue> {
+        let mut out = std::collections::BTreeMap::new();
+        let Some((_, key)) = self.loaded_scripts.get(script_path) else {
+            return out;
+        };
+        let Ok(env) = self.lua.registry_value::<mlua::Table>(key) else {
+            return out;
+        };
+        let Ok(table) = env.get::<_, mlua::Table>("properties") else {
+            return out;
+        };
+        for pair in table.pairs::<String, mlua::Value>() {
+            let Ok((name, value)) = pair else { continue };
+            let converted = match value {
+                mlua::Value::Number(n) => Some(ScriptValue::Num(n)),
+                mlua::Value::Integer(i) => Some(ScriptValue::Num(i as f64)),
+                mlua::Value::Boolean(b) => Some(ScriptValue::Bool(b)),
+                mlua::Value::String(s) => s.to_str().ok().map(|t| ScriptValue::Text(t.to_string())),
+                _ => None,
+            };
+            if let Some(v) = converted {
+                out.insert(name, v);
+            }
+        }
+        out
+    }
+
+
+    /// Reads a numeric expression out of a loaded script's environment. Test-only.
+    #[cfg(test)]
+    pub fn eval_number(&self, script_path: &str, expr: &str) -> Option<f64> {
+        let (_, key) = self.loaded_scripts.get(script_path)?;
+        let env: mlua::Table = self.lua.registry_value(key).ok()?;
+        self.lua
+            .load(format!("return {expr}"))
+            .set_environment(env)
+            .eval::<f64>()
+            .ok()
+    }
+
+    /// Runs `on_entity_update(entity_id, dt, props)` for one entity.
+    ///
+    /// `properties` are that entity's own values — the third argument exists because scripts are
+    /// loaded per PATH, so two entities running the same file share one Lua environment and cannot
+    /// each keep a value in it. Passing them is additive: a script whose `on_entity_update` takes
+    /// two parameters simply ignores the third, which is why this did not need a new hook name.
     pub fn update_entity(
         &mut self,
         entity_id: u32,
         script_path: &str,
         dt: f32,
+        properties: &std::collections::BTreeMap<String, ScriptValue>,
     ) -> Result<(), String> {
         if let Some((_, key)) = self.loaded_scripts.get(script_path) {
             let env: mlua::Table = self.lua.registry_value(key).map_err(|e| e.to_string())?;
 
-            // on_entity_update(entity_id, dt) çağır (varsa)
+            // on_entity_update(entity_id, dt, props) çağır (varsa)
             if let Ok(func) = env.get::<_, LuaFunction>("on_entity_update") {
+                let props = self.lua.create_table().map_err(|e| e.to_string())?;
+                for (name, value) in properties {
+                    let set = match value {
+                        ScriptValue::Num(n) => props.set(name.as_str(), *n),
+                        ScriptValue::Bool(b) => props.set(name.as_str(), *b),
+                        ScriptValue::Text(t) => props.set(name.as_str(), t.as_str()),
+                    };
+                    set.map_err(|e| e.to_string())?;
+                }
                 self.arm_budget();
-                func.call::<_, ()>((entity_id, dt)).map_err(|e| {
+                func.call::<_, ()>((entity_id, dt, props)).map_err(|e| {
                     warn!(entity_id, script_path, error = %e, "[Scripting] on_entity_update çalışma-zamanı hatası");
                     format!(
                         "Lua on_entity_update hatası (entity {} mod {}): {}",
@@ -1723,6 +1833,91 @@ mod tests {
     /// Script serde round-trip: `initialized` alanı `#[serde(default, skip)]` olduğundan
     /// serileştirmede yer almaz ve deserialize sonrası daima false olur — böylece sahne
     /// yüklendiğinde on_init yeniden çalışır. file_path korunmalı.
+    /// A script's `properties = { … }` declaration is what the editor lists.
+    ///
+    /// Read back out of the script's own environment, which is where a bare assignment lands.
+    /// Non-scalar entries are dropped rather than guessed at: a nested table is the script's own
+    /// business and has no inspector row.
+    #[test]
+    fn declared_properties_are_read_from_the_script() {
+        let mut engine = ScriptEngine::new().unwrap();
+        let path = unique_temp("declared_props");
+        std::fs::write(
+            &path,
+            r#"
+properties = {
+    open_speed = 2.4,
+    locked = false,
+    label = "gate",
+    nested = { nope = 1 },
+}
+"#,
+        )
+        .unwrap();
+        engine.load_script(&path).unwrap();
+
+        let declared = engine.declared_properties(&path);
+        assert_eq!(declared.get("open_speed"), Some(&ScriptValue::Num(2.4)));
+        assert_eq!(declared.get("locked"), Some(&ScriptValue::Bool(false)));
+        assert_eq!(declared.get("label"), Some(&ScriptValue::Text("gate".into())));
+        assert!(
+            !declared.contains_key("nested"),
+            "a table is not an inspector row and must not be guessed at"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A script with no declaration yields nothing, rather than erroring.
+    #[test]
+    fn a_script_without_properties_declares_none() {
+        let mut engine = ScriptEngine::new().unwrap();
+        let path = unique_temp("no_props");
+        std::fs::write(&path, "function on_entity_update(id, dt, props) end\n").unwrap();
+        engine.load_script(&path).unwrap();
+        assert!(engine.declared_properties(&path).is_empty());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// The per-entity values reach the script, and two entities running the same file see their
+    /// own.
+    ///
+    /// This is the whole reason the values live on the component: scripts are loaded per PATH, so
+    /// both entities below share one Lua environment. If the properties lived in that environment
+    /// the second call would overwrite the first.
+    #[test]
+    fn each_entity_sees_its_own_property_values() {
+        let mut engine = ScriptEngine::new().unwrap();
+        let path = unique_temp("per_entity_props");
+        std::fs::write(
+            &path,
+            r#"
+seen = {}
+function on_entity_update(id, dt, props)
+    seen[id] = props.open_speed
+end
+"#,
+        )
+        .unwrap();
+        engine.load_script(&path).unwrap();
+
+        let mut a = std::collections::BTreeMap::new();
+        a.insert("open_speed".to_string(), ScriptValue::Num(1.5));
+        let mut b = std::collections::BTreeMap::new();
+        b.insert("open_speed".to_string(), ScriptValue::Num(9.25));
+
+        engine.update_entity(1, &path, 0.016, &a).unwrap();
+        engine.update_entity(2, &path, 0.016, &b).unwrap();
+
+        let seen_1 = engine.eval_number(&path, "seen[1]").expect("entity 1 value");
+        let seen_2 = engine.eval_number(&path, "seen[2]").expect("entity 2 value");
+        assert_eq!(seen_1, 1.5);
+        assert_eq!(
+            seen_2, 9.25,
+            "the second entity saw the first one's value — the properties are being shared"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
     #[test]
     fn script_serde_roundtrip_resets_initialized() {
         let mut s = Script::new("a.lua");

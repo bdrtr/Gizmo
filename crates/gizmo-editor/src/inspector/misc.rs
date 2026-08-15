@@ -180,11 +180,13 @@ pub fn draw_script_section(
                         ui.text_edit_singleline(&mut script.file_path);
                     });
 
-                    if ui.button("✏️ Düzenle").clicked() {
+                    if ui.button("Düzenle").clicked() {
                         let text = std::fs::read_to_string(&script.file_path).unwrap_or_else(|_| "".to_string());
                         pending_text = Some(text);
-                        state.log_info("✏️ Düzenle butonuna basıldı! Dosya okunmaya çalışılıyor...");
+                        state.log_info("Düzenle butonuna basıldı! Dosya okunmaya çalışılıyor...");
                     }
+
+                    draw_script_properties(ui, world, &mut script);
                 });
             ui.separator();
         }
@@ -708,4 +710,82 @@ pub fn draw_mesh_renderer_section(
             });
         });
     ui.separator();
+}
+
+/// The properties a script declares, with this entity's values.
+///
+/// The prototype's SCRIPT section shows exactly this — `open_speed 2.400`, `locked true/false` —
+/// and it is the part of the design that needed engine work rather than drawing: scripts are
+/// loaded per path, so two entities running one file share a Lua environment and a per-entity value
+/// has nowhere to live in it. It lives on the `Script` component and reaches the script as the
+/// third argument of `on_entity_update`.
+///
+/// The rows come from the script's own `properties = { … }` declaration, read back out of its
+/// environment. An entity that has not touched a property shows the declared default and stores
+/// nothing; editing one writes an override onto that entity alone.
+fn draw_script_properties(
+    ui: &mut egui::Ui,
+    world: &World,
+    script: &mut gizmo_scripting::Script,
+) {
+    use gizmo_scripting::{ScriptEngine, ScriptValue};
+
+    let Some(engine) = world.get_resource::<ScriptEngine>() else {
+        return; // no engine in this configuration; nothing to declare
+    };
+    let declared = engine.declared_properties(&script.file_path);
+    drop(engine);
+
+    if declared.is_empty() {
+        ui.label(
+            egui::RichText::new("Bu script özellik bildirmiyor (properties = { … }).")
+                .size(10.0)
+                .color(crate::theme::palette::TEXT_DIM),
+        );
+        return;
+    }
+
+    ui.separator();
+    for (name, default) in &declared {
+        // The entity's override, but only if its kind still matches the declaration: a script
+        // edited from `locked = false` to `locked = "no"` leaves a stale bool behind, and coercing
+        // it would hand the script a value of a type it stopped expecting.
+        let current = script
+            .properties
+            .get(name)
+            .filter(|v| v.kind() == default.kind())
+            .cloned()
+            .unwrap_or_else(|| default.clone());
+
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(name).size(11.0));
+            match current {
+                ScriptValue::Num(mut n) => {
+                    if ui.add(egui::DragValue::new(&mut n).speed(0.1)).changed() {
+                        script.properties.insert(name.clone(), ScriptValue::Num(n));
+                    }
+                }
+                ScriptValue::Bool(mut b) => {
+                    if crate::theme::segmented(ui, &mut b, &[(true, "true"), (false, "false")]) {
+                        script.properties.insert(name.clone(), ScriptValue::Bool(b));
+                    }
+                }
+                ScriptValue::Text(mut t) => {
+                    if ui.text_edit_singleline(&mut t).changed() {
+                        script.properties.insert(name.clone(), ScriptValue::Text(t));
+                    }
+                }
+            }
+            // An overridden property is marked, so "why is this one different from the file?" has
+            // an answer on the row rather than in a diff.
+            if script.properties.contains_key(name)
+                && ui
+                    .small_button(egui::RichText::new("↺").color(crate::theme::palette::ACCENT_LIGHT))
+                    .on_hover_text("Script'teki varsayılana dön")
+                    .clicked()
+            {
+                script.properties.remove(name);
+            }
+        });
+    }
 }

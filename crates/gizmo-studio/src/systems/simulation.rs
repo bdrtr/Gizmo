@@ -61,17 +61,24 @@ pub fn handle_simulation(
             // Call per-entity updates
             let scripts = world.borrow::<gizmo::scripting::Script>();
             {
-                let mut entity_calls: Vec<(u32, String)> = Vec::new();
+                // The entity's own property values ride along: scripts are loaded per path, so a
+                // per-entity value cannot live in the shared Lua environment.
+                let mut entity_calls: Vec<(u32, String, std::collections::BTreeMap<String, gizmo::scripting::ScriptValue>)> =
+                    Vec::new();
                 for (entity_id, _) in scripts.iter() {
                     if let Some(script) = scripts.get(entity_id) {
-                        entity_calls.push((entity_id, script.file_path.clone()));
+                        entity_calls.push((
+                            entity_id,
+                            script.file_path.clone(),
+                            script.properties.clone(),
+                        ));
                     }
                 }
                 drop(scripts);
 
-                for (entity_id, path) in entity_calls {
+                for (entity_id, path, properties) in entity_calls {
                     let _ = engine.reload_if_changed(&path);
-                    if let Err(e) = engine.update_entity(entity_id, &path, dt) {
+                    if let Err(e) = engine.update_entity(entity_id, &path, dt, &properties) {
                         editor_state.log_warning(&format!("Entity script error: {}", e));
                     }
                 }

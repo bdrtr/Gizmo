@@ -66,7 +66,7 @@ pub mod engine;
 
 pub use commands::{CommandQueue, ScriptCommand};
 
-pub use engine::{Script, ScriptContext, ScriptEngine, ScriptResult};
+pub use engine::{Script, ScriptContext, ScriptEngine, ScriptResult, ScriptValue};
 
 /// Registers the scripting layer's serializable scene components (currently
 /// [`Script`]) into a scene `ComponentRegistry`.
