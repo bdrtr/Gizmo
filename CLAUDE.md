@@ -72,10 +72,20 @@ Clean bottom-up layering, **no circular dependencies**:
 
 ```
 gizmo-math ─┬─ gizmo-core ─┬─ gizmo-physics-{core,rigid,dynamics,soft}
-            │              ├─ gizmo-renderer ─ gizmo-{window,ui,editor}
-            │              ├─ gizmo-{scene,net,ai,animation,audio,scripting}
-            └──────────────┴─ gizmo-app ─ gizmo (facade) ─ demo / cradle / server
+            │              ├─ gizmo-audio, gizmo-animation
+            │              ├─ gizmo-{scene,net,ai}       (over physics-{core,rigid})
+            │              ├─ gizmo-renderer             (over gizmo-animation)
+            │              ├─ gizmo-scripting            (over ai + animation + physics-rigid)
+            │              └─ gizmo-editor               (over renderer + scene + scripting + ai)
+            └── gizmo-app (over renderer/editor/scene/scripting/audio/net/physics)
+                  ├─ gizmo-ui, gizmo-analysis
+                  └─ gizmo (facade, published as `gizmo-engine`) ─ demo / cradle / studio
+gizmo-window: standalone, no in-workspace dependencies.
 ```
+<!-- Measured from the manifests, not drawn from memory: `gizmo-ui` sits ABOVE `gizmo-app`
+     (it depends on it), `gizmo-window` depends on nothing of ours, and `gizmo-animation` is a
+     dependency of both the renderer and scripting rather than a leaf beside them. The invariants
+     this shape has to keep are tested in `crates/gizmo/tests/crate_staging.rs`. -->
 
 - **`gizmo-math`** — vector/quat math (re-exports `glam`; also has an experimental Q16.16 `Fp32` the sim does *not* use).
 - **`gizmo-core`** — archetype-based ECS: `World`, `Query`/`query_mut`, `With`/`Without`/`Changed`/`Added` filters, `Commands` (deferred structural changes), `Res`/`ResMut`, Table + SparseSet storage, scheduling, events, hierarchy, input. Component access is borrow-checked — aliasing `&mut` views can't be built in safe code.

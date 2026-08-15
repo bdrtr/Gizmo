@@ -1030,7 +1030,7 @@ görünür bir etki beklenmiyor — ama ikisini de test edecek koşum yok, §3'�
 
 ### Doğrulanmış ama henüz el atılmamış kökler
 
-- **Crate grafiği / Stage A.** `gizmo-animation` Stage A listesinde ama pratikte öyle değil.
+(Bu listedeki son madde de kapandı — aşağıya bakın.)
 
 Kapatılanlar (**2026-08-14**), ayrıntısı §7'de:
 
@@ -1045,6 +1045,18 @@ Kapatılanlar (**2026-08-14**), ayrıntısı §7'de:
   üstünde ince bir metin sarmalayıcı. Refaktör kendisi için değil: derlenen shader'lar bind-group
   indekslerini satır içi yerleştiriyor (`@group(#{INSTANCE_GROUP})`), yani onları yalnız naga
   okuyamıyor — sözleşme testinin gerçek kompozisyon yoluna ihtiyacı vardı.
+- **Crate grafiği / Stage A** → ölçüldü. `gizmo-animation` bağımlılık olarak zaten temiz
+  (`gizmo-core`/`math`/`physics-core`, `default = []`, `wgpu` yok) — yani Stage A ölçütünü
+  karşılıyor; bayat olan **grafik belgesiydi**. Gerçek grafik `cargo metadata`'dan alındı ve
+  CLAUDE.md'deki diyagram üç yerde yanlıştı: `gizmo-ui` aslında `gizmo-app`'in **üstünde** (ona
+  bağlı), `gizmo-window`'un hiçbir workspace bağımlılığı yok, ve `gizmo-animation` renderer ile
+  scripting'in **altında** — yanlarındaki bir yaprak değil. Diyagram düzeltildi.
+  Asıl kazanç ölçüm değil, artık sınanan değişmez: `crates/gizmo/tests/crate_staging.rs`
+  manifestlerden grafiği okuyup **hiçbir Stage A crate'inin Stage B'ye bağlanmadığını** doğruluyor
+  (bağlansaydı o crate, listelendiği sürümü hızlı katmanın her kırıcı değişikliğiyle birlikte
+  yapmak zorunda kalırdı), her crate'in tam bir aşamada sınıflandırıldığını (yeni crate = karar
+  anı) ve `gizmo-core`/`gizmo-math`'in taban olarak kaldığını. Kırılabildiği doğrulandı
+  (`gizmo-audio → gizmo-scripting` kenarı eklendi, kırmızıya düştü).
 - **Determinizm çevresi** → `snapshot()`/`restore_snapshot()` artık `..` içermeyen **tam yıkım**
   (destructure) yapıyor: `PhysicsWorld`'e (ya da `WorldSnapshot`'a) eklenen bir alan orada derleme
   hatası. `_` ile bağlanan 19 alanın her biri gerekçesiyle yazılı — yapılandırma, türetilmiş,
