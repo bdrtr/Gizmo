@@ -355,11 +355,25 @@ impl ScriptEngine {
 
         let env = self.lua.create_table().map_err(|e| e.to_string())?;
 
-        // Link to _G via metatable
+        // Link to _G via metatable: reads fall through to the shared globals (that is how a script
+        // sees `entity`, `input`, `print`), writes land on the script's own table.
         let meta = self.lua.create_table().map_err(|e| e.to_string())?;
         meta.set("__index", self.lua.globals())
             .map_err(|e| e.to_string())?;
         env.set_metatable(Some(meta));
+
+        // `_G` inside a script means the SCRIPT's table, not the engine's globals.
+        //
+        // Without this the isolation was one-way and easy to step around by accident: an implicit
+        // `FOO = 1` stayed local, but the very next thing a Lua author reaches for — `_G.FOO = 1`,
+        // which every tutorial spells as "the explicit way to make a global" — wrote straight into
+        // the shared table, where the next script read it. Measured before the fix: script A set
+        // `_G.LEAK` and script B read it back. Two scripts sharing a mutable namespace by accident
+        // is a race with the load order, and the load order is alphabetical.
+        //
+        // Pointing `_G` at the env keeps the idiom meaning what the author expects — a global for
+        // this script — while `__index` still exposes the engine API for reading.
+        env.set("_G", env.clone()).map_err(|e| e.to_string())?;
 
         // Script'i İzole env içinde çalıştır
         self.arm_budget();
@@ -982,6 +996,66 @@ mod soundness {
 
 #[cfg(test)]
 mod tests {
+
+    /// One script's globals must not be another's, including the explicit spelling.
+    ///
+    /// Each script already ran in its own environment, so an implicit `FOO = 1` stayed local. But
+    /// `_G` resolved to the ENGINE's globals through the environment's `__index`, so `_G.FOO = 1`
+    /// — the spelling every Lua tutorial gives for "make this global" — wrote into the shared
+    /// table and the next script read it back. Measured, not theorised: script A set `_G.LEAK` and
+    /// script B saw `from-a`. Two scripts sharing a mutable namespace by accident is a race with
+    /// the load order, and the load order is alphabetical.
+    #[test]
+    fn a_script_cannot_reach_another_through_g() {
+        let dir = std::env::temp_dir().join(format!("gizmo_sandbox_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = dir.join("a_writer.lua");
+        let b = dir.join("b_reader.lua");
+        std::fs::write(&a, "function on_update(c)\n  _G.LEAK = 'from-a'\n  IMPLICIT = 'also-a'\nend\n")
+            .unwrap();
+        std::fs::write(
+            &b,
+            "function on_update(c)\n  print('LEAK=' .. tostring(_G.LEAK))\n  print('IMPLICIT=' .. tostring(IMPLICIT))\nend\n",
+        )
+        .unwrap();
+
+        let mut engine = ScriptEngine::new().unwrap();
+        engine.load_script(a.to_str().unwrap()).unwrap();
+        engine.load_script(b.to_str().unwrap()).unwrap();
+        engine.update(&World::new(), &Input::default(), 0.016).unwrap();
+
+        let log = engine.log_queue.lock().unwrap().clone();
+        let said = |needle: &str| log.iter().any(|(_, m)| m.contains(needle));
+        assert!(said("LEAK=nil"), "`_G.X` from one script reached another: {log:?}");
+        assert!(said("IMPLICIT=nil"), "an implicit global reached another script: {log:?}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// …and the containment must not have cost the script its API. `_G` is the script's own table
+    /// now, but reads still fall through to the engine's globals, which is what makes `print`,
+    /// `input` and the rest visible at all.
+    #[test]
+    fn a_script_still_reaches_the_engine_api_and_its_own_globals() {
+        let dir = std::env::temp_dir().join(format!("gizmo_sandbox2_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("s.lua");
+        std::fs::write(
+            &path,
+            "function on_update(c)\n  _G.MINE = 5\n  print('mine=' .. tostring(MINE))\n  print('api=' .. tostring(_G.input ~= nil and _G.print ~= nil))\n  print('std=' .. tostring(string.rep('x', 2)))\nend\n",
+        )
+        .unwrap();
+
+        let mut engine = ScriptEngine::new().unwrap();
+        engine.load_script(path.to_str().unwrap()).unwrap();
+        engine.update(&World::new(), &Input::default(), 0.016).unwrap();
+
+        let log = engine.log_queue.lock().unwrap().clone();
+        let said = |needle: &str| log.iter().any(|(_, m)| m.contains(needle));
+        assert!(said("mine=5"), "a script's own `_G` write must be visible to itself: {log:?}");
+        assert!(said("api=true"), "the engine API must still resolve through `_G`: {log:?}");
+        assert!(said("std=xx"), "the Lua standard library must still resolve: {log:?}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     /// A script that never returns must lose its frame, not the process.
     ///

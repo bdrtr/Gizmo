@@ -129,6 +129,71 @@ PlayAnimation {
 }
 
 
+impl ScriptCommand {
+    /// Does every number this command carries have a finite value?
+    ///
+    /// # Why the queue asks
+    ///
+    /// Lua arithmetic produces NaN and infinity quietly — `0/0`, `math.huge`, a division by a
+    /// velocity that happened to be zero — and a script has no reason to notice. Downstream,
+    /// nothing recovers: a NaN position makes an entity vanish and every comparison against it
+    /// false, a NaN velocity poisons the integrator for that body and then, through contacts, for
+    /// whatever it touches, and the determinism hash goes with it. `sanitize_dim` covered collider
+    /// dimensions — one of the eleven variants that carry floats — because that was the one that
+    /// had bitten someone.
+    ///
+    /// The match is **exhaustive on purpose**: no `_` arm, so a variant added with a float in it
+    /// fails to compile here rather than becoming the next one that was not covered. Variants
+    /// carrying no numbers answer `true` by naming themselves, which is the price of that.
+    #[must_use]
+    pub fn is_finite(&self) -> bool {
+        use ScriptCommand::*;
+        match self {
+            SetPosition(_, v) | SetScale(_, v) | SetVelocity(_, v) | SetAngularVelocity(_, v)
+            | ApplyForce(_, v) | ApplyImpulse(_, v) | SetAiTarget(_, v) | PlaySound3D(_, v) => {
+                v.is_finite()
+            }
+            SetRotation(_, q) => q.is_finite(),
+            AddRigidBody { mass, .. } => mass.is_finite(),
+            AddBoxCollider { hx, hy, hz, .. } => {
+                hx.is_finite() && hy.is_finite() && hz.is_finite()
+            }
+            AddSphereCollider { radius, .. } => radius.is_finite(),
+            SetVehicleEngineForce(_, f) | SetVehicleSteering(_, f) | SetVehicleBrake(_, f) => {
+                f.is_finite()
+            }
+            SpawnEntity { position, .. } | SpawnPrefab { position, .. } => position.is_finite(),
+            ShowDialogue { duration, .. } => duration.is_finite(),
+            AddCheckpoint { position, radius, .. } => position.is_finite() && radius.is_finite(),
+            SetCameraFov(f) | SetAnimationSpeed(_, f) => f.is_finite(),
+            SetFightCamera { height, distance, .. } => height.is_finite() && distance.is_finite(),
+            PlayAnimation { blend, .. } => blend.is_finite(),
+            SetFighterMove { damage, .. } => damage.is_finite(),
+
+            // Carry no floating-point numbers. Listed rather than wildcarded — see above.
+            DestroyEntity(_)
+            | PlaySound(_)
+            | StopSound(_)
+            | LoadScene(_)
+            | SaveScene(_)
+            | HideDialogue
+            | TriggerCutscene(_)
+            | EndCutscene
+            | StartRace
+            | ActivateCheckpoint(_)
+            | FinishRace { .. }
+            | ResetRace
+            | SetCameraTarget(_)
+            | SetEntityName(_, _)
+            | AddNavAgent(_)
+            | ClearAiTarget(_)
+            | ApplyHitstop(_, _)
+            | ApplyHitstun(_, _) => true,
+        }
+    }
+}
+
+
 /// Thread-safe queue of pending [`ScriptCommand`]s, accessible from Lua callbacks.
 ///
 /// Lua callbacks cannot mutate the `World` directly, so they push commands here;
@@ -137,6 +202,10 @@ PlayAnimation {
 pub struct CommandQueue {
     /// Pending commands, guarded by a mutex so Lua callbacks can push concurrently.
     pub commands: Mutex<Vec<ScriptCommand>>,
+    /// How many commands [`push`](CommandQueue::push) has refused for carrying NaN or infinity.
+    /// Cumulative for the life of the queue; a caller that wants a per-frame figure takes
+    /// differences.
+    rejected: std::sync::atomic::AtomicU64,
 }
 
 impl CommandQueue {
@@ -144,17 +213,38 @@ impl CommandQueue {
     pub fn new() -> Self {
         Self {
             commands: Mutex::new(Vec::new()),
+            rejected: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
-    /// Appends a command to the queue.
+    /// Appends a command to the queue, unless it carries a non-finite number.
+    ///
+    /// Dropped rather than clamped: a clamped force is a wrong answer the frame accepts silently,
+    /// while a dropped one is a no-op with a log line and a counter behind it. A script that
+    /// produced NaN has a bug, and the useful thing to do is say so, not to guess what it meant.
     pub fn push(&self, cmd: ScriptCommand) {
+        if !cmd.is_finite() {
+            tracing::warn!(
+                command = ?cmd,
+                "[Scripting] command dropped: carries NaN or infinity"
+            );
+            self.rejected
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            return;
+        }
         // Poison-recovery: bir thread lock tutarken panic etse bile kuyruk
         // kullanılabilir kalır (FFI/Lua callback sınırında panic-free).
         self.commands
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .push(cmd);
+    }
+
+    /// How many commands have been refused for carrying NaN or infinity, since this queue was
+    /// created.
+    #[must_use]
+    pub fn rejected_count(&self) -> u64 {
+        self.rejected.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Removes and returns all currently queued commands, leaving the queue empty.
@@ -188,6 +278,54 @@ impl CommandQueue {
 
 #[cfg(test)]
 mod tests {
+
+    /// The queue is the one place every command passes, so it is the one place that has to ask.
+    #[test]
+    fn a_command_carrying_nan_never_reaches_the_queue() {
+        let q = CommandQueue::new();
+        q.push(ScriptCommand::SetPosition(1, Vec3::new(f32::NAN, 0.0, 0.0)));
+        q.push(ScriptCommand::ApplyForce(1, Vec3::new(0.0, f32::INFINITY, 0.0)));
+        q.push(ScriptCommand::SetCameraFov(f32::NAN));
+        q.push(ScriptCommand::SetAnimationSpeed(1, f32::NEG_INFINITY));
+        q.push(ScriptCommand::SetRotation(1, Quat::from_xyzw(f32::NAN, 0.0, 0.0, 1.0)));
+
+        assert_eq!(q.rejected_count(), 5, "every one of these should have been refused");
+        assert!(q.drain().is_empty(), "a non-finite command reached the queue");
+    }
+
+    /// …and the guard must not cost the ordinary case anything.
+    #[test]
+    fn finite_commands_pass_through_untouched() {
+        let q = CommandQueue::new();
+        q.push(ScriptCommand::SetPosition(1, Vec3::new(1.0, 2.0, 3.0)));
+        q.push(ScriptCommand::DestroyEntity(2));
+        q.push(ScriptCommand::PlaySound("hit".into()));
+        q.push(ScriptCommand::AddCheckpoint {
+            id: 3,
+            position: Vec3::ZERO,
+            radius: 4.0,
+        });
+
+        assert_eq!(q.rejected_count(), 0);
+        assert_eq!(q.drain().len(), 4);
+    }
+
+    /// A NaN in ONE field is enough, whichever field it is — the multi-float variants are where a
+    /// per-field check gets written for two of three and then forgotten.
+    #[test]
+    fn one_bad_field_condemns_the_whole_command() {
+        let bad_z = ScriptCommand::AddBoxCollider { id: 1, hx: 1.0, hy: 1.0, hz: f32::NAN };
+        assert!(!bad_z.is_finite(), "hz was not checked");
+        let bad_distance =
+            ScriptCommand::SetFightCamera { p1_id: 1, p2_id: 2, height: 3.0, distance: f32::NAN };
+        assert!(!bad_distance.is_finite(), "distance was not checked");
+        let bad_position = ScriptCommand::SpawnPrefab {
+            name: "x".into(),
+            prefab_type: "y".into(),
+            position: Vec3::new(0.0, 0.0, f32::INFINITY),
+        };
+        assert!(!bad_position.is_finite(), "position.z was not checked");
+    }
     use super::*;
     use std::sync::Arc;
 
