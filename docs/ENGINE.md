@@ -1191,6 +1191,34 @@ yarısı oradan da eksikti.
 - **Sonda köprüsünde hangi sorgular sunulacak.** Mekanizma kuruldu ve tek tüketicisi var
   (`physics.ground_at`); geri kalanı API tasarımı.
 
+### God fonksiyon taraması (2026-08-15)
+
+Uzunluk tek başına sinyal değil; iç içelik derinliği ve dallanma sayısıyla birlikte ölçüldü. Bölünen
+beş yer ve **bölünmeyenlerin gerekçesi** — ikincisi daha önemli, çünkü tekrar tartışılmasın:
+
+- `handle_event` (gizmo-app) 708 → 450, derinlik 10 → 9. Asıl kazanç uzunluk değildi: dört surface
+  hata kolunun üçü, `self`'ten çıkarılan altı şeyi geri koyan sekiz satırlık epilogun kendi
+  kopyasını taşıyordu. Tek çağıran-tarafı epiloga indi.
+- `constraint_solve_step` (gizmo-physics-rigid) 459 → 438, derinlik **10 → 8**. Crate'in en derin
+  noktası solver aritmetiği değil, satır içi cevaplanan bir kırılma kontrolüymüş.
+- `execute_render_pipeline` (studio) 595 → 541 + editörün kamera kuralları ilk kez testli.
+- Kutu-seçim ve reparent: kod bölünmedi, **testleri yazıldı** / çekirdek yardımcıya indirildi.
+
+**Bölünmeyenler ve neden:**
+
+| Fonksiyon | Gerekçe |
+|---|---|
+| `update_vehicle_with_query` (544) | Ayrılabilir kararlar **zaten ayrılmış**: `ackermann_steering_angle`, `anti_roll_force`, `ground_effect_factor`, `weather_grip_factor`, `apply_force_at_point` — hepsi ayrı fonksiyon ve 19 testli. Kalan kütle 256 satırlık tekerlek döngüsü; dışarıdan ~12 değer okuyor, çıkarmak 12 alanlı bir bağlam struct'ı demek. Fonksiyon kısalır, karmaşıklık kalır. |
+| `create_fluid_pipelines` (529) | **0 dal** — bildirimsel wgpu descriptor'u. Çözülecek akış yok. |
+| `default_render_pass` (420) | **Derinlik 4** — uzun ama düz; zaten faz dizisi olarak okunuyor. |
+| `ui_scene_view` (433) | egui tesisatı; kararları başka yerde çözülüyor (kutu-seçim isteği burada kaydedilip `studio_input`'ta işleniyor — okunarak doğrulandı). |
+| `solve_contacts` / `_tgs` / `narrowphase_*` | Sıcak yol. Belgeler belirli *optimizasyonları* ölçüp reddetmiş; yapı hakkında bir şey söylemiyor. Bölünecekse şartı `headless_stress_test` hash'inin değişmemesi — `collect_fracture_events` bunun yapılabildiğini gösterdi. |
+
+**Ölçüt olarak ayakta kalan tek şey:** uzunluğun sebebi **düğüm mü** (iç içe durum + dallanma → böl)
+yoksa **dizi/bildirim mi** (→ bırak). Yol boyunca kullanılıp çürütülen üç sahte ölçüt: "iyi test
+edilmiş" (kapsam bölmeyi *güvenli* kılar, gereksiz değil), "GPU'ya bağlı" (test edilebilirlik
+hakkında, bölünebilirlik hakkında değil), "bilinçli yoğun" (perf kararı, yapı kararı değil).
+
 ### Bir daha kovalanmasın
 
 - Animasyonun zamanlanmamasının sebebi **imza değildi** — studio onu tam o imzayla zaten çağırıyordu.
