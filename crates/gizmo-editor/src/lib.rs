@@ -163,11 +163,9 @@ pub fn draw_editor(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
     // 1. Status Bar (En altta) — composed into the root `Ui`; `show_inside`
     // shrinks the root cursor from the bottom so the dock fills the remainder.
     egui::Panel::bottom("status_bar")
-        .exact_size(24.0)
+        .exact_size(23.0) // the prototype's bar
         .show_inside(ui, |ui| {
-            ui.horizontal_centered(|ui| {
-                ui.label(egui::RichText::new(&state.status_message).weak().small());
-            });
+            draw_status_bar(ui, world, state);
         });
 
     // 2. Toolbar (en üstte kalmaya devam etmeli, dock'un dışında)
@@ -233,4 +231,69 @@ viewer.state.dock_state = dock_state;
 
     // Her çerçevenin sonunda I/O optimizasyonu olarak prefs kirlendiyse dosyaya yaz
     state.prefs.flush_if_dirty();
+}
+
+/// The prototype's global status bar: a state dot and message on the left, live counts, and the
+/// frame cost on the right.
+///
+/// # What is not on it
+///
+/// The prototype also shows `RAM 1.8 GB · VRAM 742 MB`, `41 systems`, `wgpu / vulkan` and
+/// `egui 0.29 · rustc 1.83`. None of those are measured or stored anywhere in this engine — the
+/// renderer logs its adapter at startup and keeps nothing, and the schedule does not expose a
+/// system count. A status bar that prints a number it did not measure is worse than a shorter one,
+/// so they are absent rather than plausible. Listed in `docs/FIXPLAN.md` under what the design
+/// asks for and the engine cannot yet answer.
+fn draw_status_bar(ui: &mut egui::Ui, world: &World, state: &EditorState) {
+    use crate::theme::palette::*;
+
+    let sep = |ui: &mut egui::Ui| {
+        ui.label(egui::RichText::new("|").color(BORDER).size(11.0));
+    };
+
+    ui.horizontal_centered(|ui| {
+        ui.spacing_mut().item_spacing.x = crate::theme::SPACE_2;
+
+        // The state dot: accent while playing, neutral while editing. The prototype leads with it
+        // because "am I in play mode" is the one piece of state that changes what every other
+        // control does.
+        let playing = state.is_playing() || state.mode == crate::editor_state::EditorMode::Paused;
+        let (dot, _) = ui.allocate_exact_size(egui::vec2(7.0, 7.0), egui::Sense::hover());
+        ui.painter()
+            .rect_filled(dot, 0.0, if playing { ACCENT } else { BORDER_HOT });
+        ui.label(egui::RichText::new(&state.status_message).color(TEXT_BRIGHT).size(11.0));
+
+        sep(ui);
+        let selected = state.selection.entities.len();
+        let sel_label = match selected {
+            0 => "nothing selected".to_string(),
+            1 => {
+                let names = world.borrow::<gizmo_core::EntityName>();
+                let id = state.selection.entities.iter().next().map(|e| e.id());
+                let name = id
+                    .and_then(|id| names.get(id).map(|n| n.0.clone()))
+                    .unwrap_or_else(|| format!("Entity {}", id.unwrap_or(0)));
+                format!("{name} selected")
+            }
+            n => format!("{n} selected"),
+        };
+        ui.label(egui::RichText::new(sel_label).color(TEXT_BODY).size(11.0));
+
+        sep(ui);
+        ui.label(
+            egui::RichText::new(format!("{} entities", world.iter_alive_entities().len()))
+                .color(TEXT_BODY)
+                .size(11.0),
+        );
+
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if let Some(p) = world.get_resource::<gizmo_core::FrameProfiler>() {
+                ui.label(
+                    egui::RichText::new(format!("{:.2} ms", p.avg_frame_ms(30)))
+                        .color(TEXT_BODY)
+                        .size(11.0),
+                );
+            }
+        });
+    });
 }

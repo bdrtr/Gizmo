@@ -90,11 +90,21 @@ pub fn ui_inspector(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
         ui.separator();
 
         if sel_len == 1 {
-            ui.horizontal(|ui| {
-                if ui.button("➕ Bileşen Ekle").clicked() {
-                    state.add_component_open = !state.add_component_open;
-                }
-            });
+            // The prototype's `+ ADD COMPONENT`: full width, accent outline, flush at the bottom of
+            // the component list — it is the one action that belongs to the inspector as a whole
+            // rather than to any section, and it reads that way only if it spans them all.
+            ui.add_space(crate::theme::SPACE_2);
+            let label = if state.add_component_open { "− BİLEŞEN EKLE" } else { "+ BİLEŞEN EKLE" };
+            let button = egui::Button::new(
+                egui::RichText::new(label).size(10.0).color(crate::theme::palette::ACCENT),
+            )
+            .fill(crate::theme::palette::CHROME)
+            .stroke(egui::Stroke::new(1.0_f32, crate::theme::palette::ACCENT))
+            .corner_radius(0)
+            .min_size(egui::vec2(ui.available_width(), 22.0));
+            if ui.add(button).clicked() {
+                state.add_component_open = !state.add_component_open;
+            }
 
             if state.add_component_open {
                 menu::draw_add_component_menu(ui, world, entity_id, state);
