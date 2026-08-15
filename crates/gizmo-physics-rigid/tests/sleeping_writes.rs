@@ -145,3 +145,71 @@ fn the_same_write_works_when_the_writer_wakes_the_body() {
          given, or the guard has turned into 'gameplay cannot push a settled object'"
     );
 }
+
+/// A sleeping neighbour in a solved island must not bank a velocity it will never spend.
+///
+/// # The half-awake island
+///
+/// The solver has no sleep check anywhere — a sleeping dynamic body still has finite inverse mass,
+/// so it takes real impulses — and the island write-back used to store the result on every dynamic
+/// member. Position integration then skips the sleeping ones. The velocity is banked, and fires
+/// whenever something wakes the body.
+///
+/// Getting into that state is ordinary: the ended-collision path wakes both bodies of a pair
+/// unconditionally, and an island only wakes its members wholesale when one of them is a *mover*
+/// (speed above 0.05). Wake one body below that threshold and the island is solved with sleeping
+/// members in it.
+///
+/// Gravity is off on purpose. At 240 Hz an awake resting body already carries `g·dt ≈ 0.0409`
+/// against the 0.05 mover threshold, which leaves almost no headroom to place a sub-threshold
+/// nudge — the scenario would be measuring the threshold, not the defect.
+#[test]
+fn a_sleeping_neighbour_does_not_bank_a_velocity_it_never_spends() {
+    use gizmo_physics_core::BodyHandle;
+
+    let mut pw = PhysicsWorld::new();
+    pw.integrator.gravity = Vec3::ZERO;
+
+    let collider = Collider::box_collider(Vec3::splat(0.5));
+    let mut rb = RigidBody::new(1.0, true);
+    rb.update_inertia_from_collider(&collider);
+
+    // Two unit boxes overlapping slightly, so a manifold exists and they share an island.
+    let a = BodyHandle::from_id(1);
+    let b = BodyHandle::from_id(2);
+    pw.add_body(a, rb, Transform::new(Vec3::new(0.0, 0.0, 0.0)), Velocity::default(), collider.clone());
+    pw.add_body(b, rb, Transform::new(Vec3::new(0.98, 0.0, 0.0)), Velocity::default(), collider);
+
+    for _ in 0..400 {
+        pw.step(1.0 / 60.0).ok();
+    }
+
+    let idx_a = pw.entities.iter().position(|e| *e == a).expect("a");
+    let idx_b = pw.entities.iter().position(|e| *e == b).expect("b");
+    assert!(
+        pw.rigid_bodies[idx_a].is_sleeping && pw.rigid_bodies[idx_b].is_sleeping,
+        "scenario invalid: the pair never fell asleep, so there is no sleeping member to solve \
+         around"
+    );
+    let v_b_before = pw.velocities[idx_b];
+
+    // Wake A only, at a speed below the 0.05 mover threshold, so the island is solved without
+    // waking B.
+    pw.rigid_bodies[idx_a].wake_up();
+    pw.velocities[idx_a].linear = Vec3::new(0.045, 0.0, 0.0);
+
+    for _ in 0..20 {
+        pw.step(1.0 / 60.0).ok();
+    }
+
+    assert!(
+        pw.rigid_bodies[idx_b].is_sleeping,
+        "scenario invalid: the island found a mover and woke everything, so nothing was solved \
+         around a sleeper"
+    );
+    assert_eq!(
+        pw.velocities[idx_b], v_b_before,
+        "the sleeping neighbour banked a velocity from a solve it never integrates — it will fire \
+         as a stale impulse the moment anything wakes it"
+    );
+}

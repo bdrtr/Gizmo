@@ -933,10 +933,35 @@ current_cache.insert(pair, (false, Some(cached)));
                 // deepest island, and summing it would mean nothing.
                 self.metrics.solver_sweeps += stats.iterations;
                 self.metrics.max_island_depth = self.metrics.max_island_depth.max(stats.island_depth);
+                // The wake pass runs BEFORE the velocities are written back, and that order is the
+                // whole of the fix below.
+                //
+                // The solver has no sleep check anywhere (a sleeping dynamic still has finite
+                // inverse mass, so it takes real impulses), and this loop used to write its result
+                // onto every dynamic island member. Position integration then skips the sleeping
+                // ones — so a body that stays asleep banks a velocity it never spends, and fires it
+                // whenever something wakes it later. That is the defect `docs/FIXPLAN.md` records
+                // against this write-back.
+                //
+                // Waking first is what keeps this from changing the ordinary case: an island with a
+                // real mover wakes its sleepers here, so they are awake by the time the guard below
+                // runs and still take the impact impulse on this substep. Only the half-awake
+                // island — woken by something that is not a mover, e.g. the unconditional
+                // ended-collision wake — loses the write, which is exactly the case that was wrong.
+                total_wakes += wake_ups.len();
+                for entity in wake_ups {
+                    if let Some(&idx) = entity_map.get(&entity.id()) {
+                        self.rigid_bodies[idx].wake_up();
+                    }
+                }
                 for (entity, vel) in island_vels {
+                    // Unconditional: `in_island` is read further down to decide sleep eligibility,
+                    // and a body that was solved belongs to an island whether or not it woke.
                     in_island.insert(entity.id());
                     if let Some(&idx) = entity_map.get(&entity.id()) {
-                        self.velocities[idx] = vel;
+                        if !self.rigid_bodies[idx].is_sleeping {
+                            self.velocities[idx] = vel;
+                        }
                     }
                 }
                 // Split-impulse pozisyon düzeltmesini doğrudan transform'a uygula
@@ -949,12 +974,6 @@ current_cache.insert(pair, (false, Some(cached)));
                             t.rotation = (gizmo_math::Quat::from_scaled_axis(dang) * t.rotation).normalize();
                         }
                         t.update_local_matrix();
-                    }
-                }
-                total_wakes += wake_ups.len();
-                for entity in wake_ups {
-                    if let Some(&idx) = entity_map.get(&entity.id()) {
-                        self.rigid_bodies[idx].wake_up();
                     }
                 }
                 // After the wake pass, so the two can never fight: an island with a mover is
