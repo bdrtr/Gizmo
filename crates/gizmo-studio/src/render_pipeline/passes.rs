@@ -333,7 +333,17 @@ pub(super) fn record_studio_main_pass(
             let is_playing_mode = !draw_chrome || world.get_resource::<gizmo::editor::EditorState>()
                 .map(|ed| ed.is_playing() || ed.mode == gizmo::editor::EditorMode::Paused)
                 .unwrap_or(false);
-            if !is_playing_mode {
+            // The "Grid Çizgilerini Göster" checkbox, which until now wrote a preference to disk
+            // that nothing read back.
+            //
+            // The default is `true`, not `false`: with no `EditorState` in the world — every
+            // headless render test — falsy would blank the grid and quietly change what those
+            // tests measure. It also matches `EditorPrefs::default()`.
+            let show_grid = world
+                .get_resource::<gizmo::editor::EditorState>()
+                .map(|ed| ed.prefs.show_grid)
+                .unwrap_or(true);
+            if !is_playing_mode && show_grid {
                 render_pass.set_pipeline(&renderer.scene.grid_pipeline);
                 for batch in flat_batches {
                     if !batch.is_grid {

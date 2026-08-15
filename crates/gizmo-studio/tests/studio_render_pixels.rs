@@ -679,3 +679,163 @@ fn the_game_view_shows_the_game_camera_not_the_editor_camera() {
         scene_px.len()
     );
 }
+
+/// The "show grid" preference actually hides the grid.
+///
+/// It was a checkbox that wrote a value to disk and was read by nobody: the grid draw was gated on
+/// play mode alone. Nothing pinned the grid at all, in either direction — `cargo test` could not
+/// tell a viewport with a grid from one without.
+///
+/// Two renders of the same world, differing only in that one flag, compared over the whole frame.
+/// A count rather than an eyeball: the grid is thin lines over a dark clear, so a threshold picked
+/// from a single sample point would be luck.
+#[test]
+fn the_show_grid_preference_hides_the_grid() {
+    let _gpu = gpu_lock();
+    if !pollster::block_on(Renderer::headless_adapter_available()) {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    }
+    if pollster::block_on(Renderer::headless_adapter_is_software()) {
+        eprintln!("skipping: software adapter");
+        return;
+    }
+
+    let with_grid = render_grid_scene(true).expect("first render");
+    let without = render_grid_scene(false).expect("second render");
+
+    let differing = with_grid
+        .iter()
+        .zip(without.iter())
+        .filter(|(a, b)| a != b)
+        .count();
+    assert!(
+        differing > 200,
+        "turning the grid off changed only {differing} bytes — the preference is not reaching the \
+         grid draw"
+    );
+
+    // And the direction: the grid ADDS light lines over a dark clear, so the frame with it is the
+    // brighter one. Without this the test would also pass if the flag inverted.
+    let sum = |px: &[u8]| px.chunks_exact(4).map(|c| u64::from(c[0]) + u64::from(c[1]) + u64::from(c[2])).sum::<u64>();
+    assert!(
+        sum(&with_grid) > sum(&without),
+        "the frame WITH the grid is not brighter than the one without — the flag is inverted"
+    );
+}
+
+/// A scene that is nothing but the editor grid, rendered with `show_grid` set either way.
+fn render_grid_scene(show_grid: bool) -> Option<Vec<u8>> {
+    pollster::block_on(async {
+        let mut renderer = Renderer::new_headless(W, H, None).await;
+        let mut am = AssetManager::new();
+        let mut world = World::new();
+        let tex = am.create_white_texture(
+            &renderer.device,
+            &renderer.queue,
+            &renderer.scene.texture_bind_group_layout,
+        );
+
+        // The grid, exactly as `gizmo_studio::setup` builds it.
+        let grid = world.spawn();
+        world.add_component(grid, Transform::new(Vec3::ZERO));
+        world.add_component(
+            grid,
+            AssetManager::create_editor_grid_mesh(&renderer.device, 500.0),
+        );
+        let mut grid_mat = Material::new(tex);
+        grid_mat.albedo = Vec4::ONE;
+        grid_mat.material_type = gizmo::renderer::components::MaterialType::Grid;
+        world.add_component(grid, grid_mat);
+        world.add_component(grid, MeshRenderer::new());
+
+        // Looking down at the grid from above, so it fills the frame.
+        let cam = world.spawn();
+        world.add_component(cam, Transform::new(Vec3::new(0.0, 6.0, 6.0)));
+        world.add_component(
+            cam,
+            gizmo::renderer::components::Camera::new(
+                std::f32::consts::FRAC_PI_4,
+                0.1,
+                1000.0,
+                -std::f32::consts::FRAC_PI_2,
+                -0.7,
+                true,
+            ),
+        );
+        world.spawn_bundle(gizmo::prelude::DirectionalLightBundle::default());
+
+        let mut ed = gizmo::editor::EditorState::default();
+        ed.prefs.show_grid = show_grid;
+        world.insert_resource(ed);
+
+        let state = StudioState {
+            current_fps: 60.0,
+            actual_dt: 1.0 / 60.0,
+            editor_camera: cam.id(),
+            game_camera: 4242,
+            do_raycast: false,
+            physics_accumulator: 0.0,
+            asset_watcher: None,
+            gc_timer: 0.0,
+            autosave_timer: 0.0,
+            visible_entity_count: 0,
+            draw_call_count: 0,
+        };
+
+        let format = renderer.config.format;
+        let target = renderer.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("grid-target"),
+            size: wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut enc = renderer
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        execute_render_pipeline(&mut world, &state, &mut enc, &view, &mut renderer, 0.0);
+
+        let staging = renderer.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("grid-readback"),
+            size: u64::from(W * H * BPP),
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        enc.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &target,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(W * BPP),
+                    rows_per_image: Some(H),
+                },
+            },
+            wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 1 },
+        );
+        renderer.queue.submit(std::iter::once(enc.finish()));
+
+        let slice = staging.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        let _ = renderer
+            .device
+            .poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        rx.recv().expect("readback channel").expect("readback");
+        let pixels = slice.get_mapped_range().to_vec();
+        staging.unmap();
+        Some(pixels)
+    })
+}

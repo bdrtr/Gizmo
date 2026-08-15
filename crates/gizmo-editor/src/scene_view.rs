@@ -245,9 +245,10 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
                 };
 
                 let is_ctrl = ui.input(|i| i.modifiers.ctrl);
-                let snap_enabled = state.prefs.snap_enabled ^ is_ctrl;
+                let snap_enabled = snap_active(state.prefs.snap_enabled, is_ctrl);
                 let snap_distance = if snap_enabled { state.prefs.snap_translate } else { 0.0 };
                 let snap_angle = if snap_enabled { state.prefs.snap_rotate_deg.to_radians() } else { 0.0 };
+                let snap_scale = if snap_enabled { state.prefs.snap_scale } else { 0.0 };
 
                 let vm = view_mat.to_cols_array_2d();
                 let pm = proj_mat.to_cols_array_2d();
@@ -301,8 +302,20 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
                         crate::editor_state::GizmoMode::Select => transform_gizmo_egui::GizmoMode::all(),
                     },
                     orientation: gizmo_orientation,
+                    // `snapping` is the gate: `transform-gizmo` reads `snap_distance`,
+                    // `snap_angle` and `snap_scale` ONLY inside `if config.snapping` (see
+                    // subgizmo/{translation,rotation,scale}.rs in the crate). It was never
+                    // assigned here, so `..Default::default()` supplied `false` and all three
+                    // settings — a preferences panel with three sliders and a Ctrl modifier
+                    // already wired below — were computed every frame and thrown away.
+                    snapping: snap_enabled,
                     snap_distance,
                     snap_angle,
+                    snap_scale,
+                    visuals: transform_gizmo_egui::GizmoVisuals {
+                        gizmo_size: state.prefs.gizmo_size,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 };
                 state.transform_gizmo.update_config(config);
@@ -433,5 +446,58 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
                 state.camera.focus_target = Some(t.position);
             }
         }
+    }
+}
+
+/// Is snapping on for this drag?
+///
+/// Ctrl **inverts** the preference rather than forcing snapping on: with snapping off it is the
+/// hold-to-snap key, and with snapping on it is hold-to-snap-*off*, which is the behaviour every
+/// other editor has and the reason this is an XOR and not an OR. It was written inline as `^`,
+/// where a reader cannot tell an intended inversion from a typo'd `||`, and where nothing checked
+/// the second row of the table.
+#[inline]
+pub(crate) fn snap_active(pref_enabled: bool, ctrl_held: bool) -> bool {
+    pref_enabled ^ ctrl_held
+}
+
+#[cfg(test)]
+mod snap_tests {
+    use super::snap_active;
+
+    #[test]
+    fn ctrl_inverts_the_preference_in_both_directions() {
+        assert!(!snap_active(false, false), "off by default");
+        assert!(snap_active(false, true), "Ctrl is hold-to-snap when the preference is off");
+        assert!(snap_active(true, false), "on by preference");
+        assert!(
+            !snap_active(true, true),
+            "Ctrl must SUSPEND snapping when the preference is on — an OR here would make the \
+             key do nothing half the time, and nothing would notice"
+        );
+    }
+
+    /// The gate the three snap settings sit behind.
+    ///
+    /// `transform-gizmo` reads `snap_distance`, `snap_angle` and `snap_scale` only inside
+    /// `if config.snapping` (subgizmo/{translation,rotation,scale}.rs). That field was never
+    /// assigned, so `..Default::default()` supplied `false` and three preference sliders plus a
+    /// Ctrl modifier were computed every frame and discarded. Nothing here can drive an egui drag,
+    /// so this pins the one thing a test can see: that the field is still assigned.
+    #[test]
+    fn the_gizmo_config_still_assigns_snapping() {
+        let src = include_str!("scene_view.rs");
+        let code = src.split("#[cfg(test)]").next().unwrap_or("");
+        assert!(
+            code.contains("snapping: snap_enabled"),
+            "GizmoConfig must assign `snapping`, or the snap settings are silently inert again"
+        );
+        for field in ["snap_distance,", "snap_angle,", "snap_scale,"] {
+            assert!(code.contains(field), "GizmoConfig no longer passes {field}");
+        }
+        assert!(
+            code.contains("gizmo_size: state.prefs.gizmo_size"),
+            "the gizmo size preference must reach GizmoVisuals"
+        );
     }
 }
