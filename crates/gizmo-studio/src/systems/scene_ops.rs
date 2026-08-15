@@ -326,83 +326,189 @@ pub fn handle_scene_operations(
     }
 
     // --- PARENT DEĞİŞTİRME (Reparent) ---
+    //
+    // The link itself is `HierarchyExt::add_child`, not a copy of it. This block used to
+    // re-implement the whole thing — the same cycle rejection, the same removal from the old
+    // parent's `Children`, the same create-the-list-if-missing — forty lines beside a core method
+    // that already did it and has tests for the cycle case. Two implementations of "make B a child
+    // of A", one of which has a hang in its history (a `Children` cycle wedges transform
+    // propagation, `despawn_recursive` and scene save), is exactly the shape worth removing.
+    //
+    // What stays here is what the editor adds: telling the user WHY a drag was refused. `add_child`
+    // returns silently, so the condition is tested here for the message and then the core call
+    // does the work.
     if let Some((child_id, new_parent_id)) = editor_state.reparent_request.take() {
-        // Reddet: bir entity'yi kendisine ya da kendi torununa parent yapmak bir
-        // `Children` döngüsü yaratır → cyclic GlobalTransform + (guard'lanmadan önce)
-        // transform-propagation/despawn/save hang'i. `is_ancestor` önerilen parent'ın
-        // ata zincirini gezip child'a ulaşırsa reddeder.
-        if new_parent_id.id() == child_id.id()
-            || world.is_ancestor(child_id.id(), new_parent_id.id())
-        {
+        let would_cycle = new_parent_id.id() == child_id.id()
+            || world.is_ancestor(child_id.id(), new_parent_id.id());
+        if would_cycle {
             editor_state.log_info(&format!(
                 "Reparent reddedildi: {child_id} → {new_parent_id} bir hiyerarşi döngüsü oluştururdu."
             ));
-        } else {
-            // Eski parent'ı O(1) maliyetle bul
-            let old_parent_id = world
-                .borrow::<gizmo::core::component::Parent>()
-                .get(child_id.id())
-                .map(|c| c.0);
-
-            // Eski parent'ın children listesinden çıkar ve yeni parent'a ekle
-            {
-                let mut children_comp = world.borrow_mut::<gizmo::core::component::Children>();
-                if let Some(old_pid) = old_parent_id {
-                    if let Some(mut ch) = children_comp.get_mut(old_pid) {
-                        ch.0.retain(|&cid| cid != child_id.id());
-                    }
-                }
-
-                // Yeni parent'a ekle
-                if let Some(mut ch) = children_comp.get_mut(new_parent_id.id()) {
-                    if !ch.0.contains(&child_id.id()) {
-                        ch.0.push(child_id.id());
-                    }
-                } else {
-                    // Yeni parent'ın henüz Children component'i yok → oluştur
-                    drop(children_comp);
-                    if let Some(parent_ent) = world.get_entity(new_parent_id.id()) {
-                        world.add_component(
-                            parent_ent,
-                            gizmo::core::component::Children(vec![child_id.id()]),
-                        );
-                    }
-                }
-            }
-
-            if let Some(child_ent) = world.get_entity(child_id.id()) {
-                world.add_component(
-                    child_ent,
-                    gizmo::core::component::Parent(new_parent_id.id()),
-                );
-                editor_state.log_info(&format!(
-                    "Entity {} parent {} olarak ayarlandı.",
-                    child_id, new_parent_id
-                ));
-            }
+        } else if let (Some(child), Some(parent)) = (
+            world.get_entity(child_id.id()),
+            world.get_entity(new_parent_id.id()),
+        ) {
+            world.add_child(parent, child);
+            editor_state.log_info(&format!(
+                "Entity {} parent {} olarak ayarlandı.",
+                child_id, new_parent_id
+            ));
         }
     }
 
     // --- PARENT KALDIR (Root Yap) ---
+    //
+    // Likewise `HierarchyExt::remove_child`, which drops the `Parent` component and takes the id
+    // out of the old parent's `Children` — the two halves that have to happen together or the
+    // hierarchy is left describing itself two different ways.
     if let Some(child_id) = editor_state.unparent_request.take() {
-        // Eski parent'ı O(1) maliyetle bul
         let old_parent_id = world
             .borrow::<gizmo::core::component::Parent>()
             .get(child_id.id())
             .map(|c| c.0);
 
-        if let Some(old_pid) = old_parent_id {
-            {
-                let mut children_comp = world.borrow_mut::<gizmo::core::component::Children>();
-                if let Some(mut ch) = children_comp.get_mut(old_pid) {
-                    ch.0.retain(|&cid| cid != child_id.id());
-                }
+        if let (Some(old_pid), Some(child)) = (old_parent_id, world.get_entity(child_id.id())) {
+            if let Some(old_parent) = world.get_entity(old_pid) {
+                world.remove_child(old_parent, child);
+                editor_state.log_info(&format!("Entity {} kök (root) yapıldı.", child_id));
             }
         }
+    }
+}
 
-        if let Some(child_ent) = world.get_entity(child_id.id()) {
-            world.remove_component::<gizmo::core::component::Parent>(child_ent);
-            editor_state.log_info(&format!("Entity {} kök (root) yapıldı.", child_id));
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gizmo::core::component::{Children, Parent};
+
+    /// The editor's request fields are the only input this system has, so the tests drive it the
+    /// way the UI does: set a request, run the system, look at the world.
+    ///
+    /// What the cycle tests below pin is that the EDITOR'S PATH refuses cycles — not that this
+    /// file is what refuses them. Since the reparent became a call to `HierarchyExt::add_child`,
+    /// the refusal lives there (and `gizmo-core` tests it directly); the check that remains here
+    /// exists to tell the user why the drag was rejected, and that message goes to the global
+    /// logger, which is shared between tests and not worth asserting on. Removing the local check
+    /// therefore does not fail these tests — verified — and it should not: they are asking whether
+    /// the editor can produce a cycle, and the answer stays no either way.
+    fn studio_state() -> StudioState {
+        StudioState {
+            current_fps: 0.0,
+            actual_dt: 0.016,
+            editor_camera: 0,
+            game_camera: 0,
+            do_raycast: false,
+            physics_accumulator: 0.0,
+            asset_watcher: None,
+            gc_timer: 0.0,
+            autosave_timer: 0.0,
+            visible_entity_count: 0,
+            draw_call_count: 0,
         }
+    }
+
+    fn spawn(world: &mut World) -> gizmo::core::entity::Entity {
+        let e = world.spawn();
+        world.add_component(e, Transform::default());
+        e
+    }
+
+    fn children_of(world: &World, parent: u32) -> Vec<u32> {
+        world.borrow::<Children>().get(parent).map(|c| c.0.clone()).unwrap_or_default()
+    }
+
+    /// A reparent must leave BOTH halves of the hierarchy agreeing: the child points up, the
+    /// parent lists it. Half of that is a scene that describes itself two different ways.
+    #[test]
+    fn a_reparent_sets_both_directions() {
+        let mut world = World::new();
+        let (parent, child) = (spawn(&mut world), spawn(&mut world));
+        let mut ed = EditorState::default();
+        ed.reparent_request = Some((child, parent));
+
+        handle_scene_operations(&mut world, &mut ed, &mut studio_state());
+
+        assert_eq!(
+            world.borrow::<Parent>().get(child.id()).map(|p| p.0),
+            Some(parent.id()),
+            "the child must point at its new parent"
+        );
+        assert_eq!(children_of(&world, parent.id()), vec![child.id()], "…and be listed by it");
+    }
+
+    /// Moving a child from one parent to another must take it OUT of the first one's list.
+    #[test]
+    fn a_reparent_removes_the_child_from_its_previous_parent() {
+        let mut world = World::new();
+        let (first, second, child) = (spawn(&mut world), spawn(&mut world), spawn(&mut world));
+        let mut ed = EditorState::default();
+
+        ed.reparent_request = Some((child, first));
+        handle_scene_operations(&mut world, &mut ed, &mut studio_state());
+        ed.reparent_request = Some((child, second));
+        handle_scene_operations(&mut world, &mut ed, &mut studio_state());
+
+        assert!(
+            children_of(&world, first.id()).is_empty(),
+            "the old parent still lists a child it no longer has"
+        );
+        assert_eq!(children_of(&world, second.id()), vec![child.id()]);
+        assert_eq!(world.borrow::<Parent>().get(child.id()).map(|p| p.0), Some(second.id()));
+    }
+
+    /// Dropping a node onto itself is refused. A `Children` cycle is not a cosmetic problem: it
+    /// wedges transform propagation, `despawn_recursive` and scene save.
+    #[test]
+    fn an_entity_cannot_become_its_own_parent() {
+        let mut world = World::new();
+        let e = spawn(&mut world);
+        let mut ed = EditorState::default();
+        ed.reparent_request = Some((e, e));
+
+        handle_scene_operations(&mut world, &mut ed, &mut studio_state());
+
+        assert!(world.borrow::<Parent>().get(e.id()).is_none(), "self-parenting must be refused");
+    }
+
+    /// …and neither can it be dropped onto its own descendant, which is the same cycle one level
+    /// down and the one a user actually produces by dragging in the hierarchy panel.
+    #[test]
+    fn an_entity_cannot_become_a_child_of_its_own_descendant() {
+        let mut world = World::new();
+        let (root, mid, leaf) = (spawn(&mut world), spawn(&mut world), spawn(&mut world));
+        let mut ed = EditorState::default();
+        ed.reparent_request = Some((mid, root));
+        handle_scene_operations(&mut world, &mut ed, &mut studio_state());
+        ed.reparent_request = Some((leaf, mid));
+        handle_scene_operations(&mut world, &mut ed, &mut studio_state());
+
+        // Now try to make the root a child of the leaf: root → mid → leaf → root.
+        ed.reparent_request = Some((root, leaf));
+        handle_scene_operations(&mut world, &mut ed, &mut studio_state());
+
+        assert!(
+            world.borrow::<Parent>().get(root.id()).is_none(),
+            "the root was adopted by its own grandchild — that is a cycle"
+        );
+        assert_eq!(children_of(&world, leaf.id()), Vec::<u32>::new());
+    }
+
+    /// Unparenting drops the `Parent` component and the entry in the old parent's list together.
+    #[test]
+    fn unparenting_clears_both_directions() {
+        let mut world = World::new();
+        let (parent, child) = (spawn(&mut world), spawn(&mut world));
+        let mut ed = EditorState::default();
+        ed.reparent_request = Some((child, parent));
+        handle_scene_operations(&mut world, &mut ed, &mut studio_state());
+
+        ed.unparent_request = Some(child);
+        handle_scene_operations(&mut world, &mut ed, &mut studio_state());
+
+        assert!(world.borrow::<Parent>().get(child.id()).is_none(), "the child is a root now");
+        assert!(
+            children_of(&world, parent.id()).is_empty(),
+            "the old parent must not keep listing it"
+        );
     }
 }
