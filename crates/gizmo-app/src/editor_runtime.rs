@@ -13,6 +13,68 @@ use crate::egui_ctx::EguiContext;
 use gizmo_core::world::World;
 use gizmo_renderer::renderer::Renderer;
 
+/// The format egui must sample a viewport texture through, given the format the engine renders it
+/// in.
+///
+/// One line, named, because it is the whole of the bug described on [`create_viewport_target`]: the
+/// render view keeps the sRGB format so the hardware encodes, and egui gets the raw variant because
+/// its shader wants bytes it can treat as gamma.
+fn egui_sample_format(render_format: wgpu::TextureFormat) -> wgpu::TextureFormat {
+    render_format.remove_srgb_suffix()
+}
+
+/// Creates one viewport render-to-texture and registers it with egui, returning the view the
+/// engine renders into and the id the panel samples.
+///
+/// # The colour space, which was wrong for both viewports
+///
+/// egui's shader states its contract in a comment: *"We expect 'normal' textures that are NOT
+/// sRGB-aware."* It samples a user texture, treats the value as **gamma-encoded**, and then applies
+/// `linear_from_gamma_rgb` on the way out because the framebuffer re-encodes. Hand it an sRGB
+/// texture and the hardware decodes on the way in as well — two decodes, one encode, and every
+/// pixel of the 3D viewport lands one gamma step too dark. Measured through the post chain: the
+/// composite writes linear 0.5, and 128 reaches the screen where 188 belongs. A dark scene turns
+/// nearly black, which is what "the editor looks flat and washed out" actually was.
+///
+/// The fix is not to change the texture's format — `run_post_processing`'s pipeline is built for
+/// `config.format`, and an attachment that disagrees is a validation error. The texture stays sRGB
+/// so the hardware still encodes what the post chain writes; egui gets a **second view of the same
+/// memory** in the non-sRGB variant, so its sample returns those encoded bytes verbatim, exactly
+/// the "not sRGB-aware" texture it asked for.
+///
+/// On a surface format with no sRGB pair (`remove_srgb_suffix` is then a no-op) the two views are
+/// the same and this is exactly the old behaviour — nothing to reinterpret, nothing gained.
+fn create_viewport_target(
+    device: &wgpu::Device,
+    egui_renderer: &mut egui_wgpu::Renderer,
+    label: &str,
+    format: wgpu::TextureFormat,
+    width: u32,
+    height: u32,
+) -> (std::sync::Arc<wgpu::TextureView>, egui::TextureId) {
+    let sample_format = egui_sample_format(format);
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[sample_format],
+    });
+    // What the engine renders into: the texture's own format, so the write is gamma-encoded.
+    let render_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    // What egui samples: the same bytes, reinterpreted as raw.
+    let sample_view = texture.create_view(&wgpu::TextureViewDescriptor {
+        label: Some("egui sample view (gamma space)"),
+        format: Some(sample_format),
+        ..Default::default()
+    });
+    let id = egui_renderer.register_native_texture(device, &sample_view, wgpu::FilterMode::Linear);
+    (std::sync::Arc::new(render_view), id)
+}
+
 /// Keeps the editor's scene/game viewport render targets sized to the panels.
 ///
 /// When the editor's `EditorState` resource is present, this (re)creates the
@@ -61,28 +123,16 @@ pub fn sync_render_targets(world: &mut World, editor: &mut EguiContext) {
             let tex_id;
             {
                 let r = world.get_resource::<Renderer>().unwrap();
-                let texture = r.device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some("Editor RTT"),
-                    size: wgpu::Extent3d {
-                        width: scene_w,
-                        height: scene_h,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: r.config.format,
-                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                        | wgpu::TextureUsages::TEXTURE_BINDING,
-                    view_formats: &[],
-                });
-                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-                tex_id = Some(editor.renderer.register_native_texture(
+                let (view, id) = create_viewport_target(
                     &r.device,
-                    &view,
-                    wgpu::FilterMode::Linear,
-                ));
-                new_scene_target = Some((std::sync::Arc::new(view), scene_w, scene_h));
+                    &mut editor.renderer,
+                    "Editor RTT",
+                    r.config.format,
+                    scene_w,
+                    scene_h,
+                );
+                tex_id = Some(id);
+                new_scene_target = Some((view, scene_w, scene_h));
             }
             ed_state_ref.scene_texture_id = tex_id;
             tracing::debug!(
@@ -111,28 +161,16 @@ pub fn sync_render_targets(world: &mut World, editor: &mut EguiContext) {
             let tex_id;
             {
                 let r = world.get_resource::<Renderer>().unwrap();
-                let texture = r.device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some("Game RTT"),
-                    size: wgpu::Extent3d {
-                        width: game_w,
-                        height: game_h,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: r.config.format,
-                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                        | wgpu::TextureUsages::TEXTURE_BINDING,
-                    view_formats: &[],
-                });
-                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-                tex_id = Some(editor.renderer.register_native_texture(
+                let (view, id) = create_viewport_target(
                     &r.device,
-                    &view,
-                    wgpu::FilterMode::Linear,
-                ));
-                new_game_target = Some((std::sync::Arc::new(view), game_w, game_h));
+                    &mut editor.renderer,
+                    "Game RTT",
+                    r.config.format,
+                    game_w,
+                    game_h,
+                );
+                tex_id = Some(id);
+                new_game_target = Some((view, game_w, game_h));
             }
             ed_state_ref.game_texture_id = tex_id;
             tracing::debug!(
@@ -308,6 +346,122 @@ pub fn process_scene_requests(world: &mut World) {
                     format!("Sahne yüklenemedi: {}", path)
                 };
                 ed.has_unsaved_changes = false;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The pairing itself. Written as a table so that a surface format arriving later cannot
+    /// quietly pick the wrong branch — and stated in both directions, because "sRGB in, raw out" is
+    /// only half the contract; "raw in, raw out" is what makes the helper safe on a surface with no
+    /// sRGB pair.
+    #[test]
+    fn egui_samples_the_raw_variant_of_whatever_the_engine_renders_into() {
+        use wgpu::TextureFormat::*;
+        assert_eq!(egui_sample_format(Bgra8UnormSrgb), Bgra8Unorm);
+        assert_eq!(egui_sample_format(Rgba8UnormSrgb), Rgba8Unorm);
+        // Already raw: nothing to reinterpret, and the two views coincide.
+        assert_eq!(egui_sample_format(Bgra8Unorm), Bgra8Unorm);
+        assert_eq!(egui_sample_format(Rgba8Unorm), Rgba8Unorm);
+        // No sRGB pair at all — must be a no-op rather than a wrong guess.
+        assert_eq!(egui_sample_format(Rgba16Float), Rgba16Float);
+
+        assert_ne!(
+            egui_sample_format(Bgra8UnormSrgb),
+            Bgra8UnormSrgb,
+            "on the format this engine actually gets, the sampled view MUST differ from the \
+             rendered one — equal views are the bug: the viewport renders one gamma step too dark"
+        );
+    }
+
+    /// The guard that outlives the fix: egui may only be handed a viewport texture through
+    /// [`create_viewport_target`].
+    ///
+    /// Scans rather than listing files. The bug existed twice — the scene viewport and the game
+    /// viewport, each with its own copy of the same twenty lines — so the thing worth policing is
+    /// not those two call sites but the appearance of a third. A future panel that registers its
+    /// own render target with a default (sRGB) view reintroduces exactly this defect, and it looks
+    /// completely reasonable while doing it.
+    #[test]
+    fn nothing_registers_an_egui_texture_outside_the_viewport_helper() {
+        let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("crates/gizmo-app sits two levels below the workspace root")
+            .to_path_buf();
+        if !workspace.join("crates/gizmo-studio").is_dir() {
+            return; // Packaged crate, not a workspace checkout.
+        }
+
+        let mut sources = Vec::new();
+        collect_rs_files(&workspace.join("crates"), &mut sources);
+        collect_rs_files(&workspace.join("demo"), &mut sources);
+        assert!(sources.len() > 100, "source walk found only {} files", sources.len());
+
+        let this_file = std::path::Path::new(file!()).file_name().unwrap();
+        let mut offenders = Vec::new();
+        for path in &sources {
+            if path.file_name() == Some(this_file) {
+                continue;
+            }
+            let text = std::fs::read_to_string(path).unwrap_or_default();
+            for (i, line) in text.lines().enumerate() {
+                if line.trim_start().starts_with("//") {
+                    continue;
+                }
+                if line.contains("register_native_texture(") {
+                    offenders.push(format!("{}:{}", path.display(), i + 1));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "egui viewport textures must be created by `create_viewport_target` in \
+             editor_runtime.rs, which hands egui the non-sRGB view. Registering a default view \
+             renders that panel one gamma step too dark. Offenders:\n{}",
+            offenders.join("\n")
+        );
+
+        // And the helper itself must still be handing over the reinterpreted view, not the
+        // attachment — the one-word edit that would silently undo all of this.
+        //
+        // Only the code ABOVE `#[cfg(test)]` is searched. Scanning the whole file makes the check
+        // vacuous, because the string being searched for also appears in this assertion: the first
+        // version of this test passed with the defect reintroduced, which is how that was found.
+        let me =
+            std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/editor_runtime.rs"))
+                .unwrap();
+        let code = me
+            .split_once("#[cfg(test)]")
+            .expect("this file has a test module")
+            .0;
+        assert!(
+            code.contains("register_native_texture(device, &sample_view"),
+            "the helper must register the non-sRGB `sample_view`, not the render attachment"
+        );
+        assert!(
+            !code.contains("register_native_texture(device, &render_view"),
+            "registering the sRGB render view is the defect this whole module documents"
+        );
+    }
+
+    fn collect_rs_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if path.file_name().is_some_and(|n| n == "target") {
+                    continue;
+                }
+                collect_rs_files(&path, out);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                out.push(path);
             }
         }
     }
