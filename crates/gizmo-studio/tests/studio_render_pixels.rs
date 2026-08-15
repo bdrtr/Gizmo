@@ -479,3 +479,199 @@ fn the_editor_casts_a_shadow_onto_the_ground() {
         "no shadow on the ground: the shadowed patch ({shadow:.1}) is not meaningfully darker than          the lit one ({lit:.1}). The editor records four cascades every frame; this is the only          check that any of it reaches a pixel"
     );
 }
+
+/// The Game panel must show the game camera, and it does not.
+///
+/// # What it shows instead
+///
+/// One scene render per frame, two outputs: `execute_render_pipeline` runs `run_post_processing`
+/// into the editor target and then again into the game target, both reading the same
+/// `renderer.post.hdr_texture_view`. That texture holds whatever `viewpoint::resolve` picked, which
+/// in edit mode is the **editor camera** — gizmos, grid and the game-frustum wire box included. So
+/// the Game tab is a copy of the Scene tab, and it is a copy precisely when it would be useful:
+/// while you are editing. In play mode both cameras are the same one and the question does not
+/// arise.
+///
+/// The scene view even draws a wire box around "what the game camera would see", which is the
+/// feature this tab is supposed to be.
+///
+/// # Why it is `#[ignore]` rather than fixed here
+///
+/// A correct game view is a second scene render from the other camera, and it must **not** carry
+/// editor chrome. Culling and the instance buffer can be reused (the editor already culls against
+/// the game camera), and re-recording the main pass into the same HDR target before the second
+/// post run is ordered correctly inside one encoder. What is missing is a way to leave chrome out:
+/// the grid has `is_grid`, but the light icons are ordinary unlit cubes and nothing distinguishes
+/// them from unlit scene geometry. That wants an editor-only marker component and batch-level
+/// filtering — a design decision, not a patch, so it is recorded executably instead of guessed at.
+///
+/// This test passes the day someone builds it. Until then it states the defect in the one language
+/// that cannot go stale.
+#[test]
+#[ignore = "the game view is a copy of the scene view in edit mode; needs a second render + an editor-only marker"]
+fn the_game_view_shows_the_game_camera_not_the_editor_camera() {
+    let _gpu = gpu_lock();
+    if !pollster::block_on(Renderer::headless_adapter_available()) {
+        return;
+    }
+    if pollster::block_on(Renderer::headless_adapter_is_software()) {
+        return;
+    }
+
+    let (scene_px, game_px) = pollster::block_on(async {
+        let mut renderer = Renderer::new_headless(W, H, None).await;
+        let mut am = AssetManager::new();
+        let mut world = World::new();
+        let tex = am.create_white_texture(
+            &renderer.device,
+            &renderer.queue,
+            &renderer.scene.texture_bind_group_layout,
+        );
+
+        // A cube well off to one side: in frame for the editor camera, behind the game camera.
+        let cube = world.spawn();
+        world.add_component(cube, Transform::new(Vec3::new(0.0, 0.0, 0.0)));
+        world.add_component(cube, AssetManager::create_cube(&renderer.device));
+        world.add_component(
+            cube,
+            Material::new(tex).with_pbr(Vec4::new(0.9, 0.2, 0.2, 1.0), 0.6, 0.0),
+        );
+        world.add_component(cube, MeshRenderer::new());
+
+        // Editor camera: looking AT the cube from -X.
+        let editor_cam = world.spawn();
+        world.add_component(editor_cam, Transform::new(Vec3::new(-6.0, 0.0, 0.0)));
+        world.add_component(
+            editor_cam,
+            gizmo::renderer::components::Camera::new(
+                std::f32::consts::FRAC_PI_4, 0.1, 1000.0, 0.0, 0.0, true,
+            ),
+        );
+
+        // Game camera: same place, looking AWAY from it. Whatever this one sees, it is not a cube.
+        let game_cam = world.spawn();
+        world.add_component(game_cam, Transform::new(Vec3::new(-6.0, 0.0, 0.0)));
+        world.add_component(
+            game_cam,
+            gizmo::renderer::components::Camera::new(
+                std::f32::consts::FRAC_PI_4, 0.1, 1000.0, std::f32::consts::PI, 0.0, false,
+            ),
+        );
+
+        world.spawn_bundle(gizmo::prelude::DirectionalLightBundle::default());
+
+        let make_target = |label: &str, device: &wgpu::Device, format: wgpu::TextureFormat| {
+            let t = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            let v = t.create_view(&wgpu::TextureViewDescriptor::default());
+            (t, v)
+        };
+        let format = renderer.config.format;
+        let (scene_tex, scene_view) = make_target("scene-rtt", &renderer.device, format);
+        let (game_tex, game_view) = make_target("game-rtt", &renderer.device, format);
+
+        world.insert_resource(gizmo::renderer::components::EditorRenderTarget(
+            gizmo::renderer::components::RenderTarget {
+                view: std::sync::Arc::new(scene_view),
+                width: W,
+                height: H,
+            },
+        ));
+        world.insert_resource(gizmo::renderer::components::GameRenderTarget(
+            gizmo::renderer::components::RenderTarget {
+                view: std::sync::Arc::new(game_view),
+                width: W,
+                height: H,
+            },
+        ));
+
+        let state = StudioState {
+            current_fps: 60.0,
+            actual_dt: 1.0 / 60.0,
+            editor_camera: editor_cam.id(),
+            game_camera: game_cam.id(),
+            do_raycast: false,
+            physics_accumulator: 0.0,
+            asset_watcher: None,
+            gc_timer: 0.0,
+            autosave_timer: 0.0,
+            visible_entity_count: 0,
+            draw_call_count: 0,
+        };
+
+        // A throwaway swapchain-ish view: with an EditorRenderTarget present the pipeline clears
+        // this and draws into the target instead.
+        let (_scratch_tex, scratch_view) = make_target("scratch", &renderer.device, format);
+        let mut enc = renderer
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        execute_render_pipeline(&mut world, &state, &mut enc, &scratch_view, &mut renderer, 0.0);
+
+        let read = |tex: &wgpu::Texture, enc: &mut wgpu::CommandEncoder, device: &wgpu::Device| {
+            let buf = device.create_buffer(&wgpu::BufferDescriptor {
+                label: None,
+                size: u64::from(W * H * BPP),
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            enc.copy_texture_to_buffer(
+                wgpu::TexelCopyTextureInfo {
+                    texture: tex,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &buf,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(W * BPP),
+                        rows_per_image: Some(H),
+                    },
+                },
+                wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 1 },
+            );
+            buf
+        };
+        let scene_buf = read(&scene_tex, &mut enc, &renderer.device);
+        let game_buf = read(&game_tex, &mut enc, &renderer.device);
+        renderer.queue.submit(std::iter::once(enc.finish()));
+
+        let fetch = |buf: &wgpu::Buffer, device: &wgpu::Device| {
+            let slice = buf.slice(..);
+            let (tx, rx) = std::sync::mpsc::channel();
+            slice.map_async(wgpu::MapMode::Read, move |r| {
+                let _ = tx.send(r);
+            });
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+            rx.recv().expect("channel").expect("map");
+            let v = slice.get_mapped_range().to_vec();
+            buf.unmap();
+            v
+        };
+        (fetch(&scene_buf, &renderer.device), fetch(&game_buf, &renderer.device))
+    });
+
+    // Compared as a count, not with `assert_ne!` on the vectors: a failure there prints two
+    // 64 KB byte arrays into the test log and buries its own message.
+    let differing = scene_px
+        .iter()
+        .zip(game_px.iter())
+        .filter(|(a, b)| a != b)
+        .count();
+    assert!(
+        differing > scene_px.len() / 100,
+        "the game target is byte-identical to the scene target ({differing} of {} bytes differ): \
+         two cameras pointed in opposite directions produced the same picture, because only one \
+         render happened",
+        scene_px.len()
+    );
+}
