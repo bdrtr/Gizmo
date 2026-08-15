@@ -376,8 +376,13 @@ pub(super) fn collect_draw_items(
                     crate::renderer::Visibility::ShadowOnly => false,
                 };
 
-                // Auto-LOD (Level of Detail) Seçimi
-                let dist_to_cam = (world_c - cam_pos).length();
+                // Auto-LOD (Level of Detail) Seçimi. The per-object bias means the same thing
+                // here as in the editor even though the mechanism differs (flattened `lod_vbufs`
+                // rather than a `LodGroup`) — that is what the shared helper is for.
+                let dist_to_cam = crate::renderer::components::effective_lod_distance(
+                    (world_c - cam_pos).length(),
+                    renderers.get($e).map(|r| r.lod_bias).unwrap_or(1.0),
+                );
                 let use_lod1 = if !$mesh.lod_vbufs.is_empty() {
                     dist_to_cam > world_r * 15.0 // Nesne boyutuna göre uzaklaştıkça LOD1'e geç (örneğin 2m çapında bir nesne 30m uzaktayken geç)
                 } else {

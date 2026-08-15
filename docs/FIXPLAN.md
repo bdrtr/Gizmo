@@ -2831,7 +2831,11 @@ yok olması demek değil.
   (On/Off/Only), HER İKİ render yoluna da bağlı ve iki batch anahtarında da. Yalnız editörde
   çalışan bir bayrak, editörün oyunun ne yapacağı hakkında yalan söylemesi olurdu. Üç durum da
   piksel testiyle doğrulandı.
-- ⬜ **LOD bias** (prototip: `LOD bias 1.0`). `LodGroup` var ama bias kavramı yok.
+- ✅ **LOD bias** (2026-08-16). `MeshRenderer::lod_bias`, her iki yolda da. İki yol LOD'u farklı
+  mekanizmayla seçiyor (editör `LodGroup`, motor mesh içi `lod_vbufs`) ve anlaşmaları gereken tek
+  şey sayının ne demek olduğu — o yüzden bölme tek bir yardımcıda: `effective_lod_distance`.
+  1'in üstü detayı daha uzakta tutuyor. Sıfır, negatif ve NaN yok sayılıyor: sıfır sıfıra bölerdi,
+  negatif ölçeği ters çevirip uzaklaştıkça detayı artırırdı — ikisi de yazım hatası, istek değil.
 - ⬜ **Varlık GUID'i ve meta verisi** (prototipin detay paneli: type / size / detail / folder /
   guid). Motor varlıkları yol ile tanıyor; kalıcı bir kimlik yok.
 - ✅ **Script'in dışa açtığı özellikler** (2026-08-16). Script `properties = { open_speed = 2.4,

@@ -281,6 +281,16 @@ impl Mesh {
 /// Hiçbir ek alan içermez; sadece entity'nin render sistemine dahil edilmesini sağlar.
 #[derive(Clone)]
 pub struct MeshRenderer {
+    /// Scales the distance used to pick a level of detail.
+    ///
+    /// Above 1.0 holds the higher-detail mesh further out, below 1.0 switches down sooner — the
+    /// convention every engine with this knob uses, because the number reads as "how much quality
+    /// this object is worth". Applied as a division: [`effective_lod_distance`].
+    ///
+    /// Per-object because that is the only place it means anything: a global multiplier is a
+    /// quality setting, and the thing an artist wants is "this hero prop stays sharp, that fence
+    /// does not".
+    pub lod_bias: f32,
     /// Whether this object casts a shadow, and whether it is drawn at all.
     ///
     /// Per-object rather than per-material, which is where the engine used to decide it: shadow
@@ -320,7 +330,13 @@ impl ShadowCasting {
 
 impl MeshRenderer {
     pub fn new() -> Self {
-        Self { shadows: ShadowCasting::On }
+        Self { lod_bias: 1.0, shadows: ShadowCasting::On }
+    }
+
+    /// Builder form: `MeshRenderer::new().with_lod_bias(2.0)`.
+    pub fn with_lod_bias(mut self, bias: f32) -> Self {
+        self.lod_bias = bias;
+        self
     }
 
     /// Builder form: `MeshRenderer::new().with_shadows(ShadowCasting::Only)`.
@@ -330,8 +346,55 @@ impl MeshRenderer {
     }
 }
 
+
+/// The distance a LOD decision should be made against, given an object's bias.
+///
+/// `bias > 1` divides the distance down, so the object behaves as if it were nearer and keeps its
+/// higher-detail mesh further out; `bias < 1` does the reverse. One function rather than the
+/// division written at each call site, because the two render paths pick LODs by completely
+/// different mechanisms (the editor by `LodGroup`, the engine by a mesh's flattened `lod_vbufs`)
+/// and the only thing they must agree on is what the number means.
+///
+/// A non-finite or non-positive bias is ignored rather than obeyed: zero would divide by zero and
+/// a negative would invert the whole scale, and neither is a thing a user meant to ask for.
+pub fn effective_lod_distance(distance: f32, bias: f32) -> f32 {
+    if bias.is_finite() && bias > 0.0 {
+        distance / bias
+    } else {
+        distance
+    }
+}
+
 impl Default for MeshRenderer {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod lod_bias_tests {
+    use super::effective_lod_distance;
+
+    /// The direction of the knob, which is the only thing a user can get wrong about it.
+    #[test]
+    fn a_higher_bias_holds_detail_further_out() {
+        // Twice the bias means the object is treated as half as far away, so a LOD boundary at
+        // 50 m is not crossed until 100 m.
+        assert_eq!(effective_lod_distance(100.0, 2.0), 50.0);
+        assert_eq!(effective_lod_distance(100.0, 0.5), 200.0);
+        assert_eq!(effective_lod_distance(100.0, 1.0), 100.0, "1.0 is a no-op");
+    }
+
+    /// Values that cannot mean anything are ignored rather than obeyed.
+    ///
+    /// Zero would divide by zero — `inf` distance, everything culled to the coarsest level or
+    /// dropped entirely — and a negative would invert the scale so that moving away increased
+    /// detail. Both are typos, not requests.
+    #[test]
+    fn a_bias_that_cannot_mean_anything_is_ignored() {
+        assert_eq!(effective_lod_distance(100.0, 0.0), 100.0);
+        assert_eq!(effective_lod_distance(100.0, -2.0), 100.0);
+        assert_eq!(effective_lod_distance(100.0, f32::NAN), 100.0);
+        assert_eq!(effective_lod_distance(100.0, f32::INFINITY), 100.0);
     }
 }

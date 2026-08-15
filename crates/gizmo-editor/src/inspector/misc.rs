@@ -697,6 +697,15 @@ pub fn draw_mesh_renderer_section(
         .default_open(true)
         .show(ui, |ui| {
             ui.horizontal(|ui| {
+                ui.label("LOD bias:");
+                ui.add(
+                    egui::DragValue::new(&mut renderer.lod_bias)
+                        .speed(0.05)
+                        .range(0.1..=8.0),
+                )
+                .on_hover_text("1'in üstü daha uzakta bile yüksek detayı korur");
+            });
+            ui.horizontal(|ui| {
                 ui.label("Cast shadow:");
                 crate::theme::segmented(
                     ui,

@@ -230,7 +230,10 @@ pub fn execute_render_pipeline(
                 // --- LOD (Level of Detail) SEÇİMİ ---
                 // Hangi mesh çizilecek sorusunun cevabı ortak (`LodGroup::pick`); bize ait olan
                 // yalnız mesafenin nereden ölçüldüğü — burada birleştirilmiş model matrisinden.
-                let dist = cam_pos.distance(Vec3::new(model.w_axis.x, model.w_axis.y, model.w_axis.z));
+                let dist = gizmo::renderer::components::effective_lod_distance(
+                    cam_pos.distance(Vec3::new(model.w_axis.x, model.w_axis.y, model.w_axis.z)),
+                    renderers.get(e).map(|r| r.lod_bias).unwrap_or(1.0),
+                );
                 let active_mesh = match gizmo::renderer::components::LodGroup::pick(
                     lod_groups.get(e),
                     mesh,
