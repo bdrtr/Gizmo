@@ -241,6 +241,130 @@ pub fn section_title(name: &str) -> egui::RichText {
         .strong()
 }
 
+/// A segmented control: joined cells, one of them on.
+///
+/// The prototype uses these wherever a value has two to four states — `On / Off / Only` for shadow
+/// casting, `Static / Dynamic / Kinematic` for a body type, `true / false` for a flag. They read as
+/// one control with a position rather than as a dropdown you have to open to learn the current
+/// value, which is the whole reason a modal setting gets a segmented control instead of a combo
+/// box.
+///
+/// Painted rather than assembled from buttons: the cells share their borders (a run of egui
+/// buttons would double every internal edge and round nothing off, since the theme is square), and
+/// the active cell is a solid accent fill that `Button::selected` does not produce.
+///
+/// Returns `true` when the value changed.
+pub fn segmented<T: PartialEq + Copy>(
+    ui: &mut egui::Ui,
+    value: &mut T,
+    options: &[(T, &str)],
+) -> bool {
+    use palette::*;
+
+    if options.is_empty() {
+        return false;
+    }
+
+    let height = ROW_HEIGHT;
+    // Measure first so every cell is as wide as the widest label — a segmented control whose cells
+    // jump width as the text changes is a row of buttons wearing a costume.
+    let font = egui::FontId::proportional(11.0);
+    let cell_w = options
+        .iter()
+        .map(|(_, label)| {
+            ui.painter().layout_no_wrap((*label).to_string(), font.clone(), TEXT_BODY).size().x
+        })
+        .fold(0.0_f32, f32::max)
+        + SPACE_3;
+
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2(cell_w * options.len() as f32, height),
+        egui::Sense::hover(),
+    );
+
+    let mut changed = false;
+    for (i, (opt, label)) in options.iter().enumerate() {
+        let cell = egui::Rect::from_min_size(
+            egui::pos2(rect.left() + cell_w * i as f32, rect.top()),
+            egui::vec2(cell_w, height),
+        );
+        let id = ui.id().with(("segmented", i));
+        let resp = ui.interact(cell, id, egui::Sense::click());
+        let on = *value == *opt;
+
+        let painter = ui.painter();
+        painter.rect_filled(
+            cell,
+            0.0,
+            if on {
+                ACCENT
+            } else if resp.hovered() {
+                SURFACE
+            } else {
+                CHROME
+            },
+        );
+        painter.rect_stroke(
+            cell,
+            0.0,
+            egui::Stroke::new(1.0_f32, if on { ACCENT } else { BORDER }),
+            egui::StrokeKind::Inside,
+        );
+        painter.text(
+            cell.center(),
+            egui::Align2::CENTER_CENTER,
+            *label,
+            font.clone(),
+            if on { TEXT_BRIGHT } else { TEXT_BODY },
+        );
+
+        if resp.clicked() && !on {
+            *value = *opt;
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// A single on/off cell, filled with the accent when on.
+///
+/// The prototype's `Shaded` / `Grid` viewport toggles. Distinct from [`segmented`]: that one picks
+/// one of several mutually exclusive states, this one is an independent switch. Expressing a
+/// boolean as a two-cell segmented control gives you labels like "Colliders off | Colliders",
+/// which is a sentence pretending to be a control.
+///
+/// Returns `true` when the value changed.
+pub fn toggle(ui: &mut egui::Ui, value: &mut bool, label: &str) -> bool {
+    use palette::*;
+
+    let font = egui::FontId::proportional(11.0);
+    let w = ui.painter().layout_no_wrap(label.to_string(), font.clone(), TEXT_BODY).size().x + SPACE_3;
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, ROW_HEIGHT), egui::Sense::click());
+
+    let on = *value;
+    let painter = ui.painter();
+    painter.rect_filled(rect, 0.0, if on { ACCENT } else if resp.hovered() { SURFACE } else { CHROME });
+    painter.rect_stroke(
+        rect,
+        0.0,
+        egui::Stroke::new(1.0_f32, if on { ACCENT } else { BORDER }),
+        egui::StrokeKind::Inside,
+    );
+    painter.text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        label,
+        font,
+        if on { TEXT_BRIGHT } else { TEXT_BODY },
+    );
+
+    if resp.clicked() {
+        *value = !on;
+        return true;
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

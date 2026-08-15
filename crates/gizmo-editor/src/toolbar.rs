@@ -196,23 +196,16 @@ fn draw_tool_row(ui: &mut egui::Ui, state: &mut EditorState) {
 
                 ui.add_space(6.0);
 
-                egui::ComboBox::from_id_salt("shading_mode")
-                    .selected_text(match state.shading_mode {
-                        0 => "Lit",
-                        1 => "Normals",
-                        2 => "Albedo",
-                        3 => "Wireframe",
-                        _ => "?",
-                    })
-                    .width(84.0)
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut state.shading_mode, 0, "Lit");
-                        ui.selectable_value(&mut state.shading_mode, 1, "Normals");
-                        ui.selectable_value(&mut state.shading_mode, 2, "Albedo");
-                        ui.selectable_value(&mut state.shading_mode, 3, "Wireframe");
-                    });
+                // A segmented control, not a combo box: four states you switch between constantly,
+                // and the prototype shows the current one without making you open anything.
+                crate::theme::segmented(
+                    ui,
+                    &mut state.shading_mode,
+                    &[(0u32, "Lit"), (1, "Normals"), (2, "Albedo"), (3, "Wire")],
+                );
 
-                ui.toggle_value(&mut state.show_colliders, "Colliders");
+                ui.add_space(crate::theme::SPACE_1);
+                crate::theme::toggle(ui, &mut state.show_colliders, "Colliders");
 
                 // Transport on the right, where the prototype keeps it.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
