@@ -95,6 +95,8 @@ pub struct AssetBrowserState {
     pub filter: String,
     /// The type chip currently selected, or `None` for "All" — the prototype's asset filter row.
     pub kind_filter: Option<crate::asset_browser::AssetKind>,
+    /// The file the detail pane describes, or `None` when nothing is selected.
+    pub selected: Option<std::path::PathBuf>,
     pub root: String,
     pub show: bool,
     pub workspace_rx: Option<std::sync::Mutex<std::sync::mpsc::Receiver<String>>>,
@@ -109,6 +111,7 @@ impl Default for AssetBrowserState {
         Self {
             filter: String::new(),
             kind_filter: None,
+            selected: None,
             root: "demo/assets".to_string(),
             show: true,
             workspace_rx: None,

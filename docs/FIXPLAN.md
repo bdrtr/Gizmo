@@ -2836,8 +2836,26 @@ yok olması demek değil.
   şey sayının ne demek olduğu — o yüzden bölme tek bir yardımcıda: `effective_lod_distance`.
   1'in üstü detayı daha uzakta tutuyor. Sıfır, negatif ve NaN yok sayılıyor: sıfır sıfıra bölerdi,
   negatif ölçeği ters çevirip uzaklaştıkça detayı artırırdı — ikisi de yazım hatası, istek değil.
-- ⬜ **Varlık GUID'i ve meta verisi** (prototipin detay paneli: type / size / detail / folder /
-  guid). Motor varlıkları yol ile tanıyor; kalıcı bir kimlik yok.
+- 🔄 **Varlık GUID'i ve meta verisi** — ve bu madde **yanlış yazılmıştı.** "Kalıcı bir kimlik yok"
+  demiştim; var: `gizmo-renderer/src/asset/mod.rs:22` `AssetMeta { uuid }`, her varlığın yanına
+  `<dosya>.meta` olarak yazılıyor, `path_to_uuid`/`uuid_to_path` haritaları duruyor ve **diskte 22
+  sidecar** var. Dahası `load_obj` ve `load_material_texture` yol yerine UUID kabul ediyor, yani
+  bir sahne bugün `mesh_source`'a UUID yazsa çözülürdü — sahne formatı değişmeden.
+
+  Gerçek durum "yok" değil, **yarı bağlı**:
+  - `scan_assets_directory` yalnızca `AssetManager::new()`'dan, CWD'ye göre sabit `assets/` yolunu
+    tarayarak çağrılıyor — editörün kökü `demo/assets` ise hiç taranmıyor.
+  - Kurucu **diske yazıyor** (eksik sidecar'ı üretiyor), ve `AssetManager::new()` render testleri
+    dahil sekiz yerde çağrılıyor.
+  - glTF UUID ile referanslanamıyor: `gltf_mesh_` dalı yolu çözümden ÖNCE ayıklıyor.
+  - Hiçbir yazıcı sahneye UUID koymuyor, ve mekanizmanın hiç testi yoktu.
+
+  ✅ Bu turda yapılan: salt-okuyan `read_asset_meta` + tarayıcının detay sütunu (type/size/folder/
+  guid). Kimlik ÜRETMİYOR — tıklamayla UUID basmak, kullanıcının yalnızca baktığı dosyaları
+  damgalamak olurdu. Dört test, biri özellikle "okumak sidecar yaratmaz" diyor.
+  ⬜ Kalan ve kararı verilmedi: kurucudaki yazma yan etkisi, `demo/assets`'in taranmaması, glTF'in
+  UUID alamaması, ve sahnelerin UUID yazması. `detail` alanı da eklenmedi: görüntü boyutu bir
+  decode ve `image` bağımlılığı ister, ölçmediğimiz satırı basmayız.
 - ✅ **Script'in dışa açtığı özellikler** (2026-08-16). Script `properties = { open_speed = 2.4,
   locked = false }` diye bildiriyor; motor bunu script'in kendi env'inden geri okuyor
   (`declared_properties`) ve editör satırları oradan listeliyor. Varlık başına değerler

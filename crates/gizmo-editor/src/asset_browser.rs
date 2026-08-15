@@ -127,6 +127,17 @@ let mut finished = false;
 
     ui.separator();
 
+    // The detail pane is a right-hand COLUMN, as in the prototype — not a strip under the grid.
+    // Below the grid it simply never appeared: the thumbnails fill the dock and push it past the
+    // bottom edge, which is what the first attempt did.
+    if state.assets.selected.is_some() {
+        egui::Panel::right("asset_detail")
+            .exact_size(200.0)
+            .show_inside(ui, |ui| {
+                draw_asset_detail(ui, state);
+            });
+    }
+
     egui::ScrollArea::both().show(ui, |ui| {
         ui.horizontal_wrapped(|ui| {
             let root = Path::new(&state.assets.root);
@@ -254,6 +265,9 @@ let mut finished = false;
                         } else {
                             state.status_message = format!("Seçilen: {}", name);
                         }
+                        // Every click selects, whatever else it also did — the detail pane
+                        // describes what you last touched.
+                        state.assets.selected = Some(path.clone());
                     }
 
                     // Dosya adı (kısa gösterim)
@@ -313,6 +327,10 @@ pub enum AssetKind {
     Prefab,
     Scene,
     Data,
+    /// An asset's `.meta` sidecar. A kind of its own so the browser can leave the 22 of them out
+    /// of the grid instead of rendering each as an anonymous grey tile beside the file it belongs
+    /// to.
+    Meta,
     Other,
 }
 
@@ -329,6 +347,7 @@ impl AssetKind {
             Self::Prefab => "📦",
             Self::Scene => "🎬",
             Self::Data => "📋",
+            Self::Meta => "🏷",
             Self::Other => "📄",
         }
     }
@@ -362,6 +381,8 @@ pub fn asset_kind(filename: &str) -> AssetKind {
         AssetKind::Script
     } else if is("json") || is("toml") || is("ron") {
         AssetKind::Data
+    } else if is("meta") {
+        AssetKind::Meta
     } else if is("prefab") {
         AssetKind::Prefab
     } else if is("gizmo") || is("giz") {
@@ -396,6 +417,11 @@ pub fn entry_passes(
     if !text_filter.is_empty() && !name.to_lowercase().contains(text_filter) {
         return false;
     }
+    // Sidecars are never listed. They are bookkeeping that belongs to the file next to them, and
+    // the detail pane shows their one field (the uuid) on that file's own row.
+    if !is_dir && asset_kind(name) == AssetKind::Meta {
+        return false;
+    }
     match kind_filter {
         // Folders always survive the type chip. Filtering them out strands you in a directory with
         // no way back up, and the prototype keeps its folder tree visible under every chip.
@@ -404,8 +430,117 @@ pub fn entry_passes(
     }
 }
 
+/// The prototype's asset detail pane — four fields, and the fifth deliberately absent.
+///
+/// # Why four
+///
+/// The design shows `type / size / detail / folder / guid`. Four of those are measurable here and
+/// one is not: `detail` means image dimensions or a triangle count, which needs a decode and a
+/// dependency (`image`) this crate does not have. This project's rule is that a panel must not
+/// print a value it did not measure, so the row is missing rather than blank-or-guessed.
+///
+/// # The guid row is a reader
+///
+/// It shows the `.meta` sidecar that already exists beside the file — 22 of them are committed —
+/// and an em dash when there is none. It never creates one. `AssetManager::new` does mint sidecars
+/// while scanning, but that is a scan of the `assets/` tree; minting identity because a user
+/// clicked a thumbnail would stamp UUIDs onto files they merely looked at.
+fn draw_asset_detail(ui: &mut egui::Ui, state: &mut EditorState) {
+    use crate::theme::palette::*;
+
+    let Some(path) = state.assets.selected.clone() else {
+        return;
+    };
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    ui.label(
+        egui::RichText::new(name.to_uppercase())
+            .size(10.0)
+            .color(TEXT_BRIGHT)
+            .strong(),
+    );
+
+    let row = |ui: &mut egui::Ui, label: &str, value: String, dim: bool| {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(label).size(10.0).color(TEXT_DIM));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(
+                    egui::RichText::new(value)
+                        .size(10.0)
+                        .color(if dim { TEXT_DIM } else { TEXT_BODY }),
+                );
+            });
+        });
+    };
+
+    row(ui, "type", format!("{:?}", asset_kind(&name)).to_lowercase(), false);
+
+    match std::fs::metadata(&path) {
+        Ok(m) => row(ui, "size", format_size(m.len()), false),
+        // The file was listed a moment ago and is not there now — say so rather than showing 0 B.
+        Err(_) => row(ui, "size", "okunamadı".to_string(), true),
+    }
+
+    row(
+        ui,
+        "folder",
+        path.parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| ".".to_string()),
+        false,
+    );
+
+    match gizmo_renderer::asset::read_asset_meta(&path) {
+        Some(meta) => row(ui, "guid", meta.uuid.to_string(), false),
+        None => row(ui, "guid", "—".to_string(), true),
+    }
+}
+
+/// Bytes as B / KB / MB, for the detail pane's `size` row.
+fn format_size(bytes: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+    let b = bytes as f64;
+    if b >= MB {
+        format!("{:.1} MB", b / MB)
+    } else if b >= KB {
+        format!("{:.0} KB", b / KB)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn sidecars_are_a_kind_and_never_listed() {
+        assert_eq!(asset_kind("grass.jpg.meta"), AssetKind::Meta);
+        assert!(
+            !entry_passes("grass.jpg.meta", false, "", None),
+            "the 22 committed sidecars must not appear as tiles beside the files they belong to"
+        );
+        // Only the last extension counts, so the file itself is unaffected.
+        assert_eq!(asset_kind("grass.jpg"), AssetKind::Texture);
+        assert!(entry_passes("grass.jpg", false, "", None));
+    }
+
+    /// A folder called `meta` is a folder, not a sidecar.
+    #[test]
+    fn a_directory_named_meta_still_lists() {
+        assert!(entry_passes("meta", true, "", None));
+    }
+
+    #[test]
+    fn sizes_read_as_bytes_kilobytes_or_megabytes() {
+        use super::format_size;
+        assert_eq!(format_size(512), "512 B");
+        assert_eq!(format_size(2048), "2 KB");
+        assert_eq!(format_size(5 * 1024 * 1024), "5.0 MB");
+    }
+
     use super::{asset_kind, entry_passes, AssetKind};
 
     #[test]

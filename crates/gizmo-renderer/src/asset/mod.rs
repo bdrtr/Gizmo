@@ -660,3 +660,106 @@ impl AssetManager {
         )
     }
 }
+
+/// Reads an asset's `.meta` sidecar, or `None` when it has none.
+///
+/// The read-only half of `read_or_create_meta`, and the distinction is the point: this never mints
+/// an identity. The editor's asset detail pane calls it, and a pane that created a UUID because you
+/// clicked a file would stamp identities onto assets you merely looked at.
+///
+/// A free function rather than a method, because a reader needs no `AssetManager` — and because the
+/// editor must not gain a `ron` dependency to parse this itself. `gizmo_scene::SceneData::from_ron_str`
+/// exists for exactly that reason: parsing belongs to the crate that already owns the parser.
+pub fn read_asset_meta(asset_path: &Path) -> Option<AssetMeta> {
+    let meta_path = PathBuf::from(format!("{}.meta", asset_path.display()));
+    let text = std::fs::read_to_string(&meta_path).ok()?;
+    match ron::from_str::<AssetMeta>(&text) {
+        Ok(meta) => Some(meta),
+        Err(e) => {
+            // Reported, and deliberately NOT repaired: `read_or_create_meta` answers a corrupt
+            // sidecar by minting a fresh UUID, which silently breaks every reference to the old
+            // one. Doing that from a mouse click would be worse still.
+            tracing::warn!(path = %meta_path.display(), error = %e, "[AssetManager] bozuk .meta sidecar");
+            None
+        }
+    }
+}
+
+
+#[cfg(test)]
+mod asset_meta_tests {
+    use super::{read_asset_meta, AssetMeta};
+
+    fn temp(tag: &str) -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static N: AtomicU64 = AtomicU64::new(0);
+        std::env::temp_dir().join(format!(
+            "gizmo_meta_{tag}_{}",
+            N.fetch_add(1, Ordering::Relaxed)
+        ))
+    }
+
+    /// Reads the sidecar beside a file, in the shape the 22 committed ones use.
+    #[test]
+    fn a_sidecar_next_to_the_asset_is_read() {
+        let asset = temp("read");
+        std::fs::write(&asset, b"not really an image").unwrap();
+        let meta_path = format!("{}.meta", asset.display());
+        std::fs::write(
+            &meta_path,
+            "(\n    uuid: \"ed91a228-ef2a-49ab-a525-1eb3ed0660c0\",\n)",
+        )
+        .unwrap();
+
+        let meta = read_asset_meta(&asset).expect("sidecar should be read");
+        assert_eq!(meta.uuid.to_string(), "ed91a228-ef2a-49ab-a525-1eb3ed0660c0");
+
+        let _ = std::fs::remove_file(&asset);
+        let _ = std::fs::remove_file(&meta_path);
+    }
+
+    /// No sidecar is `None`, and — the part that matters — reading does not CREATE one.
+    ///
+    /// `read_or_create_meta` mints a UUID when the sidecar is missing. This function must not: the
+    /// editor calls it when you click a thumbnail, and minting identity from a mouse click would
+    /// stamp UUIDs onto files the user merely looked at.
+    #[test]
+    fn reading_never_creates_a_sidecar() {
+        let asset = temp("nocreate");
+        std::fs::write(&asset, b"x").unwrap();
+        let meta_path = std::path::PathBuf::from(format!("{}.meta", asset.display()));
+
+        assert!(read_asset_meta(&asset).is_none());
+        assert!(
+            !meta_path.exists(),
+            "the reader wrote a sidecar — it must never mint identity"
+        );
+
+        let _ = std::fs::remove_file(&asset);
+    }
+
+    /// A corrupt sidecar reads as absent rather than as a fresh identity.
+    #[test]
+    fn a_corrupt_sidecar_is_not_silently_reminted() {
+        let asset = temp("corrupt");
+        std::fs::write(&asset, b"x").unwrap();
+        let meta_path = format!("{}.meta", asset.display());
+        std::fs::write(&meta_path, "this is not ron at all").unwrap();
+
+        assert!(read_asset_meta(&asset).is_none());
+        // And the corrupt file is left exactly as it was, for a human to look at.
+        assert_eq!(std::fs::read_to_string(&meta_path).unwrap(), "this is not ron at all");
+
+        let _ = std::fs::remove_file(&asset);
+        let _ = std::fs::remove_file(&meta_path);
+    }
+
+    /// The shape the sidecars on disk actually have round-trips.
+    #[test]
+    fn the_committed_sidecar_shape_round_trips() {
+        let meta = AssetMeta { uuid: uuid::Uuid::new_v4() };
+        let text = ron::ser::to_string(&meta).unwrap();
+        let back: AssetMeta = ron::from_str(&text).unwrap();
+        assert_eq!(back.uuid, meta.uuid);
+    }
+}
