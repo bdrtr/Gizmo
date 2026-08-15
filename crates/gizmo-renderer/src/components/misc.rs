@@ -227,6 +227,24 @@ pub struct EditorRenderTarget(pub RenderTarget);
 #[derive(Clone)]
 pub struct GameRenderTarget(pub RenderTarget);
 
+/// What the last frame actually cost, published by whichever render path drew it.
+///
+/// The editor's viewport overlay reads this. It exists because the numbers it shows have to be
+/// *measured*: `StudioState::draw_call_count` was a field nothing ever wrote, and an overlay that
+/// prints a plausible-looking zero is worse than one that prints nothing.
+///
+/// Frame time is deliberately absent — that belongs to `gizmo_core::FrameProfiler`, which already
+/// measures it for every configuration, editor or not.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RenderStats {
+    /// Draw calls recorded for the main pass — one per batch that reached the pass.
+    pub draw_calls: u32,
+    /// Triangles submitted, counting instances: `Σ (indices / 3) × instances`.
+    pub triangles: u32,
+    /// Instances uploaded this frame, across all batches.
+    pub instances: u32,
+}
+
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]

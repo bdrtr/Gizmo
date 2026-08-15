@@ -28,96 +28,7 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
         });
     }
 
-    // ─── VIEWPORT BİLGİ OVERLAY'İ ───
-    // FPS, entity sayısı, kamera pozisyonu gibi bilgileri sahne görünümünün
-    // sol üst köşesinde yarı-şeffaf arkaplanla gösterir (Blender viewport overlay benzeri)
-    {
-        let painter = ui.painter();
-        let overlay_margin = 8.0;
-        let line_height = 14.0;
-
-        // FPS bilgisi
-        let profiler_fps = world
-            .get_resource::<gizmo_core::FrameProfiler>()
-            .map(|p| p.estimated_fps())
-            .unwrap_or(0.0);
-        let fps_color = if profiler_fps >= 55.0 {
-            egui::Color32::from_rgb(80, 200, 120) // Yeşil
-        } else if profiler_fps >= 30.0 {
-            egui::Color32::from_rgb(240, 180, 50) // Sarı
-        } else {
-            egui::Color32::from_rgb(220, 60, 60) // Kırmızı
-        };
-
-        // Entity sayısı
-        let entity_count = world.iter_alive_entities().len();
-        let selected_count = state.selection.entities.len();
-
-        // Kamera pozisyonu
-        let cam_pos = {
-            let transforms = world.borrow::<gizmo_physics_core::Transform>();
-            // Editor camera'yı bulmak için en basit yol: birinci entity'yi tara
-            // (state.editor_camera zaten SceneView'dan erişilemez, ama World'den çekebiliriz)
-            let mut pos = gizmo_math::Vec3::ZERO;
-            let cameras = world.borrow::<gizmo_renderer::components::Camera>();
-            for e in world.iter_alive_entities() {
-                if cameras.get(e.id()).is_some() {
-                    if let Some(t) = transforms.get(e.id()) {
-                        pos = t.position;
-                        break;
-                    }
-                }
-            }
-            pos
-        };
-
-        let lines = [
-            (format!("⚡ {:.0} FPS", profiler_fps), fps_color),
-            (
-                format!("📦 {} obje", entity_count),
-                egui::Color32::from_rgb(180, 180, 200),
-            ),
-            (
-                if selected_count > 0 {
-                    format!("✅ {} seçili", selected_count)
-                } else {
-                    "✅ —".to_string()
-                },
-                if selected_count > 0 {
-                    egui::Color32::from_rgb(237, 113, 28) // Blender turuncu
-                } else {
-                    egui::Color32::from_rgb(120, 120, 140)
-                },
-            ),
-            (
-                format!("📍 {:.1}, {:.1}, {:.1}", cam_pos.x, cam_pos.y, cam_pos.z),
-                egui::Color32::from_rgb(140, 140, 160),
-            ),
-        ];
-
-        // Arka plan kutusu
-        let bg_height = lines.len() as f32 * line_height + 12.0;
-        let bg_width = 165.0;
-        let bg_rect = egui::Rect::from_min_size(
-            egui::pos2(rect.left() + overlay_margin, rect.top() + overlay_margin),
-            egui::vec2(bg_width, bg_height),
-        );
-        painter.rect_filled(bg_rect, 4.0, egui::Color32::from_rgba_premultiplied(20, 20, 25, 180));
-
-        // Metin
-        for (i, (text, color)) in lines.iter().enumerate() {
-            painter.text(
-                egui::pos2(
-                    rect.left() + overlay_margin + 6.0,
-                    rect.top() + overlay_margin + 6.0 + i as f32 * line_height,
-                ),
-                egui::Align2::LEFT_TOP,
-                text,
-                egui::FontId::monospace(11.0),
-                *color,
-            );
-        }
-    }
+    draw_viewport_overlays(ui, world, state, rect);
 
     // --- GIZMO FARE (MOUSE) ETKİLEŞİMLERİ ---
     let (hover_pos, interact_pos, _latest_pos, any_released, alt_pressed, scroll_y, _primary_down, press_origin) =
@@ -459,6 +370,159 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
 #[inline]
 pub(crate) fn snap_active(pref_enabled: bool, ctrl_held: bool) -> bool {
     pref_enabled ^ ctrl_held
+}
+
+
+
+/// The prototype's two viewport overlays: a row of state chips at the top, and a RENDER STATS
+/// table at the bottom.
+///
+/// # Why these are two different things
+///
+/// The chips say what mode you are in — they are the viewport's half of the tool row, and they
+/// answer "if I drag now, what happens?". The stats table says what the frame cost. The old overlay
+/// mixed both into one translucent box of emoji lines, which meant the answer to "am I in local or
+/// global space?" was sitting underneath the frame rate.
+///
+/// Every number here is measured. `RenderStats` is published by the render pipeline from the batch
+/// list it is about to draw, and the frame time comes from `FrameProfiler`. The prototype also
+/// shows VRAM; nothing in this engine measures it, so that row is absent rather than plausible.
+fn draw_viewport_overlays(
+    ui: &egui::Ui,
+    world: &World,
+    state: &EditorState,
+    rect: egui::Rect,
+) {
+    use crate::theme::palette::*;
+
+    let painter = ui.painter();
+    let pad = 8.0;
+
+    // ── Chips, top-left ──────────────────────────────────────────────────────────────────────
+    let camera_label = {
+        let cameras = world.borrow::<gizmo_renderer::components::Camera>();
+        let fov = world
+            .iter_alive_entities()
+            .into_iter()
+            .find_map(|e| cameras.get(e.id()).map(|c| c.fov))
+            .unwrap_or(std::f32::consts::FRAC_PI_3);
+        // 35 mm equivalent, which is how the prototype labels it: a 36 mm-wide frame subtends
+        // `fov`, so the focal length is half the width over the tangent of the half angle.
+        let mm = 18.0 / (fov * 0.5).tan();
+        format!("Perspective · {mm:.0}mm")
+    };
+    let mode_label = format!(
+        "{} · {}",
+        match state.gizmo_mode {
+            crate::editor_state::GizmoMode::Select => "Select",
+            crate::editor_state::GizmoMode::Translate => "Move",
+            crate::editor_state::GizmoMode::Rotate => "Rotate",
+            crate::editor_state::GizmoMode::Scale => "Scale",
+        },
+        if state.gizmo_local_space { "Local" } else { "Global" }
+    );
+    let snap_label = format!("Snap {:.2} m", state.prefs.snap_translate);
+
+    let mut x = rect.left() + pad;
+    for (text, accented) in [
+        (camera_label, false),
+        (mode_label, false),
+        (snap_label, state.prefs.snap_enabled),
+    ] {
+        let galley = painter.layout_no_wrap(text, egui::FontId::proportional(11.0), TEXT_BRIGHT);
+        let size = egui::vec2(galley.size().x + 16.0, 21.0);
+        let chip = egui::Rect::from_min_size(egui::pos2(x, rect.top() + pad), size);
+        painter.rect_filled(chip, 0.0, if accented { ACCENT_DEEP } else { CHROME });
+        painter.rect_stroke(
+            chip,
+            0.0,
+            egui::Stroke::new(1.0_f32, if accented { ACCENT } else { BORDER }),
+            egui::StrokeKind::Inside,
+        );
+        painter.galley(
+            egui::pos2(chip.left() + 8.0, chip.center().y - galley.size().y * 0.5),
+            galley,
+            TEXT_BRIGHT,
+        );
+        x += size.x + 6.0;
+    }
+
+    // ── RENDER STATS, bottom-left ────────────────────────────────────────────────────────────
+    let stats = world
+        .get_resource::<gizmo_renderer::components::RenderStats>()
+        .map(|s| *s)
+        .unwrap_or_default();
+    let frame_ms = world
+        .get_resource::<gizmo_core::FrameProfiler>()
+        .map(|p| p.avg_frame_ms(30))
+        .unwrap_or(0.0);
+    let entities = world.iter_alive_entities().len();
+
+    let rows: [(&str, String); 5] = [
+        ("frame", format!("{frame_ms:.2} ms")),
+        ("draw calls", stats.draw_calls.to_string()),
+        ("tris", format_thousands(stats.triangles)),
+        ("instances", stats.instances.to_string()),
+        ("entities", entities.to_string()),
+    ];
+
+    const ROW: f32 = 16.0;
+    const HEADER: f32 = 20.0;
+    let width = 200.0_f32.min(rect.width() - pad * 2.0);
+    let height = HEADER + rows.len() as f32 * ROW + 6.0;
+    let panel = egui::Rect::from_min_size(
+        egui::pos2(rect.left() + pad, rect.bottom() - pad - height),
+        egui::vec2(width, height),
+    );
+    if panel.width() < 80.0 || panel.top() < rect.top() {
+        return; // too small a viewport to be worth covering
+    }
+    painter.rect_filled(panel, 0.0, CHROME);
+    painter.rect_stroke(panel, 0.0, egui::Stroke::new(1.0_f32, BORDER), egui::StrokeKind::Inside);
+    painter.text(
+        egui::pos2(panel.left() + 8.0, panel.top() + 5.0),
+        egui::Align2::LEFT_TOP,
+        "RENDER STATS",
+        egui::FontId::proportional(10.0),
+        TEXT_MUTED,
+    );
+    painter.line_segment(
+        [
+            egui::pos2(panel.left(), panel.top() + HEADER),
+            egui::pos2(panel.right(), panel.top() + HEADER),
+        ],
+        egui::Stroke::new(1.0_f32, BORDER),
+    );
+    for (i, (label, value)) in rows.iter().enumerate() {
+        let y = panel.top() + HEADER + 3.0 + i as f32 * ROW;
+        painter.text(
+            egui::pos2(panel.left() + 8.0, y),
+            egui::Align2::LEFT_TOP,
+            *label,
+            egui::FontId::proportional(11.0),
+            TEXT_DIM,
+        );
+        painter.text(
+            egui::pos2(panel.right() - 8.0, y),
+            egui::Align2::RIGHT_TOP,
+            value,
+            egui::FontId::proportional(11.0),
+            TEXT_BRIGHT,
+        );
+    }
+}
+
+/// `30588` → `30,588`, the way the prototype prints its triangle count.
+fn format_thousands(n: u32) -> String {
+    let digits = n.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
 }
 
 #[cfg(test)]

@@ -118,6 +118,8 @@ pub fn execute_render_pipeline(
 
     // Set inside the block below: false means the Game panel still needs the fallback copy.
     let mut game_view_rendered = false;
+    // Filled inside the block below, published to the world after it.
+    let mut render_stats = gizmo::renderer::components::RenderStats::default();
 
     CACHE.with(|cache_ref| {
         let mut cache = cache_ref.borrow_mut();
@@ -535,6 +537,25 @@ pub fn execute_render_pipeline(
             }
         }
 
+            // What this frame cost, measured from the list that is about to be drawn rather than
+            // guessed: one draw call per batch, and triangles counted with their instances. The
+            // editor's RENDER STATS overlay reads this; before it, the field it displayed
+            // (`StudioState::draw_call_count`) was never written by anything.
+            {
+                let mut stats = gizmo::renderer::components::RenderStats::default();
+                for b in flat_batches.iter() {
+                    let instances = b.end_instance.saturating_sub(b.start_instance);
+                    if instances == 0 {
+                        continue;
+                    }
+                    stats.draw_calls += 1;
+                    stats.instances += instances;
+                    let indices = if b.index_count > 0 { b.index_count } else { b.vertex_count };
+                    stats.triangles += (indices / 3) * instances;
+                }
+                render_stats = stats;
+            }
+
             // --- GAME VIEW: bu karenin İLK çizimi, kendi encoder'ında ---
             //
             // Sırası kasıtlı ve düzeltilmesi gereken kusurun ta kendisi: `Queue::write_buffer`
@@ -584,6 +605,8 @@ pub fn execute_render_pipeline(
             record_studio_particle_pass(encoder, renderer);
 
     }); // Cikis: CACHE.with bloğu
+
+    world.insert_resource(render_stats);
 
     // Çizilen Gizmo'ları sonraki frame için temizle
     if let Some(mut gizmos) = world.get_resource_mut::<gizmo::renderer::Gizmos>() {

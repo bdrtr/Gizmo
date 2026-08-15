@@ -386,6 +386,16 @@ fn every_render_capability_is_known_to_both_draw_paths() {
             "the play-mode preview texture inside the editor, for the same reason.",
         ),
         (
+            "RenderStats",
+            Path::EditorOnly,
+            "what the last frame cost, published from the batch list the editor is about to draw \
+             and read by its RENDER STATS overlay. The game path could publish the same numbers, \
+             but nothing there reads them — and this type exists precisely because \
+             `StudioState::draw_call_count` was a field nothing ever wrote. Publishing stats with \
+             no consumer would be the same mistake facing the other way. Wire it into the game \
+             path when a game overlay wants it, not before.",
+        ),
+        (
             "EditorOnly",
             Path::EditorOnly,
             "the marker that says an entity is the editor's own furniture — grid, light icons, \
