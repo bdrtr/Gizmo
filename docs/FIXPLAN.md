@@ -1689,8 +1689,21 @@ eklemekten ibaret.
   yeniden koşuldu: **her hücrede iki sayı birebir aynı**. Yayımlanan tablolar etkilenmemiş.
   `trip_lean`/`trip_tilt_deg` de eklendi, böylece dedektörün tetiklendiği an bir devrilme mi
   yoksa bir seğirme mi olduğu okunabiliyor.
-  - ⬜ **Ayrı, küçük kusur:** uyuyan cisme yazılan hız uyandığında uygulanıyor — bayat bir
-    impuls. Tek `if` ile düzelir ama determinizm hash'ini oynatır; bu iş kapsamı dışında.
+  - ✅ **Ayrı, küçük kusur — KAPANDI (2026-08-15), ve erteleme gerekçesi iki kez yanlıştı.**
+    Kayıt şöyle diyordu: "uyuyan cisme yazılan hız uyandığında uygulanıyor — bayat bir impuls.
+    Tek `if` ile düzelir ama determinizm hash'ini oynatır; bu iş kapsamı dışında."
+    - Birincisi, **iki ayrı kusur** varmış. Bu madde ada hız geri-yazımının (`pipeline.rs`)
+      alt-maddesi ve onu anlatıyor; ama aynı cümle `sync_bodies`'teki bambaşka bir kusuru da
+      tarif ediyor — oyunun uyuyan cisme yazdığı hızın orada saklanması. İkincisi kullanıcının
+      çarptığı olan: editörün Velocity denetçisinde uyuyan bir kasanın X alanını sürüklüyorsun,
+      hiçbir şey olmuyor, sonra yığın sarsılınca kasa 2.5 m fırlıyor (ölçüldü).
+    - İkincisi, **hash'i oynatmıyor.** Ada yazımı düzeltildikten sonra 200 kutuluk çökme sahnesi
+      hâlâ `A462C9EB8A09D5CA`, altı golden sabiti ve soak sınırları da yerinde. Sebebi: o sahnede
+      uyuyan bir üye çözüldüğünde adada zaten bir hareketli var, uyandırma geçişi herkesi
+      uyandırıyor ve koruma hiç ateşlenmiyor. Kusur gerçek — ama onu gösteren şey sahne değil,
+      eşik altı hızla uyandırılmış iki kutuluk bir senaryo (`tests/sleeping_writes.rs`).
+    - Kalan, aynı sınıf, ayrı yer: eklem çözücü karşı ucu uyanıkken uyuyan bir dinamiğin hızını
+      yazıyor (`joint_is_inert` iki ucun da atıl olmasını istiyor). ⬜ Takip maddesi.
 
 - ✅ **Bayat doküman düzeltildi:** `ConstraintSolver::support_ordering` yorumu "VARSAYILAN
   KAPALI" diyordu, `Default` ise `true` veriyor. Yığın kararlılığına bakan biri için önemli:
