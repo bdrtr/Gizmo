@@ -564,6 +564,24 @@ pub fn execute_render_pipeline(
                     let indices = if b.index_count > 0 { b.index_count } else { b.vertex_count };
                     stats.triangles += (indices / 3) * instances;
                 }
+                // GPU memory, sampled about once a second. `generate_allocator_report` builds a
+                // Vec of every live allocation, so calling it per frame would cost more than the
+                // number is worth — and it does not move at frame rate anyway.
+                let previous = world
+                    .get_resource::<gizmo::renderer::components::RenderStats>()
+                    .map(|r| (r.gpu_allocated_bytes, r.gpu_sampled_at))
+                    .unwrap_or((None, f32::NEG_INFINITY));
+                if elapsed_time - previous.1 >= 1.0 {
+                    stats.gpu_allocated_bytes = renderer
+                        .device
+                        .generate_allocator_report()
+                        .map(|r| r.total_allocated_bytes);
+                    stats.gpu_sampled_at = elapsed_time;
+                } else {
+                    stats.gpu_allocated_bytes = previous.0;
+                    stats.gpu_sampled_at = previous.1;
+                }
+
                 render_stats = stats;
             }
 

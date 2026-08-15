@@ -458,13 +458,19 @@ fn draw_viewport_overlays(
         .unwrap_or(0.0);
     let entities = world.iter_alive_entities().len();
 
-    let rows: [(&str, String); 5] = [
+    let mut rows: Vec<(&str, String)> = vec![
         ("frame", format!("{frame_ms:.2} ms")),
         ("draw calls", stats.draw_calls.to_string()),
         ("tris", format_thousands(stats.triangles)),
         ("instances", stats.instances.to_string()),
         ("entities", entities.to_string()),
     ];
+    // The prototype's `vram` row, present only when the backend actually reports allocations.
+    // Labelled "gpu mem" rather than "vram": this is what wgpu has sub-allocated for this process,
+    // not the card's total usage, and the shorter word would claim the larger thing.
+    if let Some(bytes) = stats.gpu_allocated_bytes {
+        rows.push(("gpu mem", format_bytes(bytes)));
+    }
 
     const ROW: f32 = 16.0;
     const HEADER: f32 = 20.0;
@@ -509,6 +515,18 @@ fn draw_viewport_overlays(
             egui::FontId::proportional(11.0),
             TEXT_BRIGHT,
         );
+    }
+}
+
+
+/// Bytes as MB or GB, the way a stats panel reads them.
+fn format_bytes(bytes: u64) -> String {
+    const MB: f64 = 1024.0 * 1024.0;
+    let mb = bytes as f64 / MB;
+    if mb >= 1024.0 {
+        format!("{:.2} GB", mb / 1024.0)
+    } else {
+        format!("{mb:.0} MB")
     }
 }
 

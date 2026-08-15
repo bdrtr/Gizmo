@@ -235,7 +235,9 @@ pub struct GameRenderTarget(pub RenderTarget);
 ///
 /// Frame time is deliberately absent — that belongs to `gizmo_core::FrameProfiler`, which already
 /// measures it for every configuration, editor or not.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+// No `Eq`: the sample timestamp is a float. `PartialEq` is enough for the one comparison anyone
+// makes of these — "did the frame change" in a test.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct RenderStats {
     /// Draw calls recorded for the main pass — one per batch that reached the pass.
     pub draw_calls: u32,
@@ -243,6 +245,21 @@ pub struct RenderStats {
     pub triangles: u32,
     /// Instances uploaded this frame, across all batches.
     pub instances: u32,
+    /// GPU memory wgpu has allocated, in bytes — `None` when the backend does not report it.
+    ///
+    /// This is the allocator's view (`Device::generate_allocator_report`), not the driver's total
+    /// VRAM: it counts what this process has sub-allocated, which is the number an engine can
+    /// actually act on. Labelled accordingly wherever it is shown, because "VRAM" would imply the
+    /// card's usage including every other process.
+    ///
+    /// `None` is a real answer and must stay one: some backends never report, and a zero would
+    /// read as "nothing allocated".
+    pub gpu_allocated_bytes: Option<u64>,
+    /// When the sample above was taken, in seconds of `Time::elapsed`.
+    ///
+    /// The report walks every live allocation, so it is sampled about once a second rather than
+    /// per frame; this is what the sampler compares against.
+    pub gpu_sampled_at: f32,
 }
 
 

@@ -2827,16 +2827,22 @@ yok olması demek değil.
 
 ### B. Motorda VERİSİ de yok (önce motor tarafı gerekiyor)
 
-- ⬜ **Nesne başına gölge dökme anahtarı** (prototip: `Cast shadow  On / Off / Only`). Motorda
-  gölge dökme materyal yönlendirmesinden türüyor (unlit/skybox/grid hariç tutuluyor); nesne başına
-  bir bayrak yok.
+- ✅ **Nesne başına gölge dökme anahtarı** (2026-08-16). `MeshRenderer::shadows: ShadowCasting`
+  (On/Off/Only), HER İKİ render yoluna da bağlı ve iki batch anahtarında da. Yalnız editörde
+  çalışan bir bayrak, editörün oyunun ne yapacağı hakkında yalan söylemesi olurdu. Üç durum da
+  piksel testiyle doğrulandı.
 - ⬜ **LOD bias** (prototip: `LOD bias 1.0`). `LodGroup` var ama bias kavramı yok.
 - ⬜ **Varlık GUID'i ve meta verisi** (prototipin detay paneli: type / size / detail / folder /
   guid). Motor varlıkları yol ile tanıyor; kalıcı bir kimlik yok.
 - ⬜ **Script'in dışa açtığı özellikler** (prototip: SCRIPT bölümünde `open_speed 2.400`,
   `locked true/false`). Lua tarafında bir özellik yansıtma (reflection) mekanizması yok.
-- ⬜ **VRAM ölçümü.** RENDER STATS'ta prototipin gösterdiği satır; wgpu bunu kolayca vermiyor ve
-  bu yüzden tablodan çıkarıldı — makul görünen bir sayı basmaktansa satır olmasın.
+- ✅ **GPU bellek ölçümü** (2026-08-16). `Device::generate_allocator_report()` varmış:
+  `total_allocated_bytes` gerçek bir sayı ve desteklemeyen backend'de dürüstçe `None` döndürüyor.
+  RENDER STATS'ta artık `gpu mem` satırı var — "vram" değil, çünkü ölçülen şey bu sürecin
+  alt-ayırmaları, kartın toplam kullanımı değil; kısa kelime büyük şeyi iddia ederdi. Rapor bütün
+  canlı ayırmaları gezdiği için saniyede bir örnekleniyor.
+  ⬜ Kalan: durum çubuğundaki `RAM` yarısı — süreç RSS'i okumak ayrı bir iş ve bir render kaygısı
+  değil.
 
 ### C. Sıfırdan özellik
 
