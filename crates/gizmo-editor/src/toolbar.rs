@@ -2,6 +2,7 @@
 
 use crate::editor_state::{BuildTarget, EditorMode, EditorState, GizmoMode};
 use egui;
+use crate::theme::palette::{ACCENT, ACCENT_LIGHT, TEXT_BRIGHT};
 
 #[cfg(target_arch = "wasm32")]
 use web_time::Instant;
@@ -15,6 +16,9 @@ pub fn draw_toolbar(ui: &mut egui::Ui, state: &mut EditorState) {
         .show_inside(ui, |ui| {
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
+
+                draw_wordmark(ui);
+                ui.separator();
 
                 // === DOSYA İŞLEMLERİ ===
                 if ui
@@ -111,8 +115,7 @@ pub fn draw_toolbar(ui: &mut egui::Ui, state: &mut EditorState) {
                 if state.mode == EditorMode::Edit {
                     if ui
                         .button(
-                            egui::RichText::new("▶ Başlat")
-                                .color(egui::Color32::from_rgb(80, 200, 80)),
+                            egui::RichText::new("▶ Başlat").color(ACCENT),
                         )
                         .clicked()
                     {
@@ -126,8 +129,7 @@ pub fn draw_toolbar(ui: &mut egui::Ui, state: &mut EditorState) {
                     };
                     if ui
                         .button(
-                            egui::RichText::new(pause_text)
-                                .color(egui::Color32::from_rgb(200, 200, 80)),
+                            egui::RichText::new(pause_text).color(ACCENT_LIGHT),
                         )
                         .clicked()
                     {
@@ -348,4 +350,37 @@ pub fn draw_toolbar(ui: &mut egui::Ui, state: &mut EditorState) {
                 }
             });
         });
+}
+
+/// The prototype's mark: an accent square with a crosshair knocked out of it, then GIZMO in
+/// letterspaced caps.
+///
+/// Drawn rather than assembled from widgets because it is a 11x11 px glyph with 1 px cuts — the
+/// prototype builds it from three absolutely-positioned divs, and the painter is the direct
+/// translation of that. Sized off the row so it tracks the theme instead of pinning a magic
+/// height next to one.
+fn draw_wordmark(ui: &mut egui::Ui) {
+    const MARK: f32 = 11.0;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(MARK, MARK), egui::Sense::hover());
+    let p = ui.painter();
+    p.rect_filled(rect, 0.0, ACCENT);
+    // The two 1 px cuts, in the chrome colour, exactly as the prototype knocks them out.
+    let cut = ui.visuals().panel_fill;
+    p.rect_filled(
+        egui::Rect::from_min_size(rect.min + egui::vec2(5.0, 1.0), egui::vec2(1.0, 9.0)),
+        0.0,
+        cut,
+    );
+    p.rect_filled(
+        egui::Rect::from_min_size(rect.min + egui::vec2(1.0, 5.0), egui::vec2(9.0, 1.0)),
+        0.0,
+        cut,
+    );
+    ui.add_space(2.0);
+    ui.label(
+        egui::RichText::new("G I Z M O")
+            .size(13.0)
+            .strong()
+            .color(TEXT_BRIGHT),
+    );
 }

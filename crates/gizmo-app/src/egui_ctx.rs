@@ -74,47 +74,23 @@ impl EguiContext {
         ctx
     }
 
+    /// Applies the editor's visual design.
+    ///
+    /// The design itself lives in [`crate::editor_theme`], which implements the
+    /// `Gizmo Editor Prototype` mockup — palette, geometry and type scale, with the reasoning for
+    /// each. It used to be forty lines of literals here; a theme spread through a constructor is
+    /// one nobody can read as a whole, and this one had drifted into a different look entirely
+    /// (rounded, cool grey, touch-sized) from the design it was meant to be.
     pub fn apply_theme(&self) {
-        let mut visuals = egui::Visuals::dark();
-
-        // Modern, sleek rounding
-        let widget_rounding = egui::CornerRadius::same(6);
-        visuals.window_corner_radius = egui::CornerRadius::same(10);
-        visuals.menu_corner_radius = egui::CornerRadius::same(8);
-        visuals.widgets.noninteractive.corner_radius = widget_rounding;
-        visuals.widgets.inactive.corner_radius = widget_rounding;
-        visuals.widgets.hovered.corner_radius = widget_rounding;
-        visuals.widgets.active.corner_radius = widget_rounding;
-        visuals.widgets.open.corner_radius = widget_rounding;
-
-        // Modern Dark Colors (similar to Unreal Engine / VS Code)
-        visuals.window_fill = egui::Color32::from_rgb(28, 28, 30); // Deep dark gray
-        visuals.panel_fill = egui::Color32::from_rgb(34, 34, 36); // Slightly lighter panel
-        visuals.faint_bg_color = egui::Color32::from_rgb(42, 42, 45);
-
-        // Widget Backgrounds
-        visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(45, 45, 48); // Buttons
-        visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(58, 58, 62); // Hover
-        visuals.widgets.active.bg_fill = egui::Color32::from_rgb(70, 70, 75); // Clicked
-
-        // Accent Color: Modern Soft Blue/Purple
-        let accent_color = egui::Color32::from_rgb(64, 120, 240); // Soft Tech Blue
-        visuals.selection.bg_fill = accent_color;
-        visuals.selection.stroke = egui::Stroke::new(1.0_f32, accent_color);
-
-        // Improve text contrast slightly
-        visuals.override_text_color = Some(egui::Color32::from_rgb(230, 230, 230));
-
-        self.context.set_visuals(visuals);
-
-        // Improve spacing and padding for a less cluttered look
-        let mut style = (*self.context.global_style()).clone();
-        style.spacing.item_spacing = egui::vec2(10.0, 8.0);
-        style.spacing.button_padding = egui::vec2(12.0, 6.0);
-        style.spacing.window_margin = egui::Margin::same(12);
-        style.spacing.interact_size = egui::vec2(40.0, 24.0); // Make clickable areas taller
-
-        self.context.set_global_style(style);
+        // The design belongs to the editor, so it lives in `gizmo_editor::theme` — which is also
+        // the only place both consumers can see it: this call site, and the editor's own widgets,
+        // which reach for the palette directly. `gizmo-editor` sits below `gizmo-app`, so the
+        // reverse arrangement would have been a dependency cycle.
+        //
+        // Without the editor feature this is a plain egui overlay for a game, and imposing the
+        // editor's chrome on it would be wrong.
+        #[cfg(feature = "editor")]
+        gizmo_editor::theme::apply(&self.context);
     }
 
     /// Forwards a window event to egui; returns `true` if egui consumed it.

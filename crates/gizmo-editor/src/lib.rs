@@ -15,6 +15,8 @@
 //! - **Scene View** — center panel: 3D scene viewport
 //! - **Game View** — runtime/play viewport
 
+/// The editor's visual design (palette, geometry, type scale).
+pub mod theme;
 pub mod asset_browser;
 pub mod console;
 pub mod editor_state;
