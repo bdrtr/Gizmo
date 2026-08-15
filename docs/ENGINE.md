@@ -1345,7 +1345,7 @@ Gölge yolu az kalsın yanlışlıkla "ölü" diye kaydediliyordu: forward shade
 noktanın aydınlık bir yüzde olmasıydı. Tek pikselden çıkarılan olumsuz sonuç, sahne o soruyu
 soracak biçimde kurulmadıkça hiçbir şey kanıtlamıyor.
 
-#### Game paneli editör kamerasını gösteriyor (2026-08-15, açık)
+#### Game paneli editör kamerasını gösteriyordu (2026-08-15, KAPANDI)
 
 Studio karede **tek** sahne çizimi yapıp iki çıktı üretiyor: `run_post_processing` önce editör
 hedefine, sonra oyun hedefine yazıyor, ikisi de aynı `renderer.post.hdr_texture_view`'i okuyarak.
@@ -1358,9 +1358,25 @@ anda. Play modunda iki kamera aynı olduğu için soru doğmuyor.
 `the_game_view_shows_the_game_camera_not_the_editor_camera` — çünkü çalıştırılabilir bir kayıt
 bayatlayamaz ve düzeltildiği gün kendiliğinden yeşile döner.
 
-**Düzeltmenin şekli belli, kararı açık.** İkinci çizim için culling ve instance tamponu yeniden
-kullanılabilir (editör zaten oyun kamerasına göre culling yapıyor); ana geçişi aynı HDR hedefine
-yeniden kaydedip ikinci post koşusundan önce sıralamak tek encoder içinde doğru. Eksik olan tek
-parça kromayı dışarıda bırakmak: grid'in `is_grid`'i var, ama ışık ikonları sıradan unlit küpler.
-Bu, `gizmo-core`'da yeni bir **public** işaretleyici bileşen demek, yani §4 kapsamında bir karar —
-o yüzden tahminle geçilmedi.
+**Düzeltildi.** Üç parça: `EditorOnly` işaretleyici bileşeni (gizmo-core'a değil
+`gizmo-renderer`'a — ECS tabanı Stage A'nın en alt yüzeyi ve bu bir render kaygısı, §4;
+`EditorRenderTarget` zaten orada), ana geçişe `draw_chrome` bayrağı, ve oyun kamerasından ikinci
+bir çizim. İşaretleyici batch anahtarına da girdi: bir ikonla aynı batch'e düşen sahne mesh'i aksi
+hâlde oyun görüntüsünden onunla birlikte silinirdi.
+
+**Ve buradaki tuzak kaydedilmeye değer.** İlk deneme "kare ortasında uniform'u yeniden yaz, ikinci
+geçişi aynı encoder'a kaydet" idi ve çalışmadı — üstelik *hiçbir şey olmamış gibi* görünen bir
+başarısızlıkla: `Queue::write_buffer` komutlarla değil **submit'lerle** sıralı. Bir submit'ten
+önceki her yazım o submit'teki bütün geçişler için geçerli, dolayısıyla ikinci yazım ilk çizimi de
+değiştirdi ve iki panel yine aynı görüntüyü verdi. Doğrusu bir submit sınırı: oyun görünümü kendi
+encoder'ında çizilip, editörün uniform'ları geri yazılmadan önce submit ediliyor. Bu sayede ikinci
+bir uniform tamponu ya da bind group çoğaltması gerekmedi.
+
+Cascade'ler oyun kamerasına yeniden oturtuluyor — shader cascade'i görüş derinliğinden seçtiği için
+split'ler bakan kameraya ait olmak zorunda. Bedel ölçüldü: 481 → 453 FPS (~%6); culling ve instance
+tamponu paylaşıldığı için iki kez ödenen şey yalnızca pass kaydı ve rasterizasyon. Görünürlük
+kapısı bilinçli olarak konmadı: editör durumunda panelin görünür olup olmadığını bildiren bir şey
+yok ve canlı beklenen bir önizlemede %6 için görünürlük protokolü icat etmek yanlış takas.
+
+Yan kazanç: ışık ikonları artık **play modunda da** görüntüye sızmıyor. Krom bastırma eskiden
+"oynuyor muyuz" sorusuna bakıyordu, o soru da bir ışık ikonuyla bir lambayı ayırt edemiyor.
