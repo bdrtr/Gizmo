@@ -11,10 +11,18 @@ use egui;
 use gizmo_core::World;
 
 /// Profiler panelinin renk paleti
-const COLOR_BG_BAR: egui::Color32 = egui::Color32::from_rgb(40, 40, 45);
-const COLOR_GOOD: egui::Color32 = egui::Color32::from_rgb(80, 200, 120);
-const COLOR_WARN: egui::Color32 = egui::Color32::from_rgb(240, 180, 50);
-const COLOR_BAD: egui::Color32 = egui::Color32::from_rgb(220, 60, 60);
+use crate::theme::palette;
+
+/// The graph's well — the deepest surface, so the bars read as sitting in a trough.
+const COLOR_BG_BAR: egui::Color32 = palette::VOID;
+
+/// Under budget: neutral. A frame that meets its budget is unremarkable, and painting it green
+/// spends the loudest colour in the panel on the case you never need to look at.
+const COLOR_GOOD: egui::Color32 = palette::BORDER_HOT;
+/// Over 60 fps budget.
+const COLOR_WARN: egui::Color32 = palette::ACCENT_LIGHT;
+/// Over 30 fps budget.
+const COLOR_BAD: egui::Color32 = palette::ACCENT;
 
 /// Frame süresine göre renk döndürür
 fn frame_color(ms: f64) -> egui::Color32 {
@@ -27,7 +35,12 @@ fn frame_color(ms: f64) -> egui::Color32 {
     }
 }
 
-/// Scope derinliğine göre renk paleti
+/// Scope derinliğine göre renk paleti.
+///
+/// Deliberately NOT folded into the mono accent scheme. The design system says one accent and no
+/// second, which is right for chrome — but a flamegraph's colours are data, not decoration: eight
+/// shades of one hue would make adjacent scopes indistinguishable, which is the only thing this
+/// table is for. The rule is about the interface, and this is a chart.
 fn scope_color(depth: u32, idx: usize) -> egui::Color32 {
     const PALETTE: &[egui::Color32] = &[
         egui::Color32::from_rgb(86, 156, 214),  // Mavi
@@ -97,7 +110,7 @@ pub fn ui_profiler(ui: &mut egui::Ui, world: &World, _state: &mut EditorState) {
         let painter = ui.painter_at(rect);
 
         // Arka plan
-        painter.rect_filled(rect, 4.0, COLOR_BG_BAR);
+        painter.rect_filled(rect, 0.0, COLOR_BG_BAR);
 
         // Hedef çizgileri
         let max_ms = 33.33f64; // Y ekseni max
@@ -110,10 +123,9 @@ pub fn ui_profiler(ui: &mut egui::Ui, world: &World, _state: &mut EditorState) {
                 egui::pos2(rect.left(), y_16ms),
                 egui::pos2(rect.right(), y_16ms),
             ],
-            egui::Stroke::new(
-                1.0_f32,
-                egui::Color32::from_rgba_premultiplied(80, 200, 120, 60),
-            ),
+            // The budget line, in the accent at low alpha: it is a threshold, not a value, so it
+            // has to be legible without competing with the bars that cross it.
+            egui::Stroke::new(1.0_f32, palette::ACCENT.gamma_multiply(0.45)),
         );
 
         // Çubuklar
@@ -134,9 +146,9 @@ pub fn ui_profiler(ui: &mut egui::Ui, world: &World, _state: &mut EditorState) {
         painter.text(
             egui::pos2(rect.left() + 4.0, y_16ms - 12.0),
             egui::Align2::LEFT_BOTTOM,
-            "60fps",
-            egui::FontId::proportional(10.0),
-            egui::Color32::from_rgb(80, 200, 120),
+            "16.6 ms",
+            egui::FontId::proportional(9.0),
+            palette::TEXT_DIM,
         );
         let _ = y_33ms; // suppress unused
     }
