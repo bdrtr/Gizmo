@@ -1378,5 +1378,33 @@ tamponu paylaşıldığı için iki kez ödenen şey yalnızca pass kaydı ve ra
 kapısı bilinçli olarak konmadı: editör durumunda panelin görünür olup olmadığını bildiren bir şey
 yok ve canlı beklenen bir önizlemede %6 için görünürlük protokolü icat etmek yanlış takas.
 
-Yan kazanç: ışık ikonları artık **play modunda da** görüntüye sızmıyor. Krom bastırma eskiden
-"oynuyor muyuz" sorusuna bakıyordu, o soru da bir ışık ikonuyla bir lambayı ayırt edemiyor.
+Bu iş sırasında yazdığım bir yan kazanç iddiası **yanlıştı** ve düzeltildi: "ışık ikonları artık
+play modunda da sızmıyor" demiştim; `systems/gizmos.rs` play modunda o nesnelere zaten `IsHidden`
+ekliyormuş. İşaretleyicinin gerçek kazancı edit modundaki Game görünümü.
+
+
+### "Editör nesnesi mi" kararı: sekiz kopyadan bire (2026-08-15)
+
+Game view işi bir işaretleyici bileşen gerektirdi, ve onu ararken kuralın zaten var olduğu ortaya
+çıktı — isim öneki olarak, `starts_with("Editor ") || == "Highlight Box"`, **sekiz** yerde ayrı
+ayrı yazılmış: hiyerarşi paneli (iki kez), `gizmo-app`'in editör runtime'ı, `gizmo-scene`'in
+snapshot filtreleri (iki) ve sahne yazıcısı, studio'nun korunan-nesne kümesi, silme koruması,
+tümünü-seç kısayolu, play-modu gizlemesi. Sekizinin de o boşluk karakteri üzerinde anlaşması
+gerekiyordu.
+
+Karar artık `gizmo_core::component::is_editor_only`; yanında `EditorOnly` bileşeni. İsim kuralı
+korunuyor çünkü bileşenden önce yazılmış sahneler yalnızca isim taşıyor — geçiş, tasarım değil.
+
+**Bileşenin yeri ölçüldü, tercih edilmedi.** Önce `gizmo-renderer`'a konmuştu ("editör kavramı ECS
+tabanına ait değil"). Tüketicileri sayınca yanlış olduğu görüldü: `gizmo-scene` de bu kararı
+veriyor ve renderer'ı göremiyor — grafikte yanında duruyor, üstünde değil. Yani kavram bir render
+kaygısı değil, bir *dünya* kavramı: "bu nesne alet, içerik değil". Çekirdek zaten `IsHidden` ve
+`IsDeleted`'ı barındırıyor.
+
+İsim kuralının bilinen yarası testte belge olarak duruyor: sahnesinde "Editor Desk" adlı masası
+olan kullanıcı onu hiyerarşide göremez ve hiçbir kayıtta bulamaz. İşaretleyici tam da bunun için
+var.
+
+Tarayıcı test yalnızca **üretim kodunu** okuyor: bir testin "bu filtrelendi" derken dizeyi anması
+sonucu denetlemektir, kararı yeniden vermek değil — `gizmo-scene`'in kayıt testi tam olarak bunu
+yapıyor ve haklı.
