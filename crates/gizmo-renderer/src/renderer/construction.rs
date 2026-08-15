@@ -213,8 +213,17 @@ impl Renderer {
             .find(|f| f.is_srgb())
             .unwrap_or(surface_caps.formats[0]);
 
+        // `COPY_SRC` is what makes `capture::texture_to_png` able to read the presented frame back.
+        // Requested only when the surface advertises it: on a backend that does not, asking is a
+        // hard configure failure, and a screenshot facility must never be the reason a window
+        // fails to open. Where it is missing, capture reports `NotCopyable` and the frame is fine.
+        let mut usage = wgpu::TextureUsages::RENDER_ATTACHMENT;
+        if surface_caps.usages.contains(wgpu::TextureUsages::COPY_SRC) {
+            usage |= wgpu::TextureUsages::COPY_SRC;
+        }
+
         let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            usage,
             format: surface_format,
             width: size.width,
             height: size.height,

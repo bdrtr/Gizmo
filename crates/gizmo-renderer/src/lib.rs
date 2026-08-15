@@ -111,6 +111,7 @@
 pub mod asset;
 pub mod async_assets;
 pub mod backdrop;
+pub mod capture;
 pub mod routing;
 pub mod components;
 pub mod csm;

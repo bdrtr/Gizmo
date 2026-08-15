@@ -236,6 +236,49 @@ impl<State: 'static> App<State> {
     /// The recovery behaviour is unchanged: transient states skip quietly, `Outdated`/`Lost`
     /// reconfigure the swapchain and back off, a validation error is logged and skipped, and the
     /// failure streak drives the rate-limited logging.
+    /// Write the presented frame to a PNG when `GIZMO_SCREENSHOT` asks for it.
+    ///
+    /// Called from the one point in the loop where the finished frame is still readable — after
+    /// `submit`, before `present`. Does nothing at all without the env var, which is why it can sit
+    /// unconditionally in the hot path.
+    ///
+    /// The request lives in statics rather than in `App`: it comes from the process environment, so
+    /// it is process-wide by nature, and threading a diagnostic through the builder, the struct,
+    /// its `Debug` impl and every constructor would cost more than it explains.
+    fn service_screenshot(
+        renderer: &Renderer,
+        output: &wgpu::SurfaceTexture,
+        current_window: &ActiveEventLoop,
+    ) {
+        use gizmo_renderer::capture::CaptureRequest;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::sync::OnceLock;
+
+        static REQUEST: OnceLock<Option<CaptureRequest>> = OnceLock::new();
+        static FRAME: AtomicU64 = AtomicU64::new(0);
+
+        let Some(req) = REQUEST.get_or_init(CaptureRequest::from_env) else {
+            return;
+        };
+        // `fetch_add` returns the previous value, so the first presented frame is 0.
+        if FRAME.fetch_add(1, Ordering::Relaxed) != req.frame {
+            return;
+        }
+
+        match gizmo_renderer::capture::texture_to_png(
+            &renderer.device,
+            &renderer.queue,
+            &output.texture,
+            &req.path,
+        ) {
+            Ok(()) => tracing::info!(path = %req.path.display(), frame = req.frame, "screenshot written"),
+            Err(e) => tracing::error!("{e}"),
+        }
+        if req.exit_after {
+            current_window.exit();
+        }
+    }
+
     fn acquire_backbuffer(&mut self, renderer: &mut Renderer) -> Option<wgpu::SurfaceTexture> {
         let surface = renderer
             .surface
@@ -734,6 +777,12 @@ impl<State: 'static> App<State> {
                             }
 
                             renderer.queue.submit(std::iter::once(encoder.finish()));
+
+                            // Between submit and present: the surface texture is still alive and
+                            // now holds the finished frame, egui included. This is the only moment
+                            // in the loop where the engine can see what the user sees.
+                            Self::service_screenshot(&renderer, &output, current_window);
+
                             output.present();
 
                             self.world.insert_resource(renderer);
