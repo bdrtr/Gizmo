@@ -16,7 +16,7 @@ pub fn draw_point_light_section(
     let mut lights = unsafe { world.borrow_mut_unchecked::<PointLight>() };
     {
         if let Some(mut light) = lights.get_mut(entity_id.id()) {
-            egui::CollapsingHeader::new("💡 PointLight")
+            egui::CollapsingHeader::new(crate::theme::section_title("PointLight"))
                 .default_open(false)
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
@@ -50,7 +50,7 @@ pub fn draw_directional_light_section(
     // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
     let mut lights = unsafe { world.borrow_mut_unchecked::<DirectionalLight>() };
     if let Some(mut light) = lights.get_mut(entity_id.id()) {
-        egui::CollapsingHeader::new("☀️ Directional Light (Güneş)")
+        egui::CollapsingHeader::new(crate::theme::section_title("Directional Light (Güneş)"))
             .default_open(true)
             .show(ui, |ui| {
                 ui.horizontal(|ui| {

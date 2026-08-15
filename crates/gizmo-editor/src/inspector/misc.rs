@@ -16,7 +16,7 @@ pub fn draw_animation_player_section(
     // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
     let mut anim_players = unsafe { world.borrow_mut_unchecked::<gizmo_renderer::components::AnimationPlayer>() };
     if let Some(mut player) = anim_players.get_mut(entity_id.id()) {
-        egui::CollapsingHeader::new("🏃 Animation Player")
+        egui::CollapsingHeader::new(crate::theme::section_title("Animation Player"))
             .default_open(true)
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -90,7 +90,7 @@ pub fn draw_animation_player_section(
 
     let skeletons = world.borrow::<gizmo_renderer::components::Skeleton>();
     if let Some(skel) = skeletons.get(entity_id.id()) {
-        egui::CollapsingHeader::new("🦴 Skeleton")
+        egui::CollapsingHeader::new(crate::theme::section_title("Skeleton"))
             .default_open(false)
             .show(ui, |ui| {
                 ui.label(format!("Joints: {}", skel.hierarchy.joints.len()));
@@ -129,7 +129,7 @@ pub fn draw_particle_emitter_section(
     let mut emitters = unsafe { world.borrow_mut_unchecked::<ParticleEmitter>() };
     {
         if let Some(mut emitter) = emitters.get_mut(entity_id.id()) {
-            egui::CollapsingHeader::new("✨ Particle Emitter")
+            egui::CollapsingHeader::new(crate::theme::section_title("Particle Emitter"))
                 .default_open(false)
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
@@ -172,7 +172,7 @@ pub fn draw_script_section(
     {
         if let Some(mut script) = scripts.get_mut(entity_id.id()) {
             file_path = script.file_path.clone();
-            egui::CollapsingHeader::new("📜 Script")
+            egui::CollapsingHeader::new(crate::theme::section_title("Script"))
                 .default_open(true)
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
@@ -219,7 +219,7 @@ pub fn draw_terrain_section(
     {
         if let Some(mut terrain) = terrains.get_mut(entity_id.id()) {
             let mut changed = false;
-            egui::CollapsingHeader::new("🏔 Terrain")
+            egui::CollapsingHeader::new(crate::theme::section_title("Terrain"))
                 .default_open(true)
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
@@ -276,7 +276,7 @@ pub fn draw_fluid_section(
     let mut fluids = unsafe { world.borrow_mut_unchecked::<FluidSimulation>() };
     {
         if let Some(mut fluid) = fluids.get_mut(entity_id.id()) {
-            egui::CollapsingHeader::new("🌊 SPH Fluid Simulation (GPU)")
+            egui::CollapsingHeader::new(crate::theme::section_title("SPH Fluid Simulation (GPU)"))
                 .default_open(true)
                 .show(ui, |ui| {
                     ui.label("GPU SPH Engine Aktif (ECS Üzerinden Yönetilir)");
@@ -332,7 +332,7 @@ pub fn draw_ai_section(
     let mut agents = unsafe { world.borrow_mut_unchecked::<NavAgent>() };
     {
         if let Some(mut agent) = agents.get_mut(entity_id.id()) {
-            egui::CollapsingHeader::new("🤖 AI NavAgent")
+            egui::CollapsingHeader::new(crate::theme::section_title("AI NavAgent"))
                 .default_open(true)
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
@@ -454,7 +454,7 @@ pub fn draw_hitbox_section(
     // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
     let mut hitboxes = unsafe { world.borrow_mut_unchecked::<gizmo_physics_core::components::Hitbox>() };
     if let Some(mut hitbox) = hitboxes.get_mut(entity_id.id()) {
-        egui::CollapsingHeader::new("🥊 Hitbox")
+        egui::CollapsingHeader::new(crate::theme::section_title("Hitbox"))
             .default_open(true)
             .show(ui, |ui| {
                 ui.checkbox(&mut hitbox.active, "Aktif (Vurabilir)");
@@ -494,7 +494,7 @@ pub fn draw_hurtbox_section(
     // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
     let mut hurtboxes = unsafe { world.borrow_mut_unchecked::<gizmo_physics_core::components::Hurtbox>() };
     if let Some(mut hurtbox) = hurtboxes.get_mut(entity_id.id()) {
-        egui::CollapsingHeader::new("🛡 Hurtbox")
+        egui::CollapsingHeader::new(crate::theme::section_title("Hurtbox"))
             .default_open(true)
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -533,7 +533,7 @@ pub fn draw_bone_attachment_section(
     // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
     let mut attachments = unsafe { world.borrow_mut_unchecked::<gizmo_renderer::components::BoneAttachment>() };
     if let Some(mut attachment) = attachments.get_mut(entity_id.id()) {
-        egui::CollapsingHeader::new("🔗 Bone Attachment")
+        egui::CollapsingHeader::new(crate::theme::section_title("Bone Attachment"))
             .default_open(true)
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -639,7 +639,7 @@ pub fn draw_fighter_controller_section(
     // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
     let mut controllers = unsafe { world.borrow_mut_unchecked::<gizmo_physics_core::components::FighterController>() };
     if let Some(mut fighter) = controllers.get_mut(entity_id.id()) {
-        egui::CollapsingHeader::new("🥋 Fighter Controller")
+        egui::CollapsingHeader::new(crate::theme::section_title("Fighter Controller"))
             .default_open(true)
             .show(ui, |ui| {
                 ui.horizontal(|ui| {

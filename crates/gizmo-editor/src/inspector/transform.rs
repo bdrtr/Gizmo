@@ -20,7 +20,7 @@ pub fn draw_transform_section(
     let mut changed = false;
 
     if let Some(mut t) = transforms.get_mut(entity_id.id()) {
-        let _is_interacting_with_transform = egui::CollapsingHeader::new("🚀 Transform")
+        let _is_interacting_with_transform = egui::CollapsingHeader::new(crate::theme::section_title("Transform"))
             .default_open(true)
             .show(ui, |ui| {
                 ui.label("Pozisyon:");

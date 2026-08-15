@@ -9,7 +9,7 @@ pub fn draw_environment_settings(ui: &mut egui::Ui, state: &mut EditorState) {
     ui.separator();
 
     egui::ScrollArea::vertical().show(ui, |ui| {
-        egui::CollapsingHeader::new("✨ Post-Processing / Bloom")
+        egui::CollapsingHeader::new(crate::theme::section_title("Post-Processing / Bloom"))
             .default_open(true)
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -26,7 +26,7 @@ pub fn draw_environment_settings(ui: &mut egui::Ui, state: &mut EditorState) {
                 });
             });
 
-        egui::CollapsingHeader::new("📷 Camera Lens Effects")
+        egui::CollapsingHeader::new(crate::theme::section_title("Camera Lens Effects"))
             .default_open(true)
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -43,7 +43,7 @@ pub fn draw_environment_settings(ui: &mut egui::Ui, state: &mut EditorState) {
                 });
             });
             
-        egui::CollapsingHeader::new("🔍 Depth of Field (Odak)")
+        egui::CollapsingHeader::new(crate::theme::section_title("Depth of Field (Odak)"))
             .default_open(false)
             .show(ui, |ui| {
                 ui.horizontal(|ui| {

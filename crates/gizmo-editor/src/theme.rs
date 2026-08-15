@@ -75,6 +75,36 @@ pub const ROW_HEIGHT: f32 = 21.0;
 /// units and up to 13 for the wordmark.
 pub const TEXT_SIZE: f32 = 12.0;
 
+/// The system's spacing scale (`--space-1` … `--space-6` in its `styles.css`), in steps of 4 px.
+///
+/// Named rather than inlined because the point of a modular scale is that a value which is not on
+/// it is a mistake, and a bare `6.0` in a layout does not look like one.
+pub const SPACE_1: f32 = 4.0;
+/// See [`SPACE_1`].
+pub const SPACE_2: f32 = 8.0;
+/// See [`SPACE_1`].
+pub const SPACE_3: f32 = 12.0;
+/// See [`SPACE_1`].
+pub const SPACE_4: f32 = 16.0;
+
+/// What the design system asks for that egui 0.34 cannot express, recorded so it is not
+/// rediscovered as a bug.
+///
+/// - **Flush-left button labels** ("even inside buttons", says the system's guide). `egui::Button`
+///   centres its content and exposes no alignment: the `align2` setter lives on the private
+///   `AtomLayout` field. Matching it means a custom button widget, which is a real piece of work
+///   and not a theme setting.
+/// - **Lucide icons throughout.** egui's bundled font has none of them — the prototype's ✥/⟳/⤢ and
+///   the editor's old 🖐/🔀/🔄/📏 all render as empty boxes. Short words are used instead; real
+///   icons mean vendoring a font file.
+/// - **2 px rules between major sections.** `Separator` draws with
+///   `widgets.noninteractive.bg_stroke`, which is also every widget's outline — raising it to 2 px
+///   would thicken the 1 px borders the prototype uses everywhere else.
+/// - **`:focus-visible` as a 2 px accent outline with a 2 px offset.** egui has no separate focus
+///   stroke; a focused widget is drawn with `selection.stroke`, which this theme already sets to
+///   the accent, but without the offset.
+pub const UNIMPLEMENTED_SYSTEM_RULES: () = ();
+
 /// Applies the design to an egui context.
 ///
 /// Everything here is a global default. Anything a specific panel wants differently — an accented
@@ -96,12 +126,14 @@ pub fn apply(ctx: &egui::Context) {
     ]
     .into();
 
-    // Prototype gaps: 8 px between groups in a row, 4 px between stacked rows. The old values
-    // (10×8, with 12×6 button padding) spread a tool row over roughly twice the height.
-    style.spacing.item_spacing = egui::vec2(6.0, 4.0);
-    style.spacing.button_padding = egui::vec2(8.0, 3.0);
-    style.spacing.window_margin = egui::Margin::same(8);
-    style.spacing.menu_margin = egui::Margin::same(6);
+    // The system's own spacing scale, read from its `styles.css` tokens rather than measured off
+    // the mockup: `--space-1: 4px` … `--space-6: 24px`, in steps of 4. Every value below is one of
+    // those steps; the earlier 6 px gap and 3 px padding were eyeballed and sat between steps,
+    // which is exactly what a modular scale exists to prevent.
+    style.spacing.item_spacing = egui::vec2(SPACE_2, SPACE_1);
+    style.spacing.button_padding = egui::vec2(SPACE_2, SPACE_1);
+    style.spacing.window_margin = egui::Margin::same(SPACE_2 as i8);
+    style.spacing.menu_margin = egui::Margin::same(SPACE_2 as i8);
     style.spacing.interact_size = egui::vec2(24.0, ROW_HEIGHT);
     style.spacing.icon_width = 12.0;
     style.spacing.slider_width = 96.0;
@@ -184,6 +216,29 @@ pub fn visuals() -> egui::Visuals {
     v.override_text_color = None;
 
     v
+}
+
+
+/// A section heading in the Inspector, the way the prototype draws them: the component's name in
+/// accent-coloured caps, no emoji.
+///
+/// One helper rather than a `RichText` at each of the twenty-three `CollapsingHeader`s, because a
+/// heading style spelled out twenty-three times is one that ends up with twenty-three variations —
+/// which is how the editor arrived at 🚀/📷/💨/⚙️/🛡️/🔗/✨ as its section language in the first
+/// place.
+///
+/// # Plain uppercase, deliberately, in a Turkish-language editor
+///
+/// The first version mapped `i` to `İ`, which is correct Turkish and wrong here: every one of the
+/// twenty-three section names is English — Transform, Velocity, Collider, Post-Processing — with
+/// at most a Turkish gloss in parentheses. It rendered `POST-PROCESSİNG` and `DEPTH OF FİELD`,
+/// which is worse than the three parentheticals (`(ODAK)`, `(GÜNEŞ)`, `(FIZIKSEL BAĞLANTILAR)`)
+/// losing their dots. Counted before choosing: ten-odd English titles against three glosses.
+pub fn section_title(name: &str) -> egui::RichText {
+    egui::RichText::new(name.to_uppercase())
+        .size(10.0)
+        .color(palette::ACCENT)
+        .strong()
 }
 
 #[cfg(test)]

@@ -24,7 +24,7 @@ pub fn draw_velocity_section(
     let mut velocity_edited = false;
     {
         if let Some(mut v) = velocities.get_mut(entity_id.id()) {
-            egui::CollapsingHeader::new("💨 Velocity")
+            egui::CollapsingHeader::new(crate::theme::section_title("Velocity"))
                 .default_open(false)
                 .show(ui, |ui| {
                     ui.label("Doğrusal:");
@@ -101,7 +101,7 @@ pub fn draw_rigidbody_section(
     let mut rigidbodies = unsafe { world.borrow_mut_unchecked::<RigidBody>() };
     {
         if let Some(mut rb) = rigidbodies.get_mut(entity_id.id()) {
-            egui::CollapsingHeader::new("⚙️ RigidBody")
+            egui::CollapsingHeader::new(crate::theme::section_title("RigidBody"))
                 .default_open(false)
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
@@ -145,7 +145,7 @@ pub fn draw_collider_section(
     let mut colliders = unsafe { world.borrow_mut_unchecked::<Collider>() };
     {
         if let Some(mut collider) = colliders.get_mut(entity_id.id()) {
-            egui::CollapsingHeader::new("🛡️ Collider")
+            egui::CollapsingHeader::new(crate::theme::section_title("Collider"))
                 .default_open(true)
                 .show(ui, |ui| {
                     // === IS TRIGGER ===
@@ -242,7 +242,7 @@ pub fn draw_joint_section(
             }
         }
 
-        egui::CollapsingHeader::new("🔗 Joints (Fiziksel Bağlantılar)")
+        egui::CollapsingHeader::new(crate::theme::section_title("Joints (Fiziksel Bağlantılar)"))
             .default_open(has_joints)
             .show(ui, |ui| {
                 let mut i = 0;
