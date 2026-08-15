@@ -341,7 +341,10 @@ mod tests {
     // spawn entities and drive the actual picking/selection logic. Private helpers
     // (`find_selection_root`, `is_editor_entity`, `compute_entity_obb`) are reachable
     // because this module is a descendant of the one that defines them.
-    use super::{build_ray, compute_entity_obb, find_selection_root, is_editor_entity};
+    use super::{
+        build_ray, compute_entity_obb, find_selection_root, is_editor_entity,
+        perform_rubber_band_selection,
+    };
     use gizmo::core::component::{EntityName, Parent};
     use gizmo::math::{Quat, Vec3};
     use gizmo::physics::components::{GlobalTransform, Transform};
@@ -563,5 +566,238 @@ mod tests {
         // NDC left/right map to the rect's left/right edges (x is NOT flipped).
         assert!((ndc_to_screen(-1.0, 0.0, rect).0 - 100.0).abs() < 1e-3);
         assert!((ndc_to_screen(1.0, 0.0, rect).0 - 900.0).abs() < 1e-3);
+    }
+
+    // ── perform_rubber_band_selection ──────────────────────────────────────
+    //
+    // Ninety lines of rules and, until now, no test: which entities the box skips, where their
+    // screen point comes from, what happens to things behind the camera, whether ctrl adds or
+    // replaces, and whether a hit on a child selects the child or its root. Each is a rule someone
+    // can break without any other test noticing, and the picking code right above this has ten.
+
+    /// A camera at the origin looking down -Z, with the editor state a box-select needs: the view
+    /// and projection it projects with, and the viewport rect it maps into.
+    fn box_select_state(rect_w: f32, rect_h: f32) -> gizmo::editor::EditorState {
+        let mut ed = gizmo::editor::EditorState::default();
+        let cam = make_camera(-FRAC_PI_2, 0.0);
+        ed.camera.view = Some(cam.get_view(Vec3::ZERO));
+        ed.camera.proj = Some(cam.get_projection(rect_w / rect_h));
+        ed.scene_view_rect = Some(gizmo::egui::Rect::from_min_size(
+            gizmo::egui::pos2(0.0, 0.0),
+            gizmo::egui::vec2(rect_w, rect_h),
+        ));
+        ed
+    }
+
+    /// An entity with a collider (so it has "volume") at `pos`.
+    fn spawn_solid(world: &mut World, pos: Vec3) -> u32 {
+        let e = world.spawn();
+        world.add_component(e, Transform::new(pos));
+        world.add_component(e, Collider::box_collider(Vec3::splat(0.5)));
+        e.id()
+    }
+
+    /// The whole screen selects what is in front of the camera and nothing behind it.
+    #[test]
+    fn a_box_over_the_whole_screen_takes_what_the_camera_can_see() {
+        let mut world = World::new();
+        let cam = spawn_camera(&mut world, Vec3::ZERO, -FRAC_PI_2, 0.0);
+        let in_front = spawn_solid(&mut world, Vec3::new(0.0, 0.0, -10.0));
+        let behind = spawn_solid(&mut world, Vec3::new(0.0, 0.0, 10.0));
+        let mut ed = box_select_state(800.0, 600.0);
+
+        perform_rubber_band_selection(
+            &mut world,
+            &mut ed,
+            gizmo::math::Vec2::new(0.0, 0.0),
+            gizmo::math::Vec2::new(800.0, 600.0),
+            cam,
+            false,
+        );
+
+        let ids: Vec<u32> = ed.selection.entities.iter().map(|e| e.id()).collect();
+        assert!(ids.contains(&in_front), "the object in front of the camera should be selected");
+        assert!(
+            !ids.contains(&behind),
+            "an object BEHIND the camera projects to a screen point too — `clip.w <= 0` is the \
+             only thing keeping it out of the box"
+        );
+        assert!(!ids.contains(&cam), "the camera being looked through is never a target");
+    }
+
+    /// A box over one half of the screen takes only what falls in that half.
+    #[test]
+    fn the_box_is_a_screen_rectangle_not_a_select_all() {
+        let mut world = World::new();
+        let cam = spawn_camera(&mut world, Vec3::ZERO, -FRAC_PI_2, 0.0);
+        // yaw=-PI/2 → camera-right is +X, so +X lands on the right half of the screen.
+        let right = spawn_solid(&mut world, Vec3::new(4.0, 0.0, -10.0));
+        let left = spawn_solid(&mut world, Vec3::new(-4.0, 0.0, -10.0));
+        let mut ed = box_select_state(800.0, 600.0);
+
+        // Right half only.
+        perform_rubber_band_selection(
+            &mut world,
+            &mut ed,
+            gizmo::math::Vec2::new(400.0, 0.0),
+            gizmo::math::Vec2::new(800.0, 600.0),
+            cam,
+            false,
+        );
+
+        let ids: Vec<u32> = ed.selection.entities.iter().map(|e| e.id()).collect();
+        assert!(ids.contains(&right), "the object on the right half should be selected");
+        assert!(!ids.contains(&left), "the object on the left half should not");
+    }
+
+    /// The corners may arrive in any order — dragging up-left is the same box as down-right.
+    #[test]
+    fn the_drag_direction_does_not_change_the_box() {
+        let mut world = World::new();
+        let cam = spawn_camera(&mut world, Vec3::ZERO, -FRAC_PI_2, 0.0);
+        let target = spawn_solid(&mut world, Vec3::new(4.0, 0.0, -10.0));
+
+        let mut forwards = box_select_state(800.0, 600.0);
+        perform_rubber_band_selection(
+            &mut world,
+            &mut forwards,
+            gizmo::math::Vec2::new(400.0, 0.0),
+            gizmo::math::Vec2::new(800.0, 600.0),
+            cam,
+            false,
+        );
+        let mut backwards = box_select_state(800.0, 600.0);
+        perform_rubber_band_selection(
+            &mut world,
+            &mut backwards,
+            gizmo::math::Vec2::new(800.0, 600.0),
+            gizmo::math::Vec2::new(400.0, 0.0),
+            cam,
+            false,
+        );
+
+        let a: Vec<u32> = forwards.selection.entities.iter().map(|e| e.id()).collect();
+        let b: Vec<u32> = backwards.selection.entities.iter().map(|e| e.id()).collect();
+        assert!(a.contains(&target) && b.contains(&target));
+        assert_eq!(a.len(), b.len(), "dragging the other way must select the same set");
+    }
+
+    /// Without ctrl the box REPLACES the selection; with ctrl it adds to it.
+    #[test]
+    fn ctrl_adds_to_the_selection_and_a_plain_drag_replaces_it() {
+        let mut world = World::new();
+        let cam = spawn_camera(&mut world, Vec3::ZERO, -FRAC_PI_2, 0.0);
+        let right = spawn_solid(&mut world, Vec3::new(4.0, 0.0, -10.0));
+        let left = spawn_solid(&mut world, Vec3::new(-4.0, 0.0, -10.0));
+
+        let left_half = (gizmo::math::Vec2::new(0.0, 0.0), gizmo::math::Vec2::new(400.0, 600.0));
+        let right_half = (gizmo::math::Vec2::new(400.0, 0.0), gizmo::math::Vec2::new(800.0, 600.0));
+
+        // Plain drag over the right half, then a plain drag over the left: only the left survives.
+        let mut ed = box_select_state(800.0, 600.0);
+        perform_rubber_band_selection(&mut world, &mut ed, right_half.0, right_half.1, cam, false);
+        perform_rubber_band_selection(&mut world, &mut ed, left_half.0, left_half.1, cam, false);
+        let ids: Vec<u32> = ed.selection.entities.iter().map(|e| e.id()).collect();
+        assert!(ids.contains(&left) && !ids.contains(&right), "a plain drag replaces");
+
+        // Same two drags with ctrl on the second: both survive.
+        let mut ed = box_select_state(800.0, 600.0);
+        perform_rubber_band_selection(&mut world, &mut ed, right_half.0, right_half.1, cam, false);
+        perform_rubber_band_selection(&mut world, &mut ed, left_half.0, left_half.1, cam, true);
+        let ids: Vec<u32> = ed.selection.entities.iter().map(|e| e.id()).collect();
+        assert!(ids.contains(&left) && ids.contains(&right), "ctrl adds");
+    }
+
+    /// An entity with neither a collider nor a mesh has no volume to box-select.
+    #[test]
+    fn things_without_volume_are_not_selectable() {
+        let mut world = World::new();
+        let cam = spawn_camera(&mut world, Vec3::ZERO, -FRAC_PI_2, 0.0);
+        let ghost = world.spawn();
+        world.add_component(ghost, Transform::new(Vec3::new(0.0, 0.0, -10.0)));
+        let mut ed = box_select_state(800.0, 600.0);
+
+        perform_rubber_band_selection(
+            &mut world,
+            &mut ed,
+            gizmo::math::Vec2::new(0.0, 0.0),
+            gizmo::math::Vec2::new(800.0, 600.0),
+            cam,
+            false,
+        );
+        assert!(
+            !ed.selection.entities.iter().any(|e| e.id() == ghost.id()),
+            "a transform with no collider and no mesh is not a thing you can rubber-band"
+        );
+    }
+
+    /// A hidden entity is not selectable, for the same reason it is not visible.
+    #[test]
+    fn hidden_entities_stay_out_of_the_box() {
+        let mut world = World::new();
+        let cam = spawn_camera(&mut world, Vec3::ZERO, -FRAC_PI_2, 0.0);
+        let hidden = spawn_solid(&mut world, Vec3::new(0.0, 0.0, -10.0));
+        let e = world.get_entity(hidden).unwrap();
+        world.add_component(e, gizmo::core::component::IsHidden);
+        let mut ed = box_select_state(800.0, 600.0);
+
+        perform_rubber_band_selection(
+            &mut world,
+            &mut ed,
+            gizmo::math::Vec2::new(0.0, 0.0),
+            gizmo::math::Vec2::new(800.0, 600.0),
+            cam,
+            false,
+        );
+        assert!(ed.selection.entities.is_empty(), "a hidden entity must not be box-selected");
+    }
+
+    /// Boxing a child selects its ROOT — the same rule clicking one follows, so the two ways of
+    /// selecting the same object cannot disagree.
+    #[test]
+    fn boxing_a_child_selects_the_root_it_belongs_to() {
+        let mut world = World::new();
+        let cam = spawn_camera(&mut world, Vec3::ZERO, -FRAC_PI_2, 0.0);
+        let root = spawn_solid(&mut world, Vec3::new(0.0, 0.0, -10.0));
+        let child = spawn_solid(&mut world, Vec3::new(0.2, 0.0, -10.0));
+        let child_e = world.get_entity(child).unwrap();
+        world.add_component(child_e, Parent(root));
+
+        let mut ed = box_select_state(800.0, 600.0);
+        perform_rubber_band_selection(
+            &mut world,
+            &mut ed,
+            gizmo::math::Vec2::new(0.0, 0.0),
+            gizmo::math::Vec2::new(800.0, 600.0),
+            cam,
+            false,
+        );
+
+        let ids: Vec<u32> = ed.selection.entities.iter().map(|e| e.id()).collect();
+        assert!(ids.contains(&root), "the root must be in the selection");
+        assert!(
+            !ids.contains(&child),
+            "the child should have resolved to its root, exactly as a click does"
+        );
+    }
+
+    /// With no camera matrices recorded yet — the first frame, before the viewport has drawn —
+    /// the box does nothing rather than projecting through a garbage matrix.
+    #[test]
+    fn a_box_before_the_viewport_has_a_camera_is_a_no_op() {
+        let mut world = World::new();
+        let cam = spawn_camera(&mut world, Vec3::ZERO, -FRAC_PI_2, 0.0);
+        spawn_solid(&mut world, Vec3::new(0.0, 0.0, -10.0));
+        let mut ed = gizmo::editor::EditorState::default(); // no view/proj/rect
+
+        perform_rubber_band_selection(
+            &mut world,
+            &mut ed,
+            gizmo::math::Vec2::new(0.0, 0.0),
+            gizmo::math::Vec2::new(800.0, 600.0),
+            cam,
+            false,
+        );
+        assert!(ed.selection.entities.is_empty());
     }
 }
