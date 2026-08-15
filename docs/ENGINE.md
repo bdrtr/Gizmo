@@ -868,6 +868,16 @@ already auto-vectorized). DO NOT RETRY without passing the step-0 gate again. (T
 Bulunup düzeltilen kusurlar aşağıda kendi bölümlerinde duruyor. Bu bölüm yalnız **açık olanı** ve
 **bir daha kovalanmaması gerekeni** taşır.
 
+**Kayıtlı kusur listesi boş.** 15 Ağustos sonunda açık kalan hiçbir madde bir hata ya da engel
+değil; ikisi bilinçli karar (aşağıda), gerisi sıradan ürün işi (§3 Faz 6/7).
+
+**Bulmayı sağlayan soru — bir sonraki oturum için asıl aktarılan şey bu:** *aynı karar nerede iki
+kez veriliyor?* Bugünün on bir bulgusunun tamamı bu sorudan çıktı ve hiçbiri bir hata raporundan
+gelmedi. Sıralı olarak bakılan eksenler: iki render yolu (sekiz sürüklenme), üçüncü hedef olarak
+wasm (hiç lint edilmiyormuş), scripting (dört kusur), crate grafiği (belge bayat, söz sınanmıyor),
+rollback (iki uygulama, biri eksik). Tükendiğinde belirti şu oluyor: aday aramak, bulguları
+üretmekten uzun sürüyor.
+
 ### İki render yolu — kayıtlı adımların hepsi kapandı
 
 Kök kayıtlı ("The root the sweep could not see"). Beş kesim:
@@ -1171,9 +1181,26 @@ kopyalayıp düzeltilen satırları ezerdi — fonksiyonun kendi dokümanının 
 `record_resimulated_tick`'i çağırıyor; o döngü `end_frame`'i satır içi tekrar yazdığı için fizik
 yarısı oradan da eksikti.
 
+### Açık kalan iki karar (kusur değil)
+
+- **Çizim listesi birleştirmesi.** `collect_draw_items` (~950 satır) ile studio'nun batching'i hâlâ
+  iki uygulama. Ölçüye dayanarak yapılmadı: bugün bulunan sekiz sürüklenmenin hepsi ortak bir
+  *karardaydı* ve hepsi tek kaynağa indi, her biri bekçiyle. Kalan ikizlik döngü **yapısı**, ve onu
+  birleştirmek pass kaydını birleştirmek demek — otomatik kapsamı olmayan ve insan-gözü kapısına
+  bağlı olan yarı. Çizgi: "dünyayı okuyan ortak, komut kaydeden ayrı".
+- **Sonda köprüsünde hangi sorgular sunulacak.** Mekanizma kuruldu ve tek tüketicisi var
+  (`physics.ground_at`); geri kalanı API tasarımı.
+
 ### Bir daha kovalanmasın
 
 - Animasyonun zamanlanmamasının sebebi **imza değildi** — studio onu tam o imzayla zaten çağırıyordu.
 - Süpürme sayısını kesmek yakınsamayı iyileştirmez: 9 kat az süpürme %17 kazandırıyor ve tavanı o.
 - Varyans kırpması TAA kalıntısını düzeltmiyor; iki kez ölçüldü, ikisinde de biraz kötüleşti.
+- **`gizmo-animation` Stage A'ya uygun değil** diye kaydedilmişti; bağımlılıkları ölçüldü, uygun.
+  Bayat olan diyagramdı.
+- **Sonda köprüsü `send` yüzünden imkânsız** diye kaydedilmişti; `Scope::create_function`'ın
+  imzasına bakılmamıştı, o sınırı taşımıyor.
+- **ECS-only rollback dört düşen kutuda ıraksıyor** diye ölçmüştüm; ıraksamayı üreten şey testteki
+  fazladan bir adımdı. O senaryo iki uygulamayı ayırt edemiyor; ayırt eden şey pencere içinde
+  kopan bir eklem.
 
