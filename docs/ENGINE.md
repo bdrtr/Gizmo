@@ -1232,3 +1232,41 @@ hakkında, bölünebilirlik hakkında değil), "bilinçli yoğun" (perf kararı,
   fazladan bir adımdı. O senaryo iki uygulamayı ayırt edemiyor; ayırt eden şey pencere içinde
   kopan bir eklem.
 
+
+### Editör viewport'u: "çirkin ve kalitesiz" neydi (2026-08-15)
+
+Kullanıcı editörü açıp *"çok çirkin ve kalitesiz görünüyo"* dedi ve dört belirtiyi birden
+işaretledi: bulanık, tırtıklı, ışık düz, renkler yıkanmış. Dördü birden tek bir üst-akım sebebe
+işaret ediyordu ve öyleydi.
+
+**Kök: editörün 3B görüntüsü ekrana bir sRGB kodlaması eksik düşüyordu.** egui'nin shader'ı
+sözleşmesini kendi yorumunda yazıyor — *"We expect 'normal' textures that are NOT sRGB-aware"* —
+ama her iki viewport RTT'si de `config.format` ile, yani sRGB olarak yaratılıyordu. İki çözme,
+bir kodlama. Ayrıntı ve düzeltme `editor_runtime::create_viewport_target`'ta.
+
+Bu kökü bulmanın yolu, tahmin listesini eleyip **ölçmek** oldu; sırayla düşen hipotezler:
+
+| Hipotez | Nasıl düştü |
+|---|---|
+| Bugünkü DoF kalibrasyonu | Hesap: hiperbolik derinlikte 20 m'de fark %1. Görünür değil. |
+| PBR paketleme değişikliği | Forward shader `inst_pbr.w`'yi hiç okumuyor. |
+| `..Default::default()` bloom'u düşürdü | Devredilen alanların hepsi aynı değere sahip. |
+| Ortak ışık kurulumuna geçiş | Uniform'a giden değerler bastırıldı: güneş yön/renk/yoğunluk doğru. |
+| Gölge haritası her yeri gölgede sanıyor | Gölge araması devre dışı bırakıldı, piksel bire bir aynı. |
+| Mesh hiç çizilmiyor | Batch'ler bastırıldı: küp 24 vert/36 index ile lit batch'te. |
+| FXAA | Kapatıldı, piksel değişmedi. |
+
+Ayırt eden ölçüm, post zincirine **bilinen bir sabit** basmak oldu: composite'e lineer 0.5
+yazdırıldı, ekranda 188 yerine 128 çıktı. Bir gamma adımı, tam olarak. Kalibrasyon için egui
+panel zemini kullanıldı (28 ölçüldü, egui koyu temasının 27'si) — yüzey kodlamasının doğru
+olduğunu, kaybın yalnızca viewport yolunda olduğunu bu gösterdi.
+
+**Bunu mümkün kılan şey yeni `gizmo_renderer::capture`.** Bu makinede dışarıdan ekran yakalama
+çalışmıyor (Xwayland rootless → X kökünde içerik yok, `import` da ffmpeg de siyah döndürür), ve
+bu değişmeyecek. Kare artık GPU'dan geri okunuyor. Motorun kendi çıktısına bakabilmesi teşhis
+süresini "kullanıcıya sor" döngüsünden ~40 saniyelik bir deneye indirdi.
+
+Sahne içeriği hakkında, kusur olmayan iki gözlem: studio'nun varsayılan sahnesinde gökyüzü/zemin
+yok (`setup.rs`'teki "Custom Skybox or proper horizon color" yorumu kalıntı) ve Default Cube'ün
+materyali kasten %21 gri. Karanlık görünmesinin bir kısmı buradan; ikisi de bilinçli seçim
+olabilir, o yüzden dokunulmadı.
