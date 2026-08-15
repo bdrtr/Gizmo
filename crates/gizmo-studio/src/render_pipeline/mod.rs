@@ -4,6 +4,7 @@ use std::cell::RefCell;
 
 mod batching;
 mod passes;
+mod viewpoint;
 use batching::*;
 use passes::*;
 
@@ -25,45 +26,20 @@ pub fn execute_render_pipeline(
     let (aspect, ed_shading_mode, show_colliders, post_params) =
         sync_editor_settings(world, renderer);
 
-    let mut proj = Mat4::perspective_rh(std::f32::consts::FRAC_PI_4, aspect, 0.1, 2000.0);
-    let mut view_mat = Mat4::from_translation(Vec3::ZERO);
-    let mut cam_pos = Vec3::ZERO;
-    let mut cam_near = 0.1f32;
-    let mut cam_far = 2000.0f32;
-    let mut cam_fov = std::f32::consts::FRAC_PI_4;
-    let mut cam_forward = Vec3::new(0.0, 0.0, -1.0);
     let _is_hidden_guard = world.borrow::<gizmo::core::component::IsHidden>();
 
-    let cameras = world.borrow::<Camera>();
-    let transforms = world.borrow::<Transform>();
-
-    // Play modunda Game Camera, Edit modunda Editor Camera kullan
-    let is_playing_mode = world.get_resource::<gizmo::editor::EditorState>()
-        .map(|ed| ed.is_playing() || ed.mode == gizmo::editor::EditorMode::Paused)
-        .unwrap_or(false);
-
-    let active_camera_id = if is_playing_mode && cameras.get(state.game_camera).is_some() {
-        state.game_camera
-    } else {
-        state.editor_camera
-    };
-
-    {
-        if let (Some(cam), Some(trans)) = (
-            cameras.get(active_camera_id),
-            transforms.get(active_camera_id),
-        ) {
-            proj = cam.get_projection(aspect);
-            view_mat = cam.get_view(trans.position);
-            cam_pos = trans.position;
-            cam_near = cam.near;
-            cam_far = cam.far;
-            cam_fov = cam.fov;
-            cam_forward = cam.get_front();
-        }
-    }
-
-    let view_proj = proj * view_mat;
+    // Which camera this frame is drawn from — and, separately, which one it culls against. Both
+    // decisions, and the reasons for them, live in `viewpoint` where they are tested.
+    let vp = viewpoint::resolve(
+        world,
+        state.editor_camera,
+        state.game_camera,
+        aspect,
+        post_params.exposure,
+    );
+    let is_playing_mode = vp.is_playing_mode;
+    let cam_fov = vp.fov;
+    let cam_pos = vp.camera.position;
 
     // Event: Spawning moved to spawner_update_system.
     // Event: Texture Loading moved to main render loop pass before execute_render_pipeline.
@@ -75,19 +51,9 @@ pub fn execute_render_pipeline(
         .map(|t| t.elapsed() as f32)
         .unwrap_or(0.0);
 
-    // The active camera, in the form both uniform blocks are built from. The post block gets it
-    // too — its `cam_near`/`cam_far` were hardcoded 0.1/2000 here, which mis-linearised depth for
-    // DoF on any editor or game camera with a different range.
-    let camera = gizmo::renderer::CameraFrame {
-        view_proj,
-        position: cam_pos,
-        forward: cam_forward,
-        near: cam_near,
-        far: cam_far,
-        // Exposure reaches the picture through the post block, which the editor drives from its
-        // own slider; the scene block's copy is unread (see `SceneUniforms::new`).
-        exposure: post_params.exposure,
-    };
+    // Built by `viewpoint::resolve` above, exposure included — the post block drives it from the
+    // editor's own slider and the scene block's copy is unread (see `SceneUniforms::new`).
+    let camera = vp.camera;
     renderer.update_post_process(&renderer.queue, post_params.with_camera(&camera));
 
     // Lights, cascades and the scene block — the SAME helper the game path calls. Everything the
@@ -129,24 +95,12 @@ pub fn execute_render_pipeline(
     // --- BATCHING (INSTANCING) HAZIRLIĞI VE FRUSTUM CULLING ---
     use gizmo::renderer::renderer::InstanceRaw;
 
-    // --- GAME CAMERA FRUSTUM HESAPLAMA (Görselleştirme için) ---
-    let mut game_view_proj = None;
-    if !is_playing_mode {
-        if let (Some(cam), Some(trans)) = (
-            cameras.get(state.game_camera),
-            transforms.get(state.game_camera),
-        ) {
-            let p = cam.get_projection(aspect);
-            let v = cam.get_view(trans.position);
-            game_view_proj = Some(p * v);
-        }
-    }
-
-    let frustum = gizmo::renderer::Frustum::from_matrix(&view_proj);
-    let game_frustum = game_view_proj.map(|vp| gizmo::renderer::Frustum::from_matrix(&vp));
-
-    // Frustum Culling için her zaman Game Camera'yı kullanalım (Edit modunda da culling test edebilmek için)
-    let culling_frustum = game_frustum.unwrap_or(frustum);
+    // Culls against the GAME camera even in edit mode — deliberately, so the viewport can show
+    // what the game would and would not draw. See `viewpoint::culling_frustum`, where that is
+    // tested rather than asserted in a comment.
+    let culling_frustum = viewpoint::culling_frustum(world, state.game_camera, aspect, &vp);
+    // The gizmo pass draws the game camera's frustum as a wire box in edit mode.
+    let game_view_proj = viewpoint::game_view_proj(world, state.game_camera, aspect, &vp);
 
     // Per-cascade LIGHT frusta — shadow casters are culled against these (not the camera
     // frustum), so off-screen objects that cast shadows INTO view aren't dropped.
