@@ -1344,3 +1344,23 @@ Gölge yolu az kalsın yanlışlıkla "ölü" diye kaydediliyordu: forward shade
 1.0'a zorlandığında örneklenen piksel sıfır değişmişti. Sebep gölgenin çalışmaması değil, örnek
 noktanın aydınlık bir yüzde olmasıydı. Tek pikselden çıkarılan olumsuz sonuç, sahne o soruyu
 soracak biçimde kurulmadıkça hiçbir şey kanıtlamıyor.
+
+#### Game paneli editör kamerasını gösteriyor (2026-08-15, açık)
+
+Studio karede **tek** sahne çizimi yapıp iki çıktı üretiyor: `run_post_processing` önce editör
+hedefine, sonra oyun hedefine yazıyor, ikisi de aynı `renderer.post.hdr_texture_view`'i okuyarak.
+O doku edit modunda editör kamerasından çizilmiş oluyor — gizmo'lar, grid ve "oyun kamerası burayı
+görüyor" tel kutusu dahil. Yani Game sekmesi Scene sekmesinin kopyası, hem de tam işe yarayacağı
+anda. Play modunda iki kamera aynı olduğu için soru doğmuyor.
+
+Ölçüldü: iki kamera zıt yönlere bakarken game hedefi sahne hedefiyle bayt bayt aynı (65536 baytın
+0'ı farklı). Kayıt prosa değil, `#[ignore]`'lu bir teste kondu —
+`the_game_view_shows_the_game_camera_not_the_editor_camera` — çünkü çalıştırılabilir bir kayıt
+bayatlayamaz ve düzeltildiği gün kendiliğinden yeşile döner.
+
+**Düzeltmenin şekli belli, kararı açık.** İkinci çizim için culling ve instance tamponu yeniden
+kullanılabilir (editör zaten oyun kamerasına göre culling yapıyor); ana geçişi aynı HDR hedefine
+yeniden kaydedip ikinci post koşusundan önce sıralamak tek encoder içinde doğru. Eksik olan tek
+parça kromayı dışarıda bırakmak: grid'in `is_grid`'i var, ama ışık ikonları sıradan unlit küpler.
+Bu, `gizmo-core`'da yeni bir **public** işaretleyici bileşen demek, yani §4 kapsamında bir karar —
+o yüzden tahminle geçilmedi.
