@@ -157,6 +157,17 @@ pub(super) fn record_studio_shadow_passes(
         }
 }
 
+/// Records the scene into the HDR target.
+///
+/// `draw_chrome` is what separates the two pictures this pipeline produces. The editor viewport
+/// wants the grid, the gizmo lines and the collider overlay; the game view is the same scene
+/// without any of it, drawn from the other camera. The furniture that lives in the batch list
+/// (grid, light icons) is filtered out by the caller via `EditorOnly`; the furniture drawn
+/// procedurally here — grid pass, debug lines, colliders — is what this flag governs.
+///
+/// Play mode still suppresses the same things on its own: that rule predates the flag and stays,
+/// because "playing" and "this is the game picture" are different questions with the same answer
+/// here.
 pub(super) fn record_studio_main_pass(
     encoder: &mut wgpu::CommandEncoder,
     renderer: &mut gizmo::renderer::Renderer,
@@ -165,6 +176,7 @@ pub(super) fn record_studio_main_pass(
     game_view_proj: Option<Mat4>,
     debug_aabbs: &[Aabb],
     show_colliders: bool,
+    draw_chrome: bool,
 ) {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Main Render Pass (HDR)"),
@@ -317,7 +329,8 @@ pub(super) fn record_studio_main_pass(
             }
 
             // 5. GRID ÇİZİMİ (Play modunda gizle — Game View temiz görünsün)
-            let is_playing_mode = world.get_resource::<gizmo::editor::EditorState>()
+            // `draw_chrome` folds in: the game view is never chrome, whatever the mode.
+            let is_playing_mode = !draw_chrome || world.get_resource::<gizmo::editor::EditorState>()
                 .map(|ed| ed.is_playing() || ed.mode == gizmo::editor::EditorMode::Paused)
                 .unwrap_or(false);
             if !is_playing_mode {
@@ -369,7 +382,7 @@ pub(super) fn record_studio_main_pass(
                 }
             }
 
-            if show_colliders {
+            if show_colliders && draw_chrome {
                 if let Some(physics) = &renderer.gpu_physics {
                     physics.debug_render_pass(&mut render_pass, &renderer.scene.global_bind_group);
                 }

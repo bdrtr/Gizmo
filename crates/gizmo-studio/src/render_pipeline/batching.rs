@@ -20,6 +20,10 @@ pub(super) type BatchKey = (
     bool, // is_grid
     bool, // is_unlit
     bool, // is_backdrop
+    // Editor furniture (`EditorOnly`) is keyed apart for the same reason as the routing flags,
+    // and one more: the game view skips these batches, so a light icon sharing a batch with a
+    // scene mesh would drag the scene mesh out of the game picture with it.
+    bool, // is_editor_only
 );
 
 pub(super) struct BatchData {
@@ -48,8 +52,12 @@ pub(super) struct BatchData {
     /// A painted backdrop (`gizmo_renderer::backdrop`): drawn FIRST, from the mesh's own
     /// texture and vertex colour, locked to the camera and writing no depth.
     pub(super) is_backdrop: bool,
+    /// The editor's own furniture — see [`gizmo::renderer::components::EditorOnly`]. Drawn into
+    /// the scene view, never into the game view.
+    pub(super) is_editor_only: bool,
 }
 
+#[derive(Clone)]
 pub(super) struct FlatBatchData {
     pub(super) vbuf: std::sync::Arc<wgpu::Buffer>,
     pub(super) vertex_count: u32,
@@ -80,6 +88,8 @@ pub(super) struct FlatBatchData {
     /// See [`BatchData::is_backdrop`]. Every other draw loop in `passes.rs` must skip these;
     /// the backdrop loop draws them before anything else in the frame.
     pub(super) is_backdrop: bool,
+    /// See [`BatchData::is_editor_only`].
+    pub(super) is_editor_only: bool,
 }
 
 impl FlatBatchData {

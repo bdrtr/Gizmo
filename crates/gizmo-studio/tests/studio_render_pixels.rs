@@ -480,35 +480,31 @@ fn the_editor_casts_a_shadow_onto_the_ground() {
     );
 }
 
-/// The Game panel must show the game camera, and it does not.
+/// The Game panel shows the game camera, not a copy of the scene view.
 ///
-/// # What it shows instead
+/// # The defect this guards
 ///
-/// One scene render per frame, two outputs: `execute_render_pipeline` runs `run_post_processing`
-/// into the editor target and then again into the game target, both reading the same
-/// `renderer.post.hdr_texture_view`. That texture holds whatever `viewpoint::resolve` picked, which
-/// in edit mode is the **editor camera** — gizmos, grid and the game-frustum wire box included. So
-/// the Game tab is a copy of the Scene tab, and it is a copy precisely when it would be useful:
-/// while you are editing. In play mode both cameras are the same one and the question does not
-/// arise.
+/// Studio used to make one scene render per frame and post-process it into both targets, so the
+/// Game tab was a byte-identical copy of the Scene tab — editor camera, gizmos, grid and all —
+/// precisely while you were editing, which is when a game preview is worth having. Measured before
+/// the fix: 0 of 65536 bytes differed.
 ///
-/// The scene view even draws a wire box around "what the game camera would see", which is the
-/// feature this tab is supposed to be.
+/// # The trap in fixing it, which this test also pins
 ///
-/// # Why it is `#[ignore]` rather than fixed here
+/// The obvious fix — write the game camera's uniforms mid-frame and record a second pass into the
+/// same encoder — does not work, and fails in a way that looks like nothing happened at all:
+/// `Queue::write_buffer` is ordered against **submissions**, not against commands. Every write
+/// made before a submit applies to every pass in it, so the second write reached the first render
+/// too and both panels showed the game camera. The fix is a submission boundary: the game view is
+/// drawn into its own encoder and submitted before the editor's uniforms are written back.
 ///
-/// A correct game view is a second scene render from the other camera, and it must **not** carry
-/// editor chrome. Culling and the instance buffer can be reused (the editor already culls against
-/// the game camera), and re-recording the main pass into the same HDR target before the second
-/// post run is ordered correctly inside one encoder. What is missing is a way to leave chrome out:
-/// the grid has `is_grid`, but the light icons are ordinary unlit cubes and nothing distinguishes
-/// them from unlit scene geometry. That wants an editor-only marker component and batch-level
-/// filtering — a design decision, not a patch, so it is recorded executably instead of guessed at.
+/// # Why the cameras point the same way
 ///
-/// This test passes the day someone builds it. Until then it states the defect in the one language
-/// that cannot go stale.
+/// Pointing them in opposite directions proves nothing here: the editor culls against the **game**
+/// camera even in edit mode (deliberately — it lets you watch what the game would drop), so a cube
+/// behind the game camera is culled out of the batch list and missing from both pictures. Same
+/// direction, four times the distance, is a difference no shared render can fake.
 #[test]
-#[ignore = "the game view is a copy of the scene view in edit mode; needs a second render + an editor-only marker"]
 fn the_game_view_shows_the_game_camera_not_the_editor_camera() {
     let _gpu = gpu_lock();
     if !pollster::block_on(Renderer::headless_adapter_available()) {
@@ -528,7 +524,14 @@ fn the_game_view_shows_the_game_camera_not_the_editor_camera() {
             &renderer.scene.texture_bind_group_layout,
         );
 
-        // A cube well off to one side: in frame for the editor camera, behind the game camera.
+        // Both cameras must be able to see the cube.
+        //
+        // The obvious setup — point them in opposite directions — proves nothing here, and finding
+        // out why is worth the comment: the editor culls against the **game** camera even in edit
+        // mode (deliberately, so you can watch what the game would drop). A cube behind the game
+        // camera is therefore culled out of the batch list altogether and missing from *both*
+        // pictures, which makes them identical for a reason that has nothing to do with the defect
+        // under test. So: same direction, very different distance.
         let cube = world.spawn();
         world.add_component(cube, Transform::new(Vec3::new(0.0, 0.0, 0.0)));
         world.add_component(cube, AssetManager::create_cube(&renderer.device));
@@ -548,13 +551,14 @@ fn the_game_view_shows_the_game_camera_not_the_editor_camera() {
             ),
         );
 
-        // Game camera: same place, looking AWAY from it. Whatever this one sees, it is not a cube.
+        // Game camera: same direction, four times further back, so the cube it sees is a
+        // fraction of the size — a difference no shared render can produce.
         let game_cam = world.spawn();
-        world.add_component(game_cam, Transform::new(Vec3::new(-6.0, 0.0, 0.0)));
+        world.add_component(game_cam, Transform::new(Vec3::new(-25.0, 0.0, 0.0)));
         world.add_component(
             game_cam,
             gizmo::renderer::components::Camera::new(
-                std::f32::consts::FRAC_PI_4, 0.1, 1000.0, std::f32::consts::PI, 0.0, false,
+                std::f32::consts::FRAC_PI_4, 0.1, 1000.0, 0.0, 0.0, false,
             ),
         );
 

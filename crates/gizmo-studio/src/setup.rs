@@ -61,6 +61,7 @@ pub fn setup_studio_scene(world: &mut World, renderer: &gizmo::renderer::Rendere
     );
     world.add_component(icon1, gizmo::renderer::components::MeshRenderer::new());
     world.add_component(icon1, gizmo::core::component::Parent(light.id()));
+    world.add_component(icon1, gizmo::renderer::components::EditorOnly);
 
     let icon2 = world.spawn();
     world.add_component(
@@ -82,6 +83,7 @@ pub fn setup_studio_scene(world: &mut World, renderer: &gizmo::renderer::Rendere
     );
     world.add_component(icon2, gizmo::renderer::components::MeshRenderer::new());
     world.add_component(icon2, gizmo::core::component::Parent(light.id()));
+    world.add_component(icon2, gizmo::renderer::components::EditorOnly);
 
     let icon3 = world.spawn();
     world.add_component(
@@ -103,6 +105,7 @@ pub fn setup_studio_scene(world: &mut World, renderer: &gizmo::renderer::Rendere
     );
     world.add_component(icon3, gizmo::renderer::components::MeshRenderer::new());
     world.add_component(icon3, gizmo::core::component::Parent(light.id()));
+    world.add_component(icon3, gizmo::renderer::components::EditorOnly);
 
     world.add_component(
         light,
@@ -117,6 +120,9 @@ pub fn setup_studio_scene(world: &mut World, renderer: &gizmo::renderer::Rendere
     );
     world.add_component(gizmo_root, Transform::new(Vec3::ZERO));
     world.add_component(gizmo_root, gizmo::physics::components::GlobalTransform::default());
+    // Everything under this root is editor furniture. The marker is per-entity rather than
+    // inherited because batching sees components, not ancestry — see `EditorOnly`.
+    world.add_component(gizmo_root, gizmo::renderer::components::EditorOnly);
     let mut gizmo_children = Vec::new();
 
     // Procedural 3D Grid Lines and Infinite Axes
@@ -145,6 +151,7 @@ pub fn setup_studio_scene(world: &mut World, renderer: &gizmo::renderer::Rendere
         grid_entity,
         gizmo::renderer::components::MeshRenderer::new(),
     );
+    world.add_component(grid_entity, gizmo::renderer::components::EditorOnly);
     gizmo_children.push(grid_entity.id());
 
     // Merkez Eksenler (Kırmızı/Mavi Çizgiler) artık Grid Shader (grid.wgsl) tarafından

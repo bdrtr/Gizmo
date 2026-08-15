@@ -116,6 +116,9 @@ pub fn execute_render_pipeline(
 
     let mut debug_aabbs = Vec::new();
 
+    // Set inside the block below: false means the Game panel still needs the fallback copy.
+    let mut game_view_rendered = false;
+
     CACHE.with(|cache_ref| {
         let mut cache = cache_ref.borrow_mut();
         let PipelineCache {
@@ -145,6 +148,7 @@ pub fn execute_render_pipeline(
         let renderers = world.borrow::<gizmo::renderer::components::MeshRenderer>();
         let skeletons = world.borrow::<gizmo::renderer::components::Skeleton>();
         let lod_groups = world.borrow::<gizmo::renderer::components::LodGroup>();
+        let editor_only = world.borrow::<gizmo::renderer::components::EditorOnly>();
 
         if let Some(mut q) = world.query::<(&Mesh, &gizmo::physics::components::GlobalTransform, &Material)>() {
             for (e, (mesh, global_trans, mat)) in q.iter_mut() {
@@ -280,6 +284,9 @@ pub fn execute_render_pipeline(
                 let is_grid = routing.is_grid;
                 let is_unlit = routing.unlit_material;
                 let is_backdrop = routing.is_backdrop;
+                // Editor furniture, so the game view can leave it out. Not derivable from the
+                // material: a light icon is an ordinary unlit cube.
+                let is_editor_only = editor_only.get(e).is_some();
 
                 let batches = if mat.is_transparent {
                     &mut *transparent_batches
@@ -290,7 +297,16 @@ pub fn execute_render_pipeline(
                 };
 
                 let batch = batches
-                    .entry((vbuf_ptr, bg_ptr, skel_ptr, is_skybox, is_grid, is_unlit, is_backdrop))
+                    .entry((
+                        vbuf_ptr,
+                        bg_ptr,
+                        skel_ptr,
+                        is_skybox,
+                        is_grid,
+                        is_unlit,
+                        is_backdrop,
+                        is_editor_only,
+                    ))
                     .or_insert_with(|| BatchData {
                         vbuf: active_mesh.vbuf.clone(),
                         vertex_count: active_mesh.vertex_count,
@@ -309,6 +325,7 @@ pub fn execute_render_pipeline(
                         is_grid,
                         is_unlit,
                         is_backdrop,
+                        is_editor_only,
                     });
 
                 if camera_visible {
@@ -373,6 +390,7 @@ pub fn execute_render_pipeline(
                         is_grid: batch.is_grid,
                         is_unlit: batch.is_unlit,
                         is_backdrop: batch.is_backdrop,
+                        is_editor_only: batch.is_editor_only,
                     });
                 }
             };
@@ -517,13 +535,54 @@ pub fn execute_render_pipeline(
             }
         }
 
+            // --- GAME VIEW: bu karenin İLK çizimi, kendi encoder'ında ---
+            //
+            // Sırası kasıtlı ve düzeltilmesi gereken kusurun ta kendisi: `Queue::write_buffer`
+            // encoder komutlarıyla araya girmez. Bir submit'ten önce yapılan bütün yazımlar o
+            // submit'teki BÜTÜN geçişler için geçerlidir. Uniform'u kare ortasında ikinci kez
+            // yazıp "artık oyun kamerası" demek bu yüzden çalışmıyor — ilk çizim de o değeri
+            // görüyor ve iki panel yine aynı görüntüyü veriyor (ölçüldü: 65536 baytın 0'ı farklı).
+            //
+            // Doğrusu, oyun görünümünü kendi encoder'ına çizip HEMEN submit etmek: o submit'e
+            // kadar yazılanlar ona, sonrasında yazılanlar çağıranın encoder'ına uygulanır. Böylece
+            // ikinci bir uniform tamponu ya da bind group çoğaltmasına gerek kalmıyor.
+            if !is_playing_mode {
+                let game_batches: Vec<batching::FlatBatchData> = flat_batches
+                    .iter()
+                    .filter(|b| !b.is_editor_only)
+                    .cloned()
+                    .collect();
+                game_view_rendered = record_game_view(
+                    world,
+                    renderer,
+                    &game_batches,
+                    state.game_camera,
+                    aspect,
+                    ed_shading_mode,
+                    elapsed_time,
+                    post_params,
+                );
+                if game_view_rendered {
+                    // Aşağıdaki geçişler için editörün uniform'larını geri yaz. Bu yazımlar
+                    // çağıranın submit'inden önce olduğu için ona uygulanırlar.
+                    renderer.update_post_process(&renderer.queue, post_params.with_camera(&camera));
+                    renderer.queue.write_buffer(
+                        &renderer.scene.global_uniform_buffer,
+                        0,
+                        gizmo::bytemuck::cast_slice(&[scene_uniform_data]),
+                    );
+                }
+            }
+
             // --- 1. CSM GÖLGE PASS + 2. ANA RENDER PASS (Tier 3: geçişler ayrı fn) ---
             record_studio_shadow_passes(encoder, renderer, flat_batches.as_slice(), &light_view_proj_cascades);
             record_studio_main_pass(
-                encoder, renderer, world, flat_batches.as_slice(), game_view_proj, &debug_aabbs, show_colliders,
+                encoder, renderer, world, flat_batches.as_slice(), game_view_proj, &debug_aabbs,
+                show_colliders, true,
             );
             // After the main pass, because it needs a pass with no depth attachment of its own.
             record_studio_particle_pass(encoder, renderer);
+
     }); // Cikis: CACHE.with bloğu
 
     // Çizilen Gizmo'ları sonraki frame için temizle
@@ -532,6 +591,8 @@ pub fn execute_render_pipeline(
     }
 
     // --- 3. POST-PROCESSING (Bloom + Tone Mapping → Ekrana Yaz) ---
+    // Scoped so the resource borrow ends before the game view needs the world again.
+    {
     let render_target = world.get_resource::<gizmo::renderer::components::EditorRenderTarget>();
     let output_view = if let Some(target) = &render_target {
         // Ana ekranı siyah ile mecburi temizleyelim (Swapchain error önleme)
@@ -557,12 +618,116 @@ pub fn execute_render_pipeline(
     };
 
     renderer.run_post_processing(encoder, output_view);
-
-    // Game View RTT: Post-processing çıktısını GameRenderTarget'a da yaz
-    let game_target = world.get_resource::<gizmo::renderer::components::GameRenderTarget>();
-    if let Some(target) = &game_target {
-        renderer.run_post_processing(encoder, &target.0.view);
     }
+
+    // --- 4. GAME VIEW: the same world, from the other camera, without the furniture ---
+    //
+    // This used to be `run_post_processing` a second time on the SAME hdr texture, which made the
+    // Game panel a byte-identical copy of the Scene panel — measured, with two cameras pointed in
+    // opposite directions. One render, two outputs.
+    //
+    // In play mode both panels legitimately show the game camera (`viewpoint::resolve` already
+    // switched to it), so the cheap path is still the correct one there.
+    if !game_view_rendered {
+        // Play mode (both panels legitimately show the game camera), or a scene with no game
+        // camera at all: the HDR texture already holds the only picture there is.
+        let game_view = world
+            .get_resource::<gizmo::renderer::components::GameRenderTarget>()
+            .map(|t| t.0.view.clone());
+        if let Some(game_view) = game_view {
+            renderer.run_post_processing(encoder, &game_view);
+        }
+    }
+}
+
+/// Draws the game camera's view of the scene into `output`, returning false if there is no game
+/// camera to draw from.
+///
+/// Runs the same steps as the main frame — scene setup, cascades, main pass, post — with three
+/// differences, each of which is the point:
+///
+/// - the camera is the **game** camera, resolved by name rather than by mode;
+/// - the batch list has already had `EditorOnly` filtered out by the caller, and `draw_chrome` is
+///   false, so neither the furniture in the batches nor the grid/gizmo/collider draws appear;
+/// - the cascades are refitted to this camera. Reusing the editor camera's would be cheaper and
+///   wrong in a specific way: the shader picks a cascade from view depth, so the splits have to
+///   belong to the camera doing the viewing or the wrong cascade gets sampled.
+///
+/// # Cost
+///
+/// A second full scene render plus four cascades, every frame the Game panel exists — measured on
+/// the default studio scene at 481 → 453 FPS, about 6%. Culling and the instance buffer are shared
+/// with the editor's render, so what is paid twice is pass recording and rasterisation, not the
+/// CPU-side batching. There is deliberately no "is the panel visible" gate: nothing in the editor
+/// state reports that today, and inventing a visibility protocol to save 6% on a preview users
+/// expect to be live is the wrong trade until a heavy scene says otherwise.
+#[allow(clippy::too_many_arguments)]
+fn record_game_view(
+    world: &World,
+    renderer: &mut gizmo::renderer::Renderer,
+    batches: &[batching::FlatBatchData],
+    game_camera: u32,
+    aspect: f32,
+    ed_shading_mode: u32,
+    elapsed_time: f32,
+    post_params: gizmo::renderer::PostProcessUniforms,
+) -> bool {
+    let Some(output) = world
+        .get_resource::<gizmo::renderer::components::GameRenderTarget>()
+        .map(|t| t.0.view.clone())
+    else {
+        return false;
+    };
+    let Some(camera) = viewpoint::camera_frame(world, game_camera, aspect, post_params.exposure)
+    else {
+        return false;
+    };
+    let cam_fov = {
+        let cameras = world.borrow::<gizmo::renderer::components::Camera>();
+        match cameras.get(game_camera) {
+            Some(c) => c.fov,
+            None => return false,
+        }
+    };
+
+    let setup = gizmo::systems::render::collect_scene_setup(
+        world,
+        &gizmo::systems::render::SceneSetupInputs {
+            camera,
+            aspect,
+            cam_fov,
+            shadow_caster: gizmo::systems::render::ShadowCaster::SunOrFirstLight,
+            environment: gizmo::renderer::EnvironmentFrame {
+                shading_mode: ed_shading_mode,
+                ..Default::default()
+            },
+            point_shadows_enabled: false,
+            elapsed_time,
+        },
+    );
+    let cascades = setup.cascade_view_projs.map(|m| m.to_cols_array_2d());
+
+    renderer.update_post_process(&renderer.queue, post_params.with_camera(&camera));
+    let scene_uniform = gizmo::renderer::SceneUniforms::new(&setup.frame);
+    renderer.queue.write_buffer(
+        &renderer.scene.global_uniform_buffer,
+        0,
+        gizmo::bytemuck::cast_slice(&[scene_uniform]),
+    );
+
+    // Its own encoder, submitted before returning — that submission boundary is what makes the
+    // uniform writes above belong to this render and not to the editor's.
+    let mut enc = renderer
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Game View") });
+    record_studio_shadow_passes(&mut enc, renderer, batches, &cascades);
+    record_studio_main_pass(&mut enc, renderer, world, batches, None, &[], false, false);
+    // No particle pass: the GPU particle compute for this frame is recorded into the caller's
+    // encoder, which runs after this one, so drawing them here would show the previous frame's
+    // positions. A preview panel is not worth a second compute dispatch.
+    renderer.run_post_processing(&mut enc, &output);
+    renderer.queue.submit(std::iter::once(enc.finish()));
+    true
 }
 
 
