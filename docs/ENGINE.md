@@ -1432,6 +1432,11 @@ edilebilecek bir hata: kapsam dışı bırakılan yer, aranan şeyin yaşadığ�
 hiç atanmamıştı, ve `..Default::default()` `false` veriyordu. Ctrl modifier'ı bile yıllardır
 kuruluymuş ve kimse fark etmemiş — çünkü hepsi hesaplanıp atılıyordu.
 
+`gizmo_size` uçtan uca **görsel olarak** doğrulandı: küp geçici olarak seçili hâle getirilip
+75 ve 220 değerleriyle iki kare alındı; tutamaklar belirgin biçimde büyüdü. Piksel testi yazılmadı,
+çünkü transform gizmo'su yalnız bir seçim varken çiziliyor ve seçim egui girdisiyle kuruluyor —
+headless koşumda simüle edilemez. Geçici düzenlemeler geri alındı.
+
 Grid anahtarının testi iki şey birden tutuyor: fark sayısı **ve yönü**. Yalnız "kareler farklı"
 denseydi bayrak ters dönse de test geçerdi. Snapping'de piksel testi mümkün değil (egui sürüklemesi
 gerekir), o yüzden karar `snap_active` saf fonksiyonuna çıkarıldı; XOR'un asıl sınanmaya değer
