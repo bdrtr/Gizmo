@@ -34,17 +34,32 @@ fn draw_engine_logs(ui: &mut egui::Ui, state: &mut EditorState) {
 
         ui.separator();
 
-        let prev_info = state.console.show_info;
-        ui.toggle_value(&mut state.console.show_info, format!("ℹ Info ({})", state.console.count_info));
-        if prev_info != state.console.show_info { filter_changed = true; }
+        // The prototype's chips: label plus count, the active one an accent fill. `toggle_value`
+        // with an emoji prefix was the old form — and the ℹ/⚠️/🔴 glyphs render as boxes in egui's
+        // bundled font, which is why they are gone rather than restyled.
+        if crate::theme::toggle(
+            ui,
+            &mut state.console.show_info,
+            &format!("Info {}", state.console.count_info),
+        ) {
+            filter_changed = true;
+        }
 
-        let prev_warn = state.console.show_warn;
-        ui.toggle_value(&mut state.console.show_warn, format!("⚠️ Warn ({})", state.console.count_warn));
-        if prev_warn != state.console.show_warn { filter_changed = true; }
+        if crate::theme::toggle(
+            ui,
+            &mut state.console.show_warn,
+            &format!("Warn {}", state.console.count_warn),
+        ) {
+            filter_changed = true;
+        }
 
-        let prev_error = state.console.show_error;
-        ui.toggle_value(&mut state.console.show_error, format!("🔴 Error ({})", state.console.count_error));
-        if prev_error != state.console.show_error { filter_changed = true; }
+        if crate::theme::toggle(
+            ui,
+            &mut state.console.show_error,
+            &format!("Error {}", state.console.count_error),
+        ) {
+            filter_changed = true;
+        }
 
         ui.separator();
 

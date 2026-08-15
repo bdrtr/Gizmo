@@ -69,10 +69,28 @@ let mut finished = false;
 
         ui.separator();
 
-        ui.label("🔍");
-        ui.text_edit_singleline(&mut state.assets.filter);
+        ui.add(
+            egui::TextEdit::singleline(&mut state.assets.filter)
+                .desired_width(140.0)
+                .hint_text("Filter assets…"),
+        );
         ui.separator();
 
+    });
+
+    // The type chips get their own row, as in the prototype — a 28 px filter strip under the
+    // header. Squeezed onto the end of the header they simply ran off the right edge of the panel.
+    ui.horizontal(|ui| {
+        for (kind, label) in AssetKind::CHIPS {
+            let mut on = state.assets.kind_filter == kind;
+            if crate::theme::toggle(ui, &mut on, label) {
+                // Clicking the active chip turns it off, which lands back on All.
+                state.assets.kind_filter = if on { kind } else { None };
+            }
+        }
+    });
+
+    ui.horizontal(|ui| {
         // Breadcrumb tarzında yol gösterimi
         let current_root = state.assets.root.clone();
         ui.horizontal(|ui| {
@@ -152,8 +170,7 @@ let mut finished = false;
 
             for (path, name, is_dir) in file_entries {
                 // Filtre
-                let name_lower = name.to_lowercase();
-                if !filter_lower.is_empty() && !name_lower.contains(&filter_lower) {
+                if !entry_passes(&name, is_dir, &filter_lower, state.assets.kind_filter) {
                     continue;
                 }
 
@@ -279,59 +296,156 @@ let mut finished = false;
 }
 
 /// Dosya uzantısına göre ikon döndürür
-fn get_file_icon(filename: &str) -> &'static str {
+/// What an asset file is, decided from its extension.
+///
+/// One table, because the icon and the type filter are the same question asked twice. The icon
+/// lookup used to own the extension list on its own; adding the prototype's `All / Mesh / Material
+/// / Texture / Audio` filter beside it would have meant a second list that has to agree with the
+/// first about whether `.tga` is a texture.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AssetKind {
+    Folder,
+    Mesh,
+    Texture,
+    Audio,
+    Script,
+    Shader,
+    Prefab,
+    Scene,
+    Data,
+    Other,
+}
+
+impl AssetKind {
+    /// The glyph the browser shows for this kind.
+    pub fn icon(self) -> &'static str {
+        match self {
+            Self::Folder => "📁",
+            Self::Mesh => "🗿",
+            Self::Texture => "🖼️",
+            Self::Audio => "🔊",
+            Self::Script => "📜",
+            Self::Shader => "🎨",
+            Self::Prefab => "📦",
+            Self::Scene => "🎬",
+            Self::Data => "📋",
+            Self::Other => "📄",
+        }
+    }
+
+    /// The filter chips, in the prototype's order. `None` is "All".
+    ///
+    /// Shader, Prefab, Scene and Data are deliberately absent: the prototype offers five chips and
+    /// a row of ten would stop being a filter and start being a second navigation tree. They are
+    /// still reachable through the text filter.
+    pub const CHIPS: [(Option<AssetKind>, &'static str); 5] = [
+        (None, "All"),
+        (Some(AssetKind::Mesh), "Mesh"),
+        (Some(AssetKind::Prefab), "Prefab"),
+        (Some(AssetKind::Texture), "Texture"),
+        (Some(AssetKind::Audio), "Audio"),
+    ];
+}
+
+/// Classifies a file name. The single extension table.
+pub fn asset_kind(filename: &str) -> AssetKind {
     let ext = filename.rsplit('.').next().unwrap_or("");
-    if ext.eq_ignore_ascii_case("obj")
-        || ext.eq_ignore_ascii_case("glb")
-        || ext.eq_ignore_ascii_case("gltf")
-        || ext.eq_ignore_ascii_case("fbx")
-    {
-        return "🗿";
+    let is = |c: &str| ext.eq_ignore_ascii_case(c);
+
+    if is("obj") || is("glb") || is("gltf") || is("fbx") {
+        AssetKind::Mesh
+    } else if is("jpg") || is("jpeg") || is("png") || is("bmp") || is("tga") {
+        AssetKind::Texture
+    } else if is("wav") || is("ogg") || is("mp3") || is("flac") {
+        AssetKind::Audio
+    } else if is("lua") {
+        AssetKind::Script
+    } else if is("json") || is("toml") || is("ron") {
+        AssetKind::Data
+    } else if is("prefab") {
+        AssetKind::Prefab
+    } else if is("gizmo") || is("giz") {
+        AssetKind::Scene
+    } else if is("wgsl") || is("glsl") || is("hlsl") {
+        AssetKind::Shader
+    } else if filename.contains('.') {
+        AssetKind::Other
+    } else {
+        AssetKind::Folder
     }
-    if ext.eq_ignore_ascii_case("jpg")
-        || ext.eq_ignore_ascii_case("jpeg")
-        || ext.eq_ignore_ascii_case("png")
-        || ext.eq_ignore_ascii_case("bmp")
-        || ext.eq_ignore_ascii_case("tga")
-    {
-        return "🖼️";
+}
+
+fn get_file_icon(filename: &str) -> &'static str {
+    asset_kind(filename).icon()
+}
+
+/// Does one directory entry survive the browser's two filters?
+///
+/// Extracted so it can be tested: the rules are small but each has a way of being wrong that only
+/// shows up in use — a text filter that is case-sensitive, or a type filter that hides the folder
+/// you need in order to leave the directory.
+///
+/// `text_filter` is expected already lowercased; the caller computes it once per frame rather than
+/// per entry.
+pub fn entry_passes(
+    name: &str,
+    is_dir: bool,
+    text_filter: &str,
+    kind_filter: Option<AssetKind>,
+) -> bool {
+    if !text_filter.is_empty() && !name.to_lowercase().contains(text_filter) {
+        return false;
     }
-    if ext.eq_ignore_ascii_case("wav")
-        || ext.eq_ignore_ascii_case("ogg")
-        || ext.eq_ignore_ascii_case("mp3")
-        || ext.eq_ignore_ascii_case("flac")
-    {
-        return "🔊";
+    match kind_filter {
+        // Folders always survive the type chip. Filtering them out strands you in a directory with
+        // no way back up, and the prototype keeps its folder tree visible under every chip.
+        Some(want) => is_dir || asset_kind(name) == want,
+        None => true,
     }
-    if ext.eq_ignore_ascii_case("lua") {
-        return "📜";
-    }
-    if ext.eq_ignore_ascii_case("json")
-        || ext.eq_ignore_ascii_case("toml")
-        || ext.eq_ignore_ascii_case("ron")
-    {
-        return "📋";
-    }
-    if ext.eq_ignore_ascii_case("prefab") {
-        return "📦";
-    }
-    if ext.eq_ignore_ascii_case("gizmo") || ext.eq_ignore_ascii_case("giz") {
-        return "🎬";
-    }
-    if ext.eq_ignore_ascii_case("wgsl")
-        || ext.eq_ignore_ascii_case("glsl")
-        || ext.eq_ignore_ascii_case("hlsl")
-    {
-        return "🎨";
-    }
-    if filename.contains('.') {
-        return "📄";
-    }
-    "📁"
 }
 
 #[cfg(test)]
 mod tests {
+    use super::{asset_kind, entry_passes, AssetKind};
+
+    #[test]
+    fn the_type_chip_keeps_its_kind_and_every_folder() {
+        assert!(entry_passes("hero.glb", false, "", Some(AssetKind::Mesh)));
+        assert!(!entry_passes("hero.png", false, "", Some(AssetKind::Mesh)));
+        assert!(
+            entry_passes("textures", true, "", Some(AssetKind::Mesh)),
+            "a folder must survive every type chip, or the filter traps you in the directory"
+        );
+        assert!(entry_passes("anything.xyz", false, "", None), "All filters nothing");
+    }
+
+    #[test]
+    fn the_text_filter_is_case_insensitive_and_combines_with_the_chip() {
+        assert!(entry_passes("Hero.GLB", false, "hero", None));
+        assert!(!entry_passes("Hero.GLB", false, "villain", None));
+        // Both filters have to pass.
+        assert!(entry_passes("Hero.GLB", false, "hero", Some(AssetKind::Mesh)));
+        assert!(!entry_passes("Hero.PNG", false, "hero", Some(AssetKind::Mesh)));
+    }
+
+    /// The chips cover kinds that `asset_kind` can actually produce.
+    ///
+    /// A chip for a kind nothing classifies as would filter every file away and look broken.
+    #[test]
+    fn every_chip_is_a_kind_something_can_be() {
+        for (kind, label) in AssetKind::CHIPS {
+            let Some(kind) = kind else { continue }; // "All"
+            let sample = match kind {
+                AssetKind::Mesh => "a.glb",
+                AssetKind::Texture => "a.png",
+                AssetKind::Audio => "a.wav",
+                AssetKind::Prefab => "a.prefab",
+                other => panic!("chip {label} is {other:?}, which this test has no sample for"),
+            };
+            assert_eq!(asset_kind(sample), kind, "chip {label} classifies nothing");
+        }
+    }
+
     use super::get_file_icon;
 
     #[test]
