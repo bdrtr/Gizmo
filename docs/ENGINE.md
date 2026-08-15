@@ -1270,3 +1270,20 @@ Sahne içeriği hakkında, kusur olmayan iki gözlem: studio'nun varsayılan sah
 yok (`setup.rs`'teki "Custom Skybox or proper horizon color" yorumu kalıntı) ve Default Cube'ün
 materyali kasten %21 gri. Karanlık görünmesinin bir kısmı buradan; ikisi de bilinçli seçim
 olabilir, o yüzden dokunulmadı.
+
+#### Denendi ve reddedildi: editör viewport'una prosedürel gökyüzü
+
+Gamma düzeltmesinden sonra geriye kalan "sahne boş bir karanlık" hissini gidermek için skybox
+denendi. `sky.wgsl` zaten tam bir atmosfer çiziyor (zenit/ufuk/zemin gradyanı, güneş halesi ve
+diski) ve `sky_pipeline` kurulu — studio'nun hiç skybox varlığı yaratmaması yüzünden editörde hiç
+çalışmamış. Bir varlık eklemek yetiyor; `gizmo_root` altında, grid ile aynı krom statüsünde.
+
+**Sonuç ölçüldü ve daha kötü:** gökyüzü açıldığında grid tamamen kayboluyor. Grid materyali açık
+renkli ve alfa-harmanlı; koyu arka plan için tasarlanmış. Ufuk rengi (0.5, 0.7, 0.9) sahnenin
+güneş yoğunluğuyla çarpıldığı için (studio'da 1.5) beyaza kırpılıyor; yoğunluk 1.0'a çekilince de
+viewport 182–211 aralığında düz bir soluk yıkama oluyor ve grid yine görünmüyor. Kamera pitch'i
+-23°, FOV 60° — görünen alanın neredeyse tamamı en parlak ufuk bandı.
+
+Gökyüzünü editörde kullanılabilir kılmak grid ve gizmo renklerinin de yeniden tasarlanmasını
+gerektirir. Blender ve Unity'nin editör arka planını nötr-koyu tutmasının sebebi bu. Kayıt için:
+skybox varlığını eklemek 20 satır, sorun orada değil.
