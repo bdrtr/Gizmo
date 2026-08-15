@@ -32,6 +32,13 @@ cargo run --release -p demo --bin advanced_physics
 # Determinism / stability gate — 200-box tower collapse, 3 runs, hashes must match
 cargo run --release -p demo --bin headless_stress_test
 
+# Look at what the engine actually drew — any windowed binary, no display grab needed.
+# (External screen capture does NOT work here: Xwayland runs rootless, so the X root window is
+# empty and every `import`/ffmpeg grab comes back black. This reads the frame back from the GPU.)
+GIZMO_SCREENSHOT=/tmp/frame.png GIZMO_SCREENSHOT_FRAME=180 GIZMO_SCREENSHOT_EXIT=1 \
+  env -u WAYLAND_DISPLAY DISPLAY=:1 ./target/release/gizmo-studio
+# FRAME defaults to 90 (early frames are unrepresentative: assets stream in, layout settles).
+
 # Benchmarks (criterion; benches only in gizmo-math and gizmo-core). CI runs once with --test:
 cargo bench --workspace --benches -- --test    # smoke: runs each bench once, catches runtime panics
 cargo bench -p gizmo-core                       # real timing run
