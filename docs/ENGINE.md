@@ -1076,7 +1076,16 @@ Kapatılanlar (**2026-08-14**), ayrıntısı §7'de:
 
 ### Scripting
 
-32 doğrulanmış kusurdan **yedisi** düzeltildi. Önceki üçü: script sırası (`HashMap` → `BTreeMap`,
+Bu bölüm bir zamanlar "32 doğrulanmış kusurdan yedisi düzeltildi" diye başlıyordu. **Kalan 25'in
+arkasında yazılı tek bir madde yok** — bunu bir sonraki okuyanın keşfetmesine bırakmamak için burada
+söylüyor: 32 sayısı, madde listesi saklanmamış bir taramadan geliyor. Aşağıdaki yedi maddenin
+yanındaki not ("kayıtta adı geçen bütün açık maddeler") o taramanın yazıya geçmiş kısmının tükendiğini
+söylüyor. Dolayısıyla "25 kalan kusur" bir iş kalemi değil; ne kovalanabilir ne kapatılabilir.
+Scripting'de bir sonraki adım, sayıyı azaltmak değil **taramayı yeniden koşturup bu kez maddeleri
+yazmak**. Sayı bu yüzden buradan kaldırıldı: arkasında iş olmayan bir sayaç, ilerleme ölçüsü gibi
+görünüp değil.
+
+Düzeltilmiş ve kaydı tutulan yedi kusur. İlk üçü: script sırası (`HashMap` → `BTreeMap`,
 proses başına rastgeleydi), on altı komutun sessizce yutulması, bir script'in hatasının ötekileri
 iptal etmesi. **2026-08-15'te dördü daha — kayıtta adı geçen bütün açık maddeler:**
 
