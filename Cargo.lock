@@ -2915,6 +2915,7 @@ version = "0.9.0"
 dependencies = [
  "gizmo-engine",
  "mimalloc",
+ "pollster 0.3.0",
  "rand 0.9.4",
  "tracing",
 ]

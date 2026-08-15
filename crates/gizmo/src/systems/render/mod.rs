@@ -25,7 +25,18 @@ pub struct WireframeConfig {
 /// transform systems each frame. Here we (1) backfill a `GlobalTransform` onto any
 /// mesh that lacks one, then (2) refresh local matrices and propagate them to
 /// `GlobalTransform` — the "update transforms right before the pass" TODO.
-fn ensure_global_transforms(world: &mut World) {
+///
+/// **Public because both render paths need it and only one had it.** The editor's forward pipeline
+/// ran `TransformSyncSystem` + `TransformPropagateSystem` — which *update* a `GlobalTransform` but
+/// never *add* one, which is exactly why step (1) exists here as a separate pass. So a
+/// `spawn((Transform, Mesh, Material))` rendered in the game and silently drew nothing in the
+/// editor: the same footgun this function was written to close, still loaded on the other path.
+/// Measured, not inferred — `gizmo-studio/tests/studio_render_pixels.rs` renders that exact entity
+/// and reads the pixels back.
+///
+/// The visible cost of the gap was `setup.rs` adding `GlobalTransform::default()` by hand to nine
+/// entities in a row: a tax the author paid per spawn, for a component the renderer can supply.
+pub fn ensure_global_transforms(world: &mut World) {
     use crate::core::query::Without;
     use crate::core::system::System;
     use gizmo_physics_core::components::{GlobalTransform, Transform};

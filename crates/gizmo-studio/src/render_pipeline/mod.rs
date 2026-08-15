@@ -16,6 +16,12 @@ pub fn execute_render_pipeline(
     renderer: &mut gizmo::renderer::Renderer,
     _light_time: f32,
 ) {
+    // Meshes with a `Transform` but no `GlobalTransform` get one, and every world matrix is
+    // refreshed — the same call the game path makes, for the same reason. Studio's update loop
+    // runs the sync and propagate systems, but neither *adds* the component, so an entity spawned
+    // as `Transform + Mesh + Material` drew in the game and silently vanished in the editor.
+    gizmo::systems::render::ensure_global_transforms(world);
+
     // --- SKELETAL ANIMATION UPDATE (Done before any ECS borrows!) ---
     let delta_time = state.actual_dt;
     gizmo::renderer::animation_update_system(world, delta_time, &renderer.queue);
