@@ -288,7 +288,11 @@ pub fn segmented<T: PartialEq + Copy>(
             egui::pos2(rect.left() + cell_w * i as f32, rect.top()),
             egui::vec2(cell_w, height),
         );
-        let id = ui.id().with(("segmented", i));
+        // Salted with the label, not just the index: two segmented controls in the same parent
+        // `Ui` would otherwise share ids cell-for-cell and steal each other's clicks. Latent today
+        // (there is one call site) and the kind of thing that surfaces as "the wrong control
+        // responded" months later.
+        let id = ui.id().with(("segmented", *label, i));
         let resp = ui.interact(cell, id, egui::Sense::click());
         let on = *value == *opt;
 

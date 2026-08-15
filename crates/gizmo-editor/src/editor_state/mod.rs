@@ -250,13 +250,27 @@ fn create_default_dock_state() -> egui_dock::DockState<EditorTab> {
     let [main, _inspector] =
         surface.split_right(NodeIndex::root(), 0.75, vec![EditorTab::Inspector]);
 
-    // 2. Split left for Hierarchy (takes 20% of the remaining 75% width)
-    let [_hierarchy, center] =
-        surface.split_left(main, 0.20, vec![EditorTab::Hierarchy]);
+    // 2. Hierarchy takes the left 20%; `center` is what remains.
+    //
+    // The binding order is load-bearing and was wrong here for a long time. `Tree::split_*` returns
+    // `[old_node, new_node]` (egui_dock `tree/mod.rs`), NOT `[left, right]` — so the node that
+    // keeps the existing tabs comes first regardless of which side it ends up on. Written as
+    // `[_hierarchy, center]`, `center` was bound to the freshly-created Hierarchy leaf, and the
+    // split below then hung the asset browser under the hierarchy: a 175 px column in the bottom
+    // left, where a three-column asset browser cannot be read at all.
+    let [center, _hierarchy] = surface.split_left(main, 0.20, vec![EditorTab::Hierarchy]);
 
-    // 3. Split bottom of the center area for Asset Browser and Console
-    let [_scene, _bottom] =
-        surface.split_below(center, 0.65, vec![EditorTab::AssetBrowser, EditorTab::Console]);
+    // 3. The bottom dock, under the VIEWPORT: assets, console and profiler as tabs, the way the
+    //    prototype arranges them. 0.78 leaves the strip roughly the prototype's 218 px.
+    //
+    //    The profiler was previously in no default layout at all — `Window ▸ Profiler` calls
+    //    `push_to_first_leaf`, which walks nodes in index order and lands on the Inspector, so it
+    //    opened on the right next to the entity fields.
+    let [_scene, _bottom] = surface.split_below(
+        center,
+        0.78,
+        vec![EditorTab::AssetBrowser, EditorTab::Console, EditorTab::Profiler],
+    );
 
     state
 }
@@ -527,6 +541,51 @@ mod tests {
     // =========================================================
     //  Dock / Tab
     // =========================================================
+    /// The bottom dock sits under the VIEWPORT, not under the hierarchy.
+    ///
+    /// This is the assertion the four existing dock tests were missing. Every one of them asks
+    /// only "is this tab open somewhere" — which stayed true the entire time the asset browser was
+    /// crammed into a 175 px column in the bottom-left corner, because a reversed destructuring of
+    /// `split_left`'s `[old, new]` return had hung it off the hierarchy node. Placement is the
+    /// thing that was wrong, so placement is the thing to assert.
+    ///
+    /// Calls `create_default_dock_state()` directly rather than `EditorState::new()`: `new()` goes
+    /// through `load_layout()`, which reads a cwd-relative `editor_layout.json` that a test cannot
+    /// control and a developer might have.
+    #[test]
+    fn the_bottom_dock_hangs_off_the_viewport_not_the_hierarchy() {
+        let state = create_default_dock_state();
+        let assets = state.find_tab(&EditorTab::AssetBrowser).expect("asset browser");
+        let scene = state.find_tab(&EditorTab::SceneView).expect("scene view");
+        let hierarchy = state.find_tab(&EditorTab::Hierarchy).expect("hierarchy");
+
+        assert_eq!(
+            assets.node.parent(),
+            scene.node.parent(),
+            "the asset browser must share a parent with the viewport — that is what puts it \
+             underneath it"
+        );
+        assert_ne!(
+            assets.node.parent(),
+            hierarchy.node.parent(),
+            "the asset browser is hanging off the hierarchy again: `split_*` returns [old, new], \
+             so binding the new node to `center` puts the whole bottom dock in the left column"
+        );
+    }
+
+    /// The profiler is in the default layout, in the bottom dock with the other two.
+    ///
+    /// It used to be in no layout at all: `Window ▸ Profiler` calls `push_to_first_leaf`, which
+    /// takes the first leaf in index order — the Inspector — so a performance panel opened on top
+    /// of the entity fields.
+    #[test]
+    fn the_profiler_ships_in_the_bottom_dock() {
+        let state = create_default_dock_state();
+        let profiler = state.find_tab(&EditorTab::Profiler).expect("profiler is in the layout");
+        let assets = state.find_tab(&EditorTab::AssetBrowser).expect("asset browser");
+        assert_eq!(profiler.node, assets.node, "the profiler belongs in the same leaf as the assets");
+    }
+
     #[test]
     fn test_default_dock_has_scene_view() {
         let state = EditorState::new();
