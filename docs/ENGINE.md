@@ -1119,11 +1119,24 @@ iptal etmesi. **2026-08-15'te dördü daha — kayıtta adı geçen bütün aç�
 yalıtımı bunu zararsız kılıyor, gölge o script'e özel. Ve motorun global olarak sunmak yerine
 *değer olarak* verdiği tablolar bu kapsamda değil.
 
-**Teşhis sondası köprüsünün önündeki asıl engel:** `send` özelliğiyle `create_function`'ın kapanışı
-`Send + 'static` olmak zorunda, yani bir Lua callback'i **`&World` yakalayamaz**. Bütün okuma yolu bu
-yüzden kare başına anlık görüntü. Parametreli sorgu (şu (x,z)'de zemin kotu) anlık görüntüyle ifade
-edilemez; çağrı-anı erişim mekanizması gerekiyor (`Lua::scope` ya da ömrü belgelenmiş userdata). Bu,
-ince bir köprü değil gerçek bir tasarım kararı.
+**Teşhis sondası köprüsü — engel diye kaydedilen şey engel değilmiş (2026-08-15).** Kayıt şöyle
+diyordu: `send` özelliğiyle `create_function`'ın kapanışı `Send + 'static` olmak zorunda, yani bir
+Lua callback'i `&World` yakalayamaz; bütün okuma yolu bu yüzden kare-başı anlık görüntü, ve
+parametreli sorgu (şu (x,z)'de zemin kotu) anlık görüntüyle ifade edilemez.
+
+Muhakemenin ilk yarısı doğru, sonucu yanlış. O sınır `Lua::create_function`'ın; **`Scope::create_function`'ın
+sınırı `F: Fn(..) + 'scope` — ne `Send` ne `'static`.** Yani kapsamlı (scoped) bir kapanış dünyayı
+ödünç alabiliyor, ve ödünç kapsam bitince bitiyor: tam da karenin ömrü.
+
+Çalışan hâli: `api_physics::with_call_time_queries` kareyi bir `lua.scope` içine alıyor, `&World`
+tutan `physics.ground_at(x, z)`'yi kuruyor, scriptleri koşturuyor, çıkarken adı geri siliyor —
+böylece adı saklayıp sonra çağıran bir script "destructed callback" yerine sade bir nil alıyor.
+Testi kayıttaki örneğin kendisi: üstü y=2'de olan bir zemin plakası; script `ground_at(0,0)` için
+2.0, plakanın dışında `nil` alıyor (0.0 değil — zemin yok ile zemin sıfırda aynı cevap değil).
+Kırılabildiği doğrulandı: fonksiyon kurulmayınca test kırmızı.
+
+Yani sonda köprüsü artık bir tasarım kararı beklemiyor; mekanizma kurulu ve tek tüketicisi var.
+Kalanı sıradan iş: hangi sorguların sunulacağı.
 
 ### Bir daha kovalanmasın
 

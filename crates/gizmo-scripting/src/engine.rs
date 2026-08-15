@@ -439,23 +439,34 @@ impl ScriptEngine {
         // for that frame — and with the map now ordered by path, "after it" is a stable and
         // therefore reliably silent set. Errors are collected and reported together instead; a
         // broken script loses its own frame and nobody else's.
+        // Wrapped in the call-time query scope: for the length of this loop — and only for it —
+        // the physics API carries functions that hold `&World` and can answer a question the
+        // engine could not have precomputed. See `api_physics::with_call_time_queries`.
+        let lua = &self.lua;
+        let scripts = &self.loaded_scripts;
+        let budget = &self.budget;
+        let budget_ticks = self.budget_ticks;
         let mut failures = Vec::new();
-        for (path, (_, key)) in &self.loaded_scripts {
-            let env: mlua::Table = match self.lua.registry_value(key) {
-                Ok(env) => env,
-                Err(e) => {
-                    failures.push(format!("{path}: env okunamadı: {e}"));
-                    continue;
-                }
-            };
-            if let Ok(func) = env.get::<_, LuaFunction>("on_update") {
-                self.arm_budget();
-                if let Err(e) = func.call::<_, ()>(ctx_table.clone()) {
-                    warn!(path = %path, error = %e, "[Scripting] on_update çalışma-zamanı hatası");
-                    failures.push(format!("Lua on_update hatası ({path}): {e}"));
+        api_physics::with_call_time_queries(lua, world, || {
+            for (path, (_, key)) in scripts {
+                let env: mlua::Table = match lua.registry_value(key) {
+                    Ok(env) => env,
+                    Err(e) => {
+                        failures.push(format!("{path}: env okunamadı: {e}"));
+                        continue;
+                    }
+                };
+                if let Ok(func) = env.get::<_, LuaFunction>("on_update") {
+                    budget.store(budget_ticks, std::sync::atomic::Ordering::Relaxed);
+                    if let Err(e) = func.call::<_, ()>(ctx_table.clone()) {
+                        warn!(path = %path, error = %e, "[Scripting] on_update çalışma-zamanı hatası");
+                        failures.push(format!("Lua on_update hatası ({path}): {e}"));
+                    }
                 }
             }
-        }
+            Ok(())
+        })
+        .map_err(|e| format!("script scope hatası: {e}"))?;
 
         if failures.is_empty() {
             Ok(())
@@ -1098,6 +1109,82 @@ mod tests {
             "the neighbour saw a rewritten API: {log:?}"
         );
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A parameterised query the engine could not have precomputed, answered while the script is
+    /// calling.
+    ///
+    /// This is the item the audit recorded as blocked. Its reasoning was right about
+    /// `Lua::create_function` — with mlua's `send` feature that wants `Fn(..) + Send + 'static`,
+    /// and `&World` is neither — and wrong about the conclusion, because `Scope::create_function`
+    /// carries no such bound: `F: Fn(..) + 'scope`. A scoped closure may borrow the world, and the
+    /// borrow ends when the scope does, which is the frame.
+    ///
+    /// "Ground height at (x, z)" is the audit's own example, and it is the right shape of example:
+    /// there is no snapshot that answers it, because the engine does not know which (x, z) the
+    /// script will ask about until it asks.
+    #[test]
+    fn a_script_can_ask_a_question_the_engine_did_not_precompute() {
+        use gizmo_physics_rigid::world::PhysicsWorld;
+
+        let dir = std::env::temp_dir().join(format!("gizmo_probe_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("probe.lua");
+        std::fs::write(
+            &path,
+            "function on_update(c)\n             \x20 print('on_slab=' .. tostring(physics.ground_at(0.0, 0.0)))\n             \x20 print('off_slab=' .. tostring(physics.ground_at(500.0, 500.0)))\n             end\n",
+        )
+        .unwrap();
+
+        // A floor slab whose top sits at y = 2.
+        use gizmo_math::Vec3;
+        use gizmo_physics_core::{BodyHandle, Collider, Transform};
+        use gizmo_physics_rigid::{RigidBody, Velocity};
+
+        let mut world = World::new();
+        let mut pw = PhysicsWorld::new();
+        pw.add_body(
+            BodyHandle::from_id(0),
+            RigidBody::new_static(),
+            Transform::new(Vec3::new(0.0, 0.0, 0.0)),
+            Velocity::default(),
+            Collider::box_collider(Vec3::new(50.0, 2.0, 50.0)),
+        );
+        world.insert_resource(pw);
+
+        let mut engine = ScriptEngine::new().unwrap();
+        engine.load_script(path.to_str().unwrap()).unwrap();
+        engine.update(&world, &Input::default(), 0.016).unwrap();
+
+        let log = engine.log_queue.lock().unwrap().clone();
+        let line = |k: &str| {
+            log.iter()
+                .find_map(|(_, m)| m.strip_prefix(k).map(str::to_string))
+                .unwrap_or_else(|| panic!("no `{k}` line in {log:?}"))
+        };
+        let on_slab: f32 = line("on_slab=").parse().expect("a height over the slab");
+        assert!((on_slab - 2.0).abs() < 0.01, "expected the slab top at 2.0, got {on_slab}");
+        assert_eq!(line("off_slab="), "nil", "no floor there must read as nil, not as zero");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// …and the borrow does not outlive the frame: the name is gone once the scope closes, so a
+    /// script that saved it cannot call into a world that is no longer there.
+    #[test]
+    fn the_call_time_query_is_not_available_outside_the_frame() {
+        let lua = Lua::new();
+        crate::api_physics::register_physics_api(&lua, Arc::new(CommandQueue::new())).unwrap();
+        let world = World::new();
+
+        crate::api_physics::with_call_time_queries(&lua, &world, || {
+            let present: bool = lua.load("return physics.ground_at ~= nil").eval()?;
+            assert!(present, "the query must exist while the frame is running");
+            Ok(())
+        })
+        .unwrap();
+
+        let present: bool = lua.load("return physics.ground_at ~= nil").eval().unwrap();
+        assert!(!present, "the query must be gone once the frame is over");
     }
 
     /// A script that never returns must lose its frame, not the process.

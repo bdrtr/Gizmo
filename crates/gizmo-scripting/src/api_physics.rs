@@ -105,6 +105,65 @@ pub fn register_physics_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Resu
     })
 }
 
+/// Install the **call-time** physics queries for the duration of one frame's script run.
+///
+/// # Why a scope
+///
+/// Everything else in this API is a per-frame *snapshot*: Rust copies what it has into a table and
+/// Lua reads it. That works for "what collided this frame" and cannot work for a parameterised
+/// question — "what is the ground height at (x, z)" has no answer to precompute, because the
+/// engine does not know which (x, z) the script will ask about. Answering it means running a
+/// raycast **while the script is calling**, from a closure that holds the world.
+///
+/// The record said that was blocked: with mlua's `send` feature, `Lua::create_function` demands
+/// `Fn(..) + Send + 'static`, and `&World` is neither. That is true of `Lua::create_function` and
+/// **not** of `Scope::create_function`, whose bound is `F: Fn(..) + 'scope` — no `Send`, no
+/// `'static`. A scoped closure may borrow the world, and mlua invalidates it when the scope ends,
+/// which is exactly the lifetime the borrow has.
+///
+/// So the frame looks like this: enter a scope, hand Lua a function that borrows the world, run
+/// the scripts, leave. Outside that window the function is gone rather than dangling — removed
+/// below, so a script that squirrelled the name away and called it later gets a plain "nil value"
+/// instead of an mlua error about a destructed callback.
+pub fn with_call_time_queries<R>(
+    lua: &Lua,
+    world: &gizmo_core::World,
+    run: impl FnOnce() -> Result<R, LuaError>,
+) -> Result<R, LuaError> {
+    let physics_table = crate::api_table::raw(lua, "physics")?;
+
+    let out = lua.scope(|scope| {
+        let ground_at = scope.create_function(|_, (x, z): (f32, f32)| {
+            // Straight down from well above the world; the height is where it lands.
+            let Ok(pw) = world.try_get_resource::<gizmo_physics_rigid::world::PhysicsWorld>()
+            else {
+                return Ok(LuaValue::Nil);
+            };
+            let ray = gizmo_physics_core::raycast::Ray::new(
+                gizmo_math::Vec3::new(x, GROUND_PROBE_HEIGHT, z),
+                gizmo_math::Vec3::new(0.0, -1.0, 0.0),
+            );
+            Ok(match pw.raycast(&ray, GROUND_PROBE_HEIGHT * 2.0) {
+                Some(hit) => LuaValue::Number(f64::from(hit.point.y)),
+                // Nothing under that point. `nil` rather than 0.0: a floor at height zero and no
+                // floor at all are different answers, and a script that cannot tell them apart
+                // will happily place something on a floor that is not there.
+                None => LuaValue::Nil,
+            })
+        })?;
+        physics_table.raw_set("ground_at", ground_at)?;
+        run()
+    });
+
+    // Whatever happened, the borrow is over — take the name with it.
+    physics_table.raw_set("ground_at", LuaValue::Nil)?;
+    out
+}
+
+/// How far above the query point the ground probe starts. High enough to clear any level geometry
+/// the engine is used for, and finite so the raycast has a bound.
+const GROUND_PROBE_HEIGHT: f32 = 10_000.0;
+
 /// Her frame güncel fizik olaylarını (Tetikleyiciler, Çarpışmalar) Lua'ya aktarır
 #[tracing::instrument(skip_all, name = "script_physics_read")]
 pub fn update_physics_api(
