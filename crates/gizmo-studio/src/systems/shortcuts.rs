@@ -102,6 +102,7 @@ pub fn handle_editor_shortcuts(
         // Ctrl+A → Tümünü Seç
         if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::KeyA as u32) {
             let names = world.borrow::<gizmo::core::component::EntityName>();
+            let markers = world.borrow::<gizmo::core::component::EditorOnly>();
             let hidden = world.borrow::<gizmo::core::component::IsHidden>();
             let deleted = world.borrow::<gizmo::core::component::IsDeleted>();
             for e in world.iter_alive_entities() {
@@ -109,10 +110,11 @@ pub fn handle_editor_shortcuts(
                 if hidden.contains(e.id()) || deleted.contains(e.id()) {
                     continue;
                 }
-                if let Some(name) = names.get(e.id()) {
-                    if name.0.starts_with("Editor ") || name.0 == "Highlight Box" {
-                        continue;
-                    }
+                if gizmo::core::component::is_editor_only(
+                    markers.get(e.id()).is_some(),
+                    names.get(e.id()).map(|n| n.0.as_str()),
+                ) {
+                    continue;
                 }
                 editor_state.selection.entities.insert(e);
             }
@@ -133,6 +135,7 @@ pub fn handle_editor_shortcuts(
                 let hidden = world.borrow::<gizmo::core::component::IsHidden>();
                 let deleted = world.borrow::<gizmo::core::component::IsDeleted>();
                 let names = world.borrow::<gizmo::core::component::EntityName>();
+                let markers = world.borrow::<gizmo::core::component::EditorOnly>();
                 hidden
                     .iter()
                     .filter(|(id, _)| {
@@ -140,10 +143,11 @@ pub fn handle_editor_shortcuts(
                         if deleted.contains(*id) {
                             return false;
                         }
-                        if let Some(name) = names.get(*id) {
-                            if name.0.starts_with("Editor ") || name.0 == "Highlight Box" {
-                                return false;
-                            }
+                        if gizmo::core::component::is_editor_only(
+                            markers.get(*id).is_some(),
+                            names.get(*id).map(|n| n.0.as_str()),
+                        ) {
+                            return false;
                         }
                         true
                     })

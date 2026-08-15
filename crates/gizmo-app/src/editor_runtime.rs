@@ -293,11 +293,15 @@ pub fn process_scene_requests(world: &mut World) {
     if clear_req || load_req.is_some() {
         let editor_entities: std::collections::HashSet<u32> = {
             let names = world.borrow::<gizmo_core::EntityName>();
+            let markers = world.borrow::<gizmo_core::component::EditorOnly>();
             names
                 .iter()
                 .filter_map(|(id, _)| {
                     names.get(id).and_then(|n| {
-                        if n.0.starts_with("Editor ") || n.0 == "Highlight Box" {
+                        if gizmo_core::component::is_editor_only(
+                            markers.get(id).is_some(),
+                            Some(n.0.as_str()),
+                        ) {
                             Some(id)
                         } else {
                             None

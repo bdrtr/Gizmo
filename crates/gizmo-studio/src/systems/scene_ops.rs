@@ -122,15 +122,18 @@ pub fn handle_scene_operations(
             editor_state.selection.entities.remove(&ent_id);
 
             // Korumalı objelerin (Editor Kamera, Grid, Işık) silinmesini engelle
-            let mut is_protected = false;
-            if let Some(name) = world.borrow::<gizmo::core::component::EntityName>().get(ent_id.id()) {
-                if name.0.starts_with("Editor ")
-                    || name.0 == "Directional Light"
-                    || name.0 == "Highlight Box"
-                {
-                    is_protected = true;
-                }
-            }
+            // Krom kararı ortak; "Directional Light" ise krom DEĞİL — sahnenin güneşi, ama
+            // varsayılan sahnenin silinmesini istemediğimiz bir parçası. İkisi ayrı gerekçe,
+            // o yüzden ayrı satırda duruyorlar.
+            let is_protected = {
+                let names = world.borrow::<gizmo::core::component::EntityName>();
+                let markers = world.borrow::<gizmo::core::component::EditorOnly>();
+                let name = names.get(ent_id.id()).map(|n| n.0.clone());
+                gizmo::core::component::is_editor_only(
+                    markers.get(ent_id.id()).is_some(),
+                    name.as_deref(),
+                ) || name.as_deref() == Some("Directional Light")
+            };
 
             if is_protected {
                 editor_state.log_warning(&format!("Entity {} korumalı bir objedir ve silinemez.", ent_id.id()));

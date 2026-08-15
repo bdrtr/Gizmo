@@ -30,7 +30,6 @@ gizmo_core::impl_component!(
     ParticleEmitter,
     EditorRenderTarget,
     GameRenderTarget,
-    EditorOnly,
     Decal
 );
 gizmo_core::impl_component!(FluidParticle, FluidHandle, FluidPhase, FluidInteractor);

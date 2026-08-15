@@ -148,7 +148,7 @@ pub fn execute_render_pipeline(
         let renderers = world.borrow::<gizmo::renderer::components::MeshRenderer>();
         let skeletons = world.borrow::<gizmo::renderer::components::Skeleton>();
         let lod_groups = world.borrow::<gizmo::renderer::components::LodGroup>();
-        let editor_only = world.borrow::<gizmo::renderer::components::EditorOnly>();
+        let editor_only = world.borrow::<gizmo::core::component::EditorOnly>();
 
         if let Some(mut q) = world.query::<(&Mesh, &gizmo::physics::components::GlobalTransform, &Material)>() {
             for (e, (mesh, global_trans, mat)) in q.iter_mut() {

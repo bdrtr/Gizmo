@@ -182,6 +182,41 @@ impl EntityName {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct IsHidden;
 
+/// Zero-sized marker meaning "this entity is the editor's own tooling, not scene content":
+/// grids, light icons, selection boxes, handles.
+///
+/// # Why this is in the ECS floor and not in the editor
+///
+/// Because four unrelated layers need the answer and only this one is below all of them: the
+/// hierarchy panel hides these rows, the studio's game view refuses to draw them, the windowed
+/// app's editor runtime skips them, and — the one that matters most — [`crate`]'s sibling
+/// `gizmo-scene` leaves them out of a saved scene. That last consumer cannot see a renderer
+/// component: scene sits beside the renderer in the graph, not above it.
+///
+/// Until this existed, all four asked the same question by **string prefix on the entity name**
+/// (`"Editor "` / `"Highlight Box"`), written out four times. That works only by convention and
+/// fails in a way nobody would debug quickly: an office scene with a desk named "Editor Desk"
+/// loses it from the hierarchy and from every save.
+///
+/// The name rule is still honoured — see [`is_editor_only`] — because scenes saved before this
+/// component existed carry names and not markers.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct EditorOnly;
+
+/// Is this entity the editor's own tooling rather than scene content?
+///
+/// The single place that decides. Callers pass whatever they have — a marker lookup, a name, or
+/// both — because the four call sites reach the world differently and a shared signature that
+/// takes `&World` would force three of them to look up something they already hold.
+///
+/// The legacy half (the name rule) is a **transition**, not a design: it exists so that scenes
+/// written before [`EditorOnly`] still round-trip. New tooling entities should carry the marker
+/// and need no particular name.
+#[inline]
+pub fn is_editor_only(has_marker: bool, name: Option<&str>) -> bool {
+    has_marker || name.is_some_and(|n| n.starts_with("Editor ") || n == "Highlight Box")
+}
+
 /// Zero-sized marker meaning "soft-deleted": the entity is still alive with its id, handles and
 /// components intact, but is meant to be skipped by processing.
 ///
@@ -291,7 +326,7 @@ pub struct MaterialSource {
     pub texture_source: Option<String>,
 }
 
-impl_component!(Parent, Children, EntityName, IsHidden, PrefabRequest, IsDeleted, MeshSource, MaterialSource);
+impl_component!(Parent, Children, EntityName, IsHidden, EditorOnly, PrefabRequest, IsDeleted, MeshSource, MaterialSource);
 
 // ============================================================
 //  Bundle Trait
@@ -500,3 +535,117 @@ impl_bundle_tuple!(A, B, C, D, E, F, G, H, I, J, K, L, M);
 impl_bundle_tuple!(A, B, C, D, E, F, G, H, I, J, K, L, M, N);
 impl_bundle_tuple!(A, B, C, D, E, F, G, H, I, J, K, L, M, N, O);
 impl_bundle_tuple!(A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P);
+
+
+#[cfg(test)]
+mod editor_only_tests {
+    use super::*;
+
+    /// The predicate itself, both halves.
+    #[test]
+    fn the_marker_wins_and_the_legacy_names_still_count() {
+        // The marker alone is enough — no name needed, which is the point of having it.
+        assert!(is_editor_only(true, None));
+        assert!(is_editor_only(true, Some("Enemy")));
+
+        // Legacy: scenes written before the marker existed carry only names.
+        assert!(is_editor_only(false, Some("Editor Grid")));
+        assert!(is_editor_only(false, Some("Editor Light Icon 1")));
+        assert!(is_editor_only(false, Some("Highlight Box")));
+
+        // Content stays content.
+        assert!(!is_editor_only(false, Some("Enemy")));
+        assert!(!is_editor_only(false, None));
+        assert!(
+            !is_editor_only(false, Some("Editor")),
+            "the legacy rule needs the trailing space; a scene object merely named \"Editor\" is \
+             not tooling"
+        );
+        assert!(
+            !is_editor_only(false, Some("My Editor Desk")),
+            "the prefix is anchored — only names that START with it"
+        );
+    }
+
+    /// The name rule's failure mode, stated so it is not mistaken for a design.
+    ///
+    /// A scene object legitimately named "Editor Desk" is invisible in the hierarchy and dropped
+    /// from every save. That is why the marker exists; the rule survives only for old scenes.
+    #[test]
+    fn the_legacy_name_rule_still_swallows_a_legitimately_named_object() {
+        assert!(
+            is_editor_only(false, Some("Editor Desk")),
+            "documented wart: this is what the marker is for"
+        );
+    }
+
+    /// Nothing may re-implement the rule.
+    ///
+    /// It lived in **eight** places — the hierarchy panel (twice), the windowed app's editor
+    /// runtime, two filters in `gizmo-scene`'s snapshot, one in its scene writer, the studio's
+    /// protected-entity set, its delete guard, its select-all shortcut and its play-mode hide.
+    /// Eight copies of one string comparison, and every one of them had to agree about the
+    /// trailing space.
+    #[test]
+    fn the_editor_only_rule_is_written_once() {
+        let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("crates/gizmo-core sits two levels below the workspace root")
+            .to_path_buf();
+        if !workspace.join("crates/gizmo-studio").is_dir() {
+            return; // packaged crate
+        }
+
+        let mut sources = Vec::new();
+        collect_rs(&workspace.join("crates"), &mut sources);
+        collect_rs(&workspace.join("demo"), &mut sources);
+        assert!(sources.len() > 100, "source walk found only {} files", sources.len());
+
+        let this_file = std::path::Path::new(file!()).file_name().unwrap();
+        let mut offenders = Vec::new();
+        for path in &sources {
+            if path.file_name() == Some(this_file) {
+                continue;
+            }
+            let text = std::fs::read_to_string(path).unwrap_or_default();
+            // Production code only. A test that asserts "this got filtered out" names the strings
+            // on purpose and is checking the outcome, not re-deciding it — `gizmo-scene`'s save
+            // test does exactly that. Cutting at the first `#[cfg(test)]` is approximate and
+            // deliberately so: the cost of a miss is a test module that could re-implement the
+            // rule unnoticed, and a test module that did would be caught by its own assertions
+            // disagreeing with production.
+            let code = text.split("#[cfg(test)]").next().unwrap_or("");
+            for (i, line) in code.lines().enumerate() {
+                let t = line.trim_start();
+                if t.starts_with("//") || t.starts_with("///") {
+                    continue;
+                }
+                if line.contains("starts_with(\"Editor \")") || line.contains("== \"Highlight Box\"") {
+                    offenders.push(format!("{}:{}", path.display(), i + 1));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "the editor-only rule must be asked of `component::is_editor_only`, not re-written. \
+             Offenders:\n{}",
+            offenders.join("\n")
+        );
+    }
+
+    fn collect_rs(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if path.file_name().is_some_and(|n| n == "target") {
+                    continue;
+                }
+                collect_rs(&path, out);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                out.push(path);
+            }
+        }
+    }
+}

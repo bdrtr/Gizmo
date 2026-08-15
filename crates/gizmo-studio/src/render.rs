@@ -13,11 +13,13 @@ fn collect_protected_ids(world: &World, editor_camera: u32) -> HashSet<u32> {
 
     {
         let names = world.borrow::<gizmo::core::component::EntityName>();
+        let markers = world.borrow::<gizmo::core::component::EditorOnly>();
         for e in world.iter_alive_entities() {
-            if let Some(name) = names.get(e.id()) {
-                if name.0.starts_with("Editor ") || name.0 == "Highlight Box" {
-                    protected.insert(e.id());
-                }
+            if gizmo::core::component::is_editor_only(
+                markers.get(e.id()).is_some(),
+                names.get(e.id()).map(|n| n.0.as_str()),
+            ) {
+                protected.insert(e.id());
             }
         }
     }

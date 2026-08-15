@@ -227,30 +227,6 @@ pub struct EditorRenderTarget(pub RenderTarget);
 #[derive(Clone)]
 pub struct GameRenderTarget(pub RenderTarget);
 
-/// Marks an entity as part of the editor's own furniture rather than the scene: grids, light
-/// icons, camera boxes, handles.
-///
-/// # What it is for
-///
-/// Two pictures come out of the editor and only one of them should contain this: the scene view,
-/// which you are editing, and the game view, which is meant to be what ships. The pass recording
-/// already suppressed *some* chrome — the grid and the debug lines are skipped in play mode — but
-/// it did so by asking "are we playing?", which cannot see the difference between a light icon and
-/// a lamp. The icons are ordinary unlit cubes; nothing about their geometry says otherwise. So they
-/// were drawn into the game picture too, and a player pressing Play saw the editor's yellow star
-/// hanging in the level.
-///
-/// A marker is the smallest thing that answers the question the render path actually has, which is
-/// not "what mode are we in" but "does this belong to the scene".
-///
-/// # Why it lives here and not in `gizmo-core`
-///
-/// `gizmo-core` is the ECS floor and Stage A's lowest public surface; an editor concept does not
-/// belong in it (ENGINE.md §4). `gizmo-renderer` already carries `EditorRenderTarget` and
-/// `GameRenderTarget` for the same reason: the editor's furniture is a *rendering* concern, and
-/// this is where the batching that must skip it can see it.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct EditorOnly;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]

@@ -164,6 +164,7 @@ impl SceneSnapshot {
         let mut component_count = 0usize;
         let mut dropped_components = 0usize;
         let names = world.borrow::<gizmo_core::EntityName>();
+        let editor_only_markers = world.borrow::<gizmo_core::component::EditorOnly>();
 
         for ent in world.iter_alive_entities() {
             let id = ent.id();
@@ -171,11 +172,12 @@ impl SceneSnapshot {
                 continue;
             }
 
-            // Editor internal entity'lerini atla
-            if let Some(name) = names.get(id) {
-                if name.0.starts_with("Editor ") || name.0 == "Highlight Box" {
-                    continue;
-                }
+            // Editor internal entity'lerini atla — karar `gizmo_core`'da, tek yerde.
+            if gizmo_core::component::is_editor_only(
+                editor_only_markers.get(id).is_some(),
+                names.get(id).map(|n| n.0.as_str()),
+            ) {
+                continue;
             }
 
             let name = names.get(id).map(|n| n.0.clone());
@@ -303,15 +305,17 @@ impl SceneSnapshot {
 
         {
             let names = world.borrow::<gizmo_core::EntityName>();
+            let editor_only_markers = world.borrow::<gizmo_core::component::EditorOnly>();
             for ent in &alive {
                 let id = ent.id();
                 if protected_ids.contains(&id) {
                     continue;
                 }
-                if let Some(name) = names.get(id) {
-                    if name.0.starts_with("Editor ") || name.0 == "Highlight Box" {
-                        continue;
-                    }
+                if gizmo_core::component::is_editor_only(
+                    editor_only_markers.get(id).is_some(),
+                    names.get(id).map(|n| n.0.as_str()),
+                ) {
+                    continue;
                 }
                 
                 if !snap_ids.contains(&id) {

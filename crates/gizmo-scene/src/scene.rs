@@ -454,15 +454,17 @@ impl SceneData {
         let materials = world.borrow::<MaterialSource>();
         let parents = world.borrow::<Parent>();
         let children_store = world.borrow::<Children>();
+        let editor_only_markers = world.borrow::<gizmo_core::component::EditorOnly>();
 
         for &id in &entity_ids {
             let name = names.get(id).map(|n| n.0.clone());
 
-            // Gizmo Studio'nun içsel araçlarını kaydetme
-            if let Some(ref n) = name {
-                if n.starts_with("Editor ") || n == "Highlight Box" {
-                    continue;
-                }
+            // Gizmo Studio'nun içsel araçlarını kaydetme — karar `gizmo_core`'da, tek yerde.
+            if gizmo_core::component::is_editor_only(
+                editor_only_markers.get(id).is_some(),
+                name.as_deref(),
+            ) {
+                continue;
             }
 
             let mesh_source = meshes.get(id).map(|m| m.0.clone());

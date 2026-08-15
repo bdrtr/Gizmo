@@ -117,6 +117,7 @@ pub fn ui_hierarchy(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
     // Entity listesini oluştur
     egui::ScrollArea::vertical().show(ui, |ui| {
         let names = world.borrow::<EntityName>();
+        let editor_only_markers = world.borrow::<gizmo_core::component::EditorOnly>();
         let parents = world.borrow::<Parent>();
         let children_comp = world.borrow::<Children>();
         let is_hidden_comp = world.borrow::<gizmo_core::component::IsHidden>();
@@ -134,10 +135,10 @@ pub fn ui_hierarchy(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
         // Root entity'leri çiz
         for entity in root_entities {
             // Editor-only (Hayali) objeleri hiyerarşide listeleme
-            let is_editor_only = names
-                .get(entity.id())
-                .map(|e| e.0.starts_with("Editor ") || e.0 == "Highlight Box")
-                .unwrap_or(false);
+            let is_editor_only = gizmo_core::component::is_editor_only(
+                editor_only_markers.get(entity.id()).is_some(),
+                names.get(entity.id()).map(|e| e.0.as_str()),
+            );
 
             if state.hide_editor_entities && is_editor_only {
                 continue;
@@ -152,6 +153,7 @@ pub fn ui_hierarchy(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
                 &children_comp,
                 &is_hidden_comp,
                 &is_deleted_comp,
+                &editor_only_markers,
                 &filter_lower,
             );
         }
@@ -171,6 +173,7 @@ fn draw_entity_node(
     children_comp: &gizmo_core::StorageView<Children>,
     is_hidden_comp: &gizmo_core::StorageView<gizmo_core::component::IsHidden>,
     is_deleted_comp: &gizmo_core::StorageView<gizmo_core::component::IsDeleted>,
+    editor_only_markers: &gizmo_core::StorageView<gizmo_core::component::EditorOnly>,
     filter_lower: &str,
 ) {
     let entity_name = names
@@ -179,7 +182,10 @@ fn draw_entity_node(
         .unwrap_or_else(|| format!("Entity_{}", entity.id()));
 
     if state.hide_editor_entities
-        && (entity_name.starts_with("Editor ") || entity_name == "Highlight Box")
+        && gizmo_core::component::is_editor_only(
+            editor_only_markers.get(entity.id()).is_some(),
+            Some(entity_name.as_str()),
+        )
     {
         return;
     }
@@ -205,6 +211,7 @@ fn draw_entity_node(
                             children_comp,
                             is_hidden_comp,
                             is_deleted_comp,
+                            editor_only_markers,
                             filter_lower,
                         );
                     }
@@ -427,6 +434,7 @@ fn draw_entity_node(
                                     children_comp,
                                     is_hidden_comp,
                                     is_deleted_comp,
+                                    editor_only_markers,
                                     filter_lower,
                                 );
                             }
