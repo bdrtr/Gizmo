@@ -1296,3 +1296,33 @@ viewport 182–211 aralığında düz bir soluk yıkama oluyor ve grid yine gör
 Gökyüzünü editörde kullanılabilir kılmak grid ve gizmo renklerinin de yeniden tasarlanmasını
 gerektirir. Blender ve Unity'nin editör arka planını nötr-koyu tutmasının sebebi bu. Kayıt için:
 skybox varlığını eklemek 20 satır, sorun orada değil.
+
+### Editör hattının ilk piksel testleri, ve bulduğu kusur (2026-08-15)
+
+Motorun deferred yolunda on yedi golden piksel testi var; editörün 600 satırlık forward yolunda
+hiç yoktu. `render_parity.rs` ortak *kurulumu* örtüyor (kurulum saf fonksiyon), ama pass kaydı
+gözlemsizdi. Bedeli bu oturumda görüldü: bir aylık açılış çökmesi ve aylarca süren gamma hatası,
+ikisi de ekran görüntüsünde apaçık, ikisi de piksele bakmayan bir test paketine görünmez.
+
+`tests/studio_render_pixels.rs` bu boşluğu kapatıyor: headless renderer, gerçek
+`execute_render_pipeline`, geri okuma. Kaba iddialar bilinçli — golden görüntü editörün *görünüşünü*
+sabitler, oysa görünüş değişmeli; testler yalnızca kaybı "bozuk" demek olan özellikleri tutuyor
+(hiçbir şey çizilmemiş, her şey tek renk, aydınlatılan nesne arkasındaki boşluktan ayırt edilemez).
+
+**Kurulur kurulmaz bir kusur buldu.** Motor yolu `ensure_global_transforms` ile `Transform`'u olup
+`GlobalTransform`'u olmayan mesh'lere bileşeni ekliyor — kendi yorumunda "empty screen footgun".
+Editör yolunda bu adım yoktu; studio'nun koşturduğu sync/propagate sistemleri mevcut bileşeni
+günceller, olmayanı eklemez. Yani `spawn((Transform, Mesh, Material))` oyunda çiziliyor, editörde
+sessizce çizilmiyordu (ölçüm: küp merkezi 44.0, arka plan 34.0 — saf arka plan). Farkın görünür
+bedeli `setup.rs`'te duruyordu: dokuz varlığa elle eklenmiş `GlobalTransform::default()`.
+
+İki kayıt notu daha çürüdü:
+
+- *"Bu testler için önce `StudioState` headless kurulabilir olmalı."* Değilmiş: struct skalarlardan
+  ve bir `Option`'dan ibaret, hat da üç opsiyonel kaynağa bakıyor. İlk denemede koştu. Bu, ölçülmeden
+  kaydedilmiş engellerin bu kod tabanındaki **üçüncüsü** ve üçü de temasta dağıldı (öncekiler:
+  `Scope::create_function`'ın `Send` sınırı, animasyonun imzası).
+- Testin ilk hâli kırmızıydı ve suç renderer'da değildi: küpe tam cepheden bakan kamera tek yüz
+  gösteriyor, tek normal tek gölge veriyor — 153.6..153.6, doğru çıktı, ama "aydınlatma ulaşmıyor"
+  ile birebir aynı görünüyor. Küp döndürüldü; gerekçe testin içinde, yoksa biri "gereksiz" diye
+  siler.
