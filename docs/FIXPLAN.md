@@ -2845,17 +2845,46 @@ yok olması demek değil.
   Gerçek durum "yok" değil, **yarı bağlı**:
   - `scan_assets_directory` yalnızca `AssetManager::new()`'dan, CWD'ye göre sabit `assets/` yolunu
     tarayarak çağrılıyor — editörün kökü `demo/assets` ise hiç taranmıyor.
-  - Kurucu **diske yazıyor** (eksik sidecar'ı üretiyor), ve `AssetManager::new()` render testleri
-    dahil sekiz yerde çağrılıyor.
+  - Kurucu **diske yazıyor** (eksik sidecar'ı üretiyor), ve `AssetManager::new()` **43** yerde
+    çağrılıyor — "sekiz" de yanlıştı. Her demo binary'si, her render testi, stüdyo, ve
+    renderer'ın kendi kurucusu.
   - glTF UUID ile referanslanamıyor: `gltf_mesh_` dalı yolu çözümden ÖNCE ayıklıyor.
   - Hiçbir yazıcı sahneye UUID koymuyor, ve mekanizmanın hiç testi yoktu.
 
-  ✅ Bu turda yapılan: salt-okuyan `read_asset_meta` + tarayıcının detay sütunu (type/size/folder/
-  guid). Kimlik ÜRETMİYOR — tıklamayla UUID basmak, kullanıcının yalnızca baktığı dosyaları
-  damgalamak olurdu. Dört test, biri özellikle "okumak sidecar yaratmaz" diyor.
-  ⬜ Kalan ve kararı verilmedi: kurucudaki yazma yan etkisi, `demo/assets`'in taranmaması, glTF'in
-  UUID alamaması, ve sahnelerin UUID yazması. `detail` alanı da eklenmedi: görüntü boyutu bir
-  decode ve `image` bağımlılığı ister, ölçmediğimiz satırı basmayız.
+  ✅ Bu turda yapılan (1/2): salt-okuyan `read_asset_meta` + tarayıcının detay sütunu (type/size/
+  folder/guid). Kimlik ÜRETMİYOR — tıklamayla UUID basmak, kullanıcının yalnızca baktığı dosyaları
+  damgalamak olurdu. Dört test, biri özellikle "okumak sidecar yaratmaz" diyor. `detail` alanı
+  eklenmedi: görüntü boyutu bir decode ve `image` bağımlılığı ister, ölçmediğimiz satırı basmayız.
+
+  ✅ Bu turda yapılan (2/2) — **kurucunun yan etkisi kesildi** (2026-08-16). `AssetManager::new()`
+  artık dosya sistemine hiç dokunmuyor, ve tarama iki ayrı işleme bölündü:
+  `scan_assets_directory` (salt-okur; sidecar'ı olmayan varlığı atlar) ve `import_assets_directory`
+  (eksik olanı üretir). Yazmak artık bir *proje-içe-aktarma eylemi*, bir dizinin yürünmüş olmasının
+  yan ürünü değil.
+
+  Kesmenin bedeli **sıfır** oldu, ve bunu ölçtüm: haritaları okuyan tek şey
+  `resolve_path_from_meta_source`, ve onun UUID dalı yalnızca kaynak dizesi bir UUID ise girilir.
+  Ağaçtaki hiçbir `.scene`/`.ron`/`.prefab` dosyası UUID biçimi içermiyor (arandı, sıfır sonuç), yani
+  o dal bugün hiç çalışmıyor; yol dalı haritaya zaten bakmıyor. Yani 43 kurucunun yaptığı disk
+  yürüyüşü ve yazma, **hiçbir okuyucusu olmayan** bir şey üretiyordu.
+
+  Sidecar'la kimliğin sınırı da ölçüldü: `assets/` altında **6** canlı varlığa karşı **16** sidecar
+  var, yani 10'u silinmiş `.glb`'lerin yetimi. Sidecar dosya adıyla birlikte yaşıyor — dosyayı eski
+  adıyla geri koymak kimliği kurtarır, yeniden adlandırmak kurtarmaz. Yetimler silinmedi: aynı adlı
+  bir dosya geri gelirse kimliği geri veriyorlar, ve bu kullanıcının varlık ağacı.
+
+  ⬜ Kalan ve kararı verilmedi: `demo/assets`'in hiç taranmaması, glTF'in UUID alamaması, ve
+  sahnelerin UUID yazması. Üçü tek bir soruya bağlı — sahneler kimliğe *geçecek mi* — ve o soru
+  cevaplanmadan tarayıcıyı bağlamak spekülasyon olurdu.
+
+  **Testin kendisi hakkında bir not:** ilk yazdığım çalışma-zamanı testi ("kurucu kur, haritalar boş
+  mu bak") kusuru **yakalamıyordu**, ve bunu kusuru geri koyarak ölçtüm. Eski kod CWD'ye göre
+  `assets/` tarıyor; `cargo test` altında CWD `crates/gizmo-renderer/` ve orada `assets/` yok, yani
+  tarama ilk `is_dir()`'de dönüyor ve test hatayla birlikte yeşil kalıyor. `set_current_dir` süreç
+  geneli olduğu için diğer testlerle yarışırdı. Bu yüzden muhafız kaynağı okuyor: `new()`'in gövdesi
+  parantez eşleyerek ayıklanıyor (dosyanın tamamı taranmıyor — test modülünün kendi metni aramayı
+  karşılayamasın diye) ve içinde `fs::`/`read_dir`/`Path::new`/tarama çağrısı geçmemesi
+  doğrulanıyor. Her iki muhafız da kusur geri konarak kırmızıya döndürüldü.
 - ✅ **Script'in dışa açtığı özellikler** (2026-08-16). Script `properties = { open_speed = 2.4,
   locked = false }` diye bildiriyor; motor bunu script'in kendi env'inden geri okuyor
   (`declared_properties`) ve editör satırları oradan listeliyor. Varlık başına değerler

@@ -243,8 +243,24 @@ impl Default for AssetManager {
 }
 
 impl AssetManager {
+    /// An empty manager. **Touches no filesystem.**
+    ///
+    /// This used to end with `scan_assets_directory(Path::new("assets"))`, which walked a
+    /// CWD-relative directory and *wrote* a `.meta` sidecar next to every asset that lacked one.
+    /// There are 43 call sites — every demo binary, every render test, the studio, the renderer's
+    /// own constructor — so constructing a manager for any reason stamped files into whatever
+    /// asset tree happened to sit beside the working directory.
+    ///
+    /// What that bought: nothing anything reads. The UUID maps it filled are consumed by exactly
+    /// one function, [`Self::resolve_path_from_meta_source`], and only on its UUID branch — which
+    /// requires a scene, material or prefab to *store* a UUID. None does; `.meta` files are the
+    /// only place a UUID appears in this tree. The path branch normalises its argument and never
+    /// looks at the maps.
+    ///
+    /// Registration is now something a caller asks for: [`Self::scan_assets_directory`] to read
+    /// identities that already exist, [`Self::import_assets_directory`] to mint the missing ones.
     pub fn new() -> Self {
-        let mut manager = Self {
+        Self {
             mesh_cache: std::collections::HashMap::new(),
             texture_cache: std::collections::HashMap::new(),
             placeholder_mesh: None,
@@ -252,9 +268,7 @@ impl AssetManager {
             path_to_uuid: std::collections::HashMap::new(),
             uuid_to_path: std::collections::HashMap::new(),
             embedded_assets: std::collections::HashMap::new(),
-        };
-        manager.scan_assets_directory(Path::new("assets"));
-        manager
+        }
     }
 
     /// Serbest bırakılmış GPU kaynaklarını (mesh/texture) cache'ten siler.
@@ -497,12 +511,33 @@ impl AssetManager {
 
     // ── Asset scanning ────────────────────────────────────────────────────
 
-    /// Recursively scan `dir` for known asset extensions, creating or
-    /// reading `.meta` sidecar files to assign stable UUIDs.
+    /// Recursively register the assets under `dir` that **already** carry a `.meta` sidecar.
     ///
-    /// Safe to call multiple times — existing entries are updated, not
-    /// duplicated.
+    /// Read-only: an asset with no sidecar is skipped, not stamped. Minting is
+    /// [`Self::import_assets_directory`], which is a separate call because it is a separate
+    /// decision — writing into someone's asset tree is an action a project-import flow takes
+    /// deliberately, not a thing that happens because a directory got walked.
+    ///
+    /// Safe to call repeatedly; entries are updated, not duplicated.
     pub fn scan_assets_directory(&mut self, dir: &Path) {
+        self.walk_assets(dir, false);
+    }
+
+    /// Like [`Self::scan_assets_directory`], but **writes**: any asset with no `.meta` sidecar
+    /// gets a fresh UUID and a sidecar next to it.
+    ///
+    /// This is the import action. Note what identity by sidecar can and cannot do: the sidecar
+    /// travels with the filename, so a rename orphans it and mints a new UUID for the new name —
+    /// this repository's own `assets/` holds 10 orphaned sidecars from deleted `.glb` files
+    /// against 6 live assets. Re-adding a file under its old name recovers the old identity;
+    /// renaming does not preserve it.
+    pub fn import_assets_directory(&mut self, dir: &Path) {
+        self.walk_assets(dir, true);
+    }
+
+    /// The shared walker. `mint` decides whether a missing sidecar is created or the asset is
+    /// skipped — the only difference between scanning and importing.
+    fn walk_assets(&mut self, dir: &Path, mint: bool) {
         if !dir.is_dir() {
             return;
         }
@@ -522,7 +557,7 @@ impl AssetManager {
             let path = entry.path();
 
             if path.is_dir() {
-                self.scan_assets_directory(&path);
+                self.walk_assets(&path, mint);
                 continue;
             }
 
@@ -553,7 +588,9 @@ impl AssetManager {
             }
 
             let meta_path = PathBuf::from(format!("{}.meta", path.display()));
-            let uuid = self.read_or_create_meta(&path, &meta_path);
+            let Some(uuid) = self.read_meta_or_mint(&path, &meta_path, mint) else {
+                continue; // scanning, and this asset has no identity yet
+            };
 
             let normalized = Self::normalize_path(&path.to_string_lossy());
             self.path_to_uuid.insert(normalized.clone(), uuid);
@@ -561,14 +598,16 @@ impl AssetManager {
         }
     }
 
-    /// Read an existing `.meta` file or create a new one, returning the UUID.
-    fn read_or_create_meta(&self, asset_path: &Path, meta_path: &Path) -> Uuid {
+    /// Read an existing `.meta` file, and mint one only if `mint` is set.
+    ///
+    /// Returns `None` when there is no usable identity and we were not asked to create one.
+    fn read_meta_or_mint(&self, asset_path: &Path, meta_path: &Path, mint: bool) -> Option<Uuid> {
         if meta_path.exists() {
             match std::fs::read_to_string(meta_path)
                 .map_err(|e| e.to_string())
                 .and_then(|s| ron::from_str::<AssetMeta>(&s).map_err(|e| e.to_string()))
             {
-                Ok(meta) => return meta.uuid,
+                Ok(meta) => return Some(meta.uuid),
                 Err(e) => {
                     tracing::error!(
                         "[AssetManager] WARN: corrupt .meta for '{}' ({e}). \
@@ -576,9 +615,13 @@ impl AssetManager {
                          asset will break.",
                         asset_path.display()
                     );
-                    // Fall through to generate a fresh UUID.
+                    // Fall through: an import replaces it, a scan leaves it alone.
                 }
             }
+        }
+
+        if !mint {
+            return None;
         }
 
         let uuid = Uuid::new_v4();
@@ -596,7 +639,7 @@ impl AssetManager {
             Err(e) => tracing::error!("[AssetManager] WARN: RON serialisation failed: {e}"),
         }
 
-        uuid
+        Some(uuid)
     }
 
     // ── Placeholder mesh ──────────────────────────────────────────────────
@@ -663,7 +706,7 @@ impl AssetManager {
 
 /// Reads an asset's `.meta` sidecar, or `None` when it has none.
 ///
-/// The read-only half of `read_or_create_meta`, and the distinction is the point: this never mints
+/// The read-only half of `read_meta_or_mint`, and the distinction is the point: this never mints
 /// an identity. The editor's asset detail pane calls it, and a pane that created a UUID because you
 /// clicked a file would stamp identities onto assets you merely looked at.
 ///
@@ -676,7 +719,7 @@ pub fn read_asset_meta(asset_path: &Path) -> Option<AssetMeta> {
     match ron::from_str::<AssetMeta>(&text) {
         Ok(meta) => Some(meta),
         Err(e) => {
-            // Reported, and deliberately NOT repaired: `read_or_create_meta` answers a corrupt
+            // Reported, and deliberately NOT repaired: `import_assets_directory` answers a corrupt
             // sidecar by minting a fresh UUID, which silently breaks every reference to the old
             // one. Doing that from a mouse click would be worse still.
             tracing::warn!(path = %meta_path.display(), error = %e, "[AssetManager] bozuk .meta sidecar");
@@ -720,7 +763,7 @@ mod asset_meta_tests {
 
     /// No sidecar is `None`, and — the part that matters — reading does not CREATE one.
     ///
-    /// `read_or_create_meta` mints a UUID when the sidecar is missing. This function must not: the
+    /// `import_assets_directory` mints a UUID when the sidecar is missing. This function must not: the
     /// editor calls it when you click a thumbnail, and minting identity from a mouse click would
     /// stamp UUIDs onto files the user merely looked at.
     #[test]
@@ -761,5 +804,174 @@ mod asset_meta_tests {
         let text = ron::ser::to_string(&meta).unwrap();
         let back: AssetMeta = ron::from_str(&text).unwrap();
         assert_eq!(back.uuid, meta.uuid);
+    }
+}
+
+/// Constructing a manager, and scanning with one, must not write to the asset tree.
+///
+/// # What these pin
+///
+/// `AssetManager::new()` used to walk a CWD-relative `assets/` and stamp a `.meta` sidecar next to
+/// every asset that lacked one — from 43 call sites, including every render test and every demo
+/// binary. The first test here fails the moment that scan comes back; the second and third pin the
+/// split that replaced it, so "scan" cannot quietly regain the ability to write.
+#[cfg(test)]
+mod scan_does_not_write_tests {
+    use super::AssetManager;
+    use std::path::{Path, PathBuf};
+
+    /// A directory holding one asset file with no sidecar.
+    ///
+    /// Named by `tag` alone — no counter. A shared counter made the directory name depend on which
+    /// test the harness scheduled first, so a run could land on a name a *previous* run had left
+    /// behind, inherit its minted sidecars, and fail with a count that had nothing to do with the
+    /// code. Tags are unique per test, and the tree is wiped before it is built, so each test gets
+    /// the same directory in the same state every time.
+    fn tree(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("gizmo_scan_{tag}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("nested")).unwrap();
+        std::fs::write(dir.join("thing.png"), b"not really a png").unwrap();
+        std::fs::write(dir.join("nested").join("deep.obj"), b"o cube").unwrap();
+        dir
+    }
+
+    fn sidecars(dir: &Path) -> usize {
+        let mut n = 0;
+        for e in std::fs::read_dir(dir).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                n += sidecars(&p);
+            } else if p.extension().is_some_and(|x| x == "meta") {
+                n += 1;
+            }
+        }
+        n
+    }
+
+    /// The defect itself: the constructor's body must not reach the filesystem.
+    ///
+    /// # Why this reads source instead of behaviour
+    ///
+    /// The obvious runtime test — construct a manager, assert the maps are empty — **does not
+    /// bite**, and I verified that by reintroducing the defect: the old code scanned
+    /// `Path::new("assets")` relative to the process CWD, which under `cargo test` is
+    /// `crates/gizmo-renderer/`, and that directory has no `assets/` subtree. The scan returns at
+    /// its first `is_dir()` check, the maps stay empty, and the test passes with the bug present.
+    /// Making it bite would need `set_current_dir`, which is process-global and would race every
+    /// other test in this binary.
+    ///
+    /// So the instrument matches the invariant: *the constructor performs no I/O*. The body is
+    /// extracted by brace matching rather than scanning the whole file, so nothing in this test
+    /// module can satisfy the search — the failure mode of the first guard test I wrote in this
+    /// codebase, which searched for a string that appeared in its own assertion.
+    #[test]
+    fn the_constructor_body_touches_no_filesystem() {
+        let src = include_str!("mod.rs");
+        let sig = "pub fn new() -> Self {";
+        let start = src.find(sig).expect("AssetManager::new not found — was it renamed?");
+
+        // Brace-match from the opening `{` of the signature to its close.
+        let open = start + sig.len() - 1;
+        let mut depth = 0usize;
+        let mut end = open;
+        for (i, c) in src[open..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = open + i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let body = &src[open..=end];
+        assert!(body.len() > 20, "brace matching failed; the guard would be vacuous");
+
+        for needle in [
+            "scan_assets_directory",
+            "import_assets_directory",
+            "walk_assets",
+            "read_dir",
+            "fs::",
+            "Path::new",
+        ] {
+            assert!(
+                !body.contains(needle),
+                "`AssetManager::new` mentions `{needle}`. The constructor must not touch the \
+                 filesystem: it has 43 call sites — every demo binary, every render test, the \
+                 studio — and the version that scanned a CWD-relative `assets/` stamped `.meta` \
+                 sidecars into whatever asset tree sat next to the working directory. Registration \
+                 belongs to `scan_assets_directory` (read-only) or `import_assets_directory` \
+                 (mints), called by whoever actually wants it."
+            );
+        }
+    }
+
+    /// A freshly constructed manager knows about nothing.
+    ///
+    /// Weaker than the guard above and kept for the behaviour it states directly — see that test
+    /// for why this one cannot catch the original defect on its own.
+    #[test]
+    fn a_new_manager_has_registered_nothing() {
+        let m = AssetManager::new();
+        assert!(m.path_to_uuid.is_empty() && m.uuid_to_path.is_empty());
+    }
+
+    /// Scanning registers what already has identity, and creates none.
+    #[test]
+    fn scanning_reads_existing_identities_and_mints_none() {
+        let dir = tree("scan");
+        // Give exactly one of the two assets an identity.
+        let known = uuid::Uuid::new_v4();
+        std::fs::write(
+            dir.join("thing.png.meta"),
+            ron::ser::to_string(&super::AssetMeta { uuid: known }).unwrap(),
+        )
+        .unwrap();
+
+        let mut m = AssetManager::new();
+        m.scan_assets_directory(&dir);
+
+        assert_eq!(
+            m.path_to_uuid.len(),
+            1,
+            "scan registered {} assets; only the one with a sidecar has an identity to register",
+            m.path_to_uuid.len()
+        );
+        assert_eq!(m.get_uuid(&dir.join("thing.png").to_string_lossy()), Some(known));
+        assert_eq!(
+            sidecars(&dir),
+            1,
+            "scanning minted a sidecar for the asset that had none"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Importing is the half that writes — including into subdirectories.
+    #[test]
+    fn importing_mints_the_missing_sidecars() {
+        let dir = tree("import");
+        let mut m = AssetManager::new();
+        m.import_assets_directory(&dir);
+
+        assert_eq!(m.path_to_uuid.len(), 2, "import missed the nested asset");
+        assert_eq!(sidecars(&dir), 2, "import did not write both sidecars");
+
+        // And a second import is idempotent: identities are read back, not reminted.
+        let first = m.get_uuid(&dir.join("thing.png").to_string_lossy()).unwrap();
+        let mut m2 = AssetManager::new();
+        m2.import_assets_directory(&dir);
+        assert_eq!(
+            m2.get_uuid(&dir.join("thing.png").to_string_lossy()),
+            Some(first),
+            "re-importing changed an asset's identity, breaking every reference to it"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
