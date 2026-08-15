@@ -51,6 +51,14 @@ pub fn ui_inspector(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
 
     let entity_id = primary_entity;
 
+    // The inspector body sits on SURFACE, not on the panel fill.
+    //
+    // The prototype inverts the panel/field relationship the rest of the editor uses: its inspector
+    // is the LIGHTER `#2d2b2b` with field wells cut into it in the darker `#201e1d`. This theme
+    // paints panels CHROME and widgets SURFACE — the other way round — so a field well painted to
+    // spec would be invisible here. Reframing just this panel keeps the finished toolbar,
+    // hierarchy and viewport work untouched while the fields inside can be drawn as designed.
+    egui::Frame::new().fill(crate::theme::palette::SURFACE).show(ui, |ui| {
     egui::ScrollArea::vertical().show(ui, |ui| {
         if sel_len == 1 {
             misc::draw_name_section(ui, world, entity_id, state);
@@ -92,5 +100,6 @@ pub fn ui_inspector(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
                 menu::draw_add_component_menu(ui, world, entity_id, state);
             }
         }
+    });
     });
 }

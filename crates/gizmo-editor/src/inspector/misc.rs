@@ -91,7 +91,7 @@ pub fn draw_animation_player_section(
     let skeletons = world.borrow::<gizmo_renderer::components::Skeleton>();
     if let Some(skel) = skeletons.get(entity_id.id()) {
         egui::CollapsingHeader::new(crate::theme::section_title("Skeleton"))
-            .default_open(false)
+            .default_open(true)
             .show(ui, |ui| {
                 ui.label(format!("Joints: {}", skel.hierarchy.joints.len()));
             });
@@ -130,7 +130,7 @@ pub fn draw_particle_emitter_section(
     {
         if let Some(mut emitter) = emitters.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new(crate::theme::section_title("Particle Emitter"))
-                .default_open(false)
+                .default_open(true)
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.label("Üretim Hızı (Rate):");

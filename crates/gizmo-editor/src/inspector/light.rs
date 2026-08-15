@@ -17,7 +17,7 @@ pub fn draw_point_light_section(
     {
         if let Some(mut light) = lights.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new(crate::theme::section_title("PointLight"))
-                .default_open(false)
+                .default_open(true)
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.label("Renk:");

@@ -44,7 +44,7 @@ pub fn draw_environment_settings(ui: &mut egui::Ui, state: &mut EditorState) {
             });
             
         egui::CollapsingHeader::new(crate::theme::section_title("Depth of Field (Odak)"))
-            .default_open(false)
+            .default_open(true)
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label("Odak Uzaklığı:");

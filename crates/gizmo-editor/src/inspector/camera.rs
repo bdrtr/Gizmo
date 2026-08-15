@@ -16,7 +16,7 @@ pub fn draw_camera_section(
     {
         if let Some(mut cam) = cameras.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new(crate::theme::section_title("Camera"))
-                .default_open(false)
+                .default_open(true)
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.label("FOV:");

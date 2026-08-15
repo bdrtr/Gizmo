@@ -3,7 +3,7 @@ use crate::editor_state::EditorState;
 use egui;
 use gizmo_core::World;
 use gizmo_physics_core::Collider;
-use gizmo_physics_rigid::components::{RigidBody, Velocity};
+use gizmo_physics_rigid::components::{BodyType, RigidBody, Velocity};
 
 
 pub fn draw_velocity_section(
@@ -25,7 +25,7 @@ pub fn draw_velocity_section(
     {
         if let Some(mut v) = velocities.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new(crate::theme::section_title("Velocity"))
-                .default_open(false)
+                .default_open(true)
                 .show(ui, |ui| {
                     ui.label("Doğrusal:");
                     ui.horizontal(|ui| {
@@ -102,8 +102,25 @@ pub fn draw_rigidbody_section(
     {
         if let Some(mut rb) = rigidbodies.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new(crate::theme::section_title("RigidBody"))
-                .default_open(false)
+                .default_open(true)
                 .show(ui, |ui| {
+                    // The prototype's headline segmented control, and the field had no UI at all:
+                    // `RigidBody::body_type` decides whether the solver simulates the body, whether
+                    // gravity applies, and whether it can sleep — and until now the only way to
+                    // change it was in code.
+                    ui.horizontal(|ui| {
+                        ui.label("Tip:");
+                        crate::theme::segmented(
+                            ui,
+                            &mut rb.body_type,
+                            &[
+                                (BodyType::Static, "Static"),
+                                (BodyType::Dynamic, "Dynamic"),
+                                (BodyType::Kinematic, "Kinematic"),
+                            ],
+                        );
+                    });
+
                     ui.horizontal(|ui| {
                         ui.label("Kütle:");
                         ui.add(
