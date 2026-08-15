@@ -1066,10 +1066,44 @@ Kapatılanlar (**2026-08-14**), ayrıntısı §7'de:
 
 ### Scripting
 
-32 doğrulanmış kusurdan üçü düzeltildi: script sırası (`HashMap` → `BTreeMap`, proses başına
-rastgeleydi), on altı komutun sessizce yutulması, ve bir script'in hatasının ötekileri iptal etmesi.
-Açık kalanlar: yürütme/bellek limiti yok (sonsuz Lua döngüsü prosesi asar), NaN/sonsuz doğrulaması
-yok, tek yönlü sandbox (`_G`), tuş haritası her girdisinde yanlış.
+32 doğrulanmış kusurdan **yedisi** düzeltildi. Önceki üçü: script sırası (`HashMap` → `BTreeMap`,
+proses başına rastgeleydi), on altı komutun sessizce yutulması, bir script'in hatasının ötekileri
+iptal etmesi. **2026-08-15'te dördü daha — kayıtta adı geçen bütün açık maddeler:**
+
+- **Tuş haritası her girdisinde yanlıştı.** Lua tablosu **USB HID** kullanım kodları taşıyordu
+  (`w = 17`, `space = 44`), motor ise `winit::KeyCode as u32` saklıyor (KeyW = 41, Space = 62).
+  İkisi de gerçek numaralandırma; aynı numaralandırma değil ve ikisini karşılaştıran hiçbir şey
+  yoktu. En kötüsü: `down = 81` ve `right = 79`, winit'in ArrowRight ve ArrowDown'ı — yani ok
+  tuşlarını okuyan bir script, oyuncu aşağı bastığında sağa gidiyordu. `up`/`left` ise kendi
+  kodlarına denk gelmişti, yani girdi yarı çalışıyor gibi görünüyordu. Test de yakalayamazdı:
+  aynı transkripsiyonu kullanıyordu (17'ye basıp "w" iddia ediyordu) — aynası kopya olan bir ayna
+  testi. Sayılar artık `gizmo_core::input::keys`'te bir kez, winit'in bildirim sırasından
+  üretilmiş; doğrulama winit'i gören crate'te (`gizmo-app`), hiçbir girdi denetimsiz kalmayacak
+  bir kapsam iddiasıyla.
+- **Sonsuz döngü prosesi bitiriyordu.** Ne komut sayacı ne bellek tavanı vardı: `while true do end`
+  yield etmiyor, `call` dönmüyor, kare bitmiyor, pencere kapanma olayını bile işlemiyor. Yakalanacak
+  sinyal ve yardımı dokunacak bir watchdog yok — VM'i ancak VM kesebilir. 10 000 komutta bir çalışan
+  hook **çağrı başına** bütçe harcıyor (kare başına değil: `update` bütün scriptleri koşturur ve
+  ortak bütçe, ilk hatalı script'in herkesinkini harcaması demekti — hata izolasyonundan kaldırılan
+  aynı kusurun başka para birimindeki hâli). Bellek tavanı da taşan ayırmayı yakalanabilir Lua
+  hatasına çeviriyor. Negatif kontrolü farklı: hook kaldırılınca test kırmızıya düşmüyor, **asılıyor**.
+- **`_G` paylaşımlı tabloydu.** Her script kendi env'inde koşuyordu, yani örtük `FOO = 1` yereldi —
+  ama `_G`, env'in `__index`'i üzerinden motorun globals'ına çözülüyordu, dolayısıyla her Lua
+  öğreticisinin "global yapmanın açık yolu" diye yazdığı `_G.FOO = 1` paylaşılan tabloya yazıyordu.
+  Ölçüldü: A `_G.LEAK` yazdı, B `from-a` okudu. Yükleme sırası alfabetik olduğu için bu, sırayla
+  yarışan bir paylaşım. `_G` artık script'in kendi tablosu; okumalar hâlâ düşüyor, yani API ve
+  standart kütüphane aynen görünür.
+- **NaN doğrulaması on bir varyanttan birinde vardı.** `sanitize_dim` yalnız collider ölçülerini
+  kapsıyordu; pozisyon, kuvvet, impuls, hız, kamera fov'u, animasyon hızı ve hasar denetimsizdi.
+  Denetim artık her komutun geçtiği tek yerde — kuyrukta — ve match'i **tam**: `_` kolu yok, yani
+  float taşıyan yeni bir varyant orada derleme hatası (doğrulandı: `E0004`). Komutlar kırpılmıyor,
+  düşürülüyor: kırpılmış bir kuvvet karenin sessizce kabul ettiği yanlış cevaptır.
+
+**Hâlâ açık, ölçülmüş hâliyle:** API tabloları paylaşılan nesneler — bir script'teki
+`input.is_pressed = f` ötekilerde de görünüyor (varsayım değil, denendi). Kapatmak, o tabloları
+Lua'ya salt-okunur yapıp motorun Rust'tan `raw_set` ile güncellemesini ve testlerin dürttüğü özel
+`_keys` alanlarına ne olacağına karar vermeyi gerektiriyor — bu bir satır değil, birkaç cevabı olan
+bir tasarım.
 
 **Teşhis sondası köprüsünün önündeki asıl engel:** `send` özelliğiyle `create_function`'ın kapanışı
 `Send + 'static` olmak zorunda, yani bir Lua callback'i **`&World` yakalayamaz**. Bütün okuma yolu bu
