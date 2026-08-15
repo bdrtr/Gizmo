@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 /// Vehicle API fonksiyonlarını Lua'ya kaydeder
 pub fn register_vehicle_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Result<(), LuaError> {
-    let vehicle_table = lua.create_table()?;
+    crate::api_table::register_protected(lua, "vehicle", |vehicle_table| {
 
     // === ENGINE FORCE (GAZ) ===
     {
@@ -46,9 +46,8 @@ pub fn register_vehicle_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Resu
         )?;
     }
 
-    lua.globals().set("vehicle", vehicle_table)?;
-
-    Ok(())
+        Ok(())
+    })
 }
 
 #[cfg(test)]

@@ -1057,6 +1057,49 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// A script cannot rewrite the engine API out from under the other scripts.
+    ///
+    /// `_G` isolation made a script's *globals* its own. It did not make the API tables its own,
+    /// because `input.is_pressed = f` is not a global write — it is a field write on an object
+    /// every script holds a reference to. Measured before the fix: script A replaced
+    /// `input.is_pressed`, and script B called A's version.
+    ///
+    /// What closes it is a proxy (see `api_table`), and specifically not a bare `__newindex`:
+    /// that metamethod fires only for keys the table does not already have, and every key worth
+    /// clobbering is one it has.
+    #[test]
+    fn a_script_cannot_rewrite_the_api_for_everyone_else() {
+        let dir = std::env::temp_dir().join(format!("gizmo_api_ro_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = dir.join("a_vandal.lua");
+        let b = dir.join("b_victim.lua");
+        std::fs::write(
+            &a,
+            "function on_update(c)\n  input.is_pressed = function(k) return 'CLOBBERED' end\nend\n",
+        )
+        .unwrap();
+        std::fs::write(
+            &b,
+            "function on_update(c)\n  print('sees=' .. tostring(input.is_pressed('w')))\nend\n",
+        )
+        .unwrap();
+
+        let mut engine = ScriptEngine::new().unwrap();
+        engine.load_script(a.to_str().unwrap()).unwrap();
+        engine.load_script(b.to_str().unwrap()).unwrap();
+
+        // The vandal's own frame fails — loudly, with the reason — and the victim's does not.
+        let err = engine.update(&World::new(), &Input::default(), 0.016).unwrap_err();
+        assert!(err.contains("read-only"), "expected a read-only refusal, got: {err}");
+
+        let log = engine.log_queue.lock().unwrap().clone();
+        assert!(
+            log.iter().any(|(_, m)| m.contains("sees=false")),
+            "the neighbour saw a rewritten API: {log:?}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// A script that never returns must lose its frame, not the process.
     ///
     /// `while true do end` in a Lua VM the host has no timeout on is unrecoverable: the call never

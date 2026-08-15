@@ -8,18 +8,18 @@ use mlua::prelude::*;
 
 /// Input API fonksiyonlarını Lua'ya kaydeder
 pub fn register_input_api(lua: &Lua) -> Result<(), LuaError> {
-    let input_table = lua.create_table()?;
+    crate::api_table::register_protected(lua, "input", |input_table| {
 
     // Placeholder fonksiyonlar - her frame update_input_api ile güncellenir
-    input_table.set("_keys", lua.create_table()?)?;
-    input_table.set("_just_keys", lua.create_table()?)?;
-    input_table.set("_mouse_x", 0.0f32)?;
-    input_table.set("_mouse_y", 0.0f32)?;
-    input_table.set("_mouse_dx", 0.0f32)?;
-    input_table.set("_mouse_dy", 0.0f32)?;
-    input_table.set("_mouse_left", false)?;
-    input_table.set("_mouse_right", false)?;
-    input_table.set("_mouse_middle", false)?;
+    input_table.raw_set("_keys", lua.create_table()?)?;
+    input_table.raw_set("_just_keys", lua.create_table()?)?;
+    input_table.raw_set("_mouse_x", 0.0f32)?;
+    input_table.raw_set("_mouse_y", 0.0f32)?;
+    input_table.raw_set("_mouse_dx", 0.0f32)?;
+    input_table.raw_set("_mouse_dy", 0.0f32)?;
+    input_table.raw_set("_mouse_left", false)?;
+    input_table.raw_set("_mouse_right", false)?;
+    input_table.raw_set("_mouse_middle", false)?;
 
     // The name → key-code table comes from `gizmo_core::input::NAMED_KEYS`, not from a copy
     // written here. The copy this replaces held USB HID usage codes (`w = 17`, `space = 44`)
@@ -31,9 +31,7 @@ pub fn register_input_api(lua: &Lua) -> Result<(), LuaError> {
     for (name, code) in gizmo_core::input::NAMED_KEYS {
         key_map.set(*name, *code)?;
     }
-    input_table.set("_key_map", key_map)?;
-
-    lua.globals().set("input", input_table)?;
+    input_table.raw_set("_key_map", key_map)?;
 
     // Lua helper fonksiyonlarını tanımla
     lua.load(
@@ -70,16 +68,17 @@ pub fn register_input_api(lua: &Lua) -> Result<(), LuaError> {
             return false
         end
     "#,
-    )
-    .exec()?;
-
-    Ok(())
+        )
+        .exec()
+    })
 }
 
 /// Her frame Input durumunu Lua'ya aktarır
 #[tracing::instrument(skip_all, name = "script_input_read")]
 pub fn update_input_api(lua: &Lua, input: &Input) -> Result<(), LuaError> {
-    let input_table: LuaTable = lua.globals().get("input")?;
+    // The real table, not the global: the global is a read-only proxy so a script cannot rewrite
+    // the API (see `api_table`), and the engine's own per-frame writes go behind it.
+    let input_table = crate::api_table::raw(lua, "input")?;
 
     // Basılı tuşları Lua table'ına aktar
     let keys = lua.create_table()?;
@@ -95,26 +94,26 @@ pub fn update_input_api(lua: &Lua, input: &Input) -> Result<(), LuaError> {
         }
     }
 
-    input_table.set("_keys", keys)?;
-    input_table.set("_just_keys", just_keys)?;
+    input_table.raw_set("_keys", keys)?;
+    input_table.raw_set("_just_keys", just_keys)?;
 
     let (mx, my) = input.mouse_position();
-    input_table.set("_mouse_x", mx)?;
-    input_table.set("_mouse_y", my)?;
+    input_table.raw_set("_mouse_x", mx)?;
+    input_table.raw_set("_mouse_y", my)?;
 
     let (dx, dy) = input.mouse_delta();
-    input_table.set("_mouse_dx", dx)?;
-    input_table.set("_mouse_dy", dy)?;
+    input_table.raw_set("_mouse_dx", dx)?;
+    input_table.raw_set("_mouse_dy", dy)?;
 
-    input_table.set(
+    input_table.raw_set(
         "_mouse_left",
         input.is_mouse_button_pressed(gizmo_core::input::mouse::LEFT),
     )?;
-    input_table.set(
+    input_table.raw_set(
         "_mouse_right",
         input.is_mouse_button_pressed(gizmo_core::input::mouse::RIGHT),
     )?;
-    input_table.set(
+    input_table.raw_set(
         "_mouse_middle",
         input.is_mouse_button_pressed(gizmo_core::input::mouse::MIDDLE),
     )?;
@@ -133,21 +132,20 @@ mod tests {
     /// while every one of them described the wrong keyboard: the table under test and the table in
     /// the test were the same transcription of USB HID codes, so they agreed with each other and
     /// with nothing else.
+    ///
+    /// Written through the registry rather than from Lua, because the API table is read-only to
+    /// scripts now — and that is the honest path anyway: this is where real input arrives from.
     fn press(lua: &Lua, held: &[&str], just: &[&str]) {
-        let entries = |names: &[&str]| {
-            names
-                .iter()
-                .map(|n| format!("[{}] = true", code_from_name(n).expect("known key")))
-                .collect::<Vec<_>>()
-                .join(", ")
+        let table = |names: &[&str]| {
+            let t = lua.create_table().unwrap();
+            for n in names {
+                t.raw_set(code_from_name(n).expect("known key"), true).unwrap();
+            }
+            t
         };
-        lua.load(format!(
-            "input._keys = {{ {} }} input._just_keys = {{ {} }}",
-            entries(held),
-            entries(just)
-        ))
-        .exec()
-        .unwrap();
+        let input_table = crate::api_table::raw(lua, "input").unwrap();
+        input_table.raw_set("_keys", table(held)).unwrap();
+        input_table.raw_set("_just_keys", table(just)).unwrap();
     }
 
     /// Regression: 'n' and 'w' must not share a code, and each must answer on its own.
@@ -260,16 +258,15 @@ mod tests {
     fn mouse_helpers_read_snapshot() {
         let lua = Lua::new();
         register_input_api(&lua).unwrap();
+        let t = crate::api_table::raw(&lua, "input").unwrap();
+        for (k, v) in [("_mouse_x", 120.0f32), ("_mouse_y", 45.0), ("_mouse_dx", -3.0), ("_mouse_dy", 7.0)] {
+            t.raw_set(k, v).unwrap();
+        }
+        for (k, v) in [("_mouse_left", true), ("_mouse_right", false), ("_mouse_middle", true)] {
+            t.raw_set(k, v).unwrap();
+        }
         lua.load(
             r#"
-            input._mouse_x = 120.0
-            input._mouse_y = 45.0
-            input._mouse_dx = -3.0
-            input._mouse_dy = 7.0
-            input._mouse_left = true
-            input._mouse_right = false
-            input._mouse_middle = true
-
             local p = input.mouse_position()
             assert(p.x == 120.0 and p.y == 45.0, "pozisyon")
             local d = input.mouse_delta()

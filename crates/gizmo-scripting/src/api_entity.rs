@@ -11,12 +11,12 @@ use std::sync::Arc;
 
 /// Entity API fonksiyonlarını Lua'ya kaydeder
 pub fn register_entity_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Result<(), LuaError> {
-    let entity_table = lua.create_table()?;
+    crate::api_table::register_protected(lua, "entity", |entity_table| {
 
     // === POSITION ===
     {
         let cq = command_queue.clone();
-        entity_table.set(
+        entity_table.raw_set(
             "set_position",
             lua.create_function(move |_, (id, x, y, z): (u32, f32, f32, f32)| {
                 cq.push(ScriptCommand::SetPosition(id, Vec3::new(x, y, z)));
@@ -28,7 +28,7 @@ pub fn register_entity_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Resul
     // === ROTATION ===
     {
         let cq = command_queue.clone();
-        entity_table.set(
+        entity_table.raw_set(
             "set_rotation",
             lua.create_function(move |_, (id, x, y, z, w): (u32, f32, f32, f32, f32)| {
                 cq.push(ScriptCommand::SetRotation(id, Quat::from_xyzw(x, y, z, w)));
@@ -40,7 +40,7 @@ pub fn register_entity_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Resul
     // === SCALE ===
     {
         let cq = command_queue.clone();
-        entity_table.set(
+        entity_table.raw_set(
             "set_scale",
             lua.create_function(move |_, (id, x, y, z): (u32, f32, f32, f32)| {
                 cq.push(ScriptCommand::SetScale(id, Vec3::new(x, y, z)));
@@ -52,7 +52,7 @@ pub fn register_entity_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Resul
     // === VELOCITY ===
     {
         let cq = command_queue.clone();
-        entity_table.set(
+        entity_table.raw_set(
             "set_velocity",
             lua.create_function(move |_, (id, x, y, z): (u32, f32, f32, f32)| {
                 cq.push(ScriptCommand::SetVelocity(id, Vec3::new(x, y, z)));
@@ -63,7 +63,7 @@ pub fn register_entity_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Resul
 
     {
         let cq = command_queue.clone();
-        entity_table.set(
+        entity_table.raw_set(
             "set_angular_velocity",
             lua.create_function(move |_, (id, x, y, z): (u32, f32, f32, f32)| {
                 cq.push(ScriptCommand::SetAngularVelocity(id, Vec3::new(x, y, z)));
@@ -75,7 +75,7 @@ pub fn register_entity_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Resul
     // === SPAWN ===
     {
         let cq = command_queue.clone();
-        entity_table.set(
+        entity_table.raw_set(
             "spawn",
             lua.create_function(move |_, (name, x, y, z): (String, f32, f32, f32)| {
                 cq.push(ScriptCommand::SpawnEntity {
@@ -90,7 +90,7 @@ pub fn register_entity_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Resul
     // === SPAWN PREFAB ===
     {
         let cq = command_queue.clone();
-        entity_table.set(
+        entity_table.raw_set(
             "spawn_prefab",
             lua.create_function(
                 move |_, (name, prefab_type, x, y, z): (String, String, f32, f32, f32)| {
@@ -108,7 +108,7 @@ pub fn register_entity_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Resul
     // === DESTROY ===
     {
         let cq = command_queue.clone();
-        entity_table.set(
+        entity_table.raw_set(
             "destroy",
             lua.create_function(move |_, id: u32| {
                 cq.push(ScriptCommand::DestroyEntity(id));
@@ -120,7 +120,7 @@ pub fn register_entity_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Resul
     // === SET NAME ===
     {
         let cq = command_queue.clone();
-        entity_table.set(
+        entity_table.raw_set(
             "set_name",
             lua.create_function(move |_, (id, name): (u32, String)| {
                 cq.push(ScriptCommand::SetEntityName(id, name));
@@ -129,14 +129,41 @@ pub fn register_entity_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Resul
         )?;
     }
 
-    lua.globals().set("entity", entity_table)?;
-    Ok(())
+        // Defined once, at registration: these are static helpers, and the per-frame update path
+        // used to re-`load` them on every frame — which is both wasted work and, now that the API
+        // table is read-only to Lua, a write the proxy rejects.
+        // Lua tarafı get_position(id) gibi helper fonksiyonları kullanır
+        lua.load(
+            r#"
+            function entity.get_position(id)
+                return entity._positions[id] or {x=0, y=0, z=0}
+            end
+            function entity.get_velocity(id)
+                return entity._velocities[id] or {x=0, y=0, z=0}
+            end
+            function entity.get_rotation(id)
+                return entity._rotations[id] or {x=0, y=0, z=0, w=1}
+            end
+            function entity.get_scale(id)
+                return entity._scales[id] or {x=1, y=1, z=1}
+            end
+            function entity.get_name(id)
+                return entity._names[id] or ""
+            end
+        "#,
+        )
+        .exec()?;
+
+        Ok(())
+    })
 }
 
 /// World'den okunan verilerle entity read API'sini günceller (her frame)
 #[tracing::instrument(skip_all, name = "script_entity_read")]
 pub fn update_entity_read_api(lua: &Lua, world: &World) -> Result<(), LuaError> {
-    let entity_table: LuaTable = lua.globals().get("entity")?;
+    // The real table, not the global: the global is a read-only proxy so a script cannot
+    // rewrite the API (see `api_table`), and the engine's per-frame writes go behind it.
+    let entity_table = crate::api_table::raw(lua, "entity")?;
 
     // get_position: World'den doğrudan okunan veriye dayalı closure
     // Her frame snapshot alarak Lua table'ına yazıyoruz
@@ -189,33 +216,12 @@ pub fn update_entity_read_api(lua: &Lua, world: &World) -> Result<(), LuaError> 
     }
 
     // Snapshot table'ları entity API'sine bağla
-    entity_table.set("_positions", positions)?;
-    entity_table.set("_velocities", velocities)?;
-    entity_table.set("_rotations", rotations)?;
-    entity_table.set("_scales", scales)?;
-    entity_table.set("_names", names)?;
+    entity_table.raw_set("_positions", positions)?;
+    entity_table.raw_set("_velocities", velocities)?;
+    entity_table.raw_set("_rotations", rotations)?;
+    entity_table.raw_set("_scales", scales)?;
+    entity_table.raw_set("_names", names)?;
 
-    // Lua tarafı get_position(id) gibi helper fonksiyonları kullanır
-    lua.load(
-        r#"
-        function entity.get_position(id)
-            return entity._positions[id] or {x=0, y=0, z=0}
-        end
-        function entity.get_velocity(id)
-            return entity._velocities[id] or {x=0, y=0, z=0}
-        end
-        function entity.get_rotation(id)
-            return entity._rotations[id] or {x=0, y=0, z=0, w=1}
-        end
-        function entity.get_scale(id)
-            return entity._scales[id] or {x=1, y=1, z=1}
-        end
-        function entity.get_name(id)
-            return entity._names[id] or ""
-        end
-    "#,
-    )
-    .exec()?;
 
     Ok(())
 }

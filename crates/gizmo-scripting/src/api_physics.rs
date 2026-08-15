@@ -24,12 +24,12 @@ fn sanitize_dim(v: f32) -> f32 {
 
 /// Physics API fonksiyonlarını Lua'ya kaydeder
 pub fn register_physics_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Result<(), LuaError> {
-    let physics_table = lua.create_table()?;
+    crate::api_table::register_protected(lua, "physics", |physics_table| {
 
     // === KUVVET UYGULA ===
     {
         let cq = command_queue.clone();
-        physics_table.set(
+        physics_table.raw_set(
             "apply_force",
             lua.create_function(move |_, (id, fx, fy, fz): (u32, f32, f32, f32)| {
                 cq.push(ScriptCommand::ApplyForce(id, Vec3::new(fx, fy, fz)));
@@ -41,7 +41,7 @@ pub fn register_physics_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Resu
     // === İMPULS UYGULA ===
     {
         let cq = command_queue.clone();
-        physics_table.set(
+        physics_table.raw_set(
             "apply_impulse",
             lua.create_function(move |_, (id, ix, iy, iz): (u32, f32, f32, f32)| {
                 cq.push(ScriptCommand::ApplyImpulse(id, Vec3::new(ix, iy, iz)));
@@ -53,7 +53,7 @@ pub fn register_physics_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Resu
     // === RIGIDBODY EKLE ===
     {
         let cq = command_queue.clone();
-        physics_table.set(
+        physics_table.raw_set(
             "add_rigidbody",
             lua.create_function(
                 // Contact friction/restitution live on the collider material, not
@@ -73,7 +73,7 @@ pub fn register_physics_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Resu
     // === COLLIDER EKLE ===
     {
         let cq = command_queue.clone();
-        physics_table.set(
+        physics_table.raw_set(
             "add_box_collider",
             lua.create_function(move |_, (id, hx, hy, hz): (u32, f32, f32, f32)| {
                 cq.push(ScriptCommand::AddBoxCollider {
@@ -89,7 +89,7 @@ pub fn register_physics_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Resu
 
     {
         let cq = command_queue.clone();
-        physics_table.set(
+        physics_table.raw_set(
             "add_sphere_collider",
             lua.create_function(move |_, (id, radius): (u32, f32)| {
                 cq.push(ScriptCommand::AddSphereCollider {
@@ -101,9 +101,8 @@ pub fn register_physics_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Resu
         )?;
     }
 
-    lua.globals().set("physics", physics_table)?;
-
-    Ok(())
+        Ok(())
+    })
 }
 
 /// Her frame güncel fizik olaylarını (Tetikleyiciler, Çarpışmalar) Lua'ya aktarır
@@ -112,7 +111,9 @@ pub fn update_physics_api(
     lua: &Lua,
     world: &gizmo_core::World,
 ) -> Result<(), LuaError> {
-    let physics_table: LuaTable = lua.globals().get("physics")?;
+    // The real table, not the global: the global is a read-only proxy so a script cannot
+    // rewrite the API (see `api_table`), and the engine's per-frame writes go behind it.
+    let physics_table = crate::api_table::raw(lua, "physics")?;
     
     let triggers = lua.create_table()?;
     let collisions = lua.create_table()?;
@@ -158,8 +159,8 @@ pub fn update_physics_api(
     }
 
     // Her frame listeleri güncelle
-    physics_table.set("triggers", triggers)?;
-    physics_table.set("collisions", collisions)?;
+    physics_table.raw_set("triggers", triggers)?;
+    physics_table.raw_set("collisions", collisions)?;
     
     Ok(())
 }
@@ -175,11 +176,9 @@ mod tests {
     #[test]
     fn test_update_physics_api() {
         let lua = Lua::new();
-        let globals = lua.globals();
-        
-        // build_physics_api initializes the `physics` global table
-        let physics_table = lua.create_table().unwrap();
-        globals.set("physics", physics_table).unwrap();
+        // Register the API the way the engine does: the update path reads the real table from the
+        // registry, and a hand-built global is a different table that nothing writes to.
+        register_physics_api(&lua, Arc::new(CommandQueue::new())).unwrap();
 
         let mut world = World::new();
         let ent1 = world.spawn();
@@ -315,8 +314,7 @@ mod tests {
     #[test]
     fn update_without_physics_world_yields_empty_lists() {
         let lua = Lua::new();
-        let globals = lua.globals();
-        globals.set("physics", lua.create_table().unwrap()).unwrap();
+        register_physics_api(&lua, Arc::new(CommandQueue::new())).unwrap();
 
         let world = World::new(); // PhysicsWorld kaynağı eklenmedi
         update_physics_api(&lua, &world).unwrap();
@@ -336,7 +334,7 @@ mod tests {
     #[test]
     fn collision_event_status_maps_stay_and_exit() {
         let lua = Lua::new();
-        lua.globals().set("physics", lua.create_table().unwrap()).unwrap();
+        register_physics_api(&lua, Arc::new(CommandQueue::new())).unwrap();
 
         let mut world = World::new();
         let a = world.spawn();

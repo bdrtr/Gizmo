@@ -9,12 +9,12 @@ use std::sync::Arc;
 
 /// Scene + Game API fonksiyonlarını Lua'ya kaydeder
 pub fn register_scene_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Result<(), LuaError> {
-    let scene_table = lua.create_table()?;
+    crate::api_table::register_protected(lua, "scene", |scene_table| {
 
     // --- SAHNE KAYDET / YÜKLE ---
     {
         let cq = command_queue.clone();
-        scene_table.set(
+        scene_table.raw_set(
             "save",
             lua.create_function(move |_, path: String| {
                 cq.push(ScriptCommand::SaveScene(path));
@@ -24,7 +24,7 @@ pub fn register_scene_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Result
     }
     {
         let cq = command_queue.clone();
-        scene_table.set(
+        scene_table.raw_set(
             "load",
             lua.create_function(move |_, path: String| {
                 cq.push(ScriptCommand::LoadScene(path));
@@ -33,10 +33,32 @@ pub fn register_scene_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Result
         )?;
     }
 
-    lua.globals().set("scene", scene_table)?;
+        // Defined once, at registration — the update path re-loaded them every frame, which the
+        // comment there called "idempotent" and which the read-only proxy now rejects outright.
+        lua.load(
+            r#"
+            function scene.get_all_entities()
+                return scene._entities or {}
+            end
+
+            function scene.find_by_name(name)
+                return scene._name_map[name]
+            end
+
+            function scene.entity_count()
+                local count = 0
+                for _ in pairs(scene._entities or {}) do count = count + 1 end
+                return count
+            end
+        "#,
+        )
+        .exec()?;
+
+        Ok(())
+    })?;
 
     // --- DİYALOG ---
-    let dialogue_table = lua.create_table()?;
+    crate::api_table::register_protected(lua, "dialogue", |dialogue_table| {
     {
         let cq = command_queue.clone();
         dialogue_table.set(
@@ -63,10 +85,11 @@ pub fn register_scene_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Result
             })?,
         )?;
     }
-    lua.globals().set("dialogue", dialogue_table)?;
+        Ok(())
+    })?;
 
     // --- ARA SAHNE (CUTSCENE) ---
-    let cutscene_table = lua.create_table()?;
+    crate::api_table::register_protected(lua, "cutscene", |cutscene_table| {
     {
         let cq = command_queue.clone();
         cutscene_table.set(
@@ -87,10 +110,11 @@ pub fn register_scene_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Result
             })?,
         )?;
     }
-    lua.globals().set("cutscene", cutscene_table)?;
+        Ok(())
+    })?;
 
     // --- YARIŞ SİSTEMİ ---
-    let race_table = lua.create_table()?;
+    crate::api_table::register_protected(lua, "race", |race_table| {
     {
         let cq = command_queue.clone();
         race_table.set(
@@ -149,10 +173,11 @@ pub fn register_scene_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Result
             })?,
         )?;
     }
-    lua.globals().set("race", race_table)?;
+        Ok(())
+    })?;
 
     // --- KAMERA ---
-    let camera_table = lua.create_table()?;
+    crate::api_table::register_protected(lua, "camera", |camera_table| {
     {
         let cq = command_queue.clone();
         camera_table.set(
@@ -173,7 +198,8 @@ pub fn register_scene_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Result
             })?,
         )?;
     }
-    lua.globals().set("camera", camera_table)?;
+        Ok(())
+    })?;
 
     Ok(())
 }
@@ -181,14 +207,16 @@ pub fn register_scene_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Result
 /// Her frame sahne verisini Lua'ya günceller (entity listesi, isim arama)
 #[tracing::instrument(skip_all, name = "script_scene_read")]
 pub fn update_scene_api(lua: &Lua, world: &World) -> Result<(), LuaError> {
-    let scene_table: LuaTable = lua.globals().get("scene")?;
+    // The real table, not the global: the global is a read-only proxy so a script cannot
+    // rewrite the API (see `api_table`), and the engine's per-frame writes go behind it.
+    let scene_table = crate::api_table::raw(lua, "scene")?;
 
     // Entity listesini güncelle
     let entities_table = lua.create_table()?;
     for (idx, entity) in world.iter_alive_entities().into_iter().enumerate() {
         entities_table.set(idx + 1, entity.id())?;
     }
-    scene_table.set("_entities", entities_table)?;
+    scene_table.raw_set("_entities", entities_table)?;
 
     // İsim → ID eşleme tablosu
     let name_map = lua.create_table()?;
@@ -198,27 +226,8 @@ pub fn update_scene_api(lua: &Lua, world: &World) -> Result<(), LuaError> {
             name_map.set(n.0.clone(), eid)?;
         }
     }
-    scene_table.set("_name_map", name_map)?;
+    scene_table.raw_set("_name_map", name_map)?;
 
-    // Lua helper'ları (sadece bir kere yüklenmeli ama idempotent)
-    lua.load(
-        r#"
-        function scene.get_all_entities()
-            return scene._entities or {}
-        end
-
-        function scene.find_by_name(name)
-            return scene._name_map[name]
-        end
-
-        function scene.entity_count()
-            local count = 0
-            for _ in pairs(scene._entities or {}) do count = count + 1 end
-            return count
-        end
-    "#,
-    )
-    .exec()?;
 
     Ok(())
 }

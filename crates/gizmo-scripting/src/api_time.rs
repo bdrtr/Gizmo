@@ -6,13 +6,12 @@ use mlua::prelude::*;
 
 /// Time API fonksiyonlarını Lua'ya kaydeder
 pub fn register_time_api(lua: &Lua) -> Result<(), LuaError> {
-    let time_table = lua.create_table()?;
+    crate::api_table::register_protected(lua, "time", |time_table| {
 
-    time_table.set("_dt", 0.0f32)?;
-    time_table.set("_elapsed", 0.0f32)?;
-    time_table.set("_fps", 60.0f32)?;
+    time_table.raw_set("_dt", 0.0f32)?;
+    time_table.raw_set("_elapsed", 0.0f32)?;
+    time_table.raw_set("_fps", 60.0f32)?;
 
-    lua.globals().set("time", time_table)?;
 
     // Lua helper fonksiyonları
     lua.load(
@@ -32,15 +31,18 @@ pub fn register_time_api(lua: &Lua) -> Result<(), LuaError> {
     )
     .exec()?;
 
-    Ok(())
+        Ok(())
+    })
 }
 
 /// Her frame zaman verisini günceller
 pub fn update_time_api(lua: &Lua, dt: f32, elapsed: f32, fps: f32) -> Result<(), LuaError> {
-    let time_table: LuaTable = lua.globals().get("time")?;
-    time_table.set("_dt", dt)?;
-    time_table.set("_elapsed", elapsed)?;
-    time_table.set("_fps", fps)?;
+    // The real table, not the global: the global is a read-only proxy so a script cannot
+    // rewrite the API (see `api_table`), and the engine's per-frame writes go behind it.
+    let time_table = crate::api_table::raw(lua, "time")?;
+    time_table.raw_set("_dt", dt)?;
+    time_table.raw_set("_elapsed", elapsed)?;
+    time_table.raw_set("_fps", fps)?;
     Ok(())
 }
 

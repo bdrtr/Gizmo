@@ -8,16 +8,16 @@ use mlua::prelude::*;
 use std::sync::Arc;
 
 pub fn register_fighter_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Result<(), LuaError> {
-    let fighter_table = lua.create_table()?;
+    crate::api_table::register_protected(lua, "fighter", |fighter_table| {
 
     // Oku-Yaz tablosu
-    fighter_table.set("_buffers", lua.create_table()?)?;
-    fighter_table.set("_is_locked", lua.create_table()?)?;
+    fighter_table.raw_set("_buffers", lua.create_table()?)?;
+    fighter_table.raw_set("_is_locked", lua.create_table()?)?;
 
     // === SET FIGHTER MOVE ===
     {
         let cq = command_queue.clone();
-        fighter_table.set(
+        fighter_table.raw_set(
             "set_move",
             lua.create_function(
                 move |_, (id, name, startup, active, recovery, damage): (u32, String, u32, u32, u32, f32)| {
@@ -38,7 +38,7 @@ pub fn register_fighter_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Resu
     // === APPLY HITSTOP ===
     {
         let cq = command_queue.clone();
-        fighter_table.set(
+        fighter_table.raw_set(
             "apply_hitstop",
             lua.create_function(move |_, (id, frames): (u32, u32)| {
                 cq.push(ScriptCommand::ApplyHitstop(id, frames));
@@ -50,7 +50,7 @@ pub fn register_fighter_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Resu
     // === APPLY HITSTUN ===
     {
         let cq = command_queue.clone();
-        fighter_table.set(
+        fighter_table.raw_set(
             "apply_hitstun",
             lua.create_function(move |_, (id, frames): (u32, u32)| {
                 cq.push(ScriptCommand::ApplyHitstun(id, frames));
@@ -59,7 +59,6 @@ pub fn register_fighter_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Resu
         )?;
     }
 
-    lua.globals().set("fighter", fighter_table)?;
 
     // Lua tarafında kombo kontrol eden yardımcı fonksiyon
     lua.load(
@@ -100,12 +99,15 @@ pub fn register_fighter_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Resu
     )
     .exec()?;
 
-    Ok(())
+        Ok(())
+    })
 }
 
 #[tracing::instrument(skip_all, name = "script_fighter_read")]
 pub fn update_fighter_read_api(lua: &Lua, world: &World) -> Result<(), LuaError> {
-    let fighter_table: LuaTable = lua.globals().get("fighter")?;
+    // The real table, not the global: the global is a read-only proxy so a script cannot
+    // rewrite the API (see `api_table`), and the engine's per-frame writes go behind it.
+    let fighter_table = crate::api_table::raw(lua, "fighter")?;
 
     let buffers = lua.create_table()?;
     let is_locked = lua.create_table()?;
@@ -138,8 +140,8 @@ pub fn update_fighter_read_api(lua: &Lua, world: &World) -> Result<(), LuaError>
         }
     }
 
-    fighter_table.set("_buffers", buffers)?;
-    fighter_table.set("_is_locked", is_locked)?;
+    fighter_table.raw_set("_buffers", buffers)?;
+    fighter_table.raw_set("_is_locked", is_locked)?;
 
     Ok(())
 }

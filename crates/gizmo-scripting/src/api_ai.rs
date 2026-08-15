@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 /// AI API fonksiyonlarını Lua'ya kaydeder
 pub fn register_ai_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Result<(), LuaError> {
-    let ai_table = lua.create_table()?;
+    crate::api_table::register_protected(lua, "ai", |ai_table| {
 
     // === SET TARGET ===
     {
@@ -47,8 +47,8 @@ pub fn register_ai_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Result<()
         )?;
     }
 
-    lua.globals().set("ai", ai_table)?;
-    Ok(())
+        Ok(())
+    })
 }
 
 #[cfg(test)]

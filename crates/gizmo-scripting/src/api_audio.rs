@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 /// Audio API fonksiyonlarını Lua'ya kaydeder
 pub fn register_audio_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Result<(), LuaError> {
-    let audio_table = lua.create_table()?;
+    crate::api_table::register_protected(lua, "audio", |audio_table| {
 
     // === SES ÇALMA ===
     {
@@ -45,8 +45,8 @@ pub fn register_audio_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Result
         )?;
     }
 
-    lua.globals().set("audio", audio_table)?;
-    Ok(())
+        Ok(())
+    })
 }
 
 #[cfg(test)]

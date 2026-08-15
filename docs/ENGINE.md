@@ -1099,11 +1099,25 @@ iptal etmesi. **2026-08-15'te dördü daha — kayıtta adı geçen bütün aç�
   float taşıyan yeni bir varyant orada derleme hatası (doğrulandı: `E0004`). Komutlar kırpılmıyor,
   düşürülüyor: kırpılmış bir kuvvet karenin sessizce kabul ettiği yanlış cevaptır.
 
-**Hâlâ açık, ölçülmüş hâliyle:** API tabloları paylaşılan nesneler — bir script'teki
-`input.is_pressed = f` ötekilerde de görünüyor (varsayım değil, denendi). Kapatmak, o tabloları
-Lua'ya salt-okunur yapıp motorun Rust'tan `raw_set` ile güncellemesini ve testlerin dürttüğü özel
-`_keys` alanlarına ne olacağına karar vermeyi gerektiriyor — bu bir satır değil, birkaç cevabı olan
-bir tasarım.
+- **API tabloları paylaşılan nesnelerdi** (aynı gün kapatıldı). `_G` yalıtımı bir script'in
+  *global*lerini kendine ait yaptı; API tablolarını yapmadı, çünkü `input.is_pressed = f` bir
+  global yazımı değil, her script'in elinde tuttuğu bir **nesnenin alanına** yazma. Ölçüldü: A
+  `input.is_pressed`'i değiştirdi, B A'nın sürümünü çağırdı.
+  Çözüm çıplak bir `__newindex` **değil** — o metametot yalnız tabloda *olmayan* anahtarlar için
+  tetikleniyor ve ezilmeye değer her anahtar zaten var. Bu yüzden script'in gördüğü global boş bir
+  **proxy**: her okuma ıskalayıp `__index` üzerinden gerçek tabloya gidiyor, her yazma —yeni
+  anahtar olsun olmasın— `__newindex`'e düşüp reddediliyor. Gerçek tablo Lua'nın adlandıramadığı
+  **registry**'de duruyor; `__metatable = false` de `getmetatable` ile çıkarılmasını engelliyor.
+  Motor kendi kare-başı yazımlarını `raw_set` ile yapıyor: yazan motor, okuyan script.
+  Dokuz modülün on dördü tablo bu desene geçti. Yan kazanç: `entity` ve `scene`'in Lua
+  yardımcıları **her frame yeniden tanımlanıyormuş** (kendi yorumu "idempotent" diyordu) — artık
+  kayıt sırasında bir kez.
+  Kırılabildiği doğrulandı: proxy yerine klasik yanlış çözüm (`__newindex`'li gerçek tablo)
+  konunca test kırmızıya düşüyor.
+
+**Hâlâ açık:** bir script kendi env'inde adı gölgeleyebilir (`input = başka_şey`) — ki `_G`
+yalıtımı bunu zararsız kılıyor, gölge o script'e özel. Ve motorun global olarak sunmak yerine
+*değer olarak* verdiği tablolar bu kapsamda değil.
 
 **Teşhis sondası köprüsünün önündeki asıl engel:** `send` özelliğiyle `create_function`'ın kapanışı
 `Send + 'static` olmak zorunda, yani bir Lua callback'i **`&World` yakalayamaz**. Bütün okuma yolu bu
