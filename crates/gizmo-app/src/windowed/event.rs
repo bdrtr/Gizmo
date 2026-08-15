@@ -772,6 +772,9 @@ impl<State: 'static> App<State> {
                                     &renderer.queue,
                                     &mut encoder,
                                     &view,
+                                    // The acquired backbuffer, not the window: the two disagree
+                                    // for one frame on every resize.
+                                    [output.texture.width(), output.texture.height()],
                                     full_output,
                                 );
                             }

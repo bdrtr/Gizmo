@@ -121,6 +121,8 @@ impl EguiContext {
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
+        // Width and height of `view` in physical pixels — see the note on the screen descriptor.
+        target_size: [u32; 2],
         full_output: egui::FullOutput,
     ) {
         self.state
@@ -137,8 +139,20 @@ impl EguiContext {
                 .update_texture(device, queue, *id, image_delta);
         }
 
+        // The size comes from the TARGET, not from the window.
+        //
+        // These are the same number until the moment they are not: winit can hand us a redraw with
+        // an already-updated `inner_size()` before the `Resized` event that reconfigures the
+        // surface has been processed. egui then emits a scissor for the new size against a texture
+        // still sized for the old one, and wgpu rejects the whole command encoder:
+        //
+        //   Scissor Rect { w: 1904, h: 1028 } is not contained in the render target (948, 1028)
+        //
+        // which is a hard crash on any window resize — a tiling WM rearranging the desktop is
+        // enough. A screen descriptor describes the surface being painted, so it has to be read
+        // from that surface.
         let screen_descriptor = ScreenDescriptor {
-            size_in_pixels: [window.inner_size().width, window.inner_size().height],
+            size_in_pixels: target_size,
             pixels_per_point: window.scale_factor() as f32,
         };
 
@@ -175,5 +189,40 @@ impl EguiContext {
         for id in &full_output.textures_delta.free {
             self.renderer.free_texture(id);
         }
+    }
+}
+
+#[cfg(test)]
+mod screen_descriptor_tests {
+    /// egui's screen descriptor must be sized from the render target, never from the window.
+    ///
+    /// The two agree until a resize, and then they do not: winit can deliver a redraw whose
+    /// `inner_size()` is already the new size while the surface is still configured for the old
+    /// one. egui emits a scissor for the new size, wgpu rejects the command encoder, and the editor
+    /// dies —
+    ///
+    ///   Scissor Rect { w: 1904, h: 1028 } is not contained in the render target (948, 1028)
+    ///
+    /// — which is what a tiling window manager rearranging the desktop did to it. There is no unit
+    /// test for "resize the window", so this pins the shape of the fix instead: the descriptor
+    /// reads `target_size`, and the call site fills it from the acquired backbuffer.
+    #[test]
+    fn the_descriptor_is_sized_from_the_target_not_the_window() {
+        let src = include_str!("egui_ctx.rs");
+        let code = src.split("#[cfg(test)]").next().unwrap_or("");
+        assert!(
+            code.contains("size_in_pixels: target_size"),
+            "the screen descriptor must take the target's size"
+        );
+        assert!(
+            !code.contains("size_in_pixels: [window.inner_size()"),
+            "the window's size is not the target's size on the frame a resize lands"
+        );
+
+        let call_site = include_str!("windowed/event.rs");
+        assert!(
+            call_site.contains("[output.texture.width(), output.texture.height()]"),
+            "the caller must measure the backbuffer it just acquired, not the window"
+        );
     }
 }
