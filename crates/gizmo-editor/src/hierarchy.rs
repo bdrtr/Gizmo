@@ -1,6 +1,7 @@
 //! Scene Hierarchy Panel — Sol panel'de entity ağacını gösterir
 
 use crate::editor_state::EditorState;
+use crate::theme::palette::{ACCENT, ACCENT_LIGHT, BORDER_HOT, SURFACE, TEXT_BODY, TEXT_BRIGHT, TEXT_DIM, TEXT_MUTED};
 use egui;
 use gizmo_core::{
     component::{Children, Parent},
@@ -9,14 +10,31 @@ use gizmo_core::{
 
 /// Scene Hierarchy sekmesini çizer
 pub fn ui_hierarchy(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
-    ui.heading("🌍 Sahne Hiyerarşisi");
+    // The prototype's panel header: the name in letterspaced caps, the live count beside it, and
+    // the panel's own actions on the right. A count in the header is not decoration — it is the
+    // one number you check before asking why something is missing.
+    let visible_count = world.iter_alive_entities().len();
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new("H I E R A R C H Y")
+                .size(10.0)
+                .color(TEXT_MUTED),
+        );
+        ui.label(egui::RichText::new(visible_count.to_string()).size(10.0).color(TEXT_DIM));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.toggle_value(&mut state.hide_editor_entities, egui::RichText::new("krom").size(9.0))
+                .on_hover_text("Editörün kendi nesnelerini gizle");
+        });
+    });
     ui.separator();
 
     // Arama kutusu
     ui.horizontal(|ui| {
-        ui.label("🔍");
-        ui.add(egui::TextEdit::singleline(&mut state.hierarchy_filter).desired_width(120.0));
-        ui.checkbox(&mut state.hide_editor_entities, "Gizle");
+        ui.add(
+            egui::TextEdit::singleline(&mut state.hierarchy_filter)
+                .desired_width(f32::INFINITY)
+                .hint_text("Filter entities…"),
+        );
     });
     ui.separator();
 
@@ -159,8 +177,8 @@ pub fn ui_hierarchy(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
         }
     });
 
-    ui.separator();
-    ui.label(format!("Toplam: {} entity", world.entity_count()));
+    // No total at the bottom: the header carries the count, and two of the same number in one
+    // panel invites the reader to work out why they differ.
 }
 
 /// Tek bir entity node'unu recursive olarak çizer
@@ -231,49 +249,110 @@ fn draw_entity_node(
 
     // Düğüm Çizimi + Drag Drop Kapsüllemesi
     let mut draw_row = |ui: &mut egui::Ui| {
-        let icon = if entity_name.to_lowercase().contains("camera") {
-            "📷"
-        } else if entity_name.to_lowercase().contains("light") {
-            "💡"
-        } else {
-            "📦"
-        };
-
-        let label_text = if is_hidden {
-            format!("{} {} (Gizli)", icon, entity_name)
-        } else {
-            format!("{} {}", icon, entity_name)
-        };
-
-        // Tek bir interaction alanı: hem click hem drag (önceki ui.interact çakışmasını önler)
+        // The prototype's row: an indent, a type square, the name, then the component badges
+        // and a visibility dot pinned to the right edge.
         let _row_id = egui::Id::new("hierarchy_row").with(entity.id());
-        let desired_size = egui::vec2(ui.available_width(), ui.spacing().interact_size.y);
+        let desired_size = egui::vec2(ui.available_width(), 19.0);
         let (rect, response) = ui.allocate_exact_size(desired_size, egui::Sense::click_and_drag());
+        let painter = ui.painter();
 
-        // Arka plan — seçili ise vurgu
-        if is_selected || response.hovered() {
-            let bg_color = if is_selected {
-                ui.style().visuals.selection.bg_fill
-            } else {
-                egui::Color32::from_white_alpha(8)
-            };
-            ui.painter().rect_filled(rect, 2.0, bg_color);
+        // Selection is a full-width accent fill, as in the prototype — not a tinted label. It is
+        // the strongest thing on the panel because "which entity am I editing" is the question the
+        // hierarchy exists to answer.
+        if is_selected {
+            painter.rect_filled(rect, 0.0, ACCENT);
+        } else if response.hovered() {
+            painter.rect_filled(rect, 0.0, SURFACE);
         }
 
-        // Metin
-        let text_color = if is_selected {
-            egui::Color32::from_rgb(100, 200, 255)
+        let dim = is_hidden || is_deleted_comp.get(entity.id()).is_some();
+        let name_color = if is_selected {
+            TEXT_BRIGHT
+        } else if dim {
+            TEXT_DIM
+        } else if has_children {
+            TEXT_BRIGHT
         } else {
-            ui.style().visuals.text_color()
+            TEXT_BODY
         };
-        let font = egui::FontId::proportional(13.0);
-        ui.painter().text(
-            rect.left_center() + egui::vec2(4.0, 0.0),
-            egui::Align2::LEFT_CENTER,
-            &label_text,
-            font,
-            text_color,
+
+        // The type square. A filled corner marks a group, mirroring the prototype's disclosure.
+        let sq = egui::Rect::from_center_size(
+            egui::pos2(rect.left() + 12.0, rect.center().y),
+            egui::vec2(7.0, 7.0),
         );
+        painter.rect_stroke(
+            sq,
+            0.0,
+            egui::Stroke::new(1.0_f32, if is_selected { TEXT_BRIGHT } else { BORDER_HOT }),
+            egui::StrokeKind::Inside,
+        );
+        if has_children {
+            painter.rect_filled(sq.shrink(2.0), 0.0, if is_selected { TEXT_BRIGHT } else { BORDER_HOT });
+        }
+
+        let font = egui::FontId::proportional(11.0);
+        let name_pos = egui::pos2(rect.left() + 22.0, rect.center().y);
+        // Anchor the right-hand column to the CLIP rect, not to the row rect: inside a scroll
+        // area the row is allocated the content width, which is wider than what is visible, so
+        // anchoring to `rect.right()` pushes the dot and the badges out past the panel edge —
+        // which is exactly where they went the first time.
+        let right = rect.right().min(ui.clip_rect().right() - 4.0);
+
+        // The visibility dot, clickable. It was buried in the context menu; the prototype puts it
+        // on the row because it is the one per-entity action you take constantly.
+        let dot_c = egui::pos2(right - 8.0, rect.center().y);
+        let dot_color = if is_selected { TEXT_BRIGHT } else if is_hidden { TEXT_DIM } else { TEXT_MUTED };
+        if is_hidden {
+            painter.circle_stroke(dot_c, 3.5, egui::Stroke::new(1.0_f32, dot_color));
+        } else {
+            painter.circle_filled(dot_c, 3.0, dot_color);
+        }
+        let dot_hit = egui::Rect::from_center_size(dot_c, egui::vec2(16.0, 16.0));
+        if ui.rect_contains_pointer(dot_hit) && ui.input(|i| i.pointer.primary_pressed()) {
+            state.toggle_visibility_requests.push(entity);
+        }
+
+        // Component badges, derived from what the entity actually has rather than from its name.
+        let badge_color = if is_selected { TEXT_BRIGHT } else { ACCENT_LIGHT };
+        let mut badge_x = right - 20.0;
+        for tag in entity_badges(world, entity.id()).into_iter().rev() {
+            let bg = painter.layout_no_wrap(tag.to_string(), egui::FontId::proportional(9.0), badge_color);
+            badge_x -= bg.size().x + 6.0;
+            painter.galley(egui::pos2(badge_x, rect.center().y - bg.size().y * 0.5), bg, badge_color);
+        }
+
+        // The name goes in LAST, clipped to whatever the badges left. Drawing it first is what put
+        // "Directional Light" underneath its own `lit` tag: a long name in a 175 px panel runs
+        // straight through the right-hand column.
+        let name_max = (badge_x - 6.0 - name_pos.x).max(24.0);
+        let mut job = egui::text::LayoutJob::single_section(
+            entity_name.clone(),
+            egui::TextFormat { font_id: font, color: name_color, ..Default::default() },
+        );
+        job.wrap = egui::text::TextWrapping {
+            max_width: name_max,
+            max_rows: 1,
+            break_anywhere: true,
+            overflow_character: Some('…'),
+        };
+        let galley = painter.layout_job(job);
+        painter.galley(
+            egui::pos2(name_pos.x, name_pos.y - galley.size().y * 0.5),
+            galley.clone(),
+            name_color,
+        );
+        // Hidden entities are struck through, the way the prototype shows a disabled row — a
+        // greyed name alone reads as "unimportant" rather than "not in the scene right now".
+        if dim {
+            painter.line_segment(
+                [
+                    egui::pos2(name_pos.x, name_pos.y),
+                    egui::pos2(name_pos.x + galley.size().x, name_pos.y),
+                ],
+                egui::Stroke::new(1.0_f32, TEXT_DIM),
+            );
+        }
 
         // Tıklama — seçim
         if response.clicked() {
@@ -403,13 +482,32 @@ fn draw_entity_node(
         // Yatay satır: [▼ toggle] [seçilebilir label]
         let _header_res = ui.horizontal(|ui| {
             // Küçük üçgen toggle butonu (sadece bu alana tıklanınca aç/kapa)
-            let triangle = if is_open { "▼" } else { "▶" };
-            if ui
-                .add(egui::Button::new(
-                    egui::RichText::new(triangle).size(10.0),
-                ).frame(false).min_size(egui::vec2(14.0, 14.0)))
-                .clicked()
+            // Painted, not a glyph. egui's bundled font renders ▼/▶ as empty boxes at this size —
+            // the same missing-glyph problem the toolbar icons had — and a disclosure control that
+            // shows a blank square is worse than none.
+            let (tri_rect, tri_resp) =
+                ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::click());
             {
+                let c = tri_rect.center();
+                let col = if tri_resp.hovered() { TEXT_BRIGHT } else { TEXT_MUTED };
+                let pts = if is_open {
+                    // ▼
+                    vec![
+                        egui::pos2(c.x - 3.5, c.y - 2.0),
+                        egui::pos2(c.x + 3.5, c.y - 2.0),
+                        egui::pos2(c.x, c.y + 2.5),
+                    ]
+                } else {
+                    // ▶
+                    vec![
+                        egui::pos2(c.x - 2.0, c.y - 3.5),
+                        egui::pos2(c.x - 2.0, c.y + 3.5),
+                        egui::pos2(c.x + 2.5, c.y),
+                    ]
+                };
+                ui.painter().add(egui::Shape::convex_polygon(pts, col, egui::Stroke::NONE));
+            }
+            if tri_resp.clicked() {
                 collapsing_state.toggle(ui);
             }
             // Seçilebilir label (ayrı click alanı — seçim burada)
@@ -447,4 +545,33 @@ fn draw_entity_node(
         // Alt elemanı olmayan düz düğüm
         draw_row(ui);
     }
+}
+
+
+/// The short component tags shown at the right edge of a hierarchy row.
+///
+/// Derived from the components an entity actually carries. The prototype shows tags like `lit` and
+/// `rs`; inventing them from the entity's *name* — which is what the row icon used to do, matching
+/// on the substrings "camera" and "light" — would make a crate called "lightbox" claim to be a
+/// lamp. Capped at two: the column is 40 px wide and a row that spells out five components stops
+/// being scannable, which is the only thing this column is for.
+fn entity_badges(world: &World, id: u32) -> Vec<&'static str> {
+    let mut tags = Vec::new();
+    if world.borrow::<gizmo_renderer::components::Camera>().get(id).is_some() {
+        tags.push("cam");
+    }
+    if world.borrow::<gizmo_renderer::components::DirectionalLight>().get(id).is_some()
+        || world.borrow::<gizmo_renderer::components::PointLight>().get(id).is_some()
+        || world.borrow::<gizmo_renderer::components::SpotLight>().get(id).is_some()
+    {
+        tags.push("lit");
+    }
+    if world.borrow::<gizmo_physics_rigid::components::RigidBody>().get(id).is_some() {
+        tags.push("rb");
+    }
+    if world.borrow::<gizmo_physics_core::Collider>().get(id).is_some() {
+        tags.push("col");
+    }
+    tags.truncate(2);
+    tags
 }
