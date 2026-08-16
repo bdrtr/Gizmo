@@ -862,6 +862,15 @@ already auto-vectorized). DO NOT RETRY without passing the step-0 gate again. (T
   project had. CI built that target and never linted it, and it was holding an undocumented public
   function in a crate that denies `missing_docs`, plus a `return` that is needless once the other
   arm is stripped. A green native lint says nothing about the arms it did not compile.
+  - **It caught its first real break the next day** (2026-08-16). Per-object shadow casting added
+    `DrawItem::casts_shadows`, whose only reader is `passes::shadow` — and that module is
+    `#[cfg(not(target_arch = "wasm32"))]`, because the browser pipeline is forward-only and has no
+    shadow pass. So the field is written on every target and read on one, which is `dead_code` on
+    wasm and invisible to the native gate. The field stays (it is part of `BatchKey`; dropping it
+    on wasm would merge objects that disagree about shadows into one batch), so the fix is a
+    targeted `#[cfg_attr(target_arch = "wasm32", allow(dead_code))]` with that reason written
+    down. Worth noting *how* it surfaced: nothing in the native workspace was red — the break sat
+    at HEAD for three commits, and the wasm gate is the only thing that sees this class of defect.
 
 ## Nerede kaldık (2026-08-14 → 15)
 

@@ -128,6 +128,13 @@ pub struct DrawItem {
     pub(super) is_double_sided: bool,
     /// Per-object shadow casting (`MeshRenderer::shadows`). Two objects sharing a mesh and a
     /// material can answer differently, so it belongs in the key.
+    ///
+    /// Read only by `passes::shadow`, which is `#[cfg(not(target_arch = "wasm32"))]` — the browser
+    /// pipeline is forward-only and has no shadow pass at all. The field is still *written* there,
+    /// and deliberately: it is part of `BatchKey`, so removing it on wasm would merge two objects
+    /// that disagree about shadows into one batch and change what the native build has to re-split
+    /// later. So the value is computed everywhere and consumed on one target.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(super) casts_shadows: bool,
     /// Per-object visibility (`ShadowCasting::Only` casts without being drawn).
     pub(super) visible_in_camera: bool,
