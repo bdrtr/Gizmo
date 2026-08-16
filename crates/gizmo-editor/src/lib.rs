@@ -256,7 +256,12 @@ viewer.state.dock_state = dock_state;
     }
 
     // Her çerçevenin sonunda I/O optimizasyonu olarak prefs kirlendiyse dosyaya yaz
-    state.prefs.flush_if_dirty();
+    if let Some(e) = state.prefs.flush_if_dirty() {
+        state.log_error(&format!(
+            "❌ Editör tercihleri kaydedilemedi: {} — ayarlarınız bu oturumdan sonra kalmayacak.",
+            e
+        ));
+    }
 }
 
 /// The prototype's global status bar: a state dot and message on the left, live counts, memory,
