@@ -1,5 +1,10 @@
 <div align="center">
-  <img src="media/logo.png" alt="Gizmo Engine Logo" width="250" />
+  <!-- Görseller MUTLAK URL olmak zorunda. GitHub göreli yolları depoya göre çözer, crates.io
+       çözmez: README'yi kendi alan adından sunar, yani `media/logo.png` orada
+       `https://crates.io/media/logo.png` olur ve 404 verir — crates.io sayfasındaki kırık
+       görsellerin sebebi buydu. `main` referansı, `v0.9.1` gibi bir tag yerine, her sürümde
+       elle güncellenmek zorunda kalmasın diye. -->
+  <img src="https://raw.githubusercontent.com/bdrtr/Gizmo/main/media/logo.png" alt="Gizmo Engine Logo" width="250" />
   <h1>Gizmo Engine</h1>
   <p><strong>A lightweight, ECS-driven 3D game engine and physics simulator written entirely in Rust.</strong></p>
 
@@ -92,11 +97,11 @@ Gizmo is a workspace of small crates layered bottom-up, so you can depend on the
 ## 📸 Showcase
 
 <p float="left">
-  <img src="media/gizmo_city_demo.jpg" width="48%" />
-  <img src="media/gizmo_engine_showcase.png" width="48%" /> 
+  <img src="https://raw.githubusercontent.com/bdrtr/Gizmo/main/media/gizmo_city_demo.jpg" width="48%" />
+  <img src="https://raw.githubusercontent.com/bdrtr/Gizmo/main/media/gizmo_engine_showcase.png" width="48%" /> 
 </p>
 <p align="center">
-  <img src="media/demo_racetrack.jpg" width="70%" />
+  <img src="https://raw.githubusercontent.com/bdrtr/Gizmo/main/media/demo_racetrack.jpg" width="70%" />
 </p>
 
 
@@ -122,9 +127,12 @@ cargo run --release -p demo --bin fluid_rigid
 > `GIZMO_ASSETS` at a directory containing it to get the real thing — see
 > [`assets/README.md`](assets/README.md).
 
-> **Upgrading?** `0.9.0` is a correctness release — two paths to undefined behaviour,
-> one determinism hole, and the reason the crate previously compiled in only one feature
-> configuration. Three public signatures changed, because their old shape *was* the bug.
+> **Upgrading?** `0.9.1` is what follows `0.8.0` on crates.io — `0.9.0` was documented and
+> then never published, so there is nothing to upgrade *from* at that number. It carries the
+> correctness work of both: two paths to undefined behaviour, one determinism hole, the reason
+> the crate previously compiled in only one feature configuration, and the removal of an
+> exported `Sprite` component that nothing could ever draw. Public signatures changed, because
+> their old shape *was* the bug.
 > The whole workspace still ships at one uniform `0.x` version and no API is promised
 > stable yet. See the [`CHANGELOG`](CHANGELOG.md) (and, if coming from `0.1.x`, the
 > [migration guide](docs/ENGINE.md) (§6)).
