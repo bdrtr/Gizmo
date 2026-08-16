@@ -85,7 +85,9 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
             &renderer.device,
             &renderer.queue,
             &renderer.scene.texture_bind_group_layout,
-            "assets/sky.jpg",
+            // `assets/sky.jpg` is not in the repository and never was; the file lives in the
+            // demo crate's own asset directory.
+            "demo/assets/sky.jpg",
         )
         .unwrap();
     world.spawn_bundle((

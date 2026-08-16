@@ -47,11 +47,13 @@ fn setup(world: &mut World, renderer: &Renderer) -> KccState {
         Material::new(checker.clone()).with_pbr(Vec4::new(0.6, 0.6, 0.6, 1.0), 0.8, 0.1);
 
     // --- Gökyüzü kubbesi (skybox dokusu; diskten) ---
-    let sky_path = if std::path::Path::new("tut/assets/sky.jpg").exists() {
-        "tut/assets/sky.jpg"
-    } else {
-        "assets/sky.jpg"
-    };
+    // One path, not a probe. This used to prefer `tut/assets/sky.jpg` and fall back to
+    // `assets/sky.jpg`; `tut/` was renamed to `demo/assets/` long ago and neither branch was
+    // updated, so the preferred path never existed and the fallback never existed either — the
+    // sky has been silently absent from this demo ever since. Both halves are gone: the probe,
+    // because the directory it looked for cannot come back (it is purged from history too), and
+    // the fallback, because it named a file that is not in the repository.
+    let sky_path = "demo/assets/sky.jpg";
     let sky_tex = assets
         .load_material_texture(
             &renderer.device,

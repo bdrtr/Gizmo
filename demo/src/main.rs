@@ -206,7 +206,7 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Domin
             &renderer.device,
             &renderer.queue,
             &renderer.scene.texture_bind_group_layout,
-            "tut/assets/domino_real.png",
+            "demo/assets/domino_real.png",
         )
         .unwrap_or_else(|e| {
             eprintln!(

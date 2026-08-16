@@ -25,7 +25,7 @@ pub(super) fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
             &renderer.device,
             &renderer.queue,
             &renderer.scene.texture_bind_group_layout,
-            "tut/assets/textures/dirt_grass.jpg",
+            "demo/assets/textures/dirt_grass.jpg",
         )
         .unwrap_or_else(|_| {
             asset_manager.create_checkerboard_texture(
@@ -40,7 +40,7 @@ pub(super) fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
             &renderer.device,
             &renderer.queue,
             &renderer.scene.texture_bind_group_layout,
-            "tut/assets/textures/rusty_metal.jpg",
+            "demo/assets/textures/rusty_metal.jpg",
         )
         .unwrap_or_else(|_| {
             asset_manager.create_checkerboard_texture(
@@ -55,7 +55,7 @@ pub(super) fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
             &renderer.device,
             &renderer.queue,
             &renderer.scene.texture_bind_group_layout,
-            "tut/assets/textures/tire_tread.jpg",
+            "demo/assets/textures/tire_tread.jpg",
         )
         .unwrap_or_else(|_| {
             asset_manager.create_checkerboard_texture(
@@ -384,8 +384,8 @@ pub(super) fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
     let mut engine_audio_id = None;
     let mut am = gizmo::prelude::AudioManager::new().ok();
     if let Some(audio_manager) = &mut am {
-        let _ = audio_manager.load_sound("engine", "tut/assets/audio/engine.wav");
-        let _ = audio_manager.load_sound("crash", "tut/assets/audio/crash.wav");
+        let _ = audio_manager.load_sound("engine", "demo/assets/audio/engine.wav");
+        let _ = audio_manager.load_sound("crash", "demo/assets/audio/crash.wav");
         engine_audio_id = audio_manager.play_looped("engine").ok();
         if let Some(id) = engine_audio_id {
             audio_manager.set_volume(id, 0.2); // Idle volume

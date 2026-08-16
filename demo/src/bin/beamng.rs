@@ -244,7 +244,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> BeamNGState {
             &renderer.device,
             &renderer.queue,
             &renderer.scene.texture_bind_group_layout,
-            "tut/assets/sky.jpg",
+            "demo/assets/sky.jpg",
         )
         .unwrap();
     world.spawn_bundle((

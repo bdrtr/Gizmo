@@ -59,11 +59,13 @@ fn setup(world: &mut World, renderer: &Renderer) -> RpgState {
 
     // --- SKYBOX ---
     let skybox_mesh = AssetManager::create_inverted_cube(&renderer.device);
-    let sky_path = if std::path::Path::new("tut/assets/sky.jpg").exists() {
-        "tut/assets/sky.jpg"
-    } else {
-        "assets/sky.jpg"
-    };
+    // One path, not a probe. This used to prefer `tut/assets/sky.jpg` and fall back to
+    // `assets/sky.jpg`; `tut/` was renamed to `demo/assets/` long ago and neither branch was
+    // updated, so the preferred path never existed and the fallback never existed either — the
+    // sky has been silently absent from this demo ever since. Both halves are gone: the probe,
+    // because the directory it looked for cannot come back (it is purged from history too), and
+    // the fallback, because it named a file that is not in the repository.
+    let sky_path = "demo/assets/sky.jpg";
     let sky_tex = asset_manager
         .load_material_texture(
             &renderer.device,
@@ -91,7 +93,11 @@ fn setup(world: &mut World, renderer: &Renderer) -> RpgState {
     // Asenkron Doku Akışı test edilmesi için Ground texture kaynağı bırakıyoruz
     let ground_mat = Material::new(ground_tex.clone())
         .with_pbr(Vec4::new(0.4, 0.6, 0.3, 1.0), 0.9, 0.0)
-        .with_texture_source("assets/textures/grass_high_res.png".to_string());
+        // `assets/textures/grass_high_res.png` is not in the repository and never was, so the
+        // streaming this comment describes never happened: the ground stayed on its checkerboard
+        // placeholder for the whole demo. `dirt_grass.jpg` is the ground texture the demo crate
+        // actually ships, and at 856 KB it is big enough for the async swap to be visible.
+        .with_texture_source("demo/assets/textures/dirt_grass.jpg".to_string());
 
     // --- AÇIK DÜNYA CHUNK ASSETLERİ ---
     println!("LOD TESTİ: Orman Assetleri hazırlanıyor...");
@@ -122,7 +128,11 @@ fn setup(world: &mut World, renderer: &Renderer) -> RpgState {
             Material::new(ground_tex.clone()).with_pbr(Vec4::new(1.0, 0.2, 0.2, 1.0), 0.5, 0.0);
 
         // 3D Spatial Ses Denemesi
-        let mut audio = AudioSource::new("assets/sounds/villager_hum.wav");
+        // A stand-in. `assets/sounds/villager_hum.wav` is not in the repository, so this
+        // spatial-audio demonstration had no sound to be spatial with. `engine.wav` is not a
+        // villager, but it is a real file, and what is under test here is 3D attenuation rather
+        // than what the NPC sounds like.
+        let mut audio = AudioSource::new("demo/assets/audio/engine.wav");
         audio.is_3d = true;
         audio.max_distance = 20.0;
 
