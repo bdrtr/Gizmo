@@ -250,12 +250,12 @@ impl AsyncAssetLoader {
 
     /// Run `gltf::import` off the main thread; upload with `AssetManager::load_gltf_from_import`.
     pub fn request_gltf_import(&self, path: String) -> bool {
-        tracing::info!(">>> request_gltf_import çağrıldı: {}", path);
+        tracing::debug!(path, "gltf import isteği");
         // Poison-recovery: guarded state is plain (queues/sets) and remains consistent
         // even if a thread panicked while holding the lock, so recover instead of panicking.
         let mut g = self.shared.lock().unwrap_or_else(|e| e.into_inner());
         if g.gltf_inflight.contains(&path) {
-            tracing::info!(">>> request_gltf_import: Model zaten yükleniyor!");
+            tracing::debug!(path, "gltf import: aynı yol zaten uçuşta, istek reddedildi");
             return false;
         }
         g.gltf_inflight.insert(path.clone());
@@ -263,7 +263,11 @@ impl AsyncAssetLoader {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let ok = g.job_tx.send(Job::Gltf { path }).is_ok();
-            tracing::info!(">>> request_gltf_import: İşlem gönderildi mi? {}", ok);
+            if !ok {
+                // The worker channel is closed: nothing will ever load again. That is not an
+                // "info" and it is not a `>>>` note to whoever was debugging that day.
+                tracing::error!("gltf iş kuyruğu kapalı — arka plan yükleyici durmuş");
+            }
             ok
         }
         #[cfg(target_arch = "wasm32")]

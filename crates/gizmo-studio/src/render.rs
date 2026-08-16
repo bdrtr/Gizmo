@@ -96,25 +96,33 @@ pub fn render_studio(
 
     // Yeni istekleri loader'a aktar
     if let Some((path, pos)) = gltf_req {
-        tracing::info!(">>> render.rs: gltf_load_request yakalandı: {}", path);
-        let mut handled = false;
-        if let Some(asset_server) = world.get_resource::<gizmo::asset_server::AssetServer>() {
-            tracing::info!(">>> render.rs: AssetServer bulundu, import isteği gönderiliyor...");
-            if asset_server.loader.request_gltf_import(path.clone()) {
-                handled = true;
+        tracing::debug!(path, "gltf yükleme isteği alındı");
+        // The two ways this fails are told apart. They used to share one message — "Model
+        // yüklenemedi veya zaten yükleniyor" — printed for a missing `AssetServer` as well, which
+        // sends the reader looking at their file while the loader was never there to ask.
+        let outcome = match world.get_resource::<gizmo::asset_server::AssetServer>() {
+            None => GltfRequest::NoAssetServer,
+            Some(asset_server) => {
+                if asset_server.loader.request_gltf_import(path.clone()) {
+                    GltfRequest::Started
+                } else {
+                    GltfRequest::AlreadyLoading
+                }
             }
-        } else {
-            tracing::info!(">>> render.rs: HATA - AssetServer bulunamadı!");
-        }
-        if handled {
+        };
+        if outcome == GltfRequest::Started {
             if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
                 ed.pending_async_gltfs.insert(path.clone(), pos.unwrap_or(gizmo::math::Vec3::ZERO));
                 ed.log_info(&format!("⌛ Asenkron model yüklemesi başlatıldı: {}", path));
             }
         } else {
-            tracing::info!(">>> render.rs: HATA - İstek AssetServer tarafından reddedildi veya işlenmedi!");
+            if outcome == GltfRequest::NoAssetServer {
+                // A real error, and it used to be logged at `info` behind a `>>>` prefix, where it
+                // read as scaffolding rather than as the failure it is.
+                tracing::error!(path, "AssetServer kaynağı yok — model yüklenemez");
+            }
             if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
-                ed.log_error(&format!("❌ Model yüklenemedi veya zaten yükleniyor: {}", path));
+                ed.log_error(&gltf_request_message(outcome, &path));
             }
         }
     }
@@ -517,5 +525,100 @@ mod save_reporting_tests {
                 );
             }
         }
+    }
+}
+
+/// What happened to a request to import a glTF asynchronously.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GltfRequest {
+    Started,
+    /// The same path is already in flight; the loader refused a duplicate.
+    AlreadyLoading,
+    /// No `AssetServer` resource in the world. Nothing can be loaded at all.
+    NoAssetServer,
+}
+
+/// The console line for a glTF request that did not start.
+pub(crate) fn gltf_request_message(outcome: GltfRequest, path: &str) -> String {
+    match outcome {
+        GltfRequest::AlreadyLoading => {
+            format!("⌛ Model zaten yükleniyor, istek yok sayıldı: {path}")
+        }
+        GltfRequest::NoAssetServer => {
+            format!("❌ Model yüklenemedi: AssetServer kaynağı yok ({path})")
+        }
+        // Not reachable from the call site, which handles this branch itself.
+        GltfRequest::Started => format!("⌛ Asenkron model yüklemesi başlatıldı: {path}"),
+    }
+}
+
+#[cfg(test)]
+mod gltf_request_tests {
+    use super::*;
+
+    /// The two ways an import can fail must not share one message.
+    ///
+    /// They did: a missing `AssetServer` and a duplicate in-flight request both produced
+    /// "❌ Model yüklenemedi veya zaten yükleniyor". One of those is the user asking twice and the
+    /// other is the loader not existing, and the sentence sends the reader to inspect their file
+    /// in both cases.
+    #[test]
+    fn the_two_failures_are_told_apart() {
+        let busy = gltf_request_message(GltfRequest::AlreadyLoading, "a.glb");
+        let missing = gltf_request_message(GltfRequest::NoAssetServer, "a.glb");
+
+        assert_ne!(busy, missing, "both failures still produce the same sentence");
+        assert!(busy.contains("zaten yükleniyor"), "{busy}");
+        assert!(missing.contains("AssetServer"), "{missing}");
+        assert!(
+            !missing.contains("zaten yükleniyor"),
+            "a missing AssetServer is still being blamed on a duplicate request: {missing}"
+        );
+        for line in [&busy, &missing] {
+            assert!(line.contains("a.glb"), "the path is what makes the line actionable: {line}");
+        }
+    }
+
+    /// No `>>>` scaffolding is left in the workspace, at any level.
+    ///
+    /// There were eight, across three crates, all at `info`: personal debugging notes shipped as
+    /// engine output. Two of them labelled genuine errors — "HATA - AssetServer bulunamadı!" and a
+    /// closed worker channel — which meant they could not be filtered as errors and read as noise
+    /// beside the rest.
+    ///
+    /// A source scan, because the point is that these never reach a user, and no runtime assertion
+    /// can say "this line was never written".
+    #[test]
+    fn no_debug_scaffolding_is_left_in_the_logs() {
+        let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("crates/");
+        let mut found = Vec::new();
+        let mut stack = vec![crates.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    if path.file_name().is_some_and(|n| n == "target") {
+                        continue;
+                    }
+                    stack.push(path);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    let Ok(src) = std::fs::read_to_string(&path) else { continue };
+                    for (n, line) in src.lines().enumerate() {
+                        // This file's own doc comments talk about the marker; only real log calls
+                        // count, which always open the string right after the format macro's `(`.
+                        if line.contains("!(\">>>") {
+                            found.push(format!("{}:{}", path.display(), n + 1));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            found.is_empty(),
+            "debug scaffolding is back in the engine's log output: {found:?}"
+        );
     }
 }
