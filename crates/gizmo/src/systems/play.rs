@@ -57,9 +57,11 @@ pub enum PlayReport<'a> {
 
 /// The edge a script's load attempt just crossed, if any.
 ///
-/// Not gated on the `scripting` feature although only the script pass produces one: the decision
-/// is a set and a `Result`, it needs nothing from Lua, and keeping it always-compiled is what
-/// keeps its tests running in a default build.
+/// The decision needs nothing from Lua — a set and a `Result` — so it is compiled whenever its
+/// tests are, which is what keeps them running in a default (scripting-off) build. It still has
+/// to be gated: without `test` in this list a wasm build, where `scripting` is off, carries an
+/// enum and a function nobody calls, and `-D warnings` is a CI gate. Measured the hard way.
+#[cfg(any(feature = "scripting", test))]
 #[derive(Debug, PartialEq, Eq)]
 enum ReloadEdge {
     Broke(String),
@@ -76,6 +78,7 @@ enum ReloadEdge {
 ///
 /// `failed` is the memory that turns a stream into two edges — the moment it breaks and the
 /// moment it comes back, which are the two a person needs.
+#[cfg(any(feature = "scripting", test))]
 fn reload_edge(
     failed: &mut std::collections::BTreeSet<String>,
     path: &str,

@@ -273,8 +273,13 @@ mod tests {
         let src = include_str!("simulation.rs");
         let code = src.split("#[cfg(test)]").next().unwrap_or("");
 
+        // Whitespace-stripped before matching. The first version of this looked for the call
+        // spelled across three lines exactly as rustfmt had left it, which made it a test of the
+        // formatter and of the checkout's line endings: it went red on Windows only, in CI, for a
+        // file nobody had touched.
+        let compact: String = code.chars().filter(|c| !c.is_whitespace()).collect();
         assert!(
-            code.contains("state\n            .play\n            .step(") || code.contains(".play.step("),
+            compact.contains(".play.step("),
             "the editor must drive gizmo::systems::PlayLoop for its play frame"
         );
         for reimplemented in [
