@@ -1494,8 +1494,14 @@ mod golden_render_tests {
     ///
     /// The scene is a camera INSIDE a cube, which is the cheapest way to see nothing but back
     /// faces: with culling on the frame is empty, with the flag honoured the interior is drawn.
-    /// Reverting either pipeline selection in `passes::geometry` makes the two frames identical
-    /// again and fails here.
+    ///
+    /// **What it actually guards is the G-BUFFER pipeline selection.** This used to claim
+    /// "reverting *either* pipeline selection in `passes::geometry`" fails it; that was measured
+    /// on 2026-08-16 and is not true — reverting the z-prepass arm alone leaves this test green,
+    /// with the old whole-frame assertion just as much as with the current one. It makes sense
+    /// once stated: the prepass only writes depth, and in a scene whose sole occluder is the
+    /// surface under test, a wrong depth arm changes no colour. The z-prepass arm is therefore
+    /// **unguarded**, and saying so is worth more than a sentence that sounds stronger.
     #[test]
     fn a_double_sided_material_is_drawn_from_behind() {
         let _gpu = crate::test_gpu::gpu_lock();
@@ -1516,14 +1522,36 @@ mod golden_render_tests {
             let one_sided = render_from_inside_a_cube(false).await;
             let two_sided = render_from_inside_a_cube(true).await;
 
-            let differing = one_sided
-                .iter()
-                .zip(two_sided.iter())
-                .filter(|(a, b)| a.abs_diff(**b) > 8)
-                .count();
-            let ratio = differing as f32 / one_sided.len() as f32;
+            // The CENTRE is the part of this test that means the same thing on every backend.
+            // The camera sits at the origin inside a cube 16 units across, looking at a wall 8
+            // units away; the ray through the middle of the image lands on that wall under any
+            // projection, so if the flag is honoured those pixels MUST change from background to
+            // surface. What fraction of the *whole* frame changes is a framing question — how
+            // much of the wall the projection covers — and that is exactly what differed between
+            // backends: this assertion was `> 0.5` over the whole frame and macOS/Metal produced
+            // 36.6%, failing a test whose subject was working there.
+            //
+            // Bytes, not pixels, was the other half of it: alpha never changes, so a quarter of
+            // the bytes compared could never differ and the old ratio was capped at 0.75 before
+            // any geometry was drawn. Both checks below count PIXELS and ignore alpha.
+            let (centre_changed, centre_total) = changed_pixels(&one_sided, &two_sided, 32);
+            let centre_ratio = centre_changed as f32 / centre_total as f32;
             assert!(
-                ratio > 0.5,
+                centre_ratio > 0.9,
+                "only {:.1}% of the frame's centre changed when the material was made \
+                 double-sided — the camera is inside the cube, so the middle of the image is a \
+                 wall the engine's deferred path is culling away",
+                100.0 * centre_ratio
+            );
+
+            // A loose whole-frame floor as well. The defect this guards produces IDENTICAL
+            // frames, so it fails at 0% either way; the floor is here so a backend that drew
+            // only a sliver of the interior could not pass on the centre alone. It is set far
+            // below every backend's real figure rather than at the edge of one of them.
+            let (changed, total) = changed_pixels(&one_sided, &two_sided, 128);
+            let ratio = changed as f32 / total as f32;
+            assert!(
+                ratio > 0.25,
                 "only {:.1}% of the frame changed when the material was made double-sided — the \
                  engine's deferred path is culling the back faces it was told to keep",
                 100.0 * ratio
@@ -1568,6 +1596,33 @@ mod golden_render_tests {
         world.spawn_bundle(DirectionalLightBundle::default());
 
         render_world(&mut renderer, &mut world).await
+    }
+
+    /// How many pixels of a centred `side`×`side` block differ between two 128×128 RGBA8 frames,
+    /// and how many were looked at.
+    ///
+    /// A pixel counts as changed when any of R/G/B moves by more than 8. **Alpha is ignored on
+    /// purpose**: these frames are opaque, so including it only dilutes every ratio by a fixed
+    /// quarter and makes a threshold read as stricter than it is.
+    ///
+    /// `side == 128` covers the whole frame.
+    fn changed_pixels(a: &[u8], b: &[u8], side: u32) -> (usize, usize) {
+        const W: u32 = 128;
+        const H: u32 = 128;
+        const BPP: usize = 4;
+        let side = side.min(W).min(H);
+        let x0 = (W - side) / 2;
+        let y0 = (H - side) / 2;
+        let mut changed = 0;
+        for y in y0..y0 + side {
+            for x in x0..x0 + side {
+                let i = (y as usize * W as usize + x as usize) * BPP;
+                if (0..3).any(|c| a[i + c].abs_diff(b[i + c]) > 8) {
+                    changed += 1;
+                }
+            }
+        }
+        (changed, (side * side) as usize)
     }
 
     /// Drive the REAL [`default_render_pass`] over `world` into a 128×128 offscreen target and
