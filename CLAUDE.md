@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Gizmo Engine — a pure-Rust, ECS-driven 3D game engine and physics simulator with **zero external physics dependencies**. Cargo workspace of ~20 crates at uniform version `0.9.0`, published to crates.io (the facade crate `crates/gizmo` is published as **`gizmo-engine`**). Aimed at large-scale, deterministic physics simulation + a WGPU renderer that also runs in the browser via WASM/WebGPU.
+Gizmo Engine — a pure-Rust, ECS-driven 3D game engine and physics simulator with **zero external physics dependencies**. Cargo workspace of ~20 crates at uniform version `0.10.0`, published to crates.io (the facade crate `crates/gizmo` is published as **`gizmo-engine`**). Aimed at large-scale, deterministic physics simulation + a WGPU renderer that also runs in the browser via WASM/WebGPU.
 
 ## Build, test, run
 
