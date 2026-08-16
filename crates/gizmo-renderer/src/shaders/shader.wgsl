@@ -162,6 +162,25 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let base_color = in.inst_albedo.rgb * tex_color.rgb;
     let metallic = clamp(in.inst_pbr.y, 0.0, 1.0);
 
+    // Editor debug views, matching `deferred_lighting.wgsl`'s numbering exactly — the studio's
+    // toolbar sets one uniform and must not mean two different things depending on which path
+    // happens to run.
+    //
+    // These modes were reachable ONLY from the deferred pass, and the studio renders forward: the
+    // toolbar wrote `shading_mode` every frame into a uniform this shader never read, so the
+    // Normals and Albedo chips produced output byte-identical to Lit. Measured before this, at
+    // 128x128: 0 of 65536 bytes differed for either.
+    //
+    // Placed here, before the lighting work, because that work is exactly what these views exist
+    // to bypass. `shading_mode` is 0 for every non-studio caller, so the normal path pays one
+    // comparison.
+    if (scene.shading_mode == 1u) {
+        return vec4<f32>(N * 0.5 + vec3<f32>(0.5), 1.0);
+    }
+    if (scene.shading_mode == 2u) {
+        return vec4<f32>(base_color, 1.0);
+    }
+
     // --- CSM Gölge (PCF) --- 
     // textureSampleCompare uniform control flow gerektirir, non-uniform branch'tan önce hesapla
     var shadow_visibility = 1.0;

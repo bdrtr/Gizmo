@@ -647,7 +647,7 @@ pub fn execute_render_pipeline(
             record_studio_shadow_passes(encoder, renderer, flat_batches.as_slice(), &light_view_proj_cascades);
             record_studio_main_pass(
                 encoder, renderer, world, flat_batches.as_slice(), game_view_proj, &debug_aabbs,
-                show_colliders, true,
+                show_colliders, true, ed_shading_mode,
             );
             // After the main pass, because it needs a pass with no depth attachment of its own.
             record_studio_particle_pass(encoder, renderer);
@@ -792,7 +792,8 @@ fn record_game_view(
         .device
         .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Game View") });
     record_studio_shadow_passes(&mut enc, renderer, batches, &cascades);
-    record_studio_main_pass(&mut enc, renderer, world, batches, None, &[], false, false);
+    // The game view never takes the editor's debug shading: it is the picture the game shows.
+    record_studio_main_pass(&mut enc, renderer, world, batches, None, &[], false, false, 0);
     // No particle pass: the GPU particle compute for this frame is recorded into the caller's
     // encoder, which runs after this one, so drawing them here would show the previous frame's
     // positions. A preview panel is not worth a second compute dispatch.

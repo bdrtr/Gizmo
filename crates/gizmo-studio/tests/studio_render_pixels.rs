@@ -492,6 +492,10 @@ fn the_editor_casts_a_shadow_onto_the_ground() {
 /// for a panel that is actually on screen, and this is what lets both halves of that be tested —
 /// the picture when it is shown, and the absence of the work when it is not.
 fn render_scene_and_game_targets(game_view_visible: bool) -> (Vec<u8>, Vec<u8>) {
+    render_with_shading(game_view_visible, 0)
+}
+
+fn render_with_shading(game_view_visible: bool, shading_mode: u32) -> (Vec<u8>, Vec<u8>) {
     pollster::block_on(async {
         let mut renderer = Renderer::new_headless(W, H, None).await;
         let mut am = AssetManager::new();
@@ -579,6 +583,7 @@ fn render_scene_and_game_targets(game_view_visible: bool) -> (Vec<u8>, Vec<u8>) 
         // the world the studio takes the hidden path and never renders the game camera at all.
         let mut ed = gizmo::editor::EditorState::default();
         ed.game_view_visible = game_view_visible;
+        ed.shading_mode = shading_mode;
         world.insert_resource(ed);
 
         let state = StudioState {
@@ -1082,4 +1087,105 @@ fn shadow_scene(mode: gizmo::renderer::components::ShadowCasting) -> Option<Vec<
         staging.unmap();
         px
     }))
+}
+
+
+/// Mean RGB over a square of the frame.
+fn mean_rgb(px: &[u8], x0: usize, y0: usize, size: usize) -> (f32, f32, f32) {
+    let (mut r, mut g, mut b) = (0u64, 0u64, 0u64);
+    for y in y0..y0 + size {
+        for x in x0..x0 + size {
+            let i = (y * W as usize + x) * 4;
+            r += px[i] as u64;
+            g += px[i + 1] as u64;
+            b += px[i + 2] as u64;
+        }
+    }
+    let n = (size * size) as f32;
+    (r as f32 / n, g as f32 / n, b as f32 / n)
+}
+
+/// The toolbar's four shading chips each draw a different picture.
+///
+/// # The defect this guards
+///
+/// Three of the four did nothing at all. The chips write `EditorState::shading_mode`, which the
+/// studio forwards into the scene uniform — but the modes were implemented only in
+/// `deferred_lighting.wgsl`, and the studio's viewport renders **forward**, through `shader.wgsl`,
+/// which never read the field. Measured before the fix, at this resolution: Normals, Albedo and
+/// Wire were each **0 of 65536 bytes** different from Lit.
+///
+/// "Wire" was doubly broken: `deferred_lighting.wgsl` reads mode 3 as Roughness/Metallic, so even
+/// on the path where the uniform mattered, the chip labelled Wire meant something else. It is a
+/// pipeline, not a shading term — and `renderer.scene.wireframe_pipeline`, built from the same
+/// shader with `PolygonMode::Line`, had existed unselected by anything in the workspace.
+///
+/// All six pairs are compared, not just each against Lit: two chips that both "work" by producing
+/// the same picture are still one broken chip.
+#[test]
+fn every_shading_mode_draws_a_different_picture() {
+    let _gpu = gpu_lock();
+    if !pollster::block_on(Renderer::headless_adapter_available()) {
+        return;
+    }
+    if pollster::block_on(Renderer::headless_adapter_is_software()) {
+        return;
+    }
+
+    const NAMES: [&str; 4] = ["Lit", "Normals", "Albedo", "Wire"];
+    let shots: Vec<Vec<u8>> = (0u32..4).map(|m| render_with_shading(false, m).0).collect();
+    let total = shots[0].len();
+
+    for a in 0..4 {
+        for b in (a + 1)..4 {
+            let differing = target_difference(&shots[a], &shots[b]);
+            assert!(
+                differing > total / 100,
+                "{} and {} render the same picture ({differing} of {total} bytes differ) — one of \
+                 those two toolbar chips does nothing",
+                NAMES[a],
+                NAMES[b],
+            );
+        }
+    }
+}
+
+/// Wire draws edges, so the middle of a face is empty.
+///
+/// The pairwise test above only says the four pictures differ; this says the fourth one is a
+/// *wireframe*. The centre of the cube sits on a face, and under `PolygonMode::Line` that face is
+/// not filled — so the centre reads as background, while under Lit it reads as the cube.
+#[test]
+fn the_wire_mode_leaves_the_middle_of_a_face_empty() {
+    let _gpu = gpu_lock();
+    if !pollster::block_on(Renderer::headless_adapter_available()) {
+        return;
+    }
+    if pollster::block_on(Renderer::headless_adapter_is_software()) {
+        return;
+    }
+
+    let lit = render_with_shading(false, 0).0;
+    let wire = render_with_shading(false, 3).0;
+
+    // The top-left corner is empty in every mode: that is the pass's clear colour.
+    let bg = mean_rgb(&lit, 0, 0, 8);
+    let dist = |c: (f32, f32, f32)| {
+        ((c.0 - bg.0).powi(2) + (c.1 - bg.1).powi(2) + (c.2 - bg.2).powi(2)).sqrt()
+    };
+
+    let centre = (W as usize / 2 - 8, H as usize / 2 - 8);
+    let lit_centre = dist(mean_rgb(&lit, centre.0, centre.1, 16));
+    let wire_centre = dist(mean_rgb(&wire, centre.0, centre.1, 16));
+
+    assert!(
+        lit_centre > 20.0,
+        "the filled render has nothing at the centre of the frame ({lit_centre:.1} from the \
+         background) — the fixture stopped putting a cube there and this test measures nothing"
+    );
+    assert!(
+        wire_centre < lit_centre / 2.0,
+        "the centre of the face is as solid in Wire as in Lit (Wire {wire_centre:.1} vs Lit \
+         {lit_centre:.1} from the background) — the wireframe pipeline is not being selected"
+    );
 }

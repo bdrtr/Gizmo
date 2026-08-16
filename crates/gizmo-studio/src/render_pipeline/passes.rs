@@ -12,6 +12,10 @@ use super::batching::FlatBatchData;
 /// `cam_far` — belong to the active camera, and the camera is not resolved until after this runs
 /// (its projection needs the aspect this function computes). Uploading here is what left the
 /// editor's DoF linearising depth against a hardcoded 0.1/2000 range.
+/// The toolbar's fourth shading chip. A pipeline swap, not a shader uniform — see the comment at
+/// the pipeline selection in [`record_studio_main_pass`].
+pub(super) const SHADING_WIREFRAME: u32 = 3;
+
 pub(super) fn sync_editor_settings(
     world: &gizmo::core::World,
     renderer: &mut gizmo::renderer::Renderer,
@@ -188,6 +192,7 @@ pub(super) fn record_studio_main_pass(
     debug_aabbs: &[Aabb],
     show_colliders: bool,
     draw_chrome: bool,
+    ed_shading_mode: u32,
 ) {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Main Render Pass (HDR)"),
@@ -245,7 +250,19 @@ pub(super) fn record_studio_main_pass(
                 batch.record_draw(&mut render_pass, batch.start_instance..safe_end);
             }
 
-            render_pass.set_pipeline(&renderer.scene.render_pipeline);
+            // "Wire" is a PIPELINE, not a shading term: `wireframe_pipeline` is built from the
+            // same `shader.wgsl` with `PolygonMode::Line` and has existed, unselected, since it
+            // was written — nothing in the workspace ever set it. The toolbar's fourth chip is
+            // what it is for.
+            //
+            // The uniform stays 0 for this mode. `deferred_lighting.wgsl` reads 3 as
+            // "Roughness/Metallic", and one chip labelled "Wire" must not mean two different
+            // pictures depending on which path runs.
+            render_pass.set_pipeline(if ed_shading_mode == SHADING_WIREFRAME {
+                &renderer.scene.wireframe_pipeline
+            } else {
+                &renderer.scene.render_pipeline
+            });
             for batch in flat_batches {
                 if batch.is_transparent
                     || batch.is_double_sided
