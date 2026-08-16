@@ -56,6 +56,17 @@ wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
 web-sys = { version = "0.3", features = ["Window", "Response"] }
+# TWO getrandom majors, and both need the wasm backend turned on explicitly.
+#
+# 0.3 arrives through `ahash` and `rand_core` 0.9; 0.4 through this crate's own `rand` 0.10.
+# The `getrandom_backend="wasm_js"` cfg in `.cargo/config.toml` covers 0.3 on its own — 0.4
+# made it a crate FEATURE as well, and a version that has one but not the other stops the wasm
+# build dead with `compile_error!`.
+#
+# This entry said only "0.3" until 2026-08-16, which is how the wasm gate went red: building
+# `-p gizmo-renderer` alone (exactly what CI does) had nothing enabling 0.4's feature, while
+# building `-p demo-web` did — so a local check on demo-web passed and CI did not.
 getrandom = { version = "0.3", features = ["wasm_js"] }
+getrandom_04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
 uuid = { version = "1.23.0", features = ["v4", "serde", "js"] }
 web-time = "1"

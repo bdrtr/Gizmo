@@ -2812,6 +2812,7 @@ dependencies = [
  "bytemuck",
  "criterion 0.8.2",
  "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "gizmo-animation",
  "gizmo-core",
  "gizmo-math",

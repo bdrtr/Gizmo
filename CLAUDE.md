@@ -75,6 +75,14 @@ cargo clippy --target wasm32-unknown-unknown -p gizmo-editor \
   -- -D warnings -A clippy::too_many_arguments -A clippy::type_complexity
 ```
 
+> **The wasm gate is per-crate, and checking a subset is not checking it.** CI builds
+> `-p gizmo-renderer` and `-p gizmo-app` on their own, not only through `-p demo-web`. Feature
+> unification makes that a real difference: `demo-web`'s graph can enable a feature (getrandom's
+> `wasm_js`, say) that the same crate built alone does not get, so a local check on `demo-web`
+> passes while CI's standalone build fails with `compile_error!`. That happened on 2026-08-16.
+> To reproduce the gate, run the crate list from `.github/workflows/ci.yml`'s `wasm` job, not a
+> convenient subset of it.
+
 ## Environment / machine constraints
 
 `.cargo/config.toml` caps `jobs = 4` and sets `codegen-units=4, lto=off` — this dev machine has limited RAM (~13 GB); each rustc uses 1–2 GB, so unbounded parallelism OOMs. `[profile.dev]` uses `debug = "line-tables-only"` + `split-debuginfo = "unpacked"` (demo binaries statically link all of wgpu/egui; full DWARF blew `target/` past 600 GB). These affect debug info / build only — **runtime perf is unchanged**. Don't "fix" these settings.
