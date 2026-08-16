@@ -16,6 +16,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Removed
+
+- **The GPU mesh-culling subsystem, which never ran.** `gizmo_renderer::gpu_cull` — `GpuCullState`,
+  `MeshBoundsRaw`, `DrawIndirectArgs`, `WebProfile::gpu_cull_enabled` and `mesh_cull.wgsl` — was
+  constructed for every renderer (a compute pipeline, three buffers, a bind group) and called by
+  nothing: the render path had removed the pass itself, with the reason left in a comment there
+  (`// GPU cull pass removed since we use CPU instancing`). CPU frustum culling is the live path
+  and is unchanged. Bringing GPU culling back needs the *draw* side — indirect draws in the batch
+  path, bounds uploaded per frame — and, by this project's own rule for optimisations, a
+  measurement of what CPU culling actually costs first. The code is in the history.
+
 ### Changed
 
 - **Studio's Build/Export ships your scene, not the engine's sample.** It built `demo` and copied

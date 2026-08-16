@@ -1233,6 +1233,40 @@ yarısı oradan da eksikti.
 - **Sonda köprüsünde hangi sorgular sunulacak.** Mekanizma kuruldu ve tek tüketicisi var
   (`physics.ground_at`); geri kalanı API tasarımı.
 
+### Kalan GPU alt sistemleri tarandı: biri hiç koşmuyormuş (2026-08-16)
+
+Aynı alet (geçişi kaldır, pikseli say) hiç ölçülmemiş dört isteğe bağlı sisteme tutuldu.
+
+| Sistem | Varsayılan | Sonuç |
+|---|---|---|
+| `gpu_particles` | **açık** | **çalışıyor** — emitter'lı sahnede 10 karede 197/16384 px, 60 karede 355, max delta 142 |
+| `gpu_particles` + `gpu_fluid` | **açık** | parçacığı/sıvısı olmayan sahnede **0/65536 bayt** — boşta duruyorlar, kirletmiyorlar |
+| `smoke` | kapalı | ölçülmedi; varsayılan `None`, demo `Some(SmokeVolume::new(..))` veriyor |
+| `gpu_fluid` (kullanıldığında) | — | ölçülmedi; SPH parçacığı olan bir fixture gerekiyor (`fluid_rigid` demosu bu yolu koşturuyor) |
+| **`gpu_cull`** | kurulu | **hiç koşmuyor — kaldırıldı** |
+
+**`gpu_cull`'un hikâyesi** kayda değer, çünkü SSR/SSGI'den farklı bir ölü türü: geçiş yanlış
+çalışmıyordu, **hiç çağrılmıyordu**. `GpuCullState` her renderer'da kuruluyordu (compute pipeline,
+üç tampon, bind group), `prepare()` ve `cull_pass()` eksiksiz yazılmıştı — kapasite taşmasını
+uyaran bir `warn!`'ı ve `clamped_draw_count` için kendi birim testi bile vardı — ama depoda tek bir
+çağıranı yoktu. Gerekçe de koddaydı, `default_render_pass`'in içinde:
+
+```rust
+// GPU cull pass removed since we use CPU instancing
+```
+
+Yani karar zaten verilmiş, yalnız kurulum geride kalmış. Silinen: modül (256 satır), `mesh_cull.wgsl`,
+`Renderer::gpu_cull` alanı, kurulumu, ve `WebProfile::gpu_cull_enabled` — o bayrağın da okuyanı
+yoktu, yalnız iki testte doğrulanıyordu. CPU tarafındaki `frustum_cull` çalışan yol ve öyle kalıyor.
+
+**Geri istenirse ne gerekir:** eksik olan yarı `prepare`/`cull_pass` değil, **çizim** tarafı —
+batch'lerin `draw_indirect`'e taşınması ve mesh sınırlarının her kare yüklenmesi. Ve deponun kendi
+kuralına göre önce bir ölçüm: CPU culling'in karede ne kadar tuttuğu. (Aynı kural narrowphase
+batch-SIMD'i %3'te reddetmişti.) Kod git geçmişinde duruyor.
+
+Bekçi: `particles_from_an_emitter_reach_the_frame`. Böylece "kareye ulaşıyor mu" ailesi dörde
+çıktı — SSR/SSGI, volumetric, decal, parçacıklar.
+
 ### Pencereli her uygulama ilk karede ölüyordu (2026-08-16, DÜZELTİLDİ)
 
 `cargo run -p demo --bin advanced_physics` — CLAUDE.md'nin belgelediği komut — açılıştan ~1 saniye

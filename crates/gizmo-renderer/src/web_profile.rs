@@ -81,8 +81,6 @@ pub struct WebProfile {
     /// Deferred rendering aktif mi? (false = forward only)
     pub deferred_enabled: bool,
 
-    /// GPU frustum culling aktif mi?
-    pub gpu_cull_enabled: bool,
 
     /// Gölge kalitesi
     pub shadow_quality: ShadowQuality,
@@ -134,7 +132,6 @@ impl WebProfile {
             gpu_fluid_enabled: false,
             gpu_fluid_max: 0,
             deferred_enabled: false,
-            gpu_cull_enabled: false,
             shadow_quality: ShadowQuality::Off,
             post_process_level: PostProcessLevel::Medium,
             ssao_enabled: false,
@@ -160,7 +157,6 @@ impl WebProfile {
             gpu_fluid_enabled: false,
             gpu_fluid_max: 0,
             deferred_enabled: false,
-            gpu_cull_enabled: false, // CPU culling yeterli
             shadow_quality: ShadowQuality::Low,
             post_process_level: PostProcessLevel::Medium,
             ssao_enabled: false,
@@ -186,7 +182,6 @@ impl WebProfile {
             gpu_fluid_enabled: true,
             gpu_fluid_max: 10_000, // Mobil/web için 10K yeterli
             deferred_enabled: false,
-            gpu_cull_enabled: false,
             shadow_quality: ShadowQuality::Off,
             post_process_level: PostProcessLevel::Low,
             ssao_enabled: false,
@@ -211,7 +206,6 @@ impl WebProfile {
             gpu_fluid_enabled: false,
             gpu_fluid_max: 0,
             deferred_enabled: false,
-            gpu_cull_enabled: false,
             shadow_quality: ShadowQuality::Low,
             post_process_level: PostProcessLevel::Low,
             ssao_enabled: false,
@@ -236,7 +230,6 @@ impl WebProfile {
             gpu_fluid_enabled: true,
             gpu_fluid_max: 100_000,
             deferred_enabled: true,
-            gpu_cull_enabled: true,
             shadow_quality: ShadowQuality::High,
             post_process_level: PostProcessLevel::High,
             ssao_enabled: true,
@@ -261,7 +254,6 @@ impl WebProfile {
             gpu_fluid_enabled: false,
             gpu_fluid_max: 0,
             deferred_enabled: false,
-            gpu_cull_enabled: false,
             shadow_quality: ShadowQuality::Off,
             post_process_level: PostProcessLevel::Minimal,
             ssao_enabled: false,
@@ -419,7 +411,7 @@ mod tests {
         assert!(!p.gpu_particles_enabled && p.gpu_particles_max == 0);
         assert!(!p.gpu_physics_enabled && p.gpu_physics_max == 0);
         assert!(!p.gpu_fluid_enabled && p.gpu_fluid_max == 0);
-        assert!(!p.deferred_enabled && !p.gpu_cull_enabled);
+        assert!(!p.deferred_enabled);
         assert!(!p.ssao_enabled && !p.ssr_enabled && !p.ssgi_enabled && !p.taa_enabled);
         assert!(!p.volumetric_enabled && !p.use_hdr);
         assert_eq!(p.shadow_quality, ShadowQuality::Off);
@@ -460,7 +452,7 @@ mod tests {
     #[test]
     fn desktop_enables_the_full_pipeline() {
         let p = WebProfile::desktop();
-        assert!(p.deferred_enabled && p.gpu_cull_enabled && p.taa_enabled);
+        assert!(p.deferred_enabled && p.taa_enabled);
         assert!(p.ssao_enabled && p.ssr_enabled && p.ssgi_enabled && p.volumetric_enabled);
         assert_eq!(p.shadow_quality, ShadowQuality::High);
         assert_eq!(p.post_process_level, PostProcessLevel::High);

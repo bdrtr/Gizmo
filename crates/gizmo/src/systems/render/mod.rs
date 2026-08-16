@@ -2517,6 +2517,94 @@ mod golden_render_tests {
         });
     }
 
+    /// Same scene, but with a `ParticleEmitter` on the cube, rendered over several frames from
+    /// ONE renderer — particles need time to be spawned and to move.
+    async fn render_emitter_scene(with_emitter: bool, frames: u32) -> Vec<u8> {
+        const W: u32 = 128;
+        let mut renderer = Renderer::new_headless(W, W, None).await;
+        let mut asset_manager = AssetManager::new();
+        let mut world = World::new();
+        world.insert_resource(gizmo_core::time::Time::new());
+        let tex = asset_manager.create_white_texture(
+            &renderer.device,
+            &renderer.queue,
+            &renderer.scene.texture_bind_group_layout,
+        );
+        let floor = world.spawn();
+        world.add_component(
+            floor,
+            Transform::new(Vec3::new(0.0, -1.2, 0.0)).with_scale(Vec3::new(20.0, 0.2, 20.0)),
+        );
+        world.add_component(floor, GlobalTransform::default());
+        world.add_component(floor, AssetManager::create_cube(&renderer.device));
+        world.add_component(
+            floor,
+            Material::new(tex.clone()).with_pbr(Vec4::new(0.8, 0.8, 0.8, 1.0), 0.0, 0.9),
+        );
+        world.add_component(floor, MeshRenderer::new());
+
+        let emitter = world.spawn();
+        world.add_component(emitter, Transform::new(Vec3::new(0.0, -0.5, 0.0)));
+        world.add_component(emitter, GlobalTransform::default());
+        if with_emitter {
+            world.add_component(
+                emitter,
+                {
+                    let mut e = crate::renderer::components::ParticleEmitter::with_rate(400.0);
+                    e.size_start = 0.6;
+                    e
+                },
+            );
+        }
+
+        world.spawn_bundle(CameraBundle {
+            position: Vec3::new(-5.0, 1.0, 0.0),
+            yaw: 0.0,
+            pitch: -0.1,
+            primary: true,
+            ..Default::default()
+        });
+        world.spawn_bundle(DirectionalLightBundle::default());
+
+        let mut last = Vec::new();
+        for _ in 0..frames {
+            if let Some(mut t) = world.get_resource_mut::<gizmo_core::time::Time>() {
+                t.update(1.0 / 60.0);
+            }
+            last = render_world(&mut renderer, &mut world).await;
+        }
+        last
+    }
+
+    /// **A `ParticleEmitter` has to produce particles anyone can see.**
+    ///
+    /// The emitter-to-GPU bridge is young and was missing for everyone outside the studio once
+    /// already (see `spawn_from_emitters`), and the particle system is one of two GPU subsystems
+    /// this path builds for *every* renderer whether the scene wants them or not. Measured on the
+    /// way in: with no emitter in the world, switching the particle system off changes 0 of 65536
+    /// bytes — it is idle, not idling loudly — and with one, it paints 197 pixels of 16384 after
+    /// ten frames and 355 after sixty, growing as the spawn accumulates. The floor here is set
+    /// far below that: this asks whether particles reach the frame at all.
+    #[test]
+    fn particles_from_an_emitter_reach_the_frame() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let with = render_emitter_scene(true, 10).await;
+            let without = render_emitter_scene(false, 10).await;
+            let (changed, total) = changed_pixels(&with, &without, 128);
+            assert!(
+                changed >= 40,
+                "an emitter spawning 400 particles a second changed {changed}/{total} pixels over                  ten frames — nothing is reaching the frame (measured 197)",
+            );
+        });
+    }
+
     /// A matte floor with — optionally — a decal projector volume straddling its surface.
     async fn render_decal_scene(with_decal: bool) -> Vec<u8> {
         const W: u32 = 128;

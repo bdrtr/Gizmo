@@ -428,12 +428,11 @@ mod tests {
                 ("physics_compute.wgsl", include_str!("../shaders/physics_compute.wgsl")),
                 ("physics_culling.wgsl", include_str!("../shaders/physics_culling.wgsl")),
                 ("physics_debug.wgsl", include_str!("../shaders/physics_debug.wgsl")),
-                // Loaded via create_shader_module in gpu_physics/gpu_particles/gpu_cull (not
-                // in the golden render test's pipelines), so validate their naga_oil
-                // composition here — this test auto-composes any src containing `#import`.
+                // Loaded via create_shader_module in gpu_physics/gpu_particles (not in the
+                // golden render test's pipelines), so validate their naga_oil composition
+                // here — this test auto-composes any src containing `#import`.
                 ("physics_render.wgsl", include_str!("../shaders/physics_render.wgsl")),
                 ("particle_render.wgsl", include_str!("../shaders/particle_render.wgsl")),
-                ("mesh_cull.wgsl", include_str!("../shaders/mesh_cull.wgsl")),
             ];
 
             // Shaders that go through the wasm `load_shader_composed_web` path: validate BOTH

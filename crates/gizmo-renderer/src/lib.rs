@@ -123,7 +123,6 @@ pub mod frame_uniforms;
 pub mod frustum_cull;
 pub mod fxaa;
 pub mod gi;
-pub mod gpu_cull;
 pub mod gpu_fluid;
 pub mod gpu_particles;
 pub mod gpu_smoke;
@@ -195,7 +194,6 @@ pub use deferred::{
     GBUFFER_WORLD_POSITION_FORMAT, GBUFFER_WORLD_TANGENT_FORMAT,
 };
 pub use gi::{LightProbe, ProbeGrid, SHCoeffs};
-pub use gpu_cull::{DrawIndirectArgs, GpuCullState, MeshBoundsRaw};
 pub use gpu_types::{
     InstanceRaw, LightData, MaterialParams, PostProcessUniforms, SceneUniforms, ShadowVsUniform,
     Vertex,

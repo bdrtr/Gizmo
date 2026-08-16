@@ -132,9 +132,6 @@ pub struct Renderer {
     // === DEFERRED RENDERING — G-Buffer + Lighting pass ===
     pub deferred: Option<crate::deferred::DeferredState>,
 
-    // === GPU-DRIVEN MESH CULLING — Compute frustum cull + indirect draw ===
-    pub gpu_cull: Option<crate::gpu_cull::GpuCullState>,
-
     // === SSAO — Screen-Space Ambient Occlusion ===
     pub ssao: Option<crate::ssao::SsaoState>,
 

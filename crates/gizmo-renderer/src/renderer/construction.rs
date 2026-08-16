@@ -507,15 +507,6 @@ impl Renderer {
         #[cfg(target_arch = "wasm32")]
         let deferred: Option<crate::deferred::DeferredState> = None;
 
-        #[cfg(not(target_arch = "wasm32"))]
-        let gpu_cull = Some(crate::gpu_cull::GpuCullState::new(
-            &device,
-            &scene_state,
-            scene_state.instance_capacity as u32,
-        ));
-        #[cfg(target_arch = "wasm32")]
-        let gpu_cull: Option<crate::gpu_cull::GpuCullState> = None;
-
         let ssao = deferred.as_ref().map(|def| {
             crate::ssao::SsaoState::new(&device, &queue, &scene_state, def, size.width, size.height)
         });
@@ -609,7 +600,6 @@ impl Renderer {
             scene: scene_state,
             post: post_state,
             deferred,
-            gpu_cull,
             ssao,
             ssr,
             ssgi,
