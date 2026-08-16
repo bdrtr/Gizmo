@@ -224,18 +224,18 @@ pub(super) fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
     let car_start_pos = Vec3::new(-10.0, 3.0, 0.0);
 
     // --- PROCEDURAL CONVEX HULL ROCKS ---
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
     for i in 1..=3 {
         // Generate random points for the rock
         let mut points = Vec::new();
-        let num_points = rng.gen_range(8..20);
-        let rock_radius = rng.gen_range(0.5..1.5);
+        let num_points = rng.random_range(8..20);
+        let rock_radius = rng.random_range(0.5..1.5);
         for _ in 0..num_points {
             points.push(Vec3::new(
-                rng.gen_range(-rock_radius..rock_radius),
-                rng.gen_range(-rock_radius..rock_radius),
-                rng.gen_range(-rock_radius..rock_radius),
+                rng.random_range(-rock_radius..rock_radius),
+                rng.random_range(-rock_radius..rock_radius),
+                rng.random_range(-rock_radius..rock_radius),
             ));
         }
 

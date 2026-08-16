@@ -22,7 +22,7 @@ serde = { version = "1.0.228", features = ["derive"] }
 [dev-dependencies]
 criterion = "0.5.1"
 bevy_math = "0.19"
-rand = "0.8"
+rand = "0.10.1"
 bevy_picking = { version = "0.19", features = ["mesh_picking"] }
 bevy_mesh = "0.19"
 

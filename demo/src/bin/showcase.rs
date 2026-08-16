@@ -204,13 +204,13 @@ fn main() {
             world.add_component(ground, RigidBody::new(0.0, false));
 
             // --- 500 GPU Physics Küpü (Lavın İçinden Dökülen Taşlar) ---
-            use rand::Rng;
-            let mut rng = rand::thread_rng();
+            use rand::RngExt;
+            let mut rng = rand::rng();
             for _i in 0..500 {
                 let box_ent = world.spawn();
-                let px = rng.gen_range(-5.0..5.0);
-                let py = rng.gen_range(10.0..30.0);
-                let pz = rng.gen_range(-25.0..-15.0);
+                let px = rng.random_range(-5.0..5.0);
+                let py = rng.random_range(10.0..30.0);
+                let pz = rng.random_range(-25.0..-15.0);
                 world.add_component(
                     box_ent,
                     Transform::new(Vec3::new(px, py, pz)).with_scale(Vec3::new(0.5, 0.5, 0.5)),
@@ -921,19 +921,19 @@ fn main() {
 
             // --- GPU Particle Spawner (Ateş / Sihir Şelalesi) ---
             if let Some(particles) = &renderer.gpu_particles {
-                use rand::Rng;
-                let mut rng = rand::thread_rng();
+                use rand::RngExt;
+                let mut rng = rand::rng();
                 let mut new_particles = Vec::new();
                 for _ in 0..state.particle_spawn_rate {
-                    let p_x = rng.gen_range(-1.0..1.0);
-                    let p_z = rng.gen_range(-1.0..1.0);
-                    let v_x = rng.gen_range(-3.0..3.0);
-                    let v_y = rng.gen_range(
+                    let p_x = rng.random_range(-1.0..1.0);
+                    let p_z = rng.random_range(-1.0..1.0);
+                    let v_x = rng.random_range(-3.0..3.0);
+                    let v_y = rng.random_range(
                         (state.particle_velocity_y - 5.0).max(0.0)
                             ..(state.particle_velocity_y + 5.0),
                     ); // Yukarı doğru fışkırma
-                    let v_z = rng.gen_range(-3.0..3.0);
-                    let life = rng.gen_range(1.0..3.0);
+                    let v_z = rng.random_range(-3.0..3.0);
+                    let life = rng.random_range(1.0..3.0);
 
                     new_particles.push(gizmo::renderer::gpu_particles::GpuParticle {
                         position: [p_x, 5.0, -20.0 + p_z], // Sütunun içinden çıksın

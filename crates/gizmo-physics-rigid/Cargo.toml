@@ -40,7 +40,6 @@ gizmo-physics-core = { path = "../gizmo-physics-core", version = "0.10.0", defau
 wide = "1.2.0"
 rustc-hash = "2"
 rand = "0.10.1"
-dashmap = "5.5"
 crossbeam-queue = "0.3"
 tracing = "0.1.44"
 serde_json = "1.0"

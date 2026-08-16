@@ -4,10 +4,12 @@ use bevy_math::{
 };
 use core::hint::black_box;
 use criterion::{criterion_group, criterion_main, Criterion};
+// rand 0.10 renamed the module `distributions` -> `distr` and the sampler
+// `Standard` -> `StandardUniform`, and `Uniform::new` became fallible.
 use rand::{
-    distributions::{Distribution, Standard, Uniform},
+    distr::{Distribution, StandardUniform, Uniform},
     rngs::StdRng,
-    Rng, SeedableRng,
+    RngExt, SeedableRng,
 };
 
 macro_rules! bench {
@@ -39,17 +41,18 @@ fn bounding(c: &mut Criterion) {
     let mut rng2 = StdRng::seed_from_u64(456);
 
     let point_clouds = Uniform::<usize>::new(black_box(3), black_box(30))
+        .expect("3..30 is a valid range")
         .sample_iter(&mut rng1)
         .take(black_box(1000))
         .map(|num_points| PointCloud {
-            points: Standard
+            points: StandardUniform
                 .sample_iter(&mut rng2)
                 .take(num_points)
                 .map(|p: [f32; 3]| Vec3A::from_array(p))
                 .collect::<Vec<Vec3A>>(),
             isometry: Isometry3d::new(
-                Vec3::new(rng2.gen(), rng2.gen(), rng2.gen()),
-                Quat::from_array(rng2.gen()),
+                Vec3::new(rng2.random(), rng2.random(), rng2.random()),
+                Quat::from_array(rng2.random()),
             ),
         })
         .collect::<Vec<_>>();

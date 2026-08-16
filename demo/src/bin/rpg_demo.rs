@@ -310,7 +310,7 @@ fn update(world: &mut World, state: &mut RpgState, dt: f32, input: &gizmo::core:
             };
 
             use rand::rngs::StdRng;
-            use rand::{Rng, SeedableRng};
+            use rand::{RngExt, SeedableRng};
             let seed = (coord.0 as u64)
                 .wrapping_mul(31)
                 .wrapping_add(coord.1 as u64);
@@ -357,8 +357,8 @@ fn update(world: &mut World, state: &mut RpgState, dt: f32, input: &gizmo::core:
 
             // Her chunk'a 5 ağaç dikelim
             for _ in 0..5 {
-                let x = chunk_center.x + rng.gen_range(-40.0..40.0);
-                let z = chunk_center.z + rng.gen_range(-40.0..40.0);
+                let x = chunk_center.x + rng.random_range(-40.0..40.0);
+                let z = chunk_center.z + rng.random_range(-40.0..40.0);
 
                 if coord.0 == 0 && coord.1 == 0 && x.abs() < 20.0 && z.abs() < 20.0 {
                     continue;

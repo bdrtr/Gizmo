@@ -478,7 +478,11 @@ pub fn execute_render_pipeline(
             {
                 let transforms = world.borrow::<Transform>();
                 {
-                    use rand::Rng;
+                    // rand 0.10 split the trait: `Rng` is the core one (re-exported from
+                    // rand_core) and the convenience methods — `random_range` here — moved to
+                    // `RngExt`. Importing the old one leaves them out of scope with an
+                    // "unused import" warning as the only clue.
+                    use rand::RngExt;
                     let mut rng = rand::rng();
                     let mut all_new_particles = Vec::new();
 

@@ -10,7 +10,7 @@ default-run = "bevy_3d_scene"
 gizmo = { package = "gizmo-engine", path = "../crates/gizmo", features = ["audio", "scripting", "scene", "editor", "render", "window", "ui"] }
 mimalloc = { workspace = true }
 pollster = "0.3"
-rand = "0.8"
+rand = "0.10.1"
 winit = { workspace = true }
 bytemuck = "1.14"
 tracing = "0.1.44"
