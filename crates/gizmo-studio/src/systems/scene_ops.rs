@@ -182,61 +182,185 @@ pub fn handle_scene_operations(
 
     // --- YENİ ENTITY OLUŞTURMA (Küp / Küre / Boş) ---
     if let Some(kind) = editor_state.spawn_request.take() {
-        let pending_assets = world
-            .get_resource::<DebugAssets>()
-            .map(|a| (a.cube.clone(), a.white_tex.clone()));
+        // What the `➕` menu offers and what this understood had drifted a long way apart. The menu
+        // has nine entries; this match had two arms and a catch-all, so `Group`, `Plane`,
+        // `Cylinder`, `Capsule`, `PointLight`, `Camera` and `ParticleEmitter` all fell through and
+        // produced an entity called "Boş Entity" carrying a `MeshRenderer` and no mesh — seven menu
+        // items promising seven different things and making the same wrong one.
+        //
+        // The channel is a `SpawnKind` now rather than a `String`, and this match is **exhaustive**
+        // on it: a variant nobody teaches this about does not compile. See the type's own note for
+        // why it is deliberately not `#[non_exhaustive]`.
+        let e = world.spawn();
+        world.add_component(e, Transform::new(Vec3::ZERO));
+        world.add_component(e, gizmo::physics::components::GlobalTransform::default());
 
-        if let Some((cube_mesh, white_tex)) = pending_assets {
-            let sphere_mesh = world
-                .get_resource::<DebugAssets>()
-                .map(|a| a.sphere.clone());
-            let e = world.spawn();
-            world.add_component(e, Transform::new(Vec3::ZERO));
-            world.add_component(e, gizmo::physics::components::GlobalTransform::default());
-            world.add_component(e, gizmo::renderer::components::MeshRenderer::new());
+        // Meshes come from `DebugAssets`, which needs a GPU. The kinds that do NOT draw — an empty,
+        // a group, a light, a camera, an emitter — must not be gated behind it: the whole spawn
+        // block used to sit inside `if let Some(assets)`, so with no renderer resource every menu
+        // entry did nothing at all, silently.
+        let meshes = world.get_resource::<DebugAssets>().map(|a| {
+            (
+                a.cube.clone(),
+                a.sphere.clone(),
+                a.plane.clone(),
+                a.cylinder.clone(),
+                a.capsule.clone(),
+                a.white_tex.clone(),
+            )
+        });
 
-            match kind.as_str() {
-                "Cube" => {
-                    world.add_component(e, gizmo::core::component::EntityName("Küp".to_string()));
-                    world.add_component(e, cube_mesh);
-                    world.add_component(
-                        e,
-                        gizmo::prelude::Material::new(white_tex).with_pbr(
-                            gizmo::math::Vec4::new(0.8, 0.8, 0.8, 1.0),
-                            0.5,
-                            0.0,
-                        ),
-                    );
-                    world.add_component(
-                        e,
-                        gizmo::physics::Collider::box_collider(gizmo::math::Vec3::new(
-                            1.0, 1.0, 1.0,
-                        )),
-                    );
-                    editor_state.log_info("Yeni küp oluşturuldu.");
-                }
-                "Sphere" => {
-                    world.add_component(e, gizmo::core::component::EntityName("Küre".to_string()));
-                    world.add_component(e, sphere_mesh.clone().unwrap_or(cube_mesh.clone()));
-                    world.add_component(
-                        e,
-                        gizmo::prelude::Material::new(white_tex).with_pbr(
-                            gizmo::math::Vec4::new(0.4, 0.6, 1.0, 1.0),
-                            0.2,
-                            0.0,
-                        ),
-                    );
-                    world.add_component(e, gizmo::physics::Collider::sphere(1.0));
-                    editor_state.log_info("Yeni küre oluşturuldu.");
-                }
-                _ => {
-                    world.add_component(
-                        e,
-                        gizmo::core::component::EntityName("Boş Entity".to_string()),
-                    );
-                    editor_state.log_info("Boş entity oluşturuldu.");
-                }
+        use crate::state::PrimitiveSize as PS;
+        use gizmo::editor::SpawnKind;
+
+        // `Some(())` = built. `None` = a drawing kind asked for before the GPU assets exist.
+        let built: Option<()> = match kind {
+            SpawnKind::Cube => meshes.clone().map(|(cube, _, _, _, _, tex)| {
+                world.add_component(e, cube);
+                world.add_component(
+                    e,
+                    gizmo::prelude::Material::new(tex).with_pbr(
+                        gizmo::math::Vec4::new(0.8, 0.8, 0.8, 1.0),
+                        0.5,
+                        0.0,
+                    ),
+                );
+                world.add_component(
+                    e,
+                    gizmo::physics::Collider::box_collider(gizmo::math::Vec3::splat(PS::CUBE_HALF)),
+                );
+            }),
+            SpawnKind::Sphere => meshes.clone().map(|(_, sphere, _, _, _, tex)| {
+                world.add_component(e, sphere);
+                world.add_component(
+                    e,
+                    gizmo::prelude::Material::new(tex).with_pbr(
+                        gizmo::math::Vec4::new(0.4, 0.6, 1.0, 1.0),
+                        0.2,
+                        0.0,
+                    ),
+                );
+                // Was `sphere(1.0)` against a mesh of radius 0.5: the collision shape was twice
+                // the size of the thing you could see, so a dropped sphere came to rest half a
+                // radius above the floor. Both numbers are `PS::SPHERE_RADIUS` now.
+                world.add_component(e, gizmo::physics::Collider::sphere(PS::SPHERE_RADIUS));
+            }),
+            SpawnKind::Plane => meshes.clone().map(|(_, _, plane, _, _, tex)| {
+                world.add_component(e, plane);
+                world.add_component(
+                    e,
+                    gizmo::prelude::Material::new(tex).with_pbr(
+                        gizmo::math::Vec4::new(0.7, 0.7, 0.7, 1.0),
+                        0.8,
+                        0.0,
+                    ),
+                );
+                // Pushed down by its own half-thickness, so the collider's TOP face is exactly the
+                // visible quad instead of hovering above it.
+                world.add_component(
+                    e,
+                    gizmo::physics::Collider::offset_box(
+                        PS::plane_collider_offset(),
+                        PS::plane_collider_half_extents(),
+                    ),
+                );
+            }),
+            SpawnKind::Cylinder => meshes.clone().map(|(_, _, _, cylinder, _, tex)| {
+                world.add_component(e, cylinder);
+                world.add_component(
+                    e,
+                    gizmo::prelude::Material::new(tex).with_pbr(
+                        gizmo::math::Vec4::new(0.9, 0.7, 0.3, 1.0),
+                        0.4,
+                        0.0,
+                    ),
+                );
+                // The engine has no cylinder shape. A capsule would round the ends off and a box
+                // would square them; the hull of the mesh's OWN ring points is the faceted prism
+                // that is actually on screen.
+                world.add_component(
+                    e,
+                    gizmo::physics::Collider::convex_hull(&PS::cylinder_hull_points()),
+                );
+            }),
+            SpawnKind::Capsule => meshes.clone().map(|(_, _, _, _, capsule, tex)| {
+                world.add_component(e, capsule);
+                world.add_component(
+                    e,
+                    gizmo::prelude::Material::new(tex).with_pbr(
+                        gizmo::math::Vec4::new(0.5, 0.9, 0.6, 1.0),
+                        0.3,
+                        0.0,
+                    ),
+                );
+                // The mesh takes the cylindrical section's WHOLE length; the collider takes half
+                // of it. That conversion is the one place these two disagree by construction.
+                world.add_component(
+                    e,
+                    gizmo::physics::Collider::capsule(
+                        PS::CAPSULE_RADIUS,
+                        PS::capsule_collider_half_height(),
+                    ),
+                );
+            }),
+
+            // --- The kinds that draw nothing: no mesh, no material, no `MeshRenderer`. ---
+            SpawnKind::PointLight => {
+                world.add_component(
+                    e,
+                    gizmo::renderer::components::PointLight::new(
+                        gizmo::math::Vec3::new(1.0, 0.95, 0.85),
+                        20.0,
+                        10.0,
+                    ),
+                );
+                Some(())
             }
+            SpawnKind::Camera => {
+                world.add_component(
+                    e,
+                    gizmo::renderer::components::Camera::new(
+                        60.0_f32.to_radians(),
+                        0.1,
+                        500.0,
+                        0.0,
+                        0.0,
+                        // NOT primary: adding a camera to a scene must not hijack the view.
+                        false,
+                    ),
+                );
+                Some(())
+            }
+            SpawnKind::ParticleEmitter => {
+                world.add_component(e, gizmo::renderer::components::ParticleEmitter::new());
+                Some(())
+            }
+            // A group is an empty entity with a different name, and that is the honest whole of
+            // it — `Parent`/`Children` already carry what "folder" means.
+            SpawnKind::Group | SpawnKind::Empty => Some(()),
+        };
+
+        if built.is_none() {
+            // A drawing kind was asked for before the GPU assets existed. Leave nothing behind: a
+            // half-built entity in the scene is worse than none, and keeping it is exactly what
+            // the old catch-all did.
+            editor_state.log_error(&format!(
+                "'{}' oluşturulamadı: mesh varlıkları henüz hazır değil.",
+                kind.entity_name()
+            ));
+            world.despawn_by_id(e.id());
+            editor_state.pending_child_parent = None;
+            editor_state.pending_group_members.clear();
+            editor_state.pending_child_components.clear();
+        }
+
+        if built.is_some() {
+            let name = kind.entity_name();
+            if kind.draws() {
+                world.add_component(e, gizmo::renderer::components::MeshRenderer::new());
+            }
+            world.add_component(e, gizmo::core::component::EntityName(name.to_string()));
+            editor_state.log_info(&format!("{name} oluşturuldu."));
 
             editor_state.select_exclusive(e);
             editor_state
@@ -307,6 +431,35 @@ pub fn handle_scene_operations(
                         editor_state.add_component_request = Some((e, comp_name.clone()));
                     }
                 }
+            }
+
+            // === Seçilenleri bu yeni entity'nin altına al (pending_group_members) ===
+            //
+            // "📂 Seçilileri Grupla" asked for a `Group` and stopped there — it created a stray
+            // empty entity and left the selection exactly where it was. Its own comment said
+            // "sonra seçili objeleri ona bağla"; nothing ever did. This is that second half.
+            //
+            // `add_child` is the core call the drag-reparent already goes through, so grouping
+            // gets the same cycle refusal and the same both-sides bookkeeping. It cannot cycle
+            // here anyway — the parent was spawned a few lines ago and can be nobody's ancestor —
+            // but going through a second implementation is how the first cycle bug happened.
+            let members: Vec<_> = editor_state.pending_group_members.drain(..).collect();
+            let mut grouped = 0usize;
+            for member in members {
+                if member.id() == e.id() {
+                    continue;
+                }
+                if let (Some(child), Some(parent)) =
+                    (world.get_entity(member.id()), world.get_entity(e.id()))
+                {
+                    world.add_child(parent, child);
+                    grouped += 1;
+                }
+            }
+            if grouped > 0 {
+                editor_state.log_info(&format!("{grouped} nesne '{name}' altına alındı."));
+                // The group is the thing you now want to move, so it is what stays selected.
+                editor_state.select_exclusive(e);
             }
         }
     }
@@ -408,6 +561,191 @@ mod tests {
             visible_entity_count: 0,
             draw_call_count: 0,
         }
+    }
+
+
+    // ── The ➕ menu ──────────────────────────────────────────────────────────────────────────
+    //
+    // These run with **no** `DebugAssets` in the world, which is the point: the kinds that draw
+    // nothing must not be gated behind a GPU. The whole spawn block used to live inside
+    // `if let Some(assets) = ...`, so in a world without a renderer every menu entry did nothing,
+    // and said nothing about it either.
+
+    use gizmo::editor::SpawnKind;
+
+    fn name_of(world: &World, id: u32) -> Option<String> {
+        world
+            .borrow::<gizmo::core::component::EntityName>()
+            .get(id)
+            .map(|n| n.0.clone())
+    }
+
+    fn spawn_via_menu(kind: SpawnKind) -> (World, EditorState, Vec<u32>) {
+        let mut world = World::new();
+        let before: Vec<u32> = world.iter_alive_entities().iter().map(|e| e.id()).collect();
+        let mut ed = EditorState::default();
+        ed.spawn_request = Some(kind);
+        handle_scene_operations(&mut world, &mut ed, &mut studio_state());
+        let new: Vec<u32> = world
+            .iter_alive_entities()
+            .iter()
+            .map(|e| e.id())
+            .filter(|id| !before.contains(id))
+            .collect();
+        (world, ed, new)
+    }
+
+    /// Each non-drawing kind produces exactly one entity, under its own name.
+    ///
+    /// Before this, `Group`, `PointLight`, `Camera` and `ParticleEmitter` all hit a catch-all and
+    /// came out as "Boş Entity" — four menu entries, one result, no complaint.
+    #[test]
+    fn each_kind_that_draws_nothing_spawns_itself_and_says_so() {
+        for kind in [
+            SpawnKind::Empty,
+            SpawnKind::Group,
+            SpawnKind::PointLight,
+            SpawnKind::Camera,
+            SpawnKind::ParticleEmitter,
+        ] {
+            let (world, _ed, new) = spawn_via_menu(kind);
+            assert_eq!(new.len(), 1, "{kind:?} must create exactly one entity");
+            assert_eq!(
+                name_of(&world, new[0]).as_deref(),
+                Some(kind.entity_name()),
+                "{kind:?} came out under the wrong name"
+            );
+        }
+    }
+
+    /// `MeshRenderer` used to be added to every spawn before the match ran, so every light,
+    /// camera and empty in the scene carried a renderer with nothing to render.
+    #[test]
+    fn nothing_that_draws_nothing_carries_a_renderer() {
+        for kind in [
+            SpawnKind::Empty,
+            SpawnKind::Group,
+            SpawnKind::PointLight,
+            SpawnKind::Camera,
+            SpawnKind::ParticleEmitter,
+        ] {
+            assert!(!kind.draws(), "{kind:?} is not a drawing kind");
+            let (world, _ed, new) = spawn_via_menu(kind);
+            assert!(
+                world
+                    .borrow::<gizmo::renderer::components::MeshRenderer>()
+                    .get(new[0])
+                    .is_none(),
+                "{kind:?} must not be given a MeshRenderer"
+            );
+        }
+    }
+
+    /// A light is a light, a camera is a camera, an emitter is an emitter. All three used to be
+    /// an empty entity with a name that said otherwise.
+    #[test]
+    fn the_light_camera_and_emitter_get_their_own_component() {
+        let (world, _ed, new) = spawn_via_menu(SpawnKind::PointLight);
+        assert!(world
+            .borrow::<gizmo::renderer::components::PointLight>()
+            .get(new[0])
+            .is_some());
+
+        let (world, _ed, new) = spawn_via_menu(SpawnKind::Camera);
+        let cam = world.borrow::<gizmo::renderer::components::Camera>();
+        let cam = cam.get(new[0]).expect("a Camera component");
+        assert!(
+            !cam.primary,
+            "a camera dropped into a scene must not take over the view"
+        );
+
+        let (world, _ed, new) = spawn_via_menu(SpawnKind::ParticleEmitter);
+        assert!(world
+            .borrow::<gizmo::renderer::components::ParticleEmitter>()
+            .get(new[0])
+            .is_some());
+    }
+
+    /// Without GPU meshes a drawing kind must leave **nothing** behind. The old code kept the
+    /// entity — a nameless thing with a renderer and no mesh, which is a scene member you then
+    /// have to find and delete.
+    #[test]
+    fn a_drawing_kind_leaves_nothing_behind_when_the_meshes_are_missing() {
+        for kind in [
+            SpawnKind::Cube,
+            SpawnKind::Sphere,
+            SpawnKind::Plane,
+            SpawnKind::Cylinder,
+            SpawnKind::Capsule,
+        ] {
+            assert!(kind.draws(), "{kind:?} is a drawing kind");
+            let (_world, _ed, new) = spawn_via_menu(kind);
+            assert!(
+                new.is_empty(),
+                "{kind:?} left {} entities behind with no meshes to build from",
+                new.len()
+            );
+        }
+    }
+
+    /// "📂 Seçilileri Grupla" created the group and stopped. Its own comment promised the second
+    /// half — *"sonra seçili objeleri ona bağla"* — and nothing ever did it, so the button spawned
+    /// a stray empty entity and left the selection exactly where it was.
+    #[test]
+    fn grouping_puts_the_selection_under_the_new_group() {
+        let mut world = World::new();
+        let (a, b) = (spawn(&mut world), spawn(&mut world));
+        let mut ed = EditorState::default();
+        ed.pending_group_members = vec![a, b];
+        ed.spawn_request = Some(SpawnKind::Group);
+
+        handle_scene_operations(&mut world, &mut ed, &mut studio_state());
+
+        let group = world
+            .iter_alive_entities()
+            .into_iter()
+            .find(|e| name_of(&world, e.id()).as_deref() == Some("Grup"))
+            .expect("the group itself");
+
+        for member in [a, b] {
+            assert_eq!(
+                world.borrow::<Parent>().get(member.id()).map(|p| p.0),
+                Some(group.id()),
+                "every selected entity must end up under the group"
+            );
+        }
+        let mut listed = children_of(&world, group.id());
+        listed.sort_unstable();
+        let mut expected = vec![a.id(), b.id()];
+        expected.sort_unstable();
+        assert_eq!(listed, expected, "...and the group must list them both");
+
+        // The group is what you now want to drag, so it is what is selected.
+        assert!(
+            ed.selection.entities.contains(&group),
+            "the new group should be the selection"
+        );
+        assert!(
+            ed.pending_group_members.is_empty(),
+            "the request must be consumed, or the next spawn eats the same list again"
+        );
+    }
+
+    /// A spawn that never happens must not leave its pending requests armed — the next one would
+    /// pick them up and group the wrong things under the wrong entity.
+    #[test]
+    fn a_failed_spawn_disarms_its_pending_requests() {
+        let mut world = World::new();
+        let a = spawn(&mut world);
+        let mut ed = EditorState::default();
+        ed.pending_group_members = vec![a];
+        ed.spawn_request = Some(SpawnKind::Cube); // needs meshes; there are none
+
+        handle_scene_operations(&mut world, &mut ed, &mut studio_state());
+
+        assert!(ed.pending_group_members.is_empty());
+        assert!(ed.pending_child_parent.is_none());
+        assert!(world.borrow::<Parent>().get(a.id()).is_none());
     }
 
     fn spawn(world: &mut World) -> gizmo::core::entity::Entity {

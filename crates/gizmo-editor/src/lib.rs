@@ -33,7 +33,7 @@ pub mod scene_view;
 pub mod toolbar;
 pub mod windows;
 
-pub use editor_state::{BuildTarget, EditorMode, EditorState, EditorTab, GizmoMode};
+pub use editor_state::{BuildTarget, EditorMode, EditorState, EditorTab, GizmoMode, SpawnKind};
 pub use error::EditorError;
 
 use egui_dock::{DockArea, TabViewer};

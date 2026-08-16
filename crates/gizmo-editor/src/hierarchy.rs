@@ -68,49 +68,49 @@ pub fn ui_hierarchy(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
     bg_response.context_menu(|ui| {
         ui.menu_button("➕ Boş Obje", |ui| {
             if ui.button("📦 Boş Entity").clicked() {
-                state.spawn_request = Some("Empty".to_string());
+                state.spawn_request = Some(crate::editor_state::SpawnKind::Empty);
                 ui.close();
             }
             if ui.button("📂 Grup (Klasör)").clicked() {
-                state.spawn_request = Some("Group".to_string());
+                state.spawn_request = Some(crate::editor_state::SpawnKind::Group);
                 ui.close();
             }
         });
         ui.menu_button("🔶 3D Primitif", |ui| {
             if ui.button("📦 Küp (Cube)").clicked() {
-                state.spawn_request = Some("Cube".to_string());
+                state.spawn_request = Some(crate::editor_state::SpawnKind::Cube);
                 ui.close();
             }
             if ui.button("🔴 Küre (Sphere)").clicked() {
-                state.spawn_request = Some("Sphere".to_string());
+                state.spawn_request = Some(crate::editor_state::SpawnKind::Sphere);
                 ui.close();
             }
             if ui.button("▬ Düzlem (Plane)").clicked() {
-                state.spawn_request = Some("Plane".to_string());
+                state.spawn_request = Some(crate::editor_state::SpawnKind::Plane);
                 ui.close();
             }
             if ui.button("🔵 Silindir (Cylinder)").clicked() {
-                state.spawn_request = Some("Cylinder".to_string());
+                state.spawn_request = Some(crate::editor_state::SpawnKind::Cylinder);
                 ui.close();
             }
             if ui.button("💊 Kapsül (Capsule)").clicked() {
-                state.spawn_request = Some("Capsule".to_string());
+                state.spawn_request = Some(crate::editor_state::SpawnKind::Capsule);
                 ui.close();
             }
         });
         ui.menu_button("💡 Işık & Kamera", |ui| {
             if ui.button("💡 Nokta Işığı (Point Light)").clicked() {
-                state.spawn_request = Some("PointLight".to_string());
+                state.spawn_request = Some(crate::editor_state::SpawnKind::PointLight);
                 ui.close();
             }
             if ui.button("📷 Kamera (Camera)").clicked() {
-                state.spawn_request = Some("Camera".to_string());
+                state.spawn_request = Some(crate::editor_state::SpawnKind::Camera);
                 ui.close();
             }
         });
         ui.menu_button("✨ Efekt", |ui| {
             if ui.button("✨ Particle Emitter").clicked() {
-                state.spawn_request = Some("ParticleEmitter".to_string());
+                state.spawn_request = Some(crate::editor_state::SpawnKind::ParticleEmitter);
                 ui.close();
             }
         });
@@ -421,7 +421,7 @@ fn draw_entity_node(
             // === HİYERARŞİ ===
             if ui.button("➕ Çocuk Entity Ekle").clicked() {
                 // Boş child entity oluştur ve bu entity'nin altına bağla
-                state.spawn_request = Some("Empty".to_string());
+                state.spawn_request = Some(crate::editor_state::SpawnKind::Empty);
                 // spawn sonrası reparent yapılacak → spawn_request işlenirken
                 // parent'ı ayarlamak için pending_child_parent kullanılacak
                 state.pending_child_parent = Some(entity);
@@ -430,14 +430,14 @@ fn draw_entity_node(
 
             // Dövüş oyunu kısayolları
             if ui.button("🥊 Hitbox Ekle (Çocuk)").clicked() {
-                state.spawn_request = Some("Empty".to_string());
+                state.spawn_request = Some(crate::editor_state::SpawnKind::Empty);
                 state.pending_child_parent = Some(entity);
                 state.pending_child_components.push("Hitbox".to_string());
                 ui.close();
             }
 
             if ui.button("🛡 Hurtbox Ekle (Çocuk)").clicked() {
-                state.spawn_request = Some("Empty".to_string());
+                state.spawn_request = Some(crate::editor_state::SpawnKind::Empty);
                 state.pending_child_parent = Some(entity);
                 state.pending_child_components.push("Hurtbox".to_string());
                 ui.close();
@@ -453,8 +453,12 @@ fn draw_entity_node(
             // Seçili birden fazla obje varsa gruplama butonu
             if state.selection.entities.len() > 1
                 && ui.button("📂 Seçilileri Grupla").clicked() {
-                    // Boş bir parent entity oluştur, sonra seçili objeleri ona bağla
-                    state.spawn_request = Some("Group".to_string());
+                    // Boş bir parent entity oluştur, sonra seçili objeleri ona bağla. The second
+                    // half is `pending_group_members`: without it this button spawned a stray
+                    // empty entity and left the selection untouched, which is what it did for as
+                    // long as it existed.
+                    state.pending_group_members = state.selection.entities.iter().copied().collect();
+                    state.spawn_request = Some(crate::editor_state::SpawnKind::Group);
                     ui.close();
                 }
 

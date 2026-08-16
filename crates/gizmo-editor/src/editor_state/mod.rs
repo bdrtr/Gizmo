@@ -71,11 +71,15 @@ pub struct EditorState {
         Option<gizmo_core::entity::Entity>,
         Option<gizmo_math::Vec3>,
     )>,
-    pub spawn_request: Option<String>,
+    pub spawn_request: Option<SpawnKind>,
     /// Spawn edilen entity'nin otomatik olarak bağlanacağı parent
     pub pending_child_parent: Option<gizmo_core::entity::Entity>,
     /// Spawn edilen entity'ye otomatik eklenecek bileşenler
     pub pending_child_components: Vec<String>,
+    /// Entities that should become children of the entity the next spawn creates — the other half
+    /// of "group the selection", which used to create the group and then leave the selection
+    /// exactly where it was.
+    pub pending_group_members: Vec<gizmo_core::entity::Entity>,
     pub spawn_asset_request: Option<String>,
     pub spawn_asset_position: Option<gizmo_math::Vec3>,
     pub gltf_load_request: Option<(String, Option<gizmo_math::Vec3>)>,
@@ -180,6 +184,7 @@ impl EditorState {
             spawn_request: None,
             pending_child_parent: None,
             pending_child_components: Vec::new(),
+            pending_group_members: Vec::new(),
             spawn_asset_request: None,
             spawn_asset_position: None,
             gltf_load_request: None,

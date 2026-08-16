@@ -52,6 +52,92 @@ pub enum EditorMode {
     Paused,
 }
 
+/// What the hierarchy's `➕` menu can ask the studio to create.
+///
+/// # Why this is a type and not a string
+///
+/// It was an `Option<String>`, written in `gizmo-editor` and matched in `gizmo-studio`, and the
+/// two drifted badly: the menu offered **nine** kinds and the spawner's match had **two** arms
+/// plus a catch-all, so `Group`, `Plane`, `Cylinder`, `Capsule`, `PointLight`, `Camera` and
+/// `ParticleEmitter` all fell through and produced an entity called "Boş Entity" carrying a
+/// `MeshRenderer` and no mesh. Seven menu entries promising seven different things and making the
+/// same wrong one. A string channel between two crates has no agreement in it to check, so
+/// nothing could have caught it — not a test, not the compiler, not a reader of either file.
+///
+/// # Why it is deliberately NOT `#[non_exhaustive]`
+///
+/// Every other public enum here is. This one must not be, and that is the whole point: the
+/// spawner matches on it exhaustively, so adding a variant without teaching the spawner about it
+/// is a **compile error**. `#[non_exhaustive]` would force a `_` arm back into `gizmo-studio` and
+/// hand back precisely the hole this type exists to close.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SpawnKind {
+    Empty,
+    /// A folder: an entity that groups without drawing.
+    ///
+    /// There is no marker component. `Parent`/`Children` already say everything "folder" means,
+    /// and a flag beside them would be a second source of truth that can disagree — an entity
+    /// with the marker and a mesh, or with children and no marker. What a group actually is, is
+    /// an entity with a name, children, and nothing to draw.
+    Group,
+    Cube,
+    Sphere,
+    Plane,
+    Cylinder,
+    Capsule,
+    PointLight,
+    Camera,
+    ParticleEmitter,
+}
+
+impl SpawnKind {
+    /// Does this kind put geometry on the screen?
+    ///
+    /// Only these may be given a `MeshRenderer`. It used to be added to every spawn before the
+    /// match ran, which left one on every light, camera and empty in the scene.
+    pub fn draws(self) -> bool {
+        match self {
+            Self::Cube | Self::Sphere | Self::Plane | Self::Cylinder | Self::Capsule => true,
+            Self::Empty
+            | Self::Group
+            | Self::PointLight
+            | Self::Camera
+            | Self::ParticleEmitter => false,
+        }
+    }
+
+    /// The name the new entity carries in the hierarchy.
+    pub fn entity_name(self) -> &'static str {
+        match self {
+            Self::Empty => "Boş Entity",
+            Self::Group => "Grup",
+            Self::Cube => "Küp",
+            Self::Sphere => "Küre",
+            Self::Plane => "Düzlem",
+            Self::Cylinder => "Silindir",
+            Self::Capsule => "Kapsül",
+            Self::PointLight => "Nokta Işığı",
+            Self::Camera => "Kamera",
+            Self::ParticleEmitter => "Particle Emitter",
+        }
+    }
+
+    /// Every kind, for tests that have to walk all of them. Kept exhaustive by
+    /// `every_kind_is_in_all`, which matches on a variant rather than trusting this list.
+    pub const ALL: &'static [SpawnKind] = &[
+        Self::Empty,
+        Self::Group,
+        Self::Cube,
+        Self::Sphere,
+        Self::Plane,
+        Self::Cylinder,
+        Self::Capsule,
+        Self::PointLight,
+        Self::Camera,
+        Self::ParticleEmitter,
+    ];
+}
+
 // --- Alt Durum Yapilari ---
 #[derive(Default, Debug)]
 #[non_exhaustive]

@@ -2525,6 +2525,48 @@ toplandı.
 
 ### A — Sessiz yanlış davranış (en yüksek değer)
 
+#### ✅ `➕` menüsünün dokuz maddesinden yedisi yalan söylüyordu *(2026-08-16)*
+
+Hiyerarşinin sağ tık menüsü dokuz şey yaratmayı teklif ediyor; `spawn_request`'i işleyen `match`'in
+**iki** dalı ve bir `_` yakalayıcısı vardı. `Group`, `Plane`, `Cylinder`, `Capsule`, `PointLight`,
+`Camera` ve `ParticleEmitter` — yedisi de `_`'a düşüyor ve **"Boş Entity"** adlı, meshi olmayan bir
+`MeshRenderer` taşıyan aynı varlığı üretiyordu. Yedi ayrı şey vaat eden yedi menü maddesi, tek ve
+yanlış bir sonuç, ve tek bir uyarı bile yok.
+
+Bulunan diğer kusurlar, hepsi aynı fonksiyonda:
+
+- **Küre'nin çarpışma şekli meshinin iki katıydı.** Mesh `create_sphere(…, 0.5, …)`, collider
+  `Collider::sphere(1.0)`. İki sayı iki ayrı dosyada, üç yüz satır arayla yazılıydı. Yere düşen bir
+  küre yarım yarıçap havada duruyordu.
+- **`MeshRenderer` `match`'ten ÖNCE ekleniyordu**, yani sahnedeki her ışığa, her kameraya ve her
+  boş varlığa çizecek hiçbir şeyi olmayan bir renderer takılıyordu.
+- **"📂 Seçilileri Grupla" işin yarısını yapıyordu.** Grubu kuruyor, seçimi ona hiç bağlamıyordu —
+  kendi yorumu *"sonra seçili objeleri ona bağla"* diyor, ve hiçbir zaman kimse bağlamadı. Düğme
+  başıboş bir boş varlık üretip seçimi olduğu yerde bırakıyordu.
+- **Bütün spawn bloğu `if let Some(assets) = …` içindeydi**, yani GPU varlıkları yokken menünün
+  tamamı sessizce hiçbir şey yapmıyordu. Işık, kamera, grup ve boş varlığın GPU'yla hiçbir işi yok.
+
+**Kök sebep bir tip eksikliğiydi**, ve düzeltme oradan başlıyor: `spawn_request` iki crate arasında
+bir `Option<String>`'di — `gizmo-editor` yazıyor, `gizmo-studio` eşliyor, ve aralarında
+denetlenebilecek hiçbir anlaşma yok. Artık `Option<SpawnKind>`, ve spawner ona **tam kapsamlı**
+`match` ediyor: kimsenin öğretmediği yeni bir varyant **derlenmiyor**. Bu üç noktada ölçüldü —
+`draws()`, `entity_name()` ve spawner'ın kendi `match`'i; üçü de bir varyant ekleyip
+`E0004: non-exhaustive patterns` alarak doğrulandı. `SpawnKind` bu yüzden bilerek
+`#[non_exhaustive]` DEĞİL (bu modüldeki diğer bütün public enum'lar öyle): `#[non_exhaustive]`
+stüdyoya bir `_` dalı koymaya zorlar, ve kapatmak için var olduğu deliği geri açardı.
+
+Ölçüler de tek yere indi (`PrimitiveSize`): mesh ile collider aynı sayının iki okuyucusu, ve zaten
+ayrışmışlardı. Silindirin collider'ı meshin **kendi halka noktalarından** kurulan konveks kabuk —
+motorda silindir şekli yok, kapsül uçları yuvarlar, kutu köşeleri kareler. Düzlemin kutusu kendi
+yarı-kalınlığı kadar aşağı itiliyor ki **üst yüzü** görünen dörtgen olsun.
+
+Grup için **işaretleyici bileşen eklenmedi**: `Parent`/`Children` "klasör"ün anlattığı her şeyi
+zaten söylüyor, ve yanlarına konacak bir bayrak onlarla çelişebilecek ikinci bir doğruluk kaynağı
+olurdu (işaretçisi olup meshi olan varlık, ya da çocukları olup işaretçisi olmayan). Bir grup,
+adı olan, çocukları olan ve çizecek şeyi olmayan bir varlıktır.
+
+Dokuz muhafız, dokuzu da kusur geri konarak birebir doğrulandı.
+
 > **DALGA 1 + 2 KAPANDI** *(2026-08-07)* — aşağıdaki "bilerek dışarıda bırakıldı" cümlesi
 > yalnız DALGA 1 için geçerliydi; o üç fizik maddesi (patlama uyandırma, GPU/CPU damping,
 > GPU çift ilerletme) aynı gün DALGA 2'de kapandı, listede ✅ olarak işaretli.
@@ -2958,8 +3000,11 @@ kutular commit'lerin gerisinde kalmıştı.
     birlikte) ve tam dikey bakış (yaw belirsiz; `atan2(0,0)` sessizce `0` dönüp sahneyi +X'e
     döndürüyordu). Setup'taki iki eski regresyon testi formülün *kendi kopyasını* ölçüyordu; artık
     gerçek çifti çağırıyorlar.
-- ⬜ **Hiyerarşide klasör grupları** (Environment / Town / Gameplay). Parent/Children ile temsil
-  edilebilir ama "klasör" kavramı — çizim yapmayan, yalnız gruplayan varlık — yok.
+- ✅ **Hiyerarşide klasör grupları** (2026-08-16). `SpawnKind::Group` — adı olan, çocukları olan,
+  çizecek şeyi olmayan varlık — ve "📂 Seçilileri Grupla" artık seçimi gerçekten altına alıyor.
+  İşaretleyici bileşen bilerek yok: `Parent`/`Children` klasörün anlattığı her şeyi zaten söylüyor,
+  bir bayrak onlarla çelişebilecek ikinci doğruluk kaynağı olurdu. Ayrıntı ve yanında bulunan altı
+  kusur için yukarıdaki "➕ menüsünün dokuz maddesinden yedisi yalan söylüyordu" başlığına bak.
 
 ### Uygulanmış olanlar (aynı taramadan)
 
@@ -2979,7 +3024,6 @@ Sırada duran her şey burada; A öbeği bitti, B'nin ve C'nin kalanı bu:
   yazmıyor) — üçü de "sahneler kimliğe geçecek mi" sorusuna bağlı, ve o cevaplanmadan bağlamak
   spekülasyon olur.
 - ⬜ **Shader Graph** — listenin en büyüğü, tek başına bir proje.
-- ⬜ Hiyerarşide **klasör grupları** (çizim yapmayan, yalnız gruplayan varlık kavramı yok).
 
 ### Prototipin isteyip egui 0.34'ün veremediği dördü
 

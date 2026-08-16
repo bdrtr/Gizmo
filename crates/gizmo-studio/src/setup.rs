@@ -255,11 +255,27 @@ pub fn setup_studio_scene(world: &mut World, renderer: &gizmo::renderer::Rendere
 
 world.insert_resource(editor_state);
 
-    let debug_cube = gizmo::renderer::asset::AssetManager::create_cube(&renderer.device);
-    let debug_sphere = gizmo::renderer::asset::AssetManager::create_sphere(&renderer.device, 0.5, 16, 16);
+    // Every dimension here comes from `PrimitiveSize`, which the spawned colliders read too —
+    // see the type's own note for what happened when they were two separate numbers.
+    use crate::state::PrimitiveSize as PS;
+    use gizmo::renderer::asset::AssetManager as AM;
     world.insert_resource(DebugAssets {
-        cube: debug_cube,
-        sphere: debug_sphere,
+        cube: AM::create_cube(&renderer.device),
+        sphere: AM::create_sphere(&renderer.device, PS::SPHERE_RADIUS, 16, 16),
+        plane: AM::create_plane(&renderer.device, PS::PLANE_SIZE),
+        cylinder: AM::create_cylinder(
+            &renderer.device,
+            PS::CYLINDER_RADIUS,
+            PS::CYLINDER_HEIGHT,
+            PS::CYLINDER_SEGMENTS,
+        ),
+        capsule: AM::create_capsule(
+            &renderer.device,
+            PS::CAPSULE_RADIUS,
+            PS::CAPSULE_DEPTH,
+            12,
+            16,
+        ),
         white_tex: white_tex.clone(),
     });
     world.insert_resource(gizmo::renderer::Gizmos::default());
