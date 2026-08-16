@@ -133,6 +133,14 @@ pub struct EditorState {
 
     /// Fighting game HUD durumu (health bar, round, timer)
     pub fight_hud: FightHudState,
+
+    /// When the status bar last read this process's resident set size, and what it read.
+    ///
+    /// Cached because the reading is a file read and a parse; the bar samples it once a second
+    /// rather than sixty times. `rss_bytes` stays `None` where RSS cannot be measured at all, and
+    /// the row is then absent rather than showing a zero it did not measure.
+    pub rss_sampled_at: Option<Instant>,
+    pub rss_bytes: Option<u64>,
 }
 
 impl EditorState {
@@ -224,6 +232,9 @@ impl EditorState {
             pending_json_updates: Vec::new(),
 
             fight_hud: FightHudState::default(),
+
+            rss_sampled_at: None,
+            rss_bytes: None,
         }
     }
 

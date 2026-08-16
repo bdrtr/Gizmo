@@ -369,6 +369,25 @@ pub fn toggle(ui: &mut egui::Ui, value: &mut bool, label: &str) -> bool {
     false
 }
 
+/// A memory figure, the way a stats line reads one.
+///
+/// Shared by the viewport's `gpu mem` row and the status bar's `RAM`, because those two are the
+/// same kind of number and a second copy would be free to drift from the first.
+///
+/// The asset browser's file sizes deliberately do **not** come through here. That is a different
+/// presentation for a different question — a 512-byte `.meta` sidecar wants `512 B`, and rounding
+/// it into `0.0 MB` to share one function would be unification for its own sake. Two formatters
+/// with two documented rules, not one formatter pretending both audiences want the same thing.
+pub fn format_memory(bytes: u64) -> String {
+    const MB: f64 = 1024.0 * 1024.0;
+    let mb = bytes as f64 / MB;
+    if mb >= 1024.0 {
+        format!("{:.2} GB", mb / 1024.0)
+    } else {
+        format!("{mb:.0} MB")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -442,6 +461,18 @@ mod tests {
                 c.b()
             );
         }
+    }
+
+    #[test]
+    fn memory_reads_as_megabytes_until_it_is_gigabytes() {
+        use super::format_memory;
+        assert_eq!(format_memory(330 * 1024 * 1024), "330 MB");
+        assert_eq!(format_memory(0), "0 MB");
+        // The switch is at a gibibyte, and the GB form keeps two decimals — a process at 1.8 GB
+        // reads as 1.8, not as 1843 MB.
+        assert_eq!(format_memory(1023 * 1024 * 1024), "1023 MB");
+        assert_eq!(format_memory(1024 * 1024 * 1024), "1.00 GB");
+        assert_eq!(format_memory(1800 * 1024 * 1024), "1.76 GB");
     }
 
     /// Rows are tool-sized, not touch-sized.

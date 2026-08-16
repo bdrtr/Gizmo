@@ -39,6 +39,11 @@ pub use error::EditorError;
 use egui_dock::{DockArea, TabViewer};
 use gizmo_core::World;
 
+#[cfg(target_arch = "wasm32")]
+use web_time::Instant;
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
+
 /// Bridges the dockable [`EditorTab`]s to their per-panel UI drawing code.
 ///
 /// Implements [`egui_dock::TabViewer`] so [`egui_dock::DockArea`] can render
@@ -233,18 +238,23 @@ viewer.state.dock_state = dock_state;
     state.prefs.flush_if_dirty();
 }
 
-/// The prototype's global status bar: a state dot and message on the left, live counts, and the
-/// frame cost on the right.
+/// The prototype's global status bar: a state dot and message on the left, live counts, memory,
+/// and the frame cost on the right.
 ///
-/// # What is not on it
+/// # What is on it, and what is still not
 ///
-/// The prototype also shows `RAM 1.8 GB · VRAM 742 MB`, `41 systems`, `wgpu / vulkan` and
-/// `egui 0.29 · rustc 1.83`. None of those are measured or stored anywhere in this engine — the
-/// renderer logs its adapter at startup and keeps nothing, and the schedule does not expose a
-/// system count. A status bar that prints a number it did not measure is worse than a shorter one,
-/// so they are absent rather than plausible. Listed in `docs/FIXPLAN.md` under what the design
-/// asks for and the engine cannot yet answer.
-fn draw_status_bar(ui: &mut egui::Ui, world: &World, state: &EditorState) {
+/// The prototype shows `RAM 1.8 GB · VRAM 742 MB`, `41 systems`, `wgpu / vulkan` and
+/// `egui 0.29 · rustc 1.83`.
+///
+/// `RAM` is here now: it is this process's resident set size, sampled once a second. `VRAM` is
+/// measured too — but it lives in the viewport's RENDER STATS as `gpu mem` and is deliberately not
+/// repeated here, because the same number in two places is an invitation to work out why they
+/// differ. (It is also *not* VRAM: it is what wgpu has sub-allocated for this process.)
+///
+/// The other two remain absent rather than plausible: the renderer fetches its adapter info at
+/// startup, logs it and keeps nothing, and the schedule exposes no system count. A status bar that
+/// prints a number it did not measure is worse than a shorter one. Listed in `docs/FIXPLAN.md`.
+fn draw_status_bar(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
     use crate::theme::palette::*;
 
     let sep = |ui: &mut egui::Ui| {
@@ -286,6 +296,26 @@ fn draw_status_bar(ui: &mut egui::Ui, world: &World, state: &EditorState) {
                 .size(11.0),
         );
 
+        // Resident set size, sampled at most once a second. It is a file read and a parse, and a
+        // status bar does not need either of those sixty times a second — the same reasoning as
+        // the `gpu mem` row, which walks every live GPU allocation.
+        let now = Instant::now();
+        let due = state
+            .rss_sampled_at
+            .is_none_or(|t| now.duration_since(t).as_secs_f32() >= RSS_SAMPLE_SECS);
+        if due {
+            state.rss_sampled_at = Some(now);
+            state.rss_bytes = process_rss_bytes();
+        }
+        if let Some(bytes) = state.rss_bytes {
+            sep(ui);
+            ui.label(
+                egui::RichText::new(format!("RAM {}", crate::theme::format_memory(bytes)))
+                    .color(TEXT_BODY)
+                    .size(11.0),
+            );
+        }
+
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if let Some(p) = world.get_resource::<gizmo_core::FrameProfiler>() {
                 ui.label(
@@ -296,4 +326,111 @@ fn draw_status_bar(ui: &mut egui::Ui, world: &World, state: &EditorState) {
             }
         });
     });
+}
+
+/// How often the RAM figure is re-read.
+const RSS_SAMPLE_SECS: f32 = 1.0;
+
+/// This process's resident set size in bytes, or `None` where it cannot be measured.
+///
+/// Linux reads it out of `/proc/self/status`; everywhere else the row is **absent** rather than
+/// zero, because this project's rule is that a panel must not print a number it did not measure
+/// and `0 MB` is a number.
+///
+/// `VmRSS` rather than `/proc/self/statm`: statm reports a page *count*, which needs the page size
+/// to become bytes, and that means either `libc` — a dependency for one `sysconf` call — or
+/// assuming 4 KiB, which arm64 kernels are free to disagree with. `VmRSS` is already in kB.
+///
+/// No `sysinfo`-style crate either: those pull in a whole process enumerator to answer a question
+/// about the one process we are already inside.
+fn process_rss_bytes() -> Option<u64> {
+    #[cfg(target_os = "linux")]
+    {
+        parse_vm_rss(&std::fs::read_to_string("/proc/self/status").ok()?)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
+}
+
+/// Pull `VmRSS` out of `/proc/self/status` and return it in bytes.
+///
+/// Split from the file read because the read cannot be tested and this can: the format is a kernel
+/// detail, and a parser that silently returns the wrong unit is a status bar confidently reporting
+/// a thousandth of the real figure.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn parse_vm_rss(status: &str) -> Option<u64> {
+    let rest = status
+        .lines()
+        .find_map(|line| line.strip_prefix("VmRSS:"))?;
+    let mut fields = rest.split_whitespace();
+    let value: u64 = fields.next()?.parse().ok()?;
+    // The kernel always writes kB here. If that ever stops being true, report nothing rather than
+    // guessing a scale — a status bar off by 1024 looks perfectly reasonable.
+    match fields.next() {
+        Some("kB") => Some(value * 1024),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod status_bar_tests {
+    use super::parse_vm_rss;
+
+    /// The real shape of the line, tabs and all.
+    #[test]
+    fn vm_rss_is_read_in_kilobytes_and_returned_in_bytes() {
+        let status = "Name:\tgizmo-studio\nVmPeak:\t 9999999 kB\nVmRSS:\t  1843200 kB\nThreads:\t9\n";
+        assert_eq!(parse_vm_rss(status), Some(1_843_200 * 1024));
+    }
+
+    /// The real file surrounds `VmRSS` with lines a looser match would take instead — `VmHWM` is
+    /// the *peak* and `RssAnon` / `RssFile` / `RssShmem` are its components. Any of them reported
+    /// as the current figure looks entirely plausible on a status bar.
+    ///
+    /// The fixture is the real neighbourhood, in the real order, and `VmRSS` is deliberately NOT
+    /// first: a parser that took whichever Rss-ish line it met first would pass a tidier fixture.
+    #[test]
+    fn only_the_vm_rss_line_counts() {
+        let status = "\
+RssAnon:\t   111111 kB
+RssFile:\t   222222 kB
+RssShmem:\t     3333 kB
+VmHWM:\t   9000000 kB
+VmRSS:\t    512000 kB
+VmData:\t   777777 kB
+";
+        assert_eq!(
+            parse_vm_rss(status),
+            Some(512_000 * 1024),
+            "neither the peak nor one of the Rss components — the VmRSS line"
+        );
+        // ...and a file without it at all reports nothing rather than zero.
+        assert_eq!(parse_vm_rss("RssAnon:\t 111111 kB\nVmHWM:\t 9000000 kB\n"), None);
+    }
+
+    /// A unit the kernel does not currently write means the format changed under us. Report
+    /// nothing: a status bar off by a factor of 1024 looks perfectly reasonable, which is exactly
+    /// what makes it dangerous.
+    #[test]
+    fn an_unexpected_unit_reports_nothing_rather_than_guessing() {
+        assert_eq!(parse_vm_rss("VmRSS:\t  1800 MB\n"), None);
+        assert_eq!(parse_vm_rss("VmRSS:\t  1800\n"), None, "no unit at all");
+        assert_eq!(parse_vm_rss("VmRSS:\thuge kB\n"), None, "not a number");
+        assert_eq!(parse_vm_rss(""), None);
+    }
+
+    /// On the machine this runs on, the reading must actually work — a parser that is only ever
+    /// exercised against hand-written fixtures is a parser that has never met the kernel.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_real_proc_status_parses_to_something_plausible() {
+        let bytes = super::process_rss_bytes().expect("Linux must be able to read its own RSS");
+        // A test binary that has loaded this crate is somewhere between a megabyte and a terabyte.
+        assert!(
+            bytes > 1024 * 1024 && bytes < 1024_u64.pow(4),
+            "implausible RSS: {bytes} bytes"
+        );
+    }
 }

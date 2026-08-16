@@ -476,7 +476,7 @@ fn draw_viewport_overlays(
     // Labelled "gpu mem" rather than "vram": this is what wgpu has sub-allocated for this process,
     // not the card's total usage, and the shorter word would claim the larger thing.
     if let Some(bytes) = stats.gpu_allocated_bytes {
-        rows.push(("gpu mem", format_bytes(bytes)));
+        rows.push(("gpu mem", crate::theme::format_memory(bytes)));
     }
 
     const ROW: f32 = 16.0;
@@ -694,17 +694,6 @@ fn draw_axis_gizmo(
     // band behind it.
     hovered.is_some()
         || press_origin.is_some_and(|p| p.distance(centre) <= AXIS_HALF)
-}
-
-/// Bytes as MB or GB, the way a stats panel reads them.
-fn format_bytes(bytes: u64) -> String {
-    const MB: f64 = 1024.0 * 1024.0;
-    let mb = bytes as f64 / MB;
-    if mb >= 1024.0 {
-        format!("{:.2} GB", mb / 1024.0)
-    } else {
-        format!("{mb:.0} MB")
-    }
 }
 
 /// `30588` → `30,588`, the way the prototype prints its triangle count.
