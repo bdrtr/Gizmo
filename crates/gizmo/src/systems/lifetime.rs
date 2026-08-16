@@ -152,8 +152,9 @@ impl gizmo_core::system::System for LifetimeSystem {
 /// [`DespawnBelowY`] component are deleted automatically.
 pub struct LifetimePlugin;
 
-impl<State: 'static> crate::app::Plugin<State> for LifetimePlugin {
-    fn build(&self, app: &mut crate::app::App<State>) {
+impl crate::app::Plugin for LifetimePlugin {
+    fn build(&self, app: &mut dyn crate::app::AppLike) {
+        let app = app.parts_mut();
         app.schedule.add_di_system(
             gizmo_core::system::SystemConfig::new(Box::new(LifetimeSystem)).label("lifetime"),
         );

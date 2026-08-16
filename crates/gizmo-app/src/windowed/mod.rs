@@ -40,8 +40,9 @@ struct PendingWebInit {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AssetPlugin;
 
-impl<State: 'static> super::Plugin<State> for AssetPlugin {
-    fn build(&self, app: &mut App<State>) {
+impl super::Plugin for AssetPlugin {
+    fn build(&self, app: &mut dyn super::AppLike) {
+        let app = app.parts_mut();
         app.world
             .insert_resource(gizmo_core::asset::Assets::<gizmo_renderer::components::Mesh>::new());
         app.world.insert_resource(gizmo_core::asset::Assets::<
@@ -171,3 +172,13 @@ impl<State: 'static> std::fmt::Debug for App<State> {
 mod builder;
 mod lifecycle;
 mod event;
+
+impl<State: 'static> crate::plugin::AppLike for App<State> {
+    fn parts_mut(&mut self) -> crate::plugin::AppParts<'_> {
+        crate::plugin::AppParts {
+            world: &mut self.world,
+            schedule: &mut self.schedule,
+            update_schedule: &mut self.update_schedule,
+        }
+    }
+}

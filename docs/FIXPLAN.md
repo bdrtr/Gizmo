@@ -57,12 +57,13 @@
 > `unsafe impl`'i duruyor, o ayrı ve gerekçeli); ve "modellenmiyor" listesinde
 > `justify_items`/`justify_self` eksikti.
 
-### ⬜ (özgün madde) A3-followup — `taffy::Style` bağımlılığını component'ten çıkar
-`Style(pub taffy::style::Style)` bir ECS component'i olduğu için `Send+Sync` zorunlu, ama
-taffy'nin tipi yapısal olarak değil. Şu an feature-gate'e dayanıyoruz (yukarıdaki kalan risk).
-Kalıcı çözüm: component'te kendi POD layout tipimizi tut, `taffy::Style`'a yalnız layout
-hesabı sırasında `UiContext` içinde dönüştür. Bu aynı zamanda `lib.rs:76`'daki
-`pub use taffy::style::*` sızıntısını da kapatır.
+### ✅ (özgün madde) A3-followup — `taffy::Style` bağımlılığını component'ten çıkar
+> **Bitti (2026-08-08); işareti 2026-08-17'de doğrulanıp güncellendi.** Component artık kendi POD
+> `Style`'ımız, `taffy`'ye çeviri yalnız `UiContext::to_taffy_style` içinde yapılıyor,
+> `pub use taffy::style::*` sızıntısı kapalı ve `gizmo-ui`'de component için hiç `unsafe impl`
+> yok. Geriye kalan iki impl `UiContext` üzerinde ve gerekçeleri artık bu dosyaya değil kendi
+> yanlarına yazılı; `no_length_conversion_produces_a_calc_tagged_value` testi `calc` etiketli bir
+> uzunluk üretilemediğini iddia ediyor.
 
 ### ✅ A4 — `query_entity_mut` aliasing kontrolü
 > **Bitti (2026-08-04).** `query_entity_mut` ve simetri için `query_entity`'ye
@@ -188,10 +189,28 @@ tekrarlanabilirlik. Davranış (görsel) değiştirdiği için Faz A kapsamına 
 > `bundles.rs`, `asset_server.rs`, `systems/{mod,physics,transform,render/mod}.rs`,
 > `crates/gizmo-app/src/{lib,headless}.rs`, `.github/workflows/ci.yml`.
 
-### ⬜ A2-followup — `Plugin`'i runtime üzerinden generic yap
-`pub trait Plugin<State> { fn build(&self, app: &mut App<State>); }` tek bir somut `App`'e
-bağlı. Runtime'ı da tip parametresi yapmak (veya bir `AppLike` trait'i) `headless::App`'in
-pencereli runtime varken de plugin kabul etmesini sağlar. 11 impl imzası etkilenir.
+### ✅ A2-followup — `Plugin`'i runtime'dan bağımsız yap *(2026-08-17)*
+> **Bitti.** Çözüm tip parametresi değil, `AppLike` oldu — çünkü ölçünce görüldü ki depodaki
+> **on üç** plugin'in tamamı yalnızca üç şeye dokunuyor: `world`, `schedule`, `update_schedule`.
+> Üçünü adlandırmak yetiyor, ve `Plugin` nesne-güvenli kalıyor (`&mut dyn AppLike`) — runtime'ı
+> tip parametresi yapmak onu her impl'e ve her çağıranın turbofish'ine taşırdı.
+>
+> **Üç erişimci değil tek `parts_mut()`**, ve bu bir üslup tercihi değil: `gizmo-ui`'nin plugin'i
+> dünyayı VE bir schedule'ı aynı çağrıda istiyor; iki ayrı `&mut self` metodundan bunu alamazsın
+> (ikinci ödünç birinciyle çakışır). Ayrık alan ödünçleri taşıyan tek bir `AppParts` struct'ı,
+> plugin'in doğrudan alan erişiminde sahip olduğu şeyin aynısı.
+>
+> `Plugin`'in `State` parametresi düştü: gövdelerin hiçbiri kullanmıyordu, ve düşünce on üç impl
+> `impl<State: 'static> Plugin<State> for X` yerine `impl Plugin for X` oldu — imza sadeleşti.
+>
+> **Asıl kazanç ve testi:** `headless::App::add_plugin` artık `#[cfg]`'li değil.
+> `the_headless_runtime_accepts_a_plugin_in_a_windowed_build` tam da eskiden derlenemeyen şeyi
+> yapıyor: pencereli derlemede headless runtime'a plugin takmak.
+>
+> **Ve bir gerçek kullanıcı, trait'in sınırını doğruladı:** `cradle/headless_server.rs`'in
+> "plugin"i `set_runner_mut` çağırıyordu — yani runtime'ın kendisini değiştiriyordu, bir plugin'in
+> tanımı gereği yapamayacağı şey. Somut `App` alan düz bir fonksiyona çevrildi; gerekçesi orada
+> yazılı.
 
 ### ⬜ A-followup — `Transform`'u `gizmo-core`'a taşı
 A2'nin ortaya çıkardığı asıl mimari kusur: motorun en temel uzamsal tipi bir *fizik*
@@ -316,7 +335,8 @@ gizliyor ama fizik crate'lerini bağımsız paketlemeyi (D1) zorlaştırıyor ve
 > grafik yığını (wgpu/winit/egui/naga) tek PR'da gruplanıyor — MSRV'yi birlikte etkiliyorlar;
 > `glam` major'ı ise bilinçli olarak **ignore** (public dep, D5 ile planlı yapılacak).
 
-### 🔄 A6-followup — `bincode` 1.x → 2.x *(2026-08-07)*: **geçiş yapıldı, ama uyarı KAPANMADI**
+### ✅ A6-followup — `bincode` 1.x → 2.x *(2026-08-07)*: **geçiş yapıldı, uyarı kapanmadı — ve kapanamaz**
+> **Kapatıldı 2026-08-17:** son açık kalemi ("bincode'dan tamamen çıkmak") karara bağlandı, aşağıda.
 
 **Maddenin varsayımı yanlıştı ve bunu ancak ölçünce gördüm.** "2.x'e geç, `cargo deny` sussun"
 diyordu. RUSTSEC-2025-0141 "bincode 1.x eski" demiyor: bincode ekibi geliştirmeyi **kalıcı olarak
@@ -345,8 +365,11 @@ kaldırıp `cargo deny`'ın düşmesiyle ortaya çıktı.
 > Config artık tek bir yerde (`transport::WIRE_CONFIG`); iki çağrı yerinin kendi config'ini
 > seçmesi wire formatının sessizce kayması demek.
 
-- ⬜ **Kalan karar:** bincode'dan tamamen çıkmak (postcard/bitcode/rkyv). Wire kırılması,
-  kendi benchmark'ı ve kendi turunu isteyen ayrı bir karar.
+- ✅ **Kalan karar verildi (2026-08-17): bincode'da kalınıyor.** postcard/bitcode/rkyv'ye geçiş
+  wire formatını kırar, kendi benchmark'ını ve kendi turunu ister; karşılığında bugün ölçülmüş bir
+  sorun çözmüyor — muafiyetin gerekçesi zaten "güvenlik açığı değil, bakım durdu" ve 2.0.1 bakımı
+  sürdürülen hat. Yeniden açılacaksa tetikleyici somut olsun: ölçülmüş bir serileştirme darboğazı
+  ya da bincode 2'de kapanmayan bir kusur.
 
 ### ✅ A9 — 0.9.0 sürüm bump'ı
 > **Bitti (2026-08-04).** `0.8.1` değil **`0.9.0`**: bu turda üç public imza değişti

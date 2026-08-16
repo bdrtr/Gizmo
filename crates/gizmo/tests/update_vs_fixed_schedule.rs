@@ -15,7 +15,7 @@ use gizmo::systems::fps_look::{FpsLook, FpsLookPlugin};
 
 /// Build an `App` far enough to apply plugins. No window and no renderer is created until
 /// `run()`, so this is cheap and headless.
-fn app_with_plugin<P: gizmo::app::Plugin<()>>(plugin: P) -> gizmo::app::App<()> {
+fn app_with_plugin<P: gizmo::app::Plugin>(plugin: P) -> gizmo::app::App<()> {
     gizmo::app::App::<()>::new("schedule-placement-test", 64, 64).add_plugin(plugin)
 }
 
@@ -228,5 +228,36 @@ fn update_systems_observe_the_world_after_the_frame_s_fixed_steps() {
         seq.iter().filter(|s| **s == "update").count(),
         1,
         "and exactly once; sequence was {seq:?}"
+    );
+}
+
+/// **A headless app takes plugins in a graphical build too.**
+///
+/// It could not. `Plugin::build` took `&mut App<State>`, `App` is whichever runtime the features
+/// selected, and the two runtimes coexist — so in any build with `window` + `render` (this one),
+/// `headless::App::add_plugin` was `#[cfg]`-ed out entirely and a headless simulation inside a
+/// graphical application had to register every system by hand. `Plugin` speaks `AppLike` now, and
+/// this test is the thing that was impossible: the *headless* runtime, in the *windowed* build,
+/// accepting the same plugin the windowed one takes.
+#[test]
+fn the_headless_runtime_accepts_a_plugin_in_a_windowed_build() {
+    let app = gizmo::app::headless::App::<()>::new("headless-plugin-test", 64, 64)
+        .add_plugin(gizmo::systems::lifetime::LifetimePlugin);
+
+    // The plugin's system is registered where the plugin put it — the fixed schedule — and the
+    // world it registered into is the headless app's own.
+    let mut app = app;
+    let e = app.world.spawn();
+    app.world
+        .add_component(e, gizmo::systems::lifetime::DespawnAfter { remaining: 0.05 });
+
+    // Two fixed steps at 1/60 s spend the 0.05 s lifetime and the entity is gone.
+    for _ in 0..4 {
+        app.schedule.run(&mut app.world, 1.0 / 60.0);
+        app.world.apply_commands();
+    }
+    assert!(
+        app.world.entity(e.id()).is_none(),
+        "the plugin's despawn system did not run in the headless app"
     );
 }

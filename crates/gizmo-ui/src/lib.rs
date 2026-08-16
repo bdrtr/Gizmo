@@ -157,15 +157,16 @@ pub fn register(world: &mut World, schedule: &mut Schedule) {
 pub struct UiPlugin;
 
 #[cfg(feature = "app")]
-impl<State: 'static> gizmo_app::Plugin<State> for UiPlugin {
-    fn build(&self, app: &mut gizmo_app::App<State>) {
+impl gizmo_app::Plugin for UiPlugin {
+    fn build(&self, app: &mut dyn gizmo_app::AppLike) {
+        let app = app.parts_mut();
         // Per-frame, not per fixed step. Layout resolves against the window size and
         // interaction reads the mouse position — both are presentation state refreshed once
         // per rendered frame. On the fixed-timestep schedule these ran `0..N` times per
         // frame depending on the physics accumulator, so with vsync off a hover would
         // register on roughly one frame in ten and a resize could take several frames to
         // reflow. Neither has anything to do with the simulation rate.
-        register(&mut app.world, &mut app.update_schedule);
+        register(&mut *app.world, &mut *app.update_schedule);
     }
 }
 

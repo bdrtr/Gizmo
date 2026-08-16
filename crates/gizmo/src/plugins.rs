@@ -1,4 +1,4 @@
-use crate::app::{App, Plugin};
+use crate::app::Plugin;
 #[cfg(feature = "physics")]
 use gizmo_physics_rigid::world::PhysicsWorld;
 
@@ -36,8 +36,9 @@ impl PhysicsPlugin {
 }
 
 #[cfg(feature = "physics")]
-impl<State: 'static> Plugin<State> for PhysicsPlugin {
-    fn build(&self, app: &mut App<State>) {
+impl Plugin for PhysicsPlugin {
+    fn build(&self, app: &mut dyn gizmo_app::AppLike) {
+        let app = app.parts_mut();
         tracing::info!(
             "[Plugin] PhysicsPlugin yükleniyor (Yerçekimi: {:?})...",
             self.gravity
@@ -74,8 +75,9 @@ impl<State: 'static> Plugin<State> for PhysicsPlugin {
 pub struct TransformPlugin;
 
 #[cfg(feature = "physics")]
-impl<State: 'static> Plugin<State> for TransformPlugin {
-    fn build(&self, app: &mut App<State>) {
+impl Plugin for TransformPlugin {
+    fn build(&self, app: &mut dyn gizmo_app::AppLike) {
+        let app = app.parts_mut();
         // Per-frame, not per fixed step — and this is an ordering fix as much as a cost one.
         //
         // These ran in the fixed-timestep schedule, so they propagated `0..N` times per

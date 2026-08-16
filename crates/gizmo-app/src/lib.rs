@@ -50,7 +50,7 @@ pub mod scene_registry;
 pub mod gameplay;
 pub mod plugin;
 
-pub use plugin::Plugin;
+pub use plugin::{AppLike, Plugin};
 
 /// Errors that can occur while building and running an [`App`].
 ///

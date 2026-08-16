@@ -150,8 +150,9 @@ pub fn asset_server_update_system(
 
 pub struct AssetServerPlugin;
 
-impl<State: 'static> crate::app::Plugin<State> for AssetServerPlugin {
-    fn build(&self, app: &mut crate::app::App<State>) {
+impl crate::app::Plugin for AssetServerPlugin {
+    fn build(&self, app: &mut dyn crate::app::AppLike) {
+        let app = app.parts_mut();
         app.world.insert_resource(AssetServer::new());
         app.schedule.add_di_system(asset_server_update_system);
         // Distance-based texture streaming: request nearby high-res textures and

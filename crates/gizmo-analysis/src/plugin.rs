@@ -4,7 +4,7 @@
 //! `Analyzer::collect` çağıran bir sistemi schedule'a koyar.
 
 use crate::analyzer::{AnalysisConfig, Analyzer};
-use gizmo_app::{App, Plugin};
+use gizmo_app::Plugin;
 use gizmo_core::system::{AccessInfo, System};
 use gizmo_core::world::World;
 use gizmo_core::FrameProfiler;
@@ -24,8 +24,9 @@ impl AnalysisPlugin {
     }
 }
 
-impl<State: 'static> Plugin<State> for AnalysisPlugin {
-    fn build(&self, app: &mut App<State>) {
+impl Plugin for AnalysisPlugin {
+    fn build(&self, app: &mut dyn gizmo_app::AppLike) {
+        let app = app.parts_mut();
         // Frame profiler yoksa ekle (Analyzer span'leri buradan okur; schedule.run
         // her frame end_frame çağırır).
         if app.world.get_resource::<FrameProfiler>().is_none() {

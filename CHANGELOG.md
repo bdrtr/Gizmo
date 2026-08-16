@@ -29,6 +29,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`Plugin` no longer names a runtime, so both runtimes can take plugins.** `Plugin::build` took
+  `&mut App<State>`, and `App` is whichever runtime the feature flags selected — but the two
+  runtimes coexist, so in any `window` + `render` build `headless::App::add_plugin` was `#[cfg]`-ed
+  out of existence and a headless simulation inside a graphical application had to register every
+  system by hand. `build` now takes `&mut dyn AppLike`, whose single method hands back the three
+  things every plugin in the tree actually touched — world, fixed schedule, update schedule — as
+  disjoint borrows (`AppParts`), which is what a plugin had with direct field access.
+
+  `Plugin`'s `State` parameter is gone with it: no `build` body used it, so thirteen impls went
+  from `impl<State: 'static> Plugin<State> for X` to `impl Plugin for X`. A plugin that needs more
+  than `AppLike` — replacing the runner, say — is not a plugin: take the concrete `App` in an
+  ordinary function (`cradle`'s headless server now does).
+
 - **Studio's Build/Export ships your scene, not the engine's sample.** It built `demo` and copied
   that crate's default binary — `bevy_3d_scene`, a fixed floor/cube/light/camera that opens no
   scene file and runs no script — then copied the project's `scenes/` and `scripts/` next to it,

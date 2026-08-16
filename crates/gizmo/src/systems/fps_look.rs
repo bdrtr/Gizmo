@@ -203,8 +203,9 @@ impl gizmo_core::system::System for FpsLookSystem {
 /// component look around with the mouse (and move around with WASD).
 pub struct FpsLookPlugin;
 
-impl<State: 'static> crate::app::Plugin<State> for FpsLookPlugin {
-    fn build(&self, app: &mut crate::app::App<State>) {
+impl crate::app::Plugin for FpsLookPlugin {
+    fn build(&self, app: &mut dyn crate::app::AppLike) {
+        let app = app.parts_mut();
         // Per-frame, not per fixed step. This system reads `Input::mouse_delta`, which is
         // accumulated from window events and cleared once per rendered frame — so on the
         // fixed schedule it saw a fraction of the mouse motion (or, on frames where the

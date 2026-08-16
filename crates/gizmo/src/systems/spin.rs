@@ -103,8 +103,9 @@ impl gizmo_core::system::System for SpinSystem {
 /// rotates automatically.
 pub struct SpinPlugin;
 
-impl<State: 'static> crate::app::Plugin<State> for SpinPlugin {
-    fn build(&self, app: &mut crate::app::App<State>) {
+impl crate::app::Plugin for SpinPlugin {
+    fn build(&self, app: &mut dyn crate::app::AppLike) {
+        let app = app.parts_mut();
         app.schedule.add_di_system(
             gizmo_core::system::SystemConfig::new(Box::new(SpinSystem)).label("spin"),
         );

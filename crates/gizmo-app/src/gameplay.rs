@@ -81,9 +81,10 @@ pub fn register_gameplay_physics_systems(schedule: &mut Schedule) {
 #[derive(Debug, Default, Clone, Copy)]
 pub struct GameplayPhysicsPlugin;
 
-impl<State: 'static> crate::plugin::Plugin<State> for GameplayPhysicsPlugin {
-    fn build(&self, app: &mut crate::App<State>) {
-        register_gameplay_physics_systems(&mut app.schedule);
+impl crate::plugin::Plugin for GameplayPhysicsPlugin {
+    fn build(&self, app: &mut dyn crate::plugin::AppLike) {
+        let app = app.parts_mut();
+        register_gameplay_physics_systems(&mut *app.schedule);
     }
 }
 

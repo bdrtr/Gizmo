@@ -1,12 +1,13 @@
-use gizmo::app::Plugin;
 use gizmo::prelude::*;
 
-/// Bu eklenti (Plugin), motorun normal pencereli (Winit+Wgpu) döngüsünü
-/// tamamen ezip yerine penceresiz ve sadece CPU odaklı (Headless) bir döngü kurar.
-struct HeadlessServerPlugin;
-
-impl Plugin for HeadlessServerPlugin {
-    fn build(&self, app: &mut App) {
+/// Motorun normal pencereli (Winit+Wgpu) döngüsünü tamamen ezip yerine penceresiz, sadece CPU
+/// odaklı bir döngü kurar.
+///
+/// **Neden `Plugin` değil, düz fonksiyon.** `Plugin::build` bir `AppLike` alıyor — dünya ve iki
+/// schedule — çünkü ancak o zaman aynı plugin hem pencereli hem headless runtime'a takılabiliyor.
+/// Bu kod ise `set_runner_mut` çağırıyor: runtime'ın KENDİSİNİ değiştiriyor, yani bir plugin'in
+/// tanımı gereği yapamayacağı şeyi yapıyor. Somut `App`'i alan bir fonksiyon dürüst karşılığı.
+fn install_headless_runner(app: &mut App<()>) {
         // Motorun Runner'ını değiştiriyoruz. Artık Winit veya Wgpu yüklenmeyecek!
         app.set_runner_mut(|mut app| {
             println!("\n[Sunucu] Gizmo Engine Headless (Penceresiz) Sunucu Başlatıldı!");
@@ -61,14 +62,12 @@ impl Plugin for HeadlessServerPlugin {
                 }
             }
         });
-    }
 }
 
 fn main() {
-    // App'i oluştur, Headless plugin'i tak ve çalıştır.
-    App::new("Gizmo Dedicated Server", 0, 0)
-        .add_plugin(PhysicsPlugin::default()) // Fizik Plugin'ini ekledik
-        .add_plugin(HeadlessServerPlugin)
-        .run()
-        .expect("uygulama çalıştırılamadı");
+    // App'i oluştur, fizik plugin'ini tak, headless runner'ı kur ve çalıştır.
+    let mut app = App::<()>::new("Gizmo Dedicated Server", 0, 0)
+        .add_plugin(PhysicsPlugin::default());
+    install_headless_runner(&mut app);
+    app.run().expect("uygulama çalıştırılamadı");
 }

@@ -1,8 +1,5 @@
 use gizmo_core::system::Schedule;
 use gizmo_core::world::World;
-// Only `add_plugin` uses this, and that method exists only when the headless runtime is the
-// crate's root `App` — see the gate on it below.
-#[cfg(not(all(feature = "window", feature = "render")))]
 use crate::plugin::Plugin;
 
 /// The headless application builder and runtime.
@@ -75,12 +72,10 @@ impl<State: 'static> App<State> {
     /// Everything else on `headless::App` (`set_setup`, `set_update`, `set_runner`, `run`)
     /// stays available unconditionally, so a simulation server keeps working even if some
     /// unrelated crate in the graph turns `window` on — which is the whole point of the two
-    /// runtimes no longer being mutually exclusive.
-    ///
-    /// Making `Plugin` generic over the runtime would remove this restriction; see
-    /// `docs/FIXPLAN.md`.
-    #[cfg(not(all(feature = "window", feature = "render")))]
-    pub fn add_plugin<P: Plugin<State>>(mut self, plugin: P) -> Self {
+    /// runtimes no longer being mutually exclusive. Since `Plugin` speaks `AppLike` rather than
+    /// a concrete runtime, this is available in EVERY build — including a windowed one, where a
+    /// headless app used to be unable to take a plugin at all.
+    pub fn add_plugin<P: Plugin>(mut self, plugin: P) -> Self {
         tracing::info!(plugin = %std::any::type_name::<P>(), "[App:headless] plugin build");
         plugin.build(&mut self);
         self
@@ -181,6 +176,16 @@ impl<State: 'static> App<State> {
 
             // Simple busy wait or sleep to avoid 100% CPU in headless if not limited
             std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+}
+
+impl<State: 'static> crate::plugin::AppLike for App<State> {
+    fn parts_mut(&mut self) -> crate::plugin::AppParts<'_> {
+        crate::plugin::AppParts {
+            world: &mut self.world,
+            schedule: &mut self.schedule,
+            update_schedule: &mut self.update_schedule,
         }
     }
 }

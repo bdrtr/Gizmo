@@ -95,7 +95,7 @@ impl<State: 'static> App<State> {
         self
     }
 
-    pub fn add_plugin<P: crate::Plugin<State>>(mut self, plugin: P) -> Self {
+    pub fn add_plugin<P: crate::Plugin>(mut self, plugin: P) -> Self {
         tracing::info!(plugin = %std::any::type_name::<P>(), "[App] plugin build");
         plugin.build(&mut self);
         self
