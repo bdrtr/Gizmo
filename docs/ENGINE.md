@@ -1260,6 +1260,63 @@ diye okundu; bir daha aynı tuzağa düşülmesin:
 Genel kural: bir kontrolün ölü olduğunu ancak **etkili olabileceği** bir zeminde ölçtükten sonra
 söyle. Gölgeleme çipleri gerçekten ölüydü (her zeminde 0/65536); bu ikisi değildi.
 
+### SSR ve SSGI iki karakter yüzünden ölüydü (2026-08-16, DÜZELTİLDİ)
+
+Aynı mercek bir seviye aşağı tutuldu: kontrolü değil **geçişin kendisini** kaldır
+(`renderer.ssgi = None`) ve kareyi baytına kadar karşılaştır. Dört sahne, beş ekran-uzayı geçişi:
+
+| Geçiş | Kaldırılınca fark | |
+|---|---|---|
+| SSAO | %10–15 | çalışıyor — *kontrolü* ölü, o ayrı konu (yukarıdaki tablo) |
+| TAA | %0,4–1,6 | çalışıyor |
+| volumetric | eşik altı; 7–20 bin bayt kıpırdıyor, max delta 5–8 | koşuyor ama görünmez zayıflıkta |
+| **SSGI** | **0/65536 bayt** | **ölü** |
+| **SSR** | **0/65536 bayt** | **ölü** |
+
+Sıfır "az" demek değil, **birebir aynı kare**: durum kuruluyor, pass kaydediliyor, pipeline
+derleniyor, her karede koşuyor — ve toplamsal apply'ı kareye hiçbir şey eklemiyor.
+
+Sebep tek eşik. `gbuffer.wgsl` "bu piksel yazıldı" bayrağını world_position'ın alfasına paketliyor:
+
+```wgsl
+let packed_ss_aniso = (0.5 + 0.49 * anisotropy_raw) + floor(100.0 * subsurface_raw);
+```
+
+Sıradan bir malzemede (anizotropi 0, subsurface 0) bu **tam 0,5**, ve 0,5 Rgba16Float'ta tam
+temsil edilir — yuvarlama payı yok. Bayrağı okuyan on yerden sekizi kapsayıcı yazılmış
+(`< 0.5` → atla, ya da `>= 0.5` → geçerli): ssao'nun ikisi, deferred_lighting, volumetric, taa,
+ssgi_temporal ve SSR/SSGI'nin **kendi giriş kapıları**. Işın yürüyüşünün isabet testi ise iki
+shader'da `> 0.5` idi — `ssr.wgsl:71` ve `ssgi.wgsl:107` — yani sıradan her piksel için yanlış.
+Işın 20 (SSR) / 8 (SSGI) adımını sonuna kadar koşup hiçbir isabet kaydedemiyor, siyah dönüyordu.
+
+`>= 0.5` yapıldı. Ölçüm (ayna zemin, 128×128, pass açık vs. kaldırılmış):
+
+| | önce | sonra |
+|---|---|---|
+| SSGI | 0 px · 0 bayt | 2005/16384 px (%12,2) · 7959 bayt · max delta 64 |
+| SSR | 0 px · 0 bayt | 426/16384 px (%2,6) · 1908 bayt · max delta 26 |
+
+Bekçi: `screen_space_reflections_and_gi_reach_the_frame` (`golden_render_tests`). Eşikler ölçülenin
+çok altında — korunan şey "geçiş kareye ulaşıyor mu", ayarı değil. Düzeltme geri alınıp test
+koşuldu: `removing SSGI changed 0/16384 pixels` ile kırmızı, yani kusuru gerçekten tutuyor.
+
+**Düzeltme nereye ulaşıyor.** `default_render_pass` — yani oyun yolu; `platformer`, `vehicle_scene`,
+`cloth_demo` gibi geçişleri açık bırakan demolar bugünden itibaren gerçekten SSR/SSGI görüyor.
+Editör viewport'u **değişmez**: stüdyonun kendi hattı bu geçişleri hiç kaydetmiyor (`gizmo-studio`
+içinde `ssr`/`ssgi` geçmiyor, "iki render yolu" bölümüyle tutarlı), `SimpleApp` ile
+`with_scene_render` ise ikisini bilerek `None`'a çekiyor. Değişikliği stüdyoda arayan biri
+"düzelmemiş" sonucuna varır.
+
+**Neden yıllarca hiçbir şey yakalamadı.** Kurulum, kayıt, bind group, shader derlemesi — her yan
+sağlıklı görünüyordu; yalnız resim biliyordu. Ve zemin seçimi burada da belirleyici: SSGI ayna
+zeminde %12,2 verirken kırmızı duvarlı "bounce" sahnesinde eşiğin altında kaldı (max delta 6).
+Toplayacak parlak komşu yoksa GI'yi ölçmek yine fixture'ı ölçer.
+
+Ölçüm notu: her render için yeni bir `Renderer::new_headless` kurmak GPU belleğini bitiriyor —
+4 zemin × 6 render = 24 cihazın 17.'sinde `radv/amdgpu: Not enough memory for command submission`
+ve cihaz kaybı geldi (tek başına gölge dizisi 3072²×4). Süpürmeyi gerçekten okunacak satırlarla
+sınırlı tut; bu makinede sınır ~16 headless renderer.
+
 ### Gölgeleme modları: forward hat deferred'ın numaralandırmasını TEKRARLIYOR (2026-08-16)
 
 Toolbar'ın Lit/Normals/Albedo/Wire çipleri tek bir `shading_mode` uniform'u yazıyor. Modlar

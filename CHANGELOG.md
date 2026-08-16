@@ -16,6 +16,22 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Screen-space reflections and screen-space GI reach the frame at all.** Both shaders tested the
+  G-buffer's written-flag with a strict `> 0.5`, while `gbuffer.wgsl` packs that flag as
+  `(0.5 + 0.49·anisotropy) + floor(100·subsurface)` — exactly `0.5` for an ordinary material, and
+  exactly representable in the `Rgba16Float` target it is stored in. Every ray-march hit candidate
+  was therefore rejected, both passes returned black, and their additive apply added nothing: a
+  frame rendered with SSR and SSGI running was byte-identical to one rendered with the passes
+  removed, on every scene measured. The entry gates in the same two shaders had always used the
+  inclusive form, as do the other six readers of that flag; only the inner hit test disagreed.
+
+  Games drawing through `default_render_pass` now get both effects (measured on a mirror floor at
+  128×128: SSGI moves 12.2 % of pixels, SSR 2.6 %). `SimpleApp` and `with_scene_render` still
+  switch both off deliberately, and the editor viewport never recorded them. Guarded by
+  `screen_space_reflections_and_gi_reach_the_frame`.
+
 ## [0.10.0] — 2026-08-16
 
 ### Changed

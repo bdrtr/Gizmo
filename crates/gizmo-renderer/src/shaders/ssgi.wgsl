@@ -103,8 +103,14 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
             
             let scene_pos = textureLoad(t_position_rel_camera, sample_iuv, 0);
             
-            // Depth check
-            if (scene_pos.w > 0.5) {
+            // Depth check. `>= 0.5`, NOT `> 0.5` — same defect SSR carried: the written-flag
+            // gbuffer.wgsl packs into `.w` is `(0.5 + 0.49·anisotropy) + floor(100·subsurface)`,
+            // which is EXACTLY 0.5 for an ordinary material, so the strict form rejected every
+            // hit candidate and the gather returned black everywhere. Note the entry gate at the
+            // top of this shader is `< 0.5` and therefore already agrees with the encoder; only
+            // this inner test disagreed, which is why the pass looked alive and contributed
+            // nothing (0 of 65536 bytes moved with the pass on vs. off, on every ground tried).
+            if (scene_pos.w >= 0.5) {
                 // Already camera-relative, so its length IS the camera distance.
                 let scene_z = length(scene_pos.xyz);
                 let current_z = length(current_pos - scene.camera_pos.xyz);

@@ -67,8 +67,16 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         
         let scene_pos = textureLoad(t_position_rel_camera, sample_iuv, 0);
         
-        // Depth test check
-        if (scene_pos.w > 0.5) {
+        // Depth test check. `>= 0.5`, NOT `> 0.5`: gbuffer.wgsl writes the written-flag as
+        // `(0.5 + 0.49·anisotropy) + floor(100·subsurface)`, so a written pixel of an ordinary
+        // material (anisotropy 0, subsurface 0) carries EXACTLY 0.5 — and 0.5 is exactly
+        // representable in this Rgba16Float target, so the strict form was false for every
+        // such pixel. The march then ran its full 20 steps without ever registering a hit and
+        // returned black for the whole frame: measured, SSR moved 0 of 65536 bytes on a mirror
+        // floor whether the pass ran or not. The entry gate above and every other reader of
+        // this flag (ssao, ssgi's own gate, deferred_lighting, volumetric, taa, ssgi_temporal)
+        // already treat 0.5 as written.
+        if (scene_pos.w >= 0.5) {
             // `scene_pos` is already camera-relative; `current_pos` is in world space.
             let depth_diff = length(current_pos - scene.camera_pos.xyz) - length(scene_pos.xyz);
             

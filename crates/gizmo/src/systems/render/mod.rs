@@ -2311,4 +2311,117 @@ mod golden_render_tests {
             );
         });
     }
+
+    /// Which screen-space pass to switch off for a comparison render.
+    #[derive(Clone, Copy, PartialEq)]
+    enum Effect {
+        None,
+        Ssgi,
+        Ssr,
+    }
+
+    /// A lit cube standing on a wide mirror floor, seen from a raised camera — a scene where a
+    /// screen-space gather has something to find: a smooth surface to reflect in, and a bright
+    /// neighbour on screen to bounce from. `disabled` switches one pass off so a caller can
+    /// compare like with like.
+    async fn render_mirror_scene(disabled: Effect) -> Vec<u8> {
+        const W: u32 = 128;
+        const H: u32 = 128;
+
+        let mut renderer = Renderer::new_headless(W, H, None).await;
+        match disabled {
+            Effect::None => {}
+            Effect::Ssgi => renderer.ssgi = None,
+            Effect::Ssr => renderer.ssr = None,
+        }
+        let mut asset_manager = AssetManager::new();
+        let mut world = World::new();
+
+        let tex = asset_manager.create_white_texture(
+            &renderer.device,
+            &renderer.queue,
+            &renderer.scene.texture_bind_group_layout,
+        );
+
+        // Ground: a flattened cube, top face at y = -1, and polished — SSR rejects anything
+        // rougher than 0.5 outright, so a matte floor would measure the fixture, not the pass.
+        let floor = world.spawn();
+        world.add_component(
+            floor,
+            Transform::new(Vec3::new(0.0, -1.2, 0.0)).with_scale(Vec3::new(20.0, 0.2, 20.0)),
+        );
+        world.add_component(floor, GlobalTransform::default());
+        world.add_component(floor, AssetManager::create_cube(&renderer.device));
+        world.add_component(
+            floor,
+            Material::new(tex.clone()).with_pbr(Vec4::new(0.9, 0.9, 0.9, 1.0), 1.0, 0.05),
+        );
+        world.add_component(floor, MeshRenderer::new());
+
+        // A unit cube whose bottom face lands exactly on the floor: both what the floor has to
+        // reflect and what a hemisphere ray leaving the floor can land on.
+        let cube = world.spawn();
+        world.add_component(cube, Transform::new(Vec3::ZERO));
+        world.add_component(cube, GlobalTransform::default());
+        world.add_component(cube, AssetManager::create_cube(&renderer.device));
+        world.add_component(
+            cube,
+            Material::new(tex).with_pbr(Vec4::new(0.9, 0.15, 0.15, 1.0), 0.0, 0.6),
+        );
+        world.add_component(cube, MeshRenderer::new());
+
+        world.spawn_bundle(CameraBundle {
+            position: Vec3::new(-5.0, 2.0, 0.0),
+            yaw: 0.0,
+            pitch: -0.35,
+            primary: true,
+            ..Default::default()
+        });
+        world.spawn_bundle(DirectionalLightBundle::default());
+
+        render_world(&mut renderer, &mut world).await
+    }
+
+    /// **SSR and SSGI have to reach the frame.** Both march the G-buffer, and both tested its
+    /// written-flag with a strict `> 0.5` while `gbuffer.wgsl` packs that flag as
+    /// `(0.5 + 0.49·anisotropy) + floor(100·subsurface)` — **exactly 0.5** for an ordinary
+    /// material, and exactly representable in the Rgba16Float target it is stored in. Every hit
+    /// candidate was therefore rejected, both passes returned black for the whole frame, and
+    /// their additive apply added nothing: measured on four different scenes, the picture was
+    /// byte-identical with the pass running and with the pass removed (0 of 65536 bytes moved).
+    ///
+    /// Nothing else could have caught it. The states were constructed, the passes recorded and
+    /// executed every frame, the shaders compiled — only the picture knew. Note the entry gates
+    /// in the same two shaders (`w < 0.5` → skip) always agreed with the encoder; it was the
+    /// inner hit test that did not, which is why the effects looked alive from every side but
+    /// the output.
+    ///
+    /// The floors are far below what the fix measured (SSGI 2005, SSR 426 of 16384 pixels):
+    /// this guards *that the pass contributes at all*, not any tuning of it.
+    #[test]
+    fn screen_space_reflections_and_gi_reach_the_frame() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available()) {
+            eprintln!("skipping: no GPU adapter");
+            return;
+        }
+        if pollster::block_on(Renderer::headless_adapter_is_software()) {
+            eprintln!("skipping: software adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let all_on = render_mirror_scene(Effect::None).await;
+            for (name, effect, floor) in
+                [("SSGI", Effect::Ssgi, 400usize), ("SSR", Effect::Ssr, 80usize)]
+            {
+                let off = render_mirror_scene(effect).await;
+                let (changed, total) = changed_pixels(&all_on, &off, 128);
+                assert!(
+                    changed >= floor,
+                    "removing {name} changed {changed}/{total} pixels — the pass runs but does \
+                     not reach the frame (expected at least {floor})",
+                );
+            }
+        });
+    }
 }
