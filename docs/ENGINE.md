@@ -1233,6 +1233,33 @@ yarısı oradan da eksikti.
 - **Sonda köprüsünde hangi sorgular sunulacak.** Mekanizma kuruldu ve tek tüketicisi var
   (`physics.ground_at`); geri kalanı API tasarımı.
 
+### Post-process kontrolleri taraması: SSAO dışında hepsi çalışıyor (2026-08-16)
+
+Gölgeleme çiplerinin üçünün ölü çıkması üzerine, editörün TÜM render kontrolleri aynı yöntemle
+ölçüldü — headless 128×128 render, kontrolü kıpırdatıp piksel farkı say:
+
+| Kontrol | Fark | |
+|---|---|---|
+| bloom eşiği · exposure · vignette · film grain | %66–75 | çalışıyor |
+| dof blur · fxaa | %1.5–2.0 | çalışıyor |
+| dof odak aralığı · chromatic aberration | %0.3–0.7 | çalışıyor |
+| bloom yoğunluğu | %75 (eşik 0'da) | çalışıyor |
+| dof odak mesafesi | %1.6 (aralık ≥20'de) | çalışıyor |
+| **SSAO** | %0 | **ölü — zaten belgeli, widget'ları kapalı** |
+
+Yeni kusur yok. Ama sonuca varmak **iki kötü deney** gerektirdi ve ikisi de önce "bu kontrol ölü"
+diye okundu; bir daha aynı tuzağa düşülmesin:
+
+- **Bloom yoğunluğu**, varsayılan eşikte 0 fark verir. Sahnede eşiği aşan hiçbir şey yoksa
+  yoğunluğun büyütecek bir şeyi yoktur. Eşiği 0'a indirmeden ölçmek, kontrolü değil fixture'ı
+  ölçer.
+- **DoF odak mesafesi**, dar aralıkta 0 fark verir. `coc = clamp(|view_dist - focus| / range, 0, 1)`
+  — `range` küçükken her iki odak değeri de coc'u 1.0'a doyurur, iki resim de eşit derecede
+  bulanık olur. Aralığı ≥20 tutmadan ölçmek yine deneyi ölçer.
+
+Genel kural: bir kontrolün ölü olduğunu ancak **etkili olabileceği** bir zeminde ölçtükten sonra
+söyle. Gölgeleme çipleri gerçekten ölüydü (her zeminde 0/65536); bu ikisi değildi.
+
 ### Gölgeleme modları: forward hat deferred'ın numaralandırmasını TEKRARLIYOR (2026-08-16)
 
 Toolbar'ın Lit/Normals/Albedo/Wire çipleri tek bir `shading_mode` uniform'u yazıyor. Modlar

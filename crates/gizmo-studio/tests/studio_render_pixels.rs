@@ -496,6 +496,14 @@ fn render_scene_and_game_targets(game_view_visible: bool) -> (Vec<u8>, Vec<u8>) 
 }
 
 fn render_with_shading(game_view_visible: bool, shading_mode: u32) -> (Vec<u8>, Vec<u8>) {
+    render_with_editor(game_view_visible, |ed| ed.shading_mode = shading_mode)
+}
+
+/// Render one studio frame with the editor state tweaked, and read both targets.
+fn render_with_editor(
+    game_view_visible: bool,
+    tweak: impl FnOnce(&mut gizmo::editor::EditorState),
+) -> (Vec<u8>, Vec<u8>) {
     pollster::block_on(async {
         let mut renderer = Renderer::new_headless(W, H, None).await;
         let mut am = AssetManager::new();
@@ -583,7 +591,7 @@ fn render_with_shading(game_view_visible: bool, shading_mode: u32) -> (Vec<u8>, 
         // the world the studio takes the hidden path and never renders the game camera at all.
         let mut ed = gizmo::editor::EditorState::default();
         ed.game_view_visible = game_view_visible;
-        ed.shading_mode = shading_mode;
+        tweak(&mut ed);
         world.insert_resource(ed);
 
         let state = StudioState {
@@ -1189,3 +1197,4 @@ fn the_wire_mode_leaves_the_middle_of_a_face_empty() {
          {lit_centre:.1} from the background) — the wireframe pipeline is not being selected"
     );
 }
+
