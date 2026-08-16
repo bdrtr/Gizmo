@@ -54,7 +54,12 @@ pub struct ComponentSparseSet {
 // değişebilir alanlara (`dense` ham-pointer, `ticks` `UnsafeCell`) yalnız sorgu
 // zamanlayıcısının ayrık-erişim garantisi altında yazılır → iki thread aynı satırı
 // eşzamanlı yazmaz. `UnsafeCell<ComponentTicks>` eklenince otomatik `Sync` düştü.
+// SAFETY: contents are component values, and `Component: Send + Sync`.
 unsafe impl Send for ComponentSparseSet {}
+// SAFETY: as above for the contents. The interior mutability (`dense`'s raw pointers, the
+// `UnsafeCell<ComponentTicks>`) is written only under the query scheduler's disjoint-access
+// guarantee, so two threads never write the same row — the same argument `BlobVec` and
+// `Archetype` make, and the reason the automatic `Sync` was lost when the ticks became cells.
 unsafe impl Sync for ComponentSparseSet {}
 
 impl ComponentSparseSet {
@@ -90,6 +95,10 @@ impl ComponentSparseSet {
         if existing_row != u32::MAX {
             // Zaten var, üzerine yaz
             let row = existing_row as usize;
+            // SAFETY: `row` came from `sparse`, which only ever holds live `dense` indices, so it
+            // is in range. `&mut self` here, so no other reference into `dense` is alive. The old
+            // value is dropped before the overwrite a few lines down — without that, a component
+            // owning heap memory would leak its allocation on re-insert.
             unsafe {
                 let slot = self.dense.get_unchecked_mut(row);
                 // Üzerine yazmadan ÖNCE eski değeri düşür; aksi halde heap sahibi
@@ -104,6 +113,10 @@ impl ComponentSparseSet {
         } else {
             // Yeni satır oluştur
             let row = self.dense.len() as u32;
+            // SAFETY: `data_ptr` points at a value of exactly this set's component type and
+            // layout (the caller's contract on `insert`), and `push` memcpys it and takes
+            // ownership — the caller must not drop the source afterwards, which is the contract
+            // `BlobVec::push` documents and every caller here honours with `mem::forget`.
             unsafe {
                 self.dense.push(data_ptr);
             }
@@ -123,6 +136,9 @@ impl ComponentSparseSet {
         let row = self.sparse[e] as usize;
         let last_row = self.dense.len() - 1;
 
+        // SAFETY: `row` is a live `dense` index (it came from `sparse`, checked above) and
+        // `&mut self` excludes any other reference. `ticks` is swap-removed at the same index on
+        // the next line, which is what keeps the two arrays in step.
         unsafe {
             self.dense.swap_remove_and_drop(row);
         }
@@ -179,6 +195,10 @@ impl ComponentSparseSet {
         if e >= self.sparse.len() || self.sparse[e] == u32::MAX {
             return None;
         }
+        // SAFETY: the index came from `sparse` and was checked against `u32::MAX` above, so it
+        // addresses a live row. The returned pointer borrows nothing — the doc contract above
+        // says it must be consumed before any `&mut self` method runs, because a `dense` growth
+        // moves the allocation.
         unsafe { Some(self.dense.get_unchecked(self.sparse[e] as usize)) }
     }
 
@@ -194,6 +214,8 @@ impl ComponentSparseSet {
         if e >= self.sparse.len() || self.sparse[e] == u32::MAX {
             return None;
         }
+        // SAFETY: index validity as in `get_ptr`; `&mut self` here, so this is the only live
+        // reference into `dense` while the pointer is produced.
         unsafe { Some(self.dense.get_unchecked_mut(self.sparse[e] as usize)) }
     }
 
@@ -214,6 +236,11 @@ impl ComponentSparseSet {
         // the moved-out value (mirrors the mem::forget-after-raw-insert pattern).
         // src_ptr points into `dense`; it is consumed by clone_fn BEFORE insert
         // may reallocate `dense`, so it never dangles.
+        // SAFETY: `src_ptr` addresses the live row of `src` and `clone_fn` is this component
+        // type's own cloner, so the read is well typed. The clone lands in a temporary buffer of
+        // exactly `layout`, and `insert` then memcpys it and takes ownership — so the buffer is
+        // freed WITHOUT dropping the moved-out value. `src_ptr` is consumed before `insert` can
+        // reallocate `dense`, so it cannot dangle.
         unsafe {
             if layout.size() == 0 {
                 let z = std::ptr::NonNull::<u8>::dangling().as_ptr();

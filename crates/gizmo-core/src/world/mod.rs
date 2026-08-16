@@ -591,6 +591,8 @@ mod tests {
         let ptr = world
             .get_component_ptr(e, std::any::TypeId::of::<SparseC>())
             .expect("get_component_ptr returned None for a sparse component");
+        // SAFETY: test-local — the pointer was looked up by `TypeId::of::<SparseC>()`, so the cast matches
+        // the bytes, and the world outlives this read.
         let val = unsafe { &*(ptr as *const SparseC) };
         assert_eq!(val.0, 42, "get_component_ptr read the wrong sparse value");
     }

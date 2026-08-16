@@ -63,12 +63,13 @@ a milestone does to work — it turns "not done yet" into "not looked at". None 
 to happen, so none of it is scheduled against one any more. Each item below carries its measured
 state instead.
 
-- **`unsafe` contracts.** Every `unsafe` block states why it is sound, and the lint that says so is
-  a per-crate ratchet: `#![deny(clippy::undocumented_unsafe_blocks)]`. **19 of 20 crates are at
-  zero and deny it** (2026-08-17). The remainder is `gizmo-core`: **57 blocks** in the archetype /
-  query / world internals, where the invariant is real and each comment has to be argued rather
-  than stamped. Ordinary work, counted, not gated yet — the crate goes on the ratchet the day it
-  reaches zero.
+- **`unsafe` contracts — CLOSED (2026-08-17).** Every `unsafe` block in the workspace states why
+  it is sound, and the lint that says so is a ratchet in **all 20 crates**:
+  `#![deny(clippy::undocumented_unsafe_blocks)]`. `gizmo-core` was the last and the real one — the
+  ECS holds most of the workspace's `unsafe` — and the arguments there are the three the storage
+  actually rests on: the `Component: Send + Sync` bound behind the `Send`/`Sync` impls on
+  `BlobVec` / `Archetype` / `ComponentSparseSet`, the caller-side no-aliasing contract behind the
+  `UnsafeCell` column access, and row liveness behind every raw pointer.
 - **"Freeze the public API" — dropped.** There is no freeze event to schedule. What that item was
   reaching for is §4's external-type contract, and that is enforced continuously: every dependency
   on a public surface is listed there with its cost, and `crates/gizmo/tests/crate_staging.rs`
@@ -1281,14 +1282,18 @@ işe yaptığı tam olarak bu, "henüz yapılmadı"yı "bakılmadı"ya çeviriyo
 
 Ölçülen durum ve alınan kararlar §3'te tablo hâlinde; buradaki kayıt, yapılan işin kendisi:
 
-- **`unsafe` sözleşmeleri.** Lint (`clippy::undocumented_unsafe_blocks`) 106 yer bildiriyordu ama
-  bunların çoğunda gerekçe **zaten yazılıydı** — clippy'nin aradığı yerde değil, insanın okuduğu
-  yerde: bir grup `unsafe`'in üstünde tek yorum, ya da araya bir `let` girmiş. Yani madde
-  göründüğünden çok daha yakınmış. `gizmo-core` dışındaki **25 yerin hepsi** gerçek gerekçeyle
-  kapatıldı (yalnız iki tanesi sıfırdan yazıldı: SSE intrinsics'in x86_64 ABI garantisi, ve
-  allocator örneğindeki `GlobalAlloc` sözleşmesi) ve **19 crate mandala takıldı** —
-  `#![deny(clippy::undocumented_unsafe_blocks)]`. Kalan: `gizmo-core`'un 57 bloğu (archetype /
-  query / world içi), sayılmış hâlde.
+- **`unsafe` sözleşmeleri — KAPANDI.** Lint 106 yer bildiriyordu ama çoğunda gerekçe **zaten
+  yazılıydı**: clippy'nin aradığı yerde değil, insanın okuduğu yerde (bir grup `unsafe`'in üstünde
+  tek yorum, ya da araya girmiş bir `let`). Yani madde göründüğünden çok daha yakınmış. Önce
+  `gizmo-core` dışındaki 25 yer kapatıldı; sonra `gizmo-core`'un kendisi — deponun `unsafe`'inin
+  çoğunun yaşadığı yer — ve orada yazılan şey üç gerçek değişmez: depolama `Send`/`Sync`
+  impl'lerinin arkasındaki `Component: Send + Sync` sınırı, `UnsafeCell` sütun erişiminin
+  arkasındaki *çağıran-tarafı* aliasing sözleşmesi, ve her ham pointer'ın arkasındaki satır
+  canlılığı. **20 crate'in 20'si mandalda**, workspace sıfırda.
+
+  Yol boyunca düzeltilen bir yanlış kayıt: `BlobVec`'in `Send`/`Sync` gerekçesi "erişim &self/&mut
+  self üzerinden, RefCell guard'ları koruyor" diye yazılıydı. O, *aliasing* argümanı; thread'ler
+  arası taşımayı meşru kılan şey `Component: Send + Sync` sınırı. Gerekçe düzeltildi.
 - **`missing_docs`.** `gizmo-window` (0) ve `gizmo-ui` (5 madde yazıldı) mandala eklendi. Geri
   kalanın sayıları §3'te; kural şu: bir crate sıfıra inince mandala girer, böylece birikim
   eritilirken yeniden büyümez.
@@ -1296,6 +1301,12 @@ işe yaptığı tam olarak bu, "henüz yapılmadı"yı "bakılmadı"ya çeviriyo
   kolunda** derlenen ikinci `unsafe impl`'i (`Sync`) açıkta kaldı: gerekçe ilk impl'in üstünde tek
   blok hâlindeydi. Native işin göremeyeceği bir yer — ve bu, CLAUDE.md'nin "wasm kapısını alt
   kümeyle koşturma" uyarısının aynı hafta ikinci kez haklı çıkışı.
+
+  Üçüncü kez de aynı gün geldi ve bu sefer ders farklıydı: `-p gizmo-app`'in wasm derlemesi
+  yerelde `egui-winit` yüzünden düşüyordu ve bu "yerele özgü bir tuhaflık" diye kaydedilmişti.
+  Değildi — CI o adımı `--no-default-features --features render,physics,scene` ile koşuyor, ben
+  varsayılan özelliklerle koşmuştum. Yani kapıyı değil, kendi uydurduğum bir komutu koşturmuşum.
+  Doğru bayraklarla yerelde de yeşil. **Kapıyı koştururken komutu workflow'dan kopyala.**
 
 ### Decal editörde görünmüyordu (2026-08-17, DÜZELTİLDİ)
 

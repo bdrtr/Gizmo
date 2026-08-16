@@ -286,10 +286,17 @@ impl ComponentInfo {
             type_name: std::any::type_name::<T>(),
             layout: Layout::new::<T>(),
             drop_fn: if std::mem::needs_drop::<T>() {
+                // SAFETY: this closure is stored in the metadata for `T` and is only ever called
+                // with a pointer to a live, owned `T` — that is `BlobVec`'s contract for
+                // `drop_fn`, and the layout it was built with is `Layout::new::<T>()` right
+                // above, so the cast is the same type the bytes were written as.
                 Some(|ptr: *mut u8| unsafe { ptr::drop_in_place(ptr as *mut T) })
             } else {
                 None
             },
+            // SAFETY: same pairing as `drop_fn` — called only with pointers to `count` live
+            // `T`s (source) and to space for `count` `T`s (destination), both of this type's
+            // layout, and both non-overlapping by the caller's contract.
             clone_fn: Some(|src: *const u8, dst: *mut u8, count: usize| unsafe {
                 let src = src as *const T;
                 let dst = dst as *mut T;

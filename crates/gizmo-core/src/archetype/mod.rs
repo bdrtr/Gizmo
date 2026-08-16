@@ -107,7 +107,14 @@ pub struct Archetype {
     pub(crate) edges: HashMap<TypeId, ArchetypeEdge>,
 }
 
+// SAFETY: an archetype's columns hold component values only, and `Component: Send + Sync`, so
+// its contents may cross threads. The `UnsafeCell<Column>` wrapper is what makes the type
+// `!Sync` by default; it is there for INTERIOR MUTABILITY (a `&self` query handing out `&mut` to
+// a disjoint column), and the no-aliasing half of that is the caller's contract on
+// `get_column_mut` — upheld in this crate by the world's borrow tracking.
 unsafe impl Send for Archetype {}
+// SAFETY: as above — contents are `Sync` by the `Component` bound, and every `&self` route to a
+// `&mut Column` goes through an `unsafe fn` whose contract forbids aliasing.
 unsafe impl Sync for Archetype {}
 
 impl Archetype {
@@ -149,6 +156,9 @@ impl Archetype {
     pub(crate) fn debug_assert_consistent(&self) {
         let n = self.entities.len();
         for cell in &self.columns {
+            // SAFETY: a shared read of the column behind the cell, taken and dropped inside this
+            // expression. `&mut self` is not held anywhere in this loop, so no `&mut Column`
+            // handed out by `get_column_mut` can be alive at the same time.
             let col_len = unsafe { (*cell.get()).len() };
             debug_assert_eq!(
                 col_len, n,
@@ -205,6 +215,10 @@ impl Archetype {
     pub fn get_column(&self, type_id: TypeId) -> Option<&Column> {
         self.column_indices
             .get(&type_id)
+            // SAFETY: `column_indices` only ever holds indices this archetype created for its own
+            // `columns`, so the index is in range and the cell is live. The reference handed back
+            // is shared and borrows `self`; a conflicting `&mut` can only come from the `unsafe`
+            // `get_column_mut`, whose contract is exactly that it must not overlap with this.
             .map(|&idx| unsafe { &*self.columns[idx].get() })
     }
 
@@ -223,6 +237,9 @@ impl Archetype {
     pub unsafe fn get_column_mut(&self, type_id: TypeId) -> Option<&mut Column> {
         self.column_indices
             .get(&type_id)
+            // SAFETY: index validity as in `get_column`. The aliasing rule — no second live
+            // reference to the SAME column — is this function's own documented contract and is
+            // the caller's to keep; that is why it is an `unsafe fn`.
             .map(|&idx| unsafe { &mut *self.columns[idx].get() })
     }
 
@@ -243,6 +260,10 @@ impl Archetype {
 
         // Tüm sütunlarda swap_remove_and_drop
         for col_cell in &self.columns {
+            // SAFETY: `&mut self` here, so no other reference into this archetype exists; each
+            // cell is visited once, so the `&mut Column`s never overlap. `row` is in range —
+            // `last` was computed from a non-empty `entities`, and every column is kept the same
+            // length as `entities` (the invariant `debug_assert_consistent` checks).
             unsafe {
                 (&mut *col_cell.get()).swap_remove_and_drop(row);
             }
@@ -372,6 +393,8 @@ impl Archetype {
     pub fn shrink_to_fit(&mut self) {
         self.entities.shrink_to_fit();
         for col_cell in &self.columns {
+            // SAFETY: `&mut self`, one visit per cell — no overlapping references. Shrinking
+            // moves the allocation but keeps every live element, so rows stay valid.
             unsafe {
                 (&mut *col_cell.get()).shrink_to_fit();
             }
@@ -383,6 +406,8 @@ impl Archetype {
     /// Quickly clears all row data in this archetype table.
     pub fn clear(&mut self) {
         for col_cell in &mut self.columns {
+            // SAFETY: `&mut self`, one visit per cell. `clear` drops every live element and
+            // leaves the column empty; `self.entities.clear()` below keeps the two in step.
             unsafe {
                 (&mut *col_cell.get()).clear();
             }
@@ -412,6 +437,8 @@ mod tests {
 
         let values: Vec<u32> = vec![10, 20, 30, 40, 50];
         for v in &values {
+            // SAFETY: test-local — the values were built here with the layout this storage was created
+            // with, the rows used are the ones just pushed, and the test owns the storage outright.
             unsafe {
                 blob.push(v as *const u32 as *const u8);
             }
@@ -420,6 +447,8 @@ mod tests {
         assert_eq!(blob.len(), 5);
 
         for (i, expected) in values.iter().enumerate() {
+            // SAFETY: test-local — the values were built here with the layout this storage was created
+            // with, the rows used are the ones just pushed, and the test owns the storage outright.
             unsafe {
                 let ptr = blob.get_unchecked(i) as *const u32;
                 assert_eq!(*ptr, *expected);
@@ -434,17 +463,23 @@ mod tests {
 
         let values: Vec<u64> = vec![100, 200, 300, 400];
         for v in &values {
+            // SAFETY: test-local — the values were built here with the layout this storage was created
+            // with, the rows used are the ones just pushed, and the test owns the storage outright.
             unsafe {
                 blob.push(v as *const u64 as *const u8);
             }
         }
 
         // index 1'i (200) çıkar → son(400) onun yerine gelir
+        // SAFETY: test-local — the values were built here with the layout this storage was created
+        // with, the rows used are the ones just pushed, and the test owns the storage outright.
         unsafe {
             blob.swap_remove_and_drop(1);
         }
         assert_eq!(blob.len(), 3);
 
+        // SAFETY: test-local — the values were built here with the layout this storage was created
+        // with, the rows used are the ones just pushed, and the test owns the storage outright.
         unsafe {
             assert_eq!(*(blob.get_unchecked(0) as *const u64), 100);
             assert_eq!(*(blob.get_unchecked(1) as *const u64), 400); // swap
@@ -468,6 +503,8 @@ mod tests {
         DROP_COUNT.store(0, Ordering::Relaxed);
 
         let layout = Layout::new::<Droppable>();
+        // SAFETY: this dropper is paired with the layout of the type declared beside it, and the test is
+        // its only caller.
         let drop_fn: unsafe fn(*mut u8) = |ptr| unsafe {
             ptr::drop_in_place(ptr as *mut Droppable);
         };
@@ -476,6 +513,8 @@ mod tests {
             let mut blob = BlobVec::new(layout, Some(drop_fn));
             for i in 0..5 {
                 let val = Droppable(i);
+                // SAFETY: test-local — the values were built here with the layout this storage was created
+                // with, the rows used are the ones just pushed, and the test owns the storage outright.
                 unsafe {
                     blob.push(&val as *const Droppable as *const u8);
                 }
@@ -495,6 +534,8 @@ mod tests {
 
         let vals: Vec<f32> = vec![1.0, 2.0, 3.0];
         for v in &vals {
+            // SAFETY: test-local — the values were built here with the layout this storage was created
+            // with, the rows used are the ones just pushed, and the test owns the storage outright.
             unsafe {
                 col.push_raw(v as *const f32 as *const u8, 1);
             }
@@ -503,6 +544,8 @@ mod tests {
         assert_eq!(col.len(), 3);
         assert_eq!(col.type_id(), TypeId::of::<F32Comp>());
 
+        // SAFETY: test-local — the values were built here with the layout this storage was created
+        // with, the rows used are the ones just pushed, and the test owns the storage outright.
         unsafe {
             let v = *(col.get_ptr(1) as *const f32);
             assert_eq!(v, 2.0);
@@ -525,6 +568,8 @@ mod tests {
         // Entity 42 ekle
         let pos: F32Comp = F32Comp(10.0);
         let hp: U32Comp = U32Comp(100);
+        // SAFETY: test-local — the values were built here with the layout this storage was created
+        // with, the rows used are the ones just pushed, and the test owns the storage outright.
         unsafe {
             arch.get_column_mut(TypeId::of::<F32Comp>())
                 .unwrap()
@@ -541,6 +586,8 @@ mod tests {
         // Entity 99 ekle
         let pos2: F32Comp = F32Comp(20.0);
         let hp2: U32Comp = U32Comp(50);
+        // SAFETY: test-local — the values were built here with the layout this storage was created
+        // with, the rows used are the ones just pushed, and the test owns the storage outright.
         unsafe {
             arch.get_column_mut(TypeId::of::<F32Comp>())
                 .unwrap()
@@ -604,6 +651,8 @@ mod tests {
 
         let values: Vec<u32> = vec![10, 20, 30, 40];
         for v in &values {
+            // SAFETY: test-local — the values were built here with the layout this storage was created
+            // with, the rows used are the ones just pushed, and the test owns the storage outright.
             unsafe {
                 blob.push(v as *const u32 as *const u8);
             }
@@ -611,6 +660,8 @@ mod tests {
 
         // index 1'i (20) çıkar ve out'a taşı
         let mut out: u32 = 0;
+        // SAFETY: test-local — the values were built here with the layout this storage was created
+        // with, the rows used are the ones just pushed, and the test owns the storage outright.
         unsafe {
             blob.swap_remove_unchecked(1, &mut out as *mut u32 as *mut u8);
         }
@@ -618,6 +669,8 @@ mod tests {
         assert_eq!(blob.len(), 3);
 
         // Sıra: [10, 40, 30]
+        // SAFETY: test-local — the values were built here with the layout this storage was created
+        // with, the rows used are the ones just pushed, and the test owns the storage outright.
         unsafe {
             assert_eq!(*(blob.get_unchecked(0) as *const u32), 10);
             assert_eq!(*(blob.get_unchecked(1) as *const u32), 40);

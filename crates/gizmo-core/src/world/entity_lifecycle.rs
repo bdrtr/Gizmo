@@ -147,6 +147,8 @@ impl World {
         // Seçilen Archetype içinde kopyalamayı batch halinde yapıyoruz
         let arch = &mut self.archetype_index.archetypes[arch_id];
         let tick = self.tick;
+        // SAFETY: `row` is a live row of this archetype (it is the template entity's own), and
+        // `new_eids` has exactly `count` freshly reserved ids — `batch_clone_row`'s contract.
         let new_rows = unsafe { arch.batch_clone_row(row, count, &new_eids, tick) };
 
         // Location güncellemeleri
@@ -248,6 +250,8 @@ impl World {
             let new_row = {
                 let arch = &mut self.archetype_index.archetypes[target_arch_id];
                 let row = arch.push_entity(eid);
+                // SAFETY: the row was just pushed into the archetype chosen for this bundle's
+                // component set, so the bundle writes every column of it exactly once.
                 unsafe { crate::component::Bundle::write_to_archetype(bundle, arch, row as usize, self.tick); }
                 row
             };

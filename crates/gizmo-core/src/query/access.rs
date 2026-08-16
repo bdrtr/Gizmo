@@ -85,6 +85,10 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
             return None;
         }
         let arch = &self.world.archetype_index.archetypes[loc.archetype_id as usize];
+        // SAFETY: the entity's own location names this archetype and it was checked against
+        // `matching_archetypes` above, so the fetch is for an archetype this query matches and
+        // `loc.row` is a live row in it. The fetch borrows the world for `'w`; aliasing was
+        // settled at construction by `check_aliasing`.
         unsafe {
             let fetch = Q::fetch_raw(self.world, arch, self.world.tick)?;
             if !Q::filter_row(fetch, loc.row as usize, entity_id, self.world.change_ref_tick) {
@@ -106,7 +110,14 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
         // Pointer taşıyıcı wrapper — Güvenlidir çünkü Query::new() check_aliasing yapmıştır
         #[derive(Copy, Clone)]
         struct FetchWrapper<T>(T);
+        // SAFETY: the wrapper exists to carry a fetch (a bundle of raw pointers) into rayon's
+        // closures, which demand `Send`/`Sync`. Sending it is sound because the pointers address
+        // component storage whose values are `Send + Sync` by the `Component` bound, and because
+        // `Query::new`'s `check_aliasing` already established that this query's access set does
+        // not overlap itself — the parallel rows below are disjoint by construction (one row
+        // each), so no two threads touch the same element.
         unsafe impl<T> Send for FetchWrapper<T> {}
+        // SAFETY: as above — sharing the wrapper only ever hands out a copy of the same pointers.
         unsafe impl<T> Sync for FetchWrapper<T> {}
 
         impl<T: Copy> FetchWrapper<T> {
@@ -119,6 +130,8 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
         let ref_tick = self.world.change_ref_tick;
         self.matching_archetypes.par_iter().for_each(|&arch_idx| {
             let arch = &self.world.archetype_index.archetypes[arch_idx];
+            // SAFETY: `arch_idx` is from `matching_archetypes` and the archetype is borrowed from
+            // the world for the whole parallel section, so the fetch outlives every task.
             if let Some(fetch) = unsafe { Q::fetch_raw(self.world, arch, tick) } {
                 let len = arch.len();
                 let wrapped_fetch = FetchWrapper(fetch);
@@ -130,6 +143,9 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
                 (0..len)
                     .into_par_iter()
                     .with_min_len(512)
+                    // SAFETY: `row < len == arch.len()`, so each task addresses a live row of
+                    // this archetype, and every task gets a DIFFERENT row — that disjointness is
+                    // what makes the shared fetch sound here.
                     .for_each(move |row| unsafe {
                         let id = *entities_ptr.get().add(row);
                         if Q::filter_row(wrapped_fetch.get(), row, id, ref_tick) {

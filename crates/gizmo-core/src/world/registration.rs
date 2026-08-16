@@ -95,6 +95,9 @@ impl World {
                 // `Parent` stores a bare id with no generation; a plain `despawn(parent)`
                 // (not despawn_recursive) leaves children with a dangling `Parent(id)`.
                 // Resolve it safely — a dead id stops propagation instead of panicking.
+                // SAFETY: keyed by `TypeId::of::<Parent>()`, so the cast matches the bytes; the
+                // id is copied out immediately and resolved through `entity()`, which is what
+                // makes a dead parent stop the walk instead of dangling.
                 let parent_id = unsafe { (*(parent_ptr as *const Parent)).0 };
                 match self.entity(parent_id) {
                     Some(e) => current_entity = e,

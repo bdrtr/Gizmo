@@ -216,6 +216,9 @@ impl World {
         if !Q::matches_archetype(arch) {
             return None;
         }
+        // SAFETY: the archetype is the entity's own and was just checked to match `Q`, so the
+        // fetch is well formed and `loc.row` is a live row in it. The fetch borrows `self` for
+        // the returned item's lifetime.
         unsafe {
             let fetch = Q::fetch_raw(self, arch, self.tick)?;
             if !Q::filter_row(fetch, loc.row as usize, entity_id, self.change_ref_tick) {
@@ -250,6 +253,8 @@ impl World {
         if !Q::matches_archetype(arch) {
             return None;
         }
+        // SAFETY: as in the read-only counterpart above — the entity's own archetype, matched
+        // against `Q`, and `loc.row` live in it.
         unsafe {
             let fetch = Q::fetch_raw(self, arch, self.tick)?;
             if !Q::filter_row(fetch, loc.row as usize, entity_id, self.change_ref_tick) {

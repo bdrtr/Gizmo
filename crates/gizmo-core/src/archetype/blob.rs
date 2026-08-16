@@ -60,10 +60,14 @@ pub struct BlobVec {
     pub(crate) capacity: usize,
 }
 
-// BlobVec Send + Sync güvenlidir çünkü:
-// - Tüm erişim &self veya &mut self üzerinden yapılır
-// - İç pointer'a eşzamanlı erişim RefCell guard'ları ile korunur
+// SAFETY: a `BlobVec` only ever holds COMPONENT values (columns and sparse sets are its only
+// users), and `Component: Send + Sync` — so every byte it owns is already safe to move to
+// another thread. That bound, not the access pattern, is what makes this sound.
 unsafe impl Send for BlobVec {}
+// SAFETY: same bound gives `Sync` for the contents. The type itself synchronises nothing and
+// promises nothing: `get_unchecked_mut(&self)` hands out a `*mut` through a shared reference,
+// which is exactly why it is an `unsafe fn` — the no-aliasing half of the contract is the
+// caller's (module docs), and the world's borrow tracking is what upholds it in this crate.
 unsafe impl Sync for BlobVec {}
 
 /// Converts the `item_size * count` product into a `Layout` in an overflow-safe way.
@@ -331,12 +335,18 @@ impl BlobVec {
 
         let new_data = if self.capacity == 0 {
             // İlk tahsis
+            // SAFETY: `new_layout` came from `checked_array_layout`, and the ZST case returned
+            // above — so the layout has non-zero size, which is `alloc`'s one requirement. The
+            // null it may return is handled by the `NonNull::new(..).expect(..)` below.
             unsafe { alloc::alloc(new_layout) }
         } else {
             // Yeniden tahsis
             let old_layout =
                 checked_array_layout(item_size, self.capacity, self.item_layout.align())
                     .expect("BlobVec::grow: Old layout overflow");
+            // SAFETY: `capacity > 0` on this arm, so `self.data` is a live allocation made by
+            // this same allocator with exactly `old_layout` (recomputed here from the fields that
+            // produced it), and `new_layout.size()` is non-zero. Null is handled below.
             unsafe { alloc::realloc(self.data.as_ptr(), old_layout, new_layout.size()) }
         };
 
@@ -360,6 +370,10 @@ impl BlobVec {
             let old_layout =
                 checked_array_layout(item_size, self.capacity, self.item_layout.align())
                     .expect("BlobVec::shrink_to_fit: Layout overflow");
+            // SAFETY: `len == 0` and the ZST case returned above, so this is the live
+            // allocation this vec made with `old_layout` and there is no element left to drop
+            // (`clear`/`swap_remove` handled ownership). The pointer is not used again before
+            // being replaced with a dangling one on the next line.
             unsafe { alloc::dealloc(self.data.as_ptr(), old_layout) };
             self.data = NonNull::dangling();
             self.capacity = 0;
@@ -371,6 +385,9 @@ impl BlobVec {
         let old_layout = checked_array_layout(item_size, self.capacity, self.item_layout.align())
             .expect("BlobVec::shrink_to_fit: Layout overflow");
 
+        // SAFETY: same as `grow`'s realloc — a live allocation of `old_layout` from this
+        // allocator, and `new_layout.size()` is non-zero because `len > 0` and the element is not
+        // a ZST (both returned earlier). Shrinking keeps the first `len` elements in place.
         let new_data = unsafe { alloc::realloc(self.data.as_ptr(), old_layout, new_layout.size()) };
         self.data =
             NonNull::new(new_data).expect("BlobVec::shrink_to_fit: Allocation failed (OOM)");
@@ -383,6 +400,10 @@ impl BlobVec {
         if let Some(drop_fn) = self.drop_fn {
             let item_size = self.item_layout.size();
             for i in 0..self.len {
+                // SAFETY: `i < len`, so `i * item_size` stays inside the allocation, and the
+                // element there is live and owned by this vec — `drop_fn` is the type's own
+                // dropper, recorded at construction for exactly this layout. `len` is set to 0
+                // right after the loop, so nothing is dropped twice.
                 unsafe {
                     let ptr = self.data.as_ptr().add(i * item_size);
                     drop_fn(ptr);
@@ -401,6 +422,10 @@ impl Drop for BlobVec {
             let layout =
                 checked_array_layout(item_size, self.capacity, self.item_layout.align())
                     .expect("BlobVec::drop: Layout error");
+            // SAFETY: `clear()` above dropped every live element, and the guard on this branch
+            // says the allocation exists (non-ZST, capacity > 0). `layout` is recomputed from the
+            // same fields that allocated it, and the vec is being dropped, so the pointer is
+            // never read again.
             unsafe {
                 alloc::dealloc(self.data.as_ptr(), layout);
             }
@@ -425,10 +450,14 @@ mod tests {
             fn drop(&mut self) { DROP_COUNT.fetch_add(1, Ordering::SeqCst); }
         }
 
+        // SAFETY: test-local — the values were built here with the layout this storage was created
+        // with, the rows used are the ones just pushed, and the test owns the storage outright.
         let mut vec = BlobVec::new(Layout::new::<Dropper>(), Some(|ptr| unsafe {
             std::ptr::drop_in_place(ptr as *mut Dropper)
         }));
 
+        // SAFETY: test-local — the values were built here with the layout this storage was created
+        // with, the rows used are the ones just pushed, and the test owns the storage outright.
         unsafe {
             let d = Dropper;
             vec.push(&d as *const Dropper as *const u8);
@@ -451,10 +480,14 @@ mod tests {
             fn drop(&mut self) { DROP_COUNT.fetch_add(1, Ordering::SeqCst); }
         }
 
+        // SAFETY: test-local — the values were built here with the layout this storage was created
+        // with, the rows used are the ones just pushed, and the test owns the storage outright.
         let mut vec = BlobVec::new(Layout::new::<Dropper>(), Some(|ptr| unsafe {
             std::ptr::drop_in_place(ptr as *mut Dropper)
         }));
 
+        // SAFETY: test-local — the values were built here with the layout this storage was created
+        // with, the rows used are the ones just pushed, and the test owns the storage outright.
         unsafe {
             let d = Dropper;
             vec.push(&d as *const Dropper as *const u8);
@@ -465,6 +498,8 @@ mod tests {
         }
 
         assert_eq!(DROP_COUNT.load(Ordering::SeqCst), 0);
+        // SAFETY: test-local — the values were built here with the layout this storage was created
+        // with, the rows used are the ones just pushed, and the test owns the storage outright.
         unsafe { vec.swap_remove_and_drop(0); }
         assert_eq!(DROP_COUNT.load(Ordering::SeqCst), 1);
         drop(vec);

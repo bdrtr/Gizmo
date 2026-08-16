@@ -54,6 +54,11 @@ where
             let fetch = match self.current_fetch {
                 Some(f) => f,
                 None => {
+                    // SAFETY: `arch` is one of `matching_archetypes` — an archetype this query
+                    // was matched against — and it is borrowed from the world for `'w`, so the
+                    // fetch pointer stays valid for as long as this iterator does, which is
+                    // `fetch_raw`'s contract. The no-aliasing half was settled once at
+                    // construction by `Query::new`'s `check_aliasing`.
                     match unsafe { Q::fetch_raw(self.world, arch, self.world.tick) } {
                         Some(f) => {
                             self.current_fetch = Some(f);
@@ -73,7 +78,10 @@ where
                 let row = self.current_row;
                 self.current_row += 1;
                 let id = arch.entities()[row];
+                // SAFETY: `row < arch.len()` was just checked, and `fetch` came from this same
+                // archetype — so both calls address a live row of the columns it points at.
                 if unsafe { Q::filter_row(fetch, row, id, self.world.change_ref_tick) } {
+                    // SAFETY: as above, and the row passed the filter, so the item exists.
                     let item = unsafe { Q::get_item(fetch, row, id) };
                     return Some((id, item));
                 }
@@ -97,10 +105,15 @@ where
             if len == 0 {
                 continue;
             }
+            // SAFETY: a matched archetype borrowed from the world, as in `next` above; aliasing
+            // was checked once by `Query::new`.
             if let Some(fetch) = unsafe { Q::fetch_raw(self.world, arch, self.world.tick) } {
                 let entities = arch.entities();
                 for (row, &id) in entities.iter().enumerate().take(len) {
+                    // SAFETY: `take(len)` keeps `row` inside the archetype, and `fetch` is this
+                    // archetype's.
                     if unsafe { Q::filter_row(fetch, row, id, self.world.change_ref_tick) } {
+                        // SAFETY: as above; the row passed the filter.
                         let item = unsafe { Q::get_item(fetch, row, id) };
                         f((id, item));
                     }
@@ -161,12 +174,17 @@ where
                 continue;
             }
 
+            // SAFETY: matched archetype, borrowed from the world for `'w` — see `next`.
             let fetch = match unsafe { Q::fetch_raw(self.world, arch, self.world.tick) } {
                 Some(f) => f,
                 None => continue,
             };
 
+            // SAFETY: `len == arch.len()` and the entity vector is exactly that long, so this
+            // rebuilds the slice the archetype already owns, with its lifetime tied to `'w`.
             let ids = unsafe { std::slice::from_raw_parts(arch.entities().as_ptr(), len) };
+            // SAFETY: `fetch` is this archetype's and `len` is its row count, which is what
+            // `get_slice` requires; it panics for SparseSet storage rather than fabricating one.
             let slice = unsafe { Q::get_slice(fetch, len) };
 
             return Some((ids, slice));

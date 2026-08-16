@@ -228,6 +228,8 @@ impl ComponentRegistry {
         let type_id = TypeId::of::<T>();
 
         let get_reflect_ptr_fn: fn(*const u8) -> *const dyn bevy_reflect::Reflect = |ptr| {
+            // SAFETY: this closure is stored under `TypeId::of::<T>()` and the registry only ever
+            // calls it with a pointer to a live component of that same type.
             let component = unsafe { &*(ptr as *const T) };
             component as &dyn bevy_reflect::Reflect as *const dyn bevy_reflect::Reflect
         };
@@ -304,6 +306,7 @@ impl ComponentRegistry {
         self.name_to_type.insert(name.to_string(), type_id);
 
         let serialize_fn: fn(*const u8) -> Result<String, String> = |ptr| {
+            // SAFETY: registered under `TypeId::of::<T>()`; called only with a live `T`.
             let component = unsafe { &*(ptr as *const T) };
             ron::to_string(component).map_err(|e| e.to_string())
         };
@@ -319,6 +322,7 @@ impl ComponentRegistry {
         };
 
         let get_json_fn: fn(*const u8) -> Result<serde_json::Value, String> = |ptr| {
+            // SAFETY: registered under `TypeId::of::<T>()`; called only with a live `T`.
             let component = unsafe { &*(ptr as *const T) };
             serde_json::to_value(component).map_err(|e| e.to_string())
         };

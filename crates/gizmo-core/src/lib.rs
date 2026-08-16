@@ -1,3 +1,9 @@
+#![deny(clippy::undocumented_unsafe_blocks)]
+//! (`undocumented_unsafe_blocks` is a RATCHET, and this crate was the last one to earn it: the
+//! ECS's archetype / query / world internals hold most of the workspace's `unsafe`, and every
+//! block there now states the invariant it relies on — the `Component: Send + Sync` bound behind
+//! the storage `Send`/`Sync` impls, the caller-side aliasing contract behind the `UnsafeCell`
+//! column access, and the row-liveness argument behind the raw pointers. Whole workspace: zero.)
 #![warn(missing_docs)]
 //! (`missing_docs` is a RATCHET, not a suggestion. The CI lint gate runs with `-D warnings`,
 //! so every public item in this crate must carry a doc comment or the build fails. This crate

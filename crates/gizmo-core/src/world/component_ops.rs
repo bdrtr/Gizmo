@@ -97,6 +97,11 @@ impl World {
             // Sadece override
             let loc = self.entity_locations[eid as usize];
             let arch = &mut self.archetype_index.archetypes[target_arch_id];
+            // SAFETY: `write_to_archetype`'s contract is that the bundle writes EVERY column of
+            // this archetype at this row — the archetype was chosen for exactly this bundle's
+            // component set, and `loc.row` is the entity's live row. A bundle that skipped a
+            // column would desync column length from `entities`; `debug_assert_consistent`
+            // catches that in debug builds.
             unsafe { bundle.write_to_archetype(arch, loc.row as usize, self.tick); }
             return;
         }
@@ -128,6 +133,7 @@ impl World {
         }
 
         let arch = &mut self.archetype_index.archetypes[target_arch_id];
+        // SAFETY: as above, for the row just pushed into the target archetype during the move.
         unsafe { bundle.write_to_archetype(arch, new_row as usize, self.tick); }
 
         self.entity_locations[eid as usize] = EntityLocation {
@@ -307,6 +313,9 @@ impl World {
                 // SAFETY: query/scheduler bu archetype sütununa ayrık erişimi garanti eder.
                 let col = unsafe { arch.get_column_mut(type_id) }
                     .expect("component column missing in current archetype");
+                // SAFETY: `type_id` is `T`'s, so the column's layout is `T`'s, and `old_loc.row`
+                // is the entity's live row. Assignment (not `ptr::write`) is deliberate: the slot
+                // already holds a live `T` and `*ptr = ..` drops it, where a write would leak.
                 unsafe {
                     let ptr = col.get_ptr(old_loc.row as usize) as *mut T;
                     *ptr = component;
@@ -372,6 +381,9 @@ impl World {
             // SAFETY: yeni satır bu archetype'a az önce ayrıldı; sütuna tekil erişim.
             let col = unsafe { arch.get_column_mut(type_id) }
                 .expect("Mandatory component column missing");
+            // SAFETY: `type_id` is `T`'s and `new_row` was just allocated in this archetype, so
+            // the slot is uninitialised — `ptr::write` (not assignment) is the right one here,
+            // because there is no old value to drop.
             unsafe {
                 let ptr = col.get_ptr(new_row as usize) as *mut T;
                 std::ptr::write(ptr, component);
@@ -425,6 +437,9 @@ impl World {
         }
         let arch = &self.archetype_index.archetypes[loc.archetype_id as usize];
         let col = arch.get_column(type_id)?;
+        // SAFETY: `loc` was checked valid above, so `loc.row` is a live row of this archetype and
+        // the column belongs to it. The pointer is raw and borrows nothing — the caller must not
+        // hold it across a structural change.
         Some(unsafe { col.get_ptr(loc.row as usize) })
     }
 
@@ -442,6 +457,7 @@ impl World {
         let arch = &mut self.archetype_index.archetypes[loc.archetype_id as usize];
         // SAFETY: &mut self ile tekil archetype erişimi; sütuna tekil &mut.
         let col = unsafe { arch.get_column_mut(type_id) }?;
+        // SAFETY: as in `get_component_ptr`, and `&mut self` makes this the only live view.
         Some(unsafe { col.get_mut_ptr(loc.row as usize) })
     }
 
@@ -569,6 +585,9 @@ impl World {
                 let col = unsafe { arch.get_column_mut(type_id) }.unwrap();
                 for e in &group_entities {
                     let row = self.entity_locations[e.id() as usize].row as usize;
+                    // SAFETY: every entity in this group is in `target_arch_id` (that is how the
+                    // group was formed), so `row` is a live row of the column just taken, and
+                    // `type_id` is `T`'s.
                     unsafe {
                         // Same-archetype overwrite: the slot already holds a live `T`.
                         // Assignment (`*ptr = ..`) drops the old value; `ptr::write` would
@@ -618,6 +637,9 @@ impl World {
                     let arch = &self.archetype_index.archetypes[target_arch_id];
                     // SAFETY: yeni ayrılan satır; sütuna tekil erişim.
                     let col = unsafe { arch.get_column_mut(type_id) }.unwrap();
+                    // SAFETY: `new_row` was just allocated in this archetype, so the slot is
+                    // uninitialised and `ptr::write` is correct; `type_id` is `T`'s, so the
+                    // column's layout matches what is written.
                     unsafe {
                         std::ptr::write(col.get_ptr(new_row as usize) as *mut T, component.clone());
                         col.ticks_ptr_mut().add(new_row as usize).write(crate::archetype::ComponentTicks::new(self.tick));

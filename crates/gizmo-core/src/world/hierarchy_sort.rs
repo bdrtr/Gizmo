@@ -15,6 +15,9 @@ impl World {
         let entity_a = arch.entities()[row_a];
         let entity_b = arch.entities()[row_b];
 
+        // SAFETY: both rows were read from this archetype's entity list above, so both are live
+        // and in range; `&mut self` means nothing else holds a view while they are permuted, and
+        // `swap_rows` moves the parallel arrays (columns, ticks, entities) together.
         unsafe {
             let mut_arch = &mut self.archetype_index.archetypes[arch_id as usize];
             mut_arch.swap_rows(row_a, row_b);
@@ -52,9 +55,14 @@ impl World {
                 visited.insert(parent_entity_id);
 
                 let children_opt = {
+                    // SAFETY: the archetype comes from this world and is borrowed for the whole
+                    // expression, so the fetch cannot outlive it; the sort holds no other view of
+                    // `Children` while it reads one.
                     let fetch = unsafe {
                         <&crate::component::Children as crate::query::FetchComponent>::fetch_raw(self, &self.archetype_index.archetypes[arch_idx], self.tick)
                     };
+                    // SAFETY: `row` is the parent's live row in the archetype `f` was built
+                    // from, which is what `get_item` requires.
                     fetch.map(|f| unsafe {
                         <&crate::component::Children as crate::query::FetchComponent>::get_item(f, row, parent_entity_id)
                     })

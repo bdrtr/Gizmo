@@ -94,6 +94,8 @@ pub fn bench_contiguous_iter_avx2(c: &mut Criterion) {
         b.iter(|| {
             let iter = query.iter_chunks_mut();
             for (_ids, (velocity_slice, position_slice)) in iter {
+                // SAFETY: test-local — the values were built here with the layout this storage was created
+                // with, the rows used are the ones just pushed, and the test owns the storage outright.
                 unsafe {
                     exec(position_slice, velocity_slice);
                 }

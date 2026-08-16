@@ -54,6 +54,8 @@ fn clone_hierarchy_recursive(world: &mut World, source_id: u32) -> Option<gizmo_
     let mut children_to_clone = Vec::new();
     let source_entity = world.entity(source_id)?;
     if let Some(children_ptr) = world.get_component_ptr(source_entity, core::any::TypeId::of::<Children>()) {
+        // SAFETY: test-local — the pointer was looked up by `TypeId::of::<Children>()`, so the cast matches
+        // the bytes, and the world outlives this read.
         let children = unsafe { &*(children_ptr as *const Children) };
         children_to_clone = children.0.clone();
     }

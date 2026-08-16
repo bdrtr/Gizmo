@@ -43,6 +43,8 @@ impl HierarchyExt for World {
 
         // Remove from old parent first
         if let Some(parent_ptr) = self.get_component_ptr(child, std::any::TypeId::of::<Parent>()) {
+            // SAFETY: the pointer was keyed by `TypeId::of::<Parent>()`, so it addresses a live
+            // `Parent`; the id is copied out immediately, before anything can move the row.
             let old_parent_id = unsafe { (*(parent_ptr as *const Parent)).0 };
             if old_parent_id != parent.id() {
                 if let Some(old_parent) = self.entity(old_parent_id) {
@@ -56,6 +58,9 @@ impl HierarchyExt for World {
 
         // Add to new parent's Children list
         if let Some(children_ptr) = self.get_component_mut_ptr(parent, std::any::TypeId::of::<Children>()) {
+            // SAFETY: keyed by `TypeId::of::<Children>()` and obtained from `&mut self`, so this
+            // is the only live reference to that component; it is used and dropped inside this
+            // block, with no structural change in between.
             let children = unsafe { &mut *(children_ptr as *mut Children) };
             if !children.0.contains(&child.id()) {
                 children.0.push(child.id());
@@ -69,6 +74,8 @@ impl HierarchyExt for World {
         self.remove_component::<Parent>(child);
 
         if let Some(children_ptr) = self.get_component_mut_ptr(parent, std::any::TypeId::of::<Children>()) {
+            // SAFETY: as in `add_child` — right type by construction, exclusive by `&mut self`,
+            // consumed before any structural change.
             let children = unsafe { &mut *(children_ptr as *mut Children) };
             children.0.retain(|&id| id != child.id());
         }
@@ -104,6 +111,9 @@ fn despawn_recursive_inner(
 
     let mut children_to_despawn = Vec::new();
     if let Some(children_ptr) = world.get_component_ptr(entity, std::any::TypeId::of::<Children>()) {
+        // SAFETY: keyed by `TypeId::of::<Children>()`, so the type is right. The list is only
+        // READ here (the ids are copied into `children_to_despawn`) and the despawns happen
+        // after this borrow ends — reading it while despawning would be the dangling case.
         let children = unsafe { &*(children_ptr as *const Children) };
         for &child_id in &children.0 {
             if let Some(child_entity) = world.entity(child_id) {
@@ -114,6 +124,7 @@ fn despawn_recursive_inner(
 
     // Detach from the (surviving) parent's Children list.
     if let Some(parent_ptr) = world.get_component_ptr(entity, std::any::TypeId::of::<Parent>()) {
+        // SAFETY: right type by construction; the id is copied out before anything moves the row.
         let parent_id = unsafe { (*(parent_ptr as *const Parent)).0 };
         if let Some(parent_entity) = world.entity(parent_id) {
             world.remove_child(parent_entity, entity);
@@ -142,6 +153,8 @@ mod tests {
 
         // Check if Parent component is added to child
         if let Some(parent_ptr) = world.get_component_ptr(child, std::any::TypeId::of::<Parent>()) {
+            // SAFETY: test-local — the pointer was looked up by `TypeId::of::<Parent>()`, so the cast matches
+            // the bytes, and the world outlives this read.
             let parent_id = unsafe { (*(parent_ptr as *const Parent)).0 };
             assert_eq!(parent_id, parent.id());
         } else {
@@ -150,6 +163,8 @@ mod tests {
 
         // Check if Children component is updated
         if let Some(children_ptr) = world.get_component_ptr(parent, std::any::TypeId::of::<Children>()) {
+            // SAFETY: test-local — the pointer was looked up by `TypeId::of::<Children>()`, so the cast matches
+            // the bytes, and the world outlives this read.
             let children = unsafe { &*(children_ptr as *const Children) };
             assert_eq!(children.0.len(), 1);
             assert_eq!(children.0[0], child.id());
@@ -165,6 +180,8 @@ mod tests {
 
         // Parent should have empty Children list
         if let Some(children_ptr) = world.get_component_ptr(parent, std::any::TypeId::of::<Children>()) {
+            // SAFETY: test-local — the pointer was looked up by `TypeId::of::<Children>()`, so the cast matches
+            // the bytes, and the world outlives this read.
             let children = unsafe { &*(children_ptr as *const Children) };
             assert_eq!(children.0.len(), 0);
         }
