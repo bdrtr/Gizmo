@@ -239,14 +239,19 @@ pub fn render_studio(
     }
 
     if let Some((ent_id, path)) = prefab_save_req {
-        let _ = gizmo::scene::SceneData::save_prefab(
+        // Reported both ways, like the scene load above it — this one used to drop the result and
+        // say "Prefab kaydedildi." either way.
+        let save = gizmo::scene::SceneData::save_prefab(
             world,
             ent_id.id(),
             &path,
             &gizmo::full_scene_registry(),
         );
         if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
-            ed.log_info("Prefab kaydedildi.");
+            match save {
+                Ok(_) => ed.log_info(&format!("Prefab kaydedildi: {}", path)),
+                Err(e) => ed.log_error(&format!("Prefab kaydedilemedi ({}): {}", path, e)),
+            }
         }
     }
 
@@ -290,27 +295,41 @@ pub fn render_studio(
             ent_id, time_ns
         );
 
-        let _ = gizmo::scene::SceneData::save_prefab(
+        // Duplicate is a round trip through a temporary prefab: save the entity out, read it back
+        // in. Either half can fail, and this used to drop the save's result and announce "Obje
+        // çoğaltıldı." before looking at the load's — so a duplicate that produced nothing at all
+        // still reported success, and a failed save surfaced (if at all) as a confusing load
+        // error about a file the user never asked for.
+        let save = gizmo::scene::SceneData::save_prefab(
             world,
             ent_id.id(),
             &temp_path,
             &gizmo::full_scene_registry(),
         );
-
-        let root_res = gizmo::scene::SceneData::load_prefab(
-            &temp_path,
-            None,
-            world,
-            &gizmo::full_scene_registry(),
-        );
+        let outcome = match save {
+            Err(e) => DuplicateOutcome::SaveFailed(e.to_string()),
+            Ok(_) => match gizmo::scene::SceneData::load_prefab(
+                &temp_path,
+                None,
+                world,
+                &gizmo::full_scene_registry(),
+            ) {
+                Ok(Some(new_id)) => DuplicateOutcome::Duplicated(new_id),
+                Ok(None) => DuplicateOutcome::NothingLoaded,
+                Err(e) => DuplicateOutcome::LoadFailed(e.to_string()),
+            },
+        };
         if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
-            ed.log_info("Obje çoğaltıldı.");
-            if let Ok(Some(new_id)) = root_res {
-                ed.clear_selection();
-                if let Some(new_ent) = world.get_entity(new_id) {
-                    ed.selection.entities.insert(new_ent);
-                    ed.selection.primary = Some(new_ent);
+            match &outcome {
+                DuplicateOutcome::Duplicated(new_id) => {
+                    ed.log_info("Obje çoğaltıldı.");
+                    ed.clear_selection();
+                    if let Some(new_ent) = world.get_entity(*new_id) {
+                        ed.selection.entities.insert(new_ent);
+                        ed.selection.primary = Some(new_ent);
+                    }
                 }
+                other => ed.log_error(&duplicate_failure_message(other)),
             }
         }
 
@@ -401,4 +420,102 @@ pub fn render_studio(
     }
 
     render_pipeline::execute_render_pipeline(world, state, encoder, view, renderer, light_time);
+}
+
+/// How a `Ctrl+D` duplicate ended.
+///
+/// Duplicating is a round trip: the entity is written to a temporary prefab and read straight back.
+/// Two calls, and both used to be able to fail without the user hearing about it — the save's
+/// result was discarded, and "Obje çoğaltıldı." was logged before the load's result was looked at.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum DuplicateOutcome {
+    Duplicated(u32),
+    SaveFailed(String),
+    /// The prefab was written and read, but carried no root entity — nothing appeared.
+    NothingLoaded,
+    LoadFailed(String),
+}
+
+/// The console line for a duplicate that did not produce an object.
+///
+/// Kept apart from the world-touching code so the four branches can be checked directly, and so
+/// the one branch that must NOT reach it — `Duplicated` — is visible as a mistake if it ever does.
+pub(crate) fn duplicate_failure_message(outcome: &DuplicateOutcome) -> String {
+    match outcome {
+        DuplicateOutcome::SaveFailed(e) => {
+            format!("Obje çoğaltılamadı — geçici prefab yazılamadı: {e}")
+        }
+        DuplicateOutcome::LoadFailed(e) => {
+            format!("Obje çoğaltılamadı — geçici prefab okunamadı: {e}")
+        }
+        DuplicateOutcome::NothingLoaded => {
+            "Obje çoğaltılamadı — geçici prefab bir kök entity içermiyor.".to_string()
+        }
+        // Not reachable from the call site, which handles this branch itself. Spelled out rather
+        // than `unreachable!()`: a wrong word in the console beats taking the editor down.
+        DuplicateOutcome::Duplicated(id) => {
+            format!("Obje çoğaltıldı (entity {id}) — bu satır bir hata olarak basıldı.")
+        }
+    }
+}
+
+#[cfg(test)]
+mod save_reporting_tests {
+    use super::*;
+
+    /// Every way a duplicate can fail gets its own line, and none of them says it worked.
+    #[test]
+    fn a_duplicate_that_produced_nothing_does_not_report_success() {
+        for outcome in [
+            DuplicateOutcome::SaveFailed("disk dolu".into()),
+            DuplicateOutcome::LoadFailed("bozuk prefab".into()),
+            DuplicateOutcome::NothingLoaded,
+        ] {
+            let line = duplicate_failure_message(&outcome);
+            assert!(
+                line.contains("çoğaltılamadı"),
+                "{outcome:?} produced {line:?}, which does not tell the user it failed"
+            );
+            assert!(
+                !line.contains("Obje çoğaltıldı."),
+                "{outcome:?} produced the success line: {line:?}"
+            );
+        }
+    }
+
+    /// The two halves are told apart, because they need different fixes.
+    #[test]
+    fn the_message_says_which_half_of_the_round_trip_failed() {
+        assert!(duplicate_failure_message(&DuplicateOutcome::SaveFailed("x".into()))
+            .contains("yazılamadı"));
+        assert!(duplicate_failure_message(&DuplicateOutcome::LoadFailed("x".into()))
+            .contains("okunamadı"));
+        assert!(duplicate_failure_message(&DuplicateOutcome::SaveFailed("disk dolu".into()))
+            .contains("disk dolu"), "the underlying error must survive into the message");
+    }
+
+    /// No save in the studio may announce success without looking at its result.
+    ///
+    /// The three sites this guards — auto-save, prefab save, duplicate — all had the same shape:
+    /// `let _ = SceneData::save…(..)` followed by an unconditional "kaydedildi" line. The auto-save
+    /// one is the reason this test exists rather than a comment: "💾 Auto-Save" ticking past every
+    /// interval is exactly what a person relies on to believe their work is on disk.
+    ///
+    /// Reading the source is the only way to state "the result is not discarded" — a behavioural
+    /// test cannot make a real save fail without an unwritable filesystem.
+    #[test]
+    fn no_save_call_discards_its_result() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        for file in ["render.rs", "systems/gc.rs"] {
+            let src = std::fs::read_to_string(root.join(file)).expect("kaynak okunmalı");
+            for (n, line) in src.lines().enumerate() {
+                let line = line.trim();
+                assert!(
+                    !(line.starts_with("let _ =") && line.contains("SceneData::save")),
+                    "{file}:{} discards a save's result: {line}",
+                    n + 1
+                );
+            }
+        }
+    }
 }

@@ -85,12 +85,21 @@ pub fn garbage_collection_system(
             state.autosave_timer = 0.0;
 
             let autosave_path = format!("{}.autosave", editor_state.scene_path);
-            let _ = gizmo::scene::SceneData::save(
+            // The result used to be dropped and the success line printed regardless, which is the
+            // worst place in the editor to do that: a person watching "💾 Auto-Save" tick past
+            // every interval concludes their work is safe. An unwritable path, a full disk or a
+            // serialisation failure all produced the same reassuring line and no file.
+            match gizmo::scene::SceneData::save(
                 world,
                 &autosave_path,
                 &gizmo::full_scene_registry(),
-            );
-            editor_state.log_info(&format!("💾 Auto-Save: {}", autosave_path));
+            ) {
+                Ok(_) => editor_state.log_info(&format!("💾 Auto-Save: {}", autosave_path)),
+                Err(e) => editor_state.log_error(&format!(
+                    "❌ Auto-Save BAŞARISIZ: {} — {}. Çalışmanız KAYDEDİLMEDİ.",
+                    autosave_path, e
+                )),
+            }
         }
     } else {
         state.autosave_timer = 0.0; // Play modundayken veya sahne yolu boşken sıfırla
