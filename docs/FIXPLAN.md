@@ -2981,7 +2981,26 @@ kutular commit'lerin gerisinde kalmıştı.
   Lua env'i paylaşıyor ve oraya konan değer ikinci varlıkta ezilir — test tam olarak bunu tutuyor.
   Sayı/bool/metin dışındaki bildirimler (iç içe tablo) atlanıyor: onlar script'in kendi işi, satır
   değil. Türü bildirimle uyuşmayan eski bir override zorlanmıyor, yok sayılıyor.
-  ⬜ Kalan: script'e özellik EKLEME arayüzü yok (bildirimden gelmeyeni editörden yaratmak).
+  ✅ **Kalan da kapandı** (2026-08-16) — ve altından bir kusur çıktı. Inspector satırları script'in
+  `properties = { … }` bildiriminden geliyordu, **yalnız** ondan; oysa `update_entity`
+  `Script::properties`'i BÜTÜN olarak alıyor ve stüdyo ona `script.properties.clone()` veriyor.
+  Aradaki hiçbir şey filtrelemiyor. İki tür değer boşluğa düşüyordu, ikisi de sıradan:
+  - **Bayat override.** Script `locked = false`'tan `locked = "no"`ya düzenlendiğinde, o özelliğe
+    dokunmuş her varlıkta bir bool kalıyor. Eski kod bunu gösterimden eliyor ve *bildirilen
+    varsayılanı* çiziyordu — script ise bool'u almaya devam ediyordu. Panel bir şey diyor, koşan
+    oyun başka şey yapıyordu.
+  - **Bildirilmemiş anahtar.** Hiç listelenmiyor, yine de script'e gidiyor, yine de sahneye
+    yazılıyor, ve editörden görülüp silinemiyor.
+
+  `ScriptValue::kind`'ın kendi notu "yok sayılır" diyordu; yok sayılmıyordu. Satırlar artık
+  **birleşim**, ve tuhaf olanlar gizlenmek yerine işaretleniyor (`⚠` tür değişti, `+` bildirilmemiş,
+  `●` override). Hiçbir şey kendiliğinden silmiyor: yarım kaydedilmiş bir script dosyası yoksa
+  kullanıcının emek verdiği değerleri çöpe atardı. Ekleme arayüzü de bu yüzden anlamlı — çalışma
+  zamanı haritanın tamamını geçirdiği için script `props.foo`'yu bildirmeden okuyabilir.
+
+  Çalışma zamanı sözleşmesi artık `gizmo-scripting`'de teste bağlı
+  (`every_stored_property_reaches_the_script_declared_or_not`): editörün çizdiği şey ona uymak
+  zorunda, tersi değil.
 - ✅ **GPU bellek ölçümü** (2026-08-16). `Device::generate_allocator_report()` varmış:
   `total_allocated_bytes` gerçek bir sayı ve desteklemeyen backend'de dürüstçe `None` döndürüyor.
   RENDER STATS'ta artık `gpu mem` satırı var — "vram" değil, çünkü ölçülen şey bu sürecin
@@ -3042,7 +3061,6 @@ ADD COMPONENT düğmesi, ve viewport'un eksen gizmo'su.
 
 Sırada duran her şey burada; A öbeği bitti, B'nin ve C'nin kalanı bu:
 
-- ⬜ Script'e editörden **özellik ekleme** (bildirimden gelmeyeni yaratmak).
 - ⬜ Durum çubuğundaki **RAM** yarısı — süreç RSS'i, bir render kaygısı değil.
 - ⬜ Varlık kimliğinin kalan üçü (`demo/assets` taranmıyor, glTF UUID alamıyor, sahneler UUID
   yazmıyor) — üçü de "sahneler kimliğe geçecek mi" sorusuna bağlı, ve o cevaplanmadan bağlamak

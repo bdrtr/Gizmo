@@ -4,6 +4,10 @@ pub mod light;
 pub mod camera;
 pub mod material;
 pub mod misc;
+/// The SCRIPT section's property rows. Native-only: `gizmo-scripting` is a
+/// `cfg(not(target_arch = "wasm32"))` dependency of this crate.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod script;
 pub mod environment;
 pub mod menu;
 

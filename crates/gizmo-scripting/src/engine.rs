@@ -118,9 +118,16 @@ pub enum ScriptValue {
 
 impl ScriptValue {
     /// The label the inspector shows for this kind, and what a mismatched override is checked
-    /// against — an override whose kind differs from the declaration is ignored rather than
-    /// coerced, because silently turning `true` into `1` is how a script starts misbehaving in a
-    /// way nobody can trace to the editor.
+    /// against: an override whose kind differs from the declaration is never *coerced*, because
+    /// silently turning `true` into `1` is how a script starts misbehaving in a way nobody can
+    /// trace to the editor.
+    ///
+    /// It is not *ignored* either, and this note used to say it was. Nothing filters
+    /// [`Script::properties`] on its way to Lua — see
+    /// `every_stored_property_reaches_the_script_declared_or_not`. The editor acted on the wrong
+    /// half of that sentence: it dropped mismatched overrides from its display and showed the
+    /// declared default, while the script kept running on the stale value. The inspector now
+    /// shows every stored value and marks the odd ones instead.
     pub fn kind(&self) -> &'static str {
         match self {
             Self::Num(_) => "number",
@@ -1914,6 +1921,68 @@ end
         assert_eq!(
             seen_2, 9.25,
             "the second entity saw the first one's value — the properties are being shared"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// **Every** stored value reaches the script — declared or not, right type or not.
+    ///
+    /// `update_entity` takes the component's whole `properties` map and the studio hands it
+    /// `script.properties.clone()`, so nothing between the scene file and Lua filters it. That is
+    /// the contract, and it is a reasonable one — a scene may carry per-entity data a script reads
+    /// without declaring.
+    ///
+    /// It is pinned here because the editor once claimed the opposite. `ScriptValue::kind`'s note
+    /// said an override whose kind differs from the declaration "is ignored rather than coerced",
+    /// and the inspector duly filtered such an override out of its *display* — while the script
+    /// went on receiving it. The inspector showed the declared default and the script ran on the
+    /// stale value. Whatever the editor draws has to agree with this test, not the other way
+    /// round.
+    #[test]
+    fn every_stored_property_reaches_the_script_declared_or_not() {
+        let mut engine = ScriptEngine::new().unwrap();
+        let path = unique_temp("undeclared_props");
+        std::fs::write(
+            &path,
+            r#"
+properties = { open_speed = 2.4, locked = false }
+seen_speed = nil
+seen_locked_is_string = nil
+seen_undeclared = nil
+function on_entity_update(id, dt, props)
+    seen_speed = props.open_speed
+    seen_locked_is_string = (type(props.locked) == "string") and 1 or 0
+    seen_undeclared = props.nobody_declared_me
+end
+"#,
+        )
+        .unwrap();
+        engine.load_script(&path).unwrap();
+
+        // The declaration says `locked` is a bool and knows nothing about `nobody_declared_me`.
+        let declared = engine.declared_properties(&path);
+        assert_eq!(declared.get("locked").map(|v| v.kind()), Some("bool"));
+        assert!(!declared.contains_key("nobody_declared_me"));
+
+        let mut stored = std::collections::BTreeMap::new();
+        stored.insert("open_speed".to_string(), ScriptValue::Num(7.5));
+        // A stale override: the script now declares this as a bool.
+        stored.insert("locked".to_string(), ScriptValue::Text("yes".to_string()));
+        // And a key the script never declared at all.
+        stored.insert("nobody_declared_me".to_string(), ScriptValue::Num(42.0));
+
+        engine.update_entity(1, &path, 0.016, &stored).unwrap();
+
+        assert_eq!(engine.eval_number(&path, "seen_speed"), Some(7.5));
+        assert_eq!(
+            engine.eval_number(&path, "seen_locked_is_string"),
+            Some(1.0),
+            "the type-mismatched override is handed to the script verbatim — it is NOT ignored"
+        );
+        assert_eq!(
+            engine.eval_number(&path, "seen_undeclared"),
+            Some(42.0),
+            "an undeclared key reaches the script too, so the editor must not pretend it is absent"
         );
         let _ = std::fs::remove_file(&path);
     }

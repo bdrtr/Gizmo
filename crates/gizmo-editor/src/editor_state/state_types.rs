@@ -294,6 +294,13 @@ pub struct ScriptEditorState {
     pub active_content: Option<String>,
     pub is_dirty: bool,
     pub pending_clear_confirm: bool,
+    /// Draft name in the inspector's "add a property" row. Native-only, like the row itself:
+    /// `gizmo-scripting` is a `cfg(not(target_arch = "wasm32"))` dependency of this crate.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub new_property_name: String,
+    /// Which kind that draft property will be created as.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub new_property_kind: crate::inspector::script::NewPropertyKind,
 }
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
