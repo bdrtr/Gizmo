@@ -566,3 +566,4 @@ mod panel_visibility_tests {
         );
     }
 }
+

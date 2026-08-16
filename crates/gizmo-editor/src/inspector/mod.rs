@@ -118,3 +118,109 @@ pub fn ui_inspector(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
     });
     });
 }
+
+#[cfg(test)]
+mod inspector_width_tests {
+    use super::*;
+
+    /// The Inspector's share of the default layout: `split_right(root, 0.75, ..)` of a 1600 px
+    /// window, which `create_default_dock_state` fixes and `main.rs` sizes.
+    const DEFAULT_INSPECTOR_WIDTH: f32 = 400.0;
+
+    /// The furthest right anything the frame painted reaches.
+    fn painted_right_edge(output: &egui::FullOutput) -> f32 {
+        fn scan(shape: &egui::Shape, max: &mut f32) {
+            match shape {
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| scan(s, max)),
+                other => {
+                    let r = other.visual_bounding_rect();
+                    if r.is_finite() {
+                        *max = max.max(r.max.x);
+                    }
+                }
+            }
+        }
+        let mut max = 0.0_f32;
+        output.shapes.iter().for_each(|s| scan(&s.shape, &mut max));
+        max
+    }
+
+    /// Draw the inspector into a panel of exactly `width`, and report how far its ink actually got.
+    ///
+    /// The clip rect is deliberately left wide open. Clipping is what *hides* this defect on a real
+    /// screen — the overflowing half is simply not drawn, so the panel looks like a panel with the
+    /// ends of its words bitten off. Measuring unclipped is what turns that into a number.
+    fn ink_width(width: f32, state: &mut EditorState, world: &World) -> f32 {
+        let ctx = egui::Context::default();
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let mut panel = ui.new_child(egui::UiBuilder::new().max_rect(
+                egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(width, 2000.0)),
+            ));
+            panel.set_clip_rect(egui::Rect::EVERYTHING);
+            ui_inspector(&mut panel, world, state);
+        });
+        let edge = painted_right_edge(&output);
+        output.drop_without_applying_deltas();
+        edge
+    }
+
+    /// The Inspector must fit the width the default layout gives it.
+    ///
+    /// It did not. With nothing selected the Inspector shows the environment settings, and every
+    /// one of its nine rows was `ui.horizontal(label, Slider)` — a layout that does not shrink, so
+    /// the content demanded a flat 422.7 px no matter how narrow the panel was. At the default
+    /// 1600 px window the Inspector gets 400 px, so it overflowed by 23 px out of the box; at a
+    /// 1280 px window, by about 100. The overflow also widened the enclosing `ScrollArea`, which
+    /// is why the closing hint wrapped at a width wider than the panel and lost the end of both
+    /// of its lines.
+    ///
+    /// Measured at three widths, because the failure is that the content has a *fixed* minimum:
+    /// a fix that merely moved the constant would still fail the narrow case.
+    /// The other half of the panel: the component sections shown for a selected entity.
+    ///
+    /// `ui_inspector` branches on selection, so the environment settings and the component list
+    /// are two disjoint bodies of UI and a measurement of one says nothing about the other. This
+    /// selects an entity carrying the components a user actually clicks on — transform, body,
+    /// collider, velocity — and holds the same rows to the same panel.
+    #[test]
+    fn the_component_sections_fit_the_width_too() {
+        use gizmo_physics_core::{Collider, Transform};
+        use gizmo_physics_rigid::components::{RigidBody, Velocity};
+
+        let mut world = World::new();
+        let entity = world.spawn_bundle((
+            Transform::new(gizmo_math::Vec3::new(1.5, 2.0, -0.25)),
+            RigidBody::new(1.0, true),
+            Collider::box_collider(gizmo_math::Vec3::splat(0.5)),
+            Velocity::default(),
+        ));
+
+        for width in [DEFAULT_INSPECTOR_WIDTH, 320.0, 260.0] {
+            let mut state = EditorState::default();
+            state.selection.entities.insert(entity);
+            state.selection.primary = Some(entity);
+            let ink = ink_width(width, &mut state, &world);
+            assert!(
+                ink <= width + 1.0,
+                "the component sections painted out to {ink:.1} px inside a {width:.0} px panel                  ({:.1} px past the edge)",
+                ink - width
+            );
+        }
+    }
+
+    #[test]
+    fn the_inspector_fits_the_width_the_layout_gives_it() {
+        let world = World::new();
+        for width in [DEFAULT_INSPECTOR_WIDTH, 320.0, 260.0] {
+            let mut state = EditorState::default();
+            let ink = ink_width(width, &mut state, &world);
+            assert!(
+                ink <= width + 1.0,
+                "with nothing selected the Inspector painted out to {ink:.1} px inside a \
+                 {width:.0} px panel ({:.1} px past the edge). On screen that is not an overflow \
+                 you can scroll to — it is clipped, so the words simply end.",
+                ink - width
+            );
+        }
+    }
+}
