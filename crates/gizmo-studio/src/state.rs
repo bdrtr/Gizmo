@@ -107,9 +107,6 @@ impl PrimitiveSize {
     }
 }
 
-/// Event fired to request a runtime shader hot-reload.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct ShaderReloadEvent;
 
 #[cfg(test)]
 mod primitive_size_tests {

@@ -26,18 +26,20 @@ pub fn handle_simulation(
                         }
                     }
                 } else if path_str.ends_with(".wgsl") {
-                    editor_state
-                        .log_warning(&format!("🔥 Shader Hot-Reload iskitleniyor: {}", path_str));
-                    // WGPU Shader hot reload events can be integrated here similarly
-                    let has_events = world.get_resource::<gizmo::core::event::Events<crate::state::ShaderReloadEvent>>().is_some();
-                    if !has_events {
-                        world.insert_resource(gizmo::core::event::Events::<
-                            crate::state::ShaderReloadEvent,
-                        >::new());
-                    }
-                    if let Some(mut events) = world.get_resource_mut::<gizmo::core::event::Events<crate::state::ShaderReloadEvent>>() {
-                            events.push(crate::state::ShaderReloadEvent);
-                        }
+                    // This used to push a `ShaderReloadEvent` and stop, under a comment reading
+                    // "WGPU Shader hot reload events can be integrated here similarly". Nothing
+                    // consumed that event — not one reader anywhere — so the editor logged that a
+                    // reload was happening and the pipelines kept running the shaders they were
+                    // built with. `Renderer::rebuild_shaders` already existed and already worked;
+                    // the only demo that hot-reloads shaders (`rpg_demo`) calls it directly. So
+                    // does this now, and the dead event type went with it.
+                    //
+                    // The renderer IS a live resource here: the app loop removes it just before
+                    // drawing and puts it back after, and the update hook runs before that.
+                    world.resource_scope(|_world, renderer: &mut gizmo::renderer::Renderer| {
+                        renderer.rebuild_shaders();
+                    });
+                    editor_state.log_info(&format!("🔥 Shader hot-reload: {} yeniden derlendi", path_str));
                 }
             }
         }

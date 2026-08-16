@@ -83,6 +83,24 @@ cargo clippy --target wasm32-unknown-unknown -p gizmo-editor \
 > To reproduce the gate, run the crate list from `.github/workflows/ci.yml`'s `wasm` job, not a
 > convenient subset of it.
 
+### Shader hot-reload (works, and is not discoverable)
+
+Every renderer shader is compiled in with `include_str!`, but each one first tries to read a
+**disk override** and falls back to the embedded copy:
+
+```rust
+let source = std::fs::read_to_string("demo/assets/shaders/post_process.wgsl")
+    .unwrap_or_else(|_| include_str!("shaders/post_process.wgsl").to_string());
+```
+
+So: copy a shader out of `crates/gizmo-renderer/src/shaders/` into `demo/assets/shaders/`, edit it,
+and the studio recompiles the pipelines while it runs — the studio watches `demo/assets`
+recursively and calls `Renderer::rebuild_shaders()` on any `.wgsl` change. Verified end to end on
+2026-08-16 by tinting `post_process.wgsl` mid-run and watching the frame turn green.
+
+`demo/assets/shaders/` is deliberately **not** in the repository. Committing copies there would
+mean two versions of every shader free to drift, with the disk one silently winning.
+
 ## Environment / machine constraints
 
 `.cargo/config.toml` caps `jobs = 4` and sets `codegen-units=4, lto=off` — this dev machine has limited RAM (~13 GB); each rustc uses 1–2 GB, so unbounded parallelism OOMs. `[profile.dev]` uses `debug = "line-tables-only"` + `split-debuginfo = "unpacked"` (demo binaries statically link all of wgpu/egui; full DWARF blew `target/` past 600 GB). These affect debug info / build only — **runtime perf is unchanged**. Don't "fix" these settings.

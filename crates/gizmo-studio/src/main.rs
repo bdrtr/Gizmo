@@ -27,7 +27,6 @@ fn main() {
         // (see publish_all.sh), so reaching outside the crate directory is safe here — a
         // published crate could not, because `cargo package` only ships files under its own root.
         .with_icon(LOGO)
-        .add_event::<gizmo_studio::state::ShaderReloadEvent>()
         .add_plugin(gizmo::asset_server::AssetServerPlugin);
 
     app = app.set_setup(setup::setup_studio_scene);
