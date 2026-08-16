@@ -52,7 +52,7 @@ rayon = "1.11.0"
 chacha20 = "0.10.0"
 criterion = "0.8.2"
 rand = "0.10.1"
-bevy_tasks = "0.15"
+bevy_tasks = "0.19"
 proptest = { workspace = true }
 
 [[bench]]
