@@ -138,6 +138,22 @@ let mut finished = false;
             });
     }
 
+    // The folder tree is the prototype's LEFT column, and the third of the three.
+    //
+    // It is dropped when the dock is too narrow rather than squeezed: the three columns want
+    // `TREE + grid + DETAIL`, and below that width the grid — the column the panel is actually
+    // for — gets nothing. The detail pane already only appears when there is a selection, so the
+    // usual layout is two columns wide, not three.
+    state.assets.workspace_root =
+        tree_root_for(&state.assets.workspace_root, &state.assets.root);
+    if ui.available_width() > TREE_WIDTH + 260.0 {
+        egui::Panel::left("asset_tree")
+            .exact_size(TREE_WIDTH)
+            .show_inside(ui, |ui| {
+                draw_folder_tree(ui, state);
+            });
+    }
+
     egui::ScrollArea::both().show(ui, |ui| {
         ui.horizontal_wrapped(|ui| {
             let root = Path::new(&state.assets.root);
@@ -430,6 +446,165 @@ pub fn entry_passes(
     }
 }
 
+/// Width of the folder tree column.
+const TREE_WIDTH: f32 = 150.0;
+/// How long a directory listing in the tree is trusted before it is re-read.
+const TREE_CACHE_SECS: f32 = 1.0;
+/// How deep the tree will recurse. A symlink pointing at one of its own ancestors is a cycle, and
+/// `read_dir` follows it happily; the panel would recurse until the stack ran out.
+const TREE_MAX_DEPTH: usize = 12;
+/// How many subfolders one directory contributes. `target/` in a Rust workspace holds thousands,
+/// and a tree node is not a thing you want thousands of. What is dropped is *said* — see the
+/// `… +N more` row — because a silently truncated tree reads as a complete one.
+const TREE_MAX_CHILDREN: usize = 200;
+
+/// Where the folder tree should be rooted, given the workspace and where the grid currently is.
+///
+/// Normally the workspace, unchanged. The one rule: the back button walks to the parent directory
+/// with **no floor** — press it enough times and you are at `/` — so the grid can leave the
+/// workspace entirely. A tree that did not follow would be showing a folder that no longer
+/// contains you, with nothing highlighted and no way back down to where you are. So walking out
+/// of the workspace makes wherever you landed the new one.
+pub(crate) fn tree_root_for(workspace: &str, current: &str) -> String {
+    if Path::new(current).starts_with(workspace) {
+        workspace.to_string()
+    } else {
+        current.to_string()
+    }
+}
+
+/// Is this directory one the tree should show?
+///
+/// Dot-directories are out: `.git` alone is thousands of nodes of plumbing, and no asset lives in
+/// one. This is a rule about the leading dot rather than a list of names — a list would have to be
+/// kept in step with every tool the user's project happens to use.
+pub(crate) fn tree_dir_is_listable(name: &str) -> bool {
+    !name.starts_with('.')
+}
+
+/// The tree's subfolders for one directory, through the cache.
+fn cached_subfolders(
+    state: &mut EditorState,
+    dir: &Path,
+) -> (Vec<(std::path::PathBuf, String)>, usize) {
+    let now = Instant::now();
+    if let Some((read_at, kids, total)) = state.assets.tree_cache.get(dir) {
+        if now.duration_since(*read_at).as_secs_f32() < TREE_CACHE_SECS {
+            return (kids.clone(), *total);
+        }
+    }
+
+    let mut kids: Vec<(std::path::PathBuf, String)> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue; // files are the grid's job; this column is folders
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !tree_dir_is_listable(&name) {
+                continue;
+            }
+            kids.push((path, name));
+        }
+    }
+    kids.sort_by(|a, b| a.1.cmp(&b.1));
+    let total = kids.len();
+    kids.truncate(TREE_MAX_CHILDREN);
+    state
+        .assets
+        .tree_cache
+        .insert(dir.to_path_buf(), (now, kids.clone(), total));
+    (kids, total)
+}
+
+/// The prototype's folder tree — the browser's left column.
+///
+/// # What a click does
+///
+/// Navigates the grid *and* expands the node, both from the one click on the folder's name. The
+/// two are the same intention here: you open a folder to see what is in it, and "what is in it" is
+/// files (the grid) and folders (the branch). Making the arrow the only way to expand would mean
+/// two targets 12 px apart that both mean "open this".
+///
+/// The folder the grid is showing is drawn in the accent, so the tree answers "where am I" without
+/// being clicked.
+fn draw_folder_tree(ui: &mut egui::Ui, state: &mut EditorState) {
+    use crate::theme::palette::*;
+
+    ui.label(
+        egui::RichText::new("FOLDERS")
+            .size(10.0)
+            .color(TEXT_MUTED),
+    );
+    ui.separator();
+
+    let root = std::path::PathBuf::from(state.assets.workspace_root.clone());
+    let root_name = root
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| state.assets.workspace_root.clone());
+
+    egui::ScrollArea::vertical().show(ui, |ui| {
+        // The workspace itself is a row, so there is somewhere to click to get back to the top.
+        let at_root = Path::new(&state.assets.root) == root;
+        if ui
+            .add(egui::Button::new(
+                egui::RichText::new(format!("🗀 {root_name}"))
+                    .size(11.0)
+                    .color(if at_root { ACCENT } else { TEXT_BODY }),
+            )
+            .frame(false))
+            .clicked()
+        {
+            state.assets.root = root.to_string_lossy().to_string();
+        }
+        tree_children(ui, state, &root, 0);
+    });
+}
+
+/// One level of the tree. Recurses only into open nodes — `CollapsingHeader` does not run this
+/// body while it is closed, which is what keeps an unexpanded `target/` from ever being read.
+fn tree_children(ui: &mut egui::Ui, state: &mut EditorState, dir: &Path, depth: usize) {
+    use crate::theme::palette::*;
+
+    if depth >= TREE_MAX_DEPTH {
+        ui.label(
+            egui::RichText::new("… too deep")
+                .size(10.0)
+                .color(TEXT_DIM),
+        );
+        return;
+    }
+
+    let (kids, total) = cached_subfolders(state, dir);
+    for (path, name) in kids {
+        let current = Path::new(&state.assets.root) == path;
+        let header = egui::RichText::new(&name)
+            .size(11.0)
+            .color(if current { ACCENT } else { TEXT_BODY });
+
+        let response = egui::CollapsingHeader::new(header)
+            .id_salt(&path)
+            .default_open(false)
+            .show(ui, |ui| {
+                tree_children(ui, state, &path, depth + 1);
+            });
+
+        if response.header_response.clicked() {
+            state.assets.root = path.to_string_lossy().to_string();
+        }
+    }
+
+    if total > TREE_MAX_CHILDREN {
+        ui.label(
+            egui::RichText::new(format!("… +{} more", total - TREE_MAX_CHILDREN))
+                .size(10.0)
+                .color(TEXT_DIM),
+        );
+    }
+}
+
 /// The prototype's asset detail pane — four fields, and the fifth deliberately absent.
 ///
 /// # Why four
@@ -542,6 +717,88 @@ mod tests {
     }
 
     use super::{asset_kind, entry_passes, AssetKind};
+
+    use super::{cached_subfolders, tree_dir_is_listable, tree_root_for, TREE_MAX_CHILDREN};
+
+    /// The tree is rooted at the workspace — until the back button walks above it, which it can,
+    /// because that button has no floor. Then the tree has to follow, or it is showing a folder
+    /// that no longer contains you.
+    #[test]
+    fn the_tree_follows_you_out_of_the_workspace_and_not_into_it() {
+        // Staying inside keeps the workspace, at every depth.
+        assert_eq!(tree_root_for("demo/assets", "demo/assets"), "demo/assets");
+        assert_eq!(tree_root_for("demo/assets", "demo/assets/textures"), "demo/assets");
+        assert_eq!(
+            tree_root_for("demo/assets", "demo/assets/textures/pbr/wood"),
+            "demo/assets"
+        );
+        // Walking out of it re-roots, so the current folder is always in the tree.
+        assert_eq!(tree_root_for("demo/assets", "demo"), "demo");
+        // ...and so does picking an unrelated workspace, which is the same thing.
+        assert_eq!(tree_root_for("demo/assets", "/srv/game"), "/srv/game");
+    }
+
+    /// A sibling whose name merely *starts with* the workspace's is not inside it. `starts_with`
+    /// on a `Path` compares components, and the whole rule depends on that being true.
+    #[test]
+    fn a_sibling_with_a_shared_prefix_is_not_inside_the_workspace() {
+        assert_eq!(
+            tree_root_for("demo/assets", "demo/assets_old"),
+            "demo/assets_old",
+            "demo/assets_old is a sibling of demo/assets, not a child of it"
+        );
+    }
+
+    #[test]
+    fn dot_directories_stay_out_of_the_tree() {
+        assert!(!tree_dir_is_listable(".git"));
+        assert!(!tree_dir_is_listable(".cache"));
+        assert!(tree_dir_is_listable("textures"));
+        // The rule is the leading dot, not the dot: a folder can have one in the middle.
+        assert!(tree_dir_is_listable("v1.2"));
+    }
+
+    /// The listing itself, against a real directory: folders only, sorted, dot-dirs dropped, and
+    /// the cap counted rather than silently applied.
+    #[test]
+    fn the_listing_is_folders_only_sorted_and_counted() {
+        let dir = std::env::temp_dir().join(format!("gizmo_tree_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("zebra")).unwrap();
+        std::fs::create_dir_all(dir.join("apple")).unwrap();
+        std::fs::create_dir_all(dir.join(".hidden")).unwrap();
+        std::fs::write(dir.join("a_file.png"), b"not a folder").unwrap();
+
+        let mut state = crate::EditorState::new();
+        let (kids, total) = cached_subfolders(&mut state, &dir);
+
+        let names: Vec<&str> = kids.iter().map(|(_, n)| n.as_str()).collect();
+        assert_eq!(names, vec!["apple", "zebra"], "folders only, alphabetical");
+        assert_eq!(total, 2, "the total is what survived the filter, before the cap");
+        assert!(total <= TREE_MAX_CHILDREN, "nothing was dropped here");
+
+        // A second call inside the cache window must not re-read the directory. Prove it by
+        // changing the directory underneath and watching the answer NOT change.
+        std::fs::create_dir_all(dir.join("mango")).unwrap();
+        let (again, _) = cached_subfolders(&mut state, &dir);
+        assert_eq!(again.len(), 2, "the second read came from the cache");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A directory that cannot be read is empty, not a panic. The tree walks whatever the user
+    /// points it at, including folders they have no permission for.
+    #[test]
+    fn an_unreadable_directory_lists_as_empty() {
+        let mut state = crate::EditorState::new();
+        let (kids, total) = cached_subfolders(
+            &mut state,
+            std::path::Path::new("/definitely/not/a/directory/here"),
+        );
+        assert!(kids.is_empty());
+        assert_eq!(total, 0);
+    }
+
 
     #[test]
     fn the_type_chip_keeps_its_kind_and_every_folder() {

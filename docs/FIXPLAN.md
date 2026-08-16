@@ -2820,11 +2820,29 @@ kutular commit'lerin gerisinde kalmıştı.
 - ✅ **Profiler grafiği** (`profiler_panel.rs`). Kare-çubuğu grafiği, 16.67 ms bütçe çizgisi, scope
   tablosu; `FrameProfiler::history()` üzerinden, ölçülen sayılarla.
 - ✅ **Console filtre çipleri** (All / Warn / Error + sayılar) — `console.rs`, artı metin filtresi.
-- 🔄 **Varlık tipi filtresi** ✅ (All / Mesh / Material / Texture / Audio, tek uzantı tablosundan;
-  ikon araması ve çip aynı soruyu sorduğu için liste tek). ⬜ **Kalan: üçüncü sütun.** Tarayıcı iki
-  sütun — ızgara + sağdaki detay paneli; prototipin sol **klasör ağacı** sütunu yok, gezinme
-  breadcrumb ve ızgaradan yürüyor. (Klasörler tip çipini hep geçiyor, yoksa bir dizinde mahsur
-  kalınıyor.)
+- ✅ **Varlık tipi filtresi + üç sütunlu tarayıcı** (2026-08-16). Tip filtresi (All / Mesh /
+  Material / Texture / Audio) tek uzantı tablosundan; ikon araması ve çip aynı soruyu sorduğu için
+  liste tek. Klasörler tip çipini hep geçiyor, yoksa bir dizinde mahsur kalınıyor. Üçüncü sütun —
+  sol **klasör ağacı** — bu turda geldi: `TREE + ızgara + DETAY`.
+
+  Ağacın dört kararı ve gerekçeleri:
+  - **Kökü `root`'tan ayrı.** `workspace_root` yeni bir alan; ağacı bulunduğun klasöre köklemek
+    yalnız onun çocuklarını gösterirdi, ki o zaten ızgaranın kendisi. Geri düğmesinin **tabanı yok**
+    (yeterince basarsan `/`'a çıkarsın), o yüzden tek kural: çalışma alanının dışına çıkarsan
+    indiğin yer yeni çalışma alanı olur — ağaç her zaman bulunduğun yeri içerir. Kural `Path`
+    bileşenleriyle karşılaştırıyor, dize önekiyle değil: `demo/assets_old`, `demo/assets`'in
+    kardeşi, çocuğu değil, ve testi tam bunu tutuyor.
+  - **Yalnız açık dal okunuyor.** `CollapsingHeader` kapalıyken gövdesini çalıştırmıyor, yani
+    açılmamış bir `target/` hiç okunmuyor. Açık olan da 1 sn'lik önbellekten geçiyor; bir klasör
+    ağacı açık kalan bir panel, her kare `read_dir` demek olurdu.
+  - **Nokta dizinleri yok** (`.git` tek başına binlerce düğüm). Kural baştaki nokta, bir isim
+    listesi değil — liste kullanıcının kullandığı her araca göre güncellenmek zorunda kalırdı.
+  - **Kesilen söyleniyor.** Dizin başına 200 alt klasör sınırı var ve aşılırsa `… +N more` satırı
+    basılıyor; sessizce kırpılmış bir ağaç tam bir ağaç gibi okunur. Simge bağı için 12 seviye
+    derinlik tavanı da var (`read_dir` bağı seve seve izler).
+
+  Dar dock'ta ağaç **sıkıştırılmıyor, düşürülüyor**: üç sütun sığmadığında feda edilecek olan,
+  panelin asıl sebebi olan ızgara olmamalı.
 - ✅ **Inspector'da `RigidBody::body_type`** — Static/Dynamic/Kinematic segmenti,
   `inspector/physics.rs:108`.
 
@@ -2955,7 +2973,6 @@ ADD COMPONENT düğmesi, ve viewport'un eksen gizmo'su.
 Sırada duran her şey burada; A öbeği bitti, B'nin ve C'nin kalanı bu:
 
 - ⬜ Timeline'ın **yazma** tarafı (Auto-key, keyframe düzenleme) — geri-alma hikâyesi ister.
-- ⬜ Tarayıcının **klasör ağacı** sütunu (üçüncü sütun).
 - ⬜ Script'e editörden **özellik ekleme** (bildirimden gelmeyeni yaratmak).
 - ⬜ Durum çubuğundaki **RAM** yarısı — süreç RSS'i, bir render kaygısı değil.
 - ⬜ Varlık kimliğinin kalan üçü (`demo/assets` taranmıyor, glTF UUID alamıyor, sahneler UUID

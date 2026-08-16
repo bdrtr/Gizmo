@@ -105,7 +105,13 @@ pub struct AssetBrowserState {
     pub kind_filter: Option<crate::asset_browser::AssetKind>,
     /// The file the detail pane describes, or `None` when nothing is selected.
     pub selected: Option<std::path::PathBuf>,
+    /// The folder the **grid** is showing. Changes as you navigate.
     pub root: String,
+    /// The folder the **tree** is rooted at. Separate from `root` on purpose: a tree rooted at
+    /// wherever you happen to be standing would only ever show that folder's children, which is
+    /// the grid again. See `crate::asset_browser::tree_root_for` for what happens when navigation
+    /// walks above it.
+    pub workspace_root: String,
     pub show: bool,
     pub workspace_rx: Option<std::sync::Mutex<std::sync::mpsc::Receiver<String>>>,
     pub cached_dir: Option<(
@@ -113,6 +119,16 @@ pub struct AssetBrowserState {
         Instant,
         Vec<(std::path::PathBuf, String, bool)>,
     )>,
+    /// Subfolder listings for the tree, one entry per directory that has been expanded at least
+    /// once: `(read at, the folders, how many there were before the cap)`.
+    ///
+    /// The tree only reads a directory while it is open, so an unexpanded branch costs nothing —
+    /// but an open one would otherwise be re-walked every frame, and a folder tree is a panel that
+    /// stays open.
+    pub tree_cache: std::collections::HashMap<
+        std::path::PathBuf,
+        (Instant, Vec<(std::path::PathBuf, String)>, usize),
+    >,
 }
 impl Default for AssetBrowserState {
     fn default() -> Self {
@@ -121,9 +137,11 @@ impl Default for AssetBrowserState {
             kind_filter: None,
             selected: None,
             root: "demo/assets".to_string(),
+            workspace_root: "demo/assets".to_string(),
             show: true,
             workspace_rx: None,
             cached_dir: None,
+            tree_cache: std::collections::HashMap::new(),
         }
     }
 }
