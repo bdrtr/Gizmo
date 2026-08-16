@@ -263,7 +263,7 @@ impl Default for EditorState {
     }
 }
 
-fn create_default_dock_state() -> egui_dock::DockState<EditorTab> {
+pub(crate) fn create_default_dock_state() -> egui_dock::DockState<EditorTab> {
     use egui_dock::{DockState, NodeIndex};
     
     // Root tab "Scene View" and "Game View" in the same area

@@ -29,7 +29,7 @@ pub fn execute_render_pipeline(
     let mut bone_att = gizmo::systems::transform::BoneAttachmentSystem;
     gizmo::core::system::System::run(&mut bone_att, world, delta_time);
 
-    let (aspect, ed_shading_mode, show_colliders, post_params) =
+    let (aspect, ed_shading_mode, show_colliders, post_params, game_view_visible) =
         sync_editor_settings(world, renderer);
 
     let _is_hidden_guard = world.borrow::<gizmo::core::component::IsHidden>();
@@ -603,7 +603,19 @@ pub fn execute_render_pipeline(
             // Doğrusu, oyun görünümünü kendi encoder'ına çizip HEMEN submit etmek: o submit'e
             // kadar yazılanlar ona, sonrasında yazılanlar çağıranın encoder'ına uygulanır. Böylece
             // ikinci bir uniform tamponu ya da bind group çoğaltmasına gerek kalmıyor.
-            if !is_playing_mode {
+            // Only for a panel someone can see. In the default layout Scene and Game are tabs of
+            // ONE dock leaf, so at most one of them is on screen — and this ran unconditionally,
+            // paying for a second full scene pass (batches, uniforms, its own submit) every frame
+            // to fill a texture behind another tab. Gating it took the studio's frame from
+            // 2.63/3.02 ms to 1.65/1.69 ms, about 40%.
+            //
+            // The flag is this frame's answer, not a stale one: the app loop runs the egui hook
+            // (`event.rs`, `ui_fn`) before the render hook, so the panels have already said whether
+            // they drew. The one cost is the frame you switch tabs on — the Game panel announces
+            // itself and paints in the same frame, so it shows the previous contents once (black,
+            // if it has never rendered) and is correct from the next frame. Rendering a frame early
+            // for a panel that is not there yet is the trade this whole gate exists to refuse.
+            if !is_playing_mode && game_view_visible {
                 let game_batches: Vec<batching::FlatBatchData> = flat_batches
                     .iter()
                     .filter(|b| !b.is_editor_only)

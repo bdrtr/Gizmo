@@ -484,41 +484,13 @@ fn the_editor_casts_a_shadow_onto_the_ground() {
     );
 }
 
-/// The Game panel shows the game camera, not a copy of the scene view.
+/// Render one studio frame with the Game panel either visible or hidden, and read both targets.
 ///
-/// # The defect this guards
-///
-/// Studio used to make one scene render per frame and post-process it into both targets, so the
-/// Game tab was a byte-identical copy of the Scene tab — editor camera, gizmos, grid and all —
-/// precisely while you were editing, which is when a game preview is worth having. Measured before
-/// the fix: 0 of 65536 bytes differed.
-///
-/// # The trap in fixing it, which this test also pins
-///
-/// The obvious fix — write the game camera's uniforms mid-frame and record a second pass into the
-/// same encoder — does not work, and fails in a way that looks like nothing happened at all:
-/// `Queue::write_buffer` is ordered against **submissions**, not against commands. Every write
-/// made before a submit applies to every pass in it, so the second write reached the first render
-/// too and both panels showed the game camera. The fix is a submission boundary: the game view is
-/// drawn into its own encoder and submitted before the editor's uniforms are written back.
-///
-/// # Why the cameras point the same way
-///
-/// Pointing them in opposite directions proves nothing here: the editor culls against the **game**
-/// camera even in edit mode (deliberately — it lets you watch what the game would drop), so a cube
-/// behind the game camera is culled out of the batch list and missing from both pictures. Same
-/// direction, four times the distance, is a difference no shared render can fake.
-#[test]
-fn the_game_view_shows_the_game_camera_not_the_editor_camera() {
-    let _gpu = gpu_lock();
-    if !pollster::block_on(Renderer::headless_adapter_available()) {
-        return;
-    }
-    if pollster::block_on(Renderer::headless_adapter_is_software()) {
-        return;
-    }
-
-    let (scene_px, game_px) = pollster::block_on(async {
+/// `game_view_visible` is a real input now: the studio only renders the separate game-camera pass
+/// for a panel that is actually on screen, and this is what lets both halves of that be tested —
+/// the picture when it is shown, and the absence of the work when it is not.
+fn render_scene_and_game_targets(game_view_visible: bool) -> (Vec<u8>, Vec<u8>) {
+    pollster::block_on(async {
         let mut renderer = Renderer::new_headless(W, H, None).await;
         let mut am = AssetManager::new();
         let mut world = World::new();
@@ -601,6 +573,12 @@ fn the_game_view_shows_the_game_camera_not_the_editor_camera() {
             },
         ));
 
+        // The panel's own answer, which the pipeline reads through `EditorState`. Without one in
+        // the world the studio takes the hidden path and never renders the game camera at all.
+        let mut ed = gizmo::editor::EditorState::default();
+        ed.game_view_visible = game_view_visible;
+        world.insert_resource(ed);
+
         let state = StudioState {
             current_fps: 60.0,
             actual_dt: 1.0 / 60.0,
@@ -668,21 +646,84 @@ fn the_game_view_shows_the_game_camera_not_the_editor_camera() {
             v
         };
         (fetch(&scene_buf, &renderer.device), fetch(&game_buf, &renderer.device))
-    });
+    })
+}
 
-    // Compared as a count, not with `assert_ne!` on the vectors: a failure there prints two
-    // 64 KB byte arrays into the test log and buries its own message.
-    let differing = scene_px
-        .iter()
-        .zip(game_px.iter())
-        .filter(|(a, b)| a != b)
-        .count();
+/// How many bytes of the two targets differ. Counted rather than compared with `assert_ne!`,
+/// because a failure there prints two 64 KB byte arrays into the log and buries its own message.
+fn target_difference(scene_px: &[u8], game_px: &[u8]) -> usize {
+    scene_px.iter().zip(game_px.iter()).filter(|(a, b)| a != b).count()
+}
+
+/// The Game panel shows the game camera, not a copy of the scene view.
+///
+/// # The defect this guards
+///
+/// Studio used to make one scene render per frame and post-process it into both targets, so the
+/// Game tab was a byte-identical copy of the Scene tab — editor camera, gizmos, grid and all —
+/// precisely while you were editing, which is when a game preview is worth having. Measured before
+/// the fix: 0 of 65536 bytes differed.
+///
+/// # The trap in fixing it, which this test also pins
+///
+/// The obvious fix — write the game camera's uniforms mid-frame and record a second pass into the
+/// same encoder — does not work, and fails in a way that looks like nothing happened at all:
+/// `Queue::write_buffer` is ordered against **submissions**, not against commands. Every write
+/// made before a submit applies to every pass in it, so the second write reached the first render
+/// too and both panels showed the game camera. The fix is a submission boundary: the game view is
+/// drawn into its own encoder and submitted before the editor's uniforms are written back.
+///
+/// # Why the cameras point the same way
+///
+/// Pointing them in opposite directions proves nothing here: the editor culls against the **game**
+/// camera even in edit mode (deliberately — it lets you watch what the game would drop), so a cube
+/// behind the game camera is culled out of the batch list and missing from both pictures. Same
+/// direction, four times the distance, is a difference no shared render can fake.
+#[test]
+fn the_game_view_shows_the_game_camera_not_the_editor_camera() {
+    let _gpu = gpu_lock();
+    if !pollster::block_on(Renderer::headless_adapter_available()) {
+        return;
+    }
+    if pollster::block_on(Renderer::headless_adapter_is_software()) {
+        return;
+    }
+    let (scene_px, game_px) = render_scene_and_game_targets(true);
+    let differing = target_difference(&scene_px, &game_px);
     assert!(
         differing > scene_px.len() / 100,
         "the game target is byte-identical to the scene target ({differing} of {} bytes differ): \
          two cameras pointed in opposite directions produced the same picture, because only one \
          render happened",
         scene_px.len()
+    );
+}
+
+/// The other half: a Game panel nobody is looking at costs nothing.
+///
+/// In the default layout Scene and Game are tabs of the same leaf, so at most one is ever on
+/// screen — and the studio used to render the game camera as a full extra scene pass every frame
+/// regardless, which measured as roughly 40% of the frame (2.6-3.0 ms down to 1.65-1.69 ms on this
+/// machine). With the panel hidden that pass must not happen, and the game target then holds
+/// whatever the cheap shared path put there: the editor's own picture, byte for byte.
+///
+/// This is the assertion that stops the gate being quietly inverted or dropped. Without it, a gate
+/// that never fires would leave the test above green and the saving gone.
+#[test]
+fn a_hidden_game_panel_does_not_pay_for_a_second_render() {
+    let _gpu = gpu_lock();
+    if !pollster::block_on(Renderer::headless_adapter_available()) {
+        return;
+    }
+    if pollster::block_on(Renderer::headless_adapter_is_software()) {
+        return;
+    }
+    let (scene_px, game_px) = render_scene_and_game_targets(false);
+    let differing = target_difference(&scene_px, &game_px);
+    assert_eq!(
+        differing, 0,
+        "the game target differs from the scene target in {differing} bytes with the panel \
+         hidden — the separate game-camera pass ran for a panel nobody is looking at"
     );
 }
 

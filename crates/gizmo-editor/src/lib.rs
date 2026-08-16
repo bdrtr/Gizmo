@@ -106,6 +106,13 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
 /// the mutable [`EditorState`]. The editor composes its panels into the root `Ui`
 /// via `show_inside` (egui 0.34's root-`Ui` composition model).
 pub fn draw_editor(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
+    // Panel visibility is a per-FRAME fact, so it is cleared here and re-asserted by whichever
+    // panels the dock actually draws below. Both flags existed before this and were only ever set
+    // to `true` — never cleared, never read — so they said "this panel has been visible at least
+    // once", which is not a question anyone was asking.
+    state.scene_view_visible = false;
+    state.game_view_visible = false;
+
     let ctx = ui.ctx().clone();
     // ==== Global Klavye Kısayolları (Sadece text alanları odakta değilken) ====
     if !ctx.egui_wants_keyboard_input() {
@@ -445,6 +452,117 @@ VmData:\t   777777 kB
         assert!(
             bytes > 1024 * 1024 && bytes < 1024_u64.pow(4),
             "implausible RSS: {bytes} bytes"
+        );
+    }
+}
+
+#[cfg(test)]
+mod panel_visibility_tests {
+    use super::*;
+
+    /// Panel visibility must describe *this* frame, not any frame since startup.
+    ///
+    /// The studio skips an entire extra scene render when `game_view_visible` is false, so the flag
+    /// has to be recomputed per frame: cleared at the top of `draw_editor`, set again by whichever
+    /// viewport actually drew. Drop either half and the flag degrades into "has been visible once",
+    /// which latches true and quietly hands the saving back.
+    ///
+    /// Scene and Game are tabs of one dock leaf, so exactly one of them is on top at a time. The
+    /// test brings each to the front in turn and demands the pair of flags follow — and it starts
+    /// each frame with both flags at the *opposite* of the expected answer, so no assertion can
+    /// pass on leftover state. Every one of the four has to be written during its frame.
+    ///
+    /// `Context::run_ui` drives a real frame with no window and no GPU. The viewports paint nothing
+    /// without a texture, but the dock still decides who is on top, which is the part under test.
+    #[test]
+    fn a_frame_recomputes_which_viewport_is_visible() {
+        let world = World::new();
+        let ctx = egui::Context::default();
+
+        for (front, tab) in [("Scene", EditorTab::SceneView), ("Game", EditorTab::GameView)] {
+            let want_scene = tab == EditorTab::SceneView;
+            let mut state = EditorState {
+                // Not whatever `editor_layout.json` happens to be in the working directory.
+                dock_state: editor_state::create_default_dock_state(),
+                scene_view_visible: !want_scene,
+                game_view_visible: want_scene,
+                ..Default::default()
+            };
+            let found = state.dock_state.find_tab(&tab).expect("tab is in the default layout");
+            state
+                .dock_state
+                .set_active_tab(found)
+                .expect("the tab the layout just handed back is still addressable");
+
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                draw_editor(ui, &world, &mut state);
+            });
+            output.drop_without_applying_deltas();
+
+            assert_eq!(
+                (state.scene_view_visible, state.game_view_visible),
+                (want_scene, !want_scene),
+                "with the {front} tab in front, the visibility flags read \
+                 (scene={}, game={}) — the studio spends a full extra scene render on \
+                 game_view_visible and skips the render a visible viewport needs, so a flag that \
+                 describes some earlier frame costs real frame time either way",
+                state.scene_view_visible,
+                state.game_view_visible,
+            );
+        }
+    }
+
+    /// The Game panel shows the texture it was handed, in every mode that has one.
+    ///
+    /// This is the other half of the same bargain as
+    /// [`a_frame_recomputes_which_viewport_is_visible`], and it was broken in the opposite
+    /// direction: the studio renders the game camera into its own target on every frame it is *not*
+    /// playing, and the panel used to display that target only *while* playing. Exact opposites, so
+    /// a whole live-preview feature rendered every frame into a texture nobody ever saw.
+    ///
+    /// The frame runs in Edit mode — the mode the old condition rejected — and the assertion
+    /// looks for the texture in the shapes the frame actually emitted, not for the state that was
+    /// supposed to lead there.
+    #[test]
+    fn the_game_panel_paints_the_texture_it_was_given() {
+        /// Shapes nest: a `Shape::Vec` holds more shapes, so a flat scan would miss the mesh.
+        fn paints(shape: &egui::Shape, id: egui::TextureId) -> bool {
+            match shape {
+                egui::Shape::Mesh(mesh) => mesh.texture_id == id,
+                egui::Shape::Vec(shapes) => shapes.iter().any(|s| paints(s, id)),
+                _ => false,
+            }
+        }
+
+        let target = egui::TextureId::User(0x6112_0000);
+        let world = World::new();
+        let mut state = EditorState {
+            dock_state: editor_state::create_default_dock_state(),
+            mode: EditorMode::Edit,
+            game_texture_id: Some(target),
+            ..Default::default()
+        };
+        let found = state
+            .dock_state
+            .find_tab(&EditorTab::GameView)
+            .expect("the Game tab is in the default layout");
+        state
+            .dock_state
+            .set_active_tab(found)
+            .expect("the tab the layout just handed back is still addressable");
+
+        let ctx = egui::Context::default();
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            draw_editor(ui, &world, &mut state);
+        });
+        let painted = output.shapes.iter().any(|s| paints(&s.shape, target));
+        output.drop_without_applying_deltas();
+
+        assert!(
+            painted,
+            "the Game panel had a texture and did not paint it — while not playing, the studio \
+             renders the game camera into exactly this target every frame, so a panel that refuses \
+             to show it outside play mode throws the whole preview away and charges for it too"
         );
     }
 }

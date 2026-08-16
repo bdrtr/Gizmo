@@ -15,7 +15,7 @@ use super::batching::FlatBatchData;
 pub(super) fn sync_editor_settings(
     world: &gizmo::core::World,
     renderer: &mut gizmo::renderer::Renderer,
-) -> (f32, u32, bool, gizmo::renderer::PostProcessUniforms) {
+) -> (f32, u32, bool, gizmo::renderer::PostProcessUniforms, bool) {
     let mut aspect = if renderer.size.height > 0 {
         renderer.size.width as f32 / renderer.size.height as f32
     } else {
@@ -27,6 +27,10 @@ pub(super) fn sync_editor_settings(
     let mut ed_ssao_enabled = true;
     let mut ed_ssao_strength = 0.8;
     let mut show_colliders = false;
+    // Whether the Game panel is on screen this frame. In the default layout Scene and Game are
+    // TABS OF THE SAME LEAF, so at most one of them is ever visible — and the game view was being
+    // rendered as a full extra scene pass every frame regardless.
+    let mut game_view_visible = false;
     
     // The editor's look before `EditorState` overrides it: the renderer's neutral default, minus
     // the film grain (it reads as noise on a static viewport) and with a mild aberration and a
@@ -64,6 +68,7 @@ pub(super) fn sync_editor_settings(
                 aspect = rect.width() / rect.height();
             }
         }
+        game_view_visible = ed_state.game_view_visible;
     }
 
     if let Some(ref mut fxaa) = renderer.fxaa {
@@ -82,7 +87,7 @@ pub(super) fn sync_editor_settings(
     // Restoring this line is not what turns SSAO on here; a depth-normal prepass is.
     let _ = (ed_ssao_enabled, ed_ssao_strength);
 
-    (aspect, ed_shading_mode, show_colliders, post_params)
+    (aspect, ed_shading_mode, show_colliders, post_params, game_view_visible)
 }
 
 // execute_render_pipeline'ten çıkarılan render geçişleri (Tier 3: mega-fn bölmesi).

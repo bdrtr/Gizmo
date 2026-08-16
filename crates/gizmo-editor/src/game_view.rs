@@ -5,7 +5,18 @@ pub fn ui_game_view(ui: &mut egui::Ui, state: &mut EditorState) {
     let is_playing = state.is_playing();
     let is_paused = state.mode == crate::editor_state::EditorMode::Paused;
 
-    if is_playing || is_paused {
+    // The texture is shown whenever there IS one, not only while playing.
+    //
+    // This used to be `if is_playing || is_paused`, and that one condition threw away a whole
+    // feature. The studio renders the game camera into its own target on every frame it is NOT
+    // playing — a separate scene pass, editor chrome excluded, built precisely so this panel can
+    // show a live preview while you edit (the render's own comments record the work of stopping
+    // the two panels drawing the same picture). The panel then refused to display it outside play
+    // mode and drew a placeholder instead, so that pass rendered into a texture nobody ever saw.
+    //
+    // The two conditions were exact opposites: rendered only when not playing, displayed only
+    // when playing.
+    if state.game_texture_id.is_some() {
         if is_playing {
             ui.input_mut(|i| i.events.clear());
         }
@@ -36,9 +47,22 @@ pub fn ui_game_view(ui: &mut egui::Ui, state: &mut EditorState) {
                     egui::FontId::proportional(40.0),
                     egui::Color32::from_white_alpha(150),
                 );
+            } else if !is_playing {
+                // A line, not a takeover: the preview is the point of the panel, and the one
+                // thing a reader needs told is that it is a preview and how to start the game.
+                ui.painter().text(
+                    egui::pos2(rect.center().x, rect.max.y - 10.0),
+                    egui::Align2::CENTER_BOTTOM,
+                    "oyun kamerası — önizleme · ▶ Başlat ile çalıştır",
+                    egui::FontId::proportional(12.0),
+                    egui::Color32::from_white_alpha(90),
+                );
             }
         }
     } else {
+        // No texture at all — no game camera in the scene, or the first frame before the render
+        // target exists. This is the only case with nothing to show, so it is the only case that
+        // gets the placeholder and the shortcut list.
         ui.vertical_centered(|ui| {
             ui.add_space(30.0);
             ui.label(
@@ -49,7 +73,7 @@ pub fn ui_game_view(ui: &mut egui::Ui, state: &mut EditorState) {
 
             ui.label(
                 egui::RichText::new(
-                    "Toolbar'daki ▶ Başlat butonuna\nbasarak simülasyonu çalıştırın.",
+                    "Sahnede bir oyun kamerası yok, ya da ilk kare henüz çizilmedi.\nToolbar'daki ▶ Başlat butonuna basarak simülasyonu çalıştırın.",
                 )
                 .size(14.0)
                 .color(egui::Color32::from_white_alpha(40)),
