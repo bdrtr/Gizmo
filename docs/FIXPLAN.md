@@ -2278,10 +2278,21 @@ eklemekten ibaret.
   > `cargo update` CI'ı sessizce desenkronize ederdi. Bugün `0.2.126`'ya çözülüyor
   > (lockfile'a karşı elden doğrulandı). YAML geçerliliği de doğrulandı (jobs: build, deploy).
 
-  - ⬜ **İNSAN ADIMI GEREKİYOR, workflow tek başına yetmez:** repo ayarlarında
-    Settings → Pages → Source = "GitHub Actions" seçilmeli. Bu yapılmadan workflow koşar ve
-    deploy adımında düşer. Ayrıca deploy'un kendisi hiç koşturulmadı — bu makinede
-    doğrulanabilir olan kısım YAML ve sürüm türetmesiydi, gerçek build+deploy değil.
+  - ✅ **KAPANDI (2026-08-16).** Bu madde bayatlamış: insan adımı yapılmış ve deploy uzun
+    zamandır koşuyor. `gh api repos/bdrtr/Gizmo/pages` → `build_type: "workflow"`, ve
+    `gh run list --workflow=pages.yml` son sekiz push'un **sekizinde de başarılı** diyor
+    (en sonu 2026-08-16, 1m14s). Site canlı: https://bdrtr.github.io/Gizmo/
+  - ✅ **Sayfanın kendisi de düzenlendi** (2026-08-16). Ziyaretçinin ilk gördüğü şey koyu
+    zeminde gri bir satırdı; artık logo var — hem sekme ikonu hem yükleme ekranı olarak, aynı
+    baytlardan, yani ikisi ayrışamaz. Logo dosya olarak DEĞİL gömülü: workflow tam olarak iki
+    şey yayınlıyor (`index.html` ve `pkg/`), üçüncü bir yol eklemek ve ikinci bir istek atmak
+    — üstelik birkaç megabaytlık wasm'ı indirmek üzere olan bir sayfada — 15 KB base64'ten
+    pahalı. `viewport` ve `description` meta'ları da eklendi.
+
+    Bir kusur da bu sırada çıktı: hata yolu `boot.textContent = …` yazıyordu, yani logoyu
+    DA silerdi. Artık yalnız metin düğümünü değiştiriyor. İki durum da tarayıcıda görüldü —
+    yükleme (logo nefes alıyor) ve hata (logo sönük, animasyon duruyor). `prefers-reduced-motion`
+    diyen birine sabit logo gidiyor.
 - ✅ **D4 — `#![warn(missing_docs)]` Stage A'da.** **1. parti bitti (2026-08-05):**
   `gizmo-math`, `gizmo-net`, `gizmo-scene`, `gizmo-animation` sıfır eksik dokümanla ratchet
   altında. **2. parti bitti (2026-08-05):** `gizmo-physics-soft`, `gizmo-physics-dynamics` ve
