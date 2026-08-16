@@ -1233,6 +1233,23 @@ yarısı oradan da eksikti.
 - **Sonda köprüsünde hangi sorgular sunulacak.** Mekanizma kuruldu ve tek tüketicisi var
   (`physics.ground_at`); geri kalanı API tasarımı.
 
+### Editör kamera tuşları sağ tuşa kapılandı (2026-08-16, davranış değişikliği)
+
+Araç kısayolları (Q/W/E/R → Seç/Taşı/Döndür/Ölçek, `draw_editor`'da GENEL) ile serbest uçuş
+tuşları (W/A/S/D + Q/E, `gizmo-studio` kamera sistemi) üç harfi paylaşıyordu ve uçuş hiçbir
+değiştirici istemiyordu. Sonuç: W ile öne uçmak aracı Taşı yapıyordu, kaçışı yoktu.
+
+Uçuş artık **viewport üzerinde sağ tuş basılı** olmasını istiyor — bakışı zaten kapılayan jest, ve
+Game panelinin yardım metninin zaten tarif ettiği şey. Bu bir davranış değişikliği: eskiden sağ
+tuşsuz uçulabiliyordu.
+
+Bayrak `dragged_by` ile değil `is_pointer_button_down_on() && pointer.secondary_down()` ile
+üretiliyor. Sürükleme egui'nin eşiğini geçmeden başlamaz; sağ tuşu basılı tutup fareyi
+kıpırdatmadan WASD ile uçmak normal kullanım, drag'e bağlansaydı fare durunca kamera da dururdu.
+
+Geri alınacaksa bilinsin diye yazıldı: kapıyı kaldırmak çakışmayı geri getirir, ve
+`free_flight_is_gated_on_the_right_mouse_button` bunu kırmızıya çevirir.
+
 ### "Sonucu at, başarıyı yaz" taraması (2026-08-16)
 
 Aynı kalıbın dört örneği bir günde çıkınca depo geneli tarandı. Kalıp şu: bir işlemin `Result`'ı
