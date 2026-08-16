@@ -708,6 +708,20 @@ impl<State: 'static> App<State> {
 
                             let Some(output) = self.acquire_backbuffer(&mut renderer) else {
                                 // The one epilogue: every skip path in the acquire lands here.
+                                #[cfg(feature = "egui")]
+                                {
+                                    // The egui frame above already ran, and its texture deltas are
+                                    // handed over exactly once. Skipping the *pixels* is what this
+                                    // path is for; skipping the *uploads* dropped the font atlas
+                                    // for the rest of the run — and killed every debug build on
+                                    // epaint's assert, which is why no windowed demo could start.
+                                    editor.absorb_unpainted_frame(
+                                        &window,
+                                        &renderer.device,
+                                        &renderer.queue,
+                                        full_output,
+                                    );
+                                }
                                 self.world.insert_resource(renderer);
                                 if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
                                     profiler.end_scope("render");

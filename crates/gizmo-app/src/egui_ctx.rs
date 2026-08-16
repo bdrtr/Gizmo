@@ -123,7 +123,7 @@ impl EguiContext {
         view: &wgpu::TextureView,
         // Width and height of `view` in physical pixels — see the note on the screen descriptor.
         target_size: [u32; 2],
-        full_output: egui::FullOutput,
+        mut full_output: egui::FullOutput,
     ) {
         self.state
             .handle_platform_output(window, full_output.platform_output);
@@ -191,10 +191,54 @@ impl EguiContext {
                 .render(&mut render_pass, &paint_jobs, &screen_descriptor);
         }
 
-        // Eski dokuları sil
+        // Eski dokuları sil — çizimden SONRA: bu karenin paint job'ları hâlâ o dokulara bakıyor.
         for id in &full_output.textures_delta.free {
             self.renderer.free_texture(id);
         }
+
+        // Applied, so say so. `TexturesDelta`'s `Drop` is a `debug_assert!` that the delta was
+        // handled, and this function handled it by reference — the struct still held both lists,
+        // so every debug frame that carried one died here with "Dropped TexturesDelta with 1
+        // unapplied deltas". Release builds did not panic and did not need to: the assert is the
+        // only thing that fires. That is the worse half of it, because egui emits each delta
+        // exactly ONCE — see `absorb_unpainted_frame`, which exists for the same reason.
+        full_output.textures_delta.clear();
+    }
+
+    /// Take a frame that will never be painted: apply its texture deltas, drop the rest.
+    ///
+    /// The renderer skips a frame whenever the swapchain image cannot be acquired — an outdated
+    /// surface, a resize in flight, a timeout — and the first frame of a freshly mapped window is
+    /// the common case, not the rare one. But the egui frame for it has already run, and egui
+    /// hands over each texture delta **once**: whoever holds that output owns the only copy of,
+    /// say, the font atlas upload. Dropping it costs the atlas for the rest of the run (glyphs
+    /// then paint as blank boxes) and, in a debug build, kills the process on epaint's assert.
+    ///
+    /// So the pixels are what a skipped frame skips — not the uploads.
+    pub fn absorb_unpainted_frame(
+        &mut self,
+        window: &Window,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        mut full_output: egui::FullOutput,
+    ) {
+        // The UI ran; its platform side effects (cursor shape, clipboard, IME) are as true for an
+        // unpainted frame as for a painted one.
+        self.state
+            .handle_platform_output(window, full_output.platform_output);
+
+        for (id, image_deltas) in &full_output.textures_delta.set {
+            for image_delta in image_deltas {
+                self.renderer
+                    .update_texture(device, queue, *id, image_delta);
+            }
+        }
+        // Nothing was painted this frame, so unlike `render` there is no paint job left holding a
+        // reference and the free list can go immediately.
+        for id in &full_output.textures_delta.free {
+            self.renderer.free_texture(id);
+        }
+        full_output.textures_delta.clear();
     }
 }
 
@@ -230,5 +274,57 @@ mod screen_descriptor_tests {
             call_site.contains("[output.texture.width(), output.texture.height()]"),
             "the caller must measure the backbuffer it just acquired, not the window"
         );
+    }
+}
+
+#[cfg(test)]
+mod egui_frame_ownership_tests {
+    /// Every egui frame the loop starts has to reach something that applies its texture deltas:
+    /// [`super::EguiContext::render`] when the frame is painted, `absorb_unpainted_frame` when the
+    /// swapchain image could not be acquired and it is not.
+    ///
+    /// egui hands each delta over exactly **once**, so a dropped `FullOutput` is not a dropped
+    /// frame — it is a font atlas that never reaches the GPU and never comes back. Debug builds
+    /// said so and took the process with them (`TexturesDelta`'s `Drop` is a `debug_assert!`):
+    /// measured, `cargo run -p demo --bin advanced_physics` died about a second after launch with
+    /// "Dropped TexturesDelta with 1 unapplied deltas", because the first frame of a freshly
+    /// mapped window is a skipped frame. Release builds did not panic and were worse off for it:
+    /// the same loss is silent there, and the glyphs paint as blank boxes for the rest of the run.
+    ///
+    /// There is no unit test for "the surface went outdated" — the panic needs a real swapchain —
+    /// so these pin the shape of the fix instead.
+    #[test]
+    fn the_skipped_frame_still_absorbs_its_egui_output() {
+        let src = include_str!("windowed/event.rs");
+        let skip = src
+            .find("acquire_backbuffer(&mut renderer) else {")
+            .expect("the frame loop still skips through acquire_backbuffer");
+        let epilogue_end = src[skip..]
+            .find("};")
+            .expect("the skip epilogue is a block")
+            + skip;
+        let epilogue = &src[skip..epilogue_end];
+
+        assert!(
+            epilogue.contains("absorb_unpainted_frame("),
+            "the frame that is not painted still owns this frame's texture deltas — hand them \
+             over before returning, or the atlas is gone and debug builds die on the assert"
+        );
+    }
+
+    #[test]
+    fn a_full_output_taken_by_value_is_cleared_before_it_drops() {
+        let src = include_str!("egui_ctx.rs");
+        let code = src.split("#[cfg(test)]").next().unwrap_or("");
+
+        let takes_by_value = code.matches("mut full_output: egui::FullOutput").count();
+        let clears = code.matches("full_output.textures_delta.clear();").count();
+        assert_eq!(
+            takes_by_value, clears,
+            "every function that takes a FullOutput by value ends up dropping it, and dropping an \
+             unhandled TexturesDelta is the assert that killed the demos: clear it once its \
+             contents have been applied"
+        );
+        assert!(clears >= 2, "both the painted and the unpainted path clear it");
     }
 }

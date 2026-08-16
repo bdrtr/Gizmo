@@ -18,6 +18,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A windowed app no longer dies on a frame it could not present.** The egui frame runs at the
+  top of the loop; when the swapchain image could not be acquired afterwards — an outdated
+  surface, a resize in flight, and the first frame of a freshly mapped window — the loop returned
+  early and dropped that frame's `egui::FullOutput`. egui hands each texture delta over exactly
+  once, so this was not a skipped frame but a lost upload: debug builds died on epaint's
+  `debug_assert!` (`cargo run -p demo --bin advanced_physics` panicked about a second after
+  launch, and so did every other windowed binary), and release builds lost whatever that frame
+  carried — a font atlas rebuilt on a DPI change never reaching the GPU means glyphs paint as
+  blank boxes for the rest of the run. `EguiContext::render` had the same defect on the painted
+  path: it applied the deltas by reference and never cleared them.
+
+  A skipped frame now skips the pixels, not the uploads (`EguiContext::absorb_unpainted_frame`).
+
 - **Screen-space reflections and screen-space GI reach the frame at all.** Both shaders tested the
   G-buffer's written-flag with a strict `> 0.5`, while `gbuffer.wgsl` packs that flag as
   `(0.5 + 0.49·anisotropy) + floor(100·subsurface)` — exactly `0.5` for an ordinary material, and

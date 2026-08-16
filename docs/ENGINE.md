@@ -1233,6 +1233,40 @@ yarısı oradan da eksikti.
 - **Sonda köprüsünde hangi sorgular sunulacak.** Mekanizma kuruldu ve tek tüketicisi var
   (`physics.ground_at`); geri kalanı API tasarımı.
 
+### Pencereli her uygulama ilk karede ölüyordu (2026-08-16, DÜZELTİLDİ)
+
+`cargo run -p demo --bin advanced_physics` — CLAUDE.md'nin belgelediği komut — açılıştan ~1 saniye
+sonra `Dropped TexturesDelta with 1 unapplied deltas` ile ölüyordu. Export çalışma-zamanı için ilk
+sahne denemesinde çıktı ve kusur yeni binary'de değil, motorun pencere döngüsündeydi: deponun
+kendi demosu da aynı biçimde ölüyor.
+
+Kare şöyle akıyor: egui karesi en başta koşuyor (`event.rs:574`), sonra swapchain görüntüsü
+alınıyor. Alınamazsa — outdated surface, uçuşta bir resize, timeout; ve **yeni haritalanmış bir
+pencerenin ilk karesi tam olarak budur** — tek bir epilog erken dönüyor ve o `FullOutput`
+uygulanmadan düşüyordu.
+
+Maliyeti iki katmanlı, ve sessiz olan yarısı daha kötüsü:
+
+- **Debug**: `TexturesDelta::drop` bir `debug_assert!`. Süreç ölüyor — yani hiçbir pencereli demo
+  debug'da açılamıyordu.
+- **Release**: assert sessiz. Ama egui her deltayı **bir kez** verir; düşen çıktı o karenin
+  taşıdığı yüklemeleri kalıcı olarak götürür. Atlas o karede yeniden kurulmuşsa (ölçek/DPI
+  değişimi, font değişimi) yazı bir daha geri gelmez, glyph'ler boş kutu olarak çizilir.
+
+Aynı kusurun ikinci yüzü `EguiContext::render`'ın kendisindeydi: deltaları referansla uygulayıp
+listeyi `clear()` etmiyordu, dolayısıyla **çizilen** karede de aynı assert'e düşülüyordu.
+
+Düzeltme `absorb_unpainted_frame`: çizilmeyecek karenin dokularını yükleyip listeyi temizler,
+platform çıktısını da uygular (UI koştu — imleç/pano onun sonucu). Atlanan kare **pikselleri**
+atlar, yüklemeleri değil. `render` de uyguladıktan sonra temizliyor.
+
+Doğrulandı: düzeltmeden önce `advanced_physics` 1 s içinde exit 101; sonra 25 s boyunca ayakta ve
+`GIZMO_SCREENSHOT` ile kare üretiyor. Bekçiler `egui_frame_ownership_tests` — kaynak-şekli
+testleri, çünkü "surface outdated" durumu gerçek bir swapchain olmadan birim testine sokulamıyor.
+
+Neden bugüne kadar görülmedi: demolar `--release` ile koşuluyor (CLAUDE.md fizik demoları için
+bunu şart koşuyor), release'te panik yok, ve kalan zarar hem sessiz hem koşullu.
+
 ### Post-process kontrolleri taraması: SSAO dışında hepsi çalışıyor (2026-08-16)
 
 Gölgeleme çiplerinin üçünün ölü çıkması üzerine, editörün TÜM render kontrolleri aynı yöntemle
