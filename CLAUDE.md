@@ -87,7 +87,8 @@ cargo clippy --target wasm32-unknown-unknown -p gizmo-editor \
 
 `egui::Context::run_ui` drives a **real** editor frame headlessly — no window, no wgpu, no display.
 That makes UI facts assertable instead of screenshot-guessable, and it is fast enough for ordinary
-unit tests (the whole editor draws in ~0.2 ms here):
+unit tests — measured here, a module driving several full editor frames finishes in 0.04–0.22 s,
+most of which is egui building its font atlas once:
 
 ```rust
 let ctx = egui::Context::default();
