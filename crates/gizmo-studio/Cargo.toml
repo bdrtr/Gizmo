@@ -24,6 +24,10 @@ mimalloc = { workspace = true }
 tracing = "0.1.44"
 
 [dev-dependencies]
+# The window-icon test decodes the embedded logo the same way the runtime does. `image` is not a
+# normal dependency here — the app never touches it directly, `gizmo-app` does — so it is a
+# dev-dependency rather than a new edge in the shipped binary.
+image = "0.25"
 # The editor pixel tests drive the real pipeline on a headless device; `Renderer::new_headless`
 # is async and there is no runtime in a test binary.
 pollster = "0.3"
