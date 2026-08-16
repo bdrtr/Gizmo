@@ -1490,6 +1490,46 @@ kimse yok. Kapsamı bir hata düzeltmesinin ötesinde olduğu için bilerek aç�
 verilmeden yapılmamalı, çünkü "oyun çalışma-zamanı" motorun ne kadarını varsayılan açacağı
 sorusudur (fizik? scripting? ağ?).
 
+#### Çalışma-zamanı yazıldı: `gizmo_runtime` (2026-08-16)
+
+Kapsam sorusu **referansla** cevaplandı, zevkle değil: çalışma-zamanı, editörün Play modunun
+sürdüğünü sürer — script motoru (`update` → `flush_commands` → entity başına `update_entity`),
+1/60 sn sabit adımlı fizik akümülatörü (kare başına en çok 16 adım, borç da 16 adımla sınırlı) ve
+`default_render_pass`. Ne fazlası ne eksiği. Bunun değeri şu: "export edilen oyun editörde
+gördüğünle aynısını yapar" bir söz olmaktan çıkıp **karşılaştırmaya** dönüşüyor; ikisi ayrıştığı an
+biri hatalıdır, tasarım tartışması değil.
+
+Bilerek bırakılan iki fark, ikisi de eksik olan şeyin editör olması yüzünden: asset watcher yok
+(hot-reload bir yazarlık aracı) ve script logları editör konsoluna değil stdout'a gidiyor.
+
+Veri nereden geliyor: export edilen dizin binary'nin yanında `scenes/`, `scripts/`, `assets/`
+taşıyan **kendi kendine yeten** bir dizin, dolayısıyla runtime o dizini çalışma dizini yapıyor ve
+editörün yazdığı göreli yollar anlamını koruyor. Geliştirme ağacında (binary `target/release`'te)
+bu kural kendiliğinden kapanıyor — kuralın kendisi testli.
+
+Beklenen şey, **parçaların zaten var olmasıydı** ve öyle çıktı: `App::load_scene` açılışta
+`SceneData::load_into`'yu `full_scene_registry` ile zaten çağırıyor. Yazılan şey alt sistem değil,
+kablolama.
+
+Doğrulandı: `demo/assets/sample.scene` (aşağıya bak) verilip `GIZMO_SCREENSHOT` ile kare alındı —
+zemin, kırmızı küp, mavi küre, güneş ve gölgesi. Yani dosyadan yüklenen sahne gerçekten çiziliyor.
+
+**Yolda çıkan iki kusur:**
+
+1. Pencereli her uygulamanın ilk karede ölmesi (ayrı bölüm, düzeltildi). Runtime'ın ilk denemesi
+   onu ortaya çıkardı; kusur runtime'da değildi.
+2. **Deponun tek `.scene` dosyası yüklenmiyor.** `demo/assets/perfect_car.scene` eski biçimden:
+   `components` alanını iç içe map olarak yazıyor, bugünkü biçim ise her bileşeni **string** olarak
+   yazıyor (`"Transform": "(position:(...))"`). Ayrıştırma `10:28 Expected string` ile düşüyor —
+   yani sürüm göçü (`migrate`) çalışamadan. Editörün varlık tarayıcısı da bu dosyayı açamaz.
+   Dönüştürücü yazılmadı; yerine güncel biçimde `demo/assets/sample.scene` motorun kendi
+   `SceneData::save` yolundan üretildi ve commit'lendi. Bekçi: `scene_round_trip.rs` — kaydedilen
+   sahne mesh kaynakları, ışığı, birincil kamerası ve değerleriyle geri geliyor mu.
+
+Kalan adımlar: export'un bu binary'yi kurup açık sahneyi yanına yazması, iki yolun (Play modu ↔
+runtime) davranış eşitliğinin testi, ve "Oyununuz hazır" satırının ancak sahne gerçekten
+yazıldıysa çıkması.
+
 ### God fonksiyon taraması (2026-08-15)
 
 Uzunluk tek başına sinyal değil; iç içelik derinliği ve dallanma sayısıyla birlikte ölçüldü. Bölünen
