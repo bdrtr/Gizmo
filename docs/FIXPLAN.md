@@ -2853,12 +2853,37 @@ yok olması demek değil.
 Bu öbeğin beşi de kapandı; aşağıdaki işaretler 2026-08-16'da **kaynağa bakılarak** güncellendi,
 kutular commit'lerin gerisinde kalmıştı.
 
-- ✅ **ANIMATION timeline'ı** (`animation_panel.rs`). Track'ler, keyframe elmasları, zaman cetveli,
-  oynatma çizgisi. Motorda `gizmo_animation::clip::Track` zaten tamdı — bu bir arayüz işiydi,
-  motor özelliği değil. ⬜ **Kalan: yazma tarafı.** Panel bir *görüntüleyici*: scrub `elapsed_time`
-  oynatıyor, hiçbir şey keyframe YAZMIYOR. Auto-key ve keyframe düzenleme bir geri-alma hikâyesi
-  ister, ve o ayrı bir iş. Kanal ayrımı (position.x'i position.y'den ayırmak) sunumdan ibaret ve
-  eklenebilir.
+- ✅ **ANIMATION timeline'ı — okuma ve yazma** (`animation_panel.rs`). Track'ler, keyframe
+  elmasları, zaman cetveli, oynatma çizgisi; ve 2026-08-16'dan beri **keyframe düzenleme**:
+  sürükleyerek zamanını değiştirme, silme (sağ tık ya da Delete), ve geri alma.
+
+  Yazma tarafının tuttuğu iki değişmez, ikisi de kaynakta zaten yazılıydı ve ikisi de sessizce
+  bozulur:
+  - **Keyframe listesi sıralı kalmak zorunda** — örnekleme ikili arama yapıyor, yani komşusunun
+    ötesine sürüklenen bir anahtar hata vermiyor, *yanlış segmenti* döndürüyor. Düzenleme bu
+    yüzden `Track::retime_keyframe` / `remove_keyframe` üzerinden geçiyor, `keyframes`'e doğrudan
+    dokunarak değil. NaN zaman kabul edilmiyor (her karşılaştırması false, liste kalıcı olarak
+    sıralanamaz hale gelir), negatif zaman sıfıra kırpılıyor.
+  - **`duration` saklanan bir değer, türetilen değil**, ve alanın kendi notu diyor ki gerçek son
+    keyframe'den kısa olması klibin kuyruğunu kesiyor — *ve bu hiçbir yerde tespit edilmiyor*. Her
+    düzenleme `AnimationClip::grow_duration_to_fit` ile bitiyor. Yalnız **büyütüyor**: bir glTF
+    klibi son pozu tutmak için bilerek uzun süre bildirmiş olabilir, ve tam yeniden hesaplamak
+    ilk dokunuşta o dolguyu sessizce atardı.
+
+  Geri alma tek sürükleme = tek girdi (bırakışta), ve anlık görüntü tüm `Arc<[AnimationClip]>` —
+  keyframe indeksi değil, çünkü retime listeyi tanımı gereği yeniden sıralıyor ve indeks tabanlı
+  bir geri alma sürüklenenden başka bir anahtarı oynatırdı.
+
+  ⬜ Kalan: kanal ayrımı (position.x'i position.y'den ayırmak) — sunumdan ibaret. Düzenleme bu
+  varlığın klip kopyasını değiştiriyor, diskteki varlığı değil: `animations` spawn başına ayrı bir
+  `Arc`, ve varlığa geri yazmak ayrı bir iş.
+
+  **Auto-key eksik değil, uymuyor.** Prototipin auto-key'i seçili nesnenin transform'unu keyframe
+  olarak kaydediyor. Bu timeline bir *iskelet* klibi oynatıyor: track'leri glTF eklemlerini isimle
+  hedefliyor ve `evaluate_clip` onları `SkeletonHierarchy`'ye yazıyor, varlığın `Transform`'una
+  değil. Motorda transform-track animasyon tipi var (`gizmo_animation::clip`) ama o modülün
+  dışında **hiç kimse kullanmıyor** — stüdyo iskelet oynatıcısını sürüyor. Yanlış şeyi
+  keyframe'leyen bir düğme takmak yerine buraya yazıldı.
 - ✅ **Profiler grafiği** (`profiler_panel.rs`). Kare-çubuğu grafiği, 16.67 ms bütçe çizgisi, scope
   tablosu; `FrameProfiler::history()` üzerinden, ölçülen sayılarla.
 - ✅ **Console filtre çipleri** (All / Warn / Error + sayılar) — `console.rs`, artı metin filtresi.
@@ -3017,7 +3042,6 @@ ADD COMPONENT düğmesi, ve viewport'un eksen gizmo'su.
 
 Sırada duran her şey burada; A öbeği bitti, B'nin ve C'nin kalanı bu:
 
-- ⬜ Timeline'ın **yazma** tarafı (Auto-key, keyframe düzenleme) — geri-alma hikâyesi ister.
 - ⬜ Script'e editörden **özellik ekleme** (bildirimden gelmeyeni yaratmak).
 - ⬜ Durum çubuğundaki **RAM** yarısı — süreç RSS'i, bir render kaygısı değil.
 - ⬜ Varlık kimliğinin kalan üçü (`demo/assets` taranmıyor, glTF UUID alamıyor, sahneler UUID

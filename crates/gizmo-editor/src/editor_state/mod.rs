@@ -51,6 +51,12 @@ pub struct EditorState {
 
     // Nested Yapılar
     pub camera: CameraState,
+    /// The animation timeline's authoring state (drag + selection).
+    pub anim_edit: AnimationEditState,
+    /// The entity's clips as they were when the current keyframe drag started, so a whole drag
+    /// becomes ONE undo entry instead of one per frame — the same shape the transform gizmo uses
+    /// with `gizmo_original_transforms`.
+    pub anim_drag_original: Option<std::sync::Arc<[gizmo_renderer::AnimationClip]>>,
     pub build: BuildState,
     pub assets: AssetBrowserState,
     pub scene: SceneState,
@@ -164,6 +170,8 @@ impl EditorState {
             transform_gizmo: transform_gizmo_egui::Gizmo::default(),
 
             camera: CameraState::default(),
+            anim_edit: AnimationEditState::default(),
+            anim_drag_original: None,
             build: BuildState::default(),
             assets: AssetBrowserState::default(),
             scene: SceneState::default(),

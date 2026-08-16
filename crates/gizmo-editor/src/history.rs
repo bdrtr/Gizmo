@@ -16,6 +16,23 @@ pub enum EditorAction {
     EntitySpawned {
         entity_ids: Vec<gizmo_core::entity::Entity>,
     },
+    /// The selected entity's animation clips, before and after a timeline edit.
+    ///
+    /// Snapshots the **whole** `Arc<[AnimationClip]>` rather than a "keyframe #3 moved from 1.2s
+    /// to 2.4s" record. Two reasons, and the second is the one that matters:
+    ///
+    /// 1. `AnimationPlayer::animations` is documented as immutable and swapped wholesale, so both
+    ///    halves already exist at the edit site. An `Arc` clone is a refcount bump — holding both
+    ///    does not copy any keyframe data.
+    /// 2. An index-based record breaks the moment an edit **reorders** the list, and a retime
+    ///    reorders it by definition: keyframes must stay sorted, so dragging one past its
+    ///    neighbour changes what every later index refers to. Undoing by index would then move a
+    ///    different keyframe than the one the user dragged.
+    AnimationClipsChanged {
+        entity: gizmo_core::entity::Entity,
+        before: std::sync::Arc<[gizmo_renderer::AnimationClip]>,
+        after: std::sync::Arc<[gizmo_renderer::AnimationClip]>,
+    },
     /// Dinamik / Diğer bileşenlerin değişimi
     ComponentChanged {
         entity: gizmo_core::entity::Entity,
@@ -114,6 +131,20 @@ impl History {
                     self.redo_stack
                         .push_back(EditorAction::EntitySpawned { entity_ids });
                 }
+                EditorAction::AnimationClipsChanged { entity, before, after } => {
+                    // Generation-safe like the arms above: a recycled slot holds a DIFFERENT
+                    // entity, and writing a clip set onto it would replace whatever animation it
+                    // actually has.
+                    if world.is_alive(entity) {
+                        let mut players =
+                            world.borrow_mut::<gizmo_renderer::components::AnimationPlayer>();
+                        if let Some(mut p) = players.get_mut(entity.id()) {
+                            p.animations = before.clone();
+                        }
+                    }
+                    self.redo_stack
+                        .push_back(EditorAction::AnimationClipsChanged { entity, before, after });
+                }
                 other => {
                     // Henüz implement edilmedi — stack'e geri koy
                     tracing::error!("Uyarı: Bu action türü henüz geri alınamıyor (Undo desteklenmiyor).");
@@ -167,6 +198,17 @@ impl History {
                     self.undo_stack
                         .push_back(EditorAction::EntitySpawned { entity_ids });
                 }
+                EditorAction::AnimationClipsChanged { entity, before, after } => {
+                    if world.is_alive(entity) {
+                        let mut players =
+                            world.borrow_mut::<gizmo_renderer::components::AnimationPlayer>();
+                        if let Some(mut p) = players.get_mut(entity.id()) {
+                            p.animations = after.clone();
+                        }
+                    }
+                    self.undo_stack
+                        .push_back(EditorAction::AnimationClipsChanged { entity, before, after });
+                }
                 other => {
                     tracing::error!(
                         "Uyarı: Bu action türü henüz ileri alınamıyor (Redo desteklenmiyor)."
@@ -182,6 +224,111 @@ impl History {
 mod tests {
     use super::*;
     use gizmo_math::Vec3;
+
+    use gizmo_renderer::components::AnimationPlayer;
+    use gizmo_renderer::{AnimationClip, InterpolationMode, Keyframe, Track};
+
+    fn clips(times: &[f32], duration: f32) -> std::sync::Arc<[AnimationClip]> {
+        std::sync::Arc::new([AnimationClip {
+            name: "test".to_string(),
+            duration,
+            translations: vec![Track {
+                target_node: 0,
+                target_node_name: None,
+                interpolation: InterpolationMode::Linear,
+                keyframes: times
+                    .iter()
+                    .map(|&t| Keyframe {
+                        time: t,
+                        value: Vec3::ZERO,
+                        in_tangent: None,
+                        out_tangent: None,
+                    })
+                    .collect(),
+            }],
+            rotations: Vec::new(),
+            scales: Vec::new(),
+        }])
+    }
+
+    fn keyframe_times(world: &World, entity: gizmo_core::entity::Entity) -> Vec<f32> {
+        world
+            .borrow::<AnimationPlayer>()
+            .get(entity.id())
+            .map(|p| {
+                p.animations[0].translations[0]
+                    .keyframes
+                    .iter()
+                    .map(|k| k.time)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// The timeline's undo round trip. The snapshot is the whole clip set, so undo has to put
+    /// back both the keyframe positions AND the duration that grew to cover them.
+    #[test]
+    fn animation_undo_restores_the_clips_and_redo_reapplies_them() {
+        let mut world = World::new();
+        let e = world.spawn();
+        let before = clips(&[0.0, 1.0, 2.0], 2.0);
+        let after = clips(&[1.0, 2.0, 5.0], 5.0);
+        world.add_component(
+            e,
+            AnimationPlayer { animations: after.clone(), ..Default::default() },
+        );
+
+        let mut history = History::new(10);
+        history.push(EditorAction::AnimationClipsChanged {
+            entity: e,
+            before: before.clone(),
+            after: after.clone(),
+        });
+
+        history.undo(&mut world);
+        assert_eq!(keyframe_times(&world, e), vec![0.0, 1.0, 2.0]);
+        assert_eq!(
+            world.borrow::<AnimationPlayer>().get(e.id()).unwrap().animations[0].duration,
+            2.0,
+            "undo must restore the duration too — it grew with the edit"
+        );
+
+        history.redo(&mut world);
+        assert_eq!(keyframe_times(&world, e), vec![1.0, 2.0, 5.0]);
+        assert_eq!(
+            world.borrow::<AnimationPlayer>().get(e.id()).unwrap().animations[0].duration,
+            5.0
+        );
+    }
+
+    /// Same generation-safety rule as the transform arm: after the GC recycles a slot, an undo
+    /// must not write a clip set onto whatever different entity now lives there — which would
+    /// replace an unrelated object's animation outright.
+    #[test]
+    fn animation_undo_is_generation_safe_after_slot_recycle() {
+        let mut world = World::new();
+        let a = world.spawn();
+        world.add_component(a, AnimationPlayer { animations: clips(&[9.0], 9.0), ..Default::default() });
+
+        let mut history = History::new(10);
+        history.push(EditorAction::AnimationClipsChanged {
+            entity: a,
+            before: clips(&[0.0], 0.0),
+            after: clips(&[9.0], 9.0),
+        });
+
+        world.despawn(a);
+        let b = world.spawn();
+        world.add_component(b, AnimationPlayer { animations: clips(&[7.0], 7.0), ..Default::default() });
+
+        history.undo(&mut world);
+
+        assert_eq!(
+            keyframe_times(&world, b),
+            vec![7.0],
+            "B's own animation must survive an undo aimed at the entity that used to hold its slot"
+        );
+    }
 
     /// GC bir slot'u geri dönüştürdükten sonra `TransformsChanged` undo'sunun
     /// o slotta artık yaşayan BAŞKA bir objeyi ezmemesi gerekir.

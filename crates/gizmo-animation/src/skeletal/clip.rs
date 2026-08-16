@@ -106,3 +106,147 @@ pub struct AnimationClip {
     /// that. Untargeted joints keep `bind_scale`.
     pub scales: Vec<Track<Vec3>>,
 }
+
+impl AnimationClip {
+    /// Bring [`duration`](Self::duration) back in step with the tracks after an edit.
+    ///
+    /// **Every editing entry point must end here.** `duration` is stored, not derived, and the
+    /// field's own note spells out what a stale one does: shorter than the real last keyframe
+    /// truncates the clip's tail, longer holds the final pose — *and neither is detected*. A
+    /// timeline that retimes a key without this leaves a clip that plays wrong and looks fine.
+    ///
+    /// It only ever **grows**. Shrinking would be the more obvious rule and it is the wrong one:
+    /// a glTF clip may declare a duration past its last keyframe on purpose, to hold the final
+    /// pose, and recomputing exactly would silently throw that padding away the first time
+    /// anybody nudged a key. Growing prevents the harmful case; the benign one is the author's
+    /// business. To drop the padding deliberately, assign `duration` — that is a decision, not a
+    /// side effect of an edit.
+    pub fn grow_duration_to_fit(&mut self) {
+        let last = self.last_keyframe_time();
+        if last > self.duration {
+            self.duration = last;
+        }
+    }
+
+    /// The largest last-keyframe timestamp across all three channel lists, or `0.0` when every
+    /// track is empty — the number [`duration`](Self::duration) was built from at load time.
+    pub fn last_keyframe_time(&self) -> f32 {
+        let t = self.translations.iter().filter_map(|t| t.last_time());
+        let r = self.rotations.iter().filter_map(|t| t.last_time());
+        let s = self.scales.iter().filter_map(|t| t.last_time());
+        t.chain(r).chain(s).fold(0.0_f32, f32::max)
+    }
+
+    /// Is every track still sorted by time? The sampling path assumes it and cannot check it.
+    pub fn tracks_are_sorted(&self) -> bool {
+        self.translations.iter().all(|t| t.is_sorted_by_time())
+            && self.rotations.iter().all(|t| t.is_sorted_by_time())
+            && self.scales.iter().all(|t| t.is_sorted_by_time())
+    }
+}
+
+
+#[cfg(test)]
+mod editing_tests {
+    use super::*;
+    use crate::skeletal::keyframe::{InterpolationMode, Keyframe};
+
+    fn rot_track(times: &[f32]) -> Track<Quat> {
+        Track {
+            target_node: 0,
+            target_node_name: Some("Hips".to_string()),
+            interpolation: InterpolationMode::Linear,
+            keyframes: times
+                .iter()
+                .map(|&t| Keyframe {
+                    time: t,
+                    value: Quat::IDENTITY,
+                    in_tangent: None,
+                    out_tangent: None,
+                })
+                .collect(),
+        }
+    }
+
+    fn clip(duration: f32, times: &[f32]) -> AnimationClip {
+        AnimationClip {
+            name: "test".to_string(),
+            duration,
+            translations: Vec::new(),
+            rotations: vec![rot_track(times)],
+            scales: Vec::new(),
+        }
+    }
+
+    /// The invariant the whole thing turns on: a stored `duration` shorter than the real last
+    /// keyframe truncates the clip's tail, and the field's own note says that is not detected
+    /// anywhere. Dragging a key past the end is the ordinary way to produce it.
+    #[test]
+    fn dragging_a_key_past_the_end_grows_the_duration() {
+        let mut c = clip(2.0, &[0.0, 1.0, 2.0]);
+        c.rotations[0].retime_keyframe(2, 5.0).unwrap();
+        assert_eq!(
+            c.duration, 2.0,
+            "the retime alone must not touch duration — that is why the caller has to grow it"
+        );
+        c.grow_duration_to_fit();
+        assert_eq!(c.duration, 5.0);
+        assert!(
+            c.duration >= c.last_keyframe_time(),
+            "a clip must never claim to be shorter than its own keyframes"
+        );
+    }
+
+    /// It grows and never shrinks. A glTF clip is allowed to declare a duration past its last
+    /// keyframe to hold the final pose; recomputing exactly would throw that away the first time
+    /// anyone nudged a key, silently changing how long the animation runs.
+    #[test]
+    fn deliberate_padding_survives_an_edit() {
+        let mut c = clip(10.0, &[0.0, 1.0, 2.0]);
+        c.rotations[0].retime_keyframe(2, 1.5).unwrap();
+        c.grow_duration_to_fit();
+        assert_eq!(c.duration, 10.0, "padding past the last key is the author's, not ours to drop");
+    }
+
+    #[test]
+    fn an_emptied_clip_reports_zero_and_keeps_its_duration() {
+        let mut c = clip(3.0, &[0.0, 1.0]);
+        assert!(c.rotations[0].remove_keyframe(1));
+        assert!(c.rotations[0].remove_keyframe(0));
+        assert_eq!(c.last_keyframe_time(), 0.0, "no keyframes anywhere");
+        c.grow_duration_to_fit();
+        assert_eq!(c.duration, 3.0);
+    }
+
+    /// `last_keyframe_time` has to look at all three lists, not just the one the test author
+    /// happened to fill in — a translation track running past the rotations is the ordinary case
+    /// for root motion.
+    #[test]
+    fn the_last_keyframe_is_the_latest_across_all_three_channels() {
+        let mut c = clip(0.0, &[0.0, 1.0]);
+        c.scales.push(Track {
+            target_node: 1,
+            target_node_name: None,
+            interpolation: InterpolationMode::Linear,
+            keyframes: vec![Keyframe {
+                time: 7.0,
+                value: Vec3::ONE,
+                in_tangent: None,
+                out_tangent: None,
+            }],
+        });
+        assert_eq!(c.last_keyframe_time(), 7.0);
+        c.grow_duration_to_fit();
+        assert_eq!(c.duration, 7.0);
+    }
+
+    /// Sortedness is a whole-clip property because sampling is per track: one track left out of
+    /// order is one joint animating wrongly while everything else looks right.
+    #[test]
+    fn a_retime_keeps_every_track_sorted() {
+        let mut c = clip(2.0, &[0.0, 1.0, 2.0]);
+        assert!(c.tracks_are_sorted());
+        c.rotations[0].retime_keyframe(0, 1.5).unwrap();
+        assert!(c.tracks_are_sorted(), "the retime must restore the order it broke");
+    }
+}

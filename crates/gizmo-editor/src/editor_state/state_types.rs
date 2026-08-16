@@ -138,6 +138,37 @@ impl SpawnKind {
     ];
 }
 
+/// Which of a clip's three channel lists a track lives in.
+///
+/// The three are separate `Vec`s on `AnimationClip`, so a track is only addressable as
+/// *(which list, which index)* — an index alone is ambiguous between them.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TrackChannel {
+    Translation,
+    Rotation,
+    Scale,
+}
+
+/// One keyframe, addressed the only way a clip allows.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct KeyframeRef {
+    pub channel: TrackChannel,
+    pub track: usize,
+    pub keyframe: usize,
+}
+
+/// The timeline's authoring state.
+#[derive(Default, Debug)]
+#[non_exhaustive]
+pub struct AnimationEditState {
+    /// The keyframe currently under the pointer's drag, if any. Updated as the drag reorders the
+    /// track — a retime can move a key past its neighbours, and the index has to follow it or the
+    /// next frame of the same drag grabs a different keyframe.
+    pub dragging: Option<KeyframeRef>,
+    /// The last keyframe clicked, so Delete has something to act on.
+    pub selected: Option<KeyframeRef>,
+}
+
 // --- Alt Durum Yapilari ---
 #[derive(Default, Debug)]
 #[non_exhaustive]

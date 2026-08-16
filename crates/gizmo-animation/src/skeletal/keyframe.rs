@@ -157,6 +157,72 @@ pub struct Track<T> {
     pub keyframes: Vec<Keyframe<T>>,
 }
 
+/// Editing, for a timeline that authors rather than only plays.
+///
+/// Separate from the sampling `impl` below and deliberately free of the `Clone + Copy` bound:
+/// nothing here reads a keyframe's value, only its position in time, so a track of any payload
+/// can be retimed.
+///
+/// # The invariant these exist to keep
+///
+/// [`keyframes`](Track::keyframes) **must stay sorted ascending by time** — sampling
+/// binary-searches it, so an out-of-order entry does not error, it silently returns the wrong
+/// segment. Mutating the list by hand from a UI is exactly how that happens: a drag past a
+/// neighbour reorders two keys and nothing complains until the pose is wrong. These methods
+/// restore the order themselves, which is why editing goes through them rather than through
+/// `keyframes` directly.
+impl<T> Track<T> {
+    /// Move the keyframe at `index` to `new_time`, restoring the sort, and return the index it
+    /// ended up at.
+    ///
+    /// Returns `None` — changing nothing — for an out-of-range index or a non-finite time. NaN
+    /// is refused rather than clamped because every comparison against it is false: a single NaN
+    /// timestamp makes the list unsortable and `partition_point` returns nonsense from then on,
+    /// permanently, on a track that still looks fine.
+    ///
+    /// Negative times are clamped to zero. A clip's duration is measured from `t = 0`, so a
+    /// keyframe before the start is not a shorter clip, it is a key that can never be the
+    /// sampled segment.
+    ///
+    /// Equal timestamps are allowed and the moved key lands **after** its equals, which is where
+    /// a drag leaves it visually. Two keys sharing a time are legal: the zero-length segment
+    /// between them is never the one sampled.
+    pub fn retime_keyframe(&mut self, index: usize, new_time: f32) -> Option<usize> {
+        if index >= self.keyframes.len() || !new_time.is_finite() {
+            return None;
+        }
+        let new_time = new_time.max(0.0);
+        let mut moved = self.keyframes.remove(index);
+        moved.time = new_time;
+        let at = self.keyframes.partition_point(|k| k.time <= new_time);
+        self.keyframes.insert(at, moved);
+        Some(at)
+    }
+
+    /// Remove the keyframe at `index`, reporting whether there was one.
+    ///
+    /// Emptying a track is allowed: an empty track samples to `None` and every joint it targeted
+    /// falls back to its bind pose, which is a legitimate thing to author.
+    pub fn remove_keyframe(&mut self, index: usize) -> bool {
+        if index >= self.keyframes.len() {
+            return false;
+        }
+        self.keyframes.remove(index);
+        true
+    }
+
+    /// The timestamp of the last keyframe, or `None` for an empty track.
+    pub fn last_time(&self) -> Option<f32> {
+        self.keyframes.last().map(|k| k.time)
+    }
+
+    /// Is the list still sorted ascending? For tests and debug assertions — the sampling path
+    /// assumes this and cannot check it.
+    pub fn is_sorted_by_time(&self) -> bool {
+        self.keyframes.windows(2).all(|w| w[0].time <= w[1].time)
+    }
+}
+
 impl<T: Clone + Copy> Track<T> {
     /// Locate where `time` falls in the keyframe list (shared by linear & cubic sampling).
     fn segment(&self, time: f32) -> Option<SegmentPos> {
@@ -251,6 +317,107 @@ impl<T: Clone + Copy> Track<T> {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod editing_tests {
+    use super::*;
+
+    fn track(times: &[f32]) -> Track<f32> {
+        Track {
+            target_node: 0,
+            target_node_name: None,
+            interpolation: InterpolationMode::Linear,
+            keyframes: times
+                .iter()
+                .map(|&t| Keyframe { time: t, value: t, in_tangent: None, out_tangent: None })
+                .collect(),
+        }
+    }
+
+    fn times(t: &Track<f32>) -> Vec<f32> {
+        t.keyframes.iter().map(|k| k.time).collect()
+    }
+
+    /// The whole reason these methods exist: sampling binary-searches the list, so a drag past a
+    /// neighbour must reorder it rather than leave it unsorted and silently wrong.
+    #[test]
+    fn dragging_a_key_past_its_neighbour_reorders_the_list() {
+        let mut t = track(&[0.0, 1.0, 2.0]);
+        // Drag the FIRST key to the far end.
+        let at = t.retime_keyframe(0, 5.0).expect("a valid index and time");
+        assert_eq!(at, 2, "it must report where it landed, not where it was");
+        assert_eq!(times(&t), vec![1.0, 2.0, 5.0]);
+        assert!(t.is_sorted_by_time());
+
+        // ...and back past the others the other way.
+        let at = t.retime_keyframe(2, 0.5).expect("valid");
+        assert_eq!(at, 0);
+        assert_eq!(times(&t), vec![0.5, 1.0, 2.0]);
+        assert!(t.is_sorted_by_time());
+    }
+
+    /// The value travels with the key. A retime that reordered the timestamps but left the
+    /// values where they were would rewrite the animation instead of moving one key.
+    #[test]
+    fn the_value_moves_with_its_timestamp() {
+        let mut t = track(&[0.0, 1.0, 2.0]); // value == time, so the pairing is visible
+        t.retime_keyframe(0, 5.0).unwrap();
+        let pairs: Vec<(f32, f32)> = t.keyframes.iter().map(|k| (k.time, k.value)).collect();
+        assert_eq!(pairs, vec![(1.0, 1.0), (2.0, 2.0), (5.0, 0.0)]);
+    }
+
+    /// NaN is refused, not clamped. Every comparison against it is false, so one NaN timestamp
+    /// makes the list permanently unsortable and `partition_point` nonsense from then on — on a
+    /// track that still looks perfectly fine.
+    #[test]
+    fn a_nan_time_is_refused_and_changes_nothing() {
+        let mut t = track(&[0.0, 1.0]);
+        assert!(t.retime_keyframe(0, f32::NAN).is_none());
+        assert!(t.retime_keyframe(0, f32::INFINITY).is_none());
+        assert_eq!(times(&t), vec![0.0, 1.0], "a refused edit must not have moved anything");
+        assert!(t.is_sorted_by_time());
+    }
+
+    /// Negative times clamp to zero: duration is measured from `t = 0`, so a key before the
+    /// start is not a shorter clip, it is a key that can never be the sampled segment.
+    #[test]
+    fn a_negative_time_clamps_to_the_start() {
+        let mut t = track(&[1.0, 2.0]);
+        let at = t.retime_keyframe(1, -3.0).unwrap();
+        assert_eq!(at, 0);
+        assert_eq!(times(&t), vec![0.0, 1.0]);
+    }
+
+    #[test]
+    fn an_out_of_range_index_changes_nothing() {
+        let mut t = track(&[0.0, 1.0]);
+        assert!(t.retime_keyframe(9, 0.5).is_none());
+        assert!(!t.remove_keyframe(9));
+        assert_eq!(times(&t), vec![0.0, 1.0]);
+    }
+
+    /// Equal timestamps are legal; the moved key lands after its equals, which is where a drag
+    /// leaves it on screen.
+    #[test]
+    fn a_key_dropped_onto_another_lands_after_it() {
+        let mut t = track(&[0.0, 1.0, 2.0]);
+        let at = t.retime_keyframe(2, 1.0).unwrap();
+        assert_eq!(at, 2, "after the key it was dropped onto");
+        assert_eq!(times(&t), vec![0.0, 1.0, 1.0]);
+        assert!(t.is_sorted_by_time());
+    }
+
+    #[test]
+    fn removing_takes_that_key_and_can_empty_the_track() {
+        let mut t = track(&[0.0, 1.0, 2.0]);
+        assert!(t.remove_keyframe(1));
+        assert_eq!(times(&t), vec![0.0, 2.0]);
+        assert!(t.remove_keyframe(0));
+        assert!(t.remove_keyframe(0));
+        assert!(t.keyframes.is_empty(), "emptying a track is allowed");
+        assert_eq!(t.last_time(), None);
     }
 }
 
