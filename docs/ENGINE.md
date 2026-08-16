@@ -1233,6 +1233,36 @@ yarısı oradan da eksikti.
 - **Sonda köprüsünde hangi sorgular sunulacak.** Mekanizma kuruldu ve tek tüketicisi var
   (`physics.ground_at`); geri kalanı API tasarımı.
 
+### Panel genişliği taraması: sekiz panelden biri taşıyordu (2026-08-16)
+
+Inspector'ın kendi içeriğini kırptığı bulununca (ayrıntısı commit'te) aynı kusur sınıfı için
+**bütün editör panelleri ölçüldü** — göz kararı değil: `Context::run_ui` ile gerçek bir kare
+sürülüp karenin boyadığı şekillerin en sağ kenarı okundu, clip rect açık bırakılarak. Kırpma
+kusuru ekranda gizleyen şeyin ta kendisi; kırpmadan ölçmek onu sayıya çeviriyor.
+
+Varsayılan yerleşimdeki genişliklerde (1600 px pencere, `create_default_dock_state` bölmeleri):
+
+| Panel | Genişlik | İçerik | Sonuç |
+|---|---|---|---|
+| Inspector (environment) | 400 | **422.7** | taşıyordu — düzeltildi |
+| Inspector (bileşenler) | 400 | 400.5 | sığıyor |
+| Hierarchy | 320 | 320.5 | sığıyor |
+| Assets · Console · Console (400 karakterlik satırla) | 880 | 880.5 | sığıyor |
+| Profiler | 880 | 224.0 | sığıyor |
+| Animation | 880 | 304.1 | sığıyor |
+| Ayarlar · Script Editor | 400 | 400.5 | sığıyor |
+| Toolbar | 1600 / 1280 / 1024 / 900 | +0.5 | sığıyor |
+
+0.5 px kenarlık kalınlığı, taşma değil.
+
+**Ölçümün kör olmadığı doğrulandı** — "temiz" demenin ön koşulu bu: toolbar saçma genişliklerde
+tekrar ölçüldü ve 687 px'in altında taşıdığı görüldü (500 px'te 186.7 px taşma). Yani araç
+taşmayı görüyor; diğer paneller gerçekten taşmıyor. Toolbar'ın gerçek alt sınırı **687 px**,
+stüdyonun varsayılan penceresinin çok altında.
+
+Bir daha taranmasına gerek yok; bekçi `inspector_width_tests` olarak duruyor ve iki yolu da
+(seçim yok / seçili nesne) üç genişlikte tutuyor.
+
 ### Export bir oyunu değil, sabit bir demoyu paketliyor (2026-08-16, açık)
 
 Stüdyodaki "Build / Export", `cargo build --release -p demo` koşup çıkan binary'yi
