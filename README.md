@@ -127,7 +127,9 @@ cargo run --release -p demo --bin fluid_rigid
 > `GIZMO_ASSETS` at a directory containing it to get the real thing — see
 > [`assets/README.md`](assets/README.md).
 
-> **Upgrading?** `0.9.1` is what follows `0.8.0` on crates.io — `0.9.0` was documented and
+> **Upgrading?** `0.10.0` raises the minimum Rust to **1.96** (from 1.92) along with the
+> `wgpu` 30 / `egui` 0.36 graphics stack — that is why the minor moved. `0.9.1` before it is what
+> followed `0.8.0` on crates.io — `0.9.0` was documented and
 > then never published, so there is nothing to upgrade *from* at that number. It carries the
 > correctness work of both: two paths to undefined behaviour, one determinism hole, the reason
 > the crate previously compiled in only one feature configuration, and the removal of an

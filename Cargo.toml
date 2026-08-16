@@ -12,7 +12,7 @@ members = [
 exclude = ["benchmarks"]
 
 [workspace.package]
-version = "0.9.1"
+version = "0.10.0"
 edition = "2021"
 # Minimum Supported Rust Version. Floor is set by `transform-gizmo-egui 0.10` (1.96); the
 # egui 0.36 family and `bevy_ecs` sit just under it at 1.95, and wgpu 30 at 1.87. Measured

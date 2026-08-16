@@ -25,9 +25,9 @@ rustdoc-args = ["--cfg", "docsrs"]
 # Optional: only the `UiPlugin` convenience wrapper needs the app framework.
 # The dependency-light `register(world, schedule)` entry point needs only
 # gizmo-core, so gizmo-ui is usable as a pure ECS-UI layer without gizmo-app.
-gizmo-app = { version = "0.9.1", path = "../gizmo-app", default-features = false, optional = true }
-gizmo-core = { version = "0.9.1", path = "../gizmo-core" }
-gizmo-math = { path = "../gizmo-math", version = "0.9.1" }
+gizmo-app = { version = "0.10.0", path = "../gizmo-app", default-features = false, optional = true }
+gizmo-core = { version = "0.10.0", path = "../gizmo-core" }
+gizmo-math = { path = "../gizmo-math", version = "0.10.0" }
 # taffy bir İMPLEMENTASYON DETAYIDIR: public API'de hiçbir taffy tipi görünmez.
 # `Style` artık kendi POD tipimiz (components.rs); taffy'ye çeviri yalnızca
 # `UiContext::to_taffy_style` içinde yapılır (layout.rs). A3-followup, 2026-08-08.

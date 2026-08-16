@@ -16,6 +16,51 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-08-16
+
+### Changed
+
+- **Graphics stack upgraded to `wgpu` 30 / `egui` 0.36 — and the MSRV rises with it,
+  `1.92` → `1.96`.** This is why the release is `0.10.0` and not `0.9.2`: raising the minimum
+  supported Rust version is a semver-minor change, and under `0.x` the minor position is the
+  breaking one.
+
+  The floor was measured across every dependency's declared `rust-version`, not guessed:
+  `transform-gizmo-egui 0.10` asks for 1.96, the `egui` 0.36 family and `bevy_ecs` for 1.95,
+  and `wgpu` 30 for only 1.87. The previous floor of 1.92 came from `egui` 0.34 the same way.
+
+  Full set: `wgpu` 29 → 30, `naga` 29 → 30, `naga_oil` 0.22 → 0.23, `egui`/`egui-winit`/
+  `egui-wgpu` 0.34 → 0.36, `egui_dock` 0.19 → 0.21, `transform-gizmo-egui` 0.9 → 0.10.
+
+  The automated bump this replaces was internally inconsistent and could not build: it left
+  `egui` at 0.35 while moving `transform-gizmo-egui` to 0.10 (which needs 0.36), and moved
+  `wgpu` to 30 while leaving `egui-wgpu` at 0.35 (which needs 29) — two `egui`s and two `wgpu`s
+  in one graph, whose types do not interconvert.
+
+  Nothing about rendering changed on purpose. `SurfaceConfiguration::color_space` is set to
+  `Auto`, the variant documented as reproducing wgpu's pre-30 behaviour, because a dependency
+  upgrade is the wrong place to change how colour reaches the screen. The determinism hash is
+  unmoved (`A462C9EB8A09D5CA`, 3/3).
+
+### Fixed
+
+- **`egui` texture deltas were being dropped.** `textures_delta.set` now carries a *list* of
+  deltas per texture — a font atlas that grows in several regions in one frame arrives as
+  several partial updates. Uploading only the first would have left the rest of the atlas
+  stale: glyphs rendering as blank boxes a frame later.
+
+- **`gizmo-animation` shipped to crates.io and docs.rs with no README.** It was the only one of
+  the 19 published crates missing `readme.workspace = true`.
+
+- **README images were broken on crates.io.** They were relative paths, which GitHub resolves
+  against the repository and crates.io does not — it serves the README from its own domain, so
+  `media/logo.png` became a 404. Now absolute.
+
+- **The MSRV CI gate could have stopped guarding anything.** Its toolchain was pinned as the
+  action ref (`dtolnay/rust-toolchain@1.92.0`), which Dependabot cannot tell from an action
+  version; it opened a bump to `@1.100.0`, a Rust that does not exist. The toolchain is now
+  derived from `rust-version` in `Cargo.toml`, so there is no constant left to drift.
+
 ## [0.9.1] — 2026-08-16
 
 > **`0.9.0` never reached crates.io.** It was a local version bump — no `v0.9.0` tag, no

@@ -1592,7 +1592,7 @@ dependencies = [
 
 [[package]]
 name = "cradle"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "gizmo-core",
  "gizmo-engine",
@@ -1835,7 +1835,7 @@ checksum = "4583a4551df46e2792f82ceeac45e850d2e2d5debba0b91f102385cda5b11f06"
 
 [[package]]
 name = "demo"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "bytemuck",
  "gizmo-engine",
@@ -1850,7 +1850,7 @@ dependencies = [
 
 [[package]]
 name = "demo-web"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "gizmo-engine",
  "log",
@@ -2588,7 +2588,7 @@ checksum = "e629b9b98ef3dd8afe6ca2bd0f89306cec16d43d907889945bc5d6687f2f13c7"
 
 [[package]]
 name = "gizmo-ai"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "gizmo-core",
  "gizmo-math",
@@ -2601,7 +2601,7 @@ dependencies = [
 
 [[package]]
 name = "gizmo-analysis"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "egui",
  "gizmo-app",
@@ -2613,7 +2613,7 @@ dependencies = [
 
 [[package]]
 name = "gizmo-animation"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "gizmo-core",
  "gizmo-math",
@@ -2624,7 +2624,7 @@ dependencies = [
 
 [[package]]
 name = "gizmo-app"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "backtrace",
  "console_error_panic_hook",
@@ -2661,7 +2661,7 @@ dependencies = [
 
 [[package]]
 name = "gizmo-audio"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "gizmo-core",
  "log",
@@ -2671,7 +2671,7 @@ dependencies = [
 
 [[package]]
 name = "gizmo-core"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "bevy_reflect",
  "bevy_tasks 0.15.3",
@@ -2693,7 +2693,7 @@ dependencies = [
 
 [[package]]
 name = "gizmo-editor"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "dirs",
  "egui",
@@ -2717,7 +2717,7 @@ dependencies = [
 
 [[package]]
 name = "gizmo-engine"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "bytemuck",
  "criterion 0.5.1",
@@ -2750,7 +2750,7 @@ dependencies = [
 
 [[package]]
 name = "gizmo-math"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "bevy_math",
  "bevy_mesh",
@@ -2764,7 +2764,7 @@ dependencies = [
 
 [[package]]
 name = "gizmo-net"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "bincode",
  "gizmo-core",
@@ -2779,7 +2779,7 @@ dependencies = [
 
 [[package]]
 name = "gizmo-physics-core"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "arrayvec",
  "bevy_reflect",
@@ -2793,7 +2793,7 @@ dependencies = [
 
 [[package]]
 name = "gizmo-physics-dynamics"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "gizmo-core",
  "gizmo-math",
@@ -2804,7 +2804,7 @@ dependencies = [
 
 [[package]]
 name = "gizmo-physics-rigid"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "bevy_reflect",
  "criterion 0.8.2",
@@ -2827,7 +2827,7 @@ dependencies = [
 
 [[package]]
 name = "gizmo-physics-soft"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "bytemuck",
  "gizmo-core",
@@ -2844,7 +2844,7 @@ dependencies = [
 
 [[package]]
 name = "gizmo-renderer"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "bytemuck",
  "criterion 0.8.2",
@@ -2861,7 +2861,7 @@ dependencies = [
  "naga_oil",
  "notify",
  "pollster 0.3.0",
- "rand 0.9.5",
+ "rand 0.10.2",
  "ron 0.12.2",
  "serde",
  "tobj",
@@ -2877,7 +2877,7 @@ dependencies = [
 
 [[package]]
 name = "gizmo-scene"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "bevy_reflect",
  "gizmo-core",
@@ -2892,7 +2892,7 @@ dependencies = [
 
 [[package]]
 name = "gizmo-scripting"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "gizmo-ai",
  "gizmo-animation",
@@ -2908,7 +2908,7 @@ dependencies = [
 
 [[package]]
 name = "gizmo-studio"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "gizmo-engine",
  "image",
@@ -2920,7 +2920,7 @@ dependencies = [
 
 [[package]]
 name = "gizmo-ui"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "gizmo-app",
  "gizmo-core",
@@ -2930,7 +2930,7 @@ dependencies = [
 
 [[package]]
 name = "gizmo-window"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "tracing",
  "winit",
@@ -5602,7 +5602,7 @@ dependencies = [
 
 [[package]]
 name = "server"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "bincode",
  "gizmo-core",
