@@ -76,6 +76,10 @@ impl Renderer {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: Some(&surface),
                 force_fallback_adapter: false,
+                // wgpu 30. Limit bucketing exists so a browser can stop untrusted content
+                // fingerprinting the GPU through its exact limits. This is a native engine talking to
+                // its own hardware, and bucketing would cost real limits for a threat it does not have.
+                apply_limit_buckets: false,
             })
             .await;
 
@@ -99,6 +103,10 @@ impl Renderer {
                         power_preference: wgpu::PowerPreference::HighPerformance,
                         compatible_surface: None,
                         force_fallback_adapter: false,
+                        // wgpu 30. Limit bucketing exists so a browser can stop untrusted content
+                        // fingerprinting the GPU through its exact limits. This is a native engine talking to
+                        // its own hardware, and bucketing would cost real limits for a threat it does not have.
+                        apply_limit_buckets: false,
                     })
                     .await
                 {
@@ -237,6 +245,11 @@ impl Renderer {
             // waiting on the display; a game that wants vsync asks for it.
             present_mode: wgpu::PresentMode::AutoNoVsync,
             alpha_mode: surface_caps.alpha_modes[0],
+            // wgpu 30 made the surface's colour space explicit. `Auto` is the variant documented
+            // as "reproducing wgpu's historical behavior", which is exactly what this upgrade
+            // must not change: picking Srgb or a wide-gamut space here would be a rendering
+            // decision smuggled in under a dependency bump.
+            color_space: wgpu::SurfaceColorSpace::Auto,
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
@@ -263,6 +276,10 @@ impl Renderer {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: None,
                 force_fallback_adapter: false,
+                // wgpu 30. Limit bucketing exists so a browser can stop untrusted content
+                // fingerprinting the GPU through its exact limits. This is a native engine talking to
+                // its own hardware, and bucketing would cost real limits for a threat it does not have.
+                apply_limit_buckets: false,
             })
             .await
             .is_ok()
@@ -292,6 +309,10 @@ impl Renderer {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: None,
                 force_fallback_adapter: false,
+                // wgpu 30. Limit bucketing exists so a browser can stop untrusted content
+                // fingerprinting the GPU through its exact limits. This is a native engine talking to
+                // its own hardware, and bucketing would cost real limits for a threat it does not have.
+                apply_limit_buckets: false,
             })
             .await
             .map(|a| a.get_info().device_type == wgpu::DeviceType::Cpu)
@@ -321,6 +342,10 @@ impl Renderer {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: None,
                 force_fallback_adapter: false,
+                // wgpu 30. Limit bucketing exists so a browser can stop untrusted content
+                // fingerprinting the GPU through its exact limits. This is a native engine talking to
+                // its own hardware, and bucketing would cost real limits for a threat it does not have.
+                apply_limit_buckets: false,
             })
             .await
             .expect("Headless Renderer: hiçbir GPU adapter bulunamadı");
@@ -349,6 +374,10 @@ impl Renderer {
             height,
             present_mode: wgpu::PresentMode::AutoNoVsync,
             alpha_mode: wgpu::CompositeAlphaMode::Auto,
+            // See the windowed config above: `Auto` is the variant that reproduces wgpu's
+            // pre-30 behaviour, and a dependency bump is the wrong place to change how colour
+            // reaches the screen — least of all in the headless path the golden tests read.
+            color_space: wgpu::SurfaceColorSpace::Auto,
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };

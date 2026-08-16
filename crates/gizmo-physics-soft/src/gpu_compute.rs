@@ -115,6 +115,9 @@ impl GpuCompute {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: None,
                 force_fallback_adapter: false,
+                // wgpu 30. Limit bucketing is a browser-fingerprinting defence; this is a native
+                // compute path talking to its own hardware, and bucketing would cost real limits.
+                apply_limit_buckets: false,
             })
             .await
             .map_err(|_| crate::SoftBodyError::NoCompatibleAdapter)?;
@@ -552,7 +555,10 @@ impl GpuCompute {
             ));
         }
 
-        let mapped = slice.get_mapped_range();
+        let mapped = slice
+            // wgpu 30 made this fallible; the range is the whole buffer just mapped.
+            .get_mapped_range()
+            .expect("a just-mapped buffer's full range is always valid");
         let output_nodes: &[GpuSoftBodyNode] = bytemuck::cast_slice(&mapped);
 
         // 6. Update CPU models and apply CPU collisions

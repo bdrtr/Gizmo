@@ -175,7 +175,7 @@ impl GizmoRendererSystem {
                 module: &shader,
                 entry_point: Some("vs_main"),
                 compilation_options: Default::default(),
-                buffers: &[GpuGizmoVertex::desc()],
+                buffers: &[Some(GpuGizmoVertex::desc())],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,

@@ -26,7 +26,7 @@ pub fn draw_toolbar(ui: &mut egui::Ui, state: &mut EditorState) {
 fn draw_menu_bar(ui: &mut egui::Ui, state: &mut EditorState) {
     egui::Panel::top("toolbar_menu")
         .exact_size(26.0)
-        .show_inside(ui, |ui| {
+        .show(ui, |ui| {
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
                 draw_wordmark(ui);
@@ -133,7 +133,7 @@ fn draw_menu_bar(ui: &mut egui::Ui, state: &mut EditorState) {
 fn draw_tool_row(ui: &mut egui::Ui, state: &mut EditorState) {
     egui::Panel::top("toolbar_tools")
         .exact_size(30.0)
-        .show_inside(ui, |ui| {
+        .show(ui, |ui| {
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
 

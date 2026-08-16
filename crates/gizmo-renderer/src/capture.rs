@@ -142,7 +142,12 @@ pub fn texture_to_png(
 
     let mut pixels = Vec::with_capacity((unpadded_row * height) as usize);
     {
-        let mapped = slice.get_mapped_range();
+        // wgpu 30 made this fallible: mapping can now report a range error rather than
+        // panicking. The capture path already has an error for "the readback did not come back",
+        // so it reuses it instead of unwrapping on the caller's behalf.
+        let mapped = slice
+            .get_mapped_range()
+            .map_err(|_| CaptureError::MapFailed)?;
         for row in 0..height as usize {
             let start = row * padded_row as usize;
             let row_bytes = &mapped[start..start + unpadded_row as usize];

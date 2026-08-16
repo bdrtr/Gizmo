@@ -36,7 +36,10 @@ mod tests {
         });
         receiver.recv().unwrap().unwrap();
 
-        let data = buffer_slice.get_mapped_range();
+        let data = buffer_slice.get_mapped_range()
+            // wgpu 30 made this fallible; the range is the whole buffer we just mapped, so a
+            // failure here is a programming error rather than a runtime condition.
+            .expect("a just-mapped buffer's full range is always valid");
         let result = bytemuck::cast_slice(&data).to_vec();
         drop(data);
         staging_buffer.unmap();

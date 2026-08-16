@@ -134,9 +134,15 @@ impl EguiContext {
             .tessellate(full_output.shapes, window.scale_factor() as f32);
 
         // Dokuları Yükle (Fontlar, Pencereler vs)
-        for (id, image_delta) in &full_output.textures_delta.set {
-            self.renderer
-                .update_texture(device, queue, *id, image_delta);
+        // egui 0.36 turned each entry into a LIST of deltas for one texture: a font atlas that
+        // grows in several regions in one frame now arrives as several partial updates instead of
+        // one. Uploading only the first would leave the rest of the atlas stale — glyphs that
+        // render as blank boxes a frame later.
+        for (id, image_deltas) in &full_output.textures_delta.set {
+            for image_delta in image_deltas {
+                self.renderer
+                    .update_texture(device, queue, *id, image_delta);
+            }
         }
 
         // The size comes from the TARGET, not from the window.

@@ -241,7 +241,7 @@ pub fn create_physics_pipelines(
             module: &render_shader,
             entry_point: Some("vs_main"),
             compilation_options: Default::default(),
-            buffers: &[Vertex::desc(), GpuBox::desc()],
+            buffers: &[Some(Vertex::desc()), Some(GpuBox::desc())],
         },
         fragment: Some(wgpu::FragmentState {
             module: &render_shader,

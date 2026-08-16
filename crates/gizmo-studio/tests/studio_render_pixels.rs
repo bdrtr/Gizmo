@@ -221,7 +221,9 @@ fn render_scene(albedo: Vec4) -> Option<Frame> {
             .device
             .poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
         rx.recv().expect("readback channel").expect("readback");
-        let pixels = slice.get_mapped_range().to_vec();
+        let pixels = slice.get_mapped_range()
+        // wgpu 30 made this fallible; the range is the whole buffer the test just mapped.
+        .expect("a just-mapped buffer's full range is always valid").to_vec();
         staging.unmap();
 
         Some(Frame { pixels, bgra: matches!(
@@ -455,7 +457,9 @@ fn the_editor_casts_a_shadow_onto_the_ground() {
             .device
             .poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
         rx.recv().expect("readback channel").expect("readback");
-        let pixels = slice.get_mapped_range().to_vec();
+        let pixels = slice.get_mapped_range()
+        // wgpu 30 made this fallible; the range is the whole buffer the test just mapped.
+        .expect("a just-mapped buffer's full range is always valid").to_vec();
         staging.unmap();
         (pixels, matches!(format.remove_srgb_suffix(), wgpu::TextureFormat::Bgra8Unorm))
     });
@@ -657,7 +661,9 @@ fn the_game_view_shows_the_game_camera_not_the_editor_camera() {
             });
             let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
             rx.recv().expect("channel").expect("map");
-            let v = slice.get_mapped_range().to_vec();
+            let v = slice.get_mapped_range()
+        // wgpu 30 made this fallible; the range is the whole buffer the test just mapped.
+        .expect("a just-mapped buffer's full range is always valid").to_vec();
             buf.unmap();
             v
         };
@@ -834,7 +840,9 @@ fn render_grid_scene(show_grid: bool) -> Option<Vec<u8>> {
             .device
             .poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
         rx.recv().expect("readback channel").expect("readback");
-        let pixels = slice.get_mapped_range().to_vec();
+        let pixels = slice.get_mapped_range()
+        // wgpu 30 made this fallible; the range is the whole buffer the test just mapped.
+        .expect("a just-mapped buffer's full range is always valid").to_vec();
         staging.unmap();
         Some(pixels)
     })
@@ -1022,7 +1030,9 @@ fn shadow_scene(mode: gizmo::renderer::components::ShadowCasting) -> Option<Vec<
             .device
             .poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
         rx.recv().expect("channel").expect("map");
-        let px = slice.get_mapped_range().to_vec();
+        let px = slice.get_mapped_range()
+        // wgpu 30 made this fallible; the range is the whole buffer the test just mapped.
+        .expect("a just-mapped buffer's full range is always valid").to_vec();
         staging.unmap();
         px
     }))

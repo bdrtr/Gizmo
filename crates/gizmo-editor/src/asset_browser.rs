@@ -133,7 +133,7 @@ let mut finished = false;
     if state.assets.selected.is_some() {
         egui::Panel::right("asset_detail")
             .exact_size(200.0)
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 draw_asset_detail(ui, state);
             });
     }
@@ -149,7 +149,7 @@ let mut finished = false;
     if ui.available_width() > TREE_WIDTH + 260.0 {
         egui::Panel::left("asset_tree")
             .exact_size(TREE_WIDTH)
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 draw_folder_tree(ui, state);
             });
     }

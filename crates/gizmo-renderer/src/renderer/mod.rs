@@ -543,6 +543,10 @@ mod tests {
                     power_preference: wgpu::PowerPreference::LowPower,
                     compatible_surface: None,
                     force_fallback_adapter: false,
+                    // wgpu 30. Limit bucketing exists so a browser can stop untrusted content
+                    // fingerprinting the GPU through its exact limits. This is a native engine talking to
+                    // its own hardware, and bucketing would cost real limits for a threat it does not have.
+                    apply_limit_buckets: false,
                 })
                 .await;
 
@@ -710,7 +714,10 @@ mod tests {
             });
             receiver.recv().unwrap().unwrap();
 
-            let data = slice.get_mapped_range();
+            let data = slice.get_mapped_range()
+                // wgpu 30 made this fallible; the range is the whole buffer we just mapped, so a
+                // failure here is a programming error rather than a runtime condition.
+                .expect("a just-mapped buffer's full range is always valid");
             assert_eq!(
                 &data[0..4],
                 &[0u8, 255, 0, 255],

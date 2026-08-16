@@ -172,7 +172,7 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
                 module: sm,
                 entry_point: Some("vs_main"),
                 compilation_options: Default::default(),
-                buffers: &[Vertex::desc()],
+                buffers: &[Some(Vertex::desc())],
             },
             fragment: Some(wgpu::FragmentState {
                 module: sm,
@@ -346,7 +346,7 @@ pub(super) fn build_shadow_pipeline(device: &wgpu::Device, layouts: &LayoutRefs)
             module: &shadow_shader,
             entry_point: Some("vs_main"),
             compilation_options: Default::default(),
-            buffers: &[Vertex::desc()],
+            buffers: &[Some(Vertex::desc())],
         },
         fragment: None,
         primitive: wgpu::PrimitiveState {

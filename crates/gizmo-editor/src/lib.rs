@@ -58,6 +58,16 @@ pub struct EditorTabViewer<'a> {
 impl<'a> TabViewer for EditorTabViewer<'a> {
     type Tab = EditorTab;
 
+    /// A stable identity per tab, required by `egui_dock` 0.21.
+    ///
+    /// `EditorTab` is a fieldless enum that derives `Hash`, and the dock holds at most one of
+    /// each variant, so hashing the variant is both unique and stable across frames — which is
+    /// what the id is for. The alternative the crate suggests, hashing `title()`, would tie tab
+    /// identity to a display string: renaming "Ayarlar" would silently reset that tab's state.
+    fn id(&mut self, tab: &mut Self::Tab) -> egui::Id {
+        egui::Id::new(tab)
+    }
+
     fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
         match tab {
             EditorTab::Hierarchy => "Hierarchy".into(),
@@ -169,7 +179,7 @@ pub fn draw_editor(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
     // shrinks the root cursor from the bottom so the dock fills the remainder.
     egui::Panel::bottom("status_bar")
         .exact_size(23.0) // the prototype's bar
-        .show_inside(ui, |ui| {
+        .show(ui, |ui| {
             draw_status_bar(ui, world, state);
         });
 
@@ -220,8 +230,12 @@ pub fn draw_editor(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
         }
     }
 
-    // Dock fills the central region left by the panels above (egui_dock 0.19
-    // `show_inside`, composed into the same root `Ui`).
+    // Dock fills the central region left by the panels above (egui_dock's `show_inside`,
+    // composed into the same root `Ui`).
+    //
+    // NOTE: this is `egui_dock`'s method, NOT egui's. egui 0.36 renamed `Panel::show_inside` to
+    // `show`; `DockArea::show_inside` kept its name, and a blanket rename across the crate broke
+    // exactly here.
     DockArea::new(&mut dock_state)
         .style(dock_style)
         .show_inside(ui, &mut viewer);

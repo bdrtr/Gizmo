@@ -426,7 +426,9 @@ fn capture_and_save(world: &mut World, renderer: &mut Renderer, raw_path: &str) 
         timeout: None,
     });
     rx.recv().unwrap().unwrap();
-    let data = slice.get_mapped_range();
+    let data = slice.get_mapped_range()
+        // wgpu 30 made this fallible; the range is the whole buffer just mapped.
+        .expect("a just-mapped buffer's full range is always valid");
 
     let is_bgra = matches!(
         fmt,

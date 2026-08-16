@@ -786,7 +786,9 @@ impl<State: 'static> App<State> {
                             // in the loop where the engine can see what the user sees.
                             Self::service_screenshot(&renderer, &output, current_window);
 
-                            output.present();
+                            // wgpu 30 moved presentation off the texture and onto the queue:
+                            // `SurfaceTexture::present(self)` became `Queue::present(texture)`.
+                            renderer.queue.present(output);
 
                             self.world.insert_resource(renderer);
 

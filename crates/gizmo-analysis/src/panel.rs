@@ -11,7 +11,7 @@
 //! # let mut world = gizmo_core::world::World::new();
 //! # world.insert_resource(gizmo_analysis::Analyzer::new());
 //! # let out = ctx.run_ui(egui::RawInput::default(), |ui| {
-//! egui::Panel::right("analysis").show_inside(ui, |ui| {
+//! egui::Panel::right("analysis").show(ui, |ui| {
 //!     gizmo_analysis::panel::analysis_ui_world(ui, &world);
 //! });
 //! # });
@@ -351,18 +351,17 @@ mod tests {
     use super::*;
     use crate::Analyzer;
 
-    // NOTE: `Context::run` / `CentralPanel::show` are deprecated in egui 0.34 (in
-    // favour of `run_ui` / `show_inside`), but they still work and are the
-    // simplest way to drive one headless frame in a test. Migrating the egui
-    // API surface is a separate maintenance pass (tracked with the gizmo-analysis
-    // editor-panel work), so we allow the deprecation here rather than risk
-    // changing behaviour in an unrelated test helper.
-    #[allow(deprecated)]
+    // This used to call `Context::run` behind an `#[allow(deprecated)]`, with a note saying the
+    // egui API migration was "a separate maintenance pass". egui 0.36 removed the method, so the
+    // pass happened here. `run_ui` hands the closure a `&mut Ui` directly — the central panel the
+    // old form needed was only there to turn a `&Context` into one, so it goes with it.
     fn run_panel(analyzer: &Analyzer) {
         let ctx = egui::Context::default();
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| analysis_ui(ui, analyzer));
-        });
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| analysis_ui(ui, analyzer));
+        // `FullOutput` is `#[must_use]` and carries texture deltas a real app would upload;
+        // a headless test has no GPU to give them to, and dropping them silently would leak
+        // the atlas allocation the context just made.
+        output.drop_without_applying_deltas();
     }
 
     #[test]

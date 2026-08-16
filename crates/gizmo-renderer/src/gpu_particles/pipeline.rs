@@ -157,12 +157,12 @@ pub fn create_particle_pipelines(
             entry_point: Some("vs_main"),
             compilation_options: Default::default(),
             buffers: &[
-                wgpu::VertexBufferLayout {
+                Some(wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<[f32; 2]>() as wgpu::BufferAddress,
                     step_mode: wgpu::VertexStepMode::Vertex,
                     attributes: &wgpu::vertex_attr_array![4 => Float32x2],
-                },
-                GpuParticle::desc(),
+                }),
+                Some(GpuParticle::desc()),
             ],
         },
         fragment: Some(wgpu::FragmentState {

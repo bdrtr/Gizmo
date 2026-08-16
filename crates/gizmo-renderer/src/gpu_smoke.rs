@@ -570,7 +570,10 @@ mod tests {
         slice.map_async(wgpu::MapMode::Read, move |v| tx.send(v).unwrap());
         let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
         rx.recv().unwrap().unwrap();
-        let data = slice.get_mapped_range();
+        let data = slice.get_mapped_range()
+            // wgpu 30 made this fallible; the range is the whole buffer we just mapped, so a
+            // failure here is a programming error rather than a runtime condition.
+            .expect("a just-mapped buffer's full range is always valid");
         let out: Vec<f32> = bytemuck::cast_slice(&data).to_vec();
         drop(data);
         staging.unmap();
@@ -725,7 +728,10 @@ mod tests {
             slice.map_async(wgpu::MapMode::Read, move |v| { let _ = tx.send(v); });
             let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
             let _ = rx.recv();
-            let data = slice.get_mapped_range();
+            let data = slice.get_mapped_range()
+                // wgpu 30 made this fallible; the range is the whole buffer we just mapped, so a
+                // failure here is a programming error rather than a runtime condition.
+                .expect("a just-mapped buffer's full range is always valid");
             let px: &[u16] = bytemuck::cast_slice(&data);
             let mut lit = 0u32;
             let mut rows_with_smoke = std::collections::BTreeSet::new();

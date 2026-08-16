@@ -418,7 +418,7 @@ impl GpuPhysicsSystem {
                         module: &shader,
                         entry_point: Some("vs_debug"),
                         compilation_options: Default::default(),
-                        buffers: &[DebugVertex::desc()],
+                        buffers: &[Some(DebugVertex::desc())],
                     },
                     fragment: Some(wgpu::FragmentState {
                         module: &shader,
@@ -772,7 +772,10 @@ impl GpuPhysicsSystem {
 
         if self.readback_state.load(Ordering::SeqCst) == 3 {
             let slice = self.readback_buffer.slice(..);
-            let view = slice.get_mapped_range();
+            let view = slice.get_mapped_range()
+                // wgpu 30 made this fallible; the range is the whole buffer we just mapped, so a
+                // failure here is a programming error rather than a runtime condition.
+                .expect("a just-mapped buffer's full range is always valid");
 
             let data: &[GpuBox] = bytemuck::cast_slice(&view);
             let vec_data = data.to_vec();
