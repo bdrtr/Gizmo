@@ -2516,4 +2516,92 @@ mod golden_render_tests {
             );
         });
     }
+
+    /// A matte floor with — optionally — a decal projector volume straddling its surface.
+    async fn render_decal_scene(with_decal: bool) -> Vec<u8> {
+        const W: u32 = 128;
+        let mut renderer = Renderer::new_headless(W, W, None).await;
+        let mut asset_manager = AssetManager::new();
+        let mut world = World::new();
+        let tex = asset_manager.create_white_texture(
+            &renderer.device,
+            &renderer.queue,
+            &renderer.scene.texture_bind_group_layout,
+        );
+
+        // Matte floor, top face at y = -1.1.
+        let floor = world.spawn();
+        world.add_component(
+            floor,
+            Transform::new(Vec3::new(0.0, -1.2, 0.0)).with_scale(Vec3::new(20.0, 0.2, 20.0)),
+        );
+        world.add_component(floor, GlobalTransform::default());
+        world.add_component(floor, AssetManager::create_cube(&renderer.device));
+        world.add_component(
+            floor,
+            Material::new(tex.clone()).with_pbr(Vec4::new(0.8, 0.8, 0.8, 1.0), 0.0, 0.9),
+        );
+        world.add_component(floor, MeshRenderer::new());
+
+        if with_decal {
+            // A projector volume straddling the floor surface, right where the camera looks.
+            let d = world.spawn();
+            world.add_component(
+                d,
+                Transform::new(Vec3::new(0.0, -1.1, 0.0)).with_scale(Vec3::splat(3.0)),
+            );
+            world.add_component(d, GlobalTransform::default());
+            world.add_component(
+                d,
+                crate::renderer::components::Decal::new(
+                    tex.clone(),
+                    Vec4::new(1.0, 0.0, 0.0, 1.0),
+                ),
+            );
+        }
+
+        world.spawn_bundle(CameraBundle {
+            position: Vec3::new(-5.0, 2.0, 0.0),
+            yaw: 0.0,
+            pitch: -0.35,
+            primary: true,
+            ..Default::default()
+        });
+        world.spawn_bundle(DirectionalLightBundle::default());
+
+        render_world(&mut renderer, &mut world).await
+    }
+
+    /// **A decal has to land on the floor.** (Named to match the two guards above: one
+    /// `cargo test reach_the_frame` runs the whole family.) The decal pass had no test of any
+    /// kind: it blends
+    /// into the G-buffer's albedo target from inside the deferred geometry pass, so nothing in
+    /// the editor's forward path can see it (documented separately, and still open) and nothing
+    /// in the game path was measuring it either.
+    ///
+    /// It reads the same written-flag SSR and SSGI got wrong, and it read it in the third and
+    /// most fragile spelling — an exact `== 0.0`, now `< 0.5` like every other reader. That
+    /// rewrite cannot change a pixel today (the encoder never produces a value in `(0, 0.5)`),
+    /// which is exactly why it needs a measurement standing behind it rather than an argument:
+    /// a red projector over a white floor moves 1133 of 16384 pixels, max delta 75.
+    #[test]
+    fn decals_reach_the_frame() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let with = render_decal_scene(true).await;
+            let without = render_decal_scene(false).await;
+            let (changed, total) = changed_pixels(&with, &without, 128);
+            assert!(
+                changed >= 200,
+                "spawning a decal over the floor changed {changed}/{total} pixels — it is not \
+                 reaching the frame (measured 1133)",
+            );
+        });
+    }
 }

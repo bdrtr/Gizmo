@@ -1324,6 +1324,17 @@ levha konunca: **2376/16384 piksel (%14,5), max delta 22**. Geçiş sağlam.
 Bekçi: `volumetric_god_rays_reach_the_frame`. Bu test aynı zamanda kuralın kendisinin kaydı — tek
 sahnenin sıfırı, geçişin ölü olduğunu göstermez.
 
+**Aynı bayrağın üçüncü yazımı: decal.** `decal.wgsl` bayrağı `world_pos_val.w == 0.0` ile, yani
+tam kayan-nokta eşitliğiyle okuyordu. Bugün doğru çalışıyor — temizleme değeri tam 0,0 ve tam
+temsil ediliyor — ama `(0, 0,5)` aralığındaki her şeyi de içeri alırdı; on okuyucu içindeki en
+kırılgan biçim. `< 0.5`'e hizalandı. Bu yeniden yazım bugün tek pikseli değiştiremez (kodlayıcı o
+aralıkta değer üretmiyor), tam da bu yüzden arkasına tartışma değil ölçüm konuldu.
+
+Ve decal geçişinin **hiçbir testi yoktu**: beyaz zemine kırmızı projektör → **1133/16384 piksel
+(%6,9), max delta 75**. Oyun yolunda çalışıyor; bekçi `decals_reach_the_frame`. Editörde hâlâ
+görünmüyor ve bu ayrı bir kusur: decal G-buffer'ın albedo hedefine karışıyor, editörün hattı ise
+forward — kayıt `gizmo-studio/tests/render_parity.rs`'te duruyor ve **açık**.
+
 Ölçüm notu: her render için yeni bir `Renderer::new_headless` kurmak GPU belleğini bitiriyor —
 4 zemin × 6 render = 24 cihazın 17.'sinde `radv/amdgpu: Not enough memory for command submission`
 ve cihaz kaybı geldi (tek başına gölge dizisi 3072²×4). Süpürmeyi gerçekten okunacak satırlarla

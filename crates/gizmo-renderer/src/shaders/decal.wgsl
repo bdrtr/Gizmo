@@ -35,7 +35,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let tex_coord = vec2<i32>(in.position.xy);
     let world_pos_val = textureLoad(t_position_rel_camera, tex_coord, 0);
     
-    if (world_pos_val.w == 0.0) {
+    // Sky / unwritten G-buffer pixel → nothing to project onto. `< 0.5`, like the other readers
+    // of this flag: gbuffer.wgsl writes `(0.5 + 0.49·anisotropy) + floor(100·subsurface)`, so
+    // written pixels start at 0.5 and the clear is 0.0. The old form here was an exact `== 0.0`,
+    // which is the most fragile of the three spellings this flag had — it happens to work only
+    // because the clear value is exactly representable, and it would pass anything in (0, 0.5)
+    // straight through. The strict `> 0.5` spelling of the same test is what left SSR and SSGI
+    // contributing nothing at all; see their hit tests.
+    if (world_pos_val.w < 0.5) {
         discard;
     }
     
