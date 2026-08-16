@@ -495,6 +495,7 @@ fn render_scene_and_game_targets(game_view_visible: bool) -> (Vec<u8>, Vec<u8>) 
     render_with_shading(game_view_visible, 0)
 }
 
+/// Render one studio frame at a given toolbar shading mode, and read both targets.
 fn render_with_shading(game_view_visible: bool, shading_mode: u32) -> (Vec<u8>, Vec<u8>) {
     render_with_editor(game_view_visible, |ed| ed.shading_mode = shading_mode)
 }
