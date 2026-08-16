@@ -1233,6 +1233,28 @@ yarısı oradan da eksikti.
 - **Sonda köprüsünde hangi sorgular sunulacak.** Mekanizma kuruldu ve tek tüketicisi var
   (`physics.ground_at`); geri kalanı API tasarımı.
 
+### Export bir oyunu değil, sabit bir demoyu paketliyor (2026-08-16, açık)
+
+Stüdyodaki "Build / Export", `cargo build --release -p demo` koşup çıkan binary'yi
+`export/gizmo_game/` altına kopyalıyor ve "Oyununuz hazır" diyor. `demo`'nun varsayılan binary'si
+`bevy_3d_scene` — zemin, küp, ışık ve kameradan ibaret **sabit** bir sahne. Hiçbir sahne dosyası
+okumuyor, hiçbir script çalıştırmıyor.
+
+Yani export kullanıcının sahnesini değil, motorun örneğini paketliyor. Kopyalanan `scenes/` ve
+`scripts/` dizinlerini açan bir şey yok: `Scene::load_into` var ama tek çağıranı editör; `demo`,
+`cradle` ve `server` altındaki hiçbir binary sahne dosyası yüklemiyor.
+
+Bugün kapatılan yarısı, kopyalamanın **dürüstlüğüydü** — dört dizin `let _ =` ile kopyalanıp
+dördü için de koşulsuz "Kopyalandı" basılıyordu ve kaynakların ikisi (`demo/scenes`,
+`demo/scripts`) hiç var olmayan yollardı. Artık ne olduğunu söylüyor ve çalışma anında kullanılan
+yollardan (`scripts/`, `scenes/`) okuyor.
+
+Kalan yarısı bir **özellik**: başlangıçta bir sahne dosyası yükleyen, script'leri bağlayan ve
+fiziği/render'ı süren bir çalışma-zamanı binary'si. Onsuz export'un kopyaladığı veriyi okuyan
+kimse yok. Kapsamı bir hata düzeltmesinin ötesinde olduğu için bilerek açık bırakıldı; kararı
+verilmeden yapılmamalı, çünkü "oyun çalışma-zamanı" motorun ne kadarını varsayılan açacağı
+sorusudur (fizik? scripting? ağ?).
+
 ### God fonksiyon taraması (2026-08-15)
 
 Uzunluk tek başına sinyal değil; iç içelik derinliği ve dallanma sayısıyla birlikte ölçüldü. Bölünen
