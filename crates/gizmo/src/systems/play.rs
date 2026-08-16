@@ -164,9 +164,13 @@ impl PlayLoop {
                 report(PlayReport::ScriptError { error: &e });
             }
 
-            // Commands a script queued (audio, scene switching). The editor drops them on purpose
-            // — it must not switch scenes under the author — and the runtime has no consumer for
-            // them yet; either way they are drained here so they cannot pile up.
+            // Commands the shared pass queued, applied before the per-entity hooks run so those
+            // hooks read a world that already reflects them.
+            //
+            // (`entity.set_position` and its neighbours do not write the world; they push a
+            // command. So "flush" is not bookkeeping — it is when a script's decision becomes
+            // true.) Unhandled ones — audio, scene switching — are dropped: the editor must not
+            // switch scenes under the author, and the runtime has no consumer for them yet.
             let _unhandled = engine.flush_commands(world, dt);
 
             // Per-entity `on_update`. The entity's own property overrides ride along: scripts are
@@ -202,6 +206,16 @@ impl PlayLoop {
                     });
                 }
             }
+
+            // **The second flush, and the reason it exists.** Everything an `on_entity_update`
+            // just asked for is sitting in the queue, and with only the flush above it would wait
+            // for the *next* frame — measured: an entity whose script sets its position on frame
+            // 1 was still at the origin at the end of frame 1 and moved at the end of frame 2.
+            // That is a frame of latency on every per-entity script in the engine, in the editor
+            // and in every exported game, and nothing caught it because the movement did happen.
+            // Draining an empty queue is a `Vec` swap, so the frame that queued nothing pays
+            // nothing.
+            let _unhandled = engine.flush_commands(world, dt);
 
             if let Ok(mut logs) = engine.log_queue.lock() {
                 for (level, message) in logs.drain(..) {

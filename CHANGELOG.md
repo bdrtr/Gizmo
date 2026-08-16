@@ -36,6 +36,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A per-entity script's commands land in the frame that issued them.** `entity.set_position` and
+  its neighbours queue a command rather than writing the world, and the play loop flushed that
+  queue *before* running the per-entity `on_entity_update` hooks — so everything those hooks asked
+  for waited for the next frame's flush. Measured: an entity whose script set its position on
+  frame 1 was still at the origin at the end of frame 1 and moved at the end of frame 2. Every
+  per-entity script in the engine carried a frame of latency, in the editor and in exported games
+  alike, and nothing caught it because the movement did happen — just late.
+
 - **A windowed app no longer dies on a frame it could not present.** The egui frame runs at the
   top of the loop; when the swapchain image could not be acquired afterwards — an outdated
   surface, a resize in flight, and the first frame of a freshly mapped window — the loop returned

@@ -1579,6 +1579,32 @@ gerçekten ihtiyaç duyduğu tuş eşlemesi sahnede durmalı, o zaman iki yol da
 
 Refactor'dan sonra runtime aynı sahneyi birebir aynı kareyle çiziyor.
 
+#### Ve ortak adım ilk gerçek script'inde bir kusur verdi: bir kare gecikme (2026-08-16, DÜZELTİLDİ)
+
+Sözleşmenin render yarısı doğrulanmıştı, **scripting yarısı hiç** — üstelik depoda tek bir `.lua`
+dosyası yok, scripting testlerinin hepsi kaynağını geçici dosyaya kendi yazıyor. İlk gerçek script
+koşturulduğunda çıktı:
+
+`entity.set_position` dünyayı yazmaz, **komut kuyruğuna atar**; kuyruğu `flush_commands` uygular.
+Adımın sırası ise `update → flush → entity başına on_entity_update` idi. Yani bir entity script'inin
+istediği her şey, o karenin flush'ını **kaçırıp** bir sonraki kareyi bekliyordu. Ölçüldü: 1. karede
+konumunu (5,0,0) yapan script'in entity'si 1. karenin sonunda hâlâ orijinde, 2. karenin sonunda
+yerinde.
+
+Yani motordaki **her** entity script'i bir kare gecikmeli çalışıyordu — editörde ve gönderilen her
+oyunda — ve kimse fark etmedi çünkü hareket *oluyordu*, sadece geç.
+
+Düzeltme: entity döngüsünden sonra ikinci bir flush. İlki duruyor (entity hook'ları paylaşılan
+pass'in komutlarını görmüş bir dünya okusun diye); boş kuyruğu boşaltmak bir `Vec` takası, yani
+komut üretmeyen kare hiçbir şey ödemiyor. Ve düzeltme tek yerde: `PlayLoop` paylaşıldığı için
+editör de export edilen oyun da aynı anda düzeldi — refactor'ın ilk temettüsü.
+
+Bekçiler `demo/tests/the_runtime_runs_scripts.rs`: script'in istediği karede indiği, eksik bir
+script'in otuz karede bir kez bildirilip kareyi düşürmediği, ve **zincirin tamamı** — sahne dosyası
+→ dünya → `Script` bileşeni dosyadan sağ çıkıyor → koşuyor → entity kıpırdıyor. Halkaların her
+birinin testi vardı, zincirin yoktu; export'un okunmayan bir binary'yi bunca zaman
+paketleyebilmesinin sebebi de tam olarak buydu.
+
 ### God fonksiyon taraması (2026-08-15)
 
 Uzunluk tek başına sinyal değil; iç içelik derinliği ve dallanma sayısıyla birlikte ölçüldü. Bölünen
