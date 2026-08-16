@@ -2424,4 +2424,96 @@ mod golden_render_tests {
             }
         });
     }
+
+    /// Camera looking straight INTO the sun over open sky, with a pillar to break the beam.
+    /// `DirectionalLightBundle::default()` is `rotation_x(-π/4)`, and `sun_dir = rot·(0,0,-1)`
+    /// = (0, -0.707, -0.707), so the direction *toward* the sun is (0, +0.707, +0.707):
+    /// yaw = π/2, pitch = π/4 aims the view ray exactly along it — `cos_theta = 1`, the peak of
+    /// the Henyey-Greenstein lobe. Sky pixels also march the full 100-unit default instead of
+    /// stopping a few metres away on the floor.
+    async fn render_sunbeam(volumetric: bool) -> Vec<u8> {
+        const W: u32 = 128;
+        let mut renderer = Renderer::new_headless(W, W, None).await;
+        if !volumetric {
+            renderer.volumetric = None;
+        }
+        let mut asset_manager = AssetManager::new();
+        let mut world = World::new();
+        let tex = asset_manager.create_white_texture(
+            &renderer.device,
+            &renderer.queue,
+            &renderer.scene.texture_bind_group_layout,
+        );
+
+        let floor = world.spawn();
+        world.add_component(
+            floor,
+            Transform::new(Vec3::new(0.0, -2.0, 0.0)).with_scale(Vec3::new(40.0, 0.2, 40.0)),
+        );
+        world.add_component(floor, GlobalTransform::default());
+        world.add_component(floor, AssetManager::create_cube(&renderer.device));
+        world.add_component(
+            floor,
+            Material::new(tex.clone()).with_pbr(Vec4::new(0.5, 0.5, 0.5, 1.0), 0.0, 0.9),
+        );
+        world.add_component(floor, MeshRenderer::new());
+
+        // A slab standing between the camera and the sun: what the cascades have to shadow if
+        // the march is to produce a shaft rather than a flat haze.
+        let pillar = world.spawn();
+        world.add_component(
+            pillar,
+            Transform::new(Vec3::new(0.0, 2.0, 4.0)).with_scale(Vec3::new(4.0, 4.0, 0.4)),
+        );
+        world.add_component(pillar, GlobalTransform::default());
+        world.add_component(pillar, AssetManager::create_cube(&renderer.device));
+        world.add_component(
+            pillar,
+            Material::new(tex).with_pbr(Vec4::new(0.2, 0.2, 0.2, 1.0), 0.0, 0.9),
+        );
+        world.add_component(pillar, MeshRenderer::new());
+
+        world.spawn_bundle(CameraBundle {
+            position: Vec3::new(0.0, 1.0, -6.0),
+            yaw: std::f32::consts::FRAC_PI_2,
+            pitch: std::f32::consts::FRAC_PI_4,
+            primary: true,
+            ..Default::default()
+        });
+        world.spawn_bundle(DirectionalLightBundle::default());
+
+        render_world(&mut renderer, &mut world).await
+    }
+
+    /// **The god rays have to reach the frame too.** Volumetric was nearly written off with the
+    /// two passes above: on the scenes that answered the SSR/SSGI question it moved bytes but
+    /// nothing a person could see (max delta 5–8 of 255), which reads exactly like a pass that
+    /// runs and contributes nothing. It was the fixture. `sun_intensity · phase · march length`
+    /// is the whole contribution, and all three collapse when the camera does not face the sun:
+    /// the Henyey-Greenstein lobe at `g = 0.55` is 0.61 straight into the sun and 0.015 away from
+    /// it — a factor of 40 — and a view ray that lands on nearby geometry marches 6 units instead
+    /// of the sky's 100. Aimed properly it moves 14.5 % of the frame with a max delta of 22.
+    ///
+    /// So this guards volumetric on the only ground where the question is meaningful, and it is
+    /// the standing counter-example to reading one scene's zero as a dead pass.
+    #[test]
+    fn volumetric_god_rays_reach_the_frame() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let on = render_sunbeam(true).await;
+            let off = render_sunbeam(false).await;
+            let (changed, total) = changed_pixels(&on, &off, 128);
+            assert!(
+                changed >= 400,
+                "removing the volumetric pass changed {changed}/{total} pixels with the camera \
+                 pointed into the sun — the god rays are not reaching the frame (measured 2376)",
+            );
+        });
+    }
 }

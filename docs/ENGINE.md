@@ -1269,7 +1269,7 @@ Aynı mercek bir seviye aşağı tutuldu: kontrolü değil **geçişin kendisini
 |---|---|---|
 | SSAO | %10–15 | çalışıyor — *kontrolü* ölü, o ayrı konu (yukarıdaki tablo) |
 | TAA | %0,4–1,6 | çalışıyor |
-| volumetric | eşik altı; 7–20 bin bayt kıpırdıyor, max delta 5–8 | koşuyor ama görünmez zayıflıkta |
+| volumetric | bu sahnelerde eşik altı (max delta 5–8) | **fixture'dı** — doğru zeminde %14,5, aşağıya bak |
 | **SSGI** | **0/65536 bayt** | **ölü** |
 | **SSR** | **0/65536 bayt** | **ölü** |
 
@@ -1311,6 +1311,18 @@ içinde `ssr`/`ssgi` geçmiyor, "iki render yolu" bölümüyle tutarlı), `Simpl
 sağlıklı görünüyordu; yalnız resim biliyordu. Ve zemin seçimi burada da belirleyici: SSGI ayna
 zeminde %12,2 verirken kırmızı duvarlı "bounce" sahnesinde eşiğin altında kaldı (max delta 6).
 Toplayacak parlak komşu yoksa GI'yi ölçmek yine fixture'ı ölçer.
+
+**Ve aynı tarama volumetric'i az kalsın yanlış mahkûm ediyordu.** Yukarıdaki tabloda "max delta
+5–8" satırı, bu belgenin bir bölüm yukarıda yazdığı kuralın ihlaliydi: ölçüldüğü dört sahnenin
+hiçbirinde kamera güneşe bakmıyordu. Katkının tamamı `sun_intensity · faz · yürüyüş boyu`, ve
+kamera güneşe dönmediğinde üçü birden çöküyor — Henyey-Greenstein lobu `g = 0,55`'te güneşe
+doğru 0,61, tersine 0,015 (kırk kat), ve yakın geometriye çarpan ışın gökyüzünün 100 birimi
+yerine 6 birim yürüyor. Kamera güneşe çevrilince (`yaw = π/2, pitch = π/4`, çünkü
+`DirectionalLightBundle::default()` güneşi (0, +0,707, +0,707) yönüne koyuyor) ve ışını kesen bir
+levha konunca: **2376/16384 piksel (%14,5), max delta 22**. Geçiş sağlam.
+
+Bekçi: `volumetric_god_rays_reach_the_frame`. Bu test aynı zamanda kuralın kendisinin kaydı — tek
+sahnenin sıfırı, geçişin ölü olduğunu göstermez.
 
 Ölçüm notu: her render için yeni bir `Renderer::new_headless` kurmak GPU belleğini bitiriyor —
 4 zemin × 6 render = 24 cihazın 17.'sinde `radv/amdgpu: Not enough memory for command submission`
