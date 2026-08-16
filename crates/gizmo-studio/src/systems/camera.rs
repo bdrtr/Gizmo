@@ -17,12 +17,14 @@ pub fn handle_camera(
     let mut camera_speed = 8.0;
     let mut camera_focus_distance = 10.0;
     let mut is_playing = false;
+    let mut fly_active = false;
     let mut focus_target = None;
     let mut view_request = None;
     if let Some(es) = world.get_resource::<EditorState>() {
         camera_speed = es.prefs.camera_speed;
         camera_focus_distance = es.prefs.camera_focus_distance;
         is_playing = es.is_playing();
+        fly_active = es.camera.fly_active;
         focus_target = es.camera.focus_target;
         view_request = es.camera.view_request;
     }
@@ -62,7 +64,21 @@ pub fn handle_camera(
 
             let mut move_dir = gizmo::math::Vec3::ZERO;
 
-            if !is_playing {
+            // Fly keys only while the right button is held on the viewport — the same gesture
+            // that already gates looking around, and what the Game panel's own help text
+            // describes ("Sağ Tık + Sürükle — Kamerayı döndür").
+            //
+            // Ungated, these keys collided head-on with the editor's tool shortcuts, which are
+            // bound globally in `gizmo_editor::draw_editor`:
+            //
+            //     Q → aşağı  / Select      W → ileri  / Translate
+            //     E → yukarı / Rotate      R →   —    / Scale
+            //
+            // So flying forward with W silently switched the active tool to Translate, and there
+            // was no way to avoid it: movement asked for no modifier at all. Every editor in this
+            // class solves it the same way — the right button is what puts the viewport in camera
+            // mode, and the letter keys mean tools outside it.
+            if !is_playing && fly_active {
                 // Kamera nereye bakıyorsa ORAYA ileri git
                 if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyW as u32) {
                     move_dir += forward;

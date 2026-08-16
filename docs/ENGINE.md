@@ -1233,6 +1233,33 @@ yarısı oradan da eksikti.
 - **Sonda köprüsünde hangi sorgular sunulacak.** Mekanizma kuruldu ve tek tüketicisi var
   (`physics.ground_at`); geri kalanı API tasarımı.
 
+### "Sonucu at, başarıyı yaz" taraması (2026-08-16)
+
+Aynı kalıbın dört örneği bir günde çıkınca depo geneli tarandı. Kalıp şu: bir işlemin `Result`'ı
+`let _ =` ile atılıyor, hemen ardından koşulsuz bir başarı satırı basılıyor. Sonuç: log, olmamış
+bir şeyi olmuş gibi söylüyor.
+
+Bulunan ve kapatılanlar:
+
+| Yer | Ne diyordu | Gerçek |
+|---|---|---|
+| `gc.rs` auto-save | `💾 Auto-Save: <yol>` | kayıt başarısız olabilir, dosya yok |
+| `build.rs` export | `Kopyalandı -> scripts/` (×4) | ikisinin kaynağı hiç yoktu |
+| `render.rs` prefab kaydet | `Prefab kaydedildi.` | yazma başarısız olabilir |
+| `render.rs` Ctrl+D | `Obje çoğaltıldı.` | okuma sonucuna bakılmadan |
+| `prefs.rs` tercihler | (hiçbir şey demiyordu) | ayarlar sessizce kaybolur |
+| `simulation.rs` script | (hiçbir şey demiyordu) | script hiç çalışmaz |
+
+En ağırı auto-save'di: insanın işinin diskte olduğuna inanmak için baktığı satır tam da o.
+
+Tarama sonrası `crates/` altında bu kalıptan **kalmadı** (üretici + iddia dörder satır içinde,
+koşulsuz). İki bekçi duruyor: `no_save_call_discards_its_result` (`render.rs`, `gc.rs` kaynağını
+okur) ve her düzeltmenin kendi davranış testi.
+
+Sık düşülen tuzak, düzeltmenin ikinci yarısı: **koşulsuz bildirmek de yanlış.** Auto-save, script
+reload ve tercih yazımı kare başına koşuyor; düz bir log satırı saniyede altmış kopya demek.
+Üçünde de karar "giriş/çıkış anında bir kez" — hafızası olan saf bir fonksiyonda, döngüde değil.
+
 ### Panel genişliği taraması: sekiz panelden biri taşıyordu (2026-08-16)
 
 Inspector'ın kendi içeriğini kırptığı bulununca (ayrıntısı commit'te) aynı kusur sınıfı için

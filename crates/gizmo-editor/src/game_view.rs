@@ -84,8 +84,13 @@ pub fn ui_game_view(ui: &mut egui::Ui, state: &mut EditorState) {
 
         ui.label(egui::RichText::new("📋 Editör Kısayolları").strong());
 
+        // The camera keys are listed WITH the button that arms them. They used to be listed bare,
+        // which was both wrong (they now need the right button held) and the reason the collision
+        // with the tool shortcuts below went unnoticed for so long: read as written, W meant two
+        // different things on the same screen.
         let shortcuts = [
-            ("W / A / S / D", "Kamerayı hareket ettir"),
+            ("Sağ Tık (basılı) + W A S D", "Kamerayı hareket ettir"),
+            ("Sağ Tık (basılı) + Q / E", "Kamerayı aşağı / yukarı taşı"),
             ("Sağ Tık + Sürükle", "Kamerayı döndür"),
             ("Orta Tık + Sürükle", "Kamerayı kaydır (pan)"),
             ("Scroll", "Yakınlaştır / uzaklaştır"),
@@ -94,6 +99,7 @@ pub fn ui_game_view(ui: &mut egui::Ui, state: &mut EditorState) {
             ("Ctrl + Z / Y", "Geri al / İleri al"),
             ("Ctrl + D", "Seçili objeyi çoğalt"),
             ("Ctrl + Sürükle (Gizmo)", "Snap ile hareket"),
+            ("Q / W / E / R", "Araç: Seç / Taşı / Döndür / Ölçek"),
         ];
 
         egui::Grid::new(ui.id().with("shortcut_grid"))

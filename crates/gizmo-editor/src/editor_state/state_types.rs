@@ -173,6 +173,11 @@ pub struct AnimationEditState {
 #[derive(Default, Debug)]
 #[non_exhaustive]
 pub struct CameraState {
+    /// Whether the viewport is in fly mode: the right mouse button held down over it.
+    ///
+    /// Separate from `look_delta`, which is `Some` only while the pointer is actually moving. Fly
+    /// movement has to work with the mouse held still, and holding the button is the whole signal.
+    pub fly_active: bool,
     pub look_delta: Option<gizmo_math::Vec2>,
     pub pan_delta: Option<gizmo_math::Vec2>,
     pub orbit_delta: Option<gizmo_math::Vec2>,

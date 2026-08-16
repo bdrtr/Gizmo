@@ -61,6 +61,13 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
         }
 
 
+        // Fly mode: right button DOWN on the viewport. `is_pointer_button_down_on` rather than
+        // `dragged_by`, because a drag only counts once the pointer has moved past egui's
+        // threshold — and flying with WASD while holding the mouse perfectly still is the normal
+        // case, not an edge one.
+        state.camera.fly_active = response.is_pointer_button_down_on()
+            && ui.input(|i| i.pointer.secondary_down());
+
         // Sağ tık kamerayı çevirmek için (Egui ham input'u yuttuğu için burdan geçirmeliyiz)
         if response.dragged_by(egui::PointerButton::Secondary) {
             let delta = response.drag_delta();
@@ -93,6 +100,7 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
         }
     } else {
         state.mouse_ndc = None;
+        state.camera.fly_active = false;
         state.camera.look_delta = None;
         state.camera.pan_delta = None;
         state.camera.orbit_delta = None;
@@ -896,6 +904,77 @@ mod snap_tests {
         assert!(
             code.contains("gizmo_size: state.prefs.gizmo_size"),
             "the gizmo size preference must reach GizmoVisuals"
+        );
+    }
+}
+
+#[cfg(test)]
+mod fly_gate_tests {
+
+    /// The editor's tool shortcuts and its camera-fly keys must not be the same ungated keys.
+    ///
+    /// `draw_editor` binds Q/W/E/R to Select/Translate/Rotate/Scale globally, and the studio's
+    /// camera reads W/A/S/D/Q/E for free flight. Three of those letters are the same key, so with
+    /// flight ungated there was no way to move the editor camera without silently changing the
+    /// active tool — press W to fly forward and the gizmo became Translate.
+    ///
+    /// Both halves are read from source, because that is where the pairing lives: one binding is
+    /// in this crate and the other is in `gizmo-studio`, and nothing at runtime brings them
+    /// together to be asserted about. What the test pins is that the studio's flight block is
+    /// gated on `fly_active` — the right button held on the viewport, the same gesture that
+    /// already gates looking.
+    #[test]
+    fn free_flight_is_gated_on_the_right_mouse_button() {
+        let studio = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("crates/")
+            .join("gizmo-studio/src/systems/camera.rs");
+        let src = std::fs::read_to_string(&studio).expect("studio camera system");
+
+        assert!(
+            src.contains("if !is_playing && fly_active {"),
+            "the studio's flight block is no longer gated on fly_active, so W/E/Q move the camera \
+             and change the tool at the same time again"
+        );
+        assert!(
+            src.contains("fly_active = es.camera.fly_active;"),
+            "the flag is never read from EditorState, so the gate above is reading a constant"
+        );
+
+        // And the tool shortcuts this collides with are still on those letters.
+        let editor = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs"),
+        )
+        .expect("lib.rs");
+        for key in ["Key::Q", "Key::W", "Key::E", "Key::R"] {
+            assert!(
+                editor.contains(key),
+                "{key} is no longer a tool shortcut — if the bindings moved, this test's premise \
+                 needs rewriting rather than deleting"
+            );
+        }
+    }
+
+    /// `fly_active` is the button being HELD, not a drag.
+    ///
+    /// `dragged_by` only becomes true once the pointer has moved past egui's click-versus-drag
+    /// threshold, and holding the right button perfectly still while flying with WASD is the
+    /// normal way to use this. Gating flight on the drag would have made the camera stutter to a
+    /// stop whenever the mouse stopped moving.
+    #[test]
+    fn the_fly_gate_is_a_held_button_not_a_drag() {
+        let src = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/scene_view.rs"),
+        )
+        .expect("scene_view.rs");
+        let line = src
+            .lines()
+            .find(|l| l.contains("state.camera.fly_active ="))
+            .expect("fly_active is assigned in the viewport");
+        assert!(
+            !line.contains("dragged_by"),
+            "fly_active is derived from a drag, so flight stops whenever the mouse holds still: \
+             {line}"
         );
     }
 }
