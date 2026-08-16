@@ -13,6 +13,10 @@ pub mod fps_look;
 pub mod lifetime;
 #[cfg(feature = "physics")]
 pub mod physics;
+/// One frame of a running game — shared by the editor's Play mode and an exported game, which is
+/// what makes "the export behaves like Play" a fact rather than a promise.
+#[cfg(feature = "physics")]
+pub mod play;
 #[cfg(feature = "render")]
 pub mod render;
 pub mod spin;
@@ -32,6 +36,8 @@ pub use fps_look::*;
 pub use lifetime::*;
 #[cfg(feature = "physics")]
 pub use physics::*;
+#[cfg(feature = "physics")]
+pub use play::{PlayLoop, PlayReport};
 #[cfg(feature = "render")]
 pub use render::*;
 pub use spin::*;

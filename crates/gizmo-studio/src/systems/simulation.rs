@@ -1,52 +1,37 @@
 use crate::state::StudioState;
 use gizmo::editor::EditorState;
 use gizmo::prelude::*;
+use gizmo::systems::PlayReport;
 
-/// What the console should be told about one script's load attempt this frame.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum ScriptReload {
-    /// Nothing new: it loaded, or it is failing the same way it was already failing.
-    Quiet,
-    /// It has just started failing.
-    Broke(String),
-    /// It was failing and now loads.
-    Recovered,
-}
-
-/// Decide what to say about a reload result, and remember the answer.
+/// Route one frame's play-loop report into the editor console.
 ///
-/// The studio ran `let _ = engine.reload_if_changed(&path);` — result discarded — and then called
-/// `update_entity`, which for a script that never loaded takes its `else` branch, emits a `trace!`
-/// and returns `Ok(())`. So a Script component pointing at a file that is not there did nothing,
-/// forever, and said nothing: the editor's own `➕ Bileşen Ekle ▸ Script` stamps
-/// `scripts/new_script.lua`, a path no part of the editor creates. Press ▶ and the console stays
-/// empty while the script never runs.
-///
-/// Reporting it needs a memory, or it is 60 identical lines a second. `failed` holds the paths
-/// that are currently broken, so the message is emitted on the way in and the recovery on the way
-/// out — the two moments a person needs to know about.
-pub(crate) fn script_reload_report(
-    failed: &mut std::collections::BTreeSet<String>,
-    path: &str,
-    result: Result<bool, String>,
-) -> ScriptReload {
-    match result {
-        Ok(_) => {
-            if failed.remove(path) {
-                ScriptReload::Recovered
-            } else {
-                ScriptReload::Quiet
-            }
+/// This is the whole of what the editor adds to a running game: the frame itself is
+/// `gizmo::systems::PlayLoop`, the same one an exported game runs, so the only thing the two
+/// callers may legitimately disagree about is where the messages land. The decisions behind these
+/// messages — when a broken script is worth a line and when it is not — moved into that shared
+/// step with the loop they belong to.
+fn log_play_report(editor_state: &mut EditorState, report: PlayReport<'_>) {
+    match report {
+        PlayReport::ScriptError { error } => {
+            editor_state.log_error(&format!("Script Error: {error}"))
         }
-        Err(e) => {
-            if failed.insert(path.to_string()) {
-                ScriptReload::Broke(e)
-            } else {
-                ScriptReload::Quiet
-            }
+        PlayReport::EntityScriptError { path, error, .. } => {
+            editor_state.log_warning(&format!("Entity script error ({path}): {error}"))
         }
+        PlayReport::ScriptBroke { path, error } => editor_state.log_error(&format!(
+            "❌ Script yüklenemedi: {path} — {error}. Entity'nin script'i ÇALIŞMIYOR."
+        )),
+        PlayReport::ScriptRecovered { path } => {
+            editor_state.log_info(&format!("✅ Script yeniden yüklendi: {path}"))
+        }
+        PlayReport::ScriptLog { level, message } => match level {
+            "error" => editor_state.log_error(&format!("[Lua] {message}")),
+            "warn" => editor_state.log_warning(&format!("[Lua] {message}")),
+            _ => editor_state.log_info(&format!("[Lua] {message}")),
+        },
     }
 }
+
 pub fn handle_simulation(
     world: &mut World,
     editor_state: &mut EditorState,
@@ -93,124 +78,52 @@ pub fn handle_simulation(
 
     // --- OYUN / SİMÜLASYON DÖNGÜSÜ ---
     if editor_state.is_playing() {
-        // SCRIPT ENGINE UPDATE: Sadece "Play" modundayken oyun mantığını işlet
-        world.resource_scope(|world, engine: &mut gizmo::scripting::ScriptEngine| {
-            if let Err(e) = engine.update(world, input, dt) {
-                editor_state.log_error(&format!("Script Error: {}", e));
+        // The frame of a running game is the ENGINE's, not the editor's: `PlayLoop::step` is the
+        // same call an exported game makes (`demo/src/bin/gizmo_runtime.rs`). That is what lets
+        // Build/Export promise the shipped game behaves like the one you just pressed ▶ on — a
+        // promise that was prose here and a second implementation over there, until the two were
+        // merged. What stays on this side is the console.
+        //
+        // The default `ActionMap` below is the one thing the editor adds and the runtime does
+        // not: it was written for a fighter system whose call is commented out two lines under
+        // it, so it is scaffolding, not part of a running game. Bindings a game actually needs
+        // belong in the scene, and then both paths get them.
+        {
+            let has_am = world
+                .try_get_resource::<gizmo::core::input::ActionMap>()
+                .is_ok();
+            if !has_am {
+                let mut am = gizmo::core::input::ActionMap::new();
+                use gizmo::prelude::KeyCode;
+                // Yön tuşları (Ok tuşları)
+                am.bind_key("Up", KeyCode::ArrowUp as u32);
+                am.bind_key("Down", KeyCode::ArrowDown as u32);
+                am.bind_key("Left", KeyCode::ArrowLeft as u32);
+                am.bind_key("Right", KeyCode::ArrowRight as u32);
+                // Alternatif yön: WASD
+                am.bind_key("Up", KeyCode::KeyW as u32);
+                am.bind_key("Down", KeyCode::KeyS as u32);
+                am.bind_key("Left", KeyCode::KeyA as u32);
+                am.bind_key("Right", KeyCode::KeyD as u32);
+                // Saldırı tuşları: J=LightPunch, K=HeavyPunch, L=LightKick, U=HeavyKick
+                am.bind_key("LightPunch", KeyCode::KeyJ as u32);
+                am.bind_key("HeavyPunch", KeyCode::KeyK as u32);
+                am.bind_key("LightKick", KeyCode::KeyL as u32);
+                am.bind_key("HeavyKick", KeyCode::KeyU as u32);
+                world.insert_resource(am);
             }
-
-            // Flush commands directly
-            let unhandled_commands = engine.flush_commands(world, dt);
-            for _cmd in unhandled_commands {
-                // For now, audio/scene commands can be skipped or warned inside the editor
-                // as the editor shouldn't suddenly switch scenes due to a script.
-            }
-
-            // Call per-entity updates
-            let scripts = world.borrow::<gizmo::scripting::Script>();
-            {
-                // The entity's own property values ride along: scripts are loaded per path, so a
-                // per-entity value cannot live in the shared Lua environment.
-                let mut entity_calls: Vec<(u32, String, std::collections::BTreeMap<String, gizmo::scripting::ScriptValue>)> =
-                    Vec::new();
-                for (entity_id, _) in scripts.iter() {
-                    if let Some(script) = scripts.get(entity_id) {
-                        entity_calls.push((
-                            entity_id,
-                            script.file_path.clone(),
-                            script.properties.clone(),
-                        ));
-                    }
-                }
-                drop(scripts);
-
-                for (entity_id, path, properties) in entity_calls {
-                    match script_reload_report(
-                        &mut state.failed_scripts,
-                        &path,
-                        engine.reload_if_changed(&path),
-                    ) {
-                        ScriptReload::Broke(e) => editor_state.log_error(&format!(
-                            "❌ Script yüklenemedi: {} — {}. Entity'nin script'i ÇALIŞMIYOR.",
-                            path, e
-                        )),
-                        ScriptReload::Recovered => editor_state
-                            .log_info(&format!("✅ Script yeniden yüklendi: {}", path)),
-                        ScriptReload::Quiet => {}
-                    }
-                    if let Err(e) = engine.update_entity(entity_id, &path, dt, &properties) {
-                        editor_state.log_warning(&format!("Entity script error: {}", e));
-                    }
-                }
-            }
-
-            // Pump logs to editor console
-            if let Ok(mut logs) = engine.log_queue.lock() {
-                for (level, msg) in logs.drain(..) {
-                    match level.as_str() {
-                        "error" => editor_state.log_error(&format!("[Lua] {}", msg)),
-                        "warn" => editor_state.log_warning(&format!("[Lua] {}", msg)),
-                        _ => editor_state.log_info(&format!("[Lua] {}", msg)),
-                    }
-                }
-            }
-        });
-
-        state.physics_accumulator += dt;
-        let fixed_dt = 1.0 / 60.0;
-        // Death spiral önleme
-        state.physics_accumulator = state.physics_accumulator.min(fixed_dt * 16.0);
-
-        let mut steps = 0;
-        while state.physics_accumulator >= fixed_dt && steps < 16 {
-            gizmo::physics::system::physics_step_system(world, fixed_dt);
-            
-            // Fighter System: Dövüş mekanikleri (Input Buffer, Hitstop) her fizik karesinde güncellenir
-            {
-                let has_am = world.try_get_resource::<gizmo::core::input::ActionMap>().is_ok();
-                if !has_am {
-                    let mut am = gizmo::core::input::ActionMap::new();
-                    use gizmo::prelude::KeyCode;
-                    // Yön tuşları (Ok tuşları)
-                    am.bind_key("Up",    KeyCode::ArrowUp as u32);
-                    am.bind_key("Down",  KeyCode::ArrowDown as u32);
-                    am.bind_key("Left",  KeyCode::ArrowLeft as u32);
-                    am.bind_key("Right", KeyCode::ArrowRight as u32);
-                    // Alternatif yön: WASD
-                    am.bind_key("Up",    KeyCode::KeyW as u32);
-                    am.bind_key("Down",  KeyCode::KeyS as u32);
-                    am.bind_key("Left",  KeyCode::KeyA as u32);
-                    am.bind_key("Right", KeyCode::KeyD as u32);
-                    // Saldırı tuşları: J=LightPunch, K=HeavyPunch, L=LightKick, U=HeavyKick
-                    am.bind_key("LightPunch", KeyCode::KeyJ as u32);
-                    am.bind_key("HeavyPunch", KeyCode::KeyK as u32);
-                    am.bind_key("LightKick",  KeyCode::KeyL as u32);
-                    am.bind_key("HeavyKick",  KeyCode::KeyU as u32);
-                    world.insert_resource(am);
-                }
-                
-                if let Ok(_am) = world.try_get_resource::<gizmo::core::input::ActionMap>() {
-                    // gizmo::physics::system::physics_fighter_system(world, input, &am);
-                }
-                
-                // Hit Detection: Hitbox ↔ Hurtbox çarpışma algılama
-                // let hit_events = gizmo::physics::system::hit_detection_system(world);
-                /*
-                for event in &hit_events {
-                    editor_state.log_info(&format!(
-                        "💥 HIT! Saldırgan:{} → Kurban:{} | Hasar: {:.1} | Pozisyon: ({:.1}, {:.1}, {:.1})",
-                        event.attacker_id, event.victim_id, event.damage,
-                        event.hit_point.x, event.hit_point.y, event.hit_point.z
-                    ));
-                }
-                */
-            }
-            
-            state.physics_accumulator -= fixed_dt;
-            steps += 1;
         }
+
+        // `editor_state` and `state` are separate bindings, so the console can be written
+        // from inside the callback: the step borrows `state.play`, the reporter borrows the
+        // editor, and neither is the other.
+        state
+            .play
+            .step(world, dt, input, &mut |r| log_play_report(editor_state, r));
     } else {
-        state.physics_accumulator = 0.0;
+        // Time does not pass in a stopped game; carrying the debt into the next ▶ would spend it
+        // all in one frame.
+        state.play.reset();
     }
 
     // --- FIGHT HUD SYNC: FighterController → EditorState.fight_hud ---
@@ -347,64 +260,35 @@ pub fn handle_simulation(
 mod tests {
     use gizmo::math::Vec3;
 
-    // Mirror of the fixed-timestep pump in `handle_simulation` (the play-mode physics
-    // loop). Same accumulator, same fixed_dt, same death-spiral clamp + 16-step cap.
-    // Returns (leftover_accumulator, steps_taken) so the invariants are observable
-    // without a live World / ScriptEngine / PhysicsWorld.
-    fn pump(mut accumulator: f32, dt: f32) -> (f32, u32) {
-        accumulator += dt;
-        let fixed_dt = 1.0 / 60.0;
-        // Death spiral önleme
-        accumulator = accumulator.min(fixed_dt * 16.0);
+    /// **The play frame is the engine's, and this file must not grow another one.**
+    ///
+    /// It used to be here: an accumulator, a step size, a cap and a script order — with the
+    /// exported game's runtime carrying its own copy of all four. The tests that stood here were
+    /// a *third* copy, a hand-written mirror of the pump they were guarding, which is a test that
+    /// cannot fail when the thing it mirrors changes. The loop now lives in
+    /// `gizmo::systems::PlayLoop`, is tested there against the real code, and both callers drive
+    /// it. This guards the arrangement rather than restating the arithmetic.
+    #[test]
+    fn the_play_frame_is_the_shared_step_not_a_copy_of_it() {
+        let src = include_str!("simulation.rs");
+        let code = src.split("#[cfg(test)]").next().unwrap_or("");
 
-        let mut steps = 0;
-        while accumulator >= fixed_dt && steps < 16 {
-            accumulator -= fixed_dt;
-            steps += 1;
+        assert!(
+            code.contains("state\n            .play\n            .step(") || code.contains(".play.step("),
+            "the editor must drive gizmo::systems::PlayLoop for its play frame"
+        );
+        for reimplemented in [
+            "physics_step_system(",
+            "physics_accumulator",
+            "flush_commands(",
+            "update_entity(",
+        ] {
+            assert!(
+                !code.contains(reimplemented),
+                "{reimplemented:?} is back in the editor's loop — the exported game and the \
+                 editor are two implementations of one contract again"
+            );
         }
-        (accumulator, steps)
-    }
-
-    /// One real-time frame at exactly the fixed rate advances the sim exactly once
-    /// and leaves (essentially) no leftover.
-    #[test]
-    fn pump_single_frame_is_one_step() {
-        let (leftover, steps) = pump(0.0, 1.0 / 60.0);
-        assert_eq!(steps, 1);
-        assert!(leftover.abs() < 1e-4, "leftover accumulator: {leftover}");
-    }
-
-    /// A sub-frame dt performs no step but banks time; two half-frames then trigger
-    /// exactly one step (accumulator carry-over invariant).
-    #[test]
-    fn pump_sub_frame_banks_then_steps() {
-        let (acc1, steps1) = pump(0.0, 1.0 / 120.0);
-        assert_eq!(steps1, 0, "half a frame must not step yet");
-        assert!(acc1 > 0.0);
-
-        let (acc2, steps2) = pump(acc1, 1.0 / 120.0);
-        assert_eq!(steps2, 1, "two half-frames = one step");
-        assert!(acc2.abs() < 1e-4, "leftover after the step: {acc2}");
-    }
-
-    /// A catastrophic hitch (1 full second) must NOT spiral: the accumulator is
-    /// clamped to 16*fixed_dt and the loop is hard-capped at 16 steps, so the sim
-    /// never tries to simulate a second of physics in one frame.
-    #[test]
-    fn pump_huge_dt_is_capped_at_16_steps() {
-        let (leftover, steps) = pump(0.0, 1.0);
-        assert_eq!(steps, 16, "step count must be capped");
-        // Clamp = 16*fixed_dt, exactly drained by 16 steps → ~0 leftover, and never
-        // the ~0.78s of un-simulated time a naive loop would carry.
-        assert!(leftover < 1.0 / 60.0, "leftover must be below one step: {leftover}");
-    }
-
-    /// Even with pre-existing banked time plus a big dt, the clamp holds the step
-    /// count at the 16 ceiling (idempotent under repeated overload).
-    #[test]
-    fn pump_overload_stays_capped_with_prior_accumulator() {
-        let (_, steps) = pump(0.5, 0.5);
-        assert_eq!(steps, 16);
     }
 
     // Mirror of the auto-fight-camera framing math in `handle_simulation`:
@@ -442,72 +326,10 @@ mod tests {
 
 #[cfg(test)]
 mod script_reload_tests {
-    use super::*;
-
-    /// A script that cannot load must be reported — once, and again only when it changes state.
-    ///
-    /// The studio discarded this result entirely (`let _ = engine.reload_if_changed(&path);`), and
-    /// the call after it, `update_entity`, returns `Ok(())` for a script it never loaded. So the
-    /// two places that knew both stayed quiet and the entity's script simply never ran. Reporting
-    /// it naively is no better: this runs per entity per frame, so an unconditional log is 60
-    /// identical lines a second on top of whatever the user is actually reading.
-    #[test]
-    fn a_broken_script_is_reported_once_and_its_recovery_too() {
-        let mut failed = std::collections::BTreeSet::new();
-        let path = "scripts/new_script.lua";
-
-        // Frame 1 — the file is not there. The editor's own `Script` component points here.
-        assert_eq!(
-            script_reload_report(&mut failed, path, Err("Script okunamadı".into())),
-            ScriptReload::Broke("Script okunamadı".into()),
-            "the first failure has to reach the console; nothing else in the chain says a word"
-        );
-
-        // Frames 2..n — still broken. Silence, or the console is unusable.
-        for _ in 0..120 {
-            assert_eq!(
-                script_reload_report(&mut failed, path, Err("Script okunamadı".into())),
-                ScriptReload::Quiet,
-                "a failure that is already on screen must not be printed again every frame"
-            );
-        }
-
-        // The user creates the file.
-        assert_eq!(
-            script_reload_report(&mut failed, path, Ok(true)),
-            ScriptReload::Recovered,
-            "coming back has to be reported too — otherwise the last word on screen is an error \
-             about a script that is now running fine"
-        );
-        assert_eq!(
-            script_reload_report(&mut failed, path, Ok(false)),
-            ScriptReload::Quiet,
-            "and then it goes quiet again"
-        );
-        assert!(failed.is_empty(), "a recovered path must not stay in the failed set");
-    }
-
-    /// Two broken scripts are two reports, not one: the set is keyed by path.
-    #[test]
-    fn each_script_is_tracked_on_its_own() {
-        let mut failed = std::collections::BTreeSet::new();
-        assert!(matches!(
-            script_reload_report(&mut failed, "a.lua", Err("yok".into())),
-            ScriptReload::Broke(_)
-        ));
-        assert!(
-            matches!(
-                script_reload_report(&mut failed, "b.lua", Err("yok".into())),
-                ScriptReload::Broke(_)
-            ),
-            "a second broken script was swallowed because the first one had already reported"
-        );
-        assert_eq!(
-            script_reload_report(&mut failed, "a.lua", Ok(true)),
-            ScriptReload::Recovered
-        );
-        assert_eq!(failed.iter().collect::<Vec<_>>(), ["b.lua"]);
-    }
+    // The reporting *decision* these used to cover moved into `gizmo::systems::play` with the
+    // loop that makes it, and is tested there. What stays here is the engine behaviour that made
+    // the decision necessary — it belongs wherever the engine is reachable, and it is the half a
+    // shared helper cannot assert about itself.
 
     /// The defect this guards is real, and this is the engine saying so.
     ///

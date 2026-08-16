@@ -160,13 +160,12 @@ fn render_scene(albedo: Vec4) -> Option<Frame> {
             editor_camera: cam.id(),
             game_camera: 4242,
             do_raycast: false,
-            physics_accumulator: 0.0,
+            play: gizmo::systems::PlayLoop::new(),
             asset_watcher: None,
             gc_timer: 0.0,
             autosave_timer: 0.0,
             visible_entity_count: 0,
             draw_call_count: 0,
-            failed_scripts: std::collections::BTreeSet::new(),
         };
 
         let format = renderer.config.format;
@@ -398,13 +397,12 @@ fn the_editor_casts_a_shadow_onto_the_ground() {
             editor_camera: cam.id(),
             game_camera: 4242,
             do_raycast: false,
-            physics_accumulator: 0.0,
+            play: gizmo::systems::PlayLoop::new(),
             asset_watcher: None,
             gc_timer: 0.0,
             autosave_timer: 0.0,
             visible_entity_count: 0,
             draw_call_count: 0,
-            failed_scripts: std::collections::BTreeSet::new(),
         };
 
         let format = renderer.config.format;
@@ -601,13 +599,12 @@ fn render_with_editor(
             editor_camera: editor_cam.id(),
             game_camera: game_cam.id(),
             do_raycast: false,
-            physics_accumulator: 0.0,
+            play: gizmo::systems::PlayLoop::new(),
             asset_watcher: None,
             gc_timer: 0.0,
             autosave_timer: 0.0,
             visible_entity_count: 0,
             draw_call_count: 0,
-            failed_scripts: std::collections::BTreeSet::new(),
         };
 
         // A throwaway swapchain-ish view: with an EditorRenderTarget present the pipeline clears
@@ -839,13 +836,12 @@ fn render_grid_scene(show_grid: bool) -> Option<Vec<u8>> {
             editor_camera: cam.id(),
             game_camera: 4242,
             do_raycast: false,
-            physics_accumulator: 0.0,
+            play: gizmo::systems::PlayLoop::new(),
             asset_watcher: None,
             gc_timer: 0.0,
             autosave_timer: 0.0,
             visible_entity_count: 0,
             draw_call_count: 0,
-            failed_scripts: std::collections::BTreeSet::new(),
         };
 
         let format = renderer.config.format;
@@ -1030,13 +1026,12 @@ fn shadow_scene(mode: gizmo::renderer::components::ShadowCasting) -> Option<Vec<
             editor_camera: cam.id(),
             game_camera: 4242,
             do_raycast: false,
-            physics_accumulator: 0.0,
+            play: gizmo::systems::PlayLoop::new(),
             asset_watcher: None,
             gc_timer: 0.0,
             autosave_timer: 0.0,
             visible_entity_count: 0,
             draw_call_count: 0,
-            failed_scripts: std::collections::BTreeSet::new(),
         };
 
         let format = renderer.config.format;

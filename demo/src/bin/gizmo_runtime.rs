@@ -9,23 +9,19 @@
 //!
 //! What a default runtime should open — physics? scripting? networking? — is the question that
 //! kept this unwritten, and answering it by taste would have produced a second, slightly
-//! different engine. So it is answered by reference instead: per frame this runs what
-//! `gizmo-studio`'s `handle_simulation` runs behind `is_playing()`, and nothing else.
+//! different engine. So it is not answered here at all: the frame is
+//! [`gizmo::systems::PlayLoop`], the same function the editor's ▶ drives. Scripts (shared pass →
+//! queued commands → per-entity update), then a 1/60 s fixed-step physics accumulator, then
+//! `default_render_pass` with SSR/SSGI/volumetric/TAA left on.
 //!
-//! 1. `ScriptEngine::update` → `flush_commands` → per-entity `update_entity`, with a script whose
-//!    file cannot be read reported once on the way in and once on the way out — a per-frame log
-//!    line is sixty identical lines a second.
-//! 2. A fixed-step physics accumulator: 1/60 s, at most 16 steps in a frame, and the debt itself
-//!    clamped to 16 steps so a slow frame cannot spiral.
-//! 3. `default_render_pass` — the same pass, with SSR/SSGI/volumetric/TAA left on.
+//! That is what makes "the exported game does what the editor showed you" a fact instead of a
+//! promise: there is nothing here to drift *from*. Only the reporting differs — the editor writes
+//! to its console, this writes to stdout — which is why `PlayLoop::step` takes the reporter as an
+//! argument.
 //!
-//! Picking Play mode as the definition is what makes the two paths comparable: "the exported game
-//! does what the editor showed you" stops being a promise and becomes a measurement. Where they
-//! differ, one of them is wrong — which is a bug report, not a design argument.
-//!
-//! Two knowing differences from `handle_simulation`, both because the missing part is the editor,
-//! not the game: there is no asset watcher (hot-reload is an authoring tool — a shipped game has
-//! no source to watch), and script logs go to stdout instead of the editor console.
+//! Two knowing differences from the editor, both because the missing part is the editor and not
+//! the game: no asset watcher (hot-reload is an authoring tool — a shipped game has no source to
+//! watch), and no default `ActionMap` scaffolding.
 //!
 //! ## Where the data comes from
 //!
@@ -41,26 +37,18 @@
 //! With no argument it opens `scenes/main.scene`, which is where the export writes the scene.
 
 use gizmo::prelude::*;
-use std::collections::BTreeSet;
+use gizmo::systems::{PlayLoop, PlayReport};
 use std::path::{Path, PathBuf};
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-/// The fixed simulation step. Same value as the editor's Play loop — see the module docs on why
-/// that is a contract and not a coincidence.
-const FIXED_DT: f32 = 1.0 / 60.0;
-/// Ceiling on the steps one frame may take, and on the debt the accumulator may carry.
-const MAX_STEPS: u32 = 16;
-
 /// The default scene, and the name the export writes.
 const DEFAULT_SCENE: &str = "scenes/main.scene";
 
-/// What the runtime carries between frames: the physics debt, and which scripts are currently
-/// failing to load (so the failure is reported on its edges rather than every frame).
+/// What the runtime carries between frames — all of it inside the shared play loop.
 struct RuntimeState {
-    physics_accumulator: f32,
-    failed_scripts: BTreeSet<String>,
+    play: PlayLoop,
 }
 
 /// The scene to open: the first argument, or the exported default.
@@ -82,23 +70,25 @@ fn exported_layout_root<'a>(exe_dir: &'a Path, is_dir: &dyn Fn(&Path) -> bool) -
     }
 }
 
-/// What to say about one script's reload attempt. Reporting needs a memory or it is sixty
-/// identical lines a second; `failed` is that memory, so a break is announced once and so is the
-/// recovery. (The editor keeps its own copy of this decision in `gizmo-studio`; the two are the
-/// same rule for the same reason, and they are the first thing to merge if a third caller
-/// appears.)
-fn report_reload(failed: &mut BTreeSet<String>, path: &str, result: Result<bool, String>) {
-    match result {
-        Ok(_) => {
-            if failed.remove(path) {
-                println!("✅ Script yeniden yüklendi: {path}");
-            }
+/// Where a shipped game's messages go: the console it was launched from. The editor's copy of
+/// this match writes the same events to its own console — that difference is the only one the
+/// two paths have, which is why it is the part that is injected.
+fn print_report(report: PlayReport<'_>) {
+    match report {
+        PlayReport::ScriptError { error } => eprintln!("Script hatası: {error}"),
+        PlayReport::EntityScriptError {
+            entity,
+            path,
+            error,
+        } => eprintln!("Entity {entity} script hatası ({path}): {error}"),
+        PlayReport::ScriptBroke { path, error } => {
+            eprintln!("❌ Script yüklenemedi: {path} — {error}. Entity'nin script'i ÇALIŞMIYOR.")
         }
-        Err(e) => {
-            if failed.insert(path.to_string()) {
-                eprintln!("❌ Script yüklenemedi: {path} — {e}. Entity'nin script'i ÇALIŞMIYOR.");
-            }
-        }
+        PlayReport::ScriptRecovered { path } => println!("✅ Script yeniden yüklendi: {path}"),
+        PlayReport::ScriptLog { level, message } => match level {
+            "error" | "warn" => eprintln!("[Lua] {message}"),
+            _ => println!("[Lua] {message}"),
+        },
     }
 }
 
@@ -120,68 +110,14 @@ fn setup(world: &mut World, _renderer: &Renderer) -> RuntimeState {
     }
 
     RuntimeState {
-        physics_accumulator: 0.0,
-        failed_scripts: BTreeSet::new(),
+        play: PlayLoop::new(),
     }
 }
 
-/// One frame of the game: scripts, then physics. Mirrors `handle_simulation`'s `is_playing()`
-/// branch step for step.
+/// One frame of the game. The frame itself is the engine's; only where the messages land is this
+/// binary's business.
 fn update(world: &mut World, state: &mut RuntimeState, dt: f32, input: &Input) {
-    if world
-        .try_get_resource::<gizmo::scripting::ScriptEngine>()
-        .is_ok()
-    {
-        world.resource_scope(|world, engine: &mut gizmo::scripting::ScriptEngine| {
-            if let Err(e) = engine.update(world, input, dt) {
-                eprintln!("Script Error: {e}");
-            }
-
-            // Audio and scene commands a script asked for that nothing here consumes. The editor
-            // drops them on purpose (it must not switch scenes under the author); a shipped game
-            // has no such reason, so this is where scene switching would be implemented.
-            let _unhandled = engine.flush_commands(world, dt);
-
-            // Per-entity `on_update`. The entity's own property overrides ride along: scripts are
-            // cached per path, so a per-entity value cannot live in the shared Lua environment.
-            let mut entity_calls = Vec::new();
-            {
-                let scripts = world.borrow::<gizmo::scripting::Script>();
-                for (entity_id, script) in scripts.iter() {
-                    entity_calls.push((
-                        entity_id,
-                        script.file_path.clone(),
-                        script.properties.clone(),
-                    ));
-                }
-            }
-            for (entity_id, path, properties) in entity_calls {
-                report_reload(&mut state.failed_scripts, &path, engine.reload_if_changed(&path));
-                if let Err(e) = engine.update_entity(entity_id, &path, dt, &properties) {
-                    eprintln!("Entity script error: {e}");
-                }
-            }
-
-            if let Ok(mut logs) = engine.log_queue.lock() {
-                for (level, msg) in logs.drain(..) {
-                    match level.as_str() {
-                        "error" => eprintln!("[Lua] {msg}"),
-                        "warn" => eprintln!("[Lua] {msg}"),
-                        _ => println!("[Lua] {msg}"),
-                    }
-                }
-            }
-        });
-    }
-
-    state.physics_accumulator =
-        (state.physics_accumulator + dt).min(FIXED_DT * MAX_STEPS as f32);
-    let mut steps = 0;
-    while state.physics_accumulator >= FIXED_DT && steps < MAX_STEPS {
-        gizmo::physics::system::physics_step_system(world, FIXED_DT);
-        state.physics_accumulator -= FIXED_DT;
-        steps += 1;
-    }
+    state.play.step(world, dt, input, &mut print_report);
 }
 
 fn render(
@@ -275,18 +211,23 @@ mod tests {
         );
     }
 
+    /// The frame belongs to the engine. If this binary ever grows its own accumulator or its own
+    /// script order again, the export's promise ("it does what Play mode did") quietly becomes
+    /// two implementations of one contract — which is exactly what it was before.
     #[test]
-    fn a_broken_script_is_announced_once_and_so_is_its_recovery() {
-        let mut failed = BTreeSet::new();
+    fn the_frame_is_the_shared_play_step_not_a_copy_of_it() {
+        let src = include_str!("gizmo_runtime.rs");
+        let code = src.split("#[cfg(test)]").next().unwrap_or("");
 
-        report_reload(&mut failed, "scripts/a.lua", Err("yok".into()));
-        assert!(failed.contains("scripts/a.lua"));
-
-        // Still broken, same way: already remembered, so nothing new to say.
-        report_reload(&mut failed, "scripts/a.lua", Err("yok".into()));
-        assert_eq!(failed.len(), 1);
-
-        report_reload(&mut failed, "scripts/a.lua", Ok(true));
-        assert!(failed.is_empty(), "recovery forgets it, so the next break is news again");
+        assert!(
+            code.contains("play.step("),
+            "the runtime must drive gizmo::systems::PlayLoop"
+        );
+        for reimplemented in ["physics_step_system(", "flush_commands(", "update_entity("] {
+            assert!(
+                !code.contains(reimplemented),
+                "the runtime re-implements {reimplemented:?} instead of sharing the play step"
+            );
+        }
     }
 }

@@ -1551,8 +1551,33 @@ Uçtan uca doğrulandı: `gizmo_runtime` + `scenes/main.scene`'den ibaret bir di
 **başka bir çalışma dizininden, argümansız** çalıştırıldı — kendi dizinini bulup sahneyi açtı ve
 çizdi.
 
-Kalan tek adım: Play modu ile runtime'ın davranış eşitliğinin testi (aynı sahne, N kare, aynı
-state).
+#### Sözleşme iddia değil, tek kod oldu: `PlayLoop` (2026-08-16)
+
+Son adım "iki yolun davranış eşitliğini test et" diye planlanmıştı. Doğrusu test değildi:
+**eşitliği sınamak yerine ortadan kaldırmak.** Koşan bir oyunun karesi artık
+`gizmo::systems::PlayLoop::step` — editörün ▶'si de, export edilen oyun da onu çağırıyor. Tek
+akümülatör, tek adım boyu, tek script sırası.
+
+İkisinin meşru olarak ayrıldığı tek şey **kimin duyduğu**: bozuk bir script editörde kırmızı bir
+konsol satırı, gönderilmiş oyunda stderr satırı. O yüzden raporlama enjekte ediliyor
+(`PlayReport`), kararların hiçbiri değil.
+
+Bu, üç kopyayı bire indirdi — ve üçüncüsü testin kendisiydi: stüdyonun testleri koruduğu pump'ın
+**elle yazılmış bir aynasını** çalıştırıyordu ("Mirror of the fixed-timestep pump"), yani
+korudukları şey değiştiğinde kırılamayan bir test. Aritmetik artık gerçek kodun üstünde
+sınanıyor; iki tarafta kalan testler ise düzeni koruyor: `the_play_frame_is_the_shared_step_not_a_copy_of_it`
+(stüdyo) ve `the_frame_is_the_shared_play_step_not_a_copy_of_it` (runtime) — birinde
+`physics_accumulator` ya da `update_entity` yeniden belirirse kırmızıya düşüyorlar.
+
+Ölçü ve sınırlar yazılı hâlde taşındı: `MAX_STEPS`'in hem kare başına adımı hem **borcu** birden
+sınırlaması (yalnız adım sayısını sınırlamak, kırk saniye boyunca hızlı ileri sarma demek) artık
+`a_long_stall_does_not_buy_hundreds_of_steps_or_leave_them_owed` ile tutuluyor.
+
+Editörde kalan tek fark bilerek: varsayılan `ActionMap` iskelesi. İki satır altında çağrısı yorum
+satırına alınmış bir dövüş sistemi için yazılmıştı, yani koşan bir oyunun parçası değil; bir oyunun
+gerçekten ihtiyaç duyduğu tuş eşlemesi sahnede durmalı, o zaman iki yol da alır.
+
+Refactor'dan sonra runtime aynı sahneyi birebir aynı kareyle çiziyor.
 
 ### God fonksiyon taraması (2026-08-15)
 

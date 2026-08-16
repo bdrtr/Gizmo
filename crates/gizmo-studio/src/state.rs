@@ -6,7 +6,10 @@ pub struct StudioState {
     pub editor_camera: u32,
     pub game_camera: u32,
     pub do_raycast: bool,
-    pub physics_accumulator: f32,
+    /// The running game's frame — the *same* loop an exported game runs
+    /// ([`gizmo::systems::PlayLoop`]). It carries the physics debt and which scripts are currently
+    /// failing to load; both used to be fields here, next to a copy of the loop that used them.
+    pub play: gizmo::systems::PlayLoop,
     pub asset_watcher: Option<gizmo::renderer::hot_reload::AssetWatcher>,
     /// Garbage Collection zamanlayıcı — soft-deleted entity'leri temizler
     pub gc_timer: f32,
@@ -16,9 +19,6 @@ pub struct StudioState {
     pub visible_entity_count: u32,
     /// Son frame'deki draw call sayısı
     pub draw_call_count: u32,
-    /// Script paths whose last load attempt failed, so the console is told once instead of 60
-    /// times a second. See `script_reload_report`.
-    pub failed_scripts: std::collections::BTreeSet<String>,
 }
 
 /// GPU resources used to render editor debug gizmos (primitive meshes and a

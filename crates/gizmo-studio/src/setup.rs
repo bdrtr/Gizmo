@@ -315,13 +315,12 @@ world.insert_resource(editor_state);
         editor_camera: cam.id(),
         game_camera: game_cam.id(),
         do_raycast: false,
-        physics_accumulator: 0.0,
+        play: gizmo::systems::PlayLoop::new(),
         asset_watcher: gizmo::renderer::hot_reload::AssetWatcher::new(&["demo/assets", "scripts"]),
         gc_timer: 0.0,
         autosave_timer: 0.0,
         visible_entity_count: 0,
         draw_call_count: 0,
-        failed_scripts: std::collections::BTreeSet::new(),
     }
 }
 

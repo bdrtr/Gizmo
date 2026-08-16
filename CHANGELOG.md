@@ -25,10 +25,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `demo/src/bin/`), writes the world the editor is showing to `export/gizmo_game/scenes/main.scene`,
   and only claims the game is ready when the scene actually landed.
 
-  The runtime's contract is the editor's Play mode by reference, not by taste: script engine
-  update → command flush → per-entity update, a 1/60 s fixed-step physics accumulator capped at 16
-  steps, and `default_render_pass`. "The exported game does what the editor showed you" is
-  therefore a comparison rather than a promise. An exported directory is self-contained, so the
+  The runtime's contract is the editor's Play mode, and not by resemblance: both drive the same
+  `gizmo::systems::PlayLoop` — one accumulator, one step size, one script order — with only the
+  reporting injected, because a broken script is a console line in the editor and a stderr line in
+  a shipped game. "The exported game does what the editor showed you" is therefore not a promise
+  to keep but a thing with nothing to drift from. (`PlayLoop` is new public API on the facade,
+  behind the existing `physics` feature.) An exported directory is self-contained, so the
   runtime makes it the working directory and the editor's relative paths keep meaning what they
   meant; with no argument it opens `scenes/main.scene`.
 
