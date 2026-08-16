@@ -67,6 +67,12 @@ cargo build -p demo-web --target wasm32-unknown-unknown --release
 # branch is invisible to the native clippy job, and two real violations were living there.
 cargo clippy --target wasm32-unknown-unknown -p demo-web \
   -- -D warnings -A clippy::too_many_arguments -A clippy::type_complexity
+
+# `gizmo-editor` is linted for wasm too (added 2026-08-16) even though the browser build does not
+# ship an editor: the crate declares wasm intent (target-gated `gizmo-scripting`, `web-time`,
+# cfg'd items), nothing ever compiled that arm, and it had stopped building for wasm entirely.
+cargo clippy --target wasm32-unknown-unknown -p gizmo-editor \
+  -- -D warnings -A clippy::too_many_arguments -A clippy::type_complexity
 ```
 
 ## Environment / machine constraints

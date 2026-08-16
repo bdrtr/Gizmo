@@ -316,17 +316,27 @@ fn draw_build_menu(ui: &mut egui::Ui, state: &mut EditorState) {
 fn spawn_scene_dialog(state: &mut EditorState, saving: bool) {
     let (tx, rx) = std::sync::mpsc::channel();
     state.pending_dialog_rx = Some(std::sync::Mutex::new(rx));
-    let scene_path = state.scene_path.clone();
-    std::thread::spawn(move || {
-        let mut initial_dir = std::path::PathBuf::from(".");
-        if let Some(parent) = std::path::Path::new(&scene_path).parent() {
-            if parent.exists() && parent.is_dir() {
-                initial_dir = parent.to_path_buf();
-            }
-        }
 
-        #[cfg(not(target_arch = "wasm32"))]
-        {
+    // The browser has no native file dialog, and `std::thread::spawn` is not supported on
+    // `wasm32-unknown-unknown` either — it does not run the closure, it panics. So the wasm arm
+    // answers "cancelled" on the spot rather than spawning a thread that cannot exist. It used to
+    // share the native path's thread, which meant Save/Load in a browser build panicked on click.
+    #[cfg(target_arch = "wasm32")]
+    let _ = tx.send((saving, None));
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let scene_path = state.scene_path.clone();
+        std::thread::spawn(move || {
+            // Derived inside the native arm because it exists only for `set_directory`. Outside,
+            // it was computed on wasm too and thrown away — dead work the native lint could not
+            // see, since it reads as used on the target it compiles for.
+            let initial_dir = std::path::Path::new(&scene_path)
+                .parent()
+                .filter(|p| p.is_dir())
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| std::path::PathBuf::from("."));
+
             let dialog = rfd::FileDialog::new()
                 .add_filter("Gizmo Scene", &["scene"])
                 .set_directory(&initial_dir);
@@ -338,10 +348,8 @@ fn spawn_scene_dialog(state: &mut EditorState, saving: bool) {
                     s.strip_prefix(r"\\?\").map(str::to_string).unwrap_or(s)
                 }),
             ));
-        }
-        #[cfg(target_arch = "wasm32")]
-        let _ = tx.send((saving, None));
-    });
+        });
+    }
 }
 
 /// The prototype's mark: an accent square with a crosshair knocked out of it, then GIZMO in

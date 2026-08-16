@@ -871,6 +871,16 @@ already auto-vectorized). DO NOT RETRY without passing the step-0 gate again. (T
     targeted `#[cfg_attr(target_arch = "wasm32", allow(dead_code))]` with that reason written
     down. Worth noting *how* it surfaced: nothing in the native workspace was red — the break sat
     at HEAD for three commits, and the wasm gate is the only thing that sees this class of defect.
+  - **`gizmo-editor` joined the gate** (2026-08-16), and it had already rotted. The crate declares
+    wasm intent — `gizmo-scripting` is a `cfg(not(target_arch = "wasm32"))` dependency, `web-time`
+    a wasm one, and items are cfg'd to match — but nothing ever compiled that arm, because
+    `demo-web` does not enable the facade's editor feature. It had stopped building for wasm
+    outright: a scripting-only inspector function was added without the `cfg` its neighbour
+    carries. Beside it, a `let mut initial_dir` that is dead once the native arm is stripped, and
+    a `std::thread::spawn` on the wasm path — which on `wasm32-unknown-unknown` does not run the
+    closure, it panics, so Save/Load in a browser build would have panicked on click. Three
+    defects in one crate, none visible to any native job. The editor is still **not shipped** in
+    the browser; it is compiled there so its cfg arms stay honest.
 
 ## Nerede kaldık (2026-08-14 → 15)
 

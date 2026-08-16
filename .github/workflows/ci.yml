@@ -256,6 +256,15 @@ jobs:
             -p gizmo-physics-soft -p gizmo-ai -p gizmo-animation -p gizmo-scene \
             -p gizmo-renderer \
             -- -D warnings -A clippy::too_many_arguments -A clippy::type_complexity
+          # `gizmo-editor` is NOT shipped in the browser — `demo-web` does not enable the facade's
+          # editor feature. It is linted here anyway because the crate *declares* wasm intent:
+          # `gizmo-scripting` is a `cfg(not(target_arch = "wasm32"))` dependency, `web-time`
+          # a wasm one, and items are cfg'd accordingly. Nothing compiled that arm, so it rotted:
+          # a scripting-only function lost its `cfg` and the crate stopped building for wasm
+          # entirely, plus a `let mut` that is dead once the native arm is stripped. Neither was
+          # visible to any other job. (2026-08-16)
+          cargo clippy --locked --target wasm32-unknown-unknown -p gizmo-editor \
+            -- -D warnings -A clippy::too_many_arguments -A clippy::type_complexity
           cargo clippy --locked --target wasm32-unknown-unknown -p gizmo-app \
             --no-default-features --features render,physics,scene \
             -- -D warnings -A clippy::too_many_arguments -A clippy::type_complexity
