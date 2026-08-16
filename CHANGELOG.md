@@ -16,6 +16,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`Renderer::headless_device()` and `Renderer::new_headless_with_device(..)`** — build several
+  headless renderers on one `wgpu::Device`. `new_headless` is now a thin wrapper over the pair and
+  behaves exactly as before. This is what the test suites needed: a renderer per test (they carry
+  TAA/GI history between frames, so sharing one breaks the "single frame from a clean state" the
+  golden tests are written against), but *not* a device per test — one device per renderer is what
+  made the GPU tests flaky at workspace scale and what makes a long sweep die outright
+  (`radv/amdgpu: Not enough memory for command submission`, measured at ~17 devices).
+
 ### Removed
 
 - **The GPU mesh-culling subsystem, which never ran.** `gizmo_renderer::gpu_cull` — `GpuCullState`,

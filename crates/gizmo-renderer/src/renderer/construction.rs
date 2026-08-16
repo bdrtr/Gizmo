@@ -325,10 +325,18 @@ impl Renderer {
     /// the windowed [`Renderer::new`], so every GPU subsystem initialises identically.
     ///
     /// `format` defaults to `Rgba8UnormSrgb` when `None`.
-    pub async fn new_headless(width: u32, height: u32, format: Option<wgpu::TextureFormat>) -> Self {
-        let width = width.max(1);
-        let height = height.max(1);
-
+    /// Acquire a headless GPU device: an instance, a high-performance adapter and a device with
+    /// this engine's limits. No surface, no window.
+    ///
+    /// Split out of [`new_headless`](Self::new_headless) so a caller that builds SEVERAL headless
+    /// renderers can build them all on ONE device. That is not a micro-optimisation: creating a
+    /// device per renderer is what made the golden-image tests flaky (a driver-level crash under
+    /// sustained load, no panic and no test name), and what makes a long sweep die with
+    /// `radv/amdgpu: Not enough memory for command submission` — measured at ~17 devices on this
+    /// machine. Sharing the *renderer* is not an option (it carries TAA/GI history between
+    /// frames, which every golden test's "one frame from a clean state" assumption depends on);
+    /// sharing the device is.
+    pub async fn headless_device() -> (wgpu::Device, wgpu::Queue) {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
             flags: wgpu::InstanceFlags::default(),
@@ -350,7 +358,7 @@ impl Renderer {
             .await
             .expect("Headless Renderer: hiçbir GPU adapter bulunamadı");
 
-        let (device, queue) = adapter
+        adapter
             .request_device(&wgpu::DeviceDescriptor {
                 required_features: wgpu::Features::POLYGON_MODE_LINE,
                 required_limits: wgpu::Limits {
@@ -365,8 +373,21 @@ impl Renderer {
                 trace: wgpu::Trace::Off,
             })
             .await
-            .expect("Headless Renderer: request_device başarısız");
+            .expect("Headless Renderer: request_device başarısız")
+    }
 
+    /// Build a headless renderer on a device the caller already has.
+    ///
+    /// See [`headless_device`](Self::headless_device) for why this exists.
+    pub fn new_headless_with_device(
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        width: u32,
+        height: u32,
+        format: Option<wgpu::TextureFormat>,
+    ) -> Self {
+        let width = width.max(1);
+        let height = height.max(1);
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             format: format.unwrap_or(wgpu::TextureFormat::Rgba8UnormSrgb),
@@ -374,9 +395,9 @@ impl Renderer {
             height,
             present_mode: wgpu::PresentMode::AutoNoVsync,
             alpha_mode: wgpu::CompositeAlphaMode::Auto,
-            // See the windowed config above: `Auto` is the variant that reproduces wgpu's
-            // pre-30 behaviour, and a dependency bump is the wrong place to change how colour
-            // reaches the screen — least of all in the headless path the golden tests read.
+            // See the windowed config: `Auto` is the variant that reproduces wgpu's pre-30
+            // behaviour, and a dependency bump is the wrong place to change how colour reaches
+            // the screen — least of all in the headless path the golden tests read.
             color_space: wgpu::SurfaceColorSpace::Auto,
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
@@ -389,6 +410,11 @@ impl Renderer {
             config,
             winit::dpi::PhysicalSize::new(width, height),
         )
+    }
+
+    pub async fn new_headless(width: u32, height: u32, format: Option<wgpu::TextureFormat>) -> Self {
+        let (device, queue) = Self::headless_device().await;
+        Self::new_headless_with_device(device, queue, width, height, format)
     }
 
     /// Surface-agnostic tail of construction: configures the surface, builds the

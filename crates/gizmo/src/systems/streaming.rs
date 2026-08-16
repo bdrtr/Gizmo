@@ -194,7 +194,7 @@ mod tests {
     /// Headless Renderer + AssetServer + a primary camera (at the origin) + a Material entity
     /// with a `dummy.png` texture_source, close (1 m) to the camera. Returns `mat_id`.
     fn setup() -> (World, u32) {
-        let renderer = pollster::block_on(Renderer::new_headless(64, 64, None));
+        let renderer = pollster::block_on(crate::test_gpu::headless_renderer(64, 64));
         let mut world = World::new();
 
         let cam = world.spawn();

@@ -31,3 +31,35 @@ pub(crate) fn gpu_lock() -> std::sync::MutexGuard<'static, ()> {
     static GPU: std::sync::Mutex<()> = std::sync::Mutex::new(());
     GPU.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
+
+/// A headless [`Renderer`](gizmo_renderer::Renderer) built on **the one device this test binary
+/// owns**.
+///
+/// Every golden test needs its own renderer — it carries TAA/GI history between frames, and the
+/// tests are written as "one frame from a clean state" — but nothing needs its own *device*.
+/// Creating one per renderer is what `docs/FIXPLAN.md` measured as the residual flake (a
+/// driver-level crash with no panic and no test name), and this file had grown from ~5 such
+/// devices to 15 as the render guards were added; the same shape kills a long sweep outright
+/// (`radv/amdgpu: Not enough memory for command submission`, measured at ~17 devices).
+///
+/// The device is created once, on the first call, and lives for the process — which is what makes
+/// the count 1 no matter how many renderers the suite builds.
+pub(crate) async fn headless_renderer(width: u32, height: u32) -> gizmo_renderer::Renderer {
+    use std::sync::OnceLock;
+    static DEVICE: OnceLock<(wgpu::Device, wgpu::Queue)> = OnceLock::new();
+
+    // `get_or_init` cannot await, and the acquisition is behind `gpu_lock()` at every call site
+    // anyway, so the race this looks like cannot happen: only one test runs GPU work at a time.
+    if DEVICE.get().is_none() {
+        let dq = gizmo_renderer::Renderer::headless_device().await;
+        let _ = DEVICE.set(dq);
+    }
+    let (device, queue) = DEVICE.get().expect("device just initialised");
+    gizmo_renderer::Renderer::new_headless_with_device(
+        device.clone(),
+        queue.clone(),
+        width,
+        height,
+        None,
+    )
+}

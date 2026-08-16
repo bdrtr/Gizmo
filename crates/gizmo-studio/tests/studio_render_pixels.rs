@@ -47,6 +47,22 @@ use gizmo_studio::StudioState;
 /// `#[cfg(test)]`-private to that crate, so this binary needs its own.
 static GPU_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// A renderer on **the one device this test binary owns**.
+///
+/// Each test still needs its own `Renderer` — it carries TAA/GI history between frames and these
+/// tests are "one frame from a clean state" — but not its own device. Creating one per test is
+/// what `docs/FIXPLAN.md` measured as the residual GPU flake, and this binary was making six.
+async fn shared_device_renderer(width: u32, height: u32) -> Renderer {
+    use std::sync::OnceLock;
+    static DEVICE: OnceLock<(wgpu::Device, wgpu::Queue)> = OnceLock::new();
+    // Every caller holds `gpu_lock()` for its whole body, so this cannot race.
+    if DEVICE.get().is_none() {
+        let _ = DEVICE.set(Renderer::headless_device().await);
+    }
+    let (device, queue) = DEVICE.get().expect("device just initialised");
+    Renderer::new_headless_with_device(device.clone(), queue.clone(), width, height, None)
+}
+
 fn gpu_lock() -> std::sync::MutexGuard<'static, ()> {
     // A test that panicked while holding it poisoned it; that says nothing about the GPU.
     GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner())
@@ -103,7 +119,7 @@ fn render_scene(albedo: Vec4) -> Option<Frame> {
     }
 
     pollster::block_on(async {
-        let mut renderer = Renderer::new_headless(W, H, None).await;
+        let mut renderer = shared_device_renderer(W, H).await;
         let mut asset_manager = AssetManager::new();
         let mut world = World::new();
 
@@ -340,7 +356,7 @@ fn the_editor_casts_a_shadow_onto_the_ground() {
 
     const S: u32 = 256;
     let frame = pollster::block_on(async {
-        let mut renderer = Renderer::new_headless(S, S, None).await;
+        let mut renderer = shared_device_renderer(S, S).await;
         let mut am = AssetManager::new();
         let mut world = World::new();
         let tex = am.create_white_texture(
@@ -504,7 +520,7 @@ fn render_with_editor(
     tweak: impl FnOnce(&mut gizmo::editor::EditorState),
 ) -> (Vec<u8>, Vec<u8>) {
     pollster::block_on(async {
-        let mut renderer = Renderer::new_headless(W, H, None).await;
+        let mut renderer = shared_device_renderer(W, H).await;
         let mut am = AssetManager::new();
         let mut world = World::new();
         let tex = am.create_white_texture(
@@ -788,7 +804,7 @@ fn the_show_grid_preference_hides_the_grid() {
 /// A scene that is nothing but the editor grid, rendered with `show_grid` set either way.
 fn render_grid_scene(show_grid: bool) -> Option<Vec<u8>> {
     pollster::block_on(async {
-        let mut renderer = Renderer::new_headless(W, H, None).await;
+        let mut renderer = shared_device_renderer(W, H).await;
         let mut am = AssetManager::new();
         let mut world = World::new();
         let tex = am.create_white_texture(
@@ -974,7 +990,7 @@ fn per_object_shadow_casting_controls_the_shadow_and_the_object() {
 fn shadow_scene(mode: gizmo::renderer::components::ShadowCasting) -> Option<Vec<u8>> {
     const S: u32 = 256;
     Some(pollster::block_on(async {
-        let mut renderer = Renderer::new_headless(S, S, None).await;
+        let mut renderer = shared_device_renderer(S, S).await;
         let mut am = AssetManager::new();
         let mut world = World::new();
         let tex = am.create_white_texture(
@@ -1233,7 +1249,7 @@ fn render_decal_frame(with_decal: bool) -> Option<Vec<u8>> {
     }
 
     pollster::block_on(async {
-        let mut renderer = Renderer::new_headless(W, H, None).await;
+        let mut renderer = shared_device_renderer(W, H).await;
         let mut asset_manager = AssetManager::new();
         let mut world = World::new();
         let tex = asset_manager.create_white_texture(

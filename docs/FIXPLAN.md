@@ -212,11 +212,38 @@ tekrarlanabilirlik. Davranış (görsel) değiştirdiği için Faz A kapsamına 
 > tanımı gereği yapamayacağı şey. Somut `App` alan düz bir fonksiyona çevrildi; gerekçesi orada
 > yazılı.
 
-### ⬜ A-followup — `Transform`'u `gizmo-core`'a taşı
-A2'nin ortaya çıkardığı asıl mimari kusur: motorun en temel uzamsal tipi bir *fizik*
-crate'inde duruyor. `gizmo-physics-core`'un facade'da zorunlu olması bunu şimdilik
-gizliyor ama fizik crate'lerini bağımsız paketlemeyi (D1) zorlaştırıyor ve
-"transform istiyorum ama fizik istemiyorum" tüketicisini imkânsız kılıyor.
+### ✅ A-followup — `Transform`'u `gizmo-core`'a taşı *(2026-08-17: ÖLÇÜLDÜ, TAŞINMIYOR)*
+> Madde şuydu: "motorun en temel uzamsal tipi bir *fizik* crate'inde duruyor; bu, fizik
+> crate'lerini bağımsız paketlemeyi zorlaştırıyor ve 'transform istiyorum ama fizik istemiyorum'
+> tüketicisini imkânsız kılıyor." Üç ölçüm bunun ikinci yarısını çürüttü, birinci yarısının
+> bedelini de ortaya koydu.
+>
+> **1. O tüketici zaten bedel ödemiyor.** `gizmo-physics-core`'a bağlanmak bugün şunları çekiyor:
+> `arrayvec`, `gizmo-core`, `gizmo-math`, `rustc-hash`, `serde`, `tracing`. Solver yok, `rayon`
+> yok, integrator yok — çünkü simülasyon `gizmo-physics-rigid`'te. CLAUDE.md'nin feature notu bunu
+> zaten söylüyor: `physics` özelliği *simülasyonu* kapılar, uzamsal tipleri değil. Yani şikâyet
+> işlevsel değil, **isimsel**.
+>
+> **2. Taşımanın bedeli ölçüldü ve §4'ün özellikle koruduğu bir şeyi bozuyor.** `gizmo-core`'un
+> kaynaklarında bugün **tek bir `gizmo_math`/glam referansı yok** — 11 Stage A crate'i içinde
+> yüzeyinde glam OLMAYAN üçten biri (ötekiler `gizmo-audio`, `gizmo-net`). `Transform`'u oraya
+> koymak `gizmo-core → gizmo-math` kenarını ekler ve glam'i motorun tabanının public yüzeyine
+> taşır: bir glam major'ı bugün 8 crate'i kırıyor, sonra 9'unu kıracak ve dokuzuncusu herkesin
+> bağımlı olduğu taban olacak.
+>
+> **3. Ve mevcut düzenin, taşımanın yok edeceği bir özelliği var:** `gizmo-physics-core`'un
+> `gizmo-core` bağımlılığı **opsiyonel**. Yani `Transform` bugün ECS olmadan da kullanılabiliyor;
+> core'a taşınırsa tipi kullanan herkes ECS'i de almak zorunda kalır.
+>
+> **Karar: taşınmıyor.** Yapılan şey isimsel karışıklığı gidermek: `gizmo-physics-core`'un
+> *uzamsal sözlük* crate'i olduğu (Transform + collider şekilleri + AABB) belgelerde açıkça
+> yazılı.
+>
+> **Ödenmesi gerekirse iki şekli var ve ikisi de yazılı olsun:** (a) `Transform` core'a taşınır ve
+> core'un glam bağımsızlığı bilinçli olarak feda edilir; (b) `bevy_transform` gibi ayrı bir
+> uzamsal crate açılır (core + math'e bağlı, fiziğe değil). **Tetikleyici** ikisi için de aynı:
+> D1'in (fizik crate'lerini bağımsız paketleme) gerçekten yapılması, ya da tipi fizik sözlüğü
+> olmadan isteyen somut bir tüketici. Bugün ikisi de yok.
 
 ### ✅ A7 — Doc-test'ler gerçekten çalışsın — **KAPANDI** *(2026-08-08)*
 > **Workspace'te sıfır `ignore` kaldı.** Çalışan doc-test: **17 → 45**, 0 başarısız,
@@ -1150,7 +1177,25 @@ impulse_scale = 0` değil — geri besleme terimi var.
 >   düştü (duvar-saati iddiası olan bir süre testi, makine yükü altında). Ayrı sorun,
 >   ölçülmedi.
 
-### ⬜ GPU test flake'i — kısmen çözüldü, kalanı ölçüldü *(önceki tur; `gizmo` tarafı)*
+### ✅ GPU test flake'i — kalan sebep (cihaz sayısı) kaldırıldı *(2026-08-17)*
+> **Yapılan: cihazı paylaş, renderer'ı DEĞİL** — maddenin kendi yazdığı "doğru çözüm", ve artık
+> gerekli constructor var: `Renderer::headless_device()` + `Renderer::new_headless_with_device(..)`.
+> `new_headless` ikisinin üstüne ince bir sarmalayıcı, davranışı aynı.
+>
+> Her test hâlâ **taze bir `Renderer`** alıyor (TAA/GI geçmişi kareler arası taşınıyor; golden
+> testlerin tamamı "temiz durumdan tek kare" varsayımına dayanıyor — paylaşılan renderer denemesi
+> bu yüzden reddedilmişti), ama hepsi tek bir `wgpu::Device` üzerinde kuruluyor.
+>
+> **Sayılar.** `gizmo` lib testleri **16 cihaz → 1** (bu turda eklenen "kareye ulaşıyor mu"
+> bekçileriyle 5'ten 15'e çıkmıştı; `streaming`'in kendi başına açtığı cihaz da dahil edildi),
+> `gizmo-studio` piksel testleri **6 → 1**. İki ikili toplamı **22 → 2**.
+>
+> Doğrulama: `gizmo` lib testleri arka arkaya 3 koşu, 98/98 temiz (~45 s); stüdyo piksel testleri
+> 11/11 temiz. Aynı sebep bu turda ayrıca ölçülmüştü: tek bir taramada ~17 cihaz açmak
+> `radv/amdgpu: Not enough memory for command submission` ile cihaz kaybına yol açıyor — yani bu
+> yalnız bir test flake'i değil, ölçüm aracının tavanıydı.
+
+### (eski kayıt) GPU test flake'i — kısmen çözüldü, kalanı ölçüldü *(önceki tur; `gizmo` tarafı)*
 `crates/gizmo/src/systems/render/mod.rs`'teki golden-image testleri her biri kendi wgpu
 cihazını açıyordu ve `cargo test` bir binary'nin testlerini paralel koşturuyor → eşzamanlı
 cihaz oluşturma sürücüde **SIGSEGV**'e dönüyor, tüm workspace koşusunu düşürüyordu.

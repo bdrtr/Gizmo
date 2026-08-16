@@ -654,7 +654,7 @@ mod golden_render_tests {
     async fn render_translated(offset: Vec3) -> Vec<u8> {
         const W: u32 = 128;
         const H: u32 = 128;
-        let mut renderer = Renderer::new_headless(W, H, None).await;
+        let mut renderer = crate::test_gpu::headless_renderer(W, H).await;
         let mut asset_manager = AssetManager::new();
         let mut world = World::new();
 
@@ -726,7 +726,7 @@ mod golden_render_tests {
     async fn render_dark(albedo: f32) -> Vec<u8> {
         const W: u32 = 128;
         const H: u32 = 128;
-        let mut renderer = Renderer::new_headless(W, H, None).await;
+        let mut renderer = crate::test_gpu::headless_renderer(W, H).await;
         let mut asset_manager = AssetManager::new();
         let mut world = World::new();
         let mesh = AssetManager::create_cube(&renderer.device);
@@ -785,7 +785,7 @@ mod golden_render_tests {
             return;
         }
         pollster::block_on(async {
-            let mut renderer = Renderer::new_headless(128, 128, None).await;
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
             let mut asset_manager = AssetManager::new();
             let mut world = World::new();
             let mesh = AssetManager::create_cube(&renderer.device);
@@ -859,7 +859,7 @@ mod golden_render_tests {
             // Constructing the renderer is what builds them: deferred, gbuffer, both shadow
             // passes, forward, post-process, ssao/ssr/ssgi, the particle and fluid compute
             // pipelines. A backend rejecting any one of them fails here.
-            let renderer = Renderer::new_headless(64, 64, None).await;
+            let renderer = crate::test_gpu::headless_renderer(64, 64).await;
             assert!(
                 renderer.surface.is_none(),
                 "the headless renderer must have no surface"
@@ -902,7 +902,7 @@ mod golden_render_tests {
             return;
         }
         pollster::block_on(async {
-            let mut renderer = Renderer::new_headless(64, 64, None).await;
+            let mut renderer = crate::test_gpu::headless_renderer(64, 64).await;
             let mut world = World::new();
 
             // A clock with a real delta. The pass reads `Time::dt()`, and a world without the
@@ -1017,7 +1017,7 @@ mod golden_render_tests {
             const H: u32 = 128;
             const BPP: u32 = 4; // every surface format used here is 4 bytes/pixel
 
-            let mut renderer = Renderer::new_headless(W, H, None).await;
+            let mut renderer = crate::test_gpu::headless_renderer(W, H).await;
             let mut asset_manager = AssetManager::new();
             let mut world = World::new();
 
@@ -1169,7 +1169,7 @@ mod golden_render_tests {
         const W: u32 = 128;
         const H: u32 = 128;
 
-        let mut renderer = Renderer::new_headless(W, H, None).await;
+        let mut renderer = crate::test_gpu::headless_renderer(W, H).await;
         renderer.point_shadows_enabled = point_shadows;
         let mut asset_manager = AssetManager::new();
         let mut world = World::new();
@@ -1257,7 +1257,7 @@ mod golden_render_tests {
     async fn render_two_panes(near_first: bool) -> Vec<u8> {
         const W: u32 = 128;
         const H: u32 = 128;
-        let mut renderer = Renderer::new_headless(W, H, None).await;
+        let mut renderer = crate::test_gpu::headless_renderer(W, H).await;
         let mut asset_manager = AssetManager::new();
         let mut world = World::new();
 
@@ -1424,7 +1424,7 @@ mod golden_render_tests {
             return;
         }
         pollster::block_on(async {
-            let mut renderer = Renderer::new_headless(64, 64, None).await;
+            let mut renderer = crate::test_gpu::headless_renderer(64, 64).await;
             let start_capacity = renderer.scene.instance_capacity;
             // One more than the buffer holds is enough to prove the point; 9 000 keeps the test
             // honest if the starting capacity is ever raised to 8 192 exactly.
@@ -1596,7 +1596,7 @@ mod golden_render_tests {
     async fn render_from_inside_a_cube(double_sided: bool) -> Vec<u8> {
         const W: u32 = 128;
         const H: u32 = 128;
-        let mut renderer = Renderer::new_headless(W, H, None).await;
+        let mut renderer = crate::test_gpu::headless_renderer(W, H).await;
         let mut asset_manager = AssetManager::new();
         let mut world = World::new();
 
@@ -1943,7 +1943,7 @@ mod golden_render_tests {
         const W: u32 = 128;
         const H: u32 = 128;
 
-        let mut renderer = Renderer::new_headless(W, H, None).await;
+        let mut renderer = crate::test_gpu::headless_renderer(W, H).await;
         // Screen-space filters off. Each of them re-derives world positions and ray
         // directions from the camera, so each makes the final image depend on where the
         // camera IS — which would drown out the question these tests ask, namely whether the
@@ -2331,7 +2331,7 @@ mod golden_render_tests {
         const W: u32 = 128;
         const H: u32 = 128;
 
-        let mut renderer = Renderer::new_headless(W, H, None).await;
+        let mut renderer = crate::test_gpu::headless_renderer(W, H).await;
         match disabled {
             Effect::None => {}
             Effect::Ssgi => renderer.ssgi = None,
@@ -2436,7 +2436,7 @@ mod golden_render_tests {
     /// stopping a few metres away on the floor.
     async fn render_sunbeam(volumetric: bool) -> Vec<u8> {
         const W: u32 = 128;
-        let mut renderer = Renderer::new_headless(W, W, None).await;
+        let mut renderer = crate::test_gpu::headless_renderer(W, W).await;
         if !volumetric {
             renderer.volumetric = None;
         }
@@ -2524,7 +2524,7 @@ mod golden_render_tests {
     /// ONE renderer — particles need time to be spawned and to move.
     async fn render_emitter_scene(with_emitter: bool, frames: u32) -> Vec<u8> {
         const W: u32 = 128;
-        let mut renderer = Renderer::new_headless(W, W, None).await;
+        let mut renderer = crate::test_gpu::headless_renderer(W, W).await;
         let mut asset_manager = AssetManager::new();
         let mut world = World::new();
         world.insert_resource(gizmo_core::time::Time::new());
@@ -2611,7 +2611,7 @@ mod golden_render_tests {
     /// A matte floor with — optionally — a decal projector volume straddling its surface.
     async fn render_decal_scene(with_decal: bool) -> Vec<u8> {
         const W: u32 = 128;
-        let mut renderer = Renderer::new_headless(W, W, None).await;
+        let mut renderer = crate::test_gpu::headless_renderer(W, W).await;
         let mut asset_manager = AssetManager::new();
         let mut world = World::new();
         let tex = asset_manager.create_white_texture(
