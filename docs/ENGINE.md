@@ -1468,7 +1468,7 @@ stüdyonun varsayılan penceresinin çok altında.
 Bir daha taranmasına gerek yok; bekçi `inspector_width_tests` olarak duruyor ve iki yolu da
 (seçim yok / seçili nesne) üç genişlikte tutuyor.
 
-### Export bir oyunu değil, sabit bir demoyu paketliyor (2026-08-16, açık)
+### Export bir oyunu değil, sabit bir demoyu paketliyordu (2026-08-16, DÜZELTİLDİ)
 
 Stüdyodaki "Build / Export", `cargo build --release -p demo` koşup çıkan binary'yi
 `export/gizmo_game/` altına kopyalıyor ve "Oyununuz hazır" diyor. `demo`'nun varsayılan binary'si
@@ -1526,9 +1526,33 @@ zemin, kırmızı küp, mavi küre, güneş ve gölgesi. Yani dosyadan yüklenen
    `SceneData::save` yolundan üretildi ve commit'lendi. Bekçi: `scene_round_trip.rs` — kaydedilen
    sahne mesh kaynakları, ışığı, birincil kamerası ve değerleriyle geri geliyor mu.
 
-Kalan adımlar: export'un bu binary'yi kurup açık sahneyi yanına yazması, iki yolun (Play modu ↔
-runtime) davranış eşitliğinin testi, ve "Oyununuz hazır" satırının ancak sahne gerçekten
-yazıldıysa çıkması.
+#### Export artık onu paketliyor (2026-08-16)
+
+`cargo build --release -p demo` → `cargo build --release -p demo --bin gizmo_runtime`, ve kopyalanan
+dosya `demo` değil `gizmo_runtime`. Çapraz derleme hedefleri dahil: Windows export'unun `demo.exe`
+göndermesi aynı kusurun uzantısı değişmiş hâliydi.
+
+**Açık sahne de gidiyor.** Build isteği geldiğinde, iş parçacığı başlamadan önce ana iş
+parçacığında canlı dünya geçici bir dosyaya kaydediliyor; cargo başarılı olursa
+`export/gizmo_game/scenes/main.scene` olarak kopyalanıyor — runtime'ın argümansız açtığı ad. İki
+karar yazılı: **canlı dünya**, çünkü diskteki son kayıt kullanıcının baktığı şey değildir ve eski
+bir sahneyi sessizce paketlemek bu yolun düzeltildiği yalanın aynısıdır; **geçici dosya**, çünkü
+export kullanıcının kaynak ağacına, hele `scenes/main.scene` üstüne yazmamalı.
+
+Bitiş satırı da artık koşullu: sahne gitmediyse "Oyununuz hazır" değil, "build bitti ama sahne
+gitmedi, boş pencere gelir" yazıyor.
+
+Bekçiler (`export_copy_tests`): her hedefin runtime'ı kurup gönderdiği (`--bin` olmadan cargo
+demo'nun varsayılanını kurar), export'un yazdığı sahne adının runtime'ın aradığı adla aynı olduğu
+(test öteki ucun kaynağını okuyor, tekrar etmiyor), ve staging'in canlı dünyayı proje ağacının
+dışına yazdığı.
+
+Uçtan uca doğrulandı: `gizmo_runtime` + `scenes/main.scene`'den ibaret bir dizin kurulup binary
+**başka bir çalışma dizininden, argümansız** çalıştırıldı — kendi dizinini bulup sahneyi açtı ve
+çizdi.
+
+Kalan tek adım: Play modu ile runtime'ın davranış eşitliğinin testi (aynı sahne, N kare, aynı
+state).
 
 ### God fonksiyon taraması (2026-08-15)
 

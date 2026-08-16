@@ -28,7 +28,7 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
             input,
             &win_info,
         );
-        crate::systems::build::handle_build_requests(editor_state);
+        crate::systems::build::handle_build_requests(world, editor_state);
         crate::systems::shortcuts::handle_editor_shortcuts(world, editor_state, state, input);
         crate::systems::simulation::handle_simulation(world, editor_state, state, dt, input);
         crate::systems::scene_ops::handle_scene_operations(world, editor_state, state);

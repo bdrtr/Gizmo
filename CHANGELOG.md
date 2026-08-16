@@ -16,6 +16,22 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Studio's Build/Export ships your scene, not the engine's sample.** It built `demo` and copied
+  that crate's default binary — `bevy_3d_scene`, a fixed floor/cube/light/camera that opens no
+  scene file and runs no script — then copied the project's `scenes/` and `scripts/` next to it,
+  where nothing ever read them, and said "Oyununuz hazır". It now builds `gizmo_runtime` (new, in
+  `demo/src/bin/`), writes the world the editor is showing to `export/gizmo_game/scenes/main.scene`,
+  and only claims the game is ready when the scene actually landed.
+
+  The runtime's contract is the editor's Play mode by reference, not by taste: script engine
+  update → command flush → per-entity update, a 1/60 s fixed-step physics accumulator capped at 16
+  steps, and `default_render_pass`. "The exported game does what the editor showed you" is
+  therefore a comparison rather than a promise. An exported directory is self-contained, so the
+  runtime makes it the working directory and the editor's relative paths keep meaning what they
+  meant; with no argument it opens `scenes/main.scene`.
+
 ### Fixed
 
 - **A windowed app no longer dies on a frame it could not present.** The egui frame runs at the

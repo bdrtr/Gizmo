@@ -1,4 +1,5 @@
 use gizmo::editor::{BuildTarget, EditorState};
+use gizmo::prelude::World;
 
 use crate::update::copy_dir_all;
 
@@ -71,7 +72,96 @@ fn describe_copy(label: &str, src: &str, outcome: CopyOutcome) -> String {
     }
 }
 
-pub fn handle_build_requests(editor_state: &mut EditorState) {
+/// The binary an export ships: the runtime that opens a scene file, not a demo.
+///
+/// This used to be `demo`, whose default binary is `bevy_3d_scene` — a fixed floor, cube, light
+/// and camera that reads no scene and runs no script. The export copied the user's `scenes/` and
+/// `scripts/` next to it and nothing on the other side ever opened them, while the log said
+/// "Oyununuz hazır". `gizmo_runtime` is the other side; see its module docs for the contract.
+const RUNTIME_BIN: &str = "gizmo_runtime";
+
+/// The scene file name the export writes, and the one [`RUNTIME_BIN`] opens with no argument.
+/// The two are one contract — `the_exported_scene_lands_where_the_runtime_looks` holds them.
+const EXPORT_SCENE_NAME: &str = "main.scene";
+
+/// What one build target compiles to. Split out of the build thread because *which binary ships*
+/// is the export's most consequential decision and it was previously a literal buried inside a
+/// closure, where no test could see it.
+struct BuildPlan {
+    triple: Option<&'static str>,
+    exe: &'static str,
+    label: &'static str,
+}
+
+fn build_plan(target: BuildTarget) -> BuildPlan {
+    let native_exe = if cfg!(windows) {
+        "gizmo_runtime.exe"
+    } else {
+        RUNTIME_BIN
+    };
+    match target {
+        BuildTarget::Linux => BuildPlan {
+            triple: Some("x86_64-unknown-linux-gnu"),
+            exe: RUNTIME_BIN,
+            label: "Linux (ELF)",
+        },
+        BuildTarget::Windows => BuildPlan {
+            triple: Some("x86_64-pc-windows-gnu"),
+            exe: "gizmo_runtime.exe",
+            label: "Windows (.exe)",
+        },
+        BuildTarget::MacOs => BuildPlan {
+            triple: Some("x86_64-apple-darwin"),
+            exe: RUNTIME_BIN,
+            label: "macOS",
+        },
+        // `Native` and anything added to the enum later: build for this machine.
+        _ => BuildPlan {
+            triple: None,
+            exe: native_exe,
+            label: "Native",
+        },
+    }
+}
+
+/// The exact cargo invocation for a plan — a value, so the log can echo what actually runs and a
+/// test can read which binary is being built without starting cargo.
+fn cargo_args(plan: &BuildPlan) -> Vec<String> {
+    let mut args = vec![
+        "build".to_string(),
+        "--release".to_string(),
+        "-p".to_string(),
+        "demo".to_string(),
+        "--bin".to_string(),
+        RUNTIME_BIN.to_string(),
+    ];
+    if let Some(triple) = plan.triple {
+        args.push(format!("--target={triple}"));
+    }
+    args
+}
+
+/// Write the world the editor is showing to a temporary file, for the build thread to copy into
+/// the export once cargo succeeds.
+///
+/// Two decisions worth stating. **Now, on this thread:** the build runs on a worker that cannot
+/// borrow the world, so the alternative is shipping whatever was last saved to disk — which is
+/// not what the user is looking at, and an export that silently ships an older scene is the same
+/// class of lie this whole path was fixed for. **A temp file, not `scenes/main.scene`:** exporting
+/// must not write into the project tree, least of all over a file the user may already keep there.
+fn stage_scene_for_export(world: &World) -> Result<std::path::PathBuf, String> {
+    let path = std::env::temp_dir().join(format!(
+        "gizmo_export_scene_{}_{}.scene",
+        std::process::id(),
+        EXPORT_SCENE_NAME
+    ));
+    let as_str = path.to_string_lossy().to_string();
+    gizmo::scene::SceneData::save(world, &as_str, &gizmo::full_scene_registry())
+        .map(|()| path)
+        .map_err(|e| e.to_string())
+}
+
+pub fn handle_build_requests(world: &World, editor_state: &mut EditorState) {
     // --- BUILD SİSTEMİ (STANDALONE EXPORTER) ---
     if editor_state.build.request {
         editor_state.build.request = false;
@@ -86,45 +176,27 @@ pub fn handle_build_requests(editor_state: &mut EditorState) {
         let (tx, rx) = std::sync::mpsc::channel();
         editor_state.build.logs_rx = Some(std::sync::Mutex::new(rx));
         let build_target = editor_state.build.target;
+        // Captured before the thread starts — see `stage_scene_for_export`.
+        let staged_scene = stage_scene_for_export(world);
 
         std::thread::spawn(move || {
             let log = |msg: &str| {
                 let _ = tx.send(msg.to_string());
             };
 
-            // Hedefe göre cargo args belirle
-            let (target_triple, exe_name, target_label) = match build_target {
-                BuildTarget::Native => (
-                    None,
-                    if cfg!(windows) { "demo.exe" } else { "demo" },
-                    "Native",
-                ),
-                BuildTarget::Linux => (Some("x86_64-unknown-linux-gnu"), "demo", "Linux (ELF)"),
-                BuildTarget::Windows => {
-                    (Some("x86_64-pc-windows-gnu"), "demo.exe", "Windows (.exe)")
-                }
-                BuildTarget::MacOs => (Some("x86_64-apple-darwin"), "demo", "macOS"),
-                _ => (
-                    None,
-                    if cfg!(windows) { "demo.exe" } else { "demo" },
-                    "Native",
-                ),
-            };
+            let plan = build_plan(build_target);
+            let (target_triple, exe_name, target_label) = (plan.triple, plan.exe, plan.label);
 
             log(&format!(
                 "== [Adım 1/3] Gizmo Build Başlıyor — Hedef: {} ==",
                 target_label
             ));
 
-            let mut args = vec!["build", "--release", "-p", "demo"];
-            let target_str;
-            if let Some(triple) = target_triple {
-                target_str = format!("--target={}", triple);
-                args.push(&target_str);
-                log(&format!("> cargo {}", args.join(" ")));
-            } else {
-                log("> cargo build --release -p demo");
-            }
+            // One line, echoing the arguments actually about to run: the two branches used to
+            // print different things and the no-target branch printed a command it was not
+            // running.
+            let args = cargo_args(&plan);
+            log(&format!("> cargo {}", args.join(" ")));
 
             let mut command = std::process::Command::new("cargo");
             command
@@ -245,8 +317,49 @@ pub fn handle_build_requests(editor_state: &mut EditorState) {
                             ));
                         }
 
-                        log("\n🎉 BUILD TAMAMLANDI! 🎉");
-                        log("Oyununuz 'export/gizmo_game/' dizininde hazır.");
+                        // The scene the editor was showing, under the name the runtime opens with
+                        // no argument. After the directory copies on purpose: `scenes/` may ship a
+                        // project's other scenes, and this is the one the game starts in.
+                        let scene_dst = export_dir.join("scenes").join(EXPORT_SCENE_NAME);
+                        let scene_shipped = match &staged_scene {
+                            Ok(src) => {
+                                let placed = std::fs::create_dir_all(export_dir.join("scenes"))
+                                    .and_then(|()| std::fs::copy(src, &scene_dst));
+                                let _ = std::fs::remove_file(src);
+                                match placed {
+                                    Ok(_) => {
+                                        log(&format!("Sahne yazıldı -> scenes/{EXPORT_SCENE_NAME}"));
+                                        true
+                                    }
+                                    Err(e) => {
+                                        log(&format!("HATA: sahne yazılamadı ({scene_dst:?}): {e}"));
+                                        false
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                log(&format!("HATA: açık sahne kaydedilemedi: {e}"));
+                                false
+                            }
+                        };
+
+                        // The claim is made only where it is true. An export whose scene did not
+                        // land still produces a runnable binary — it just opens an empty window,
+                        // and saying "Oyununuz hazır" over that is the defect this path had.
+                        if scene_shipped {
+                            log("\n🎉 BUILD TAMAMLANDI! 🎉");
+                            log(&format!(
+                                "Oyununuz 'export/gizmo_game/' dizininde hazır — çalıştır: ./{}",
+                                exe_name
+                            ));
+                        } else {
+                            log("\n⚠ BUILD BİTTİ, AMA SAHNE GİTMEDİ.");
+                            log(&format!(
+                                "'export/gizmo_game/{}' çalışır durumda, ancak açacağı sahne yok: \
+                                 boş pencere gelir.",
+                                exe_name
+                            ));
+                        }
                     } else {
                         log("\n❌ HATA: Cargo derlemesi başarısız oldu.");
                     }
@@ -343,6 +456,97 @@ mod export_copy_tests {
             "a copy that could not run produced {line:?}"
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// **What ships is the runtime, not a demo.**
+    ///
+    /// The export ran `cargo build --release -p demo` and copied `demo`'s default binary, which is
+    /// `bevy_3d_scene`: a fixed floor, cube, light and camera that opens no scene file and runs no
+    /// script. Every target has to name the runtime, cross-compiled ones included — a Windows
+    /// export shipping `demo.exe` is the same defect with a different extension.
+    #[test]
+    fn every_target_builds_and_ships_the_runtime() {
+        for target in [
+            BuildTarget::Native,
+            BuildTarget::Linux,
+            BuildTarget::Windows,
+            BuildTarget::MacOs,
+        ] {
+            let plan = build_plan(target);
+            assert!(
+                plan.exe.starts_with(RUNTIME_BIN),
+                "{:?} ships {:?}, which is not the runtime",
+                target,
+                plan.exe
+            );
+
+            let args = cargo_args(&plan);
+            let bin = args.iter().position(|a| a == "--bin").map(|i| i + 1);
+            assert_eq!(
+                bin.and_then(|i| args.get(i)).map(String::as_str),
+                Some(RUNTIME_BIN),
+                "{:?} builds {:?} — without --bin, cargo builds demo's default binary",
+                target,
+                args
+            );
+            assert!(
+                args.contains(&"--release".to_string()),
+                "an exported game is a release build"
+            );
+        }
+    }
+
+    /// The export writes the scene where the runtime looks for it with no argument. Two constants
+    /// in two crates, one contract — so this reads the other end rather than restating it.
+    #[test]
+    fn the_exported_scene_lands_where_the_runtime_looks() {
+        let runtime = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../demo/src/bin/gizmo_runtime.rs");
+        let src = std::fs::read_to_string(&runtime)
+            .unwrap_or_else(|e| panic!("runtime kaynağı okunamadı ({runtime:?}): {e}"));
+        assert!(
+            src.contains(&format!("scenes/{EXPORT_SCENE_NAME}")),
+            "the runtime no longer defaults to scenes/{EXPORT_SCENE_NAME}, so an exported game \
+             would start with an empty window"
+        );
+    }
+
+    /// The staged scene is the live world, and it is staged outside the project.
+    ///
+    /// Both halves matter: an export that ships the last *saved* scene ships something the user
+    /// is not looking at, and an export that writes `scenes/main.scene` into the project tree
+    /// overwrites a file the user may keep there.
+    #[test]
+    fn the_staged_scene_is_the_live_world_and_lands_outside_the_project() {
+        use gizmo::core::component::EntityName;
+        use gizmo::prelude::*;
+
+        let mut world = World::new();
+        let e = world.spawn();
+        world.add_component(e, EntityName::new("Sahnedeki Kutu"));
+        world.add_component(e, Transform::new(Vec3::new(1.0, 2.0, 3.0)));
+
+        let staged = stage_scene_for_export(&world).expect("açık sahne kaydedilebilmeli");
+        assert!(staged.is_file(), "staged scene {staged:?} yazılmadı");
+        assert!(
+            staged.starts_with(std::env::temp_dir()),
+            "staging must not touch the project tree, but wrote {staged:?}"
+        );
+
+        let mut loaded = World::new();
+        gizmo::scene::SceneData::load_into(
+            &staged.to_string_lossy(),
+            &mut loaded,
+            &gizmo::full_scene_registry(),
+        )
+        .expect("staged sahne geri yüklenebilmeli");
+        let _ = std::fs::remove_file(&staged);
+
+        let names = loaded.borrow::<EntityName>();
+        assert!(
+            names.iter().any(|(_, n)| n.0 == "Sahnedeki Kutu"),
+            "the world the editor was showing is not what got staged"
+        );
     }
 
     /// The export ships the paths the runtime reads, not paths nobody writes.
