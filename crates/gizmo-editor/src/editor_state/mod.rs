@@ -689,6 +689,7 @@ mod tests {
         assert!(cam.orbit_delta.is_none());
         assert!(cam.scroll_delta.is_none());
         assert!(cam.focus_target.is_none());
+        assert!(cam.view_request.is_none());
         assert!(cam.bookmarks.iter().all(|b| b.is_none()));
     }
 

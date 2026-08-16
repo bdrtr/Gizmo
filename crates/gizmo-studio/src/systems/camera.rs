@@ -18,11 +18,13 @@ pub fn handle_camera(
     let mut camera_focus_distance = 10.0;
     let mut is_playing = false;
     let mut focus_target = None;
+    let mut view_request = None;
     if let Some(es) = world.get_resource::<EditorState>() {
         camera_speed = es.prefs.camera_speed;
         camera_focus_distance = es.prefs.camera_focus_distance;
         is_playing = es.is_playing();
         focus_target = es.camera.focus_target;
+        view_request = es.camera.view_request;
     }
 
     // Editor Camera WASD Controller
@@ -96,9 +98,13 @@ pub fn handle_camera(
                 let dist_to_target = diff.length();
                 let dir = if dist_to_target > 0.001 { diff / dist_to_target } else { forward };
                 
-                let desired_pitch = dir.y.asin();
-                let desired_yaw = dir.z.atan2(dir.x);
-                
+                // Hedef tam tepedeyse yaw belirsiz; mevcut yaw devralınıyor, ki odaklanma nesneyi
+                // ortalarken sahneyi bir de kendi etrafında döndürmesin.
+                let (desired_yaw, desired_pitch) =
+                    gizmo::renderer::components::Camera::yaw_pitch_from_forward(dir, cam.yaw)
+                        .unwrap_or((cam.yaw, cam.pitch));
+
+
                 let mut yaw_diff = desired_yaw - cam.yaw;
                 while yaw_diff > std::f32::consts::PI { yaw_diff -= std::f32::consts::TAU; }
                 while yaw_diff < -std::f32::consts::PI { yaw_diff += std::f32::consts::TAU; }
@@ -156,6 +162,33 @@ pub fn handle_camera(
                 // Yeni pozisyonu pivota göre konumlandır
                 t.position = pivot
                     - (t.rotation * gizmo::math::Vec3::new(0.0, 0.0, 1.0)) * camera_focus_distance;
+            }
+
+            // 4.5 Viewport eksen gizmo'sundan gelen bakış isteği.
+            //
+            // Kamera YERİNDE dönmüyor: ekranın ortasındaki nokta ortada kalıyor, yalnız yön
+            // değişiyor — orbit'in yaptığının aynısı, deltayla değil hedef yönle. Yerinde dönseydi
+            // bakmakta olduğun nesne ekrandan çıkardı, ve bir bakış küpünün tek işi ona bakmaktır.
+            if let Some(dir) = view_request {
+                if let Some((yaw, pitch)) =
+                    gizmo::renderer::components::Camera::yaw_pitch_from_forward(dir, cam.yaw)
+                {
+                    let max_pitch = 89.0_f32.to_radians();
+                    let pitch = pitch.clamp(-max_pitch, max_pitch);
+                    // Pivot güncel yaw/pitch'ten kuruluyor, fonksiyonun başındaki `forward`dan
+                    // değil: orbit bu kareyi çoktan döndürmüş olabilir.
+                    let pivot = t.position
+                        + gizmo::renderer::components::Camera::forward_from(cam.yaw, cam.pitch)
+                            * camera_focus_distance;
+                    cam.yaw = yaw;
+                    cam.pitch = pitch;
+                    t.position = pivot
+                        - gizmo::renderer::components::Camera::forward_from(yaw, pitch)
+                            * camera_focus_distance;
+                }
+                if let Some(mut es) = world.get_resource_mut::<EditorState>() {
+                    es.camera.view_request = None;
+                }
             }
 
             // 5. Scroll Zoom (İleri / Geri) — Play modunda devre dışı
@@ -298,6 +331,84 @@ mod tests {
     fn clamp_pitch(pitch: f32) -> f32 {
         let max_pitch = 89.0_f32.to_radians();
         pitch.clamp(-max_pitch, max_pitch)
+    }
+
+    use gizmo::math::Vec3;
+    use gizmo::renderer::components::Camera;
+
+    /// The six axes the viewport gizmo can be clicked on.
+    const AXES: [Vec3; 6] = [
+        Vec3::X,
+        Vec3::NEG_X,
+        Vec3::Y,
+        Vec3::NEG_Y,
+        Vec3::Z,
+        Vec3::NEG_Z,
+    ];
+
+    /// `yaw_pitch_from_forward` is claimed to be the inverse of `forward_from`, so measure it against
+    /// the real function rather than against a second copy of the formula. A swapped `atan2`
+    /// argument order or a sign lost on pitch survives any test that only reads the numbers back
+    /// out of the inverse itself.
+    #[test]
+    fn yaw_pitch_from_forward_round_trips_through_forward_from() {
+        for dir in AXES {
+            let (yaw, pitch) = Camera::yaw_pitch_from_forward(dir, 0.0).expect("an axis is a direction");
+            let back = Camera::forward_from(yaw, pitch);
+            // `forward_from` holds pitch just off vertical, so ±Y cannot come back exact; a dot
+            // product of 1 - 5e-7 is that clamp and nothing else.
+            assert!(
+                back.dot(dir) > 0.999,
+                "yaw_pitch_from_forward({dir}) → yaw {yaw}, pitch {pitch} → {back}, which is not {dir}"
+            );
+        }
+    }
+
+    /// Yaw is undetermined when looking straight up or down, and `atan2(0.0, 0.0)` returns `0.0`
+    /// without complaining — so the top view would quietly swing the scene round to face world +X.
+    #[test]
+    fn yaw_pitch_from_forward_inherits_yaw_when_it_is_undetermined() {
+        for dir in [Vec3::Y, Vec3::NEG_Y] {
+            let (yaw, _) = Camera::yaw_pitch_from_forward(dir, 1.234).expect("a direction");
+            assert!(
+                (yaw - 1.234).abs() < 1e-6,
+                "vertical look must keep the yaw it had, got {yaw}"
+            );
+        }
+        // ...and a direction that *does* determine yaw must ignore the hint entirely.
+        let (yaw, _) = Camera::yaw_pitch_from_forward(Vec3::X, 1.234).expect("a direction");
+        assert!(yaw.abs() < 1e-6, "+X is yaw 0 regardless of where we were, got {yaw}");
+    }
+
+    #[test]
+    fn yaw_pitch_from_forward_rejects_a_zero_direction() {
+        assert!(Camera::yaw_pitch_from_forward(Vec3::ZERO, 0.0).is_none());
+    }
+
+    /// The handle for `+X` sends `look_dir = -X`, and the camera must end up standing on the **+X**
+    /// side looking back at the pivot — not on the -X side looking away. This mirrors the
+    /// repositioning in `handle_camera`, including its 89° pitch clamp.
+    #[test]
+    fn a_handle_puts_the_camera_on_that_axis_side() {
+        const DIST: f32 = 10.0;
+        let pivot = Vec3::new(2.0, 3.0, -4.0);
+        for axis in AXES {
+            let (yaw, pitch) = Camera::yaw_pitch_from_forward(-axis, 0.0).expect("a direction");
+            let max_pitch = 89.0_f32.to_radians();
+            let front = Camera::forward_from(yaw, pitch.clamp(-max_pitch, max_pitch));
+            let pos = pivot - front * DIST;
+
+            let offset = pos - pivot;
+            assert!(
+                offset.dot(axis) > DIST * 0.99,
+                "clicking {axis} must put the camera on the {axis} side of the pivot, got {offset}"
+            );
+            assert!(
+                (offset.length() - DIST).abs() < 1e-3,
+                "the turn must not change the distance to the pivot, got {}",
+                offset.length()
+            );
+        }
     }
 
     #[test]

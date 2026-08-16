@@ -29,6 +29,12 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
     }
 
     draw_viewport_overlays(ui, world, state, rect);
+    let axis_gizmo_hot = draw_axis_gizmo(
+        ui,
+        state,
+        rect,
+        response.clicked_by(egui::PointerButton::Primary),
+    );
 
     // --- GIZMO FARE (MOUSE) ETKİLEŞİMLERİ ---
     let (hover_pos, interact_pos, _latest_pos, any_released, alt_pressed, scroll_y, _primary_down, press_origin) =
@@ -301,13 +307,14 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
     let is_dragging_gizmo = gizmo_interacted || !state.scene.gizmo_original_transforms.is_empty();
 
     if !is_dragging_gizmo
+        && !axis_gizmo_hot
         && (response.clicked_by(egui::PointerButton::Primary)
             || response.drag_started_by(egui::PointerButton::Primary))
         {
             tracing::info!("SceneView CLICKED/DRAG_STARTED! ndc: {:?}", state.mouse_ndc);
             state.do_raycast = true;
         }
-    if !is_dragging_gizmo && response.dragged_by(egui::PointerButton::Primary) {
+    if !is_dragging_gizmo && !axis_gizmo_hot && response.dragged_by(egui::PointerButton::Primary) {
         if state.selection.rubber_band_start.is_none() {
             if let Some(pos) = press_origin {
                 state.selection.rubber_band_start = Some(gizmo_math::Vec2::new(pos.x, pos.y));
@@ -519,6 +526,176 @@ fn draw_viewport_overlays(
 }
 
 
+/// Arm length of the axis gizmo, centre to handle centre.
+const AXIS_ARM: f32 = 26.0;
+/// Radius of an axis handle.
+const AXIS_HANDLE: f32 = 7.0;
+/// Half-width of the whole widget: the arm, its handle, and a little air.
+const AXIS_HALF: f32 = AXIS_ARM + AXIS_HANDLE + 4.0;
+
+/// One drawable end of a world axis, already projected into the widget.
+struct AxisHandle {
+    /// Where the camera should end up looking if this handle is clicked.
+    look_dir: gizmo_math::Vec3,
+    centre: egui::Pos2,
+    /// View-space z of the axis direction. The view matrix is right-handed and the camera looks
+    /// down its own -Z, so a **larger** z means the axis points more towards the viewer.
+    depth: f32,
+    color: egui::Color32,
+    label: &'static str,
+    positive: bool,
+}
+
+/// The six axis ends, projected through `view` and sorted **back to front** — so drawing them in
+/// order gives the right occlusion, and walking the slice backwards gives the right hit test.
+///
+/// Split out from the drawing because every decision in it is a sign that fails silently: a
+/// forgotten y-flip puts +Y at the bottom, a flipped depth hides the near handle behind the far
+/// one, and negating the wrong vector sends the camera to the far side of the scene.
+fn axis_handles(view: gizmo_math::Mat4, centre: egui::Pos2) -> Vec<AxisHandle> {
+    let visuals = transform_gizmo_egui::GizmoVisuals::default();
+    let mut handles = Vec::with_capacity(6);
+    for (axis, label, color) in [
+        (gizmo_math::Vec3::X, "X", visuals.x_color),
+        (gizmo_math::Vec3::Y, "Y", visuals.y_color),
+        (gizmo_math::Vec3::Z, "Z", visuals.z_color),
+    ] {
+        for sign in [1.0_f32, -1.0] {
+            let world = axis * sign;
+            let v = view.transform_vector3(world);
+            handles.push(AxisHandle {
+                // Clicking the near end of an axis means standing on that side, so the camera
+                // looks back along it.
+                look_dir: -world,
+                // View-space +Y is up and screen +y is down, hence the flip on y only.
+                centre: centre + egui::vec2(v.x * AXIS_ARM, -v.y * AXIS_ARM),
+                depth: v.z,
+                color,
+                label,
+                positive: sign > 0.0,
+            });
+        }
+    }
+    handles.sort_by(|a, b| a.depth.total_cmp(&b.depth));
+    handles
+}
+
+/// The prototype's viewport axis gizmo, top-right corner.
+///
+/// # Why it is drawn from the view matrix
+///
+/// The three world axes are pushed through `state.camera.view` — the same matrix the renderer drew
+/// the frame with — rather than rebuilt from yaw/pitch. So it cannot disagree with what is on
+/// screen: if the corner says +Z points left, +Z points left. Nothing here needs to know the
+/// camera's Euler convention, which is exactly the thing that gets a sign wrong.
+///
+/// # Why these three colours
+///
+/// They are read off `GizmoVisuals::default()` — the live colours of the transform handles in the
+/// middle of the viewport. Hardcoding a red/green/blue triple here would have made the editor claim
+/// X is red in one corner and pink in the middle of the same frame.
+///
+/// # Interaction
+///
+/// A click on a handle asks for a *direction*, not a camera placement: the camera keeps its
+/// distance and its pivot, and only turns. The near end (`+X`) is the side you end up standing on,
+/// so clicking it looks along `-X`, the way every editor's view cube behaves.
+///
+/// Returns `true` while the pointer belongs to this widget, so the caller can keep the same click
+/// from also falling through to selection or a rubber band.
+fn draw_axis_gizmo(
+    ui: &egui::Ui,
+    state: &mut EditorState,
+    rect: egui::Rect,
+    primary_clicked: bool,
+) -> bool {
+    use crate::theme::palette::*;
+
+    let Some(view) = state.camera.view else {
+        return false; // no camera measured yet — draw nothing rather than a plausible cube
+    };
+    if rect.width() < AXIS_HALF * 4.0 || rect.height() < AXIS_HALF * 4.0 {
+        return false; // too small a viewport to spend a corner on
+    }
+
+    let centre = egui::pos2(
+        rect.right() - 8.0 - AXIS_HALF,
+        rect.top() + 8.0 + AXIS_HALF,
+    );
+    let handles = axis_handles(view, centre);
+
+    let (hover_pos, press_origin) =
+        ui.input(|i| (i.pointer.hover_pos(), i.pointer.press_origin()));
+
+    // Front-most handle wins the hover: the draw order is back-to-front, so the hit test walks it
+    // backwards. Without this, an axis hidden behind another would still take the click.
+    let hovered = hover_pos.and_then(|p| {
+        handles
+            .iter()
+            .rposition(|h| h.centre.distance(p) <= AXIS_HANDLE + 2.0)
+    });
+
+    let painter = ui.painter();
+    painter.circle_filled(centre, AXIS_HALF, CHROME.gamma_multiply(0.55));
+    painter.circle_stroke(centre, AXIS_HALF, egui::Stroke::new(1.0_f32, BORDER));
+
+    for (i, h) in handles.iter().enumerate() {
+        let hot = hovered == Some(i);
+        if h.positive {
+            // Only the positive ends get a stem. Six spokes would be a wheel, not an axis triad.
+            painter.line_segment(
+                [centre, h.centre],
+                egui::Stroke::new(2.0_f32, h.color.gamma_multiply(if hot { 1.0 } else { 0.8 })),
+            );
+            painter.circle_filled(h.centre, AXIS_HANDLE, h.color);
+            painter.text(
+                h.centre,
+                egui::Align2::CENTER_CENTER,
+                h.label,
+                egui::FontId::proportional(9.0),
+                VOID,
+            );
+        } else {
+            // Hollow, the way every view cube marks the far end: same hue, no fill, and the letter
+            // only while hovered — otherwise six letters compete in a 74 px circle.
+            painter.circle_filled(h.centre, AXIS_HANDLE, VOID.gamma_multiply(0.75));
+            painter.circle_stroke(
+                h.centre,
+                AXIS_HANDLE,
+                egui::Stroke::new(1.5_f32, h.color.gamma_multiply(if hot { 1.0 } else { 0.7 })),
+            );
+            if hot {
+                painter.text(
+                    h.centre,
+                    egui::Align2::CENTER_CENTER,
+                    h.label,
+                    egui::FontId::proportional(9.0),
+                    h.color,
+                );
+            }
+        }
+        if hot {
+            painter.circle_stroke(
+                h.centre,
+                AXIS_HANDLE + 2.5,
+                egui::Stroke::new(1.0_f32, TEXT_BRIGHT),
+            );
+        }
+    }
+
+    if let Some(i) = hovered {
+        if primary_clicked {
+            state.camera.view_request = Some(handles[i].look_dir);
+        }
+    }
+
+    // The widget owns its whole disc for the duration of a press, not just the frames where a
+    // handle is under the cursor: a press that starts here and drags off must not leave a rubber
+    // band behind it.
+    hovered.is_some()
+        || press_origin.is_some_and(|p| p.distance(centre) <= AXIS_HALF)
+}
+
 /// Bytes as MB or GB, the way a stats panel reads them.
 fn format_bytes(bytes: u64) -> String {
     const MB: f64 = 1024.0 * 1024.0;
@@ -541,6 +718,156 @@ fn format_thousands(n: u32) -> String {
         out.push(c);
     }
     out
+}
+
+#[cfg(test)]
+mod axis_gizmo_tests {
+    use super::{axis_handles, AXIS_ARM};
+
+    /// A camera at the origin looking down world -Z with +Y up — the plainest view there is, and
+    /// the one where every projected axis has an answer you can name without doing any arithmetic.
+    fn plain_view() -> gizmo_math::Mat4 {
+        gizmo_math::Mat4::look_at_rh(
+            gizmo_math::Vec3::ZERO,
+            gizmo_math::Vec3::NEG_Z,
+            gizmo_math::Vec3::Y,
+        )
+    }
+
+    fn handle(view: gizmo_math::Mat4, label: &str, positive: bool) -> super::AxisHandle {
+        let centre = egui::pos2(100.0, 100.0);
+        axis_handles(view, centre)
+            .into_iter()
+            .find(|h| h.label == label && h.positive == positive)
+            .expect("all six ends are always produced")
+    }
+
+    /// Screen y grows downward and view-space y grows upward. Getting this wrong draws a gizmo
+    /// that is upside down but otherwise entirely plausible.
+    #[test]
+    fn up_is_up_and_right_is_right() {
+        let v = plain_view();
+        let centre = egui::pos2(100.0, 100.0);
+
+        let up = handle(v, "Y", true);
+        assert!(
+            up.centre.y < centre.y - AXIS_ARM * 0.9,
+            "+Y must be drawn ABOVE the centre, got {:?}",
+            up.centre
+        );
+        let right = handle(v, "X", true);
+        assert!(
+            right.centre.x > centre.x + AXIS_ARM * 0.9,
+            "+X must be drawn to the RIGHT for a camera looking down -Z, got {:?}",
+            right.centre
+        );
+    }
+
+    /// The view matrix is right-handed and the camera looks down its own -Z, so an axis pointing
+    /// at the viewer has a POSITIVE view-space z. Flip this and the far handles paint over the
+    /// near ones, and the hit test hands clicks to the axis you cannot see.
+    #[test]
+    fn the_axis_pointing_at_the_viewer_is_the_front_most() {
+        let v = plain_view();
+        let towards_viewer = handle(v, "Z", true); // world +Z, i.e. behind this camera
+        let away = handle(v, "Z", false);
+        assert!(
+            towards_viewer.depth > away.depth,
+            "+Z points at a camera that looks down -Z: {} should exceed {}",
+            towards_viewer.depth,
+            away.depth
+        );
+
+        let sorted = axis_handles(v, egui::pos2(100.0, 100.0));
+        assert_eq!(
+            sorted.last().map(|h| (h.label, h.positive)),
+            Some(("Z", true)),
+            "back-to-front order must end on the handle nearest the viewer"
+        );
+    }
+
+    /// Clicking the near end of an axis puts the camera on that side, which means looking back
+    /// along it. Dropping the negation aims the camera away from the scene — at nothing.
+    #[test]
+    fn a_handle_looks_back_along_its_own_axis() {
+        let v = plain_view();
+        for (label, positive, expected) in [
+            ("X", true, gizmo_math::Vec3::NEG_X),
+            ("X", false, gizmo_math::Vec3::X),
+            ("Y", true, gizmo_math::Vec3::NEG_Y),
+            ("Z", true, gizmo_math::Vec3::NEG_Z),
+        ] {
+            let h = handle(v, label, positive);
+            assert!(
+                (h.look_dir - expected).length() < 1e-6,
+                "the {label} handle (positive={positive}) must look along {expected}, got {}",
+                h.look_dir
+            );
+        }
+    }
+
+    /// Where the camera *is* must not move the widget. The axes are directions, so only the view
+    /// matrix's rotation may touch them; if the eye position leaked in — a `transform_point3` where
+    /// a `transform_vector3` belongs — the whole triad slides off into the corner of the screen.
+    ///
+    /// Measured as: the handle's offset and its depth are two legs of a unit vector. On screen the
+    /// offset alone is shorter than the arm (an axis pointing away from you is drawn short, which
+    /// is the foreshortening that makes the widget readable), so the arm circle is a bound, not an
+    /// equality — the length that stays fixed is the 3D one.
+    #[test]
+    fn the_camera_position_does_not_move_the_widget() {
+        // Two cameras with the same orientation, parked a long way apart.
+        let near = gizmo_math::Mat4::look_at_rh(
+            gizmo_math::Vec3::new(0.0, 0.0, 5.0),
+            gizmo_math::Vec3::ZERO,
+            gizmo_math::Vec3::Y,
+        );
+        let far = gizmo_math::Mat4::look_at_rh(
+            gizmo_math::Vec3::new(0.0, 0.0, 900.0),
+            gizmo_math::Vec3::new(0.0, 0.0, 895.0),
+            gizmo_math::Vec3::Y,
+        );
+        let centre = egui::pos2(100.0, 100.0);
+        let a = axis_handles(near, centre);
+        let b = axis_handles(far, centre);
+        for (ha, hb) in a.iter().zip(b.iter()) {
+            assert!(
+                ha.centre.distance(hb.centre) < 1e-3,
+                "{}{} moved with the camera: {:?} vs {:?}",
+                if ha.positive { "+" } else { "-" },
+                ha.label,
+                ha.centre,
+                hb.centre
+            );
+            let offset = ha.centre - centre;
+            let len3 = ((offset.x / AXIS_ARM).powi(2)
+                + (offset.y / AXIS_ARM).powi(2)
+                + ha.depth.powi(2))
+            .sqrt();
+            assert!(
+                (len3 - 1.0).abs() < 1e-4,
+                "a projected unit axis must stay unit length, got {len3}"
+            );
+            assert!(
+                offset.length() <= AXIS_ARM + 1e-4,
+                "no handle may be drawn outside the arm circle"
+            );
+        }
+    }
+
+    /// The three colours must be the ones the transform handles in the middle of the viewport are
+    /// drawn with. A local red/green/blue triple would have the editor calling X two colours in
+    /// one frame.
+    #[test]
+    fn the_colours_come_from_the_transform_gizmo() {
+        let visuals = transform_gizmo_egui::GizmoVisuals::default();
+        let v = plain_view();
+        assert_eq!(handle(v, "X", true).color, visuals.x_color);
+        assert_eq!(handle(v, "Y", true).color, visuals.y_color);
+        assert_eq!(handle(v, "Z", true).color, visuals.z_color);
+        // ...and both ends of an axis share it.
+        assert_eq!(handle(v, "X", false).color, visuals.x_color);
+    }
 }
 
 #[cfg(test)]

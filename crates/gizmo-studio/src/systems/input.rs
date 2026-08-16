@@ -12,27 +12,34 @@ pub fn handle_input_and_scene_view(
     input: &Input,
     window: &gizmo::prelude::WindowInfo,
 ) {
+    let (ww, wh) = window.size();
+    let aspect = if let Some(rect) = editor_state.scene_view_rect {
+        rect.width() / rect.height()
+    } else {
+        ww / wh
+    };
+
+    // Kameranın görüntü/izdüşüm matrisleri HER KARE yayınlanıyor.
+    //
+    // Bunlar `if let Some(ndc) = mouse_ndc` bloğunun içindeydi — yani yalnız fare sahne
+    // viewport'unun ÜSTÜNDEYKEN. Işın atmak için doğru (fare yoksa ışın da yok), ama matrisler bir
+    // fare olayı değil, kameranın o kareki hâli: onları okuyan başka herkes (viewport'un eksen
+    // gizmo'su, kutuyla seçim) fare içeri girene kadar `None` görüyordu. Eksen gizmo'su bu yüzden
+    // ilk karelerde hiç çizilmiyordu ve kusur ekran görüntüsüyle ölçüldü.
+    {
+        let transforms = world.borrow::<Transform>();
+        let cameras = world.borrow::<gizmo::renderer::components::Camera>();
+        if let (Some(t), Some(cam)) = (
+            transforms.get(state.editor_camera),
+            cameras.get(state.editor_camera),
+        ) {
+            editor_state.camera.view = Some(cam.get_view(t.position));
+            editor_state.camera.proj = Some(cam.get_projection(aspect));
+        }
+    }
+
     // Editör Scene View üzerinden gelen NDC ve raycast tetiğini okuyalım
     if let Some(ndc) = editor_state.mouse_ndc {
-        let (ww, wh) = window.size();
-        let aspect = if let Some(rect) = editor_state.scene_view_rect {
-            rect.width() / rect.height()
-        } else {
-            ww / wh
-        };
-
-        {
-            let transforms = world.borrow::<Transform>();
-            let cameras = world.borrow::<gizmo::renderer::components::Camera>();
-            if let (Some(t), Some(cam)) = (
-                transforms.get(state.editor_camera),
-                cameras.get(state.editor_camera),
-            ) {
-                editor_state.camera.view = Some(cam.get_view(t.position));
-                editor_state.camera.proj = Some(cam.get_projection(aspect));
-            }
-        }
-
         let current_ray =
             studio_input::build_ray(world, state.editor_camera, ndc.x, ndc.y, aspect, 1.0);
         if let Some(ray) = current_ray {
@@ -117,5 +124,45 @@ pub fn handle_input_and_scene_view(
                 asset_path
             ));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// The editor camera's view/projection matrices must be published **every frame**, not only on
+    /// the frames where the pointer happens to be over the scene viewport.
+    ///
+    /// They used to be written inside `if let Some(ndc) = editor_state.mouse_ndc`, which is the
+    /// right gate for casting a picking ray and the wrong one for the matrices: the viewport's axis
+    /// gizmo reads them to know which way the camera is facing, and it simply did not draw until
+    /// the mouse first entered the viewport. That is how the defect was found — a screenshot of a
+    /// freshly launched studio has no pointer in it.
+    ///
+    /// This reads the source rather than running the system: `handle_input_and_scene_view` wants a
+    /// `World`, a fully built `StudioState` (asset watcher, camera entities, debug meshes) and a
+    /// `WindowInfo`, and standing all of that up would test the fixture, not the ordering. What can
+    /// break here is precisely the ordering, so that is what is pinned.
+    #[test]
+    fn the_camera_matrices_are_published_outside_the_pointer_branch() {
+        let src = include_str!("input.rs");
+        let code = src.split("#[cfg(test)]").next().unwrap_or("");
+        // Comments talk about the branch by name; only real code counts.
+        let code: String = code
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let assign = code
+            .find("editor_state.camera.view = Some")
+            .expect("the studio must publish the editor camera's view matrix somewhere");
+        let branch = code
+            .find("if let Some(ndc) = editor_state.mouse_ndc")
+            .expect("the picking ray is still gated on the pointer");
+        assert!(
+            assign < branch,
+            "the camera matrices are back inside the pointer branch — everything that reads them \
+             without a mouse (the axis gizmo, box select) sees None again"
+        );
     }
 }

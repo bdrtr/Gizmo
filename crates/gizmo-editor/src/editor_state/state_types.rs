@@ -63,6 +63,14 @@ pub struct CameraState {
     pub view: Option<gizmo_math::Mat4>,
     pub proj: Option<gizmo_math::Mat4>,
     pub focus_target: Option<gizmo_math::Vec3>,
+    /// A world-space direction the editor camera should be pointed along, set by the viewport's
+    /// axis gizmo and consumed (and cleared) by the studio's camera system.
+    ///
+    /// A **direction**, not a yaw/pitch pair, on purpose: yaw/pitch live on the `Camera`
+    /// component, and only the consumer knows what the current yaw is — which matters, because a
+    /// straight-up or straight-down look leaves yaw undetermined and has to inherit it rather
+    /// than snap to zero.
+    pub view_request: Option<gizmo_math::Vec3>,
     pub bookmarks: [Option<(gizmo_math::Vec3, f32, f32)>; 10],
 }
 

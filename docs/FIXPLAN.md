@@ -2808,22 +2808,25 @@ yok olması demek değil.
 
 ### A. Verisi VAR, yalnız arayüzü yok (en ucuzu, en yüksek getiri)
 
-- ⬜ **ANIMATION timeline'ı.** Prototipte track'ler (Gate_Left → position.x / rotation.z),
-  keyframe elmasları, zaman cetveli, oynatma çizgisi, `frame 42/120 · 30 fps`, Auto-key.
-  Motorda `gizmo_animation::clip::Track { target_name, keyframe_timestamps: Vec<f32>, keyframes,
-  interpolation, tangents }` zaten tam — yani bir timeline'ın çizmesi gereken her şey duruyor.
-  Editörde yalnız `inspector/misc.rs:19`'daki "Animation Player" bölümü ve bir Loop onay kutusu
-  var. **Bu bir arayüz işi, motor özelliği değil.** (Daha önce bunu "büyük özellik" diye
-  kaydetmiştim; kaynağa bakınca yanlış olduğu görüldü.)
-- ⬜ **Profiler grafiği.** Prototipte kare-çubuğu grafiği + 16.6 ms bütçe çizgisi + scope tablosu.
-  Motorda `gizmo_core::profiler::FrameProfiler` scope'ları ve kare geçmişini zaten tutuyor
-  (`history()`, `avg_scope_ms`), editörde `profiler_panel.rs` var; eksik olan grafik biçimi.
-- ⬜ **Console filtre çipleri** (All / Warn / Error + sayılar). Sayılar `state.console`'da var.
-- ⬜ **Varlık tipi filtresi** (All / Mesh / Material / Texture / Audio) ve üç sütunlu tarayıcı
-  (klasör ağacı + ızgara + detay paneli).
-- ⬜ **Inspector'da `RigidBody::body_type`** (Static/Dynamic/Kinematic segmenti). Alan
-  `rigid_body.rs:61`'de duruyor, editörde **hiç arayüzü yok** — prototipin en göze çarpan
-  segmentli kontrolü ve tek satırlık veri erişimiyle yapılabilir.
+Bu öbeğin beşi de kapandı; aşağıdaki işaretler 2026-08-16'da **kaynağa bakılarak** güncellendi,
+kutular commit'lerin gerisinde kalmıştı.
+
+- ✅ **ANIMATION timeline'ı** (`animation_panel.rs`). Track'ler, keyframe elmasları, zaman cetveli,
+  oynatma çizgisi. Motorda `gizmo_animation::clip::Track` zaten tamdı — bu bir arayüz işiydi,
+  motor özelliği değil. ⬜ **Kalan: yazma tarafı.** Panel bir *görüntüleyici*: scrub `elapsed_time`
+  oynatıyor, hiçbir şey keyframe YAZMIYOR. Auto-key ve keyframe düzenleme bir geri-alma hikâyesi
+  ister, ve o ayrı bir iş. Kanal ayrımı (position.x'i position.y'den ayırmak) sunumdan ibaret ve
+  eklenebilir.
+- ✅ **Profiler grafiği** (`profiler_panel.rs`). Kare-çubuğu grafiği, 16.67 ms bütçe çizgisi, scope
+  tablosu; `FrameProfiler::history()` üzerinden, ölçülen sayılarla.
+- ✅ **Console filtre çipleri** (All / Warn / Error + sayılar) — `console.rs`, artı metin filtresi.
+- 🔄 **Varlık tipi filtresi** ✅ (All / Mesh / Material / Texture / Audio, tek uzantı tablosundan;
+  ikon araması ve çip aynı soruyu sorduğu için liste tek). ⬜ **Kalan: üçüncü sütun.** Tarayıcı iki
+  sütun — ızgara + sağdaki detay paneli; prototipin sol **klasör ağacı** sütunu yok, gezinme
+  breadcrumb ve ızgaradan yürüyor. (Klasörler tip çipini hep geçiyor, yoksa bir dizinde mahsur
+  kalınıyor.)
+- ✅ **Inspector'da `RigidBody::body_type`** — Static/Dynamic/Kinematic segmenti,
+  `inspector/physics.rs:108`.
 
 ### B. Motorda VERİSİ de yok (önce motor tarafı gerekiyor)
 
@@ -2907,7 +2910,36 @@ yok olması demek değil.
 - ⬜ **Shader Graph.** Prototipte kendi sekmesi var (`4 nodes · 3 links · wgsl 214 instructions`).
   Motorda node grafiği namına hiçbir şey yok: bir node editörü + WGSL üretimi demek. Listedeki en
   büyük kalem, ve tek başına bir proje.
-- ⬜ **Viewport view-cube / eksen gizmo'su** (sağ üst köşe).
+- ✅ **Viewport eksen gizmo'su** (2026-08-16, sağ üst köşe). Altı eksen ucu: yakın uçlar dolu ve
+  harfli, uzak uçlar içi boş; bir uca tıklamak kamerayı o eksen boyunca geri baktırıyor.
+
+  Üç şey ölçülerek yapıldı, üçü de sessizce yanlış olabilecek yerler:
+  - **Yön, yaw/pitch'ten değil görüntü matrisinden** geliyor — kare hangi matrisle çizildiyse köşe
+    de onunla çiziliyor, yani ekranla çelişemez. Euler dönüşümünü bilmesi gerekmiyor, ki işaret
+    hatası tam orada olur.
+  - **Renkler `GizmoVisuals::default()`'tan** okunuyor, yani ekranın ortasındaki taşıma
+    tutamaklarının canlı renkleri. Buraya elle kırmızı/yeşil/mavi yazmak, editörün aynı karede
+    X'e iki ayrı renk demesi olurdu.
+  - **Kamera yerinde dönmüyor**: pivot ve uzaklık korunuyor, yalnız yön değişiyor. Yerinde dönse
+    baktığın nesne ekrandan çıkardı.
+
+  Dört muhafız var (y çevirme, derinlik yönü, tıklama yönü, matrisin ötelemesinin sızmaması) ve
+  dördü de kusur geri konarak **birebir** kırmızıya döndürüldü: her kusur yalnız kendi testini
+  düşürüyor.
+
+  **Yol boyunca çıkan iki kusur, ikisi de bu işten bağımsız:**
+  - `camera.view`/`proj` yalnızca `if let Some(ndc) = mouse_ndc` bloğunun içinde yazılıyordu —
+    yani fare sahne viewport'unun üstündeyken. Işın atmak için doğru gate, matrisler için yanlış:
+    onları okuyan herkes (eksen gizmo'su, kutuyla seçim) fare içeri girene kadar `None` görüyordu.
+    Gizmo bu yüzden ilk karelerde hiç çizilmedi, ve kusur **ekran görüntüsüyle** bulundu — yeni
+    açılmış bir stüdyonun karesinde imleç yok. Matrisler artık her kare yayınlanıyor.
+  - Yaw/pitch ters çevirmesi (`z.atan2(x)` / `y.asin()`) depoda **dört** yere elle yazılmıştı ve
+    beşincisini yazmak üzereydim. Artık çevirdiği fonksiyonun yanında, tek yerde:
+    `Camera::yaw_pitch_from_forward`. İki dejenere durum da orada adlandırıldı — sıfır/NaN yön
+    (dövüş kamerası hedefinin tam üstüne varınca `cam.yaw`'a NaN yazıyordu, görüntü matrisiyle
+    birlikte) ve tam dikey bakış (yaw belirsiz; `atan2(0,0)` sessizce `0` dönüp sahneyi +X'e
+    döndürüyordu). Setup'taki iki eski regresyon testi formülün *kendi kopyasını* ölçüyordu; artık
+    gerçek çifti çağırıyorlar.
 - ⬜ **Hiyerarşide klasör grupları** (Environment / Town / Gameplay). Parent/Children ile temsil
   edilebilir ama "klasör" kavramı — çizim yapmayan, yalnız gruplayan varlık — yok.
 
@@ -2915,7 +2947,22 @@ yok olması demek değil.
 
 Palet ve geometri, iki satırlı üst çubuk, viewport çipleri + ölçülmüş RENDER STATS, hiyerarşi satır
 anatomisi + gerçek bileşen rozetleri, Inspector'ın vurgu renkli bölüm başlıkları, segmentli kontrol
-ve tek hücreli anahtar, alt dock'un doğru yere inmesi ve palete oturması.
+ve tek hücreli anahtar, alt dock'un doğru yere inmesi ve palete oturması, durum çubuğu +
+ADD COMPONENT düğmesi, ve viewport'un eksen gizmo'su.
+
+### Bu listede kalanların tamamı (2026-08-16)
+
+Sırada duran her şey burada; A öbeği bitti, B'nin ve C'nin kalanı bu:
+
+- ⬜ Timeline'ın **yazma** tarafı (Auto-key, keyframe düzenleme) — geri-alma hikâyesi ister.
+- ⬜ Tarayıcının **klasör ağacı** sütunu (üçüncü sütun).
+- ⬜ Script'e editörden **özellik ekleme** (bildirimden gelmeyeni yaratmak).
+- ⬜ Durum çubuğundaki **RAM** yarısı — süreç RSS'i, bir render kaygısı değil.
+- ⬜ Varlık kimliğinin kalan üçü (`demo/assets` taranmıyor, glTF UUID alamıyor, sahneler UUID
+  yazmıyor) — üçü de "sahneler kimliğe geçecek mi" sorusuna bağlı, ve o cevaplanmadan bağlamak
+  spekülasyon olur.
+- ⬜ **Shader Graph** — listenin en büyüğü, tek başına bir proje.
+- ⬜ Hiyerarşide **klasör grupları** (çizim yapmayan, yalnız gruplayan varlık kavramı yok).
 
 ### Prototipin isteyip egui 0.34'ün veremediği dördü
 
