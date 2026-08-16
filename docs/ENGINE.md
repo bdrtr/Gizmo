@@ -398,6 +398,20 @@ The "1.0-readiness hardening + graphics upgrade" breaking release (2026-06-25):
 
 ## 7. Closed Research & Non-Goals
 
+**Metal draws less of a double-sided interior than Vulkan — OPEN, measured, do not re-chase as a
+threshold bug** *(2026-08-16)*. `a_double_sided_material_is_drawn_from_behind` fails only on the
+macOS runner. It reads like a mis-calibrated pixel threshold and it is not: the assertion was
+rewritten to sample the CENTRE of the frame — a camera inside a cube is looking at a wall there
+under any projection — and Metal changes **43.8%** of those pixels where Vulkan changes over 90%.
+A framing difference cannot leave half the centre of a wall untouched, so the amount of interior
+actually drawn differs on that backend. The test is `#[ignore]`d on macOS with the number written
+into its doc comment rather than loosened, because loosening it would hide the difference on every
+platform. Diagnosing it needs a Mac to run on. Two things measured along the way and worth keeping:
+the old assertion compared BYTES including a constant alpha channel, so its ratio was capped at
+0.75 before any geometry was drawn; and the test's claim to guard "either pipeline selection" was
+false — reverting the z-prepass arm leaves it green (the prepass writes only depth, and the sole
+occluder here is the surface under test), so that arm is unguarded.
+
 **Solver stack instability — SOLVED.** A resting column of N≥5 boxes was linearly unstable
 (lateral BUCKLING / inverted pendulum, not a vertical energy pump): the iterative contact
 solver's effective lateral restoring stiffness was below the buckling-critical value.

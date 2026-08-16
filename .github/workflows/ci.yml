@@ -166,14 +166,44 @@ jobs:
       - name: cargo deny (advisories + licenses + bans + sources)
         run: cargo deny --all-features check
 
-  # ── MSRV gate: workspace must build on the declared rust-version (1.92) ────
+  # ── MSRV gate: workspace must build on the declared rust-version ──────────
+  #
+  # The toolchain is DERIVED from `rust-version` in Cargo.toml rather than pinned here, and the
+  # reason is a hazard this job actually hit. `dtolnay/rust-toolchain` takes the toolchain from its
+  # own ref, so the pin read `@1.92.0` — and to Dependabot's github-actions ecosystem that is
+  # indistinguishable from an action version. It opened a PR bumping it to `@1.100.0`: not a Rust
+  # release at all (stable is 1.97), so the job died in seven seconds at
+  # `rustup toolchain install 1.100.0`.
+  #
+  # The failure was the lucky outcome. Had such a bump ever landed on a version that DOES exist,
+  # this job would have gone green while checking a toolchain with no relationship to the declared
+  # `rust-version` — an MSRV gate guarding nothing, and nothing anywhere would have said so.
+  #
+  # Deriving it removes the constant Dependabot can reach. Same answer as `pages.yml`, which reads
+  # the wasm-bindgen pin out of `Cargo.lock` so a `cargo update` cannot silently desync CI from the
+  # source tree. The job's display name is deliberately version-less: GitHub resolves job names
+  # before any step runs, so a name carrying "1.92" would be a second copy of the number, free to
+  # drift from the manifest exactly like the pin was.
   msrv:
-    name: MSRV (1.92)
+    name: MSRV
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.92.0
+      - name: Resolve the MSRV from Cargo.toml
+        id: msrv
+        run: |
+          set -euo pipefail
+          ver=$(awk -F'"' '/^rust-version = /{print $2; exit}' Cargo.toml)
+          if [ -z "$ver" ]; then
+            echo '::error::could not read rust-version from [workspace.package] in Cargo.toml'
+            exit 1
+          fi
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "MSRV gate will build on Rust $ver (from Cargo.toml)"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
       - name: Install Linux dependencies
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev pkg-config
       - uses: Swatinem/rust-cache@v2
