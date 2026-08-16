@@ -114,9 +114,19 @@ fn draw_engine_logs(ui: &mut egui::Ui, state: &mut EditorState) {
                 for i in row_range {
                     let log = &state.console.cached_logs[i];
                     let (text_color, bg_color, icon) = match log.level {
-                        LogLevel::Info => (egui::Color32::WHITE, egui::Color32::TRANSPARENT, "ℹ"),
-                        LogLevel::Warning => (egui::Color32::from_rgb(100, 255, 100), egui::Color32::from_rgba_unmultiplied(100, 255, 100, 15), "⚠️"),
-                        LogLevel::Error => (egui::Color32::RED, egui::Color32::from_rgba_unmultiplied(255, 0, 0, 20), "🔴"),
+                        // From the palette, not invented here — and warnings are amber, matching
+                        // both their own `⚠` icon and the `⚠` labels elsewhere in the editor.
+                        LogLevel::Info => (crate::theme::palette::TEXT, egui::Color32::TRANSPARENT, "ℹ"),
+                        LogLevel::Warning => (
+                            crate::theme::palette::WARNING,
+                            crate::theme::palette::WARNING_WASH,
+                            "⚠",
+                        ),
+                        LogLevel::Error => (
+                            crate::theme::palette::DANGER,
+                            crate::theme::palette::DANGER_WASH,
+                            "🔴",
+                        ),
                     };
 
                     let text = format!("[{}] {} {}", log.timestamp, icon, log.message);
@@ -138,4 +148,121 @@ fn draw_engine_logs(ui: &mut egui::Ui, state: &mut EditorState) {
                 }
             },
         );
+}
+
+#[cfg(test)]
+mod console_colour_tests {
+    use crate::theme::palette;
+
+    /// A warning must not be drawn in the colour that means "fine".
+    ///
+    /// The console drew warnings green — text and row tint — while labelling them `⚠️`, and while
+    /// the rest of the editor was already using yellow for the same idea (`asset_browser`'s
+    /// "⚠ Asset dizini bulunamadı", the fight HUD's amber). A console of warnings scanned as a
+    /// console of successes, and today's work routes more warnings into it than ever.
+    #[test]
+    fn a_warning_is_not_painted_green() {
+        let (r, g, b, _) = palette::WARNING.to_tuple();
+        assert!(
+            r >= g,
+            "the warning colour is greener than it is red ({r}, {g}, {b}) — that is the colour of \
+             success, not of a warning"
+        );
+        assert!(
+            r > b && g > b,
+            "the warning colour must sit in the amber/yellow family, not blue-ward: ({r}, {g}, {b})"
+        );
+    }
+
+    /// The three levels have to be distinguishable at a glance, which is the entire job of the
+    /// colour: `Info` is unremarkable text, `Warning` is amber, `Error` is red.
+    #[test]
+    fn the_three_levels_are_told_apart_by_colour() {
+        let info = palette::TEXT;
+        let warn = palette::WARNING;
+        let error = palette::DANGER;
+        assert_ne!(info, warn);
+        assert_ne!(warn, error);
+        assert_ne!(info, error);
+
+        let (wr, wg, _, _) = warn.to_tuple();
+        let (er, eg, _, _) = error.to_tuple();
+        assert!(
+            er as i32 - eg as i32 > wr as i32 - wg as i32,
+            "the error colour is not redder than the warning colour, so the two rows read the same"
+        );
+    }
+
+    /// And the panel actually paints with those colours.
+    ///
+    /// The constants above only matter if the console reads them; it used to hold its own inline
+    /// `from_rgb(100, 255, 100)`. This drives a real console frame with one warning and one error
+    /// in the log and reads the colours back out of the shapes egui emitted.
+    #[test]
+    fn the_console_paints_warnings_and_errors_in_those_colours() {
+        use gizmo_core::logger::{self, LogLevel};
+
+        let marker = format!("renk-testi-{}", std::process::id());
+        logger::log_message(LogLevel::Warning, format!("{marker}-uyari"), "test.rs", 1);
+        logger::log_message(LogLevel::Error, format!("{marker}-hata"), "test.rs", 2);
+
+        let mut state = crate::EditorState::default();
+        let ctx = egui::Context::default();
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let mut panel = ui.new_child(egui::UiBuilder::new().max_rect(
+                egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(880.0, 1200.0)),
+            ));
+            super::ui_console(&mut panel, &mut state);
+        });
+
+        // (text, colour) for everything the frame drew.
+        fn collect(shape: &egui::Shape, out: &mut Vec<(String, egui::Color32)>) {
+            match shape {
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| collect(s, out)),
+                egui::Shape::Text(t) => {
+                    let colour = t.override_text_color.unwrap_or_else(|| {
+                        t.galley
+                            .job
+                            .sections
+                            .first()
+                            .map(|s| s.format.color)
+                            .unwrap_or(egui::Color32::PLACEHOLDER)
+                    });
+                    out.push((t.galley.text().to_owned(), colour));
+                }
+                _ => {}
+            }
+        }
+        let mut painted = Vec::new();
+        output.shapes.iter().for_each(|s| collect(&s.shape, &mut painted));
+        output.drop_without_applying_deltas();
+
+        let colour_of = |needle: &str| {
+            painted
+                .iter()
+                .find(|(text, _)| text.contains(needle))
+                .map(|(_, c)| *c)
+        };
+
+        assert_eq!(
+            colour_of(&format!("{marker}-uyari")),
+            Some(palette::WARNING),
+            "the console did not paint the warning row in the palette's warning colour"
+        );
+        assert_eq!(
+            colour_of(&format!("{marker}-hata")),
+            Some(palette::DANGER),
+            "the console did not paint the error row in the palette's error colour"
+        );
+    }
+
+    /// Errors must not wear the accent, which in this editor means "selected".
+    #[test]
+    fn an_error_does_not_look_like_a_selection() {
+        assert_ne!(
+            palette::DANGER,
+            palette::ACCENT,
+            "errors painted in the selection colour make every error look like the row you clicked"
+        );
+    }
 }

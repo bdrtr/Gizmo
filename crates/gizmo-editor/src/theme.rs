@@ -65,6 +65,22 @@ pub mod palette {
     pub const ACCENT_LIGHT: Color32 = Color32::from_rgb(0xff, 0x97, 0x83);
     /// `#ffc4b8` — a link under the cursor.
     pub const ACCENT_PALE: Color32 = Color32::from_rgb(0xff, 0xc4, 0xb8);
+
+    /// A warning. Amber, like the `⚠` labels the rest of the editor already uses.
+    ///
+    /// The console drew warnings in **green** — `from_rgb(100, 255, 100)`, text and row tint both
+    /// — while its own icon was `⚠️` and while `asset_browser` and the fight HUD were using yellow
+    /// for the same idea. Green is the one colour that means "nothing to see here", so a console
+    /// full of warnings scanned as a console full of fine.
+    pub const WARNING: Color32 = Color32::from_rgb(0xe8, 0xa3, 0x3d);
+    /// The 15%-alpha row tint that goes under [`WARNING`] text.
+    pub const WARNING_WASH: Color32 = Color32::from_rgba_premultiplied(0x18, 0x11, 0x06, 0x00);
+
+    /// An error. Distinct from [`ACCENT`], which means "selected" in this editor and would make
+    /// every error look like a selection.
+    pub const DANGER: Color32 = Color32::from_rgb(0xff, 0x5a, 0x4a);
+    /// The row tint that goes under [`DANGER`] text.
+    pub const DANGER_WASH: Color32 = Color32::from_rgba_premultiplied(0x1c, 0x08, 0x06, 0x00);
 }
 
 /// The prototype's row height. Its controls sit between 20 and 24 px; 21 is both the mode and the
