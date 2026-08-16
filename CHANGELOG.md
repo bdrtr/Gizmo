@@ -47,6 +47,23 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A decal placed in the editor is visible in the editor.** Decals blend into the deferred
+  G-buffer's albedo target, and the editor draws forward and fills no G-buffer, so a decal was
+  invisible until the game ran — the author saw an empty floor and the shipped game showed the
+  splatter. There is a forward decal pass now (`gizmo::systems::render::record_forward_decals`,
+  `decal_forward.wgsl`): it reconstructs the surface position from the depth buffer the forward
+  pass already writes and alpha-blends into the lit image, with the same volume test, projection
+  and fade as the deferred one. Both passes read the world through one shared collector, so they
+  cannot disagree about where a decal is.
+
+- **Two of the engine's own assets said the wrong thing when they failed to load.** A scene from
+  before components were stored as strings (`perfect_car.scene`) failed at the parser with
+  `10:28: Expected string` — before the version machinery could say anything — and now fails as
+  `SceneError::LegacyComponentEncoding`, which names the format and says what to do. A prefab that
+  was not text at all (`prefab_8.prefab`, binary) reported "scene file I/O error" for a file that
+  was present and readable; the not-UTF-8 case is now reported as the wrong-format failure it is,
+  and that prefab — which every export copied — is deleted.
+
 - **A per-entity script's commands land in the frame that issued them.** `entity.set_position` and
   its neighbours queue a command rather than writing the world, and the play loop flushed that
   queue *before* running the per-entity `on_entity_update` hooks — so everything those hooks asked

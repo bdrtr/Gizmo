@@ -369,13 +369,6 @@ fn every_render_capability_is_known_to_both_draw_paths() {
     /// Declared asymmetries: (component, which path, why).
     const EXCEPTIONS: &[(&str, Path, &str)] = &[
         (
-            "Decal",
-            Path::GameOnly,
-            "the decal pass blends into the G-BUFFER, and the editor's path is forward — there is \
-             no surface there to blend into. Structural, not an oversight, but the consequence is \
-             real and unfixed: a decal placed in the editor is invisible until the game runs.",
-        ),
-        (
             "EditorRenderTarget",
             Path::EditorOnly,
             "the editor's own viewport texture; a game has no second viewport to render into.",

@@ -4,6 +4,16 @@ use wgpu::util::DeviceExt;
 
 pub struct DecalState {
     pub pipeline: wgpu::RenderPipeline,
+    /// The same decal, drawn for a pipeline that has no G-buffer.
+    ///
+    /// The editor draws forward, so `world_pos_bg` (deferred RT2) is empty there and a decal
+    /// placed in the editor was invisible until the game ran. This variant reconstructs the
+    /// surface position from the depth buffer and blends into the lit HDR image instead. Same
+    /// uniforms, same cube, same shader logic — see `decal_forward.wgsl`.
+    pub forward_pipeline: wgpu::RenderPipeline,
+    /// Layout for the depth texture the forward variant samples (built per frame, like the
+    /// particle pass's, because the depth view is recreated on every resize).
+    pub depth_bgl: wgpu::BindGroupLayout,
     pub decal_uniform_bgl: wgpu::BindGroupLayout,
     pub decal_uniform_bg: wgpu::BindGroup,
     pub world_pos_bgl: wgpu::BindGroupLayout,
@@ -128,6 +138,78 @@ impl DecalState {
             cache: None,
         });
 
+        let depth_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Decal Depth BGL"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Depth,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            }],
+        });
+
+        let forward_shader = load_shader_composed(
+            device,
+            "crates/gizmo-renderer/src/shaders/decal_forward.wgsl",
+            include_str!("shaders/decal_forward.wgsl"),
+            "decal_forward",
+        );
+        let forward_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Decal Forward Pipeline Layout"),
+            bind_group_layouts: &[
+                Some(&scene.global_bind_group_layout),  // 0
+                Some(&depth_bgl),                       // 1 — depth, not the G-buffer
+                Some(&scene.texture_bind_group_layout), // 2
+                Some(&decal_uniform_bgl),               // 3
+            ],
+            immediate_size: 0,
+        });
+        let forward_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Decal Forward Pipeline"),
+            layout: Some(&forward_layout),
+            vertex: wgpu::VertexState {
+                module: &forward_shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[Some(wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x3],
+                })],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &forward_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    // The lit HDR image, not the albedo G-buffer — hence `ColorWrites::ALL`
+                    // here where the deferred variant must preserve RT0's metallic channel.
+                    format: wgpu::TextureFormat::Rgba16Float,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                // Back faces only: with no depth attachment both faces of the volume would
+                // rasterise and every covered pixel would be blended twice.
+                cull_mode: Some(wgpu::Face::Front),
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+
         // Unit cube from -0.5 to 0.5
         let cube_vertices: &[[f32; 3]] = &[
             // Front
@@ -202,6 +284,8 @@ impl DecalState {
 
         Self {
             pipeline,
+            forward_pipeline,
+            depth_bgl,
             decal_uniform_bgl,
             decal_uniform_bg,
             world_pos_bgl,
@@ -209,6 +293,24 @@ impl DecalState {
             vertex_buffer,
             uniform_buffer,
         }
+    }
+
+    /// Bind group for the forward variant's depth input. Built per frame like the particle
+    /// pass's: the depth view is a new object after every resize, so caching it would hand the
+    /// GPU a view of a texture that no longer exists.
+    pub fn create_depth_bind_group(
+        &self,
+        device: &wgpu::Device,
+        depth_view: &wgpu::TextureView,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Decal Depth BG"),
+            layout: &self.depth_bgl,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(depth_view),
+            }],
+        })
     }
 
     pub fn resize(&mut self, device: &wgpu::Device, deferred: &DeferredState) {

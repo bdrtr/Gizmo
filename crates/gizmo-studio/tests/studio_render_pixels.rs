@@ -1194,3 +1194,170 @@ fn the_wire_mode_leaves_the_middle_of_a_face_empty() {
     );
 }
 
+/// **A decal placed in the editor is visible in the editor.**
+///
+/// It was not. A decal blends into the deferred G-buffer's albedo target, and the editor draws
+/// forward and fills no G-buffer, so the decal pass had nothing to read and nothing to write into:
+/// the author saw an empty floor and the shipped game showed the splatter. `render_parity.rs`
+/// recorded that as "real and unfixed". The fix is a forward decal pass that reconstructs the
+/// surface from the depth buffer (`gizmo::systems::render::record_forward_decals`), and this is
+/// the measurement that says it arrived.
+#[test]
+fn a_decal_is_visible_in_the_editor_viewport() {
+    let _gpu = gpu_lock();
+    let (Some(with), Some(without)) = (render_decal_frame(true), render_decal_frame(false)) else {
+        return;
+    };
+
+    let changed = with
+        .chunks_exact(4)
+        .zip(without.chunks_exact(4))
+        .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 8))
+        .count();
+
+    assert!(
+        changed >= 100,
+        "placing a decal changed {changed} of {} pixels in the editor's own pipeline — it is \
+         still only visible once the game runs",
+        (W * H) as usize
+    );
+}
+
+/// The editor's pipeline over a floor, with or without a decal projected onto it.
+fn render_decal_frame(with_decal: bool) -> Option<Vec<u8>> {
+    if !pollster::block_on(Renderer::headless_adapter_available())
+        || pollster::block_on(Renderer::headless_adapter_is_software())
+    {
+        eprintln!("skipping: no usable GPU adapter");
+        return None;
+    }
+
+    pollster::block_on(async {
+        let mut renderer = Renderer::new_headless(W, H, None).await;
+        let mut asset_manager = AssetManager::new();
+        let mut world = World::new();
+        let tex = asset_manager.create_white_texture(
+            &renderer.device,
+            &renderer.queue,
+            &renderer.scene.texture_bind_group_layout,
+        );
+
+        // A wide floor, so the projector has a surface under it.
+        let floor = world.spawn();
+        world.add_component(
+            floor,
+            Transform::new(Vec3::new(0.0, -1.2, 0.0)).with_scale(Vec3::new(20.0, 0.2, 20.0)),
+        );
+        world.add_component(floor, GlobalTransform::default());
+        world.add_component(floor, AssetManager::create_cube(&renderer.device));
+        world.add_component(
+            floor,
+            Material::new(tex.clone()).with_pbr(Vec4::new(0.8, 0.8, 0.8, 1.0), 0.9, 0.0),
+        );
+        world.add_component(floor, MeshRenderer::new());
+
+        if with_decal {
+            let d = world.spawn();
+            world.add_component(
+                d,
+                Transform::new(Vec3::new(0.0, -1.1, 0.0)).with_scale(Vec3::splat(3.0)),
+            );
+            world.add_component(d, GlobalTransform::default());
+            world.add_component(
+                d,
+                gizmo::renderer::components::Decal::new(
+                    tex.clone(),
+                    Vec4::new(1.0, 0.0, 0.0, 1.0),
+                ),
+            );
+        }
+
+        let cam = world.spawn();
+        world.add_component(cam, Transform::new(Vec3::new(-5.0, 2.0, 0.0)));
+        world.add_component(cam, GlobalTransform::default());
+        world.add_component(
+            cam,
+            gizmo::renderer::components::Camera::new(
+                std::f32::consts::FRAC_PI_4,
+                0.1,
+                1000.0,
+                0.0,
+                -0.35,
+                true,
+            ),
+        );
+        world.spawn_bundle(gizmo::prelude::DirectionalLightBundle::default());
+
+        let state = StudioState {
+            current_fps: 60.0,
+            actual_dt: 1.0 / 60.0,
+            editor_camera: cam.id(),
+            game_camera: 4242,
+            do_raycast: false,
+            play: gizmo::systems::PlayLoop::new(),
+            asset_watcher: None,
+            gc_timer: 0.0,
+            autosave_timer: 0.0,
+            visible_entity_count: 0,
+            draw_call_count: 0,
+        };
+
+        let format = renderer.config.format;
+        let target = renderer.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("studio-decal-target"),
+            size: wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = renderer
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        execute_render_pipeline(&mut world, &state, &mut encoder, &view, &mut renderer, 0.0);
+
+        let staging = renderer.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("studio-decal-readback"),
+            size: u64::from(W * H * BPP),
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &target,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(W * BPP),
+                    rows_per_image: Some(H),
+                },
+            },
+            wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 1 },
+        );
+        renderer.queue.submit(std::iter::once(encoder.finish()));
+
+        let slice = staging.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        let _ = renderer
+            .device
+            .poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        rx.recv().expect("readback channel").expect("readback");
+        let pixels = slice
+            .get_mapped_range()
+            .expect("a just-mapped buffer's full range is always valid")
+            .to_vec();
+        staging.unmap();
+        Some(pixels)
+    })
+}

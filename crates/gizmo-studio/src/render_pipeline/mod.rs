@@ -649,7 +649,14 @@ pub fn execute_render_pipeline(
                 encoder, renderer, world, flat_batches.as_slice(), game_view_proj, &debug_aabbs,
                 show_colliders, true, ed_shading_mode,
             );
-            // After the main pass, because it needs a pass with no depth attachment of its own.
+            // A `Decal` before the particles: a decal paints a surface, a particle floats in
+            // front of one. Both after the main pass, because both sample the depth this frame
+            // just wrote and a texture cannot be attachment and sampler in one pass.
+            //
+            // This is the engine's own pass (`gizmo::systems::render::record_forward_decals`),
+            // not a studio copy — the editor drawing forward is exactly why decals were invisible
+            // here until the game ran, and a second implementation is how that would come back.
+            gizmo::systems::render::record_forward_decals(encoder, renderer, world, cam_pos);
             record_studio_particle_pass(encoder, renderer);
 
     }); // Cikis: CACHE.with bloğu

@@ -172,6 +172,19 @@ pub enum SceneError {
         /// Highest version this build understands.
         supported: u32,
     },
+    /// The file predates the current component encoding, and no version field can say so.
+    ///
+    /// A component is stored today as a **string** holding its own RON
+    /// (`"Transform": "(position:(0,0,0),…)"`). Older files wrote a nested map keyed by field
+    /// name, with enums internally tagged (`"shape": {"type": "Aabb", …}`) — a `bevy_reflect`
+    /// shape rather than a serde one. Such a file fails at the parser, *before*
+    /// [`SceneData::migrate`](crate::scene::SceneData::migrate) can look at its version, and the
+    /// raw failure is a column number and "Expected string", which tells the person holding an
+    /// old scene nothing. This says what is actually wrong.
+    LegacyComponentEncoding {
+        /// Path of the offending file.
+        path: String,
+    },
 }
 
 impl std::fmt::Display for SceneError {
@@ -189,6 +202,13 @@ impl std::fmt::Display for SceneError {
                 "scene file '{path}' is format version {found}, but this build understands \
                  at most {supported} — it was written by a newer version of the engine"
             ),
+            SceneError::LegacyComponentEncoding { path } => write!(
+                f,
+                "scene file '{path}' stores its components in the old reflection format \
+                 (nested maps, internally tagged enums); this build reads components written as \
+                 RON strings. Re-save it from an engine version that can still open it, or \
+                 rebuild the scene"
+            ),
         }
     }
 }
@@ -199,8 +219,10 @@ impl std::error::Error for SceneError {
             SceneError::Io(e) => Some(e),
             SceneError::Parse(e) => Some(e),
             SceneError::Serialize(e) => Some(e),
-            // No inner error — the version mismatch IS the failure.
-            SceneError::UnsupportedVersion { .. } => None,
+            // No inner error — the mismatch IS the failure in both of these.
+            SceneError::UnsupportedVersion { .. } | SceneError::LegacyComponentEncoding { .. } => {
+                None
+            }
         }
     }
 }

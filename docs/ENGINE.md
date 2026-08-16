@@ -1233,6 +1233,66 @@ yarısı oradan da eksikti.
 - **Sonda köprüsünde hangi sorgular sunulacak.** Mekanizma kuruldu ve tek tüketicisi var
   (`physics.ground_at`); geri kalanı API tasarımı.
 
+### Decal editörde görünmüyordu (2026-08-17, DÜZELTİLDİ)
+
+Bir decal bir **projektör**dür: zaten orada olan yüzeyi boyar, dolayısıyla o yüzeyin konumuna
+ihtiyacı vardır. Motorun deferred geçişi bunu G-buffer'dan okur — oyun için çalışır, editör için
+hiç çalışmaz: stüdyo forward çiziyor ve G-buffer doldurmuyor. Sonuç, editörün WYSIWYG olma iddiası
+için en kötüsü: kullanıcı decal'ı yerleştiriyor, boş zemin görüyor, "bozuk" diye kaydediyor —
+oysa gönderilen oyunda splatter oradaydı. `render_parity.rs` bunu "gerçek ve **düzeltilmemiş**"
+diye kaydetmişti; bu, o kaydı kapatıyor.
+
+**Düzeltme:** forward bir decal geçişi (`decal_forward.wgsl` + `record_forward_decals`), yüzey
+konumunu **derinlik tamponundan** geri kuruyor — forward hattın zaten yazdığı tampon — ve ışıklı
+HDR görüntüsüne alfa harmanlıyor. Projeksiyon matematiği, hacim testi ve dairesel solma deferred
+sürümün birebir aynısı: editörde bir türlü, oyunda başka türlü görünen bir decal, hiç
+görünmeyeninden kötüdür.
+
+İki ayrıntı kayda değer:
+
+- **Dünyayı okuyan taraf ortak.** `collect_decals` (facade'da, çünkü `DecalState` renderer'da ve
+  `Transform` physics-core'da) her iki geçişi de besliyor. İkisinin anlaşmak zorunda olduğu şey
+  decal'ın *nerede* olduğu; nasıl kaydedildiği değil.
+- **Tek uniform, iki shader.** CPU tarafı `inv_model`'i `model⁻¹ · T(kamera)` olarak katlıyor,
+  çünkü deferred okuyucu kameraya göreli konum veriyor. Forward shader da geri kurduğu mutlak
+  konumdan kamerayı çıkarıp aynı matrisi kullanıyor — böylece iki hat aynı tamponu paylaşıyor ve
+  "decal nerede" sorusunda ayrışamıyorlar.
+
+Ayrıca derinlik tamponu bu geçişte **örnekleniyor**, attachment değil (wgpu ikisine birden izin
+vermez) — parçacık geçişinin kalıbı. Ön yüzler kırpılıyor: derinlik testi olmadan kutunun iki yüzü
+de rasterize olur ve her piksel iki kez harmanlanırdı.
+
+Doğrulama, stüdyonun kendi piksel koşumunda: `a_decal_is_visible_in_the_editor_viewport`. Geçiş
+kapatılıp koşuldu — **0/16384 piksel**; açıkken geçiyor. Ve `render_parity.rs`'teki `Decal`
+istisnası kaldırıldı: artık iki hat da tanıyor.
+
+### Ölü biçimdeki iki varlık: artık ne oldukları söyleniyor (2026-08-17, KAPANDI)
+
+Depoda iki dosya, ikisi de motorun kendi varlıkları, ikisi de yüklenemiyordu — ve ikisinin de
+hatası yanlış şeyi söylüyordu. Denetim (2026-08-04) bunu zaten kaydetmişti; kapatan bu.
+
+**1. `perfect_car.scene` — reflection çağından.** Bileşenleri alan-adı anahtarlı iç içe map olarak,
+enum'ları iç etiketli (`"shape": {"type": "Aabb", …}`) yazıyor; bugünkü biçim her bileşeni bir RON
+**string**'i olarak yazıyor. Ayrıştırma tipli deserialize'da düşüyor — yani `migrate` dosyanın
+sürümüne bakamadan — ve kullanıcıya kalan mesaj `10:28: Expected string` oluyor. Sürüm alanının
+tam da bu yüzden var olduğu bir dosyada, sürüm mekanizması devreye giremiyor.
+
+Yeni davranış: ayrıştırma düştüğünde dosya bir kez de `ron::Value` olarak okunuyor ve doğrudan
+sorulan soru şu — **bileşen yükü string mi, map mi?** Map'se hata `SceneError::LegacyComponentEncoding`
+ve mesaj ne olduğunu ve ne yapılacağını söylüyor. Bu ikinci ayrıştırma yalnız zaten başarısız olmuş
+yolda koşuyor.
+
+Dosyanın kendisi silinmedi, **fixture oldu**: `crates/gizmo-scene/tests/fixtures/legacy_reflection.scene`.
+Sentetik bir örnek değil, gerçek relik — ve testi o çalıştırıyor. Üç bekçi: eski dosya adıyla
+anılıyor mu, sıradan bozuk bir dosya hâlâ `Parse` mı (yoksa her hata "sahneniz eski" olur), ve
+bugünkü biçim hâlâ yükleniyor mu.
+
+**2. `prefab_8.prefab` — ikili çöp.** RON değil, metin bile değil; `read_to_string` UTF-8'de
+düşüyor ve kullanıcının gördüğü şey **"scene file I/O error"** — yani yerinde duran, okunabilir bir
+dosya için "dosya açılamadı" diyen bir mesaj. Dosya silindi (export her oyuna kopyalıyordu), ve
+`InvalidData` durumu artık ayrı raporlanıyor: "bu dosya metin değil, başka bir (muhtemelen ikili,
+eski) biçimde yazılmış". Yanındaki `Default_Cube.prefab` ölçüldü, **yükleniyor** — o sağlam.
+
 ### Kalan GPU alt sistemleri tarandı: biri hiç koşmuyormuş (2026-08-16)
 
 Aynı alet (geçişi kaldır, pikseli say) hiç ölçülmemiş dört isteğe bağlı sisteme tutuldu.
@@ -1559,6 +1619,7 @@ zemin, kırmızı küp, mavi küre, güneş ve gölgesi. Yani dosyadan yüklenen
    Dönüştürücü yazılmadı; yerine güncel biçimde `demo/assets/sample.scene` motorun kendi
    `SceneData::save` yolundan üretildi ve commit'lendi. Bekçi: `scene_round_trip.rs` — kaydedilen
    sahne mesh kaynakları, ışığı, birincil kamerası ve değerleriyle geri geliyor mu.
+   **(2026-08-17'de kapatıldı — aşağıya bak.)**
 
 #### Export artık onu paketliyor (2026-08-16)
 

@@ -418,6 +418,10 @@ mod tests {
                 ("shadow.wgsl", include_str!("../shaders/shadow.wgsl")),
                 ("point_shadow.wgsl", include_str!("../shaders/point_shadow.wgsl")),
                 ("decal.wgsl", include_str!("../shaders/decal.wgsl")),
+                (
+                    "decal_forward.wgsl",
+                    include_str!("../shaders/decal_forward.wgsl"),
+                ),
                 ("debug_lines.wgsl", include_str!("../shaders/debug_lines.wgsl")),
                 ("mipmap.wgsl", include_str!("../shaders/mipmap.wgsl")),
                 // Self-contained compute shaders (own bindings inline). The fluid

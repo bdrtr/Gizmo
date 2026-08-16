@@ -31,7 +31,7 @@
 //! that way (the binary sits in `target/release/`), so there the caller's cwd is left alone:
 //!
 //! ```sh
-//! cargo run --release --bin gizmo_runtime -- demo/assets/perfect_car.scene
+//! cargo run --release --bin gizmo_runtime -- demo/assets/sample.scene
 //! ```
 //!
 //! With no argument it opens `scenes/main.scene`, which is where the export writes the scene.

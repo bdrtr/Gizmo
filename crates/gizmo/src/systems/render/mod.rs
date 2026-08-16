@@ -568,6 +568,9 @@ pub use batching::{clear_render_cache, DrawItem, RenderCache};
 
 mod passes;
 
+mod decals;
+pub use decals::{collect_decals, record_forward_decals};
+
 mod particles;
 pub use particles::spawn_from_emitters;
 

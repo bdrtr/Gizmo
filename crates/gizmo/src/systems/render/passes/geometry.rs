@@ -147,41 +147,15 @@ pub fn record_deferred_geometry(
     }
 
     // ── Decal Pass (Blend into G-buffer) ──────────────────────────
-    let mut decal_draws = Vec::new();
+    // What to draw comes from the shared collector, so this pass and the editor's forward one
+    // cannot disagree about where a decal is — only about which target it lands in.
+    let (decal_uniforms, decal_draws) = super::super::collect_decals(world, cam_pos);
     if let Some(ref decal_state) = renderer.decal {
-        let decals = world.borrow::<crate::renderer::components::Decal>();
-        let transforms = world.borrow::<gizmo_physics_core::Transform>();
-        let mut uniform_data = Vec::new();
-
-        for (id, decal) in decals.iter() {
-            if let Some(trans) = transforms.get(id) {
-                let model = trans.local_matrix;
-                // The G-buffer stores position relative to the camera (see gbuffer.wgsl), and the
-                // decal shader multiplies whatever it reads by this matrix. Folding the camera
-                // translation in here is what keeps that multiplication correct without giving the
-                // decal shader a uniform it does not otherwise need: `inv_model · T(camera)` maps a
-                // camera-relative position exactly where `inv_model` mapped an absolute one.
-                let inv_model = model.inverse() * gizmo_math::Mat4::from_translation(cam_pos);
-
-                uniform_data.push(crate::renderer::decal::DecalUniforms {
-                    inv_model: inv_model.to_cols_array(),
-                    model: model.to_cols_array(),
-                    albedo_color: [decal.color.x, decal.color.y, decal.color.z, decal.color.w],
-                    _pad: [0.0; 28],
-                });
-
-                decal_draws.push(decal.bind_group.clone());
-                if uniform_data.len() >= 1024 {
-                    break;
-                } // Max 1024 decals limit
-            }
-        }
-
-        if !uniform_data.is_empty() {
+        if !decal_uniforms.is_empty() {
             renderer.queue.write_buffer(
                 &decal_state.uniform_buffer,
                 0,
-                bytemuck::cast_slice(&uniform_data),
+                bytemuck::cast_slice(&decal_uniforms),
             );
         }
     }

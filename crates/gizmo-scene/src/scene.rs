@@ -12,9 +12,12 @@ use std::collections::HashMap;
 /// A scene file is data a user authored and expects to keep working. Until this existed
 /// there was no way to tell a file apart from one written by a different engine version, so
 /// any change to a component's serde shape silently broke every scene ever saved — a RON
-/// parse error with nothing to branch on. The repository's own `demo/assets/perfect_car.scene`
-/// and one shipped prefab are already unloadable relics of earlier formats, which is what
-/// that costs in practice.
+/// parse error with nothing to branch on. The repository's own `perfect_car.scene` and one
+/// shipped prefab were already unloadable relics of earlier formats, which is what that costs in
+/// practice — both are gone from the assets now: the scene is a test fixture
+/// (`tests/fixtures/legacy_reflection.scene`, the file that proves
+/// [`SceneError::LegacyComponentEncoding`](crate::SceneError::LegacyComponentEncoding) fires),
+/// and the binary prefab is deleted.
 ///
 /// | version | meaning |
 /// |---|---|
@@ -550,6 +553,42 @@ impl SceneData {
         entities_data
     }
 
+    /// Was this file written before components became strings?
+    ///
+    /// Today a component is one RON string per name (`"Transform": "(position:(0,0,0),…)"`).
+    /// Older files wrote a nested map keyed by field name, with enums internally tagged
+    /// (`"shape": {"type": "Aabb", …}`) — reflection's shape, not serde's. RON itself parses
+    /// both happily; it is only the typed deserialize that fails, and it fails pointing at a
+    /// column. So the file is re-read as a plain value and the question is asked directly:
+    /// **is any component's payload a map instead of a string?**
+    ///
+    /// A cheap second parse, on a path that has already failed and is about to return an error.
+    fn uses_legacy_component_encoding(src: &str) -> bool {
+        fn field<'a>(map: &'a ron::Map, name: &str) -> Option<&'a ron::Value> {
+            map.iter()
+                .find(|(k, _)| matches!(k, ron::Value::String(s) if s == name))
+                .map(|(_, v)| v)
+        }
+
+        let Ok(ron::Value::Map(root)) = ron::from_str::<ron::Value>(src) else {
+            return false;
+        };
+        let Some(ron::Value::Seq(entities)) = field(&root, "entities") else {
+            return false;
+        };
+        entities.iter().any(|entity| {
+            let ron::Value::Map(entity) = entity else {
+                return false;
+            };
+            match field(entity, "components") {
+                Some(ron::Value::Map(components)) => components
+                    .iter()
+                    .any(|(_, payload)| matches!(payload, ron::Value::Map(_))),
+                _ => false,
+            }
+        })
+    }
+
     /// Read a RON scene file and spawn its contents into `world`.
     ///
     /// **Additive** — it never clears `world` first and never reuses the ids stored in the
@@ -569,8 +608,10 @@ impl SceneData {
     ///
     /// # Errors
     /// [`SceneError::Io`] if the file cannot be read, [`SceneError::Parse`] if it is not valid
-    /// RON, and [`SceneError::UnsupportedVersion`] if it was written by a newer engine (see
-    /// [`migrate`](Self::migrate)).
+    /// RON, [`SceneError::UnsupportedVersion`] if it was written by a newer engine (see
+    /// [`migrate`](Self::migrate)), and [`SceneError::LegacyComponentEncoding`] if it was
+    /// written by an older one — that case fails at the parser, before `migrate` can see a
+    /// version, so it is detected here.
     #[tracing::instrument(skip_all, name = "scene_load", fields(path = %file_path))]
     pub fn load_into(
         file_path: &str,
@@ -578,19 +619,45 @@ impl SceneData {
         registry: &gizmo_core::registry::ComponentRegistry,
     ) -> Result<(), SceneError> {
         let string_data = fs::read_to_string(file_path).map_err(|e| {
-            tracing::error!(path = %file_path, error = %e, "[Scene] sahne dosyası okunamadı");
+            // `InvalidData` here means the bytes are not UTF-8, which for a text format is not
+            // an I/O problem at all — it is a file written by something else. Say which, or the
+            // caller shows "I/O error" for a file that is sitting right there and readable.
+            if e.kind() == std::io::ErrorKind::InvalidData {
+                tracing::error!(
+                    path = %file_path,
+                    "[Scene] dosya metin değil — sahne/prefab biçimi RON metnidir; bu dosya \
+                     başka bir (muhtemelen ikili, eski) biçimde yazılmış",
+                );
+            } else {
+                tracing::error!(path = %file_path, error = %e, "[Scene] sahne dosyası okunamadı");
+            }
             e
         })?;
 
-        let mut scene: SceneData = ron::from_str(&string_data).map_err(|e| {
-            tracing::error!(
-                path = %file_path,
-                error = %e,
-                bytes = string_data.len(),
-                "[Scene] sahne RON ayrıştırma (parse) hatası",
-            );
-            e
-        })?;
+        let mut scene: SceneData = match ron::from_str(&string_data) {
+            Ok(scene) => scene,
+            Err(e) => {
+                // A file from before components were stored as strings fails here, at the
+                // parser, *before* `migrate` can read its version — so the version machinery
+                // cannot report it and the raw message is a column number. Name it instead.
+                if Self::uses_legacy_component_encoding(&string_data) {
+                    tracing::error!(
+                        path = %file_path,
+                        "[Scene] eski (reflection) bileşen biçimi — bu yapı okuyamıyor",
+                    );
+                    return Err(SceneError::LegacyComponentEncoding {
+                        path: file_path.to_string(),
+                    });
+                }
+                tracing::error!(
+                    path = %file_path,
+                    error = %e,
+                    bytes = string_data.len(),
+                    "[Scene] sahne RON ayrıştırma (parse) hatası",
+                );
+                return Err(e.into());
+            }
+        };
 
         scene.migrate(file_path)?;
 
@@ -950,7 +1017,18 @@ impl SceneData {
         registry: &gizmo_core::registry::ComponentRegistry,
     ) -> Result<Option<u32>, SceneError> {
         let string_data = fs::read_to_string(file_path).map_err(|e| {
-            tracing::error!(path = %file_path, error = %e, "[Scene] prefab dosyası okunamadı");
+            // Same reasoning as `load_into`: not-UTF-8 is a wrong-format report, not an I/O one.
+            // The repository shipped exactly such a prefab (`prefab_8.prefab`, binary), and its
+            // failure read as "scene file I/O error" for a file that was present and readable.
+            if e.kind() == std::io::ErrorKind::InvalidData {
+                tracing::error!(
+                    path = %file_path,
+                    "[Scene] prefab metin değil — bu dosya başka bir (muhtemelen ikili, eski) \
+                     biçimde yazılmış",
+                );
+            } else {
+                tracing::error!(path = %file_path, error = %e, "[Scene] prefab dosyası okunamadı");
+            }
             e
         })?;
 
