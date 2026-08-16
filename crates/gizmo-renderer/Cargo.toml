@@ -26,15 +26,15 @@ log = "0.4"
 pollster = "0.3"
 winit = { workspace = true }
 bytemuck = { version = "1.14", features = ["derive"] }
-gizmo-math = { path = "../gizmo-math" , version = "0.9.0" }
-gizmo-core = { path = "../gizmo-core" , version = "0.9.0" }
-gizmo-animation = { path = "../gizmo-animation", version = "0.9.0", default-features = false }
+gizmo-math = { path = "../gizmo-math" , version = "0.9.1" }
+gizmo-core = { path = "../gizmo-core" , version = "0.9.1" }
+gizmo-animation = { path = "../gizmo-animation", version = "0.9.1", default-features = false }
 tobj = "4.0.3"
 image = { version = "0.25", features = ["webp"] }
 serde = { version = "1.0.228", features = ["derive"] }
 gltf = { version = "1.4.1", features = ["import", "extensions", "KHR_materials_emissive_strength", "KHR_texture_transform"] }
 notify = "6"
-rand = "0.9.0"
+rand = "0.9.1"
 uuid = { version = "1.23.0", features = ["v4", "serde"] }
 ron = "0.12.1"
 tracing = "0.1.44"

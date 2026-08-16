@@ -6,6 +6,9 @@ authors.workspace = true
 description.workspace = true
 license.workspace = true
 repository.workspace = true
+# The other 18 published crates all inherit this; this one was the exception, so
+# `gizmo-animation` shipped to crates.io and docs.rs with no README at all.
+readme.workspace = true
 
 [features]
 # OFF by default so the crate's default public API is dependency-light (Stage A:
@@ -20,8 +23,8 @@ repository.workspace = true
 default = []
 
 [dependencies]
-gizmo-core = { version = "0.9.0", path = "../gizmo-core" }
-gizmo-math = { version = "0.9.0", path = "../gizmo-math" }
-gizmo-physics-core = { version = "0.9.0", path = "../gizmo-physics-core" }
+gizmo-core = { version = "0.9.1", path = "../gizmo-core" }
+gizmo-math = { version = "0.9.1", path = "../gizmo-math" }
+gizmo-physics-core = { version = "0.9.1", path = "../gizmo-physics-core" }
 serde = { version = "1", features = ["derive"] }
 tracing = "0.1.44"

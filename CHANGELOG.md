@@ -16,6 +16,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.9.1] — 2026-08-16
+
+> **`0.9.0` never reached crates.io.** It was a local version bump — no `v0.9.0` tag, no
+> registry upload — so the last published release is `0.8.0` and this is what follows it there.
+> The `[0.9.0]` section below is kept as written: it documents real work, and rewriting history
+> to pretend it was `0.9.1` would make the dated record wrong. Under 0.x semver `0.8 → 0.9` is
+> the breaking-allowed step, which is what the `Sprite` removal needs, so nobody pinned to
+> `^0.8` is upgraded into it.
+
 ### Removed
 
 - **`gizmo_renderer::components::Sprite` — BREAKING.** An exported component that nothing could

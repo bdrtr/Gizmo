@@ -32,11 +32,11 @@ experimental-multibody = []
 
 [dependencies]
 serde = { version = "1.0.228", features = ["derive"] }
-gizmo-core = { path = "../gizmo-core", version = "0.9.0", optional = true }
-gizmo-math = { path = "../gizmo-math", version = "0.9.0" }
+gizmo-core = { path = "../gizmo-core", version = "0.9.1", optional = true }
+gizmo-math = { path = "../gizmo-math", version = "0.9.1" }
 # `default-features = false`: without it, turning `ecs` off here would still drag
 # `gizmo-core` in through this crate's own default. The `ecs` feature re-enables it.
-gizmo-physics-core = { path = "../gizmo-physics-core", version = "0.9.0", default-features = false }
+gizmo-physics-core = { path = "../gizmo-physics-core", version = "0.9.1", default-features = false }
 wide = "1.2.0"
 rustc-hash = "2"
 rand = "0.10.1"

@@ -34,15 +34,15 @@ rigid-coupling = ["ecs", "dep:gizmo-physics-rigid"]
 gpu_physics = ["wgpu", "bytemuck", "pollster"]
 
 [dependencies]
-gizmo-core = { path = "../gizmo-core", version = "0.9.0", optional = true }
-gizmo-math = { path = "../gizmo-math", version = "0.9.0" }
+gizmo-core = { path = "../gizmo-core", version = "0.9.1", optional = true }
+gizmo-math = { path = "../gizmo-math", version = "0.9.1" }
 # `default-features = false` on the physics deps: without it, turning `ecs` off here
 # would still drag `gizmo-core` in through their defaults. The `ecs` feature re-enables it.
-gizmo-physics-core = { path = "../gizmo-physics-core", version = "0.9.0", default-features = false }
+gizmo-physics-core = { path = "../gizmo-physics-core", version = "0.9.1", default-features = false }
 # Only for the `rigid-coupling` ECS write-back — see the feature comment above. `ecs` is
 # requested explicitly because `rigid-coupling` implies it and `default-features = false`
 # would otherwise leave `RigidBody`/`Velocity` without their `Component` impls.
-gizmo-physics-rigid = { path = "../gizmo-physics-rigid", version = "0.9.0", default-features = false, features = ["ecs"], optional = true }
+gizmo-physics-rigid = { path = "../gizmo-physics-rigid", version = "0.9.1", default-features = false, features = ["ecs"], optional = true }
 wgpu = { version = "29", optional = true }
 bytemuck = { version = "1.14", features = ["derive"], optional = true }
 pollster = { version = "0.3", optional = true }
@@ -59,8 +59,8 @@ proptest = { workspace = true }
 # Both crates are OPTIONAL normal dependencies, and an optional dependency is not linked into
 # a test target, so they are declared again here. Dev-dependencies do not reach downstream
 # consumers or the published dependency graph.
-gizmo-core = { path = "../gizmo-core", version = "0.9.0" }
-gizmo-physics-rigid = { path = "../gizmo-physics-rigid", version = "0.9.0" }
+gizmo-core = { path = "../gizmo-core", version = "0.9.1" }
+gizmo-physics-rigid = { path = "../gizmo-physics-rigid", version = "0.9.1" }
 # Parses `soft_body.wgsl` and computes its struct layouts under the WGSL rules, so the
 # CPU-side `#[repr(C)]` records can be checked against the shader WITHOUT a GPU. See
 # `tests/wgsl_layout.rs` — this caught an 80-vs-96 byte stride mismatch that no test,
