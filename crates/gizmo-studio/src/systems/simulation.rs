@@ -1,6 +1,52 @@
 use crate::state::StudioState;
 use gizmo::editor::EditorState;
 use gizmo::prelude::*;
+
+/// What the console should be told about one script's load attempt this frame.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ScriptReload {
+    /// Nothing new: it loaded, or it is failing the same way it was already failing.
+    Quiet,
+    /// It has just started failing.
+    Broke(String),
+    /// It was failing and now loads.
+    Recovered,
+}
+
+/// Decide what to say about a reload result, and remember the answer.
+///
+/// The studio ran `let _ = engine.reload_if_changed(&path);` — result discarded — and then called
+/// `update_entity`, which for a script that never loaded takes its `else` branch, emits a `trace!`
+/// and returns `Ok(())`. So a Script component pointing at a file that is not there did nothing,
+/// forever, and said nothing: the editor's own `➕ Bileşen Ekle ▸ Script` stamps
+/// `scripts/new_script.lua`, a path no part of the editor creates. Press ▶ and the console stays
+/// empty while the script never runs.
+///
+/// Reporting it needs a memory, or it is 60 identical lines a second. `failed` holds the paths
+/// that are currently broken, so the message is emitted on the way in and the recovery on the way
+/// out — the two moments a person needs to know about.
+pub(crate) fn script_reload_report(
+    failed: &mut std::collections::BTreeSet<String>,
+    path: &str,
+    result: Result<bool, String>,
+) -> ScriptReload {
+    match result {
+        Ok(_) => {
+            if failed.remove(path) {
+                ScriptReload::Recovered
+            } else {
+                ScriptReload::Quiet
+            }
+        }
+        Err(e) => {
+            if failed.insert(path.to_string()) {
+                ScriptReload::Broke(e)
+            } else {
+                ScriptReload::Quiet
+            }
+        }
+    }
+}
 pub fn handle_simulation(
     world: &mut World,
     editor_state: &mut EditorState,
@@ -79,7 +125,19 @@ pub fn handle_simulation(
                 drop(scripts);
 
                 for (entity_id, path, properties) in entity_calls {
-                    let _ = engine.reload_if_changed(&path);
+                    match script_reload_report(
+                        &mut state.failed_scripts,
+                        &path,
+                        engine.reload_if_changed(&path),
+                    ) {
+                        ScriptReload::Broke(e) => editor_state.log_error(&format!(
+                            "❌ Script yüklenemedi: {} — {}. Entity'nin script'i ÇALIŞMIYOR.",
+                            path, e
+                        )),
+                        ScriptReload::Recovered => editor_state
+                            .log_info(&format!("✅ Script yeniden yüklendi: {}", path)),
+                        ScriptReload::Quiet => {}
+                    }
                     if let Err(e) = engine.update_entity(entity_id, &path, dt, &properties) {
                         editor_state.log_warning(&format!("Entity script error: {}", e));
                     }
@@ -379,5 +437,103 @@ mod tests {
         let p2 = Vec3::new(7.0, 3.0, -4.0);
         let midpoint = (p1 + p2) * 0.5;
         assert!((midpoint - Vec3::new(2.0, 2.0, -1.0)).length() < 1e-5);
+    }
+}
+
+#[cfg(test)]
+mod script_reload_tests {
+    use super::*;
+
+    /// A script that cannot load must be reported — once, and again only when it changes state.
+    ///
+    /// The studio discarded this result entirely (`let _ = engine.reload_if_changed(&path);`), and
+    /// the call after it, `update_entity`, returns `Ok(())` for a script it never loaded. So the
+    /// two places that knew both stayed quiet and the entity's script simply never ran. Reporting
+    /// it naively is no better: this runs per entity per frame, so an unconditional log is 60
+    /// identical lines a second on top of whatever the user is actually reading.
+    #[test]
+    fn a_broken_script_is_reported_once_and_its_recovery_too() {
+        let mut failed = std::collections::BTreeSet::new();
+        let path = "scripts/new_script.lua";
+
+        // Frame 1 — the file is not there. The editor's own `Script` component points here.
+        assert_eq!(
+            script_reload_report(&mut failed, path, Err("Script okunamadı".into())),
+            ScriptReload::Broke("Script okunamadı".into()),
+            "the first failure has to reach the console; nothing else in the chain says a word"
+        );
+
+        // Frames 2..n — still broken. Silence, or the console is unusable.
+        for _ in 0..120 {
+            assert_eq!(
+                script_reload_report(&mut failed, path, Err("Script okunamadı".into())),
+                ScriptReload::Quiet,
+                "a failure that is already on screen must not be printed again every frame"
+            );
+        }
+
+        // The user creates the file.
+        assert_eq!(
+            script_reload_report(&mut failed, path, Ok(true)),
+            ScriptReload::Recovered,
+            "coming back has to be reported too — otherwise the last word on screen is an error \
+             about a script that is now running fine"
+        );
+        assert_eq!(
+            script_reload_report(&mut failed, path, Ok(false)),
+            ScriptReload::Quiet,
+            "and then it goes quiet again"
+        );
+        assert!(failed.is_empty(), "a recovered path must not stay in the failed set");
+    }
+
+    /// Two broken scripts are two reports, not one: the set is keyed by path.
+    #[test]
+    fn each_script_is_tracked_on_its_own() {
+        let mut failed = std::collections::BTreeSet::new();
+        assert!(matches!(
+            script_reload_report(&mut failed, "a.lua", Err("yok".into())),
+            ScriptReload::Broke(_)
+        ));
+        assert!(
+            matches!(
+                script_reload_report(&mut failed, "b.lua", Err("yok".into())),
+                ScriptReload::Broke(_)
+            ),
+            "a second broken script was swallowed because the first one had already reported"
+        );
+        assert_eq!(
+            script_reload_report(&mut failed, "a.lua", Ok(true)),
+            ScriptReload::Recovered
+        );
+        assert_eq!(failed.iter().collect::<Vec<_>>(), ["b.lua"]);
+    }
+
+    /// The defect this guards is real, and this is the engine saying so.
+    ///
+    /// Drives the actual `ScriptEngine` down the exact path the play loop takes for a `Script`
+    /// component whose file does not exist: `reload_if_changed` fails, and `update_entity` — the
+    /// only other call — reports success. Without the reporter, that pair is the whole story the
+    /// user gets.
+    #[test]
+    fn the_engine_reports_success_for_a_script_it_never_loaded() {
+        let mut engine = gizmo::scripting::ScriptEngine::new().expect("Lua VM");
+        let missing = std::env::temp_dir()
+            .join(format!("gizmo_absent_{}.lua", std::process::id()))
+            .to_string_lossy()
+            .to_string();
+        let _ = std::fs::remove_file(&missing);
+
+        assert!(
+            engine.reload_if_changed(&missing).is_err(),
+            "reading a file that is not there must fail; this is the one signal that exists"
+        );
+        assert!(
+            engine
+                .update_entity(1, &missing, 1.0 / 60.0, &Default::default())
+                .is_ok(),
+            "update_entity returning Ok for a script it never loaded is exactly why discarding \
+             the reload error left the failure invisible"
+        );
     }
 }

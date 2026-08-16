@@ -16,6 +16,9 @@ pub struct StudioState {
     pub visible_entity_count: u32,
     /// Son frame'deki draw call sayısı
     pub draw_call_count: u32,
+    /// Script paths whose last load attempt failed, so the console is told once instead of 60
+    /// times a second. See `script_reload_report`.
+    pub failed_scripts: std::collections::BTreeSet<String>,
 }
 
 /// GPU resources used to render editor debug gizmos (primitive meshes and a

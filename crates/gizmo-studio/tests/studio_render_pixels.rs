@@ -166,6 +166,7 @@ fn render_scene(albedo: Vec4) -> Option<Frame> {
             autosave_timer: 0.0,
             visible_entity_count: 0,
             draw_call_count: 0,
+            failed_scripts: std::collections::BTreeSet::new(),
         };
 
         let format = renderer.config.format;
@@ -403,6 +404,7 @@ fn the_editor_casts_a_shadow_onto_the_ground() {
             autosave_timer: 0.0,
             visible_entity_count: 0,
             draw_call_count: 0,
+            failed_scripts: std::collections::BTreeSet::new(),
         };
 
         let format = renderer.config.format;
@@ -591,6 +593,7 @@ fn render_scene_and_game_targets(game_view_visible: bool) -> (Vec<u8>, Vec<u8>) 
             autosave_timer: 0.0,
             visible_entity_count: 0,
             draw_call_count: 0,
+            failed_scripts: std::collections::BTreeSet::new(),
         };
 
         // A throwaway swapchain-ish view: with an EditorRenderTarget present the pipeline clears
@@ -828,6 +831,7 @@ fn render_grid_scene(show_grid: bool) -> Option<Vec<u8>> {
             autosave_timer: 0.0,
             visible_entity_count: 0,
             draw_call_count: 0,
+            failed_scripts: std::collections::BTreeSet::new(),
         };
 
         let format = renderer.config.format;
@@ -1018,6 +1022,7 @@ fn shadow_scene(mode: gizmo::renderer::components::ShadowCasting) -> Option<Vec<
             autosave_timer: 0.0,
             visible_entity_count: 0,
             draw_call_count: 0,
+            failed_scripts: std::collections::BTreeSet::new(),
         };
 
         let format = renderer.config.format;
