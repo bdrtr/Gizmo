@@ -13,14 +13,28 @@ pub fn ui_hierarchy(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
     // The prototype's panel header: the name in letterspaced caps, the live count beside it, and
     // the panel's own actions on the right. A count in the header is not decoration — it is the
     // one number you check before asking why something is missing.
-    let visible_count = world.iter_alive_entities().len();
+    //
+    // Which is why it has to be the number of rows this panel DREW. It used to be
+    // `world.iter_alive_entities().len()` — the world's total, ignoring all three filters the list
+    // applies (deleted, editor-chrome via the `krom` toggle, and the name filter) as well as
+    // collapsed subtrees. With `krom` on, the default, the header read 11 over a list of 3. The one
+    // number you check to find out why something is missing was itself the thing that went missing.
+    //
+    // So the space is reserved here and painted after the list, from the counter the row-drawing
+    // code increments. No predicate is duplicated, so none can drift.
+    let mut count_slot = None;
     ui.horizontal(|ui| {
         ui.label(
             egui::RichText::new("H I E R A R C H Y")
                 .size(10.0)
                 .color(TEXT_MUTED),
         );
-        ui.label(egui::RichText::new(visible_count.to_string()).size(10.0).color(TEXT_DIM));
+        // Wide enough for four digits; a scene big enough to overflow it has other problems.
+        let (rect, _) = ui.allocate_exact_size(
+            egui::vec2(28.0, ui.spacing().interact_size.y),
+            egui::Sense::hover(),
+        );
+        count_slot = Some(rect);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.toggle_value(&mut state.hide_editor_entities, egui::RichText::new("krom").size(9.0))
                 .on_hover_text("Editörün kendi nesnelerini gizle");
@@ -133,7 +147,7 @@ pub fn ui_hierarchy(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
     });
 
     // Entity listesini oluştur
-    egui::ScrollArea::vertical().show(ui, |ui| {
+    let listed = egui::ScrollArea::vertical().show(ui, |ui| {
         let names = world.borrow::<EntityName>();
         let editor_only_markers = world.borrow::<gizmo_core::component::EditorOnly>();
         let parents = world.borrow::<Parent>();
@@ -143,6 +157,9 @@ pub fn ui_hierarchy(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
 
         let filter_lower = state.hierarchy_filter.to_lowercase(); // Bir kez hesaplanır
 
+        // Rows the list actually draws. The header's number is this, painted after the fact.
+        let mut listed = 0_usize;
+
         // ROOT entity'leri filtrele (Iter alive bazından cachelenir) O(N) tek geçiş
         let root_entities: Vec<gizmo_core::entity::Entity> = world
             .iter_alive_entities()
@@ -150,18 +167,15 @@ pub fn ui_hierarchy(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
             .filter(|e| parents.get(e.id()).is_none() && is_deleted_comp.get(e.id()).is_none())
             .collect();
 
-        // Root entity'leri çiz
+        // Root entity'leri çiz.
+        //
+        // The editor-chrome skip that used to sit here is gone, not moved: `draw_entity_node`
+        // applies the identical rule to every node it is handed, root or child, so this copy could
+        // only ever agree with it or drift from it. The two spellings even looked different — this
+        // one passed `None` for an unnamed entity where the other passes `"Entity_<id>"` — and
+        // `is_editor_only` reduces both to the marker alone, so they were the same test written
+        // twice. Deleting it changed no test, which is what made it safe to delete.
         for entity in root_entities {
-            // Editor-only (Hayali) objeleri hiyerarşide listeleme
-            let is_editor_only = gizmo_core::component::is_editor_only(
-                editor_only_markers.get(entity.id()).is_some(),
-                names.get(entity.id()).map(|e| e.0.as_str()),
-            );
-
-            if state.hide_editor_entities && is_editor_only {
-                continue;
-            }
-
             draw_entity_node(
                 ui,
                 world,
@@ -173,9 +187,22 @@ pub fn ui_hierarchy(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
                 &is_deleted_comp,
                 &editor_only_markers,
                 &filter_lower,
+                &mut listed,
             );
         }
-    });
+        listed
+    }).inner;
+
+    // The header's number, painted now that the list has been drawn and has counted itself.
+    if let Some(rect) = count_slot {
+        ui.painter().text(
+            rect.left_center(),
+            egui::Align2::LEFT_CENTER,
+            listed.to_string(),
+            egui::FontId::proportional(10.0),
+            TEXT_DIM,
+        );
+    }
 
     // No total at the bottom: the header carries the count, and two of the same number in one
     // panel invites the reader to work out why they differ.
@@ -193,6 +220,7 @@ fn draw_entity_node(
     is_deleted_comp: &gizmo_core::StorageView<gizmo_core::component::IsDeleted>,
     editor_only_markers: &gizmo_core::StorageView<gizmo_core::component::EditorOnly>,
     filter_lower: &str,
+    listed: &mut usize,
 ) {
     let entity_name = names
         .get(entity.id())
@@ -231,6 +259,7 @@ fn draw_entity_node(
                             is_deleted_comp,
                             editor_only_markers,
                             filter_lower,
+                            listed,
                         );
                     }
                 }
@@ -238,6 +267,11 @@ fn draw_entity_node(
         }
         return;
     }
+
+    // Past every early return: this entity gets exactly one row, so this is the only place that
+    // can count one. The header's number is this counter, which is why it cannot drift from the
+    // list — there is no second copy of the rule to keep in step.
+    *listed += 1;
 
     let is_selected = state.is_selected(entity);
     let has_children = children_comp
@@ -538,6 +572,7 @@ fn draw_entity_node(
                                     is_deleted_comp,
                                     editor_only_markers,
                                     filter_lower,
+                                    listed,
                                 );
                             }
                         }
@@ -578,4 +613,105 @@ fn entity_badges(world: &World, id: u32) -> Vec<&'static str> {
     }
     tags.truncate(2);
     tags
+}
+
+#[cfg(test)]
+mod hierarchy_count_tests {
+    use super::*;
+
+    /// The digits the header painted, read back out of the frame.
+    ///
+    /// Read from the shapes rather than from a return value on purpose: the number in the header is
+    /// only worth anything if it is the number a person can see, and this is the same text egui
+    /// hands the tessellator.
+    fn header_number(world: &World, state: &mut EditorState) -> String {
+        let ctx = egui::Context::default();
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let mut panel = ui.new_child(egui::UiBuilder::new().max_rect(
+                egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(320.0, 900.0)),
+            ));
+            ui_hierarchy(&mut panel, world, state);
+        });
+
+        fn collect(shape: &egui::Shape, out: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| collect(s, out)),
+                egui::Shape::Text(text) => out.push(text.galley.text().to_owned()),
+                _ => {}
+            }
+        }
+        let mut texts = Vec::new();
+        output.shapes.iter().for_each(|s| collect(&s.shape, &mut texts));
+        output.drop_without_applying_deltas();
+
+        // The header count is the only bare integer the panel paints; entity names are words and
+        // the one other control is the `krom` toggle.
+        texts
+            .into_iter()
+            .find(|t| !t.is_empty() && t.chars().all(|c| c.is_ascii_digit()))
+            .unwrap_or_else(|| "<sayı yok>".to_string())
+    }
+
+    /// The header count must describe the list under it, not the world behind it.
+    ///
+    /// It was `world.iter_alive_entities().len()` — every living entity, including the editor's own
+    /// furniture, which the `krom` toggle hides from the list by default. In a stock studio scene
+    /// that read **11** above a list of **3**. The comment on the line called the count "the one
+    /// number you check before asking why something is missing"; it was reporting the things that
+    /// were missing as though they were there.
+    #[test]
+    fn the_header_counts_the_rows_the_panel_drew() {
+        let mut world = World::new();
+        // Three entities a user made, and two the editor made for itself. `is_editor_only` keys off
+        // the `EditorOnly` marker or the name prefix, and the studio names its furniture this way.
+        for name in ["Player", "Ground", "Lamp"] {
+            let e = world.spawn();
+            world.add_component(e, EntityName(name.to_string()));
+        }
+        for name in ["Editor Gizmo - Light", "Editor Grid"] {
+            let e = world.spawn();
+            world.add_component(e, EntityName(name.to_string()));
+            world.add_component(e, gizmo_core::component::EditorOnly);
+        }
+
+        let mut state = EditorState {
+            hide_editor_entities: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            header_number(&world, &mut state),
+            "3",
+            "with the editor's own objects hidden the header must count the three rows on screen, \
+             not the five entities in the world"
+        );
+
+        state.hide_editor_entities = false;
+        assert_eq!(
+            header_number(&world, &mut state),
+            "5",
+            "with the `krom` toggle off every entity is listed, so the count must rise to match"
+        );
+    }
+
+    /// The name filter is part of "what the panel shows", so the count follows it too.
+    #[test]
+    fn the_header_follows_the_name_filter() {
+        let mut world = World::new();
+        for name in ["Player", "PlayerWeapon", "Ground"] {
+            let e = world.spawn();
+            world.add_component(e, EntityName(name.to_string()));
+        }
+
+        let mut state = EditorState {
+            hide_editor_entities: true,
+            hierarchy_filter: "player".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            header_number(&world, &mut state),
+            "2",
+            "the filter left two rows on screen; a header that still says 3 is telling the reader \
+             their filter did not work"
+        );
+    }
 }
