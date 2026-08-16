@@ -235,11 +235,18 @@ pub fn handle_simulation(
 
                             // Look-at: Yaw/Pitch hesapla
                             if let Some(mut cam) = cameras.get_mut(cam_entity_id) {
-                                let dir = (look_target - t.position).normalize();
-                                // Invert Camera::get_front(): fx = cos(yaw)cos(pitch),
-                                // fy = sin(pitch), fz = sin(yaw)cos(pitch)
-                                cam.yaw = dir.z.atan2(dir.x);
-                                cam.pitch = dir.y.asin();
+                                // Kamera hedefin tam üstündeyse/üstündeyken yön dikey, kamera
+                                // hedefin ÜSTÜNDEYSE de sıfır olur; ikisinde de eski kod kameraya
+                                // 0 ya da NaN yaw yazıyordu. Şimdi mevcut açı korunuyor.
+                                let dir = look_target - t.position;
+                                if let Some((yaw, pitch)) =
+                                    gizmo::renderer::components::Camera::yaw_pitch_from_forward(
+                                        dir, cam.yaw,
+                                    )
+                                {
+                                    cam.yaw = yaw;
+                                    cam.pitch = pitch;
+                                }
                             }
 
                             t.update_local_matrix();

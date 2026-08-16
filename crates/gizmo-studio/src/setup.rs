@@ -229,11 +229,10 @@ pub fn setup_studio_scene(world: &mut World, renderer: &gizmo::renderer::Rendere
     // Dövüş oyunu için yan görünüm: Z ekseninde 12 birim uzakta, hafif yukarıdan bakıyor
     let game_cam_pos = Vec3::new(0.0, 3.0, 12.0);
     let look_target = Vec3::new(0.0, 1.0, 0.0);
-    let game_cam_forward = (look_target - game_cam_pos).normalize();
-    // Invert Camera::get_front(): fx = cos(yaw)cos(pitch),
-    // fy = sin(pitch), fz = sin(yaw)cos(pitch)
-    let game_cam_yaw = game_cam_forward.z.atan2(game_cam_forward.x);
-    let game_cam_pitch = game_cam_forward.y.asin();
+    let game_cam_forward = look_target - game_cam_pos;
+    let (game_cam_yaw, game_cam_pitch) =
+        gizmo::renderer::components::Camera::yaw_pitch_from_forward(game_cam_forward, 0.0)
+            .unwrap_or((0.0, 0.0));
     world.add_component(
         game_cam,
         Transform::new(game_cam_pos),
@@ -312,33 +311,30 @@ world.insert_resource(editor_state);
 #[cfg(test)]
 mod tests {
     use gizmo::math::Vec3;
-
-    /// Mirror of `Camera::get_front()`: reconstruct the forward vector from yaw/pitch.
-    fn front_from_yaw_pitch(yaw: f32, pitch: f32) -> Vec3 {
-        let fx = yaw.cos() * pitch.cos();
-        let fy = pitch.sin();
-        let fz = yaw.sin() * pitch.cos();
-        Vec3::new(fx, fy, fz).normalize()
-    }
+    use gizmo::renderer::components::Camera;
 
     /// Regression for the game-camera yaw/pitch initialization (setup.rs).
     /// The old code used `forward.x.atan2(-forward.z)` / `(-forward.y).asin()`,
     /// which does NOT invert `get_front()` and yields the wrong facing.
+    ///
+    /// Both this and the fight-camera test below used to carry their own copy of the inversion AND
+    /// their own copy of `get_front` — so they measured a formula that no longer had to be the one
+    /// in the source. They now call the real pair, which is the only version of it left.
     #[test]
     fn game_camera_yaw_pitch_inverts_get_front() {
         let game_cam_pos = Vec3::new(0.0, 3.0, 12.0);
         let look_target = Vec3::new(0.0, 1.0, 0.0);
         let forward = (look_target - game_cam_pos).normalize();
 
-        let yaw = forward.z.atan2(forward.x);
-        let pitch = forward.y.asin();
+        let (yaw, pitch) =
+            Camera::yaw_pitch_from_forward(forward, 0.0).expect("a real look direction");
 
         // yaw should point toward -Z (roughly -PI/2), NOT 0 as the buggy code produced.
         let expected_yaw = (-2.0_f32).atan2(0.0); // atan2(neg, 0) == -PI/2
         assert!((yaw - expected_yaw).abs() < 1e-4, "yaw = {yaw}");
 
         // Reconstructed forward must match the original direction.
-        let reconstructed = front_from_yaw_pitch(yaw, pitch);
+        let reconstructed = Camera::forward_from(yaw, pitch);
         assert!((reconstructed.x - forward.x).abs() < 1e-4);
         assert!((reconstructed.y - forward.y).abs() < 1e-4);
         assert!((reconstructed.z - forward.z).abs() < 1e-4);
@@ -352,12 +348,23 @@ mod tests {
         let look_target = Vec3::new(0.0, 1.0, 0.0);
         let dir = (look_target - cam_pos).normalize();
 
-        let yaw = dir.z.atan2(dir.x);
-        let pitch = dir.y.asin();
+        let (yaw, pitch) = Camera::yaw_pitch_from_forward(dir, 0.0).expect("a real look direction");
 
-        let reconstructed = front_from_yaw_pitch(yaw, pitch);
+        let reconstructed = Camera::forward_from(yaw, pitch);
         assert!((reconstructed.x - dir.x).abs() < 1e-4);
         assert!((reconstructed.y - dir.y).abs() < 1e-4);
         assert!((reconstructed.z - dir.z).abs() < 1e-4);
+    }
+
+    /// The fight camera lerps its position towards the target and then looks at it, so it can
+    /// arrive exactly on top of it — and `(target - pos).normalize()` is NaN there, which used to
+    /// be written straight into `cam.yaw` and take the view matrix with it.
+    #[test]
+    fn a_camera_sitting_on_its_target_keeps_its_angles() {
+        assert!(Camera::yaw_pitch_from_forward(Vec3::ZERO, 0.7).is_none());
+        // ...and glam hands us exactly that: normalizing a zero difference gives NaN.
+        let degenerate = (Vec3::ONE - Vec3::ONE).normalize();
+        assert!(degenerate.is_nan(), "the input this guards against");
+        assert!(Camera::yaw_pitch_from_forward(degenerate, 0.7).is_none());
     }
 }

@@ -116,6 +116,36 @@ impl Camera {
         .normalize()
     }
 
+    /// [`forward_from`](Self::forward_from)'un TERSİ: bir yöne bakmak için gereken yaw/pitch.
+    ///
+    /// Bu formül depoda dört ayrı yere elle yazılmıştı (stüdyo kurulumu, dövüş kamerasının
+    /// look-at'ı, odaklanma, ve viewport'un eksen gizmo'su) — her birinin başında aynı iki satırlık
+    /// "Invert `get_front()`" yorumuyla. Bir kere de yanlış yazılmıştı: `x.atan2(-z)` /
+    /// `(-y).asin()`, ki `get_front`'u ters çevirmez ve kamerayı bambaşka yöne bakar. Ters çevirme
+    /// artık çevirdiği fonksiyonun yanında duruyor, ve ikisi birlikte değişmek zorunda.
+    ///
+    /// İki dejenere durum, ikisi de sessizce yanlış cevap vermek yerine adlandırılmış:
+    /// - **Sıfır/sonsuz yön** → `None`. Bugün bu `atan2(NaN, NaN)` ile kameraya NaN yaw yazıyor ve
+    ///   görüntü matrisini öldürüyor; "hiçbir yer"in açısı yok.
+    /// - **Tam yukarı/aşağı bakış** → yaw belirsizdir (`atan2(0, 0)` şikâyet etmeden `0` döner ve
+    ///   sahneyi dünya +X'e döndürür), o yüzden uydurulmuyor, `fallback_yaw` devralınıyor.
+    ///
+    /// `forward_from` pitch'i dikeyin 0.001 rad berisinde tuttuğu için tam dikey bir yön
+    /// gidiş-dönüşte birebir geri gelmez; fark budur, başka bir şey değil.
+    pub fn yaw_pitch_from_forward(dir: Vec3, fallback_yaw: f32) -> Option<(f32, f32)> {
+        let d = dir.normalize_or_zero();
+        if d == Vec3::ZERO {
+            return None;
+        }
+        let pitch = d.y.clamp(-1.0, 1.0).asin();
+        let yaw = if d.x.abs() + d.z.abs() < 1e-4 {
+            fallback_yaw
+        } else {
+            d.z.atan2(d.x)
+        };
+        Some((yaw, pitch))
+    }
+
     /// Yaw'dan dünya-uzayı sağ (right) yön vektörü (yatay). forward × (0,1,0)'ın kapalı formu.
     pub fn right_from(yaw: f32) -> Vec3 {
         Vec3::new(-yaw.sin(), 0.0, yaw.cos())
