@@ -2874,9 +2874,22 @@ kutular commit'lerin gerisinde kalmıştı.
   keyframe indeksi değil, çünkü retime listeyi tanımı gereği yeniden sıralıyor ve indeks tabanlı
   bir geri alma sürüklenenden başka bir anahtarı oynatırdı.
 
-  ⬜ Kalan: kanal ayrımı (position.x'i position.y'den ayırmak) — sunumdan ibaret. Düzenleme bu
-  varlığın klip kopyasını değiştiriyor, diskteki varlığı değil: `animations` spawn başına ayrı bir
-  `Arc`, ve varlığa geri yazmak ayrı bir iş.
+  🔄 **Kanal ayrımı UYMUYOR**, ve bu ölçülerek anlaşıldı — "sunumdan ibaret, eklenebilir" diye
+  yazılmıştı. Bir glTF sampler'ı `Vec3` başına TEK zaman damgası saklıyor (`Track<Vec3>` içinde
+  `Keyframe<Vec3>`), yani `position.x` ile `position.y` her keyframe'i paylaşıyor. Satırı üçe
+  bölmek üç ÖZDEŞ elmas satırı çizerdi ve her biri tek başına sürüklenebilir bir anahtar ima
+  ederdi — oysa herhangi birini sürüklemek üçünü birden oynatır, çünkü onlar tek keyframe. Altındaki
+  veri hakkında yalan söyleyen bir kontrol olurdu.
+
+  Bölmenin asıl cevapladığı soru — *bu track ne yapıyor* — ölçülebilir, ve satırlar artık onu
+  söylüyor: hangi eksenler oynuyor (`position · x z`), ya da hiçbiri (`· const`). Eşik 1e-6, çünkü
+  dışa aktarılmış keyframe'ler kayan nokta gürültüsü taşıyor ve tam karşılaştırma her satırı
+  "hareketli" ilan edip notu anlamsız kılardı. Hareket ilk keyframe'e göre ölçülüyor, komşusuna
+  göre değil: her adımı eşiğin altında kalan yavaş bir rampa komşu karşılaştırmasında "const"
+  görünürdü.
+
+  ⬜ Kalan: düzenleme bu varlığın klip kopyasını değiştiriyor, diskteki varlığı değil —
+  `animations` spawn başına ayrı bir `Arc`, ve varlığa geri yazmak ayrı bir iş.
 
   **Auto-key eksik değil, uymuyor.** Prototipin auto-key'i seçili nesnenin transform'unu keyframe
   olarak kaydediyor. Bu timeline bir *iskelet* klibi oynatıyor: track'leri glTF eklemlerini isimle
@@ -3006,8 +3019,18 @@ kutular commit'lerin gerisinde kalmıştı.
   RENDER STATS'ta artık `gpu mem` satırı var — "vram" değil, çünkü ölçülen şey bu sürecin
   alt-ayırmaları, kartın toplam kullanımı değil; kısa kelime büyük şeyi iddia ederdi. Rapor bütün
   canlı ayırmaları gezdiği için saniyede bir örnekleniyor.
-  ⬜ Kalan: durum çubuğundaki `RAM` yarısı — süreç RSS'i okumak ayrı bir iş ve bir render kaygısı
-  değil.
+  ✅ Durum çubuğundaki `RAM` yarısı da kapandı (2026-08-16): süreç RSS'i, saniyede bir örneklenerek.
+  `/proc/self/status`'un `VmRSS` satırından, `statm`'den değil — statm sayfa *sayısı* veriyor ve
+  bayta çevirmek ya `libc` (tek bir `sysconf` için bir bağımlılık) ya da 4 KiB varsaymak demek, ki
+  arm64 çekirdekleri buna katılmak zorunda değil. `sysinfo` türü bir crate de yok: zaten içinde
+  olduğumuz tek süreç hakkındaki bir soruyu cevaplamak için bütün bir süreç sayıcısı getiriyorlar.
+  Linux dışında satır **yok** — ölçülmemiş sayıyı basmamak kuralı, ve `0 MB` bir sayıdır. Birim
+  `kB` değilse hiçbir şey raporlanmıyor: 1024 kat yanlış bir durum çubuğu gayet makul görünür.
+
+  `VRAM` de artık ölçülü ama durum çubuğuna KONMADI: viewport'un RENDER STATS'ında `gpu mem` olarak
+  duruyor, ve aynı sayının iki yerde olması "neden farklılar" sorusunu davet eder. Geri kalan ikisi
+  hâlâ yok ve gerekçesi aynı: renderer adaptör bilgisini açılışta loglayıp atıyor, schedule da
+  sistem sayısı vermiyor.
 
 ### C. Sıfırdan özellik
 
@@ -3061,7 +3084,6 @@ ADD COMPONENT düğmesi, ve viewport'un eksen gizmo'su.
 
 Sırada duran her şey burada; A öbeği bitti, B'nin ve C'nin kalanı bu:
 
-- ⬜ Durum çubuğundaki **RAM** yarısı — süreç RSS'i, bir render kaygısı değil.
 - ⬜ Varlık kimliğinin kalan üçü (`demo/assets` taranmıyor, glTF UUID alamıyor, sahneler UUID
   yazmıyor) — üçü de "sahneler kimliğe geçecek mi" sorusuna bağlı, ve o cevaplanmadan bağlamak
   spekülasyon olur.

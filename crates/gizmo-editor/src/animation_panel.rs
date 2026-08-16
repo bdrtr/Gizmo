@@ -39,7 +39,16 @@
 //!
 //! # What the prototype has that this does not
 //!
-//! Per-channel rows (`position.x` separately from `position.y`) — presentational, and addable.
+//! **Per-channel rows do not apply**, and this was recorded as "presentational, and addable" until
+//! it was measured. A glTF sampler stores one timestamp per `Vec3`: `Track<Vec3>` holds
+//! `Keyframe<Vec3>`, so `position.x` and `position.y` share every keyframe there is. Splitting the
+//! row into three would draw three *identical* rows of diamonds, each implying a key you could
+//! drag on its own — and dragging any of them moves all three, because they are one keyframe. It
+//! would be a control that lies about the data underneath it.
+//!
+//! What the split is actually for is answering "what does this track do", and that *can* be
+//! measured: each row says which axes move (`position · x z`) or that none do (`· const`). See
+//! [`varying_axes`].
 //!
 //! **Auto-key is not missing, it does not apply.** The prototype's auto-key records the selected
 //! object's transform as a keyframe. This timeline plays a *skeletal* clip: its tracks target
@@ -112,24 +121,45 @@ pub fn ui_animation(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
     }
     let mut rows: Vec<Row> = Vec::new();
     for (i, t) in clip.translations.iter().enumerate() {
+        let values: Vec<gizmo_math::Vec3> = t.keyframes.iter().map(|k| k.value).collect();
         rows.push(Row {
-            label: format!("{}  position", track_name(t.target_node_name.as_deref())),
+            label: format!(
+                "{}  position{}",
+                track_name(t.target_node_name.as_deref()),
+                axis_suffix(varying_axes(&values))
+            ),
             channel: TrackChannel::Translation,
             track: i,
             times: t.keyframes.iter().map(|k| k.time).collect(),
         });
     }
     for (i, t) in clip.rotations.iter().enumerate() {
+        // A quaternion's x/y/z/w are not axes anyone poses by, so a rotation row says only whether
+        // it turns at all — which is the part worth knowing when a clip has fifty bone tracks.
+        let moves = t.keyframes.first().is_some_and(|f| {
+            t.keyframes
+                .iter()
+                .any(|k| !k.value.abs_diff_eq(f.value, AXIS_EPS))
+        });
         rows.push(Row {
-            label: format!("{}  rotation", track_name(t.target_node_name.as_deref())),
+            label: format!(
+                "{}  rotation{}",
+                track_name(t.target_node_name.as_deref()),
+                if moves { "" } else { CONST_SUFFIX }
+            ),
             channel: TrackChannel::Rotation,
             track: i,
             times: t.keyframes.iter().map(|k| k.time).collect(),
         });
     }
     for (i, t) in clip.scales.iter().enumerate() {
+        let values: Vec<gizmo_math::Vec3> = t.keyframes.iter().map(|k| k.value).collect();
         rows.push(Row {
-            label: format!("{}  scale", track_name(t.target_node_name.as_deref())),
+            label: format!(
+                "{}  scale{}",
+                track_name(t.target_node_name.as_deref()),
+                axis_suffix(varying_axes(&values))
+            ),
             channel: TrackChannel::Scale,
             track: i,
             times: t.keyframes.iter().map(|k| k.time).collect(),
@@ -393,6 +423,58 @@ fn remove(
     .unwrap_or(false)
 }
 
+/// How far a value has to move before the row calls the axis animated.
+///
+/// Exported keyframes carry float noise — a "constant" axis is rarely bit-identical across fifty
+/// keys — so an exact comparison would mark every track as moving on every axis and the annotation
+/// would say nothing. A micrometre is below anything an animator posed on purpose.
+const AXIS_EPS: f32 = 1e-6;
+
+/// What a row with nothing moving is marked with.
+const CONST_SUFFIX: &str = " · const";
+
+/// Which axes of a `Vec3` track actually move across its keyframes.
+///
+/// This is the honest half of the prototype's per-channel rows. It cannot split a track into
+/// `position.x` / `position.y` / `position.z` — a glTF sampler stores one timestamp per `Vec3`, so
+/// those three share every keyframe and three rows would be three copies of one — but the question
+/// the split answers, *what does this track do*, is a measurement.
+///
+/// An empty track moves on nothing.
+fn varying_axes(values: &[gizmo_math::Vec3]) -> [bool; 3] {
+    let Some(first) = values.first() else {
+        return [false; 3];
+    };
+    let mut moves = [false; 3];
+    for v in values {
+        for axis in 0..3 {
+            if (v[axis] - first[axis]).abs() > AXIS_EPS {
+                moves[axis] = true;
+            }
+        }
+    }
+    moves
+}
+
+/// The suffix a row label carries for its measured axes — and nothing at all when every axis
+/// moves, because a note that is true of every row is noise on all of them.
+fn axis_suffix(moves: [bool; 3]) -> String {
+    if moves == [true; 3] {
+        return String::new();
+    }
+    if moves == [false; 3] {
+        return CONST_SUFFIX.to_string();
+    }
+    let named: String = ["x", "y", "z"]
+        .iter()
+        .zip(moves)
+        .filter(|(_, m)| *m)
+        .map(|(n, _)| *n)
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!(" · {named}")
+}
+
 /// A track's target, or a placeholder when the clip did not name one.
 ///
 /// `target_node_name` is optional: glTF channels can target a node index with no name, and
@@ -471,6 +553,72 @@ mod tests {
             .iter()
             .map(|k| k.time)
             .collect()
+    }
+
+    use super::{axis_suffix, varying_axes, AXIS_EPS, CONST_SUFFIX};
+    use gizmo_math::Vec3;
+
+    /// The measurement behind the row annotation: which axes actually move.
+    #[test]
+    fn only_the_axes_that_move_are_reported() {
+        let vals = vec![
+            Vec3::new(0.0, 1.0, 5.0),
+            Vec3::new(2.0, 1.0, 5.0),
+            Vec3::new(4.0, 1.0, 9.0),
+        ];
+        assert_eq!(varying_axes(&vals), [true, false, true]);
+        assert_eq!(axis_suffix(varying_axes(&vals)), " · x z");
+    }
+
+    /// Exported keyframes carry float noise, so an exact comparison would call every axis animated
+    /// and the annotation would say nothing on any row.
+    ///
+    /// The offsets here are chosen to survive `f32`: `1.0 + 1e-9` rounds straight back to `1.0`,
+    /// so a fixture written that way compares two identical numbers and passes with the threshold
+    /// deleted. `5e-7` next to `0.0` is exactly representable and genuinely below it.
+    #[test]
+    fn float_noise_does_not_count_as_movement() {
+        let vals = vec![Vec3::new(0.0, 2.0, 3.0), Vec3::new(5e-7, 2.0, 3.0)];
+        assert_ne!(vals[0].x, vals[1].x, "the fixture must actually differ in f32");
+        assert_eq!(varying_axes(&vals), [false; 3]);
+        assert_eq!(axis_suffix(varying_axes(&vals)), CONST_SUFFIX);
+    }
+
+    /// Movement is measured against the **first** keyframe, not the previous one, and a slow ramp
+    /// is where the two part company: each step here is below the threshold while the whole run is
+    /// far above it. Comparing neighbours would call a track that travels a full unit "const".
+    #[test]
+    fn a_slow_ramp_is_movement_even_though_every_step_is_noise() {
+        let vals: Vec<Vec3> = (0..2000).map(|i| Vec3::new(0.0, i as f32 * 5e-7, 0.0)).collect();
+        let step = vals[1].y - vals[0].y;
+        assert!(step < AXIS_EPS, "each step must be below the threshold, got {step}");
+        assert!(vals.last().unwrap().y > 1e-4, "...and the total must be far above it");
+        assert_eq!(varying_axes(&vals), [false, true, false]);
+    }
+
+    /// Movement is measured against the FIRST keyframe, not against the neighbour: a track that
+    /// leaves and comes back has moved, even though consecutive pairs at the ends match.
+    #[test]
+    fn a_track_that_returns_to_its_start_still_counts_as_moving() {
+        let vals = vec![
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 3.0, 0.0),
+            Vec3::new(0.0, 0.0, 0.0),
+        ];
+        assert_eq!(varying_axes(&vals), [false, true, false]);
+    }
+
+    /// A note that is true of every row is noise on all of them, so the all-axes case says
+    /// nothing at all.
+    #[test]
+    fn a_track_that_moves_on_everything_is_left_unannotated() {
+        assert_eq!(axis_suffix([true; 3]), "");
+    }
+
+    #[test]
+    fn an_empty_track_moves_on_nothing() {
+        assert_eq!(varying_axes(&[]), [false; 3]);
+        assert_eq!(varying_axes(&[Vec3::ONE]), [false; 3], "a single key is a constant");
     }
 
     /// The panel's whole editing contract in one test: the key moves, the list stays sorted, the
