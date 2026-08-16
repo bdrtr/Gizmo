@@ -1233,6 +1233,26 @@ yarısı oradan da eksikti.
 - **Sonda köprüsünde hangi sorgular sunulacak.** Mekanizma kuruldu ve tek tüketicisi var
   (`physics.ground_at`); geri kalanı API tasarımı.
 
+### Gölgeleme modları: forward hat deferred'ın numaralandırmasını TEKRARLIYOR (2026-08-16)
+
+Toolbar'ın Lit/Normals/Albedo/Wire çipleri tek bir `shading_mode` uniform'u yazıyor. Modlar
+başlangıçta yalnız `deferred_lighting.wgsl`'de vardı; stüdyo ise forward hattan (`shader.wgsl`)
+çiziyor, yani üç çip ölçülebilir biçimde hiçbir şey yapmıyordu — Lit'e karşı 0/65536 bayt.
+
+`shader.wgsl` artık 1 (Normals) ve 2 (Albedo) modlarını **aynı numaralarla ve aynı kodlamayla**
+uyguluyor. Bu bir kopya, ve bilerek: tek uniform, hangi hat koşarsa koşsun tek anlam. Deferred
+tarafına yeni bir mod eklenirse (bugün 3–6: Roughness/Metallic, Shadows, Tangents, ClearCoat) ve
+stüdyoda görünmesi isteniyorsa, forward'a da eklenmesi gerekir — `every_shading_mode_draws_a_different_picture`
+yalnız toolbar'ın gösterdiği dördünü tutar.
+
+**Mod 3 iki hatta iki farklı şey.** Deferred'da Roughness/Metallic; stüdyoda toolbar'ın dediği şey,
+yani **wireframe** — ve wireframe bir shading terimi değil, bir pipeline: `wireframe_pipeline`
+aynı shader'dan `PolygonMode::Line` ile kurulu, ve depoda onu seçen hiçbir şey yoktu. Stüdyo o
+modda uniform'u 0'da bırakıp pipeline'ı değiştiriyor, tam da bu çakışma yüzünden.
+
+Not: hata ayıklama görünümleri HDR tamponuna yazılıp post-process'ten geçiyor, yani ekrandaki
+değerler ham normal/albedo değil. Deferred hattın davranışı da aynı; ayrı bir kusur değil.
+
 ### Editör kamera tuşları sağ tuşa kapılandı (2026-08-16, davranış değişikliği)
 
 Araç kısayolları (Q/W/E/R → Seç/Taşı/Döndür/Ölçek, `draw_editor`'da GENEL) ile serbest uçuş
