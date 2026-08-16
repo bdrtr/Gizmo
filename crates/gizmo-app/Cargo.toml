@@ -27,11 +27,11 @@ gizmo-editor = { path = "../gizmo-editor" , version = "0.9.1", optional = true }
 gizmo-scene = { path = "../gizmo-scene" , version = "0.9.1", optional = true }
 gizmo-net = { path = "../gizmo-net", version = "0.9.1", optional = true, default-features = false }
 winit = { version = "0.30", optional = true }
-wgpu = { version = "29", features = ["fragile-send-sync-non-atomic-wasm", "webgl"], optional = true }
+wgpu = { version = "30", features = ["fragile-send-sync-non-atomic-wasm", "webgl"], optional = true }
 pollster = { version = "0.3", optional = true }
-egui = { version = "0.34", optional = true }
-egui-winit = { version = "0.34", default-features = false, features = ["links"], optional = true }
-egui-wgpu = { version = "0.34", optional = true }
+egui = { version = "0.35", optional = true }
+egui-winit = { version = "0.35", default-features = false, features = ["links"], optional = true }
+egui-wgpu = { version = "0.35", optional = true }
 image = { version = "0.25", optional = true }
 
 [features]
