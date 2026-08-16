@@ -15,6 +15,7 @@ pub fn animation_update_system(world: &mut World, dt: f32, queue: &wgpu::Queue) 
     // SAFETY: exclusive `&mut World`; AnimationPlayer and Skeleton are distinct component
     // types, so these two mutable queries never alias the same storage.
     let mut players = unsafe { world.borrow_mut_unchecked::<AnimationPlayer>() };
+    // SAFETY: as above — Skeleton is a distinct component type from AnimationPlayer.
     let mut skeletons = unsafe { world.borrow_mut_unchecked::<Skeleton>() };
     {
         for entity in entities {
@@ -145,6 +146,7 @@ pub fn animation_state_machine_update_system(world: &mut World, dt: f32, queue: 
     // SAFETY: exclusive `&mut World`; AnimationStateMachine and Skeleton are distinct
     // component types, so these two mutable queries never alias the same storage.
     let mut machines = unsafe { world.borrow_mut_unchecked::<AnimationStateMachine>() };
+    // SAFETY: as above — Skeleton is a distinct component type from AnimationStateMachine.
     let mut skeletons = unsafe { world.borrow_mut_unchecked::<Skeleton>() };
     for entity in entities {
         let mut machine_mut = match machines.get_mut(entity) {

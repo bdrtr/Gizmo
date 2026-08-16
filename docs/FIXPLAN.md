@@ -14,7 +14,8 @@
 
 ## Faz A — Dürüstlük ve güvenlik
 
-*1.0'dan önce şart. Sırasıyla: yalan söyleyen şeyler → UB → determinizm → kapılar.*
+*Sırasıyla: yalan söyleyen şeyler → UB → determinizm → kapılar.*
+*(Eskiden "1.0'dan önce şart" yazıyordu. Bu iş bir sürüme kilitli değil — ENGINE.md §3, 2026-08-17.)*
 
 ### ✅ A3 — Unsound `unsafe impl`'leri kaldır
 > **Bitti (2026-08-04).** Sonuç: 5 test eklendi, determinizm hash'i değişmedi

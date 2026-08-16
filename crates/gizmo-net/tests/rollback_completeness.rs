@@ -91,8 +91,13 @@ fn step(world: &mut World, pw: &mut PhysicsWorld) {
     pw.step(DT).ok();
 
     // Results back to the ECS.
+    // SAFETY: this test owns the world exclusively, and Transform/Velocity/RigidBody are three
+    // distinct component types, so the views never alias the same storage — the same argument
+    // the code under test makes in `PhysicsStateSnapshot::restore`.
     let mut transforms = unsafe { world.borrow_mut_unchecked::<Transform>() };
+    // SAFETY: as above — a distinct component type.
     let mut velocities = unsafe { world.borrow_mut_unchecked::<Velocity>() };
+    // SAFETY: as above — a distinct component type.
     let mut rigid_bodies = unsafe { world.borrow_mut_unchecked::<RigidBody>() };
     for (i, handle) in pw.entities.iter().enumerate() {
         let id = handle.id();

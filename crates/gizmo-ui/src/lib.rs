@@ -1,3 +1,10 @@
+#![warn(missing_docs)]
+//! (`missing_docs` is a RATCHET — see the note in `gizmo-math`. This crate is at zero.)
+#![deny(clippy::undocumented_unsafe_blocks)]
+//! (`undocumented_unsafe_blocks` is a RATCHET: this crate carries no `unsafe` block without a
+//! `// SAFETY:` line stating why it is sound, and the lint keeps it that way. Every crate in the
+//! workspace except `gizmo-core` is at zero and denies it; `gizmo-core`'s ECS internals are the
+//! measured remainder — see docs/ENGINE.md.)
 //! **Experimental.** Flexbox UI *layout* and pointer *hit-testing* for the
 //! Gizmo ECS — this crate computes geometry and interaction state, and draws
 //! nothing at all.
@@ -95,10 +102,15 @@
 //! rendering lands (a `Text` component and a draw-list output are the obvious
 //! additions). Nothing here is deprecated and nothing is scheduled for removal —
 //! the label is about how much of a UI toolkit this is, not about its lifespan.
+/// The UI components themselves: rectangles, styles, anchors — what a widget *is*.
 pub mod components;
+/// The layout pass: turns the component tree into resolved rectangles (taffy under the hood).
 pub mod layout;
+/// The scheduled systems that run layout and interaction each frame.
 pub mod system;
+/// Pointer hit-testing and the hover/press state a widget reads.
 pub mod interaction;
+/// Bundles that spawn a complete widget in one call.
 pub mod bundles;
 
 use gizmo_core::system::{IntoSystemConfig, Schedule};

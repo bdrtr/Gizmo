@@ -91,7 +91,9 @@ impl PhysicsStateSnapshot {
         // SAFETY: exclusive `&mut World`; Transform/Velocity/RigidBody are distinct component
         // types, so these three mutable queries never alias the same storage.
         let mut transforms = unsafe { world.borrow_mut_unchecked::<Transform>() };
+        // SAFETY: as above — Velocity is a distinct component type from Transform.
         let mut velocities = unsafe { world.borrow_mut_unchecked::<Velocity>() };
+        // SAFETY: as above — RigidBody is distinct from both Transform and Velocity.
         let mut rigid_bodies = unsafe { world.borrow_mut_unchecked::<RigidBody>() };
 
         // Bir state'in en az bir bileşeni canlı entity'ye uygulandı mı — aksi halde

@@ -35,6 +35,11 @@ use std::arch::x86_64::*;
 #[cfg(target_arch = "x86_64")]
 #[inline]
 pub fn aabb_overlaps_simd4(target: &Aabb, others: [&Aabb; 4]) -> u8 {
+    // SAFETY: every intrinsic below is SSE/SSE2, which the x86_64 ABI guarantees is present —
+    // that is what the `cfg(target_arch = "x86_64")` on this function buys, and it is why no
+    // runtime feature detection is needed. The loads are `_mm_set_ps` over values read from the
+    // four `&Aabb` references, so there is no pointer arithmetic and no alignment requirement to
+    // meet: the only unsafety here is the ISA, and the ISA is guaranteed.
     unsafe {
         let t_min_x = _mm_set1_ps(target.min.x);
         let t_max_x = _mm_set1_ps(target.max.x);

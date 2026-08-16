@@ -1,3 +1,8 @@
+#![deny(clippy::undocumented_unsafe_blocks)]
+//! (`undocumented_unsafe_blocks` is a RATCHET: this crate carries no `unsafe` block without a
+//! `// SAFETY:` line stating why it is sound, and the lint keeps it that way. Every crate in the
+//! workspace except `gizmo-core` is at zero and denies it; `gizmo-core`'s ECS internals are the
+//! measured remainder — see docs/ENGINE.md.)
 //! `gizmo-audio` is the audio subsystem of the Gizmo engine.
 //!
 //! It is a thin, [`rodio`]-backed layer that exposes a small public surface:
@@ -161,6 +166,10 @@ pub struct AudioManager {
 // hatasıyla yeniden değerlendirmeye zorlar (sessiz unsoundness yerine).
 #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
 unsafe impl Send for AudioManager {}
+// SAFETY: aynı gerekçe — tek thread'li wasm'da paylaşımlı erişim gözlemlenemez, ve `atomics`
+// açılırsa bu impl de kaybolur. (Bu satır clippy için ayrıca yazıldı: gerekçe yukarıda tek blok
+// hâlindeydi, lint her `unsafe impl`'in kendi başına belgelenmesini istiyor — ve haklı, çünkü
+// biri silinip öteki kalabilir.)
 #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
 unsafe impl Sync for AudioManager {}
 

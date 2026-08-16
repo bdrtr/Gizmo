@@ -14,6 +14,7 @@ impl gizmo_core::system::System for TransformSyncSystem {
         // SAFETY: scheduled system; the scheduler guarantees no other system mutably
         // aliases Transform while this runs (see `World::query_unchecked`).
         let mut updated = 0usize;
+        // SAFETY: see the note above — scheduled system, no other system aliases Transform.
         if let Some(mut transforms) = unsafe {
             world.query_unchecked::<gizmo_core::query::Mut<gizmo_physics_core::Transform>>()
         } {

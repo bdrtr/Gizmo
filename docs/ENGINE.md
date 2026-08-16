@@ -55,24 +55,64 @@ still-large functions such as `update_vehicle` / `execute_render_pipeline` — a
 Phases 0–5 (stabilization, tests+CI, determinism, P2P rollback netcode, physics depth,
 renderer/WASM/editor) are **DONE**. Remaining:
 
-**Phase 6 — API stability & 1.0 mechanics**
-- Freeze the public API + document the `unsafe` contracts.
-- Staged 1.0 (see §4): Stage A core at 1.x, Stage B graphics layer at 0.y.
-- The `RigidBody::friction`/`restitution` fields are **IGNORED** by the contact solver
-  (the source is the collider material) → bridge them or remove them? (An API decision;
-  bridging shifts the defaults.)
+**Phase 6 — API hygiene (CONTINUOUS, not a milestone; restated 2026-08-17)**
+
+This used to read "API stability & 1.0 mechanics" and hold three items waiting for a 1.0. Waiting
+was the problem: two of the three had already been done and the list did not know it, which is what
+a milestone does to work — it turns "not done yet" into "not looked at". None of it needs a release
+to happen, so none of it is scheduled against one any more. Each item below carries its measured
+state instead.
+
+- **`unsafe` contracts.** Every `unsafe` block states why it is sound, and the lint that says so is
+  a per-crate ratchet: `#![deny(clippy::undocumented_unsafe_blocks)]`. **19 of 20 crates are at
+  zero and deny it** (2026-08-17). The remainder is `gizmo-core`: **57 blocks** in the archetype /
+  query / world internals, where the invariant is real and each comment has to be argued rather
+  than stamped. Ordinary work, counted, not gated yet — the crate goes on the ratchet the day it
+  reaches zero.
+- **"Freeze the public API" — dropped.** There is no freeze event to schedule. What that item was
+  reaching for is §4's external-type contract, and that is enforced continuously: every dependency
+  on a public surface is listed there with its cost, and `crates/gizmo/tests/crate_staging.rs`
+  fails the build if the crate graph drifts from it.
+- **Staged 1.0 — not being pursued as a milestone.** The crates keep one workspace version and
+  stay on `0.x`. §4 stays exactly as it is, because its *rules* are what keep the surface honest;
+  what is dropped is the release event those rules were being saved for. A 1.0 can be declared
+  later, from a surface that is already clean, which is the only way it was ever going to be
+  worth declaring.
+- **`RigidBody::friction`/`restitution` — closed; the item was stale.** The fields do not exist:
+  friction and restitution come from the collider's material, and `RigidBody`'s own docs say so at
+  the type and at `RigidBody::new`. Verified 2026-08-17.
 
 **Phase 7 — Product layer (a shippable game)**
 - M7.4 authoritative client-server netcode; M7.5 audio mixer/bus/DSP; M7.6 UI font/text/
   widget/z-index; M7.7 WASM feature parities, editor panels + AssetServer hot-reload.
-- 1.0 CI gates: rustfmt / `missing_docs` / coverage / cargo-deny / benchmark regression.
 - Optional: cross-platform determinism (as a feature — see §5), gizmo-net on WASM.
 - Gated on human-eye A/B: the textured-glTF `material_demo` asset, `car_demo` driving/geometry.
+
+**The CI gates that were filed under "1.0" — decided, 2026-08-17.** They were one line
+("rustfmt / `missing_docs` / coverage / cargo-deny / benchmark regression"), and two of them had
+already shipped. Each is now either on, or off with a reason:
+
+| Gate | State |
+|---|---|
+| **cargo-deny** | **ON** — a CI job since before this list was written (`Supply chain (cargo-deny)`, advisories + licenses + bans + sources). The roadmap line was stale. |
+| **`missing_docs`** | **ON per crate, as a ratchet.** All 10 Stage A crates plus `gizmo-window` and `gizmo-ui` are at zero and warn (CI's `-D warnings` makes that a deny). Measured backlog for the rest: renderer 873, editor 281, facade 168, scripting 102, studio 40, analysis 33, app 23. A crate joins the ratchet when it reaches zero — that rule is what stops the number growing while the backlog is worked off. |
+| **benchmarks** | **ON as a smoke gate** (`cargo bench --benches -- --test` runs every criterion bench once, catching panics and broken bench asserts). A *regression* gate is **not** adopted: shared CI runners have no timing floor, so the threshold that avoids false alarms is wide enough to miss real regressions. Performance work here is measured deliberately instead (§7 has the record of what was measured and rejected). |
+| **rustfmt** | **report-only, and staying that way.** Making it a gate means reformatting the tree first: measured, **2660 hunks across every crate**. That is one commit of pure churn against git blame, a conflict with anything in flight, and it buys a property clippy does not already give — the lint gate is the one that catches defects. The existing rule stands: don't reflow unrelated code, and leave the report on so drift stays visible. |
+| **coverage** | **not adopted.** A percentage gate rewards tests that execute lines; this codebase's tests are written to fail when behaviour is wrong (the pixel readbacks, the soak horizons, the source-shape guards), and several of the defects found this month were in code with coverage and no assertion. The number would go up and mean nothing. |
 <!-- TRANSLATOR NOTE: "İnsan-gözü A/B gated" is a terse fragment; read as "these items can only be signed off by a human comparing before/after side by side". -->
 
 ---
 
-## 4. Release Strategy — Staged 1.0
+## 4. Public-surface contract (was: "Release Strategy — Staged 1.0")
+
+> **Reframed 2026-08-17.** Nothing in this section is waiting for a release any more (§3). The
+> staging *plan* — Stage A crates going to `1.x` on their own version line — is **not being
+> pursued**; the workspace keeps one `0.x` version. Everything else here is kept word for word,
+> because the rules are what they always were: they describe which foreign types may appear on a
+> public surface and what each one costs, and they are true whether or not a 1.0 is ever declared.
+> Read "may go 1.x" below as "would be defensible to promise", and the criterion as the test a
+> change to the public API has to pass **today**. That is also how it is enforced today, by
+> `crates/gizmo/tests/crate_staging.rs` and by the seals listed further down.
 
 1.0 = the hard promise of "no breaking change without a 2.0". What decides whether a crate can
 make that promise is not our own code but our loudest dependency: if a foreign type is reachable
@@ -1232,6 +1272,30 @@ yarısı oradan da eksikti.
   bağlı olan yarı. Çizgi: "dünyayı okuyan ortak, komut kaydeden ayrı".
 - **Sonda köprüsünde hangi sorgular sunulacak.** Mekanizma kuruldu ve tek tüketicisi var
   (`physics.ground_at`); geri kalanı API tasarımı.
+
+### "1.0 için" bekleyen işler normal işe çevrildi (2026-08-17)
+
+Roadmap'te bir sürüme kilitli üç madde ve beş "1.0 CI kapısı" duruyordu. Kilidi kaldırınca çıkan
+ilk şey şu oldu: **maddelerin çoğu ya çoktan bitmişti ya da hiç bakılmamıştı** — bir milestone'un
+işe yaptığı tam olarak bu, "henüz yapılmadı"yı "bakılmadı"ya çeviriyor.
+
+Ölçülen durum ve alınan kararlar §3'te tablo hâlinde; buradaki kayıt, yapılan işin kendisi:
+
+- **`unsafe` sözleşmeleri.** Lint (`clippy::undocumented_unsafe_blocks`) 106 yer bildiriyordu ama
+  bunların çoğunda gerekçe **zaten yazılıydı** — clippy'nin aradığı yerde değil, insanın okuduğu
+  yerde: bir grup `unsafe`'in üstünde tek yorum, ya da araya bir `let` girmiş. Yani madde
+  göründüğünden çok daha yakınmış. `gizmo-core` dışındaki **25 yerin hepsi** gerçek gerekçeyle
+  kapatıldı (yalnız iki tanesi sıfırdan yazıldı: SSE intrinsics'in x86_64 ABI garantisi, ve
+  allocator örneğindeki `GlobalAlloc` sözleşmesi) ve **19 crate mandala takıldı** —
+  `#![deny(clippy::undocumented_unsafe_blocks)]`. Kalan: `gizmo-core`'un 57 bloğu (archetype /
+  query / world içi), sayılmış hâlde.
+- **`missing_docs`.** `gizmo-window` (0) ve `gizmo-ui` (5 madde yazıldı) mandala eklendi. Geri
+  kalanın sayıları §3'te; kural şu: bir crate sıfıra inince mandala girer, böylece birikim
+  eritilirken yeniden büyümez.
+- **Ve wasm kapısı işini yaptı.** Mandal her crate'e takılınca `gizmo-audio`'nun **yalnız wasm
+  kolunda** derlenen ikinci `unsafe impl`'i (`Sync`) açıkta kaldı: gerekçe ilk impl'in üstünde tek
+  blok hâlindeydi. Native işin göremeyeceği bir yer — ve bu, CLAUDE.md'nin "wasm kapısını alt
+  kümeyle koşturma" uyarısının aynı hafta ikinci kez haklı çıkışı.
 
 ### Decal editörde görünmüyordu (2026-08-17, DÜZELTİLDİ)
 

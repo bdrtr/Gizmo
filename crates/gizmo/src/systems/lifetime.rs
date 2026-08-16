@@ -109,9 +109,11 @@ impl gizmo_core::system::System for LifetimeSystem {
 
         // ── DespawnAfter: sayacı azalt, süresi dolanları sil. ──
         // SAFETY: exclusive sistem; scheduler bu çalışırken disjoint mutable erişim garanti eder.
-        if let Some(mut q) =
-            unsafe { world.query_unchecked::<gizmo_core::query::Mut<DespawnAfter>>() }
-        {
+        // (Bound out of the `if let` so the comment sits directly above the `unsafe`, which is
+        // where `clippy::undocumented_unsafe_blocks` looks — the lint is a ratchet in this crate.)
+        let despawn_after =
+            unsafe { world.query_unchecked::<gizmo_core::query::Mut<DespawnAfter>>() };
+        if let Some(mut q) = despawn_after {
             for (id, mut d) in q.iter_mut() {
                 d.remaining -= dt;
                 if d.remaining <= 0.0 {
@@ -124,6 +126,7 @@ impl gizmo_core::system::System for LifetimeSystem {
         }
 
         // ── DespawnBelowY: konumu eşiğin altındaki varlıkları sil. ──
+        // SAFETY: exclusive system; this view is read-only and aliases nothing mutably.
         if let Some(q) = unsafe { world.query_unchecked::<(&DespawnBelowY, &Transform)>() } {
             for (id, (below, t)) in q.iter() {
                 if t.position.y < below.y {

@@ -1,3 +1,8 @@
+#![deny(clippy::undocumented_unsafe_blocks)]
+//! (`undocumented_unsafe_blocks` is a RATCHET: this crate carries no `unsafe` block without a
+//! `// SAFETY:` line stating why it is sound, and the lint keeps it that way. Every crate in the
+//! workspace except `gizmo-core` is at zero and denies it; `gizmo-core`'s ECS internals are the
+//! measured remainder — see docs/ENGINE.md.)
 #![warn(missing_docs)]
 //! (`missing_docs` is a RATCHET, not a suggestion. The CI lint gate runs with `-D warnings`,
 //! so every public item in this crate must carry a doc comment or the build fails. This crate

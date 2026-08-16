@@ -1,3 +1,8 @@
+#![deny(clippy::undocumented_unsafe_blocks)]
+//! (`undocumented_unsafe_blocks` is a RATCHET: this crate carries no `unsafe` block without a
+//! `// SAFETY:` line stating why it is sound, and the lint keeps it that way. Every crate in the
+//! workspace except `gizmo-core` is at zero and denies it; `gizmo-core`'s ECS internals are the
+//! measured remainder — see docs/ENGINE.md.)
 //! Gizmo Editor — an `egui`-based scene editor for the Gizmo engine.
 //!
 //! This crate provides the editor UI built on top of `egui`/`egui_dock`,

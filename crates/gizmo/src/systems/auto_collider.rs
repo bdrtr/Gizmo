@@ -182,6 +182,8 @@ impl gizmo_core::system::System for AutoBoxColliderSystem {
         // Mevcut `update_inertia_from_collider`'ı YENİDEN KULLAN — Box kolu yarı→tam
         // ikilemeyi kendi içinde yapar, böylece FULL-vs-HALF ×2 tuzağı yapısal olarak imkânsız.
         // Statik/kinematik yazımı zararsızca yutar (inv_inertia=0); trigger-only doğal dışlanır.
+        // SAFETY: scheduled system; RigidBody is the only mutable view and nothing else in
+        // this pass holds one, so the borrow `query_unchecked` skips cannot be violated here.
         if let Some(mut q) = unsafe {
             world
                 .query_unchecked::<(&Transform, Mut<RigidBody>, &Collider, &AutoBoxCollider, Added<AutoBoxCollider>)>()

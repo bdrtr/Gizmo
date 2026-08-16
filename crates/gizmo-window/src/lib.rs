@@ -1,3 +1,10 @@
+#![warn(missing_docs)]
+//! (`missing_docs` is a RATCHET — see the note in `gizmo-math`. This crate is at zero.)
+#![deny(clippy::undocumented_unsafe_blocks)]
+//! (`undocumented_unsafe_blocks` is a RATCHET: this crate carries no `unsafe` block without a
+//! `// SAFETY:` line stating why it is sound, and the lint keeps it that way. Every crate in the
+//! workspace except `gizmo-core` is at zero and denies it; `gizmo-core`'s ECS internals are the
+//! measured remainder — see docs/ENGINE.md.)
 //! A thin wrapper around [`winit`] for creating an OS window.
 //!
 //! This crate exposes a minimal [`AppWindow`] type and a [`run_window`]

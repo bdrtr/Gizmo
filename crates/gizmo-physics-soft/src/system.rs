@@ -44,6 +44,9 @@ pub fn soft_body_step_system(world: &World, dt: f32, gravity: Vec3) {
 
     // 3. Query and step all SoftBodyMesh components
     let mut impulses: Vec<RigidImpulse> = Vec::new();
+    // SAFETY: a scheduled system; the scheduler guarantees no other system holds a conflicting
+    // view of SoftBodyMesh while this one runs, which is the invariant `query_unchecked` asks
+    // the caller to supply in exchange for skipping the runtime borrow check.
     if let Some(mut q) = unsafe { world.query_unchecked::<gizmo_core::query::Mut<SoftBodyMesh>>() }
     {
         for (_, mut soft_body) in q.iter_mut() {
@@ -191,6 +194,7 @@ pub fn cloth_step_system(world: &World, dt: f32, gravity: Vec3) {
     // Collect rigid colliders so the cloth drapes over them (not just the floor).
     let rigid_colliders = collect_rigid_colliders(world);
 
+    // SAFETY: scheduled system, exclusive view of Cloth — see `soft_body_step_system` above.
     if let Some(mut q) = unsafe { world.query_unchecked::<gizmo_core::query::Mut<Cloth>>() } {
         for (_, mut cloth) in q.iter_mut() {
             cloth.step(dt, gravity, sub_steps, &rigid_colliders);
@@ -203,6 +207,7 @@ pub fn cloth_step_system(world: &World, dt: f32, gravity: Vec3) {
 #[tracing::instrument(skip_all, name = "rope_step_system")]
 pub fn rope_step_system(world: &World, dt: f32, gravity: Vec3) {
     let dt = dt.min(MAX_SOFT_DT);
+    // SAFETY: scheduled system, exclusive view of Rope — see `soft_body_step_system` above.
     if let Some(mut q) = unsafe { world.query_unchecked::<gizmo_core::query::Mut<Rope>>() } {
         for (_, mut rope) in q.iter_mut() {
             rope.step(dt, gravity);

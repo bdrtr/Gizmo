@@ -118,6 +118,8 @@ pub fn ai_navigation_system(world: &World, dt: f32) {
     // distinct component types, so their storages never overlap with each other either.
     let mut agents = unsafe { world.borrow_mut_unchecked::<NavAgent>() };
     let transforms = world.borrow::<Transform>();
+    // SAFETY: same argument as `agents` above — Velocity is a distinct component type from
+    // both NavAgent and Transform, so this view aliases neither.
     let mut velocities = unsafe { world.borrow_mut_unchecked::<Velocity>() };
 
     // Iterasyon

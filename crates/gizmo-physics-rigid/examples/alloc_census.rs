@@ -27,19 +27,24 @@ unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, l: Layout) -> *mut u8 {
         ALLOCS.fetch_add(1, Ordering::Relaxed);
         BYTES.fetch_add(l.size(), Ordering::Relaxed);
+        // SAFETY: the caller of `GlobalAlloc::alloc` upholds its contract (a non-zero, valid layout);
+        // this only counts the call and forwards it unchanged.
         unsafe { System.alloc(l) }
     }
     unsafe fn alloc_zeroed(&self, l: Layout) -> *mut u8 {
         ALLOCS.fetch_add(1, Ordering::Relaxed);
         BYTES.fetch_add(l.size(), Ordering::Relaxed);
+        // SAFETY: as `alloc` above — the contract is the caller's, the forward is verbatim.
         unsafe { System.alloc_zeroed(l) }
     }
     unsafe fn realloc(&self, p: *mut u8, l: Layout, new_size: usize) -> *mut u8 {
         ALLOCS.fetch_add(1, Ordering::Relaxed);
         BYTES.fetch_add(new_size, Ordering::Relaxed);
+        // SAFETY: as `alloc` above — `p`/`l` come from this same allocator by the caller's contract.
         unsafe { System.realloc(p, l, new_size) }
     }
     unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
+        // SAFETY: as `alloc` above — `p`/`l` are this allocator's by the caller's contract.
         unsafe { System.dealloc(p, l) }
     }
 }

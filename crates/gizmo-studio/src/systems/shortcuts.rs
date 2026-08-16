@@ -279,6 +279,7 @@ fn focus_on_selection(
 
         // SAFETY: exclusive `&mut World`; Transform and Camera are distinct component types.
         let mut t_mut = unsafe { world.borrow_mut_unchecked::<Transform>() };
+        // SAFETY: as above — Camera is a distinct component type from Transform.
         let mut cam_mut = unsafe { world.borrow_mut_unchecked::<gizmo::renderer::components::Camera>() };
         if let (Some(mut cam_t), Some(cam)) = (
             t_mut.get_mut(state.editor_camera),

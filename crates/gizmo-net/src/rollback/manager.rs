@@ -142,7 +142,9 @@ impl RollbackManager {
         // views never alias the same storage. Same argument as `PhysicsStateSnapshot::restore`.
         let mut transforms =
             unsafe { world.borrow_mut_unchecked::<gizmo_physics_core::components::Transform>() };
+        // SAFETY: as above — Velocity is a distinct component type from Transform.
         let mut velocities = unsafe { world.borrow_mut_unchecked::<gizmo_physics_rigid::Velocity>() };
+        // SAFETY: as above — RigidBody is distinct from both Transform and Velocity.
         let mut rigid_bodies =
             unsafe { world.borrow_mut_unchecked::<gizmo_physics_rigid::RigidBody>() };
         for (id, rb, t, v) in rows {
