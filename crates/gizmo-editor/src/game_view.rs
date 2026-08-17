@@ -1,5 +1,6 @@
 use crate::EditorState;
 
+/// Draws the game view tab: what the game camera renders, with the fighting HUD over it.
 pub fn ui_game_view(ui: &mut egui::Ui, state: &mut EditorState) {
     state.game_view_visible = true;
     let is_playing = state.is_playing();

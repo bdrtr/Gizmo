@@ -7,6 +7,7 @@ use gizmo_renderer::components::ParticleEmitter;
 use gizmo_ai::components::NavAgent;
 
 
+/// The inspector's animation-player rows: the clips on the entity and which one is playing.
 pub fn draw_animation_player_section(
     ui: &mut egui::Ui,
     world: &World,
@@ -99,6 +100,7 @@ pub fn draw_animation_player_section(
 }
 
 
+/// The name row at the top of the inspector, and the rename it commits.
 pub fn draw_name_section(
     ui: &mut egui::Ui,
     world: &World,
@@ -119,6 +121,7 @@ pub fn draw_name_section(
 }
 
 
+/// The particle-emitter rows: rate, lifetime, velocity and the emitter's shape.
 pub fn draw_particle_emitter_section(
     ui: &mut egui::Ui,
     world: &World,
@@ -159,6 +162,7 @@ pub fn draw_particle_emitter_section(
 
 
 #[cfg(not(target_arch = "wasm32"))]
+/// The script rows: which file is attached, and the properties it declares.
 pub fn draw_script_section(
     ui: &mut egui::Ui,
     world: &World,
@@ -212,6 +216,7 @@ pub fn draw_script_section(
 ) {}
 
 
+/// The terrain rows, including the generate request the studio acts on.
 pub fn draw_terrain_section(
     ui: &mut egui::Ui,
     world: &World,
@@ -270,6 +275,7 @@ pub fn draw_terrain_section(
 }
 
 
+/// The fluid rows: which phase the entity is, and how it couples to the simulation.
 pub fn draw_fluid_section(
     ui: &mut egui::Ui,
     world: &World,
@@ -326,6 +332,7 @@ pub fn draw_fluid_section(
 }
 
 
+/// The AI rows: the navigation agent and its current target.
 pub fn draw_ai_section(
     ui: &mut egui::Ui,
     world: &World,
@@ -394,6 +401,7 @@ pub fn draw_ai_section(
 // === YARDIMCI FONKSİYONLAR ===
 
 
+/// The reflection-probe rows.
 pub fn draw_reflection_section(
     ui: &mut egui::Ui,
     world: &World,
@@ -449,6 +457,7 @@ pub fn draw_reflection_section(
 }
 
 
+/// The fighting-game hitbox rows — the volume that deals damage.
 pub fn draw_hitbox_section(
     ui: &mut egui::Ui,
     world: &World,
@@ -489,6 +498,7 @@ pub fn draw_hitbox_section(
 }
 
 
+/// The fighting-game hurtbox rows — the volume that takes it.
 pub fn draw_hurtbox_section(
     ui: &mut egui::Ui,
     world: &World,
@@ -528,6 +538,7 @@ pub fn draw_hurtbox_section(
 }
 
 
+/// The bone-attachment rows: which skeleton bone the entity rides.
 pub fn draw_bone_attachment_section(
     ui: &mut egui::Ui,
     world: &World,
@@ -560,6 +571,11 @@ pub fn draw_bone_attachment_section(
 }
 
 
+/// Draws an editable row for one `serde_json::Value`, recursing into objects and arrays.
+///
+/// This is how the inspector edits a component whose type it does not know: the component is
+/// round-tripped through JSON, edited here, and written back by the function pointer stored
+/// beside it in `pending_json_updates`. Returns whether anything changed.
 pub fn draw_json_value(ui: &mut egui::Ui, name: &str, value: &mut serde_json::Value) -> bool {
     let mut changed = false;
     match value {
@@ -634,6 +650,7 @@ pub fn draw_json_value(ui: &mut egui::Ui, name: &str, value: &mut serde_json::Va
 
 
 
+/// The fighter-controller rows: health, state and the frame data of the current move.
 pub fn draw_fighter_controller_section(
     ui: &mut egui::Ui,
     world: &World,

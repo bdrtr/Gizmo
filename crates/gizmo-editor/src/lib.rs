@@ -1,4 +1,5 @@
 #![deny(clippy::undocumented_unsafe_blocks)]
+#![warn(missing_docs)]
 //! (`undocumented_unsafe_blocks` is a RATCHET: this crate carries no `unsafe` block without a
 //! `// SAFETY:` line stating why it is sound, and the lint keeps it that way. Every crate in the
 //! workspace except `gizmo-core` is at zero and denies it; `gizmo-core`'s ECS internals are the
@@ -25,17 +26,24 @@
 pub mod animation_panel;
 pub mod theme;
 pub mod asset_browser;
+/// The log console panel.
 pub mod console;
 pub mod editor_state;
 pub mod error;
+/// The game view tab — what the game camera sees, plus the fighting HUD overlay.
 pub mod game_view;
 pub mod hierarchy;
+/// Undo/redo: the actions the editor records and how each one is reversed.
 pub mod history;
+/// The inspector panel, one module per component family it can edit.
 pub mod inspector;
+/// Editor preferences, persisted to disk between sessions.
 pub mod prefs;
 pub mod profiler_panel;
+/// The scene view tab: the editable viewport, its gizmo and its picking.
 pub mod scene_view;
 pub mod toolbar;
+/// The editor's floating windows — settings, and the dialogs that are not panels.
 pub mod windows;
 
 pub use editor_state::{BuildTarget, EditorMode, EditorState, EditorTab, GizmoMode, SpawnKind};

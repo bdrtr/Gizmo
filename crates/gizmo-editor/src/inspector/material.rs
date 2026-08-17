@@ -6,6 +6,7 @@ use gizmo_math::Vec4;
 use gizmo_renderer::components::Material;
 
 
+/// The material rows: albedo, metallic, roughness, emissive and the texture slots.
 pub fn draw_material_section(
     ui: &mut egui::Ui,
     world: &World,

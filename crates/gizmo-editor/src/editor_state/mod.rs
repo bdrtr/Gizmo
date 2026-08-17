@@ -11,45 +11,84 @@ use std::time::Instant;
 mod state_types;
 pub use state_types::*;
 
+/// Everything the editor knows between frames.
+///
+/// One struct rather than a dozen resources, because egui draws the whole UI in one pass and
+/// every panel needs to see what the others decided. It is `#[non_exhaustive]`: build one with
+/// [`EditorState::new`] and adjust fields, so that adding state here is not a breaking change.
+///
+/// The **request** fields are the pattern worth knowing. A panel cannot mutate the world while
+/// egui is drawing it, so an action — delete, duplicate, reparent, add component — is recorded
+/// here and carried out afterwards by the host's systems, which drain it. A request that nobody
+/// drains is a menu item that silently does nothing, which is exactly the class of bug the
+/// exhaustive `SpawnKind` match in `gizmo-studio` was added to prevent.
 #[non_exhaustive]
 pub struct EditorState {
+    /// Post-process settings the viewport renders with — bloom, exposure, FXAA and the rest.
     pub post_process: PostProcessSettings,
+    /// Whether the editor UI is drawn at all. `false` leaves the game rendering on its own.
     pub open: bool,
+    /// Edit, play or paused.
     pub mode: EditorMode,
+    /// Which transform gizmo is active: translate, rotate or scale.
     pub gizmo_mode: GizmoMode,
 
+    /// Raised by the toolbar's ▶; the host consumes it, takes the scene snapshot and starts
+    /// playing.
     pub play_start_request: bool,
+    /// Raised by ■; the host restores the snapshot and stops.
     pub play_stop_request: bool,
 
+    /// Set when a viewport click needs picking; cleared once the raycast has run.
     pub do_raycast: bool,
+    /// The mouse in normalised device coordinates for that pick, `None` outside the viewport.
     pub mouse_ndc: Option<gizmo_math::Vec2>,
+    /// Whether the gizmo works in the entity's local space rather than the world's.
     pub gizmo_local_space: bool,
+    /// Which shading mode the viewport draws in — lit, unlit, wireframe and the debug channels.
     pub shading_mode: u32,
-    /// Whether FXAA anti-aliasing is on
-    // Post-Processing Settings
+    /// Undo/redo. Every editor action that changes the world is pushed here rather than applied
+    /// directly, which is what makes Ctrl+Z whole.
     pub history: crate::history::History,
 
-    // Panellerin görünürlüğü (asset browser hariç)
+    // Panel visibility (the asset browser keeps its own, in `assets`).
+    /// Is the hierarchy panel shown?
     pub show_hierarchy: bool,
+    /// Is the inspector shown?
     pub show_inspector: bool,
+    /// Is the toolbar shown?
     pub show_toolbar: bool,
+    /// Is the settings window open?
     pub settings_open: bool,
+    /// Draw collider outlines over the scene?
     pub show_colliders: bool,
 
+    /// The transforms as they were when the current inspector drag started, so a whole drag
+    /// becomes ONE undo entry rather than one per frame.
     pub inspector_drag_original_transforms: std::collections::HashMap<gizmo_core::entity::Entity, gizmo_physics_core::Transform>,
 
-    // Diğer global UI state
+    // Other global UI state.
+    /// The hierarchy panel's search box.
     pub hierarchy_filter: String,
+    /// Hide the editor's own entities (camera, grid, lights) from the hierarchy.
     pub hide_editor_entities: bool,
+    /// Is the "add component" popup open?
     pub add_component_open: bool,
+    /// The last error to show in the status bar, if any.
     pub last_error: Option<String>,
+    /// The status bar's current message.
     pub status_message: String,
+    /// Path of the scene being edited; empty until it has been saved once.
     pub scene_path: String,
+    /// Whether the scene has changes that are not on disk.
     pub has_unsaved_changes: bool,
+    /// The asset currently being dragged out of the browser, if any.
     pub dragged_asset: Option<String>,
+    /// The transform gizmo widget itself, which owns its own interaction state.
     pub transform_gizmo: transform_gizmo_egui::Gizmo,
 
-    // Nested Yapılar
+    // Nested state, one struct per area.
+    /// The editor camera's own state.
     pub camera: CameraState,
     /// The animation timeline's authoring state (drag + selection).
     pub anim_edit: AnimationEditState,
@@ -57,26 +96,44 @@ pub struct EditorState {
     /// becomes ONE undo entry instead of one per frame — the same shape the transform gizmo uses
     /// with `gizmo_original_transforms`.
     pub anim_drag_original: Option<std::sync::Arc<[gizmo_renderer::AnimationClip]>>,
+    /// Export/build state: the target, the progress and the last result.
     pub build: BuildState,
+    /// The asset browser's own state: where it is looking and what is filtered.
     pub assets: AssetBrowserState,
+    /// Scene-level UI state — the save/load prompts and what they are waiting on.
     pub scene: SceneState,
+    /// What is selected, and the outline drawn around it.
     pub selection: SelectionState,
+    /// The console panel: its buffer, its filters and its input line.
     pub console: ConsoleState,
+    /// The script editor: the open file, its text and whether it is dirty.
     pub script: ScriptEditorState,
 
+    /// Preferences that persist between sessions, on disk.
     pub prefs: EditorPrefs,
 
+    // Requests. The UI cannot mutate the world while it is drawing, so every action it offers
+    // becomes an entry here and a system carries it out afterwards. Each is drained by its
+    // handler, which is why they are plain vectors rather than events.
+    /// Entities the UI asked to delete.
     pub despawn_requests: Vec<gizmo_core::entity::Entity>,
+    /// Entities the UI asked to generate terrain for.
     pub generate_terrain_requests: Vec<gizmo_core::entity::Entity>,
+    /// Entities the UI asked to duplicate.
     pub duplicate_requests: Vec<gizmo_core::entity::Entity>,
+    /// Entities whose visibility the UI asked to toggle.
     pub toggle_visibility_requests: Vec<gizmo_core::entity::Entity>,
 
+    /// "Save this entity as a prefab at this path."
     pub prefab_save_request: Option<(gizmo_core::entity::Entity, String)>,
+    /// "Load this prefab" — the path, an optional parent to attach it to, and an optional
+    /// position to place it at.
     pub prefab_load_request: Option<(
         String,
         Option<gizmo_core::entity::Entity>,
         Option<gizmo_math::Vec3>,
     )>,
+    /// Which primitive the `➕ Add` menu asked to spawn.
     pub spawn_request: Option<SpawnKind>,
     /// The parent a spawned entity is automatically attached to
     pub pending_child_parent: Option<gizmo_core::entity::Entity>,
@@ -86,34 +143,58 @@ pub struct EditorState {
     /// of "group the selection", which used to create the group and then leave the selection
     /// exactly where it was.
     pub pending_group_members: Vec<gizmo_core::entity::Entity>,
+    /// An asset dragged into the viewport, waiting to be spawned.
     pub spawn_asset_request: Option<String>,
+    /// Where that asset was dropped, in world space.
     pub spawn_asset_position: Option<gizmo_math::Vec3>,
+    /// "Load this glTF", with an optional position to place it at.
     pub gltf_load_request: Option<(String, Option<gizmo_math::Vec3>)>,
+    /// glTF imports handed to the background loader, and where each should land when it arrives.
     pub pending_async_gltfs: std::collections::HashMap<String, gizmo_math::Vec3>,
+    /// "Make the first entity a child of the second."
     pub reparent_request: Option<(gizmo_core::entity::Entity, gizmo_core::entity::Entity)>,
+    /// "Detach this entity from its parent."
     pub unparent_request: Option<gizmo_core::entity::Entity>,
+    /// "Add this component, by name, to this entity."
     pub add_component_request: Option<(gizmo_core::entity::Entity, String)>,
+    /// "Remove this component, by name, from this entity."
     pub remove_component_request: Option<(gizmo_core::entity::Entity, String)>,
 
+    // The two viewports. Each panel reports where and how big it is, and the host renders into a
+    // texture of that size — which is why a size of `None` means "not laid out yet", not "zero".
+    /// Is the scene view tab visible this frame?
     pub scene_view_visible: bool,
+    /// Is the game view tab visible this frame?
     pub game_view_visible: bool,
+    /// Where the scene view sits on screen, for turning a click into a ray.
     pub scene_view_rect: Option<egui::Rect>,
+    /// Where the game view sits on screen.
     pub game_view_rect: Option<egui::Rect>,
+    /// The scene view's size in points, which the render target follows.
     pub scene_view_size: Option<egui::Vec2>,
+    /// The game view's size in points.
     pub game_view_size: Option<egui::Vec2>,
+    /// The egui texture the scene view paints — the render target's other end.
     pub scene_texture_id: Option<egui::TextureId>,
+    /// The egui texture the game view paints.
     pub game_texture_id: Option<egui::TextureId>,
+    /// The dock layout: which tabs exist and how they are arranged. Persisted between sessions.
     pub dock_state: egui_dock::DockState<EditorTab>,
 
+    /// Debug boxes to draw this frame: position, rotation, half-extents and colour.
     pub debug_draw_requests: Vec<(
         gizmo_math::Vec3,
         gizmo_math::Quat,
         gizmo_math::Vec3,
         gizmo_math::Vec4,
     )>,
+    /// Debug entities with a lifetime: seconds remaining, and the entity id to despawn.
     pub debug_spawned_entities: Vec<(f32, u32)>,
+    /// What Ctrl+C copied — the entities a paste will duplicate.
     pub clipboard_entities: Vec<gizmo_core::entity::Entity>,
 
+    /// The channel a native file dialog answers on. It runs on its own thread, so the frame that
+    /// opened it cannot block: the result is picked up whenever it arrives.
     pub pending_dialog_rx:
         Option<std::sync::Mutex<std::sync::mpsc::Receiver<(bool, Option<String>)>>>,
 
@@ -121,6 +202,10 @@ pub struct EditorState {
     /// `Some(snapshot)` once play is pressed, `None` on stop.
     pub play_snapshot: Option<gizmo_scene::SceneSnapshot>,
 
+    /// Component edits the inspector made as JSON, each with the function that applies it.
+    ///
+    /// The inspector edits a component it does not know the type of by round-tripping it through
+    /// `serde_json`; the function pointer is what turns that value back into a typed write.
     pub pending_json_updates: Vec<(
         gizmo_core::entity::Entity,
         fn(
@@ -131,7 +216,7 @@ pub struct EditorState {
         serde_json::Value,
     )>,
 
-    /// Fighting game HUD durumu (health bar, round, timer)
+    /// The fighting-game HUD's state: health bars, round counter and timer.
     pub fight_hud: FightHudState,
 
     /// When the status bar last read this process's resident set size, and what it read.
@@ -140,10 +225,17 @@ pub struct EditorState {
     /// rather than sixty times. `rss_bytes` stays `None` where RSS cannot be measured at all, and
     /// the row is then absent rather than showing a zero it did not measure.
     pub rss_sampled_at: Option<Instant>,
+    /// The resident set size last read, in bytes. `None` where RSS cannot be measured.
     pub rss_bytes: Option<u64>,
 }
 
 impl EditorState {
+    /// The editor's starting state, with preferences and the dock layout read from disk.
+    ///
+    /// Both reads touch the filesystem — `editor_prefs.toml` from the config directory and
+    /// `editor_layout.json` from the working directory — so a test that cares about the dock
+    /// should overwrite `dock_state` with `create_default_dock_state()` rather than inherit
+    /// whatever the developer's machine has.
     pub fn new() -> Self {
         let prefs = EditorPrefs::load();
         Self {

@@ -1,6 +1,8 @@
 use crate::EditorState;
 use gizmo_core::World;
 
+/// Draws the scene view tab: the rendered viewport, the transform gizmo over it, and the input
+/// that turns a click into a pick or a drag into a rubber band.
 pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
     state.scene_view_visible = true;
 

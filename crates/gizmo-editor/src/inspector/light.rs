@@ -6,6 +6,7 @@ use gizmo_math::Vec3;
 use gizmo_renderer::components::{PointLight, DirectionalLight};
 
 
+/// The point-light rows: colour, intensity and radius.
 pub fn draw_point_light_section(
     ui: &mut egui::Ui,
     world: &World,
@@ -41,6 +42,7 @@ pub fn draw_point_light_section(
 }
 
 
+/// The directional-light rows: colour, intensity and the direction it points.
 pub fn draw_directional_light_section(
     ui: &mut egui::Ui,
     world: &World,

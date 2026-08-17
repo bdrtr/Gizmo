@@ -1,18 +1,29 @@
 use super::*;
 
+/// A dockable tab in the editor's layout. Serialised with the layout, so a tab that is renamed
+/// is a tab that vanishes from everyone's saved dock.
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Hash, Debug)]
 #[non_exhaustive]
 pub enum EditorTab {
     /// The ANIMATION timeline — tracks and keyframes for the selected entity's player.
     Animation,
+    /// The scene tree.
     Hierarchy,
+    /// The selected entity's components.
     Inspector,
+    /// The project's files.
     AssetBrowser,
+    /// The editable viewport, with the gizmo and picking.
     SceneView,
+    /// What the game camera sees, as the game sees it.
     GameView,
+    /// The log console.
     Console,
+    /// The editor's settings window.
     Settings,
+    /// The Lua script editor.
     ScriptEditor,
+    /// Frame timings and the flamegraph.
     Profiler,
 }
 
@@ -20,9 +31,13 @@ pub enum EditorTab {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[non_exhaustive]
 pub enum GizmoMode {
+    /// Picking only; the gizmo is not drawn.
     Select,
+    /// Move the selection.
     Translate,
+    /// Turn it.
     Rotate,
+    /// Resize it.
     Scale,
 }
 
@@ -34,7 +49,7 @@ pub enum BuildTarget {
     Native,
     /// Linux (x86_64-unknown-linux-gnu)
     Linux,
-    /// Windows (x86_64-pc-windows-gnu — cross gerektirir)
+    /// Windows (x86_64-pc-windows-gnu — needs a cross toolchain)
     Windows,
     /// macOS (x86_64-apple-darwin — on a Mac only)
     MacOs,
@@ -72,6 +87,7 @@ pub enum EditorMode {
 /// hand back precisely the hole this type exists to close.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SpawnKind {
+    /// A bare entity: a transform and a name, nothing else.
     Empty,
     /// A folder: an entity that groups without drawing.
     ///
@@ -80,13 +96,21 @@ pub enum SpawnKind {
     /// with the marker and a mesh, or with children and no marker. What a group actually is, is
     /// an entity with a name, children, and nothing to draw.
     Group,
+    /// A cube, with a matching box collider.
     Cube,
+    /// A sphere, with a matching sphere collider.
     Sphere,
+    /// A plane quad, with a thin box collider under it.
     Plane,
+    /// A cylinder, with a cylinder collider.
     Cylinder,
+    /// A capsule, with a capsule collider.
     Capsule,
+    /// A point light.
     PointLight,
+    /// A camera.
     Camera,
+    /// A particle emitter.
     ParticleEmitter,
 }
 
@@ -144,16 +168,22 @@ impl SpawnKind {
 /// *(which list, which index)* — an index alone is ambiguous between them.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TrackChannel {
+    /// The clip's translation tracks.
     Translation,
+    /// Its rotation tracks.
     Rotation,
+    /// Its scale tracks.
     Scale,
 }
 
 /// One keyframe, addressed the only way a clip allows.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct KeyframeRef {
+    /// Which of the clip's three channel lists the track is in.
     pub channel: TrackChannel,
+    /// Index of the track within that list.
     pub track: usize,
+    /// Index of the keyframe within that track.
     pub keyframe: usize,
 }
 
@@ -169,7 +199,12 @@ pub struct AnimationEditState {
     pub selected: Option<KeyframeRef>,
 }
 
-// --- Alt Durum Yapilari ---
+// --- The nested state structs ---
+/// What the viewport asked the editor camera to do this frame, and what it worked out.
+///
+/// The `*_delta` fields are inputs the panel writes and the camera system consumes; `view` and
+/// `proj` are outputs it writes back, so that picking and the gizmo work from the same matrices
+/// the frame was drawn with rather than rebuilding them.
 #[derive(Default, Debug)]
 #[non_exhaustive]
 pub struct CameraState {
@@ -178,12 +213,19 @@ pub struct CameraState {
     /// Separate from `look_delta`, which is `Some` only while the pointer is actually moving. Fly
     /// movement has to work with the mouse held still, and holding the button is the whole signal.
     pub fly_active: bool,
+    /// Mouse movement to look with this frame, in points. `None` while the pointer is still.
     pub look_delta: Option<gizmo_math::Vec2>,
+    /// Movement to pan the camera sideways with (middle drag).
     pub pan_delta: Option<gizmo_math::Vec2>,
+    /// Movement to orbit the focus point with (Alt drag).
     pub orbit_delta: Option<gizmo_math::Vec2>,
+    /// Wheel movement to dolly with.
     pub scroll_delta: Option<f32>,
+    /// The view matrix the frame was drawn with — written by the camera system, read by picking.
     pub view: Option<gizmo_math::Mat4>,
+    /// The projection matrix that went with it.
     pub proj: Option<gizmo_math::Mat4>,
+    /// A point to frame, set by `F` on the selection and cleared once the camera has moved there.
     pub focus_target: Option<gizmo_math::Vec3>,
     /// A world-space direction the editor camera should be pointed along, set by the viewport's
     /// axis gizmo and consumed (and cleared) by the studio's camera system.
@@ -193,17 +235,30 @@ pub struct CameraState {
     /// straight-up or straight-down look leaves yaw undetermined and has to inherit it rather
     /// than snap to zero.
     pub view_request: Option<gizmo_math::Vec3>,
+    /// The ten camera bookmarks, each a position with its yaw and pitch. Empty slots are
+    /// `None`.
     pub bookmarks: [Option<(gizmo_math::Vec3, f32, f32)>; 10],
 }
 
 #[derive(Debug)]
 #[non_exhaustive]
+/// Exporting a game: what was asked for, and what the build is doing about it.
+///
+/// The build runs `cargo` on its own thread, so everything here is either a request the UI
+/// raised or a channel it reads the result from — the frame must not block on a compiler.
 pub struct BuildState {
+    /// Raised by the toolbar's Build button; cleared once the build has been started.
     pub request: bool,
+    /// Which platform to build for.
     pub target: BuildTarget,
+    /// Whether a build is running. Shared with the build thread, which clears it when it exits.
     pub is_building: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// The channel the build thread streams its output on.
     pub logs_rx: Option<std::sync::Mutex<std::sync::mpsc::Receiver<String>>>,
+    /// Output already drained from that channel, with the colour it is drawn in — kept because
+    /// the receiver can only be read once.
     pub cached_logs: Vec<(String, egui::Color32)>,
+    /// When the running build started, for the elapsed time in the panel.
     pub start_time: Option<Instant>,
 }
 impl Default for BuildState {
@@ -221,7 +276,10 @@ impl Default for BuildState {
 
 #[derive(Debug)]
 #[non_exhaustive]
+/// The asset browser's own state: where it is looking, what it is showing, and the caches that
+/// keep it from walking the filesystem every frame.
 pub struct AssetBrowserState {
+    /// The search box's contents.
     pub filter: String,
     /// The type chip currently selected, or `None` for "All" — the prototype's asset filter row.
     pub kind_filter: Option<crate::asset_browser::AssetKind>,
@@ -234,8 +292,14 @@ pub struct AssetBrowserState {
     /// the grid again. See `crate::asset_browser::tree_root_for` for what happens when navigation
     /// walks above it.
     pub workspace_root: String,
+    /// Is the browser panel visible?
     pub show: bool,
+    /// The channel a "choose workspace folder" dialog answers on; it runs off-thread like the
+    /// other native dialogs.
     pub workspace_rx: Option<std::sync::Mutex<std::sync::mpsc::Receiver<String>>>,
+    /// The grid's listing of `root`: `(which folder, when it was read, the entries)`, each entry
+    /// being `(path, display name, is a directory)`. Re-read when it goes stale rather than every
+    /// frame.
     pub cached_dir: Option<(
         String,
         Instant,
@@ -281,34 +345,55 @@ impl Default for AssetBrowserState {
 
 #[derive(Default, Debug)]
 #[non_exhaustive]
+/// Scene-level requests the UI raised, and the dialogs it is waiting on.
 pub struct SceneState {
+    /// "Save the scene to this path."
     pub save_request: Option<String>,
+    /// "Load the scene at this path."
     pub load_request: Option<String>,
+    /// "Empty the scene", keeping the editor's own entities.
     pub clear_request: bool,
+    /// "Rebuild the navigation mesh from what is in the scene now."
     pub rebuild_navmesh_request: bool,
+    /// Open the native save dialog — the scene has no path yet, or Save As was used.
     pub request_save_dialog: bool,
+    /// A load waiting on "you have unsaved changes, continue?", carrying the path it would load.
     pub load_confirm_dialog: Option<String>,
+    /// The transforms as they were when the current gizmo drag started, so the whole drag is one
+    /// undo entry rather than one per frame.
     pub gizmo_original_transforms:
         std::collections::HashMap<gizmo_core::entity::Entity, gizmo_physics_core::Transform>,
 }
 
 #[derive(Default, Debug)]
 #[non_exhaustive]
+/// What is selected, and the rubber band being dragged over the viewport.
 pub struct SelectionState {
+    /// Everything selected.
     pub entities: std::collections::HashSet<gizmo_core::entity::Entity>,
+    /// The one the inspector shows and the gizmo sits on — the last one clicked.
     pub primary: Option<gizmo_core::entity::Entity>,
+    /// Where the rubber band started, in viewport points; `None` when none is being dragged.
     pub rubber_band_start: Option<gizmo_math::Vec2>,
+    /// Where the pointer is now, so the band can be drawn.
     pub rubber_band_current: Option<gizmo_math::Vec2>,
+    /// A finished band waiting to be turned into a selection: the two corners it spanned.
     pub rubber_band_request: Option<(gizmo_math::Vec2, gizmo_math::Vec2)>,
 }
 
 #[derive(Default, Debug)]
 #[non_exhaustive]
+/// The script editor tab: which file is open, its text, and whether it has been changed.
 pub struct ScriptEditorState {
+    /// Is the editor tab open?
     pub open: bool,
+    /// The file being edited, `None` when nothing is open.
     pub active_path: Option<String>,
+    /// Its text as edited — not what is on disk until it is saved.
     pub active_content: Option<String>,
+    /// Whether the text differs from the file.
     pub is_dirty: bool,
+    /// A "discard your changes?" prompt is waiting for an answer.
     pub pending_clear_confirm: bool,
     /// Draft name in the inspector's "add a property" row. Native-only, like the row itself:
     /// `gizmo-scripting` is a `cfg(not(target_arch = "wasm32"))` dependency of this crate.
@@ -321,26 +406,40 @@ pub struct ScriptEditorState {
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
 #[non_exhaustive]
+/// Which stream the console panel is showing.
 pub enum ConsoleMode {
+    /// The engine's own log.
     EngineLogs,
+    /// The output of the running build.
     BuildOutput,
 }
 
 #[non_exhaustive]
+/// The console panel: which lines it shows, and the snapshot it draws from.
 pub struct ConsoleState {
+    /// Which console is being shown — the log, or the cvar command line.
     pub mode: ConsoleMode,
+    /// Show info lines?
     pub show_info: bool,
+    /// Show warnings?
     pub show_warn: bool,
+    /// Show errors?
     pub show_error: bool,
+    /// A substring every shown line must contain.
     pub filter_text: String,
 
-    // Cache
+    // The panel draws from a snapshot rather than holding the logger's lock for the frame.
+    /// The lines as of the last refresh.
     pub cached_logs: Vec<gizmo_core::logger::LogEntry>,
+    /// The logger's version when that snapshot was taken; a change is what triggers a refresh.
     pub last_version: usize,
 
-    // İstatistikler
+    // Counts, for the level chips.
+    /// How many info lines the snapshot holds.
     pub count_info: usize,
+    /// How many warnings.
     pub count_warn: usize,
+    /// How many errors.
     pub count_error: usize,
 }
 
@@ -366,18 +465,35 @@ impl Default for ConsoleState {
 
 #[derive(Clone, Debug)]
 #[non_exhaustive]
+/// The post-process chain's settings, as the editor exposes them.
+///
+/// Everything here is clamped into a safe range by `EditorState::clamp_post_process` before it
+/// reaches the renderer, so a slider dragged to an extreme cannot produce a frame that is all
+/// white or all NaN.
 pub struct PostProcessSettings {
+    /// How much bloom is mixed back into the frame; 0 disables it.
     pub bloom_intensity: f32,
+    /// The luminance above which a pixel blooms.
     pub bloom_threshold: f32,
+    /// Exposure applied at tone-mapping; 1.0 leaves the HDR scene as rendered.
     pub exposure: f32,
+    /// How much the frame darkens towards its corners, 0 for not at all.
     pub vignette: f32,
+    /// How far the colour channels separate towards the edges, in pixels.
     pub chromatic_aberration: f32,
+    /// Distance from the camera that is in focus, in metres.
     pub dof_focus_dist: f32,
+    /// How deep that in-focus band is, in metres.
     pub dof_focus_range: f32,
+    /// How much the out-of-focus part is blurred.
     pub dof_blur_size: f32,
+    /// Film-grain strength, 0 for none.
     pub film_grain: f32,
+    /// Whether FXAA runs as the last pass.
     pub fxaa_enabled: bool,
+    /// Whether screen-space ambient occlusion is computed.
     pub ssao_enabled: bool,
+    /// How strongly that occlusion darkens the frame.
     pub ssao_strength: f32,
 }
 
@@ -404,16 +520,27 @@ impl Default for PostProcessSettings {
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct FightHudState {
+    /// Whether the HUD is drawn at all.
     pub active: bool,
+    /// Player one's name plate.
     pub p1_name: String,
+    /// Player two's name plate.
     pub p2_name: String,
+    /// Player one's remaining health.
     pub p1_health: f32,
+    /// What that health bar is full at.
     pub p1_max_health: f32,
+    /// Player two's remaining health.
     pub p2_health: f32,
+    /// What their bar is full at.
     pub p2_max_health: f32,
+    /// Which round is being fought, counting from 1.
     pub current_round: u32,
+    /// Seconds left on the round timer.
     pub timer_seconds: f32,
+    /// Player one's entity, so the HUD can follow the right fighter.
     pub p1_entity: Option<u32>,
+    /// Player two's entity.
     pub p2_entity: Option<u32>,
 }
 

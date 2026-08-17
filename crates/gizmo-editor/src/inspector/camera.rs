@@ -5,6 +5,7 @@ use gizmo_core::World;
 use gizmo_renderer::components::Camera;
 
 
+/// The camera rows: field of view, clip planes, exposure and whether this is the primary camera.
 pub fn draw_camera_section(
     ui: &mut egui::Ui,
     world: &World,

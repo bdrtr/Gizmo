@@ -32,6 +32,8 @@ fn slider_row(
     ui.add_space(6.0);
 }
 
+/// The environment rows — sky, ambient light and fog — which belong to the scene rather than to
+/// any one entity.
 pub fn draw_environment_settings(ui: &mut egui::Ui, state: &mut EditorState) {
     ui.heading("🌍 World & Environment Settings");
     ui.label(

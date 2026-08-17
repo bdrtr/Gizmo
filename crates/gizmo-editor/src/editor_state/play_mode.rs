@@ -20,6 +20,7 @@ impl EditorState {
         };
     }
 
+    /// Pauses a running game, or resumes a paused one. Does nothing in edit mode.
     pub fn toggle_pause(&mut self) {
         self.mode = match self.mode {
             EditorMode::Play => EditorMode::Paused,
@@ -38,10 +39,12 @@ impl EditorState {
         matches!(self.mode, EditorMode::Play | EditorMode::Paused)
     }
 
+    /// Is the editor in edit mode (not playing, not paused)?
     pub fn is_editing(&self) -> bool {
         self.mode == EditorMode::Edit
     }
 
+    /// Is the game paused?
     pub fn is_paused(&self) -> bool {
         self.mode == EditorMode::Paused
     }

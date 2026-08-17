@@ -6,6 +6,7 @@ use gizmo_physics_core::Collider;
 use gizmo_physics_rigid::components::{BodyType, RigidBody, Velocity};
 
 
+/// The velocity rows: linear and angular, editable while the simulation is stopped.
 pub fn draw_velocity_section(
     ui: &mut egui::Ui,
     world: &World,
@@ -91,6 +92,7 @@ pub fn draw_velocity_section(
 }
 
 
+/// The rigid-body rows: mass, damping, gravity, and the sleep state.
 pub fn draw_rigidbody_section(
     ui: &mut egui::Ui,
     world: &World,
@@ -152,6 +154,7 @@ pub fn draw_rigidbody_section(
 }
 
 
+/// The collider rows: its shape's dimensions, its material and its layer.
 pub fn draw_collider_section(
     ui: &mut egui::Ui,
     world: &World,
@@ -258,6 +261,7 @@ pub fn draw_collider_section(
 }
 
 
+/// The joint rows: what this entity is jointed to, and the limits of that joint.
 pub fn draw_joint_section(
     ui: &mut egui::Ui,
     world: &World,

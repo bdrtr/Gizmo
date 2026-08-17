@@ -333,19 +333,29 @@ let mut finished = false;
 /// first about whether `.tga` is a texture.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AssetKind {
+    /// A directory.
     Folder,
+    /// Geometry: `.obj`, `.gltf`, `.glb`.
     Mesh,
+    /// An image the renderer can sample.
     Texture,
+    /// A sound file.
     Audio,
+    /// A Lua script.
     Script,
+    /// A WGSL shader.
     Shader,
+    /// A saved prefab.
     Prefab,
+    /// A saved scene.
     Scene,
+    /// Structured data — JSON, RON, TOML.
     Data,
     /// An asset's `.meta` sidecar. A kind of its own so the browser can leave the 22 of them out
     /// of the grid instead of rendering each as an anonymous grey tile beside the file it belongs
     /// to.
     Meta,
+    /// Anything with an extension this table does not know.
     Other,
 }
 

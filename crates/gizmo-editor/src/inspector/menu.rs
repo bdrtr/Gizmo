@@ -4,6 +4,8 @@ use egui;
 use gizmo_core::World;
 
 
+/// The `➕ Add component` menu: what can be added to the selection, and the request each entry
+/// raises.
 pub fn draw_add_component_menu(
     ui: &mut egui::Ui,
     world: &World,

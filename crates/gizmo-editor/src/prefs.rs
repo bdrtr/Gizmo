@@ -3,17 +3,34 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[non_exhaustive]
+/// The editor's persisted preferences.
+///
+/// Written to `editor_prefs.toml` in the user's config directory and validated on load: a file
+/// hand-edited into nonsense clamps back into range rather than producing a camera that cannot
+/// move or a history that eats memory.
 pub struct EditorPrefs {
+    /// The editor camera's fly speed, in metres per second.
     pub camera_speed: f32,
+    /// How far the camera sits from what it focuses with `F`, in metres.
     pub camera_focus_distance: f32,
+    /// Draw the ground grid in the scene view?
     pub show_grid: bool,
+    /// Is gizmo snapping on?
     pub snap_enabled: bool,
+    /// Translation snap, in metres.
     pub snap_translate: f32,
+    /// Rotation snap, in degrees.
     pub snap_rotate_deg: f32,
+    /// Scale snap, as a fraction.
     pub snap_scale: f32,
+    /// How large the transform gizmo is drawn, in screen terms.
     pub gizmo_size: f32,
+    /// How many undo entries to keep.
     pub max_history: usize,
 
+    /// Whether the preferences have changed since they were last written.
+    ///
+    /// `#[serde(skip)]`: a dirty flag is not persistent state, and it always deserialises false.
     #[serde(skip)]
     pub dirty: bool,
     /// Whether the last write failed. Only used to keep the report to one line per run — see
@@ -40,6 +57,8 @@ impl Default for EditorPrefs {
     }
 }
 
+/// Where the preferences file lives: the user's config directory, or the working directory when
+/// there is no config directory to be had.
 pub fn prefs_path() -> std::path::PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
@@ -48,10 +67,13 @@ pub fn prefs_path() -> std::path::PathBuf {
 }
 
 impl EditorPrefs {
+    /// The default preferences, without touching the disk.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Reads the preferences from disk, falling back to the defaults when the file is missing or
+    /// unreadable. Whatever is loaded is validated before it is returned.
     pub fn load() -> Self {
         let path = prefs_path();
         match std::fs::read_to_string(&path) {
@@ -71,6 +93,8 @@ impl EditorPrefs {
         }
     }
 
+    /// Clamps every value into the range the editor can actually work with. Fields with no
+    /// meaningful range — `show_grid`, `camera_focus_distance` — are left alone.
     pub fn validate(&mut self) {
         self.camera_speed = self.camera_speed.clamp(0.1, 1000.0);
         self.snap_translate = self.snap_translate.clamp(0.001, 100.0);
@@ -80,6 +104,7 @@ impl EditorPrefs {
         self.max_history = self.max_history.clamp(1, 1000);
     }
 
+    /// Marks the preferences as needing a write; the editor saves them at the next opportunity.
     pub fn mark_dirty(&mut self) {
         self.dirty = true;
     }

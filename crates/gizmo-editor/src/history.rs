@@ -8,12 +8,17 @@ use std::collections::VecDeque;
 pub enum EditorAction {
     /// An object's (or several objects') translation, rotation or scale changed
     TransformsChanged {
-        changes: Vec<(gizmo_core::entity::Entity, Transform, Transform)>, // (Entity, old_transform, new_transform)
+        /// One entry per entity: `(entity, the transform before, the transform after)`.
+        changes: Vec<(gizmo_core::entity::Entity, Transform, Transform)>,
     },
     /// Objects were deleted (hidden by a soft delete)
-    EntityDespawned { entity_ids: Vec<gizmo_core::entity::Entity> },
+    EntityDespawned {
+        /// The entities that were hidden, and that an undo brings back.
+        entity_ids: Vec<gizmo_core::entity::Entity>,
+    },
     /// Objects were created
     EntitySpawned {
+        /// The entities that were created, and that an undo soft-deletes again.
         entity_ids: Vec<gizmo_core::entity::Entity>,
     },
     /// The selected entity's animation clips, before and after a timeline edit.
@@ -29,14 +34,23 @@ pub enum EditorAction {
     ///    neighbour changes what every later index refers to. Undoing by index would then move a
     ///    different keyframe than the one the user dragged.
     AnimationClipsChanged {
+        /// The entity whose player was edited.
         entity: gizmo_core::entity::Entity,
+        /// Its clips before the edit.
         before: std::sync::Arc<[gizmo_renderer::AnimationClip]>,
+        /// Its clips after it.
         after: std::sync::Arc<[gizmo_renderer::AnimationClip]>,
     },
     /// A dynamic or otherwise unclassified component changed
     ComponentChanged {
+        /// The entity whose component changed.
         entity: gizmo_core::entity::Entity,
-        type_name: String, // Box<dyn Any> does not implement Clone across UI bounds easily, using typed names for future reflection implementation.
+        /// The component's type name.
+        ///
+        /// A name rather than the value: `Box<dyn Any>` is not `Clone` across the UI boundary, so
+        /// this variant records *that* something changed and is not undoable yet — `undo` puts it
+        /// back on the stack rather than dropping it.
+        type_name: String,
     },
 }
 
@@ -45,6 +59,7 @@ pub enum EditorAction {
 pub struct History {
     undo_stack: VecDeque<EditorAction>,
     redo_stack: VecDeque<EditorAction>,
+    /// How many entries the undo stack keeps before dropping its oldest.
     pub max_history: usize,
 }
 
@@ -55,6 +70,7 @@ impl Default for History {
 }
 
 impl History {
+    /// An empty history that keeps at most `max_history` entries.
     pub fn new(max_history: usize) -> Self {
         Self {
             undo_stack: VecDeque::new(),
@@ -63,10 +79,12 @@ impl History {
         }
     }
 
+    /// Is there anything to undo?
     pub fn can_undo(&self) -> bool {
         !self.undo_stack.is_empty()
     }
 
+    /// Is there anything to redo?
     pub fn can_redo(&self) -> bool {
         !self.redo_stack.is_empty()
     }

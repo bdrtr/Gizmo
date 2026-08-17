@@ -42,7 +42,10 @@ pub enum PropertyStatus {
     ///
     /// The stored value is what the script receives — it is not coerced and it is not dropped.
     /// The row shows it, and says what the script now declares instead.
-    TypeMismatch { declared_kind: &'static str },
+    TypeMismatch {
+        /// The kind the script declares the property as, which the override disagrees with.
+        declared_kind: &'static str,
+    },
     /// Stored on this entity but absent from the declaration: either a leftover from an older
     /// version of the script, or data added here on purpose. Either way the script gets it.
     Undeclared,
@@ -51,11 +54,13 @@ pub enum PropertyStatus {
 /// One row of the SCRIPT section.
 #[derive(Clone, Debug)]
 pub struct PropertyRow {
+    /// The property's name, as the script declares it.
     pub name: String,
     /// What the row shows and edits. For [`PropertyStatus::Declared`] this is the declared
     /// default (nothing is stored); for every other status it is the stored value, which is
     /// exactly what the script receives.
     pub value: ScriptValue,
+    /// Whether this entity overrides it, and whether that override still type-checks.
     pub status: PropertyStatus,
 }
 
@@ -99,8 +104,11 @@ pub fn property_rows(
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum NewPropertyKind {
     #[default]
+    /// A number.
     Num,
+    /// A flag.
     Bool,
+    /// A string.
     Text,
 }
 

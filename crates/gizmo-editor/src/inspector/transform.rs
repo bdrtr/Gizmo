@@ -5,6 +5,7 @@ use gizmo_core::World;
 use gizmo_physics_core::Transform;
 
 
+/// The transform rows: position, rotation in degrees, and scale.
 pub fn draw_transform_section(
     ui: &mut egui::Ui,
     world: &World,
@@ -132,12 +133,19 @@ pub fn draw_transform_section(
 }
 
 
+/// A quaternion as Euler angles in degrees, for display.
+///
+/// The decomposition is not unique — several triples name the same rotation, and at gimbal lock
+/// (|pitch| ≈ 90°) yaw and roll trade off — so a round trip through here preserves the *rotation*
+/// rather than the numbers.
 pub fn quat_to_euler_deg(q: gizmo_math::Quat) -> (f32, f32, f32) {
     let (x, y, z) = q.to_euler(gizmo_math::EulerRot::XYZ);
     (x.to_degrees(), y.to_degrees(), z.to_degrees())
 }
 
 
+/// Euler angles in degrees back to a unit quaternion — the inverse of
+/// [`quat_to_euler_deg`], up to the ambiguity described there.
 pub fn euler_deg_to_quat(rx: f32, ry: f32, rz: f32) -> gizmo_math::Quat {
     gizmo_math::Quat::from_euler(
         gizmo_math::EulerRot::XYZ,

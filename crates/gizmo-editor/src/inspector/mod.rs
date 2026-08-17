@@ -1,19 +1,29 @@
+/// The transform rows, and the Euler↔quaternion conversion behind them.
 pub mod transform;
+/// The rigid-body and collider rows.
 pub mod physics;
+/// The light rows, one shape of section per light type.
 pub mod light;
+/// The camera rows.
 pub mod camera;
+/// The material rows: albedo, metallic, roughness and the texture slots.
 pub mod material;
+/// Everything else the inspector can edit, one `draw_*_section` per component family.
 pub mod misc;
 /// The SCRIPT section's property rows. Native-only: `gizmo-scripting` is a
 /// `cfg(not(target_arch = "wasm32"))` dependency of this crate.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod script;
+/// The environment rows — sky, ambient and fog.
 pub mod environment;
+/// The `➕ Add component` menu, and what each entry adds.
 pub mod menu;
 
 use crate::editor_state::EditorState;
 use gizmo_core::World;
 
+/// Draws the whole inspector panel for the current selection: one section per component the
+/// primary entity carries, plus the add-component menu.
 pub fn ui_inspector(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
     let sel_len = state.selection.entities.len();
     if sel_len == 0 {

@@ -1,6 +1,7 @@
 use crate::editor_state::{ConsoleMode, EditorState};
 use gizmo_core::logger::{self, LogLevel};
 
+/// Draws the console panel: the filtered log or the build output, with the level chips above it.
 pub fn ui_console(ui: &mut egui::Ui, state: &mut EditorState) {
     // Konsol sekmeleri (Engine vs Build)
     ui.horizontal(|ui| {

@@ -1,5 +1,6 @@
 use crate::EditorState;
 
+/// The build window: the target, the Build button, and the compiler output as it streams in.
 pub fn ui_build_console(ui: &mut egui::Ui, state: &mut EditorState) {
     let is_building = state
         .build
@@ -70,6 +71,7 @@ pub fn ui_build_console(ui: &mut egui::Ui, state: &mut EditorState) {
     }
 }
 
+/// The settings window — editor preferences and the post-process sliders.
 pub fn ui_settings_window(ui: &mut egui::Ui, state: &mut EditorState) {
     egui::ScrollArea::vertical().show(ui, |ui| {
         // --- Kamera ---
@@ -257,6 +259,7 @@ pub fn ui_settings_window(ui: &mut egui::Ui, state: &mut EditorState) {
     });
 }
 
+/// The script editor window: the open file's text, and saving it back.
 pub fn ui_script_editor(ui: &mut egui::Ui, state: &mut EditorState) {
     let has_script = state.script.active_path.is_some();
     let current_path = state.script.active_path.clone();
