@@ -40,6 +40,8 @@ pub mod inspector;
 /// Editor preferences, persisted to disk between sessions.
 pub mod prefs;
 pub mod profiler_panel;
+/// The rebinding panel: an `ActionMap` shown as rows a player can change.
+pub mod rebinding;
 /// The scene view tab: the editable viewport, its gizmo and its picking.
 pub mod scene_view;
 pub mod toolbar;

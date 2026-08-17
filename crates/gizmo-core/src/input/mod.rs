@@ -451,6 +451,7 @@ pub mod mouse {
 // public paths (`input::ActionMap`, `input::InputBinding`, `input::FrameRecord`,
 // `input::PlaybackData`, …) and the crate-root `pub use input::{...}` stay unchanged.
 mod axis;
+mod binding_names;
 mod fighter;
 mod gamepad;
 mod mapping;
@@ -463,6 +464,7 @@ pub use gamepad::{
     GamepadId, Gamepads, NAMED_GAMEPAD_AXES, NAMED_GAMEPAD_BUTTONS,
 };
 pub use mapping::{ActionMap, InputBinding};
+pub use binding_names::{binding_from_name, binding_to_name, UnknownBinding};
 pub use rumble::RumbleRequest;
 
 #[cfg(test)]

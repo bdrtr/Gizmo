@@ -199,8 +199,35 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
   on Linux advertise only `FF_RUMBLE` — so gilrs reports no force feedback for them either.
   **Trigger:** a gilrs release that fixes this, or a wheel-class device to try it on.
 
-  *A rebinding UI:* `NAMED_GAMEPAD_BUTTONS` exists so a config file can name controls, but no editor
-  panel consumes it. *Demos beyond `car_demo` and `platformer` — CLOSED (2026-08-17), and the
+  *A rebinding UI — CLOSED (2026-08-18), and the missing piece was not the
+  panel.* The item read "`NAMED_GAMEPAD_BUTTONS` exists so a config file can name controls, but no
+  editor panel consumes it". What actually blocked it was that **`ActionMap` had no way out to
+  text and no way back**, so the names named things nobody could save; a panel would have had
+  nowhere to put its answer.
+
+  `gizmo_core::input::binding_names` is that half. One binding is one string —
+  `key:w`, `mouse:left`, `pad:south`, `axis:left_stick_x+0.5` — and the `pad:`/`axis:` prefix
+  earns its place: `left_trigger` is a name in **both** tables, the same control read as a digital
+  press and as analog travel, and a config that could not tell them apart would be ambiguous
+  exactly where a driving game cares. `to_named` returns a `BTreeMap` so a settings file does not
+  produce a diff on every save; `apply_named` **replaces** rather than merges, or a control removed
+  from the file keeps firing until the next fresh start; and it **returns what it could not parse**
+  instead of skipping it, because a typo is otherwise a control that silently does nothing, which
+  is the least diagnosable bug a game can have.
+
+  **The capture read is the part a naive version gets wrong**, so it is in the engine rather than
+  the panel: `InputBinding::captured_from` reads press *edges* (or the click that opened the dialog
+  binds itself), stores a **default** threshold rather than however far the stick happened to be
+  pushed (0.83 of travel would bind an action that only fires past 0.83), and answers in a fixed
+  order so a key beats a stick resting past its deadzone. A test asserts that everything capture
+  can return is also nameable — otherwise a panel shows a blank row for a control just pressed.
+
+  `gizmo_editor::rebinding` is the panel, and it takes the map and the `Input` rather than owning
+  them, so a game's own settings screen can draw the same rows. Its one interesting state is
+  *listening*, one action at a time, with a **one-frame grace** — the click that starts listening
+  is in the same `Input` the panel is about to read. Escape cancels and is checked before capture,
+  or the key that means "stop" is the key that gets bound. All of it drives headlessly through
+  `egui::Context::run_ui`, which is what makes it testable at all. *Demos beyond `car_demo` and `platformer` — CLOSED (2026-08-17), and the
   three lines turned out to be the wrong shape.* See the movement-axis item below.
 - **Movement input — one axis instead of nineteen copies (2026-08-17).** The gamepad item above
   left a line reading "the remaining 37 demos still read the keyboard only; the path is three

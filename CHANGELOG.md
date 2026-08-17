@@ -48,6 +48,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Keyboard behaviour is unchanged for the demos that were already correct — checked against their
   previous expression over all 81 key combinations, not asserted.
 
+- **Input bindings as text, and a rebinding panel.** `ActionMap::to_named` / `apply_named` turn a
+  map into `action → ["key:w", "pad:south", "axis:left_stick_x+0.5"]` and back, which is what the
+  `NAMED_KEYS` / `NAMED_GAMEPAD_BUTTONS` tables were built for and what nothing could do until now.
+  `apply_named` returns every entry it could not parse rather than dropping it — a typo'd binding
+  is otherwise a control that silently does nothing.
+
+  `InputBinding::captured_from(&Input)` is the "press a control now" read: press edges only, a
+  default threshold for axes rather than however far the stick happened to be, and a fixed
+  precedence so a key beats a resting stick. `ActionMap::add_binding` / `remove_binding_named` are
+  the two edits a rebinding UI makes.
+
+  `gizmo_editor::rebinding::ui_rebinding_panel` draws the rows. It takes the map and the input
+  rather than owning them, so a game's settings screen can use the same panel.
+
 - **Gamepad rumble.** `Input::rumble(weak, strong, duration_secs)` and `Input::rumble_pad` queue a
   request; `GamepadBackend::apply_rumble` hands it to the driver. The two motors are separate and
   named for the feeling — `weak` buzzes, `strong` thumps — because a game that sets only one is
