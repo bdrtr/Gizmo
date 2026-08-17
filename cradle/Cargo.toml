@@ -9,7 +9,7 @@ license.workspace = true
 gizmo = { package = "gizmo-engine", path = "../crates/gizmo", features = ["audio", "scripting", "scene", "editor", "render", "window", "ui"] }
 gizmo-math = { path = "../crates/gizmo-math" }
 gizmo-core = { path = "../crates/gizmo-core" }
-pollster = "0.3"
+pollster = "0.4"
 winit = { workspace = true }
 mimalloc = { workspace = true }
 

@@ -23,7 +23,7 @@ wgpu = { version = "30", features = ["fragile-send-sync-non-atomic-wasm", "webgl
 naga_oil = "0.23"
 naga = { version = "30", features = ["wgsl-in", "wgsl-out"] }
 log = "0.4"
-pollster = "0.3"
+pollster = "0.4"
 winit = { workspace = true }
 bytemuck = { version = "1.14", features = ["derive"] }
 gizmo-math = { path = "../gizmo-math" , version = "0.10.0" }
@@ -43,7 +43,7 @@ meshopt = "0.6.2"
 
 
 [dev-dependencies]
-pollster = "0.3"
+pollster = "0.4"
 criterion = "0.8.2"
 
 # CPU-only: builds `Frustum`/`Aabb`/`Mat4` scenes and runs the cull, no wgpu adapter.
