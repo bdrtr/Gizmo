@@ -185,13 +185,20 @@ fn update(world: &mut World, state: &mut PlatformerState, dt: f32, input: &Input
         }
     }
 
-    // 2. Kamera kontrolleri
+    // 2. Kamera kontrolleri — sağ tuş + fare, ya da kolun sağ çubuğu.
     if input.is_mouse_button_pressed(1) {
         let delta = input.mouse_delta();
         state.camera_yaw -= delta.0 * 0.005;
         state.camera_pitch -= delta.1 * 0.005;
-        state.camera_pitch = state.camera_pitch.clamp(-PI / 2.0 + 0.1, PI / 2.0 - 0.1);
     }
+    if let Some(pad) = input.gamepad() {
+        // Çubuk duran bir yatırma miktarı (fare deltası gibi frame başına piksel değil), o
+        // yüzden dt ile ölçekleniyor — yoksa bakış hızı FPS'e bağlı olurdu.
+        let (x, y) = pad.right_stick();
+        state.camera_yaw -= x * 2.5 * dt;
+        state.camera_pitch += y * 2.0 * dt;
+    }
+    state.camera_pitch = state.camera_pitch.clamp(-PI / 2.0 + 0.1, PI / 2.0 - 0.1);
 
     // İleri/sağ yönler motorun paylaşılan yardımcısından (elle trig YOK).
     let forward = Camera::forward_from(state.camera_yaw, state.camera_pitch);
@@ -226,9 +233,23 @@ fn update(world: &mut World, state: &mut PlatformerState, dt: f32, input: &Input
         }
 
         move_dir = move_dir.normalize_or_zero();
+        // Çubuk yönü DEĞİL, yön+miktar taşır: normalize edilmiş tuş yönünün üstüne kendi
+        // büyüklüğüyle eklenir, böylece hafif yatırma yürüyüş, tam yatırma koşu olur — tuşun
+        // veremediği tek şey. Toplam 1'i geçerse kırpılır ki tuş+çubuk birlikte hız aşmasın.
+        if let Some(pad) = input.gamepad() {
+            let (x, y) = pad.left_stick();
+            move_dir += move_right * x + move_forward * y;
+            if move_dir.length() > 1.0 {
+                move_dir = move_dir.normalize();
+            }
+        }
         kcc.target_velocity = move_dir * kcc.speed;
 
-        if input.is_key_pressed(KeyCode::Space as u32) {
+        if input.is_key_pressed(KeyCode::Space as u32)
+            || input
+                .gamepad()
+                .is_some_and(|p| p.is_pressed(GamepadButton::South))
+        {
             kcc.jump_buffer_timer = kcc.jump_buffer_time;
         }
     }

@@ -164,6 +164,8 @@ fn main() {
         .set_setup(setup_scene)
         .set_update(|world, state, dt, input| {
             // W/↑ = ileri gaz, S/↓ = geri vites gazı, Space = fren.
+            // Kolda: RT = gaz, LT = geri, A = fren, sol çubuk = direksiyon, sağ çubuk = kamera,
+            // omuz düğmeleri = vites, Y = oto-vites, Start = sıfırla.
             let mut throttle: f32 = 0.0;
             if input.is_key_pressed(KeyCode::ArrowUp as u32)
                 || input.is_key_pressed(KeyCode::KeyW as u32)
@@ -175,11 +177,20 @@ fn main() {
             {
                 throttle -= 1.0;
             }
-            let brake = if input.is_key_pressed(KeyCode::Space as u32) {
+            let mut brake = if input.is_key_pressed(KeyCode::Space as u32) {
                 1.0
             } else {
                 0.0
             };
+            // Tetikler analog: klavyenin aç/kapa gazının aksine yarım gaz verilebiliyor. Kol
+            // takılı değilse `gamepad()` None döner ve buranın tamamı atlanır.
+            if let Some(pad) = input.gamepad() {
+                throttle += pad.right_trigger() - pad.left_trigger();
+                if pad.is_pressed(GamepadButton::South) {
+                    brake = 1.0;
+                }
+            }
+            let throttle = throttle.clamp(-1.0, 1.0);
 
             // FPS (yumuşatılmış). NOT: present_mode AutoNoVsync = FPS sınırsız, sahne yüküyle
             // dalgalanır; sayının inip çıkması normaldir, hata değil.
@@ -205,6 +216,16 @@ fn main() {
             {
                 state.steer_angle = (state.steer_angle - state.config.steer_speed * dt)
                     .max(-state.config.steer_max_angle);
+                is_steering = true;
+            }
+            // Sol çubuk direksiyonu bir HEDEF olarak sürer: açı yine `steer_speed` ile sınırlı
+            // hızda gider (araç modeli ani direksiyon sıçramasıyla test edilmedi), ama nereye
+            // gideceğini çubuğun ne kadar yatırıldığı söyler — tuşun veremediği ara açılar.
+            let stick_steer = input.gamepad().map(|p| p.left_stick().0).unwrap_or(0.0);
+            if stick_steer != 0.0 {
+                let target = -stick_steer * state.config.steer_max_angle;
+                let step = state.config.steer_speed * dt;
+                state.steer_angle += (target - state.steer_angle).clamp(-step, step);
                 is_steering = true;
             }
             if !is_steering {
@@ -234,19 +255,24 @@ fn main() {
                         w.pacejka_lat.d = tire_d;
                     }
 
-                    // T: oto-vites aç/kapa
-                    if input.is_key_just_pressed(KeyCode::KeyT as u32) {
+                    // T / Y: oto-vites aç/kapa
+                    let pad_pressed = |b| input.gamepad().is_some_and(|p| p.is_just_pressed(b));
+                    if input.is_key_just_pressed(KeyCode::KeyT as u32)
+                        || pad_pressed(GamepadButton::North)
+                    {
                         vehicle.auto_shift = !vehicle.auto_shift;
                     }
-                    // Q/E: manuel vites (yalnız oto-vites kapalıyken)
+                    // Q/E veya omuz düğmeleri: manuel vites (yalnız oto-vites kapalıyken)
                     if !vehicle.auto_shift {
                         let max_gear = vehicle.tuning.gear_ratios.len().saturating_sub(1);
-                        if input.is_key_just_pressed(KeyCode::KeyE as u32)
+                        if (input.is_key_just_pressed(KeyCode::KeyE as u32)
+                            || pad_pressed(GamepadButton::RightBumper))
                             && vehicle.current_gear < max_gear
                         {
                             vehicle.current_gear += 1;
                         }
-                        if input.is_key_just_pressed(KeyCode::KeyQ as u32)
+                        if (input.is_key_just_pressed(KeyCode::KeyQ as u32)
+                            || pad_pressed(GamepadButton::LeftBumper))
                             && vehicle.current_gear > 2
                         {
                             vehicle.current_gear -= 1;
@@ -258,7 +284,11 @@ fn main() {
             // Reset Car (konum + hız + VehicleController durumu + görsel steer/spin).
             // NOT: eskiden ayrıca phys_world.transforms/velocities'e DOĞRUDAN yazılıyordu; bu
             // gereksiz — physics_step_system her adımda ECS'ten sync_bodies ile yeniden kurar.
-            if input.is_key_just_pressed(KeyCode::KeyR as u32) {
+            if input.is_key_just_pressed(KeyCode::KeyR as u32)
+                || input
+                    .gamepad()
+                    .is_some_and(|p| p.is_just_pressed(GamepadButton::Start))
+            {
                 // SAFETY: Transform/Velocity/VehicleController ayrı bileşen tipleri, alias yok.
                 let mut transforms = unsafe { world.borrow_mut_unchecked::<Transform>() };
                 let mut velocities = unsafe { world.borrow_mut_unchecked::<Velocity>() };
@@ -464,7 +494,8 @@ fn main() {
             // update_camera'da sürer), değilse yarış-takip. ESKİDEN takip bloğu her frame
             // yaw/pitch'i konumdan yeniden hesaplayıp fare sürüklemesini anında eziyordu →
             // orbit işlevsizdi. Artık iki mod ayrık.
-            let orbit = input.is_mouse_button_pressed(gizmo::core::input::mouse::RIGHT);
+            let orbit =
+                input.is_mouse_button_pressed(gizmo::core::input::mouse::RIGHT) || pad_looking(input);
             if let Some(t) = world.borrow::<Transform>().get(state.chassis_id) {
                 let car_pos = t.position;
                 if orbit {
@@ -1352,11 +1383,28 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> CarDe
     state
 }
 
-fn update_camera(world: &mut World, state: &mut CarDemoState, input: &Input, _dt: f32) {
+/// Sağ çubuk serbest bakışı sürüyor mu?
+///
+/// Eşik ölü bölgenin üstünde ayrı bir sayı: `right_stick()` zaten ölü bölgeyi uyguluyor, bu ise
+/// "kamerayı kastediyor" demek için gereken miktar — çubuğa hafifçe dokunmak takip kamerasını
+/// bırakmasın diye.
+fn pad_looking(input: &Input) -> bool {
+    let (x, y) = input.gamepad().map(|p| p.right_stick()).unwrap_or((0.0, 0.0));
+    x.hypot(y) > 0.2
+}
+
+fn update_camera(world: &mut World, state: &mut CarDemoState, input: &Input, dt: f32) {
     if input.is_mouse_button_pressed(gizmo::core::input::mouse::RIGHT) {
         let delta = input.mouse_delta();
         state.cam_yaw += delta.0 * 0.005;
         state.cam_pitch += delta.1 * 0.005;
+    }
+    // Sağ çubuk faresiz aynı işi yapar. Fare deltası frame başına piksel, çubuk ise duran bir
+    // yatırma miktarı — o yüzden bu dt ile ölçekleniyor, yoksa dönüş hızı FPS'e bağlı olurdu.
+    if let Some(pad) = input.gamepad() {
+        let (x, y) = pad.right_stick();
+        state.cam_yaw += x * 2.5 * dt;
+        state.cam_pitch -= y * 2.0 * dt;
     }
 
     state.cam_pitch = state.cam_pitch.clamp(

@@ -103,8 +103,15 @@ pub struct App<State: 'static = ()> {
     input_fn: Option<Box<dyn FnMut(&mut World, &mut State, &winit::event::Event<()>) -> bool>>, // Input handler
     #[cfg(feature = "egui")]
     ui_fn: Option<Box<dyn FnMut(&mut World, &mut State, &egui::Context)>>, // Overlay UI handler
-    /// Current keyboard/mouse input state, updated from window events.
+    /// Current keyboard/mouse/gamepad input state, updated from window and device events.
     pub input: gizmo_core::input::Input,
+    /// Reads physical controllers into `input`, once per frame.
+    ///
+    /// Created lazily at the first frame rather than in `App::new`: constructing it enumerates
+    /// the system's input devices, and an `App` that is built and never run — every test that
+    /// checks a builder method — should not touch `/dev/input` to do it.
+    #[cfg(all(feature = "gamepad", not(target_arch = "wasm32")))]
+    gamepad_backend: Option<crate::gamepad::GamepadBackend>,
     #[allow(clippy::type_complexity)]
     event_updaters: Vec<Box<dyn FnMut(&mut World)>>,
     initial_scene: Option<String>,

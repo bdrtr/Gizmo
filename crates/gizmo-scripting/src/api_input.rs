@@ -67,6 +67,35 @@ pub fn register_input_api(lua: &Lua) -> Result<(), LuaError> {
             end
             return false
         end
+
+        -- Gamepad. Kol takılı değilse `input._pad` nil'dir ve hepsi false/0 döner, yani
+        -- script'in "kol var mı" diye ayrı bir dal yazması gerekmez.
+        function input.gamepad_connected()
+            return input._pad ~= nil
+        end
+
+        function input.gamepad_name()
+            return input._pad and input._pad.name or nil
+        end
+
+        function input.gamepad_pressed(button)
+            return input._pad ~= nil and input._pad.held[button] == true
+        end
+
+        function input.gamepad_just_pressed(button)
+            return input._pad ~= nil and input._pad.just[button] == true
+        end
+
+        function input.gamepad_just_released(button)
+            return input._pad ~= nil and input._pad.released[button] == true
+        end
+
+        -- Ölü bölge UYGULANMIŞ değer: çubuklar için `left_stick_x/y`, `right_stick_x/y`,
+        -- tetikler için `left_trigger`/`right_trigger`.
+        function input.gamepad_axis(axis)
+            if input._pad == nil then return 0.0 end
+            return input._pad.axes[axis] or 0.0
+        end
     "#,
         )
         .exec()
@@ -118,6 +147,53 @@ pub fn update_input_api(lua: &Lua, input: &Input) -> Result<(), LuaError> {
         input.is_mouse_button_pressed(gizmo_core::input::mouse::MIDDLE),
     )?;
 
+    // Gamepad. `nil` when nothing is plugged in — the helpers above lean on that, so a script
+    // never has to ask twice, and the table is rebuilt each frame rather than mutated so a
+    // disconnect cannot leave a stale button behind.
+    match input.gamepad() {
+        None => input_table.raw_set("_pad", mlua::Value::Nil)?,
+        Some(pad) => {
+            let held = lua.create_table()?;
+            let just = lua.create_table()?;
+            let released = lua.create_table()?;
+            // Names come from `gizmo_core`'s table, not from a transcription here. The key API
+            // above carries the scar from doing it the other way.
+            for (name, button) in gizmo_core::input::NAMED_GAMEPAD_BUTTONS {
+                if pad.is_pressed(*button) {
+                    held.raw_set(*name, true)?;
+                }
+                if pad.is_just_pressed(*button) {
+                    just.raw_set(*name, true)?;
+                }
+                if pad.is_just_released(*button) {
+                    released.raw_set(*name, true)?;
+                }
+            }
+
+            // Axes are the DEADZONED reading, because a script asking for the stick wants what
+            // the player meant, not the sensor. `axis()` is still reachable from Rust for the
+            // rare case that wants the raw value.
+            let axes = lua.create_table()?;
+            let (lx, ly) = pad.left_stick();
+            let (rx, ry) = pad.right_stick();
+            axes.raw_set("left_stick_x", lx)?;
+            axes.raw_set("left_stick_y", ly)?;
+            axes.raw_set("right_stick_x", rx)?;
+            axes.raw_set("right_stick_y", ry)?;
+            axes.raw_set("left_trigger", pad.left_trigger())?;
+            axes.raw_set("right_trigger", pad.right_trigger())?;
+
+            let table = lua.create_table()?;
+            table.raw_set("name", pad.name())?;
+            table.raw_set("connected", pad.is_connected())?;
+            table.raw_set("held", held)?;
+            table.raw_set("just", just)?;
+            table.raw_set("released", released)?;
+            table.raw_set("axes", axes)?;
+            input_table.raw_set("_pad", table)?;
+        }
+    }
+
     Ok(())
 }
 
@@ -146,6 +222,71 @@ mod tests {
         let input_table = crate::api_table::raw(lua, "input").unwrap();
         input_table.raw_set("_keys", table(held)).unwrap();
         input_table.raw_set("_just_keys", table(just)).unwrap();
+    }
+
+    /// The gamepad half goes through the real `update_input_api`, not through a hand-built
+    /// table: what it has to prove is that an `Input` a game would actually hold turns into the
+    /// values a script reads — including the two that are easy to get wrong, the deadzoned
+    /// stick and the trigger that is a button *and* an axis.
+    #[test]
+    fn a_script_reads_the_pad_the_engine_holds() {
+        use gizmo_core::input::{GamepadAxis, GamepadButton, GamepadId, Input};
+
+        let lua = Lua::new();
+        register_input_api(&lua).unwrap();
+
+        // Nothing plugged in: every query must answer, and answer "no".
+        let mut input = Input::new();
+        update_input_api(&lua, &input).unwrap();
+        lua.load(
+            r#"
+            assert(input.gamepad_connected() == false, "kol yokken bagli gorunmemeli")
+            assert(input.gamepad_pressed("south") == false, "kol yokken tus basili degil")
+            assert(input.gamepad_axis("left_stick_x") == 0.0, "kol yokken eksen sifir")
+            assert(input.gamepad_name() == nil, "kol yokken isim yok")
+            "#,
+        )
+        .exec()
+        .unwrap();
+
+        let pad = GamepadId::new(0);
+        input.on_gamepad_connected(pad, "Test Pad");
+        input.on_gamepad_button_pressed(pad, GamepadButton::South);
+        input.on_gamepad_axis(pad, GamepadAxis::LeftStickX, 1.0);
+        input.on_gamepad_axis(pad, GamepadAxis::RightTrigger, 1.0);
+        // Inside the deadzone: the script must see a centred stick, not a drifting one.
+        input.on_gamepad_axis(pad, GamepadAxis::RightStickY, 0.05);
+        update_input_api(&lua, &input).unwrap();
+
+        lua.load(
+            r#"
+            assert(input.gamepad_connected() == true, "kol bagli olmali")
+            assert(input.gamepad_name() == "Test Pad", "kolun adi gelmeli")
+            assert(input.gamepad_pressed("south") == true, "south basili")
+            assert(input.gamepad_just_pressed("south") == true, "south bu frame basildi")
+            assert(input.gamepad_pressed("north") == false, "north basili DEGIL")
+            assert(input.gamepad_axis("left_stick_x") > 0.99, "sol cubuk tam sagda")
+            assert(input.gamepad_axis("right_trigger") > 0.99, "sag tetik tam cekili")
+            assert(input.gamepad_axis("right_stick_y") == 0.0, "olu bolge icindeki kayma sifirlanmali")
+            assert(input.gamepad_axis("no_such_axis") == 0.0, "bilinmeyen eksen sifir doner")
+            "#,
+        )
+        .exec()
+        .unwrap();
+
+        // And the pad going away must not leave a stale table behind.
+        input.begin_frame();
+        input.on_gamepad_disconnected(pad);
+        input.begin_frame();
+        update_input_api(&lua, &input).unwrap();
+        lua.load(
+            r#"
+            assert(input.gamepad_connected() == false, "kol cikinca bagli kalmamali")
+            assert(input.gamepad_pressed("south") == false, "cikan kolun tusu basili kalmamali")
+            "#,
+        )
+        .exec()
+        .unwrap();
     }
 
     /// Regression: 'n' and 'w' must not share a code, and each must answer on its own.

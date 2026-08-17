@@ -47,6 +47,10 @@ pub mod editor_runtime;
 /// Per-frame simulation stepping — the fixed-timestep loop and the once-per-frame
 /// update schedule. Dependency-free, so it is available in every configuration.
 pub mod frame;
+/// Physical game controllers → `gizmo_core::input::Input`. Native only; the browser's gamepad
+/// API is polled rather than evented and is not wired yet.
+#[cfg(all(feature = "gamepad", not(target_arch = "wasm32")))]
+pub mod gamepad;
 /// The registry scene save/load uses. NOT `gizmo_scene::registry::default_scene_registry`
 /// — see the module docs for why.
 #[cfg(feature = "scene")]

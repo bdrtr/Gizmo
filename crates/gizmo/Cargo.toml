@@ -25,7 +25,7 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
-default = ["window", "render", "audio", "physics", "physics-dynamics", "physics-soft", "scene", "editor", "ui", "animation", "network"]
+default = ["window", "render", "audio", "physics", "physics-dynamics", "physics-soft", "scene", "editor", "ui", "animation", "network", "gamepad"]
 headless = ["physics", "network", "gizmo-app/headless"]
 network = ["dep:gizmo-net", "gizmo-app/network"]
 window = ["gizmo-app/window", "dep:winit", "dep:gizmo-window"]
@@ -37,6 +37,10 @@ egui = ["dep:egui", "gizmo-app/egui", "render", "gizmo-analysis?/egui"]
 # The full in-engine editor, layered on top of `egui` and `scene`.
 editor = ["egui", "scene", "dep:gizmo-editor", "gizmo-app/editor"]
 scripting = ["dep:gizmo-scripting"]
+# Physical game controllers. Nothing to gate here but the app layer's feature — the input types
+# live in `gizmo-core` and exist unconditionally, so a game can write its pad handling with this
+# off; it simply never sees a pad. Off on wasm regardless (browsers use a different API).
+gamepad = ["gizmo-app/gamepad"]
 scene = ["dep:gizmo-scene", "gizmo-app/scene"]
 # `gizmo-physics-core` is intentionally NOT gated here: it defines `Transform`,
 # `GlobalTransform`, `Collider` and the AABB/shape vocabulary that the renderer, the audio

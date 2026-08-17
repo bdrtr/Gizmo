@@ -89,6 +89,12 @@ pub use crate::systems::fps_look::{FpsLook, FpsLookPlugin};
 
 // === Windowing & Input ===
 pub use crate::core::input::Input;
+/// Gamepad vocabulary. Unconditional, like `Input` itself: the state types live in
+/// `gizmo-core` and a game can be written against them whatever the app layer was built with —
+/// with no backend (or on the web) `input.gamepad()` simply stays `None`.
+pub use crate::core::input::{
+    AxisDirection, Gamepad, GamepadAxis, GamepadButton, GamepadDeadzone, GamepadId, Gamepads,
+};
 
 #[cfg(feature = "window")]
 pub use winit::event::{ElementState, MouseButton};

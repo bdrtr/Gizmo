@@ -110,8 +110,72 @@ What it still tracked as unfinished is the list below — verified against the c
 moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, non-goals) and §8
 (method).
 
-- **Gamepad input.** Never started. `car_demo`, `beamng`, `platformer` and a complete
-  fighting-game input module exist and not one of them can be played with a stick.
+- **Gamepad input — CLOSED (2026-08-17), native.** `car_demo`, `beamng`, `platformer` and a
+  complete fighting-game input module existed and not one of them could be played with a stick.
+  Now: pads live in `Input` next to the keyboard and mouse (`input.gamepad()`,
+  `input.gamepads()`, named `GamepadButton`/`GamepadAxis`), `ActionMap` binds buttons and
+  axes-past-a-threshold, and `gizmo_app::gamepad::GamepadBackend` (gilrs, default-on `gamepad`
+  feature, native only) feeds them from the windowed loop.
+
+  **Putting the state inside `Input` rather than beside it is the decision the rest follows
+  from.** `Input` is what a replay records, what the loop clones into the world each frame, what
+  focus loss clears and what `begin_frame` rolls — a separate `Gamepads` resource would have
+  needed its own copy of every one of those, and the first one forgotten would have been the
+  replay. The cost is a serialisation change, paid with `#[serde(default)]` and a test that loads
+  a pre-gamepad recording.
+
+  **Sticks are read through a radial deadzone, not a per-axis one** (`apply_stick_deadzone`,
+  0.15 default, rescaled to a unit disc). A per-axis threshold leaves a *square* dead region:
+  `(0.14, 0.14)` is a clear diagonal push that reads as dead centre, and `(0.16, 0.14)` snaps to
+  pure horizontal. The magnitude clamp is the other half — square-gated hardware reports `(1, 1)`
+  at full diagonal, magnitude 1.41, i.e. 41 % extra speed for running diagonally. Triggers get a
+  separate, smaller deadzone (0.05); every hundredth there is throttle resolution.
+
+  **Three findings from the device test, and none would have come from reading documentation.**
+  gilrs does *not* emit `ButtonChanged` when an analog trigger crosses its press threshold — a
+  trigger pulled from rest to the floor produces `ButtonPressed(RightTrigger2)` and nothing else,
+  so the backend read a pressed trigger whose travel was still 0.0 and a driving game bound to
+  `right_trigger()` got no throttle at all. The fix reads the value out of gilrs's own state on
+  the button edge. And `Gamepads::first()` originally returned only *connected* pads, which
+  quietly emptied the promise that an unplugged controller releases what it held: the release
+  edges exist on the frame `input.gamepad()` had already gone `None`, so
+  `if let Some(pad) = input.gamepad()` — the shape every game writes — could not see them. It now
+  falls back to a pad living out its disconnect frame, and a still-connected pad always outranks
+  one that is going away.
+
+  The third came from driving `car_demo` with the virtual pad and screenshotting the frame: the
+  car did not move, and `Gaz: 0.00` was on screen while the trigger was held. **gilrs reads
+  nothing from a device when it opens it** — measured directly: immediately after `Gilrs::new()`,
+  a pad holding its right trigger at maximum reports `button_data(RightTrigger2) == None` and
+  `value(RightZ) == 0.0`, and the value appears only once an event moves it. Its state is built
+  from the event stream, so "ask gilrs what the pad is doing" is not a thing that can be done.
+  The backend therefore keeps its **own mirror** of everything it has seen, and `resync` replays
+  that instead — which is what makes the focus round-trip work (Alt-Tab away with the throttle
+  held, come back, still held). What it cannot fix is the launch case: a control already held
+  when the game starts stays invisible until it moves, because nothing anywhere saw it happen.
+  With the wobble that a held analog control needs on Linux anyway (the kernel drops an `ABS`
+  write that repeats the current value), the same run read `Gaz: 0.98 | Fren: 0.00 |
+  Direksiyon: -0.89`, 18.6 km/h — against `0.00 | 0.00 | 0.00`, 0.0 km/h, 800 RPM with no pad
+  present. The whole chain, in pixels: uinput → gilrs → backend → `Input` → vehicle → HUD. (The
+  control run is not a formality: the *first* one was taken while a virtual pad from the previous
+  run was still alive and read exactly like the pad run, which would have "confirmed" the feature
+  by measuring nothing. A control that reproduces the treatment is a control that was not run.)
+
+  Also: gilrs's `Button::LeftTrigger` is the *bumper* and `LeftTrigger2` is the analog trigger;
+  this engine calls those `LeftBumper` and `LeftTrigger`, and the one `match` that crosses the two
+  namings has a test, because a silent swap gives every player a handbrake where they expected a
+  gear change.
+
+  **Not covered, with triggers.** *A control held while the game launches* — see above; it needs
+  reading the device's state directly, which is the backend's job and not ours. **Trigger:** a
+  gilrs release that reads initial state, or a complaint. *The browser:* gilrs ships a wasm
+  backend, but it is polled
+  rather than evented and nothing here can verify it — **trigger:** a browser with a pad in front
+  of someone. *Rumble:* gilrs has `ff`; nothing is wired — **trigger:** a game that asks. *A
+  rebinding UI:* `NAMED_GAMEPAD_BUTTONS` exists so a config file can name controls, but no editor
+  panel consumes it. *Demos beyond `car_demo` and `platformer`:* the remaining 37 still read the
+  keyboard only; the path is three lines each and the two that shipped are the ones that prove
+  it — analog throttle/brake/steering and analog character movement.
 - **The ten-light ceiling — the *selection* half is closed (2026-08-17); the ceiling is not.**
   `gpu_types.rs` still holds `[LightData; 10]`. What changed is which ten it holds. It used to be
   whichever ten ECS iteration reached first, and that had three separate consequences: distance
@@ -1204,6 +1268,16 @@ the *slope* gate is the one that guards it.
   `cargo hack check --feature-powerset`, now written into CLAUDE.md's local command list. Walk
   backwards over the attributes *and* the docs before inserting, and run the powerset check after
   touching any module declaration.
+- **When the subject is a device, make one.** Gamepad support could be unit-tested down to the
+  last edge and still be wrong about the only questions that mattered: does a button arrive as the
+  button we named it, is a stick pushed *up* positive when the kernel calls that direction
+  negative, does a controller yanked from the port release what it held. `/dev/uinput` answers all
+  three — `crates/gizmo-app/tests/virtual_pad.py` creates a virtual Xbox 360 pad and drives a
+  scripted sequence into it while the test reads the engine's side, and it found two real defects
+  in the first run (§3, gamepad). It is `#[ignore]`d because CI has no `/dev/uinput` ACL, and it is
+  worth far more than the mock it replaced would have been: a mock of gilrs would have encoded my
+  belief about gilrs, which is exactly what was wrong. The same trick is available for anything
+  the kernel can pretend to be — pads, tablets, joysticks, keyboards.
 - **Prefer a scanned subject list to a written one.** A test that names the ten files it polices
   cannot see the eleventh, and that is the file the bug will be in. Take subjects from the
   directory, the component modules, the workspace; keep only the *exceptions* by hand, and fail on

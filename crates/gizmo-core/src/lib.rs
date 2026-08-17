@@ -114,6 +114,9 @@ pub type StorageViewMut<'w, T> = crate::query::Query<'w, crate::query::Mut<'w, T
 /// Access to all the basic types with a single `use gizmo_core::prelude::*;`.
 pub mod prelude {
     pub use super::input::mouse;
+    pub use super::input::{
+        AxisDirection, Gamepad, GamepadAxis, GamepadButton, GamepadDeadzone, GamepadId, Gamepads,
+    };
     pub use super::{
         ActionMap, Bundle, Changed, CommandQueue, Commands, Component, Entity, EntityName,
         EventReader, EventWriter, Events, FrameProfiler, Input, InputBinding, IntoSystem,

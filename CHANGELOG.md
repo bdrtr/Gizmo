@@ -18,6 +18,44 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Gamepads.** `Input` now carries connected controllers alongside the keyboard and mouse:
+  `input.gamepad()` for the pad in use, `input.gamepads()` for local multiplayer, with named
+  `GamepadButton`/`GamepadAxis` enums rather than opaque codes. `ActionMap` gained
+  `bind_gamepad_button` and `bind_gamepad_axis` (an axis past a threshold, with real press and
+  release *edges*), plus `watch_gamepad` so one map per player reads one pad. The Lua API gained
+  `input.gamepad_pressed/just_pressed/just_released/axis/connected/name`, whose button names come
+  from `gizmo_core::input::NAMED_GAMEPAD_BUTTONS` rather than a second transcription.
+
+  The device side is `gizmo_app::gamepad::GamepadBackend` over [gilrs], behind the default-on
+  `gamepad` feature (native only — the browser's gamepad API is polled, not evented, and is not
+  wired). The windowed loop drives it: it pumps once per frame *before* the replay logic, so a
+  recording captures the pad and a replay is not steerable, and it restores pad state on focus
+  regain because a driver reading the device directly never stopped sending while the window was
+  away and never announces what is still held on the way back. That restore replays the backend's
+  own mirror of the event stream: gilrs reads nothing from a device when it opens it (measured —
+  a pad holding its trigger at maximum reports no value at all until something moves), so a
+  control already held when the game *launches* is invisible until it moves. Once seen, it stays
+  known.
+
+  Sticks are read through a **radial** deadzone with the remaining travel rescaled to a unit disc
+  (`apply_stick_deadzone`, default 0.15) — a per-axis deadzone leaves a square dead region, so a
+  stick pushed to `(0.14, 0.14)` reads as centred and one pushed to `(0.16, 0.14)` snaps to pure
+  horizontal, and square-gated hardware reporting `(1, 1)` at full diagonal is a 41 % speed bonus
+  for running diagonally. Triggers get their own smaller deadzone (0.05) because every hundredth
+  there is throttle resolution.
+
+  `car_demo` and `platformer` are playable on a controller: analog throttle and brake on the
+  triggers, steering and movement on the left stick with the magnitude preserved (a light push
+  walks), camera on the right stick, gears on the bumpers. The fighting-game motion buffer reads
+  its frames through `ActionMap`, so a quarter-circle is enterable on a d-pad with no new code
+  there at all — `a_quarter_circle_motion_can_be_entered_on_a_dpad` is the proof.
+
+  Held state survives what it should and not what it shouldn't: focus loss releases the pad (an
+  Alt-Tabbed game must not keep driving), and a controller unplugged mid-hold emits its release
+  edges and centres its axes before disappearing, so a charge never sticks.
+
+  [gilrs]: https://gitlab.com/gilrs-project/gilrs
+
 - **Clustered light culling, and a light ceiling of 256** (`MAX_LIGHTS` 32 → 256). The view volume is
   cut into 16×9×24 clusters; each light is assigned to the clusters its sphere of influence touches;
   the deferred and forward lighting loops walk their own fragment's cluster list instead of every

@@ -35,6 +35,10 @@ Desktop.ini
 scratch/
 scratch.rs
 *.py
+# …except the ones a test runs. `gamepad_virtual_device.rs` spawns `virtual_pad.py` to create a
+# virtual controller on /dev/uinput; without the script the test can only skip, and the method
+# note in docs/ENGINE.md §8 would point at a file nobody has.
+!crates/gizmo-app/tests/*.py
 
 # Runtime / editor state
 editor_prefs.toml

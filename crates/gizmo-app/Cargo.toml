@@ -35,7 +35,7 @@ egui-wgpu = { version = "0.36", optional = true }
 image = { version = "0.25", optional = true }
 
 [features]
-default = ["window", "render", "audio", "physics", "scene", "editor", "network"]
+default = ["window", "render", "audio", "physics", "scene", "editor", "network", "gamepad"]
 headless = ["physics", "network"]
 network = ["dep:gizmo-net", "gizmo-net/rollback"]
 window = ["dep:winit"]
@@ -51,10 +51,23 @@ egui = ["dep:egui", "dep:egui-winit", "dep:egui-wgpu", "render"]
 # `scene` for its save/load request handling.
 editor = ["egui", "scene", "dep:gizmo-editor"]
 scene = ["dep:gizmo-scene", "dep:gizmo-scripting"]
+# Physical game controllers, through gilrs. Target-gated like `scene`'s scripting half: the
+# dependency exists only off wasm32 (browsers expose gamepads through a different, polled API
+# that is not wired yet), so `dep:gilrs` here is a no-op on the web and the feature stays
+# additive — turning it on never removes anything, and the module simply does not exist there.
+#
+# It is on by default because a controller that does nothing until the developer finds a
+# feature flag is indistinguishable from one that is broken. Off, the engine builds without
+# gilrs and without its libudev link on Linux, which is what a headless server wants.
+gamepad = ["dep:gilrs"]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rfd = "0.17.2"
 backtrace = "0.3.76"
+# Default features on purpose: gilrs's default is `wgi` (Windows.Gaming.Input), and with BOTH
+# `wgi` and `xinput` off its platform module raises a `compile_error!` — one that is not gated on
+# Windows, so `default-features = false` breaks the build on every OS.
+gilrs = { version = "0.11.2", optional = true }
 # Pulled in by `scene` so the runtime can register the `Script` scene component
 # (gizmo-scene itself no longer depends on scripting — keeps scene GPU-free).
 # Target-gated: mlua (C Lua) cannot build for wasm32-unknown-unknown, so on the

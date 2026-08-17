@@ -552,6 +552,18 @@ impl<State: 'static> App<State> {
                             WindowEvent::Focused(false) => {
                                 self.input.release_all();
                             }
+                            // Gamepads are read straight from the device, so unlike the
+                            // keyboard they never stopped sending while focus was away and
+                            // never announce what is still held on the way back. `release_all`
+                            // dropped that state; this is what restores it, and without it a
+                            // player holding the throttle across an Alt-Tab comes back to a
+                            // dead pad until they let go.
+                            #[cfg(all(feature = "gamepad", not(target_arch = "wasm32")))]
+                            WindowEvent::Focused(true) => {
+                                if let Some(backend) = self.gamepad_backend.as_mut() {
+                                    backend.resync(&mut self.input);
+                                }
+                            }
                             _ => {}
                         }
                         if let WindowEvent::RedrawRequested = event {
@@ -563,6 +575,20 @@ impl<State: 'static> App<State> {
                             dt = dt.min(0.05); // Güvenlik çemberi: Frame takılırsa 50ms'den fazla zıplamayacak, yerçekiminden düşme engellenecek.
                             last_frame_time = now;
                             tracing::trace!(dt, "[frame] begin");
+
+                            // Physical controllers, before the replay logic below: during a
+                            // recording this is what gets recorded, and during playback the
+                            // recorded input overwrites it — a replay must not be steerable.
+                            #[cfg(all(feature = "gamepad", not(target_arch = "wasm32")))]
+                            {
+                                if self.gamepad_backend.is_none() {
+                                    self.gamepad_backend =
+                                        Some(crate::gamepad::GamepadBackend::new(&mut self.input));
+                                }
+                                if let Some(backend) = self.gamepad_backend.as_mut() {
+                                    backend.pump(&mut self.input);
+                                }
+                            }
 
                             // Playback / Record mantigi
                             self.apply_playback_or_record(&mut dt, current_window);

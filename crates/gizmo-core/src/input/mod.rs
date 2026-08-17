@@ -1,5 +1,5 @@
-//! Per-frame keyboard and mouse state ([`Input`]), logical action names layered on top of it
-//! ([`ActionMap`]), and the fighting-game motion buffer and replay records
+//! Per-frame keyboard, mouse and gamepad state ([`Input`]), logical action names layered on top
+//! of it ([`ActionMap`]), and the fighting-game motion buffer and replay records
 //! ([`FighterInputBuffer`], [`PlaybackData`]).
 //!
 //! [`Input`] is a snapshot, not a stream. The platform layer pushes events into it with the
@@ -11,6 +11,12 @@
 //! so the mapping from a physical key to a code is entirely the caller's convention — the
 //! examples here spell it `KeyCode as u32` — and it must stay stable, or saved bindings and
 //! recorded replays silently start meaning different keys.
+//!
+//! Gamepads are the exception to that rule: they arrive as the named [`GamepadButton`] and
+//! [`GamepadAxis`] enums rather than as opaque codes, because a pad's controls mean the same
+//! thing on every platform while a key code does not. The device side of it — hot-plug,
+//! per-vendor button layouts, hat switches — is the platform layer's problem, and this module
+//! only holds the result. [`Gamepads`] is the collection, [`Gamepad`] is one pad.
 
 pub mod keys;
 pub use keys::{code_from_name, NAMED_KEYS};
@@ -64,6 +70,13 @@ pub struct Input {
 
     // Fare tekerlek (scroll) deltası
     mouse_scroll_delta: f32,
+
+    /// Connected gamepads and their button/axis state.
+    ///
+    /// `#[serde(default)]` is what keeps replays recorded before gamepads existed loadable:
+    /// the field is simply absent in those files and deserialises to "no pads".
+    #[serde(default)]
+    gamepads: Gamepads,
 }
 
 impl Input {
@@ -86,6 +99,7 @@ impl Input {
             mouse_position: (0.0, 0.0),
             mouse_delta: (0.0, 0.0),
             mouse_scroll_delta: 0.0,
+            gamepads: Gamepads::new(),
         }
     }
 
@@ -114,6 +128,11 @@ impl Input {
         self.mouse_buttons_just_released.clear();
         self.mouse_delta = (0.0, 0.0);
         self.mouse_scroll_delta = 0.0;
+        // Gamepad buttons roll the same way; axes additionally keep this frame's values as
+        // the "previous" ones, which is what lets a stick report an edge (see
+        // `Gamepad::axis_previous`). A pad unplugged during the frame that just ended is
+        // dropped here, one frame after its release edges were readable.
+        self.gamepads.begin_frame();
     }
 
     // ==================== TUŞ GİRDİSİ ====================
@@ -185,6 +204,17 @@ impl Input {
         self.mouse_buttons_just_pressed.clear();
         self.mouse_delta = (0.0, 0.0);
         self.mouse_scroll_delta = 0.0;
+        // Gamepads too, and here the OS is not the reason — a driver reading the device
+        // directly (evdev, XInput) keeps delivering events to an unfocused window, so without
+        // this an Alt-Tabbed game would keep driving. The pads themselves stay in the list:
+        // they are still plugged in, they are just not being listened to.
+        //
+        // The other half of this contract lives in the platform layer: since the buttons a
+        // player is still physically holding produced no new events while focus was away, the
+        // backend re-reads each pad's state on focus regain (`gizmo-app`'s
+        // `GamepadBackend::resync`) so held controls come back rather than waiting for a
+        // release-and-press.
+        self.gamepads.release_all();
     }
 
     /// Is the key pressed right now? (continuous check)
@@ -296,6 +326,84 @@ impl Input {
     pub fn mouse_scroll(&self) -> f32 {
         self.mouse_scroll_delta
     }
+
+    // ==================== GAMEPAD ====================
+    //
+    // The `on_gamepad_*` half is the platform layer's (in this workspace `gizmo-app`, over
+    // gilrs); everything below it is the game's. See `input::gamepad` for the state model.
+
+    /// Call when a gamepad appears — at startup for pads already plugged in, and on hot-plug.
+    ///
+    /// Calling it twice for the same id is safe and is how the platform layer re-announces
+    /// pads: an existing entry keeps its held buttons and axes and only refreshes its name.
+    pub fn on_gamepad_connected(&mut self, id: GamepadId, name: &str) {
+        self.gamepads.connect(id, name);
+    }
+
+    /// Call when a gamepad is unplugged.
+    ///
+    /// Everything the pad held is reported as released and its axes go to zero *on this
+    /// frame*; the pad disappears from [`Input::gamepads`] at the next
+    /// [`begin_frame`](Input::begin_frame). Unknown ids are ignored — a disconnect never
+    /// creates a pad.
+    pub fn on_gamepad_disconnected(&mut self, id: GamepadId) {
+        self.gamepads.disconnect(id);
+    }
+
+    /// Call when a gamepad button goes down.
+    ///
+    /// Fast taps are preserved exactly as they are for keys: press and release inside one
+    /// frame leaves the button readable as held, just-pressed and just-released for that
+    /// frame. An event for an id that never connected creates the pad rather than dropping the
+    /// press.
+    pub fn on_gamepad_button_pressed(&mut self, id: GamepadId, button: GamepadButton) {
+        self.gamepads.press(id, button);
+    }
+
+    /// Call when a gamepad button comes up.
+    pub fn on_gamepad_button_released(&mut self, id: GamepadId, button: GamepadButton) {
+        self.gamepads.release(id, button);
+    }
+
+    /// Call when a stick or trigger moves.
+    ///
+    /// The value is stored as given — sticks `-1..=1` with +Y up, triggers `0..=1` — and the
+    /// deadzone is applied when the game reads it, not here, so a settings change re-reads the
+    /// same input differently instead of needing the device to move again.
+    pub fn on_gamepad_axis(&mut self, id: GamepadId, axis: GamepadAxis, value: f32) {
+        self.gamepads.set_axis(id, axis, value);
+    }
+
+    /// The pad a single-player game should read: the connected one with the lowest id, or
+    /// `None` when nothing is plugged in.
+    ///
+    /// ```
+    /// # use gizmo_core::prelude::*;
+    /// # use gizmo_core::input::{GamepadButton, GamepadId};
+    /// # let mut input = Input::new();
+    /// # input.on_gamepad_connected(GamepadId::new(0), "pad");
+    /// # input.on_gamepad_button_pressed(GamepadId::new(0), GamepadButton::South);
+    /// // Keyboard and pad, side by side — the pad is simply absent when unplugged.
+    /// let jump = input.is_key_just_pressed(57)
+    ///     || input.gamepad().is_some_and(|p| p.is_just_pressed(GamepadButton::South));
+    /// assert!(jump);
+    /// ```
+    #[inline]
+    pub fn gamepad(&self) -> Option<&Gamepad> {
+        self.gamepads.first()
+    }
+
+    /// Every gamepad, for local multiplayer, per-pad settings and controller-select UIs.
+    #[inline]
+    pub fn gamepads(&self) -> &Gamepads {
+        &self.gamepads
+    }
+
+    /// Mutable access to the gamepad collection — deadzone settings live here.
+    #[inline]
+    pub fn gamepads_mut(&mut self) -> &mut Gamepads {
+        &mut self.gamepads
+    }
 }
 
 impl Default for Input {
@@ -331,8 +439,14 @@ pub mod mouse {
 // public paths (`input::ActionMap`, `input::InputBinding`, `input::FrameRecord`,
 // `input::PlaybackData`, …) and the crate-root `pub use input::{...}` stay unchanged.
 mod fighter;
+mod gamepad;
 mod mapping;
 pub use fighter::{FighterInputBuffer, FrameActions, FrameRecord, PlaybackData};
+pub use gamepad::{
+    apply_stick_deadzone, apply_trigger_deadzone, gamepad_axis_from_name,
+    gamepad_button_from_name, AxisDirection, Gamepad, GamepadAxis, GamepadButton, GamepadDeadzone,
+    GamepadId, Gamepads, NAMED_GAMEPAD_AXES, NAMED_GAMEPAD_BUTTONS,
+};
 pub use mapping::{ActionMap, InputBinding};
 
 #[cfg(test)]
@@ -631,5 +745,141 @@ mod tests {
             actions.bindings.get("Jump").unwrap()[0],
             InputBinding::Key(42)
         ));
+    }
+
+    // ──── ActionMap × Gamepad ────
+
+    /// The point of binding both: the same action name answers to the keyboard and to the pad,
+    /// and the player may switch between them mid-session without the game noticing.
+    #[test]
+    fn an_action_answers_to_the_keyboard_and_the_pad_alike() {
+        let pad = GamepadId::new(0);
+        let mut actions = ActionMap::new();
+        actions.bind_key("Jump", 57);
+        actions.bind_gamepad_button("Jump", GamepadButton::South);
+
+        let mut input = Input::new();
+        input.on_gamepad_connected(pad, "pad");
+
+        input.on_key_pressed(57);
+        assert!(actions.is_action_just_pressed(&input, "Jump"));
+
+        input.begin_frame();
+        input.on_key_released(57);
+        input.begin_frame();
+        assert!(!actions.is_action_pressed(&input, "Jump"));
+
+        input.on_gamepad_button_pressed(pad, GamepadButton::South);
+        assert!(actions.is_action_just_pressed(&input, "Jump"));
+        assert!(actions.is_action_pressed(&input, "Jump"));
+
+        input.begin_frame();
+        input.on_gamepad_button_released(pad, GamepadButton::South);
+        assert!(actions.is_action_just_released(&input, "Jump"));
+    }
+
+    /// An axis bound as a button must fire ONCE per push. Without the previous-frame value it
+    /// would re-fire every frame the stick is held over, which turns one menu step into a
+    /// scroll to the bottom of the list.
+    #[test]
+    fn an_axis_binding_fires_once_per_push() {
+        let pad = GamepadId::new(0);
+        let mut actions = ActionMap::new();
+        actions.bind_gamepad_axis(
+            "MenuRight",
+            GamepadAxis::LeftStickX,
+            AxisDirection::Positive,
+            0.5,
+        );
+
+        let mut input = Input::new();
+        input.on_gamepad_connected(pad, "pad");
+
+        input.on_gamepad_axis(pad, GamepadAxis::LeftStickX, 0.8);
+        assert!(actions.is_action_pressed(&input, "MenuRight"));
+        assert!(actions.is_action_just_pressed(&input, "MenuRight"));
+
+        input.begin_frame(); // still held over
+        assert!(actions.is_action_pressed(&input, "MenuRight"));
+        assert!(
+            !actions.is_action_just_pressed(&input, "MenuRight"),
+            "holding must not re-fire"
+        );
+
+        input.on_gamepad_axis(pad, GamepadAxis::LeftStickX, 0.0);
+        assert!(actions.is_action_just_released(&input, "MenuRight"));
+        assert!(!actions.is_action_pressed(&input, "MenuRight"));
+
+        // The other direction is a different binding and must stay silent throughout.
+        input.begin_frame();
+        input.on_gamepad_axis(pad, GamepadAxis::LeftStickX, -0.9);
+        assert!(!actions.is_action_pressed(&input, "MenuRight"));
+    }
+
+    /// The fighting-game buffer reads its frames through [`ActionMap`], so binding the pad is
+    /// all it takes to make a motion input enterable on a d-pad — there is no second code path
+    /// and nothing in `FighterInputBuffer` knows a gamepad exists. This is the test that says
+    /// so, because "it should work by construction" is how a stack quietly does not.
+    #[test]
+    fn a_quarter_circle_motion_can_be_entered_on_a_dpad() {
+        let pad = GamepadId::new(0);
+        let mut actions = ActionMap::new();
+        actions.bind_gamepad_button("Down", GamepadButton::DPadDown);
+        actions.bind_gamepad_button("Forward", GamepadButton::DPadRight);
+        actions.bind_gamepad_button("Punch", GamepadButton::West);
+
+        let mut input = Input::new();
+        input.on_gamepad_connected(pad, "pad");
+        let mut buffer = FighterInputBuffer::new(60);
+        let tracked = ["Down", "Forward", "Punch"];
+
+        let frame = |input: &mut Input, buffer: &mut FighterInputBuffer| {
+            buffer.update(input, &actions, &tracked);
+            input.begin_frame();
+        };
+
+        // ↓ — hold it, as a player would.
+        input.on_gamepad_button_pressed(pad, GamepadButton::DPadDown);
+        frame(&mut input, &mut buffer);
+        // ↘ — down and forward together, the diagonal a d-pad expresses as two buttons.
+        input.on_gamepad_button_pressed(pad, GamepadButton::DPadRight);
+        frame(&mut input, &mut buffer);
+        // → — down released.
+        input.on_gamepad_button_released(pad, GamepadButton::DPadDown);
+        frame(&mut input, &mut buffer);
+        // Punch.
+        input.on_gamepad_button_pressed(pad, GamepadButton::West);
+        frame(&mut input, &mut buffer);
+
+        assert!(
+            buffer.check_combo_strict(&tracked, 12),
+            "quarter-circle-forward + punch must register from the pad"
+        );
+    }
+
+    /// Local multiplayer: one map per player, each watching its own pad. Player one's stick
+    /// must not move player two.
+    #[test]
+    fn a_map_watching_one_pad_ignores_the_other() {
+        let (p1, p2) = (GamepadId::new(0), GamepadId::new(1));
+        let mut input = Input::new();
+        input.on_gamepad_connected(p1, "one");
+        input.on_gamepad_connected(p2, "two");
+
+        let mut player_one = ActionMap::new();
+        player_one.bind_gamepad_button("Fire", GamepadButton::RightTrigger);
+        player_one.watch_gamepad(Some(p1));
+        let mut player_two = player_one.clone();
+        player_two.watch_gamepad(Some(p2));
+        assert_eq!(player_two.watched_gamepad(), Some(p2));
+
+        input.on_gamepad_button_pressed(p2, GamepadButton::RightTrigger);
+        assert!(!player_one.is_action_pressed(&input, "Fire"));
+        assert!(player_two.is_action_pressed(&input, "Fire"));
+
+        // The default — watching nothing in particular — answers to either pad.
+        let mut anyone = ActionMap::new();
+        anyone.bind_gamepad_button("Fire", GamepadButton::RightTrigger);
+        assert!(anyone.is_action_pressed(&input, "Fire"));
     }
 }
