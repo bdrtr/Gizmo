@@ -86,7 +86,18 @@ impl Integrator {
         }
 
         // ── Accumulated forces / torques ──────────────────────────────────
-        // Drain the accumulator so forces are applied exactly once per step.
+        // Applied on EVERY substep and drained once per frame (`PhysicsWorld::step`), not here.
+        //
+        // Draining here was a frame-rate dependence in a public API, and a severe one. The world
+        // runs fixed 1/240 s substeps, so a 1/60 s frame is four of them: the force landed on the
+        // first substep with `dt` = 1/240 and the other three got nothing, i.e. the body received
+        // a quarter of the impulse asked for. Measured — 10 N on 1 kg for one second:
+        //
+        //     240 fps  9.95 m/s      120 fps  4.97      60 fps  2.49      30 fps  1.24
+        //
+        // The same force, the same second, and the acceleration HALVES every time the frame rate
+        // halves. Integrating it on each substep sums to `F·Σsubstep_dt` = `F·frame_dt`, which is
+        // what a force acting continuously across the frame means.
         let inv_mass = rb.inv_mass();
         if inv_mass > 0.0 {
             vel.linear += rb.force_accumulator * inv_mass * dt;
@@ -96,7 +107,6 @@ impl Integrator {
             let inv_inertia = rb.inv_world_inertia_tensor(rotation);
             vel.angular += inv_inertia * rb.torque_accumulator * dt;
         }
-        rb.clear_forces();
 
         // ── Aerodynamic drag: F = ½·ρ·Cd·A·|v|², opposing velocity ─────────
         // Opt-in via `RigidBody::with_air_drag` (Cd·A > 0). Unlike `linear_damping`

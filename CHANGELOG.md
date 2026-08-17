@@ -225,6 +225,22 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Applied forces were frame-rate dependent, and by a large factor.** The physics world runs fixed
+  1/240 s substeps; the integrator drained `RigidBody::force_accumulator` on the **first substep**
+  of each frame, so a body received `F·(1/240)` of impulse per frame instead of `F·frame_dt`. The
+  same 10 N push on a 1 kg body for one second reached 9.95 m/s at 240 fps, 4.97 at 120, 2.49 at 60
+  and 1.24 at 30 — the acceleration halving with the frame rate. Forces are drained once per frame
+  now; every substep integrates `F·substep_dt` and the sum is `F·frame_dt`.
+
+  `PhysicsWorld::apply_force` was never affected (it writes the velocity directly with a
+  caller-supplied `dt`), and nothing in the workspace wrote to the accumulator — which is why this
+  survived. The determinism hash is unchanged.
+
+  It also removed most of the friction creep documented in docs/ENGINE.md §3: a box held at 99 % of
+  its static limit drifted 15.2 mm over 200 s before and **0.010 mm** after, because the old drain
+  delivered each frame's force as a kick that tripped the sliding branch of the friction cone four
+  times a second.
+
 - **`AssetManager::normalize_path` doubled the leading separator of an absolute path**
   (`/tmp/x` → `//tmp/x`). Lookups matched anyway, since both sides normalise, so the damage was to
   the path handed *out* by `get_path` — tolerated on Linux, a UNC prefix on Windows. `./demo/x` and

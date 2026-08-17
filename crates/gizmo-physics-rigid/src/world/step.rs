@@ -86,6 +86,20 @@ impl PhysicsWorld {
             steps += 1;
         }
 
+        // Forces are drained ONCE PER FRAME, here, not once per substep.
+        //
+        // The accumulator holds a force, and a force acts continuously: every substep integrates
+        // `F·substep_dt`, and the sum over the frame is `F·frame_dt`. Clearing inside the
+        // substep loop instead — which is what the integrator used to do — delivered `F/steps`,
+        // so the same push produced a quarter of the acceleration at 60 fps and an eighth at 30.
+        //
+        // Cleared even on a frame that ran ZERO substeps (a delta shorter than 1/240 s): the
+        // force was asked for during that frame, and carrying it into the next one would make a
+        // 1000 fps game apply each force four times over.
+        for rb in &mut self.rigid_bodies {
+            rb.clear_forces();
+        }
+
         // Gövde/uyku sayımları (profilleme — uyku optimizasyonunun etkisini gösterir).
         self.metrics.body_count = self.entities.len();
         self.metrics.sleeping_count = self

@@ -434,12 +434,47 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
     impulse rather than from whether the contact was sliding, and a crate at rest on a 28° slope
     left the plate. Fixed (§7 "The slope a crate could not stand on"), and the residual creep fell
     44× at 90 % of the static limit and 7.5× at 99 %.
-  - **What is genuinely left** is the last of that residual: 14 mm over 200 s for a box held at
-    99 % of its limit, because `λ_n` still fluctuates and a velocity-level row cannot undo a
-    displacement that already happened. A persistent tangential anchor (Box2D v3 / Rapier's
-    "friction anchors") is the fix, and `ContactPoint` already carries `local_point_a/b` plus the
-    warm-start match that would freeze them. **Trigger:** a game that needs sub-millimetre hold at
-    the friction limit. Not before — the visible symptom is gone.
+  - **Chasing it a third time (2026-08-18) turned up something larger again — this time not in
+    friction at all.** The item asked for a measured creep; writing the measurement as a test
+    (`friction_hold.rs`, which had never existed — the 14 mm lived in this paragraph and nothing
+    would have noticed it changing) meant pushing a box with `RigidBody::force_accumulator`, and
+    the box would not move until roughly **four times** the force it should have taken.
+
+    The force channel was frame-rate dependent. The world runs fixed 1/240 s substeps; the
+    integrator drained the accumulator on the **first substep** of a frame and the rest got
+    nothing, so a body received `F·(1/240)` of impulse per frame instead of `F·frame_dt`.
+    Measured, 10 N on 1 kg for one second:
+
+    | frame rate | v after 1 s, before | after |
+    |---|---|---|
+    | 240 fps | 9.95 m/s | 9.95 m/s |
+    | 120 fps | 4.97 m/s | 9.95 m/s |
+    | 60 fps | 2.49 m/s | 9.95 m/s |
+    | 30 fps | 1.24 m/s | 9.95 m/s |
+
+    The acceleration halved every time the frame rate halved — a thruster, a wind volume or a
+    custom gravity field behaving differently on every machine. Forces are drained once per
+    **frame** now, so each substep integrates `F·substep_dt` and the sum is `F·frame_dt`.
+
+    **Nothing in the workspace wrote to that field**, which is exactly why it survived: the
+    engine's own `PhysicsWorld::apply_force` takes a `dt` and writes the velocity directly, so the
+    accumulator was a public API with no in-tree consumer, and no test, demo or golden image
+    touched it. The determinism hash is unchanged (`A462C9EB8A09D5CA`) for the same reason — the
+    stress test falls under gravity.
+
+  - **And the residual creep this item is named for went with it.** Same harness, same 99 % of the
+    static limit: **15.2 mm over 200 s before, 0.010 mm after** — a factor of 1500. The mechanism
+    is the one §7 already described: the old drain delivered the frame's force as a *kick* on one
+    substep, and a kick is tangential velocity that has already happened, so `friction_limit` saw
+    a sliding contact and charged the dynamic coefficient — losing `(μ_s − μ_d)·λ_n` of hold, four
+    times a second. A steady per-substep push is what the static branch can actually hold.
+
+    That does not prove the tangent channel now has a positional term — it does not, and a
+    velocity row still cannot undo a displacement that already happened. What it does mean is that
+    the *motivation* recorded here was measured through a defective force channel, and the honest
+    residual is 10 µm over 200 s rather than 14 mm. **Trigger:** unchanged in kind and weaker in
+    force — a game that needs sub-millimetre hold at the friction limit. Friction anchors remain
+    the fix if one turns up.
 - **The doc-language rule — CLOSED (2026-08-17), and the claim it replaces was false.**
   This item used to read "Stage A plus the facade went from 1286 Turkish `///` lines to 8, and
   seven of those eight are measurement error." Scanning for it found **462 Turkish doc lines in
