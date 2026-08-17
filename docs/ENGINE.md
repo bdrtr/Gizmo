@@ -112,10 +112,25 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
 
 - **Gamepad input.** Never started. `car_demo`, `beamng`, `platformer` and a complete
   fighting-game input module exist and not one of them can be played with a stick.
-- **The ten-light ceiling.** `gpu_types.rs`'s `[LightData; 10]`, filled by whichever ten lights
-  ECS iteration reaches first — no distance or priority culling, and that order is not stable
-  across frames. Clustered/tiled light culling is the fix, and it is the reason this engine has a
-  deferred pipeline at all.
+- **The ten-light ceiling — the *selection* half is closed (2026-08-17); the ceiling is not.**
+  `gpu_types.rs` still holds `[LightData; 10]`. What changed is which ten it holds. It used to be
+  whichever ten ECS iteration reached first, and that had three separate consequences: distance
+  never entered into it (a light behind the camera took a slot from one lighting the wall in
+  front), point lights were collected in their own loop first and so **starved every spotlight**
+  once ten points existed anywhere in the level, and the chosen ten shifted whenever the archetype
+  set changed — spawn, despawn or add a component and a still scene changed its lighting, i.e.
+  flicker. `collect_scene_lights` now scores every light against the camera and keeps the best
+  ten, points and spots in one pool, ordered by distance to the light's **sphere of influence**
+  (exact, not a heuristic: the shaders window attenuation with `clamp(1 - (d/r)^4, 0, 1)`, so a
+  light contributes precisely nothing past `radius`), tie-broken by `intensity * radius` and then
+  by entity id — which is what makes the selection a pure function of world state rather than of
+  iteration order. Four tests in `shared.rs` hold it, including the archetype-reorder one that is
+  the flicker regression.
+  **Still open:** the cap itself, and frustum culling of the light spheres. Both belong with
+  clustered/tiled culling — the cluster grid gives the frustum test for free and is what allows
+  the cap to rise at all — and that is the reason this engine has a deferred pipeline. Raising
+  `MAX_LIGHTS` on its own means editing seven WGSL files plus `shader_contract.rs` and paying an
+  unclustered per-fragment loop for every light, which is the trade clustering exists to avoid.
 - **Friction has no positional term.** The normal channel carries `pen0` into the bias in all
   three sweeps (`solver/tgs.rs`), which is what depenetrates and what makes TGS work. The tangent
   channel has no counterpart: all three friction solves are pure `acc_t − rel·t/k_t`, i.e.

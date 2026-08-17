@@ -21,7 +21,8 @@ use gizmo_physics_core::components::{GlobalTransform, Transform};
 /// Point + spot + sun lights collected from the world for one frame, ready to be
 /// dropped into `SceneUniforms`.
 pub struct SceneLights {
-    /// Up to [`MAX_LIGHTS`] point/spot lights (the shader's fixed light array).
+    /// The [`MAX_LIGHTS`] most important point/spot lights for this frame, nearest first
+    /// (see [`collect_scene_lights`] for what "most important" means and why the order matters).
     pub lights: [LightData; MAX_LIGHTS],
     pub num_lights: u32,
     /// Direction the sun points along (normalized). Default down-vector when the
@@ -41,7 +42,22 @@ pub struct SceneLights {
     pub shadow_point_index: i32,
 }
 
-/// Collect the scene's dynamic lights (point + spot, capped at 10) and the sun.
+/// One light that *could* go in the frame's array, with the key that decides whether it does.
+struct Candidate {
+    data: LightData,
+    is_point: bool,
+    /// Distance from the camera to the light's sphere of influence — `0.0` when the camera is
+    /// inside it. Ascending: the lights whose light actually reaches the viewer come first.
+    surface_dist: f32,
+    /// How far this light throws, as a tie-break among the many that all score `0.0` above.
+    /// Descending: between two lights around the camera, the brighter/larger one matters more.
+    reach: f32,
+    /// Final tie-break, and the reason the selection is stable: entity id is a property of the
+    /// world, not of iteration order.
+    entity_id: u32,
+}
+
+/// Collect the scene's dynamic lights (point + spot, capped at [`MAX_LIGHTS`]) and the sun.
 ///
 /// Each light's world transform prefers a synced `GlobalTransform` (so a parented
 /// light follows its parent, matching how meshes are placed) and falls back to the
@@ -49,7 +65,35 @@ pub struct SceneLights {
 /// uses. Previously the game path queried `(&Light, &GlobalTransform)` (dropping
 /// any light without a global) while the studio path read the raw `Transform`
 /// (ignoring parenting); this unifies both onto the correct-and-robust rule.
-pub fn collect_scene_lights(world: &World) -> SceneLights {
+///
+/// # Which lights survive the cap, and why it is not "the first ten"
+///
+/// The shader array holds [`MAX_LIGHTS`]. This used to fill it in ECS iteration order and `break`
+/// on the eleventh light, which had three consequences, all visible:
+///
+/// 1. **Distance did not enter into it.** A light 500 units behind the camera took a slot from one
+///    lighting the wall in front of it.
+/// 2. **Point lights starved spot lights.** Points were collected in their own loop first, so ten
+///    points anywhere in the level meant no spotlight was lit at all — and the studio's
+///    "cast shadows from the first light" rule then followed that arbitrary choice.
+/// 3. **The chosen ten changed as the world changed shape.** Archetype iteration order is stable
+///    only while the archetype set is: spawning, despawning or adding a component reorders it, so
+///    which ten lights were live could change from frame to frame with the scene standing still.
+///    That reads as flicker, and it is the reason this is ranked rather than merely capped.
+///
+/// So every light is now scored against the camera and the best [`MAX_LIGHTS`] win, points and
+/// spots competing in one pool. The score is the distance from `cam_pos` to the light's **sphere
+/// of influence** (`radius`), which is exact rather than a heuristic: every lighting shader
+/// windows attenuation with `clamp(1 - (d/r)^4, 0, 1)`, so a light contributes precisely nothing
+/// past its radius. Lights reaching the camera all score `0.0` and are then ordered by
+/// `intensity * radius`, and any remaining tie by entity id — which is what makes the selection a
+/// pure function of the world state, and therefore the same on every frame that state is.
+///
+/// What this deliberately does **not** do is cull against the camera frustum, which would also
+/// drop lights whose sphere is off-screen. That needs the frustum planes here and is worth doing
+/// with the cluster grid that a tiled/clustered pass builds anyway — the follow-up that actually
+/// raises the ceiling (docs/ENGINE.md §3). Ranking is the part that does not need it.
+pub fn collect_scene_lights(world: &World, cam_pos: Vec3) -> SceneLights {
     let globals = world.borrow::<GlobalTransform>();
     let locals = world.borrow::<Transform>();
 
@@ -64,35 +108,43 @@ pub fn collect_scene_lights(world: &World) -> SceneLights {
             .or_else(|| locals.get(e).map(|t| (t.position, t.rotation)))
     };
 
-    let mut lights = [LightData::default(); MAX_LIGHTS];
-    let mut num_lights = 0usize;
-    // The first collected point light owns the single point-shadow cube.
-    let mut shadow_point_index: i32 = -1;
+    // Every light in the scene, not just the first MAX_LIGHTS: the cap is applied by the ranking
+    // below, and a `break` here is what used to make the choice arbitrary. One allocation per
+    // frame for the whole light set — if a scene ever makes that measurable, the shape to reach
+    // for is a fixed top-N insertion, not a smaller cap.
+    let mut candidates: Vec<Candidate> = Vec::new();
+
+    // Distance from the camera to a light's sphere of influence, and how far the light throws.
+    // Non-finite input (a NaN transform, a deserialized garbage intensity) must not be allowed to
+    // win a slot, so it sorts last instead of poisoning the comparison.
+    let score = |pos: Vec3, intensity: f32, radius: f32| -> (f32, f32) {
+        if !pos.is_finite() || !intensity.is_finite() || !radius.is_finite() {
+            return (f32::MAX, 0.0);
+        }
+        ((cam_pos.distance(pos) - radius).max(0.0), intensity * radius)
+    };
 
     if let Some(q) = world.query::<&PointLight>() {
         for (e, light) in q.iter() {
-            if num_lights >= MAX_LIGHTS {
-                break;
-            }
             let Some((pos, _)) = world_tf(e) else { continue };
-            if shadow_point_index < 0 {
-                shadow_point_index = num_lights as i32;
-            }
-            lights[num_lights] = LightData {
-                position: [pos.x, pos.y, pos.z, light.intensity],
-                color: [light.color.x, light.color.y, light.color.z, light.radius],
-                direction: [0.0, -1.0, 0.0, 0.0],
-                params: [0.0, 0.0, 0.0, 0.0], // params.y = 0 → PointLight
-            };
-            num_lights += 1;
+            let (surface_dist, reach) = score(pos, light.intensity, light.radius);
+            candidates.push(Candidate {
+                data: LightData {
+                    position: [pos.x, pos.y, pos.z, light.intensity],
+                    color: [light.color.x, light.color.y, light.color.z, light.radius],
+                    direction: [0.0, -1.0, 0.0, 0.0],
+                    params: [0.0, 0.0, 0.0, 0.0], // params.y = 0 → PointLight
+                },
+                is_point: true,
+                surface_dist,
+                reach,
+                entity_id: e,
+            });
         }
     }
 
     if let Some(q) = world.query::<&SpotLight>() {
         for (e, light) in q.iter() {
-            if num_lights >= MAX_LIGHTS {
-                break;
-            }
             let Some((pos, rot)) = world_tf(e) else { continue };
             let dir = rot.mul_vec3(Vec3::new(0.0, 0.0, -1.0)).normalize();
             // The shaders compare the cone against `dot(-L, spot_dir)` (a cosine), so the
@@ -102,14 +154,44 @@ pub fn collect_scene_lights(world: &World) -> SceneLights {
             // raw radians made the cone a hard cut at the wrong angle with no falloff; the
             // studio path used to `.cos()` these itself, the game path never did (its spots
             // were broken) — single-sourcing the fix corrects both.
-            lights[num_lights] = LightData {
-                position: [pos.x, pos.y, pos.z, light.intensity],
-                color: [light.color.x, light.color.y, light.color.z, light.radius],
-                direction: [dir.x, dir.y, dir.z, light.inner_angle.cos()],
-                params: [light.outer_angle.cos(), 1.0, 0.0, 0.0], // params.y = 1 → SpotLight
-            };
-            num_lights += 1;
+            let (surface_dist, reach) = score(pos, light.intensity, light.radius);
+            candidates.push(Candidate {
+                data: LightData {
+                    position: [pos.x, pos.y, pos.z, light.intensity],
+                    color: [light.color.x, light.color.y, light.color.z, light.radius],
+                    direction: [dir.x, dir.y, dir.z, light.inner_angle.cos()],
+                    params: [light.outer_angle.cos(), 1.0, 0.0, 0.0], // params.y = 1 → SpotLight
+                },
+                is_point: false,
+                surface_dist,
+                reach,
+                entity_id: e,
+            });
         }
+    }
+
+    // Nearest influence first, then the light that throws furthest, then entity id. `total_cmp`
+    // rather than `partial_cmp().unwrap()`: the scores are sanitized above, and a total order is
+    // what makes this a sort at all.
+    candidates.sort_unstable_by(|a, b| {
+        a.surface_dist
+            .total_cmp(&b.surface_dist)
+            .then(b.reach.total_cmp(&a.reach))
+            .then(a.entity_id.cmp(&b.entity_id))
+    });
+
+    let mut lights = [LightData::default(); MAX_LIGHTS];
+    let mut num_lights = 0usize;
+    // The highest-ranked point light *that made the cut* owns the single point-shadow cube — a
+    // light outside the array is not lit at all, so casting its shadow would be a cube with no
+    // light in it.
+    let mut shadow_point_index: i32 = -1;
+    for c in candidates.iter().take(MAX_LIGHTS) {
+        if c.is_point && shadow_point_index < 0 {
+            shadow_point_index = num_lights as i32;
+        }
+        lights[num_lights] = c.data;
+        num_lights += 1;
     }
 
     let mut sun_dir = Vec3::new(0.0, -1.0, 0.0);
@@ -151,9 +233,11 @@ pub enum ShadowCaster {
     /// editor's rule. A scene being lit by hand often has no sun yet, and a viewport with no
     /// shadows at all reads as broken rather than as unlit.
     ///
-    /// "First collected light" is what the code does; the comment it replaced said "first point
-    /// light", which is the same thing only while the scene has one — [`collect_scene_lights`]
-    /// fills points before spots, so a scene of nothing but spotlights casts from a spot.
+    /// "First collected light" is what the code does, and since lights are ranked it now means
+    /// something a scene author can predict: the light with the most influence at the camera,
+    /// point or spot (see [`collect_scene_lights`]). It used to mean whichever light ECS iteration
+    /// reached first, which is why the comment before it claimed "first point light" — true only
+    /// while the old collector filled points ahead of spots.
     SunOrFirstLight,
 }
 
@@ -203,7 +287,7 @@ pub struct SceneSetupInputs {
 pub fn collect_scene_setup(world: &World, inputs: &SceneSetupInputs) -> SceneSetup {
     use gizmo_math::Mat4;
 
-    let lights = collect_scene_lights(world);
+    let lights = collect_scene_lights(world, inputs.camera.position);
 
     let shadow_dir = match inputs.shadow_caster {
         // Always fits, sun or not. `sun_dir` is the collector's down-vector default when the
@@ -286,7 +370,7 @@ mod tests {
         // inner_angle = 0.4 rad, outer_angle = 0.6 rad (radians, ctor clamps inner ≤ outer).
         world.add_component(e, SpotLight::new(Vec3::ONE, 10.0, 30.0, 0.4, 0.6));
 
-        let l = collect_scene_lights(&world);
+        let l = collect_scene_lights(&world, Vec3::ZERO);
         assert_eq!(l.num_lights, 1);
         let spot = l.lights[0];
         assert_eq!(spot.params[1], 1.0, "params.y == 1 marks a spot light");
@@ -304,28 +388,34 @@ mod tests {
         assert!(spot.direction[3] > spot.params[0]);
     }
 
-    // Point lights come before spot lights, and a light with only a `Transform`
-    // (no synced `GlobalTransform`) is still collected via the fallback.
+    /// Ranking decides the order, not the light's kind: a spot nearer the camera than a point
+    /// comes first, which is the property the old collector could not have (it filled every point
+    /// before looking at a single spot). The `Transform`-only fallback still resolves, and the
+    /// point-shadow index follows the light to wherever the ranking put it.
     #[test]
-    fn point_before_spot_and_transform_fallback() {
+    fn the_nearer_light_ranks_first_even_when_it_is_the_spot() {
         let mut world = World::new();
-        // A point light carrying a GlobalTransform (also registers the component).
+        // A point light 50 units away, carrying a GlobalTransform.
         let p = world.spawn();
-        world.add_component(p, GlobalTransform::default());
+        world.add_component(
+            p,
+            GlobalTransform {
+                matrix: gizmo_math::Mat4::from_translation(Vec3::new(0.0, 0.0, 50.0)),
+            },
+        );
         world.add_component(p, PointLight::new(Vec3::ONE, 5.0, 12.0));
-        // A spot light with ONLY a Transform → must resolve via the Transform fallback.
+        // A spot light 4 units away with ONLY a Transform → resolves via the fallback.
         let s = world.spawn();
         world.add_component(s, Transform::new(Vec3::new(1.0, 2.0, 3.0)));
         world.add_component(s, SpotLight::new(Vec3::ONE, 7.0, 20.0, 0.3, 0.5));
 
-        let l = collect_scene_lights(&world);
+        let l = collect_scene_lights(&world, Vec3::ZERO);
         assert_eq!(l.num_lights, 2);
-        assert_eq!(l.lights[0].params[1], 0.0, "point light packed first");
-        assert_eq!(l.lights[1].params[1], 1.0, "spot light packed second");
+        assert_eq!(l.lights[0].params[1], 1.0, "the nearby spot outranks the distant point");
+        assert_eq!(l.lights[1].params[1], 0.0);
         // Spot position came from its Transform (GlobalTransform-less) fallback.
-        assert_eq!(l.lights[1].position, [1.0, 2.0, 3.0, 7.0]);
-        // The point light (index 0) owns the single point-shadow cube.
-        assert_eq!(l.shadow_point_index, 0, "first point light is the shadow caster");
+        assert_eq!(l.lights[0].position, [1.0, 2.0, 3.0, 7.0]);
+        assert_eq!(l.shadow_point_index, 1, "the caster index points at the point light's slot");
     }
 
     // With no point light there is no point-shadow caster: the index must be -1 so the
@@ -338,8 +428,101 @@ mod tests {
         world.add_component(s, GlobalTransform::default());
         world.add_component(s, SpotLight::new(Vec3::ONE, 7.0, 20.0, 0.3, 0.5));
 
-        let l = collect_scene_lights(&world);
+        let l = collect_scene_lights(&world, Vec3::ZERO);
         assert_eq!(l.num_lights, 1);
         assert_eq!(l.shadow_point_index, -1, "no point light → no point-shadow caster");
+    }
+
+    /// Spawn a point light at `z` with a `Transform`, and return its entity.
+    fn point_at(world: &mut World, z: f32) -> gizmo_core::entity::Entity {
+        let e = world.spawn();
+        world.add_component(e, Transform::new(Vec3::new(0.0, 0.0, z)));
+        world.add_component(e, PointLight::new(Vec3::ONE, 5.0, 10.0));
+        e
+    }
+
+    /// The z coordinates in the frame's light array, in order.
+    fn selected_z(l: &SceneLights) -> Vec<f32> {
+        l.lights[..l.num_lights as usize].iter().map(|d| d.position[2]).collect()
+    }
+
+    /// The cap drops the *far* lights, not the ones ECS iteration happened to reach last.
+    ///
+    /// Twelve lights, spawned far-to-near so that iteration order is the exact opposite of
+    /// importance: the old collector kept the twelve-hundred-unit ones and threw away the light
+    /// standing next to the camera.
+    #[test]
+    fn the_lights_that_lose_a_slot_are_the_distant_ones() {
+        let mut world = World::new();
+        for i in (1..=12).rev() {
+            point_at(&mut world, i as f32 * 100.0);
+        }
+
+        let l = collect_scene_lights(&world, Vec3::ZERO);
+        assert_eq!(l.num_lights as usize, MAX_LIGHTS, "the array is full");
+        assert_eq!(
+            selected_z(&l),
+            (1..=MAX_LIGHTS).map(|i| i as f32 * 100.0).collect::<Vec<_>>(),
+            "the ten nearest survive, nearest first"
+        );
+    }
+
+    /// The same world state must select the same lights however the archetypes are laid out.
+    ///
+    /// This is the flicker regression. Adding a component moves an entity to another archetype,
+    /// which reorders iteration; with a `break`-at-ten collector that silently changed *which*
+    /// lights were lit while the scene stood still. Here nothing about the lights changes, so
+    /// nothing about the selection may.
+    #[test]
+    fn the_selection_does_not_depend_on_archetype_order() {
+        let mut world = World::new();
+        let mut lights = Vec::new();
+        for i in 1..=12 {
+            lights.push(point_at(&mut world, i as f32 * 10.0));
+        }
+        let before = collect_scene_lights(&world, Vec3::ZERO);
+
+        // Move three of the winners into a different archetype, leaving them the same lights in
+        // the same places. (`GlobalTransform::default()` is the identity, and the collector
+        // prefers it — so these three now resolve to the origin. Give each the matrix that
+        // reproduces its own position, or the test would be measuring a move, not a reorder.)
+        for &e in &[lights[0], lights[4], lights[9]] {
+            let z = world.query::<&Transform>().unwrap().get(e.id()).unwrap().position.z;
+            world.add_component(
+                e,
+                GlobalTransform {
+                    matrix: gizmo_math::Mat4::from_translation(Vec3::new(0.0, 0.0, z)),
+                },
+            );
+        }
+        let after = collect_scene_lights(&world, Vec3::ZERO);
+
+        assert_eq!(selected_z(&before), selected_z(&after), "same world, same ten lights");
+        assert_eq!(before.shadow_point_index, after.shadow_point_index);
+    }
+
+    /// Ten point lights across the level no longer starve a spotlight at the camera.
+    ///
+    /// The old collector filled the array from its point-light loop and `break`-ed before the spot
+    /// loop ran, so this scene lit zero spotlights — and in the studio, whose shadow caster is
+    /// "the first light", cast shadows from a point light 1000 units away.
+    #[test]
+    fn a_near_spot_takes_a_slot_from_ten_distant_points() {
+        let mut world = World::new();
+        for i in 1..=10 {
+            point_at(&mut world, i as f32 * 100.0);
+        }
+        let s = world.spawn();
+        world.add_component(s, Transform::new(Vec3::new(0.0, 0.0, 2.0)));
+        world.add_component(s, SpotLight::new(Vec3::ONE, 7.0, 20.0, 0.3, 0.5));
+
+        let l = collect_scene_lights(&world, Vec3::ZERO);
+        assert_eq!(l.num_lights as usize, MAX_LIGHTS);
+        assert_eq!(l.lights[0].params[1], 1.0, "the spot at the camera is lit, and ranks first");
+        assert!(
+            !selected_z(&l).contains(&1000.0),
+            "the furthest point light is the one that gives up its slot: {:?}",
+            selected_z(&l)
+        );
     }
 }
