@@ -40,6 +40,8 @@ pub fn update_character(
         ),
         ColliderShape::Sphere(s) => (s.radius * 2.0, s.radius),
         ColliderShape::Cylinder(c) => (c.half_height * 2.0, c.radius),
+        // A cone's widest point is its base, which is what a character sweeps with.
+        ColliderShape::Cone(c) => (c.half_height * 2.0, c.radius),
         _ => (2.0, 0.5), // fallback
     };
 

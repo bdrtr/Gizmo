@@ -15,6 +15,7 @@ impl Gjk {
             ColliderShape::Box(b) => Self::box_support(b, local_dir),
             ColliderShape::Capsule(c) => Self::capsule_support(c, local_dir),
             ColliderShape::Cylinder(c) => Self::cylinder_support(c, local_dir),
+            ColliderShape::Cone(c) => Self::cone_support(c, local_dir),
             ColliderShape::Plane(_) => {
                 // Contract violation: planes are handled by dedicated analytic paths and must
                 // never reach GJK support. In debug this aborts; in release it would silently
@@ -174,6 +175,32 @@ impl Gjk {
             .map(|n| n * cylinder.radius)
             .unwrap_or(Vec3::ZERO);
         Vec3::new(rim.x, y, rim.z)
+    }
+
+    /// The support point of a cone about local +Y: **the apex, or a point on the base rim**.
+    ///
+    /// Never anything in between, and that is the whole difference from
+    /// [`cylinder_support`](Self::cylinder_support). A cylinder picks its radial and axial
+    /// extremes independently, because its radius is the same at every height; a cone's radius
+    /// shrinks to zero at the apex, so the two are coupled and the extreme point is whichever of
+    /// the two candidates is further along `dir`. Choosing independently would describe a
+    /// cylinder — the shape would rest on a flat top that does not exist, and a cone tipped past
+    /// its balance point would refuse to fall.
+    ///
+    /// A direction with no XZ component leaves the base candidate at the centre of the base disc,
+    /// which is the correct support there and the continuous choice as the direction tilts.
+    fn cone_support(cone: &ConeShape, dir: Vec3) -> Vec3 {
+        let apex = Vec3::new(0.0, cone.half_height, 0.0);
+        let radial = Vec3::new(dir.x, 0.0, dir.z)
+            .try_normalize()
+            .map(|n| n * cone.radius)
+            .unwrap_or(Vec3::ZERO);
+        let base = Vec3::new(radial.x, -cone.half_height, radial.z);
+        if apex.dot(dir) >= base.dot(dir) {
+            apex
+        } else {
+            base
+        }
     }
 
     fn capsule_support(capsule: &CapsuleShape, dir: Vec3) -> Vec3 {

@@ -48,6 +48,23 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Keyboard behaviour is unchanged for the demos that were already correct — checked against their
   previous expression over all 81 key combinations, not asserted.
 
+- **`ColliderShape::Cone`.** Base at `-half_height`, apex at `+half_height`, axis local +Y —
+  `Collider::cone(radius, half_height)`, the same convention as the cylinder. Convex, so it rides
+  the existing GJK/EPA route.
+
+  What is new is the support function, and it is the one part that must not be copied from the
+  cylinder: a cone's extreme point in any direction is **either the apex or a point on the base
+  rim**, never in between, because its radius shrinks to nothing at the tip. Everything derived
+  from the shape got its own arm — volume (exactly a third of the bounding cylinder), an analytic
+  inertia tensor (`I_y = (3/10)·m·r²`, and the transverse term taken about the collider origin
+  rather than the centroid, which a cone's is not), an exact AABB (the union of a point and a
+  disc), a ray test whose lateral quadratic is genuinely a cone's, the cloth pusher and the debug
+  wireframe.
+
+  Also fixed with it: `SimpleApp::spawn_textured_cone` gave a cone mesh a **sphere** collider under
+  an `// approximation` comment, and `spawn_textured_cylinder` still did the same a day after
+  `Collider::cylinder` shipped. Both now use their own shape.
+
 - **`ColliderShape::Cylinder`.** Flat circular ends, axis along local +Y, built with
   `Collider::cylinder(radius, half_height)` — where `half_height` is half the *whole* solid,
   unlike `Collider::capsule`'s, which excludes the caps. The shape a wheel, a barrel or a column

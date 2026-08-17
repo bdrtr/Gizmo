@@ -177,6 +177,30 @@ impl Collider {
                 );
                 gizmo_math::Aabb::from_center_half_extents(position, extent)
             }
+            ColliderShape::Cone(c) => {
+                // Exact, and NOT the cylinder's box: a cone is an apex plus a base disc, so its
+                // extent is the union of a point and a disc rather than of two discs. Treating it
+                // as a cylinder would inflate the box by the full radius at the apex end — a
+                // broadphase false positive on everything standing above a cone, and on a scene
+                // of traffic cones that is every pair.
+                //
+                // The disc term is the cylinder's, and carries the same measured wrinkle: when
+                // the axis lands on a world axis `sqrt(1 - a_i²)` sits on a square-root
+                // singularity, so a quaternion's last bits come out as ≈ r·sqrt(2ε). It errs
+                // outwards, which is the direction a bound may err in.
+                let axis = rotation * Vec3::Y;
+                let apex = position + axis * c.half_height;
+                let base_center = position - axis * c.half_height;
+                let disc = Vec3::new(
+                    c.radius * (1.0 - axis.x * axis.x).max(0.0).sqrt(),
+                    c.radius * (1.0 - axis.y * axis.y).max(0.0).sqrt(),
+                    c.radius * (1.0 - axis.z * axis.z).max(0.0).sqrt(),
+                );
+                gizmo_math::Aabb {
+                    min: apex.min(base_center - disc).into(),
+                    max: apex.max(base_center + disc).into(),
+                }
+            }
             ColliderShape::Plane(_) => {
                 // Infinite plane - use a very large AABB
                 let large = 10000.0;
@@ -360,6 +384,25 @@ impl Collider {
     pub fn cylinder(radius: f32, half_height: f32) -> Self {
         Self {
             shape: ColliderShape::Cylinder(CylinderShape {
+                radius,
+                half_height,
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// A solid cone along the collider's local **+Y** axis: base at `-half_height`, apex at
+    /// `+half_height`.
+    ///
+    /// `half_height` is half the *whole* cone, as for [`Collider::cylinder`] — a traffic cone
+    /// 0.7 m tall on a 0.2 m base is `Collider::cone(0.2, 0.35)`. To point it downwards, rotate
+    /// the body; there is no axis parameter, by the same convention as the capsule and cylinder.
+    ///
+    /// See [`ConeShape`] for what its support function does differently from the cylinder's, and
+    /// for the note on the centre of mass.
+    pub fn cone(radius: f32, half_height: f32) -> Self {
+        Self {
+            shape: ColliderShape::Cone(ConeShape {
                 radius,
                 half_height,
             }),
@@ -568,6 +611,10 @@ impl Collider {
             ColliderShape::Cylinder(c) => {
                 std::f32::consts::PI * c.radius.powi(2) * (c.half_height * 2.0)
             }
+            ColliderShape::Cone(c) => {
+                // A third of the cylinder that bounds it.
+                std::f32::consts::PI * c.radius.powi(2) * (c.half_height * 2.0) / 3.0
+            }
             ColliderShape::Plane(_) => f32::MAX, // Safe value instead of INFINITY for inertia calculations
             ColliderShape::TriMesh(_)
             | ColliderShape::Heightfield(_)
@@ -602,6 +649,7 @@ impl Collider {
             ColliderShape::Box(b) => b.half_extents.y,
             ColliderShape::Capsule(c) => c.half_height + c.radius,
             ColliderShape::Cylinder(c) => c.half_height,
+            ColliderShape::Cone(c) => c.half_height,
             ColliderShape::Plane(_) => 0.0,
             ColliderShape::TriMesh(_)
             | ColliderShape::Heightfield(_)
@@ -648,6 +696,14 @@ pub enum ColliderShape {
     ///
     /// [`Capsule`]: ColliderShape::Capsule
     Cylinder(CylinderShape),
+    /// A solid cone about the local +Y axis: circular base at `-half_height`, apex at
+    /// `+half_height`. See [`Collider::cone`].
+    ///
+    /// Convex, so it rides the same GJK/EPA route as the cylinder — but its support function is
+    /// **not** the cylinder's with a shrinking radius, because a cone's extreme point in any
+    /// direction is either the apex or a point on the base rim, never in between. See
+    /// [`ConeShape`].
+    Cone(ConeShape),
     /// An infinite half-space — see [`PlaneShape`] for the frame its two fields live in.
     /// Its AABB is a large finite box, not an unbounded one.
     Plane(PlaneShape),
@@ -730,6 +786,37 @@ pub struct CylinderShape {
     /// +half_height`, so its total height is twice this. Note that this is *not* the same
     /// convention as [`CapsuleShape::half_height`], which excludes the caps: a cylinder's
     /// half-height is its whole half-height.
+    pub half_height: f32,
+}
+
+/// A solid cone about the local **+Y** axis: a circular base at `-half_height` and an apex at
+/// `+half_height`.
+///
+/// Convex, so it goes through GJK/EPA — but the support function is the one thing that must not be
+/// copied from the cylinder. A cylinder's radial and axial extremes are independent (pick the far
+/// side of the rim, then pick an end); a cone's are not, because its radius shrinks to nothing at
+/// the apex. Its support point is always **either the apex or a point on the base rim**, whichever
+/// is further along the direction — see `Gjk::cone_support`. Choosing radially and axially the way
+/// a cylinder does would describe a cylinder, and the shape would balance on a flat top that is
+/// not there.
+///
+/// **The local origin is the geometric midpoint, not the centre of mass.** A solid cone's centroid
+/// sits a quarter of the way up from its base, i.e. at `y = -half_height / 2` here, and the engine
+/// leaves [`RigidBody::center_of_mass`](../../../gizmo_physics_rigid/components/struct.RigidBody.html#structfield.center_of_mass)
+/// alone for every primitive shape — so the inertia tensor is computed **about the origin** to
+/// match, rather than about the centroid. That is self-consistent and is the same simplification
+/// the box, sphere and capsule already make (for them the two points coincide, which is why it has
+/// never had to be said). A body that should topple about its true balance point can set
+/// `center_of_mass` to `(0, -half_height / 2, 0)` itself; the tensor then wants the centroid form,
+/// `I_xz = (3/20)·m·r² + (3/80)·m·H²`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ConeShape {
+    /// Radius of the circular base, in metres. Not validated, exactly as the other primitives are
+    /// not: zero and negative values are stored as given and yield a degenerate shape.
+    pub radius: f32,
+    /// Half the cone's total height along local Y, in metres — the base sits at `-half_height`
+    /// and the apex at `+half_height`, so the whole height is twice this. The same convention as
+    /// [`CylinderShape::half_height`], and deliberately not [`CapsuleShape::half_height`]'s.
     pub half_height: f32,
 }
 

@@ -12,7 +12,7 @@
 //! `simplex`, expansion in `epa`, per-shape support in `support`.
 
 use crate::collision::ContactPoint;
-use crate::components::{BoxShape, CapsuleShape, ColliderShape, CylinderShape, SphereShape};
+use crate::components::{BoxShape, CapsuleShape, ColliderShape, ConeShape, CylinderShape, SphereShape};
 use gizmo_math::Vec3;
 
 const EPA_TOLERANCE: f32 = 0.001;

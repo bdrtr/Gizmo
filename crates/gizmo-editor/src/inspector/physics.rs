@@ -236,6 +236,15 @@ pub fn draw_collider_section(
                                 ui.add(egui::DragValue::new(&mut cylinder.half_height).speed(0.1));
                             });
                         }
+                        gizmo_physics_core::ColliderShape::Cone(cone) => {
+                            ui.label("Şekil: Koni");
+                            ui.horizontal(|ui| {
+                                ui.label("Taban yarıçapı:");
+                                ui.add(egui::DragValue::new(&mut cone.radius).speed(0.1));
+                                ui.label("Y. Yükseklik:");
+                                ui.add(egui::DragValue::new(&mut cone.half_height).speed(0.1));
+                            });
+                        }
                         gizmo_physics_core::ColliderShape::Heightfield(hf) => {
                             // A summary, not the shape's `Debug`: the catch-all below would print
                             // every sample, and a terrain carries thousands of them.

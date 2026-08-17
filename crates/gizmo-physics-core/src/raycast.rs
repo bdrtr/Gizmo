@@ -427,6 +427,104 @@ impl Raycast {
         best.map(|(t, n)| (t, rotation * n))
     }
 
+    /// Ray against a solid cone about local +Y: base disc at `-half_height`, apex at
+    /// `+half_height`.
+    ///
+    /// Two surfaces, nearest hit wins — the same shape of answer as [`Self::ray_cylinder`], but
+    /// the lateral one is a **quadratic in all three components**, not just XZ. A cylinder's side
+    /// is `x² + z² = r²` with `y` free; a cone's is `x² + z² = (k·(apex_y − y))²`, so `y` appears
+    /// in the quadratic and the coefficients carry `k = r / height`. Reusing the cylinder's
+    /// quadratic would test a tube, and a ray aimed at the tip would report a hit out at the base
+    /// radius.
+    ///
+    /// The infinite double cone the quadratic describes is why each root is range-checked: a root
+    /// on the **mirror** cone above the apex satisfies the equation exactly and is not on this
+    /// solid at all.
+    ///
+    /// Returns `(distance, world-space normal)` of the first surface at or after the ray's origin,
+    /// with the same inside-start behaviour as the other primitives here. The lateral normal is
+    /// the surface gradient, so it leans by the cone's half-angle rather than pointing straight
+    /// out — a shallow cone's normals are nearly vertical, which is what makes a body slide off
+    /// one instead of gripping it.
+    pub fn ray_cone(
+        ray: &Ray,
+        center: Vec3,
+        rotation: gizmo_math::Quat,
+        radius: f32,
+        half_height: f32,
+    ) -> Option<(f32, Vec3)> {
+        // Into the cone's own frame; the answer is rotated back at the end.
+        let inv = rotation.conjugate();
+        let o = inv * (ray.origin - center);
+        let d = inv * ray.direction;
+
+        let apex_y = half_height;
+        let height = half_height * 2.0;
+        if height <= 0.0 || radius <= 0.0 {
+            return None;
+        }
+        let k = radius / height; // radius per unit of drop below the apex
+        let k2 = k * k;
+
+        let mut best: Option<(f32, Vec3)> = None;
+        let mut consider = |t: f32, n: Vec3| {
+            if t >= 0.0 && best.is_none_or(|(bt, _)| t < bt) {
+                best = Some((t, n));
+            }
+        };
+
+        // ── lateral surface: x² + z² = k²·(apex_y − y)² ──
+        let dy = apex_y - o.y;
+        let a = d.x * d.x + d.z * d.z - k2 * d.y * d.y;
+        let b = 2.0 * (o.x * d.x + o.z * d.z + k2 * dy * d.y);
+        let c = o.x * o.x + o.z * o.z - k2 * dy * dy;
+        let roots: [f32; 2] = if a.abs() > 1e-9 {
+            let disc: f32 = b * b - 4.0 * a * c;
+            if disc < 0.0 {
+                [f32::NAN; 2]
+            } else {
+                let sq = disc.sqrt();
+                [(-b - sq) / (2.0 * a), (-b + sq) / (2.0 * a)]
+            }
+        } else if b.abs() > 1e-9 {
+            // Ray parallel to a generator: one root.
+            [-c / b, f32::NAN]
+        } else {
+            [f32::NAN; 2]
+        };
+        for t in roots {
+            if !t.is_finite() {
+                continue;
+            }
+            let p = o + d * t;
+            // Only the solid half: between base and apex. Without this the mirror cone above the
+            // apex answers too, and a ray fired upward past the tip would "hit" it.
+            if p.y < -half_height || p.y > apex_y {
+                continue;
+            }
+            let radial = Vec3::new(p.x, 0.0, p.z);
+            let n = match radial.try_normalize() {
+                // Gradient of the lateral surface: outward in XZ, plus `k` upward along the
+                // slope. Normalised, this is the true surface normal rather than the horizontal
+                // one a cylinder would report.
+                Some(r) => Vec3::new(r.x, k, r.z).normalize(),
+                None => Vec3::Y, // exactly at the apex
+            };
+            consider(t, n);
+        }
+
+        // ── base disc at y = -half_height ──
+        if d.y.abs() > 1e-9 {
+            let t = (-half_height - o.y) / d.y;
+            let p = o + d * t;
+            if p.x * p.x + p.z * p.z <= radius * radius {
+                consider(t, Vec3::NEG_Y);
+            }
+        }
+
+        best.map(|(t, n)| (t, rotation * n))
+    }
+
     /// Ray against a solid cylinder about local +Y, centred on `center`.
     ///
     /// Three surfaces, tested together and resolved by nearest hit: the side wall (a quadratic
@@ -625,6 +723,13 @@ impl Raycast {
                 c.half_height,
             ),
             ColliderShape::Cylinder(c) => Self::ray_cylinder(
+                ray,
+                transform.position,
+                transform.rotation,
+                c.radius,
+                c.half_height,
+            ),
+            ColliderShape::Cone(c) => Self::ray_cone(
                 ray,
                 transform.position,
                 transform.rotation,

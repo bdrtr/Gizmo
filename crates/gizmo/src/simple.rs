@@ -283,7 +283,9 @@ impl<'a> SceneBuilder<'a> {
         self.world.add_component(ent, mesh);
         self.world.add_component(ent, mat);
         self.world.add_component(ent, MeshRenderer::new());
-        self.world.add_bundle(ent, RigidBodyBundle::dynamic(10.0).with_collider(Collider::sphere(radius)));
+        // `Collider::cylinder` landed 2026-08-17 and this call site was not updated with it — a
+        // cylinder mesh wearing a sphere rolls in every direction and rests a radius too high.
+        self.world.add_bundle(ent, RigidBodyBundle::dynamic(10.0).with_collider(Collider::cylinder(radius, height / 2.0)));
         ent
     }
 
@@ -298,7 +300,10 @@ impl<'a> SceneBuilder<'a> {
         self.world.add_component(ent, mesh);
         self.world.add_component(ent, mat);
         self.world.add_component(ent, MeshRenderer::new());
-        self.world.add_bundle(ent, RigidBodyBundle::dynamic(10.0).with_collider(Collider::sphere(radius))); // approximation
+        // The real cone, not a sphere. `create_cone`'s mesh has its base at `-height/2` and its
+        // apex at `+height/2`, which is exactly `ConeShape`'s convention, so the collider is the
+        // silhouette rather than something near it.
+        self.world.add_bundle(ent, RigidBodyBundle::dynamic(10.0).with_collider(Collider::cone(radius, height / 2.0)));
         ent
     }
 

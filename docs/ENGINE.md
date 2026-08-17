@@ -491,8 +491,41 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
   is worse than one that misses. Four inline copies of Möller–Trumbore became one shared
   `Raycast::ray_triangle` on the way past.
 
-  **Still open: `Cone`.** **Trigger:** somebody needs one; nothing in the engine or the demos
-  does.
+  **`Cone` landed 2026-08-18, and the shape gap is closed.** Base at `-half_height`, apex at
+  `+half_height`, axis local +Y — the same convention as the cylinder, deliberately, so the two are
+  interchangeable in a scene file.
+
+  **The support function is the one thing that must not be copied from the cylinder.** A cylinder
+  picks its radial and axial extremes independently, because its radius is the same at every
+  height. A cone's is not: its extreme point in any direction is **either the apex or a point on
+  the base rim**, never in between. Verified red by writing the cylinder's version instead — a cone
+  balanced apex-down then sat there indefinitely on a flat top that does not exist, where the real
+  one falls over. That test (`a_cone_balanced_on_its_apex_falls_over_where_a_cylinder_stands`)
+  measures the cylinder in the same pose as its own control, so it fails if the two ever agree.
+
+  Every derived quantity got its own arm rather than a fallback, and each differs from the
+  cylinder's by a number a wrong copy shows up as: volume is exactly a third; `I_y = (3/10)·m·r²`
+  against the cylinder's `½·m·r²`, a ratio of 3/5; the AABB is the union of a **point and a disc**
+  rather than of two discs; the ray test's lateral quadratic carries `y` in all three coefficients
+  (a cylinder's does not), and each root is range-checked because the infinite double cone above
+  the apex satisfies the equation exactly and is not part of the solid. The cloth pusher measures
+  the radius **at the node's own height**, and the debug wireframe draws one rim and the lines to
+  the apex — the fallback box would have drawn a cone and a cylinder identically, which is the
+  confusion the shape exists to remove.
+
+  **On the centre of mass, stated rather than assumed.** A solid cone's centroid is a quarter of
+  the way up from its base, i.e. `-half_height/2` here, so the origin this shape is centred on is
+  *not* its balance point. The engine leaves `RigidBody::center_of_mass` alone for every primitive,
+  so the tensor is taken about the **origin** to match — `I_xz = (3/20)·m·r² + (1/10)·m·H²`, which
+  is the textbook centroid form with the parallel-axis shift folded in and the two `H²` terms
+  collapsed. Using the quoted centroid number directly would understate a cone's resistance to
+  tipping, because it is the tensor about a point the engine does not spin it around. A body that
+  wants the real balance point sets `center_of_mass` itself; the field docs say what to use.
+
+  **Two call sites were lying and are not now.** `SimpleApp::spawn_textured_cone` gave a cone mesh
+  a **sphere** collider under a `// approximation` comment — and `spawn_textured_cylinder` did the
+  same, still, a day after `Collider::cylinder` landed. Both now carry their own shape. Nothing in
+  the studio needed fixing: it has no cone primitive to be wrong about.
 
 - **Shader Graph.** A node editor plus WGSL generation. The largest item on the editor list and a
   project on its own; the prototype has a tab for it, the engine has nothing.

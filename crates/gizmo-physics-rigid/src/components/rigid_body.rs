@@ -723,6 +723,32 @@ impl RigidBody {
         self.local_inertia = Vec3::new(i_xz, i_y, i_xz);
     }
 
+    /// Principal inertia of a solid cone about local +Y, **about the collider's origin** — the
+    /// geometric midpoint, which is where every other primitive here puts it.
+    ///
+    /// `I_y = (3/10)·m·r²` about the axis. Across it, the textbook figure is quoted about the
+    /// *centroid*, `(3/20)·m·r² + (3/80)·m·H²`, and a cone's centroid is **not** its midpoint: it
+    /// sits a quarter of the height up from the base, i.e. `H/4` below the origin this shape is
+    /// centred on. Shifting the tensor there with the parallel-axis theorem folds `m·(H/4)²` in
+    /// and the two `H²` terms collapse:
+    ///
+    /// ```text
+    /// I_xz = (3/20)·m·r² + (3/80)·m·H² + m·(H/4)²
+    ///      = (3/20)·m·r² + (1/10)·m·H²
+    /// ```
+    ///
+    /// Using the centroid form directly — the number a reference gives — would understate a
+    /// cone's resistance to tipping, because it would be the tensor about a point the engine does
+    /// not spin it around. See [`ConeShape`](gizmo_physics_core::components::ConeShape) for the
+    /// centre-of-mass note and for what to set if you want the real balance point.
+    pub fn calculate_cone_inertia(&mut self, r: f32, half_h: f32) {
+        let m = self.mass;
+        let h = half_h * 2.0;
+        let i_y = 0.3 * m * r * r;
+        let i_xz = 0.15 * m * r * r + 0.1 * m * h * h;
+        self.local_inertia = Vec3::new(i_xz, i_y, i_xz);
+    }
+
     /// Overwrites [`local_inertia`](Self::local_inertia) with the solid-capsule tensor for
     /// a capsule whose axis is the body-local **Y** axis, matching the capsule collider's
     /// own convention.
@@ -777,7 +803,9 @@ impl RigidBody {
     /// crate's `RigidBodyBundle` does invoke it while spawning.)
     ///
     /// Accuracy per shape:
-    /// - **Box, sphere, capsule** — the exact analytic solid tensor.
+    /// - **Box, sphere, capsule, cylinder, cone** — the exact analytic solid tensor. The cone's
+    ///   is taken about the collider origin rather than its centroid; see
+    ///   [`calculate_cone_inertia`](Self::calculate_cone_inertia).
     /// - **Plane** — infinite on every axis, i.e. zero inverse: a plane cannot be spun.
     /// - **ConvexHull** — approximated by the box tensor of the hull's local AABB, each
     ///   extent floored at 1 mm; an empty vertex list falls back to a 1×1×1 box.
@@ -805,6 +833,9 @@ impl RigidBody {
             }
             ColliderShape::Cylinder(c) => {
                 self.calculate_cylinder_inertia(c.radius, c.half_height);
+            }
+            ColliderShape::Cone(c) => {
+                self.calculate_cone_inertia(c.radius, c.half_height);
             }
             ColliderShape::Plane(_) => {
                 self.local_inertia = Vec3::splat(f32::INFINITY);

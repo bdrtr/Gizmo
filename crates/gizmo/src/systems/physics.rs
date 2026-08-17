@@ -115,6 +115,25 @@ pub fn physics_debug_system(world: &crate::core::World) {
                         gizmos.draw_line(rim(i, 1.0), rim(i, -1.0), color);
                     }
                 }
+                gizmo_physics_core::ColliderShape::Cone(c) => {
+                    // One rim and the lines up to the apex — the silhouette that tells a cone
+                    // from the cylinder next to it. The fallback box below would draw the same
+                    // outline for both, which is exactly the confusion this shape was added to
+                    // remove.
+                    const SEGMENTS: usize = 16;
+                    let axis = trans.rotation.mul_vec3(Vec3::Y) * c.half_height;
+                    let u = trans.rotation.mul_vec3(Vec3::X) * c.radius;
+                    let w = trans.rotation.mul_vec3(Vec3::Z) * c.radius;
+                    let apex = trans.position + axis;
+                    let rim = |i: usize| {
+                        let a = i as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
+                        trans.position - axis + u * a.cos() + w * a.sin()
+                    };
+                    for i in 0..SEGMENTS {
+                        gizmos.draw_line(rim(i), rim(i + 1), color);
+                        gizmos.draw_line(rim(i), apex, color);
+                    }
+                }
                 gizmo_physics_core::ColliderShape::Heightfield(hf) => {
                     // The field's bounds, not its surface. A terrain's cell edges are tens of
                     // thousands of lines and would bury the rest of the frame; the box is what a

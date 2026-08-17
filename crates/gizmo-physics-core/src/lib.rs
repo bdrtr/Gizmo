@@ -62,7 +62,7 @@ pub use collision::{
 };
 pub use components::{
     Collider, ColliderShape, CollisionLayer, CombineMode, ConvexHullShape, PhysicsMaterial,
-    PlaneShape, SphereShape, Transform, TriMeshShape, BoxShape, CapsuleShape, CylinderShape,
+    PlaneShape, SphereShape, Transform, TriMeshShape, BoxShape, CapsuleShape, ConeShape, CylinderShape,
     HeightfieldShape
 };
 pub use error::GizmoError;

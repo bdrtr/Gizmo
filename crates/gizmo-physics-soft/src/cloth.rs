@@ -123,6 +123,51 @@ fn project_point_out(
                 trans.rotation * n_local,
             ))
         }
+        ColliderShape::Cone(c) => {
+            // Axis local Y, base at -half_height, apex at +half_height. The lateral surface is a
+            // slope, not a wall, so the radial exit is measured against the radius **at the
+            // node's own height** — pushing to the base radius everywhere would be a cylinder,
+            // and cloth draped over a cone would float off it near the tip.
+            let local = trans.rotation.inverse() * (pos - trans.position);
+            let radial = Vec3::new(local.x, 0.0, local.z);
+            let r = radial.length();
+            let h = c.half_height * 2.0;
+            if h <= 0.0 {
+                return None;
+            }
+            let min_y = c.half_height + thickness;
+            if local.y >= min_y || local.y <= -min_y {
+                return None;
+            }
+            // Radius of the solid at this height, grown by the cloth's thickness.
+            let t = ((c.half_height - local.y) / h).clamp(0.0, 1.0);
+            let radius_here = c.radius * t + thickness;
+            if r >= radius_here {
+                return None;
+            }
+            let out_radial = radius_here - r;
+            let out_axial = local.y + min_y; // distance down to the base plane
+            let (new_local, n_local) = if out_radial <= out_axial {
+                let n = if r > 1e-6 { radial / r } else { Vec3::X };
+                // The surface normal leans by the cone's half-angle; a horizontal one would let
+                // cloth grip a slope it should slide down.
+                let k = c.radius / h;
+                let n_out = Vec3::new(n.x, k, n.z).normalize();
+                (
+                    Vec3::new(n.x * radius_here, local.y, n.z * radius_here),
+                    n_out,
+                )
+            } else {
+                (
+                    Vec3::new(local.x, -min_y, local.z),
+                    Vec3::new(0.0, -1.0, 0.0),
+                )
+            };
+            Some((
+                trans.position + trans.rotation * new_local,
+                trans.rotation * n_local,
+            ))
+        }
         _ => None, // plane / trimesh / convex-hull / compound: not yet handled
     }
 }
@@ -135,6 +180,8 @@ fn collider_bound(shape: &ColliderShape) -> Option<f32> {
         ColliderShape::Box(b) => Some(b.half_extents.length()),
         ColliderShape::Capsule(c) => Some(c.half_height + c.radius),
         ColliderShape::Cylinder(c) => Some(c.radius.hypot(c.half_height)),
+        // Same bound as the cylinder that contains it: the apex is the far corner.
+        ColliderShape::Cone(c) => Some(c.radius.hypot(c.half_height)),
         _ => None,
     }
 }
