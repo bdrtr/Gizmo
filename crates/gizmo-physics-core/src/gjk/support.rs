@@ -25,6 +25,18 @@ impl Gjk {
                 debug_assert!(false, "Plane shapes must use separate collision detection");
                 Vec3::ZERO
             }
+            ColliderShape::Heightfield(_) => {
+                // Same contract as `Plane`, for the opposite reason: a heightfield is CONCAVE,
+                // so its support function would describe the convex hull of the terrain — a lid
+                // over every valley. Contact generation dispatches it per cell instead
+                // (`NarrowPhase::shape_heightfield`), and reaching here means a pair slipped
+                // past that dispatch.
+                tracing::error!(
+                    "Heightfield reached GJK support_point; terrain is dispatched per cell (returning ZERO)"
+                );
+                debug_assert!(false, "Heightfield must be dispatched per cell, not through GJK");
+                Vec3::ZERO
+            }
             ColliderShape::TriMesh(tm) => {
                 let mut best_dot = f32::NEG_INFINITY;
                 let mut best_pt = Vec3::ZERO;

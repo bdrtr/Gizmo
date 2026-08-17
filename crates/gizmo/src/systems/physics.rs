@@ -113,6 +113,29 @@ pub fn physics_debug_system(world: &crate::core::World) {
                         gizmos.draw_line(rim(i, 1.0), rim(i, -1.0), color);
                     }
                 }
+                gizmo_physics_core::ColliderShape::Heightfield(hf) => {
+                    // The field's bounds, not its surface. A terrain's cell edges are tens of
+                    // thousands of lines and would bury the rest of the frame; the box is what a
+                    // debug view of a static body is actually for — is it where I put it, and is
+                    // it as big as I think. The surface itself is on screen already.
+                    let (lo, hi) = (hf.local_aabb.min, hf.local_aabb.max);
+                    let mut corners = [Vec3::ZERO; 8];
+                    for (i, c) in corners.iter_mut().enumerate() {
+                        let local = Vec3::new(
+                            if i & 1 == 0 { lo.x } else { hi.x },
+                            if i & 2 == 0 { lo.y } else { hi.y },
+                            if i & 4 == 0 { lo.z } else { hi.z },
+                        );
+                        *c = trans.position + trans.rotation.mul_vec3(local);
+                    }
+                    for (a, b) in [
+                        (0, 1), (2, 3), (4, 5), (6, 7),
+                        (0, 2), (1, 3), (4, 6), (5, 7),
+                        (0, 4), (1, 5), (2, 6), (3, 7),
+                    ] {
+                        gizmos.draw_line(corners[a], corners[b], color);
+                    }
+                }
                 _ => {
                     let min = trans.position - Vec3::new(1.0, 1.0, 1.0);
                     let max = trans.position + Vec3::new(1.0, 1.0, 1.0);

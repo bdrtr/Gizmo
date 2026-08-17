@@ -331,8 +331,8 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
     no asset rename/move action in the editor yet (the browser is read-only), so nothing else needs
     it. **Trigger for more:** an editor move/rename action — which should carry the sidecar, and at
     that point is also what makes the orphan case above worth fixing.
-- **Collider shapes — `Cylinder` landed (2026-08-17); `Heightfield` and `Cone` are still open,
-  and this item was not on the list at all.** The 2026-08 audit found three shape gaps (§Y1,
+- **Collider shapes — `Cylinder` and `Heightfield` landed (2026-08-17), closing an audit item
+  that was never carried onto this list.** The 2026-08 audit found three shape gaps (§Y1,
   "Cylinder, Cone, Heightfield yok") and its phase B carried them as B7, *"Cylinder + Heightfield
   collider — wheels and terrain, both common"*. When FIXPLAN was retired the item was not carried
   into this section, so the roadmap has been silent about it since; the code was not. That is the
@@ -363,10 +363,31 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
   AABB rather than from `½·m·r²`, and every contact resolved against a facet, so a cylinder on its
   side settled onto whichever flat it landed on.
 
-  **Still open:** `Heightfield` — which is what forces open-world terrain through `TriMesh` today —
-  and `Cone`. Heightfield is not a support function: it is concave, so it needs per-cell dispatch
-  and its own acceleration structure, i.e. the same shape of work `TriMesh` already carries.
-  **Trigger for `Cone`:** somebody needs one; nothing in the engine or the demos does.
+  **`Heightfield` landed the same day, and B7 is closed.** Terrain is a lattice of height
+  samples centred on the collider's origin, `heights[row * cols + col]`, with `scale` as (cell
+  size in X, height multiplier, cell size in Z). Each cell is two triangles, and that is what the
+  narrowphase and the raycast test against — the same per-cell idea as `TriMesh`, with the tree
+  replaced by arithmetic: which cells a shape overlaps is a division on its bounds, not a
+  traversal, and the data is one float per sample instead of three vertices and three indices per
+  triangle.
+
+  **What the shape is for is the concavity, so that is what the test measures.** Any convex
+  treatment — GJK on a support function, a hull of the samples, the field's own AABB — puts a lid
+  across every valley, and a body dropped into a dip rests on the lid. Verified red:
+  flattening every cell to the field's highest sample made
+  `a_box_dropped_into_a_valley_rests_on_its_floor_not_on_a_lid` stop the box at 4.25 m, the rim's
+  height, with the message that names the failure. The support function refuses a heightfield the
+  way it refuses a plane, and the narrowphase arms sit below the plane arms and above the GJK
+  fallback for the same two reasons the mesh arms do.
+
+  Raycasting walks the lattice cell by cell (a 2-D DDA in XZ) and stops as soon as the nearest hit
+  is closer than the next cell boundary, so a ray at the ground under a character tests one or two
+  cells whatever the terrain's size — with a hard step bound, because a raycast that never returns
+  is worse than one that misses. Four inline copies of Möller–Trumbore became one shared
+  `Raycast::ray_triangle` on the way past.
+
+  **Still open: `Cone`.** **Trigger:** somebody needs one; nothing in the engine or the demos
+  does.
 
 - **Shader Graph.** A node editor plus WGSL generation. The largest item on the editor list and a
   project on its own; the prototype has a tab for it, the engine has nothing.

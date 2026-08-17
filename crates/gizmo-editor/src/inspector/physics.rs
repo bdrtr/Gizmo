@@ -233,6 +233,15 @@ pub fn draw_collider_section(
                                 ui.add(egui::DragValue::new(&mut cylinder.half_height).speed(0.1));
                             });
                         }
+                        gizmo_physics_core::ColliderShape::Heightfield(hf) => {
+                            // A summary, not the shape's `Debug`: the catch-all below would print
+                            // every sample, and a terrain carries thousands of them.
+                            ui.label("Şekil: Arazi (Heightfield)");
+                            ui.label(format!(
+                                "{}×{} örnek · hücre {:.2}×{:.2} m · yükseklik ×{:.2}",
+                                hf.rows, hf.cols, hf.scale.x, hf.scale.z, hf.scale.y
+                            ));
+                        }
                         other => {
                             ui.label(
                                 egui::RichText::new(format!("Şekil: {:?} (Sadece Okunur)", other))

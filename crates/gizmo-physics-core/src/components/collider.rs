@@ -182,6 +182,25 @@ impl Collider {
                 let large = 10000.0;
                 gizmo_math::Aabb::new(position - Vec3::splat(large), position + Vec3::splat(large))
             }
+            ColliderShape::Heightfield(hf) => {
+                // The cached local box through its eight corners, exactly as the triangle mesh
+                // does it: exact for an axis-aligned rotation, a conservative superset otherwise,
+                // and independent of how many samples the field holds.
+                let (lo, hi) = (hf.local_aabb.min, hf.local_aabb.max);
+                let mut min = Vec3::splat(f32::INFINITY);
+                let mut max = Vec3::splat(f32::NEG_INFINITY);
+                for i in 0..8 {
+                    let corner = Vec3::new(
+                        if i & 1 == 0 { lo.x } else { hi.x },
+                        if i & 2 == 0 { lo.y } else { hi.y },
+                        if i & 4 == 0 { lo.z } else { hi.z },
+                    );
+                    let world = position + rotation * corner;
+                    min = min.min(world);
+                    max = max.max(world);
+                }
+                gizmo_math::Aabb::new(min, max)
+            }
             ColliderShape::TriMesh(tm) => {
                 if tm.vertices.is_empty() {
                     // Was an inverted (+inf, -inf) box, which this file already recorded as
@@ -348,6 +367,52 @@ impl Collider {
         }
     }
 
+    /// A terrain heightfield: `rows * cols` samples on a lattice centred on the collider's local
+    /// origin.
+    ///
+    /// `heights` is row-major (`heights[row * cols + col]`, `col` along X, `row` along Z) in
+    /// units of `scale.y`; `scale` is (cell size in X, height multiplier, cell size in Z). The
+    /// footprint is therefore `(cols-1)·scale.x` by `(rows-1)·scale.z`, centred on the origin —
+    /// place the terrain by moving the body, not by offsetting the samples.
+    ///
+    /// Inconsistent input does not panic and does not guess: a sample count that disagrees with
+    /// `rows * cols`, or a lattice too small to make a single cell, logs a warning and yields a
+    /// field that **collides with nothing**. That is the same choice the rest of this file makes
+    /// for degenerate geometry, and the warning is what keeps it from being silent.
+    ///
+    /// The shape is for static bodies. Nothing stops you attaching it to a dynamic one, but its
+    /// inertia falls back to a unit box and its own motion is not what the per-cell dispatch is
+    /// written for.
+    pub fn heightfield(heights: Vec<f32>, rows: u32, cols: u32, scale: Vec3) -> Self {
+        let usable = rows >= 2 && cols >= 2 && heights.len() == (rows as usize) * (cols as usize);
+        if !usable {
+            tracing::warn!(
+                rows,
+                cols,
+                samples = heights.len(),
+                "heightfield needs at least a 2x2 lattice and one sample per node; \
+                 this one collides with nothing"
+            );
+        }
+        let (heights, rows, cols) = if usable {
+            (heights, rows, cols)
+        } else {
+            (Vec::new(), 0, 0)
+        };
+        let mut shape = HeightfieldShape {
+            heights: std::sync::Arc::new(heights),
+            rows,
+            cols,
+            scale,
+            local_aabb: gizmo_math::Aabb::new(Vec3::ZERO, Vec3::ZERO),
+        };
+        shape.local_aabb = shape.measure_local_aabb();
+        Self {
+            shape: ColliderShape::Heightfield(shape),
+            ..Default::default()
+        }
+    }
+
     /// The convex hull of `points`, computed now via [`crate::quickhull`].
     ///
     /// `points` are in the collider's local frame (metres) and need no ordering: interior
@@ -505,6 +570,7 @@ impl Collider {
             }
             ColliderShape::Plane(_) => f32::MAX, // Safe value instead of INFINITY for inertia calculations
             ColliderShape::TriMesh(_)
+            | ColliderShape::Heightfield(_)
             | ColliderShape::ConvexHull(_)
             | ColliderShape::Compound(_) => {
                 let aabb = self.compute_aabb(Vec3::ZERO, Quat::IDENTITY);
@@ -538,6 +604,7 @@ impl Collider {
             ColliderShape::Cylinder(c) => c.half_height,
             ColliderShape::Plane(_) => 0.0,
             ColliderShape::TriMesh(_)
+            | ColliderShape::Heightfield(_)
             | ColliderShape::ConvexHull(_)
             | ColliderShape::Compound(_) => {
                 let aabb = self.compute_aabb(Vec3::ZERO, Quat::IDENTITY);
@@ -592,6 +659,13 @@ pub enum ColliderShape {
     /// A convex polyhedron, handled by GJK/EPA over its vertices. Build with
     /// [`Collider::convex_hull`], which discards interior points.
     ConvexHull(ConvexHullShape),
+    /// A regular grid of heights — terrain. Concave like [`TriMesh`], and dispatched per
+    /// **cell** for the same reason, but its geometry is arithmetic rather than a tree: the
+    /// samples are on a lattice, so which cells a shape overlaps is a division, not a query.
+    /// Build with [`Collider::heightfield`].
+    ///
+    /// [`TriMesh`]: ColliderShape::TriMesh
+    Heightfield(HeightfieldShape),
     /// Several sub-shapes, each placed by a [`Transform`] relative to the *parent
     /// collider's* origin.
     ///
@@ -724,6 +798,194 @@ pub struct TriMeshShape {
     /// is eight corners rotated, whatever the mesh.
     #[serde(skip)]
     pub local_aabb: gizmo_math::Aabb,
+}
+
+/// A regular grid of height samples — the shape for terrain.
+///
+/// The samples sit on a lattice in the collider's local XZ plane, **centred on the local
+/// origin**, and `heights` is row-major: `heights[row * cols + col]`, with `col` running along
+/// X and `row` along Z. A sample's world-local position is
+/// `((col - (cols-1)/2)·scale.x, height·scale.y, (row - (rows-1)/2)·scale.z)`, so `scale` is
+/// (cell size in X, height multiplier, cell size in Z) and the field's footprint is
+/// `(cols-1)·scale.x` by `(rows-1)·scale.z`.
+///
+/// Each cell — four neighbouring samples — is two triangles, which is what the narrowphase and
+/// the raycast test against. That is what makes the shape genuinely concave: a valley is a set
+/// of cells, not a dent in a convex hull, so a body sitting in one rests on its floor instead of
+/// on a lid across the top. [`Collider::trimesh`] can express the same surface; what a
+/// heightfield buys is that finding the candidate cells is arithmetic on the query's bounds
+/// rather than a tree traversal, and that the data is one float per sample.
+///
+/// Meant for **static** bodies, like [`TriMeshShape`]: there is no meaningful inertia tensor for
+/// terrain, and [`crate::gjk::Gjk::support_point`] rejects it the way it rejects a plane — a
+/// concave shape has no support function, and reaching one would silently collide against the
+/// hull of the terrain.
+///
+/// Build it with [`Collider::heightfield`], which is what keeps the four fields consistent.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(into = "HeightfieldShapeData", from = "HeightfieldShapeData")]
+pub struct HeightfieldShape {
+    /// Height samples, row-major, `rows * cols` of them, in units of `scale.y`.
+    pub heights: std::sync::Arc<Vec<f32>>,
+    /// Number of samples along Z. A field with fewer than two rows has no cells and collides
+    /// with nothing.
+    pub rows: u32,
+    /// Number of samples along X. As with `rows`, fewer than two means no cells.
+    pub cols: u32,
+    /// Cell size in X, height multiplier, cell size in Z.
+    ///
+    /// The Y component is a multiplier rather than a size because heights are data: a field of
+    /// samples in `0..=1` becomes a 30 m mountain with `scale.y = 30.0` and nothing else changes.
+    pub scale: Vec3,
+    /// The field's bounds in its own space, measured when the collider is built.
+    ///
+    /// Cached for the same reason [`TriMeshShape::local_aabb`] is: the broadphase asks for a
+    /// body's AABB several times per substep, and folding over every sample to answer would make
+    /// terrain the most expensive static body in the scene. Never stored in a scene file;
+    /// recomputed on deserialize.
+    #[serde(skip)]
+    pub local_aabb: gizmo_math::Aabb,
+}
+
+impl HeightfieldShape {
+    /// The height at one sample, already multiplied by `scale.y`. Out-of-range indices give
+    /// `0.0` rather than panicking — this is read on hot paths over data that may come from a
+    /// file.
+    pub fn height_at(&self, row: u32, col: u32) -> f32 {
+        if row >= self.rows || col >= self.cols {
+            return 0.0;
+        }
+        self.heights
+            .get((row as usize) * (self.cols as usize) + col as usize)
+            .copied()
+            .unwrap_or(0.0)
+            * self.scale.y
+    }
+
+    /// A sample's position in the collider's local frame.
+    pub fn sample_position(&self, row: u32, col: u32) -> Vec3 {
+        Vec3::new(
+            (col as f32 - (self.cols.max(1) - 1) as f32 * 0.5) * self.scale.x,
+            self.height_at(row, col),
+            (row as f32 - (self.rows.max(1) - 1) as f32 * 0.5) * self.scale.z,
+        )
+    }
+
+    /// How many cells the field has in each direction: `(cols - 1, rows - 1)`, or `(0, 0)` when
+    /// there are not enough samples to make one.
+    pub fn cell_counts(&self) -> (u32, u32) {
+        (self.cols.saturating_sub(1), self.rows.saturating_sub(1))
+    }
+
+    /// The two triangles of one cell, in the collider's local frame, wound counter-clockwise
+    /// seen from +Y so that their geometric normals point up.
+    ///
+    /// The diagonal is fixed (`(row, col)`–`(row+1, col+1)`) rather than chosen per cell. A
+    /// chosen diagonal would follow the terrain better on a saddle; a fixed one means the
+    /// surface a raycast hits and the surface a contact resolves against are the same triangle
+    /// pair, which matters more.
+    pub fn cell_triangles(&self, row: u32, col: u32) -> [[Vec3; 3]; 2] {
+        let p00 = self.sample_position(row, col);
+        let p01 = self.sample_position(row, col + 1);
+        let p10 = self.sample_position(row + 1, col);
+        let p11 = self.sample_position(row + 1, col + 1);
+        [[p00, p10, p11], [p00, p11, p01]]
+    }
+
+    /// The range of cells overlapping an XZ box in the field's own frame, clamped to what
+    /// exists: `(col_start, col_end, row_start, row_end)`, ends exclusive. Empty when the box
+    /// misses the field entirely.
+    pub fn cell_range(&self, min: Vec3, max: Vec3) -> (u32, u32, u32, u32) {
+        let (cells_x, cells_z) = self.cell_counts();
+        if cells_x == 0 || cells_z == 0 || self.scale.x <= 0.0 || self.scale.z <= 0.0 {
+            return (0, 0, 0, 0);
+        }
+        let half_x = cells_x as f32 * 0.5 * self.scale.x;
+        let half_z = cells_z as f32 * 0.5 * self.scale.z;
+        let to_cell = |v: f32, half: f32, size: f32| (v + half) / size;
+        let c0 = to_cell(min.x, half_x, self.scale.x).floor();
+        let c1 = to_cell(max.x, half_x, self.scale.x).ceil();
+        let r0 = to_cell(min.z, half_z, self.scale.z).floor();
+        let r1 = to_cell(max.z, half_z, self.scale.z).ceil();
+        if c1 < 0.0 || r1 < 0.0 || c0 > cells_x as f32 || r0 > cells_z as f32 {
+            return (0, 0, 0, 0);
+        }
+        (
+            c0.max(0.0) as u32,
+            (c1.max(0.0) as u32).min(cells_x),
+            r0.max(0.0) as u32,
+            (r1.max(0.0) as u32).min(cells_z),
+        )
+    }
+
+    /// The field's bounds in its own space, from the sample extremes.
+    fn measure_local_aabb(&self) -> gizmo_math::Aabb {
+        if self.rows == 0 || self.cols == 0 {
+            return gizmo_math::Aabb::new(Vec3::ZERO, Vec3::ZERO);
+        }
+        let (mut lo_y, mut hi_y) = (f32::INFINITY, f32::NEG_INFINITY);
+        for h in self.heights.iter() {
+            let y = h * self.scale.y;
+            lo_y = lo_y.min(y);
+            hi_y = hi_y.max(y);
+        }
+        if !lo_y.is_finite() || !hi_y.is_finite() {
+            lo_y = 0.0;
+            hi_y = 0.0;
+        }
+        let half_x = (self.cols.max(1) - 1) as f32 * 0.5 * self.scale.x;
+        let half_z = (self.rows.max(1) - 1) as f32 * 0.5 * self.scale.z;
+        gizmo_math::Aabb::new(
+            Vec3::new(-half_x, lo_y, -half_z),
+            Vec3::new(half_x, hi_y, half_z),
+        )
+    }
+}
+
+/// What a heightfield is in a scene file: the samples, the lattice size and the scale. The
+/// bounds are measured again on load, the way the triangle mesh's tree is rebuilt.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct HeightfieldShapeData {
+    heights: Vec<f32>,
+    rows: u32,
+    cols: u32,
+    scale: Vec3,
+}
+
+impl From<HeightfieldShapeData> for HeightfieldShape {
+    fn from(data: HeightfieldShapeData) -> Self {
+        let mut shape = HeightfieldShape {
+            heights: std::sync::Arc::new(data.heights),
+            rows: data.rows,
+            cols: data.cols,
+            scale: data.scale,
+            local_aabb: gizmo_math::Aabb::new(Vec3::ZERO, Vec3::ZERO),
+        };
+        if shape.heights.len() != (shape.rows as usize) * (shape.cols as usize) {
+            tracing::warn!(
+                rows = shape.rows,
+                cols = shape.cols,
+                samples = shape.heights.len(),
+                "heightfield sample count does not match its lattice; it will collide with nothing"
+            );
+            shape.rows = 0;
+            shape.cols = 0;
+            shape.heights = std::sync::Arc::new(Vec::new());
+        }
+        shape.local_aabb = shape.measure_local_aabb();
+        shape
+    }
+}
+
+impl From<HeightfieldShape> for HeightfieldShapeData {
+    fn from(shape: HeightfieldShape) -> Self {
+        Self {
+            heights: (*shape.heights).clone(),
+            rows: shape.rows,
+            cols: shape.cols,
+            scale: shape.scale,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -897,6 +1159,75 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The lattice: where samples sit, what a cell's triangles are, and which cells a box
+    /// overlaps. Everything the narrowphase and the raycast do is built on these three, so an
+    /// off-by-one here is an off-by-one everywhere.
+    #[test]
+    fn the_lattice_is_centred_and_its_cells_line_up() {
+        // 3×3 samples, 2 m cells → a 4×4 m field from -2 to +2, all at height 1.
+        let c = Collider::heightfield(vec![1.0; 9], 3, 3, Vec3::new(2.0, 1.0, 2.0));
+        let ColliderShape::Heightfield(hf) = &c.shape else {
+            panic!("expected a heightfield")
+        };
+        assert_eq!(hf.cell_counts(), (2, 2));
+        assert_eq!(hf.sample_position(0, 0), Vec3::new(-2.0, 1.0, -2.0));
+        assert_eq!(hf.sample_position(2, 2), Vec3::new(2.0, 1.0, 2.0));
+        assert_eq!(hf.sample_position(1, 1), Vec3::new(0.0, 1.0, 0.0));
+
+        // A cell is two triangles sharing the (row,col)–(row+1,col+1) diagonal, and both are
+        // wound so their geometric normal points up — the surface faces the sky, or every
+        // contact normal is inverted.
+        for tri in hf.cell_triangles(0, 0) {
+            let n = (tri[1] - tri[0]).cross(tri[2] - tri[0]);
+            assert!(n.y > 0.0, "triangle {tri:?} faces down (n = {n:?})");
+        }
+
+        // A box over the middle sample touches all four cells; one in a corner touches one.
+        assert_eq!(
+            hf.cell_range(Vec3::new(-0.1, 0.0, -0.1), Vec3::new(0.1, 2.0, 0.1)),
+            (0, 2, 0, 2)
+        );
+        assert_eq!(
+            hf.cell_range(Vec3::new(-1.9, 0.0, -1.9), Vec3::new(-1.6, 2.0, -1.6)),
+            (0, 1, 0, 1)
+        );
+        // And a box beside the field touches nothing, rather than clamping onto the edge cell.
+        assert_eq!(
+            hf.cell_range(Vec3::new(10.0, 0.0, 10.0), Vec3::new(11.0, 1.0, 11.0)),
+            (0, 0, 0, 0)
+        );
+    }
+
+    /// The bounds come from the data, and they are what the broadphase sees.
+    #[test]
+    fn a_heightfields_bounds_come_from_its_samples() {
+        let heights = vec![0.0, 0.0, 0.0, 0.0, 3.0, 0.0, 0.0, 0.0, -1.0];
+        let c = Collider::heightfield(heights, 3, 3, Vec3::new(1.0, 2.0, 1.0));
+        let aabb = c.compute_aabb(Vec3::ZERO, Quat::IDENTITY);
+        assert_eq!(aabb.min.x, -1.0, "footprint is (cols-1)·scale.x wide");
+        assert_eq!(aabb.max.x, 1.0);
+        assert_eq!(aabb.max.y, 6.0, "the tallest sample times scale.y");
+        assert_eq!(aabb.min.y, -2.0, "and the lowest");
+    }
+
+    /// Inconsistent data is refused loudly rather than indexed into: a field whose sample count
+    /// disagrees with its lattice collides with nothing, and does not panic on the way there.
+    #[test]
+    fn a_malformed_heightfield_collides_with_nothing() {
+        let c = Collider::heightfield(vec![0.0; 5], 3, 3, Vec3::ONE);
+        let ColliderShape::Heightfield(hf) = &c.shape else {
+            panic!("expected a heightfield")
+        };
+        assert_eq!(hf.cell_counts(), (0, 0));
+        assert_eq!(hf.height_at(0, 0), 0.0, "no sample is in range");
+        // A 1×N lattice has no cell either — two samples across are the minimum.
+        let thin = Collider::heightfield(vec![0.0, 1.0], 1, 2, Vec3::ONE);
+        let ColliderShape::Heightfield(hf) = &thin.shape else {
+            panic!("expected a heightfield")
+        };
+        assert_eq!(hf.cell_counts(), (0, 0));
     }
 
     /// πr²h, and specifically NOT the capsule's volume — the caps are the difference and mass

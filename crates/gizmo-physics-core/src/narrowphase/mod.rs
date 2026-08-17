@@ -423,6 +423,94 @@ impl NarrowPhase {
         out
     }
 
+    /// Contacts between a shape and a terrain heightfield, generated per **cell**.
+    ///
+    /// The same idea as [`Self::shape_trimesh`] — a concave surface is not one convex shape, so
+    /// each piece of it is tested as its own — with the tree replaced by arithmetic: the query
+    /// shape's bounds in the field's frame divide straight into a range of cells, and each cell
+    /// contributes its two triangles. Nothing is stored per triangle and nothing is traversed.
+    ///
+    /// The cost is bounded the same way: one GJK call per candidate triangle, and the candidates
+    /// are what the shape's own box overlaps — a character on a hillside touches one or two
+    /// cells whatever the terrain's size. Contacts are cut to the four deepest, which is what
+    /// the solver keeps.
+    ///
+    /// A heightfield as the *query* shape is a programming error, not a case: it has no support
+    /// function (see [`Gjk::support_point`]), and the dispatch above cuts the heightfield–
+    /// heightfield pair before it gets here.
+    fn shape_heightfield(
+        shape: &ColliderShape,
+        pos: Vec3,
+        rot: Quat,
+        hf: &crate::components::HeightfieldShape,
+        hf_pos: Vec3,
+        hf_rot: Quat,
+    ) -> Vec<ContactPoint> {
+        let (cells_x, cells_z) = hf.cell_counts();
+        if cells_x == 0 || cells_z == 0 {
+            return Vec::new();
+        }
+
+        // The query box in the field's own space, from six support queries — the same trick the
+        // mesh path uses to get a shape's bounds without knowing what shape it is.
+        let axes = [Vec3::X, -Vec3::X, Vec3::Y, -Vec3::Y, Vec3::Z, -Vec3::Z];
+        let mut lo = Vec3::splat(f32::INFINITY);
+        let mut hi = Vec3::splat(f32::NEG_INFINITY);
+        let inv = hf_rot.inverse();
+        for dir in axes {
+            let p = inv * (Gjk::support_point(shape, pos, rot, dir) - hf_pos);
+            lo = lo.min(p);
+            hi = hi.max(p);
+        }
+        if !lo.is_finite() || !hi.is_finite() {
+            return Vec::new();
+        }
+        // A skin of tolerance, so a body resting exactly on the surface still finds its cell.
+        let skin = Vec3::splat(0.01);
+        let (lo, hi) = (lo - skin, hi + skin);
+
+        // Vertically out of reach: terrain is a surface, so a shape above the highest sample or
+        // below the lowest cannot touch it, and answering that with a comparison beats walking
+        // the cells to find nothing.
+        if lo.y > hf.local_aabb.max.y || hi.y < hf.local_aabb.min.y {
+            return Vec::new();
+        }
+
+        let (col0, col1, row0, row1) = hf.cell_range(lo, hi);
+        if col0 >= col1 || row0 >= row1 {
+            return Vec::new();
+        }
+
+        let mut out: Vec<ContactPoint> = Vec::new();
+
+        // One hull wrapper, refilled per triangle — hoisted for the reason the mesh path spells
+        // out: building it inside the loop costs three allocations per candidate triangle.
+        let mut face = ColliderShape::ConvexHull(crate::components::ConvexHullShape {
+            vertices: std::sync::Arc::new(Vec::with_capacity(3)),
+            faces: std::sync::Arc::new(Vec::new()),
+        });
+
+        for row in row0..row1 {
+            for col in col0..col1 {
+                for tri in hf.cell_triangles(row, col) {
+                    let ColliderShape::ConvexHull(hull) = &mut face else {
+                        unreachable!("`face` is constructed as a ConvexHull above")
+                    };
+                    let verts = std::sync::Arc::make_mut(&mut hull.vertices);
+                    verts.clear();
+                    verts.extend_from_slice(&tri);
+                    if let Some(c) = Gjk::get_contact(shape, pos, rot, &face, hf_pos, hf_rot) {
+                        out.push(c);
+                    }
+                }
+            }
+        }
+
+        out.sort_by(|a, b| b.penetration.total_cmp(&a.penetration));
+        out.truncate(4);
+        out
+    }
+
     /// Return the contact points between two shapes, empty when they do not
     /// overlap.
     ///
@@ -565,6 +653,28 @@ impl NarrowPhase {
             }
             (ColliderShape::TriMesh(tm), _) => {
                 let mut cs = Self::shape_trimesh(shape_b, pos_b, rot_b, tm, pos_a, rot_a);
+                for c in &mut cs {
+                    c.normal = -c.normal;
+                }
+                cs
+            }
+
+            // Anything – Heightfield, and its mirror. Same placement rules as the TriMesh pair
+            // above and for the same two reasons: below the Plane arms so a `(Heightfield, Plane)`
+            // pair still reaches `shape_plane` rather than handing a plane to GJK, and above the
+            // GJK fallback because terrain is concave — the fallback would collide against the
+            // convex hull of the landscape, i.e. a lid over every valley.
+            //
+            // Two heightfields never generate contacts: both are static terrain, so the pair is
+            // work with no possible outcome. The arm below reaches `shape_heightfield` with a
+            // heightfield as the *query* shape, whose support function refuses — so the case is
+            // cut here instead.
+            (ColliderShape::Heightfield(_), ColliderShape::Heightfield(_)) => Vec::new(),
+            (_, ColliderShape::Heightfield(hf)) => {
+                Self::shape_heightfield(shape_a, pos_a, rot_a, hf, pos_b, rot_b)
+            }
+            (ColliderShape::Heightfield(hf), _) => {
+                let mut cs = Self::shape_heightfield(shape_b, pos_b, rot_b, hf, pos_a, rot_a);
                 for c in &mut cs {
                     c.normal = -c.normal;
                 }

@@ -16,7 +16,8 @@
 //!
 //! - **Components**: ECS-friendly building blocks such as [`Collider`],
 //!   [`Transform`], [`PhysicsMaterial`] and the collider shape variants
-//!   ([`SphereShape`], [`BoxShape`], [`CapsuleShape`], [`CylinderShape`], [`PlaneShape`],
+//!   ([`SphereShape`], [`BoxShape`], [`CapsuleShape`], [`CylinderShape`], [`HeightfieldShape`],
+//!   [`PlaneShape`],
 //!   [`ConvexHullShape`], [`TriMeshShape`]).
 //! - **Broadphase**: a [`SpatialHash`] and a [`bvh`] for quickly pruning
 //!   pairs that cannot possibly collide.
@@ -61,7 +62,8 @@ pub use collision::{
 };
 pub use components::{
     Collider, ColliderShape, CollisionLayer, CombineMode, ConvexHullShape, PhysicsMaterial,
-    PlaneShape, SphereShape, Transform, TriMeshShape, BoxShape, CapsuleShape, CylinderShape
+    PlaneShape, SphereShape, Transform, TriMeshShape, BoxShape, CapsuleShape, CylinderShape,
+    HeightfieldShape
 };
 pub use error::GizmoError;
 pub use gjk::Gjk;

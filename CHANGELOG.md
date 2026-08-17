@@ -35,9 +35,23 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `gizmo-studio`'s cylinder primitive now spawns one. It used to spawn `Collider::convex_hull` of
   the mesh's 24 ring points — a prism standing in for a circle, with an AABB-derived inertia.
 
-  Not covered: `Heightfield` (concave, so it needs per-cell dispatch like `TriMesh` — it is what
-  forces open-world terrain through a triangle mesh today) and `Cone`. Both were listed beside
-  the cylinder in the 2026-08 audit.
+- **`ColliderShape::Heightfield`** — terrain. `Collider::heightfield(heights, rows, cols, scale)`
+  takes a row-major lattice of height samples centred on the collider's origin, with `scale` as
+  (cell size in X, height multiplier, cell size in Z). Each cell is two triangles, dispatched
+  per cell by the narrowphase and walked cell by cell (a 2-D DDA) by the raycast, so cost follows
+  what a body or a ray actually overlaps rather than the size of the terrain.
+
+  It is genuinely concave, which is the point: a body dropped into a valley rests on the valley
+  floor. Any convex treatment — the shape's support function, a hull of its samples, its AABB —
+  puts a lid across the dip instead, which is the "the car floats over the ditch" bug. The
+  support function therefore refuses a heightfield the way it refuses a plane.
+
+  Malformed input is inert rather than fatal: a sample count that disagrees with `rows * cols`,
+  or a lattice too small for one cell, logs a warning and yields a field that collides with
+  nothing. The cached bounds are `serde(skip)` and measured again on load, like the triangle
+  mesh's BVH.
+
+  Not covered: `Cone`, the third shape the 2026-08 audit listed.
 
 - **Gamepads.** `Input` now carries connected controllers alongside the keyboard and mouse:
   `input.gamepad()` for the pad in use, `input.gamepads()` for local multiplayer, with named

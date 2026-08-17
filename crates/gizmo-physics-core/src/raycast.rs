@@ -276,6 +276,157 @@ impl Raycast {
         }
     }
 
+    /// Möller–Trumbore against one triangle, in whatever frame the caller is working in.
+    ///
+    /// Returns `(distance, unit normal facing the ray)` for a hit strictly in front of the
+    /// origin. The normal is the triangle's own geometric normal, flipped if the ray came at its
+    /// back face — the shapes here are closed surfaces whose winding is not guaranteed, so a
+    /// caller that needs a *side* has to know it some other way.
+    ///
+    /// One function rather than the four inline copies this file grew (the BVH walk, the naive
+    /// mesh scan, the convex hull, and now the heightfield): they were the same fifteen lines
+    /// down to the `1e-6` parallel-ray epsilon, and a fix to one of them would have been a fix to
+    /// one of them.
+    fn ray_triangle(origin: Vec3, dir: Vec3, v0: Vec3, v1: Vec3, v2: Vec3) -> Option<(f32, Vec3)> {
+        let e1 = v1 - v0;
+        let e2 = v2 - v0;
+        let h = dir.cross(e2);
+        let a = e1.dot(h);
+        if a.abs() < 1e-6 {
+            return None;
+        }
+        let f = 1.0 / a;
+        let s = origin - v0;
+        let u = f * s.dot(h);
+        if !(0.0..=1.0).contains(&u) {
+            return None;
+        }
+        let q = s.cross(e1);
+        let v = f * dir.dot(q);
+        if v < 0.0 || u + v > 1.0 {
+            return None;
+        }
+        let t = f * e2.dot(q);
+        if t <= 0.0 {
+            return None;
+        }
+        let mut normal = e1.cross(e2).try_normalize().unwrap_or(Vec3::Y);
+        if normal.dot(dir) > 0.0 {
+            normal = -normal;
+        }
+        Some((t, normal))
+    }
+
+    /// Ray against a terrain heightfield, walking the lattice cell by cell.
+    ///
+    /// A grid needs no tree: the ray is clipped to the field's box and then stepped through the
+    /// cells it actually crosses (a 2-D DDA in XZ), testing that cell's two triangles as it goes.
+    /// Cost is proportional to the cells the ray passes over, not to the size of the terrain —
+    /// which is the whole reason to have this shape rather than a triangle mesh of the same
+    /// surface.
+    ///
+    /// It stops as soon as the nearest hit found so far is closer than the next cell boundary,
+    /// so a ray pointing at the ground under a character tests one or two cells. The step loop
+    /// also carries a hard iteration bound: a direction whose components are denormal enough to
+    /// make the boundary arithmetic stall would otherwise spin, and a raycast that never returns
+    /// is worse than one that misses.
+    pub fn ray_heightfield(
+        ray: &Ray,
+        center: Vec3,
+        rotation: gizmo_math::Quat,
+        hf: &crate::components::HeightfieldShape,
+    ) -> Option<(f32, Vec3)> {
+        let (cells_x, cells_z) = hf.cell_counts();
+        if cells_x == 0 || cells_z == 0 || hf.scale.x <= 0.0 || hf.scale.z <= 0.0 {
+            return None;
+        }
+
+        let inv = rotation.inverse();
+        let o = inv * (ray.origin - center);
+        let d = inv * ray.direction;
+
+        // Clip to the field's own box, for both ends: the entry parameter is where the walk
+        // starts and the exit is what bounds it.
+        let (lo, hi) = (hf.local_aabb.min, hf.local_aabb.max);
+        let mut t_enter = 0.0_f32;
+        let mut t_exit = f32::INFINITY;
+        for axis in 0..3 {
+            let (oa, da, loa, hia) = match axis {
+                0 => (o.x, d.x, lo.x, hi.x),
+                1 => (o.y, d.y, lo.y, hi.y),
+                _ => (o.z, d.z, lo.z, hi.z),
+            };
+            if da.abs() < 1e-9 {
+                if oa < loa || oa > hia {
+                    return None;
+                }
+                continue;
+            }
+            let (mut t0, mut t1) = ((loa - oa) / da, (hia - oa) / da);
+            if t0 > t1 {
+                std::mem::swap(&mut t0, &mut t1);
+            }
+            t_enter = t_enter.max(t0);
+            t_exit = t_exit.min(t1);
+            if t_enter > t_exit {
+                return None;
+            }
+        }
+
+        let half_x = cells_x as f32 * 0.5 * hf.scale.x;
+        let half_z = cells_z as f32 * 0.5 * hf.scale.z;
+        let entry = o + d * t_enter;
+        let mut col = (((entry.x + half_x) / hf.scale.x).floor() as i64).clamp(0, cells_x as i64 - 1);
+        let mut row = (((entry.z + half_z) / hf.scale.z).floor() as i64).clamp(0, cells_z as i64 - 1);
+
+        let step_c = if d.x > 0.0 { 1 } else if d.x < 0.0 { -1 } else { 0 };
+        let step_r = if d.z > 0.0 { 1 } else if d.z < 0.0 { -1 } else { 0 };
+        let boundary = |i: i64, step: i64, half: f32, size: f32| {
+            let edge = if step > 0 { (i + 1) as f32 } else { i as f32 };
+            edge * size - half
+        };
+        let mut t_next_x = if step_c != 0 {
+            (boundary(col, step_c, half_x, hf.scale.x) - o.x) / d.x
+        } else {
+            f32::INFINITY
+        };
+        let mut t_next_z = if step_r != 0 {
+            (boundary(row, step_r, half_z, hf.scale.z) - o.z) / d.z
+        } else {
+            f32::INFINITY
+        };
+        let delta_x = if step_c != 0 { (hf.scale.x / d.x).abs() } else { f32::INFINITY };
+        let delta_z = if step_r != 0 { (hf.scale.z / d.z).abs() } else { f32::INFINITY };
+
+        let mut best: Option<(f32, Vec3)> = None;
+        let max_steps = (cells_x as usize + cells_z as usize) * 2 + 8;
+        for _ in 0..max_steps {
+            for tri in hf.cell_triangles(row as u32, col as u32) {
+                if let Some((t, n)) = Self::ray_triangle(o, d, tri[0], tri[1], tri[2]) {
+                    if t <= t_exit + 1e-4 && best.is_none_or(|(bt, _)| t < bt) {
+                        best = Some((t, n));
+                    }
+                }
+            }
+            let t_boundary = t_next_x.min(t_next_z);
+            if best.is_some_and(|(bt, _)| bt <= t_boundary) || t_boundary > t_exit {
+                break;
+            }
+            if t_next_x < t_next_z {
+                col += step_c;
+                t_next_x += delta_x;
+            } else {
+                row += step_r;
+                t_next_z += delta_z;
+            }
+            if col < 0 || col >= cells_x as i64 || row < 0 || row >= cells_z as i64 {
+                break;
+            }
+        }
+
+        best.map(|(t, n)| (t, rotation * n))
+    }
+
     /// Ray against a solid cylinder about local +Y, centred on `center`.
     ///
     /// Three surfaces, tested together and resolved by nearest hit: the side wall (a quadratic
@@ -495,6 +646,9 @@ impl Raycast {
                     None
                 }
             }
+            ColliderShape::Heightfield(hf) => {
+                Self::ray_heightfield(ray, transform.position, transform.rotation, hf)
+            }
             ColliderShape::TriMesh(tm) => {
                 let mut best_t = f32::INFINITY;
                 let mut best_normal = Vec3::ZERO;
@@ -523,31 +677,16 @@ impl Raycast {
                                 let v1 = tm.vertices[tm.indices[i + 1] as usize];
                                 let v2 = tm.vertices[tm.indices[i + 2] as usize];
 
-                                let e1 = v1 - v0;
-                                let e2 = v2 - v0;
-                                let h = local_dir.cross(e2);
-                                let a = e1.dot(h);
-                                if a.abs() < 1e-6 {
-                                    continue;
-                                }
-                                let f = 1.0 / a;
-                                let s = local_origin - v0;
-                                let u = f * s.dot(h);
-                                if !(0.0..=1.0).contains(&u) {
-                                    continue;
-                                }
-                                let q = s.cross(e1);
-                                let v = f * local_dir.dot(q);
-                                if v < 0.0 || u + v > 1.0 {
-                                    continue;
-                                }
-                                let t = f * e2.dot(q);
-                                if t > 0.0 && t < best_t {
-                                    best_t = t;
-                                    best_normal = e1.cross(e2).try_normalize().unwrap_or(Vec3::Y);
-                                    if best_normal.dot(local_dir) > 0.0 {
-                                        best_normal = -best_normal;
+                                if let Some((t, n)) = Self::ray_triangle(local_origin, local_dir, v0, v1, v2) {
+
+                                    if t < best_t {
+
+                                        best_t = t;
+
+                                        best_normal = n;
+
                                     }
+
                                 }
                             }
                         } else {
@@ -565,30 +704,10 @@ impl Raycast {
                         let v0 = tm.vertices[chunk[0] as usize];
                         let v1 = tm.vertices[chunk[1] as usize];
                         let v2 = tm.vertices[chunk[2] as usize];
-                        let e1 = v1 - v0;
-                        let e2 = v2 - v0;
-                        let h = local_dir.cross(e2);
-                        let a = e1.dot(h);
-                        if a.abs() < 1e-6 {
-                            continue;
-                        }
-                        let f = 1.0 / a;
-                        let s = local_origin - v0;
-                        let u = f * s.dot(h);
-                        if !(0.0..=1.0).contains(&u) {
-                            continue;
-                        }
-                        let q = s.cross(e1);
-                        let v = f * local_dir.dot(q);
-                        if v < 0.0 || u + v > 1.0 {
-                            continue;
-                        }
-                        let t = f * e2.dot(q);
-                        if t > 0.0 && t < best_t {
-                            best_t = t;
-                            best_normal = e1.cross(e2).try_normalize().unwrap_or(Vec3::Y);
-                            if best_normal.dot(local_dir) > 0.0 {
-                                best_normal = -best_normal;
+                        if let Some((t, n)) = Self::ray_triangle(local_origin, local_dir, v0, v1, v2) {
+                            if t < best_t {
+                                best_t = t;
+                                best_normal = n;
                             }
                         }
                     }
@@ -626,30 +745,10 @@ impl Raycast {
                     let v0 = ch.vertices[tri[0] as usize];
                     let v1 = ch.vertices[tri[1] as usize];
                     let v2 = ch.vertices[tri[2] as usize];
-                    let e1 = v1 - v0;
-                    let e2 = v2 - v0;
-                    let h = local_dir.cross(e2);
-                    let a = e1.dot(h);
-                    if a.abs() < 1e-6 {
-                        continue;
-                    }
-                    let f = 1.0 / a;
-                    let s = local_origin - v0;
-                    let u = f * s.dot(h);
-                    if !(0.0..=1.0).contains(&u) {
-                        continue;
-                    }
-                    let q = s.cross(e1);
-                    let v = f * local_dir.dot(q);
-                    if v < 0.0 || u + v > 1.0 {
-                        continue;
-                    }
-                    let t = f * e2.dot(q);
-                    if t > 0.0 && t < best_t {
-                        best_t = t;
-                        best_normal = e1.cross(e2).try_normalize().unwrap_or(Vec3::Y);
-                        if best_normal.dot(local_dir) > 0.0 {
-                            best_normal = -best_normal;
+                    if let Some((t, n)) = Self::ray_triangle(local_origin, local_dir, v0, v1, v2) {
+                        if t < best_t {
+                            best_t = t;
+                            best_normal = n;
                         }
                     }
                 }
@@ -695,8 +794,68 @@ impl Raycast {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::CylinderShape;
+    use crate::components::{Collider, CylinderShape};
     use gizmo_math::Quat;
+
+    /// A ray down onto a slope lands on the surface, at the height the samples describe — and
+    /// the walk finds the right cell rather than the first one.
+    #[test]
+    fn a_ray_lands_on_the_heightfield_where_the_samples_put_it() {
+        // 3×3 lattice, 2 m cells, a ramp rising along +X: heights 0, 1, 2 per column.
+        let heights = vec![0.0, 1.0, 2.0, 0.0, 1.0, 2.0, 0.0, 1.0, 2.0];
+        let shape = ColliderShape::Heightfield(
+            match Collider::heightfield(heights, 3, 3, Vec3::new(2.0, 1.0, 2.0)).shape {
+                ColliderShape::Heightfield(hf) => hf,
+                _ => unreachable!(),
+            },
+        );
+        let at_origin = Transform::new(Vec3::ZERO);
+
+        // Straight down over the middle sample: the surface there is 1 m up.
+        let mid = Ray::new(Vec3::new(0.0, 10.0, 0.0), Vec3::new(0.0, -1.0, 0.0));
+        let (t, n) = Raycast::ray_shape(&mid, &shape, &at_origin).expect("hits the ramp");
+        assert!((t - 9.0).abs() < 1e-3, "10 m up, surface at 1 m: {t}");
+        assert!(n.y > 0.0, "a surface normal points up, got {n:?}");
+
+        // Over the high edge: 2 m up, so 8 m of travel. Same field, a different cell — this is
+        // what a walk that always tested the entry cell would get wrong.
+        let high = Ray::new(Vec3::new(1.9, 10.0, 0.0), Vec3::new(0.0, -1.0, 0.0));
+        let (t, _) = Raycast::ray_shape(&high, &shape, &at_origin).expect("hits the high end");
+        assert!((t - 8.05).abs() < 0.1, "surface near 1.95 m: {t}");
+
+        // Beside the field: a miss, not a clamp onto the nearest edge cell.
+        let outside = Ray::new(Vec3::new(50.0, 10.0, 0.0), Vec3::new(0.0, -1.0, 0.0));
+        assert!(Raycast::ray_shape(&outside, &shape, &at_origin).is_none());
+    }
+
+    /// A long shallow ray crosses many cells and must still terminate and hit. The walk is a DDA
+    /// with a step bound; a ray that skims the surface is what exercises both.
+    #[test]
+    fn a_ray_across_the_field_terminates_and_finds_the_first_surface() {
+        // 9×9 flat field at height 1, 1 m cells → 8 m across.
+        let shape = ColliderShape::Heightfield(
+            match Collider::heightfield(vec![1.0; 81], 9, 9, Vec3::new(1.0, 1.0, 1.0)).shape {
+                ColliderShape::Heightfield(hf) => hf,
+                _ => unreachable!(),
+            },
+        );
+        let at_origin = Transform::new(Vec3::ZERO);
+
+        // From one corner, descending slowly across the whole field: it must hit the plateau.
+        let ray = Ray::new(
+            Vec3::new(-3.9, 1.5, -3.9),
+            Vec3::new(1.0, -0.1, 1.0).normalize(),
+        );
+        let hit = Raycast::ray_shape(&ray, &shape, &at_origin);
+        let (t, n) = hit.expect("a ray descending onto a plateau hits it");
+        let p = ray.origin + ray.direction * t;
+        assert!((p.y - 1.0).abs() < 1e-3, "lands on the plateau, at {p:?}");
+        assert!(n.y > 0.9, "flat ground's normal is up, got {n:?}");
+
+        // Parallel above it: crosses every cell and finds nothing, without spinning.
+        let over = Ray::new(Vec3::new(-3.9, 2.0, 0.0), Vec3::new(1.0, 0.0, 0.0));
+        assert!(Raycast::ray_shape(&over, &shape, &at_origin).is_none());
+    }
 
     /// The three surfaces of a cylinder, one ray each, plus the miss that a naive
     /// infinite-cylinder test would report as a hit.

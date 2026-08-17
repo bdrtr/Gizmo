@@ -825,7 +825,10 @@ impl RigidBody {
                     self.calculate_box_inertia(1.0, 1.0, 1.0);
                 }
             }
-            ColliderShape::TriMesh(_) => {
+            ColliderShape::TriMesh(_) | ColliderShape::Heightfield(_) => {
+                // Both are static surfaces with no solid interior, so there is no tensor to
+                // derive. A unit box is the placeholder; a dynamic body wearing terrain is a
+                // mistake this cannot repair.
                 self.calculate_box_inertia(1.0, 1.0, 1.0);
             }
             ColliderShape::Compound(shapes) => {
