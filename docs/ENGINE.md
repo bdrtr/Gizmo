@@ -180,17 +180,34 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
   lines each". Writing those three lines nineteen times is what turned out to be wrong, because
   the nineteen copies did not already agree with each other.
 
-  **Measured before touching anything:** 17 demos read movement keys. Thirteen accumulate a
-  direction and normalise it. **Four — `showcase`, `cpu_physics`, `ocean_scene` and
-  `advanced_physics` — add a full-speed step per key from four independent `if`s**, so holding W
-  and D moved them at √2 ≈ 1.41 × the speed of either key alone. That is not an exotic defect; it
-  is what writing four `if`s produces, which is exactly why it should not be written nineteen
-  times.
+  **Measured before touching anything — and then re-measured by the scanner, which found more.**
+  A first `grep` said 17 demos; the source ratchet described below, which knows the several ways
+  this repository spells a key code and looks in subdirectories, put the real figure at **18
+  places computing a movement direction from the keyboard**: 16 demos, `SimpleApp`'s built-in fly
+  camera and the studio's editor camera. Fourteen accumulated a direction and normalised it.
+  **Four — `showcase`, `cpu_physics`, `ocean_scene` and `advanced_physics` — add a full-speed step
+  per key from four independent `if`s**, so holding W and D moved them at √2 ≈ 1.41 × the speed of
+  either key alone. **Seventeen of the eighteen had no stick at all**, and two of those seventeen
+  are engine code rather than demos: every game built on `SimpleApp` had a fly camera a pad could
+  not drive, which is the part of this that was never a demo problem.
 
-  `gizmo_core::input::blend_move_axis` and [`Input::move_axis`] are the two rules in one place,
-  and 16 demos now read movement through them. `car_demo` deliberately does not: a vehicle's
-  controls are not a movement vector — throttle and steering are independent axes, and folding
-  them into a unit disc would take away throttle for steering.
+  `gizmo_core::input::blend_move_axis` and [`Input::move_axis`] are the two rules in one place, and
+  all 18 now read movement through them. `car_demo` deliberately does not: a vehicle's controls are
+  not a movement vector — throttle and steering are independent axes, and folding them into a unit
+  disc would take away throttle for steering.
+
+  **Two API levels, and the studio is why.** `move_axis` reads keys and stick together, which is
+  what a demo wants. The studio cannot use it: its fly keys are gated behind the right mouse
+  button, because W/E/Q collide head-on with the editor's Translate/Rotate/Select shortcuts — but a
+  **pad has no tool shortcuts**, so requiring that gesture of a stick would be a restriction with
+  nothing behind it. It therefore calls `blend_move_axis` with the key half zeroed when the gate is
+  closed, and the stick flies the viewport ungated (still not during Play — there the pad is the
+  game's).
+
+  **`SimpleSceneState::fly_step` exists because the engine's own camera was untestable.** It lived
+  inside a `set_update` closure, which needs a window, a renderer and an event loop to reach, so
+  nothing had ever asserted on the mover every `SimpleApp` user gets. It is a method now, and six
+  tests cover it — including the diagonal it did *not* have, pinned so it cannot acquire it.
 
   **The two rules do different jobs, and the obvious explanation of the second one is wrong.**
   The radial clamp on the sum is what bounds the speed, diagonal keys included. Normalising the
@@ -211,6 +228,18 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
 
   Verified on a device, not only in unit tests: the virtual-pad test now also asserts that a stick
   pushed right and up arrives at `move_axis` as `(1.00, 0.00)` and `(0.00, 1.00)`.
+
+  **And there is now something watching, because the divergence was never a hard problem — it was
+  an unwatched one.** `crates/gizmo/tests/movement_input.rs` scans the demo directory and both
+  engine cameras for files that read a movement key without going through the shared blend. It is a
+  ratchet, and its exception list is the other thing it produced: eight files read movement-*named*
+  keys for something else entirely — throttle (`car_demo`, `hill_climb`), turret aim (`yikim`,
+  `yikim_ustasi`), a dial (`cloth_demo`, `wind_tunnel`), editor tool modes, and a fighting-game
+  `ActionMap` table where directions are digital by design. Each entry says which, so the list read
+  end to end answers "what does W mean in this repository". The detector is a **proxy** — it
+  matches "reads a movement key", not "rolls its own blend" — and says so in its own docs; the
+  choice was deliberate, because a scan clever enough to tell a good `KeyCode::KeyW` from a bad one
+  by its neighbours is a scan that fails silently.
 
   **Not covered:** look/aim. `platformer` scales the right stick by `dt` because a stick is a
   standing tilt where a mouse delta is per-frame pixels — mixing those up is the same class of

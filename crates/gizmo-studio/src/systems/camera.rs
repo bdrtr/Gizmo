@@ -81,26 +81,49 @@ pub fn handle_camera(
             // was no way to avoid it: movement asked for no modifier at all. Every editor in this
             // class solves it the same way — the right button is what puts the viewport in camera
             // mode, and the letter keys mean tools outside it.
-            if !is_playing && fly_active {
-                // Kamera nereye bakıyorsa ORAYA ileri git
-                if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyW as u32) {
-                    move_dir += forward;
-                }
-                if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyS as u32) {
-                    move_dir -= forward;
-                }
-                if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyA as u32) {
-                    move_dir -= right;
-                }
-                if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyD as u32) {
-                    move_dir += right;
-                }
-                // Dünyaya göre yukarı/aşağı tırmanış
-                if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyE as u32) {
-                    move_dir += up;
-                }
-                if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyQ as u32) {
-                    move_dir -= up;
+            //
+            // ÇUBUK O KAPININ DIŞINDA. Kapı, HARFLERİN araç kısayollarıyla çakışması yüzünden
+            // var; kolun araç kısayolu yok, yani aynı jesti ondan istemek gerekçesi olmayan bir
+            // kısıtlama olurdu. `!is_playing` ise ikisi için de geçerli: Play sırasında kol
+            // oyunun.
+            //
+            // Bu yüzden burada `Input::move_axis` değil `blend_move_axis` çağrılıyor — tuş
+            // yarısını koşullu susturabilmek için. Harmanın kuralları (tuş yönü çubukla
+            // karşılaştırılabilir olsun diye önce birim boya gelir, toplam birim diske kırpılır)
+            // yine tek yerde.
+            if !is_playing {
+                let keys = if fly_active {
+                    let axis = |neg: u32, pos: u32| {
+                        f32::from(input.is_key_pressed(pos)) - f32::from(input.is_key_pressed(neg))
+                    };
+                    (
+                        axis(
+                            gizmo::winit::keyboard::KeyCode::KeyA as u32,
+                            gizmo::winit::keyboard::KeyCode::KeyD as u32,
+                        ),
+                        axis(
+                            gizmo::winit::keyboard::KeyCode::KeyS as u32,
+                            gizmo::winit::keyboard::KeyCode::KeyW as u32,
+                        ),
+                    )
+                } else {
+                    (0.0, 0.0)
+                };
+                let stick = input
+                    .gamepad()
+                    .map(gizmo::core::input::Gamepad::left_stick)
+                    .unwrap_or((0.0, 0.0));
+                let (mx, my) = gizmo::core::input::blend_move_axis(keys, stick);
+                move_dir += right * mx + forward * my;
+
+                // Dünyaya göre yukarı/aşağı tırmanış — çubukta karşılığı yok, harflerde kalıyor.
+                if fly_active {
+                    if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyE as u32) {
+                        move_dir += up;
+                    }
+                    if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyQ as u32) {
+                        move_dir -= up;
+                    }
                 }
             }
 
@@ -145,7 +168,14 @@ pub fn handle_camera(
                     }
                 }
             } else {
-                t.position += move_dir.normalize_or_zero() * (speed * dt);
+                // Normalize değil KIRPMA: tuşlarda ikisi aynı (boş olmayan her tuş bileşimi
+                // zaten en az birim boyda), ama normalize yarım yatırılmış çubuğu tam hıza
+                // çıkarıp çubuğun kattığı tek şeyi — miktarı — yok ederdi.
+                let len = move_dir.length();
+                if len > 1.0 {
+                    move_dir /= len;
+                }
+                t.position += move_dir * (speed * dt);
             }
 
             // 3. Orta Tık Pan (Kaydırma)

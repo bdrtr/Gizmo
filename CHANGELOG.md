@@ -23,12 +23,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   multiplies it by whatever right/forward vectors it already has. `MoveKeys::WASD` and
   `MoveKeys::ARROWS` are presets; `move_axis_with` takes any four key codes.
 
-  It exists because nineteen demos had written their own and they did not agree: four of them
+  It exists because **18 places** had written their own and they did not agree: four of them
   (`showcase`, `cpu_physics`, `ocean_scene`, `advanced_physics`) added a full-speed step per key
-  from four independent `if`s, so **holding W and D moved 41 % faster than either key alone**.
-  16 demos now read movement through the shared function and are playable with a stick;
-  `car_demo` deliberately still does not, because a vehicle's throttle and steering are
-  independent axes rather than a movement vector.
+  from four independent `if`s, so **holding W and D moved 41 % faster than either key alone**, and
+  seventeen of the eighteen had no gamepad support at all. Two of those seventeen are engine code:
+  **`SimpleApp`'s built-in fly camera and the studio's editor camera can now be flown with a
+  stick**, so every game built on `SimpleApp` gets that without doing anything.
+
+  `car_demo` deliberately still reads its keys directly, because a vehicle's throttle and steering
+  are independent axes rather than a movement vector.
+
+  `SimpleSceneState::fly_step` is new and public: the fly camera's per-frame step, lifted out of an
+  `set_update` closure that could not be reached without a window. It is why the engine's own
+  camera has tests at all.
 
   Keyboard behaviour is unchanged for the demos that were already correct — checked against their
   previous expression over all 81 key combinations, not asserted.
@@ -145,6 +152,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A source ratchet keeps movement going through one function.**
+  `crates/gizmo/tests/movement_input.rs` fails the build if a demo or either engine camera reads a
+  movement key without the shared blend. Its exception list documents the eight files that read
+  movement-named keys for something else: throttle, turret aim, a dial, editor tool modes, and a
+  fighting-game binding table.
 - **Demos with a vertical movement axis (Q/E, Space/Ctrl) now clamp their movement vector to
   length 1 instead of normalising it.** Identical for keys — any non-empty key combination is
   already at least unit length — and a normalise would push a half-tilted stick back up to full

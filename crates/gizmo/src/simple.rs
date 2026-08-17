@@ -1,4 +1,5 @@
 use crate::app::App;
+use crate::core::input::Input;
 use crate::core::world::World;
 use crate::core::Bundle;
 use crate::bundles::{RigidBodyBundle, CameraBundle};
@@ -23,6 +24,56 @@ pub struct SimpleSceneState {
     pub camera_yaw: f32,
     /// Camera position in world space.
     pub camera_pos: Vec3,
+}
+
+impl SimpleSceneState {
+    /// Advances the built-in fly camera by one frame: look, then move.
+    ///
+    /// Extracted from the update closure so it can be tested at all — a closure inside
+    /// `set_update` needs a window, a renderer and an event loop to reach, which is why the
+    /// engine's own camera was the last mover in the workspace nothing had ever asserted on.
+    ///
+    /// **Looking** is the right mouse button dragging, in pixels; **moving** is
+    /// [`Input::move_axis`] (WASD *and* the left stick) horizontally, with Q/E for the vertical
+    /// axis the stick has no counterpart for. The total is clamped to unit length rather than
+    /// normalised: for keys the two are identical, and a normalise would push a half-tilted
+    /// stick back up to full speed, which is the one thing a stick expresses and a key cannot.
+    pub fn fly_step(&mut self, input: &Input, dt: f32) {
+        if input.is_mouse_button_pressed(1) {
+            let delta = input.mouse_delta();
+            self.camera_yaw -= delta.0 * 0.005;
+            self.camera_pitch -= delta.1 * 0.005;
+            self.camera_pitch = self.camera_pitch.clamp(-PI / 2.0 + 0.1, PI / 2.0 - 0.1);
+        }
+
+        let fx = self.camera_yaw.cos() * self.camera_pitch.cos();
+        let fy = self.camera_pitch.sin();
+        let fz = self.camera_yaw.sin() * self.camera_pitch.cos();
+        let forward = Vec3::new(fx, fy, fz).normalize();
+        let right = forward.cross(Vec3::new(0.0, 1.0, 0.0)).normalize();
+        let up = Vec3::new(0.0, 1.0, 0.0);
+
+        let speed = if input.is_key_pressed(crate::winit::keyboard::KeyCode::ShiftLeft as u32) {
+            self.camera_speed * 3.0
+        } else {
+            self.camera_speed
+        };
+
+        let (mx, my) = input.move_axis();
+        let mut cam_move = right * mx + forward * my;
+        if input.is_key_pressed(crate::winit::keyboard::KeyCode::KeyE as u32) {
+            cam_move += up;
+        }
+        if input.is_key_pressed(crate::winit::keyboard::KeyCode::KeyQ as u32) {
+            cam_move -= up;
+        }
+
+        let len = cam_move.length();
+        if len > 1.0 {
+            cam_move /= len;
+        }
+        self.camera_pos += cam_move * speed * dt;
+    }
 }
 
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
@@ -437,37 +488,7 @@ impl SimpleAppExt for App<SimpleSceneState> {
             state
         })
         .set_update(|world, state, dt, input| {
-            if input.is_mouse_button_pressed(1) {
-                let delta = input.mouse_delta();
-                state.camera_yaw -= delta.0 * 0.005;
-                state.camera_pitch -= delta.1 * 0.005;
-                state.camera_pitch = state.camera_pitch.clamp(-PI / 2.0 + 0.1, PI / 2.0 - 0.1);
-            }
-
-            let fx = state.camera_yaw.cos() * state.camera_pitch.cos();
-            let fy = state.camera_pitch.sin();
-            let fz = state.camera_yaw.sin() * state.camera_pitch.cos();
-            let forward = Vec3::new(fx, fy, fz).normalize();
-            let right = forward.cross(Vec3::new(0.0, 1.0, 0.0)).normalize();
-            let up = Vec3::new(0.0, 1.0, 0.0);
-
-            let speed = if input.is_key_pressed(crate::winit::keyboard::KeyCode::ShiftLeft as u32) {
-                state.camera_speed * 3.0
-            } else {
-                state.camera_speed
-            };
-
-            let mut cam_move = Vec3::ZERO;
-            if input.is_key_pressed(crate::winit::keyboard::KeyCode::KeyW as u32) { cam_move += forward; }
-            if input.is_key_pressed(crate::winit::keyboard::KeyCode::KeyS as u32) { cam_move -= forward; }
-            if input.is_key_pressed(crate::winit::keyboard::KeyCode::KeyD as u32) { cam_move += right; }
-            if input.is_key_pressed(crate::winit::keyboard::KeyCode::KeyA as u32) { cam_move -= right; }
-            if input.is_key_pressed(crate::winit::keyboard::KeyCode::KeyE as u32) { cam_move += up; }
-            if input.is_key_pressed(crate::winit::keyboard::KeyCode::KeyQ as u32) { cam_move -= up; }
-
-            if cam_move.length_squared() > 0.0 {
-                state.camera_pos += cam_move.normalize() * speed * dt;
-            }
+            state.fly_step(input, dt);
 
             if let Some(mut q) = world.query_mut::<(
                 crate::core::query::Mut<Transform>,
@@ -509,6 +530,138 @@ impl SimpleAppExt for App<SimpleSceneState> {
 
             systems::default_render_pass(world, encoder, view, renderer);
         })
+    }
+}
+
+#[cfg(test)]
+mod fly_camera_tests {
+    //! The engine's own fly camera — the one every `SimpleApp` gets, and the one nothing had
+    //! ever asserted on, because it lived inside an `set_update` closure that needs a window to
+    //! reach. [`SimpleSceneState::fly_step`] is that closure's body, and this is what it does.
+
+    use super::*;
+    use crate::core::input::{GamepadAxis, GamepadId, MoveKeys};
+
+    fn state() -> SimpleSceneState {
+        SimpleSceneState {
+            camera_speed: 10.0,
+            camera_pitch: 0.0,
+            camera_yaw: 0.0,
+            camera_pos: Vec3::ZERO,
+        }
+    }
+
+    /// The defect this camera did NOT have — pinned so it cannot acquire it. Four demos in this
+    /// repository did, and each of them was one `if` away from this shape.
+    #[test]
+    fn a_diagonal_is_not_faster_than_a_straight_push() {
+        let mut straight = state();
+        let mut input = Input::new();
+        input.on_key_pressed(MoveKeys::WASD.forward);
+        straight.fly_step(&input, 1.0);
+
+        let mut diagonal = state();
+        input.on_key_pressed(MoveKeys::WASD.right);
+        diagonal.fly_step(&input, 1.0);
+
+        let (a, b) = (straight.camera_pos.length(), diagonal.camera_pos.length());
+        assert!((a - 10.0).abs() < 1e-4, "one key should travel speed × dt, got {a}");
+        assert!(
+            (b - a).abs() < 1e-4,
+            "the diagonal travelled {b} against {a} — the 41 % bug"
+        );
+    }
+
+    /// What a pad buys: the amount, which a key cannot express. Half a tilt is a walk.
+    #[test]
+    fn the_left_stick_flies_the_camera_and_carries_its_amount() {
+        let mut input = Input::new();
+        let id = GamepadId::new(0);
+        input.on_gamepad_connected(id, "test pad");
+        input.on_gamepad_axis(id, GamepadAxis::LeftStickY, 1.0);
+
+        let mut full = state();
+        full.fly_step(&input, 1.0);
+        assert!(
+            full.camera_pos.length() > 9.0,
+            "a full stick did not fly the camera: {:?}",
+            full.camera_pos
+        );
+
+        // Past the 0.15 deadzone, well short of the rim.
+        input.on_gamepad_axis(id, GamepadAxis::LeftStickY, 0.5);
+        let mut half = state();
+        half.fly_step(&input, 1.0);
+        assert!(
+            half.camera_pos.length() < full.camera_pos.length() * 0.8,
+            "half a tilt must walk, not run: {} against {}",
+            half.camera_pos.length(),
+            full.camera_pos.length()
+        );
+        assert!(half.camera_pos.length() > 0.1, "…but it must move at all");
+    }
+
+    /// The vertical axis has no stick counterpart, so it stays on Q/E — and adding it must not
+    /// let the total exceed full speed, nor re-normalise a half-tilted stick back up to it.
+    #[test]
+    fn the_vertical_axis_neither_exceeds_nor_inflates_the_speed() {
+        let mut input = Input::new();
+        input.on_key_pressed(MoveKeys::WASD.forward);
+        input.on_key_pressed(crate::winit::keyboard::KeyCode::KeyE as u32);
+        let mut keys = state();
+        keys.fly_step(&input, 1.0);
+        assert!(
+            (keys.camera_pos.length() - 10.0).abs() < 1e-4,
+            "forward + up should still be one speed, got {}",
+            keys.camera_pos.length()
+        );
+
+        let mut input = Input::new();
+        let id = GamepadId::new(0);
+        input.on_gamepad_connected(id, "test pad");
+        input.on_gamepad_axis(id, GamepadAxis::LeftStickY, 0.5);
+        let mut stick = state();
+        stick.fly_step(&input, 1.0);
+        assert!(
+            stick.camera_pos.length() < 9.0,
+            "a half-tilted stick was normalised back up to full speed: {}",
+            stick.camera_pos.length()
+        );
+    }
+
+    #[test]
+    fn nothing_held_does_not_move_the_camera() {
+        let mut s = state();
+        s.fly_step(&Input::new(), 1.0);
+        assert_eq!(s.camera_pos, Vec3::ZERO);
+    }
+
+    #[test]
+    fn the_right_mouse_button_is_what_looks_around() {
+        let mut input = Input::new();
+        input.on_mouse_delta(100.0, 0.0);
+
+        let mut ignored = state();
+        ignored.fly_step(&input, 1.0);
+        assert_eq!(ignored.camera_yaw, 0.0, "a drag with no button must not turn the camera");
+
+        input.on_mouse_button_pressed(1);
+        let mut looked = state();
+        looked.fly_step(&input, 1.0);
+        assert!(looked.camera_yaw != 0.0, "right-drag must turn the camera");
+    }
+
+    /// Pitch is clamped just short of vertical: at exactly ±90° the forward/right basis is
+    /// degenerate and `right` comes out as a zero vector, which loses the camera's heading.
+    #[test]
+    fn pitch_cannot_reach_straight_up() {
+        let mut input = Input::new();
+        input.on_mouse_button_pressed(1);
+        input.on_mouse_delta(0.0, -10_000.0);
+        let mut s = state();
+        s.fly_step(&input, 1.0);
+        assert!(s.camera_pitch < PI / 2.0, "pitch reached {}", s.camera_pitch);
+        assert!(s.camera_pitch > PI / 2.0 - 0.2);
     }
 }
 
