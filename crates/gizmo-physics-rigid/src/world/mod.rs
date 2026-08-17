@@ -252,7 +252,7 @@ impl Default for FluidZone {
 /// one query.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct WaterSample {
-    /// Su yüzeyinin dünya-Y'si (zone üstü).
+    /// The water surface's world Y — the top of the zone.
     pub surface_y: f32,
     /// How far the point is below the surface (m, ≥0).
     pub depth: f32,

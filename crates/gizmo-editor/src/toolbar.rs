@@ -1,4 +1,4 @@
-//! Toolbar — Üst toolbar paneli (Save/Load/Play/Pause/Gizmo mode)
+//! The top toolbar panel (save/load, play/pause, gizmo mode).
 
 use crate::editor_state::{BuildTarget, EditorMode, EditorState, GizmoMode};
 use egui;
@@ -9,7 +9,7 @@ use web_time::Instant;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
 
-/// Toolbar panelini çizer
+/// Draws the toolbar panel.
 pub fn draw_toolbar(ui: &mut egui::Ui, state: &mut EditorState) {
     // The prototype's top chrome is TWO rows, and that split is most of what makes it read as an
     // engine editor rather than a strip of buttons: a 26 px menu bar (mark, menus, breadcrumb) and

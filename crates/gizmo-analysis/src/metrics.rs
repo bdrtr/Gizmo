@@ -134,7 +134,7 @@ impl MetricSeries {
         self.ring.is_empty()
     }
 
-    /// Ring üzerinden tam istatistik.
+    /// Full statistics over the ring.
     pub fn stats(&self) -> Stats {
         let n = self.ring.len();
         if n == 0 {
@@ -254,7 +254,7 @@ impl MetricStore {
         }
     }
 
-    /// Sample (ölçüm) kaydet.
+    /// Records a sample (a measurement).
     pub fn sample(&mut self, name: &str, value: f64) {
         if let Some(s) = self.entry(name, MetricKind::Sample) {
             s.set(value);
@@ -282,7 +282,7 @@ impl MetricStore {
         self.series.keys().map(|s| s.as_str())
     }
 
-    /// (isim, seri) çiftleri.
+    /// `(name, series)` pairs.
     pub fn iter(&self) -> impl Iterator<Item = (&str, &MetricSeries)> {
         self.series.iter().map(|(k, v)| (k.as_str(), v))
     }

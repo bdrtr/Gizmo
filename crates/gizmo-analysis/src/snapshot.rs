@@ -24,15 +24,16 @@ pub struct SpanSample {
 pub struct FrameSnapshot {
     /// The frame number, counting from zero.
     pub frame: u64,
-    /// Bu frame'in toplam süresi (ms) — mümkünse FrameProfiler'dan, yoksa duvar-saati.
+    /// This frame's total duration in ms — from the FrameProfiler where possible, otherwise
+    /// the wall clock.
     pub frame_ms: f64,
     /// Time elapsed since the Analyzer's epoch (ns) — for the time axis.
     pub timestamp_ns: u64,
-    /// ECS üst-düzey istatistikleri.
+    /// Top-level ECS statistics.
     pub ecs: WorldStats,
     /// The detailed archetype table (can be empty depending on the config — it is heavy).
     pub archetypes: Vec<ArchetypeSummary>,
-    /// Bu frame'de tamamlanan profiling span'leri (iç içe olabilir).
+    /// The profiling spans that closed during this frame; they may be nested.
     pub spans: Vec<SpanSample>,
     /// The free-form metric groups the collectors add: group → [(metric, value)].
     /// For example "physics" → [("bodies", 1281.0), ("solver_ms", 4.1), …].

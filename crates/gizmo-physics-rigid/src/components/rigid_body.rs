@@ -384,14 +384,14 @@ impl RigidBody {
         self
     }
 
-    /// Kütle merkezini (gövde-yerel) ayarlar. Zincirlenebilir.
+    /// Sets the centre of mass, in body-local coordinates. Chainable.
     pub fn with_center_of_mass(mut self, com: Vec3) -> Self {
         self.center_of_mass = com;
         self
     }
 
-    /// Üç dönme eksenini de kilitler — cisim devrilmez/dönmez (karakter kapsülü, dik
-    /// duran nesneler). Zincirlenebilir.
+    /// Locks all three rotation axes, so the body neither tips nor spins — a character capsule,
+    /// or anything meant to stay upright. Chainable.
     pub fn lock_rotation(mut self) -> Self {
         self.lock_rotation_x = true;
         self.lock_rotation_y = true;

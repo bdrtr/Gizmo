@@ -44,7 +44,7 @@ pub enum BuildTarget {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[non_exhaustive]
 pub enum EditorMode {
-    /// Düzenleme modu — fizik durur, entity'ler serbestçe manipüle edilir
+    /// Edit mode — physics is stopped and entities can be manipulated freely.
     Edit,
     /// Game mode — physics and scripts run
     Play,

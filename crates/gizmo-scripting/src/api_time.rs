@@ -35,7 +35,7 @@ pub fn register_time_api(lua: &Lua) -> Result<(), LuaError> {
     })
 }
 
-/// Her frame zaman verisini günceller
+/// Refreshes the timing data every frame.
 pub fn update_time_api(lua: &Lua, dt: f32, elapsed: f32, fps: f32) -> Result<(), LuaError> {
     // The real table, not the global: the global is a read-only proxy so a script cannot
     // rewrite the API (see `api_table`), and the engine's per-frame writes go behind it.

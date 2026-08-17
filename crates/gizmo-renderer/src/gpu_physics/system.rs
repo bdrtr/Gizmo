@@ -474,7 +474,7 @@ impl GpuPhysicsSystem {
         }
     }
 
-    /// Joint ekle — indeksini döndürür.
+    /// Adds a joint and returns its index.
     pub fn add_joint(&mut self, queue: &wgpu::Queue, joint: GpuJoint) -> Option<u32> {
         if self.joint_count >= self.max_joints {
             return None;
@@ -498,7 +498,7 @@ impl GpuPhysicsSystem {
         }
     }
 
-    /// Simülasyon parametrelerini güncelle (dt, num_joints, vb.)
+    /// Updates the simulation parameters (dt, num_joints and the rest).
     pub fn update_params(&self, queue: &wgpu::Queue, dt: f32, gravity: [f32; 3]) {
         let params = PhysicsSimParams {
             dt,
@@ -604,12 +604,12 @@ impl GpuPhysicsSystem {
         self.debug_enabled = true;
     }
 
-    /// Debug'u aç/kapat.
+    /// Turns the debug visualisation on or off.
     pub fn toggle_debug(&mut self) {
         self.debug_enabled = !self.debug_enabled;
     }
 
-    /// Debug flag'leri günceller (show_wireframes)
+    /// Updates the debug flags (show_wireframes).
     pub fn set_debug_flags(&self, queue: &wgpu::Queue, show_wireframes: u32) {
         let dp = DebugParams {
             num_boxes: self.max_boxes,

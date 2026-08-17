@@ -98,7 +98,7 @@ impl ClientPredictor {
 mod tests {
     use super::*;
 
-    /// Basit deterministik fizik: pozisyonu girdiye göre ilerletir.
+    /// Simple deterministic physics: advances the position according to the input.
     fn step(state: &PredictedState, input: &PlayerInput) -> PredictedState {
         PredictedState {
             position: [

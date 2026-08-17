@@ -25,7 +25,7 @@ use std::time::Instant;
 pub struct SHCoeffs {
     /// L0 band (ambient/constant term) — RGB
     pub l0: Vec3,
-    /// L1 band (directional gradients) — 3 yön × RGB
+    /// The L1 band (directional gradients) — 3 directions × RGB
     pub l1: [Vec3; 3],
     /// The L2 band (quadratic detail) — 5 coefficients × RGB
     pub l2: [Vec3; 5],
@@ -127,7 +127,7 @@ impl SHCoeffs {
         }
     }
 
-    /// GPU'ya gönderilebilecek flat float dizisi (27 float)
+    /// A flat float array ready to be uploaded to the GPU (27 floats).
     pub fn to_gpu_data(&self) -> [f32; 28] {
         let mut data = [0.0f32; 28]; // 28 = 27 + 1 padding (16-byte aligned)
         data[0] = self.l0.x;

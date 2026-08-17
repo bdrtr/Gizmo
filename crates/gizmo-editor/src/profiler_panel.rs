@@ -24,7 +24,7 @@ const COLOR_WARN: egui::Color32 = palette::ACCENT_LIGHT;
 /// Over 30 fps budget.
 const COLOR_BAD: egui::Color32 = palette::ACCENT;
 
-/// Frame süresine göre renk döndürür
+/// The colour for a frame time.
 fn frame_color(ms: f64) -> egui::Color32 {
     if ms < 16.67 {
         COLOR_GOOD
@@ -56,7 +56,7 @@ fn scope_color(depth: u32, idx: usize) -> egui::Color32 {
     PALETTE[i]
 }
 
-/// Profiler panelini çizer
+/// Draws the profiler panel.
 pub fn ui_profiler(ui: &mut egui::Ui, world: &World, _state: &mut EditorState) {
     let profiler = match world.get_resource::<gizmo_core::FrameProfiler>() {
         Some(p) => p,
@@ -334,7 +334,7 @@ mod tests {
         assert_eq!(scope_color(0, 0), scope_color(0, 16));
     }
 
-    /// depth, idx'e 3'lük ofset ekler: scope_color(d, i) == scope_color(0, d*3 + i).
+    /// Depth adds an offset of 3 to the index: scope_color(d, i) == scope_color(0, d*3 + i).
     #[test]
     fn scope_color_depth_offsets_index_by_three() {
         assert_eq!(scope_color(1, 0), scope_color(0, 3));

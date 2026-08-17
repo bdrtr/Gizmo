@@ -122,7 +122,7 @@ pub fn scope<'w>(world: &'w World, name: &'static str) -> ScopeTimer<'w> {
     ScopeTimer { world, name }
 }
 
-/// `profile_scope!(world, "isim");` — mevcut blok boyunca süreyi ölçer.
+/// `profile_scope!(world, "name");` — times the block it is written in.
 #[macro_export]
 macro_rules! profile_scope {
     ($world:expr, $name:expr) => {

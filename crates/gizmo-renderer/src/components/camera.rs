@@ -69,7 +69,8 @@ impl Camera {
         };
     }
 
-    /// Fazla birikmeyi önlemek icin acilari temizler (yaw mod TAU, pitch clamp)
+    /// Tidies the angles to stop them accumulating without bound: yaw modulo TAU, pitch
+    /// clamped.
     pub fn sanitize_angles(&mut self) {
         self.yaw %= std::f32::consts::TAU;
         self.pitch = self.pitch.clamp(

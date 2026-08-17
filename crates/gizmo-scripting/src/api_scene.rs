@@ -204,7 +204,7 @@ pub fn register_scene_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Result
     Ok(())
 }
 
-/// Her frame sahne verisini Lua'ya günceller (entity listesi, isim arama)
+/// Mirrors the scene data into Lua every frame (the entity list and the name lookup).
 #[tracing::instrument(skip_all, name = "script_scene_read")]
 pub fn update_scene_api(lua: &Lua, world: &World) -> Result<(), LuaError> {
     // The real table, not the global: the global is a read-only proxy so a script cannot

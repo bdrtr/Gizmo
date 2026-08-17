@@ -226,7 +226,7 @@ mod tests {
         }
     }
 
-    /// `euler_deg_to_quat` daima birim (normalize) quaternion üretmeli.
+    /// `euler_deg_to_quat` must always produce a unit (normalised) quaternion.
     #[test]
     fn produced_quaternion_is_unit_length() {
         for (rx, ry, rz) in [(0.0, 0.0, 0.0), (90.0, 45.0, 30.0), (-123.0, 47.0, 200.0)] {

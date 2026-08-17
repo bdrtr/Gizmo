@@ -158,7 +158,7 @@ pub fn register_entity_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Resul
     })
 }
 
-/// World'den okunan verilerle entity read API'sini günceller (her frame)
+/// Refreshes the entity read API from the world, every frame.
 #[tracing::instrument(skip_all, name = "script_entity_read")]
 pub fn update_entity_read_api(lua: &Lua, world: &World) -> Result<(), LuaError> {
     // The real table, not the global: the global is a read-only proxy so a script cannot

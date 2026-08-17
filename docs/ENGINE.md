@@ -280,6 +280,16 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
   reason — `gizmo-core/src/cvar.rs` documents how `to_lowercase` handles `İ`, i.e. the Turkish
   letter is the subject of an English sentence — and an exception that stops applying fails too.
 
+  **The "clean" claim needed one correction, and it is the interesting part.** The detector's
+  letter set was the six that appear in no other language likely to show up here (`ğşı` and their
+  capitals), which made it precise and left a tail: a Turkish line marked only by `ç`, `ö` or `ü`
+  — `/// (isim, seri) çiftleri.` — sailed straight through. **52 such lines were still in `src/`
+  after the pass that reported the surface clean.** The three letters are in now, at the price of
+  a small allowlist of proper nouns spelled with them (`Möller`, `Plücker`, `Bézier`…), checked
+  word by word rather than as a whole-file exception. What the detector still cannot see is a
+  Turkish sentence with no marked letter and fewer than two of its listed function words; that is
+  the residual, and it is written down here rather than implied by a green test.
+
   **Stage B went the same way in the same session**, so the table is now **empty**: the renderer
   (327), scripting (138), analysis (137), editor (100) and studio (53) are English too, 755 lines
   on top of Stage A's 462. Along the way the detector learned to ignore citations — a code span or

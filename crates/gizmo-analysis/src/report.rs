@@ -19,7 +19,7 @@ fn json_num(v: f64) -> f64 {
 }
 
 impl Analyzer {
-    /// Konsol/HUD için özet metin raporu.
+    /// A summary text report, for a console or a HUD.
     pub fn report_text(&self) -> String {
         let mut s = String::new();
         let _ = writeln!(s, "╔══ Gizmo Analysis ── frame {} ──", self.frame());
@@ -197,7 +197,7 @@ impl Analyzer {
         s
     }
 
-    /// Frame-indeksli CSV zaman-serisi (çekirdek sütunlar). Excel/pandas/gnuplot için.
+    /// A frame-indexed CSV time series (the core columns), for Excel, pandas or gnuplot.
     pub fn to_csv(&self) -> String {
         let mut s = String::new();
         s.push_str("frame,timestamp_ms,frame_ms,entities,archetypes,component_bytes,resources\n");

@@ -165,7 +165,7 @@ impl Script {
     }
 }
 
-/// Lua'ya geçirilecek entity verisi (geriye dönük uyumluluk için)
+/// The entity data handed to Lua, kept for backwards compatibility.
 #[derive(Clone, Debug, Default)]
 #[non_exhaustive]
 pub struct ScriptContext {

@@ -756,7 +756,7 @@ fn apply_force_central(rb: &RigidBody, vel: &mut Velocity, force: Vec3, dt: f32)
     vel.linear += force * rb.inv_mass() * dt;
 }
 
-/// Belirli bir noktadan kuvvet uygulama — tork üretir
+/// Applies a force at a point, which produces a torque.
 fn apply_force_at_point(
     rb: &RigidBody,
     vel: &mut Velocity,

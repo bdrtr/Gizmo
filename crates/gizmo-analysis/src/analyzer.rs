@@ -72,7 +72,7 @@ impl Analyzer {
         analyzer
     }
 
-    /// Ek bir collector kaydet (ör. `PhysicsCollector`).
+    /// Registers an additional collector (`PhysicsCollector`, for instance).
     pub fn register_collector(&mut self, collector: Box<dyn Collector>) {
         self.collectors.push(collector);
     }

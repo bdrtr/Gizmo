@@ -1,4 +1,4 @@
-//! Editor State — Editörün global durumunu yönetir
+//! Editor state — the editor's global state lives here.
 use crate::prefs::EditorPrefs;
 use serde::{Deserialize, Serialize};
 

@@ -42,7 +42,35 @@ const BUDGET: &[(&str, usize)] = &[];
 const EXCEPTIONS: &[(&str, &str)] = &[];
 
 /// Letters that exist in Turkish and not in English. One is enough to settle a line.
-const TURKISH_LETTERS: [char; 6] = ['ğ', 'Ğ', 'ş', 'Ş', 'ı', 'İ'];
+///
+/// The set grew on 2026-08-17, and how it grew is worth keeping. It started as the six letters
+/// that appear in *no* other language likely to show up here — `ğşı` and their capitals — which
+/// made it precise and left a tail: a Turkish sentence whose only marked letters are `ç`, `ö` or
+/// `ü` (`/// (isim, seri) çiftleri.`) sailed through, and 55 of them were still in `src/` after
+/// the campaign that reported the surface clean. Those three letters are now in, at the cost of
+/// needing [`SPELLED_WITH_DIACRITICS`]: they are also how a handful of proper nouns are spelled
+/// in English prose, and this file's own `Möller–Trumbore` was the first casualty.
+const TURKISH_LETTERS: [char; 12] = [
+    'ğ', 'Ğ', 'ş', 'Ş', 'ı', 'İ', 'ç', 'Ç', 'ö', 'Ö', 'ü', 'Ü',
+];
+
+/// Words that carry a Turkish-looking letter and are English prose anyway — proper nouns,
+/// almost always a person's name in an algorithm's.
+///
+/// Checked word by word rather than as an exception on the file, because the alternative is
+/// excusing a whole file for one surname. Matched case-insensitively; add to it rather than
+/// stripping the accent out of someone's name.
+const SPELLED_WITH_DIACRITICS: [&str; 9] = [
+    "plücker",
+    "möller",
+    "trumbore",
+    "bézier",
+    "poincaré",
+    "schrödinger",
+    "gödel",
+    "erdős",
+    "müller",
+];
 
 /// Common Turkish function words, for lines that happen to carry no distinctive letter.
 ///
@@ -69,15 +97,19 @@ fn workspace() -> PathBuf {
 /// `İ`, is written in English *about* Turkish, and counting it would push the rule towards
 /// rewriting quotes that have to keep matching the code.
 fn is_turkish(text: &str) -> bool {
-    let text = &strip_citations(text);
-    if text.chars().any(|c| TURKISH_LETTERS.contains(&c)) {
-        return true;
-    }
+    let text = strip_citations(text);
     let lowered = text.to_lowercase();
     let words: Vec<&str> = lowered
         .split(|c: char| !c.is_alphabetic())
         .filter(|w| !w.is_empty())
         .collect();
+    if words
+        .iter()
+        .filter(|w| !SPELLED_WITH_DIACRITICS.contains(w))
+        .any(|w| w.chars().any(|c| TURKISH_LETTERS.contains(&c)))
+    {
+        return true;
+    }
     words.iter().filter(|w| TURKISH_WORDS.contains(w)).count() >= 2
 }
 
@@ -247,6 +279,14 @@ fn the_detector_tells_the_two_languages_apart() {
     assert!(
         !is_turkish("`to_lowercase` maps `İ` to two code points."),
         "and so is one quoting a Turkish letter"
+    );
+    assert!(
+        is_turkish("(isim, seri) çiftleri."),
+        "the tail that `ğşı` alone could not see: a line marked only by ç/ö/ü"
+    );
+    assert!(
+        !is_turkish("Möller–Trumbore against one triangle, in the caller's frame."),
+        "and the cost of seeing it: a surname that has to be spelled correctly"
     );
     assert!(
         is_turkish("var files, ise blocks"),

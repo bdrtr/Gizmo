@@ -110,7 +110,7 @@ fn thread_id_u64() -> u64 {
 /// Used to keep a span's start instant in the span's own extensions.
 struct SpanStart(Instant);
 
-/// Motorun tüm span'lerini yakalayan `tracing_subscriber::Layer`.
+/// The `tracing_subscriber::Layer` that captures every span the engine opens.
 pub struct GizmoTraceLayer {
     sink: TraceSink,
     epoch: Instant,

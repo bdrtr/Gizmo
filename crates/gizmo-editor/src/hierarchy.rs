@@ -8,7 +8,7 @@ use gizmo_core::{
     EntityName, World,
 };
 
-/// Scene Hierarchy sekmesini çizer
+/// Draws the scene hierarchy tab.
 pub fn ui_hierarchy(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
     // The prototype's panel header: the name in letterspaced caps, the live count beside it, and
     // the panel's own actions on the right. A count in the header is not decoration — it is the

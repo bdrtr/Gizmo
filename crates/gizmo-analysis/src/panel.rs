@@ -70,7 +70,7 @@ pub fn analysis_window(ctx: &egui::Context, open: &mut bool, analyzer: &Analyzer
         .show(ctx, |ui| analysis_ui(ui, analyzer));
 }
 
-/// Analiz panelini verilen `Ui`'ye çizer.
+/// Draws the analysis panel into the given `Ui`.
 pub fn analysis_ui(ui: &mut egui::Ui, analyzer: &Analyzer) {
     header(ui, analyzer);
     ui.add_space(4.0);

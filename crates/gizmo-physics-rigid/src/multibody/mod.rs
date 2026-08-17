@@ -89,7 +89,7 @@ impl SpatialTransform {
         }
     }
 
-    /// Vektörü bu frame'den ebeveyn frame'e çevirir.
+    /// Converts a vector from this frame into the parent frame.
     /// V_parent = X_parent_child * V_child
     pub fn transform_motion(self, v: SpatialVector) -> SpatialVector {
         let rw = self.rotation.mul_vec3(v.w);
@@ -97,7 +97,7 @@ impl SpatialTransform {
         SpatialVector::new(rw, self.translation.cross(rw) + rv)
     }
 
-    /// Vektörü ebeveyn frame'den bu frame'e çevirir (Ters transform).
+    /// Converts a vector from the parent frame into this one (the inverse transform).
     /// V_child = X_child_parent * V_parent
     pub fn inverse_transform_motion(self, v: SpatialVector) -> SpatialVector {
         let rw = self.rotation.transpose().mul_vec3(v.w);
@@ -106,14 +106,14 @@ impl SpatialTransform {
         SpatialVector::new(rw, rv)
     }
 
-    /// Kuvveti bu frame'den ebeveyn frame'e çevirir.
+    /// Converts a force from this frame into the parent frame.
     pub fn transform_force(self, f: SpatialVector) -> SpatialVector {
         let rw = self.rotation.mul_vec3(f.w);
         let rv = self.rotation.mul_vec3(f.v);
         SpatialVector::new(rw + self.translation.cross(rv), rv)
     }
 
-    /// Kuvveti ebeveyn frame'den bu frame'e çevirir (Ters transform).
+    /// Converts a force from the parent frame into this one (the inverse transform).
     pub fn inverse_transform_force(self, f: SpatialVector) -> SpatialVector {
         let r_trans_cross = self.translation.cross(f.v);
         let rw = self.rotation.transpose().mul_vec3(f.w - r_trans_cross);

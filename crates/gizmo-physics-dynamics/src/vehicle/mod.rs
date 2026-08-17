@@ -88,7 +88,7 @@ impl PacejkaParams {
     }
 }
 
-/// Geriye uyum için PacejkaLat alias
+/// A `PacejkaLat` alias, kept for backwards compatibility.
 pub type PacejkaLat = PacejkaParams;
 
 /// Combined Pacejka: compute the longitudinal and lateral forces together,
@@ -155,14 +155,15 @@ pub enum Axle {
     Rear,
 }
 
-/// Tahrik düzeni: motor torku hangi aksa gider ve motor RPM'i hangi tekerleklerden türetilir.
+/// The drivetrain layout: which axle the engine's torque goes to, and which wheels the engine
+/// RPM is derived from.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Drivetrain {
     /// Front-wheel drive
     Fwd,
     /// Rear-wheel drive (the default)
     Rwd,
-    /// Dört tekerlek
+    /// All four wheels
     Awd,
 }
 
@@ -384,7 +385,7 @@ impl Default for Wheel {
     }
 }
 
-/// Eski uyum için `pacejka` getter
+/// A `pacejka` getter, kept for backwards compatibility.
 impl Wheel {
     /// Compatibility accessor from before the tyre model was split into separate longitudinal
     /// and lateral coefficient sets.

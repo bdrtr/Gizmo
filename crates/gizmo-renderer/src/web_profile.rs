@@ -43,11 +43,11 @@ pub enum PostProcessLevel {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ShadowQuality {
-    /// Gölge yok
+    /// No shadows
     Off,
     /// A single cascade, low resolution
     Low,
-    /// 2 cascade, orta çözünürlük
+    /// 2 cascades, medium resolution
     Medium,
     /// 4 cascades, high resolution (the desktop default)
     High,
@@ -66,7 +66,7 @@ pub struct WebProfile {
     /// The maximum number of GPU particles
     pub gpu_particles_max: u32,
 
-    /// GPU fizik simülasyonu aktif mi?
+    /// Is the GPU physics simulation active?
     pub gpu_physics_enabled: bool,
     /// Maksimum GPU fizik nesnesi
     pub gpu_physics_max: u32,
@@ -81,7 +81,7 @@ pub struct WebProfile {
     pub deferred_enabled: bool,
 
 
-    /// Gölge kalitesi
+    /// Shadow quality
     pub shadow_quality: ShadowQuality,
 
     /// Post-processing seviyesi
@@ -339,7 +339,7 @@ impl WebProfile {
         }
     }
 
-    /// Profil özetini logla
+    /// Logs a summary of the profile.
     pub fn log_summary(&self) {
         log::info!("╔══════════════════════════════════════════╗");
         log::info!("║  WebProfile: {:26} ║", self.name);

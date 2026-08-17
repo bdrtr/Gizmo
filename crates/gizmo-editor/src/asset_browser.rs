@@ -9,7 +9,7 @@ use web_time::Instant;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
 
-/// Asset Browser sekmesini çizer
+/// Draws the asset browser tab.
 pub fn ui_asset_browser(ui: &mut egui::Ui, state: &mut EditorState) {
 let mut finished = false;
     if let Some(rx) = &state.assets.workspace_rx {

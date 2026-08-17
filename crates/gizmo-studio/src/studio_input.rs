@@ -10,7 +10,7 @@
 //! scene_view.rs  →  do_raycast = true
 //! systems/input.rs → build_ray() → handle_studio_input()
 //! studio_input.rs  → perform_raycast() → state.select_exclusive()
-//! update.rs        → OBB highlight çizimi
+//! update.rs        → draws the OBB highlight
 //! ```
 
 use gizmo::editor::EditorState;
