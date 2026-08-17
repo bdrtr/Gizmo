@@ -599,6 +599,42 @@ mod tests {
         player.stop();
     }
 
+    /// End-to-end on **real hardware**: open the default device, play a sound of known length,
+    /// and require that it has finished by the time it should have.
+    ///
+    /// A sound only drains as the device's callback pulls samples through it, so this passing is
+    /// evidence the whole chain ran — device open, mixer, symphonia decode, sample-rate
+    /// conversion — not merely that it type-checks. The device-free test above cannot show that.
+    ///
+    /// `#[ignore]` because CI runners have no sound card, where `AudioManager::new` legitimately
+    /// fails. Run it by hand after touching the audio backend:
+    ///
+    /// ```text
+    /// cargo test -p gizmo-audio -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "needs a real audio output device — run with --ignored"]
+    fn a_real_device_drains_a_played_sound() {
+        let mut manager = match AudioManager::new() {
+            Ok(m) => m,
+            Err(e) => panic!("no audio output device on this machine: {e}"),
+        };
+        // 8000 frames at 8 kHz = exactly one second.
+        manager.load_sound_bytes("beep", wav_bytes(8_000));
+
+        let id = manager.play("beep").expect("a registered WAV must decode and play");
+        assert!(manager.is_playing(id), "playback must start immediately");
+
+        std::thread::sleep(std::time::Duration::from_millis(1_500));
+        manager.update(); // the frame-time garbage collector
+
+        assert!(
+            !manager.is_playing(id),
+            "a one-second sound must have drained after 1.5 s — if it has not, the device is \
+             not pulling samples and nothing is audible"
+        );
+    }
+
     #[test]
     fn playback_speed_never_reaches_zero() {
         // 0 / negative / NaN would make rodio's SampleRateConverter assert (from >= 1)
