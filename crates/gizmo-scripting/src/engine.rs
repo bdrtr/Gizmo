@@ -236,6 +236,9 @@ impl ScriptEngine {
         // ordered after it still run.
         let budget = Arc::new(std::sync::atomic::AtomicU32::new(0));
         let hook_budget = budget.clone();
+        // mlua 0.12 made `set_hook` fallible, and this hook is the instruction budget — the only
+        // thing standing between a `while true do end` and a hung frame. Propagated, never
+        // dropped: an engine whose budget hook failed to install must not report success.
         lua.set_hook(
             mlua::HookTriggers::new().every_nth_instruction(Self::HOOK_INSTRUCTION_STEP),
             move |_lua, _debug| {
@@ -250,9 +253,11 @@ impl ScriptEngine {
                     ));
                 }
                 hook_budget.store(left - 1, std::sync::atomic::Ordering::Relaxed);
-                Ok(())
+                // mlua 0.10+ lets a hook stop or yield the VM; this one only counts, so it
+                // always says "carry on". The budget is enforced by the `return Err` above.
+                Ok(mlua::VmState::Continue)
             },
-        );
+        )?;
         lua.set_memory_limit(Self::DEFAULT_MEMORY_LIMIT)?;
 
         // === TEMEL PRINT FONKSİYONU ===
@@ -276,7 +281,7 @@ impl ScriptEngine {
                     .iter()
                     .map(|v| {
                         if let mlua::Value::String(s) = v {
-                            s.to_str().unwrap_or("").to_string()
+                            s.to_str().map(|s| s.to_string()).unwrap_or_default()
                         } else if let mlua::Value::Number(n) = v {
                             n.to_string()
                         } else if let mlua::Value::Integer(i) = v {
@@ -422,7 +427,9 @@ impl ScriptEngine {
         let meta = self.lua.create_table().map_err(|e| e.to_string())?;
         meta.set("__index", self.lua.globals())
             .map_err(|e| e.to_string())?;
-        env.set_metatable(Some(meta));
+        // Fallible in mlua 0.12. Without this metatable the script's environment does not fall
+        // back to the engine globals, so `entity`/`input`/`print` would be nil inside it.
+        env.set_metatable(Some(meta)).map_err(|e| e.to_string())?;
 
         // `_G` inside a script means the SCRIPT's table, not the engine's globals.
         //
@@ -518,9 +525,9 @@ impl ScriptEngine {
                         continue;
                     }
                 };
-                if let Ok(func) = env.get::<_, LuaFunction>("on_update") {
+                if let Ok(func) = env.get::<LuaFunction>("on_update") {
                     budget.store(budget_ticks, std::sync::atomic::Ordering::Relaxed);
-                    if let Err(e) = func.call::<_, ()>(ctx_table.clone()) {
+                    if let Err(e) = func.call::<()>(ctx_table.clone()) {
                         warn!(path = %path, error = %e, "[Scripting] on_update çalışma-zamanı hatası");
                         failures.push(format!("Lua on_update hatası ({path}): {e}"));
                     }
@@ -565,7 +572,7 @@ impl ScriptEngine {
         let Ok(env) = self.lua.registry_value::<mlua::Table>(key) else {
             return out;
         };
-        let Ok(table) = env.get::<_, mlua::Table>("properties") else {
+        let Ok(table) = env.get::<mlua::Table>("properties") else {
             return out;
         };
         for pair in table.pairs::<String, mlua::Value>() {
@@ -614,7 +621,7 @@ impl ScriptEngine {
             let env: mlua::Table = self.lua.registry_value(key).map_err(|e| e.to_string())?;
 
             // on_entity_update(entity_id, dt, props) çağır (varsa)
-            if let Ok(func) = env.get::<_, LuaFunction>("on_entity_update") {
+            if let Ok(func) = env.get::<LuaFunction>("on_entity_update") {
                 let props = self.lua.create_table().map_err(|e| e.to_string())?;
                 for (name, value) in properties {
                     let set = match value {
@@ -625,7 +632,7 @@ impl ScriptEngine {
                     set.map_err(|e| e.to_string())?;
                 }
                 self.arm_budget();
-                func.call::<_, ()>((entity_id, dt, props)).map_err(|e| {
+                func.call::<()>((entity_id, dt, props)).map_err(|e| {
                     warn!(entity_id, script_path, error = %e, "[Scripting] on_entity_update çalışma-zamanı hatası");
                     format!(
                         "Lua on_entity_update hatası (entity {} mod {}): {}",
@@ -989,7 +996,7 @@ ScriptCommand::PlayAnimation { id, name, blend, loop_anim } => {
     pub fn has_function(&mut self, path: &str, name: &str) -> bool {
         if let Some((_, key)) = self.loaded_scripts.get(path) {
             if let Ok(env) = self.lua.registry_value::<mlua::Table>(key) {
-                return env.get::<_, LuaFunction>(name).is_ok();
+                return env.get::<LuaFunction>(name).is_ok();
             }
         }
         false
@@ -1064,14 +1071,14 @@ ScriptCommand::PlayAnimation { id, name, blend, loop_anim } => {
 
         let mut result = ScriptResult::default();
 
-        if let Ok(pos) = result_table.get::<_, LuaTable>("position") {
+        if let Ok(pos) = result_table.get::<LuaTable>("position") {
             let x: f32 = pos.get("x").unwrap_or(0.0);
             let y: f32 = pos.get("y").unwrap_or(0.0);
             let z: f32 = pos.get("z").unwrap_or(0.0);
             result.new_position = Some([x, y, z]);
         }
 
-        if let Ok(vel) = result_table.get::<_, LuaTable>("velocity") {
+        if let Ok(vel) = result_table.get::<LuaTable>("velocity") {
             let x: f32 = vel.get("x").unwrap_or(0.0);
             let y: f32 = vel.get("y").unwrap_or(0.0);
             let z: f32 = vel.get("z").unwrap_or(0.0);

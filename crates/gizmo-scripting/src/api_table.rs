@@ -64,7 +64,7 @@ pub fn register_protected(
         "__newindex",
         lua.create_function(move |_, (_, key, _): (LuaTable, LuaValue, LuaValue)| {
             let key = match &key {
-                LuaValue::String(s) => s.to_str().unwrap_or("?").to_string(),
+                LuaValue::String(s) => s.to_str().map(|s| s.to_string()).unwrap_or_else(|_| "?".to_string()),
                 other => format!("{other:?}"),
             };
             Err::<(), _>(LuaError::RuntimeError(format!(
@@ -76,7 +76,10 @@ pub fn register_protected(
     // Stops `getmetatable(input).__index` from handing the real table back, and `setmetatable`
     // from replacing the guard.
     meta.set("__metatable", false)?;
-    proxy.set_metatable(Some(meta));
+    // mlua 0.12 made this fallible. Propagated rather than dropped: if the guard metatable does
+    // not go on, the "read-only engine API" protection above is not there — and a script would
+    // then be able to reassign `input.is_pressed` for every other script in the scene.
+    proxy.set_metatable(Some(meta))?;
 
     lua.globals().set(name, proxy)?;
     Ok(())
@@ -87,7 +90,7 @@ pub fn register_protected(
 /// Callers must use [`LuaTable::raw_set`] on it. A plain `set` would work today — the real table
 /// has no metatable — but the point of fetching it here rather than reading the global is that the
 /// write path and the read path are deliberately different, and `raw_set` says so at the call site.
-pub fn raw<'lua>(lua: &'lua Lua, name: &str) -> Result<LuaTable<'lua>, LuaError> {
+pub fn raw(lua: &Lua, name: &str) -> Result<LuaTable, LuaError> {
     lua.named_registry_value(&registry_key(name))
 }
 
