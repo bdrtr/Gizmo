@@ -89,5 +89,5 @@ gizmo-net = { version = "0.10.0", path = "../gizmo-net", optional = true, defaul
 [dev-dependencies]
 criterion = "0.5"
 rayon = "1.11.0"
-pollster = "0.3"
+pollster = "0.4"
 
