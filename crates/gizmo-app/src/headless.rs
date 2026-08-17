@@ -42,6 +42,9 @@ impl<State: 'static> std::fmt::Debug for App<State> {
 }
 
 impl<State: 'static> App<State> {
+    /// A headless application. `title`, `width` and `height` are recorded for logs and for the
+    /// window a headless build does not open — they keep the constructor identical to the
+    /// windowed runtime's, so moving a program between the two is a type change and nothing else.
     pub fn new(title: &str, width: u32, height: u32) -> Self {
         tracing::info!(title = %title, width, height, "[App:headless] created");
         Self {
@@ -54,6 +57,8 @@ impl<State: 'static> App<State> {
         }
     }
 
+    /// Replaces what [`run`](Self::run) does with `f`. The escape hatch for a server that owns
+    /// its own loop — a fixed-rate tick driven by the network, say, rather than by this crate.
     pub fn set_runner<F>(mut self, f: F) -> Self
     where
         F: FnOnce(App<State>) + 'static,
@@ -81,6 +86,8 @@ impl<State: 'static> App<State> {
         self
     }
 
+    /// Builds the simulation's own state once, before the first tick. No renderer is passed —
+    /// that is the whole difference from the windowed runtime's `set_setup`.
     pub fn set_setup<F>(mut self, f: F) -> Self
     where
         F: FnOnce(&mut World) -> State + 'static,
@@ -89,6 +96,8 @@ impl<State: 'static> App<State> {
         self
     }
 
+    /// The per-tick hook: world, state and `dt`. There is no input parameter, because a headless
+    /// app has no window to receive any.
     pub fn set_update<F>(mut self, f: F) -> Self
     where
         F: FnMut(&mut World, &mut State, f32) + 'static,
@@ -97,6 +106,8 @@ impl<State: 'static> App<State> {
         self
     }
 
+    /// Registers a system on the fixed-timestep schedule — the same schedule and the same
+    /// constant `dt` the windowed runtime steps physics on.
     pub fn add_system<Params, S: gizmo_core::system::IntoSystemConfig<Params>>(
         mut self,
         system: S,
@@ -105,6 +116,7 @@ impl<State: 'static> App<State> {
         self
     }
 
+    /// Configures a system set on the fixed-timestep schedule — ordering and run conditions.
     pub fn configure_set(mut self, config: gizmo_core::system::SetConfig) -> Self {
         self.schedule.configure_set(config);
         self

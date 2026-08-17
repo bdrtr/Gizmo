@@ -1,6 +1,14 @@
 use super::*;
 
 impl<State: 'static> App<State> {
+    /// A windowed application with a title and an initial inner size in physical pixels.
+    ///
+    /// Nothing is created yet: the window, the GPU device and the user state all come up on the
+    /// first `resumed` event, once [`run`](Self::run) has an event loop to build them from. That
+    /// is why `new` cannot fail and why a builder method may be called in any order after it.
+    ///
+    /// The engine's panic hook is installed here, and [`AssetPlugin`](super::AssetPlugin) is
+    /// added so the renderer's asset collections exist before any setup hook runs.
     pub fn new(title: &str, width: u32, height: u32) -> Self {
         crate::setup_panic_hook();
         let mut app = Self {
@@ -50,6 +58,12 @@ impl<State: 'static> App<State> {
         app
     }
 
+    /// Replaces what [`run`](Self::run) does with `f`, handing it the whole app.
+    ///
+    /// The escape hatch for an embedder that owns its own event loop — the editor's play mode is
+    /// the in-tree example. `f` receives the fully built app and is responsible for everything
+    /// afterwards, including creating a window; nothing in the normal loop runs unless it calls
+    /// it.
     pub fn set_runner<F>(mut self, f: F) -> Self
     where
         F: FnOnce(App<State>) + 'static,
@@ -58,6 +72,7 @@ impl<State: 'static> App<State> {
         self
     }
 
+    /// [`set_runner`](Self::set_runner) for the `&mut self` builder style.
     pub fn set_runner_mut<F>(&mut self, f: F)
     where
         F: FnOnce(App<State>) + 'static,
@@ -65,6 +80,11 @@ impl<State: 'static> App<State> {
         self.runner = Some(Box::new(f));
     }
 
+    /// Records every frame's input and its duration, and writes the recording out on exit.
+    ///
+    /// What is captured is the whole [`Input`](gizmo_core::input::Input) snapshot — keys, mouse,
+    /// and the gamepad — plus that frame's `dt`, so a replay reproduces one-shot triggers and the
+    /// original stepping rather than the replaying machine's frame times.
     pub fn start_recording(mut self) -> Self {
         tracing::info!("[App] input recording enabled");
         self.record_mode = true;
@@ -72,6 +92,12 @@ impl<State: 'static> App<State> {
         self
     }
 
+    /// Replays a recording made by [`start_recording`](Self::start_recording), from `path`.
+    ///
+    /// Each frame the live input is **overwritten** by the recorded one before any system runs,
+    /// so a replay cannot be steered — the keyboard, the mouse and the pad are all ignored while
+    /// it plays. A replay only reproduces the original run on a build whose simulation behaves
+    /// identically; nothing here checks that, and there is no state or checksum in the file.
     pub fn start_playback(mut self, path: &str) -> Self {
         tracing::info!(path = %path, "[App] input playback enabled");
         self.playback_file = Some(path.to_string());
@@ -92,22 +118,39 @@ impl<State: 'static> App<State> {
         self
     }
 
+    /// Sets the window icon from encoded image bytes (PNG and the rest of what `image` reads).
+    ///
+    /// Decoded when the window is created, not here, so a format the decoder refuses — or an
+    /// image winit rejects, which includes anything that is not square — costs a warning and the
+    /// platform default rather than a failure.
     pub fn with_icon(mut self, icon_bytes: &'static [u8]) -> Self {
         self.window_icon = Some(icon_bytes);
         self
     }
 
+    /// Applies a [`Plugin`](crate::Plugin): it gets to add resources, systems and schedules now,
+    /// before the app runs.
     pub fn add_plugin<P: crate::Plugin>(mut self, plugin: P) -> Self {
         tracing::info!(plugin = %std::any::type_name::<P>(), "[App] plugin build");
         plugin.build(&mut self);
         self
     }
 
+    /// Registers bytes to be served as if they were the file at `path`.
+    ///
+    /// What a shipped build uses instead of a directory: the loaders consult this table before
+    /// touching the filesystem, so an `include_bytes!` asset and one on disk are addressed the
+    /// same way.
     pub fn add_embedded_asset(mut self, path: &str, data: std::borrow::Cow<'static, [u8]>) -> Self {
         self.embedded_assets.insert(path.to_string(), data);
         self
     }
 
+    /// Builds the game's own state once, after the GPU is up and before the first frame.
+    ///
+    /// `f` receives the world and the live [`Renderer`], which is what makes it the place to
+    /// create meshes, materials and entities; whatever it returns becomes the `State` every other
+    /// hook is handed. It runs exactly once, on the first `resumed` event.
     pub fn set_setup<F>(mut self, f: F) -> Self
     where
         F: FnOnce(&mut World, &Renderer) -> State + 'static,
@@ -116,6 +159,14 @@ impl<State: 'static> App<State> {
         self
     }
 
+    /// The per-frame game hook: world, state, `dt` and the current input.
+    ///
+    /// The `dt` here is the **raw** frame time (clamped to 50 ms), not the one the schedules see:
+    /// `Time`'s `time_scale` is applied to the simulation's delta, so a paused or slow-motion
+    /// game still gets a smoothly advancing camera and UI through this hook.
+    ///
+    /// Runs after input has been gathered for the frame and before the schedules, so
+    /// `is_key_just_pressed` and the gamepad's edges are live here.
     pub fn set_update<F>(mut self, f: F) -> Self
     where
         F: FnMut(&mut World, &mut State, f32, &gizmo_core::input::Input) + 'static,
@@ -124,6 +175,11 @@ impl<State: 'static> App<State> {
         self
     }
 
+    /// The low-level render hook: raw encoder, target view, renderer and the scene's light time.
+    ///
+    /// Everything is handed over as wgpu types, so this is the hook for a pass the engine does
+    /// not have. Most games want [`set_simple_render`](Self::set_simple_render) instead, which
+    /// wraps the same call in a [`RenderContext`] and keeps `wgpu` out of the signature.
     pub fn set_render<F>(mut self, f: F) -> Self
     where
         F: FnMut(
@@ -148,6 +204,11 @@ impl<State: 'static> App<State> {
         self
     }
 
+    /// A raw winit event hook, called before the engine interprets the event.
+    ///
+    /// Returning `true` **consumes** the event: the engine's own handling — key state, mouse
+    /// deltas, resize — does not see it. That is what an embedder needs and what a game almost
+    /// never does; returning `false` is the normal answer.
     pub fn set_input<F>(mut self, f: F) -> Self
     where
         F: FnMut(&mut World, &mut State, &Event<()>) -> bool + 'static,
@@ -167,6 +228,11 @@ impl<State: 'static> App<State> {
         self
     }
 
+    /// Registers a system on the **fixed-timestep** schedule — the one physics runs on.
+    ///
+    /// It runs `0..N` times per rendered frame depending on the accumulator, with a constant
+    /// `dt`. Right for simulation; wrong for anything reading input edges or driving a camera,
+    /// which want [`add_update_system`](Self::add_update_system).
     pub fn add_system<Params, S: gizmo_core::system::IntoSystemConfig<Params>>(
         mut self,
         system: S,
@@ -209,11 +275,16 @@ impl<State: 'static> App<State> {
         self.update_schedule.add_di_system(system);
     }
 
-pub fn configure_set(mut self, config: gizmo_core::system::SetConfig) -> Self {
+/// Configures a system set on the fixed-timestep schedule — ordering and run conditions.
+    pub fn configure_set(mut self, config: gizmo_core::system::SetConfig) -> Self {
         self.schedule.configure_set(config);
         self
     }
 
+    /// Queues a scene file to load once the app is up, after `set_setup` has run.
+    ///
+    /// Loaded through the app's own asset-identity repair, so a scene whose assets have moved
+    /// still finds them by id (see [`asset_identity`](crate::asset_identity)).
     pub fn load_scene(mut self, path: &str) -> Self {
         tracing::debug!(scene = %path, "[App] initial scene queued");
         self.initial_scene = Some(path.to_string());

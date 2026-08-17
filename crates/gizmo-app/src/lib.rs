@@ -1,4 +1,5 @@
 #![deny(clippy::undocumented_unsafe_blocks)]
+#![warn(missing_docs)]
 //! (`undocumented_unsafe_blocks` is a RATCHET: this crate carries no `unsafe` block without a
 //! `// SAFETY:` line stating why it is sound, and the lint keeps it that way. Every crate in the
 //! workspace except `gizmo-core` is at zero and denies it; `gizmo-core`'s ECS internals are the
@@ -35,6 +36,9 @@
 /// app's own initial-scene load uses it, and every game gets identity repair without wiring it.
 #[cfg(all(feature = "scene", feature = "render"))]
 pub mod asset_identity;
+/// The in-engine developer console: a `~`-style overlay that reads and writes
+/// [`gizmo_core::cvar`] variables and prints the engine's log buffer. Drawn by the windowed
+/// loop when the `egui` feature is on, over whatever the game is rendering.
 #[cfg(feature = "egui")]
 pub mod dev_console;
 /// Generic immediate-mode overlay UI runtime (egui integration).
@@ -59,6 +63,11 @@ pub mod scene_registry;
 /// into the app schedule. Requires the `physics` feature.
 #[cfg(feature = "physics")]
 pub mod gameplay;
+/// The plugin trait and the `AppLike` abstraction over the two runtimes.
+///
+/// A [`Plugin`] is how a subsystem installs itself — resources, systems, schedules — without the
+/// app knowing what it is. It speaks `AppLike` rather than a concrete `App`, which is what lets
+/// the same plugin be applied to the windowed and the headless runtime.
 pub mod plugin;
 
 pub use plugin::{AppLike, Plugin};
