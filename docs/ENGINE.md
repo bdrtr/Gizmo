@@ -137,11 +137,34 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
   are now written `528 + 64·MAX_LIGHTS`, so the next raise does not need a hand-recomputed literal
   in three files — which is how one of them would have been forgotten.
 
-  What the raise does **not** buy is many more lights than that: both lighting loops are
-  per-fragment and unclustered, so cost scales with lights actually in the frame. **Still open:**
-  clustered/tiled culling, which is what makes a cap of hundreds affordable and is the reason this
-  engine has a deferred pipeline. 32 is the ceiling that fits today's cost model, not an
-  architectural limit.
+  **Clustered culling landed the same day, and the cap is now 256.** `MAX_LIGHTS` was never a
+  hardware limit — it was the per-fragment loop over *every* light in the frame wearing a constant's
+  clothing. `gizmo-renderer::clustered` cuts the view volume into 16×9×24 clusters, assigns each
+  light to the clusters its sphere touches, and both lighting loops (deferred and forward) now walk
+  their own fragment's list, bounded by `MAX_LIGHTS_PER_CLUSTER` = 32 whatever the scene holds. The
+  hard ceiling left is the uniform block: `(65536 − 560) / 64` = 1015 lights, and the honest move
+  past a few hundred is to put the light array in a storage buffer rather than inch toward that
+  cliff.
+
+  **Assignment is on the CPU, deliberately**, and the cost is measured (release, this machine):
+  0.047 ms at 8 lights, 0.106 at 32, 0.201 at 64, 0.469 at 128, 0.764 at 256. A compute-shader
+  build is the follow-up and its **trigger is a profile** showing this — not a preference for
+  compute. What the CPU version buys is that the whole assignment is a pure function with nine unit
+  tests, which is how the rest of this engine's correctness is held.
+
+  **The guard finding is the part worth remembering.** Clustering is correct only if
+  `assign_lights` (CPU) and `gizmo_cluster_index` (WGSL) agree about which cluster a point is in,
+  and *no pixel test could see a disagreement*: adding `+ 1u` to the shader's slice left **every**
+  frame guard green, including one written specifically to catch it, because a light big enough to
+  measure is a light the CPU also assigned to the neighbouring slices. What guards it is a **GPU
+  mirror test** — the shader's own function, composed from the shipping module, evaluated over
+  sample points and compared against the CPU's `cluster_of_point`. It fails on 93 of 97 points for a
+  one-slice error and 73 of 97 for a one-tile error. Two implementations of one rule need a test
+  that runs *both*, not a test of what they are for.
+  (Boundary points are deliberately not sampled: glam's matrix multiply and the GPU's are both
+  correct and not bit-identical, so a point exactly on a tile edge may land either side. That is
+  harmless because cluster bounds are corner AABBs and therefore overlap — a light on the seam is
+  assigned to both.)
 
   Two findings worth keeping from doing it. The GPU guard
   (`the_last_light_slot_reaches_the_frame`, a light in slot 31 must change the frame) only went red

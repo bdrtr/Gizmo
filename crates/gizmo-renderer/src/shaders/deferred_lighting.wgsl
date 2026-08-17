@@ -6,11 +6,18 @@
 // in by load_shader_composed (naga_oil). Only binding-dependent deferred code lives below:
 // the fullscreen pass, procedural environment/IBL and PCSS shadows (they read `scene` and the
 // shadow textures, so per the common.wgsl convention they stay out of the pure modules).
-#import gizmo::common::{SceneUniforms, LightData, compute_direct_lighting}
+#import gizmo::common::{SceneUniforms, LightData, compute_direct_lighting, gizmo_cluster_index}
 #import gizmo::pbr_ext::{approximate_env_brdf, compute_direct_lighting_anisotropic, compute_clear_coat}
 
 @group(0) @binding(0) var<uniform> scene: SceneUniforms;
 
+
+// Clustered light lists (gizmo-renderer/src/clustered.rs). On the GLOBAL group because the web
+// forward pipeline has no fifth bind group to spare — see `pipeline::layouts`.
+@group(0) @binding(1)
+var<storage, read> cluster_table: array<vec2<u32>>;
+@group(0) @binding(2)
+var<storage, read> cluster_light_indices: array<u32>;
 @group(1) @binding(0) var t_shadow: texture_depth_2d_array;
 @group(1) @binding(1) var s_shadow: sampler_comparison;
 @group(1) @binding(2) var t_point_shadow: texture_depth_cube;
@@ -479,8 +486,15 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         total_lighting += sun_light;
     }
 
-    // --- Dynamic Lights ---
-    for (var i = 0u; i < scene.num_lights; i++) {
+    // --- Dynamic Lights (clustered) ---
+    //
+    // Only the lights assigned to THIS fragment's cluster, instead of every light in the frame.
+    // `i` still holds the index into `scene.lights`, so everything below — including the
+    // point-shadow caster comparison — reads exactly as it did when this looped over all of them.
+    let cluster = gizmo_cluster_index(scene, world_pos);
+    let cluster_range = cluster_table[cluster];
+    for (var ci = 0u; ci < cluster_range.y; ci++) {
+        let i = cluster_light_indices[cluster_range.x + ci];
         let light      = scene.lights[i];
         let light_type = u32(light.params.y);
         let intensity  = light.position.w;

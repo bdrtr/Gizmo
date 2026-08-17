@@ -363,6 +363,9 @@ pub fn default_render_pass(
         0,
         bytemuck::cast_slice(&[scene_uniform_data]),
     );
+    // The lighting shaders read their per-fragment light list from these buffers, so this upload is
+    // not an optimisation — without it every cluster is empty and nothing is lit.
+    renderer.scene.upload_clusters(&renderer.queue, &setup.clusters);
     for (i, light_view_proj) in light_view_projs.iter().enumerate() {
         renderer.queue.write_buffer(
             &renderer.scene.shadow_cascade_uniform_buffers[i],
@@ -2723,6 +2726,95 @@ mod golden_render_tests {
         // different one.
 
         render_world(&mut renderer, &mut world).await
+    }
+
+    /// A floor lit (or not) by ONE small point light sitting just above it.
+    ///
+    /// What this guards: a *small* light is lit at all. Every other frame guard uses lights that
+    /// cover most of the view, so none of them would notice clustering dropping the small ones —
+    /// a light assigned to no cluster, or a fragment reading a cluster list that is never uploaded,
+    /// both show up here.
+    async fn render_small_clustered_light_scene(lit: bool) -> Vec<u8> {
+        const W: u32 = 128;
+        let mut renderer = crate::test_gpu::headless_renderer(W, W).await;
+        let mut asset_manager = AssetManager::new();
+        let mut world = World::new();
+        let tex = asset_manager.create_white_texture(
+            &renderer.device,
+            &renderer.queue,
+            &renderer.scene.texture_bind_group_layout,
+        );
+
+        // A long floor receding away from the camera, so depth varies across the frame.
+        let floor = world.spawn();
+        world.add_component(
+            floor,
+            Transform::new(Vec3::new(0.0, -1.0, -20.0)).with_scale(Vec3::new(6.0, 0.1, 40.0)),
+        );
+        world.add_component(floor, GlobalTransform::default());
+        world.add_component(floor, AssetManager::create_cube(&renderer.device));
+        world.add_component(
+            floor,
+            Material::new(tex.clone()).with_pbr(Vec4::new(0.9, 0.9, 0.9, 1.0), 0.0, 0.9),
+        );
+        world.add_component(floor, MeshRenderer::new());
+
+        if lit {
+            let e = world.spawn();
+            world.add_component(e, Transform::new(Vec3::new(0.0, -0.4, -8.0)));
+            world.add_component(e, GlobalTransform::default());
+            world.add_component(
+                e,
+                crate::renderer::components::PointLight::new(Vec3::ONE, 30.0, 2.0),
+            );
+        }
+
+        world.spawn_bundle(CameraBundle {
+            position: Vec3::new(0.0, 0.6, 0.0),
+            yaw: -std::f32::consts::FRAC_PI_2,
+            pitch: -0.15,
+            primary: true,
+            ..Default::default()
+        });
+        // No sun: the only light in the frame is the one being clustered.
+
+        render_world(&mut renderer, &mut world).await
+    }
+
+    /// **A small clustered light must still reach the frame.**
+    ///
+    /// # What this does NOT guard, measured rather than assumed
+    ///
+    /// It does not catch a CPU↔shader cluster *mapping* error. Adding `+ 1u` to the shader's slice
+    /// index left this guard green (and every other frame guard too): a light big enough to see is a
+    /// light the CPU assigned to the neighbouring slices as well, so reading the wrong one still
+    /// finds it. Shrinking the light until that stopped being true would have made the lit patch too
+    /// small to measure reliably.
+    ///
+    /// The mapping is guarded instead by `gizmo_renderer::clustered`'s GPU mirror test, which runs
+    /// the shader's own `gizmo_cluster_index` over sample points and compares against the CPU's
+    /// `cluster_of_point` — that one fails on 93 of 97 points for a one-slice error and 73 of 97 for
+    /// a one-tile error. This test is kept for the thing it *does* cover, and this note is here
+    /// because a guard whose claim is wrong is worse than no guard.
+    #[test]
+    fn a_small_clustered_light_reaches_the_frame() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let lit = render_small_clustered_light_scene(true).await;
+            let dark = render_small_clustered_light_scene(false).await;
+            let (changed, total) = changed_pixels(&lit, &dark, 128);
+            assert!(
+                changed >= 100,
+                "a small point light changed {changed}/{total} pixels — the fragment's cluster and \
+                 the light's cluster do not agree (measured 1213)",
+            );
+        });
     }
 
     /// **The last light slot has to reach the frame.** The array was `[LightData; 10]` in Rust and

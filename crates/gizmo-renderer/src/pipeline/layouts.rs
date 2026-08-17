@@ -10,20 +10,52 @@ pub(super) struct Layouts {
 }
 
 pub(super) fn build_layouts(device: &wgpu::Device) -> Layouts {
+    // The clustered-light buffers live on the GLOBAL group rather than a group of their own, and
+    // that is a hard constraint rather than a preference: the web forward pipeline already binds
+    // four groups (global, texture, skeleton, instance) and `max_bind_groups` is 4 on every WebGPU
+    // baseline this engine targets, so a fifth group would take clustering away from the browser.
+    // Group 0 is bound by every pipeline, and a shader that does not light simply does not declare
+    // bindings 1 and 2 — wgpu allows a layout to offer more than a shader uses, not less.
     let global = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("global_bind_group_layout"),
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::VERTEX
-                | wgpu::ShaderStages::FRAGMENT
-                | wgpu::ShaderStages::COMPUTE,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: None,
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX
+                    | wgpu::ShaderStages::FRAGMENT
+                    | wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
             },
-            count: None,
-        }],
+            // Cluster table: (offset, count) per cluster. FRAGMENT only — lighting is a
+            // fragment-stage job, and a storage buffer visible to the vertex stage spends a slot
+            // from a per-stage budget that is 8 on the WebGPU baseline.
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            // Light indices, referenced by the table.
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+        ],
     });
 
     let shadow = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {

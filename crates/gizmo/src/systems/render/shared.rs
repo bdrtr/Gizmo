@@ -271,6 +271,14 @@ pub struct SceneSetup {
     /// The collected lights. The caller needs `shadow_point_index` (and that light's position and
     /// radius) to decide whether to render the point-shadow cube and where to put it.
     pub lights: SceneLights,
+    /// Which of those lights reach which cluster of the view volume.
+    ///
+    /// Computed here because this is where the camera and the collected lights are both in hand,
+    /// and both render paths need the same answer. **The caller must upload it**
+    /// (`renderer.scene.upload_clusters`): the lighting shaders read their light list from these
+    /// buffers, so a path that skips the upload lights nothing at all — which is the failure mode
+    /// to expect if a new render path appears and forgets.
+    pub clusters: crate::renderer::clustered::ClusterAssignment,
 }
 
 /// The per-frame inputs that are *not* the world: the camera, and the handful of decisions each
@@ -339,7 +347,37 @@ pub fn collect_scene_setup(world: &World, inputs: &SceneSetupInputs) -> SceneSet
     let cascade_view_projs =
         if shadow_dir.is_some() { cascades.view_projs } else { [Mat4::IDENTITY; 4] };
 
+    // Cluster assignment over the lights that survived collection. The indices it produces are
+    // indices into `lights.lights`, which is exactly what the shader indexes.
+    let grid = crate::renderer::clustered::ClusterGrid::default();
+    let spheres: Vec<crate::renderer::clustered::LightSphere> = lights.lights
+        [..lights.num_lights as usize]
+        .iter()
+        .map(|l| crate::renderer::clustered::LightSphere {
+            center: Vec3::new(l.position[0], l.position[1], l.position[2]),
+            radius: l.color[3],
+        })
+        .collect();
+    let clusters = crate::renderer::clustered::assign_lights(
+        grid,
+        crate::renderer::clustered::ClusterView {
+            view_proj: inputs.camera.view_proj,
+            camera_pos: inputs.camera.position,
+            forward: inputs.camera.forward,
+            near: inputs.camera.near,
+            far: inputs.camera.far,
+        },
+        &spheres,
+    );
+    if clusters.dropped > 0 {
+        tracing::debug!(
+            dropped = clusters.dropped,
+            "[Render] bir küme dolduğu için ışık ataması düştü"
+        );
+    }
+
     SceneSetup {
+        clusters,
         frame: crate::renderer::SceneFrame {
             camera: inputs.camera,
             sun: crate::renderer::SunFrame {

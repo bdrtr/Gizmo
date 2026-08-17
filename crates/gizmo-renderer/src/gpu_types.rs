@@ -213,7 +213,17 @@ pub struct SceneUniforms {
     /// existing field offset — and the partial SceneUniforms copies in other shaders — is
     /// unaffected.
     pub inv_view_proj: [[f32; 4]; 4],
-                           // Total: 528 + 64·MAX_LIGHTS bytes (2576 at MAX_LIGHTS = 32)
+    /// Cluster grid dimensions `(x, y, z, 0)` — see [`crate::clustered`].
+    ///
+    /// The shader needs these to turn a fragment's screen position and view depth into the same
+    /// cluster index the CPU assignment used. They are *derived*, not plumbed: the grid is
+    /// [`ClusterGrid::default()`](crate::clustered::ClusterGrid::default) on both sides, which is
+    /// the one place it may come from — two sources for this number is two different grids.
+    pub cluster_dims: [u32; 4],
+    /// `[z_scale, z_bias, 0, 0]` for `slice = floor(log(view_depth) * z_scale + z_bias)`, from
+    /// [`clustered::depth_params`](crate::clustered::depth_params) over the camera's own near/far.
+    pub cluster_depth: [f32; 4],
+                           // Total: 560 + 64·MAX_LIGHTS bytes (2608 at MAX_LIGHTS = 32)
 }
 
 #[repr(C)]
@@ -394,12 +404,12 @@ mod tests {
         // wrong offsets for i > 0 — see `every_instance_shader_declares_the_full_struct`.
         assert_eq!(std::mem::size_of::<InstanceRaw>(), 128, "InstanceRaw");
         assert_eq!(std::mem::size_of::<MaterialParams>(), 48, "MaterialParams = 3×vec4");
-        // The fixed part is 528 bytes; the light array is the rest. Expressed against
+        // The fixed part is 560 bytes; the light array is the rest. Expressed against
         // MAX_LIGHTS so raising the light ceiling does not require editing three literals in
         // three files (and so that forgetting one is not how the layout drifts).
         assert_eq!(
             std::mem::size_of::<SceneUniforms>(),
-            528 + crate::frame_uniforms::MAX_LIGHTS * 64,
+            560 + crate::frame_uniforms::MAX_LIGHTS * 64,
             "SceneUniforms total"
         );
     }

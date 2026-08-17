@@ -18,6 +18,18 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Clustered light culling, and a light ceiling of 256** (`MAX_LIGHTS` 32 → 256). The view volume is
+  cut into 16×9×24 clusters; each light is assigned to the clusters its sphere of influence touches;
+  the deferred and forward lighting loops walk their own fragment's cluster list instead of every
+  light in the frame. Per-fragment work is bounded by `clustered::MAX_LIGHTS_PER_CLUSTER` = 32
+  regardless of scene light count, so the cap stopped being a frame-time budget in disguise.
+
+  The assignment runs on the CPU (`gizmo_renderer::clustered::assign_lights`, a pure function with
+  unit tests): measured 0.047 ms at 8 lights, 0.106 at 32, 0.201 at 64, 0.469 at 128, 0.764 at 256.
+  The two cluster buffers live on bind group 0 because the web forward pipeline already binds four
+  groups and WebGPU's baseline `maxBindGroups` is 4 — clustering therefore works in the browser too.
+  `SceneUniforms` gained `cluster_dims` and `cluster_depth`, both derived from the camera.
+
 - **Scenes can find an asset that moved (asset identity, path-authoritative).** `EntityData` and
   `MaterialData` gained `mesh_uuid` / `texture_uuid` (`serde(default)`, so every existing scene
   loads unchanged), and `SceneData::save_with_identity` / `load_into_with_identity` write and use

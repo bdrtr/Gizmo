@@ -137,7 +137,7 @@ fn the_two_paths_agree_on_everything_the_world_decides() {
     assert_eq!(g._align_pad, e._align_pad);
     assert_eq!(
         std::mem::size_of::<SceneUniforms>(),
-        528 + gizmo::renderer::MAX_LIGHTS * 64,
+        560 + gizmo::renderer::MAX_LIGHTS * 64,
         "a field was added to the block — decide here whether the two paths should agree on it \
          (the light array is the block's only variable part, so it is written against MAX_LIGHTS)"
     );

@@ -97,6 +97,9 @@ pub fn execute_render_pipeline(
         0,
         gizmo::bytemuck::cast_slice(&[scene_uniform_data]),
     );
+    // Same as the game path: the forward shader's light loop reads these, so skipping this upload
+    // means an unlit viewport rather than a slower one.
+    renderer.scene.upload_clusters(&renderer.queue, &setup.clusters);
 
     // --- BATCHING (INSTANCING) HAZIRLIĞI VE FRUSTUM CULLING ---
     use gizmo::renderer::renderer::InstanceRaw;

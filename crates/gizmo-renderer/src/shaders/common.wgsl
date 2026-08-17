@@ -29,7 +29,7 @@ struct SceneUniforms {
     camera_pos:      vec4<f32>,
     sun_direction:   vec4<f32>,   // xyz = sun dir, w = sun-present flag (1/0)
     sun_color:       vec4<f32>,   // rgb = colour, w = intensity
-    lights:          array<LightData, 32>,
+    lights:          array<LightData, 256>,
     light_view_proj: array<mat4x4<f32>, 4>,
     cascade_splits:  vec4<f32>,
     camera_forward:  vec4<f32>,
@@ -50,7 +50,35 @@ struct SceneUniforms {
     // Fullscreen passes that unproject NDC→world read this instead of calling inverse_mat4
     // per fragment. Appended at the tail so all prior field offsets stay byte-compatible.
     inv_view_proj: mat4x4<f32>,
+    // Clustered light culling (gizmo-renderer/src/clustered.rs). dims = (x, y, z, 0) tiles/slices;
+    // depth = (z_scale, z_bias, 0, 0) for slice = floor(log(view_depth) * z_scale + z_bias).
+    cluster_dims:  vec4<u32>,
+    cluster_depth: vec4<f32>,
 };
+
+// ── Clustered light lookup ───────────────────────────────────────────────────
+//
+// The cluster a world position belongs to, by the SAME mapping `clustered.rs` assigns lights with:
+// screen tile from NDC, depth slice from the log of the view depth. A shader that wants a cluster's
+// light list also needs the two storage bindings (group 0, bindings 1 and 2) — they are declared by
+// the shaders that light, not here, because a pipeline whose group 0 lacks them must still be able
+// to compose this module.
+fn gizmo_cluster_index(scene_: SceneUniforms, world_pos: vec3<f32>) -> u32 {
+    let dims = scene_.cluster_dims;
+    let clip = scene_.view_proj * vec4<f32>(world_pos, 1.0);
+    // Behind the camera (w <= 0) has no cluster; clamp into the volume rather than wrap.
+    let inv_w = select(1.0 / clip.w, 1.0, abs(clip.w) < 1e-9);
+    let uv = clamp(clip.xy * inv_w * 0.5 + vec2<f32>(0.5), vec2<f32>(0.0), vec2<f32>(0.999999));
+    let tile = vec2<u32>(uv * vec2<f32>(f32(dims.x), f32(dims.y)));
+
+    let depth = max(dot(world_pos - scene_.camera_pos.xyz, scene_.camera_forward.xyz), 1e-6);
+    let raw = log(depth) * scene_.cluster_depth.x + scene_.cluster_depth.y;
+    let slice = min(u32(max(floor(raw), 0.0)), dims.z - 1u);
+
+    return min(tile.x, dims.x - 1u)
+         + min(tile.y, dims.y - 1u) * dims.x
+         + slice * dims.x * dims.y;
+}
 
 // ── Core BRDF (Cook-Torrance / GGX) ──────────────────────────────────────────
 

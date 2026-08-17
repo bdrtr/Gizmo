@@ -47,6 +47,11 @@ pub struct SceneState {
     pub global_uniform_buffer: wgpu::Buffer,
     pub global_bind_group_layout: wgpu::BindGroupLayout,
     pub global_bind_group: wgpu::BindGroup,
+    /// Clustered lights: `(offset, count)` per cluster. Allocated for the worst case so the bind
+    /// group is built once — see [`crate::clustered::index_bytes`].
+    pub cluster_table_buffer: wgpu::Buffer,
+    /// Clustered lights: the index list the table points into.
+    pub cluster_index_buffer: wgpu::Buffer,
     pub shadow_bind_group_layout: wgpu::BindGroupLayout,
     pub shadow_bind_group: wgpu::BindGroup,
     /// Depth `texture_2d_array` (all CSM layers) for comparison sampling in lit shaders.
@@ -110,6 +115,32 @@ impl SceneState {
 // ANA YÖNETİCİ METOTLAR
 // ------------------------------------------------------------------
 
+impl SceneState {
+    /// Upload one frame's clustered-light assignment.
+    ///
+    /// Both buffers are allocated for the worst case, so this only ever writes a prefix and can
+    /// never need to grow — which is what keeps `global_bind_group` valid for the life of the
+    /// renderer. A cluster whose count is zero is still written: a stale table from an earlier frame
+    /// would light fragments from lights that are no longer there.
+    ///
+    /// `assignment.dropped` is the caller's to report; this is the transport, not the policy.
+    pub fn upload_clusters(
+        &self,
+        queue: &wgpu::Queue,
+        assignment: &crate::clustered::ClusterAssignment,
+    ) {
+        let table: Vec<u32> = assignment.table.iter().flat_map(|pair| *pair).collect();
+        queue.write_buffer(&self.cluster_table_buffer, 0, bytemuck::cast_slice(&table));
+        if !assignment.indices.is_empty() {
+            queue.write_buffer(
+                &self.cluster_index_buffer,
+                0,
+                bytemuck::cast_slice(&assignment.indices),
+            );
+        }
+    }
+}
+
 #[tracing::instrument(skip_all)]
 pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
     let global_uniform_buffer = build_global_uniforms(device);
@@ -124,12 +155,36 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
     ) = build_shadow_resources(device);
     let layouts = build_layouts(device);
 
+    let grid = crate::clustered::ClusterGrid::default();
+    let cluster_table_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("cluster_table"),
+        size: crate::clustered::table_bytes(grid),
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let cluster_index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("cluster_light_indices"),
+        size: crate::clustered::index_bytes(grid),
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+
     let global_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         layout: &layouts.global,
-        entries: &[wgpu::BindGroupEntry {
-            binding: 0,
-            resource: global_uniform_buffer.as_entire_binding(),
-        }],
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: global_uniform_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: cluster_table_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: cluster_index_buffer.as_entire_binding(),
+            },
+        ],
         label: Some("global_bind_group"),
     });
 
@@ -269,6 +324,8 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         global_uniform_buffer,
         global_bind_group_layout: layouts.global,
         global_bind_group,
+        cluster_table_buffer,
+        cluster_index_buffer,
         shadow_bind_group_layout: layouts.shadow,
         shadow_bind_group,
         shadow_texture_view,

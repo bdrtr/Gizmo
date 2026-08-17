@@ -113,6 +113,8 @@
 //! Implementation: [`frustum_cull`] re-exports [`Frustum`] and helpers from `gizmo-math`;
 //! [`visibility`] holds the index.
 
+/// Clustered light culling — which lights can reach which part of the frame.
+pub mod clustered;
 pub mod asset;
 pub mod async_assets;
 pub mod backdrop;

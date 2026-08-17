@@ -512,6 +512,8 @@ impl Renderer {
             global_uniform_buffer: scene.global_uniform_buffer,
             global_bind_group_layout: scene.global_bind_group_layout,
             global_bind_group: scene.global_bind_group,
+            cluster_table_buffer: scene.cluster_table_buffer,
+            cluster_index_buffer: scene.cluster_index_buffer,
             shadow_bind_group_layout: scene.shadow_bind_group_layout,
             shadow_bind_group: scene.shadow_bind_group,
             texture_bind_group_layout: scene.texture_bind_group_layout,

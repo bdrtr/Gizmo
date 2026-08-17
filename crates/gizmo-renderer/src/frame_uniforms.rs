@@ -56,19 +56,25 @@ use gizmo_math::{Mat4, Vec3};
 /// and compares field offsets *and* total span against this struct, so a raise that misses a
 /// shader fails a test with the offending file named.
 ///
-/// # Why 32
+/// # Why 256
 ///
-/// It was 10, which is few enough that an ordinary room lit by hand runs out — and running out
-/// used to mean lights vanishing arbitrarily (see `collect_scene_lights`; the selection is ranked
-/// and frustum-culled now, so what a raise buys is that fewer scenes reach the cap at all).
+/// It was 10 (arbitrary ten survived), then 32 once selection was ranked and frustum-culled, and
+/// both of those numbers were limited by the same thing: the lighting loop ran over **every** light
+/// in the frame, per fragment, so the cap was a frame-time budget in disguise.
 ///
-/// 32 costs 2 KiB of the scene block (2576 bytes total, against a 64 KiB uniform-binding floor
-/// everywhere WebGPU runs) and nothing per frame: both lighting loops run to `num_lights`, not to
-/// this constant, so a scene with three lights pays for three. What it does *not* buy is a
-/// thousand lights — the loop is per-fragment and unclustered, which is what a tiled/clustered
-/// pass exists to fix (docs/ENGINE.md §3). 32 is the ceiling that fits the cost model this
-/// renderer actually has today.
-pub const MAX_LIGHTS: usize = 32;
+/// Clustering removed that link ([`crate::clustered`]). A fragment now loops over its own cluster's
+/// list, bounded by
+/// [`MAX_LIGHTS_PER_CLUSTER`](crate::clustered::MAX_LIGHTS_PER_CLUSTER) = 32 whatever the scene
+/// holds, so what this constant limits is only how many lights a *frame* may carry, and the costs
+/// are linear and small: 16 KiB of the scene block (16944 bytes total, against a 64 KiB
+/// uniform-binding floor everywhere WebGPU runs) and 0.1–0.8 ms of CPU assignment depending on how
+/// many lights are actually in view.
+///
+/// Why not more: the light array lives in the *uniform* block, so the hard ceiling is
+/// `(65536 - 560) / 64` = 1015 lights, and past a few hundred the honest move is to put the array in
+/// a storage buffer rather than to inch this number toward a cliff. 256 is a round number well
+/// inside the limit that no hand-lit scene is going to reach.
+pub const MAX_LIGHTS: usize = 256;
 
 /// The active camera, as *both* uniform blocks need it.
 ///
@@ -230,6 +236,18 @@ impl SceneUniforms {
                 shadows.point_caster.map_or(0.0, |i| (i + 1) as f32),
             ],
             num_lights: *num_lights,
+            // Derived here rather than plumbed: the grid is the one `ClusterGrid::default()` both
+            // sides use, and the depth mapping comes from the camera's own near/far, which this
+            // block already carries. Nothing upstream has to know clustering exists.
+            cluster_dims: {
+                let g = crate::clustered::ClusterGrid::default();
+                [g.x, g.y, g.z, 0]
+            },
+            cluster_depth: {
+                let g = crate::clustered::ClusterGrid::default();
+                let [scale, bias] = crate::clustered::depth_params(g, camera.near, camera.far);
+                [scale, bias, 0.0, 0.0]
+            },
             // Read by nothing today — the post composite owns exposure and `deferred_lighting.wgsl`
             // says as much next to the field it no longer reads. Fed from the camera in both paths
             // regardless, so a shader that starts reading it does not find two different answers.
@@ -405,7 +423,7 @@ mod tests {
         // the light ceiling changes. (It was `1168` / `1104`, correct only at MAX_LIGHTS = 10.)
         const LIGHT_BYTES: usize = std::mem::size_of::<LightData>(); // 4 × vec4 = 64
         assert_eq!(LIGHT_BYTES, 64);
-        assert_eq!(std::mem::size_of::<SceneUniforms>(), 528 + MAX_LIGHTS * LIGHT_BYTES);
+        assert_eq!(std::mem::size_of::<SceneUniforms>(), 560 + MAX_LIGHTS * LIGHT_BYTES);
         assert_eq!(
             std::mem::offset_of!(SceneUniforms, inv_view_proj),
             464 + MAX_LIGHTS * LIGHT_BYTES

@@ -5,7 +5,7 @@
 // dropped on web. That divergence is expressed at the SOURCE via `#ifdef SHADOWS` (shadow
 // bindings + PCF block) and `@group(#{SKELETON_GROUP})` / `@group(#{INSTANCE_GROUP})`
 // (3/4 native, 2/3 web) — never by grepping naga's reformatted output.
-#import gizmo::common::{SceneUniforms, compute_direct_lighting}
+#import gizmo::common::{SceneUniforms, compute_direct_lighting, gizmo_cluster_index}
 
 // Inverse of a 3x3 matrix for correct normal transformation under non-uniform scale
 fn inverse_transpose_3x3(m: mat3x3<f32>) -> mat3x3<f32> {
@@ -23,6 +23,13 @@ fn inverse_transpose_3x3(m: mat3x3<f32>) -> mat3x3<f32> {
 
 @group(0) @binding(0)
 var<uniform> scene: SceneUniforms;
+
+// Clustered light lists (gizmo-renderer/src/clustered.rs). On the GLOBAL group because the web
+// forward pipeline has no fifth bind group to spare — see `pipeline::layouts`.
+@group(0) @binding(1)
+var<storage, read> cluster_table: array<vec2<u32>>;
+@group(0) @binding(2)
+var<storage, read> cluster_light_indices: array<u32>;
 
 #ifdef SHADOWS
 @group(2) @binding(0)
@@ -270,7 +277,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         total_lighting += sun_light;
     }
 
-    for (var i = 0u; i < scene.num_lights; i++) {
+    // Clustered: only this fragment's cluster's lights. `i` is still the index into `scene.lights`
+    // so the body is unchanged from when it looped over every light.
+    let cluster = gizmo_cluster_index(scene, in.world_position);
+    let cluster_range = cluster_table[cluster];
+    for (var ci = 0u; ci < cluster_range.y; ci++) {
+        let i = cluster_light_indices[cluster_range.x + ci];
         let light = scene.lights[i];
         let light_type = u32(light.params.y);
         let intensity = light.position.w;

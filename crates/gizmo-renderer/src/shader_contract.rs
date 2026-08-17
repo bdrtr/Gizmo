@@ -132,6 +132,8 @@ fn scene_layout() -> Vec<(&'static str, u32)> {
         ("environment_preset_b", offset_of!(SceneUniforms, environment_preset_2) as u32),
         ("shading_mode", offset_of!(SceneUniforms, shading_mode) as u32),
         ("inv_view_proj", offset_of!(SceneUniforms, inv_view_proj) as u32),
+        ("cluster_dims", offset_of!(SceneUniforms, cluster_dims) as u32),
+        ("cluster_depth", offset_of!(SceneUniforms, cluster_depth) as u32),
     ]
 }
 
