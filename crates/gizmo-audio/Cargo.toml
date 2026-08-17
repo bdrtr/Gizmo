@@ -17,11 +17,29 @@ log = "0.4.29"
 serde = { version = "1.0", features = ["derive"] }
 gizmo-core = { path = "../gizmo-core" , version = "0.10.0" }
 
+# `default-features = false` bilinçli: 0.22'nin varsayılanı `recording` (mikrofon yakalama +
+# rtrb), `mp4` (isomp4 + aac) ve `dither` (rand, rand_distr) getiriyor. Motorun hiçbiri
+# kullanmıyor — çalınan formatlar 0.17'de olduğu gibi flac/mp3/vorbis/wav. Yeni bir formata
+# ihtiyaç doğarsa feature'ı burada tek satırla açarız; varsayılana bırakırsak tedarik zinciri
+# yüzeyi kimse istemeden büyür.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-rodio = "0.17"
+rodio = { version = "0.22", default-features = false, features = [
+    "playback",
+    "flac",
+    "mp3",
+    "vorbis",
+    "wav",
+] }
 
 # Web: cpal'ın WebAudio (AudioContext) backend'i. Tarayıcı autoplay politikası
 # gereği ses ancak bir kullanıcı jestinden sonra başlar; AudioManager::new'in
 # Result sözleşmesi bunu zaten kaldırıyor (başarısızlıkta sessiz devam).
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-rodio = { version = "0.17", features = ["wasm-bindgen"] }
+rodio = { version = "0.22", default-features = false, features = [
+    "playback",
+    "wasm-bindgen",
+    "flac",
+    "mp3",
+    "vorbis",
+    "wav",
+] }

@@ -18,7 +18,8 @@
 //! distance. No `rodio` types appear in the public API, keeping the dependency
 //! contract internal.
 
-use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source, SpatialSink};
+use rodio::stream::DeviceSinkBuilder;
+use rodio::{Decoder, MixerDeviceSink, Player, Source, SpatialPlayer};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Cursor, Read};
@@ -141,16 +142,18 @@ impl AudioSource {
 /// Resource that owns the audio output device and manages loaded sounds and
 /// active playback sinks (both global and 3D spatial).
 pub struct AudioManager {
-    // OutputStream is kept alive so audio actually plays
-    _stream: OutputStream,
-    stream_handle: OutputStreamHandle,
+    // The device sink owns the live `cpal::Stream` — dropping it stops all audio — and hands out
+    // the mixer that every player connects to. (rodio 0.22 merged the old `OutputStream` +
+    // `OutputStreamHandle` pair into this one value; "sink" in *our* vocabulary still means one
+    // playing sound, which rodio now calls a `Player`.)
+    device_sink: MixerDeviceSink,
 
     // RAM'e (Memory) yüklenmiş ses dosyaları (Disk I/O darboğazını önler)
     sound_buffers: HashMap<String, Arc<[u8]>>,
 
-    // Aktif SpatialSink'leri veya normal Sink'leri takip edip parametrelerini güncellemek için
-    active_spatial_sinks: HashMap<u64, SpatialSink>,
-    active_sinks: HashMap<u64, Sink>,
+    // Aktif uzamsal/normal çalıcıları takip edip parametrelerini güncellemek için
+    active_spatial_sinks: HashMap<u64, SpatialPlayer>,
+    active_sinks: HashMap<u64, Player>,
     next_sink_id: u64,
 
     // Su-altı "boğma" modu: aktifken tüm sesler kısık + hafif düşük pitch (dampening).
@@ -214,12 +217,15 @@ impl AudioManager {
     /// Returns [`AudioError::Backend`] if no audio output device is available
     /// or the default device cannot be opened.
     pub fn new() -> Result<Self, AudioError> {
-        match OutputStream::try_default() {
-            Ok((stream, stream_handle)) => {
+        match DeviceSinkBuilder::open_default_sink() {
+            Ok(mut device_sink) => {
+                // rodio prints "Dropping DeviceSink, audio playing through this sink will stop"
+                // to stderr on drop unless this is off. Here that drop *is* engine shutdown —
+                // the manager owns the device for its whole life — so the warning is noise.
+                device_sink.log_on_drop(false);
                 log::info!("Gizmo Audio: Ses cihazı başlatıldı! 3D Uzamsal (Spatial) Motor Aktif.");
                 Ok(Self {
-                    _stream: stream,
-                    stream_handle,
+                    device_sink,
                     sound_buffers: HashMap::new(),
                     active_spatial_sinks: HashMap::new(),
                     active_sinks: HashMap::new(),
@@ -268,7 +274,7 @@ impl AudioManager {
     const UW_SPEED: f32 = 0.85;
 
     /// Turn the underwater "muffle" mode on/off. While active every sound is turned down +
-    /// drops to a slightly lower pitch (since rodio's `Sink` does not support a live low-pass
+    /// drops to a slightly lower pitch (since rodio's `Player` does not support a live low-pass
     /// filter, this dampening is used instead of a real low-pass — it gives a "muffled" feel).
     /// IDEMPOTENT: it applies only when the state CHANGES, so it can safely be called every
     /// frame. NOTE: because the volume is undone with a multiplier, if the game side calls
@@ -300,8 +306,8 @@ impl AudioManager {
         self.underwater
     }
 
-    /// Applies the muffle to a newly created normal `Sink` if we are underwater at that moment.
-    fn apply_underwater_to(sink: &Sink, underwater: bool) {
+    /// Applies the muffle to a newly created normal player if we are underwater at that moment.
+    fn apply_underwater_to(sink: &Player, underwater: bool) {
         if underwater {
             sink.set_volume(sink.volume() * Self::UW_VOLUME_MUL);
             sink.set_speed(Self::UW_SPEED);
@@ -312,9 +318,9 @@ impl AudioManager {
     ///
     /// # Errors
     ///
-    /// Returns [`AudioError::NotLoaded`] if `name` was never loaded,
-    /// [`AudioError::Decode`] if the bytes cannot be decoded, or
-    /// [`AudioError::Backend`] if a playback sink cannot be created.
+    /// Returns [`AudioError::NotLoaded`] if `name` was never loaded, or
+    /// [`AudioError::Decode`] if the bytes cannot be decoded. Attaching the sound to the output
+    /// device cannot fail here — the device was opened once, in [`AudioManager::new`].
     pub fn play(&mut self, name: &str) -> Result<u64, AudioError> {
         self.play_internal(name, false)
     }
@@ -323,9 +329,9 @@ impl AudioManager {
     ///
     /// # Errors
     ///
-    /// Returns [`AudioError::NotLoaded`] if `name` was never loaded,
-    /// [`AudioError::Decode`] if the bytes cannot be decoded, or
-    /// [`AudioError::Backend`] if a playback sink cannot be created.
+    /// Returns [`AudioError::NotLoaded`] if `name` was never loaded, or
+    /// [`AudioError::Decode`] if the bytes cannot be decoded. Attaching the sound to the output
+    /// device cannot fail here — the device was opened once, in [`AudioManager::new`].
     pub fn play_looped(&mut self, name: &str) -> Result<u64, AudioError> {
         self.play_internal(name, true)
     }
@@ -337,7 +343,7 @@ impl AudioManager {
         })?;
         let cursor = Cursor::new(Arc::clone(bytes));
         let decoder = Decoder::new(cursor).map_err(|e| AudioError::Decode(e.to_string()))?;
-        let sink = Sink::try_new(&self.stream_handle).map_err(|e| AudioError::Backend(e.to_string()))?;
+        let sink = Player::connect_new(self.device_sink.mixer());
         if looped {
             sink.append(decoder.repeat_infinite());
         } else {
@@ -356,9 +362,9 @@ impl AudioManager {
     ///
     /// # Errors
     ///
-    /// Returns [`AudioError::NotLoaded`] if `name` was never loaded,
-    /// [`AudioError::Decode`] if the bytes cannot be decoded, or
-    /// [`AudioError::Backend`] if a spatial sink cannot be created.
+    /// Returns [`AudioError::NotLoaded`] if `name` was never loaded, or
+    /// [`AudioError::Decode`] if the bytes cannot be decoded. Attaching the sound to the output
+    /// device cannot fail here — the device was opened once, in [`AudioManager::new`].
     pub fn play_3d(
         &mut self,
         name: &str,
@@ -373,9 +379,9 @@ impl AudioManager {
     ///
     /// # Errors
     ///
-    /// Returns [`AudioError::NotLoaded`] if `name` was never loaded,
-    /// [`AudioError::Decode`] if the bytes cannot be decoded, or
-    /// [`AudioError::Backend`] if a spatial sink cannot be created.
+    /// Returns [`AudioError::NotLoaded`] if `name` was never loaded, or
+    /// [`AudioError::Decode`] if the bytes cannot be decoded. Attaching the sound to the output
+    /// device cannot fail here — the device was opened once, in [`AudioManager::new`].
     pub fn play_3d_looped(
         &mut self,
         name: &str,
@@ -400,8 +406,8 @@ impl AudioManager {
         })?;
         let cursor = Cursor::new(Arc::clone(bytes));
         let decoder = Decoder::new(cursor).map_err(|e| AudioError::Decode(e.to_string()))?;
-        let sink = SpatialSink::try_new(&self.stream_handle, emitter_pos, left_ear, right_ear)
-            .map_err(|e| AudioError::Backend(e.to_string()))?;
+        let sink =
+            SpatialPlayer::connect_new(self.device_sink.mixer(), emitter_pos, left_ear, right_ear);
         if looped {
             sink.append(decoder.repeat_infinite());
         } else {
@@ -523,7 +529,75 @@ impl AudioManager {
 
 #[cfg(test)]
 mod tests {
-    use super::sanitize_playback_speed;
+    use super::{sanitize_playback_speed, AudioManager};
+    use rodio::{Decoder, Player, Source};
+    use std::io::Cursor;
+
+    /// A complete 16-bit mono PCM WAV file, `samples` frames of a cheap square wave.
+    ///
+    /// Built in-process rather than committed as a fixture: the point is to exercise the
+    /// *decoder*, and a handful of bytes assembled here cannot rot, go missing from a package,
+    /// or drag a binary blob into the repository.
+    fn wav_bytes(samples: u32) -> Vec<u8> {
+        const RATE: u32 = 8_000;
+        let data_len = samples * 2;
+        let mut v = Vec::with_capacity(44 + data_len as usize);
+        v.extend_from_slice(b"RIFF");
+        v.extend_from_slice(&(36 + data_len).to_le_bytes());
+        v.extend_from_slice(b"WAVEfmt ");
+        v.extend_from_slice(&16u32.to_le_bytes()); // fmt chunk size
+        v.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        v.extend_from_slice(&1u16.to_le_bytes()); // mono
+        v.extend_from_slice(&RATE.to_le_bytes());
+        v.extend_from_slice(&(RATE * 2).to_le_bytes()); // byte rate
+        v.extend_from_slice(&2u16.to_le_bytes()); // block align
+        v.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
+        v.extend_from_slice(b"data");
+        v.extend_from_slice(&data_len.to_le_bytes());
+        for i in 0..samples {
+            let s: i16 = if i % 32 < 16 { 8_000 } else { -8_000 };
+            v.extend_from_slice(&s.to_le_bytes());
+        }
+        v
+    }
+
+    /// The playback path — decode bytes, queue them on a player, mutate volume/speed — works
+    /// **without an output device**, so it is assertable on CI hardware that has no sound card.
+    ///
+    /// This is the regression test for the rodio 0.17 → 0.22 migration (2026-08-17). That upgrade
+    /// replaced every decoder: WAV used to go through `hound`, and now goes through `symphonia`.
+    /// A format the old backend accepted and the new one rejects would not break the build — it
+    /// would make `AudioManager::play` return `Decode` at runtime, i.e. silence, which is exactly
+    /// the failure a compile-checked migration misses.
+    #[test]
+    fn a_decoded_sound_queues_on_a_device_free_player() {
+        let decoder = Decoder::new(Cursor::new(wav_bytes(256)))
+            .expect("the WAV decoder must accept a plain 16-bit PCM file");
+
+        // `Player::new` is the device-free half of `connect_new`: the queue output would be fed
+        // to a mixer in real playback. Holding it keeps the queue alive for the assertions.
+        let (player, _queue) = Player::new();
+        assert!(player.empty(), "a fresh player holds no sound");
+
+        player.append(decoder.repeat_infinite());
+        assert!(!player.empty(), "the decoded sound must be queued on the player");
+        assert!(!player.is_paused(), "playback starts running, as it did on 0.17");
+
+        // The underwater muffle reads a player's volume back and writes both parameters — the two
+        // accessors `set_underwater` depends on.
+        AudioManager::apply_underwater_to(&player, true);
+        assert!(
+            player.volume() < 1.0 && player.speed() < 1.0,
+            "underwater must turn the sound down and slow it: vol {} speed {}",
+            player.volume(),
+            player.speed()
+        );
+
+        // Not asserted here: that `stop()` empties the player. Emptiness is decremented as the
+        // *mixer pulls samples*, so with no device nothing ever drains — which is also why
+        // `clean_dead_sinks`'s garbage collection cannot be tested without hardware.
+        player.stop();
+    }
 
     #[test]
     fn playback_speed_never_reaches_zero() {
