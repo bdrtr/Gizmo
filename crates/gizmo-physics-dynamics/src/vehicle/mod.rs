@@ -62,7 +62,7 @@ impl Default for PacejkaParams {
 }
 
 impl PacejkaParams {
-    /// Tek eksen için saf Pacejka değeri ([-∞,+∞] slip → kuvvet)
+    /// The pure Pacejka value for one axis ([-∞,+∞] slip → force)
     pub fn calculate_force(&self, slip: f32, normal_load: f32) -> f32 {
         let bx = self.b * slip;
         let d = self.d * normal_load;
@@ -70,8 +70,8 @@ impl PacejkaParams {
         d * inner.sin()
     }
 
-    /// Kombine slip weighting fonksiyonu (Lorentzian falloff)
-    /// σ_other = dikey yöndeki normalize kayma miktarı
+    /// The combined-slip weighting function (Lorentzian falloff).
+    /// σ_other = the normalised slip in the perpendicular direction.
     fn weighting_lorentzian(&self, sigma_other: f32) -> f32 {
         let k = self.b * sigma_other;
         // Lorentzian falloff, KİNETİK sürtünme tabanıyla (0.35).
@@ -91,8 +91,8 @@ impl PacejkaParams {
 /// Geriye uyum için PacejkaLat alias
 pub type PacejkaLat = PacejkaParams;
 
-/// Kombine Pacejka: uzunlamasına ve yanal kuvvetleri birlikte hesapla
-/// Sürtünme çemberi dahilinde tutulur.
+/// Combined Pacejka: compute the longitudinal and lateral forces together,
+/// keeping them inside the friction circle.
 pub fn pacejka_combined(
     long: &PacejkaParams,
     lat: &PacejkaParams,
@@ -158,9 +158,9 @@ pub enum Axle {
 /// Tahrik düzeni: motor torku hangi aksa gider ve motor RPM'i hangi tekerleklerden türetilir.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Drivetrain {
-    /// Önden çekiş
+    /// Front-wheel drive
     Fwd,
-    /// Arkadan itiş (varsayılan)
+    /// Rear-wheel drive (the default)
     Rwd,
     /// Dört tekerlek
     Awd,
@@ -347,9 +347,11 @@ pub struct Wheel {
     /// This doubles as the tyre's normal load `Fz` in the Pacejka model, so a corner at 0 N
     /// produces no grip at all in either axis. Zeroed while airborne.
     pub suspension_force: f32,
-    /// Temas edilen zeminin dinamik sürtünmesi (grip çarpanı için). 1. geçiş raycast'inde
-    /// çarpılan collider'ın PhysicsMaterial'ından yakalanır; havadayken ASPHALT'a döner.
-    /// grip_mult = surface_friction / ASPHALT.dynamic_friction → buz/kum/asfalt gerçek tutuş verir.
+    /// The dynamic friction of the ground being touched (for the grip multiplier). Captured
+    /// from the PhysicsMaterial of the collider hit by the first-pass raycast; falls back to
+    /// ASPHALT while airborne.
+    /// grip_mult = surface_friction / ASPHALT.dynamic_friction → ice/sand/asphalt give real
+    /// grip.
     pub surface_friction: f32,
 }
 
@@ -478,7 +480,7 @@ pub struct VehicleTuning {
     /// This is a clamp, not a limiter — there is no fuel cut and no over-rev damage; the
     /// engine speed simply saturates here while the wheels keep accelerating.
     pub max_rpm: f32,
-    /// [0]=Geri, [1]=Nötr, [2..]=İleri vitesler
+    /// [0]=reverse, [1]=neutral, [2..]=forward gears
     pub gear_ratios: Vec<f32>,
     /// Final-drive (differential) ratio, multiplied onto the selected gear ratio.
     ///
@@ -488,9 +490,9 @@ pub struct VehicleTuning {
     /// against top speed and changes throttle response at the same time. A value of 0 leaves
     /// the car with no drive at all.
     pub final_drive_ratio: f32,
-    /// Otomatik vites: upshift RPM eşiği
+    /// Automatic gearbox: the upshift RPM threshold
     pub upshift_rpm: f32,
-    /// Otomatik vites: downshift RPM eşiği
+    /// Automatic gearbox: the downshift RPM threshold
     pub downshift_rpm: f32,
     /// Distance between the front and rear axles in metres. Sets the turn radius
     /// (`wheelbase / tan(steer_angle)`) and, with the track width, the per-wheel Ackermann
@@ -534,22 +536,22 @@ pub struct VehicleTuning {
     /// Drag, downforce and ground-effect parameters. Aero is applied to the chassis every step
     /// regardless of whether any wheel is grounded.
     pub aero: AeroPackage,
-    /// Ölçülmüş tork eğrisi: `(rpm, N·m)` çiftleri, **devire göre artan** sırada.
+    /// A measured torque curve: `(rpm, N·m)` pairs, in **ascending rpm** order.
     ///
-    /// Boş bırakılırsa (varsayılan) motor [`Self::max_engine_torque`] ile ölçeklenen kendi
-    /// parametrik çan eğrisini kullanır — yani mevcut davranış bit düzeyinde korunur.
-    /// Doluysa çan eğrisi tamamen devre dışı kalır ve tork bu noktalardan doğrusal
-    /// interpolasyonla okunur.
+    /// Left empty (the default), the engine uses its own parametric bell curve scaled by
+    /// [`Self::max_engine_torque`] — so existing behaviour is preserved bit for bit. When it is
+    /// populated the bell curve is bypassed entirely and torque is read from these points by
+    /// linear interpolation.
     ///
-    /// Neden var: çan eğrisi her aracın tepe torkunu **aynı devirde** yapmasına yol açıyor
-    /// (`ratio = 0.4`). Gerçek bir aracın eğrisi elde varsa bu, arabaları birbirinden ayıran
-    /// şeyi atmak demek — iki farklı motor aynı tepe torka sahipse birebir aynı sürülür.
-    /// Örnek: NFSU2'nun 240SX kaydı tepe torkunu 4675 devirde yapıyor, çan eğrisi ise
-    /// 3280'de; 1.400 devirlik bir fark ve tamamen farklı bir düşüş şekli.
+    /// Why it exists: the bell curve makes every vehicle peak at the **same rpm**
+    /// (`ratio = 0.4`). If a real vehicle's curve is available, that throws away the thing that
+    /// tells cars apart — two different engines with the same peak torque drive identically.
+    /// For example, NFSU2's 240SX record peaks at 4675 rpm where the bell curve peaks at 3280;
+    /// a difference of 1,400 rpm and an entirely different fall-off.
     ///
-    /// Aralık dışı devirler **uçlara sabitlenir**, sıfıra düşmez: motorun kırmızı çizgiyi
-    /// aşınca arabayı frenlemesi gerçek değil, ve çan eğrisinin `0.05` tabanı da tam bunun
-    /// için vardı.
+    /// Out-of-range rpms are **clamped to the ends** rather than falling to zero: an engine
+    /// braking the car once past the redline is not real, and the bell curve's `0.05` floor was
+    /// there for exactly that.
     pub torque_curve: Vec<(f32, f32)>,
 }
 
@@ -681,7 +683,7 @@ pub struct VehicleController {
     /// snapping straight to the redline off the line; in a tall gear the ratio shrinks and the
     /// engine picks up more freely. Undriven wheels never see it.
     pub flywheel_inertia: f32,   // kg·m²
-    /// Tahrik düzeni (FWD/RWD/AWD) — tork dağıtımı ve RPM türetimi buna göre.
+    /// The drivetrain layout (FWD/RWD/AWD) — torque distribution and RPM derivation follow it.
     pub drivetrain: Drivetrain,
 }
 
@@ -729,10 +731,11 @@ impl VehicleController {
         self.wheels.push(wheel);
     }
 
-    /// Motor tork eğrisi — ölçülmüş noktalar varsa onlardan, yoksa parametrik çan eğrisinden.
+    /// The engine torque curve — from the measured points if there are any, otherwise from the
+    /// parametric bell curve.
     ///
-    /// İki yol da gazla doğrusal ölçekleniyor ve ikisi de asla negatif dönmüyor: kırmızı çizgiyi
-    /// aşan bir motorun arabayı *frenlemesi* fizik değil, hata olur.
+    /// Both paths scale linearly with throttle and neither ever returns a negative value: an
+    /// engine past the redline *braking* the car would not be physics, it would be a bug.
     pub fn engine_torque(&self) -> f32 {
         let t = &self.tuning;
         let nm = if t.torque_curve.is_empty() {
@@ -745,16 +748,16 @@ impl VehicleController {
         nm * self.throttle_input.abs()
     }
 
-    /// `(rpm, N·m)` noktalarından devire karşılık gelen torku doğrusal interpolasyonla okur.
+    /// Reads the torque for an rpm out of the `(rpm, N·m)` points by linear interpolation.
     ///
-    /// Uçların dışı **sabitlenir** (ekstrapolasyon yok): ilk noktanın altında ilk değer, son
-    /// noktanın üstünde son değer. Ekstrapolasyon yapsaydı düşen bir eğri yeterince yüksek
-    /// devirde negatife geçer ve motor arabayı frenlemeye başlardı — çan eğrisinin `0.05`
-    /// tabanının koruduğu şey buydu, ve aynı koruma burada da olmalı.
+    /// Outside the ends it **clamps** (no extrapolation): below the first point the first value,
+    /// above the last point the last one. Extrapolating would take a falling curve negative at a
+    /// high enough rpm and the engine would start braking the car — which is what the bell
+    /// curve's `0.05` floor protected against, and the same protection has to hold here.
     ///
-    /// Noktaların artan sırada olduğu varsayılır. Değilse sonuç anlamsız olur ama panik veya
-    /// negatif değer üretmez; sıralama çağıranın işi, çünkü onu burada her karede yapmak
-    /// ölçülmüş bir eğriyi kullanmanın maliyetini boşuna ikiye katlar.
+    /// The points are assumed to be in ascending order. If they are not, the result is
+    /// meaningless but it neither panics nor goes negative; sorting is the caller's job, because
+    /// doing it here every frame would needlessly double the cost of using a measured curve.
     fn torque_from_curve(points: &[(f32, f32)], rpm: f32) -> f32 {
         let first = points[0];
         if rpm <= first.0 {
@@ -806,7 +809,7 @@ impl VehicleController {
         }
     }
 
-    /// Otomatik vites — RPM eşiğine göre upshift/downshift
+    /// The automatic gearbox — upshift/downshift against the RPM thresholds
     pub fn auto_shift_tick(&mut self, dt: f32) {
         if !self.auto_shift || self.reverse_input {
             return;

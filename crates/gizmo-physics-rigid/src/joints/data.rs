@@ -2,45 +2,45 @@ use gizmo_physics_core::BodyHandle;
 use gizmo_math::{Quat, Vec3};
 use serde::{Deserialize, Serialize};
 
-/// Bir çözücü GEÇİŞİNE ait çözücü scratch'i: satır-başına birikmiş λ ve geçişin NET
-/// impulse'ı.
+/// Solver scratch belonging to ONE solver pass: the per-row accumulated λ and the pass's NET
+/// impulse.
 ///
-/// Eşitsizlik (tek-yönlü) satırlarında — limit, halat, koni — clamp artık her iterasyonun
-/// kendi artımına değil, geçiş boyunca birikmiş TOPLAM λ'ya uygulanır. Eskiden negatif bir
-/// artım her seferinde 0'a kırpıldığından bir satır kendi ÖNCEKİ AŞIRI-DÜZELTMESİNİ geri
-/// alamıyordu: aynı eklemin başka bir satırı Jv'yi geri ittiğinde limit her iterasyonda
-/// yeniden pompalıyor, hiç geri vermiyordu — tek yönlü bir cırcır.
+/// On inequality (one-sided) rows — limit, rope, cone — the clamp now applies to the TOTAL λ
+/// accumulated over the pass, not to each iteration's own increment. A negative increment used
+/// to be clamped to 0 every time, so a row could never undo its OWN EARLIER OVER-CORRECTION:
+/// when another row of the same joint pushed Jv back, the limit re-pumped it every iteration and
+/// never gave anything back — a one-way ratchet.
 ///
-/// `is_broken` gibi `#[serde(skip)]`: sahne dosyası formatının parçası değil. Her
-/// `solve_joints` geçişinin başında sıfırlanır, yani `warm_start_factor = 0` (VARSAYILAN)
-/// iken adımlar arasında TAŞINMAZ. Warm start açıldığında `prev_rows` geçen geçişin
-/// λ'sını taşır ve gerçek simülasyon durumu olur — `WorldSnapshot` `joints`'i olduğu gibi
-/// klonladığı için bu zaten kapsanıyor (bkz. `JointSolver::solve_joints`).
+/// `#[serde(skip)]`, like `is_broken`: not part of the scene file format. It is zeroed at the
+/// start of every `solve_joints` pass, so with `warm_start_factor = 0` (the DEFAULT) nothing
+/// carries between steps. With warm start on, `prev_rows` carries the previous pass's λ and
+/// becomes real simulation state — which is already covered, because `WorldSnapshot` clones
+/// `joints` verbatim (see `JointSolver::solve_joints`).
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct JointScratch {
     rows: [f32; JointScratch::LEN],
-    /// Bir ÖNCEKİ `solve_joints` geçişinin λ'sı — yalnızca warm start okur.
+    /// The λ of the PREVIOUS `solve_joints` pass — read only by warm starting.
     prev_rows: [f32; JointScratch::LEN],
-    /// Enjeksiyon süpürmesi sırasında warm-start faktörü, aksi hâlde 0. Katsayı yerine
-    /// scratch'te durmasının sebebi tamamen pratik: scratch zaten 25 `apply_*` çağrı yerinin
-    /// hepsine geçiyor, çözücü modu ise geçmiyordu.
+    /// The warm-start factor during the injection sweep, 0 otherwise. It lives in the scratch
+    /// rather than in the coefficients for an entirely practical reason: the scratch was already
+    /// threaded through all 25 `apply_*` call sites, and the solver mode was not.
     warm_factor: f32,
-    /// Geçişin NET doğrusal impulse'ı, `Σ λᵢ·nᵢ` (dünya uzayı). `break_force` bundan
-    /// hesaplanır: taşınan gerçek tepki kuvvetinin büyüklüğü `‖Σ λᵢ·nᵢ‖ / dt`.
+    /// The pass's NET linear impulse, `Σ λᵢ·nᵢ` (world space). `break_force` is derived from
+    /// it: the magnitude of the real reaction force being carried is `‖Σ λᵢ·nᵢ‖ / dt`.
     pub(crate) impulse_lin: Vec3,
-    /// Geçişin NET açısal impulse'ı, `Σ λᵢ·nᵢ`. `break_torque` bundan hesaplanır.
+    /// The pass's NET angular impulse, `Σ λᵢ·nᵢ`. `break_torque` is derived from it.
     pub(crate) impulse_ang: Vec3,
 }
 
 impl JointScratch {
-    /// En çok satır üreten tür BallSocket: 3 lineer (`solve_fixed_joint`'ten), koni, twist ve
-    /// 2 asimetrik swing = 7 satır, en yüksek yuva indeksi 8. 10 = yuva 9 motor satırı için
-    /// ayrılmış pay.
+    /// The type that emits the most rows is BallSocket: 3 linear (from `solve_fixed_joint`),
+    /// cone, twist and 2 asymmetric swings = 7 rows, highest slot index 8. 10 leaves slot 9
+    /// reserved for the motor row.
     pub const LEN: usize = 10;
 
-    /// Bir satırın birikmiş λ'sına erişim. Yuvalar `joints::solver::row` içinde DERLEME
-    /// ZAMANI SABİTİ; koşullu atlanan satırlar yüzünden ilerleyen bir imleç kullanılamaz
-    /// (atlanan bir satır sonraki her satırın kimliğini kaydırırdı).
+    /// Access to a row's accumulated λ. The slots are COMPILE-TIME CONSTANTS in
+    /// `joints::solver::row`; an advancing cursor cannot be used because rows are conditionally
+    /// skipped, and a skipped row would shift the identity of every row after it.
     #[inline]
     pub(crate) fn row(&mut self, slot: usize) -> &mut f32 {
         &mut self.rows[slot]

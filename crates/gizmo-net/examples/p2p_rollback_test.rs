@@ -1,21 +1,21 @@
-//! Gerçek-UDP P2P deterministik rollback istemcisi (Faz 3 — "gerçek istemci binary'si").
+//! A real-UDP P2P deterministic rollback client (phase 3 — the "real client binary").
 //!
-//! Yeni `RollbackSession` + deterministik `PhysicsWorld::snapshot` üzerine kuruludur (eski
-//! ECS-tabanlı manuel döngü warm-start'ı kaybediyordu). İki örneği AYRI süreçlerde, çapraz
-//! portlarla çalıştırın; gerçek UDP üzerinden girdi alışverişi yapıp rollback ile senkron
-//! kalırlar.
+//! Built on the current `RollbackSession` plus the deterministic `PhysicsWorld::snapshot` (the
+//! old hand-rolled ECS loop lost warm-start state). Run two instances in SEPARATE processes with
+//! crossed ports; they exchange inputs over real UDP and stay in sync through rollback.
 //!
-//! NOT (GGPO davranışı): anlık (frontier) `state_hash`, uzak girdi henüz ONAYLANMADIĞI
-//! için TAHMİN içerir → iki tarafta canlı tick'lerde FARKLI olabilir; onaylı geçmiş ve
-//! (tüm girdiler geldikten sonra) SON hash yakınsar/eşleşir. Bit-bit rigorlu kanıt:
-//! `cargo test -p gizmo-net --features rollback` → `two_peers_converge_under_lag_and_packet_loss`
-//! (tam kontrollü loopback; iki peer ground-truth'a state_hash-eşit yakınsar).
+//! NOTE (GGPO behaviour): the frontier `state_hash` contains PREDICTION, because the remote input
+//! is not confirmed yet → it can DIFFER between the two sides on live ticks; the confirmed
+//! history, and the FINAL hash once every input has arrived, converge and match. The rigorous
+//! bit-for-bit proof is `cargo test -p gizmo-net --features rollback` →
+//! `two_peers_converge_under_lag_and_packet_loss` (a fully controlled loopback where both peers
+//! converge to the ground truth with equal state_hashes).
 //!
-//! Çalıştırma (iki terminal):
+//! Running it (two terminals):
 //!   cargo run -p gizmo-net --features rollback --example p2p_rollback_test -- 8000 8001 0
 //!   cargo run -p gizmo-net --features rollback --example p2p_rollback_test -- 8001 8000 1
 //!
-//! Argümanlar: <local_port> <remote_port> <local_player_id (0|1)>
+//! Arguments: <local_port> <remote_port> <local_player_id (0|1)>
 
 use gizmo_physics_rigid::BodyHandle;
 use gizmo_math::Vec3;

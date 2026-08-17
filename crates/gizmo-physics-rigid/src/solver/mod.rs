@@ -2,13 +2,13 @@ use crate::components::{RigidBody, Velocity};
 use gizmo_math::Vec3;
 use gizmo_physics_core::components::Transform;
 /// AAA Constraint Solver — Sequential Impulses (SI) with:
-/// - Warm-starting (önceki frame'in impulslarını uygula)
-/// - Accumulated-impulse clamping (negatif normal impulse engeli)
-/// - Coulomb friction cone (statik + dinamik)
-/// - Speculative contacts (penetrasyon öncesi temas)
-/// - 2-boyutlu sürtünme (iki tangent yönü)
-/// - Restitution threshold (micro-bounce önleme)
-/// - Solver iteration sayısı konfigüre edilebilir
+/// - Warm-starting (re-apply the previous frame's impulses)
+/// - Accumulated-impulse clamping (no negative normal impulse)
+/// - Coulomb friction cone (static + dynamic)
+/// - Speculative contacts (contact resolved before penetration happens)
+/// - 2-dimensional friction (two tangent directions)
+/// - Restitution threshold (suppresses micro-bounce)
+/// - Configurable solver iteration count
 use gizmo_physics_core::ContactManifold;
 
 mod block;
@@ -260,113 +260,119 @@ fn support_order_manifolds(
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct ConstraintSolver {
-    /// PGS iterasyon sayısı (daha fazla = daha stabil, daha yavaş)
+    /// PGS iteration count (more = more stable, slower)
     pub iterations: usize,
-    /// Baumgarte stabilizasyon faktörü (0.1..0.3 arası ideal)
-    /// Split Impulse kapalıyken fallback olarak kullanılır.
+    /// Baumgarte stabilisation factor (0.1..0.3 is the useful range).
+    /// Used as the fallback while Split Impulse is off.
     pub baumgarte: f32,
-    /// Penetrasyon toleransı — bu kadar penetrasyon normal kabul edilir
+    /// Penetration tolerance — this much overlap is accepted as normal
     pub slop: f32,
-    /// Warm-start faktörü (0.8 = önceki frame impulsunun %80'ini uygula)
+    /// Warm-start factor (0.8 = re-apply 80 % of the previous frame's impulse)
     pub warm_start_factor: f32,
-    /// Bu hızın altındaki çarpışmalarda restitution sıfır yapılır (dinlenme teması)
+    /// Below this closing speed restitution is forced to zero (resting contact)
     pub restitution_velocity_threshold: f32,
-    /// Maksimum pozisyon düzeltme miktarı (metre/step) - Patlamaları önler
+    /// Maximum positional correction per step (metres) — keeps corrections from exploding
     pub max_linear_correction: f32,
-    /// Split Impulse (Pseudo-Velocity) — pozisyon düzeltmesini ayrı bir
-    /// pseudo-velocity kanalında yapar, velocity'yi kirletmez.
-    /// Stacking stabilitesi ve resting contact jitter'ını önler.
-    /// (TGS Soft açıkken kullanılmaz; eski yol fallback olarak kalır.)
+    /// Split Impulse (pseudo-velocity) — resolves penetration on a separate
+    /// pseudo-velocity channel instead of polluting the real velocity.
+    /// Buys stacking stability and removes resting-contact jitter.
+    /// (Unused while TGS Soft is on; the old path stays as a fallback.)
     pub split_impulse_enabled: bool,
-    /// Split Impulse penetrasyon düzeltme oranı (0.1..0.4 arası ideal)
+    /// Split Impulse penetration recovery rate (0.1..0.4 is the useful range)
     pub split_impulse_erp: f32,
 
-    // ── TGS Soft (modern çözücü) ──────────────────────────────────────────
-    /// TGS Soft yolunu kullan (soft constraint + relax pass). Açıkken split-impulse
-    /// devre dışı kalır; pozisyon düzeltmesi soft bias'ın velocity katkısından
-    /// (biased−relaxed)·dt olarak `pos_corrections`'a yazılır. Yüksek-enerji çarpan
-    /// uzun yığınları (n≥16) SI'nin çözemediği yerde kararlı tutar.
+    // ── TGS Soft (the modern solver) ──────────────────────────────────────
+    /// Use the TGS Soft path (soft constraints + relax pass). While on, split-impulse is
+    /// disabled and the positional correction is written into `pos_corrections` as the soft
+    /// bias's velocity contribution, `(biased − relaxed)·dt`. It holds long stacks under
+    /// high-energy impacts (n≥16) where plain SI cannot.
     pub use_tgs_soft: bool,
-    /// Temas yumuşaklığı frekansı (Hz). Yüksek = daha sert/az gömülme; düşük = daha
-    /// yumuşak/kararlı. Box2D v3 varsayılanı 30 Hz. Substep oranına da clamp'lenir.
+    /// Contact softness frequency (Hz). Higher = stiffer/less penetration; lower =
+    /// softer/steadier. Box2D v3 defaults to 30 Hz. Also clamped against the substep rate.
     pub contact_hertz: f32,
-    /// Temas sönümleme oranı (ζ). >1 aşırı-sönümlü (sekmesiz, kararlı yığın). ~10.
+    /// Contact damping ratio (ζ). >1 is over-damped (no bounce, steady stacks). ~10.
     pub contact_damping_ratio: f32,
-    /// Relax (bias=0) iterasyon sayısı — soft bias'ın enjekte ettiği hızı temizler.
+    /// Relax (bias=0) iteration count — drains the velocity the soft bias injected.
     pub relax_iterations: usize,
-    /// Maksimum soft-bias hızı (m/s) — derin gömülmede pozisyon düzeltme hızını
-    /// sınırlar (patlama yok). Box2D v3 ≈ 3·lengthUnits.
+    /// Maximum soft-bias velocity (m/s) — caps how fast deep penetration is pushed out
+    /// (no explosions). Box2D v3 uses ≈ 3·lengthUnits.
     pub max_bias_velocity: f32,
 
-    /// Temasları çözmeden önce ankraj-tabanlı (bottom-up) DETERMİNİSTİK support
-    /// sırasına diz → ada çözümü broadphase pair-emission sırasından BAĞIMSIZ olur
-    /// (pair-order-invariant). Bu, incremental-broadphase'in önünü açan uyku-determinizmi
-    /// özelliğidir (docs/ENGINE.md §7).
+    /// Sort contacts into a DETERMINISTIC anchor-based (bottom-up) support order before
+    /// solving → an island's solution becomes INDEPENDENT of broadphase pair-emission order
+    /// (pair-order-invariant). That is the sleep-determinism property incremental broadphase
+    /// depends on (docs/ENGINE.md §7).
     ///
-    /// **VARSAYILAN AÇIK** (`Default` `true` veriyor). Bu yorum uzun süre "VARSAYILAN KAPALI"
-    /// diyordu ve yanlıştı — 2026-08-06'da düzeltildi. Yığın kararlılığını inceleyen biri için
-    /// önemli bir fark: sıralama devrede, yani ada çözümü broadphase pair-emission sırasından
-    /// zaten bağımsız ve "sıralamayı açmayı denesek mi" sorusu kapalı.
+    /// **ON BY DEFAULT** (`Default` yields `true`). This comment claimed "OFF BY DEFAULT" for a
+    /// long time and was wrong — corrected on 2026-08-06. The difference matters to anyone
+    /// investigating stack stability: the ordering is live, so island solutions are already
+    /// independent of pair-emission order and "should we try turning ordering on?" is a closed
+    /// question.
     ///
-    /// Başlangıçta yüksek-yığın instabilitesini çözeceği umuluyordu (Stage 1 "linchpin"), ancak
-    /// ampirik ölçüm bunu ÇÜRÜTTÜ: sıralama patlama frame'ini pek oynatmıyor (bkz.
-    /// soak_and_golden.rs kök-neden notu — instabilite bir under-convergence değil, metastable
-    /// rezonans). Asıl sağladığı şey belirlenimci, pair-emission'dan bağımsız bir toplam sıra;
-    /// incremental-broadphase işinin önünü açan uyku-determinizmi özelliği bu.
+    /// It was originally expected to fix tall-stack instability (the Stage 1 "linchpin"), and
+    /// measurement REFUTED that: ordering barely moves the frame at which a stack explodes (see
+    /// the root-cause note in soak_and_golden.rs — the instability is a metastable resonance,
+    /// not under-convergence). What it does deliver is a deterministic total order independent
+    /// of pair emission, which is the sleep-determinism property the incremental-broadphase
+    /// work needs.
     ///
-    /// Not: kapatmak `island_depth` hesabını KALDIRMAZ — `block_solver` açıkken BFS yine
-    /// koşuyor (yalnız permütasyon uygulanmıyor), çünkü adaptif sweep sayısı derinliğe bağlı.
+    /// Note: turning it off does NOT remove the `island_depth` computation — with `block_solver`
+    /// on the BFS still runs (only the permutation is skipped), because the adaptive sweep count
+    /// is derived from depth.
     pub support_ordering: bool,
 
-    /// Dönen ankrajlar (Box2D-v3 tekniği): her sweep'te temas ayrımını (separation) ve
-    /// jacobian kollarını (r_a/r_b) birikmiş dp DÖNMESİYLE yeniden hesapla — donmuş-ankraj
-    /// linearizasyon kaymasını giderir. VARSAYILAN KAPALI: resting-stack instabilitesini
-    /// ÇÖZMEZ (ampirik: N16 patlamasını ~%30 geciktirir, N32'yi çözmez — enjeksiyon
-    /// HEM TGS HEM SI yolunda; yani solver-üstü/paylaşılan bir kök, bkz. soak_and_golden.rs
-    /// kök-neden notu). Doğru bir teknik; per-sweep 2 Quat maliyeti nedeniyle varsayılan
-    /// açılmadı. Hazır ve gated.
+    /// Rotating anchors (a Box2D v3 technique): recompute contact separation and the Jacobian
+    /// arms (r_a/r_b) each sweep from the accumulated delta ROTATION, which removes the
+    /// frozen-anchor linearisation drift. OFF BY DEFAULT: it does NOT fix resting-stack
+    /// instability (measured: it delays the N16 blow-up by ~30 % and does not fix N32 — the
+    /// injection is present on BOTH the TGS and SI paths, i.e. the root is above the solver or
+    /// shared; see the root-cause note in soak_and_golden.rs). The technique is correct; it was
+    /// not made the default because of its cost of 2 quaternion ops per sweep. Implemented and
+    /// gated.
     pub rotating_anchors: bool,
 
-    /// Bir temasın "kayıyor" sayılması için gereken teğet hız (m/s) — Coulomb bütçesinin
-    /// **statik mi dinamik mi** olduğuna bu karar verir.
+    /// The tangential speed (m/s) at which a contact counts as *sliding* — this is what decides
+    /// whether the Coulomb budget is **static or dynamic**.
     ///
-    /// # Neden bir eşik, "talep aştı mı" değil
+    /// # Why a threshold, and not "did demand exceed it"
     ///
-    /// Koni kırpması eskiden şöyleydi: talep edilen teğet impuls `μ_s·λ_n`'i aşarsa `μ_d·λ_n`'e
-    /// ölçekle. Kulağa Coulomb gibi geliyor ama durum testi olarak YANLIŞ: `λ_n` sweep'ler ve
-    /// substep'ler arasında dalgalanıyor, dolayısıyla TAM DURAN bir temas da arada bir eşiği
-    /// aşıp dinamik bütçeye düşüyor ve hak ettiği `(μ_s − μ_d)·λ_n` tutuş kuvvetini kaybediyor.
-    /// Kaybettiği kuvvet küçük, sonucu değil: `atan(μ_d)` eğiminin üstünde kaçış kendini
-    /// besliyor. Ölçüldü (2026-08-17), μ_s=0.6 / μ_d=0.5 varsayılanlarıyla, 1 kg sandık:
+    /// The cone clamp used to work like this: if the demanded tangential impulse exceeded
+    /// `μ_s·λ_n`, scale it down to `μ_d·λ_n`. That sounds like Coulomb but is WRONG as a state
+    /// test: `λ_n` fluctuates between sweeps and substeps, so a contact that is COMPLETELY AT
+    /// REST crosses the threshold now and then, drops to the dynamic budget, and loses the
+    /// `(μ_s − μ_d)·λ_n` of holding force it had earned. The lost force is small; the outcome is
+    /// not, because above a slope of `atan(μ_d)` the escape feeds itself. Measured (2026-08-17)
+    /// with the defaults μ_s=0.6 / μ_d=0.5 and a 1 kg crate:
     ///
-    /// | eğim | tan θ / μ_s | eski davranış | olması gereken |
+    /// | slope | tan θ / μ_s | old behaviour | what should happen |
     /// |---|---|---|---|
-    /// | 25° | 0.78 | 10 s'de 2.8 mm sürüklenme | durmalı |
-    /// | 28° | 0.89 | **10 s'de 26 m kayıp, tabladan düştü** | durmalı (μ_s tutar) |
-    /// | 30° | 0.96 | **10 s'de 77 m, 27 m/s** | durmalı |
+    /// | 25° | 0.78 | 2.8 mm of drift in 10 s | stays put |
+    /// | 28° | 0.89 | **26 m in 10 s, slid off the plate** | stays put (μ_s holds it) |
+    /// | 30° | 0.96 | **77 m in 10 s, 27 m/s** | stays put |
     ///
-    /// `μ_d`'yi `μ_s`'ye eşitlemek üçünü de durduruyordu — yani sorun sürtünmenin büyüklüğü
-    /// değil, statik/dinamik geçişinin yanlış tetiklenmesiydi.
+    /// Setting `μ_d` equal to `μ_s` stopped all three — so the problem was never the magnitude
+    /// of friction, it was the static/dynamic transition firing when it should not.
     ///
-    /// Artık bütçeyi temasın GERÇEK teğet hızı seçiyor (PhysX'in `PxMaterial` modeli): eşiğin
-    /// altında statik, üstünde dinamik. Varsayılan 1 cm/s — bir oyunda "duruyor" denecek her şey
-    /// bunun altında, gerçekten kayan hiçbir şey değil.
+    /// The budget is now chosen by the contact's ACTUAL tangential speed (PhysX's `PxMaterial`
+    /// model): below the threshold static, above it dynamic. The default is 1 cm/s — everything
+    /// a game would call "at rest" is below it, and nothing genuinely sliding is.
     pub static_friction_velocity_threshold: f32,
 
-    /// Warm-start eşleme toleransı (m): bir önceki substep'in temas impulsu, YENİ temas
-    /// noktasına yalnız bu mesafeden yakınsa taşınır (pipeline.rs narrowphase warm-start).
-    /// Dinlenen yığın instabilitesinin ENJEKSİYON KANALI burası: kaymış bir temas noktasına
-    /// eski (skaler) impulsu YENİ kaldıraç koluyla yeniden uygulamak artık-tork bırakıp
-    /// yanal salınımı pompalıyor (buckling). Toleransı düşürmek (ör. 1e-3) yalnız GERÇEKTEN
-    /// dural noktalara warm-start verir → kaymış noktalar soğuk başlar → pompa kesilir.
-    /// Varsayılan 0.02 (tarihsel davranış).
+    /// Warm-start matching tolerance (m): the previous substep's contact impulse is carried to a
+    /// NEW contact point only if the point is within this distance (narrowphase warm-start, in
+    /// pipeline.rs). This is the INJECTION CHANNEL for resting-stack instability: re-applying an
+    /// old (scalar) impulse at a point that has MOVED, with the NEW lever arm, leaves a residual
+    /// torque and pumps a lateral oscillation (buckling). Lowering the tolerance (to e.g. 1e-3)
+    /// warm-starts only points that really did persist → shifted points start cold → the pump is
+    /// cut. Default 0.02 (historical behaviour).
     pub warm_start_match_tolerance: f32,
 
-    /// Manifold BLOCK solver: bir temas manifoldunun (aynı gövde-çifti, ≤4 coplanar nokta)
-    /// normal kısıtlarını ARDIŞIK Gauss-Seidel yerine BİRLİKTE (doğrudan aktif-küme LCP) çöz.
-    /// Noktalar-arası (tilt) kuplajı tam çözer → yığın-kolonunun yanal restoring stiffness'ini
-    /// buckling-kritiğin ÜSTÜNE çıkarır (dinlenen-yığın instabilitesinin yapısal fixi). Sürtünme
-    /// yine ardışık. Varsayılan kapalı (A/B + doğrulama); çalışırsa default açılacak.
+    /// Manifold BLOCK solver: solve a contact manifold's normal constraints (same body pair,
+    /// ≤4 coplanar points) TOGETHER as a direct active-set LCP instead of SEQUENTIALLY through
+    /// Gauss-Seidel. It resolves the point-to-point (tilt) coupling exactly, raising a stack
+    /// column's lateral restoring stiffness ABOVE the buckling threshold — the structural fix
+    /// for resting-stack instability. Friction stays sequential. Off by default (pending A/B +
+    /// verification); it becomes the default if it holds up.
     pub block_solver: bool,
 
     /// Let the block solver pick its own sweep count from the island's support depth instead of
@@ -399,28 +405,29 @@ pub struct ConstraintSolver {
     /// reach its top.
     pub adaptive_iterations: bool,
 
-    /// Block-solver Tikhonov regularizasyonu (manifoldun ortalama normal efektif kütlesinin
-    /// oranı). 4-coplanar temas bloğunun rank-eksikliğini giderir; fiziksel tilt-restoring
-    /// modlarını sert bırakacak kadar küçük olmalı.
+    /// Block-solver Tikhonov regularisation, as a fraction of the manifold's mean normal
+    /// effective mass. It cures the rank deficiency of a 4-coplanar contact block, and must stay
+    /// small enough to leave the physical tilt-restoring modes stiff.
     ///
-    /// **0.1'den 0.05'e indirildi (2026-08-06).** 0.1, arayüzlerin çoğunun DEJENERE tek noktalı
-    /// olduğu — yani rank-eksikliği hiç oluşmadığı, dolayısıyla bu terimin hiç uygulanmadığı —
-    /// dönemde seçilmişti. `clip_box_box` derinlik toleransı 4-noktalı bloğu norm hâline
-    /// getirince 0.1 fazla yumuşatma oldu: bir regülarizasyon terimi aynı zamanda bir
-    /// yumuşatmadır ve yumuşak arayüz yavaş yakınsar. Ölçüldü — sıkıştırılmış serbest zincir
-    /// (n=24, varsayılan sweep) 0.1'de 379 karede dinleniyor ve 5.4e-4 momentum sızdırıyor,
-    /// 0.05'te 0. karede dinleniyor ve 4e-6 sızdırıyor: 135× daha iyi korunum. 0.05'ten
-    /// 0.002'ye kadar her değer aynı; en BÜYÜĞÜ seçildi, çünkü rank-eksikliğine karşı en çok
-    /// sayısal payı bırakan o. 12 katlı yığınlar (6 hücre) her değerde ayakta.
+    /// **Lowered from 0.1 to 0.05 (2026-08-06).** 0.1 was chosen back when most interfaces were
+    /// DEGENERATE single-point ones — i.e. the rank deficiency never arose and this term was
+    /// never applied. Once `clip_box_box`'s depth tolerance made the 4-point block the norm, 0.1
+    /// turned out to be too much softening: a regularisation term is also a softening, and a
+    /// soft interface converges slowly. Measured — a compressed free chain (n=24, default
+    /// sweeps) settles at frame 379 and leaks 5.4e-4 of momentum at 0.1, versus settling at
+    /// frame 0 and leaking 4e-6 at 0.05: 135× better conservation. Every value from 0.05 down to
+    /// 0.002 behaves identically; the LARGEST was taken, because it leaves the most numerical
+    /// margin against rank deficiency. 12-high stacks (6 cells) stand at every value.
     /// (`tests/solver_quality.rs::does_block_regularization_drive_the_convergence_cost`)
     pub block_regularization: f32,
 
-    /// Whole-CHAIN direct solve: yüksek (support-depth≥5), yeterince küçük chain adalarının
-    /// TÜM normal impulslarını her sweep'te BİRLİKTE (yoğun aktif-küme LCP) çöz → inter-manifold
-    /// support kuplajını TAM çözer, orta-yükseklik kule kararlılığını artırır (N24/N40 gibi).
-    /// VARSAYILAN KAPALI: O(n³) maliyeti pahalı ve aşırı kuleleri (N32+) yine ROBUST çözmüyor
-    /// (kalan instabilite friction/geometri-kanalında; normal+friction ortak çözücü gerek).
-    /// Doğru+test edildi; yüksek kuleye ihtiyaç olan ve maliyeti kaldıran sahneler için gated.
+    /// Whole-CHAIN direct solve: for tall (support depth ≥5) and small enough chain islands,
+    /// solve ALL of their normal impulses TOGETHER each sweep (dense active-set LCP) → the
+    /// inter-manifold support coupling is resolved exactly, which improves mid-height tower
+    /// stability (N24/N40). OFF BY DEFAULT: it costs O(n³) and still does not solve extreme
+    /// towers (N32+) ROBUSTLY — the remaining instability lives in the friction/geometry channel
+    /// and needs a joint normal+friction solver. Correct and tested; gated for scenes that need
+    /// tall stacks and can afford the cost.
     pub direct_chain_solve: bool,
 }
 
@@ -508,11 +515,11 @@ impl ConstraintSolver {
     // ANA SOLVER: Manifold listesi üzerinde PGS (Projected Gauss-Seidel)
     // ─────────────────────────────────────────────────────────────────────────
 
-    /// `pos_corrections` (uzunluğu `velocities` ile aynı), split-impulse pozisyon
-    /// düzeltmesini gövde başına (lineer Δkonum, açısal Δ-scaled-axis) olarak DIŞARI
-    /// yazar. Eskiden bu düzeltme doğrudan `velocities`'e ekleniyordu; bu, pozisyon
-    /// düzeltme hızının kalıcı hıza sızmasına (resting jitter / cisimlerin uyumaması)
-    /// yol açıyordu. Çağıran bu deltaları pozisyona uygulamalıdır.
+    /// `pos_corrections` (same length as `velocities`) is where the split-impulse positional
+    /// correction is written OUT, per body, as (linear Δposition, angular Δ-scaled-axis). This
+    /// correction used to be added straight into `velocities`, which let the positional recovery
+    /// speed leak into the body's real velocity — resting jitter, and bodies that never fell
+    /// asleep. The caller is responsible for applying these deltas to position.
     ///
     /// Returns what the adaptive policy decided for this island — see [`SolveStats`]. An island
     /// with no manifolds is not solved and reports zeroes.

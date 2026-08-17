@@ -1,8 +1,7 @@
-//! Snapshot Interpolation (Durum Aradeğerlemesi)
+//! Snapshot interpolation.
 //!
-//! Diğer oyuncuların ağ üzerinden gelen konum/dönüş verilerini
-//! akıcı bir şekilde ekrana yansıtmak için geçmiş sunucu Snapshot'ları arasında
-//! interpolasyon (Lerp/Slerp) yapar.
+//! Interpolates (lerp/slerp) between past server snapshots so that the position/rotation data
+//! arriving over the network for other players can be displayed smoothly.
 //!
 //! Nothing in this repository drives this yet — `server/src/main.rs` is the only reference
 //! integration and it is server-side only. The buffer's behaviour is therefore pinned by this
@@ -33,8 +32,8 @@ pub struct TransformSnapshot {
 #[derive(Debug, Clone)]
 pub struct SnapshotInterpolator {
     buffer: VecDeque<TransformSnapshot>,
-    /// İstemci gösteriminde bırakılacak gecikme süresi (Saniye)
-    /// Örneğin 0.1s (100ms) ise oyuncu 100ms geçmişi izler ama çok akıcı olur.
+    /// How far behind the client renders, in seconds.
+    /// At 0.1 s (100 ms) the player watches a 100 ms-old world — and a very smooth one.
     pub interpolation_delay: f64,
 }
 
@@ -56,14 +55,14 @@ impl SnapshotInterpolator {
         }
     }
 
-    /// Sunucudan yeni bir durum geldiğinde tampona ekler.
+    /// Adds a state to the buffer as it arrives from the server.
     ///
-    /// `get_interpolated_transform`'daki tarama, tampon **zaman-artan** sıralı olduğunu
-    /// varsayar (S1.time <= render_time <= S2.time'ı saran ikiliyi soldan sağa bulur).
-    /// Ağ paketleri sırasız gelebileceğinden (jitter/yeniden-sıralama), burada sıralı
-    /// konuma ekleyerek bu değişmezi (invariant) her zaman koruruz. Aksi halde
-    /// `buffer = [{5.0}, {3.0}]` gibi bir durumda tarama yanlış ikiliyi seçip
-    /// interpolasyon yerine tek (gelecek) snapshot'ı döndürürdü.
+    /// The scan in `get_interpolated_transform` assumes the buffer is sorted by **increasing
+    /// time** (it walks left to right for the pair bracketing S1.time <= render_time <=
+    /// S2.time). Network packets can arrive out of order (jitter, reordering), so insertion
+    /// happens at the sorted position to preserve that invariant at all times. Otherwise a
+    /// buffer like `[{5.0}, {3.0}]` would make the scan pick the wrong pair and return a single
+    /// (future) snapshot instead of an interpolation.
     pub fn add_snapshot(&mut self, time: f64, position: [f32; 3], rotation: [f32; 4]) {
         let snapshot = TransformSnapshot {
             time,
@@ -101,7 +100,7 @@ impl SnapshotInterpolator {
         }
     }
 
-    /// O anki zamana göre enterpole edilmiş Transform verisini döner
+    /// Returns the Transform interpolated to the current time.
     ///
     /// `current_client_time` is in seconds on the *same clock* as the `time` values passed to
     /// [`Self::add_snapshot`]; the instant actually rendered is

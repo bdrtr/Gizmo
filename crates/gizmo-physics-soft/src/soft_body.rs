@@ -718,9 +718,9 @@ impl SoftBodyMesh {
 mod tests {
     use super::*;
 
-    /// Orta derecede sıkışmış GEÇERLİ bir eleman (J ≈ 0.4³ ≈ 0.064, eski 0.1 eşiğinin
-    /// altında) artık direnç gösterip geri açılmalı. (Eski kod J < 0.1 olunca sıfır kuvvet
-    /// uyguluyordu → eleman çökük kalıyordu.) Ayrıca NaN/Inf üretmemeli.
+    /// A VALID, moderately compressed element (J ≈ 0.4³ ≈ 0.064, below the old 0.1 threshold)
+    /// must now resist and spring back. (The old code applied zero force once J < 0.1, so the
+    /// element stayed collapsed.) It must also produce no NaN/Inf.
     #[test]
     fn resists_moderate_compression_and_stays_finite() {
         let mut sb = SoftBodyMesh::new(1000.0, 0.3).expect("valid material params");
@@ -752,8 +752,8 @@ mod tests {
         }
     }
 
-    /// Kütlesi 0 (ve is_fixed=false) bir düğüm eskiden `forces/mass` = Inf/NaN
-    /// üretip tüm simülasyonu zehirliyordu. Artık böyle düğüm sabit gibi atlanır.
+    /// A node with mass 0 (and is_fixed=false) used to produce `forces/mass` = Inf/NaN and
+    /// poison the whole simulation. Such a node is now skipped, as if it were fixed.
     #[test]
     fn zero_mass_node_does_not_poison_simulation() {
         let mut sb = SoftBodyMesh::new(1000.0, 0.3).expect("valid material params");
@@ -781,8 +781,8 @@ mod tests {
         assert_eq!(sb.nodes[zero_idx].velocity, Vec3::ZERO);
     }
 
-    /// Dört (neredeyse) düzlemsel düğümle oluşturulan dejenere bir tetrahedron
-    /// rest_volume ≈ 0 verir; artık `add_element` bunu reddetmeli.
+    /// A degenerate tetrahedron built from four (nearly) coplanar nodes has rest_volume ≈ 0;
+    /// `add_element` must now reject it.
     #[test]
     fn degenerate_tetrahedron_is_rejected() {
         let mut sb = SoftBodyMesh::new(1000.0, 0.3).expect("valid material params");

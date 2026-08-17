@@ -1,12 +1,13 @@
-//! Client-Side Prediction & Server Reconciliation
+//! Client-side prediction & server reconciliation.
 //!
-//! İstemcinin (Client) kendi hareketlerini sunucuyu beklemeden anında uygulaması (Prediction)
-//! ve sunucudan gelen kesin (Authoritative) sonuçlara göre gerekirse geçmişe dönüp düzeltmesi (Reconciliation)
+//! The client applies its own movement immediately instead of waiting for the server
+//! (prediction), then goes back and corrects itself if the authoritative results from the server
+//! disagree (reconciliation).
 
 use super::protocol::{tick_is_newer, PlayerInput};
 use std::collections::VecDeque;
 
-/// İstemcinin öngördüğü yerel durum (Fizik motoru üzerinde anlık uygulanacak)
+/// The local state the client predicted (applied to the physics engine immediately).
 #[derive(Debug, Clone)]
 pub struct PredictedState {
     /// Predicted world-space position `[x, y, z]`.
@@ -18,9 +19,9 @@ pub struct PredictedState {
 /// Tracks unacknowledged inputs so the client can reconcile against authoritative server state.
 #[derive(Debug, Clone)]
 pub struct ClientPredictor {
-    /// Sunucuya gönderilmiş ama henüz sunucudan onayı (ACK) gelmemiş girdiler
+    /// Inputs that have been sent to the server but not yet acknowledged by it.
     pub pending_inputs: VecDeque<PlayerInput>,
-    /// İstemcinin şu anki simülasyon tick'i
+    /// The client's current simulation tick.
     pub current_tick: u32,
 }
 
@@ -39,7 +40,7 @@ impl ClientPredictor {
         }
     }
 
-    /// Yeni bir girdi üret ve kuyruğa ekle
+    /// Produce a new input and add it to the queue.
     pub fn add_input(&mut self, move_x: f32, move_z: f32, jump: bool, dt: f32) -> PlayerInput {
         let input = PlayerInput {
             tick: self.current_tick,
@@ -53,12 +54,12 @@ impl ClientPredictor {
         input
     }
 
-    /// Sunucudan Authoritative State geldiğinde (Reconciliation)
-    /// Hatalı tahmin varsa düzeltmek için çağrılır.
+    /// Called when authoritative state arrives from the server (reconciliation), to correct a
+    /// mispredicted state.
     ///
-    /// - `server_tick`: Sunucunun işlediği son girdinin tick değeri
-    /// - `server_state`: Sunucunun onayladığı kesin pozisyon/hız
-    /// - `apply_physics_fn`: Geçmiş girdileri yeniden simüle etmek için kullanılacak closure
+    /// - `server_tick`: the tick of the last input the server processed
+    /// - `server_state`: the authoritative position/velocity the server confirmed
+    /// - `apply_physics_fn`: the closure used to re-simulate the pending inputs
     #[tracing::instrument(skip_all, name = "client_reconcile")]
     pub fn reconcile<F>(
         &mut self,

@@ -17,9 +17,9 @@ use gizmo_math::Vec3;
 use gizmo_physics_core::BodyHandle;
 use rand::{rngs::StdRng, RngExt, SeedableRng};
 
-/// Patlama hız değişimi (force/mass) üst sınırı. İnce kıymık parçalar çok küçük kütleye
-/// sahip olduğundan `force/mass` patlayıp parçaları absürt hızlarda fırlatıyordu (tünelleme
-/// / kararsızlık). Hız değişimini bu makul sınıra kırp.
+/// Upper bound on the explosion's velocity change (force/mass). Thin sliver fragments have a
+/// very small mass, so `force/mass` blew up and launched them at absurd speeds (tunnelling and
+/// instability). Clamp the velocity change to this sane limit.
 const MAX_EXPLOSION_DV: f32 = 50.0;
 
 /// One convex piece of a shattered body: a triangle mesh plus the mass properties derived
@@ -632,9 +632,10 @@ mod tests {
         assert!(!voronoi_shatter(Vec3::splat(1.0), 8, 1).is_empty());
     }
 
-    /// COM = gerçek HACİM merkezi (düzgün-yoğunluklu katının kütle merkezi), vertex
-    /// ortalaması DEĞİL. Ayırt edici şekil: kare piramit — kütle merkezi tabandan h/4,
-    /// vertex ortalaması ise h/5. Eski kod (vertex-centroid) bu testte FAIL eder.
+    /// COM = the true VOLUME centroid (the centre of mass of a uniform-density solid), NOT the
+    /// average of the vertices. The discriminating shape is a square pyramid: its centre of mass
+    /// is h/4 above the base, the vertex average h/5. The old code (vertex centroid) FAILS this
+    /// test.
     #[test]
     fn convex_mass_props_returns_volume_centroid_not_vertex_average() {
         // Taban z=0'da 2×2 kare (alan 4), tepe (0,0,3) → hacim = ⅓·4·3 = 4.
@@ -688,8 +689,8 @@ mod tests {
         );
     }
 
-    /// İnce kıymık (çok küçük hacim/kütle) parçalar, büyük çarpma kuvvetinde bile
-    /// makul hızda fırlatılmalı — `force/mass` patlaması MAX_EXPLOSION_DV ile kırpılır.
+    /// Thin sliver fragments (very small volume/mass) must be launched at a sane speed even
+    /// under a large impact force — the `force/mass` blow-up is clamped by MAX_EXPLOSION_DV.
     #[test]
     fn explosion_velocity_clamped_for_tiny_chunks() {
         let tetra = || {

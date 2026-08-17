@@ -1,4 +1,4 @@
-//! `renet` tabanlı, otoriter sunuculu (client-server) netcode.
+//! Authoritative-server (client-server) netcode, built on `renet`.
 
 /// Client-side connection: a renet client bundled with its netcode transport, driven by one
 /// `update` / `send_packets` pair per frame.

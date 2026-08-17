@@ -2,7 +2,7 @@ use gizmo_core::{Entity, World};
 use gizmo_math::{Quat, Vec3};
 use serde::{Deserialize, Serialize};
 
-/// Tek bir objenin fiziki durumu (hızlı kopyalanabilir ve ağdan gönderilebilir)
+/// One object's physical state (cheap to copy and sendable over the network).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct EntityState {
@@ -33,7 +33,7 @@ impl Default for EntityState {
     }
 }
 
-/// Tüm dünyadaki fizik objelerinin anlık yedeği
+/// A snapshot of every physics object in the world.
 #[derive(Clone, Default, Debug, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct PhysicsStateSnapshot {
@@ -45,7 +45,7 @@ pub struct PhysicsStateSnapshot {
 }
 
 impl PhysicsStateSnapshot {
-    /// O(N) hızında belleğe kopyalama işlemi yapar
+    /// Copies into memory in O(N).
     #[tracing::instrument(skip_all, name = "snapshot_capture")]
     pub fn capture(world: &World, tick: u64) -> Self {
         use gizmo_physics_core::components::transform::Transform;
@@ -81,7 +81,7 @@ impl PhysicsStateSnapshot {
         Self { tick, states }
     }
 
-    /// Snapshot'u mevcut dünyaya anında geri yükler (Restore / Rollback)
+    /// Restores the snapshot into the current world immediately (restore / rollback).
     #[tracing::instrument(skip_all, name = "snapshot_restore")]
     pub fn restore(&self, world: &mut World) {
         use gizmo_physics_core::components::transform::Transform;
@@ -139,7 +139,7 @@ impl PhysicsStateSnapshot {
     }
 }
 
-/// Dairesel Tampon (Ring Buffer), geçmiş N kareyi tutar
+/// A ring buffer holding the last N frames.
 #[derive(Debug, Clone)]
 pub struct RollbackBuffer {
     buffer: Vec<Option<PhysicsStateSnapshot>>,

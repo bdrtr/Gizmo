@@ -257,9 +257,34 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
     "friction anchors") is the fix, and `ContactPoint` already carries `local_point_a/b` plus the
     warm-start match that would freeze them. **Trigger:** a game that needs sub-millimetre hold at
     the friction limit. Not before — the visible symptom is gone.
-- **The doc-language rule, Stage B remainder.** Stage A plus the facade went from 1286 Turkish
-  `///` lines to 8, and seven of those eight are measurement error. The Stage B crates
-  (renderer, editor, studio, scripting, app) have not been through it.
+- **The doc-language rule — Stage A is DONE (2026-08-17), and the claim it replaces was false.**
+  This item used to read "Stage A plus the facade went from 1286 Turkish `///` lines to 8, and
+  seven of those eight are measurement error." Scanning for it found **462 Turkish doc lines in
+  Stage A's `src/`**, 476 of them in `gizmo-physics-rigid` alone — the solver's and the joint
+  solver's parameter documentation, which is some of the densest engineering prose in the repo.
+  So the marker had been false for as long as anyone had believed it, and the earlier
+  measurement is the thing to distrust, not the crates.
+
+  All 462 are now English, `gizmo-physics-rigid` and `gizmo-net` included, and the translation
+  commit is comment-only by construction — `git diff -U0 | grep '^[+-]' | grep -v '^[+-]\s*//'`
+  came back empty at every step, which is how the one accidental *code* change (a renamed struct
+  field) was caught while translating the doc block above it.
+
+  **What replaces the marker is a ratchet**, `crates/gizmo/tests/doc_language.rs`: it scans
+  `crates/*/src/**/*.rs`, counts Turkish doc lines by crate, and compares against a table that
+  may only go down. A crate absent from the table must be at zero, a crate in it must match
+  **exactly** (so cleaning without lowering the budget also fails, which is what stops the table
+  becoming fiction), and the subject list is scanned rather than written, so a new crate is
+  covered the moment it exists. Verified red: putting one Turkish line back into
+  `gizmo-physics-rigid` fails it with the file and line. One exception is recorded with a
+  reason — `gizmo-core/src/cvar.rs` documents how `to_lowercase` handles `İ`, i.e. the Turkish
+  letter is the subject of an English sentence — and an exception that stops applying fails too.
+
+  **Remaining, as measured by the same scan:** `gizmo-renderer` 328, `gizmo-scripting` 138,
+  `gizmo-analysis` 139, `gizmo-editor` 106, `gizmo-studio` 59, the facade 1 — the Stage B crates,
+  which have never been through it. Test files, benches and plain `//` comments are deliberately
+  out of scope (the rule is about the documentation surface; CLAUDE.md already records that
+  inline comments are still Turkish in places).
 - **Asset identity — decided and wired (2026-08-17); one of the three stays open, with a trigger.**
   The blocking question was *do scenes address assets by identity?* The answer is **the path stays
   authoritative and identity is the fallback**, because the two failure modes are not symmetric: a

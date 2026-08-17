@@ -3,29 +3,30 @@ use gizmo_physics_core::components::Transform;
 use crate::components::{RigidBody, Velocity};
 use gizmo_math::{Quat, Vec3};
 
-/// Birikmiş-λ yuvaları ([`JointScratch`]).
+/// Accumulated-λ slots ([`JointScratch`]).
 ///
-/// Yuvalar DERLEME ZAMANI SABİTİ, ilerleyen bir imleç DEĞİL: satırların çoğu koşullu
-/// atlanıyor (`fixed.rs`'te `err_len >= 1e-4`, `hinge.rs`'te `err_mag > 1e-6` ve limit
-/// dalları, `slider.rs`'te `err.abs() > 1e-4`, `ball_socket.rs`'teki koni/twist/swing
-/// kapıları, `d6.rs`'teki `continue` kolları), bir imleç atlanan her satırda sonraki
-/// satırların kimliğini kaydırır ve λ'lar yanlış satıra yazılırdı.
+/// The slots are COMPILE-TIME CONSTANTS, not an advancing cursor: most rows are conditionally
+/// skipped (`err_len >= 1e-4` in `fixed.rs`, `err_mag > 1e-6` and the limit branches in
+/// `hinge.rs`, `err.abs() > 1e-4` in `slider.rs`, the cone/twist/swing gates in
+/// `ball_socket.rs`, the `continue` arms in `d6.rs`), and a cursor would shift the identity of
+/// every following row each time one was skipped — writing λs into the wrong row.
 ///
-/// Bir DOF'un ALT ve ÜST limiti aynı yuvayı paylaşır: iki bağ ama tek serbestlik derecesi,
-/// ve bir geçiş boyunca `transforms` DEĞİŞMEDİĞİ için (çözücü `&[Transform]` alır,
-/// entegrasyon geçişten sonra) hangi dalın seçildiği 10 iterasyon boyunca sabittir — ters
-/// işaretli bayat bir λ miras alınamaz.
+/// A DOF's LOWER and UPPER limit share one slot: two constraints but a single degree of
+/// freedom, and since `transforms` does NOT change during a pass (the solver takes
+/// `&[Transform]`, integration happens after the pass), which branch is taken stays fixed for
+/// all 10 iterations — a stale λ of the opposite sign cannot be inherited.
 pub(crate) mod row {
-    /// 0,1,2 — nokta kısıtının X/Y/Z'si, slider'ın iki dik ekseni, D6 lineer DOF'ları.
+    /// 0,1,2 — the point constraint's X/Y/Z, a slider's two perpendicular axes, D6's linear DOFs.
     pub const LIN: usize = 0;
-    /// 3,4,5 — Fixed 3-eksen açısal kilidi, D6 açısal DOF'ları, hinge eksen hizalaması,
-    /// slider açısal kilidi, ball-socket koni (3) ve twist (4).
+    /// 3,4,5 — Fixed's 3-axis angular lock, D6's angular DOFs, a hinge's axis alignment, a
+    /// slider's angular lock, ball-socket cone (3) and twist (4).
     pub const ANG: usize = 3;
-    /// Hinge/slider limiti, distance min|max — hepsi tek DOF'un iki yönlü sınırı.
+    /// Hinge/slider limit, distance min|max — all of them the two-sided bound of a single DOF.
     pub const LIMIT: usize = 6;
-    /// 7,8 — ball-socket asimetrik swing limitleri (perp1, perp2).
+    /// 7,8 — ball-socket asymmetric swing limits (perp1, perp2).
     pub const SWING: usize = 7;
-    /// 9 — motor / servo satırı. Kopma toplamına KATILMAZ: motor dış yük değil eyleyicidir.
+    /// 9 — the motor / servo row. It does NOT count towards the breaking total: a motor is an
+    /// actuator, not an external load.
     pub const MOTOR: usize = 9;
 }
 
@@ -658,63 +659,67 @@ impl JointSolver {
         point - global_com
     }
 
-    /// Yumuşak (compliant) bir satırın Box2D v3 soft-constraint katsayıları:
+    /// Box2D-v3 soft-constraint coefficients of a compliant row:
     /// `(bias_rate, mass_scale, impulse_scale)`.
     ///
-    /// Temas çözücüsü bu formülasyonu zaten kullanıyor (`solver/tgs.rs:117-124` ve `:597`);
-    /// joint çözücüsü Baumgarte β + hız kırpmasında kalmış ve `compliance`'ı efektif kütleye
-    /// `α/dt²` (CFM) ekleyerek uyguluyordu. O yol bu motorda ÇALIŞMIYOR, iki ayrı sebepten:
+    /// The contact solver already uses this formulation (`solver/tgs.rs:117-124` and `:597`);
+    /// the joint solver was still on Baumgarte β + velocity clamping, applying `compliance` by
+    /// adding `α/dt²` (CFM) to the effective mass. That path does NOT work in this engine, for
+    /// two separate reasons:
     ///
-    /// 1. **CFM tek başına yumuşaklık üretmez.** `k`'yi büyütmek yalnızca her iterasyonun
-    ///    adımını küçültür; iterasyon sayısı arttıkça seri yine RİJİT çözüme yakınsar. Yani
-    ///    `compliance` fiziksel bir ters-sertlik değil, `iterations`'a bağlı bir gevşetme
-    ///    katsayısıydı.
-    /// 2. **Eksik geri besleme terimi (`-α̃·λ`) bu çözücüye eklenemiyor.** Denge noktası
-    ///    `λ_toplam = bias/α̃` olurdu, ama `bias` burada `max_correction_speed` ile HIZ-KIRPILI:
-    ///    kırpma ısırdığı an λ tavanlanıyor, taşınacak yükün çok altında kalıyor ve kısıt
-    ///    sessizce boşalıyor (ölçüldü: 2 m'lik halat 600 adımda 27.4 m — serbest düşüş).
+    /// 1. **CFM on its own does not produce softness.** Growing `k` only shrinks each
+    ///    iteration's step; as the iteration count rises the series still converges to the RIGID
+    ///    solution. So `compliance` was not a physical inverse stiffness — it was a relaxation
+    ///    factor whose meaning depended on `iterations`.
+    /// 2. **The missing feedback term (`-α̃·λ`) cannot be added to this solver.** The
+    ///    equilibrium would be `λ_total = bias/α̃`, but `bias` here is SPEED-CLAMPED by
+    ///    `max_correction_speed`: the moment the clamp bites, λ is capped far below the load it
+    ///    has to carry and the constraint quietly goes slack (measured: a 2 m rope reached
+    ///    27.4 m in 600 steps — free fall).
     ///
-    /// Soft formülasyonda `c` bir ÇARPAN: denge `λ_toplam = c·bias_rate·C = dt·ω²·C`. Gereken
-    /// bias küçük kalıyor, kırpma hiç ısırmıyor. CFM'de `λ = bias/α̃` bir BÖLME'ydi ve aynı
-    /// yükü taşımak kırpmanın ~14 katı bias istiyordu. Aynı fiziğin iki yazılışı; kırpmalı bir
-    /// çözücüde taban tabana zıt koşullanma.
+    /// In the soft formulation `c` is a MULTIPLIER: equilibrium is `λ_total = c·bias_rate·C =
+    /// dt·ω²·C`. The required bias stays small and the clamp never bites. Under CFM, `λ =
+    /// bias/α̃` was a DIVISION, and carrying the same load asked for ~14× the clamp's bias. Two
+    /// ways of writing the same physics; diametrically opposite conditioning in a solver that
+    /// clamps.
     ///
-    /// `ω = √(k/α)` — satırın efektif kütlesinden türetilir (`m_eff = 1/k`), yani
-    /// `ω = √(K/m_eff)` klasik yay frekansı. Dengede `λ = dt·ω²·C/k = dt·C/α`, yani
-    /// **`F = C/α`: Hooke yasası.** Sertlik sabit, ağır yük daha çok uzatır — `compliance`
-    /// bir ters-sertlik olarak ilan edildiğine göre olması gereken de bu.
+    /// `ω = √(k/α)` — derived from the row's effective mass (`m_eff = 1/k`), i.e. the classic
+    /// spring frequency `ω = √(K/m_eff)`. At equilibrium `λ = dt·ω²·C/k = dt·C/α`, that is
+    /// **`F = C/α`: Hooke's law.** Stiffness is constant and a heavier load stretches it
+    /// further — which is what `compliance` being declared an inverse stiffness has to mean.
     ///
-    /// # `impulse_scale` terimi `k`'ye BÖLÜNMEZ
+    /// # The `impulse_scale` term is NOT divided by `k`
     ///
-    /// Bu ayrım kozmetik değil, KARARLILIK meselesi. `-impulse_scale·λ` de `/k` ile
-    /// bölünürse λ yinelemesi `λ_{n+1} = λ_n·(1 - impulse_scale/k) + …` olur ve
-    /// `impulse_scale > 2k`, yani `m_eff > 2/impulse_scale` olduğunda IRAKSAR. Ölçüldü:
-    /// bölünen biçimde α = 0.03'lük halat 1 kg'ı 0.2937 m uzatıyor (Hooke: 0.2943 ✓) ama
-    /// 4 kg'da kısıt tamamen boşalıp cisim 331 m'ye düşüyor — 2000 adımlık serbest düşüş.
+    /// The distinction is not cosmetic, it is STABILITY. If `-impulse_scale·λ` were also
+    /// divided by `k`, the λ iteration becomes `λ_{n+1} = λ_n·(1 - impulse_scale/k) + …`, which
+    /// DIVERGES once `impulse_scale > 2k`, i.e. `m_eff > 2/impulse_scale`. Measured: in the
+    /// divided form a rope with α = 0.03 stretches 0.2937 m under 1 kg (Hooke: 0.2943 ✓), but at
+    /// 4 kg the constraint goes fully slack and the body falls 331 m — 2000 steps of free fall.
     ///
-    /// Bölünmeyen biçimde yineleme `λ_{n+1} = λ_n·(1 - impulse_scale) + …` ve
-    /// `impulse_scale = 1/(1+c) ∈ (0, 1]` olduğundan **koşulsuz kararlı**.
+    /// Undivided, the iteration is `λ_{n+1} = λ_n·(1 - impulse_scale) + …` and, since
+    /// `impulse_scale = 1/(1+c) ∈ (0, 1]`, it is **unconditionally stable**.
     ///
-    /// (`solver/tgs.rs:597` temas çözücüsünde terim `/ k_n` ile bölünüyor. Oradaki
-    /// `impulse_scale` çok daha küçük — contact_hertz=30, ζ=10 ile ≈0.058 — bu yüzden sınır
-    /// `m_eff ≈ 34`'e çıkıyor ve mevcut soak sahnelerinde ısırmıyor. Ölçülmesi gereken ayrı
-    /// bir konu; bkz. docs/ENGINE.md.)
+    /// (In the contact solver at `solver/tgs.rs:597` the term IS divided by `k_n`. Its
+    /// `impulse_scale` there is far smaller — ≈0.058 at contact_hertz=30, ζ=10 — so the bound
+    /// rises to `m_eff ≈ 34` and does not bite in any current soak scene. That is a separate
+    /// thing to measure; see docs/ENGINE.md.)
     ///
-    /// # Kırpma rejimi sorusu KAPANDI
+    /// # The clamping-regime question is CLOSED
     ///
-    /// Bu doküman "compliance'ın iterasyon bağımlılığı kırpma rejimiyle birlikte ele
-    /// alınacak" diye açık bir soru bırakmıştı. Cevap: yumuşak formülasyon **çarpan**
-    /// rejiminde ve kırpma dengeyi ısırmıyor. Kimlik şu —
+    /// This document used to leave an open question: "compliance's iteration dependence will be
+    /// dealt with together with the clamping regime". The answer: the soft formulation is in the
+    /// **multiplier** regime and the clamp does not bite the equilibrium. The identity is —
     ///
     /// ```text
     /// ω² = mass_scale · bias_rate / (impulse_scale · dt)
-    /// statik hata C* = a / ω²,   denge bias'ı b* = impulse_scale · a · dt / mass_scale
+    /// static error C* = a / ω²,   equilibrium bias b* = impulse_scale · a · dt / mass_scale
     /// ```
     ///
-    /// — ve `mass_scale + impulse_scale ≡ 1` olduğundan denge λ'sı tam olarak `a·dt·m_eff`,
-    /// yani gerçek yük; kırpmaya hiç bağlı değil. Süitin en ağır sahnesinde bile gereken
-    /// bias tavanın 21 katı altında (ayrıntı: [`Self::rigid_coefficients`]). Rijit satırlar
-    /// da artık bu yolda; oradaki tek fark ω'nın nereden geldiği.
+    /// — and because `mass_scale + impulse_scale ≡ 1`, the equilibrium λ is exactly `a·dt·m_eff`,
+    /// i.e. the real load, with no dependence on the clamp at all. Even in the heaviest scene in
+    /// the suite the required bias is 21× below the ceiling (details in
+    /// [`Self::rigid_coefficients`]). Rigid rows are on this path too now; the only difference
+    /// there is where ω comes from.
     #[inline]
     fn soft_coefficients(&self, compliance: f32, k: f32, dt: f32) -> (f32, f32, f32) {
         let omega = (k / compliance).sqrt();
@@ -736,39 +741,42 @@ impl JointSolver {
     /// triple through 25 call sites to save ~8 flops next to the inverse-inertia matrix
     /// products already in the same function.
     ///
-    /// # Neden bu satır artık YUMUŞAK
+    /// # Why this row is SOFT now
     ///
-    /// Rijit satır bugüne kadar `mass_scale = 1, impulse_scale = 0` ile koşuyordu: Baumgarte
-    /// β·C/dt + hız kırpması, geri besleme terimi YOK. Az-yakınsamış bir geçiş Baumgarte
-    /// artığını λ'ya entegre ediyor ve geri sızdıracak hiçbir şey yok. Warm-start'ı doğal
-    /// f=1.0 değerinde yıkan buydu (16 halkalı zincir, 200 kg uç: 4.83 m, 44 m/s artık
-    /// hareket), aynı zincir `compliance = 1e-6` ile KARARLIYKEN. Bkz. docs/ENGINE.md B4.
+    /// Until now the rigid row ran with `mass_scale = 1, impulse_scale = 0`: Baumgarte β·C/dt
+    /// plus velocity clamping, and NO feedback term. An under-converged pass integrates the
+    /// Baumgarte residual into λ with nothing there to bleed it back out. That is what broke
+    /// warm-starting at its natural f=1.0 (a 16-link chain with a 200 kg end: 4.83 m of residual
+    /// motion at 44 m/s) while the same chain was STABLE with `compliance = 1e-6`. See
+    /// docs/ENGINE.md B4.
     ///
-    /// # Kırpma rejimi: ÇARPAN, bölme değil — ama bu bir PAY, kurgusal bir garanti değil
+    /// # Clamping regime: MULTIPLIER, not division — but that is a MARGIN, not a guarantee
     ///
-    /// Denge bias'ı `b* = impulse_scale·a·dt/mass_scale` — varsayılanlarda `1.099e-4·a`.
-    /// 1 kg'lık halatta 1.1e-3 m/s (tavanın 4500 katı altında); süitin en ağır sahnesinde,
-    /// 200 kg uçlu zincirin çapa satırında (`a ≈ 2109 m/s²`) 0.232 m/s — 5 m/s tavanının
-    /// **21 katı** altında. CFM'deki felaket `λ = bias/α̃` bir BÖLME olduğu içindi ve gereken
-    /// bias kırpmanın ~14 katıydı; burada `c` bir çarpan ve gereken bias 4500 kat altında.
+    /// The equilibrium bias is `b* = impulse_scale·a·dt/mass_scale` — `1.099e-4·a` at the
+    /// defaults. On a 1 kg rope that is 1.1e-3 m/s (4500× below the ceiling); in the heaviest
+    /// scene in the suite, the anchor row of the chain with a 200 kg end (`a ≈ 2109 m/s²`), it
+    /// is 0.232 m/s — **21× below** the 5 m/s ceiling. The CFM disaster happened because
+    /// `λ = bias/α̃` was a DIVISION and the required bias was ~14× the clamp; here `c` is a
+    /// multiplier and the required bias is 4500× under it.
     ///
-    /// Yine de ISIRIRSA ne olacağı yazılmalı, çünkü eski yoldan DAHA kötü. `b_max < b*` iken
-    /// kararlı duruma ulaşmak imkânsızdır: kalan hız `b* − b_max` sabit kalır ve hata zamanda
-    /// DOĞRUSAL büyür — kısıt boşalır. Eski Baumgarte yolunda kırpma yalnızca onarımı
-    /// yavaşlatıyordu (`v_son = kırpılmış bias`, hata sınırlı). Eşik
-    /// `a > max_correction_speed·c/dt ≈ 45 000 m/s²`; ölçülen en ağır sahnede 21× pay var,
-    /// ama pay `rigid_hertz` düşürüldükçe (küçük `c`) daralır, `1/dt`'ye dayanmış bir
-    /// `hertz`'te `c ≤ 52` ile eşik ≈ 62 000 m/s²'ye çıkar. Bir sahne bu bölgeye girerse
-    /// çare `max_correction_speed`'i yükseltmektir, `rigid_hertz`'i değil.
+    /// What happens if it DOES bite still has to be written down, because it is WORSE than the
+    /// old path. With `b_max < b*` a steady state is impossible: the residual velocity stays at
+    /// `b* − b_max` and the error grows LINEARLY in time — the constraint goes slack. On the old
+    /// Baumgarte path the clamp merely slowed the repair down (`v_final = clamped bias`, bounded
+    /// error). The threshold is `a > max_correction_speed·c/dt ≈ 45 000 m/s²`; the heaviest
+    /// measured scene has 21× of margin, but the margin narrows as `rigid_hertz` is lowered
+    /// (smaller `c`), and with a `hertz` pinned to `1/dt` — `c ≤ 52` — the threshold rises to
+    /// ≈ 62 000 m/s². If a scene ever enters that region, the fix is to raise
+    /// `max_correction_speed`, not to lower `rigid_hertz`.
     ///
-    /// # `hertz` ve ζ neden temas çözücüsünden FARKLI
+    /// # Why `hertz` and ζ DIFFER from the contact solver's
     ///
-    /// `solve_contacts_tgs` 30 Hz / ζ=10 kullanıyor. Aynı sayılar burada `ω² = 3.6e4` verir:
-    /// 1 kg'lık halat 2.8e-4 m sarkar (mevcut 1e-4 sınırına karşı KIRMIZI) ve zincir 1.8 m.
-    /// Sebep yapısal: bir temas kabaca kendi cisminin ağırlığını taşır, bir eklem 400 katını
-    /// taşıyabilir. 200 Hz / ζ=1, ölçülmüş `compliance = 1e-6` kontrolünün her iki eksenini
-    /// de yeniden üretir (`impulse_scale` 0.0257 ↔ ölçülen bant 0.021–0.037, `bias_rate`
-    /// 173.7 ↔ 179) ve o doğrulanmış bandın içinde kalan EN SERT ayardır.
+    /// `solve_contacts_tgs` uses 30 Hz / ζ=10. The same numbers here give `ω² = 3.6e4`: a 1 kg
+    /// rope sags 2.8e-4 m (RED against the current 1e-4 bound) and the chain sags 1.8 m. The
+    /// reason is structural: a contact carries roughly its own body's weight, a joint can carry
+    /// 400× that. 200 Hz / ζ=1 reproduces both axes of the measured `compliance = 1e-6` control
+    /// (`impulse_scale` 0.0257 ↔ measured band 0.021–0.037, `bias_rate` 173.7 ↔ 179) and is the
+    /// STIFFEST setting that stays inside that verified band.
     #[inline]
     fn rigid_coefficients(&self, dt: f32) -> (f32, f32, f32) {
         // Kırpma temas çözücüsünün `0.25/dt`'siyle TERS gerekçeye sahip. Orada amaç ω·dt'yi
@@ -786,12 +794,14 @@ impl JointSolver {
         (omega / denom, c / (1.0 + c), 1.0 / (1.0 + c))
     }
 
-    /// Birikmiş-λ kırpma: `lambda_min/max` ARTIMA değil, geçiş boyunca birikmiş TOPLAMA
-    /// uygulanır. Tek yönlü bir satır (limit / halat / koni) böylece NEGATİF artım da
-    /// uygulayabilir — toplam doğru tarafta kaldığı sürece kendi önceki aşırı-düzeltmesini
-    /// GERİ ALIR. Eskiden her artım ayrı kırpıldığından geri verme mümkün değildi.
+    /// Accumulated-λ clamping: `lambda_min/max` are applied to the TOTAL accumulated over the
+    /// pass, not to the increment. That lets a one-sided row (limit / rope / cone) apply a
+    /// NEGATIVE increment too — it can TAKE BACK its own earlier over-correction, as long as the
+    /// total stays on the right side. Clamping each increment separately, as it used to, made
+    /// giving anything back impossible.
     ///
-    /// Uygulanan (geri döndürülen) değer artımdır, birikim değil; hızlar artımla güncellenir.
+    /// The value applied (and returned) is the increment, not the accumulation; velocities are
+    /// updated with the increment.
     #[inline]
     fn accumulate(accum: &mut f32, delta: f32, lambda_min: f32, lambda_max: f32) -> f32 {
         let total = *accum + delta;
@@ -1128,18 +1138,18 @@ mod tests {
         }
     }
 
-    /// 1-DOF doğrusal hız kısıtı, DOĞRU efektif kütleyle tek uygulamada bağıl hızın tam
-    /// olarak `mass_scale` katını siler ve geriye `impulse_scale·v` bırakır
-    /// (λ = mass_scale·(-Jv)/k, yeni Jv = Jv + kλ = impulse_scale·Jv).
+    /// With the CORRECT effective mass, one application of a 1-DOF linear velocity constraint
+    /// removes exactly `mass_scale` of the relative velocity and leaves `impulse_scale·v` behind
+    /// (λ = mass_scale·(-Jv)/k, new Jv = Jv + kλ = impulse_scale·Jv).
     ///
-    /// Yanlış `k` ile (eski `((I⁻¹r)×n)×r·n`) silinen miktar `k_doğru/k_yanlış` ile
-    /// ölçeklenir ve kalan bu değeri IŞKALAR; test bu yüzden hâlâ doğru çapraz-çarpım
-    /// sırasını ayırt ediyor — üstelik eskisinden DAHA keskin, çünkü artık sıfıra karşı
-    /// değil hesaplanmış bir sabite karşı ölçüyor.
+    /// With the wrong `k` (the old `((I⁻¹r)×n)×r·n`) the amount removed is scaled by
+    /// `k_correct/k_wrong` and the remainder MISSES that value; this is why the test still
+    /// distinguishes the correct cross-product order — and does so more sharply than before,
+    /// because it now measures against a computed constant rather than against zero.
     ///
-    /// Kalan sıfır DEĞİL, çünkü rijit satır artık `rigid_hertz` frekansında yumuşak: bir
-    /// geçişte 10 uygulama var, `impulse_scale ≈ 0.019` üstel olarak sönüyor. Bedeli bu,
-    /// karşılığında satır geri besleme terimini kazanıyor.
+    /// The remainder is NOT zero, because the rigid row is soft now at `rigid_hertz`: there are
+    /// 10 applications in a pass and `impulse_scale ≈ 0.019` decays exponentially. That is the
+    /// price, and what the row buys with it is the feedback term.
     #[test]
     fn linear_constraint_zeroes_relative_velocity_with_correct_effective_mass() {
         let solver = JointSolver::default();
@@ -1190,8 +1200,9 @@ mod tests {
         );
     }
 
-    /// İki eşit kütleli cisim, ankorları kütle merkezinde (r = 0 → k = 1/m + 1/m = 2),
-    /// tek yönlü (yalnız ÇEKEN) bir satır. Aradaki tek fark clamp'in nereye uygulandığı.
+    /// Two bodies of equal mass with their anchors at the centre of mass (r = 0 → k = 1/m +
+    /// 1/m = 2), and a one-sided (PULL-only) row. The only thing that varies is where the clamp
+    /// is applied.
     fn one_sided_pair() -> ([RigidBody; 2], [Transform; 2], [Velocity; 2]) {
         let body = || RigidBody::new(1.0, false);
         (
@@ -1201,15 +1212,16 @@ mod tests {
         )
     }
 
-    /// Tek yönlü bir satır kendi ÖNCEKİ impulse'ını GERİ VEREBİLMELİ.
+    /// A one-sided row must be able to GIVE BACK the impulse it applied.
     ///
-    /// Eskiden clamp her iterasyonun kendi artımına uygulanıyordu: yalnız-çeken bir satırda
-    /// (`lambda_max = 0`) pozitif bir artım her seferinde 0'a kırpıldığından satır, kendi
-    /// aşırı-düzeltmesini geri alamıyordu — tek yönlü bir cırcır. Clamp artık geçiş boyunca
-    /// birikmiş TOPLAMA uygulanıyor, dolayısıyla toplam doğru tarafta kaldığı sürece
-    /// negatif/pozitif her artım uygulanabilir.
+    /// The clamp used to be applied to each iteration's own increment: on a pull-only row
+    /// (`lambda_max = 0`) a positive increment was clamped to 0 every time, so the row could
+    /// never undo its own over-correction — a one-way ratchet. The clamp now applies to the
+    /// TOTAL accumulated over the pass, so any increment, negative or positive, can be applied
+    /// as long as the total stays on the right side.
     ///
-    /// Ayırt edici: eski kodda ikinci çağrı hiçbir şey uygulamaz ve bağıl hız −1.0'da kalır.
+    /// What makes it discriminating: under the old code the second call applies nothing and the
+    /// relative velocity stays at −1.0.
     #[test]
     fn a_one_sided_row_can_return_the_impulse_it_applied() {
         let solver = JointSolver::default();
@@ -1268,8 +1280,8 @@ mod tests {
         );
     }
 
-    /// …ama uyguladığından FAZLASINI geri veremez: biriken toplam sınırı geçemez, yani
-    /// yalnız-çeken bir satır hiçbir koşulda İTMEZ.
+    /// …but it cannot give back MORE than it applied: the accumulated total may not cross the
+    /// bound, so a pull-only row never PUSHES, under any circumstances.
     #[test]
     fn a_one_sided_row_never_pushes_past_its_bound() {
         let solver = JointSolver::default();
@@ -1303,9 +1315,9 @@ mod tests {
         );
     }
 
-    /// Birikim bir GEÇİŞE ait: `solve_joints` her çağrıda sıfırdan başlamalı. Sıfırlama
-    /// olmasa ikinci geçiş, birincinin doymuş λ'sını miras alır ve aynı girdiye farklı
-    /// cevap verir — adımlar arası sessiz bir durum sızıntısı.
+    /// The accumulation belongs to ONE PASS: `solve_joints` must start from zero on every
+    /// call. Without the reset, a second pass inherits the first one's saturated λ and answers
+    /// the same input differently — a silent state leak between steps.
     #[test]
     fn accumulated_lambda_does_not_leak_between_passes() {
         use crate::joints::data::Joint;

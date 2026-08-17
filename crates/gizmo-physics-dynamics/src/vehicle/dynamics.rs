@@ -56,19 +56,19 @@ fn anti_roll_force(is_left: bool, diff: f32, stiffness: f32) -> f32 {
     signed * stiffness
 }
 
-/// Ground-effect downforce çarpanı: şasi taban `clearance`'ı (gövde tabanının yere
-/// dikey boşluğu, m) azaldıkça `1.0`'dan `multiplier`'a YUMUŞAK rampa yapar.
-/// `clearance ≥ height` → 1.0 (etki yok); `clearance = 0` → `multiplier`; arası lineer.
-/// Negatif clearance (gövde yerin içinde) `multiplier`'a kırpılır.
+/// The ground-effect downforce multiplier: as the chassis `clearance` (the vertical gap between
+/// the body's underside and the ground, in metres) shrinks, it ramps SMOOTHLY from `1.0` to
+/// `multiplier`. `clearance ≥ height` → 1.0 (no effect); `clearance = 0` → `multiplier`; linear
+/// in between. Negative clearance (the body inside the ground) clamps to `multiplier`.
 fn ground_effect_factor(clearance: f32, height: f32, multiplier: f32) -> f32 {
     let t = (1.0 - clearance.max(0.0) / height.max(1e-3)).clamp(0.0, 1.0);
     1.0 + (multiplier - 1.0) * t
 }
 
-/// Hava durumu grip çarpanı — rigid araç sistemindeki mantığın portu (o sistem siliniyor).
-/// Sunny → 1.0, Snow → 0.3, Rain → %50 taban, 20 m/s üstünde su kaymasıyla (aquaplaning)
-/// kademeli düşüş. `speed_mps` aracın hızı (m/s). Sürtünme çemberi limitine çarpan olarak
-/// uygulanır (bkz. update_vehicle 2. geçiş).
+/// The weather grip multiplier — a port of the logic from the rigid vehicle system (which is
+/// being deleted). Sunny → 1.0, Snow → 0.3, Rain → a 50 % floor with a gradual fall-off above
+/// 20 m/s as it starts to aquaplane. `speed_mps` is the vehicle's speed in m/s. Applied as a
+/// multiplier on the friction-circle limit (see update_vehicle, second pass).
 pub fn weather_grip_factor(weather: Weather, speed_mps: f32) -> f32 {
     match weather {
         Weather::Sunny => 1.0,
@@ -883,10 +883,11 @@ mod tests {
         );
     }
 
-    /// Aerodinamik hava direnci = ½·ρ·Cd·A·v², hız yönüne KARŞI. Aracı yüksekte (hiçbir
-    /// tekerlek yere değmez → tek yatay kuvvet aero), gaz KAPALI, bilinen hızda tek adım
-    /// sürüp yatay hız kaybının analitik ½ρCdAv²/m·dt ile eşleştiğini doğrular. Böylece
-    /// drag hem UYGULANIYOR hem DOĞRU formül/işaret/büyüklükte.
+    /// Aerodynamic drag = ½·ρ·Cd·A·v², OPPOSING the velocity. Steps the vehicle once high in
+    /// the air (no wheel touches the ground → the only horizontal force is aero), throttle OFF,
+    /// at a known speed, and checks that the horizontal velocity lost matches the analytic
+    /// ½ρCdAv²/m·dt. That shows drag is both APPLIED and applied with the right
+    /// formula/sign/magnitude.
     #[test]
     fn aero_drag_matches_half_rho_cd_a_v_squared() {
         const MASS: f32 = 1200.0;
@@ -957,8 +958,8 @@ mod tests {
         );
     }
 
-    /// Ground-effect: downforce yalnız araç GERÇEKTEN alçaldığında artmalı; normal
-    /// sürüş yüksekliğinde etki 1.0 (davranış korunur). Yumuşak, monoton rampa.
+    /// Ground effect: downforce must only rise once the car is REALLY low; at normal ride
+    /// height the effect is 1.0 (behaviour preserved). A smooth, monotonic ramp.
     #[test]
     fn ground_effect_ramps_downforce_only_when_low() {
         let (height, mult) = (0.15_f32, 1.8_f32);
@@ -1152,9 +1153,10 @@ mod tests {
         );
     }
 
-    /// Yüzey materyali + hava durumu grip wiring'i (Track C) ve FWD/reverse (Track E) için
-    /// esnek harness: verilen zemin materyali, weather_grip, tahrik düzeni ve aks yerleşimiyle
-    /// aracı düşürüp sürer; sonda ileri (−Z) hızı ve son VehicleController'ı döner.
+    /// A flexible harness for the surface-material and weather grip wiring (Track C) and for
+    /// FWD/reverse (Track E): it drops and drives the vehicle with the given ground material,
+    /// weather_grip, drivetrain and axle layout, and returns the final forward (−Z) speed
+    /// together with the final VehicleController.
     /// A parked car that has fallen asleep must **move when the driver presses the accelerator**.
     ///
     /// The integrator skips a sleeping body entirely, but this system runs regardless: it makes
@@ -1342,8 +1344,9 @@ mod tests {
         (vel.linear.dot(forward), vc)
     }
 
-    /// Track C: yüzey materyali gerçek tutuşu belirler. Buz (μ=0.03) asfalttan (μ=0.65) çok
-    /// daha az hızlanmalı. Eskiden dynamics tire modeli PhysicsMaterial'ı YOK SAYIYORDU.
+    /// Track C: the surface material decides the real grip. Ice (μ=0.03) must accelerate far
+    /// less than asphalt (μ=0.65). The dynamics tyre model used to IGNORE PhysicsMaterial
+    /// entirely.
     #[test]
     fn surface_material_scales_tire_grip() {
         let (asphalt, _) =
@@ -1358,8 +1361,8 @@ mod tests {
         );
     }
 
-    /// Track C: hava durumu grip çarpanı gerçekten uygulanır. Snow (weather_grip 0.3) sunny'den
-    /// (1.0) daha az hız üretmeli.
+    /// Track C: the weather grip multiplier really is applied. Snow (weather_grip 0.3) must
+    /// produce less speed than sunny (1.0).
     #[test]
     fn weather_grip_reduces_traction() {
         let (sunny, _) =
@@ -1374,8 +1377,8 @@ mod tests {
         );
     }
 
-    /// Track E: FWD (tüm tekerlekler ön aks + Drivetrain::Fwd) hızlanmalı. Eskiden hardcoded
-    /// RWD olduğundan tam-ön yerleşim HİÇ hareket etmiyor, RPM idle'da takılıyordu.
+    /// Track E: FWD (every wheel on the front axle + Drivetrain::Fwd) must accelerate. With the
+    /// old hardcoded RWD an all-front layout never moved at all and the RPM stuck at idle.
     #[test]
     fn fwd_layout_accelerates() {
         let (fwd, vc) =
@@ -1388,8 +1391,8 @@ mod tests {
         );
     }
 
-    /// Track E: geri vites gerçekten geri (+Z) hareket üretmeli (ileri hız negatif). Reverse
-    /// yolu daha önce test edilmiyordu.
+    /// Track E: reverse gear must really produce backwards (+Z) motion (negative forward
+    /// speed). The reverse path was previously untested.
     #[test]
     fn reverse_produces_backward_motion() {
         let (fwd, vc) =
@@ -1401,8 +1404,8 @@ mod tests {
         );
     }
 
-    /// Track C: weather_grip_factor'ın Weather→grip eşlemesini ve aquaplaning rampasını DOĞRUDAN
-    /// pinle (sim testleri ham skaler geçtiğinden bu fonksiyonu atlıyordu).
+    /// Track C: pin weather_grip_factor's Weather→grip mapping and its aquaplaning ramp
+    /// DIRECTLY (the simulation tests pass a raw scalar and so skipped this function).
     #[test]
     fn weather_grip_factor_maps_weather_and_aquaplanes() {
         assert_eq!(weather_grip_factor(Weather::Sunny, 0.0), 1.0);
@@ -1420,7 +1423,8 @@ mod tests {
         assert!(weather_grip_factor(Weather::Rain, 40.0) < weather_grip_factor(Weather::Rain, 25.0));
     }
 
-    /// Track E: Drivetrain::drives eşleme tablosu (tork dağıtımı + RPM türetimi buna dayanır).
+    /// Track E: the Drivetrain::drives mapping table (torque distribution and RPM derivation
+    /// both rest on it).
     #[test]
     fn drivetrain_drives_table() {
         assert!(Drivetrain::Fwd.drives(&Axle::Front) && !Drivetrain::Fwd.drives(&Axle::Rear));
@@ -1428,8 +1432,9 @@ mod tests {
         assert!(Drivetrain::Awd.drives(&Axle::Front) && Drivetrain::Awd.drives(&Axle::Rear));
     }
 
-    /// Track C: tekerlek havaya kalkınca surface_friction ASPHALT'a resetlenmeli (bayat buz
-    /// değerinin inişte bir frame taşınmasını önler). Grounded'da çarpılan materyalden yakalanır.
+    /// Track C: when a wheel leaves the ground, surface_friction must reset to ASPHALT (which
+    /// stops a stale ice value from carrying for a frame on landing). While grounded it is
+    /// captured from the material that was hit.
     #[test]
     fn surface_friction_captures_material_and_resets_when_airborne() {
         let veh_id = BodyHandle::from_id(2);

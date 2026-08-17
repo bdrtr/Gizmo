@@ -532,9 +532,9 @@ mod tests {
         );
     }
 
-    /// Track C wiring: vehicle_controller_system, PhysicsWorld.weather'ı okuyup grip'e uygular.
-    /// Kar (weather_grip 0.3), güneşe göre belirgin daha az ileri mesafe → weather-oku→wg→grip
-    /// zincirini uçtan uca zorlar (tüm eski testler yalnız Sunny idi).
+    /// Track C wiring: vehicle_controller_system reads PhysicsWorld.weather and applies it to
+    /// grip. Snow (weather_grip 0.3) must cover markedly less ground than sunny, which exercises
+    /// the read-weather → wg → grip chain end to end (every earlier test was Sunny only).
     #[test]
     fn snow_weather_reduces_travel_vs_sunny() {
         use gizmo_physics_rigid::world::Weather;
@@ -563,8 +563,8 @@ mod tests {
         );
     }
 
-    /// Track C wiring: PhysicsWorld kaynağı YOKKEN weather unwrap_or_default()=Sunny → panic yok,
-    /// araç normal sürülür (fallback yolu).
+    /// Track C wiring: with NO PhysicsWorld resource, weather is unwrap_or_default() = Sunny →
+    /// no panic and the vehicle drives normally (the fallback path).
     #[test]
     fn vehicle_controller_system_ok_without_physics_world_resource() {
         let mut world = World::new();

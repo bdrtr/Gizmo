@@ -1,4 +1,4 @@
-//! Eşler-arası (P2P) deterministik rollback netcode (GGPO tarzı).
+//! Peer-to-peer deterministic rollback netcode (GGPO-style).
 
 /// Per-player ring buffer of [`PlayerInput`] plus the GGPO prediction rule: when a tick
 /// has not arrived yet, repeat the last confirmed input rather than stall.

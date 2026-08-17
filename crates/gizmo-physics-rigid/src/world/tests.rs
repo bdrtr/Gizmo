@@ -29,9 +29,9 @@ fn test_physics_step() {
     assert!(world.transforms[0].position.y < 10.0);
 }
 
-/// Uçtan uca (sync → step → integrate) hava direnci: aynı yükseklikten bırakılan iki
-/// gövdeden ağır drag'lisi çok daha az düşmeli ve analitik terminal hıza oturmalı;
-/// drag'siz olan hızlanmaya devam edip çok daha hızlı olmalı.
+/// Air resistance end to end (sync → step → integrate): of two bodies dropped from the same
+/// height, the one with heavy drag must fall far less and settle at the analytic terminal
+/// velocity, while the one without drag keeps accelerating and ends up much faster.
 #[test]
 fn air_drag_body_falls_slower_and_reaches_terminal_velocity() {
     let mut world = PhysicsWorld::new(); // gravity -9.81, air_density 1.225
@@ -479,9 +479,9 @@ fn test_car_simulation() {
     );
 }
 
-/// 2-tangent sürtünme, eksen-hizalı olmayan (diyagonal) bir kaymayı her iki
-/// tangent bileşeninde simetrik yavaşlatıp durdurmalı. Eski tek-tangent yöntemi
-/// birikmiş impulsun dik bileşenini kaybedebiliyordu.
+/// 2-tangent friction must slow and stop a slide that is not axis-aligned (diagonal)
+/// symmetrically in both tangent components. The old single-tangent method could lose the
+/// perpendicular component of the accumulated impulse.
 #[test]
 fn friction_decelerates_diagonal_slide_symmetrically() {
     let mut world = PhysicsWorld::new();
@@ -537,9 +537,9 @@ fn friction_decelerates_diagonal_slide_symmetrically() {
     assert!(speed_end < 0.5, "durmaya yakın olmalı, kalan hız: {speed_end}");
 }
 
-/// Hareket eden kinematik platform, üstündeki UYUYAN dinamik cismi uyandırmalı ve
-/// sürtünmeyle sürüklemeli. (Eskiden kinematik gövde "mover" sayılmadığından ada
-/// uyanmıyor, uyuyan cisim hiç uyandırılmıyordu.)
+/// A moving kinematic platform must wake the SLEEPING dynamic body resting on it and drag it
+/// along by friction. (A kinematic body did not use to count as a "mover", so the island never
+/// woke and the sleeping body was never disturbed.)
 #[test]
 fn moving_kinematic_platform_wakes_sleeping_body() {
     let mut world = PhysicsWorld::new();

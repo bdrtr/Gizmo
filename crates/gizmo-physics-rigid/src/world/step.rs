@@ -10,8 +10,8 @@ use web_time::Instant;
 use std::time::Instant;
 
 impl PhysicsWorld {
-    /// Ana fizik adımı — sabit 120Hz sub-stepping ile
-    /// Render dt'yi (değişken) sabit iç fizik dt'ye dönüştürür.
+    /// The main physics step — with fixed 120 Hz sub-stepping.
+    /// Converts the (variable) render dt into the fixed internal physics dt.
     #[tracing::instrument(skip_all, name = "physics_frame")]
     pub fn step(
         &mut self,
@@ -154,9 +154,8 @@ impl PhysicsWorld {
         Ok(())
     }
 
-    /// İç fizik adımı — sabit FIXED_DT ile çağrılır
-    /// İç fizik adımı — sabit FIXED_DT ile çağrılır
-    /// Modüler pipeline: her aşama ayrı fonksiyonda (pipeline.rs)
+    /// The inner physics step — always called with the fixed FIXED_DT.
+    /// A modular pipeline: each stage lives in its own function (pipeline.rs).
     #[tracing::instrument(skip_all, name = "physics_substep")]
     fn step_internal(
         &mut self,

@@ -9,14 +9,14 @@
 //! is Stage A — the dependency-light core that goes to 1.x first — and its documented surface
 //! is part of that promise. Do not silence this with `#[allow]`; write the doc.)
 
-//! Gizmo networking — özellik bayraklarıyla (feature flags) seçilen iki bağımsız netcode mimarisi.
+//! Gizmo networking — two independent netcode architectures, selected by feature flags.
 //!
-//! - **`client-server`**: `renet` tabanlı, otoriter sunuculu mimari; istemci tahmini
-//!   (prediction) ve snapshot interpolasyonu içerir. Adanmış sunuculu oyunlar için.
-//! - **`rollback`**: eşler-arası (P2P) deterministik rollback (GGPO tarzı); fizik
-//!   durumunu yakalayıp geri yükler. Dövüş/lockstep tarzı oyunlar için.
+//! - **`client-server`**: an authoritative-server architecture built on `renet`, with client-side
+//!   prediction and snapshot interpolation. For games with a dedicated server.
+//! - **`rollback`**: peer-to-peer deterministic rollback (GGPO-style), capturing and restoring
+//!   physics state. For fighting/lockstep-style games.
 //!
-//! İki mimari de aynı anda etkinleştirilebilir ama birbirinden bağımsızdır.
+//! Both can be enabled at once, and they are independent of each other.
 
 #[cfg(feature = "client-server")]
 pub mod client_server;

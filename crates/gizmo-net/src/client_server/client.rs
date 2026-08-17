@@ -14,14 +14,14 @@ pub struct NetworkClient {
 }
 
 impl NetworkClient {
-    /// Sunucuya bağlanacak bir istemci oluşturur.
+    /// Creates a client that will connect to a server.
     ///
-    /// `client_id` çağıran tarafından benzersiz ve ideal olarak tahmin edilemez
-    /// şekilde sağlanmalıdır. (Eskiden buraya gömülü olan "şu anki milisaniye"
-    /// değeri hem çakışmaya hem de öngörülebilirliğe açıktı.)
+    /// `client_id` must be supplied by the caller, unique and ideally unpredictable. (The
+    /// "current millisecond" that used to be baked in here was open to both collisions and
+    /// prediction.)
     ///
-    /// Adres ayrıştırma, soket bağlama veya transport kurulumu başarısız olursa
-    /// panik yerine hata döndürür.
+    /// Returns an error rather than panicking if address parsing, socket binding or transport
+    /// setup fails.
     pub fn new(server_addr: &str, client_id: u64) -> Result<Self, NetError> {
         let client = RenetClient::new(connection_config());
 

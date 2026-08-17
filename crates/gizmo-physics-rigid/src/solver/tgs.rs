@@ -615,11 +615,13 @@ impl ConstraintSolver {
         }
     }
 
-    /// Tek TGS iterasyon taraması — precompute'lu (`prepared`) sürüm. Her temasta normal
-    /// (opsiyonel soft bias) + 2-tangent Coulomb sürtünme çöz. `use_bias=false` → rijit
-    /// relax. Sabitler (`r_a/r_b/normal/k_n/t1/t2/k_t/inv_i…`) `prepared`'da hazır; burada
-    /// yalnız hız/dp'ye bağlı değişken kısım hesaplanır. Ters sıra (`reverse`) düz dizinin
-    /// TERSİDİR — eski kodun (manifold-ters + contact-ters) sırasıyla BİREBİR aynı.
+    /// One TGS iteration sweep — the precomputed (`prepared`) version. For each contact it
+    /// solves the normal row (with an optional soft bias) plus 2-tangent Coulomb friction;
+    /// `use_bias=false` gives the rigid relax pass. The constants
+    /// (`r_a/r_b/normal/k_n/t1/t2/k_t/inv_i…`) are ready in `prepared`, so only the part that
+    /// varies with velocity/dp is computed here. Reverse order (`reverse`) is the exact reverse
+    /// of the forward sequence — identical to the old code's (manifold-reversed +
+    /// contact-reversed) order.
     #[allow(clippy::too_many_arguments, clippy::needless_range_loop)]
     fn tgs_sweep_prepared(
         &self,

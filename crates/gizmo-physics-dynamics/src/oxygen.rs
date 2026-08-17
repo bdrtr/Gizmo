@@ -1,8 +1,9 @@
-//! Basit oksijen/nefes sistemi — su-altı keşif oyunları (Subnautica-tarzı) için.
+//! A simple oxygen/breath system — for underwater exploration games (Subnautica-style).
 //!
-//! Kafası batık entity'lerin oksijeni tükenir, yüzeye çıkınca dolar. Su hacimleri
-//! [`PhysicsWorld::is_submerged`](gizmo_physics_rigid::world::PhysicsWorld) ile sorgulanır —
-//! yani buoyancy, yüzme kontrolcüsü ve su-altı sisiyle AYNI `FluidZone`'ları kullanır.
+//! An entity whose head is submerged runs out of oxygen, and refills on surfacing. Water volumes
+//! are queried through
+//! [`PhysicsWorld::is_submerged`](gizmo_physics_rigid::world::PhysicsWorld) — i.e. it uses the
+//! SAME `FluidZone`s as buoyancy, the swimming controller and the underwater fog.
 
 use gizmo_core::component::IsDeleted;
 use gizmo_core::query::{Mut, Without};
@@ -17,11 +18,12 @@ pub struct Oxygen {
     pub current: f32,
     /// Maksimum hava (saniye).
     pub max: f32,
-    /// Batıkken saniyede tükenme miktarı.
+    /// How much is consumed per second while submerged.
     pub depletion_rate: f32,
-    /// Yüzeyde saniyede dolma miktarı.
+    /// How much refills per second at the surface.
     pub refill_rate: f32,
-    /// Ağız/burun yüksekliği (entity merkezinden Y ofseti); bu NOKTA suya batıksa oksijen tükenir.
+    /// Mouth/nose height (a Y offset from the entity's centre); oxygen drains while THAT POINT
+    /// is under water.
     pub head_offset: f32,
 }
 
@@ -40,7 +42,7 @@ impl Default for Oxygen {
 }
 
 impl Oxygen {
-    /// Kalan oran (0..1) — HUD barı için.
+    /// The fraction remaining (0..1) — for a HUD bar.
     #[inline]
     pub fn fraction(&self) -> f32 {
         if self.max > 0.0 {
@@ -50,16 +52,17 @@ impl Oxygen {
         }
     }
 
-    /// Hava bitti mi (boğulma sınırı).
+    /// Has the air run out (the drowning threshold)?
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.current <= 0.0
     }
 }
 
-/// `Oxygen` taşıyan her entity'nin havasını günceller: KAFA noktası (`position + head_offset`) bir
-/// su hacminde (FluidZone) ise tüketir, değilse doldurur. `PhysicsWorld` kaynağı yoksa (sahnede su
-/// yok) her şey dolar — sistemin su içermeyen sahnelerde no-op olması garanti.
+/// Updates the air of every entity carrying `Oxygen`: it drains while the HEAD point
+/// (`position + head_offset`) is inside a water volume (FluidZone) and refills otherwise. With no
+/// `PhysicsWorld` resource (no water in the scene) everything refills — which guarantees the
+/// system is a no-op in scenes without water.
 #[tracing::instrument(skip_all, name = "oxygen_system")]
 pub fn oxygen_system(world: &World, dt: f32) {
     if dt <= 0.0 {
@@ -112,7 +115,7 @@ mod tests {
         world
     }
 
-    /// Batıkken oksijen tükenir, yüzeye çıkınca dolar.
+    /// Oxygen drains while submerged and refills on surfacing.
     #[test]
     fn oxygen_depletes_underwater_and_refills_at_surface() {
         let mut world = world_with_water();
@@ -217,7 +220,8 @@ mod tests {
         assert_eq!(o, 5.0, "dt <= 0 must leave oxygen untouched, got {o}");
     }
 
-    /// Sahnede su (PhysicsWorld) yoksa boğulma olmaz — oksijen dolar (no-op güvenliği).
+    /// With no water (no PhysicsWorld) in the scene nobody drowns — oxygen refills (the no-op
+    /// safety property).
     #[test]
     fn oxygen_refills_without_physics_world() {
         let mut world = World::new();

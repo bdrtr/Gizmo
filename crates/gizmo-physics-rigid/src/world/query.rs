@@ -10,9 +10,9 @@ use gizmo_physics_core::BodyHandle;
 impl PhysicsWorld {
     /// Apply an impulse to a body at a point.
     ///
-    /// `rb` alınır `&mut` çünkü uyuyan bir cisme impuls uygulamak onu UYANDIRMALIDIR;
-    /// aksi halde hız değişir ama `is_sleeping` true kalır → position_integration cismi
-    /// atlar ve impuls SESSİZCE YUTULUR (cisim hiç hareket etmez).
+    /// `rb` is taken by `&mut` because applying an impulse to a sleeping body must WAKE it;
+    /// otherwise the velocity changes while `is_sleeping` stays true → position integration
+    /// skips the body and the impulse is SILENTLY SWALLOWED (the body never moves).
     pub fn apply_impulse(
         &self,
         rb: &mut RigidBody,
@@ -27,7 +27,8 @@ impl PhysicsWorld {
         Integrator::apply_impulse_at_point(rb, transform, vel, impulse, point);
     }
 
-    /// Apply a force to a body. `rb` `&mut` — uyuyan cismi uyandırır (bkz. apply_impulse).
+    /// Apply a force to a body. `rb` is `&mut` because it wakes a sleeping body (see
+    /// `apply_impulse`).
     pub fn apply_force(
         &self,
         rb: &mut RigidBody,

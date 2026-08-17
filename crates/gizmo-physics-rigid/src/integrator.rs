@@ -17,13 +17,13 @@ pub struct Integrator {
     /// `RigidBody::use_gravity` set receive it; static, kinematic and sleeping bodies are
     /// skipped entirely. `Vec3::ZERO` gives a weightless world.
     pub gravity: Vec3,
-    /// Hava yoğunluğu ρ (kg/m³), aerodinamik sürükleme F = ½·ρ·Cd·A·v² için. Deniz
-    /// seviyesi ~1.225. Sürükleme yalnız gövdenin `drag_coefficient·drag_area > 0` ise
-    /// uygulanır (opt-in, [`RigidBody::with_air_drag`]).
+    /// Air density ρ (kg/m³), for the aerodynamic drag F = ½·ρ·Cd·A·v². ~1.225 at sea level.
+    /// Drag is applied only if the body's `drag_coefficient·drag_area > 0` (opt-in, via
+    /// [`RigidBody::with_air_drag`]).
     pub air_density: f32,
-    /// Rüzgar (hava kütlesinin) hızı, m/s. Sürükleme bağıl hıza (v − wind) karşı
-    /// uygulanır → rüzgar tüneli/esinti: durağan cisim bile rüzgar yönünde itilir.
-    /// Varsayılan sıfır (durağan hava).
+    /// Wind (i.e. air mass) velocity, m/s. Drag opposes the relative velocity (v − wind), which
+    /// gives a wind tunnel or a gust: even a stationary body is pushed downwind.
+    /// Defaults to zero (still air).
     pub wind: Vec3,
 }
 
@@ -448,9 +448,9 @@ mod tests {
         assert!(vel.linear.x > 0.0, "velocity must stay positive");
     }
 
-    /// Aerodinamik hava direnci tek adımda `F = ½·ρ·Cd·A·v²`'yi hıza KARŞI uygular.
-    /// Yerçekimi ve lineer sönüm kapalıyken (izole), hız kaybı analitik Δv = F/m·dt ile
-    /// eşleşmeli.
+    /// In one step, aerodynamic drag applies `F = ½·ρ·Cd·A·v²` OPPOSING the velocity. With
+    /// gravity and linear damping off (isolated), the velocity lost must match the analytic
+    /// Δv = F/m·dt.
     #[test]
     fn air_drag_matches_half_rho_cd_a_v_squared_one_step() {
         let integrator = Integrator::default(); // air_density = 1.225
@@ -475,8 +475,8 @@ mod tests {
         assert!(vel.linear.x < v0, "drag must reduce the speed");
     }
 
-    /// Doğal davranış: yerçekimi + hava direnci altında düşen cisim, serbest düşüşe
-    /// gitmek yerine analitik TERMINAL hıza oturur: v_term = √(2·m·g / (ρ·Cd·A)).
+    /// The natural behaviour: a body falling under gravity + drag settles at the analytic
+    /// TERMINAL velocity instead of accelerating forever: v_term = √(2·m·g / (ρ·Cd·A)).
     #[test]
     fn air_drag_gives_natural_terminal_velocity() {
         let integrator = Integrator::default(); // gravity -9.81, air 1.225
@@ -507,8 +507,8 @@ mod tests {
         );
     }
 
-    /// Rüzgar (Integrator.wind) durağan bir sürüklemeli cismi rüzgar yönünde iter ve hız
-    /// rüzgar hızına asimptot yapar (drag bağıl hıza v−wind karşı → denge v = wind).
+    /// Wind (Integrator.wind) pushes a stationary body with drag downwind, and its velocity is
+    /// asymptotic to the wind speed (drag opposes v−wind → equilibrium at v = wind).
     #[test]
     fn wind_pushes_a_stationary_drag_body_toward_wind_speed() {
         let mut integrator = Integrator::default();

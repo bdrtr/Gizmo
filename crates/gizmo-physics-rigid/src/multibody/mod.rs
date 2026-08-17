@@ -41,8 +41,8 @@ use gizmo_math::spatial::{SpatialInertia, SpatialMatrix, SpatialVector};
 use gizmo_math::{Mat3, Quat, Vec3};
 use serde::{Deserialize, Serialize};
 
-/// Uzaysal Transformasyon Matrisi (6x6)
-/// Bir frame'den diğer frame'e uzaysal vektörleri taşır.
+/// Spatial transformation matrix (6×6).
+/// Carries spatial vectors from one frame to another.
 #[derive(Clone, Copy, Debug)]
 pub struct SpatialTransform {
     /// Orientation of the child frame expressed in the parent frame, as a rotation
@@ -121,7 +121,7 @@ impl SpatialTransform {
         SpatialVector::new(rw, rv)
     }
 
-    /// Spatial Inertia'yı ebeveyn frame'e çevirir: I_parent = X_parent_child * I_child * X_child_parent
+    /// Converts a spatial inertia into the parent frame: I_parent = X_parent_child * I_child * X_child_parent
     pub fn transform_inertia(self, i: SpatialInertia) -> SpatialInertia {
         // Tam dönüşüm çok maliyetlidir. Pratik olarak kütle aynı kalır, CoM kaydırılır ve Rotasyon çevrilir.
         SpatialInertia {

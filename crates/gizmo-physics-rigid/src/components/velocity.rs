@@ -38,7 +38,7 @@ pub struct Velocity {
     /// left, and skips the rotation entirely when the angular speed for the step is under
     /// about `1e-4` rad/s, rather than normalising a near-identity quaternion.
     pub angular: Vec3,
-    /// Önceki karenin hızı (Diferansiyel hesap / Heun's method için)
+    /// The previous frame's velocity (for differential calculations / Heun's method)
     #[serde(skip)]
     #[cfg_attr(feature = "reflect", reflect(ignore))]
     pub pre_linear: Vec3,

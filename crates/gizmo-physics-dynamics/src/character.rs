@@ -327,8 +327,8 @@ pub fn update_character(
     transform.position = current_pos;
 }
 
-/// Su-altı buoyant hareket + duvar/teren kayması (step-climb YOK). `surface_y` su yüzeyinin
-/// dünya-Y'si. Kara `update_character` yerine batıkken çağrılır.
+/// Buoyant underwater movement plus wall/terrain sliding (NO step-climb). `surface_y` is the
+/// water surface's world Y. Called instead of the on-land `update_character` while submerged.
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(skip_all, level = "trace", name = "swim_step")]
 fn swim_step(
@@ -563,7 +563,8 @@ mod tests {
 
     // ── SU / YÜZME (W1 + W2) ────────────────────────────────
 
-    /// W1: PhysicsWorld::water_at bir fluid zone içinde yüzey/derinlik/yoğunluk döner, dışında None.
+    /// W1: PhysicsWorld::water_at returns surface/depth/density inside a fluid zone, and None
+    /// outside one.
     #[test]
     fn water_at_reports_surface_depth_and_density() {
         use gizmo_physics_rigid::world::{FluidZone, PhysicsWorld, ZoneShape};
@@ -591,8 +592,9 @@ mod tests {
         assert!(pw.is_submerged(Vec3::new(0.0, -1.0, 0.0)));
     }
 
-    /// A: her FluidZone kendi su-altı sisini tanımlar; çakışan zone'larda en üst-yüzeyli seçilir
-    /// ve ONUN fog'u döner (kamera hangi su hacmindeyse onun görünümü).
+    /// A: every FluidZone defines its own underwater fog; where zones overlap the one with the
+    /// highest surface wins and ITS fog is returned (the camera gets the look of whichever body
+    /// of water it is in).
     #[test]
     fn water_at_returns_per_zone_fog() {
         use gizmo_physics_rigid::world::{FluidZone, PhysicsWorld, ZoneShape};
@@ -617,7 +619,8 @@ mod tests {
         assert!((s.fog_color[1] - 0.4).abs() < 1e-6);
     }
 
-    /// W2: batık karakter (girdisiz) kaldırma kuvvetiyle yüzeye doğru YÜKSELİR ve yüzeyi aşmaz.
+    /// W2: a submerged character with no input RISES towards the surface under buoyancy and
+    /// does not shoot past it.
     #[test]
     fn submerged_character_rises_toward_surface() {
         let entity = BodyHandle::from_id(0);
@@ -645,7 +648,7 @@ mod tests {
         );
     }
 
-    /// W2: batık karakter target_velocity yönünde 3B yüzer (ileri + yukarı/aşağı).
+    /// W2: a submerged character swims in 3D along target_velocity (forward + up/down).
     #[test]
     fn submerged_character_swims_in_3d_target_direction() {
         let entity = BodyHandle::from_id(0);
@@ -676,7 +679,7 @@ mod tests {
         assert!(transform.position.is_finite());
     }
 
-    /// W2: yüzme modu terenden GEÇMEMELİ (duvar kayması step-climb'sız da çalışır).
+    /// W2: swimming must not pass THROUGH terrain (wall sliding works without step-climb too).
     #[test]
     fn submerged_character_does_not_swim_through_wall() {
         let entity = BodyHandle::from_id(0);

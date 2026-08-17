@@ -233,11 +233,12 @@ mod tests {
         );
     }
 
-    /// Fixed eklem zinciri koparmamalı. Kök revolute (Z), CoM tam aşağıda → TEK BAŞINA
-    /// q̈=0 (denge). Ucuna KİLİTLİ (Fixed) bir çocuk eklenir; çocuğun kütlesi YANA kaçık,
-    /// dolayısıyla yerçekimi kök Z eksenine net tork uygular. Bu tork köke ancak Fixed
-    /// eklemin ataleti/bias'ı yukarı taşınırsa ulaşır → kök ivmelenir. (Eski kod D≈0'da
-    /// hiç taşımıyordu → kök q̈≈0 kalır, zincir kopar.)
+    /// A Fixed joint must not break the chain. The root is revolute (Z) with its CoM straight
+    /// below it, so ON ITS OWN q̈=0 (equilibrium). A LOCKED (Fixed) child is attached to its
+    /// end, and the child's mass is offset SIDEWAYS, so gravity applies a net torque about the
+    /// root's Z axis. That torque can only reach the root if the Fixed joint's inertia/bias is
+    /// propagated upwards → the root accelerates. (The old code propagated nothing at D≈0, so
+    /// the root stayed at q̈≈0 and the chain came apart.)
     #[test]
     fn fixed_joint_does_not_sever_chain() {
         let link = |parent: usize, jt: JointType, t: Vec3, com: Vec3| ArticulatedLink {

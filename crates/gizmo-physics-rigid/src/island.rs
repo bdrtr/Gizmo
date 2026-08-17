@@ -1,8 +1,8 @@
 /// Island-Based Parallel Solver
 ///
-/// Fizik dünyasını bağlı bileşenlere (island) ayırır.
-/// Birbirinden bağımsız island'lar PhysicsWorld tarafında Rayon ile paralel çözülür.
-/// Hareketsiz island'lar sleeping'e alınarak tamamen atlanır.
+/// Splits the physics world into connected components (islands).
+/// Islands that are independent of each other are solved in parallel with Rayon by PhysicsWorld.
+/// Islands that are not moving go to sleep and are skipped entirely.
 use gizmo_physics_core::ContactManifold;
 use gizmo_physics_core::BodyHandle;
 use std::collections::HashMap;
@@ -11,12 +11,12 @@ use std::collections::HashMap;
 // Island veri yapısı
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Tek bir fizik adası — birbirine temas eden dinamik cisimler
+/// A single physics island — dynamic bodies that are in contact with one another
 #[derive(Debug, Clone, PartialEq)]
 pub struct Island {
     /// Bu island'a ait manifold indisleri (orijinal Vec'teki)
     pub manifold_indices: Vec<usize>,
-    /// Uyku durumu: tüm cisimler yeterince yavaşsa true
+    /// Sleep state: true once every body in the island is slow enough
     pub sleeping: bool,
 }
 
@@ -35,10 +35,10 @@ pub struct Island {
 pub struct IslandManager;
 
 impl IslandManager {
-    /// Manifoldları bağlı bileşenlere (island) ayır.
-    /// İki manifold aynı island'a aittir ↔ ortak bir dinamik cisme sahipler.
+    /// Partition manifolds into connected components (islands).
+    /// Two manifolds belong to the same island ↔ they share a dynamic body.
     ///
-    /// Algoritma: Union-Find (path compression + rank)
+    /// Algorithm: union-find (path compression + rank)
     pub fn build_islands(
         manifolds: &[ContactManifold],
         entity_is_dynamic: &impl Fn(BodyHandle) -> bool,
@@ -136,7 +136,7 @@ impl IslandManager {
         islands
     }
 
-    /// Manifoldları island gruplarına göre böl — her island kendi manifold Vec'ine sahip
+    /// Split manifolds by island group — each island gets its own manifold Vec
     pub fn split_manifolds(
         manifolds: Vec<ContactManifold>,
         islands: &[Island],
@@ -157,8 +157,8 @@ impl IslandManager {
             .collect()
     }
 
-    /// Island'ın uyuma uygun olup olmadığını kontrol et.
-    /// Tüm temas noktalarındaki impuls toplamı eşiğin altındaysa → uyku
+    /// Decide whether the island may go to sleep.
+    /// If the total impulse across all its contact points is under the threshold → sleep
     pub fn should_sleep(manifolds: &[ContactManifold], impulse_threshold: f32) -> bool {
         if manifolds.is_empty() {
             return false;

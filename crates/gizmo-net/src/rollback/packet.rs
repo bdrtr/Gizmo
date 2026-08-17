@@ -18,15 +18,15 @@ use serde::{Deserialize, Serialize};
 use super::input_buffer::PlayerInput;
 use super::snapshot::PhysicsStateSnapshot;
 
-/// Ağ üzerinden gönderilen tüm verilerin genel zarfı (Envelope).
+/// The envelope wrapping everything sent over the network.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum NetworkPacket {
-    /// Oynanış sırasında en sık yollanacak paket.
-    /// Sadece oyuncunun o karedeki (tick) girişlerini içerir.
+    /// The packet sent most often during play.
+    /// It carries nothing but the player's inputs for that tick.
     Input(PlayerInput),
 
-    /// İki bilgisayar arasındaki gecikmeyi ölçmek için.
+    /// For measuring the latency between the two machines.
     Ping {
         /// The sender's clock reading when the ping left, to be echoed back verbatim in
         /// the matching [`NetworkPacket::Pong`]; subtracting it from the sender's clock
@@ -48,8 +48,8 @@ pub enum NetworkPacket {
         timestamp: u64,
     },
 
-    /// Nadiren, eğer oyun çok fazla asenkron (desync) olursa
-    /// veya yeni bir oyuncu odaya katılırsa tüm sahne gönderilir.
+    /// Rarely — when the game desyncs badly, or a new player joins the room — the whole scene
+    /// is sent.
     FullState(PhysicsStateSnapshot),
 }
 

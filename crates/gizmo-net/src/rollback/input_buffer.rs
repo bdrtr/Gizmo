@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-/// Oyuncunun tek bir karedeki (tick) girdisi.
-/// Çoğu dövüş ve fizik oyununda 32-bit veya 64-bit bir maske (bitmask) tüm tuşlara yeter.
+/// A player's input for a single frame (tick).
+/// In most fighting and physics games a 32- or 64-bit bitmask covers every button.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct PlayerInput {
     /// Simulation tick this input belongs to.
@@ -30,14 +30,14 @@ impl PlayerInput {
     }
 }
 
-/// Her bir oyuncunun uzak ve yerel (local) girdilerini sakladığı dairesel tampon.
+/// The ring buffer holding each player's remote and local inputs.
 #[derive(Debug, Clone)]
 pub struct InputBuffer {
     /// Id of the player this buffer stores inputs for.
     pub player_id: u32,
     buffer: Vec<Option<PlayerInput>>,
     capacity: usize,
-    /// En son "doğrulanan" girdi tick'i (bu tick'e kadar her şey kesin doğru)
+    /// The most recent "confirmed" input tick (everything up to it is known-correct).
     pub last_confirmed_tick: u64,
 }
 
@@ -71,8 +71,8 @@ impl InputBuffer {
         }
     }
 
-    /// Belirtilen Tick'teki girdiyi okur. Eğer girdi henüz ağdan gelmemişse, 
-    /// tahmin (Prediction) yaparak en son bilinen girdiyi döndürür.
+    /// Reads the input at the given tick. If it has not arrived over the network yet, it
+    /// predicts by returning the most recent known input.
     pub fn get_or_predict(&self, tick: u64) -> PlayerInput {
         let index = (tick as usize) % self.capacity;
         

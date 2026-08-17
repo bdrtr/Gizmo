@@ -1,27 +1,26 @@
-//! `client-server` mimarisi için somut hata tipi.
+//! The concrete error type for the `client-server` architecture.
 //!
-//! Eskiden yapıcılar `Box<dyn Error + Send + Sync>` döndürüyordu; bu, çağıranın
-//! hatayı program-akışıyla (adres ayrıştırma mı, port-in-use mu, transport mu)
-//! ayırt etmesini imkansız kılıyordu. [`NetError`] bunu eşleşilebilir
-//! varyantlara ayırır.
+//! The constructors used to return `Box<dyn Error + Send + Sync>`, which made it impossible for
+//! a caller to tell the cases apart in code (was it address parsing, a port already in use, the
+//! transport?). [`NetError`] splits that into variants you can match on.
 
 use std::error::Error;
 use std::fmt;
 
-/// `client-server` netcode kurulumu sırasında oluşabilecek hatalar.
+/// The errors that can arise while setting up `client-server` netcode.
 ///
-/// `#[non_exhaustive]`: ileride yeni varyant eklemek semver-kıran olmadan
-/// mümkün kalsın diye. Çağıranlar `match`'lerinde `_ => ...` kullanmalıdır.
+/// `#[non_exhaustive]`, so that adding a variant later is not a semver break. Callers should
+/// include a `_ => ...` arm in their matches.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum NetError {
-    /// Verilen sunucu/genel adres geçerli bir `SocketAddr` olarak ayrıştırılamadı.
+    /// The given server/public address could not be parsed as a valid `SocketAddr`.
     AddrParse(std::net::AddrParseError),
-    /// UDP soketi bağlanamadı (örn. port kullanımda) veya başka bir G/Ç hatası.
+    /// The UDP socket could not be bound (e.g. the port is in use), or another I/O error.
     Io(std::io::Error),
-    /// Sistem saati UNIX epoch'tan önceydi (`SystemTime::duration_since` hatası).
+    /// The system clock was before the UNIX epoch (a `SystemTime::duration_since` failure).
     Time(std::time::SystemTimeError),
-    /// Alttaki netcode taşıma katmanı kurulamadı.
+    /// The underlying netcode transport could not be set up.
     Transport(Box<dyn Error + Send + Sync + 'static>),
 }
 

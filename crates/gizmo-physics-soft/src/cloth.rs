@@ -582,18 +582,18 @@ impl gizmo_core::Component for Cloth {}
 mod tests {
     use super::*;
 
-    /// Zemine çarpan bir düğümün çarpma hızı, pozisyon zemine KENETLENMEDEN ÖNCE
-    /// hesaplanmalı. Kenetlenmiş pozisyondan hesaplanırsa (bug) düğüm zaten zeminin
-    /// altındayken sahte bir YUKARI yönlü dikey hız üretilir: kenetlenmiş y (thickness)
-    /// önceki (daha da alçak) y'den büyük olduğu için `(clamped.y - prev.y)/dt > 0`.
-    /// Bu, `prev_position`'ı yanlış kurar ve bir sonraki karede yanlış (yukarı) impuls
-    /// enjekte eder.
+    /// The impact velocity of a node hitting the ground must be computed BEFORE its position is
+    /// clamped to the ground. Computing it from the clamped position (the bug) invents a
+    /// spurious UPWARD vertical velocity whenever the node is already below the ground: the
+    /// clamped y (thickness) is greater than the previous (even lower) y, so
+    /// `(clamped.y - prev.y)/dt > 0`. That sets `prev_position` wrongly and injects a wrong
+    /// (upward) impulse on the following frame.
     ///
-    /// Kurulum: düğümü zaten zeminin ALTINA yerleştir (prev ve tahmini konum ikisi de
-    /// thickness'ın altında, aşağı yönlü hareket). Doğru davranışta yakalanan gerçek
-    /// hız aşağı yönlü (< 0) olup `vel.y.max(0.0)` ile SIFIRLANIR → yeniden kurulan
-    /// prev_position.y == thickness. Buggy davranışta ise pozitif bir dikey hız kalır
-    /// → prev_position.y < thickness olur.
+    /// Setup: place the node already BELOW the ground (both prev and the predicted position
+    /// under thickness, moving downwards). Under the correct behaviour the captured real
+    /// velocity is downward (< 0) and `vel.y.max(0.0)` ZEROES it → the rebuilt prev_position.y
+    /// == thickness. Under the buggy behaviour a positive vertical velocity survives →
+    /// prev_position.y < thickness.
     #[test]
     fn floor_collision_uses_pre_clamp_velocity() {
         let sub_dt = 1.0 / 60.0;

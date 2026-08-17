@@ -2,7 +2,7 @@ use std::net::{UdpSocket, SocketAddr};
 use std::io::ErrorKind;
 use super::packet::NetworkPacket;
 
-/// Native (Masaüstü) ortamlar için Non-Blocking UDP haberleşme katmanı.
+/// The non-blocking UDP communication layer, for native (desktop) environments.
 #[derive(Debug)]
 pub struct UdpTransport {
     socket: UdpSocket,
@@ -53,7 +53,7 @@ pub fn decode_packet(bytes: &[u8]) -> std::io::Result<NetworkPacket> {
 }
 
 impl UdpTransport {
-    /// Yeni bir UDP soketi oluşturur ve yerel porta bağlar.
+    /// Creates a new UDP socket and binds it to the local port.
     pub fn bind(local_port: u16) -> std::io::Result<Self> {
         let addr = format!("0.0.0.0:{}", local_port);
         let socket = UdpSocket::bind(addr)?;
@@ -68,13 +68,13 @@ impl UdpTransport {
         })
     }
 
-    /// Karşı tarafın (Peer) adresini ayarlar.
+    /// Sets the peer's address.
     pub fn set_remote(&mut self, addr: SocketAddr) {
         tracing::debug!(remote = %addr, "Uzak eş (peer) adresi elle ayarlandı");
         self.remote_addr = Some(addr);
     }
 
-    /// Bir NetworkPacket'i bincode ile baytlara çevirip karşı tarafa yollar.
+    /// Encodes a NetworkPacket to bytes with bincode and sends it to the peer.
     pub fn send_packet(&self, packet: &NetworkPacket) -> std::io::Result<()> {
         if let Some(remote) = self.remote_addr {
             let bytes = encode_packet(packet)?;
@@ -83,8 +83,8 @@ impl UdpTransport {
         Ok(())
     }
 
-    /// Gelen tüm UDP paketlerini okur ve NetworkPacket olarak döndürür.
-    /// Non-blocking olduğu için eğer okunacak paket yoksa anında boş döner.
+    /// Reads every incoming UDP packet and returns them as NetworkPackets.
+    /// It is non-blocking, so it returns empty immediately when there is nothing to read.
     #[tracing::instrument(skip_all, name = "udp_poll_events")]
     pub fn poll_events(&mut self) -> Vec<(SocketAddr, NetworkPacket)> {
         let mut events = Vec::new();

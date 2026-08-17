@@ -28,12 +28,12 @@ pub struct TransformData {
     pub rotation: [f32; 4],
 }
 
-/// İstemcinin tek bir tick için ürettiği girdi — hem ağ üzerinden gönderilen
-/// (wire) format hem de client-side prediction/reconciliation'ın işlediği birim.
+/// The input a client produces for a single tick — both the wire format sent over the network
+/// and the unit client-side prediction/reconciliation operates on.
 ///
-/// `tick` alanı, sunucunun bu girdiyi işledikten sonra istemciye hangi tick'e
-/// kadar ilerlediğini (ACK) bildirebilmesi ve istemcinin onaylanmamış girdileri
-/// yeniden simüle edebilmesi (reconciliation) için zorunludur.
+/// The `tick` field is mandatory: it is how the server tells the client which tick it has
+/// processed up to (the ACK), and how the client knows which unacknowledged inputs to
+/// re-simulate (reconciliation).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct PlayerInput {
     /// Client simulation tick this input was sampled on, stamped by
@@ -76,15 +76,13 @@ pub struct PlayerInput {
     pub dt: f32,
 }
 
-/// `candidate` tick'i `reference`'tan KESİN olarak daha yeni mi — `u32` tick
-/// uzayı taştıktan (`u32::MAX -> 0`) sonra bile doğru sıralama için
-/// işaretli-wraparound aritmetiği kullanır.
+/// Is the `candidate` tick STRICTLY newer than `reference` — using signed wraparound arithmetic
+/// so the ordering stays correct after the `u32` tick space wraps (`u32::MAX -> 0`).
 ///
-/// "Bu tick şundan ileride mi" sorusunun TEK doğruluk kaynağı: hem istemci
-/// reconciliation'ı ([`crate::client_server::prediction::ClientPredictor::reconcile`])
-/// hem de sunucunun per-client ACK defteri bunu kullanır. Düz `>` wraparound'da
-/// desync eder (sunucu ACK'i taşmadan sonra bir daha ilerlemez → istemci kuyruğu
-/// sınırsız büyür), bu yüzden tek yerde tutulur.
+/// The SINGLE source of truth for "is this tick ahead of that one": both client reconciliation
+/// ([`crate::client_server::prediction::ClientPredictor::reconcile`]) and the server's per-client
+/// ACK ledger use it. A plain `>` desyncs on wraparound (the server's ACK never advances again
+/// after the wrap → the client's queue grows without bound), which is why it lives in one place.
 #[inline]
 pub fn tick_is_newer(candidate: u32, reference: u32) -> bool {
     (candidate.wrapping_sub(reference) as i32) > 0
@@ -112,9 +110,10 @@ pub enum ServerMessage {
         /// Renet client id of the player that disconnected.
         client_id: u64,
     },
-    /// Tüm istemcilere yayınlanan (broadcast) ortak dünya durumu — interpolasyon için.
+    /// The shared world state broadcast to every client — what interpolation runs on.
     WorldStateUpdate {
-        /// Sunucunun bu state'i ürettiği otoriter tick — interpolasyon zaman çizelgesi için.
+        /// The authoritative tick at which the server produced this state — the timeline
+        /// interpolation runs against.
         server_tick: u32,
         /// One entry per replicated entity, keyed by an application-chosen id.
         ///
@@ -130,9 +129,9 @@ pub enum ServerMessage {
         /// which re-sorts by timestamp, instead of applying them to transforms directly.
         players: HashMap<u64, TransformData>,
     },
-    /// Yalnızca ilgili istemciye gönderilen (per-client) reconciliation ACK'i:
-    /// sunucunun o istemciden işlediği son girdinin tick'i. İstemci bu tick'e
-    /// kadar olan girdileri kuyruğundan siler, kalanları yeniden simüle eder.
+    /// The per-client reconciliation ACK, sent only to the client it concerns: the tick of the
+    /// last input the server processed from it. The client drops everything up to that tick from
+    /// its queue and re-simulates the rest.
     InputAck {
         /// Tick of the newest input from *this* client that the server has consumed.
         ///

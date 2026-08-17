@@ -3,7 +3,7 @@ use super::snapshot::{PhysicsStateSnapshot, RollbackBuffer};
 use gizmo_core::World;
 use gizmo_physics_rigid::{PhysicsWorld, WorldSnapshot};
 
-/// Oyundaki tüm ağ trafiği, tahminler ve rollback süreçlerini yöneten ana sistem.
+/// The main system driving all of the game's network traffic, predictions and rollbacks.
 #[derive(Debug, Clone)]
 pub struct RollbackManager {
     /// Tick currently being simulated.
@@ -174,9 +174,9 @@ impl RollbackManager {
         self.current_tick += 1;
     }
 
-    /// Fizik döngüsünden ÖNCE çağrılır. Gerekirse geçmişe döner.
-    /// Geriye dönülürse true döner, böylece oyun motoru mevcut current_tick'e 
-    /// tekrar ulaşana kadar "sessizce" (render olmadan) fiziği simüle eder.
+    /// Called BEFORE the physics loop; rolls back if it has to.
+    /// Returns true when it did roll back, so the engine can re-simulate physics "silently"
+    /// (without rendering) until it reaches current_tick again.
     #[tracing::instrument(skip_all, name = "rollback_begin_frame")]
     pub fn begin_frame(&mut self, world: &mut World) -> bool {
         if let Some(target_tick) = self.rollback_target_tick {
@@ -224,7 +224,7 @@ impl RollbackManager {
         false
     }
 
-    /// Fizik döngüsünün tam SONUNDA çağrılır. O anki dünyanın anlık kopyasını alır.
+    /// Called at the very END of the physics loop; takes a snapshot of the world as it now is.
     #[tracing::instrument(skip_all, name = "rollback_end_frame")]
     pub fn end_frame(&mut self, world: &World) {
         let snapshot = PhysicsStateSnapshot::capture(world, self.current_tick);

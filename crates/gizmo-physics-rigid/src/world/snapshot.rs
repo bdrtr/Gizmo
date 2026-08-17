@@ -3,7 +3,7 @@ use super::{PhysicsWorld, SnapshotError, WorldSnapshot};
 use std::path::PathBuf;
 
 impl PhysicsWorld {
-    /// Deterministik rollback/replay için TAM durum anlık görüntüsü al (bkz [`WorldSnapshot`]).
+    /// Take a COMPLETE state snapshot for deterministic rollback/replay (see [`WorldSnapshot`]).
     ///
     /// # Why this destructures instead of reading fields
     ///
@@ -82,8 +82,8 @@ impl PhysicsWorld {
         }
     }
 
-    /// Anlık görüntüyü geri yükle (rollback). entities/colliders aynı kalmalı (aksi halde
-    /// indeks hizası bozulur). Sonraki `step` çağrıları bu durumdan deterministik ilerler.
+    /// Restore a snapshot (rollback). `entities`/`colliders` must be unchanged, or the index
+    /// alignment breaks. Subsequent `step` calls advance deterministically from this state.
     ///
     /// Destructures the snapshot exhaustively for the reason given on [`Self::snapshot`]: a field
     /// added to [`WorldSnapshot`] and not restored is a snapshot that carries state nothing puts
@@ -112,15 +112,18 @@ impl PhysicsWorld {
         self.weather = *weather;
     }
 
-    /// Simülasyon durumunun DETERMINISTIK hash'i — rollback/replay desync tespiti + testler.
+    /// A DETERMINISTIC hash of the simulation state — desync detection for rollback/replay, and
+    /// tests.
     ///
-    /// Cisimler **entity id'sine göre SABİT sırada** gezilir (ekleme/HashMap sırasından ve
-    /// dizi düzeninden bağımsız), her `f32` `to_bits()` ile karıştırılır. Sabit-anahtarlı
-    /// `DefaultHasher` (RandomState DEĞİL) kullanıldığından çıktı SÜREÇLER ARASI tutarlıdır.
+    /// Bodies are walked in a **fixed order, by entity id** (independent of insertion order,
+    /// HashMap order and array layout), and every `f32` is mixed in through `to_bits()`. It uses
+    /// a fixed-key `DefaultHasher` (NOT RandomState), so the output is consistent ACROSS
+    /// PROCESSES.
     ///
-    /// Garanti: **aynı platform + aynı binary**'de, aynı başlangıç durumundan aynı `dt`
-    /// adımlarıyla adım-adım eşleşir (replay/rollback için yeterli). Cross-platform bit-exact
-    /// GARANTİ EDİLMEZ (sim f32/glam üzerinde; bkz. `docs/ENGINE.md §5`).
+    /// The guarantee: on the **same platform and the same binary**, stepping the same initial
+    /// state with the same `dt` matches step for step (which is what replay/rollback needs).
+    /// Cross-platform bit-exactness is NOT guaranteed (the sim runs on f32/glam; see
+    /// `docs/ENGINE.md §5`).
     pub fn state_hash(&self) -> u64 {
         use std::hash::Hasher;
         // BodyHandle id'sine göre sabit sıra (dizi/ekleme sırasından bağımsız).

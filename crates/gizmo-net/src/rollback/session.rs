@@ -1,19 +1,20 @@
-//! Uçtan uca P2P rollback oturumu (Faz 3).
+//! The end-to-end P2P rollback session (phase 3).
 //!
-//! `RollbackSession`, deterministik fiziği (`PhysicsWorld` + Faz 2/3'ün `state_hash` /
-//! `snapshot`/`restore_snapshot`'ı) bir ağ transport'uyla birleştirip tam GGPO tarzı
-//! rollback döngüsünü sürer: yerel girdiyi gönder → uzak girdileri al → yanlış-tahmin
-//! varsa geçmişe dön + yeniden simüle et → ilerle. Transport SOYUT (`Transport` trait):
-//!   * `UdpTransport` — gerçek ağ (P2P UDP),
-//!   * `LoopbackTransport` — bellek-içi eşli kanal (lag + paket-kaybı simülasyonu); CI'da
-//!     deterministik test için.
+//! `RollbackSession` joins deterministic physics (`PhysicsWorld` plus phase 2/3's `state_hash` /
+//! `snapshot` / `restore_snapshot`) to a network transport and drives the full GGPO-style
+//! rollback loop: send the local input → receive remote inputs → on a misprediction, roll back
+//! and re-simulate → advance. The transport is ABSTRACT (the `Transport` trait):
+//!   * `UdpTransport` — a real network (P2P UDP),
+//!   * `LoopbackTransport` — an in-memory paired channel (with lag and packet-loss simulation),
+//!     for deterministic tests in CI.
 
 use super::input_buffer::{InputBuffer, PlayerInput};
 use super::packet::NetworkPacket;
 use gizmo_physics_rigid::{PhysicsWorld, WorldSnapshot};
 use std::collections::HashMap;
 
-/// Ağ taşıma soyutlaması — gerçek UDP ile test loopback'i aynı oturum kodunu kullanır.
+/// The network transport abstraction — real UDP and the test loopback run the same session
+/// code.
 pub trait Transport {
     /// Hands one packet to the network, best effort. Delivery, ordering and uniqueness
     /// are all unguaranteed and failures are not reported back to the caller — by design:
@@ -50,9 +51,9 @@ impl Transport for super::transport::UdpTransport {
     }
 }
 
-/// Tek-iş-parçacıklı eşli bellek-içi transport (TEST). `pair(lag, drop_modulo)` iki uç döner.
-/// lag = paket teslim gecikmesi (poll sayısı); drop_modulo = her N. gönderilen paket düşer
-/// (0 = kayıp yok). Paket kaybına dayanıklılık için oturum son girdileri yeniden gönderir.
+/// A single-threaded paired in-memory transport (TEST). `pair(lag, drop_modulo)` returns the two
+/// ends. `lag` is the delivery delay in polls; `drop_modulo` drops every Nth sent packet (0 = no
+/// loss). To survive packet loss, the session re-sends its recent inputs.
 #[derive(Debug)]
 pub struct LoopbackTransport {
     inbox: std::rc::Rc<std::cell::RefCell<std::collections::VecDeque<(u32, NetworkPacket)>>>,
@@ -119,10 +120,10 @@ impl Transport for LoopbackTransport {
     }
 }
 
-/// Bir oyuncunun girdisini fiziğe uygulayan oyun-spesifik geri çağrı tipi.
+/// The game-specific callback type that applies one player's input to the physics.
 pub type ApplyInput = dyn Fn(&mut PhysicsWorld, u32, &PlayerInput);
 
-/// İki-oyunculu deterministik rollback oturumu (PhysicsWorld otoriter durum).
+/// A two-player deterministic rollback session (PhysicsWorld is the authoritative state).
 pub struct RollbackSession<T: Transport> {
     /// The authoritative simulation state. Public so gameplay and rendering can read it
     /// (and so it can be seeded before the first tick), but [`RollbackSession::advance`]
@@ -150,11 +151,11 @@ pub struct RollbackSession<T: Transport> {
     remote_id: u32,
     local_buf: InputBuffer,
     remote_buf: InputBuffer,
-    /// tick başına o tick'in BAŞINDAKİ tam durum (rollback için).
+    /// Per tick, the complete state as it was at the START of that tick (for rollback).
     snaps: HashMap<u64, WorldSnapshot>,
     max_rollback: u64,
     fixed_dt: f32,
-    /// Paket kaybına dayanıklılık: her gönderide son bu kadar yerel girdiyi yeniden yolla.
+    /// Packet-loss resilience: re-send this many of the most recent local inputs on every send.
     resend_window: u64,
 }
 
@@ -223,7 +224,8 @@ impl<T: Transport> RollbackSession<T> {
         self.world.state_hash()
     }
 
-    /// Bir tick ilerlet. `local_input` bu tick'in yerel girdisi; `apply` girdiyi fiziğe uygular.
+    /// Advance one tick. `local_input` is this tick's local input; `apply` applies an input to
+    /// the physics.
     #[tracing::instrument(skip_all, name = "rollback_advance")]
     pub fn advance(&mut self, mut local_input: PlayerInput, apply: &ApplyInput) {
         let t = self.tick;

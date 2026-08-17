@@ -219,11 +219,13 @@ pub struct FluidZone {
     /// [`linear_drag`](Self::linear_drag) at high speed and is negligible at low
     /// speed. Same submerged-ratio scaling and same low-speed cut-off.
     pub quadratic_drag: f32, // fallback quadratic drag
-    /// Kamera bu hacimdeyken uygulanan su-altı sis rengi (lineer RGB). Böylece her su hacmi
-    /// kendi su-altı görünümünü tanımlar (sığ turkuaz vs derin lacivert). Serde-eksik → [0;3].
+    /// The underwater fog colour applied while the camera is inside this volume (linear RGB),
+    /// so each body of water defines its own underwater look (shallow turquoise vs deep navy).
+    /// Missing in serde → [0;3].
     #[serde(default)]
     pub fog_color: [f32; 3],
-    /// Su-altı sis yoğunluğu (Beer-Lambert; büyük = daha çabuk görüş kapanması). Serde-eksik → 0.
+    /// Underwater fog density (Beer-Lambert; larger = visibility closes in sooner). Missing in
+    /// serde → 0.
     #[serde(default)]
     pub fog_density: f32,
 }
@@ -245,25 +247,27 @@ impl Default for FluidZone {
     }
 }
 
-/// Bir noktadaki su örneği: onu içeren fluid zone'un yüzey yüksekliği, derinlik ve yoğunluk.
-/// Yüzme karakter kontrolcüsü ve kamera-su-altı tespiti bu ortak sorguyu kullanır.
+/// A water sample at a point: the surface height, depth and density of the fluid zone that
+/// contains it. The swimming character controller and the camera's underwater test share this
+/// one query.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct WaterSample {
     /// Su yüzeyinin dünya-Y'si (zone üstü).
     pub surface_y: f32,
-    /// Noktanın yüzeyin ne kadar altında olduğu (m, ≥0).
+    /// How far the point is below the surface (m, ≥0).
     pub depth: f32,
-    /// Sıvı yoğunluğu (kg/m³).
+    /// Fluid density (kg/m³).
     pub density: f32,
-    /// Bu hacmin su-altı sis rengi (kamera batıksa post-process için).
+    /// This volume's underwater fog colour (for post-processing while the camera is submerged).
     pub fog_color: [f32; 3],
-    /// Bu hacmin su-altı sis yoğunluğu.
+    /// This volume's underwater fog density.
     pub fog_density: f32,
 }
 
 impl PhysicsWorld {
-    /// `p` herhangi bir fluid zone içindeyse su örneği döner (birden çok zone çakışırsa en ÜST
-    /// yüzeyli seçilir). Zone dışıysa `None`. Yüzme + kamera-batık tespiti için ortak sorgu.
+    /// Returns a water sample if `p` is inside any fluid zone (when several zones overlap, the
+    /// one with the HIGHEST surface wins); `None` outside every zone. The shared query behind
+    /// swimming and camera-submersion detection.
     pub fn water_at(&self, p: gizmo_math::Vec3) -> Option<WaterSample> {
         let mut best: Option<WaterSample> = None;
         for zone in &self.fluid_zones {
@@ -288,16 +292,17 @@ impl PhysicsWorld {
         best
     }
 
-    /// `p` bir su hacminin içinde mi (batık mı)?
+    /// Is `p` inside a body of water (i.e. submerged)?
     pub fn is_submerged(&self, p: gizmo_math::Vec3) -> bool {
         self.fluid_zones.iter().any(|z| z.shape.contains(p))
     }
 }
 
-/// Sabit iç fizik frekansı (Hz) - 240Hz (Sub-stepping ile mükemmel çarpışma tespiti)
+/// Fixed internal physics frequency (Hz) — 240 Hz (with sub-stepping, excellent collision
+/// detection)
 const PHYSICS_HZ: f32 = 240.0;
 const FIXED_DT: f32 = 1.0 / PHYSICS_HZ;
-/// Sub-step başına maksimum adım sayısı — spiral'i önler
+/// Maximum number of steps per sub-step — prevents the spiral of death
 const MAX_SUBSTEPS: u32 = 64; // Increased from 8 to support larger DTs without losing simulation time
 
 /// Global weather condition carried on the world as a shared setting.
@@ -562,29 +567,29 @@ impl Default for PhysicsWorld {
     }
 }
 
-/// Rollback/replay için TAM simülasyon durumu anlık görüntüsü (Faz 3 netcode).
+/// A COMPLETE simulation-state snapshot for rollback/replay (phase 3 netcode).
 ///
-/// `PhysicsStateSnapshot`'tan (yalnız transform+velocity, 1-kare rewind için) FARKLI:
-/// deterministik RE-SİMÜLASYON için gereken İÇ DURUMU da taşır — `rigid_bodies` (uyku
-/// durumu + sayaçlar), **`contact_cache` (warm-start impuls'ları)**, substep `accumulator`
-/// ve **`joints`** (`is_broken` mandalı + mandallanmış referans pozları). Bunlar olmadan
-/// restore sonrası çözücü farklı warm-start'la yakınsar → rollback re-simülasyonu kesintisiz
-/// simülasyondan SAPAR. (entities/colliders/entity_index_map rollback penceresinde DEĞİŞMEZ
-/// varsayılır — ekleme/silme yok.)
+/// DIFFERENT from `PhysicsStateSnapshot` (transform+velocity only, for a 1-frame rewind): it
+/// also carries the INTERNAL state deterministic RE-SIMULATION needs — `rigid_bodies` (sleep
+/// state + counters), **`contact_cache` (the warm-start impulses)**, the substep `accumulator`
+/// and **`joints`** (the `is_broken` latch + latched reference poses). Without those the solver
+/// converges from a different warm start after a restore, and the rollback re-simulation DIVERGES
+/// from the uninterrupted one. (`entities`/`colliders`/`entity_index_map` are assumed UNCHANGED
+/// across the rollback window — no spawns, no despawns.)
 ///
-/// **Ekleme kuralı:** buraya bir alanın girip girmeyeceğinin ölçütü "büyük mü" değil,
-/// *`transforms`/`velocities`'ten türetilebiliyor mu*. Türetilemiyorsa girmek ZORUNDA — ve
-/// eksikliği çoğu alan için `state_hash` ile YAKALANAMAZ. Eklem durumu tam bu yüzden yıllarca
-/// sessizce eksik kaldı.
+/// **The rule for adding a field:** the test is not "is it big" but *can it be derived from
+/// `transforms`/`velocities`*. If it cannot, it MUST be here — and for most fields its absence
+/// CANNOT be caught by `state_hash`. That is exactly how joint state stayed silently missing for
+/// years.
 ///
-/// `state_hash` bugün transform/velocity/sleep'e EK OLARAK eklem başına şunları karıştırıyor:
-/// uç handle çifti, `is_broken`, ve `JointScratch`'in on λ yuvası. Yalnız ilk ikisi TAŞINAN
-/// durum; λ her geçişin başında sıfırlandığı için orada bir tel-tuzağı olarak duruyor (çözücüde
-/// ayrışmış ama henüz hızlara sızmamış iki koşuyu bir substep erken ayırıyor).
-/// Karıştırmadıkları hâlâ var ve kural onlar için değişmedi: `initial_relative_rotation`,
-/// `current_angle`, `current_position` ve genel olarak `JointData`'nın geri kalanı snapshot'ta
-/// taşınıyor ama hash'te GÖRÜNMÜYOR — bayat bir referans pozu ancak hızlara sızdıktan sonra
-/// fark edilir.
+/// Today `state_hash` mixes in, IN ADDITION to transform/velocity/sleep, these per joint: the
+/// endpoint handle pair, `is_broken`, and `JointScratch`'s ten λ slots. Only the first two are
+/// CARRIED state; λ is zeroed at the start of every pass, so it sits there as a tripwire (it
+/// separates two runs that have diverged inside the solver but not yet leaked into velocities,
+/// one substep earlier). What it does not mix is still there and the rule has not changed for
+/// them: `initial_relative_rotation`, `current_angle`, `current_position` and the rest of
+/// `JointData` in general are carried in the snapshot but INVISIBLE to the hash — a stale
+/// reference pose is only noticed once it has leaked into the velocities.
 #[derive(Debug, Clone)]
 pub struct WorldSnapshot {
     transforms: Vec<Transform>,

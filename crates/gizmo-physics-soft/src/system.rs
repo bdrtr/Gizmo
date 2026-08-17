@@ -4,8 +4,8 @@ use gizmo_core::world::World;
 use gizmo_math::Vec3;
 use gizmo_physics_core::{BodyHandle, Collider, Transform};
 
-/// Soft-body integratörleri büyük `dt`'de (kare sıçraması/hitch) patlar (FEM
-/// kararlılık sınırı + XPBD aşırı-tahmin). Adımı bu üst sınıra kırp.
+/// The soft-body integrators blow up at a large `dt` (a frame spike or hitch), from the FEM
+/// stability limit plus XPBD over-prediction. Clamp the step to this upper bound.
 const MAX_SOFT_DT: f32 = 1.0 / 30.0;
 
 /// Steps every [`SoftBodyMesh`] in the world by `dt` seconds under `gravity`,
@@ -68,8 +68,8 @@ pub fn soft_body_step_system(world: &World, dt: f32, gravity: Vec3) {
 /// Every entity carrying both a `Transform` and a `Collider`, as the soft solvers want them:
 /// the same list `soft_body_step_system` and `cloth_step_system` both sweep against.
 ///
-/// Panik koruması: entity sorgu ile `get_entity` arasında despawn edilmiş olabilir
-/// (yarış/tutarsızlık) → unwrap yerine bu collider sessizce atlanır.
+/// Panic guard: an entity may have been despawned between the query and `get_entity` (a race or
+/// an inconsistency) → rather than unwrapping, that collider is silently skipped.
 fn collect_rigid_colliders(world: &World) -> Vec<(BodyHandle, Transform, Collider)> {
     let mut rigid_colliders = Vec::new();
     if let Some(q) = world.query::<(&Transform, &Collider)>() {

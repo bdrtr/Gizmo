@@ -224,8 +224,8 @@ impl gizmo_core::Component for Rope {}
 mod tests {
     use super::*;
 
-    /// Zeminin ALTINA sabitlenmiş bir düğüm, zemin çarpışması tarafından taşınmamalı
-    /// (eskiden `is_fixed` guard yoktu → sabit düğüm y=0'a sıçrıyordu).
+    /// A node pinned BELOW the ground must not be moved by the ground collision (there used to
+    /// be no `is_fixed` guard, so a fixed node jumped to y=0).
     #[test]
     fn fixed_node_below_floor_is_not_moved() {
         let mut rope = Rope::new(

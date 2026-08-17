@@ -86,17 +86,16 @@ pub struct RigidBody {
     /// It scales all three components by the same factor, so it cannot damp spin about
     /// one axis only — use the rotation locks for that.
     pub angular_damping: f32,
-    /// Aerodinamik sürükleme katsayısı (Cd). `drag_area` ile birlikte >0 olduğunda
-    /// integrator fiziksel hava direnci uygular: F = ½·ρ·Cd·A·|v|², hıza KARŞI. 0 =
-    /// kapalı (varsayılan). `linear_damping` (hıza-doğrusal exp sönüm) kaba bir proxy
-    /// iken bu gerçekçi v² sürüklemesidir → cisim doğal terminal hıza oturur
-    /// (v_term = √(2·m·g / (ρ·Cd·A))). Hava yoğunluğu `Integrator::air_density`'den.
-    /// `#[serde(default)]`: bu alan eklenmeden önce kaydedilmiş sahneler `0.0` (kapalı)
-    /// olarak yüklenir.
+    /// Aerodynamic drag coefficient (Cd). When it and `drag_area` are both >0 the integrator
+    /// applies physical air resistance: F = ½·ρ·Cd·A·|v|², OPPOSING the velocity. 0 = off
+    /// (default). Where `linear_damping` (exponential decay, linear in velocity) is a crude
+    /// proxy, this is real v² drag → a body settles at its natural terminal velocity
+    /// (v_term = √(2·m·g / (ρ·Cd·A))). Air density comes from `Integrator::air_density`.
+    /// `#[serde(default)]`: scenes saved before this field existed load as `0.0` (off).
     #[serde(default)]
     pub drag_coefficient: f32,
-    /// Sürüklemeye maruz referans (frontal) alan, m². `drag_coefficient` ile birlikte
-    /// >0 olduğunda hava direnci aktif olur.
+    /// The reference (frontal) area exposed to drag, in m². Air resistance is active when this
+    /// and `drag_coefficient` are both >0.
     #[serde(default)]
     pub drag_area: f32,
     /// When `false` the gravity term is skipped for this body only; the world's gravity
@@ -275,9 +274,9 @@ impl RigidBody {
         }
     }
 
-    /// Fiziksel hava direncini açar: F = ½·ρ·Cd·A·|v|² (hıza karşı). `cd` sürükleme
-    /// katsayısı (küre ~0.47, küp ~1.05, akıcı gövde ~0.04), `area` frontal alan (m²).
-    /// Yerçekimi altında cisim doğal terminal hıza oturur. Zincirlenebilir.
+    /// Enables physical air resistance: F = ½·ρ·Cd·A·|v|² (opposing the velocity). `cd` is the
+    /// drag coefficient (sphere ~0.47, cube ~1.05, streamlined body ~0.04), `area` the frontal
+    /// area in m². Under gravity the body settles at its natural terminal velocity. Chainable.
     pub fn with_air_drag(mut self, cd: f32, area: f32) -> Self {
         self.drag_coefficient = cd.max(0.0);
         self.drag_area = area.max(0.0);
@@ -340,44 +339,46 @@ impl RigidBody {
         self
     }
 
-    /// Lineer + açısal sönümü ayarlar (kaba, hıza-doğrusal enerji kaybı). Gerçekçi
-    /// v² hava direnci için [`with_air_drag`](Self::with_air_drag) kullan. Zincirlenebilir.
+    /// Sets linear + angular damping (a crude energy loss, linear in velocity). For realistic
+    /// v² air resistance use [`with_air_drag`](Self::with_air_drag) instead. Chainable.
     pub fn with_damping(mut self, linear: f32, angular: f32) -> Self {
         self.linear_damping = linear.max(0.0);
         self.angular_damping = angular.max(0.0);
         self
     }
 
-    /// Yerçekimini aç/kapat (uçan/asılı cisimler için). Zincirlenebilir.
+    /// Turns gravity on or off for this body (flying or suspended objects). Chainable.
     pub fn with_gravity(mut self, enabled: bool) -> Self {
         self.use_gravity = enabled;
         self
     }
 
-    /// Sürekli Çarpışma Tespiti'ni (CCD) açar — hızlı/ince cisimler tünellemez. Zincirlenebilir.
+    /// Enables Continuous Collision Detection (CCD) — fast or thin bodies stop tunnelling.
+    /// Chainable.
     ///
-    /// **Bedeli var ve ölçüldü: CCD'li cisim sekmeyi kaybeder.** Eşit kütleli, `restitution = 1`,
-    /// kafa kafaya bir çarpışma CCD kapalıyken doğru davranır (vuran durur, vurulan hızı alır:
-    /// 0,000 / 4,950 m/s) ama CCD açıkken **2,475 / 2,475** verir — yani tam esnek çarpışma tam
-    /// esnek OLMAYANA döner. Sebep iki adımlı: (1) adada CCD'li bir cisim varsa çözücü
-    /// `use_tgs_soft && !has_ccd` koşuluyla modern TGS-soft yolundan **eski split-impulse yoluna
-    /// düşer**, (2) o yol spekülatif temasta restitution uygulamaz — ki CCD'nin ürettiği temas
-    /// tam olarak odur. Spekülatif kısıt yaklaşma hızını yer, gerçek temas oluştuğunda geri
-    /// sektirecek bir şey kalmaz.
+    /// **It has a price, and the price is measured: a CCD body loses its bounce.** A head-on
+    /// collision between equal masses at `restitution = 1` behaves correctly with CCD off (the
+    /// striker stops, the struck body takes the velocity: 0.000 / 4.950 m/s) but gives
+    /// **2.475 / 2.475** with CCD on — a perfectly elastic collision turned inelastic. The cause
+    /// has two steps: (1) if any body in the island has CCD, the `use_tgs_soft && !has_ccd`
+    /// condition drops the solver from the modern TGS-soft path **back to the old split-impulse
+    /// path**, and (2) that path does not apply restitution on a speculative contact — which is
+    /// exactly the kind of contact CCD produces. The speculative constraint eats the approach
+    /// velocity, and by the time the real contact forms there is nothing left to bounce back.
     ///
-    /// Ve bu bir gözden kaçma değil, **tasarımın varsaydığı cismin sonucu**: o istisnanın
-    /// yanındaki gerekçe "CCD cisimleri (mermiler) nadir ve genelde izole" diyor. Yani CCD
-    /// mermi için tasarlandı — tek, yalnız, ve *sekmesi beklenmeyen* bir cisim. Bir Newton
-    /// sarkacı bu varsayımın üçünü de çiğner: beş cisim de CCD'li olur, hepsi tek island'da
-    /// buluşur, ve hepsinden sekmesi beklenir.
+    /// This is not an oversight but **a consequence of the body the design had in mind**: the
+    /// rationale next to that exception says "CCD bodies (bullets) are rare and usually
+    /// isolated". CCD was designed for a bullet — a single, lonely object that is *not expected
+    /// to bounce*. A Newton's cradle violates all three assumptions: all five bodies have CCD,
+    /// they all meet in one island, and every one of them is expected to bounce.
     ///
-    /// Yani sekmesi *gereken* cisimlerde (bilardo topu, Newton sarkacı) tünellemeyi bununla
-    /// çözmeye kalkmak sahnenin asıl davranışını sessizce yok eder — üstelik çoğu zaman
-    /// gereksiz yere: 0,5 m yarıçaplı toplar 1/240 s alt-adımda 320 m/s'de bile tünellemiyor
-    /// (ölçüm aşağıdaki testte). Tünelleme şüphesi varsa **önce ölçülmeli**; CCD'yi ihtiyaten
-    /// açmak bedava değil.
+    /// So reaching for this to cure tunnelling on bodies that are *supposed* to bounce (a
+    /// billiard ball, a Newton's cradle) silently destroys the scene's actual behaviour — and
+    /// usually for nothing: 0.5 m radius balls do not tunnel even at 320 m/s with a 1/240 s
+    /// substep (measured in the test below). If tunnelling is suspected, **measure it first**;
+    /// turning CCD on as a precaution is not free.
     ///
-    /// Ölçen test: `gizmo-physics-rigid/tests/cradle_passthrough.rs::ccd_makes_a_bounce_a_thud`.
+    /// The measurement: `gizmo-physics-rigid/tests/cradle_passthrough.rs::ccd_makes_a_bounce_a_thud`.
     pub fn with_ccd(mut self) -> Self {
         self.ccd_enabled = true;
         self
@@ -864,7 +865,7 @@ mod tests {
     use gizmo_physics_core::components::collider::ConvexHullShape;
     use std::sync::Arc;
 
-    /// Akıcı builder'lar: alan erişimi yerine tek zincirde yapılandırma.
+    /// Fluent builders: configure in one chain instead of reaching for the fields.
     #[test]
     fn ergonomic_rigid_body_builders() {
         let rb = RigidBody::new(5.0, true)
@@ -886,8 +887,8 @@ mod tests {
         assert_eq!(RigidBody::default().with_damping(-1.0, -2.0).linear_damping, 0.0);
     }
 
-    /// ConvexHull ataleti AABB'den türetilmeli (eskiden sabit 1×1×1 idi → fracture
-    /// parçaları boyuttan bağımsız aynı atalete sahipti).
+    /// A ConvexHull's inertia must be derived from its AABB (it used to be a fixed 1×1×1, so
+    /// every fracture fragment had the same inertia regardless of its size).
     #[test]
     fn convex_hull_inertia_uses_aabb_extents() {
         // 4×2×6 kutuyu kapsayan köşeler.
@@ -928,11 +929,11 @@ mod tests {
         );
     }
 
-    /// Kapsül enine ataleti (i_xz) analitik değerle eşleşmeli. Regresyon: eskiden
-    /// yarımküre paralel-eksen COM-offset terimi (9/64·r² = 0.140625·r²) çift
-    /// sayılıyordu → enine atalet fazla hesaplanıyordu (kapsül devrilmeye aşırı
-    /// dirençliydi). Doğru yarımküre-çifti katkısı: m_sph·(2/5·r² + half_h² +
-    /// 3/4·r·half_h) — fazladan COM-offset terimi YOK.
+    /// A capsule's transverse inertia (i_xz) must match the analytic value. Regression: the
+    /// hemisphere's parallel-axis COM-offset term (9/64·r² = 0.140625·r²) used to be counted
+    /// twice, so transverse inertia came out too large and the capsule was over-resistant to
+    /// tipping. The correct hemisphere-pair contribution is m_sph·(2/5·r² + half_h² +
+    /// 3/4·r·half_h) — with NO extra COM-offset term.
     #[test]
     fn capsule_transverse_inertia_has_no_spurious_com_term() {
         let r = 0.5_f32;

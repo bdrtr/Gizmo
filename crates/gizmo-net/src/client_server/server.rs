@@ -14,10 +14,10 @@ pub struct NetworkServer {
 }
 
 impl NetworkServer {
-    /// Verilen genel adreste dinleyen bir sunucu oluşturur.
+    /// Creates a server listening on the given public address.
     ///
-    /// Adres ayrıştırma, soket bağlama veya transport kurulumu başarısız olursa
-    /// (örn. port kullanımda) panik yerine hata döndürür.
+    /// Returns an error rather than panicking if address parsing, socket binding or transport
+    /// setup fails (e.g. the port is already in use).
     pub fn new(public_addr: &str) -> Result<Self, NetError> {
         let server = RenetServer::new(connection_config());
 
