@@ -1,13 +1,21 @@
 use gizmo_math::Vec3;
 
+/// A light radiating equally in all directions from the entity's position.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PointLight {
+    /// Linear RGB colour.
     pub color: Vec3,
+    /// Brightness. Zero is a light that is present but contributes nothing.
     pub intensity: f32,
+    /// The distance at which the falloff reaches zero. It is also the culling bound — a light is
+    /// only considered for surfaces inside this radius, so an over-large radius costs
+    /// performance and a too-small one clips the light off visibly.
     pub radius: f32,
 }
 
 impl PointLight {
+    /// A point light, with a negative intensity floored at zero and the radius kept above 0.001 —
+    /// a zero radius divides by zero in the falloff.
     pub fn new(color: Vec3, intensity: f32, radius: f32) -> Self {
         let intensity = intensity.max(0.0);
         let radius = radius.max(0.001);
@@ -19,21 +27,35 @@ impl PointLight {
     }
 }
 
+/// What a [`DirectionalLight`] is *for* — which one of several is the scene's sun.
+///
+/// The distinction is load-bearing: only the sun drives the cascaded shadow maps and the sky
+/// gradient, and there is one set of cascades. A scene with two suns would have them fight over
+/// those cascades, so the extra directional lights are [`Generic`](Self::Generic) fill and shade
+/// nothing but the surface.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum LightRole {
+    /// The scene's sun: it drives the shadow cascades and the sky.
     Sun,
+    /// An ordinary directional light — fill or rim, casting no shadows.
     Generic,
 }
 
+/// A light from an infinitely distant source: parallel rays, no falloff. Its direction comes
+/// from the entity's `Transform`, not from a field here.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DirectionalLight {
+    /// Linear RGB colour.
     pub color: Vec3,
+    /// Brightness.
     pub intensity: f32,
+    /// Whether this is the scene's sun — see [`LightRole`].
     pub role: LightRole,
 }
 
 impl DirectionalLight {
+    /// A directional light, with a negative intensity floored at zero.
     pub fn new(color: Vec3, intensity: f32, role: LightRole) -> Self {
         let intensity = intensity.max(0.0);
         Self {
@@ -44,16 +66,26 @@ impl DirectionalLight {
     }
 }
 
+/// A cone of light from the entity's position, aimed along its `Transform`'s forward axis.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SpotLight {
+    /// Linear RGB colour.
     pub color: Vec3,
+    /// Brightness.
     pub intensity: f32,
+    /// The distance the falloff reaches zero at, as for [`PointLight::radius`].
     pub radius: f32,
+    /// Half-angle of the cone's fully-lit core, in radians.
     pub inner_angle: f32,
+    /// Half-angle at which the light reaches zero. Between the two the edge falls off smoothly;
+    /// equal angles give a hard-edged cone.
     pub outer_angle: f32,
 }
 
 impl SpotLight {
+    /// A spot light, with intensity floored at zero, the radius kept above 0.001, and an inner
+    /// angle clamped to no more than the outer one — an inner cone wider than its outer cone
+    /// inverts the falloff and lights the outside of the cone instead.
     pub fn new(
         color: Vec3,
         intensity: f32,

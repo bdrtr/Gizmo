@@ -3,9 +3,16 @@ use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
 use wgpu::util::DeviceExt;
 
+/// Geometry on the GPU, plus the CPU-side facts the renderer needs about it: its bounds, a
+/// triangle-list copy for picking, and any simplified LOD buffers.
+///
+/// Buffers are behind `Arc`s because one loaded mesh is shared by every entity that draws it —
+/// cloning a `Mesh` clones the handles, not the vertices.
 #[derive(Clone)]
 pub struct Mesh {
+    /// The vertex buffer, laid out as [`Vertex`](crate::gpu_types::Vertex).
     pub vbuf: Arc<wgpu::Buffer>,
+    /// How many vertices `vbuf` holds. For an unindexed mesh this is also the draw count.
     pub vertex_count: u32,
     /// The index buffer, if there is one. `None` means the mesh is drawn as a flat triangle
     /// list (`draw`), `Some` means `draw_indexed`.
@@ -28,7 +35,11 @@ pub struct Mesh {
     /// It does not affect the AABB bounds directly (those are computed from the raw vertex
     /// data).
     pub center_offset: Vec3,
+    /// Where this mesh came from — a file path, or a name for generated geometry. Used for
+    /// debug labels and for recognising an already-loaded asset.
     pub source: String,
+    /// The model-space bounding box, from the raw vertex positions. Frustum culling and the
+    /// editor's selection bounds both read it.
     pub bounds: gizmo_math::Aabb,
     /// The CPU-side copy of the geometry, **as a flat triangle list**: every consecutive triple
     /// is one triangle.
@@ -38,7 +49,10 @@ pub struct Mesh {
     /// That is the contract because consumers walk this in groups of three; a caller who wants
     /// the order matching the GPU buffer has to read `ibuf`.
     pub cpu_vertices: Arc<Vec<Vec3>>,
+    /// Simplified vertex buffers, coarsest last, generated at load time for meshes above the
+    /// decimation threshold. Flattened triangle lists — see [`Self::ibuf`] for why that matters.
     pub lod_vbufs: Vec<Arc<wgpu::Buffer>>,
+    /// Vertex counts matching [`Self::lod_vbufs`].
     pub lod_vertex_counts: Vec<u32>,
 }
 
@@ -332,6 +346,7 @@ impl ShadowCasting {
 }
 
 impl MeshRenderer {
+    /// The default render settings: no LOD bias, casting and receiving shadows.
     pub fn new() -> Self {
         Self { lod_bias: 1.0, shadows: ShadowCasting::On }
     }

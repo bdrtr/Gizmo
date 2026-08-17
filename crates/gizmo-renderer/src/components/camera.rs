@@ -9,17 +9,36 @@ pub enum ProjectionMode {
     Perspective,
     /// Orthographic projection. `height` is the vertical extent of the view
     /// volume in world units; the width is derived from the aspect ratio.
-    Orthographic { height: f32 },
+    Orthographic {
+        /// The vertical extent of the view volume, in world units.
+        height: f32,
+    },
 }
 
+/// A 3-D camera: where it looks, how far it sees, and how the result is projected.
+///
+/// The camera's **position** is not here — it comes from the entity's `Transform`, which is why
+/// [`Camera::get_view`] takes one. Its orientation, though, is: yaw and pitch rather than a
+/// quaternion, because the controllers that drive a camera all think in those two angles and
+/// round-tripping them through a quaternion loses the roll-free invariant.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Camera {
+    /// Vertical field of view, in radians. Perspective only.
     pub fov: f32,
+    /// The near clip plane, in metres. Everything closer is clipped away.
     pub near: f32,
+    /// The far clip plane. The near/far ratio is what depth precision costs, so a near plane of
+    /// 0.001 with a far of 10 000 will z-fight.
     pub far: f32,
+    /// Rotation about the world Y axis, in radians.
     pub yaw: f32,
+    /// Rotation above/below the horizon, in radians, clamped just short of ±90° — at exactly
+    /// vertical the view basis is degenerate.
     pub pitch: f32,
-    pub exposure: f32, // Fiziksel kamera pozlaması (EV tabanlı veya doğrudan çarpan)
+    /// Exposure multiplier applied to the whole frame, before tone mapping.
+    pub exposure: f32,
+    /// Whether this is the camera the frame is rendered from. With several primaries the first
+    /// one found wins, which is a scene authoring error rather than a supported configuration.
     pub primary: bool,
     /// Perspective (default) or orthographic projection. `#[serde(default)]` keeps
     /// scenes saved before this field was added loading as perspective.
@@ -28,6 +47,13 @@ pub struct Camera {
 }
 
 impl Camera {
+    /// A perspective camera, with every argument corrected into a usable range: a non-positive
+    /// FOV or near plane becomes 0.001, a far plane is pushed to at least `near + 0.1`, yaw is
+    /// wrapped into one turn and pitch clamped just short of vertical.
+    ///
+    /// Corrected rather than rejected because these come from scene files and editor fields as
+    /// often as from code, and a camera that renders nothing is a harder thing to diagnose than
+    /// one that renders slightly wrong.
     pub fn new(
         mut fov: f32,
         mut near: f32,
@@ -60,6 +86,11 @@ impl Camera {
     /// Toggles between perspective and orthographic projection. When switching to
     /// orthographic, the vertical extent is chosen so the framing roughly matches
     /// the current perspective `fov` at the given `distance` from the camera.
+    /// Switches between perspective and orthographic.
+    ///
+    /// `distance` is how far the subject is: going orthographic, it is what the ortho height is
+    /// derived from, so the subject keeps the on-screen size it had under perspective. Without
+    /// that the view appears to jump.
     pub fn toggle_projection(&mut self, distance: f32) {
         self.projection = match self.projection {
             ProjectionMode::Perspective => ProjectionMode::Orthographic {
@@ -71,6 +102,8 @@ impl Camera {
 
     /// Tidies the angles to stop them accumulating without bound: yaw modulo TAU, pitch
     /// clamped.
+    /// Wraps yaw into one turn and clamps pitch away from vertical — the same correction
+    /// [`Camera::new`] applies, for callers that have written the fields directly.
     pub fn sanitize_angles(&mut self) {
         self.yaw %= std::f32::consts::TAU;
         self.pitch = self.pitch.clamp(
@@ -79,6 +112,8 @@ impl Camera {
         );
     }
 
+    /// The projection matrix for a viewport of the given aspect ratio (width / height),
+    /// perspective or orthographic according to [`Self::projection`].
     pub fn get_projection(&self, aspect: f32) -> gizmo_math::Mat4 {
         match self.projection {
             ProjectionMode::Perspective => {
@@ -94,6 +129,8 @@ impl Camera {
         }
     }
 
+    /// The view matrix for a camera at `position` looking along its yaw/pitch. The position is
+    /// taken as an argument because it lives on the entity's `Transform`, not here.
     pub fn get_view(&self, position: Vec3) -> gizmo_math::Mat4 {
         let front = self.get_front();
         let right = self.get_right();
@@ -157,10 +194,12 @@ impl Camera {
         Vec3::new(-yaw.sin(), 0.0, yaw.cos())
     }
 
+    /// The world-space direction this camera is aimed.
     pub fn get_front(&self) -> Vec3 {
         Self::forward_from(self.yaw, self.pitch)
     }
 
+    /// The world-space right vector, horizontal regardless of pitch.
     pub fn get_right(&self) -> Vec3 {
         Self::right_from(self.yaw)
     }
@@ -192,17 +231,23 @@ impl Camera {
     }
 }
 
+/// A 2-D camera: an orthographic view in pixel units, with a zoom.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Camera2D {
+    /// How much the view is magnified. 1 = one world unit per pixel; larger zooms in.
     pub zoom: f32,
+    /// Whether this is the camera the frame is rendered from.
     pub primary: bool,
 }
 
 impl Camera2D {
+    /// A 2-D camera at the given zoom.
     pub fn new(zoom: f32, primary: bool) -> Self {
         Self { zoom, primary }
     }
 
+    /// The orthographic projection for a viewport of `width` × `height` pixels, scaled by the
+    /// zoom. The depth range is ±1000, so sprites can be ordered by Z.
     pub fn get_projection(&self, width: f32, height: f32) -> gizmo_math::Mat4 {
         let safe_zoom = self.zoom.max(0.001);
         let hw = (width / 2.0) / safe_zoom;

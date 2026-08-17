@@ -8,16 +8,38 @@ pub use gizmo_animation::skeletal::{
     AnimationTransition, BoneAttachment, SkeletonHierarchy,
 };
 
+/// A skinned mesh's skeleton: the joint hierarchy, the current pose, and the GPU buffer the
+/// vertex shader reads its skinning matrices from.
+///
+/// Both poses are kept because they are different things: animation writes **local** poses, one
+/// per joint relative to its parent, and the skinning pass needs **global** ones, which are the
+/// local poses composed down the hierarchy. Storing only locals would mean re-walking the tree per
+/// vertex; storing only globals would make it impossible to blend two animations.
 #[derive(Clone)]
 pub struct Skeleton {
+    /// The bind group holding [`Self::buffer`].
     pub bind_group: Arc<wgpu::BindGroup>,
+    /// The GPU buffer of skinning matrices, uploaded from [`Self::global_poses`] each frame the
+    /// pose changes.
     pub buffer: Arc<wgpu::Buffer>,
+    /// The joint hierarchy — parent links and inverse bind matrices. Shared, because every entity
+    /// using one skinned mesh has the same skeleton.
     pub hierarchy: Arc<gizmo_animation::skeletal::SkeletonHierarchy>,
+    /// The current pose: one matrix per joint, relative to its parent. This is what animation
+    /// playback writes.
     pub local_poses: Vec<gizmo_math::Mat4>,
+    /// The same pose composed down the hierarchy, in model space. This is what reaches the GPU.
     pub global_poses: Vec<gizmo_math::Mat4>,
 }
 
 impl Skeleton {
+    /// A skeleton in its initial pose, with the global poses seeded from the local ones.
+    ///
+    /// # Panics
+    ///
+    /// If `local_poses` has a different length than the hierarchy's joint list — a pose array
+    /// that does not match its skeleton indexes out of bounds or skins to the wrong joint, and
+    /// both are far harder to trace from the resulting picture than from here.
     pub fn new(
         bind_group: Arc<wgpu::BindGroup>,
         buffer: Arc<wgpu::Buffer>,

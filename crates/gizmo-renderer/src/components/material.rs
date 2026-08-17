@@ -1,15 +1,28 @@
 use std::sync::Arc;
 
+/// Which shading route a [`Material`] takes — which pipeline it is drawn with, and what the
+/// fragment shader does with it.
+///
+/// A type rather than a set of booleans on `Material`, because these are not independent knobs:
+/// each one implies a pass, a depth mode and a set of inputs that only make sense together. The
+/// two backdrop variants document that reasoning at length.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 #[non_exhaustive]
 pub enum MaterialType {
+    /// Physically based shading through the deferred G-buffer — the default, and what every
+    /// lighting feature (IBL, SSAO, SSGI, clustered lights) applies to.
     Pbr,
+    /// Drawn with its albedo exactly as given, with no lighting and no shadow. Interface
+    /// elements, debug geometry, anything that should not react to the scene.
     Unlit,
     /// Lighting already baked into the vertex colour, plus the sun's shadow — a static level, a
     /// lightmapped world, anything authored lit. Skips the G-buffer and the point lights: one
     /// forward draw per batch instead of eleven, and it still casts into and receives from the
     /// directional cascades.
     BakedLit,
+    /// A generated atmospheric sky: the mesh's geometry is ignored, and the gradient is derived
+    /// from the sun's direction and colour. Right when there is no sky asset — see
+    /// [`Backdrop`](Self::Backdrop) for when there is.
     Skybox,
     /// A painted backdrop — the scene's OWN sky/panorama geometry, drawn from its own texture
     /// and vertex colour behind everything else.
@@ -40,18 +53,39 @@ pub enum MaterialType {
     /// The depth treatment is the same and is what makes both safe: pinned to the far plane, so
     /// whatever is in front wins, however near the panel physically is.
     BackdropPlaced,
+    /// An animated water surface: waves, reflection and refraction, and a low fixed roughness.
     Water,
+    /// The editor's ground grid — lines that fade with distance and never write depth.
     Grid,
 }
 
+/// How a surface is shaded: its textures (behind the bind group), its PBR scalars, and which
+/// route through the renderer it takes.
+///
+/// Build one with [`Material::new`] and the `with_*` chain rather than by struct literal — the
+/// builders clamp their inputs and set the matching [`MaterialType`], and several of them also
+/// flip [`Self::is_transparent`] from the albedo's alpha.
+///
+/// One `Material` is typically shared by many entities: the bind group is behind an `Arc`, and the
+/// per-entity values that can still differ ride [`InstanceRaw`](crate::gpu_types::InstanceRaw)
+/// instead.
 #[derive(Clone)]
 pub struct Material {
+    /// The texture bind group — albedo, normal, metallic-roughness, occlusion, emissive and the
+    /// per-material parameter buffer.
     pub bind_group: Arc<wgpu::BindGroup>,
+    /// Base colour tint (linear), multiplied into the albedo texture. `w` is alpha.
     pub albedo: gizmo_math::Vec4,
+    /// Perceptual roughness, 0 = mirror, 1 = fully diffuse.
     pub roughness: f32,
+    /// Metalness, 0 = dielectric, 1 = metal. Values in between are physically meaningless and
+    /// exist only for blend maps.
     pub metallic: f32,
+    /// Anisotropic highlight strength — brushed metal, hair, vinyl. 0 = isotropic.
     pub anisotropy: f32,
+    /// A second, smoother specular layer over the base — car paint, lacquer. 0 = none.
     pub clear_coat: f32,
+    /// How much light scatters through the surface — skin, wax, leaves. 0 = opaque.
     pub subsurface: f32,
     /// Light that reaches the surface no matter where the sun is (linear RGB).
     ///
@@ -79,13 +113,22 @@ pub struct Material {
     /// own emissive, from the glTF material's `emissiveFactor` + emissive map; this knob does
     /// not touch it.)
     pub emissive: gizmo_math::Vec3,
+    /// Where the albedo texture came from; `None` for an untextured material. Used for
+    /// reloading and for recognising an already-loaded texture.
     pub texture_source: Option<String>,
+    /// The shading route — see [`MaterialType`].
     pub material_type: MaterialType,
+    /// Whether this draw goes into the transparent bucket: sorted back to front, alpha blended,
+    /// and not written into the G-buffer.
     pub is_transparent: bool,
+    /// Whether back faces are drawn. Needed for anything modelled as a single sheet — foliage,
+    /// cloth, a flat pane.
     pub is_double_sided: bool,
 }
 
 impl Material {
+    /// A neutral PBR material over the given bind group: white albedo, mid roughness, no metal,
+    /// and every extra knob at zero.
     pub fn new(bind_group: Arc<wgpu::BindGroup>) -> Self {
         Self {
             bind_group,
@@ -120,16 +163,19 @@ impl Material {
         self
     }
 
+    /// Sets [`Material::anisotropy`], clamped into `[0, 1]`.
     pub fn with_anisotropy(mut self, anisotropy: f32) -> Self {
         self.anisotropy = anisotropy.clamp(0.0, 1.0);
         self
     }
 
+    /// Sets [`Material::clear_coat`], clamped into `[0, 1]`.
     pub fn with_clear_coat(mut self, clear_coat: f32) -> Self {
         self.clear_coat = clear_coat.clamp(0.0, 1.0);
         self
     }
 
+    /// Sets [`Material::subsurface`], clamped into `[0, 1]`.
     pub fn with_subsurface(mut self, subsurface: f32) -> Self {
         self.subsurface = subsurface.clamp(0.0, 1.0);
         self
@@ -144,6 +190,7 @@ impl Material {
         self
     }
 
+    /// Sets whether back faces are drawn.
     pub fn with_double_sided(mut self, double_sided: bool) -> Self {
         self.is_double_sided = double_sided;
         self
@@ -197,6 +244,9 @@ impl Material {
         self
     }
 
+    /// Configures this as a generated atmospheric sky — see [`MaterialType::Skybox`]. The mesh's
+    /// own geometry and texture are ignored; for a painted sky use
+    /// [`with_backdrop`](Self::with_backdrop).
     pub fn with_skybox(mut self) -> Self {
         self.material_type = MaterialType::Skybox;
         self
@@ -245,6 +295,8 @@ impl Material {
         self
     }
 
+    /// Records where the albedo texture came from. This does not load anything — the bind group
+    /// already holds the texture; this is the path it was loaded from.
     pub fn with_texture_source(mut self, path: String) -> Self {
         self.texture_source = Some(path);
         self

@@ -1,8 +1,18 @@
 use bytemuck::{Pod, Zeroable};
 
+/// The engine's one vertex layout — every mesh, every pipeline, one stride.
+///
+/// There is deliberately no second, leaner layout for meshes that carry no skin or no tangents:
+/// a mesh with two possible strides is a mesh that can be bound to the wrong pipeline, and the
+/// bytes saved are dwarfed by the buffers themselves. Absent source attributes are normalised at
+/// import instead (see [`Default`]), so a shader may always read all seven.
+///
+/// [`Vertex::desc`] describes it to wgpu, and the field offsets there come from `offset_of!`
+/// rather than a running sum — see the note on that function.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct Vertex {
+    /// Position in the mesh's own (model) space.
     pub position: [f32; 3],
     /// Vertex colour, **RGBA**.
     ///
@@ -18,10 +28,21 @@ pub struct Vertex {
     /// absent. Downstream code must therefore take this value at face value: `[0,0,0,1]`
     /// means "authored black", not "missing".
     pub color: [f32; 4],
+    /// Model-space normal, expected to be unit length.
     pub normal: [f32; 3],
+    /// The first UV set. The engine samples every map with these — a second UV set from the
+    /// source file is dropped at import.
     pub tex_coords: [f32; 2],
+    /// Up to four skin joints influencing this vertex, as indices into the skin's joint palette.
+    /// Unskinned meshes carry zeroes here and zero weights, which the vertex shader's
+    /// weighted sum turns into the identity.
     pub joint_indices: [u32; 4],
+    /// The weights matching [`Vertex::joint_indices`], expected to sum to 1 for a skinned vertex
+    /// and to 0 for an unskinned one.
     pub joint_weights: [f32; 4],
+    /// Model-space tangent, `w` carrying the bitangent's handedness (±1) as glTF defines it.
+    /// Normal mapping needs the sign: mirrored UV islands flip it, and taking it as +1 turns
+    /// their normals inside out.
     pub tangent: [f32; 4],
 }
 
@@ -42,6 +63,12 @@ impl Default for Vertex {
 }
 
 impl Vertex {
+    /// This layout as wgpu describes it: the stride, and one attribute per field at
+    /// locations 0..=6.
+    ///
+    /// Offsets are taken from `offset_of!` rather than written out, because a hand-maintained
+    /// running sum is one arithmetic slip away from a pipeline that reads normals out of the
+    /// tex-coords — see the comment inside.
     pub fn desc<'a>() -> wgpu::VertexBufferLayout<'a> {
         wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
@@ -95,13 +122,26 @@ impl Vertex {
     }
 }
 
+/// One punctual light as the shaders read it: point, spot and directional in a single 64-byte
+/// record, discriminated by `params.y`.
+///
+/// One record type rather than three arrays, because [`SceneUniforms::lights`] is a fixed-length
+/// array the shader walks linearly — three kinds in three arrays would mean three loops and three
+/// counts. Unused slots are [`LightData::default`], and only the first
+/// [`SceneUniforms::num_lights`] are read.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, Pod, Zeroable)]
 pub struct LightData {
-    pub position: [f32; 4],  // xyz=pos, w=intensity
-    pub color: [f32; 4],     // rgb=color, a=radius
-    pub direction: [f32; 4], // xyz=direction (spot), w=inner_cutoff_cos
-    pub params: [f32; 4], // x=outer_cutoff_cos, y=light_type (0=point,1=spot,2=directional), zw=unused
+    /// `xyz` = world position, `w` = intensity.
+    pub position: [f32; 4],
+    /// `rgb` = linear colour, `a` = radius (the distance the falloff reaches zero at).
+    pub color: [f32; 4],
+    /// `xyz` = direction the light points (spot/directional), `w` = cosine of the inner cone
+    /// angle. Cosines rather than angles because the shader compares them against a dot product.
+    pub direction: [f32; 4],
+    /// `x` = cosine of the outer cone angle, `y` = the light type (0 = point, 1 = spot,
+    /// 2 = directional), `zw` unused.
+    pub params: [f32; 4],
 }
 
 /// Pack the anisotropy/clear-coat/subsurface triple into the one spare `InstanceRaw` slot.
@@ -143,21 +183,37 @@ impl Default for LightData {
     }
 }
 
+/// Every knob the post-process chain reads, in one uniform block.
+///
+/// The whole chain shares one block rather than one per effect: the passes run back to back over
+/// the same target, and a per-pass block would be four more bind groups to keep in step for no
+/// gain. An effect is switched off by zeroing its own scalar, not by skipping the upload.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct PostProcessUniforms {
+    /// How much of the bloom blur is added back over the frame. 0 = no bloom.
     pub bloom_intensity: f32,
+    /// The luminance a texel must exceed to contribute to bloom.
     pub bloom_threshold: f32,
+    /// Linear exposure multiplier applied before tone mapping.
     pub exposure: f32,
+    /// Per-channel radial UV offset, in screen fractions. 0 = no aberration.
     pub chromatic_aberration: f32,
+    /// How dark the frame's corners get. 0 = no vignette.
     pub vignette_intensity: f32,
+    /// Strength of the animated grain. 0 = none.
     pub film_grain_intensity: f32,
+    /// Depth of field: the distance, in metres, that is perfectly in focus.
     pub dof_focus_dist: f32,
+    /// Depth of field: how far either side of [`Self::dof_focus_dist`] still counts as sharp.
     pub dof_focus_range: f32,
+    /// Depth of field: the maximum blur radius, in texels, reached outside that range.
     pub dof_blur_size: f32,
     // Active camera near/far, so DoF depth linearization matches the real projection
     // instead of hardcoded 0.1/1000 (miscalibrated CoC for any other far plane).
+    /// The active camera's near plane.
     pub cam_near: f32,
+    /// The active camera's far plane.
     pub cam_far: f32,
     // ── Su-altı atmosferi (kamera bir fluid zone içindeyken) ──
     /// 0 = the camera is in air (no effect), 1 = the camera is underwater → depth-based fog is
@@ -166,8 +222,11 @@ pub struct PostProcessUniforms {
     /// The underwater fog colour (sea blue-green) plus its density. In WGSL it lines up as a
     /// single `fog: vec4` (rgb + a=density) at offset 48, 16-byte aligned.
     pub fog_r: f32,
+    /// Green channel of that fog colour.
     pub fog_g: f32,
+    /// Blue channel of that fog colour.
     pub fog_b: f32,
+    /// How quickly the underwater fog closes in with distance.
     pub fog_density: f32,
 }
 
@@ -175,16 +234,36 @@ pub struct PostProcessUniforms {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct ShadowVsUniform {
+    /// World → clip space for the cascade being rendered.
     pub light_view_proj: [[f32; 4]; 4],
 }
 
+/// The per-frame uniform block every shader binds at group 0 — camera, sun, lights, cascades and
+/// the environment state.
+///
+/// Its byte layout is a contract with the WGSL side, and the padding fields below are load-bearing
+/// rather than decorative. Two tests hold the two halves of that contract: the size assertion in
+/// this file's `tests`, and [`crate::shader_contract`], which parses the shaders and compares
+/// naga's computed offsets against `offset_of!` here. A field added anywhere but the tail moves
+/// every field after it, in every shader — including the ones that declare only a partial copy of
+/// this struct.
+///
+/// Build it through [`crate::frame_uniforms`] rather than field by field: several fields are
+/// derived (the cluster grid, the inverse view-projection) and a second derivation is a second
+/// answer.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct SceneUniforms {
+    /// The camera's world → clip matrix.
     pub view_proj: [[f32; 4]; 4],
+    /// `xyz` = camera world position, `w` unused.
     pub camera_pos: [f32; 4],
+    /// `xyz` = direction TO the sun (normalised), `w` = 1 when there is a sun at all — the flag
+    /// the shadow and sun-lighting branches test.
     pub sun_direction: [f32; 4],
+    /// `rgb` = the sun's linear colour × intensity, `a` unused.
     pub sun_color: [f32; 4],
+    /// The punctual lights, of which the first [`Self::num_lights`] are live.
     pub lights: [LightData; crate::frame_uniforms::MAX_LIGHTS],
     /// Directional CSM: world → light clip space per cascade (same order as shadow array layers).
     pub light_view_proj: [[[f32; 4]; 4]; 4],
@@ -199,15 +278,31 @@ pub struct SceneUniforms {
     /// x = camera z_near, y = 1 / shadow map resolution (PCF texel size),
     /// z = elapsed time in seconds (fluid caustics/wave animation), w unused.
     pub cascade_params: [f32; 4],
+    /// How many entries of [`Self::lights`] are live; the rest are zeroed defaults.
     pub num_lights: u32,
+    /// Linear exposure multiplier, for the forward path that tone-maps in place.
     pub exposure: f32,
+    /// Explicit padding, to keep the fields below at the offsets the shaders declare.
     pub _pre_align_pad: [u32; 2], // offset 1064-1071
-    pub _align_pad: [u32; 3],     // offset 1072-1083
+    /// Explicit padding, as above.
+    pub _align_pad: [u32; 3], // offset 1072-1083
+    /// How far between the two environment presets: 0 = fully [`Self::environment_preset`],
+    /// 1 = fully [`Self::environment_preset_2`].
     pub environment_blend_t: f32, // offset 1084-1087
-    pub environment_preset: u32,  // offset 1088-1091
+    /// The active sky/environment preset.
+    pub environment_preset: u32, // offset 1088-1091
+    /// Non-zero when point lights cast shadows this frame.
     pub point_shadows_enabled: u32, // offset 1092-1095
+    /// The preset being blended towards. Called `environment_preset_b` on the WGSL side — only
+    /// the offset has to agree, not the name.
     pub environment_preset_2: u32, // offset 1096-1099
-    pub shading_mode: u32,        // offset 1100-1103
+    /// Debug shading mode: 0 = shade normally, 1 = show world normals, 2 = show albedo.
+    ///
+    /// The forward and deferred shaders MUST number these identically. They did not once: the
+    /// studio's toolbar wrote this uniform every frame while rendering forward, and the forward
+    /// shader had no branch for it, so the Normals and Albedo chips produced output byte-identical
+    /// to Lit.
+    pub shading_mode: u32, // offset 1100-1103
     /// inverse(view_proj), computed once per frame on the CPU so fullscreen passes that
     /// unproject NDC→world (volumetric, particle soft-depth) read it instead of recomputing a
     /// full 4×4 inverse per fragment. Appended at the 16-byte-aligned tail (`464 + 64·MAX_LIGHTS`) so every
@@ -227,13 +322,29 @@ pub struct SceneUniforms {
                            // Total: 560 + 64·MAX_LIGHTS bytes (2608 at MAX_LIGHTS = 32)
 }
 
+/// One draw's per-instance record: its transform and the material values that do not live in a
+/// bind group.
+///
+/// Instancing is why the split exists — everything here can differ between two instances sharing
+/// one material bind group. Build it with [`InstanceRaw::new`], never field by field: the
+/// anisotropy/clear-coat/subsurface slot is packed, and assembling it at a call site is how the
+/// engine and the studio came to pack it two incompatible ways.
+///
+/// Every shader that indexes `array<InstanceRaw>` must declare all eight `vec4`s, or `instances[i]`
+/// reads the wrong offsets for every `i > 0`.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct InstanceRaw {
+    /// Model → world for this instance.
     pub model: [[f32; 4]; 4],
+    /// The base colour tint, multiplied into the albedo map. `a` carries alpha.
     pub albedo_color: [f32; 4],
+    /// Perceptual roughness, 0 = mirror, 1 = fully diffuse.
     pub roughness: f32,
+    /// Metalness, 0 = dielectric, 1 = metal.
     pub metallic: f32,
+    /// Which shading route this instance takes: 0 = deferred PBR, 1 = unlit / baked-lit,
+    /// 2 = skybox.
     pub unlit: f32,
     /// The anisotropy/clear-coat/subsurface triple, packed into one f32 — the `.w` of the
     /// shader's `pbr` vec4. Called `_padding` until 2026-08-15, which is part of how two render
@@ -345,6 +456,8 @@ impl Default for MaterialParams {
 }
 
 impl MaterialParams {
+    /// Packs the glTF factors into the three `vec4` slots the shader reads, in the order
+    /// documented on the fields.
     pub fn new(
         emissive: [f32; 3],
         normal_scale: f32,
@@ -366,8 +479,11 @@ impl MaterialParams {
 /// `asset::loaders`. Its [`Default`] is the identity (no transform).
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct UvTransform {
+    /// UV translation, applied after the rotation and scale.
     pub offset: [f32; 2],
+    /// UV rotation in radians, about the origin.
     pub rotation: f32,
+    /// UV scale, applied first.
     pub scale: [f32; 2],
 }
 
