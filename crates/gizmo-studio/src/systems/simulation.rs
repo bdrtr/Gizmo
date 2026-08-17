@@ -32,6 +32,8 @@ fn log_play_report(editor_state: &mut EditorState, report: PlayReport<'_>) {
     }
 }
 
+/// Advances play mode: steps the game loop while playing, and takes or restores the scene
+/// snapshot on the play/stop transitions.
 pub fn handle_simulation(
     world: &mut World,
     editor_state: &mut EditorState,

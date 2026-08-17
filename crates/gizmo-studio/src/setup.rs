@@ -4,6 +4,8 @@ use gizmo::math::{Quat, Vec3, Vec4};
 use gizmo::physics::components::Transform;
 use gizmo::prelude::*;
 
+/// Builds the studio's starting scene — editor camera, grid, default light, debug assets — and
+/// returns the state the update hook carries from then on.
 pub fn setup_studio_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> StudioState {
     // --- Setup Editor Scene (Grid & Axes) ---
     let mut asset_manager = gizmo::renderer::asset::AssetManager::new();

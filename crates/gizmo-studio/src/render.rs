@@ -55,6 +55,8 @@ fn despawn_non_protected(world: &mut World, protected: &HashSet<u32>) {
     }
 }
 
+/// Renders one studio frame: the scene viewport, the game viewport and the editor's own
+/// objects, into the render targets the panels display.
 pub fn render_studio(
     world: &mut World,
     state: &StudioState,

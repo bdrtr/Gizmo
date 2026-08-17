@@ -4,6 +4,8 @@ use gizmo::editor::EditorState;
 use gizmo::physics::components::Transform;
 use gizmo::prelude::*;
 
+/// Turns this frame's viewport input into picking and scene-view interactions — the click that
+/// selects, the drag that rubber-bands.
 pub fn handle_input_and_scene_view(
     world: &mut World,
     editor_state: &mut EditorState,

@@ -21,6 +21,7 @@ pub enum MetricKind {
 }
 
 impl MetricKind {
+    /// The kind's name as it appears in exports (`"counter"`, `"gauge"`, `"sample"`).
     pub fn as_str(&self) -> &'static str {
         match self {
             MetricKind::Counter => "counter",
@@ -33,14 +34,24 @@ impl MetricKind {
 /// The summary statistics computed over one metric's history.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Stats {
+    /// How many values the statistics were computed over — the ring's length, not the number of
+    /// times the metric was ever written.
     pub count: usize,
+    /// The most recent value.
     pub last: f64,
+    /// The smallest value in the ring.
     pub min: f64,
+    /// The largest value in the ring.
     pub max: f64,
+    /// The arithmetic mean.
     pub mean: f64,
+    /// The population standard deviation (divided by `count`, not `count - 1`).
     pub stddev: f64,
+    /// The median.
     pub p50: f64,
+    /// The 95th percentile — where a frame-time series shows its hitches.
     pub p95: f64,
+    /// The 99th percentile.
     pub p99: f64,
 }
 
@@ -64,6 +75,8 @@ impl Stats {
 /// A single named metric series (a ring buffer).
 #[derive(Debug, Clone)]
 pub struct MetricSeries {
+    /// How this series is interpreted, fixed when it was first written. A later write of a
+    /// different kind warns once rather than reinterpreting the history.
     pub kind: MetricKind,
     ring: VecDeque<f64>,
     capacity: usize,
@@ -126,10 +139,12 @@ impl MetricSeries {
         self.ring.iter().copied()
     }
 
+    /// How many values the ring currently holds — at most its capacity.
     pub fn len(&self) -> usize {
         self.ring.len()
     }
 
+    /// Has this series recorded anything yet?
     pub fn is_empty(&self) -> bool {
         self.ring.is_empty()
     }
@@ -192,6 +207,8 @@ pub struct MetricStore {
 }
 
 impl MetricStore {
+    /// A store whose series each keep `capacity` values. A capacity of 0 is raised to 1, so a
+    /// series always has room for the value that would otherwise be dropped on arrival.
     pub fn new(capacity: usize) -> Self {
         MetricStore {
             series: BTreeMap::new(),
@@ -262,12 +279,15 @@ impl MetricStore {
     }
 
     /// End of frame — writes every Counter series' delta into its ring.
+    /// Closes the frame for every series: each counter's accumulated delta is written into its
+    /// ring and the accumulator reset. Gauges and samples are unaffected.
     pub fn end_frame(&mut self) {
         for s in self.series.values_mut() {
             s.end_frame();
         }
     }
 
+    /// One series by name, for reading its raw ring rather than its statistics.
     pub fn get(&self, name: &str) -> Option<&MetricSeries> {
         self.series.get(name)
     }
@@ -287,10 +307,12 @@ impl MetricStore {
         self.series.iter().map(|(k, v)| (k.as_str(), v))
     }
 
+    /// How many distinct metrics have been recorded.
     pub fn len(&self) -> usize {
         self.series.len()
     }
 
+    /// Has anything been recorded at all?
     pub fn is_empty(&self) -> bool {
         self.series.is_empty()
     }

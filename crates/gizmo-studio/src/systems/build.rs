@@ -161,6 +161,8 @@ fn stage_scene_for_export(world: &World) -> Result<std::path::PathBuf, String> {
         .map_err(|e| e.to_string())
 }
 
+/// Acts on a build request from the toolbar: packages the current scene and the runtime for the
+/// chosen target, and reports the result back into the editor state.
 pub fn handle_build_requests(world: &World, editor_state: &mut EditorState) {
     // --- BUILD SİSTEMİ (STANDALONE EXPORTER) ---
     if editor_state.build.request {

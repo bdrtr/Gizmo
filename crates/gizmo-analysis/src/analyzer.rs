@@ -39,6 +39,8 @@ impl Default for AnalysisConfig {
 
 /// Merkezi analiz durumu.
 pub struct Analyzer {
+    /// What to collect and how much history to keep. Read every frame, so changing it mid-run
+    /// takes effect on the next `collect`.
     pub config: AnalysisConfig,
     frame: u64,
     metrics: MetricStore,

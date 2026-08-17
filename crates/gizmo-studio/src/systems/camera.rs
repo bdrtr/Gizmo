@@ -3,6 +3,8 @@ use gizmo::editor::EditorState;
 use gizmo::physics::components::Transform;
 use gizmo::prelude::*;
 
+/// Drives the editor camera for this frame: fly controls while the viewport has the mouse, plus
+/// any focus or orbit the UI asked for.
 pub fn handle_camera(
     world: &mut World,
     state: &mut StudioState,

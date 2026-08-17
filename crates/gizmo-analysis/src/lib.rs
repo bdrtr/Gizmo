@@ -1,4 +1,5 @@
 #![deny(clippy::undocumented_unsafe_blocks)]
+#![warn(missing_docs)]
 //! (`undocumented_unsafe_blocks` is a RATCHET: this crate carries no `unsafe` block without a
 //! `// SAFETY:` line stating why it is sound, and the lint keeps it that way. Every crate in the
 //! workspace except `gizmo-core` is at zero and denies it; `gizmo-core`'s ECS internals are the

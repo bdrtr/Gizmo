@@ -12,13 +12,16 @@ use gizmo_core::FrameProfiler;
 /// The plugin that wires the analysis machinery into an App.
 #[derive(Debug, Clone, Default)]
 pub struct AnalysisPlugin {
+    /// The configuration the installed [`Analyzer`](crate::Analyzer) starts with.
     pub config: AnalysisConfig,
 }
 
 impl AnalysisPlugin {
+    /// The plugin with default settings — collection on, the default history depth.
     pub fn new() -> Self {
         Self::default()
     }
+    /// The plugin with a configuration of your own.
     pub fn with_config(config: AnalysisConfig) -> Self {
         Self { config }
     }

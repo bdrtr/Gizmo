@@ -2,6 +2,8 @@ use crate::state::StudioState;
 use gizmo::editor::EditorState;
 use gizmo::prelude::*;
 
+/// The studio's per-frame update: input and picking, camera, shortcuts, scene operations, play
+/// mode, gizmos and the housekeeping timers, in that order.
 pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input: &Input) {
     state.current_fps = 1.0 / dt;
     state.actual_dt = dt;

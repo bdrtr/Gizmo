@@ -1,6 +1,8 @@
 use gizmo::prelude::*;
 use crate::state::DebugAssets;
 
+/// Updates the editor's own gizmos for this frame: the transform handles on the selection and
+/// the outline drawn around it.
 pub fn update_editor_gizmos(world: &mut World, state: &crate::state::StudioState) {
     let mut to_spawn = Vec::new();
     let mut existing_gizmos = Vec::new();

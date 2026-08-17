@@ -8,6 +8,8 @@ mod viewpoint;
 use batching::*;
 use passes::*;
 
+/// Records the studio's render passes for one viewport — shadows, opaque, transparent, grid and
+/// skybox — into the given encoder.
 pub fn execute_render_pipeline(
     world: &mut World,
     state: &StudioState,

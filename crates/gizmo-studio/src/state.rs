@@ -1,15 +1,21 @@
 /// Per-application runtime state for Gizmo Studio (FPS, camera entities,
 /// timers and frame statistics) carried across the engine's update loop.
 pub struct StudioState {
+    /// The smoothed frame rate shown in the status bar.
     pub current_fps: f32,
+    /// The last frame's real duration in seconds, before any time scaling.
     pub actual_dt: f32,
+    /// Entity id of the editor's own camera — the one the viewport flies.
     pub editor_camera: u32,
+    /// Entity id of the camera the game view renders through.
     pub game_camera: u32,
+    /// Set by the scene view when a click needs picking; cleared once the raycast has run.
     pub do_raycast: bool,
     /// The running game's frame — the *same* loop an exported game runs
     /// ([`gizmo::systems::PlayLoop`]). It carries the physics debt and which scripts are currently
     /// failing to load; both used to be fields here, next to a copy of the loop that used them.
     pub play: gizmo::systems::PlayLoop,
+    /// Watches `demo/assets` for changes; `None` when the directory could not be watched.
     pub asset_watcher: Option<gizmo::renderer::hot_reload::AssetWatcher>,
     /// The garbage-collection timer — cleans up soft-deleted entities
     pub gc_timer: f32,
@@ -24,11 +30,17 @@ pub struct StudioState {
 /// GPU resources used to render editor debug gizmos (primitive meshes and a
 /// default white texture bind group), and the meshes the `➕ Add` menu spawns.
 pub struct DebugAssets {
+    /// The cube mesh the `➕ Add` menu spawns.
     pub cube: gizmo::renderer::components::Mesh,
+    /// The sphere mesh.
     pub sphere: gizmo::renderer::components::Mesh,
+    /// The plane quad.
     pub plane: gizmo::renderer::components::Mesh,
+    /// The cylinder mesh.
     pub cylinder: gizmo::renderer::components::Mesh,
+    /// The capsule mesh.
     pub capsule: gizmo::renderer::components::Mesh,
+    /// A 1×1 white texture's bind group, used as the default material for everything above.
     pub white_tex: std::sync::Arc<gizmo::wgpu::BindGroup>,
 }
 
@@ -47,6 +59,7 @@ impl PrimitiveSize {
     /// `±1.0` written into its vertex table and takes no size, so this is the number the collider
     /// has to agree with.
     pub const CUBE_HALF: f32 = 1.0;
+    /// Radius of the sphere mesh, and of its collider — the pair that had drifted apart.
     pub const SPHERE_RADIUS: f32 = 0.5;
     /// Edge length of the plane quad; it is centred on the origin, so it spans ±half.
     pub const PLANE_SIZE: f32 = 10.0;
@@ -54,12 +67,19 @@ impl PrimitiveSize {
     /// It gets a thin one pushed *down* by its own half-height, so the top face lands exactly on
     /// the visible quad rather than hovering a centimetre over it.
     pub const PLANE_THICKNESS: f32 = 0.05;
+    /// Radius of the cylinder mesh, and of its collider.
     pub const CYLINDER_RADIUS: f32 = 0.5;
+    /// Full height of the cylinder mesh. `Collider::cylinder` takes half of it — see
+    /// [`cylinder_collider_half_height`](Self::cylinder_collider_half_height).
     pub const CYLINDER_HEIGHT: f32 = 2.0;
-    /// Radial segment count for the cylinder — shared by the mesh and by the ring of points the
-    /// convex hull is built from, so the collider is the same faceted prism you see. The engine
-    /// has no cylinder shape; a capsule would round off the ends and a box would square them.
+    /// Radial segment count for the cylinder **mesh**.
+    ///
+    /// It used to be shared with the collider, because the engine had no cylinder shape and the
+    /// studio stood a 24-sided convex hull in for one. Since `ColliderShape::Cylinder` exists
+    /// (2026-08-17) the collider is a real cylinder and this number is the visual only — a
+    /// coarser mesh no longer changes what the physics sees.
     pub const CYLINDER_SEGMENTS: u32 = 24;
+    /// Radius of the capsule mesh, and of its collider.
     pub const CAPSULE_RADIUS: f32 = 0.5;
     /// Length of the capsule's *cylindrical* section. The mesh takes this whole length as `depth`
     /// and `Collider::capsule` takes half of it as `half_height` — the one conversion between the

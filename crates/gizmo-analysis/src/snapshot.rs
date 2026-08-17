@@ -12,10 +12,16 @@ use std::collections::BTreeMap;
 /// trace).
 #[derive(Debug, Clone)]
 pub struct SpanSample {
+    /// The scope's name, as `profile_scope!` was given it.
     pub name: &'static str,
+    /// How long the scope was open, in milliseconds — the same number the profiler shows.
     pub ms: f64,
+    /// Nesting depth, 0 for a scope opened at the top of the frame. What makes a flame chart a
+    /// chart rather than a list.
     pub depth: u32,
+    /// Start, in nanoseconds since the frame's own epoch — the Chrome trace's `ts`.
     pub start_ns: u64,
+    /// End, in the same units. `end_ns - start_ns` is `ms` without the rounding.
     pub end_ns: u64,
 }
 

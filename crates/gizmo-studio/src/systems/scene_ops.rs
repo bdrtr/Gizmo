@@ -4,6 +4,8 @@ use gizmo::editor::EditorState;
 use gizmo::physics::components::Transform;
 use gizmo::prelude::*;
 
+/// Carries out the scene operations the UI raised this frame: spawning a primitive, deleting or
+/// duplicating a selection, saving and loading.
 pub fn handle_scene_operations(
     world: &mut World,
     editor_state: &mut EditorState,

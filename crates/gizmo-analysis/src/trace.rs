@@ -29,7 +29,10 @@ use tracing_subscriber::registry::LookupSpan;
 /// A single captured span record.
 #[derive(Debug, Clone)]
 pub struct TraceRecord {
+    /// The span's name, as `tracing` recorded it.
     pub name: &'static str,
+    /// The span's target — the module path `tracing` attributes it to, which is what a filter
+    /// selects on.
     pub target: String,
     /// The start, in nanoseconds since the layer's epoch.
     pub start_ns: u64,
@@ -46,6 +49,8 @@ pub struct TraceSink {
 }
 
 impl TraceSink {
+    /// An empty sink. Clone it freely: every clone shares the same records, which is how the
+    /// layer and the code that exports the trace end up looking at one list.
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(Vec::new())),
@@ -57,14 +62,18 @@ impl TraceSink {
         self.inner.lock().map(|g| g.clone()).unwrap_or_default()
     }
 
+    /// How many spans have been captured. A poisoned lock reports 0 rather than panicking —
+    /// tracing must not take the process down on its way out.
     pub fn len(&self) -> usize {
         self.inner.lock().map(|g| g.len()).unwrap_or(0)
     }
 
+    /// Has anything been captured yet?
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
+    /// Drops every record, so a long-running process can export a window and start again.
     pub fn clear(&self) {
         if let Ok(mut g) = self.inner.lock() {
             g.clear();
@@ -117,6 +126,8 @@ pub struct GizmoTraceLayer {
 }
 
 impl GizmoTraceLayer {
+    /// A layer writing into `sink`, with its epoch set to now — every record's `start_ns` is
+    /// measured from this moment, so build the layer where you want time to start.
     pub fn new(sink: TraceSink) -> Self {
         Self {
             sink,

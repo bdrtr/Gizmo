@@ -3,6 +3,8 @@ use gizmo::editor::{EditorState, GizmoMode};
 use gizmo::physics::components::Transform;
 use gizmo::prelude::*;
 
+/// Applies the editor's keyboard shortcuts for this frame — undo/redo, delete, duplicate, focus
+/// and the gizmo mode keys.
 pub fn handle_editor_shortcuts(
     world: &mut World,
     editor_state: &mut EditorState,
