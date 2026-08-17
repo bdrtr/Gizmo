@@ -279,6 +279,64 @@ impl std::fmt::Display for EntityName {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MeshSource(pub String);
 
+impl MeshSource {
+    /// The prefix a glTF sub-mesh key carries.
+    pub const GLTF_PREFIX: &'static str = "gltf_mesh_";
+
+    /// Splits a glTF sub-mesh key into `(file path, sub-asset suffix)`, or `None` for any other
+    /// kind of key.
+    ///
+    /// The key is `gltf_mesh_<path><suffix>`, where the suffix is `_<node name>_p<primitive>` and
+    /// **both halves may contain underscores** — a node called `wheel_front_left` inside
+    /// `sports_car.glb` is the normal case. So the split is made at the file **extension**, not at
+    /// a separator, which is the same rule the renderer's loader uses to find the file it has to
+    /// open. It lives here, below both, because two copies of a parsing rule is how the halves of
+    /// one key come to disagree.
+    ///
+    /// ```
+    /// # use gizmo_core::component::MeshSource;
+    /// let key = "gltf_mesh_assets/sports_car.glb_wheel_front_left_p0";
+    /// let (path, sub) = MeshSource::split_gltf_key(key).unwrap();
+    /// assert_eq!(path, "assets/sports_car.glb");
+    /// assert_eq!(sub, "_wheel_front_left_p0");
+    ///
+    /// assert!(MeshSource::split_gltf_key("standard_cube").is_none());
+    /// ```
+    #[must_use]
+    pub fn split_gltf_key(key: &str) -> Option<(&str, &str)> {
+        let rest = key.strip_prefix(Self::GLTF_PREFIX)?;
+        // `.glb` first, then `.gltf`: searching for `.gltf` in a `.glb` key finds nothing, but a
+        // `.gltf` key contains no `.glb`, so the order only decides which lookup runs twice.
+        let end = rest
+            .find(".glb")
+            .map(|i| i + 4)
+            .or_else(|| rest.find(".gltf").map(|i| i + 5))?;
+        Some(rest.split_at(end))
+    }
+
+    /// Rebuilds a glTF sub-mesh key for the same sub-asset in a file that has **moved**.
+    ///
+    /// This is the sub-asset half of asset identity — Unity's fileID to the file's GUID. A moved
+    /// `.glb` keeps its UUID through its `.meta` sidecar, but a scene refers to a mesh *inside* it
+    /// by a key with the old path baked in, so repointing the file is not enough: the key has to
+    /// be rewritten around the new path while the suffix — which is what names the sub-asset —
+    /// stays exactly as it was.
+    ///
+    /// ```
+    /// # use gizmo_core::component::MeshSource;
+    /// let moved = MeshSource::gltf_key_with_path(
+    ///     "gltf_mesh_old/car.glb_Body_p0",
+    ///     "vehicles/car.glb",
+    /// );
+    /// assert_eq!(moved.as_deref(), Some("gltf_mesh_vehicles/car.glb_Body_p0"));
+    /// ```
+    #[must_use]
+    pub fn gltf_key_with_path(key: &str, new_path: &str) -> Option<String> {
+        let (_, sub) = Self::split_gltf_key(key)?;
+        Some(format!("{}{new_path}{sub}", Self::GLTF_PREFIX))
+    }
+}
+
 /// Renderer-independent material description, converted into a GPU `Material` by the renderer's
 /// asset-loading pass.
 ///

@@ -517,9 +517,23 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
   - Two defects fell out of writing the tests: `normalize_path` gave absolute paths a **doubled
     leading slash** (`//tmp/x`, harmless in a lookup because both sides normalise, wrong in the
     value handed to a loader), and `./demo/x` vs `demo/x` were two registry keys for one file.
-  - **glTF sub-mesh identity is still open.** A `.glb` gets one UUID as a file, but a scene's key is
-    `gltf_mesh_<file>_<index>`, so identity at the sub-asset level needs a second id (Unity's
-    fileID). **Trigger:** somebody renames or moves a `.glb` and expects its meshes to survive.
+  - **glTF sub-mesh identity — CLOSED (2026-08-18), and it needed no second id.** The item said a
+    sub-asset needs "a second id (Unity's fileID)". It already had one: the key is
+    `gltf_mesh_<path>_<node>_p<n>`, and the suffix after the path **is** the fileID — what was
+    missing was anyone using it. `stamp_asset_identity` asked the registry about the whole key,
+    which is not a path, so a sub-mesh reference gained no identity at all and a moved `.glb`
+    took its meshes with it.
+
+    Two halves, and the second is the one a naive fix gets wrong. Stamping now looks up the
+    **path inside the key**. Repair **rewrites** the key around the new path instead of replacing
+    it: overwriting `gltf_mesh_old/car.glb_Body_p0` with `vehicles/car.glb` would turn "the Body
+    mesh in car.glb" into "car.glb", which the loader reads as an OBJ path and fails to load.
+
+    The split is made at the file **extension**, not at a separator, because underscores are
+    normal on both sides — `wheel_front_left` inside `sports_car.glb` is the ordinary case. That
+    rule now lives once, in `MeshSource::split_gltf_key` in `gizmo-core` (below both consumers),
+    and the renderer's loader was rewritten onto it: it had its own copy, and two parses of one
+    key shape is how the loader and the saver come to disagree about where a file name ends.
   - **Writing identity is on for the editor and the app, and that is the whole rollout.** There is
     no asset rename/move action in the editor yet (the browser is read-only), so nothing else needs
     it. **Trigger for more:** an editor move/rename action — which should carry the sidecar, and at

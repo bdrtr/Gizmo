@@ -149,7 +149,13 @@ impl SceneData {
     pub fn stamp_asset_identity(&mut self, identity: &dyn AssetIdentity) -> usize {
         let mut stamped = 0;
         for entity in &mut self.entities {
-            if let Some(path) = entity.mesh_source.as_deref() {
+            if let Some(source) = entity.mesh_source.as_deref() {
+                // A glTF sub-mesh key is not a path — it is `gltf_mesh_<path>_<node>_p<n>` — so
+                // asking the registry about it directly answers `None` and the reference gets no
+                // identity at all. That was the whole of the sub-mesh gap: the FILE has a UUID,
+                // and nothing looked it up. Stamp against the path inside the key.
+                let path = gizmo_core::component::MeshSource::split_gltf_key(source)
+                    .map_or(source, |(path, _)| path);
                 if let Some(uuid) = identity.uuid_for_path(path) {
                     if entity.mesh_uuid.as_deref() != Some(uuid.as_str()) {
                         stamped += 1;
@@ -190,8 +196,20 @@ impl SceneData {
         for entity in &mut self.entities {
             if let Some(uuid) = entity.mesh_uuid.clone() {
                 if let Some(current) = identity.path_for_uuid(&uuid) {
-                    if entity.mesh_source.as_deref() != Some(current.as_str()) {
-                        entity.mesh_source = Some(current);
+                    // For a glTF sub-mesh the repair is a REWRITE, not a replacement: the key
+                    // names a mesh inside the file, and overwriting it with the file's path would
+                    // turn "the Body mesh in car.glb" into "car.glb", which the loader reads as an
+                    // OBJ path and fails to load. The suffix — the sub-asset's own name — is what
+                    // has to survive, which is exactly the fileID half of an identity pair.
+                    let repointed = entity
+                        .mesh_source
+                        .as_deref()
+                        .and_then(|source| {
+                            gizmo_core::component::MeshSource::gltf_key_with_path(source, &current)
+                        })
+                        .unwrap_or(current);
+                    if entity.mesh_source.as_deref() != Some(repointed.as_str()) {
+                        entity.mesh_source = Some(repointed);
                         repaired += 1;
                     }
                 }
@@ -2266,6 +2284,80 @@ mod asset_identity_tests {
         assert_eq!(
             scene.entities[0].material_source.as_ref().unwrap().texture_source.as_deref(),
             Some("demo/assets/props/bark.png")
+        );
+    }
+
+    /// The sub-asset half, and the reason it was open: a mesh INSIDE a `.glb` is referred to by
+    /// `gltf_mesh_<path>_<node>_p<n>`, which is not a path — so the registry answered `None`, the
+    /// reference gained no identity at all, and a moved `.glb` took its meshes with it.
+    #[test]
+    fn a_mesh_inside_a_moved_gltf_file_is_found_again() {
+        let at_save = Registry::new(&[(
+            "demo/assets/old/car.glb",
+            "33333333-3333-3333-3333-333333333333",
+        )]);
+        let mut scene = scene_with(
+            "gltf_mesh_demo/assets/old/car.glb_Body_p0",
+            "demo/assets/old/paint.png",
+        );
+        assert_eq!(
+            scene.stamp_asset_identity(&at_save),
+            1,
+            "the sub-mesh must gain the FILE's identity; before this it gained none"
+        );
+
+        let at_load = Registry::new(&[(
+            "demo/assets/vehicles/car.glb",
+            "33333333-3333-3333-3333-333333333333",
+        )]);
+        assert_eq!(scene.repair_asset_paths(&at_load), 1);
+        assert_eq!(
+            scene.entities[0].mesh_source.as_deref(),
+            Some("gltf_mesh_demo/assets/vehicles/car.glb_Body_p0"),
+            "the repair must REWRITE the key around the new path — replacing it with the path \
+             would turn `the Body mesh in car.glb` into `car.glb`, which the loader reads as an \
+             OBJ path and fails to load"
+        );
+    }
+
+    /// Underscores are the normal case on both sides of the split, which is why the parse is made
+    /// at the file extension rather than at a separator.
+    #[test]
+    fn a_sub_mesh_key_survives_underscores_in_both_halves() {
+        let at_save = Registry::new(&[(
+            "assets/sports_car.glb",
+            "44444444-4444-4444-4444-444444444444",
+        )]);
+        let mut scene = scene_with(
+            "gltf_mesh_assets/sports_car.glb_wheel_front_left_p2",
+            "t.png",
+        );
+        assert_eq!(scene.stamp_asset_identity(&at_save), 1);
+
+        let at_load = Registry::new(&[(
+            "assets/cars/sports_car.glb",
+            "44444444-4444-4444-4444-444444444444",
+        )]);
+        scene.repair_asset_paths(&at_load);
+        assert_eq!(
+            scene.entities[0].mesh_source.as_deref(),
+            Some("gltf_mesh_assets/cars/sports_car.glb_wheel_front_left_p2"),
+            "the sub-asset name must come through untouched"
+        );
+    }
+
+    /// `.gltf` as well as `.glb` — the extension is what the split is made at, so both have to be
+    /// found, and a `.gltf` key must not be cut at the `.glb` its own extension contains.
+    #[test]
+    fn a_gltf_key_is_split_at_its_own_extension() {
+        let at_save = Registry::new(&[("a/scene.gltf", "55555555-5555-5555-5555-555555555555")]);
+        let mut scene = scene_with("gltf_mesh_a/scene.gltf_Mesh_p0", "t.png");
+        assert_eq!(scene.stamp_asset_identity(&at_save), 1);
+        let at_load = Registry::new(&[("b/scene.gltf", "55555555-5555-5555-5555-555555555555")]);
+        scene.repair_asset_paths(&at_load);
+        assert_eq!(
+            scene.entities[0].mesh_source.as_deref(),
+            Some("gltf_mesh_b/scene.gltf_Mesh_p0")
         );
     }
 

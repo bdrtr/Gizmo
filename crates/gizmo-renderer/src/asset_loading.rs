@@ -76,11 +76,12 @@ pub fn run_asset_loading_system(
                 if let Some(cached) = asset_manager.get_cached_mesh(&mesh_src) {
                     cached
                 } else {
-                    let file_path = if let Some(idx) = mesh_src.find(".glb") {
-                        Some(&mesh_src["gltf_mesh_".len()..idx + 4])
-                    } else {
-                        mesh_src.find(".gltf").map(|idx| &mesh_src["gltf_mesh_".len()..idx + 5])
-                    };
+                    // The one parse of this key shape in the workspace, shared with the scene
+                    // format's identity repair — see `MeshSource::split_gltf_key`. Two copies of
+                    // it is how the loader and the saver come to disagree about where the file
+                    // name ends, which for a node called `wheel_front_left` is not hypothetical.
+                    let file_path = gizmo_core::component::MeshSource::split_gltf_key(&mesh_src)
+                        .map(|(path, _)| path);
 
                     if let Some(path) = file_path {
                         if let Err(e) = asset_manager.load_gltf_scene(

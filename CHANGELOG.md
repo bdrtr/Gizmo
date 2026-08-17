@@ -62,6 +62,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `gizmo_editor::rebinding::ui_rebinding_panel` draws the rows. It takes the map and the input
   rather than owning them, so a game's settings screen can use the same panel.
 
+- **A mesh inside a moved `.glb` is found again.** Scene asset identity covered files but not the
+  meshes inside them: a sub-mesh is referenced by `gltf_mesh_<path>_<node>_p<n>`, which is not a
+  path, so the registry answered nothing and the reference gained no identity. Stamping now uses
+  the path inside the key, and repair **rewrites** the key around the file's new location rather
+  than replacing it with the path — which would turn "the Body mesh in car.glb" into "car.glb".
+
+  `MeshSource::split_gltf_key` / `gltf_key_with_path` are the shared parse, in `gizmo-core` below
+  both consumers; the renderer's loader had its own copy and now uses this one.
+
 - **`FpsLook` gained a look gate, sprint and configurable vertical keys — and its first caller.**
   `look_button` makes looking require a held mouse button (the mouse only; a stick is not gated),
   `sprint_key`/`sprint_multiplier` add sprinting, and `up_key`/`down_key` are configurable because
