@@ -1423,6 +1423,33 @@ the *slope* gate is the one that guards it.
 ## 8. Working Method
 
 - Every item: **fix → write a regression test → build/test/clippy → tick it off.**
+- **A positive `contains` over source text is satisfied by a comment — and four of this
+  repository's guards were.** Audited 2026-08-18, after three separate false guards turned up in
+  two days by accident: the fly-gate assertion that stayed green with the call wrapped in the very
+  gate it forbade, the `missing_docs` ratchet that was per-target, and a written subject list that
+  covered less than it looked like. The systematic pass — comment out the guarded line, re-run —
+  found four more, all one shape:
+
+  | Guard | With the line commented out |
+  |---|---|
+  | `render_parity::both_paths_size_the_instance_buffer_for_the_frame` | **green** — both paths carry long comments *about* `ensure_instance_capacity` |
+  | `scene_view::the_gizmo_config_still_assigns_snapping` | **green** — the inert field plus the old line as a comment |
+  | `egui_ctx::the_descriptor_is_sized_from_the_target_not_the_window` | **green** |
+  | `csm::shader_shadow_fade_matches_the_rust_mirror` | **green** — WGSL comments are `//` too |
+
+  Every one of them exists **because a line was once deleted or made inert**, which is the state a
+  comment is indistinguishable from. They now cut comments before matching, and each was
+  re-broken to watch it go red. Five guards audited the same way held: the draw-loop
+  `select_mesh` scan, `the_editor_only_rule_is_written_once`,
+  `no_stage_a_crate_depends_on_a_stage_b_crate`, and both `shader_contract` layout checks —
+  and `editor_runtime`'s texture check, which survived only because of its **negative** half
+  (`!contains("&render_view")`). That is the pattern worth keeping: a positive assertion says a
+  string is present somewhere, a negative one says the wrong thing is absent, and the second is
+  much harder to satisfy by accident.
+- **The audit tool needs the same scepticism as the thing it audits.** The first harness reported
+  "green" for a run where the filter matched **no test at all**, and for one where the injected
+  mistake did not compile. Both look identical to "the guard did not fire". It now reports those
+  separately, which changed two verdicts.
 - **A crate-wide lint is only crate-wide on the target you ran it on.** `gizmo-editor` was put on
   the `missing_docs` ratchet after clippy reported zero, and CI went red: the crate has a
   `#[cfg(target_arch = "wasm32")]` arm — an empty `draw_script_section`, since a browser has no

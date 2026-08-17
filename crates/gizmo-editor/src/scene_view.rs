@@ -869,6 +869,34 @@ mod axis_gizmo_tests {
 
 #[cfg(test)]
 mod snap_tests {
+    /// Source with its comments removed.
+    ///
+    /// A positive `contains` over raw source is satisfied by a **comment**, and every assertion that
+    /// uses one exists because a line was deleted or made inert — the two states a comment cannot tell
+    /// apart. Audited 2026-08-18 by commenting the guarded line out: four such tests across the
+    /// workspace stayed green, this one among them.
+    ///
+    /// `//` preceded by `:` is left alone so a `https://` inside a string is not mistaken for the
+    /// start of a comment. A trailing comment that *contains* the pattern is cut, which is the point.
+    fn code_only(src: &str) -> String {
+        src.lines()
+            .map(|line| {
+                let mut end = line.len();
+                let bytes = line.as_bytes();
+                let mut i = 0;
+                while i + 1 < bytes.len() {
+                    if bytes[i] == b'/' && bytes[i + 1] == b'/' && (i == 0 || bytes[i - 1] != b':') {
+                        end = i;
+                        break;
+                    }
+                    i += 1;
+                }
+                &line[..end]
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     use super::snap_active;
 
     #[test]
@@ -893,7 +921,11 @@ mod snap_tests {
     #[test]
     fn the_gizmo_config_still_assigns_snapping() {
         let src = include_str!("scene_view.rs");
-        let code = src.split("#[cfg(test)]").next().unwrap_or("");
+        // Production code, and then with its comments cut. Both halves matter and the second was
+        // missing: `snapping: snap_enabled,` commented out and replaced with `snapping: false`
+        // left this test green, which is the exact defect it was written for — the field inert
+        // while the line that used to set it survives as an explanation. Measured 2026-08-18.
+        let code = code_only(src.split("#[cfg(test)]").next().unwrap_or(""));
         assert!(
             code.contains("snapping: snap_enabled"),
             "GizmoConfig must assign `snapping`, or the snap settings are silently inert again"

@@ -244,6 +244,34 @@ impl EguiContext {
 
 #[cfg(test)]
 mod screen_descriptor_tests {
+    /// Source with its comments removed.
+    ///
+    /// A positive `contains` over raw source is satisfied by a **comment**, and every assertion that
+    /// uses one exists because a line was deleted or made inert — the two states a comment cannot tell
+    /// apart. Audited 2026-08-18 by commenting the guarded line out: four such tests across the
+    /// workspace stayed green, this one among them.
+    ///
+    /// `//` preceded by `:` is left alone so a `https://` inside a string is not mistaken for the
+    /// start of a comment. A trailing comment that *contains* the pattern is cut, which is the point.
+    fn code_only(src: &str) -> String {
+        src.lines()
+            .map(|line| {
+                let mut end = line.len();
+                let bytes = line.as_bytes();
+                let mut i = 0;
+                while i + 1 < bytes.len() {
+                    if bytes[i] == b'/' && bytes[i + 1] == b'/' && (i == 0 || bytes[i - 1] != b':') {
+                        end = i;
+                        break;
+                    }
+                    i += 1;
+                }
+                &line[..end]
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     /// egui's screen descriptor must be sized from the render target, never from the window.
     ///
     /// The two agree until a resize, and then they do not: winit can deliver a redraw whose
@@ -259,7 +287,10 @@ mod screen_descriptor_tests {
     #[test]
     fn the_descriptor_is_sized_from_the_target_not_the_window() {
         let src = include_str!("egui_ctx.rs");
-        let code = src.split("#[cfg(test)]").next().unwrap_or("");
+        // Comments cut as well as the test module: without that, replacing the assignment with
+        // `size_in_pixels: [1, 1]` and leaving the old line as a comment kept this test green,
+        // and the crash it documents was reachable underneath it. Measured 2026-08-18.
+        let code = code_only(src.split("#[cfg(test)]").next().unwrap_or(""));
         assert!(
             code.contains("size_in_pixels: target_size"),
             "the screen descriptor must take the target's size"

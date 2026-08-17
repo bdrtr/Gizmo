@@ -160,6 +160,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Four source-shape guards were vacuous and now are not.** A positive `contains` over source
+  text is satisfied by a comment, and each of these tests exists because a line was once deleted or
+  made inert — the one state a comment cannot be told apart from. Commenting the guarded line out
+  left `both_paths_size_the_instance_buffer_for_the_frame`,
+  `the_gizmo_config_still_assigns_snapping`, `the_descriptor_is_sized_from_the_target_not_the_window`
+  and `shader_shadow_fade_matches_the_rust_mirror` all green, with the defect each names reachable
+  underneath. They cut comments before matching now, and each was re-broken to watch it fail.
 - **A source ratchet keeps movement going through one function.**
   `crates/gizmo/tests/movement_input.rs` fails the build if anything under `crates/*/src` or
   `demo/src` reads a movement key without the shared blend. Its exception list documents the nine

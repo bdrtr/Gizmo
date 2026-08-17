@@ -266,6 +266,34 @@ pub fn directional_cascade_view_projs(
 
 #[cfg(test)]
 mod tests {
+    /// Source with its comments removed.
+    ///
+    /// A positive `contains` over raw source is satisfied by a **comment**, and every assertion that
+    /// uses one exists because a line was deleted or made inert — the two states a comment cannot tell
+    /// apart. Audited 2026-08-18 by commenting the guarded line out: four such tests across the
+    /// workspace stayed green, this one among them.
+    ///
+    /// `//` preceded by `:` is left alone so a `https://` inside a string is not mistaken for the
+    /// start of a comment. A trailing comment that *contains* the pattern is cut, which is the point.
+    fn code_only(src: &str) -> String {
+        src.lines()
+            .map(|line| {
+                let mut end = line.len();
+                let bytes = line.as_bytes();
+                let mut i = 0;
+                while i + 1 < bytes.len() {
+                    if bytes[i] == b'/' && bytes[i + 1] == b'/' && (i == 0 || bytes[i - 1] != b':') {
+                        end = i;
+                        break;
+                    }
+                    i += 1;
+                }
+                &line[..end]
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     use super::*;
 
     /// A tall caster still casts, at any sun angle.
@@ -680,6 +708,11 @@ mod tests {
         ];
         let expected = format!("const SHADOW_FADE_FRACTION: f32 = {SHADOW_FADE_FRACTION:?};");
         for (name, src) in shaders {
+            // WGSL comments are `//` too, and this test was satisfied by them: commenting out the
+            // line that APPLIES the fade left it green, so a shader could declare the mirror,
+            // never call it, and pass. Measured 2026-08-18.
+            let src = code_only(src);
+            let src = src.as_str();
             assert!(
                 src.contains(&expected),
                 "{name} must declare `{expected}` — the shader fade band has drifted from \

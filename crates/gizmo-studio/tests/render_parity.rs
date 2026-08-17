@@ -329,8 +329,13 @@ fn neither_draw_loop_answers_the_shared_per_entity_questions_itself() {
 fn both_paths_size_the_instance_buffer_for_the_frame() {
     let (game, editor) = draw_path_sources();
     for (path, text) in [("game", &game), ("editor", &editor)] {
+        // In CODE, not in a comment — the same rule its sibling above already applies. Without
+        // it this test was vacuous: both draw paths carry long comments *about*
+        // `ensure_instance_capacity`, so deleting the call and keeping the explanation left this
+        // green, and the defect it names (geometry silently dropped past the buffer's capacity)
+        // was reachable underneath it. Measured 2026-08-18.
         assert!(
-            text.contains("ensure_instance_capacity"),
+            code_only(text).contains("ensure_instance_capacity("),
             "the {path} path uploads instances without asking for room — past the buffer's \
              capacity it will drop geometry rather than grow"
         );
@@ -575,6 +580,34 @@ fn every_render_capability_is_known_to_both_draw_paths() {
 ///
 /// `shared.rs` sits inside the game path's directory but belongs to both, so it is not either
 /// path's own code and is left out.
+/// Source with its comments removed.
+///
+/// A positive `contains` over raw source is satisfied by a **comment**, and every assertion that
+/// uses one exists because a line was deleted or made inert — the two states a comment cannot tell
+/// apart. Audited 2026-08-18 by commenting the guarded line out: four such tests across the
+/// workspace stayed green, this one among them.
+///
+/// `//` preceded by `:` is left alone so a `https://` inside a string is not mistaken for the
+/// start of a comment. A trailing comment that *contains* the pattern is cut, which is the point.
+fn code_only(src: &str) -> String {
+    src.lines()
+        .map(|line| {
+            let mut end = line.len();
+            let bytes = line.as_bytes();
+            let mut i = 0;
+            while i + 1 < bytes.len() {
+                if bytes[i] == b'/' && bytes[i + 1] == b'/' && (i == 0 || bytes[i - 1] != b':') {
+                    end = i;
+                    break;
+                }
+                i += 1;
+            }
+            &line[..end]
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn draw_path_sources() -> (String, String) {
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
