@@ -53,6 +53,15 @@ cargo clippy --workspace --all-features --all-targets -- -D warnings \
 
 `-D warnings` is a real gate. The two `-A` exemptions are grandfathered architectural lints (a **ratchet**: new lint kinds break CI; the exempt list only shrinks). `rustfmt` is checked **report-only** in CI — the tree is not yet fully fmt-clean, so a `cargo fmt` diff will not fail CI, but don't reflow unrelated code.
 
+```bash
+# Feature-pair gate (CI job "Feature powerset"). RUN THIS after touching any `#[cfg(feature)]`,
+# any module declaration, or any `pub use` — it is the ONLY gate that catches a `#[cfg]` that got
+# detached from its item, and an insertion anchored on a `pub mod` line steals the attributes above
+# it. That mistake reached CI twice on 2026-08-17 (see docs/ENGINE.md §8).
+cargo hack check -p gizmo-app --feature-powerset --depth 2 --no-dev-deps
+cargo hack check -p gizmo-engine --feature-powerset --depth 2 --no-dev-deps
+```
+
 > Gotchas when reproducing CI locally: the entry crate is **`gizmo-engine`**, not `-p gizmo`. Piping cargo through `| tail` masks the exit code — check exit status separately.
 
 ### WASM (browser) build

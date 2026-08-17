@@ -1175,8 +1175,12 @@ the *slope* gate is the one that guards it.
   twice displacing a doc comment (caught immediately by `missing_docs`) and once taking
   `#[cfg(feature = "egui")]` off `pub mod dev_console`, which compiled fine natively and produced
   17 unresolved-`egui` errors in the wasm job — a gate that only exists because the same reasoning
-  was applied to the wasm target a day earlier. Walk backwards over the attributes *and* the docs
-  before inserting, and note which gate would notice if you did not.
+  was applied to the wasm target a day earlier. Then it happened a **fourth** time, in the facade,
+  taking `#[cfg(feature = "render")]` off `pub mod asset_server` — and that one reached CI, because
+  no local gate I was running compiles a feature *subset*. The gate that catches it is
+  `cargo hack check --feature-powerset`, now written into CLAUDE.md's local command list. Walk
+  backwards over the attributes *and* the docs before inserting, and run the powerset check after
+  touching any module declaration.
 - **Prefer a scanned subject list to a written one.** A test that names the ten files it polices
   cannot see the eleventh, and that is the file the bug will be in. Take subjects from the
   directory, the component modules, the workspace; keep only the *exceptions* by hand, and fail on

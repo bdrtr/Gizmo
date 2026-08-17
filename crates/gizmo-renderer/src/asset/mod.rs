@@ -478,25 +478,36 @@ impl AssetManager {
     /// to reach an absolute asset path (an editor opening a project outside the working directory
     /// is the other).
     pub fn normalize_path(path: &str) -> String {
+        use std::path::Component;
         let mut out = String::new();
         for component in Path::new(path).components() {
-            // A leading `./` is dropped. `Path::components` keeps it (it removes only *interior*
-            // `.`), so `./demo/x.png` and `demo/x.png` used to be two different registry keys for
-            // one file — one identity per way of spelling the path, which is the mismatch this
-            // registry exists to prevent.
-            if component == std::path::Component::CurDir {
-                continue;
-            }
-            let text = component.as_os_str().to_string_lossy();
-            // The root (and a Windows prefix) already carries its separator.
-            if out.is_empty() || out.ends_with('/') {
-                out.push_str(&text);
-            } else {
-                out.push('/');
-                out.push_str(&text);
+            match component {
+                // A leading `./` is dropped. `Path::components` keeps it (it removes only
+                // *interior* `.`), so `./demo/x.png` and `demo/x.png` used to be two different
+                // registry keys for one file — one identity per way of spelling the path, which is
+                // the mismatch this registry exists to prevent.
+                Component::CurDir => continue,
+                // A Windows prefix (`C:`, `\\?\C:`) carries no separator of its own; the
+                // `RootDir` component that follows it is what does.
+                Component::Prefix(prefix) => {
+                    out.push_str(&prefix.as_os_str().to_string_lossy().replace('\\', "/"));
+                }
+                // Exactly one separator, however many the platform spells it with.
+                Component::RootDir => {
+                    if !out.ends_with('/') {
+                        out.push('/');
+                    }
+                }
+                other => {
+                    let text = other.as_os_str().to_string_lossy().replace('\\', "/");
+                    if !out.is_empty() && !out.ends_with('/') {
+                        out.push('/');
+                    }
+                    out.push_str(&text);
+                }
             }
         }
-        out.replace('\\', "/")
+        out
     }
 
     /// Return the UUID registered for `path`, if any.
@@ -965,6 +976,21 @@ mod scan_does_not_write_tests {
         // same asset twice.
         let once = AssetManager::normalize_path("/tmp/assets/thing.png");
         assert_eq!(AssetManager::normalize_path(&once), once);
+
+        // Windows shape, and it is `#[cfg]`-gated because `Path::components` is platform-specific:
+        // only there does `C:\\Users\\x` yield a `Prefix` followed by a `RootDir`, and the first
+        // fix for the doubled slash handled the POSIX root while turning that pair into
+        // `C:///Users/x`. The Windows CI job is what found it — the same day this function was
+        // "fixed" for absolute paths.
+        #[cfg(windows)]
+        {
+            assert_eq!(
+                AssetManager::normalize_path("C:\\Users\\dev\\assets\\thing.png"),
+                "C:/Users/dev/assets/thing.png"
+            );
+            let once = AssetManager::normalize_path("C:\\Users\\dev\\thing.png");
+            assert_eq!(AssetManager::normalize_path(&once), once);
+        }
     }
 
     #[test]

@@ -67,10 +67,12 @@
 // `Transform` lives in `gizmo-physics-core`, so anything touching transforms needs the
 // `physics` feature — that is why several purely-logical modules are gated on it.
 
-/// GPU asset loading — requires a renderer.
-#[cfg(feature = "render")]
+/// The path↔UUID bridge between an asset registry and the scene format. Defined in `gizmo-app`,
+/// the first layer that holds both halves; re-exported here so `gizmo::asset_identity` works.
 #[cfg(all(feature = "scene", feature = "render"))]
 pub use gizmo_app::asset_identity;
+/// GPU asset loading — requires a renderer.
+#[cfg(feature = "render")]
 pub mod asset_server;
 /// Ready-made component bundles. Light/camera/mesh bundles need `render`; the rigid-body
 /// bundle needs `physics` (see the per-item gates inside).
