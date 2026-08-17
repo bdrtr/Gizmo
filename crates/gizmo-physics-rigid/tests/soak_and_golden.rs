@@ -297,11 +297,12 @@ fn soak_tall_stack_n16_stays_upright() {
 // time Gauss-Seidel, which restores the tilt-resisting torque the sequential sweep lost — plus
 // support-order + adaptive iterations (sweeps scale with island depth) so support propagates
 // up the column. This raises the buckling critical height from ~5 to ≥16 and cuts residual
-// energy ~100× (20 m/s blow-ups → ~0.2 peak). REMAINING: extreme towers (N≥32, 32:1 aspect
-// ratio) still buckle eventually — the iterative solve leaves a weak creep and NO iteration/
-// reg/damping tuning robustly fixes N32 (chaotic across builds); a whole-chain DIRECT solve
-// is needed (soak_extreme_tower_n32_stays_bounded, #[ignore]d). See
-// docs/ENGINE.md §7 for the shipped fix + rationale.
+// energy ~100× (20 m/s blow-ups → ~0.2 peak). What this comment used to call REMAINING —
+// extreme towers (N≥32, 32:1 aspect ratio) buckling eventually, no tuning fixing it, a
+// whole-chain DIRECT solve being needed — is CLOSED as of 2026-08-17: N=48 is green and
+// un-ignored below. The buckling never needed a better solver; it needed the narrowphase to
+// stop handing the solver a ONE-point manifold for boxes at exact contact (`be46e01`).
+// See docs/ENGINE.md §7 for the bisect.
 //
 // GATE that DID hold: resting penetration sits > slop for tall stacks (N16 0.0074,
 // N32 0.0092 vs slop 0.005) — kept below as a mechanism cross-check.
@@ -445,8 +446,8 @@ fn stack_soak_report(results: &[StackSoakResult]) -> String {
 ///      grid_candidate_fixes; the config-sweep data showed this is the single most effective,
 ///      most principled knob — hertz/tol/iters are chaotic and don't compose).
 ///
-/// Realistic game stacks (≤~12) are far below this. (Extreme 48+ towers still buckle and need
-/// a friction-aware direct solve — see the #[ignore]d acceptance test below.)
+/// Realistic game stacks (≤~12) are far below this — and so, as of 2026-08-17, is the ceiling
+/// itself: N=48 stands too, and its acceptance test is no longer `#[ignore]`d (see below).
 #[test]
 fn soak_resting_stacks_stay_bounded() {
     let frames = 1500;
@@ -485,15 +486,26 @@ fn direct_chain_solve_keeps_small_stack_bounded() {
     );
 }
 
-/// Acceptance test for the REMAINING work: extreme aspect-ratio towers (N≥48). Full warm-start
-/// pushed robust stability to N≤32 (now locked in soak_resting_stacks_stay_bounded), but the
-/// residual marginal energy injection still compounds for VERY tall single columns — N=48
-/// blows up around frame ~200, and empirically NO parameter tuning (warm-start/hertz/tol/iters,
-/// alone or combined) robustly fixes N≥48; the blow-up frame is chaotic. A complete fix needs a
-/// friction-aware whole-chain DIRECT/global solve (the current `solve_island_normals` handles
-/// only normals, and is O(n³)). Un-ignore when that lands. See grid_candidate_fixes for data.
+/// The extreme aspect-ratio tower (N=48), which **stands** — and was an accepted non-goal until
+/// somebody re-ran it (2026-08-17).
+///
+/// This was written as an acceptance test for work that was never going to be done: N=48 blew up
+/// around frame ~200, no parameter tuning fixed it robustly, the blow-up frame was chaotic, and
+/// the conclusion recorded in `docs/ENGINE.md` was that a complete fix needed a friction-aware
+/// whole-chain direct solve. So it was left `#[ignore]`d, and "N≥48 extreme towers still buckle"
+/// became a documented non-goal that nothing ever re-tested.
+///
+/// It has been passing since `be46e01` (2026-08-06) gave the narrowphase depth test the tolerance
+/// its slab test already had. Boxes at exact contact had all four clip corners at `signed_depth ==
+/// 0.0`, every one was rejected, and the pair fell through to GJK/EPA and its **single** contact
+/// point — no tilt-resisting torque, which is precisely what a 48-high column has no margin for.
+/// The measured state today: peak |v| 0.379, resting penetration 0.0013 mm-scale, stable over
+/// 1500 frames, and unaffected by ground half-extent from 20 to 200 (the old N1 sensitivity, gone
+/// with the same commit). The whole-chain direct solve is not needed for this and is not planned.
+///
+/// It is un-ignored because it costs 0.4 s and it is the only thing watching the height at which
+/// the solver's margin actually runs out.
 #[test]
-#[ignore = "extreme tower (N48) still buckles eventually; needs a friction-aware whole-chain direct solve — un-ignore when it lands"]
 fn soak_extreme_tower_n48_stays_bounded() {
     let results: Vec<StackSoakResult> = [48usize]
         .into_iter()
@@ -503,7 +515,7 @@ fn soak_extreme_tower_n48_stays_bounded() {
     eprint!("{report}");
     assert!(
         results.iter().all(|r| r.blew_up_at.is_none()),
-        "extreme tower N48 still buckles:{report}"
+        "extreme tower N48 buckled — it has been stable since be46e01 (2026-08-06):{report}"
     );
 }
 
@@ -882,4 +894,98 @@ fn golden_box_settles_on_ground() {
     );
     // Dinlenmede (uyumuş ya da neredeyse durgun).
     assert!(v.length() < 0.1, "kutu dinlenmedi: |v|={}", v.length());
+}
+
+/// Regression gate for the collapse that used to be called **N2**: a 2×12×2 block of boxes whose
+/// columns sit **2 cm apart laterally** toppled, while exact contact and every other gap from
+/// 1 cm to 20 cm stood.
+///
+/// # Why this is a gate and not another measurement
+///
+/// It had a roadmap entry of its own for eleven days, described as "a single-cell spike, and the
+/// cause is open", with `warm_start_match_tolerance` (whose default is also 0.02) refuted as the
+/// suspect. It was closed on 2026-08-17 by bisecting rather than theorising, and by then it had
+/// been fixed for eleven days by two commits that never mentioned it:
+///
+/// * `947a830` (sleep whole contact islands) turned a broad band of collapses — gaps 0.005, 0.020,
+///   0.030, 0.050, 0.100 all fell on one ground size or the other — into that single cell.
+/// * `be46e01` (give the narrowphase depth test the tolerance the slab test already had) closed the
+///   cell. That is the same root as the recorded "seed": `clip_box_box` rejected corners at
+///   `signed_depth <= 0.0`, and two boxes at exact contact have all four corners at exactly 0.0, so
+///   clipping returned nothing and the pair fell through to GJK/EPA, which yields **one** contact
+///   point. A one-point manifold carries no tilt-resisting torque at all, which is what a
+///   marginally-stable stack needs.
+///
+/// The lesson the gate exists to enforce: the cell was only ever watched by an `#[ignore]`d
+/// measurement, so nothing noticed it had gone green, and nothing would have noticed it coming
+/// back. 2 cm is the cheapest cell to keep watched, so it is watched here.
+#[test]
+fn a_block_with_a_two_centimetre_lateral_gap_stays_standing() {
+    // Both ground sizes that used to fall, and the frames they fell on: 17 (half-extent 20) and
+    // 136 (200) after `947a830`, 70 and 1564 before it. 400 frames clears every one of them.
+    for ground_half in [20.0f32, 200.0] {
+        let mut world = PhysicsWorld::new();
+        let mut ground = RigidBody::new_static();
+        ground.wake_up();
+        world.add_body(
+            BodyHandle::from_id(0),
+            ground,
+            Transform::new(Vec3::new(0.0, -1.0, 0.0)),
+            Velocity::default(),
+            Collider::box_collider(Vec3::new(ground_half, 1.0, ground_half)),
+        );
+
+        let half = 0.5;
+        let pitch = 1.0 + 0.02; // 2·half + 2 cm: the columns start apart
+        let no_bounce = PhysicsMaterial {
+            restitution: 0.0,
+            ..Default::default()
+        };
+        let mut id = 1u32;
+        for y in 0..12 {
+            for x in 0..2 {
+                for z in 0..2 {
+                    let mut rb = RigidBody::new(1.0, true);
+                    rb.wake_up();
+                    let col = Collider::box_collider(Vec3::splat(half)).with_material(no_bounce);
+                    rb.update_inertia_from_collider(&col);
+                    world.add_body(
+                        BodyHandle::from_id(id),
+                        rb,
+                        Transform::new(Vec3::new(
+                            x as f32 * pitch,
+                            half + y as f32 * (2.0 * half),
+                            z as f32 * pitch,
+                        )),
+                        Velocity::default(),
+                        col,
+                    );
+                    id += 1;
+                }
+            }
+        }
+        let n = (id - 1) as usize;
+
+        let mut peak_speed = 0.0f32;
+        let mut blew_up_at = None;
+        for f in 0..400 {
+            world.step(1.0 / 60.0).ok();
+            let finite = (1..=n).all(|i| {
+                world.transforms[i].position.is_finite() && world.velocities[i].linear.is_finite()
+            });
+            assert!(finite, "ground {ground_half}: the block went non-finite at frame {f}");
+            let max_speed = (1..=n)
+                .map(|i| world.velocities[i].linear.length() + world.velocities[i].angular.length())
+                .fold(0.0f32, f32::max);
+            peak_speed = peak_speed.max(max_speed);
+            if blew_up_at.is_none() && max_speed >= 0.5 {
+                blew_up_at = Some(f);
+            }
+        }
+        assert!(
+            blew_up_at.is_none(),
+            "ground {ground_half}: the 2 cm-gap block collapsed at frame {} (peak |v| {peak_speed:.3})",
+            blew_up_at.unwrap()
+        );
+    }
 }

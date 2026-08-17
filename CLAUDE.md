@@ -182,7 +182,7 @@ The simulation state (Transform/Velocity/solver) runs entirely on **glam/f32**. 
 
 - Each change: **fix → write a regression test → build/test/clippy → done.** Verify behavior-changing physics fixes with `headless_stress_test` + focused scenarios; choose a soak-test horizon *past* the onset of instability (a too-short soak once shipped green while hiding an explosion at frame ~853).
 - On bug-hunt sweeps: fan out subagents, then **verify each finding by hand** — this codebase has a documented history of false positives (see ENGINE.md §7 for the list of already-refuted "bugs" — don't re-chase them).
-- Known accepted non-goals: narrowphase batch-SIMD (measured ~3% of frame, rejected); N≥48 extreme towers still buckle (`soak_extreme_tower_n48` is `#[ignore]`, game structures are ≤~12 so it doesn't matter).
+- Known accepted non-goals: narrowphase batch-SIMD (measured ~3% of frame, rejected). **The N≥48 tower non-goal was retired 2026-08-17** — `soak_extreme_tower_n48_stays_bounded` is un-ignored and green; it, N1's ground-size sensitivity and N2's 2 cm-gap collapse were all closed on 2026-08-06 by `be46e01` (the narrowphase depth test's missing tolerance → one-point manifolds at exact contact), and the docs simply hadn't re-run the measurement. See ENGINE.md §7.
 
 ## Docs & conventions
 

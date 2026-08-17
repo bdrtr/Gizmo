@@ -1618,23 +1618,33 @@ fn does_a_bigger_ground_degrade_the_contact() {
 #[ignore = "measurement, not a gate — long (~5 min)"]
 fn where_is_the_fast_collapse_band() {
     eprintln!("\n=== 2x12x2, default solver, collapse frame vs lateral gap (3000 frames) ===");
+    // `blew_up_at` alone cannot tell "the block stood" from "the harness measured nothing" — an
+    // empty scene reports max_speed 0.0 on every frame and prints the same dash. Peak |v| and peak
+    // lean are what make a dash readable: a real standing run settles with a visible peak speed
+    // and a small non-zero lean. (Added 2026-08-17, when every cell came back a dash.)
     eprintln!(
-        "{:>10}  {:>12}  {:>12}  {:>11}",
-        "gap (m)", "ground 20", "ground 200", "note"
+        "{:>10}  {:>26}  {:>26}  {:>17}",
+        "gap (m)", "ground 20  (frame/|v|/lean)", "ground 200 (frame/|v|/lean)", "note"
     );
     for gap in [0.0f32, 0.005, 0.01, 0.015, 0.02, 0.025, 0.03, 0.05, 0.1, 0.2] {
         let mut cells = Vec::new();
         for g in [20.0f32, 200.0] {
             let (mut world, bodies, origins) = scene_crate_pile_spaced(2, 12, 1.0 + gap);
+            assert_eq!(bodies.len(), 2 * 12 * 2, "the block must be built before it is measured");
             world.colliders[0] = Collider::box_collider(Vec3::new(g, 1.0, g));
             let r = run(&mut world, &bodies, &origins, 3000, 0.5);
-            cells.push(match r.blew_up_at {
-                Some(f) => f.to_string(),
-                None => "-".to_string(),
-            });
+            cells.push(format!(
+                "{:>8} {:>7.4} {:>7.4}",
+                match r.blew_up_at {
+                    Some(f) => f.to_string(),
+                    None => "-".to_string(),
+                },
+                r.peak_speed,
+                r.peak_lean
+            ));
         }
         eprintln!(
-            "{:>10.3}  {:>12}  {:>12}  {:>11}",
+            "{:>10.3}  {:>26}  {:>26}  {:>17}",
             gap,
             cells[0],
             cells[1],
@@ -3166,3 +3176,4 @@ fn observables_read_a_resting_box_correctly() {
         "no contacts observed and the box is not asleep — the reader is blind: {last:?}"
     );
 }
+

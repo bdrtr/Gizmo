@@ -131,15 +131,17 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
   the cap to rise at all — and that is the reason this engine has a deferred pipeline. Raising
   `MAX_LIGHTS` on its own means editing seven WGSL files plus `shader_contract.rs` and paying an
   unclustered per-fragment loop for every light, which is the trade clustering exists to avoid.
-- **Friction has no positional term.** The normal channel carries `pen0` into the bias in all
-  three sweeps (`solver/tgs.rs`), which is what depenetrates and what makes TGS work. The tangent
-  channel has no counterpart: all three friction solves are pure `acc_t − rel·t/k_t`, i.e.
-  velocity-level only. Friction resists tangential *velocity*, never tangential *displacement* —
-  the standing candidate for the tall-stack growth rate (§7).
-- **N2 — the 2 cm lateral-gap collapse.** A 20-unit ground with a 0.020 gap collapses; 0.010,
-  0.015, 0.025, 0.030, 0.040, 0.050 and 0.060 all stand for 3000 frames. A single-cell spike, and
-  the cause is open. `warm_start_match_tolerance` was the obvious suspect (its default is also
-  0.02) and is refuted: 0.002 / 0.02 / 0.05 collapse in the same gap on the same frame.
+- **Friction has no positional term** — a modelling gap, no longer a stability lead. The normal
+  channel carries `pen0` into the bias in all three sweeps (`solver/tgs.rs`), which is what
+  depenetrates and what makes TGS work. The tangent channel has no counterpart: all three friction
+  solves are pure `acc_t − rel·t/k_t`, i.e. velocity-level only, so friction resists tangential
+  *velocity* and never tangential *displacement*. It was listed here as the standing candidate for
+  the tall-stack growth rate — and that growth rate is now measured at exactly zero (§7, N1/N2
+  closed 2026-08-17: peak lean 0.0000 for N=16/32/48 at every ground half-extent from 20 to 200).
+  So the symptom it was going to fix does not exist. What remains is real but different: sustained
+  lateral load should produce no creep at all under static friction, and velocity-level friction
+  cannot promise that. **Trigger to do it:** a measured creep — a body that walks under a constant
+  tangential force it should hold against — not a stack that topples.
 - **The doc-language rule, Stage B remainder.** Stage A plus the facade went from 1286 Turkish
   `///` lines to 8, and seven of those eight are measurement error. The Stage B crates
   (renderer, editor, studio, scripting, app) have not been through it.
@@ -517,9 +519,11 @@ solver's effective lateral restoring stiffness was below the buckling-critical v
   (3000 frames, a single ground size) — see the narrowing below; this sentence used to be written
   unconditionally. NO determinism re-bless. Regression:
   `soak_resting_stacks_stay_bounded` (N∈{2,5,16,24,32}).
-- **OPEN:** the extreme N≥48 tower still buckles — it needs a friction-aware whole-chain
-  direct/global solver (`direct_chain_solve` opt-in flag + `solve_island_normals` solves normals
-  only, O(n³)). `soak_extreme_tower_n48` is #[ignore].
+- **CLOSED 2026-08-17 (was: "OPEN — the extreme N≥48 tower still buckles").** It stands, and has
+  since `be46e01` closed the one-point-manifold seed; `soak_extreme_tower_n48_stays_bounded` is
+  un-ignored and green. The friction-aware whole-chain direct solver this waited for
+  (`direct_chain_solve` + `solve_island_normals`, normals only, O(n³)) is not needed for it and is
+  not planned. See §7.
 
 **At exact contact the manifold collapsed to a SINGLE POINT — SOLVED** *(2026-08-06)*.
 The depth test in `narrowphase/contacts.rs::clip_box_box` had no tolerance (`signed_depth <= 0.0`).
@@ -954,7 +958,37 @@ sleep, the cost collapses, and that reads as a speed-up).
 dev profile — and they are machine-specific. Use them the only way they are valid: same machine,
 before and after.
 
-### The tall-stack sensitivity (N1/N2), and the five candidates that died proving what it is
+### The tall-stack sensitivity (N1/N2) — CLOSED 2026-08-17, and the five candidates that died proving what it is
+
+> **Both are gone, and had been for eleven days.** Re-running the measurements on 2026-08-17 found
+> N1's ground-size sensitivity and N2's 2 cm-gap collapse both absent, so the cause was bisected
+> instead of theorised further (a `git worktree`, not a checkout — the tree is shared):
+>
+> | commit | date | effect on the 2×12×2 block, gaps 0 → 0.2 m |
+> |---|---|---|
+> | `947a830~1` | 2026-08-06 | broad: gaps 0.005 (f1640), 0.020 (f70) fall on ground 20; 0.000, 0.005, 0.020, 0.030, 0.050, 0.100 fall on ground 200 |
+> | `947a830` sleep whole contact islands | 2026-08-06 | **one cell left**: gap 0.020 only, at frame 17 (ground 20) and 136 (ground 200) |
+> | `be46e01` give the depth test the tolerance the slab test already had | 2026-08-06 | **nothing falls**, at any gap, on either ground |
+> | today (HEAD) | 2026-08-17 | nothing falls; peak \|v\| 0.030–0.032, peak lean 0.0000–0.0001 |
+>
+> `be46e01` is the same root as the recorded *seed* (`43c51b0`): `clip_box_box` rejected corners at
+> `signed_depth <= 0.0`, two boxes at exact contact have all four corners at exactly `0.0`, so
+> Sutherland-Hodgman returned empty, the swapped-reference retry too, and the pair fell through to
+> GJK/EPA — **one** contact point. A one-point manifold carries no tilt-resisting torque, which is
+> exactly the margin a marginally-stable stack has none of. Nothing about warm start, ground-face
+> float detail or friction was ever the mechanism.
+>
+> Two things follow. **The N≥48 non-goal is retired**: `soak_extreme_tower_n48_stays_bounded` is
+> un-ignored and green (peak \|v\| 0.379, resting penetration 0.0013, 1500 frames, 0.4 s release /
+> 3.5 s debug), and the "friction-aware whole-chain direct solve" it was waiting for is not needed
+> and not planned. **And the ground-extent effect is gone with it**: N=16/32/48 at half-extents 20,
+> 140, 150 and 200 all report identical peak \|v\| to four decimals and peak lean 0.0000 — 140 and
+> 150 are the two sizes recorded below as falling.
+>
+> The 2 cm cell is now watched by a real gate, `a_block_with_a_two_centimetre_lateral_gap_stays_standing`,
+> verified to fail at `be46e01~1` ("collapsed at frame 17, peak |v| 0.648") and pass at HEAD. The
+> record below is kept as-written because the refuted candidates are still refuted — a future
+> instability must not re-chase them — but its open threads are answered above.
 
 **N1 — ground size changes tower stability.** Mechanism found: it is the **sleep path**. Forcing
 every body awake makes the whole effect vanish; ground size only moves *when* the stack sleeps.
@@ -1004,6 +1038,17 @@ Refuted on the way, and none of them worth re-testing:
   marker is a claim about the code: verify it against the code before planning around it. "Not
   done" about finished work is worse than no plan, because it is the one kind of error that never
   gets a bug report.
+- **An `#[ignore]`d measurement is not a watchman, and "verified against the code" is not the same
+  as re-run.** N1/N2 (§7) were the fifth and sixth stale items, and they cost the most so far: two
+  physics defects, an accepted non-goal (N≥48) and a queued solver feature (positional friction)
+  all rested on numbers that had been false for eleven days. The measurement that would have said
+  so existed and was `#[ignore]`d, so nothing ran it — and when the item was moved into this
+  document it was checked against the *code shape* (the parameters still exist, the scene still
+  builds), which is exactly the check that cannot notice a behaviour change. Two rules follow: an
+  open defect gets a **real gate at the exact failing cell**, not an ignored table, and re-running
+  the measurement is part of moving an item, not a follow-up. Bisecting the cause afterwards took
+  four `git worktree` builds — cheaper than the eleven days, and the only reason the fix can be
+  named instead of hoped for.
 - **Re-blessing a golden scene is a paragraph, not a number.** Record old → new for every value
   *in the file*, name the cause, and say which direction the sharpest instrument moved. The two
   joint scenes carry two such blocks and they are what makes a later reader able to tell a fix
