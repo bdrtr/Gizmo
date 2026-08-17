@@ -9,123 +9,203 @@ use std::sync::Mutex;
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum ScriptCommand {
-    // Transform
+    // ── Transform ────────────────────────────────────────────────────────────
+    /// Move an entity to a world position, in metres.
     SetPosition(u32, Vec3),
+    /// Set an entity's world rotation. Not normalised on the way through: a quaternion built by
+    /// hand in Lua arrives as it was written.
     SetRotation(u32, Quat),
+    /// Set an entity's scale. Collider geometry does not follow it — see `Collider`.
     SetScale(u32, Vec3),
 
-    // Velocity
+    // ── Velocity ─────────────────────────────────────────────────────────────
+    /// Set a body's linear velocity outright, in m/s. Overwrites what the solver produced this
+    /// frame rather than adding to it.
     SetVelocity(u32, Vec3),
+    /// Set a body's angular velocity outright, in rad/s.
     SetAngularVelocity(u32, Vec3),
 
-    // Physics
+    // ── Physics ──────────────────────────────────────────────────────────────
+    /// Apply a force (N) for this frame — an acceleration once divided by mass. A zero-mass body
+    /// is skipped rather than accelerated infinitely.
     ApplyForce(u32, Vec3),
+    /// Apply an impulse (N·s) — an instantaneous velocity change, mass accounted for.
     ApplyImpulse(u32, Vec3),
+    /// Give an entity a rigid body, and a `Velocity` with it: without one it could not move.
     AddRigidBody {
+        /// Entity to add the body to.
         id: u32,
+        /// Mass in kilograms.
         mass: f32,
+        /// Whether gravity acts on it.
         use_gravity: bool,
     },
+    /// Give an entity a box collider, sized by half-extents in metres.
     AddBoxCollider {
+        /// Entity to add the collider to.
         id: u32,
+        /// Half-extent on X. Clamped away from zero and non-finite values before use.
         hx: f32,
+        /// Half-extent on Y.
         hy: f32,
+        /// Half-extent on Z.
         hz: f32,
     },
+    /// Give an entity a sphere collider.
     AddSphereCollider {
+        /// Entity to add the collider to.
         id: u32,
+        /// Radius in metres, clamped away from zero and non-finite values.
         radius: f32,
     },
 
-    // Vehicle
+    // ── Vehicle ──────────────────────────────────────────────────────────────
+    /// Set a vehicle's engine force. Negative drives it backwards.
     SetVehicleEngineForce(u32, f32),
+    /// Set a vehicle's steering input, −1 (left) to 1 (right).
     SetVehicleSteering(u32, f32),
+    /// Set a vehicle's brake input, 0 to 1.
     SetVehicleBrake(u32, f32),
 
-    // Entity Lifecycle
+    // ── Entity lifecycle ─────────────────────────────────────────────────────
+    /// Spawn a named entity carrying a `Transform` at `position`, and nothing else.
     SpawnEntity {
+        /// The `EntityName` it is spawned with.
         name: String,
+        /// Where it appears, in world space.
         position: Vec3,
     },
+    /// Spawn an entity from a prefab.
     SpawnPrefab {
+        /// The `EntityName` the instance is given.
         name: String,
+        /// Which prefab to instantiate.
         prefab_type: String,
+        /// Where it appears, in world space.
         position: Vec3,
     },
+    /// Despawn an entity. A stale id is a no-op, not an error.
     DestroyEntity(u32),
 
-    // Audio
+    // ── Audio ────────────────────────────────────────────────────────────────
+    /// Play a sound by name, without a position (2D).
     PlaySound(String),
+    /// Play a sound positioned in the world, so the listener hears it spatially.
     PlaySound3D(String, Vec3),
+    /// Stop a sound by name.
     StopSound(String),
 
-    // Scene
+    // ── Scene ────────────────────────────────────────────────────────────────
+    /// Load a scene file. Handed back to the host: this crate does not own scene loading.
     LoadScene(String),
+    /// Save the current scene to a file. Also the host's to carry out.
     SaveScene(String),
 
-    // Diyalog Sistemi
+    // ── Dialogue ─────────────────────────────────────────────────────────────
+    /// Show a line of dialogue.
     ShowDialogue {
+        /// Who is speaking, for the name plate.
         speaker: String,
+        /// The line itself.
         text: String,
+        /// How long to leave it up, in seconds.
         duration: f32,
     },
+    /// Hide the dialogue box now, whatever time it had left.
     HideDialogue,
 
-    // Ara Sahne (Cutscene)
-    TriggerCutscene(String), // cutscene adı/id
+    // ── Cutscene ─────────────────────────────────────────────────────────────
+    /// Start the named cutscene.
+    TriggerCutscene(String),
+    /// End the running cutscene and hand control back.
     EndCutscene,
 
-    // Yarış Sistemi
+    // ── Race ─────────────────────────────────────────────────────────────────
+    /// Start the race — the timer runs and checkpoints begin counting.
     StartRace,
+    /// Register a checkpoint the racer has to pass through.
     AddCheckpoint {
+        /// Checkpoint number, which is also the order they must be taken in.
         id: u32,
+        /// Its centre, in world space.
         position: Vec3,
+        /// How close counts as passing through it, in metres.
         radius: f32,
     },
+    /// Mark a checkpoint as reached.
     ActivateCheckpoint(u32),
+    /// End the race.
     FinishRace {
+        /// Who won, for the results screen.
         winner_name: String,
     },
+    /// Reset the race: the timer, the checkpoints and the standings.
     ResetRace,
 
-    // Kamera
-    SetCameraTarget(u32), // hangi entity'yi takip etsin
+    // ── Camera ───────────────────────────────────────────────────────────────
+    /// Make the camera follow an entity.
+    SetCameraTarget(u32),
+    /// Set the camera's vertical field of view, in degrees.
     SetCameraFov(f32),
     /// The fighting camera, which follows both fighters at once
     SetFightCamera {
+        /// First fighter's entity.
         p1_id: u32,
+        /// Second fighter's entity.
         p2_id: u32,
-        height: f32,     // Kamera yüksekliği (Y offset)
-        distance: f32,   // Minimum uzaklık (Z offset)
+        /// How far above the pair the camera sits (Y offset, metres).
+        height: f32,
+        /// How far back it sits at minimum (Z offset, metres) — it pulls further out as the
+        /// fighters separate, never closer than this.
+        distance: f32,
     },
 
-// Component
+    // ── Components ───────────────────────────────────────────────────────────
+    /// Rename an entity, i.e. overwrite its `EntityName`.
     SetEntityName(u32, String),
-PlayAnimation {
+    /// Play an animation clip on an entity.
+    PlayAnimation {
+        /// Entity to animate.
         id: u32,
+        /// Clip name.
         name: String,
+        /// Blend time into the clip, in seconds.
         blend: f32,
+        /// Whether the clip loops.
         loop_anim: bool,
     },
+    /// Scale an entity's animation playback rate — 1.0 is normal speed.
     SetAnimationSpeed(u32, f32),
 
-
-    // AI
+    // ── AI ───────────────────────────────────────────────────────────────────
+    /// Give an entity a navigation agent, so it can be sent places.
     AddNavAgent(u32),
+    /// Send an agent to a world position.
     SetAiTarget(u32, Vec3),
+    /// Clear an agent's destination — the target *and* the path it had planned.
     ClearAiTarget(u32),
 
-    // Fighter
+    // ── Fighter ──────────────────────────────────────────────────────────────
+    /// Start a fighting-game move, with its frame data.
     SetFighterMove {
+        /// The fighter's entity.
         id: u32,
+        /// The move's name.
         name: String,
+        /// Startup frames before the hitbox is live.
         startup: u32,
+        /// Frames the hitbox is live for.
         active: u32,
+        /// Recovery frames after it, during which the fighter cannot act.
         recovery: u32,
+        /// Damage dealt on hit.
         damage: f32,
     },
+    /// Freeze a fighter for a number of frames on impact — the hit-stop that gives a blow its
+    /// weight.
     ApplyHitstop(u32, u32),
-    ApplyHitstun(u32, u32),
+    /// Lock a fighter out of acting for a number of frames after being hit.
+    ApplyHitstun(u32, u32)
 }
 
 

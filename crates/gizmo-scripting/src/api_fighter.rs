@@ -7,6 +7,7 @@ use gizmo_core::World;
 use mlua::prelude::*;
 use std::sync::Arc;
 
+/// Registers the fighter API functions with Lua.
 pub fn register_fighter_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Result<(), LuaError> {
     crate::api_table::register_protected(lua, "fighter", |fighter_table| {
 
@@ -104,6 +105,7 @@ pub fn register_fighter_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Resu
 }
 
 #[tracing::instrument(skip_all, name = "script_fighter_read")]
+/// Mirrors the fighters' read-only state — input buffers and lock flags — into Lua, every frame.
 pub fn update_fighter_read_api(lua: &Lua, world: &World) -> Result<(), LuaError> {
     // The real table, not the global: the global is a read-only proxy so a script cannot
     // rewrite the API (see `api_table`), and the engine's per-frame writes go behind it.

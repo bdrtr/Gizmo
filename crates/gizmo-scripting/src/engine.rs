@@ -111,8 +111,11 @@ impl std::fmt::Debug for ScriptEngine {
 /// table it manages itself, not an inspector row.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum ScriptValue {
+    /// A number. Lua has one numeric type, so this is what every `properties` number arrives as.
     Num(f64),
+    /// A flag, shown as a checkbox.
     Bool(bool),
+    /// A string, shown as a text field.
     Text(String),
 }
 
@@ -140,9 +143,15 @@ impl ScriptValue {
 /// The ECS component recording which Lua script is attached to an entity.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Script {
+    /// Path of the Lua file. It is also the identity a script is loaded under: two entities with
+    /// the same path share one environment.
     pub file_path: String,
+    /// Has `on_init` run for this entity yet?
+    ///
+    /// `#[serde(default, skip)]`, so it is never written to a scene and always starts false on
+    /// load — which is what makes `on_init` run again when a scene is opened.
     #[serde(default, skip)]
-    pub initialized: bool, // on_init çağrıldı mı?
+    pub initialized: bool,
     /// Per-entity overrides for the properties this script declares.
     ///
     /// Scripts are loaded once per PATH — two entities running the same file share one Lua
@@ -156,6 +165,8 @@ pub struct Script {
 }
 
 impl Script {
+    /// A script component pointing at `path`, not yet initialised and with no property
+    /// overrides.
     pub fn new(path: &str) -> Self {
         Self {
             file_path: path.to_string(),
@@ -169,25 +180,40 @@ impl Script {
 #[derive(Clone, Debug, Default)]
 #[non_exhaustive]
 pub struct ScriptContext {
+    /// The entity the script is running for.
     pub entity_id: u32,
+    /// This frame's delta time, in seconds.
     pub dt: f32,
+    /// The entity's world position.
     pub position: [f32; 3],
+    /// The entity's linear velocity.
     pub velocity: [f32; 3],
+    /// Is `W` held?
     pub key_w: bool,
+    /// Is `A` held?
     pub key_a: bool,
+    /// Is `S` held?
     pub key_s: bool,
+    /// Is `D` held?
     pub key_d: bool,
+    /// Is `Space` held?
     pub key_space: bool,
+    /// Is the up arrow held?
     pub key_up: bool,
+    /// Is the down arrow held?
     pub key_down: bool,
+    /// Is the left arrow held?
     pub key_left: bool,
+    /// Is the right arrow held?
     pub key_right: bool,
 }
 
 /// The changes coming back from Lua (kept for backwards compatibility).
 #[derive(Clone, Debug, Default)]
 pub struct ScriptResult {
+    /// A position the script returned, if it returned one — `None` means "leave it alone".
     pub new_position: Option<[f32; 3]>,
+    /// A velocity the script returned, if any.
     pub new_velocity: Option<[f32; 3]>,
 }
 
@@ -212,6 +238,10 @@ impl ScriptEngine {
     /// a machine running an editor and a game is not necessarily this one.
     pub const DEFAULT_MEMORY_LIMIT: usize = 64 * 1024 * 1024;
 
+    /// Starts a Lua VM with the engine's API registered, the dangerous globals removed and the
+    /// instruction and memory budgets in place.
+    ///
+    /// Fails only if the VM itself cannot be created; a script is not loaded here.
     pub fn new() -> Result<Self, LuaError> {
         let lua = Lua::new();
         let command_queue = Arc::new(CommandQueue::new());
@@ -413,6 +443,11 @@ impl ScriptEngine {
     }
 
     #[tracing::instrument(skip_all, name = "script_load", fields(path = %path))]
+    /// Loads (or reloads) the Lua file at `path` into its own environment.
+    ///
+    /// One environment per path: two entities running the same file share it, which is why
+    /// per-entity values live in [`Script::properties`] rather than in globals. A read or a
+    /// syntax error comes back as a message rather than a panic.
     pub fn load_script(&mut self, path: &str) -> Result<(), String> {
         let content = std::fs::read_to_string(path).map_err(|e| {
             error!(path, error = %e, "[Scripting] Script dosyası okunamadı");
