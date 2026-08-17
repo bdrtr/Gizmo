@@ -39,6 +39,7 @@ pub fn update_character(
             b.half_extents.x.min(b.half_extents.z),
         ),
         ColliderShape::Sphere(s) => (s.radius * 2.0, s.radius),
+        ColliderShape::Cylinder(c) => (c.half_height * 2.0, c.radius),
         _ => (2.0, 0.5), // fallback
     };
 

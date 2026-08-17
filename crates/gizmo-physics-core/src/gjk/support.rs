@@ -14,6 +14,7 @@ impl Gjk {
             ColliderShape::Sphere(s) => Self::sphere_support(s, local_dir),
             ColliderShape::Box(b) => Self::box_support(b, local_dir),
             ColliderShape::Capsule(c) => Self::capsule_support(c, local_dir),
+            ColliderShape::Cylinder(c) => Self::cylinder_support(c, local_dir),
             ColliderShape::Plane(_) => {
                 // Contract violation: planes are handled by dedicated analytic paths and must
                 // never reach GJK support. In debug this aborts; in release it would silently
@@ -138,6 +139,31 @@ impl Gjk {
         )
     }
 
+    /// Support point of a solid cylinder about local +Y.
+    ///
+    /// The two halves are independent, which is the whole difference from a capsule: the axial
+    /// coordinate jumps to whichever flat end `dir` points at, and the radial part goes to the
+    /// rim in the direction's own XZ plane. Their combination is the **rim**, and that is what
+    /// makes a cylinder stand on its end where a capsule of the same size rocks: GJK can return
+    /// any point of the circular edge, so the contact manifold spreads around it.
+    ///
+    /// A direction with no XZ component (straight up or down) leaves the radial part at zero —
+    /// the centre of the flat end. Any point of that face is an equally valid support point;
+    /// picking the centre is the one choice that is continuous as the direction tilts.
+    fn cylinder_support(cylinder: &CylinderShape, dir: Vec3) -> Vec3 {
+        let y = if dir.y >= 0.0 {
+            cylinder.half_height
+        } else {
+            -cylinder.half_height
+        };
+        let radial = Vec3::new(dir.x, 0.0, dir.z);
+        let rim = radial
+            .try_normalize()
+            .map(|n| n * cylinder.radius)
+            .unwrap_or(Vec3::ZERO);
+        Vec3::new(rim.x, y, rim.z)
+    }
+
     fn capsule_support(capsule: &CapsuleShape, dir: Vec3) -> Vec3 {
         let dir_normalized = dir.try_normalize().unwrap_or(Vec3::X);
         let sphere_center = if dir_normalized.y > 0.0 {
@@ -190,6 +216,66 @@ mod tests {
         let rot = Quat::from_rotation_x(0.9); // must not matter for a sphere
         let s = Gjk::support_point(&shape, pos, rot, Vec3::Z);
         assert!((s - (pos + Vec3::new(0.0, 0.0, 2.0))).length() < 1e-5, "{s:?}");
+    }
+
+    #[test]
+    fn cylinder_support_reaches_the_rim_and_the_flat_ends() {
+        let shape = ColliderShape::Cylinder(CylinderShape {
+            radius: 0.5,
+            half_height: 2.0,
+        });
+        // Straight up → the centre of the top face, not a point 0.5 above it: a cylinder has no
+        // cap. (A capsule of the same numbers answers (0, 2.5, 0) here.)
+        let up = Gjk::support_point(&shape, Vec3::ZERO, Quat::IDENTITY, Vec3::Y);
+        assert!((up - Vec3::new(0.0, 2.0, 0.0)).length() < 1e-5, "got {up:?}");
+
+        // Sideways → the rim: full radius out, and on one of the two ends.
+        let side = Gjk::support_point(&shape, Vec3::ZERO, Quat::IDENTITY, Vec3::X);
+        assert!((side.x - 0.5).abs() < 1e-5, "radius out, got {side:?}");
+        assert!((side.y.abs() - 2.0).abs() < 1e-5, "and on an end, got {side:?}");
+
+        // Diagonally → the rim on the end the direction points at.
+        let diag = Gjk::support_point(
+            &shape,
+            Vec3::ZERO,
+            Quat::IDENTITY,
+            Vec3::new(1.0, -1.0, 0.0).normalize(),
+        );
+        assert!(
+            (diag - Vec3::new(0.5, -2.0, 0.0)).length() < 1e-5,
+            "got {diag:?}"
+        );
+    }
+
+    /// The support point defines the shape the narrowphase actually sees, so this is where a
+    /// cylinder that is secretly a capsule (or a box) would show up.
+    #[test]
+    fn a_cylinder_is_not_its_capsule_or_its_box() {
+        let cylinder = ColliderShape::Cylinder(CylinderShape {
+            radius: 0.5,
+            half_height: 2.0,
+        });
+        let capsule = ColliderShape::Capsule(CapsuleShape {
+            radius: 0.5,
+            half_height: 2.0,
+        });
+        let up = Vec3::Y;
+        let cyl_up = Gjk::support_point(&cylinder, Vec3::ZERO, Quat::IDENTITY, up);
+        let cap_up = Gjk::support_point(&capsule, Vec3::ZERO, Quat::IDENTITY, up);
+        assert!(
+            cap_up.y - cyl_up.y > 0.4,
+            "the capsule reaches a radius further up: {cap_up:?} vs {cyl_up:?}"
+        );
+
+        // And it is round, not square: 45° in the XZ plane stays on the circle.
+        let diag = Gjk::support_point(
+            &cylinder,
+            Vec3::ZERO,
+            Quat::IDENTITY,
+            Vec3::new(1.0, 0.0, 1.0).normalize(),
+        );
+        let radial = Vec3::new(diag.x, 0.0, diag.z).length();
+        assert!((radial - 0.5).abs() < 1e-5, "on the circle, got {radial}");
     }
 
     #[test]

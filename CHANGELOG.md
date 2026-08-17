@@ -18,6 +18,27 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`ColliderShape::Cylinder`.** Flat circular ends, axis along local +Y, built with
+  `Collider::cylinder(radius, half_height)` — where `half_height` is half the *whole* solid,
+  unlike `Collider::capsule`'s, which excludes the caps. The shape a wheel, a barrel or a column
+  needs: a capsule of the same numbers rests a radius higher and rocks on its rounded end, and a
+  box squares off a silhouette that is round.
+
+  It is convex, so it goes through the existing GJK/EPA route; what is new is a support function
+  whose radial and axial parts are chosen independently, which is what puts support points on the
+  **rim** and lets a resting contact spread around the edge instead of balancing on a point.
+  Everything a shape feeds got its own arm rather than a fallback: an analytic inertia tensor
+  (`I_y = ½·m·r²`, `I_x = I_z = m(3r² + h²)/12`), an exact AABB, `πr²h` for volume, a ray test
+  against the wall and both caps, cloth collision, the character controller's size derivation, an
+  editable inspector row and a debug wireframe.
+
+  `gizmo-studio`'s cylinder primitive now spawns one. It used to spawn `Collider::convex_hull` of
+  the mesh's 24 ring points — a prism standing in for a circle, with an AABB-derived inertia.
+
+  Not covered: `Heightfield` (concave, so it needs per-cell dispatch like `TriMesh` — it is what
+  forces open-world terrain through a triangle mesh today) and `Cone`. Both were listed beside
+  the cylinder in the 2026-08 audit.
+
 - **Gamepads.** `Input` now carries connected controllers alongside the keyboard and mouse:
   `input.gamepad()` for the pad in use, `input.gamepads()` for local multiplayer, with named
   `GamepadButton`/`GamepadAxis` enums rather than opaque codes. `ActionMap` gained

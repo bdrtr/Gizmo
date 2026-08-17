@@ -276,6 +276,70 @@ impl Raycast {
         }
     }
 
+    /// Ray against a solid cylinder about local +Y, centred on `center`.
+    ///
+    /// Three surfaces, tested together and resolved by nearest hit: the side wall (a quadratic
+    /// in the XZ plane, accepted only where the hit's `y` is inside the cylinder) and the two
+    /// flat caps (a plane hit accepted only inside the disc). Doing it as one nearest-of-three
+    /// is what keeps the normal right at the rim, where the side and a cap meet.
+    ///
+    /// Returns `(distance, world-space normal)` of the first surface at or after the ray's
+    /// origin. A ray that starts *inside* reports the exit surface — the same behaviour as the
+    /// other primitives here, and it means a hit with `t == 0` is not special-cased away.
+    /// A degenerate direction along the axis with the origin outside the disc misses, rather
+    /// than dividing by zero.
+    pub fn ray_cylinder(
+        ray: &Ray,
+        center: Vec3,
+        rotation: gizmo_math::Quat,
+        radius: f32,
+        half_height: f32,
+    ) -> Option<(f32, Vec3)> {
+        let inv_rot = rotation.inverse();
+        let o = inv_rot * (ray.origin - center);
+        let d = inv_rot * ray.direction;
+
+        // Nearest accepted hit so far, in local space.
+        let mut best: Option<(f32, Vec3)> = None;
+        let mut consider = |t: f32, normal: Vec3| {
+            if t >= 0.0 && best.is_none_or(|(bt, _)| t < bt) {
+                best = Some((t, normal));
+            }
+        };
+
+        // Side wall: |o.xz + t·d.xz|² = r², accepted while the hit stays between the caps.
+        let a = d.x * d.x + d.z * d.z;
+        if a > 1e-12 {
+            let b = 2.0 * (o.x * d.x + o.z * d.z);
+            let c = o.x * o.x + o.z * o.z - radius * radius;
+            let disc = b * b - 4.0 * a * c;
+            if disc >= 0.0 {
+                let sqrt_disc = disc.sqrt();
+                for t in [(-b - sqrt_disc) / (2.0 * a), (-b + sqrt_disc) / (2.0 * a)] {
+                    let y = o.y + t * d.y;
+                    if y.abs() <= half_height {
+                        let hit = o + d * t;
+                        let n = Vec3::new(hit.x, 0.0, hit.z);
+                        consider(t, n.try_normalize().unwrap_or(Vec3::X));
+                    }
+                }
+            }
+        }
+
+        // Caps: the two planes y = ±half_height, accepted inside the disc.
+        if d.y.abs() > 1e-12 {
+            for sign in [1.0_f32, -1.0] {
+                let t = (sign * half_height - o.y) / d.y;
+                let hit = o + d * t;
+                if hit.x * hit.x + hit.z * hit.z <= radius * radius {
+                    consider(t, Vec3::new(0.0, sign, 0.0));
+                }
+            }
+        }
+
+        best.map(|(t, n)| (t, rotation * n))
+    }
+
     /// Test ray against capsule
     ///
     /// The capsule runs along its **own local Y axis**, and `half_height` is half of
@@ -403,6 +467,13 @@ impl Raycast {
                 Self::ray_box(ray, transform.position, transform.rotation, b.half_extents)
             }
             ColliderShape::Capsule(c) => Self::ray_capsule(
+                ray,
+                transform.position,
+                transform.rotation,
+                c.radius,
+                c.half_height,
+            ),
+            ColliderShape::Cylinder(c) => Self::ray_cylinder(
                 ray,
                 transform.position,
                 transform.rotation,
@@ -624,6 +695,70 @@ impl Raycast {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::CylinderShape;
+    use gizmo_math::Quat;
+
+    /// The three surfaces of a cylinder, one ray each, plus the miss that a naive
+    /// infinite-cylinder test would report as a hit.
+    #[test]
+    fn a_ray_finds_the_wall_the_cap_and_nothing_past_the_end() {
+        let shape = ColliderShape::Cylinder(CylinderShape {
+            radius: 0.5,
+            half_height: 1.0,
+        });
+        let at_origin = Transform::new(Vec3::ZERO);
+
+        // Side wall, straight in along -X from 3 m out: 2.5 m to the surface, normal +X.
+        let side = Ray::new(Vec3::new(3.0, 0.0, 0.0), Vec3::new(-1.0, 0.0, 0.0));
+        let (t, n) = Raycast::ray_shape(&side, &shape, &at_origin).expect("hits the wall");
+        assert!((t - 2.5).abs() < 1e-4, "distance {t}");
+        assert!((n - Vec3::X).length() < 1e-4, "normal {n:?}");
+
+        // Top cap, straight down the axis: 2 m, normal +Y. A capsule would answer 1.5 m.
+        let cap = Ray::new(Vec3::new(0.0, 3.0, 0.0), Vec3::new(0.0, -1.0, 0.0));
+        let (t, n) = Raycast::ray_shape(&cap, &shape, &at_origin).expect("hits the cap");
+        assert!((t - 2.0).abs() < 1e-4, "distance {t}");
+        assert!((n - Vec3::Y).length() < 1e-4, "normal {n:?}");
+
+        // Level with the wall but past the end: the infinite cylinder is struck, the solid is
+        // not. Getting this wrong is a raycast that stops at a wheel's ghost.
+        let past_end = Ray::new(Vec3::new(3.0, 2.0, 0.0), Vec3::new(-1.0, 0.0, 0.0));
+        assert!(
+            Raycast::ray_shape(&past_end, &shape, &at_origin).is_none(),
+            "a ray level with nothing must miss"
+        );
+
+        // Parallel to the axis but outside the disc: also a miss, and not a divide by zero.
+        let beside = Ray::new(Vec3::new(2.0, 3.0, 0.0), Vec3::new(0.0, -1.0, 0.0));
+        assert!(Raycast::ray_shape(&beside, &shape, &at_origin).is_none());
+    }
+
+    /// The shape turns with the body, so the ray has to be tested in its frame — a cylinder laid
+    /// on its side is the wheel case, and the one where a forgotten rotation would still "work"
+    /// against an upright test.
+    #[test]
+    fn a_ray_respects_the_cylinders_rotation_and_position() {
+        let shape = ColliderShape::Cylinder(CylinderShape {
+            radius: 0.5,
+            half_height: 1.0,
+        });
+        let mut lying = Transform::new(Vec3::new(0.0, 2.0, 0.0));
+        lying.rotation = Quat::from_rotation_z(std::f32::consts::FRAC_PI_2);
+
+        // From above: the axis now points along X, so the top of the shape is a wall at
+        // y = 2 + radius.
+        let down = Ray::new(Vec3::new(0.0, 5.0, 0.0), Vec3::new(0.0, -1.0, 0.0));
+        let (t, n) = Raycast::ray_shape(&down, &shape, &lying).expect("hits the wall");
+        assert!((t - 2.5).abs() < 1e-4, "distance {t}");
+        assert!((n - Vec3::Y).length() < 1e-4, "normal {n:?}");
+
+        // Along the new axis: now it is the flat end that is struck, at x = half_height.
+        let along = Ray::new(Vec3::new(5.0, 2.0, 0.0), Vec3::new(-1.0, 0.0, 0.0));
+        let (t, n) = Raycast::ray_shape(&along, &shape, &lying).expect("hits the end");
+        assert!((t - 4.0).abs() < 1e-4, "distance {t}");
+        assert!((n - Vec3::X).length() < 1e-4, "normal {n:?}");
+    }
+
 
     #[test]
     fn test_ray_sphere() {

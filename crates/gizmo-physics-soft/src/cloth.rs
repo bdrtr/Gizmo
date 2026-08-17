@@ -92,6 +92,37 @@ fn project_point_out(
                 None
             }
         }
+        ColliderShape::Cylinder(c) => {
+            // The cylinder's axis is local Y. Unlike the capsule, the ends are flat, so the
+            // nearest surface point is not one sphere test: a node beside the wall is pushed
+            // radially, a node past an end is pushed along the axis, and the choice is
+            // whichever of the two exits is shorter — which is what puts a node near the rim
+            // out through the rim rather than through whichever surface was tested first.
+            let local = trans.rotation.inverse() * (pos - trans.position);
+            let radial = Vec3::new(local.x, 0.0, local.z);
+            let r = radial.length();
+            let min_r = c.radius + thickness;
+            let min_y = c.half_height + thickness;
+            if r >= min_r || local.y.abs() >= min_y {
+                return None;
+            }
+            let out_radial = min_r - r;
+            let out_axial = min_y - local.y.abs();
+            let (new_local, n_local) = if out_radial <= out_axial {
+                let n = if r > 1e-6 { radial / r } else { Vec3::X };
+                (Vec3::new(n.x * min_r, local.y, n.z * min_r), n)
+            } else {
+                let s = if local.y >= 0.0 { 1.0 } else { -1.0 };
+                (
+                    Vec3::new(local.x, s * min_y, local.z),
+                    Vec3::new(0.0, s, 0.0),
+                )
+            };
+            Some((
+                trans.position + trans.rotation * new_local,
+                trans.rotation * n_local,
+            ))
+        }
         _ => None, // plane / trimesh / convex-hull / compound: not yet handled
     }
 }
@@ -103,6 +134,7 @@ fn collider_bound(shape: &ColliderShape) -> Option<f32> {
         ColliderShape::Sphere(s) => Some(s.radius),
         ColliderShape::Box(b) => Some(b.half_extents.length()),
         ColliderShape::Capsule(c) => Some(c.half_height + c.radius),
+        ColliderShape::Cylinder(c) => Some(c.radius.hypot(c.half_height)),
         _ => None,
     }
 }

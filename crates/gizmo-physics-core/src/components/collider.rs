@@ -152,6 +152,31 @@ impl Collider {
                 let extent = half_height_vec.abs() + radius_vec;
                 gizmo_math::Aabb::from_center_half_extents(position, extent)
             }
+            ColliderShape::Cylinder(c) => {
+                // Exact analytically, and conservative numerically: when the axis lands on a
+                // world axis, `sqrt(1 - a_i²)` sits on a square-root singularity, so a
+                // quaternion's last bits of error (ε ≈ 6e-8) come out as ≈ r·sqrt(2ε) — measured
+                // at 1.2e-4 m for a 0.35 m wheel laid on its side. It always errs LARGER, which
+                // is the direction a broadphase bound is allowed to err in.
+                //
+                // Exact, not the capsule's bound with a different radius. A capsule's caps are
+                // spheres, so its extent on every axis grows by the full radius; a cylinder's
+                // are discs, and a disc perpendicular to axis `a` only reaches
+                // `r·sqrt(1 - a_i²)` along world axis `i` — zero along the axis itself. Using
+                // the capsule formula here would inflate an upright cylinder's box by its
+                // radius top and bottom, which is a broadphase false positive on every body
+                // standing on top of another.
+                let axis = rotation * Vec3::Y;
+                let extent = Vec3::new(
+                    (c.half_height * axis.x).abs()
+                        + c.radius * (1.0 - axis.x * axis.x).max(0.0).sqrt(),
+                    (c.half_height * axis.y).abs()
+                        + c.radius * (1.0 - axis.y * axis.y).max(0.0).sqrt(),
+                    (c.half_height * axis.z).abs()
+                        + c.radius * (1.0 - axis.z * axis.z).max(0.0).sqrt(),
+                );
+                gizmo_math::Aabb::from_center_half_extents(position, extent)
+            }
             ColliderShape::Plane(_) => {
                 // Infinite plane - use a very large AABB
                 let large = 10000.0;
@@ -297,6 +322,25 @@ impl Collider {
     pub fn capsule(radius: f32, half_height: f32) -> Self {
         Self {
             shape: ColliderShape::Capsule(CapsuleShape {
+                radius,
+                half_height,
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// A solid cylinder along the collider's local **+Y** axis, centred on the local origin.
+    ///
+    /// `half_height` is half the *whole* cylinder, so the total height is `2 * half_height`
+    /// metres — unlike [`Collider::capsule`], where the same argument excludes the caps. A
+    /// wheel of diameter 0.7 m and width 0.25 m is `Collider::cylinder(0.35, 0.125)` laid on
+    /// its side by rotating the body.
+    ///
+    /// The +Y convention is baked in, as it is for the capsule: to lay a cylinder down, rotate
+    /// the body rather than looking for an axis parameter.
+    pub fn cylinder(radius: f32, half_height: f32) -> Self {
+        Self {
+            shape: ColliderShape::Cylinder(CylinderShape {
                 radius,
                 half_height,
             }),
@@ -456,6 +500,9 @@ impl Collider {
                 let sphere_vol = (4.0 / 3.0) * std::f32::consts::PI * c.radius.powi(3);
                 cylinder_vol + sphere_vol
             }
+            ColliderShape::Cylinder(c) => {
+                std::f32::consts::PI * c.radius.powi(2) * (c.half_height * 2.0)
+            }
             ColliderShape::Plane(_) => f32::MAX, // Safe value instead of INFINITY for inertia calculations
             ColliderShape::TriMesh(_)
             | ColliderShape::ConvexHull(_)
@@ -488,6 +535,7 @@ impl Collider {
             ColliderShape::Sphere(s) => s.radius,
             ColliderShape::Box(b) => b.half_extents.y,
             ColliderShape::Capsule(c) => c.half_height + c.radius,
+            ColliderShape::Cylinder(c) => c.half_height,
             ColliderShape::Plane(_) => 0.0,
             ColliderShape::TriMesh(_)
             | ColliderShape::ConvexHull(_)
@@ -503,7 +551,7 @@ impl Collider {
 ///
 /// Not every variant travels the same road through the narrowphase. Sphere–sphere,
 /// sphere–plane, box–plane and box–box have dedicated analytic paths; every other pair —
-/// `Capsule` and `ConvexHull` included — goes through the generic support-point and
+/// `Capsule`, `Cylinder` and `ConvexHull` included — goes through the generic support-point and
 /// GJK/EPA routes (the module table on [`crate::narrowphase`] lists them). `TriMesh` is
 /// dispatched per triangle, because the GJK fallback would collide against its convex hull
 /// instead of the mesh. `Plane` and `Compound` are handled entirely by dedicated paths, and
@@ -528,6 +576,11 @@ pub enum ColliderShape {
     Box(BoxShape),
     /// A capsule whose axis is the local +Y direction; rotate the body to lay it down.
     Capsule(CapsuleShape),
+    /// A solid cylinder about the local +Y axis — flat circular ends, unlike [`Capsule`]'s
+    /// rounded ones. See [`Collider::cylinder`].
+    ///
+    /// [`Capsule`]: ColliderShape::Capsule
+    Cylinder(CylinderShape),
     /// An infinite half-space — see [`PlaneShape`] for the frame its two fields live in.
     /// Its AABB is a large finite box, not an unbounded one.
     Plane(PlaneShape),
@@ -579,6 +632,31 @@ pub struct CapsuleShape {
     /// the cylindrical section, caps excluded; see [`Collider::capsule`] for the total
     /// length. Not validated at construction or on deserialize.
     pub half_height: f32, // Height of cylindrical part (not including hemispheres)
+}
+
+/// A solid cylinder about the collider's local **+Y** axis, centred on the local origin.
+/// See [`Collider::cylinder`].
+///
+/// The difference from [`CapsuleShape`] is the ends: flat discs rather than hemispheres. That
+/// is what makes it the shape for a wheel, a barrel or a column — a capsule of the same
+/// dimensions rocks on its rounded end where a cylinder stands, and rolls where a cylinder
+/// pivots on its rim.
+///
+/// It is convex, so it goes through the generic GJK/EPA route rather than an analytic one.
+/// Worth knowing about the rim: GJK finds the support point of the *exact* cylinder (the
+/// circular edge included), so a cylinder resting on its flat end produces contacts spread
+/// around that edge rather than a single point — which is what holds it upright.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct CylinderShape {
+    /// Radius of the circular cross-section, in metres. Not validated at construction or on
+    /// deserialize: zero and negative values are stored as given and yield a degenerate shape
+    /// rather than an error, exactly as the other primitives do.
+    pub radius: f32,
+    /// Half the cylinder's length along local Y, in metres — it spans `-half_height ..=
+    /// +half_height`, so its total height is twice this. Note that this is *not* the same
+    /// convention as [`CapsuleShape::half_height`], which excludes the caps: a cylinder's
+    /// half-height is its whole half-height.
+    pub half_height: f32,
 }
 
 /// An infinite half-space: everything with `dot(x, normal) < distance` is inside.
@@ -750,6 +828,91 @@ gizmo_core::impl_component!(Collider);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The cylinder's bound is the shape's, not the capsule's with a smaller radius. An upright
+    /// cylinder reaches exactly `half_height` up and down — a capsule of the same numbers
+    /// reaches `half_height + radius`, and using that formula here would inflate every wheel's
+    /// broadphase box by its own radius at both ends.
+    #[test]
+    fn an_upright_cylinders_bound_does_not_include_a_cap() {
+        let c = Collider::cylinder(0.35, 0.125);
+        let aabb = c.compute_aabb(Vec3::ZERO, Quat::IDENTITY);
+        assert!((aabb.max.y - 0.125).abs() < 1e-6, "top at half_height, got {}", aabb.max.y);
+        assert!((aabb.min.y + 0.125).abs() < 1e-6, "bottom at -half_height");
+        assert!((aabb.max.x - 0.35).abs() < 1e-6, "radius across, got {}", aabb.max.x);
+    }
+
+    /// Laid on its side the roles swap exactly — that is the wheel orientation, so it is the one
+    /// that has to be right.
+    #[test]
+    fn a_cylinder_on_its_side_swaps_its_extents() {
+        let c = Collider::cylinder(0.35, 0.125);
+        let lying = Quat::from_rotation_z(std::f32::consts::FRAC_PI_2);
+        let aabb = c.compute_aabb(Vec3::ZERO, lying);
+        // 1e-3, not 1e-6: with the axis on a world axis the radial term is a square root at
+        // zero, so the quaternion's rounding shows up amplified — always outwards. See the
+        // note on `compute_aabb`.
+        assert!((aabb.max.x - 0.125).abs() < 1e-3, "half_height along X, got {}", aabb.max.x);
+        assert!((aabb.max.y - 0.35).abs() < 1e-3, "radius along Y, got {}", aabb.max.y);
+        assert!((aabb.max.z - 0.35).abs() < 1e-3, "radius along Z, got {}", aabb.max.z);
+        assert!(aabb.max.x >= 0.125, "and it errs outwards, never inwards");
+    }
+
+    /// The property that matters at every other angle, where there is no obvious closed form to
+    /// compare against: the box must CONTAIN the shape. Checked against the same support
+    /// function the narrowphase uses, over a spread of directions and orientations — a bound
+    /// that is too small loses contacts, which is the failure that does not announce itself.
+    #[test]
+    fn a_rotated_cylinders_bound_contains_every_support_point() {
+        use crate::gjk::Gjk;
+        let collider = Collider::cylinder(0.4, 0.9);
+        let position = Vec3::new(1.0, -2.0, 0.5);
+        for (i, rotation) in [
+            Quat::IDENTITY,
+            Quat::from_rotation_x(0.7),
+            Quat::from_rotation_z(std::f32::consts::FRAC_PI_4),
+            Quat::from_euler(gizmo_math::EulerRot::XYZ, 0.3, 1.1, -0.8),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let aabb = collider.compute_aabb(position, rotation);
+            for dir in [
+                Vec3::X, -Vec3::X, Vec3::Y, -Vec3::Y, Vec3::Z, -Vec3::Z,
+                Vec3::new(1.0, 1.0, 1.0).normalize(),
+                Vec3::new(-1.0, 0.4, 0.7).normalize(),
+                Vec3::new(0.2, -1.0, 0.3).normalize(),
+            ] {
+                let support = Gjk::support_point(&collider.shape, position, rotation, dir);
+                assert!(
+                    support.x >= aabb.min.x - 1e-4
+                        && support.x <= aabb.max.x + 1e-4
+                        && support.y >= aabb.min.y - 1e-4
+                        && support.y <= aabb.max.y + 1e-4
+                        && support.z >= aabb.min.z - 1e-4
+                        && support.z <= aabb.max.z + 1e-4,
+                    "orientation {i}: support {support:?} for {dir:?} is outside {:?}..{:?}",
+                    aabb.min,
+                    aabb.max
+                );
+            }
+        }
+    }
+
+    /// πr²h, and specifically NOT the capsule's volume — the caps are the difference and mass
+    /// is derived from this.
+    #[test]
+    fn a_cylinders_volume_is_the_analytic_one() {
+        let c = Collider::cylinder(2.0, 1.5);
+        let expected = std::f32::consts::PI * 4.0 * 3.0;
+        assert!((c.volume() - expected).abs() < 1e-3, "got {}", c.volume());
+        assert!(
+            c.volume() < Collider::capsule(2.0, 1.5).volume(),
+            "a capsule of the same numbers is the cylinder plus a sphere"
+        );
+        assert!((c.extents_y() - 1.5).abs() < 1e-6);
+    }
+
 
     const EPS: f32 = 1e-4;
 

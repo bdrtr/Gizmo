@@ -26,7 +26,7 @@ pub mod fighter;
 /// Combat volumes ([`Hitbox`]/[`Hurtbox`]) carried in addition to the physics [`Collider`].
 pub mod hitbox;
 
-pub use collider::{BoxShape, CapsuleShape, Collider, ColliderShape, ConvexHullShape, PlaneShape, SphereShape, TriMeshShape};
+pub use collider::{BoxShape, CapsuleShape, Collider, ColliderShape, ConvexHullShape, CylinderShape, PlaneShape, SphereShape, TriMeshShape};
 pub use collision_layer::CollisionLayer;
 pub use physics_material::{CombineMode, PhysicsMaterial};
 pub use transform::{GlobalTransform, Transform};

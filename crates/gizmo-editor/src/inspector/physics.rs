@@ -224,6 +224,15 @@ pub fn draw_collider_section(
                                 ui.add(egui::DragValue::new(&mut capsule.half_height).speed(0.1));
                             });
                         }
+                        gizmo_physics_core::ColliderShape::Cylinder(cylinder) => {
+                            ui.label("Şekil: Silindir");
+                            ui.horizontal(|ui| {
+                                ui.label("Yarıçap:");
+                                ui.add(egui::DragValue::new(&mut cylinder.radius).speed(0.1));
+                                ui.label("Y. Yükseklik:");
+                                ui.add(egui::DragValue::new(&mut cylinder.half_height).speed(0.1));
+                            });
+                        }
                         other => {
                             ui.label(
                                 egui::RichText::new(format!("Şekil: {:?} (Sadece Okunur)", other))

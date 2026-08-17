@@ -331,6 +331,43 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
     no asset rename/move action in the editor yet (the browser is read-only), so nothing else needs
     it. **Trigger for more:** an editor move/rename action — which should carry the sidecar, and at
     that point is also what makes the orphan case above worth fixing.
+- **Collider shapes — `Cylinder` landed (2026-08-17); `Heightfield` and `Cone` are still open,
+  and this item was not on the list at all.** The 2026-08 audit found three shape gaps (§Y1,
+  "Cylinder, Cone, Heightfield yok") and its phase B carried them as B7, *"Cylinder + Heightfield
+  collider — wheels and terrain, both common"*. When FIXPLAN was retired the item was not carried
+  into this section, so the roadmap has been silent about it since; the code was not. That is the
+  second stale marker found this week by checking the code instead of the list.
+
+  **What `Cylinder` is, and what it is not.** Flat circular ends, axis along local +Y, the same
+  convention as the capsule — except that `half_height` here means half the *whole* solid, where
+  a capsule's excludes its caps. It is convex, so it rides the existing GJK/EPA route: the only
+  new geometry is a support function whose radial and axial parts are chosen independently, which
+  is exactly what puts the support point on the **rim** and lets a manifold spread around the
+  edge. That is the property that makes a cylinder stand where a capsule rocks.
+
+  Everything derived from a shape got its own arm rather than a fallback: an analytic inertia
+  tensor (`I_y = ½·m·r²`, `I_x = I_z = m(3r² + h²)/12` — *not* the capsule's, whose hemispheres
+  put mass furthest from the axis), an exact AABB, `πr²h` for volume, a ray test against wall and
+  both caps, the cloth pusher, the character controller's size, the editor inspector and the debug
+  wireframe.
+
+  **The AABB has a measured numerical wrinkle worth knowing.** Its radial term is
+  `r·sqrt(1 - a_i²)`, and when the axis lands on a world axis that square root sits on a
+  singularity: a quaternion's last bits (ε ≈ 6e-8) come out as ≈ `r·sqrt(2ε)`, measured at
+  1.2e-4 m for a 0.35 m wheel on its side. It always errs *outwards*, which is the direction a
+  broadphase bound may err in, and the test's tolerance says so rather than hiding it.
+
+  **The studio stopped lying in the same commit.** Its cylinder primitive spawned
+  `Collider::convex_hull` of the mesh's 24 ring points under a comment reading "the engine has no
+  cylinder shape" — faithful to the silhouette, and still wrong twice over: inertia came from an
+  AABB rather than from `½·m·r²`, and every contact resolved against a facet, so a cylinder on its
+  side settled onto whichever flat it landed on.
+
+  **Still open:** `Heightfield` — which is what forces open-world terrain through `TriMesh` today —
+  and `Cone`. Heightfield is not a support function: it is concave, so it needs per-cell dispatch
+  and its own acceleration structure, i.e. the same shape of work `TriMesh` already carries.
+  **Trigger for `Cone`:** somebody needs one; nothing in the engine or the demos does.
+
 - **Shader Graph.** A node editor plus WGSL generation. The largest item on the editor list and a
   project on its own; the prototype has a tab for it, the engine has nothing.
 

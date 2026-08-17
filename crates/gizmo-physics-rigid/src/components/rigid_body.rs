@@ -707,6 +707,22 @@ impl RigidBody {
         self.local_inertia = Vec3::splat(i);
     }
 
+    /// Principal inertia of a solid cylinder about local +Y, from the analytic formulas:
+    /// `I_y = ½·m·r²` about the axis, `I_x = I_z = m·(3r² + h²)/12` across it, with `h` the
+    /// full height.
+    ///
+    /// Not the capsule's number with the caps subtracted: the two shapes differ by a
+    /// hemisphere at each end, and those hemispheres are the *farthest* mass from the axis,
+    /// so a capsule's transverse inertia runs well above a cylinder's of the same dimensions.
+    /// Reusing one for the other would make a wheel resist tipping like something it is not.
+    pub fn calculate_cylinder_inertia(&mut self, r: f32, half_h: f32) {
+        let m = self.mass;
+        let h = half_h * 2.0;
+        let i_y = 0.5 * m * r * r;
+        let i_xz = m * (3.0 * r * r + h * h) / 12.0;
+        self.local_inertia = Vec3::new(i_xz, i_y, i_xz);
+    }
+
     /// Overwrites [`local_inertia`](Self::local_inertia) with the solid-capsule tensor for
     /// a capsule whose axis is the body-local **Y** axis, matching the capsule collider's
     /// own convention.
@@ -786,6 +802,9 @@ impl RigidBody {
             }
             ColliderShape::Capsule(c) => {
                 self.calculate_capsule_inertia(c.radius, c.half_height);
+            }
+            ColliderShape::Cylinder(c) => {
+                self.calculate_cylinder_inertia(c.radius, c.half_height);
             }
             ColliderShape::Plane(_) => {
                 self.local_inertia = Vec3::splat(f32::INFINITY);

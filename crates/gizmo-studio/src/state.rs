@@ -76,6 +76,17 @@ impl PrimitiveSize {
         Self::CAPSULE_DEPTH * 0.5
     }
 
+    /// `half_height` for the cylinder's collider.
+    ///
+    /// Here rather than at the spawn site for the same reason as the capsule's: a test can then
+    /// call the function the spawner calls. The conversion is the same one — the mesh takes the
+    /// whole height, `Collider::cylinder` takes half of it — but note the shapes disagree about
+    /// what `half_height` covers: a capsule's excludes its caps, a cylinder's is simply half the
+    /// solid.
+    pub fn cylinder_collider_half_height() -> f32 {
+        Self::CYLINDER_HEIGHT * 0.5
+    }
+
     /// Where the plane's collider box sits relative to the entity origin.
     ///
     /// Pushed down by its own half-thickness so the box's **top face** is the quad you can see.
@@ -94,20 +105,6 @@ impl PrimitiveSize {
         )
     }
 
-    /// The ring of points a cylinder's convex-hull collider is built from: the same radius, the
-    /// same segment count and the same half-height as the mesh, top ring and bottom ring.
-    pub fn cylinder_hull_points() -> Vec<gizmo::math::Vec3> {
-        let half_h = Self::CYLINDER_HEIGHT * 0.5;
-        let n = Self::CYLINDER_SEGMENTS;
-        let mut points = Vec::with_capacity(n as usize * 2);
-        for i in 0..n {
-            let a = (i as f32 / n as f32) * std::f32::consts::TAU;
-            let (x, z) = (Self::CYLINDER_RADIUS * a.cos(), Self::CYLINDER_RADIUS * a.sin());
-            points.push(gizmo::math::Vec3::new(x, half_h, z));
-            points.push(gizmo::math::Vec3::new(x, -half_h, z));
-        }
-        points
-    }
 }
 
 
@@ -115,35 +112,29 @@ impl PrimitiveSize {
 mod primitive_size_tests {
     use super::PrimitiveSize as PS;
 
-    /// The cylinder's collider is the convex hull of these points, and its mesh is built from the
-    /// same radius, height and segment count — so the hull has to sit exactly on the surface the
-    /// mesh draws. A radius or a half-height that drifts here is a collider that does not match
-    /// the shape on screen, which is the defect this whole table exists to prevent (the sphere
-    /// shipped with a collider twice its mesh).
+    /// The cylinder's collider has to be the cylinder the mesh draws.
+    ///
+    /// This used to check a ring of hull points, because the engine had no cylinder shape and the
+    /// studio stood a 24-sided prism in for one. The shape exists now, so what has to agree is
+    /// the pair of numbers — and they are read from the same function the spawner calls, not
+    /// recomputed here, or the test would keep passing with the conversion deleted from the
+    /// source. (That is how the old camera regression tests managed to guard nothing.)
     #[test]
-    fn the_cylinder_hull_sits_on_the_cylinder_the_mesh_draws() {
-        let points = PS::cylinder_hull_points();
-        assert_eq!(
-            points.len(),
-            PS::CYLINDER_SEGMENTS as usize * 2,
-            "one point per segment on each of the two rings"
+    fn the_cylinder_collider_is_the_cylinder_the_mesh_draws() {
+        let half = PS::cylinder_collider_half_height();
+        assert!(
+            (half * 2.0 - PS::CYLINDER_HEIGHT).abs() < 1e-6,
+            "the collider must span the mesh's whole height, got {}",
+            half * 2.0
         );
-        let half_h = PS::CYLINDER_HEIGHT * 0.5;
-        for p in &points {
-            let r = (p.x * p.x + p.z * p.z).sqrt();
-            assert!(
-                (r - PS::CYLINDER_RADIUS).abs() < 1e-5,
-                "point at radius {r}, mesh is at {}",
-                PS::CYLINDER_RADIUS
-            );
-            assert!(
-                (p.y.abs() - half_h).abs() < 1e-5,
-                "point at y {}, the mesh's caps are at ±{half_h}",
-                p.y
-            );
+        let collider = gizmo::physics::Collider::cylinder(PS::CYLINDER_RADIUS, half);
+        match collider.shape {
+            gizmo::physics::ColliderShape::Cylinder(c) => {
+                assert!((c.radius - PS::CYLINDER_RADIUS).abs() < 1e-6);
+                assert!((c.half_height - half).abs() < 1e-6);
+            }
+            other => panic!("expected a cylinder shape, got {other:?}"),
         }
-        // Both caps are present — a hull built from one ring is a disc, not a cylinder.
-        assert!(points.iter().any(|p| p.y > 0.0) && points.iter().any(|p| p.y < 0.0));
     }
 
     /// The one unit conversion in the table: the capsule mesh takes the cylindrical section's

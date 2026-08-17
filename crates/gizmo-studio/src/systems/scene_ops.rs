@@ -275,12 +275,19 @@ pub fn handle_scene_operations(
                         0.0,
                     ),
                 );
-                // The engine has no cylinder shape. A capsule would round the ends off and a box
-                // would square them; the hull of the mesh's OWN ring points is the faceted prism
-                // that is actually on screen.
+                // The real cylinder shape, since 2026-08-17. Until then this was the convex hull
+                // of the mesh's own ring points — a 24-sided prism standing in for a circle,
+                // because a capsule would have rounded the ends off and a box would have squared
+                // them. The hull was faithful to the mesh's silhouette and still wrong in two
+                // ways the shape fixes: its inertia came from an AABB rather than from
+                // `½·m·r²`, and every contact resolved against a facet, so a cylinder on its
+                // side settled into whichever flat it happened to land on.
                 world.add_component(
                     e,
-                    gizmo::physics::Collider::convex_hull(&PS::cylinder_hull_points()),
+                    gizmo::physics::Collider::cylinder(
+                        PS::CYLINDER_RADIUS,
+                        PS::cylinder_collider_half_height(),
+                    ),
                 );
             }),
             SpawnKind::Capsule => meshes.clone().map(|(_, _, _, _, capsule, tex)| {

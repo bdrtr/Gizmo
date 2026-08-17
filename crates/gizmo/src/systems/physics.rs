@@ -94,6 +94,25 @@ pub fn physics_debug_system(world: &crate::core::World) {
                         gizmos.draw_line(center + t2 * o - t1 * half, center + t2 * o + t1 * half, color);
                     }
                 }
+                gizmo_physics_core::ColliderShape::Cylinder(c) => {
+                    // Two rims and the lines between them. Drawn properly rather than left to
+                    // the fallback box below, because the shape exists for wheels and barrels
+                    // — the cases where seeing the real silhouette is the point.
+                    const SEGMENTS: usize = 16;
+                    let axis = trans.rotation.mul_vec3(Vec3::Y) * c.half_height;
+                    let u = trans.rotation.mul_vec3(Vec3::X) * c.radius;
+                    let w = trans.rotation.mul_vec3(Vec3::Z) * c.radius;
+                    let rim = |i: usize, end: f32| {
+                        let a = i as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
+                        trans.position + axis * end + u * a.cos() + w * a.sin()
+                    };
+                    for i in 0..SEGMENTS {
+                        for end in [1.0, -1.0] {
+                            gizmos.draw_line(rim(i, end), rim(i + 1, end), color);
+                        }
+                        gizmos.draw_line(rim(i, 1.0), rim(i, -1.0), color);
+                    }
+                }
                 _ => {
                     let min = trans.position - Vec3::new(1.0, 1.0, 1.0);
                     let max = trans.position + Vec3::new(1.0, 1.0, 1.0);
