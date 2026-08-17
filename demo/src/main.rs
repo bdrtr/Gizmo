@@ -382,24 +382,22 @@ fn update_camera(
 
     let speed = state.cam_speed * dt;
 
-    if input.is_key_pressed(KeyCode::KeyW as u32) {
-        state.cam_pos += fwd * speed;
-    }
-    if input.is_key_pressed(KeyCode::KeyS as u32) {
-        state.cam_pos -= fwd * speed;
-    }
-    if input.is_key_pressed(KeyCode::KeyA as u32) {
-        state.cam_pos -= right * speed;
-    }
-    if input.is_key_pressed(KeyCode::KeyD as u32) {
-        state.cam_pos += right * speed;
-    }
+    // Tuşlar ve sol çubuk `Input::move_axis` ile birleşiyor. Burada da dört ayrı `if` tam adım
+    // ekliyordu, yani W+D basılıyken hız √2 katıydı. Dikey (Q/E) ayrı kalıyor — çubukta karşılığı
+    // yok — ve toplam normalize değil KIRPILIYOR, yoksa yarım yatırılmış çubuk tam hıza çıkardı.
+    let (mx, my) = input.move_axis();
+    let mut cam_move = right * mx + fwd * my;
     if input.is_key_pressed(KeyCode::KeyQ as u32) {
-        state.cam_pos.y -= speed;
+        cam_move.y -= 1.0;
     }
     if input.is_key_pressed(KeyCode::KeyE as u32) {
-        state.cam_pos.y += speed;
+        cam_move.y += 1.0;
     }
+    let len = cam_move.length();
+    if len > 1.0 {
+        cam_move /= len;
+    }
+    state.cam_pos += cam_move * speed;
 
     let mut trans = world.borrow_mut::<Transform>();
     {

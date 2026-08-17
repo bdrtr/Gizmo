@@ -23,12 +23,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   multiplies it by whatever right/forward vectors it already has. `MoveKeys::WASD` and
   `MoveKeys::ARROWS` are presets; `move_axis_with` takes any four key codes.
 
-  It exists because **18 places** had written their own and they did not agree: four of them
-  (`showcase`, `cpu_physics`, `ocean_scene`, `advanced_physics`) added a full-speed step per key
-  from four independent `if`s, so **holding W and D moved 41 % faster than either key alone**, and
-  seventeen of the eighteen had no gamepad support at all. Two of those seventeen are engine code:
-  **`SimpleApp`'s built-in fly camera and the studio's editor camera can now be flown with a
-  stick**, so every game built on `SimpleApp` gets that without doing anything.
+  It exists because **20 places** had written their own and they did not agree: five of them
+  (`showcase`, `cpu_physics`, `ocean_scene`, `advanced_physics`, `demo/src/main.rs`) added a
+  full-speed step per key from four independent `if`s, so **holding W and D moved 41 % faster than
+  either key alone**, and nineteen of the twenty had no gamepad support at all. Three of those
+  nineteen are engine code: **`SimpleApp`'s built-in fly camera, the studio's editor camera and
+  `FpsLook` can now all be driven with a stick**, so a game built on any of them gets that without
+  doing anything.
 
   `car_demo` deliberately still reads its keys directly, because a vehicle's throttle and steering
   are independent axes rather than a movement vector.
@@ -36,6 +37,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `SimpleSceneState::fly_step` is new and public: the fly camera's per-frame step, lifted out of an
   `set_update` closure that could not be reached without a window. It is why the engine's own
   camera has tests at all.
+
+- **`FpsLook::apply_stick_look` and `FpsLook::stick_sensitivity` — right-stick look for the
+  engine's first-person controller.** `stick_sensitivity` is in **radians per second**, not the
+  radians-per-pixel that `sensitivity` is, because the two inputs are different kinds of thing: a
+  mouse reports how far it *has moved* (the frame's time is already in the number, so `apply_look`
+  takes no `dt` and must not), a stick reports how far it *is held* (a rate, so `apply_stick_look`
+  takes `dt` and must). Getting either backwards makes look speed frame-rate dependent.
 
   Keyboard behaviour is unchanged for the demos that were already correct — checked against their
   previous expression over all 81 key combinations, not asserted.
@@ -153,10 +161,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - **A source ratchet keeps movement going through one function.**
-  `crates/gizmo/tests/movement_input.rs` fails the build if a demo or either engine camera reads a
-  movement key without the shared blend. Its exception list documents the eight files that read
-  movement-named keys for something else: throttle, turret aim, a dial, editor tool modes, and a
-  fighting-game binding table.
+  `crates/gizmo/tests/movement_input.rs` fails the build if anything under `crates/*/src` or
+  `demo/src` reads a movement key without the shared blend. Its exception list documents the nine
+  files that read movement-named keys for something else: throttle, turret aim, a dial, editor tool
+  modes, a fighting-game binding table, and the platform layer's logical-key fallback.
 - **Demos with a vertical movement axis (Q/E, Space/Ctrl) now clamp their movement vector to
   length 1 instead of normalising it.** Identical for keys — any non-empty key combination is
   already at least unit length — and a normalise would push a half-tilted stick back up to full

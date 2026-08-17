@@ -54,8 +54,16 @@ pub struct FpsLook {
     pub yaw: f32,
     /// Vertical look angle (rad); clamped to `±pitch_limit`.
     pub pitch: f32,
-    /// Mouse sensitivity (rad / pixel).
+    /// Mouse sensitivity, **radians per pixel**.
+    ///
+    /// Distinct from [`stick_sensitivity`](Self::stick_sensitivity) in units *and* in how it is
+    /// applied — see [`apply_look`](Self::apply_look), where that difference is the whole point.
     pub sensitivity: f32,
+    /// Right-stick look speed, **radians per second**. 0 → the stick does not look.
+    ///
+    /// A different unit from [`sensitivity`](Self::sensitivity) because it is a different kind of
+    /// input: a mouse reports how far it *has moved*, a stick reports how far it *is held*.
+    pub stick_sensitivity: f32,
     /// WASD movement speed (units/s). 0 → look only (the camera stays put).
     pub move_speed: f32,
     /// Pitch is clamped to ± this value (rad) (prevents going upside-down).
@@ -70,6 +78,9 @@ impl Default for FpsLook {
             yaw: 0.0,
             pitch: 0.0,
             sensitivity: 0.0025,
+            // ~143°/s at full tilt, the usual console default. Both axes turn at the same rate;
+            // games that want a slower pitch scale it themselves.
+            stick_sensitivity: 2.5,
             move_speed: 0.0,
             pitch_limit: std::f32::consts::FRAC_PI_2 - 0.05,
             enabled: true,
@@ -95,6 +106,12 @@ impl FpsLook {
         self
     }
 
+    /// Set the right-stick look speed (rad/s). 0 turns stick look off. Chainable.
+    pub fn with_stick_sensitivity(mut self, s: f32) -> Self {
+        self.stick_sensitivity = s;
+        self
+    }
+
     /// Initial yaw/pitch (rad). Chainable.
     pub fn looking(mut self, yaw: f32, pitch: f32) -> Self {
         self.yaw = yaw;
@@ -105,9 +122,35 @@ impl FpsLook {
     /// Apply a mouse delta (pixels) to yaw/pitch (mouse right → yaw+, mouse up →
     /// pitch+); pitch is clamped to `±pitch_limit`. Pure/testable (the system calls
     /// this with the real mouse delta).
+    ///
+    /// **There is no `dt` here, and that is not an oversight.** A mouse delta is how far the
+    /// device moved *during the frame that just happened*: the time is already inside the number.
+    /// Multiplying it by `dt` would make the same physical mouse movement turn the camera further
+    /// at low frame rates than at high ones — the classic way an FPS camera ends up feeling
+    /// different on every machine. Contrast [`apply_stick_look`](Self::apply_stick_look), which
+    /// takes `dt` for the opposite reason.
     pub fn apply_look(&mut self, mouse_dx: f32, mouse_dy: f32) {
         self.yaw += mouse_dx * self.sensitivity;
         self.pitch -= mouse_dy * self.sensitivity;
+        self.pitch = self.pitch.clamp(-self.pitch_limit, self.pitch_limit);
+    }
+
+    /// Apply a right-stick deflection to yaw/pitch, over `dt` seconds (stick right → yaw+,
+    /// stick up → pitch+); pitch is clamped to `±pitch_limit`.
+    ///
+    /// **`dt` is required here for the exact reason it is absent from
+    /// [`apply_look`](Self::apply_look).** A stick reports a *standing* deflection — it reads 0.8
+    /// for as long as the player holds it there, however many frames that takes — so what it
+    /// describes is a turn *rate*. Without `dt` the camera would turn further per second the
+    /// faster the machine runs, which is the same bug as scaling the mouse by `dt`, arrived at
+    /// from the other side.
+    ///
+    /// The deflection is expected to be deadzoned already, i.e. straight from
+    /// [`Gamepad::right_stick`](gizmo_core::input::Gamepad::right_stick).
+    pub fn apply_stick_look(&mut self, stick_x: f32, stick_y: f32, dt: f32) {
+        let rate = self.stick_sensitivity * dt;
+        self.yaw += stick_x * rate;
+        self.pitch += stick_y * rate;
         self.pitch = self.pitch.clamp(-self.pitch_limit, self.pitch_limit);
     }
 
@@ -147,6 +190,17 @@ impl gizmo_core::system::System for FpsLookSystem {
                 .map(|i| i.is_key_pressed(c as u32))
                 .unwrap_or(false)
         };
+        // Keys and the left stick as one direction, and the right stick for looking. Read once
+        // here rather than per camera: several `FpsLook` cameras in one world all see the same
+        // frame of input, and the shared blend is a pure function of it.
+        let move_axis = world
+            .get_resource::<Input>()
+            .map(|i| i.move_axis())
+            .unwrap_or((0.0, 0.0));
+        let stick_look = world
+            .get_resource::<Input>()
+            .and_then(|i| i.gamepad().map(gizmo_core::input::Gamepad::right_stick))
+            .unwrap_or((0.0, 0.0));
 
         // SAFETY: exclusive sistem; scheduler disjoint mutable erişim garanti eder.
         if let Some(mut q) = unsafe {
@@ -159,31 +213,25 @@ impl gizmo_core::system::System for FpsLookSystem {
             for (_id, (mut look, mut cam, mut t)) in q.iter_mut() {
                 if look.enabled {
                     look.apply_look(mdx, mdy);
+                    look.apply_stick_look(stick_look.0, stick_look.1, dt);
 
                     if look.move_speed > 0.0 {
-                        let mut dir = Vec3::ZERO;
+                        // Yatay yön tuş+sol çubuk; dikey (Space/Shift) ayrı, çubukta karşılığı
+                        // yok. Toplam normalize DEĞİL kırpılıyor: normalize, yarım yatırılmış
+                        // çubuğu tam hıza çıkarıp çubuğun kattığı tek şeyi yok ederdi.
                         let (fwd, right) = (look.forward(), look.right());
-                        if key(KeyCode::KeyW) {
-                            dir += fwd;
-                        }
-                        if key(KeyCode::KeyS) {
-                            dir -= fwd;
-                        }
-                        if key(KeyCode::KeyD) {
-                            dir += right;
-                        }
-                        if key(KeyCode::KeyA) {
-                            dir -= right;
-                        }
+                        let mut dir = right * move_axis.0 + fwd * move_axis.1;
                         if key(KeyCode::Space) {
                             dir += Vec3::Y;
                         }
                         if key(KeyCode::ShiftLeft) {
                             dir -= Vec3::Y;
                         }
-                        if dir.length_squared() > 1e-9 {
-                            t.position += dir.normalize() * look.move_speed * dt;
+                        let len = dir.length();
+                        if len > 1.0 {
+                            dir /= len;
                         }
+                        t.position += dir * look.move_speed * dt;
                     }
                 }
 
@@ -236,6 +284,85 @@ mod tests {
         // Yukarı çok → +limit'e clamp.
         look.apply_look(0.0, -1_000_000.0);
         assert!((look.pitch - look.pitch_limit).abs() < 1e-4, "yukarı-clamp: {}", look.pitch);
+    }
+
+    /// The rule the two look inputs differ by, checked from both sides. Getting it backwards is
+    /// invisible on the machine it was written on and obvious on any other.
+    #[test]
+    fn the_mouse_ignores_dt_and_the_stick_does_not() {
+        // The mouse half is held by the SIGNATURE, not by this assertion: `apply_look` takes no
+        // `dt`, so it cannot depend on one. Stated here anyway, because the property is the point
+        // of the pair and a future `dt` parameter should have to delete a line that says why.
+        let mut fast = FpsLook::new().with_sensitivity(0.01);
+        let mut slow = FpsLook::new().with_sensitivity(0.01);
+        fast.apply_look(100.0, 0.0);
+        slow.apply_look(100.0, 0.0);
+        assert_eq!(fast.yaw, slow.yaw, "a mouse delta must not depend on the frame rate");
+
+        // A stick deflection is a rate: held for twice as long, it must turn twice as far.
+        let mut short = FpsLook::new().with_stick_sensitivity(2.0);
+        let mut long = FpsLook::new().with_stick_sensitivity(2.0);
+        short.apply_stick_look(1.0, 0.0, 0.01);
+        long.apply_stick_look(1.0, 0.0, 0.02);
+        assert!(
+            (long.yaw - 2.0 * short.yaw).abs() < 1e-6,
+            "a stick held over twice the time must turn twice as far: {} against {}",
+            long.yaw,
+            short.yaw
+        );
+        // …and the rate is what the field says it is: 2 rad/s for 0.5 s is 1 rad.
+        let mut one = FpsLook::new().with_stick_sensitivity(2.0);
+        one.apply_stick_look(1.0, 0.0, 0.5);
+        assert!((one.yaw - 1.0).abs() < 1e-6, "yaw {}", one.yaw);
+    }
+
+    #[test]
+    fn stick_look_clamps_pitch_like_the_mouse_does() {
+        let mut look = FpsLook::new().with_stick_sensitivity(10.0);
+        look.apply_stick_look(0.0, 1.0, 100.0);
+        assert!((look.pitch - look.pitch_limit).abs() < 1e-4, "up: {}", look.pitch);
+        look.apply_stick_look(0.0, -1.0, 100.0);
+        assert!((look.pitch + look.pitch_limit).abs() < 1e-4, "down: {}", look.pitch);
+    }
+
+    #[test]
+    fn a_zero_stick_sensitivity_turns_stick_look_off() {
+        let mut look = FpsLook::new().with_stick_sensitivity(0.0);
+        look.apply_stick_look(1.0, 1.0, 1.0);
+        assert_eq!((look.yaw, look.pitch), (0.0, 0.0));
+    }
+
+    /// The movement half, through the system, with a live pad in the world.
+    #[test]
+    fn the_left_stick_moves_an_fps_camera_and_carries_its_amount() {
+        use gizmo_core::input::{GamepadAxis, GamepadId};
+
+        fn travel(stick_y: f32) -> f32 {
+            let mut world = World::new();
+            let cam = world.spawn();
+            world.add_component(cam, Transform::new(Vec3::ZERO));
+            world.add_component(cam, Camera::new(1.0, 0.1, 100.0, 0.0, 0.0, true));
+            world.add_component(cam, FpsLook::new().with_move_speed(10.0));
+
+            let mut input = Input::new();
+            let id = GamepadId::new(0);
+            input.on_gamepad_connected(id, "test pad");
+            input.on_gamepad_axis(id, GamepadAxis::LeftStickY, stick_y);
+            world.insert_resource(input);
+
+            FpsLookSystem.run(&world, 1.0);
+            let transforms = world.borrow::<Transform>();
+            transforms.get_entity(cam).unwrap().position.length()
+        }
+
+        let full = travel(1.0);
+        assert!(full > 9.0, "a full stick did not move the camera: {full}");
+        let half = travel(0.5); // past the 0.15 deadzone, well short of the rim
+        assert!(half > 0.1, "a half tilt must move it at all: {half}");
+        assert!(
+            half < full * 0.8,
+            "half a tilt must walk, not run: {half} against {full}"
+        );
     }
 
     #[test]

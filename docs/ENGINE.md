@@ -180,16 +180,19 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
   lines each". Writing those three lines nineteen times is what turned out to be wrong, because
   the nineteen copies did not already agree with each other.
 
-  **Measured before touching anything — and then re-measured by the scanner, which found more.**
-  A first `grep` said 17 demos; the source ratchet described below, which knows the several ways
-  this repository spells a key code and looks in subdirectories, put the real figure at **18
-  places computing a movement direction from the keyboard**: 16 demos, `SimpleApp`'s built-in fly
-  camera and the studio's editor camera. Fourteen accumulated a direction and normalised it.
-  **Four — `showcase`, `cpu_physics`, `ocean_scene` and `advanced_physics` — add a full-speed step
-  per key from four independent `if`s**, so holding W and D moved them at √2 ≈ 1.41 × the speed of
-  either key alone. **Seventeen of the eighteen had no stick at all**, and two of those seventeen
-  are engine code rather than demos: every game built on `SimpleApp` had a fly camera a pad could
-  not drive, which is the part of this that was never a demo problem.
+  **Measured before touching anything — and then re-measured twice, because each measurement was
+  short.** A first `grep` said 17 demos. A source ratchet over a *written* subject list said 18. A
+  ratchet over a **scanned** one — every crate's `src` plus the demo crate's — said **20 places
+  computing a movement direction from the keyboard**: 16 demos in `demo/src/bin`, `demo/src/main.rs`,
+  `SimpleApp`'s built-in fly camera, the studio's editor camera, and
+  `gizmo::systems::fps_look` — the engine's own first-person controller. Fifteen accumulated a
+  direction and normalised it.
+  **Five — `showcase`, `cpu_physics`, `ocean_scene`, `advanced_physics` and `demo/src/main.rs` —
+  add a full-speed step per key from four independent `if`s**, so holding W and D moved them at
+  √2 ≈ 1.41 × the speed of either key alone. **Nineteen of the twenty had no stick at all**, and
+  three of those nineteen are engine code rather than demos: every game built on `SimpleApp`, and
+  every camera driven by `FpsLook`, had movement a pad could not touch. That is the part of this
+  that was never a demo problem.
 
   `gizmo_core::input::blend_move_axis` and [`Input::move_axis`] are the two rules in one place, and
   all 18 now read movement through them. `car_demo` deliberately does not: a vehicle's controls are
@@ -230,8 +233,17 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
   pushed right and up arrives at `move_axis` as `(1.00, 0.00)` and `(0.00, 1.00)`.
 
   **And there is now something watching, because the divergence was never a hard problem — it was
-  an unwatched one.** `crates/gizmo/tests/movement_input.rs` scans the demo directory and both
-  engine cameras for files that read a movement key without going through the shared blend. It is a
+  an unwatched one.** `crates/gizmo/tests/movement_input.rs` scans for files that read a movement
+  key without going through the shared blend.
+
+  **Its first subject list was written, and it was wrong within the hour** — which is §8's rule
+  about scanned subject lists failing in exactly the documented way: silently, by covering less
+  than it appeared to. It named `demo/src/bin`, `SimpleApp` and the studio camera, and so missed
+  `demo/src/main.rs` (which had the 41 % diagonal) and `fps_look.rs` (the engine's own FP
+  controller, whose module doc *opens* by complaining that "the demos write it out BY HAND every
+  frame"). The subjects are scanned now: `crates/*/src` plus `demo/src`, so a crate added tomorrow
+  is covered. The detector also learned to cut **trailing** comments — `gizmo-core`'s `NAMED_KEYS`
+  is a column of `("a", 19), // KeyCode::KeyA`, and the key table was on its own offender list. It is a
   ratchet, and its exception list is the other thing it produced: eight files read movement-*named*
   keys for something else entirely — throttle (`car_demo`, `hill_climb`), turret aim (`yikim`,
   `yikim_ustasi`), a dial (`cloth_demo`, `wind_tunnel`), editor tool modes, and a fighting-game
@@ -241,10 +253,24 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
   choice was deliberate, because a scan clever enough to tell a good `KeyCode::KeyW` from a bad one
   by its neighbours is a scan that fails silently.
 
-  **Not covered:** look/aim. `platformer` scales the right stick by `dt` because a stick is a
-  standing tilt where a mouse delta is per-frame pixels — mixing those up is the same class of
-  error — but a shared helper would have to own a sensitivity convention, and one demo is not
-  enough evidence for which. **Trigger:** a second demo that wants stick look.
+  **Look/aim — resolved where it belonged, not as a free-floating helper.** The deferral said a
+  shared helper would have to invent a sensitivity convention. `FpsLook` already owns one
+  (`sensitivity`, rad/pixel), so that is where stick look went: `FpsLook::apply_stick_look` and a
+  `stick_sensitivity` in **rad/second**. The different unit is the whole point, and the pair is
+  written down at both functions: **a mouse reports how far it has moved, so the frame's time is
+  already inside the number and `dt` must not be applied; a stick reports how far it is held, so
+  what it describes is a rate and `dt` must be.** Getting either backwards makes look speed
+  frame-rate dependent, which is invisible on the machine it was written on. `apply_look` takes no
+  `dt` at all — the signature is the guard — and the stick's half is pinned by a test that holds it
+  for twice as long and expects twice the turn.
+
+  **`FpsLook` has no callers, and that is the real finding here.** The engine ships a first-person
+  controller documented as the answer to hand-written camera loops, and **zero of the forty demos
+  use it**; 22 of them hand-roll mouse-look instead. Converting them is not obviously right — some
+  want a fly camera, some an orbit, some a turret — but "the abstraction exists and nothing adopted
+  it" is a stronger signal than any of the individual copies. **Trigger:** the next demo that
+  wants a first-person camera; if `FpsLook` does not fit it either, the controller is the thing to
+  change.
 - **The ten-light ceiling — the *selection* half is closed (2026-08-17); the ceiling is not.**
   `gpu_types.rs` still holds `[LightData; 10]`. What changed is which ten it holds. It used to be
   whichever ten ECS iteration reached first, and that had three separate consequences: distance

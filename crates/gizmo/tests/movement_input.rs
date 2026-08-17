@@ -60,6 +60,12 @@ const MOVEMENT_KEYS: [&str; 8] = [
 /// that had never happened.
 const EXCEPTIONS: &[(&str, &str)] = &[
     (
+        "crates/gizmo-app/src/windowed/event.rs",
+        "the platform layer's logical-key fallback: it PRODUCES key codes from winit's logical \
+         keys for layouts where the physical code is absent. It is the far side of the boundary \
+         from anything that reads movement.",
+    ),
+    (
         "demo/src/bin/car_demo.rs",
         "a vehicle's controls are not a movement vector: W/S are throttle and brake, A/D drive a \
          steering-angle target, and the two axes are independent. Folding them into a unit disc \
@@ -105,16 +111,33 @@ const EXCEPTIONS: &[(&str, &str)] = &[
     ),
 ];
 
-/// Where movement is read from. Directories are scanned; a file is taken as itself.
+/// Where movement is read from: **every crate's `src`, and the demo crate's**.
 ///
-/// Scanned rather than listed wherever a directory will do, so demo number 41 is covered the day
-/// it is written — a written list of demos is a list that goes stale, and this whole file exists
-/// because of things nobody looked at.
-const SUBJECTS: [&str; 3] = [
-    "demo/src/bin",
-    "crates/gizmo/src/simple.rs",
-    "crates/gizmo-studio/src/systems",
-];
+/// The first version of this list named three places — `demo/src/bin`, `SimpleApp` and the
+/// studio's camera — and it was wrong within the hour. It missed
+/// `crates/gizmo/src/systems/fps_look.rs`, the engine's own first-person controller, whose module
+/// doc opens by complaining that "the demos write it out BY HAND every frame"; and it missed
+/// `demo/src/main.rs`, which had the 41 % diagonal. A *written* subject list is exactly the thing
+/// §8 of docs/ENGINE.md says not to write, and it failed in the documented way: silently, by
+/// covering less than it looked like it covered.
+///
+/// So the subjects are now scanned. `crates/*/src` picks up any crate, present or future; the
+/// `tests/` directories are deliberately outside it, because a test that lists key codes to prove
+/// them (`gizmo-app`'s `key_convention.rs`, and this file) is not movement code.
+fn subjects(root: &Path) -> Vec<PathBuf> {
+    let mut dirs = vec![root.join("demo/src")];
+    for entry in std::fs::read_dir(root.join("crates"))
+        .expect("crates/ is readable")
+        .flatten()
+    {
+        let src = entry.path().join("src");
+        if src.is_dir() {
+            dirs.push(src);
+        }
+    }
+    dirs.sort();
+    dirs
+}
 
 fn workspace() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -139,12 +162,16 @@ fn rust_files(path: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// Does this line read a movement key, ignoring comments?
+/// Does this line read a movement key?
+///
+/// Comments are cut first, **including trailing ones** — `gizmo-core`'s `NAMED_KEYS` table is a
+/// column of `("a", 19), // KeyCode::KeyA`, and counting those would have put the key table itself
+/// on the offender list.
 fn reads_a_movement_key(line: &str) -> bool {
-    let code = line.trim_start();
-    if code.starts_with("//") {
-        return false;
-    }
+    let code = match line.find("//") {
+        Some(i) => &line[..i],
+        None => line,
+    };
     MOVEMENT_KEYS.iter().any(|k| code.contains(k))
 }
 
@@ -154,23 +181,21 @@ fn movement_is_read_through_one_function() {
     let excepted: BTreeSet<&str> = EXCEPTIONS.iter().map(|(path, _)| *path).collect();
 
     let mut files = Vec::new();
-    for subject in SUBJECTS {
-        let path = root.join(subject);
+    for path in subjects(&root) {
         let before = files.len();
         rust_files(&path, &mut files);
         assert!(
             files.len() > before,
-            "no sources under {} — the subject list has gone stale, which is the one way a \
-             scanner silently passes",
+            "no sources under {} — a subject that scans to nothing is the one way a scanner \
+             silently passes",
             path.display()
         );
     }
     files.sort();
-    // The demo directory alone is around forty files; a scan that suddenly covers three has
-    // stopped being a scan.
+    // Twenty crates plus forty demos: a scan that suddenly covers a handful has stopped being one.
     assert!(
-        files.len() >= 30,
-        "only {} sources scanned; expected the whole demo directory and the two engine cameras",
+        files.len() >= 300,
+        "only {} sources scanned; expected every crate's src and the demo crate's",
         files.len()
     );
 
@@ -235,26 +260,33 @@ fn movement_is_read_through_one_function() {
     );
 }
 
-/// The subjects have to be places that *do* move something, or the scan above proves nothing.
+/// The scan finds offenders; this finds *deserters*.
 ///
-/// A path renamed out from under `SUBJECTS` would leave this file passing over an empty set, and
-/// the first assertion only catches a directory that vanished entirely. This one checks that each
-/// subject still contains movement code at all — spelled as a call to the function they were all
-/// converted to.
+/// A file that stops calling the shared blend and stops reading movement keys — because someone
+/// rewrote its camera against `ActionMap`, or moved it — passes the scan silently, since the scan
+/// can only see what is there. These four are the movers that matter most, checked by name.
 #[test]
-fn every_subject_still_contains_the_movement_it_is_watching() {
+fn the_known_movers_still_go_through_the_shared_blend() {
     let root = workspace();
-    for subject in SUBJECTS {
-        let mut files = Vec::new();
-        rust_files(&root.join(subject), &mut files);
-        let uses_axis = files.iter().any(|f| {
-            let text = std::fs::read_to_string(f).unwrap_or_default();
-            text.contains("move_axis") || text.contains("blend_move_axis")
-        });
+    // The places that were converted on 2026-08-17. Named on purpose, unlike the scan above: the
+    // scan's job is to find offenders anywhere, and this one's is to notice if a *known* mover
+    // quietly stops going through the shared blend — by being deleted, moved, or rewritten. A
+    // scan cannot ask that question, because it cannot tell "no movement here" from "no file
+    // here".
+    const KNOWN_MOVERS: [&str; 4] = [
+        "demo/src/bin/platformer.rs",
+        "demo/src/main.rs",
+        "crates/gizmo/src/simple.rs",
+        "crates/gizmo/src/systems/fps_look.rs",
+    ];
+    for mover in KNOWN_MOVERS {
+        let path = root.join(mover);
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("{mover} is gone or unreadable ({e}) — if it moved, move \
+                                        this entry with it"));
         assert!(
-            uses_axis,
-            "nothing under {subject} reads movement any more — either it moved somewhere this \
-             test is not looking, or `SUBJECTS` is out of date"
+            text.contains("move_axis(") || text.contains("blend_move_axis("),
+            "{mover} no longer reads movement through the shared blend"
         );
     }
 }

@@ -920,9 +920,15 @@ mod fly_gate_tests {
     ///
     /// Both halves are read from source, because that is where the pairing lives: one binding is
     /// in this crate and the other is in `gizmo-studio`, and nothing at runtime brings them
-    /// together to be asserted about. What the test pins is that the studio's flight block is
+    /// together to be asserted about. What the test pins is that the studio's flight **keys** are
     /// gated on `fly_active` — the right button held on the viewport, the same gesture that
     /// already gates looking.
+    ///
+    /// **The stick is deliberately outside that gate**, and the second pair of assertions is what
+    /// says so. The gate exists because three *letters* are also tool shortcuts; a gamepad has no
+    /// tool shortcuts, so asking a stick for the same gesture would be a restriction with nothing
+    /// behind it. Zeroing only the key half and still running the blend is how both hold at once —
+    /// which is also why the studio calls `blend_move_axis` rather than `Input::move_axis`.
     #[test]
     fn free_flight_is_gated_on_the_right_mouse_button() {
         let studio = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -932,9 +938,34 @@ mod fly_gate_tests {
         let src = std::fs::read_to_string(&studio).expect("studio camera system");
 
         assert!(
-            src.contains("if !is_playing && fly_active {"),
-            "the studio's flight block is no longer gated on fly_active, so W/E/Q move the camera \
+            src.contains("let keys = if fly_active {"),
+            "the studio's flight KEYS are no longer gated on fly_active, so W/E/Q move the camera \
              and change the tool at the same time again"
+        );
+        assert!(
+            src.matches("if fly_active {").count() >= 2,
+            "the vertical keys (Q/E) left the gate — they are two of the three letters that \
+             collide with the tool shortcuts"
+        );
+        // …and that the blend itself is NOT under that gate. Checking only that the call exists
+        // is not enough — measured: wrapping it in `if fly_active { … }` left a `contains` check
+        // green, which is a guard that reads as covering the property and does not.
+        let block = src
+            .find("if !is_playing {")
+            .expect("the movement block is gated on !is_playing");
+        let call = src[block..]
+            .find("blend_move_axis(")
+            .expect("the studio still blends keys and stick");
+        let before_the_call = &src[block..block + call];
+        assert_eq!(
+            before_the_call.matches("if fly_active {").count(),
+            1,
+            "the only `fly_active` gate before the blend must be the one zeroing the KEY half; a \
+             second one means the stick was put back behind a gesture that exists for letters"
+        );
+        assert!(
+            before_the_call.contains("let keys = if fly_active {"),
+            "that one gate is no longer the key half"
         );
         assert!(
             src.contains("fly_active = es.camera.fly_active;"),
