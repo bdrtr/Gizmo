@@ -69,6 +69,8 @@
 
 /// GPU asset loading — requires a renderer.
 #[cfg(feature = "render")]
+#[cfg(all(feature = "scene", feature = "render"))]
+pub use gizmo_app::asset_identity;
 pub mod asset_server;
 /// Ready-made component bundles. Light/camera/mesh bundles need `render`; the rigid-body
 /// bundle needs `physics` (see the per-item gates inside).

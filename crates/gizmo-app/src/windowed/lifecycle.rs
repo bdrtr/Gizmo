@@ -177,10 +177,17 @@ impl<State: 'static> App<State> {
                     // wasm32: gizmo-scripting (mlua) web'de derlenmez — sahneler
                     // Script bileşeni kaydı olmadan yüklenir (web scripting ertelendi).
                     let registry = crate::scene_registry::full_scene_registry();
-                    match gizmo_scene::scene::SceneData::load_into(
+                    // With identity: an asset reference whose path has gone stale is repointed at
+                    // the file it names, using the UUID the scene recorded next to that path. Costs
+                    // nothing when the registry is empty (every lookup answers "don't know", every
+                    // path is left alone), which is the state of any application that never scans
+                    // its asset tree — see `crate::asset_identity`.
+                    let identity = crate::asset_identity::ManagerIdentity(&asset_manager);
+                    match gizmo_scene::scene::SceneData::load_into_with_identity(
                         &scene_path,
                         &mut self.world,
                         &registry,
+                        &identity,
                     ) {
                         Ok(()) => {
                             tracing::info!(scene = %scene_path, "[App] initial scene loaded")

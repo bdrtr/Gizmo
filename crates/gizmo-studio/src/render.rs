@@ -212,10 +212,30 @@ pub fn render_studio(
     }
 
     if let Some(path) = save_req {
-        let _ =
-            gizmo::scene::SceneData::save(world, &path, &gizmo::full_scene_registry());
+        // Saved WITH identity: each asset reference also records the UUID of the file it names, so
+        // a later load can find that file if it has since moved. The path is written exactly as
+        // before — see `gizmo::asset_identity` for what that does and does not survive.
+        //
+        // The manager is taken out and put back rather than borrowed, because the save reads the
+        // whole world and cannot hold a resource borrow across it.
+        let manager = world.remove_resource::<gizmo::renderer::asset::AssetManager>();
+        let save = match &manager {
+            Some(m) => gizmo::scene::SceneData::save_with_identity(
+                world,
+                &path,
+                &gizmo::full_scene_registry(),
+                &gizmo::asset_identity::ManagerIdentity(m),
+            ),
+            None => gizmo::scene::SceneData::save(world, &path, &gizmo::full_scene_registry()),
+        };
+        if let Some(m) = manager {
+            world.insert_resource(m);
+        }
         if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
-            ed.log_info("Sahne kaydedildi.");
+            match save {
+                Ok(_) => ed.log_info("Sahne kaydedildi."),
+                Err(e) => ed.log_error(&format!("Sahne kaydedilemedi: {e}")),
+            }
         }
     }
 
@@ -232,11 +252,24 @@ pub fn render_studio(
     if let Some(path) = load_req {
         let protected_ids = collect_protected_ids(world, state.editor_camera);
         despawn_non_protected(world, &protected_ids);
-        let load_result = gizmo::scene::SceneData::load_into(
-            &path,
-            world,
-            &gizmo::full_scene_registry(),
-        );
+        // Loaded WITH identity: any asset reference whose path has gone stale is repointed at
+        // where that asset is now, before the entities are built (the ECS components carry only
+        // the path, so after instantiation there is nothing left to repair from).
+        let manager = world.remove_resource::<gizmo::renderer::asset::AssetManager>();
+        let load_result = match &manager {
+            Some(m) => gizmo::scene::SceneData::load_into_with_identity(
+                &path,
+                world,
+                &gizmo::full_scene_registry(),
+                &gizmo::asset_identity::ManagerIdentity(m),
+            ),
+            None => {
+                gizmo::scene::SceneData::load_into(&path, world, &gizmo::full_scene_registry())
+            }
+        };
+        if let Some(m) = manager {
+            world.insert_resource(m);
+        }
         if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
             ed.clear_selection();
             match load_result {

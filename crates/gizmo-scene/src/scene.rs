@@ -74,6 +74,143 @@ impl Default for SceneData {
     }
 }
 
+/// How this layer asks about asset identity, without knowing what an asset is.
+///
+/// `gizmo-scene` sits *below* `gizmo-renderer`, so it cannot reach the `AssetManager` that owns
+/// the path↔UUID registry — and inverting that dependency to get two lookups would be the wrong
+/// trade. The caller passes an implementation instead; the facade has one for `AssetManager`.
+///
+/// Both methods return `None` freely: an unscanned registry, an asset with no `.meta` sidecar, or
+/// an identity that no longer exists are all ordinary answers, and every caller here treats
+/// "don't know" as "leave the path alone".
+pub trait AssetIdentity {
+    /// The UUID registered for `path`, as a string, if the registry knows one.
+    fn uuid_for_path(&self, path: &str) -> Option<String>;
+    /// The **current** path of the asset with this UUID, if the registry knows it.
+    fn path_for_uuid(&self, uuid: &str) -> Option<String>;
+}
+
+/// A resolver that knows nothing — what [`SceneData::save`] and [`SceneData::load_into`] use.
+///
+/// It exists so the identity-aware and identity-blind paths are the same code with a different
+/// resolver, rather than two code paths that can drift.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoAssetIdentity;
+
+impl AssetIdentity for NoAssetIdentity {
+    fn uuid_for_path(&self, _path: &str) -> Option<String> {
+        None
+    }
+    fn path_for_uuid(&self, _uuid: &str) -> Option<String> {
+        None
+    }
+}
+
+impl SceneData {
+    /// Write every alive entity in `world` to `file_path`, without recording asset identity.
+    ///
+    /// See [`save_with_identity`](Self::save_with_identity) for the version that also writes the
+    /// UUID fallback, and [`AssetIdentity`] for why the resolver is the caller's to supply.
+    ///
+    /// # Errors
+    ///
+    /// The same as [`save_with_identity`](Self::save_with_identity).
+    pub fn save(
+        world: &World,
+        file_path: &str,
+        registry: &gizmo_core::registry::ComponentRegistry,
+    ) -> Result<(), SceneError> {
+        Self::save_with_identity(world, file_path, registry, &NoAssetIdentity)
+    }
+
+    /// Load `file_path` into `world`, without consulting asset identity.
+    ///
+    /// See [`load_into_with_identity`](Self::load_into_with_identity).
+    ///
+    /// # Errors
+    ///
+    /// The same as [`load_into_with_identity`](Self::load_into_with_identity).
+    pub fn load_into(
+        file_path: &str,
+        world: &mut World,
+        registry: &gizmo_core::registry::ComponentRegistry,
+    ) -> Result<(), SceneError> {
+        Self::load_into_with_identity(file_path, world, registry, &NoAssetIdentity)
+    }
+
+    /// Record the identity of every asset this scene references, where `identity` knows one.
+    ///
+    /// Run before writing. Paths are left exactly as they are — this only *adds* what a later load
+    /// can fall back on, so the file stays readable and a scene whose assets never move is
+    /// unaffected by all of this.
+    ///
+    /// Returns how many references gained an identity, which is the number a caller can log or
+    /// assert on. Re-stamping is idempotent for an unchanged tree.
+    pub fn stamp_asset_identity(&mut self, identity: &dyn AssetIdentity) -> usize {
+        let mut stamped = 0;
+        for entity in &mut self.entities {
+            if let Some(path) = entity.mesh_source.as_deref() {
+                if let Some(uuid) = identity.uuid_for_path(path) {
+                    if entity.mesh_uuid.as_deref() != Some(uuid.as_str()) {
+                        stamped += 1;
+                    }
+                    entity.mesh_uuid = Some(uuid);
+                }
+            }
+            if let Some(material) = entity.material_source.as_mut() {
+                if let Some(path) = material.texture_source.as_deref() {
+                    if let Some(uuid) = identity.uuid_for_path(path) {
+                        if material.texture_uuid.as_deref() != Some(uuid.as_str()) {
+                            stamped += 1;
+                        }
+                        material.texture_uuid = Some(uuid);
+                    }
+                }
+            }
+        }
+        stamped
+    }
+
+    /// Point every stale asset path at where that asset is *now*, using the recorded identity.
+    ///
+    /// Run after reading, before instantiating. For each reference that carries a UUID the registry
+    /// knows, the registry's path wins — it was built by scanning the live tree, so a disagreement
+    /// means the file moved and the scene's path is the stale half.
+    ///
+    /// What this does **not** repair, and it is worth being exact about it rather than promising
+    /// robustness: the `.meta` sidecar is named after its asset file, so a rename or move that
+    /// leaves the sidecar behind orphans the identity, and this has nothing to work from (a later
+    /// import mints a *new* UUID for the new name). What it does repair is the case that actually
+    /// happens — a file or a whole folder MOVED with its sidecar, which is what dragging a folder
+    /// or `git mv` does, and which a path reference cannot survive.
+    ///
+    /// Returns how many references were repointed.
+    pub fn repair_asset_paths(&mut self, identity: &dyn AssetIdentity) -> usize {
+        let mut repaired = 0;
+        for entity in &mut self.entities {
+            if let Some(uuid) = entity.mesh_uuid.clone() {
+                if let Some(current) = identity.path_for_uuid(&uuid) {
+                    if entity.mesh_source.as_deref() != Some(current.as_str()) {
+                        entity.mesh_source = Some(current);
+                        repaired += 1;
+                    }
+                }
+            }
+            if let Some(material) = entity.material_source.as_mut() {
+                if let Some(uuid) = material.texture_uuid.clone() {
+                    if let Some(current) = identity.path_for_uuid(&uuid) {
+                        if material.texture_source.as_deref() != Some(current.as_str()) {
+                            material.texture_source = Some(current);
+                            repaired += 1;
+                        }
+                    }
+                }
+            }
+        }
+        repaired
+    }
+}
+
 impl SceneData {
     /// Parse a scene out of a RON **string** — the in-memory counterpart of
     /// [`load_into`](Self::load_into), for a level that is embedded in the binary, fetched
@@ -229,6 +366,23 @@ pub struct EntityData {
     /// `spawner` helpers, glTF import) carry no `MeshSource`, so they save with
     /// `mesh_source: None` and reload without geometry.
     pub mesh_source: Option<String>,
+    /// Stable identity of the asset [`mesh_source`](Self::mesh_source) names, when one is known —
+    /// the UUID from its `.meta` sidecar, as a string.
+    ///
+    /// **The path is authoritative; this is the fallback.** A scene stays readable and
+    /// hand-editable because it still names its mesh by path, and identity only speaks up when the
+    /// path has gone stale: `SceneData::repair_asset_paths` replaces the path when the registry
+    /// reports a *different* current location for the same UUID. So a texture or mesh that MOVED
+    /// (carrying its sidecar, which is what dragging a folder or `git mv` does) keeps working, and
+    /// nothing changes for a scene whose assets sat still.
+    ///
+    /// A `String` rather than a `Uuid`: the type would put the `uuid` crate on a Stage A public
+    /// surface for no gain here — this layer never does arithmetic on it, it only carries it to a
+    /// resolver (docs/ENGINE.md §4).
+    ///
+    /// `serde(default)`: every scene written before 2026-08-17 loads unchanged, with `None`.
+    #[serde(default)]
+    pub mesh_uuid: Option<String>,
     /// The entity's [`MaterialSource`], inlined rather than referenced by name so that a scene
     /// file is self-contained — colours and roughness survive without an external material
     /// library alongside it.
@@ -325,6 +479,11 @@ pub struct MaterialData {
     /// unmodified. A path that fails to load falls back to that same white texture and logs a
     /// warning — a missing texture degrades the look but never fails the scene load.
     pub texture_source: Option<String>,
+    /// Stable identity of the texture [`texture_source`](Self::texture_source) names — the same
+    /// path-authoritative, identity-as-fallback rule as [`EntityData::mesh_uuid`], for the same
+    /// reasons.
+    #[serde(default)]
+    pub texture_uuid: Option<String>,
 }
 
 impl SceneData {
@@ -347,10 +506,16 @@ impl SceneData {
     /// [`SceneError::Serialize`] if RON encoding fails, [`SceneError::Io`] if the file cannot
     /// be written.
     #[tracing::instrument(skip_all, name = "scene_save", fields(path = %file_path))]
-    pub fn save(
+    /// [`save`](Self::save), and additionally record each asset's identity so a later load can
+    /// find an asset that has **moved** (see [`SceneData::stamp_asset_identity`]).
+    ///
+    /// Paths are written exactly as before; this only adds the fallback. `save` is this function
+    /// with [`NoAssetIdentity`], so there is one code path rather than two that can drift.
+    pub fn save_with_identity(
         world: &World,
         file_path: &str,
         registry: &gizmo_core::registry::ComponentRegistry,
+        identity: &dyn AssetIdentity,
     ) -> Result<(), SceneError> {
         if let Some(parent) = std::path::Path::new(file_path).parent() {
             // Non-fatal here: `fs::write` below surfaces the real failure if the directory
@@ -378,11 +543,15 @@ impl SceneData {
             joints = physics_world.joints.clone();
         }
 
-        let scene = SceneData {
+        let mut scene = SceneData {
             version: CURRENT_SCENE_VERSION,
             entities: entities_data,
             joints,
         };
+        let stamped = scene.stamp_asset_identity(identity);
+        if stamped > 0 {
+            tracing::debug!(stamped, "[Scene] varlık kimlikleri sahneye işlendi");
+        }
 
         let string_data = ron::ser::to_string_pretty(&scene, ron::ser::PrettyConfig::default())
             .map_err(|e| {
@@ -477,6 +646,10 @@ impl SceneData {
                 metallic: m.metallic,
                 unlit: m.unlit,
                 texture_source: m.texture_source.clone(),
+                // Filled by `stamp_asset_identity`, which the caller runs with a resolver: this
+                // layer cannot look up an asset's identity, because that registry lives in the
+                // renderer, a layer above.
+                texture_uuid: None,
             });
             let parent_id = parents.get(id).map(|p| p.0);
 
@@ -527,6 +700,7 @@ impl SceneData {
                     original_id: id,
                     name,
                     mesh_source,
+                    mesh_uuid: None,
                     material_source,
                     parent_id,
                     components: dynamic_components,
@@ -613,10 +787,15 @@ impl SceneData {
     /// written by an older one — that case fails at the parser, before `migrate` can see a
     /// version, so it is detected here.
     #[tracing::instrument(skip_all, name = "scene_load", fields(path = %file_path))]
-    pub fn load_into(
+    /// [`load_into`](Self::load_into), and additionally repoint any asset reference whose path has
+    /// gone stale at where that asset is now (see [`SceneData::repair_asset_paths`]).
+    ///
+    /// `load_into` is this function with [`NoAssetIdentity`].
+    pub fn load_into_with_identity(
         file_path: &str,
         world: &mut World,
         registry: &gizmo_core::registry::ComponentRegistry,
+        identity: &dyn AssetIdentity,
     ) -> Result<(), SceneError> {
         let string_data = fs::read_to_string(file_path).map_err(|e| {
             // `InvalidData` here means the bytes are not UTF-8, which for a text format is not
@@ -660,6 +839,17 @@ impl SceneData {
         };
 
         scene.migrate(file_path)?;
+
+        // Before instantiation, because the ECS components carry only the path: once
+        // `MaterialSource`/`MeshSource` exist there is no identity left to repair from.
+        let repaired = scene.repair_asset_paths(identity);
+        if repaired > 0 {
+            tracing::info!(
+                repaired,
+                path = %file_path,
+                "[Scene] taşınmış varlıklar kimlikten yeniden bulundu",
+            );
+        }
 
         let entities = scene.entities;
         let entity_count = entities.len();
@@ -929,6 +1119,7 @@ impl SceneData {
                 original_id: root_entity_id,
                 name: None,
                 mesh_source: None,
+                mesh_uuid: None,
                 material_source: None,
                 parent_id: None,
                 components: std::collections::BTreeMap::new(),
@@ -1535,6 +1726,7 @@ mod tests {
                 metallic: 0.25,
                 unlit: 1.0,
                 texture_source: Some("wood/oak.png".to_string()),
+                texture_uuid: None,
             },
             MaterialData {
                 albedo: [1.0, 1.0, 1.0, 1.0],
@@ -1542,6 +1734,7 @@ mod tests {
                 metallic: 0.0,
                 unlit: 0.0,
                 texture_source: None,
+                texture_uuid: None,
             },
         ] {
             let encoded = ron::ser::to_string(&mat).expect("MaterialData serialize");
@@ -1559,12 +1752,14 @@ mod tests {
             original_id: 42,
             name: Some("Crate".to_string()),
             mesh_source: Some("cube".to_string()),
+            mesh_uuid: None,
             material_source: Some(MaterialData {
                 albedo: [0.2, 0.4, 0.6, 1.0],
                 roughness: 0.7,
                 metallic: 0.1,
                 unlit: 0.0,
                 texture_source: None,
+                texture_uuid: None,
             }),
             parent_id: Some(7),
             components,
@@ -1741,6 +1936,7 @@ mod tests {
                 original_id: 1000,
                 name: Some("P".to_string()),
                 mesh_source: None,
+                mesh_uuid: None,
                 material_source: None,
                 parent_id: None,
                 components: std::collections::BTreeMap::new(),
@@ -1749,6 +1945,7 @@ mod tests {
                 original_id: 1001,
                 name: Some("C".to_string()),
                 mesh_source: None,
+                mesh_uuid: None,
                 material_source: None,
                 parent_id: Some(1000),
                 components: std::collections::BTreeMap::new(),
@@ -1791,6 +1988,7 @@ mod tests {
             original_id: 500,
             name: Some("Orphan".to_string()),
             mesh_source: None,
+            mesh_uuid: None,
             material_source: None,
             parent_id: Some(9999), // not present in the saved set → unresolvable
             components: std::collections::BTreeMap::new(),
@@ -1996,5 +2194,115 @@ mod tests {
         assert_eq!(names.len(), 2);
         assert!(names.iter().any(|(id, n)| *id == a.id() && n == "Alpha"));
         assert!(names.iter().any(|(id, n)| *id == b.id() && n == "Beta"));
+    }
+}
+
+#[cfg(test)]
+mod asset_identity_tests {
+    use super::{AssetIdentity, EntityData, MaterialData, NoAssetIdentity, SceneData};
+    use std::collections::HashMap;
+
+    /// A registry stub: exactly the two lookups the trait names, from a fixed table.
+    struct Registry {
+        by_path: HashMap<String, String>,
+        by_uuid: HashMap<String, String>,
+    }
+
+    impl Registry {
+        /// `entries` are (current path, uuid) — the shape a scan produces.
+        fn new(entries: &[(&str, &str)]) -> Self {
+            Self {
+                by_path: entries.iter().map(|(p, u)| (p.to_string(), u.to_string())).collect(),
+                by_uuid: entries.iter().map(|(p, u)| (u.to_string(), p.to_string())).collect(),
+            }
+        }
+    }
+
+    impl AssetIdentity for Registry {
+        fn uuid_for_path(&self, path: &str) -> Option<String> {
+            self.by_path.get(path).cloned()
+        }
+        fn path_for_uuid(&self, uuid: &str) -> Option<String> {
+            self.by_uuid.get(uuid).cloned()
+        }
+    }
+
+    fn scene_with(mesh: &str, texture: &str) -> SceneData {
+        let e = EntityData {
+            original_id: 1,
+            mesh_source: Some(mesh.to_string()),
+            material_source: Some(MaterialData {
+                texture_source: Some(texture.to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut scene = SceneData::from_ron_str("(version: 1, entities: [])").expect("empty scene");
+        scene.entities.push(e);
+        scene
+    }
+
+    /// The whole point, in one test: an asset that MOVED is still found.
+    ///
+    /// Save with the asset at its old path, move the file (the registry now reports the new
+    /// location for the same UUID), load — and the scene points at the new path. Without the
+    /// identity stamp the reference would be exactly as stale as the path it was written from.
+    #[test]
+    fn a_moved_asset_is_found_again_by_identity() {
+        let at_save = Registry::new(&[
+            ("demo/assets/old/tree.obj", "11111111-1111-1111-1111-111111111111"),
+            ("demo/assets/old/bark.png", "22222222-2222-2222-2222-222222222222"),
+        ]);
+        let mut scene = scene_with("demo/assets/old/tree.obj", "demo/assets/old/bark.png");
+        assert_eq!(scene.stamp_asset_identity(&at_save), 2, "both references gained an identity");
+
+        // The file moved with its sidecar; a fresh scan reports the new path for the same UUID.
+        let at_load = Registry::new(&[
+            ("demo/assets/props/tree.obj", "11111111-1111-1111-1111-111111111111"),
+            ("demo/assets/props/bark.png", "22222222-2222-2222-2222-222222222222"),
+        ]);
+        assert_eq!(scene.repair_asset_paths(&at_load), 2);
+        assert_eq!(scene.entities[0].mesh_source.as_deref(), Some("demo/assets/props/tree.obj"));
+        assert_eq!(
+            scene.entities[0].material_source.as_ref().unwrap().texture_source.as_deref(),
+            Some("demo/assets/props/bark.png")
+        );
+    }
+
+    /// A scene whose assets sat still is byte-identical after a repair pass — the fallback must
+    /// not rewrite paths for its own sake.
+    #[test]
+    fn nothing_moves_when_nothing_moved() {
+        let reg = Registry::new(&[("demo/assets/tree.obj", "11111111-1111-1111-1111-111111111111")]);
+        let mut scene = scene_with("demo/assets/tree.obj", "demo/assets/bark.png");
+        scene.stamp_asset_identity(&reg);
+        let before = scene.to_ron_string().expect("encode");
+        assert_eq!(scene.repair_asset_paths(&reg), 0);
+        assert_eq!(scene.to_ron_string().expect("encode"), before);
+    }
+
+    /// An unknown identity leaves the path alone. This is the case a game that ships without
+    /// sidecars is in on every load, so it must be a no-op and not an error.
+    #[test]
+    fn an_unknown_identity_leaves_the_path_alone() {
+        let mut scene = scene_with("demo/assets/tree.obj", "demo/assets/bark.png");
+        scene.entities[0].mesh_uuid = Some("99999999-9999-9999-9999-999999999999".into());
+        assert_eq!(scene.repair_asset_paths(&Registry::new(&[])), 0);
+        assert_eq!(scene.entities[0].mesh_source.as_deref(), Some("demo/assets/tree.obj"));
+        // And the identity-blind resolver is the same no-op, which is what `save`/`load_into` use.
+        assert_eq!(scene.repair_asset_paths(&NoAssetIdentity), 0);
+        assert_eq!(scene.stamp_asset_identity(&NoAssetIdentity), 0);
+    }
+
+    /// A scene written before the fields existed loads with `None` and is untouched by both passes.
+    #[test]
+    fn a_scene_without_the_fields_still_loads() {
+        let old = "(version: 1, entities: [(original_id: 7, name: Some(\"Crate\"), \
+                   mesh_source: Some(\"demo/assets/tree.obj\"), material_source: None, \
+                   parent_id: None, components: {})])";
+        let mut scene = SceneData::from_ron_str(old).expect("a pre-identity scene must still load");
+        assert_eq!(scene.entities[0].mesh_uuid, None);
+        assert_eq!(scene.entities[0].mesh_source.as_deref(), Some("demo/assets/tree.obj"));
+        assert_eq!(scene.repair_asset_paths(&Registry::new(&[])), 0);
     }
 }

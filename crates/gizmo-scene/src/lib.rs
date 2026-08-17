@@ -86,7 +86,7 @@ pub use registry::SceneRegistry;
 /// [`MaterialData`](scene::MaterialData) the PBR parameters (albedo RGBA, roughness,
 /// metallic, unlit, optional texture path) copied out of a row's `MaterialSource` — none of
 /// which the in-memory [`SceneSnapshot`] carries.
-pub use scene::{EntityData, MaterialData, SceneData};
+pub use scene::{AssetIdentity, EntityData, MaterialData, NoAssetIdentity, SceneData};
 /// Re-export of [`snapshot::SceneSnapshot`] — the editor's in-memory Play/Stop backup. Same
 /// component registry as the file format, but no disk I/O, no RON file, and no mesh or
 /// material data.

@@ -16,6 +16,33 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Scenes can find an asset that moved (asset identity, path-authoritative).** `EntityData` and
+  `MaterialData` gained `mesh_uuid` / `texture_uuid` (`serde(default)`, so every existing scene
+  loads unchanged), and `SceneData::save_with_identity` / `load_into_with_identity` write and use
+  them. The path is still what a scene names and what loads it; the UUID only speaks up when the
+  registry reports a *different* current location for the same asset — i.e. the file moved with its
+  `.meta` sidecar, which is exactly what a path reference cannot survive. A rename that leaves the
+  sidecar behind orphans the identity and is not covered.
+
+  The resolver is supplied by the caller through the new `gizmo_scene::AssetIdentity` trait, because
+  `gizmo-scene` sits below `gizmo-renderer` and must not learn what an asset is;
+  `gizmo_app::asset_identity::ManagerIdentity` is the implementation over `AssetManager`. **This is
+  also the release where anything populates that registry at all** — no code anywhere called
+  `AssetManager::scan_assets_directory`, so the scanner, the UUID resolver in `load_obj` /
+  `load_material_texture` and the `.meta` sidecars on disk had never been connected. The studio
+  scans its asset-browser root at startup (read-only — minting stays an explicit import), the
+  exported runtime scans its own layouts, and an application that scans nothing behaves exactly as
+  before.
+
+### Fixed
+
+- **`AssetManager::normalize_path` doubled the leading separator of an absolute path**
+  (`/tmp/x` → `//tmp/x`). Lookups matched anyway, since both sides normalise, so the damage was to
+  the path handed *out* by `get_path` — tolerated on Linux, a UNC prefix on Windows. `./demo/x` and
+  `demo/x` also keyed the same file twice, which would have given one asset two identities.
+
 ### Changed
 
 - **The light ceiling is 32, and off-screen lights no longer take slots (`MAX_LIGHTS` 10 → 32).**

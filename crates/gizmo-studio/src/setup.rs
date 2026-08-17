@@ -189,6 +189,25 @@ pub fn setup_studio_scene(world: &mut World, renderer: &gizmo::renderer::Rendere
     // Fizik sistemleri
     world.insert_resource(gizmo::physics::world::PhysicsWorld::new());
 
+    // Register the identity of every asset in the project that already has one.
+    //
+    // Read-only on purpose: `scan_assets_directory` skips an asset with no `.meta` sidecar rather
+    // than stamping one, because writing into somebody's asset tree is an import action, not a
+    // side effect of opening the editor (see `AssetManager::import_assets_directory`). Until this
+    // call existed nothing anywhere populated the registry, so the path↔UUID machinery — the
+    // scanner, the resolver, the sidecars on disk — was wired to nothing, and a scene could not
+    // have been repaired by identity even in principle.
+    //
+    // The directory is the asset browser's own root, so the editor cannot end up scanning one tree
+    // while showing another.
+    let workspace_root = gizmo::editor::editor_state::AssetBrowserState::DEFAULT_WORKSPACE_ROOT;
+    asset_manager.scan_assets_directory(std::path::Path::new(workspace_root));
+    tracing::info!(
+        root = workspace_root,
+        registered = asset_manager.path_to_uuid.len(),
+        "[Studio] varlık kimlik kaydı tarandı"
+    );
+
     // Custom Skybox or proper horizon color
     world.insert_resource(asset_manager);
     world.insert_resource(gizmo::core::asset::Assets::<gizmo::renderer::components::Mesh>::default());

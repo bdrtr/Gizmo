@@ -252,14 +252,25 @@ pub struct AssetBrowserState {
         (Instant, Vec<(std::path::PathBuf, String)>, usize),
     >,
 }
+impl AssetBrowserState {
+    /// The project directory the browser opens in, and the one whose asset identities an
+    /// application should register.
+    ///
+    /// A single source for what used to be the string `"demo/assets"` written twice here — and, as
+    /// soon as anything outside this crate needed it, would have been written a third time
+    /// somewhere else. The studio scans exactly this directory at startup, so the editor cannot
+    /// show one tree while the asset registry knows another.
+    pub const DEFAULT_WORKSPACE_ROOT: &'static str = "demo/assets";
+}
+
 impl Default for AssetBrowserState {
     fn default() -> Self {
         Self {
             filter: String::new(),
             kind_filter: None,
             selected: None,
-            root: "demo/assets".to_string(),
-            workspace_root: "demo/assets".to_string(),
+            root: Self::DEFAULT_WORKSPACE_ROOT.to_string(),
+            workspace_root: Self::DEFAULT_WORKSPACE_ROOT.to_string(),
             show: true,
             workspace_rx: None,
             cached_dir: None,

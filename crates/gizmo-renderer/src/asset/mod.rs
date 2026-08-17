@@ -465,12 +465,38 @@ impl AssetManager {
     /// Normalise a file-system path to forward-slash form for use as a map key.
     ///
     /// Uses [`Path`] to avoid platform-specific separator assumptions.
+    ///
+    /// # Absolute paths
+    ///
+    /// `Path::components` yields the root as its own component whose text is already `"/"`, so
+    /// joining every component with `"/"` used to produce `//tmp/assets/thing.png` — a doubled
+    /// leading separator. Lookups still matched (both sides go through this function), which is why
+    /// it survived: the damage was to the value handed *out* by
+    /// [`get_path`](Self::get_path) — a path that Linux tolerates and Windows reads as the start of
+    /// a UNC name, and that shows a doubled slash wherever it is printed. Found 2026-08-17 by a
+    /// facade test that registered an asset under `std::env::temp_dir()`, which is the ordinary way
+    /// to reach an absolute asset path (an editor opening a project outside the working directory
+    /// is the other).
     pub fn normalize_path(path: &str) -> String {
-        Path::new(path)
-            .components()
-            .map(|c| c.as_os_str().to_string_lossy().into_owned())
-            .collect::<Vec<_>>()
-            .join("/")
+        let mut out = String::new();
+        for component in Path::new(path).components() {
+            // A leading `./` is dropped. `Path::components` keeps it (it removes only *interior*
+            // `.`), so `./demo/x.png` and `demo/x.png` used to be two different registry keys for
+            // one file — one identity per way of spelling the path, which is the mismatch this
+            // registry exists to prevent.
+            if component == std::path::Component::CurDir {
+                continue;
+            }
+            let text = component.as_os_str().to_string_lossy();
+            // The root (and a Windows prefix) already carries its separator.
+            if out.is_empty() || out.ends_with('/') {
+                out.push_str(&text);
+            } else {
+                out.push('/');
+                out.push_str(&text);
+            }
+        }
+        out.replace('\\', "/")
     }
 
     /// Return the UUID registered for `path`, if any.
@@ -922,6 +948,25 @@ mod scan_does_not_write_tests {
     }
 
     /// Scanning registers what already has identity, and creates none.
+    /// An absolute path keeps exactly one leading separator.
+    ///
+    /// It used to gain a second one, because `Path::components` hands back the root as a component
+    /// whose text is already `"/"` and every component was joined with another. Lookups matched
+    /// anyway (both sides normalise), so only the value handed out was wrong — which is the kind of
+    /// defect that hides until something reads it: `get_path` feeds a loader, and `//tmp/x` is
+    /// tolerated on Linux and a UNC prefix on Windows.
+    #[test]
+    fn normalising_an_absolute_path_does_not_double_the_root() {
+        assert_eq!(AssetManager::normalize_path("/tmp/assets/thing.png"), "/tmp/assets/thing.png");
+        assert_eq!(AssetManager::normalize_path("demo/assets/thing.png"), "demo/assets/thing.png");
+        assert_eq!(AssetManager::normalize_path("./demo/thing.png"), "demo/thing.png");
+        assert!(!AssetManager::normalize_path("demo\\assets\\thing.png").contains('\\'));
+        // Idempotent: normalising a normalised path must not change it, or a re-scan would key the
+        // same asset twice.
+        let once = AssetManager::normalize_path("/tmp/assets/thing.png");
+        assert_eq!(AssetManager::normalize_path(&once), once);
+    }
+
     #[test]
     fn scanning_reads_existing_identities_and_mints_none() {
         let dir = tree("scan");

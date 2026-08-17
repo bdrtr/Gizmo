@@ -99,7 +99,23 @@ fn print_report(report: PlayReport<'_>) {
 /// is not there.
 fn setup(world: &mut World, _renderer: &Renderer) -> RuntimeState {
     world.insert_resource(gizmo::physics::world::PhysicsWorld::new());
-    world.insert_resource(AssetManager::new());
+
+    // Register asset identities before the scene loads, so a reference whose path has gone stale
+    // can be repointed at the file it names (`gizmo::asset_identity`). Read-only: a shipped game
+    // must not stamp new sidecars into its own install directory — an asset with no identity keeps
+    // being addressed by path, exactly as before.
+    //
+    // `assets/` and `demo/assets/` because those are the two layouts `exported_layout_root` picks
+    // between: an export puts `assets/` beside the binary, and a dev run from the workspace has
+    // `demo/assets/`. Scanning a directory that does not exist is a no-op.
+    let mut assets = AssetManager::new();
+    for root in ["assets", "demo/assets"] {
+        assets.scan_assets_directory(Path::new(root));
+    }
+    if !assets.path_to_uuid.is_empty() {
+        tracing::debug!(registered = assets.path_to_uuid.len(), "varlık kimlikleri kaydedildi");
+    }
+    world.insert_resource(assets);
     world.insert_resource(gizmo::core::asset::Assets::<gizmo::renderer::components::Mesh>::default());
 
     match gizmo::scripting::ScriptEngine::new() {

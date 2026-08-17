@@ -28,6 +28,13 @@
 //! Builder methods are typically chained, ending with `run`, in the order
 //! `new` -> `set_setup` -> `set_update` -> optional render/UI hooks -> `run`.
 
+/// The path↔UUID bridge between an asset registry and the scene format (see the module docs).
+///
+/// Needs both halves — `gizmo-renderer`'s `AssetManager` and `gizmo-scene`'s `AssetIdentity` — so
+/// it lives here, at the first layer that has them, rather than in the facade above: this way the
+/// app's own initial-scene load uses it, and every game gets identity repair without wiring it.
+#[cfg(all(feature = "scene", feature = "render"))]
+pub mod asset_identity;
 #[cfg(feature = "egui")]
 pub mod dev_console;
 /// Generic immediate-mode overlay UI runtime (egui integration).

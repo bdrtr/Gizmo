@@ -173,11 +173,44 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
 - **The doc-language rule, Stage B remainder.** Stage A plus the facade went from 1286 Turkish
   `///` lines to 8, and seven of those eight are measurement error. The Stage B crates
   (renderer, editor, studio, scripting, app) have not been through it.
-- **Asset identity, the remaining three.** `demo/assets` is not scanned, glTF meshes get no UUID,
-  and scenes still write paths rather than ids. All three wait on one decision — *do scenes
-  address assets by identity?* — and wiring them before it is answered would be speculation. The
-  machinery exists: `AssetMeta { uuid }`, `.meta` sidecars on disk, `path_to_uuid`/`uuid_to_path`,
-  and `load_obj`/`load_material_texture` already accept a UUID in place of a path.
+- **Asset identity — decided and wired (2026-08-17); one of the three stays open, with a trigger.**
+  The blocking question was *do scenes address assets by identity?* The answer is **the path stays
+  authoritative and identity is the fallback**, because the two failure modes are not symmetric: a
+  missing path is a message anyone can act on ("no file at `demo/assets/tree.obj`"), while a
+  dangling UUID is opaque, and a scene that names its assets by UUID stops being readable or
+  hand-editable for a gain that only materialises when a file moves. So a scene records both, and
+  `SceneData::repair_asset_paths` prefers the registry's current path only when it *disagrees* with
+  the stored one.
+
+  What that closed:
+  - **`demo/assets` is scanned.** This was the linchpin and it was not a small gap: *nothing
+    anywhere* called `scan_assets_directory` or `import_assets_directory`, so `path_to_uuid` was
+    always empty, and the scanner, the resolver (`resolve_path_from_meta_source`, which `load_obj`
+    and `load_material_texture` have always called) and the 22 sidecars on disk were wired to
+    nothing at all. The studio now scans its asset-browser root at startup, read-only, and the
+    exported runtime scans its own two layouts.
+  - **Scenes carry identity.** `EntityData::mesh_uuid` and `MaterialData::texture_uuid`, both
+    `serde(default)` so every older scene loads unchanged. `save_with_identity` /
+    `load_into_with_identity` are the identity-aware pair; `save` / `load_into` are those functions
+    with a `NoAssetIdentity`, so there is one code path rather than two that drift. The resolver is
+    passed in as `AssetIdentity` because `gizmo-scene` sits below `gizmo-renderer` and must not
+    learn what an asset is; the impl lives in `gizmo-app`, the first layer holding both halves,
+    which is also why the app's own initial-scene load gets repair for free.
+  - **What it survives, exactly:** a file or folder that MOVED with its `.meta` sidecar — dragging
+    a folder, `git mv`, reorganising `demo/assets` — which is the case a path cannot survive. Not a
+    rename that leaves the sidecar behind: the sidecar is named after its file, so the identity is
+    orphaned and a later import mints a new one. That is a property of sidecar identity, and
+    overclaiming it would be worse than the gap.
+  - Two defects fell out of writing the tests: `normalize_path` gave absolute paths a **doubled
+    leading slash** (`//tmp/x`, harmless in a lookup because both sides normalise, wrong in the
+    value handed to a loader), and `./demo/x` vs `demo/x` were two registry keys for one file.
+  - **glTF sub-mesh identity is still open.** A `.glb` gets one UUID as a file, but a scene's key is
+    `gltf_mesh_<file>_<index>`, so identity at the sub-asset level needs a second id (Unity's
+    fileID). **Trigger:** somebody renames or moves a `.glb` and expects its meshes to survive.
+  - **Writing identity is on for the editor and the app, and that is the whole rollout.** There is
+    no asset rename/move action in the editor yet (the browser is read-only), so nothing else needs
+    it. **Trigger for more:** an editor move/rename action — which should carry the sidecar, and at
+    that point is also what makes the orphan case above worth fixing.
 - **Shader Graph.** A node editor plus WGSL generation. The largest item on the editor list and a
   project on its own; the prototype has a tab for it, the engine has nothing.
 
@@ -1136,6 +1169,14 @@ the *slope* gate is the one that guards it.
   to catch a class of mistake — a scan, a ratchet, an exhaustive destructure — reintroduce the
   mistake, watch it go red, and put that in the commit message. Two of this repo's mirror tests
   passed for months while checking nothing, and both looked exactly like tests that worked.
+- **Inserting an item before a `pub mod` or `pub fn` steals its attributes.** Anchor an insertion on
+  the item's own line and it lands *between* the item and the `#[cfg]` / `#[allow]` / doc block
+  above it — which now belongs to whatever was inserted. This happened three times on 2026-08-17:
+  twice displacing a doc comment (caught immediately by `missing_docs`) and once taking
+  `#[cfg(feature = "egui")]` off `pub mod dev_console`, which compiled fine natively and produced
+  17 unresolved-`egui` errors in the wasm job — a gate that only exists because the same reasoning
+  was applied to the wasm target a day earlier. Walk backwards over the attributes *and* the docs
+  before inserting, and note which gate would notice if you did not.
 - **Prefer a scanned subject list to a written one.** A test that names the ten files it polices
   cannot see the eleventh, and that is the file the bug will be in. Take subjects from the
   directory, the component modules, the workspace; keep only the *exceptions* by hand, and fail on
