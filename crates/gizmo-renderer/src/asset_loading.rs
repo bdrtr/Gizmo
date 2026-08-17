@@ -6,8 +6,8 @@ use wgpu::Device;
 use wgpu::Queue;
 use wgpu::BindGroupLayout;
 
-/// Sürekli olarak sahnede yeni eklenen `MeshSource` ve `MaterialSource` bileşenlerini
-/// tarayarak, eksik olan `Mesh` ve `Material` GPU bileşenlerini yükler.
+/// Continuously scans the scene for newly added `MeshSource` and `MaterialSource` components and
+/// loads the `Mesh` and `Material` GPU components they are missing.
 #[tracing::instrument(skip_all, level = "trace")]
 pub fn run_asset_loading_system(
     world: &mut World,

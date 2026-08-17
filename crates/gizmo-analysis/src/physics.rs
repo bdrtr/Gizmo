@@ -1,13 +1,13 @@
-//! Fizik metrik toplayıcısı (`physics` özelliği).
+//! The physics metric collector (the `physics` feature).
 //!
-//! `PhysicsWorld` resource'undan `PhysicsMetrics`'i (aşama zamanlamaları + sayımlar) okur.
+//! Reads `PhysicsMetrics` (stage timings and counts) out of the `PhysicsWorld` resource.
 
 use crate::collector::Collector;
 use crate::snapshot::FrameSnapshot;
 use gizmo_core::world::World;
 use gizmo_physics_rigid::PhysicsWorld;
 
-/// Rigid-body fizik dünyasının metriklerini toplar.
+/// Collects the rigid-body physics world's metrics.
 #[derive(Debug, Clone, Default)]
 pub struct PhysicsCollector;
 

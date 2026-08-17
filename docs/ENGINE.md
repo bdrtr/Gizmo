@@ -257,7 +257,7 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
     "friction anchors") is the fix, and `ContactPoint` already carries `local_point_a/b` plus the
     warm-start match that would freeze them. **Trigger:** a game that needs sub-millimetre hold at
     the friction limit. Not before — the visible symptom is gone.
-- **The doc-language rule — Stage A is DONE (2026-08-17), and the claim it replaces was false.**
+- **The doc-language rule — CLOSED (2026-08-17), and the claim it replaces was false.**
   This item used to read "Stage A plus the facade went from 1286 Turkish `///` lines to 8, and
   seven of those eight are measurement error." Scanning for it found **462 Turkish doc lines in
   Stage A's `src/`**, 476 of them in `gizmo-physics-rigid` alone — the solver's and the joint
@@ -280,11 +280,19 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
   reason — `gizmo-core/src/cvar.rs` documents how `to_lowercase` handles `İ`, i.e. the Turkish
   letter is the subject of an English sentence — and an exception that stops applying fails too.
 
-  **Remaining, as measured by the same scan:** `gizmo-renderer` 328, `gizmo-scripting` 138,
-  `gizmo-analysis` 139, `gizmo-editor` 106, `gizmo-studio` 59, the facade 1 — the Stage B crates,
-  which have never been through it. Test files, benches and plain `//` comments are deliberately
-  out of scope (the rule is about the documentation surface; CLAUDE.md already records that
-  inline comments are still Turkish in places).
+  **Stage B went the same way in the same session**, so the table is now **empty**: the renderer
+  (327), scripting (138), analysis (137), editor (100) and studio (53) are English too, 755 lines
+  on top of Stage A's 462. Along the way the detector learned to ignore citations — a code span or
+  a quoted string is something a sentence *mentions*, not the language it is written in — which
+  removed the only exception the ratchet had (`cvar.rs` documents how `to_lowercase` treats `İ`)
+  and dropped 15 false positives across four crates. `EXCEPTIONS` stays in the file, empty, for
+  the case citation-stripping cannot answer.
+
+  Test files, benches and plain `//` comments are deliberately out of scope (the rule is about the
+  documentation surface; CLAUDE.md already records that inline comments are still Turkish in
+  places). Measured remainder there, by the same detector: **221 lines** in `tests/` and `benches/`
+  across the workspace. (An earlier count said 524; that figure predated citation-stripping and
+  counted the `#[cfg(test)]` modules that live inside `src/` — which this session translated.)
 - **Asset identity — decided and wired (2026-08-17); one of the three stays open, with a trigger.**
   The blocking question was *do scenes address assets by identity?* The answer is **the path stays
   authoritative and identity is the fallback**, because the two failure modes are not symmetric: a

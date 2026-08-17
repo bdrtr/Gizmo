@@ -13,8 +13,8 @@ use std::sync::Arc;
 use super::Renderer;
 
 impl Renderer {
-    /// Dama dokusu (checkerboard) oluşturur — test materyalleri için idealdir.
-    /// Cache'lenir: aynı doku tekrar oluşturulmaz.
+    /// Creates a checkerboard texture — ideal for test materials.
+    /// Cached: the same texture is not created twice.
     pub fn create_checkerboard_texture(&self) -> Arc<wgpu::BindGroup> {
         self.asset_manager
             .write()
@@ -26,8 +26,8 @@ impl Renderer {
             )
     }
 
-    /// Düz beyaz doku — varsayılan materyal için.
-    /// Cache'lenir: aynı doku tekrar oluşturulmaz.
+    /// A plain white texture, for the default material.
+    /// Cached: the same texture is not created twice.
     pub fn create_white_texture(&self) -> Arc<wgpu::BindGroup> {
         self.asset_manager.write().unwrap().create_white_texture(
             &self.device,
@@ -36,8 +36,8 @@ impl Renderer {
         )
     }
 
-    /// Diskten doku yükler (BC7 pipeline dahil).
-    /// Cache'lenir: aynı dosya yolu tekrar yüklenmez.
+    /// Loads a texture from disk (including the BC7 pipeline).
+    /// Cached: the same path is not loaded twice.
     pub fn load_texture(
         &self,
         path: &str,

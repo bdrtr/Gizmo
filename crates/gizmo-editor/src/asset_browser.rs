@@ -1,4 +1,4 @@
-//! Asset Browser — Alt panel'de proje dosyalarını gösterir
+//! The asset browser — shows the project's files in the bottom panel.
 
 use crate::editor_state::EditorState;
 use egui;
@@ -325,7 +325,6 @@ let mut finished = false;
     });
 }
 
-/// Dosya uzantısına göre ikon döndürür
 /// What an asset file is, decided from its extension.
 ///
 /// One table, because the icon and the type filter are the same question asked twice. The icon
@@ -861,7 +860,7 @@ mod tests {
         assert_eq!(get_file_icon("pbr.wgsl"), "🎨");
     }
 
-    /// Uzantı eşleştirmesi büyük/küçük harfe DUYARSIZ olmalı.
+    /// Extension matching must be case-INSENSITIVE.
     #[test]
     fn extension_matching_is_case_insensitive() {
         assert_eq!(get_file_icon("MODEL.OBJ"), "🗿");
@@ -870,21 +869,21 @@ mod tests {
         assert_eq!(get_file_icon("SHADER.WGSL"), "🎨");
     }
 
-    /// Uzantısı olmayan (nokta içermeyen) isim = klasör ikonu.
+    /// A name with no extension (no dot) gets the folder icon.
     #[test]
     fn no_extension_is_folder() {
         assert_eq!(get_file_icon("assets"), "📁");
         assert_eq!(get_file_icon(""), "📁");
     }
 
-    /// Bilinmeyen ama noktalı uzantı = jenerik dosya ikonu.
+    /// An unknown but dotted extension gets the generic file icon.
     #[test]
     fn unknown_extension_with_dot_is_generic_file() {
         assert_eq!(get_file_icon("notes.txt"), "📄");
         assert_eq!(get_file_icon("archive.xyz"), "📄");
     }
 
-    /// Çok-noktalı isimde YALNIZ son uzantı dikkate alınır.
+    /// In a multi-dotted name ONLY the last extension counts.
     #[test]
     fn only_last_extension_matters() {
         // son parça "gz" → bilinmeyen ama noktalı → jenerik dosya
@@ -893,8 +892,8 @@ mod tests {
         assert_eq!(get_file_icon("my.backup.png"), "🖼️");
     }
 
-    /// Nokta ile başlayan dotfile: rsplit ilk parçayı "gitignore" olarak alır,
-    /// bilinen uzantı değil ama isim nokta içerir → jenerik dosya ikonu.
+    /// A dotfile: rsplit takes the first piece as "gitignore", which is not a known extension,
+    /// but the name does contain a dot → generic file icon.
     #[test]
     fn leading_dot_dotfile_is_generic_file() {
         assert_eq!(get_file_icon(".gitignore"), "📄");

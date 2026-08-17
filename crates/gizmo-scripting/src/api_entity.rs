@@ -1,7 +1,7 @@
-//! Entity API — Lua'ya sunulan entity yönetim fonksiyonları
+//! The entity API — the entity-management functions exposed to Lua.
 //!
-//! Lua scriptlerinden entity pozisyon, rotasyon, hız ve ölçek bilgilerine
-//! erişim sağlar. Tüm değişiklikler komut kuyruğuna yazılır.
+//! Gives Lua scripts access to entity position, rotation, velocity and scale. Every change is
+//! written to the command queue.
 
 use crate::commands::{CommandQueue, ScriptCommand};
 use gizmo_core::World;
@@ -9,7 +9,7 @@ use gizmo_math::{Quat, Vec3};
 use mlua::prelude::*;
 use std::sync::Arc;
 
-/// Entity API fonksiyonlarını Lua'ya kaydeder
+/// Registers the entity API functions with Lua.
 pub fn register_entity_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Result<(), LuaError> {
     crate::api_table::register_protected(lua, "entity", |entity_table| {
 
@@ -232,8 +232,8 @@ mod tests {
     use gizmo_physics_core::Transform;
     use mlua::Lua;
 
-    /// Yazma tarafı: set_position/scale/velocity/angular_velocity ve set_rotation
-    /// argümanları doğru ScriptCommand'lara (Vec3/Quat) dönüştürüp kuyruğa yazmalı.
+    /// The write side: set_position/scale/velocity/angular_velocity and set_rotation must
+    /// convert their arguments into the right ScriptCommands (Vec3/Quat) and queue them.
     #[test]
     fn write_calls_push_expected_commands() {
         let lua = Lua::new();
@@ -268,7 +268,8 @@ mod tests {
         }
     }
 
-    /// Yaşam döngüsü: spawn / spawn_prefab / destroy / set_name doğru komutlara dönüşmeli.
+    /// Lifecycle: spawn / spawn_prefab / destroy / set_name must turn into the right
+    /// commands.
     #[test]
     fn lifecycle_calls_push_expected_commands() {
         let lua = Lua::new();
@@ -313,8 +314,8 @@ mod tests {
         assert!(matches!(cmds[3], ScriptCommand::DestroyEntity(9)));
     }
 
-    /// Okuma tarafı: update_entity_read_api World'den snapshot alır; get_position bilinen
-    /// entity için gerçek değeri döndürmeli.
+    /// The read side: update_entity_read_api snapshots the World, and get_position must return
+    /// the real value for a known entity.
     #[test]
     fn read_api_reflects_world_transform() {
         let lua = Lua::new();
@@ -340,8 +341,8 @@ mod tests {
         .unwrap();
     }
 
-    /// Bilinmeyen entity için getter'lar güvenli varsayılanlar döndürmeli:
-    /// pozisyon/hız sıfır, rotasyon kimlik (w=1), ölçek birim (1,1,1), isim boş.
+    /// For an unknown entity the getters must return safe defaults: zero position and velocity,
+    /// identity rotation (w=1), unit scale (1,1,1) and an empty name.
     #[test]
     fn read_api_returns_safe_defaults_for_unknown_id() {
         let lua = Lua::new();

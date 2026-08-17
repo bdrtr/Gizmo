@@ -1,4 +1,5 @@
-//! Shader yükleme yardımcıları (naga_oil ile WGSL modül kompozisyonu + native/web şeması).
+//! Shader-loading helpers (WGSL module composition through naga_oil, plus the native/web
+//! scheme).
 
 use naga_oil::compose::ShaderDefValue;
 use std::collections::HashMap;

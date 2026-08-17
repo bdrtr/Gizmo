@@ -4,11 +4,13 @@ pub struct ParticlePipelines {
     pub compute_pipeline: wgpu::ComputePipeline,
     pub compute_bind_group: wgpu::BindGroup,
     pub render_pipeline: wgpu::RenderPipeline,
-    /// Group 1: sahne derinlik dokusu (soft particles için FS'te örneklenir). Bind group
-    /// her frame güncel `depth_texture_view` ile oluşturulur (resize'da view değişir).
+    /// Group 1: the scene depth texture (sampled in the FS for soft particles). The bind group
+    /// is rebuilt every frame from the current `depth_texture_view`, because the view changes on
+    /// resize.
     pub depth_bind_group_layout: wgpu::BindGroupLayout,
-    /// Group 2: flipbook/SubUV atlas dokusu + sampler (duman sprite'ları). Varsayılan 1×1
-    /// beyaz; `set_flipbook` gerçek atlas'ı yükler. `misc.z` bayrağı FS'te açar/kapatır.
+    /// Group 2: the flipbook/SubUV atlas texture and sampler (smoke sprites). 1×1 white by
+    /// default; `set_flipbook` uploads the real atlas. The `misc.z` flag switches it on and off
+    /// in the FS.
     pub flipbook_bind_group_layout: wgpu::BindGroupLayout,
 }
 

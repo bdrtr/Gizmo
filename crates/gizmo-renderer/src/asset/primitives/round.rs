@@ -3,8 +3,9 @@ use crate::renderer::Vertex;
 use gizmo_math::Vec3;
 
 impl crate::asset::AssetManager {
-    /// Programatik UV Küre (Sphere) üretir.
-    /// UV-küre köşeleri (dış-yüzey CCW sarımlı, kutup dejenereleri atlanmış). Saf veri.
+    /// Builds a UV sphere programmatically.
+    /// The UV sphere's vertices (CCW-wound on the outside, with the degenerate pole triangles
+    /// skipped). Pure data.
     pub(crate) fn sphere_data(radius: f32, stacks: u32, slices: u32) -> Vec<Vertex> {
         let stacks = stacks.max(3);
         let slices = slices.max(3);
@@ -140,7 +141,7 @@ impl crate::asset::AssetManager {
         )
     }
 
-    /// Silindir köşeleri (yan + iki kapak), dış-yüzey CCW sarımlı. Saf veri.
+    /// A cylinder's vertices (side wall + two caps), CCW-wound on the outside. Pure data.
     pub(crate) fn cylinder_data(radius: f32, height: f32, radial_segments: u32) -> Vec<Vertex> {
         let radial_segments = radial_segments.max(3);
         let mut vertices = Vec::new();
@@ -195,7 +196,7 @@ impl crate::asset::AssetManager {
         Mesh::new_indexed(device, &vertices, Vec3::ZERO, format!("cylinder_{}_{}", radius, height))
     }
 
-    /// Koni köşeleri (yan + taban), dış-yüzey CCW sarımlı. Saf veri.
+    /// A cone's vertices (side wall + base), CCW-wound on the outside. Pure data.
     pub(crate) fn cone_data(radius: f32, height: f32, radial_segments: u32) -> Vec<Vertex> {
         let radial_segments = radial_segments.max(3);
         let mut vertices = Vec::new();
@@ -290,7 +291,7 @@ impl crate::asset::AssetManager {
         Mesh::new_indexed(device, &vertices, Vec3::ZERO, format!("torus_{}_{}", radius, tube_radius))
     }
 
-    /// Kapsül köşeleri (tüp + iki yarıküre), dış-yüzey CCW sarımlı. Saf veri.
+    /// A capsule's vertices (tube + two hemispheres), CCW-wound on the outside. Pure data.
     pub(crate) fn capsule_data(radius: f32, depth: f32, latitudes: u32, longitudes: u32) -> Vec<Vertex> {
         let latitudes = latitudes.max(4);
         let longitudes = longitudes.max(4);

@@ -1,11 +1,11 @@
-//! Audio API — Lua'ya sunulan ses yönetim fonksiyonları
+//! The audio API — the sound-management functions exposed to Lua.
 
 use crate::commands::{CommandQueue, ScriptCommand};
 use gizmo_math::Vec3;
 use mlua::prelude::*;
 use std::sync::Arc;
 
-/// Audio API fonksiyonlarını Lua'ya kaydeder
+/// Registers the audio API functions with Lua.
 pub fn register_audio_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Result<(), LuaError> {
     crate::api_table::register_protected(lua, "audio", |audio_table| {
 
@@ -54,8 +54,8 @@ mod tests {
     use super::*;
     use mlua::Lua;
 
-    /// audio.play / play_3d / stop doğru komutları (ad + 3B konum) kuyruğa yazmalı,
-    /// FIFO sırayı ve argüman dönüşümünü koruyarak.
+    /// audio.play / play_3d / stop must push the right commands (name + 3D position) onto the
+    /// queue, preserving FIFO order and the argument conversion.
     #[test]
     fn audio_calls_push_expected_commands() {
         let lua = Lua::new();

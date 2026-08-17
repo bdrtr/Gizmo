@@ -160,10 +160,11 @@ pub struct PostProcessUniforms {
     pub cam_near: f32,
     pub cam_far: f32,
     // ── Su-altı atmosferi (kamera bir fluid zone içindeyken) ──
-    /// 0 = kamera havada (etki yok), 1 = kamera su altında → derinlik-bazlı sis uygulanır.
+    /// 0 = the camera is in air (no effect), 1 = the camera is underwater → depth-based fog is
+    /// applied.
     pub underwater: f32,
-    /// Su-altı sis rengi (deniz mavisi-yeşili) + yoğunluk. WGSL'de tek `fog: vec4` (rgb+a=density)
-    /// olarak hizalanır (offset 48, 16-bayt hizalı).
+    /// The underwater fog colour (sea blue-green) plus its density. In WGSL it lines up as a
+    /// single `fog: vec4` (rgb + a=density) at offset 48, 16-byte aligned.
     pub fog_r: f32,
     pub fog_g: f32,
     pub fog_b: f32,

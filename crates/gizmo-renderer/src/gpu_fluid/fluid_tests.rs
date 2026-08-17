@@ -129,7 +129,7 @@ impl FluidSystem {
         &self.particles
     }
 
-    /// Brute-force komşu arama (test referansı)
+    /// Brute-force neighbour search (the reference for tests).
     pub fn neighbors(&self, i: usize) -> Vec<usize> {
         let pi = &self.particles[i];
         let h_sq = self.config.smoothing_radius * self.config.smoothing_radius;
@@ -214,7 +214,7 @@ impl FluidSystem {
         dt_cfl.min(requested_dt)
     }
 
-    /// Bir simülasyon adımı — CFL substep yönetimi
+    /// One simulation step — including the CFL substep handling.
     pub fn step(&mut self, dt: f32) {
         let sub_dt = self.compute_adaptive_dt(dt);
         let substeps = ((dt / sub_dt).ceil() as i32).min(self.config.max_substeps);
@@ -249,7 +249,7 @@ impl FluidSystem {
     }
 }
 
-/// Test yardımcısı — C++ makeSystem karşılığı
+/// A test helper — the counterpart of C++'s makeSystem.
 fn make_system(particle_count: usize) -> FluidSystem {
     let mut sys = FluidSystem::init(FluidConfig::default());
     if particle_count > 0 {

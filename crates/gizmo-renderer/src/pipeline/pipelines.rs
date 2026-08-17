@@ -1,4 +1,4 @@
-//! Render pipeline'larının (core + shadow) oluşturulması.
+//! Creating the render pipelines (core + shadow).
 
 use super::layouts::LayoutRefs;
 use super::shaders::load_shader;

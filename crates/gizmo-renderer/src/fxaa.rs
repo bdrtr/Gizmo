@@ -1,12 +1,12 @@
 //! FXAA (Fast Approximate Anti-Aliasing) — Post-Processing Pass
 //!
-//! Timothy Lottes FXAA 3.11 Quality implementasyonu.
-//! Composite + Tone Mapping sonrasında son pass olarak çalışır.
-//! Kenar tespiti luma tabanlıdır — düşük GPU maliyetli kenar yumuşatma sağlar.
+//! An implementation of Timothy Lottes' FXAA 3.11 Quality.
+//! Runs as the final pass, after composite and tone mapping.
+//! Edge detection is luma-based, which gives cheap edge smoothing on the GPU.
 
 use wgpu::util::DeviceExt;
 
-/// FXAA GPU kaynakları
+/// FXAA's GPU resources.
 pub struct FxaaState {
     pub pipeline: wgpu::RenderPipeline,
     pub bind_group_layout: wgpu::BindGroupLayout,
@@ -18,7 +18,7 @@ pub struct FxaaState {
     pub enabled: bool,
 }
 
-/// FXAA shader'ına gönderilen parametreler
+/// The parameters handed to the FXAA shader.
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct FxaaParams {
@@ -182,7 +182,7 @@ impl FxaaState {
         }
     }
 
-    /// Pencere boyutu değiştiğinde texture'ları yeniden oluştur
+    /// Recreates the textures when the window size changes.
     pub fn resize(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, surface_format: wgpu::TextureFormat, width: u32, height: u32) {
         let (tex, view) = create_fxaa_texture(device, surface_format, width, height);
         self.input_texture = tex;
@@ -217,7 +217,7 @@ impl FxaaState {
         });
     }
 
-    /// FXAA'yı aç/kapat
+    /// Turns FXAA on or off.
     pub fn set_enabled(&mut self, queue: &wgpu::Queue, enabled: bool) {
         self.enabled = enabled;
         let params = FxaaParams {
@@ -234,8 +234,8 @@ impl FxaaState {
     }
 }
 
-/// FXAA render pass'ını çalıştırır
-/// `input_view` → composite çıktısı, `output_view` → ekran/swapchain
+/// Runs the FXAA render pass.
+/// `input_view` is the composite's output, `output_view` the screen/swapchain.
 #[tracing::instrument(skip_all, level = "trace")]
 pub fn run_fxaa_pass(
     fxaa: &FxaaState,
@@ -261,7 +261,7 @@ pub fn run_fxaa_pass(
     pass.draw(0..3, 0..1);
 }
 
-/// FXAA input texture oluşturur (composite pass buraya yazar)
+/// Creates FXAA's input texture (the composite pass writes into it).
 fn create_fxaa_texture(
     device: &wgpu::Device,
     format: wgpu::TextureFormat,

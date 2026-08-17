@@ -1,6 +1,6 @@
-//! Prosedürel mesh üreticileri (god-file Tier 3 round-2 bölmesi).
-//! Tüm üreticiler `AssetManager` üzerinde inherent metod; kategori
-//! başına ayrı `impl` blokları alt-modüllerde tutulur.
+//! The procedural mesh builders (the Tier 3 round-2 split of the god file).
+//! Every builder is an inherent method on `AssetManager`; the `impl` blocks are kept per category
+//! in the submodules.
 
 mod cuboid;
 mod flat;
@@ -9,19 +9,19 @@ mod terrain;
 
 #[cfg(test)]
 mod winding_tests {
-    //! Prosedürel mesh'lerin üçgen sarımı (winding) ile declared yüzey normalleri
-    //! TUTARLI olmalı: geometrik (sağ-el) normal, declared outward normal ile aynı
-    //! yöne bakmalı (dot > 0). Aksi halde Ccw + Back-cull pipeline'ında (bkz.
-    //! pipeline.rs:579-580, deferred.rs:336-337) yüzeyler back-face sayılıp culllanır
-    //! → şekil "içi-dışına" / görünmez render olur. (Bu testin yakaladığı bug buydu.)
+    //! A procedural mesh's triangle winding and its declared surface normals must AGREE: the
+    //! geometric (right-hand) normal must point the same way as the declared outward normal
+    //! (dot > 0). Otherwise, in a Ccw + back-cull pipeline (see pipeline.rs:579-580,
+    //! deferred.rs:336-337), the faces count as back faces and are culled → the shape renders
+    //! inside-out or invisible. (That is the bug this test caught.)
     //!
-    //! Saf `*_data` fonksiyonları üzerinde çalışır — GPU device gerekmez.
+    //! It works on the pure `*_data` functions — no GPU device needed.
 
     use crate::asset::AssetManager;
     use crate::gpu_types::Vertex;
     use gizmo_math::Vec3;
 
-    /// Bir non-indexed üçgen listesinin sarım + normal geçerliliğini doğrula.
+    /// Checks the winding and normal validity of a non-indexed triangle list.
     fn assert_outward(name: &str, verts: &[Vertex]) {
         assert!(
             !verts.is_empty() && verts.len().is_multiple_of(3),

@@ -2,17 +2,17 @@ use gizmo_core::World;
 use gizmo_physics_core::Transform;
 use std::collections::VecDeque;
 
-/// Editör içinde yapılan geri alınabilir tekil bir işlem
+/// A single undoable operation performed in the editor
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum EditorAction {
-    /// Objenin veya objelerin taşıma, dönme veya ölçeklenme değerlerinin değişmesi
+    /// An object's (or several objects') translation, rotation or scale changed
     TransformsChanged {
         changes: Vec<(gizmo_core::entity::Entity, Transform, Transform)>, // (Entity, old_transform, new_transform)
     },
-    /// Objelerin silinmesi (Soft Delete kullanılarak gizlenmiş)
+    /// Objects were deleted (hidden by a soft delete)
     EntityDespawned { entity_ids: Vec<gizmo_core::entity::Entity> },
-    /// Objelerin oluşturulması
+    /// Objects were created
     EntitySpawned {
         entity_ids: Vec<gizmo_core::entity::Entity>,
     },
@@ -33,14 +33,14 @@ pub enum EditorAction {
         before: std::sync::Arc<[gizmo_renderer::AnimationClip]>,
         after: std::sync::Arc<[gizmo_renderer::AnimationClip]>,
     },
-    /// Dinamik / Diğer bileşenlerin değişimi
+    /// A dynamic or otherwise unclassified component changed
     ComponentChanged {
         entity: gizmo_core::entity::Entity,
         type_name: String, // Box<dyn Any> does not implement Clone across UI bounds easily, using typed names for future reflection implementation.
     },
 }
 
-/// Yapılan eylemlerin kaydını tutan History yöneticisi.
+/// The history manager, which keeps the record of what was done.
 #[non_exhaustive]
 pub struct History {
     undo_stack: VecDeque<EditorAction>,
@@ -71,7 +71,7 @@ impl History {
         !self.redo_stack.is_empty()
     }
 
-    /// Yeni bir eylemi geçmişe kaydeder
+    /// Records a new action in the history
     pub fn push(&mut self, action: EditorAction) {
         self.redo_stack.clear();
         self.undo_stack.push_back(action);
@@ -81,7 +81,7 @@ impl History {
         }
     }
 
-    /// Son işlemi geri al (Undo) - Semantic Note: world state mutasyona uğratılır (interior mutability ile)
+    /// Undo the last operation. Note: the world state is mutated (through interior mutability).
     pub fn undo(&mut self, world: &mut World) {
         if let Some(action) = self.undo_stack.pop_back() {
             match action {
@@ -154,7 +154,8 @@ impl History {
         }
     }
 
-    /// Geri alınan işlemi yeniden uygula (Redo) - Semantic Note: world state mutasyona uğratılır (interior mutability)
+    /// Redo the operation that was undone. Note: the world state is mutated (through interior
+    /// mutability).
     pub fn redo(&mut self, world: &mut World) {
         if let Some(action) = self.redo_stack.pop_back() {
             match action {
@@ -330,12 +331,12 @@ mod tests {
         );
     }
 
-    /// GC bir slot'u geri dönüştürdükten sonra `TransformsChanged` undo'sunun
-    /// o slotta artık yaşayan BAŞKA bir objeyi ezmemesi gerekir.
+    /// After the GC recycles a slot, a `TransformsChanged` undo must not overwrite a DIFFERENT
+    /// object now living in that slot.
     ///
-    /// Eski kod `transforms.get_mut(entity.id())` ile çıplak slot id'ye
-    /// bakıyordu; bu test ESKİ kodda B'nin Transform'u old_a ile ezildiği için
-    /// BAŞARISIZ olur, generation-safe düzeltmeyle GEÇER.
+    /// The old code looked at the bare slot id via `transforms.get_mut(entity.id())`; this test
+    /// FAILS against that code (B's Transform is overwritten with old_a) and PASSES with the
+    /// generation-safe fix.
     #[test]
     fn transforms_undo_is_generation_safe_after_slot_recycle() {
         let mut world = World::new();
@@ -383,9 +384,9 @@ mod tests {
         );
     }
 
-    /// redo() arm'ı için aynı generation-safety garantisi.
-    /// Eski kod `get_mut(entity.id())` ile B'yi new_a ile ezdiği için BAŞARISIZ,
-    /// düzeltmeyle GEÇER.
+    /// The same generation-safety guarantee for the redo() arm.
+    /// The old code overwrote B with new_a through `get_mut(entity.id())` and so FAILS; it
+    /// PASSES with the fix.
     #[test]
     fn transforms_redo_is_generation_safe_after_slot_recycle() {
         let mut world = World::new();
@@ -424,8 +425,8 @@ mod tests {
         );
     }
 
-    /// Kontrol testi: entity HÂLÂ canlıysa undo gerçekten Transform'u eski
-    /// değere geri almalı (guard mutlu-yolu bozmamalı).
+    /// The control: when the entity is STILL alive, undo really must restore the old Transform
+    /// (the guard must not break the happy path).
     #[test]
     fn transforms_undo_applies_when_entity_still_alive() {
         let mut world = World::new();
@@ -453,8 +454,8 @@ mod tests {
 
     // === Yardımcılar ===
 
-    /// Transform storage'ı kayıtlı bir World döndürür (boş-changes undo'ları
-    /// `borrow_mut::<Transform>()` çağırdığı için tip kayıtlı olmalı).
+    /// Returns a World with Transform storage registered (an empty-changes undo calls
+    /// `borrow_mut::<Transform>()`, so the type has to be registered).
     fn world_with_transform_storage() -> World {
         let mut w = World::new();
         let e = w.spawn();
@@ -490,7 +491,7 @@ mod tests {
         assert_eq!(History::default().max_history, 50);
     }
 
-    /// Yeni bir push, redo_stack'i temizlemeli (undo→push sonrası redo gitmeli).
+    /// A new push must clear the redo stack (after undo→push, redo is gone).
     #[test]
     fn push_clears_redo_stack() {
         let mut world = world_with_transform_storage();
@@ -510,7 +511,7 @@ mod tests {
         assert!(h.can_undo());
     }
 
-    /// max_history aşıldığında en eski kayıt düşürülmeli (ring-buffer davranışı).
+    /// Past max_history the oldest record must be dropped (ring-buffer behaviour).
     #[test]
     fn max_history_evicts_oldest_when_capacity_exceeded() {
         let mut world = world_with_transform_storage();
@@ -559,8 +560,8 @@ mod tests {
         assert!(h.can_undo());
     }
 
-    /// EntityDespawned: undo işaretçileri kaldırıp objeyi geri getirir;
-    /// redo tekrar soft-delete + gizler.
+    /// EntityDespawned: undo removes the markers and brings the object back; redo soft-deletes
+    /// and hides it again.
     #[test]
     fn entity_despawned_undo_restores_then_redo_hides() {
         let mut world = World::new();
@@ -584,8 +585,8 @@ mod tests {
         assert!(is_hidden(&world, e));
     }
 
-    /// Henüz implement edilmemiş action türü (ComponentChanged) undo edilince
-    /// KAYBOLMAMALI — undo_stack'e geri konur, redo boş kalır.
+    /// An action type that is not implemented yet (ComponentChanged) must not be LOST when
+    /// undone — it goes back onto the undo stack and redo stays empty.
     #[test]
     fn unsupported_action_is_preserved_on_undo() {
         let mut world = World::new();
@@ -603,9 +604,8 @@ mod tests {
         assert!(!h.can_redo(), "desteklenmeyen action redo'ya taşınmamalı");
     }
 
-    /// Spawn/despawn undo'ları da generation-safe olmalı: GC bir slot'u geri
-    /// dönüştürdükten sonra undo, o slotta yaşayan BAŞKA objeyi soft-delete
-    /// ETMEMELİ.
+    /// Spawn/despawn undos must be generation-safe too: after the GC recycles a slot, an undo
+    /// must NOT soft-delete the DIFFERENT object living there.
     #[test]
     fn entity_spawned_undo_is_generation_safe_after_recycle() {
         let mut world = World::new();

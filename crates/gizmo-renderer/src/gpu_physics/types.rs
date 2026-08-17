@@ -82,7 +82,7 @@ pub struct GpuJoint {
 }
 
 impl GpuJoint {
-    /// Küresel eklem — iki gövdeyi bir noktada birleştirir, serbest dönüş.
+    /// A ball joint — joins two bodies at a point and rotates freely.
     pub fn ball(body_a: u32, body_b: u32, anchor_a: [f32; 3], anchor_b: [f32; 3]) -> Self {
         Self {
             body_a,
@@ -98,7 +98,7 @@ impl GpuJoint {
         }
     }
 
-    /// Menteşe — tek eksen etrafında dönüş, diğer tüm hareket kısıtlı.
+    /// A hinge — rotation about a single axis, every other motion constrained.
     pub fn hinge(
         body_a: u32,
         body_b: u32,
@@ -120,7 +120,7 @@ impl GpuJoint {
         }
     }
 
-    /// Sabit birleşim — tüm hareket kısıtlı (kaynak gibi).
+    /// A fixed joint — every motion constrained (a weld).
     pub fn fixed(body_a: u32, body_b: u32, anchor_a: [f32; 3], anchor_b: [f32; 3]) -> Self {
         Self {
             body_a,
@@ -136,7 +136,7 @@ impl GpuJoint {
         }
     }
 
-    /// Yay — yumuşak bağlantı, stiffness ve damping ile.
+    /// A spring — a soft connection, with stiffness and damping.
     pub fn spring(
         body_a: u32,
         body_b: u32,
@@ -164,7 +164,7 @@ impl GpuJoint {
         }
     }
 
-    /// Sürgü — tek eksen boyunca kayma, diğer tüm hareket kısıtlı.
+    /// A slider — sliding along a single axis, every other motion constrained.
     pub fn slider(body_a: u32, body_b: u32, axis: [f32; 3]) -> Self {
         Self {
             body_a,
@@ -180,7 +180,7 @@ impl GpuJoint {
         }
     }
 
-    /// Kırılabilir yap — belirli kuvvet aşılınca joint kırılır.
+    /// Breakable — the joint breaks once a given force is exceeded.
     pub fn breakable(mut self, force: f32) -> Self {
         self.max_force = force;
         self.flags |= 2; // bit1 = breakable

@@ -1,12 +1,13 @@
-//! Vehicle API — Lua'ya sunulan araç kontrol fonksiyonları
+//! The vehicle API — the vehicle-control functions exposed to Lua.
 //!
-//! Lua scriptlerinden VehicleController bileşenine gaz, fren ve direksiyon komutları yolları sağlar.
+//! Lets Lua scripts send throttle, brake and steering commands to the VehicleController
+//! component.
 
 use crate::commands::{CommandQueue, ScriptCommand};
 use mlua::prelude::*;
 use std::sync::Arc;
 
-/// Vehicle API fonksiyonlarını Lua'ya kaydeder
+/// Registers the vehicle API functions with Lua.
 pub fn register_vehicle_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Result<(), LuaError> {
     crate::api_table::register_protected(lua, "vehicle", |vehicle_table| {
 
@@ -55,8 +56,8 @@ mod tests {
     use super::*;
     use mlua::Lua;
 
-    /// vehicle.set_engine_force / set_steering / set_brake doğru komutları,
-    /// negatif değerleri (geri vites / sola direksiyon) koruyarak kuyruğa yazmalı.
+    /// vehicle.set_engine_force / set_steering / set_brake must queue the right commands,
+    /// preserving negative values (reverse gear, steering left).
     #[test]
     fn vehicle_calls_push_expected_commands() {
         let lua = Lua::new();

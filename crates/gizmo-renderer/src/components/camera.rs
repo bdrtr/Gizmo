@@ -100,9 +100,9 @@ impl Camera {
         gizmo_math::Mat4::look_at_rh(position, position + front, up)
     }
 
-    /// Yaw/pitch'ten dünya-uzayı ileri (forward/aim) yön vektörü. [`get_front`] VE
-    /// FP-kamera denetleyicisi (`FpsLook`, gizmo-engine::systems) bunu paylaşır — böylece
-    /// "nişan yönü" matematiği demolarda/oyunlarda ELLE yeniden yazılmaz.
+    /// The world-space forward (aim) vector from yaw/pitch. [`get_front`] AND the first-person
+    /// camera controller (`FpsLook`, gizmo-engine::systems) share it, so the "aim direction"
+    /// maths is not re-written BY HAND in every demo and game.
     pub fn forward_from(yaw: f32, pitch: f32) -> Vec3 {
         let pitch = pitch.clamp(
             -std::f32::consts::PI / 2.0 + 0.001,
@@ -116,22 +116,26 @@ impl Camera {
         .normalize()
     }
 
-    /// [`forward_from`](Self::forward_from)'un TERSİ: bir yöne bakmak için gereken yaw/pitch.
+    /// The INVERSE of [`forward_from`](Self::forward_from): the yaw/pitch needed to look along a
+    /// direction.
     ///
-    /// Bu formül depoda dört ayrı yere elle yazılmıştı (stüdyo kurulumu, dövüş kamerasının
-    /// look-at'ı, odaklanma, ve viewport'un eksen gizmo'su) — her birinin başında aynı iki satırlık
-    /// "Invert `get_front()`" yorumuyla. Bir kere de yanlış yazılmıştı: `x.atan2(-z)` /
-    /// `(-y).asin()`, ki `get_front`'u ters çevirmez ve kamerayı bambaşka yöne bakar. Ters çevirme
-    /// artık çevirdiği fonksiyonun yanında duruyor, ve ikisi birlikte değişmek zorunda.
+    /// This formula was written out by hand in four separate places in the repository (studio
+    /// setup, the fighting camera's look-at, focusing, and the viewport's axis gizmo) — each
+    /// under the same two-line "Invert `get_front()`" comment. One of them was written *wrong*:
+    /// `x.atan2(-z)` / `(-y).asin()`, which does not invert `get_front` and points the camera
+    /// somewhere else entirely. The inverse now lives next to the function it inverts, and the
+    /// two have to change together.
     ///
-    /// İki dejenere durum, ikisi de sessizce yanlış cevap vermek yerine adlandırılmış:
-    /// - **Sıfır/sonsuz yön** → `None`. Bugün bu `atan2(NaN, NaN)` ile kameraya NaN yaw yazıyor ve
-    ///   görüntü matrisini öldürüyor; "hiçbir yer"in açısı yok.
-    /// - **Tam yukarı/aşağı bakış** → yaw belirsizdir (`atan2(0, 0)` şikâyet etmeden `0` döner ve
-    ///   sahneyi dünya +X'e döndürür), o yüzden uydurulmuyor, `fallback_yaw` devralınıyor.
+    /// Two degenerate cases, both named instead of silently answered wrongly:
+    /// - **A zero or non-finite direction** → `None`. Today that path writes a NaN yaw into the
+    ///   camera through `atan2(NaN, NaN)` and kills the view matrix; "nowhere" has no angle.
+    /// - **Looking straight up or down** → yaw is undefined (`atan2(0, 0)` returns `0` without
+    ///   complaint and swings the scene to world +X), so it is not invented: `fallback_yaw` is
+    ///   carried through instead.
     ///
-    /// `forward_from` pitch'i dikeyin 0.001 rad berisinde tuttuğu için tam dikey bir yön
-    /// gidiş-dönüşte birebir geri gelmez; fark budur, başka bir şey değil.
+    /// Because `forward_from` keeps pitch 0.001 rad short of vertical, an exactly vertical
+    /// direction does not come back bit-identical through a round trip. That is the whole
+    /// difference.
     pub fn yaw_pitch_from_forward(dir: Vec3, fallback_yaw: f32) -> Option<(f32, f32)> {
         let d = dir.normalize_or_zero();
         if d == Vec3::ZERO {
@@ -146,7 +150,8 @@ impl Camera {
         Some((yaw, pitch))
     }
 
-    /// Yaw'dan dünya-uzayı sağ (right) yön vektörü (yatay). forward × (0,1,0)'ın kapalı formu.
+    /// The world-space right vector from yaw (horizontal). The closed form of
+    /// forward × (0,1,0).
     pub fn right_from(yaw: f32) -> Vec3 {
         Vec3::new(-yaw.sin(), 0.0, yaw.cos())
     }

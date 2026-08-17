@@ -7,43 +7,45 @@ use wgpu::util::DeviceExt;
 pub struct Mesh {
     pub vbuf: Arc<wgpu::Buffer>,
     pub vertex_count: u32,
-    /// İndeks tamponu, varsa. `None` ise mesh düz üçgen listesi olarak çizilir
-    /// (`draw`), `Some` ise `draw_indexed` ile.
+    /// The index buffer, if there is one. `None` means the mesh is drawn as a flat triangle
+    /// list (`draw`), `Some` means `draw_indexed`.
     ///
-    /// Opsiyonel olmasının sebebi geçiş değil, **LOD**: `lod_vbufs` düzleştirilmiş
-    /// tamponlar tutuyor, yani bir LOD seviyesi aktifken indeks tamponu geçerli
-    /// DEĞİL (indeksler tam çözünürlüklü vertex dizisine göre). Batching bu durumda
-    /// indeksi düşürüyor.
+    /// It is optional because of **LOD**, not because of a migration: `lod_vbufs` holds
+    /// flattened buffers, so while a LOD level is active the index buffer is NOT valid (its
+    /// indices refer to the full-resolution vertex array). Batching drops the index in that
+    /// case.
     pub ibuf: Option<Arc<wgpu::Buffer>>,
-    /// `ibuf`'taki indeks sayısı — çizilecek eleman sayısı budur, `vertex_count` değil.
-    /// `ibuf` `None` iken anlamsız (0).
+    /// The number of indices in `ibuf` — this, not `vertex_count`, is how many elements get
+    /// drawn. Meaningless (0) while `ibuf` is `None`.
     pub index_count: u32,
-    /// `ibuf`'un eleman genişliği. Tampon hangi formatta YAZILDIYSA `set_index_buffer`'a da
-    /// o verilmeli — 16-bit bir tamponu 32-bit diye bağlamak çökmez, **yanlış üçgen çizer**.
-    /// Bu yüzden türetilmiyor, taşınıyor. `ibuf` `None` iken anlamsız.
+    /// `ibuf`'s element width. Whatever format the buffer was WRITTEN in must be what
+    /// `set_index_buffer` is given — binding a 16-bit buffer as 32-bit does not crash, it
+    /// **draws the wrong triangles**. That is why it is carried rather than derived. Meaningless
+    /// while `ibuf` is `None`.
     pub index_format: wgpu::IndexFormat,
-    /// Geometrinin ağırlık merkezini orijine taşımak için kullanılan ofset değeri.
-    /// Render aşamasında model matrisine uygulanabilir.
-    /// AABB sınırlarını doğrudan etkilemez (sınırlar ham vertex verisinden hesaplanır).
+    /// The offset used to move the geometry's centre of mass to the origin.
+    /// It can be applied to the model matrix at render time.
+    /// It does not affect the AABB bounds directly (those are computed from the raw vertex
+    /// data).
     pub center_offset: Vec3,
     pub source: String,
     pub bounds: gizmo_math::Aabb,
-    /// Geometrinin CPU tarafındaki kopyası, **düz üçgen listesi olarak**: ardışık her üçlü
-    /// bir üçgendir.
+    /// The CPU-side copy of the geometry, **as a flat triangle list**: every consecutive triple
+    /// is one triangle.
     ///
-    /// `vbuf` ile indeks-indeks eşleşmesi GARANTİ DEĞİL — indeksli bir mesh'te (`ibuf`
-    /// `Some`) vertex tamponu tekilleştirilmiştir, bu alan ise üçgen listesi olarak kalır.
-    /// Sözleşme budur çünkü tüketiciler burayı üçlü gruplar hâlinde yürüyor; GPU tamponuna
-    /// karşılık gelen sırayı isteyen bir çağıran `ibuf`'u okumalı.
+    /// It is NOT guaranteed to match `vbuf` index for index — on an indexed mesh (`ibuf` is
+    /// `Some`) the vertex buffer has been deduplicated while this field stays a triangle list.
+    /// That is the contract because consumers walk this in groups of three; a caller who wants
+    /// the order matching the GPU buffer has to read `ibuf`.
     pub cpu_vertices: Arc<Vec<Vec3>>,
     pub lod_vbufs: Vec<Arc<wgpu::Buffer>>,
     pub lod_vertex_counts: Vec<u32>,
 }
 
 impl Mesh {
-    /// Yeni bir `Mesh` bileşeni oluşturur.
-    /// `vertices` dizisi üzerinden otomatik olarak `vertex_count` ve `bounds` hesaplanır.
-    /// Hata durumlarında boş bir mesh oluşturmak için `Mesh::empty()` kullanılmalıdır.
+    /// Creates a new `Mesh` component.
+    /// `vertex_count` and `bounds` are computed from the `vertices` array automatically.
+    /// For an empty mesh on an error path, use `Mesh::empty()`.
     // WASM: meshopt LOD üretimi native-only cfg'li — `device` ve `mut`'lar orada
     // kullanılmadığından hedefli allow (native lint gücü korunur).
     #[cfg_attr(target_arch = "wasm32", allow(unused_variables, unused_mut))]
@@ -130,20 +132,20 @@ impl Mesh {
         }
     }
 
-    /// [`Mesh::new`] gibi, ama vertex'leri **tekilleştirip** bir indeks tamponu da kurar,
-    /// ve vertex tamponunu kendisi oluşturur (çağıran hazır bir `vbuf` vermez).
+    /// Like [`Mesh::new`], but it **deduplicates** the vertices and builds an index buffer as
+    /// well, and creates the vertex buffer itself (the caller does not hand in a ready `vbuf`).
     ///
-    /// Motorun tekilleştirme makinesi zaten vardı ve çıktısı atılıyordu: [`Mesh::new`],
-    /// 20000'den fazla vertex'te LOD üretmek için `meshopt::generate_vertex_remap` çağırıp
-    /// bir indeks dizisi kuruyor, sonra `unique_vertices[idx]`'i düz bir diziye geri açıyor
-    /// ("Gizmo renderer flat bekliyor"). Bir küpün 36 vertex'i 8'e, bir glTF sahnesinin
-    /// paylaşılan köşeleri komşu üçgen sayısı kadar aza iner — hem yükleme bandı hem
-    /// vertex shader çağrısı olarak.
+    /// The engine's deduplication machinery already existed and its output was being thrown
+    /// away: above 20000 vertices [`Mesh::new`] calls `meshopt::generate_vertex_remap` to build
+    /// LODs, produces an index array, and then expands `unique_vertices[idx]` back into a flat
+    /// array ("the Gizmo renderer expects flat"). A cube's 36 vertices become 8, and a glTF
+    /// scene's shared corners fall to as few as the number of adjacent triangles — both as
+    /// upload bandwidth and as vertex-shader invocations.
     ///
-    /// **Her hedefte çağrılabilir.** `meshopt` native-only olduğundan WASM'da tekilleştirme
-    /// yapılmaz; mesh düz kalır ve `ibuf` `None` döner. Bu bir çağıran yükü DEĞİL: çizim yolu
-    /// zaten iki durumu da taşıyor (`record_draw`), dolayısıyla `cfg` dallanması burada bir
-    /// kez yapılıyor, her çağrı yerinde değil.
+    /// **Callable on every target.** `meshopt` is native-only, so there is no deduplication on
+    /// WASM: the mesh stays flat and `ibuf` comes back `None`. That is NOT a burden on the
+    /// caller — the draw path already carries both cases (`record_draw`), so the `cfg` branch
+    /// happens once here rather than at every call site.
     pub fn new_indexed(
         device: &wgpu::Device,
         vertices: &[crate::gpu_types::Vertex],
@@ -229,8 +231,8 @@ impl Mesh {
         }
     }
 
-    /// Dosya yüklenememesi gibi durumlarda motorun çökmemesi için
-    /// 0 vertex'li, boş bir yer tutucu (fallback) Mesh oluşturur.
+    /// Creates an empty placeholder Mesh with 0 vertices, so that the engine does not crash
+    /// when a file fails to load.
     pub fn empty(vbuf: Arc<wgpu::Buffer>, source: String) -> Self {
         Self {
             vbuf,
@@ -247,9 +249,9 @@ impl Mesh {
         }
     }
 
-    /// Keyfi (üçgen-liste) vertex verisinden mesh kurar — vertex buffer'ı oluşturup
-    /// [`Mesh::new`]'e verir. Prosedürel geometri (ör. akış-çizgisi şeritleri, debug
-    /// çizimleri) için kısayol; çağıran wgpu buffer detaylarıyla uğraşmaz.
+    /// Builds a mesh from arbitrary (triangle-list) vertex data — it creates the vertex buffer
+    /// and hands it to [`Mesh::new`]. A shortcut for procedural geometry (streamline ribbons,
+    /// debug drawing), so the caller does not have to deal with wgpu buffer details.
     pub fn from_vertices(
         device: &wgpu::Device,
         vertices: &[crate::gpu_types::Vertex],
@@ -265,11 +267,12 @@ impl Mesh {
         Mesh::new(device, Arc::new(vbuf), vertices, Vec3::ZERO, source.into())
     }
 
-    /// Vertex buffer'ının İÇERİĞİNİ yerinde günceller (aynı sayıda vertex; pozisyon/renk/uv
-    /// değişebilir). Prosedürel/animasyonlu geometri için — mesh'i yeniden kurmadan her frame
-    /// yazılabilir. Buffer `COPY_DST` ile kurulmuş olmalı (`from_vertices` öyle kurar) ve
-    /// vertex sayısı DEĞİŞMEMELİ. Not: `bounds`/`vertex_count` güncellenmez (pozisyon aralığı
-    /// aynı kalmalı) ve `>20000` vertex'te LOD buffer'ları güncellenmez.
+    /// Updates the CONTENTS of the vertex buffer in place (same vertex count;
+    /// position/colour/uv may change). For procedural or animated geometry — it can be written
+    /// every frame without rebuilding the mesh. The buffer must have been created with
+    /// `COPY_DST` (`from_vertices` does) and the vertex count must NOT change. Note:
+    /// `bounds`/`vertex_count` are not updated (the position range is expected to stay the same)
+    /// and above 20000 vertices the LOD buffers are not updated.
     pub fn update_vertices(&self, queue: &wgpu::Queue, vertices: &[crate::gpu_types::Vertex]) {
         let bytes: &[u8] = bytemuck::cast_slice(vertices);
         debug_assert!(bytes.len() as u64 <= self.vbuf.size());
@@ -277,8 +280,8 @@ impl Mesh {
     }
 }
 
-/// Bir entity'nin ekrana çizilebilir bir Mesh olduğunu belirten ECS marker bileşenidir.
-/// Hiçbir ek alan içermez; sadece entity'nin render sistemine dahil edilmesini sağlar.
+/// The ECS marker component saying an entity is a Mesh that can be drawn.
+/// It carries no fields; it only brings the entity into the render system.
 #[derive(Clone)]
 pub struct MeshRenderer {
     /// Scales the distance used to pick a level of detail.

@@ -1,10 +1,10 @@
-//! VOLUMETRİK DUMAN (T6) — 3B yoğunluk grid sim'i + raymarch render.
-//! `smoke_advect.wgsl` (compute): grid'i semi-Lagrangian advekte eder (prosedürel buoyancy +
-//! curl hız alanı), kaynaktan enjekte eder, dissipation uygular (src→dst ping-pong).
-//! `smoke_raymarch.wgsl` (render): grid yoğunluğunu ışın boyunca yürütür (Beer-Lambert + güneş
-//! saçılımı + sahne-derinliği occlusion), HDR'ye premultiplied-over kompozit eder. Billboard
-//! DEĞİL — gerçek katılımcı ortam. Demo `Renderer.smoke = Some(..)` verip ayarlar; her frame
-//! `render()` compute+raymarch yapar (parity ile ping-pong).
+//! VOLUMETRIC SMOKE (T6) — a 3D density-grid simulation plus a raymarched render.
+//! `smoke_advect.wgsl` (compute): advects the grid semi-Lagrangian style (procedural buoyancy +
+//! a curl velocity field), injects from the source and applies dissipation (src→dst ping-pong).
+//! `smoke_raymarch.wgsl` (render): walks the grid's density along the ray (Beer-Lambert + sun
+//! scattering + scene-depth occlusion) and composites premultiplied-over into HDR. NOT a
+//! billboard — a real participating medium. A demo sets it up with `Renderer.smoke = Some(..)`;
+//! each frame `render()` does the compute and the raymarch (ping-ponging on parity).
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use wgpu::util::DeviceExt;
@@ -490,7 +490,8 @@ impl SmokeVolume {
         queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[p]));
     }
 
-    /// Bir sim adımı (advect compute) + volumetrik raymarch (HDR'ye). Ping-pong ile buffer değişir.
+    /// One simulation step (the advect compute) plus the volumetric raymarch into HDR. The
+    /// buffers swap through the ping-pong.
     #[allow(clippy::too_many_arguments)]
     #[tracing::instrument(skip_all, level = "trace")]
     pub fn render(

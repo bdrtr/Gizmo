@@ -1,9 +1,9 @@
-//! Dosya izleme (`AssetWatcher`) ile hot-reload.
+//! Hot reload through file watching (`AssetWatcher`).
 //!
-//! Görüntü dosyaları için decode işini ana iş parçacığını kilitlememek adına
-//! [`crate::async_assets::AsyncAssetLoader`] kuyruğuna verin; her karede
-//! `drain_completed` sonrası [`crate::asset::AssetManager::install_decoded_material_texture`]
-//! ile GPU yüklemesi yapın (ör. `demo` render döngüsü).
+//! For image files, hand the decode to [`crate::async_assets::AsyncAssetLoader`]'s queue rather
+//! than blocking the main thread; each frame, after `drain_completed`, upload to the GPU with
+//! [`crate::asset::AssetManager::install_decoded_material_texture`] (as the `demo` render loop
+//! does).
 
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 use std::collections::HashSet;
@@ -11,14 +11,14 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::Mutex;
 
-/// Dosya değişikliklerini izleyerek hot-reload tetikleyen Asset Watcher
+/// The asset watcher: it watches for file changes and triggers hot reloads.
 pub struct AssetWatcher {
     _watcher: notify::RecommendedWatcher,
     rx: Mutex<mpsc::Receiver<Result<Event, notify::Error>>>,
 }
 
 impl AssetWatcher {
-    /// Yeni bir AssetWatcher oluşturur ve belirtilen dizinleri izlemeye başlar
+    /// Creates a new AssetWatcher and starts watching the given directories.
     pub fn new<P: AsRef<Path>>(watch_dirs: &[P]) -> Option<Self> {
         let (tx, rx) = mpsc::channel();
 
@@ -47,7 +47,7 @@ impl AssetWatcher {
         })
     }
 
-    /// Bu frame'de değişen dosyaların yollarını döndürür (her frame çağrılmalı)
+    /// Returns the paths of the files that changed this frame (call it every frame).
     pub fn poll_changes(&self) -> Vec<PathBuf> {
         let mut seen = HashSet::new(); // O(1) dedup (eskiden Vec::contains ile O(N²))
 

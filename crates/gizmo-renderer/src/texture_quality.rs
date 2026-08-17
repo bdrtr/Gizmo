@@ -1,49 +1,48 @@
-//! Bir yerde toplanmış mipmap + anizotropi politikası: örneklenen her materyal dokusu
-//! buradan geçer.
+//! The mipmap and anisotropy policy, gathered in one place: every sampled material texture goes
+//! through here.
 //!
-//! **Neden tek yerde.** Bundan önce üç yükleme yolu üç farklı şey yapıyordu ve ikisi
-//! mipmap'siz doku üretiyordu:
+//! **Why one place.** Before this, three loading paths did three different things and two of them
+//! produced textures without mipmaps:
 //!
-//! | yol | mip | mipmap filtresi | aniso |
+//! | path | mips | mipmap filter | aniso |
 //! |---|---|---|---|
-//! | `asset::loaders::images` (glTF — arabaların ve şehrin dokuları) | 1 | Nearest | kapalı |
-//! | `asset::texture::install_decoded_material_texture` (disk/streaming/prosedürel) | 1 | Nearest | kapalı |
-//! | `Renderer::create_texture` (elle RGBA) | tam zincir | Linear | kapalı |
+//! | `asset::loaders::images` (glTF — the cars' and the city's textures) | 1 | Nearest | off |
+//! | `asset::texture::install_decoded_material_texture` (disk/streaming/procedural) | 1 | Nearest | off |
+//! | `Renderer::create_texture` (hand-built RGBA) | full chain | Linear | off |
 //!
-//! Yani mipmap üreteci ve `mipmap.wgsl` shader'ı zaten vardı, ama motorun asıl doku
-//! yollarının hiçbiri onu çağırmıyordu — eğik açıdan bakılan her yüzey minification
-//! aliasing'i yaşıyordu ve hiçbir sampler anizotropi istemiyordu.
+//! So the mipmap generator and the `mipmap.wgsl` shader already existed, and none of the engine's
+//! real texture paths called them — every surface viewed at an angle suffered minification
+//! aliasing, and no sampler asked for anisotropy.
 
-/// Materyal sampler'larının istediği anizotropik filtreleme seviyesi.
+/// The anisotropic filtering level material samplers ask for.
 ///
-/// 16, WebGPU'nun izin verdiği tavan; backend cihazın gerçek limitine kırpar, yani bunu
-/// desteklemeyen bir GPU'da hata değil sessiz düşüş olur. Anizotropi maliyeti yalnız
-/// minification'ın gerçekten olduğu (eğik, uzak) yüzeylerde ödenir.
+/// 16 is the ceiling WebGPU allows; the backend clamps it to the device's real limit, so a GPU
+/// that cannot do it degrades silently rather than erroring. Anisotropy only costs anything on
+/// the surfaces where minification actually happens (angled, distant ones).
 pub(crate) const MATERIAL_ANISOTROPY: u16 = 16;
 
-/// 2-B bir doku için tam mip zinciri uzunluğu.
+/// The full mip-chain length of a 2D texture.
 ///
-/// `max(1)` sıfır boyuta karşı değil — çağıranlar zaten sıfırı eliyor — `ilog2()`'nin 0'da
-/// panikleyecek olmasına karşı.
+/// The `max(1)` is not there for a zero dimension — callers already filter those out — but
+/// because `ilog2()` would panic at 0.
 pub(crate) fn mip_level_count(width: u32, height: u32) -> u32 {
     width.max(height).max(1).ilog2() + 1
 }
 
-/// Mip zinciri üretilecek bir dokunun ihtiyaç duyduğu ek kullanım bayrağı.
+/// The extra usage flag a texture needs if a mip chain is going to be generated for it.
 ///
-/// Üretici her mip seviyesine ÇİZEREK indirger (blit), o yüzden doku render hedefi
-/// olabilmeli. Bunu eklemeyi unutmak wgpu'da yükleme anında validation hatası verir.
+/// The generator downsamples by DRAWING into each mip level (a blit), so the texture has to be
+/// usable as a render target. Forgetting this gives a wgpu validation error at upload time.
 pub(crate) const MIPPED_TEXTURE_USAGE: wgpu::TextureUsages =
     wgpu::TextureUsages::TEXTURE_BINDING
         .union(wgpu::TextureUsages::COPY_DST)
         .union(wgpu::TextureUsages::RENDER_ATTACHMENT);
 
-/// Örneklenen bir materyal dokusunun sampler'ı.
+/// The sampler for a sampled material texture.
 ///
-/// `has_mips`, dokunun gerçekten bir mip zinciriyle yüklenip yüklenmediğidir — sampler'ı
-/// dokunun sahip OLMADIĞI seviyelerden örneklemeye ayarlamak bir doğrulama hatası, ve
-/// bunun tersi (zincir var ama sampler `Nearest`) tam olarak bu modülün düzelttiği
-/// sessiz kayıptı.
+/// `has_mips` is whether the texture really was uploaded with a mip chain — setting the sampler
+/// to sample levels the texture does NOT have is a validation error, and the converse (a chain
+/// exists but the sampler says `Nearest`) is exactly the silent loss this module fixes.
 pub(crate) fn material_sampler(
     device: &wgpu::Device,
     label: &str,
@@ -83,12 +82,12 @@ pub(crate) fn material_sampler(
     })
 }
 
-/// Mip zincirini ardışık blit'lerle dolduran, YENİDEN KULLANILABİLİR üreteç.
+/// A REUSABLE generator that fills the mip chain with successive blits.
 ///
-/// Bir struct, çünkü eskiden bu bir serbest fonksiyondu ve **her çağrıda shader modülünü
-/// ve render pipeline'ını yeniden derliyordu.** Tek bir elle oluşturulan dokuda bu
-/// görünmezdi; yüzlerce dokusu olan bir glTF sahnesinde (Bayview) doku başına bir pipeline
-/// derlemesi demek olurdu. Blitter'ı bir kez kurup partideki her doku için yeniden kullan.
+/// It is a struct because this used to be a free function that **recompiled the shader module and
+/// the render pipeline on every call.** On a single hand-built texture that was invisible; on a
+/// glTF scene with hundreds of textures (Bayview) it would mean one pipeline compilation per
+/// texture. Build the blitter once and reuse it for every texture in the batch.
 pub(crate) struct MipmapBlitter {
     pipeline: wgpu::RenderPipeline,
     sampler: wgpu::Sampler,
@@ -96,8 +95,8 @@ pub(crate) struct MipmapBlitter {
 }
 
 impl MipmapBlitter {
-    /// `format` için bir üreteç kurar. Pipeline renk hedefi formatına bağlı olduğundan
-    /// blitter tek bir formata özgüdür — sRGB ve lineer dokular ayrı blitter ister.
+    /// Builds a generator for `format`. The pipeline depends on the colour target's format, so a
+    /// blitter is specific to one format — sRGB and linear textures need separate blitters.
     pub(crate) fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Mipmap Blit Shader"),
@@ -153,11 +152,11 @@ impl MipmapBlitter {
         }
     }
 
-    /// `texture`'ın 1..`mip_level_count` seviyelerini, her birini bir öncekinden
-    /// örnekleyerek doldurur. Seviye 0 zaten yazılmış olmalıdır.
+    /// Fills levels 1..`mip_level_count` of `texture`, sampling each from the one before it.
+    /// Level 0 must already have been written.
     ///
-    /// Komutları verilen `encoder`'a yazar; **submit etmez.** Bir parti dokunun tek bir
-    /// komut tamponunda toplanabilmesi için böyle.
+    /// It records the commands into the given `encoder` and **does not submit.** That is what
+    /// lets a batch of textures be gathered into a single command buffer.
     pub(crate) fn record(
         &self,
         device: &wgpu::Device,
@@ -230,8 +229,8 @@ impl MipmapBlitter {
         }
     }
 
-    /// Tek bir doku için kolaylık sarmalayıcısı: kaydet ve hemen submit et.
-    /// Bir parti yüklüyorsan [`record`](Self::record) kullan.
+    /// A convenience wrapper for a single texture: record and submit immediately.
+    /// If you are uploading a batch, use [`record`](Self::record).
     pub(crate) fn generate(
         &self,
         device: &wgpu::Device,

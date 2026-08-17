@@ -1,22 +1,22 @@
-//! Metrik deposu — sayaç (counter), gösterge (gauge) ve örnek (sample) serileri.
+//! The metric store — counter, gauge and sample series.
 //!
-//! Her metrik son `capacity` değeri bir ring-buffer'da tutar; üzerinden tam istatistik
-//! (min/max/ortalama/std-sapma/p50/p95/p99) hesaplanabilir. Bu, "en ufak ayrıntıyı"
-//! zaman-serisi olarak analiz etmenin temelidir: herhangi bir ölçümü isimlendirip
-//! kaydet, geçmişi üzerinden trend/tepe (spike) çıkar.
+//! Each metric keeps its last `capacity` values in a ring buffer, over which full statistics
+//! (min/max/mean/std-dev/p50/p95/p99) can be computed. That is the basis for analysing "the
+//! smallest detail" as a time series: name any measurement, record it, and read trends and spikes
+//! out of its history.
 
 use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 
-/// Bir metriğin türü — nasıl yorumlanacağını belirler.
+/// A metric's kind — what decides how it is interpreted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MetricKind {
-    /// Monoton artan toplam; her frame'in *deltası* örneklenir.
+    /// A monotonically increasing total; each frame's *delta* is what gets sampled.
     Counter,
-    /// Anlık değer (entity sayısı, bellek, sıcaklık…).
+    /// An instantaneous value (entity count, memory, temperature, …).
     Gauge,
-    /// Ölçüm/zamanlama örneği (ms, iterasyon…) — istatistik için.
+    /// A measurement or timing sample (ms, iterations, …) — for statistics.
     Sample,
 }
 
@@ -30,7 +30,7 @@ impl MetricKind {
     }
 }
 
-/// Bir metriğin geçmişi üzerinden hesaplanan özet istatistik.
+/// The summary statistics computed over one metric's history.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Stats {
     pub count: usize,
@@ -45,7 +45,7 @@ pub struct Stats {
 }
 
 impl Stats {
-    /// Boş seri için sıfır istatistik.
+    /// The zero statistics, for an empty series.
     pub fn empty() -> Self {
         Stats {
             count: 0,
@@ -61,15 +61,15 @@ impl Stats {
     }
 }
 
-/// Tek bir isimlendirilmiş metrik serisi (ring-buffer).
+/// A single named metric series (a ring buffer).
 #[derive(Debug, Clone)]
 pub struct MetricSeries {
     pub kind: MetricKind,
     ring: VecDeque<f64>,
     capacity: usize,
-    /// Counter için kümülatif toplam (delta hesabında kullanılır).
+    /// The cumulative total of a Counter (used to compute the delta).
     total: f64,
-    /// Counter için son frame'de eklenen ham toplam (delta ölçümü için).
+    /// The raw total added to a Counter during the last frame (for measuring the delta).
     accum_this_frame: f64,
 }
 
@@ -91,18 +91,19 @@ impl MetricSeries {
         self.ring.push_back(v);
     }
 
-    /// Bu frame boyunca biriktir (Counter). `end_frame`'de ring'e delta olarak işlenir.
+    /// Accumulate over this frame (Counter). `end_frame` writes the delta into the ring.
     fn add(&mut self, delta: f64) {
         self.accum_this_frame += delta;
         self.total += delta;
     }
 
-    /// Anlık değer yaz (Gauge/Sample). Doğrudan ring'e girer.
+    /// Write an instantaneous value (Gauge/Sample). It goes straight into the ring.
     fn set(&mut self, v: f64) {
         self.push_ring(v);
     }
 
-    /// Frame sonu: Counter'ın bu frame'deki deltasını ring'e yaz ve biriktiriciyi sıfırla.
+    /// End of frame: write the Counter's delta for this frame into the ring and reset the
+    /// accumulator.
     fn end_frame(&mut self) {
         if self.kind == MetricKind::Counter {
             self.push_ring(self.accum_this_frame);
@@ -110,17 +111,17 @@ impl MetricSeries {
         }
     }
 
-    /// Kümülatif toplam (yalnız Counter için anlamlı).
+    /// The cumulative total (meaningful for a Counter only).
     pub fn total(&self) -> f64 {
         self.total
     }
 
-    /// Son kaydedilen değer (ring'in son elemanı).
+    /// The last recorded value (the newest element of the ring).
     pub fn last(&self) -> f64 {
         self.ring.back().copied().unwrap_or(0.0)
     }
 
-    /// Ring'teki ham değerler (eskiden yeniye).
+    /// The raw values in the ring (oldest to newest).
     pub fn values(&self) -> impl Iterator<Item = f64> + '_ {
         self.ring.iter().copied()
     }
@@ -161,7 +162,7 @@ impl MetricSeries {
     }
 }
 
-/// Sıralı bir dilim üzerinde doğrusal-interpolasyonlu yüzdelik. `q ∈ [0,1]`.
+/// A linearly interpolated percentile over a sorted slice. `q ∈ [0,1]`.
 fn percentile(sorted: &[f64], q: f64) -> f64 {
     let n = sorted.len();
     if n == 0 {
@@ -181,7 +182,7 @@ fn percentile(sorted: &[f64], q: f64) -> f64 {
     }
 }
 
-/// İsimlendirilmiş metriklerin merkezi deposu.
+/// The central store of named metrics.
 #[derive(Debug, Clone)]
 pub struct MetricStore {
     series: BTreeMap<String, MetricSeries>,
@@ -239,14 +240,14 @@ impl MetricStore {
         );
     }
 
-    /// Counter'a ekle (bu frame'in deltasına birikir).
+    /// Add to a Counter (accumulating into this frame's delta).
     pub fn counter_add(&mut self, name: &str, delta: f64) {
         if let Some(s) = self.entry(name, MetricKind::Counter) {
             s.add(delta);
         }
     }
 
-    /// Gauge (anlık değer) yaz.
+    /// Write a Gauge (an instantaneous value).
     pub fn gauge(&mut self, name: &str, value: f64) {
         if let Some(s) = self.entry(name, MetricKind::Gauge) {
             s.set(value);
@@ -260,7 +261,7 @@ impl MetricStore {
         }
     }
 
-    /// Frame sonu — tüm Counter serilerinin deltasını ring'e işler.
+    /// End of frame — writes every Counter series' delta into its ring.
     pub fn end_frame(&mut self) {
         for s in self.series.values_mut() {
             s.end_frame();
@@ -271,12 +272,12 @@ impl MetricStore {
         self.series.get(name)
     }
 
-    /// Bir metriğin geçmişi üzerinden istatistik.
+    /// Statistics over one metric's history.
     pub fn stats(&self, name: &str) -> Option<Stats> {
         self.series.get(name).map(|s| s.stats())
     }
 
-    /// Tüm metrik adları (deterministik sıralı).
+    /// Every metric name, in a deterministic order.
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.series.keys().map(|s| s.as_str())
     }

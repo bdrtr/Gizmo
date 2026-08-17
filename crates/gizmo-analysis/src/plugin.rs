@@ -1,7 +1,7 @@
-//! App/Plugin entegrasyonu (`app` özelliği).
+//! App/Plugin integration (the `app` feature).
 //!
-//! [`AnalysisPlugin`] `FrameProfiler` + `Analyzer` kaynaklarını ekler ve her frame
-//! `Analyzer::collect` çağıran bir sistemi schedule'a koyar.
+//! [`AnalysisPlugin`] adds the `FrameProfiler` and `Analyzer` resources and puts a system into
+//! the schedule that calls `Analyzer::collect` every frame.
 
 use crate::analyzer::{AnalysisConfig, Analyzer};
 use gizmo_app::Plugin;
@@ -9,7 +9,7 @@ use gizmo_core::system::{AccessInfo, System};
 use gizmo_core::world::World;
 use gizmo_core::FrameProfiler;
 
-/// Analiz altyapısını App'e bağlayan plugin.
+/// The plugin that wires the analysis machinery into an App.
 #[derive(Debug, Clone, Default)]
 pub struct AnalysisPlugin {
     pub config: AnalysisConfig,
@@ -42,12 +42,12 @@ impl Plugin for AnalysisPlugin {
     }
 }
 
-/// Her frame `Analyzer::collect` çağıran sistem.
+/// The system that calls `Analyzer::collect` every frame.
 ///
-/// NOT: schedule `FrameProfiler::end_frame`'i tüm sistemlerden SONRA çağırdığından,
-/// bu sistemin gördüğü span'ler BİR ÖNCEKİ frame'e aittir (ECS durumu günceldir).
-/// Span'lerde sıfır-gecikme isteniyorsa, plugin yerine `schedule.run` sonrası elle
-/// `analyzer.collect(&world)` çağırın (bkz. `headless_analysis` örneği).
+/// NOTE: the schedule calls `FrameProfiler::end_frame` AFTER all systems, so the spans this
+/// system sees belong to the PREVIOUS frame (the ECS state is current). If you need zero lag on
+/// spans, call `analyzer.collect(&world)` by hand after `schedule.run` instead of using the
+/// plugin (see the `headless_analysis` example).
 pub struct AnalysisCollectSystem;
 
 impl System for AnalysisCollectSystem {

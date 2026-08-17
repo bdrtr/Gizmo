@@ -1,4 +1,4 @@
-//! Scene Hierarchy Panel — Sol panel'de entity ağacını gösterir
+//! The scene hierarchy panel — shows the entity tree in the left panel.
 
 use crate::editor_state::EditorState;
 use crate::theme::palette::{ACCENT, ACCENT_LIGHT, BORDER_HOT, SURFACE, TEXT_BODY, TEXT_BRIGHT, TEXT_DIM, TEXT_MUTED};
@@ -208,7 +208,7 @@ pub fn ui_hierarchy(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
     // panel invites the reader to work out why they differ.
 }
 
-/// Tek bir entity node'unu recursive olarak çizer
+/// Draws a single entity node, recursively
 fn draw_entity_node(
     ui: &mut egui::Ui,
     world: &World,

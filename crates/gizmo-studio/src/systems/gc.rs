@@ -1,20 +1,20 @@
-//! Garbage Collection System — Soft-deleted entity'leri düzenli aralıklarla temizler
+//! The garbage-collection system — clears soft-deleted entities at a regular interval.
 //!
-//! Blender/Unity gibi motorlar entity silindiğinde hemen GPU kaynakları bırakmaz.
-//! Bu sistem, IsDeleted bayrağı taşıyan entity'leri 3 saniyelik bir gecikmeyle
-//! topluca temizleyerek hem Undo güvenliğini korur hem de RAM sızıntısını önler.
+//! Engines like Blender and Unity do not release GPU resources the moment an entity is deleted.
+//! This system sweeps entities carrying the IsDeleted flag in a batch, after a 3-second delay,
+//! which keeps undo safe and stops the memory from leaking.
 
 use crate::state::StudioState;
 use gizmo::editor::EditorState;
 use gizmo::prelude::*;
 
-/// Garbage collection aralığı (saniye)
+/// The garbage-collection interval, in seconds
 const GC_INTERVAL: f32 = 3.0;
 
-/// Auto-save aralığı (saniye) — 5 dakikada bir
+/// The auto-save interval, in seconds — every 5 minutes
 const AUTOSAVE_INTERVAL: f32 = 300.0;
 
-/// Soft-deleted entity'leri temizler ve GPU kaynaklarını serbest bırakır
+/// Clears soft-deleted entities and releases their GPU resources
 pub fn garbage_collection_system(
     world: &mut World,
     state: &mut StudioState,

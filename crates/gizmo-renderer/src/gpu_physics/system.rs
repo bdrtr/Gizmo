@@ -515,7 +515,8 @@ impl GpuPhysicsSystem {
         queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[params]));
     }
 
-    /// Debug görselleştirmeyi etkinleştir. Bind group'u gerçek buffer referanslarıyla oluşturur.
+    /// Enables the debug visualisation, building the bind group from the real buffer
+    /// references.
     pub fn enable_debug(&mut self, device: &wgpu::Device, _show_flags: u32) {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             entries: &[

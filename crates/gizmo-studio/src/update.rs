@@ -337,7 +337,7 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
     );
 }
 
-/// Dizin kopyalama yardımcı fonksiyonu
+/// A helper for copying a directory
 pub fn copy_dir_all(
     src: impl AsRef<std::path::Path>,
     dst: impl AsRef<std::path::Path>,

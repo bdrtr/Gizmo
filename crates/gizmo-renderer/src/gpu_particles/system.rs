@@ -11,40 +11,46 @@ pub struct GpuParticleSystem {
     pub quad_vertex_buffer: wgpu::Buffer,
     pub active_particles: u32,
     pub ring_head: std::sync::atomic::AtomicU32,
-    /// Simülasyon yerçekimi (m/s²), her frame parçacığın `velocity.y`'sinden düşülür.
-    /// Default 9.81 (kıvılcım/duman düşer). Yatay akış/streamline için `0.0` yap —
-    /// böylece parçacıklar sarkmadan düz akar (ör. rüzgar tüneli). Runtime'da değişir.
+    /// Simulation gravity (m/s²), subtracted from each particle's `velocity.y` every frame.
+    /// Defaults to 9.81 (sparks and smoke fall). For horizontal flow or streamlines set it to
+    /// `0.0`, so particles run straight instead of sagging (a wind tunnel, say). Changeable at
+    /// runtime.
     pub gravity: f32,
-    /// Simülasyon sürükleme katsayısı (üstel hız sönümü, `v -= v*drag*dt`). Default 0.8
-    /// (parçacıklar hızla yavaşlar). Düz/uzun streamline için `≈0.0` yap ki hız korunsun.
+    /// Simulation drag coefficient (exponential velocity decay, `v -= v*drag*dt`). Defaults to
+    /// 0.8 (particles slow down quickly). For long straight streamlines set it to `≈0.0` so the
+    /// speed is preserved.
     pub drag: f32,
-    /// Engel küreleri (xyz = merkez dünya-uzayı, w = yarıçap). Parçacıklar bunlara
-    /// çarpıp etrafından SAPAR (flow-around). En fazla `MAX_PARTICLE_OBSTACLES` kullanılır.
-    /// Boş (default) → sapma kapalı. Rüzgar tüneli gibi "akış cisme çarpsın" için doldur.
+    /// Obstacle spheres (xyz = centre in world space, w = radius). Particles hit them and are
+    /// DEFLECTED around them (flow-around). At most `MAX_PARTICLE_OBSTACLES` are used.
+    /// Empty (the default) → deflection off. Fill it when the flow should hit a body, as in a
+    /// wind tunnel.
     pub obstacles: Vec<[f32; 4]>,
-    /// Nominal akış hızı (relaks hedefi). Parçacık hızı buna doğru yumuşakça çekilir →
-    /// engelden sonra çizgiler tekrar paralelleşir. `flow_relax`=0 iken etkisiz.
+    /// The nominal flow velocity (the relaxation target). Particle velocities are drawn towards
+    /// it smoothly, so the lines become parallel again downstream of an obstacle. No effect
+    /// while `flow_relax` is 0.
     pub flow_target: [f32; 3],
-    /// Akış relaks oranı (1/s). 0 = kapalı (default).
+    /// The flow relaxation rate (1/s). 0 = off (the default).
     pub flow_relax: f32,
-    /// Türbülans gücü: relaks hedefine eklenen dalgalı (swirl) hız genliği → düz akış
-    /// yerine duman gibi kıvrımlı filamentler. 0 = kapalı (default, düz çizgiler).
+    /// Turbulence strength: the swirl amplitude added to the relaxation target, which turns
+    /// straight flow into smoke-like curling filaments. 0 = off (the default, straight lines).
     pub turbulence: f32,
-    /// Curl-noise gücü: parçacık hızına DOĞRUDAN eklenen diverjanssız (zamanla evrilen)
-    /// swirl → duman/toz gerçekçi kıvrılır. 0 = kapalı (default). Duman için ~1.5–3.
+    /// Curl-noise strength: a divergence-free (time-evolving) swirl added DIRECTLY to particle
+    /// velocity, which makes smoke and dust curl realistically. 0 = off (the default). For smoke,
+    /// ~1.5–3.
     pub curl_strength: f32,
-    /// Flipbook/SubUV atlas bind group'u (group 2). Default 1×1 (boş); `set_flipbook` /
-    /// `set_procedural_smoke_flipbook` gerçek atlası yükler.
+    /// The flipbook/SubUV atlas bind group (group 2). 1×1 (empty) by default; `set_flipbook` and
+    /// `set_procedural_smoke_flipbook` upload the real atlas.
     pub flipbook_bind_group: wgpu::BindGroup,
-    /// Flipbook config uniform'u (render FS: x=tiles/kenar, y=açık). update_params yazar.
+    /// The flipbook config uniform (render FS: x = tiles per edge, y = enabled). Written by
+    /// update_params.
     pub flipbook_params_buffer: wgpu::Buffer,
-    /// Atlas'ın kenar-başına kare sayısı (ör. 4 → 4×4=16 kare). FS SubUV için.
+    /// The atlas's frames per edge (4 → 4×4 = 16 frames). For SubUV in the FS.
     pub flipbook_tiles: f32,
-    /// Flipbook açık mı (FS'te atlas mı yoksa prosedürel yuvarlak mı). Default kapalı →
-    /// mevcut kıvılcım/toz efektleri değişmez; duman için demo açar.
+    /// Is the flipbook on (the FS samples the atlas rather than a procedural disc)? Off by
+    /// default, so existing spark/dust effects are unchanged; a smoke demo turns it on.
     pub flipbook_on: bool,
-    /// Işıklandırma (T4): küresel normal + half-lambert + ambient ile güneşe göre aydınlan.
-    /// Default kapalı (kıvılcım/ateş emissive kalsın); duman/toz için demo açar.
+    /// Lighting (T4): lit by the sun through a spherical normal + half-lambert + ambient. Off by
+    /// default (so sparks and fire stay emissive); a smoke or dust demo turns it on.
     pub lit: bool,
 }
 
@@ -196,7 +202,7 @@ impl GpuParticleSystem {
         })
     }
 
-    /// RGBA8 atlas verisini flipbook olarak yükler (kenar-başına `tiles` kare) ve etkinleştirir.
+    /// Uploads RGBA8 atlas data as a flipbook (`tiles` frames per edge) and enables it.
     pub fn set_flipbook(
         &mut self,
         device: &wgpu::Device,
@@ -242,8 +248,9 @@ impl GpuParticleSystem {
         self.flipbook_on = true;
     }
 
-    /// PROSEDÜREL duman flipbook'u üretip yükler (dış varlık gerekmez): `tiles`×`tiles` kare,
-    /// her kare fBm-modüle bir duman topağının bir animasyon fazı (büyür + dağılır + kıvrılır).
+    /// Generates and uploads a PROCEDURAL smoke flipbook (no external asset needed):
+    /// `tiles`×`tiles` frames, each one an animation phase of an fBm-modulated smoke puff (it
+    /// grows, disperses and curls).
     pub fn set_procedural_smoke_flipbook(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
         let tiles: u32 = 4;
         let tile_px: u32 = 128;
@@ -328,8 +335,9 @@ impl GpuParticleSystem {
         tracing::trace!(active_particles, workgroups, "[GpuParticles] simulated");
     }
 
-    /// Soft particles için group-1 (sahne derinliği) bind group'u güncel `depth_view` ile
-    /// oluşturur. `depth_texture_view` resize'da değiştiğinden her frame çağrılmalı (ucuz).
+    /// Builds the group-1 (scene depth) bind group for soft particles from the current
+    /// `depth_view`. `depth_texture_view` changes on resize, so this must be called every frame
+    /// (it is cheap).
     pub fn create_depth_bind_group(
         &self,
         device: &wgpu::Device,
@@ -450,8 +458,9 @@ fn sstep(a: f32, b: f32, x: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
-/// `tiles`×`tiles` kare duman atlası üretir; her kare bir animasyon fazı (büyür + dağılır +
-/// fBm ile kıvrılır). Beyaz duman, alpha = yoğunluk. Döner: (RGBA8 veri, atlas kenar-piksel).
+/// Generates a `tiles`×`tiles` frame smoke atlas; each frame is one animation phase (it grows,
+/// disperses and curls through fBm). White smoke, with alpha as density. Returns (RGBA8 data,
+/// atlas edge in pixels).
 pub fn generate_smoke_atlas(tiles: u32, tile_px: u32) -> (Vec<u8>, u32) {
     let size = tiles * tile_px;
     let frames = tiles * tiles;

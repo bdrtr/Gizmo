@@ -257,7 +257,7 @@ pub fn handle_editor_shortcuts(
         }
 }
 
-/// Kamerayı seçili objelerin merkezine odaklar
+/// Focuses the camera on the centre of the selected objects
 fn focus_on_selection(
     world: &mut World,
     editor_state: &mut EditorState,

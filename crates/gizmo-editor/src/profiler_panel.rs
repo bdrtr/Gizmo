@@ -1,10 +1,10 @@
-//! Profiler Panel — Görsel performans izleme paneli
+//! The profiler panel — visual performance monitoring.
 //!
-//! FrameProfiler'daki verileri egui ile görselleştirir:
-//! - Frame time grafiği (son 300 frame)
-//! - FPS sayacı
-//! - Scope bazlı zamanlama tablosu (mini flamegraph)
-//! - Bütçe çubukları (16.6ms = 60fps hedef)
+//! Visualises FrameProfiler's data with egui:
+//! - A frame-time graph (the last 300 frames)
+//! - An FPS counter
+//! - A per-scope timing table (a mini flamegraph)
+//! - Budget bars (16.6 ms = the 60 fps target)
 
 use crate::editor_state::EditorState;
 use egui;
@@ -35,7 +35,7 @@ fn frame_color(ms: f64) -> egui::Color32 {
     }
 }
 
-/// Scope derinliğine göre renk paleti.
+/// The colour palette, by scope depth.
 ///
 /// Deliberately NOT folded into the mono accent scheme. The design system says one accent and no
 /// second, which is right for chrome — but a flamegraph's colours are data, not decoration: eight
@@ -292,7 +292,7 @@ mod tests {
         assert_eq!(frame_color(16.66), COLOR_GOOD);
     }
 
-    /// Sınır: tam 16.67ms artık "iyi" DEĞİL (`< 16.67` false) → uyarı.
+    /// The boundary: exactly 16.67 ms is no longer "good" (`< 16.67` is false) → warning.
     #[test]
     fn frame_color_at_60fps_boundary_is_warn() {
         assert_eq!(frame_color(16.67), COLOR_WARN);
@@ -304,20 +304,21 @@ mod tests {
         assert_eq!(frame_color(33.32), COLOR_WARN);
     }
 
-    /// Sınır: tam 33.33ms artık "uyarı" DEĞİL (`< 33.33` false) → kötü.
+    /// The boundary: exactly 33.33 ms is no longer "warning" (`< 33.33` is false) → bad.
     #[test]
     fn frame_color_at_30fps_boundary_is_bad() {
         assert_eq!(frame_color(33.33), COLOR_BAD);
         assert_eq!(frame_color(100.0), COLOR_BAD);
     }
 
-    /// Negatif süre (anlamsız ama savunmacı) yine "iyi" tarafına düşer.
+    /// A negative duration (meaningless, but handled defensively) still lands on the "good"
+    /// side.
     #[test]
     fn frame_color_negative_is_good() {
         assert_eq!(frame_color(-5.0), COLOR_GOOD);
     }
 
-    /// NaN/∞ her iki `<` karşılaştırmasında da false → kötü (davranışı belgeler).
+    /// NaN and ∞ are false in both `<` comparisons → bad (this documents that behaviour).
     #[test]
     fn frame_color_nan_and_inf_fall_through_to_bad() {
         assert_eq!(frame_color(f64::NAN), COLOR_BAD);
@@ -326,7 +327,7 @@ mod tests {
 
     // ─── scope_color: (depth*3 + idx) % 8 palet indeksleme ───
 
-    /// Palet 8 elemanlı → indeks 8 periyoduyla sarmalanır.
+    /// The palette has 8 entries → the index wraps with a period of 8.
     #[test]
     fn scope_color_wraps_modulo_palette_len() {
         assert_eq!(scope_color(0, 0), scope_color(0, 8));
@@ -342,7 +343,7 @@ mod tests {
         assert_eq!(scope_color(2, 2), scope_color(0, 0));
     }
 
-    /// İlk 8 indeks (i=0..8, depth=0) BİRBİRİNDEN farklı renkler vermeli.
+    /// The first 8 indices (i=0..8, depth=0) must give colours that differ from EACH OTHER.
     #[test]
     fn scope_color_first_eight_indices_are_distinct() {
         let colors: Vec<_> = (0..8).map(|i| scope_color(0, i)).collect();
@@ -357,7 +358,7 @@ mod tests {
         }
     }
 
-    /// Deterministiklik: aynı giriş daima aynı rengi verir.
+    /// Determinism: the same input always gives the same colour.
     #[test]
     fn scope_color_is_deterministic() {
         assert_eq!(scope_color(3, 5), scope_color(3, 5));

@@ -4,9 +4,8 @@ use gizmo::editor::EditorState;
 use gizmo::prelude::*;
 use std::collections::HashSet;
 
-/// Editor'ün iç nesnelerini (Kamera, Grid, Işık, Highlight Box) tanımlayıp
-/// korumalı ID kümesi döndürür. Sahne temizleme ve yükleme sırasında
-/// bu nesnelerin silinmesini engellemek için kullanılır.
+/// Identifies the editor's own objects (camera, grid, light, highlight box) and returns the set
+/// of protected ids. Used to keep them from being deleted while a scene is cleared or loaded.
 fn collect_protected_ids(world: &World, editor_camera: u32) -> HashSet<u32> {
     let mut protected = HashSet::new();
     protected.insert(editor_camera);
@@ -45,8 +44,8 @@ fn collect_protected_ids(world: &World, editor_camera: u32) -> HashSet<u32> {
     protected
 }
 
-/// Dünya'daki editor-dışı entity'leri temizler (despawn).
-/// Korumalı nesneler (kamera, ızgara, ışıklar) dokunulmaz.
+/// Despawns every non-editor entity in the world.
+/// The protected objects (camera, grid, lights) are left alone.
 fn despawn_non_protected(world: &mut World, protected: &HashSet<u32>) {
     let ents = world.iter_alive_entities();
     for e in ents {

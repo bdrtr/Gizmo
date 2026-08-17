@@ -11,13 +11,13 @@ pub struct StudioState {
     /// failing to load; both used to be fields here, next to a copy of the loop that used them.
     pub play: gizmo::systems::PlayLoop,
     pub asset_watcher: Option<gizmo::renderer::hot_reload::AssetWatcher>,
-    /// Garbage Collection zamanlayıcı — soft-deleted entity'leri temizler
+    /// The garbage-collection timer — cleans up soft-deleted entities
     pub gc_timer: f32,
-    /// Auto-Save zamanlayıcı — sahneyi belirli aralıklarla yedekler
+    /// The auto-save timer — backs the scene up at a fixed interval
     pub autosave_timer: f32,
-    /// Sahnedeki aktif (görünür) entity sayısı
+    /// How many entities in the scene are active (visible)
     pub visible_entity_count: u32,
-    /// Son frame'deki draw call sayısı
+    /// The draw-call count of the last frame
     pub draw_call_count: u32,
 }
 

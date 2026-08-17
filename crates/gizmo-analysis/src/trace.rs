@@ -1,8 +1,8 @@
-//! Otomatik span yakalama katmanı (`trace` özelliği).
+//! The automatic span-capture layer (the `trace` feature).
 //!
-//! Motorun HER `#[tracing::instrument]` / `span!` span'ini otomatik yakalar — collector'ların
-//! göremediği paralel/çapraz-thread ayrıntıyı da. Kaydı `chrome://tracing`/Perfetto için
-//! alev-grafiğine aktarır. Kurulum:
+//! Captures EVERY `#[tracing::instrument]` / `span!` span in the engine automatically — including
+//! the parallel and cross-thread detail collectors cannot see — and exports the record as a flame
+//! chart for `chrome://tracing`/Perfetto. Setup:
 //! ```
 //! use gizmo_analysis::trace::{GizmoTraceLayer, TraceSink};
 //! use tracing_subscriber::prelude::*;
@@ -10,10 +10,10 @@
 //! let sink = TraceSink::new();
 //! tracing_subscriber::registry().with(GizmoTraceLayer::new(sink.clone())).init();
 //!
-//! // ... motoru çalıştır ...
-//! tracing::info_span!("ecs_update").in_scope(|| { /* bir frame */ });
+//! // ... run the engine ...
+//! tracing::info_span!("ecs_update").in_scope(|| { /* one frame */ });
 //!
-//! // Kapanan her span bir kayıt olur; dosyaya:
+//! // Every span that closes becomes a record; to write it out:
 //! // `std::fs::write("engine_trace.json", sink.to_chrome_trace())`.
 //! assert_eq!(sink.len(), 1);
 //! assert!(sink.to_chrome_trace().contains("\"name\":\"ecs_update\""));
@@ -26,20 +26,20 @@ use tracing::Subscriber;
 use tracing_subscriber::layer::{Context, Layer};
 use tracing_subscriber::registry::LookupSpan;
 
-/// Yakalanan tek bir span kaydı.
+/// A single captured span record.
 #[derive(Debug, Clone)]
 pub struct TraceRecord {
     pub name: &'static str,
     pub target: String,
-    /// Layer epoch'undan itibaren başlangıç (ns).
+    /// The start, in nanoseconds since the layer's epoch.
     pub start_ns: u64,
-    /// Span'in duvar-saati süresi (ilk giriş → kapanış), ns.
+    /// The span's wall-clock duration (first entry → close), in nanoseconds.
     pub dur_ns: u64,
-    /// Thread kimliği (hash).
+    /// The thread identity (hashed).
     pub thread: u64,
 }
 
-/// Thread-güvenli span kaydı deposu (Layer ile paylaşılır).
+/// The thread-safe store of span records (shared with the layer).
 #[derive(Clone, Default)]
 pub struct TraceSink {
     inner: Arc<Mutex<Vec<TraceRecord>>>,
@@ -52,7 +52,7 @@ impl TraceSink {
         }
     }
 
-    /// Tüm kayıtların kopyası.
+    /// A copy of every record.
     pub fn records(&self) -> Vec<TraceRecord> {
         self.inner.lock().map(|g| g.clone()).unwrap_or_default()
     }
@@ -107,7 +107,7 @@ fn thread_id_u64() -> u64 {
     h.finish()
 }
 
-/// Span başlangıç anını span'in extension'ında saklamak için.
+/// Used to keep a span's start instant in the span's own extensions.
 struct SpanStart(Instant);
 
 /// Motorun tüm span'lerini yakalayan `tracing_subscriber::Layer`.

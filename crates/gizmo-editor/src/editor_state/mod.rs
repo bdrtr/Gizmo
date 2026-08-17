@@ -25,7 +25,7 @@ pub struct EditorState {
     pub mouse_ndc: Option<gizmo_math::Vec2>,
     pub gizmo_local_space: bool,
     pub shading_mode: u32,
-    /// FXAA Anti-Aliasing açık/kapalı durumu
+    /// Whether FXAA anti-aliasing is on
     // Post-Processing Settings
     pub history: crate::history::History,
 
@@ -78,9 +78,9 @@ pub struct EditorState {
         Option<gizmo_math::Vec3>,
     )>,
     pub spawn_request: Option<SpawnKind>,
-    /// Spawn edilen entity'nin otomatik olarak bağlanacağı parent
+    /// The parent a spawned entity is automatically attached to
     pub pending_child_parent: Option<gizmo_core::entity::Entity>,
-    /// Spawn edilen entity'ye otomatik eklenecek bileşenler
+    /// The components automatically added to a spawned entity
     pub pending_child_components: Vec<String>,
     /// Entities that should become children of the entity the next spawn creates — the other half
     /// of "group the selection", which used to create the group and then leave the selection
@@ -117,8 +117,8 @@ pub struct EditorState {
     pub pending_dialog_rx:
         Option<std::sync::Mutex<std::sync::mpsc::Receiver<(bool, Option<String>)>>>,
 
-    /// Play/Stop modu için in-memory sahne yedeği.
-    /// Play'e basıldığında `Some(snapshot)`, Stop'ta `None` olur.
+    /// The in-memory scene backup behind play/stop.
+    /// `Some(snapshot)` once play is pressed, `None` on stop.
     pub play_snapshot: Option<gizmo_scene::SceneSnapshot>,
 
     pub pending_json_updates: Vec<(
@@ -239,8 +239,8 @@ impl EditorState {
     }
 
     // --- Post-Process Validation ---
-    /// Post-process değerlerini güvenli aralıklara sıkıştırır.
-    /// Render pipeline'a geçmeden önce çağrılmalıdır.
+    /// Clamps the post-process values into safe ranges.
+    /// Must be called before they reach the render pipeline.
     pub fn validate_post_process(&mut self) {
         self.post_process.bloom_intensity = self.post_process.bloom_intensity.clamp(0.0, 5.0);
         self.post_process.bloom_threshold = self.post_process.bloom_threshold.clamp(0.0, 10.0);

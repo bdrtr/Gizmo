@@ -3,9 +3,9 @@ use crate::renderer::Vertex;
 use gizmo_math::Vec3;
 
 impl crate::asset::AssetManager {
-    /// Basit, yatay bir düzlem (Plane) üretir.
-    /// Düzlem köşeleri (XZ düzleminde, +Y'ye bakan). Saf veri — device gerekmez,
-    /// winding testi buna doğrudan erişebilir.
+    /// Builds a simple horizontal plane.
+    /// The plane's vertices (in the XZ plane, facing +Y). Pure data — no device needed, so the
+    /// winding test can reach it directly.
     pub(crate) fn plane_data(size: f32) -> Vec<Vertex> {
         let half = size / 2.0;
         let y = 0.0;
@@ -42,7 +42,7 @@ impl crate::asset::AssetManager {
         )
     }
 
-    /// Yuvarlak bir disk (Çember tabanı) köşeleri (+Y'ye bakan). Saf veri.
+    /// The vertices of a round disc (a circular base), facing +Y. Pure data.
     pub(crate) fn circle_data(radius: f32, segments: u32) -> Vec<Vertex> {
         let segments = segments.max(3);
         let mut vertices = Vec::with_capacity((segments * 3) as usize);
@@ -91,7 +91,8 @@ impl crate::asset::AssetManager {
         )
     }
 
-    /// Editör sahneleri için GPU'da çizilen sonsuz grid mesh (tek bir quad). Shader içinde matematiksel olarak çizilir.
+    /// The infinite grid mesh drawn on the GPU for editor scenes (a single quad). The grid
+    /// itself is drawn mathematically inside the shader.
     pub fn create_editor_grid_mesh(device: &wgpu::Device, extents: f32) -> Mesh {
         let mut vertices = Vec::new();
         // Zemin boyunca devasa bir XY (veya XZ düzleminde) quad oluştur.
@@ -123,8 +124,8 @@ impl crate::asset::AssetManager {
         )
     }
 
-    /// 2D Sprite dörtgeni oluşturur (XY düzleminde, kameraya paralel).
-    /// Ortografik projeksiyon ile kullanıldığında 2D oyun desteği sağlar.
+    /// Builds a 2D sprite quad (in the XY plane, parallel to the camera).
+    /// With an orthographic projection this is what makes 2D games possible.
     pub fn create_sprite_quad(device: &wgpu::Device, width: f32, height: f32) -> Mesh {
         let hw = width / 2.0;
         let hh = height / 2.0;

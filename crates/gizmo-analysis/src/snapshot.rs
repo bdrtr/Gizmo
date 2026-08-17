@@ -1,14 +1,15 @@
-//! Tek bir frame'in yapısal anlık görüntüsü (snapshot).
+//! The structural snapshot of a single frame.
 //!
-//! Bir frame'de motorun gözlemlenebilir durumunun tamamı: ECS istatistikleri,
-//! ayrıntılı archetype tablosu, zaman-damgalı span'ler (FrameProfiler'dan) ve
-//! collector'ların eklediği serbest metrik grupları. `groups` alanı sayesinde herhangi
-//! bir alt-sistem, snapshot tipini değiştirmeden kendi ayrıntısını ekleyebilir.
+//! Everything observable about the engine in one frame: ECS statistics, the detailed archetype
+//! table, timestamped spans (from the FrameProfiler) and the free-form metric groups the
+//! collectors add. The `groups` field is what lets any subsystem add its own detail without
+//! changing the snapshot type.
 
 use gizmo_core::world::{ArchetypeSummary, WorldStats};
 use std::collections::BTreeMap;
 
-/// FrameProfiler'ın bir scope'unun analiz-tarafı kopyası (Chrome-trace için ns'ler dahil).
+/// The analysis-side copy of one FrameProfiler scope (including nanoseconds, for the Chrome
+/// trace).
 #[derive(Debug, Clone)]
 pub struct SpanSample {
     pub name: &'static str,
@@ -18,28 +19,29 @@ pub struct SpanSample {
     pub end_ns: u64,
 }
 
-/// Bir frame'in tam anlık görüntüsü.
+/// The complete snapshot of one frame.
 #[derive(Debug, Clone, Default)]
 pub struct FrameSnapshot {
-    /// Sıfırdan başlayan frame numarası.
+    /// The frame number, counting from zero.
     pub frame: u64,
     /// Bu frame'in toplam süresi (ms) — mümkünse FrameProfiler'dan, yoksa duvar-saati.
     pub frame_ms: f64,
-    /// Analyzer epoch'undan bu yana geçen zaman (ns) — zaman ekseni için.
+    /// Time elapsed since the Analyzer's epoch (ns) — for the time axis.
     pub timestamp_ns: u64,
     /// ECS üst-düzey istatistikleri.
     pub ecs: WorldStats,
-    /// Ayrıntılı archetype tablosu (config'e göre boş olabilir — ağır).
+    /// The detailed archetype table (can be empty depending on the config — it is heavy).
     pub archetypes: Vec<ArchetypeSummary>,
     /// Bu frame'de tamamlanan profiling span'leri (iç içe olabilir).
     pub spans: Vec<SpanSample>,
-    /// Collector'ların eklediği serbest metrik grupları: grup → [(metrik, değer)].
-    /// Örn. "physics" → [("bodies", 1281.0), ("solver_ms", 4.1), …].
+    /// The free-form metric groups the collectors add: group → [(metric, value)].
+    /// For example "physics" → [("bodies", 1281.0), ("solver_ms", 4.1), …].
     pub groups: BTreeMap<String, Vec<(String, f64)>>,
 }
 
 impl FrameSnapshot {
-    /// Bir metrik grubuna (yoksa oluşturarak) değer ekler. Collector'lar bunu kullanır.
+    /// Adds a value to a metric group, creating the group if it is not there. This is what
+    /// collectors use.
     pub fn push_metric(&mut self, group: &str, name: &str, value: f64) {
         self.groups
             .entry(group.to_string())
@@ -47,14 +49,14 @@ impl FrameSnapshot {
             .push((name.to_string(), value));
     }
 
-    /// Bir grup+metrik değerini okur (varsa).
+    /// Reads a group+metric value, if it exists.
     pub fn metric(&self, group: &str, name: &str) -> Option<f64> {
         self.groups
             .get(group)
             .and_then(|g| g.iter().find(|(n, _)| n == name).map(|(_, v)| *v))
     }
 
-    /// En pahalı span (ms) — hızlı darboğaz göstergesi.
+    /// The most expensive span (ms) — a quick bottleneck indicator.
     pub fn hottest_span(&self) -> Option<&SpanSample> {
         self.spans
             .iter()

@@ -25,25 +25,21 @@ use std::path::{Path, PathBuf};
 
 /// Turkish doc lines still present under each crate's `src/`, by crate.
 ///
-/// **Only ever edit this downwards.** A crate that reaches zero leaves the table entirely.
-const BUDGET: &[(&str, usize)] = &[
-    ("gizmo-analysis", 139),
-    ("gizmo-editor", 106),
-    ("gizmo-renderer", 328),
-    ("gizmo-scripting", 138),
-    ("gizmo-studio", 59),
-    ("gizmo", 1),
-];
+/// **Empty, as of 2026-08-17** — every crate's documentation surface is English. It stays in the
+/// file because that is the shape the rule needs: work that lands mid-campaign gets a number here
+/// instead of an exemption, and the number may only ever be edited downwards. A crate that
+/// reaches zero leaves the table entirely.
+const BUDGET: &[(&str, usize)] = &[];
 
 /// Files whose flagged lines are English prose *about* Turkish, with the reason.
 ///
 /// Each one must still contain a flagged line: an exception that has stopped applying fails, so
 /// the list cannot outlive what it excuses.
-const EXCEPTIONS: &[(&str, &str)] = &[(
-    "gizmo-core/src/cvar.rs",
-    "documents how `to_lowercase` handles `İ` — the Turkish letter is the subject of the English \
-     sentence, not the language it is written in",
-)];
+/// Currently empty, and that is a result rather than an oversight: the one file that needed an
+/// entry (`gizmo-core/src/cvar.rs`, which documents how `to_lowercase` handles `İ`) stopped being
+/// flagged once [`is_turkish`] learned to ignore citations. The mechanism stays for the case that
+/// citation-stripping cannot answer.
+const EXCEPTIONS: &[(&str, &str)] = &[];
 
 /// Letters that exist in Turkish and not in English. One is enough to settle a line.
 const TURKISH_LETTERS: [char; 6] = ['ğ', 'Ğ', 'ş', 'Ş', 'ı', 'İ'];
@@ -67,7 +63,13 @@ fn workspace() -> PathBuf {
 }
 
 /// Is this doc line's text Turkish?
+///
+/// Code spans and quoted strings are removed first, because a citation is not prose: an English
+/// sentence explaining that the engine logs `"Obje çoğaltıldı."`, or how `to_lowercase` treats
+/// `İ`, is written in English *about* Turkish, and counting it would push the rule towards
+/// rewriting quotes that have to keep matching the code.
 fn is_turkish(text: &str) -> bool {
+    let text = &strip_citations(text);
     if text.chars().any(|c| TURKISH_LETTERS.contains(&c)) {
         return true;
     }
@@ -77,6 +79,25 @@ fn is_turkish(text: &str) -> bool {
         .filter(|w| !w.is_empty())
         .collect();
     words.iter().filter(|w| TURKISH_WORDS.contains(w)).count() >= 2
+}
+
+/// Removes `` `code spans` `` and `"quoted strings"` — the parts of a doc line that quote
+/// something rather than say it.
+fn strip_citations(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut delimiter: Option<char> = None;
+    for c in text.chars() {
+        match delimiter {
+            Some(open) => {
+                if c == open {
+                    delimiter = None;
+                }
+            }
+            None if c == '`' || c == '"' => delimiter = Some(c),
+            None => out.push(c),
+        }
+    }
+    out
 }
 
 /// Every `.rs` file under a directory.
@@ -218,6 +239,14 @@ fn the_detector_tells_the_two_languages_apart() {
     assert!(
         !is_turkish("Every value is derived from the camera, not from a constant."),
         "English must not trip the word rule"
+    );
+    assert!(
+        !is_turkish("The console prints `\"Obje çoğaltıldı.\"` when a duplicate lands."),
+        "an English sentence quoting a Turkish string is English"
+    );
+    assert!(
+        !is_turkish("`to_lowercase` maps `İ` to two code points."),
+        "and so is one quoting a Turkish letter"
     );
     assert!(
         is_turkish("var files, ise blocks"),

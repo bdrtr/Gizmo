@@ -5,52 +5,53 @@
 //! measured remainder — see docs/ENGINE.md.)
 //! # gizmo-analysis
 //!
-//! Gizmo motoru için **derin gözlemlenebilirlik / analiz modülü**. Amaç: analiz modülüyle
-//! çalışan bir motorun **en ufak ayrıntısı bile** — her frame'in süresi ve alt-span'leri,
-//! ECS'in archetype/component/bellek dökümü, fizik metrikleri, herhangi bir isimlendirilmiş
-//! sayaç/gösterge/ölçüm — kaydedilebilir, üzerinde istatistik alınabilir ve dışa aktarılabilir
-//! olsun.
+//! **Deep observability and analysis** for the Gizmo engine. The goal: with this module running,
+//! **even the smallest detail** of an engine — every frame's duration and its sub-spans, the
+//! ECS's archetype/component/memory breakdown, physics metrics, any named
+//! counter/gauge/measurement — can be recorded, have statistics taken over it, and be exported.
 //!
-//! ## Bileşenler
-//! - [`Analyzer`] — merkezi resource. Her frame bir [`FrameSnapshot`] üretir, ring-buffer
-//!   geçmişi tutar, tüm sayısal değerleri [`MetricStore`]'a besler.
-//! - [`MetricStore`] / [`Stats`] — sayaç/gösterge/ölçüm serileri + min/max/ortalama/std/p50/p95/p99.
-//! - [`Collector`] — genişletme noktası. Yeni bir alt-sistemi analiz edilebilir yapmak için
-//!   bir collector yazıp kaydet. Yerleşik: [`EcsCollector`] (+ `physics` özelliğiyle
-//!   `PhysicsCollector`).
-//! - Dışa aktarım: [`Analyzer::report_text`], [`Analyzer::to_json`], [`Analyzer::to_csv`],
-//!   [`Analyzer::to_chrome_trace`] (Perfetto/`chrome://tracing`).
+//! ## The pieces
+//! - [`Analyzer`] — the central resource. Produces a [`FrameSnapshot`] every frame, keeps a
+//!   ring-buffer history, and feeds every numeric value into the [`MetricStore`].
+//! - [`MetricStore`] / [`Stats`] — counter/gauge/sample series plus
+//!   min/max/mean/std/p50/p95/p99.
+//! - [`Collector`] — the extension point. To make a new subsystem analysable, write a collector
+//!   and register it. Built in: [`EcsCollector`] (plus `PhysicsCollector` with the `physics`
+//!   feature).
+//! - Export: [`Analyzer::report_text`], [`Analyzer::to_json`], [`Analyzer::to_csv`],
+//!   [`Analyzer::to_chrome_trace`] (Perfetto / `chrome://tracing`).
 //!
-//! ## Hızlı kullanım (headless)
+//! ## Quick start (headless)
 //! ```
 //! use gizmo_analysis::{profile_scope, Analyzer, FrameProfiler};
 //! use gizmo_core::{Schedule, World};
 //!
 //! let mut world = World::new();
 //! world.insert_resource(FrameProfiler::new());
-//! let mut schedule = Schedule::new();          // gerçek motorda sistemlerle dolu
-//! let mut analyzer = Analyzer::new();          // EcsCollector yerleşik; span'leri
-//!                                              // world'deki FrameProfiler'dan okur
+//! let mut schedule = Schedule::new();          // full of systems in a real engine
+//! let mut analyzer = Analyzer::new();          // EcsCollector is built in; spans are
+//!                                              // read from the world's FrameProfiler
 //!
 //! for _ in 0..3 {
 //!     {
-//!         profile_scope!(&world, "simulate");  // sistemlerin ölçtüğü span'ler
+//!         profile_scope!(&world, "simulate");  // the spans the systems measure
 //!     }
-//!     schedule.run(&mut world, 1.0 / 60.0);    // motor bir frame ilerler (+ end_frame)
-//!     analyzer.collect(&world);                // o frame'i analiz et
+//!     schedule.run(&mut world, 1.0 / 60.0);    // the engine advances one frame (+ end_frame)
+//!     analyzer.collect(&world);                // analyse that frame
 //! }
 //!
-//! // Her `collect` bir frame'i kaydeder; span'ler `span.<ad>` metrik serisine de düşer.
+//! // Every `collect` records one frame; spans also land in the `span.<name>` metric series.
 //! assert_eq!(analyzer.frame(), 3);
 //! assert_eq!(analyzer.stats("span.simulate").unwrap().count, 3);
 //! assert!(analyzer.report_text().contains("Gizmo Analysis"));
 //!
-//! // Alev-grafiği: `std::fs::write("trace.json", trace)` → chrome://tracing / Perfetto.
+//! // Flame chart: `std::fs::write("trace.json", trace)` → chrome://tracing / Perfetto.
 //! let trace = analyzer.to_chrome_trace();
 //! assert!(trace.contains("\"name\":\"simulate\""));
 //! ```
 //!
-//! `app` özelliğiyle [`AnalysisPlugin`] tüm bunları App/Plugin schedule'ına otomatik bağlar.
+//! With the `app` feature, [`AnalysisPlugin`] wires all of this into the App/Plugin schedule
+//! automatically.
 
 mod analyzer;
 pub mod collector;
@@ -86,8 +87,8 @@ pub mod panel;
 
 use gizmo_core::world::World;
 
-/// Bir profiling span'i başlat (FrameProfiler resource'u varsa). Genelde [`profile_scope!`]
-/// makrosunu kullanın.
+/// Starts a profiling span (if there is a FrameProfiler resource). Normally you want the
+/// [`profile_scope!`] macro instead.
 pub fn begin_scope(world: &World, name: &'static str) {
     if let Some(mut p) = world.get_resource_mut::<FrameProfiler>() {
         p.begin_scope(name);
@@ -101,8 +102,9 @@ pub fn end_scope(world: &World, name: &'static str) {
     }
 }
 
-/// RAII span zamanlayıcısı — drop edilince span kapanır. FrameProfiler kaynağını yalnız
-/// başlangıç ve bitişte kısa süre kilitler (uzun tutmaz → paralel sistemlerde güvenli).
+/// An RAII span timer — the span closes when it is dropped. It locks the FrameProfiler resource
+/// only briefly, at the start and at the end (never holds it, so it is safe under parallel
+/// systems).
 pub struct ScopeTimer<'w> {
     world: &'w World,
     name: &'static str,
@@ -114,7 +116,7 @@ impl Drop for ScopeTimer<'_> {
     }
 }
 
-/// Bir span aç ve RAII zamanlayıcı döndür.
+/// Opens a span and returns the RAII timer.
 pub fn scope<'w>(world: &'w World, name: &'static str) -> ScopeTimer<'w> {
     begin_scope(world, name);
     ScopeTimer { world, name }

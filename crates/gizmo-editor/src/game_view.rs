@@ -119,11 +119,11 @@ pub fn ui_game_view(ui: &mut egui::Ui, state: &mut EditorState) {
     }
 }
 
-/// Dövüş oyunu HUD overlay'ı çizer:
-/// - P1 Health Bar (Sol, Mavi)
-/// - P2 Health Bar (Sağ, Kırmızı)
-/// - Round göstergesi (Ortada)
-/// - Timer (Ortada)
+/// Draws the fighting-game HUD overlay:
+/// - P1 health bar (left, blue)
+/// - P2 health bar (right, red)
+/// - Round indicator (centre)
+/// - Timer (centre)
 fn draw_fight_hud(ui: &mut egui::Ui, rect: egui::Rect, state: &EditorState) {
     let painter = ui.painter();
     let hud = &state.fight_hud;

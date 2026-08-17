@@ -33,16 +33,16 @@ pub(super) type BatchKey = (
 pub(super) struct BatchData {
     pub(super) vbuf: std::sync::Arc<wgpu::Buffer>,
     pub(super) vertex_count: u32,
-    /// `Some` ise batch `draw_indexed` ile çizilir.
+    /// When `Some`, the batch is drawn with `draw_indexed`.
     ///
-    /// Ana boru hattının `DrawItem`'ından farklı olarak burada LOD yüzünden düşürme YOK:
-    /// studio'nun LOD'u `lods` bileşeninden ayrı bir `Mesh` seçiyor, motorun düzleştirilmiş
-    /// `lod_vbufs` tamponlarını değil, dolayısıyla seçilen mesh'in indeksleri kendi vertex
-    /// dizisine göre zaten geçerli.
+    /// Unlike the main pipeline's `DrawItem` there is NO dropping for LOD here: the studio's LOD
+    /// picks a separate `Mesh` out of the `lods` component rather than the engine's flattened
+    /// `lod_vbufs` buffers, so the chosen mesh's indices are already valid against its own
+    /// vertex array.
     pub(super) ibuf: Option<std::sync::Arc<wgpu::Buffer>>,
-    /// `ibuf` `Some` iken çizilecek indeks sayısı.
+    /// How many indices to draw while `ibuf` is `Some`.
     pub(super) index_count: u32,
-    /// `ibuf`'un eleman genişliği — mesh'ten olduğu gibi taşınır.
+    /// `ibuf`'s element width — carried through from the mesh unchanged.
     pub(super) index_format: wgpu::IndexFormat,
     pub(super) bind_group: std::sync::Arc<wgpu::BindGroup>,
     pub(super) skeleton_bg: std::sync::Arc<wgpu::BindGroup>,
@@ -69,16 +69,16 @@ pub(super) struct BatchData {
 pub(super) struct FlatBatchData {
     pub(super) vbuf: std::sync::Arc<wgpu::Buffer>,
     pub(super) vertex_count: u32,
-    /// `Some` ise batch `draw_indexed` ile çizilir.
+    /// When `Some`, the batch is drawn with `draw_indexed`.
     ///
-    /// Ana boru hattının `DrawItem`'ından farklı olarak burada LOD yüzünden düşürme YOK:
-    /// studio'nun LOD'u `lods` bileşeninden ayrı bir `Mesh` seçiyor, motorun düzleştirilmiş
-    /// `lod_vbufs` tamponlarını değil, dolayısıyla seçilen mesh'in indeksleri kendi vertex
-    /// dizisine göre zaten geçerli.
+    /// Unlike the main pipeline's `DrawItem` there is NO dropping for LOD here: the studio's LOD
+    /// picks a separate `Mesh` out of the `lods` component rather than the engine's flattened
+    /// `lod_vbufs` buffers, so the chosen mesh's indices are already valid against its own
+    /// vertex array.
     pub(super) ibuf: Option<std::sync::Arc<wgpu::Buffer>>,
-    /// `ibuf` `Some` iken çizilecek indeks sayısı.
+    /// How many indices to draw while `ibuf` is `Some`.
     pub(super) index_count: u32,
-    /// `ibuf`'un eleman genişliği — mesh'ten olduğu gibi taşınır.
+    /// `ibuf`'s element width — carried through from the mesh unchanged.
     pub(super) index_format: wgpu::IndexFormat,
     pub(super) bind_group: std::sync::Arc<wgpu::BindGroup>,
     pub(super) skeleton_bg: std::sync::Arc<wgpu::BindGroup>,
@@ -105,11 +105,12 @@ pub(super) struct FlatBatchData {
 }
 
 impl FlatBatchData {
-    /// Bu batch'in geometrisini bağlar ve `instances` için çizim çağrısını yapar.
+    /// Binds this batch's geometry and issues the draw call for `instances`.
     ///
-    /// Motorun `DrawItem::record_draw`'unun studio karşılığı, ve aynı sebeple var: bu
-    /// dosyanın geçitlerinde altı çizim noktası var (gölge, opak, çift-yüzlü, şeffaf,
-    /// grid, skybox) ve birinde indeksli, ötekinde düz çizmek tutarsız kare üretir.
+    /// The studio's counterpart to the engine's `DrawItem::record_draw`, and it exists for the
+    /// same reason: the passes in this file have six draw sites (shadow, opaque, double-sided,
+    /// transparent, grid, skybox), and drawing indexed at one and non-indexed at another
+    /// produces an inconsistent frame.
     pub(super) fn record_draw(
         &self,
         pass: &mut wgpu::RenderPass<'_>,

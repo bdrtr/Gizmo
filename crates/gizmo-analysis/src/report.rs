@@ -1,7 +1,7 @@
-//! Dışa aktarım — insan-okunur metin, JSON, CSV zaman-serisi ve Chrome-trace.
+//! Export — human-readable text, JSON, a CSV time series and a Chrome trace.
 //!
-//! Chrome-trace çıktısı `chrome://tracing` veya Perfetto'da açılıp her span'in en ufak
-//! ayrıntısına zoom yapılabilir bir alev-grafiği (flame chart) verir.
+//! The Chrome-trace output opens in `chrome://tracing` or Perfetto as a flame chart you can zoom
+//! into the smallest detail of every span.
 
 use crate::analyzer::Analyzer;
 use crate::metrics::MetricKind;
@@ -9,7 +9,7 @@ use crate::util::{human_bytes, json_escape};
 use gizmo_core::world::short_type_name;
 use std::fmt::Write as _;
 
-/// Sonlu olmayan değerleri JSON-güvenli hale getir (null yerine 0).
+/// Makes non-finite values JSON-safe (0 instead of null).
 fn json_num(v: f64) -> f64 {
     if v.is_finite() {
         v
@@ -104,7 +104,8 @@ impl Analyzer {
         s
     }
 
-    /// Son snapshot + tüm metrik istatistiklerini JSON olarak (bağımlılıksız, elle).
+    /// The last snapshot plus every metric's statistics as JSON (written by hand, no
+    /// dependency).
     pub fn to_json(&self) -> String {
         let mut s = String::new();
         s.push('{');
@@ -216,8 +217,8 @@ impl Analyzer {
         s
     }
 
-    /// Chrome Tracing JSON — geçmişteki her span bir "complete" (ph:"X") olay olur.
-    /// `chrome://tracing` veya `ui.perfetto.dev` ile açılıp zoom yapılabilir.
+    /// Chrome Tracing JSON — every span in the history becomes a "complete" (ph:"X") event.
+    /// Open it in `chrome://tracing` or `ui.perfetto.dev` and zoom in.
     pub fn to_chrome_trace(&self) -> String {
         let mut s = String::new();
         s.push_str("{\"traceEvents\":[");
@@ -240,7 +241,7 @@ impl Analyzer {
         s
     }
 
-    /// Belirli bir metrik türündeki tüm serilerin adları (filtreli sorgu kolaylığı).
+    /// The names of every series of a given metric kind (a filtered-query convenience).
     pub fn metric_names_of_kind(&self, kind: MetricKind) -> Vec<&str> {
         self.metrics()
             .iter()

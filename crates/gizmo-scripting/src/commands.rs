@@ -1,11 +1,11 @@
-//! Script Command Queue — Lua scriptlerden gelen değişiklik isteklerinin biriktirildiği kuyruk
+//! The script command queue — where the change requests coming from Lua scripts accumulate.
 //!
-//! Lua scriptleri doğrudan World'ü mutate edemez (Rust borrow kuralları).
-//! Bunun yerine komutlar bu kuyrukta birikir ve frame sonunda `flush()` ile uygulanır.
+//! Lua scripts cannot mutate the World directly (Rust's borrow rules). Commands accumulate in
+//! this queue instead and are applied by `flush()` at the end of the frame.
 
 use gizmo_math::{Quat, Vec3};
 use std::sync::Mutex;
-/// Lua'dan gelen tüm değişiklik istekleri
+/// Every change request coming from Lua.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum ScriptCommand {
@@ -91,7 +91,7 @@ pub enum ScriptCommand {
     // Kamera
     SetCameraTarget(u32), // hangi entity'yi takip etsin
     SetCameraFov(f32),
-    /// İki dövüşçüyü aynı anda takip eden fighting camera
+    /// The fighting camera, which follows both fighters at once
     SetFightCamera {
         p1_id: u32,
         p2_id: u32,
@@ -329,7 +329,7 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
-    /// `drain` FIFO sırayı korumalı ve push edilen HER komutu döndürmeli.
+    /// `drain` must preserve FIFO order and return EVERY command that was pushed.
     #[test]
     fn drain_preserves_push_order() {
         let q = CommandQueue::new();
@@ -344,7 +344,8 @@ mod tests {
         assert!(matches!(drained[2], ScriptCommand::StartRace));
     }
 
-    /// `new()` ve `default()` her ikisi de boş kuyruk üretmeli; len/is_empty tutarlı olmalı.
+    /// `new()` and `default()` must both produce an empty queue, with len/is_empty
+    /// consistent.
     #[test]
     fn new_and_default_start_empty_and_agree() {
         for q in [CommandQueue::new(), CommandQueue::default()] {
@@ -353,7 +354,8 @@ mod tests {
         }
     }
 
-    /// `drain` kuyruğu boşaltmalı: ilk drain komutları döndürür, ikincisi boş döner.
+    /// `drain` must empty the queue: the first drain returns the commands, the second returns
+    /// nothing.
     #[test]
     fn drain_empties_queue() {
         let q = CommandQueue::new();
@@ -370,8 +372,8 @@ mod tests {
         assert!(q.drain().is_empty());
     }
 
-    /// Eşzamanlı push'lar: N thread × M komut = tam olarak N*M komut kaybolmadan birikmeli.
-    /// (Mutex'in sağladığı toplam-koruma invariant'ı.)
+    /// Concurrent pushes: N threads × M commands must accumulate as exactly N*M commands with
+    /// none lost. (The total-conservation invariant the mutex provides.)
     #[test]
     fn concurrent_pushes_are_all_recorded() {
         let q = Arc::new(CommandQueue::new());
@@ -396,8 +398,8 @@ mod tests {
         assert_eq!(q.drain().len(), threads * per_thread as usize);
     }
 
-    /// Zehirlenmiş mutex (bir thread lock tutarken panic etti) kuyruğu kullanılamaz
-    /// bırakmamalı — poison-recovery ile push/drain/len panic-free çalışmaya devam etmeli.
+    /// A poisoned mutex (a thread panicked while holding the lock) must not leave the queue
+    /// unusable — with poison recovery, push/drain/len keep working panic-free.
     #[test]
     fn survives_poisoned_mutex() {
         let q = Arc::new(CommandQueue::new());

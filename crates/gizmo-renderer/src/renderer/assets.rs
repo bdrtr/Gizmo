@@ -16,22 +16,22 @@ impl Renderer {
     //  doğrudan `renderer.create_cube()` gibi çağırabilir.
     // ==========================================================
 
-    /// Küp mesh oluşturur.
+    /// Creates a cube mesh.
     pub fn create_cube(&self) -> crate::components::Mesh {
         crate::asset::AssetManager::create_cube(&self.device)
     }
 
-    /// Küre mesh oluşturur.
+    /// Creates a sphere mesh.
     pub fn create_sphere(&self, radius: f32, stacks: u32, slices: u32) -> crate::components::Mesh {
         crate::asset::AssetManager::create_sphere(&self.device, radius, stacks, slices)
     }
 
-    /// Düzlem mesh oluşturur.
+    /// Creates a plane mesh.
     pub fn create_plane(&self, size: f32) -> crate::components::Mesh {
         crate::asset::AssetManager::create_plane(&self.device, size)
     }
 
-    /// Diskten bir GLTF (veya GLB) modelini senkron olarak yükler.
+    /// Loads a glTF (or GLB) model from disk, synchronously.
     pub fn load_gltf(
         &self,
         path: &str,

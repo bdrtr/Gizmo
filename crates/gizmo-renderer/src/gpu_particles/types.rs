@@ -42,7 +42,7 @@ impl GpuParticle {
     }
 }
 
-/// Parçacık sim uniform'unda taşınabilecek maksimum engel (küre) sayısı.
+/// The maximum number of obstacle spheres the particle-sim uniform can carry.
 pub const MAX_PARTICLE_OBSTACLES: usize = 8;
 
 #[repr(C)]
@@ -51,15 +51,16 @@ pub struct ParticleSimParams {
     pub dt: f32,
     pub global_gravity: f32,
     pub global_drag: f32,
-    /// Aktif engel sayısı (0 = engel yok → sapma davranışı KAPALI, eski davranış).
+    /// How many obstacles are active (0 = none → deflection OFF, the old behaviour).
     pub obstacle_count: f32,
-    /// xyz = nominal akış hızı (relaks hedefi), w = relaks oranı (0 = kapalı).
-    /// Parçacık hızı her frame bu hedefe doğru yumuşakça çekilir → engelden sonra
-    /// akış çizgileri tekrar paralelleşir (aşağı-akış birleşmesi).
+    /// xyz = the nominal flow velocity (the relaxation target), w = the relaxation rate
+    /// (0 = off). Particle velocities are drawn smoothly towards the target each frame, so the
+    /// flow lines become parallel again downstream of an obstacle.
     pub flow_target: [f32; 4],
-    /// x = türbülans gücü (relaks hedefine eklenen diverjanssız swirl genliği → duman
-    /// gibi dalgalı filamentler). yzw = ileride kullanım için rezerve.
+    /// x = turbulence strength (the divergence-free swirl amplitude added to the relaxation
+    /// target, which gives smoke-like undulating filaments). yzw are reserved for future use.
     pub misc: [f32; 4],
-    /// Engel küreleri: xyz = merkez (dünya), w = yarıçap. `obstacle_count` kadarı geçerli.
+    /// Obstacle spheres: xyz = the centre (world), w = the radius. The first `obstacle_count`
+    /// are valid.
     pub obstacles: [[f32; 4]; MAX_PARTICLE_OBSTACLES],
 }

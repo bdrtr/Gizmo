@@ -1,4 +1,4 @@
-//! Bind group layout'ları (global, shadow, texture, skeleton, instance).
+//! The bind group layouts (global, shadow, texture, skeleton, instance).
 
 pub(super) struct Layouts {
     pub(super) global: wgpu::BindGroupLayout,

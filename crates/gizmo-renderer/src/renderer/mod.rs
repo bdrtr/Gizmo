@@ -18,27 +18,27 @@ mod textures;
 //  RenderContext — wgpu detaylarını kullanıcıdan gizler
 // ============================================================
 
-/// Kullanıcı kodunun doğrudan `wgpu::CommandEncoder` veya `wgpu::TextureView`
-/// görmesine gerek kalmadan render işlemi yapmasını sağlayan bağlam nesnesi.
+/// The context object that lets user code render without ever seeing a `wgpu::CommandEncoder` or
+/// a `wgpu::TextureView` directly.
 ///
-/// `gizmo_app`'in `set_simple_render` çağrısının beklediği imza budur:
+/// This is the signature `gizmo_app`'s `set_simple_render` expects:
 ///
 /// ```
 /// # use gizmo_core::World;
 /// # use gizmo_renderer::RenderContext;
 /// # struct GameState;
 /// fn render(world: &mut World, _state: &GameState, ctx: &mut RenderContext) {
-///     ctx.disable_gpu_compute();           // GPU Compute kapalı
-///     let _light_time = ctx.light_time();  // sahne verisi — ham wgpu tipi görünmüyor
+///     ctx.disable_gpu_compute();           // GPU compute off
+///     let _light_time = ctx.light_time();  // scene data — no raw wgpu type in sight
 /// #   let _ = world;
 /// }
-/// # // `set_simple_render` bağı: for<'a> FnMut(&mut World, &State, &mut RenderContext<'a>)
+/// # // The `set_simple_render` bound: for<'a> FnMut(&mut World, &State, &mut RenderContext<'a>)
 /// # let _: fn(&mut World, &GameState, &mut RenderContext<'_>) = render;
 /// ```
 ///
-/// Varsayılan render pipeline'ını tek satırda sürmek için facade'daki
-/// `RenderContextExt::default_render` uzantısı kullanılır (`gizmo` crate'i,
-/// `use gizmo::prelude::*`); bu crate'in kendisi o uzantıyı tanımlamaz.
+/// To drive the default render pipeline in one line, use the facade's
+/// `RenderContextExt::default_render` extension (the `gizmo` crate, `use gizmo::prelude::*`);
+/// this crate does not define that extension itself.
 pub struct RenderContext<'a> {
     pub(crate) encoder: &'a mut wgpu::CommandEncoder,
     pub(crate) view: &'a wgpu::TextureView,
@@ -47,7 +47,7 @@ pub struct RenderContext<'a> {
 }
 
 impl<'a> RenderContext<'a> {
-    /// Yeni bir RenderContext oluşturur (motor tarafından dahili olarak çağrılır).
+    /// Creates a new RenderContext (called internally by the engine).
     pub fn new(
         encoder: &'a mut wgpu::CommandEncoder,
         view: &'a wgpu::TextureView,
@@ -62,41 +62,41 @@ impl<'a> RenderContext<'a> {
         }
     }
 
-    /// GPU Compute alt sistemlerini devre dışı bırakır (fluid, particles, physics).
-    /// Basit sahnelerde gereksiz GPU iş yükünü sıfırlar.
+    /// Disables the GPU compute subsystems (fluid, particles, physics).
+    /// Removes needless GPU work in simple scenes.
     pub fn disable_gpu_compute(&mut self) {
         self.renderer.gpu_fluid = None;
         self.renderer.gpu_particles = None;
         self.renderer.gpu_physics = None;
     }
 
-    /// Mevcut sahne ışık zamanını döndürür (saniye).
+    /// Returns the current scene light time, in seconds.
     pub fn light_time(&self) -> f32 {
         self.light_time
     }
 
-    /// Renderer'a doğrudan erişim (ileri düzey kullanım).
+    /// Direct access to the Renderer (advanced use).
     pub fn renderer(&self) -> &Renderer {
         self.renderer
     }
 
-    /// Renderer'a mutable erişim (ileri düzey kullanım).
+    /// Mutable access to the Renderer (advanced use).
     pub fn renderer_mut(&mut self) -> &mut Renderer {
         self.renderer
     }
 
-    /// İleri düzey kullanım: ham wgpu encoder'a erişim.
+    /// Advanced use: access to the raw wgpu encoder.
     pub fn encoder(&mut self) -> &mut wgpu::CommandEncoder {
         self.encoder
     }
 
-    /// İleri düzey kullanım: çıkış texture view'ına erişim.
+    /// Advanced use: access to the output texture view.
     pub fn output_view(&self) -> &wgpu::TextureView {
         self.view
     }
 
-    /// Dahili bileşenlere eşzamanlı erişim — `default_render_pass` gibi
-    /// fonksiyonlara geçirmek için kullanılır.
+    /// Simultaneous access to the internals — for passing to functions like
+    /// `default_render_pass`.
     pub fn parts_mut(&mut self) -> (&mut wgpu::CommandEncoder, &wgpu::TextureView, &mut Renderer) {
         (self.encoder, self.view, self.renderer)
     }

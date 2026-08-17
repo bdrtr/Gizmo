@@ -1,8 +1,8 @@
-//! `Analyzer` — analiz merkezi. Bir World resource'u olarak eklenir.
+//! `Analyzer` — the centre of the analysis module, added as a World resource.
 //!
-//! Her frame bir `FrameSnapshot` üretir (ECS durumu + span'ler + collector metrikleri),
-//! bunu ring-buffer geçmişine yazar ve tüm sayısal değerleri `MetricStore`'a besler; böylece
-//! herhangi bir metriğin geçmişi üzerinden istatistik/trend alınabilir.
+//! Every frame it produces a `FrameSnapshot` (ECS state + spans + collector metrics), writes it
+//! into a ring-buffer history and feeds every numeric value into the `MetricStore`, so statistics
+//! and trends can be taken over any metric's history.
 
 use crate::collector::{Collector, EcsCollector};
 use crate::metrics::{MetricStore, Stats};
@@ -13,16 +13,16 @@ use std::collections::VecDeque;
 use std::fmt::Write as _;
 use std::time::Instant;
 
-/// Analyzer davranış ayarları.
+/// The Analyzer's behaviour settings.
 #[derive(Debug, Clone)]
 pub struct AnalysisConfig {
-    /// Kapalıysa `collect` hiçbir şey yapmaz (sıfır maliyet).
+    /// While off, `collect` does nothing at all (zero cost).
     pub enabled: bool,
-    /// Geçmişte tutulacak frame snapshot sayısı (ring-buffer).
+    /// How many frame snapshots to keep in the history (a ring buffer).
     pub history_frames: usize,
-    /// Metrik serilerinde tutulacak değer sayısı (ring-buffer).
+    /// How many values to keep in each metric series (a ring buffer).
     pub metric_history: usize,
-    /// Ayrıntılı archetype tablosunu topla.
+    /// Collect the detailed archetype table.
     pub detailed_archetypes: bool,
 }
 
@@ -49,12 +49,12 @@ pub struct Analyzer {
 }
 
 impl Analyzer {
-    /// Varsayılan ayarlarla + yerleşik `EcsCollector` ile.
+    /// With the default settings and the built-in `EcsCollector`.
     pub fn new() -> Self {
         Self::with_config(AnalysisConfig::default())
     }
 
-    /// Verilen ayarlarla; yerleşik `EcsCollector` otomatik kayıtlı.
+    /// With the given settings; the built-in `EcsCollector` is registered automatically.
     pub fn with_config(config: AnalysisConfig) -> Self {
         let now = Instant::now();
         let mut analyzer = Self {
@@ -77,47 +77,47 @@ impl Analyzer {
         self.collectors.push(collector);
     }
 
-    /// Kayıtlı collector adları.
+    /// The names of the registered collectors.
     pub fn collector_names(&self) -> Vec<&'static str> {
         self.collectors.iter().map(|c| c.name()).collect()
     }
 
     // ── Elle enstrümantasyon (sistem içinden `get_resource_mut` ile) ─────────
-    /// Monoton sayaç — bu frame'in deltasına birikir.
+    /// A monotonic counter — accumulates into this frame's delta.
     pub fn counter_add(&mut self, name: &str, delta: f64) {
         self.metrics.counter_add(name, delta);
     }
-    /// Anlık gösterge değeri.
+    /// An instantaneous gauge value.
     pub fn gauge(&mut self, name: &str, value: f64) {
         self.metrics.gauge(name, value);
     }
-    /// Ölçüm örneği (ms/iterasyon…).
+    /// A measurement sample (ms, iterations, …).
     pub fn sample(&mut self, name: &str, value: f64) {
         self.metrics.sample(name, value);
     }
 
     // ── Sorgu API'si ─────────────────────────────────────────────────────────
-    /// İşlenmiş frame sayısı.
+    /// How many frames have been processed.
     pub fn frame(&self) -> u64 {
         self.frame
     }
-    /// Son frame snapshot'ı (geçmişin son elemanı).
+    /// The last frame snapshot (the newest element of the history).
     pub fn last(&self) -> Option<&FrameSnapshot> {
         self.history.back()
     }
-    /// Snapshot geçmişi (eskiden yeniye).
+    /// The snapshot history (oldest to newest).
     pub fn history(&self) -> impl Iterator<Item = &FrameSnapshot> {
         self.history.iter()
     }
-    /// Metrik deposu (dışa aktarım/özel sorgu için).
+    /// The metric store (for export and custom queries).
     pub fn metrics(&self) -> &MetricStore {
         &self.metrics
     }
-    /// Bir metriğin geçmişi üzerinden istatistik.
+    /// Statistics over one metric's history.
     pub fn stats(&self, metric: &str) -> Option<Stats> {
         self.metrics.stats(metric)
     }
-    /// Tahmini FPS (frame_ms örnek geçmişinden).
+    /// The estimated FPS (from the frame_ms sample history).
     pub fn estimated_fps(&self) -> f64 {
         match self.metrics.stats("frame_ms") {
             Some(s) if s.mean > 0.0 => 1000.0 / s.mean,
@@ -125,7 +125,8 @@ impl Analyzer {
         }
     }
 
-    /// Frame başına bir kez çağrılır: snapshot üret, geçmişe yaz, collector'ları çalıştır.
+    /// Called once per frame: produce a snapshot, write it into the history, run the
+    /// collectors.
     pub fn collect(&mut self, world: &World) {
         if !self.config.enabled {
             return;

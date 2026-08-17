@@ -1,19 +1,19 @@
-//! Editör katmanı için somut hata tipi (1.0 hata kontratı).
+//! The concrete error type for the editor layer (the 1.0 error contract).
 
-/// Editör dosya/serileştirme işlemlerinde oluşabilecek hatalar.
+/// The errors the editor's file and serialisation operations can produce.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum EditorError {
-    /// Bir dosya okuma/yazma işlemi başarısız oldu (yol bağlamı ile).
+    /// A file read or write failed (with the path for context).
     Io {
-        /// Hatanın oluştuğu işlem için açıklama (ör. yol veya bağlam).
+        /// A description of the operation that failed (e.g. the path, or context).
         context: String,
-        /// Alttaki G/Ç hatası.
+        /// The underlying I/O error.
         source: std::io::Error,
     },
-    /// JSON serileştirme/ayrıştırma başarısız oldu (layout vb.).
+    /// JSON serialisation or parsing failed (layout and the like).
     Json(serde_json::Error),
-    /// TOML serileştirme başarısız oldu (tercihler).
+    /// TOML serialisation failed (preferences).
     TomlSerialize(toml::ser::Error),
 }
 
@@ -69,8 +69,8 @@ mod tests {
         );
     }
 
-    /// `From<serde_json::Error>` Json varyantına düşmeli; Display sabit mesaj,
-    /// source alttaki serde hatası olmalı.
+    /// `From<serde_json::Error>` must land on the Json variant: Display a fixed message, with
+    /// the underlying serde error as the source.
     #[test]
     fn json_from_conversion_and_display() {
         let json_err = serde_json::from_str::<i32>("not a number").unwrap_err();
@@ -80,8 +80,8 @@ mod tests {
         assert!(err.source().is_some());
     }
 
-    /// `From<toml::ser::Error>` TomlSerialize varyantına düşmeli. Üst-seviye
-    /// bir tamsayı TOML tablosu değildir → serileştirme hatası üretir.
+    /// `From<toml::ser::Error>` must land on the TomlSerialize variant. A top-level integer is
+    /// not a TOML table, so serialising one produces the error.
     #[test]
     fn toml_serialize_from_conversion_and_display() {
         let toml_err = toml::to_string_pretty(&42i32).unwrap_err();

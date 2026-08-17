@@ -1,12 +1,12 @@
-//! Input API — Lua'ya sunulan girdi sorgulama fonksiyonları
+//! The input API — the input-querying functions exposed to Lua.
 //!
-//! Lua scriptlerinden tuş ve fare durumunu sorgulamak için kullanılır.
-//! Read-only API'dir, komut kuyruğuna yazmaz.
+//! Used from Lua scripts to ask about key, mouse and gamepad state. It is a read-only API and
+//! never writes to the command queue.
 
 use gizmo_core::input::Input;
 use mlua::prelude::*;
 
-/// Input API fonksiyonlarını Lua'ya kaydeder
+/// Registers the input API functions with Lua.
 pub fn register_input_api(lua: &Lua) -> Result<(), LuaError> {
     crate::api_table::register_protected(lua, "input", |input_table| {
 
@@ -68,8 +68,8 @@ pub fn register_input_api(lua: &Lua) -> Result<(), LuaError> {
             return false
         end
 
-        -- Gamepad. Kol takılı değilse `input._pad` nil'dir ve hepsi false/0 döner, yani
-        -- script'in "kol var mı" diye ayrı bir dal yazması gerekmez.
+        -- Gamepad. With nothing plugged in `input._pad` is nil and all of these answer
+        -- false/0, so a script never has to branch on "is there a pad".
         function input.gamepad_connected()
             return input._pad ~= nil
         end
@@ -90,8 +90,8 @@ pub fn register_input_api(lua: &Lua) -> Result<(), LuaError> {
             return input._pad ~= nil and input._pad.released[button] == true
         end
 
-        -- Ölü bölge UYGULANMIŞ değer: çubuklar için `left_stick_x/y`, `right_stick_x/y`,
-        -- tetikler için `left_trigger`/`right_trigger`.
+        -- The DEADZONED value: `left_stick_x/y` and `right_stick_x/y` for the sticks,
+        -- `left_trigger`/`right_trigger` for the triggers.
         function input.gamepad_axis(axis)
             if input._pad == nil then return 0.0 end
             return input._pad.axes[axis] or 0.0
@@ -102,7 +102,7 @@ pub fn register_input_api(lua: &Lua) -> Result<(), LuaError> {
     })
 }
 
-/// Her frame Input durumunu Lua'ya aktarır
+/// Mirrors the Input state into Lua, every frame.
 #[tracing::instrument(skip_all, name = "script_input_read")]
 pub fn update_input_api(lua: &Lua, input: &Input) -> Result<(), LuaError> {
     // The real table, not the global: the global is a read-only proxy so a script cannot rewrite
@@ -393,8 +393,8 @@ mod tests {
         .unwrap();
     }
 
-    /// Fare yardımcıları: pozisyon/delta tablo döndürmeli; is_mouse_pressed sol/sağ/orta
-    /// ve bilinmeyen düğme için doğru sonuç vermeli.
+    /// The mouse helpers: position/delta must return tables, and is_mouse_pressed must answer
+    /// correctly for left/right/middle and for an unknown button.
     #[test]
     fn mouse_helpers_read_snapshot() {
         let lua = Lua::new();
@@ -422,8 +422,8 @@ mod tests {
         .unwrap();
     }
 
-    /// update_input_api gerçek bir Input durumunu Lua'ya doğru aktarmalı:
-    /// basılı tuş, fare konumu/deltası ve fare düğmeleri.
+    /// update_input_api must mirror a real Input state into Lua correctly: the held key, the
+    /// mouse position/delta and the mouse buttons.
     #[test]
     fn update_input_api_mirrors_real_input() {
         use gizmo_core::input::{mouse, Input};

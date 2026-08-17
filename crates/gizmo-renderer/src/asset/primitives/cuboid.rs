@@ -3,8 +3,9 @@ use crate::renderer::Vertex;
 use gizmo_math::Vec3;
 
 impl crate::asset::AssetManager {
-    /// İçi boş ters yüzlü küp (Skybox) mesh üretir.
-    /// Normaller içe bakar, böylece kamera küpün merkezinden dışarıya baktığında yüzeyler görünür.
+    /// Builds a hollow inward-facing cube mesh (a skybox).
+    /// The normals point inwards, so the faces are visible with the camera at the cube's centre
+    /// looking out.
     pub fn create_inverted_cube(device: &wgpu::Device) -> Mesh {
         // 6 yüz × 2 üçgen × 3 köşe = 36 vertex
         // Her yüzün normali İÇE bakar (ters küp)
@@ -128,7 +129,8 @@ impl crate::asset::AssetManager {
         )
     }
 
-    /// Düzenli Küp mesh üretir (Dışa bakan normaller, PBR ışıklandırma ve gölgelendirme için doğru)
+    /// Builds an ordinary cube mesh (outward-facing normals, correct for PBR lighting and
+    /// shading).
     pub fn create_cube(device: &wgpu::Device) -> Mesh {
         let positions: [[f32; 3]; 8] = [
             [-1.0, -1.0, -1.0], // 0

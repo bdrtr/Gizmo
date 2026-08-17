@@ -35,7 +35,7 @@ use crate::api_time;
 use crate::api_vehicle;
 use crate::commands::{CommandQueue, ScriptCommand};
 
-/// Lua Scripting Motoru — Genişletilmiş API ile oyun mantığını yönetir
+/// The Lua scripting engine — runs game logic through the extended API.
 pub struct ScriptEngine {
     lua: Lua,
     /// Loaded scripts, keyed by path — **ordered**, and that is load-bearing rather than tidy.
@@ -137,7 +137,7 @@ impl ScriptValue {
     }
 }
 
-/// ECS Componenti: Varlığın üzerine hangi Lua script'inin takılı olduğunu tutar
+/// The ECS component recording which Lua script is attached to an entity.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Script {
     pub file_path: String,
@@ -184,7 +184,7 @@ pub struct ScriptContext {
     pub key_right: bool,
 }
 
-/// Lua'dan dönen değişiklikler (geriye dönük uyumluluk)
+/// The changes coming back from Lua (kept for backwards compatibility).
 #[derive(Clone, Debug, Default)]
 pub struct ScriptResult {
     pub new_position: Option<[f32; 3]>,
@@ -474,7 +474,7 @@ impl ScriptEngine {
         Ok(())
     }
 
-    /// Her frame çağrılan güncelleme — World verilerini Lua'ya aktarır, scriptleri çalıştırır
+    /// The per-frame update — mirrors World data into Lua and runs the scripts.
     #[tracing::instrument(skip_all, name = "script_update")]
     pub fn update(&mut self, world: &World, input: &Input, dt: f32) -> Result<(), String> {
         self.elapsed_time += dt;
@@ -546,7 +546,6 @@ impl ScriptEngine {
         }
     }
 
-    /// Per-entity script güncelleme — Script component'i olan entity'ler için izole ortamda çalıştırır
     /// The properties a script DECLARES, read from its `properties` table.
     ///
     /// The convention is a plain assignment at the top of the file:
@@ -646,7 +645,8 @@ impl ScriptEngine {
         Ok(())
     }
 
-    /// Komut kuyruğundaki tüm komutları World'e uygular ve oyun mantığı için kalan komutları döndürür
+    /// Applies every command in the queue to the World and returns the ones left for game
+    /// logic.
     #[tracing::instrument(skip_all, name = "script_flush_commands")]
     pub fn flush_commands(&self, world: &mut World, dt: f32) -> Vec<ScriptCommand> {
         let commands = self.command_queue.drain();
@@ -966,14 +966,14 @@ ScriptCommand::PlayAnimation { id, name, blend, loop_anim } => {
         unhandled
     }
 
-    /// Runtime'da bekleyen ses/sahne komutlarını döndürür (demo tarafında ele alınır)
+    /// Returns the audio/scene commands pending at runtime (handled on the demo side).
     pub fn get_pending_audio_scene_commands(&self) -> Vec<ScriptCommand> {
         // Flush zaten çağrıldıysa bu boş dönecek
         // Alternatif: flush'tan önce çağrılmalı
         Vec::new()
     }
 
-    /// Script'in hot-reload edilip edilmeyeceğini kontrol eder
+    /// Decides whether the script should be hot-reloaded.
     pub fn reload_if_changed(&mut self, path: &str) -> Result<bool, String> {
         let current =
             std::fs::read_to_string(path).map_err(|e| format!("Script okunamadı: {}", e))?;
@@ -988,7 +988,7 @@ ScriptCommand::PlayAnimation { id, name, blend, loop_anim } => {
         Ok(true)
     }
 
-    /// Belirli bir isimdeki Lua fonksiyonunun var olup olmadığını kontrol eder
+    /// Is there a Lua function with this name?
     ///
     /// Takes `&mut self` even though it only reads: `registry_value` mutates the
     /// underlying `lua_State`, and the `unsafe impl Sync` above is only sound
@@ -1002,7 +1002,7 @@ ScriptCommand::PlayAnimation { id, name, blend, loop_anim } => {
         false
     }
 
-    /// Belirli bir isimdeki Lua fonksiyonunu çağırır (per-entity scriptler için)
+    /// Calls the Lua function with this name (for per-entity scripts).
     ///
     /// Takes `&mut self`: calling into the VM mutates the `lua_State`, and the
     /// `unsafe impl Sync` above is only sound while no `&self` method does that.
@@ -1088,7 +1088,7 @@ ScriptCommand::PlayAnimation { id, name, blend, loop_anim } => {
         Ok(result)
     }
 
-    /// Komut kuyruğuna doğrudan erişim (internals)
+    /// Direct access to the command queue (internals).
     pub fn command_queue(&self) -> &Arc<CommandQueue> {
         &self.command_queue
     }
@@ -1443,7 +1443,7 @@ mod tests {
     use gizmo_physics_core::{Collider, ColliderShape, Transform};
     use gizmo_physics_rigid::components::{RigidBody, Velocity};
 
-    /// Paralel test koşumlarında çakışmayan benzersiz geçici script yolu üretir.
+    /// Produces a unique temporary script path that will not collide across parallel test runs.
     fn unique_temp(tag: &str) -> String {
         use std::sync::atomic::{AtomicU64, Ordering};
         static N: AtomicU64 = AtomicU64::new(0);
@@ -1486,8 +1486,8 @@ mod tests {
         );
     }
 
-    /// Regression: RigidBody var ama Velocity yoksa ApplyForce sessizce
-    /// kaybolmamalı; Velocity oluşturulup ivme uygulanmalı.
+    /// Regression: with a RigidBody but no Velocity, ApplyForce must not vanish silently — a
+    /// Velocity is created and the acceleration applied.
     #[test]
     fn apply_force_creates_velocity_when_missing() {
         let engine = ScriptEngine::new().unwrap();
@@ -1513,8 +1513,8 @@ mod tests {
         assert!((v.linear.x - 1.0).abs() < 1e-5, "x hızı yanlış: {}", v.linear.x);
     }
 
-    /// Regression: RigidBody var ama Velocity yoksa ApplyImpulse sessizce
-    /// kaybolmamalı; Velocity oluşturulup delta-v uygulanmalı.
+    /// Regression: with a RigidBody but no Velocity, ApplyImpulse must not vanish silently — a
+    /// Velocity is created and the delta-v applied.
     #[test]
     fn apply_impulse_creates_velocity_when_missing() {
         let engine = ScriptEngine::new().unwrap();
@@ -1538,8 +1538,8 @@ mod tests {
         assert!((v.linear.x - 3.0).abs() < 1e-5, "x hızı yanlış: {}", v.linear.x);
     }
 
-    /// Transform yazma komutları (SetPosition/SetScale/SetRotation) mevcut bir
-    /// Transform'a uygulanmalı.
+    /// The Transform write commands (SetPosition/SetScale/SetRotation) must apply to an
+    /// existing Transform.
     #[test]
     fn transform_commands_apply_to_component() {
         let engine = ScriptEngine::new().unwrap();
@@ -1560,7 +1560,7 @@ mod tests {
         assert!((t.rotation.x - 1.0).abs() < 1e-6 && t.rotation.w.abs() < 1e-6);
     }
 
-    /// SetVelocity/SetAngularVelocity mevcut Velocity'nin linear/angular alanlarını ayarlamalı.
+    /// SetVelocity/SetAngularVelocity must set an existing Velocity's linear/angular fields.
     #[test]
     fn velocity_commands_apply_to_component() {
         let engine = ScriptEngine::new().unwrap();
@@ -1579,8 +1579,8 @@ mod tests {
         assert_eq!(v.angular, Vec3::new(0.0, 1.0, 0.0));
     }
 
-    /// Kütlesi sıfır (statik) bir gövdeye kuvvet uygulanınca Velocity OLUŞTURULMAMALI —
-    /// `mass > 0.0` koruması sonsuz ivmeyi engeller.
+    /// Applying a force to a zero-mass (static) body must NOT create a Velocity — the
+    /// `mass > 0.0` guard is what keeps the acceleration from being infinite.
     #[test]
     fn apply_force_on_zero_mass_creates_no_velocity() {
         let engine = ScriptEngine::new().unwrap();
@@ -1598,7 +1598,7 @@ mod tests {
         );
     }
 
-    /// Aynı flush içinde birden çok kuvvet birikimli (superposition) uygulanmalı.
+    /// Several forces in one flush must accumulate (superposition).
     #[test]
     fn multiple_forces_accumulate_in_one_flush() {
         let engine = ScriptEngine::new().unwrap();
@@ -1619,7 +1619,7 @@ mod tests {
         assert!((v.linear.y - 1.5).abs() < 1e-5, "y: {}", v.linear.y);
     }
 
-    /// AddRigidBody hareket edebilmesi için beraberinde bir Velocity de oluşturmalı.
+    /// AddRigidBody must also create a Velocity, or the body cannot move.
     #[test]
     fn add_rigidbody_also_creates_velocity() {
         let engine = ScriptEngine::new().unwrap();
@@ -1639,7 +1639,7 @@ mod tests {
         );
     }
 
-    /// AddBoxCollider/AddSphereCollider doğru şekilli Collider bileşenleri oluşturmalı.
+    /// AddBoxCollider/AddSphereCollider must create Collider components of the right shape.
     #[test]
     fn colliders_are_created_with_correct_shape() {
         let engine = ScriptEngine::new().unwrap();
@@ -1663,7 +1663,8 @@ mod tests {
         }
     }
 
-    /// SpawnEntity: isimli, Transform'lu bir entity oluşturmalı ve log kuyruğuna kayıt düşmeli.
+    /// SpawnEntity: creates a named entity with a Transform and leaves a record in the log
+    /// queue.
     #[test]
     fn spawn_entity_creates_named_transform_and_logs() {
         let engine = ScriptEngine::new().unwrap();
@@ -1692,7 +1693,7 @@ mod tests {
         );
     }
 
-    /// DestroyEntity var olan bir entity'yi despawn etmeli (artık canlı olmamalı).
+    /// DestroyEntity must despawn an existing entity (which is then no longer alive).
     #[test]
     fn destroy_entity_removes_it() {
         let engine = ScriptEngine::new().unwrap();
@@ -1707,7 +1708,7 @@ mod tests {
         assert!(world.entity(id).is_none(), "entity despawn edilmeliydi");
     }
 
-    /// SetEntityName mevcut EntityName'i yeniden adlandırmalı.
+    /// SetEntityName must rename an existing EntityName.
     #[test]
     fn set_entity_name_renames() {
         let engine = ScriptEngine::new().unwrap();
@@ -1723,7 +1724,8 @@ mod tests {
         assert_eq!(names.get(id).unwrap().0, "new");
     }
 
-    /// AddNavAgent + SetAiTarget hedefi ayarlamalı; ClearAiTarget hedefi (yalnız yolu değil) temizlemeli.
+    /// AddNavAgent + SetAiTarget must set the target; ClearAiTarget must clear the target (not
+    /// just the path).
     #[test]
     fn nav_agent_target_set_then_cleared() {
         use gizmo_ai::components::NavAgent;
@@ -1748,14 +1750,16 @@ mod tests {
         }
     }
 
-    /// Uygulanmayan her komut çağırana geri döndürülmeli — sessizce yutulmamalı.
+    /// Every command that is not applied must be handed back to the caller — never swallowed
+    /// silently.
     ///
-    /// **Bu test eskiden kusuru sabitliyordu.** Adı `..._but_consumes_savescene_and_vehicle` idi ve
-    /// `SaveScene` ile araç komutlarının *dönmemesini* iddia ediyordu. Oysa onları yutan kol,
-    /// yorumunda "bunlar zaten unhandled'a düşecek" diyordu — düşemezlerdi, çünkü kolun kendisi
-    /// onları tüketiyordu. Lua tarafında canlı fonksiyonları olan bir komutun hiçbir iz bırakmadan
-    /// kaybolması, bir script yazarının teşhis edemeyeceği tek şeydir. Artık iddia niyet: bu crate
-    /// uygulayamadığı komutu ev sahibine verir.
+    /// **This test used to pin the defect in place.** It was called
+    /// `..._but_consumes_savescene_and_vehicle` and asserted that `SaveScene` and the vehicle
+    /// commands were *not* returned. Meanwhile the arm that swallowed them said in its comment
+    /// that "these will fall through to unhandled anyway" — they could not, because that arm was
+    /// itself consuming them. A command with live functions on the Lua side disappearing without
+    /// a trace is the one thing a script author cannot diagnose. The assertion is now the
+    /// intent: this crate hands back what it cannot apply.
     #[test]
     fn flush_returns_everything_it_cannot_apply_itself() {
         let engine = ScriptEngine::new().unwrap();
@@ -1786,13 +1790,13 @@ mod tests {
         );
     }
 
-    /// Scriptler her koşuda aynı sırada çalışmalı.
+    /// Scripts must run in the same order on every run.
     ///
-    /// `loaded_scripts` bir `std::collections::HashMap` idi, ve `RandomState` proses başına
-    /// tohumlanır — yani `update`'in scriptleri çalıştırma sırası koşudan koşuya değişiyordu. Aynı
-    /// varlığa dokunan iki script çeliştiğinde sonucu ekleme sırası belirler, ve bu motorun manşet
-    /// sözleşmesi aynı-platform bit-birebir tekrar oynatma. Sıra artık scriptlerin yollarının bir
-    /// özelliği, ayırıcının değil.
+    /// `loaded_scripts` was a `std::collections::HashMap`, and `RandomState` is seeded per
+    /// process — so the order in which `update` ran the scripts changed from run to run. When two
+    /// scripts touching the same entity disagree, insertion order decides the outcome, and this
+    /// engine's headline contract is same-platform bit-exact replay. The order is now a property
+    /// of the scripts' paths, not of the hasher.
     #[test]
     fn scripts_run_in_a_stable_order() {
         let mut engine = ScriptEngine::new().unwrap();
@@ -1823,7 +1827,7 @@ mod tests {
         }
     }
 
-    /// flush_commands kuyruğu tüketmeli (drain): çağrı sonrası kuyruk boş olmalı.
+    /// flush_commands must drain the queue: it is empty after the call.
     #[test]
     fn flush_drains_the_queue() {
         let engine = ScriptEngine::new().unwrap();
@@ -1836,7 +1840,7 @@ mod tests {
         assert!(engine.command_queue().is_empty(), "flush kuyruğu boşaltmalı");
     }
 
-    /// Script::new her zaman initialized=false ile başlar (on_init henüz çağrılmadı).
+    /// Script::new always starts with initialized=false (on_init has not run yet).
     #[test]
     fn script_new_starts_uninitialized() {
         let s = Script::new("scripts/player.lua");
@@ -1844,9 +1848,9 @@ mod tests {
         assert!(!s.initialized);
     }
 
-    /// Script serde round-trip: `initialized` alanı `#[serde(default, skip)]` olduğundan
-    /// serileştirmede yer almaz ve deserialize sonrası daima false olur — böylece sahne
-    /// yüklendiğinde on_init yeniden çalışır. file_path korunmalı.
+    /// A Script serde round trip: `initialized` is `#[serde(default, skip)]`, so it does not
+    /// appear in the serialisation and is always false afterwards — which is what makes on_init
+    /// run again when a scene is loaded. file_path must survive.
     /// A script's `properties = { … }` declaration is what the editor lists.
     ///
     /// Read back out of the script's own environment, which is where a bare assignment lands.
@@ -2007,8 +2011,8 @@ end
         assert!(!back.initialized, "deserialize sonrası initialized=false olmalı");
     }
 
-    /// Güvenlik: motor tehlikeli global'leri (os/io/require/dofile/loadfile/package/
-    /// debug/load/loadstring) devre dışı bırakmalı.
+    /// Security: the engine must disable the dangerous globals (os, io, require, dofile,
+    /// loadfile, package, debug, load, loadstring).
     #[test]
     fn sandbox_disables_dangerous_globals() {
         let mut engine = ScriptEngine::new().unwrap();
@@ -2033,7 +2037,7 @@ end
         res.expect("sandbox assert'leri geçmeli (global'ler nil olmalı)");
     }
 
-    /// Motorun kaydettiği Lua matematik yardımcıları (vec3_*, clamp, lerp) doğru çalışmalı.
+    /// The Lua math helpers the engine registers (vec3_*, clamp, lerp) must work correctly.
     #[test]
     fn lua_math_helpers_are_correct() {
         let mut engine = ScriptEngine::new().unwrap();
@@ -2061,7 +2065,8 @@ end
         res.expect("matematik yardımcı assert'leri geçmeli");
     }
 
-    /// Hata yolu: var olmayan bir script yüklenince açıklayıcı bir hata dönmeli (panik değil).
+    /// The error path: loading a script that does not exist must return a descriptive error,
+    /// not panic.
     #[test]
     fn load_missing_file_returns_error() {
         let mut engine = ScriptEngine::new().unwrap();
@@ -2071,7 +2076,8 @@ end
         assert!(err.contains("okunamadı"), "okuma hatası mesajı beklenir, gelen: {err}");
     }
 
-    /// Hata yolu: yüklenmemiş bir script için run_entity_update 'not loaded' hatası vermeli.
+    /// The error path: for a script that was never loaded, run_entity_update must give a 'not
+    /// loaded' error.
     #[test]
     fn run_entity_update_on_unloaded_script_errors() {
         let mut engine = ScriptEngine::new().unwrap();
@@ -2082,8 +2088,9 @@ end
         assert!(err.contains("not loaded"), "mesaj: {err}");
     }
 
-    /// run_entity_update ctx'i (pozisyon + dt) Lua'ya geçirmeli ve dönen position tablosunu
-    /// ScriptResult.new_position olarak çıkarmalı. Var olmayan fonksiyon default döndürmeli.
+    /// run_entity_update must pass ctx (position + dt) into Lua and lift the returned position
+    /// table out as ScriptResult.new_position. A function that does not exist gives the
+    /// default.
     #[test]
     fn run_entity_update_marshals_position_and_extracts_result() {
         let mut engine = ScriptEngine::new().unwrap();
@@ -2114,8 +2121,8 @@ end
         let _ = std::fs::remove_file(&path);
     }
 
-    /// run_entity_update girdi (input) bayraklarını Lua ctx.input'a geçirmeli; script
-    /// bunlara göre velocity döndürebilmeli.
+    /// run_entity_update must pass the input flags into Lua's ctx.input, so a script can return
+    /// a velocity based on them.
     #[test]
     fn run_entity_update_marshals_input_flags() {
         let mut engine = ScriptEngine::new().unwrap();
@@ -2142,7 +2149,7 @@ end
         let _ = std::fs::remove_file(&path);
     }
 
-    /// has_function yalnız yüklü script'te tanımlı fonksiyonlar için true dönmeli.
+    /// has_function must return true only for functions defined in a loaded script.
     #[test]
     fn has_function_detects_defined_and_missing() {
         let mut engine = ScriptEngine::new().unwrap();
@@ -2157,8 +2164,8 @@ end
         let _ = std::fs::remove_file(&path);
     }
 
-    /// reload_if_changed: içerik değişmediyse false (yeniden yükleme yok), değişince true;
-    /// sonra tekrar değişmezse yine false — hot-reload durum makinesi.
+    /// reload_if_changed: false while the content is unchanged (no reload), true when it
+    /// changes, then false again when it stops — the hot-reload state machine.
     #[test]
     fn reload_if_changed_detects_content_change() {
         let mut engine = ScriptEngine::new().unwrap();

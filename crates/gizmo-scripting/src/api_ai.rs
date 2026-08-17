@@ -1,13 +1,13 @@
-//! AI API — Lua'ya sunulan Yapay Zeka navigasyon fonksiyonları
+//! The AI API — the navigation functions exposed to Lua.
 //!
-//! Lua scriptlerinden NPC ve ajanlara gitmeleri gereken hedefleri ayarlamayı sağlar.
+//! Lets Lua scripts set the destinations NPCs and agents should head for.
 
 use crate::commands::{CommandQueue, ScriptCommand};
 use gizmo_math::Vec3;
 use mlua::prelude::*;
 use std::sync::Arc;
 
-/// AI API fonksiyonlarını Lua'ya kaydeder
+/// Registers the AI API functions with Lua.
 pub fn register_ai_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Result<(), LuaError> {
     crate::api_table::register_protected(lua, "ai", |ai_table| {
 
@@ -56,7 +56,7 @@ mod tests {
     use super::*;
     use mlua::Lua;
 
-    /// ai.add_agent / set_target / clear_target doğru komutları kuyruğa yazmalı.
+    /// ai.add_agent / set_target / clear_target must push the right commands onto the queue.
     #[test]
     fn ai_calls_push_expected_commands() {
         let lua = Lua::new();

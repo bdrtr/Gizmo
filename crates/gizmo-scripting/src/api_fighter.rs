@@ -1,6 +1,6 @@
-//! Fighter API — Lua'ya sunulan dövüş sistemi fonksiyonları
+//! The fighter API — the fighting-system functions exposed to Lua.
 //!
-//! Lua scriptlerinden kombo sorgulama, hitstop/hitstun uygulama ve saldırı başlatma için kullanılır.
+//! Used from Lua scripts to query combos, apply hitstop/hitstun and start attacks.
 
 use crate::commands::{CommandQueue, ScriptCommand};
 use gizmo_core::World;
@@ -151,8 +151,8 @@ mod tests {
     use super::*;
     use crate::commands::CommandQueue;
 
-    /// Belirtilen frame indekslerinde `input` tuşunu just_pressed olarak
-    /// işaretleyen bir buffer'ı Lua'ya kuran yardımcı ve check_combo sonucu.
+    /// A helper that builds a buffer in Lua marking `input` as just_pressed at the given frame
+    /// indices, and returns check_combo's result.
     fn run_combo(setup: &str) -> bool {
         let lua = Lua::new();
         register_fighter_api(&lua, Arc::new(CommandQueue::new())).unwrap();
@@ -162,9 +162,9 @@ mod tests {
             .unwrap()
     }
 
-    /// Regression: max_gap=2 tam olarak 2 frame boşluğa izin vermeli.
-    /// 'b' bulunduktan sonra 2 boş frame + 'a' => kabul.
-    /// 3 boş frame => ret.
+    /// Regression: max_gap=2 must allow a gap of exactly 2 frames.
+    /// After 'b' is found, 2 empty frames + 'a' => accepted.
+    /// 3 empty frames => rejected.
     #[test]
     fn combo_gap_boundary_is_exact() {
         // Buffer ileri taranır; önce combo'nun son elemanı ('b') aranır.
@@ -194,7 +194,8 @@ mod tests {
         );
     }
 
-    /// Bitişik (boşluksuz) tam kombo tanınmalı; combo tersten (son eleman önce) taranır.
+    /// A complete adjacent (gapless) combo must be recognised; a combo is scanned backwards,
+    /// last element first.
     #[test]
     fn adjacent_full_combo_is_recognized() {
         let accepted = run_combo(
@@ -209,7 +210,7 @@ mod tests {
         assert!(accepted, "bitişik c-b-a dizisi a,b,c kombosunu tamamlamalı");
     }
 
-    /// Boş kombo listesi asla eşleşmemeli (combo_idx == 0 erken çıkış).
+    /// An empty combo list must never match (the combo_idx == 0 early exit).
     #[test]
     fn empty_combo_never_matches() {
         let matched = run_combo(
@@ -223,7 +224,8 @@ mod tests {
         assert!(!matched, "boş kombo false dönmeli");
     }
 
-    /// Entity için buffer yoksa check_combo güvenle false dönmeli (nil buffer koruması).
+    /// With no buffer for the entity, check_combo must safely return false (the nil-buffer
+    /// guard).
     #[test]
     fn missing_buffer_returns_false() {
         let matched = run_combo(
@@ -236,7 +238,8 @@ mod tests {
         assert!(!matched, "buffer yoksa false dönmeli");
     }
 
-    /// Kombo tam tamamlanmazsa (yalnız son eleman var, ilki yok) false dönmeli.
+    /// If the combo is not completed (only the last element is present, not the first) it must
+    /// return false.
     #[test]
     fn partially_matched_combo_is_rejected() {
         let matched = run_combo(
@@ -251,7 +254,7 @@ mod tests {
         assert!(!matched, "eksik kombo tamamlanmamış sayılmalı");
     }
 
-    /// is_locked: _is_locked tablosunda giriş yoksa false, true ise true.
+    /// is_locked: false when there is no entry in the _is_locked table, true when there is.
     #[test]
     fn is_locked_reads_table_with_false_default() {
         let lua = Lua::new();
@@ -267,7 +270,8 @@ mod tests {
         .unwrap();
     }
 
-    /// set_move / apply_hitstop / apply_hitstun doğru komutları (frame verileri dahil) kuyruğa yazmalı.
+    /// set_move / apply_hitstop / apply_hitstun must queue the right commands, frame data
+    /// included.
     #[test]
     fn fighter_write_calls_push_expected_commands() {
         let lua = Lua::new();

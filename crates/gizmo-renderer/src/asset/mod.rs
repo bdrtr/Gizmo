@@ -271,9 +271,9 @@ impl AssetManager {
         }
     }
 
-    /// Serbest bırakılmış GPU kaynaklarını (mesh/texture) cache'ten siler.
-    /// Sadece referans sayısı 1'e düşmüş (yani ECS'te kullanılmayan ve 
-    /// sadece AssetManager'ın bildiği) varlıklar silinir.
+    /// Removes released GPU resources (meshes/textures) from the cache.
+    /// Only assets whose reference count has fallen to 1 — i.e. unused in the ECS and known only
+    /// to the AssetManager — are dropped.
     pub fn garbage_collect(&mut self) -> usize {
         let mut freed = 0;
         

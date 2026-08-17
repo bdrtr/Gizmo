@@ -1,12 +1,13 @@
 use super::*;
 
-/// Web'de dahili render çözünürlüğü üst sınırı. 4K/Retina canvas'larda tam
-/// çözünürlükte render performansı katlederdi; aspect'i koruyarak buna caplenir
-/// ve sonuç CSS ile tekrar %100'e ölçeklenir (kasıtlı kalite/performans dengesi).
-/// **Native'de no-op** (verbatim döner) — sadece wasm hedefinde etkindir.
+/// The upper bound on the internal render resolution on the web. Rendering a 4K/Retina canvas at
+/// full resolution would destroy performance, so it is capped to this with the aspect ratio
+/// preserved and the result scaled back to 100 % by CSS (a deliberate quality/performance
+/// trade). **A no-op on native** (it returns its input verbatim) — it only applies to the wasm
+/// target.
 ///
-/// `Renderer::new` VE `Renderer::resize` bu tek fonksiyondan geçer; yoksa ilk
-/// `Resized` olayı (tarayıcı canvas'ı büyüdüğünde) cap'i sessizce delerdi.
+/// `Renderer::new` AND `Renderer::resize` both go through this one function; otherwise the first
+/// `Resized` event (when the browser canvas grows) would silently break through the cap.
 pub(crate) fn cap_web_render_size(
     mut size: winit::dpi::PhysicalSize<u32>,
 ) -> winit::dpi::PhysicalSize<u32> {

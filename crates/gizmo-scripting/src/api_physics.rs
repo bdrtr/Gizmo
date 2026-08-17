@@ -1,6 +1,6 @@
-//! Physics API — Lua'ya sunulan fizik sistemi fonksiyonları
+//! The physics API — the physics functions exposed to Lua.
 //!
-//! Kuvvet uygulama, raycast ve yerçekimi ayarı gibi işlemler için kullanılır.
+//! Used for applying forces, raycasting, setting gravity and the like.
 
 use crate::commands::{CommandQueue, ScriptCommand};
 use gizmo_math::Vec3;
@@ -8,12 +8,13 @@ use mlua::prelude::*;
 use std::sync::Arc;
 use tracing::trace;
 
-/// Bir collider boyutunun alt sınırı. Script'ten gelen negatif/NaN/sonsuz/sıfır değerler
-/// (yazım hatası) bu değere kelepçelenir — dejenere AABB veya GJK'da NaN üretmesinler.
+/// The lower bound on a collider dimension. Negative, NaN, infinite or zero values coming from a
+/// script (a typo) are clamped to it, so they cannot produce a degenerate AABB or a NaN in GJK.
 const MIN_COLLIDER_DIM: f32 = 1e-4;
 
-/// Collider boyutunu güvene al: sonlu ve pozitif değilse küçük pozitif bir extent'e çek.
-/// `NaN`/`-inf`/`inf`/negatif/sıfır hepsi tek dalda `MIN_COLLIDER_DIM`'e düşer.
+/// Makes a collider dimension safe: anything not finite and positive is pulled to a small
+/// positive extent. `NaN`, `-inf`, `inf`, negative and zero all fall to `MIN_COLLIDER_DIM` in one
+/// branch.
 fn sanitize_dim(v: f32) -> f32 {
     if v.is_finite() && v > MIN_COLLIDER_DIM {
         v
@@ -22,7 +23,7 @@ fn sanitize_dim(v: f32) -> f32 {
     }
 }
 
-/// Physics API fonksiyonlarını Lua'ya kaydeder
+/// Registers the physics API functions with Lua.
 pub fn register_physics_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Result<(), LuaError> {
     crate::api_table::register_protected(lua, "physics", |physics_table| {
 
@@ -164,7 +165,7 @@ pub fn with_call_time_queries<R>(
 /// the engine is used for, and finite so the raycast has a bound.
 const GROUND_PROBE_HEIGHT: f32 = 10_000.0;
 
-/// Her frame güncel fizik olaylarını (Tetikleyiciler, Çarpışmalar) Lua'ya aktarır
+/// Mirrors the current physics events (triggers, collisions) into Lua, every frame.
 #[tracing::instrument(skip_all, name = "script_physics_read")]
 pub fn update_physics_api(
     lua: &Lua,
@@ -320,7 +321,8 @@ mod tests {
         }
     }
 
-    /// apply_force / apply_impulse / add_rigidbody Lua argümanlarını doğru komutlara çevirmeli.
+    /// apply_force / apply_impulse / add_rigidbody must translate their Lua arguments into the
+    /// right commands.
     #[test]
     fn force_impulse_rigidbody_calls_push_expected_commands() {
         let lua = Lua::new();
@@ -351,7 +353,7 @@ mod tests {
         }
     }
 
-    /// Geçerli (sonlu, pozitif) box boyutları dokunulmadan geçmeli.
+    /// Valid (finite, positive) box dimensions must pass through untouched.
     #[test]
     fn valid_box_dims_pass_through() {
         let lua = Lua::new();
@@ -368,8 +370,8 @@ mod tests {
         }
     }
 
-    /// PhysicsWorld kaynağı hiç yoksa update_physics_api panik etmemeli ve
-    /// triggers/collisions BOŞ tablolar olarak ayarlanmalı (belirsiz değil).
+    /// With no PhysicsWorld resource at all, update_physics_api must not panic and must set
+    /// triggers/collisions to EMPTY tables (not leave them undefined).
     #[test]
     fn update_without_physics_world_yields_empty_lists() {
         let lua = Lua::new();
@@ -389,7 +391,7 @@ mod tests {
         .unwrap();
     }
 
-    /// Çarpışma olay tipi → durum string eşlemesi: Persisting="stay", Ended="exit".
+    /// The collision event kind → state string mapping: Persisting="stay", Ended="exit".
     #[test]
     fn collision_event_status_maps_stay_and_exit() {
         let lua = Lua::new();

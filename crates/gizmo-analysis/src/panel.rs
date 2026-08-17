@@ -1,11 +1,11 @@
-//! Canlı analiz paneli (`egui` özelliği).
+//! The live analysis panel (the `egui` feature).
 //!
-//! `Analyzer`'ı egui ile görselleştirir: FPS + frame-süresi yüzdelikleri ve grafiği,
-//! ECS archetype/component/bellek tablosu, bu frame'in iç içe span çubukları ve tüm
-//! metriklerin istatistik + mini-sparkline tablosu. Editör'deki `profiler_panel`'i
-//! tamamlar (o yalnız FrameProfiler'a bakar; bu, tüm Analyzer verisini gösterir).
+//! Visualises the `Analyzer` with egui: FPS plus frame-time percentiles and a graph, the ECS
+//! archetype/component/memory table, this frame's nested span bars, and a table of every metric's
+//! statistics with a mini sparkline. It complements the editor's `profiler_panel` (which only
+//! looks at the FrameProfiler; this shows all of the Analyzer's data).
 //!
-//! Çağrım (app'in `set_ui` closure'ında kurduğunuz kök `Ui`'nin içine):
+//! How to call it (inside the root `Ui` you build in the app's `set_ui` closure):
 //! ```
 //! # let ctx = egui::Context::default();
 //! # let mut world = gizmo_core::world::World::new();
@@ -15,7 +15,7 @@
 //!     gizmo_analysis::panel::analysis_ui_world(ui, &world);
 //! });
 //! # });
-//! # assert!(!out.shapes.is_empty(), "panel her durumda bir şeyler çizer");
+//! # assert!(!out.shapes.is_empty(), "the panel always draws something");
 //! ```
 
 use crate::analyzer::Analyzer;
@@ -52,7 +52,7 @@ fn scope_color(depth: u32, idx: usize) -> egui::Color32 {
     PALETTE[(depth as usize * 3 + idx) % PALETTE.len()]
 }
 
-/// World'den `Analyzer` resource'unu çekip paneli çizer (kolaylık).
+/// Pulls the `Analyzer` resource out of the World and draws the panel (a convenience).
 pub fn analysis_ui_world(ui: &mut egui::Ui, world: &gizmo_core::world::World) {
     match world.get_resource::<Analyzer>() {
         Some(a) => analysis_ui(ui, &a),
@@ -62,7 +62,7 @@ pub fn analysis_ui_world(ui: &mut egui::Ui, world: &gizmo_core::world::World) {
     }
 }
 
-/// Bir egui penceresi olarak paneli açar (kapatılabilir).
+/// Opens the panel as an egui window (closable).
 pub fn analysis_window(ctx: &egui::Context, open: &mut bool, analyzer: &Analyzer) {
     egui::Window::new("🔬 Gizmo Analysis")
         .open(open)
@@ -313,7 +313,7 @@ fn metrics_section(ui: &mut egui::Ui, analyzer: &Analyzer) {
         });
 }
 
-/// Küçük çizgi grafiği — bir metriğin ring geçmişini çizer.
+/// A small line chart — draws a metric's ring history.
 fn sparkline(ui: &mut egui::Ui, values: &[f64], w: f32, h: f32, color: egui::Color32) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
     let p = ui.painter_at(rect);

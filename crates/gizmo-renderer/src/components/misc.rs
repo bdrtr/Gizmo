@@ -189,7 +189,7 @@ impl ParticleEmitter {
         }
     }
 
-    /// Yeni bir parçacık yayıcı oluşturur ve doğrulama yapar.
+    /// Creates a new particle emitter, validating its parameters.
     pub fn with_rate(spawn_rate: f32) -> Self {
         assert!(
             spawn_rate > 0.0,
@@ -271,8 +271,9 @@ pub enum FluidPhaseType {
     Bubble,
 }
 
-/// Bir entity'nin sıvı parçacığı olduğunu belirten ECS marker bileşenidir.
-/// Simülasyonda FluidHandle, FluidPhase, FluidInteractor ile birlikte kullanılabilir.
+/// The ECS marker component saying an entity is a fluid particle.
+/// In the simulation it can be used together with FluidHandle, FluidPhase and
+/// FluidInteractor.
 #[derive(Clone)]
 pub struct FluidParticle;
 

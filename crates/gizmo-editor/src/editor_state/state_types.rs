@@ -16,7 +16,7 @@ pub enum EditorTab {
     Profiler,
 }
 
-/// Gizmo aracı modu
+/// The gizmo tool's mode
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[non_exhaustive]
 pub enum GizmoMode {
@@ -26,29 +26,29 @@ pub enum GizmoMode {
     Scale,
 }
 
-/// Build hedef işletim sistemi
+/// The target operating system of a build
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[non_exhaustive]
 pub enum BuildTarget {
-    /// Mevcut işletim sistemi (native)
+    /// The current operating system (native)
     Native,
     /// Linux (x86_64-unknown-linux-gnu)
     Linux,
     /// Windows (x86_64-pc-windows-gnu — cross gerektirir)
     Windows,
-    /// macOS (x86_64-apple-darwin — yalnızca Mac üzerinde)
+    /// macOS (x86_64-apple-darwin — on a Mac only)
     MacOs,
 }
 
-/// Editor çalışma modu
+/// The editor's run mode
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[non_exhaustive]
 pub enum EditorMode {
     /// Düzenleme modu — fizik durur, entity'ler serbestçe manipüle edilir
     Edit,
-    /// Oyun modu — fizik ve scriptler çalışır
+    /// Game mode — physics and scripts run
     Play,
-    /// Duraklatılmış oyun modu
+    /// Game mode, paused
     Paused,
 }
 
@@ -362,7 +362,7 @@ impl Default for ConsoleState {
     }
 }
 
-/// Editörün tüm durumunu tutan yapı
+/// The struct holding all of the editor's state
 
 #[derive(Clone, Debug)]
 #[non_exhaustive]
@@ -400,8 +400,7 @@ impl Default for PostProcessSettings {
     }
 }
 
-/// Dövüş oyunu HUD durumu — game_view.rs tarafından okunur,
-/// simulation loop tarafından yazılır.
+/// The fighting-game HUD state — read by game_view.rs, written by the simulation loop.
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct FightHudState {

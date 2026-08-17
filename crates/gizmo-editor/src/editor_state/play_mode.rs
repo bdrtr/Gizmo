@@ -2,9 +2,9 @@
 use super::*;
 
 impl EditorState {
-    /// Play/Stop geçişi yapar.
-    /// Edit → Play: Sahne snapshot'ı alınması için `play_start_request` set edilir.
-    /// Play veya Paused → Edit: Sahne geri yüklenmesi için `play_stop_request` set edilir.
+    /// Toggles between play and stop.
+    /// Edit → Play: sets `play_start_request`, so a scene snapshot gets taken.
+    /// Play or Paused → Edit: sets `play_stop_request`, so the scene gets restored.
     pub fn toggle_play(&mut self) {
         self.mode = match self.mode {
             EditorMode::Edit => {
@@ -28,7 +28,7 @@ impl EditorState {
         };
     }
 
-    /// Oyun aktif olarak çalışıyor mu? (Sadece Play, Paused değil)
+    /// Is the game actually running? (Play only — not Paused.)
     pub fn is_playing(&self) -> bool {
         self.mode == EditorMode::Play
     }

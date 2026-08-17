@@ -3,7 +3,7 @@ use crate::renderer::Vertex;
 use gizmo_math::Vec3;
 
 impl super::AssetManager {
-    /// Tetrahedron köşeleri (dış-yüzey CCW sarımlı). Saf veri.
+    /// A tetrahedron's vertices, CCW-wound on the outside. Pure data.
     pub(crate) fn tetrahedron_data(size: f32) -> Vec<Vertex> {
         let s = size;
         let p0 = [s, s, s];
@@ -44,7 +44,7 @@ impl super::AssetManager {
         Mesh::new_indexed(device, &vertices, Vec3::ZERO, "tetrahedron".to_string())
     }
 
-    /// Kesik koni (konik frustum) köşeleri, dış-yüzey CCW sarımlı. Saf veri.
+    /// A truncated cone's (conical frustum's) vertices, CCW-wound on the outside. Pure data.
     pub(crate) fn conical_frustum_data(radius_bottom: f32, radius_top: f32, height: f32, radial_segments: u32) -> Vec<Vertex> {
         let radial_segments = radial_segments.max(3);
         let mut vertices = Vec::new();

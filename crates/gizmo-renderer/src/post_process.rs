@@ -1,7 +1,8 @@
 use crate::gpu_types::PostProcessUniforms;
 use wgpu::util::DeviceExt;
 
-/// Post-Processing durumu — HDR, Bloom, Blur, Composite pipeline'ları ve kaynakları
+/// The post-processing state — the HDR, bloom, blur and composite pipelines and their
+/// resources.
 pub struct PostProcessState {
     pub post_bind_group_layout: wgpu::BindGroupLayout,
     pub blur_params_bind_group_layout: wgpu::BindGroupLayout,
@@ -515,7 +516,7 @@ pub fn create_blur_buffers(
     (h_buf, h_bg, v_bg)
 }
 
-/// Post-processing render geçişlerini sırayla çalıştırır.
+/// Runs the post-processing render passes in order.
 #[tracing::instrument(skip_all, level = "trace")]
 pub fn run_post_processing(
     renderer: &crate::Renderer,

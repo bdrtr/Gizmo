@@ -1,13 +1,13 @@
-//! Scene API — Lua'ya sunulan sahne ve oyun yönetim fonksiyonları
+//! The scene API — the scene and game-management functions exposed to Lua.
 //!
-//! Kapsam: sahne kaydet/yükle, diyalog, ara sahne, yarış sistemi, kamera.
+//! Covers: saving/loading scenes, dialogue, cutscenes, the race system and the camera.
 
 use crate::commands::{CommandQueue, ScriptCommand};
 use gizmo_core::World;
 use mlua::prelude::*;
 use std::sync::Arc;
 
-/// Scene + Game API fonksiyonlarını Lua'ya kaydeder
+/// Registers the scene and game API functions with Lua.
 pub fn register_scene_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Result<(), LuaError> {
     crate::api_table::register_protected(lua, "scene", |scene_table| {
 
@@ -244,7 +244,8 @@ mod tests {
         (lua, cq)
     }
 
-    /// dialogue.show süre argümanı opsiyonel: verilmezse 3.0'a düşmeli, verilirse korunmalı.
+    /// dialogue.show's duration argument is optional: it must default to 3.0 when omitted and
+    /// be preserved when given.
     #[test]
     fn dialogue_show_duration_defaults_and_overrides() {
         let (lua, cq) = setup();
@@ -269,7 +270,8 @@ mod tests {
         }
     }
 
-    /// race.add_checkpoint yarıçapı opsiyonel: verilmezse 5.0'a düşmeli, verilirse korunmalı.
+    /// race.add_checkpoint's radius is optional: it must default to 5.0 when omitted and be
+    /// preserved when given.
     #[test]
     fn checkpoint_radius_defaults_and_overrides() {
         let (lua, cq) = setup();
@@ -295,7 +297,7 @@ mod tests {
         }
     }
 
-    /// Sahne/kamera/ara-sahne binding'leri: her çağrı beklenen komutu üretmeli.
+    /// The scene/camera/cutscene bindings: every call must produce the expected command.
     #[test]
     fn scene_camera_cutscene_calls_push_expected_commands() {
         let (lua, cq) = setup();
@@ -329,7 +331,8 @@ mod tests {
         assert!(matches!(cmds[9], ScriptCommand::ResetRace));
     }
 
-    /// update_scene_api isim→id eşlemesi kurmalı; bilinmeyen isim nil, entity_count doğru.
+    /// update_scene_api must build the name→id mapping: an unknown name gives nil, and
+    /// entity_count is correct.
     #[test]
     fn scene_name_lookup_and_count() {
         let (lua, cq) = setup();

@@ -1,10 +1,10 @@
-//! Time API — Lua'ya sunulan zaman fonksiyonları
+//! The time API — the timing functions exposed to Lua.
 //!
-//! Delta time, toplam süre ve FPS bilgilerine erişim sağlar.
+//! Gives access to delta time, total elapsed time and FPS.
 
 use mlua::prelude::*;
 
-/// Time API fonksiyonlarını Lua'ya kaydeder
+/// Registers the time API functions with Lua.
 pub fn register_time_api(lua: &Lua) -> Result<(), LuaError> {
     crate::api_table::register_protected(lua, "time", |time_table| {
 
@@ -55,7 +55,7 @@ mod tests {
         lua.load(format!("return {expr}")).eval().unwrap()
     }
 
-    /// Kayıt sonrası varsayılanlar: dt=0, elapsed=0, fps=60. Getter'lar bunları okumalı.
+    /// The defaults after registration: dt=0, elapsed=0, fps=60. The getters must read them.
     #[test]
     fn defaults_after_register() {
         let lua = Lua::new();
@@ -65,7 +65,7 @@ mod tests {
         assert_eq!(eval_f32(&lua, "time.fps()"), 60.0);
     }
 
-    /// update_time_api getter'lara yansımalı ve önceki değerleri EZMELİ (overwrite).
+    /// update_time_api must show up in the getters and must OVERWRITE the previous values.
     #[test]
     fn update_reflects_and_overwrites() {
         let lua = Lua::new();

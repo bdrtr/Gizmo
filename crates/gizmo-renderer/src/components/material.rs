@@ -106,9 +106,9 @@ impl Material {
         }
     }
 
-    /// PBR materyali olarak yapılandırır.
-    /// Not: Eğer `albedo.w < 1.0` verilirse `is_transparent` otomatik olarak `true` yapılır.
-    /// `roughness` ve `metallic` değerleri [0.0, 1.0] aralığına sınırlandırılır.
+    /// Configures this as a PBR material.
+    /// Note: if `albedo.w < 1.0` is given, `is_transparent` is set to `true` automatically.
+    /// `roughness` and `metallic` are clamped into [0.0, 1.0].
     pub fn with_pbr(mut self, albedo: gizmo_math::Vec4, roughness: f32, metallic: f32) -> Self {
         self.albedo = albedo;
         self.roughness = roughness.clamp(0.0, 1.0);
@@ -135,9 +135,10 @@ impl Material {
         self
     }
 
-    /// Saydamlığı manuel olarak belirler.
-    /// Uyarı: `with_pbr`, `with_unlit` veya `with_water` metodları albedo'nun alpha değerine (w) bakarak
-    /// saydamlığı otomatik değiştirebilir. Kesin bir saydamlık istiyorsanız, bu metodu builder zincirinin en sonunda çağırın.
+    /// Sets transparency by hand.
+    /// Careful: `with_pbr`, `with_unlit` and `with_water` may change transparency automatically
+    /// from the albedo's alpha (w). If you want a definite value, call this last in the builder
+    /// chain.
     pub fn with_transparent(mut self, transparent: bool) -> Self {
         self.is_transparent = transparent;
         self
@@ -148,13 +149,15 @@ impl Material {
         self
     }
 
-    /// Vertex renginde pişmiş ışığı kullanan, güneşin gölgesini alan materyal.
+    /// A material that uses light baked into the vertex colour and still receives the sun's
+    /// shadow.
     ///
-    /// `with_unlit`'ten farkı tek şey: gölge. Işık zaten vertex renginde olduğu için PBR'a gerek
-    /// yok, ama dünyanın önünde duran dinamik nesnelerin gölgesi dosyada olamaz.
+    /// The only difference from `with_unlit` is the shadow. The light is already in the vertex
+    /// colour, so PBR is unnecessary — but the shadows of dynamic objects standing in front of
+    /// the world cannot be in the file.
     ///
-    /// Karanlık sahneleri açmak için [`with_ambient`](Self::with_ambient) ve
-    /// [`with_emissive`](Self::with_emissive); ikisi de varsayılan olarak sıfırdır.
+    /// To lift a dark scene use [`with_ambient`](Self::with_ambient) and
+    /// [`with_emissive`](Self::with_emissive); both default to zero.
     pub fn with_baked_lit(mut self, albedo: gizmo_math::Vec4) -> Self {
         self.albedo = albedo;
         self.material_type = MaterialType::BakedLit;
@@ -169,8 +172,6 @@ impl Material {
     /// always a bug, and it would make the shader's `lit + ambient` go negative).
     ///
     /// Only [`MaterialType::BakedLit`] reads it; see the field for the exact expression.
-    ///
-    /// Yüzeye güneşten bağımsız ulaşan ışık. Karanlık pişmiş sahneleri açmanın yolu.
     pub fn with_ambient(mut self, ambient: gizmo_math::Vec3) -> Self {
         self.ambient = ambient.max(gizmo_math::Vec3::ZERO);
         self
@@ -180,15 +181,13 @@ impl Material {
     /// and of the sun's shadow. Negative components are clamped to zero.
     ///
     /// Only [`MaterialType::BakedLit`] reads it; see the field for the exact expression.
-    ///
-    /// Yüzeyin kendi yaydığı ışık; albedo'dan ve gölgeden bağımsızdır.
     pub fn with_emissive(mut self, emissive: gizmo_math::Vec3) -> Self {
         self.emissive = emissive.max(gizmo_math::Vec3::ZERO);
         self
     }
 
-    /// Işıklandırmadan etkilenmeyen (Unlit) materyal olarak yapılandırır.
-    /// Not: Eğer `albedo.w < 1.0` verilirse `is_transparent` otomatik olarak `true` yapılır.
+    /// Configures this as an unlit material (unaffected by lighting).
+    /// Note: if `albedo.w < 1.0` is given, `is_transparent` is set to `true` automatically.
     pub fn with_unlit(mut self, albedo: gizmo_math::Vec4) -> Self {
         self.albedo = albedo;
         self.material_type = MaterialType::Unlit;
@@ -212,9 +211,6 @@ impl Material {
     /// `is_transparent` on a sub-1.0 alpha, because it does not need to: the backdrop pipeline
     /// always alpha-blends, and `is_transparent` would additionally move the draw into the
     /// transparent bucket — which is exactly where a backdrop must not be.
-    ///
-    /// Boyalı arka plan (gökyüzü/panorama): mesh'in kendi dokusu ve vertex rengi, dünyadan
-    /// önce, kameraya kilitli, derinlik yazmadan çizilir.
     pub fn with_backdrop(mut self, albedo: gizmo_math::Vec4) -> Self {
         self.albedo = albedo;
         self.material_type = MaterialType::Backdrop;
@@ -228,17 +224,16 @@ impl Material {
     /// world, its own pixels, no depth write — except that the geometry keeps its place instead
     /// of following the camera. Reach for it when the backdrop is *in* the level rather than
     /// *around* the viewer.
-    ///
-    /// Kameraya kilitlenmeyen boyalı arka plan: dünyada durduğu yerde çizilir.
     pub fn with_backdrop_placed(mut self, albedo: gizmo_math::Vec4) -> Self {
         self.albedo = albedo;
         self.material_type = MaterialType::BackdropPlaced;
         self
     }
 
-    /// Su materyali olarak yapılandırır.
-    /// `roughness` 0.05, `metallic` 0.0 olarak varsayılan su değerlerine ayarlanır.
-    /// Not: Eğer `base_albedo.w < 1.0` verilirse `is_transparent` otomatik olarak `true` yapılır.
+    /// Configures this as a water material.
+    /// `roughness` is set to 0.05 and `metallic` to 0.0, the defaults for water.
+    /// Note: if `base_albedo.w < 1.0` is given, `is_transparent` is set to `true`
+    /// automatically.
     pub fn with_water(mut self, base_albedo: gizmo_math::Vec4) -> Self {
         self.albedo = base_albedo;
         self.roughness = 0.05;

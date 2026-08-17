@@ -194,8 +194,8 @@ mod tests {
         assert_eq!(p.max_history, 1000);
     }
 
-    /// Aralık içindeki geçerli değerler validate() ile DEĞİŞMEMELİ; ayrıca
-    /// clamp edilmeyen alanlara (show_grid, camera_focus_distance) dokunulmamalı.
+    /// Valid in-range values must NOT be changed by validate(), and the fields that are not
+    /// clamped (show_grid, camera_focus_distance) must be left alone.
     #[test]
     fn validate_is_noop_for_valid_values() {
         let mut p = EditorPrefs {
@@ -210,7 +210,7 @@ mod tests {
         assert_eq!(p, before);
     }
 
-    /// Default → TOML → default: alanlar korunmalı (serde round-trip).
+    /// Default → TOML → default: the fields must survive (a serde round trip).
     #[test]
     fn toml_round_trip_preserves_default_fields() {
         let p = EditorPrefs::default();
@@ -219,7 +219,7 @@ mod tests {
         assert_eq!(p, p2);
     }
 
-    /// Default olmayan değerler de round-trip'te korunmalı.
+    /// Non-default values must survive the round trip too.
     #[test]
     fn toml_round_trip_preserves_custom_fields() {
         let p = EditorPrefs {
@@ -235,8 +235,8 @@ mod tests {
         assert_eq!(p, p2);
     }
 
-    /// `dirty` alanı `#[serde(skip)]` → asla diske yazılmaz, deserialize'da
-    /// daima `false` döner (kirli bayrağı kalıcı state değildir).
+    /// The `dirty` field is `#[serde(skip)]` → never written to disk and always `false` after
+    /// deserialisation (the dirty flag is not persistent state).
     #[test]
     fn dirty_flag_is_not_persisted() {
         let mut p = EditorPrefs::default();

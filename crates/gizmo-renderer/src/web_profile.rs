@@ -1,28 +1,27 @@
-//! WASM Optimizasyon Profil Sistemi
+//! The WASM optimisation profile system.
 //!
-//! Oyun türüne göre otomatik GPU kaynak yönetimi sağlar.
-//! Tarayıcı ortamında maksimum performans için gereksiz
-//! subsistemler otomatik devre dışı bırakılır.
+//! Manages GPU resources automatically according to the kind of game. In a browser, subsystems
+//! that are not needed are turned off automatically, for maximum performance.
 //!
-//! # Kullanım
+//! # Usage
 //! ```
 //! use gizmo_renderer::{PostProcessLevel, ShadowQuality, WebProfile};
 //!
-//! let fighter = WebProfile::fighter(); // Dövüş oyunu preset'i
+//! let fighter = WebProfile::fighter(); // the fighting-game preset
 //! assert_eq!(fighter.shadow_quality, ShadowQuality::Off);
 //! assert!(fighter.gpu_particles_enabled && !fighter.gpu_fluid_enabled);
 //!
-//! let racing = WebProfile::racing();   // Yarış oyunu preset'i
-//! let sandbox = WebProfile::sandbox(); // Açık dünya / sandbox
+//! let racing = WebProfile::racing();   // the racing-game preset
+//! let sandbox = WebProfile::sandbox(); // open world / sandbox
 //! assert!(racing.max_instances < sandbox.max_instances);
 //!
-//! let profile = WebProfile::custom()   // Özel konfigürasyon
+//! let profile = WebProfile::custom()   // a custom configuration
 //!     .with_particles(true, 5000)
 //!     .with_shadows(ShadowQuality::Medium)
 //!     .with_post_processing(PostProcessLevel::Medium);
 //! assert_eq!(profile.gpu_particles_max, 5000);
 //! assert_eq!(profile.post_process_level, PostProcessLevel::Medium);
-//! // `custom()` minimal tabandan başlar: dokunulmayan her şey kapalı kalır.
+//! // `custom()` starts from the minimal base: anything left untouched stays off.
 //! assert!(!profile.gpu_physics_enabled && !profile.ssao_enabled);
 //! ```
 
@@ -46,25 +45,25 @@ pub enum PostProcessLevel {
 pub enum ShadowQuality {
     /// Gölge yok
     Off,
-    /// Tek cascade, düşük çözünürlük
+    /// A single cascade, low resolution
     Low,
     /// 2 cascade, orta çözünürlük
     Medium,
-    /// 4 cascade, yüksek çözünürlük (masaüstü varsayılan)
+    /// 4 cascades, high resolution (the desktop default)
     High,
 }
 
-/// WASM ortamında GPU kaynak konfigürasyonu
+/// The GPU resource configuration for a WASM environment.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct WebProfile {
-    /// Profil adı (log ve debug için)
+    /// The profile's name (for logs and debugging)
     pub name: &'static str,
 
     // ── GPU Compute Subsystems ────────────────────────────
     /// GPU particle sistemi aktif mi?
     pub gpu_particles_enabled: bool,
-    /// Maksimum GPU particle sayısı
+    /// The maximum number of GPU particles
     pub gpu_particles_max: u32,
 
     /// GPU fizik simülasyonu aktif mi?
@@ -72,9 +71,9 @@ pub struct WebProfile {
     /// Maksimum GPU fizik nesnesi
     pub gpu_physics_max: u32,
 
-    /// GPU sıvı simülasyonu aktif mi?
+    /// Is the GPU fluid simulation active?
     pub gpu_fluid_enabled: bool,
-    /// Maksimum GPU sıvı parçacığı
+    /// The maximum number of GPU fluid particles
     pub gpu_fluid_max: u32,
 
     // ── Rendering Pipeline ───────────────────────────────
@@ -105,13 +104,13 @@ pub struct WebProfile {
     pub volumetric_enabled: bool,
 
     // ── Resource Limits ──────────────────────────────────
-    /// Maksimum bind group sayısı (Chrome WebGPU = 4)
+    /// The maximum number of bind groups (Chrome's WebGPU = 4)
     pub max_bind_groups: u32,
 
-    /// Maksimum instance sayısı (instanced rendering)
+    /// The maximum number of instances (instanced rendering)
     pub max_instances: usize,
 
-    /// HDR texture formatı (Rgba16Float vs Rgba8Unorm)
+    /// The HDR texture format (Rgba16Float vs Rgba8Unorm)
     pub use_hdr: bool,
 }
 
@@ -120,8 +119,8 @@ impl WebProfile {
     //  PRESET'LER — Oyun türüne göre hazır profiller
     // ════════════════════════════════════════════════════════
 
-    /// 🥊 Dövüş oyunu — 2 karakter, arena, hit efektleri
-    /// Particles: düşük (hit spark), Fluid: kapalı, Deferred: kapalı
+    /// 🥊 A fighting game — 2 characters, an arena, hit effects.
+    /// Particles: low (hit sparks), fluid: off, deferred: off.
     pub fn fighter() -> Self {
         Self {
             name: "Fighter",
@@ -145,8 +144,8 @@ impl WebProfile {
         }
     }
 
-    /// 🏎️ Yarış oyunu — çok nesne, hız efektleri, geniş sahne
-    /// Particles: orta (toz/kıvılcım), Fluid: kapalı, Shadows: düşük
+    /// 🏎️ A racing game — many objects, speed effects, a large scene.
+    /// Particles: medium (dust and sparks), fluid: off, shadows: low.
     pub fn racing() -> Self {
         Self {
             name: "Racing",
@@ -170,8 +169,8 @@ impl WebProfile {
         }
     }
 
-    /// 🌊 Su/sıvı odaklı oyun — SPH fluid, fizik etkileşimi
-    /// Particles: orta, Fluid: aktif (düşük limit), Physics: düşük
+    /// 🌊 A water/fluid-focused game — SPH fluid with physics interaction.
+    /// Particles: medium, fluid: on (with a low limit), physics: low.
     pub fn fluid() -> Self {
         Self {
             name: "Fluid",
@@ -195,7 +194,7 @@ impl WebProfile {
         }
     }
 
-    /// 🏗️ Sandbox / açık dünya — dengeli, her şeyden biraz
+    /// 🏗️ Sandbox / open world — balanced, a little of everything.
     pub fn sandbox() -> Self {
         Self {
             name: "Sandbox",
@@ -219,7 +218,7 @@ impl WebProfile {
         }
     }
 
-    /// 🖥️ Masaüstü — tüm özellikler açık (varsayılan native profil)
+    /// 🖥️ Desktop — every feature on (the default native profile).
     pub fn desktop() -> Self {
         Self {
             name: "Desktop",
@@ -243,7 +242,7 @@ impl WebProfile {
         }
     }
 
-    /// 📱 Minimum — en düşük ayarlar (eski donanım / mobil)
+    /// 📱 Minimum — the lowest settings (old hardware, mobile).
     pub fn minimal() -> Self {
         Self {
             name: "Minimal",
@@ -271,7 +270,7 @@ impl WebProfile {
     //  BUILDER API — Özel profil oluşturma
     // ════════════════════════════════════════════════════════
 
-    /// Boş profil (her şey kapalı) — builder ile özelleştir
+    /// An empty profile (everything off) — customise it with the builder.
     pub fn custom() -> Self {
         Self::minimal()
     }
@@ -328,7 +327,7 @@ impl WebProfile {
     //  UTILITY
     // ════════════════════════════════════════════════════════
 
-    /// Mevcut platforma göre varsayılan profil seç
+    /// Picks the default profile for the current platform.
     pub fn auto() -> Self {
         #[cfg(target_arch = "wasm32")]
         {

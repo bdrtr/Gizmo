@@ -1,11 +1,11 @@
-//! Studio Input — Viewport raycast ve rubber band seçim mantığı
+//! Studio input — viewport raycasting and rubber-band selection.
 //!
-//! Bu dosya şu sorumlulukları taşır:
-//! 1. Fare ışını (ray) ile sahnedeki objelere tıklama (raycast/OBB seçimi)
-//! 2. Rubber band (kutu) ile çoklu seçim
-//! 3. Kamera ışını (ray) oluşturma
+//! This file is responsible for:
+//! 1. Clicking scene objects with the mouse ray (raycast / OBB selection)
+//! 2. Multi-selection with a rubber band (box)
+//! 3. Building the camera ray
 //!
-//! Seçim akışı:
+//! The selection flow:
 //! ```text
 //! scene_view.rs  →  do_raycast = true
 //! systems/input.rs → build_ray() → handle_studio_input()
@@ -21,7 +21,7 @@ use gizmo::prelude::*;
 // ANA GİRİŞ NOKTASI
 // ═══════════════════════════════════════════════════════════════
 
-/// Her frame çağrılır. Raycast ve rubber band seçimlerini yürütür.
+/// Called every frame; carries out raycast and rubber-band selection.
 pub fn handle_studio_input(
     world: &mut World,
     state: &mut EditorState,
@@ -43,11 +43,11 @@ pub fn handle_studio_input(
 // RAYCAST SEÇİMİ
 // ═══════════════════════════════════════════════════════════════
 
-/// Editör ismi olan objeleri seçimden çıkarır (Grid, Directional Light vb.)
+/// Removes objects with editor names (grid, directional light, …) from the selection.
 const EDITOR_ENTITY_NAMES: &[&str] = &["Editor Grid", "Editor Guidelines", "Directional Light"];
 const EDITOR_ENTITY_PREFIXES: &[&str] = &["Editor Light Icon"];
 
-/// Bir entity'nin editör objesi (seçilemez) olup olmadığını kontrol eder.
+/// Is this entity an editor object (and therefore not selectable)?
 fn is_editor_entity(world: &World, id: u32) -> bool {
     let names = world.borrow::<gizmo::core::component::EntityName>();
     if let Some(name) = names.get(id) {
@@ -63,8 +63,8 @@ fn is_editor_entity(world: &World, id: u32) -> bool {
     false
 }
 
-/// Fare ışınıyla sahnedeki en yakın objeye tıklama.
-/// OBB (Oriented Bounding Box) testi ile çalışır.
+/// Clicks the nearest object in the scene along the mouse ray.
+/// Works with an OBB (oriented bounding box) test.
 fn perform_raycast(
     world: &mut World,
     state: &mut EditorState,
@@ -103,9 +103,9 @@ fn perform_raycast(
     }
 }
 
-/// Bir entity'nin en üstteki seçilebilir atasını (root) bulur.
-/// GLTF modelleri için: mesh child'ından → GLTF root'a yürür.
-/// Sonsuz döngüyü engellemek için maksimum 32 seviye derinlik limiti var.
+/// Finds an entity's topmost selectable ancestor (its root).
+/// For glTF models it walks from the mesh child up to the glTF root.
+/// A depth limit of 32 levels guards against an infinite loop.
 fn find_selection_root(world: &World, start_id: u32) -> u32 {
     let parents = world.borrow::<gizmo::core::component::Parent>();
     let mut current = start_id;
@@ -120,7 +120,7 @@ fn find_selection_root(world: &World, start_id: u32) -> u32 {
     current
 }
 
-/// Işın ile sahnedeki tüm objeleri tarar, en yakın isabet eden entity id'sini döner.
+/// Sweeps the ray against every object in the scene and returns the id of the nearest hit.
 fn find_closest_hit(world: &World, ray: &Ray, player_id: u32) -> Option<u32> {
     let mut closest_t = f32::MAX;
     let mut hit_entity = None;
@@ -219,7 +219,8 @@ fn compute_entity_obb(
 // RUBBER BAND (KUTU) SEÇİMİ
 // ═══════════════════════════════════════════════════════════════
 
-/// Kutu ile çoklu seçim — ekran koordinatlarında dikdörtgen çizer ve içindeki objeleri seçer.
+/// Box multi-selection — draws a rectangle in screen coordinates and selects what is inside
+/// it.
 fn perform_rubber_band_selection(
     world: &mut World,
     state: &mut EditorState,
@@ -308,8 +309,8 @@ fn perform_rubber_band_selection(
 // KAMERA IŞINI OLUŞTURMA
 // ═══════════════════════════════════════════════════════════════
 
-/// NDC koordinatlarından kamera ışını (ray) oluşturur.
-/// `ndc_x`, `ndc_y`: -1..1 aralığında normalize edilmiş ekran koordinatları.
+/// Builds the camera ray from NDC coordinates.
+/// `ndc_x`, `ndc_y` are screen coordinates normalised into -1..1.
 pub fn build_ray(
     world: &World,
     player_id: u32,

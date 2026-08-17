@@ -1,4 +1,4 @@
-//! Global uniform buffer ve shadow doku/görünüm kaynaklarının oluşturulması.
+//! Creating the global uniform buffer and the shadow texture/view resources.
 
 use crate::csm::SHADOW_MAP_RES;
 use crate::frame_uniforms::SceneFrame;

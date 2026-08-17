@@ -152,10 +152,10 @@ mod tests {
     use super::*;
     use gizmo_math::{Quat, Vec3};
 
-    /// İki quaternion'un AYNI rotasyonu temsil edip etmediğini, üç temel
-    /// vektörü döndürüp sonuçları karşılaştırarak doğrular. Bu, `q` ile `-q`nin
-    /// aynı rotasyon olması (çift-örtü) ve Euler ayrıştırmasının farklı ama
-    /// eşdeğer üçlüler üretebilmesi sorununu doğal olarak aşar.
+    /// Checks whether two quaternions represent the SAME rotation by rotating the three basis
+    /// vectors and comparing the results. That naturally sidesteps both `q` and `-q` being the
+    /// same rotation (the double cover) and Euler decomposition producing different but
+    /// equivalent triples.
     fn assert_same_rotation(a: Quat, b: Quat, eps: f32) {
         for v in [Vec3::X, Vec3::Y, Vec3::Z, Vec3::new(1.0, 2.0, 3.0)] {
             let ra = a.mul_vec3(v);
@@ -186,8 +186,8 @@ mod tests {
         assert_same_rotation(q, Quat::IDENTITY, 1e-5);
     }
 
-    /// Derece → radyan dönüşümü doğru olmalı: 90° X ekseni etrafında dönüş,
-    /// glam'in `from_rotation_x(PI/2)`si ile aynı rotasyonu vermeli.
+    /// The degree → radian conversion must be right: 90° about the X axis must give the same
+    /// rotation as glam's `from_rotation_x(PI/2)`.
     #[test]
     fn degrees_are_converted_to_radians() {
         let q = euler_deg_to_quat(90.0, 0.0, 0.0);
@@ -197,7 +197,7 @@ mod tests {
         assert_same_rotation(qy, Quat::from_rotation_y(45.0_f32.to_radians()), 1e-5);
     }
 
-    /// Tek eksen dönüşleri Euler'e temiz geri okunmalı (gimbal-lock yok).
+    /// Single-axis rotations must read back cleanly as Euler angles (no gimbal lock).
     #[test]
     fn single_axis_round_trips_to_expected_degrees() {
         let (x, y, z) = quat_to_euler_deg(Quat::from_rotation_y(45.0_f32.to_radians()));
@@ -206,8 +206,8 @@ mod tests {
         assert!(z.abs() < 1e-3, "z={}", z);
     }
 
-    /// Asıl invariant: quat → euler → quat, girişle AYNI rotasyonu vermeli.
-    /// Gimbal-lock (|pitch|≈90°) dışındaki temsili açı üçlüleri için taranır.
+    /// The real invariant: quat → euler → quat must give the SAME rotation as the input.
+    /// Swept over representative angle triples outside gimbal lock (|pitch|≈90°).
     #[test]
     fn quat_euler_quat_round_trip_preserves_rotation() {
         let samples = [
@@ -235,7 +235,7 @@ mod tests {
         }
     }
 
-    /// 360°'lik tam tur, sıfır dönüş ile aynı rotasyonu vermeli (periyodiklik).
+    /// A full 360° turn must give the same rotation as none at all (periodicity).
     #[test]
     fn full_turn_is_equivalent_to_no_rotation() {
         let q_full = euler_deg_to_quat(360.0, 0.0, 0.0);

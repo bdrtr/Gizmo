@@ -1,9 +1,9 @@
-//! Küçük paylaşılan yardımcılar — biçimlendirme + JSON/Chrome-trace serileştirme.
-//! (report / panel / trace modülleri arasında tek kaynak olsun diye buradadır.)
+//! Small shared helpers — formatting plus JSON/Chrome-trace serialisation.
+//! (They live here so that the report, panel and trace modules share one source.)
 
 use std::fmt::Write as _;
 
-/// İnsan dostu bayt biçimi.
+/// A human-friendly byte format.
 pub(crate) fn human_bytes(b: usize) -> String {
     const KB: f64 = 1024.0;
     const MB: f64 = KB * 1024.0;
@@ -17,7 +17,7 @@ pub(crate) fn human_bytes(b: usize) -> String {
     }
 }
 
-/// JSON string kaçışı (yalnız gerekli karakterler + kontrol karakterleri).
+/// JSON string escaping (only the characters that need it, plus control characters).
 pub(crate) fn json_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     for c in s.chars() {
@@ -36,8 +36,8 @@ pub(crate) fn json_escape(s: &str) -> String {
     out
 }
 
-/// Tek bir Chrome-trace "complete" (`ph:"X"`) olayını `out`'a yazar. `args` verilirse
-/// ham JSON gövdesi olarak eklenir (ör. `"frame":3`). İsim ve kategori kaçışlanır.
+/// Writes a single Chrome-trace "complete" (`ph:"X"`) event into `out`. If `args` is given it is
+/// appended as a raw JSON body (e.g. `"frame":3`). The name and category are escaped.
 pub(crate) fn write_trace_event(
     out: &mut String,
     name: &str,

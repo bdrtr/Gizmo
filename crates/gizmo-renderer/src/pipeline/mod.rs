@@ -1,7 +1,7 @@
-//! Sahne render pipeline'larının kurulumu: layout'lar, shadow kaynakları, core/shadow
-//! pipeline'ları ve global bind group'lar. Alt modüllere bölünmüştür; genel API
-//! (SceneState, build_scene_pipelines, rebuild_pipelines, load_shader) bu modülden
-//! değişmeden yeniden ihraç edilir.
+//! Setting up the scene render pipelines: layouts, shadow resources, the core and shadow
+//! pipelines, and the global bind groups. Split into submodules; the public API (SceneState,
+//! build_scene_pipelines, rebuild_pipelines, load_shader) is re-exported unchanged from this
+//! module.
 
 mod layouts;
 mod pipelines;
@@ -393,23 +393,25 @@ pub fn rebuild_pipelines(renderer: &mut crate::Renderer) {
 mod tests {
     use super::*;
 
-    /// Çekirdek WGSL shader'ları headless device'ta naga ile derlenebilmeli.
-    /// shader.wgsl/gbuffer.wgsl düzenlemelerinin (skinned-normal inverse-transpose vb.)
-    /// WGSL'i geçersiz kılmadığını doğrular. GPU adapter yoksa graceful atlanır.
+    /// The core WGSL shaders must compile with naga on a headless device.
+    /// This checks that edits to shader.wgsl/gbuffer.wgsl (the skinned-normal inverse-transpose
+    /// and the like) have not made the WGSL invalid. Skipped gracefully when there is no GPU
+    /// adapter.
     ///
-    /// **Geçmesi, shader'ın her arka uçta derleneceği anlamına GELMEZ — ve bu bir kez pahalıya
-    /// mal oldu.** Burada olan şey bir `create_shader_module`: naga WGSL'i doğrular. Oysa gerçek
-    /// derleme, naga'nın hedef dili üretip (D3D12'de HLSL) o dilin derleyicisinin (FXC) kabul
-    /// etmesiyle tamamlanır, ve o derleyicinin bu katmanın hiç bilmediği kısıtları vardır.
-    /// 2026-08-14: gölge PCF döngüsü `textureSampleCompare` çağırıyordu — örtük türev — ve
-    /// koşullu bir dalın içindeydi. WGSL'e göre kusursuz, FXC'ye göre *"gradient instruction used
-    /// in a loop with varying iteration"*, ve **Deferred Lighting pipeline'ı Windows'ta hiç
-    /// kurulamıyordu**: D3D12'de motor hiçbir şey çizmiyordu. Bu testin dokuz ay boyunca yeşil
-    /// kaldığı bir kusur.
+    /// **Passing does NOT mean the shader compiles on every backend — and that cost something
+    /// once.** What happens here is a `create_shader_module`: naga validates the WGSL. Real
+    /// compilation finishes when naga has emitted the target language (HLSL on D3D12) and *that*
+    /// language's compiler (FXC) accepts it — and that compiler has constraints this layer knows
+    /// nothing about. On 2026-08-14 the shadow PCF loop called `textureSampleCompare` — an
+    /// implicit derivative — inside a conditional branch. Flawless by WGSL, but to FXC a
+    /// *"gradient instruction used in a loop with varying iteration"*, and **the deferred
+    /// lighting pipeline could not be created at all on Windows**: on D3D12 the engine drew
+    /// nothing. A defect this test stayed green through for nine months.
     ///
-    /// Arka uca özgü derlemeyi yakalayan tek şey, o arka uçta gerçekten **pipeline kuran** bir
-    /// test: `gizmo`'nun `golden_render_tests`'i, CI'nin üç platformunda üç ayrı arka uç sürüyor.
-    /// Buradaki liste bir tip denetimidir; oradaki liste kapsama.
+    /// The only thing that catches backend-specific compilation is a test that actually
+    /// **creates a pipeline** on that backend: `gizmo`'s `golden_render_tests`, which drive three
+    /// different backends across CI's three platforms. The list here is a type check; the list
+    /// there is coverage.
     #[test]
     fn core_shaders_compile() {
         // Bu test kendi wgpu cihazını kuruyor. Guard testin TAMAMI boyunca tutulur —

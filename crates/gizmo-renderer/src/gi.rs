@@ -1,12 +1,13 @@
-//! Spherical Harmonics (SH) Probe — Global Illumination altyapısı
+//! Spherical-harmonics (SH) probes — the global-illumination machinery.
 //!
-//! ## Mimari
-//! 1. **SH Probe**: Sahnedeki bir noktada 2. derece SH katsayılarını saklar (L0, L1, L2 = 9 katsayı)
-//! 2. **Probe Grid**: Sahnede düzenli aralıklarla yerleştirilmiş probe ızgarası
-//! 3. **Irradiance Baking**: Her probe için ambient aydınlatma hesaplanır
-//! 4. **Runtime Lookup**: Shader'da en yakın probe'lardan trilinear interpolasyon
+//! ## Architecture
+//! 1. **SH probe**: stores second-order SH coefficients at a point in the scene (L0, L1, L2 = 9
+//!    coefficients)
+//! 2. **Probe grid**: a regularly spaced grid of probes across the scene
+//! 3. **Irradiance baking**: the ambient lighting is computed for each probe
+//! 4. **Runtime lookup**: trilinear interpolation from the nearest probes, in the shader
 //!
-//! Bevy/Unity/Unreal'deki Light Probe sistemiyle eşdeğerdir.
+//! Equivalent to the light-probe systems in Bevy, Unity and Unreal.
 
 use gizmo_math::Vec3;
 
@@ -15,18 +16,18 @@ use web_time::Instant;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
 
-/// 2. derece Spherical Harmonics katsayıları (9 katsayı × 3 kanal = 27 float)
+/// Second-order spherical-harmonics coefficients (9 coefficients × 3 channels = 27 floats).
 ///
-/// Band 0 (L=0): 1 katsayı  → ortam ışığı (DC bileşen)
-/// Band 1 (L=1): 3 katsayı  → yönlü gradient
-/// Band 2 (L=2): 5 katsayı  → detay
+/// Band 0 (L=0): 1 coefficient  → ambient light (the DC component)
+/// Band 1 (L=1): 3 coefficients → the directional gradient
+/// Band 2 (L=2): 5 coefficients → detail
 #[derive(Debug, Clone, Copy)]
 pub struct SHCoeffs {
     /// L0 band (ambient/constant term) — RGB
     pub l0: Vec3,
     /// L1 band (directional gradients) — 3 yön × RGB
     pub l1: [Vec3; 3],
-    /// L2 band (quadratic detail) — 5 katsayı × RGB
+    /// The L2 band (quadratic detail) — 5 coefficients × RGB
     pub l2: [Vec3; 5],
 }
 
@@ -41,7 +42,7 @@ impl Default for SHCoeffs {
 }
 
 impl SHCoeffs {
-    /// Verilen yönden gelen ışığı SH katsayılarına ekler
+    /// Adds light arriving from the given direction into the SH coefficients.
     pub fn add_directional_light(&mut self, direction: Vec3, color: Vec3) {
         let d = direction.normalize();
 
@@ -71,7 +72,7 @@ impl SHCoeffs {
         self.l2[4] += color * y2_pos2;
     }
 
-    /// Verilen yöndeki ışık radyansını (irradiance) hesaplar
+    /// Computes the irradiance in the given direction.
     pub fn evaluate(&self, direction: Vec3) -> Vec3 {
         let d = direction.normalize();
 
@@ -99,7 +100,7 @@ impl SHCoeffs {
         Vec3::new(result.x.max(0.0), result.y.max(0.0), result.z.max(0.0))
     }
 
-    /// İki SH katsayısını lineer interpolasyon yapar
+    /// Linearly interpolates two sets of SH coefficients.
     pub fn lerp(&self, other: &Self, t: f32) -> Self {
         let lerp_v = |a: Vec3, b: Vec3| -> Vec3 {
             Vec3::new(
@@ -161,7 +162,7 @@ impl SHCoeffs {
     }
 }
 
-/// Tek bir Light Probe — sahne içindeki belirli bir pozisyonda SH katsayılarını tutar
+/// A single light probe — holds the SH coefficients at one position in the scene.
 #[derive(Debug, Clone)]
 pub struct LightProbe {
     pub position: Vec3,
@@ -179,7 +180,7 @@ impl LightProbe {
     }
 }
 
-/// Probe Grid — Sahnede düzenli aralıklarla yerleştirilmiş probe ızgarası
+/// The probe grid — probes placed at regular intervals across the scene.
 pub struct ProbeGrid {
     pub probes: Vec<LightProbe>,
     pub grid_min: Vec3,
@@ -189,7 +190,7 @@ pub struct ProbeGrid {
 }
 
 impl ProbeGrid {
-    /// Verilen sınırlar içinde düzenli bir probe ızgarası oluşturur
+    /// Builds a regular grid of probes within the given bounds.
     pub fn new(min: Vec3, max: Vec3, resolution: [u32; 3]) -> Self {
         let extent = max - min;
         let cell_size = Vec3::new(
@@ -221,10 +222,10 @@ impl ProbeGrid {
         }
     }
 
-    /// Basit baking: Sahne ışıklarından her probe için SH katsayılarını hesaplar
+    /// Simple baking: computes each probe's SH coefficients from the scene's lights.
     ///
-    /// Gerçek bir path-tracer yerine, mevcut DirectionalLight ve PointLight'ları
-    /// analitik olarak SH'ya projekte ederiz.
+    /// Instead of a real path tracer, it projects the existing DirectionalLights and PointLights
+    /// into SH analytically.
     pub fn bake_from_lights(
         &mut self,
         directional_lights: &[(Vec3, Vec3, f32)], // (direction, color, intensity)
@@ -276,7 +277,7 @@ impl ProbeGrid {
         );
     }
 
-    /// Dünya pozisyonundaki noktadan trilineer interpolasyon ile SH değeri okur
+    /// Reads the SH value at a world position by trilinear interpolation.
     pub fn sample(&self, world_pos: Vec3) -> SHCoeffs {
         // An empty grid (zero-resolution axis) would make `probes.len() - 1` in the
         // corner fetch underflow and panic; return a neutral coefficient set instead.
@@ -332,7 +333,7 @@ impl ProbeGrid {
         c0.lerp(&c1, tz)
     }
 
-    /// Probe sayısı
+    /// How many probes there are.
     pub fn probe_count(&self) -> usize {
         self.probes.len()
     }

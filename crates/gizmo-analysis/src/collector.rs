@@ -1,24 +1,25 @@
-//! Collector'lar — her frame dünyayı okuyup snapshot'a metrik ekleyen eklentiler.
+//! Collectors — the plug-ins that read the world each frame and add metrics to the snapshot.
 //!
-//! Yeni bir alt-sistemi analiz edilebilir yapmak için tek yapılması gereken bir
-//! `Collector` yazıp `Analyzer`'a kaydetmektir. Böylece "en ufak ayrıntı" sınırsızca
-//! genişletilebilir kalır.
+//! Making a new subsystem analysable takes nothing more than writing a `Collector` and
+//! registering it with the `Analyzer`, which is what keeps "the smallest detail" open-endedly
+//! extensible.
 
 use crate::snapshot::FrameSnapshot;
 use gizmo_core::world::World;
 
-/// Her frame çağrılan analiz toplayıcısı.
+/// An analysis collector, called every frame.
 pub trait Collector: Send + Sync {
-    /// Grup adı (snapshot metrik grubu olarak da kullanılır).
+    /// The group name (also used as the snapshot's metric group).
     fn name(&self) -> &'static str;
-    /// Dünyayı oku, `out`'a metrik/ayrıntı ekle. Dünyayı DEĞİŞTİRME.
+    /// Read the world and add metrics/details to `out`. Do NOT mutate the world.
     fn collect(&mut self, world: &World, out: &mut FrameSnapshot);
 }
 
-/// Yerleşik ECS toplayıcısı — entity/archetype/component/bellek durumunu çıkarır.
+/// The built-in ECS collector — extracts entity/archetype/component/memory state.
 #[derive(Debug, Clone)]
 pub struct EcsCollector {
-    /// Ayrıntılı per-archetype tabloyu topla (biraz daha ağır). Kapalıysa yalnız üst-düzey.
+    /// Collect the detailed per-archetype table (somewhat heavier). While off, only the
+    /// top-level figures.
     pub detailed_archetypes: bool,
 }
 
