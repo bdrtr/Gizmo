@@ -16,6 +16,36 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A crate resting on a slope no longer runs away — the friction cone was choosing its
+  coefficient from the wrong quantity.** With the default material (`μ_s` 0.6, `μ_d` 0.5) the
+  friction angle is `atan(0.6)` = 30.96°, so a body at rest on anything shallower must stay put.
+  It did not: measured on a 1 kg crate over 10 s, a 28° slope produced **26 m of slide and the
+  crate leaving the plate**, and a 30° slope **77 m, still accelerating at 27 m/s**. Below
+  `atan(μ_d)` = 26.57° the same fault showed as creep instead (2.8 mm at 25°, and 107 mm over
+  200 s for a box held at 99 % of its static limit on the flat).
+
+  The coefficients were never the problem: setting `μ_d = μ_s` made every slope hold, which is
+  what identified the *transition* as the fault. The cone clamped to `μ_d·λ_n` whenever the
+  **demanded** impulse exceeded `μ_s·λ_n` on a sweep — but `λ_n` fluctuates between sweeps and
+  substeps, so a contact standing perfectly still was intermittently charged the dynamic rate and
+  lost the `(μ_s − μ_d)·λ_n` of hold it was entitled to. Above the dynamic friction angle that
+  slip feeds itself.
+
+  The budget now comes from the contact's **actual tangential speed** (the model PhysX uses):
+  static below `ConstraintSolver::static_friction_velocity_threshold` (new, default 1 cm/s),
+  dynamic above it. All five friction solves in the crate — TGS sweep, block sweep, island sweep,
+  the SI path and the standalone one-shot — went through five copies of the same four lines and
+  now call one `friction_limit` helper.
+
+  After: 28° slides 6.7 mm and stops, 30° slides 9.6 mm and stops, and flat-ground creep improves
+  44× at 90 % of the limit and 7.5× at 99 %. Gated by
+  `soak_and_golden::a_crate_holds_on_a_slope_below_the_friction_angle`. **Determinism is
+  unchanged** (`headless_stress_test`, three matching hashes, `A462C9EB8A09D5CA`): its scenario is
+  a 2000-box collapse whose contacts slide far above the threshold, so it runs the dynamic branch
+  throughout. No golden scene needed re-blessing.
+
 ### Changed
 
 - **Joints warm-start by default (`JointSolver::warm_start_factor` 0.0 → 0.5) — a physics

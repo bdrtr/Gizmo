@@ -989,3 +989,91 @@ fn a_block_with_a_two_centimetre_lateral_gap_stays_standing() {
         );
     }
 }
+
+/// A crate resting on a slope **below the friction angle** must stay where it is.
+///
+/// # The defect this locks out
+///
+/// `atan(μ_s)` for the default material (0.6) is 30.96°, so a crate at rest on anything shallower
+/// than that is held by static friction and must not move. It did not: measured 2026-08-17, a 1 kg
+/// crate left the plate entirely.
+///
+/// | slope | before | after |
+/// |---|---|---|
+/// | 25° | 2.8 mm in 10 s | 2.8 mm |
+/// | 28° | **26 m, fell off the plate** | 6.7 mm |
+/// | 30° | **77 m, still accelerating at 27 m/s** | 9.6 mm |
+///
+/// The cause was the friction cone's state test, not the coefficients: it clamped to `μ_d·λ_n`
+/// whenever the *demanded* impulse exceeded `μ_s·λ_n` on a sweep, and `λ_n` fluctuates between
+/// sweeps, so a contact standing perfectly still was intermittently charged the dynamic rate and
+/// lost the `(μ_s − μ_d)·λ_n` of hold it was entitled to. Below `atan(μ_d)` = 26.57° that leaks as
+/// creep; above it, gravity outruns dynamic friction and the slip feeds itself. Setting
+/// `μ_d = μ_s` made all three slopes hold, which is what identified the transition rather than the
+/// magnitude as the fault. The fix picks the budget from the contact's actual tangential speed
+/// (`ConstraintSolver::friction_limit`).
+///
+/// The band 26.57°–30.96° is where this is visible, so that is where the gate sits.
+#[test]
+fn a_crate_holds_on_a_slope_below_the_friction_angle() {
+    for deg in [28.0f32, 30.0] {
+        let rad = deg.to_radians();
+        let mut world = PhysicsWorld::new();
+        let mut ground = RigidBody::new_static();
+        ground.wake_up();
+        let no_bounce = PhysicsMaterial {
+            restitution: 0.0,
+            ..Default::default()
+        };
+        world.add_body(
+            BodyHandle::from_id(0),
+            ground,
+            Transform {
+                position: Vec3::new(0.0, -1.0, 0.0),
+                rotation: gizmo_math::Quat::from_rotation_z(rad),
+                ..Default::default()
+            },
+            Velocity::default(),
+            Collider::box_collider(Vec3::new(50.0, 1.0, 50.0)).with_material(no_bounce),
+        );
+        let mut rb = RigidBody::new(1.0, true);
+        rb.wake_up();
+        let col = Collider::box_collider(Vec3::splat(0.5)).with_material(no_bounce);
+        rb.update_inertia_from_collider(&col);
+        world.add_body(
+            BodyHandle::from_id(1),
+            rb,
+            Transform {
+                position: Vec3::new(0.0, 0.62, 0.0),
+                rotation: gizmo_math::Quat::from_rotation_z(rad),
+                ..Default::default()
+            },
+            Velocity::default(),
+            col,
+        );
+
+        // Land and settle on the incline, then watch for 10 s.
+        for _ in 0..300 {
+            world.step(1.0 / 60.0).ok();
+        }
+        let start = world.transforms[1].position;
+        for _ in 0..600 {
+            // Held awake deliberately: sleeping would hide the defect, and the question is what
+            // the solver does with a live contact under sustained tangential load.
+            world.rigid_bodies[1].wake_up();
+            world.step(1.0 / 60.0).ok();
+        }
+        let slide = (world.transforms[1].position - start).length();
+        let speed = world.velocities[1].linear.length();
+
+        assert!(
+            slide < 0.05,
+            "{deg}° slope: the crate slid {slide:.4} m in 10 s — static friction (mu_s 0.6, \
+             friction angle 30.96°) must hold it"
+        );
+        assert!(
+            speed < 0.01,
+            "{deg}° slope: the crate is still moving at {speed:.4} m/s after 10 s"
+        );
+    }
+}

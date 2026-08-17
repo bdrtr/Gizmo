@@ -171,15 +171,16 @@ impl ConstraintSolver {
             return;
         }
 
-        let max_static = static_friction * normal_impulse.abs();
-        let max_dynamic = dynamic_friction * normal_impulse.abs();
+        // Coulomb bütçesi: duran temas μ_s, kayan temas μ_d (bkz. `friction_limit`). `tang_mag`
+        // zaten bu temasın teğet hızı, yani durum testi burada bedava.
+        let limit = self.friction_limit(tang_mag, static_friction, dynamic_friction, normal_impulse);
 
         let delta_t = -tang_mag / k;
 
-        let jt = if delta_t.abs() <= max_static {
+        let jt = if delta_t.abs() <= limit {
             delta_t
         } else {
-            delta_t.signum() * max_dynamic
+            delta_t.signum() * limit
         };
 
         let ft = tangent * jt;

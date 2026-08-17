@@ -327,6 +327,32 @@ pub struct ConstraintSolver {
     /// açılmadı. Hazır ve gated.
     pub rotating_anchors: bool,
 
+    /// Bir temasın "kayıyor" sayılması için gereken teğet hız (m/s) — Coulomb bütçesinin
+    /// **statik mi dinamik mi** olduğuna bu karar verir.
+    ///
+    /// # Neden bir eşik, "talep aştı mı" değil
+    ///
+    /// Koni kırpması eskiden şöyleydi: talep edilen teğet impuls `μ_s·λ_n`'i aşarsa `μ_d·λ_n`'e
+    /// ölçekle. Kulağa Coulomb gibi geliyor ama durum testi olarak YANLIŞ: `λ_n` sweep'ler ve
+    /// substep'ler arasında dalgalanıyor, dolayısıyla TAM DURAN bir temas da arada bir eşiği
+    /// aşıp dinamik bütçeye düşüyor ve hak ettiği `(μ_s − μ_d)·λ_n` tutuş kuvvetini kaybediyor.
+    /// Kaybettiği kuvvet küçük, sonucu değil: `atan(μ_d)` eğiminin üstünde kaçış kendini
+    /// besliyor. Ölçüldü (2026-08-17), μ_s=0.6 / μ_d=0.5 varsayılanlarıyla, 1 kg sandık:
+    ///
+    /// | eğim | tan θ / μ_s | eski davranış | olması gereken |
+    /// |---|---|---|---|
+    /// | 25° | 0.78 | 10 s'de 2.8 mm sürüklenme | durmalı |
+    /// | 28° | 0.89 | **10 s'de 26 m kayıp, tabladan düştü** | durmalı (μ_s tutar) |
+    /// | 30° | 0.96 | **10 s'de 77 m, 27 m/s** | durmalı |
+    ///
+    /// `μ_d`'yi `μ_s`'ye eşitlemek üçünü de durduruyordu — yani sorun sürtünmenin büyüklüğü
+    /// değil, statik/dinamik geçişinin yanlış tetiklenmesiydi.
+    ///
+    /// Artık bütçeyi temasın GERÇEK teğet hızı seçiyor (PhysX'in `PxMaterial` modeli): eşiğin
+    /// altında statik, üstünde dinamik. Varsayılan 1 cm/s — bir oyunda "duruyor" denecek her şey
+    /// bunun altında, gerçekten kayan hiçbir şey değil.
+    pub static_friction_velocity_threshold: f32,
+
     /// Warm-start eşleme toleransı (m): bir önceki substep'in temas impulsu, YENİ temas
     /// noktasına yalnız bu mesafeden yakınsa taşınır (pipeline.rs narrowphase warm-start).
     /// Dinlenen yığın instabilitesinin ENJEKSİYON KANALI burası: kaymış bir temas noktasına
@@ -422,6 +448,7 @@ impl Default for ConstraintSolver {
             max_bias_velocity: 4.0,
             support_ordering: true,
             rotating_anchors: false,
+            static_friction_velocity_threshold: 0.01,
             warm_start_match_tolerance: 0.02,
             block_solver: true,
             adaptive_iterations: true,
@@ -448,6 +475,34 @@ impl ConstraintSolver {
             ..Default::default()
         }
     }
+    /// The Coulomb impulse budget for one contact point this sweep.
+    ///
+    /// `μ_s·λ_n` while the contact is effectively at rest, `μ_d·λ_n` once it is genuinely
+    /// sliding — the decision comes from `tangential_speed`, not from whether the demanded
+    /// impulse happened to exceed the static cap on this sweep. See
+    /// [`static_friction_velocity_threshold`](Self::static_friction_velocity_threshold) for what
+    /// the old test cost (a crate on a 28° slope left the plate) and why this is the fix.
+    ///
+    /// All five friction solves in the crate call this: the TGS sweep, the block sweep, the
+    /// island sweep, the SI path and the standalone one-shot. They had five copies of the same
+    /// four lines, which is how they came to disagree about nothing and would have come to
+    /// disagree about this.
+    #[inline]
+    pub(crate) fn friction_limit(
+        &self,
+        tangential_speed: f32,
+        static_friction: f32,
+        dynamic_friction: f32,
+        normal_impulse: f32,
+    ) -> f32 {
+        let mu = if tangential_speed > self.static_friction_velocity_threshold {
+            dynamic_friction
+        } else {
+            static_friction
+        };
+        mu * normal_impulse.abs()
+    }
+
 
     // ─────────────────────────────────────────────────────────────────────────
     // ANA SOLVER: Manifold listesi üzerinde PGS (Projected Gauss-Seidel)
@@ -844,12 +899,18 @@ impl ConstraintSolver {
                         acc_t2
                     };
 
-                    // Dairesel Coulomb koni: |(new1,new2)| ≤ μ_s·N ise statik; aşarsa μ_d·N'e ölçekle.
-                    let max_static = manifolds[mid].static_friction * new_acc_n.abs();
-                    let max_dynamic = friction * new_acc_n.abs();
+                    // Dairesel Coulomb koni: bütçe temasın teğet hızından geliyor (duran temas
+                    // μ_s, gerçekten kayan temas μ_d) — bkz. `friction_limit`.
+                    let tang_speed = (rel2 - normal * rel2.dot(normal)).length();
+                    let limit = self.friction_limit(
+                        tang_speed,
+                        manifolds[mid].static_friction,
+                        friction,
+                        new_acc_n,
+                    );
                     let mag = (new1 * new1 + new2 * new2).sqrt();
-                    if mag > max_static && mag > 1e-12 {
-                        let s = max_dynamic / mag;
+                    if mag > limit && mag > 1e-12 {
+                        let s = limit / mag;
                         new1 *= s;
                         new2 *= s;
                     }

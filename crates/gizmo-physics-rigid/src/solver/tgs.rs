@@ -734,11 +734,13 @@ impl ConstraintSolver {
             } else {
                 acc_t2
             };
-            let max_static = p.static_friction * new_acc_n.abs();
-            let max_dynamic = p.friction * new_acc_n.abs();
+            // Coulomb bütçesi: duran temas μ_s, kayan temas μ_d (bkz. `friction_limit`).
+            let tang_speed = (rel2 - p.normal * rel2.dot(p.normal)).length();
+            let limit =
+                self.friction_limit(tang_speed, p.static_friction, p.friction, new_acc_n);
             let mag = (new1 * new1 + new2 * new2).sqrt();
-            if mag > max_static && mag > 1e-12 {
-                let s = max_dynamic / mag;
+            if mag > limit && mag > 1e-12 {
+                let s = limit / mag;
                 new1 *= s;
                 new2 *= s;
             }
@@ -865,11 +867,13 @@ impl ConstraintSolver {
                 } else {
                     acc_t2
                 };
-                let max_static = p.static_friction * p.acc_n.abs();
-                let max_dynamic = p.friction * p.acc_n.abs();
+                // Coulomb bütçesi: duran temas μ_s, kayan temas μ_d (bkz. `friction_limit`).
+                let tang_speed = (rel2 - p.normal * rel2.dot(p.normal)).length();
+                let limit =
+                    self.friction_limit(tang_speed, p.static_friction, p.friction, p.acc_n);
                 let mag = (new1 * new1 + new2 * new2).sqrt();
-                if mag > max_static && mag > 1e-12 {
-                    let s = max_dynamic / mag;
+                if mag > limit && mag > 1e-12 {
+                    let s = limit / mag;
                     new1 *= s;
                     new2 *= s;
                 }
@@ -980,11 +984,12 @@ impl ConstraintSolver {
             } else {
                 acc_t2
             };
-            let max_static = p.static_friction * p.acc_n.abs();
-            let max_dynamic = p.friction * p.acc_n.abs();
+            // Coulomb bütçesi: duran temas μ_s, kayan temas μ_d (bkz. `friction_limit`).
+            let tang_speed = (rel2 - p.normal * rel2.dot(p.normal)).length();
+            let limit = self.friction_limit(tang_speed, p.static_friction, p.friction, p.acc_n);
             let mag = (new1 * new1 + new2 * new2).sqrt();
-            if mag > max_static && mag > 1e-12 {
-                let s = max_dynamic / mag;
+            if mag > limit && mag > 1e-12 {
+                let s = limit / mag;
                 new1 *= s;
                 new2 *= s;
             }

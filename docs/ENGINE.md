@@ -131,17 +131,25 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
   the cap to rise at all — and that is the reason this engine has a deferred pipeline. Raising
   `MAX_LIGHTS` on its own means editing seven WGSL files plus `shader_contract.rs` and paying an
   unclustered per-fragment loop for every light, which is the trade clustering exists to avoid.
-- **Friction has no positional term** — a modelling gap, no longer a stability lead. The normal
-  channel carries `pen0` into the bias in all three sweeps (`solver/tgs.rs`), which is what
-  depenetrates and what makes TGS work. The tangent channel has no counterpart: all three friction
-  solves are pure `acc_t − rel·t/k_t`, i.e. velocity-level only, so friction resists tangential
-  *velocity* and never tangential *displacement*. It was listed here as the standing candidate for
-  the tall-stack growth rate — and that growth rate is now measured at exactly zero (§7, N1/N2
-  closed 2026-08-17: peak lean 0.0000 for N=16/32/48 at every ground half-extent from 20 to 200).
-  So the symptom it was going to fix does not exist. What remains is real but different: sustained
-  lateral load should produce no creep at all under static friction, and velocity-level friction
-  cannot promise that. **Trigger to do it:** a measured creep — a body that walks under a constant
-  tangential force it should hold against — not a stack that topples.
+- **Friction has no positional term** — a modelling gap. Narrowed twice on 2026-08-17, and worth
+  reading in that order. The normal channel carries `pen0` into the bias in all three sweeps
+  (`solver/tgs.rs`); the tangent channel has no counterpart — every friction solve is pure
+  `acc_t − rel·t/k_t`, velocity-level only, so friction resists tangential *velocity* and never
+  tangential *displacement*.
+  - It was listed as the standing candidate for the tall-stack growth rate. That growth rate is
+    now measured at exactly zero (§7, N1/N2 closed: peak lean 0.0000 for N=16/32/48 at every
+    ground half-extent from 20 to 200), so that motivation is gone.
+  - Chasing the trigger this item was left with — "a measured creep" — found one, and it was not a
+    missing positional term: the friction **cone** was picking its coefficient from the demanded
+    impulse rather than from whether the contact was sliding, and a crate at rest on a 28° slope
+    left the plate. Fixed (§7 "The slope a crate could not stand on"), and the residual creep fell
+    44× at 90 % of the static limit and 7.5× at 99 %.
+  - **What is genuinely left** is the last of that residual: 14 mm over 200 s for a box held at
+    99 % of its limit, because `λ_n` still fluctuates and a velocity-level row cannot undo a
+    displacement that already happened. A persistent tangential anchor (Box2D v3 / Rapier's
+    "friction anchors") is the fix, and `ContactPoint` already carries `local_point_a/b` plus the
+    warm-start match that would freeze them. **Trigger:** a game that needs sub-millimetre hold at
+    the friction limit. Not before — the visible symptom is gone.
 - **The doc-language rule, Stage B remainder.** Stage A plus the facade went from 1286 Turkish
   `///` lines to 8, and seven of those eight are measurement error. The Stage B crates
   (renderer, editor, studio, scripting, app) have not been through it.
@@ -1006,6 +1014,53 @@ Refuted on the way, and none of them worth re-testing:
 | accumulated slip discriminates survivors | same | **dead** — survivors accumulate MORE (0.521 vs 0.462) |
 | contact jitter grows with ground | `does_a_settled_contact_jitter_more_on_a_bigger_ground` | **dead** — a settled contact is bit-stable at every size, 0 jitter over 600 frames |
 | "no mechanism, just a different sample" | ground 20.000 → 20.001 → 20.01 → 20.1 → 21.0 | **dead** — a millimetre on a 40 m box does not scatter the result; peak leans stay within 0.004 |
+
+### The slope a crate could not stand on (2026-08-17, FIXED)
+
+Found by chasing the trigger left on the "friction has no positional term" item (§3) — the item
+asked for "a measured creep", and looking for one turned up something much larger.
+
+The default material is `μ_s` 0.6 / `μ_d` 0.5, so the friction angle is `atan(0.6)` = 30.96° and a
+body at rest on anything shallower must not move. Measured, 1 kg crate, 10 s after settling:
+
+| slope | tan θ / μ_s | before | after |
+|---|---|---|---|
+| 25° | 0.78 | 2.8 mm | 2.8 mm |
+| 28° | 0.89 | **26 m — left the plate** | 6.7 mm, at rest |
+| 30° | 0.96 | **77 m, still accelerating at 27 m/s** | 9.6 mm, at rest |
+
+And on the flat, a box pushed at a constant fraction of its static limit crept **linearly, forever**
+— 0.000533 m/s at 99 % (107 mm over 200 s), 0.000030 m/s at 90 %. After the fix: 0.000071 and
+0.000001 m/s (7.5× and 44×).
+
+**The coefficients were never the fault.** Setting `μ_d = μ_s` = 0.6 made all three slopes hold;
+so did 1.2/1.2, identically — the magnitude changed nothing, the *gap* changed everything. That is
+what pointed at the transition:
+
+```rust
+if mag > max_static { scale to max_dynamic }   // the old test, in five places
+```
+
+`mag` is the impulse *demanded on this sweep* and `max_static` is `μ_s·λ_n` — but `λ_n` fluctuates
+between sweeps and substeps, so a contact standing perfectly still occasionally demands more than
+the static cap and is charged the dynamic rate for it, losing `(μ_s − μ_d)·λ_n` of hold it was
+entitled to. Below `atan(μ_d)` = 26.57° the loss shows up as creep; above it, gravity outruns
+dynamic friction and the slip feeds itself, which is exactly the band 26.57°–30.96° where the crate
+ran away. The sharp cliff between 25° (2.8 mm) and 28° (26 m) is that boundary, not a threshold in
+the code.
+
+The fix is to decide the budget from the contact's **actual tangential speed**, which is what
+"sliding" means and what PhysX's `PxMaterial` does: static below
+`ConstraintSolver::static_friction_velocity_threshold` (new, 1 cm/s), dynamic above. The five
+copies of the clamp — TGS sweep, block sweep, island sweep, SI path, standalone one-shot — now call
+one `friction_limit` helper, because five copies is how they would have come to disagree about it.
+
+Gate: `soak_and_golden::a_crate_holds_on_a_slope_below_the_friction_angle` (28° and 30°, both
+inside the band). **Determinism unchanged** — `headless_stress_test` gives three matching
+`A462C9EB8A09D5CA`, the same value as before the change, because its 2000-box collapse slides far
+above the threshold and never takes the static branch; no golden scene moved either. That is worth
+stating precisely rather than as reassurance: this change is invisible to the determinism gate, so
+the *slope* gate is the one that guards it.
 
 ### Do not re-chase (carried from the campaign)
 
