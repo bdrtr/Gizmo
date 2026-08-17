@@ -51,10 +51,12 @@ egui = ["dep:egui", "dep:egui-winit", "dep:egui-wgpu", "render"]
 # `scene` for its save/load request handling.
 editor = ["egui", "scene", "dep:gizmo-editor"]
 scene = ["dep:gizmo-scene", "dep:gizmo-scripting"]
-# Physical game controllers, through gilrs. Target-gated like `scene`'s scripting half: the
-# dependency exists only off wasm32 (browsers expose gamepads through a different, polled API
-# that is not wired yet), so `dep:gilrs` here is a no-op on the web and the feature stays
-# additive — turning it on never removes anything, and the module simply does not exist there.
+# Physical game controllers, through gilrs — on every target, including the browser.
+#
+# It WAS target-gated off wasm32, on the grounds that "browsers expose gamepads through a
+# different, polled API that is not wired yet". gilrs wires it: its wasm backend reads the Web
+# Gamepad API through web-sys and turns the browser's polled snapshot into the same event stream
+# the native backends produce, so the engine's side is identical on both.
 #
 # It is on by default because a controller that does nothing until the developer finds a
 # feature flag is indistinguishable from one that is broken. Off, the engine builds without
@@ -77,6 +79,13 @@ gilrs = { version = "0.11.2", optional = true }
 gizmo-scripting = { path = "../gizmo-scripting" , version = "0.10.0", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+# The browser's gamepads, through gilrs's wasm backend (web-sys + the Web Gamepad API).
+#
+# Default features, for the same reason as the native entry and verified the hard way: gilrs's
+# `compile_error!` about `xinput`/`wgi` is NOT gated on Windows, so `default-features = false`
+# fails on wasm32 too — the comment above already said so, and trying it anyway is how that got
+# re-confirmed. The Windows backends are simply unused here.
+gilrs = { version = "0.11.2", optional = true }
 wasm-bindgen = "0.2"
 console_error_panic_hook = "0.1"
 console_log = "1.0"

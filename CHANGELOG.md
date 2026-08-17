@@ -62,6 +62,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `gizmo_editor::rebinding::ui_rebinding_panel` draws the rows. It takes the map and the input
   rather than owning them, so a game's settings screen can use the same panel.
 
+- **Gamepads in the browser.** The `gamepad` feature is no longer native-only: gilrs's wasm
+  backend reads the Web Gamepad API, and the engine's side is identical on both targets.
+  `demo-web` enables it explicitly, and CI lints the wasm arm with the feature on.
+
+  Two browser-only facts, documented at the backend: the page must be a secure context, and the
+  gamepad list stays empty until the player presses a button — so "no pad connected" is the normal
+  first state on the web rather than an error.
+
 - **Gamepad rumble.** `Input::rumble(weak, strong, duration_secs)` and `Input::rumble_pad` queue a
   request; `GamepadBackend::apply_rumble` hands it to the driver. The two motors are separate and
   named for the feeling — `weak` buzzes, `strong` thumps — because a game that sets only one is

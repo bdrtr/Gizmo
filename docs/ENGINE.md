@@ -168,10 +168,30 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
 
   **Not covered, with triggers.** *A control held while the game launches* — see above; it needs
   reading the device's state directly, which is the backend's job and not ours. **Trigger:** a
-  gilrs release that reads initial state, or a complaint. *The browser:* gilrs ships a wasm
-  backend, but it is polled
-  rather than evented and nothing here can verify it — **trigger:** a browser with a pad in front
-  of someone. *Rumble — WIRED (2026-08-18), with a
+  gilrs release that reads initial state, or a complaint. *The browser — WIRED (2026-08-18).* gilrs's wasm backend reads
+  the Web Gamepad API through web-sys and turns the browser's polled snapshot into the same event
+  stream the native backends produce, so `pump`, `resync` and the `KnownPad` mirror are unchanged
+  and nothing above the backend knows which target it is on. The `gamepad` feature is no longer
+  target-gated, `demo-web` opts into it explicitly (it takes `default-features = false`, so
+  without the entry the web build would be the one configuration where a plugged-in controller
+  does nothing), and CI lints the arm in its own invocation — because a target that is *built* and
+  never *linted* is exactly how the previous wasm arm in this workspace rotted.
+
+  **Two browser facts with no native counterpart**, both of which a game meets before this code
+  does: the page must be a **secure context** (https or localhost) or the API is simply absent,
+  and **the gamepad list stays empty until the player presses a button** — browsers hide connected
+  pads from a page nobody has interacted with, as a fingerprinting defence. So the "control held
+  at launch" gap above is not merely still open on the web; it is the *normal* first state there,
+  and a game that waits for `input.gamepad()` before showing "press a button to start" has it
+  backwards.
+
+  **Not verified against a real browser** — nothing here can drive one. What is verified is that
+  the arm builds and lints for wasm32 with the feature on. **Trigger:** a browser with a pad in
+  front of someone.
+
+  Worth recording separately, because it cost a build: gilrs's `compile_error!` demanding
+  `xinput` or `wgi` is **not gated on Windows**, so `default-features = false` fails on wasm32
+  too. The Cargo.toml comment already said so; trying it anyway is how that was re-confirmed. *Rumble — WIRED (2026-08-18), with a
   third-party limitation measured rather than guessed.* `Input::rumble(weak, strong, secs)` and
   `rumble_pad`; `gizmo_app::gamepad::GamepadBackend::apply_rumble` hands them to gilrs's `ff`
   after the frame's systems have run.

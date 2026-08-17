@@ -558,7 +558,7 @@ impl<State: 'static> App<State> {
                             // dropped that state; this is what restores it, and without it a
                             // player holding the throttle across an Alt-Tab comes back to a
                             // dead pad until they let go.
-                            #[cfg(all(feature = "gamepad", not(target_arch = "wasm32")))]
+                            #[cfg(feature = "gamepad")]
                             WindowEvent::Focused(true) => {
                                 if let Some(backend) = self.gamepad_backend.as_mut() {
                                     backend.resync(&mut self.input);
@@ -579,7 +579,7 @@ impl<State: 'static> App<State> {
                             // Physical controllers, before the replay logic below: during a
                             // recording this is what gets recorded, and during playback the
                             // recorded input overwrites it — a replay must not be steerable.
-                            #[cfg(all(feature = "gamepad", not(target_arch = "wasm32")))]
+                            #[cfg(feature = "gamepad")]
                             {
                                 if self.gamepad_backend.is_none() {
                                     self.gamepad_backend =
@@ -840,7 +840,7 @@ impl<State: 'static> App<State> {
                             // AFTER they have run, because that is when the requests exist, and
                             // before `begin_frame`, which is where a request made this frame would
                             // otherwise sit unseen until the next one.
-                            #[cfg(all(feature = "gamepad", not(target_arch = "wasm32")))]
+                            #[cfg(feature = "gamepad")]
                             if let Some(backend) = self.gamepad_backend.as_mut() {
                                 backend.apply_rumble(&mut self.input);
                             }

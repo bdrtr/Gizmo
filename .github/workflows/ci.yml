@@ -298,6 +298,13 @@ jobs:
           cargo clippy --locked --target wasm32-unknown-unknown -p gizmo-app \
             --no-default-features --features render,physics,scene \
             -- -D warnings -A clippy::too_many_arguments -A clippy::type_complexity
+          # …and again WITH `gamepad`, which became a wasm feature on 2026-08-18. It is a
+          # separate invocation rather than another entry in the list above because the line
+          # above is the feature set `demo-web` ships and this one is the arm that only exists
+          # when the feature is on — the exact shape of gap this job was created for.
+          cargo clippy --locked --target wasm32-unknown-unknown -p gizmo-app \
+            --no-default-features --features render,physics,scene,gamepad \
+            -- -D warnings -A clippy::too_many_arguments -A clippy::type_complexity
           cargo clippy --locked --target wasm32-unknown-unknown -p demo-web \
             -- -D warnings -A clippy::too_many_arguments -A clippy::type_complexity
 

@@ -26,6 +26,10 @@ gizmo = { package = "gizmo-engine", path = "../crates/gizmo", default-features =
     "animation",
     "ui",
     "audio",
+    # The browser's gamepads, through gilrs's wasm backend. Listed explicitly because this crate
+    # takes `default-features = false`: without it the web demo is the one build of the engine
+    # where a plugged-in controller does nothing, which is indistinguishable from broken.
+    "gamepad",
 ] }
 log = "0.4"
 

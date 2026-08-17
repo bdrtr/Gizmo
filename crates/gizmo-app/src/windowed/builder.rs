@@ -25,7 +25,7 @@ impl<State: 'static> App<State> {
             #[cfg(feature = "egui")]
             ui_fn: None,
             input: gizmo_core::input::Input::new(),
-            #[cfg(all(feature = "gamepad", not(target_arch = "wasm32")))]
+            #[cfg(feature = "gamepad")]
             gamepad_backend: None,
             event_updaters: Vec::new(),
             initial_scene: None,

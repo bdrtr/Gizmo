@@ -110,7 +110,7 @@ pub struct App<State: 'static = ()> {
     /// Created lazily at the first frame rather than in `App::new`: constructing it enumerates
     /// the system's input devices, and an `App` that is built and never run — every test that
     /// checks a builder method — should not touch `/dev/input` to do it.
-    #[cfg(all(feature = "gamepad", not(target_arch = "wasm32")))]
+    #[cfg(feature = "gamepad")]
     gamepad_backend: Option<crate::gamepad::GamepadBackend>,
     #[allow(clippy::type_complexity)]
     event_updaters: Vec<Box<dyn FnMut(&mut World)>>,

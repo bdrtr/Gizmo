@@ -28,6 +28,29 @@
 //!   normalise that into the four d-pad buttons before we ever see it, which is why
 //!   [`GamepadAxis`] has no d-pad entry.
 
+// ── The browser ──────────────────────────────────────────────────────────────────────────────
+//
+// This module builds and runs on wasm32 as of 2026-08-18, through gilrs's own wasm backend: it
+// reads the **Web Gamepad API** with web-sys and turns the browser's polled snapshot into the
+// same event stream the native backends produce. Nothing above this file knows the difference,
+// which is the point — `pump`, `resync` and the `KnownPad` mirror are unchanged.
+//
+// Two browser facts that have no native counterpart, and that a game will meet before this code
+// does:
+//
+// * **A page must be a secure context** (https, or localhost) or the API is absent. gilrs warns
+//   rather than failing, so the symptom is a pad that never connects.
+// * **The gamepad list stays empty until the player presses a button.** Browsers hide connected
+//   pads from a page that has not been interacted with, as a fingerprinting defence. So the
+//   "control held at launch" gap documented above is not merely still open on the web — it is
+//   the *normal* first state there, and a game that waits for `input.gamepad()` before showing
+//   "press a button to start" has it the wrong way round.
+//
+// Not verified against a real browser: nothing here can drive one. What is verified is that the
+// arm compiles and lints for wasm32 with the feature on, which is its own CI invocation (see the
+// `wasm` job) — because a target that is built and never linted is exactly how the *last* wasm
+// arm in this workspace rotted.
+
 use gilrs::{Axis, Button, Event, EventType, Gilrs};
 use gizmo_core::input::{GamepadAxis, GamepadButton, GamepadId, Input};
 
