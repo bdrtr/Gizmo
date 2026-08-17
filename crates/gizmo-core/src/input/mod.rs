@@ -438,9 +438,11 @@ pub mod mouse {
 // Action mapping and the fighting-game input buffer live in submodules; re-export so the
 // public paths (`input::ActionMap`, `input::InputBinding`, `input::FrameRecord`,
 // `input::PlaybackData`, …) and the crate-root `pub use input::{...}` stay unchanged.
+mod axis;
 mod fighter;
 mod gamepad;
 mod mapping;
+pub use axis::{blend_move_axis, MoveKeys};
 pub use fighter::{FighterInputBuffer, FrameActions, FrameRecord, PlaybackData};
 pub use gamepad::{
     apply_stick_deadzone, apply_trigger_deadzone, gamepad_axis_from_name,

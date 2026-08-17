@@ -527,19 +527,13 @@ fn update(world: &mut World, state: &mut BeamNGState, dt: f32, input: &Input) {
         state.camera_speed
     };
 
-    let mut cam_move = Vec3::ZERO;
-    if input.is_key_pressed(KeyCode::KeyW as u32) {
-        cam_move += forward;
-    }
-    if input.is_key_pressed(KeyCode::KeyS as u32) {
-        cam_move -= forward;
-    }
-    if input.is_key_pressed(KeyCode::KeyD as u32) {
-        cam_move += right;
-    }
-    if input.is_key_pressed(KeyCode::KeyA as u32) {
-        cam_move -= right;
-    }
+    // Tuşlar ve sol çubuk `Input::move_axis` ile tek yönde birleşiyor; dikey eksen
+    // (Q/E) ayrı kalıyor çünkü çubukta karşılığı yok. Aşağıdaki normalize KIRPMAYA
+    // döndü: normalize, yarım yatırılmış çubuğu tam hıza çıkarır ve çubuğun tek
+    // kattığı şeyi — miktarı — yok ederdi. Tuşlarda davranış birebir aynı (herhangi
+    // bir tuş bileşimi zaten 1 veya daha uzun).
+    let (mx, my) = input.move_axis();
+    let mut cam_move = right * mx + forward * my;
     if input.is_key_pressed(KeyCode::KeyE as u32) {
         cam_move += up;
     }
@@ -547,9 +541,11 @@ fn update(world: &mut World, state: &mut BeamNGState, dt: f32, input: &Input) {
         cam_move -= up;
     }
 
-    if cam_move.length_squared() > 0.0 {
-        state.camera_pos += cam_move.normalize() * speed * dt;
+    let len = cam_move.length();
+    if len > 1.0 {
+        cam_move /= len;
     }
+    state.camera_pos += cam_move * speed * dt;
 
     if let Some(mut q) = world.query_mut::<(Mut<Transform>, Mut<Camera>)>() {
         let yaw_rot = Quat::from_rotation_y(-state.camera_yaw + FRAC_PI_2);

@@ -256,18 +256,11 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &Input) {
                     1.0
                 };
 
-            if input.is_key_pressed(KeyCode::KeyW as u32) {
-                state.camera_pos += forward * speed;
-            }
-            if input.is_key_pressed(KeyCode::KeyS as u32) {
-                state.camera_pos -= forward * speed;
-            }
-            if input.is_key_pressed(KeyCode::KeyA as u32) {
-                state.camera_pos -= right * speed;
-            }
-            if input.is_key_pressed(KeyCode::KeyD as u32) {
-                state.camera_pos += right * speed;
-            }
+            // Tuşlar ve sol çubuk tek bir yönde birleşiyor (`Input::move_axis`). İki şey
+            // değişti: çapraz basış artık düz basıştan √2 kat hızlı DEĞİL (dört `if` ayrı ayrı
+            // tam adım ekliyordu), ve kol takılıysa yarım yatırma yürüyüş oluyor.
+            let (mx, my) = input.move_axis();
+            state.camera_pos += (right * mx + forward * my) * speed;
             if input.is_key_pressed(KeyCode::Space as u32) {
                 state.camera_pos += up * speed;
             }

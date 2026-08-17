@@ -173,9 +173,49 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
   rather than evented and nothing here can verify it — **trigger:** a browser with a pad in front
   of someone. *Rumble:* gilrs has `ff`; nothing is wired — **trigger:** a game that asks. *A
   rebinding UI:* `NAMED_GAMEPAD_BUTTONS` exists so a config file can name controls, but no editor
-  panel consumes it. *Demos beyond `car_demo` and `platformer`:* the remaining 37 still read the
-  keyboard only; the path is three lines each and the two that shipped are the ones that prove
-  it — analog throttle/brake/steering and analog character movement.
+  panel consumes it. *Demos beyond `car_demo` and `platformer` — CLOSED (2026-08-17), and the
+  three lines turned out to be the wrong shape.* See the movement-axis item below.
+- **Movement input — one axis instead of nineteen copies (2026-08-17).** The gamepad item above
+  left a line reading "the remaining 37 demos still read the keyboard only; the path is three
+  lines each". Writing those three lines nineteen times is what turned out to be wrong, because
+  the nineteen copies did not already agree with each other.
+
+  **Measured before touching anything:** 17 demos read movement keys. Thirteen accumulate a
+  direction and normalise it. **Four — `showcase`, `cpu_physics`, `ocean_scene` and
+  `advanced_physics` — add a full-speed step per key from four independent `if`s**, so holding W
+  and D moved them at √2 ≈ 1.41 × the speed of either key alone. That is not an exotic defect; it
+  is what writing four `if`s produces, which is exactly why it should not be written nineteen
+  times.
+
+  `gizmo_core::input::blend_move_axis` and [`Input::move_axis`] are the two rules in one place,
+  and 16 demos now read movement through them. `car_demo` deliberately does not: a vehicle's
+  controls are not a movement vector — throttle and steering are independent axes, and folding
+  them into a unit disc would take away throttle for steering.
+
+  **The two rules do different jobs, and the obvious explanation of the second one is wrong.**
+  The radial clamp on the sum is what bounds the speed, diagonal keys included. Normalising the
+  key direction *first* changes no magnitude at all — deleting it left every speed assertion in
+  the file green, which is how the wrong explanation was caught. What it actually buys is that
+  keys and stick are **comparable**: a stick is at most 1 long, an un-normalised diagonal key push
+  is √2, so without it a player pushing the stick hard against a held W+D cancels only 71 % of it
+  and keeps drifting at 0.414 of full speed. That number is the failure message of the one test
+  that notices — `a_full_stick_can_cancel_a_diagonal_key_push_too` — and both mistakes were
+  reintroduced to watch their own guard go red.
+
+  **The conversion's promise was that keyboard play is untouched, so that is a test rather than a
+  claim:** `the_keyboard_half_reproduces_what_the_demos_already_computed` checks the new function
+  against the shape the thirteen correct demos had, over all 81 key combinations. The demos with a
+  vertical axis (Q/E, Space/Ctrl) had their `normalize` turned into a **clamp** — for keys the two
+  are identical (any non-empty combination is at least unit length), and a normalise would have
+  pushed a half-tilted stick back up to full speed, destroying the one thing the stick adds.
+
+  Verified on a device, not only in unit tests: the virtual-pad test now also asserts that a stick
+  pushed right and up arrives at `move_axis` as `(1.00, 0.00)` and `(0.00, 1.00)`.
+
+  **Not covered:** look/aim. `platformer` scales the right stick by `dt` because a stick is a
+  standing tilt where a mouse delta is per-frame pixels — mixing those up is the same class of
+  error — but a shared helper would have to own a sensitivity convention, and one demo is not
+  enough evidence for which. **Trigger:** a second demo that wants stick look.
 - **The ten-light ceiling — the *selection* half is closed (2026-08-17); the ceiling is not.**
   `gpu_types.rs` still holds `[LightData; 10]`. What changed is which ten it holds. It used to be
   whichever ten ECS iteration reached first, and that had three separate consequences: distance

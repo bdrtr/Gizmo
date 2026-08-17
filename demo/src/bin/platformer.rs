@@ -218,31 +218,12 @@ fn update(world: &mut World, state: &mut PlatformerState, dt: f32, input: &Input
         .borrow_mut::<CharacterController>()
         .get_mut(state.player.id())
     {
-        let mut move_dir = Vec3::ZERO;
-        if input.is_key_pressed(KeyCode::KeyW as u32) {
-            move_dir += move_forward;
-        }
-        if input.is_key_pressed(KeyCode::KeyS as u32) {
-            move_dir -= move_forward;
-        }
-        if input.is_key_pressed(KeyCode::KeyD as u32) {
-            move_dir += move_right;
-        }
-        if input.is_key_pressed(KeyCode::KeyA as u32) {
-            move_dir -= move_right;
-        }
-
-        move_dir = move_dir.normalize_or_zero();
-        // Çubuk yönü DEĞİL, yön+miktar taşır: normalize edilmiş tuş yönünün üstüne kendi
-        // büyüklüğüyle eklenir, böylece hafif yatırma yürüyüş, tam yatırma koşu olur — tuşun
-        // veremediği tek şey. Toplam 1'i geçerse kırpılır ki tuş+çubuk birlikte hız aşmasın.
-        if let Some(pad) = input.gamepad() {
-            let (x, y) = pad.left_stick();
-            move_dir += move_right * x + move_forward * y;
-            if move_dir.length() > 1.0 {
-                move_dir = move_dir.normalize();
-            }
-        }
+        // Bu harmanlama elle burada duruyordu; artık motorda: `Input::move_axis`. Çubuk yönü
+        // DEĞİL, yön+miktar taşır (hafif yatırma yürüyüş, tam yatırma koşu — tuşun veremediği
+        // tek şey), tuş yönü çubukla KARŞILAŞTIRILABİLİR olsun diye önce birim boya getirilir,
+        // ve toplam birim diske kırpılır. Gerekçelerin tamamı `blend_move_axis`'te.
+        let (mx, my) = input.move_axis();
+        let move_dir = move_right * mx + move_forward * my;
         kcc.target_velocity = move_dir * kcc.speed;
 
         if input.is_key_pressed(KeyCode::Space as u32)

@@ -143,19 +143,13 @@ fn main() {
                 speed *= 3.0;
             }
 
-            let mut cam_move = Vec3::ZERO;
-            if input.is_key_pressed(KeyCode::KeyW as u32) {
-                cam_move.z -= 1.0;
-            }
-            if input.is_key_pressed(KeyCode::KeyS as u32) {
-                cam_move.z += 1.0;
-            }
-            if input.is_key_pressed(KeyCode::KeyA as u32) {
-                cam_move.x -= 1.0;
-            }
-            if input.is_key_pressed(KeyCode::KeyD as u32) {
-                cam_move.x += 1.0;
-            }
+            // Tuşlar ve sol çubuk `Input::move_axis` ile tek yönde birleşiyor; dikey eksen
+            // (Q/E) ayrı kalıyor çünkü çubukta karşılığı yok. Aşağıdaki normalize KIRPMAYA
+            // döndü: normalize, yarım yatırılmış çubuğu tam hıza çıkarır ve çubuğun tek
+            // kattığı şeyi — miktarı — yok ederdi. Tuşlarda davranış birebir aynı (herhangi
+            // bir tuş bileşimi zaten 1 veya daha uzun).
+            let (mx, my) = input.move_axis();
+            let mut cam_move = Vec3::new(mx, 0.0, -my);
             if input.is_key_pressed(KeyCode::KeyQ as u32) {
                 cam_move.y -= 1.0;
             }
@@ -163,9 +157,11 @@ fn main() {
                 cam_move.y += 1.0;
             }
 
-            if cam_move.length_squared() > 0.0 {
-                cam_move = cam_move.normalize() * speed * dt;
+            let len = cam_move.length();
+            if len > 1.0 {
+                cam_move /= len;
             }
+            cam_move *= speed * dt;
 
             let mouse_delta = input.mouse_delta();
             if input.is_mouse_button_pressed(1) {

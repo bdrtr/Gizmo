@@ -18,6 +18,21 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`Input::move_axis` / `blend_move_axis` — one movement read for the keyboard and the stick.**
+  Returns `(x, y)` in the closed unit disc, `x` right and `y` forward, basis-free so the caller
+  multiplies it by whatever right/forward vectors it already has. `MoveKeys::WASD` and
+  `MoveKeys::ARROWS` are presets; `move_axis_with` takes any four key codes.
+
+  It exists because nineteen demos had written their own and they did not agree: four of them
+  (`showcase`, `cpu_physics`, `ocean_scene`, `advanced_physics`) added a full-speed step per key
+  from four independent `if`s, so **holding W and D moved 41 % faster than either key alone**.
+  16 demos now read movement through the shared function and are playable with a stick;
+  `car_demo` deliberately still does not, because a vehicle's throttle and steering are
+  independent axes rather than a movement vector.
+
+  Keyboard behaviour is unchanged for the demos that were already correct — checked against their
+  previous expression over all 81 key combinations, not asserted.
+
 - **`ColliderShape::Cylinder`.** Flat circular ends, axis along local +Y, built with
   `Collider::cylinder(radius, half_height)` — where `half_height` is half the *whole* solid,
   unlike `Collider::capsule`'s, which excludes the caps. The shape a wheel, a barrel or a column
@@ -130,6 +145,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Demos with a vertical movement axis (Q/E, Space/Ctrl) now clamp their movement vector to
+  length 1 instead of normalising it.** Identical for keys — any non-empty key combination is
+  already at least unit length — and a normalise would push a half-tilted stick back up to full
+  speed, which removes the one thing a stick adds over a key.
 - **The light ceiling is 32, and off-screen lights no longer take slots (`MAX_LIGHTS` 10 → 32).**
   The scene block grows to 2576 bytes (the uniform-binding floor is 64 KiB everywhere WebGPU runs)
   and costs nothing per frame — both lighting loops run to `num_lights`, so a scene with three

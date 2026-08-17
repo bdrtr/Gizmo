@@ -790,19 +790,13 @@ fn camera_orbit(
             camera_settings.speed
         };
 
-        let mut cam_move = Vec3::ZERO;
-        if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyW as u32) {
-            cam_move += forward;
-        }
-        if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyS as u32) {
-            cam_move -= forward;
-        }
-        if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyD as u32) {
-            cam_move += right;
-        }
-        if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyA as u32) {
-            cam_move -= right;
-        }
+        // Tuşlar ve sol çubuk `Input::move_axis` ile tek yönde birleşiyor; dikey eksen
+        // (Q/E) ayrı kalıyor çünkü çubukta karşılığı yok. Aşağıdaki normalize KIRPMAYA
+        // döndü: normalize, yarım yatırılmış çubuğu tam hıza çıkarır ve çubuğun tek
+        // kattığı şeyi — miktarı — yok ederdi. Tuşlarda davranış birebir aynı (herhangi
+        // bir tuş bileşimi zaten 1 veya daha uzun).
+        let (mx, my) = input.move_axis();
+        let mut cam_move = right * mx + forward * my;
         if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyE as u32) {
             cam_move += up;
         }
@@ -810,9 +804,11 @@ fn camera_orbit(
             cam_move -= up;
         }
 
-        if cam_move.length_squared() > 0.0 {
-            camera_settings.pos += cam_move.normalize() * speed * dt;
+        let len = cam_move.length();
+        if len > 1.0 {
+            cam_move /= len;
         }
+        camera_settings.pos += cam_move * speed * dt;
     }
 
     let yaw_rot = Quat::from_rotation_y(-camera_settings.yaw + std::f32::consts::FRAC_PI_2);

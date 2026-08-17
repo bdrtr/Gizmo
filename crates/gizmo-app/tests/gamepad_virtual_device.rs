@@ -115,6 +115,17 @@ fn a_virtual_pad_arrives_as_the_buttons_and_axes_this_engine_names() {
             log.push("disconnected".to_string());
         }
 
+        // The movement axis every demo now reads, taken from the same live device rather than
+        // from a hand-built `Input`. Its unit tests pin the arithmetic; what only a device can
+        // answer is whether the stick reaches it at all, and with the sign the player expects.
+        let (mx, my) = input.move_axis();
+        if mx.abs() > 0.5 && !log.iter().any(|l| l.starts_with("move_axis right")) {
+            log.push(format!("move_axis right = ({mx:.2}, {my:.2})"));
+        }
+        if my.abs() > 0.5 && !log.iter().any(|l| l.starts_with("move_axis up")) {
+            log.push(format!("move_axis up = ({mx:.2}, {my:.2})"));
+        }
+
         input.begin_frame();
         std::thread::sleep(Duration::from_millis(4));
 
@@ -161,6 +172,19 @@ fn a_virtual_pad_arrives_as_the_buttons_and_axes_this_engine_names() {
         ys.iter().any(|v| (*v - 1.0).abs() < 0.05),
         "stick pushed UP must read +1 — the kernel calls that direction negative, so this is \
          the assertion that catches an inverted Y. Saw {ys:?}"
+    );
+
+    // ── …and that the same stick reaches `Input::move_axis`, which is what the demos read ──
+    let moved_right = log.iter().find(|l| l.starts_with("move_axis right"));
+    let moved_up = log.iter().find(|l| l.starts_with("move_axis up"));
+    assert!(
+        moved_right.is_some(),
+        "the stick pushed right never reached `move_axis` — 16 demos read movement through it \
+         and would not have moved. Log: {log:?}"
+    );
+    assert!(
+        moved_up.is_some(),
+        "the stick pushed up never reached `move_axis`. Log: {log:?}"
     );
 
     // ── Triggers: analog travel, on their own axes ───────────────────────────────

@@ -162,20 +162,10 @@ fn update(world: &mut World, state: &mut KccState, dt: f32, input: &Input) {
         .borrow_mut::<CharacterController>()
         .get_mut(state.character.id())
     {
-        let mut dir = Vec3::ZERO;
-        if input.is_key_pressed(KeyCode::KeyW as u32) {
-            dir += move_forward;
-        }
-        if input.is_key_pressed(KeyCode::KeyS as u32) {
-            dir -= move_forward;
-        }
-        if input.is_key_pressed(KeyCode::KeyD as u32) {
-            dir += move_right;
-        }
-        if input.is_key_pressed(KeyCode::KeyA as u32) {
-            dir -= move_right;
-        }
-        kcc.target_velocity = dir.normalize_or_zero() * kcc.speed;
+        // Tuşlar ve sol çubuk `Input::move_axis` ile birleşiyor. Tuşlarda davranış aynı;
+        // yeni olan, çubuğun yarım yatırılınca yürüyüş vermesi — tuşun veremediği tek şey.
+        let (mx, my) = input.move_axis();
+        kcc.target_velocity = (move_right * mx + move_forward * my) * kcc.speed;
 
         if input.is_key_pressed(KeyCode::Space as u32) {
             kcc.jump_buffer_timer = kcc.jump_buffer_time;

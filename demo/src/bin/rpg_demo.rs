@@ -264,21 +264,10 @@ fn update(world: &mut World, state: &mut RpgState, dt: f32, input: &gizmo::core:
         .borrow_mut::<CharacterController>()
         .get_mut(state.character_entity.id())
     {
-        let mut move_dir = Vec3::ZERO;
-        if input.is_key_pressed(KeyCode::KeyW as u32) {
-            move_dir += move_forward;
-        }
-        if input.is_key_pressed(KeyCode::KeyS as u32) {
-            move_dir -= move_forward;
-        }
-        if input.is_key_pressed(KeyCode::KeyD as u32) {
-            move_dir += move_right;
-        }
-        if input.is_key_pressed(KeyCode::KeyA as u32) {
-            move_dir -= move_right;
-        }
-
-        move_dir = move_dir.normalize_or_zero();
+        // Tuşlar ve sol çubuk `Input::move_axis` ile birleşiyor. Tuşlarda davranış aynı;
+        // yeni olan, çubuğun yarım yatırılınca yürüyüş vermesi — tuşun veremediği tek şey.
+        let (mx, my) = input.move_axis();
+        let move_dir = move_right * mx + move_forward * my;
         kcc.target_velocity = move_dir * kcc.speed;
 
         if input.is_key_pressed(KeyCode::Space as u32) {

@@ -246,26 +246,21 @@ fn update(world: &mut World, state: &mut WaterState, dt: f32, input: &gizmo::cor
             .borrow_mut::<CharacterController>()
             .get_mut(state.swimmer.id())
         {
-            let mut dir = Vec3::ZERO;
-            if input.is_key_pressed(KeyCode::KeyW as u32) {
-                dir += forward;
-            } // baktığın yöne yüz
-            if input.is_key_pressed(KeyCode::KeyS as u32) {
-                dir -= forward;
-            }
-            if input.is_key_pressed(KeyCode::KeyD as u32) {
-                dir += right;
-            }
-            if input.is_key_pressed(KeyCode::KeyA as u32) {
-                dir -= right;
-            }
+            // Yatay yön tuş+çubuk (`Input::move_axis`), dikey ayrı: çubukta karşılığı yok.
+            // Normalize yerine KIRPMA, yoksa yarım yatırılmış çubuk tam hıza çıkardı.
+            let (mx, my) = input.move_axis();
+            let mut dir = right * mx + forward * my;
             if input.is_key_pressed(KeyCode::Space as u32) {
                 dir += Vec3::Y;
             } // yüksel
             if input.is_key_pressed(KeyCode::ControlLeft as u32) {
                 dir -= Vec3::Y;
             } // dal
-            kcc.target_velocity = dir.normalize_or_zero() * (kcc.speed * fast);
+            let len = dir.length();
+            if len > 1.0 {
+                dir /= len;
+            }
+            kcc.target_velocity = dir * (kcc.speed * fast);
         }
     }
 

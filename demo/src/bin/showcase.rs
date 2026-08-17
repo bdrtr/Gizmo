@@ -400,18 +400,11 @@ fn main() {
                 flat
             };
 
-            if input.is_key_pressed(KeyCode::KeyW as u32) {
-                state.cam_pos += move_fwd * speed * sprint;
-            }
-            if input.is_key_pressed(KeyCode::KeyS as u32) {
-                state.cam_pos -= move_fwd * speed * sprint;
-            }
-            if input.is_key_pressed(KeyCode::KeyA as u32) {
-                state.cam_pos -= right * speed * sprint;
-            }
-            if input.is_key_pressed(KeyCode::KeyD as u32) {
-                state.cam_pos += right * speed * sprint;
-            }
+            // Tuşlar ve sol çubuk tek bir yönde birleşiyor (`Input::move_axis`). İki şey
+            // değişti: çapraz basış artık düz basıştan √2 kat hızlı DEĞİL (dört `if` ayrı ayrı
+            // tam adım ekliyordu), ve kol takılıysa yarım yatırma yürüyüş oluyor.
+            let (mx, my) = input.move_axis();
+            state.cam_pos += (right * mx + move_fwd * my) * speed * sprint;
 
             if state.fly_mode {
                 if input.is_key_pressed(KeyCode::KeyQ as u32) {
