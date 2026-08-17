@@ -679,7 +679,7 @@ pub fn draw_fighter_controller_section(
 /// answer: whether this object casts a shadow, and whether it is drawn.
 ///
 /// The prototype also shows the mesh and material asset names and an LOD bias. Those need asset
-/// identities and a bias field that do not exist yet (`docs/FIXPLAN.md`, group B), and a section
+/// identities and a bias field that do not exist yet (`docs/ENGINE.md` §3), and a section
 /// that displayed them as blanks would be worse than one that shows what it has.
 pub fn draw_mesh_renderer_section(
     ui: &mut egui::Ui,

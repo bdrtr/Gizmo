@@ -56,7 +56,7 @@
 //! the entity's `Transform`. Keying an entity transform into one would be a category error. The
 //! engine does have a transform-track animation type (`gizmo_animation::clip`), but nothing
 //! outside that module uses it — the studio drives the skeletal player. Recorded in
-//! `docs/FIXPLAN.md` rather than faked with a toggle that keys the wrong thing.
+//! `docs/ENGINE.md` §3 rather than faked with a toggle that keys the wrong thing.
 
 use crate::editor_state::{EditorState, KeyframeRef, TrackChannel};
 use crate::theme::palette::*;

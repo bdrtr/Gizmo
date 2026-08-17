@@ -24,7 +24,7 @@ updates:
     ignore:
       # `glam` is a deliberate public dependency: `gizmo_math` re-exports it, so a major
       # bump is a breaking change for every downstream user and has to be planned rather
-      # than merged. Tracked in docs/FIXPLAN.md (D5).
+      # than merged. Tracked in docs/ENGINE.md §3.
       - dependency-name: glam
         update-types: ["version-update:semver-major"]
 

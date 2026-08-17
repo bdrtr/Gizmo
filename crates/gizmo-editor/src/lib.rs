@@ -284,7 +284,7 @@ viewer.state.dock_state = dock_state;
 ///
 /// The other two remain absent rather than plausible: the renderer fetches its adapter info at
 /// startup, logs it and keeps nothing, and the schedule exposes no system count. A status bar that
-/// prints a number it did not measure is worse than a shorter one. Listed in `docs/FIXPLAN.md`.
+/// prints a number it did not measure is worse than a shorter one. Listed in `docs/ENGINE.md` §3.
 fn draw_status_bar(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
     use crate::theme::palette::*;
 

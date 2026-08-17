@@ -240,7 +240,7 @@ impl Renderer {
             // unconditionally and lets wgpu resolve it against what the surface supports.
             //
             // This is a DEFAULT, not a fixed property: `Renderer::set_present_mode` switches it
-            // at runtime (FIXPLAN B6). It stays uncapped here because the engine's own
+            // at runtime (the campaign record, now ENGINE.md §3). It stays uncapped here because the engine's own
             // benchmarks and the `full_step_mixed` frame-pacing work assume frames are not
             // waiting on the display; a game that wants vsync asks for it.
             present_mode: wgpu::PresentMode::AutoNoVsync,

@@ -58,9 +58,9 @@ ignore = [
   # move at all.
   #
   # Leaving bincode is therefore a separate decision about which serializer this project wants,
-  # with its own wire break and its own benchmarks — tracked in docs/FIXPLAN.md, not smuggled
+  # with its own wire break and its own benchmarks — decided in docs/ENGINE.md §7, not smuggled
   # into a supply-chain commit.
-  { id = "RUSTSEC-2025-0141", reason = "bincode is unmaintained at every version; no in-family upgrade clears it. Migrated 1.x -> 2.x anyway; leaving the crate entirely is a separate decision (see FIXPLAN A6-followup)" },
+  { id = "RUSTSEC-2025-0141", reason = "bincode is unmaintained at every version; no in-family upgrade clears it. Migrated 1.x -> 2.x anyway; leaving the crate entirely was decided against — see ENGINE.md §7" },
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -124,7 +124,7 @@ allow = ["Apache-2.0"]
 # three `rand` majors (0.8 dev / 0.9 renderer / 0.10 physics), three `getrandom`, two
 # `ron` (0.8 core / 0.12 scene+renderer), two `criterion`, two `glam` (0.29 ours,
 # 0.32 via transform-gizmo). Deduplicating them is real work with real semver
-# consequences, tracked in docs/FIXPLAN.md — so this warns rather than fails, to keep
+# consequences, tracked in docs/ENGINE.md §3 — so this warns rather than fails, to keep
 # the gate honest instead of permanently red.
 multiple-versions = "warn"
 wildcards = "deny"

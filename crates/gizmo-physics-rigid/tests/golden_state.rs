@@ -114,7 +114,7 @@ fn golden_box_settling_on_the_ground() {
     // the contact solve could cancel it, and then froze holding the unsolved value. Sleep is now
     // decided after the solve and per island, so the body sleeps holding a solved velocity.
     // `settle y` is unchanged, so the resting position — the load-bearing number here — did not
-    // move. See docs/FIXPLAN.md, island-collective sleep.
+    // move. See docs/ENGINE.md, island-collective sleep.
     lock("settle vy", w.velocities[1].linear.y, 0.0);
 }
 

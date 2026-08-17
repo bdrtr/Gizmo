@@ -105,7 +105,7 @@ impl ConstraintSolver {
     /// that has since been fixed at its root — partial island sleep and the degenerate
     /// single-point manifold — and it was compensating for both. It also exceeded the default
     /// `iterations` of 20, so a caller could not lower the sweep count of a deep island at all,
-    /// which docs/FIXPLAN.md recorded as a defect.
+    /// which docs/ENGINE.md recorded as a defect.
     ///
     /// What the ensembles say now (`tests/solver_quality.rs`): 1-wide towers of N = 16, 24 and 32
     /// stand at EVERY sweep count from 1 to 96 on three ground sizes — 72 cells, zero collapses,

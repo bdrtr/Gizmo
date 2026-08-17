@@ -142,7 +142,7 @@ pub struct JointSolver {
     /// **Why it exists.** The hard path has no `−impulse_scale·λ` feedback term. That is what
     /// destroyed joint warm start at its natural factor of 1.0 (a 16-link chain with a 200 kg
     /// tip settled at 4.83 m against a converged 16.00, with 44 m/s of residual motion) while
-    /// the identical chain at `compliance = 1e-6` stayed stable. See `docs/FIXPLAN.md`, B4
+    /// the identical chain at `compliance = 1e-6` stayed stable. See `docs/ENGINE.md` §7
     /// commit 5.
     ///
     /// Be careful with the mechanism, because the obvious story is wrong and was believed here
@@ -181,7 +181,7 @@ pub struct JointSolver {
     /// Injection is a SEPARATE sweep before iteration 0, never in place: this solver clamps
     /// the accumulated TOTAL, so `λ_prev + (−Jv_pre − k·λ_prev + bias)/k = (−Jv_pre + bias)/k`
     /// — in-place injection cancels exactly and is an algebraic no-op (measured; see
-    /// `docs/FIXPLAN.md`). With a non-zero factor the λ of a pass becomes carried simulation
+    /// `docs/ENGINE.md`). With a non-zero factor the λ of a pass becomes carried simulation
     /// state, which `WorldSnapshot` already covers (it clones the joints).
     ///
     /// Two things the injection sweep does NOT cover, both harmless and both worth knowing
@@ -571,7 +571,7 @@ impl JointSolver {
         // Artık ölçülen şey geçişin NET impulse vektörü `‖Σ λᵢ·nᵢ‖ / dt` — yani eklemin
         // gerçekten taşıdığı kuvvet/tork. Kuvvet-tabanlı yaylar da (Spring, slider
         // süspansiyonu, hinge torsiyon yayı) bu toplama katkı verir; motorlar/sürücüler
-        // VERMEZ, çünkü onlar dış yük değil eyleyicidir (bkz. docs/FIXPLAN.md B4 commit 4).
+        // VERMEZ, çünkü onlar dış yük değil eyleyicidir (bkz. docs/ENGINE.md §7).
         for joint in joints.iter_mut() {
             if joint.is_broken {
                 continue;
@@ -698,7 +698,7 @@ impl JointSolver {
     /// (`solver/tgs.rs:597` temas çözücüsünde terim `/ k_n` ile bölünüyor. Oradaki
     /// `impulse_scale` çok daha küçük — contact_hertz=30, ζ=10 ile ≈0.058 — bu yüzden sınır
     /// `m_eff ≈ 34`'e çıkıyor ve mevcut soak sahnelerinde ısırmıyor. Ölçülmesi gereken ayrı
-    /// bir konu; bkz. docs/FIXPLAN.md.)
+    /// bir konu; bkz. docs/ENGINE.md.)
     ///
     /// # Kırpma rejimi sorusu KAPANDI
     ///
@@ -742,7 +742,7 @@ impl JointSolver {
     /// β·C/dt + hız kırpması, geri besleme terimi YOK. Az-yakınsamış bir geçiş Baumgarte
     /// artığını λ'ya entegre ediyor ve geri sızdıracak hiçbir şey yok. Warm-start'ı doğal
     /// f=1.0 değerinde yıkan buydu (16 halkalı zincir, 200 kg uç: 4.83 m, 44 m/s artık
-    /// hareket), aynı zincir `compliance = 1e-6` ile KARARLIYKEN. Bkz. docs/FIXPLAN.md B4.
+    /// hareket), aynı zincir `compliance = 1e-6` ile KARARLIYKEN. Bkz. docs/ENGINE.md B4.
     ///
     /// # Kırpma rejimi: ÇARPAN, bölme değil — ama bu bir PAY, kurgusal bir garanti değil
     ///

@@ -51,7 +51,7 @@ static GPU_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 ///
 /// Each test still needs its own `Renderer` — it carries TAA/GI history between frames and these
 /// tests are "one frame from a clean state" — but not its own device. Creating one per test is
-/// what `docs/FIXPLAN.md` measured as the residual GPU flake, and this binary was making six.
+/// what `docs/ENGINE.md` measured as the residual GPU flake, and this binary was making six.
 async fn shared_device_renderer(width: u32, height: u32) -> Renderer {
     use std::sync::OnceLock;
     static DEVICE: OnceLock<(wgpu::Device, wgpu::Queue)> = OnceLock::new();

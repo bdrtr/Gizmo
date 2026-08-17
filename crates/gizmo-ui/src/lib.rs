@@ -59,7 +59,7 @@
 //! - **There is no text rendering** — no `Text` component, no font loading, no
 //!   glyph rasterisation, neither here nor in `gizmo-renderer`. This is the
 //!   single largest missing piece and the reason this crate is labelled
-//!   experimental (tracked as D7 in the repository's `docs/FIXPLAN.md`).
+//!   experimental (tracked as D7 in the repository's `docs/ENGINE.md`).
 //! - **[`BackgroundColor`] is written and never read.** The bundles attach it,
 //!   and no crate in this workspace consumes it. The only consumer of
 //!   `gizmo-ui` in the workspace at all is the facade's `pub use gizmo_ui as

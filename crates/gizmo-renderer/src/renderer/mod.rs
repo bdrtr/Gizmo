@@ -248,7 +248,7 @@ impl Renderer {
     /// The engine builds its surface with [`wgpu::PresentMode::AutoNoVsync`], i.e. frames are
     /// presented as fast as they are produced. That is the right default for a benchmark and the
     /// wrong one for a laptop on battery, and until now it was not reachable at all: the value
-    /// was hard-coded at construction (FIXPLAN B6).
+    /// was hard-coded at construction (the campaign record, now ENGINE.md §3).
     ///
     /// `AutoVsync` is the usual opposite choice. Anything the surface does not support falls back
     /// inside wgpu rather than failing here, so this cannot make the swapchain invalid.

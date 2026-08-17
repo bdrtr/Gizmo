@@ -88,7 +88,7 @@ fn run(world: &mut PhysicsWorld, steps: usize) -> bool {
 /// while the AVERAGE is pinned at 9.81 N by momentum balance. Soft rigid rows raised the peak
 /// (22.6 → 26.0 N) because the repair rate at the gate threshold went from `β/dt` = 72 s⁻¹ to
 /// 173.7 s⁻¹; the gate itself is unchanged and is tracked as its own follow-up in
-/// `docs/FIXPLAN.md` B4. **The 30 N bracket below now has 13% of margin, not 33%** — a further
+/// `docs/ENGINE.md` B4. **The 30 N bracket below now has 13% of margin, not 33%** — a further
 /// rise in `rigid_hertz` is what would flip it.
 #[test]
 fn break_force_measures_the_net_reaction_not_the_sum_of_axis_magnitudes() {

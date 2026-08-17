@@ -10,7 +10,7 @@
 //! residual — with `mass_scale = 1, impulse_scale = 0` the coefficient on λ in the update is
 //! already zero. The memory lives in the Gauss–Seidel coupling between rows; see
 //! `JointSolver::rigid_hertz`.) Measured consequence
-//! (`docs/FIXPLAN.md`, B4 commit 5): joint warm start at its natural factor of 1.0 — the value
+//! (`docs/ENGINE.md` §7 commit 5): joint warm start at its natural factor of 1.0 — the value
 //! the CONTACT solver runs its own warm start at — destroyed a 16-link chain, and the identical
 //! chain at `compliance = 1e-6`, i.e. taking the soft branch, was stable and better than cold.
 //!
@@ -241,7 +241,7 @@ fn zero_rigid_hertz_restores_the_baumgarte_path() {
 
 const CHAIN_LINKS: u32 = 16;
 
-/// The `docs/FIXPLAN.md` B4 chain, tip mass parameterised.
+/// The `docs/ENGINE.md` B4 chain, tip mass parameterised.
 fn chain(tip_mass: f32) -> PhysicsWorld {
     let mut world = PhysicsWorld::new().with_gravity(Vec3::new(0.0, -G, 0.0));
     let mut anchor = RigidBody::new_static();

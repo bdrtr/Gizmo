@@ -66,7 +66,7 @@
 //! So this group measures the ADAPTIVE ITERATION POLICY as much as the solver.
 //!
 //! Whether the policy is wrong here is a separate question, and NOT settled — see
-//! docs/FIXPLAN.md. Suppressing the scaling for anchor-free islands looks obvious and is not:
+//! docs/ENGINE.md. Suppressing the scaling for anchor-free islands looks obvious and is not:
 //! a tall tower that separates from the ground by a hair is also anchor-free for that substep,
 //! and it genuinely needs the sweeps. Measured — `soak_resting_stacks_stay_bounded` buckles at
 //! N=24 and N=32 with that change in place.

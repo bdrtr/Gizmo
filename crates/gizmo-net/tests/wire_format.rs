@@ -3,7 +3,7 @@
 //! # Why this exists
 //!
 //! `bincode` 1.x is unmaintained — `cargo deny` flags it, and it is `gizmo-net`'s only direct
-//! advisory (FIXPLAN A6-followup). Moving to 2.x is a dependency swap everywhere except in one
+//! advisory (ENGINE.md §7). Moving to 2.x is a dependency swap everywhere except in one
 //! respect: **bincode 2's default configuration is not bincode 1's**. `config::standard()` uses
 //! variable-length integers, so the same `NetworkPacket` encodes to different bytes and two peers
 //! on different builds silently stop understanding each other. `config::legacy()` is the one that

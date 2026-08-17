@@ -7,7 +7,7 @@
 //! `systems::streaming`'s test building its own headless `Renderer` — a full wgpu device — with
 //! no serialisation at all, free to run concurrently with a golden render test.
 //!
-//! That is a concrete explanation for a residual `docs/FIXPLAN.md` had recorded as roughly two
+//! That is a concrete explanation for a residual `docs/ENGINE.md` had recorded as roughly two
 //! crashes in twelve full-workspace runs and attributed to "driver/system level, under sustained
 //! load". Measured in `gizmo-renderer` (see `gizmo_renderer`'s own `test_gpu`), two concurrently
 //! live devices are survivable and four are fatal — and one serialised device plus one unlocked
@@ -37,7 +37,7 @@ pub(crate) fn gpu_lock() -> std::sync::MutexGuard<'static, ()> {
 ///
 /// Every golden test needs its own renderer — it carries TAA/GI history between frames, and the
 /// tests are written as "one frame from a clean state" — but nothing needs its own *device*.
-/// Creating one per renderer is what `docs/FIXPLAN.md` measured as the residual flake (a
+/// Creating one per renderer is what `docs/ENGINE.md` measured as the residual flake (a
 /// driver-level crash with no panic and no test name), and this file had grown from ~5 such
 /// devices to 15 as the render guards were added; the same shape kills a long sweep outright
 /// (`radv/amdgpu: Not enough memory for command submission`, measured at ~17 devices).

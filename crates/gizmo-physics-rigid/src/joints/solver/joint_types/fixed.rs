@@ -98,7 +98,7 @@ impl JointSolver {
         // under 10 rad/s² before that branch existed). `JointData::Fixed` carries no
         // reference pose to servo toward, which is why this is a velocity lock in the first
         // place; giving it one is a breaking change to a public enum and is tracked in
-        // docs/FIXPLAN.md rather than done here.
+        // docs/ENGINE.md rather than done here.
         if matches!(joint.data, JointData::Fixed) {
             for (i, axis) in [Vec3::X, Vec3::Y, Vec3::Z].into_iter().enumerate() {
                 self.apply_angular_constraint(

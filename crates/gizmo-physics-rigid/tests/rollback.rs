@@ -427,12 +427,12 @@ fn snapshot_restores_the_weather() {
 // ── Rollback over a heavily loaded joint chain ───────────────────────────────
 //
 // The scene is deliberately the ill-conditioned one — a 16-link chain with a 200 kg tip, the
-// case `docs/FIXPLAN.md` measured joint warm-start against. It is where the joint solver works
+// case `docs/ENGINE.md` measured joint warm-start against. It is where the joint solver works
 // hardest and where an incomplete restore diverges fastest, which makes it the sharpest probe
 // for snapshot completeness that this crate has.
 //
 // It was written for a warm start that did not ship (B4 commit 5: the operator works, but at
-// its natural factor it pumps energy into rigid rows — see docs/FIXPLAN.md). Under the shipped
+// its natural factor it pumps energy into rigid rows — see docs/ENGINE.md). Under the shipped
 // solver λ is rebuilt from zero every pass, so what this pins today is the rest of the joint
 // state: the handle pairs, `is_broken`, and the latched reference poses inside `JointData`.
 // When the warm start does land, λ becomes carried state and this scene is already here to

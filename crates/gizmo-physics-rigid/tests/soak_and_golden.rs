@@ -251,7 +251,7 @@ fn soak_tall_stack_n16_stays_upright() {
 // solver + adaptive iterations, 2026-07-15) makes realistic stacks (N≤16) stay bounded;
 // see soak_resting_stacks_stay_bounded (the live regression test) and the diagnosis below.
 //
-// ROOT CAUSE — CORRECTED (2026-07-14, this session). The FIXPLAN blamed
+// ROOT CAUSE — CORRECTED (2026-07-14, this session). The campaign record blamed
 // "under-converged biased Gauss-Seidel (O(N²) Delassus condition)". An empirical
 // iteration ladder REFUTES that: the blow-up frame is CHAOTIC / non-monotonic in the
 // iteration count (N=32 blows at every count 30…110, e.g. iters=35→@63, iters=60→@1458

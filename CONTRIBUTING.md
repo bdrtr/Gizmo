@@ -91,7 +91,7 @@ gizmo-math ─┬─ gizmo-core ─┬─ gizmo-physics-{core,rigid,dynamics,sof
   something as a bug**; several plausible-looking findings have been chased more than once.
 - [`docs/AUDIT-2026-08.md`](docs/AUDIT-2026-08.md) — an external review, every finding
   pinned to `file:line`.
-- [`docs/FIXPLAN.md`](docs/FIXPLAN.md) — what is being worked on and what is deliberately
+- [`docs/ENGINE.md`](docs/ENGINE.md) §3 — what is being worked on and what is deliberately
   deferred. A good place to find something to pick up.
 
 ## Language

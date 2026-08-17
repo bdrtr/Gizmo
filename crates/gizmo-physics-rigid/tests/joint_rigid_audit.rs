@@ -24,7 +24,7 @@
 //! one scene, with the branch as the only difference — no cross-build comparison, no rebuild
 //! drift.
 //!
-//! The chain scene below is calibrated against `docs/FIXPLAN.md`'s recorded numbers before it is
+//! The chain scene below is calibrated against `docs/ENGINE.md`'s recorded numbers before it is
 //! used to judge anything: see `q0_the_scene_reproduces_the_recorded_baseline`.
 //!
 //! # One caveat that applies to the whole file, stated once
@@ -44,7 +44,7 @@ use std::time::Instant;
 /// The chain's frame step. `PhysicsWorld` substeps this internally at 1/240, so one frame is
 /// four solver passes and 400 frames is the 1600 substeps every recorded chain number used.
 const FRAME_DT: f32 = 1.0 / 60.0;
-/// The horizon `docs/FIXPLAN.md`'s cold and warm-start chain tables were taken at.
+/// The horizon `docs/ENGINE.md`'s cold and warm-start chain tables were taken at.
 const FRAMES: usize = 400;
 /// The horizon its commit-5 acceptance table was taken at (4000 substeps).
 const LONG_FRAMES: usize = 1000;
@@ -192,10 +192,10 @@ fn measure(tip_mass: f32, iterations: usize, hz: f32, warm: f32, frames: usize) 
 // ── Q0: the scene is the recorded one ────────────────────────────────────────
 
 /// **Calibration, and it runs first for a reason.** Every table below compares a legacy column
-/// against a soft column; if my chain is not the chain `docs/FIXPLAN.md` measured, the legacy
+/// against a soft column; if my chain is not the chain `docs/ENGINE.md` measured, the legacy
 /// column is not the recorded baseline and none of the comparisons transfer.
 ///
-/// This scene was rebuilt from the FIXPLAN prose alone — 16 links, 1 m rope joints, 1 kg each,
+/// This scene was rebuilt from the campaign record's prose alone (now `docs/ENGINE.md` §7) — 16 links, 1 m rope joints, 1 kg each,
 /// static anchor at y = 16, default gravity — and it reproduces the recorded pre-change cold sag
 /// to under 0.6 mm on every one of nine cells. That also pins two things the prose left implicit:
 /// the horizon (400 frames of 1/60) and the fact that the recorded runs did not force the links
@@ -208,7 +208,7 @@ fn q0_the_scene_reproduces_the_recorded_baseline() {
         (20.0, [16.0229, 16.0056, 16.0012]),
         (200.0, [16.1657, 16.0443, 16.0106]),
     ];
-    println!("\nQ0  legacy path (rigid_hertz = 0) vs docs/FIXPLAN.md's recorded pre-change sag");
+    println!("\nQ0  legacy path (rigid_hertz = 0) vs docs/ENGINE.md's recorded pre-change sag");
     println!("       tip   iter    measured    recorded       diff");
     let mut worst = 0.0f32;
     for (mass, row) in recorded {
@@ -222,7 +222,7 @@ fn q0_the_scene_reproduces_the_recorded_baseline() {
     println!("    worst |diff| = {worst:.5} m");
     assert!(
         worst < 1e-3,
-        "this scene is not the recorded one — worst deviation {worst:.5} m from FIXPLAN's \
+        "this scene is not the recorded one — worst deviation {worst:.5} m from the recorded \
          pre-change column; every table below would be comparing against the wrong baseline"
     );
 }
@@ -677,7 +677,7 @@ fn q3b_the_fixed_joints_angular_lock_does_not_creep() {
     for (name, hz, d6) in [
         ("Fixed, legacy hz=0 ", LEGACY_HZ, false),
         ("Fixed, soft  hz=200", SHIPPED_HZ, false),
-        // 150 Hz is the setting `docs/FIXPLAN.md` names as the price of turning warm start on
+        // 150 Hz is the setting `docs/ENGINE.md` names as the price of turning warm start on
         // at factor 1.0, so what it costs in creep belongs in the same table as the decision.
         ("Fixed, soft  hz=150", 150.0f32, false),
         ("Fixed, soft  hz=100", 100.0f32, false),

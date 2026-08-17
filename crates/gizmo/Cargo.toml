@@ -44,7 +44,7 @@ scene = ["dep:gizmo-scene", "gizmo-app/scene"]
 # `--features audio` fail to compile, because you cannot draw or spatialise anything without
 # a transform. `physics` therefore gates the *simulation* (the rigid-body solver), not the
 # spatial types. Moving `Transform` into `gizmo-core` where it belongs is tracked in
-# docs/FIXPLAN.md; until then this is the honest split.
+# docs/ENGINE.md; until then this is the honest split.
 physics = ["gizmo-app/physics", "dep:gizmo-physics-rigid"]
 physics-dynamics = ["dep:gizmo-physics-dynamics"]
 physics-soft = ["dep:gizmo-physics-soft"]

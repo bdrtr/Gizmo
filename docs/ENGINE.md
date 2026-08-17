@@ -48,9 +48,11 @@ still-large functions such as `update_vehicle` / `execute_render_pipeline` — a
 
 > **2026-08-04:** An independent whole-engine audit was carried out → `docs/AUDIT-2026-08.md`
 > (every finding backed by `file:line` evidence; 9 claims that could not survive adversarial
-> verification were removed). The resulting work is being executed in `docs/FIXPLAN.md` — once
-> that campaign ends, the durable decisions move here and FIXPLAN is deleted. The Phase 6/7 items
-> below remain valid; the audit added a Phase A (honesty + security) that comes **before** them.
+> verification were removed). The resulting work was executed in `docs/FIXPLAN.md`, a deliberately
+> temporary document. **That campaign closed on 2026-08-17 and the file is deleted, as its own
+> header always promised.** Its durable content is here: unfinished work below, measurements and
+> refuted candidates in §7, method in §8. The audit report itself stays — it is dated evidence,
+> not a plan.
 
 Phases 0–5 (stabilization, tests+CI, determinism, P2P rollback netcode, physics depth,
 renderer/WASM/editor) are **DONE**. Remaining:
@@ -101,6 +103,39 @@ already shipped. Each is now either on, or off with a reason:
 | **rustfmt** | **report-only, and staying that way.** Making it a gate means reformatting the tree first: measured, **2660 hunks across every crate**. That is one commit of pure churn against git blame, a conflict with anything in flight, and it buys a property clippy does not already give — the lint gate is the one that catches defects. The existing rule stands: don't reflow unrelated code, and leave the report on so drift stays visible. |
 | **coverage** | **not adopted.** A percentage gate rewards tests that execute lines; this codebase's tests are written to fail when behaviour is wrong (the pixel readbacks, the soak horizons, the source-shape guards), and several of the defects found this month were in code with coverage and no assertion. The number would go up and mean nothing. |
 <!-- TRANSLATOR NOTE: "İnsan-gözü A/B gated" is a terse fragment; read as "these items can only be signed off by a human comparing before/after side by side". -->
+
+**Carried from the FIXPLAN campaign (retired 2026-08-17).** `docs/FIXPLAN.md` was the temporary
+document that executed the 2026-08 audit; it is gone, as its own header always said it would be.
+What it still tracked as unfinished is the list below — verified against the code on the day it
+moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, non-goals) and §8
+(method).
+
+- **Gamepad input.** Never started. `car_demo`, `beamng`, `platformer` and a complete
+  fighting-game input module exist and not one of them can be played with a stick.
+- **The ten-light ceiling.** `gpu_types.rs`'s `[LightData; 10]`, filled by whichever ten lights
+  ECS iteration reaches first — no distance or priority culling, and that order is not stable
+  across frames. Clustered/tiled light culling is the fix, and it is the reason this engine has a
+  deferred pipeline at all.
+- **Friction has no positional term.** The normal channel carries `pen0` into the bias in all
+  three sweeps (`solver/tgs.rs`), which is what depenetrates and what makes TGS work. The tangent
+  channel has no counterpart: all three friction solves are pure `acc_t − rel·t/k_t`, i.e.
+  velocity-level only. Friction resists tangential *velocity*, never tangential *displacement* —
+  the standing candidate for the tall-stack growth rate (§7).
+- **N2 — the 2 cm lateral-gap collapse.** A 20-unit ground with a 0.020 gap collapses; 0.010,
+  0.015, 0.025, 0.030, 0.040, 0.050 and 0.060 all stand for 3000 frames. A single-cell spike, and
+  the cause is open. `warm_start_match_tolerance` was the obvious suspect (its default is also
+  0.02) and is refuted: 0.002 / 0.02 / 0.05 collapse in the same gap on the same frame.
+- **The doc-language rule, Stage B remainder.** Stage A plus the facade went from 1286 Turkish
+  `///` lines to 8, and seven of those eight are measurement error. The Stage B crates
+  (renderer, editor, studio, scripting, app) have not been through it.
+- **Asset identity, the remaining three.** `demo/assets` is not scanned, glTF meshes get no UUID,
+  and scenes still write paths rather than ids. All three wait on one decision — *do scenes
+  address assets by identity?* — and wiring them before it is answered would be speculation. The
+  machinery exists: `AssetMeta { uuid }`, `.meta` sidecars on disk, `path_to_uuid`/`uuid_to_path`,
+  and `load_obj`/`load_material_texture` already accept a UUID in place of a path.
+- **Shader Graph.** A node editor plus WGSL generation. The largest item on the editor list and a
+  project on its own; the prototype has a tab for it, the engine has nothing.
+
 
 ---
 
@@ -883,9 +918,81 @@ already auto-vectorized). DO NOT RETRY without passing the step-0 gate again. (T
 
 ---
 
+### Physics performance baseline (2026-08-05, `benches/step_bench.rs`)
+
+Carried out of the campaign because a baseline nobody can find is a baseline nobody uses. Five
+scenario groups in `gizmo-physics-rigid` — broadphase (a contact-free lattice), narrowphase
+(overlapped), solver (a settled tower), joints (a hanging chain), full_step (mixed). Every
+iteration **rebuilds the scene**: `iter_batched`'s setup stays out of the measurement, and
+stepping one world a thousand times measures a different simulation each time (bodies settle,
+sleep, the cost collapses, and that reads as a speed-up).
+
+| scenario | 64/8 | 256/24 | 1024/48 |
+|---|---|---|---|
+| broadphase | 226 µs | 609 µs | 1.73 ms |
+| dense_contacts (solver-bound) | 6.96 ms | 27.66 ms | **151.00 ms** |
+| solver (tower) | 532 µs | 1.20 ms | 4.05 ms |
+| joints (chain 8/32/128) | 161 µs | 317 µs | 755 µs |
+| full_step (128/512) | 635 µs | 2.43 ms | — |
+
+**These are a floor, not a ceiling** — measured with this repo's `lto=off` / `codegen-units=4`
+dev profile — and they are machine-specific. Use them the only way they are valid: same machine,
+before and after.
+
+### The tall-stack sensitivity (N1/N2), and the five candidates that died proving what it is
+
+**N1 — ground size changes tower stability.** Mechanism found: it is the **sleep path**. Forcing
+every body awake makes the whole effect vanish; ground size only moves *when* the stack sleeps.
+What size really does is raise the **resting amplitude** — peak lean is ~0.011 up to half-size 21
+and saturates at ~0.018–0.024 from 50 on — and collapses appear only in that upper band. *Which*
+size collapses inside the band is chaotic: 140 and 150 fall, 160/175/190 stand, 200 falls. What
+raises the amplitude is still unidentified, and that is the thread to pull.
+
+Refuted on the way, and none of them worth re-testing:
+
+| candidate | measurement | verdict |
+|---|---|---|
+| birth-kick magnitude scales with ground | `does_a_bigger_ground_deliver_a_bigger_birth_kick` | **dead** — 0.58 % across 20→200 |
+| tangential ratchet (accumulation) | `is_the_lean_slip_or_rotation` | **dead** — slip oscillates, path/net ≈ 21 |
+| accumulated slip discriminates survivors | same | **dead** — survivors accumulate MORE (0.521 vs 0.462) |
+| contact jitter grows with ground | `does_a_settled_contact_jitter_more_on_a_bigger_ground` | **dead** — a settled contact is bit-stable at every size, 0 jitter over 600 frames |
+| "no mechanism, just a different sample" | ground 20.000 → 20.001 → 20.01 → 20.1 → 21.0 | **dead** — a millimetre on a 40 m box does not scatter the result; peak leans stay within 0.004 |
+
+### Do not re-chase (carried from the campaign)
+
+- **`gizmo-audio`'s cfg-gated `unsafe impl Send/Sync`.** Correct, and justified in place: a
+  single-threaded wasm build with `atomics` off, and the impls disappear if `atomics` is enabled.
+- **The nine audit claims that failed adversarial verification.** They were removed from
+  `docs/AUDIT-2026-08.md` when it was written; they are not a backlog.
+- **bincode.** Staying. The advisory covers every version of the crate (development stopped; "no
+  safe upgrade is available"), 2.0.1 is the maintained line, and the alternatives are different
+  serializers, not upgrades. Leaving it breaks the wire format and needs its own benchmarks. The
+  trigger to reopen: a measured serialization bottleneck, or a defect 2.x does not fix.
+- **Moving `Transform` into `gizmo-core`.** Measured 2026-08-17 and declined: depending on
+  `gizmo-physics-core` costs nothing a consumer would notice (no solver, no rayon — arrayvec,
+  core, math, rustc-hash, serde, tracing), `gizmo-core` is one of only three Stage A crates with
+  no glam on its surface, and physics-core's `gizmo-core` dependency is *optional*, so `Transform`
+  works without an ECS today — a move would end that. If it is ever paid for, the two shapes are
+  (a) core takes glam, or (b) a separate spatial crate in the shape of `bevy_transform`; the
+  trigger is D1 (packaging the physics crates independently) actually happening, or a consumer who
+  wants the type without the physics vocabulary.
+- **The prototype's four egui-0.34 limits** (left-aligned button labels, Lucide icons, a 2 px
+  separator between sections, an offset focus ring). Not defects, toolkit limits — recorded in
+  code as `gizmo_editor::theme::UNIMPLEMENTED_SYSTEM_RULES` so they are not rediscovered as bugs.
+
 ## 8. Working Method
 
 - Every item: **fix → write a regression test → build/test/clippy → tick it off.**
+- **A plan's own status markers rot, and they rot in the direction that costs most.** Retiring
+  FIXPLAN found *four* items marked in progress or not started whose work had been finished weeks
+  earlier — including one where the code, its tests and its Cargo.toml comment all said so. A
+  marker is a claim about the code: verify it against the code before planning around it. "Not
+  done" about finished work is worse than no plan, because it is the one kind of error that never
+  gets a bug report.
+- **Re-blessing a golden scene is a paragraph, not a number.** Record old → new for every value
+  *in the file*, name the cause, and say which direction the sharpest instrument moved. The two
+  joint scenes carry two such blocks and they are what makes a later reader able to tell a fix
+  from a regression.
 - Verify behavior-changing physics fixes with `headless_stress_test` + focused scenarios;
   choose the soak horizon beyond the onset of instability.
 - On bug-hunt rounds use subagent fan-out, then verify every finding BY HAND

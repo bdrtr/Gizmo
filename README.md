@@ -92,7 +92,7 @@ Gizmo is a workspace of small crates layered bottom-up, so you can depend on the
 > `gizmo-physics-rigid` still takes `gizmo-core` as a mandatory dependency today, so
 > using it from another engine pulls the ECS in with it. Making that dependency
 > optional (and shipping the physics crates with their own docs) is a tracked
-> roadmap item — see [`docs/FIXPLAN.md`](docs/FIXPLAN.md) D1.
+> roadmap item — see [`docs/ENGINE.md`](docs/ENGINE.md) §3.
 
 ## 📸 Showcase
 

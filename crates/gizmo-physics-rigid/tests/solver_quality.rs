@@ -2908,7 +2908,7 @@ fn what_does_the_rewind_history_cost() {
 ///
 /// `benches/step_bench.rs` reports whole-`step` wall time per scenario; the engine's own
 /// `PhysicsMetrics` breaks one frame into broadphase / narrowphase / solver / integration. The
-/// last time that split was recorded (docs/FIXPLAN.md, C1) the solver was 91% of a dense frame —
+/// last time that split was recorded (docs/ENGINE.md, C1) the solver was 91% of a dense frame —
 /// but that measurement was on the exploding raft, and since then stacks sleep as a unit, the
 /// broadphase is incremental and the narrowphase no longer produces degenerate manifolds.
 ///

@@ -50,7 +50,7 @@ pub use crate::gizmo_log;
 // NOTE: `Transform` and `GlobalTransform` live in `gizmo-physics-core`, so the `physics`
 // feature is what puts even the basic spatial types in the prelude. Moving them into
 // `gizmo-core` would let a render-only or logic-only build have transforms — tracked in
-// docs/FIXPLAN.md.
+// docs/ENGINE.md.
 pub use gizmo_physics_core::{Collider, ColliderShape, Transform};
 pub use gizmo_physics_core::components::GlobalTransform;
 #[cfg(feature = "physics")]

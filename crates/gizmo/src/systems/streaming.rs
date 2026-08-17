@@ -224,7 +224,7 @@ mod tests {
         // Bu test kendi headless `Renderer`'ını (tam bir wgpu cihazı) kuruyor ve uzun süre
         // golden testlerle EŞZAMANLI koşuyordu: `gpu_lock` `golden_render_tests` içinde
         // private'dı, buradan erişilemiyordu. İki canlı cihaz, ölçülen 2-iyi/4-ölümcül
-        // eşiğinin tam sınırında — FIXPLAN'ın "~12 koşuda 2 çöküş" artığının açıklaması bu.
+        // eşiğinin tam sınırında — kampanya kaydındaki "~12 koşuda 2 çöküş" artığının açıklaması bu.
         // Guard `gpu_available()` probe'undan da ÖNCE alınıyor: o probe da bir Instance kuruyor.
         let _gpu = crate::test_gpu::gpu_lock();
         if !gpu_available() {

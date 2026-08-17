@@ -940,7 +940,7 @@ current_cache.insert(pair, (false, Some(cached)));
                 // inverse mass, so it takes real impulses), and this loop used to write its result
                 // onto every dynamic island member. Position integration then skips the sleeping
                 // ones — so a body that stays asleep banks a velocity it never spends, and fires it
-                // whenever something wakes it later. That is the defect `docs/FIXPLAN.md` records
+                // whenever something wakes it later. That is the defect `docs/ENGINE.md` records
                 // against this write-back.
                 //
                 // Waking first is what keeps this from changing the ordinary case: an island with a
