@@ -125,7 +125,7 @@ jobs:
       # v5 exists; not taken because this pair is the tested one and v4 changed
       # dotfile handling. `_site` has no dotfiles either way.)
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: _site
 
