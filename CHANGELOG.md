@@ -48,6 +48,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Keyboard behaviour is unchanged for the demos that were already correct — checked against their
   previous expression over all 81 key combinations, not asserted.
 
+- **Gamepad rumble.** `Input::rumble(weak, strong, duration_secs)` and `Input::rumble_pad` queue a
+  request; `GamepadBackend::apply_rumble` hands it to the driver. The two motors are separate and
+  named for the feeling — `weak` buzzes, `strong` thumps — because a game that sets only one is
+  asking for a qualitatively different sensation, not a quieter version of the same one.
+
+  It is a **queue** rather than state, which is what keeps three things from going wrong: a replay
+  does not shake the controller (the queue is `#[serde(skip)]`), a dropped frame does not repeat a
+  rumble (requests are drained), and losing focus clears pending ones and asks the driver to stop.
+
+  **Known limitation, measured:** gilrs reports no force-feedback support for a Linux uinput device
+  even when it advertises every capability bit gilrs's own test reads, so the device-level path
+  could not be verified here — see docs/ENGINE.md §3. The engine's side (queue, clamps, focus-loss
+  stop, one effect per pad, requests consumed even when unsatisfiable) is covered by tests.
+
 - **`ColliderShape::Cone`.** Base at `-half_height`, apex at `+half_height`, axis local +Y —
   `Collider::cone(radius, half_height)`, the same convention as the cylinder. Convex, so it rides
   the existing GJK/EPA route.

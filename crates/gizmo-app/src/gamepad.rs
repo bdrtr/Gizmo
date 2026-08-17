@@ -42,6 +42,13 @@ pub struct GamepadBackend {
     gilrs: Option<Gilrs>,
     /// What each pad is doing, as far as anything can know — see [`KnownPad`].
     known: Vec<KnownPad>,
+    /// The rumble effect currently uploaded per pad, held so it can be stopped and replaced.
+    ///
+    /// gilrs's `Effect` owns its slot in the driver: dropping it removes the effect, and a driver
+    /// has a small fixed number of slots (16 on a typical Linux pad). Building a new effect per
+    /// request without dropping the old one therefore stops working after a dozen explosions —
+    /// with an error the game has no way to act on. One effect per pad, replaced in place.
+    effects: Vec<(GamepadId, gilrs::ff::Effect)>,
 }
 
 /// The backend's own mirror of a pad's state, kept because gilrs does not keep one for us.
@@ -97,6 +104,7 @@ impl GamepadBackend {
         let mut backend = Self {
             gilrs,
             known: Vec::new(),
+            effects: Vec::new(),
         };
         if let Some(gilrs) = &backend.gilrs {
             for (id, gamepad) in gilrs.gamepads() {
@@ -112,6 +120,96 @@ impl GamepadBackend {
     /// Is a gamepad subsystem actually running? False means no pad will ever appear.
     pub fn is_available(&self) -> bool {
         self.gilrs.is_some()
+    }
+
+    /// Hands the frame's rumble requests to the driver, and empties the queue.
+    ///
+    /// Call it **after** the frame's systems have run — that is when the requests exist — and
+    /// before the next `pump`. A game asks with [`Input::rumble`]; this is the other end.
+    ///
+    /// Silently does nothing when gilrs did not start, when the pad is gone, or when the device
+    /// has no motors: `is_ff_supported()` is false for a great many pads (every wired Xbox 360
+    /// clone without the rumble pack, most flight sticks, every virtual pad that did not declare
+    /// `FF_RUMBLE`), and a game must not have to ask before it can call `rumble` on impact.
+    ///
+    /// **Duration is expressed as the effect's own scheduling, not by a timer here.** A rumble
+    /// that the engine had to stop on a later frame would keep buzzing through a stall, a
+    /// breakpoint or a dropped frame — the driver has the clock that does not stop.
+    pub fn apply_rumble(&mut self, input: &mut Input) {
+        if !input.has_rumble_requests() {
+            return;
+        }
+        let requests = input.take_rumble_requests();
+        let Some(gilrs) = &mut self.gilrs else {
+            return;
+        };
+
+        for request in requests {
+            let Some(pad_id) = gilrs
+                .gamepads()
+                .find(|(id, _)| GamepadId::new(usize::from(*id) as u32) == request.gamepad)
+                .map(|(id, _)| id)
+            else {
+                continue;
+            };
+            if !gilrs.gamepad(pad_id).is_ff_supported() {
+                continue;
+            }
+
+            // A stop is a stop, not an effect of zero magnitude: dropping the effect frees the
+            // driver slot, where a zero-magnitude effect would keep holding it.
+            if request.is_stop() {
+                self.effects.retain(|(id, _)| *id != request.gamepad);
+                continue;
+            }
+
+            // f32 0..=1 → the u16 the driver speaks. Rounded rather than truncated so a request
+            // of 1.0 reaches full scale instead of one short of it.
+            let scale = |v: f32| (v.clamp(0.0, 1.0) * f32::from(u16::MAX)).round() as u16;
+            let ms = (request.duration_secs * 1000.0).round().clamp(0.0, 60_000.0) as u32;
+            let play_for = gilrs::ff::Ticks::from_ms(ms);
+
+            let mut builder = gilrs::ff::EffectBuilder::new();
+            // Both motors, always — a request that asked for only one gets the other at zero,
+            // which is what makes "buzz" and "thump" separable rather than a single intensity.
+            builder
+                .add_effect(gilrs::ff::BaseEffect {
+                    kind: gilrs::ff::BaseEffectType::Weak {
+                        magnitude: scale(request.weak),
+                    },
+                    scheduling: gilrs::ff::Replay {
+                        play_for,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                })
+                .add_effect(gilrs::ff::BaseEffect {
+                    kind: gilrs::ff::BaseEffectType::Strong {
+                        magnitude: scale(request.strong),
+                    },
+                    scheduling: gilrs::ff::Replay {
+                        play_for,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                })
+                .add_gamepad(&gilrs.gamepad(pad_id));
+
+            match builder.finish(gilrs) {
+                Ok(effect) => {
+                    if let Err(e) = effect.play() {
+                        tracing::debug!(pad = %request.gamepad, error = ?e, "[gamepad] rumble refused");
+                        continue;
+                    }
+                    // Replace rather than append: see `effects`.
+                    self.effects.retain(|(id, _)| *id != request.gamepad);
+                    self.effects.push((request.gamepad, effect));
+                }
+                Err(e) => {
+                    tracing::debug!(pad = %request.gamepad, error = ?e, "[gamepad] rumble effect rejected");
+                }
+            }
+        }
     }
 
     /// Drains every pending device event into `input`. Call once per frame, before the frame's

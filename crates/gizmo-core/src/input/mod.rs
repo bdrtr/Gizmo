@@ -77,6 +77,13 @@ pub struct Input {
     /// the field is simply absent in those files and deserialises to "no pads".
     #[serde(default)]
     gamepads: Gamepads,
+
+    /// Rumble the game has asked for and the platform layer has not yet taken.
+    ///
+    /// `#[serde(skip)]`, not `#[serde(default)]`: this is an OUTPUT, and a replay records inputs.
+    /// See [`crate::input::rumble`] for the three ways treating it as state would go wrong.
+    #[serde(skip)]
+    rumble_queue: Vec<RumbleRequest>,
 }
 
 impl Input {
@@ -100,6 +107,7 @@ impl Input {
             mouse_delta: (0.0, 0.0),
             mouse_scroll_delta: 0.0,
             gamepads: Gamepads::new(),
+            rumble_queue: Vec::new(),
         }
     }
 
@@ -215,6 +223,10 @@ impl Input {
         // `GamepadBackend::resync`) so held controls come back rather than waiting for a
         // release-and-press.
         self.gamepads.release_all();
+        // Rumble travels the other way, so it needs the opposite treatment: pending requests are
+        // dropped and a STOP is queued in their place, or an explosion that started a moment
+        // before Alt-Tab keeps shaking a pad nobody is holding. See `input::rumble`.
+        self.clear_rumble_on_focus_loss();
     }
 
     /// Is the key pressed right now? (continuous check)
@@ -442,6 +454,7 @@ mod axis;
 mod fighter;
 mod gamepad;
 mod mapping;
+pub mod rumble;
 pub use axis::{blend_move_axis, MoveKeys};
 pub use fighter::{FighterInputBuffer, FrameActions, FrameRecord, PlaybackData};
 pub use gamepad::{
@@ -450,6 +463,7 @@ pub use gamepad::{
     GamepadId, Gamepads, NAMED_GAMEPAD_AXES, NAMED_GAMEPAD_BUTTONS,
 };
 pub use mapping::{ActionMap, InputBinding};
+pub use rumble::RumbleRequest;
 
 #[cfg(test)]
 mod tests {

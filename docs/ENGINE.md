@@ -171,8 +171,35 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
   gilrs release that reads initial state, or a complaint. *The browser:* gilrs ships a wasm
   backend, but it is polled
   rather than evented and nothing here can verify it — **trigger:** a browser with a pad in front
-  of someone. *Rumble:* gilrs has `ff`; nothing is wired — **trigger:** a game that asks. *A
-  rebinding UI:* `NAMED_GAMEPAD_BUTTONS` exists so a config file can name controls, but no editor
+  of someone. *Rumble — WIRED (2026-08-18), with a
+  third-party limitation measured rather than guessed.* `Input::rumble(weak, strong, secs)` and
+  `rumble_pad`; `gizmo_app::gamepad::GamepadBackend::apply_rumble` hands them to gilrs's `ff`
+  after the frame's systems have run.
+
+  **A queue, not a field, and the reasons are each a line of code.** Rumble is the one thing on a
+  pad that travels outwards, so the three properties `Input` gets for free as *state* all become
+  wrong: a replay would shake the controller (the queue is `#[serde(skip)]` — a recording is what
+  the player did, not what the game answered), a dropped frame would repeat it (it is *drained*,
+  not read), and Alt-Tab would fire it late (`release_all` clears pending requests **and** queues
+  a stop, because a rumble already running lives in the driver and outlives the frame that started
+  it). The two motors are named `weak`/`strong` after the feeling rather than `left`/`right` after
+  one controller's plastic. One effect per pad, replaced in place: a gilrs `Effect` owns a driver
+  slot and a typical pad has sixteen, so building a new one per explosion stops working after a
+  dozen — with an error a game cannot act on.
+
+  **What could not be verified here, precisely.** A virtual `/dev/uinput` pad declaring `FF_RUMBLE`
+  plus every bit gilrs's `test_ff` reads — `FF_SQUARE`, `FF_TRIANGLE`, `FF_SINE`, `FF_GAIN`,
+  checked by reading the device's capabilities back — still reports `is_ff_supported() == false`
+  through gilrs, so no effect ever reaches the kernel's upload protocol and the magnitudes cannot
+  be read back. The blocker is inside gilrs-core's Linux path. `gamepad_rumble_device.rs` keeps the
+  whole harness (it *does* read uploaded effects: `strong=`, `weak=`, `length=` straight out of
+  `UI_FF_UPLOAD`) and **skips loudly with that measurement** rather than failing, because a red
+  test there would be blaming this engine for someone else's behaviour. Worth knowing separately:
+  gilrs's test wants the periodic-waveform set of a force-feedback *wheel*, and most console pads
+  on Linux advertise only `FF_RUMBLE` — so gilrs reports no force feedback for them either.
+  **Trigger:** a gilrs release that fixes this, or a wheel-class device to try it on.
+
+  *A rebinding UI:* `NAMED_GAMEPAD_BUTTONS` exists so a config file can name controls, but no editor
   panel consumes it. *Demos beyond `car_demo` and `platformer` — CLOSED (2026-08-17), and the
   three lines turned out to be the wrong shape.* See the movement-axis item below.
 - **Movement input — one axis instead of nineteen copies (2026-08-17).** The gamepad item above

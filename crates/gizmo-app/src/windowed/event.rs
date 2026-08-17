@@ -836,6 +836,15 @@ impl<State: 'static> App<State> {
                                 profiler.end_scope("render");
                             }
 
+                            // Rumble the frame's systems asked for, handed to the driver here —
+                            // AFTER they have run, because that is when the requests exist, and
+                            // before `begin_frame`, which is where a request made this frame would
+                            // otherwise sit unseen until the next one.
+                            #[cfg(all(feature = "gamepad", not(target_arch = "wasm32")))]
+                            if let Some(backend) = self.gamepad_backend.as_mut() {
+                                backend.apply_rumble(&mut self.input);
+                            }
+
                             // İşlemlerin bitiminde frame-özel input girdilerini (fare delta vs.) temizle
                             self.input.begin_frame();
 
