@@ -207,6 +207,11 @@ pub fn draw_script_section(
     }
 }
 
+/// The script rows on wasm, where there is no filesystem to browse: a stub that draws nothing.
+///
+/// It needs its own doc comment because `missing_docs` is per-target in exactly the way the wasm
+/// clippy job exists to catch — the native lint never compiles this arm, so the crate read as
+/// fully documented while this one function was not. See the `wasm` job in `.github/workflows/ci.yml`.
 #[cfg(target_arch = "wasm32")]
 pub fn draw_script_section(
     _ui: &mut egui::Ui,
