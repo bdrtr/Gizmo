@@ -1,25 +1,39 @@
 use crate::deferred::DeferredState;
 use crate::pipeline::{load_shader, load_shader_composed, SceneState};
 
+/// Screen-space reflections: reflections marched through the depth buffer.
+///
+/// Only what is already on screen can be reflected, so a surface facing away from the camera
+/// reflects nothing — the fallback is the environment probe, applied by the deferred lighting pass.
 pub struct SsrState {
+    /// The traced reflection colour.
     pub ssr_texture: wgpu::Texture,
+    /// Its view.
     pub ssr_view: wgpu::TextureView,
 
+    /// The trace pass.
     pub ssr_pipeline: wgpu::RenderPipeline,
     ssr_bgl: wgpu::BindGroupLayout,
+    /// Its G-buffer and HDR inputs. Rebuilt on resize.
     pub ssr_bind_group: wgpu::BindGroup,
 
+    /// The apply pass, compositing the reflection over the HDR target by the surface's Fresnel
+    /// term.
     pub apply_pipeline: wgpu::RenderPipeline,
     apply_bgl: wgpu::BindGroupLayout,
+    /// Its input. Rebuilt on resize.
     pub apply_bind_group: wgpu::BindGroup,
 
     nearest_sampler: wgpu::Sampler,
 
+    /// The reflection target's width, in pixels.
     pub width: u32,
+    /// Its height.
     pub height: u32,
 }
 
 impl SsrState {
+    /// Builds every SSR resource for a target of the given size.
     pub fn new(
         device: &wgpu::Device,
         scene: &SceneState,
@@ -72,6 +86,7 @@ impl SsrState {
         }
     }
 
+    /// Rebuilds the size-dependent texture and the bind groups that read it.
     pub fn resize(
         &mut self,
         device: &wgpu::Device,

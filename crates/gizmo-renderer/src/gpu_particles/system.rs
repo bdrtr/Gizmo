@@ -3,13 +3,26 @@ use wgpu::util::DeviceExt;
 use super::pipeline::{create_particle_pipelines, ParticlePipelines};
 use super::types::*;
 
+/// A GPU particle system: one buffer that is simulated and then drawn, with no CPU round trip.
+///
+/// Particles are never added or removed — the buffer is a fixed-size ring, and spawning overwrites
+/// the oldest slot. That is what keeps the whole system to one dispatch and one draw regardless of
+/// how many particles are alive.
 pub struct GpuParticleSystem {
+    /// The buffer's capacity, and the ring's length.
     pub max_particles: u32,
+    /// The particles themselves — [`GpuParticle`](crate::gpu_particles::types::GpuParticle)s.
     pub particles_buffer: wgpu::Buffer,
+    /// The per-frame simulation parameters.
     pub params_buffer: wgpu::Buffer,
+    /// The compute and render pipelines.
     pub pipelines: ParticlePipelines,
+    /// The unit quad each particle is billboarded onto.
     pub quad_vertex_buffer: wgpu::Buffer,
+    /// How many particles the simulation and draw cover this frame.
     pub active_particles: u32,
+    /// Where the next spawn writes. Atomic because spawning happens from `&self`, so several
+    /// emitters can spawn in the same frame without taking a lock.
     pub ring_head: std::sync::atomic::AtomicU32,
     /// Simulation gravity (m/s²), subtracted from each particle's `velocity.y` every frame.
     /// Defaults to 9.81 (sparks and smoke fall). For horizontal flow or streamlines set it to
@@ -55,6 +68,7 @@ pub struct GpuParticleSystem {
 }
 
 impl GpuParticleSystem {
+    /// Allocates the particle ring and builds both pipelines.
     pub fn new(
         device: &wgpu::Device,
         max_particles: u32,
@@ -258,6 +272,7 @@ impl GpuParticleSystem {
         self.set_flipbook(device, queue, &rgba, size, size, tiles);
     }
 
+    /// Uploads this frame's timestep and elapsed time.
     pub fn update_params(&self, queue: &wgpu::Queue, dt: f32, time: f32) {
         let count = self.obstacles.len().min(crate::gpu_particles::types::MAX_PARTICLE_OBSTACLES);
         let mut obstacles = [[0.0f32; 4]; crate::gpu_particles::types::MAX_PARTICLE_OBSTACLES];
@@ -289,6 +304,8 @@ impl GpuParticleSystem {
         queue.write_buffer(&self.flipbook_params_buffer, 0, bytemuck::cast_slice(&fb));
     }
 
+    /// Writes new particles at the ring head, wrapping — a spawn larger than the remaining tail
+    /// is split into two writes rather than truncated.
     pub fn spawn_particles(&self, queue: &wgpu::Queue, new_particles: &[GpuParticle]) {
         if new_particles.is_empty() {
             return;
@@ -320,6 +337,7 @@ impl GpuParticleSystem {
     }
 
     #[tracing::instrument(skip_all, level = "trace")]
+    /// Records the simulation dispatch for `active_particles` particles.
     pub fn compute_pass(&self, encoder: &mut wgpu::CommandEncoder, active_particles: u32) {
         if active_particles == 0 {
             return;
@@ -354,6 +372,7 @@ impl GpuParticleSystem {
     }
 
     #[tracing::instrument(skip_all, level = "trace")]
+    /// Records the billboard draw, taking the simulation buffer directly as instance data.
     pub fn render_pass<'a>(
         &'a self,
         rpass: &mut wgpu::RenderPass<'a>,

@@ -33,6 +33,11 @@ struct SmokeParams {
     inv_view_proj: [[f32; 4]; 4],
 }
 
+/// A raymarched volumetric smoke box, simulated on a 3-D grid.
+///
+/// The density field is stepped by a compute pass, ping-ponging between two buffers, and then
+/// raymarched from the camera. It is a *volume*, not particles: it occupies a fixed box in the
+/// world, and everything below the settings line is what a demo tunes.
 pub struct SmokeVolume {
     grid_n: u32,
     // Bind grup'lar buffer'ları canlı tutar; alan sadece sahiplik/ömür içindir.
@@ -53,19 +58,35 @@ pub struct SmokeVolume {
     parity: AtomicU32, // güncel yoğunluk hangi buffer'da
 
     // Ayarlanabilir (demo yazar):
+    /// The volume's minimum corner, in world space.
     pub bounds_min: [f32; 3],
+    /// Its maximum corner.
     pub bounds_max: [f32; 3],
+    /// How fast light is absorbed through the smoke — larger is more opaque.
     pub absorption: f32,
+    /// A multiplier on the simulated density before it is marched.
     pub density_scale: f32,
+    /// How many samples each ray takes through the volume. More is smoother and slower.
     pub steps: u32,
+    /// The smoke's linear RGB colour.
     pub color: [f32; 3],
+    /// Ambient light reaching the smoke regardless of the sun.
     pub ambient: f32,
+    /// Where smoke is injected, in world space.
     pub source: [f32; 3],
+    /// The radius injection happens over.
     pub source_radius: f32,
+    /// How much density is injected per step. 0 = the source is off.
     pub inject: f32,
+    /// How much density decays per step — what makes a plume thin out instead of accumulating
+    /// forever.
     pub dissipation: f32,
+    /// How strongly smoke rises.
     pub buoyancy: f32,
+    /// Curl-noise strength: the swirl added to the velocity field, which is what makes the plume
+    /// break up instead of rising as a column.
     pub curl_strength: f32,
+    /// The spatial scale of that noise — smaller means finer eddies.
     pub curl_scale: f32,
     /// Bounded radial fill: smoke is pushed OUTWARD from the source so it spreads to fill a
     /// volume (rather than only rising), the push fading to zero past `fill_radius`. This is a
@@ -82,6 +103,7 @@ pub struct SmokeVolume {
 }
 
 impl SmokeVolume {
+    /// Allocates the density grid and builds the compute and raymarch pipelines.
     pub fn new(
         device: &wgpu::Device,
         scene_global_layout: &wgpu::BindGroupLayout,

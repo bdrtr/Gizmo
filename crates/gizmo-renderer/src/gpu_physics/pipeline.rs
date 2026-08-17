@@ -1,23 +1,43 @@
 use super::types::GpuBox;
 use crate::gpu_types::Vertex;
 
+/// Every pipeline the GPU rigid-body solver runs: one compute pass per stage of a step, plus the
+/// draw and the frustum-culling pass that feeds it.
+///
+/// The stages must run in this order, each as its own dispatch, because each reads what the
+/// previous one wrote across the whole buffer — a single fused kernel would need a global barrier
+/// that a compute dispatch does not have.
 pub struct PhysicsPipelines {
+    /// Layout of the group holding every simulation buffer.
     pub compute_bind_group_layout: wgpu::BindGroupLayout,
+    /// That group.
     pub compute_bind_group: wgpu::BindGroup,
+    /// Stage 1: clear the broadphase grid.
     pub pipeline_clear: wgpu::ComputePipeline,
+    /// Stage 2: bin every body into the grid.
     pub pipeline_build: wgpu::ComputePipeline,
+    /// Stage 3: turn candidate pairs into contact manifolds.
     pub pipeline_narrowphase: wgpu::ComputePipeline,
+    /// Stage 4: the contact solver, run for several iterations.
     pub pipeline_solve: wgpu::ComputePipeline,
+    /// Stage 6: integrate velocities into positions, and update the sleep state.
     pub pipeline_integrate: wgpu::ComputePipeline,
+    /// Stage 5: the joint solver.
     pub pipeline_solve_joints: wgpu::ComputePipeline,
 
+    /// The instanced box draw, reading the simulation buffer directly.
     pub render_pipeline: wgpu::RenderPipeline,
 
+    /// Layout of the culling pass's group.
     pub culling_bind_group_layout: wgpu::BindGroupLayout,
+    /// That group.
     pub culling_bind_group: wgpu::BindGroup,
+    /// Frustum culling on the GPU, writing the visible subset and an indirect draw count — so the
+    /// CPU never learns how many bodies were visible, and never has to.
     pub pipeline_culling: wgpu::ComputePipeline,
 }
 
+/// Builds every physics pipeline and bind group over the given simulation buffers.
 pub fn create_physics_pipelines(
     device: &wgpu::Device,
     global_bind_group_layout: &wgpu::BindGroupLayout,

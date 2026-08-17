@@ -46,6 +46,8 @@ impl Renderer {
         )
     }
 
+    /// Builds a [`Skeleton`](crate::components::Skeleton) from a joint hierarchy: allocates its
+    /// matrix buffer and bind group, and seeds the pose.
     pub fn create_skeleton(
         &self,
         hierarchy: std::sync::Arc<gizmo_animation::skeletal::SkeletonHierarchy>,
@@ -91,6 +93,8 @@ impl Renderer {
         )
     }
 
+    /// Uploads a vertex slice and returns the buffer. The caller wraps it in a
+    /// [`Mesh`](crate::components::Mesh), which is where the bounds and the CPU copy are computed.
     pub fn create_mesh(&self, vertices: &[Vertex]) -> wgpu::Buffer {
         self.device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {

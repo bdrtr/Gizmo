@@ -25,8 +25,11 @@ use wgpu::util::DeviceExt;
 
 /// Sahne render durumu — pipeline'lar, shadow, skeleton ve global bind group'lar
 pub struct SceneState {
+    /// The main opaque PBR pipeline, back faces culled.
     pub render_pipeline: wgpu::RenderPipeline,
+    /// The same, with culling off, for materials marked double-sided.
     pub render_double_sided_pipeline: wgpu::RenderPipeline,
+    /// Albedo straight through, no lighting — see [`MaterialType::Unlit`](crate::components::MaterialType::Unlit).
     pub unlit_pipeline: wgpu::RenderPipeline,
     /// Baked lighting × texture, with the sun's cascade term. See `shaders/baked_lit.wgsl`.
     pub baked_lit_pipeline: wgpu::RenderPipeline,
@@ -34,51 +37,85 @@ pub struct SceneState {
     /// marked transparent — a decal or skid-mark layer, which the opaque variant would paint
     /// over the road as solid geometry no matter what alpha the shader produced.
     pub baked_lit_transparent_pipeline: wgpu::RenderPipeline,
+    /// The generated atmospheric sky — a gradient from the sun's direction and colour, ignoring
+    /// the mesh. Contrast [`backdrop_pipeline`](Self::backdrop_pipeline).
     pub sky_pipeline: wgpu::RenderPipeline,
     /// The scene's OWN painted sky/panorama geometry: `shaders/backdrop.wgsl`, no depth write,
     /// camera-locked. Unlike `sky_pipeline` it draws the mesh's texture and vertex colour
     /// instead of an invented gradient. See [`crate::backdrop`].
     pub backdrop_pipeline: wgpu::RenderPipeline,
+    /// The animated water surface.
     pub water_pipeline: wgpu::RenderPipeline,
+    /// Depth-only, for rendering into the shadow cascades.
     pub shadow_pipeline: wgpu::RenderPipeline,
+    /// Line-topology, for wireframe views.
     pub wireframe_pipeline: wgpu::RenderPipeline,
+    /// Alpha-blended, no depth write, for the transparent bucket.
     pub transparent_pipeline: wgpu::RenderPipeline,
+    /// The editor's ground grid.
     pub grid_pipeline: wgpu::RenderPipeline,
+    /// The [`SceneUniforms`](crate::gpu_types::SceneUniforms) buffer — group 0, rewritten each
+    /// frame.
     pub global_uniform_buffer: wgpu::Buffer,
+    /// Its layout. Every pipeline in the engine declares this as group 0.
     pub global_bind_group_layout: wgpu::BindGroupLayout,
+    /// Its bind group.
     pub global_bind_group: wgpu::BindGroup,
     /// Clustered lights: `(offset, count)` per cluster. Allocated for the worst case so the bind
     /// group is built once — see [`crate::clustered::index_bytes`].
     pub cluster_table_buffer: wgpu::Buffer,
     /// Clustered lights: the index list the table points into.
     pub cluster_index_buffer: wgpu::Buffer,
+    /// Layout of the group the lit shaders sample the shadow maps through.
     pub shadow_bind_group_layout: wgpu::BindGroupLayout,
+    /// That group: the cascade array, the point-light cube, and their comparison samplers.
     pub shadow_bind_group: wgpu::BindGroup,
     /// Depth `texture_2d_array` (all CSM layers) for comparison sampling in lit shaders.
     pub shadow_texture_view: wgpu::TextureView,
     /// One 2D depth view per cascade for shadow map rendering passes.
     pub shadow_cascade_layer_views: [wgpu::TextureView; 4],
+    /// The cascade depth texture itself — a depth array, one layer per cascade.
     pub shadow_depth_texture: wgpu::Texture,
+    /// The point-light shadow cube's depth texture.
     pub point_shadow_depth_texture: wgpu::Texture,
+    /// It as a cube view, for sampling.
     pub point_shadow_cube_view: wgpu::TextureView,
+    /// One 2-D view per cube face, for rendering into.
     pub point_shadow_face_views: [wgpu::TextureView; 6],
+    /// Layout of the shadow pass's own group, holding just its light-view-projection.
     pub shadow_pass_bind_group_layout: wgpu::BindGroupLayout,
     /// One uniform buffer + bind group per CSM cascade (avoids per-pass overwrite races on the queue).
     pub shadow_cascade_uniform_buffers: [wgpu::Buffer; 4],
+    /// The matching bind groups, one per cascade.
     pub shadow_pass_bind_groups: [wgpu::BindGroup; 4],
+    /// One uniform buffer per cube face, for the same reason as the cascades': six passes writing
+    /// one buffer would race on the queue.
     pub point_shadow_uniform_buffers: [wgpu::Buffer; 6],
+    /// The matching bind groups, one per face.
     pub point_shadow_pass_bind_groups: [wgpu::BindGroup; 6],
+    /// Layout of a material's texture group — every [`Material`](crate::components::Material)
+    /// builds its bind group against this.
     pub texture_bind_group_layout: wgpu::BindGroupLayout,
+    /// Layout of a skinned mesh's joint-matrix group.
     pub skeleton_bind_group_layout: wgpu::BindGroupLayout,
+    /// A one-joint identity skeleton, bound for unskinned meshes: a pipeline's groups must all be
+    /// bound, so an unskinned draw still needs *something* here.
     pub dummy_skeleton_bind_group: Arc<wgpu::BindGroup>,
+    /// Layout of the instance storage buffer's group.
     pub instance_bind_group_layout: wgpu::BindGroupLayout,
+    /// The per-frame [`InstanceRaw`](crate::gpu_types::InstanceRaw) buffer, grown as needed by
+    /// [`ensure_instance_capacity`](Self::ensure_instance_capacity).
     pub instance_buffer: wgpu::Buffer,
+    /// Its bind group. Rebuilt whenever the buffer is reallocated.
     pub instance_bind_group: wgpu::BindGroup,
     /// Current capacity (number of InstanceRaw items) of `instance_buffer`.
     pub instance_capacity: usize,
 }
 
 impl SceneState {
+    /// Grows the instance buffer to hold at least `needed` instances, rebuilding its bind group,
+    /// and returns whether it reallocated. A caller holding the old bind group must re-read it
+    /// when this returns `true`.
     pub fn ensure_instance_capacity(&mut self, device: &wgpu::Device, needed: usize) -> bool {
         if needed <= self.instance_capacity {
             return false;
@@ -142,6 +179,8 @@ impl SceneState {
 }
 
 #[tracing::instrument(skip_all)]
+/// Builds every scene pipeline, bind-group layout, shadow target and shared buffer — the whole of
+/// [`SceneState`].
 pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
     let global_uniform_buffer = build_global_uniforms(device);
     let (
@@ -350,6 +389,9 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
 }
 
 #[tracing::instrument(skip_all)]
+/// Recompiles every shader and rebuilds every pipeline in place, keeping the existing buffers,
+/// textures and bind groups — what [`Renderer::rebuild_shaders`](crate::Renderer::rebuild_shaders)
+/// calls on a hot reload.
 pub fn rebuild_pipelines(renderer: &mut crate::Renderer) {
     let device = &renderer.device;
     let post_shader = load_shader(

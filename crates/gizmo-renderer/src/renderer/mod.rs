@@ -102,80 +102,138 @@ impl<'a> RenderContext<'a> {
     }
 }
 
+/// The renderer: every GPU resource the engine owns, and the entry points that drive a frame.
+///
+/// One object rather than a tree of subsystems, because almost every pass needs the device, the
+/// queue and the surface configuration, and the optional passes need each other's textures (SSAO
+/// reads the G-buffer, TAA reads the composite, FXAA reads TAA's output). The `Option` fields are
+/// the passes that can be absent: each is `None` until something enables it, and every one of them
+/// is off on the web profile.
+///
+/// Construction lives in [`construction`](crate::renderer::construction) — [`Renderer::new`] for
+/// the windowed path and `new_headless` for a renderer with no surface, which is what the tests
+/// and the screenshot path use.
 pub struct Renderer {
     // === TEMEL WGPU KAYNAKLARI ===
     /// `None` in headless/offscreen mode (constructed via [`Renderer::new_headless`]);
     /// `Some` on the windowed path. Frame acquisition/present must handle both.
     pub surface: Option<Surface<'static>>,
+    /// The wgpu device — everything is allocated from it.
     pub device: Device,
+    /// The command queue everything is submitted to.
     pub queue: Queue,
+    /// The surface's configuration: format, size and present mode. Kept truthful even headless, so
+    /// that attaching a surface later needs no reconciliation.
     pub config: SurfaceConfiguration,
+    /// The render resolution in physical pixels. On the web this is capped below the window size —
+    /// see `cap_web_render_size`.
     pub size: winit::dpi::PhysicalSize<u32>,
+    /// The depth buffer for the main pass, rebuilt on every resize.
     pub depth_texture_view: wgpu::TextureView,
 
     // === SAHNE (Scene) — Pipeline'lar, Shadow, Skeleton ===
+    /// Pipelines, bind-group layouts, the instance buffer, shadow maps and skinning — everything
+    /// needed to draw the world itself.
     pub scene: SceneState,
 
     // === POST-PROCESSING — HDR, Bloom, Blur, Composite ===
+    /// The HDR chain: bloom, blur, tone map and composite targets.
     pub post: PostProcessState,
 
     // === PARTİKÜL SİSTEMİ ===
+    /// The GPU particle system, if one was created.
     pub gpu_particles: Option<crate::gpu_particles::GpuParticleSystem>,
 
+    /// The renderer's own GPU rigid-body solver. `None` unless
+    /// [`enable_gpu_physics`](Renderer::enable_gpu_physics) was called — it must stay off for a
+    /// game using the CPU physics plugin, or the two simulations fight over the same transforms.
     pub gpu_physics: Option<crate::gpu_physics::GpuPhysicsSystem>,
 
     // === GPU SIVI SİSTEMİ ===
+    /// The SPH fluid solver and its surface. Allocated by the windowed path, but only composited
+    /// when [`fluid_enabled`](Renderer::fluid_enabled) is set.
     pub gpu_fluid: Option<crate::gpu_fluid::GpuFluidSystem>,
     /// Volumetrik duman (T6, raymarch). Default None; demo `Some(SmokeVolume::new(..))` verir.
     pub smoke: Option<crate::gpu_smoke::SmokeVolume>,
 
     // === DEFERRED RENDERING — G-Buffer + Lighting pass ===
+    /// The G-buffer and the deferred lighting pass. `None` on the web profile, which renders
+    /// forward-only.
     pub deferred: Option<crate::deferred::DeferredState>,
 
     // === SSAO — Screen-Space Ambient Occlusion ===
+    /// Screen-space ambient occlusion. Requires [`deferred`](Renderer::deferred).
     pub ssao: Option<crate::ssao::SsaoState>,
 
     // === SSR — Screen-Space Reflections ===
+    /// Screen-space reflections. Requires [`deferred`](Renderer::deferred).
     pub ssr: Option<crate::ssr::SsrState>,
 
     // === SSGI — Screen-Space Global Illumination ===
+    /// Screen-space global illumination. Requires [`deferred`](Renderer::deferred).
     pub ssgi: Option<crate::ssgi::SsgiState>,
 
     // === Volumetric Lighting (God Rays) ===
+    /// Volumetric lighting — the god rays raymarched through the shadow cascades.
     pub volumetric: Option<crate::volumetric::VolumetricState>,
 
     // === DEFERRED DECALS ===
+    /// The deferred decal pass, which projects decals onto the G-buffer.
     pub decal: Option<crate::decal::DecalState>,
 
     // === TAA — Temporal Anti-Aliasing (ping-pong history + Halton jitter) ===
+    /// Temporal anti-aliasing: the history buffers and the Halton jitter sequence.
     pub taa: Option<crate::taa::TaaState>,
 
     // === FXAA — Fast Approximate Anti-Aliasing (son post-process pass) ===
+    /// FXAA, the last pass in the chain. When present and enabled, post-processing writes into
+    /// its input texture rather than straight to the swapchain.
     pub fxaa: Option<crate::fxaa::FxaaState>,
 
     // === GIZMO HATA AYIKLAMA (Debug Lines) ===
+    /// The debug line renderer — gizmos, wireframes, physics overlays.
     pub debug_renderer: Option<crate::debug_renderer::GizmoRendererSystem>,
 
     // === DAHİLİ ASSET YÖNETİCİSİ (Kolaylık metodları için cache) ===
+    /// The texture/mesh cache behind the convenience loaders. Behind a lock because the
+    /// convenience methods take `&self`, and loading mutates the cache.
     pub asset_manager: std::sync::RwLock<crate::asset::AssetManager>,
 
     // === WEB PROFİLİ — Platform bazlı GPU kaynak yönetimi ===
+    /// Which resource budget this renderer was built for — it is what decides whether the heavy
+    /// passes exist at all.
     pub web_profile: crate::web_profile::WebProfile,
 
     // === RENDER SETTINGS & DIAGNOSTICS ===
+    /// Debug shading mode: 0 = shade normally, 1 = world normals, 2 = albedo. Both the forward
+    /// and deferred shaders must number these identically — see
+    /// [`SceneUniforms::shading_mode`](crate::gpu_types::SceneUniforms::shading_mode).
     pub shading_mode: u32,
+    /// The active sky/environment preset.
     pub environment_preset: u32,
+    /// The preset being blended towards.
     pub environment_preset_2: u32,
+    /// How far between the two: 0 = fully the first, 1 = fully the second.
     pub environment_blend_t: f32,
+    /// How much bloom is added back over the frame.
     pub bloom_intensity: f32,
+    /// The luminance above which a texel blooms.
     pub bloom_threshold: f32,
+    /// Linear exposure multiplier applied before tone mapping.
     pub exposure: f32,
+    /// Whether depth of field runs.
     pub dof_enabled: bool,
+    /// The distance that is perfectly in focus, in metres.
     pub dof_focus_dist: f32,
+    /// How far either side of that stays sharp.
     pub dof_focus_range: f32,
+    /// The maximum blur radius outside that range, in texels.
     pub dof_blur_size: f32,
+    /// Per-channel radial offset, in screen fractions. 0 = off.
     pub chromatic_aberration: f32,
+    /// Strength of the animated film grain. 0 = off.
     pub film_grain_intensity: f32,
+    /// Whether point lights cast shadows this frame.
     pub point_shadows_enabled: bool,
     /// Whether the GPU SPH fluid "ocean" is simulated and composited this frame.
     /// A renderer always allocates a 100k-particle fluid system, but its water
@@ -207,6 +265,13 @@ impl Renderer {
         self.gpu_physics = Some(physics);
     }
 
+    /// Compiles a shader, preferring a copy on disk over the one compiled in.
+    ///
+    /// `file_path` is tried first and `fallback_src` — normally an `include_str!` — is used when
+    /// it is absent. That is what makes shader hot-reload work: drop a copy of a shader into
+    /// `demo/assets/shaders/`, edit it, and the studio rebuilds its pipelines on the change. The
+    /// repository deliberately ships no such copies, because two versions of a shader free to
+    /// drift, with the disk one silently winning, is worse than no hot reload.
     pub fn load_shader(
         device: &wgpu::Device,
         file_path: &str,
@@ -221,11 +286,15 @@ impl Renderer {
         })
     }
 
+    /// Recompiles every shader and rebuilds every pipeline — what the studio's file watcher calls
+    /// when a `.wgsl` under `demo/assets` changes.
     pub fn rebuild_shaders(&mut self) {
         tracing::info!("🚀 Rebuilding Shaders Pipeline...");
         crate::pipeline::rebuild_pipelines(self);
     }
 
+    /// Grows the instance buffer to hold at least `needed` instances, returning whether it was
+    /// reallocated (in which case any bind group referring to the old buffer is stale).
     pub fn ensure_instance_capacity(&mut self, needed: usize) -> bool {
         self.scene.ensure_instance_capacity(&self.device, needed)
     }
@@ -273,6 +342,13 @@ impl Renderer {
         self.config.present_mode
     }
 
+    /// Resizes the swapchain and every size-dependent target: depth, G-buffer, decals, fluid.
+    ///
+    /// The requested size is first put through the web render cap, so a browser canvas growing to
+    /// fill its window does not silently rebuild the whole chain at full physical resolution — that
+    /// is precisely how the first `Resized` event used to defeat the initial cap.
+    ///
+    /// A zero width or height is ignored (a minimised window reports one).
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
         // Web'de dahili render çözünürlüğünü aynı cap'ten geçir (native no-op).
         // Bu olmadan ilk `Resized` olayı — tarayıcı canvas'ı CSS %100 ile
@@ -383,6 +459,11 @@ impl Renderer {
         }
     }
 
+    /// Runs the post-process chain into `output_view`.
+    ///
+    /// When FXAA is present and enabled the chain writes into FXAA's input texture and FXAA writes
+    /// the result out, so the anti-aliasing sees the final tone-mapped image rather than the HDR
+    /// one.
     pub fn run_post_processing(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -400,6 +481,7 @@ impl Renderer {
         crate::post_process::run_post_processing(self, encoder, output_view);
     }
 
+    /// Uploads the post-process parameters for this frame.
     pub fn update_post_process(&self, queue: &wgpu::Queue, params: PostProcessUniforms) {
         queue.write_buffer(
             &self.post.post_params_buffer,

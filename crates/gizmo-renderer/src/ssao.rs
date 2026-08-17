@@ -14,9 +14,11 @@ struct SsaoKernel {
     samples: [[f32; 4]; KERNEL_SIZE],
 }
 
+/// The SSAO pass's one dial, in the uniform block it reads.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct SsaoParams {
+    /// How dark the occlusion gets. 0 = no occlusion, 1 = the raw computed term.
     pub strength: f32,
     _pad: [f32; 3],
 }
@@ -32,11 +34,20 @@ impl Default for SsaoParams {
 
 // ── SsaoState ────────────────────────────────────────────────────────────────
 
+/// Screen-space ambient occlusion: three passes, and everything they need.
+///
+/// Compute the AO term from the G-buffer's depth and normals, blur it (the sample kernel is noisy
+/// by construction — that is what trades banding for grain), then multiply it into the HDR target.
+/// The blur is a separate texture rather than in-place because a blur that reads what it is writing
+/// smears in one direction.
 pub struct SsaoState {
-    // AO render targets
+    /// The raw, noisy AO term.
     pub ao_texture: wgpu::Texture,
+    /// Its view.
     pub ao_view: wgpu::TextureView,
+    /// The blurred AO term — what actually multiplies the frame.
     pub ao_blurred_texture: wgpu::Texture,
+    /// Its view.
     pub ao_blurred_view: wgpu::TextureView,
 
     // Noise + kernel resources (static — never resized)
@@ -45,28 +56,39 @@ pub struct SsaoState {
     noise_sampler: wgpu::Sampler,
     gbuf_sampler: wgpu::Sampler,
     kernel_buffer: wgpu::Buffer,
+    /// The [`SsaoParams`] uniform buffer.
     pub params_buffer: wgpu::Buffer,
 
     // SSAO pass: G-buffer inputs → raw AO
+    /// The AO pass: G-buffer in, raw AO out.
     pub ssao_pipeline: wgpu::RenderPipeline,
     ssao_gbuf_bgl: wgpu::BindGroupLayout,
+    /// Its G-buffer inputs. Rebuilt on resize, because the G-buffer views are.
     pub ssao_gbuf_bind_group: wgpu::BindGroup,
 
     // Blur pass: raw AO → blurred AO
+    /// The blur pass: raw AO in, blurred AO out.
     pub blur_pipeline: wgpu::RenderPipeline,
     blur_bgl: wgpu::BindGroupLayout,
+    /// Its input. Rebuilt on resize.
     pub blur_bind_group: wgpu::BindGroup,
 
     // Apply pass: blurred AO × HDR (multiply blend)
+    /// The apply pass: multiplies the blurred AO into the HDR target.
     pub apply_pipeline: wgpu::RenderPipeline,
     apply_bgl: wgpu::BindGroupLayout,
+    /// Its input. Rebuilt on resize.
     pub apply_bind_group: wgpu::BindGroup,
 
+    /// The AO targets' width, in pixels.
     pub width: u32,
+    /// Their height.
     pub height: u32,
 }
 
 impl SsaoState {
+    /// Builds every SSAO resource for a target of the given size, including the hemisphere sample
+    /// kernel and the tiling noise texture (which are static and survive a resize).
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,

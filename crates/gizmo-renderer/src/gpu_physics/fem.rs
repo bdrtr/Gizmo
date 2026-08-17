@@ -2,57 +2,105 @@ use wgpu::util::DeviceExt;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+/// One node of a tetrahedral soft body, as the FEM compute shader reads it.
 pub struct GpuSoftBodyNode {
+    /// `xyz` = world position, `w` = mass.
     pub position_mass: [f32; 4],
+    /// `xyz` = velocity, `w` != 0 pins the node in place (an anchor).
     pub velocity_fixed: [f32; 4],
+    /// The accumulated force, as **fixed-point integers**.
+    ///
+    /// Integers because every tetrahedron touching a node adds to it concurrently, and only the
+    /// integer atomics are available in WGSL — a float accumulation would need a lock the GPU does
+    /// not have. The shader scales by a fixed factor on the way in and out.
     pub forces: [i32; 4],
 }
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+/// One tetrahedral element, with its rest shape precomputed.
+///
+/// The inverse rest matrix is stored rather than the rest positions because that is what the
+/// deformation gradient needs — `F = D_current · D_rest⁻¹` — and inverting a 3×3 per element per
+/// step, for every element, is exactly the work this precomputation removes.
 pub struct GpuTetrahedron {
+    /// The four node indices.
     pub indices: [u32; 4],
+    /// Column 0 of the inverse rest-shape matrix.
     pub inv_rest_col0: [f32; 4],
+    /// Column 1.
     pub inv_rest_col1: [f32; 4],
+    /// Column 2.
     pub inv_rest_col2: [f32; 4],
+    /// `x` = the element's rest volume, the rest padding.
     pub rest_volume_pad: [f32; 4],
 }
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+/// An obstacle the soft body is kept out of.
 pub struct GpuFemCollider {
+    /// Which shape: 0 = sphere, 1 = plane.
     pub shape_type: u32,
+    /// The sphere's radius. Read only when [`Self::shape_type`] is 0.
     pub radius: f32,
+    /// Padding.
     pub _pad0: u32,
+    /// Padding, completing the 16-byte slot before the vectors.
     pub _pad1: u32,
+    /// The sphere's centre, or a point on the plane.
     pub position: [f32; 4],
+    /// The plane's normal. Read only when [`Self::shape_type`] is 1.
     pub normal: [f32; 4],
 }
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+/// The FEM solver's per-step parameters.
 pub struct GpuFemParams {
-    pub properties: [f32; 4], // dt, mu, lambda, damping
-    pub gravity: [f32; 4],    // gx, gy, gz, _pad
-    pub counts: [u32; 4],     // num_nodes, num_elements, num_colliders, _pad
+    /// `[dt, μ, λ, damping]` — the timestep, the two Lamé parameters that define the material's
+    /// stiffness, and velocity damping.
+    pub properties: [f32; 4],
+    /// `xyz` = gravity in m/s², `w` unused.
+    pub gravity: [f32; 4],
+    /// `[nodes, elements, colliders, _]` — how much of each buffer is live.
+    pub counts: [u32; 4],
 }
 
+/// A GPU FEM soft body: a tetrahedral mesh whose deformation is solved on the GPU.
+///
+/// Three dispatches per step — clear the force accumulator, compute each element's stress, then
+/// integrate — for the same reason the rigid solver is staged: each reads what the previous wrote
+/// across the whole buffer.
 pub struct GpuFemSystem {
+    /// The nodes.
     pub nodes_buffer: wgpu::Buffer,
+    /// The tetrahedra.
     pub elements_buffer: wgpu::Buffer,
+    /// The per-step parameters.
     pub params_buffer: wgpu::Buffer,
+    /// The obstacles.
     pub colliders_buffer: wgpu::Buffer,
 
+    /// All four buffers, as the compute passes read them.
     pub compute_bind_group: wgpu::BindGroup,
+    /// Stage 1: zero the fixed-point force accumulators.
     pub pipeline_clear: wgpu::ComputePipeline,
+    /// Stage 2: per element, compute the deformation gradient and scatter its forces to the four
+    /// nodes.
     pub pipeline_stress: wgpu::ComputePipeline,
+    /// Stage 3: per node, integrate those forces and resolve collisions.
     pub pipeline_integrate: wgpu::ComputePipeline,
 
+    /// How many nodes are live.
     pub num_nodes: u32,
+    /// How many tetrahedra are live.
     pub num_elements: u32,
 }
 
 impl GpuFemSystem {
+    /// Uploads a tetrahedral mesh, precomputing each element's inverse rest matrix, and builds the
+    /// three pipelines.
     pub fn new(
         device: &wgpu::Device,
         nodes: &[GpuSoftBodyNode],
@@ -223,6 +271,7 @@ impl GpuFemSystem {
         }
     }
 
+    /// Records one whole FEM step: clear, stress, integrate.
     pub fn compute_pass(&self, encoder: &mut wgpu::CommandEncoder) {
         let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("FEM Compute Pass"),

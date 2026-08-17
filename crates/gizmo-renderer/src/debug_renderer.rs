@@ -1,15 +1,25 @@
 use gizmo_math::Vec3;
 #[derive(Clone, Default)]
+/// The frame's debug lines, accumulated immediate-mode.
+///
+/// Draw into it from anywhere during the frame, then hand it to
+/// [`GizmoRendererSystem::update`]; [`clear`](Self::clear) starts the next frame. Nothing here
+/// touches the GPU, so a system can draw gizmos without holding a device.
 pub struct Gizmos {
+    /// The line vertices, in pairs — each two consecutive entries are one segment.
     pub lines: Vec<GizmoVertex>,
+    /// Whether the lines are occluded by the scene. False draws them over everything, which is
+    /// what makes a gizmo inside a mesh still selectable.
     pub depth_test: bool,
 }
 
 impl Gizmos {
+    /// Drops every line, ready for the next frame.
     pub fn clear(&mut self) {
         self.lines.clear();
     }
 
+    /// One world-space segment.
     pub fn draw_line(&mut self, start: Vec3, end: Vec3, color: [f32; 4]) {
         // Prevent GPU driver crashes from NaN/Infinity vertices
         if !start.x.is_finite()
@@ -37,6 +47,7 @@ impl Gizmos {
         });
     }
 
+    /// The twelve edges of an axis-aligned box.
     pub fn draw_box(&mut self, min: Vec3, max: Vec3, color: [f32; 4]) {
         let p0 = Vec3::new(min.x, min.y, min.z);
         let p1 = Vec3::new(max.x, min.y, min.z);
@@ -63,10 +74,14 @@ impl Gizmos {
         self.draw_line(p3, p7, color);
     }
 
+    /// [`draw_box`](Self::draw_box) over an [`Aabb`](gizmo_math::Aabb).
     pub fn draw_aabb(&mut self, aabb: gizmo_math::Aabb, color: [f32; 4]) {
         self.draw_box(aabb.min.into(), aabb.max.into(), color);
     }
 
+    /// The wireframe of a camera's view volume, by unprojecting the eight NDC corners through the
+    /// inverse of `view_proj`. Useful for seeing what a shadow cascade or a culling camera actually
+    /// covers — which is otherwise invisible by construction.
     pub fn draw_frustum(&mut self, view_proj: gizmo_math::Mat4, color: [f32; 4]) {
         let inv = view_proj.inverse();
         
@@ -108,19 +123,27 @@ impl Gizmos {
 }
 
 #[derive(Clone, Copy, Debug)]
+/// One debug-line vertex, CPU-side.
 pub struct GizmoVertex {
+    /// World-space position.
     pub position: [f32; 3],
+    /// Its colour, RGBA.
     pub color: [f32; 4],
 }
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+/// The same vertex in the layout the GPU reads — `Pod`, and therefore uploadable, which
+/// [`GizmoVertex`] is not.
 pub struct GpuGizmoVertex {
+    /// World-space position.
     pub position: [f32; 3],
+    /// Its colour, RGBA.
     pub color: [f32; 4],
 }
 
 impl GpuGizmoVertex {
+    /// This vertex as wgpu describes it: position at location 0, colour at location 1.
     pub fn desc<'a>() -> wgpu::VertexBufferLayout<'a> {
         wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<GpuGizmoVertex>() as wgpu::BufferAddress,
@@ -141,15 +164,24 @@ impl GpuGizmoVertex {
     }
 }
 
+/// The GPU side of the debug lines: two pipelines and one growable vertex buffer.
 pub struct GizmoRendererSystem {
+    /// The depth-tested pipeline.
     pub pipeline: wgpu::RenderPipeline,
+    /// The same pipeline without the depth test, for lines that must stay visible through
+    /// geometry.
     pub pipeline_no_depth: wgpu::RenderPipeline,
+    /// The vertex buffer the frame's lines are uploaded into.
     pub vertex_buffer: wgpu::Buffer,
+    /// How many vertices that buffer holds. Lines past this are dropped rather than
+    /// reallocating mid-frame.
     pub max_vertices: u32,
+    /// How many vertices the last [`update`](Self::update) wrote — the draw count.
     pub index_count: u32,
 }
 
 impl GizmoRendererSystem {
+    /// Builds both pipelines and allocates the vertex buffer.
     pub fn new(
         device: &wgpu::Device,
         global_bind_group_layout: &wgpu::BindGroupLayout,
@@ -236,6 +268,7 @@ impl GizmoRendererSystem {
         }
     }
 
+    /// Uploads this frame's lines, truncating at [`max_vertices`](Self::max_vertices).
     pub fn update(&mut self, queue: &wgpu::Queue, gizmos: &Gizmos) {
         self.index_count = gizmos.lines.len() as u32;
         if self.index_count > 0 {
@@ -255,6 +288,7 @@ impl GizmoRendererSystem {
     }
 
     #[tracing::instrument(skip_all, level = "trace")]
+    /// Draws the uploaded lines, choosing the depth-tested or depth-ignoring pipeline.
     pub fn render<'a>(
         &'a self,
         rpass: &mut wgpu::RenderPass<'a>,

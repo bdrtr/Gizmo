@@ -4,28 +4,54 @@ use wgpu::util::DeviceExt;
 /// The post-processing state — the HDR, bloom, blur and composite pipelines and their
 /// resources.
 pub struct PostProcessState {
+    /// Layout of the "one HDR texture + sampler" group every pass in the chain binds.
     pub post_bind_group_layout: wgpu::BindGroupLayout,
+    /// Layout of the blur pass's direction group.
     pub blur_params_bind_group_layout: wgpu::BindGroupLayout,
+    /// Layout of the composite pass's group: the blurred bloom, and the depth for DoF.
     pub composite_bloom_bind_group_layout: wgpu::BindGroupLayout,
+    /// The [`PostProcessUniforms`] buffer, rewritten each frame.
     pub post_params_buffer: wgpu::Buffer,
+    /// Its layout.
     pub post_params_bind_group_layout: wgpu::BindGroupLayout,
+    /// Its bind group. Never rebuilt — the buffer outlives every resize.
     pub post_params_bind_group: wgpu::BindGroup,
+    /// The bloom extract pass: everything above the threshold, at half resolution.
     pub bloom_extract_pipeline: wgpu::RenderPipeline,
+    /// The separable blur pass, run twice — horizontally, then vertically.
     pub bloom_blur_pipeline: wgpu::RenderPipeline,
+    /// The composite pass: tone map, add bloom, and apply DoF, grain, vignette and aberration.
     pub composite_pipeline: wgpu::RenderPipeline,
+    /// The HDR target the world is rendered into, ahead of tone mapping.
     pub hdr_texture: wgpu::Texture,
+    /// Its view.
     pub hdr_texture_view: wgpu::TextureView,
+    /// It as an input to the chain.
     pub hdr_bind_group: wgpu::BindGroup,
+    /// The extract pass's output.
     pub bloom_extract_texture_view: wgpu::TextureView,
+    /// It as an input to the blur.
     pub bloom_extract_bind_group: wgpu::BindGroup,
+    /// The blur's output — the ping half of the two-pass blur.
     pub bloom_blur_texture_view: wgpu::TextureView,
+    /// It as an input.
     pub bloom_blur_bind_group: wgpu::BindGroup,
+    /// The blurred bloom and the depth buffer, as the composite pass reads them.
     pub composite_bloom_bind_group: wgpu::BindGroup,
+    /// The blur direction buffer, holding both the horizontal and the vertical step.
     pub blur_params_buffer: wgpu::Buffer,
+    /// The horizontal blur's parameters — a texel step along X.
     pub blur_h_bind_group: wgpu::BindGroup,
+    /// The vertical blur's — a texel step along Y. One separable blur run twice costs `2n`
+    /// samples where a true 2-D kernel costs `n²`.
     pub blur_v_bind_group: wgpu::BindGroup,
 }
 
+/// Builds the whole post-process chain: shaders, three pipelines, every target and every bind
+/// group.
+///
+/// The shader is loaded through the disk-override path on native (so it hot-reloads) and from a
+/// separate, reduced `post_process_wasm.wgsl` in the browser.
 pub fn build_post_process_resources(
     device: &wgpu::Device,
     surface_format: wgpu::TextureFormat,
@@ -355,6 +381,8 @@ fn build_post_pipelines(
     )
 }
 
+/// Recompiles just the three post-process pipelines against a new shader module, leaving every
+/// texture and bind group in place — what shader hot-reload calls.
 pub fn rebuild_post_pipelines(renderer: &mut crate::Renderer, post_shader: &wgpu::ShaderModule) {
     let (e, b, c) = build_post_pipelines(
         &renderer.device,
@@ -383,6 +411,9 @@ fn create_post_sampler(device: &wgpu::Device) -> wgpu::Sampler {
 // WASM: composite-bloom bind group'un depth girdisi native dalında — `depth_view`
 // web'de kullanılmaz (hedefli allow, native lint gücü korunur).
 #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
+/// (Re)creates every size-dependent target in the chain and the bind groups that read them,
+/// returning them in the order the caller assigns them: HDR texture, view and group; the extract
+/// view and group; the blur view and group; and the composite group.
 pub fn create_post_textures(
     device: &wgpu::Device,
     post_bgl: &wgpu::BindGroupLayout,
@@ -478,6 +509,8 @@ pub fn create_post_textures(
     (hdr_t, hdr_v, hdr_bg, be_v, be_bg, bb_v, bb_bg, cb_bg)
 }
 
+/// Builds the blur direction buffer and its two bind groups — one stepping a texel along X, one
+/// along Y. Size-dependent, because a texel step is `1 / width`.
 pub fn create_blur_buffers(
     device: &wgpu::Device,
     bgl: &wgpu::BindGroupLayout,

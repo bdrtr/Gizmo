@@ -3,6 +3,8 @@ use crate::renderer::Vertex;
 use gizmo_math::Vec3;
 
 impl crate::asset::AssetManager {
+    /// Builds a terrain mesh from a heightmap image — see
+    /// [`Terrain`](crate::components::Terrain), which holds the recipe this reads.
     pub fn create_terrain(
         device: &wgpu::Device,
         heightmap_path: &str,

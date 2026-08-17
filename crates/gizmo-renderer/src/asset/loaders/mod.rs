@@ -31,22 +31,38 @@ use skeleton::parse_skeletons;
 //  Public data structures
 // ============================================================================
 
+/// One node of an imported glTF scene tree, flattened into engine terms.
+///
+/// The transform is kept decomposed rather than as a matrix because that is how the engine's
+/// `Transform` stores it, and because recomposing then re-decomposing a matrix loses the
+/// distinction between a negative scale and a rotation.
 pub struct GltfNodeData {
+    /// Its index in the glTF document, which is how animation channels refer to it.
     pub index: usize,
+    /// Its name, if the file gave it one.
     pub name: Option<String>,
     /// Index into [`GltfSceneAsset::skeletons`] if this node drives a skin.
     pub skin_index: Option<usize>,
+    /// Its local translation.
     pub translation: [f32; 3],
+    /// Its local rotation, as a quaternion `xyzw`.
     pub rotation: [f32; 4],
+    /// Its local scale.
     pub scale: [f32; 3],
     /// (mesh, optional material) per glTF primitive on this node.
     pub primitives: Vec<(Mesh, Option<Material>)>,
+    /// Its children, already resolved — the tree is materialised at import rather than left as
+    /// indices.
     pub children: Vec<GltfNodeData>,
 }
 
+/// A whole imported glTF scene: its node trees, its animations and its skeletons.
 pub struct GltfSceneAsset {
+    /// The scene's root nodes.
     pub roots: Vec<GltfNodeData>,
+    /// Every animation clip in the file.
     pub animations: Vec<AnimationClip>,
+    /// Every skin, as a joint hierarchy.
     pub skeletons: Vec<SkeletonHierarchy>,
 }
 
@@ -55,6 +71,8 @@ pub struct GltfSceneAsset {
 // ============================================================================
 
 impl super::AssetManager {
+    /// Imports a glTF/GLB file into engine types: meshes and materials into the cache, and the
+    /// node tree, animations and skeletons into the returned [`GltfSceneAsset`].
     pub fn load_gltf_scene(
         &mut self,
         device: &wgpu::Device,

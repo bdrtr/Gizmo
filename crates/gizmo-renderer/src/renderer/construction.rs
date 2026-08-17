@@ -30,6 +30,11 @@ pub(crate) fn cap_web_render_size(
 }
 
 impl Renderer {
+    /// Builds a renderer against a window: adapter, device, surface, and every pass the platform
+    /// profile allows.
+    ///
+    /// On the web the render resolution is capped below the window size — see
+    /// `cap_web_render_size` — and the heavy passes (deferred, SSAO, SSR, SSGI) are left `None`.
     pub async fn new(window: Arc<Window>) -> Self {
         let size = cap_web_render_size(window.inner_size());
 
@@ -413,6 +418,10 @@ impl Renderer {
         )
     }
 
+    /// Builds a renderer with no surface, rendering into an off-screen target of the given size.
+    ///
+    /// This is what the golden-image tests and the screenshot path use: everything works except
+    /// presenting, and [`Renderer::surface`](crate::Renderer::surface) stays `None`.
     pub async fn new_headless(width: u32, height: u32, format: Option<wgpu::TextureFormat>) -> Self {
         let (device, queue) = Self::headless_device().await;
         Self::new_headless_with_device(device, queue, width, height, format)

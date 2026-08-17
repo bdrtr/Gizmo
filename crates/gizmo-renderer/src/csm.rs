@@ -89,7 +89,9 @@ pub fn shadow_distance_fade(view_depth: f32, shadow_far: f32) -> f32 {
 /// The directional shadow cascades for one frame: the split distances and the
 /// per-cascade light clip matrices, ready to upload.
 pub struct ShadowCascades {
+    /// The far distance of each cascade, along the camera's forward axis.
     pub splits: [f32; CASCADE_COUNT],
+    /// World → light clip space for each cascade, in the same order as the shadow array's layers.
     pub view_projs: [Mat4; CASCADE_COUNT],
 }
 

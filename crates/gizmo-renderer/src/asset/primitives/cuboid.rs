@@ -252,6 +252,7 @@ impl crate::asset::AssetManager {
         )
     }
 
+    /// The translate gizmo's arrow — a shaft with a cone head, along +Y.
     pub fn create_gizmo_arrow(device: &wgpu::Device) -> Mesh {
         let w = 0.03; // Shaft thickness
         let hw = 0.12; // Head width

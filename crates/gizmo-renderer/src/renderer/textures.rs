@@ -50,6 +50,8 @@ impl Renderer {
         )
     }
 
+    /// Uploads RGBA8 pixels and returns a material bind group over them, built against
+    /// [`SceneState::texture_bind_group_layout`](crate::pipeline::SceneState::texture_bind_group_layout).
     pub fn create_texture(&self, rgba_bytes: &[u8], width: u32, height: u32) -> wgpu::BindGroup {
         let mip_level_count = crate::texture_quality::mip_level_count(width, height);
         let size = wgpu::Extent3d {

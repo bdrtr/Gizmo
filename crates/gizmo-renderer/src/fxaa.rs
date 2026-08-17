@@ -8,13 +8,23 @@ use wgpu::util::DeviceExt;
 
 /// FXAA's GPU resources.
 pub struct FxaaState {
+    /// The FXAA pass.
     pub pipeline: wgpu::RenderPipeline,
+    /// Its bind-group layout, kept so the bind group can be rebuilt on resize.
     pub bind_group_layout: wgpu::BindGroupLayout,
+    /// The input texture and params. Rebuilt on resize.
     pub bind_group: wgpu::BindGroup,
+    /// The [`FxaaParams`] uniform buffer.
     pub params_buffer: wgpu::Buffer,
+    /// What post-processing writes into when FXAA is enabled — FXAA reads this and writes the
+    /// swapchain, so it sees the final tone-mapped image rather than the HDR one.
     pub input_texture: wgpu::Texture,
+    /// Its view.
     pub input_texture_view: wgpu::TextureView,
+    /// The linear sampler FXAA reads its input with — the filtering is what lets it resolve an
+    /// edge from neighbouring texels.
     pub sampler: wgpu::Sampler,
+    /// Whether the pass runs. Off, post-processing writes straight to the output.
     pub enabled: bool,
 }
 
@@ -22,12 +32,17 @@ pub struct FxaaState {
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct FxaaParams {
-    pub inv_screen_size: [f32; 2], // 1.0 / vec2(width, height)
-    pub fxaa_enabled: f32,         // 1.0 = açık, 0.0 = kapalı
+    /// `1 / (width, height)` — the texel size the edge search steps by.
+    pub inv_screen_size: [f32; 2],
+    /// 1 = on, 0 = off. A uniform as well as a Rust flag, so the pass can be neutralised without
+    /// rebuilding anything.
+    pub fxaa_enabled: f32,
+    /// Padding to 16 bytes.
     pub _padding: f32,
 }
 
 impl FxaaState {
+    /// Builds the FXAA pass and its input texture for a target of the given size.
     pub fn new(
         device: &wgpu::Device,
         surface_format: wgpu::TextureFormat,

@@ -1,4 +1,5 @@
 #![deny(clippy::undocumented_unsafe_blocks)]
+#![warn(missing_docs)]
 //! (`undocumented_unsafe_blocks` is a RATCHET: this crate carries no `unsafe` block without a
 //! `// SAFETY:` line stating why it is sound, and the lint keeps it that way. Every crate in the
 //! workspace except `gizmo-core` is at zero and denies it; `gizmo-core`'s ECS internals are the
@@ -115,6 +116,7 @@
 
 /// Clustered light culling — which lights can reach which part of the frame.
 pub mod clustered;
+/// Loading, decoding and uploading meshes, textures and glTF scenes.
 pub mod asset;
 pub mod async_assets;
 pub mod backdrop;
@@ -122,26 +124,39 @@ pub mod capture;
 pub mod routing;
 pub mod components;
 pub mod csm;
+/// The immediate-mode line renderer behind the debug gizmos.
 pub mod debug_renderer;
+/// The deferred decal pass.
 pub mod decal;
+/// The G-buffer, its formats, and the deferred lighting pass.
 pub mod deferred;
 pub mod draw_order;
 pub mod frame_uniforms;
 pub mod frustum_cull;
 pub mod fxaa;
 pub mod gi;
+/// GPU SPH fluid simulation and its surface rendering.
 pub mod gpu_fluid;
+/// The GPU particle system — simulated and drawn from the same buffer.
 pub mod gpu_particles;
 pub mod gpu_smoke;
+/// The renderer's own GPU rigid-body solver, separate from `gizmo-physics-rigid`.
 pub mod gpu_physics;
+/// The structs that mirror the shaders' own byte layouts.
 pub mod gpu_types;
 pub mod hot_reload;
 pub mod pipeline;
+/// The HDR post-process chain: bloom, depth of field, tone mapping and composite.
 pub mod post_process;
+/// The [`Renderer`] itself — every GPU resource, and the entry points that drive a frame.
 pub mod renderer;
+/// Screen-space ambient occlusion.
 pub mod ssao;
+/// Screen-space global illumination.
 pub mod ssgi;
+/// Screen-space reflections.
 pub mod ssr;
+/// Temporal anti-aliasing.
 pub mod taa;
 #[cfg(test)]
 mod shader_contract;
@@ -149,8 +164,11 @@ mod shader_contract;
 mod test_gpu;
 mod texture_quality;
 pub mod visibility;
+/// Volumetric lighting — god rays through the shadow cascades.
 pub mod volumetric;
 pub mod web_profile;
+/// The convenience loaders on [`Renderer`] — load a mesh or texture without touching the asset
+/// manager directly.
 pub mod asset_loading;
 
 pub use backdrop::{
@@ -173,6 +191,7 @@ pub use gizmo_animation::skeletal::{
     AnimationTransition, BoneAttachment, InterpolationMode, Keyframe, SkeletonHierarchy,
     SkeletonJoint, Track,
 };
+/// The ECS systems that advance animation players and write their poses into skeletons.
 pub mod animation_system;
 pub use animation_system::{animation_state_machine_update_system, animation_update_system};
 pub use gizmo_animation::skeletal::decompose_mat4;

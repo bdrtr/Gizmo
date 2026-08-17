@@ -18,7 +18,10 @@ use crate::pipeline::{load_shader, load_shader_composed, SceneState};
 // engine — its flagship level is a night city whose frame medians sit at 1–14/255. Alpha carries
 // metallic and is untouched by the transfer function, and the byte budget is unchanged, so this
 // costs nothing. Guarded by `golden_render_tests::two_different_dark_materials_do_not_render_identically`.
+/// G-buffer target 0: `rgb` = albedo, `a` = metallic. **sRGB**, for the reason spelled out
+/// above — a linear 8-bit target gives a night scene four distinct codes where sRGB gives 32.
 pub const GBUFFER_ALBEDO_METALLIC_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+/// G-buffer target 1: `rgb` = world normal, `a` = roughness.
 pub const GBUFFER_NORMAL_ROUGHNESS_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 // World position is Rgba16Float and CANNOT be upgraded to Rgba32Float: the four G-buffer
 // MRTs share a `max_color_attachment_bytes_per_sample` budget of 32 (the WebGPU-guaranteed
@@ -44,22 +47,35 @@ pub const GBUFFER_NORMAL_ROUGHNESS_FORMAT: wgpu::TextureFormat = wgpu::TextureFo
 // the same subsurface with anisotropy 1 decoded as 0. Pinned by
 // `gbuffer_packing_tests::subsurface_and_anisotropy_survive_the_round_trip`, which fails on the
 // old form. Subsurface is still quantised to 1 %, which the `/100` decode always implied.
+/// G-buffer target 2: `rgb` = position **relative to the camera**, `a` = packed subsurface and
+/// anisotropy. It cannot be widened — see the note above on the four targets' shared byte budget,
+/// and on why camera-relative storage removed the need to.
 pub const GBUFFER_WORLD_POSITION_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+/// G-buffer target 3: `rgb` = world tangent, `a` = its handedness.
 pub const GBUFFER_WORLD_TANGENT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
 /// G-Buffer textures, pipelines and bind groups for the deferred rendering path.
 pub struct DeferredState {
     // G-buffer colour targets
+    /// Albedo + metallic — see [`GBUFFER_ALBEDO_METALLIC_FORMAT`].
     pub albedo_metallic_tex: wgpu::Texture,
+    /// Its view.
     pub albedo_metallic_view: wgpu::TextureView,
+    /// Normal + roughness.
     pub normal_roughness_tex: wgpu::Texture,
+    /// Its view.
     pub normal_roughness_view: wgpu::TextureView,
+    /// Camera-relative position + packed subsurface/anisotropy.
     pub world_position_tex: wgpu::Texture,
+    /// Its view.
     pub world_position_view: wgpu::TextureView,
+    /// Tangent + handedness.
     pub world_tangent_tex: wgpu::Texture,
+    /// Its view.
     pub world_tangent_view: wgpu::TextureView,
 
     // Geometry pass (writes to 4 MRTs)
+    /// The geometry pass, writing all four targets at once.
     pub gbuffer_pipeline: wgpu::RenderPipeline,
     /// The same pipeline with back-face culling off, for a material that declared itself
     /// [`double-sided`](crate::components::Material::is_double_sided).
@@ -71,6 +87,8 @@ pub struct DeferredState {
     pub gbuffer_double_sided_pipeline: wgpu::RenderPipeline,
 
     // Z-Prepass (Depth only)
+    /// The depth-only prepass, so the geometry pass shades each pixel once rather than once per
+    /// overlapping triangle.
     pub z_prepass_pipeline: wgpu::RenderPipeline,
     /// Depth for double-sided geometry. Needed alongside the G-buffer variant, not instead of it:
     /// the prepass owns the depth these fragments are tested against, so culling here would
@@ -79,18 +97,28 @@ pub struct DeferredState {
     pub z_prepass_double_sided_pipeline: wgpu::RenderPipeline,
 
     // Lighting pass (fullscreen triangle → HDR texture)
+    /// The lighting pass: a fullscreen triangle that reads the four targets and resolves every
+    /// light.
     pub lighting_pipeline: wgpu::RenderPipeline,
 
     // Bind group used by the lighting pass to read the G-buffers
+    /// The layout of the four-target bind group, kept so other passes (SSAO, SSR, decals) can
+    /// declare a matching one.
     pub gbuffer_bind_group_layout: wgpu::BindGroupLayout,
+    /// The four G-buffer views as the lighting pass reads them. Rebuilt on resize.
     pub gbuffer_bind_group: wgpu::BindGroup,
+    /// The sampler used for all four — nearest, since a G-buffer must never be interpolated
+    /// between two surfaces.
     pub gbuf_sampler: wgpu::Sampler,
 
+    /// The G-buffer's width, in pixels.
     pub width: u32,
+    /// Its height.
     pub height: u32,
 }
 
 impl DeferredState {
+    /// Builds all four G-buffer targets and the three pipelines for a frame of the given size.
     pub fn new(device: &wgpu::Device, scene: &SceneState, width: u32, height: u32) -> Self {
         let (
             albedo_metallic_tex,

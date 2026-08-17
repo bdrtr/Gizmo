@@ -11,34 +11,59 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 #[derive(Debug)]
+/// A texture that finished decoding off the main thread and is ready to upload.
+///
+/// Decoding is the slow part and needs no GPU; uploading needs the device and must happen on the
+/// main thread. This is what crosses between them.
 pub struct TextureReloadCompletion {
+    /// The cache key the decoded image belongs to.
     pub cache_key: String,
+    /// The decoded pixels, RGBA8.
     pub rgba: Vec<u8>,
+    /// Their width.
     pub width: u32,
+    /// Their height.
     pub height: u32,
+    /// The entities waiting on this texture, so they can be rebound once it is uploaded.
     pub entity_ids: Vec<usize>,
 }
 
 #[derive(Debug)]
+/// An OBJ mesh that finished parsing off-thread, ready to become GPU buffers.
 pub struct ObjLoadCompletion {
+    /// The file it came from.
     pub path: String,
+    /// Its vertices, already in the engine's layout.
     pub vertices: Vec<crate::gpu_types::Vertex>,
+    /// Their bounding box, computed while the data was still on the CPU.
     pub aabb: gizmo_math::Aabb,
+    /// The handles waiting on this mesh.
     pub handle_ids: Vec<usize>,
 }
 
 /// Successful GLTF parse on the worker; GPU upload via [`AssetManager::load_gltf_from_import`](crate::asset::AssetManager::load_gltf_from_import).
 #[derive(Debug)]
 pub struct GltfImportCompletion {
+    /// The file it came from.
     pub path: String,
+    /// The parsed glTF document — nodes, meshes, materials and animations.
     pub document: gltf::Document,
+    /// Its resolved binary buffers.
     pub buffers: Vec<gltf::buffer::Data>,
+    /// Its decoded images.
     pub images: Vec<gltf::image::Data>,
 }
 
 #[derive(Debug)]
+/// A glTF import that failed off-thread.
+///
+/// It is carried back rather than logged where it happened, so the failure surfaces on the main
+/// thread alongside the successes — a background thread that only logs is a load that appears to
+/// hang.
 pub struct GltfImportError {
+    /// The file that failed.
     pub path: String,
+    /// Why. A string because it has crossed a thread boundary.
     pub message: String,
 }
 
@@ -51,10 +76,16 @@ impl std::fmt::Display for GltfImportError {
 impl std::error::Error for GltfImportError {}
 
 #[derive(Debug)]
+/// Everything that finished loading since the last drain — what the main thread picks up each
+/// frame.
 pub struct CompletedAsyncLoads {
+    /// Decoded textures awaiting upload.
     pub textures: Vec<TextureReloadCompletion>,
+    /// Parsed OBJ meshes.
     pub objs: Vec<ObjLoadCompletion>,
+    /// Imported glTF scenes.
     pub gltfs: Vec<GltfImportCompletion>,
+    /// Imports that failed.
     pub gltf_errors: Vec<GltfImportError>,
 }
 
@@ -116,6 +147,7 @@ pub struct AsyncAssetLoader {
 }
 
 impl AsyncAssetLoader {
+    /// An empty queue with no work outstanding.
     pub fn new() -> Self {
         let (job_tx, job_rx) = mpsc::sync_channel::<Job>(64);
         let (result_tx, result_rx) = mpsc::channel::<WorkerMsg>();

@@ -1,32 +1,64 @@
+/// Every pipeline the fluid runs: the position-based solver's compute stages, and the
+/// screen-space passes that turn its particles into a water surface.
+///
+/// The surface is rendered in screen space (SSFR) rather than by extracting a mesh: depth and
+/// thickness are splatted from the particles, blurred into a smooth surface, and shaded — which
+/// costs the same whether there are ten thousand particles or a hundred thousand, and needs no
+/// marching-cubes pass on the CPU.
 pub struct FluidPipelines {
+    /// Layout of the group holding every simulation buffer.
     pub compute_bind_group_layout: wgpu::BindGroupLayout,
+    /// That group.
     pub compute_bind_group: wgpu::BindGroup,
 
+    /// Clears the grid.
     pub pipeline_clear: wgpu::ComputePipeline,
+    /// Hashes each particle into its cell.
     pub pipeline_hash: wgpu::ComputePipeline,
+    /// One stage of the bitonic sort over those hashes — dispatched repeatedly, with a different
+    /// [`SortParams`](crate::gpu_fluid::types::SortParams) each time.
     pub pipeline_sort: wgpu::ComputePipeline,
+    /// Finds each cell's range in the sorted list.
     pub pipeline_offsets: wgpu::ComputePipeline,
+    /// Applies external forces and predicts a position.
     pub pipeline_predict: wgpu::ComputePipeline,
+    /// Computes each particle's density constraint multiplier.
     pub pipeline_calc_lambda: wgpu::ComputePipeline,
+    /// Applies the resulting position correction. It and the stage above run once per solver
+    /// iteration.
     pub pipeline_apply_delta_p: wgpu::ComputePipeline,
     // AAA: Vorticity Confinement — computes curl of velocity field
+    /// Computes the curl of the velocity field, for vorticity confinement.
     pub pipeline_compute_vorticity: wgpu::ComputePipeline,
+    /// Derives the new velocity from the position correction, then applies vorticity and XSPH.
     pub pipeline_update_velocity: wgpu::ComputePipeline,
     // AAA: Foam/Spray classification
+    /// Classifies particles into phases — which is what promotes agitated surface water to foam.
     pub pipeline_classify: wgpu::ComputePipeline,
 
+    /// Splats each particle's depth, as a sphere impostor.
     pub pipeline_depth: wgpu::RenderPipeline,
+    /// Splats accumulated thickness, which is what drives the absorption through the water.
     pub pipeline_thickness: wgpu::RenderPipeline,
+    /// Blurs the splatted depth into a smooth surface — the step that turns visible spheres into
+    /// water.
     pub pipeline_blur: wgpu::ComputePipeline,
+    /// Shades that surface: normals from the blurred depth, refraction and reflection over the
+    /// scene behind it.
     pub pipeline_composite: wgpu::RenderPipeline,
     // AAA: Foam/Spray/Droplet rendering
+    /// Draws foam and bubble particles as sprites over the surface.
     pub pipeline_foam: wgpu::RenderPipeline,
 
+    /// Layout of the group the splat passes read particles through.
     pub particle_render_bg_layout: wgpu::BindGroupLayout,
+    /// Layout of the blur pass's group.
     pub blur_bind_group_layout: wgpu::BindGroupLayout,
+    /// Layout of the composite pass's group.
     pub composite_bind_group_layout: wgpu::BindGroupLayout,
 }
 
+/// Builds every fluid pipeline and bind group over the given buffers and targets.
 pub fn create_fluid_pipelines(
     device: &wgpu::Device,
     global_bind_group_layout: &wgpu::BindGroupLayout,

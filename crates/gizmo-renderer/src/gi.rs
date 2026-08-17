@@ -165,12 +165,17 @@ impl SHCoeffs {
 /// A single light probe — holds the SH coefficients at one position in the scene.
 #[derive(Debug, Clone)]
 pub struct LightProbe {
+    /// Where the probe sits, in world space.
     pub position: Vec3,
+    /// The irradiance around it, as spherical-harmonic coefficients.
     pub coeffs: SHCoeffs,
+    /// Whether [`Self::coeffs`] has been baked yet. An unbaked probe contributes nothing rather
+    /// than contributing black.
     pub is_baked: bool,
 }
 
 impl LightProbe {
+    /// An unbaked probe at `position`, with zero coefficients.
     pub fn new(position: Vec3) -> Self {
         Self {
             position,
@@ -182,10 +187,15 @@ impl LightProbe {
 
 /// The probe grid — probes placed at regular intervals across the scene.
 pub struct ProbeGrid {
+    /// The probes, in x-major grid order.
     pub probes: Vec<LightProbe>,
+    /// The grid's minimum corner, in world space.
     pub grid_min: Vec3,
+    /// Its maximum corner.
     pub grid_max: Vec3,
-    pub resolution: [u32; 3], // (x, y, z)
+    /// How many probes along each axis, `(x, y, z)`.
+    pub resolution: [u32; 3],
+    /// The spacing between neighbouring probes, derived from the bounds and the resolution.
     pub cell_size: Vec3,
 }
 

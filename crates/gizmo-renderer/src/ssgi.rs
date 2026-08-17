@@ -12,15 +12,25 @@ struct SsgiTemporalParams {
     camera_pos: [f32; 3],
 }
 
+/// Screen-space global illumination: light bounced off what is already on screen.
+///
+/// Same shape as [`SsaoState`](crate::ssao::SsaoState) — trace, temporally accumulate, blur, apply
+/// — but the trace is far noisier, which is why this one has a temporal pass that SSAO does not.
 pub struct SsgiState {
+    /// The raw traced GI term.
     pub ssgi_texture: wgpu::Texture,
+    /// Its view.
     pub ssgi_view: wgpu::TextureView,
 
+    /// The blurred GI term — what is applied to the frame.
     pub ssgi_blurred_texture: wgpu::Texture,
+    /// Its view.
     pub ssgi_blurred_view: wgpu::TextureView,
 
+    /// The trace pass.
     pub ssgi_pipeline: wgpu::RenderPipeline,
     ssgi_bgl: wgpu::BindGroupLayout,
+    /// Its G-buffer inputs. Rebuilt on resize.
     pub ssgi_bind_group: wgpu::BindGroup,
 
     // ── Temporal accumulation (denoise the 1-spp raymarch) ──────────────────────
@@ -31,32 +41,41 @@ pub struct SsgiState {
     history_b: wgpu::Texture,
     history_b_view: wgpu::TextureView,
     frame_parity: bool,
+    /// The frame counter that rotates the sample pattern, so successive frames sample different
+    /// directions and the temporal pass has something to average.
     pub frame_index: u32,
     prev_vp: [[f32; 4]; 4],
     temporal_params_buffer: wgpu::Buffer,
+    /// The temporal accumulation pass, which blends this frame's trace into the history.
     pub temporal_pipeline: wgpu::RenderPipeline,
     temporal_bgl: wgpu::BindGroupLayout,
     temporal_bg_read_a: wgpu::BindGroup, // history=A → output=B
     temporal_bg_read_b: wgpu::BindGroup, // history=B → output=A
 
+    /// The spatial blur pass.
     pub blur_pipeline: wgpu::RenderPipeline,
     blur_bgl: wgpu::BindGroupLayout,
     // Blur reads the accumulated history (ping-pong), not the raw ssgi buffer.
     blur_bg_a: wgpu::BindGroup, // reads history A
     blur_bg_b: wgpu::BindGroup, // reads history B
 
+    /// The apply pass, adding the GI term into the HDR target.
     pub apply_pipeline: wgpu::RenderPipeline,
     apply_bgl: wgpu::BindGroupLayout,
+    /// Its input. Rebuilt on resize.
     pub apply_bind_group: wgpu::BindGroup,
 
     _nearest_sampler: wgpu::Sampler,
     linear_sampler: wgpu::Sampler,
 
+    /// The GI targets' width, in pixels.
     pub width: u32,
+    /// Their height.
     pub height: u32,
 }
 
 impl SsgiState {
+    /// Builds every SSGI resource for a target of the given size.
     pub fn new(
         device: &wgpu::Device,
         scene: &SceneState,
@@ -183,6 +202,7 @@ impl SsgiState {
         }
     }
 
+    /// Rebuilds the size-dependent textures and the bind groups that read them.
     pub fn resize(
         &mut self,
         device: &wgpu::Device,

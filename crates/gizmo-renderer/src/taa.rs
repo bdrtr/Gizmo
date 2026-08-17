@@ -20,6 +20,12 @@ struct TaaParamsGpu {
 
 // ── TaaState ──────────────────────────────────────────────────────────────────
 
+/// Temporal anti-aliasing: this frame resolved against the last one.
+///
+/// The camera is jittered by a sub-pixel Halton offset each frame, so successive frames sample
+/// different points inside each pixel; the resolve pass reprojects the previous frame through
+/// [`Self::prev_vp`] and blends. Hence the ping-pong: a frame cannot be both the history being read
+/// and the output being written, so the two textures swap roles every frame.
 pub struct TaaState {
     // Ping-pong history buffers (Rgba16Float)
     history_a: wgpu::Texture,
@@ -30,9 +36,13 @@ pub struct TaaState {
     // false → read A (history), write B (output)
     // true  → read B (history), write A (output)
     frame_parity: bool,
+    /// The frame counter driving the Halton jitter sequence.
     pub frame_index: u32,
 
     // Unjittered view-proj from the previous frame (for reprojection)
+    /// The previous frame's **unjittered** view-projection, used to reproject the history. It
+    /// must be the unjittered one, or the reprojection would chase the jitter it is meant to
+    /// resolve.
     pub prev_vp: [[f32; 4]; 4],
 
     // Samplers and uniform buffer (never recreated on resize)
@@ -41,25 +51,34 @@ pub struct TaaState {
     nearest_sampler: wgpu::Sampler,
 
     // Resolve pipeline: group 0 → { params, t_current, t_history, t_position, samplers }
+    /// The resolve pass: current frame + reprojected history → the anti-aliased result.
     pub resolve_pipeline: wgpu::RenderPipeline,
     resolve_bgl: wgpu::BindGroupLayout,
     resolve_bg_read_a: wgpu::BindGroup, // history=A → output=B
     resolve_bg_read_b: wgpu::BindGroup, // history=B → output=A
 
     // Blit pipeline: group 0 empty, group 1 → { t_taa_out, s_blit }
+    /// The blit pass, copying whichever history buffer is this frame's output onward.
     pub blit_pipeline: wgpu::RenderPipeline,
     blit_bgl: wgpu::BindGroupLayout,
     blit_bg_a: wgpu::BindGroup, // reads A (used when parity=true, A is output)
     blit_bg_b: wgpu::BindGroup, // reads B (used when parity=false, B is output)
     _empty_bgl: wgpu::BindGroupLayout,
+    /// An empty bind group for the blit pipeline's unused group 0 — a pipeline's groups must all
+    /// be bound even when a shader reads none of them.
     pub empty_bg: wgpu::BindGroup,
 
+    /// The history buffers' width, in pixels.
     pub width: u32,
+    /// Their height.
     pub height: u32,
+    /// Whether TAA runs. Off, the camera is not jittered either.
     pub enabled: bool,
 }
 
 impl TaaState {
+    /// Builds both history buffers, both pipelines and all four bind-group permutations for a
+    /// target of the given size.
     pub fn new(
         device: &wgpu::Device,
         hdr_view: &wgpu::TextureView,

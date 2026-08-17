@@ -2,6 +2,9 @@ use super::*;
 
 impl GpuFluidSystem {
     #[tracing::instrument(skip_all, level = "trace")]
+    /// Records one whole simulation step: hash and sort, then the predict/solve/update stages,
+    /// with the density constraint iterated [`FluidParams::solver_iterations`](crate::gpu_fluid::types::FluidParams::solver_iterations)
+    /// times.
     pub fn compute_pass(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -162,6 +165,8 @@ impl GpuFluidSystem {
         }
     }
 
+    /// Records the plain particle draw — every particle as a sprite, with no surface
+    /// reconstruction.
     pub fn render_pass<'a>(
         &'a self,
         _rpass: &mut wgpu::RenderPass<'a>,
@@ -170,6 +175,8 @@ impl GpuFluidSystem {
         // Fallback for compatibility, not used directly by SSFR loop
     }
     #[tracing::instrument(skip_all, level = "trace")]
+    /// Records the screen-space fluid rendering chain: splat depth and thickness, blur, then
+    /// composite the shaded surface over the scene.
     pub fn render_ssfr(
         &self,
         encoder: &mut wgpu::CommandEncoder,

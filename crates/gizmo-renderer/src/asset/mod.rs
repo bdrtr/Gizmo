@@ -9,7 +9,9 @@ use wgpu::util::DeviceExt;
 pub mod error;
 pub mod loaders;
 pub mod primitives;
+/// Meshes generated in code rather than loaded — extrusions and solids.
 pub mod procedural;
+/// Texture decoding, upload and the built-in fallback textures.
 pub mod texture;
 
 pub use error::{AssetError, ObjIndexKind};
@@ -25,6 +27,8 @@ pub use loaders::GltfNodeData;
 /// identity rather than by path, surviving renames and moves.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct AssetMeta {
+    /// The asset's stable identifier, which is what a scene file references — a path can move,
+    /// this cannot.
     pub uuid: Uuid,
 }
 
@@ -222,6 +226,11 @@ pub(crate) struct MaterialDefaults {
     pub params_buffer: wgpu::Buffer,
 }
 
+/// The renderer's asset cache: what has been loaded, under which key, and how a UUID maps to a
+/// path.
+///
+/// Everything it holds is shared (`Arc`), so loading the same mesh twice returns the same GPU
+/// buffers rather than a second copy.
 pub struct AssetManager {
     mesh_cache: std::collections::HashMap<String, Mesh>,
     texture_cache: std::collections::HashMap<String, Arc<wgpu::BindGroup>>,
@@ -230,7 +239,9 @@ pub struct AssetManager {
     /// Lazily created shared default maps for the textured-PBR material bind group.
     material_defaults: Option<MaterialDefaults>,
 
+    /// Where an asset was loaded from → its UUID.
     pub path_to_uuid: std::collections::HashMap<String, Uuid>,
+    /// The reverse. Both are kept because a scene file stores UUIDs and a loader needs paths.
     pub uuid_to_path: std::collections::HashMap<Uuid, String>,
     /// Assets whose bytes are baked into the binary (e.g. via `include_bytes!`).
     pub embedded_assets: std::collections::HashMap<String, std::borrow::Cow<'static, [u8]>>,

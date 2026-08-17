@@ -1,8 +1,13 @@
 use super::types::GpuParticle;
 
+/// The particle system's two pipelines: one compute pass that steps every particle, one draw that
+/// billboards them.
 pub struct ParticlePipelines {
+    /// The simulation pass.
     pub compute_pipeline: wgpu::ComputePipeline,
+    /// The particle buffer and parameters, as that pass reads them.
     pub compute_bind_group: wgpu::BindGroup,
+    /// The billboard draw, taking the same buffer as instance data.
     pub render_pipeline: wgpu::RenderPipeline,
     /// Group 1: the scene depth texture (sampled in the FS for soft particles). The bind group
     /// is rebuilt every frame from the current `depth_texture_view`, because the view changes on
@@ -14,6 +19,7 @@ pub struct ParticlePipelines {
     pub flipbook_bind_group_layout: wgpu::BindGroupLayout,
 }
 
+/// Builds both particle pipelines and the compute bind group over the given buffers.
 pub fn create_particle_pipelines(
     device: &wgpu::Device,
     global_bind_group_layout: &wgpu::BindGroupLayout,

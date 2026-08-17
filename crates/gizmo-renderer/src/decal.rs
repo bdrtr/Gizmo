@@ -2,7 +2,13 @@ use crate::deferred::DeferredState;
 use crate::pipeline::{load_shader_composed, SceneState};
 use wgpu::util::DeviceExt;
 
+/// The deferred decal pass: projector boxes drawn against the G-buffer.
+///
+/// A decal is drawn as a box; where that box contains geometry, the decal's texture is projected
+/// onto it and blended into the albedo target. Doing it against the G-buffer rather than as
+/// geometry is what lets a decal wrap over whatever it lands on without matching its shape.
 pub struct DecalState {
+    /// The projection pass.
     pub pipeline: wgpu::RenderPipeline,
     /// The same decal, drawn for a pipeline that has no G-buffer.
     ///
@@ -14,26 +20,41 @@ pub struct DecalState {
     /// Layout for the depth texture the forward variant samples (built per frame, like the
     /// particle pass's, because the depth view is recreated on every resize).
     pub depth_bgl: wgpu::BindGroupLayout,
+    /// Layout of the per-decal uniform group, which is bound with a dynamic offset — hence the
+    /// 256-byte stride on [`DecalUniforms`].
     pub decal_uniform_bgl: wgpu::BindGroupLayout,
+    /// That group.
     pub decal_uniform_bg: wgpu::BindGroup,
+    /// Layout of the world-position group the pass reconstructs surface positions from.
     pub world_pos_bgl: wgpu::BindGroupLayout,
+    /// That group. Rebuilt on resize, because the G-buffer view is.
     pub world_pos_bg: wgpu::BindGroup,
 
     // Cube mesh for volume rendering
+    /// The unit cube every decal is drawn as.
     pub vertex_buffer: wgpu::Buffer,
+    /// One [`DecalUniforms`] per decal, at 256-byte stride.
     pub uniform_buffer: wgpu::Buffer,
 }
 
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+/// One decal's transform and tint, padded to the dynamic-offset alignment.
 pub struct DecalUniforms {
+    /// World → decal space. This is the one that does the work: a surface point is transformed
+    /// into the projector's space, and lands inside the unit cube or is discarded.
     pub inv_model: [f32; 16],
+    /// Decal → world.
     pub model: [f32; 16],
+    /// The tint multiplied into the projected texture; `a` scales its opacity.
     pub albedo_color: [f32; 4],
-    pub _pad: [f32; 28], // pad to 256 bytes for dynamic offset alignment
+    /// Padding to 256 bytes — the minimum stride wgpu allows for a dynamically-offset uniform
+    /// binding.
+    pub _pad: [f32; 28],
 }
 
 impl DecalState {
+    /// Builds the decal pipeline, the unit cube and the uniform buffer.
     pub fn new(device: &wgpu::Device, scene: &SceneState, deferred: &DeferredState) -> Self {
         let shader = load_shader_composed(
             device,
@@ -313,6 +334,7 @@ impl DecalState {
         })
     }
 
+    /// Rebinds the world-position group after the G-buffer has been rebuilt.
     pub fn resize(&mut self, device: &wgpu::Device, deferred: &DeferredState) {
         self.world_pos_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Decal WorldPos BG"),

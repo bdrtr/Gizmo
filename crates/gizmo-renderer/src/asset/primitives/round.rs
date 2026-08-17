@@ -131,6 +131,7 @@ impl crate::asset::AssetManager {
         vertices
     }
 
+    /// A UV sphere: `stacks` rings from pole to pole, `slices` segments around.
     pub fn create_sphere(device: &wgpu::Device, radius: f32, stacks: u32, slices: u32) -> Mesh {
         let vertices = Self::sphere_data(radius, stacks, slices);
         Mesh::new_indexed(
@@ -191,6 +192,7 @@ impl crate::asset::AssetManager {
         vertices
     }
 
+    /// A capped cylinder about the Y axis.
     pub fn create_cylinder(device: &wgpu::Device, radius: f32, height: f32, radial_segments: u32) -> Mesh {
         let vertices = Self::cylinder_data(radius, height, radial_segments);
         Mesh::new_indexed(device, &vertices, Vec3::ZERO, format!("cylinder_{}_{}", radius, height))
@@ -240,11 +242,13 @@ impl crate::asset::AssetManager {
         vertices
     }
 
+    /// A cone about the Y axis, with a capped base.
     pub fn create_cone(device: &wgpu::Device, radius: f32, height: f32, radial_segments: u32) -> Mesh {
         let vertices = Self::cone_data(radius, height, radial_segments);
         Mesh::new_indexed(device, &vertices, Vec3::ZERO, format!("cone_{}_{}", radius, height))
     }
 
+    /// A torus: `radius` to the centre of the tube, `tube_radius` around it.
     pub fn create_torus(device: &wgpu::Device, radius: f32, tube_radius: f32, radial_segments: u32, tubular_segments: u32) -> Mesh {
         let radial_segments = radial_segments.max(3);
         let tubular_segments = tubular_segments.max(3);
@@ -383,6 +387,7 @@ impl crate::asset::AssetManager {
         vertices
     }
 
+    /// A capsule about the Y axis: a cylinder of length `depth` with a hemisphere on each end.
     pub fn create_capsule(device: &wgpu::Device, radius: f32, depth: f32, latitudes: u32, longitudes: u32) -> Mesh {
         let vertices = Self::capsule_data(radius, depth, latitudes, longitudes);
         Mesh::new_indexed(device, &vertices, Vec3::ZERO, format!("capsule_{}_{}", radius, depth))

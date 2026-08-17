@@ -2,25 +2,38 @@
 use crate::deferred::DeferredState;
 use crate::pipeline::{load_shader, load_shader_composed, SceneState};
 
+/// Volumetric lighting — the shafts of light ("god rays") raymarched through the shadow cascades.
+///
+/// Marched at reduced resolution and then applied over the HDR target: the effect is low-frequency,
+/// so a half-resolution march is not visibly different and is several times cheaper.
 pub struct VolumetricState {
+    /// The marched scattering term.
     pub volumetric_texture: wgpu::Texture,
+    /// Its view.
     pub volumetric_view: wgpu::TextureView,
 
+    /// The raymarch pass.
     pub volumetric_pipeline: wgpu::RenderPipeline,
     volumetric_bgl: wgpu::BindGroupLayout,
+    /// Its depth and shadow-map inputs. Rebuilt on resize.
     pub volumetric_bind_group: wgpu::BindGroup,
 
+    /// The apply pass, adding the scattering over the HDR target.
     pub apply_pipeline: wgpu::RenderPipeline,
     apply_bgl: wgpu::BindGroupLayout,
+    /// Its input. Rebuilt on resize.
     pub apply_bind_group: wgpu::BindGroup,
 
     linear_sampler: wgpu::Sampler,
 
+    /// The march target's width, in pixels.
     pub width: u32,
+    /// Its height.
     pub height: u32,
 }
 
 impl VolumetricState {
+    /// Builds every volumetric resource for a target of the given size.
     pub fn new(
         device: &wgpu::Device,
         scene: &SceneState,
@@ -71,6 +84,7 @@ impl VolumetricState {
         }
     }
 
+    /// Rebuilds the size-dependent texture and the bind groups that read it.
     pub fn resize(
         &mut self,
         device: &wgpu::Device,

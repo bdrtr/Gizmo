@@ -244,6 +244,8 @@ impl super::AssetManager {
             .expect("checkerboard texture creation must not fail")
     }
 
+    /// A generated checkerboard with coloured axes, for seeing a mesh's UV layout — stretched,
+    /// mirrored or wrapped texture coordinates are obvious on it and invisible on an ordinary map.
     pub fn create_uv_debug_texture(
         &mut self,
         device: &wgpu::Device,

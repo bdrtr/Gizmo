@@ -9,6 +9,8 @@ use std::sync::Arc;
 // ── Simple AnimationPlayer update ────────────────────────────────────────────
 
 #[tracing::instrument(skip_all, level = "trace")]
+/// Advances every [`AnimationPlayer`], composes the resulting local poses down each skeleton, and
+/// uploads the joint matrices.
 pub fn animation_update_system(world: &mut World, dt: f32, queue: &wgpu::Queue) {
     let entities: Vec<u32> = world.borrow::<AnimationPlayer>().entities().collect();
     tracing::trace!(players = entities.len(), dt, "[Animation] updating skeletal players");
@@ -141,6 +143,8 @@ fn advance_and_sample_prev(
     normalize_anim_time(*prev_time, duration, looped)
 }
 
+/// The same, for entities driven by an [`AnimationStateMachine`]: it evaluates transitions first,
+/// then blends the active states before composing the pose.
 pub fn animation_state_machine_update_system(world: &mut World, dt: f32, queue: &wgpu::Queue) {
     let entities: Vec<u32> = world.borrow::<AnimationStateMachine>().entities().collect();
     // SAFETY: exclusive `&mut World`; AnimationStateMachine and Skeleton are distinct

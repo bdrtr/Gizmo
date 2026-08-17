@@ -180,12 +180,17 @@ pub struct EnvironmentFrame {
 /// light array — which is what the demos were doing.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SceneFrame {
+    /// Where the camera is and what it can see.
     pub camera: CameraFrame,
+    /// The scene's sun, if it has one.
     pub sun: SunFrame,
     /// Point + spot lights, `num_lights` of them live.
     pub lights: [LightData; MAX_LIGHTS],
+    /// How many entries of [`Self::lights`] are live.
     pub num_lights: u32,
+    /// The shadow cascades and their settings.
     pub shadows: ShadowFrame,
+    /// The sky preset, the blend towards the next one, and the debug shading mode.
     pub environment: EnvironmentFrame,
     /// Seconds since start, driving fluid caustics and the SSGI sample rotation. Left at zero this
     /// is not "no animation" but *frozen* animation — both paths shipped that bug once.
@@ -269,6 +274,7 @@ impl SceneUniforms {
 pub struct UnderwaterFog {
     /// Linear rgb.
     pub color: [f32; 3],
+    /// How quickly the underwater fog closes in with distance.
     pub density: f32,
 }
 

@@ -10,33 +10,63 @@ mod ssfr;
 use geometry::alloc_sphere_verts;
 use ssfr::create_ssfr_sized;
 
+/// A GPU SPH fluid: the solver's buffers, its pipelines, and the screen-space surface it is drawn
+/// as.
+///
+/// A renderer allocates one of these but does **not** composite it unless
+/// [`Renderer::fluid_enabled`](crate::Renderer::fluid_enabled) is set — an ocean surface over every
+/// scene is not a sensible default.
 pub struct GpuFluidSystem {
+    /// How many particles the simulation runs.
     pub num_particles: u32,
+    /// How many cells the neighbour-search grid has.
     pub total_cells: u32,
+    /// The particles — [`FluidParticle`](crate::gpu_fluid::types::FluidParticle)s.
     pub particles_buffer: wgpu::Buffer,
+    /// The solver's parameters.
     pub params_buffer: wgpu::Buffer,
+    /// Each cell's range in the sorted hash list.
     pub grid_buffer: wgpu::Buffer,
+    /// The obstacles.
     pub colliders_buffer: wgpu::Buffer,
+    /// The `(hash, index)` pairs the bitonic sort orders.
     pub sort_buffer: wgpu::Buffer,
+    /// Which stage of that sort the next dispatch runs.
     pub sort_params_buffer: wgpu::Buffer,
 
+    /// Every pipeline the fluid runs.
     pub pipelines: FluidPipelines,
 
+    /// The impostor quad each particle is splatted through.
     pub mesh_vertices: wgpu::Buffer,
+    /// Its index count.
     pub index_count: u32,
+    /// Its vertex count.
     pub vertex_count: u32,
 
     // SSFR resources
+    /// The particles, as the splat passes read them.
     pub ssfr_particle_bg: wgpu::BindGroup,
+    /// The horizontal blur's inputs.
     pub ssfr_blur_x_bg: wgpu::BindGroup,
+    /// The vertical blur's — separable, for the same reason bloom's blur is.
     pub ssfr_blur_y_bg: wgpu::BindGroup,
+    /// The composite pass's inputs.
     pub ssfr_composite_bg: wgpu::BindGroup,
+    /// The depth attachment the splat pass renders with.
     pub depth_texture_view: wgpu::TextureView,
+    /// The splatted depth, before blurring.
     pub raw_depth_texture: wgpu::Texture,
+    /// Its view.
     pub raw_depth_texture_view: wgpu::TextureView,
+    /// The blurred depth — the surface the composite pass shades.
     pub blur_texture_view: wgpu::TextureView,
+    /// The accumulated thickness, driving absorption.
     pub thickness_texture_view: wgpu::TextureView,
+    /// A copy of the opaque scene behind the water, so the composite pass can refract it — a pass
+    /// cannot sample the target it is writing.
     pub opaque_bg_texture: wgpu::Texture,
+    /// Its view.
     pub opaque_bg_texture_view: wgpu::TextureView,
 }
 
@@ -60,6 +90,7 @@ struct SsfrSized {
 }
 
 impl GpuFluidSystem {
+    /// Allocates every buffer and screen-space target and builds every pipeline.
     pub fn new(
         device: &wgpu::Device,
         _queue: &wgpu::Queue,
@@ -322,6 +353,7 @@ impl GpuFluidSystem {
         self.opaque_bg_texture_view = ssfr.opaque_bg_texture_view;
     }
 
+    /// Sets how many entries of the collider buffer are live.
     pub fn update_colliders_count(&self, queue: &wgpu::Queue, count: u32) {
         // num_colliders offset is 108:
         // params layout:
@@ -335,6 +367,7 @@ impl GpuFluidSystem {
         queue.write_buffer(&self.params_buffer, 112, bytemuck::cast_slice(&[count]));
     }
 
+    /// Uploads the solver's parameters for this step.
     pub fn update_parameters(
         &self,
         queue: &wgpu::Queue,

@@ -32,6 +32,7 @@ impl crate::asset::AssetManager {
         ]
     }
 
+    /// A square in the XZ plane, facing up.
     pub fn create_plane(device: &wgpu::Device, size: f32) -> Mesh {
         let vertices = Self::plane_data(size);
         Mesh::new_indexed(
@@ -81,6 +82,7 @@ impl crate::asset::AssetManager {
         vertices
     }
 
+    /// A filled disc in the XZ plane, facing up.
     pub fn create_circle(device: &wgpu::Device, radius: f32, segments: u32) -> Mesh {
         let vertices = Self::circle_data(radius, segments);
         Mesh::new_indexed(

@@ -12,61 +12,94 @@ use std::path::PathBuf;
 #[non_exhaustive]
 pub enum AssetError {
     /// A load source referenced an asset UUID that is not registered.
-    MissingUuid { source: String },
+    MissingUuid {
+        /// The UUID that was asked for.
+        source: String,
+    },
 
     /// An image file (texture) could not be decoded.
     ImageDecode {
+        /// The file that failed to decode.
         path: PathBuf,
+        /// What the `image` crate reported.
         source: image::ImageError,
     },
 
     /// An OBJ file could not be parsed by `tobj`.
     ObjLoad {
+        /// The file that failed to parse.
         path: PathBuf,
+        /// What `tobj` reported.
         source: tobj::LoadError,
     },
 
     /// An OBJ file parsed but contained no models.
-    ObjEmpty { path: PathBuf },
+    ObjEmpty {
+        /// The file that parsed but held no geometry.
+        path: PathBuf,
+    },
 
     /// An OBJ vertex/normal/texcoord index pointed outside the available data.
     ObjIndexOutOfRange {
+        /// The file the bad index was in.
         path: PathBuf,
+        /// Which attribute array it indexed.
         kind: ObjIndexKind,
+        /// The index itself.
         index: usize,
+        /// How long that array actually is.
         len: usize,
     },
 
     /// A glTF / GLB file (or embedded slice) could not be imported.
     GltfImport {
+        /// The file that failed to import.
         path: PathBuf,
+        /// What the `gltf` crate reported.
         source: gltf::Error,
     },
 
     /// A texture upload requested a zero width or height.
     ZeroDimensionTexture {
+        /// The texture's cache key, which is what identifies it before it has a GPU handle.
         cache_key: String,
+        /// The requested width.
         width: u32,
+        /// The requested height.
         height: u32,
     },
 
     /// A network fetch for an asset (WASM target) failed.
-    Fetch { url: String, message: String },
+    Fetch {
+        /// The URL that was fetched.
+        url: String,
+        /// What the fetch reported. A string because the browser's error is not a Rust error
+        /// type.
+        message: String,
+    },
 
     /// A heightmap image was smaller than the 2x2 minimum required to build a
     /// terrain mesh.
     HeightmapTooSmall {
+        /// The heightmap image.
         path: PathBuf,
+        /// Its width, in texels.
         width: u32,
+        /// Its height.
         height: u32,
     },
 
     /// The provided RGBA byte buffer did not match `width * height * 4`.
     RgbaSizeMismatch {
+        /// The texture's cache key.
         cache_key: String,
+        /// How many bytes were handed over.
         got: usize,
+        /// How many `width × height × 4` comes to.
         expected: usize,
+        /// The declared width.
         width: u32,
+        /// The declared height.
         height: u32,
     },
 }
@@ -75,8 +108,11 @@ pub enum AssetError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ObjIndexKind {
+    /// The vertex position array.
     Position,
+    /// The normal array.
     Normal,
+    /// The texture-coordinate array.
     TexCoord,
 }
 

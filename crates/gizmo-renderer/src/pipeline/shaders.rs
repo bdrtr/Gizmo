@@ -115,6 +115,8 @@ pub(crate) fn compose_wgsl(
         .unwrap_or_else(|e| panic!("emitting WGSL for '{label}' failed: {e}"))
 }
 
+/// Compiles a shader, preferring a copy on disk over the compiled-in fallback — the mechanism
+/// behind shader hot-reload. See [`Renderer::load_shader`](crate::Renderer::load_shader).
 pub fn load_shader(
     device: &wgpu::Device,
     file_path: &str,

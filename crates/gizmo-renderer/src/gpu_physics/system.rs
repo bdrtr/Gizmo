@@ -5,45 +5,93 @@ use wgpu::util::DeviceExt;
 use super::pipeline::{create_physics_pipelines, PhysicsPipelines};
 use super::types::*;
 
+/// The renderer's own GPU rigid-body solver: bodies that are simulated, culled and drawn without
+/// the CPU seeing them.
+///
+/// It is **not** the engine's physics — that is `gizmo-physics-rigid`, on the CPU and
+/// deterministic. This one trades determinism and generality for scale, and the two must not run
+/// over the same entities: enable it through
+/// [`Renderer::enable_gpu_physics`](crate::Renderer::enable_gpu_physics), and only for a game that
+/// is not using `PhysicsPlugin`.
 pub struct GpuPhysicsSystem {
+    /// The body buffer's capacity.
     pub max_boxes: u32,
+    /// The broadphase grid's side length, in cells.
     pub grid_size: u32,
+    /// The bodies — [`GpuBox`]es.
     pub boxes_buffer: wgpu::Buffer,
+    /// The per-step [`PhysicsSimParams`](crate::gpu_physics::types::PhysicsSimParams).
     pub params_buffer: wgpu::Buffer,
+    /// One head index per grid cell, into the linked-node list below. Grid + linked list, rather
+    /// than a per-cell array, because a cell's occupancy is unbounded.
     pub grid_heads_buffer: wgpu::Buffer,
+    /// The linked-list nodes those heads point into.
     pub linked_nodes_buffer: wgpu::Buffer,
+    /// Per-body contact manifolds — see
+    /// [`GpuBoxContacts`](crate::gpu_physics::types::GpuBoxContacts), whose stride is the one
+    /// number in this file that has already been got wrong once.
     pub box_contacts_buffer: wgpu::Buffer,
+    /// The static colliders.
     pub colliders_buffer: wgpu::Buffer,
+    /// Which bodies are awake, written by the integrator and read by the next step's solver.
     pub awake_flags_buffer: wgpu::Buffer,
+    /// The joints.
     pub joints_buffer: wgpu::Buffer,
+    /// How many of them are live.
     pub joint_count: u32,
+    /// The joint buffer's capacity.
     pub max_joints: u32,
 
+    /// Every pipeline the solver runs.
     pub pipelines: PhysicsPipelines,
 
+    /// The unit cube every body is drawn as.
     pub box_vertex_buffer: wgpu::Buffer,
+    /// Its indices.
     pub box_index_buffer: wgpu::Buffer,
+    /// How many of them.
     pub index_count: u32,
 
+    /// A mappable copy of the body buffer, for the rare case where the CPU does need to see the
+    /// simulation — see [`request_readback`](Self::request_readback).
     pub readback_buffer: wgpu::Buffer,
     // 0 = Idle, 1 = Copied to buffer (awaiting map), 2 = Mapping, 3 = Mapped (ready to read)
+    /// Where that readback is: 0 = idle, 1 = copied and awaiting a map, 2 = mapping, 3 = mapped
+    /// and readable.
+    ///
+    /// A state machine rather than a blocking read because mapping a buffer takes at least a frame:
+    /// waiting on it would stall the pipeline that the whole system exists to keep full.
     pub readback_state: Arc<AtomicU8>,
 
+    /// The indirect draw arguments the culling pass writes — the instance count never reaches the
+    /// CPU.
     pub indirect_buffer: wgpu::Buffer,
+    /// The visible subset the culling pass compacts into, and the draw reads.
     pub culled_boxes_buffer: wgpu::Buffer,
 
     // ═══ Debug Renderer ═══
+    /// Whether the debug overlay is generated this frame.
     pub debug_enabled: bool,
+    /// The lines the debug compute pass emits.
     pub debug_line_buffer: wgpu::Buffer,
+    /// How many it emitted, doubling as the indirect draw count — again, the CPU never learns the
+    /// number.
     pub debug_line_count_buffer: wgpu::Buffer,
+    /// What the overlay should draw — see
+    /// [`DebugParams`](crate::gpu_physics::types::DebugParams).
     pub debug_params_buffer: wgpu::Buffer,
+    /// The overlay's compute bind group.
     pub debug_compute_bind_group: wgpu::BindGroup,
+    /// The pass that turns bodies and joints into line vertices.
     pub debug_compute_pipeline: wgpu::ComputePipeline,
+    /// The pass that draws them.
     pub debug_render_pipeline: wgpu::RenderPipeline,
+    /// The line buffer's capacity.
     pub debug_max_lines: u32,
 }
 
 impl GpuPhysicsSystem {
+    /// Allocates every simulation buffer for `max_boxes` bodies and builds every pipeline.
     pub fn new(
         device: &wgpu::Device,
         max_boxes: u32,
@@ -450,6 +498,7 @@ impl GpuPhysicsSystem {
         }
     }
 
+    /// Overwrites one body. Seeding the simulation, or teleporting a body from the CPU.
     pub fn update_box(&self, queue: &wgpu::Queue, index: u32, box_struct: &GpuBox) {
         if index < self.max_boxes {
             let offset = (index as wgpu::BufferAddress)
@@ -462,6 +511,7 @@ impl GpuPhysicsSystem {
         }
     }
 
+    /// Overwrites one static collider.
     pub fn update_collider(&self, queue: &wgpu::Queue, index: u32, collider: &GpuCollider) {
         if index < 100 {
             let offset = (index as wgpu::BufferAddress)
@@ -621,6 +671,8 @@ impl GpuPhysicsSystem {
     }
 
     #[tracing::instrument(skip_all, level = "trace")]
+    /// Records one whole simulation step: clear, build, narrowphase, solve, joints, integrate —
+    /// each its own dispatch, in that order.
     pub fn compute_pass(&self, encoder: &mut wgpu::CommandEncoder) {
         tracing::trace!(
             boxes = self.max_boxes,
@@ -669,6 +721,8 @@ impl GpuPhysicsSystem {
     }
 
     #[tracing::instrument(skip_all, level = "trace")]
+    /// Records the frustum-culling dispatch, which compacts the visible bodies and writes the
+    /// indirect draw arguments.
     pub fn cull_pass(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -687,6 +741,7 @@ impl GpuPhysicsSystem {
     }
 
     #[tracing::instrument(skip_all, level = "trace")]
+    /// Records the instanced box draw, indirect off the culling pass's count.
     pub fn render_pass<'a>(
         &'a self,
         rpass: &mut wgpu::RenderPass<'a>,
@@ -700,6 +755,7 @@ impl GpuPhysicsSystem {
         rpass.draw_indexed_indirect(&self.indirect_buffer, 0);
     }
 
+    /// Records the dispatch that generates the debug overlay's lines.
     pub fn debug_compute_pass(&self, encoder: &mut wgpu::CommandEncoder) {
         if !self.debug_enabled {
             return;
@@ -725,6 +781,7 @@ impl GpuPhysicsSystem {
         );
     }
 
+    /// Records the debug overlay's draw.
     pub fn debug_render_pass<'a>(
         &'a self,
         rpass: &mut wgpu::RenderPass<'a>,
@@ -740,6 +797,11 @@ impl GpuPhysicsSystem {
         rpass.draw_indirect(&self.debug_line_count_buffer, 0);
     }
 
+    /// Asks for a copy of the body buffer, if no readback is already in flight.
+    ///
+    /// Idempotent: a second call while one is outstanding does nothing, so it is safe to call every
+    /// frame. Pair with [`poll_readback_data`](Self::poll_readback_data), which is what eventually
+    /// returns the data.
     pub fn request_readback(&self, encoder: &mut wgpu::CommandEncoder) {
         if self
             .readback_state
@@ -752,6 +814,10 @@ impl GpuPhysicsSystem {
         }
     }
 
+    /// Advances the readback state machine, returning the bodies once they are mapped.
+    ///
+    /// `None` means "not ready", not "nothing there" — a readback takes at least a frame to arrive,
+    /// so this returns `None` several times before it returns the data once.
     pub fn poll_readback_data(&self, device: &wgpu::Device) -> Option<Vec<GpuBox>> {
         if self
             .readback_state

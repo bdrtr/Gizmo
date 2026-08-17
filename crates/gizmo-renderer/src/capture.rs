@@ -185,8 +185,13 @@ pub fn texture_to_png(
 /// - `GIZMO_SCREENSHOT_EXIT` — `1` to close the window after writing, which is what a script wants.
 #[derive(Debug, Clone)]
 pub struct CaptureRequest {
+    /// Where the PNG is written.
     pub path: std::path::PathBuf,
+    /// Which frame to capture. Early frames are unrepresentative — assets are still streaming in
+    /// and the layout has not settled — so this defaults well past the first.
     pub frame: u64,
+    /// Whether the process exits once the frame is written, which is what makes this usable from
+    /// a script.
     pub exit_after: bool,
 }
 

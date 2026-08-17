@@ -39,6 +39,7 @@ impl super::AssetManager {
         vertices
     }
 
+    /// A regular tetrahedron with flat-shaded faces.
     pub fn create_tetrahedron(device: &wgpu::Device, size: f32) -> Mesh {
         let vertices = Self::tetrahedron_data(size);
         Mesh::new_indexed(device, &vertices, Vec3::ZERO, "tetrahedron".to_string())
@@ -97,11 +98,15 @@ impl super::AssetManager {
         vertices
     }
 
+    /// A cone with its tip cut off. Equal radii give a cylinder; a zero top radius gives a cone.
     pub fn create_conical_frustum(device: &wgpu::Device, radius_bottom: f32, radius_top: f32, height: f32, radial_segments: u32) -> Mesh {
         let vertices = Self::conical_frustum_data(radius_bottom, radius_top, height, radial_segments);
         Mesh::new_indexed(device, &vertices, Vec3::ZERO, "conical_frustum".to_string())
     }
 
+    /// Extrudes a **convex** 2-D outline along Z, capping both ends. The convexity matters: the
+    /// caps are triangulated as a fan from the first point, which is only correct for a convex
+    /// polygon.
     pub fn create_convex_extrusion(device: &wgpu::Device, points_2d: &[[f32; 2]], depth: f32) -> Mesh {
         let mut vertices = Vec::new();
         let half_d = depth / 2.0;
@@ -161,6 +166,8 @@ impl super::AssetManager {
         Mesh::new_indexed(device, &vertices, Vec3::ZERO, "extrusion".to_string())
     }
 
+    /// Extrudes the ring between two 2-D outlines along Z — a shape with a hole, which
+    /// [`create_convex_extrusion`](Self::create_convex_extrusion) cannot express.
     pub fn create_ring_extrusion(device: &wgpu::Device, inner_points: &[[f32; 2]], outer_points: &[[f32; 2]], depth: f32) -> Mesh {
         let mut vertices = Vec::new();
         let half_d = depth / 2.0;

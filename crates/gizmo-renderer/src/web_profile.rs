@@ -275,49 +275,61 @@ impl WebProfile {
         Self::minimal()
     }
 
+    /// Sets whether GPU particles run, and their budget.
     pub fn with_particles(mut self, enabled: bool, max: u32) -> Self {
         self.gpu_particles_enabled = enabled;
         self.gpu_particles_max = max;
         self
     }
 
+    /// Sets whether the GPU physics solver runs, and its body budget.
     pub fn with_physics(mut self, enabled: bool, max: u32) -> Self {
         self.gpu_physics_enabled = enabled;
         self.gpu_physics_max = max;
         self
     }
 
+    /// Sets whether the fluid solver runs, and its particle budget.
     pub fn with_fluid(mut self, enabled: bool, max: u32) -> Self {
         self.gpu_fluid_enabled = enabled;
         self.gpu_fluid_max = max;
         self
     }
 
+    /// Sets the shadow quality — which decides the cascade resolution, and whether there are
+    /// cascades at all.
     pub fn with_shadows(mut self, quality: ShadowQuality) -> Self {
         self.shadow_quality = quality;
         self
     }
 
+    /// Sets how much of the post-process chain runs.
     pub fn with_post_processing(mut self, level: PostProcessLevel) -> Self {
         self.post_process_level = level;
         self
     }
 
+    /// Sets whether rendering goes through the G-buffer. Off means forward-only, which is what
+    /// the browser profile uses — and it takes SSAO, SSR and SSGI with it, since they all read the
+    /// G-buffer.
     pub fn with_deferred(mut self, enabled: bool) -> Self {
         self.deferred_enabled = enabled;
         self
     }
 
+    /// Sets whether SSAO runs. Requires deferred.
     pub fn with_ssao(mut self, enabled: bool) -> Self {
         self.ssao_enabled = enabled;
         self
     }
 
+    /// Sets whether SSR runs. Requires deferred.
     pub fn with_ssr(mut self, enabled: bool) -> Self {
         self.ssr_enabled = enabled;
         self
     }
 
+    /// Sets the instance-buffer ceiling.
     pub fn with_max_instances(mut self, max: usize) -> Self {
         self.max_instances = max;
         self
