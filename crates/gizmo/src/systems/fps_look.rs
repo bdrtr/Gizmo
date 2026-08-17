@@ -70,6 +70,30 @@ pub struct FpsLook {
     pub pitch_limit: f32,
     /// false → the system SKIPS this camera (for menus, cutscenes, autoplay).
     pub enabled: bool,
+    /// Mouse button that must be **held** for looking to apply; `None` looks always.
+    ///
+    /// Added 2026-08-18 because the controller had no callers and this was the first reason why:
+    /// a tool or a demo with a cursor cannot have the camera swing every time the mouse moves.
+    /// `gizmo-studio`'s editor camera and `cpu_physics` had both hand-rolled exactly this gate.
+    /// Defaults to `None`, so a `FpsLook` written before this field behaves as it always did.
+    ///
+    /// It gates **looking only** — movement keys keep working, which is what a fly camera in a
+    /// tool wants. It does not gate the stick, for the same reason the studio's does not: a pad
+    /// has no cursor to fight with.
+    pub look_button: Option<u32>,
+    /// Key that multiplies movement speed by [`sprint_multiplier`](Self::sprint_multiplier) while
+    /// held; `None` disables sprinting.
+    ///
+    /// `None` by default and NOT `ShiftLeft`, because ShiftLeft already means *descend* here —
+    /// see [`down_key`](Self::down_key). A caller that wants shift-to-sprint should move the
+    /// descend key first, and that collision is the reason both are fields rather than constants.
+    pub sprint_key: Option<u32>,
+    /// What [`sprint_key`](Self::sprint_key) multiplies the speed by.
+    pub sprint_multiplier: f32,
+    /// Key that moves straight up, in world space. Defaults to Space.
+    pub up_key: u32,
+    /// Key that moves straight down. Defaults to ShiftLeft — see [`sprint_key`](Self::sprint_key).
+    pub down_key: u32,
 }
 
 impl Default for FpsLook {
@@ -84,6 +108,11 @@ impl Default for FpsLook {
             move_speed: 0.0,
             pitch_limit: std::f32::consts::FRAC_PI_2 - 0.05,
             enabled: true,
+            look_button: None,
+            sprint_key: None,
+            sprint_multiplier: 3.0,
+            up_key: KeyCode::Space as u32,
+            down_key: KeyCode::ShiftLeft as u32,
         }
     }
 }
@@ -109,6 +138,31 @@ impl FpsLook {
     /// Set the right-stick look speed (rad/s). 0 turns stick look off. Chainable.
     pub fn with_stick_sensitivity(mut self, s: f32) -> Self {
         self.stick_sensitivity = s;
+        self
+    }
+
+    /// Look only while `button` is held — `gizmo_core::input::mouse::RIGHT` is the usual choice.
+    /// Chainable.
+    pub fn with_look_button(mut self, button: u32) -> Self {
+        self.look_button = Some(button);
+        self
+    }
+
+    /// Hold `key` to move `multiplier` times faster. Chainable.
+    ///
+    /// Note the collision this exists to make visible: [`down_key`](Self::down_key) is ShiftLeft
+    /// by default, so `with_sprint(KeyCode::ShiftLeft as u32, 3.0)` alone would make shift mean
+    /// both. Set [`down_key`](Self::down_key) as well, or pick another sprint key.
+    pub fn with_sprint(mut self, key: u32, multiplier: f32) -> Self {
+        self.sprint_key = Some(key);
+        self.sprint_multiplier = multiplier;
+        self
+    }
+
+    /// The keys that move straight up and down in world space. Chainable.
+    pub fn with_vertical_keys(mut self, up: u32, down: u32) -> Self {
+        self.up_key = up;
+        self.down_key = down;
         self
     }
 
@@ -184,10 +238,16 @@ impl gizmo_core::system::System for FpsLookSystem {
             .get_resource::<Input>()
             .map(|i| i.mouse_delta())
             .unwrap_or((0.0, 0.0));
-        let key = |c: KeyCode| {
+        let key_code = |code: u32| {
             world
                 .get_resource::<Input>()
-                .map(|i| i.is_key_pressed(c as u32))
+                .map(|i| i.is_key_pressed(code))
+                .unwrap_or(false)
+        };
+        let mouse_held = |button: u32| {
+            world
+                .get_resource::<Input>()
+                .map(|i| i.is_mouse_button_pressed(button))
                 .unwrap_or(false)
         };
         // Keys and the left stick as one direction, and the right stick for looking. Read once
@@ -212,7 +272,13 @@ impl gizmo_core::system::System for FpsLookSystem {
         } {
             for (_id, (mut look, mut cam, mut t)) in q.iter_mut() {
                 if look.enabled {
-                    look.apply_look(mdx, mdy);
+                    // The gate covers the MOUSE only. A stick has no cursor to fight with, so
+                    // requiring a held button of it would be a restriction with nothing behind
+                    // it — the same conclusion the studio's camera reached about its fly keys.
+                    let looking = look.look_button.is_none_or(&mouse_held);
+                    if looking {
+                        look.apply_look(mdx, mdy);
+                    }
                     look.apply_stick_look(stick_look.0, stick_look.1, dt);
 
                     if look.move_speed > 0.0 {
@@ -221,17 +287,21 @@ impl gizmo_core::system::System for FpsLookSystem {
                         // çubuğu tam hıza çıkarıp çubuğun kattığı tek şeyi yok ederdi.
                         let (fwd, right) = (look.forward(), look.right());
                         let mut dir = right * move_axis.0 + fwd * move_axis.1;
-                        if key(KeyCode::Space) {
+                        if key_code(look.up_key) {
                             dir += Vec3::Y;
                         }
-                        if key(KeyCode::ShiftLeft) {
+                        if key_code(look.down_key) {
                             dir -= Vec3::Y;
                         }
                         let len = dir.length();
                         if len > 1.0 {
                             dir /= len;
                         }
-                        t.position += dir * look.move_speed * dt;
+                        let sprint = match look.sprint_key {
+                            Some(k) if key_code(k) => look.sprint_multiplier,
+                            _ => 1.0,
+                        };
+                        t.position += dir * look.move_speed * sprint * dt;
                     }
                 }
 
@@ -363,6 +433,100 @@ mod tests {
             half < full * 0.8,
             "half a tilt must walk, not run: {half} against {full}"
         );
+    }
+
+    /// The gate the controller had no callers for want of.
+    #[test]
+    fn a_look_button_gates_the_mouse_and_not_the_stick() {
+        use gizmo_core::input::{mouse, GamepadAxis, GamepadId};
+
+        fn yaw_after(look: FpsLook, hold_button: bool, stick: f32) -> f32 {
+            let mut world = World::new();
+            let cam = world.spawn();
+            world.add_component(cam, Transform::new(Vec3::ZERO));
+            world.add_component(cam, Camera::new(1.0, 0.1, 100.0, 0.0, 0.0, true));
+            world.add_component(cam, look);
+
+            let mut input = Input::new();
+            input.on_mouse_delta(100.0, 0.0);
+            if hold_button {
+                input.on_mouse_button_pressed(mouse::RIGHT);
+            }
+            if stick != 0.0 {
+                let id = GamepadId::new(0);
+                input.on_gamepad_connected(id, "pad");
+                input.on_gamepad_axis(id, GamepadAxis::RightStickX, stick);
+            }
+            world.insert_resource(input);
+            FpsLookSystem.run(&world, 1.0);
+            world.borrow::<FpsLook>().get_entity(cam).unwrap().yaw
+        }
+
+        let gated = FpsLook::new().with_sensitivity(0.01).with_look_button(mouse::RIGHT);
+        assert_eq!(
+            yaw_after(gated, false, 0.0),
+            0.0,
+            "a mouse drag with the button up must not turn a gated camera"
+        );
+        assert!(
+            yaw_after(gated, true, 0.0) > 0.0,
+            "…and must turn it while the button is held"
+        );
+        // The stick is NOT gated: it has no cursor to fight with.
+        assert!(
+            yaw_after(gated, false, 1.0) > 0.0,
+            "the gate is for the mouse; requiring a held button of a stick is a restriction with \
+             nothing behind it"
+        );
+        // Ungated is the default, so a `FpsLook` written before the field behaves as it did.
+        assert!(yaw_after(FpsLook::new().with_sensitivity(0.01), false, 0.0) > 0.0);
+    }
+
+    #[test]
+    fn sprint_multiplies_the_distance_travelled() {
+        use gizmo_core::input::{code_from_name, MoveKeys};
+
+        fn travel(look: FpsLook, sprinting: bool) -> f32 {
+            let mut world = World::new();
+            let cam = world.spawn();
+            world.add_component(cam, Transform::new(Vec3::ZERO));
+            world.add_component(cam, Camera::new(1.0, 0.1, 100.0, 0.0, 0.0, true));
+            world.add_component(cam, look);
+            let mut input = Input::new();
+            input.on_key_pressed(MoveKeys::WASD.forward);
+            if sprinting {
+                input.on_key_pressed(code_from_name("q").unwrap());
+            }
+            world.insert_resource(input);
+            FpsLookSystem.run(&world, 1.0);
+            world.borrow::<Transform>().get_entity(cam).unwrap().position.length()
+        }
+
+        let look = FpsLook::new()
+            .with_move_speed(10.0)
+            .with_sprint(code_from_name("q").unwrap(), 3.0);
+        let walk = travel(look, false);
+        let run = travel(look, true);
+        assert!((walk - 10.0).abs() < 1e-4, "walk {walk}");
+        assert!((run - 30.0).abs() < 1e-3, "sprint should treble it: {run}");
+    }
+
+    /// The collision the sprint field exists to make visible: ShiftLeft already means *descend*.
+    #[test]
+    fn the_vertical_keys_are_configurable_because_shift_is_taken() {
+        use gizmo_core::input::code_from_name;
+        let look = FpsLook::new();
+        assert_eq!(
+            look.down_key,
+            KeyCode::ShiftLeft as u32,
+            "the default descend key is what a shift-to-sprint caller collides with"
+        );
+        let moved = FpsLook::new().with_vertical_keys(
+            code_from_name("r").unwrap(),
+            code_from_name("f").unwrap(),
+        );
+        assert_eq!(moved.up_key, code_from_name("r").unwrap());
+        assert_eq!(moved.down_key, code_from_name("f").unwrap());
     }
 
     #[test]

@@ -338,13 +338,27 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
   `dt` at all — the signature is the guard — and the stick's half is pinned by a test that holds it
   for twice as long and expects twice the turn.
 
-  **`FpsLook` has no callers, and that is the real finding here.** The engine ships a first-person
-  controller documented as the answer to hand-written camera loops, and **zero of the forty demos
-  use it**; 22 of them hand-roll mouse-look instead. Converting them is not obviously right — some
-  want a fly camera, some an orbit, some a turret — but "the abstraction exists and nothing adopted
-  it" is a stronger signal than any of the individual copies. **Trigger:** the next demo that
-  wants a first-person camera; if `FpsLook` does not fit it either, the controller is the thing to
-  change.
+  **`FpsLook` had no callers — and the trigger fired on the first attempt to give it one
+  (2026-08-18).** The recorded trigger was "the next demo that wants a first-person camera; if
+  `FpsLook` does not fit it either, the controller is the thing to change". Trying `cpu_physics`
+  showed it did not fit, in two specific ways that every real caller has:
+
+  * **Looking was ungated.** A demo or a tool with a cursor cannot have the camera swing on every
+    mouse move; `cpu_physics` and `gizmo-studio`'s editor camera had each hand-rolled a
+    right-mouse gate. `FpsLook::look_button` is that gate, and it covers the **mouse only** — a
+    stick has no cursor to fight with, the same conclusion the studio reached about its fly keys.
+  * **No sprint.** `sprint_key` + `sprint_multiplier`, and the collision that forced the vertical
+    keys to become fields too: ShiftLeft already meant *descend*, so shift-to-sprint would have
+    meant both. `up_key`/`down_key` are configurable and default to what they were, so a `FpsLook`
+    written before this behaves exactly as it did.
+
+  `cpu_physics` is the first caller, and the conversion is the evidence: **−57 lines, and its
+  `DemoState` lost every camera field it had** (`camera_speed`, `camera_pitch`, `camera_yaw`,
+  `camera_pos` — all four dead once the controller owned them; the struct is down to `time`).
+
+  The other 21 hand-rolled cameras stay hand-rolled: some are orbit cameras, some are turrets, and
+  converting a camera nobody asked about is churn against a demo that works. **Trigger:** the next
+  one that is a plain first-person or fly camera.
 - **The ten-light ceiling — the *selection* half is closed (2026-08-17); the ceiling is not.**
   `gpu_types.rs` still holds `[LightData; 10]`. What changed is which ten it holds. It used to be
   whichever ten ECS iteration reached first, and that had three separate consequences: distance

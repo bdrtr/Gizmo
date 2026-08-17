@@ -31,11 +31,12 @@ use gizmo::physics::BodyHandle;
 use gizmo::prelude::*;
 use std::f32::consts::{FRAC_PI_2, FRAC_PI_3, PI};
 
+/// Bu demonun kendi durumu — ve artık kamera burada DEĞİL.
+///
+/// Dört alan (`camera_speed`, `camera_pitch`, `camera_yaw`, `camera_pos`) `FpsLook`'a geçtiğinde
+/// öldü. Soyutlamanın uyduğunun en açık kanıtı bu: demonun kendi kamera durumu tamamen ortadan
+/// kalktı, kalan tek şey zaman.
 struct DemoState {
-    camera_speed: f32,
-    camera_pitch: f32,
-    camera_yaw: f32,
-    camera_pos: Vec3,
     time: f32,
 }
 
@@ -82,9 +83,22 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
     let box_mat = Material::new(box_tex).with_pbr(Vec4::splat(1.0), 0.5, 0.0);
 
     // --- Kamera ---
+    // Bu demo, motorun KENDİ birinci-şahıs kontrolcüsünü kullanıyor: bakış, hareket (tuş + sol
+    // çubuk), sağ-tık kapısı, koşma ve dikey eksen `FpsLook`'un içinde. Eskiden bunların hepsi
+    // burada elle yazılıydı — ve `FpsLook` motorun sunduğu, hiç kimsenin kullanmadığı bileşendi.
+    // Sağ tık kapısı ile koşma, tam da uymadığı için 2026-08-18'de kontrolcüye eklendi.
     world.spawn_bundle((
         Transform::new(Vec3::new(0.0, 10.0, 20.0)).with_rotation(Quat::from_rotation_x(-0.2)),
         Camera::new(FRAC_PI_3, 0.1, 5000.0, -FRAC_PI_2, -0.2, true),
+        FpsLook::new()
+            .looking(-FRAC_PI_2, -0.2)
+            .with_sensitivity(0.002)
+            .with_move_speed(20.0)
+            .with_look_button(mouse::RIGHT)
+            // Shift koşma olduğu için iniş tuşu Ctrl'e alındı — çakışma `with_sprint`'in
+            // belgesinde yazılı olan tam bu.
+            .with_vertical_keys(KeyCode::Space as u32, KeyCode::ControlLeft as u32)
+            .with_sprint(KeyCode::ShiftLeft as u32, 3.0),
         EntityName("Main Camera".into()),
     ));
 
@@ -309,10 +323,6 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
     world.insert_resource(gizmo::renderer::Gizmos::default());
 
     DemoState {
-        camera_speed: 15.0,
-        camera_pitch: -0.2,
-        camera_yaw: -FRAC_PI_2,
-        camera_pos: Vec3::new(0.0, 10.0, 20.0),
         time: 0.0,
     }
 }
@@ -320,55 +330,12 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
 fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &Input) {
     state.time += dt;
 
-    let mut cam_forward = Vec3::new(0.0, 0.0, -1.0);
-    let mut cam_pos = Vec3::ZERO;
-
-    if let Some(mut q) = world.query_mut::<(Mut<Transform>, Mut<Camera>)>() {
-        for (_, (mut transform, mut camera)) in q.iter_mut() {
-            let (dx, dy) = input.mouse_delta();
-            let sensitivity = 0.002;
-
-            // Yalnız sağ tık basılıyken kamerayı döndür (serbest fare kaymasını önler).
-            if input.is_mouse_button_pressed(mouse::RIGHT) {
-                state.camera_yaw -= dx * sensitivity;
-                state.camera_pitch -= dy * sensitivity;
-                state.camera_pitch = state.camera_pitch.clamp(-1.5, 1.5);
-            }
-
-            // Bakış/hareket yönü — paylaşılan kamera yardımcısından (elle trig yok).
-            let forward = Camera::forward_from(state.camera_yaw, state.camera_pitch);
-            let right = forward.cross(Vec3::new(0.0, 1.0, 0.0)).normalize();
-            let up = Vec3::new(0.0, 1.0, 0.0);
-
-            // Yaw/pitch → oryantasyon quaternion'u.
-            let yaw_rot = Quat::from_rotation_y(-state.camera_yaw + FRAC_PI_2);
-            let pitch_rot = Quat::from_rotation_x(state.camera_pitch);
-            transform.rotation = yaw_rot * pitch_rot;
-
-            let speed = state.camera_speed
-                * dt
-                * if input.is_key_pressed(KeyCode::ShiftLeft as u32) {
-                    3.0
-                } else {
-                    1.0
-                };
-
-            // Tuşlar ve sol çubuk tek bir yönde birleşiyor (`Input::move_axis`). İki şey
-            // değişti: çapraz basış artık düz basıştan √2 kat hızlı DEĞİL (dört `if` ayrı ayrı
-            // tam adım ekliyordu), ve kol takılıysa yarım yatırma yürüyüş oluyor.
-            let (mx, my) = input.move_axis();
-            state.camera_pos += (right * mx + forward * my) * speed;
-            if input.is_key_pressed(KeyCode::Space as u32) {
-                state.camera_pos += up * speed;
-            }
-
-            transform.position = state.camera_pos;
-            transform.update_local_matrix();
-
-            camera.yaw = state.camera_yaw;
-            camera.pitch = state.camera_pitch;
-
-            cam_forward = forward;
+    // Kamerayı `FpsLookSystem` sürüyor (aşağıda, `add_system`). Buradan yalnız pozunu okuyoruz:
+    // aşağıdaki ışın onu kullanıyor.
+    let (mut cam_forward, mut cam_pos) = (Vec3::new(0.0, 0.0, -1.0), Vec3::ZERO);
+    if let Some(mut q) = world.query::<(&FpsLook, &Transform)>() {
+        for (_, (look, transform)) in q.iter_mut() {
+            cam_forward = look.forward();
             cam_pos = transform.position;
         }
     }
@@ -412,6 +379,7 @@ fn render(
 fn main() {
     App::<DemoState>::new("Gizmo Engine - CPU Physics", 1280, 720)
         .set_setup(setup)
+        .add_plugin(FpsLookPlugin)
         .set_update(update)
         .set_render(render)
         .run()

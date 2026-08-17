@@ -62,6 +62,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `gizmo_editor::rebinding::ui_rebinding_panel` draws the rows. It takes the map and the input
   rather than owning them, so a game's settings screen can use the same panel.
 
+- **`FpsLook` gained a look gate, sprint and configurable vertical keys — and its first caller.**
+  `look_button` makes looking require a held mouse button (the mouse only; a stick is not gated),
+  `sprint_key`/`sprint_multiplier` add sprinting, and `up_key`/`down_key` are configurable because
+  ShiftLeft already meant descend and shift-to-sprint would have meant both. All three default to
+  the previous behaviour.
+
+  The three exist because the controller had **no callers at all**, and the first attempt to give
+  it one showed why. `cpu_physics` is that caller now: −57 lines, and its state struct lost all
+  four of its camera fields.
+
 - **Gamepads in the browser.** The `gamepad` feature is no longer native-only: gilrs's wasm
   backend reads the Web Gamepad API, and the engine's side is identical on both targets.
   `demo-web` enables it explicitly, and CI lints the wasm arm with the feature on.
