@@ -10,7 +10,10 @@ use bytemuck;
 use wgpu;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// Whether the frame is drawn as wireframe.
+#[allow(clippy::derivable_impls)]
 pub struct WireframeConfig {
+    /// Draw everything as wireframe, whatever the individual materials say.
     pub global: bool,
 }
 

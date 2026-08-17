@@ -5,6 +5,8 @@ use gizmo_physics_rigid::components::RigidBody;
 use crate::renderer::Renderer;
 
 #[cfg(feature = "render")]
+/// Draws the physics debug view: every collider's shape, plus the velocity and contact gizmos
+/// on top of it.
 pub fn physics_debug_system(world: &crate::core::World) {
     if let Some(mut gizmos) = world.get_resource_mut::<crate::renderer::Gizmos>() {
         fn draw_collider(
@@ -305,6 +307,7 @@ static NEXT_STATIC_COLLIDER_SLOT: std::sync::atomic::AtomicU32 =
     std::sync::atomic::AtomicU32::new(3);
 
 #[cfg(feature = "render")]
+/// Uploads the bodies marked for GPU physics and reads their results back into the ECS.
 pub fn gpu_physics_submit_system(world: &mut crate::core::World, renderer: &Renderer) {
     use gizmo_physics_rigid::components::Velocity;
 
@@ -458,6 +461,7 @@ pub fn gpu_physics_readback_system(world: &mut crate::core::World, renderer: &Re
 
 // Phase 7.1: Fluid-Rigid Coupling
 // Senkronize eder: GpuPhysicsLink sahibi objeleri FluidCollider buffer'ına yazar.
+/// Steps the CPU physics world by `dt` and writes the results back into the ECS.
 pub fn cpu_physics_step_system(world: &crate::core::World, dt: f32) {
     gizmo_physics_rigid::system::physics_step_system(world, dt);
 

@@ -3,18 +3,27 @@ use crate::renderer::async_assets::AsyncAssetLoader;
 use crate::renderer::components::{Material, Mesh};
 use wgpu::util::DeviceExt;
 
+/// Background asset loading, and the completions a frame collects from it.
+///
+/// The loader runs off-thread; everything below it is a queue the update system drains, which is
+/// why they are fields rather than callbacks.
 pub struct AssetServer {
+    /// The worker that decodes and imports off the main thread.
     pub loader: AsyncAssetLoader,
     mesh_paths: std::collections::HashMap<String, Handle<Mesh>>,
     _material_paths: std::collections::HashMap<String, Handle<Material>>,
+    /// glTF imports that finished this frame, waiting to be installed.
     pub completed_gltfs: Vec<crate::renderer::async_assets::GltfImportCompletion>,
+    /// glTF imports that failed, with their errors — reported rather than dropped.
     pub completed_gltf_errors: Vec<crate::renderer::async_assets::GltfImportError>,
     /// Streaming textures whose background decode has completed. `asset_server_update_system`
     /// accumulates them here from `drain_completed`; `TextureStreamingSystem` consumes them each
     /// frame, uploads them to the GPU and updates the relevant entities' `Material.bind_group`.
     /// (Formerly `completed.textures` was silently DISCARDED → streaming was visually a no-op.)
+    /// Textures that finished decoding this frame, waiting to be uploaded.
     pub completed_textures: Vec<crate::renderer::async_assets::TextureReloadCompletion>,
     #[cfg(all(feature = "render", not(target_arch = "wasm32")))]
+    /// The file watcher behind hot reload; `None` when the asset directory could not be watched.
     pub watcher: Option<crate::renderer::hot_reload::AssetWatcher>,
 }
 
@@ -25,6 +34,7 @@ impl Default for AssetServer {
 }
 
 impl AssetServer {
+    /// An asset server with a running loader and an empty set of completions.
     pub fn new() -> Self {
         #[cfg(all(feature = "render", not(target_arch = "wasm32")))]
         let watcher = crate::renderer::hot_reload::AssetWatcher::new(&["assets", "demo/assets"]);
@@ -41,6 +51,10 @@ impl AssetServer {
         }
     }
 
+    /// Requests a mesh and returns its handle immediately.
+    ///
+    /// The handle resolves once the load completes; until then it points at nothing, which is
+    /// what lets a scene be built before its geometry has arrived.
     pub fn load_mesh(&mut self, path: &str) -> Handle<Mesh> {
         if let Some(handle) = self.mesh_paths.get(path) {
             tracing::trace!(path, "load_mesh: önbellek isabeti, mevcut handle döndürülüyor");
@@ -59,6 +73,8 @@ impl AssetServer {
 }
 
 #[tracing::instrument(skip_all, level = "trace", name = "asset_server_update")]
+/// Drains the loader's completions each frame and installs what arrived — meshes, glTF scenes
+/// and reloaded textures — reporting the failures instead of swallowing them.
 pub fn asset_server_update_system(
     mut server: crate::core::system::ResMut<AssetServer>,
     renderer: crate::core::system::ResMut<crate::renderer::Renderer>,
@@ -148,6 +164,7 @@ pub fn asset_server_update_system(
     }
 }
 
+/// Installs the [`AssetServer`] resource and its per-frame update system.
 pub struct AssetServerPlugin;
 
 impl crate::app::Plugin for AssetServerPlugin {

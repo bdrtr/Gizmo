@@ -29,9 +29,14 @@ use crate::renderer::components::{
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg(feature = "render")]
 pub struct DirectionalLightBundle {
+    /// Which way the light points. A directional light has no position, so this is all its
+    /// placement — the default tilts it 45° down.
     pub rotation: Quat,
+    /// Linear RGB, unbounded above: this is a colour *and* a tint, multiplied by `intensity`.
     pub color: Vec3,
+    /// Brightness multiplier.
     pub intensity: f32,
+    /// What the light is for — the sun casts the cascaded shadows, a fill light does not.
     pub role: LightRole,
 }
 
@@ -72,9 +77,15 @@ impl Bundle for DirectionalLightBundle {
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg(feature = "render")]
 pub struct PointLightBundle {
+    /// Where the light sits, in world space.
     pub position: Vec3,
+    /// Linear RGB, multiplied by `intensity`.
     pub color: Vec3,
+    /// Brightness multiplier.
     pub intensity: f32,
+    /// Radius of influence, in metres. It is a hard cut, not a hint: the shaders window
+    /// attenuation with `clamp(1 - (d/r)^4, 0, 1)`, so the light contributes exactly nothing
+    /// past it — which is also what clustered culling uses to decide where it is needed.
     pub radius: f32,
 }
 
@@ -112,12 +123,20 @@ impl Bundle for PointLightBundle {
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg(feature = "render")]
 pub struct SpotLightBundle {
+    /// Where the cone starts, in world space.
     pub position: Vec3,
+    /// Which way the cone points.
     pub rotation: Quat,
+    /// Linear RGB, multiplied by `intensity`.
     pub color: Vec3,
+    /// Brightness multiplier.
     pub intensity: f32,
+    /// Range in metres — the same hard cut as a point light's.
     pub radius: f32,
+    /// Half-angle of the fully lit core, in radians.
     pub inner_angle: f32,
+    /// Half-angle where the cone reaches zero, in radians. The falloff lives between the two, so
+    /// an outer equal to the inner gives a hard edge.
     pub outer_angle: f32,
 }
 
@@ -183,13 +202,23 @@ impl Bundle for SpotLightBundle {
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg(feature = "render")]
 pub struct CameraBundle {
+    /// Where the camera sits, in world space.
     pub position: Vec3,
+    /// Vertical field of view, in degrees.
     pub fov: f32,
+    /// Near clip plane, in metres. Small values buy close-up geometry and spend depth precision.
     pub near: f32,
+    /// Far clip plane, in metres.
     pub far: f32,
+    /// Yaw, in radians — rotation about world +Y.
     pub yaw: f32,
+    /// Pitch, in radians. Kept just short of vertical by the camera helpers, because a pitch of
+    /// exactly ±90° leaves yaw undefined.
     pub pitch: f32,
+    /// Exposure, applied at tone-mapping. 1.0 leaves the HDR scene as rendered.
     pub exposure: f32,
+    /// Whether this is the camera the frame is rendered through. Two primaries is not an error
+    /// here; which one wins is then whichever the renderer's query reaches first.
     pub primary: bool,
 }
 
@@ -257,11 +286,17 @@ impl Bundle for CameraBundle {
 /// ```
 #[cfg(feature = "render")]
 pub struct MeshBundle {
+    /// Where the entity sits, in world space.
     pub position: Vec3,
+    /// Its orientation.
     pub rotation: Quat,
+    /// Its scale. Visual only — collider geometry is never scaled by a transform.
     pub scale: Vec3,
+    /// The geometry to draw.
     pub mesh: crate::core::asset::Handle<Mesh>,
+    /// The material to draw it with.
     pub material: crate::core::asset::Handle<Material>,
+    /// An optional `EntityName`, which is what the hierarchy panel and scene lookups show.
     pub name: Option<String>,
 }
 
@@ -341,14 +376,22 @@ use gizmo_physics_rigid::components::{RigidBody, Velocity};
 #[cfg(feature = "physics")]
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct RigidBodyBundle {
+    /// Mass, damping, gravity and the sleep state — the body itself.
     pub rigid_body: RigidBody,
+    /// Its starting linear and angular velocity.
     pub velocity: Velocity,
+    /// Its collision shape, material and layer.
     pub collider: Collider,
 }
 
 
 #[cfg(feature = "physics")]
 impl RigidBodyBundle {
+    /// A dynamic body of `mass` kilograms, affected by gravity — the ordinary case.
+    ///
+    /// The collider is the bundle's default until you attach one with
+    /// [`with_collider`](Self::with_collider); the inertia tensor is derived from whichever
+    /// collider is in place when the bundle is applied.
     pub fn dynamic(mass: f32) -> Self {
         Self {
             rigid_body: RigidBody::new(mass, true),
@@ -356,6 +399,8 @@ impl RigidBodyBundle {
         }
     }
 
+    /// An immovable body: infinite mass, no gravity, never integrated. What the ground and the
+    /// walls are.
     pub fn static_body() -> Self {
         Self {
             rigid_body: RigidBody::new_static(),
@@ -373,6 +418,7 @@ impl RigidBodyBundle {
         }
     }
 
+    /// Attaches the collision shape. Chainable.
     pub fn with_collider(mut self, collider: Collider) -> Self {
         self.collider = collider;
         self

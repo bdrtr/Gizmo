@@ -9,6 +9,7 @@ use crate::math::Vec3;
 #[non_exhaustive]
 #[cfg(feature = "physics")]
 pub struct PhysicsPlugin {
+    /// The world's gravity, in m/s². The default is Earth's, straight down.
     pub gravity: Vec3,
 }
 

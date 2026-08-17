@@ -5,21 +5,37 @@ use gizmo_math::Vec4;
 pub struct Color(pub Vec4);
 
 impl Color {
-    // ─── Temel Renkler ────────────────────────────────────────────────────────
+    // ─── The named colours ───────────────────────────────────────────────────
+    //
+    // Components are taken literally, with no sRGB conversion: `RED` is `(1, 0, 0)` in whatever
+    // space the consumer reads it as. For a material's albedo that is linear, so these are the
+    // *linear* primaries and read brighter than the same hex value in a paint program.
+    /// Pure red.
     pub const RED: Color = Color(Vec4::new(1.0, 0.0, 0.0, 1.0));
+    /// Pure green.
     pub const GREEN: Color = Color(Vec4::new(0.0, 1.0, 0.0, 1.0));
+    /// Pure blue.
     pub const BLUE: Color = Color(Vec4::new(0.0, 0.0, 1.0, 1.0));
+    /// Opaque white.
     pub const WHITE: Color = Color(Vec4::new(1.0, 1.0, 1.0, 1.0));
+    /// Opaque black.
     pub const BLACK: Color = Color(Vec4::new(0.0, 0.0, 0.0, 1.0));
+    /// Red + green.
     pub const YELLOW: Color = Color(Vec4::new(1.0, 1.0, 0.0, 1.0));
+    /// Green + blue.
     pub const CYAN: Color = Color(Vec4::new(0.0, 1.0, 1.0, 1.0));
+    /// Red + blue.
     pub const MAGENTA: Color = Color(Vec4::new(1.0, 0.0, 1.0, 1.0));
+    /// Half-bright red with a little green.
     pub const ORANGE: Color = Color(Vec4::new(1.0, 0.5, 0.0, 1.0));
+    /// Mid grey, 0.5 on every channel.
     pub const GRAY: Color = Color(Vec4::new(0.5, 0.5, 0.5, 1.0));
+    /// Dark grey, 0.2 on every channel.
     pub const DARK_GRAY: Color = Color(Vec4::new(0.2, 0.2, 0.2, 1.0));
+    /// Fully transparent black — alpha 0, so it is invisible rather than dark.
     pub const TRANSPARENT: Color = Color(Vec4::new(0.0, 0.0, 0.0, 0.0));
 
-    // ─── Yapıcılar ────────────────────────────────────────────────────────────
+    // ─── Constructors ────────────────────────────────────────────────────────
 
     /// Construct from RGB float values (between 0.0 - 1.0).
     #[inline]

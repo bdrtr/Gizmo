@@ -2,6 +2,8 @@ use gizmo_physics_core::{Collider, ColliderShape, Transform};
 use crate::renderer::Renderer;
 use bytemuck;
 
+/// Feeds the scene's colliders into the GPU fluid simulation so particles collide with the
+/// world. Only spheres and boxes are sent; other shapes are skipped rather than approximated.
 pub fn gpu_fluid_coupling_system(world: &crate::core::World, renderer: &mut Renderer) {
     use gizmo_renderer::gpu_fluid::types::FluidCollider;
     use gizmo_renderer::gpu_fluid::types::MAX_FLUID_COLLIDERS;

@@ -69,9 +69,16 @@ impl std::error::Error for GltfLoadError {}
 
 // ─── Commands ─────────────────────────────────────────────────────────────────
 
+/// A spawning front end: primitives with their meshes, materials and bodies in one call.
+///
+/// Each `spawn_*` returns an [`EntityBuilder`] so the entity can be adjusted before it is
+/// finished — colour, physics, name.
 pub struct Commands<'a> {
+    /// The world entities are spawned into.
     pub world: &'a mut World,
+    /// The live renderer, for creating the meshes and textures.
     pub renderer: &'a Renderer,
+    /// The asset manager used for created assets; built on demand.
     pub asset_manager: Option<AssetManager>,
 }
 
@@ -84,6 +91,7 @@ impl<'a> Drop for Commands<'a> {
 }
 
 impl<'a> Commands<'a> {
+    /// A spawner over this world and renderer.
     pub fn new(world: &'a mut World, renderer: &'a Renderer) -> Self {
         let am = world.remove_resource::<AssetManager>().unwrap_or_default();
         Self {

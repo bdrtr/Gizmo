@@ -2,14 +2,19 @@ use crate::core::World;
 use gizmo_math::Vec3;
 use std::collections::{HashMap, HashSet};
 
+/// The side length of one streaming chunk, in metres.
 pub const CHUNK_SIZE: f32 = 100.0;
+/// How many chunks are kept loaded around the player, measured in chunks: 2 gives the 5×5 grid
+/// centred on them.
 pub const CHUNK_LOAD_RADIUS: i32 = 2; // Oyuncunun etrafındaki 5x5'lik grid yüklenir
 
+/// A chunk's grid coordinate, `(x, z)`. Chunk `(0, 0)` is the one containing the world origin.
 pub type ChunkCoord = (i32, i32);
 
 /// Component that holds which Entity belongs to which Chunk
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ChunkEntity {
+    /// The chunk this entity belongs to; unloading that chunk despawns it.
     pub coord: ChunkCoord,
 }
 
@@ -35,6 +40,7 @@ impl Default for ChunkManager {
 }
 
 impl ChunkManager {
+    /// The chunk a world position falls in. Y is ignored: chunks are columns.
     pub fn world_pos_to_chunk(pos: Vec3) -> ChunkCoord {
         (
             (pos.x / CHUNK_SIZE).floor() as i32,
@@ -42,6 +48,7 @@ impl ChunkManager {
         )
     }
 
+    /// The world position of a chunk's centre, at y = 0.
     pub fn chunk_to_world_pos(coord: ChunkCoord) -> Vec3 {
         Vec3::new(
             (coord.0 as f32) * CHUNK_SIZE + (CHUNK_SIZE / 2.0),

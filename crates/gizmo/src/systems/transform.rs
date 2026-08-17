@@ -1,3 +1,5 @@
+/// Propagates the transform hierarchy: every entity's `GlobalTransform` is rebuilt from its
+/// local `Transform` and its parents', so a child follows what it is attached to.
 pub struct TransformSyncSystem;
 
 impl gizmo_core::system::System for TransformSyncSystem {
@@ -51,6 +53,8 @@ fn set_global_matrix(
     }
 }
 
+/// Walks the hierarchy root-down and writes each entity's `GlobalTransform`, so a parent's
+/// movement reaches its children in the same frame it happened.
 pub struct TransformPropagateSystem;
 
 impl gizmo_core::system::System for TransformPropagateSystem {

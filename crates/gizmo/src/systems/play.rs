@@ -36,11 +36,17 @@ pub const MAX_STEPS: u32 = 16;
 #[derive(Debug)]
 pub enum PlayReport<'a> {
     /// The shared script pass failed. The world is intact; this frame's script logic is not.
-    ScriptError { error: &'a str },
+    ScriptError {
+        /// What the shared pass reported.
+        error: &'a str,
+    },
     /// One entity's `on_update` failed. Others still ran.
     EntityScriptError {
+        /// The entity whose script failed.
         entity: u32,
+        /// The script file it was running.
         path: &'a str,
+        /// What it reported.
         error: &'a str,
     },
     /// A script file has just *started* failing to load — reported on the edge, not every frame.
@@ -48,11 +54,24 @@ pub enum PlayReport<'a> {
     /// The edge is the point: the editor stamps `scripts/new_script.lua`, a path nothing creates,
     /// so a script component pointing at a missing file is the common case. Announcing it per
     /// frame is sixty identical lines a second; announcing it never is what used to happen.
-    ScriptBroke { path: &'a str, error: &'a str },
+    ScriptBroke {
+        /// The file that has started failing.
+        path: &'a str,
+        /// Why it will not load.
+        error: &'a str,
+    },
     /// A script that was failing now loads.
-    ScriptRecovered { path: &'a str },
+    ScriptRecovered {
+        /// The file that loads again.
+        path: &'a str,
+    },
     /// A line the script itself printed, with the level it chose.
-    ScriptLog { level: &'a str, message: &'a str },
+    ScriptLog {
+        /// The level the script chose: `info`, `warn`, `error`.
+        level: &'a str,
+        /// The line itself.
+        message: &'a str,
+    },
 }
 
 /// The edge a script's load attempt just crossed, if any.
@@ -104,6 +123,7 @@ pub struct PlayLoop {
 }
 
 impl PlayLoop {
+    /// A loop with no accumulated debt and nothing recorded as broken.
     pub fn new() -> Self {
         Self::default()
     }

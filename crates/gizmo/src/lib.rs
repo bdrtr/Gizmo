@@ -1,4 +1,5 @@
 #![deny(clippy::undocumented_unsafe_blocks)]
+#![warn(missing_docs)]
 //! (`undocumented_unsafe_blocks` is a RATCHET: this crate carries no `unsafe` block without a
 //! `// SAFETY:` line stating why it is sound, and the lint keeps it that way. Every crate in the
 //! workspace except `gizmo-core` is at zero and denies it; `gizmo-core`'s ECS internals are the
@@ -78,13 +79,19 @@ pub mod asset_server;
 /// bundle needs `physics` (see the per-item gates inside).
 #[cfg(any(feature = "render", feature = "physics"))]
 pub mod bundles;
+/// A small RGBA colour type with the usual named constants, for demos and tools.
 pub mod color;
+/// The plugins the facade ships: transform propagation, physics, rendering, and the rest of what
+/// `SimpleApp` installs for you.
 pub mod plugins;
+/// `use gizmo::prelude::*` — the one import a game is expected to need.
 pub mod prelude;
 /// Entity spawning helpers built on the renderer's mesh/material pipeline. They also spawn
 /// rigid bodies, hence the `physics` half of the gate.
 #[cfg(all(feature = "render", feature = "physics"))]
 pub mod spawner;
+/// The engine's own systems, as the facade wires them: transform propagation, the render
+/// batching path, the play loop, chunk streaming and the physics bridges.
 pub mod systems;
 #[cfg(test)]
 mod test_gpu;
@@ -108,6 +115,8 @@ pub use gizmo_window as window;
 // Sık kullanılan matematik tiplerini lib.rs'ten doğrudan aç:
 pub use math::{Mat4, Quat, Vec2, Vec3, Vec4};
 
+/// [`SimpleApp`](simple::SimpleApp) — the batteries-included entry point, for a game that wants
+/// a window, physics and a renderer without wiring plugins by hand.
 #[cfg(all(feature = "window", feature = "render", feature = "physics"))]
 pub mod simple;
 #[cfg(all(feature = "window", feature = "render", feature = "physics"))]

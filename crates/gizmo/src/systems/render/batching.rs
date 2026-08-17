@@ -9,9 +9,16 @@
 use super::*;
 
 #[derive(Default)]
+/// The per-frame batching scratch: what was grouped, the instance data for it, and the draw
+/// items the passes record from.
+///
+/// Held in a thread-local and cleared each frame rather than rebuilt, so a steady scene stops
+/// reallocating after its first frame.
 pub struct RenderCache {
     pub(crate) batches: std::collections::HashMap<BatchKey, BatchData>,
+    /// Per-instance data for every batch, in the order the draw items index it.
     pub instances: Vec<crate::renderer::gpu_types::InstanceRaw>,
+    /// One entry per batch: the geometry to bind and how many instances of it to draw.
     pub draw_items: Vec<DrawItem>,
 }
 
@@ -19,6 +26,8 @@ thread_local! {
     static RENDER_CACHE: std::cell::RefCell<RenderCache> = std::cell::RefCell::new(RenderCache::default());
 }
 
+/// Empties the thread-local render cache — for a test that wants a clean frame, or a host that
+/// has torn its renderer down.
 pub fn clear_render_cache() {
     RENDER_CACHE.with(|rc| {
         let mut cache = rc.borrow_mut();
@@ -103,6 +112,7 @@ pub(crate) fn cmp_draw_order(a: (DrawLayer, f32), b: (DrawLayer, f32)) -> std::c
 }
 
 #[derive(Debug, Clone)]
+/// One batched draw: the buffers to bind, and the instance range to draw them with.
 pub struct DrawItem {
     // Fields are `pub(super)` (= visible across the whole `render` module tree) so the sibling
     // `passes/` recorders can still read them now that DrawItem lives here, not in mod.rs.

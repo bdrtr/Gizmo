@@ -24,6 +24,8 @@ pub struct SceneLights {
     /// The [`MAX_LIGHTS`] most important point/spot lights for this frame, nearest first
     /// (see [`collect_scene_lights`] for what "most important" means and why the order matters).
     pub lights: [LightData; MAX_LIGHTS],
+    /// How many entries of `lights` are live this frame; the rest are stale and must not be
+    /// read.
     pub num_lights: u32,
     /// Direction the sun points along (normalized). Default down-vector when the
     /// scene has no `LightRole::Sun`.
@@ -284,16 +286,21 @@ pub struct SceneSetup {
 /// The per-frame inputs that are *not* the world: the camera, and the handful of decisions each
 /// render path makes for itself.
 pub struct SceneSetupInputs {
+    /// The camera the frame is rendered through.
     pub camera: crate::renderer::CameraFrame,
     /// Viewport aspect and the camera's vertical FOV — the cascade fit needs the frustum, and
     /// [`crate::renderer::CameraFrame`] carries the matrix rather than the angles it came from.
     pub aspect: f32,
+    /// The camera's vertical field of view, in radians.
     pub cam_fov: f32,
+    /// Which light casts the cascaded shadows this frame, if any.
     pub shadow_caster: ShadowCaster,
+    /// Sky, ambient and fog — everything lighting the scene that is not a light.
     pub environment: crate::renderer::EnvironmentFrame,
     /// Whether this path renders the point-shadow cube. A path that does not must leave it off:
     /// the lookup would sample whatever the cube held on the last frame that did.
     pub point_shadows_enabled: bool,
+    /// Time since the scene started, in seconds; what animated shaders advance on.
     pub elapsed_time: f32,
 }
 

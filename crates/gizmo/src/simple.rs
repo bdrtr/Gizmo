@@ -12,20 +12,34 @@ use crate::math::{Quat, Vec3, Vec4};
 use crate::systems;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+/// The state a `SimpleApp` scene carries between frames: where the fly camera is and how fast
+/// it moves.
 pub struct SimpleSceneState {
+    /// Fly speed in metres per second.
     pub camera_speed: f32,
+    /// Pitch in radians.
     pub camera_pitch: f32,
+    /// Yaw in radians.
     pub camera_yaw: f32,
+    /// Camera position in world space.
     pub camera_pos: Vec3,
 }
 
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+/// Serialisable camera settings — the same numbers as [`SimpleSceneState`] plus the two
+/// post-process knobs, in a form a scene or a settings file can hold.
 pub struct CameraSettings {
+    /// Fly speed in metres per second.
     pub speed: f32,
+    /// Pitch in radians.
     pub pitch: f32,
+    /// Yaw in radians.
     pub yaw: f32,
+    /// Camera position in world space.
     pub pos: Vec3,
+    /// Exposure applied at tone-mapping; 1.0 leaves the HDR scene as rendered.
     pub exposure: f32,
+    /// How much bloom is mixed back in, 0 for none.
     pub bloom_intensity: f32,
 }
 
@@ -43,12 +57,20 @@ impl Default for CameraSettings {
 }
 
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+/// The lighting a `SimpleApp` scene runs with: two presets and the blend between them, which is
+/// what makes a time-of-day sweep a single number.
 pub struct LightingSettings {
+    /// The preset being blended *from*.
     pub preset: u32,
+    /// The preset being blended *to*.
     pub preset_2: u32,
+    /// Where between the two the scene currently sits, 0 → `preset`, 1 → `preset_2`.
     pub blend_t: f32,
+    /// Whether `blend_t` advances on its own.
     pub auto_cycle: bool,
+    /// How fast the sun rotates, in radians per second.
     pub rotation_speed: f32,
+    /// The directional light's intensity multiplier.
     pub direct_intensity: f32,
 }
 
@@ -68,9 +90,13 @@ impl Default for LightingSettings {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[derive(Default)]
 #[non_exhaustive]
+/// What the demo camera is doing.
 pub enum CameraState {
+    /// Circling the scene on its own.
     Orbiting,
+    /// Parked; neither input nor the orbit moves it.
     Stationary,
+    /// Driven by the player's input — the default.
     #[default]
     Manual,
 }
@@ -79,22 +105,34 @@ pub enum CameraState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[derive(Default)]
 #[non_exhaustive]
+/// Whether the scene is being played or edited.
 pub enum EditorState {
+    /// Running: physics steps and scripts execute.
     #[default]
     PlayMode,
+    /// Being edited: the simulation is stopped and entities can be moved freely.
     EditMode,
+    /// Play mode, held still — the world keeps its state and nothing advances.
     Paused,
 }
 
 
 
+/// The handle a `with_simple_scene` setup closure builds its scene through.
+///
+/// Every `spawn_*` on it creates the mesh, the material and the physics body together, so a demo
+/// scene is a list of calls rather than a bundle assembly.
 pub struct SceneBuilder<'a> {
+    /// The world being populated.
     pub world: &'a mut World,
+    /// The live renderer, for creating meshes and textures.
     pub renderer: &'a Renderer,
+    /// The asset manager the created meshes and textures are registered with.
     pub asset_manager: &'a mut AssetManager,
 }
 
 impl<'a> SceneBuilder<'a> {
+    /// Spawns a coloured cube with a matching box collider.
     pub fn spawn_cube(&mut self, position: Vec3, size: f32, color: Vec3) {
         let mesh = AssetManager::create_cube(&self.renderer.device);
         let tex = self.asset_manager.create_white_texture(
@@ -120,6 +158,7 @@ impl<'a> SceneBuilder<'a> {
         self.world.add_bundle(ent, RigidBodyBundle::dynamic(10.0).with_collider(Collider::box_collider(Vec3::splat(half_extents))));
     }
 
+    /// Spawns a coloured sphere with a matching sphere collider.
     pub fn spawn_sphere(&mut self, position: Vec3, radius: f32, color: Vec3) {
         let mesh = AssetManager::create_sphere(&self.renderer.device, radius, 32, 32);
         let tex = self.asset_manager.create_white_texture(
@@ -141,6 +180,7 @@ impl<'a> SceneBuilder<'a> {
         self.world.add_bundle(ent, RigidBodyBundle::dynamic(10.0).with_collider(Collider::sphere(radius)));
     }
 
+    /// Spawns a cube with the default checker texture, and returns its entity.
     pub fn spawn_textured_cube(&mut self, position: Vec3, size: f32) -> crate::core::entity::Entity {
         let mesh = AssetManager::create_cube(&self.renderer.device);
         let tex = self.asset_manager.create_uv_debug_texture(
@@ -161,6 +201,7 @@ impl<'a> SceneBuilder<'a> {
         ent
     }
 
+    /// Spawns a textured sphere, and returns its entity.
     pub fn spawn_textured_sphere(&mut self, position: Vec3, radius: f32) -> crate::core::entity::Entity {
         let mesh = AssetManager::create_sphere(&self.renderer.device, radius, 32, 32);
         let tex = self.asset_manager.create_uv_debug_texture(
@@ -180,6 +221,7 @@ impl<'a> SceneBuilder<'a> {
         ent
     }
 
+    /// Spawns a textured cylinder, and returns its entity.
     pub fn spawn_textured_cylinder(&mut self, position: Vec3, radius: f32, height: f32) -> crate::core::entity::Entity {
         let mesh = AssetManager::create_cylinder(&self.renderer.device, radius, height, 32);
         let tex = self.asset_manager.create_uv_debug_texture(&self.renderer.device, &self.renderer.queue, &self.renderer.scene.texture_bind_group_layout);
@@ -194,6 +236,7 @@ impl<'a> SceneBuilder<'a> {
         ent
     }
 
+    /// Spawns a textured cone, and returns its entity.
     pub fn spawn_textured_cone(&mut self, position: Vec3, radius: f32, height: f32) -> crate::core::entity::Entity {
         let mesh = AssetManager::create_cone(&self.renderer.device, radius, height, 32);
         let tex = self.asset_manager.create_uv_debug_texture(&self.renderer.device, &self.renderer.queue, &self.renderer.scene.texture_bind_group_layout);
@@ -208,6 +251,7 @@ impl<'a> SceneBuilder<'a> {
         ent
     }
 
+    /// Spawns a textured torus, and returns its entity.
     pub fn spawn_textured_torus(&mut self, position: Vec3, radius: f32, tube_radius: f32) -> crate::core::entity::Entity {
         let mesh = AssetManager::create_torus(&self.renderer.device, radius, tube_radius, 32, 16);
         let tex = self.asset_manager.create_uv_debug_texture(&self.renderer.device, &self.renderer.queue, &self.renderer.scene.texture_bind_group_layout);
@@ -222,6 +266,7 @@ impl<'a> SceneBuilder<'a> {
         ent
     }
 
+    /// Spawns a textured capsule, and returns its entity.
     pub fn spawn_textured_capsule(&mut self, position: Vec3, radius: f32, depth: f32) -> crate::core::entity::Entity {
         let mesh = AssetManager::create_capsule(&self.renderer.device, radius, depth, 16, 32);
         let tex = self.asset_manager.create_uv_debug_texture(&self.renderer.device, &self.renderer.queue, &self.renderer.scene.texture_bind_group_layout);
@@ -236,6 +281,7 @@ impl<'a> SceneBuilder<'a> {
         ent
     }
 
+    /// Spawns a textured tetrahedron, and returns its entity.
     pub fn spawn_textured_tetrahedron(&mut self, position: Vec3, size: f32) -> crate::core::entity::Entity {
         let mesh = AssetManager::create_tetrahedron(&self.renderer.device, size);
         let tex = self.asset_manager.create_uv_debug_texture(&self.renderer.device, &self.renderer.queue, &self.renderer.scene.texture_bind_group_layout);
@@ -250,6 +296,7 @@ impl<'a> SceneBuilder<'a> {
         ent
     }
 
+    /// Spawns a textured truncated cone, and returns its entity.
     pub fn spawn_textured_conical_frustum(&mut self, position: Vec3, radius_bottom: f32, radius_top: f32, height: f32) -> crate::core::entity::Entity {
         let mesh = AssetManager::create_conical_frustum(&self.renderer.device, radius_bottom, radius_top, height, 32);
         let tex = self.asset_manager.create_uv_debug_texture(&self.renderer.device, &self.renderer.queue, &self.renderer.scene.texture_bind_group_layout);
@@ -264,6 +311,7 @@ impl<'a> SceneBuilder<'a> {
         ent
     }
 
+    /// Extrudes a convex 2-D outline into a textured solid, and returns its entity.
     pub fn spawn_textured_convex_extrusion(&mut self, position: Vec3, points: &[[f32; 2]], depth: f32) -> crate::core::entity::Entity {
         let mesh = AssetManager::create_convex_extrusion(&self.renderer.device, points, depth);
         let tex = self.asset_manager.create_uv_debug_texture(&self.renderer.device, &self.renderer.queue, &self.renderer.scene.texture_bind_group_layout);
@@ -280,6 +328,7 @@ impl<'a> SceneBuilder<'a> {
         ent
     }
 
+    /// Extrudes a ring — an outer outline with an inner one cut out — into a textured solid.
     pub fn spawn_textured_ring_extrusion(&mut self, position: Vec3, inner_points: &[[f32; 2]], outer_points: &[[f32; 2]], depth: f32) -> crate::core::entity::Entity {
         let mesh = AssetManager::create_ring_extrusion(&self.renderer.device, inner_points, outer_points, depth);
         let tex = self.asset_manager.create_uv_debug_texture(&self.renderer.device, &self.renderer.queue, &self.renderer.scene.texture_bind_group_layout);
@@ -294,6 +343,7 @@ impl<'a> SceneBuilder<'a> {
         ent
     }
 
+    /// Spawns a static ground disc of `radius` metres, with a collider to match.
     pub fn spawn_ground(&mut self, radius: f32) {
         let mesh = AssetManager::create_plane(&self.renderer.device, radius * 2.0);
         let tex = self.asset_manager.create_white_texture(
@@ -315,6 +365,7 @@ impl<'a> SceneBuilder<'a> {
         self.world.add_bundle(ent, RigidBodyBundle::static_body().with_collider(Collider::plane(Vec3::new(0.0, 1.0, 0.0), 0.0)));
     }
 
+    /// Spawns a point light at `position`, with the demo defaults.
     pub fn spawn_point_light(&mut self, position: Vec3) {
         let light_ent = self.world.spawn();
         let bundle = crate::bundles::PointLightBundle {
@@ -327,6 +378,7 @@ impl<'a> SceneBuilder<'a> {
         bundle.apply(self.world, light_ent);
     }
     
+    /// Spawns the scene's camera at `pos` looking at `look_at`, and records it in `state`.
     pub fn spawn_camera(&mut self, state: &mut SimpleSceneState, pos: Vec3, look_at: Vec3) {
         let look_dir = (look_at - pos).normalize_or_zero();
         state.camera_pos = pos;
@@ -347,7 +399,10 @@ impl<'a> SceneBuilder<'a> {
     }
 }
 
+/// Adds [`with_simple_scene`](SimpleAppExt::with_simple_scene) to an `App<SimpleSceneState>`.
 pub trait SimpleAppExt {
+    /// Installs a setup closure that builds the scene through a [`SceneBuilder`], and wires the
+    /// fly camera, the physics world and the default lighting around it.
     fn with_simple_scene<F>(self, setup_fn: F) -> Self
     where
         F: FnOnce(&mut SceneBuilder, &mut SimpleSceneState) + 'static;
