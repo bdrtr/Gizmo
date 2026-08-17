@@ -320,9 +320,10 @@ fn run_chain(
 ///
 /// The bars below are deliberately loose against the soft column and impossible for the legacy
 /// one: this asserts "the mechanism is no longer destroyed", which is the claim, and not a
-/// specific quality of warm start — **whether to ship a non-zero `warm_start_factor` at all is
-/// an open decision** (`JointSolver::warm_start_factor`), so no committed scene may depend on
-/// its numbers.
+/// specific quality of warm start. **That decision is now made** (2026-08-17): the default is
+/// `warm_start_factor = 0.5`, measured below in `JointSolver::warm_start_factor`'s docs. The bars
+/// here stay loose on purpose — they assert "the mechanism is not destroyed", and a committed
+/// scene that pinned warm start's exact numbers would turn a tuning knob into a contract.
 #[test]
 fn warm_starting_a_rigid_row_does_not_pump_energy() {
     // The ordinary chain first: the earlier round's finding was that this is NOT only a

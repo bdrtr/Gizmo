@@ -266,10 +266,17 @@ fn golden_hinge_pendulum_swing() {
     //   arm error x1000  0.846_624_4 → 0.414_609_9  (the error nearly HALVED — see below)
     // `golden_hinge_pendulum_swing_legacy_baumgarte` keeps the five old values under the
     // `rigid_hertz = 0` lever, so nothing here was thrown away.
-    lock("pendulum x", w.transforms[1].position.x, 1.895_446_8);
-    lock("pendulum y", w.transforms[1].position.y, 4.360_516);
-    lock("pendulum vx", w.velocities[1].linear.x, 1.084_893_6);
-    lock("pendulum vy", w.velocities[1].linear.y, 3.196_372_5);
+    // RE-BLESSED 2026-08-17 — joints warm-start by default now
+    // (`JointSolver::warm_start_factor` 0.0 → 0.5). Old → new:
+    //   x     1.895_446_8 → 1.896_123_6   (+6.8e-4)
+    //   y     4.360_516   → 4.362_821     (+2.3e-3)
+    //   vx    1.084_893_6 → 1.080_646_4   (-4.2e-3)
+    //   vy    3.196_372_5 → 3.191_738     (-4.6e-3)
+    //   arm error x1000  0.414_609_9 → 0.320_434_57  (-23 %, the direction that matters)
+    lock("pendulum x", w.transforms[1].position.x, 1.896_123_6);
+    lock("pendulum y", w.transforms[1].position.y, 4.362_821);
+    lock("pendulum vx", w.velocities[1].linear.x, 1.080_646_4);
+    lock("pendulum vy", w.velocities[1].linear.y, 3.191_738);
 
     // The arm length is the joint's whole job, and its ERROR is the sharpest instrument in
     // this file. Scaled by 1000 on purpose: the raw length is 2.0008, so an absolute 1e-3
@@ -289,7 +296,7 @@ fn golden_hinge_pendulum_swing() {
     // BETTER after the change, and had it come back near 0.85 the model behind it would have
     // been wrong.
     let arm = (w.transforms[1].position - Vec3::new(0.0, 5.0, 0.0)).length();
-    lock("pendulum arm error x1000", (arm - 2.0) * 1000.0, 0.414_609_9);
+    lock("pendulum arm error x1000", (arm - 2.0) * 1000.0, 0.320_434_57);
 
     // …and independently of every golden value above: whatever those numbers become after a
     // deliberate re-blessing, a hinge that lets the bob drift off its arm is broken, not
@@ -352,15 +359,23 @@ fn golden_hinge_pendulum_swing_legacy_baumgarte() {
         w.step(1.0 / 60.0).expect("step");
     }
 
-    lock("legacy pendulum x", w.transforms[1].position.x, 1.892_767);
-    lock("legacy pendulum y", w.transforms[1].position.y, 4.351_293);
-    lock("legacy pendulum vx", w.velocities[1].linear.x, 1.100_116_5);
-    lock("legacy pendulum vy", w.velocities[1].linear.y, 3.208_478_7);
+    // RE-BLESSED 2026-08-17 — same cause as the soft scene above: joints warm-start by
+    // default (`warm_start_factor` 0.0 → 0.5). Old → new:
+    //   x     1.892_767   → 1.894_964_7   (+2.2e-3)
+    //   y     4.351_293   → 4.358_864     (+7.6e-3)
+    //   vx    1.100_116_5 → 1.087_582_6   (-1.3e-2)
+    //   vy    3.208_478_7 → 3.196_055_7   (-1.2e-2)
+    //   arm error x1000  0.846_624_4 → 0.486_612_32  (-43 %; the Baumgarte lever gains MORE
+    //   from warm start than the soft path, which is what a repair-rate-limited row should do)
+    lock("legacy pendulum x", w.transforms[1].position.x, 1.894_964_7);
+    lock("legacy pendulum y", w.transforms[1].position.y, 4.358_864);
+    lock("legacy pendulum vx", w.velocities[1].linear.x, 1.087_582_6);
+    lock("legacy pendulum vy", w.velocities[1].linear.y, 3.196_055_7);
     let arm = (w.transforms[1].position - Vec3::new(0.0, 5.0, 0.0)).length();
     lock(
         "legacy pendulum arm error x1000",
         (arm - 2.0) * 1000.0,
-        0.846_624_4,
+        0.486_612_32,
     );
 }
 

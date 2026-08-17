@@ -794,7 +794,9 @@ kaldırıp `cargo deny`'ın düşmesiyle ortaya çıktı.
 > suite'inde de iddia ediliyor — ama bilinçli olarak bir sabitle KARŞILAŞTIRILMIYOR, çünkü o
 > motorun vermediği bir cross-platform bit-eşlik iddiası olurdu.
 
-### 🔄 B4 — Joint çözücüsü
+### ✅ B4 — Joint çözücüsü *(başlık 2026-08-17'de doğrulanıp kapatıldı)*
+> Beş commit'in ve altındaki üç derin düzeltmenin hepsi bitmiş, yalnız başlık 🔄 kalmıştı —
+> bu turda üçüncü bayat işaret. İçerik değişmedi, yalnız durum doğru.
 
 Denetimin dört maddesi vardı. Sırayla ve her biri kendi başına doğrulanabilir olacak
 şekilde iniyor.
@@ -937,26 +939,42 @@ Temaslarda island'lar bunu zaten çözüyordu; eklemler island kurulumuna girmiy
 union-find eklem grafında: bileşende bir mover varsa bileşenin tamamı uyanır.
 `an_undisturbed_chain_stays_asleep` fixi dürüst tutuyor — "hepsini uyandır" o testi kırar.
 
-### ⬜ Ölçüldü: warm-start ne kadar önemli?
+### ✅ Warm start açıldı: `warm_start_factor = 0.5` *(2026-08-17)*
 
-Denetim warm-start'ı "büyük olan" diye işaretlemişti. **Ölçüm bunu kısmen destekliyor: yalnız
-YÜKSEK KÜTLE ORANLARINDA.** 16 halkalı rijit zincir, varsayılan 10 iterasyon, 400 adım:
+Denetim warm-start'ı "büyük olan" diye işaretlemişti; önceki tur ölçüp **yalnız yüksek kütle
+oranlarında** dedi (16 halkalı zincir, 10 iterasyon: 1 kg'da %0.04, 200 kg'da %1.04 sapma).
+Mekanizma o turda yazıldı — λ enjeksiyon süpürmesi, `prev_rows`, `JointScratch` — ama
+**varsayılanı 0.0 bırakıldı** ve `joint_rigid_stiffness.rs`'in belgesine "sıfırdan farklı bir
+faktör göndermek AÇIK BİR KARAR" diye yazıldı. Bu turda o karar ölçülüp verildi.
 
-| uç kütlesi | 10 iter | 40 iter | 160 iter |
-|---|---|---|---|
-| 1 kg | 16.0066 (%0.04) | 16.0014 | 16.0002 |
-| 20 kg | 16.0229 (%0.14) | 16.0056 | 16.0012 |
-| 200 kg | **16.1657 (%1.04)** | 16.0443 | 16.0106 |
+**Ölçüm** (16 halkalı zincir, 10 iterasyon, oturmuş: 2000 substep × 1/240 s, uçtaki kısıt hatası):
 
-Sıradan kütle oranlarında sapma 6.6 mm/16 m — görünmez. 200:1'de %1, ve 160 iterasyona
-çıkmak 16 kat düzeltiyor; işte warm-start'ın kapatacağı boşluk bu. Yani: **yıkım topu zincirde,
-halatta ağır platform** gibi sahneler için değerli, genel bir kusur değil.
+| uç kütlesi | warm 0 | **warm 0.5** | warm 1.0 | warm 0 + 11 iter | warm 0 + 20 iter |
+|---|---|---|---|---|---|
+| 1 kg | 0.00369 m | **0.00264** | 0.00159 | — | — |
+| 20 kg | 0.01249 m | **0.00881** | 0.01243 | 0.01162 | 0.00783 |
+| 200 kg | 0.10359 m | **0.06254** | 0.08721 | 0.08328 | 0.05888 |
 
-İki engeli artık kalktı: λ zaten `Joint::scratch` içinde, o da artık snapshot'lanıyor; ve
-uyuyan-uç kapısı için gereken bileşen bilgisi de var. Kalan iş: iterasyon 0'dan önce ayrı bir
-warm-start sweep'i, bir satırın aktivasyon kapısı kapandığı substep'te λ'sının sıfırlanması
-(gevşemiş halat yeniden çekmemeli), ve `tests/rollback.rs`'e yüksek-kütle-oranlı bir zincir
-sahnesi.
+Enjeksiyon süpürmesi yaklaşık bir iterasyona mal oluyor ve düz bir iterasyonun **dört katını**
+kazandırıyor; 200:1'de on fazla iterasyonun kazancını tek süpürmeyle veriyor.
+
+**Neden 1.0 değil de yarım.** Ödenen şey artık hareket: 200 kg'da `max|v|` 0.0116 → 0.0399 m/s
+(warm 0.5), ama **1.0'da 0.19 m/s** ve hata iyileşmeyi bırakıyor (0.087 — 0.5'ten kötü).
+Sıradan kütle oranları hiçbir şey ödemiyor: 1 ve 20 kg'da artık hız 1e-4 m/s'de sabit kalıyor,
+hata yine ~%30 düşüyor. Yani 0.5'ten sonrası jitter satın almak.
+
+**Davranış değişikliği ve kanıtı.** Fizik değişti, dolayısıyla iki golden eklem sahnesi yeniden
+kutsandı — ve en keskin ölçüt doğru yöne gitti: kol hatası (×1000) soft yolda
+**0.4146 → 0.3204** (−%23), legacy Baumgarte kolunda **0.8466 → 0.4866** (−%43). Eski→yeni
+değerlerin tamamı `golden_state.rs`'te satır satır yazılı. `headless_stress_test` üç eşleşen
+hash veriyor (`A462C9EB8A09D5CA`), fizik test paketinin geri kalanında kıpırdayan yok —
+motorlar, limitler, kopma, compliance, uyku, determinizm, soak.
+
+**Maddenin kalan iki alt işi:** "aktivasyon kapısı kapanan satırın λ'sını sıfırlama" mekanizmayla
+birlikte zaten yazılmıştı; `tests/rollback.rs`'e yüksek-kütle-oranlı sahne eklenmedi — warm start
+λ'yı taşınan duruma çevirdiği için `WorldSnapshot` onu zaten klonluyor ve mevcut rollback testleri
+bunu kapsıyor. Yeniden açılacaksa tetikleyici somut olsun: rollback penceresi içinde kopan/gerilen
+bir zincirde gözlenen desync.
 
 ### ✅ Ölçüldü: temas çözücüsünde de aynı bölme VARDI *(2026-08-08)*
 

@@ -16,6 +16,22 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Joints warm-start by default (`JointSolver::warm_start_factor` 0.0 → 0.5) — a physics
+  behaviour change.** The mechanism (a λ-injection sweep before the iteration loop) already
+  existed and was shipped disabled while the number was an open question. Measured on a 16-link
+  chain at 10 iterations, settled: tip constraint error 0.01249 → 0.00881 m at a 20 kg tip and
+  0.10359 → 0.06254 m at 200 kg. The injection sweep costs about one iteration and buys roughly
+  four times what an extra plain iteration buys. It is a half rather than a whole because past
+  that it buys jitter: at 1.0 the 200 kg chain's residual `max|v|` reaches 0.19 m/s while the
+  error stops improving. Ordinary mass ratios pay nothing — residual velocity unchanged at 1e-4.
+
+  Two golden joint scenes were re-blessed; the sharpest instrument in them moved the right way
+  (arm error ×1000: 0.415 → 0.320 on the soft path, 0.847 → 0.487 on the legacy Baumgarte lever).
+  Old → new values are recorded line by line in `golden_state.rs`. Determinism is unaffected
+  (`headless_stress_test`: three matching hashes).
+
 ### Added
 
 - **`Renderer::headless_device()` and `Renderer::new_headless_with_device(..)`** — build several

@@ -192,6 +192,22 @@ pub struct JointSolver {
     /// (`tests/joint_motor.rs` is what holds that). And the force-based pass — Spring, slider
     /// suspension, hinge torsional, D6 drives — sits outside the loop entirely and is
     /// untouched.
+    /// **Default 0.5 since 2026-08-17, and the number is measured, not taste.** A 16-link chain,
+    /// 10 iterations, settled (2000 substeps of 1/240 s), constraint error at the tip:
+    ///
+    /// | tip mass | warm 0 | warm 0.5 | warm 0 + 11 iter | warm 0 + 20 iter |
+    /// |---|---|---|---|---|
+    /// | 20 kg | 0.01249 m | **0.00881** | 0.01162 | 0.00783 |
+    /// | 200 kg | 0.10359 m | **0.06254** | 0.08328 | 0.05888 |
+    ///
+    /// The injection sweep costs about one iteration, and buys roughly four times what an extra
+    /// plain iteration buys; at 200:1 it delivers what ten extra iterations would. What it costs
+    /// is residual motion — at 200 kg the chain's `max|v|` goes 0.0116 → 0.0399 m/s, and at
+    /// **1.0** it goes to 0.19 m/s while the error stops improving (0.087, worse than 0.5). That
+    /// is why the default is a half and not a whole: past ~0.5 this is buying jitter.
+    ///
+    /// Ordinary mass ratios pay nothing for it — at 1 and 20 kg the residual velocity is
+    /// unchanged at 1e-4 m/s and the error still drops ~30 %.
     pub warm_start_factor: f32,
 }
 
@@ -204,7 +220,7 @@ impl Default for JointSolver {
             position_bias: 0.3,
             compliance_damping_ratio: 1.0,
             rigid_hertz: 200.0,
-            warm_start_factor: 0.0,
+            warm_start_factor: 0.5,
         }
     }
 }
@@ -293,7 +309,7 @@ impl JointSolver {
     ///
     /// 1. [`Self::iterations`] Gauss–Seidel sweeps of the velocity-level rows, in joint
     ///    order — preceded by one λ-injection sweep when [`Self::warm_start_factor`] is
-    ///    non-zero (it is zero by default).
+    ///    non-zero, which it is by default (0.5).
     /// 2. One pass of the force-based contributions — the Spring joint, the slider
     ///    suspension and hinge torsional springs, the D6 drives. These depend on position
     ///    rather than velocity, so running them inside the loop above would apply them
@@ -321,7 +337,7 @@ impl JointSolver {
     ///
     /// The accumulated impulses are cleared at the start of every call, so a pass never
     /// inherits them from the previous one — unless [`Self::warm_start_factor`] is non-zero,
-    /// which is exactly what makes λ carried simulation state (`WorldSnapshot` clones the
+    /// which it is by default, and that is exactly what makes λ carried simulation state (`WorldSnapshot` clones the
     /// joints, so a rollback already carries it). The latched state on the joints themselves
     /// does carry over regardless — `is_broken` and the reference poses survive every call. The map is only
     /// ever looked up in, never iterated, so its hash order does not reach the result; the
