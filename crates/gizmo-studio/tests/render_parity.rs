@@ -137,8 +137,9 @@ fn the_two_paths_agree_on_everything_the_world_decides() {
     assert_eq!(g._align_pad, e._align_pad);
     assert_eq!(
         std::mem::size_of::<SceneUniforms>(),
-        1168,
-        "a field was added to the block — decide here whether the two paths should agree on it"
+        528 + gizmo::renderer::MAX_LIGHTS * 64,
+        "a field was added to the block — decide here whether the two paths should agree on it \
+         (the light array is the block's only variable part, so it is written against MAX_LIGHTS)"
     );
 }
 
@@ -471,18 +472,40 @@ fn every_render_capability_is_known_to_both_draw_paths() {
 
     // `shared.rs` sits inside the game path's directory but belongs to both, so a component named
     // there is named by neither in particular.
+    //
+    // Each file is cut at its `#[cfg(test)]`, because a test naming a component is not the path
+    // *handling* it — and the difference is not hypothetical: light collection lives entirely in
+    // `shared.rs` (excluded above, correctly), and this scan reported `PointLight` as
+    // "game path only" the moment a GPU guard in `mod.rs`'s test module spawned one. Verified in
+    // this repo on 2026-08-17; every one of these files keeps its tests as the tail, which the
+    // assertion below holds true.
     let read_all = |dir: std::path::PathBuf| {
         let mut files = Vec::new();
         collect_rs(&dir, &mut files);
         files
             .iter()
             .filter(|f| f.file_name().is_some_and(|n| n != "shared.rs"))
-            .map(|f| std::fs::read_to_string(f).unwrap_or_default())
+            .map(|f| {
+                let src = std::fs::read_to_string(f).unwrap_or_default();
+                match src.find("#[cfg(test)]") {
+                    Some(i) => src[..i].to_string(),
+                    None => src,
+                }
+            })
             .collect::<Vec<_>>()
             .join("\n")
     };
     let game = read_all(workspace.join("crates/gizmo/src/systems/render"));
     let editor = read_all(workspace.join("crates/gizmo-studio/src/render_pipeline"));
+    // If a file ever puts production code *after* its tests, the cut above would silently stop
+    // scanning it — so require that the cut removed every test module rather than assuming it.
+    for (label, src) in [("game", &game), ("editor", &editor)] {
+        assert!(
+            !src.contains("#[cfg(test)]"),
+            "{label} path: a `#[cfg(test)]` survived the cut — a file has tests that are not its \
+             tail, and the scan is now reading them as capabilities"
+        );
+    }
 
     // Whole-word: `Mesh` must not match `MeshRenderer`.
     fn names(haystack: &str, needle: &str) -> bool {

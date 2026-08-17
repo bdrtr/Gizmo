@@ -2663,6 +2663,101 @@ mod golden_render_tests {
         render_world(&mut renderer, &mut world).await
     }
 
+    /// Render a floor lit by `MAX_LIGHTS` point lights stacked in one spot, where only the
+    /// **last-ranked** one emits any light (`white_last`) or none of them do.
+    ///
+    /// All the lights share a position, radius and intensity, so they score identically in
+    /// `collect_scene_lights` and the ranking falls through to its last tie-break — entity id.
+    /// Spawn order therefore decides slots, and the light spawned last lands in slot
+    /// `MAX_LIGHTS - 1`. That is the point: it is the only way to put a light *at the end* of the
+    /// array, because every rule above that tie-break exists to put a useful light at the front.
+    async fn render_last_slot_light_scene(white_last: bool) -> Vec<u8> {
+        const W: u32 = 128;
+        let mut renderer = crate::test_gpu::headless_renderer(W, W).await;
+        let mut asset_manager = AssetManager::new();
+        let mut world = World::new();
+        let tex = asset_manager.create_white_texture(
+            &renderer.device,
+            &renderer.queue,
+            &renderer.scene.texture_bind_group_layout,
+        );
+
+        let floor = world.spawn();
+        world.add_component(
+            floor,
+            Transform::new(Vec3::new(0.0, -1.2, 0.0)).with_scale(Vec3::new(20.0, 0.2, 20.0)),
+        );
+        world.add_component(floor, GlobalTransform::default());
+        world.add_component(floor, AssetManager::create_cube(&renderer.device));
+        world.add_component(
+            floor,
+            Material::new(tex.clone()).with_pbr(Vec4::new(0.8, 0.8, 0.8, 1.0), 0.0, 0.9),
+        );
+        world.add_component(floor, MeshRenderer::new());
+
+        let n = crate::renderer::MAX_LIGHTS;
+        for i in 0..n {
+            let lit = white_last && i == n - 1;
+            let e = world.spawn();
+            world.add_component(e, Transform::new(Vec3::new(0.0, 0.5, 0.0)));
+            world.add_component(e, GlobalTransform::default());
+            world.add_component(
+                e,
+                crate::renderer::components::PointLight::new(
+                    if lit { Vec3::ONE } else { Vec3::ZERO },
+                    40.0,
+                    8.0,
+                ),
+            );
+        }
+
+        world.spawn_bundle(CameraBundle {
+            position: Vec3::new(-5.0, 2.0, 0.0),
+            yaw: 0.0,
+            pitch: -0.35,
+            primary: true,
+            ..Default::default()
+        });
+        // Deliberately no sun: the whole image must come from the light in the last slot, so a
+        // shader that stops early produces a measurably darker frame rather than a slightly
+        // different one.
+
+        render_world(&mut renderer, &mut world).await
+    }
+
+    /// **The last light slot has to reach the frame.** The array was `[LightData; 10]` in Rust and
+    /// `array<LightData, 10>` hand-written in seven shaders, and raising it to 32 (2026-08-17) is
+    /// only real if the shaders read the tail they now declare. A loop that still stopped at ten,
+    /// or one shader left at the old length reading a misaligned block, both show up here as a
+    /// frame that does not change.
+    ///
+    /// Verified to fail: clamping the light loop back to `min(num_lights, 10u)` takes this from
+    /// 11631 changed pixels to **0**. That took clamping *three* shaders — `deferred_lighting`,
+    /// `shader` (the forward pass) and `volumetric` — because this frame is lit by more than one of
+    /// them and either alone kept the light visible. Which is the argument for a guard that
+    /// measures the **frame** rather than a shader: it covers every consumer, including the ones
+    /// whoever raises the cap next does not know about.
+    #[test]
+    fn the_last_light_slot_reaches_the_frame() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let lit = render_last_slot_light_scene(true).await;
+            let dark = render_last_slot_light_scene(false).await;
+            let (changed, total) = changed_pixels(&lit, &dark, 128);
+            assert!(
+                changed >= 2_000,
+                "a light in slot MAX_LIGHTS-1 changed {changed}/{total} pixels — the shaders are \
+                 not reading the end of the array they declare (measured 11631)",
+            );
+        });
+    }
+
     /// **A decal has to land on the floor.** (Named to match the two guards above: one
     /// `cargo test reach_the_frame` runs the whole family.) The decal pass had no test of any
     /// kind: it blends

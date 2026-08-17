@@ -466,7 +466,12 @@ mod tests {
     #[test]
     fn test_gpu_uniform_struct_sizes() {
         // Extremely critical alignment checks to prevent runtime pipeline crashes on GPU
-        assert_eq!(std::mem::size_of::<crate::gpu_types::SceneUniforms>(), 1168, "SceneUniforms size shifted from target 1168 bytes!");
+        let expect_scene = 528 + crate::frame_uniforms::MAX_LIGHTS * 64;
+        assert_eq!(
+            std::mem::size_of::<crate::gpu_types::SceneUniforms>(),
+            expect_scene,
+            "SceneUniforms size shifted from 528 + 64*MAX_LIGHTS bytes!"
+        );
         assert_eq!(std::mem::size_of::<crate::gpu_types::LightData>(), 64, "LightData size shifted from target 64 bytes!");
         assert_eq!(std::mem::size_of::<crate::gpu_types::PostProcessUniforms>(), 64, "PostProcessUniforms size shifted from target 64 bytes (underwater+fog eklendi)!");
         assert_eq!(std::mem::size_of::<crate::gpu_types::InstanceRaw>(), 128, "InstanceRaw size shifted from target 128 bytes!");

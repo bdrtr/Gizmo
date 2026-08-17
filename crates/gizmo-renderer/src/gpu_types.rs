@@ -184,7 +184,7 @@ pub struct SceneUniforms {
     pub camera_pos: [f32; 4],
     pub sun_direction: [f32; 4],
     pub sun_color: [f32; 4],
-    pub lights: [LightData; 10],
+    pub lights: [LightData; crate::frame_uniforms::MAX_LIGHTS],
     /// Directional CSM: world → light clip space per cascade (same order as shadow array layers).
     pub light_view_proj: [[[f32; 4]; 4]; 4],
     /// Far distance (along `camera_forward`) for cascades 0..3. `w` is therefore the far edge
@@ -209,11 +209,11 @@ pub struct SceneUniforms {
     pub shading_mode: u32,        // offset 1100-1103
     /// inverse(view_proj), computed once per frame on the CPU so fullscreen passes that
     /// unproject NDC→world (volumetric, particle soft-depth) read it instead of recomputing a
-    /// full 4×4 inverse per fragment. Appended at the 16-byte-aligned tail (1104) so every
+    /// full 4×4 inverse per fragment. Appended at the 16-byte-aligned tail (`464 + 64·MAX_LIGHTS`) so every
     /// existing field offset — and the partial SceneUniforms copies in other shaders — is
-    /// unaffected. offset 1104-1167.
+    /// unaffected.
     pub inv_view_proj: [[f32; 4]; 4],
-                           // Total: 1168 bytes
+                           // Total: 528 + 64·MAX_LIGHTS bytes (2576 at MAX_LIGHTS = 32)
 }
 
 #[repr(C)]
@@ -394,9 +394,14 @@ mod tests {
         // wrong offsets for i > 0 — see `every_instance_shader_declares_the_full_struct`.
         assert_eq!(std::mem::size_of::<InstanceRaw>(), 128, "InstanceRaw");
         assert_eq!(std::mem::size_of::<MaterialParams>(), 48, "MaterialParams = 3×vec4");
-        // The struct's own comment pins the total at 1168 bytes with inv_view_proj
-        // appended at the 16-byte-aligned tail (offset 1104).
-        assert_eq!(std::mem::size_of::<SceneUniforms>(), 1168, "SceneUniforms total");
+        // The fixed part is 528 bytes; the light array is the rest. Expressed against
+        // MAX_LIGHTS so raising the light ceiling does not require editing three literals in
+        // three files (and so that forgetting one is not how the layout drifts).
+        assert_eq!(
+            std::mem::size_of::<SceneUniforms>(),
+            528 + crate::frame_uniforms::MAX_LIGHTS * 64,
+            "SceneUniforms total"
+        );
     }
 
     #[test]

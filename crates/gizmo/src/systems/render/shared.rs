@@ -68,17 +68,18 @@ struct Candidate {
 ///
 /// # Which lights survive the cap, and why it is not "the first ten"
 ///
-/// The shader array holds [`MAX_LIGHTS`]. This used to fill it in ECS iteration order and `break`
-/// on the eleventh light, which had three consequences, all visible:
+/// The shader array holds [`MAX_LIGHTS`] (32; it was 10 when this was written). It used to be
+/// filled in ECS iteration order, `break`-ing on the first light that did not fit, which had three
+/// consequences, all visible:
 ///
 /// 1. **Distance did not enter into it.** A light 500 units behind the camera took a slot from one
 ///    lighting the wall in front of it.
-/// 2. **Point lights starved spot lights.** Points were collected in their own loop first, so ten
-///    points anywhere in the level meant no spotlight was lit at all — and the studio's
+/// 2. **Point lights starved spot lights.** Points were collected in their own loop first, so a
+///    full array of points anywhere in the level meant no spotlight was lit at all — and the studio's
 ///    "cast shadows from the first light" rule then followed that arbitrary choice.
-/// 3. **The chosen ten changed as the world changed shape.** Archetype iteration order is stable
+/// 3. **The chosen set changed as the world changed shape.** Archetype iteration order is stable
 ///    only while the archetype set is: spawning, despawning or adding a component reorders it, so
-///    which ten lights were live could change from frame to frame with the scene standing still.
+///    which lights were live could change from frame to frame with the scene standing still.
 ///    That reads as flicker, and it is the reason this is ranked rather than merely capped.
 ///
 /// So every light is now scored against the camera and the best [`MAX_LIGHTS`] win, points and
@@ -89,11 +90,20 @@ struct Candidate {
 /// `intensity * radius`, and any remaining tie by entity id — which is what makes the selection a
 /// pure function of the world state, and therefore the same on every frame that state is.
 ///
-/// What this deliberately does **not** do is cull against the camera frustum, which would also
-/// drop lights whose sphere is off-screen. That needs the frustum planes here and is worth doing
-/// with the cluster grid that a tiled/clustered pass builds anyway — the follow-up that actually
-/// raises the ceiling (docs/ENGINE.md §3). Ranking is the part that does not need it.
-pub fn collect_scene_lights(world: &World, cam_pos: Vec3) -> SceneLights {
+/// Lights whose sphere of influence does not reach the **camera frustum** are dropped before the
+/// ranking runs: nothing they light is on screen, so a slot spent on one is a slot taken from a
+/// light that is. `Frustum::intersects_sphere` is a plane test that errs toward keeping (a sphere
+/// straddling a plane counts as inside), which is the direction a cull must err in. For a spot
+/// light the sphere is a bound on its cone, so the test is conservative there twice over.
+///
+/// The jitter TAA adds to `view_proj` is sub-pixel and cannot decide this test, so the frame's own
+/// matrix is used rather than plumbing an unjittered one through.
+pub fn collect_scene_lights(
+    world: &World,
+    cam_pos: Vec3,
+    view_proj: gizmo_math::Mat4,
+) -> SceneLights {
+    let frustum = gizmo_math::Frustum::from_matrix(&view_proj);
     let globals = world.borrow::<GlobalTransform>();
     let locals = world.borrow::<Transform>();
 
@@ -117,17 +127,25 @@ pub fn collect_scene_lights(world: &World, cam_pos: Vec3) -> SceneLights {
     // Distance from the camera to a light's sphere of influence, and how far the light throws.
     // Non-finite input (a NaN transform, a deserialized garbage intensity) must not be allowed to
     // win a slot, so it sorts last instead of poisoning the comparison.
-    let score = |pos: Vec3, intensity: f32, radius: f32| -> (f32, f32) {
+    // `None` → this light cannot affect the frame and is not a candidate at all.
+    let score = |pos: Vec3, intensity: f32, radius: f32| -> Option<(f32, f32)> {
         if !pos.is_finite() || !intensity.is_finite() || !radius.is_finite() {
-            return (f32::MAX, 0.0);
+            // Sorts last rather than being dropped: a NaN light is a scene bug, and silently
+            // losing it hides that, while letting it win a slot would poison the frame.
+            return Some((f32::MAX, 0.0));
         }
-        ((cam_pos.distance(pos) - radius).max(0.0), intensity * radius)
+        if !frustum.intersects_sphere(pos, radius.max(0.0)) {
+            return None;
+        }
+        Some(((cam_pos.distance(pos) - radius).max(0.0), intensity * radius))
     };
 
     if let Some(q) = world.query::<&PointLight>() {
         for (e, light) in q.iter() {
             let Some((pos, _)) = world_tf(e) else { continue };
-            let (surface_dist, reach) = score(pos, light.intensity, light.radius);
+            let Some((surface_dist, reach)) = score(pos, light.intensity, light.radius) else {
+                continue;
+            };
             candidates.push(Candidate {
                 data: LightData {
                     position: [pos.x, pos.y, pos.z, light.intensity],
@@ -154,7 +172,9 @@ pub fn collect_scene_lights(world: &World, cam_pos: Vec3) -> SceneLights {
             // raw radians made the cone a hard cut at the wrong angle with no falloff; the
             // studio path used to `.cos()` these itself, the game path never did (its spots
             // were broken) — single-sourcing the fix corrects both.
-            let (surface_dist, reach) = score(pos, light.intensity, light.radius);
+            let Some((surface_dist, reach)) = score(pos, light.intensity, light.radius) else {
+                continue;
+            };
             candidates.push(Candidate {
                 data: LightData {
                     position: [pos.x, pos.y, pos.z, light.intensity],
@@ -287,7 +307,7 @@ pub struct SceneSetupInputs {
 pub fn collect_scene_setup(world: &World, inputs: &SceneSetupInputs) -> SceneSetup {
     use gizmo_math::Mat4;
 
-    let lights = collect_scene_lights(world, inputs.camera.position);
+    let lights = collect_scene_lights(world, inputs.camera.position, inputs.camera.view_proj);
 
     let shadow_dir = match inputs.shadow_caster {
         // Always fits, sun or not. `sun_dir` is the collector's down-vector default when the
@@ -357,6 +377,16 @@ mod tests {
     use crate::renderer::components::{PointLight, SpotLight};
     use gizmo_physics_core::components::GlobalTransform;
 
+    /// A camera at the origin looking down **+Z**, wide and deep enough to contain every light
+    /// these tests place. The frustum cull is real, so a test that wants to measure the *ranking*
+    /// has to hand it a view that keeps every candidate; `Mat4::IDENTITY` would not (it is the NDC
+    /// cube, and would silently cull almost everything here).
+    fn wide_view() -> gizmo_math::Mat4 {
+        let view = gizmo_math::Mat4::look_at_rh(Vec3::ZERO, Vec3::Z, Vec3::Y);
+        let proj = gizmo_math::Mat4::perspective_rh(std::f32::consts::FRAC_PI_2, 1.0, 0.1, 20_000.0);
+        proj * view
+    }
+
     // Regression: the shaders compare the spotlight cone against `dot(-L, spot_dir)`
     // (a cosine) and every lighting shader documents the cutoffs as cosines, but
     // `SpotLight` stores the cone half-angles in radians. The game render path fed
@@ -370,7 +400,7 @@ mod tests {
         // inner_angle = 0.4 rad, outer_angle = 0.6 rad (radians, ctor clamps inner ≤ outer).
         world.add_component(e, SpotLight::new(Vec3::ONE, 10.0, 30.0, 0.4, 0.6));
 
-        let l = collect_scene_lights(&world, Vec3::ZERO);
+        let l = collect_scene_lights(&world, Vec3::ZERO, wide_view());
         assert_eq!(l.num_lights, 1);
         let spot = l.lights[0];
         assert_eq!(spot.params[1], 1.0, "params.y == 1 marks a spot light");
@@ -409,7 +439,7 @@ mod tests {
         world.add_component(s, Transform::new(Vec3::new(1.0, 2.0, 3.0)));
         world.add_component(s, SpotLight::new(Vec3::ONE, 7.0, 20.0, 0.3, 0.5));
 
-        let l = collect_scene_lights(&world, Vec3::ZERO);
+        let l = collect_scene_lights(&world, Vec3::ZERO, wide_view());
         assert_eq!(l.num_lights, 2);
         assert_eq!(l.lights[0].params[1], 1.0, "the nearby spot outranks the distant point");
         assert_eq!(l.lights[1].params[1], 0.0);
@@ -428,7 +458,7 @@ mod tests {
         world.add_component(s, GlobalTransform::default());
         world.add_component(s, SpotLight::new(Vec3::ONE, 7.0, 20.0, 0.3, 0.5));
 
-        let l = collect_scene_lights(&world, Vec3::ZERO);
+        let l = collect_scene_lights(&world, Vec3::ZERO, wide_view());
         assert_eq!(l.num_lights, 1);
         assert_eq!(l.shadow_point_index, -1, "no point light → no point-shadow caster");
     }
@@ -448,22 +478,24 @@ mod tests {
 
     /// The cap drops the *far* lights, not the ones ECS iteration happened to reach last.
     ///
-    /// Twelve lights, spawned far-to-near so that iteration order is the exact opposite of
-    /// importance: the old collector kept the twelve-hundred-unit ones and threw away the light
-    /// standing next to the camera.
+    /// Two more lights than the array holds, spawned far-to-near so iteration order is the exact
+    /// opposite of importance: the old collector kept the furthest ones and threw away the light
+    /// standing next to the camera. Sized from `MAX_LIGHTS` rather than a literal — this test was
+    /// written when the cap was 10 and would have quietly stopped testing the cap when it became
+    /// 32.
     #[test]
     fn the_lights_that_lose_a_slot_are_the_distant_ones() {
         let mut world = World::new();
-        for i in (1..=12).rev() {
+        for i in (1..=MAX_LIGHTS + 2).rev() {
             point_at(&mut world, i as f32 * 100.0);
         }
 
-        let l = collect_scene_lights(&world, Vec3::ZERO);
+        let l = collect_scene_lights(&world, Vec3::ZERO, wide_view());
         assert_eq!(l.num_lights as usize, MAX_LIGHTS, "the array is full");
         assert_eq!(
             selected_z(&l),
             (1..=MAX_LIGHTS).map(|i| i as f32 * 100.0).collect::<Vec<_>>(),
-            "the ten nearest survive, nearest first"
+            "the nearest MAX_LIGHTS survive, nearest first"
         );
     }
 
@@ -480,7 +512,7 @@ mod tests {
         for i in 1..=12 {
             lights.push(point_at(&mut world, i as f32 * 10.0));
         }
-        let before = collect_scene_lights(&world, Vec3::ZERO);
+        let before = collect_scene_lights(&world, Vec3::ZERO, wide_view());
 
         // Move three of the winners into a different archetype, leaving them the same lights in
         // the same places. (`GlobalTransform::default()` is the identity, and the collector
@@ -495,34 +527,71 @@ mod tests {
                 },
             );
         }
-        let after = collect_scene_lights(&world, Vec3::ZERO);
+        let after = collect_scene_lights(&world, Vec3::ZERO, wide_view());
 
         assert_eq!(selected_z(&before), selected_z(&after), "same world, same ten lights");
         assert_eq!(before.shadow_point_index, after.shadow_point_index);
     }
 
-    /// Ten point lights across the level no longer starve a spotlight at the camera.
+    /// A full array of distant point lights no longer starves a spotlight at the camera.
     ///
     /// The old collector filled the array from its point-light loop and `break`-ed before the spot
     /// loop ran, so this scene lit zero spotlights — and in the studio, whose shadow caster is
-    /// "the first light", cast shadows from a point light 1000 units away.
+    /// "the first light", cast shadows from the furthest point light in the level.
     #[test]
-    fn a_near_spot_takes_a_slot_from_ten_distant_points() {
+    fn a_near_spot_takes_a_slot_from_a_full_array_of_distant_points() {
         let mut world = World::new();
-        for i in 1..=10 {
+        for i in 1..=MAX_LIGHTS {
             point_at(&mut world, i as f32 * 100.0);
         }
+        let furthest = MAX_LIGHTS as f32 * 100.0;
         let s = world.spawn();
         world.add_component(s, Transform::new(Vec3::new(0.0, 0.0, 2.0)));
         world.add_component(s, SpotLight::new(Vec3::ONE, 7.0, 20.0, 0.3, 0.5));
 
-        let l = collect_scene_lights(&world, Vec3::ZERO);
+        let l = collect_scene_lights(&world, Vec3::ZERO, wide_view());
         assert_eq!(l.num_lights as usize, MAX_LIGHTS);
         assert_eq!(l.lights[0].params[1], 1.0, "the spot at the camera is lit, and ranks first");
         assert!(
-            !selected_z(&l).contains(&1000.0),
+            !selected_z(&l).contains(&furthest),
             "the furthest point light is the one that gives up its slot: {:?}",
             selected_z(&l)
+        );
+    }
+
+    /// A light whose sphere of influence is entirely off screen does not take a slot.
+    ///
+    /// The same light, at the same distance, in front of the camera instead of behind it, does —
+    /// so this measures the cull and not the ranking. Without it a level's worth of lights behind
+    /// the player competed for the frame's ten slots on distance alone, and won.
+    #[test]
+    fn a_light_that_cannot_reach_the_screen_is_not_a_candidate() {
+        let behind = {
+            let mut world = World::new();
+            point_at(&mut world, -50.0); // camera looks down +Z, so this is behind it
+            collect_scene_lights(&world, Vec3::ZERO, wide_view())
+        };
+        assert_eq!(behind.num_lights, 0, "a light behind the camera lights nothing on screen");
+
+        let in_front = {
+            let mut world = World::new();
+            point_at(&mut world, 50.0);
+            collect_scene_lights(&world, Vec3::ZERO, wide_view())
+        };
+        assert_eq!(in_front.num_lights, 1, "the same light in view must be collected");
+
+        // The cull errs toward keeping: a light behind the camera whose radius reaches across it
+        // still lights what is in front, so it must survive.
+        let straddling = {
+            let mut world = World::new();
+            let e = world.spawn();
+            world.add_component(e, Transform::new(Vec3::new(0.0, 0.0, -2.0)));
+            world.add_component(e, PointLight::new(Vec3::ONE, 5.0, 20.0));
+            collect_scene_lights(&world, Vec3::ZERO, wide_view())
+        };
+        assert_eq!(
+            straddling.num_lights, 1,
+            "a light just behind the camera with a 20 m radius still lights the scene in front"
         );
     }
 }

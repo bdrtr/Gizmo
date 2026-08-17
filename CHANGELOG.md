@@ -16,6 +16,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **The light ceiling is 32, and off-screen lights no longer take slots (`MAX_LIGHTS` 10 → 32).**
+  The scene block grows to 2576 bytes (the uniform-binding floor is 64 KiB everywhere WebGPU runs)
+  and costs nothing per frame — both lighting loops run to `num_lights`, so a scene with three
+  lights pays for three. Lights whose sphere of influence misses the camera frustum are now culled
+  before the cap is applied, so a level's worth of lights behind the player cannot crowd out the
+  ones lighting the view. Going much past 32 needs clustered/tiled culling, which is not in this
+  release.
+
 ### Fixed
 
 - **A crate resting on a slope no longer runs away — the friction cone was choosing its

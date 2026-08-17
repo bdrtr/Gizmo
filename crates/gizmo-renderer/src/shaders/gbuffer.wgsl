@@ -15,7 +15,7 @@ struct SceneUniforms {
     camera_pos:     vec4<f32>,
     sun_direction:  vec4<f32>,
     sun_color:      vec4<f32>,
-    lights:         array<vec4<f32>, 40>, // 10 * LightData (4 vec4 each) — not used in G-pass
+    lights:         array<vec4<f32>, 128>, // MAX_LIGHTS(32) * LightData (4 vec4 each) — not used in G-pass
     light_view_proj: array<mat4x4<f32>, 4>,
     cascade_splits:  vec4<f32>,
     camera_forward:  vec4<f32>,

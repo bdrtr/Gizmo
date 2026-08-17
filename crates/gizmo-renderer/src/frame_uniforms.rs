@@ -49,9 +49,26 @@ use gizmo_math::{Mat4, Vec3};
 
 /// Length of the shader's fixed light array, and therefore of [`SceneUniforms::lights`].
 ///
-/// The shaders declare `lights: array<LightData, 10>`; anything that builds the array on the CPU
-/// must agree with them, so the number lives here instead of being spelled `10` at each site.
-pub const MAX_LIGHTS: usize = 10;
+/// The shaders declare `lights: array<LightData, MAX_LIGHTS>` by hand — six of them do, and
+/// `common.wgsl` is the source the rest compose in — so anything that builds the array on the CPU
+/// must agree with them. That agreement is not left to care: `shader_contract`'s
+/// `every_scene_uniform_declaration_matches_the_bytes_rust_uploads` parses every WGSL declaration
+/// and compares field offsets *and* total span against this struct, so a raise that misses a
+/// shader fails a test with the offending file named.
+///
+/// # Why 32
+///
+/// It was 10, which is few enough that an ordinary room lit by hand runs out — and running out
+/// used to mean lights vanishing arbitrarily (see `collect_scene_lights`; the selection is ranked
+/// and frustum-culled now, so what a raise buys is that fewer scenes reach the cap at all).
+///
+/// 32 costs 2 KiB of the scene block (2576 bytes total, against a 64 KiB uniform-binding floor
+/// everywhere WebGPU runs) and nothing per frame: both lighting loops run to `num_lights`, not to
+/// this constant, so a scene with three lights pays for three. What it does *not* buy is a
+/// thousand lights — the loop is per-fragment and unclustered, which is what a tiled/clustered
+/// pass exists to fix (docs/ENGINE.md §3). 32 is the ceiling that fits the cost model this
+/// renderer actually has today.
+pub const MAX_LIGHTS: usize = 32;
 
 /// The active camera, as *both* uniform blocks need it.
 ///
@@ -382,8 +399,17 @@ mod tests {
         let u = SceneUniforms::new(&SceneFrame { camera: a_camera(), ..Default::default() });
         assert_eq!(u._pre_align_pad, [0; 2]);
         assert_eq!(u._align_pad, [0; 3]);
-        assert_eq!(std::mem::size_of::<SceneUniforms>(), 1168);
-        assert_eq!(std::mem::offset_of!(SceneUniforms, inv_view_proj), 1104);
+        // Written against MAX_LIGHTS rather than as literals: the light array is the block's only
+        // variable-length part, so `FIXED + MAX_LIGHTS * 64` still fails on any *other* field
+        // moving — which is what this guards — without needing a hand-recomputed number every time
+        // the light ceiling changes. (It was `1168` / `1104`, correct only at MAX_LIGHTS = 10.)
+        const LIGHT_BYTES: usize = std::mem::size_of::<LightData>(); // 4 × vec4 = 64
+        assert_eq!(LIGHT_BYTES, 64);
+        assert_eq!(std::mem::size_of::<SceneUniforms>(), 528 + MAX_LIGHTS * LIGHT_BYTES);
+        assert_eq!(
+            std::mem::offset_of!(SceneUniforms, inv_view_proj),
+            464 + MAX_LIGHTS * LIGHT_BYTES
+        );
         assert_eq!(std::mem::size_of_val(&u.lights) / std::mem::size_of::<LightData>(), MAX_LIGHTS);
     }
 

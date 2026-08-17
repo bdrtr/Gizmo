@@ -126,11 +126,31 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
   by entity id — which is what makes the selection a pure function of world state rather than of
   iteration order. Four tests in `shared.rs` hold it, including the archetype-reorder one that is
   the flicker regression.
-  **Still open:** the cap itself, and frustum culling of the light spheres. Both belong with
-  clustered/tiled culling — the cluster grid gives the frustum test for free and is what allows
-  the cap to rise at all — and that is the reason this engine has a deferred pipeline. Raising
-  `MAX_LIGHTS` on its own means editing seven WGSL files plus `shader_contract.rs` and paying an
-  unclustered per-fragment loop for every light, which is the trade clustering exists to avoid.
+  **The cap and the frustum cull closed the same day.** `MAX_LIGHTS` is **32** (2576-byte scene
+  block, against a 64 KiB uniform floor everywhere WebGPU runs), and lights whose sphere of
+  influence misses the camera frustum are dropped before the ranking runs, so a level's worth of
+  lights behind the player no longer compete for the frame's slots. Raising the cap was the cheap
+  part *because* the layout is guarded: `shader_contract`'s
+  `every_scene_uniform_declaration_matches_the_bytes_rust_uploads` parses every WGSL declaration
+  against the Rust struct, and it named the one file a `grep` had missed (`gbuffer.wgsl`, which
+  flattens the array to `array<vec4<f32>, 4·MAX_LIGHTS>`). The three hardcoded `1168`-byte asserts
+  are now written `528 + 64·MAX_LIGHTS`, so the next raise does not need a hand-recomputed literal
+  in three files — which is how one of them would have been forgotten.
+
+  What the raise does **not** buy is many more lights than that: both lighting loops are
+  per-fragment and unclustered, so cost scales with lights actually in the frame. **Still open:**
+  clustered/tiled culling, which is what makes a cap of hundreds affordable and is the reason this
+  engine has a deferred pipeline. 32 is the ceiling that fits today's cost model, not an
+  architectural limit.
+
+  Two findings worth keeping from doing it. The GPU guard
+  (`the_last_light_slot_reaches_the_frame`, a light in slot 31 must change the frame) only went red
+  after clamping **three** shaders back to ten — `deferred_lighting`, `shader` and `volumetric` all
+  light this frame, and either one alone kept the light visible; a guard that measures the frame
+  rather than a shader is what covers consumers the next person does not know about. And
+  `render_parity`'s capability scan read `#[cfg(test)]` code as production: adding that guard made
+  it report `PointLight` as "game path only" although light collection is entirely in the shared
+  module. It now cuts each file at its test module, and asserts that the cut left none behind.
 - **Friction has no positional term** — a modelling gap. Narrowed twice on 2026-08-17, and worth
   reading in that order. The normal channel carries `pen0` into the bias in all three sweeps
   (`solver/tgs.rs`); the tangent channel has no counterpart — every friction solve is pure
