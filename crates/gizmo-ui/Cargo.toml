@@ -45,7 +45,7 @@ gizmo-math = { path = "../gizmo-math", version = "0.10.0" }
 #
 # `grid` açık ama `Style` grid'i modellemiyor (bkz. Style dokümanındaki "Not
 # modelled" listesi) — grid'i geri açmak isteyen önce bir track tipi tanımlamalı.
-taffy = { version = "0.10.1", default-features = false, features = [
+taffy = { version = "0.13.0", default-features = false, features = [
     "std",
     "taffy_tree",
     "flexbox",
