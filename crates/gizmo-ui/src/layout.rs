@@ -112,27 +112,27 @@ fn rect_length_percentage(rect: UiRect) -> TaffyRect<LengthPercentage> {
 
 fn to_align_items(value: AlignItems) -> TaffyAlignItems {
     match value {
-        AlignItems::Start => TaffyAlignItems::Start,
-        AlignItems::End => TaffyAlignItems::End,
-        AlignItems::FlexStart => TaffyAlignItems::FlexStart,
-        AlignItems::FlexEnd => TaffyAlignItems::FlexEnd,
-        AlignItems::Center => TaffyAlignItems::Center,
-        AlignItems::Baseline => TaffyAlignItems::Baseline,
-        AlignItems::Stretch => TaffyAlignItems::Stretch,
+        AlignItems::Start => TaffyAlignItems::START,
+        AlignItems::End => TaffyAlignItems::END,
+        AlignItems::FlexStart => TaffyAlignItems::FLEX_START,
+        AlignItems::FlexEnd => TaffyAlignItems::FLEX_END,
+        AlignItems::Center => TaffyAlignItems::CENTER,
+        AlignItems::Baseline => TaffyAlignItems::BASELINE,
+        AlignItems::Stretch => TaffyAlignItems::STRETCH,
     }
 }
 
 fn to_align_content(value: AlignContent) -> TaffyAlignContent {
     match value {
-        AlignContent::Start => TaffyAlignContent::Start,
-        AlignContent::End => TaffyAlignContent::End,
-        AlignContent::FlexStart => TaffyAlignContent::FlexStart,
-        AlignContent::FlexEnd => TaffyAlignContent::FlexEnd,
-        AlignContent::Center => TaffyAlignContent::Center,
-        AlignContent::Stretch => TaffyAlignContent::Stretch,
-        AlignContent::SpaceBetween => TaffyAlignContent::SpaceBetween,
-        AlignContent::SpaceEvenly => TaffyAlignContent::SpaceEvenly,
-        AlignContent::SpaceAround => TaffyAlignContent::SpaceAround,
+        AlignContent::Start => TaffyAlignContent::START,
+        AlignContent::End => TaffyAlignContent::END,
+        AlignContent::FlexStart => TaffyAlignContent::FLEX_START,
+        AlignContent::FlexEnd => TaffyAlignContent::FLEX_END,
+        AlignContent::Center => TaffyAlignContent::CENTER,
+        AlignContent::Stretch => TaffyAlignContent::STRETCH,
+        AlignContent::SpaceBetween => TaffyAlignContent::SPACE_BETWEEN,
+        AlignContent::SpaceEvenly => TaffyAlignContent::SPACE_EVENLY,
+        AlignContent::SpaceAround => TaffyAlignContent::SPACE_AROUND,
     }
 }
 

@@ -32,7 +32,9 @@ gizmo-math = { path = "../gizmo-math", version = "0.10.0" }
 # `Style` artık kendi POD tipimiz (components.rs); taffy'ye çeviri yalnızca
 # `UiContext::to_taffy_style` içinde yapılır (layout.rs). A3-followup, 2026-08-08.
 #
-# `calc` KASITLI OLARAK KAPALI (taffy'nin varsayılanında açıktır). taffy'nin
+# `calc` KASITLI OLARAK KAPALI. (0.10'da taffy'nin VARSAYILANINDA açıktı; 0.13'te
+# artık varsayılan değil — yani feature-birleştirme riski küçüldü ama kaybolmadı,
+# graftaki başka bir crate onu hâlâ açıkça isteyebilir. 2026-08-17'de doğrulandı.) taffy'nin
 # `CompactLength`'i 64-bit'te tag+değer+pointer'ı tek bir `*const ()` içine
 # paketler → `taffy::Style` yapısal olarak `!Send + !Sync`, dolayısıyla onu
 # barındıran `TaffyTree`, yani `UiContext`, de öyle. `UiContext`'teki iki
@@ -45,7 +47,7 @@ gizmo-math = { path = "../gizmo-math", version = "0.10.0" }
 #
 # `grid` açık ama `Style` grid'i modellemiyor (bkz. Style dokümanındaki "Not
 # modelled" listesi) — grid'i geri açmak isteyen önce bir track tipi tanımlamalı.
-taffy = { version = "0.10.1", default-features = false, features = [
+taffy = { version = "0.13.0", default-features = false, features = [
     "std",
     "taffy_tree",
     "flexbox",
