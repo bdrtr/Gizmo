@@ -297,6 +297,36 @@ pub fn editor_owns_the_physics_step(world: &World) -> bool {
         .unwrap_or(true)
 }
 
+/// How much time skeletal animation should advance by in the **editor's** picture this frame.
+///
+/// The engine's draw path takes this from [`Time::dt`](gizmo::core::time::Time::dt) — the frame
+/// delta scaled by `time_scale` and clamped — and skips the update entirely at zero. The studio
+/// passed its own raw frame delta instead, and the two disagreed in exactly the cases a clock
+/// exists for: a script calling `set_time_scale(0.5)` in Play mode halved the game's animation and
+/// left the viewport's running at full speed, and `set_time_scale(0.0)` — pause — stopped physics
+/// while the skeletons kept walking. `current_time += dt * speed` is the whole of the animation
+/// clock, so the delta *is* the playback rate.
+///
+/// Three cases, and the middle one is the reason this is a function rather than one expression:
+/// **⏸ returns zero.** Pausing stops `PlayLoop`, and `Time` keeps advancing regardless (the
+/// windowed loop updates it every frame, paused or not), so reading `Time::dt` alone would leave a
+/// paused editor animating. Editing returns the clock too — a designer previewing a clip wants it
+/// to play, and `Time::dt` is that, only clamped, so a two-second hitch no longer jumps the pose
+/// two seconds forward.
+pub fn animation_delta(world: &World) -> f32 {
+    let paused = world
+        .try_get_resource::<EditorState>()
+        .map(|editor| editor.is_paused())
+        .unwrap_or(false);
+    if paused {
+        return 0.0;
+    }
+    world
+        .get_resource::<gizmo::core::time::Time>()
+        .map(|time| time.dt())
+        .unwrap_or(0.0)
+}
+
 #[cfg(test)]
 mod tests {
     use gizmo::math::Vec3;
@@ -473,6 +503,65 @@ mod tests {
         ed.toggle_play(); // Paused → Edit (⏹)
         handle_simulation(&mut world, &mut ed, &mut st, 1.0 / 60.0, &input);
         assert!(!ed.fight_hud.active, "stopping ends the round and clears the HUD");
+    }
+
+    /// **The editor's animation runs on the clock, and ⏸ stops it.**
+    ///
+    /// The engine's draw path advances skeletons by `Time::dt()`; the studio used its own raw
+    /// frame delta, so the two disagreed exactly where a clock matters — `set_time_scale(0.5)`
+    /// halved a game's animation and left the viewport at full speed, and pause stopped physics
+    /// while the skeletons kept walking.
+    #[test]
+    fn the_editors_animation_delta_follows_the_clock_and_stops_on_pause() {
+        use super::animation_delta;
+        use gizmo::core::time::Time;
+
+        let mut world = World::new();
+        assert_eq!(
+            animation_delta(&world),
+            0.0,
+            "no clock in the world means no animation, the same answer the game path gives"
+        );
+
+        let mut time = Time::new();
+        time.update(1.0 / 60.0);
+        world.insert_resource(time);
+        world.insert_resource(EditorState::default());
+        assert!(
+            (animation_delta(&world) - 1.0 / 60.0).abs() < 1e-6,
+            "editing: the clock's delta, so a designer can preview a clip"
+        );
+
+        // A script slowing time down must slow the viewport with it.
+        {
+            let mut time = world.get_resource_mut::<Time>().expect("clock");
+            time.set_time_scale(0.5);
+            time.update(1.0 / 60.0);
+        }
+        assert!(
+            (animation_delta(&world) - 1.0 / 120.0).abs() < 1e-6,
+            "half speed halves the animation too — this is the number that used to be full speed"
+        );
+
+        world
+            .get_resource_mut::<EditorState>()
+            .expect("editor")
+            .toggle_play();
+        assert!(
+            (animation_delta(&world) - 1.0 / 120.0).abs() < 1e-6,
+            "playing: still the clock"
+        );
+
+        world
+            .get_resource_mut::<EditorState>()
+            .expect("editor")
+            .toggle_pause();
+        assert_eq!(
+            animation_delta(&world),
+            0.0,
+            "⏸ freezes the picture — `Time` keeps advancing while paused, so reading it alone \
+             would leave the skeletons walking under the pause overlay"
+        );
     }
 
     /// **The editor steps physics only when it owns the frame.**

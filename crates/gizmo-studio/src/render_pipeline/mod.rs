@@ -33,9 +33,13 @@ pub fn execute_render_pipeline(
     // other does not. The parity inventory could not see it either: it scans components *defined*
     // in `gizmo-renderer/src/components`, and the whole skeletal family is re-exported there from
     // `gizmo-animation`. Both halves are fixed together.
+    // The delta is the CLOCK's, not this frame's — see `animation_delta`. Passing the raw frame
+    // delta let `set_time_scale(0.5)` halve a game's animation while the viewport ran at full
+    // speed, and left ⏸ with walking skeletons.
+    let animation_dt = crate::systems::simulation::animation_delta(world);
+    gizmo::renderer::animation_update_system(world, animation_dt, &renderer.queue);
+    gizmo::renderer::animation_state_machine_update_system(world, animation_dt, &renderer.queue);
     let delta_time = state.actual_dt;
-    gizmo::renderer::animation_update_system(world, delta_time, &renderer.queue);
-    gizmo::renderer::animation_state_machine_update_system(world, delta_time, &renderer.queue);
     
     let mut bone_att = gizmo::systems::transform::BoneAttachmentSystem;
     gizmo::core::system::System::run(&mut bone_att, world, delta_time);

@@ -683,9 +683,13 @@ fn both_draw_paths_call_both_animation_drivers() {
         .expect("workspace root")
         .to_path_buf();
 
-    for (path_name, file) in [
-        ("editor", "crates/gizmo-studio/src/render_pipeline/mod.rs"),
-        ("game", "crates/gizmo/src/systems/render/mod.rs"),
+    for (path_name, file, clock) in [
+        (
+            "editor",
+            "crates/gizmo-studio/src/render_pipeline/mod.rs",
+            "animation_delta(world)",
+        ),
+        ("game", "crates/gizmo/src/systems/render/mod.rs", ".dt()"),
     ] {
         let src = std::fs::read_to_string(workspace.join(file)).expect("draw path source");
         let code: String = code_only(&src).chars().filter(|c| !c.is_whitespace()).collect();
@@ -695,6 +699,16 @@ fn both_draw_paths_call_both_animation_drivers() {
                 "the {path_name} path does not call {driver} — an entity driven by it animates in \
                  one picture and freezes in the other"
             );
+            assert!(
+                code.contains(&format!("{driver}world,animation_dt,")),
+                "the {path_name} path must advance animation by `animation_dt`, the delta both \
+                 paths take from the clock — a raw frame delta here is a viewport that ignores \
+                 `set_time_scale` and keeps walking through ⏸"
+            );
         }
+        assert!(
+            code.contains(clock),
+            "the {path_name} path must derive `animation_dt` from the clock ({clock})"
+        );
     }
 }

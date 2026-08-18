@@ -39,6 +39,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   it, the script takes the health off — 92, not 100 (the event arrived) and not 84 (one hit per
   move).
 
+- **The editor's viewport ignored `time_scale` and kept animating through ⏸.** The engine's draw
+  path advances skeletons by `Time::dt()` — the frame delta scaled and clamped — and skips at zero;
+  the studio passed its own raw frame delta. Since `current_time += dt * speed` is the whole of the
+  animation clock, that delta *is* the playback rate: a script calling `set_time_scale(0.5)` halved
+  a game's animation and left the viewport running at full speed, and `0.0` stopped physics while
+  the skeletons kept walking.
+
+  `systems::simulation::animation_delta` decides it now, in three cases rather than the two the
+  physics gate needed: ⏸ returns **zero**, because pausing stops `PlayLoop` while `Time` keeps
+  advancing regardless — reading the clock alone would leave a paused editor animating. Editing
+  returns the clock too, so previewing a clip still plays, now with the clamp that stops a two-second
+  hitch jumping the pose two seconds forward.
+
 - **An entity driven by an `AnimationStateMachine` animated in an exported game and stood still in
   the editor.** There are two skeletal drivers — `animation_update_system` for `AnimationPlayer`,
   `animation_state_machine_update_system` for the state machine — and the studio's pipeline called

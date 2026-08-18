@@ -2701,13 +2701,20 @@ duruyor, çünkü her biri ölçümünü ve kararını taşıyor:
 **Bir sonraki oturuma (2026-08-19, ikinci tur).** Aşağıdaki üç izin de üçü aynı gün kapandı;
 kapatırken çıkan tek yeni iz:
 
-- **Animasyon deltası iki yolda farklı.** Motorun çizim yolu `Time::dt()` okuyup `> 0.0` ise
-  ilerletiyor — yani `set_time_scale(0.0)` animasyonu da durduruyor. Stüdyonun boru hattı
-  `state.actual_dt`'yi (ham kare deltası) veriyor, yani Play modunda bir script zamanı sıfırlasa
-  fizik duruyor ama editörün viewport'unda iskeletler oynamaya devam ediyor. Bugün düzeltilen iki
-  şeyin (fiziğin çift adımlanması, state machine'in editörde koşmaması) aynı ailesinden, ve muhtemel
-  şekli de aynı: oyun oturumundayken `Time::dt()`, dışındayken kendi deltası — `editor_owns_the_physics_step`
-  ile aynı kapı. Ölçülmedi, yalnız okundu; yazmadan önce ölçülmeli.
+- ~~Animasyon deltası iki yolda farklı~~ **— düzeltildi, ve tahmin ettiğim kapı değil üç durum
+  çıktı.** Motorun çizim yolu `Time::dt()` okuyup `> 0.0` ise ilerletiyordu; stüdyo ham kare
+  deltasını veriyordu. `current_time += dt * speed` animasyon saatinin tamamı olduğu için delta
+  DOĞRUDAN oynatma hızı: `set_time_scale(0.5)` oyunun animasyonunu yarıya indirirken viewport tam
+  hızda kalıyordu, `0.0` ise fiziği durdurup iskeletleri yürütmeye devam ediyordu.
+
+  Beklediğim kapı "oyun oturumundaysa `Time::dt()`, değilse kendi deltası"ydı; ölçünce **üç** durum
+  olduğu görüldü, ve ortadaki sebebiyle bu bir fonksiyon: **⏸ sıfır döndürmeli.** Duraklatma yalnız
+  `PlayLoop`'u durduruyor, `Time` duraklatılmış karede de ilerliyor (pencereli döngü her kare
+  güncelliyor) — yani yalnız `Time::dt()` okumak duraklatılmış bir editörü animasyonlu bırakırdı.
+  Düzenleme modu da saati kullanıyor: bir tasarımcı klibi önizlerken oynasın, ve `Time::dt()`
+  kırpılmış olduğu için iki saniyelik bir takılma pozu iki saniye ileri fırlatmıyor.
+  `systems::simulation::animation_delta`, dört durumu da testli, ve parity guard'ı iki yolun da
+  deltayı saatten aldığını sabitliyor (negatif kontrol: ham deltaya döndürülünce kırmızı).
 
 **Önceki üç iz (hepsi kapandı):**
 
