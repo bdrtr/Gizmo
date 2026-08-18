@@ -172,6 +172,17 @@ pub fn default_render_pass(
     // TODO: Bütün nesnelerin (özellikle kamera ve çizilecek objelerin) global matrix'leri
     // bu pass çağrılmadan hemen önce bir `update_transforms(world)` sistemiyle güncellenmiş olmalıdır.
 
+    // **Bones carry what is attached to them.** `BoneAttachmentSystem` places every entity
+    // parented to a joint — a sword in a hand, a hat on a head — onto the pose the animation
+    // systems just wrote, so it belongs immediately after them and before anything reads a
+    // transform. The game path did not run it at all: an attachment followed the animation in the
+    // editor's viewport (which does run it) and stayed frozen in an exported game. The mirror
+    // image of the state machine, which was engine-only until the same day.
+    {
+        let mut bone_attachment = crate::systems::transform::BoneAttachmentSystem;
+        gizmo_core::system::System::run(&mut bone_attachment, world, animation_dt);
+    }
+
     // ECS veri GPU'ya basılır ve GPU verisi ECS'ye alınır (GPU-fizik yolu — `physics` ister)
     #[cfg(feature = "physics")]
     {

@@ -664,7 +664,7 @@ fn collect_rs(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
     }
 }
 
-/// **Both draw paths must CALL both animation drivers**, not merely know their names.
+/// **Both draw paths must CALL the same per-frame drivers**, not merely know their names.
 ///
 /// The capability inventory above counts a name in a comment as knowing a type, deliberately: a
 /// component only ever touched through a system cannot be named any other way. That makes it the
@@ -672,11 +672,21 @@ fn collect_rs(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
 /// which is exactly how the state machine stayed engine-only. So this one cuts comments and looks
 /// for the calls.
 ///
-/// The defect it pins: an entity animated by an `AnimationStateMachine` played in an exported game
-/// and stood perfectly still in the editor's viewport, because the studio's pipeline ran
-/// `animation_update_system` and not its sibling.
+/// Three defects of one shape, all found on 2026-08-19 and all invisible to the inventory above:
+///
+/// - `animation_state_machine_update_system` — engine-only. A state-machine-driven entity played
+///   in an exported game and stood still in the viewport.
+/// - `BoneAttachmentSystem` — editor-only, the mirror image. A sword parented to a hand bone
+///   followed the animation in the viewport and stayed frozen in the shipped game.
+/// - `gpu_physics_submit_system` / `gpu_physics_readback_system` — engine-only. A scene using GPU
+///   rigid bodies simulated in the game and sat still in the editor, whose passes were already
+///   drawing from `renderer.gpu_physics`.
+///
+/// The inventory could not see any of them: two of the three components are named in neither
+/// path's source (they are reached through systems), and it only reports a capability known to
+/// exactly ONE path — a capability known to neither is silence.
 #[test]
-fn both_draw_paths_call_both_animation_drivers() {
+fn both_draw_paths_run_the_same_per_frame_drivers() {
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(|p| p.parent())
@@ -693,12 +703,24 @@ fn both_draw_paths_call_both_animation_drivers() {
     ] {
         let src = std::fs::read_to_string(workspace.join(file)).expect("draw path source");
         let code: String = code_only(&src).chars().filter(|c| !c.is_whitespace()).collect();
-        for driver in ["animation_update_system(", "animation_state_machine_update_system("] {
+        // Every per-frame driver either path runs. A capability driven by one picture and not
+        // the other is the editor's oldest failure mode, and the list is short enough to state.
+        for driver in [
+            "ensure_global_transforms(",
+            "animation_update_system(",
+            "animation_state_machine_update_system(",
+            "BoneAttachmentSystem",
+            "gpu_physics_submit_system(",
+            "gpu_physics_readback_system(",
+        ] {
             assert!(
                 code.contains(driver),
-                "the {path_name} path does not call {driver} — an entity driven by it animates in \
-                 one picture and freezes in the other"
+                "the {path_name} path does not run {driver} — whatever it drives moves in one \
+                 picture and is frozen in the other"
             );
+        }
+
+        for driver in ["animation_update_system(", "animation_state_machine_update_system("] {
             assert!(
                 code.contains(&format!("{driver}world,animation_dt,")),
                 "the {path_name} path must advance animation by `animation_dt`, the delta both \

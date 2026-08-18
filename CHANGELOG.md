@@ -39,6 +39,24 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   it, the script takes the health off — 92, not 100 (the event arrived) and not 84 (one hit per
   move).
 
+- **The two draw paths ran different per-frame drivers, in both directions.** Enumerating what each
+  one actually calls turned up two more of the same defect on top of the state machine:
+
+  - **`BoneAttachmentSystem` ran only in the editor.** It places every entity parented to a joint —
+    a sword in a hand, a hat on a head — onto the pose animation just wrote. So an attachment
+    followed the animation in the viewport and stayed frozen in an exported game: the mirror image
+    of the state machine, which was engine-only. The game path runs it now, immediately after the
+    animation systems and before anything reads a transform.
+  - **`gpu_physics_submit_system` / `gpu_physics_readback_system` ran only in the game.** A scene
+    using GPU rigid bodies simulated when shipped and sat still in the editor — whose own passes
+    were already drawing from `renderer.gpu_physics`. Both are no-ops unless the renderer has a GPU
+    physics world, so a scene that never asked for one pays nothing.
+
+  The capability inventory could not see either: `BoneAttachment` and the GPU physics link are
+  reached through systems and named in neither path's source, and the inventory only reports a
+  capability known to exactly **one** path — one known to neither is silence. The driver list is
+  guarded directly now, comments cut, both directions.
+
 - **The editor's viewport ignored `time_scale` and kept animating through ⏸.** The engine's draw
   path advances skeletons by `Time::dt()` — the frame delta scaled and clamped — and skips at zero;
   the studio passed its own raw frame delta. Since `current_time += dt * speed` is the whole of the

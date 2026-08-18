@@ -2698,6 +2698,28 @@ duruyor, çünkü her biri ölçümünü ve kararını taşıyor:
   kararı beslemediği için §4'ten ve CLAUDE.md'den kaldırıldı, kural kaldı. (Naif
   `grep non_exhaustive` ~40 fazla sayıyor: tipler özniteliği kendi belgelerinde anlatıyor.)
 
+**İki çizim yolu, üç kusur, hepsi aynı gün (2026-08-19).** Üçü de "iki host, tek sözleşme"
+ailesinden ve üçü de parity guard'larının arasından geçmişti. Üçüncüsü çıkınca soru genelleştirildi
+— *her iki yol kare başına tam olarak neyi çağırıyor?* — ve liste kısa olduğu için sayıldı:
+
+| sürücü | eskiden | şimdi |
+|---|---|---|
+| `ensure_global_transforms` | ikisi de | ikisi de |
+| `animation_update_system` | ikisi de | ikisi de |
+| `animation_state_machine_update_system` | **yalnız motor** | ikisi de |
+| `BoneAttachmentSystem` | **yalnız editör** | ikisi de |
+| `gpu_physics_submit/readback_system` | **yalnız motor** | ikisi de |
+
+`BoneAttachmentSystem` kemiğe bağlı her varlığı (eldeki kılıç, kafadaki şapka) animasyonun az önce
+yazdığı poza oturtuyor — yani bağlı bir nesne editörün viewport'unda animasyonu izliyor, ihraç
+edilen oyunda donuyordu. GPU fiziği ise tersi: oyunda simüle ediliyor, editörde duruyordu, üstelik
+editörün kendi geçitleri `renderer.gpu_physics`'ten çiziyorken.
+
+**Envanter üçünü de göremezdi ve sebebi yapısal:** yalnız TAM OLARAK BİR yolun bildiği bir yeteneği
+bildiriyor; hiçbirinin adını anmadığı bir yetenek sessizlik. `BoneAttachment` ve GPU-fizik bağı
+sisteme üzerinden sürülüyor, yani iki kaynakta da adı geçmiyor. Artık sürücü listesi doğrudan
+guard'lı (yorumlar kesilerek, iki yönde de).
+
 **Bir sonraki oturuma (2026-08-19, ikinci tur).** Aşağıdaki üç izin de üçü aynı gün kapandı;
 kapatırken çıkan tek yeni iz:
 

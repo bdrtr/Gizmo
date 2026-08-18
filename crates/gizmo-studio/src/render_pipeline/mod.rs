@@ -44,6 +44,14 @@ pub fn execute_render_pipeline(
     let mut bone_att = gizmo::systems::transform::BoneAttachmentSystem;
     gizmo::core::system::System::run(&mut bone_att, world, delta_time);
 
+    // GPU physics, the other way round from the bone attachment above: the game path ran these
+    // two and the editor did not, so a scene using GPU rigid bodies simulated in an exported game
+    // and sat still in the viewport — while the viewport's own passes were already drawing from
+    // `renderer.gpu_physics`. Both are no-ops unless the renderer has a GPU physics world, so a
+    // scene that never asked for one pays nothing.
+    gizmo::systems::physics::gpu_physics_submit_system(world, renderer);
+    gizmo::systems::physics::gpu_physics_readback_system(world, renderer);
+
     let (aspect, ed_shading_mode, show_colliders, post_params, game_view_visible) =
         sync_editor_settings(world, renderer);
 
