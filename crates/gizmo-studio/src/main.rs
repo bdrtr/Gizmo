@@ -32,7 +32,12 @@ fn main() {
     app = app.set_setup(setup::setup_studio_scene);
 
     app = app.set_update(|world, state, dt, input| {
-        gizmo::systems::physics::cpu_physics_step_system(world, dt);
+        // Not unconditional: while ▶ is down `PlayLoop` owns the frame and stepping here as well
+        // ran the simulation at ~2x wall-clock (and left ⏸ painting a pause overlay over falling
+        // bodies). See `systems::simulation::editor_owns_the_physics_step`.
+        if gizmo_studio::systems::simulation::editor_owns_the_physics_step(world) {
+            gizmo::systems::physics::cpu_physics_step_system(world, dt);
+        }
         gizmo::ai::system::ai_navmesh_rebuild_system(world, dt);
         gizmo::ai::system::ai_navigation_system(world, dt);
         update::update_studio(world, state, dt, input);
@@ -82,5 +87,55 @@ mod icon_tests {
         assert_eq!(rgba.get_pixel(0, 0)[3], 0, "the logo must keep its transparent background");
         gizmo::winit::window::Icon::from_rgba(rgba.into_raw(), w, h)
             .expect("winit must accept it");
+    }
+
+    /// **The editor's own physics step must stay gated.**
+    ///
+    /// It was not, and the two consequences were invisible from inside the editor: with ▶ down the
+    /// world was stepped twice per rendered frame — once here with the frame delta, once by
+    /// `PlayLoop`'s 60 Hz accumulator — so the editor ran the simulation at roughly twice the rate
+    /// an exported game does, which is exactly the drift `PlayLoop` was extracted to make
+    /// impossible. And ⏸ stopped only `PlayLoop`, so the pause overlay was painted over bodies
+    /// that were still falling.
+    ///
+    /// A source-shape guard because the offending line lives in `main`'s update closure, which no
+    /// test can drive. Comments are cut first: a negative `contains` is satisfied — wrongly — by
+    /// prose that merely names the call, and the paragraph above does exactly that.
+    #[test]
+    fn the_editors_physics_step_is_gated_on_the_play_session() {
+        fn code_only(src: &str) -> String {
+            src.lines()
+                .map(|line| {
+                    let bytes = line.as_bytes();
+                    let mut end = line.len();
+                    let mut i = 0;
+                    while i + 1 < bytes.len() {
+                        if bytes[i] == b'/'
+                            && bytes[i + 1] == b'/'
+                            && (i == 0 || bytes[i - 1] != b':')
+                        {
+                            end = i;
+                            break;
+                        }
+                        i += 1;
+                    }
+                    &line[..end]
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+
+        let code = code_only(include_str!("main.rs").split("#[cfg(test)]").next().unwrap_or(""));
+        let call = code
+            .find("cpu_physics_step_system(")
+            .expect("the editor still steps physics in edit mode; if that changed, so must this");
+        let gate = code
+            .find("editor_owns_the_physics_step(")
+            .expect("the editor's physics step must be gated on whether it owns the frame");
+        assert!(
+            gate < call,
+            "the gate must come BEFORE the step — an ungated call runs the simulation twice \
+             under ▶ and keeps it running under ⏸"
+        );
     }
 }

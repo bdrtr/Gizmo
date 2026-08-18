@@ -2592,10 +2592,29 @@ komşu köşeler):
   yapıyor ama sayıları gömülü ve yalnız editörde koşuyor — ihraç edilen oyunda dövüş kamerası yok.
   Yani seçenek "sil" ile "stüdyodaki çerçeveleme matematiğini motora taşı, komut onu sürsün"
   arasında; ikincisi bir kopyayı da ortadan kaldırır.
-- **Editör modunda fizik DEĞİŞKEN dt ile adımlanıyor.** `gizmo-studio/src/main.rs:35`,
-  `set_update` içinde `cpu_physics_step_system(world, dt)` — yani ▶'ye basılmadıkça viewport'taki
-  simülasyon sabit adım kullanmıyor, ki bu tam olarak demoların 240 Hz akümülatörlerinin kaçtığı
-  şey. Play modunda `PlayLoop`'un 60 Hz'i bunun ÜSTÜNE biniyor.
+- ~~Editör modunda fizik DEĞİŞKEN dt ile adımlanıyor~~ **— iz yanlıştı, altındaki kusur çok daha
+  büyüktü; düzeltildi.** Ölçüm önce izi çürüttü: `main.rs`'in gördüğü dt zaten kırpılmış
+  (`windowed/event.rs:575`, `dt.min(0.05)`) ve `PhysicsWorld::step` çözücüye asla değişken bir
+  adım vermiyor — deltayı kendi akümülatörüne bankalayıp tam 1/240 s alt-adımlarda harcıyor
+  (`world/step.rs:67,105`). Yani editör modu hem sabit adımlı hem de 60 ve 300 fps'te aynı
+  duvar-saati hızında koşuyordu.
+
+  **Asıl kusur o satırın KAPISIZ olmasıydı.** `main.rs`'in `set_update` kancası fiziği koşulsuz
+  adımlıyordu, sonra `update_studio` → `handle_simulation` → `PlayLoop::step` bir daha adımlıyordu:
+  ▶ basılıyken dünya kare başına İKİ kez adımlanıyordu. Ölçüldü — 60 karede (bir saniye) düşen bir
+  cisim: doğru yolda **4.909 m**, kapısız hâlde **19.530 m**, yani **3.98 kat** (2× simüle edilmiş
+  zamanın ½gt² imzası). Editörde gördüğün oyun ihraç ettiğin oyun değildi, ki `PlayLoop` tam olarak
+  bunu imkânsız kılmak için (`9cbdddf`) çıkarılmıştı. İkinci sonuç: ⏸ yalnız `PlayLoop`'u
+  durduruyor, `PhysicsWorld::is_paused`'u kimse yazmıyor — yani "⏸ DURAKLATILDI" katmanı hâlâ düşen
+  cisimlerin üstüne çiziliyordu.
+
+  Düzeltme: `systems::simulation::editor_owns_the_physics_step(world)` — yalnız oyun oturumu dışında
+  true. Editör modu değişmiyor (bir yığının oturmasını izlemek onunla oluyor). Karar birim testli,
+  ve `main.rs`'in kapıyı gerçekten sorduğu bir kaynak-biçimi testiyle sabit (kapı kaldırılınca
+  kırmızı). **Yan bulgu:** o kaynak testinin komşusu olan `the_play_frame_is_the_shared_step...`
+  NEGATİF bir `contains` guard'ı ve yorumları kesmiyordu — koruduğu satırın üstüne yazılan bir
+  açıklama onu kırmızıya düşürdü. Pozitif guard'lar için 2026-08-18'de öğrenilen dersin ayna
+  görüntüsü; artık o da yorumları kesiyor.
 - **`PhysicsTime`'ın 8 adımlık ölüm-sarmalı tavanına ulaşılamıyor.** `Time::update` dt'yi 0.05'e
   kırpıyor (`time.rs:62,87`) ve `windowed/event.rs:575` bir kez daha kırpıyor; akümülatörde kalan
   da her zaman < 1/60. Yani birikim en fazla ~0.0667 s = 4 adım, tavan ise 8·(1/60) = 0.133.

@@ -39,6 +39,26 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   it, the script takes the health off — 92, not 100 (the event arrived) and not 84 (one hit per
   move).
 
+- **The editor ran the simulation at twice the rate an exported game does, and ⏸ did not stop
+  anything falling.** `gizmo-studio`'s update hook called `cpu_physics_step_system(world, dt)`
+  unconditionally, and then `handle_simulation` ran `PlayLoop::step`, which spends its own 60 Hz
+  accumulator — so with ▶ down the world was stepped **twice per rendered frame**. Measured over
+  60 frames (one second of wall clock) a falling body dropped **4.909 m** on the correct path and
+  **19.530 m** on the ungated one: 3.98× the distance, which is 2× the simulated time through
+  ½gt². The game you watched in the editor was not the game you shipped, which is exactly the
+  drift `PlayLoop` was extracted to make impossible.
+
+  The same line was why pausing did nothing to the world: ⏸ stops `PlayLoop` and nothing else ever
+  sets `PhysicsWorld::is_paused`, so the "⏸ DURAKLATILDI" overlay was painted over bodies still
+  falling under the editor's own step. Both are one gate:
+  `systems::simulation::editor_owns_the_physics_step`, true only outside a play session. Edit mode
+  is unchanged — stepping there is how a designer watches a stack settle.
+
+  (The trace that led here claimed edit mode used a *raw variable* delta. It does not: the delta is
+  clamped at `windowed/event.rs`, and `PhysicsWorld::step` never hands a variable step to the
+  solver — it banks the delta and spends it in exact 1/240 s sub-steps. The premise was wrong and
+  the defect underneath it was bigger.)
+
 - **Lua can animate: the new `animation` API.** `ScriptCommand::PlayAnimation` and
   `SetAnimationSpeed` have had working handlers for as long as they have existed —
   `flush_commands` applies both to real `AnimationPlayer`s — and **nothing anywhere pushed

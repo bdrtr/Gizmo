@@ -271,6 +271,32 @@ pub fn handle_simulation(
     }
 }
 
+/// Should the **editor** step physics itself this frame?
+///
+/// Only outside a play session. While ▶ is down `gizmo::systems::PlayLoop` owns the frame — it is
+/// the same step an exported game takes, which is the whole point of it existing — and a second
+/// stepper on top of it is not a nuance, it is a different game:
+///
+/// - **▶ ran the simulation at roughly twice wall-clock.** `main.rs`'s update hook called
+///   `cpu_physics_step_system(world, dt)` unconditionally, and then `handle_simulation` ran
+///   `PlayLoop::step`, which spends its own 60 Hz accumulator. Two steps per rendered frame, one
+///   of them invisible: a scene that behaved one way in the editor behaved another when exported,
+///   which is exactly the drift `PlayLoop` was extracted (`9cbdddf`) to make impossible.
+/// - **⏸ did not stop anything falling.** Pausing only stops `PlayLoop`; nothing sets
+///   `PhysicsWorld::is_paused`, so the "⏸ DURAKLATILDI" overlay was painted over bodies that were
+///   still moving under the editor's own step.
+///
+/// Edit mode keeps stepping — that is how a designer sees a stack settle — and is unaffected.
+///
+/// Answers `true` when the world carries no `EditorState` at all: a caller with no editor is not
+/// in a play session, and the safe reading is "step it".
+pub fn editor_owns_the_physics_step(world: &World) -> bool {
+    world
+        .try_get_resource::<EditorState>()
+        .map(|editor| !editor.is_in_play_session())
+        .unwrap_or(true)
+}
+
 #[cfg(test)]
 mod tests {
     use gizmo::math::Vec3;
@@ -283,10 +309,40 @@ mod tests {
     /// cannot fail when the thing it mirrors changes. The loop now lives in
     /// `gizmo::systems::PlayLoop`, is tested there against the real code, and both callers drive
     /// it. This guards the arrangement rather than restating the arithmetic.
+    /// Source with its comments removed.
+    ///
+    /// The positive guards in this workspace cut comments because a comment satisfies a
+    /// `contains`; the **negative** ones need it for the mirror-image reason, and this test is a
+    /// negative one. Explaining in prose why the editor must not call `physics_step_system` used
+    /// the words, and the guard read the explanation as the offence — it went red on a doc comment
+    /// added right above the line it was protecting.
+    ///
+    /// `//` preceded by `:` is left alone so a `https://` inside a string is not mistaken for the
+    /// start of a comment.
+    fn code_only(src: &str) -> String {
+        src.lines()
+            .map(|line| {
+                let bytes = line.as_bytes();
+                let mut end = line.len();
+                let mut i = 0;
+                while i + 1 < bytes.len() {
+                    if bytes[i] == b'/' && bytes[i + 1] == b'/' && (i == 0 || bytes[i - 1] != b':') {
+                        end = i;
+                        break;
+                    }
+                    i += 1;
+                }
+                &line[..end]
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     #[test]
     fn the_play_frame_is_the_shared_step_not_a_copy_of_it() {
         let src = include_str!("simulation.rs");
-        let code = src.split("#[cfg(test)]").next().unwrap_or("");
+        let code = code_only(src.split("#[cfg(test)]").next().unwrap_or(""));
+        let code = code.as_str();
 
         // Whitespace-stripped before matching. The first version of this looked for the call
         // spelled across three lines exactly as rustfmt had left it, which made it a test of the
@@ -417,6 +473,56 @@ mod tests {
         ed.toggle_play(); // Paused → Edit (⏹)
         handle_simulation(&mut world, &mut ed, &mut st, 1.0 / 60.0, &input);
         assert!(!ed.fight_hud.active, "stopping ends the round and clears the HUD");
+    }
+
+    /// **The editor steps physics only when it owns the frame.**
+    ///
+    /// Both defects this guards were invisible from inside the editor: ▶ ran the simulation at
+    /// roughly twice wall-clock (`main.rs`'s hook stepped, then `PlayLoop` stepped again), and ⏸
+    /// stopped only `PlayLoop`, so the pause overlay sat over bodies that were still falling.
+    #[test]
+    fn the_editor_steps_physics_only_outside_a_play_session() {
+        use super::editor_owns_the_physics_step;
+
+        let mut world = World::new();
+        assert!(
+            editor_owns_the_physics_step(&world),
+            "no editor in the world at all — nothing else is stepping, so this must"
+        );
+
+        world.insert_resource(EditorState::default());
+        assert!(
+            editor_owns_the_physics_step(&world),
+            "edit mode: the editor's own step is how a designer watches a stack settle"
+        );
+
+        world
+            .get_resource_mut::<EditorState>()
+            .expect("editor")
+            .toggle_play();
+        assert!(
+            !editor_owns_the_physics_step(&world),
+            "▶: PlayLoop owns the frame, and a second stepper doubles the simulation rate"
+        );
+
+        world
+            .get_resource_mut::<EditorState>()
+            .expect("editor")
+            .toggle_pause();
+        assert!(
+            !editor_owns_the_physics_step(&world),
+            "⏸: paused means paused — this is the branch that let bodies keep falling"
+        );
+
+        {
+            let mut ed = world.get_resource_mut::<EditorState>().expect("editor");
+            ed.toggle_pause(); // Paused → Play
+            ed.toggle_play(); // ⏹ → Edit
+        }
+        assert!(
+            editor_owns_the_physics_step(&world),
+            "⏹ hands the frame back to the editor"
+        );
     }
 }
 
