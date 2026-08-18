@@ -428,18 +428,39 @@ fn every_render_capability_is_known_to_both_draw_paths() {
         .to_path_buf();
 
     // Subjects: every component type the renderer exports.
+    //
+    // **Defined here OR re-exported here.** Scanning only for `pub struct` missed a whole family:
+    // the skeletal-animation types live in `gizmo-animation` and reach a consumer through a
+    // `pub use` in `components/animation.rs`. They are exports of the renderer by every measure
+    // that matters to this test — a game writes `gizmo::renderer::components::AnimationPlayer` —
+    // and one of them, the state machine, was engine-only for as long as both paths existed with
+    // this inventory watching and unable to see it.
     let mut components = Vec::new();
     let comp_dir = workspace.join("crates/gizmo-renderer/src/components");
     let mut comp_files = Vec::new();
     collect_rs(&comp_dir, &mut comp_files);
     for file in &comp_files {
-        for line in std::fs::read_to_string(file).unwrap_or_default().lines() {
+        let src = std::fs::read_to_string(file).unwrap_or_default();
+        for line in src.lines() {
             for kw in ["pub struct ", "pub enum "] {
                 if let Some(rest) = line.strip_prefix(kw) {
                     let name: String =
                         rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
                     if !name.is_empty() {
                         components.push(name);
+                    }
+                }
+            }
+        }
+        // Cross-crate re-exports: `pub use gizmo_animation::skeletal::{A, B, C};`, possibly
+        // spread over several lines. Only types are wanted, so names are filtered to those
+        // starting with a capital.
+        if let Some((_, rest)) = src.split_once("pub use gizmo_animation::skeletal::{") {
+            if let Some((list, _)) = rest.split_once('}') {
+                for name in list.split(',') {
+                    let name = name.trim();
+                    if name.starts_with(|c: char| c.is_ascii_uppercase()) {
+                        components.push(name.to_string());
                     }
                 }
             }
@@ -639,6 +660,41 @@ fn collect_rs(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
             collect_rs(&path, out);
         } else if path.extension().is_some_and(|e| e == "rs") {
             out.push(path);
+        }
+    }
+}
+
+/// **Both draw paths must CALL both animation drivers**, not merely know their names.
+///
+/// The capability inventory above counts a name in a comment as knowing a type, deliberately: a
+/// component only ever touched through a system cannot be named any other way. That makes it the
+/// wrong guard for this, because the comment explaining the drivers would satisfy it on its own —
+/// which is exactly how the state machine stayed engine-only. So this one cuts comments and looks
+/// for the calls.
+///
+/// The defect it pins: an entity animated by an `AnimationStateMachine` played in an exported game
+/// and stood perfectly still in the editor's viewport, because the studio's pipeline ran
+/// `animation_update_system` and not its sibling.
+#[test]
+fn both_draw_paths_call_both_animation_drivers() {
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("workspace root")
+        .to_path_buf();
+
+    for (path_name, file) in [
+        ("editor", "crates/gizmo-studio/src/render_pipeline/mod.rs"),
+        ("game", "crates/gizmo/src/systems/render/mod.rs"),
+    ] {
+        let src = std::fs::read_to_string(workspace.join(file)).expect("draw path source");
+        let code: String = code_only(&src).chars().filter(|c| !c.is_whitespace()).collect();
+        for driver in ["animation_update_system(", "animation_state_machine_update_system("] {
+            assert!(
+                code.contains(driver),
+                "the {path_name} path does not call {driver} — an entity driven by it animates in \
+                 one picture and freezes in the other"
+            );
         }
     }
 }

@@ -39,6 +39,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   it, the script takes the health off — 92, not 100 (the event arrived) and not 84 (one hit per
   move).
 
+- **An entity driven by an `AnimationStateMachine` animated in an exported game and stood still in
+  the editor.** There are two skeletal drivers — `animation_update_system` for `AnimationPlayer`,
+  `animation_state_machine_update_system` for the state machine — and the studio's pipeline called
+  only the first. The engine's draw path called both.
+
+  The guard that exists to catch exactly this could not see it. `render_parity.rs`'s capability
+  inventory scans for `pub struct`/`pub enum` **defined in** `gizmo-renderer/src/components`, and
+  the entire skeletal family is *re-exported* there from `gizmo-animation` — so none of those eight
+  types was ever a subject. The scanner now collects cross-crate re-exports too, which is what
+  turned this up. A second test pins the calls themselves with comments cut, because the inventory
+  deliberately counts a name in a comment as knowing a type (a component touched only through a
+  system cannot be named any other way) — and that is precisely how a comment about the drivers
+  could satisfy it while one path never ran one.
+
 - **A headless game had no clock at all.** The windowed runtime creates and updates a
   `gizmo_core::time::Time` every frame and feeds the fixed loop `Time::dt()` — the raw delta scaled
   by `time_scale` and clamped to `max_dt`. The headless runtime never touched `Time`: it handed the

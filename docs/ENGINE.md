@@ -2702,11 +2702,26 @@ duruyor, çünkü her biri ölçümünü ve kararını taşıyor:
   modülün KENDİ yorumunun şikâyet ettiği sınıfın aynısı ("bir plugin bir kez yazılıp iki
   çalışma zamanında aynı davranamıyordu") ve orada sabit adım için çözülmüş, `Time` için
   çözülmemiş. Bu oturumda düzeltilen stüdyo çift-adımı da aynı aileden: iki host, bir sözleşme.
-- **`AnimationStateMachine` ikinci bir animasyon sürücüsü.** `AnimationPlayer`'ın belgeleri ondan
-  söz ediyor ve iki sürücünün `duration == 0` durumunda AYRILDIĞINI yazıyor (biri playhead'i
-  büyütüyor, öteki sıfıra kıstırıp her karede "bitti" diyor). Yeni `animation` Lua API'si yalnız
-  `AnimationPlayer`'ı sürüyor. Sorulacak: state machine'in üreticisi/tüketicisi var mı, yoksa bu
-  da iki protokolden biri mi?
+- ~~`AnimationStateMachine` ikinci bir animasyon sürücüsü~~ **— iki protokol değil, bir ÇİZİM
+  YOLU ASİMETRİSİ çıktı; düzeltildi.** İkisi de gerçek ve ikisinin de sürücüsü var
+  (`animation_update_system` ve `animation_state_machine_update_system`, ikisi de
+  `gizmo-renderer`'da). Kusur hangisinin KİM tarafından çağrıldığındaydı: motorun çizim yolu ikisini
+  de çağırıyordu, **stüdyonunki yalnız birincisini**. Yani bir state machine ile animasyonlanan
+  varlık ihraç edilen oyunda oynuyor, editörün viewport'unda kıpırdamıyordu — editörün en eski
+  başarısızlık biçimi, bir yolun ötekinin bilmediği bir yeteneği bilmesi.
+
+  **Bunu yakalaması gereken guard göremiyordu, ve sebebi ölçüldü:** `render_parity.rs`'in yetenek
+  envanteri özneleri `gizmo-renderer/src/components/` altında **TANIMLANAN** `pub struct`/`pub enum`
+  satırlarından tarıyor. Bütün iskelet-animasyon ailesi orada tanımlı değil, `gizmo-animation`'dan
+  `pub use` ile **yeniden ihraç** ediliyor — yani sekiz tipin hiçbiri hiç özne olmamış. Tarayıcı
+  artık çapraz-crate yeniden ihraçları da topluyor. (Testin doc'u zaten "engine-only" olduğunu
+  yazıyordu; yani bilinen ama guard'a hiç girmemiş bir istisnaydı.)
+
+  Envanter "yorumdaki bir ad da bilmek sayılır" diyor — bilerek, çünkü yalnız bir sistem üzerinden
+  dokunulan bir tip başka türlü adlandırılamaz. Bu da onu ÇAĞRI için yanlış guard yapıyor (açıklama
+  yorumu tek başına tatmin ederdi — state machine'in öyle kalmasının yolu da buydu). O yüzden ikinci
+  bir test eklendi: yorumları keserek iki yolun da İKİ sürücüyü çağırdığını sabitliyor. Negatif
+  kontrol: stüdyodan satır çıkarılınca kırmızı.
 - **Düzyazıdaki öteki sayılar.** §4'ün ikisi silindi, ama tarama yedi bayat sayı daha buldu; çoğu
   geçmiş bir ölçümün kaydı (o gün doğruydu, bugünü anlatmıyor) — mesela ENGINE.md:1493'ün "12
   golden render testi" bugün 23. Kural şu: bugünü ANLATAN bir sayı ya hesaplanmalı ya silinmeli;

@@ -25,8 +25,17 @@ pub fn execute_render_pipeline(
     gizmo::systems::render::ensure_global_transforms(world);
 
     // --- SKELETAL ANIMATION UPDATE (Done before any ECS borrows!) ---
+    //
+    // BOTH drivers, because there are two: `AnimationPlayer` (a clip and a playhead) and
+    // `AnimationStateMachine` (states and transitions). The editor ran only the first, so an
+    // entity animated by a state machine played in an exported game and stood perfectly still in
+    // the viewport — the editor's oldest failure mode, one draw path knowing a capability the
+    // other does not. The parity inventory could not see it either: it scans components *defined*
+    // in `gizmo-renderer/src/components`, and the whole skeletal family is re-exported there from
+    // `gizmo-animation`. Both halves are fixed together.
     let delta_time = state.actual_dt;
     gizmo::renderer::animation_update_system(world, delta_time, &renderer.queue);
+    gizmo::renderer::animation_state_machine_update_system(world, delta_time, &renderer.queue);
     
     let mut bone_att = gizmo::systems::transform::BoneAttachmentSystem;
     gizmo::core::system::System::run(&mut bone_att, world, delta_time);

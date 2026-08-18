@@ -134,7 +134,12 @@ pub fn default_render_pass(
     // holds the world, the queue, and a position before the draw path reads the result.
     //
     // Player first, state machine second: an entity carrying both is a caller error, and if one
-    // has to win it should be the higher-level driver.
+    // has to win it should be the higher-level driver. The two capabilities are
+    // `AnimationPlayer` (a clip and a playhead) and `AnimationStateMachine` (states and
+    // transitions) — named here rather than left implicit in the system names, because the
+    // render-parity inventory reads these paths for the capabilities they know, and a type only
+    // ever touched through a system is invisible otherwise. The studio's pipeline drives both
+    // as well; it drove only the player until 2026-08-19.
     let animation_dt = world
         .get_resource::<gizmo_core::time::Time>()
         .map(|t| t.dt())
