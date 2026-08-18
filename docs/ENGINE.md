@@ -2513,32 +2513,38 @@ altsisteminin geri kalanı, ve hiçbiri saatin kapsamında değil:
    BİRİNİ sürüyordu. Yeni bir çapraz test (`gizmo-scripting`) yedi senaryoyu **ikisine birden**
    soruyor ve aynı cevabı istiyor; eski Rust semantiği geri konduğunda "üçünü birlikte tutmak"
    senaryosunda Rust true, Lua false diyerek kırılıyor.
-6. **Kalan tek madde, ve artık bir tasarım sorusu: hasar hiç uygulanmıyor.** Zincirin son halkası
-   eksik — bir hareket artık aktif penceresine ulaşıyor (saat yazıldı), script bunu okuyabiliyor,
-   ama vuruş hiçbir yerde çözülmüyor. `Hitbox::active`'i yazan tek şey denetçinin onay kutusu,
-   okuyan tek şey hata-ayıklama gizmo'su (`gizmo/src/systems/physics.rs:234`, aktifse kırmızı
-   çiziyor). `Hurtbox` yalnız çiziliyor. `hit_detection_system` de saatle birlikte `592bd6f`'de
-   gitmişti. Bileşenlerin belgeleri bunu zaten dürüstçe söylüyor (*"Nothing subtracts it, because
-   no engine system resolves these hits"*), yani bu bir yalan değil, bir boşluk.
+6. ~~Hasar hiç uygulanmıyor~~ **— vuruş algılama yazıldı, KARAR: motor bildirir, oyun harcar.**
+   Dört tasarım sorusu kullanıcıya soruldu ve *"olay yayınla, hasarı oyun uygulasın"* seçildi.
+   Yazılan: `hit_detection_system` (gizmo-physics-dynamics), her sabit adımda saatten SONRA
+   koşuyor, ve bağladığı her çakışmayı bir `HitEvent` olarak bildiriyor. Motor `health`'e
+   dokunmuyor; ölüm, zırh, savuşturma, takım ateşi oyunun kuralları olarak kalıyor.
 
-   **Neden bu oturumda yazılmadı ve kod yazmadan önce yanıtlanması gereken dört soru** (saat için
-   ölçüm karar veriyordu, burada vermiyor — bunlar politika):
-   - **Hangi hitbox hangi hareketin?** Silinen sürüm dövüşçünün ALT AĞACINDAKİ her hitbox'ı aktif
-     pencereden sürüyordu; yumruk hitbox'ı da tekme hitbox'ı da olan bir dövüşçüde bu yanlış.
-     `CombatMove`'un hitbox'ını adlandırması gerekiyor (isim? entity? maske?). Saat commit'inde
-     `Hitbox::active`'i sürmemenin sebebi tam olarak buydu.
-   - **Hareket başına tek vuruş.** 3 karelik aktif pencere, kayıt tutulmazsa üç kez hasar verir.
-     Nerede tutulacak — `FighterController`'da bir "bu hareket bu hedefe değdi" kümesi mi?
-   - **Etki doğrudan mı, olay mı?** Motor `health`'i kendisi mi düşürsün (o zaman ölüm, savuşturma,
-     zırh, takım dostu ateşi de motorun işi olmaya başlar), yoksa bir `HitEvent` mi yayınlasın da
-     hasarı oyun/script mi uygulasın? İkincisi bu deponun `gizmo-core::event` desenine uyuyor ve
-     `FrameData::{damage, hitstun, hitstop}` + `Hurtbox::damage_multiplier`'ı olayın yükü yapıyor.
-   - **Kim kimi vurabilir?** `player_id` bir kimlik etiketi, hiçbir şey benzersizliğini
-     zorlamıyor; takım/katman filtresi yok. En azından "kendi hurtbox'ına vuramaz" gerekiyor.
+   Dört sorunun yanıtları, hepsi testli:
+   - **Hangi hitbox hangi hareketin:** `Hitbox::move_name: Option<String>` eklendi. `None` (ve
+     varsayılan) "her hareket" demek — tek hitbox'lı bir dövüşçü için doğru olan. İki kutu olduğu
+     anda etiket gerekiyor, ve `592bd6f`'de silinen sürümün kusuru tam buydu: dövüşçünün ALT
+     AĞACINDAKİ her kutuyu sürüyordu.
+   - **Hareket başına tek vuruş:** `FighterController::already_hit`, `start_move` ve hareketin
+     bitişi temizliyor. Olmadığında üç karelik pencere aynı vuruşu üç kez bildiriyor (negatif
+     kontrolde ölçüldü: `[(2,1)]` yerine `[(2,1),(3,1)]`).
+   - **Kim kimi vurabilir:** sahiplik `Parent` zinciri yukarı en yakın `FighterController`;
+     saldıranın kendi alt ağacındaki hurtbox'lar hedef değil.
+   - **Etki:** olay. `HitEvent { attacker, attacker_hitbox, victim, victim_hurtbox, damage,
+     hitstun, hitstop, move_name }`; `damage` = hareketin `FrameData::damage`'ı × bölgenin
+     `Hurtbox::damage_multiplier`'ı.
 
-   Ölçülen bağlam: `Hitbox`/`Hurtbox` kutuları yerel çerçevede (`position + rotation * offset`),
-   yani çarpışma testi `gizmo-physics-core`'un OBB araçlarıyla yazılabilir; ayrı bir broadphase
-   gerekmez, dövüşçü sayısı küçük.
+   Geometri `NarrowPhase::box_box_overlap` — `box_box`'ın on beş eksenli SAT süpürmesinin boolean
+   kardeşi, aynı eksen kurulumunu ve `sat_penetration`'ı PAYLAŞIYOR (iki kopya sürüklenirdi), ilk
+   ayıran eksende duruyor ve manifold kurmuyor. 120 yapılandırmada `box_box` ile aynı cevabı
+   verdiği test edildi. Kutuların dünya pozu yerel `Transform` zinciri kompoze edilerek bulunuyor,
+   yani propagate geçişine bağlı değil; ölçek yok sayılıyor (motorun kendi hata-ayıklama gizmo'su
+   da öyle yapıyor — çizilen kutu ile sınanan kutu aynı olsun diye).
+
+   **Kalan tek şey tüketici tarafı:** `Events<HitEvent>` kaynağını hiçbir varsayılan yol eklemiyor
+   ve `PlayLoop` hiçbir olay kuyruğunu `update()` etmiyor — bu `CollisionEvent`/`TriggerEvent`
+   için de zaten böyleydi, yani editörün ▶'sinde ve ihraç edilen oyunda olaylar okunamıyor. Lua'nın
+   da olayları görecek bir yüzeyi yok. Bir sonraki adım bu: kuyruğu PlayLoop'un pompalaması +
+   `fighter.hits()` aynası + hasarı gerçekten uygulayan uçtan uca bir `.lua` testi.
 7. ~~Stüdyo tarafında dört kusur~~ **— düzeltildi (aynı gün, ayrı commit).** Saati yazdıktan
    sonra stüdyoda görülecek yüzeyi yoktu: `scene_ops` `FighterController`'ı ekleyebiliyor ama
    **silemiyordu** (denetçide dört sil düğmesi var, üçünün kolu vardı), iki dövüşçü de varsayılan

@@ -205,6 +205,16 @@ pub struct FighterController {
     /// `#[serde(skip)]`, hence `0` after a load.
     #[serde(skip)]
     pub hitstop_frames: u32,
+    /// Entities this fighter's **current move** has already connected with.
+    ///
+    /// A move connects with a given victim once: an active window three frames long would
+    /// otherwise report three hits, one per frame, since the boxes go on overlapping. Cleared by
+    /// [`FighterController::start_move`] and by [`FighterController::tick`] when the move ends,
+    /// so the record never outlives the move that filled it.
+    ///
+    /// `#[serde(skip)]`, like the other in-flight state: a loaded fighter has hit nobody yet.
+    #[serde(skip)]
+    pub already_hit: Vec<u32>,
     /// Frames of stun still pending; `0` when the fighter is free to act.
     ///
     /// Differs from `hitstop_frames` in what entering it costs, not in how it is spent:
@@ -235,6 +245,7 @@ impl Default for FighterController {
             active_move: None,
             current_move_frame: 0,
             input_buffer: FighterInputBuffer::new(60), // 1 saniyelik buffer (60fps)
+            already_hit: Vec::new(),
             hitstop_frames: 0,
             hitstun_frames: 0,
             walk_speed: 3.0,
@@ -257,6 +268,17 @@ impl FighterController {
         }
     }
     
+    /// Starts `combat_move` from frame 0, forgetting whoever the previous move had already hit.
+    ///
+    /// The three steps belong together and were being written out by hand at every call site —
+    /// assign the move, reset the frame index, clear the hit record — and the third was the one a
+    /// caller would forget, which would let a new move connect with nobody it had hit before.
+    pub fn start_move(&mut self, combat_move: CombatMove) {
+        self.active_move = Some(combat_move);
+        self.current_move_frame = 0;
+        self.already_hit.clear();
+    }
+
     /// Apply hitstop (freeze) when the character takes damage or blocks
     pub fn apply_hitstop(&mut self, frames: u32) {
         self.hitstop_frames = frames;
@@ -267,6 +289,7 @@ impl FighterController {
         self.hitstun_frames = frames;
         self.active_move = None;
         self.current_move_frame = 0;
+        self.already_hit.clear();
         self.is_blocking = false;
     }
 
@@ -329,6 +352,7 @@ impl FighterController {
         if total == 0 || next >= total {
             self.active_move = None;
             self.current_move_frame = 0;
+            self.already_hit.clear();
         } else {
             self.current_move_frame = next;
         }

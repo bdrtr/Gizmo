@@ -315,6 +315,241 @@ pub fn fighter_frame_system(world: &World, dt: f32) {
     }
 }
 
+/// Resolves fighting-game hits: drives each fighter's hitboxes from its active window, tests them
+/// against everyone else's hurtboxes, and reports every connection as a
+/// [`HitEvent`](gizmo_physics_core::components::HitEvent).
+///
+/// **The engine reports; the game decides what a hit costs.** Nothing here subtracts health,
+/// applies hitstun or ends a round — those are the rules of a particular fighting game, and they
+/// belong to the game reading these events. What is not game-specific, and what was missing, is
+/// the middle: turning "this move is in its active frames" into "these two volumes overlap, once".
+///
+/// Events go to `gizmo_core::event::Events<HitEvent>` if that resource exists; with no queue in
+/// the world the system still drives `Hitbox::active` (which is what the debug gizmo draws) and
+/// still records the hit, so a scene without an event queue does not silently re-hit forever.
+///
+/// # What it decides, and how
+///
+/// - **Which hitbox is live.** A hitbox owned by a fighter — on the fighter entity or anywhere
+///   under it — is active exactly while that fighter is inside its move's active window *and* the
+///   box's [`move_name`](gizmo_physics_core::components::Hitbox::move_name) matches (or is
+///   `None`, meaning every move). A hitbox with no fighter above it is left alone: a trap or a
+///   projectile drives its own flag.
+/// - **Who owns what.** Ownership is the nearest `FighterController` up the `Parent` chain, so a
+///   fist entity parented to a fighter attacks *for* that fighter and a torso hurtbox on a limb
+///   defends *for* it. A hurtbox under the attacker itself is skipped — nobody punches themselves.
+/// - **Once per move.** The attacker records each victim in `already_hit`, which
+///   [`FighterController::start_move`](gizmo_physics_core::components::fighter::FighterController::start_move)
+///   and the end of a move clear. Without it a three-frame active window would report the same hit
+///   three times, one per frame, since the boxes go on overlapping.
+/// - **Where the boxes are.** Poses are composed from the local `Transform` chain up to the root,
+///   so this needs no transform-propagation pass to have run. Scale is ignored — see
+///   [`hit_volumes_overlap`](gizmo_physics_core::components::hit_volumes_overlap), which the
+///   engine's own debug gizmo agrees with.
+///
+/// Fixed schedule, after `fighter_frame_system`: the window it reads has to be this frame's.
+#[tracing::instrument(skip_all, name = "hit_detection_system")]
+pub fn hit_detection_system(world: &World, dt: f32) {
+    use gizmo_core::component::Parent;
+    use gizmo_physics_core::components::{hit_volumes_overlap, HitEvent, Hitbox, Hurtbox};
+    use std::collections::HashMap;
+
+    if dt <= 0.0 {
+        return;
+    }
+
+    /// What a fighter's move is worth on the frame it connects.
+    struct Attack {
+        move_name: String,
+        damage: f32,
+        hitstun: u32,
+        hitstop: u32,
+    }
+
+    // ── 1. Every fighter, and which of them are swinging this frame ──────────────────────────
+    let mut is_fighter: HashMap<u32, ()> = HashMap::new();
+    let mut attacks: HashMap<u32, Attack> = HashMap::new();
+    let mut already_hit: HashMap<u32, Vec<u32>> = HashMap::new();
+    {
+        let controllers = world.borrow::<FighterController>();
+        for (id, fighter) in controllers.iter() {
+            is_fighter.insert(id, ());
+            already_hit.insert(id, fighter.already_hit.clone());
+            if let Some(active) = &fighter.active_move {
+                if fighter.is_in_active_window() {
+                    attacks.insert(
+                        id,
+                        Attack {
+                            move_name: active.name.clone(),
+                            damage: active.frame_data.damage,
+                            hitstun: active.frame_data.hitstun,
+                            hitstop: active.frame_data.hitstop,
+                        },
+                    );
+                }
+            }
+        }
+    }
+    if is_fighter.is_empty() {
+        return;
+    }
+
+    let transforms = world.borrow::<Transform>();
+    let parents = world.borrow::<Parent>();
+
+    // Composed local→world pose, walking the parent chain. Depth-guarded: a `Children`/`Parent`
+    // cycle is refused elsewhere, but a system that walks links must not be the one that hangs.
+    let world_pose = |start: u32| -> Option<(gizmo_math::Vec3, gizmo_math::Quat)> {
+        let mut chain = Vec::new();
+        let mut cur = start;
+        for _ in 0..32 {
+            chain.push(cur);
+            match parents.get(cur) {
+                Some(p) => cur = p.0,
+                None => break,
+            }
+        }
+        let mut pos = gizmo_math::Vec3::ZERO;
+        let mut rot = gizmo_math::Quat::IDENTITY;
+        for &e in chain.iter().rev() {
+            let t = transforms.get(e)?;
+            pos += rot.mul_vec3(t.position);
+            rot *= t.rotation;
+        }
+        Some((pos, rot))
+    };
+
+    // The nearest fighter at or above `start`, if any.
+    let owning_fighter = |start: u32| -> Option<u32> {
+        let mut cur = start;
+        for _ in 0..32 {
+            if is_fighter.contains_key(&cur) {
+                return Some(cur);
+            }
+            cur = parents.get(cur)?.0;
+        }
+        None
+    };
+
+    // ── 2. Drive `active`, and collect the boxes that are live ───────────────────────────────
+    struct LiveBox {
+        entity: u32,
+        owner: u32,
+        hitbox: Hitbox,
+        pos: gizmo_math::Vec3,
+        rot: gizmo_math::Quat,
+    }
+    let mut live: Vec<LiveBox> = Vec::new();
+    {
+        // SAFETY: exclusive `fn(&World, f32)` system — the scheduler runs it alone — and `Hitbox`
+        // is a different component type from the `Transform`/`Parent` queries borrowed above.
+        let mut hitboxes = unsafe { world.borrow_mut_unchecked::<Hitbox>() };
+        for (entity, mut hitbox) in hitboxes.iter_mut() {
+            let Some(owner) = owning_fighter(entity) else {
+                continue; // not a fighter's box — its `active` is somebody else's business
+            };
+            let swinging = attacks.get(&owner).is_some_and(|attack| {
+                hitbox
+                    .move_name
+                    .as_ref()
+                    .is_none_or(|name| *name == attack.move_name)
+            });
+            hitbox.active = swinging;
+            if swinging {
+                if let Some((pos, rot)) = world_pose(entity) {
+                    live.push(LiveBox {
+                        entity,
+                        owner,
+                        hitbox: hitbox.clone(),
+                        pos,
+                        rot,
+                    });
+                }
+            }
+        }
+    }
+    if live.is_empty() {
+        return;
+    }
+
+    // ── 3. Test them against every hurtbox that is not the attacker's own ────────────────────
+    let mut hits: Vec<HitEvent> = Vec::new();
+    {
+        let hurtboxes = world.borrow::<Hurtbox>();
+        for (victim_entity, hurtbox) in hurtboxes.iter() {
+            let victim_owner = owning_fighter(victim_entity);
+            let Some((u_pos, u_rot)) = world_pose(victim_entity) else {
+                continue;
+            };
+            for attacker_box in &live {
+                if victim_owner == Some(attacker_box.owner) || victim_entity == attacker_box.owner {
+                    continue; // your own hurtboxes are not targets
+                }
+                let victim = victim_owner.unwrap_or(victim_entity);
+                if already_hit
+                    .get(&attacker_box.owner)
+                    .is_some_and(|hit| hit.contains(&victim))
+                {
+                    continue; // this move already connected with them
+                }
+                if !hit_volumes_overlap(
+                    &attacker_box.hitbox,
+                    attacker_box.pos,
+                    attacker_box.rot,
+                    hurtbox,
+                    u_pos,
+                    u_rot,
+                ) {
+                    continue;
+                }
+
+                let attack = &attacks[&attacker_box.owner];
+                already_hit
+                    .entry(attacker_box.owner)
+                    .or_default()
+                    .push(victim);
+                hits.push(HitEvent {
+                    attacker: attacker_box.owner,
+                    attacker_hitbox: attacker_box.entity,
+                    victim,
+                    victim_hurtbox: victim_entity,
+                    damage: attack.damage * hurtbox.damage_multiplier,
+                    hitstun: attack.hitstun,
+                    hitstop: attack.hitstop,
+                    move_name: attack.move_name.clone(),
+                });
+            }
+        }
+    }
+    if hits.is_empty() {
+        return;
+    }
+
+    // ── 4. Write the record back, then report ────────────────────────────────────────────────
+    drop(transforms);
+    drop(parents);
+    {
+        // SAFETY: as above — the `Transform`/`Parent` queries are dropped, and `FighterController`
+        // is not borrowed anywhere else in this exclusive system.
+        let mut controllers = unsafe { world.borrow_mut_unchecked::<FighterController>() };
+        for hit in &hits {
+            if let Some(mut fighter) = controllers.get_mut(hit.attacker) {
+                if !fighter.already_hit.contains(&hit.victim) {
+                    fighter.already_hit.push(hit.victim);
+                }
+            }
+        }
+    }
+
+    let hit_count = hits.len();
+    if let Ok(mut queue) = world.try_get_resource_mut::<gizmo_core::event::Events<HitEvent>>() {
+        for hit in hits {
+            queue.send(hit);
+        }
+    }
+    tracing::debug!(hit_count, "[Fight] hits resolved");
+}
+
 #[cfg(test)]
 mod tests {
     use super::{character_controller_system, gather_colliders, vehicle_controller_system};
@@ -919,5 +1154,212 @@ mod tests {
              {candidates} vs {}",
             n_colliders * ray_count
         );
+    }
+
+    // ── Hit detection ───────────────────────────────────────────────────────────────────────
+
+    use super::{fighter_frame_system, hit_detection_system};
+    use gizmo_core::component::Parent;
+    use gizmo_core::event::Events;
+    use gizmo_physics_core::components::fighter::{CombatMove, FighterController, FrameData};
+    use gizmo_physics_core::components::{HitEvent, Hitbox, Hurtbox};
+
+    const DT: f32 = 1.0 / 60.0;
+
+    /// A 2/2/1 move: five frames long, hitting on the third and fourth.
+    fn jab() -> CombatMove {
+        let mut fd = FrameData::default();
+        fd.startup = 2;
+        fd.active = 2;
+        fd.recovery = 1;
+        fd.damage = 8.0;
+        fd.hitstun = 20;
+        fd.hitstop = 5;
+        let mut m = CombatMove::default();
+        m.name = "Jab".to_string();
+        m.frame_data = fd;
+        m
+    }
+
+    /// Two fighters a metre apart, the attacker's fist parented to it and reaching the defender's
+    /// torso. Returns `(world, attacker, fist, defender)`.
+    fn versus() -> (World, u32, u32, u32) {
+        let mut world = World::new();
+        world.insert_resource(Events::<HitEvent>::new());
+
+        let attacker = world.spawn();
+        world.add_component(attacker, Transform::new(Vec3::ZERO));
+        world.add_component(attacker, FighterController::new(1));
+
+        // The fist: a child, so the pose has to be composed through the parent link.
+        let fist = world.spawn();
+        world.add_component(fist, Transform::new(Vec3::new(0.0, 0.0, -0.8)));
+        world.add_component(fist, Parent(attacker.id()));
+        world.add_component(fist, Hitbox::new(Vec3::splat(0.2), 99.0));
+
+        let defender = world.spawn();
+        world.add_component(defender, Transform::new(Vec3::new(0.0, 0.0, -1.0)));
+        world.add_component(defender, FighterController::new(2));
+        world.add_component(defender, Hurtbox::new(Vec3::new(0.3, 0.5, 0.3)));
+
+        (world, attacker.id(), fist.id(), defender.id())
+    }
+
+    /// Runs one fixed frame of the fight: clock, then hit detection, then the event swap an app
+    /// does at the end of a frame. Returns what was reported this frame.
+    fn fight_frame(world: &mut World) -> Vec<HitEvent> {
+        fighter_frame_system(world, DT);
+        hit_detection_system(world, DT);
+        let mut queue = world
+            .get_resource_mut::<Events<HitEvent>>()
+            .expect("the queue is a resource");
+        queue.update();
+        queue.iter().cloned().collect()
+    }
+
+    fn start(world: &mut World, fighter: u32, m: CombatMove) {
+        let mut controllers = world.borrow_mut::<FighterController>();
+        controllers
+            .get_mut(fighter)
+            .expect("fighter")
+            .start_move(m);
+    }
+
+    /// **A move connects once, on the frames it is meant to.**
+    ///
+    /// The whole chain in one test: the clock advances the move, the active window drives the
+    /// fist's `Hitbox::active`, the boxes overlap, and one `HitEvent` comes out — one, not one per
+    /// active frame, and not on the startup or recovery frames.
+    #[test]
+    fn a_move_reports_one_hit_on_its_active_frames() {
+        let (mut world, attacker, _fist, _defender) = versus();
+        start(&mut world, attacker, jab());
+
+        let mut reported: Vec<(u32, usize)> = Vec::new();
+        for frame in 1..=6u32 {
+            let hits = fight_frame(&mut world);
+            if !hits.is_empty() {
+                reported.push((frame, hits.len()));
+            }
+        }
+
+        assert_eq!(
+            reported,
+            vec![(2, 1)],
+            "a 2/2/1 jab must connect exactly once, on the first frame of its active window — \
+             two entries here is a hit reported once per active frame"
+        );
+
+        let hit = {
+            // Re-run to inspect the payload: same setup, stopped on the frame that connects.
+            let (mut world, attacker, fist, defender) = versus();
+            start(&mut world, attacker, jab());
+            fight_frame(&mut world);
+            let hits = fight_frame(&mut world);
+            assert_eq!(hits.len(), 1);
+            let hit = hits[0].clone();
+            assert_eq!((hit.attacker, hit.attacker_hitbox), (attacker, fist));
+            assert_eq!((hit.victim, hit.victim_hurtbox), (defender, defender));
+            hit
+        };
+        assert_eq!(hit.move_name, "Jab");
+        assert_eq!(
+            hit.damage, 8.0,
+            "the MOVE's damage scaled by the region's multiplier — not the hitbox's own 99, which \
+             is for a hit volume with no fighter behind it"
+        );
+        assert_eq!((hit.hitstun, hit.hitstop), (20, 5));
+    }
+
+    /// A weak point multiplies the move's damage; the engine reports the product and applies
+    /// nothing.
+    #[test]
+    fn the_hurtbox_multiplier_scales_the_reported_damage() {
+        let (mut world, attacker, _fist, defender) = versus();
+        {
+            let mut hurtboxes = world.borrow_mut::<Hurtbox>();
+            hurtboxes.get_mut(defender).expect("hurtbox").damage_multiplier = 1.5;
+        }
+        start(&mut world, attacker, jab());
+
+        fight_frame(&mut world);
+        let hits = fight_frame(&mut world);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].damage, 12.0, "8 damage on a 1.5× weak point");
+
+        // And the health is untouched: reporting is not applying.
+        let health = world
+            .borrow::<FighterController>()
+            .get(defender)
+            .expect("defender")
+            .health;
+        assert_eq!(health, 100.0, "the engine reports hits, the game spends them");
+    }
+
+    /// **A hitbox tagged with a move's name goes live only for that move**, which is what keeps a
+    /// fighter's jab box out of its kick. An untagged box belongs to every move.
+    #[test]
+    fn a_tagged_hitbox_only_goes_live_for_its_own_move() {
+        let (mut world, attacker, fist, _defender) = versus();
+        {
+            let mut hitboxes = world.borrow_mut::<Hitbox>();
+            hitboxes.get_mut(fist).expect("fist").move_name = Some("Roundhouse".to_string());
+        }
+        start(&mut world, attacker, jab());
+
+        let mut hits = 0;
+        for _ in 0..6 {
+            hits += fight_frame(&mut world).len();
+        }
+        assert_eq!(hits, 0, "the jab must not swing the kick's hitbox");
+
+        // The same box, with the move it belongs to, does connect.
+        let mut roundhouse = jab();
+        roundhouse.name = "Roundhouse".to_string();
+        start(&mut world, attacker, roundhouse);
+        let mut hits = 0;
+        for _ in 0..6 {
+            hits += fight_frame(&mut world).len();
+        }
+        assert_eq!(hits, 1, "its own move swings it");
+    }
+
+    /// Nobody punches themselves: a hurtbox under the attacker is not a target.
+    #[test]
+    fn a_fighter_cannot_hit_its_own_hurtbox() {
+        let (mut world, attacker, _fist, defender) = versus();
+        // Give the attacker a hurtbox of its own, right where its fist is.
+        {
+            let e = world.get_entity(attacker).expect("attacker");
+            world.add_component(e, Hurtbox::new(Vec3::splat(0.6)));
+        }
+        // And move the defender out of reach so only the self-hit could report.
+        {
+            let mut transforms = world.borrow_mut::<Transform>();
+            transforms.get_mut(defender).expect("defender").position = Vec3::new(0.0, 0.0, -50.0);
+        }
+        start(&mut world, attacker, jab());
+
+        let mut hits = 0;
+        for _ in 0..6 {
+            hits += fight_frame(&mut world).len();
+        }
+        assert_eq!(hits, 0, "the attacker's own hurtbox is not a target");
+    }
+
+    /// A second move connects again — the once-per-move record is cleared when the move ends, not
+    /// kept for the life of the fighter.
+    #[test]
+    fn the_next_move_can_hit_the_same_victim_again() {
+        let (mut world, attacker, _fist, _defender) = versus();
+
+        let mut total = 0;
+        for _ in 0..3 {
+            start(&mut world, attacker, jab());
+            for _ in 0..6 {
+                total += fight_frame(&mut world).len();
+            }
+        }
+        assert_eq!(total, 3, "three jabs, three hits");
     }
 }

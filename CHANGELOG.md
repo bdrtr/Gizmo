@@ -18,6 +18,38 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Hits are resolved and reported: `gizmo_physics_dynamics::hit_detection_system` and
+  `HitEvent`.** The fight subsystem's last missing link. A move now reaches its active window (the
+  clock, above), and this turns that into "these two volumes overlap, once": it drives every
+  fighter-owned `Hitbox::active` from the active window, tests the live boxes against everyone
+  else's `Hurtbox`es, and reports each connection as a `HitEvent { attacker, attacker_hitbox,
+  victim, victim_hurtbox, damage, hitstun, hitstop, move_name }` on `Events<HitEvent>`.
+
+  **The engine reports; the game decides what a hit costs.** Nothing here subtracts health, applies
+  hitstun or ends a round — death, armour, counter-hits and friendly fire are the rules of a
+  particular fighting game. `damage` is the move's `FrameData::damage` scaled by the region's
+  `Hurtbox::damage_multiplier`, so a head hurtbox with a 1.5× multiplier reports 12 for an 8-damage
+  jab and the game spends it.
+
+  Three decisions worth knowing, each with a test and a measured negative control:
+
+  - **`Hitbox::move_name`** (new, `Option<String>`, `#[serde(default)]`) says which move a box
+    belongs to; `None` means every move. The fight system deleted in `592bd6f` drove *every* box in
+    a fighter's subtree from the active window, which is right for a fighter with one hitbox and
+    wrong the moment a jab's fist and a kick's foot are both there.
+  - **A move connects with a given victim once.** `FighterController::already_hit` records them,
+    and the new `FighterController::start_move` (and the end of a move) clears it. Without it a
+    three-frame active window reports the same hit three times, one per frame.
+  - **Ownership is the nearest `FighterController` up the `Parent` chain**, so a fist parented to a
+    fighter attacks for it, and a fighter's own hurtboxes are never targets.
+
+  Geometry is the new `NarrowPhase::box_box_overlap` — the boolean sibling of `box_box`, sharing
+  its axis construction and penetration test rather than copying them, stopping at the first
+  separating axis and building no manifold. Verified to agree with `box_box` over 120
+  configurations. Box poses are composed from the local `Transform` chain, so hit detection needs
+  no transform-propagation pass; scale is ignored, which is what the engine's own debug gizmo
+  already does.
+
 - **A Lua script can read the fight, not just write to it: `fighter.state(id)`.** The read half of
   the fighting API used to be one boolean wide (`is_locked`), so a script could ask the engine to
   throw a jab and then had no way to learn what frame it was on, whether it was hitting, or when it

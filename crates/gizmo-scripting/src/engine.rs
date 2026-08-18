@@ -919,8 +919,9 @@ ScriptCommand::PlayAnimation { id, name, blend, loop_anim } => {
                             gizmo_physics_core::components::fighter::CombatMove::default();
                         combat_move.name = name;
                         combat_move.frame_data = frame_data;
-                        fighter.active_move = Some(combat_move);
-                        fighter.current_move_frame = 0;
+                        // `start_move`, not three assignments: it also forgets who the previous
+                        // move had already hit, which is what lets the new one connect at all.
+                        fighter.start_move(combat_move);
                     } else {
                         trace!(entity = id, "[Scripting] SetFighterMove: hedefte FighterController yok, komut atlandı");
                     }

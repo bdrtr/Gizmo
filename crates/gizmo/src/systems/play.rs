@@ -520,7 +520,7 @@ impl PlayLoop {
 
     /// The physics half: spend the debt in fixed steps.
     ///
-    /// `fighter_frame_system` rides on the same steps, and this is the only place it can: a
+    /// The fight systems ride on the same steps, and this is the only place they can: a
     /// fighting move's timing is measured in **frames**, so the clock has to be spent by the same
     /// accumulator that spends the physics steps — not once per rendered frame, which would tie a
     /// jab's startup to the frame rate. Everything the fight subsystem promises (a hitstop that
@@ -530,7 +530,11 @@ impl PlayLoop {
         let (steps, remaining) = plan_steps(self.accumulator, dt);
         for _ in 0..steps {
             #[cfg(feature = "physics-dynamics")]
-            crate::physics::fighter_frame_system(world, FIXED_DT);
+            {
+                crate::physics::fighter_frame_system(world, FIXED_DT);
+                // After the clock: the active window it resolves has to be this step's.
+                crate::physics::hit_detection_system(world, FIXED_DT);
+            }
             crate::physics::system::physics_step_system(world, FIXED_DT);
         }
         self.accumulator = remaining;

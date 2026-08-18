@@ -16,17 +16,19 @@
 //!
 //! `fighter_frame_system` takes the same ordering edge for a different reason: it does not
 //! touch physics state at all, but a fighter's frame counters must be spent in the **fixed**
-//! schedule (one call = one frame), and this is the phase that runs there.
+//! schedule (one call = one frame), and this is the phase that runs there. `hit_detection_system`
+//! follows it — the active window it reads has to be the one the clock just advanced — and reports
+//! what connected as `HitEvent`s, leaving what a hit costs to the game.
 //!
-//! All three are no-ops on entities without vehicle/character/fighter components, so
+//! All four are no-ops on entities without vehicle/character/fighter components, so
 //! adding this plugin does not perturb a plain rigid-body simulation
 //! (determinism oracle hash is unaffected).
 
 use gizmo_core::system::{Phase, Schedule, SystemConfig};
 
-/// Add `vehicle_controller_system`, `character_controller_system` and
-/// `fighter_frame_system` to `schedule` in the physics phase, ordered before
-/// `"physics_step_system"`.
+/// Add `vehicle_controller_system`, `character_controller_system`, `fighter_frame_system` and
+/// `hit_detection_system` to `schedule` in the physics phase, ordered before
+/// `"physics_step_system"` (and hit detection after the fight clock).
 pub fn register_gameplay_physics_systems(schedule: &mut Schedule) {
     schedule.add_di_system(
         SystemConfig::new(Box::new(gizmo_physics_dynamics::vehicle_controller_system))
@@ -46,8 +48,16 @@ pub fn register_gameplay_physics_systems(schedule: &mut Schedule) {
             .label("fighter_frame_system")
             .before("physics_step_system"),
     );
+    // After the clock, necessarily: the active window it reads has to be this frame's.
+    schedule.add_di_system(
+        SystemConfig::new(Box::new(gizmo_physics_dynamics::hit_detection_system))
+            .in_phase(Phase::Physics)
+            .label("hit_detection_system")
+            .after("fighter_frame_system")
+            .before("physics_step_system"),
+    );
     tracing::info!(
-        "[Gameplay] registered vehicle_controller_system + character_controller_system + fighter_frame_system (Phase::Physics, before physics_step_system)"
+        "[Gameplay] registered vehicle_controller_system + character_controller_system + fighter_frame_system + hit_detection_system (Phase::Physics, before physics_step_system)"
     );
 }
 

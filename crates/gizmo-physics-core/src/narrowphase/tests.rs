@@ -462,3 +462,62 @@ fn box_box_normals_are_unit_length() {
         );
     }
 }
+
+// ── box_box_overlap ─────────────────────────────────────────────────────────────────────────
+
+/// The boolean sweep and the manifold builder must answer the same question the same way.
+///
+/// They share the axis construction and the penetration test, so this is not a restatement of
+/// either — it is the claim that stopping early loses nothing. Swept over a grid of separations
+/// on all three axes plus a rotated pair, because the interesting disagreements would be at the
+/// boundary and on the edge–edge axes.
+#[test]
+fn box_box_overlap_agrees_with_the_manifold_builder() {
+    let half = Vec3::splat(0.5);
+    let rot_a = Quat::IDENTITY;
+    let rot_b = Quat::from_rotation_y(std::f32::consts::FRAC_PI_4);
+
+    let mut checked = 0;
+    for &rot in &[Quat::IDENTITY, rot_b] {
+        for i in 0..20 {
+            let d = i as f32 * 0.15; // 0.0 .. 2.85, through the 1.0 (or 1.2 rotated) boundary
+            for axis in [Vec3::X, Vec3::Y, Vec3::Z] {
+                let pos_b = axis * d;
+                let boolean = NarrowPhase::box_box_overlap(Vec3::ZERO, rot_a, half, pos_b, rot, half);
+                let manifold =
+                    !NarrowPhase::box_box(Vec3::ZERO, rot_a, half, pos_b, rot, half).is_empty();
+                assert_eq!(
+                    boolean, manifold,
+                    "d={d} axis={axis:?} rotated={}: boolean {boolean}, manifold {manifold}",
+                    rot != Quat::IDENTITY
+                );
+                checked += 1;
+            }
+        }
+    }
+    assert_eq!(checked, 120, "the sweep must actually have run");
+}
+
+/// Clear cases, stated as themselves rather than as agreement with another function.
+#[test]
+fn box_box_overlap_answers_the_obvious_cases() {
+    let half = Vec3::splat(0.5);
+    let id = Quat::IDENTITY;
+
+    assert!(
+        NarrowPhase::box_box_overlap(Vec3::ZERO, id, half, Vec3::ZERO, id, half),
+        "coincident boxes overlap"
+    );
+    assert!(
+        !NarrowPhase::box_box_overlap(Vec3::ZERO, id, half, Vec3::new(1.5, 0.0, 0.0), id, half),
+        "half a metre of clear air is not a hit"
+    );
+    assert!(
+        NarrowPhase::box_box_overlap(Vec3::ZERO, id, half, Vec3::new(1.0, 0.0, 0.0), id, half),
+        "faces touching exactly counts — a frame-perfect hit must not be dropped"
+    );
+    assert!(
+        NarrowPhase::box_box_overlap(Vec3::ZERO, id, half, Vec3::new(0.99, 0.0, 0.0), id, half),
+        "and a hair inside certainly does"
+    );
+}

@@ -480,6 +480,21 @@ pub fn draw_hitbox_section(
                     ui.label("Damage:");
                     ui.add(egui::DragValue::new(&mut hitbox.damage).speed(1.0));
                 });
+
+                // Which move owns this box. Empty = every move, which is right for a fighter with
+                // one hitbox and wrong the moment there are two — a jab's fist and a kick's foot
+                // would otherwise both go live on either move.
+                ui.horizontal(|ui| {
+                    ui.label("Hareket (boş = hepsi):");
+                    let mut name = hitbox.move_name.clone().unwrap_or_default();
+                    if ui.text_edit_singleline(&mut name).changed() {
+                        hitbox.move_name = if name.trim().is_empty() {
+                            None
+                        } else {
+                            Some(name)
+                        };
+                    }
+                });
                 
                 ui.label("Offset:");
                 ui.horizontal(|ui| {

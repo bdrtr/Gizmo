@@ -90,6 +90,6 @@ pub use system::{physics_fracture_system, physics_explosion_system, physics_step
 // stepping physics by hand calls it the way the demos above call theirs.
 #[cfg(feature = "physics-dynamics")]
 pub use gizmo_physics_dynamics::{
-    character_controller_system, fighter_frame_system, oxygen_system, vehicle_controller_system,
-    Oxygen,
+    character_controller_system, fighter_frame_system, hit_detection_system, oxygen_system,
+    vehicle_controller_system, Oxygen,
 };

@@ -143,19 +143,17 @@ impl NarrowPhase {
 
     // ── Box–Box SAT ───────────────────────────────────────────────────────
 
-    /// Box–Box via the Separating Axis Theorem (15 axes) followed by
-    /// Sutherland–Hodgman clipping to produce up to 4 contact points.
+    /// The candidate separating axes for two oriented boxes: each box's three face normals plus
+    /// the nine edge–edge cross products, built on the stack so the sweep allocates nothing.
     ///
-    /// Returns an empty `Vec` when the boxes do not overlap.
-    pub fn box_box(
-        pos_a: Vec3,
-        rot_a: Quat,
-        ha: Vec3,
-        pos_b: Vec3,
-        rot_b: Quat,
-        hb: Vec3,
-    ) -> Vec<ContactPoint> {
-        // Local axes of each box.
+    /// Returns `(a_axes, b_axes, candidates, count)` — the count is below 15 whenever an edge
+    /// pair is parallel, since a near-zero cross product is not an axis and normalising it would
+    /// be a division by ~0.
+    ///
+    /// Shared by [`NarrowPhase::box_box`] and [`NarrowPhase::box_box_overlap`]: the second exists
+    /// because a fighting game's hit detection wants the *answer*, not a manifold, and two copies
+    /// of a fifteen-axis sweep is the kind of duplicate that drifts.
+    fn box_separating_axes(rot_a: Quat, rot_b: Quat) -> ([Vec3; 3], [Vec3; 3], [Vec3; 15], usize) {
         let ax = [
             rot_a.mul_vec3(Vec3::X),
             rot_a.mul_vec3(Vec3::Y),
@@ -166,14 +164,8 @@ impl NarrowPhase {
             rot_b.mul_vec3(Vec3::Y),
             rot_b.mul_vec3(Vec3::Z),
         ];
-        let ha_ = [ha.x, ha.y, ha.z];
-        let hb_ = [hb.x, hb.y, hb.z];
-        let t = pos_b - pos_a; // centre-to-centre offset
 
-        // Build the 15 candidate separating axes on the stack to avoid
-        // heap allocation per-call.
         // Layout: [ax0, ax1, ax2,  bx0, bx1, bx2,  9 cross products]
-        // Cross products that are near-zero (parallel edges) are skipped.
         let mut axes = [Vec3::ZERO; 15];
         let mut n_axes = 0usize;
 
@@ -197,6 +189,55 @@ impl NarrowPhase {
                 }
             }
         }
+
+        (ax, bx, axes, n_axes)
+    }
+
+    /// Do two oriented boxes overlap? The same fifteen-axis SAT sweep as
+    /// [`NarrowPhase::box_box`], stopping at the first separating axis and building no manifold.
+    ///
+    /// This is the test a fighting game's hitbox/hurtbox pass wants: it asks whether the attack
+    /// connected, not where or how deeply, and it runs over pairs the physics broadphase never
+    /// sees (hit volumes are not colliders). Touching exactly — zero penetration on the tightest
+    /// axis — counts as an overlap, which for a hit volume is the reading that does not drop a
+    /// frame-perfect hit.
+    pub fn box_box_overlap(
+        pos_a: Vec3,
+        rot_a: Quat,
+        ha: Vec3,
+        pos_b: Vec3,
+        rot_b: Quat,
+        hb: Vec3,
+    ) -> bool {
+        let (ax, bx, axes, n_axes) = Self::box_separating_axes(rot_a, rot_b);
+        let ha_ = [ha.x, ha.y, ha.z];
+        let hb_ = [hb.x, hb.y, hb.z];
+        let t = pos_b - pos_a;
+
+        for &axis in &axes[..n_axes] {
+            if sat_penetration(&axis, &ax, &ha_, &bx, &hb_, t) < 0.0 {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Box–Box via the Separating Axis Theorem (15 axes) followed by
+    /// Sutherland–Hodgman clipping to produce up to 4 contact points.
+    ///
+    /// Returns an empty `Vec` when the boxes do not overlap.
+    pub fn box_box(
+        pos_a: Vec3,
+        rot_a: Quat,
+        ha: Vec3,
+        pos_b: Vec3,
+        rot_b: Quat,
+        hb: Vec3,
+    ) -> Vec<ContactPoint> {
+        let (ax, bx, axes, n_axes) = Self::box_separating_axes(rot_a, rot_b);
+        let ha_ = [ha.x, ha.y, ha.z];
+        let hb_ = [hb.x, hb.y, hb.z];
+        let t = pos_b - pos_a; // centre-to-centre offset
 
         // SAT sweep — find minimum penetration axis.
         let mut min_pen = f32::MAX;
