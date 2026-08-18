@@ -2598,8 +2598,8 @@ altsisteminin geri kalanı, ve hiçbiri saatin kapsamında değil:
    silinen slotu geri veriyor, HUD ▶/⏸/⏹ üçlüsünde sürülüyor, ve denetçi başsız bir egui
    karesinde boyadığı metinden okunuyor.
 
-**Bir sonraki oturuma, bu oturumda ölçülüp düzeltilmeyenler** (dövüş zinciri kapandı, bunlar
-komşu köşeler):
+**Dövüş zincirinden sonra bırakılan dört iz — dördü de 2026-08-19'da kapandı.** Kayıtları
+duruyor, çünkü her biri ölçümünü ve kararını taşıyor:
 
 - ~~`PlayAnimation` ve `SetAnimationSpeed`'in üreticisi yok~~ **— bağlandı.** İkisinin de
   `flush_commands`'te çalışan işleyicisi vardı ve hiçbir `api_*.rs` onları itmiyordu: motor istek
@@ -2669,8 +2669,34 @@ komşu köşeler):
 
   Testler de sıkıldı: sarmal testi `<= 8` yerine `== 8` diyor (`<=` her küçük sayıyı da geçiriyordu,
   pencereli yolun gerçekten yaptığı 2'yi dahil), ve yeni bir test pencereli gerçeği sabitliyor.
-- **§4'ün "96 public type `#[non_exhaustive]`" sayısı bayat** (`ENGINE.md:1103`); CLAUDE.md
-  2026-08-18'de 122'ye düzeltilmişti. §8'in kendi kuralı bu satırı adıyla anıyor.
+- ~~§4'ün "96 public type `#[non_exhaustive]`" sayısı bayat; CLAUDE.md 122'ye düzeltilmişti~~
+  **— sayı güncellenmedi, SİLİNDİ, çünkü 122 de yanlıştı.** Her commit'te öznitelik sayılarak
+  ölçüldü: 96'nın alındığı 0.2.0 (`5cafbd2`) gerçekte **101**, 122'yi yazan `f2cd65c` gerçekte
+  **127**, ve `0db4be2`'de **125**'e DÜŞTÜ (tarama iki ölü `#[non_exhaustive]` tipi sildi) — yani
+  CLAUDE.md'nin "tırmanmaya devam etmesi bekleniyor" cümlesi düştüğü sırada yazılmıştı. §8'in
+  "üçü de yazıldığı anda doğruydu" cümlesi bu üçüncüsü için yanlıştı; düzeltildi. Sayı hiçbir
+  kararı beslemediği için §4'ten ve CLAUDE.md'den kaldırıldı, kural kaldı. (Naif
+  `grep non_exhaustive` ~40 fazla sayıyor: tipler özniteliği kendi belgelerinde anlatıyor.)
+
+**Bir sonraki oturuma (2026-08-19).** Önceki dört izin dördü de kapandı; bunlar onları ölçerken
+çıkanlar:
+
+- **Headless çalışma zamanı `Time` kaynağını HİÇ eklemiyor.** `windowed/event.rs:640-643` bir
+  `Time::new()` kurup dünyaya koyuyor; `headless.rs`'te tek bir `insert_resource` yok. Sonuç: bir
+  headless oyun `Res<Time>` göremiyor — `dt()`, `elapsed()`, `frame()` yok — ve `set_time_scale`
+  orada hiçbir şey yapmıyor, çünkü sabit adım ham duvar-saati deltasıyla besleniyor. Bu, o
+  modülün KENDİ yorumunun şikâyet ettiği sınıfın aynısı ("bir plugin bir kez yazılıp iki
+  çalışma zamanında aynı davranamıyordu") ve orada sabit adım için çözülmüş, `Time` için
+  çözülmemiş. Bu oturumda düzeltilen stüdyo çift-adımı da aynı aileden: iki host, bir sözleşme.
+- **`AnimationStateMachine` ikinci bir animasyon sürücüsü.** `AnimationPlayer`'ın belgeleri ondan
+  söz ediyor ve iki sürücünün `duration == 0` durumunda AYRILDIĞINI yazıyor (biri playhead'i
+  büyütüyor, öteki sıfıra kıstırıp her karede "bitti" diyor). Yeni `animation` Lua API'si yalnız
+  `AnimationPlayer`'ı sürüyor. Sorulacak: state machine'in üreticisi/tüketicisi var mı, yoksa bu
+  da iki protokolden biri mi?
+- **Düzyazıdaki öteki sayılar.** §4'ün ikisi silindi, ama tarama yedi bayat sayı daha buldu; çoğu
+  geçmiş bir ölçümün kaydı (o gün doğruydu, bugünü anlatmıyor) — mesela ENGINE.md:1493'ün "12
+  golden render testi" bugün 23. Kural şu: bugünü ANLATAN bir sayı ya hesaplanmalı ya silinmeli;
+  bir ÖLÇÜMÜN kaydı ise tarihiyle kalsın. Ayıklanması gereken, hangisinin hangisi olduğu.
 
 Düzeltilmiş ve kaydı tutulan yedi kusur. İlk üçü: script sırası (`HashMap` → `BTreeMap`,
 proses başına rastgeleydi), on altı komutun sessizce yutulması, bir script'in hatasının ötekileri
