@@ -156,10 +156,10 @@ pub fn record_forward_and_fluid(
             physics.debug_render_pass(&mut render_pass, &renderer.scene.global_bind_group);
         }
 
-        // Draw SPH fluid
-        if let Some(fluid) = &renderer.gpu_fluid {
-            fluid.render_pass(&mut render_pass, &renderer.scene.global_bind_group);
-        }
+        // No fluid here. `GpuFluidSystem::render_pass` was called on this line and its body was
+        // empty — "Fallback for compatibility, not used directly by SSFR loop" — so the forward
+        // pass has never drawn a drop. The fluid is drawn by `record_fluid_surface` below, which
+        // reconstructs its surface in screen space. Deleted with the method.
 
         // (GPU Particles artık AYRI bir pass'te — aşağıda — soft-particle derinlik örneklemesi için.)
     }
@@ -199,17 +199,12 @@ pub fn record_forward_and_fluid(
         }
     }
 
-    if let Some(fluid) = &renderer.gpu_fluid {
-        let active_fluid = (fluid.num_particles as f32 * fluid_lod) as u32;
-        fluid.render_ssfr(
-            encoder,
-            &renderer.post.hdr_texture,
-            &renderer.post.hdr_texture_view,
-            &renderer.depth_texture_view,
-            &renderer.scene.global_bind_group,
-            active_fluid,
-        );
-    }
+    let active_fluid = renderer
+        .gpu_fluid
+        .as_ref()
+        .map(|f| (f.num_particles as f32 * fluid_lod) as u32)
+        .unwrap_or(0);
+    crate::systems::render::record_fluid_surface(encoder, renderer, active_fluid);
 
     // ── Volumetrik duman (T6): sahnenin üstüne HDR'ye raymarch (post-process ÖNCESİ) ──
     if let Some(smoke) = &renderer.smoke {

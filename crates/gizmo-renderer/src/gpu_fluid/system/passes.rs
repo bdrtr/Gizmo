@@ -164,16 +164,6 @@ impl GpuFluidSystem {
             cpass.dispatch_workgroups(workgroups_parts, 1, 1);
         }
     }
-
-    /// Records the plain particle draw — every particle as a sprite, with no surface
-    /// reconstruction.
-    pub fn render_pass<'a>(
-        &'a self,
-        _rpass: &mut wgpu::RenderPass<'a>,
-        _global_scene_bind_group: &'a wgpu::BindGroup,
-    ) {
-        // Fallback for compatibility, not used directly by SSFR loop
-    }
     #[tracing::instrument(skip_all, level = "trace")]
     /// Records the screen-space fluid rendering chain: splat depth and thickness, blur, then
     /// composite the shaded surface over the scene.

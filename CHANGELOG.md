@@ -39,6 +39,21 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   it, the script takes the health off — 92, not 100 (the event arrived) and not 84 (one hit per
   move).
 
+- **GPU fluid rendered in a shipped game and showed nothing in the editor.** The last of the
+  draw-path asymmetries, and the only one that was not a call away: the game path stepped the fluid
+  and reconstructed its surface, the studio's pipeline did not mention `renderer.gpu_fluid` at all.
+  Both halves are shared entry points now — `gizmo::systems::render::step_gpu_fluid` and
+  `record_fluid_surface`, the shape `record_forward_decals` already had — and both paths call them.
+
+  Two things fell out of doing it. **The viewport's fluid had to be gated on
+  `Renderer::fluid_enabled`**, not on the fluid existing: `gpu_fluid` is `Some` on every native
+  renderer (a 100 000-particle allocation made up front) and `fluid_enabled` is what says a scene
+  wants it. Reading only `num_particles` would have run an SPH solve and a screen-space surface
+  pass in every editor frame of every scene. And **`GpuFluidSystem::render_pass` was an empty
+  public method** — "Fallback for compatibility, not used directly by SSFR loop" — called every
+  frame from the game's forward pass, which therefore has never drawn a drop of fluid. The method
+  and both call sites are gone; `render_ssfr` is what draws.
+
 - **The two draw paths ran different per-frame drivers, in both directions.** Enumerating what each
   one actually calls turned up two more of the same defect on top of the state machine:
 

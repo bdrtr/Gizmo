@@ -8,6 +8,25 @@ mod viewpoint;
 use batching::*;
 use passes::*;
 
+/// How much of the fluid the viewport simulates and draws.
+///
+/// **Zero unless the scene opted in.** `Renderer::gpu_fluid` is `Some` on every native renderer —
+/// it is allocated up front, 100 000 particles' worth — and what decides whether a scene *has*
+/// fluid is `Renderer::fluid_enabled`, which is `false` by default and set by the two demos that
+/// want it. Reading only `num_particles` here would have run an SPH solve and a screen-space
+/// surface pass over 100 000 particles in every editor frame of every scene, which is how a
+/// capability port turns into a performance defect.
+///
+/// Past that gate the viewport runs the **whole** fluid, where the game path scales it by camera
+/// distance: an editor shows what is there, the same reasoning the render-parity exceptions
+/// already record for mesh-internal LOD.
+fn studio_fluid_particles(renderer: &gizmo::renderer::Renderer) -> u32 {
+    if !renderer.fluid_enabled {
+        return 0;
+    }
+    renderer.gpu_fluid.as_ref().map(|f| f.num_particles).unwrap_or(0)
+}
+
 /// Records the studio's render passes for one viewport — shadows, opaque, transparent, grid and
 /// skybox — into the given encoder.
 pub fn execute_render_pipeline(
@@ -51,6 +70,12 @@ pub fn execute_render_pipeline(
     // scene that never asked for one pays nothing.
     gizmo::systems::physics::gpu_physics_submit_system(world, renderer);
     gizmo::systems::physics::gpu_physics_readback_system(world, renderer);
+
+    // GPU fluid: stepped here, drawn twice below (particles inside the main pass, surface after
+    // it). The editor did not step or draw it at all until 2026-08-19 — a fluid scene flowed in a
+    // shipped game and showed nothing in the viewport, while this pipeline was already drawing
+    // `renderer.gpu_physics` beside it.
+    gizmo::systems::render::step_gpu_fluid(encoder, renderer, studio_fluid_particles(renderer));
 
     let (aspect, ed_shading_mode, show_colliders, post_params, game_view_visible) =
         sync_editor_settings(world, renderer);
@@ -684,6 +709,10 @@ pub fn execute_render_pipeline(
             // here until the game ran, and a second implementation is how that would come back.
             gizmo::systems::render::record_forward_decals(encoder, renderer, world, cam_pos);
             record_studio_particle_pass(encoder, renderer);
+            // The fluid's surface, the engine's own pass again. The viewport runs the WHOLE fluid
+            // rather than the game's distance-scaled slice: an editor shows what is there, which
+            // is the same reasoning the render-parity exceptions already record for `lod_vbufs`.
+            gizmo::systems::render::record_fluid_surface(encoder, renderer, studio_fluid_particles(renderer));
 
     }); // Cikis: CACHE.with bloğu
 

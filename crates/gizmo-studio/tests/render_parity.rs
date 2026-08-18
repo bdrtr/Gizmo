@@ -732,6 +732,8 @@ fn both_draw_paths_run_the_same_per_frame_drivers() {
             "BoneAttachmentSystem",
             "gpu_physics_submit_system(",
             "gpu_physics_readback_system(",
+            "step_gpu_fluid(",
+            "record_fluid_surface(",
         ] {
             assert!(
                 code.contains(driver),
@@ -804,11 +806,11 @@ fn every_capability_neither_path_names_is_accounted_for() {
     ];
 
     /// The fluid family shares one reason, and it is an open asymmetry rather than a benign one.
-    const FLUID: &str = "the GPU fluid subsystem. The game path steps and draws it \
-        (`renderer.gpu_fluid`, forward pass); the studio's pipeline does not mention it at all, so \
-        a fluid scene renders in a shipped game and shows nothing in the viewport. Unlike the \
-        drivers fixed on 2026-08-19 this is not a call away — the editor would need the fluid pass \
-        itself. Trigger: authoring fluid in the editor.";
+    const FLUID: &str = "the GPU fluid subsystem, reached through `renderer.gpu_fluid` rather \
+        than by naming a component. Both paths step and draw it now — `step_gpu_fluid` and \
+        `record_fluid_surface` are shared entry points and the driver guard holds both to them. \
+        The editor had none of it until 2026-08-19: a fluid scene flowed in a shipped game and \
+        showed nothing in the viewport.";
 
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()

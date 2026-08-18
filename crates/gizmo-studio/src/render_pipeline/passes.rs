@@ -319,6 +319,7 @@ pub(super) fn record_studio_main_pass(
                 physics.render_pass(&mut render_pass, &renderer.scene.global_bind_group);
             }
 
+
             // 3. SKYBOX YAKALAMA VE ÖZEL PIPELINE İLE ÇİZİM
             render_pass.set_pipeline(&renderer.scene.sky_pipeline);
             for batch in flat_batches {

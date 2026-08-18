@@ -18,6 +18,55 @@ pub struct WireframeConfig {
 }
 
 
+/// Step the GPU fluid simulation for this frame.
+///
+/// `active_particles` is how much of the fluid to simulate — the caller's level-of-detail
+/// decision, because the two pictures make it differently: a game scales it by camera distance,
+/// the editor's viewport runs the whole thing (an editor shows what is there, which is the same
+/// reasoning as the `lod_vbufs` entry in the render-parity exceptions).
+///
+/// Nothing is recorded for a scene with no fluid, and the underlying pass returns immediately at
+/// zero particles.
+///
+/// It is a function here rather than a line in each pipeline for the reason `record_forward_decals`
+/// is: the editor drew no fluid at all until 2026-08-19, and a second implementation is how that
+/// comes back.
+#[cfg(feature = "render")]
+pub fn step_gpu_fluid(
+    encoder: &mut wgpu::CommandEncoder,
+    renderer: &crate::renderer::Renderer,
+    active_particles: u32,
+) {
+    let Some(fluid) = &renderer.gpu_fluid else {
+        return;
+    };
+    fluid.compute_pass(encoder, &renderer.queue, true, active_particles);
+}
+
+/// Draw the fluid's screen-space surface onto the lit HDR image.
+///
+/// The other half of [`step_gpu_fluid`], and it runs where the decals do: after the geometry pass
+/// has written depth (it reads it) and before post-processing reads the HDR texture. The particles
+/// themselves are drawn inside the forward pass; this is the surface reconstruction over them.
+#[cfg(feature = "render")]
+pub fn record_fluid_surface(
+    encoder: &mut wgpu::CommandEncoder,
+    renderer: &crate::renderer::Renderer,
+    active_particles: u32,
+) {
+    let Some(fluid) = &renderer.gpu_fluid else {
+        return;
+    };
+    fluid.render_ssfr(
+        encoder,
+        &renderer.post.hdr_texture,
+        &renderer.post.hdr_texture_view,
+        &renderer.depth_texture_view,
+        &renderer.scene.global_bind_group,
+        active_particles,
+    );
+}
+
 /// Guarantee every renderable mesh has a current `GlobalTransform` before the
 /// draw query runs.
 ///
@@ -462,10 +511,12 @@ pub fn default_render_pass(
     };
 
     // Gpu Fluid Processing
-    if let Some(fluid) = &renderer.gpu_fluid {
-        let active_fluid = (fluid.num_particles as f32 * fluid_lod) as u32;
-        fluid.compute_pass(encoder, &renderer.queue, true, active_fluid);
-    }
+    let active_fluid = renderer
+        .gpu_fluid
+        .as_ref()
+        .map(|f| (f.num_particles as f32 * fluid_lod) as u32)
+        .unwrap_or(0);
+    step_gpu_fluid(encoder, renderer, active_fluid);
 
     // Gpu Particles Processing
     if let Some(particles) = &renderer.gpu_particles {

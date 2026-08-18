@@ -2723,13 +2723,24 @@ guard'lı (yorumlar kesilerek, iki yönde de).
 **Bir sonraki oturuma (2026-08-19, dördüncü tur).** Üçüncü turun yapısal sorusu da kapandı
 (aşağıda). Geriye onu kapatırken ÖLÇÜLEN ama yazılmayan iki şey kaldı:
 
-- **GPU akışkanı editörde yok.** Oyun yolu `renderer.gpu_fluid`'i adımlıyor ve forward geçidinde
-  çiziyor; stüdyonun boru hattı ondan hiç söz etmiyor. Yani bir akışkan sahnesi ihraç edildiğinde
-  akıyor, editörün viewport'unda hiçbir şey görünmüyor. Bugünün beş sürücü kusuruyla aynı aile ama
-  **bir çağrı uzaklıkta değil**: editörün akışkan geçidini de istemesi gerekiyor, yani bir geçit
-  portu. İlk adım ölçüldü: `forward.rs:160-202` ile `mod.rs:465`'teki kullanım, ve
-  `render_parity.rs`'in `SILENT` listesindeki gerekçe. Tetikleyici: editörde akışkan yazarlamak
-  isteyen biri.
+- ~~GPU akışkanı editörde yok~~ **— taşındı, ve taşırken iki şey daha çıktı.** Oyun yolundaki üç
+  parça (compute adımı, forward geçidindeki çizim, ekran-uzayı yüzeyi) ölçülünce port sanıldığı
+  kadar büyük değildi: stüdyo zaten `renderer.post.hdr_texture_view` ve `renderer.depth_texture_view`
+  ile çiziyor, yani hedefler aynı. Ortak giriş noktaları çıkarıldı — `step_gpu_fluid` ve
+  `record_fluid_surface`, `record_forward_decals`'in şekli — ve iki yol da onları çağırıyor;
+  sürücü guard'ı ikisini de tutuyor.
+
+  **Bir:** viewport'un ne kadar akışkan koşacağı `fluid_enabled`'a bağlanmalıydı. `gpu_fluid` her
+  native renderer'da `Some` (100 000 parçacıklık tahsis önceden yapılıyor); sahnenin akışkanı olup
+  olmadığını söyleyen şey `Renderer::fluid_enabled` ve o varsayılan olarak **false**. Yalnız
+  `num_particles` okusaydım her editör karesinde, her sahnede bir SPH çözümü ve bir ekran-uzayı
+  yüzey geçidi koşacaktı — bir yetenek portunun performans kusuruna dönüşme biçimi.
+
+  **İki:** `GpuFluidSystem::render_pass` GÖVDESİ BOŞ bir public metottu ("Fallback for
+  compatibility, not used directly by SSFR loop") ve oyun yolunun forward geçidinde her kare
+  çağrılıyordu. Yani forward geçidi hiç akışkan çizmemiş; çizen şey `render_ssfr`. Metot ve iki
+  çağrı yeri silindi — `get_pending_audio_scene_commands` deseninin aynısı: boş dönmekten başka bir
+  şey yapamayan public bir yüzey.
 - **`Camera2D`'nin hiçbir tüketicisi yok.** Hiçbir çizim yolu ondan render etmiyor, motor 2B boru
   hattı göndermiyor, ama `gizmo-app`'in sahne kaydı onu serileştiriyor — yani bir sahne hiç
   çizilmeyecek bir kamera taşıyabiliyor, ve kullanıcı bunu ancak hiçbir şey olmayarak öğreniyor.
