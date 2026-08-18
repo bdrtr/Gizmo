@@ -2720,8 +2720,24 @@ bildiriyor; hiçbirinin adını anmadığı bir yetenek sessizlik. `BoneAttachme
 sisteme üzerinden sürülüyor, yani iki kaynakta da adı geçmiyor. Artık sürücü listesi doğrudan
 guard'lı (yorumlar kesilerek, iki yönde de).
 
-**Bir sonraki oturuma (2026-08-19, üçüncü tur).** İkinci turun izleri de kapandı. Geriye
-kapatırken görülen bir yapısal soru kaldı:
+**Bir sonraki oturuma (2026-08-19, dördüncü tur).** Üçüncü turun yapısal sorusu da kapandı
+(aşağıda). Geriye onu kapatırken ÖLÇÜLEN ama yazılmayan iki şey kaldı:
+
+- **GPU akışkanı editörde yok.** Oyun yolu `renderer.gpu_fluid`'i adımlıyor ve forward geçidinde
+  çiziyor; stüdyonun boru hattı ondan hiç söz etmiyor. Yani bir akışkan sahnesi ihraç edildiğinde
+  akıyor, editörün viewport'unda hiçbir şey görünmüyor. Bugünün beş sürücü kusuruyla aynı aile ama
+  **bir çağrı uzaklıkta değil**: editörün akışkan geçidini de istemesi gerekiyor, yani bir geçit
+  portu. İlk adım ölçüldü: `forward.rs:160-202` ile `mod.rs:465`'teki kullanım, ve
+  `render_parity.rs`'in `SILENT` listesindeki gerekçe. Tetikleyici: editörde akışkan yazarlamak
+  isteyen biri.
+- **`Camera2D`'nin hiçbir tüketicisi yok.** Hiçbir çizim yolu ondan render etmiyor, motor 2B boru
+  hattı göndermiyor, ama `gizmo-app`'in sahne kaydı onu serileştiriyor — yani bir sahne hiç
+  çizilmeyecek bir kamera taşıyabiliyor, ve kullanıcı bunu ancak hiçbir şey olmayarak öğreniyor.
+  Deponun kendi kuralına göre bu "sil ya da bağla"nın sil tarafına yakın (bağlamak = 2B boru hattı
+  yazmak), ama silmek genel API'den bir tip kaldırmak demek. Karar ölçümle gelmiyor; sorulmalı.
+
+**Üçüncü tur (kapandı).** İkinci turun izleri de kapanmıştı; geriye kapatırken görülen bir yapısal
+soru kalmıştı:
 
 - ~~Envanterin "ikisi de bilmiyor" kutusu sessiz~~ **— sayıldı: 35 öznenin 20'si o kutudaydı, yani
   envanter yarısından azını yargılıyordu.** Ve kutunun içi tek tür değil:
