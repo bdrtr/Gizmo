@@ -132,7 +132,13 @@ pub fn handle_simulation(
     }
 
     // --- FIGHT HUD SYNC: FighterController → EditorState.fight_hud ---
-    if editor_state.is_playing() {
+    //
+    // The condition is `is_in_play_session`, not `is_playing`: ⏸ leaves the mode at `Paused`, so
+    // the old `is_playing()` sent every paused frame into the `else` below and **reset the HUD** —
+    // the health bars vanished and the round timer jumped back to 99 the moment you paused, while
+    // the pause overlay was still being drawn over the top of them. A paused fight is still a
+    // fight; only the *countdown* below stops, because that is the part that spends time.
+    if editor_state.is_in_play_session() {
         let fighters = world.borrow::<gizmo::physics::components::FighterController>();
         let names = world.borrow::<gizmo::core::component::EntityName>();
         let mut found_any = false;
@@ -158,8 +164,11 @@ pub fn handle_simulation(
 
         editor_state.fight_hud.active = found_any && editor_state.fight_hud.p1_entity.is_some() && editor_state.fight_hud.p2_entity.is_some();
 
-        // Timer countdown
-        if editor_state.fight_hud.active && editor_state.fight_hud.timer_seconds > 0.0 {
+        // Timer countdown — the one part of the HUD that must not run while paused.
+        if editor_state.is_playing()
+            && editor_state.fight_hud.active
+            && editor_state.fight_hud.timer_seconds > 0.0
+        {
             editor_state.fight_hud.timer_seconds = (editor_state.fight_hud.timer_seconds - dt).max(0.0);
         }
 
@@ -235,7 +244,7 @@ pub fn handle_simulation(
             }
         }
     } else {
-        // Play modundan çıkınca HUD'u sıfırla
+        // The play SESSION is over (⏹, not ⏸) — the snapshot is gone and so is the round.
         editor_state.fight_hud = gizmo::editor::editor_state::FightHudState::default();
     }
 
@@ -332,6 +341,82 @@ mod tests {
         let p2 = Vec3::new(7.0, 3.0, -4.0);
         let midpoint = (p1 + p2) * 0.5;
         assert!((midpoint - Vec3::new(2.0, 2.0, -1.0)).length() < 1e-5);
+    }
+
+    // ── The fight HUD across ▶ / ⏸ / ⏹ ──────────────────────────────────────────────────────
+    //
+    // These drive the real `handle_simulation`, because what was wrong was its *condition*, not
+    // any arithmetic: the HUD block asked `is_playing()`, which is false while paused, so ⏸ fell
+    // into the reset branch.
+
+    use super::handle_simulation;
+    use crate::state::StudioState;
+    use gizmo::editor::EditorState;
+    use gizmo::prelude::*;
+
+    fn studio_state() -> StudioState {
+        StudioState {
+            current_fps: 0.0,
+            actual_dt: 0.016,
+            editor_camera: 0,
+            game_camera: 0,
+            do_raycast: false,
+            play: gizmo::systems::PlayLoop::new(),
+            asset_watcher: None,
+            gc_timer: 0.0,
+            autosave_timer: 0.0,
+            visible_entity_count: 0,
+            draw_call_count: 0,
+        }
+    }
+
+    /// A world with a player-1 and a player-2 fighter — the pair the HUD needs before it draws.
+    fn versus_world() -> World {
+        let mut world = World::new();
+        world.insert_resource(gizmo::physics::world::PhysicsWorld::new());
+        for slot in [1u8, 2] {
+            let e = world.spawn();
+            world.add_component(e, Transform::new(Vec3::new(slot as f32, 0.0, 0.0)));
+            world.add_component(
+                e,
+                gizmo::physics::components::fighter::FighterController::new(slot),
+            );
+        }
+        world
+    }
+
+    /// **Pausing must not wipe the fight HUD.** ⏸ leaves the editor in `Paused`, which
+    /// `is_playing()` reports as false — so every paused frame reset `fight_hud` to its default:
+    /// the health bars disappeared and the round timer snapped back to 99, underneath a pause
+    /// overlay that was still being drawn. Stopping (⏹) is the transition that legitimately ends
+    /// the round, and it still does.
+    #[test]
+    fn pausing_keeps_the_fight_hud_and_stopping_clears_it() {
+        let mut world = versus_world();
+        let mut ed = EditorState::default();
+        let mut st = studio_state();
+        let input = Input::new();
+
+        ed.toggle_play();
+        handle_simulation(&mut world, &mut ed, &mut st, 1.0 / 60.0, &input);
+        assert!(ed.fight_hud.active, "two fighters, so the HUD must be up");
+        let timer_running = ed.fight_hud.timer_seconds;
+        assert!(timer_running < 99.0, "the round clock runs while playing");
+
+        ed.toggle_pause();
+        handle_simulation(&mut world, &mut ed, &mut st, 1.0 / 60.0, &input);
+        assert!(
+            ed.fight_hud.active,
+            "the HUD must survive ⏸ — the round is paused, not over"
+        );
+        assert_eq!(
+            ed.fight_hud.timer_seconds, timer_running,
+            "but the round clock must not tick while paused"
+        );
+
+        ed.toggle_play(); // Paused → Edit (⏹)
+        handle_simulation(&mut world, &mut ed, &mut st, 1.0 / 60.0, &input);
+        assert!(!ed.fight_hud.active, "stopping ends the round and clears the HUD");
     }
 }
 

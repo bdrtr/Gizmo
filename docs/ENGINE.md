@@ -2499,13 +2499,17 @@ altsisteminin geri kalanı, ve hiçbiri saatin kapsamında değil:
 6. `Hitbox::active`'i yazan tek şey denetçinin onay kutusu, okuyan tek şey hata-ayıklama gizmo'su
    (`gizmo/src/systems/physics.rs:234`). Vuruş algılama (`hit_detection_system`) da `592bd6f`'de
    gitti; `Hurtbox` yalnız çiziliyor.
-7. Stüdyo tarafında üç ayrı kusur, üçü de dövüş HUD'ının kendisini gözlemlenemez kılıyor:
-   `scene_ops` bileşeni **ekleyebiliyor ama silemiyor** (denetçinin sil düğmesi
-   `remove_component_request`'i kaldırıyor, eşleşen kolu yok), iki dövüşçü de varsayılan
-   `player_id = 1` ile geliyor (HUD `p1` ve `p2` ikisini birden isteyince hiç açılmıyor), ve ⏸
-   duraklatma HUD'ı sıfırlıyor (`is_playing()` yalnız Play). Ayrıca denetçi `active_move`,
-   `current_move_frame`, `hitstop_frames`, `hitstun_frames`'in **hiçbirini göstermiyor** — yani
-   saat artık çalışsa bile stüdyoda görülecek bir yüzeyi yok.
+7. ~~Stüdyo tarafında dört kusur~~ **— düzeltildi (aynı gün, ayrı commit).** Saati yazdıktan
+   sonra stüdyoda görülecek yüzeyi yoktu: `scene_ops` `FighterController`'ı ekleyebiliyor ama
+   **silemiyordu** (denetçide dört sil düğmesi var, üçünün kolu vardı), iki dövüşçü de varsayılan
+   `player_id = 1` ile geliyordu (HUD `p1` VE `p2` isteyince hiç açılmıyordu), ⏸ duraklatma HUD'ı
+   sıfırlıyordu (`is_playing()` yalnız Play; doğrusu `is_in_play_session()`, sayaç ise yalnız
+   Play'de akmalı), ve denetçi `active_move` / `current_move_frame` / `hitstop_frames` /
+   `hitstun_frames`'in hiçbirini göstermiyordu — üstelik kendi belgesi "mevcut hareketin frame
+   data'sı" diyordu. Dördü de testli: dört sil düğmesi **birlikte** sınanıyor (kusur bir düğme
+   listesiyle bir kol listesi arasındaki asimetriydi, tek tek test tam bunu kaçırır), slot dağıtımı
+   silinen slotu geri veriyor, HUD ▶/⏸/⏹ üçlüsünde sürülüyor, ve denetçi başsız bir egui
+   karesinde boyadığı metinden okunuyor.
 
 Düzeltilmiş ve kaydı tutulan yedi kusur. İlk üçü: script sırası (`HashMap` → `BTreeMap`,
 proses başına rastgeleydi), on altı komutun sessizce yutulması, bir script'in hatasının ötekileri

@@ -86,7 +86,17 @@ pub fn handle_scene_operations(
                 "Hitbox" => world.add_component(ent, gizmo::physics::components::Hitbox::default()),
                 "Hurtbox" => world.add_component(ent, gizmo::physics::components::Hurtbox::default()),
                 "BoneAttachment" => world.add_component(ent, gizmo::renderer::components::BoneAttachment::default()),
-                "FighterController" => world.add_component(ent, gizmo::physics::components::fighter::FighterController::default()),
+                // Not `default()`: that is always player 1, so adding two fighters gave two
+                // player 1s — and the studio's own fight HUD needs a p1 AND a p2 before it draws
+                // anything (`simulation.rs`, `fight_hud.active`). Authoring a versus scene the
+                // obvious way therefore produced a HUD that never appeared. The slot is the
+                // lowest positive number no fighter in the scene is using.
+                "FighterController" => world.add_component(
+                    ent,
+                    gizmo::physics::components::fighter::FighterController::new(
+                        next_free_player_slot(world),
+                    ),
+                ),
 
                 _ => editor_state.log_warning(&format!("Bilinmeyen component: {}", comp_name)),
             }
@@ -99,6 +109,11 @@ pub fn handle_scene_operations(
                 "Hitbox" => { world.remove_component::<gizmo::physics::components::Hitbox>(ent); }
                 "Hurtbox" => { world.remove_component::<gizmo::physics::components::Hurtbox>(ent); }
                 "BoneAttachment" => { world.remove_component::<gizmo::renderer::components::BoneAttachment>(ent); }
+                // Four inspector sections draw a 🗑 button; this arm was the one missing, so that
+                // button logged "Component turu silinemiyor" at the user and left the component
+                // in place. `every_delete_button_in_the_inspector_removes_its_component` below
+                // now pins all four together rather than each on its own.
+                "FighterController" => { world.remove_component::<gizmo::physics::components::fighter::FighterController>(ent); }
                 _ => editor_state.log_warning(&format!("Component turu silinemiyor: {}", comp_name)),
             }
         }
@@ -541,6 +556,23 @@ pub fn handle_scene_operations(
     }
 }
 
+/// The lowest player slot (`1`, then `2`, …) no `FighterController` in the world is holding.
+///
+/// Saturates at `u8::MAX` rather than wrapping back onto slot 0 — a scene with 255 fighters is
+/// nonsense, and handing out slot 0 twice would be worse than handing out 255 twice.
+fn next_free_player_slot(world: &World) -> u8 {
+    let taken: Vec<u8> = world
+        .borrow::<gizmo::physics::components::fighter::FighterController>()
+        .iter()
+        .map(|(_, f)| f.player_id)
+        .collect();
+    let mut slot: u8 = 1;
+    while taken.contains(&slot) && slot < u8::MAX {
+        slot += 1;
+    }
+    slot
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -859,6 +891,106 @@ mod tests {
         assert!(
             children_of(&world, parent.id()).is_empty(),
             "the old parent must not keep listing it"
+        );
+    }
+
+    /// **Every 🗑 button in the inspector must actually remove its component.**
+    ///
+    /// Four inspector sections draw one (`Hitbox`, `Hurtbox`, `BoneAttachment`,
+    /// `FighterController`) and this system is the only thing that answers them. Three arms
+    /// existed; the fourth did not, so pressing Delete on a fighter logged
+    /// "Component turu silinemiyor: FighterController" at the user and left the component where
+    /// it was. Testing the four together is the point — the defect was an asymmetry between a
+    /// list of buttons and a list of arms, and a per-component test is exactly the shape that
+    /// misses one.
+    #[test]
+    fn every_delete_button_in_the_inspector_removes_its_component() {
+        for name in ["Hitbox", "Hurtbox", "BoneAttachment", "FighterController"] {
+            let mut world = World::new();
+            let ent = world.spawn();
+            let mut ed = EditorState::default();
+
+            ed.add_component_request = Some((ent, name.to_string()));
+            handle_scene_operations(&mut world, &mut ed, &mut studio_state());
+            assert!(
+                has_component(&world, ent.id(), name),
+                "{name} was not added, so the removal below would prove nothing"
+            );
+
+            ed.remove_component_request = Some((ent, name.to_string()));
+            handle_scene_operations(&mut world, &mut ed, &mut studio_state());
+            assert!(
+                !has_component(&world, ent.id(), name),
+                "the inspector's delete button for {name} left the component in place"
+            );
+        }
+    }
+
+    /// Is `name`'s component on `id`? Written as a match rather than generically because the
+    /// request the UI raises is a string, and this asks the same question the same way.
+    fn has_component(world: &World, id: u32, name: &str) -> bool {
+        match name {
+            "Hitbox" => world.borrow::<gizmo::physics::components::Hitbox>().get(id).is_some(),
+            "Hurtbox" => world.borrow::<gizmo::physics::components::Hurtbox>().get(id).is_some(),
+            "BoneAttachment" => world
+                .borrow::<gizmo::renderer::components::BoneAttachment>()
+                .get(id)
+                .is_some(),
+            "FighterController" => world
+                .borrow::<gizmo::physics::components::fighter::FighterController>()
+                .get(id)
+                .is_some(),
+            other => panic!("test bilinmeyen bileşen adı kullandı: {other}"),
+        }
+    }
+
+    /// **Adding two fighters gives player 1 and player 2**, which is what the studio's own fight
+    /// HUD requires before it draws anything: it wants a `p1` *and* a `p2` entity, and
+    /// `FighterController::default()` is player 1 every time. Authoring a versus scene the
+    /// obvious way used to produce two player 1s and a HUD that never appeared.
+    #[test]
+    fn each_fighter_added_takes_the_next_free_player_slot() {
+        let mut world = World::new();
+        let mut ed = EditorState::default();
+
+        let mut slots = Vec::new();
+        for _ in 0..3 {
+            let ent = world.spawn();
+            ed.add_component_request = Some((ent, "FighterController".to_string()));
+            handle_scene_operations(&mut world, &mut ed, &mut studio_state());
+            slots.push(
+                world
+                    .borrow::<gizmo::physics::components::fighter::FighterController>()
+                    .get(ent.id())
+                    .expect("the fighter was added")
+                    .player_id,
+            );
+        }
+
+        assert_eq!(slots, vec![1, 2, 3], "each fighter takes the lowest free slot");
+
+        // And a freed slot is reused rather than skipped: delete player 2, add another.
+        let p2 = world
+            .borrow::<gizmo::physics::components::fighter::FighterController>()
+            .iter()
+            .find(|(_, f)| f.player_id == 2)
+            .map(|(id, _)| id)
+            .expect("player 2 is there");
+        let p2 = world.get_entity(p2).expect("still alive");
+        ed.remove_component_request = Some((p2, "FighterController".to_string()));
+        handle_scene_operations(&mut world, &mut ed, &mut studio_state());
+
+        let ent = world.spawn();
+        ed.add_component_request = Some((ent, "FighterController".to_string()));
+        handle_scene_operations(&mut world, &mut ed, &mut studio_state());
+        assert_eq!(
+            world
+                .borrow::<gizmo::physics::components::fighter::FighterController>()
+                .get(ent.id())
+                .expect("added")
+                .player_id,
+            2,
+            "the slot the deleted fighter held is free again"
         );
     }
 }

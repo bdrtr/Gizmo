@@ -265,6 +265,27 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The studio could add a `FighterController` but not remove one, and never showed what the fight
+  clock was doing to it.** Four inspector sections draw a 🗑 button; `scene_ops` had removal arms
+  for three, so pressing Delete on a fighter logged "Component turu silinemiyor" at the user and
+  left the component in place. The four are now pinned by one test together — the defect was an
+  asymmetry between a list of buttons and a list of match arms, which is exactly what a
+  per-component test misses.
+
+  Two more in the same corner. **Adding two fighters produced two player 1s** (`default()` is
+  always slot 1), and the studio's own fight HUD needs a p1 *and* a p2 before it draws anything —
+  so authoring a versus scene the obvious way produced a HUD that never appeared; the add path now
+  hands out the lowest free slot and reuses one that is freed. And **⏸ wiped the HUD**: the sync
+  block asked `is_playing()`, which is false while paused, so every paused frame fell into the
+  reset branch and the health bars vanished and the round timer snapped back to 99 under a pause
+  overlay that was still being drawn. It asks `is_in_play_session()` now; only the countdown stops.
+
+  The inspector's fighter section also draws the live half at last — the move in flight with its
+  frame index, total and phase, the hitstop/hitstun counters and the lock — read-only, because
+  `fighter_frame_system` rewrites them every fixed step. It had been drawing six authoring fields
+  and not one of them, while its own documentation promised "the frame data of the current move",
+  and it never drew `max_health` either: the denominator of the bar the fight HUD paints.
+
 - **`PhysicsTime::alpha` promised an interpolation the engine cannot do, and now says so.**
   `gizmo_app::frame`'s documentation said an update system "can read `PhysicsTime::alpha` to
   interpolate between the last two simulated states" — the engine keeps **one**. There is no

@@ -655,7 +655,14 @@ pub fn draw_json_value(ui: &mut egui::Ui, name: &str, value: &mut serde_json::Va
 
 
 
-/// The fighter-controller rows: health, state and the frame data of the current move.
+/// The fighter-controller rows: health, stance, and — read-only, because the engine's fight clock
+/// owns them — the move in flight and the frame counters that freeze it.
+///
+/// The live half was missing entirely: the section drew six authoring fields and not one of
+/// `active_move`, `current_move_frame`, `hitstop_frames` or `hitstun_frames`, so
+/// `fighter_frame_system` could count a whole move out and the inspector showed nothing moving.
+/// It did not draw `max_health` either — the denominator of the health bar the studio's own fight
+/// HUD paints from the field right above it.
 pub fn draw_fighter_controller_section(
     ui: &mut egui::Ui,
     world: &World,
@@ -676,10 +683,54 @@ pub fn draw_fighter_controller_section(
                 ui.horizontal(|ui| {
                     ui.label("Health:");
                     ui.add(egui::DragValue::new(&mut fighter.health).speed(1.0));
+                    ui.label("/");
+                    ui.add(egui::DragValue::new(&mut fighter.max_health).speed(1.0));
                 });
                 
                 ui.checkbox(&mut fighter.is_blocking, "Blocking");
                 ui.checkbox(&mut fighter.is_crouching, "Crouching");
+
+                // ── The live half: what the fight clock is doing to this fighter right now ──
+                //
+                // Read-only on purpose. `fighter_frame_system` writes these every fixed step, so
+                // a drag here would be overwritten before the next frame is drawn — a control
+                // that fights the engine reads as a broken control.
+                ui.separator();
+                match &fighter.active_move {
+                    Some(m) => {
+                        let fd = &m.frame_data;
+                        let total = fd.total_frames();
+                        let frame = fighter.current_move_frame;
+                        let phase = if frame < fd.startup {
+                            "startup"
+                        } else if frame < fd.startup + fd.active {
+                            "AKTİF"
+                        } else {
+                            "recovery"
+                        };
+                        ui.label(format!(
+                            "Hareket: {}  —  kare {}/{}  ({})",
+                            if m.name.is_empty() { "(isimsiz)" } else { &m.name },
+                            frame,
+                            total,
+                            phase
+                        ));
+                        ui.label(format!(
+                            "  {} startup / {} aktif / {} recovery · {:.0} hasar",
+                            fd.startup, fd.active, fd.recovery, fd.damage
+                        ));
+                    }
+                    None => {
+                        ui.label("Hareket: yok (nötr)");
+                    }
+                }
+                ui.label(format!(
+                    "Hitstop: {} · Hitstun: {}{}",
+                    fighter.hitstop_frames,
+                    fighter.hitstun_frames,
+                    if fighter.is_locked() { "  — KİLİTLİ" } else { "" }
+                ));
+                ui.separator();
                 
                 ui.horizontal(|ui| {
                     ui.label("Walk Speed:");
@@ -745,3 +796,102 @@ pub fn draw_mesh_renderer_section(
     ui.separator();
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gizmo_physics_core::components::fighter::{CombatMove, FighterController, FrameData};
+
+    /// Every string the frame painted, flattened out of the nested `Shape::Vec`s.
+    fn painted_text(output: &egui::FullOutput) -> Vec<String> {
+        fn scan(shape: &egui::Shape, out: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| scan(s, out)),
+                egui::Shape::Text(t) => out.push(t.galley.text().to_string()),
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        output.shapes.iter().for_each(|s| scan(&s.shape, &mut out));
+        out
+    }
+
+    /// **The inspector shows what the fight clock is doing.**
+    ///
+    /// It showed none of it: six authoring fields and not one of `active_move`,
+    /// `current_move_frame`, `hitstop_frames` or `hitstun_frames`. So `fighter_frame_system` could
+    /// count a jab from startup through recovery and the panel a user was staring at never moved —
+    /// the clock was correct and unobservable, which for an editor is most of the way to absent.
+    ///
+    /// Driven headlessly (`Context::run_ui`), so it needs no window and no GPU and asserts the
+    /// text the frame actually painted rather than that the code was called.
+    #[test]
+    fn the_fighter_section_paints_the_move_in_flight_and_its_counters() {
+        let mut world = World::new();
+        let entity = world.spawn();
+        // `FrameData`/`CombatMove` are `#[non_exhaustive]`, so from outside their crate they are
+        // built by `default()` and assigned into — the same shape the scripting crate's
+        // `SetFighterMove` handler uses.
+        let mut frame_data = FrameData::default();
+        frame_data.startup = 5;
+        frame_data.active = 3;
+        frame_data.recovery = 2;
+        let mut combat_move = CombatMove::default();
+        combat_move.name = "Jab".to_string();
+        combat_move.frame_data = frame_data;
+
+        let mut fighter = FighterController::new(2);
+        fighter.active_move = Some(combat_move);
+        // Frame 6 of 10: inside the 5..8 active window, and frozen for two more frames.
+        fighter.current_move_frame = 6;
+        fighter.apply_hitstop(2);
+        world.add_component(entity, fighter);
+
+        let mut state = EditorState::default();
+        let ctx = egui::Context::default();
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            draw_fighter_controller_section(ui, &world, entity, &mut state);
+        });
+        let painted = painted_text(&output).join("\n");
+        output.drop_without_applying_deltas();
+
+        assert!(
+            painted.contains("Jab") && painted.contains("kare 6/10"),
+            "the move in flight and how far through it the fighter is must both be on screen:\n{painted}"
+        );
+        assert!(
+            painted.contains("AKTİF"),
+            "frame 6 of a 5/3/2 move is inside its hitting window, and that is the one state a \
+             fighting-game author is looking for:\n{painted}"
+        );
+        assert!(
+            painted.contains("Hitstop: 2") && painted.contains("KİLİTLİ"),
+            "the freeze counter and the lock it implies must be readable:\n{painted}"
+        );
+    }
+
+    /// A neutral fighter says so rather than showing a stale move.
+    #[test]
+    fn the_fighter_section_says_when_there_is_no_move() {
+        let mut world = World::new();
+        let entity = world.spawn();
+        world.add_component(entity, FighterController::new(1));
+
+        let mut state = EditorState::default();
+        let ctx = egui::Context::default();
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            draw_fighter_controller_section(ui, &world, entity, &mut state);
+        });
+        let painted = painted_text(&output).join("\n");
+        output.drop_without_applying_deltas();
+
+        assert!(
+            painted.contains("nötr"),
+            "a fighter with no active move must say so:\n{painted}"
+        );
+        assert!(
+            !painted.contains("KİLİTLİ"),
+            "and must not claim to be locked:\n{painted}"
+        );
+    }
+}
