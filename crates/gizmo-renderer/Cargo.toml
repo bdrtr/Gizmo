@@ -51,6 +51,13 @@ criterion = "0.8.2"
 name = "visibility_bench"
 harness = false
 
+# CPU-only: `assign_lights` is a pure function of the grid, the camera and the light list.
+# ENGINE.md §3 hangs "move it to a compute shader" on a profile of exactly this, and until
+# 2026-08-18 nothing could produce one.
+[[bench]]
+name = "clustered_bench"
+harness = false
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"

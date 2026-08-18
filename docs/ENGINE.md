@@ -100,7 +100,7 @@ already shipped. Each is now either on, or off with a reason:
 | **cargo-deny** | **ON** — a CI job since before this list was written (`Supply chain (cargo-deny)`, advisories + licenses + bans + sources). The roadmap line was stale. |
 | **`missing_docs`** | **ON per crate, as a ratchet.** All 10 Stage A crates plus `gizmo-window`, `gizmo-ui` and — since 2026-08-17 — `gizmo-app`, `gizmo-analysis`, `gizmo-studio`, `gizmo-scripting`, the facade, `gizmo-editor` and `gizmo-renderer` are at zero and warn (CI's `-D warnings` makes that a deny). **The backlog is closed: every crate in the workspace is on the ratchet.** Re-measured 2026-08-17, and the table was accurate at every step. `gizmo-app`'s 23 were the windowed and headless builders — `new`, `set_setup`, `set_update`, `add_system` and the rest of what every demo calls — so they were also the crate's whole docs.rs front page. `gizmo-analysis`'s 33 were mostly the public fields of `Stats`, `SpanSample` and `TraceRecord`, i.e. the units of every number it exports; `gizmo-studio`'s 40 were its module list, its per-frame systems and the `PrimitiveSize` table — which is also where a stale claim was found and removed, since that table still said the engine had no cylinder shape. `gizmo-scripting`'s 102 were three quarters `ScriptCommand`: 41 variants and 35 fields making up the entire vocabulary a Lua script has for changing the world, which is the crate's actual API and had no units written anywhere. `gizmo-editor`'s 281 were two thirds `EditorState` and its nested state types — 63 fields, 107 more in `state_types.rs` — which is where the editor's whole request protocol lives: a panel cannot mutate the world while egui is drawing it, so every action it offers is recorded as a field and drained by a system afterwards, and a request nobody drains is a menu item that silently does nothing. Documenting it also turned up a doc comment that had been on the wrong field since `ffd8c29`: `history` was described as "whether FXAA anti-aliasing is on", left behind when the FXAA flag moved into `PostProcessSettings`. `gizmo-renderer`'s 874 — the largest, and the last — split into two halves that wanted different things written. The GPU-facing structs (`gpu_types`, and the physics, fluid and particle type modules) needed the *reasons*, not the field names: every `_pad` field is the Rust half of an alignment gap naga inserts whether or not the struct does, so omitting one shifts every field after it in every shader; the render fields sitting inside simulation structs like `GpuBox` and `GpuParticle` are there because those buffers are also the instance buffers, with no CPU in between. The pass states (SSAO, SSGI, SSR, TAA, volumetric, the fluid's screen-space surface) needed the *shape*: which passes exist, which textures are rebuilt on resize, and why each split is a split — a blur that reads what it writes smears in one direction, a separable blur costs `2n` samples against `n²`, a composite pass cannot sample the target it is writing. **The renderer is also the crate that proved the ratchet is per-target**: see the note in §8. The facade's 168 were the front door itself — the bundles, `SimpleApp`'s scene builder, the `gizmo::physics` re-export tree and the colour constants — i.e. the crate a user actually types, and the one whose docs.rs page is the engine's. A crate joins the ratchet when it reaches zero; that rule is what stops the number growing while the backlog is worked off. |
 | **benchmarks** | **ON as a smoke gate** (`cargo bench --benches -- --test` runs every criterion bench once, catching panics and broken bench asserts). A *regression* gate is **not** adopted: shared CI runners have no timing floor, so the threshold that avoids false alarms is wide enough to miss real regressions. Performance work here is measured deliberately instead (§7 has the record of what was measured and rejected). |
-| **rustfmt** | **report-only, and staying that way.** Making it a gate means reformatting the tree first: measured, **2660 hunks across every crate**. That is one commit of pure churn against git blame, a conflict with anything in flight, and it buys a property clippy does not already give — the lint gate is the one that catches defects. The existing rule stands: don't reflow unrelated code, and leave the report on so drift stays visible. |
+| **rustfmt** | **report-only, and staying that way.** Making it a gate means reformatting the tree first: **2794 hunks across every crate** (re-measured 2026-08-18; it was 2660 when this row was written, and it drifts upward as the tree grows — which makes the argument stronger over time, not weaker). That is one commit of pure churn against git blame, a conflict with anything in flight, and it buys a property clippy does not already give — the lint gate is the one that catches defects. The existing rule stands: don't reflow unrelated code, and leave the report on so drift stays visible. |
 | **coverage** | **not adopted.** A percentage gate rewards tests that execute lines; this codebase's tests are written to fail when behaviour is wrong (the pixel readbacks, the soak horizons, the source-shape guards), and several of the defects found this month were in code with coverage and no assertion. The number would go up and mean nothing. |
 <!-- TRANSLATOR NOTE: "İnsan-gözü A/B gated" is a terse fragment; read as "these items can only be signed off by a human comparing before/after side by side". -->
 
@@ -408,11 +408,33 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
   learn about arithmetic done in a header. Verified red at `MAX_LIGHTS` = 1200: 77 360 B, with the
   real ceiling in the message.
 
-  **Assignment is on the CPU, deliberately**, and the cost is measured (release, this machine):
-  0.047 ms at 8 lights, 0.106 at 32, 0.201 at 64, 0.469 at 128, 0.764 at 256. A compute-shader
-  build is the follow-up and its **trigger is a profile** showing this — not a preference for
-  compute. What the CPU version buys is that the whole assignment is a pure function with nine unit
-  tests, which is how the rest of this engine's correctness is held.
+  **Assignment is on the CPU, deliberately**, and the cost is measured. A compute-shader build is
+  the follow-up and its **trigger is a profile** showing this — not a preference for compute. What
+  the CPU version buys is that the whole assignment is a pure function with nine unit tests, which
+  is how the rest of this engine's correctness is held.
+
+  **The trigger could not be pulled until 2026-08-18**, which is the part worth recording: the
+  numbers below were taken by hand and nothing reproduced them, so finding out whether assignment
+  had *become* the frame's problem meant redoing the experiment from scratch and hoping it was set
+  up the same way. `crates/gizmo-renderer/benches/clustered_bench.rs` is that experiment written
+  down, at the same light counts so a run is a comparison rather than a fresh baseline. It also
+  joins CI's `cargo bench -- --test` smoke gate, so the harness cannot quietly stop compiling
+  between the times anyone looks at it.
+
+  | lights | recorded by hand | benchmark (2026-08-18) |
+  |---|---|---|
+  | 8 | 0.047 ms | 0.027 ms |
+  | 32 | 0.106 ms | 0.091 ms |
+  | 64 | 0.201 ms | 0.177 ms |
+  | 128 | 0.469 ms | 0.346 ms |
+  | 256 | 0.764 ms | 0.718 ms |
+
+  Same order, same scaling — linear in light count — and consistently a little lower, which is
+  what a different light distribution and criterion's median rather than a wall-clock stopwatch
+  would produce. Neither column is the other's correction. What matters for the decision is the
+  last row: **0.72 ms at 256 lights is 4.3 % of a 60 fps frame**, so the CPU version is still the
+  right side of the trade, and a profile that says otherwise is now something anyone can produce
+  by running one command.
 
   **The guard finding is the part worth remembering.** Clustering is correct only if
   `assign_lights` (CPU) and `gizmo_cluster_index` (WGSL) agree about which cluster a point is in,
