@@ -55,6 +55,7 @@
 //! - `time` — delta time, elapsed time, FPS
 
 pub mod api_ai;
+pub mod api_animation;
 pub mod api_table;
 pub mod api_audio;
 pub mod api_entity;

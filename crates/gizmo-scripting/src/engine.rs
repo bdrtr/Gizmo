@@ -25,6 +25,7 @@ fn wake_after_velocity_write(world: &mut World, id: u32) {
 }
 
 use crate::api_ai;
+use crate::api_animation;
 use crate::api_audio;
 use crate::api_entity;
 use crate::api_fighter;
@@ -358,6 +359,7 @@ impl ScriptEngine {
         .exec()?;
 
         // === API MODÜLLERİNİ KAYDET ===
+        api_animation::register_animation_api(&lua, command_queue.clone())?;
         api_entity::register_entity_api(&lua, command_queue.clone())?;
         api_fighter::register_fighter_api(&lua, command_queue.clone())?;
         api_input::register_input_api(&lua)?;
@@ -474,6 +476,8 @@ impl ScriptEngine {
         self.elapsed_time += dt;
 
         // 1. World verilerini Lua'ya aktar (read snapshot)
+        api_animation::update_animation_read_api(&self.lua, world)
+            .map_err(|e| format!("Animation API güncelleme hatası: {}", e))?;
         api_entity::update_entity_read_api(&self.lua, world)
             .map_err(|e| format!("Entity API güncelleme hatası: {}", e))?;
         api_fighter::update_fighter_read_api(&self.lua, world)

@@ -96,7 +96,7 @@ enum ReloadEdge {
 /// This is where those subsystems are, and each handler passes on what it does not speak for.
 ///
 /// **What still goes unanswered, and why it is a list rather than a shrug.** Of `ScriptCommand`'s
-/// 42 variants, 22 are applied inside the scripting crate and 20 came back here. This chain now
+/// 43 variants, 23 are applied inside the scripting crate and 20 came back here. This chain now
 /// takes seven of those (three audio, three vehicle, the camera's field of view). The remaining
 /// thirteen are scene load/save, the camera *follow* commands, dialogue, cutscenes and the race
 /// subsystem — see docs/ENGINE.md's Scripting section, which carries the enumerated list and what

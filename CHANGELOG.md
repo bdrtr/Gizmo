@@ -39,6 +39,21 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   it, the script takes the health off — 92, not 100 (the event arrived) and not 84 (one hit per
   move).
 
+- **Lua can animate: the new `animation` API.** `ScriptCommand::PlayAnimation` and
+  `SetAnimationSpeed` have had working handlers for as long as they have existed —
+  `flush_commands` applies both to real `AnimationPlayer`s — and **nothing anywhere pushed
+  either one**: no Lua binding, no Rust caller, no test. The engine could animate on request and
+  had no way to be asked; `gizmo-animation`'s own docs name "the Lua `PlayAnimation` command"
+  while explaining why a bad clip name is logged.
+
+  `animation.play(id, name, blend?, loop?)` fills in the ordinary case (a 0.2 s cross-fade, and
+  looping) so a locomotion clip is one call, and takes an override for a one-shot;
+  `animation.set_speed(id, speed)` is the other half. The read side comes with it —
+  `animation.state(id)` gives `clip`, `time`, `duration`, `speed`, `looping` and the full `clips`
+  list, with `animation.clip` and `animation.is_playing` on top. The clip list matters: a name that
+  matches nothing is ignored by the engine with a warning, so a script that wants to be sure checks
+  rather than hopes.
+
 - **Hits are resolved and reported: `gizmo_physics_dynamics::hit_detection_system` and
   `HitEvent`.** The fight subsystem's last missing link. A move now reaches its active window (the
   clock, above), and this turns that into "these two volumes overlap, once": it drives every

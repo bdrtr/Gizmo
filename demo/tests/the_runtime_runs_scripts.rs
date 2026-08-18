@@ -49,6 +49,22 @@ function on_entity_update(id, dt, props)
 end
 "#;
 
+/// A script that drives an animation, then **reads back which clip is playing** and switches on
+/// what it saw. Write, read, write — the loop that proves both halves of the API.
+const DANCER: &str = r#"
+frames = 0
+function on_entity_update(id, dt, props)
+    frames = frames + 1
+    if frames == 1 then
+        animation.play(id, "run", 0.1, true)
+    elseif frames == 2 then
+        animation.set_speed(id, 2.0)
+    elseif animation.is_playing(id, "run") then
+        animation.play(id, "idle", 0.0, true)
+    end
+end
+"#;
+
 /// A script that throws a jab and then **spends the hits the engine reports**: it reads
 /// `fighter.hits()`, takes the damage off the victim's health and stuns them. This is the whole
 /// contract of the event-based design — the engine resolves the hit, the game decides the cost.
@@ -534,4 +550,64 @@ fn a_script_spends_the_hits_the_engine_reports() {
         hit.is_locked(),
         "and the stun the script applied from the event must be running"
     );
+}
+
+/// **A script can animate, and can see what it animated.**
+///
+/// `ScriptCommand::PlayAnimation` and `SetAnimationSpeed` had working handlers and no producer:
+/// `flush_commands` has applied both to real `AnimationPlayer`s for as long as they have existed,
+/// and nothing anywhere pushed either one. The engine could animate on request and had no way to
+/// be asked — `gizmo-animation`'s own docs even name "the Lua `PlayAnimation` command" while
+/// explaining a warning.
+///
+/// The script switches to `run`, sets the speed, then *reads back* that `run` is playing and
+/// switches to `idle`. The final state proves all three: the clip changed twice (so the write
+/// works), the speed stuck (so the second command works), and the second switch happened at all
+/// (so the read works — with no mirror, `is_playing` is false forever and it never fires).
+#[test]
+fn a_script_can_drive_an_animation_and_read_it_back() {
+    use gizmo::renderer::components::AnimationPlayer;
+
+    fn clip(name: &str) -> gizmo::animation::skeletal::AnimationClip {
+        gizmo::animation::skeletal::AnimationClip {
+            name: name.to_string(),
+            duration: 1.0,
+            translations: Vec::new(),
+            rotations: Vec::new(),
+            scales: Vec::new(),
+        }
+    }
+
+    let script = TempScript::new("dancer", DANCER);
+    let (mut world, entity) = world_with_scripted_entity(&script.path());
+    let id = entity.id();
+
+    world.add_component(
+        entity,
+        AnimationPlayer {
+            animations: std::sync::Arc::new([clip("idle"), clip("run")]),
+            ..Default::default()
+        },
+    );
+
+    let input = Input::default();
+    let mut play = PlayLoop::new();
+    for _ in 0..4 {
+        play.step(&mut world, 1.0 / 60.0, &input, &mut |_| {});
+    }
+
+    let players = world.borrow::<AnimationPlayer>();
+    let player = players.get(id).expect("the player is still there");
+    assert_eq!(
+        player.current_clip().map(|c| c.name.as_str()),
+        Some("idle"),
+        "the script read that `run` was playing and switched back — a script that cannot read \
+         which clip is active never makes that second switch"
+    );
+    assert_eq!(
+        player.prev_animation,
+        Some(1),
+        "and it came from `run`, so the first switch happened too"
+    );
+    assert_eq!(player.speed, 2.0, "the speed the script set must have landed");
 }

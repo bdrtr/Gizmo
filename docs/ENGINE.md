@@ -2308,8 +2308,11 @@ Cihazsız yarısı ayrı: komutların **tanınması** — asıl kırık olan yar
 birim testinde.
 
 **Ve aynı soru bütün komut vokabülerine soruldu — LİSTE BU (2026-08-18).** `ScriptCommand`'ın
-**42 varyantı** var; `flush_commands` bunların **22'sini** kendi içinde uyguluyor, **20'si** geri
-dönüyordu ve hiçbirine bakan yoktu. `PlayLoop` şimdi yedisini karşılıyor:
+**43 varyantı** var; `flush_commands` bunların **23'ünü** kendi içinde uyguluyor, **20'si** geri
+dönüyordu ve hiçbirine bakan yoktu. `PlayLoop` şimdi yedisini karşılıyor. *(Sayılar 2026-08-19'da
+düzeltildi: `SetFighterHealth` aynı gün eklendi ve iki yerde yazılı sayıyı bayatlattı — §8'in
+"düzyazıya yazılan sayı, kodun geride bıraktığı sayıdır" kuralının bu oturumdaki örneği. Ölçüm:
+enum gövdesindeki varyant adları sayıldı, 43.)*
 
 | komut | durum |
 |---|---|
@@ -2572,14 +2575,23 @@ altsisteminin geri kalanı, ve hiçbiri saatin kapsamında değil:
 **Bir sonraki oturuma, bu oturumda ölçülüp düzeltilmeyenler** (dövüş zinciri kapandı, bunlar
 komşu köşeler):
 
-- **Üç `ScriptCommand` varyantının üreticisi yok.** `PlayAnimation` ve `SetAnimationSpeed`'in
-  `flush_commands`'te çalışan işleyicileri var ama hiçbir `api_*.rs` onları kuyruğa koymuyor —
-  yani Lua'da animasyon oynatmanın yolu yok, üstelik `gizmo-animation`'ın belgesi hâlâ "the Lua
-  PlayAnimation"dan söz ediyor. `SetFightCamera` de aynı: `commands.rs:151`'de tanımlı,
-  `play.rs`'te bir yorumda anılıyor, iten yok. Bu, bu oturumda üç kez görülen desenin aynısı
-  (ölü kol / iki protokol / okuyucusuz değer): ya bağlanır ya silinir, ve hangisi olduğu
-  ölçülebilir — animasyon tarafında çalışan bir işleyici VAR, yani bağlamak bir satır Lua
-  bağlaması; dövüş kamerası ise stüdyonun kendi kamera kodunun kopyası olabilir, önce bakılmalı.
+- ~~`PlayAnimation` ve `SetAnimationSpeed`'in üreticisi yok~~ **— bağlandı.** İkisinin de
+  `flush_commands`'te çalışan işleyicisi vardı ve hiçbir `api_*.rs` onları itmiyordu: motor istek
+  üzerine animasyon oynatabiliyordu ama istenmesinin yolu yoktu. Yeni `api_animation.rs`:
+  `animation.play(id, ad, blend?, loop?)` (varsayılan 0.2 s çapraz geçiş + döngü, çünkü
+  script'in `animation.play(id, "run")` demesi sıradan olanı istemektir) ve
+  `animation.set_speed(id, hız)`; okuma yarısı da `animation.state(id)` →
+  `{ clip, time, duration, speed, looping, clips }`, artı `animation.clip` / `animation.is_playing`
+  yardımcıları. `clips` listesi olmadan bir script hangi klibi seçebileceğini bilemez — var olmayan
+  bir ad motor tarafında uyarıyla yok sayılıyor.
+  Uçtan uca test yaz-oku-yaz turunu sürüyor: script `run`'a geçiyor, hızı ayarlıyor, sonra
+  `is_playing(id, "run")` okuyup `idle`'a dönüyor. Ayna kaldırılınca ikinci geçiş hiç olmuyor
+  (`Some("run")`, `Some("idle")` yerine).
+- **`SetFightCamera`'nın ne üreticisi ne işleyicisi var** (`commands.rs:151`; `play.rs`'te yalnız
+  bir yorumda anılıyor). Stüdyonun kendi otomatik dövüş kamerası (`simulation.rs`) aynı işi
+  yapıyor ama sayıları gömülü ve yalnız editörde koşuyor — ihraç edilen oyunda dövüş kamerası yok.
+  Yani seçenek "sil" ile "stüdyodaki çerçeveleme matematiğini motora taşı, komut onu sürsün"
+  arasında; ikincisi bir kopyayı da ortadan kaldırır.
 - **Editör modunda fizik DEĞİŞKEN dt ile adımlanıyor.** `gizmo-studio/src/main.rs:35`,
   `set_update` içinde `cpu_physics_step_system(world, dt)` — yani ▶'ye basılmadıkça viewport'taki
   simülasyon sabit adım kullanmıyor, ki bu tam olarak demoların 240 Hz akümülatörlerinin kaçtığı
