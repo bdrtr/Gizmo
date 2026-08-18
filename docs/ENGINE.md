@@ -1639,6 +1639,32 @@ the *slope* gate is the one that guards it.
     **pinned rather than fixed** — restoring the root would resurrect a component the node
     deliberately removed, which is the worse surprise.
 
+  **The detector lied twice more before it was trustworthy**, and the second time in the class
+  it exists to find: a function that is *passed* rather than called. `schedule.add_di_system(
+  ui_layout_system.into_config())` mentions the name with no parenthesis after it, so both of
+  `gizmo-ui`'s systems came back as "never called" — and an ECS system passed by value is exactly
+  the shape the `animation_update_system` bug had. The check is now "is the name mentioned at
+  all, outside a comment", not "is it called". Corrected figures: 25 in the physics crates, 17
+  across the rest of Stage A, 5 in the small crates, 25 in renderer/editor/app/studio — and most
+  of those are builders a *user* calls, which is what a public API is for.
+
+  A third finding came out of the last sweep. `gizmo_math::Ray::intersect_triangle` is public,
+  documented at length, mentioned nowhere, and had no test — while `gizmo_physics_core::Raycast::
+  ray_triangle` is a second Möller–Trumbore that *is* used. Both now have tests, including a
+  cross-check that they agree on hit and distance. Two places they differ deliberately:
+
+  - **The self-intersection band.** Both reject a hit at exactly `t = 0`; between there and
+    `1e-8` the math one refuses (a renderer's shadow and bounce rays start ON surfaces) and the
+    collider one accepts (a hit a nanometre away is one body touching another). Measured at
+    offsets of 0, 1e-8 and 1e-7.
+  - **The parallel epsilon** — `1e-6` against `1e-8` — which turns out **not to be reachable**.
+    For this shape `|det| = |dir.z|`, so a determinant inside the gap means a ray travelling
+    almost entirely in the triangle's plane, and such a ray crosses it millions of units away,
+    outside any real triangle. It is rejected on the barycentrics, not on the epsilon. The first
+    test written for it asserted a one-way implication that stayed true when the epsilons were
+    made equal — measured, and replaced with the conclusion instead of a test that passes for the
+    wrong reason.
+
   Worth re-running when a crate grows a public surface.
 - **A positive `contains` over source text is satisfied by a comment — and four of this
   repository's guards were.** Audited 2026-08-18, after three separate false guards turned up in

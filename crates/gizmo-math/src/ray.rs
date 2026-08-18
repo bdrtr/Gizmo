@@ -499,4 +499,100 @@ mod tests {
         // new()/from_ndc() ile kurulan Ray her zaman geçerli olmalı.
         assert!(Ray::new(Vec3::ZERO, Vec3::new(0.0, 0.0, 2.0)).is_valid());
     }
+
+    // ── `intersect_triangle` ─────────────────────────────────────────────────────────────────
+    //
+    // Documented in detail and, until 2026-08-18, mentioned nowhere in the workspace and covered
+    // by nothing. Every claim below is one its doc comment makes.
+
+    /// A unit triangle in the z = 0 plane, spanning (0,0)–(1,0)–(0,1).
+    fn tri() -> (Vec3, Vec3, Vec3) {
+        (
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+        )
+    }
+
+    #[test]
+    fn a_ray_through_the_middle_hits_at_the_right_distance() {
+        let (a, b, c) = tri();
+        let ray = Ray::new(Vec3::new(0.25, 0.25, -3.0), Vec3::Z);
+        let t = ray.intersect_triangle(a, b, c).expect("straight through the face");
+        assert!((t - 3.0).abs() < 1e-5, "t = {t}");
+    }
+
+    /// "Both faces hit, despite what the inline comment suggests" — the docs say so explicitly,
+    /// so a later `a < 1e-8` (culling backfaces) would be a behaviour change and not a tidy-up.
+    #[test]
+    fn a_backface_hit_is_still_a_hit() {
+        let (a, b, c) = tri();
+        let front = Ray::new(Vec3::new(0.25, 0.25, -3.0), Vec3::Z);
+        let back = Ray::new(Vec3::new(0.25, 0.25, 3.0), Vec3::NEG_Z);
+        assert!(front.intersect_triangle(a, b, c).is_some());
+        assert!(
+            back.intersect_triangle(a, b, c).is_some(),
+            "this test is single-sided now, which the docs say it is not"
+        );
+    }
+
+    #[test]
+    fn a_ray_beside_the_triangle_misses() {
+        let (a, b, c) = tri();
+        // Past the hypotenuse: u + v > 1.
+        let ray = Ray::new(Vec3::new(0.9, 0.9, -3.0), Vec3::Z);
+        assert!(ray.intersect_triangle(a, b, c).is_none());
+        // And outside the u range entirely.
+        let ray = Ray::new(Vec3::new(-0.5, 0.25, -3.0), Vec3::Z);
+        assert!(ray.intersect_triangle(a, b, c).is_none());
+    }
+
+    /// Edge-inclusive on purpose: a ray through a shared edge hits **both** adjacent triangles,
+    /// and the docs tell the caller to dedupe by nearest `t`. A strict comparison would silently
+    /// open a crack along every shared edge in a mesh, which is the classic way a raycast starts
+    /// falling through the floor.
+    #[test]
+    fn the_barycentric_acceptance_is_inclusive_on_the_edges() {
+        let (a, b, c) = tri();
+        for point in [
+            Vec3::new(0.5, 0.5, 0.0), // exactly on the hypotenuse: u + v == 1
+            Vec3::new(0.0, 0.5, 0.0), // on the u == 0 edge
+            Vec3::new(0.5, 0.0, 0.0), // on the v == 0 edge
+        ] {
+            let ray = Ray::new(point + Vec3::new(0.0, 0.0, -3.0), Vec3::Z);
+            assert!(
+                ray.intersect_triangle(a, b, c).is_some(),
+                "a ray through {point:?} — exactly on an edge — must hit"
+            );
+        }
+    }
+
+    #[test]
+    fn a_triangle_behind_the_origin_is_not_a_hit() {
+        let (a, b, c) = tri();
+        let ray = Ray::new(Vec3::new(0.25, 0.25, 3.0), Vec3::Z); // pointing away
+        assert!(ray.intersect_triangle(a, b, c).is_none());
+    }
+
+    /// The `t > 1e-8` guard, which the docs describe as the self-intersection epsilon: a ray
+    /// spawned exactly ON a surface must not re-hit it at `t ≈ 0`. Without it every shadow or
+    /// bounce ray in a renderer starts by hitting the thing it left.
+    #[test]
+    fn a_ray_starting_on_the_surface_does_not_hit_it_again() {
+        let (a, b, c) = tri();
+        let ray = Ray::new(Vec3::new(0.25, 0.25, 0.0), Vec3::Z);
+        assert!(
+            ray.intersect_triangle(a, b, c).is_none(),
+            "a ray leaving the surface re-hit its own triangle at t ≈ 0"
+        );
+    }
+
+    #[test]
+    fn a_degenerate_triangle_reports_nothing_rather_than_dividing_by_zero() {
+        let p = Vec3::new(1.0, 2.0, 3.0);
+        let ray = Ray::new(Vec3::ZERO, Vec3::X);
+        let t = ray.intersect_triangle(p, p, p); // zero area
+        assert!(t.is_none(), "got {t:?}");
+        assert!(t.is_none_or(|v| v.is_finite()), "and certainly not a NaN");
+    }
 }

@@ -1242,4 +1242,131 @@ mod tests {
         // Near box's front face at z = -1 ⇒ distance 4 (not the far box at ~14).
         assert!((t - 4.0).abs() < 1e-3, "expected nearest hit at t≈4, got {t}");
     }
+
+    // ── The two ray-triangle tests ───────────────────────────────────────────────────────────
+    //
+    // There are two Möller–Trumbore implementations in this workspace: `Raycast::ray_triangle`
+    // here (private, used by the mesh and heightfield paths) and `gizmo_math::Ray::
+    // intersect_triangle` (public, documented, and — until 2026-08-18 — mentioned nowhere and
+    // covered by nothing). Two implementations of one rule need a test that runs both.
+    //
+    // They are not meant to be identical: this one returns a normal, flipped to face the ray,
+    // and that is the whole reason it exists. What must not drift is the ANSWER — hit or miss,
+    // and where. The two places they legitimately differ are pinned below rather than left to be
+    // discovered by whichever caller meets them first.
+
+    fn unit_triangle() -> (Vec3, Vec3, Vec3) {
+        (
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+        )
+    }
+
+    #[test]
+    fn the_two_ray_triangle_implementations_agree_on_hit_and_distance() {
+        let (a, b, c) = unit_triangle();
+        let cases = [
+            (Vec3::new(0.25, 0.25, -3.0), Vec3::Z),        // through the middle
+            (Vec3::new(0.25, 0.25, 3.0), Vec3::NEG_Z),     // from behind — both are two-sided
+            (Vec3::new(0.9, 0.9, -3.0), Vec3::Z),          // past the hypotenuse: a miss
+            (Vec3::new(-0.5, 0.25, -3.0), Vec3::Z),        // outside u: a miss
+            (Vec3::new(0.5, 0.5, -3.0), Vec3::Z),          // exactly on the hypotenuse
+            (Vec3::new(0.25, 0.25, 3.0), Vec3::Z),         // pointing away: a miss
+            (Vec3::new(0.25, 0.25, -3.0), Vec3::X),        // parallel to the face: a miss
+        ];
+        for (origin, dir) in cases {
+            let mine = Raycast::ray_triangle(origin, dir, a, b, c).map(|(t, _)| t);
+            let theirs = gizmo_math::Ray::new(origin, dir).intersect_triangle(a, b, c);
+            match (mine, theirs) {
+                (None, None) => {}
+                (Some(x), Some(y)) => assert!(
+                    (x - y).abs() < 1e-5,
+                    "different distances for {origin:?} → {dir:?}: {x} vs {y}"
+                ),
+                _ => panic!("one hit and one missed for {origin:?} → {dir:?}: {mine:?} vs {theirs:?}"),
+            }
+        }
+    }
+
+    /// The first legitimate difference, and it is a **band** rather than a point — which is what
+    /// writing this test taught: both reject a ray whose hit lands at exactly `t = 0`, so a ray
+    /// starting precisely on the surface misses either way. What differs is what happens just
+    /// past that: `gizmo_math` demands `t > 1e-8` (its self-intersection guard, for a renderer's
+    /// shadow and bounce rays, which are spawned ON surfaces), and this one takes any `t > 0`,
+    /// because a collider raycast landing a nanometre away is one body touching another and the
+    /// caller wants to hear about it.
+    ///
+    /// Measured: at an offset of 1e-8 the math version answers `None` and this one answers a hit;
+    /// at 1e-7 both do. Neither is wrong for its job — written down so the next person to "unify"
+    /// them knows there is a decision here and not an oversight.
+    #[test]
+    fn they_differ_deliberately_inside_the_self_intersection_band() {
+        let (a, b, c) = unit_triangle();
+        let dir = Vec3::Z;
+
+        // Exactly on the surface: BOTH miss.
+        let on_surface = Vec3::new(0.25, 0.25, 0.0);
+        assert!(Raycast::ray_triangle(on_surface, dir, a, b, c).is_none());
+        assert!(gizmo_math::Ray::new(on_surface, dir)
+            .intersect_triangle(a, b, c)
+            .is_none());
+
+        // Just inside the band: this one hits, the other does not.
+        let just_off = Vec3::new(0.25, 0.25, -1e-8);
+        assert!(
+            Raycast::ray_triangle(just_off, dir, a, b, c).is_some(),
+            "a collider hit a hair away is a real touch and must be reported"
+        );
+        assert!(
+            gizmo_math::Ray::new(just_off, dir)
+                .intersect_triangle(a, b, c)
+                .is_none(),
+            "the math one guards this band so a ray does not re-hit the surface it left"
+        );
+
+        // Past the band: both agree again.
+        let clear = Vec3::new(0.25, 0.25, -1e-7);
+        assert!(Raycast::ray_triangle(clear, dir, a, b, c).is_some());
+        assert!(gizmo_math::Ray::new(clear, dir)
+            .intersect_triangle(a, b, c)
+            .is_some());
+    }
+
+    /// The second source-level difference — and the measurement says it is **not reachable**,
+    /// which is worth more than a test that pretends otherwise.
+    ///
+    /// The parallel/degenerate epsilon is `1e-6` here and `1e-8` in `gizmo_math`, a hundredfold
+    /// gap, so on paper there is a band of nearly-edge-on rays this one rejects and the other
+    /// accepts. Trying to construct one showed why it cannot be hit: for this triangle
+    /// `|det| = |dir.z|`, so a `det` inside the band means a ray travelling almost entirely in
+    /// the triangle's own plane — and such a ray crosses `z = 0` millions of units away, far
+    /// outside a unit triangle. It is rejected on the barycentrics, not on the epsilon. Pushing
+    /// the origin close enough to the plane to fix that lands the hit inside the *other* band
+    /// (`t` below `1e-8`), where the two already differ for the reason above.
+    ///
+    /// The first version of this test asserted a one-way implication — "if the coarse epsilon
+    /// accepts it the fine one must too" — which stays true when the epsilons are made equal, so
+    /// it measured nothing. Verified: setting this crate's epsilon to `1e-8` left it green.
+    ///
+    /// So the check below is the honest one: the two agree wherever a ray can actually be aimed,
+    /// which the case list in `the_two_ray_triangle_implementations_agree_on_hit_and_distance`
+    /// already covers. This test records why there is no case to add.
+    #[test]
+    fn the_parallel_epsilon_gap_is_not_reachable_for_a_ray_that_hits() {
+        let (a, b, c) = unit_triangle();
+        // `|det| = |dir.z|` for this triangle: inside the gap by construction.
+        let dir = Vec3::new(0.0, 1.0, 1e-7).normalize();
+        let origin = Vec3::new(0.25, 0.25, -1.0);
+        assert!(
+            Raycast::ray_triangle(origin, dir, a, b, c).is_none(),
+            "a ray this close to the plane crosses it far outside the triangle"
+        );
+        assert!(
+            gizmo_math::Ray::new(origin, dir)
+                .intersect_triangle(a, b, c)
+                .is_none(),
+            "…and so does the other one, on the barycentrics rather than the epsilon"
+        );
+    }
 }
