@@ -1503,8 +1503,9 @@ editor; `Grid` was the reverse. `MaterialType` is `#[non_exhaustive]`, so a wild
 in any downstream crate and a ninth variant could never have been a compile error in either file.
 The decision now lives in the crate that defines the enum, where the match is exhaustive: one
 compile error there instead of two silent misroutes out here. The engine path is behaviour-identical
-(12 golden render tests, hash unchanged); studio's `BakedLit` flag goes 0.0 → 1.0, which is the fix
-and is a visible change to a viewport nothing can test.
+(the golden render tests of the day — 12 of them then, 23 now — hash unchanged); studio's
+`BakedLit` flag goes 0.0 → 1.0, which is the fix and is a visible change to a viewport nothing can
+test.
 
 What this deliberately does **not** do is merge the two paths. The deferred and editor-forward
 recorders genuinely differ, that difference is the part with no automated coverage, and §3 gates it
@@ -1838,6 +1839,22 @@ the *slope* gate is the one that guards it.
 
   That one is now **deleted** rather than corrected (§4) — it carried no decision. The other two
   stayed because they do: one is a standing argument about rustfmt, the other is checked by a test.
+
+  **The sorting rule, from working through the rest of them (2026-08-19).** A number in these docs
+  is one of two things and they want opposite treatment:
+  - A claim about **today** ("N public types are non_exhaustive", "published on crates.io at
+    0.9.0"). It rots silently and must be either **computed** or **deleted**. Nothing else works;
+    diligence has now failed three times on one line.
+  - The record of a **measurement** ("12 golden render tests, hash unchanged", "gizmo-scripting's
+    102 undocumented items were 41 variants and 35 fields"). It was true when taken and stays
+    valuable *because* it is dated — rewriting it to today's number would destroy the evidence and
+    tell a reader nothing about when it was gathered. Give it its date, or the phrase "of the day",
+    and leave the number alone.
+
+  `ScriptCommand`'s counts are the first family moved to **computed**:
+  `crates/gizmo/tests/prose_counts.rs` reads the enum and both prose sites and fails when they
+  disagree. It exists because those numbers went stale **twice in one session** — one commit added
+  a variant, another deleted one — and nothing noticed either time.
 
   The fix is not diligence. Where the number carries a decision, **compute it** — the uniform
   ceiling is a test now, and the cluster-assignment cost is a benchmark. Where it is background,
@@ -2722,10 +2739,14 @@ duruyor, çünkü her biri ölçümünü ve kararını taşıyor:
   yorumu tek başına tatmin ederdi — state machine'in öyle kalmasının yolu da buydu). O yüzden ikinci
   bir test eklendi: yorumları keserek iki yolun da İKİ sürücüyü çağırdığını sabitliyor. Negatif
   kontrol: stüdyodan satır çıkarılınca kırmızı.
-- **Düzyazıdaki öteki sayılar.** §4'ün ikisi silindi, ama tarama yedi bayat sayı daha buldu; çoğu
-  geçmiş bir ölçümün kaydı (o gün doğruydu, bugünü anlatmıyor) — mesela ENGINE.md:1493'ün "12
-  golden render testi" bugün 23. Kural şu: bugünü ANLATAN bir sayı ya hesaplanmalı ya silinmeli;
-  bir ÖLÇÜMÜN kaydı ise tarihiyle kalsın. Ayıklanması gereken, hangisinin hangisi olduğu.
+- ~~Düzyazıdaki öteki sayılar~~ **— ayıklandı, ve kural §8'e yazıldı.** İki tür var ve zıt muamele
+  istiyorlar: **bugünü anlatan** bir sayı ya hesaplanmalı ya silinmeli (§4'ün ikisi silindi), bir
+  **ölçümün kaydı** ise tarihiyle kalmalı — bugünün sayısına çevirmek kanıtı yok eder ("12 golden
+  render testi, hash değişmedi" o gün doğruydu; bugün 23, ve satır artık "o günkü" diyor).
+  `ScriptCommand`'ın sayıları **hesaplanana** taşındı: `crates/gizmo/tests/prose_counts.rs` enum'u
+  ve iki düzyazı yerini okuyup uyuşmadıklarında kırılıyor. Sebebi somut — o sayılar **tek oturumda
+  iki kez** bayatladı (bir commit varyant ekledi, bir başkası sildi) ve ikisini de kimse fark
+  etmedi. Negatif kontrol: 42 → 41 yapılınca test kırmızı.
 
 Düzeltilmiş ve kaydı tutulan yedi kusur. İlk üçü: script sırası (`HashMap` → `BTreeMap`,
 proses başına rastgeleydi), on altı komutun sessizce yutulması, bir script'in hatasının ötekileri
