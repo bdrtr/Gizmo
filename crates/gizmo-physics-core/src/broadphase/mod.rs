@@ -381,4 +381,71 @@ mod tests {
         tree.remove(make_entity(10));
         tree.validate();
     }
+
+    /// The four-at-a-time overlap test against a reference written out longhand.
+    ///
+    /// `aabb_overlaps_simd4` has **two** bodies — SSE on x86_64, a scalar loop everywhere else —
+    /// and they are `cfg`-exclusive, so no build compiles both and no test can compare them to
+    /// each other. What a test *can* do is compare whichever one is compiled against the rule
+    /// they are both supposed to implement, written here as plainly as possible. Two
+    /// implementations of one rule need a test that runs both; when the language will not allow
+    /// that, the next best thing is a third, obviously-correct one.
+    ///
+    /// The cases are chosen where the two could diverge: touching faces (the rule is INCLUSIVE,
+    /// matching `Aabb::intersects` and not `intersects_exclusive`), containment, a miss on one
+    /// axis only, and the `Aabb::empty()` sentinel — whose ±infinity bounds are what make the SIMD
+    /// arm agree with the scalar one despite having no `is_empty` early-out of its own.
+    #[test]
+    fn the_four_wide_overlap_test_agrees_with_the_rule_it_implements() {
+        fn reference(a: &Aabb, b: &Aabb) -> bool {
+            a.min.x <= b.max.x
+                && b.min.x <= a.max.x
+                && a.min.y <= b.max.y
+                && b.min.y <= a.max.y
+                && a.min.z <= b.max.z
+                && b.min.z <= a.max.z
+        }
+        fn boxed(min: [f32; 3], max: [f32; 3]) -> Aabb {
+            Aabb {
+                min: gizmo_math::Vec3::from(min).into(),
+                max: gizmo_math::Vec3::from(max).into(),
+            }
+        }
+
+        let target = boxed([0.0, 0.0, 0.0], [1.0, 1.0, 1.0]);
+
+        // SIX comparisons make up the rule — `min <= other.max` and `other.min <= max`, on three
+        // axes — and a case only exercises the one it sits exactly on the boundary of. The first
+        // version of this test had a touching case on ONE side of ONE axis, so five of the six
+        // could be turned strict without it noticing; each was tried. The six touching boxes
+        // below are one per comparison, and each was verified to fail on its own.
+        let cases = [
+            boxed([1.0, 0.0, 0.0], [2.0, 1.0, 1.0]),    // touches target.max.x
+            boxed([-1.0, 0.0, 0.0], [0.0, 1.0, 1.0]),   // touches target.min.x
+            boxed([0.0, 1.0, 0.0], [1.0, 2.0, 1.0]),    // touches target.max.y
+            boxed([0.0, -1.0, 0.0], [1.0, 0.0, 1.0]),   // touches target.min.y
+            boxed([0.0, 0.0, 1.0], [1.0, 1.0, 2.0]),    // touches target.max.z
+            boxed([0.0, 0.0, -1.0], [1.0, 1.0, 0.0]),   // touches target.min.z
+            boxed([0.5, 0.5, 0.5], [2.0, 2.0, 2.0]),    // overlapping
+            boxed([2.0, 0.0, 0.0], [3.0, 1.0, 1.0]),    // clear miss on X
+            boxed([0.2, 0.2, 0.2], [0.8, 0.8, 0.8]),    // fully contained
+            boxed([-5.0, -5.0, -5.0], [5.0, 5.0, 5.0]), // fully containing
+            boxed([0.0, 0.0, 5.0], [1.0, 1.0, 6.0]),    // overlaps X and Y, misses Z
+            Aabb::empty(),                              // the ±infinity sentinel
+        ];
+
+        for chunk in cases.chunks(4) {
+            let four: [&Aabb; 4] = [&chunk[0], &chunk[1], &chunk[2], &chunk[3]];
+            let mask = aabb_overlaps_simd4(&target, four);
+            for (i, other) in four.iter().enumerate() {
+                let got = mask & (1 << i) != 0;
+                assert_eq!(
+                    got,
+                    reference(&target, other),
+                    "bit {i} disagrees for {other:?} — the four-wide test and the rule it \
+                     implements have diverged"
+                );
+            }
+        }
+    }
 }

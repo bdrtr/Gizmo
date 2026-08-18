@@ -39,6 +39,67 @@ fn unit_box() -> ColliderShape {
 
 // ───────────────────────── overlap ─────────────────────────
 
+/// `raycast_all` and `raycast` must agree about what "within `max_distance`" means.
+///
+/// They did not. `raycast_all` filtered nothing, so a body whose AABB reached into range while
+/// its solid sat outside came back anyway — the broadphase's bound leaking out as if it were the
+/// query's. The shape below is the cheapest way to make the two disagree: a long thin box turned
+/// 45°, so its axis-aligned bounds reach back toward the ray origin while the box itself is far
+/// down the ray.
+///
+/// Measured before the fix, `max_distance = 10`: `raycast` → `None`, `raycast_all` → a hit at
+/// 15.29 m. For a game that is "what is within 10 m of me" answering with things that are not,
+/// and only sometimes, depending on how loose each body's bounding box happens to be.
+#[test]
+fn raycast_all_bounds_by_the_surface_it_hit_not_by_the_broadphase() {
+    let mut w = PhysicsWorld::new();
+    let mut t = Transform::new(Vec3::new(15.0, 0.0, 0.0));
+    t.rotation = Quat::from_rotation_y(std::f32::consts::FRAC_PI_4);
+    w.add_body(
+        BodyHandle::from_id(0),
+        RigidBody::new_static(),
+        t,
+        Velocity::default(),
+        Collider::box_collider(Vec3::new(0.5, 0.5, 10.0)),
+    );
+    w.step(1.0 / 60.0).expect("step");
+
+    let ray = Ray::new(Vec3::new(-1.0, 0.0, 0.0), Vec3::X);
+
+    // Out of range for both.
+    assert!(w.raycast(&ray, 10.0).is_none(), "premise: the surface is past 10 m");
+    let near = w.raycast_all(&ray, 10.0);
+    assert!(
+        near.is_empty(),
+        "raycast_all returned {:?} for a 10 m query whose nearest surface is at {:.2} m",
+        near.iter().map(|h| h.distance).collect::<Vec<_>>(),
+        w.raycast(&ray, 200.0).map(|h| h.distance).unwrap_or_default()
+    );
+
+    // In range for both, and they agree on the distance.
+    let far = w.raycast_all(&ray, 200.0);
+    assert_eq!(far.len(), 1, "one body, one hit: {far:?}");
+    let single = w.raycast(&ray, 200.0).expect("the same hit");
+    assert!(
+        (far[0].distance - single.distance).abs() < 1e-4,
+        "the two queries disagree about the distance: {} vs {}",
+        far[0].distance,
+        single.distance
+    );
+}
+
+/// The bound is inclusive, which is the reading "within 10 metres" has everywhere else in this
+/// API — and the one an off-by-one in the comparison would flip.
+#[test]
+fn a_hit_exactly_at_the_limit_is_inside_it() {
+    let (w, _) = world_with_box_at(&[Vec3::new(10.0, 0.0, 0.0)]);
+    let ray = Ray::new(Vec3::ZERO, Vec3::X);
+    // The box is half-extent 0.5 at x = 10, so its near face is at 9.5.
+    let exact = w.raycast_all(&ray, 9.5);
+    assert_eq!(exact.len(), 1, "a hit exactly at the limit must be inside it: {exact:?}");
+    assert!(w.raycast_all(&ray, 9.49).is_empty(), "and just inside the limit, outside it");
+}
+
 #[test]
 fn overlap_shape_finds_the_bodies_it_intersects_and_not_the_others() {
     let (w, h) = world_with_box_at(&[Vec3::ZERO, Vec3::new(5.0, 0.0, 0.0)]);

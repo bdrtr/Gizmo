@@ -225,6 +225,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`PhysicsWorld::raycast_all` ignored `max_distance`.** It bounded nothing, so a body whose
+  bounding box reached into range while its actual shape sat outside was returned anyway — the
+  broadphase's limit leaking out as if it were the query's. A 1×1×20 box turned 45° and centred
+  15 m away, queried at 10 m: `raycast` correctly answered `None`, `raycast_all` answered a hit at
+  15.29 m. Now bounded by the surface distance, inclusively.
+
 - **Applied forces were frame-rate dependent, and by a large factor.** The physics world runs fixed
   1/240 s substeps; the integrator drained `RigidBody::force_accumulator` on the **first substep**
   of each frame, so a body received `F·(1/240)` of impulse per frame instead of `F·frame_dt`. The

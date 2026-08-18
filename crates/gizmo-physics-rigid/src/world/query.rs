@@ -125,7 +125,17 @@ impl PhysicsWorld {
         closest_hit
     }
 
-    /// Perform a raycast and return all hits
+    /// Every hit along the ray within `max_distance`, nearest first.
+    ///
+    /// **`max_distance` bounds the SURFACE, not just the broadphase**, and that distinction was a
+    /// defect until 2026-08-18: this function filtered nothing, so a body whose AABB reached into
+    /// range while its solid sat outside it came back anyway. Measured — a 1×1×20 box turned 45°
+    /// and centred 15 m away, queried with `max_distance = 10`: [`Self::raycast`] answered `None`
+    /// and this answered a hit at **15.29 m**. Two queries, one ray, one world, two answers.
+    ///
+    /// The symptom for a game is worse than the number: "what is within 10 m of me" — line of
+    /// sight, weapon range, an interaction probe — returned things past the limit *sometimes*,
+    /// depending on how loose each body's bounding box happened to be.
     pub fn raycast_all(&self, ray: &Ray, max_distance: f32) -> Vec<RaycastHit> {
         let mut hits = Vec::new();
 
@@ -142,12 +152,17 @@ impl PhysicsWorld {
                 if let Some((distance, normal)) =
                     Raycast::ray_shape(ray, &collider.shape, transform)
                 {
-                    hits.push(RaycastHit {
-                        entity,
-                        point: ray.point_at(distance),
-                        normal,
-                        distance,
-                    });
+                    // The broadphase bounds by AABB; this bounds by the surface actually hit.
+                    // `<=` rather than `<` so a hit exactly at the limit is inside it, which is
+                    // the reading "within 10 metres" has everywhere else.
+                    if distance <= max_distance {
+                        hits.push(RaycastHit {
+                            entity,
+                            point: ray.point_at(distance),
+                            normal,
+                            distance,
+                        });
+                    }
                 }
             }
         }

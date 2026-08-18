@@ -1593,6 +1593,31 @@ the *slope* gate is the one that guards it.
 ## 8. Working Method
 
 - Every item: **fix → write a regression test → build/test/clippy → tick it off.**
+- **"No production caller and no test" is a defect class, not a tidiness question.** The
+  frame-rate-dependent force channel (§3) was found by writing a measurement for something else,
+  and it had survived because nothing in the workspace wrote to `force_accumulator`. Sweeping the
+  four physics crates for the same shape on 2026-08-18: **247 public functions, 56 with no
+  production caller, 27 with neither a caller nor a test.** Most of those 27 are builders and
+  back-compat aliases that are correct by inspection. Two were not:
+
+  - **`PhysicsWorld::raycast_all` did not bound by `max_distance` at all.** It filtered nothing,
+    so a body whose AABB reached into range while its solid sat outside came back anyway — the
+    broadphase's bound leaking out as though it were the query's. Measured: a 1×1×20 box turned
+    45° and centred 15 m away, queried at `max_distance = 10`, gave `raycast → None` and
+    `raycast_all → a hit at 15.29 m`. One ray, one world, two answers. For a game that is "what
+    is within 10 m of me" returning things that are not, and only sometimes — depending on how
+    loose each body's bounding box happens to be.
+  - **`aabb_overlaps_simd4` has two `cfg`-exclusive bodies and no caller.** SSE on x86_64, a
+    scalar loop on wasm32; no build compiles both, so nothing could ever compare them. It now
+    has a test against the rule written out longhand — the third-implementation trick for when
+    the language will not let two be compared. Writing it taught its own lesson: the rule is
+    **six** comparisons, a case only exercises the one it sits exactly on the boundary of, and
+    the first version had a touching box on one side of one axis — so five of the six could be
+    turned strict without it noticing. Each of the six is now covered and each was verified to
+    fail on its own.
+
+  The sweep is a script, not a list: `pub fn` declarations in each crate's `src` against call
+  sites everywhere, cut at `#[cfg(test)]`. Worth re-running when a crate grows a public surface.
 - **A positive `contains` over source text is satisfied by a comment — and four of this
   repository's guards were.** Audited 2026-08-18, after three separate false guards turned up in
   two days by accident: the fly-gate assertion that stayed green with the call wrapped in the very
