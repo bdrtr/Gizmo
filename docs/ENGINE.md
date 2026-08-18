@@ -1630,6 +1630,31 @@ the *slope* gate is the one that guards it.
 ## 8. Working Method
 
 - Every item: **fix → write a regression test → build/test/clippy → tick it off.**
+- **A remembered rationale is not evidence, and the cheapest way to find out is to remove the
+  thing it defends.** The solver skips its modern TGS-soft path for any island containing a CCD
+  body, with a comment giving the reason: TGS's dp/relax flow conflicts with the speculative
+  clamp on high-speed angled impacts. That gate has a *known cost*, pinned as an ignored test —
+  `ccd_makes_a_bounce_a_thud`: with CCD on, an equal-mass head-on hit at restitution 1 shares the
+  momentum evenly instead of transferring it, so a Newton's cradle stops bouncing.
+
+  Tried on 2026-08-18, by deleting `&& !has_ccd` and running the CCD suites:
+
+  - The pinned limitation **passes** — so the cost really does come from that gate and nowhere
+    else, which no amount of reading would have established.
+  - `ccd_analytical`'s nine tests stay green, including the angled-impact one the rationale names.
+  - But `prop_ccd_never_tunnels` found and shrank a counterexample **inside one run**: speed
+    1753.91 m/s, half-thickness 0.2967, radius 0.3940 → tunnelled at x = 0.70. A bullet through a
+    0.59 m wall.
+
+  So the trade is real and the gate stays. What changed is what defends it: a sentence became a
+  counterexample, saved in `ccd.proptest-regressions`. The shipped solver passes that case, so
+  keeping it costs nothing and covers a genuinely hard shot. The other route out — restitution on
+  speculative contacts in the split-impulse path — is untouched by this experiment and stays the
+  open candidate.
+
+  The general point: an ignored test that documents a limitation is worth more than a comment,
+  because it can be *un-ignored experimentally*. That is what turned this from folklore into a
+  number in an afternoon.
 - **"No production caller and no test" is a defect class, not a tidiness question.** The
   frame-rate-dependent force channel (§3) was found by writing a measurement for something else,
   and it had survived because nothing in the workspace wrote to `force_accumulator`. Sweeping the

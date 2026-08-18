@@ -187,6 +187,19 @@ fn the_cradle_keeps_its_balls_apart() {
 /// a CCD island never reaches that file. It is either restitution on speculative contacts
 /// in the split-impulse path (against a documented objection) or letting a CCD island keep
 /// the TGS-soft solver (an architectural call with a determinism contract attached).
+///
+/// **The second option was tried on 2026-08-18, and the objection to it is now measured.**
+/// Dropping `&& !has_ccd` from the solver gate makes this test **pass** — so the limitation
+/// really does come from that gate and nowhere else — and `ccd_analytical`'s nine tests stay
+/// green. But `prop_ccd_never_tunnels` found and shrank a counterexample inside one run:
+/// **speed 1753.91 m/s, half-thickness 0.2967, radius 0.3940 → tunnelled at x = 0.70**, a
+/// bullet through a 0.59 m wall. That case is saved in `ccd.proptest-regressions` and the
+/// shipped solver passes it, so it is free extra coverage of a genuinely hard shot.
+///
+/// The trade is therefore real and the gate stays. What changed is the evidence: the objection
+/// was a remembered sentence and is now a recorded counterexample. The other route —
+/// restitution on speculative contacts in the split-impulse path — is untouched by this
+/// experiment and remains the open candidate.
 #[test]
 #[ignore = "documents the CCD-loses-restitution limitation; un-ignore when it is fixed"]
 fn ccd_makes_a_bounce_a_thud() {

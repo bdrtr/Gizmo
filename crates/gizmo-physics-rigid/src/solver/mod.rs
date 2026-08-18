@@ -634,6 +634,22 @@ impl ConstraintSolver {
         // CCD speculative temasları ince ayarlıdır; TGS'in dp/relax akışı yüksek-hızlı
         // açılı çarpmalarda speculative clamp'le çatışıp tünellemeye yol açabiliyor.
         // CCD cisimleri (mermiler) nadir ve genelde izole; yığın kararlılığı TGS'te kalır.
+        //
+        // BU GEREKÇE 2026-08-18'DE ÖLÇÜLDÜ, çünkü hatırlanan bir gerekçe bir kanıt değildir —
+        // ve `tests/cradle_passthrough.rs`'teki `ccd_makes_a_bounce_a_thud` bu kapının bedelini
+        // (CCD açıkken esnek çarpışmanın esnekliğini kaybetmesi) çivilenmiş bir sınırlama olarak
+        // taşıyor. Deney: `&& !has_ccd`'yi kaldır, CCD paketini koştur.
+        //
+        //   • `ccd_analytical` (9 test) ve `cradle_passthrough` HEPSİ GEÇTİ — çivilenmiş
+        //     sınırlama dahil, yani kapının bedeli gerçekten bu kapıdan geliyor.
+        //   • Ama `prop_ccd_never_tunnels` bir tur içinde karşı örnek buldu ve KÜÇÜLTTÜ:
+        //     hız 1753.91 m/s, yarı-kalınlık 0.2967, yarıçap 0.3940 → x = 0.70'te TÜNELLEDİ.
+        //     0.59 m kalınlıkta bir duvarı delen bir mermi.
+        //
+        // Yani takas gerçek ve kapı kalıyor. Fark şu: itiraz artık `ccd.proptest-regressions`'a
+        // yazılmış bir karşı örnek (sevkiyattaki çözücü onu geçiyor, dolayısıyla bedava ek
+        // kapsam), hatırlanan bir cümle değil. Açık kalan öbür yol, split-impulse yolunda
+        // speculative temaslara restitution vermek — bu deney onun hakkında bir şey söylemiyor.
         let has_ccd = manifolds.iter().any(|m| {
             [m.entity_a, m.entity_b].iter().any(|e| {
                 entity_index_map

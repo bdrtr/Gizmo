@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 35cc9e75a5b1b7c8410fc4a13f92b1c338b45f522e8ab04ade2905b059613512 # shrinks to speed = 2336.5244, half_thick = 0.2995697, radius = 0.09951787
+cc 0a906ca3a1511f0b938c0b00b50fa0d67513720ef5bb224f81a936a6f5ea120d # shrinks to speed = 1753.9102, half_thick = 0.29671118, radius = 0.39398175
