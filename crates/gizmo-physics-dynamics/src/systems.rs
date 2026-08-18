@@ -1,7 +1,7 @@
 //! ECS system wrappers that drive the (manually-written, audited) gameplay
 //! controllers in this crate from the schedule.
 //!
-//! Both systems use the exclusive-barrier signature `fn(&World, dt)` — the same
+//! All three use the exclusive-barrier signature `fn(&World, dt)` — the same
 //! shape as [`gizmo_physics_rigid::physics_step_system`] — so they can be added
 //! straight into a [`gizmo_core::system::Schedule`] (see
 //! `gizmo_app::gameplay`). A `fn(&World, f32)` reports itself as an *exclusive*
@@ -16,8 +16,11 @@
 //! * [`character_controller_system`] performs its own kinematic
 //!   move/step/slide and writes `Transform`/`Velocity` directly; it does not
 //!   depend on the rigid solver.
+//! * [`fighter_frame_system`] touches no physics state at all — it counts frames on
+//!   `FighterController` — so it has no ordering edge against the rigid step. It does need to
+//!   run in the **fixed** schedule, once per step, because frames are what it counts.
 //!
-//! Both systems are **no-ops** on worlds that contain no vehicle/character
+//! All three are **no-ops** on worlds that contain no vehicle/character/fighter
 //! entities (the component-tuple query matches nothing), so registering them
 //! does not perturb a plain rigid-body scene (e.g. the determinism oracle).
 //!
@@ -33,7 +36,7 @@
 use gizmo_core::component::IsDeleted;
 use gizmo_core::query::{Mut, Without};
 use gizmo_core::world::World;
-use gizmo_physics_core::components::CharacterController;
+use gizmo_physics_core::components::{CharacterController, FighterController};
 use gizmo_physics_core::{BodyHandle, Collider, Transform};
 use gizmo_physics_rigid::components::{RigidBody, Velocity};
 
@@ -261,6 +264,54 @@ pub fn character_controller_system(world: &World, dt: f32) {
             collider_count = all_colliders.len(),
             "[KCC] controller system tick"
         );
+    }
+}
+
+/// Advances every [`FighterController`] in the world by one fixed frame:
+/// [`FighterController::tick`] on each.
+///
+/// **This system is the fight subsystem's clock, and before it nothing was.** The component is
+/// pure data whose every duration is a frame count, and its own documentation said "the game (or
+/// a script) must tick them once per fixed frame" — but no game, script or system in the engine
+/// did. The measured consequence: `fighter.apply_hitstop(id, 6)` from Lua froze that fighter for
+/// the rest of the process rather than for six frames, `fighter.set_move` started a move that
+/// never reached its active window, and `is_in_active_window` therefore never once answered
+/// `true`. The subsystem had a full authoring surface — the studio adds the component, the
+/// inspector edits it, the scene format serialises it, the fight HUD reads it, three Lua calls
+/// write it — over a state machine with no clock.
+///
+/// **Fixed schedule, not update.** The counters are frames, so one call must mean one fixed
+/// step; called once per rendered frame instead, a move's timing would follow the frame rate.
+/// `gizmo_app::gameplay::register_gameplay_physics_systems` places it in
+/// [`Phase::Physics`](gizmo_core::system::Phase::Physics), and `gizmo::systems::PlayLoop` calls
+/// it once per step of its own accumulator.
+///
+/// **What it deliberately does not do**: it does not feed `input_buffer` (what to record is the
+/// game's set of action names — see [`FighterInputBuffer::update`](gizmo_core::input::FighterInputBuffer::update)),
+/// it does not start moves from input (which move a button means is the game's or a script's),
+/// and it does not drive `Hitbox::active` from the active window. Each of those is a policy the
+/// engine would be guessing at; the clock is not.
+///
+/// `dt` is used only as the pause signal (`dt <= 0.0` returns without ticking), matching
+/// [`oxygen_system`](crate::oxygen::oxygen_system): a paused game must not spend frames.
+#[tracing::instrument(skip_all, name = "fighter_frame_system")]
+pub fn fighter_frame_system(world: &World, dt: f32) {
+    if dt <= 0.0 {
+        return;
+    }
+
+    // SAFETY: exclusive `fn(&World, f32)` system — the scheduler runs it alone — and
+    // `FighterController` is the only component type borrowed here, so nothing aliases.
+    let query = unsafe { world.query_unchecked::<(Mut<FighterController>, Without<IsDeleted>)>() };
+    if let Some(mut query) = query {
+        let mut fighter_count = 0usize;
+        for (_id, (mut fighter, _)) in query.iter_mut() {
+            fighter.tick();
+            fighter_count += 1;
+        }
+        if fighter_count > 0 {
+            tracing::trace!(fighter_count, "[Fight] frame clock tick");
+        }
     }
 }
 

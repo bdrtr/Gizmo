@@ -3,9 +3,10 @@
 //! `gizmo-physics-dynamics` ships the deep controllers (Pacejka vehicle,
 //! kinematic character controller, ragdoll) and the thin ECS system wrappers
 //! that drive them ([`vehicle_controller_system`](gizmo_physics_dynamics::vehicle_controller_system),
-//! [`character_controller_system`](gizmo_physics_dynamics::character_controller_system)).
+//! [`character_controller_system`](gizmo_physics_dynamics::character_controller_system),
+//! [`fighter_frame_system`](gizmo_physics_dynamics::fighter_frame_system)).
 //! This module wires those systems into an [`App`](crate::App)'s schedule so a
-//! scene author gets working vehicles/characters "for free".
+//! scene author gets working vehicles/characters/fighters "for free".
 //!
 //! The systems are placed in [`Phase::Physics`](gizmo_core::system::Phase::Physics)
 //! and ordered **before** the rigid physics step (label `"physics_step_system"`):
@@ -13,14 +14,19 @@
 //! the physics step then integrates. Register the rigid `physics_step_system`
 //! under that same label for the ordering edge to bind.
 //!
-//! Both systems are no-ops on entities without vehicle/character components, so
+//! `fighter_frame_system` takes the same ordering edge for a different reason: it does not
+//! touch physics state at all, but a fighter's frame counters must be spent in the **fixed**
+//! schedule (one call = one frame), and this is the phase that runs there.
+//!
+//! All three are no-ops on entities without vehicle/character/fighter components, so
 //! adding this plugin does not perturb a plain rigid-body simulation
 //! (determinism oracle hash is unaffected).
 
 use gizmo_core::system::{Phase, Schedule, SystemConfig};
 
-/// Add `vehicle_controller_system` and `character_controller_system` to
-/// `schedule` in the physics phase, ordered before `"physics_step_system"`.
+/// Add `vehicle_controller_system`, `character_controller_system` and
+/// `fighter_frame_system` to `schedule` in the physics phase, ordered before
+/// `"physics_step_system"`.
 pub fn register_gameplay_physics_systems(schedule: &mut Schedule) {
     schedule.add_di_system(
         SystemConfig::new(Box::new(gizmo_physics_dynamics::vehicle_controller_system))
@@ -34,8 +40,14 @@ pub fn register_gameplay_physics_systems(schedule: &mut Schedule) {
             .label("character_controller_system")
             .before("physics_step_system"),
     );
+    schedule.add_di_system(
+        SystemConfig::new(Box::new(gizmo_physics_dynamics::fighter_frame_system))
+            .in_phase(Phase::Physics)
+            .label("fighter_frame_system")
+            .before("physics_step_system"),
+    );
     tracing::info!(
-        "[Gameplay] registered vehicle_controller_system + character_controller_system (Phase::Physics, before physics_step_system)"
+        "[Gameplay] registered vehicle_controller_system + character_controller_system + fighter_frame_system (Phase::Physics, before physics_step_system)"
     );
 }
 
@@ -94,6 +106,7 @@ mod tests {
     use gizmo_core::system::{Phase, Schedule, SystemConfig};
     use gizmo_core::world::World;
     use gizmo_math::Vec3;
+    use gizmo_physics_core::components::FighterController;
     use gizmo_physics_core::{BoxShape, Collider, ColliderShape, Transform};
     use gizmo_physics_dynamics::vehicle::{Axle, VehicleController, Wheel};
     use gizmo_physics_rigid::components::{RigidBody, Velocity};
@@ -174,6 +187,43 @@ mod tests {
             start_z - end.position.z > 0.2,
             "plugin-driven vehicle should move forward (-Z): Δz {}",
             start_z - end.position.z
+        );
+    }
+
+    /// The same registration also gives a scene its fight clock: driving the schedule spends a
+    /// fighter's hitstop frames, which nothing in the engine did before 0.10.
+    ///
+    /// It is asserted through the *schedule* rather than by calling the system, because the
+    /// registration is the part that can silently not happen — a system in a phase nobody runs
+    /// behaves exactly like the missing clock it replaces.
+    #[test]
+    fn plugin_registers_the_fight_clock() {
+        let mut world = World::new();
+        let fighter_entity = world.spawn();
+        let mut fighter = FighterController::new(1);
+        fighter.apply_hitstop(4);
+        world.add_component(fighter_entity, fighter);
+
+        let mut schedule = Schedule::new();
+        register_gameplay_physics_systems(&mut schedule);
+
+        let mut locked_after = Vec::new();
+        for frame in 1..=6 {
+            schedule.run(&mut world, 1.0 / 60.0);
+            let locked = world
+                .borrow::<FighterController>()
+                .get(fighter_entity.id())
+                .expect("the fighter is still there")
+                .is_locked();
+            if locked {
+                locked_after.push(frame);
+            }
+        }
+
+        assert_eq!(
+            locked_after,
+            vec![1, 2, 3],
+            "four frames of hitstop must be spent by four runs of the schedule and no more"
         );
     }
 }

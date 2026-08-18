@@ -38,6 +38,28 @@ function on_entity_update(id, dt, props)
 end
 "#;
 
+/// A script that freezes its fighter for three frames, once, on the first frame it runs.
+const FREEZER: &str = r#"
+frames = 0
+function on_entity_update(id, dt, props)
+    frames = frames + 1
+    if frames == 1 then
+        fighter.apply_hitstop(id, 3)
+    end
+end
+"#;
+
+/// A script that throws one 5/3/2 jab, once, on the first frame it runs.
+const JABBER: &str = r#"
+frames = 0
+function on_entity_update(id, dt, props)
+    frames = frames + 1
+    if frames == 1 then
+        fighter.set_move(id, "jab", 5, 3, 2, 8.0)
+    end
+end
+"#;
+
 struct TempScript(std::path::PathBuf);
 
 impl TempScript {
@@ -265,4 +287,100 @@ fn a_script_drives_a_car_through_the_whole_chain() {
     assert_eq!(car.brake_input, 0.25, "and so must the brake");
     assert!(car.reverse_input, "a negative engine force is reverse, not forwards");
     assert_eq!(car.throttle_input, 0.6, "and its magnitude is the throttle");
+}
+
+/// Reads a fighter's `(is_locked, is_in_active_window, has_a_move)` back out of the world.
+fn fighter_state(world: &World, id: u32) -> (bool, bool, bool) {
+    let fighters = world.borrow::<gizmo::physics::components::FighterController>();
+    let f = fighters.get(id).expect("the fighter is still there");
+    (f.is_locked(), f.is_in_active_window(), f.active_move.is_some())
+}
+
+/// **A hitstop asked for from Lua ends.** Three frames must cost three frames.
+///
+/// It cost forever. `fighter.apply_hitstop` queues a command, `flush_commands` applies it to the
+/// component, and `FighterController::is_locked` then answered `true` for the rest of the
+/// process, because *nothing in the engine counted the frames down* — not a system, not the play
+/// loop, not the studio. The component's own documentation said "the game (or a script) must tick
+/// them once per fixed frame" and no game, script or system anywhere did. A script that used the
+/// engine's own fighting API to add three frames of hit-freeze froze its fighter permanently.
+///
+/// The frames are counted where they are spent: `PlayLoop::physics_pass`, once per **fixed** step.
+/// Each `step` below carries exactly one `FIXED_DT`, so one call is one frame.
+#[test]
+fn a_hitstop_from_a_script_ends_after_the_frames_it_asked_for() {
+    let script = TempScript::new("freezer", FREEZER);
+    let (mut world, entity) = world_with_scripted_entity(&script.path());
+    let id = entity.id();
+    world.add_component(
+        entity,
+        gizmo::physics::components::FighterController::new(1),
+    );
+
+    let input = Input::default();
+    let mut play = PlayLoop::new();
+
+    let mut locked_after = Vec::new();
+    for frame in 1..=5 {
+        play.step(&mut world, 1.0 / 60.0, &input, &mut |_| {});
+        if fighter_state(&world, id).0 {
+            locked_after.push(frame);
+        }
+    }
+
+    assert_eq!(
+        locked_after,
+        vec![1, 2],
+        "three frames of hitstop must be spent over three frames and then be over — a fighter \
+         still locked on frame 5 is the defect this test exists for (it used to be locked forever)"
+    );
+}
+
+/// **A move started from Lua reaches its active window, and then ends.**
+///
+/// The other half of the same missing clock, and the half a fighting game is built on:
+/// `is_in_active_window` — the function that says "this attack is hitting right now" — had never
+/// once answered `true` in this engine, because `current_move_frame` was only ever *assigned*
+/// (to 0, by `set_move`) and never advanced.
+///
+/// The numbers are the contract, not a smoke test: a 5/3/2 jab must hit on exactly three frames,
+/// they must be the three that follow five frames of startup, and the fighter must be back to
+/// neutral after all ten — recovery included, which is the phase nothing used to honour.
+#[test]
+fn a_move_from_a_script_reaches_its_active_window_and_ends() {
+    let script = TempScript::new("jabber", JABBER);
+    let (mut world, entity) = world_with_scripted_entity(&script.path());
+    let id = entity.id();
+    world.add_component(
+        entity,
+        gizmo::physics::components::FighterController::new(1),
+    );
+
+    let input = Input::default();
+    let mut play = PlayLoop::new();
+
+    let mut hitting_on = Vec::new();
+    let mut still_committed_after = Vec::new();
+    for frame in 1..=12 {
+        play.step(&mut world, 1.0 / 60.0, &input, &mut |_| {});
+        let (_, in_window, has_move) = fighter_state(&world, id);
+        if in_window {
+            hitting_on.push(frame);
+        }
+        if has_move {
+            still_committed_after.push(frame);
+        }
+    }
+
+    assert_eq!(
+        hitting_on,
+        vec![5, 6, 7],
+        "a 5/3/2 jab hits on the three frames after its five of startup — an empty list here is \
+         the engine never advancing a move at all"
+    );
+    assert_eq!(
+        still_committed_after,
+        (1..=9).collect::<Vec<_>>(),
+        "the move must occupy startup+active+recovery = 10 frames and be over on the tenth"
+    );
 }

@@ -12,8 +12,10 @@
 //! so the reporting is injected ([`PlayReport`]) and none of the decisions are.
 //!
 //! What is deliberately *not* here: hot-reload (an authoring tool, and the editor's own asset
-//! watcher drives it), and the editor's default `ActionMap` scaffolding, which exists for a
-//! fighter system that is currently commented out. Both stay on the studio side.
+//! watcher drives it), and the editor's default `ActionMap` scaffolding — bindings a game
+//! actually needs belong in its scene. Both stay on the studio side. The fighter system that
+//! scaffolding was written for is no longer commented out anywhere: the fight clock
+//! (`fighter_frame_system`) runs here, on the fixed step, for both paths.
 
 use crate::core::World;
 
@@ -517,9 +519,18 @@ impl PlayLoop {
     }
 
     /// The physics half: spend the debt in fixed steps.
+    ///
+    /// `fighter_frame_system` rides on the same steps, and this is the only place it can: a
+    /// fighting move's timing is measured in **frames**, so the clock has to be spent by the same
+    /// accumulator that spends the physics steps — not once per rendered frame, which would tie a
+    /// jab's startup to the frame rate. Everything the fight subsystem promises (a hitstop that
+    /// ends, a move that reaches its active window) hangs off this line, in the editor's ▶ and in
+    /// every exported game alike.
     fn physics_pass(&mut self, world: &World, dt: f32) -> u32 {
         let (steps, remaining) = plan_steps(self.accumulator, dt);
         for _ in 0..steps {
+            #[cfg(feature = "physics-dynamics")]
+            crate::physics::fighter_frame_system(world, FIXED_DT);
             crate::physics::system::physics_step_system(world, FIXED_DT);
         }
         self.accumulator = remaining;

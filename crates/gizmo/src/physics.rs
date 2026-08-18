@@ -83,7 +83,13 @@ pub use system::{physics_fracture_system, physics_explosion_system, physics_step
 // `VehicleController` / `CharacterController` and must run *before* `physics_step_system`
 // so the rigid step integrates the forces they write into `Velocity`. Demos that step
 // physics manually (car_demo, vehicle_scene, hill_climb) call these directly.
+//
+// `fighter_frame_system` is in the same list for a different reason: it integrates nothing, it
+// counts frames on `FighterController`, and it needs the same one-call-per-fixed-step placement.
+// `PlayLoop` calls it, so the editor's ▶ and every exported game have the fight clock; a game
+// stepping physics by hand calls it the way the demos above call theirs.
 #[cfg(feature = "physics-dynamics")]
 pub use gizmo_physics_dynamics::{
-    character_controller_system, oxygen_system, vehicle_controller_system, Oxygen,
+    character_controller_system, fighter_frame_system, oxygen_system, vehicle_controller_system,
+    Oxygen,
 };

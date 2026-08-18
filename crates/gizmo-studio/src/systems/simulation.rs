@@ -87,9 +87,12 @@ pub fn handle_simulation(
         // merged. What stays on this side is the console.
         //
         // The default `ActionMap` below is the one thing the editor adds and the runtime does
-        // not: it was written for a fighter system whose call is commented out two lines under
-        // it, so it is scaffolding, not part of a running game. Bindings a game actually needs
-        // belong in the scene, and then both paths get them.
+        // not. It was written for the fighter system deleted in `592bd6f`, which read these
+        // eight names straight out of it and both filled the input buffer and picked the move.
+        // The clock has since come back (`fighter_frame_system`, on `PlayLoop`'s fixed step) but
+        // deliberately without those two halves: which button is a jab is the game's, and so is
+        // which action names its combos are spelled in. So this stays scaffolding — bindings a
+        // game actually needs belong in the scene, and then both paths get them.
         {
             let has_am = world
                 .try_get_resource::<gizmo::core::input::ActionMap>()

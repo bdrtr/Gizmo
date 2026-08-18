@@ -18,6 +18,18 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The fight subsystem has a clock: `FighterController::tick`, `FrameData::total_frames` and
+  `gizmo_physics_dynamics::fighter_frame_system`.** `tick` spends one fixed frame on one fighter —
+  it counts `hitstop_frames`/`hitstun_frames` down and advances `current_move_frame`, ending the
+  move after `total_frames()` of them, recovery included. `fighter_frame_system` is the thin ECS
+  driver, registered by `GameplayPhysicsPlugin` alongside the vehicle and character controllers and
+  called by `gizmo::systems::PlayLoop` on its fixed step — so the editor's ▶ and every exported
+  game have it. Both are no-ops on a world with no fighters.
+
+  It deliberately stops there: it does not fill `input_buffer` (which action names to record is the
+  game's), does not pick a move from a button, and does not drive `Hitbox::active`. Those are the
+  three halves of the system deleted in `592bd6f` that were game policy rather than engine clock.
+
 - **A real low-pass for the underwater muffle, retunable while sounds are playing**
   (`gizmo_audio::filter::Muffle`, internal). rodio's `Player` hands out no way to reach the source
   it is playing, so a live filter has to be *inside* the source: `Muffle` wraps each decoder and
@@ -252,6 +264,26 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   before.
 
 ### Fixed
+
+- **A hitstop applied from Lua lasted forever, and no attack ever reached its hitting frames.**
+  `FighterController` is a frame-counting state machine and **nothing in the engine counted its
+  frames**: every write to `hitstop_frames`, `hitstun_frames` and `current_move_frame` anywhere in
+  the workspace was a wholesale assignment — not one `+=`, `-=` or `saturating_*` existed. So
+  `fighter.apply_hitstop(id, 6)` froze that fighter for the rest of the process rather than for six
+  frames, `fighter.set_move` started a move that stayed on frame 0, and `is_in_active_window` — the
+  function that says "this attack is hitting right now" — had never once answered `true` in this
+  engine (it had no callers at all).
+
+  The subsystem had every other half: the studio adds the component and draws a fight HUD from it,
+  the inspector edits it, the scene format serialises it, and three Lua calls write it. The clock
+  was written once (`334d6ed`) and deleted two days later by a refactor (`592bd6f`); its call site
+  survived as a comment until `9cbdddf` swept that too. The engine's own default path — `PlayLoop`,
+  which is both the editor's ▶ and every exported game — therefore ran a fighting API over state
+  nothing produced.
+
+  Regression tests drive the whole chain from a `.lua` file: a script's three-frame hitstop now
+  ends after exactly three frames, and a 5/3/2 jab hits on exactly frames 5, 6 and 7 and is over
+  after 10. Without the clock those two assertions read `[1,2,3,4,5]` (locked forever) and `[]`.
 
 - **The underwater muffle did nothing to 3D sound, and made everything 2.5× too loud on the way
   out.** `AudioManager::set_underwater` multiplied every sink's volume by `0.4` and undid it with

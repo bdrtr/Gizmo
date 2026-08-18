@@ -30,9 +30,11 @@ pub struct FrameData {
     /// Frames of lock-out after the hitting window closes, during which the fighter is still
     /// committed to the move and vulnerable.
     ///
-    /// Descriptive only: no method on [`FrameData`] or [`FighterController`] reads it. The
-    /// code that advances `current_move_frame` is what decides when a move ends, so recovery
-    /// is honoured only if that code sums the three phases itself.
+    /// Counted by [`FrameData::total_frames`] and therefore honoured by
+    /// [`FighterController::tick`], which is what ends the move: a fighter stays committed
+    /// through its recovery frames and only returns to neutral after them. No other method
+    /// reads it — nothing here makes a recovering fighter more vulnerable, that is the game's
+    /// to model.
     pub recovery: u32,
     /// Damage a clean hit with this move deals, in the same health points as
     /// [`FighterController::health`] (whose default full bar is 100).
@@ -67,6 +69,24 @@ impl Default for FrameData {
     }
 }
 
+impl FrameData {
+    /// How many frames the move lasts in total: `startup + active + recovery`.
+    ///
+    /// The one definition of a move's length — [`FighterController::tick`] ends a move by this
+    /// number, so a game that sums the three phases itself and a game that calls this cannot
+    /// disagree. Saturating rather than wrapping: three phase lengths near `u32::MAX` are
+    /// nonsense either way, and a wrapped total would end the move on its first frame.
+    ///
+    /// `0` (all three phases empty) describes a move with no frames at all; `tick` ends such a
+    /// move immediately rather than leaving the fighter committed to it forever.
+    #[inline]
+    pub fn total_frames(&self) -> u32 {
+        self.startup
+            .saturating_add(self.active)
+            .saturating_add(self.recovery)
+    }
+}
+
 /// A named attack: an identifier plus its [`FrameData`] timing, and nothing else.
 ///
 /// That is the complete move description — no animation reference, hitbox list or cancel
@@ -94,11 +114,18 @@ pub struct CombatMove {
 /// Per-fighter combat state for a 2D-style fighting game: health, stance flags, the move
 /// currently being executed, and the frame counters that freeze or stun the character.
 ///
-/// Pure data with no scheduler behind it. Nothing in this crate advances
-/// `current_move_frame`, feeds `input_buffer`, or counts `hitstop_frames`/`hitstun_frames`
-/// down — the game (or a script) must tick them once per fixed frame. That is also why every
-/// duration here is a frame count rather than seconds: the component has no `dt` to work
-/// with, so it cannot express time any other way.
+/// [`FighterController::tick`] is the clock: it counts `hitstop_frames`/`hitstun_frames` down
+/// and advances `current_move_frame`, and something must call it once per fixed frame.
+/// `gizmo-physics-dynamics`' `fighter_frame_system` is that caller for an ECS game — the engine
+/// registers it with the other gameplay systems — and a game stepping by hand calls `tick`
+/// itself. Before that clock existed nothing called anything at all: the counters stood still,
+/// so a hitstop applied from Lua froze its fighter permanently and no move ever reached its
+/// active window.
+///
+/// `input_buffer` is the one part still on the game: nothing here feeds it, because what to
+/// record is the game's action names. Every duration is a frame count rather than seconds
+/// because the component has no `dt` to work with — it counts ticks, and cannot express time
+/// any other way.
 ///
 /// Three fields are `#[serde(skip)]` (`input_buffer`, `hitstop_frames`, `hitstun_frames`), so
 /// a save/load round trip yields a fighter with a fresh 60-frame input buffer and neither
@@ -148,15 +175,21 @@ pub struct FighterController {
     pub active_move: Option<CombatMove>,
     /// Frame index within `active_move`, `0` on the move's first startup frame.
     ///
-    /// Never advanced here; the driving code increments it once per fixed frame and is also
-    /// what decides the move is over, since this type only ever clears `active_move` through
-    /// [`FighterController::apply_hitstun`]. Indices past the move's total length are not
-    /// rejected — they simply fall outside the active window.
+    /// Advanced by [`FighterController::tick`], one frame per call, which is also what ends
+    /// the move (at [`FrameData::total_frames`]) and resets this to `0`. Written directly it is
+    /// not validated: an index past the move's total length is not rejected, it simply falls
+    /// outside the active window until the next tick ends the move.
     pub current_move_frame: u32,
     
     // Combo / Input handling
     /// Rolling motion/command history that combo recognition reads, 60 frames deep as
     /// constructed by [`FighterController::new`] and `default()`.
+    ///
+    /// Nothing in the engine fills it — not even [`FighterController::tick`], which is a clock
+    /// and has no input to read. Feeding it is the game's, via
+    /// [`FighterInputBuffer::update`](gizmo_core::input::FighterInputBuffer::update) with the
+    /// action names that game binds. Left alone it stays empty, and every combo query over it
+    /// answers `false`.
     ///
     /// `#[serde(skip)]`: a saved fighter comes back with a default-constructed buffer, so a
     /// depth configured at spawn is silently lost across a round trip and any motion input in
@@ -167,8 +200,8 @@ pub struct FighterController {
     // Hitstop / Hitstun (Kare cinsinden bekleme süresi)
     /// Frames of hit-freeze still pending; `0` when the fighter is not frozen.
     ///
-    /// Written wholesale by [`FighterController::apply_hitstop`] and read by
-    /// [`FighterController::is_locked`], but never decremented here — the game counts it down.
+    /// Written wholesale by [`FighterController::apply_hitstop`], read by
+    /// [`FighterController::is_locked`] and counted down one per [`FighterController::tick`].
     /// `#[serde(skip)]`, hence `0` after a load.
     #[serde(skip)]
     pub hitstop_frames: u32,
@@ -177,7 +210,7 @@ pub struct FighterController {
     /// Differs from `hitstop_frames` in what entering it costs, not in how it is spent:
     /// [`FighterController::apply_hitstun`] additionally cancels the active move and drops the
     /// guard, whereas a hitstop leaves the move intact to resume where it froze. Equally
-    /// `#[serde(skip)]` and equally never decremented here.
+    /// `#[serde(skip)]`, and counted down by the same [`FighterController::tick`].
     #[serde(skip)]
     pub hitstun_frames: u32,
 
@@ -251,7 +284,205 @@ impl FighterController {
             false
         }
     }
+
+    /// Advances this fighter by **one fixed frame**: counts hitstop and hitstun down, and moves
+    /// the active move to its next frame unless the fighter is frozen or stunned.
+    ///
+    /// This is the clock the rest of the type is written against — `apply_hitstop` sets a
+    /// duration, `is_locked` reports one is pending, `is_in_active_window` reads a frame index,
+    /// and every one of them stands still until something calls this. Call it exactly once per
+    /// fixed step; `gizmo_physics_dynamics::fighter_frame_system` is that caller for an ECS
+    /// game, and a game stepping by hand calls it directly.
+    ///
+    /// **The lock is read before it is spent.** A fighter that enters the frame with
+    /// `hitstop_frames == 1` still spends this frame frozen and only advances on the next one,
+    /// so `apply_hitstop(n)` freezes for exactly `n` frames rather than `n - 1`.
+    ///
+    /// **Hitstop freezes the move, hitstun has already cancelled it.** Both stop the frame
+    /// index, but a hitstop leaves `active_move` intact so the move resumes where it froze,
+    /// which is what [`FighterController::apply_hitstun`] deliberately does not do.
+    ///
+    /// **What `current_move_frame` counts.** Index `0` is the frame the move was authored on —
+    /// the value [`FighterController::apply_hitstun`] and the scripting API's `set_move` leave
+    /// behind — and the first tick moves it to `1`. So a game reading the index *after* a fixed
+    /// step sees the number of frames the move has run, index `0` exists only in between, and a
+    /// move of `total_frames()` frames occupies exactly that many ticks. The active window is
+    /// open on exactly `active` of them.
+    ///
+    /// A move whose [`FrameData::total_frames`] is `0` ends on its first tick instead of
+    /// pinning the fighter to a move it can never finish.
+    pub fn tick(&mut self) {
+        let was_locked = self.is_locked();
+
+        self.hitstop_frames = self.hitstop_frames.saturating_sub(1);
+        self.hitstun_frames = self.hitstun_frames.saturating_sub(1);
+
+        if was_locked {
+            return;
+        }
+
+        let Some(move_data) = &self.active_move else {
+            return;
+        };
+        let total = move_data.frame_data.total_frames();
+        let next = self.current_move_frame.saturating_add(1);
+        if total == 0 || next >= total {
+            self.active_move = None;
+            self.current_move_frame = 0;
+        } else {
+            self.current_move_frame = next;
+        }
+    }
 }
 
 #[cfg(feature = "ecs")]
 gizmo_core::impl_component!(FighterController);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A fighter with a `startup`/`active`/`recovery` move already running from frame 0.
+    fn with_move(startup: u32, active: u32, recovery: u32) -> FighterController {
+        let frame_data = FrameData {
+            startup,
+            active,
+            recovery,
+            ..Default::default()
+        };
+        FighterController {
+            active_move: Some(CombatMove {
+                name: "test".to_string(),
+                frame_data,
+            }),
+            current_move_frame: 0,
+            ..Default::default()
+        }
+    }
+
+    /// The defect this clock exists for: a hitstop applied and never counted down.
+    ///
+    /// `apply_hitstop(3)` used to be permanent — `is_locked` answered `true` for the rest of
+    /// the process because nothing in the engine subtracted from the counter. Three frames must
+    /// cost exactly three frames: locked after the first and second tick, free after the third.
+    #[test]
+    fn hitstop_lasts_exactly_the_frames_it_was_given() {
+        let mut f = FighterController::default();
+        f.apply_hitstop(3);
+
+        for spent in 1..=3 {
+            assert!(f.is_locked(), "tick {spent}: still inside the freeze");
+            f.tick();
+        }
+        assert!(!f.is_locked(), "three frames of hitstop must end after three ticks");
+        assert_eq!(f.hitstop_frames, 0);
+
+        // And it stays free — the saturating subtraction must not wrap into a fresh freeze.
+        f.tick();
+        assert!(!f.is_locked(), "a spent counter must not wrap around");
+        assert_eq!(f.hitstop_frames, 0);
+    }
+
+    /// Hitstun counts down the same way, and its extra cost (the cancelled move) is applied at
+    /// `apply_hitstun` time, not at tick time.
+    #[test]
+    fn hitstun_counts_down_and_leaves_the_move_cancelled() {
+        let mut f = with_move(5, 3, 2);
+        f.apply_hitstun(2);
+        assert!(f.active_move.is_none(), "stun cancels the move on the spot");
+
+        f.tick();
+        assert!(f.is_locked(), "second stun frame");
+        f.tick();
+        assert!(!f.is_locked(), "two frames of stun must end after two ticks");
+    }
+
+    /// A frozen fighter's move does not advance, and resumes on exactly the frame it froze on.
+    #[test]
+    fn hitstop_freezes_the_move_and_it_resumes_where_it_stopped() {
+        let mut f = with_move(5, 3, 2);
+        f.tick();
+        f.tick();
+        assert_eq!(f.current_move_frame, 2);
+
+        f.apply_hitstop(2);
+        f.tick();
+        f.tick();
+        assert_eq!(
+            f.current_move_frame, 2,
+            "the move must not advance while the fighter is frozen"
+        );
+        assert!(f.active_move.is_some(), "a hitstop does not cancel the move");
+
+        f.tick();
+        assert_eq!(f.current_move_frame, 3, "and it resumes from where it froze");
+    }
+
+    /// The active window opens for exactly `active` frames, and the move ends after exactly
+    /// `total_frames()` of them — recovery included, which is the half nothing used to honour.
+    #[test]
+    fn a_move_runs_for_its_total_length_and_hits_for_its_active_window() {
+        let (startup, active, recovery) = (5, 3, 2);
+        let mut f = with_move(startup, active, recovery);
+        assert_eq!(f.active_move.as_ref().unwrap().frame_data.total_frames(), 10);
+
+        let mut hitting = Vec::new();
+        for tick in 1..=10 {
+            f.tick();
+            if f.is_in_active_window() {
+                hitting.push(tick);
+            }
+        }
+
+        assert_eq!(
+            hitting,
+            vec![5, 6, 7],
+            "the window must open on the startup-th frame and stay open for `active` frames"
+        );
+        assert!(
+            f.active_move.is_none(),
+            "after startup+active+recovery frames the fighter is back to neutral"
+        );
+        assert_eq!(f.current_move_frame, 0, "and the index resets with it");
+    }
+
+    /// A move with no frames at all must not pin the fighter to it forever.
+    #[test]
+    fn a_zero_length_move_ends_on_its_first_tick() {
+        let mut f = with_move(0, 0, 0);
+        f.tick();
+        assert!(f.active_move.is_none());
+        assert_eq!(f.current_move_frame, 0);
+    }
+
+    /// Ticking a neutral fighter is a no-op — the system runs over every entity every frame, so
+    /// the common case must cost nothing and change nothing.
+    #[test]
+    fn ticking_a_neutral_fighter_changes_nothing() {
+        let mut f = FighterController {
+            health: 73.0,
+            is_blocking: true,
+            ..Default::default()
+        };
+        f.tick();
+        assert!(f.active_move.is_none());
+        assert_eq!(f.current_move_frame, 0);
+        assert_eq!(f.hitstop_frames, 0);
+        assert_eq!(f.hitstun_frames, 0);
+        assert!(f.is_blocking, "the clock does not touch stance");
+        assert_eq!(f.health, 73.0, "nor health");
+    }
+
+    /// `total_frames` saturates rather than wrapping: a wrapped total would read as a move that
+    /// ends immediately, which is the opposite of what absurd phase lengths describe.
+    #[test]
+    fn total_frames_saturates() {
+        let fd = FrameData {
+            startup: u32::MAX,
+            active: 10,
+            recovery: 10,
+            ..Default::default()
+        };
+        assert_eq!(fd.total_frames(), u32::MAX);
+    }
+}

@@ -2386,31 +2386,107 @@ alındı ve **kabuk 0 döndürdü** — CLAUDE.md'nin "boruya sokmak çıkış k
 tam olarak kendisi. Build'in çöktüğü ancak çıktı okunduğunda görüldü. Boruya sokulan bir cargo
 komutunun yeşil görünmesi bir kanıt değildir.
 
-Bir sonraki oturuma iki iz, ikisi de aynı sorunun bir sonraki katmanı:
-- **Dövüş altsistemi: sözleşmenin "ya da bir script" yarısı Lua'dan ulaşılamıyor.**
-  `FighterController` bileşeninin kendi belgesi bunu bilerek söylüyor — *"arkasında zamanlayıcı
-  olmayan saf veri; `current_move_frame`'i ilerleten, `input_buffer`'ı besleyen ya da
-  `hitstop_frames`/`hitstun_frames`'i geri sayan bir şey bu crate'te yok — **oyun (ya da bir
-  script)** her sabit karede bunları saymalı"*. Bileşeni üreten var (studio'nun `scene_ops`'u
-  ekliyor, denetçi düzenliyor, sahne serileştiriyor); **sayan yok**: workspace'teki bütün yazımlar
-  atama (`apply_hitstop`, `apply_hitstun`, `SetFighterMove`), tek bir azaltma ya da ilerletme yok.
-  Ölçülen sonuç Lua tarafında: `fighter._buffers` `input_buffer`'dan besleniyor, onu dolduran
-  olmadığı için **her zaman boş** — yani `check_combo` (crate'in en çok testi olan, boşluk sınırı
-  tam ölçülmüş fonksiyonu) bu motorda hiç dolu bir tampon göremiyor. Ve `_is_locked` script'e
-  **boolean** olarak veriliyor, oysa geri saymak için **sayı** gerekiyor: bir script başlattığı
-  donmayı bitiremiyor, hareket karesini hiç ilerletemiyor, dolayısıyla `is_in_active_window` hiç
-  açılmıyor. **Karar bekleyen iki yol:** sayaçları sayı olarak sunup ilerletme yazımını eklemek,
-  ya da bileşenin belgesindeki "(ya da bir script)" ifadesini kaldırıp tick'in Rust host'un işi
-  olduğunu söylemek. Fixture yazmadan önce hangisinin istendiğine karar verilmeli.
-- **Kare enterpolasyonu: `alpha` her kare hesaplanıyor, kimse okumuyor.** Buradaki ilk şüphe
-  (`windowed/event.rs`'te `let _ = steps;`) bakınca eridi — `run_fixed_and_update`'in döndürdüğü
-  `FrameSteps` bir **kopya**, asıl değerler `PhysicsTime` kaynağında duruyor ve trace'e de
-  yazılıyor. Ama bir kat aşağıda soru duruyor: `PhysicsTime::compute_alpha()` her karede
-  çağrılıyor, `alpha()` de belgesinde `lerp(prev, curr, alpha)` diyor, ve workspace'te onu okuyan
-  **hiçbir render yolu yok** (tek geçtiği yerler tanımı ve testi). Yani ya enterpolasyon
-  gömen oyunun işi — o zaman belge bunu söylemeli — ya da motorun render'ı sabit adımlar arasında
-  hiç enterpole etmiyor, ki bu düşük adım hızında görünür bir titremedir. Bu, ölçülecek bir şey:
-  önce `PhysicsTime::alpha`'nın gerçek tüketicisi aranmalı, sonra karar.
+Bir önceki oturumun bıraktığı iki izden **birincisi kapandı**, ikincisi hâlâ açık:
+
+- **Dövüş altsisteminin saati yoktu — 2026-08-18'de yazıldı.** Bırakılan iz "sözleşmenin *ya da
+  bir script* yarısı Lua'dan ulaşılamıyor" diyordu ve iki yol öneriyordu: sayaçları sayı olarak
+  Lua'ya açıp ilerletme yazımını eklemek, ya da belgeden "(ya da bir script)"i silip tick'i Rust
+  host'un işi ilan etmek. **Ölçüm ikisini de geçersiz kıldı: tick'i yapan host da yoktu.** Depoyu
+  taradığımızda `current_move_frame`, `hitstop_frames` ve `hitstun_frames`'e yapılan HER yazım bir
+  atamaydı — bütün ağaçta tek bir `+=`, `-=` ya da `saturating_*` yok. Yani seçenek "kim sayacak"
+  değildi; **kimse saymıyordu.**
+
+  Somut sonuç, artık regresyon testi olarak sabit: `fighter.apply_hitstop(id, 3)` çağıran bir
+  script dövüşçüsünü üç kare değil **sonsuza kadar** donduruyordu (test kaldırıldığında ölçülen
+  dizi `[1,2,3,4,5]`), ve `fighter.set_move` ile başlatılan hareket 0. karesinde kalıyordu, yani
+  `is_in_active_window` — "bu saldırı şu an vuruyor" diyen fonksiyon — bu motorda **hiç `true`
+  dönmemişti** (zaten tek bir çağıranı da yoktu).
+
+  Tarih önemli, çünkü bu bir eksik özellik değil bir **kayıp**: saat `334d6ed`'de yazılmıştı
+  (`physics_fighter_system`, 415 satır, kendi testiyle), iki gün sonra `592bd6f`'in ayrıştırma
+  refactor'ünde silindi, yorum satırına düşmüş çağrısı da `9cbdddf`'de süpürüldü. Geriye
+  altsistemin bütün öteki yarıları kaldı: stüdyo bileşeni ekliyor ve ondan bir dövüş HUD'ı
+  çiziyor, denetçi düzenliyor, sahne biçimi serileştiriyor, üç Lua çağrısı yazıyor. §7'nin
+  "oyunun kendi zamanlaması gereken bir sistem *bağlanmamış* sayılmaz" istisnası bunu kapsamıyor;
+  kapsayan, hemen altındaki dar sınıf: **motorun kendi varsayılan yolu, motorun kendi döngüsünün
+  hiç üretmediği bir duruma dayanıyordu** — ve o yol `PlayLoop`, yani hem editörün ▶'si hem
+  ihraç edilen her oyun.
+
+  Yazılan: `FighterController::tick` (bir sabit kare), `FrameData::total_frames` (hareketin tek
+  uzunluk tanımı), ve `fighter_frame_system` (ince ECS sürücüsü) — `GameplayPhysicsPlugin`
+  kaydediyor, `PlayLoop::physics_pass` sabit adımda çağırıyor. Kilit **harcanmadan önce
+  okunuyor**, yani `apply_hitstop(n)` tam `n` kare donduruyor; hitstop hareketi donduruyor
+  (hitstun zaten iptal ediyor); hareket `total_frames()` karede bitiyor, recovery dahil.
+
+  **Bilerek yapılmayan üç şey**, çünkü üçü de motorun tahmin edeceği oyun politikası:
+  `input_buffer`'ı beslemek (hangi eylem adlarının kaydedileceği oyunun), bir tuştan hareket
+  seçmek, ve `Hitbox::active`'i aktif pencereden sürmek. Silinen 415 satırın motor-saati olmayan
+  kısmı tam olarak bu üçüydü; stüdyodaki varsayılan `ActionMap` iskelesi de onların fosili.
+
+- **Kare enterpolasyonu: `alpha` her kare hesaplanıyor, kimse okumuyor.** (Hâlâ açık.) Buradaki
+  ilk şüphe (`windowed/event.rs`'te `let _ = steps;`) bakınca eridi — `run_fixed_and_update`'in
+  döndürdüğü `FrameSteps` bir **kopya**, asıl değerler `PhysicsTime` kaynağında duruyor ve
+  trace'e de yazılıyor. Ama bir kat aşağıda soru duruyor: `PhysicsTime::compute_alpha()` her
+  karede çağrılıyor, `alpha()` de belgesinde `lerp(prev, curr, alpha)` diyor, ve workspace'te onu
+  okuyan **hiçbir render yolu yok**.
+
+  2026-08-18 taraması bunu doğruladı ve **üç şey ekledi**:
+  1. `alpha()`'nın tüm ağaçta iki tüketicisi var, ikisi de render değil: `frame.rs:126`'daki
+     `tracing::debug!` alanı ve `FrameSteps.alpha` — onun da tek üretim okuyucusu
+     `windowed/event.rs:695`'teki `let _ = steps;`. (ENGINE.md'nin "tek geçtiği yerler tanımı ve
+     testi" cümlesi bu trace alanını atlıyordu.)
+  2. **İKİNCİ bir alpha var**: `gizmo_physics_rigid::world::PhysicsWorld::render_alpha`
+     (`world/step.rs:172`), kendi 1/240 s alt-adım akümülatörüne göre hesaplanıyor ve kendi
+     belgesi *"Output only — nothing in the pipeline reads it back"* diyor. İki alpha, iki farklı
+     akümülatör (60 Hz sabit adım vs 240 Hz alt-adım), sıfır okuyucu — yani bir sonraki bağlama
+     yanlışını seçebilir. Bu, bir önceki commit'in `run_entity_update`/`update_entity` ikizinin
+     aynısı.
+  3. **Eksik olan yarı katsayı değil, saklama.** `PhysicsTime::alpha`'yı okuyan bir oyunun
+     lerp'leyecek `prev`'i yok: ağaçta sabit adımlar arası enterpolasyon için tutulan hiçbir
+     önceki-Transform yok. (`TaaState::prev_vp` ve `SsgiState::prev_vp` var ama onlar KAMERANIN
+     önceki view-projection'ı, temporal reprojection için; `gizmo-renderer`'ın
+     `animation_system`'i ise gerçekten `blend_poses(prev, cur, alpha)` yapıyor — yani "önceki
+     durum + alpha" deseni motorda zaten var, sadece Transform için yok.)
+
+  **Karar hâlâ ölçülecek:** render hızı ile sabit adım arasındaki vuruş (60 Hz fizik, serbest
+  `AutoNoVsync` render) titremeyi ne kadar görünür yapıyor? Ondan sonra üç yol: (a) motorun kendi
+  enterpolasyonunu yazmak (önceki-Transform saklama + extract'te lerp, opt-in), (b) yalnız
+  kopyayı silip (`render_alpha`) `PhysicsTime::alpha`'nın belgesini dürüst hale getirmek ("motor
+  enterpole etmez; kendi `prev`'ini tutan oyun için"), (c) ikisi. Ölçüm yapılmadan (a) yazılmaz.
+
+Saat yazılırken aynı taramanın çıkardığı, **ölçülmüş ama düzeltilmemiş** yedi şey — hepsi dövüş
+altsisteminin geri kalanı, ve hiçbiri saatin kapsamında değil:
+
+1. **Bir düzeltme, bir önceki oturumun cümlesine.** "`check_combo` bu motorda hiç dolu bir tampon
+   göremez" doğru değil: `fighter._buffers` bir Lua tablosu, ve salt-okunur API vekili yalnız DIŞ
+   tablonun `__newindex`'ini tutuyor — `fighter._buffers` okuması `__index` üzerinden **gerçek iç
+   tabloyu** döndürüyor, dolayısıyla `fighter._buffers[1] = {...}` sıradan bir tablo yazımı
+   (`api_table.rs`'in kendi belgesi bu boşluğu zaten söylüyor: *"a table the engine hands out by
+   value … is unaffected"*), ve crate'in beş kombo testi tam olarak bunu yapıyor. Doğru cümle:
+   **motor tamponu hiç doldurmuyor**, script kendisi doldurabiliyor.
+2. `SetFighterMove` **hitstun ve hitstop karelerini taşıyamıyor** (`commands.rs:190-203`: yalnız
+   startup/active/recovery/damage). Lua'dan başlatılan her hareket sessizce
+   `FrameData::default()`'ın 20/5'ini miras alıyor, ve script yazdığı hareketin kendi stun verisini
+   ne okuyabiliyor ne değiştirebiliyor.
+3. **Lua'ya hiçbir dövüşçü sayısı okunmuyor.** Sınırı geçen tek şey `is_locked`'ın boolean'ı;
+   `hitstop_frames`, `hitstun_frames`, `current_move_frame`, `active_move`, `health`, duruş —
+   altısı da okunamıyor. Deseni hazır: `api_entity.rs`'in `update_entity_read_api`'si (düz
+   `table[entity_id] = değer`), ki `_is_locked` zaten o şekli kullanıyor.
+4. Lua aynası `just_released`'ı **düşürüyor** (`api_fighter.rs:126-137` yalnız `just_pressed` ve
+   `pressed`'i kopyalıyor) — yani şarjlı/negatif-kenar hareketler script'e görünmez.
+5. Lua'nın `check_combo`'su ile Rust'ın `check_combo_strict`'i **farklı algoritmalar**: Lua yalnız
+   `just_pressed`, Rust `just_pressed VEYA pressed` eşliyor. Beş test de Lua sürümüne bakıyor, yani
+   ayrışma test takımına görünmüyor.
+6. `Hitbox::active`'i yazan tek şey denetçinin onay kutusu, okuyan tek şey hata-ayıklama gizmo'su
+   (`gizmo/src/systems/physics.rs:234`). Vuruş algılama (`hit_detection_system`) da `592bd6f`'de
+   gitti; `Hurtbox` yalnız çiziliyor.
+7. Stüdyo tarafında üç ayrı kusur, üçü de dövüş HUD'ının kendisini gözlemlenemez kılıyor:
+   `scene_ops` bileşeni **ekleyebiliyor ama silemiyor** (denetçinin sil düğmesi
+   `remove_component_request`'i kaldırıyor, eşleşen kolu yok), iki dövüşçü de varsayılan
+   `player_id = 1` ile geliyor (HUD `p1` ve `p2` ikisini birden isteyince hiç açılmıyor), ve ⏸
+   duraklatma HUD'ı sıfırlıyor (`is_playing()` yalnız Play). Ayrıca denetçi `active_move`,
+   `current_move_frame`, `hitstop_frames`, `hitstun_frames`'in **hiçbirini göstermiyor** — yani
+   saat artık çalışsa bile stüdyoda görülecek bir yüzeyi yok.
 
 Düzeltilmiş ve kaydı tutulan yedi kusur. İlk üçü: script sırası (`HashMap` → `BTreeMap`,
 proses başına rastgeleydi), on altı komutun sessizce yutulması, bir script'in hatasının ötekileri
