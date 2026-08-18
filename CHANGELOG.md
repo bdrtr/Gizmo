@@ -277,6 +277,18 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   dead sinks but nothing dropped what the mixer knew about them; `clean_dead_sinks` now retires
   both together.
 
+- **A force or torque applied to a sleeping body did nothing at all.** `RigidBody::force_accumulator`
+  and `torque_accumulator` are the public fields a game writes for a continuous push — a thruster, a
+  wind volume, a conveyor — and the integrator returns early on `is_sleeping`, so the accumulator was
+  never read; nothing woke the body either, because the sleep test looks only at velocity and a force
+  is not one. Measured: a 1 kg box settled on a plate, given 50 N sideways for two seconds, moved
+  **0.0000 m**; with a manual `wake_up()` it moved 92.7 m. So a continuous force stopped working the
+  moment its target came to rest.
+
+  `PhysicsWorld::step` now wakes any dynamic sleeping body whose force or torque accumulator is
+  non-zero, which is the contract `apply_impulse`, `apply_force` and the explosion system already
+  kept. Determinism unchanged (`A462C9EB8A09D5CA`).
+
 - **Ten unused imports, a dead static and an unused binding, all in feature combinations nothing
   linted.** CI's lint job runs `--all-features`, so it never sees code a *smaller* feature set
   removes, and the feature-powerset job compiled those combinations with `cargo hack check`, which

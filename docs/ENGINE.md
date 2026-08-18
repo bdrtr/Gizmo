@@ -589,6 +589,41 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
     residual is 10 µm over 200 s rather than 14 mm. **Trigger:** unchanged in kind and weaker in
     force — a game that needs sub-millimetre hold at the friction limit. Friction anchors remain
     the fix if one turns up.
+
+  - **A third defect in the same field, found the same way (2026-08-18): a force applied to a
+    sleeping body did nothing at all.** Measured — a 1 kg box settled on a plate, then given
+    **50 N sideways for two seconds** through `force_accumulator`, moved **0.0000 m**. The same
+    box with `wake_up()` called alongside the push moved **92.7 m**. Not less: nothing, silently,
+    for as long as it stayed asleep.
+
+    The mechanism is two correct decisions meeting: `Integrator::integrate_velocities` returns
+    early on `is_sleeping`, so the accumulator is never read — and the sleep test looks only at
+    *velocity*, so a body with a force but no motion is a body that qualifies to keep sleeping.
+    A thruster, a wind volume or a conveyor therefore stopped working the moment its target came
+    to rest, which is the moment it is most obviously meant to work.
+
+    **Every sibling path already kept the contract.** `PhysicsWorld::apply_impulse` and
+    `apply_force` take `&mut RigidBody` precisely so they can wake it, each with a comment saying
+    that otherwise the effect is silently swallowed; the explosion system wakes what it moves,
+    after a bug where "a settled stack beside a blast simply did not react". The accumulators are
+    **public fields**, so they were the one way in with nothing standing there. `PhysicsWorld::step`
+    now wakes any dynamic sleeping body whose force or torque accumulator is non-zero, before the
+    substeps run.
+
+    It was in front of us the whole afternoon: `friction_hold.rs`, written hours earlier, calls
+    `wake_up()` next to its push with a comment explaining that sleeping "would make this measure
+    nothing at all". A workaround in a test is a defect report nobody filed. That call is gone now,
+    and the file exercises the path instead. Determinism unchanged (`A462C9EB8A09D5CA`) — a body
+    with an empty accumulator is not touched.
+
+    **And the angular channel had no guard at all.** Both accumulators are drained by the same
+    line, so the frame-rate defect above was on both, and only the linear half was pinned by a
+    test — an edit could have restored it on the angular half with everything still green.
+    `applied_forces.rs` now covers the torque twin (bit-identical ω at 240/120/60/30 fps), the
+    wake contract on both channels, and the one property `Integrator::apply_torque` rests on: the
+    **world-space** inverse inertia tensor. That test uses a rod laid on its side, where the
+    body-space shortcut answers 0.0150 rad/s against the correct 3.0 — 200×, so it cannot pass by
+    accident.
 - **The doc-language rule — CLOSED (2026-08-17), and the claim it replaces was false.**
   This item used to read "Stage A plus the facade went from 1286 Turkish `///` lines to 8, and
   seven of those eight are measurement error." Scanning for it found **462 Turkish doc lines in

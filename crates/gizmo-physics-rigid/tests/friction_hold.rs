@@ -93,12 +93,13 @@ fn drift_at(fraction: f32, seconds: f32) -> f32 {
 
     let steps = (seconds / DT) as usize;
     for _ in 0..steps {
-        // Woken along with the push. Sleeping would make this measure nothing at all: the
-        // question is what a contact does *while it is being solved*, and a sleeping body is not
-        // solved. Waking it is also honest about the scene — something is pushing it.
+        // This used to call `rb.wake_up()` alongside the push, because a sleeping body is not
+        // solved and the harness would have measured nothing. The engine does that itself now —
+        // writing an accumulator wakes the body it is written to (`world/step.rs`, and
+        // `applied_forces.rs::a_force_wakes_the_body_it_is_applied_to` is the regression) — so
+        // the call is gone and this file exercises that path rather than working around it.
         let mut bodies = w.borrow_mut::<RigidBody>();
         if let Some(mut rb) = bodies.get_mut(b.id()) {
-            rb.wake_up();
             rb.force_accumulator.x += push;
         }
         drop(bodies);

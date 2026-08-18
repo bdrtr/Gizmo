@@ -79,6 +79,28 @@ impl PhysicsWorld {
         // boyunca birikir, adım sonunda okunur.
         crate::profile::PHASES.reset();
 
+        // A force written into `RigidBody::force_accumulator` or `torque_accumulator` WAKES the
+        // body it is written to. Every other way of pushing a body already does this —
+        // `PhysicsWorld::apply_impulse` and `apply_force` take `&mut RigidBody` for exactly this
+        // reason, and the explosion system wakes what it moves — but the accumulators are public
+        // fields, so nothing stood between a game and the one path that did not.
+        //
+        // What that cost, measured (2026-08-18): a 1 kg box settled on a plate, then given 50 N
+        // sideways for two seconds through `force_accumulator`, moved **0.0000 m**. The same box
+        // with `wake_up()` called alongside the push moved **92.7 m**. Not less — nothing at all,
+        // silently, for as long as the body stays asleep: a thruster, a wind volume or a conveyor
+        // stops working the moment its target comes to rest, which is the moment it is most
+        // obviously supposed to work.
+        for rb in &mut self.rigid_bodies {
+            if rb.is_dynamic()
+                && rb.is_sleeping
+                && (rb.force_accumulator != gizmo_math::Vec3::ZERO
+                    || rb.torque_accumulator != gizmo_math::Vec3::ZERO)
+            {
+                rb.wake_up();
+            }
+        }
+
         let mut steps = 0u32;
         while self.accumulator >= FIXED_DT && steps < MAX_SUBSTEPS {
             self.step_internal(FIXED_DT)?;
