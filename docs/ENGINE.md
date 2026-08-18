@@ -2698,8 +2698,18 @@ duruyor, çünkü her biri ölçümünü ve kararını taşıyor:
   kararı beslemediği için §4'ten ve CLAUDE.md'den kaldırıldı, kural kaldı. (Naif
   `grep non_exhaustive` ~40 fazla sayıyor: tipler özniteliği kendi belgelerinde anlatıyor.)
 
-**Bir sonraki oturuma (2026-08-19).** Önceki dört izin dördü de kapandı; bunlar onları ölçerken
-çıkanlar:
+**Bir sonraki oturuma (2026-08-19, ikinci tur).** Aşağıdaki üç izin de üçü aynı gün kapandı;
+kapatırken çıkan tek yeni iz:
+
+- **Animasyon deltası iki yolda farklı.** Motorun çizim yolu `Time::dt()` okuyup `> 0.0` ise
+  ilerletiyor — yani `set_time_scale(0.0)` animasyonu da durduruyor. Stüdyonun boru hattı
+  `state.actual_dt`'yi (ham kare deltası) veriyor, yani Play modunda bir script zamanı sıfırlasa
+  fizik duruyor ama editörün viewport'unda iskeletler oynamaya devam ediyor. Bugün düzeltilen iki
+  şeyin (fiziğin çift adımlanması, state machine'in editörde koşmaması) aynı ailesinden, ve muhtemel
+  şekli de aynı: oyun oturumundayken `Time::dt()`, dışındayken kendi deltası — `editor_owns_the_physics_step`
+  ile aynı kapı. Ölçülmedi, yalnız okundu; yazmadan önce ölçülmeli.
+
+**Önceki üç iz (hepsi kapandı):**
 
 - ~~Headless çalışma zamanı `Time` kaynağını HİÇ eklemiyor~~ **— düzeltildi, ve kopya da
   ortadan kalktı.** İki çalışma zamanı simüle deltayı artık aynı yerden alıyor:
