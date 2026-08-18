@@ -373,16 +373,22 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
   by entity id — which is what makes the selection a pure function of world state rather than of
   iteration order. Four tests in `shared.rs` hold it, including the archetype-reorder one that is
   the flicker regression.
-  **The cap and the frustum cull closed the same day.** `MAX_LIGHTS` is **32** (2576-byte scene
-  block, against a 64 KiB uniform floor everywhere WebGPU runs), and lights whose sphere of
+  **The cap and the frustum cull closed the same day.** `MAX_LIGHTS` went 10 → **32** — read this
+  paragraph as history, because clustering raised it to 256 the same day (below) — and lights whose sphere of
   influence misses the camera frustum are dropped before the ranking runs, so a level's worth of
   lights behind the player no longer compete for the frame's slots. Raising the cap was the cheap
   part *because* the layout is guarded: `shader_contract`'s
   `every_scene_uniform_declaration_matches_the_bytes_rust_uploads` parses every WGSL declaration
   against the Rust struct, and it named the one file a `grep` had missed (`gbuffer.wgsl`, which
   flattens the array to `array<vec4<f32>, 4·MAX_LIGHTS>`). The three hardcoded `1168`-byte asserts
-  are now written `528 + 64·MAX_LIGHTS`, so the next raise does not need a hand-recomputed literal
+  are now written against `MAX_LIGHTS`, so the next raise does not need a hand-recomputed literal
   in three files — which is how one of them would have been forgotten.
+
+  **The block's fixed part is 560 bytes, not the 528 this paragraph used to say.** It grew by 32
+  when `cluster_dims` and `cluster_depth` were appended, and only the ceiling arithmetic below was
+  updated — so the same struct had two different sizes in adjacent paragraphs until 2026-08-18.
+  Measured, not recomputed: `SceneUniforms` is **16 944 B** at `MAX_LIGHTS` = 256, of which 560 B
+  is fixed.
 
   **Clustered culling landed the same day, and the cap is now 256.** `MAX_LIGHTS` was never a
   hardware limit — it was the per-fragment loop over *every* light in the frame wearing a constant's
@@ -392,6 +398,15 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
   hard ceiling left is the uniform block: `(65536 − 560) / 64` = 1015 lights, and the honest move
   past a few hundred is to put the light array in a storage buffer rather than inch toward that
   cliff.
+
+  **That ceiling is computed now, not argued.**
+  `the_scene_block_fits_the_uniform_binding_floor_every_webgpu_target_guarantees` asserts the block
+  is inside the 64 KiB `maxUniformBufferBindingSize` every WebGPU target guarantees, and that the
+  560 / 1015 figures quoted here are this layout's. Before it, raising `MAX_LIGHTS` past the cliff
+  would have compiled, passed every test, and failed at **run time** on the first machine that
+  enforces the floor — as a bind-group validation error, which is the least informative place to
+  learn about arithmetic done in a header. Verified red at `MAX_LIGHTS` = 1200: 77 360 B, with the
+  real ceiling in the message.
 
   **Assignment is on the CPU, deliberately**, and the cost is measured (release, this machine):
   0.047 ms at 8 lights, 0.106 at 32, 0.201 at 64, 0.469 at 128, 0.764 at 256. A compute-shader

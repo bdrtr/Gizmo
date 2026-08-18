@@ -319,7 +319,9 @@ pub struct SceneUniforms {
     /// `[z_scale, z_bias, 0, 0]` for `slice = floor(log(view_depth) * z_scale + z_bias)`, from
     /// [`clustered::depth_params`](crate::clustered::depth_params) over the camera's own near/far.
     pub cluster_depth: [f32; 4],
-                           // Total: 560 + 64·MAX_LIGHTS bytes (2608 at MAX_LIGHTS = 32)
+                           // Total: 560 + 64·MAX_LIGHTS bytes (16 944 at MAX_LIGHTS = 256).
+                           // The 64 KiB uniform floor caps this layout at 1015 lights — checked by
+                           // `frame_uniforms`'s `the_scene_block_fits_the_uniform_binding_floor_…`.
 }
 
 /// One draw's per-instance record: its transform and the material values that do not live in a

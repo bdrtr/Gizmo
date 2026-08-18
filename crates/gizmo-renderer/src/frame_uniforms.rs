@@ -437,6 +437,45 @@ mod tests {
         assert_eq!(std::mem::size_of_val(&u.lights) / std::mem::size_of::<LightData>(), MAX_LIGHTS);
     }
 
+    /// The scene block must fit a uniform binding, and nothing checked that it did.
+    ///
+    /// `maxUniformBufferBindingSize` is **64 KiB** everywhere WebGPU runs — that is the
+    /// guaranteed floor, and the number `MAX_LIGHTS` has always been argued against. The argument
+    /// lived in prose: docs/ENGINE.md works out `(65536 − 560) / 64 = 1015` lights as the hard
+    /// ceiling. Nothing computed it, so raising `MAX_LIGHTS` past it would have compiled, passed
+    /// every test, and then failed at **run time** on the first machine that enforces the floor —
+    /// as a bind-group validation error, which is the least informative place to learn about an
+    /// arithmetic mistake made in a header file.
+    ///
+    /// The same prose was also stale in one place and current in another: the fixed part is 560
+    /// bytes (it grew from 528 when `cluster_dims` and `cluster_depth` were appended), and the
+    /// document quoted both figures in adjacent paragraphs. A number worth arguing from is a
+    /// number worth computing.
+    #[test]
+    fn the_scene_block_fits_the_uniform_binding_floor_every_webgpu_target_guarantees() {
+        /// `maxUniformBufferBindingSize`, the WebGPU-guaranteed minimum.
+        const UNIFORM_FLOOR: usize = 65_536;
+        let block = std::mem::size_of::<SceneUniforms>();
+        assert!(
+            block <= UNIFORM_FLOOR,
+            "the scene uniform block is {block} B, past the {UNIFORM_FLOOR} B floor every WebGPU \
+             target guarantees — MAX_LIGHTS is {MAX_LIGHTS} and the ceiling is {} for this \
+             layout. Past a few hundred lights the answer is a storage buffer, not a bigger \
+             uniform.",
+            (UNIFORM_FLOOR - (block - MAX_LIGHTS * std::mem::size_of::<LightData>()))
+                / std::mem::size_of::<LightData>()
+        );
+
+        // …and the ceiling the documentation argues from is the one this layout actually has.
+        let fixed = block - MAX_LIGHTS * std::mem::size_of::<LightData>();
+        assert_eq!(fixed, 560, "the block's fixed part");
+        assert_eq!(
+            (UNIFORM_FLOOR - fixed) / std::mem::size_of::<LightData>(),
+            1015,
+            "the light ceiling docs/ENGINE.md quotes"
+        );
+    }
+
     /// A path that renders no point-shadow cube must not enable the lookup — the shader would
     /// sample whatever the cube held on the last frame that did.
     #[test]
