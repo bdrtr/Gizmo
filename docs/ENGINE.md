@@ -12,7 +12,9 @@
 ## 1. Overview
 
 Gizmo — a lightweight, **pure-Rust**, ECS-based 3D engine + a physics simulator written from
-scratch (no external physics dependency). Published on crates.io (**0.9.0**, 19 crates).
+scratch (no external physics dependency). Published on crates.io (**0.10.0**, 19 of the 20
+workspace crates — `gizmo-studio` is `publish = false`). *(Said `0.9.0` until 2026-08-19;
+CHANGELOG.md's own note says that version never reached crates.io — no tag, no release.)*
 
 - **ECS:** Entity = id, Component = data, Systems query Archetypes. `World` is the central
   state; `Query`/`Mut`/`With`/`Without`/`Changed`/`Added` filters; `Commands` for deferred
@@ -627,8 +629,11 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
 - **The doc-language rule — CLOSED (2026-08-17), and the claim it replaces was false.**
   This item used to read "Stage A plus the facade went from 1286 Turkish `///` lines to 8, and
   seven of those eight are measurement error." Scanning for it found **462 Turkish doc lines in
-  Stage A's `src/`**, 476 of them in `gizmo-physics-rigid` alone — the solver's and the joint
-  solver's parameter documentation, which is some of the densest engineering prose in the repo.
+  Stage A's `src/`**, most of them in `gizmo-physics-rigid` — the solver's and the joint solver's
+  parameter documentation, which is some of the densest engineering prose in the repo. *(This
+  sentence said "476 of them in `gizmo-physics-rigid` alone", which is impossible against a total
+  of 462; corrected 2026-08-19 by dropping the second number rather than re-deriving a figure
+  nothing reads. Two counts in one sentence is one more than the sentence needed.)*
   So the marker had been false for as long as anyone had believed it, and the earlier
   measurement is the thing to distrust, not the crates.
 
@@ -1100,7 +1105,15 @@ its precision, and a section that silently rewrites itself cannot be checked.
   of its cadence. The leak turns into a cost only if Stage B is ever taken to 1.0, which is gated
   on all three of them settling in the criterion-1 sense.
 
-96 public types are `#[non_exhaustive]`; 13 Error enums + fn→Result conversions.
+`#[non_exhaustive]` is the default for a public type here, and errors are enums with
+`fn → Result` conversions rather than panics. **There is deliberately no count of either.** This
+line carried "96 public types are `#[non_exhaustive]`; 13 Error enums" and both numbers were
+wrong — 125 and 16 when re-measured on 2026-08-19 — but the reason they are gone rather than
+updated is stronger than that: the figure has been wrong every single time it was written (see
+§8), it moves in both directions, and no decision anywhere reads it. A rule that binds every new
+public type does not need a tally of the old ones. If a number is ever wanted, compute it —
+`grep -c '^\s*#\[non_exhaustive\]' crates/*/src/**/*.rs`, and note that grepping for the bare
+word overshoots by ~40 because nearly every affected type explains the attribute in its docs.
 
 ---
 
@@ -1811,7 +1824,20 @@ the *slope* gate is the one that guards it.
   on the same afternoon (2026-08-18), each written once and never re-measured: the rustfmt churn
   behind a standing decision (2660 → **2794**), the scene block's fixed part quoted two different
   ways in adjacent paragraphs (528 vs **560**), and CLAUDE.md's present-tense "96 types are
-  `#[non_exhaustive]`" (**122**). None of the three was wrong when written.
+  `#[non_exhaustive]`" (**122**).
+
+  **"None of the three was wrong when written" — that sentence stood here, and for the third one it
+  is false.** Re-measured 2026-08-19 by counting the attribute at each commit: the day this rule
+  was written (`f2cd65c`) the real count was **127**, not the 122 the same commit recorded; the
+  "96" baseline was already **101** at the 0.2.0 release it was taken from (`5cafbd2`); and by
+  `0db4be2` it had *fallen* to **125**, because that sweep deleted two dead `#[non_exhaustive]`
+  types. So the correction was itself wrong by five, its baseline was wrong by five, and
+  CLAUDE.md's "expected to keep climbing" describes a number that had just gone down. The lesson
+  survives its own example, harder: a count is wrong the moment it is typed, including in the
+  commit that is complaining about counts.
+
+  That one is now **deleted** rather than corrected (§4) — it carried no decision. The other two
+  stayed because they do: one is a standing argument about rustfmt, the other is checked by a test.
 
   The fix is not diligence. Where the number carries a decision, **compute it** — the uniform
   ceiling is a test now, and the cluster-assignment cost is a benchmark. Where it is background,
