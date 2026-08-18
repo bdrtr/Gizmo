@@ -141,10 +141,22 @@ jobs:
       # Reproducibility is already enforced by every other job; this one is a compile
       # matrix. `--no-dev-deps` stays because it keeps 39 combinations from each rebuilding
       # the bevy dev-dependency stack.
-      - name: gizmo-app — every feature pair must compile
-        run: cargo hack check -p gizmo-app --feature-powerset --depth 2 --no-dev-deps
-      - name: gizmo-engine — every feature pair must compile
-        run: cargo hack check -p gizmo-engine --feature-powerset --depth 2 --no-dev-deps
+      # `clippy -D warnings`, not `check`, since 2026-08-18 — and the reason is the wasm job's,
+      # one axis over. The lint config is crate-wide (`#![warn(missing_docs)]`, `-D warnings`) but
+      # WHICH CODE EXISTS is per-feature, and the lint job runs `--all-features`, so an import or
+      # a static that is only reachable under a smaller feature set was outside every gate. This
+      # job was already building those sets and throwing the warnings away: measured, **66 of the
+      # facade's 150 combinations** failed `-D warnings` the first time it was asked — ten defects
+      # in two files, each repeated across the combinations that expose it, including a `#[cfg]`
+      # sitting on the line below the import it was meant to gate.
+      #
+      # The cost is 20 %: 49 s → 59 s over those 150 combinations with dependencies cached.
+      - name: gizmo-app — every feature pair must compile AND lint
+        run: cargo hack clippy -p gizmo-app --feature-powerset --depth 2 --no-dev-deps
+          -- -D warnings -A clippy::too_many_arguments -A clippy::type_complexity
+      - name: gizmo-engine — every feature pair must compile AND lint
+        run: cargo hack clippy -p gizmo-engine --feature-powerset --depth 2 --no-dev-deps
+          -- -D warnings -A clippy::too_many_arguments -A clippy::type_complexity
 
   # ── Supply chain: advisories, licences, sources ───────────────────────────
   # The workspace publishes 19 crates and had no supply-chain tooling at all until

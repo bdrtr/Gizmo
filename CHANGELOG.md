@@ -261,6 +261,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   dead sinks but nothing dropped what the mixer knew about them; `clean_dead_sinks` now retires
   both together.
 
+- **Ten unused imports, a dead static and an unused binding, all in feature combinations nothing
+  linted.** CI's lint job runs `--all-features`, so it never sees code a *smaller* feature set
+  removes, and the feature-powerset job compiled those combinations with `cargo hack check`, which
+  does not deny warnings. Asked with `-D warnings` for the first time, **66 of the facade's 150
+  feature combinations failed** — ten defects in `crates/gizmo/src/bundles.rs` and
+  `crates/gizmo/src/systems/physics.rs`, each repeated across the combinations that expose it, one
+  of them a `#[cfg]` attached to the line below the import it was meant to gate. All fixed, and
+  the powerset job now runs `clippy -- -D warnings` so the configuration cannot rot again (+20 %:
+  49 s → 59 s over the 150 combinations, dependencies cached).
+
 - **`gizmo-audio` was the one crate not on the `missing_docs` ratchet** (19 of 20 carried
   `#![warn(missing_docs)]`), while `docs/ENGINE.md` said the backlog was closed. The crate was
   already at zero, so the fix is one line and no documentation — but a crate at zero with no lint

@@ -1,8 +1,14 @@
+// Everything these four lines name is used by the `render`-gated items below — the debug view and
+// the two GPU-physics systems. Without that feature the module still exists (it is gated on
+// `physics`) and they are unused.
+#[cfg(feature = "render")]
 use crate::math::Vec3;
-use gizmo_physics_core::{Collider, ColliderShape, Transform, components::GpuPhysicsLink};
-use gizmo_physics_rigid::components::RigidBody;
 #[cfg(feature = "render")]
 use crate::renderer::Renderer;
+#[cfg(feature = "render")]
+use gizmo_physics_core::{Collider, ColliderShape, Transform, components::GpuPhysicsLink};
+#[cfg(feature = "render")]
+use gizmo_physics_rigid::components::RigidBody;
 
 #[cfg(feature = "render")]
 /// Draws the physics debug view: every collider's shape, plus the velocity and contact gizmos
@@ -237,6 +243,7 @@ pub fn physics_debug_system(world: &crate::core::World) {
             }
         }
 
+        #[cfg(feature = "physics-soft")]
         let soft_color = [1.0, 0.4, 0.8, 1.0]; // Pinkish for soft body
         #[cfg(feature = "physics-soft")]
         if let Some(q) = world.query::<&gizmo_physics_soft::SoftBodyMesh>() {
@@ -321,7 +328,8 @@ pub fn physics_debug_system(world: &crate::core::World) {
 /// Registers the newly created Physical Objects in the ECS (RigidBody + Transform + Collider)
 /// onto the highway of the GPU Physics core (GpuPhysicsSystem::spheres_buffer).
 /// A separate counter for static colliders. The first 3 slots are reserved for the initial
-/// colliders.
+/// colliders. Only the GPU submit system reads it, and that system needs `render`.
+#[cfg(feature = "render")]
 static NEXT_STATIC_COLLIDER_SLOT: std::sync::atomic::AtomicU32 =
     std::sync::atomic::AtomicU32::new(3);
 

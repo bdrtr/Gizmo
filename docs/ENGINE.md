@@ -1693,6 +1693,35 @@ the *slope* gate is the one that guards it.
   do what I meant" — it is not a regression diff, and CLAUDE.md now says so with the numbers. And
   the accident was the useful part: without the stale binary the false conclusion would have been
   written down. A difference is only evidence once you know what no difference looks like.
+- **A configuration that is *built* and never *linted* is outside every gate the project has —
+  and the target axis was only the first one.** The wasm lint job exists because that arm was
+  compiled by CI and never linted (2026-08-16). The same argument holds one axis over, and nobody
+  made it until 2026-08-18: the lint gate runs `--all-features`, so it cannot see code that a
+  *smaller* feature set removes, and the feature-powerset job that does build those sets ran
+  `cargo hack check` — which compiles the combinations and throws their warnings away.
+
+  Asked properly for the first time — `cargo hack clippy --feature-powerset --depth 2` with the
+  same `-D warnings` CI applies everywhere else — **66 of the facade's 150 combinations failed.**
+  Not 66 defects: **ten, in two files**, each repeated across every combination that exposes it.
+  The first run only reported the first three, because `cargo hack` stops at the first failing
+  combination; `--keep-going` is what turns "a warning" into the size of the thing.
+
+  What they were, and none of them is exotic: imports at the top of `systems/physics.rs` naming
+  types that only the `render`-gated debug view and GPU-physics systems use; a static counter read
+  by one of those systems; a `soft_color` binding sitting one line above the
+  `#[cfg(feature = "physics-soft")]` block that is its only reader; and in `bundles.rs`, six
+  imports whose users are `render`-only or `all(render, physics)` — including a
+  `use gizmo_physics_core::{BoxShape, Collider, ColliderShape};` line directly above a
+  `#[cfg(feature = "physics")]` that belonged to it. That is the same detached-`#[cfg]` shape this
+  section already records twice from 2026-08-17, and it had been sitting in the tree the whole
+  time, in the one configuration nothing looked at.
+
+  **The gate is flipped rather than the tree merely cleaned**, because cleaning without a gate is
+  what produced this: `check` → `clippy -- -D warnings` in the powerset job. Measured cost, with
+  dependencies cached and only the facade rebuilt: **49 s → 59 s** for 150 combinations, i.e. 20 %
+  on a job that already compiles every one of them. `gizmo-app`'s 49 combinations were clean
+  already, which is the other half of the number: the debt is where the feature graph is widest.
+
 - **A count written into prose is a count the code will walk away from.** Three were found stale
   on the same afternoon (2026-08-18), each written once and never re-measured: the rustfmt churn
   behind a standing decision (2660 → **2794**), the scene block's fixed part quoted two different

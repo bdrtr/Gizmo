@@ -73,11 +73,26 @@ cargo clippy --workspace --all-features --all-targets -- -D warnings \
 # any module declaration, or any `pub use` — it is the ONLY gate that catches a `#[cfg]` that got
 # detached from its item, and an insertion anchored on a `pub mod` line steals the attributes above
 # it. That mistake reached CI twice on 2026-08-17 (see docs/ENGINE.md §8).
-cargo hack check -p gizmo-app --feature-powerset --depth 2 --no-dev-deps
-cargo hack check -p gizmo-engine --feature-powerset --depth 2 --no-dev-deps
+#
+# It runs CLIPPY, not `check` (since 2026-08-18): the `--all-features` lint job cannot see an arm
+# that a smaller feature set removes, so 66 of the facade's 150 combinations were warning with
+# nothing looking. Add `--keep-going` when fixing: without it the run stops at the first failing
+# combination and tells you nothing about the size of what you are fixing.
+# Slow (~1 min per crate warm, longer cold) — run it in the background, not in a foreground shell.
+cargo hack clippy -p gizmo-app --feature-powerset --depth 2 --no-dev-deps \
+  -- -D warnings -A clippy::too_many_arguments -A clippy::type_complexity
+cargo hack clippy -p gizmo-engine --feature-powerset --depth 2 --no-dev-deps \
+  -- -D warnings -A clippy::too_many_arguments -A clippy::type_complexity
 ```
 
 > Gotchas when reproducing CI locally: the entry crate is **`gizmo-engine`**, not `-p gizmo`. Piping cargo through `| tail` masks the exit code — check exit status separately.
+>
+> **`cargo hack --no-dev-deps` rewrites the manifests in place while it runs**, and restores them
+> when it finishes. So a second cargo command started in parallel — in another terminal, another
+> agent, a background job — compiles against a tree whose `[dev-dependencies]` have been deleted,
+> and fails with an error that describes nothing real (`cannot find crate serde_json`, in a crate
+> whose manifest plainly has it). Run the powerset gate alone, and if a build fails with a
+> missing dev-dependency, check whether a powerset run is in flight before believing it.
 
 ### WASM (browser) build
 

@@ -11,8 +11,18 @@
 // (`--no-default-features --features physics`). On the item, the doctest is cfg'd out with the
 // item itself.
 
-use crate::core::{Bundle, Entity, EntityName, World};
-use crate::math::{Quat, Vec3, Vec4};
+use crate::core::{Bundle, Entity, World};
+use crate::math::Vec3;
+// Named by the renderer bundles only — the module itself is `any(render, physics)`, so under
+// `physics` alone every one of these is unused. Each gate matches the items that use it.
+#[cfg(feature = "render")]
+use crate::core::EntityName;
+#[cfg(feature = "render")]
+use crate::math::Quat;
+// `Vec4` is the PBR albedo on `Prefab::with_pbr`, which is `all(render, physics)`.
+#[cfg(all(feature = "render", feature = "physics"))]
+use crate::math::Vec4;
+#[cfg(feature = "render")]
 use gizmo_physics_core::Transform;
 // Light/camera/mesh bundles are renderer components; `RigidBodyBundle` below is not, so the
 // module stays available with `physics` alone.
@@ -367,7 +377,11 @@ impl Bundle for MeshBundle {
 //  RigidBodyBundle
 // ============================================================
 
-use gizmo_physics_core::{BoxShape, Collider, ColliderShape};
+#[cfg(feature = "physics")]
+use gizmo_physics_core::Collider;
+// `Prefab`'s scale-derived box collider is the only user, and it is `all(render, physics)`.
+#[cfg(all(feature = "render", feature = "physics"))]
+use gizmo_physics_core::{BoxShape, ColliderShape};
 #[cfg(feature = "physics")]
 use gizmo_physics_rigid::components::{RigidBody, Velocity};
 

@@ -39,6 +39,9 @@ pub use crate::app::{App, Plugin};
 #[cfg(feature = "render")]
 pub use crate::asset_server::AssetServer;
 pub use crate::color::Color;
+// Everything in `plugins` is physics-gated, so without that feature this glob imports an empty
+// module — which is a warning, in the one configuration no lint gate was looking at.
+#[cfg(feature = "physics")]
 pub use crate::plugins::*;
 #[cfg(all(feature = "render", feature = "physics"))]
 pub use crate::spawner::{Commands as SpawnCommands, GltfLoadError, InputExt, WorldExt};

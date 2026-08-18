@@ -81,8 +81,9 @@ pub mod asset_server;
 pub mod bundles;
 /// A small RGBA colour type with the usual named constants, for demos and tools.
 pub mod color;
-/// The plugins the facade ships: transform propagation, physics, rendering, and the rest of what
-/// `SimpleApp` installs for you.
+/// The plugins the facade ships: `PhysicsPlugin` (a `PhysicsWorld` resource plus the step system)
+/// and `TransformPlugin` (transform propagation). Both need the `physics` feature, which is what
+/// gates every item in the module — so without it this module is empty rather than absent.
 pub mod plugins;
 /// `use gizmo::prelude::*` — the one import a game is expected to need.
 pub mod prelude;

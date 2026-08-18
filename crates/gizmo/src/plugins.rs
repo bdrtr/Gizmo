@@ -1,8 +1,13 @@
+// Every item in this module is a physics plugin, so the imports carry that gate too: without the
+// feature the module is empty, and these two `use` lines plus the prelude's re-export of it were
+// the only things left in it — all three warning, in a configuration nothing linted until
+// 2026-08-18.
+#[cfg(feature = "physics")]
 use crate::app::Plugin;
 #[cfg(feature = "physics")]
-use gizmo_physics_rigid::world::PhysicsWorld;
-
 use crate::math::Vec3;
+#[cfg(feature = "physics")]
+use gizmo_physics_rigid::world::PhysicsWorld;
 
 /// Gizmo Engine Physics Plugin.
 /// When added, it initializes the physics world (PhysicsWorld).
