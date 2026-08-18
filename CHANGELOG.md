@@ -544,6 +544,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- **`ScriptCommand::SetFightCamera`, dead at both ends.** Unlike the other open commands — a script
+  can ask for those and the engine has not answered yet — this one could not be asked for either:
+  no `api_*.rs` pushed it, and no arm matched it (it fell into `flush_commands`' catch-all, and the
+  host's camera pass answers only `SetCameraFov`). Wiring it would have meant writing the
+  camera-follow subsystem the engine does not ship, and a live replacement already runs in
+  `gizmo-studio`, whose auto fight camera derives all four of the command's fields itself.
+
+  **Trigger to bring it back:** the engine shipping a camera-follow system a script can point at,
+  plus a game that wants to parameterise the framing. The first step that day is moving the
+  studio's framing maths (midpoint, `separation.max(2.0)`, `(separation * 1.2).max(4.0)`, height
+  1.8) into the engine — then the command drives something that exists, and the studio's copy goes
+  with it.
+
 - **`ScriptEngine::get_pending_audio_scene_commands` — a public method that returned an empty
   `Vec` and could not return anything else.** Its body was `Vec::new()` under two comments
   wondering when it should be called; its doc said it "returns the audio/scene commands pending at

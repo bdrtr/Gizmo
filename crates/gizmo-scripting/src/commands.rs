@@ -147,18 +147,6 @@ pub enum ScriptCommand {
     SetCameraTarget(u32),
     /// Set the camera's vertical field of view, in degrees.
     SetCameraFov(f32),
-    /// The fighting camera, which follows both fighters at once
-    SetFightCamera {
-        /// First fighter's entity.
-        p1_id: u32,
-        /// Second fighter's entity.
-        p2_id: u32,
-        /// How far above the pair the camera sits (Y offset, metres).
-        height: f32,
-        /// How far back it sits at minimum (Z offset, metres) — it pulls further out as the
-        /// fighters separate, never closer than this.
-        distance: f32,
-    },
 
     // ── Components ───────────────────────────────────────────────────────────
     /// Rename an entity, i.e. overwrite its `EntityName`.
@@ -262,7 +250,6 @@ impl ScriptCommand {
             ShowDialogue { duration, .. } => duration.is_finite(),
             AddCheckpoint { position, radius, .. } => position.is_finite() && radius.is_finite(),
             SetCameraFov(f) | SetAnimationSpeed(_, f) => f.is_finite(),
-            SetFightCamera { height, distance, .. } => height.is_finite() && distance.is_finite(),
             PlayAnimation { blend, .. } => blend.is_finite(),
             SetFighterMove { damage, .. } => damage.is_finite(),
             SetFighterHealth(_, health) => health.is_finite(),
@@ -413,9 +400,12 @@ mod tests {
     fn one_bad_field_condemns_the_whole_command() {
         let bad_z = ScriptCommand::AddBoxCollider { id: 1, hx: 1.0, hy: 1.0, hz: f32::NAN };
         assert!(!bad_z.is_finite(), "hz was not checked");
-        let bad_distance =
-            ScriptCommand::SetFightCamera { p1_id: 1, p2_id: 2, height: 3.0, distance: f32::NAN };
-        assert!(!bad_distance.is_finite(), "distance was not checked");
+        let bad_radius = ScriptCommand::AddCheckpoint {
+            id: 1,
+            position: Vec3::ZERO,
+            radius: f32::NAN,
+        };
+        assert!(!bad_radius.is_finite(), "radius was not checked");
         let bad_position = ScriptCommand::SpawnPrefab {
             name: "x".into(),
             prefab_type: "y".into(),

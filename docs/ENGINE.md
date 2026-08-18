@@ -2308,7 +2308,7 @@ Cihazsız yarısı ayrı: komutların **tanınması** — asıl kırık olan yar
 birim testinde.
 
 **Ve aynı soru bütün komut vokabülerine soruldu — LİSTE BU (2026-08-18).** `ScriptCommand`'ın
-**43 varyantı** var; `flush_commands` bunların **23'ünü** kendi içinde uyguluyor, **20'si** geri
+**42 varyantı** var; `flush_commands` bunların **23'ünü** kendi içinde uyguluyor, **19'u** geri
 dönüyordu ve hiçbirine bakan yoktu. `PlayLoop` şimdi yedisini karşılıyor. *(Sayılar 2026-08-19'da
 düzeltildi: `SetFighterHealth` aynı gün eklendi ve iki yerde yazılı sayıyı bayatlattı — §8'in
 "düzyazıya yazılan sayı, kodun geride bıraktığı sayıdır" kuralının bu oturumdaki örneği. Ölçüm:
@@ -2320,7 +2320,7 @@ enum gövdesindeki varyant adları sayıldı, 43.)*
 | `SetVehicleEngineForce` · `SetVehicleSteering` · `SetVehicleBrake` | **karşılandı** — Lua'nın araç API'si de sessizdi; `VehicleController` `gizmo-physics-dynamics`'te, yani scripting crate'inin ulaşamayacağı yerde |
 | `SetCameraFov` | **karşılandı** |
 | `LoadScene` · `SaveScene` | açık, **bilerek**: editör yazarın altından sahne değiştiremez. Çalışma zamanı için meşru; tetikleyicisi sahne geçişi isteyen bir oyun |
-| `SetCameraTarget` · `SetFightCamera` | açık: bunlar bir **değer** değil, zaman içinde bir **davranış** istiyor ve motor script'in gösterebileceği bir takip sistemi göndermiyor. Tetikleyici: öyle bir sistem |
+| `SetCameraTarget` | açık: bu bir **değer** değil, zaman içinde bir **davranış** istiyor ve motor script'in gösterebileceği bir takip sistemi göndermiyor. Tetikleyici: öyle bir sistem. *(`SetFightCamera` bu satırdaydı; 2026-08-19'da SİLİNDİ — bkz. aşağısı.)* |
 | `ShowDialogue` · `HideDialogue` | açık: diyalog altsistemi yok |
 | `TriggerCutscene` · `EndCutscene` | açık: ara sahne altsistemi yok |
 | `StartRace` · `FinishRace` · `ResetRace` · `AddCheckpoint` · `ActivateCheckpoint` | açık: yarış altsistemi yok |
@@ -2587,11 +2587,19 @@ komşu köşeler):
   Uçtan uca test yaz-oku-yaz turunu sürüyor: script `run`'a geçiyor, hızı ayarlıyor, sonra
   `is_playing(id, "run")` okuyup `idle`'a dönüyor. Ayna kaldırılınca ikinci geçiş hiç olmuyor
   (`Some("run")`, `Some("idle")` yerine).
-- **`SetFightCamera`'nın ne üreticisi ne işleyicisi var** (`commands.rs:151`; `play.rs`'te yalnız
-  bir yorumda anılıyor). Stüdyonun kendi otomatik dövüş kamerası (`simulation.rs`) aynı işi
-  yapıyor ama sayıları gömülü ve yalnız editörde koşuyor — ihraç edilen oyunda dövüş kamerası yok.
-  Yani seçenek "sil" ile "stüdyodaki çerçeveleme matematiğini motora taşı, komut onu sürsün"
-  arasında; ikincisi bir kopyayı da ortadan kaldırır.
+- ~~`SetFightCamera`'nın ne üreticisi ne işleyicisi var~~ **— silindi.** Öteki açık komutlardan
+  farkı ölçülünce göründü: `SetCameraTarget` gibi "script sorabiliyor, cevaplayan yok" değil,
+  **iki ucundan da ölü** — ne bir `api_*.rs` onu itiyordu ne de herhangi bir kol onu karşılıyordu
+  (`engine.rs`'in `other => unhandled` yakalayıcısına düşüyor, `play.rs`'in kamera geçidi yalnız
+  `SetCameraFov`'a bakıyor). Deponun kendi silme kuralının üç şartını da karşılıyor: yol yok,
+  bağlamak istenmemiş bir özellik yazmak demek (motor bir takip sistemi göndermiyor), ve canlı bir
+  ikamesi var — stüdyonun otomatik dövüş kamerası (`systems/simulation.rs`) dört alanın hepsini
+  kendisi türetiyor.
+  **Tetikleyici (geri getirmek için):** motorun script'in gösterebileceği bir kamera-takip sistemi
+  göndermesi, VE çerçevelemeyi parametreleştirmek isteyen bir oyun. İlk adım o gün: stüdyodaki
+  çerçeveleme matematiğini (orta nokta, `separation.max(2.0)`, `(separation*1.2).max(4.0)`,
+  yükseklik 1.8) motora taşımak — o zaman komut zaten var olan bir şeyi sürer, ve stüdyodaki kopya
+  da ortadan kalkar.
 - ~~Editör modunda fizik DEĞİŞKEN dt ile adımlanıyor~~ **— iz yanlıştı, altındaki kusur çok daha
   büyüktü; düzeltildi.** Ölçüm önce izi çürüttü: `main.rs`'in gördüğü dt zaten kırpılmış
   (`windowed/event.rs:575`, `dt.min(0.05)`) ve `PhysicsWorld::step` çözücüye asla değişken bir

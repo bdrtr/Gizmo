@@ -96,9 +96,9 @@ enum ReloadEdge {
 /// This is where those subsystems are, and each handler passes on what it does not speak for.
 ///
 /// **What still goes unanswered, and why it is a list rather than a shrug.** Of `ScriptCommand`'s
-/// 43 variants, 23 are applied inside the scripting crate and 20 came back here. This chain now
+/// 42 variants, 23 are applied inside the scripting crate and 19 came back here. This chain now
 /// takes seven of those (three audio, three vehicle, the camera's field of view). The remaining
-/// thirteen are scene load/save, the camera *follow* commands, dialogue, cutscenes and the race
+/// twelve are scene load/save, the camera *follow* command, dialogue, cutscenes and the race
 /// subsystem — see docs/ENGINE.md's Scripting section, which carries the enumerated list and what
 /// each one is waiting for.
 #[cfg(feature = "scripting")]
@@ -179,7 +179,7 @@ fn apply_script_vehicle(
 /// have caught it. This is the same shape as the keymap defect the scripting section already
 /// records: two real units, not the same unit, and nothing comparing them.
 ///
-/// The camera's *follow* commands (`SetCameraTarget`, `SetFightCamera`) are still handed back:
+/// The camera's *follow* command (`SetCameraTarget`) is still handed back:
 /// they ask for a behaviour over time, not a value, and the engine ships no follow system for a
 /// script to point at. **Trigger:** one.
 #[cfg(all(feature = "scripting", feature = "render"))]
