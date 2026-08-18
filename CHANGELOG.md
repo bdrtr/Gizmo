@@ -39,6 +39,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   it, the script takes the health off — 92, not 100 (the event arrived) and not 84 (one hit per
   move).
 
+- **A headless game had no clock at all.** The windowed runtime creates and updates a
+  `gizmo_core::time::Time` every frame and feeds the fixed loop `Time::dt()` — the raw delta scaled
+  by `time_scale` and clamped to `max_dt`. The headless runtime never touched `Time`: it handed the
+  raw wall-clock delta straight to the fixed loop. So a server had no `Res<Time>` — no `dt()`, no
+  `elapsed()`, no `frame()` — and `set_time_scale` did nothing there, `0.0` included, which is
+  supposed to be pause. That is the same defect the headless loop's own comment records having
+  fixed one layer up ("a plugin could not be written once and behave the same in both"), left
+  standing one layer down.
+
+  Both runtimes now take the simulated delta from one place, `gizmo_app::frame::advance_time`,
+  which also removes the duplicate: the windowed loop had this inline. A source-shape guard pins
+  both call sites, because neither loop can be driven from a test — one needs a window, the other
+  never returns.
+
 - **The editor ran the simulation at twice the rate an exported game does, and ⏸ did not stop
   anything falling.** `gizmo-studio`'s update hook called `cpu_physics_step_system(world, dt)`
   unconditionally, and then `handle_simulation` ran `PlayLoop::step`, which spends its own 60 Hz

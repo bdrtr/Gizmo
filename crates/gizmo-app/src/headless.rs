@@ -171,11 +171,18 @@ impl<State: 'static> App<State> {
             // plugin in the windowed runtime stepped at a fixed 60 Hz. A plugin could not be
             // written once and behave the same in both — which for a dedicated server, the
             // one place a fixed step matters most, was the wrong way round.
+            // The SIMULATED delta is `Time`'s, not the wall clock's — the same rule the windowed
+            // runtime follows, and for the same reason one layer down. This loop used to hand the
+            // raw delta straight in and never create a `Time` at all, so a headless game had no
+            // `Res<Time>` (no `dt()`, no `elapsed()`, no `frame()`) and `set_time_scale` did
+            // nothing here, `0.0` included — pause worked in a window and not on a server.
+            let sim_dt = crate::frame::advance_time(&mut self.world, dt);
+
             crate::frame::run_fixed_and_update(
                 &mut self.world,
                 &mut self.schedule,
                 &mut self.update_schedule,
-                dt,
+                sim_dt,
                 dt,
                 |_| {},
             );

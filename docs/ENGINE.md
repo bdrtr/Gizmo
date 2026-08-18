@@ -2654,11 +2654,14 @@ duruyor, çünkü her biri ölçümünü ve kararını taşıyor:
   başka bir giriş kapısını koruyor ve hangisinin GEÇERLİ olduğu çağırana bağlı:
   - `PhysicsTime`'ın **8**'i: pencereli yolda ölü, çünkü `Time::update` dt'yi `max_dt`'ye (0.05 s)
     ve time_scale'den SONRA kırpıyor. 60 Hz'de bu **2 adım** (kalıntı varsa 3) — üçün değil ikinin
-    çıkmasının sebebi f32: `3 × (1/60) = 0.050000004`, kırpmanın bir kıl üstünde. Ama tavan iki
-    yerde canlı: **headless** çalışma zamanı ham duvar-saati deltasını doğrudan veriyor (`Time`
-    kaynağını hiç eklemiyor), ve **~140 Hz üstünde** `8/hz < 0.05` olduğu için yine devreye giriyor
-    (240 Hz'de takılan bir kare 12 adım isteyip 8 alıyor). Kırpılan zaman artık SESSİZ değil:
-    `accumulate` düşürdüğü süreyi `warn!` ile bildiriyor.
+    çıkmasının sebebi f32: `3 × (1/60) = 0.050000004`, kırpmanın bir kıl üstünde. O gün tavan iki
+    yerde canlıydı: **headless** çalışma zamanı ham duvar-saati deltasını doğrudan veriyordu
+    (`Time` kaynağını hiç eklemiyordu), ve **~140 Hz üstünde** `8/hz < 0.05` olduğu için devreye
+    giriyordu. **Birincisi aynı gün kapandı** — headless artık `advance_time`'dan geçiyor, yani
+    orada da kırpılıyor (bkz. aşağıdaki madde); geriye 140 Hz üstü ve `accumulate`'i kendisi
+    besleyen bir gömücü kaldı — o public API, üstündeki kırpma bir çalışma zamanının nezaketi,
+    garanti değil. Kırpılan zaman artık SESSİZ değil: `accumulate` düşürdüğü süreyi `warn!` ile
+    bildiriyor.
   - `PlayLoop`'un **16**'sı: iki sürücüsü de aynı kırpılmış deltayı verdiği için ulaşılamıyor.
   - `PhysicsWorld`'ün **64**'ü: kare başına İŞİ sınırlıyor ama BORCU değil, çünkü o akümülatör hiç
     kırpılmıyor. Yorumu "time lost" diyordu — yanlış, ve aynı cümlede "akümülatörde harcanmamış
@@ -2681,7 +2684,18 @@ duruyor, çünkü her biri ölçümünü ve kararını taşıyor:
 **Bir sonraki oturuma (2026-08-19).** Önceki dört izin dördü de kapandı; bunlar onları ölçerken
 çıkanlar:
 
-- **Headless çalışma zamanı `Time` kaynağını HİÇ eklemiyor.** `windowed/event.rs:640-643` bir
+- ~~Headless çalışma zamanı `Time` kaynağını HİÇ eklemiyor~~ **— düzeltildi, ve kopya da
+  ortadan kalktı.** İki çalışma zamanı simüle deltayı artık aynı yerden alıyor:
+  `gizmo_app::frame::advance_time(world, raw_dt)` — `Time`'ı yoksa yaratıyor, günceller, ve
+  `time_scale` ile ölçeklenip `max_dt`'ye kırpılmış deltayı döndürüyor. Pencereli döngü bunu satır
+  içi yapıyordu; headless hiç yapmıyordu. Sonuç: headless bir oyunun artık `Res<Time>`'ı var
+  (`dt()`, `elapsed()`, `frame()`), ve `set_time_scale` orada da çalışıyor — `0.0` dahil, ki o
+  duraklatma demek ve sunucuda hiç çalışmıyordu. Testler: `advance_time` saati yoksa yaratıyor,
+  oyunun ayarladığını koruyor (0.0 → 0.0, 0.5 → yarı hız, `elapsed` yalnız simüle zamanı sayıyor),
+  takılmayı kırpıyor; artı iki çalışma zamanının da onu çağırdığını sabitleyen kaynak-biçimi testi
+  (ikisi de testten sürülemiyor: biri pencere istiyor, öteki hiç dönmüyor).
+
+  ESKİ HÂLİ, KAYIT İÇİN: `windowed/event.rs:640-643` bir
   `Time::new()` kurup dünyaya koyuyor; `headless.rs`'te tek bir `insert_resource` yok. Sonuç: bir
   headless oyun `Res<Time>` göremiyor — `dt()`, `elapsed()`, `frame()` yok — ve `set_time_scale`
   orada hiçbir şey yapmıyor, çünkü sabit adım ham duvar-saati deltasıyla besleniyor. Bu, o

@@ -198,11 +198,17 @@ impl Default for Time {
 ///   leftover. (Two, not the three the arithmetic suggests, because `3 x fixed_dt` is 0.050000004
 ///   in f32 — a hair over the clamp.) The 8 is dead code on that path, and the number a reader
 ///   should reason about is `Time::max_dt`.
-/// - The **headless** runtime passes the raw wall-clock delta straight in (it never inserts a
-///   `Time` at all). There this cap is the only one there is, it does fire, and the time past it
-///   is genuinely gone — which is what the `warn!` in [`PhysicsTime::accumulate`] reports.
-/// - Above ~140 Hz the cap shrinks below the windowed clamp (`8/hz < 0.05`) and starts firing
-///   there too: at 240 Hz a stalled 0.05 s frame wants 12 steps and gets 8.
+/// - The **headless** runtime used to pass the raw wall-clock delta straight in — it never
+///   inserted a `Time` at all — which made this cap the only one there was, and the only place it
+///   fired. That asymmetry was itself the defect: a headless game had no clock, so
+///   `set_time_scale` did nothing there either. Since both runtimes go through
+///   `gizmo_app::frame::advance_time`, headless is clamped the same way and this cap is no longer
+///   reachable there.
+/// - What is left, and it is live: above ~140 Hz the cap shrinks below the windowed clamp
+///   (`8/hz < 0.05`) — at 240 Hz a stalled 0.05 s frame wants 12 steps and gets 8 — and **any
+///   embedder feeding [`PhysicsTime::accumulate`] itself** can hand in whatever it likes. This is
+///   public API; the clamp above it is a runtime's courtesy, not a guarantee. When it does fire,
+///   the time past it is gone, which is what the `warn!` in `accumulate` reports.
 ///
 /// The three ceilings in this engine are easy to confuse and only one of them is doing anything at
 /// a time: this one, `gizmo::systems::PlayLoop::MAX_STEPS` (16, and likewise unreachable from its

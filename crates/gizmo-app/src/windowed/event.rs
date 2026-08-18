@@ -624,26 +624,7 @@ impl<State: 'static> App<State> {
                             // DURDURSUN, `0.5` ağır çekim yapsın. `time_scale == 1.0` (varsayılan)
                             // iken `min(dt, max_dt) == dt` olduğundan davranış bit-aynı. Kullanıcı
                             // update hook'u ham `dt` alır (kamera/UI duraklamada bile akıcı kalsın).
-                            let sim_dt = {
-                                let has_time = self
-                                    .world
-                                    .get_resource::<gizmo_core::time::Time>()
-                                    .is_some();
-                                if has_time {
-                                    let mut time = self
-                                        .world
-                                        .get_resource_mut::<gizmo_core::time::Time>()
-                                        .unwrap();
-                                    time.update(dt);
-                                    time.dt()
-                                } else {
-                                    let mut time = gizmo_core::time::Time::new();
-                                    time.update(dt);
-                                    let sim_dt = time.dt();
-                                    self.world.insert_resource(time);
-                                    sim_dt
-                                }
-                            };
+                            let sim_dt = crate::frame::advance_time(&mut self.world, dt);
 
                             // ═══ Fixed Timestep Fizik Döngüsü ═══
                             if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {

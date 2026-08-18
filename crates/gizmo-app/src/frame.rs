@@ -65,6 +65,37 @@ pub struct FrameSteps {
     pub alpha: f32,
 }
 
+/// Advance the world's [`Time`] by one frame of wall clock and return the **simulated** delta.
+///
+/// The return value is `Time::dt()` — the raw delta scaled by `time_scale` and then clamped to
+/// `max_dt` — which is what a runtime should feed the fixed-timestep loop, while the update hook
+/// keeps getting the raw delta so cameras and UI stay smooth through a pause. Creates the
+/// resource if the world has none, the same way [`run_fixed_and_update`] creates a
+/// [`PhysicsTime`].
+///
+/// **It exists because the two runtimes disagreed about whether `Time` exists at all.** The
+/// windowed loop did this inline; the headless one never touched `Time` and handed the raw
+/// wall-clock delta straight to the fixed loop. So a headless game had no `Res<Time>` — no
+/// `dt()`, no `elapsed()`, no `frame()` — and `set_time_scale` did nothing there, including
+/// `0.0`, which is supposed to be pause. That is the same defect the headless loop's own comment
+/// records having fixed one layer up ("a plugin could not be written once and behave the same in
+/// both"), left standing one layer down. One function now, called by both.
+pub fn advance_time(world: &mut World, raw_dt: f32) -> f32 {
+    if world.get_resource::<gizmo_core::time::Time>().is_some() {
+        let mut time = world
+            .get_resource_mut::<gizmo_core::time::Time>()
+            .expect("just checked");
+        time.update(raw_dt);
+        time.dt()
+    } else {
+        let mut time = gizmo_core::time::Time::new();
+        time.update(raw_dt);
+        let sim_dt = time.dt();
+        world.insert_resource(time);
+        sim_dt
+    }
+}
+
 /// Advance one rendered frame: drain the fixed-timestep accumulator, then run the
 /// per-frame update schedule exactly once.
 ///
@@ -399,5 +430,126 @@ mod tests {
             steps.fixed_steps > 0,
             "a full second of simulated time must produce fixed steps"
         );
+    }
+
+    /// **`advance_time` creates the clock if the world has none** — which is the whole of what the
+    /// headless runtime was missing. A game there had no `Res<Time>` at all: no `dt()`, no
+    /// `elapsed()`, no `frame()`.
+    #[test]
+    fn advance_time_creates_the_clock_and_returns_the_simulated_delta() {
+        use gizmo_core::time::Time;
+
+        let mut world = World::new();
+        assert!(
+            world.get_resource::<Time>().is_none(),
+            "the fixture starts without one"
+        );
+
+        let sim_dt = advance_time(&mut world, 1.0 / 60.0);
+        assert!(
+            (sim_dt - 1.0 / 60.0).abs() < 1e-6,
+            "an ordinary frame passes through untouched: {sim_dt}"
+        );
+
+        let time = world.get_resource::<Time>().expect("it was created");
+        assert_eq!(time.frame(), 1, "and the frame counter started");
+        assert!((time.dt() - sim_dt).abs() < 1e-9, "the resource agrees with the return value");
+    }
+
+    /// It keeps using the clock the game configured rather than replacing it, so `set_time_scale`
+    /// and a custom `max_dt` survive from frame to frame.
+    #[test]
+    fn advance_time_honours_the_clock_the_game_configured() {
+        use gizmo_core::time::Time;
+
+        let mut world = World::new();
+        let mut time = Time::new();
+        time.set_time_scale(0.0); // pause
+        world.insert_resource(time);
+
+        let sim_dt = advance_time(&mut world, 1.0 / 60.0);
+        assert_eq!(
+            sim_dt, 0.0,
+            "time_scale 0.0 is pause, and this is the value that feeds the fixed loop — it did \
+             nothing at all on the headless path, where no Time existed to read"
+        );
+
+        {
+            let mut time = world.get_resource_mut::<Time>().expect("still there");
+            time.set_time_scale(0.5);
+        }
+        let half = advance_time(&mut world, 1.0 / 60.0);
+        assert!(
+            (half - (1.0 / 120.0)).abs() < 1e-6,
+            "half speed halves the simulated delta: {half}"
+        );
+
+        let elapsed = world.get_resource::<Time>().expect("still there").elapsed();
+        assert!(
+            (elapsed - (1.0 / 120.0)).abs() < 1e-6,
+            "and elapsed counts SIMULATED time, so the paused frame added nothing: {elapsed}"
+        );
+    }
+
+    /// A stalled frame is clamped by `max_dt`, which is the ceiling that actually governs the
+    /// fixed loop's catch-up — see `PhysicsTime`'s docs on the three of them.
+    #[test]
+    fn advance_time_clamps_a_stall() {
+        use gizmo_core::time::Time;
+
+        let mut world = World::new();
+        let sim_dt = advance_time(&mut world, 1.0); // a one-second stall
+        assert!(
+            (sim_dt - 0.05).abs() < 1e-6,
+            "clamped to the default max_dt of 50 ms, not passed through: {sim_dt}"
+        );
+        assert!(
+            world.get_resource::<Time>().expect("created").raw_dt() > 0.9,
+            "the raw delta is still readable — the clamp is on the simulated one"
+        );
+    }
+
+    /// **Both runtimes take the simulated delta from the same place.** A source-shape guard,
+    /// because neither loop can be driven from a test: the windowed one needs a window and the
+    /// headless one never returns. Comments are cut first — this file's prose names the call.
+    #[test]
+    fn both_runtimes_feed_the_fixed_loop_the_simulated_delta() {
+        fn code_only(src: &str) -> String {
+            src.lines()
+                .map(|line| {
+                    let bytes = line.as_bytes();
+                    let mut end = line.len();
+                    let mut i = 0;
+                    while i + 1 < bytes.len() {
+                        if bytes[i] == b'/'
+                            && bytes[i + 1] == b'/'
+                            && (i == 0 || bytes[i - 1] != b':')
+                        {
+                            end = i;
+                            break;
+                        }
+                        i += 1;
+                    }
+                    &line[..end]
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+
+        for (name, src) in [
+            ("headless", include_str!("headless.rs")),
+            ("windowed", include_str!("windowed/event.rs")),
+        ] {
+            let code: String = code_only(src).chars().filter(|c| !c.is_whitespace()).collect();
+            assert!(
+                code.contains("advance_time(&mutself.world,dt)"),
+                "{name} must take its simulated delta from `advance_time`"
+            );
+            assert!(
+                !code.contains("run_fixed_and_update(&mutself.world,&mutself.schedule,&mutself.update_schedule,dt,dt,"),
+                "{name} is feeding the RAW delta to the fixed loop again — that is the defect \
+                 where a headless game had no clock and `set_time_scale` did nothing"
+            );
+        }
     }
 }
