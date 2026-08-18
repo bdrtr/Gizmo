@@ -91,7 +91,7 @@ gizmo-animation = { version = "0.10.0", path = "../gizmo-animation", optional = 
 gizmo-net = { version = "0.10.0", path = "../gizmo-net", optional = true, default-features = false }
 
 [dev-dependencies]
-criterion = "0.5"
+criterion = "0.8"
 rayon = "1.11.0"
 pollster = "0.4"
 
