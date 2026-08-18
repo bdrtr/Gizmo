@@ -1787,6 +1787,15 @@ the *slope* gate is the one that guards it.
   on a job that already compiles every one of them. `gizmo-app`'s 49 combinations were clean
   already, which is the other half of the number: the debt is where the feature graph is widest.
 
+  **That 20 % was the steady state, and the first run is not the steady state.** On CI the flip
+  landed on a cache with no clippy artifacts for any of the ~200 combinations, and the job was
+  still running at **35 minutes** against its 45-minute ceiling — a number the local measurement
+  could not have shown, because locally everything was already built. The job is now a two-entry
+  matrix (one runner per crate, `fail-fast: false`) with the ceiling at 60: the crates overlap
+  instead of queueing, and each pays for its own dependency build once. The lesson is the ordinary
+  one in a new costume: a cost measured warm is a lower bound, and the run that *introduces* a
+  gate is the one that pays for it.
+
 - **A count written into prose is a count the code will walk away from.** Three were found stale
   on the same afternoon (2026-08-18), each written once and never re-measured: the rustfmt churn
   behind a standing decision (2660 → **2794**), the scene block's fixed part quoted two different
@@ -2287,8 +2296,43 @@ koşturuldu: `apply_script_audio` çağrısı kaldırılınca test kırmızıya 
 Cihazsız yarısı ayrı: komutların **tanınması** — asıl kırık olan yarı — `split_audio_actions` ile
 birim testinde.
 
-**Taramanın kalanı hâlâ açık.** Bu bir madde; bölümün başındaki "sayıyı değil listeyi yaz" işi
-bitmedi. Bir sonraki oturum aynı soruyu öteki dönüş değerlerine ve öteki API tablolarına sorsun.
+**Ve aynı soru bütün komut vokabülerine soruldu — LİSTE BU (2026-08-18).** `ScriptCommand`'ın
+**42 varyantı** var; `flush_commands` bunların **22'sini** kendi içinde uyguluyor, **20'si** geri
+dönüyordu ve hiçbirine bakan yoktu. `PlayLoop` şimdi yedisini karşılıyor:
+
+| komut | durum |
+|---|---|
+| `PlaySound` · `PlaySound3D` · `StopSound` | **karşılandı** — yukarıdaki madde |
+| `SetVehicleEngineForce` · `SetVehicleSteering` · `SetVehicleBrake` | **karşılandı** — Lua'nın araç API'si de sessizdi; `VehicleController` `gizmo-physics-dynamics`'te, yani scripting crate'inin ulaşamayacağı yerde |
+| `SetCameraFov` | **karşılandı** |
+| `LoadScene` · `SaveScene` | açık, **bilerek**: editör yazarın altından sahne değiştiremez. Çalışma zamanı için meşru; tetikleyicisi sahne geçişi isteyen bir oyun |
+| `SetCameraTarget` · `SetFightCamera` | açık: bunlar bir **değer** değil, zaman içinde bir **davranış** istiyor ve motor script'in gösterebileceği bir takip sistemi göndermiyor. Tetikleyici: öyle bir sistem |
+| `ShowDialogue` · `HideDialogue` | açık: diyalog altsistemi yok |
+| `TriggerCutscene` · `EndCutscene` | açık: ara sahne altsistemi yok |
+| `StartRace` · `FinishRace` · `ResetRace` · `AddCheckpoint` · `ActivateCheckpoint` | açık: yarış altsistemi yok |
+
+**Araç tarafında iki BİRİM tuzağı vardı ve ikisi de canlıydı** — düz atama ikisini de sessizce
+bozardı:
+
+- `SetVehicleEngineForce`'un belgesi "negatif değer geri sürer" diyor;
+  `VehicleController::throttle_input`'un belgesi tam tersini söylüyor: *"yalnız büyüklüğü kullanılır,
+  negatif değer geri vites DEĞİLDİR — onun için `set_reverse`"*. Alanı doğrudan yazsaydık
+  `vehicle.set_engine_force(id, -1)` arabayı **tam gazla ileri** sürerdi, ki bu "geri"nin
+  olabilecek en kötü okuması. Eşleme geri vitesi takıyor (idempotent, her kare çağrılabilir).
+- `SetCameraFov`'un belgesi **derece**, `Camera::fov`'unki **radyan**. 60 isteyen bir script
+  60 radyan alırdı ve `Camera::new` yalnız alttan kelepçeliyor, yani hiçbir şey itiraz etmezdi.
+  Bu, bölümün zaten kayıtlı tuş-haritası kusuruyla aynı şekil: iki gerçek birim, aynı birim değil,
+  ve ikisini karşılaştıran hiçbir şey yok.
+
+Üçünün de testi var ve üçü de cihazsız — ses komutlarının aksine bunlar saf ECS yazımı.
+
+**Yapısal olarak açık kalan bir şey daha.** `PlayLoop::step` karşılayamadığı komutları artık
+yutmuyor ama **dışarı da vermiyor**: gömen bir oyunun kendi diyalog/yarış katmanını Rust'ta yazıp
+kalanları alması mümkün değil. Yani yukarıdaki on üç madde "motor göndermiyor" olmaktan çıkıp
+"kimse gönderemez"e dönüyor. Tetikleyici: bu altsistemlerden birini kendi yazmak isteyen bir oyun;
+çaresi muhtemelen `PlayReport`'a bir varyant, çünkü raporlama zaten enjekte edilen kanal.
+
+Bir sonraki oturum aynı soruyu öteki dönüş değerlerine ve öteki API tablolarına sorsun.
 
 Düzeltilmiş ve kaydı tutulan yedi kusur. İlk üçü: script sırası (`HashMap` → `BTreeMap`,
 proses başına rastgeleydi), on altı komutun sessizce yutulması, bir script'in hatasının ötekileri

@@ -118,10 +118,20 @@ jobs:
   # `cargo hack --feature-powerset` builds the combinations directly. Depth 2 (every pair)
   # is the sweet spot: it catches "feature A alone" and "A+B interact" without the
   # exponential blowup of the full powerset on a 15-feature crate.
+  # Two crates, two runners, on purpose (2026-08-18). Sequentially in one job they took **35+
+  # minutes and were still going** on the first run after this gate became `clippy` — a cold cache
+  # has no clippy artifacts for any of the ~200 combinations, so the run that introduces the gate
+  # is the expensive one and it was heading for the 45-minute ceiling. Split, each crate pays for
+  # its own dependency build once and they overlap; `matrix` rather than two copies so the setup
+  # cannot drift between them.
   feature-powerset:
-    name: Feature powerset (facade + app)
+    name: Feature powerset (${{ matrix.crate }})
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        crate: [gizmo-engine, gizmo-app]
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -150,12 +160,10 @@ jobs:
       # in two files, each repeated across the combinations that expose it, including a `#[cfg]`
       # sitting on the line below the import it was meant to gate.
       #
-      # The cost is 20 %: 49 s → 59 s over those 150 combinations with dependencies cached.
-      - name: gizmo-app — every feature pair must compile AND lint
-        run: cargo hack clippy -p gizmo-app --feature-powerset --depth 2 --no-dev-deps
-          -- -D warnings -A clippy::too_many_arguments -A clippy::type_complexity
-      - name: gizmo-engine — every feature pair must compile AND lint
-        run: cargo hack clippy -p gizmo-engine --feature-powerset --depth 2 --no-dev-deps
+      # The steady-state cost is 20 %: 49 s → 59 s over the facade's 150 combinations with
+      # dependencies cached. The cold run is the one that needed the split above.
+      - name: ${{ matrix.crate }} — every feature pair must compile AND lint
+        run: cargo hack clippy -p ${{ matrix.crate }} --feature-powerset --depth 2 --no-dev-deps
           -- -D warnings -A clippy::too_many_arguments -A clippy::type_complexity
 
   # ── Supply chain: advisories, licences, sources ───────────────────────────

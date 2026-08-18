@@ -277,6 +277,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   dead sinks but nothing dropped what the mixer knew about them; `clean_dead_sinks` now retires
   both together.
 
+- **A Lua script could not drive a car, and could not set a field of view.** The same scan that
+  found the silent audio API enumerated the whole command vocabulary: of `ScriptCommand`'s 42
+  variants, 22 are applied inside the scripting crate and 20 came back to a host that dropped them.
+  `PlayLoop` now answers seven — the three audio calls, the three vehicle calls
+  (`vehicle.set_engine_force` / `set_steering` / `set_brake`) and `SetCameraFov`. The remaining
+  thirteen are listed in docs/ENGINE.md with what each is waiting for.
+
+  Two of the new ones carried **unit traps** that a straight assignment would have failed silently:
+  `SetVehicleEngineForce` documents "negative drives it backwards" while `VehicleController::
+  throttle_input` documents that a negative value is *not* reverse — so the naive mapping would have
+  driven the car forwards at full throttle. It engages reverse instead. And `SetCameraFov` is
+  documented in degrees while `Camera::fov` is radians, so a script asking for 60 would have got 60
+  radians, unremarked.
+
 - **A Lua script's `audio.play` made no sound — anywhere.** `audio.play` / `play_3d` / `stop` queue
   a `ScriptCommand`, and `ScriptEngine::flush_commands` returns the ones it cannot apply itself (the
   scripting crate does not depend on the audio subsystem). Both call sites in `PlayLoop` discarded

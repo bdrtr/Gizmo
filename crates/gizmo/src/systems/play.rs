@@ -87,6 +87,142 @@ enum ReloadEdge {
     Recovered,
 }
 
+/// Answer everything `flush_commands` handed back that this side of the engine can reach.
+///
+/// The scripting crate depends on `gizmo-core`, the physics components and `gizmo-ai` — not on
+/// audio, not on the renderer, not on the vehicle dynamics — so what it cannot apply it returns.
+/// This is where those subsystems are, and each handler passes on what it does not speak for.
+///
+/// **What still goes unanswered, and why it is a list rather than a shrug.** Of `ScriptCommand`'s
+/// 42 variants, 22 are applied inside the scripting crate and 20 came back here. This chain now
+/// takes seven of those (three audio, three vehicle, the camera's field of view). The remaining
+/// thirteen are scene load/save, the camera *follow* commands, dialogue, cutscenes and the race
+/// subsystem — see docs/ENGINE.md's Scripting section, which carries the enumerated list and what
+/// each one is waiting for.
+#[cfg(feature = "scripting")]
+fn apply_host_commands(
+    world: &mut World,
+    unhandled: Vec<crate::scripting::ScriptCommand>,
+) -> Vec<crate::scripting::ScriptCommand> {
+    let rest = apply_script_audio(world, unhandled);
+    let rest = apply_script_vehicle(world, rest);
+    apply_script_camera(world, rest)
+}
+
+/// Drive a vehicle from Lua: `vehicle.set_engine_force`, `set_steering`, `set_brake`.
+///
+/// **Two unit traps here, and both were live.** `SetVehicleEngineForce`'s documentation says
+/// "negative drives it backwards", while `VehicleController::throttle_input`'s says the opposite in
+/// as many words: *"Only its magnitude is used, so a negative value is **not** reverse — use
+/// `set_reverse` for that."* Assigning the command's value straight into the field would have
+/// honoured neither: `vehicle.set_engine_force(id, -1)` would have driven the car **forwards**.
+/// The mapping below keeps the Lua promise by engaging reverse, which is idempotent and safe to
+/// call every frame from a held input.
+///
+/// Steering and brake do line up with their fields (−1..1 and 0..1), and are passed through
+/// unclamped exactly as the controller's own documentation says it treats them.
+#[cfg(all(feature = "scripting", feature = "physics-dynamics"))]
+fn apply_script_vehicle(
+    world: &mut World,
+    unhandled: Vec<crate::scripting::ScriptCommand>,
+) -> Vec<crate::scripting::ScriptCommand> {
+    use crate::scripting::ScriptCommand as Cmd;
+
+    let mut rest = Vec::new();
+    let mut vehicles = world.borrow_mut::<gizmo_physics_dynamics::VehicleController>();
+    for cmd in unhandled {
+        match cmd {
+            Cmd::SetVehicleEngineForce(id, force) => {
+                if let Some(mut vehicle) = vehicles.get_mut(id) {
+                    vehicle.set_reverse(force < 0.0);
+                    vehicle.throttle_input = force.abs();
+                } else {
+                    tracing::trace!(entity = id, "[Scripting] set_engine_force: hedefte VehicleController yok");
+                }
+            }
+            Cmd::SetVehicleSteering(id, steering) => {
+                if let Some(mut vehicle) = vehicles.get_mut(id) {
+                    vehicle.steering_input = steering;
+                } else {
+                    tracing::trace!(entity = id, "[Scripting] set_steering: hedefte VehicleController yok");
+                }
+            }
+            Cmd::SetVehicleBrake(id, brake) => {
+                if let Some(mut vehicle) = vehicles.get_mut(id) {
+                    vehicle.brake_input = brake;
+                } else {
+                    tracing::trace!(entity = id, "[Scripting] set_brake: hedefte VehicleController yok");
+                }
+            }
+            other => rest.push(other),
+        }
+    }
+    rest
+}
+
+/// Without the vehicle dynamics there is nothing to steer.
+#[cfg(all(feature = "scripting", not(feature = "physics-dynamics")))]
+fn apply_script_vehicle(
+    _world: &mut World,
+    unhandled: Vec<crate::scripting::ScriptCommand>,
+) -> Vec<crate::scripting::ScriptCommand> {
+    unhandled
+}
+
+/// `camera.set_fov` from Lua, applied to the primary camera.
+///
+/// **The third unit trap of the afternoon.** `ScriptCommand::SetCameraFov`'s documentation says
+/// *degrees*; `Camera::fov`'s says *radians*. A script asking for a 60° field of view would have
+/// got 60 radians — and `Camera::new` clamps only the bottom (`fov.max(0.001)`), so nothing would
+/// have caught it. This is the same shape as the keymap defect the scripting section already
+/// records: two real units, not the same unit, and nothing comparing them.
+///
+/// The camera's *follow* commands (`SetCameraTarget`, `SetFightCamera`) are still handed back:
+/// they ask for a behaviour over time, not a value, and the engine ships no follow system for a
+/// script to point at. **Trigger:** one.
+#[cfg(all(feature = "scripting", feature = "render"))]
+fn apply_script_camera(
+    world: &mut World,
+    unhandled: Vec<crate::scripting::ScriptCommand>,
+) -> Vec<crate::scripting::ScriptCommand> {
+    use crate::scripting::ScriptCommand as Cmd;
+
+    let mut rest = Vec::new();
+    for cmd in unhandled {
+        match cmd {
+            Cmd::SetCameraFov(degrees) => {
+                let radians = degrees.to_radians().max(0.001);
+                // The primary is found through a read borrow and written through a write one:
+                // the mutable query is not iterable, and holding both at once is a panic.
+                let primary = {
+                    let cameras = world.borrow::<crate::renderer::Camera>();
+                    cameras.iter().find(|(_, cam)| cam.primary).map(|(entity, _)| entity)
+                };
+                match primary {
+                    Some(entity) => {
+                        let mut cameras = world.borrow_mut::<crate::renderer::Camera>();
+                        if let Some(mut cam) = cameras.get_mut(entity) {
+                            cam.fov = radians;
+                        }
+                    }
+                    None => tracing::trace!("[Scripting] set_fov: sahnede birincil kamera yok"),
+                }
+            }
+            other => rest.push(other),
+        }
+    }
+    rest
+}
+
+/// Without a renderer there is no camera to point.
+#[cfg(all(feature = "scripting", not(feature = "render")))]
+fn apply_script_camera(
+    _world: &mut World,
+    unhandled: Vec<crate::scripting::ScriptCommand>,
+) -> Vec<crate::scripting::ScriptCommand> {
+    unhandled
+}
+
 /// One thing a script asked the audio subsystem for.
 ///
 /// The scripting crate cannot name `AudioManager` — it depends on `gizmo-core` and the physics
@@ -322,7 +458,7 @@ impl PlayLoop {
             // from where it stands; the audio half is answered here, and scene switching is still
             // dropped on purpose — the editor must not switch scenes under the author.
             let unhandled = engine.flush_commands(world, dt);
-            let _unhandled = apply_script_audio(world, unhandled);
+            let _unhandled = apply_host_commands(world, unhandled);
 
             // Per-entity `on_update`. The entity's own property overrides ride along: scripts are
             // cached per path, so a per-entity value cannot live in the shared Lua environment.
@@ -367,7 +503,7 @@ impl PlayLoop {
             // Draining an empty queue is a `Vec` swap, so the frame that queued nothing pays
             // nothing.
             let unhandled = engine.flush_commands(world, dt);
-            let _unhandled = apply_script_audio(world, unhandled);
+            let _unhandled = apply_host_commands(world, unhandled);
 
             if let Ok(mut logs) = engine.log_queue.lock() {
                 for (level, message) in logs.drain(..) {
@@ -439,6 +575,104 @@ mod tests {
             "all three of the Lua audio API's calls must be answered"
         );
         assert_eq!(rest.len(), 1, "and the scene command must still be handed back, not eaten");
+    }
+
+    /// **A script can drive a car** — the second of the silent Lua APIs.
+    ///
+    /// `vehicle.set_engine_force` / `set_steering` / `set_brake` queued commands nobody applied,
+    /// exactly like `audio.play`. Unlike audio these need no device, so the effect itself is
+    /// assertable here.
+    #[cfg(all(feature = "scripting", feature = "physics-dynamics"))]
+    #[test]
+    fn a_script_drives_the_vehicle_it_names() {
+        use crate::scripting::ScriptCommand as Cmd;
+
+        let mut world = World::new();
+        let car = world.spawn();
+        world.add_component(car, gizmo_physics_dynamics::VehicleController::new());
+        let id = car.id();
+
+        let rest = apply_script_vehicle(
+            &mut world,
+            vec![
+                Cmd::SetVehicleEngineForce(id, 0.75),
+                Cmd::SetVehicleSteering(id, -0.4),
+                Cmd::SetVehicleBrake(id, 0.2),
+                Cmd::LoadScene("level2".into()),
+            ],
+        );
+
+        let vehicles = world.borrow::<gizmo_physics_dynamics::VehicleController>();
+        let car = vehicles.get(id).expect("the car is still there");
+        assert_eq!(car.throttle_input, 0.75);
+        assert_eq!(car.steering_input, -0.4);
+        assert_eq!(car.brake_input, 0.2);
+        assert!(!car.reverse_input, "a positive force is not reverse");
+        assert_eq!(rest.len(), 1, "the scene command is not the vehicle handler's to eat");
+    }
+
+    /// **Reverse is a gear, not a negative throttle** — and the two sides of this command said
+    /// opposite things.
+    ///
+    /// `SetVehicleEngineForce`'s documentation: *"Negative drives it backwards."*
+    /// `VehicleController::throttle_input`'s: *"Only its magnitude is used, so a negative value is
+    /// **not** reverse."* Assigning the value straight through would have honoured neither —
+    /// `vehicle.set_engine_force(id, -1)` would have driven the car **forwards** at full throttle,
+    /// which is the worst possible reading of "backwards".
+    #[cfg(all(feature = "scripting", feature = "physics-dynamics"))]
+    #[test]
+    fn a_negative_engine_force_engages_reverse_rather_than_driving_forwards() {
+        use crate::scripting::ScriptCommand as Cmd;
+
+        let mut world = World::new();
+        let car = world.spawn();
+        world.add_component(car, gizmo_physics_dynamics::VehicleController::new());
+        let id = car.id();
+
+        apply_script_vehicle(&mut world, vec![Cmd::SetVehicleEngineForce(id, -0.8)]);
+        {
+            let vehicles = world.borrow::<gizmo_physics_dynamics::VehicleController>();
+            let car = vehicles.get(id).expect("the car");
+            assert!(car.reverse_input, "a negative force must engage reverse");
+            assert_eq!(car.throttle_input, 0.8, "and spend its magnitude as throttle");
+            assert_eq!(car.current_gear, 0, "reverse is gear 0");
+        }
+
+        // And it must come back out again, or a script that taps reverse strands the car in it.
+        apply_script_vehicle(&mut world, vec![Cmd::SetVehicleEngineForce(id, 0.5)]);
+        let vehicles = world.borrow::<gizmo_physics_dynamics::VehicleController>();
+        let car = vehicles.get(id).expect("the car");
+        assert!(!car.reverse_input);
+        assert_eq!(car.throttle_input, 0.5);
+    }
+
+    /// **The fov a script asks for is in degrees; the camera's is in radians.**
+    ///
+    /// `SetCameraFov`'s documentation says degrees and `Camera::fov`'s says radians, so a script
+    /// asking for 60 would have got 60 *radians* — and `Camera::new` clamps only the bottom, so
+    /// nothing downstream would have objected. Same shape as the keymap defect this crate already
+    /// records: two real units, not the same unit, nothing comparing them.
+    #[cfg(all(feature = "scripting", feature = "render"))]
+    #[test]
+    fn the_field_of_view_a_script_asks_for_is_converted_not_copied() {
+        use crate::scripting::ScriptCommand as Cmd;
+
+        let mut world = World::new();
+        let eye = world.spawn();
+        world.add_component(
+            eye,
+            crate::renderer::Camera::new(std::f32::consts::FRAC_PI_4, 0.1, 100.0, 0.0, 0.0, true),
+        );
+
+        apply_script_camera(&mut world, vec![Cmd::SetCameraFov(60.0)]);
+
+        let cameras = world.borrow::<crate::renderer::Camera>();
+        let fov = cameras.get(eye.id()).expect("the camera").fov;
+        assert!(
+            (fov - std::f32::consts::FRAC_PI_3).abs() < 1e-5,
+            "60 degrees is {} radians, not {fov}",
+            std::f32::consts::FRAC_PI_3
+        );
     }
 
     #[test]
