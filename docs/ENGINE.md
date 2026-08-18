@@ -2723,14 +2723,31 @@ guard'lı (yorumlar kesilerek, iki yönde de).
 **Bir sonraki oturuma (2026-08-19, üçüncü tur).** İkinci turun izleri de kapandı. Geriye
 kapatırken görülen bir yapısal soru kaldı:
 
-- **Envanterin "ikisi de bilmiyor" kutusu sessiz.** `render_parity.rs`'in yetenek envanteri yalnız
-  TAM OLARAK BİR yolun bildiği bir yeteneği bildiriyor. Hiçbirinin adını anmadığı bir yetenek —
-  bugünkü üç kusurun ikisi böyleydi — hiç rapor edilmiyor. Sürücü listesi guard'ı bu üçünü
-  yakalıyor ama o el yazımı bir liste; envanterin kendisi hâlâ "sıfır yol biliyor" durumunu
-  yutuyor. Soru: o durum da bildirilmeli mi? Meşru örnekler var (bir bileşen `shared.rs`'te
-  tüketiliyor olabilir — envanter onu bilerek dışarıda bırakıyor), yani doğru biçim muhtemelen
-  "sıfır yol biliyorsa ya bir sürücü listesinde olacak ya EXCEPTIONS'ta". Ölçülmesi gereken: şu an
-  kaç yetenek o kutuda, ve kaçı meşru.
+- ~~Envanterin "ikisi de bilmiyor" kutusu sessiz~~ **— sayıldı: 35 öznenin 20'si o kutudaydı, yani
+  envanter yarısından azını yargılıyordu.** Ve kutunun içi tek tür değil:
+  - **Meşru, çünkü paylaşılan toplayıcıda tüketiliyor:** `PointLight`, `DirectionalLight`,
+    `SpotLight`, `LightRole` — ışıklar `shared.rs`'te toplanıyor, ki tarama onu bilerek dışarıda
+    bırakıyor.
+  - **Meşru, çünkü yargılanan bir tipin üyesi:** `LodLevel` (`LodGroup`'un içinde), `ProjectionMode`
+    (`Camera`'nın alanı), `Terrain` (bir mesh TARİFİ; çizilen `Mesh`), `RenderTarget` (uygulama
+    seviyesi doku hedefi).
+  - **Meşru, çünkü iki yolun da koştuğu bir sürücünün içinde okunuyor:** `AnimationClip`,
+    `ActiveBlend`, `AnimationState`, `AnimationTransition`, `SkeletonHierarchy`, ve `BoneAttachment`
+    — sonuncusu tam da bu yüzden editör-only kalmıştı.
+  - **MEŞRU DEĞİL, ölçüldü:** `FluidHandle`, `FluidInteractor`, `FluidParticle`, `FluidPhase`,
+    `FluidPhaseType` — GPU akışkan altsistemi. Oyun yolu onu adımlıyor ve çiziyor
+    (`renderer.gpu_fluid`, forward geçidi); stüdyonun boru hattı ONDAN HİÇ SÖZ ETMİYOR. Yani bir
+    akışkan sahnesi ihraç edildiğinde akıyor, editörde hiçbir şey görünmüyor. Bugün düzeltilen
+    sürücülerden farkı: bu bir çağrı uzaklıkta değil, editörün akışkan GEÇİDİNİ de istemesi
+    gerekiyor. **Tetikleyici:** editörde akışkan yazarlamak isteyen biri.
+  - **Hiç tüketicisi yok:** `Camera2D` — hiçbir yol ondan render etmiyor ve motor 2B boru hattı
+    göndermiyor; sahne kaydı onu serileştiriyor, yani bir sahne hiç çizilmeyecek bir kamera
+    taşıyabiliyor. Tetikleyici: bir 2B boru hattı.
+
+  Karar: "sıfır yol biliyor" doğrudan başarısızlık YAPILMADI (çoğu meşru), ama kutu artık
+  **sayılıyor ve gerekçeleriyle yazılıyor** — küme TAM eşleşme olarak sınanıyor, yani yeni bir sessiz
+  yetenek de kırıyor, gerekçesi geçersizleşmiş bir madde de. İki test artık özne taramasını ve yol
+  okumasını PAYLAŞIYOR, çünkü iki kopya tam da sürüklenecek şey.
 
 **Bir sonraki oturuma (2026-08-19, ikinci tur).** Aşağıdaki üç izin de üçü aynı gün kapandı;
 kapatırken çıkan tek yeni iz:

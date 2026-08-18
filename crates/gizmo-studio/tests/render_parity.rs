@@ -370,6 +370,88 @@ fn both_paths_size_the_instance_buffer_for_the_frame() {
 /// A name mentioned only in a comment counts as known for a type, and does not for a field — a
 /// path that says in writing why it does not handle something has considered it, and for a field
 /// the access is the only unambiguous evidence either way.
+/// Every component type the renderer exports: defined in `gizmo-renderer/src/components`, or
+/// re-exported there from another crate.
+///
+/// The re-export half was added on 2026-08-19 and is not a detail: the whole skeletal-animation
+/// family reaches consumers that way, so none of those eight types had ever been a subject — and
+/// one of them was a driver the editor never ran.
+fn renderer_component_types(workspace: &std::path::Path) -> Vec<String> {
+    let comp_dir = workspace.join("crates/gizmo-renderer/src/components");
+    let mut comp_files = Vec::new();
+    collect_rs(&comp_dir, &mut comp_files);
+    let mut components = Vec::new();
+    for file in &comp_files {
+        let src = std::fs::read_to_string(file).unwrap_or_default();
+        for line in src.lines() {
+            for kw in ["pub struct ", "pub enum "] {
+                if let Some(rest) = line.strip_prefix(kw) {
+                    let name: String =
+                        rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+                    if !name.is_empty() {
+                        components.push(name);
+                    }
+                }
+            }
+        }
+        if let Some((_, rest)) = src.split_once("pub use gizmo_animation::skeletal::{") {
+            if let Some((list, _)) = rest.split_once('}') {
+                for name in list.split(',') {
+                    let name = name.trim();
+                    if name.starts_with(|c: char| c.is_ascii_uppercase()) {
+                        components.push(name.to_string());
+                    }
+                }
+            }
+        }
+    }
+    components.sort();
+    components.dedup();
+    components
+}
+
+/// One draw path's source, with `shared.rs` left out and each file cut at its `#[cfg(test)]`.
+///
+/// `shared.rs` is excluded because what lives there is *neither* path in particular; the cut is
+/// because a test naming a component is not the path handling it (a GPU guard spawning a
+/// `PointLight` reported it as game-only, in this repo, on 2026-08-17).
+fn draw_path_source(dir: std::path::PathBuf) -> String {
+    let mut files = Vec::new();
+    collect_rs(&dir, &mut files);
+    files
+        .iter()
+        .filter(|f| f.file_name().is_some_and(|n| n != "shared.rs"))
+        .map(|f| {
+            let src = std::fs::read_to_string(f).unwrap_or_default();
+            match src.find("#[cfg(test)]") {
+                Some(i) => src[..i].to_string(),
+                None => src,
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Whole-word: `Mesh` must not match `MeshRenderer`.
+fn names_type(haystack: &str, needle: &str) -> bool {
+    haystack.match_indices(needle).any(|(i, _)| {
+        let before = haystack[..i].chars().next_back();
+        let after = haystack[i + needle.len()..].chars().next();
+        let word = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+        !word(before) && !word(after)
+    })
+}
+
+/// The capabilities **neither** draw path names — the box the inventory below cannot judge.
+fn silent_capabilities(workspace: &std::path::Path) -> Vec<String> {
+    let game = draw_path_source(workspace.join("crates/gizmo/src/systems/render"));
+    let editor = draw_path_source(workspace.join("crates/gizmo-studio/src/render_pipeline"));
+    renderer_component_types(workspace)
+        .into_iter()
+        .filter(|c| !names_type(&game, c) && !names_type(&editor, c))
+        .collect()
+}
+
 #[test]
 fn every_render_capability_is_known_to_both_draw_paths() {
     /// Declared asymmetries: (component, which path, why).
@@ -427,53 +509,17 @@ fn every_render_capability_is_known_to_both_draw_paths() {
         .expect("workspace root")
         .to_path_buf();
 
-    // Subjects: every component type the renderer exports.
-    //
-    // **Defined here OR re-exported here.** Scanning only for `pub struct` missed a whole family:
-    // the skeletal-animation types live in `gizmo-animation` and reach a consumer through a
-    // `pub use` in `components/animation.rs`. They are exports of the renderer by every measure
-    // that matters to this test — a game writes `gizmo::renderer::components::AnimationPlayer` —
-    // and one of them, the state machine, was engine-only for as long as both paths existed with
-    // this inventory watching and unable to see it.
-    let mut components = Vec::new();
-    let comp_dir = workspace.join("crates/gizmo-renderer/src/components");
-    let mut comp_files = Vec::new();
-    collect_rs(&comp_dir, &mut comp_files);
-    for file in &comp_files {
-        let src = std::fs::read_to_string(file).unwrap_or_default();
-        for line in src.lines() {
-            for kw in ["pub struct ", "pub enum "] {
-                if let Some(rest) = line.strip_prefix(kw) {
-                    let name: String =
-                        rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
-                    if !name.is_empty() {
-                        components.push(name);
-                    }
-                }
-            }
-        }
-        // Cross-crate re-exports: `pub use gizmo_animation::skeletal::{A, B, C};`, possibly
-        // spread over several lines. Only types are wanted, so names are filtered to those
-        // starting with a capital.
-        if let Some((_, rest)) = src.split_once("pub use gizmo_animation::skeletal::{") {
-            if let Some((list, _)) = rest.split_once('}') {
-                for name in list.split(',') {
-                    let name = name.trim();
-                    if name.starts_with(|c: char| c.is_ascii_uppercase()) {
-                        components.push(name.to_string());
-                    }
-                }
-            }
-        }
-    }
-    components.sort();
-    components.dedup();
+    // Subjects: every component type the renderer exports — see `renderer_component_types`,
+    // which `every_capability_neither_path_names_is_accounted_for` shares so the two tests cannot
+    // drift into judging different sets.
+    let components = renderer_component_types(&workspace);
     assert!(components.len() > 15, "only {} components scanned", components.len());
 
     // …and the public FIELDS of `Material` and `Mesh`, because a capability does not have to be a
     // whole component. `is_double_sided` was a field, honoured by the editor and ignored by the
     // engine's deferred path for as long as both existed, and this test at component granularity
     // could not see it: `Material` itself is named by both paths on every line that reads a colour.
+    let comp_dir = workspace.join("crates/gizmo-renderer/src/components");
     let mut fields = Vec::new();
     for (file, ty) in [("material.rs", "Material"), ("mesh.rs", "Mesh")] {
         let src = std::fs::read_to_string(comp_dir.join(file)).unwrap_or_default();
@@ -505,24 +551,8 @@ fn every_render_capability_is_known_to_both_draw_paths() {
     // "game path only" the moment a GPU guard in `mod.rs`'s test module spawned one. Verified in
     // this repo on 2026-08-17; every one of these files keeps its tests as the tail, which the
     // assertion below holds true.
-    let read_all = |dir: std::path::PathBuf| {
-        let mut files = Vec::new();
-        collect_rs(&dir, &mut files);
-        files
-            .iter()
-            .filter(|f| f.file_name().is_some_and(|n| n != "shared.rs"))
-            .map(|f| {
-                let src = std::fs::read_to_string(f).unwrap_or_default();
-                match src.find("#[cfg(test)]") {
-                    Some(i) => src[..i].to_string(),
-                    None => src,
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-    let game = read_all(workspace.join("crates/gizmo/src/systems/render"));
-    let editor = read_all(workspace.join("crates/gizmo-studio/src/render_pipeline"));
+    let game = draw_path_source(workspace.join("crates/gizmo/src/systems/render"));
+    let editor = draw_path_source(workspace.join("crates/gizmo-studio/src/render_pipeline"));
     // If a file ever puts production code *after* its tests, the cut above would silently stop
     // scanning it — so require that the cut removed every test module rather than assuming it.
     for (label, src) in [("game", &game), ("editor", &editor)] {
@@ -531,16 +561,6 @@ fn every_render_capability_is_known_to_both_draw_paths() {
             "{label} path: a `#[cfg(test)]` survived the cut — a file has tests that are not its \
              tail, and the scan is now reading them as capabilities"
         );
-    }
-
-    // Whole-word: `Mesh` must not match `MeshRenderer`.
-    fn names(haystack: &str, needle: &str) -> bool {
-        haystack.match_indices(needle).any(|(i, _)| {
-            let before = haystack[..i].chars().next_back();
-            let after = haystack[i + needle.len()..].chars().next();
-            let word = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
-            !word(before) && !word(after)
-        })
     }
 
     /// A field ACCESS, which a local variable of the same name cannot fake.
@@ -563,7 +583,7 @@ fn every_render_capability_is_known_to_both_draw_paths() {
         let (g, e) = if is_field {
             (accesses(&game, name), accesses(&editor, name))
         } else {
-            (names(&game, name), names(&editor, name))
+            (names_type(&game, name), names_type(&editor, name))
         };
         let asymmetry = match (g, e) {
             (true, false) => Some(Path::GameOnly),
@@ -733,4 +753,86 @@ fn both_draw_paths_run_the_same_per_frame_drivers() {
             "the {path_name} path must derive `animation_dt` from the clock ({clock})"
         );
     }
+}
+
+/// **What the capability inventory did not judge, and why.**
+///
+/// `every_render_capability_is_known_to_both_draw_paths` reports a capability known to exactly
+/// **one** path. A capability named by **neither** falls out of it silently — and on 2026-08-19
+/// that box held 20 of the 35 subjects, i.e. the inventory was judging fewer than half of them.
+/// Two of the three one-sided drivers found that day sat in it (`BoneAttachment` and the GPU
+/// physics link), because a component reached only through a system is named in neither path.
+///
+/// Making "neither" a failure outright would be wrong — most of the box is legitimate: lights come
+/// from the shared collector this scan excludes on purpose, and half the entries are members of a
+/// type that *is* judged. So the box is enumerated instead, with the reason each name is in it.
+/// The set is asserted **exactly**: a new silent capability fails here, and so does an entry that
+/// has stopped being silent, which is what keeps this from rotting into a list nobody rereads.
+#[test]
+fn every_capability_neither_path_names_is_accounted_for() {
+    /// (capability, why neither draw path names it).
+    const SILENT: &[(&str, &str)] = &[
+        // ── Reached only through a driver both paths run ───────────────────────────────────
+        ("ActiveBlend", "cross-fade state inside the animation drivers; the drivers are guarded by `both_draw_paths_run_the_same_per_frame_drivers`."),
+        ("AnimationClip", "the clip data those drivers sample; same guard."),
+        ("AnimationState", "a state machine's state; same guard."),
+        ("AnimationTransition", "an edge between two of them; same guard."),
+        ("SkeletonHierarchy", "the joint tree behind `Skeleton`, which both paths do name."),
+        ("BoneAttachment", "read only inside `BoneAttachmentSystem` — which is precisely how it stayed editor-only until 2026-08-19. Both paths run that system now, and the driver guard is what holds them to it."),
+
+        // ── Collected in `shared.rs`, which this scan excludes on purpose ──────────────────
+        ("PointLight", "lights are gathered by the shared collector both paths call."),
+        ("DirectionalLight", "same collector."),
+        ("SpotLight", "same collector."),
+        ("LightRole", "the tag that collector sorts by."),
+
+        // ── A member of a type the inventory does judge ────────────────────────────────────
+        ("LodLevel", "one level inside `LodGroup`, which both paths know."),
+        ("ProjectionMode", "the enum behind `Camera::projection`, which both paths know."),
+        ("Terrain", "a mesh *recipe*: the primitive builder turns it into a `Mesh`, and `Mesh` is what gets drawn."),
+        ("RenderTarget", "an app-level render-to-texture handle (`gizmo-app`'s editor runtime), not a per-picture capability; the editor's own two are in EXCEPTIONS above."),
+
+        // ── Genuinely one-sided, measured, and NOT a one-line fix ──────────────────────────
+        ("FluidHandle", FLUID),
+        ("FluidInteractor", FLUID),
+        ("FluidParticle", FLUID),
+        ("FluidPhase", FLUID),
+        ("FluidPhaseType", FLUID),
+
+        // ── No consumer at all ────────────────────────────────────────────────────────────
+        ("Camera2D", "nothing renders from it: the engine ships no 2D pipeline, and neither path so much as reads it. The scene registry serialises it, so a scene can carry one that never draws. Trigger for wiring it: a 2D pipeline."),
+    ];
+
+    /// The fluid family shares one reason, and it is an open asymmetry rather than a benign one.
+    const FLUID: &str = "the GPU fluid subsystem. The game path steps and draws it \
+        (`renderer.gpu_fluid`, forward pass); the studio's pipeline does not mention it at all, so \
+        a fluid scene renders in a shipped game and shows nothing in the viewport. Unlike the \
+        drivers fixed on 2026-08-19 this is not a call away — the editor would need the fluid pass \
+        itself. Trigger: authoring fluid in the editor.";
+
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("workspace root")
+        .to_path_buf();
+
+    let measured = silent_capabilities(&workspace);
+    let declared: std::collections::BTreeSet<&str> = SILENT.iter().map(|(n, _)| *n).collect();
+    let measured_set: std::collections::BTreeSet<&str> =
+        measured.iter().map(String::as_str).collect();
+
+    let unaccounted: Vec<&&str> = measured_set.difference(&declared).collect();
+    assert!(
+        unaccounted.is_empty(),
+        "neither draw path names {unaccounted:?}, and nothing here says why. Either a path should \
+         be driving it — that is how `BoneAttachment` and the GPU physics link were found — or it \
+         belongs in SILENT with the reason."
+    );
+
+    let stale: Vec<&&str> = declared.difference(&measured_set).collect();
+    assert!(
+        stale.is_empty(),
+        "SILENT still lists {stale:?}, but a draw path names it now. Delete the entry — a list of \
+         reasons that no longer apply is worse than no list."
+    );
 }
