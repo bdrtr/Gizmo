@@ -2386,7 +2386,7 @@ alındı ve **kabuk 0 döndürdü** — CLAUDE.md'nin "boruya sokmak çıkış k
 tam olarak kendisi. Build'in çöktüğü ancak çıktı okunduğunda görüldü. Boruya sokulan bir cargo
 komutunun yeşil görünmesi bir kanıt değildir.
 
-Bir önceki oturumun bıraktığı iki izden **birincisi kapandı**, ikincisi hâlâ açık:
+Bir önceki oturumun bıraktığı **iki iz de kapandı** — biri kod, biri ölçüm ve karar olarak:
 
 - **Dövüş altsisteminin saati yoktu — 2026-08-18'de yazıldı.** Bırakılan iz "sözleşmenin *ya da
   bir script* yarısı Lua'dan ulaşılamıyor" diyordu ve iki yol öneriyordu: sayaçları sayı olarak
@@ -2423,36 +2423,55 @@ Bir önceki oturumun bıraktığı iki izden **birincisi kapandı**, ikincisi h�
   seçmek, ve `Hitbox::active`'i aktif pencereden sürmek. Silinen 415 satırın motor-saati olmayan
   kısmı tam olarak bu üçüydü; stüdyodaki varsayılan `ActionMap` iskelesi de onların fosili.
 
-- **Kare enterpolasyonu: `alpha` her kare hesaplanıyor, kimse okumuyor.** (Hâlâ açık.) Buradaki
-  ilk şüphe (`windowed/event.rs`'te `let _ = steps;`) bakınca eridi — `run_fixed_and_update`'in
-  döndürdüğü `FrameSteps` bir **kopya**, asıl değerler `PhysicsTime` kaynağında duruyor ve
-  trace'e de yazılıyor. Ama bir kat aşağıda soru duruyor: `PhysicsTime::compute_alpha()` her
-  karede çağrılıyor, `alpha()` de belgesinde `lerp(prev, curr, alpha)` diyor, ve workspace'te onu
-  okuyan **hiçbir render yolu yok**.
+- **Kare enterpolasyonu: `alpha` her kare hesaplanıyor, kimse okumuyor — ÖLÇÜLDÜ, karar (b).**
+  Buradaki ilk şüphe (`windowed/event.rs`'te `let _ = steps;`) bakınca erimişti — `FrameSteps`
+  bir **kopya**, asıl değer `PhysicsTime` kaynağında. Bir kat aşağıdaki soru gerçekti:
+  `compute_alpha()` her karede çağrılıyor, `alpha()` belgesinde `lerp(prev, curr, alpha)` diyor,
+  ve workspace'te onu okuyan **hiçbir render yolu yok**.
 
-  2026-08-18 taraması bunu doğruladı ve **üç şey ekledi**:
-  1. `alpha()`'nın tüm ağaçta iki tüketicisi var, ikisi de render değil: `frame.rs:126`'daki
-     `tracing::debug!` alanı ve `FrameSteps.alpha` — onun da tek üretim okuyucusu
-     `windowed/event.rs:695`'teki `let _ = steps;`. (ENGINE.md'nin "tek geçtiği yerler tanımı ve
-     testi" cümlesi bu trace alanını atlıyordu.)
-  2. **İKİNCİ bir alpha var**: `gizmo_physics_rigid::world::PhysicsWorld::render_alpha`
-     (`world/step.rs:172`), kendi 1/240 s alt-adım akümülatörüne göre hesaplanıyor ve kendi
-     belgesi *"Output only — nothing in the pipeline reads it back"* diyor. İki alpha, iki farklı
-     akümülatör (60 Hz sabit adım vs 240 Hz alt-adım), sıfır okuyucu — yani bir sonraki bağlama
-     yanlışını seçebilir. Bu, bir önceki commit'in `run_entity_update`/`update_entity` ikizinin
-     aynısı.
-  3. **Eksik olan yarı katsayı değil, saklama.** `PhysicsTime::alpha`'yı okuyan bir oyunun
-     lerp'leyecek `prev`'i yok: ağaçta sabit adımlar arası enterpolasyon için tutulan hiçbir
-     önceki-Transform yok. (`TaaState::prev_vp` ve `SsgiState::prev_vp` var ama onlar KAMERANIN
-     önceki view-projection'ı, temporal reprojection için; `gizmo-renderer`'ın
-     `animation_system`'i ise gerçekten `blend_poses(prev, cur, alpha)` yapıyor — yani "önceki
-     durum + alpha" deseni motorda zaten var, sadece Transform için yok.)
+  Tarama üç şey ekledi: (1) `alpha()`'nın iki tüketicisi var, ikisi de render değil —
+  `frame.rs:126`'daki `tracing::debug!` alanı ve `FrameSteps.alpha`, onun da tek üretim okuyucusu
+  `let _ = steps;`. (2) **İKİNCİ bir alpha var**: `PhysicsWorld::render_alpha`
+  (`world/step.rs:172`), kendi **240 Hz** alt-adım akümülatörüne göre, belgesi zaten *"Output
+  only"* diyor. (3) **Eksik olan katsayı değil, saklama**: ağaçta sabit adımlar arası
+  enterpolasyon için tutulan hiçbir önceki-`Transform` yok. (`TaaState::prev_vp` /
+  `SsgiState::prev_vp` var ama onlar KAMERANIN önceki view-projection'ı, temporal reprojection
+  için; `gizmo-renderer`'ın `animation_system`'i ise gerçekten `blend_poses(prev, cur, alpha)`
+  yapıyor — yani "önceki durum + alpha" deseni motorda zaten var, sadece `Transform` için yok.)
 
-  **Karar hâlâ ölçülecek:** render hızı ile sabit adım arasındaki vuruş (60 Hz fizik, serbest
-  `AutoNoVsync` render) titremeyi ne kadar görünür yapıyor? Ondan sonra üç yol: (a) motorun kendi
-  enterpolasyonunu yazmak (önceki-Transform saklama + extract'te lerp, opt-in), (b) yalnız
-  kopyayı silip (`render_alpha`) `PhysicsTime::alpha`'nın belgesini dürüst hale getirmek ("motor
-  enterpole etmez; kendi `prev`'ini tutan oyun için"), (c) ikisi. Ölçüm yapılmadan (a) yazılmaz.
+  **Titreme ölçüldü** ve `time.rs`'in testlerine sabitlendi (`hold_lengths`): 60 Hz fizik karşısında
+  bir renderer'ın aynı pozu üst üste kaç kare çizdiği —
+
+  | render | fizik | poz başına kare | alpha |
+  |---|---|---|---|
+  | 60 Hz | 60 Hz | hep 1 | hep 0.0 |
+  | 144 Hz | 60 Hz | **2 ya da 3**, düzensiz: 3,2,3,2,3,2,2… (240 karede 59×2, 40×3) | 0.08 – 1.0 |
+  | 165 Hz | 60 Hz | 3,3,3,3,2… | 0.09 – 1.0 |
+  | 300 Hz | 60 Hz | hep 5 | 0.0 – 0.8 |
+
+  Yani kusur ortak durumda **görünmez** (60/60'ta alpha hiç 0'dan ayrılmıyor) ve tam katta da
+  görünmez (300 Hz'de tutuş düzgün — slayt gösterisi ama pürüzsüz). Görünür olduğu yer vuruşun
+  kendisi: 144 Hz'de sabit hızla giden bir cismin kare başına yer değiştirmesi komşu kareler
+  arasında **%50 salınıyor**. İkinci sayı: `alpha * fixed_dt` çizilen pozun bayatlığı — 60 Hz'de
+  16.7 ms'ye kadar, 10 m/s giden bir şey için **16.7 cm**, saniyede altmış kez testere dişi.
+
+  **Karar: (b) şimdi, (a) tetikleyicisiyle ertelendi.** Yapılan: `alpha()`'nın, `frame.rs`'in ve
+  `render_alpha`'nın belgeleri dürüst hale getirildi (özellikle `frame.rs`'in *"son iki simüle
+  edilmiş durum arasında"* cümlesi — motor **bir** tane tutuyor), iki alpha birbirine
+  çapraz-referanslandı (hangisi hangi gömme seviyesinde doğru), ve maliyet yukarıdaki iki testle
+  depoya sabitlendi. Silinen bir şey yok: `PhysicsTime::alpha` sabit-adım sözleşmesinin standart
+  yarısı ve gömen oyun onu kullanabilir; `render_alpha` da `PhysicsWorld::step`'i doğrudan
+  değişken dt ile süren (ECS'siz) gömücü için doğru olan katsayı. İkisi kopya değil, iki seviye.
+
+  **(a) neden yazılmadı ve tetikleyicisi ne.** Motor tarafı enterpolasyon tasarım boyutunda bir iş,
+  üç yerde birden karar istiyor: (i) neyin saklanacağı — `Transform`'u enterpole etmek onu
+  *oyunun okuduğu* değer yapar, yani ayrı bir render-only poz gerekiyor; (ii) hiyerarşi —
+  `GlobalTransform` yerelden türetiliyor, dolayısıyla enterpole edilmiş yereller için ikinci bir
+  propagate geçişi gerekir; (iii) rollback/net anlık görüntüleri ve determinizm kâhini — enterpole
+  edilen değer simülasyona geri sızarsa hash değişir. Artı çizilen varlık başına kare başına bir
+  lerp. Tetikleyici: 60 Hz'in katı olmayan bir ekranda (144/165 Hz) titremenin şikâyet konusu
+  olması, ya da motorun varsayılan `PresentMode::AutoNoVsync`'inin vsync'e çekilmesi kararı —
+  ikisinden biri olduğunda (i)-(iii) sırayla yanıtlanıp opt-in bir özellik olarak yazılır.
 
 Saat yazılırken aynı taramanın çıkardığı, **ölçülmüş ama düzeltilmemiş** yedi şey — hepsi dövüş
 altsisteminin geri kalanı, ve hiçbiri saatin kapsamında değil:

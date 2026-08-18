@@ -164,7 +164,7 @@ impl Default for Time {
 //    Frame başında `accumulate(render_dt)` çağrılır.
 //    `should_step()` true döndüğü sürece fizik adımları çalıştırılır.
 //    `consume_step()` ile accumulator azaltılır.
-//    `alpha()` ile render interpolasyonu yapılır.
+//    `alpha()` render interpolasyonu için hazır bekler — motor onu HARCAMIYOR, bkz. `alpha()`.
 // ═══════════════════════════════════════════════════════════════════════
 /// Fixed-timestep accumulator for the physics clock.
 ///
@@ -180,7 +180,8 @@ impl Default for Time {
 /// Every step advances the simulation by exactly [`PhysicsTime::fixed_dt`] seconds no matter
 /// what the frame rate did, which is the property the determinism and stability guarantees
 /// rest on. Leftover time below one step stays in the accumulator and surfaces as
-/// [`PhysicsTime::alpha`] for render interpolation.
+/// [`PhysicsTime::alpha`], which is **offered for** render interpolation rather than spent on
+/// it — see that method for what the engine does and does not do with it.
 ///
 /// The accumulator is capped at 8 x `fixed_dt`, so however long a stall lasts (a breakpoint,
 /// a swap-in, a stuttering frame) at most 8 steps are ever queued. Time past the cap is
@@ -241,8 +242,13 @@ impl PhysicsTime {
         self.physics_elapsed += self.fixed_dt as f64;
     }
 
-    /// Computes the interpolation alpha.
+    /// Computes the interpolation alpha — `accumulator / fixed_dt`, the fraction of a step that
+    /// has accumulated but not been simulated.
+    ///
     /// Called after all physics steps are finished, before rendering.
+    /// `gizmo_app::frame::run_fixed_and_update` does this for a windowed game; a hand-written
+    /// loop does it itself. See [`PhysicsTime::alpha`] for who reads the result — measured,
+    /// nothing in this engine does.
     pub fn compute_alpha(&mut self) {
         self.alpha = self.accumulator / self.fixed_dt;
     }
@@ -255,8 +261,26 @@ impl PhysicsTime {
         self.fixed_dt
     }
 
-    /// Interpolation coefficient (0.0 .. 1.0).
-    /// `render_pos = lerp(prev_physics_pos, curr_physics_pos, alpha)`
+    /// Interpolation coefficient (0.0 .. 1.0): `render_pos = lerp(prev_pos, curr_pos, alpha)`.
+    ///
+    /// **The engine does not do that lerp, and cannot.** Nothing in this workspace keeps a
+    /// previous `Transform` to interpolate against — the renderer draws the pose the last fixed
+    /// step left behind, unchanged, for however many frames pass before the next one. So `prev`
+    /// in that formula is the embedding game's to keep: snapshot the poses you draw at each
+    /// fixed step, and this is the coefficient to blend them with.
+    ///
+    /// **What that costs, measured** (see this module's tests): at 60 Hz physics on a 60 Hz
+    /// display nothing at all — every pose is drawn exactly once and this stays `0.0`. At 144 Hz
+    /// each pose is held for two or three frames in a 3,2,3,2,3,2,2… pattern, so a body moving at
+    /// a constant speed appears to advance by different amounts on neighbouring frames. And
+    /// `alpha * fixed_dt` is how stale the drawn pose is: up to a full 16.7 ms at 60 Hz, which
+    /// for something moving at 10 m/s is 16.7 cm, sawtoothing sixty times a second.
+    ///
+    /// Not to be confused with `PhysicsWorld::render_alpha` in `gizmo-physics-rigid`, which is
+    /// the residue of that crate's **own** 240 Hz sub-step accumulator. Use this one when the
+    /// fixed step is driven from here (the `App`/`PlayLoop` path, where consecutive poses are
+    /// `fixed_dt` apart); use that one when you drive `PhysicsWorld::step` directly with a
+    /// variable delta.
     #[inline]
     pub fn alpha(&self) -> f32 {
         self.alpha
@@ -477,5 +501,96 @@ mod tests {
         let mut pt = PhysicsTime::new(60);
         pt.set_hz(120);
         assert!((pt.fixed_dt() - 1.0 / 120.0).abs() < 1e-6);
+    }
+
+    /// Drives the accumulator at `render_hz` against a `fixed_hz` step and returns, for each
+    /// simulated step, how many rendered frames had passed since the previous one — i.e. how
+    /// many frames in a row a renderer that does not interpolate draws the *same* pose.
+    fn hold_lengths(render_hz: u32, fixed_hz: u32, frames: u32) -> Vec<u32> {
+        let mut pt = PhysicsTime::new(fixed_hz);
+        let render_dt = 1.0 / render_hz as f32;
+        let mut holds = Vec::new();
+        let mut since = 0u32;
+        for _ in 0..frames {
+            pt.accumulate(render_dt);
+            let mut stepped = false;
+            while pt.should_step() {
+                pt.consume_step();
+                stepped = true;
+            }
+            pt.compute_alpha();
+            since += 1;
+            if stepped {
+                holds.push(since);
+                since = 0;
+            }
+        }
+        holds
+    }
+
+    /// **What not interpolating costs, as a number.** This is the measurement behind
+    /// [`PhysicsTime::alpha`]'s documentation, and the reason that documentation says the engine
+    /// does not spend it.
+    ///
+    /// At 60 Hz physics on a 60 Hz display every pose is drawn exactly once and `alpha` never
+    /// leaves 0 — nothing to interpolate, which is why the defect is invisible in the common
+    /// case. Off that beat it is not: at 144 Hz each pose is held for **two or three** frames in
+    /// an irregular 3,2,3,2,3,2,2… pattern, so the apparent per-frame displacement of a body
+    /// moving at a constant speed swings by 50 % between neighbouring frames. That swing is the
+    /// stutter; a uniform hold (300 Hz below: always 5) is merely a slideshow and looks smooth.
+    #[test]
+    fn a_render_rate_off_the_physics_beat_holds_each_pose_for_an_uneven_number_of_frames() {
+        let on_beat = hold_lengths(60, 60, 240);
+        assert!(
+            on_beat.iter().all(|&h| h == 1),
+            "60 Hz render against 60 Hz physics must draw every pose exactly once: {on_beat:?}"
+        );
+
+        let beating = hold_lengths(144, 60, 240);
+        assert!(
+            beating.contains(&2) && beating.contains(&3),
+            "144 Hz against 60 Hz must alternate 2- and 3-frame holds — that alternation is the \
+             stutter interpolation would remove: {beating:?}"
+        );
+        assert!(
+            beating.iter().all(|&h| h == 2 || h == 3),
+            "and it must never hold longer than that: {beating:?}"
+        );
+
+        let uniform = hold_lengths(300, 60, 240);
+        assert!(
+            uniform.iter().all(|&h| h == 5),
+            "300 Hz is an exact multiple: every pose held for the same 5 frames, no beat: \
+             {uniform:?}"
+        );
+    }
+
+    /// `alpha` is exactly the unsimulated fraction of a step, so `alpha * fixed_dt` is **how
+    /// stale the drawn pose is**. On the 144 Hz beat above it climbs to nearly a whole step —
+    /// 16.7 ms at 60 Hz, which for a body moving at 10 m/s is 16.7 cm of position, sawtoothing
+    /// sixty times a second. Nothing in the engine spends it, so that is what the picture shows.
+    #[test]
+    fn alpha_is_the_staleness_of_the_pose_the_renderer_draws() {
+        let mut pt = PhysicsTime::new(60);
+        let render_dt = 1.0 / 144.0;
+        let mut worst = 0.0f32;
+        for _ in 0..240 {
+            pt.accumulate(render_dt);
+            while pt.should_step() {
+                pt.consume_step();
+            }
+            pt.compute_alpha();
+            assert_eq!(
+                pt.alpha(),
+                pt.accumulator() / pt.fixed_dt(),
+                "alpha is the leftover measured in steps, and nothing else"
+            );
+            worst = worst.max(pt.alpha() * pt.fixed_dt());
+        }
+        assert!(
+            worst > 0.015,
+            "the drawn pose should fall nearly a full 1/60 s step behind at some point on this \
+             beat; worst was {worst} s"
+        );
     }
 }

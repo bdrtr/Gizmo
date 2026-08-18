@@ -31,8 +31,15 @@
 //!
 //! [`run_fixed_and_update`] runs the fixed steps first, then computes the interpolation
 //! alpha, then runs update. Update therefore observes the simulation *after* this frame's
-//! physics, and can read [`PhysicsTime::alpha`] to interpolate between the last two
-//! simulated states for rendering.
+//! physics, and can read [`PhysicsTime::alpha`] — which is the fraction of a step that has
+//! accumulated but not been simulated.
+//!
+//! **Nothing in the engine spends that alpha**, and the wording above used to imply otherwise
+//! by promising "the last two simulated states": the engine keeps exactly one. There is no
+//! previous `Transform` anywhere in the workspace, so the renderer draws the pose the last fixed
+//! step left behind and holds it — measured at 144 Hz against a 60 Hz step, for two or three
+//! frames in an irregular pattern. A game that wants interpolation snapshots its own poses each
+//! fixed step and blends them with this alpha; see [`PhysicsTime::alpha`] for the numbers.
 
 use gizmo_core::system::Schedule;
 use gizmo_core::time::PhysicsTime;
@@ -49,8 +56,12 @@ pub struct FrameSteps {
     pub fixed_steps: u32,
     /// The fixed timestep used, in seconds.
     pub fixed_dt: f32,
-    /// Interpolation factor left in the accumulator after the last step, `0.0..1.0`.
-    /// `render_pos = lerp(prev_physics_pos, curr_physics_pos, alpha)`.
+    /// Interpolation factor left in the accumulator after the last step, `0.0..1.0`:
+    /// `render_pos = lerp(prev_physics_pos, curr_physics_pos, alpha)` — a lerp the engine does
+    /// not perform, since it stores no `prev_physics_pos`. See [`PhysicsTime::alpha`].
+    ///
+    /// A **copy** of what [`PhysicsTime`] holds, for tracing and tests; the resource is the
+    /// authority, and is where a game should read it from.
     pub alpha: f32,
 }
 

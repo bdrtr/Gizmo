@@ -265,6 +265,24 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`PhysicsTime::alpha` promised an interpolation the engine cannot do, and now says so.**
+  `gizmo_app::frame`'s documentation said an update system "can read `PhysicsTime::alpha` to
+  interpolate between the last two simulated states" — the engine keeps **one**. There is no
+  previous `Transform` anywhere in the workspace, so the renderer draws the pose the last fixed
+  step left behind and holds it. Both alphas' docs now say what they are for, and cross-reference
+  each other: `PhysicsTime::alpha` is the leftover of the caller's fixed step (60 Hz on the
+  `App`/`PlayLoop` path), `PhysicsWorld::render_alpha` the leftover of `gizmo-physics-rigid`'s own
+  240 Hz sub-step accumulator — two embedding levels, not two copies.
+
+  What that costs is now measured and pinned in `gizmo-core`'s tests rather than argued about: at
+  60 Hz physics on a 60 Hz display, nothing (every pose drawn exactly once, alpha never leaves
+  0.0). At 144 Hz each pose is held for **two or three** frames in an irregular 3,2,3,2,3,2,2…
+  pattern, so a body at constant speed appears to advance by different amounts on neighbouring
+  frames; at 300 Hz the hold is a uniform 5 and there is no beat. And `alpha * fixed_dt` is how
+  stale the drawn pose is — up to 16.7 ms at 60 Hz, which at 10 m/s is 16.7 cm, sawtoothing sixty
+  times a second. Nothing was deleted and no behaviour changed; engine-side interpolation is a
+  scoped follow-up with its trigger written down in `docs/ENGINE.md`.
+
 - **A hitstop applied from Lua lasted forever, and no attack ever reached its hitting frames.**
   `FighterController` is a frame-counting state machine and **nothing in the engine counted its
   frames**: every write to `hitstop_frames`, `hitstun_frames` and `current_move_frame` anywhere in

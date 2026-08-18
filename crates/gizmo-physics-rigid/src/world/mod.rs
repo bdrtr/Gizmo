@@ -457,6 +457,15 @@ pub struct PhysicsWorld {
     /// frame boundary, values near `1.0` mean nearly a full substep of unsimulated
     /// time is pending. Output only — nothing in the pipeline reads it back.
     ///
+    /// **There is a second one, and they are not interchangeable.**
+    /// `gizmo_core::time::PhysicsTime::alpha` measures the leftover of the *caller's* fixed step
+    /// (60 Hz on the `App`/`PlayLoop` path); this measures the leftover of **this world's own
+    /// 240 Hz sub-step accumulator**, which is a quarter of the size and near zero whenever the
+    /// caller hands whole 1/60 s deltas in. Use this one only when you drive
+    /// [`PhysicsWorld::step`] yourself with a variable frame delta — then this world's
+    /// accumulator is the only one there is. Neither is spent by the engine: no previous
+    /// `Transform` is stored anywhere, so nothing can interpolate against it.
+    ///
     /// Normally in `0.0..1.0`, but it can exceed `1.0` on a frame that hit the substep
     /// ceiling and left real time unspent, so clamp it before use. A `step` that was
     /// paused or that serviced a rewind returns early and leaves the previous value.
