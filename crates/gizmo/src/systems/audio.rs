@@ -210,4 +210,30 @@ mod tests {
         s.is_3d = false;
         assert!(!should_autostart(&s), "2D sources are not handled by the spatial system");
     }
+
+    /// The system function itself, which had no test at all — the two above cover
+    /// `should_autostart`, its helper.
+    ///
+    /// Its documented precondition is an `AudioManager` resource, and its first act is to return
+    /// when there is none. A game without audio — a headless server, a test, a build with the
+    /// feature off — must therefore run it harmlessly rather than panic on the missing resource,
+    /// and nothing checked that. Found by the sweep in
+    /// `crates/gizmo/tests/unmentioned_api.rs`, which reported the system as mentioned nowhere
+    /// and covered by nothing; being opt-in explains the first half and not the second.
+    #[test]
+    fn the_system_is_inert_without_an_audio_manager() {
+        let mut world = World::new();
+        let e = world.spawn();
+        world.add_component(e, Transform::new(Vec3::ZERO));
+        world.add_component(e, AudioSource::new("boom"));
+        audio_spatial_system(&mut world, 1.0 / 60.0); // must not panic
+        assert!(
+            !world
+                .borrow::<AudioSource>()
+                .get(e.id())
+                .expect("the source is still there")
+                .has_played,
+            "with no AudioManager nothing may be started"
+        );
+    }
 }

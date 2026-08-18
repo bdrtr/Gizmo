@@ -1678,8 +1678,13 @@ the *slope* gate is the one that guards it.
     turned strict without it noticing. Each of the six is now covered and each was verified to
     fail on its own.
 
-  The sweep is a script, not a list: `pub fn` declarations in each crate's `src` against call
-  sites everywhere, cut at `#[cfg(test)]`. **Its first run lied**, and in the direction that
+  **The sweep now lives in the repository**, as `crates/gizmo/tests/unmentioned_api.rs` —
+  `#[ignore]`d, in the house style for a measurement rather than a gate. It was a scratch
+  script when this paragraph was first written, which made the paragraph describe something
+  that did not exist: the same defect class this whole section is about, produced while
+  writing about it. It scans `pub fn` declarations in each crate's `src` against mentions
+  everywhere, cut at `#[cfg(test)]`. Whole-workspace figures: **107 of 1385 public functions
+  unmentioned in production, 81 of those with no test either**. **Its first run lied**, and in the direction that
   wastes time rather than hides bugs: the call regex did not allow a turbofish, so
   `world.query_mut::<(A, B)>()` did not count as calling `query_mut`, and `get_resource`,
   `remove_component` and a dozen other things every file uses came back as "never called".
@@ -1726,6 +1731,16 @@ the *slope* gate is the one that guards it.
     test written for it asserted a one-way implication that stayed true when the epsilons were
     made equal — measured, and replaced with the conclusion instead of a test that passes for the
     wrong reason.
+
+  Two more came out of running it over everything at once. `gizmo::systems::audio_spatial_system`
+  is opt-in by design — `DefaultPlugins` deliberately does not register it — which explains
+  the missing caller and not the missing test: its documented precondition is an
+  `AudioManager` resource, and nothing checked that a game without audio runs it harmlessly
+  instead of panicking. (Its helper `should_autostart` was already covered, latch and all;
+  the sweep pointed at the system beside it.) And `Aabb::distance_to_point` was untested
+  while `distance_sq_to_point` next to it was not — a one-line wrapper is exactly where a
+  squared value gets returned from a function that promises a distance, which reads correct
+  at every call site and is wrong at all of them.
 
   Worth re-running when a crate grows a public surface.
 - **A positive `contains` over source text is satisfied by a comment — and four of this

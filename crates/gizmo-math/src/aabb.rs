@@ -380,6 +380,56 @@ impl std::fmt::Display for Aabb {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+
+    // ── `distance_to_point` / `distance_sq_to_point` ─────────────────────────────────────────
+    //
+    // Public, one line each, and untested until 2026-08-18 — which is how a `sqrt` on the wrong
+    // side of a comparison, or a squared value returned where a distance was promised, survives.
+
+    #[test]
+    fn a_point_inside_the_box_is_at_distance_zero() {
+        let b = Aabb::new(Vec3::new(-1.0, -1.0, -1.0), Vec3::new(1.0, 1.0, 1.0));
+        assert_eq!(b.distance_to_point(Vec3::ZERO), 0.0);
+        assert_eq!(b.distance_to_point(Vec3::new(0.9, -0.9, 0.5)), 0.0);
+        // On the surface counts as inside: the closest point is the point itself.
+        assert_eq!(b.distance_to_point(Vec3::new(1.0, 0.0, 0.0)), 0.0);
+    }
+
+    #[test]
+    fn a_point_beside_a_face_is_at_its_perpendicular_distance() {
+        let b = Aabb::new(Vec3::new(-1.0, -1.0, -1.0), Vec3::new(1.0, 1.0, 1.0));
+        assert!((b.distance_to_point(Vec3::new(4.0, 0.0, 0.0)) - 3.0).abs() < 1e-6);
+        assert!((b.distance_to_point(Vec3::new(0.0, -5.0, 0.0)) - 4.0).abs() < 1e-6);
+    }
+
+    /// Past a corner the distance is the diagonal, not the largest axis gap — the difference
+    /// between a real distance and a Chebyshev one, and the kind of thing a one-line helper is
+    /// quietly wrong about.
+    #[test]
+    fn a_point_past_a_corner_is_at_the_diagonal_distance() {
+        let b = Aabb::new(Vec3::new(-1.0, -1.0, -1.0), Vec3::new(1.0, 1.0, 1.0));
+        let d = b.distance_to_point(Vec3::new(4.0, 5.0, 1.0)); // 3 out in x, 4 in y, inside in z
+        assert!((d - 5.0).abs() < 1e-6, "expected the 3-4-5 diagonal, got {d}");
+    }
+
+    /// The squared form must be the square of the other, and neither may be the other's value —
+    /// returning a squared distance from a function named `distance_to_point` reads correct at
+    /// every call site and is wrong at all of them.
+    #[test]
+    fn the_squared_form_is_the_square_of_the_plain_one() {
+        let b = Aabb::new(Vec3::new(-1.0, -2.0, -3.0), Vec3::new(1.0, 2.0, 3.0));
+        for p in [
+            Vec3::new(4.0, 5.0, 1.0),
+            Vec3::new(-9.0, 0.0, 0.0),
+            Vec3::ZERO,
+            Vec3::new(1.0, 2.0, 3.0),
+        ] {
+            let d = b.distance_to_point(p);
+            let d2 = b.distance_sq_to_point(p);
+            assert!((d * d - d2).abs() < 1e-4, "for {p:?}: {d}² != {d2}");
+        }
+    }
     use glam::Vec3;
 
     const EPS: f32 = 1e-5;
