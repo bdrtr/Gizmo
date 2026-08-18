@@ -27,7 +27,7 @@ pub fn full_scene_registry() -> SceneRegistry {
 
     #[cfg(feature = "render")]
     {
-        use gizmo_renderer::components::{Camera, Camera2D, DirectionalLight, PointLight, SpotLight};
+        use gizmo_renderer::components::{Camera, DirectionalLight, PointLight, SpotLight};
         // Registration is best-effort: a name collision is a bug in this file, not a reason
         // to take the application down mid-save. Warn loudly and keep the rest.
         macro_rules! reg_or_warn {
@@ -38,7 +38,6 @@ pub fn full_scene_registry() -> SceneRegistry {
             };
         }
         reg_or_warn!(Camera, "Camera");
-        reg_or_warn!(Camera2D, "Camera2D");
         reg_or_warn!(PointLight, "PointLight");
         reg_or_warn!(DirectionalLight, "DirectionalLight");
         reg_or_warn!(SpotLight, "SpotLight");

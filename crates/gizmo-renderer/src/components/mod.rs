@@ -33,7 +33,6 @@ gizmo_core::impl_component!(
     Skeleton,
     MeshRenderer,
     Camera,
-    Camera2D,
     PointLight,
     Terrain,
     DirectionalLight,

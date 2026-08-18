@@ -618,6 +618,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- **`Camera2D`, a second camera type for a capability `Camera` already has.** No draw path read
+  it, and the trace that flagged it assumed wiring it meant writing a 2D pipeline. It does not:
+  `Camera` has `ProjectionMode::Orthographic { height }`, builds a real `Mat4::orthographic_rh`,
+  and the studio has a shortcut that toggles it — orthographic viewing works today. So this was not
+  a type waiting for a feature but a second, unread implementation of one that exists, with a zoom
+  where the other has a height.
+
+  Safe to remove: four references (the scene registry, two re-export lists, half of one test), no
+  reader anywhere, and the scene loader is infallible by design — an unknown component name is
+  logged and skipped, so a scene saved with one still loads, without it. **Trigger to bring it
+  back:** a real 2D pipeline — sprites, z-ordering, pixel snapping. A dedicated camera earns its
+  place then; today `Camera` in orthographic mode draws the same picture.
+
 - **`ScriptCommand::SetFightCamera`, dead at both ends.** Unlike the other open commands — a script
   can ask for those and the engine has not answered yet — this one could not be asked for either:
   no `api_*.rs` pushed it, and no arm matched it (it fell into `flush_commands`' catch-all, and the

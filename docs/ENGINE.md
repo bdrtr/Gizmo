@@ -2741,11 +2741,23 @@ guard'lı (yorumlar kesilerek, iki yönde de).
   çağrılıyordu. Yani forward geçidi hiç akışkan çizmemiş; çizen şey `render_ssfr`. Metot ve iki
   çağrı yeri silindi — `get_pending_audio_scene_commands` deseninin aynısı: boş dönmekten başka bir
   şey yapamayan public bir yüzey.
-- **`Camera2D`'nin hiçbir tüketicisi yok.** Hiçbir çizim yolu ondan render etmiyor, motor 2B boru
-  hattı göndermiyor, ama `gizmo-app`'in sahne kaydı onu serileştiriyor — yani bir sahne hiç
-  çizilmeyecek bir kamera taşıyabiliyor, ve kullanıcı bunu ancak hiçbir şey olmayarak öğreniyor.
-  Deponun kendi kuralına göre bu "sil ya da bağla"nın sil tarafına yakın (bağlamak = 2B boru hattı
-  yazmak), ama silmek genel API'den bir tip kaldırmak demek. Karar ölçümle gelmiyor; sorulmalı.
+- ~~`Camera2D`'nin hiçbir tüketicisi yok~~ **— silindi, ve "sorulmalı" dediğim karar ölçümle
+  geldi.** İzi yazarken bağlamanın maliyetini "bir 2B boru hattı yazmak" sanmıştım. Bakınca öyle
+  değil: `Camera`'nın zaten `ProjectionMode::Orthographic { height }` modu var, gerçek bir
+  `Mat4::orthographic_rh` kuruyor, ve stüdyonun bir kısayolu onu açıp kapatıyor. Yani ortografik
+  görüş BUGÜN çalışıyor — `Camera2D` eksik bir yeteneği bekleyen bir tip değil, aynı yeteneğin
+  ikinci ve okunmayan bir kopyasıydı (yükseklik yerine zoom ile). Bu oturumda dördüncü kez aynı
+  desen: iki protokol, biri ölü.
+
+  Silme güvenli: dört referansı vardı (sahne kaydı + iki re-export + testinin yarısı), hiçbir çizim
+  yolu okumuyordu, ve sahne yükleyici bilinmeyen bileşen adını "loglar ve atlar" (`scene.rs:943`,
+  *"Infallible by design"*) — yani eskiden kaydedilmiş bir sahne yüklenmeye devam ediyor, o
+  bileşeni bırakarak. Testinin `Camera2D` yarısı, `Camera`'nın iki modunun da sonlu projeksiyon
+  ürettiğini sınayan bir teste dönüştü.
+
+  **Tetikleyici (geri getirmek için):** gerçek bir 2B boru hattı — sprite'lar, z-sırası, piksel
+  yapıştırma. O gün ayrı bir kamera tipi hak edilmiş olur; bugün `Camera` + ortografik mod aynı
+  resmi zaten çiziyor.
 
 **Üçüncü tur (kapandı).** İkinci turun izleri de kapanmıştı; geriye kapatırken görülen bir yapısal
 soru kalmıştı:

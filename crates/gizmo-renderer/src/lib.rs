@@ -204,7 +204,7 @@ pub use async_assets::{
     ObjLoadCompletion, TextureReloadCompletion,
 };
 pub use components::{
-    Camera, Camera2D, DirectionalLight, LodGroup, LodLevel, Material, Mesh, MeshRenderer,
+    Camera, DirectionalLight, LodGroup, LodLevel, Material, Mesh, MeshRenderer,
     PointLight, SpotLight,
 };
 pub use csm::{

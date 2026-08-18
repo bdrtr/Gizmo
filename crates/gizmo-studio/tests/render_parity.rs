@@ -801,8 +801,6 @@ fn every_capability_neither_path_names_is_accounted_for() {
         ("FluidPhase", FLUID),
         ("FluidPhaseType", FLUID),
 
-        // ── No consumer at all ────────────────────────────────────────────────────────────
-        ("Camera2D", "nothing renders from it: the engine ships no 2D pipeline, and neither path so much as reads it. The scene registry serialises it, so a scene can carry one that never draws. Trigger for wiring it: a 2D pipeline."),
     ];
 
     /// The fluid family shares one reason, and it is an open asymmetry rather than a benign one.

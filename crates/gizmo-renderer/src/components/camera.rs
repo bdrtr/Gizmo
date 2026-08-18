@@ -231,31 +231,6 @@ impl Camera {
     }
 }
 
-/// A 2-D camera: an orthographic view in pixel units, with a zoom.
-#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct Camera2D {
-    /// How much the view is magnified. 1 = one world unit per pixel; larger zooms in.
-    pub zoom: f32,
-    /// Whether this is the camera the frame is rendered from.
-    pub primary: bool,
-}
-
-impl Camera2D {
-    /// A 2-D camera at the given zoom.
-    pub fn new(zoom: f32, primary: bool) -> Self {
-        Self { zoom, primary }
-    }
-
-    /// The orthographic projection for a viewport of `width` × `height` pixels, scaled by the
-    /// zoom. The depth range is ±1000, so sprites can be ordered by Z.
-    pub fn get_projection(&self, width: f32, height: f32) -> gizmo_math::Mat4 {
-        let safe_zoom = self.zoom.max(0.001);
-        let hw = (width / 2.0) / safe_zoom;
-        let hh = (height / 2.0) / safe_zoom;
-        gizmo_math::Mat4::orthographic_rh(-hw, hw, -hh, hh, -1000.0, 1000.0)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -368,19 +343,20 @@ mod tests {
         assert!(cam.pitch < std::f32::consts::FRAC_PI_2 && cam.pitch > -std::f32::consts::FRAC_PI_2);
     }
 
+    /// The 3-D camera's projection is finite in both modes — and orthographic is the mode a 2-D
+    /// view uses, which is why the separate `Camera2D` type could go: it re-implemented this with
+    /// a zoom instead of a height, and no draw path ever read it.
     #[test]
-    fn projections_are_finite_and_camera2d_zoom_scales_the_view() {
-        let cam = Camera::new(std::f32::consts::FRAC_PI_2, 0.1, 100.0, 0.0, 0.0, true);
+    fn projections_are_finite_in_both_modes() {
+        let mut cam = Camera::new(std::f32::consts::FRAC_PI_2, 0.1, 100.0, 0.0, 0.0, true);
         assert!(cam.get_projection(1.777).to_cols_array().iter().all(|v| v.is_finite()));
 
-        // Camera2D orthographic: the visible half-width is (width/2)/zoom, so a world
-        // point there maps to NDC x = 1.
-        let cam2d = Camera2D::new(2.0, true);
-        let (w, h) = (800.0f32, 600.0f32);
-        let p = cam2d.get_projection(w, h);
-        assert!(p.to_cols_array().iter().all(|v| v.is_finite()));
-        let half_w = (w / 2.0) / 2.0; // zoom = 2
-        let clip = p.project_point3(Vec3::new(half_w, 0.0, 0.0));
-        assert!((clip.x - 1.0).abs() < 1e-4, "edge maps to NDC 1, got {}", clip.x);
+        cam.toggle_projection(10.0); // the distance the ortho height is derived from
+        let ortho = cam.get_projection(1.777);
+        assert!(ortho.to_cols_array().iter().all(|v| v.is_finite()));
+        assert!(
+            matches!(cam.projection, ProjectionMode::Orthographic { .. }),
+            "the toggle must actually reach orthographic"
+        );
     }
 }
