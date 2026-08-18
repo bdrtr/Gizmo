@@ -2513,9 +2513,32 @@ altsisteminin geri kalanı, ve hiçbiri saatin kapsamında değil:
    BİRİNİ sürüyordu. Yeni bir çapraz test (`gizmo-scripting`) yedi senaryoyu **ikisine birden**
    soruyor ve aynı cevabı istiyor; eski Rust semantiği geri konduğunda "üçünü birlikte tutmak"
    senaryosunda Rust true, Lua false diyerek kırılıyor.
-6. `Hitbox::active`'i yazan tek şey denetçinin onay kutusu, okuyan tek şey hata-ayıklama gizmo'su
-   (`gizmo/src/systems/physics.rs:234`). Vuruş algılama (`hit_detection_system`) da `592bd6f`'de
-   gitti; `Hurtbox` yalnız çiziliyor.
+6. **Kalan tek madde, ve artık bir tasarım sorusu: hasar hiç uygulanmıyor.** Zincirin son halkası
+   eksik — bir hareket artık aktif penceresine ulaşıyor (saat yazıldı), script bunu okuyabiliyor,
+   ama vuruş hiçbir yerde çözülmüyor. `Hitbox::active`'i yazan tek şey denetçinin onay kutusu,
+   okuyan tek şey hata-ayıklama gizmo'su (`gizmo/src/systems/physics.rs:234`, aktifse kırmızı
+   çiziyor). `Hurtbox` yalnız çiziliyor. `hit_detection_system` de saatle birlikte `592bd6f`'de
+   gitmişti. Bileşenlerin belgeleri bunu zaten dürüstçe söylüyor (*"Nothing subtracts it, because
+   no engine system resolves these hits"*), yani bu bir yalan değil, bir boşluk.
+
+   **Neden bu oturumda yazılmadı ve kod yazmadan önce yanıtlanması gereken dört soru** (saat için
+   ölçüm karar veriyordu, burada vermiyor — bunlar politika):
+   - **Hangi hitbox hangi hareketin?** Silinen sürüm dövüşçünün ALT AĞACINDAKİ her hitbox'ı aktif
+     pencereden sürüyordu; yumruk hitbox'ı da tekme hitbox'ı da olan bir dövüşçüde bu yanlış.
+     `CombatMove`'un hitbox'ını adlandırması gerekiyor (isim? entity? maske?). Saat commit'inde
+     `Hitbox::active`'i sürmemenin sebebi tam olarak buydu.
+   - **Hareket başına tek vuruş.** 3 karelik aktif pencere, kayıt tutulmazsa üç kez hasar verir.
+     Nerede tutulacak — `FighterController`'da bir "bu hareket bu hedefe değdi" kümesi mi?
+   - **Etki doğrudan mı, olay mı?** Motor `health`'i kendisi mi düşürsün (o zaman ölüm, savuşturma,
+     zırh, takım dostu ateşi de motorun işi olmaya başlar), yoksa bir `HitEvent` mi yayınlasın da
+     hasarı oyun/script mi uygulasın? İkincisi bu deponun `gizmo-core::event` desenine uyuyor ve
+     `FrameData::{damage, hitstun, hitstop}` + `Hurtbox::damage_multiplier`'ı olayın yükü yapıyor.
+   - **Kim kimi vurabilir?** `player_id` bir kimlik etiketi, hiçbir şey benzersizliğini
+     zorlamıyor; takım/katman filtresi yok. En azından "kendi hurtbox'ına vuramaz" gerekiyor.
+
+   Ölçülen bağlam: `Hitbox`/`Hurtbox` kutuları yerel çerçevede (`position + rotation * offset`),
+   yani çarpışma testi `gizmo-physics-core`'un OBB araçlarıyla yazılabilir; ayrı bir broadphase
+   gerekmez, dövüşçü sayısı küçük.
 7. ~~Stüdyo tarafında dört kusur~~ **— düzeltildi (aynı gün, ayrı commit).** Saati yazdıktan
    sonra stüdyoda görülecek yüzeyi yoktu: `scene_ops` `FighterController`'ı ekleyebiliyor ama
    **silemiyordu** (denetçide dört sil düğmesi var, üçünün kolu vardı), iki dövüşçü de varsayılan
