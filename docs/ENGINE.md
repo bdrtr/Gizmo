@@ -2720,6 +2720,18 @@ bildiriyor; hiçbirinin adını anmadığı bir yetenek sessizlik. `BoneAttachme
 sisteme üzerinden sürülüyor, yani iki kaynakta da adı geçmiyor. Artık sürücü listesi doğrudan
 guard'lı (yorumlar kesilerek, iki yönde de).
 
+**Bir sonraki oturuma (2026-08-19, üçüncü tur).** İkinci turun izleri de kapandı. Geriye
+kapatırken görülen bir yapısal soru kaldı:
+
+- **Envanterin "ikisi de bilmiyor" kutusu sessiz.** `render_parity.rs`'in yetenek envanteri yalnız
+  TAM OLARAK BİR yolun bildiği bir yeteneği bildiriyor. Hiçbirinin adını anmadığı bir yetenek —
+  bugünkü üç kusurun ikisi böyleydi — hiç rapor edilmiyor. Sürücü listesi guard'ı bu üçünü
+  yakalıyor ama o el yazımı bir liste; envanterin kendisi hâlâ "sıfır yol biliyor" durumunu
+  yutuyor. Soru: o durum da bildirilmeli mi? Meşru örnekler var (bir bileşen `shared.rs`'te
+  tüketiliyor olabilir — envanter onu bilerek dışarıda bırakıyor), yani doğru biçim muhtemelen
+  "sıfır yol biliyorsa ya bir sürücü listesinde olacak ya EXCEPTIONS'ta". Ölçülmesi gereken: şu an
+  kaç yetenek o kutuda, ve kaçı meşru.
+
 **Bir sonraki oturuma (2026-08-19, ikinci tur).** Aşağıdaki üç izin de üçü aynı gün kapandı;
 kapatırken çıkan tek yeni iz:
 
