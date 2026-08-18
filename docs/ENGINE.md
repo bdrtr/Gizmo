@@ -2569,6 +2569,28 @@ altsisteminin geri kalanı, ve hiçbiri saatin kapsamında değil:
    silinen slotu geri veriyor, HUD ▶/⏸/⏹ üçlüsünde sürülüyor, ve denetçi başsız bir egui
    karesinde boyadığı metinden okunuyor.
 
+**Bir sonraki oturuma, bu oturumda ölçülüp düzeltilmeyenler** (dövüş zinciri kapandı, bunlar
+komşu köşeler):
+
+- **Üç `ScriptCommand` varyantının üreticisi yok.** `PlayAnimation` ve `SetAnimationSpeed`'in
+  `flush_commands`'te çalışan işleyicileri var ama hiçbir `api_*.rs` onları kuyruğa koymuyor —
+  yani Lua'da animasyon oynatmanın yolu yok, üstelik `gizmo-animation`'ın belgesi hâlâ "the Lua
+  PlayAnimation"dan söz ediyor. `SetFightCamera` de aynı: `commands.rs:151`'de tanımlı,
+  `play.rs`'te bir yorumda anılıyor, iten yok. Bu, bu oturumda üç kez görülen desenin aynısı
+  (ölü kol / iki protokol / okuyucusuz değer): ya bağlanır ya silinir, ve hangisi olduğu
+  ölçülebilir — animasyon tarafında çalışan bir işleyici VAR, yani bağlamak bir satır Lua
+  bağlaması; dövüş kamerası ise stüdyonun kendi kamera kodunun kopyası olabilir, önce bakılmalı.
+- **Editör modunda fizik DEĞİŞKEN dt ile adımlanıyor.** `gizmo-studio/src/main.rs:35`,
+  `set_update` içinde `cpu_physics_step_system(world, dt)` — yani ▶'ye basılmadıkça viewport'taki
+  simülasyon sabit adım kullanmıyor, ki bu tam olarak demoların 240 Hz akümülatörlerinin kaçtığı
+  şey. Play modunda `PlayLoop`'un 60 Hz'i bunun ÜSTÜNE biniyor.
+- **`PhysicsTime`'ın 8 adımlık ölüm-sarmalı tavanına ulaşılamıyor.** `Time::update` dt'yi 0.05'e
+  kırpıyor (`time.rs:62,87`) ve `windowed/event.rs:575` bir kez daha kırpıyor; akümülatörde kalan
+  da her zaman < 1/60. Yani birikim en fazla ~0.0667 s = 4 adım, tavan ise 8·(1/60) = 0.133.
+  Tavan ya ölü ya da yanlış yerde; hangisi olduğu ölçülmeli.
+- **§4'ün "96 public type `#[non_exhaustive]`" sayısı bayat** (`ENGINE.md:1103`); CLAUDE.md
+  2026-08-18'de 122'ye düzeltilmişti. §8'in kendi kuralı bu satırı adıyla anıyor.
+
 Düzeltilmiş ve kaydı tutulan yedi kusur. İlk üçü: script sırası (`HashMap` → `BTreeMap`,
 proses başına rastgeleydi), on altı komutun sessizce yutulması, bir script'in hatasının ötekileri
 iptal etmesi. **2026-08-15'te dördü daha — kayıtta adı geçen bütün açık maddeler:**
