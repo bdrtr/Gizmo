@@ -1630,6 +1630,22 @@ the *slope* gate is the one that guards it.
 ## 8. Working Method
 
 - Every item: **fix → write a regression test → build/test/clippy → tick it off.**
+- **Measure the noise floor before reading a difference.** After a day of physics and renderer
+  changes, nothing had confirmed a demo still *drew* anything, so one was screenshotted through
+  `GIZMO_SCREENSHOT` — a good check, and it passed: geometry, ground, debug overlay, camera where
+  expected. Then the same demo was rendered from its pre-change source and diffed: **7.39 %** of
+  bytes differed, which read as "the change altered the simulation".
+
+  It did not. A build failure left a stale binary in place, so two renders of the *same* code got
+  compared by accident — and they differed by 6.93 %. Measured properly, the same binary at the
+  same frame number three times: **6.17 %, 6.49 %, 4.77 %**. A windowed demo steps physics with
+  the real frame delta, so "frame 180" is a different amount of simulated time on every run. The
+  7.39 % was the machine, not the code.
+
+  Two things follow. The screenshot path is for "is it black, is the camera right, did the shader
+  do what I meant" — it is not a regression diff, and CLAUDE.md now says so with the numbers. And
+  the accident was the useful part: without the stale binary the false conclusion would have been
+  written down. A difference is only evidence once you know what no difference looks like.
 - **A count written into prose is a count the code will walk away from.** Three were found stale
   on the same afternoon (2026-08-18), each written once and never re-measured: the rustfmt churn
   behind a standing decision (2660 → **2794**), the scene block's fixed part quoted two different

@@ -38,6 +38,17 @@ cargo run --release -p demo --bin headless_stress_test
 GIZMO_SCREENSHOT=/tmp/frame.png GIZMO_SCREENSHOT_FRAME=180 GIZMO_SCREENSHOT_EXIT=1 \
   env -u WAYLAND_DISPLAY DISPLAY=:1 ./target/release/gizmo-studio
 # FRAME defaults to 90 (early frames are unrepresentative: assets stream in, layout settles).
+#
+# GOOD FOR: is the frame black, does the camera point where you think, is the geometry/ground/
+# debug overlay there, did a shader change do what you meant.
+#
+# NOT A BEFORE/AFTER DIFF on a physics demo, and the numbers are worth knowing before you try:
+# a windowed demo steps physics with the REAL frame delta, so "frame 180" is a different amount
+# of SIMULATED time on every run. Measured 2026-08-18, the same binary rendering the same frame
+# number three times: 6.17 %, 6.49 % and 4.77 % of bytes differed between runs. A code change
+# measured this way showed 7.39 % — indistinguishable from doing nothing at all.
+# For a deterministic comparison use a fixed-timestep driver and compare a hash, which is what
+# `headless_stress_test` is.
 
 # Benchmarks (criterion). CI runs each one once with `--test` as a smoke gate — it catches a
 # panicking or non-compiling bench, not a regression (see docs/ENGINE.md on why there is no
