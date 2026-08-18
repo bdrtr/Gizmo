@@ -28,8 +28,11 @@
 //! distance. No `rodio` types appear in the public API, keeping the dependency
 //! contract internal.
 
+mod filter;
 mod mixer;
 pub use mixer::Mixer;
+
+use filter::{Muffle, MuffleControl};
 
 use rodio::stream::DeviceSinkBuilder;
 use rodio::{Decoder, MixerDeviceSink, Player, Source, SpatialPlayer};
@@ -186,6 +189,11 @@ pub struct AudioManager {
     active_sinks: HashMap<u64, Player>,
     next_sink_id: u64,
 
+    // The live low-pass cutoff, shared with every source this manager has started and read on
+    // the audio thread. Turning the muffle on is one atomic store here, not a walk over the sinks
+    // — the filter is *inside* each source, which is the only place rodio lets it be live.
+    muffle: std::sync::Arc<MuffleControl>,
+
     // Buses, master, environment, and one route per live sink. THE ONLY PLACE a volume or a
     // speed is decided: everything below writes `mixer.volume_for(id)` / `mixer.speed_for(id)`
     // and nothing computes a level of its own. That is what stops two writers from fighting over
@@ -264,6 +272,7 @@ impl AudioManager {
                     active_spatial_sinks: HashMap::new(),
                     active_sinks: HashMap::new(),
                     next_sink_id: 1,
+                    muffle: MuffleControl::new(),
                     mixer: Mixer::new(),
                 })
             }
@@ -361,6 +370,9 @@ impl AudioManager {
     /// to sounds that are already playing.
     fn apply_mix_to_every_sink(&mut self) {
         self.mixer.take_dirty(); // whatever asked for this, it is answered now
+        // One store, heard on the next buffer, by every sound at once — including the ones this
+        // manager will start later, since they are handed the same control.
+        self.muffle.set_cutoff_hz(self.mixer.environment_cutoff_hz());
 
         for (id, sink) in &self.active_sinks {
             sink.set_volume(self.mixer.volume_for(*id));
@@ -426,10 +438,13 @@ impl AudioManager {
         let cursor = Cursor::new(Arc::clone(bytes));
         let decoder = Decoder::new(cursor).map_err(|e| AudioError::Decode(e.to_string()))?;
         let sink = Player::connect_new(self.device_sink.mixer());
+        // The muffle wraps the source rather than the player: a `Player` hands out no way to reach
+        // what it is playing, so a filter that must be switchable later has to be in the chain
+        // before `append` and read its own parameter afterwards.
         if looped {
-            sink.append(decoder.repeat_infinite());
+            sink.append(Muffle::new(decoder.repeat_infinite(), Arc::clone(&self.muffle)));
         } else {
-            sink.append(decoder);
+            sink.append(Muffle::new(decoder, Arc::clone(&self.muffle)));
         }
         let id = self.next_sink_id;
         self.next_sink_id = self.next_sink_id.wrapping_add(1);
@@ -494,9 +509,9 @@ impl AudioManager {
         let sink =
             SpatialPlayer::connect_new(self.device_sink.mixer(), emitter_pos, left_ear, right_ear);
         if looped {
-            sink.append(decoder.repeat_infinite());
+            sink.append(Muffle::new(decoder.repeat_infinite(), Arc::clone(&self.muffle)));
         } else {
-            sink.append(decoder);
+            sink.append(Muffle::new(decoder, Arc::clone(&self.muffle)));
         }
 
         let id = self.next_sink_id;
@@ -683,11 +698,17 @@ mod tests {
         player.set_volume(mixer.volume_for(7));
         player.set_speed(mixer.speed_for(7));
         assert!(
-            player.volume() < 1.0 && player.speed() < 1.0,
-            "underwater must turn the sound down and slow it: vol {} speed {}",
-            player.volume(),
-            player.speed()
+            player.volume() < 1.0,
+            "underwater must turn the sound down: vol {}",
+            player.volume()
         );
+        assert_eq!(
+            player.speed(),
+            1.0,
+            "and must NOT slow it: the muffle is a low-pass filter inside the source, not a \
+             pitch shift — that stand-in was removed 2026-08-18"
+        );
+        assert!(mixer.environment_cutoff_hz() > 0, "the corner is what carries the muffle now");
 
         // Not asserted here: that `stop()` empties the player. Emptiness is decremented as the
         // *mixer pulls samples*, so with no device nothing ever drains — which is also why
@@ -729,6 +750,21 @@ mod tests {
             "a one-second sound must have drained after 1.5 s — if it has not, the device is \
              not pulling samples and nothing is audible"
         );
+
+        // Again with the low-pass engaged. The filter's response is measured device-free in
+        // `crate::filter`; what only a device can show is that a source with a biquad in it still
+        // satisfies rodio's span/rate contract well enough to be pulled to the end. A filter that
+        // stalls or mis-reports its span is silence, and every arithmetic test would still pass.
+        manager.set_underwater(true);
+        let filtered = manager.play("beep").expect("a registered WAV must decode and play");
+        assert!(manager.is_playing(filtered));
+        std::thread::sleep(std::time::Duration::from_millis(1_500));
+        manager.update();
+        assert!(
+            !manager.is_playing(filtered),
+            "a muffled sound must drain like any other — if it does not, the filter is not \
+             passing the device's pulls through"
+        );
     }
 
     /// REGRESSION, on **real hardware** (the numbers below were measured on a device, 2026-08-18).
@@ -747,6 +783,9 @@ mod tests {
     /// | after ONE `audio_spatial_system` frame | **1.00** | **1.00** |
     /// | surfaced | **2.50** | 1.00 |
     /// | 2D at 0.22, set while submerged, then surfaced | **0.55** | 1.00 |
+    ///
+    /// The `0.85` there is history too: the speed column stays at 1.00 now, because the muffle is
+    /// a low-pass filter inside the source rather than a playback slow-down (`crate::filter`).
     ///
     /// `#[ignore]` for the usual reason: CI runners have no sound card, where `AudioManager::new`
     /// legitimately fails. `cargo test -p gizmo-audio -- --ignored`
@@ -774,26 +813,28 @@ mod tests {
         assert_eq!(spatial(&m, id), (1.0, 1.0), "a fresh sound plays at what it was given");
 
         m.set_underwater(true);
-        assert_eq!(spatial(&m, id), (0.4, 0.85), "the muffle reaches the device");
+        assert_eq!(spatial(&m, id), (0.4, 1.0), "the muffle turns it down and does not detune it");
+        assert!(m.muffle.cutoff_hz() > 0, "and the filter every source reads is engaged");
 
         // One frame of `audio_spatial_system` for a live 3D source: attenuation, then Doppler.
         // This is the write that used to erase the muffle — for EVERY 3D sound, one frame after
         // it was asked for.
         m.update_spatial_sink(id, [0.0, 0.0, 0.0], left, right, 100.0, 1.0);
         m.set_pitch(id, 1.0);
-        assert_eq!(spatial(&m, id), (0.4, 0.85), "and it survives the frame that restates it");
+        assert_eq!(spatial(&m, id), (0.4, 1.0), "and it survives the frame that restates it");
 
         m.set_underwater(false);
         assert_eq!(spatial(&m, id), (1.0, 1.0), "surfacing is not a 2.5x amplifier");
+        assert_eq!(m.muffle.cutoff_hz(), 0, "and the filter goes back to bypass, not to 20 kHz");
 
         // The global path, with a game moving a volume slider while submerged.
         let g = m.play_looped("beep").expect("a registered WAV must play");
         m.set_volume(g, 0.22);
         assert_eq!(global(&m, g), (0.22, 1.0));
         m.set_underwater(true);
-        assert_eq!(global(&m, g), (0.088, 0.85));
+        assert_eq!(global(&m, g), (0.088, 1.0));
         m.set_volume(g, 0.22); // the slider, moved underwater
-        assert_eq!(global(&m, g), (0.088, 0.85), "a value set underwater is muffled, not doubled");
+        assert_eq!(global(&m, g), (0.088, 1.0), "a value set underwater is muffled, not doubled");
         m.set_underwater(false);
         assert_eq!(global(&m, g), (0.22, 1.0), "and it comes back as the value it was given");
 

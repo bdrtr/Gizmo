@@ -21,11 +21,18 @@
 //!
 //! ```text
 //! volume = route.volume × bus.gain × master.gain × environment      (0 if either is muted)
-//! speed  = route.pitch  × environment                               (sanitised)
+//! speed  = route.pitch                                              (sanitised)
+//! cutoff = environment                                              (Hz, 0 = no filter)
 //! ```
 //!
 //! recomputed from those inputs every time any of them moves. Nothing accumulates, so nothing
 //! drifts, and the order the modifiers arrive in stops mattering.
+//!
+//! The `speed` line lost its environment term on the same day it gained the `cutoff` line: the
+//! underwater effect used to be a 0.85× playback slow-down standing in for a filter rodio could
+//! not run live, and a slow-down is a pitch shift — it detunes music and drops a looped engine a
+//! tone. `crate::filter::Muffle` puts a real biquad inside each source instead, so the cutoff
+//! travels through one atomic rather than per sink.
 //!
 //! The buses are the half a game ships: a music slider and an SFX slider are one gain each, applied
 //! to every sound routed there — including sounds that started before the player touched the slider.
@@ -68,13 +75,18 @@ struct Route {
     pitch: f32,
 }
 
-/// Volume/speed multiplier while the listener is underwater.
-///
-/// Not a real low-pass — rodio's `Player` has no live filter — so a turn-down plus a small
-/// slow-down stands in for "muffled and far away".
+/// Volume multiplier while the listener is underwater. Water attenuates, so the level drops —
+/// but the *character* of underwater sound is the missing top end, and that is
+/// [`UNDERWATER_CUTOFF_HZ`]'s job, not this one's.
 const UNDERWATER_VOLUME: f32 = 0.4;
-/// Playback speed while underwater. See [`UNDERWATER_VOLUME`].
-const UNDERWATER_SPEED: f32 = 0.85;
+/// Low-pass corner while underwater, in Hz.
+///
+/// This used to be a **0.85× playback speed** instead, because rodio's `Player` offers no live
+/// filter — but slowing playback is a pitch shift: a looped engine drops a tone, a music track
+/// detunes, and nothing about water does that. `crate::filter::Muffle` puts a real biquad inside
+/// each source, so the muffle is now what it always claimed to be. 700 Hz is inside the band where
+/// speech and engine harmonics live, so what is removed is audibly the "air" and not the sound.
+const UNDERWATER_CUTOFF_HZ: u32 = 700;
 
 /// Clamp a gain to something a mixer can multiply through.
 ///
@@ -302,17 +314,30 @@ impl Mixer {
         route.volume * bus.factor() * self.master.factor() * environment
     }
 
-    /// The playback speed to write to this sink: intent × environment, sanitised.
+    /// The playback speed to write to this sink: the pitch the game asked for, sanitised.
     ///
-    /// The sanitisation belongs **here**, after the multiply, not at the entry point: an already
-    /// clamped `0.01` pitch times the underwater `0.85` is `0.0085`, which is small enough to make
-    /// rodio's sample-rate converter compute a rate of zero and assert on the audio thread.
+    /// No environment term any more — the underwater effect is a filter, not a pitch shift (see
+    /// [`UNDERWATER_CUTOFF_HZ`]). The clamp stays because `pitch` is scene-authored and reaches
+    /// `0.0` from a serialised `AudioSource`, which makes rodio's sample-rate converter compute a
+    /// rate of zero and assert on the audio callback thread.
     pub fn speed_for(&self, id: u64) -> f32 {
         let Some(route) = self.routes.get(&id) else {
             return 1.0;
         };
-        let environment = if self.underwater { UNDERWATER_SPEED } else { 1.0 };
-        crate::sanitize_playback_speed(route.pitch * environment)
+        crate::sanitize_playback_speed(route.pitch)
+    }
+
+    /// The low-pass corner every live source should be filtering at, `0` for none.
+    ///
+    /// The manager stores this into the shared control that each source reads; it is the one part
+    /// of the composition that does not travel per sink, because the filter lives inside the
+    /// source rather than on the player.
+    pub(crate) fn environment_cutoff_hz(&self) -> u32 {
+        if self.underwater {
+            UNDERWATER_CUTOFF_HZ
+        } else {
+            0
+        }
     }
 
     /// Whether anything has moved since this was last asked, clearing the flag.
@@ -386,7 +411,12 @@ mod tests {
             UNDERWATER_VOLUME,
             "the muffle must outlive the frames that restate the attenuation"
         );
-        assert_eq!(mixer.speed_for(1), UNDERWATER_SPEED, "and so must the slow-down");
+        assert_eq!(
+            mixer.environment_cutoff_hz(),
+            UNDERWATER_CUTOFF_HZ,
+            "and so must the filter corner, which is the other half of it"
+        );
+        assert_eq!(mixer.speed_for(1), 1.0, "the muffle is a filter, not a pitch shift");
     }
 
     /// REGRESSION (measured 2026-08-18, real device). Surfacing multiplied every sink by
@@ -435,19 +465,16 @@ mod tests {
         assert_eq!(mixer.volume_for(1), 0.0, "intent is clamped on the same rule");
     }
 
-    /// The muffle multiplies the pitch, so the clamp has to be after the multiply — before it,
-    /// a pitch already at the floor goes under it and rodio asserts on the audio thread.
+    /// A scene may serialise `AudioSource.pitch = 0.0`, and rodio's sample-rate converter asserts
+    /// on a rate of zero — on the audio callback thread, taking playback with it.
     #[test]
     fn the_composed_speed_stays_above_rodios_floor() {
         let mut mixer = Mixer::new();
         mixer.route(1, Mixer::SFX);
         mixer.set_sink_pitch(1, 0.0); // e.g. a scene-authored `AudioSource.pitch`
         mixer.set_underwater(true);
-        assert!(
-            mixer.speed_for(1) >= 0.01,
-            "0.01 × 0.85 must not reach the device: got {}",
-            mixer.speed_for(1)
-        );
+        assert!(mixer.speed_for(1) >= 0.01, "got {}", mixer.speed_for(1));
+        assert_eq!(mixer.environment_cutoff_hz(), UNDERWATER_CUTOFF_HZ);
     }
 
     /// An id the mixer does not know is not a sound it will let through at full volume.

@@ -70,7 +70,9 @@ struct Candidate {
 ///
 /// # Which lights survive the cap, and why it is not "the first ten"
 ///
-/// The shader array holds [`MAX_LIGHTS`] (32; it was 10 when this was written). It used to be
+/// The shader array holds [`MAX_LIGHTS`] — the constant, deliberately not a number written here:
+/// it has been 10, then 32, then 256 within one week, and this line said "32" for a day after the
+/// last of those. It used to be
 /// filled in ECS iteration order, `break`-ing on the first light that did not fit, which had three
 /// consequences, all visible:
 ///

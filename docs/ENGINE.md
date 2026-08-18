@@ -129,9 +129,33 @@ state instead.
   the device as `NaN` samples), and the sink garbage collector now drops routes with their sinks,
   which it must: one leaked route per sound ever played is one per footstep.
 
-  **Not done, and named rather than implied:** the DSP half — filters, sends, a real low-pass
-  instead of the turn-down-and-slow-down that stands in for one — and a per-bus opt-out from the
-  environment modifier, since today the menu music muffles when the camera goes under water.
+  **The first piece of the DSP half landed the same day: a real low-pass** (`gizmo_audio::filter`).
+  The muffle's stand-in was a 0.85× playback speed, and the reason it was a stand-in is written into
+  rodio's API: once a source is `append`ed the `Player` owns it, so `BltFilter::to_low_pass` cannot
+  be reached from outside. But a slow-down is a **pitch shift** — a looped engine drops a tone, a
+  music track detunes — and none of that is what water does.
+
+  The way past it is not to reach into the player but to hand it a source that reads its own
+  parameter: `Muffle` wraps the decoder and loads an `Arc<AtomicU32>` cutoff per sample, so
+  `set_underwater` is **one atomic store** heard by every sound at once, including ones started
+  later. The playback-speed term is gone from the composition; the corner is 700 Hz.
+
+  **The biquad's state is per channel, and that is the part not borrowed from rodio.** rodio's
+  `BltFilter` keeps a single `x_n1/x_n2/y_n1/y_n2` set and runs an *interleaved* stream through it,
+  so on stereo the left channel's history filters the right channel's samples. The test that pins
+  the difference is `a_silent_channel_stays_silent`: signal left, silence right, and the right
+  channel must come out *exactly* zero — which it cannot on a shared-state filter.
+
+  Measured rather than asserted by construction (Butterworth, Q = 1/√2, 48 kHz, corner 800 Hz):
+  **100 Hz passes within 1 dB, the corner is −3 dB, and 6.4 kHz — three octaves up — is below
+  −30 dB.** Bypass (`cutoff = 0`) is *sample-for-sample identical*, since a game is bypassed for
+  its whole run except while submerged. And an absurd cutoff cannot poison the stream: unclamped,
+  a corner at or above Nyquist makes the bilinear transform produce a `NaN`, which then lives in
+  the filter's own feedback path and turns **every** later sample into `NaN` — silence on the
+  device, from a number a game is allowed to ask for.
+
+  **Still not done:** sends/returns (a reverb bus fed from other buses) and a per-bus opt-out from
+  the environment modifier, since today the menu music muffles when the camera goes under water.
   **Trigger for the opt-out:** a game with non-diegetic sound that dives. **Trigger for starting a
   sound already on its bus** (rather than `play` + `set_sink_bus`): a game that can hear the gap,
   which is one mixer buffer and audible only into a muted bus.
@@ -406,13 +430,19 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
   The other 21 hand-rolled cameras stay hand-rolled: some are orbit cameras, some are turrets, and
   converting a camera nobody asked about is churn against a demo that works. **Trigger:** the next
   one that is a plain first-person or fly camera.
-- **The ten-light ceiling — the *selection* half is closed (2026-08-17); the ceiling is not.**
-  `gpu_types.rs` still holds `[LightData; 10]`. What changed is which ten it holds. It used to be
-  whichever ten ECS iteration reached first, and that had three separate consequences: distance
-  never entered into it (a light behind the camera took a slot from one lighting the wall in
-  front), point lights were collected in their own loop first and so **starved every spotlight**
-  once ten points existed anywhere in the level, and the chosen ten shifted whenever the archetype
-  set changed — spawn, despawn or add a component and a still scene changed its lighting, i.e.
+- **The ten-light ceiling — CLOSED (2026-08-17), both halves. Read the item as history.**
+  The heading said "the ceiling is not" for a day after clustering raised it to 256 and the
+  paragraphs below recorded that; corrected 2026-08-18. `MAX_LIGHTS` is **256** in
+  `frame_uniforms.rs`, the per-fragment loop is per-cluster, and the remaining hard limit is
+  computed by a test rather than argued (all below). The item is kept because the *selection*
+  reasoning is still what the code does.
+
+  **The selection half, first.** What changed before the ceiling did was which lights get kept.
+  It used to be whichever ones ECS iteration reached first, and that had three separate
+  consequences: distance never entered into it (a light behind the camera took a slot from one
+  lighting the wall in front), point lights were collected in their own loop first and so
+  **starved every spotlight** once the array filled with points anywhere in the level, and the
+  chosen set shifted whenever the archetype set changed — spawn, despawn or add a component and a still scene changed its lighting, i.e.
   flicker. `collect_scene_lights` now scores every light against the camera and keeps the best
   ten, points and spots in one pool, ordered by distance to the light's **sphere of influence**
   (exact, not a heuristic: the shaders window attenuation with `clamp(1 - (d/r)^4, 0, 1)`, so a

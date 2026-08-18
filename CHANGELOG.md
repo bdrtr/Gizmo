@@ -18,6 +18,22 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A real low-pass for the underwater muffle, retunable while sounds are playing**
+  (`gizmo_audio::filter::Muffle`, internal). rodio's `Player` hands out no way to reach the source
+  it is playing, so a live filter has to be *inside* the source: `Muffle` wraps each decoder and
+  reads an `Arc<AtomicU32>` cutoff per sample, making `set_underwater` one atomic store that every
+  sound hears at once — including sounds started afterwards.
+
+  Measured (Butterworth Q = 1/√2, 48 kHz, corner 800 Hz): 100 Hz passes within 1 dB, the corner is
+  −3 dB, 6.4 kHz is below −30 dB, and bypass is sample-for-sample identical. The biquad keeps
+  **per-channel** state, unlike rodio's own `BltFilter`, which runs an interleaved stream through
+  one set of memories and so filters the right channel with the left channel's history.
+
+  **Behaviour change:** the underwater muffle no longer slows playback to 0.85×. That was a stand-in
+  for the filter rodio could not run live, and slowing playback is a pitch shift — it detuned music
+  and dropped looped engine sounds a tone. Volume still drops to 0.4; the character now comes from
+  the 700 Hz corner.
+
 - **A mixer with buses: `gizmo_audio::Mixer`.** Named buses (`Mixer::MUSIC`, `SFX`, `UI`, `VOICE`,
   and any name a game invents — they are created on mention), a master gain, and mute flags that
   keep their gains so unmuting restores exactly what was there. A bus gain applies to sounds that
