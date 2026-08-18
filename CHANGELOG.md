@@ -358,6 +358,34 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the path handed *out* by `get_path` — tolerated on Linux, a UNC prefix on Windows. `./demo/x` and
   `demo/x` also keyed the same file twice, which would have given one asset two identities.
 
+### Removed
+
+- **`ScriptEngine::get_pending_audio_scene_commands` — a public method that returned an empty
+  `Vec` and could not return anything else.** Its body was `Vec::new()` under two comments
+  wondering when it should be called; its doc said it "returns the audio/scene commands pending at
+  runtime". Nothing in the workspace called it. The commands it promised are the ones
+  `flush_commands` hands back, and those now have a real consumer in `PlayLoop`.
+
+- **`ScriptEngine::run_entity_update`, `ScriptContext` and `ScriptResult` — the second per-entity
+  script protocol, whose last caller was deleted in `0de4bee`.** It marshalled a `ctx` table
+  (position, velocity and nine hard-coded key flags) into Lua and lifted a `{position, velocity}`
+  table back out, leaving the caller to apply it. The live protocol is `update_entity` →
+  `on_entity_update(entity_id, dt, props)` with effects going through the command queue, which is
+  what the editor's Play mode and every exported game run. Two protocols meant the next wiring
+  could pick the dead one; the hard-coded `key_w`/`key_a`/… also duplicated the `input` table with
+  a fixed set of keys, and *its* caller would have had to fill them by hand.
+
+- **`gizmo_scripting::dummy_engine` and the crate's whole `cfg(target_arch = "wasm32")` arm.** It
+  could not be compiled in any configuration: `cargo check -p gizmo-scripting --target
+  wasm32-unknown-unknown` fails inside mlua-sys's build script ("don't know how to build Lua for
+  wasm32-unknown-unknown"), and both consumers (`gizmo-app`, `gizmo-editor`) list this crate under
+  `[target.'cfg(not(target_arch = "wasm32"))'.dependencies]`, so `cargo tree -p demo-web --target
+  wasm32-unknown-unknown` shows it zero times. The drift proves it never compiled: the stub's
+  `update_entity` took three arguments where the real one takes four, under a comment promising
+  that identical signatures let calling code compile unchanged on both targets. Web builds are
+  unaffected — the fallback that actually runs there is `gizmo-editor`'s per-item one, which *is*
+  linted for wasm.
+
 ### Changed
 
 - **Four source-shape guards were vacuous and now are not.** A positive `contains` over source

@@ -68,11 +68,11 @@ pub struct ScriptEngine {
 //   *** No `&self` method of `ScriptEngine` may touch `self.lua`. ***
 //
 // That precondition holds by construction. The complete set of `&self` methods
-// is `flush_commands`, `get_pending_audio_scene_commands` and `command_queue`;
-// none of them reads `self.lua` (they only drain the `Arc<CommandQueue>` and the
+// is `flush_commands` and `command_queue`; neither reads `self.lua` (they only
+// drain the `Arc<CommandQueue>` and the
 // `Arc<Mutex<..>>` log queue, both of which are `Sync` on their own). Every
 // method that does reach the VM — `new`, `load_script`, `reload_script`,
-// `update`, `has_function`, `run_entity_update`, … — takes `&mut self`, so the
+// `update`, `update_entity`, `has_function`, … — takes `&mut self`, so the
 // borrow checker makes concurrent VM access unrepresentable: a caller needs
 // `ResMut<ScriptEngine>`, which the scheduler treats as an exclusive write.
 //
@@ -174,47 +174,6 @@ impl Script {
             properties: std::collections::BTreeMap::new(),
         }
     }
-}
-
-/// The entity data handed to Lua, kept for backwards compatibility.
-#[derive(Clone, Debug, Default)]
-#[non_exhaustive]
-pub struct ScriptContext {
-    /// The entity the script is running for.
-    pub entity_id: u32,
-    /// This frame's delta time, in seconds.
-    pub dt: f32,
-    /// The entity's world position.
-    pub position: [f32; 3],
-    /// The entity's linear velocity.
-    pub velocity: [f32; 3],
-    /// Is `W` held?
-    pub key_w: bool,
-    /// Is `A` held?
-    pub key_a: bool,
-    /// Is `S` held?
-    pub key_s: bool,
-    /// Is `D` held?
-    pub key_d: bool,
-    /// Is `Space` held?
-    pub key_space: bool,
-    /// Is the up arrow held?
-    pub key_up: bool,
-    /// Is the down arrow held?
-    pub key_down: bool,
-    /// Is the left arrow held?
-    pub key_left: bool,
-    /// Is the right arrow held?
-    pub key_right: bool,
-}
-
-/// The changes coming back from Lua (kept for backwards compatibility).
-#[derive(Clone, Debug, Default)]
-pub struct ScriptResult {
-    /// A position the script returned, if it returned one — `None` means "leave it alone".
-    pub new_position: Option<[f32; 3]>,
-    /// A velocity the script returned, if any.
-    pub new_velocity: Option<[f32; 3]>,
 }
 
 impl ScriptEngine {
@@ -1001,13 +960,6 @@ ScriptCommand::PlayAnimation { id, name, blend, loop_anim } => {
         unhandled
     }
 
-    /// Returns the audio/scene commands pending at runtime (handled on the demo side).
-    pub fn get_pending_audio_scene_commands(&self) -> Vec<ScriptCommand> {
-        // Flush zaten çağrıldıysa bu boş dönecek
-        // Alternatif: flush'tan önce çağrılmalı
-        Vec::new()
-    }
-
     /// Decides whether the script should be hot-reloaded.
     pub fn reload_if_changed(&mut self, path: &str) -> Result<bool, String> {
         let current =
@@ -1035,92 +987,6 @@ ScriptCommand::PlayAnimation { id, name, blend, loop_anim } => {
             }
         }
         false
-    }
-
-    /// Calls the Lua function with this name (for per-entity scripts).
-    ///
-    /// Takes `&mut self`: calling into the VM mutates the `lua_State`, and the
-    /// `unsafe impl Sync` above is only sound while no `&self` method does that.
-    pub fn run_entity_update(
-        &mut self,
-        path: &str,
-        func_name: &str,
-        ctx: &ScriptContext,
-    ) -> Result<ScriptResult, String> {
-        let env: mlua::Table = if let Some((_, key)) = self.loaded_scripts.get(path) {
-            self.lua.registry_value(key).map_err(|e| e.to_string())?
-        } else {
-            return Err(format!("Script not loaded: {}", path));
-        };
-
-        let func: LuaFunction = match env.get(func_name) {
-            Ok(f) => f,
-            Err(e) => {
-                trace!(path, func_name, error = %e, "[Scripting] run_entity_update: fonksiyon alınamadı, varsayılan sonuç");
-                return Ok(ScriptResult::default());
-            }
-        };
-
-        let ctx_table = self.lua.create_table().map_err(|e| e.to_string())?;
-        ctx_table
-            .set("entity_id", ctx.entity_id)
-            .map_err(|e| e.to_string())?;
-        ctx_table.set("dt", ctx.dt).map_err(|e| e.to_string())?;
-        ctx_table
-            .set("elapsed", self.elapsed_time)
-            .map_err(|e| e.to_string())?;
-
-        let pos = self.lua.create_table().map_err(|e| e.to_string())?;
-        pos.set("x", ctx.position[0]).map_err(|e| e.to_string())?;
-        pos.set("y", ctx.position[1]).map_err(|e| e.to_string())?;
-        pos.set("z", ctx.position[2]).map_err(|e| e.to_string())?;
-        ctx_table.set("position", pos).map_err(|e| e.to_string())?;
-
-        let vel = self.lua.create_table().map_err(|e| e.to_string())?;
-        vel.set("x", ctx.velocity[0]).map_err(|e| e.to_string())?;
-        vel.set("y", ctx.velocity[1]).map_err(|e| e.to_string())?;
-        vel.set("z", ctx.velocity[2]).map_err(|e| e.to_string())?;
-        ctx_table.set("velocity", vel).map_err(|e| e.to_string())?;
-
-        let input = self.lua.create_table().map_err(|e| e.to_string())?;
-        input.set("w", ctx.key_w).map_err(|e| e.to_string())?;
-        input.set("a", ctx.key_a).map_err(|e| e.to_string())?;
-        input.set("s", ctx.key_s).map_err(|e| e.to_string())?;
-        input.set("d", ctx.key_d).map_err(|e| e.to_string())?;
-        input
-            .set("space", ctx.key_space)
-            .map_err(|e| e.to_string())?;
-        input.set("up", ctx.key_up).map_err(|e| e.to_string())?;
-        input.set("down", ctx.key_down).map_err(|e| e.to_string())?;
-        input.set("left", ctx.key_left).map_err(|e| e.to_string())?;
-        input
-            .set("right", ctx.key_right)
-            .map_err(|e| e.to_string())?;
-        ctx_table.set("input", input).map_err(|e| e.to_string())?;
-
-        self.arm_budget();
-        let result_table: LuaTable = func.call(ctx_table).map_err(|e| {
-            warn!(path, func_name, error = %e, "[Scripting] run_entity_update: Lua çalışma-zamanı hatası");
-            format!("Lua runtime: {}", e)
-        })?;
-
-        let mut result = ScriptResult::default();
-
-        if let Ok(pos) = result_table.get::<LuaTable>("position") {
-            let x: f32 = pos.get("x").unwrap_or(0.0);
-            let y: f32 = pos.get("y").unwrap_or(0.0);
-            let z: f32 = pos.get("z").unwrap_or(0.0);
-            result.new_position = Some([x, y, z]);
-        }
-
-        if let Ok(vel) = result_table.get::<LuaTable>("velocity") {
-            let x: f32 = vel.get("x").unwrap_or(0.0);
-            let y: f32 = vel.get("y").unwrap_or(0.0);
-            let z: f32 = vel.get("z").unwrap_or(0.0);
-            result.new_velocity = Some([x, y, z]);
-        }
-
-        Ok(result)
     }
 
     /// Direct access to the command queue (internals).
@@ -1151,15 +1017,14 @@ mod soundness {
     /// `lua_State` through `&Lua` and two threads sharing `&ScriptEngine` would
     /// race on it.
     ///
-    /// The audited shared surface is exactly these three methods, none of which
+    /// The audited shared surface is exactly these two methods, neither of which
     /// reads `self.lua`:
     ///   - `flush_commands`
-    ///   - `get_pending_audio_scene_commands`
     ///   - `command_queue`
     ///
     /// This test calls each of them through a genuinely shared `&ScriptEngine`
     /// obtained from two threads at once. It cannot prove the absence of a
-    /// future `&self` VM access on its own — but it does prove these three stay
+    /// future `&self` VM access on its own — but it does prove these two stay
     /// callable from a shared reference, so converting one of them to
     /// `&mut self` (the correct move if it ever needs the VM) breaks this test
     /// and forces the SAFETY comment to be revisited.
@@ -1174,7 +1039,6 @@ mod soundness {
                     // Every `&self` method on the audited list, exercised
                     // concurrently. If any of these grew a `self.lua` access,
                     // this is a data race that Miri/TSan would flag here.
-                    let _ = shared.get_pending_audio_scene_commands();
                     let _ = shared.command_queue().len();
                 });
             }
@@ -1196,8 +1060,8 @@ mod soundness {
         fn _needs_mut(e: &mut ScriptEngine) {
             let _ = e.has_function("nope.lua", "on_update");
         }
-        fn _needs_mut_2(e: &mut ScriptEngine, ctx: &ScriptContext) {
-            let _ = e.run_entity_update("nope.lua", "on_update", ctx);
+        fn _needs_mut_2(e: &mut ScriptEngine) {
+            let _ = e.update_entity(1, "nope.lua", 1.0 / 60.0, &Default::default());
         }
     }
 }
@@ -2109,79 +1973,6 @@ end
             .load_script("/nonexistent/gizmo/definitely_missing_5f2a.lua")
             .unwrap_err();
         assert!(err.contains("okunamadı"), "okuma hatası mesajı beklenir, gelen: {err}");
-    }
-
-    /// The error path: for a script that was never loaded, run_entity_update must give a 'not
-    /// loaded' error.
-    #[test]
-    fn run_entity_update_on_unloaded_script_errors() {
-        let mut engine = ScriptEngine::new().unwrap();
-        let ctx = ScriptContext::default();
-        let err = engine
-            .run_entity_update("never_loaded.lua", "on_entity_update", &ctx)
-            .unwrap_err();
-        assert!(err.contains("not loaded"), "mesaj: {err}");
-    }
-
-    /// run_entity_update must pass ctx (position + dt) into Lua and lift the returned position
-    /// table out as ScriptResult.new_position. A function that does not exist gives the
-    /// default.
-    #[test]
-    fn run_entity_update_marshals_position_and_extracts_result() {
-        let mut engine = ScriptEngine::new().unwrap();
-        let path = unique_temp("marshal_pos");
-        std::fs::write(
-            &path,
-            "function mv(ctx)\n  return { position = { x = ctx.position.x + ctx.dt, y = ctx.position.y, z = ctx.position.z } }\nend\n",
-        )
-        .unwrap();
-        engine.load_script(&path).unwrap();
-
-        let ctx = ScriptContext {
-            entity_id: 42,
-            dt: 0.5,
-            position: [10.0, -1.0, 2.0],
-            ..Default::default()
-        };
-
-        let result = engine.run_entity_update(&path, "mv", &ctx).unwrap();
-        assert_eq!(result.new_position, Some([10.5, -1.0, 2.0]));
-        assert_eq!(result.new_velocity, None, "script velocity döndürmedi");
-
-        // Var olmayan fonksiyon → default (her ikisi None).
-        let empty = engine.run_entity_update(&path, "yok_boyle_fn", &ctx).unwrap();
-        assert_eq!(empty.new_position, None);
-        assert_eq!(empty.new_velocity, None);
-
-        let _ = std::fs::remove_file(&path);
-    }
-
-    /// run_entity_update must pass the input flags into Lua's ctx.input, so a script can return
-    /// a velocity based on them.
-    #[test]
-    fn run_entity_update_marshals_input_flags() {
-        let mut engine = ScriptEngine::new().unwrap();
-        let path = unique_temp("marshal_input");
-        std::fs::write(
-            &path,
-            "function ctl(ctx)\n  local vx = 0\n  if ctx.input.d then vx = 1 end\n  if ctx.input.a then vx = vx - 1 end\n  return { velocity = { x = vx, y = 0, z = 0 } }\nend\n",
-        )
-        .unwrap();
-        engine.load_script(&path).unwrap();
-
-        let mut ctx = ScriptContext {
-            key_d: true, // sağa
-            ..Default::default()
-        };
-        let r = engine.run_entity_update(&path, "ctl", &ctx).unwrap();
-        assert_eq!(r.new_velocity, Some([1.0, 0.0, 0.0]));
-
-        ctx.key_d = false;
-        ctx.key_a = true; // sola
-        let r2 = engine.run_entity_update(&path, "ctl", &ctx).unwrap();
-        assert_eq!(r2.new_velocity, Some([-1.0, 0.0, 0.0]));
-
-        let _ = std::fs::remove_file(&path);
     }
 
     /// has_function must return true only for functions defined in a loaded script.

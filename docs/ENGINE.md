@@ -2343,7 +2343,74 @@ kalanları alması mümkün değil. Yani yukarıdaki on üç madde "motor gönde
 "kimse gönderemez"e dönüyor. Tetikleyici: bu altsistemlerden birini kendi yazmak isteyen bir oyun;
 çaresi muhtemelen `PlayReport`'a bir varyant, çünkü raporlama zaten enjekte edilen kanal.
 
-Bir sonraki oturum aynı soruyu öteki dönüş değerlerine ve öteki API tablolarına sorsun.
+**Aynı soru öteki dönüş değerlerine soruldu ve üç ÖLÜ KOL çıktı (2026-08-18).** Bu sefer araç
+tahmin değil, deponun kendi taraması: `crates/gizmo/tests/unmentioned_api.rs` yeniden koşuldu
+(**1406 public fn'in 109'u üretimde anılmıyor**) ve scripting crate'inin sırası okundu. Üçü de
+"kimse çağırmıyor" değil — üçü de **çağrılsa bile doğru cevabı veremeyecek** kod:
+
+- **`get_pending_audio_scene_commands` her zaman boş `Vec` döndürüyordu.** Gövdesi tek satır
+  `Vec::new()`, üstünde ne zaman çağrılması gerektiğini soran iki yorum; belgesi ise "çalışma
+  zamanında bekleyen ses/sahne komutlarını döndürür" diyordu. Yani bir önceki maddede düzeltilen
+  kusurun **taslağı**: ses komutlarını "demo tarafında" bekleyen kanal, hiç bağlanmamış. Gerçek
+  kanal `flush_commands`'in dönüş değeri, ve onun artık tüketicisi var. Silindi.
+- **`run_entity_update` + `ScriptContext` + `ScriptResult`: ikinci bir varlık-başı protokol.**
+  Lua'ya bir `ctx` tablosu (pozisyon, hız ve **dokuz sabit tuş bayrağı**) veriyor, geri dönen
+  `{position, velocity}` tablosunu çıkarıyor ve uygulamayı **çağırana** bırakıyordu. Canlı protokol
+  bu değil: `update_entity` → `on_entity_update(entity_id, dt, props)`, etkiler komut kuyruğundan.
+  Son çağıranı `0de4bee`'de (silinen gizmo-fight tümleştirmesi) gitmiş; o günden beri motorda
+  uygulayanı olmayan bir sonuç türü duruyordu. İki protokolün maliyeti soyut değil: bir sonraki
+  bağlama ölü olanı seçebilir, ve sabit tuş listesi `input` tablosunun sınırlı bir kopyası — üstelik
+  onu dolduracak olan da çağıranın kendisi. Silindi; `ScriptContext`'in belgesi zaten "geriye dönük
+  uyumluluk için tutuluyor" diyordu, ki 0.x'te ve dışarıda kullanıcısı olmayan bir tür için bu
+  cümlenin kendisi ipucu.
+- **Crate'in bütün `cfg(target_arch = "wasm32")` kolu — hiçbir yapılandırmada derlenemez.**
+  `dummy_engine.rs` (104 satır), wasm için `register_script_components` no-op'u ve `Dummy*` takma
+  adları. Ölçüm: `cargo check -p gizmo-scripting --target wasm32-unknown-unknown` mlua-sys'in build
+  script'inde ölüyor — *"don't know how to build Lua for wasm32-unknown-unknown"*. Yani o kolun var
+  olma sebebi olan hedef, crate'in **hiç kurulamadığı** hedef. Tüketiciler bunu zaten biliyor:
+  `gizmo-app` ve `gizmo-editor` bu crate'i `[target.'cfg(not(target_arch = "wasm32"))'.dependencies]`
+  altında listeliyor, ve `cargo tree -p demo-web --target wasm32-unknown-unknown` içinde
+  `gizmo-scripting` **sıfır** kez geçiyor. Hiç derlenmediğinin kanıtı sürüklenmenin kendisi:
+  stub'ın `update_entity`'si **üç** argüman alıyordu, gerçeği dört — üstelik hemen üstünde
+  "imzaları aynı tutmak çağıran kodun iki hedefte de değişmeden derlenmesini sağlar" diyen bir
+  yorumla. Gerçekten yük taşıyan desen crate düzeyinde değil, **tüketicide ve öğe başına**:
+  `gizmo-editor`'ün `draw_script_section`'ı iki gövdeli ve script denetçisi cfg'li — ve o kol
+  wasm'da **lint'leniyor**, farkı yapan da bu.
+  **Tetikleyici** (bir stub'ı geri getirmek için): tarayıcı yapısında `Script` bileşenlerinin sahne
+  gidiş-dönüşünde hayatta kalmasını isteyen bir oyun, ya da wasm32'de derlenen bir Lua backend'i.
+  İlk adım her iki durumda da manifestte `mlua`'yı hedefe kapılamak — yoksa stub, crate'in
+  kurulamadığı bir hedef için yazılmış olmayı sürdürür.
+
+Yöntem notu, çünkü aynı tuzağa yine düşüldü: wasm ölçümü ilk kez `cargo check … | tail -30` ile
+alındı ve **kabuk 0 döndürdü** — CLAUDE.md'nin "boruya sokmak çıkış kodunu maskeler" uyarısının
+tam olarak kendisi. Build'in çöktüğü ancak çıktı okunduğunda görüldü. Boruya sokulan bir cargo
+komutunun yeşil görünmesi bir kanıt değildir.
+
+Bir sonraki oturuma iki iz, ikisi de aynı sorunun bir sonraki katmanı:
+- **Dövüş altsistemi: sözleşmenin "ya da bir script" yarısı Lua'dan ulaşılamıyor.**
+  `FighterController` bileşeninin kendi belgesi bunu bilerek söylüyor — *"arkasında zamanlayıcı
+  olmayan saf veri; `current_move_frame`'i ilerleten, `input_buffer`'ı besleyen ya da
+  `hitstop_frames`/`hitstun_frames`'i geri sayan bir şey bu crate'te yok — **oyun (ya da bir
+  script)** her sabit karede bunları saymalı"*. Bileşeni üreten var (studio'nun `scene_ops`'u
+  ekliyor, denetçi düzenliyor, sahne serileştiriyor); **sayan yok**: workspace'teki bütün yazımlar
+  atama (`apply_hitstop`, `apply_hitstun`, `SetFighterMove`), tek bir azaltma ya da ilerletme yok.
+  Ölçülen sonuç Lua tarafında: `fighter._buffers` `input_buffer`'dan besleniyor, onu dolduran
+  olmadığı için **her zaman boş** — yani `check_combo` (crate'in en çok testi olan, boşluk sınırı
+  tam ölçülmüş fonksiyonu) bu motorda hiç dolu bir tampon göremiyor. Ve `_is_locked` script'e
+  **boolean** olarak veriliyor, oysa geri saymak için **sayı** gerekiyor: bir script başlattığı
+  donmayı bitiremiyor, hareket karesini hiç ilerletemiyor, dolayısıyla `is_in_active_window` hiç
+  açılmıyor. **Karar bekleyen iki yol:** sayaçları sayı olarak sunup ilerletme yazımını eklemek,
+  ya da bileşenin belgesindeki "(ya da bir script)" ifadesini kaldırıp tick'in Rust host'un işi
+  olduğunu söylemek. Fixture yazmadan önce hangisinin istendiğine karar verilmeli.
+- **Kare enterpolasyonu: `alpha` her kare hesaplanıyor, kimse okumuyor.** Buradaki ilk şüphe
+  (`windowed/event.rs`'te `let _ = steps;`) bakınca eridi — `run_fixed_and_update`'in döndürdüğü
+  `FrameSteps` bir **kopya**, asıl değerler `PhysicsTime` kaynağında duruyor ve trace'e de
+  yazılıyor. Ama bir kat aşağıda soru duruyor: `PhysicsTime::compute_alpha()` her karede
+  çağrılıyor, `alpha()` de belgesinde `lerp(prev, curr, alpha)` diyor, ve workspace'te onu okuyan
+  **hiçbir render yolu yok** (tek geçtiği yerler tanımı ve testi). Yani ya enterpolasyon
+  gömen oyunun işi — o zaman belge bunu söylemeli — ya da motorun render'ı sabit adımlar arasında
+  hiç enterpole etmiyor, ki bu düşük adım hızında görünür bir titremedir. Bu, ölçülecek bir şey:
+  önce `PhysicsTime::alpha`'nın gerçek tüketicisi aranmalı, sonra karar.
 
 Düzeltilmiş ve kaydı tutulan yedi kusur. İlk üçü: script sırası (`HashMap` → `BTreeMap`,
 proses başına rastgeleydi), on altı komutun sessizce yutulması, bir script'in hatasının ötekileri

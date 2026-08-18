@@ -66,14 +66,12 @@ pub mod api_time;
 pub mod api_vehicle;
 pub mod commands;
 
-#[cfg(target_arch = "wasm32")]
-pub mod dummy_engine;
 /// The Lua VM, the `Script` component and the per-entity update path.
 pub mod engine;
 
 pub use commands::{CommandQueue, ScriptCommand};
 
-pub use engine::{Script, ScriptContext, ScriptEngine, ScriptResult, ScriptValue};
+pub use engine::{Script, ScriptEngine, ScriptValue};
 
 /// Registers the scripting layer's serializable scene components (currently
 /// [`Script`]) into a scene `ComponentRegistry`.
@@ -82,18 +80,29 @@ pub use engine::{Script, ScriptContext, ScriptEngine, ScriptResult, ScriptValue}
 /// app / editor / facade) so that `gizmo-scene` itself stays free of any
 /// dependency on `gizmo-scripting`. Without this call a scene round-trips fine,
 /// it simply won't (de)serialize `Script` components.
-#[cfg(not(target_arch = "wasm32"))]
 pub fn register_script_components(reg: &mut gizmo_core::registry::ComponentRegistry) {
     reg.register_serializable::<Script>("Script")
         .expect("built-in component 'Script' registration must not conflict");
 }
 
-/// No-op on `wasm32`, where the Lua-backed scripting engine is unavailable.
-#[cfg(target_arch = "wasm32")]
-pub fn register_script_components(_reg: &mut gizmo_core::registry::ComponentRegistry) {}
-
-#[cfg(target_arch = "wasm32")]
-pub use dummy_engine::{
-    Script as DummyScript, ScriptContext as DummyContext, ScriptEngine as DummyEngine,
-    ScriptResult as DummyResult,
-};
+// THIS CRATE DOES NOT EXIST ON wasm32, and the `cfg(target_arch = "wasm32")` arm that used to sit
+// here was never compiled by anything. Measured 2026-08-18, not assumed:
+// `cargo check -p gizmo-scripting --target wasm32-unknown-unknown` dies in mlua-sys's build
+// script — "don't know how to build Lua for wasm32-unknown-unknown" — so the one configuration
+// that arm existed for is a configuration in which the crate cannot be built at all. Its
+// consumers already know that: `gizmo-app` and `gizmo-editor` both list this crate under
+// `[target.'cfg(not(target_arch = "wasm32"))'.dependencies]`, and `cargo tree -p demo-web
+// --target wasm32-unknown-unknown` shows zero occurrences of it.
+//
+// The proof it never compiled is in what it had drifted into: `dummy_engine::update_entity` took
+// three arguments where the real one takes four, under a comment promising that identical
+// signatures let "calling code compile unchanged on both targets".
+//
+// The pattern that IS load-bearing is per-item, in the consumer: `gizmo-editor` keeps two bodies
+// for `draw_script_section` and cfg's the script inspector out. That one is linted on wasm, which
+// is the difference.
+//
+// TRIGGER for reviving a stub here: a browser build that wants `Script` components to survive a
+// scene round-trip, or an mlua backend that builds for wasm32. Either way the first step is
+// target-gating `mlua` in this crate's manifest, so the crate can compile at all on the target
+// the stub is for.
