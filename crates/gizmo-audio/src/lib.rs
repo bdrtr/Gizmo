@@ -187,6 +187,9 @@ pub struct AudioManager {
     // Aktif uzamsal/normal çalıcıları takip edip parametrelerini güncellemek için
     active_spatial_sinks: HashMap<u64, SpatialPlayer>,
     active_sinks: HashMap<u64, Player>,
+    // Which loaded sound each live sink was started from. A sink id is what the engine holds, but
+    // a NAME is what a script has: `audio.stop("music")` cannot mean anything else.
+    sink_sounds: HashMap<u64, String>,
     next_sink_id: u64,
 
     // The live low-pass cutoff, shared with every source this manager has started and read on
@@ -271,6 +274,7 @@ impl AudioManager {
                     sound_buffers: HashMap::new(),
                     active_spatial_sinks: HashMap::new(),
                     active_sinks: HashMap::new(),
+                    sink_sounds: HashMap::new(),
                     next_sink_id: 1,
                     muffle: MuffleControl::new(),
                     mixer: Mixer::new(),
@@ -453,6 +457,7 @@ impl AudioManager {
         // listener is underwater, or on a bus the player has turned down, is already at the right
         // volume on its first buffer.
         self.active_sinks.insert(id, sink);
+        self.sink_sounds.insert(id, name.to_string());
         self.mixer.route(id, Mixer::DEFAULT_BUS);
         self.apply_mix(id);
         Ok(id)
@@ -518,6 +523,7 @@ impl AudioManager {
         self.next_sink_id = self.next_sink_id.wrapping_add(1);
 
         self.active_spatial_sinks.insert(id, sink);
+        self.sink_sounds.insert(id, name.to_string());
         self.mixer.route(id, Mixer::DEFAULT_BUS);
         self.apply_mix(id);
         Ok(id)
@@ -620,6 +626,34 @@ impl AudioManager {
             .copied()
             .collect();
         self.mixer.retain_routes(|id| live.contains(&id));
+        self.sink_sounds.retain(|id, _| live.contains(id));
+    }
+
+    /// Stops every live sound that was started from `name`, and reports how many it stopped.
+    ///
+    /// A sink id is what [`AudioManager::play`] hands back and what engine code keeps, but a
+    /// *name* is all a script ever has — `audio.stop("music")` cannot mean anything else. Stopping
+    /// **all** of them is deliberate: a name is not an instance, so a game that fired the same
+    /// footstep three times and asks for it to stop means all three.
+    ///
+    /// Returns `0` for a name nothing is playing, which is not an error — a script stopping a
+    /// sound that has already finished is ordinary.
+    pub fn stop_by_name(&mut self, name: &str) -> usize {
+        let ids: Vec<u64> = self
+            .sink_sounds
+            .iter()
+            .filter(|(_, sound)| sound.as_str() == name)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in &ids {
+            self.stop(*id);
+        }
+        ids.len()
+    }
+
+    /// The loaded sound a live sink is playing, if the manager still knows it.
+    pub fn sink_sound(&self, id: u64) -> Option<&str> {
+        self.sink_sounds.get(&id).map(String::as_str)
     }
 
     /// Returns whether the sink with the given id is currently playing.

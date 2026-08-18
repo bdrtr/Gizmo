@@ -2263,6 +2263,33 @@ Scripting'de bir sonraki adım, sayıyı azaltmak değil **taramayı yeniden ko�
 yazmak**. Sayı bu yüzden buradan kaldırıldı: arkasında iş olmayan bir sayaç, ilerleme ölçüsü gibi
 görünüp değil.
 
+**Tarama yeniden koşturuldu ve ilk maddesi yazıldı (2026-08-18): Lua'nın ses API'si uçtan uca
+çalışıyordu, ucu hariç.** `audio.play("jump")` bir `ScriptCommand::PlaySound` kuyruğa atıyor;
+`ScriptEngine::flush_commands` bunu uygulayamıyor — scripting crate'i ses altsistemine bağlı değil —
+ve komutu **çağırana geri veriyor**. `PlayLoop`'taki iki çağrı yerinin ikisi de o dönüş değerini
+`let _unhandled = …` ile atıyordu, ve workspace'te başka tüketici yoktu. Yani üç çağrılık ses API'si
+(play / play_3d / stop) editörün Play modunda da, ihraç edilmiş her oyunda da **hiçbir ses
+çıkarmıyordu** — üstelik `api_audio.rs`'te komutun kuyruğa atıldığını doğrulayan bir birim testiyle
+birlikte. Kuyruğu ölçen bir test, etkisi olmayan bir API'yi onaylar.
+
+Bulma yöntemi kaydedilmeye değer: kusur okuyarak değil, **bir dönüş değerini takip ederek** çıktı —
+`flush_commands`'in `Vec<ScriptCommand>` döndürdüğünü görüp "bunu kim alıyor?" diye sormak yetti.
+Cevap: kimse. Aynı soru §8'in "üretimde çağrısı olmayan public fn" taramasının bir üst katmanı.
+
+Ses tarafı artık `PlayLoop`'ta karşılanıyor (`apply_script_audio`): `play`, `play_3d` (spatial
+sistemin kullandığı **aynı** dinleyiciyle — yoksa ses ikinci karesinde zıplar) ve `stop`.
+`stop` için `AudioManager::stop_by_name` eklendi: sink id motorun elindeki şey, ama bir script'in
+elinde yalnız **isim** var. Sahne/diyalog/yarış/kamera komutları bilerek geri verilmeye devam
+ediyor — editör yazarın altından sahne değiştiremez.
+
+Uçtan uca test gerçek donanımda (`demo/tests/the_runtime_runs_scripts.rs`), ve negatif kontrolü
+koşturuldu: `apply_script_audio` çağrısı kaldırılınca test kırmızıya düşüyor (0 ses, 1 beklenirken).
+Cihazsız yarısı ayrı: komutların **tanınması** — asıl kırık olan yarı — `split_audio_actions` ile
+birim testinde.
+
+**Taramanın kalanı hâlâ açık.** Bu bir madde; bölümün başındaki "sayıyı değil listeyi yaz" işi
+bitmedi. Bir sonraki oturum aynı soruyu öteki dönüş değerlerine ve öteki API tablolarına sorsun.
+
 Düzeltilmiş ve kaydı tutulan yedi kusur. İlk üçü: script sırası (`HashMap` → `BTreeMap`,
 proses başına rastgeleydi), on altı komutun sessizce yutulması, bir script'in hatasının ötekileri
 iptal etmesi. **2026-08-15'te dördü daha — kayıtta adı geçen bütün açık maddeler:**

@@ -14,6 +14,65 @@ fn should_autostart(source: &AudioSource) -> bool {
     source.is_3d && !source.has_played && source._internal_sink_id.is_none()
 }
 
+/// Where the game is listening from: the primary camera's position, its velocity (for Doppler)
+/// and its right vector (for the two ears).
+///
+/// Pulled out of [`audio_spatial_system`] so that the script command path can ask the same
+/// question — a `audio.play_3d` from Lua has to place its sound against the same listener the
+/// spatial system will update it against, or the sound jumps on its second frame.
+#[derive(Debug, Clone, Copy)]
+pub struct Listener {
+    /// Where the listener is, in world space.
+    pub position: Vec3,
+    /// How fast it is moving — the Doppler shift's other half.
+    pub velocity: Vec3,
+    /// Its right vector, which is what separates the ears.
+    pub right: Vec3,
+}
+
+impl Default for Listener {
+    fn default() -> Self {
+        Self {
+            position: Vec3::ZERO,
+            velocity: Vec3::ZERO,
+            right: Vec3::new(1.0, 0.0, 0.0),
+        }
+    }
+}
+
+impl Listener {
+    /// Half the distance between a pair of human ears, in metres.
+    const EAR_DISTANCE: f32 = 0.2;
+
+    /// The two ear positions rodio's spatial player wants, left first.
+    pub fn ears(&self) -> ([f32; 3], [f32; 3]) {
+        let offset = self.right * (Self::EAR_DISTANCE / 2.0);
+        let left = self.position - offset;
+        let right = self.position + offset;
+        ([left.x, left.y, left.z], [right.x, right.y, right.z])
+    }
+}
+
+/// Finds the primary camera and reads the listener off it. Falls back to a listener at the origin
+/// facing +X when there is no primary camera — a scene with no camera has no listening position,
+/// and silence is a worse answer than a sound placed at the origin.
+pub fn listener(world: &World) -> Listener {
+    let mut listener = Listener::default();
+    if let Some(mut query) = world.query::<(&gizmo_renderer::Camera, &Transform)>() {
+        for (e, (cam, t)) in query.iter_mut() {
+            if cam.primary {
+                listener.position = t.position;
+                listener.right = t.rotation.mul_vec3(Vec3::new(1.0, 0.0, 0.0)).normalize();
+                if let Some(v) = world.borrow::<Velocity>().get(e) {
+                    listener.velocity = v.linear;
+                }
+                break;
+            }
+        }
+    }
+    listener
+}
+
 /// Advanced 3D Spatial Audio and Doppler Effect System
 ///
 /// This system runs every frame and:
@@ -34,36 +93,12 @@ pub fn audio_spatial_system(world: &mut World, _dt: f32) {
 
     audio.update(); // Biten sesleri temizler
 
-    // Kamerayı (Listener/Dinleyici) bul
+    // Kamerayı (Listener/Dinleyici) bul — script komut yolu da aynı fonksiyonu çağırıyor.
     let transforms = world.borrow::<Transform>();
-
-    // Aktif kamerayı bulmak için (Sahnede gizmo_scene::Camera bileşenine sahip objeyi arıyoruz)
-    let mut listener_pos = Vec3::ZERO;
-    let mut listener_vel = Vec3::ZERO;
-    let mut listener_right = Vec3::new(1.0, 0.0, 0.0);
-
-    if let Some(mut query) = world.query::<(&gizmo_renderer::Camera, &Transform)>() {
-        for (e, (cam, t)) in query.iter_mut() {
-            if cam.primary {
-                listener_pos = t.position;
-                listener_right = t.rotation.mul_vec3(Vec3::new(1.0, 0.0, 0.0)).normalize();
-
-                // Eğer kameranın bir hızı varsa al
-                if let Some(v) = world.borrow::<Velocity>().get(e) {
-                    listener_vel = v.linear;
-                }
-                break;
-            }
-        }
-    }
-
-    // İnsan başı (kulaklar arası mesafe genelde ~0.2 metredir)
-    let ear_distance = 0.2;
-    let left_ear = listener_pos - (listener_right * (ear_distance / 2.0));
-    let right_ear = listener_pos + (listener_right * (ear_distance / 2.0));
-
-    let left_ear_arr = [left_ear.x, left_ear.y, left_ear.z];
-    let right_ear_arr = [right_ear.x, right_ear.y, right_ear.z];
+    let ear = listener(world);
+    let listener_pos = ear.position;
+    let listener_vel = ear.velocity;
+    let (left_ear_arr, right_ear_arr) = ear.ears();
 
     let source_ids: Vec<u32> = world.borrow::<AudioSource>().entities().collect();
     // SAFETY: exclusive `&mut World`; AudioSource is a distinct component type from the

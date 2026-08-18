@@ -21,6 +21,14 @@ function on_entity_update(id, dt, props)
 end
 "#;
 
+/// A script that asks for a sound. The whole Lua audio API is three calls, and this is the one a
+/// game makes most.
+const NOISY: &str = r#"
+function on_entity_update(id, dt, props)
+    audio.play("beep")
+end
+"#;
+
 struct TempScript(std::path::PathBuf);
 
 impl TempScript {
@@ -168,5 +176,50 @@ fn a_missing_script_is_reported_once_and_does_not_stop_the_frame() {
         position_of(&world, id),
         Vec3::ZERO,
         "a broken script must not move anything, and must not take the frame down with it"
+    );
+}
+
+/// **A script can make a sound.** On real hardware, because silence is exactly the symptom.
+///
+/// `audio.play` queues a `ScriptCommand::PlaySound`, and `ScriptEngine::flush_commands` cannot
+/// apply it — the scripting crate does not depend on the audio subsystem — so it *returns* it to
+/// the host. Both call sites in `PlayLoop` discarded that return value (`let _unhandled = …`) and
+/// no other consumer existed in the workspace. So the Lua audio API was complete except for the
+/// end: the call worked, the command was queued, `api_audio.rs`'s unit test asserted the queueing,
+/// and nothing anywhere ever played a sound. Found 2026-08-18 by following the return value.
+///
+/// The assertion goes through `stop_by_name` because that is the only question a script's
+/// vocabulary can ask: it stops every live sink started from that name and reports how many, so a
+/// `1` here is "the sound the script asked for is playing".
+///
+/// `#[ignore]` for the usual reason: CI runners have no sound card, where `AudioManager::new`
+/// legitimately fails. `cargo test -p demo --test the_runtime_runs_scripts -- --ignored`
+#[test]
+#[ignore = "needs a real audio output device — run with --ignored"]
+fn a_script_can_make_a_sound() {
+    let script = TempScript::new("noisy", NOISY);
+    let (mut world, _id) = world_with_scripted_entity(&script.path());
+
+    let mut audio = match AudioManager::new() {
+        Ok(a) => a,
+        Err(e) => panic!("no audio output device on this machine: {e}"),
+    };
+    audio
+        .load_sound("beep", concat!(env!("CARGO_MANIFEST_DIR"), "/assets/audio/engine.wav"))
+        .expect("the demo's own engine.wav must be loadable");
+    world.insert_resource(audio);
+
+    let input = Input::default();
+    let mut play = PlayLoop::new();
+    play.step(&mut world, 1.0 / 60.0, &input, &mut |_| {});
+
+    let mut audio = world
+        .get_resource_mut::<AudioManager>()
+        .expect("the manager is still a resource");
+    assert_eq!(
+        audio.stop_by_name("beep"),
+        1,
+        "the script asked for a sound and nothing is playing — the host is dropping the audio \
+         commands `flush_commands` hands back again"
     );
 }

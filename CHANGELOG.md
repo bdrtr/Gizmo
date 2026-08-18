@@ -277,6 +277,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   dead sinks but nothing dropped what the mixer knew about them; `clean_dead_sinks` now retires
   both together.
 
+- **A Lua script's `audio.play` made no sound — anywhere.** `audio.play` / `play_3d` / `stop` queue
+  a `ScriptCommand`, and `ScriptEngine::flush_commands` returns the ones it cannot apply itself (the
+  scripting crate does not depend on the audio subsystem). Both call sites in `PlayLoop` discarded
+  that return value with `let _unhandled = …`, and no other consumer existed in the workspace — so
+  the whole Lua audio API was a no-op in the editor's Play mode and in every exported game, while a
+  unit test asserted that the command reached the queue.
+
+  `PlayLoop` now answers them: `play`, `play_3d` against the same listener the spatial audio system
+  uses, and `stop` through the new `AudioManager::stop_by_name`, which stops every live sound
+  started from a given name — a sink id is what engine code holds, but a *name* is all a script has.
+  Scene, dialogue, race and camera commands are still handed back deliberately: the editor must not
+  switch scenes under the author.
+
 - **A force or torque applied to a sleeping body did nothing at all.** `RigidBody::force_accumulator`
   and `torque_accumulator` are the public fields a game writes for a continuous push — a thruster, a
   wind volume, a conveyor — and the integrator returns early on `is_sleeping`, so the accumulator was

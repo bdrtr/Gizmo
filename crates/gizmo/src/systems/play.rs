@@ -87,6 +87,132 @@ enum ReloadEdge {
     Recovered,
 }
 
+/// One thing a script asked the audio subsystem for.
+///
+/// The scripting crate cannot name `AudioManager` — it depends on `gizmo-core` and the physics
+/// components, not on audio — so what it can do is queue a command and hand it back. This is the
+/// vocabulary on this side of that handover.
+#[cfg(all(feature = "scripting", feature = "audio"))]
+#[derive(Debug, PartialEq)]
+enum AudioAction {
+    /// `audio.play(name)`
+    Play(String),
+    /// `audio.play_3d(name, x, y, z)`
+    Play3d(String, crate::math::Vec3),
+    /// `audio.stop(name)`
+    Stop(String),
+}
+
+/// Split what `flush_commands` handed back into audio actions and everything else.
+///
+/// Separated from the doing so the *decision* is testable without an audio device: the defect this
+/// closes was not that the sound was wrong, it was that the command was never looked at.
+#[cfg(all(feature = "scripting", feature = "audio"))]
+fn split_audio_actions(
+    unhandled: Vec<crate::scripting::ScriptCommand>,
+) -> (Vec<AudioAction>, Vec<crate::scripting::ScriptCommand>) {
+    use crate::scripting::ScriptCommand as Cmd;
+    let mut actions = Vec::new();
+    let mut rest = Vec::new();
+    for cmd in unhandled {
+        match cmd {
+            Cmd::PlaySound(name) => actions.push(AudioAction::Play(name)),
+            Cmd::PlaySound3D(name, pos) => actions.push(AudioAction::Play3d(name, pos)),
+            Cmd::StopSound(name) => actions.push(AudioAction::Stop(name)),
+            other => rest.push(other),
+        }
+    }
+    (actions, rest)
+}
+
+/// The ears a script-placed 3D sound is measured against.
+///
+/// The same listener the spatial system uses, so a sound placed by `audio.play_3d` does not jump
+/// on the frame after it starts.
+#[cfg(all(feature = "scripting", feature = "audio", feature = "render", feature = "physics"))]
+fn script_listener_ears(world: &World) -> ([f32; 3], [f32; 3]) {
+    crate::systems::audio::listener(world).ears()
+}
+
+/// Without a renderer there is no camera to listen from, and without physics no `Transform` to
+/// read one off. A game in that shape (a headless server with sound, a text game) still gets its
+/// sound: it is placed at the origin, which is the only listening position such a world has.
+#[cfg(all(
+    feature = "scripting",
+    feature = "audio",
+    not(all(feature = "render", feature = "physics"))
+))]
+fn script_listener_ears(_world: &World) -> ([f32; 3], [f32; 3]) {
+    ([-0.1, 0.0, 0.0], [0.1, 0.0, 0.0])
+}
+
+/// Answer the audio commands a script queued; hand back the ones this does not speak for.
+///
+/// **What this closes.** `ScriptEngine::flush_commands` applies everything the scripting crate can
+/// reach and *returns* the rest. Both call sites in this file discarded that return value with
+/// `let _unhandled = …`, and no other consumer existed anywhere in the workspace — so
+/// `audio.play("jump")` from Lua queued a command, passed a unit test asserting the command was
+/// queued, and made no sound in the editor's Play mode or in any exported game. The API existed
+/// end to end except for the end.
+///
+/// Scene, dialogue, race and camera commands are still returned unhandled, and that is deliberate:
+/// the editor must not switch scenes under the author.
+#[cfg(all(feature = "scripting", feature = "audio"))]
+fn apply_script_audio(
+    world: &mut World,
+    unhandled: Vec<crate::scripting::ScriptCommand>,
+) -> Vec<crate::scripting::ScriptCommand> {
+    let (actions, rest) = split_audio_actions(unhandled);
+    if actions.is_empty() {
+        return rest;
+    }
+
+    // Read the listener before taking the manager: both borrow the world.
+    let (left_ear, right_ear) = script_listener_ears(world);
+
+    let Some(mut manager) = world.get_resource_mut::<gizmo_audio::AudioManager>() else {
+        // A game built without an audio device — or one whose `AudioManager::new` failed, which is
+        // a `Result` the demos handle by continuing silently. Say it at debug level: a script
+        // asking for sound in a world with no audio is a configuration, not an error.
+        tracing::debug!(
+            count = actions.len(),
+            "[Scripting] ses komutu geldi ama dünyada AudioManager yok"
+        );
+        return rest;
+    };
+
+    for action in actions {
+        match action {
+            AudioAction::Play(name) => {
+                if let Err(e) = manager.play(&name) {
+                    tracing::warn!(sound = %name, error = %e, "[Scripting] audio.play başarısız");
+                }
+            }
+            AudioAction::Play3d(name, pos) => {
+                if let Err(e) =
+                    manager.play_3d(&name, [pos.x, pos.y, pos.z], left_ear, right_ear)
+                {
+                    tracing::warn!(sound = %name, error = %e, "[Scripting] audio.play_3d başarısız");
+                }
+            }
+            AudioAction::Stop(name) => {
+                let stopped = manager.stop_by_name(&name);
+                tracing::trace!(sound = %name, stopped, "[Scripting] audio.stop");
+            }
+        }
+    }
+    rest
+}
+
+/// Without the `audio` feature there is nothing to hand them to, so they stay unhandled.
+#[cfg(all(feature = "scripting", not(feature = "audio")))]
+fn apply_script_audio(
+    _world: &mut World,
+    unhandled: Vec<crate::scripting::ScriptCommand>,
+) -> Vec<crate::scripting::ScriptCommand> {
+    unhandled
+}
+
 /// Decide what to say about one reload result, and remember the answer.
 ///
 /// The studio used to run `let _ = engine.reload_if_changed(&path);` — result discarded — and the
@@ -192,9 +318,11 @@ impl PlayLoop {
             //
             // (`entity.set_position` and its neighbours do not write the world; they push a
             // command. So "flush" is not bookkeeping — it is when a script's decision becomes
-            // true.) Unhandled ones — audio, scene switching — are dropped: the editor must not
-            // switch scenes under the author, and the runtime has no consumer for them yet.
-            let _unhandled = engine.flush_commands(world, dt);
+            // true.) What `flush_commands` hands back is what the scripting crate cannot reach
+            // from where it stands; the audio half is answered here, and scene switching is still
+            // dropped on purpose — the editor must not switch scenes under the author.
+            let unhandled = engine.flush_commands(world, dt);
+            let _unhandled = apply_script_audio(world, unhandled);
 
             // Per-entity `on_update`. The entity's own property overrides ride along: scripts are
             // cached per path, so a per-entity value cannot live in the shared Lua environment.
@@ -238,7 +366,8 @@ impl PlayLoop {
             // and in every exported game, and nothing caught it because the movement did happen.
             // Draining an empty queue is a `Vec` swap, so the frame that queued nothing pays
             // nothing.
-            let _unhandled = engine.flush_commands(world, dt);
+            let unhandled = engine.flush_commands(world, dt);
+            let _unhandled = apply_script_audio(world, unhandled);
 
             if let Ok(mut logs) = engine.log_queue.lock() {
                 for (level, message) in logs.drain(..) {
@@ -279,6 +408,38 @@ fn plan_steps(accumulator: f32, dt: f32) -> (u32, f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The audio commands must be *recognised* — the half of the defect that has nothing to do
+    /// with sound, and the only half that can be asserted without a device.
+    ///
+    /// What was broken was never the playing; it was that `flush_commands`' return value went
+    /// into `let _unhandled` and no one ever looked at it. So this asserts the looking: the three
+    /// audio commands leave the unhandled list, and everything else — scene switching, which is
+    /// dropped on purpose — stays in it.
+    #[cfg(all(feature = "scripting", feature = "audio"))]
+    #[test]
+    fn the_audio_commands_are_taken_out_of_the_unhandled_pile() {
+        use crate::math::Vec3;
+        use crate::scripting::ScriptCommand as Cmd;
+
+        let (actions, rest) = split_audio_actions(vec![
+            Cmd::PlaySound("jump".into()),
+            Cmd::LoadScene("level2".into()),
+            Cmd::PlaySound3D("explosion".into(), Vec3::new(1.0, 2.0, 3.0)),
+            Cmd::StopSound("music".into()),
+        ]);
+
+        assert_eq!(
+            actions,
+            vec![
+                AudioAction::Play("jump".into()),
+                AudioAction::Play3d("explosion".into(), Vec3::new(1.0, 2.0, 3.0)),
+                AudioAction::Stop("music".into()),
+            ],
+            "all three of the Lua audio API's calls must be answered"
+        );
+        assert_eq!(rest.len(), 1, "and the scene command must still be handed back, not eaten");
+    }
 
     #[test]
     fn a_frame_worth_of_time_buys_exactly_one_step() {
