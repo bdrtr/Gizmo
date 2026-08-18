@@ -29,6 +29,14 @@ pub const FIXED_DT: f32 = 1.0 / 60.0;
 /// a window drag, a laptop lid — leaves the next frame owing hundreds of steps, which makes the
 /// frame after that slower still. That is the death spiral, and it is why the accumulator is
 /// clamped rather than merely drained.
+///
+/// **Unreachable from either of this loop's two drivers**, measured 2026-08-19: the studio and the
+/// exported runtime both hand it the windowed loop's delta, which `Time::update` has already
+/// clamped to 0.05 s — two steps at 60 Hz, three with a leftover banked, never sixteen. The number
+/// is a guard for a caller that hands in raw time, and this loop has none today. It is the same
+/// story one layer down (`PhysicsTime`'s 8) and a different one further down again
+/// (`PhysicsWorld`'s 64 bounds work per frame but not debt, because that accumulator is not
+/// clamped) — three ceilings, and at most one of them doing anything at a time.
 pub const MAX_STEPS: u32 = 16;
 
 /// Something the step wants a human to know.

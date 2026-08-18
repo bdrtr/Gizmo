@@ -187,6 +187,27 @@ impl Default for Time {
 /// a swap-in, a stuttering frame) at most 8 steps are ever queued. Time past the cap is
 /// **dropped**, not deferred: the simulation falls behind wall-clock rather than entering a
 /// spiral of death where each catch-up frame costs more than it recovers.
+///
+/// **Which ceiling actually governs depends on who feeds this, and on the windowed path it is not
+/// this one.** Measured 2026-08-19:
+///
+/// - The **windowed** runtime hands in [`Time::dt`], which is clamped to `max_dt` (0.05 s by
+///   default) *after* `time_scale` — so `set_time_scale(100.0)` cannot push past it either. At the
+///   default 60 Hz that is **2 steps** from a clamped frame and 3 with a leftover already banked,
+///   never 8: the cap sits at 0.1333 s and nothing can hand in more than 0.0667 s counting the
+///   leftover. (Two, not the three the arithmetic suggests, because `3 x fixed_dt` is 0.050000004
+///   in f32 — a hair over the clamp.) The 8 is dead code on that path, and the number a reader
+///   should reason about is `Time::max_dt`.
+/// - The **headless** runtime passes the raw wall-clock delta straight in (it never inserts a
+///   `Time` at all). There this cap is the only one there is, it does fire, and the time past it
+///   is genuinely gone — which is what the `warn!` in [`PhysicsTime::accumulate`] reports.
+/// - Above ~140 Hz the cap shrinks below the windowed clamp (`8/hz < 0.05`) and starts firing
+///   there too: at 240 Hz a stalled 0.05 s frame wants 12 steps and gets 8.
+///
+/// The three ceilings in this engine are easy to confuse and only one of them is doing anything at
+/// a time: this one, `gizmo::systems::PlayLoop::MAX_STEPS` (16, and likewise unreachable from its
+/// two drivers — they hand it the same clamped delta), and `PhysicsWorld`'s `MAX_SUBSTEPS` (64,
+/// which bounds work per frame but not debt, since that accumulator is never clamped).
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct PhysicsTime {
     /// Fixed physics timestep (seconds). Default: 1/60.
@@ -220,10 +241,21 @@ impl PhysicsTime {
 
     /// Adds the render frame dt to the accumulator.
     /// Called once at the start of every frame.
+    ///
+    /// Time past `max_accumulator` is dropped, and **says so**: it used to vanish in silence, so a
+    /// headless server ticking slower than the cap (the one path that reaches it — see the type's
+    /// docs) fell behind wall-clock with nothing anywhere to read. The log fires only on the branch
+    /// that loses time, so a frame that fits costs nothing.
     pub fn accumulate(&mut self, render_dt: f32) {
         self.accumulator += render_dt;
         // Spiral of death koruması
         if self.accumulator > self.max_accumulator {
+            tracing::warn!(
+                dropped_s = self.accumulator - self.max_accumulator,
+                max_accumulator_s = self.max_accumulator,
+                fixed_dt_s = self.fixed_dt,
+                "[PhysicsTime] accumulator hit its cap — simulated time dropped, the simulation is                  now behind wall-clock"
+            );
             self.accumulator = self.max_accumulator;
         }
     }
@@ -458,10 +490,67 @@ mod tests {
             pt.consume_step();
             steps += 1;
         }
+        assert_eq!(
+            steps, 8,
+            "spiral guard: a one-second delta must clamp to exactly the 8 steps the cap allows, \
+             not merely to at most 8 — `<=` passed for every smaller number too, including the \
+             3 the windowed path is really limited to"
+        );
+    }
+
+    /// **The cap that governs on the windowed path is `Time::max_dt`, not this one.**
+    ///
+    /// The type's docs promise "however long a stall lasts, at most 8 steps": true, and on the
+    /// windowed runtime unreachable, because `Time::update` clamps the delta to 0.05 s before
+    /// `PhysicsTime` ever sees it. Three steps, not eight — and the difference matters to anyone
+    /// sizing a catch-up budget from the 8.
+    #[test]
+    fn the_windowed_clamp_and_not_the_cap_is_what_limits_catch_up() {
+        let mut time = Time::new();
+        time.update(1.0); // a one-second stall: a breakpoint, a window drag
         assert!(
-            steps <= 8,
-            "Spiral koruması: max 8 adım, bulundu: {}",
-            steps
+            (time.dt() - 0.05).abs() < 1e-6,
+            "Time clamps to max_dt first: {}",
+            time.dt()
+        );
+
+        let mut pt = PhysicsTime::new(60);
+        pt.accumulate(time.dt());
+        let mut steps = 0;
+        while pt.should_step() {
+            pt.consume_step();
+            steps += 1;
+        }
+        assert_eq!(
+            steps, 2,
+            "0.05 s at 60 Hz is TWO steps, not the three the arithmetic suggests: 3 x fixed_dt is \
+             0.050000004 in f32, a hair over the clamp"
+        );
+
+        // Three only when a leftover was already banked — and that is the ceiling, since the
+        // leftover is always below one step: r + 0.05 < 4 x fixed_dt.
+        let mut with_leftover = PhysicsTime::new(60);
+        with_leftover.accumulate(0.016);
+        with_leftover.accumulate(time.dt());
+        let mut leftover_steps = 0;
+        while with_leftover.should_step() {
+            with_leftover.consume_step();
+            leftover_steps += 1;
+        }
+        assert_eq!(leftover_steps, 3, "with a leftover banked, three — and never four");
+
+        // Raise the rate and the cap starts governing again: at 240 Hz the same stalled frame
+        // wants twelve steps and the accumulator only holds eight.
+        let mut fast = PhysicsTime::new(240);
+        fast.accumulate(time.dt());
+        let mut fast_steps = 0;
+        while fast.should_step() {
+            fast.consume_step();
+            fast_steps += 1;
+        }
+        assert_eq!(
+            fast_steps, 8,
+            "8/240 s = 0.0333 s is below the 0.05 s clamp, so above ~140 Hz the cap is live again"
         );
     }
 

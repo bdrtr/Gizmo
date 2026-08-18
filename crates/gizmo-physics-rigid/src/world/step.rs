@@ -147,12 +147,25 @@ impl PhysicsWorld {
             "physics frame stepped"
         );
         if steps == MAX_SUBSTEPS {
-            // Hit the substep ceiling: the accumulator still holds unspent time, so the sim
-            // is running slower than real time (death-spiral guard clamped it). Time is lost.
+            // Hit the substep ceiling: this frame stopped stepping with time still in the
+            // accumulator, so the sim is behind wall-clock.
+            //
+            // **Nothing is lost, though** — the old text here said "time lost" in the same breath
+            // as "the accumulator still holds unspent time", which cannot both be true. This
+            // accumulator is never clamped: the leftover carries into the next frame. Nor does it
+            // run away, and the two numbers are why: intake is `dt.min(0.25)` per frame while a
+            // saturated frame drains 64 x 1/240 = 0.2667 s, so every ceiling-hitting frame pays
+            // off 1/60 s of debt. That is the opposite arrangement from `PhysicsTime`, which
+            // clamps and genuinely drops time — see its docs on which ceiling governs where.
+            //
+            // Through the ECS this branch is unreachable: `physics_step_system` is handed a fixed
+            // 1/60 s, which is 4 substeps of the 64. It is for a game driving `step` itself with a
+            // large variable delta.
             tracing::warn!(
                 max_substeps = MAX_SUBSTEPS,
                 accumulator = self.accumulator,
-                "Physics hit the substep ceiling — simulation is behind real time (time lost)"
+                "Physics hit the substep ceiling — simulation is behind real time (the leftover \
+                 carries to the next frame; it is not dropped)"
             );
         }
 

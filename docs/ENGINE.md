@@ -2649,10 +2649,26 @@ komşu köşeler):
   NEGATİF bir `contains` guard'ı ve yorumları kesmiyordu — koruduğu satırın üstüne yazılan bir
   açıklama onu kırmızıya düşürdü. Pozitif guard'lar için 2026-08-18'de öğrenilen dersin ayna
   görüntüsü; artık o da yorumları kesiyor.
-- **`PhysicsTime`'ın 8 adımlık ölüm-sarmalı tavanına ulaşılamıyor.** `Time::update` dt'yi 0.05'e
-  kırpıyor (`time.rs:62,87`) ve `windowed/event.rs:575` bir kez daha kırpıyor; akümülatörde kalan
-  da her zaman < 1/60. Yani birikim en fazla ~0.0667 s = 4 adım, tavan ise 8·(1/60) = 0.133.
-  Tavan ya ölü ya da yanlış yerde; hangisi olduğu ölçülmeli.
+- ~~`PhysicsTime`'ın 8 adımlık tavanına ulaşılamıyor~~ **— ölçüldü: üç tavan var, aynı anda en
+  fazla biri iş yapıyor; belgeler düzeltildi, sayı değil.** Hiçbiri "yanlış" değil, ama her biri
+  başka bir giriş kapısını koruyor ve hangisinin GEÇERLİ olduğu çağırana bağlı:
+  - `PhysicsTime`'ın **8**'i: pencereli yolda ölü, çünkü `Time::update` dt'yi `max_dt`'ye (0.05 s)
+    ve time_scale'den SONRA kırpıyor. 60 Hz'de bu **2 adım** (kalıntı varsa 3) — üçün değil ikinin
+    çıkmasının sebebi f32: `3 × (1/60) = 0.050000004`, kırpmanın bir kıl üstünde. Ama tavan iki
+    yerde canlı: **headless** çalışma zamanı ham duvar-saati deltasını doğrudan veriyor (`Time`
+    kaynağını hiç eklemiyor), ve **~140 Hz üstünde** `8/hz < 0.05` olduğu için yine devreye giriyor
+    (240 Hz'de takılan bir kare 12 adım isteyip 8 alıyor). Kırpılan zaman artık SESSİZ değil:
+    `accumulate` düşürdüğü süreyi `warn!` ile bildiriyor.
+  - `PlayLoop`'un **16**'sı: iki sürücüsü de aynı kırpılmış deltayı verdiği için ulaşılamıyor.
+  - `PhysicsWorld`'ün **64**'ü: kare başına İŞİ sınırlıyor ama BORCU değil, çünkü o akümülatör hiç
+    kırpılmıyor. Yorumu "time lost" diyordu — yanlış, ve aynı cümlede "akümülatörde harcanmamış
+    zaman duruyor" da diyordu, ikisi birden doğru olamaz. Kaçmıyor da: alım kare başına
+    `dt.min(0.25)`, doymuş bir karenin boşaltması 64 × 1/240 = 0.2667 s, yani her tavana değen kare
+    borcun 1/60 s'sini ödüyor. ECS yolundan zaten ulaşılamıyor (`physics_step_system` sabit 1/60
+    veriyor = 4 alt-adım).
+
+  Testler de sıkıldı: sarmal testi `<= 8` yerine `== 8` diyor (`<=` her küçük sayıyı da geçiriyordu,
+  pencereli yolun gerçekten yaptığı 2'yi dahil), ve yeni bir test pencereli gerçeği sabitliyor.
 - **§4'ün "96 public type `#[non_exhaustive]`" sayısı bayat** (`ENGINE.md:1103`); CLAUDE.md
   2026-08-18'de 122'ye düzeltilmişti. §8'in kendi kuralı bu satırı adıyla anıyor.
 
