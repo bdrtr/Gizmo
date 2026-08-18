@@ -18,6 +18,31 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A Lua script can read the fight, not just write to it: `fighter.state(id)`.** The read half of
+  the fighting API used to be one boolean wide (`is_locked`), so a script could ask the engine to
+  throw a jab and then had no way to learn what frame it was on, whether it was hitting, or when it
+  ended — the whole point of frame data. `update_fighter_read_api` now mirrors the entire component
+  each frame, in the same `table[entity_id] = value` shape as `entity._positions`:
+
+  ```lua
+  local s = fighter.state(id)   -- nil if that entity is not a fighter
+  s.health, s.max_health, s.player_id, s.blocking, s.crouching
+  s.hitstop, s.hitstun, s.locked
+  s.move        -- nil when neutral: name, frame, total, startup, active, recovery,
+                -- attacking (is_in_active_window), damage, hitstun_on_hit, hitstop_on_hit
+  ```
+
+  With helpers `fighter.is_locked`, `fighter.is_attacking` and `fighter.move_frame`. The one-bit
+  `_is_locked` table is gone — it was a second source for a fact `_state` now carries. The snapshot
+  is deliberately one frame old: the script pass mirrors at the top of the frame and the fight
+  clock is spent at the bottom of it, which is the value a script reacting to its own move wants.
+
+  `fighter.set_move` also gained two **optional** trailing arguments, `hitstun` and `hitstop` — the
+  frames the move inflicts when it lands. Every Lua-authored move used to inherit `FrameData`'s
+  20/5 silently, with no way to set or read them; a call that names neither still gets exactly
+  that. And the input-buffer mirror now carries `just_released`, without which charge moves and
+  negative-edge specials were invisible to Lua however carefully the buffer was filled.
+
 - **The fight subsystem has a clock: `FighterController::tick`, `FrameData::total_frames` and
   `gizmo_physics_dynamics::fighter_frame_system`.** `tick` spends one fixed frame on one fighter —
   it counts `hitstop_frames`/`hitstun_frames` down and advances `current_move_frame`, ending the

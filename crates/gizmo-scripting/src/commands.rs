@@ -200,6 +200,16 @@ pub enum ScriptCommand {
         recovery: u32,
         /// Damage dealt on hit.
         damage: f32,
+        /// Frames of stun this move inflicts on the fighter it hits.
+        ///
+        /// Carried here rather than left to `FrameData::default()` because it is the move's own
+        /// number and the script authoring the move is the only thing that knows it. Until this
+        /// field existed every Lua-authored move silently inherited a 20-frame stun, and the
+        /// script could neither set it nor read it back.
+        hitstun: u32,
+        /// Frames of hit-freeze this move inflicts on connect — the weight of the blow. Same
+        /// story as `hitstun`: it used to be a constant 5 for every move Lua could start.
+        hitstop: u32,
     },
     /// Freeze a fighter for a number of frames on impact — the hit-stop that gives a blow its
     /// weight.

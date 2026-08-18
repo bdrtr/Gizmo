@@ -60,6 +60,30 @@ function on_entity_update(id, dt, props)
 end
 "#;
 
+/// A script that throws a jab and then **watches its own move**: it counts the frames on which the
+/// engine says it is hitting, and remembers the highest move frame it ever saw. Both numbers are
+/// reported through the only channel a script has that a test can read — its position.
+const WATCHER: &str = r#"
+frames = 0
+hits = 0
+last_frame = 0
+stun = 0
+function on_entity_update(id, dt, props)
+    frames = frames + 1
+    if frames == 1 then
+        -- 30 frames of stun and 7 of freeze: this move's own numbers, not the engine's defaults.
+        fighter.set_move(id, "jab", 5, 3, 2, 8.0, 30, 7)
+    elseif fighter.is_attacking(id) then
+        hits = hits + 1
+    end
+    local f = fighter.move_frame(id)
+    if f ~= nil then last_frame = f end
+    local s = fighter.state(id)
+    if s ~= nil and s.move ~= nil then stun = s.move.hitstun_on_hit end
+    entity.set_position(id, hits, last_frame, stun)
+end
+"#;
+
 struct TempScript(std::path::PathBuf);
 
 impl TempScript {
@@ -382,5 +406,54 @@ fn a_move_from_a_script_reaches_its_active_window_and_ends() {
         still_committed_after,
         (1..=9).collect::<Vec<_>>(),
         "the move must occupy startup+active+recovery = 10 frames and be over on the tenth"
+    );
+}
+
+/// **A script can watch the move it started.** The read side of the fighting API used to be one
+/// boolean wide — `is_locked` — so a script could ask the engine to throw a jab and then had no
+/// way to learn what frame it was on, whether it was hitting, or when it ended. Frame data exists
+/// to be read on the frame it matters.
+///
+/// The script reports through its own position because that is the one channel a Lua script has
+/// that a test can read: `x` counts the frames the engine said it was hitting, `y` is the highest
+/// move frame it ever saw.
+///
+/// The numbers are the contract. `x == 3`: a 5/3/2 jab hits on exactly three frames, and the
+/// script saw all three. `y == 9`: the last frame index it observed before the move ended, one
+/// behind the tenth and final tick — because the mirror is taken at the top of the frame and the
+/// clock is spent at the bottom of it, which is exactly the ordering a script reacting to its own
+/// move needs.
+#[test]
+fn a_script_can_read_the_move_it_started() {
+    let script = TempScript::new("watcher", WATCHER);
+    let (mut world, entity) = world_with_scripted_entity(&script.path());
+    let id = entity.id();
+    world.add_component(
+        entity,
+        gizmo::physics::components::FighterController::new(1),
+    );
+
+    let input = Input::default();
+    let mut play = PlayLoop::new();
+    for _ in 0..12 {
+        play.step(&mut world, 1.0 / 60.0, &input, &mut |_| {});
+    }
+
+    let reported = position_of(&world, id);
+    assert_eq!(
+        reported.x, 3.0,
+        "the script must see its own hitting window — all three frames of it. 0 here is a script \
+         that cannot read the move it authored"
+    );
+    assert_eq!(
+        reported.y, 9.0,
+        "and it must be able to read the frame counter advancing, up to the frame before the \
+         move ended"
+    );
+    assert_eq!(
+        reported.z, 30.0,
+        "the stun the script authored must survive the whole round trip — Lua argument, command, \
+         component, mirror, Lua again. 20 here is `FrameData`'s default winning, which is what \
+         every Lua-authored move used to get whatever it asked for"
     );
 }

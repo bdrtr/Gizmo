@@ -1,6 +1,10 @@
 //! The fighter API — the fighting-system functions exposed to Lua.
 //!
-//! Used from Lua scripts to query combos, apply hitstop/hitstun and start attacks.
+//! Two halves. The **write** half queues commands: start a move, apply hitstop, apply hitstun.
+//! The **read** half is a per-frame mirror of every `FighterController` in the world
+//! ([`update_fighter_read_api`]) — health, stance, the move in flight with the frame it is on,
+//! and the counters the engine's fight clock spends — plus the input-buffer history combo
+//! recognition walks.
 
 use crate::commands::{CommandQueue, ScriptCommand};
 use gizmo_core::World;
@@ -11,17 +15,34 @@ use std::sync::Arc;
 pub fn register_fighter_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Result<(), LuaError> {
     crate::api_table::register_protected(lua, "fighter", |fighter_table| {
 
-    // Oku-Yaz tablosu
+    // The engine writes these every frame (`update_fighter_read_api`); Lua reads them through the
+    // helpers below. Same shape as `entity._positions` and friends: `table[entity_id] = value`.
     fighter_table.raw_set("_buffers", lua.create_table()?)?;
-    fighter_table.raw_set("_is_locked", lua.create_table()?)?;
+    fighter_table.raw_set("_state", lua.create_table()?)?;
 
     // === SET FIGHTER MOVE ===
+    //
+    // `hitstun` and `hitstop` are optional trailing arguments: a move that does not name them
+    // keeps the 20/5 every Lua-authored move used to be stuck with, so calls written before they
+    // existed behave identically. They are the move's own numbers — what it inflicts when it
+    // lands — and the script authoring the move is the only thing that knows them.
     {
         let cq = command_queue.clone();
         fighter_table.raw_set(
             "set_move",
             lua.create_function(
-                move |_, (id, name, startup, active, recovery, damage): (u32, String, u32, u32, u32, f32)| {
+                move |_,
+                      (id, name, startup, active, recovery, damage, hitstun, hitstop): (
+                    u32,
+                    String,
+                    u32,
+                    u32,
+                    u32,
+                    f32,
+                    Option<u32>,
+                    Option<u32>,
+                )| {
+                    let defaults = gizmo_physics_core::components::fighter::FrameData::default();
                     cq.push(ScriptCommand::SetFighterMove {
                         id,
                         name,
@@ -29,6 +50,8 @@ pub fn register_fighter_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Resu
                         active,
                         recovery,
                         damage,
+                        hitstun: hitstun.unwrap_or(defaults.hitstun),
+                        hitstop: hitstop.unwrap_or(defaults.hitstop),
                     });
                     Ok(())
                 },
@@ -64,8 +87,27 @@ pub fn register_fighter_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Resu
     // Lua tarafında kombo kontrol eden yardımcı fonksiyon
     lua.load(
         r#"
+        function fighter.state(id)
+            return fighter._state[id]
+        end
+
         function fighter.is_locked(id)
-            return fighter._is_locked[id] or false
+            local s = fighter._state[id]
+            return s ~= nil and s.locked or false
+        end
+
+        -- Is this fighter's move inside its hitting window right now? The one question frame data
+        -- exists to answer, and until the engine had a fight clock it could never be `true`.
+        function fighter.is_attacking(id)
+            local s = fighter._state[id]
+            return s ~= nil and s.move ~= nil and s.move.attacking or false
+        end
+
+        -- How far through its move, as `frame, total`; `nil` when the fighter is neutral.
+        function fighter.move_frame(id)
+            local s = fighter._state[id]
+            if s == nil or s.move == nil then return nil end
+            return s.move.frame, s.move.total
         end
 
         function fighter.check_combo(id, combo, max_gap)
@@ -105,37 +147,101 @@ pub fn register_fighter_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Resu
 }
 
 #[tracing::instrument(skip_all, name = "script_fighter_read")]
-/// Mirrors the fighters' read-only state — input buffers and lock flags — into Lua, every frame.
+/// Mirrors every fighter's state — the whole component, not a boolean — into Lua, once a frame.
+///
+/// **What this used to hand across, and why that was not enough.** The only fighter fact a script
+/// could read was `is_locked`'s boolean. Not the health it was fighting over, not the move in
+/// flight, and above all not `current_move_frame` — so a script could start a move and then had
+/// no way to learn what frame it was on, whether it was hitting, or when it ended. The whole
+/// reason frame data exists is to be *read* on the frame it matters, and the read side of this API
+/// was one bit wide.
+///
+/// The shape follows `entity._positions` and its neighbours: `table[entity_id] = value`, rebuilt
+/// each frame from the world, read through the Lua helpers registered next to it.
+///
+/// ```lua
+/// local s = fighter.state(id)          -- nil if that entity is not a fighter
+/// s.health, s.max_health               -- numbers
+/// s.player_id, s.blocking, s.crouching
+/// s.hitstop, s.hitstun, s.locked       -- the counters the fight clock spends, and their sum
+/// s.move                               -- nil when neutral, otherwise:
+///   s.move.name, s.move.frame, s.move.total
+///   s.move.startup, s.move.active, s.move.recovery
+///   s.move.attacking                   -- is_in_active_window(): hitting on THIS frame
+///   s.move.damage, s.move.hitstun_on_hit, s.move.hitstop_on_hit
+/// ```
+///
+/// **The snapshot is one frame old by the time a per-entity hook runs**, and deliberately so: the
+/// scripting pass mirrors, then scripts run, then `PlayLoop` spends the fixed steps that advance
+/// these numbers. So `s.move.frame` is where the move stood when this frame began — which is the
+/// value a script reacting to it should be looking at anyway.
 pub fn update_fighter_read_api(lua: &Lua, world: &World) -> Result<(), LuaError> {
     // The real table, not the global: the global is a read-only proxy so a script cannot
     // rewrite the API (see `api_table`), and the engine's per-frame writes go behind it.
     let fighter_table = crate::api_table::raw(lua, "fighter")?;
 
     let buffers = lua.create_table()?;
-    let is_locked = lua.create_table()?;
+    let states = lua.create_table()?;
 
     let controllers = world.borrow::<gizmo_physics_core::components::FighterController>();
     for (eid, _) in controllers.iter() {
         if let Some(fighter) = controllers.get(eid) {
-            is_locked.set(eid, fighter.is_locked())?;
+            let state = lua.create_table()?;
+            state.set("player_id", fighter.player_id)?;
+            state.set("health", fighter.health)?;
+            state.set("max_health", fighter.max_health)?;
+            state.set("blocking", fighter.is_blocking)?;
+            state.set("crouching", fighter.is_crouching)?;
+            state.set("hitstop", fighter.hitstop_frames)?;
+            state.set("hitstun", fighter.hitstun_frames)?;
+            state.set("locked", fighter.is_locked())?;
+
+            if let Some(active) = &fighter.active_move {
+                let fd = &active.frame_data;
+                let move_table = lua.create_table()?;
+                move_table.set("name", active.name.clone())?;
+                move_table.set("frame", fighter.current_move_frame)?;
+                move_table.set("total", fd.total_frames())?;
+                move_table.set("startup", fd.startup)?;
+                move_table.set("active", fd.active)?;
+                move_table.set("recovery", fd.recovery)?;
+                move_table.set("damage", fd.damage)?;
+                // Named apart from `state.hitstun`/`state.hitstop`: these are what the move
+                // INFLICTS when it lands, not what this fighter is currently serving.
+                move_table.set("hitstun_on_hit", fd.hitstun)?;
+                move_table.set("hitstop_on_hit", fd.hitstop)?;
+                move_table.set("attacking", fighter.is_in_active_window())?;
+                state.set("move", move_table)?;
+            }
+
+            states.set(eid, state)?;
 
             let frames_table = lua.create_table()?;
             for (i, frame) in fighter.input_buffer.frames.iter().enumerate() {
                 let frame_table = lua.create_table()?;
-                
+
                 let jp_table = lua.create_table()?;
                 for k in &frame.just_pressed {
                     jp_table.set(k.clone(), true)?;
                 }
-                
+
                 let p_table = lua.create_table()?;
                 for k in &frame.pressed {
                     p_table.set(k.clone(), true)?;
                 }
-                
+
+                // The release edge was dropped on the floor here, which made charge moves,
+                // negative-edge specials and hold-and-release inputs — a whole class of fighting
+                // game move — invisible to Lua even with a buffer someone had filled.
+                let jr_table = lua.create_table()?;
+                for k in &frame.just_released {
+                    jr_table.set(k.clone(), true)?;
+                }
+
                 frame_table.set("just_pressed", jp_table)?;
                 frame_table.set("pressed", p_table)?;
-                
+                frame_table.set("just_released", jr_table)?;
+
                 frames_table.set(i + 1, frame_table)?;
             }
             buffers.set(eid, frames_table)?;
@@ -143,7 +249,7 @@ pub fn update_fighter_read_api(lua: &Lua, world: &World) -> Result<(), LuaError>
     }
 
     fighter_table.raw_set("_buffers", buffers)?;
-    fighter_table.raw_set("_is_locked", is_locked)?;
+    fighter_table.raw_set("_state", states)?;
 
     Ok(())
 }
@@ -256,18 +362,167 @@ mod tests {
         assert!(!matched, "eksik kombo tamamlanmamış sayılmalı");
     }
 
-    /// is_locked: false when there is no entry in the _is_locked table, true when there is.
+    /// The read helpers answer safely for an entity that is not a fighter at all — `false`, `nil`,
+    /// never an error. A script asking about the wrong id is the common case, not an exception.
     #[test]
-    fn is_locked_reads_table_with_false_default() {
+    fn the_read_helpers_have_safe_answers_for_a_missing_fighter() {
         let lua = Lua::new();
         register_fighter_api(&lua, Arc::new(CommandQueue::new())).unwrap();
         lua.load(
             r#"
+            assert(fighter.state(1) == nil, "dövüşçü yoksa state nil")
             assert(fighter.is_locked(1) == false, "giriş yoksa varsayılan false")
-            fighter._is_locked[1] = true
-            assert(fighter.is_locked(1) == true, "true set edilince true")
+            assert(fighter.is_attacking(1) == false, "giriş yoksa saldırmıyor")
+            assert(fighter.move_frame(1) == nil, "giriş yoksa kare nil")
             "#,
         )
+        .exec()
+        .unwrap();
+    }
+
+    /// The helpers read `_state`, and `false` in the table must come back as `false` rather than
+    /// being swallowed by Lua's `and`/`or` idiom.
+    #[test]
+    fn the_read_helpers_read_the_state_table() {
+        let lua = Lua::new();
+        register_fighter_api(&lua, Arc::new(CommandQueue::new())).unwrap();
+        lua.load(
+            r#"
+            fighter._state[1] = { locked = false, move = { frame = 4, total = 10, attacking = false } }
+            assert(fighter.is_locked(1) == false, "locked=false false dönmeli")
+            assert(fighter.is_attacking(1) == false, "attacking=false false dönmeli")
+            local f, t = fighter.move_frame(1)
+            assert(f == 4 and t == 10, "kare ve toplam okunmalı")
+
+            fighter._state[2] = { locked = true, move = { frame = 6, total = 10, attacking = true } }
+            assert(fighter.is_locked(2) == true, "locked=true true dönmeli")
+            assert(fighter.is_attacking(2) == true, "attacking=true true dönmeli")
+
+            fighter._state[3] = { locked = false }
+            assert(fighter.is_attacking(3) == false, "hareketi olmayan saldırmıyor")
+            assert(fighter.move_frame(3) == nil, "hareketi olmayanın karesi nil")
+            "#,
+        )
+        .exec()
+        .unwrap();
+    }
+
+    /// **The mirror carries the whole component, off a real world.**
+    ///
+    /// The read side used to hand Lua one boolean, so a script could start a move and never learn
+    /// what frame it was on — the thing frame data exists for. This drives the same function the
+    /// engine calls every frame and reads the numbers back out through the Lua helpers.
+    #[test]
+    fn the_mirror_carries_the_move_in_flight_and_its_counters() {
+        use gizmo_physics_core::components::fighter::{CombatMove, FighterController, FrameData};
+
+        let mut world = World::new();
+        let e = world.spawn();
+
+        let mut frame_data = FrameData::default();
+        frame_data.startup = 5;
+        frame_data.active = 3;
+        frame_data.recovery = 2;
+        frame_data.damage = 8.0;
+        frame_data.hitstun = 20;
+        frame_data.hitstop = 5;
+        let mut combat_move = CombatMove::default();
+        combat_move.name = "Jab".to_string();
+        combat_move.frame_data = frame_data;
+
+        let mut fighter = FighterController::new(2);
+        fighter.health = 73.5;
+        fighter.is_crouching = true;
+        fighter.active_move = Some(combat_move);
+        fighter.current_move_frame = 6; // inside the 5..8 window
+        fighter.apply_hitstop(4);
+        world.add_component(e, fighter);
+
+        let lua = Lua::new();
+        register_fighter_api(&lua, Arc::new(CommandQueue::new())).unwrap();
+        update_fighter_read_api(&lua, &world).unwrap();
+
+        lua.load(format!(
+            r#"
+            local s = fighter.state({id})
+            assert(s ~= nil, "dövüşçü aynada yok")
+            assert(s.player_id == 2, "player_id")
+            assert(math.abs(s.health - 73.5) < 0.001, "health")
+            assert(s.max_health == 100.0, "max_health — HUD barının paydası")
+            assert(s.crouching == true and s.blocking == false, "duruş")
+            assert(s.hitstop == 4 and s.hitstun == 0, "sayaçlar")
+            assert(s.locked == true, "hitstop varken kilitli")
+            assert(s.move ~= nil, "uçuşta bir hareket var")
+            assert(s.move.name == "Jab", "hareket adı")
+            assert(s.move.frame == 6 and s.move.total == 10, "kare 6/10")
+            assert(s.move.startup == 5 and s.move.active == 3 and s.move.recovery == 2, "fazlar")
+            assert(s.move.attacking == true, "6. kare vuruş penceresinin içinde")
+            assert(s.move.hitstun_on_hit == 20 and s.move.hitstop_on_hit == 5,
+                   "hareketin İSABET ETTİĞİNDE dayattığı süreler, dövüşçünün şu anki sayaçları değil")
+            assert(fighter.is_locked({id}) == true and fighter.is_attacking({id}) == true, "yardımcılar")
+            "#,
+            id = e.id()
+        ))
+        .exec()
+        .unwrap();
+    }
+
+    /// A neutral fighter mirrors with no `move` at all, rather than a stale one.
+    #[test]
+    fn a_neutral_fighter_mirrors_without_a_move() {
+        use gizmo_physics_core::components::fighter::FighterController;
+
+        let mut world = World::new();
+        let e = world.spawn();
+        world.add_component(e, FighterController::new(1));
+
+        let lua = Lua::new();
+        register_fighter_api(&lua, Arc::new(CommandQueue::new())).unwrap();
+        update_fighter_read_api(&lua, &world).unwrap();
+
+        lua.load(format!(
+            r#"
+            local s = fighter.state({id})
+            assert(s ~= nil and s.move == nil, "nötr dövüşçünün hareketi olmamalı")
+            assert(fighter.is_attacking({id}) == false, "ve saldırmıyor")
+            assert(fighter.move_frame({id}) == nil, "ve karesi yok")
+            "#,
+            id = e.id()
+        ))
+        .exec()
+        .unwrap();
+    }
+
+    /// The input-buffer mirror carries the RELEASE edge too. Without it a charge move — hold, then
+    /// let go — is invisible to Lua however carefully the buffer is filled.
+    #[test]
+    fn the_buffer_mirror_carries_the_release_edge() {
+        use gizmo_core::input::FrameActions;
+        use gizmo_physics_core::components::fighter::FighterController;
+        use std::collections::HashSet;
+
+        let mut world = World::new();
+        let e = world.spawn();
+        let mut fighter = FighterController::new(1);
+        fighter.input_buffer.frames.push_front(FrameActions {
+            pressed: HashSet::new(),
+            just_pressed: HashSet::new(),
+            just_released: HashSet::from(["Back".to_string()]),
+        });
+        world.add_component(e, fighter);
+
+        let lua = Lua::new();
+        register_fighter_api(&lua, Arc::new(CommandQueue::new())).unwrap();
+        update_fighter_read_api(&lua, &world).unwrap();
+
+        lua.load(format!(
+            r#"
+            local frame = fighter._buffers[{id}][1]
+            assert(frame.just_released ~= nil, "bırakma kenarı aynada olmalı")
+            assert(frame.just_released["Back"] == true, "bırakılan tuş okunmalı")
+            "#,
+            id = e.id()
+        ))
         .exec()
         .unwrap();
     }
@@ -293,11 +548,16 @@ mod tests {
         let cmds = cq.drain();
         assert_eq!(cmds.len(), 3);
         match &cmds[0] {
-            ScriptCommand::SetFighterMove { id, name, startup, active, recovery, damage } => {
+            ScriptCommand::SetFighterMove { id, name, startup, active, recovery, damage, hitstun, hitstop } => {
                 assert_eq!(*id, 1);
                 assert_eq!(name, "jab");
                 assert_eq!((*startup, *active, *recovery), (3, 2, 8));
                 assert!((damage - 5.5).abs() < 1e-6);
+                assert_eq!(
+                    (*hitstun, *hitstop),
+                    (20, 5),
+                    "a call that names neither must keep the frame-data defaults"
+                );
             }
             other => panic!("beklenen SetFighterMove, gelen {other:?}"),
         }

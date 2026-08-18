@@ -904,7 +904,7 @@ ScriptCommand::PlayAnimation { id, name, blend, loop_anim } => {
                         trace!(entity = id, "[Scripting] ClearAiTarget: hedefte NavAgent yok, komut atlandı");
                     }
                 }
-                ScriptCommand::SetFighterMove { id, name, startup, active, recovery, damage } => {
+                ScriptCommand::SetFighterMove { id, name, startup, active, recovery, damage, hitstun, hitstop } => {
                     let mut fighters = world.borrow_mut::<gizmo_physics_core::components::FighterController>();
                     if let Some(mut fighter) = fighters.get_mut(id) {
                         let mut frame_data =
@@ -913,6 +913,8 @@ ScriptCommand::PlayAnimation { id, name, blend, loop_anim } => {
                         frame_data.active = active;
                         frame_data.recovery = recovery;
                         frame_data.damage = damage;
+                        frame_data.hitstun = hitstun;
+                        frame_data.hitstop = hitstop;
                         let mut combat_move =
                             gizmo_physics_core::components::fighter::CombatMove::default();
                         combat_move.name = name;

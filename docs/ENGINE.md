@@ -2483,16 +2483,21 @@ altsisteminin geri kalanı, ve hiçbiri saatin kapsamında değil:
    (`api_table.rs`'in kendi belgesi bu boşluğu zaten söylüyor: *"a table the engine hands out by
    value … is unaffected"*), ve crate'in beş kombo testi tam olarak bunu yapıyor. Doğru cümle:
    **motor tamponu hiç doldurmuyor**, script kendisi doldurabiliyor.
-2. `SetFighterMove` **hitstun ve hitstop karelerini taşıyamıyor** (`commands.rs:190-203`: yalnız
-   startup/active/recovery/damage). Lua'dan başlatılan her hareket sessizce
-   `FrameData::default()`'ın 20/5'ini miras alıyor, ve script yazdığı hareketin kendi stun verisini
-   ne okuyabiliyor ne değiştirebiliyor.
-3. **Lua'ya hiçbir dövüşçü sayısı okunmuyor.** Sınırı geçen tek şey `is_locked`'ın boolean'ı;
-   `hitstop_frames`, `hitstun_frames`, `current_move_frame`, `active_move`, `health`, duruş —
-   altısı da okunamıyor. Deseni hazır: `api_entity.rs`'in `update_entity_read_api`'si (düz
-   `table[entity_id] = değer`), ki `_is_locked` zaten o şekli kullanıyor.
-4. Lua aynası `just_released`'ı **düşürüyor** (`api_fighter.rs:126-137` yalnız `just_pressed` ve
-   `pressed`'i kopyalıyor) — yani şarjlı/negatif-kenar hareketler script'e görünmez.
+2. ~~`SetFighterMove` hitstun ve hitstop karelerini taşıyamıyor~~ **— düzeltildi.** İkisi de
+   `fighter.set_move`'a **isteğe bağlı** son iki argüman oldu; verilmezse `FrameData::default()`'ın
+   20/5'i, yani daha önce yazılmış her çağrı aynen davranıyor. Öncesinde Lua'dan başlatılan her
+   hareket o 20/5'i sessizce miras alıyordu ve script ne okuyabiliyor ne değiştirebiliyordu.
+3. ~~Lua'ya hiçbir dövüşçü sayısı okunmuyor~~ **— düzeltildi.** `update_fighter_read_api` artık
+   bileşenin tamamını aynalıyor: `fighter.state(id)` → `health`, `max_health`, `player_id`,
+   `blocking`, `crouching`, `hitstop`, `hitstun`, `locked`, ve nötr değilse
+   `move = { name, frame, total, startup, active, recovery, attacking, damage, hitstun_on_hit,
+   hitstop_on_hit }`. Yardımcılar: `fighter.is_locked`, `fighter.is_attacking`,
+   `fighter.move_frame`. Şekil `entity._positions` deseninin aynısı. Tek bitlik `_is_locked`
+   tablosu silindi — aynı olgunun ikinci kaynağıydı. **Aynanın bir kare geriden geldiği bilinerek
+   bırakıldı**: script geçişi kareyi başında aynalıyor, saat ise sonunda harcanıyor, ki kendi
+   hareketine tepki veren bir script'in bakması gereken değer zaten o.
+4. ~~Lua aynası `just_released`'ı düşürüyor~~ **— düzeltildi.** Tampon aynası artık üç kümeyi de
+   taşıyor, yani şarjlı/negatif-kenar hareketler script'e görünür.
 5. Lua'nın `check_combo`'su ile Rust'ın `check_combo_strict`'i **farklı algoritmalar**: Lua yalnız
    `just_pressed`, Rust `just_pressed VEYA pressed` eşliyor. Beş test de Lua sürümüne bakıyor, yani
    ayrışma test takımına görünmüyor.
