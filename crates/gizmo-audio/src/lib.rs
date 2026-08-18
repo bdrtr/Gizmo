@@ -1,4 +1,10 @@
 #![deny(clippy::undocumented_unsafe_blocks)]
+#![warn(missing_docs)]
+//! (`missing_docs` is a RATCHET, like everywhere else in this workspace, and this crate was the
+//! last one to get the line — added 2026-08-18. It was already at zero, which is exactly why it
+//! went unnoticed: a crate that happens to be documented and a crate that cannot stop being
+//! documented look identical until someone adds a `pub fn`.)
+//!
 //! (`undocumented_unsafe_blocks` is a RATCHET: this crate carries no `unsafe` block without a
 //! `// SAFETY:` line stating why it is sound, and the lint keeps it that way. Every crate in the
 //! workspace except `gizmo-core` is at zero and denies it; `gizmo-core`'s ECS internals are the
@@ -10,6 +16,10 @@
 //! - [`AudioSource`] — an ECS component describing a 2D or 3D playable sound.
 //! - [`AudioManager`] — a resource that loads sounds into memory and plays,
 //!   updates and stops both global (stereo) and 3D spatial sinks.
+//! - [`Mixer`] — the buses (music/sfx/ui/voice), the master gain and the environment modifier.
+//!   **Every volume and speed that reaches rodio is composed there**, from what the game asked for
+//!   times the gains that apply; nothing multiplies into a sink and nothing has to be undone. See
+//!   the module's own docs for the measurement that shape came from.
 //! - [`AudioError`] — the error type returned when loading or playing sounds fails.
 //!
 //! Sounds are decoded from in-memory byte buffers (loaded once via
@@ -18,9 +28,12 @@
 //! distance. No `rodio` types appear in the public API, keeping the dependency
 //! contract internal.
 
+mod mixer;
+pub use mixer::Mixer;
+
 use rodio::stream::DeviceSinkBuilder;
 use rodio::{Decoder, MixerDeviceSink, Player, Source, SpatialPlayer};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{Cursor, Read};
 use std::path::Path;
@@ -93,6 +106,11 @@ pub struct AudioSource {
     pub loop_sound: bool,
     /// Distance at which the sound is fully attenuated (silent).
     pub max_distance: f32,
+    /// The mixer bus this sound plays on — the player's SFX slider, music slider, and so on.
+    /// See [`Mixer`]. Defaults to [`Mixer::DEFAULT_BUS`]; `#[serde(default)]` so a scene saved
+    /// before buses existed still loads, onto that same bus.
+    #[serde(default = "default_bus")]
+    pub bus: String,
     /// Internal id of the active sink playing this source, if any.
     pub _internal_sink_id: Option<u64>,
     /// Latches once this source has been auto-started, so a finished **one-shot** is not
@@ -109,6 +127,11 @@ impl Default for AudioSource {
     }
 }
 
+/// serde's fallback for [`AudioSource::bus`] — see that field.
+fn default_bus() -> String {
+    Mixer::DEFAULT_BUS.to_string()
+}
+
 impl AudioSource {
     /// Creates a new [`AudioSource`] for the sound with the given name.
     pub fn new(name: &str) -> Self {
@@ -119,6 +142,7 @@ impl AudioSource {
             pitch: 1.0,
             loop_sound: false,
             max_distance: 100.0, // Varsayılan değer
+            bus: default_bus(),
             _internal_sink_id: None,
             has_played: false,
         }
@@ -133,6 +157,12 @@ impl AudioSource {
     /// Sets the attenuation distance, returning the modified source.
     pub fn with_max_distance(mut self, dist: f32) -> Self {
         self.max_distance = dist;
+        self
+    }
+
+    /// Routes this sound to a mixer bus, returning the modified source. See [`Mixer`].
+    pub fn with_bus(mut self, bus: &str) -> Self {
+        self.bus = bus.to_string();
         self
     }
 }
@@ -156,8 +186,11 @@ pub struct AudioManager {
     active_sinks: HashMap<u64, Player>,
     next_sink_id: u64,
 
-    // Su-altı "boğma" modu: aktifken tüm sesler kısık + hafif düşük pitch (dampening).
-    underwater: bool,
+    // Buses, master, environment, and one route per live sink. THE ONLY PLACE a volume or a
+    // speed is decided: everything below writes `mixer.volume_for(id)` / `mixer.speed_for(id)`
+    // and nothing computes a level of its own. That is what stops two writers from fighting over
+    // one field, which is what the underwater muffle and the spatial system used to do.
+    mixer: Mixer,
 }
 
 // SAFETY: wasm32'de (atomics/paylaşımlı-bellek OLMADAN) yürütme tek thread'dir —
@@ -183,6 +216,7 @@ impl std::fmt::Debug for AudioManager {
             .field("active_spatial_sinks", &self.active_spatial_sinks.len())
             .field("active_sinks", &self.active_sinks.len())
             .field("next_sink_id", &self.next_sink_id)
+            .field("mixer", &self.mixer)
             .finish_non_exhaustive()
     }
 }
@@ -230,7 +264,7 @@ impl AudioManager {
                     active_spatial_sinks: HashMap::new(),
                     active_sinks: HashMap::new(),
                     next_sink_id: 1,
-                    underwater: false,
+                    mixer: Mixer::new(),
                 })
             }
             Err(e) => {
@@ -262,56 +296,104 @@ impl AudioManager {
         self.sound_buffers.insert(name.to_string(), bytes.into());
     }
 
-    /// Cleans up the finished sounds when update is called
+    /// Per-frame housekeeping: collects the sounds that have finished, then re-prices every live
+    /// sink **if** anything on the [`Mixer`] moved since the last frame.
+    ///
+    /// The `if` is the point. A game holds the mixer through [`AudioManager::mixer_mut`] and can
+    /// turn a bus gain whenever it likes; the manager cannot be told, so it asks — one bool test
+    /// per frame when nothing moved, two atomic stores per live sink when something did.
     pub fn update(&mut self) {
         self.clean_dead_sinks();
+        if self.mixer.take_dirty() {
+            self.apply_mix_to_every_sink();
+        }
+    }
+
+    /// The buses, the master gain and the environment — read-only. See [`Mixer`].
+    #[inline]
+    pub fn mixer(&self) -> &Mixer {
+        &self.mixer
+    }
+
+    /// The mixer, to turn a gain on. Changes are heard on the next [`AudioManager::update`],
+    /// which every frame calls; use [`AudioManager::set_sink_bus`] and the `set_*` methods here
+    /// when a change must be audible before then.
+    #[inline]
+    pub fn mixer_mut(&mut self) -> &mut Mixer {
+        &mut self.mixer
+    }
+
+    /// Moves a live sound to a mixer bus and re-prices it immediately.
+    ///
+    /// This is how a sound reaches a bus other than [`Mixer::DEFAULT_BUS`]:
+    ///
+    /// ```no_run
+    /// # use gizmo_audio::{AudioManager, Mixer};
+    /// # let mut audio = AudioManager::new().unwrap();
+    /// let id = audio.play_looped("theme")?;
+    /// audio.set_sink_bus(id, Mixer::MUSIC);   // now follows the player's music slider
+    /// # Ok::<(), gizmo_audio::AudioError>(())
+    /// ```
+    ///
+    /// Starting a sound *already* on its bus would need a second set of `play` entry points; the
+    /// trigger for adding them is a game that can hear the gap between these two calls — the sound
+    /// is priced at the default bus's gain for as long as it takes to reach the next line, which
+    /// is one mixer buffer at worst and inaudible unless that bus is muted.
+    pub fn set_sink_bus(&mut self, id: u64, bus: &str) {
+        self.mixer.set_sink_bus(id, bus);
+        self.apply_mix(id);
+    }
+
+    /// Writes this sink's composed volume and speed to rodio. Every mutator ends here.
+    fn apply_mix(&self, id: u64) {
+        let volume = self.mixer.volume_for(id);
+        let speed = self.mixer.speed_for(id);
+        if let Some(sink) = self.active_spatial_sinks.get(&id) {
+            sink.set_volume(volume);
+            sink.set_speed(speed);
+        } else if let Some(sink) = self.active_sinks.get(&id) {
+            sink.set_volume(volume);
+            sink.set_speed(speed);
+        }
+    }
+
+    /// Re-prices every live sink — what a master/bus/environment change means, since those apply
+    /// to sounds that are already playing.
+    fn apply_mix_to_every_sink(&mut self) {
+        self.mixer.take_dirty(); // whatever asked for this, it is answered now
+
+        for (id, sink) in &self.active_sinks {
+            sink.set_volume(self.mixer.volume_for(*id));
+            sink.set_speed(self.mixer.speed_for(*id));
+        }
+        for (id, sink) in &self.active_spatial_sinks {
+            sink.set_volume(self.mixer.volume_for(*id));
+            sink.set_speed(self.mixer.speed_for(*id));
+        }
     }
 
     // ── Su-altı ses boğma (underwater muffle) ────────────────────────────────
-    /// Volume multiplier while underwater (turned down).
-    const UW_VOLUME_MUL: f32 = 0.4;
-    /// Playback speed = pitch while underwater (lowered slightly → a "muffled/distant" feel).
-    const UW_SPEED: f32 = 0.85;
-
-    /// Turn the underwater "muffle" mode on/off. While active every sound is turned down +
-    /// drops to a slightly lower pitch (since rodio's `Player` does not support a live low-pass
-    /// filter, this dampening is used instead of a real low-pass — it gives a "muffled" feel).
-    /// IDEMPOTENT: it applies only when the state CHANGES, so it can safely be called every
-    /// frame. NOTE: because the volume is undone with a multiplier, if the game side calls
-    /// `set_volume` while underwater there may be a slight drift on surfacing (not a problem
-    /// for continuous ambient sounds).
+    /// Turns the underwater "muffle" on or off: every sound is turned down and slowed slightly,
+    /// which stands in for a low-pass rodio's `Player` cannot do live.
+    ///
+    /// Idempotent, and — since 2026-08-18 — actually *reversible*. It used to multiply each
+    /// sink's volume by 0.4 and undo it with 2.5, which had two measured consequences on real
+    /// hardware: a 3D sound lost the muffle on the **next frame**, because the spatial system
+    /// overwrites the sink's volume every frame (so the muffle was unreachable for every 3D sound
+    /// in the engine), and surfacing multiplied it by 2.5 regardless — a sound set to 0.22 while
+    /// submerged came back at 0.55. The state lives in the [`Mixer`] now and the volume is
+    /// composed from it, so there is nothing to undo.
     pub fn set_underwater(&mut self, on: bool) {
-        if on == self.underwater {
-            return;
-        }
-        self.underwater = on;
-        let (vol_mul, speed) = if on {
-            (Self::UW_VOLUME_MUL, Self::UW_SPEED)
-        } else {
-            (1.0 / Self::UW_VOLUME_MUL, 1.0)
-        };
-        for sink in self.active_sinks.values() {
-            sink.set_volume(sink.volume() * vol_mul);
-            sink.set_speed(speed);
-        }
-        for sink in self.active_spatial_sinks.values() {
-            sink.set_volume(sink.volume() * vol_mul);
-            sink.set_speed(speed);
+        self.mixer.set_underwater(on);
+        if self.mixer.take_dirty() {
+            self.apply_mix_to_every_sink();
         }
     }
 
     /// Is the underwater muffle mode currently active.
     #[inline]
     pub fn is_underwater(&self) -> bool {
-        self.underwater
-    }
-
-    /// Applies the muffle to a newly created normal player if we are underwater at that moment.
-    fn apply_underwater_to(sink: &Player, underwater: bool) {
-        if underwater {
-            sink.set_volume(sink.volume() * Self::UW_VOLUME_MUL);
-            sink.set_speed(Self::UW_SPEED);
-        }
+        self.mixer.is_underwater()
     }
 
     /// Plays a normal (Global/Stereo) sound (one-shot)
@@ -352,9 +434,12 @@ impl AudioManager {
         let id = self.next_sink_id;
         self.next_sink_id = self.next_sink_id.wrapping_add(1);
 
-        // Su altındayken başlayan ses de boğuk gelsin.
-        Self::apply_underwater_to(&sink, self.underwater);
+        // Routed before it is priced, priced before it is returned: a sound that starts while the
+        // listener is underwater, or on a bus the player has turned down, is already at the right
+        // volume on its first buffer.
         self.active_sinks.insert(id, sink);
+        self.mixer.route(id, Mixer::DEFAULT_BUS);
+        self.apply_mix(id);
         Ok(id)
     }
 
@@ -417,11 +502,9 @@ impl AudioManager {
         let id = self.next_sink_id;
         self.next_sink_id = self.next_sink_id.wrapping_add(1);
 
-        if self.underwater {
-            sink.set_volume(sink.volume() * Self::UW_VOLUME_MUL);
-            sink.set_speed(Self::UW_SPEED);
-        }
         self.active_spatial_sinks.insert(id, sink);
+        self.mixer.route(id, Mixer::DEFAULT_BUS);
+        self.apply_mix(id);
         Ok(id)
     }
 
@@ -438,48 +521,48 @@ impl AudioManager {
         max_distance: f32,
         base_volume: f32,
     ) {
-        if let Some(sink) = self.active_spatial_sinks.get(&id) {
-            sink.set_emitter_position(emitter_pos);
-            sink.set_left_ear_position(left_ear);
-            sink.set_right_ear_position(right_ear);
+        let Some(sink) = self.active_spatial_sinks.get(&id) else {
+            return;
+        };
+        sink.set_emitter_position(emitter_pos);
+        sink.set_left_ear_position(left_ear);
+        sink.set_right_ear_position(right_ear);
 
-            let listener_pos = [
-                (left_ear[0] + right_ear[0]) / 2.0,
-                (left_ear[1] + right_ear[1]) / 2.0,
-                (left_ear[2] + right_ear[2]) / 2.0,
-            ];
-            let dx = emitter_pos[0] - listener_pos[0];
-            let dy = emitter_pos[1] - listener_pos[1];
-            let dz = emitter_pos[2] - listener_pos[2];
-            let distance = (dx * dx + dy * dy + dz * dz).sqrt();
-            let mut volume = if max_distance > 0.0 {
-                (1.0 - distance / max_distance).max(0.0)
-            } else {
-                1.0
-            };
-            volume *= base_volume;
+        let listener_pos = [
+            (left_ear[0] + right_ear[0]) / 2.0,
+            (left_ear[1] + right_ear[1]) / 2.0,
+            (left_ear[2] + right_ear[2]) / 2.0,
+        ];
+        let dx = emitter_pos[0] - listener_pos[0];
+        let dy = emitter_pos[1] - listener_pos[1];
+        let dz = emitter_pos[2] - listener_pos[2];
+        let distance = (dx * dx + dy * dy + dz * dz).sqrt();
+        let attenuation = if max_distance > 0.0 {
+            (1.0 - distance / max_distance).max(0.0)
+        } else {
+            1.0
+        };
 
-            sink.set_volume(volume);
-        }
+        // Distance attenuation is INTENT, not the sink's volume — that distinction is the fix for
+        // the muffle this call used to erase every frame (see `set_underwater`).
+        self.mixer.set_sink_volume(id, attenuation * base_volume);
+        self.apply_mix(id);
     }
 
-    /// Sets the volume of the active sink with the given id.
+    /// Sets the volume this sink was *asked* to play at. What reaches the device is that value
+    /// times its bus, the master and the environment — so this survives a dive and a surface, and
+    /// a bus gain applies on top of it rather than replacing it. See [`Mixer`].
     pub fn set_volume(&mut self, id: u64, volume: f32) {
-        if let Some(sink) = self.active_spatial_sinks.get(&id) {
-            sink.set_volume(volume);
-        } else if let Some(sink) = self.active_sinks.get(&id) {
-            sink.set_volume(volume);
-        }
+        self.mixer.set_sink_volume(id, volume);
+        self.apply_mix(id);
     }
 
-    /// Sets the pitch/playback speed of the active sink with the given id.
+    /// Sets the pitch/playback speed this sink was asked to play at (Doppler included). The
+    /// underwater slow-down multiplies it; the clamp that keeps rodio's sample-rate converter out
+    /// of its `from >= 1` assert is applied after that multiply, in [`Mixer::speed_for`].
     pub fn set_pitch(&mut self, id: u64, pitch: f32) {
-        let pitch = sanitize_playback_speed(pitch);
-        if let Some(sink) = self.active_spatial_sinks.get(&id) {
-            sink.set_speed(pitch);
-        } else if let Some(sink) = self.active_sinks.get(&id) {
-            sink.set_speed(pitch);
-        }
+        self.mixer.set_sink_pitch(id, pitch);
+        self.apply_mix(id);
     }
 
     /// Stops the active sink with the given id.
@@ -513,6 +596,15 @@ impl AudioManager {
     pub fn clean_dead_sinks(&mut self) {
         self.active_spatial_sinks.retain(|_, sink| !sink.empty());
         self.active_sinks.retain(|_, sink| !sink.empty());
+        // A route outlives its sink otherwise: one leaked entry per sound ever played, which in a
+        // session is every footstep.
+        let live: HashSet<u64> = self
+            .active_sinks
+            .keys()
+            .chain(self.active_spatial_sinks.keys())
+            .copied()
+            .collect();
+        self.mixer.retain_routes(|id| live.contains(&id));
     }
 
     /// Returns whether the sink with the given id is currently playing.
@@ -529,7 +621,7 @@ impl AudioManager {
 
 #[cfg(test)]
 mod tests {
-    use super::{sanitize_playback_speed, AudioManager};
+    use super::{sanitize_playback_speed, AudioManager, AudioSource, Mixer};
     use rodio::{Decoder, Player, Source};
     use std::io::Cursor;
 
@@ -583,9 +675,13 @@ mod tests {
         assert!(!player.empty(), "the decoded sound must be queued on the player");
         assert!(!player.is_paused(), "playback starts running, as it did on 0.17");
 
-        // The underwater muffle reads a player's volume back and writes both parameters — the two
-        // accessors `set_underwater` depends on.
-        AudioManager::apply_underwater_to(&player, true);
+        // The composed numbers land on a real `Player`: this is the half the mixer's own tests
+        // cannot show, since they never touch rodio. `Mixer` decides, the player obeys.
+        let mut mixer = Mixer::new();
+        mixer.route(7, Mixer::SFX);
+        mixer.set_underwater(true);
+        player.set_volume(mixer.volume_for(7));
+        player.set_speed(mixer.speed_for(7));
         assert!(
             player.volume() < 1.0 && player.speed() < 1.0,
             "underwater must turn the sound down and slow it: vol {} speed {}",
@@ -633,6 +729,111 @@ mod tests {
             "a one-second sound must have drained after 1.5 s — if it has not, the device is \
              not pulling samples and nothing is audible"
         );
+    }
+
+    /// REGRESSION, on **real hardware** (the numbers below were measured on a device, 2026-08-18).
+    ///
+    /// The mixer's own tests assert the composition; this asserts that the composition is what the
+    /// device actually receives — i.e. that every path in `AudioManager` writes
+    /// `mixer.volume_for(id)` and nothing writes a level of its own. It is the half that would
+    /// still be broken if one call site kept multiplying into the sink.
+    ///
+    /// Before the mixer, on this same hardware:
+    ///
+    /// | step | volume | speed |
+    /// |---|---|---|
+    /// | 3D playing | 1.00 | 1.00 |
+    /// | underwater | 0.40 | 0.85 |
+    /// | after ONE `audio_spatial_system` frame | **1.00** | **1.00** |
+    /// | surfaced | **2.50** | 1.00 |
+    /// | 2D at 0.22, set while submerged, then surfaced | **0.55** | 1.00 |
+    ///
+    /// `#[ignore]` for the usual reason: CI runners have no sound card, where `AudioManager::new`
+    /// legitimately fails. `cargo test -p gizmo-audio -- --ignored`
+    #[test]
+    #[ignore = "needs a real audio output device — run with --ignored"]
+    fn the_device_gets_the_mixers_numbers_and_nothing_accumulates() {
+        fn spatial(m: &AudioManager, id: u64) -> (f32, f32) {
+            let s = &m.active_spatial_sinks[&id];
+            (s.volume(), s.speed())
+        }
+        fn global(m: &AudioManager, id: u64) -> (f32, f32) {
+            let s = &m.active_sinks[&id];
+            (s.volume(), s.speed())
+        }
+        let mut m = match AudioManager::new() {
+            Ok(m) => m,
+            Err(e) => panic!("no audio output device on this machine: {e}"),
+        };
+        m.load_sound_bytes("beep", wav_bytes(80_000)); // 10 s: long enough not to drain under us
+
+        let (left, right) = ([-0.1f32, 0.0, 0.0], [0.1f32, 0.0, 0.0]);
+        let id = m
+            .play_3d_looped("beep", [0.0, 0.0, 0.0], left, right)
+            .expect("a registered WAV must play");
+        assert_eq!(spatial(&m, id), (1.0, 1.0), "a fresh sound plays at what it was given");
+
+        m.set_underwater(true);
+        assert_eq!(spatial(&m, id), (0.4, 0.85), "the muffle reaches the device");
+
+        // One frame of `audio_spatial_system` for a live 3D source: attenuation, then Doppler.
+        // This is the write that used to erase the muffle — for EVERY 3D sound, one frame after
+        // it was asked for.
+        m.update_spatial_sink(id, [0.0, 0.0, 0.0], left, right, 100.0, 1.0);
+        m.set_pitch(id, 1.0);
+        assert_eq!(spatial(&m, id), (0.4, 0.85), "and it survives the frame that restates it");
+
+        m.set_underwater(false);
+        assert_eq!(spatial(&m, id), (1.0, 1.0), "surfacing is not a 2.5x amplifier");
+
+        // The global path, with a game moving a volume slider while submerged.
+        let g = m.play_looped("beep").expect("a registered WAV must play");
+        m.set_volume(g, 0.22);
+        assert_eq!(global(&m, g), (0.22, 1.0));
+        m.set_underwater(true);
+        assert_eq!(global(&m, g), (0.088, 0.85));
+        m.set_volume(g, 0.22); // the slider, moved underwater
+        assert_eq!(global(&m, g), (0.088, 0.85), "a value set underwater is muffled, not doubled");
+        m.set_underwater(false);
+        assert_eq!(global(&m, g), (0.22, 1.0), "and it comes back as the value it was given");
+
+        // A bus gain applies to what is already playing, through `update`'s dirty check.
+        m.set_sink_bus(g, Mixer::MUSIC);
+        m.mixer_mut().set_bus_gain(Mixer::MUSIC, 0.5);
+        assert_eq!(global(&m, g), (0.22, 1.0), "a gain turned through mixer_mut waits for update");
+        m.update();
+        assert_eq!(global(&m, g), (0.11, 1.0), "and update is where it is heard");
+    }
+
+    /// A scene saved before buses existed must still load — and land somewhere audible.
+    ///
+    /// `AudioSource` is serialised into scene files, so a new field is a compatibility question
+    /// before it is a feature. `#[serde(default)]` answers it, and this is what checks the answer:
+    /// the field's absence must mean [`Mixer::DEFAULT_BUS`], not an empty bus name (which would be
+    /// a *real* bus called `""`, at unity, invisible to every slider a settings panel draws).
+    #[test]
+    fn a_scene_saved_before_buses_still_loads_onto_one() {
+        let pre_bus = r#"{
+            "sound_name": "waterfall",
+            "is_3d": true,
+            "volume": 0.8,
+            "pitch": 1.0,
+            "loop_sound": true,
+            "max_distance": 40.0,
+            "_internal_sink_id": null
+        }"#;
+        let source: AudioSource =
+            serde_json::from_str(pre_bus).expect("a pre-bus AudioSource must still deserialize");
+        assert_eq!(source.bus, Mixer::DEFAULT_BUS);
+        assert_eq!(source.sound_name, "waterfall");
+        assert_eq!(source.max_distance, 40.0);
+
+        // And the round trip keeps whatever the scene did say.
+        let routed = AudioSource::new("theme").with_bus(Mixer::MUSIC);
+        let json = serde_json::to_string(&routed).expect("serialize");
+        let back: AudioSource = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.bus, Mixer::MUSIC);
+        assert_eq!(back, routed);
     }
 
     #[test]

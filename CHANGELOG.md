@@ -18,6 +18,18 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A mixer with buses: `gizmo_audio::Mixer`.** Named buses (`Mixer::MUSIC`, `SFX`, `UI`, `VOICE`,
+  and any name a game invents — they are created on mention), a master gain, and mute flags that
+  keep their gains so unmuting restores exactly what was there. A bus gain applies to sounds that
+  are **already playing**, which is what makes it a settings-menu slider rather than a value read
+  once at spawn. Reached through `AudioManager::mixer()` / `mixer_mut()`; a live sound is routed
+  with `AudioManager::set_sink_bus`, and a scene-authored one through the new `AudioSource::bus`
+  field (`#[serde(default)]`, so scenes saved before buses load onto `Mixer::DEFAULT_BUS`).
+
+  Every volume and speed that reaches rodio is now **composed** in one place —
+  `route.volume × bus × master × environment` — instead of being multiplied into the player by
+  whoever ran last. See *Fixed* below for what that changed.
+
 - **`Input::move_axis` / `blend_move_axis` — one movement read for the keyboard and the stick.**
   Returns `(x, y)` in the closed unit disc, `x` right and `y` forward, basis-free so the caller
   multiplies it by whatever right/forward vectors it already has. `MoveKeys::WASD` and
@@ -224,6 +236,35 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   before.
 
 ### Fixed
+
+- **The underwater muffle did nothing to 3D sound, and made everything 2.5× too loud on the way
+  out.** `AudioManager::set_underwater` multiplied every sink's volume by `0.4` and undid it with
+  `2.5`, while `audio_spatial_system` overwrote that same volume with `attenuation × source.volume`
+  every frame. Measured on a real device: a 3D sound went `1.00 → 0.40` on submerging and back to
+  `1.00` **on the next frame** — so the muffle was unreachable for every 3D sound in the engine —
+  and surfacing then multiplied by 2.5 regardless, i.e. 250 % of the volume the game asked for, out
+  of a speaker. A 2D sound whose volume was set to `0.22` while submerged surfaced at `0.55`. The
+  known symptom had been recorded as "a slight drift on surfacing".
+
+  Volume and speed are composed from the mixer now rather than accumulated in the sink, so the
+  order the modifiers arrive in cannot matter. Behaviour is otherwise unchanged: the same `0.4`
+  turn-down and `0.85` slow-down, still idempotent, still applied to sounds that start while
+  submerged.
+
+- **A pitch of zero could still assert on the audio thread.** `sanitize_playback_speed` clamps to
+  `0.01`, but the underwater slow-down multiplied *after* it: `0.01 × 0.85 = 0.0085`, small enough
+  for rodio's `SampleRateConverter` to compute a source rate of 0 and trip its `from >= 1` assert —
+  on the cpal callback thread, which takes playback with it. The clamp is applied after the
+  environment multiply now, where the final number is.
+
+- **Playing a sound leaked a routing entry per sound, forever.** The sink garbage collector dropped
+  dead sinks but nothing dropped what the mixer knew about them; `clean_dead_sinks` now retires
+  both together.
+
+- **`gizmo-audio` was the one crate not on the `missing_docs` ratchet** (19 of 20 carried
+  `#![warn(missing_docs)]`), while `docs/ENGINE.md` said the backlog was closed. The crate was
+  already at zero, so the fix is one line and no documentation — but a crate at zero with no lint
+  is a state, not a ratchet.
 
 - **`PhysicsWorld::raycast_all` ignored `max_distance`.** It bounded nothing, so a body whose
   bounding box reached into range while its actual shape sat outside was returned anyway — the

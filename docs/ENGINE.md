@@ -86,8 +86,55 @@ state instead.
   the type and at `RigidBody::new`. Verified 2026-08-17.
 
 **Phase 7 — Product layer (a shippable game)**
-- M7.4 authoritative client-server netcode; M7.5 audio mixer/bus/DSP; M7.6 UI font/text/
-  widget/z-index; M7.7 WASM feature parities, editor panels + AssetServer hot-reload.
+- M7.4 authoritative client-server netcode; M7.6 UI font/text/widget/z-index; M7.7 WASM feature
+  parities, editor panels + AssetServer hot-reload.
+
+- **M7.5 — the mixer landed 2026-08-18; the DSP half has not.** `gizmo_audio::Mixer` holds named
+  buses (`music`/`sfx`/`ui`/`voice`, created on demand so a game's own names need no engine
+  change), a master gain, mute flags that keep their gains, and the environment modifier. Buses
+  are the half a game ships: two sliders in a settings menu, applied to sounds that are *already
+  playing*. `AudioSource::bus` carries the choice into scene files, with `#[serde(default)]` so a
+  scene written before buses loads onto the default one.
+
+  **What made it a fix rather than a feature is what the buses displaced.** Every modifier used to
+  write *into* the player's volume: the underwater muffle multiplied by `0.4` and undid itself with
+  `2.5`, while `audio_spatial_system` overwrote the same field with `attenuation × source.volume`
+  every frame. Two writers, one field, no memory of what the game had asked for. Measured on real
+  hardware before the change:
+
+  | step | volume | speed |
+  |---|---|---|
+  | 3D sound playing | 1.00 | 1.00 |
+  | `set_underwater(true)` | 0.40 | 0.85 |
+  | **one frame of `audio_spatial_system`** | **1.00** | **1.00** |
+  | `set_underwater(false)` | **2.50** | 1.00 |
+  | 2D sound set to 0.22 while submerged, then surfaced | **0.55** | 1.00 |
+
+  So the muffle was unreachable for every 3D sound in the engine — it lasted until the next frame,
+  which is to say it never happened — and surfacing multiplied by 2.5 regardless, which a `Player`
+  obeys: 250 % of the volume asked for, out of a speaker. The documented symptom was "a slight
+  drift on surfacing".
+
+  Volume is **composed** now, never accumulated: `route.volume × bus × master × environment`, and
+  `speed = route.pitch × environment`, recomputed whenever any input moves. The order the modifiers
+  arrive in stops mattering, which is the property that was broken — and it is asserted both in the
+  mixer's own tests and, because the composition is worthless if a call site still writes its own
+  level, on a real device (`the_device_gets_the_mixers_numbers_and_nothing_accumulates`, `#[ignore]`d
+  like every hardware test here).
+
+  Three smaller things fell out of the same shape. The pitch clamp that keeps rodio's sample-rate
+  converter out of its `from >= 1` assert had to move **after** the environment multiply — an
+  already-clamped `0.01` times the underwater `0.85` is `0.0085`, i.e. the assert, on the audio
+  callback thread. Gains are clamped where they are written (negative is a phase flip, `NaN` reaches
+  the device as `NaN` samples), and the sink garbage collector now drops routes with their sinks,
+  which it must: one leaked route per sound ever played is one per footstep.
+
+  **Not done, and named rather than implied:** the DSP half — filters, sends, a real low-pass
+  instead of the turn-down-and-slow-down that stands in for one — and a per-bus opt-out from the
+  environment modifier, since today the menu music muffles when the camera goes under water.
+  **Trigger for the opt-out:** a game with non-diegetic sound that dives. **Trigger for starting a
+  sound already on its bus** (rather than `play` + `set_sink_bus`): a game that can hear the gap,
+  which is one mixer buffer and audible only into a muted bus.
 - Optional: cross-platform determinism (as a feature — see §5), gizmo-net on WASM.
 - Gated on human-eye A/B: the textured-glTF `material_demo` asset, `car_demo` driving/geometry.
 
@@ -98,7 +145,7 @@ already shipped. Each is now either on, or off with a reason:
 | Gate | State |
 |---|---|
 | **cargo-deny** | **ON** — a CI job since before this list was written (`Supply chain (cargo-deny)`, advisories + licenses + bans + sources). The roadmap line was stale. |
-| **`missing_docs`** | **ON per crate, as a ratchet.** All 10 Stage A crates plus `gizmo-window`, `gizmo-ui` and — since 2026-08-17 — `gizmo-app`, `gizmo-analysis`, `gizmo-studio`, `gizmo-scripting`, the facade, `gizmo-editor` and `gizmo-renderer` are at zero and warn (CI's `-D warnings` makes that a deny). **The backlog is closed: every crate in the workspace is on the ratchet.** Re-measured 2026-08-17, and the table was accurate at every step. `gizmo-app`'s 23 were the windowed and headless builders — `new`, `set_setup`, `set_update`, `add_system` and the rest of what every demo calls — so they were also the crate's whole docs.rs front page. `gizmo-analysis`'s 33 were mostly the public fields of `Stats`, `SpanSample` and `TraceRecord`, i.e. the units of every number it exports; `gizmo-studio`'s 40 were its module list, its per-frame systems and the `PrimitiveSize` table — which is also where a stale claim was found and removed, since that table still said the engine had no cylinder shape. `gizmo-scripting`'s 102 were three quarters `ScriptCommand`: 41 variants and 35 fields making up the entire vocabulary a Lua script has for changing the world, which is the crate's actual API and had no units written anywhere. `gizmo-editor`'s 281 were two thirds `EditorState` and its nested state types — 63 fields, 107 more in `state_types.rs` — which is where the editor's whole request protocol lives: a panel cannot mutate the world while egui is drawing it, so every action it offers is recorded as a field and drained by a system afterwards, and a request nobody drains is a menu item that silently does nothing. Documenting it also turned up a doc comment that had been on the wrong field since `ffd8c29`: `history` was described as "whether FXAA anti-aliasing is on", left behind when the FXAA flag moved into `PostProcessSettings`. `gizmo-renderer`'s 874 — the largest, and the last — split into two halves that wanted different things written. The GPU-facing structs (`gpu_types`, and the physics, fluid and particle type modules) needed the *reasons*, not the field names: every `_pad` field is the Rust half of an alignment gap naga inserts whether or not the struct does, so omitting one shifts every field after it in every shader; the render fields sitting inside simulation structs like `GpuBox` and `GpuParticle` are there because those buffers are also the instance buffers, with no CPU in between. The pass states (SSAO, SSGI, SSR, TAA, volumetric, the fluid's screen-space surface) needed the *shape*: which passes exist, which textures are rebuilt on resize, and why each split is a split — a blur that reads what it writes smears in one direction, a separable blur costs `2n` samples against `n²`, a composite pass cannot sample the target it is writing. **The renderer is also the crate that proved the ratchet is per-target**: see the note in §8. The facade's 168 were the front door itself — the bundles, `SimpleApp`'s scene builder, the `gizmo::physics` re-export tree and the colour constants — i.e. the crate a user actually types, and the one whose docs.rs page is the engine's. A crate joins the ratchet when it reaches zero; that rule is what stops the number growing while the backlog is worked off. |
+| **`missing_docs`** | **ON per crate, as a ratchet.** All 10 Stage A crates plus `gizmo-window`, `gizmo-ui` and — since 2026-08-17 — `gizmo-app`, `gizmo-analysis`, `gizmo-studio`, `gizmo-scripting`, the facade, `gizmo-editor` and `gizmo-renderer` are at zero and warn (CI's `-D warnings` makes that a deny). **The backlog is closed: every crate in the workspace is on the ratchet** — true since 2026-08-18, and this row claimed it a day early. `gizmo-audio` had never been given the attribute: it was *at* zero, so nothing was undocumented, but nothing was stopping the next `pub fn` either, which is the whole difference between a state and a ratchet. Counted, not remembered: 19 of 20 crates carried the line, and the sentence naming the sixteen that did was accurate — the crate it did not name was simply missing. Re-measured 2026-08-17, and the table was accurate at every step. `gizmo-app`'s 23 were the windowed and headless builders — `new`, `set_setup`, `set_update`, `add_system` and the rest of what every demo calls — so they were also the crate's whole docs.rs front page. `gizmo-analysis`'s 33 were mostly the public fields of `Stats`, `SpanSample` and `TraceRecord`, i.e. the units of every number it exports; `gizmo-studio`'s 40 were its module list, its per-frame systems and the `PrimitiveSize` table — which is also where a stale claim was found and removed, since that table still said the engine had no cylinder shape. `gizmo-scripting`'s 102 were three quarters `ScriptCommand`: 41 variants and 35 fields making up the entire vocabulary a Lua script has for changing the world, which is the crate's actual API and had no units written anywhere. `gizmo-editor`'s 281 were two thirds `EditorState` and its nested state types — 63 fields, 107 more in `state_types.rs` — which is where the editor's whole request protocol lives: a panel cannot mutate the world while egui is drawing it, so every action it offers is recorded as a field and drained by a system afterwards, and a request nobody drains is a menu item that silently does nothing. Documenting it also turned up a doc comment that had been on the wrong field since `ffd8c29`: `history` was described as "whether FXAA anti-aliasing is on", left behind when the FXAA flag moved into `PostProcessSettings`. `gizmo-renderer`'s 874 — the largest, and the last — split into two halves that wanted different things written. The GPU-facing structs (`gpu_types`, and the physics, fluid and particle type modules) needed the *reasons*, not the field names: every `_pad` field is the Rust half of an alignment gap naga inserts whether or not the struct does, so omitting one shifts every field after it in every shader; the render fields sitting inside simulation structs like `GpuBox` and `GpuParticle` are there because those buffers are also the instance buffers, with no CPU in between. The pass states (SSAO, SSGI, SSR, TAA, volumetric, the fluid's screen-space surface) needed the *shape*: which passes exist, which textures are rebuilt on resize, and why each split is a split — a blur that reads what it writes smears in one direction, a separable blur costs `2n` samples against `n²`, a composite pass cannot sample the target it is writing. **The renderer is also the crate that proved the ratchet is per-target**: see the note in §8. The facade's 168 were the front door itself — the bundles, `SimpleApp`'s scene builder, the `gizmo::physics` re-export tree and the colour constants — i.e. the crate a user actually types, and the one whose docs.rs page is the engine's. A crate joins the ratchet when it reaches zero; that rule is what stops the number growing while the backlog is worked off. |
 | **benchmarks** | **ON as a smoke gate** (`cargo bench --benches -- --test` runs every criterion bench once, catching panics and broken bench asserts). A *regression* gate is **not** adopted: shared CI runners have no timing floor, so the threshold that avoids false alarms is wide enough to miss real regressions. Performance work here is measured deliberately instead (§7 has the record of what was measured and rejected). |
 | **rustfmt** | **report-only, and staying that way.** Making it a gate means reformatting the tree first: **2794 hunks across every crate** (re-measured 2026-08-18; it was 2660 when this row was written, and it drifts upward as the tree grows — which makes the argument stronger over time, not weaker). That is one commit of pure churn against git blame, a conflict with anything in flight, and it buys a property clippy does not already give — the lint gate is the one that catches defects. The existing rule stands: don't reflow unrelated code, and leave the report on so drift stays visible. |
 | **coverage** | **not adopted.** A percentage gate rewards tests that execute lines; this codebase's tests are written to fail when behaviour is wrong (the pixel readbacks, the soak horizons, the source-shape guards), and several of the defects found this month were in code with coverage and no assertion. The number would go up and mean nothing. |

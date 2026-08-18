@@ -2623,6 +2623,7 @@ dependencies = [
  "log",
  "rodio",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

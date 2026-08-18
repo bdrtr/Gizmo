@@ -110,7 +110,7 @@ pub use wgpu;
 
 // === Audio (feature flag ile) ===
 #[cfg(feature = "audio")]
-pub use crate::audio::{AudioManager, AudioSource};
+pub use crate::audio::{AudioManager, AudioSource, Mixer};
 
 // === Scene (feature flag ile) ===
 #[cfg(feature = "scene")]

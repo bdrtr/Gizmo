@@ -103,7 +103,13 @@ pub fn audio_spatial_system(world: &mut World, _dt: f32) {
                 )
             };
             let sink_id = match sink_result {
-                Ok(id) => Some(id),
+                Ok(id) => {
+                    // The scene's choice of mixer bus, applied before the sound is a frame old.
+                    // Without this line a scene-authored `AudioSource::bus` would be a field the
+                    // engine reads back and never acts on.
+                    audio.set_sink_bus(id, &source.bus);
+                    Some(id)
+                }
                 Err(e) => {
                     tracing::warn!("3D ses çalınamadı '{}': {}", source.sound_name, e);
                     None
