@@ -1630,6 +1630,16 @@ the *slope* gate is the one that guards it.
 ## 8. Working Method
 
 - Every item: **fix → write a regression test → build/test/clippy → tick it off.**
+- **A count written into prose is a count the code will walk away from.** Three were found stale
+  on the same afternoon (2026-08-18), each written once and never re-measured: the rustfmt churn
+  behind a standing decision (2660 → **2794**), the scene block's fixed part quoted two different
+  ways in adjacent paragraphs (528 vs **560**), and CLAUDE.md's present-tense "96 types are
+  `#[non_exhaustive]`" (**122**). None of the three was wrong when written.
+
+  The fix is not diligence. Where the number carries a decision, **compute it** — the uniform
+  ceiling is a test now, and the cluster-assignment cost is a benchmark. Where it is background,
+  give it a date and say which way it drifts, so a reader can tell a measurement from a constant.
+  A count with neither is a claim nobody can check and everybody will quote.
 - **A remembered rationale is not evidence, and the cheapest way to find out is to remove the
   thing it defends.** The solver skips its modern TGS-soft path for any island containing a CCD
   body, with a comment giving the reason: TGS's dp/relax flow conflicts with the speculative
