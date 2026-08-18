@@ -484,6 +484,23 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`FighterInputBuffer::check_combo_strict` matches a press edge only — holding the buttons is no
+  longer performing the motion.** It used to accept `just_pressed || pressed`, which is not a
+  looser reading of a motion but the end of order checking: a player merely *holding* Down, Right
+  and Punch has all three in `pressed` on every frame of the buffer, so any order of them completes
+  within three consecutive frames — the quarter circle, its reverse, anything. `max_gap` stopped
+  meaning anything too, since a held button matches on every frame it is held. The function's own
+  comment already said the safe rule was `just_pressed`; the code did the other thing.
+
+  Real motions are unaffected — they are made of press edges, and the d-pad quarter-circle test
+  that drives a real `ActionMap` through `update` still passes untouched. What is lost is a step
+  whose edge fell outside the buffer's window, i.e. a button already held before recording began.
+
+  This also closes a divergence nobody could see: the Lua `fighter.check_combo` has always matched
+  press edges only, so the two implementations of one concept answered differently, and every combo
+  test in the workspace drove one or the other, never both. A new cross-check test in
+  `gizmo-scripting` runs seven scenarios through **both** and asserts the same answer.
+
 - **Four source-shape guards were vacuous and now are not.** A positive `contains` over source
   text is satisfied by a comment, and each of these tests exists because a line was once deleted or
   made inert — the one state a comment cannot be told apart from. Commenting the guarded line out

@@ -155,9 +155,26 @@ impl FighterInputBuffer {
     }
 
     /// Checks whether the given combo sequence took place in the last frames or not.
-    /// `sequence`: Sequence of keys that must be pressed in order. E.g.: ["Down", "Right", "Punch"]
-    /// `max_gap`: Maximum number of frames that may pass between two key presses (Error tolerance).
-    /// In fighting games a tolerance of 10-15 frames is usually given.
+    ///
+    /// `sequence`: the actions that must be pressed in order, e.g. `["Down", "Right", "Punch"]`.
+    /// `max_gap`: how many frames may pass between two of them (the tolerance; 10–15 is usual).
+    ///
+    /// **A step matches only on its press edge (`just_pressed`), never on a held button.** This
+    /// used to accept `just_pressed || pressed`, and that is not a stricter reading of a motion —
+    /// it is the end of order checking. A player merely *holding* Down, Right and Punch at the
+    /// same time has all three in `pressed` on every frame of the buffer, so any sequence of them
+    /// matches within three consecutive frames: a simultaneous press read as a quarter-circle, in
+    /// either direction. `max_gap` stops meaning anything too, since a held button matches on
+    /// every frame it is held. This function's own comment already said the safe rule was
+    /// `just_pressed`; the code did the other thing.
+    ///
+    /// Real motions are unaffected, because they are made of press edges: pressing Down, then
+    /// Right, then Punch gives each of them an edge on the frame it went down. What is lost is a
+    /// step whose edge fell outside the buffer's window — a button already held when recording
+    /// began — which is a motion this buffer never saw the start of.
+    ///
+    /// The Lua `fighter.check_combo` in `gizmo-scripting` implements the same rule over the
+    /// mirrored buffer, and a cross-check test there drives both against the same scenarios.
     pub fn check_combo_strict(&self, sequence: &[&str], max_gap: usize) -> bool {
         if sequence.is_empty() || self.frames.is_empty() {
             return false;
@@ -176,9 +193,10 @@ impl FighterInputBuffer {
 
             let required_action = sequence[seq_idx as usize];
 
-            // Dövüş oyunlarında yön tuşları 'pressed', saldırı tuşları 'just_pressed' olabilir
-            // ama en güvenlisi kombodaki her adımın 'just_pressed' (yeni basılmış) olmasıdır.
-            if frame.just_pressed.contains(required_action) || frame.pressed.contains(required_action) {
+            // Press edge only — see this function's docs for why `|| pressed` was not a tolerance
+            // but a hole: a held button matches on every frame it is held, which makes a
+            // simultaneous press indistinguishable from a motion and makes `max_gap` meaningless.
+            if frame.just_pressed.contains(required_action) {
                 // Eşleşme bulundu, komboda bir önceki adıma geç
                 seq_idx -= 1;
                 frames_since_last_match = 0;
@@ -206,82 +224,99 @@ impl Default for FighterInputBuffer {
 mod fighter_tests {
     use super::*;
 
+    /// Builds one recorded frame. `just_pressed` names go into `pressed` too, which is what
+    /// [`FighterInputBuffer::update`] produces for a key that went down this frame — a press edge
+    /// is also a hold.
+    fn frame(just_pressed: &[&str], held: &[&str]) -> FrameActions {
+        let mut pressed: HashSet<String> =
+            just_pressed.iter().map(|s| s.to_string()).collect();
+        pressed.extend(held.iter().map(|s| s.to_string()));
+        FrameActions {
+            pressed,
+            just_pressed: just_pressed.iter().map(|s| s.to_string()).collect(),
+            just_released: HashSet::new(),
+        }
+    }
+
+    /// A quarter-circle-forward punch, recorded the way the input system records one: Down goes
+    /// down, then Right while Down is still held, then Down is released, then Punch.
     #[test]
     fn test_fighter_input_buffer_combo() {
         let mut buffer = FighterInputBuffer::new(60);
-        let _input = Input::new();
-        let _action_map = ActionMap::new();
 
-        // 1. Frame: Sadece Down (pressed olarak gelecek)
-        let frame1 = FrameActions {
-            pressed: ["Down".to_string()].into_iter().collect(),
-            just_pressed: [].into_iter().collect(),
-            just_released: [].into_iter().collect(),
-        };
-        buffer.frames.push_front(frame1);
+        buffer.frames.push_front(frame(&["Down"], &[]));
+        buffer.frames.push_front(frame(&["Right"], &["Down"]));
+        buffer.frames.push_front(frame(&[], &["Right"])); // Down bırakıldı
+        buffer.frames.push_front(frame(&["LightPunch"], &[]));
 
-        // 2. Frame: DownRight (Down + Right pressed)
-        let frame2 = FrameActions {
-            pressed: ["Down".to_string(), "Right".to_string()].into_iter().collect(),
-            just_pressed: ["Right".to_string()].into_iter().collect(),
-            just_released: [].into_iter().collect(),
-        };
-        buffer.frames.push_front(frame2);
-
-        // 3. Frame: Sadece Right (pressed), Down bırakıldı
-        let frame3 = FrameActions {
-            pressed: ["Right".to_string()].into_iter().collect(),
-            just_pressed: [].into_iter().collect(),
-            just_released: ["Down".to_string()].into_iter().collect(),
-        };
-        buffer.frames.push_front(frame3);
-
-        // 4. Frame: Punch (just_pressed)
-        let frame4 = FrameActions {
-            pressed: ["LightPunch".to_string()].into_iter().collect(),
-            just_pressed: ["LightPunch".to_string()].into_iter().collect(),
-            just_released: [].into_iter().collect(),
-        };
-        buffer.frames.push_front(frame4);
-
-        // Şimdi kombo arıyoruz: ["Down", "Right", "LightPunch"]
         let combo = ["Down", "Right", "LightPunch"];
-        
-        // max_gap = 5 kare (Çok rahat yetişir)
         assert!(buffer.check_combo_strict(&combo, 5), "Kombo basariyla algilanmali");
-        
-        // Kombo sırasını bozarak test edelim
+
         let wrong_combo = ["LightPunch", "Right", "Down"];
-        assert!(!buffer.check_combo_strict(&wrong_combo, 5), "Yanlis kombo sirasi algilanmamali");
+        assert!(
+            !buffer.check_combo_strict(&wrong_combo, 5),
+            "Yanlis kombo sirasi algilanmamali"
+        );
+    }
+
+    /// **Holding the buttons is not performing the motion.**
+    ///
+    /// This is what matching on `pressed` cost, and it is not a subtle cost: a player who simply
+    /// holds Down, Right and Punch at once has all three in `pressed` on every frame of the
+    /// buffer, so *any* order of them completed within three consecutive frames — the motion, and
+    /// its reverse, and anything else. Order checking stopped meaning anything, and so did
+    /// `max_gap`, since a held button matches on every frame it is held.
+    #[test]
+    fn a_simultaneous_hold_is_not_a_motion() {
+        let mut buffer = FighterInputBuffer::new(60);
+        // Ten frames of all three held, with the press edges long gone off the back of the window.
+        for _ in 0..10 {
+            buffer
+                .frames
+                .push_front(frame(&[], &["Down", "Right", "LightPunch"]));
+        }
+
+        assert!(
+            !buffer.check_combo_strict(&["Down", "Right", "LightPunch"], 5),
+            "üç tuşu birlikte TUTMAK çeyrek daire hareketi değildir"
+        );
+        assert!(
+            !buffer.check_combo_strict(&["LightPunch", "Right", "Down"], 5),
+            "ve ters sırası da değildir — tutulan tuş her karede eşleşir, sıra denetimi biter"
+        );
+    }
+
+    /// A step whose press edge is inside the window still matches while the button stays held —
+    /// the edge is what is looked for, not the state, so a motion finished under a held button is
+    /// recognised exactly once.
+    #[test]
+    fn the_press_edge_is_what_matches_not_the_hold() {
+        let mut buffer = FighterInputBuffer::new(60);
+        buffer.frames.push_front(frame(&["Down"], &[]));
+        // Down stays held for three more frames, then Punch.
+        for _ in 0..3 {
+            buffer.frames.push_front(frame(&[], &["Down"]));
+        }
+        buffer.frames.push_front(frame(&["LightPunch"], &["Down"]));
+
+        assert!(
+            buffer.check_combo_strict(&["Down", "LightPunch"], 5),
+            "basma kenarı pencerenin içindeyse hareket tanınmalı"
+        );
     }
 
     #[test]
     fn test_fighter_input_buffer_max_gap() {
         let mut buffer = FighterInputBuffer::new(60);
 
-        let frame_down = FrameActions {
-            pressed: ["Down".to_string()].into_iter().collect(),
-            just_pressed: ["Down".to_string()].into_iter().collect(),
-            just_released: [].into_iter().collect(),
-        };
-        buffer.frames.push_front(frame_down);
+        buffer.frames.push_front(frame(&["Down"], &[]));
 
         // Araya 10 boş kare girsin
         for _ in 0..10 {
-            let empty = FrameActions {
-                pressed: [].into_iter().collect(),
-                just_pressed: [].into_iter().collect(),
-                just_released: [].into_iter().collect(),
-            };
-            buffer.frames.push_front(empty);
+            buffer.frames.push_front(frame(&[], &[]));
         }
 
-        let frame_punch = FrameActions {
-            pressed: ["LightPunch".to_string()].into_iter().collect(),
-            just_pressed: ["LightPunch".to_string()].into_iter().collect(),
-            just_released: [].into_iter().collect(),
-        };
-        buffer.frames.push_front(frame_punch);
+        buffer.frames.push_front(frame(&["LightPunch"], &[]));
 
         let combo = ["Down", "LightPunch"];
         

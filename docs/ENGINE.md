@@ -2498,9 +2498,21 @@ altsisteminin geri kalanı, ve hiçbiri saatin kapsamında değil:
    hareketine tepki veren bir script'in bakması gereken değer zaten o.
 4. ~~Lua aynası `just_released`'ı düşürüyor~~ **— düzeltildi.** Tampon aynası artık üç kümeyi de
    taşıyor, yani şarjlı/negatif-kenar hareketler script'e görünür.
-5. Lua'nın `check_combo`'su ile Rust'ın `check_combo_strict`'i **farklı algoritmalar**: Lua yalnız
-   `just_pressed`, Rust `just_pressed VEYA pressed` eşliyor. Beş test de Lua sürümüne bakıyor, yani
-   ayrışma test takımına görünmüyor.
+5. ~~Lua'nın `check_combo`'su ile Rust'ın `check_combo_strict`'i farklı algoritmalar~~
+   **— düzeltildi, ve ayrışan taraf Rust'tı.** Fark tek bir şeydeydi: Rust `just_pressed VEYA
+   pressed` eşliyordu. Bu daha hoşgörülü bir okuma değil, **sıra denetiminin sonu**: üç tuşu
+   birlikte TUTAN bir oyuncuda üçü de her karede `pressed` içinde, dolayısıyla herhangi bir
+   sıralaması üç ardışık karede tamamlanıyor — çeyrek daire de, tersi de. `max_gap` de anlamını
+   yitiriyor, çünkü tutulan tuş her karede eşleşiyor. Fonksiyonun kendi yorumu zaten "en güvenlisi
+   just_pressed" diyordu, kod öteki şeyi yapıyordu. Artık ikisi de yalnız basma kenarını eşliyor.
+   Gerçek hareketler etkilenmiyor (d-pad çeyrek daire testi gerçek bir `ActionMap` sürüyor ve
+   dokunulmadan geçiyor); kaybedilen tek şey basma kenarı pencerenin dışında kalmış bir adım, yani
+   tampon başlamadan önce basılı olan bir tuş.
+
+   Ayrışmanın görünmez olmasının sebebi de kayda geçti: workspace'teki her kombo testi ikisinden
+   BİRİNİ sürüyordu. Yeni bir çapraz test (`gizmo-scripting`) yedi senaryoyu **ikisine birden**
+   soruyor ve aynı cevabı istiyor; eski Rust semantiği geri konduğunda "üçünü birlikte tutmak"
+   senaryosunda Rust true, Lua false diyerek kırılıyor.
 6. `Hitbox::active`'i yazan tek şey denetçinin onay kutusu, okuyan tek şey hata-ayıklama gizmo'su
    (`gizmo/src/systems/physics.rs:234`). Vuruş algılama (`hit_detection_system`) da `592bd6f`'de
    gitti; `Hurtbox` yalnız çiziliyor.

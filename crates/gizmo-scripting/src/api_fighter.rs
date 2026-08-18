@@ -564,4 +564,128 @@ mod tests {
         assert!(matches!(cmds[1], ScriptCommand::ApplyHitstop(1, 6)));
         assert!(matches!(cmds[2], ScriptCommand::ApplyHitstun(2, 20)));
     }
+
+    // ── One concept, two implementations ────────────────────────────────────────────────────
+    //
+    // Combo recognition exists twice: `FighterInputBuffer::check_combo_strict` in gizmo-core, and
+    // the Lua `fighter.check_combo` above, which walks the mirrored table because a script can
+    // fill that table itself (the engine never fills the component's buffer). Two implementations
+    // of one named concept is exactly the arrangement that drifts, and it had: the Rust one
+    // matched `just_pressed || pressed` while Lua matched only `just_pressed`, and every combo
+    // test in the workspace drove one or the other, never both, so the divergence was invisible.
+    //
+    // These drive the same scenarios through both and assert the same answer.
+
+    /// One recorded frame: what went down this frame, and what is merely still held.
+    type Frame<'a> = (&'a [&'a str], &'a [&'a str]);
+
+    /// Runs `scenario` (oldest frame first) through the Rust implementation.
+    fn rust_answer(scenario: &[Frame<'_>], combo: &[&str], max_gap: usize) -> bool {
+        use gizmo_core::input::{FighterInputBuffer, FrameActions};
+        use std::collections::HashSet;
+
+        let mut buffer = FighterInputBuffer::new(60);
+        for (just_pressed, held) in scenario {
+            let mut pressed: HashSet<String> = just_pressed.iter().map(|s| s.to_string()).collect();
+            pressed.extend(held.iter().map(|s| s.to_string()));
+            buffer.frames.push_front(FrameActions {
+                pressed,
+                just_pressed: just_pressed.iter().map(|s| s.to_string()).collect(),
+                just_released: HashSet::new(),
+            });
+        }
+        buffer.check_combo_strict(combo, max_gap)
+    }
+
+    /// Runs the same scenario through the Lua implementation, via the mirrored table.
+    fn lua_answer(scenario: &[Frame<'_>], combo: &[&str], max_gap: usize) -> bool {
+        let lua = Lua::new();
+        register_fighter_api(&lua, Arc::new(CommandQueue::new())).unwrap();
+
+        // The Lua buffer is newest-first, so the chronological scenario is written backwards.
+        let frames: Vec<String> = scenario
+            .iter()
+            .rev()
+            .map(|(just_pressed, held)| {
+                let jp: Vec<String> = just_pressed
+                    .iter()
+                    .map(|k| format!("[\"{k}\"]=true"))
+                    .collect();
+                let mut p = jp.clone();
+                p.extend(held.iter().map(|k| format!("[\"{k}\"]=true")));
+                format!(
+                    "{{ just_pressed = {{{}}}, pressed = {{{}}} }}",
+                    jp.join(","),
+                    p.join(",")
+                )
+            })
+            .collect();
+        let combo_literal: Vec<String> = combo.iter().map(|c| format!("\"{c}\"")).collect();
+
+        lua.load(format!(
+            "fighter._buffers[1] = {{{}}}\nreturn fighter.check_combo(1, {{{}}}, {})",
+            frames.join(","),
+            combo_literal.join(","),
+            max_gap
+        ))
+        .eval()
+        .unwrap()
+    }
+
+    /// **Both implementations must answer the same question the same way.**
+    ///
+    /// The scenarios are the ones a fighting game actually produces: a quarter circle entered as
+    /// press edges, the same inputs merely held down, the reverse order, and the gap tolerance at
+    /// its exact boundary and one frame past it.
+    #[test]
+    fn the_rust_and_lua_combo_checks_agree() {
+        let qcf: &[Frame<'_>] = &[
+            (&["Down"], &[]),
+            (&["Right"], &["Down"]),
+            (&[], &["Right"]),
+            (&["LightPunch"], &[]),
+        ];
+        let held: &[Frame<'_>] = &[
+            (&[], &["Down", "Right", "LightPunch"]),
+            (&[], &["Down", "Right", "LightPunch"]),
+            (&[], &["Down", "Right", "LightPunch"]),
+            (&[], &["Down", "Right", "LightPunch"]),
+        ];
+        let gap_exact: &[Frame<'_>] = &[
+            (&["Down"], &[]),
+            (&[], &[]),
+            (&[], &[]),
+            (&["LightPunch"], &[]),
+        ];
+        let gap_over: &[Frame<'_>] = &[
+            (&["Down"], &[]),
+            (&[], &[]),
+            (&[], &[]),
+            (&[], &[]),
+            (&["LightPunch"], &[]),
+        ];
+
+        let cases: &[(&str, &[Frame<'_>], &[&str], usize, bool)] = &[
+            ("çeyrek daire, basma kenarlarıyla", qcf, &["Down", "Right", "LightPunch"], 5, true),
+            ("aynı girdiler ters sırada", qcf, &["LightPunch", "Right", "Down"], 5, false),
+            ("üçünü birlikte TUTMAK", held, &["Down", "Right", "LightPunch"], 5, false),
+            ("tutulanların ters sırası", held, &["LightPunch", "Right", "Down"], 5, false),
+            ("tam sınırda boşluk", gap_exact, &["Down", "LightPunch"], 2, true),
+            ("sınırın bir üstünde boşluk", gap_over, &["Down", "LightPunch"], 2, false),
+            ("boş kombo", qcf, &[], 5, false),
+        ];
+
+        for (name, scenario, combo, max_gap, expected) in cases {
+            let rust = rust_answer(scenario, combo, *max_gap);
+            let lua = lua_answer(scenario, combo, *max_gap);
+            assert_eq!(
+                rust, lua,
+                "{name}: Rust {rust} dedi, Lua {lua} dedi — bir kavramın iki uygulaması ayrışmış"
+            );
+            assert_eq!(
+                rust, *expected,
+                "{name}: beklenen {expected}, ikisi de {rust} dedi"
+            );
+        }
+    }
 }
