@@ -1787,14 +1787,25 @@ the *slope* gate is the one that guards it.
   on a job that already compiles every one of them. `gizmo-app`'s 49 combinations were clean
   already, which is the other half of the number: the debt is where the feature graph is widest.
 
-  **That 20 % was the steady state, and the first run is not the steady state.** On CI the flip
-  landed on a cache with no clippy artifacts for any of the ~200 combinations, and the job was
-  still running at **35 minutes** against its 45-minute ceiling — a number the local measurement
-  could not have shown, because locally everything was already built. The job is now a two-entry
-  matrix (one runner per crate, `fail-fast: false`) with the ceiling at 60: the crates overlap
-  instead of queueing, and each pays for its own dependency build once. The lesson is the ordinary
-  one in a new costume: a cost measured warm is a lower bound, and the run that *introduces* a
-  gate is the one that pays for it.
+  **The CI cost, measured on CI rather than guessed from here: 7 min 3 s.** That is the whole
+  powerset job — both crates, ~200 combinations, cold clippy artifacts — on the very run that
+  introduced the flip (`c693d4e`), against a 45-minute ceiling. The next run took 7 min 19 s.
+
+  **And a misdiagnosis worth keeping, because it is the more useful half.** Two later runs sat at
+  `in_progress` for 35+ minutes and the obvious reading was "the clippy flip is what is costing
+  this" — a conclusion that fits, follows from the change just made, and is wrong. Looking at
+  which *step* was running answered it in one command: both stuck jobs were parked in
+  `Install Linux dependencies`, an `apt-get` that never returned, and the two jobs that hang are
+  exactly the two that install packages. The change under suspicion had already been measured at
+  seven minutes twice.
+
+  The rule that generalises: **a slow job is not evidence about the step you changed.** Ask which
+  step is running before believing a story about the one you touched — the same discipline as
+  measuring the noise floor before reading a difference, one layer up.
+
+  The job is a two-entry matrix now (one runner per crate, `fail-fast: false`), and that stands on
+  its own smaller claim rather than the one above: sequentially, `gizmo-app` failing stops the run
+  before `gizmo-engine` is ever linted, which is the `--keep-going` lesson one level up.
 
 - **A count written into prose is a count the code will walk away from.** Three were found stale
   on the same afternoon (2026-08-18), each written once and never re-measured: the rustfmt churn

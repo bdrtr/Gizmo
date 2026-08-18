@@ -21,6 +21,15 @@ function on_entity_update(id, dt, props)
 end
 "#;
 
+/// A script that drives whatever vehicle it is attached to.
+const DRIVER: &str = r#"
+function on_entity_update(id, dt, props)
+    vehicle.set_engine_force(id, -0.6)
+    vehicle.set_steering(id, 0.5)
+    vehicle.set_brake(id, 0.25)
+end
+"#;
+
 /// A script that asks for a sound. The whole Lua audio API is three calls, and this is the one a
 /// game makes most.
 const NOISY: &str = r#"
@@ -48,7 +57,10 @@ impl Drop for TempScript {
     }
 }
 
-fn world_with_scripted_entity(script_path: &str) -> (World, u32) {
+/// Returns the entity handle, not just its id: a caller that wants to add another component —
+/// a vehicle, say — needs the handle, and reconstructing one from an id means guessing a
+/// generation.
+fn world_with_scripted_entity(script_path: &str) -> (World, gizmo::core::Entity) {
     let mut world = World::new();
     world.insert_resource(gizmo::physics::world::PhysicsWorld::new());
     world.insert_resource(gizmo::scripting::ScriptEngine::new().expect("Lua VM"));
@@ -57,7 +69,7 @@ fn world_with_scripted_entity(script_path: &str) -> (World, u32) {
     world.add_component(e, EntityName::new("Oyuncu"));
     world.add_component(e, Transform::new(Vec3::ZERO));
     world.add_component(e, gizmo::scripting::Script::new(script_path));
-    (world, e.id())
+    (world, e)
 }
 
 fn position_of(world: &World, id: u32) -> Vec3 {
@@ -80,7 +92,8 @@ fn position_of(world: &World, id: u32) -> Vec3 {
 #[test]
 fn a_scripted_entity_moves_in_the_frame_its_script_asked() {
     let script = TempScript::new("mover", MOVER);
-    let (mut world, id) = world_with_scripted_entity(&script.path());
+    let (mut world, entity) = world_with_scripted_entity(&script.path());
+    let id = entity.id();
     let input = Input::default();
     let mut play = PlayLoop::new();
 
@@ -155,7 +168,8 @@ fn a_missing_script_is_reported_once_and_does_not_stop_the_frame() {
         .to_string();
     let _ = std::fs::remove_file(&missing);
 
-    let (mut world, id) = world_with_scripted_entity(&missing);
+    let (mut world, entity) = world_with_scripted_entity(&missing);
+    let id = entity.id();
     let input = Input::default();
     let mut play = PlayLoop::new();
 
@@ -198,7 +212,7 @@ fn a_missing_script_is_reported_once_and_does_not_stop_the_frame() {
 #[ignore = "needs a real audio output device — run with --ignored"]
 fn a_script_can_make_a_sound() {
     let script = TempScript::new("noisy", NOISY);
-    let (mut world, _id) = world_with_scripted_entity(&script.path());
+    let (mut world, _entity) = world_with_scripted_entity(&script.path());
 
     let mut audio = match AudioManager::new() {
         Ok(a) => a,
@@ -222,4 +236,33 @@ fn a_script_can_make_a_sound() {
         "the script asked for a sound and nothing is playing — the host is dropping the audio \
          commands `flush_commands` hands back again"
     );
+}
+
+/// **A script can drive a car, through the whole chain.** No device, so this one runs on CI.
+///
+/// The unit tests for the handler call it directly; this drives the path a game actually takes —
+/// Lua → command queue → `flush_commands` → *its return value* → `PlayLoop` → the component. That
+/// return value is the link that was missing, and a test that skips it would not have noticed.
+///
+/// It also pins the reverse mapping at the far end of the chain: `set_engine_force(id, -0.6)` is
+/// documented as "negative drives it backwards", while `VehicleController::throttle_input` is
+/// documented as ignoring the sign — so the correct answer is reverse engaged and 0.6 of throttle,
+/// and the tempting one (assign −0.6 straight through) is full speed forwards.
+#[test]
+fn a_script_drives_a_car_through_the_whole_chain() {
+    let script = TempScript::new("driver", DRIVER);
+    let (mut world, entity) = world_with_scripted_entity(&script.path());
+    let id = entity.id();
+    world.add_component(entity, gizmo::physics::vehicle::VehicleController::new());
+
+    let input = Input::default();
+    let mut play = PlayLoop::new();
+    play.step(&mut world, 1.0 / 60.0, &input, &mut |_| {});
+
+    let vehicles = world.borrow::<gizmo::physics::vehicle::VehicleController>();
+    let car = vehicles.get(id).expect("the car is still there");
+    assert_eq!(car.steering_input, 0.5, "steering must reach the controller");
+    assert_eq!(car.brake_input, 0.25, "and so must the brake");
+    assert!(car.reverse_input, "a negative engine force is reverse, not forwards");
+    assert_eq!(car.throttle_input, 0.6, "and its magnitude is the throttle");
 }

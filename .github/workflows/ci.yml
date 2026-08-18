@@ -118,12 +118,15 @@ jobs:
   # `cargo hack --feature-powerset` builds the combinations directly. Depth 2 (every pair)
   # is the sweet spot: it catches "feature A alone" and "A+B interact" without the
   # exponential blowup of the full powerset on a 15-feature crate.
-  # Two crates, two runners, on purpose (2026-08-18). Sequentially in one job they took **35+
-  # minutes and were still going** on the first run after this gate became `clippy` — a cold cache
-  # has no clippy artifacts for any of the ~200 combinations, so the run that introduces the gate
-  # is the expensive one and it was heading for the 45-minute ceiling. Split, each crate pays for
-  # its own dependency build once and they overlap; `matrix` rather than two copies so the setup
-  # cannot drift between them.
+  # Two crates, two runners (2026-08-18), and the reason is `fail-fast`, not speed: sequentially,
+  # `gizmo-app` failing stops the run before `gizmo-engine` is linted at all — the same blindness
+  # `cargo hack --keep-going` exists to remove one level down. `matrix` rather than two copies so
+  # the setup cannot drift between them.
+  #
+  # Cost, measured on CI and not guessed: the whole job — both crates, ~200 combinations, no cached
+  # clippy artifacts — took **7 min 3 s** on the run that introduced the clippy flip, and 7 min 19 s
+  # on the next. (Two later runs sat at 35+ minutes and looked like this gate's fault; they were
+  # parked in `Install Linux dependencies`, an apt-get that never returned. See docs/ENGINE.md §8.)
   feature-powerset:
     name: Feature powerset (${{ matrix.crate }})
     runs-on: ubuntu-latest
