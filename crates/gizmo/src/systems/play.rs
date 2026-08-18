@@ -526,7 +526,7 @@ impl PlayLoop {
     /// jab's startup to the frame rate. Everything the fight subsystem promises (a hitstop that
     /// ends, a move that reaches its active window) hangs off this line, in the editor's ▶ and in
     /// every exported game alike.
-    fn physics_pass(&mut self, world: &World, dt: f32) -> u32 {
+    fn physics_pass(&mut self, world: &mut World, dt: f32) -> u32 {
         let (steps, remaining) = plan_steps(self.accumulator, dt);
         for _ in 0..steps {
             #[cfg(feature = "physics-dynamics")]
@@ -538,7 +538,51 @@ impl PlayLoop {
             crate::physics::system::physics_step_system(world, FIXED_DT);
         }
         self.accumulator = remaining;
+        pump_event_queues(world);
         steps
+    }
+}
+
+/// End of frame for the event queues this loop's own systems fill.
+///
+/// `Events<T>` is double-buffered: `send` writes the current frame and `iter` reads the previous
+/// one, and **something must call `update()` once a frame** or nothing ever becomes readable.
+/// Nothing did on this path — `App::add_event` is the windowed runtime's pump and neither the
+/// editor's ▶ nor an exported game goes through it. So `physics_step_system` had been sending
+/// collision and trigger events into queues that never rotated, and the fight events would have
+/// joined them.
+///
+/// The `HitEvent` queue is **created** if it is missing, the way
+/// [`run_fixed_and_update`](gizmo_app::frame::run_fixed_and_update) creates a `PhysicsTime`: it is
+/// the only one of the three with no other way in, and a fight whose hits are unreadable is not a
+/// fight. The other two are only rotated **if the game asked for them**, and that asymmetry is
+/// measured rather than tidy: `physics_step_system` clones every collision event it produced into
+/// that queue, which in a scene like the 200-box tower is thousands of contact lists a frame, and
+/// nobody should pay that for a resource they never asked for.
+fn pump_event_queues(world: &mut World) {
+    #[cfg(feature = "physics-dynamics")]
+    {
+        use gizmo_physics_core::components::HitEvent;
+        if world
+            .try_get_resource::<crate::core::event::Events<HitEvent>>()
+            .is_err()
+        {
+            world.insert_resource(crate::core::event::Events::<HitEvent>::new());
+        }
+        if let Ok(mut hits) = world.try_get_resource_mut::<crate::core::event::Events<HitEvent>>() {
+            hits.update();
+        }
+    }
+
+    if let Ok(mut collisions) = world
+        .try_get_resource_mut::<crate::core::event::Events<gizmo_physics_core::CollisionEvent>>()
+    {
+        collisions.update();
+    }
+    if let Ok(mut triggers) = world
+        .try_get_resource_mut::<crate::core::event::Events<gizmo_physics_core::TriggerEvent>>()
+    {
+        triggers.update();
     }
 }
 

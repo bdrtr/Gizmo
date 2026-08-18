@@ -18,6 +18,27 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The events had no reader: `PlayLoop` now rotates its event queues, and Lua can see the hits.**
+  `Events<T>` is double-buffered — `send` writes this frame, `iter` reads the last one — and
+  **something must call `update()` once a frame** or nothing ever becomes readable. Nothing did on
+  this path: `App::add_event` is the windowed runtime's pump, and neither the editor's ▶ nor an
+  exported game goes through it. So `physics_step_system` had been sending collision and trigger
+  events into queues that never rotated, and the new hit events would have joined them.
+
+  `PlayLoop` rotates them at the end of its frame, and **creates** the `HitEvent` queue if it is
+  missing — the way `run_fixed_and_update` creates a `PhysicsTime` — because it is the only one of
+  the three with no other way in. The other two are rotated only if the game asked for them, and
+  that asymmetry is measured rather than tidy: `physics_step_system` clones every collision event
+  into its queue, which in a 200-box tower is thousands of contact lists a frame.
+
+  On top of that a script can now fight: `fighter.hits()` mirrors each resolved `HitEvent`
+  (attacker, victim, the boxes involved, damage, hitstun, hitstop, move name), and
+  `fighter.set_health(id, value)` is the write that spends one — an assignment, because clamping,
+  armour, a block that halves it and death are the game's rules. The end-to-end test drives the
+  whole chain from a `.lua` file: the script throws a jab, the engine resolves the hit and reports
+  it, the script takes the health off — 92, not 100 (the event arrived) and not 84 (one hit per
+  move).
+
 - **Hits are resolved and reported: `gizmo_physics_dynamics::hit_detection_system` and
   `HitEvent`.** The fight subsystem's last missing link. A move now reaches its active window (the
   clock, above), and this turns that into "these two volumes overlap, once": it drives every

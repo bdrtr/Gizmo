@@ -926,6 +926,14 @@ ScriptCommand::PlayAnimation { id, name, blend, loop_anim } => {
                         trace!(entity = id, "[Scripting] SetFighterMove: hedefte FighterController yok, komut atlandı");
                     }
                 }
+                ScriptCommand::SetFighterHealth(id, health) => {
+                    let mut fighters = world.borrow_mut::<gizmo_physics_core::components::FighterController>();
+                    if let Some(mut fighter) = fighters.get_mut(id) {
+                        fighter.health = health;
+                    } else {
+                        trace!(entity = id, health, "[Scripting] SetFighterHealth: hedefte FighterController yok, komut atlandı");
+                    }
+                }
                 ScriptCommand::ApplyHitstop(id, frames) => {
                     let mut fighters = world.borrow_mut::<gizmo_physics_core::components::FighterController>();
                     if let Some(mut fighter) = fighters.get_mut(id) {

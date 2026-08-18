@@ -2540,11 +2540,23 @@ altsisteminin geri kalanı, ve hiçbiri saatin kapsamında değil:
    yani propagate geçişine bağlı değil; ölçek yok sayılıyor (motorun kendi hata-ayıklama gizmo'su
    da öyle yapıyor — çizilen kutu ile sınanan kutu aynı olsun diye).
 
-   **Kalan tek şey tüketici tarafı:** `Events<HitEvent>` kaynağını hiçbir varsayılan yol eklemiyor
-   ve `PlayLoop` hiçbir olay kuyruğunu `update()` etmiyor — bu `CollisionEvent`/`TriggerEvent`
-   için de zaten böyleydi, yani editörün ▶'sinde ve ihraç edilen oyunda olaylar okunamıyor. Lua'nın
-   da olayları görecek bir yüzeyi yok. Bir sonraki adım bu: kuyruğu PlayLoop'un pompalaması +
-   `fighter.hits()` aynası + hasarı gerçekten uygulayan uçtan uca bir `.lua` testi.
+   **Tüketici tarafı da kapandı (ayrı commit).** Üç eksik vardı ve üçü de "olay var, okuyanı yok"
+   biçimindeydi: (a) `Events<T>` çift tamponlu ve `update()` çağıran yoktu — `App::add_event`
+   pencereli çalışma zamanının pompası, editörün ▶'si de ihraç edilen oyun da oradan geçmiyor,
+   yani `physics_step_system`'in gönderdiği çarpışma/tetik olayları da yıllardır dönmeyen bir
+   kuyruğa gidiyormuş. `PlayLoop` artık karesinin sonunda pompalıyor; `HitEvent` kuyruğunu yoksa
+   YARATIYOR da (`run_fixed_and_update`'in `PhysicsTime`'ı yaratması gibi), ötekileri yalnız oyun
+   istemişse döndürüyor — asimetri ölçülmüş: `physics_step_system` ürettiği her çarpışma olayını o
+   kuyruğa klonluyor, 200 kutuluk kulede bu kare başına binlerce temas listesi eder ve kimse
+   istemediği bir kaynak için bunu ödememeli. (b) Lua'nın olayları göreceği yüzey yoktu:
+   `fighter.hits()` eklendi, aynası öteki okuma API'leriyle aynı şekilde bir kare geriden geliyor.
+   (c) Script'in hasarı harcayacak yazma yolu yoktu: `fighter.set_health(id, değer)` — atama,
+   çünkü tavan, taban, zırh, bloğun yarıya indirmesi ve ölüm oyunun kararları.
+
+   Uçtan uca test zincirin tamamını sürüyor (`demo/tests/the_runtime_runs_scripts.rs`): script bir
+   jab atıyor, motor vuruşu çözüp bildiriyor, script `fighter.hits()`'ten okuyup canı düşürüyor →
+   **92**, 100 değil (olay ulaştı) ve 84 değil (hareket başına tek vuruş). Negatif kontrol: pompa
+   kaldırılınca 100.
 7. ~~Stüdyo tarafında dört kusur~~ **— düzeltildi (aynı gün, ayrı commit).** Saati yazdıktan
    sonra stüdyoda görülecek yüzeyi yoktu: `scene_ops` `FighterController`'ı ekleyebiliyor ama
    **silemiyordu** (denetçide dört sil düğmesi var, üçünün kolu vardı), iki dövüşçü de varsayılan

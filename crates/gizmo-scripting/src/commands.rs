@@ -211,6 +211,12 @@ pub enum ScriptCommand {
         /// story as `hitstun`: it used to be a constant 5 for every move Lua could start.
         hitstop: u32,
     },
+    /// Set a fighter's health outright.
+    ///
+    /// The write that makes `HitEvent` spendable: the engine resolves a hit and reports its
+    /// damage, and the game (here, a script) decides what that costs. An assignment rather than a
+    /// subtraction, because clamping, armour, a block that halves it and death are all the game's.
+    SetFighterHealth(u32, f32),
     /// Freeze a fighter for a number of frames on impact — the hit-stop that gives a blow its
     /// weight.
     ApplyHitstop(u32, u32),
@@ -259,6 +265,7 @@ impl ScriptCommand {
             SetFightCamera { height, distance, .. } => height.is_finite() && distance.is_finite(),
             PlayAnimation { blend, .. } => blend.is_finite(),
             SetFighterMove { damage, .. } => damage.is_finite(),
+            SetFighterHealth(_, health) => health.is_finite(),
 
             // Carry no floating-point numbers. Listed rather than wildcarded — see above.
             DestroyEntity(_)

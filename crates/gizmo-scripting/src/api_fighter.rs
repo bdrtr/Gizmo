@@ -19,6 +19,7 @@ pub fn register_fighter_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Resu
     // helpers below. Same shape as `entity._positions` and friends: `table[entity_id] = value`.
     fighter_table.raw_set("_buffers", lua.create_table()?)?;
     fighter_table.raw_set("_state", lua.create_table()?)?;
+    fighter_table.raw_set("_hits", lua.create_table()?)?;
 
     // === SET FIGHTER MOVE ===
     //
@@ -59,6 +60,23 @@ pub fn register_fighter_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Resu
         )?;
     }
 
+    // === SET HEALTH ===
+    //
+    // The write that makes `HitEvent` usable: the engine reports a hit and its damage, and this is
+    // how the script spends it. An assignment rather than a subtraction because the script reads
+    // `fighter.state(id).health` and decides — a maximum, a floor at zero, armour, a block that
+    // halves it — and none of that is the engine's to guess.
+    {
+        let cq = command_queue.clone();
+        fighter_table.raw_set(
+            "set_health",
+            lua.create_function(move |_, (id, health): (u32, f32)| {
+                cq.push(ScriptCommand::SetFighterHealth(id, health));
+                Ok(())
+            })?,
+        )?;
+    }
+
     // === APPLY HITSTOP ===
     {
         let cq = command_queue.clone();
@@ -89,6 +107,13 @@ pub fn register_fighter_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Resu
         r#"
         function fighter.state(id)
             return fighter._state[id]
+        end
+
+        -- Every hit the engine resolved on the previous frame, oldest first. Each entry:
+        -- { attacker, attacker_hitbox, victim, victim_hurtbox, damage, hitstun, hitstop, move_name }
+        -- The engine does not spend them: subtracting the health is this script's job.
+        function fighter.hits()
+            return fighter._hits
         end
 
         function fighter.is_locked(id)
@@ -183,6 +208,28 @@ pub fn update_fighter_read_api(lua: &Lua, world: &World) -> Result<(), LuaError>
     let buffers = lua.create_table()?;
     let states = lua.create_table()?;
 
+    // The hits the engine resolved last frame. `Events` is double-buffered — `iter` reads the
+    // frame that has been rotated in — so these are one frame old, the same age as the state
+    // snapshot below and for the same reason: the mirror is taken at the top of the frame and the
+    // fight systems run at the bottom of it.
+    let hits = lua.create_table()?;
+    if let Ok(queue) = world
+        .try_get_resource::<gizmo_core::event::Events<gizmo_physics_core::components::HitEvent>>()
+    {
+        for (i, hit) in queue.iter().enumerate() {
+            let entry = lua.create_table()?;
+            entry.set("attacker", hit.attacker)?;
+            entry.set("attacker_hitbox", hit.attacker_hitbox)?;
+            entry.set("victim", hit.victim)?;
+            entry.set("victim_hurtbox", hit.victim_hurtbox)?;
+            entry.set("damage", hit.damage)?;
+            entry.set("hitstun", hit.hitstun)?;
+            entry.set("hitstop", hit.hitstop)?;
+            entry.set("move_name", hit.move_name.clone())?;
+            hits.set(i + 1, entry)?;
+        }
+    }
+
     let controllers = world.borrow::<gizmo_physics_core::components::FighterController>();
     for (eid, _) in controllers.iter() {
         if let Some(fighter) = controllers.get(eid) {
@@ -250,6 +297,7 @@ pub fn update_fighter_read_api(lua: &Lua, world: &World) -> Result<(), LuaError>
 
     fighter_table.raw_set("_buffers", buffers)?;
     fighter_table.raw_set("_state", states)?;
+    fighter_table.raw_set("_hits", hits)?;
 
     Ok(())
 }
@@ -686,6 +734,86 @@ mod tests {
                 rust, *expected,
                 "{name}: beklenen {expected}, ikisi de {rust} dedi"
             );
+        }
+    }
+
+    /// **The hits the engine resolved reach Lua**, with every field a script needs to spend one.
+    ///
+    /// `HitEvent` is the whole point of the event-based design — the engine says a hit connected
+    /// and what it is worth, the game takes the health off — and a script that cannot see the
+    /// event has nothing to spend.
+    #[test]
+    fn the_mirror_hands_the_engines_hits_to_lua() {
+        use gizmo_core::event::Events;
+        use gizmo_physics_core::components::HitEvent;
+
+        let mut world = World::new();
+        let mut queue = Events::<HitEvent>::new();
+        queue.send(HitEvent {
+            attacker: 7,
+            attacker_hitbox: 8,
+            victim: 9,
+            victim_hurtbox: 10,
+            damage: 12.0,
+            hitstun: 20,
+            hitstop: 5,
+            move_name: "Jab".to_string(),
+        });
+        // `iter` reads the rotated buffer, so a frame has to have ended for the hit to be visible
+        // — the same rotation `PlayLoop` performs at the end of its own frame.
+        queue.update();
+        world.insert_resource(queue);
+
+        let lua = Lua::new();
+        register_fighter_api(&lua, Arc::new(CommandQueue::new())).unwrap();
+        update_fighter_read_api(&lua, &world).unwrap();
+
+        lua.load(
+            r#"
+            local hits = fighter.hits()
+            assert(#hits == 1, "tam bir vuruş bekleniyor, gelen: " .. #hits)
+            local h = hits[1]
+            assert(h.attacker == 7 and h.attacker_hitbox == 8, "saldıran ve kutusu")
+            assert(h.victim == 9 and h.victim_hurtbox == 10, "hedef ve bölgesi")
+            assert(math.abs(h.damage - 12.0) < 0.001, "hasar — çarpanı uygulanmış hâliyle")
+            assert(h.hitstun == 20 and h.hitstop == 5, "hareketin dayattığı süreler")
+            assert(h.move_name == "Jab", "hareket adı")
+            "#,
+        )
+        .exec()
+        .unwrap();
+    }
+
+    /// With no event queue in the world at all, `fighter.hits()` is an empty list rather than an
+    /// error or a nil — a scene that never asked for hits still runs its scripts.
+    #[test]
+    fn hits_is_empty_when_the_world_has_no_queue() {
+        let world = World::new();
+        let lua = Lua::new();
+        register_fighter_api(&lua, Arc::new(CommandQueue::new())).unwrap();
+        update_fighter_read_api(&lua, &world).unwrap();
+
+        lua.load(r#"assert(#fighter.hits() == 0, "kuyruk yoksa boş liste")"#)
+            .exec()
+            .unwrap();
+    }
+
+    /// `fighter.set_health` queues the write that spends a hit.
+    #[test]
+    fn set_health_pushes_the_command() {
+        let lua = Lua::new();
+        let cq = Arc::new(CommandQueue::new());
+        register_fighter_api(&lua, cq.clone()).unwrap();
+        lua.load("fighter.set_health(3, 61.5)").exec().unwrap();
+
+        let cmds = cq.drain();
+        assert_eq!(cmds.len(), 1);
+        match &cmds[0] {
+            ScriptCommand::SetFighterHealth(id, health) => {
+                assert_eq!(*id, 3);
+                assert!((health - 61.5).abs() < 1e-6);
+            }
+            other => panic!("beklenen SetFighterHealth, gelen {other:?}"),
         }
     }
 }

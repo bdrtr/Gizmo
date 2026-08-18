@@ -49,6 +49,26 @@ function on_entity_update(id, dt, props)
 end
 "#;
 
+/// A script that throws a jab and then **spends the hits the engine reports**: it reads
+/// `fighter.hits()`, takes the damage off the victim's health and stuns them. This is the whole
+/// contract of the event-based design — the engine resolves the hit, the game decides the cost.
+const BRAWLER: &str = r#"
+frames = 0
+function on_entity_update(id, dt, props)
+    frames = frames + 1
+    if frames == 1 then
+        fighter.set_move(id, "Jab", 2, 2, 1, 8.0, 20, 5)
+    end
+    for _, hit in ipairs(fighter.hits()) do
+        local victim = fighter.state(hit.victim)
+        if victim ~= nil then
+            fighter.set_health(hit.victim, victim.health - hit.damage)
+            fighter.apply_hitstun(hit.victim, hit.hitstun)
+        end
+    end
+end
+"#;
+
 /// A script that throws one 5/3/2 jab, once, on the first frame it runs.
 const JABBER: &str = r#"
 frames = 0
@@ -455,5 +475,63 @@ fn a_script_can_read_the_move_it_started() {
         "the stun the script authored must survive the whole round trip — Lua argument, command, \
          component, mirror, Lua again. 20 here is `FrameData`'s default winning, which is what \
          every Lua-authored move used to get whatever it asked for"
+    );
+}
+
+/// **A script fights: the engine reports the hit, the script spends it.**
+///
+/// The end of the chain, and every link is a thing that did not exist at the start of the day: the
+/// fight clock advances the move, the active window drives the fist's hitbox, `hit_detection_system`
+/// resolves the overlap and reports a `HitEvent`, `PlayLoop` rotates the queue so the event is
+/// readable at all, the Lua mirror hands it to the script, and the script takes the health off
+/// with `fighter.set_health`. Nothing in the engine subtracts it — that is the design.
+///
+/// The numbers are the contract: **92**, not 100 (the hit landed and was spent) and not 84 (one
+/// hit per move, however many frames the window is open).
+#[test]
+fn a_script_spends_the_hits_the_engine_reports() {
+    let script = TempScript::new("brawler", BRAWLER);
+    let (mut world, attacker) = world_with_scripted_entity(&script.path());
+    world.add_component(
+        attacker,
+        gizmo::physics::components::FighterController::new(1),
+    );
+
+    // The attacker's fist, parented to it: hit detection composes the pose through the link.
+    let fist = world.spawn();
+    world.add_component(fist, Transform::new(Vec3::new(0.0, 0.0, -0.8)));
+    world.add_component(fist, gizmo::core::component::Parent(attacker.id()));
+    world.add_component(
+        fist,
+        gizmo::physics::components::Hitbox::new(Vec3::splat(0.2), 99.0),
+    );
+
+    let defender = world.spawn();
+    world.add_component(defender, Transform::new(Vec3::new(0.0, 0.0, -1.0)));
+    world.add_component(
+        defender,
+        gizmo::physics::components::FighterController::new(2),
+    );
+    world.add_component(
+        defender,
+        gizmo::physics::components::Hurtbox::new(Vec3::new(0.3, 0.5, 0.3)),
+    );
+
+    let input = Input::default();
+    let mut play = PlayLoop::new();
+    for _ in 0..10 {
+        play.step(&mut world, 1.0 / 60.0, &input, &mut |_| {});
+    }
+
+    let fighters = world.borrow::<gizmo::physics::components::FighterController>();
+    let hit = fighters.get(defender.id()).expect("the defender is still there");
+    assert_eq!(
+        hit.health, 92.0,
+        "the script must have spent exactly one 8-damage hit: 100 means the event never reached \
+         it, 84 means the same hit was reported once per active frame"
+    );
+    assert!(
+        hit.is_locked(),
+        "and the stun the script applied from the event must be running"
     );
 }
