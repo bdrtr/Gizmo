@@ -476,4 +476,103 @@ mod tests {
             "memory sequence re-ticked an already-succeeded child on resume"
         );
     }
+
+    // ── `behavior_tree_system` ───────────────────────────────────────────────────────────────
+    //
+    // The system itself had no test: the five above tick nodes directly. Its docs describe two
+    // consequences of how it ticks — the root is moved OUT of the component for the duration and
+    // put back afterwards — and both are the kind of claim that rots quietly, because neither is
+    // visible from outside a tick.
+
+    /// The bulk system reaches every entity that has a tree, and the tick actually runs.
+    #[test]
+    fn the_system_ticks_every_tree_in_the_world() {
+        let mut world = World::new();
+        let ticks = Arc::new(AtomicUsize::new(0));
+        for _ in 0..3 {
+            let e = world.spawn();
+            let counter = Arc::clone(&ticks);
+            world.add_component(
+                e,
+                BehaviorTree::new(Box::new(Action::new(move |_, _, _| {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    BtStatus::Success
+                }))),
+            );
+        }
+        behavior_tree_system(&mut world, 1.0 / 60.0);
+        assert_eq!(ticks.load(Ordering::SeqCst), 3, "one tick per tree");
+    }
+
+    /// The documented consequence of moving the root out: a node that reaches its OWN entity's
+    /// `BehaviorTree` mid-tick sees `None` there, not itself.
+    ///
+    /// Surprising enough to be worth a check — a node written to inspect its own tree would find
+    /// an empty one and could reasonably conclude the entity has no behaviour.
+    #[test]
+    fn a_node_that_looks_at_its_own_tree_mid_tick_sees_an_empty_one() {
+        let mut world = World::new();
+        let e = world.spawn();
+        let observed = Arc::new(AtomicUsize::new(usize::MAX));
+        let seen = Arc::clone(&observed);
+        world.add_component(
+            e,
+            BehaviorTree::new(Box::new(Action::new(move |entity, w: &mut World, _| {
+                let trees = w.borrow::<BehaviorTree>();
+                let root_is_none = trees.get(entity).is_some_and(|t| t.root.is_none());
+                seen.store(usize::from(root_is_none), Ordering::SeqCst);
+                BtStatus::Success
+            }))),
+        );
+        behavior_tree_system(&mut world, 1.0 / 60.0);
+        assert_eq!(
+            observed.load(Ordering::SeqCst),
+            1,
+            "the root is moved out for the duration of the tick, so it reads as None from inside"
+        );
+        // …and it is back afterwards.
+        assert!(
+            world.borrow::<BehaviorTree>().get(e.id()).is_some_and(|t| t.root.is_some()),
+            "the root must be restored once the tick returns"
+        );
+    }
+
+    /// The trap the docs warn about, made a checked fact: a node that removes its own
+    /// `BehaviorTree` loses the tree entirely — the system has the root in hand and puts it back
+    /// only if the component is still there.
+    ///
+    /// Pinned rather than fixed. Restoring it would resurrect a component the node deliberately
+    /// removed, which is a worse surprise than losing it; what matters is that the behaviour is
+    /// known and stays what the documentation says.
+    #[test]
+    fn a_node_that_removes_its_own_tree_loses_it_rather_than_having_it_restored() {
+        let mut world = World::new();
+        let e = world.spawn();
+        // The handle, not the raw id the node is handed: `remove_component` checks the
+        // generation, and a node only ever sees the id.
+        let handle = e;
+        world.add_component(
+            e,
+            BehaviorTree::new(Box::new(Action::new(move |_, w: &mut World, _| {
+                w.remove_component::<BehaviorTree>(handle);
+                BtStatus::Success
+            }))),
+        );
+        behavior_tree_system(&mut world, 1.0 / 60.0);
+        assert!(
+            world.borrow::<BehaviorTree>().get(e.id()).is_none(),
+            "the component was removed mid-tick, so the root is dropped rather than restored — \
+             putting it back would resurrect a component the node deliberately removed"
+        );
+    }
+
+    /// An empty tree is counted, not ticked, and must not panic on the way past.
+    #[test]
+    fn an_empty_tree_is_skipped_without_complaint() {
+        let mut world = World::new();
+        let e = world.spawn();
+        world.add_component(e, BehaviorTree { root: None });
+        behavior_tree_system(&mut world, 1.0 / 60.0);
+        assert!(world.borrow::<BehaviorTree>().get(e.id()).is_some_and(|t| t.root.is_none()));
+    }
 }

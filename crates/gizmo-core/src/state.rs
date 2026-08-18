@@ -84,3 +84,110 @@ where
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    //! Every claim this module's docs make, checked.
+    //!
+    //! Nothing in the workspace drives `State` — that is a recorded decision (the application
+    //! owns the `apply_transitions` call), not an accident. But it also had no test, so five
+    //! documented behaviours rested on prose alone, and one of them is genuinely surprising.
+
+    use super::*;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Screen {
+        Menu,
+        Playing,
+        Paused,
+    }
+
+    /// The whole reason the switch is deferred: between two `apply_transitions` every reader
+    /// sees the same value, whichever system asked for the change.
+    #[test]
+    fn a_requested_switch_is_not_visible_until_it_is_applied() {
+        let mut state = State::new(Screen::Menu);
+        state.set(Screen::Playing);
+        assert_eq!(*state.get(), Screen::Menu, "the switch must not happen at the call");
+        assert!(state.apply_transitions());
+        assert_eq!(*state.get(), Screen::Playing);
+    }
+
+    #[test]
+    fn the_initial_state_is_never_reported_as_a_transition() {
+        let mut state = State::new(Screen::Menu);
+        assert!(
+            !state.apply_transitions(),
+            "entering the initial state is not a transition — one-off setup for it has to be run \
+             by hand, which is only true if this returns false"
+        );
+    }
+
+    #[test]
+    fn asking_for_the_state_you_are_already_in_is_not_a_transition() {
+        let mut state = State::new(Screen::Menu);
+        state.set(Screen::Menu);
+        assert!(!state.apply_transitions(), "re-asserting the current state must be a no-op");
+    }
+
+    /// Two `set`s before an apply keep the last, and the intermediate is never observed by
+    /// anyone — which is what makes the deferral safe for systems that disagree.
+    #[test]
+    fn two_requests_before_an_apply_keep_the_last() {
+        let mut state = State::new(Screen::Menu);
+        state.set(Screen::Playing);
+        state.set(Screen::Paused);
+        assert!(state.apply_transitions());
+        assert_eq!(*state.get(), Screen::Paused);
+        assert!(!state.apply_transitions(), "and the queue is empty afterwards");
+    }
+
+    /// The surprising one, and therefore the one most worth pinning: `set` compares against the
+    /// **current** state, never against an already queued one. So asking to go back to where you
+    /// are does not cancel a queued switch — it is ignored, and the switch still happens.
+    ///
+    /// A reader who assumed otherwise would write `state.set(current)` as a cancel and get a
+    /// transition anyway, one frame later, with nothing to point at.
+    #[test]
+    fn setting_the_current_state_back_does_not_cancel_a_queued_switch() {
+        let mut state = State::new(Screen::Menu);
+        state.set(Screen::Playing);
+        state.set(Screen::Menu); // "cancel" — ignored, because Menu IS the current state
+        assert!(state.apply_transitions());
+        assert_eq!(
+            *state.get(),
+            Screen::Playing,
+            "the queued switch still happened; `set(current)` is not a cancel"
+        );
+    }
+
+    /// With no `State<S>` resource in the world, a gated system is switched **off**, not on.
+    /// The other way round would run menu systems during play on any world that forgot to
+    /// insert the machine.
+    #[test]
+    fn a_state_condition_is_false_when_the_machine_is_not_in_the_world() {
+        let world = World::new();
+        let mut condition = in_state(Screen::Menu);
+        assert!(!condition(&world), "no machine means no state, so nothing gated may run");
+    }
+
+    #[test]
+    fn a_state_condition_follows_the_applied_value_not_the_requested_one() {
+        let mut world = World::new();
+        let mut state = State::new(Screen::Menu);
+        state.set(Screen::Playing);
+        world.insert_resource(state);
+
+        let mut in_menu = in_state(Screen::Menu);
+        let mut in_play = in_state(Screen::Playing);
+        assert!(in_menu(&world), "before the apply the machine is still in Menu");
+        assert!(!in_play(&world));
+
+        world
+            .get_resource_mut::<State<Screen>>()
+            .expect("inserted above")
+            .apply_transitions();
+        assert!(!in_menu(&world));
+        assert!(in_play(&world));
+    }
+}

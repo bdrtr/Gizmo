@@ -1617,7 +1617,29 @@ the *slope* gate is the one that guards it.
     fail on its own.
 
   The sweep is a script, not a list: `pub fn` declarations in each crate's `src` against call
-  sites everywhere, cut at `#[cfg(test)]`. Worth re-running when a crate grows a public surface.
+  sites everywhere, cut at `#[cfg(test)]`. **Its first run lied**, and in the direction that
+  wastes time rather than hides bugs: the call regex did not allow a turbofish, so
+  `world.query_mut::<(A, B)>()` did not count as calling `query_mut`, and `get_resource`,
+  `remove_component` and a dozen other things every file uses came back as "never called".
+  A detector that reports the whole ECS as dead code is one nobody reads twice.
+
+  Run over the rest of Stage A afterwards, the honest figure is 21 with neither caller nor
+  test — and two of those are **documented behaviour with nothing checking it**, which is
+  the same class one layer along:
+
+  - `gizmo_core::state` — `State<S>` is deliberately undriven (the application owns the
+    `apply_transitions` call, and the module docs say so), but five behaviours rested on
+    prose alone. One is genuinely surprising: `set` compares against the **current** state
+    only, so `state.set(current)` does **not** cancel a queued switch — a reader who used it
+    as a cancel would get the transition anyway, one frame later, with nothing to point at.
+  - `gizmo_ai::behavior_tree_system` — its five neighbouring tests tick nodes; nothing ticked
+    the system. It moves each root *out* of the component for the duration of a tick, so a
+    node that reaches its own tree sees `None` there, and a node that removes its own
+    component loses the tree entirely. Both are documented; both are now checked, the second
+    **pinned rather than fixed** — restoring the root would resurrect a component the node
+    deliberately removed, which is the worse surprise.
+
+  Worth re-running when a crate grows a public surface.
 - **A positive `contains` over source text is satisfied by a comment — and four of this
   repository's guards were.** Audited 2026-08-18, after three separate false guards turned up in
   two days by accident: the fly-gate assertion that stayed green with the call wrapped in the very
