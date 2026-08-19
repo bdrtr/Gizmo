@@ -107,7 +107,12 @@ pub struct AudioSource {
     pub pitch: f32,
     /// Whether the sound should loop indefinitely.
     pub loop_sound: bool,
-    /// Distance at which the sound is fully attenuated (silent).
+    /// Distance at which the sound is fully attenuated (silent), in metres.
+    ///
+    /// The falloff between here and there is linear, and it is the curve a listener actually
+    /// hears — see [`spatial_gain`], which had to cancel rodio's own inverse-square term to make
+    /// that true. Before it did, a source set to 100 m was under 1 % of its volume by 10 m, and
+    /// raising this number barely moved that.
     pub max_distance: f32,
     /// The mixer bus this sound plays on — the player's SFX slider, music slider, and so on.
     /// See [`Mixer`]. Defaults to [`Mixer::DEFAULT_BUS`]; `#[serde(default)]` so a scene saved
@@ -238,6 +243,46 @@ impl std::fmt::Debug for AudioManager {
             .field("mixer", &self.mixer)
             .finish_non_exhaustive()
     }
+}
+
+/// The volume to write for a spatial sink at `distance`, so that what a listener hears follows
+/// [`AudioSource::max_distance`] rather than rodio's own curve.
+///
+/// # Why this is not just `1 - d/max`
+///
+/// **rodio attenuates by distance underneath us, and it is an inverse-SQUARE law.** Its
+/// `Spatial` source sets each ear's gain to `min(1/dist², 1)` (rodio 0.22.2,
+/// `source/spatial.rs`), on top of whatever volume the sink is given. So the engine's linear
+/// taper was never the curve anyone heard — it was multiplied by a much steeper one, and the
+/// field documented as "the distance at which the sound is silent" was a cut-off far beyond the
+/// point where the sound had already gone. Measured, for the default `max_distance = 100`:
+///
+/// | distance | taper | rodio | heard |
+/// |---|---|---|---|
+/// | 1 m | 0.99 | 1.0 | 99 % |
+/// | 3 m | 0.97 | 0.111 | 10.8 % |
+/// | 10 m | 0.90 | 0.010 | 0.9 % |
+/// | 30 m | 0.70 | 0.0011 | 0.08 % |
+///
+/// A sound authored to carry 100 m was inaudible past about ten, and turning `max_distance` up
+/// barely moved that — the term that was actually shaping the curve did not contain it.
+///
+/// So this **cancels** rodio's distance term (`d²`, using the listener-centre distance, and never
+/// below 1 m where rodio itself clamps) and leaves the engine's taper as the curve. Cancelling is
+/// safe by construction: the factor undoes an attenuation rodio is about to apply, so what reaches
+/// the device is at most `base_volume`, never more — this cannot make anything louder than an
+/// unspatialised sound of the same volume. What survives from rodio is the part that is its job:
+/// the left/right *difference*, i.e. the panning, which scales both ears equally here and so keeps
+/// its ratio.
+pub fn spatial_gain(distance: f32, max_distance: f32, base_volume: f32) -> f32 {
+    let taper = if max_distance > 0.0 {
+        (1.0 - distance / max_distance).max(0.0)
+    } else {
+        1.0
+    };
+    // Below one metre rodio's own modifier is clamped to 1, so there is nothing to cancel.
+    let rodio_distance_term = distance.max(1.0).powi(2);
+    taper * base_volume * rodio_distance_term
 }
 
 /// Clamp a playback-speed/pitch factor to a value that is safe for rodio's `Speed`
@@ -566,15 +611,11 @@ impl AudioManager {
         let dy = emitter_pos[1] - listener_pos[1];
         let dz = emitter_pos[2] - listener_pos[2];
         let distance = (dx * dx + dy * dy + dz * dz).sqrt();
-        let attenuation = if max_distance > 0.0 {
-            (1.0 - distance / max_distance).max(0.0)
-        } else {
-            1.0
-        };
 
         // Distance attenuation is INTENT, not the sink's volume — that distinction is the fix for
         // the muffle this call used to erase every frame (see `set_underwater`).
-        self.mixer.set_sink_volume(id, attenuation * base_volume);
+        self.mixer
+            .set_sink_volume(id, spatial_gain(distance, max_distance, base_volume));
         self.apply_mix(id);
     }
 
@@ -998,3 +1039,52 @@ mod tests {
 gizmo_core::impl_component!(AudioSource);
 
 pub mod host;
+
+#[cfg(test)]
+mod spatial_gain_tests {
+    use super::spatial_gain;
+
+    /// What rodio 0.22.2 does to each ear underneath us: `min(1/dist², 1)`
+    /// (`source/spatial.rs::set_positions`). Written out so the composed curve below is checked
+    /// against the library's actual rule rather than against the same assumption twice.
+    fn rodio_distance_modifier(distance: f32) -> f32 {
+        (1.0 / (distance * distance)).min(1.0)
+    }
+
+    /// **What the listener hears follows `max_distance`.**
+    ///
+    /// The engine's taper used to be multiplied by rodio's inverse-square term, so a source
+    /// authored to carry 100 m was at 0.9 % by 10 m. Composed with the cancellation, the heard
+    /// level is the taper itself.
+    #[test]
+    fn the_heard_curve_is_the_linear_taper_the_field_documents() {
+        for (distance, expected) in [(1.0, 0.99), (10.0, 0.90), (50.0, 0.50), (90.0, 0.10)] {
+            let written = spatial_gain(distance, 100.0, 1.0);
+            let heard = written * rodio_distance_modifier(distance);
+            assert!(
+                (heard - expected).abs() < 1e-4,
+                "at {distance} m the listener hears {heard}, not the documented {expected}"
+            );
+        }
+    }
+
+    /// The cancellation can only ever *undo* an attenuation, never add gain: at every distance the
+    /// heard level stays at or below the volume the source asked for.
+    #[test]
+    fn nothing_is_ever_louder_than_the_volume_it_asked_for() {
+        for step in 0..200 {
+            let distance = step as f32 * 0.5;
+            let heard = spatial_gain(distance, 100.0, 0.8) * rodio_distance_modifier(distance);
+            assert!(heard <= 0.8 + 1e-4, "at {distance} m the sound gained volume: {heard}");
+        }
+    }
+
+    /// Past `max_distance` the sound is silent, which is the field's whole promise — and a
+    /// `max_distance` of zero is the "no distance model" escape hatch, not a division by zero.
+    #[test]
+    fn beyond_the_limit_is_silence_and_zero_means_no_falloff() {
+        assert_eq!(spatial_gain(100.0, 100.0, 1.0), 0.0);
+        assert_eq!(spatial_gain(1_000.0, 100.0, 1.0), 0.0);
+        assert_eq!(spatial_gain(50.0, 0.0, 0.7), 0.7 * 50.0_f32.powi(2));
+    }
+}

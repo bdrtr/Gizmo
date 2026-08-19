@@ -530,6 +530,22 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`AudioSource::max_distance` was off by an order of magnitude, because rodio was attenuating
+  underneath us.** The engine wrote a linear taper (`1 - d/max`) as the sink's volume, and rodio's
+  `Spatial` source multiplies each ear by `min(1/d², 1)` on top of that. The curve anyone actually
+  heard was the product, so a source authored to carry 100 m was at **0.9 % of its volume by
+  10 m** — and turning `max_distance` up barely moved that, because the term shaping the falloff
+  did not contain it.
+
+  `spatial_gain` now cancels rodio's distance term and leaves the engine's taper as the curve, so
+  the field means what it has always said it means. Cancelling can only undo an attenuation rodio
+  is about to apply, so nothing gets louder than the volume it asked for — pinned by a test that
+  sweeps 0–100 m. What survives from rodio is the part that is its job: the left/right difference,
+  i.e. the panning, which is untouched because both ears scale by the same factor.
+
+  **Existing games will hear 3D sounds carry further**, which is the fix rather than a side effect;
+  a game that tuned around the old curve wants its `max_distance` values divided down.
+
 - **Prefabs recorded no asset identity, so a model that moved broke every prefab built on it.**
   Scenes have been saved and loaded *with identity* since it existed — each asset reference also
   records the UUID of the file it names, so a later load can find that file if it has since moved
