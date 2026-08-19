@@ -131,6 +131,14 @@ pub fn handle_simulation(
         state.play.reset();
     }
 
+    // ⏸ has to reach the device too. `PlayLoop::step` is what drives audio, and a paused editor
+    // does not call it — so the level's ambience kept playing over a frozen frame. Called every
+    // frame rather than on the transition: the manager pushes only a CHANGE to the sinks, which
+    // is also what keeps a game's own `pause(id)` from being undone every frame.
+    if let Some(mut audio) = world.get_resource_mut::<gizmo::audio::AudioManager>() {
+        audio.set_all_paused(editor_state.is_paused());
+    }
+
     // --- FIGHT HUD SYNC: FighterController → EditorState.fight_hud ---
     //
     // The condition is `is_in_play_session`, not `is_playing`: ⏸ leaves the mode at `Paused`, so

@@ -530,6 +530,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **⏸ did not reach the audio device.** `PlayLoop::step` is what drives audio and a paused editor
+  does not call it, so pausing froze the frame and left the level's ambience playing over it.
+  `AudioManager::set_all_paused` is the pause counterpart of `stop_all`, and the studio calls it
+  every frame with the editor's own pause state — only a *change* is pushed to the sinks, which is
+  what keeps a game's own `pause(id)` from being undone on the next frame.
+
 - **`AudioSource::max_distance` was off by an order of magnitude, because rodio was attenuating
   underneath us.** The engine wrote a linear taper (`1 - d/max`) as the sink's volume, and rodio's
   `Spatial` source multiplies each ear by `min(1/d², 1)` on top of that. The curve anyone actually

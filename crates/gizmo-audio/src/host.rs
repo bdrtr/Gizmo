@@ -327,4 +327,43 @@ mod tests {
             .expect("the flat source must have been started");
         assert!(manager.is_playing(sink));
     }
+
+    /// **⏸ has to reach the device.** `PlayLoop::step` drives audio and a paused editor does not
+    /// call it, so a paused game kept playing its ambience over a frozen frame.
+    #[test]
+    #[ignore = "needs an audio output device"]
+    fn pausing_the_session_pauses_the_sounds_and_resuming_brings_them_back() {
+        let mut world = World::new();
+        let e = world.spawn();
+        let mut source = AudioSource::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../demo/assets/audio/engine.wav"
+        ));
+        source.is_3d = false;
+        source.loop_sound = true;
+        world.add_component(e, source);
+        host_frame(&mut world);
+
+        let sink = world
+            .borrow::<AudioSource>()
+            .get(e.id())
+            .unwrap()
+            ._internal_sink_id
+            .expect("the source started");
+        let mut manager = world.get_resource_mut::<AudioManager>().unwrap();
+        assert!(manager.is_playing(sink));
+
+        assert_eq!(manager.set_all_paused(true), 1, "one live sink was paused");
+        assert!(!manager.is_playing(sink), "⏸ must reach the device");
+        assert_eq!(
+            manager.set_all_paused(true),
+            0,
+            "asking again changes nothing — which is what makes a per-frame call safe"
+        );
+
+        assert_eq!(manager.set_all_paused(false), 1);
+        assert!(manager.is_playing(sink), "and ▶ brings it back");
+        manager.stop_all();
+    }
+
 }

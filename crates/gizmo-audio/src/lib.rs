@@ -204,6 +204,10 @@ pub struct AudioManager {
     // a NAME is what a script has: `audio.stop("music")` cannot mean anything else.
     sink_sounds: HashMap<u64, String>,
     next_sink_id: u64,
+    // The last value [`AudioManager::set_all_paused`] was asked for, so a host can call it every
+    // frame and only a CHANGE reaches the sinks — otherwise a game pausing one sound of its own
+    // would have it resumed on the next frame by a host that is not paused.
+    all_paused: bool,
 
     // The live low-pass cutoff, shared with every source this manager has started and read on
     // the audio thread. Turning the muffle on is one atomic store here, not a walk over the sinks
@@ -329,6 +333,7 @@ impl AudioManager {
                     active_sinks: HashMap::new(),
                     sink_sounds: HashMap::new(),
                     next_sink_id: 1,
+                    all_paused: false,
                     muffle: MuffleControl::new(),
                     mixer: Mixer::new(),
                 })
@@ -727,6 +732,40 @@ impl AudioManager {
             .collect();
         for id in &ids {
             self.stop(*id);
+        }
+        ids.len()
+    }
+
+    /// Pause (or resume) every live sink, for a host that has paused the game.
+    ///
+    /// ⏸ is not ⏹: the scene is still there, the snapshot is still held, and the sounds should
+    /// hold too — a paused editor used to keep playing the level's ambience over a frozen frame,
+    /// because nothing on the pause path reached the device. (⏹ is [`AudioManager::stop_all`],
+    /// which ends them instead.)
+    ///
+    /// **Only a change is pushed to the sinks**, so this is safe to call every frame: a game that
+    /// paused one sound of its own keeps it paused while the host's answer stays the same. The
+    /// exception is the transition itself — resuming the game resumes everything, including a
+    /// sink the game had paused for its own reasons.
+    ///
+    /// Returns how many sinks were touched (`0` when nothing changed).
+    pub fn set_all_paused(&mut self, paused: bool) -> usize {
+        if paused == self.all_paused {
+            return 0;
+        }
+        self.all_paused = paused;
+        let ids: Vec<u64> = self
+            .active_spatial_sinks
+            .keys()
+            .chain(self.active_sinks.keys())
+            .copied()
+            .collect();
+        for id in &ids {
+            if paused {
+                self.pause(*id);
+            } else {
+                self.resume(*id);
+            }
         }
         ids.len()
     }
