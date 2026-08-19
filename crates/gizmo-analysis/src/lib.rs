@@ -37,7 +37,10 @@
 //!     {
 //!         profile_scope!(&world, "simulate");  // the spans the systems measure
 //!     }
-//!     schedule.run(&mut world, 1.0 / 60.0);    // the engine advances one frame (+ end_frame)
+//!     schedule.run(&mut world, 1.0 / 60.0);    // the engine advances the systems
+//!     world.get_resource_mut::<FrameProfiler>().unwrap().end_frame();  // …and the LOOP ends the
+//!                                              // frame: a schedule run is not a frame, since a
+//!                                              // windowed frame runs two of them (one 0..N times)
 //!     analyzer.collect(&world);                // analyse that frame
 //! }
 //!

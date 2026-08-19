@@ -187,6 +187,15 @@ impl<State: 'static> App<State> {
                 |_| {},
             );
 
+            // One frame ended, once — the boundary belongs to the loop that owns the frame, not
+            // to `Schedule::run` (which used to end one per run, i.e. several per frame). The
+            // windowed loop does the same at the end of its redraw.
+            if let Some(mut profiler) =
+                self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>()
+            {
+                profiler.end_frame();
+            }
+
             // Flush deferred commands (Commands/CommandQueue) queued by the update
             // hook — mirrors the windowed loop. `Schedule::run` only flushes BETWEEN
             // batches, so with no systems registered nothing would flush and the

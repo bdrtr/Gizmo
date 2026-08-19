@@ -173,6 +173,15 @@ fn main() {
 
         schedule.run(&mut world, target_dt as f32);
 
+        // The tick is this loop's frame, and ending it is this loop's job: `Schedule::run` no
+        // longer does it, because a schedule run is not a frame (a windowed frame runs two
+        // schedules, one of them several times).
+        if let Some(mut profiler) =
+            world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>()
+        {
+            profiler.end_frame();
+        }
+
         let elapsed = start.elapsed().as_secs_f64();
         if elapsed < target_dt {
             std::thread::sleep(std::time::Duration::from_secs_f64(target_dt - elapsed));

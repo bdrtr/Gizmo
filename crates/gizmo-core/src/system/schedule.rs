@@ -724,10 +724,20 @@ impl Schedule {
         // Bir sonraki frame'in referansı: bu frame'in tick'i.
         self.last_run_tick = world.tick;
 
-        // Frame profiling verisini kaydet (ring buffer'a yaz)
-        if let Some(mut profiler) = world.get_resource_mut::<crate::profiler::FrameProfiler>() {
-            profiler.end_frame();
-        }
+        // **No `FrameProfiler::end_frame()` here, deliberately: a schedule run is not a frame.**
+        //
+        // It used to be, and the arithmetic was wrong for every reader of the result. A windowed
+        // frame runs the FIXED schedule 0..N times and the UPDATE schedule once
+        // (`gizmo_app::frame::run_fixed_and_update`), and then the loop ends the frame itself —
+        // so `end_frame` fired `fixed_steps + 2` times per rendered frame, each one resetting
+        // `frame_start` and clearing `active_scopes`. Two consequences, measured 2026-08-19:
+        // every `avg_frame_ms` / `estimated_fps` the studio shows was a fragment of the real
+        // frame (roughly half the time, roughly double the FPS at 60 Hz with one step), and any
+        // scope opened around the whole step — the loop's own `"physics"` scope — was wiped
+        // before it could be closed.
+        //
+        // The frame boundary belongs to whoever owns the frame: the windowed loop, the headless
+        // loop, and a hand-written loop like `server/`. Each calls `end_frame` once per frame.
     }
 
     /// The total batch count (for debug / test purposes)
@@ -872,6 +882,79 @@ mod modify_after_build {
             2,
             "configuring a set must not empty the schedule; 1 here means the rebuild dropped \
              every system it had already compiled"
+        );
+    }
+}
+
+#[cfg(test)]
+mod frame_boundary {
+    use super::*;
+    use crate::profiler::FrameProfiler;
+    use crate::world::World;
+
+    /// **A schedule run is not a frame.**
+    ///
+    /// `Schedule::run` used to call `FrameProfiler::end_frame()` at its tail, which made the
+    /// profiler's "frame" a schedule run instead. A windowed frame runs the fixed schedule
+    /// `0..N` times and the update schedule once, and the loop then ends the frame itself — so
+    /// the count was `fixed_steps + 2` per rendered frame, each one resetting the clock. Every
+    /// `avg_frame_ms` and `estimated_fps` the studio painted was a fragment of the real frame:
+    /// roughly half the time and double the rate at 60 Hz with one fixed step.
+    #[test]
+    fn running_a_schedule_does_not_end_a_frame() {
+        let mut world = World::new();
+        world.insert_resource(FrameProfiler::new());
+        let mut schedule = Schedule::new();
+
+        for _ in 0..5 {
+            schedule.run(&mut world, 1.0 / 60.0);
+        }
+        assert_eq!(
+            world.get_resource::<FrameProfiler>().unwrap().frame_count(),
+            0,
+            "five schedule runs are not five frames — the loop that owns the frame ends it"
+        );
+
+        world
+            .get_resource_mut::<FrameProfiler>()
+            .unwrap()
+            .end_frame();
+        assert_eq!(
+            world.get_resource::<FrameProfiler>().unwrap().frame_count(),
+            1,
+            "and one `end_frame` is one frame"
+        );
+    }
+
+    /// A scope opened around a schedule run survives it.
+    ///
+    /// The other half of the same defect: `end_frame` clears `active_scopes`, so the implicit
+    /// call inside `run` destroyed any scope that spanned it — including the windowed loop's own
+    /// `"physics"` scope, which wrapped the whole fixed-step drain and could therefore never be
+    /// closed or recorded.
+    #[test]
+    fn a_scope_around_a_schedule_run_survives_it() {
+        let mut world = World::new();
+        world.insert_resource(FrameProfiler::new());
+        let mut schedule = Schedule::new();
+
+        world
+            .get_resource_mut::<FrameProfiler>()
+            .unwrap()
+            .begin_scope("physics");
+        schedule.run(&mut world, 1.0 / 60.0);
+        {
+            let mut profiler = world.get_resource_mut::<FrameProfiler>().unwrap();
+            profiler.end_scope("physics");
+            profiler.end_frame();
+        }
+
+        let profiler = world.get_resource::<FrameProfiler>().unwrap();
+        let frame = profiler.last_frame().expect("one frame was ended");
+        assert!(
+            frame.scopes.iter().any(|s| s.name == "physics"),
+            "the scope spanning the run was wiped by the run itself: {:?}",
+            frame.scopes.iter().map(|s| s.name).collect::<Vec<_>>()
         );
     }
 }

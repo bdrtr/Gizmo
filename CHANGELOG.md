@@ -39,6 +39,21 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   it, the script takes the health off — 92, not 100 (the event arrived) and not 84 (one hit per
   move).
 
+- **Every frame-time and FPS number the engine showed was a fragment of the real frame.**
+  `Schedule::run` ended with `FrameProfiler::end_frame()`, which made the profiler's "frame" a
+  schedule run. A windowed frame runs the fixed schedule `0..N` times and the update schedule once,
+  and the loop then ends the frame itself — so `end_frame` fired **`fixed_steps + 2` times per
+  rendered frame**, each one resetting the clock. The studio's status bar, the scene-view HUD and
+  the Profiler panel all showed roughly half the true frame time and roughly double the true FPS,
+  which is precisely the number a person opens that panel to trust.
+
+  The same reset clears `active_scopes`, so a scope spanning a schedule run was destroyed by the
+  run — including the windowed loop's own `"physics"` scope, which wrapped the whole fixed-step
+  drain and could therefore never be recorded. Measured: the frame's scope list came back empty.
+
+  The boundary now belongs to whoever owns the frame — the windowed loop (which already ended it),
+  the headless loop and the reference server (which now do). A schedule run is not a frame.
+
 - **A scene can hold a material at last: `MaterialDesc` + `gizmo_renderer::material_sync`.** The
   known exception written down that morning — "`Material` owns a live wgpu bind group, so a round
   trip loses PBR maps" — turned out to name its own fix. Everything else on `Material` is data,
