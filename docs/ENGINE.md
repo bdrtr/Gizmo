@@ -1683,11 +1683,20 @@ after an add, where a queue of edits is true for none of them.
   a `FluidSimulation`, or a project setting with a checkbox — and today there is no surface to
   constrain the answer. `every_component_the_inspector_edits_survives_a_save` carries this reason
   as its exemption entry, so the decision cannot be forgotten silently.
-- **No host opens a network session.** `RollbackManager::new` appears only in `gizmo-net`'s own
-  tests; nothing in the engine inserts one as a resource, so the windowed App's rollback code is
-  unreachable as shipped and no host opens a socket. A host that does not choose your netcode is a
-  legitimate design. What is not legitimate is that `README.md`/`CHANGELOG.md` advertise
-  "deterministic rollback netcode" as though the frame provided it.
+- **No host opens a network session**, and that is the design rather than the gap.
+  `RollbackManager::new` appears only in `gizmo-net`'s own tests; nothing in the engine inserts one
+  as a resource, so the windowed App's rollback code is unreachable as shipped and no host opens a
+  socket. An engine that does not choose your netcode is a legitimate position.
+
+  *(This entry said, until 2026-08-20, that `README.md`/`CHANGELOG.md` advertise "deterministic
+  rollback netcode" as though the frame provided it. **That was false, and it was written here
+  without being checked.** README's sentence is careful in exactly the way the claim denied: the
+  simulation is bit-exactly reproducible, "the property that makes replay, deterministic rollback
+  netcode and reproducible bug reports **possible**" — an enabling claim about determinism, not a
+  shipping claim about netcode. The CHANGELOG's uses of the word are bug-fix notes about renet's
+  own machinery inside `gizmo-net`'s wrappers. The lesson is the one this sweep keeps proving from
+  the other side: a claim is not a measurement, including a claim made by whoever is doing the
+  measuring.)*
 - **Rollback re-simulation still applies LIVE input** — re-measured this session and confirmed.
   `gizmo_app::windowed::event::service_rollback` calls `self.schedule.run(...)` once per tick in
   its catch-up loop and never applies the `PlayerInput` stored for that tick in
