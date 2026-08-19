@@ -1094,6 +1094,169 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   switch both off deliberately, and the editor viewport never recorded them. Guarded by
   `screen_space_reflections_and_gi_reach_the_frame`.
 
+### Changed
+
+- **BREAKING — `PostProcessSettings` keeps only the editor's own two viewport toggles.** The nine
+  graded fields (`bloom_intensity`, `bloom_threshold`, `exposure`, `vignette`,
+  `chromatic_aberration`, `dof_focus_dist`, `dof_focus_range`, `dof_blur_size`, `film_grain`) are
+  gone from `gizmo_editor::editor_state::PostProcessSettings`; what remains is `fxaa_enabled`,
+  `ssao_enabled` and `ssao_strength`.
+
+  They had to move because the struct is *editor state*: nothing wrote it to a file, its only
+  reader was the editor viewport, and the engine's frame read a second unrelated copy off the
+  `Renderer`. A look an author tuned was therefore gone at the next launch and absent from every
+  exported build — while the panel editing it said in as many words that these were the *scene's*
+  settings. The look is now `gizmo_renderer::components::PostProcess`, a component on the camera,
+  and exposure stayed on `Camera::exposure` where it already round-tripped. Leaving the fields
+  behind would have left sliders writing values nobody reads, which is the defect itself.
+
+  **Migration:** read and write the camera's `PostProcess` (add one if the camera has none — its
+  default is the engine's no-component behaviour, so adding it changes nothing) and use
+  `Camera::exposure` for exposure. `PostProcess::clamped` carries the ranges
+  `EditorState::validate_post_process` used to enforce.
+
+- **BREAKING — `inspector::environment::draw_environment_settings` takes a `&World`.** It edits the
+  active camera's components now rather than editor state, so it needs the world the camera is in.
+
+- **BREAKING — `EditorState::validate_post_process` clamps only `ssao_strength`.** The rest of the
+  clamping moved to `PostProcess::clamped` with the fields it applies to. It had to move rather
+  than stay: a scene file has no slider bounds, so a rule that only ran in a panel would not cover
+  a hand-written or generated scene.
+
+- **An export ships `demo/assets/` under its own name.** It used to be copied to `assets/`, which
+  broke every reference into it (see *Fixed*). Packages built before this change have their asset
+  tree in the old place; rebuild rather than moving it by hand, because the scene inside the
+  package names the new one.
+
+- **A collider authored in the ECS reaches the solver whole.** `is_trigger` and `collision_layer`
+  now survive the per-frame rebuild in `physics_step_system` (see *Fixed*). A game that set either
+  field and had learned to work around it being ignored will see different physics: triggers stop
+  pushing and start reporting, and layer filtering starts filtering.
+
+- **`IsHidden` hides on the engine's draw path too**, not only in the editor viewport (see
+  *Fixed*). A game that added the marker and still expected the entity drawn will now see it
+  disappear — which is what the marker's documentation has always described.
+
+### Added
+
+- **`gizmo_renderer::components::PostProcess`** — the authored look (bloom, vignette, chromatic
+  aberration, depth of field, film grain) as a component on the camera that renders it, registered
+  in `full_scene_registry` so it round-trips with the scene. Its default is exactly what a camera
+  without it gets, `dof_blur_size` included (0.0, because the renderer's `dof_enabled` is false and
+  zeroes the blur), so adding one from the ➕ menu changes nothing until a slider moves.
+
+- **`gizmo_renderer::components::active_camera`** — the one implementation of "which camera is the
+  scene's": the one flagged `primary`, else the first, so the answer never depends on ECS iteration
+  order. The engine's render path, the editor's viewport and the environment panel all ask it now,
+  because a panel editing "the scene's camera" has to mean the camera the frame renders from.
+
+- **`SpotLight` and `DirectionalLight` can be created in the editor.** Both were drawn by the
+  engine and carried by the scene file, and neither was in the studio's `ComponentRegistry` — so
+  neither appeared in the ➕ menu and the add handler had no arm for either. `SpotLight` also had no
+  inspector section at all and could not fall through to the generic one, which looks a component
+  up in that same registry. A scene that arrived without a sun could never gain one.
+
+- **The export names the assets it could not package, and packages the ones it can.**
+  `audit_scene_assets` walks the live world's reference fields — mesh sources in all three
+  encodings, material and particle textures, terrain heightmaps, scripts, sounds — and every file
+  outside the four shipped trees is either copied into the package **at its own relative path** or
+  reported in the build log with the reason it could not be. Nothing is rewritten, which is what
+  makes it safe: rewriting is where the hazards live (a glTF sub-mesh key with the path buried in
+  its middle, an asset UUID that would drag the path back to the development tree). An absolute
+  path and a `.gltf` with sidecars are refused rather than half-done, and a path containing `..` is
+  refused outright — it would write outside the export directory. The final log line is
+  `⚠ BUILD TAMAMLANDI — N varlık eksik` when anything is missing, instead of the unqualified
+  celebration that used to follow an incomplete package.
+
+- **`gizmo::systems::prefab::prefab_request_system`** — the resolver `gizmo-core` says the
+  application must supply for `PrefabRequest`, run from `PlayLoop::step` (see *Fixed*).
+
+- **`gizmo::systems::terrain::terrain_mesh_system`** — turns a `Terrain` recipe into the mesh a
+  draw path can draw, on both hosts (see *Fixed*).
+
+### Fixed
+
+- **The inspector's "Trigger" checkbox never reached the physics world — and it was the third field
+  lost by one line.** `physics_step_system` rebuilds each body's collider from the ECS every frame
+  and did it with `Collider::from_shape(shape)`, which takes everything but the shape from
+  `Default`. The `material` half of this was found and fixed earlier by appending
+  `.with_material(...)`; the two nobody appended were `is_trigger` and `collision_layer`. A
+  collider with the box ticked was rebuilt **solid** every frame, so the player hit the door sensor
+  instead of walking through it — and because the pipeline chooses between a contact manifold and a
+  `TriggerEvent` on that same flag, **no ECS body could emit a trigger event at all**, which is
+  also why Lua's `physics.triggers` was structurally always empty. The gather now clones the
+  authored collider and replaces only its shape, which closes the class rather than its third
+  instance. No determinism change: for a collider with the default flags the rebuilt struct is
+  bit-identical, and `headless_stress_test` agrees across three runs.
+
+- **Texture streaming was deleting the paths the user had assigned.** The request stage marked a
+  material as "already asked for" by clearing `Material::texture_source`, and nothing put it back —
+  the apply stage writes only `bind_group`. `material_sync` copies the material into a
+  `MaterialDesc` every frame, that is what a scene file carries, and on load it overrides
+  `MaterialSource`. So opening a textured scene, waiting a few seconds and pressing Ctrl+S wrote
+  away every albedo path in the file, and those objects reopened white. Nothing looked wrong while
+  the editor was open, because the bind group was still installed. The dedup marker is now a set of
+  `(entity, path)` pairs on `AssetServer`, keyed by path so re-assigning a texture is a new
+  question rather than a permanently suppressed one.
+
+- **Every texture assigned in the editor was missing from the exported game.** The export shipped
+  `demo/assets` under the name `assets` and nothing rewrote the references — while the asset
+  browser's workspace root *is* `demo/assets`, so a dragged texture is stored as
+  `demo/assets/foo.png`. The shipped binary makes its own directory the working directory, looks
+  there, and finds nothing. The package therefore opened untextured **on the machine that built
+  it**. `every_export_dir_ships_to_the_path_the_scene_names` now holds the whole list to
+  destination == source, because the same mistake is available to the next directory anyone adds
+  and is invisible unless someone runs the exported binary.
+
+- **The authored look was written to no file at all.** See *Changed* for what moved and how to
+  migrate. The editor's viewport and the shipped frame also disagreed about *exposure* — the
+  viewport drove it from the editor's own slider while the game read `Camera::exposure` — which the
+  same change ends.
+
+- **`Terrain` was a recipe nothing converted outside the editor.** The only code that turned one
+  into a `Mesh` was `gizmo-studio`'s render file, driven by a queue of editor edits. Nothing pushed
+  on **load**, and `Mesh` owns GPU buffers so no file can carry one — so a saved level reopened as
+  an entity that says it is a terrain and draws nothing, and an exported game never had one. The
+  new `terrain_mesh_system` is triggered by **presence** (`Terrain` and no `Mesh`), which is true
+  on load, on export and after an add, where a queue of edits is true for none of them.
+
+- **`IsHidden` was honoured only by the editor's draw loop.** The marker's own documentation says
+  "do not display this entity", the hierarchy's 👁 and the H shortcut are built on it, and the
+  engine's shared `collect_draw_items` never asked — so an object hidden in the editor came back in
+  the Game panel and in the exported game, and a game calling `world.add_component(e, IsHidden)`
+  got nothing.
+
+- **The inspector's "Mesh Renderer" section reset on every save and reopen.** `MeshRenderer` was in
+  no registry, so a LOD bias and a `Cast shadow` mode an artist set were simply not written. It
+  came in by a different route than the components fixed earlier — `asset_loading` adds one beside
+  every mesh it loads, so it is not in the ➕ menu and the menu-driven guard test could not see it.
+  A second test now scans the inspector's own section calls, where every section must name the
+  component it edits or say why the registry is not where its answer lives.
+
+- **`entity.spawn_prefab` was swallowed rather than refused.** `flush_commands` matched the command
+  and spawned an entity carrying a `PrefabRequest`, which had one producer and **zero readers**;
+  the call looked applied and produced a named empty transform with no mesh, no collider and no
+  warning. Unlike the script commands this engine drops on purpose, that one was not handed back to
+  the caller and so was invisible. The key is read as a path — the one loader in the workspace takes
+  one and there is no prefab catalogue to turn a name into anything else — and the prefab loads as a
+  child of the requesting entity, keeping the name and position the request already carried.
+
+- **Single-clicking a scene with unsaved changes did nothing at all.** The asset browser set
+  `scene.load_confirm_dialog`, which had no reader anywhere: no modal, no load, not even a status
+  line. It compounded — `has_unsaved_changes` is raised by the animation panel and the studio's own
+  save path never lowered it, so one dragged keyframe disabled single-click loading for the rest of
+  the session. Both halves are fixed.
+
+- **The README badge asked for a Rust the workspace rejects.** It said 1.92+ against a 1.96 floor
+  the same file states a hundred lines later.
+
+- **The README understated the audio layer and `demo-web/README` contradicted itself.** The README
+  said "there is no mixer, bus routing or DSP yet" while all three exist and run on the engine's own
+  audio pass (a `Mixer` with `music`/`sfx`/`ui`/`voice` buses and a master gain, and a live low-pass
+  biquad driving the underwater muffle). `demo-web/README` said audio was not enabled by that crate,
+  ten lines under its own description of the beep that proves it is. Audio is **not** native-only:
+  `gizmo-audio` has a wasm backend and `demo-web` enables the feature.
+
 ## [0.10.0] — 2026-08-16
 
 ### Changed
