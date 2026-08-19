@@ -1921,6 +1921,31 @@ A packager that gets any of those wrong rewrites paths and breaks exports that w
 is worse than not having one. The audit is the part whose correctness can be established now, and
 it is also exactly the walk the packager will need, so it is not throwaway.
 
+**And then most of it was closed, by not rewriting anything (2026-08-20).** Every hazard in that
+list is a hazard *of rewriting a stored path*. A **relative** reference does not need one: the
+shipped binary makes the package its working directory, so copying the file into the package **at
+the same relative path** makes the stored path resolve exactly as it does in the editor.
+`ship_referenced_file` does that and nothing else — no path is rewritten, so no glTF key is
+reassembled, no asset UUID is left dragging a path back to the development tree, and `.prefab`
+files need no second pass. The repository's own `assets/` tree, which was the common case, now
+travels.
+
+Two kinds are refused rather than half-done, and each refusal is in the log with its reason:
+
+- **An absolute path** — what the dialog behind "📁 Workspace Aç" returns — cannot travel without
+  a rewrite, and would not resolve on another machine even if the bytes were copied.
+- **A `.gltf`** is not one file. Its `.bin` buffers and its images are separate files named by URIs
+  inside it. Copying only the `.gltf` would produce a package that looks complete and loads a model
+  with no geometry — which moves the failure from build time to run time, the wrong direction.
+  (`.glb` embeds all of it and ships. An `.obj`'s `.mtl` is discarded at load — `tobj::load_obj`'s
+  material half goes to `_` — so an `.obj` is self-contained *for this engine* and ships too.)
+
+One hazard was found in the writing rather than in the reading, and it is the kind worth recording:
+**a stored path is data, and this routine writes with it.** `..` survives `normalize_path` by
+design, so a reference like `../../x` would have placed a file outside the export directory — the
+one directory the build had just wiped and owns. It is refused, not sanitised: a reference that
+climbs out of the project is something to tell the user about rather than quietly relocate.
+
 ### The sweep's fourth round found nothing, and that is the entry (2026-08-20)
 
 Three surfaces, **11 claims, 11 refuted**. Written down so the next session does not sweep them

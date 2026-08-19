@@ -32,10 +32,11 @@ use crate::update::copy_dir_all;
 /// invisible: the copies quietly did nothing and the log said they had worked. The `assets` one was
 /// the opposite kind — it copied a real tree, successfully, to a name nothing looked for.
 ///
-/// Still open, and NOT fixed by the rule above: a reference outside these four trees — the
-/// repository's own `assets/`, or anything under a directory chosen with "📁 Workspace Aç", which
-/// returns an absolute path — is not packaged at all and gets no warning. That needs staging to
-/// walk the scene's references and rewrite them, which is a larger change; see docs/ENGINE.md.
+/// A reference **outside** these four trees is handled separately and not by this list: see
+/// [`audit_scene_assets`] for how it is found and [`ship_referenced_file`] for how it travels —
+/// at its own relative path, so that nothing has to be rewritten. What still cannot travel (an
+/// absolute path, a `.gltf` with sidecars) is named in the build log rather than left for the
+/// player to discover.
 const EXPORT_DIRS: [(&str, &str); 4] = [
     ("demo/assets", "demo/assets"),
     ("scenes", "scenes"),
@@ -290,7 +291,7 @@ fn ships_with_export(path: &str) -> bool {
 ///
 /// Walks the **live world** rather than the staged file: these are exactly the components the save
 /// path reads, so what is audited is what will be written, and no parsing sits between the two.
-fn audit_scene_assets(world: &World) -> Vec<MissingAsset> {
+fn audit_scene_assets(world: &World, project_root: &std::path::Path) -> Vec<MissingAsset> {
     let mut refs: Vec<(String, String, RefKind)> = Vec::new();
 
     {
@@ -351,7 +352,7 @@ fn audit_scene_assets(world: &World) -> Vec<MissingAsset> {
         if !seen.insert((what.clone(), path.clone())) {
             continue;
         }
-        let on_disk = std::path::Path::new(&path).exists();
+        let on_disk = project_root.join(&path).exists();
         let reason = match (on_disk, ships_with_export(&path)) {
             (_, true) => continue,
             (true, false) => MissingReason::WillNotShip,
@@ -364,6 +365,83 @@ fn audit_scene_assets(world: &World) -> Vec<MissingAsset> {
         missing.push(MissingAsset { what, path, reason });
     }
     missing
+}
+
+/// What happened when the export tried to take a referenced file with it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ShipOutcome {
+    /// Copied into the package at the path the scene already stores.
+    Copied,
+    /// Deliberately not attempted, with the sentence the user gets.
+    Skipped(&'static str),
+    /// Attempted and failed.
+    Failed(String),
+}
+
+/// Takes one referenced file into the package **at the path the scene already stores for it**.
+///
+/// **No path is rewritten, and that is the whole design.** Rewriting is where every hazard in this
+/// area lives: a `MeshSource` may be a glTF sub-mesh key with the path buried in its middle, a
+/// rewritten path must also clear its asset UUID or the exported game's `repair_asset_paths`
+/// converts it straight back, and `.prefab` files carry the same fields again. A **relative**
+/// reference needs none of that — the shipped binary makes the package its working directory, so
+/// putting the file at the same relative path inside the package makes the stored path resolve
+/// exactly as it does in the editor.
+///
+/// Two kinds are refused rather than half-done:
+///
+/// - **An absolute path** — what the native dialog behind "📁 Workspace Aç" returns and what then
+///   gets stored — cannot be shipped without rewriting, and would not resolve on another machine
+///   even if it were copied. It stays reported.
+/// - **A `.gltf`** is not one file: its `.bin` buffers and its images are separate files named by
+///   URIs inside it, resolved relative to the `.gltf` and free to climb out with `../`. Copying
+///   only the `.gltf` would produce a package that looks complete and loads a model with no
+///   geometry — worse than the honest warning, because it moves the failure from build time to
+///   run time. (A `.glb` embeds all of it and ships fine. An `.obj`'s `.mtl` is discarded at load
+///   — `tobj::load_obj`'s material half goes to `_` — so an `.obj` is self-contained *for this
+///   engine* and does ship.)
+fn ship_referenced_file(
+    path: &str,
+    project_root: &std::path::Path,
+    export_dir: &std::path::Path,
+) -> ShipOutcome {
+    let source = std::path::Path::new(path);
+    if source.is_absolute() {
+        return ShipOutcome::Skipped(
+            "mutlak yol — paketlenmesi sahnedeki yolun yeniden yazılmasını gerektirir",
+        );
+    }
+    if source
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("gltf"))
+    {
+        return ShipOutcome::Skipped(
+            "`.gltf` tek dosya değil — yanındaki .bin ve dokuları da taşınmalı (`.glb` kullanın \
+             ya da modeli ihraç edilen bir dizine taşıyın)",
+        );
+    }
+    // A stored path is data, and this routine WRITES with it. `..` survives `normalize_path` by
+    // design, so `../../x` would place a file outside the export directory — the one directory
+    // this build wiped and owns. Refused rather than sanitised: a reference that climbs out of the
+    // project is not a thing to quietly relocate, it is a thing to tell the user about.
+    if source
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return ShipOutcome::Skipped(
+            "yol `..` içeriyor — paketin dışına çıkar, bu yüzden taşınmadı",
+        );
+    }
+
+    let destination = export_dir.join(source);
+    let prepared = match destination.parent() {
+        Some(dir) => std::fs::create_dir_all(dir),
+        None => Ok(()),
+    };
+    match prepared.and_then(|()| std::fs::copy(project_root.join(source), &destination)) {
+        Ok(_) => ShipOutcome::Copied,
+        Err(e) => ShipOutcome::Failed(e.to_string()),
+    }
 }
 
 /// Acts on a build request from the toolbar: packages the current scene and the runtime for the
@@ -386,7 +464,7 @@ pub fn handle_build_requests(world: &World, editor_state: &mut EditorState) {
         // Captured before the thread starts — see `stage_scene_for_export`. The audit is captured
         // here for the same reason: it reads the live world, which the build thread cannot borrow.
         let staged_scene = stage_scene_for_export(world);
-        let missing_assets = audit_scene_assets(world);
+        let missing_assets = audit_scene_assets(world, std::path::Path::new("."));
 
         std::thread::spawn(move || {
             let log = |msg: &str| {
@@ -552,28 +630,49 @@ pub fn handle_build_requests(world: &World, editor_state: &mut EditorState) {
                             }
                         };
 
-                        // Every asset the scene names that the package will not contain, said out
-                        // loud. The export copies four whole trees and never looks at what the
-                        // scene references, so anything outside them was simply absent from the
-                        // package — and the log's next line congratulated the user.
-                        if !missing_assets.is_empty() {
-                            log(&format!(
-                                "\n== UYARI: {} varlık pakete girmedi ==",
-                                missing_assets.len()
-                            ));
-                            for m in &missing_assets {
-                                match m.reason {
-                                    MissingReason::WillNotShip => log(&format!(
-                                        "  {} '{}' — dosya var ama ihraç edilen ağaçların dışında; \
-                                         oyunda eksik görünecek",
-                                        m.what, m.path
-                                    )),
-                                    MissingReason::Unresolved => log(&format!(
-                                        "  {} '{}' — bu yolda dosya yok; sahne bunu editörde de \
-                                         açamıyor",
-                                        m.what, m.path
-                                    )),
+                        // The assets the scene names from outside the four shipped trees. Each one
+                        // that CAN travel is taken at the path the scene already stores for it —
+                        // no rewriting, which is where every hazard in this area lives — and what
+                        // is left is said out loud rather than left for the player to discover.
+                        let mut unshipped: Vec<(&MissingAsset, String)> = Vec::new();
+                        let mut taken = 0usize;
+                        for m in &missing_assets {
+                            match m.reason {
+                                MissingReason::Unresolved => unshipped.push((
+                                    m,
+                                    "bu yolda dosya yok; sahne bunu editörde de açamıyor".into(),
+                                )),
+                                MissingReason::WillNotShip => {
+                                    match ship_referenced_file(
+                                        &m.path,
+                                        std::path::Path::new("."),
+                                        export_dir,
+                                    ) {
+                                        ShipOutcome::Copied => taken += 1,
+                                        ShipOutcome::Skipped(why) => {
+                                            unshipped.push((m, why.to_string()))
+                                        }
+                                        ShipOutcome::Failed(e) => {
+                                            unshipped.push((m, format!("kopyalanamadı: {e}")))
+                                        }
+                                    }
                                 }
+                            }
+                        }
+                        if taken > 0 {
+                            log(&format!(
+                                "Sahnenin adlandırdığı {taken} varlık, ihraç edilen ağaçların \
+                                 dışındaydı ve kendi göreli yoluyla pakete alındı"
+                            ));
+                        }
+
+                        if !unshipped.is_empty() {
+                            log(&format!(
+                                "\n== UYARI: {} varlık pakete giremedi ==",
+                                unshipped.len()
+                            ));
+                            for (m, why) in &unshipped {
+                                log(&format!("  {} '{}' — {why}", m.what, m.path));
                             }
                             log(
                                 "  Çözüm: bu dosyaları projenin ihraç edilen dizinlerinden birine \
@@ -587,10 +686,10 @@ pub fn handle_build_requests(world: &World, editor_state: &mut EditorState) {
                         // and saying "Oyununuz hazır" over that is the defect this path had. The
                         // same rule now covers a package whose assets are incomplete: it runs, and
                         // saying nothing about the missing ones is the same lie one size smaller.
-                        if scene_shipped && !missing_assets.is_empty() {
+                        if scene_shipped && !unshipped.is_empty() {
                             log(&format!(
                                 "\n⚠ BUILD TAMAMLANDI — {} varlık eksik",
-                                missing_assets.len()
+                                unshipped.len()
                             ));
                             log(&format!(
                                 "Oyun 'export/gizmo_game/' dizininde çalışır ama yukarıdaki \
@@ -753,7 +852,7 @@ mod export_copy_tests {
             gizmo::core::component::MeshSource("standard_cube".to_string()),
         );
 
-        let missing = audit_scene_assets(&world);
+        let missing = audit_scene_assets(&world, std::path::Path::new("."));
         let _ = std::fs::remove_file(&real);
 
         let reported: Vec<(&str, MissingReason)> = missing
@@ -775,6 +874,108 @@ mod export_copy_tests {
             "the shipped script, the named sound and the built-in cube must all stay quiet: \
              {reported:?}"
         );
+    }
+
+    /// **A referenced file travels at the path the scene already stores for it** — which is what
+    /// makes shipping it possible without rewriting anything.
+    ///
+    /// The rewriting is where every hazard in this area lives (a glTF sub-mesh key with the path
+    /// buried in its middle, an asset UUID that would drag the path back to the development tree,
+    /// `.prefab` files carrying the same fields again). A relative reference needs none of it: the
+    /// shipped binary makes the package its working directory, so the same relative path resolves.
+    #[test]
+    fn a_relative_reference_is_copied_to_the_same_relative_path() {
+        let export = scratch("ship_relative");
+        let project = scratch("ship_project");
+        let asset_dir = project.join("assets/textures");
+        std::fs::create_dir_all(&asset_dir).expect("kaynak dizin");
+        std::fs::write(asset_dir.join("grass.png"), b"pixels").expect("kaynak dosya");
+
+        // The project root is a parameter rather than the process's working directory: changing
+        // the cwd is global, and the other tests in this binary run in parallel with this one.
+        let outcome = ship_referenced_file("assets/textures/grass.png", &project, &export);
+
+        assert_eq!(outcome, ShipOutcome::Copied);
+        assert_eq!(
+            std::fs::read(export.join("assets/textures/grass.png")).expect("pakete alınmalı"),
+            b"pixels",
+            "the file has to land under the SAME relative path, or the stored reference misses it"
+        );
+    }
+
+    /// The two kinds that are refused rather than half-done, and why each refusal is the honest
+    /// answer instead of the lazy one.
+    #[test]
+    fn an_absolute_path_and_a_gltf_are_refused_with_a_reason() {
+        let export = scratch("ship_refused");
+
+        let absolute = std::env::temp_dir().join("gizmo_ship_abs.png");
+        std::fs::write(&absolute, b"pixels").expect("kaynak dosya");
+        let outcome = ship_referenced_file(&absolute.to_string_lossy(), &export, &export);
+        let _ = std::fs::remove_file(&absolute);
+        assert!(
+            matches!(outcome, ShipOutcome::Skipped(_)),
+            "an absolute path cannot ship without rewriting the scene, and would not resolve on \
+             another machine even if it were copied: {outcome:?}"
+        );
+
+        assert!(
+            matches!(
+                ship_referenced_file("assets/models/car.gltf", &export, &export),
+                ShipOutcome::Skipped(_)
+            ),
+            "a `.gltf` is not one file — copying only the .gltf would produce a package that looks \
+             complete and loads a model with no geometry, moving the failure from build time to \
+             run time"
+        );
+        assert!(
+            !export.join("assets/models/car.gltf").exists(),
+            "and a refusal must not leave half a model behind"
+        );
+    }
+
+    /// **A stored path is data, and this routine writes with it.**
+    ///
+    /// `..` survives the engine's `normalize_path` by design, so a reference like `../../x` would
+    /// place a file outside the export directory — the one directory the build wiped and owns.
+    /// Refused rather than sanitised: a reference that climbs out of the project is something to
+    /// tell the user about, not something to quietly relocate.
+    #[test]
+    fn a_reference_that_climbs_out_of_the_project_is_refused() {
+        let export = scratch("ship_traversal");
+        let project = scratch("ship_traversal_src");
+        std::fs::write(project.join("secret.png"), b"pixels").expect("kaynak dosya");
+
+        let outcome = ship_referenced_file("../secret.png", &project.join("sub"), &export);
+
+        assert!(
+            matches!(outcome, ShipOutcome::Skipped(_)),
+            "a path with `..` must not be written through: {outcome:?}"
+        );
+        assert!(
+            !export.parent().is_some_and(|p| p.join("secret.png").exists()),
+            "and nothing may land beside the export directory"
+        );
+    }
+
+    /// A `.glb` embeds its buffers and images, and an `.obj`'s `.mtl` is discarded at load, so both
+    /// are self-contained **for this engine** and both ship. Asserted because the `.gltf` refusal
+    /// above is one `extension()` check away from swallowing them too.
+    #[test]
+    fn a_glb_and_an_obj_are_self_contained_and_do_ship() {
+        let export = scratch("ship_selfcontained");
+        let project = scratch("ship_selfcontained_src");
+        std::fs::create_dir_all(project.join("models")).expect("kaynak dizin");
+        std::fs::write(project.join("models/car.glb"), b"glb").expect("glb");
+        std::fs::write(project.join("models/rock.obj"), b"obj").expect("obj");
+
+        let glb = ship_referenced_file("models/car.glb", &project, &export);
+        let obj = ship_referenced_file("models/rock.obj", &project, &export);
+
+        assert_eq!(glb, ShipOutcome::Copied, "a .glb embeds everything it needs");
+        assert_eq!(obj, ShipOutcome::Copied, "and tobj discards the .mtl half anyway");
+        assert!(export.join("models/car.glb").exists());
+        assert!(export.join("models/rock.obj").exists());
     }
 
     /// **An export must file every asset where the scene names it.**
