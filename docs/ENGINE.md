@@ -1839,6 +1839,52 @@ Four things were done to make that one change safe rather than merely correct:
 §3392's post-process table measured liveness only and is unchanged by this; what it did not ask was
 where the numbers came from.
 
+### The sweep's third round: export, assets, `gizmo-ui`/`gizmo-analysis`, the timeline (2026-08-19)
+
+Four surfaces nothing had swept. **13 claims, 11 refuted** — the highest kill rate of the three
+rounds, and for the same reason each time: `UiRoot` is consumed nowhere but promised nowhere;
+the animation timeline's keyframes have no file to go to and the panel offers none; the fight HUD
+is editor-only and no surface says an exported build has one. A verb whose noun no user can create
+is still not a promise.
+
+**Closed: texture streaming was deleting the user's texture paths.** `request_nearby_textures`
+marked a material as "already asked for" by clearing `Material::texture_source`, and nothing ever
+put the path back — the apply stage writes only `bind_group`. `material_sync` copies the material
+into a `MaterialDesc` every frame, `MaterialDesc` is what a scene file carries, and on load it
+overrides `MaterialSource`. So: open a textured scene, wait a few seconds for the objects within
+50 m of the camera to be requested, press Ctrl+S — and every albedo path in the file is now `None`,
+with those objects reopening white. Nothing looked wrong while the editor was open, because the
+bind group was still installed; the inspector's row just went quietly back to "Texture: (Doku
+Sürükle & Bırak)". The dedup marker is now a set of `(entity, path)` pairs on `AssetServer`, keyed
+by path so re-assigning a texture is a new question rather than a permanently suppressed one, and
+the request stage no longer mutates `Material` at all (one `unsafe` borrow gone with it).
+
+Two things about that fix are worth keeping. **The existing test asserted the defect** — "yakın
+materyal için streaming isteği atılıp `texture_source` None olmalı" — which is how a data-losing
+line survived a test that ran over it. And the rule was split into a GPU-free `should_request` and
+tested separately, because the test around it needs a real `wgpu` device and skips itself on a
+machine without an adapter: the coverage was absent exactly where regressions land.
+
+**Closed: every texture assigned in the editor was missing from the exported game.** `EXPORT_DIRS`
+shipped `demo/assets` under the name `assets`, and nothing rewrote the references — while the asset
+browser's workspace root *is* `demo/assets`, so a dragged texture is stored in the scene as
+`demo/assets/foo.png`. The exported binary makes its own directory the working directory, looks for
+`demo/assets/foo.png`, and finds nothing; the package has it at `assets/foo.png`. The shipped build
+therefore opened untextured **on the machine that built it**, and the build log ended with
+"🎉 BUILD TAMAMLANDI!". The list's own doc already stated the rule it was breaking ("the sources are
+the paths the *runtime* uses"), and `gizmo_runtime` already scanned both layouts, so shipping the
+tree under its own name is what that code was written for.
+`every_export_dir_ships_to_the_path_the_scene_names` holds the whole list to destination == source
+rather than correcting the one entry, because the same mistake is available to the next directory
+anyone adds and is invisible unless someone runs the exported binary.
+
+**Still open from this round:** an asset reference *outside* those four trees is not packaged at
+all and gets no warning — the repository's own `assets/`, and anything under a directory chosen
+with "📁 Workspace Aç", which returns an absolute path that is then baked into the scene. Closing
+it means staging walking the scene's references, copying each file into the package and rewriting
+the path, plus a build-log line for every reference it could not resolve. That is a real feature
+rather than a wiring fix, and it is the last thing this sweep has found and not done.
+
 **Small known limits (left open on purpose):**
 - Nothing raises `NavGrid::needs_rebuild` when static geometry changes; the scene's owner or the
   editor's "Rebuild NavMesh" button raises it.

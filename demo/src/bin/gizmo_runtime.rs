@@ -25,10 +25,13 @@
 //!
 //! ## Where the data comes from
 //!
-//! An exported build is a self-contained directory — the binary with `scenes/`, `scripts/` and
-//! `assets/` beside it — so the runtime makes *that* directory the working directory and every
-//! relative path the editor wrote keeps meaning what it meant. A dev checkout is not laid out
-//! that way (the binary sits in `target/release/`), so there the caller's cwd is left alone:
+//! An exported build is a self-contained directory — the binary with `scenes/`, `scripts/`,
+//! `media/` and `demo/assets/` beside it — so the runtime makes *that* directory the working
+//! directory and every relative path the editor wrote keeps meaning what it meant. The asset tree
+//! keeps its own name for exactly that reason: the editor's asset browser stores a dragged texture
+//! as `demo/assets/foo.png`, and an export that filed it under `assets/` had broken the reference
+//! before the game ever started. A dev checkout is not laid out that way (the binary sits in
+//! `target/release/`), so there the caller's cwd is left alone:
 //!
 //! ```sh
 //! cargo run --release --bin gizmo_runtime -- demo/assets/sample.scene
@@ -105,9 +108,10 @@ fn setup(world: &mut World, _renderer: &Renderer) -> RuntimeState {
     // must not stamp new sidecars into its own install directory — an asset with no identity keeps
     // being addressed by path, exactly as before.
     //
-    // `assets/` and `demo/assets/` because those are the two layouts `exported_layout_root` picks
-    // between: an export puts `assets/` beside the binary, and a dev run from the workspace has
-    // `demo/assets/`. Scanning a directory that does not exist is a no-op.
+    // Both roots because both layouts exist: an export ships `demo/assets/` beside the binary
+    // (under its own name, so the paths scenes store keep resolving), and a bare `assets/` is the
+    // repository's own tree, which a dev run from the workspace may have. Scanning a directory
+    // that does not exist is a no-op, so listing both costs nothing.
     let mut assets = AssetManager::new();
     for root in ["assets", "demo/assets"] {
         assets.scan_assets_directory(Path::new(root));

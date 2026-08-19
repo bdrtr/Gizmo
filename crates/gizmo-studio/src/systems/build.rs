@@ -5,8 +5,22 @@ use crate::update::copy_dir_all;
 
 /// The directories an export ships beside the executable, as `(destination, source)`.
 ///
+/// **Destination and source are the same string in every entry, and that is the invariant, not a
+/// coincidence.** A scene file stores the path a reference was authored with, and the exported
+/// binary makes its own directory the working directory — so a package that files an asset
+/// somewhere other than where the scene names it has broken that reference, on every machine
+/// including the one that built it. `every_export_dir_ships_to_the_path_the_scene_names` holds the
+/// list to that rule.
+///
 /// The sources are the paths the *runtime* uses, which is not what this list said before:
-///   * `assets` — `demo/assets`, which is where the shaders and models the demo runtime loads live.
+///   * `demo/assets` — where the shaders and models the demo runtime loads live, and what the
+///     asset browser writes into a scene: its workspace root is `demo/assets`, so a dragged
+///     texture is stored as `demo/assets/foo.png`. This entry used to ship that tree as `assets/`
+///     while nothing rewrote the references, so **every texture assigned through the browser was
+///     missing in the exported game** — the shipped build opened untextured and the build log said
+///     "🎉 BUILD TAMAMLANDI!". The runtime already scans both layouts
+///     (`gizmo_runtime.rs`: `for root in ["assets", "demo/assets"]`), so shipping it under its own
+///     name is what that code was already prepared for.
 ///   * `scripts` — `scripts/`, **not** `demo/scripts`. The editor stamps new scripts as
 ///     `Script::new("scripts/new_script.lua")` and `ScriptEngine::load_script` reads that path
 ///     straight through `std::fs::read_to_string`, i.e. relative to the working directory. The old
@@ -14,10 +28,16 @@ use crate::update::copy_dir_all;
 ///   * `scenes` — `scenes/`, for the same reason: `demo/scenes` is written by nobody.
 ///   * `media` — `media/`, unchanged; that one was right.
 ///
-/// `demo/scenes` and `demo/scripts` are both absent from the repository, so the two mistakes were
-/// invisible: the copies quietly did nothing and the log said they had worked.
+/// `demo/scenes` and `demo/scripts` are both absent from the repository, so those two mistakes were
+/// invisible: the copies quietly did nothing and the log said they had worked. The `assets` one was
+/// the opposite kind — it copied a real tree, successfully, to a name nothing looked for.
+///
+/// Still open, and NOT fixed by the rule above: a reference outside these four trees — the
+/// repository's own `assets/`, or anything under a directory chosen with "📁 Workspace Aç", which
+/// returns an absolute path — is not packaged at all and gets no warning. That needs staging to
+/// walk the scene's references and rewrite them, which is a larger change; see docs/ENGINE.md.
 const EXPORT_DIRS: [(&str, &str); 4] = [
-    ("assets", "demo/assets"),
+    ("demo/assets", "demo/assets"),
     ("scenes", "scenes"),
     ("scripts", "scripts"),
     ("media", "media"),
@@ -385,6 +405,34 @@ mod export_copy_tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("scratch dizini");
         dir
+    }
+
+    /// **An export must file every asset where the scene names it.**
+    ///
+    /// A scene stores the path a reference was authored with, and the shipped binary makes its own
+    /// directory the working directory — so a package that copies a tree to a *different* name has
+    /// broken every reference into it, on the machine that built it as much as on any other. That
+    /// is what `("assets", "demo/assets")` did: the asset browser's workspace root is
+    /// `demo/assets`, so a dragged texture is stored as `demo/assets/foo.png`, and the export
+    /// shipped it as `assets/foo.png`. Every texture assigned through the browser was missing in
+    /// the exported game, and the build log ended with "🎉 BUILD TAMAMLANDI!".
+    ///
+    /// Asserted as a rule over the whole list rather than as one corrected entry, because the same
+    /// mistake is available to the next directory anyone adds — and it is invisible in testing
+    /// unless someone runs the exported binary from the export directory.
+    #[test]
+    fn every_export_dir_ships_to_the_path_the_scene_names() {
+        let renamed: Vec<&str> = EXPORT_DIRS
+            .iter()
+            .filter(|(dest, src)| dest != src)
+            .map(|(_, src)| *src)
+            .collect();
+        assert!(
+            renamed.is_empty(),
+            "these trees are shipped under a different name than the one a scene stores for them, \
+             so every reference into them breaks in the exported game: {renamed:?}. Either ship \
+             them under their own path, or rewrite the scene's references while staging."
+        );
     }
 
     /// A copy that did nothing must not be logged as a copy that worked.
