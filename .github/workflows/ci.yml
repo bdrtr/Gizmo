@@ -34,10 +34,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Build
         run: cargo build --locked --workspace --verbose
+      # `--no-fail-fast` so a red run reports EVERYTHING that is red. Without it cargo stops
+      # launching test binaries at the first failure, and this workspace has 159 of them —
+      # measured locally on 2026-08-19, where one standing failure was hiding 29, `gizmo-studio`'s
+      # whole integration suite among them. On CI the same mechanism turns "one test failed" into
+      # a report that may be missing the other nine.
       - name: Test (workspace, default features)
-        run: cargo test --locked --workspace --verbose
+        run: cargo test --locked --workspace --no-fail-fast --verbose
       - name: Test gizmo-net (feature-gated backends)
-        run: cargo test --locked -p gizmo-net --features client-server,rollback
+        run: cargo test --locked -p gizmo-net --no-fail-fast --features client-server,rollback
 
   # ── Lint: rustfmt (report-only) + clippy (-D warnings, ratcheted) ─────────
   lint:
