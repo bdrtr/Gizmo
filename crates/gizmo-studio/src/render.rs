@@ -293,12 +293,30 @@ pub fn render_studio(
     if let Some((ent_id, path)) = prefab_save_req {
         // Reported both ways, like the scene load above it — this one used to drop the result and
         // say "Prefab kaydedildi." either way.
-        let save = gizmo::scene::SceneData::save_prefab(
-            world,
-            ent_id.id(),
-            &path,
-            &gizmo::full_scene_registry(),
-        );
+        // WITH identity, like the scene save above — and unlike every prefab written before
+        // today. A prefab is the reusable unit, so a model that moves breaks every instance of it
+        // in every scene; that is the case the UUID fallback exists for and the one case it was
+        // not being written for. Manager out and back, same as the scene path: the save reads the
+        // whole world and cannot hold a resource borrow across it.
+        let manager = world.remove_resource::<gizmo::renderer::asset::AssetManager>();
+        let save = match &manager {
+            Some(m) => gizmo::scene::SceneData::save_prefab_with_identity(
+                world,
+                ent_id.id(),
+                &path,
+                &gizmo::full_scene_registry(),
+                &gizmo::asset_identity::ManagerIdentity(m),
+            ),
+            None => gizmo::scene::SceneData::save_prefab(
+                world,
+                ent_id.id(),
+                &path,
+                &gizmo::full_scene_registry(),
+            ),
+        };
+        if let Some(m) = manager {
+            world.insert_resource(m);
+        }
         if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
             match save {
                 Ok(_) => ed.log_info(&format!("Prefab kaydedildi: {}", path)),
@@ -308,12 +326,28 @@ pub fn render_studio(
     }
 
     if let Some((path, parent, target_pos)) = prefab_load_req {
-        let loaded_root = gizmo::scene::SceneData::load_prefab(
-            &path,
-            parent.map(|p| p.id()),
-            world,
-            &gizmo::full_scene_registry(),
-        );
+        // WITH identity: a prefab whose model has moved since it was saved is repointed before
+        // the entities are built — after instantiation the components carry only the path and
+        // there is nothing left to repair from.
+        let manager = world.remove_resource::<gizmo::renderer::asset::AssetManager>();
+        let loaded_root = match &manager {
+            Some(m) => gizmo::scene::SceneData::load_prefab_with_identity(
+                &path,
+                parent.map(|p| p.id()),
+                world,
+                &gizmo::full_scene_registry(),
+                &gizmo::asset_identity::ManagerIdentity(m),
+            ),
+            None => gizmo::scene::SceneData::load_prefab(
+                &path,
+                parent.map(|p| p.id()),
+                world,
+                &gizmo::full_scene_registry(),
+            ),
+        };
+        if let Some(m) = manager {
+            world.insert_resource(m);
+        }
 
         // Prefab spawn pozisyonunu (Asset browser'dan drop edilmişse) uygula
         if let (Ok(Some(root_id)), Some(pos)) = (&loaded_root, target_pos) {

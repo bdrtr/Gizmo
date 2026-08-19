@@ -530,6 +530,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Prefabs recorded no asset identity, so a model that moved broke every prefab built on it.**
+  Scenes have been saved and loaded *with identity* since it existed — each asset reference also
+  records the UUID of the file it names, so a later load can find that file if it has since moved
+  — and the prefab path had none of it: `save_prefab` stamped nothing and `load_prefab` repaired
+  nothing. A prefab is the **reusable** unit, so one moved model breaks it everywhere it is
+  instantiated; it is the case identity exists for and it was the case that did not get it.
+
+  `save_prefab_with_identity` / `load_prefab_with_identity` are the identity-aware halves, and the
+  existing two now delegate to them with `NoAssetIdentity` — the same "one code path, two
+  resolvers" shape the scene functions already use, so the two cannot drift. The stamping and
+  repairing themselves are now free functions over a slice of entity records, shared by both file
+  types for the same reason. A prefab written before today carries no UUIDs and loads exactly as it
+  did.
+
 - **Two of `AnalysisConfig`'s four fields were documented as live and were read once.** The type
   said "read every frame, so changing it mid-run takes effect on the next `collect`";
   `metric_history` was read exactly once, when the `MetricStore` was built, and

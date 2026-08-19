@@ -147,8 +147,19 @@ impl SceneData {
     /// Returns how many references gained an identity, which is the number a caller can log or
     /// assert on. Re-stamping is idempotent for an unchanged tree.
     pub fn stamp_asset_identity(&mut self, identity: &dyn AssetIdentity) -> usize {
+        stamp_entity_assets(&mut self.entities, identity)
+    }
+}
+
+/// The stamping itself, over a plain slice, so a [`SceneData`] and a [`PrefabData`] cannot
+/// disagree about what an identity stamp is.
+///
+/// They did: prefabs were saved and loaded with no identity at all, so an asset that moved broke
+/// every prefab referencing it while a scene referencing the same file repaired itself.
+fn stamp_entity_assets(entities: &mut [EntityData], identity: &dyn AssetIdentity) -> usize {
+    {
         let mut stamped = 0;
-        for entity in &mut self.entities {
+        for entity in entities {
             if let Some(source) = entity.mesh_source.as_deref() {
                 // A glTF sub-mesh key is not a path — it is `gltf_mesh_<path>_<node>_p<n>` — so
                 // asking the registry about it directly answers `None` and the reference gets no
@@ -176,7 +187,9 @@ impl SceneData {
         }
         stamped
     }
+}
 
+impl SceneData {
     /// Point every stale asset path at where that asset is *now*, using the recorded identity.
     ///
     /// Run after reading, before instantiating. For each reference that carries a UUID the registry
@@ -192,8 +205,15 @@ impl SceneData {
     ///
     /// Returns how many references were repointed.
     pub fn repair_asset_paths(&mut self, identity: &dyn AssetIdentity) -> usize {
+        repair_entity_assets(&mut self.entities, identity)
+    }
+}
+
+/// The repair itself, over a plain slice — see [`stamp_entity_assets`] for why it is not a method.
+fn repair_entity_assets(entities: &mut [EntityData], identity: &dyn AssetIdentity) -> usize {
+    {
         let mut repaired = 0;
-        for entity in &mut self.entities {
+        for entity in entities {
             if let Some(uuid) = entity.mesh_uuid.clone() {
                 if let Some(current) = identity.path_for_uuid(&uuid) {
                     // For a glTF sub-mesh the repair is a REWRITE, not a replacement: the key
@@ -226,6 +246,23 @@ impl SceneData {
             }
         }
         repaired
+    }
+}
+
+impl PrefabData {
+    /// Record the identity of every asset this prefab references — the same stamp
+    /// [`SceneData::stamp_asset_identity`] writes, and for the same reason.
+    ///
+    /// A prefab is the *reusable* unit: one moved model breaks every instance of it in every
+    /// scene, which is the case identity exists for, and it was the one case that did not get it.
+    pub fn stamp_asset_identity(&mut self, identity: &dyn AssetIdentity) -> usize {
+        stamp_entity_assets(&mut self.entities, identity)
+    }
+
+    /// Point every stale asset path at where that asset is *now* — see
+    /// [`SceneData::repair_asset_paths`] for exactly what is and is not repairable.
+    pub fn repair_asset_paths(&mut self, identity: &dyn AssetIdentity) -> usize {
+        repair_entity_assets(&mut self.entities, identity)
     }
 }
 
@@ -1082,12 +1119,32 @@ impl SceneData {
     /// # Errors
     /// [`SceneError::Serialize`] if RON encoding fails, [`SceneError::Io`] if the file cannot
     /// be written.
-    #[tracing::instrument(skip_all, name = "save_prefab", fields(path = %file_path, root = root_entity_id))]
     pub fn save_prefab(
         world: &World,
         root_entity_id: u32,
         file_path: &str,
         registry: &gizmo_core::registry::ComponentRegistry,
+    ) -> Result<(), SceneError> {
+        Self::save_prefab_with_identity(world, root_entity_id, file_path, registry, &NoAssetIdentity)
+    }
+
+    /// [`save_prefab`](Self::save_prefab), plus the UUID fallback for every asset the subtree
+    /// references.
+    ///
+    /// The scene path has had this since asset identity existed and the prefab path never did, so
+    /// a model that moved took every prefab built on it with it — while a scene referencing the
+    /// same file repaired itself on load. A prefab is the *reusable* unit, so it is the one that
+    /// most needs the fallback.
+    ///
+    /// # Errors
+    /// The same as [`save_prefab`](Self::save_prefab).
+    #[tracing::instrument(skip_all, name = "save_prefab", fields(path = %file_path, root = root_entity_id))]
+    pub fn save_prefab_with_identity(
+        world: &World,
+        root_entity_id: u32,
+        file_path: &str,
+        registry: &gizmo_core::registry::ComponentRegistry,
+        identity: &dyn AssetIdentity,
     ) -> Result<(), SceneError> {
         if let Some(parent) = std::path::Path::new(file_path).parent() {
             // Non-fatal: `fs::write` below surfaces a genuinely unusable directory.
@@ -1160,12 +1217,16 @@ impl SceneData {
             }
         }
 
-        let prefab = PrefabData {
+        let mut prefab = PrefabData {
             version: CURRENT_SCENE_VERSION,
             root_id: root_entity_id,
             entities: entities_data,
             joints,
         };
+        let stamped = prefab.stamp_asset_identity(identity);
+        if stamped > 0 {
+            tracing::debug!(stamped, "[Scene] prefab varlık kimlikleri damgalandı");
+        }
 
         let string_data = ron::ser::to_string_pretty(&prefab, ron::ser::PrettyConfig::default())
             .map_err(|e| {
@@ -1218,12 +1279,31 @@ impl SceneData {
     /// # Errors
     /// [`SceneError::Io`] if the file cannot be read, [`SceneError::Parse`] if it is not valid
     /// RON.
-    #[tracing::instrument(skip_all, name = "load_prefab", fields(path = %file_path))]
     pub fn load_prefab(
         file_path: &str,
         parent_entity: Option<u32>,
         world: &mut World,
         registry: &gizmo_core::registry::ComponentRegistry,
+    ) -> Result<Option<u32>, SceneError> {
+        Self::load_prefab_with_identity(file_path, parent_entity, world, registry, &NoAssetIdentity)
+    }
+
+    /// [`load_prefab`](Self::load_prefab), repointing any stale asset path the file recorded a
+    /// UUID for — the prefab half of what
+    /// [`load_into_with_identity`](Self::load_into_with_identity) does for a scene.
+    ///
+    /// A prefab written before this existed carries no UUIDs, so it loads exactly as it did: the
+    /// repair only acts on identities that are there.
+    ///
+    /// # Errors
+    /// The same as [`load_prefab`](Self::load_prefab).
+    #[tracing::instrument(skip_all, name = "load_prefab", fields(path = %file_path))]
+    pub fn load_prefab_with_identity(
+        file_path: &str,
+        parent_entity: Option<u32>,
+        world: &mut World,
+        registry: &gizmo_core::registry::ComponentRegistry,
+        identity: &dyn AssetIdentity,
     ) -> Result<Option<u32>, SceneError> {
         let string_data = fs::read_to_string(file_path).map_err(|e| {
             // Same reasoning as `load_into`: not-UTF-8 is a wrong-format report, not an I/O one.
@@ -1241,7 +1321,7 @@ impl SceneData {
             e
         })?;
 
-        let prefab: PrefabData = ron::from_str(&string_data).map_err(|e| {
+        let mut prefab: PrefabData = ron::from_str(&string_data).map_err(|e| {
             tracing::error!(
                 path = %file_path,
                 error = %e,
@@ -1250,6 +1330,15 @@ impl SceneData {
             );
             e
         })?;
+
+        let repaired = prefab.repair_asset_paths(identity);
+        if repaired > 0 {
+            tracing::info!(
+                path = %file_path,
+                repaired,
+                "[Scene] prefab varlık yolları taşındıkları yere yönlendirildi",
+            );
+        }
 
         let saved_root = prefab.root_id;
         let entity_count = prefab.entities.len();
@@ -2397,4 +2486,83 @@ mod asset_identity_tests {
         assert_eq!(scene.entities[0].mesh_source.as_deref(), Some("demo/assets/tree.obj"));
         assert_eq!(scene.repair_asset_paths(&Registry::new(&[])), 0);
     }
+
+    /// **A prefab is the reusable unit, and it was the one thing identity did not cover.**
+    ///
+    /// End to end through the files: save a prefab while the model sits at its old path, move the
+    /// model (a fresh scan reports the new path for the same UUID), load the prefab — and the
+    /// entity it spawns points at where the model is now. Before `save_prefab` learned to stamp,
+    /// the reference was exactly as stale as the path it was written from, so a moved model broke
+    /// every prefab built on it while a *scene* referencing the same file repaired itself.
+    #[test]
+    fn a_prefab_whose_model_moved_is_still_loadable() {
+        use gizmo_core::World;
+        use gizmo_core::component::MeshSource;
+
+        let registry = gizmo_core::registry::ComponentRegistry::new();
+        let mut world = World::new();
+        let root = world.spawn();
+        world.add_component(root, MeshSource("demo/assets/old/tree.obj".to_string()));
+
+        let at_save = Registry::new(&[(
+            "demo/assets/old/tree.obj",
+            "33333333-3333-3333-3333-333333333333",
+        )]);
+        let path = std::env::temp_dir().join(format!("gizmo_prefab_id_{}.prefab", std::process::id()));
+        let path = path.to_string_lossy().to_string();
+        SceneData::save_prefab_with_identity(&world, root.id(), &path, &registry, &at_save)
+            .expect("save");
+
+        let written = std::fs::read_to_string(&path).expect("the prefab is on disk");
+        assert!(
+            written.contains("33333333-3333-3333-3333-333333333333"),
+            "the prefab must record what it references, not only where it was: {written}"
+        );
+
+        // The model moved with its sidecar.
+        let at_load = Registry::new(&[(
+            "demo/assets/props/tree.obj",
+            "33333333-3333-3333-3333-333333333333",
+        )]);
+        let mut loaded = World::new();
+        let new_root =
+            SceneData::load_prefab_with_identity(&path, None, &mut loaded, &registry, &at_load)
+                .expect("load")
+                .expect("a root came back");
+        let _ = std::fs::remove_file(&path);
+
+        let sources = loaded.borrow::<MeshSource>();
+        assert_eq!(
+            sources.get(new_root).map(|m| m.0.clone()).as_deref(),
+            Some("demo/assets/props/tree.obj"),
+            "the instance must point at where the model is now"
+        );
+    }
+
+    /// The identity-blind entry points still exist and still behave: a prefab saved without a
+    /// resolver records nothing, which is what every prefab in the tree already looks like.
+    #[test]
+    fn a_prefab_saved_without_a_resolver_records_no_identity() {
+        use gizmo_core::World;
+        use gizmo_core::component::MeshSource;
+
+        let registry = gizmo_core::registry::ComponentRegistry::new();
+        let mut world = World::new();
+        let root = world.spawn();
+        world.add_component(root, MeshSource("demo/assets/old/tree.obj".to_string()));
+
+        let path =
+            std::env::temp_dir().join(format!("gizmo_prefab_noid_{}.prefab", std::process::id()));
+        let path = path.to_string_lossy().to_string();
+        SceneData::save_prefab(&world, root.id(), &path, &registry).expect("save");
+        let written = std::fs::read_to_string(&path).expect("the prefab is on disk");
+        let _ = std::fs::remove_file(&path);
+
+        assert!(written.contains("demo/assets/old/tree.obj"), "the path is written as before");
+        assert!(
+            !written.contains("mesh_uuid: Some("),
+            "no resolver, no identity — `NoAssetIdentity` answers None to everything"
+        );
+    }
+
 }
