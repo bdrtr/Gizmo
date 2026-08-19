@@ -1542,7 +1542,7 @@ dependencies = [
  "gizmo-engine",
  "gizmo-math",
  "mimalloc",
- "pollster",
+ "pollster 1.0.1",
  "winit",
 ]
 
@@ -1771,7 +1771,7 @@ dependencies = [
  "bytemuck",
  "gizmo-engine",
  "mimalloc",
- "pollster",
+ "pollster 1.0.1",
  "rand 0.10.2",
  "tracing",
  "tracing-subscriber",
@@ -2604,7 +2604,7 @@ dependencies = [
  "image",
  "js-sys",
  "log",
- "pollster",
+ "pollster 1.0.1",
  "rfd",
  "serde",
  "tracing",
@@ -2699,7 +2699,7 @@ dependencies = [
  "gizmo-scripting",
  "gizmo-ui",
  "gizmo-window",
- "pollster",
+ "pollster 1.0.1",
  "rayon",
  "serde",
  "tracing",
@@ -2793,7 +2793,7 @@ dependencies = [
  "gizmo-physics-core",
  "gizmo-physics-rigid",
  "naga",
- "pollster",
+ "pollster 1.0.1",
  "proptest",
  "rayon",
  "tracing",
@@ -2819,7 +2819,7 @@ dependencies = [
  "naga",
  "naga_oil",
  "notify",
- "pollster",
+ "pollster 1.0.1",
  "rand 0.10.2",
  "ron 0.12.2",
  "serde",
@@ -2872,7 +2872,7 @@ dependencies = [
  "gizmo-engine",
  "image",
  "mimalloc",
- "pollster",
+ "pollster 1.0.1",
  "rand 0.10.2",
  "tracing",
 ]
@@ -4740,6 +4740,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2f3a9f18d041e6d0e102a0a46750538147e5e8992d3b4873aaafee2520b00ce3"
 
 [[package]]
+name = "pollster"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc6355899e1c9462875b6757c79f3caa011a1fdae12bbb1a2e72dd1f234f8336"
+
+[[package]]
 name = "poly1305"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5276,7 +5282,7 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-foundation 0.3.2",
  "percent-encoding",
- "pollster",
+ "pollster 0.4.0",
  "raw-window-handle",
  "wasm-bindgen",
  "wasm-bindgen-futures",
