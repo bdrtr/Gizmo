@@ -530,6 +530,21 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The analyzer counted physics steps as frames.** `AnalysisPlugin` registered its collector on
+  `AppParts::schedule` — the **fixed-timestep** schedule, which a rendered frame runs `0..N` times.
+  So a frame that stepped twice produced two samples and a frame that stepped none produced zero,
+  and every per-frame number the analysis panel and the JSON/CSV export reported was a count of
+  *steps*. The collector is on `update_schedule` now, which runs exactly once per frame — what
+  "collect every frame" always meant. The docs on the way in were stale too: they said
+  `Schedule::run` calls `FrameProfiler::end_frame`, which stopped being true when the frame
+  boundary moved out to the runtime loops that own a frame.
+
+  The guard is a source-shape one (a behavioural version needs a runtime loop), and it exposed a
+  second hole while being written: **`gizmo-analysis/app` is enabled by nothing in a workspace
+  build**, so `cargo test --workspace` never compiled `plugin.rs`'s tests at all, and the `lint`
+  job's `--all-features` only type-checks them. CI now runs `cargo test -p gizmo-analysis
+  --features app` as its own step, next to the other default-off feature seals.
+
 - **The studio could add a `FighterController` but not remove one, and never showed what the fight
   clock was doing to it.** Four inspector sections draw a 🗑 button; `scene_ops` had removal arms
   for three, so pressing Delete on a fighter logged "Component turu silinemiyor" at the user and

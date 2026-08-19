@@ -112,6 +112,13 @@ jobs:
         run: cargo test --locked -p gizmo-core --features tracing-layer
       - name: Test experimental multibody (ABA) — opt-in, off by default
         run: cargo test --locked -p gizmo-physics-rigid --features experimental-multibody
+      # `gizmo-analysis/app` is the plugin that wires the collector into an App's schedules, and
+      # NOTHING enables it in a plain workspace build: only `gizmo-engine/analysis` turns it on, and
+      # no member asks for that. Measured — a guard added inside `plugin.rs` did not appear in
+      # `cargo test --workspace` output at all. The `lint` job is `--all-features`, so it compiles
+      # these tests but never runs them. This step is the only place they run.
+      - name: Test gizmo-analysis with `app` (plugin wiring, off by default)
+        run: cargo test --locked -p gizmo-analysis --features app
 
   # ── Feature composition: every feature combination of the two entry crates must build ──
   # A workspace build only ever exercises the DEFAULT feature set, which is how the facade
