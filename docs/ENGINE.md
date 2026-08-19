@@ -1724,6 +1724,74 @@ does nothing is worse than no entry at all.
 terrain, an emitter or an audio source — can be added and not removed except by deleting the
 entity.
 
+### The sweep's second round: the surfaces that are not the component registry (2026-08-19)
+
+The first round diffed components against the frames that read them. This one went after the
+user-visible surfaces a component list cannot see — the Lua API, the editor's request queues, the
+`gizmo-app` schedule against `PlayLoop::step`, and resources nobody inserts. **10 claims, 6
+refuted**, and the refutations landed on the same half again: `VehicleController`,
+`CharacterController`, `SoftBodyMesh`/`Cloth`/`Rope` are each stepped by a system the engine's own
+frame never calls, and none of the three can be put into a world by any user — not in the ➕ menu,
+not in a scene file (`VehicleController` does not even derive `Serialize`), not from Lua, not in
+the inspector. A verb whose noun cannot exist is not a promise to anybody. Two more died the same
+way: a key-rebinding panel with no host drawing it, and a `log_error` doc that claims a status bar
+nothing reads.
+
+**Closed: the inspector's "Trigger" checkbox never reached the physics world — and it is the third
+field to be lost by one line.** `physics_step_system` rebuilds each body's collider from the ECS
+every frame, and it did that with `Collider::from_shape(shape)`, which takes everything but the
+shape from `Default`. The `material` half of this was found and fixed earlier by appending
+`.with_material(col.material)` — one field at a time — and the two nobody appended were
+`is_trigger` and `collision_layer`:
+
+- a collider with the inspector's "Trigger (Tetikleyici)" box ticked was rebuilt as a **solid**
+  one, every frame. The badge under the checkbox promises "no physical response, only enter/exit
+  events"; the player hit the door sensor instead of walking through it. And because
+  `pipeline.rs:417` decides between a contact manifold and a `TriggerEvent` on that same flag,
+  **no ECS body could emit a trigger event at all** — which is also why Lua's `physics.triggers`
+  list was not merely wrong but structurally always empty.
+- `Collider::with_layer` was equally inert from the ECS: layer filtering is opt-in, and opting in
+  did nothing.
+
+The gather now clones the authored collider and replaces only its shape, which closes the class
+rather than its third instance — a field added tomorrow travels without anyone remembering that
+line. The regression tests drive the **ECS path**, which is the part that was broken:
+`scene_queries.rs` sets `is_trigger` too and has always passed, because it calls
+`PhysicsWorld::add_body` directly and never crosses the bridge. Both new tests were confirmed to
+fail with the old line restored. No determinism change: for a collider with the default flags the
+rebuilt struct is bit-identical, and `headless_stress_test` agrees across three runs.
+
+**Measured and still open from this round:**
+
+- **`entity.spawn_prefab` is swallowed, not refused.** `flush_commands` matches the command and
+  spawns an entity carrying `EntityName`, `Transform` and `gizmo_core::PrefabRequest` — and
+  `PrefabRequest` has exactly one producer and **zero readers** in the workspace (the component's
+  own doc says so). So the call looks applied and yields a named empty transform: no mesh, no
+  collider, nothing of the prefab, and no warning. It is worse than the commands this engine drops
+  on purpose, because those are handed *back* to the caller and are therefore visible. The
+  resolver exists (`SceneData::load_prefab`) and takes a **path**, while Lua passes a **name**, and
+  there is no prefab catalogue to bridge them — the editor writes `prefab_{entity_id}.prefab` into
+  the asset root. "The string is a path" is the only rule the tree can support today; the smallest
+  honest step short of that is a `tracing::warn!`, and even that is missing.
+- **The editor's unsaved-changes guard has no dialog.** `asset_browser.rs` sets
+  `scene.load_confirm_dialog = Some(path)` when a `.scene` is single-clicked with unsaved changes,
+  and that field has **no reader anywhere** — so the click is completely silent: no modal, no load,
+  not even a status line (the message sits in the `else` branch). The hover text still says "Tek
+  tık: Sahneyi yükle". It compounds: `has_unsaved_changes` is set by the animation panel and the
+  studio's own save path never clears it, so once a keyframe is dragged the flag is true for the
+  rest of the session and single-click never works again. Right-click → "📂 Bu Sahneyi Yükle"
+  skips the check and works, but nothing tells the user that.
+- **Post-process authoring is live but not persistent.** The inspector's "🌍 World & Environment
+  Settings" panel says in as many words that these are the *scene's* lighting and post-processing
+  settings, and their only reader is the editor viewport (`render_pipeline/passes.rs`). `SceneData`
+  has no field for them and `EditorPrefs` does not carry them, so `EditorState::new` writes
+  `PostProcessSettings::default()` at every launch — the look an author tunes is gone on reopen,
+  and an exported build runs on the renderer's neutral defaults, so ▶ and the shipped game do not
+  look alike. (One correction to the first measurement: *exposure* is not in this group — the post
+  block reads `Camera::exposure`, which is scene data already. That mixed state is an argument for
+  putting the rest where exposure already lives.) The honest options are to make it scene data or
+  to relabel the panel as an editor preview, and §3392's post-process table measured liveness only.
+
 **Small known limits (left open on purpose):**
 - Nothing raises `NavGrid::needs_rebuild` when static geometry changes; the scene's owner or the
   editor's "Rebuild NavMesh" button raises it.

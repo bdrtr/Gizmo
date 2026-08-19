@@ -74,24 +74,42 @@ pub fn physics_step_system(world: &World, dt: f32) {
                     }
                 }
 
-                // Create a single Collider for this RigidBody
-                // Preserve the authored physics material (restitution / friction /
-                // density) when rebuilding the collider for the solver. `from_shape`
-                // resets it to the default, which silently ignored every custom
-                // collider material set on an ECS entity — e.g. an elastic
-                // (restitution = 1) ball behaved as the default 0.3. Bodies that
-                // never set a custom material are unaffected (still the default).
+                // One collider for this rigid body, rebuilt every frame from the entity's own
+                // shape plus its children's — and it carries the AUTHORED collider forward, not
+                // just its geometry.
+                //
+                // **This is the third field to go missing here, and the first two are why it is
+                // written this way.** The line used to be `Collider::from_shape(shape)`, and
+                // `from_shape` fills everything but the shape from `Default`. So a custom
+                // `material` was silently discarded on every ECS entity — an elastic ball
+                // (restitution 1) behaved as the default 0.3 — and that was fixed by appending
+                // `.with_material(col.material)`, one field at a time. The two fields nobody
+                // appended were `is_trigger` and `collision_layer`:
+                //
+                // - a collider with the inspector's "Trigger (Tetikleyici)" box ticked was rebuilt
+                //   as a solid one, every frame. The badge under the checkbox promises "no
+                //   physical response, only enter/exit events"; the player walked into the door
+                //   sensor instead of through it, and because `pipeline.rs` decides between a
+                //   contact manifold and a `TriggerEvent` on this same flag, **no ECS body could
+                //   ever emit a trigger event at all** — which also left Lua's `physics.triggers`
+                //   list structurally empty rather than merely wrong.
+                // - `Collider::with_layer` was equally inert from the ECS: layer filtering is
+                //   opt-in, and opting in did nothing.
+                //
+                // Cloning the authored collider and replacing only the shape ends the class:
+                // a field added tomorrow travels without anyone remembering this line.
                 let final_collider = if compound_shapes.is_empty() {
                     Collider::default() // Should technically not be simulated
                 } else if compound_shapes.len() == 1 {
                     // Single collider, avoid nesting in Compound
                     let (_t, s) = compound_shapes.remove(0);
-                    Collider::from_shape(*s).with_material(col.material)
+                    let mut rebuilt = col.clone();
+                    rebuilt.shape = *s;
+                    rebuilt
                 } else {
-                    Collider::from_shape(gizmo_physics_core::ColliderShape::Compound(
-                        compound_shapes,
-                    ))
-                    .with_material(col.material)
+                    let mut rebuilt = col.clone();
+                    rebuilt.shape = gizmo_physics_core::ColliderShape::Compound(compound_shapes);
+                    rebuilt
                 };
 
                 compound_shapes_map.insert(id, final_collider);
