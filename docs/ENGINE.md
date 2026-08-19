@@ -1612,40 +1612,112 @@ post-processing cannot be batched; both per-pair SIMD attempts regressed (the sc
 already auto-vectorized). DO NOT RETRY without passing the step-0 gate again. (The
 "~82% narrowphase" figure is OBSOLETE.)
 
-### Bir sonraki oturuma: "arayüzü olan, sahibi olmayan altsistem" taraması (2026-08-19)
+### The "interface without an owner" sweep, and what it turned out to be (2026-08-19)
 
-Bugün aynı şekil DÖRT kez çıktı ve dördü de aynı soruyla bulundu: **bu yeteneği motorun
-kendi karesinde kim çalıştırıyor?**
+Four findings landed in one day with one shape, and all four were found by one question: **who
+runs this capability on the ENGINE's own frame?** Navigation had a full "AI NavAgent" inspector
+section and `PlayLoop` never called its systems. `AudioSource` was in the ➕ menu and saved in the
+scene, and only demos ever opened the audio device. The `is_3d` flag chose "how" and silently also
+chose "at all". `NavAgent` had an inspector section and was in neither the ➕ menu nor the registry.
 
-| bulgu | arayüz vardı | sahibi yoktu |
+The four candidates that entry left unmeasured were then measured — `FluidSimulation`,
+destruction/fracture, `AnimationStateMachine`, and `gizmo-net`'s session setup — alongside a fifth
+pass that diffs every user-visible component against what the running frames actually read. **27
+claims came back and 18 of them were refuted**, which is the number worth keeping: this class of
+finding is easy to produce and most of what it produces is wrong.
+
+**The refutations all died on the same half, and it defines the shape.** "Ownerless" needs *both*
+an interface a user can reach and a missing owner, and nearly every rejected claim had only the
+second. `Breakable`, `DestructionSystem` and `PhysicsWorld::fracture_cache` were each reported as
+an unwired capability and each fell the same way: they are in no ➕ menu, no inspector section, no
+`ComponentRegistry` and no `SceneRegistry`, so there is no user who was promised anything.
+`AnimationStateMachine` fell the other way — it has an owner, in *both* frames, with a test holding
+it there. A function existing and being public is not an interface; a system not being called is
+not, by itself, a defect.
+
+**Closed (all three with a regression test that fails if the wiring is removed):**
+
+| gap | what the user could see | what runs it now |
 |---|---|---|
-| navigasyon | denetçide tam bir "AI NavAgent" bölümü | `PlayLoop` sistemleri çağırmıyordu, ve hiçbir yerde `NavGrid` kurulmuyordu |
-| ses cihazı | ➕ menüsünde `AudioSource`, sahnede kaydediliyor | `AudioManager`'ı yalnız demolar kuruyordu |
-| 2B ses | aynı bileşen, `is_3d` bayrağı | bayrak "nasıl"ı seçerken sessizce "çalınsın mı"yı seçiyordu |
-| `NavAgent` sahne kimliği | denetçi bölümü | ne ➕ menüsünde ne kayıt defterinde |
+| `MeshRenderer` | the inspector's "Mesh Renderer" section: LOD bias, `Cast shadow: On/Off/Only` | `Serialize` + `full_scene_registry`. Every value reverted to its default on each save-and-reopen |
+| `IsHidden` | the hierarchy's 👁, the H shortcut, their undo entries | `collect_draw_items` skips hidden entities, which studio's own loop already did |
+| `Terrain` | the ➕ menu, an inspector section, the scene file | `systems::terrain::terrain_mesh_system`, called by both hosts |
 
-Tarama sorusu bir dahaki sefere de aynı: *bir kullanıcı bunu editörde görebiliyorsa, motorun
-kendi karesinde onu çalıştıran satır nerede?* Ölçülmemiş adaylar (bu oturumda BAKILMADI):
-`FluidSimulation` (denetçinin `skip_names` listesinde, yani kendi bölümü var), yıkım/kırılma,
-`AnimationStateMachine`, ve `gizmo-net`in oturum kurulumu (bir host hiç sunucu/istemci başlatıyor
-mu, yoksa bu tamamen oyun kodunun mu?).
+The `MeshRenderer` one is the most instructive, because the test that existed *should* have caught
+it and structurally could not: `every_addable_component_survives_a_save` drives its list from the
+➕ menu, and nobody adds a `MeshRenderer` — `asset_loading` puts one beside every mesh it loads.
+The list that matches the user's surface is what the inspector **draws**, so there is now a second
+test built from `inspector/mod.rs`'s section calls, where every section must name the component it
+edits or say why the registry is not where its answer lives. A section added tomorrow fails until
+someone answers that.
 
-**Açık kalan tasarım kararı: rollback yakalaması CANLI girdiyle yeniden simüle ediyor.**
-`gizmo_app::windowed::event::service_rollback` yakalama döngüsünde tick başına
-`self.schedule.run(...)` çağırıyor ve `RollbackManager::input_buffers`'ta saklanan tick'e ait
-`PlayerInput`'u HİÇ uygulamıyor — o tamponları okuyan tek yer tahmin/ıraksama karşılaştırması.
-Yani yeniden simülasyon, o tick'in girdisini değil, İÇİNDE BULUNULAN karenin girdisini görüyor;
-düzeltilen tek şey ıraksamanın tespiti oluyor, kaynağı değil. Bu bir hata olduğu kadar bir tasarım
-sorusu: bir `PlayerInput` dünyaya nasıl uygulanır (bir `Input` kaynağı mı, oyuncu başına bir
-denetleyici bileşeni mi?) — cevap oyunun girdi modeline bağlı ve motor onu henüz seçmedi. Ölçüldü
-ve yazıldı; körlemesine bir uygulama yazmak yanlış katmanda karar vermek olurdu.
+`Terrain` is the same lesson at the level of a doc: the render-parity inventory marks it legitimate
+because it is "a mesh *recipe*, and `Mesh` is what gets drawn" — an answer about which path draws
+it that quietly assumes a converter exists on both hosts. Exactly one did, in `gizmo-studio`'s
+render file, driven by an editor-only request queue that two edits push to. Nothing pushed on
+**load**, and `Mesh` owns GPU buffers so no file can carry one. A saved level therefore reopened as
+an entity that says it is a terrain and draws nothing, and an exported game never had one at all.
+The trigger is now presence (`Terrain` and no `Mesh`), because that is true on load, on export and
+after an add, where a queue of edits is true for none of them.
 
-**Küçük, bilinen sınırlar (bugün açıkta bırakıldı, hepsi kasıtlı):**
-- `NavGrid::needs_rebuild`'i statik geometri değişince yükselten hiçbir şey yok; sahnenin sahibi
-  ya da editörün "Rebuild NavMesh" düğmesi yükseltiyor.
-- `BehaviorTree` yalnız Rust'tan kurulabiliyor (`Box<dyn BtNode>`), serileştirilemiyor — yani bir
-  sahne davranış ağacı taşıyamaz. `ai_frame` artık onu her kare tıklatıyor, ama koyacak kimse yok.
-- Editörde bir sesi ▶'ye basmadan ön-dinleme yok; ses koşan oyuna ait (bilinçli).
+**Measured and deliberately left open.** Each of these is real and none is a wiring bug:
+
+- **Destruction is in no engine frame, and should not be wired blind.** `physics_fracture_system`
+  and `physics_explosion_system` are called from exactly one place in the workspace,
+  `demo/src/bin/advanced_physics.rs:386-387` — not `PlayLoop::step`, not `gameplay.rs`'s schedule.
+  Unlike navigation and audio there is **no user-visible surface promising it**: `Breakable` is in
+  no menu, no registry and no inspector section. So adding the two systems to `physics_pass` would
+  not close a gap between what a user sees and what runs; it would put two more systems on every
+  game's fixed step on the strength of a public function existing. The open question is a policy
+  one — does the engine's default frame own destruction, or is it opt-in like the gameplay
+  systems `gameplay.rs` registers? — and it should be answered together with the surface.
+- **The GPU fluid is disconnected at both ends.** `Renderer::fluid_enabled` is `false` by default
+  (`gizmo-renderer/src/renderer/construction.rs:685`) and set `true` by exactly two demo binaries
+  (`ocean_scene.rs:499`, `fluid_rigid.rs:230`); nothing in the engine or the editor sets it. While
+  it is false the active particle count is zeroed at both gates (`gizmo/src/systems/render/mod.rs`,
+  `gizmo-studio/src/render_pipeline/mod.rs:24`), so the compute pass returns on its first line and
+  the SSFR surface is never composited. At the other end, `FluidSimulation`'s own doc already says
+  the inspector is the only code that reads its fields. Registering it for save/load was
+  considered and rejected on purpose: it would make a knob that steers nothing persist, which
+  *reads* as a closed gap. The real question is where the flag should come from — the presence of
+  a `FluidSimulation`, or a project setting with a checkbox — and today there is no surface to
+  constrain the answer. `every_component_the_inspector_edits_survives_a_save` carries this reason
+  as its exemption entry, so the decision cannot be forgotten silently.
+- **No host opens a network session.** `RollbackManager::new` appears only in `gizmo-net`'s own
+  tests; nothing in the engine inserts one as a resource, so the windowed App's rollback code is
+  unreachable as shipped and no host opens a socket. A host that does not choose your netcode is a
+  legitimate design. What is not legitimate is that `README.md`/`CHANGELOG.md` advertise
+  "deterministic rollback netcode" as though the frame provided it.
+- **Rollback re-simulation still applies LIVE input** — re-measured this session and confirmed.
+  `gizmo_app::windowed::event::service_rollback` calls `self.schedule.run(...)` once per tick in
+  its catch-up loop and never applies the `PlayerInput` stored for that tick in
+  `RollbackManager::input_buffers`; the only place that reads those buffers is the prediction
+  comparison. So the re-simulation sees the input of the frame it is *in*, not the input of the
+  tick it is replaying: what gets corrected is the DETECTION of divergence, not its source. This
+  is as much a design question as a bug — how a `PlayerInput` is applied to the world (an `Input`
+  resource? a controller component per player?) depends on the game's input model, and the engine
+  has not chosen one. Writing an implementation blind would be deciding at the wrong layer.
+- **The missing surface points the other way for two lights.** `SpotLight` and `DirectionalLight`
+  are drawn by the engine and carried by the scene file, and **neither can be added in the
+  editor**: neither is in the studio's `ComponentRegistry` (so neither is in the ➕ menu, which
+  prints that registry), neither has a `SpawnKind`, and `SpotLight` has no inspector section at
+  all — so a spot light that arrives from Rust or a hand-written scene lights the viewport and
+  shows not one editable row. The sun is worse in one way and softer in another: a scene with no
+  sun can never gain one (only the studio's own startup scene spawns it), but an existing sun can
+  be duplicated with Ctrl+D. Adding them to the ➕ menu is a few lines; what needs deciding first
+  is whether the three light types are three menu entries or one "Light" section with a type
+  switch, because today all three can sit on one entity and mean nothing together.
+
+**Small known limits (left open on purpose):**
+- Nothing raises `NavGrid::needs_rebuild` when static geometry changes; the scene's owner or the
+  editor's "Rebuild NavMesh" button raises it.
+- `BehaviorTree` can only be built from Rust (`Box<dyn BtNode>`) and does not serialise, so a scene
+  cannot carry one. `ai_frame` ticks it every frame now, but there is nobody to put one there.
+- `AnimationPlayer` cannot round-trip either, and for a structural reason: it holds an
+  `Arc<AnimationClip>` — a loaded asset, like `Mesh` — and a `HashMap<String, Entity>` cache whose
+  ids do not survive a reload. What could travel is a description (clip name, speed, looping); the
+  `Material`/`MaterialDesc` pair is the shape it would take.
+- The editor has no audio preview before ▶; sound belongs to the running game (deliberate).
 
 ### Sahnedeki ses hiç çalmıyordu — cihazı kimse açmıyordu (2026-08-19, DÜZELTİLDİ)
 
