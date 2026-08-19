@@ -181,6 +181,191 @@ fn stage_scene_for_export(world: &World) -> Result<std::path::PathBuf, String> {
         .map_err(|e| e.to_string())
 }
 
+/// An asset the scene names that the exported game will not find.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MissingAsset {
+    /// Which field named it, for a log line a user can act on.
+    pub what: String,
+    /// The path as the scene stores it.
+    pub path: String,
+    /// Why it will be missing.
+    pub reason: MissingReason,
+}
+
+/// The two ways a reference fails an export, which need different words to the user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MissingReason {
+    /// The file is there, and the package will not contain it — the silent case.
+    WillNotShip,
+    /// The file is not where the scene says, so it is already broken in the editor.
+    Unresolved,
+}
+
+/// Which field a reference came from — the encodings differ, so the extraction does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RefKind {
+    /// `MeshSource`: a bare path, an `obj:` prefix, a `gltf_mesh_<path><sub>` key, or the name of
+    /// a built-in primitive that is no file at all.
+    Mesh,
+    /// A texture path — or a synthetic glTF texture name, which is also no file.
+    Texture,
+    /// A plain path: heightmap, script.
+    Path,
+    /// `AudioSource::sound_name`, which is a registered *name* first and a path second.
+    Sound,
+}
+
+/// The built-in meshes that are generated rather than loaded. A scene naming one references no
+/// file, and reporting it as a missing asset would be crying wolf on every default cube.
+const PROCEDURAL_MESHES: [&str; 5] = [
+    "inverted_cube",
+    "plane",
+    "standard_cube",
+    "sphere",
+    "sprite_quad",
+];
+
+/// The file a stored reference names, or `None` when it names no file at all.
+///
+/// **Every one of these encodings is a way to be wrong about what a scene references**, which is
+/// why this is one function with a test rather than a match at the call site:
+///
+/// - a `MeshSource` may be a built-in primitive (`standard_cube`), an `obj:`-prefixed path, or a
+///   glTF sub-mesh key with the file path baked into the middle of it
+///   (`gltf_mesh_assets/car.glb_Body_p0`) — the key is split on the **extension**, not on a
+///   separator, which is what `MeshSource::split_gltf_key` exists for;
+/// - a texture reference may be the synthetic name a dropped glTF model writes
+///   (`gltf_tex_base_0`), which is not a path and never was. That is not an edge case: it is what
+///   every textured model dragged into the editor stores.
+fn referenced_file(value: &str, kind: RefKind) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    match kind {
+        RefKind::Mesh => {
+            if PROCEDURAL_MESHES.contains(&value) {
+                return None;
+            }
+            if let Some((path, _sub)) = gizmo::core::component::MeshSource::split_gltf_key(value) {
+                return Some(path.to_string());
+            }
+            Some(value.strip_prefix("obj:").unwrap_or(value).to_string())
+        }
+        // `gltf_tex_` names a texture *inside* an imported model, resolved from the model rather
+        // than from the filesystem.
+        RefKind::Texture if value.starts_with("gltf_tex_") => None,
+        RefKind::Texture | RefKind::Path | RefKind::Sound => Some(value.to_string()),
+    }
+}
+
+/// Will the exported package contain the file at this path?
+///
+/// The package ships whole trees, each under the path it already has (see [`EXPORT_DIRS`]), and
+/// the shipped binary makes the package its working directory. So a reference ships exactly when
+/// it is **relative** and sits under one of those trees. An absolute path — which is what the
+/// native file dialog behind "📁 Workspace Aç" returns, and what then gets stored in the scene —
+/// never ships and would not resolve on another machine even if it did.
+fn ships_with_export(path: &str) -> bool {
+    let path = gizmo::renderer::asset::AssetManager::normalize_path(path);
+    if std::path::Path::new(&path).is_absolute() {
+        return false;
+    }
+    EXPORT_DIRS
+        .iter()
+        .any(|(_, src)| path == *src || path.starts_with(&format!("{src}/")))
+}
+
+/// Every asset the current scene names that the exported game will not find.
+///
+/// **This is the half of asset packaging that can be done correctly today.** The export copies
+/// four whole trees and never looks at what the scene actually references, so anything outside
+/// them — the repository's own `assets/`, or a directory chosen with "📁 Workspace Aç", which
+/// hands back an absolute path — is silently absent from the package while the build log says
+/// "🎉 BUILD TAMAMLANDI!". Copying those files in and rewriting the scene's paths is the other
+/// half and is a larger change than it looks (a glTF's `.bin` and textures resolve relative to the
+/// glTF, a rewritten path must also clear the asset UUID or the exported game's `repair_asset_paths`
+/// converts it straight back, and `.prefab` files carry the same fields again). Naming what will be
+/// missing needs none of that and turns a silent package into an honest one.
+///
+/// Walks the **live world** rather than the staged file: these are exactly the components the save
+/// path reads, so what is audited is what will be written, and no parsing sits between the two.
+fn audit_scene_assets(world: &World) -> Vec<MissingAsset> {
+    let mut refs: Vec<(String, String, RefKind)> = Vec::new();
+
+    {
+        let meshes = world.borrow::<gizmo::core::component::MeshSource>();
+        for (_, m) in meshes.iter() {
+            refs.push(("Mesh".into(), m.0.clone(), RefKind::Mesh));
+        }
+    }
+    {
+        let mats = world.borrow::<gizmo::core::component::MaterialSource>();
+        for (_, m) in mats.iter() {
+            if let Some(t) = &m.texture_source {
+                refs.push(("Materyal dokusu".into(), t.clone(), RefKind::Texture));
+            }
+        }
+    }
+    {
+        let descs = world.borrow::<gizmo::renderer::components::MaterialDesc>();
+        for (_, d) in descs.iter() {
+            if let Some(t) = &d.texture_source {
+                refs.push(("Materyal dokusu".into(), t.clone(), RefKind::Texture));
+            }
+        }
+    }
+    {
+        let terrains = world.borrow::<gizmo::renderer::components::Terrain>();
+        for (_, t) in terrains.iter() {
+            refs.push(("Arazi heightmap".into(), t.heightmap_path.clone(), RefKind::Path));
+        }
+    }
+    {
+        let emitters = world.borrow::<gizmo::renderer::components::ParticleEmitter>();
+        for (_, e) in emitters.iter() {
+            if let Some(t) = &e.texture_source {
+                refs.push(("Partikül dokusu".into(), t.clone(), RefKind::Texture));
+            }
+        }
+    }
+    {
+        let scripts = world.borrow::<gizmo::scripting::Script>();
+        for (_, s) in scripts.iter() {
+            refs.push(("Script".into(), s.file_path.clone(), RefKind::Path));
+        }
+    }
+    {
+        let sounds = world.borrow::<gizmo::prelude::AudioSource>();
+        for (_, s) in sounds.iter() {
+            refs.push(("Ses".into(), s.sound_name.clone(), RefKind::Sound));
+        }
+    }
+
+    let mut missing = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for (what, value, kind) in refs {
+        let Some(path) = referenced_file(&value, kind) else {
+            continue;
+        };
+        if !seen.insert((what.clone(), path.clone())) {
+            continue;
+        }
+        let on_disk = std::path::Path::new(&path).exists();
+        let reason = match (on_disk, ships_with_export(&path)) {
+            (_, true) => continue,
+            (true, false) => MissingReason::WillNotShip,
+            // A sound name that is not a file is the documented normal case — the game registers
+            // it with `load_sound`, and the scene only named it. Reporting those would bury the
+            // real misses under every logical name in the project.
+            (false, false) if kind == RefKind::Sound => continue,
+            (false, false) => MissingReason::Unresolved,
+        };
+        missing.push(MissingAsset { what, path, reason });
+    }
+    missing
+}
+
 /// Acts on a build request from the toolbar: packages the current scene and the runtime for the
 /// chosen target, and reports the result back into the editor state.
 pub fn handle_build_requests(world: &World, editor_state: &mut EditorState) {
@@ -198,8 +383,10 @@ pub fn handle_build_requests(world: &World, editor_state: &mut EditorState) {
         let (tx, rx) = std::sync::mpsc::channel();
         editor_state.build.logs_rx = Some(std::sync::Mutex::new(rx));
         let build_target = editor_state.build.target;
-        // Captured before the thread starts — see `stage_scene_for_export`.
+        // Captured before the thread starts — see `stage_scene_for_export`. The audit is captured
+        // here for the same reason: it reads the live world, which the build thread cannot borrow.
         let staged_scene = stage_scene_for_export(world);
+        let missing_assets = audit_scene_assets(world);
 
         std::thread::spawn(move || {
             let log = |msg: &str| {
@@ -365,10 +552,52 @@ pub fn handle_build_requests(world: &World, editor_state: &mut EditorState) {
                             }
                         };
 
+                        // Every asset the scene names that the package will not contain, said out
+                        // loud. The export copies four whole trees and never looks at what the
+                        // scene references, so anything outside them was simply absent from the
+                        // package — and the log's next line congratulated the user.
+                        if !missing_assets.is_empty() {
+                            log(&format!(
+                                "\n== UYARI: {} varlık pakete girmedi ==",
+                                missing_assets.len()
+                            ));
+                            for m in &missing_assets {
+                                match m.reason {
+                                    MissingReason::WillNotShip => log(&format!(
+                                        "  {} '{}' — dosya var ama ihraç edilen ağaçların dışında; \
+                                         oyunda eksik görünecek",
+                                        m.what, m.path
+                                    )),
+                                    MissingReason::Unresolved => log(&format!(
+                                        "  {} '{}' — bu yolda dosya yok; sahne bunu editörde de \
+                                         açamıyor",
+                                        m.what, m.path
+                                    )),
+                                }
+                            }
+                            log(
+                                "  Çözüm: bu dosyaları projenin ihraç edilen dizinlerinden birine \
+                                 (demo/assets, scenes, scripts, media) taşıyıp sahnede yeniden \
+                                 atayın.",
+                            );
+                        }
+
                         // The claim is made only where it is true. An export whose scene did not
                         // land still produces a runnable binary — it just opens an empty window,
-                        // and saying "Oyununuz hazır" over that is the defect this path had.
-                        if scene_shipped {
+                        // and saying "Oyununuz hazır" over that is the defect this path had. The
+                        // same rule now covers a package whose assets are incomplete: it runs, and
+                        // saying nothing about the missing ones is the same lie one size smaller.
+                        if scene_shipped && !missing_assets.is_empty() {
+                            log(&format!(
+                                "\n⚠ BUILD TAMAMLANDI — {} varlık eksik",
+                                missing_assets.len()
+                            ));
+                            log(&format!(
+                                "Oyun 'export/gizmo_game/' dizininde çalışır ama yukarıdaki \
+                                 varlıklar olmadan — çalıştır: ./{}",
+                                exe_name
+                            ));
+                        } else if scene_shipped {
                             log("\n🎉 BUILD TAMAMLANDI! 🎉");
                             log(&format!(
                                 "Oyununuz 'export/gizmo_game/' dizininde hazır — çalıştır: ./{}",
@@ -405,6 +634,147 @@ mod export_copy_tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("scratch dizini");
         dir
+    }
+
+    /// **What a stored reference actually names**, across every encoding a scene can hold.
+    ///
+    /// Each of these is a way for a packager — or an audit — to be wrong about what a scene
+    /// references, and two of them are the common case rather than the exotic one: a glTF sub-mesh
+    /// key has the file path buried in its middle, and every textured model dropped into the editor
+    /// stores its texture as a synthetic name that is no file at all.
+    #[test]
+    fn a_reference_is_read_through_the_encoding_it_was_stored_in() {
+        // Built-ins are generated, not loaded — reporting them would cry wolf on every cube.
+        for builtin in PROCEDURAL_MESHES {
+            assert_eq!(referenced_file(builtin, RefKind::Mesh), None, "{builtin}");
+        }
+
+        assert_eq!(
+            referenced_file("gltf_mesh_assets/car.glb_Body_p0", RefKind::Mesh).as_deref(),
+            Some("assets/car.glb"),
+            "the path is in the middle of a glTF key, split on the extension"
+        );
+        assert_eq!(
+            referenced_file("obj:models/rock.obj", RefKind::Mesh).as_deref(),
+            Some("models/rock.obj")
+        );
+        assert_eq!(
+            referenced_file("demo/assets/tree.glb", RefKind::Mesh).as_deref(),
+            Some("demo/assets/tree.glb"),
+            "a bare path is itself"
+        );
+
+        assert_eq!(
+            referenced_file("gltf_tex_base_0", RefKind::Texture),
+            None,
+            "a texture inside an imported model is resolved from the model, not from disk — and \
+             this is what EVERY textured model dragged into the editor stores"
+        );
+        assert_eq!(
+            referenced_file("demo/assets/grass.jpg", RefKind::Texture).as_deref(),
+            Some("demo/assets/grass.jpg")
+        );
+
+        assert_eq!(referenced_file("", RefKind::Path), None, "an unset field names nothing");
+        assert_eq!(referenced_file("   ", RefKind::Path), None);
+    }
+
+    /// **Which paths the package will contain**: relative, and under a shipped tree.
+    #[test]
+    fn only_a_relative_path_under_a_shipped_tree_reaches_the_package() {
+        assert!(ships_with_export("demo/assets/grass.jpg"));
+        assert!(ships_with_export("./demo/assets/grass.jpg"), "a leading ./ is the same file");
+        assert!(ships_with_export("scripts/player.lua"));
+        assert!(ships_with_export("media/logo.png"));
+
+        assert!(
+            !ships_with_export("assets/grass.jpg"),
+            "the repository's own assets/ is not one of the shipped trees"
+        );
+        assert!(
+            !ships_with_export("demo/assetsX/grass.jpg"),
+            "the prefix has to end at a path boundary, or a sibling directory would look shipped"
+        );
+        assert!(
+            !ships_with_export("/home/someone/pictures/grass.jpg"),
+            "an absolute path — what the native dialog behind 📁 Workspace Aç returns — never ships"
+        );
+    }
+
+    /// **The audit, over a world that has one of each outcome.**
+    ///
+    /// The point is the third assertion as much as the first two: a sound name that is not a file
+    /// is the documented normal case (the game registers it with `load_sound`, the scene only names
+    /// it), and reporting those would bury the real misses under every logical name in the project.
+    #[test]
+    fn the_audit_names_what_will_be_missing_and_nothing_else() {
+        use gizmo::prelude::*;
+
+        let real = std::env::temp_dir().join(format!("gizmo_audit_{}.png", std::process::id()));
+        std::fs::write(&real, b"not really a png").expect("scratch dosyası");
+
+        let mut world = World::new();
+
+        // (1) Exists, outside every shipped tree: the silent case this audit exists for.
+        let outside = world.spawn();
+        world.add_component(
+            outside,
+            gizmo::renderer::components::Terrain::new(
+                real.to_string_lossy().to_string(),
+                100.0,
+                100.0,
+                20.0,
+            ),
+        );
+
+        // (2) Under a shipped tree: must not be reported, whether or not the test's working
+        //     directory happens to contain it.
+        let shipped = world.spawn();
+        world.add_component(
+            shipped,
+            gizmo::scripting::Script::new("scripts/player.lua"),
+        );
+
+        // (3) A sound named rather than pathed — the game's to register, not the packager's.
+        let sound = world.spawn();
+        world.add_component(sound, gizmo::prelude::AudioSource::new("boom"));
+
+        // (4) A path that resolves nowhere: already broken in the editor, worth saying so.
+        let broken = world.spawn();
+        world.add_component(
+            broken,
+            gizmo::core::component::MeshSource("assets/does_not_exist.glb".to_string()),
+        );
+
+        // (5) A built-in primitive: no file, no report.
+        let cube = world.spawn();
+        world.add_component(
+            cube,
+            gizmo::core::component::MeshSource("standard_cube".to_string()),
+        );
+
+        let missing = audit_scene_assets(&world);
+        let _ = std::fs::remove_file(&real);
+
+        let reported: Vec<(&str, MissingReason)> = missing
+            .iter()
+            .map(|m| (m.path.as_str(), m.reason))
+            .collect();
+
+        assert!(
+            reported.contains(&(real.to_string_lossy().as_ref(), MissingReason::WillNotShip)),
+            "a file that exists and ships with nothing is the whole point: {reported:?}"
+        );
+        assert!(
+            reported.contains(&("assets/does_not_exist.glb", MissingReason::Unresolved)),
+            "a reference that resolves nowhere is worth a different sentence: {reported:?}"
+        );
+        assert_eq!(
+            missing.len(),
+            2,
+            "the shipped script, the named sound and the built-in cube must all stay quiet: \
+             {reported:?}"
+        );
     }
 
     /// **An export must file every asset where the scene names it.**

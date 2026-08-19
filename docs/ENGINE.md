@@ -1878,12 +1878,39 @@ tree under its own name is what that code was written for.
 rather than correcting the one entry, because the same mistake is available to the next directory
 anyone adds and is invisible unless someone runs the exported binary.
 
-**Still open from this round:** an asset reference *outside* those four trees is not packaged at
-all and gets no warning — the repository's own `assets/`, and anything under a directory chosen
-with "📁 Workspace Aç", which returns an absolute path that is then baked into the scene. Closing
-it means staging walking the scene's references, copying each file into the package and rewriting
-the path, plus a build-log line for every reference it could not resolve. That is a real feature
-rather than a wiring fix, and it is the last thing this sweep has found and not done.
+**The remaining export gap, half closed on purpose (2026-08-20).** An asset reference *outside*
+those four trees is still not packaged — the repository's own `assets/`, and anything under a
+directory chosen with "📁 Workspace Aç", which hands back an absolute path that is then stored in
+the scene. What has changed is that the build now **says so**: `audit_scene_assets` walks the live
+world's reference fields and the log names every file that will be missing, with the two cases
+separated ("the file is there and the package will not contain it" versus "there is no file at that
+path, so the editor cannot open it either"), and the celebration line is downgraded to
+"⚠ BUILD TAMAMLANDI — N varlık eksik". A package that ships incomplete and congratulates the user
+is the same shape as every other finding in this sweep, one size smaller.
+
+The copying-and-rewriting half was measured before it was skipped, and the measurement is the
+reason. A scene's references are not a list of paths:
+
+- **`MeshSource` has three encodings** — a bare path, `obj:<path>`, and a glTF sub-mesh key with
+  the file path buried in the middle (`gltf_mesh_assets/car.glb_Body_p0`), split on the *extension*
+  rather than a separator. Rewriting one means `MeshSource::gltf_key_with_path`; replacing the key
+  wholesale turns the reference into an OBJ path.
+- **A `.gltf` is not one file.** Its `.bin` buffers and its textures are resolved relative to the
+  `.gltf` itself and their URIs may climb out with `../`, so packaging one means walking its
+  neighbourhood and preserving the relative layout. (A `.glb` is self-contained.) The `.meta`
+  scanner's extension whitelist does not include `.bin`, `.mtl` or several texture formats, so the
+  identity system cannot help find them either.
+- **A rewritten path must also clear its UUID.** `mesh_uuid` / `texture_uuid` drive
+  `repair_asset_paths` on load, which would convert an in-package path straight back to the
+  development tree's path.
+- **`gltf_tex_base_<i>` is not a file.** Every textured model dragged into the editor stores its
+  texture that way — the typical flow, not an edge case — and a packager that treated it as a path
+  would fail on the commonest scene there is.
+- **`.prefab` files carry the same fields again**, so a walk over `.scene` alone misses them.
+
+A packager that gets any of those wrong rewrites paths and breaks exports that work today, which
+is worse than not having one. The audit is the part whose correctness can be established now, and
+it is also exactly the walk the packager will need, so it is not throwaway.
 
 **Small known limits (left open on purpose):**
 - Nothing raises `NavGrid::needs_rebuild` when static geometry changes; the scene's owner or the
