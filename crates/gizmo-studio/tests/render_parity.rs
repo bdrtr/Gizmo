@@ -734,6 +734,8 @@ fn both_draw_paths_run_the_same_per_frame_drivers() {
             "gpu_physics_readback_system(",
             "step_gpu_fluid(",
             "record_fluid_surface(",
+            "resolve_material_descriptions(",
+            "sync_material_descriptions(",
         ] {
             assert!(
                 code.contains(driver),

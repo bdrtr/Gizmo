@@ -6,7 +6,7 @@ use std::sync::Arc;
 /// A type rather than a set of booleans on `Material`, because these are not independent knobs:
 /// each one implies a pass, a depth mode and a set of inputs that only make sense together. The
 /// two backdrop variants document that reasoning at length.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum MaterialType {
     /// Physically based shading through the deferred G-buffer — the default, and what every
@@ -124,6 +124,110 @@ pub struct Material {
     /// Whether back faces are drawn. Needed for anything modelled as a single sheet — foliage,
     /// cloth, a flat pane.
     pub is_double_sided: bool,
+}
+
+/// Everything a [`Material`] is, minus the one thing a file cannot hold: the bind group.
+///
+/// **This is the material a scene saves.** `Material` owns an `Arc<wgpu::BindGroup>` — a handle to
+/// live GPU state — so it cannot be serialized, and for as long as that was the end of the story a
+/// scene round trip silently dropped every material a user had authored: the albedo they picked,
+/// the roughness they dialled in, the texture they chose. The editor said the save worked.
+///
+/// Everything else on `Material` is data, including [`Material::texture_source`], the path the
+/// albedo came from — which is what makes rebuilding the bind group on load possible rather than
+/// hypothetical.
+///
+/// The pair is kept in step by two systems in [`crate::material_sync`]: one writes a description
+/// for every live material, the other builds a material for every description that has none.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct MaterialDesc {
+    /// See [`Material::albedo`].
+    pub albedo: gizmo_math::Vec4,
+    /// See [`Material::roughness`].
+    pub roughness: f32,
+    /// See [`Material::metallic`].
+    pub metallic: f32,
+    /// See [`Material::anisotropy`].
+    pub anisotropy: f32,
+    /// See [`Material::clear_coat`].
+    pub clear_coat: f32,
+    /// See [`Material::subsurface`].
+    pub subsurface: f32,
+    /// See [`Material::ambient`].
+    pub ambient: gizmo_math::Vec3,
+    /// See [`Material::emissive`].
+    pub emissive: gizmo_math::Vec3,
+    /// See [`Material::texture_source`] — and note this is the field the resolve step reads to
+    /// rebuild the bind group. `None` resolves to the renderer's white 1×1, which is what an
+    /// untextured material already draws with.
+    pub texture_source: Option<String>,
+    /// See [`Material::material_type`].
+    pub material_type: MaterialType,
+    /// See [`Material::is_transparent`].
+    pub is_transparent: bool,
+    /// See [`Material::is_double_sided`].
+    pub is_double_sided: bool,
+}
+
+impl From<&Material> for MaterialDesc {
+    /// **Destructured exhaustively on purpose**, with no `..`: a field added to [`Material`] and
+    /// forgotten here is a compile error rather than a value that silently stops being saved.
+    /// That is the failure this whole pair exists to prevent, so it is worth spending the
+    /// compiler on rather than a test — and a test could not do it anyway, since building a
+    /// `Material` needs a live GPU bind group.
+    fn from(m: &Material) -> Self {
+        let Material {
+            bind_group: _,
+            albedo,
+            roughness,
+            metallic,
+            anisotropy,
+            clear_coat,
+            subsurface,
+            ambient,
+            emissive,
+            texture_source,
+            material_type,
+            is_transparent,
+            is_double_sided,
+        } = m;
+        Self {
+            albedo: *albedo,
+            roughness: *roughness,
+            metallic: *metallic,
+            anisotropy: *anisotropy,
+            clear_coat: *clear_coat,
+            subsurface: *subsurface,
+            ambient: *ambient,
+            emissive: *emissive,
+            texture_source: texture_source.clone(),
+            material_type: *material_type,
+            is_transparent: *is_transparent,
+            is_double_sided: *is_double_sided,
+        }
+    }
+}
+
+impl MaterialDesc {
+    /// The material this description asks for, over a bind group the caller has built (from
+    /// [`Self::texture_source`], or the renderer's white texture when it is `None`).
+    pub fn into_material(self, bind_group: std::sync::Arc<wgpu::BindGroup>) -> Material {
+        Material {
+            bind_group,
+            albedo: self.albedo,
+            roughness: self.roughness,
+            metallic: self.metallic,
+            anisotropy: self.anisotropy,
+            clear_coat: self.clear_coat,
+            subsurface: self.subsurface,
+            ambient: self.ambient,
+            emissive: self.emissive,
+            texture_source: self.texture_source,
+            material_type: self.material_type,
+            is_transparent: self.is_transparent,
+            is_double_sided: self.is_double_sided,
+        }
+    }
 }
 
 impl Material {

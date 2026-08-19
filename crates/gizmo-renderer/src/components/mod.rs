@@ -30,6 +30,7 @@ pub use misc::*;
 gizmo_core::impl_component!(
     Mesh,
     Material,
+    MaterialDesc,
     Skeleton,
     MeshRenderer,
     Camera,

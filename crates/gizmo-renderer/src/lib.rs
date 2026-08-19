@@ -115,6 +115,7 @@
 //! [`visibility`] holds the index.
 
 /// Clustered light culling — which lights can reach which part of the frame.
+pub mod material_sync;
 pub mod clustered;
 /// Loading, decoding and uploading meshes, textures and glTF scenes.
 pub mod asset;

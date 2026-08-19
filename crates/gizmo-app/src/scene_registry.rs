@@ -21,9 +21,11 @@ use gizmo_scene::registry::SceneRegistry;
 /// unregistered component is simply not written. `gizmo-studio`'s
 /// `every_addable_component_survives_a_save` holds the two lists together.
 ///
-/// `Material` is deliberately absent even with `render` on: it owns a live wgpu bind group
-/// and cannot be serialized as-is, which is why a scene round-trip still loses PBR maps.
-/// That is a separate problem from this one.
+/// `Material` itself is absent and always will be: it owns a live wgpu bind group, which is a
+/// handle to GPU state rather than data. What travels in its place is `MaterialDesc` — every other
+/// field, including the texture path — and `gizmo_renderer::material_sync` turns one into the
+/// other at each end. Before that pair existed a scene round-trip lost every material a user had
+/// authored, silently.
 pub fn full_scene_registry() -> SceneRegistry {
     let mut reg = gizmo_scene::registry::default_scene_registry();
 
@@ -33,8 +35,8 @@ pub fn full_scene_registry() -> SceneRegistry {
     #[cfg(feature = "render")]
     {
         use gizmo_renderer::components::{
-            BoneAttachment, Camera, DirectionalLight, ParticleEmitter, PointLight, SpotLight,
-            Terrain,
+            BoneAttachment, Camera, DirectionalLight, MaterialDesc, ParticleEmitter, PointLight,
+            SpotLight, Terrain,
         };
         // Registration is best-effort: a name collision is a bug in this file, not a reason
         // to take the application down mid-save. Warn loudly and keep the rest.
@@ -56,6 +58,11 @@ pub fn full_scene_registry() -> SceneRegistry {
         reg_or_warn!(ParticleEmitter, "ParticleEmitter");
         reg_or_warn!(Terrain, "Terrain");
         reg_or_warn!(BoneAttachment, "BoneAttachment");
+        // The material a file CAN hold: `Material` owns a live wgpu bind group, `MaterialDesc` is
+        // everything else it is. `gizmo_renderer::material_sync` keeps the pair in step — one pass
+        // writes a description for every material so a save has something to write, the other
+        // rebuilds the material from the description on load.
+        reg_or_warn!(MaterialDesc, "MaterialDesc");
     }
 
     #[cfg(feature = "audio")]

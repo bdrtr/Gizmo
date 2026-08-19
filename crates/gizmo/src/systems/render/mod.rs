@@ -171,6 +171,14 @@ pub fn default_render_pass(
     // transform systems every frame.
     ensure_global_transforms(world);
 
+    // **Materials, both directions.** A scene that has just loaded carries `MaterialDesc`s and no
+    // `Material` — descriptions are what a file can hold — so resolve first, building each one's
+    // bind group; then write a description back for every live material, so the next save has
+    // something to write. Until 2026-08-19 neither happened and a saved scene lost every material
+    // a user had authored.
+    crate::renderer::material_sync::resolve_material_descriptions(world, renderer);
+    crate::renderer::material_sync::sync_material_descriptions(world);
+
     // **Advance skeletal animation.** `collect_draw_items` below reads `Skeleton` for its skinning
     // matrices, and until this call nothing in the engine ever advanced the pose it reads: the two
     // systems live in `gizmo-renderer`, `current_time += dt · speed` appears nowhere else in the

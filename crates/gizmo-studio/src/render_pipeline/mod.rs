@@ -43,6 +43,13 @@ pub fn execute_render_pipeline(
     // as `Transform + Mesh + Material` drew in the game and silently vanished in the editor.
     gizmo::systems::render::ensure_global_transforms(world);
 
+    // `MaterialDesc` → `Material` and back, the same pair the game path runs and for the same
+    // reason: a just-loaded scene carries descriptions and no materials, and a scene about to be
+    // saved needs its descriptions written back. The editor is where materials are authored, so it
+    // is the path that loses most when this is missing.
+    gizmo::renderer::material_sync::resolve_material_descriptions(world, renderer);
+    gizmo::renderer::material_sync::sync_material_descriptions(world);
+
     // --- SKELETAL ANIMATION UPDATE (Done before any ECS borrows!) ---
     //
     // BOTH drivers, because there are two: `AnimationPlayer` (a clip and a playhead) and

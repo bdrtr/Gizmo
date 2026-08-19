@@ -36,6 +36,20 @@ impl Renderer {
         )
     }
 
+    /// The white 1×1 material bind group — what an untextured material draws with.
+    ///
+    /// Cached in the asset manager under a fixed key, so the second caller gets the first
+    /// caller's upload. `material_sync` uses it for a description with no texture and for one
+    /// whose texture will not load: a warning and a white surface, rather than an entity that
+    /// silently fails to appear.
+    pub fn white_material_bind_group(&self) -> std::sync::Arc<wgpu::BindGroup> {
+        self.asset_manager.write().unwrap().create_white_texture(
+            &self.device,
+            &self.queue,
+            &self.scene.texture_bind_group_layout,
+        )
+    }
+
     /// Loads a texture from disk (including the BC7 pipeline).
     /// Cached: the same path is not loaded twice.
     pub fn load_texture(

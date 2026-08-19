@@ -51,10 +51,10 @@ fn every_addable_component_survives_a_save() {
     /// (component, why a save cannot keep it).
     const CANNOT_ROUND_TRIP: &[(&str, &str)] = &[(
         "Material",
-        "it owns a live wgpu bind group — a handle to GPU state, not data — so there is nothing \
-         to write. This is why a scene round-trip still loses PBR maps, and it is a real gap \
-         rather than an oversight: fixing it means serialising the material's *description* and \
-         rebuilding the bind group on load.",
+        "it owns a live wgpu bind group — a handle to GPU state, not data — so the component \
+         itself is not what travels. `MaterialDesc` is: every other field, including the texture \
+         path, registered under its own name, with `gizmo_renderer::material_sync` converting at \
+         each end. So a material DOES survive a save; what cannot be written is the handle.",
     )];
 
     let root = workspace_root();
@@ -167,4 +167,65 @@ fn a_particle_emitter_a_terrain_and_a_bone_attachment_survive_the_file() {
         Some(7),
         "and the attachment with the joint it names"
     );
+}
+
+/// **A material survives the file** — as a description, which is the only form a file can hold.
+///
+/// The component a user edits owns a live wgpu bind group; what gets written is `MaterialDesc`,
+/// and `gizmo_renderer::material_sync` converts at each end. This drives the half that needs no
+/// GPU: a description written to a scene comes back with every value, including the texture path
+/// the resolve step will rebuild the bind group from.
+#[test]
+fn a_material_description_survives_the_file() {
+    use gizmo::prelude::*;
+    use gizmo::renderer::components::{MaterialDesc, MaterialType};
+
+    let mut world = World::new();
+    let e = world.spawn();
+    world.add_component(e, Transform::new(Vec3::ZERO));
+    world.add_component(
+        e,
+        MaterialDesc {
+            albedo: Vec4::new(0.2, 0.4, 0.6, 1.0),
+            roughness: 0.3,
+            metallic: 0.8,
+            anisotropy: 0.0,
+            clear_coat: 0.0,
+            subsurface: 0.0,
+            ambient: Vec3::ZERO,
+            emissive: Vec3::new(0.0, 1.0, 0.0),
+            texture_source: Some("textures/rust.png".to_string()),
+            material_type: MaterialType::Pbr,
+            is_transparent: false,
+            is_double_sided: true,
+        },
+    );
+
+    let path = std::env::temp_dir().join(format!("gizmo_material_{}.scene", std::process::id()));
+    let path = path.to_string_lossy().to_string();
+    let registry = gizmo::full_scene_registry();
+    gizmo::scene::SceneData::save(&world, &path, &registry).expect("save");
+
+    let mut loaded = World::new();
+    gizmo::scene::SceneData::load_into(&path, &mut loaded, &registry).expect("load");
+    let _ = std::fs::remove_file(&path);
+
+    let id = loaded
+        .borrow::<Transform>()
+        .iter()
+        .map(|(id, _)| id)
+        .next()
+        .expect("the entity survived");
+    let descs = loaded.borrow::<MaterialDesc>();
+    let desc = descs.get(id).expect("the material description survived");
+
+    assert_eq!(desc.albedo, Vec4::new(0.2, 0.4, 0.6, 1.0), "the colour the user picked");
+    assert_eq!((desc.roughness, desc.metallic), (0.3, 0.8), "and the PBR scalars");
+    assert_eq!(desc.emissive, Vec3::new(0.0, 1.0, 0.0), "and the glow");
+    assert_eq!(
+        desc.texture_source.as_deref(),
+        Some("textures/rust.png"),
+        "and the texture path — which is what lets the load rebuild the bind group at all"
+    );
+    assert!(desc.is_double_sided, "and the flags");
 }

@@ -2708,6 +2708,24 @@ duruyor, çünkü her biri ölçümünü ve kararını taşıyor:
   kararı beslemediği için §4'ten ve CLAUDE.md'den kaldırıldı, kural kaldı. (Naif
   `grep non_exhaustive` ~40 fazla sayıyor: tipler özniteliği kendi belgelerinde anlatıyor.)
 
+**Sahne dosyası artık malzeme tutabiliyor (2026-08-19).** Aynı sabah "bilinen istisna" olarak
+yazdığım cümle kendi çözümünü de söylüyormuş: `Material` canlı bir wgpu bind group tutuyor, ama
+GERİ KALAN HER ŞEYİ veri — `texture_source` dahil, yani albedo'nun geldiği yol. Demek ki tarif
+yazılabilir ve bind group yüklemede yeniden kurulabilir.
+
+`MaterialDesc` handle dışındaki her alan; iki geçiş de ikisini birbirine bağlıyor ve İKİ çizim yolu
+da onları koşuyor: `resolve_material_descriptions` tarifi olup malzemesi olmayan her varlığa
+(yani yeni yüklenmiş bir sahneye) malzeme kuruyor, `sync_material_descriptions` canlı her malzeme
+için tarifi geri yazıyor (yani bir sonraki kaydın yazacak bir şeyi oluyor). Kodda kurulan
+malzemeler — glTF yükleyici, `Material::new`, editörün ➕ menüsü — bu mekanizmayı bilmeden
+kaydedilebilir hâle geliyor.
+
+**Alan unutulması derleme hatası:** `From<&Material> for MaterialDesc` malzemeyi `..` olmadan
+TAMAMEN destructure ediyor, yani `Material`'a eklenip burada unutulan bir alan derlenmiyor. Bunu
+bir test veremezdi: `Material` kurmak canlı bir GPU bind group istiyor. Dokusuz ya da dosyası
+açılmayan bir tarif renderer'ın beyaz 1×1'ine düşüyor — uyarı ve beyaz yüzey, görünmeyen varlık
+değil.
+
 **İki çizim yolu, üç kusur, hepsi aynı gün (2026-08-19).** Üçü de "iki host, tek sözleşme"
 ailesinden ve üçü de parity guard'larının arasından geçmişti. Üçüncüsü çıkınca soru genelleştirildi
 — *her iki yol kare başına tam olarak neyi çağırıyor?* — ve liste kısa olduğu için sayıldı:

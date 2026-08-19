@@ -39,6 +39,25 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   it, the script takes the health off — 92, not 100 (the event arrived) and not 84 (one hit per
   move).
 
+- **A scene can hold a material at last: `MaterialDesc` + `gizmo_renderer::material_sync`.** The
+  known exception written down that morning — "`Material` owns a live wgpu bind group, so a round
+  trip loses PBR maps" — turned out to name its own fix. Everything else on `Material` is data,
+  **including `texture_source`, the path the albedo came from**, so the description can be written
+  and the bind group rebuilt.
+
+  `MaterialDesc` is every field but the handle, and two passes keep the pair in step, both run by
+  both draw paths: `resolve_material_descriptions` builds a material for every description that has
+  none (a freshly loaded scene), and `sync_material_descriptions` writes a description back for
+  every live material (so the next save has something to write). Materials built in code — the glTF
+  loader, `Material::new`, the editor's ➕ menu — become saveable without knowing any of this.
+
+  `From<&Material> for MaterialDesc` destructures the material **exhaustively, with no `..`**: a
+  field added to `Material` and forgotten there is a compile error rather than a value that
+  silently stops being saved. That is a guarantee no test could give, since building a `Material`
+  needs a live GPU. A description with no texture, or one naming a file that will not load,
+  resolves to the renderer's white 1×1 — a warning and a white surface rather than an entity that
+  fails to appear. `Renderer::white_material_bind_group` is new and is what both cases use.
+
 - **Three components the editor could add and a save silently threw away.** `ParticleEmitter`,
   `Terrain` and `BoneAttachment` were offered by the ➕ menu, added by the request handler, and
   absent from the scene registry — so authoring one, saving and reopening lost it without a word,
