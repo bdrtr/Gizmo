@@ -1707,10 +1707,21 @@ Studio'nun çağrısı fizik adımıyla **aynı kapıya** alındı (`editor_owns
 artık AI'yı kendisi koşturduğu için, kapısız bırakmak ▶ altında her ajanı kare başına iki kez
 sürerdi — fizik adımının aylar önce düşmüş olduğu tuzağın aynısı.
 
-Kalan sınırlar, bilerek: `NavAgent` sahne kaydına girmiyor (kayıt defterinde yok), yani bir ajanı
-yalnız Lua ya da Rust ekleyebilir; ızgara dikey olarak sınırsız (`LAYER_LIMIT` yalnız rasterizasyon
-koruması, yürünebilirlik kuralı değil); ve `needs_rebuild`'i statik geometri değişince yükselten
-şey hâlâ sahnenin sahibi.
+**Aynı gün kapanan devamı: ajan artık sahneye konabiliyor ve dosyada duruyor.** Denetçi
+"AI NavAgent" bölümünü bileşen var olduğundan beri çiziyordu — maks hız, steering, varış yarıçapı,
+canlı durum — ve bir varlığa `NavAgent` koymanın hiçbir yolu yoktu: ➕ menüsünde yok, ekleme
+işleyicisinde yok, `SceneRegistry`'de de yok (yani script'in eklediği ajan bile kayıtta siliniyordu).
+Üçü de eklendi, bölümüne 🗑 kondu, ve `every_addable_component_survives_a_save` üç listeyi birlikte
+tutuyor. Dosyanın taşıdığı şey YAZARIN AYARLADIĞI şey: hız/steering/yarıçap ve hedef. Rota, rotadaki
+imleç, durum, sıkışma sayacı ve yeniden-planlama takvimi `#[serde(skip)]` — bunlar çalışan bir
+simülasyonun anı, ve onları taşıyan bir dosya, az önce sıfırdan kurulmuş bir seviyede rotasının
+yarısında olduğunu sanan bir ajan yüklerdi. `NavAgentRecalcState::Default` elle yazıldı: türetilmiş
+hâli `interval: 0.0` verir, o da "her karede yeniden planla", yani ajan başına kare başına tam bir
+A* sorgusu.
+
+Kalan sınırlar, bilerek: ızgara dikey olarak sınırsız (`LAYER_LIMIT` yalnız rasterizasyon koruması,
+yürünebilirlik kuralı değil); ve `needs_rebuild`'i statik geometri değişince yükselten şey hâlâ
+sahnenin sahibi.
 
 ---
 

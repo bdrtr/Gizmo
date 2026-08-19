@@ -19,13 +19,15 @@ use gizmo_math::Vec3;
 ///
 /// This is an output of the navigation system, not an input: assigning it yourself has
 /// no effect beyond the next update, which recomputes it from the target and path.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum NavAgentState {
     /// No destination set. The navigation system damps `Velocity::linear` toward zero
     /// (multiplying it by `1 - min(dt * 5, 1)` each update) and does nothing else.
     ///
-    /// This is the state of a freshly constructed agent.
+    /// This is the state of a freshly constructed agent, and the state a **loaded** one starts
+    /// in: a scene stores what an agent *is*, not what it was doing when someone pressed ⏹.
+    #[default]
     Idle,
     /// Following a path, or — when no path could be computed — steering straight at the
     /// target. Both cases look identical from here; use [`NavAgent::path_len`] to tell
@@ -70,6 +72,22 @@ pub struct NavAgentRecalcState {
     pub last_target_pos: Option<Vec3>,
 }
 
+impl Default for NavAgentRecalcState {
+    /// The seeding [`NavAgent::new`] does: replan immediately, then twice a second.
+    ///
+    /// Written out rather than derived, and the difference is not cosmetic — a derived `Default`
+    /// would give `interval: 0.0`, which means **recompute the path every single update**, i.e. a
+    /// full A* query per agent per frame. This value is what a loaded agent gets, because the
+    /// replan schedule is skipped by serde (see [`NavAgent`]).
+    fn default() -> Self {
+        Self {
+            timer: 0.0,
+            interval: 0.5,
+            last_target_pos: None,
+        }
+    }
+}
+
 /// A path-following agent: where it wants to go, the route it is taking, and how hard it
 /// is allowed to steer.
 ///
@@ -82,6 +100,14 @@ pub struct NavAgentRecalcState {
 /// [`clear_path`](Self::clear_path) to write it and
 /// [`current_waypoint`](Self::current_waypoint) / [`path_len`](Self::path_len) /
 /// [`path_index`](Self::path_index) to read it.
+/// # What a scene file keeps
+///
+/// The **tuning** — `max_speed`, `steering_force`, `arrival_radius` — and the `target`, because
+/// those are what an author sets. Everything else is skipped: the path, the cursor into it, the
+/// state, the replan timer, the stall detector. Those describe a moment in a running simulation,
+/// and a file that carried them would load an agent that believes it is halfway along a route
+/// through a level that has just been rebuilt from scratch. (The same rule `AudioSource` needed
+/// for its sink id, and for the same reason: runtime state outlives nothing.)
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct NavAgent {
     /// Destination in world space, metres. `None` means "stand still" — the agent is
@@ -96,17 +122,22 @@ pub struct NavAgent {
     /// does not reset the recalculation timer, and a new destination within 2 metres of
     /// the old one is not far enough to force a recalculation on its own, so the agent
     /// may keep following the stale route until the timer next expires.
+    #[serde(default)]
     pub target: Option<Vec3>,
+    #[serde(skip)]
     path: Vec<Vec3>,
+    #[serde(skip)]
     current_path_index: usize, // path.remove(0) yerine indeks takibi — O(1)
     /// Last state written by the navigation system. See [`NavAgentState`] — writing it
     /// yourself does not steer the agent.
+    #[serde(skip)]
     pub state: NavAgentState,
     /// When the current route is thrown away and replanned. The navigation system only
     /// advances this while [`target`](Self::target) is `Some`, so an idle agent's timer
     /// does not tick down and its path is never replaced. [`NavAgent::new`] seeds it with
     /// `timer: 0.0`, `interval: 0.5` s and `last_target_pos: None`, which is what makes
     /// the first update after a target is set plan immediately.
+    #[serde(skip)]
     pub recalc: NavAgentRecalcState,
     /// Speed cap in metres per second. Applied twice: as the magnitude of the desired
     /// velocity the steering behaviours aim for, and as a hard clamp on
@@ -149,6 +180,7 @@ pub struct NavAgent {
     /// this measures genuine stalling rather than a single slow update. Crossing 2
     /// seconds triggers [`NavAgentState::Stuck`], but the timer keeps climbing until the
     /// agent actually moves.
+    #[serde(skip)]
     pub stuck_timer: f32,
     /// Reference position for stall detection, in world space (metres) — the last place
     /// the agent was seen to have made progress, not necessarily its position last
@@ -156,6 +188,7 @@ pub struct NavAgent {
     ///
     /// `None` until the navigation system first observes the agent, at which point it is
     /// seeded from the transform.
+    #[serde(skip)]
     pub last_agent_pos: Option<Vec3>,
 }
 
@@ -321,5 +354,62 @@ mod tests {
         a.clear_path();
         assert!(a.target.is_some(), "clear_path target'ı temizlememeli");
         assert_eq!(a.path_len(), 0);
+    }
+}
+
+#[cfg(test)]
+mod scene_serde_tests {
+    use super::*;
+
+    /// **What a scene keeps of an agent is what an author set.**
+    ///
+    /// The tuning and the destination survive; the route, the cursor into it, the state and the
+    /// replan schedule do not. A file that carried those would load an agent that believes it is
+    /// halfway along a path through a level that has just been rebuilt.
+    #[test]
+    fn a_saved_agent_keeps_its_tuning_and_forgets_where_it_was() {
+        let mut agent = NavAgent::new(3.5, 12.0, 0.75);
+        agent.set_target(Vec3::new(4.0, 0.0, -9.0));
+        agent.set_path(vec![Vec3::ZERO, Vec3::new(1.0, 0.0, 0.0), Vec3::new(2.0, 0.0, 0.0)]);
+        agent.advance();
+        agent.state = NavAgentState::Moving;
+        agent.stuck_timer = 1.9;
+        agent.last_agent_pos = Some(Vec3::new(1.0, 0.0, 0.0));
+
+        let json = serde_json::to_string(&agent).expect("NavAgent is serializable");
+        let loaded: NavAgent = serde_json::from_str(&json).expect("and round-trips");
+
+        assert_eq!(loaded.max_speed, 3.5);
+        assert_eq!(loaded.steering_force, 12.0);
+        assert_eq!(loaded.arrival_radius, 0.75);
+        assert_eq!(loaded.target, Some(Vec3::new(4.0, 0.0, -9.0)));
+
+        assert_eq!(loaded.path_len(), 0, "the route is a moment, not a property");
+        assert_eq!(loaded.path_index(), 0);
+        assert_eq!(loaded.state, NavAgentState::Idle);
+        assert_eq!(loaded.stuck_timer, 0.0);
+        assert_eq!(loaded.last_agent_pos, None);
+    }
+
+    /// The replan schedule a loaded agent gets is the one `new` seeds — **not** a derived
+    /// `Default`, whose `interval: 0.0` would mean a full A* query per agent per frame.
+    #[test]
+    fn a_loaded_agent_replans_twice_a_second_not_every_frame() {
+        let json = serde_json::to_string(&NavAgent::default()).unwrap();
+        let loaded: NavAgent = serde_json::from_str(&json).unwrap();
+        assert_eq!(loaded.recalc.interval, NavAgent::default().recalc.interval);
+        assert!(loaded.recalc.interval > 0.0, "0.0 is 'replan every update'");
+        assert_eq!(loaded.recalc.timer, 0.0, "and the first update plans at once");
+    }
+
+    /// A scene written before any of this loads: every skipped field has a default, so the file
+    /// only has to carry what an author set.
+    #[test]
+    fn a_file_with_only_the_authored_fields_loads() {
+        let minimal = r#"{"max_speed":6.0,"steering_force":9.0,"arrival_radius":1.0}"#;
+        let agent: NavAgent = serde_json::from_str(minimal).expect("the tuning is enough");
+        assert_eq!(agent.max_speed, 6.0);
+        assert_eq!(agent.target, None);
+        assert_eq!(agent.state, NavAgentState::Idle);
     }
 }

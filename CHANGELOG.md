@@ -530,6 +530,21 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A `NavAgent` could not be added in the editor and could not be saved — while the inspector
+  drew a full section for it.** "AI NavAgent" with max speed, steering force, arrival radius and
+  live state has been in the inspector for as long as the component has existed, and there was no
+  way to put one on an entity: not in the ➕ menu, not in the add handler, and not in the scene
+  registry, so even a scripted agent vanished on save. It is in all three now, with a 🗑 in its
+  section like every other addable component.
+
+  What a file keeps is what an author sets — `max_speed`, `steering_force`, `arrival_radius` and
+  the target. The path, the cursor into it, the state, the stall detector and the replan schedule
+  are `#[serde(skip)]`: they describe a moment in a running simulation, and a file carrying them
+  would load an agent that believes it is halfway along a route through a level that has just been
+  rebuilt. `NavAgentRecalcState`'s `Default` is written out rather than derived for the same
+  reason a derived one would be wrong: `interval: 0.0` means *replan every update*, i.e. a full A*
+  query per agent per frame.
+
 - **A scene's music never played: `is_3d = false` meant "not played at all".** The flag was
   meant to choose *how* a source plays — spatial, with a position and a Doppler shift, or flat.
   The spatial system's auto-start requires `is_3d` (correctly: a flat sound has no position to

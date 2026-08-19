@@ -319,6 +319,7 @@ world.insert_resource(editor_state);
     let _ = component_registry.register::<gizmo::physics::components::Hurtbox>("Hurtbox");
     let _ = component_registry.register::<gizmo::renderer::components::BoneAttachment>("BoneAttachment");
     let _ = component_registry.register::<gizmo::physics::components::fighter::FighterController>("FighterController");
+    let _ = component_registry.register::<gizmo::ai::components::NavAgent>("NavAgent");
     world.insert_resource(component_registry);
 
     // --- SCRIPT ENGINE & ASSET WATCHER BİRLEŞİMİ ---

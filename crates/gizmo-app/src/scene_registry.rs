@@ -70,6 +70,17 @@ pub fn full_scene_registry() -> SceneRegistry {
         tracing::warn!(error = ?e, "[Scene] AudioSource registration failed");
     }
 
+    // The editor has drawn a full `NavAgent` section — max speed, steering force, arrival radius,
+    // live state — for as long as the component has existed, and a scene could not keep one: not
+    // registered here, so an agent placed in the editor was gone on save, silently. (It also could
+    // not be *added* from the ➕ menu; both lists are fixed together, and
+    // `every_addable_component_survives_a_save` holds them that way.) What travels is the tuning
+    // and the destination; the route and the replan schedule are runtime state — see `NavAgent`.
+    #[cfg(feature = "ai")]
+    if let Err(e) = reg.register_serializable::<gizmo_ai::components::NavAgent>("NavAgent") {
+        tracing::warn!(error = ?e, "[Scene] NavAgent registration failed");
+    }
+
     tracing::debug!(
         component_count = reg.len(),
         "[Scene] full scene registry assembled"

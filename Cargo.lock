@@ -2550,6 +2550,7 @@ dependencies = [
  "gizmo-physics-core",
  "gizmo-physics-rigid",
  "serde",
+ "serde_json",
  "tracing",
  "web-time",
 ]
@@ -2588,6 +2589,7 @@ dependencies = [
  "egui-wgpu",
  "egui-winit",
  "gilrs",
+ "gizmo-ai",
  "gizmo-audio",
  "gizmo-core",
  "gizmo-editor",

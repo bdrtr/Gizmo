@@ -229,3 +229,52 @@ fn a_material_description_survives_the_file() {
     );
     assert!(desc.is_double_sided, "and the flags");
 }
+
+/// **A navigation agent survives the file** — the whole point of registering it.
+///
+/// The editor has drawn an "AI NavAgent" section for as long as the component has existed, and
+/// there was no way to put one on an entity from the editor at all (no ➕ menu entry, no add
+/// handler) and no way for a scene to keep one. What travels is the tuning and the destination;
+/// the route and the replan schedule are runtime state and are deliberately dropped.
+#[test]
+fn a_nav_agent_survives_the_file_with_its_tuning_and_not_its_route() {
+    use gizmo::ai::components::{NavAgent, NavAgentState};
+    use gizmo::prelude::*;
+
+    let mut world = World::new();
+    let e = world.spawn();
+    world.add_component(e, Transform::new(Vec3::new(4.0, 0.0, -2.0)));
+
+    let mut agent = NavAgent::new(2.5, 8.0, 1.25);
+    agent.set_target(Vec3::new(30.0, 0.0, 12.0));
+    agent.set_path(vec![Vec3::ZERO, Vec3::new(1.0, 0.0, 1.0)]);
+    agent.state = NavAgentState::Moving;
+    world.add_component(e, agent);
+
+    let path = std::env::temp_dir().join(format!("gizmo_navagent_{}.scene", std::process::id()));
+    let path = path.to_string_lossy().to_string();
+    let registry = gizmo::full_scene_registry();
+    gizmo::scene::SceneData::save(&world, &path, &registry).expect("save");
+
+    let mut loaded = World::new();
+    gizmo::scene::SceneData::load_into(&path, &mut loaded, &registry).expect("load");
+    let _ = std::fs::remove_file(&path);
+
+    let id = loaded
+        .borrow::<Transform>()
+        .iter()
+        .map(|(id, _)| id)
+        .next()
+        .expect("the entity survived");
+
+    let agents = loaded.borrow::<NavAgent>();
+    let agent = agents.get(id).expect("the agent survived the round trip");
+    assert_eq!(
+        (agent.max_speed, agent.steering_force, agent.arrival_radius),
+        (2.5, 8.0, 1.25),
+        "the tuning is what an author sets, so it is what a file keeps"
+    );
+    assert_eq!(agent.target, Some(Vec3::new(30.0, 0.0, 12.0)));
+    assert_eq!(agent.path_len(), 0, "a route through the old level is not data");
+    assert_eq!(agent.state, NavAgentState::Idle);
+}

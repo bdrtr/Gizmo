@@ -346,6 +346,7 @@ pub fn draw_ai_section(
 ) {
     // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
     let mut agents = unsafe { world.borrow_mut_unchecked::<NavAgent>() };
+    let mut remove = false;
     {
         if let Some(mut agent) = agents.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new(crate::theme::section_title("AI NavAgent"))
@@ -397,9 +398,22 @@ pub fn draw_ai_section(
                     }
 
                     ui.label(format!("Rota Uzunluğu: {}", agent.path_len()));
+
+                    // Every other section that can be added can be removed; this one could be
+                    // neither until the component reached the ➕ menu and the scene format.
+                    ui.separator();
+                    if ui.button("🗑 Bileşeni Sil").clicked() {
+                        remove = true;
+                    }
                 });
             ui.separator();
         }
+    }
+
+    // The request is recorded, not performed: a panel cannot mutate the world while egui is
+    // drawing it, so `scene_ops` drains this next frame — the editor's whole action protocol.
+    if remove {
+        _state.remove_component_request = Some((entity_id, "NavAgent".to_string()));
     }
 }
 

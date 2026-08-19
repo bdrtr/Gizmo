@@ -98,6 +98,12 @@ pub fn handle_scene_operations(
                     ),
                 ),
 
+                // The inspector has drawn an "AI NavAgent" section since the component existed,
+                // and there was no way to put one on an entity: not in the ➕ menu, not here, and
+                // not in the scene format either. `NavAgent::default()` is the human-scale walker
+                // (5 m/s, 10 m/s², 0.5 m) — tuning is what the inspector is for.
+                "NavAgent" => world.add_component(ent, gizmo::ai::components::NavAgent::default()),
+
                 _ => editor_state.log_warning(&format!("Bilinmeyen component: {}", comp_name)),
             }
         }
@@ -114,6 +120,7 @@ pub fn handle_scene_operations(
                 // in place. `every_delete_button_in_the_inspector_removes_its_component` below
                 // now pins all four together rather than each on its own.
                 "FighterController" => { world.remove_component::<gizmo::physics::components::fighter::FighterController>(ent); }
+                "NavAgent" => { world.remove_component::<gizmo::ai::components::NavAgent>(ent); }
                 _ => editor_state.log_warning(&format!("Component turu silinemiyor: {}", comp_name)),
             }
         }
@@ -931,7 +938,7 @@ mod tests {
     /// misses one.
     #[test]
     fn every_delete_button_in_the_inspector_removes_its_component() {
-        for name in ["Hitbox", "Hurtbox", "BoneAttachment", "FighterController"] {
+        for name in ["Hitbox", "Hurtbox", "BoneAttachment", "FighterController", "NavAgent"] {
             let mut world = World::new();
             let ent = world.spawn();
             let mut ed = EditorState::default();
@@ -966,6 +973,7 @@ mod tests {
                 .borrow::<gizmo::physics::components::fighter::FighterController>()
                 .get(id)
                 .is_some(),
+            "NavAgent" => world.borrow::<gizmo::ai::components::NavAgent>().get(id).is_some(),
             other => panic!("test bilinmeyen bileşen adı kullandı: {other}"),
         }
     }
