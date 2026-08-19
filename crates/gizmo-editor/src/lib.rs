@@ -197,6 +197,9 @@ pub fn draw_editor(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
         }
     }
 
+    // ==== "Kaydedilmemiş değişiklikler var" onayı (asset browser'daki tek tıktan gelir) ====
+    draw_load_confirm_dialog(ui.ctx(), state);
+
     // 1. Status Bar (En altta) — composed into the root `Ui`; `show_inside`
     // shrinks the root cursor from the bottom so the dock fills the remainder.
     egui::Panel::bottom("status_bar")
@@ -276,6 +279,55 @@ viewer.state.dock_state = dock_state;
             "❌ Editör tercihleri kaydedilemedi: {} — ayarlarınız bu oturumdan sonra kalmayacak.",
             e
         ));
+    }
+}
+
+/// **"You have unsaved changes — load anyway?"**, and the reason it is a function rather than a
+/// few lines inside the frame.
+///
+/// `EditorState::scene::load_confirm_dialog` was written and never read. The asset browser sets it
+/// when a `.scene` is single-clicked while `has_unsaved_changes` is true, and no code anywhere in
+/// the workspace looked at the field — so that click was **completely silent**: no dialog, no
+/// load, not even a status line, because the message sits in the other branch. The hover text on
+/// the row still said "Tek tık: Sahneyi yükle", and the only route that worked was right-click →
+/// "📂 Bu Sahneyi Yükle", which skips the check and which nothing tells the user about.
+///
+/// It compounded: `has_unsaved_changes` is raised by the animation panel and the studio's own save
+/// path never cleared it, so one dragged keyframe disabled single-click loading for the rest of
+/// the session.
+///
+/// Split out so a headless `egui::Context::run_ui` frame can drive it without a `World`: what this
+/// must do is answerable from the state alone, and the defect was that nothing answered.
+fn draw_load_confirm_dialog(ctx: &egui::Context, state: &mut EditorState) {
+    let Some(path) = state.scene.load_confirm_dialog.clone() else {
+        return;
+    };
+
+    let mut decided = false;
+    egui::Window::new("Kaydedilmemiş değişiklikler")
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .show(ctx, |ui| {
+            ui.label("Sahnede kaydedilmemiş değişiklikler var. Yine de yüklensin mi?");
+            ui.label(egui::RichText::new(&path).weak().small());
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                // The destructive answer does not come first: the button under the cursor after a
+                // misclick should be the one that keeps the work.
+                if ui.button("Vazgeç").clicked() {
+                    decided = true;
+                }
+                if ui.button("Yine de yükle").clicked() {
+                    state.scene.load_request = Some(path.clone());
+                    state.status_message = format!("Sahne yükleniyor: {path}");
+                    decided = true;
+                }
+            });
+        });
+
+    if decided {
+        state.scene.load_confirm_dialog = None;
     }
 }
 
@@ -412,6 +464,108 @@ fn parse_vm_rss(status: &str) -> Option<u64> {
     match fields.next() {
         Some("kB") => Some(value * 1024),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod load_confirm_tests {
+    use super::draw_load_confirm_dialog;
+    use crate::EditorState;
+
+    /// Everything the frame painted, flattened — `Shape::Vec` nests, so a scan that does not
+    /// recurse silently misses most of it.
+    fn painted_text(state: &mut EditorState) -> Vec<String> {
+        fn collect(shape: &egui::Shape, out: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| collect(s, out)),
+                egui::Shape::Text(t) => out.push(t.galley.text().to_owned()),
+                _ => {}
+            }
+        }
+
+        let ctx = egui::Context::default();
+        let input = || egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::pos2(0.0, 0.0),
+                egui::vec2(1280.0, 720.0),
+            )),
+            ..Default::default()
+        };
+
+        // Two frames, and the second is the one read: an anchored, auto-sized `Window` does not
+        // know its own size until it has been laid out once, so the first frame is where egui
+        // measures it and the second is where it lands. Reading the first was this test's own
+        // first version, and it saw an empty screen.
+        let mut texts = Vec::new();
+        for _ in 0..2 {
+            let output = ctx.run_ui(input(), |ui| {
+                draw_load_confirm_dialog(ui.ctx(), state);
+            });
+            texts.clear();
+            output.shapes.iter().for_each(|s| collect(&s.shape, &mut texts));
+            output.drop_without_applying_deltas();
+        }
+        texts
+    }
+
+    /// **The regression itself**: `load_confirm_dialog` was written by the asset browser and read
+    /// by nothing, so a single click on a `.scene` with unsaved changes painted nothing at all.
+    #[test]
+    fn a_pending_load_paints_the_question_and_both_answers() {
+        let mut state = EditorState::default();
+        state.scene.load_confirm_dialog = Some("levels/forest.scene".to_string());
+
+        let texts = painted_text(&mut state);
+        let says = |needle: &str| texts.iter().any(|t| t.contains(needle));
+
+        assert!(
+            says("kaydedilmemiş değişiklikler var"),
+            "the question was never asked; painted: {texts:?}"
+        );
+        assert!(says("levels/forest.scene"), "and it must name the scene it would load");
+        assert!(says("Yine de yükle") && says("Vazgeç"), "both answers must be offered");
+    }
+
+    /// Drawing the question is not answering it: the load must wait for a click, and the request
+    /// must still be pending on the next frame rather than firing or being dropped.
+    #[test]
+    fn painting_the_dialog_does_not_load_anything() {
+        let mut state = EditorState::default();
+        state.scene.load_confirm_dialog = Some("levels/forest.scene".to_string());
+
+        let _ = painted_text(&mut state);
+
+        assert!(state.scene.load_request.is_none(), "nothing may load until the user answers");
+        assert_eq!(
+            state.scene.load_confirm_dialog.as_deref(),
+            Some("levels/forest.scene"),
+            "and the question must still be on screen next frame"
+        );
+    }
+
+    /// **…and the editor's frame has to CALL it.** A drawing function nothing invokes is the same
+    /// defect one layer up, and it is the shape this whole sweep keeps finding: the field had a
+    /// writer and no reader, and a dialog with no caller would leave it exactly that way while
+    /// three green tests said otherwise. Cut at the first `#[cfg(test)]` so this module's own
+    /// mentions of the name cannot satisfy it.
+    #[test]
+    fn the_editor_frame_calls_the_dialog() {
+        let src = include_str!("lib.rs");
+        let production = &src[..src.find("#[cfg(test)]").expect("a test module")];
+        assert!(
+            production.contains("draw_load_confirm_dialog(ui.ctx(), state)"),
+            "`draw_editor` no longer calls the confirmation dialog, so a single-click load with \
+             unsaved changes is silent again"
+        );
+    }
+
+    /// With nothing pending there is no window — a modal that paints itself every frame would
+    /// block the editor.
+    #[test]
+    fn no_pending_load_paints_nothing() {
+        let mut state = EditorState::default();
+        state.scene.load_confirm_dialog = None;
+        assert!(painted_text(&mut state).is_empty());
     }
 }
 

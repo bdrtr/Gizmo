@@ -1761,26 +1761,40 @@ line. The regression tests drive the **ECS path**, which is the part that was br
 fail with the old line restored. No determinism change: for a collider with the default flags the
 rebuilt struct is bit-identical, and `headless_stress_test` agrees across three runs.
 
+**Also closed from this round — two fields with a writer and no reader.** Both are the same shape
+as `PrefabRequest` and `load_confirm_dialog` respectively, and both were silent rather than broken,
+which is what made them survive:
+
+- **`entity.spawn_prefab` was swallowed, not refused.** `flush_commands` matches the command and
+  spawns an entity carrying `EntityName`, `Transform` and `gizmo_core::PrefabRequest` — and
+  `PrefabRequest` had exactly one producer and **zero readers** in the workspace; the component's
+  own doc said so and left the resolver to "the application". Nobody was the application. So the
+  call looked applied and yielded a named empty transform: no mesh, no collider, nothing of the
+  prefab, and no warning — worse than the script commands this engine drops on purpose, because
+  those are handed *back* to the caller and are therefore visible. `systems::prefab` is the
+  resolver now, run from `PlayLoop::step` right after the script pass so what it spawns is
+  physics-stepped and drawn on the same frame it was asked for. **The key is read as a path**,
+  decided rather than invented: the one loader in the workspace (`SceneData::load_prefab`) takes a
+  path, the editor writes `prefab_{entity_id}.prefab` into the asset root, and there is no
+  catalogue anywhere to turn a name into either — inventing one would be deciding a project-layout
+  question inside a system. The prefab loads as a **child** of the requesting entity, which keeps
+  the name and position the request already carries and is the shape the editor's drag-and-drop
+  already uses. A key that names nothing is warned about once and cleared, because the component is
+  what selects the entity and a missing file would otherwise be re-opened at the frame rate.
+- **The editor's unsaved-changes guard had no dialog.** `asset_browser.rs` sets
+  `scene.load_confirm_dialog = Some(path)` when a `.scene` is single-clicked with unsaved changes,
+  and that field had **no reader anywhere** — so the click was completely silent: no modal, no
+  load, not even a status line, because the message sits in the `else` branch. The hover text still
+  said "Tek tık: Sahneyi yükle". It compounded: `has_unsaved_changes` is raised by the animation
+  panel and the studio's own save path never lowered it, so one dragged keyframe disabled
+  single-click loading for the rest of the session. Right-click → "📂 Bu Sahneyi Yükle" skipped the
+  check and worked, and nothing told the user that. Both halves are fixed, and the dialog is split
+  into its own function so a headless `egui::Context::run_ui` frame can drive it without a `World`
+  — plus a test that the editor frame still **calls** it, because a drawing function nothing
+  invokes is the same defect one layer up.
+
 **Measured and still open from this round:**
 
-- **`entity.spawn_prefab` is swallowed, not refused.** `flush_commands` matches the command and
-  spawns an entity carrying `EntityName`, `Transform` and `gizmo_core::PrefabRequest` — and
-  `PrefabRequest` has exactly one producer and **zero readers** in the workspace (the component's
-  own doc says so). So the call looks applied and yields a named empty transform: no mesh, no
-  collider, nothing of the prefab, and no warning. It is worse than the commands this engine drops
-  on purpose, because those are handed *back* to the caller and are therefore visible. The
-  resolver exists (`SceneData::load_prefab`) and takes a **path**, while Lua passes a **name**, and
-  there is no prefab catalogue to bridge them — the editor writes `prefab_{entity_id}.prefab` into
-  the asset root. "The string is a path" is the only rule the tree can support today; the smallest
-  honest step short of that is a `tracing::warn!`, and even that is missing.
-- **The editor's unsaved-changes guard has no dialog.** `asset_browser.rs` sets
-  `scene.load_confirm_dialog = Some(path)` when a `.scene` is single-clicked with unsaved changes,
-  and that field has **no reader anywhere** — so the click is completely silent: no modal, no load,
-  not even a status line (the message sits in the `else` branch). The hover text still says "Tek
-  tık: Sahneyi yükle". It compounds: `has_unsaved_changes` is set by the animation panel and the
-  studio's own save path never clears it, so once a keyframe is dragged the flag is true for the
-  rest of the session and single-click never works again. Right-click → "📂 Bu Sahneyi Yükle"
-  skips the check and works, but nothing tells the user that.
 - **Post-process authoring is live but not persistent.** The inspector's "🌍 World & Environment
   Settings" panel says in as many words that these are the *scene's* lighting and post-processing
   settings, and their only reader is the editor viewport (`render_pipeline/passes.rs`). `SceneData`

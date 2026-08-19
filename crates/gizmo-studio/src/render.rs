@@ -244,7 +244,15 @@ pub fn render_studio(
         }
         if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
             match save {
-                Ok(_) => ed.log_info("Sahne kaydedildi."),
+                Ok(_) => {
+                    // The other half of the unsaved-changes guard. `has_unsaved_changes` is raised
+                    // by the animation panel and this path never lowered it, so one dragged
+                    // keyframe left the flag true for the rest of the session — and every
+                    // single-click scene load in the asset browser went through the confirmation
+                    // route from then on. `gizmo-app`'s editor runtime already clears it here.
+                    ed.has_unsaved_changes = false;
+                    ed.log_info("Sahne kaydedildi.");
+                }
                 Err(e) => ed.log_error(&format!("Sahne kaydedilemedi: {e}")),
             }
         }
