@@ -58,9 +58,14 @@ Browser WebGPU exposes `maxBindGroups = 4`, so the web pipeline uses the
 4-group scheme (`global`, `texture`, `skeleton`, `instance`) — shadows,
 deferred shading, screen-space effects and GPU compute subsystems are disabled
 on wasm and the forward shaders are rewritten at load
-(`gizmo_renderer::pipeline`'s `load_shader_web`). Audio, networking (UDP) and
-Lua scripting are native-only for now; the corresponding features are simply
-not enabled by this crate. See `docs/ENGINE.md` for the full status.
+(`gizmo_renderer::pipeline`'s `load_shader_web`). The post-process grade goes
+with them: the browser runs a reduced `post_process_wasm.wgsl` with no depth of
+field, chromatic aberration or film grain. Networking (UDP) and
+Lua scripting are native-only for now, so this crate does not enable those two
+features. **Audio is not in that group** — `demo-web` enables the `audio`
+feature and the left-click beep above goes through the engine's own
+`AudioManager`; what the browser adds is the autoplay policy, which is why it
+takes a user gesture to start. See `docs/ENGINE.md` for the full status.
 
 `test.html` is a headless verification harness (boots the engine, counts 90
 frames, samples canvas pixels, reports to the serving process); `index.html`

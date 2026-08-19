@@ -219,7 +219,7 @@ gizmo-window: standalone, no in-workspace dependencies.
 - **`gizmo-physics-{core,rigid,dynamics,soft}`** — render-agnostic, embeddable physics. BVH/SAP broadphase (Rayon), GJK/EPA narrowphase, TGS-Soft sequential-impulse solver, soft-body FEM/cloth/rope, fracture, joints, vehicle/character dynamics, CCD.
 - **`gizmo-renderer`** — WGPU deferred PBR: CSM shadows, SSAO/SSGI, bloom, volumetric, TAA. Reduced forward-only pipeline on WASM (no shadows, 4 bind groups).
 - **`gizmo-app`** — plugin-driven app loop + phase executor. Windowed loop uses winit 0.30 `ApplicationHandler` (`crates/gizmo-app/src/windowed/`).
-- **`gizmo`** (facade, crate `gizmo-engine`) — `gizmo::prelude::*`, the high-level `SimpleApp`/`App<S>` API. Feature flags gate every subsystem (`render`, `audio`, `physics`, `physics-soft`, `editor`, `scene`, `scripting`, `network`, `egui`, `analysis`, …); `headless` = physics + net, no window/render. Audio, networking, and Lua scripting are **native-only** (not on WASM).
+- **`gizmo`** (facade, crate `gizmo-engine`) — `gizmo::prelude::*`, the high-level `SimpleApp`/`App<S>` API. Feature flags gate every subsystem (`render`, `audio`, `physics`, `physics-soft`, `editor`, `scene`, `scripting`, `network`, `egui`, `analysis`, …); `headless` = physics + net, no window/render. Networking and Lua scripting are **native-only** (not on WASM). **Audio is not** — this line said it was until 2026-08-20: `gizmo-audio` carries a `cfg(target_arch = "wasm32")` dependency block and wasm-specific `Send`/`Sync` impls, `demo-web` enables the `audio` feature, and its left-click beep plays through the engine's own `AudioManager` (CI's `wasm` job names audio in the web feature subset it builds).
 
 ## Determinism contract (important)
 

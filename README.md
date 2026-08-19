@@ -11,7 +11,7 @@
   [![Crates.io](https://img.shields.io/crates/v/gizmo-engine.svg)](https://crates.io/crates/gizmo-engine)
   [![Docs.rs](https://img.shields.io/docsrs/gizmo-engine.svg)](https://docs.rs/gizmo-engine)
   [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-  [![Rust](https://img.shields.io/badge/Rust-1.92%2B-orange.svg)](https://www.rust-lang.org/)
+  [![Rust](https://img.shields.io/badge/Rust-1.96%2B-orange.svg)](https://www.rust-lang.org/)
 </div>
 
 <br/>
@@ -31,7 +31,7 @@ Gizmo Engine is a high-performance, data-driven, and fully modular game developm
   - FEM (Finite Element Method) soft bodies — compressible Neo-Hookean first Piola–Kirchhoff stress — plus XPBD cloth, rope and Voronoi fracture.
 - **WGPU-Based Rendering:** A graphics pipeline targeting Vulkan, Metal, DX12 — **and WebGPU in the browser**. Features Instanced Rendering, GLTF PBR Materials, Dynamic Shadows (CSM), SSAO, SSGI, Bloom, TAA and Deferred Shading. The engine also runs on `wasm32-unknown-unknown` with a substantially reduced web pipeline (forward-only, fixed internal resolution, no shadows/AO/GI/TAA); try it with the [`demo-web/`](demo-web/) crate. Networking and Lua scripting are native-only — see [`docs/ENGINE.md`](docs/ENGINE.md).
 - **In-Game Editor:** `egui`-based tooling with a scene hierarchy, an inspector for the engine's built-in components, transform gizmos and prefabs. It is a library of panels (`gizmo-editor`); the editor *application* (`gizmo-studio`) is not published to crates.io yet, and the inspector does not yet cover user-defined components.
-- **Spatial Audio:** RAM-cached 3D audio with distance attenuation and pitch-based Doppler. It is a thin, functional layer — there is no mixer, bus routing or DSP yet (see the roadmap).
+- **Spatial Audio:** RAM-cached 3D audio with distance attenuation and pitch-based Doppler, on a mixer with named buses (`music` / `sfx` / `ui` / `voice`) and a master gain — a scene's chosen bus is applied on the engine's own audio pass. A live low-pass filter, retunable while a sound plays, drives the underwater muffle. It runs in the browser too — `gizmo-audio` has a wasm backend and `demo-web` enables it.
 
 ## 🚀 Quickstart
 
