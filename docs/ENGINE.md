@@ -1612,6 +1612,41 @@ post-processing cannot be batched; both per-pair SIMD attempts regressed (the sc
 already auto-vectorized). DO NOT RETRY without passing the step-0 gate again. (The
 "~82% narrowphase" figure is OBSOLETE.)
 
+### Bir sonraki oturuma: "arayüzü olan, sahibi olmayan altsistem" taraması (2026-08-19)
+
+Bugün aynı şekil DÖRT kez çıktı ve dördü de aynı soruyla bulundu: **bu yeteneği motorun
+kendi karesinde kim çalıştırıyor?**
+
+| bulgu | arayüz vardı | sahibi yoktu |
+|---|---|---|
+| navigasyon | denetçide tam bir "AI NavAgent" bölümü | `PlayLoop` sistemleri çağırmıyordu, ve hiçbir yerde `NavGrid` kurulmuyordu |
+| ses cihazı | ➕ menüsünde `AudioSource`, sahnede kaydediliyor | `AudioManager`'ı yalnız demolar kuruyordu |
+| 2B ses | aynı bileşen, `is_3d` bayrağı | bayrak "nasıl"ı seçerken sessizce "çalınsın mı"yı seçiyordu |
+| `NavAgent` sahne kimliği | denetçi bölümü | ne ➕ menüsünde ne kayıt defterinde |
+
+Tarama sorusu bir dahaki sefere de aynı: *bir kullanıcı bunu editörde görebiliyorsa, motorun
+kendi karesinde onu çalıştıran satır nerede?* Ölçülmemiş adaylar (bu oturumda BAKILMADI):
+`FluidSimulation` (denetçinin `skip_names` listesinde, yani kendi bölümü var), yıkım/kırılma,
+`AnimationStateMachine`, ve `gizmo-net`in oturum kurulumu (bir host hiç sunucu/istemci başlatıyor
+mu, yoksa bu tamamen oyun kodunun mu?).
+
+**Açık kalan tasarım kararı: rollback yakalaması CANLI girdiyle yeniden simüle ediyor.**
+`gizmo_app::windowed::event::service_rollback` yakalama döngüsünde tick başına
+`self.schedule.run(...)` çağırıyor ve `RollbackManager::input_buffers`'ta saklanan tick'e ait
+`PlayerInput`'u HİÇ uygulamıyor — o tamponları okuyan tek yer tahmin/ıraksama karşılaştırması.
+Yani yeniden simülasyon, o tick'in girdisini değil, İÇİNDE BULUNULAN karenin girdisini görüyor;
+düzeltilen tek şey ıraksamanın tespiti oluyor, kaynağı değil. Bu bir hata olduğu kadar bir tasarım
+sorusu: bir `PlayerInput` dünyaya nasıl uygulanır (bir `Input` kaynağı mı, oyuncu başına bir
+denetleyici bileşeni mi?) — cevap oyunun girdi modeline bağlı ve motor onu henüz seçmedi. Ölçüldü
+ve yazıldı; körlemesine bir uygulama yazmak yanlış katmanda karar vermek olurdu.
+
+**Küçük, bilinen sınırlar (bugün açıkta bırakıldı, hepsi kasıtlı):**
+- `NavGrid::needs_rebuild`'i statik geometri değişince yükselten hiçbir şey yok; sahnenin sahibi
+  ya da editörün "Rebuild NavMesh" düğmesi yükseltiyor.
+- `BehaviorTree` yalnız Rust'tan kurulabiliyor (`Box<dyn BtNode>`), serileştirilemiyor — yani bir
+  sahne davranış ağacı taşıyamaz. `ai_frame` artık onu her kare tıklatıyor, ama koyacak kimse yok.
+- Editörde bir sesi ▶'ye basmadan ön-dinleme yok; ses koşan oyuna ait (bilinçli).
+
 ### Sahnedeki ses hiç çalmıyordu — cihazı kimse açmıyordu (2026-08-19, DÜZELTİLDİ)
 
 Navigasyonla aynı sınıf, aynı gün: editör bileşeni sunuyor, denetçi çiziyor, sahne biçimi
