@@ -1612,6 +1612,51 @@ post-processing cannot be batched; both per-pair SIMD attempts regressed (the sc
 already auto-vectorized). DO NOT RETRY without passing the step-0 gate again. (The
 "~82% narrowphase" figure is OBSOLETE.)
 
+### Sahnedeki ses hiç çalmıyordu — cihazı kimse açmıyordu (2026-08-19, DÜZELTİLDİ)
+
+Navigasyonla aynı sınıf, aynı gün: editör bileşeni sunuyor, denetçi çiziyor, sahne biçimi
+kaydediyor — ve motorun hiçbir host'u `AudioManager` kurmuyordu. Ağaçta üç kurulum var, üçü de
+demo (`hill_climb`, `water_demo`, `demo-web`). Yani ▶'ye basınca ve dışa aktarılmış oyunda
+`audio_spatial_system` ilk satırında dönüyor, Lua'nın `audio.play`'i de aynı kapıdan çıkıyordu.
+
+**Neden "opt-in" savunması tutmuyor.** `audio_spatial_system`'in doc'u "DefaultPlugins bunu
+otomatik kaydetmez, oyun kendi schedule'ına eklesin" diyor ve bu makul bir duruş — ama editörde
+eklenebilen, sahneye kaydedilen bir bileşenin oyunda sessiz kalması kimsenin verdiği bir karar
+değil. İki uç birbirinden habersiz: biri bileşeni sunuyor, öteki onu okuyan sistemi çağırmıyor.
+
+**Cihaz koşullu açılıyor, ve bir kez.** Sahnede `AudioSource` varsa (ya da bir script ses
+istediyse) açılıyor; sessiz bir oyun cihazı tutmuyor, çünkü cihaz tutmak bazı backend'lerde
+duyulabilir (hışırtı, mikser girdisi, profil değiştiren bir bluetooth kulaklık). Başarısızlık
+`AudioLoadState`'te mandallanıyor: ses kartı olmayan bir makine süreç başına bir kez sorulur,
+kare başına değil. Aynı mandal isim başına yükleme denemesi için de var — yoksa eksik bir dosya
+60 Hz'de akan bir log olur.
+
+**`sound_name` artık YOL olarak da çözülüyor**, tam olarak `MeshSource`'un yol olması gibi. Daha
+önce isim yalnız `AudioManager::load_sound` çağıran oyun kodunun kaydettiği bir anahtardı; sahne
+verisi hiçbir şey çağıramaz, dolayısıyla sahnede yazan isim hiçbir zaman var olmayan bir sesti.
+Kural tersine çevrilebilir değil: **oyunun yüklediği isme dokunulmuyor** (gömülü baytlar, wasm
+`fetch`, farklı adla yüklenmiş dosya diskteki eşadlıyı yener).
+
+İki yan bulgu, ikisi de bu düzeltme yüzünden ERİŞİLEBİLİR hâle geldiği için birlikte kapandı:
+
+- **⏹ sesleri durdurmuyordu.** Snapshot varlıkları geri getirir; sink'ler varlık değil, kaynak
+  arkasındaki cihazda yaşıyor. Döngüsel bir ambiyans oturumun sonuna kadar editörün üstünde
+  çalmaya devam ederdi (`AudioManager::stop_all`).
+- **`_internal_sink_id` sahne dosyasına yazılıyordu.** Oyun çalarken kaydedilen bir sahne canlı
+  bir sink id'si taşıyor; yeniden yüklenen DÖNGÜSEL bir kaynak bir daha hiç başlamıyor, çünkü
+  spatial sistem bayat id'yi yalnız tek-atış için temizliyor. `#[serde(skip)]`, yanındaki
+  `has_played` gibi.
+
+**Donanımda doğrulandı**, yalnız tip sisteminde değil: iki `#[ignore]`lı test gerçek ses kartında
+`demo/assets/audio/engine.wav`'ı uçtan uca çalıyor ve canlı sink'i doğruluyor; ikincisi ⏹'nin
+döngüsel sesi susturduğunu. `stop()` rodio'nun karıştırma thread'ine bir İSTEK olduğu için test
+sabit bir uyku yerine tavanlı yoklama yapıyor — hiç inmeyen bir stop tam da aranan şey.
+
+**Kapanmayan yarım, bilerek:** `is_3d = false` olan bir `AudioSource` hâlâ hiç başlatılmıyor
+(`should_autostart` 3D şartı koşuyor ve mevcut bir test bunu bilerek sabitliyor). Yani sahneye
+konmuş bir müzik/2D efekt sessiz. Ayrı bir birim: "sahne yüklenince 2D kaynak otomatik başlar mı"
+bir tasarım kararı, ve ⏹/▶ mandallarıyla birlikte düşünülmeli.
+
 ### Navigasyon hiçbir yerde çalışmıyordu — ve düzeltilince ilk yeniden kurulum donuyordu (2026-08-19, DÜZELTİLDİ)
 
 Yukarıdaki tablonun `gizmo-ai` satırı iki kez yanlıştı, ve ikinci yanlış birincisinin altında

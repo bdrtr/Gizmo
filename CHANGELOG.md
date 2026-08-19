@@ -530,6 +530,36 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A scene could hold audio and never make a sound.** The editor offers an `AudioSource`, the
+  inspector draws it, the scene format saves it — and `AudioManager` was constructed in exactly
+  three places in the tree, all of them demos. Neither the editor's ▶ nor an exported game built
+  one, so the system that reads those components returned on its first line, and Lua's
+  `audio.play` took the same exit. The API existed end to end except for the end.
+
+  `PlayLoop::step` now runs `systems::audio::audio_frame`, and the device half lives in
+  `gizmo_audio::host` so the script path — which exists in builds with no renderer — shares it.
+  The device is opened **only when the world has something to play** (an `AudioSource`, or a
+  script that just asked), because opening one is audible on some backends and a game without
+  audio should not hold it; and **only once**, because a machine with no device still has none
+  next frame. That failure is latched in `AudioLoadState`, which also latches per-name load
+  failures — otherwise a missing file is a warning per frame at 60 Hz.
+
+  `AudioSource::sound_name` is now resolved **as a path** when nothing has registered that name,
+  exactly as `MeshSource` is a path: a source saying `demo/assets/audio/engine.wav` plays that
+  file with no game code at all. A name the game loaded itself is never re-read — embedded bytes,
+  a wasm `fetch`, a differently-named file all win over anything on disk.
+
+  Two more in the same corner. **⏹ now stops the sounds**: a snapshot restores entities, and the
+  sinks are not entities — they live on the device behind a resource, so stopping a game used to
+  leave its looping ambience playing over the editor for the rest of the session
+  (`AudioManager::stop_all`). And **`AudioSource::_internal_sink_id` is no longer serialised**:
+  saving a scene while playing wrote a live sink id into the file, and a reloaded *looping* source
+  carrying one never started again — the spatial system only clears a stale id for a one-shot.
+
+  Verified on real hardware, not only in the type system: two `#[ignore]`d tests play
+  `demo/assets/audio/engine.wav` through the whole path and assert a live sink, and that ⏹
+  silences a looping one.
+
 - **No `NavAgent` the engine ever created moved, and the one path that could have moved them hung
   on a ground plane.** Two gaps stacked: `PlayLoop` — the editor's ▶ and every exported game —
   never ran the navigation systems, so agents were steered only by `gizmo-studio`'s update hook,

@@ -73,6 +73,23 @@ pub fn listener(world: &World) -> Listener {
     listener
 }
 
+/// Everything audio does in one frame of a running game.
+///
+/// **This is what nothing called.** `AudioManager` was constructed in exactly three places in the
+/// tree — two demos and a wasm demo — and in none of the engine's own hosts, so an `AudioSource`
+/// placed in the editor, saved into a scene and carried into an exported game was read by a
+/// system that returns on its first line without that resource. The component was addable, the
+/// inspector drew it, the scene format saved it, and it could not make a sound.
+///
+/// Called from [`PlayLoop::step`](crate::systems::PlayLoop::step), so audio belongs to the
+/// *running* game: the editor at rest does not open a device and does not play a scene's ambience
+/// over the person editing it.
+pub fn audio_frame(world: &mut World, dt: f32) {
+    gizmo_audio::host::ensure_audio_manager(world);
+    gizmo_audio::host::load_scene_sounds(world);
+    audio_spatial_system(world, dt);
+}
+
 /// Advanced 3D Spatial Audio and Doppler Effect System
 ///
 /// This system runs every frame and:
@@ -276,5 +293,142 @@ mod tests {
                 .has_played,
             "with no AudioManager nothing may be started"
         );
+    }
+
+    /// The loading rule, without a device — the rule itself lives in `gizmo_audio::host`; this
+    /// is the frame's copy of the question, kept because the frame is what calls it.
+    #[test]
+    fn a_name_the_game_loaded_is_left_alone_and_a_failure_is_not_retried() {
+        let named = vec![
+            "demo/assets/audio/engine.wav".to_string(),
+            "music".to_string(),
+            "demo/assets/audio/engine.wav".to_string(), // two sources, one file
+            String::new(),                              // the studio adds `AudioSource::new("")`
+        ];
+        let mut attempted = std::collections::HashSet::new();
+
+        // "music" is already registered by the game; the empty name is not a name.
+        let first = gizmo_audio::host::sounds_to_load(&named, |n| n == "music", &attempted);
+        assert_eq!(first, vec!["demo/assets/audio/engine.wav".to_string()]);
+
+        // The file is missing → the attempt is latched, and the next frame asks for nothing.
+        attempted.insert(first[0].clone());
+        assert!(gizmo_audio::host::sounds_to_load(&named, |n| n == "music", &attempted).is_empty());
+    }
+
+    /// A world with no `AudioSource` in it must not open an output device, and a machine with no
+    /// device must be asked exactly once.
+    #[test]
+    fn a_world_with_no_sources_never_opens_a_device() {
+        let mut world = World::new();
+        let e = world.spawn();
+        world.add_component(e, Transform::new(Vec3::ZERO));
+
+        gizmo_audio::host::ensure_audio_manager(&mut world);
+
+        assert!(
+            world.get_resource::<AudioManager>().is_none(),
+            "an audio-less scene must not hold the device"
+        );
+        assert!(
+            world.get_resource::<gizmo_audio::host::AudioLoadState>().is_none(),
+            "and nothing was tried, so there is nothing to remember"
+        );
+    }
+
+    /// The whole frame runs on a world with audio in it and no device behind it — the case every
+    /// CI runner and headless server is in. It must be silent, not fatal, and must not try again.
+    #[test]
+    fn the_audio_frame_is_inert_when_the_device_cannot_be_opened() {
+        let mut world = World::new();
+        let e = world.spawn();
+        world.add_component(e, Transform::new(Vec3::ZERO));
+        world.add_component(e, AudioSource::new("demo/assets/audio/engine.wav"));
+
+        audio_frame(&mut world, 1.0 / 60.0); // must not panic, with or without a sound card
+
+        if world.get_resource::<AudioManager>().is_none() {
+            // No device on this machine: the failure is latched, so frame two does not re-probe.
+            assert!(
+                world
+                    .get_resource::<gizmo_audio::host::AudioLoadState>()
+                    .expect("the attempt is remembered")
+                    .device_failed
+            );
+        }
+    }
+
+    /// **End to end, on a real sound card**, which is the only way to prove the thing this fix is
+    /// about: a scene-authored source naming a file plays it, without the game loading anything.
+    ///
+    /// `#[ignore]` for the usual reason — a CI runner has no output device, and
+    /// `AudioManager::new` fails there. Run with `cargo test -p gizmo-engine --lib -- --ignored`.
+    #[test]
+    #[ignore = "needs an audio output device"]
+    fn a_scene_authored_source_plays_its_file_with_no_game_code() {
+        let mut world = World::new();
+        let e = world.spawn();
+        world.add_component(e, Transform::new(Vec3::ZERO));
+        world.add_component(
+            e,
+            AudioSource::new(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../demo/assets/audio/engine.wav"
+            )),
+        );
+
+        audio_frame(&mut world, 1.0 / 60.0);
+
+        let manager = world
+            .get_resource::<AudioManager>()
+            .expect("a scene with a source opens the device");
+        let sources = world.borrow::<AudioSource>();
+        let source = sources.get(e.id()).unwrap();
+        let sink = source
+            ._internal_sink_id
+            .expect("the source must have been started");
+        assert!(manager.is_playing(sink), "and the sink must be live");
+    }
+
+    /// ⏹ has to reach the device, because the snapshot it restores cannot.
+    #[test]
+    #[ignore = "needs an audio output device"]
+    fn stopping_the_session_stops_the_sounds() {
+        let mut world = World::new();
+        let e = world.spawn();
+        world.add_component(e, Transform::new(Vec3::ZERO));
+        let mut source = AudioSource::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../demo/assets/audio/engine.wav"
+        ));
+        source.loop_sound = true;
+        world.add_component(e, source);
+
+        audio_frame(&mut world, 1.0 / 60.0);
+
+        let sink = world
+            .borrow::<AudioSource>()
+            .get(e.id())
+            .unwrap()
+            ._internal_sink_id
+            .expect("the looping source was started");
+        let mut manager = world.get_resource_mut::<AudioManager>().unwrap();
+        assert!(manager.is_playing(sink), "…and is playing before ⏹");
+        assert_eq!(manager.stop_all(), 1, "one live sink was stopped");
+
+        // `stop()` is a request to rodio's mixing thread, not a state change on this one: the
+        // queue drains over there, so `is_playing` (which asks whether the sink is empty) turns
+        // false shortly after rather than instantly. Poll with a ceiling instead of sleeping a
+        // fixed guess — a stop that never lands is exactly what this test is for.
+        let mut silent = false;
+        for _ in 0..100 {
+            manager.update();
+            if !manager.is_playing(sink) {
+                silent = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(silent, "the sound was still playing a second after ⏹");
     }
 }

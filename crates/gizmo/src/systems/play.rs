@@ -313,6 +313,19 @@ fn apply_script_audio(
         return rest;
     }
 
+    // A script asking for a sound is reason enough to have a device — this path used to require
+    // that the game had already built an `AudioManager` itself, which nothing in the engine did.
+    // Both of these run BEFORE the manager guard below: they take their own borrows.
+    gizmo_audio::host::open_audio_device(world);
+    let wanted: Vec<String> = actions
+        .iter()
+        .filter_map(|a| match a {
+            AudioAction::Play(name) | AudioAction::Play3d(name, _) => Some(name.clone()),
+            AudioAction::Stop(_) => None,
+        })
+        .collect();
+    gizmo_audio::host::load_named_sounds(world, &wanted);
+
     // Read the listener before taking the manager: both borrow the world.
     let (left_ear, right_ear) = script_listener_ears(world);
 
@@ -420,6 +433,11 @@ impl PlayLoop {
     /// Scripts before physics, because a script that sets a velocity this frame expects the
     /// solver to act on it this frame — the reverse order delays every input by a frame.
     ///
+    /// **Audio last**, because it reads where everything ended up: the listener is the primary
+    /// camera, and a sound's position, its Doppler shift and its distance attenuation are all
+    /// read off transforms this frame already moved. It is also the call that gives a scene's
+    /// `AudioSource`s a device at all — see [`crate::systems::audio::audio_frame`].
+    ///
     /// **AI once per rendered frame, after the step**, matching the editor's own order — an agent
     /// steers toward where things ended up, and the velocity it writes is spent by the next
     /// frame's steps. Before this it ran in the *editor only*: `gizmo-studio`'s update hook
@@ -442,6 +460,11 @@ impl PlayLoop {
         }
         let steps = self.physics_pass(world, dt);
         crate::ai::system::ai_frame(world, dt);
+        // The same three features `systems::audio` itself is gated on — the spatial half reads a
+        // `Camera` and a `Transform`, so it does not exist in an audio-only build. The device and
+        // the sound loading do (`gizmo_audio::host`), and the script path below uses them there.
+        #[cfg(all(feature = "audio", feature = "render", feature = "physics"))]
+        crate::systems::audio::audio_frame(world, dt);
         steps
     }
 
@@ -903,6 +926,55 @@ mod tests {
             v.x > 0.0,
             "the play frame must steer the agent toward its target, got {v:?}"
         );
+    }
+
+
+    /// **The play frame is where the engine's hostless subsystems get their frame.**
+    ///
+    /// Both of these had exactly one caller in the workspace and it was not this one — AI ran in
+    /// `gizmo-studio`'s update hook (so only while the editor sat stopped), and audio ran in two
+    /// demos that built their own `AudioManager`. A behavioural test covers the AI half below;
+    /// the audio half needs a sound card, so it lives behind `#[ignore]` in
+    /// `systems::audio`, and this pins the wiring itself. Comments cut, because the paragraph
+    /// above `step` names both calls.
+    #[test]
+    fn the_play_frame_runs_the_subsystems_with_no_other_host() {
+        fn code_only(src: &str) -> String {
+            src.lines()
+                .map(|line| {
+                    let bytes = line.as_bytes();
+                    let mut end = line.len();
+                    let mut i = 0;
+                    while i + 1 < bytes.len() {
+                        if bytes[i] == b'/'
+                            && bytes[i + 1] == b'/'
+                            && (i == 0 || bytes[i - 1] != b':')
+                        {
+                            end = i;
+                            break;
+                        }
+                        i += 1;
+                    }
+                    &line[..end]
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+
+        let code: String = code_only(include_str!("play.rs"))
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap_or("")
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
+
+        for call in ["ai::system::ai_frame(world,dt)", "audio::audio_frame(world,dt)"] {
+            assert!(
+                code.contains(call),
+                "the play frame no longer runs `{call}` — that subsystem has no other host"
+            );
+        }
     }
 
 }

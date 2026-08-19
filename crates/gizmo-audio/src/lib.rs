@@ -115,6 +115,14 @@ pub struct AudioSource {
     #[serde(default = "default_bus")]
     pub bus: String,
     /// Internal id of the active sink playing this source, if any.
+    ///
+    /// **Not persisted** — a sink id names a live sound on a device this process opened, and a
+    /// scene file outlives both. Saving a scene while the game is playing used to write the id
+    /// into it; reloading that file produced a source that believed it was already playing, and
+    /// for a **looping** one that is permanent: the spatial system only clears a stale id for a
+    /// one-shot, so the sound never started again. `has_played` next to it is skipped for the
+    /// same reason.
+    #[serde(skip)]
     pub _internal_sink_id: Option<u64>,
     /// Latches once this source has been auto-started, so a finished **one-shot** is not
     /// restarted every frame. (When a one-shot ends the spatial system clears
@@ -651,6 +659,37 @@ impl AudioManager {
         ids.len()
     }
 
+    /// Is a sound registered under this name?
+    ///
+    /// The question a host has to ask before it can *supply* a missing one: `play` and its
+    /// neighbours answer [`AudioError::NotLoaded`] after the fact, which is the right answer for a
+    /// game that manages its own sounds and no help at all to a loader deciding what to read from
+    /// disk. Loading is by name ([`AudioManager::load_sound`] /
+    /// [`AudioManager::load_sound_bytes`]), so this is also what keeps a host from re-reading a
+    /// file the game already registered under the same name — the game's bytes win.
+    pub fn is_loaded(&self, name: &str) -> bool {
+        self.sound_buffers.contains_key(name)
+    }
+
+    /// Stops every live sink, and reports how many it stopped.
+    ///
+    /// `stop_by_name` is the script's verb; this is the *session's*. The editor's ⏹ restores the
+    /// scene it snapshotted, and a snapshot cannot restore a sound: the sinks live on the device
+    /// behind this manager, which is a resource and not part of any scene. Without this, stopping
+    /// a game left its looping ambience playing over the editor for the rest of the session.
+    pub fn stop_all(&mut self) -> usize {
+        let ids: Vec<u64> = self
+            .active_spatial_sinks
+            .keys()
+            .chain(self.active_sinks.keys())
+            .copied()
+            .collect();
+        for id in &ids {
+            self.stop(*id);
+        }
+        ids.len()
+    }
+
     /// The loaded sound a live sink is playing, if the manager still knows it.
     pub fn sink_sound(&self, id: u64) -> Option<&str> {
         self.sink_sounds.get(&id).map(String::as_str)
@@ -924,6 +963,38 @@ mod tests {
         assert_eq!(sanitize_playback_speed(1.5), 1.5);
         assert_eq!(sanitize_playback_speed(0.5), 0.5);
     }
+
+    /// A sink id names a live sound on a device this process opened; a scene file outlives both.
+    ///
+    /// Saving a scene *while playing* used to write the id into it, and reloading produced a
+    /// source that believed it was already playing. For a looping source that is permanent — the
+    /// spatial system only clears a stale id for a one-shot — so the sound never started again.
+    #[test]
+    fn a_saved_source_does_not_carry_a_live_sink_id() {
+        let mut playing = AudioSource::new("music");
+        playing._internal_sink_id = Some(7);
+        playing.has_played = true;
+
+        let json = serde_json::to_string(&playing).expect("AudioSource is serializable");
+        assert!(
+            !json.contains("_internal_sink_id"),
+            "a runtime sink id must not reach the scene file: {json}"
+        );
+
+        let loaded: AudioSource = serde_json::from_str(&json).expect("and it round-trips");
+        assert_eq!(loaded._internal_sink_id, None);
+        assert!(!loaded.has_played, "the autostart latch is runtime state too");
+        assert_eq!(loaded.sound_name, "music");
+
+        // A file written BEFORE the field was skipped still loads, and the stale id is dropped.
+        let old = r#"{"sound_name":"music","is_3d":true,"volume":1.0,"pitch":1.0,
+            "loop_sound":false,"max_distance":100.0,"_internal_sink_id":7}"#;
+        let recovered: AudioSource = serde_json::from_str(old).expect("old scenes still load");
+        assert_eq!(recovered._internal_sink_id, None);
+    }
+
 }
 
 gizmo_core::impl_component!(AudioSource);
+
+pub mod host;

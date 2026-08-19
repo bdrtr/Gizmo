@@ -184,6 +184,16 @@ pub fn render_studio(
     }
 
     if play_stop {
+        // A snapshot cannot restore a sound: the sinks live on the device behind the
+        // `AudioManager` resource, which is not part of any scene. Without this, ⏹ left the
+        // level's looping ambience playing over the editor for the rest of the session.
+        if let Some(mut audio) = world.get_resource_mut::<gizmo::audio::AudioManager>() {
+            let stopped = audio.stop_all();
+            if stopped > 0 {
+                tracing::info!(stopped, "[Studio] ⏹ — çalan sesler durduruldu");
+            }
+        }
+
         let snapshot_opt = {
             if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
                 ed.play_snapshot.take()
