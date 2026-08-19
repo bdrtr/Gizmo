@@ -310,6 +310,15 @@ world.insert_resource(editor_state);
     let _ = component_registry.register::<gizmo::physics::Collider>("Collider");
     let _ = component_registry.register::<gizmo::renderer::components::Camera>("Camera");
     let _ = component_registry.register::<gizmo::renderer::components::PointLight>("PointLight");
+    // The other two light types, which the engine has drawn and the scene file has carried all
+    // along with no way to create either one in the editor. The sun was the sharper case: only
+    // this file's startup scene ever spawned one, so a scene arriving from Rust, from a
+    // hand-written file or from another tool could never gain a sun — it stayed lit by point
+    // lights for ever. Three entries rather than one "Light" section with a type switch, because
+    // that is the shape the editor already has: `PointLight` is its own entry and
+    // `inspector/light.rs` is already one section per type.
+    let _ = component_registry.register::<gizmo::renderer::components::DirectionalLight>("DirectionalLight");
+    let _ = component_registry.register::<gizmo::renderer::components::SpotLight>("SpotLight");
     let _ = component_registry.register::<gizmo::prelude::Material>("Material");
     let _ = component_registry.register::<gizmo::scripting::Script>("Script");
     let _ = component_registry.register::<gizmo::renderer::components::ParticleEmitter>("ParticleEmitter");

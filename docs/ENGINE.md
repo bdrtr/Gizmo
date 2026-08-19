@@ -1697,16 +1697,32 @@ after an add, where a queue of edits is true for none of them.
   is as much a design question as a bug — how a `PlayerInput` is applied to the world (an `Input`
   resource? a controller component per player?) depends on the game's input model, and the engine
   has not chosen one. Writing an implementation blind would be deciding at the wrong layer.
-- **The missing surface points the other way for two lights.** `SpotLight` and `DirectionalLight`
-  are drawn by the engine and carried by the scene file, and **neither can be added in the
-  editor**: neither is in the studio's `ComponentRegistry` (so neither is in the ➕ menu, which
-  prints that registry), neither has a `SpawnKind`, and `SpotLight` has no inspector section at
-  all — so a spot light that arrives from Rust or a hand-written scene lights the viewport and
-  shows not one editable row. The sun is worse in one way and softer in another: a scene with no
-  sun can never gain one (only the studio's own startup scene spawns it), but an existing sun can
-  be duplicated with Ctrl+D. Adding them to the ➕ menu is a few lines; what needs deciding first
-  is whether the three light types are three menu entries or one "Light" section with a type
-  switch, because today all three can sit on one entity and mean nothing together.
+**One more closed, and it is the shape read backwards (2026-08-19).** For `SpotLight` and
+`DirectionalLight` the owner was never missing — the engine collects both into the light pool and
+the scene file round-trips both — the **surface** was. Neither was in the studio's
+`ComponentRegistry`, so neither appeared in the ➕ menu (which prints that registry) and the "add"
+handler had no arm for either; `SpotLight` had no inspector section at all, and could not even
+fall through to the generic JSON section, which looks the component up in that same registry. So
+a spot light arriving from Rust or a hand-written scene lit the viewport and showed **not one
+editable row**, and a scene that arrived without a sun could never gain one — only `setup.rs`'s
+startup scene spawns a sun, and every other route in was a duplicate of one that already existed.
+
+Three menu entries rather than one "Light" section with a type switch, decided from the shape the
+editor already has: `PointLight` is its own entry and `inspector/light.rs` is already one section
+per type. The two-suns state a menu entry makes reachable was reachable before it, with Ctrl+D,
+and `shared.rs` picks one — that is a lighting question, not an add-menu one. A directional light
+a user asks for is created as `LightRole::Sun`, because the other role lights nothing shadow-wise
+and would read as broken. The spot light's default cone is 25°/35° half-angles, and the inspector
+clamps inner to outer on every edit, which is the rule `SpotLight::new` already applies: an inner
+cone wider than its outer cone inverts the falloff and lights the outside of the cone.
+`every_light_the_engine_draws_can_be_added_in_the_editor` drives the real request handler rather
+than comparing lists, because what was missing WAS the handler arm — a menu entry whose "add"
+does nothing is worse than no entry at all.
+
+*Still open on the same surface, and shared with most of the ➕ menu rather than new here:*
+`remove_component_request` has arms for five components only, so a light — like a camera, a
+terrain, an emitter or an audio source — can be added and not removed except by deleting the
+entity.
 
 **Small known limits (left open on purpose):**
 - Nothing raises `NavGrid::needs_rebuild` when static geometry changes; the scene's owner or the

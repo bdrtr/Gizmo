@@ -47,6 +47,32 @@ pub fn handle_scene_operations(
                     ent,
                     gizmo::renderer::components::PointLight::new(Vec3::new(1., 1., 1.), 1.0, 10.0),
                 ),
+                // `LightRole::Sun` because a directional light a user asks for IS the scene's sun:
+                // the alternative role exists for fill lights an author places deliberately, and
+                // choosing it here would give a light that lights nothing shadow-wise and looks
+                // broken. A scene with two suns is authorable now — it already was, via Ctrl+D —
+                // and `shared.rs` picks one; that is a lighting question, not an add-menu one.
+                "DirectionalLight" => world.add_component(
+                    ent,
+                    gizmo::renderer::components::DirectionalLight::new(
+                        Vec3::new(1.0, 0.95, 0.9),
+                        3.0,
+                        gizmo::renderer::components::LightRole::Sun,
+                    ),
+                ),
+                // 25°/35° half-angles: a readable cone rather than a pinprick or a hemisphere.
+                // The constructor clamps inner to outer, which is also what the inspector's two
+                // sliders enforce — an inner cone wider than its outer one inverts the falloff.
+                "SpotLight" => world.add_component(
+                    ent,
+                    gizmo::renderer::components::SpotLight::new(
+                        Vec3::new(1.0, 1.0, 1.0),
+                        5.0,
+                        20.0,
+                        25.0_f32.to_radians(),
+                        35.0_f32.to_radians(),
+                    ),
+                ),
                 "Material" => {
                     let white_tex = world
                         .get_resource::<DebugAssets>()
@@ -957,6 +983,45 @@ mod tests {
                 "the inspector's delete button for {name} left the component in place"
             );
         }
+    }
+
+    /// **Every light type the engine draws can be created in the editor.**
+    ///
+    /// Two of the three could not, and had not since the components existed: the engine collected
+    /// spot and directional lights into the light pool, the scene file round-tripped both, and
+    /// neither was in the studio's `ComponentRegistry` — which is what the ➕ menu prints — nor in
+    /// the arm above. The sun was the worse half: only `setup.rs`'s startup scene ever spawned
+    /// one, so a scene that arrived without a sun could never gain one and stayed lit by point
+    /// lights for ever, while a spot light that arrived from Rust showed not one editable row.
+    ///
+    /// Driven through the real request handler rather than compared against a list, because what
+    /// broke was the handler having no arm: a menu entry whose "add" does nothing logs
+    /// "Bilinmeyen component" at the user and is worse than no entry at all.
+    #[test]
+    fn every_light_the_engine_draws_can_be_added_in_the_editor() {
+        use gizmo::renderer::components::{DirectionalLight, PointLight, SpotLight};
+
+        let mut world = World::new();
+        let ent = spawn(&mut world);
+        let mut ed = EditorState::default();
+
+        for name in ["PointLight", "DirectionalLight", "SpotLight"] {
+            ed.add_component_request = Some((ent, name.to_string()));
+            handle_scene_operations(&mut world, &mut ed, &mut studio_state());
+        }
+
+        assert!(world.borrow::<PointLight>().get(ent.id()).is_some());
+        let suns = world.borrow::<DirectionalLight>();
+        let sun = suns.get(ent.id()).expect("a sun can be added");
+        assert!(sun.intensity > 0.0, "a sun that lights nothing reads as broken, not as neutral");
+        let spots = world.borrow::<SpotLight>();
+        let spot = spots.get(ent.id()).expect("a spot light can be added");
+        assert!(
+            spot.inner_angle <= spot.outer_angle,
+            "an inner cone wider than its outer cone inverts the falloff and lights the outside \
+             of the cone — the default must not ship that"
+        );
+        assert!(spot.radius > 0.0 && spot.intensity > 0.0);
     }
 
     /// Is `name`'s component on `id`? Written as a match rather than generically because the
