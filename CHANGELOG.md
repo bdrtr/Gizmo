@@ -39,6 +39,18 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   it, the script takes the health off — 92, not 100 (the event arrived) and not 84 (one hit per
   move).
 
+- **Three components the editor could add and a save silently threw away.** `ParticleEmitter`,
+  `Terrain` and `BoneAttachment` were offered by the ➕ menu, added by the request handler, and
+  absent from the scene registry — so authoring one, saving and reopening lost it without a word,
+  because a component the registry does not know is simply not written. All three already derived
+  `Serialize`/`Deserialize`; nothing structural had kept them out.
+
+  Three lists have to agree here — what the menu offers, what "add" does, what a save keeps — and a
+  new test in `gizmo-studio` holds the first to the third, reading the menu's list from the studio's
+  own setup rather than restating it. `Material` is the one declared exception, with the reason: it
+  owns a live wgpu bind group, so there is nothing to write, which is why a round trip still loses
+  PBR maps.
+
 - **GPU fluid rendered in a shipped game and showed nothing in the editor.** The last of the
   draw-path asymmetries, and the only one that was not a call away: the game path stepped the fluid
   and reconstructed its surface, the studio's pipeline did not mention `renderer.gpu_fluid` at all.

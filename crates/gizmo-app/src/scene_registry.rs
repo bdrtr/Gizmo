@@ -16,6 +16,11 @@ use gizmo_scene::registry::SceneRegistry;
 
 /// Every component the enabled feature set can round-trip.
 ///
+/// **The list this has to agree with is the editor's ➕ menu**: a component a user can add and
+/// then loses on save is worse than one they cannot add at all, because nothing says so — an
+/// unregistered component is simply not written. `gizmo-studio`'s
+/// `every_addable_component_survives_a_save` holds the two lists together.
+///
 /// `Material` is deliberately absent even with `render` on: it owns a live wgpu bind group
 /// and cannot be serialized as-is, which is why a scene round-trip still loses PBR maps.
 /// That is a separate problem from this one.
@@ -27,7 +32,10 @@ pub fn full_scene_registry() -> SceneRegistry {
 
     #[cfg(feature = "render")]
     {
-        use gizmo_renderer::components::{Camera, DirectionalLight, PointLight, SpotLight};
+        use gizmo_renderer::components::{
+            BoneAttachment, Camera, DirectionalLight, ParticleEmitter, PointLight, SpotLight,
+            Terrain,
+        };
         // Registration is best-effort: a name collision is a bug in this file, not a reason
         // to take the application down mid-save. Warn loudly and keep the rest.
         macro_rules! reg_or_warn {
@@ -41,6 +49,13 @@ pub fn full_scene_registry() -> SceneRegistry {
         reg_or_warn!(PointLight, "PointLight");
         reg_or_warn!(DirectionalLight, "DirectionalLight");
         reg_or_warn!(SpotLight, "SpotLight");
+        // These three were addable in the editor and unsaveable: a user could put a particle
+        // emitter, a terrain or a bone attachment on an entity, save, reopen, and find it gone —
+        // silently, because a component the registry does not know is simply not written. All
+        // three already derived `Serialize`/`Deserialize`; nothing structural kept them out.
+        reg_or_warn!(ParticleEmitter, "ParticleEmitter");
+        reg_or_warn!(Terrain, "Terrain");
+        reg_or_warn!(BoneAttachment, "BoneAttachment");
     }
 
     #[cfg(feature = "audio")]

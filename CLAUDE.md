@@ -11,7 +11,15 @@ Gizmo Engine — a pure-Rust, ECS-driven 3D game engine and physics simulator wi
 ```bash
 # Build / test the whole workspace (default features)
 cargo build --workspace
-cargo test --workspace
+cargo test --workspace --no-fail-fast   # ALWAYS --no-fail-fast — see below
+
+# **`--no-fail-fast` is not optional here.** Cargo stops launching further test binaries after
+# the first one fails, and this working tree has a standing red: `gizmo-studio`'s icon test, which
+# reads `media/logo.png` and fails whenever that file is not square. Measured 2026-08-19: a plain
+# `cargo test --workspace` ran **130** test binaries and `--no-fail-fast` ran **159** — the known
+# red was hiding 29 of them, including every `gizmo-studio` integration test (`render_parity`,
+# `studio_render_pixels`, …). A gate that stops at a failure you have decided to ignore is a gate
+# that covers less every time you ignore it.
 
 # Run a single test by name substring
 cargo test --workspace soak_resting_stacks_stay_bounded

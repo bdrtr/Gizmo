@@ -1860,6 +1860,16 @@ the *slope* gate is the one that guards it.
   ceiling is a test now, and the cluster-assignment cost is a benchmark. Where it is background,
   give it a date and say which way it drifts, so a reader can tell a measurement from a constant.
   A count with neither is a claim nobody can check and everybody will quote.
+- **A gate that stops at a failure you have decided to ignore covers less every time you ignore
+  it.** This tree has a standing red — `gizmo-studio`'s icon test, which fails while the working
+  copy's `media/logo.png` is not square — and every session simply reads past it. Measured
+  2026-08-19: `cargo test --workspace` ran **130** test binaries; the same command with
+  `--no-fail-fast` ran **159**. Cargo stops launching further binaries after the first failure, so
+  the ignored red was hiding 29 of them, `gizmo-studio`'s entire integration suite among them
+  (`render_parity`, `studio_render_pixels`, the new `addable_components_round_trip`). Nothing was
+  broken in the 29 — they were run one by one the same day — but "the suite is green" had been a
+  claim about two thirds of it. CLAUDE.md's command now carries the flag.
+
 - **A remembered rationale is not evidence, and the cheapest way to find out is to remove the
   thing it defends.** The solver skips its modern TGS-soft path for any island containing a CCD
   body, with a comment giving the reason: TGS's dp/relax flow conflicts with the speculative
