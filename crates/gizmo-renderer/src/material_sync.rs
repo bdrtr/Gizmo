@@ -15,6 +15,21 @@
 //! had set — silently, because an unregistered component is not written and nothing reports it.
 //! The gap was recorded as a known exception with exactly this fix written into it: serialise the
 //! description, rebuild the bind group on load.
+//!
+//! # Two consequences of the arrangement, both deliberate
+//!
+//! **Every entity with a material carries a description too.** That is one small struct per
+//! entity — not per *material*, since materials are shared by `Arc` while the component is not —
+//! so a ten-thousand-entity scene pays roughly a megabyte for the ability to save it. The
+//! alternative was to build descriptions only when a save is about to happen, which puts the
+//! knowledge in every caller that saves (two of them today, and the day there are three is the day
+//! one of them forgets). The per-frame pass costs a struct compare per material and writes
+//! nothing when nothing changed.
+//!
+//! **The description is the authored thing, so removing a material means removing both.** Remove
+//! only the `Material` and [`resolve_material_descriptions`] rebuilds it from the description on
+//! the next frame. Nothing in the editor can do that today — the inspector has no delete button
+//! for a material — but a game that removes one by hand should remove the description with it.
 
 use crate::components::{Material, MaterialDesc};
 use gizmo_core::world::World;
