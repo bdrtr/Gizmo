@@ -11,7 +11,10 @@
 //!     `Material.bind_group`. (Formerly this stage DID NOT EXIST → the decoded texture was
 //!     discarded, streaming was visually a no-op.)
 //!  2. **Request**: request a texture reload for materials near (≤50 m) the primary camera
-//!     (at most [`MAX_REQUESTS_PER_FRAME`] per frame).
+//!     (at most [`MAX_REQUESTS_PER_FRAME`] per frame). What stops it asking twice is
+//!     [`AssetServer::streaming_requested`](crate::asset_server::AssetServer::streaming_requested)
+//!     — it used to be "clear the material's `texture_source`", which put the request stage in the
+//!     business of deleting the field a scene file saves. See `should_request`.
 
 use gizmo_core::system::{AccessInfo, System};
 use gizmo_core::World;
@@ -140,16 +143,17 @@ fn request_nearby_textures(world: &World) {
         return;
     }
 
-    // Aday entity'leri topla (Material read borrow'u ifade sonunda biter), sonra mutasyon.
+    // Aday entity'leri topla (Material read borrow'u ifade sonunda biter).
     let entities: Vec<u32> = world.borrow::<Material>().entities().collect();
     let transforms = world.borrow::<Transform>();
     let hidden = world.borrow::<gizmo_core::component::IsHidden>();
-    let server = world
-        .get_resource::<crate::asset_server::AssetServer>()
-        .expect("just checked present");
-    // SAFETY: exclusive sistem; Material başka yerde mutable alias edilmez. Transform/IsHidden
-    // ayrı bileşen tipleri (read), AssetServer ayrı kaynak → çakışma yok.
-    let mut materials = unsafe { world.borrow_mut_unchecked::<Material>() };
+    let Some(mut server) = world.get_resource_mut::<crate::asset_server::AssetServer>() else {
+        return;
+    };
+    // Read-only now. It used to be `borrow_mut_unchecked` because the loop CLEARED
+    // `texture_source` as its "already asked" marker — see `should_request`, and
+    // `AssetServer::streaming_requested` for what that cost.
+    let materials = world.borrow::<Material>();
 
     let mut requests = 0usize;
     for e in entities {
@@ -159,7 +163,7 @@ fn request_nearby_textures(world: &World) {
         if hidden.get(e).is_some() {
             continue; // gizli objeler stream edilmez
         }
-        let Some(mut mat) = materials.get_mut(e) else {
+        let Some(mat) = materials.get(e) else {
             continue;
         };
         let Some(path) = mat.texture_source.clone() else {
@@ -168,13 +172,33 @@ fn request_nearby_textures(world: &World) {
         let Some(t) = transforms.get(e) else {
             continue;
         };
-        if cam_pos.distance_squared(t.position) < STREAM_IN_DISTANCE * STREAM_IN_DISTANCE {
+        if cam_pos.distance_squared(t.position) < STREAM_IN_DISTANCE * STREAM_IN_DISTANCE
+            && should_request(&mut server.streaming_requested, e, &path)
+        {
             server.loader.request_texture_reload(path, e as usize);
-            // Tekrar istek atılmasını engelle; decode bitince apply aşaması uygular.
-            mat.texture_source = None;
             requests += 1;
         }
     }
+}
+
+/// Has this `(entity, path)` pair been asked for yet? Records it if not.
+///
+/// **The whole defect was in this one decision, and it used to be made destructively.** The marker
+/// for "already asked" was `Material::texture_source = None`, and nothing put the path back: the
+/// apply stage writes only `bind_group`. `material_sync` copies the material into a `MaterialDesc`
+/// every frame, that is what a scene file carries, and on load it overrides `MaterialSource` — so
+/// opening a textured scene, waiting a few seconds and saving quietly deleted every albedo path
+/// the author had assigned, and the scene reopened white. The picture never changed while the
+/// editor was open, which is why it went unnoticed: the bind group was still there.
+///
+/// Split out from the loop because it needs no GPU, and the GPU is why the test around it is
+/// skipped on a headless machine — the rule itself is assertable everywhere.
+fn should_request(
+    requested: &mut std::collections::HashSet<(u32, String)>,
+    entity: u32,
+    path: &str,
+) -> bool {
+    requested.insert((entity, path.to_string()))
 }
 
 #[cfg(test)]
@@ -184,6 +208,31 @@ mod tests {
     use gizmo_math::Vec3;
     use gizmo_renderer::async_assets::TextureReloadCompletion;
     use gizmo_renderer::Renderer;
+
+    /// **The dedup rule, without a GPU** — and that is the point of splitting it out.
+    ///
+    /// The test below needs a real `wgpu` device (a `Material` owns a bind group) and skips itself
+    /// on a machine without an adapter, which is most CI. So the rule that replaced the
+    /// destructive marker would have had no coverage exactly where regressions land. This has it:
+    /// ask once per `(entity, path)`, and treat a re-assigned texture as a new question rather
+    /// than a permanently suppressed one.
+    #[test]
+    fn a_pair_is_asked_for_once_and_a_new_path_is_a_new_question() {
+        let mut requested = std::collections::HashSet::new();
+
+        assert!(should_request(&mut requested, 7, "rock.png"), "the first frame asks");
+        assert!(!should_request(&mut requested, 7, "rock.png"), "and no frame after it does");
+
+        assert!(
+            should_request(&mut requested, 8, "rock.png"),
+            "a different entity is a different question — they get separate bind groups"
+        );
+        assert!(
+            should_request(&mut requested, 7, "moss.png"),
+            "and re-assigning the texture in the inspector must be asked again, or the new one \
+             never streams in"
+        );
+    }
 
     /// If there is no GPU adapter (headless CI) skip the test — Material/Renderer depend on the
     /// GPU. (The same probe as golden_render_tests; it does not leak an extra `wgpu::Instance`.)
@@ -233,14 +282,39 @@ mod tests {
         }
         let (world, mat_id) = setup();
 
-        // (1) REQUEST: kameraya yakın + texture_source var → istek atılıp temizlenmeli.
+        // (1) REQUEST: kameraya yakın + texture_source var → istek atılmalı ve YOL KALMALI.
+        //
+        // Bu iddia eskiden tam tersiydi ("texture_source None olmalı") ve hatayı sabitliyordu:
+        // istek işareti olarak yolu SİLMEK, `material_sync` → `MaterialDesc` → sahne dosyası
+        // zinciriyle kullanıcının atadığı doku yollarını sessizce siliyordu.
         request_nearby_textures(&world);
-        assert!(
+        assert_eq!(
             world
                 .borrow::<Material>()
                 .get(mat_id)
-                .is_some_and(|m| m.texture_source.is_none()),
-            "yakın materyal için streaming isteği atılıp texture_source None olmalı"
+                .and_then(|m| m.texture_source.clone()),
+            Some("dummy.png".to_string()),
+            "istek atmak yolu silmemeli — sahne dosyasının kaydettiği alan bu"
+        );
+        assert!(
+            world
+                .get_resource::<AssetServer>()
+                .expect("AssetServer resource")
+                .streaming_requested
+                .contains(&(mat_id, "dummy.png".to_string())),
+            "istek, yolu bozmadan kaydedilmiş olmalı"
+        );
+
+        // …ve ikinci kare yeniden istemez: tekrarı durduran şey artık ayrı bir küme.
+        request_nearby_textures(&world);
+        assert_eq!(
+            world
+                .get_resource::<AssetServer>()
+                .expect("AssetServer resource")
+                .streaming_requested
+                .len(),
+            1,
+            "aynı (entity, yol) çifti için ikinci istek atılmamalı"
         );
 
         // (2) APPLY: worker'ın decode'u bitirdiğini simüle et (2×2 kırmızı), uygula.

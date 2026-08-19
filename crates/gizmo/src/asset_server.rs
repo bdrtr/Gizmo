@@ -22,6 +22,21 @@ pub struct AssetServer {
     /// (Formerly `completed.textures` was silently DISCARDED → streaming was visually a no-op.)
     /// Textures that finished decoding this frame, waiting to be uploaded.
     pub completed_textures: Vec<crate::renderer::async_assets::TextureReloadCompletion>,
+    /// `(entity, texture path)` pairs streaming has already asked the loader for, so it asks once.
+    ///
+    /// **This exists because the thing it replaced was destroying user data.** The streaming
+    /// request stage used to mark a material as "asked for" by clearing its
+    /// `Material::texture_source`, and nothing ever put the path back — the apply stage writes
+    /// only `bind_group`. `material_sync` then copies the material into a `MaterialDesc` every
+    /// frame, `MaterialDesc` is what a scene file carries, and on load it overrides
+    /// `MaterialSource`. So opening a textured scene, waiting a few seconds and pressing Ctrl+S
+    /// silently wrote away every albedo path the author had assigned, and the scene came back
+    /// white.
+    ///
+    /// Keyed by path as well as entity so re-assigning a texture in the inspector is a new request
+    /// rather than a permanently suppressed one. Entries are never removed: the material stays
+    /// near the camera and keeps its path, which is exactly the condition that would re-request.
+    pub streaming_requested: std::collections::HashSet<(u32, String)>,
     #[cfg(all(feature = "render", not(target_arch = "wasm32")))]
     /// The file watcher behind hot reload; `None` when the asset directory could not be watched.
     pub watcher: Option<crate::renderer::hot_reload::AssetWatcher>,
@@ -46,6 +61,7 @@ impl AssetServer {
             completed_gltfs: Vec::new(),
             completed_gltf_errors: Vec::new(),
             completed_textures: Vec::new(),
+            streaming_requested: std::collections::HashSet::new(),
             #[cfg(all(feature = "render", not(target_arch = "wasm32")))]
             watcher,
         }
