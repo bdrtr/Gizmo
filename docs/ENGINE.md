@@ -1652,10 +1652,15 @@ Kural tersine çevrilebilir değil: **oyunun yüklediği isme dokunulmuyor** (g�
 döngüsel sesi susturduğunu. `stop()` rodio'nun karıştırma thread'ine bir İSTEK olduğu için test
 sabit bir uyku yerine tavanlı yoklama yapıyor — hiç inmeyen bir stop tam da aranan şey.
 
-**Kapanmayan yarım, bilerek:** `is_3d = false` olan bir `AudioSource` hâlâ hiç başlatılmıyor
-(`should_autostart` 3D şartı koşuyor ve mevcut bir test bunu bilerek sabitliyor). Yani sahneye
-konmuş bir müzik/2D efekt sessiz. Ayrı bir birim: "sahne yüklenince 2D kaynak otomatik başlar mı"
-bir tasarım kararı, ve ⏹/▶ mandallarıyla birlikte düşünülmeli.
+**Aynı gün kapanan yarım: `is_3d = false` "hiç çalma" demekti.** Bayrak sesin NASIL çalınacağını
+seçiyor — konumlu mu, düz mü — ama spatial sistemin otomatik başlatması `is_3d` şartı koşuyor
+(haklı olarak: düz bir sesin güncellenecek konumu yok) ve başka hiçbir şey bir şey başlatmıyordu.
+Yani sahneye konmuş müzik/ambiyans sessizdi. `host::play_flat_sources` onları başlatıyor ve canlı
+sink'e her kare `volume`/`pitch` yazıyor — spatial yolun zaten verdiği söz.
+
+Kamerasız ve transformsuz çalıştığı için cihazın yanında duruyor, spatial sistemin yanında değil:
+sahne sesinin headless/render'sız bir derlemede de çalışan yarısı bu. Donanım testinin dünyasında
+HİÇ KAMERA YOK, kanıtı da o.
 
 ### Navigasyon hiçbir yerde çalışmıyordu — ve düzeltilince ilk yeniden kurulum donuyordu (2026-08-19, DÜZELTİLDİ)
 

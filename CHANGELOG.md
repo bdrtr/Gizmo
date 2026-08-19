@@ -530,6 +530,18 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A scene's music never played: `is_3d = false` meant "not played at all".** The flag was
+  meant to choose *how* a source plays — spatial, with a position and a Doppler shift, or flat.
+  The spatial system's auto-start requires `is_3d` (correctly: a flat sound has no position to
+  update), and nothing else started anything, so authoring music or an ambience track into a level
+  produced silence in ▶ and in an exported game. `gizmo_audio::host::play_flat_sources` starts
+  them now, and pushes `volume`/`pitch` to a live sink each frame so turning either has an effect
+  on a sound that is already playing — the promise the spatial path already kept.
+
+  It lives beside the device rather than beside the spatial system because a flat sound needs no
+  camera and no transform: this is the half of scene audio a headless or render-less build gets.
+  Proven on hardware by a test whose world contains **no camera at all**.
+
 - **A scene could hold audio and never make a sound.** The editor offers an `AudioSource`, the
   inspector draws it, the scene format saves it — and `AudioManager` was constructed in exactly
   three places in the tree, all of them demos. Neither the editor's ▶ nor an exported game built

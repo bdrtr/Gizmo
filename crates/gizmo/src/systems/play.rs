@@ -460,11 +460,14 @@ impl PlayLoop {
         }
         let steps = self.physics_pass(world, dt);
         crate::ai::system::ai_frame(world, dt);
-        // The same three features `systems::audio` itself is gated on — the spatial half reads a
-        // `Camera` and a `Transform`, so it does not exist in an audio-only build. The device and
-        // the sound loading do (`gizmo_audio::host`), and the script path below uses them there.
+        // Two calls, because the halves need different things. `gizmo_audio::host` opens the
+        // device, resolves the sounds a scene names and starts its flat sources — no camera, no
+        // transform, so an audio-only or headless build gets all of that. `systems::audio` is
+        // gated on `audio+render+physics` because the listener reads a `Camera`.
+        #[cfg(feature = "audio")]
+        gizmo_audio::host::host_frame(world);
         #[cfg(all(feature = "audio", feature = "render", feature = "physics"))]
-        crate::systems::audio::audio_frame(world, dt);
+        crate::systems::audio::audio_spatial_system(world, dt);
         steps
     }
 
@@ -969,7 +972,11 @@ mod tests {
             .filter(|c| !c.is_whitespace())
             .collect();
 
-        for call in ["ai::system::ai_frame(world,dt)", "audio::audio_frame(world,dt)"] {
+        for call in [
+            "ai::system::ai_frame(world,dt)",
+            "gizmo_audio::host::host_frame(world)",
+            "audio::audio_spatial_system(world,dt)",
+        ] {
             assert!(
                 code.contains(call),
                 "the play frame no longer runs `{call}` — that subsystem has no other host"

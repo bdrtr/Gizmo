@@ -84,9 +84,13 @@ pub fn listener(world: &World) -> Listener {
 /// Called from [`PlayLoop::step`](crate::systems::PlayLoop::step), so audio belongs to the
 /// *running* game: the editor at rest does not open a device and does not play a scene's ambience
 /// over the person editing it.
+///
+/// The two halves are split by what they need, not by what they do: opening the device, resolving
+/// the sounds a scene names and starting its **flat** sources need neither a camera nor a
+/// transform and live in [`gizmo_audio::host`], so a render-less build still has them; the
+/// spatial half reads a `Camera` and a `Transform` and is this module.
 pub fn audio_frame(world: &mut World, dt: f32) {
-    gizmo_audio::host::ensure_audio_manager(world);
-    gizmo_audio::host::load_scene_sounds(world);
+    gizmo_audio::host::host_frame(world);
     audio_spatial_system(world, dt);
 }
 
@@ -262,6 +266,10 @@ mod tests {
         );
     }
 
+    /// Still true, and no longer the whole story: a flat source is not the *spatial* system's to
+    /// start — it has no position to update — but it is started, by
+    /// `gizmo_audio::host::play_flat_sources`. Until that existed, `is_3d` was a flag that chose
+    /// *how* a source played and silently chose *whether* it played at all.
     #[test]
     fn non_3d_source_never_autostarts() {
         let mut s = AudioSource::new("ui_click");
