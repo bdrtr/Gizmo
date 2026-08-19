@@ -36,19 +36,54 @@ pub(super) fn sync_editor_settings(
     // rendered as a full extra scene pass every frame regardless.
     let mut game_view_visible = false;
     
-    // The editor's look before `EditorState` overrides it: the renderer's neutral default, minus
-    // the film grain (it reads as noise on a static viewport) and with a mild aberration and a
-    // real DoF blur, which are the editor's own taste. Everything unnamed is the default.
-    let mut post_params = gizmo::renderer::PostProcessUniforms {
-        exposure: 1.0,
-        vignette_intensity: 0.2,
-        chromatic_aberration: 0.005,
-        film_grain_intensity: 0.0,
-        dof_focus_dist: 10.0,
-        dof_focus_range: 20.0,
-        dof_blur_size: 2.0,
-        ..Default::default()
+    // **The viewport is graded by the scene, not by the editor's taste.**
+    //
+    // This used to start from a set of values chosen for the editor (a mild aberration, no film
+    // grain, a real DoF blur) and then be overwritten from `EditorState::post_process`, which no
+    // file ever carried. So the picture here was never the picture the game would ship: different
+    // starting values, and an authored look that reached this pass and nothing else.
+    //
+    // Now it is the active camera's `PostProcess` component when it has one — read through the
+    // same `active_camera_grade` the engine's frame uses, so "which camera is graded" has
+    // one answer — and the renderer's own neutral fields when it has none, which is exactly what
+    // `default_render_pass` falls back to. Exposure comes from `Camera::exposure` either way,
+    // filled in below from the resolved viewpoint.
+    let grade = gizmo::systems::render::active_camera_grade(world);
+    let mut post_params = match grade {
+        Some(g) => gizmo::renderer::PostProcessUniforms {
+            bloom_intensity: g.bloom_intensity,
+            bloom_threshold: g.bloom_threshold,
+            vignette_intensity: g.vignette,
+            chromatic_aberration: g.chromatic_aberration,
+            film_grain_intensity: g.film_grain,
+            dof_focus_dist: g.dof_focus_dist,
+            dof_focus_range: g.dof_focus_range,
+            dof_blur_size: g.dof_blur_size,
+            ..Default::default()
+        },
+        None => gizmo::renderer::PostProcessUniforms {
+            bloom_intensity: renderer.bloom_intensity,
+            bloom_threshold: renderer.bloom_threshold,
+            chromatic_aberration: renderer.chromatic_aberration,
+            film_grain_intensity: renderer.film_grain_intensity,
+            dof_focus_dist: renderer.dof_focus_dist,
+            dof_focus_range: renderer.dof_focus_range,
+            dof_blur_size: if renderer.dof_enabled { renderer.dof_blur_size } else { 0.0 },
+            ..Default::default()
+        },
     };
+
+    // **Exposure comes from the camera, in this viewport too.** It never moved into the grade
+    // because it never had to: `Camera::exposure` round-trips in a scene and is the one
+    // post-process value the shipped game has always read. What it did NOT do was reach this
+    // pass — the editor drove exposure from its own slider, so the viewport and the exported
+    // build disagreed about the single value both of them already agreed on the meaning of.
+    // `viewpoint::resolve` takes the number from here, which is why it is set before that call.
+    if let Some(cam_id) = gizmo::renderer::components::active_camera(world) {
+        if let Some(cam) = world.borrow::<gizmo::renderer::components::Camera>().get(cam_id) {
+            post_params.exposure = cam.exposure;
+        }
+    }
 
     if let Some(ed_state) = world.get_resource::<gizmo::editor::EditorState>() {
         ed_shading_mode = ed_state.shading_mode;
@@ -57,15 +92,10 @@ pub(super) fn sync_editor_settings(
         ed_ssao_strength = ed_state.post_process.ssao_strength;
         
         show_colliders = ed_state.show_colliders;
-        post_params.bloom_intensity = ed_state.post_process.bloom_intensity;
-        post_params.bloom_threshold = ed_state.post_process.bloom_threshold;
-        post_params.exposure = ed_state.post_process.exposure;
-        post_params.vignette_intensity = ed_state.post_process.vignette;
-        post_params.chromatic_aberration = ed_state.post_process.chromatic_aberration;
-        post_params.dof_focus_dist = ed_state.post_process.dof_focus_dist;
-        post_params.dof_focus_range = ed_state.post_process.dof_focus_range;
-        post_params.dof_blur_size = ed_state.post_process.dof_blur_size;
-        post_params.film_grain_intensity = ed_state.post_process.film_grain;
+        // Nothing about the LOOK is read from `EditorState` any more — it is the camera's, above.
+        // What is still the editor's own and rightly here: the shading-mode dropdown, the collider
+        // overlay, the viewport rect, and the two viewport toggles (FXAA, SSAO) that never
+        // travelled with a scene.
 
         if let Some(rect) = ed_state.scene_view_rect {
             if rect.height() > 0.0 {

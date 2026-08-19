@@ -263,6 +263,12 @@ pub fn default_render_pass(
     let mut cam_far = 2000.0f32;
     let mut cam_fov = std::f32::consts::FRAC_PI_4;
 
+    // The active camera's authored look, if it carries one. `None` means "graded by the
+    // renderer's own fields", which is what every camera got before `PostProcess` existed and is
+    // what a scene that has never been graded still gets. Read through `shared` so the editor's
+    // viewport previews the grade by the same rule this frame applies it by.
+    let grade = shared::active_camera_grade(world);
+
     // KAMERALARI BUL VE MATRIX YARAT
     let cameras = world.borrow::<Camera>();
     let global_transforms = world.borrow::<gizmo_physics_core::components::GlobalTransform>();
@@ -273,11 +279,12 @@ pub fn default_render_pass(
         // the audio listener. Fall back to the first camera if none is marked.
         // This makes selection deterministic instead of depending on the
         // (unstable) ECS iteration order.
-        let active_cam = cameras
-            .iter()
-            .find(|(_, c)| c.primary)
-            .or_else(|| cameras.iter().next())
-            .map(|(id, _)| id);
+        //
+        // Through `components::active_camera` rather than written out here, because the editor's
+        // environment panel and `shared::active_camera_grade` need the same answer and the panel
+        // sits below this crate. A second copy of the rule is a second answer to "which camera is
+        // the scene's", and this file has the history to show what that costs.
+        let active_cam = crate::renderer::components::active_camera(world);
         if let Some(active_cam) = active_cam {
             if let Some(cam) = cameras.get(active_cam) {
                 // Camera world position: prefer a synced GlobalTransform (needed when the
@@ -359,9 +366,27 @@ pub fn default_render_pass(
     // geometry AND post multiplied by a separate 1.15, which compounded and skipped sky/unlit;
     // folding both into one post-stage exposure fixes that.) Everything not named here is the
     // renderer's neutral default.
-    renderer.update_post_process(
-        &renderer.queue,
-        crate::renderer::PostProcessUniforms {
+    // **The camera's own grade wins where it has one.** `PostProcess` is the authored look and
+    // the only form of it a file can carry; the renderer's fields are the fallback for a camera
+    // that carries none, which is every camera in every scene written before the component
+    // existed. Exposure is not in the branch because it never moved: it has always come from
+    // `Camera::exposure`, which is exactly why the component does not duplicate it.
+    let post = match grade {
+        Some(g) => crate::renderer::PostProcessUniforms {
+            bloom_intensity: g.bloom_intensity,
+            bloom_threshold: g.bloom_threshold,
+            exposure: cam_exposure,
+            chromatic_aberration: g.chromatic_aberration,
+            vignette_intensity: g.vignette,
+            film_grain_intensity: g.film_grain,
+            dof_focus_dist: g.dof_focus_dist,
+            dof_focus_range: g.dof_focus_range,
+            // No `dof_enabled` gate here: a blur size of 0 IS the off state, which is why the
+            // component's default carries 0 rather than the renderer's 4.0.
+            dof_blur_size: g.dof_blur_size,
+            ..Default::default()
+        },
+        None => crate::renderer::PostProcessUniforms {
             bloom_intensity: renderer.bloom_intensity,
             bloom_threshold: renderer.bloom_threshold,
             exposure: cam_exposure,
@@ -371,9 +396,11 @@ pub fn default_render_pass(
             dof_focus_range: renderer.dof_focus_range,
             dof_blur_size: if renderer.dof_enabled { renderer.dof_blur_size } else { 0.0 },
             ..Default::default()
-        }
-        .with_camera(&camera)
-        .with_underwater(underwater),
+        },
+    };
+    renderer.update_post_process(
+        &renderer.queue,
+        post.with_camera(&camera).with_underwater(underwater),
     );
 
     // Elapsed time drives fluid caustics/wave animation in fluid_composite.wgsl
@@ -666,8 +693,8 @@ pub use particles::spawn_from_emitters;
 
 mod shared;
 pub use shared::{
-    collect_scene_lights, collect_scene_setup, SceneLights, SceneSetup, SceneSetupInputs,
-    ShadowCaster,
+    active_camera_grade, collect_scene_lights, collect_scene_setup, SceneLights, SceneSetup,
+    SceneSetupInputs, ShadowCaster,
 };
 
 /// Golden render test: drive the REAL [`default_render_pass`] over a minimal scene

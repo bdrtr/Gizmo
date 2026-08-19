@@ -18,6 +18,8 @@ pub mod mesh;
 /// Everything else an entity can carry: terrain, LOD groups, particle emitters, render targets,
 /// fluid markers and the frame's render statistics.
 pub mod misc;
+/// The authored look — bloom, vignette, depth of field — on the camera that renders it.
+pub mod post_process;
 
 pub use animation::*;
 pub use camera::*;
@@ -26,6 +28,7 @@ pub use light::*;
 pub use material::*;
 pub use mesh::*;
 pub use misc::*;
+pub use post_process::*;
 
 gizmo_core::impl_component!(
     Mesh,
@@ -44,6 +47,7 @@ gizmo_core::impl_component!(
     EditorRenderTarget,
     GameRenderTarget,
     RenderStats,
-    Decal
+    Decal,
+    PostProcess
 );
 gizmo_core::impl_component!(FluidParticle, FluidHandle, FluidPhase, FluidInteractor);

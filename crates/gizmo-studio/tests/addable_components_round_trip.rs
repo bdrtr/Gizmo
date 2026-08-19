@@ -279,6 +279,69 @@ fn a_nav_agent_survives_the_file_with_its_tuning_and_not_its_route() {
     assert_eq!(agent.state, NavAgentState::Idle);
 }
 
+/// **The authored look survives the file** — the whole reason it stopped being editor state.
+///
+/// A grade tuned in "🌍 World & Environment Settings" used to live in `EditorState`, which nothing
+/// wrote to disk: the look was gone on the next reopen and absent from every exported build, while
+/// the panel said in as many words that these were the scene's settings. Exposure travels with it
+/// here because it never moved — it is `Camera::exposure`, and it is the one post-process value an
+/// exported build has always read; the two are asserted together because "the look persisted" is
+/// only true if both halves come back.
+#[test]
+fn a_graded_camera_survives_the_file_with_its_look_and_its_exposure() {
+    use gizmo::prelude::*;
+    use gizmo::renderer::components::{Camera, PostProcess};
+
+    let mut world = World::new();
+    let e = world.spawn();
+    world.add_component(e, Transform::new(Vec3::ZERO));
+    let mut cam = Camera::new(60.0_f32.to_radians(), 0.1, 1000.0, 0.0, 0.0, false);
+    cam.primary = true;
+    cam.exposure = 2.25;
+    world.add_component(e, cam);
+    world.add_component(
+        e,
+        PostProcess::new()
+            .with_bloom(1.7, 0.6)
+            .with_grade(0.35, 0.02, 0.4)
+            .with_depth_of_field(12.0, 3.0, 5.0),
+    );
+
+    let path = std::env::temp_dir().join(format!("gizmo_grade_{}.scene", std::process::id()));
+    let path = path.to_string_lossy().to_string();
+    let registry = gizmo::full_scene_registry();
+    gizmo::scene::SceneData::save(&world, &path, &registry).expect("save");
+
+    let mut loaded = World::new();
+    gizmo::scene::SceneData::load_into(&path, &mut loaded, &registry).expect("load");
+    let _ = std::fs::remove_file(&path);
+
+    let id = loaded
+        .borrow::<Transform>()
+        .iter()
+        .map(|(id, _)| id)
+        .next()
+        .expect("the entity survived");
+
+    let grades = loaded.borrow::<PostProcess>();
+    let g = grades.get(id).expect("the look survived");
+    assert_eq!(
+        (g.bloom_intensity, g.bloom_threshold, g.vignette, g.chromatic_aberration),
+        (1.7, 0.6, 0.35, 0.02),
+        "every value an artist set is what the file has to keep"
+    );
+    assert_eq!((g.dof_focus_dist, g.dof_focus_range, g.dof_blur_size), (12.0, 3.0, 5.0));
+    assert_eq!(g.film_grain, 0.4);
+    assert!(!g.is_neutral(), "a graded camera that reloads as neutral is the bug this replaced");
+    drop(grades);
+
+    assert_eq!(
+        loaded.borrow::<Camera>().get(id).map(|c| c.exposure),
+        Some(2.25),
+        "exposure is the camera's half of the same look"
+    );
+}
+
 /// Every `draw_*_section` the inspector calls, in the order the panel draws them.
 ///
 /// Read from `inspector/mod.rs` rather than restated, for the same reason the ➕ list is read from

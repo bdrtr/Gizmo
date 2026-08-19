@@ -331,14 +331,15 @@ impl EditorState {
     }
 
     // --- Post-Process Validation ---
-    /// Clamps the post-process values into safe ranges.
-    /// Must be called before they reach the render pipeline.
+    /// Clamps the editor's own post-process values into safe ranges.
+    ///
+    /// The graded values this used to clamp — bloom, exposure, vignette, aberration — are not
+    /// editor state any more: they live on the camera as
+    /// [`PostProcess`](gizmo_renderer::components::PostProcess), and the clamp moved with them
+    /// (`PostProcess::clamped`). It had to: a scene file has no slider bounds, so a rule that
+    /// only ran in a panel would not cover a hand-written or generated scene.
     pub fn validate_post_process(&mut self) {
-        self.post_process.bloom_intensity = self.post_process.bloom_intensity.clamp(0.0, 5.0);
-        self.post_process.bloom_threshold = self.post_process.bloom_threshold.clamp(0.0, 10.0);
-        self.post_process.exposure = self.post_process.exposure.clamp(0.01, 20.0);
-        self.post_process.vignette = self.post_process.vignette.clamp(0.0, 1.0);
-        self.post_process.chromatic_aberration = self.post_process.chromatic_aberration.clamp(0.0, 0.1);
+        self.post_process.ssao_strength = self.post_process.ssao_strength.clamp(0.0, 5.0);
     }
 }
 
@@ -406,42 +407,24 @@ mod tests {
     }
 
     // =========================================================
-    //  Post-Process Defaults
+    //  Post-Process (what is left of it here)
     // =========================================================
+    /// The graded values moved to `PostProcess` on the camera, and their default/clamp tests moved
+    /// with them (`gizmo-renderer/src/components/post_process.rs`). What stays here is the pair of
+    /// viewport toggles that never belonged to a scene.
     #[test]
-    fn test_post_process_defaults() {
+    fn the_editor_keeps_only_its_own_viewport_toggles() {
         let state = EditorState::new();
-        assert_eq!(state.post_process.bloom_intensity, 0.8);
-        assert_eq!(state.post_process.bloom_threshold, 0.85);
-        assert_eq!(state.post_process.exposure, 1.0);
-        assert_eq!(state.post_process.vignette, 0.2);
-        assert_eq!(state.post_process.chromatic_aberration, 0.005);
+        assert!(state.post_process.fxaa_enabled);
+        assert_eq!(state.post_process.ssao_strength, 0.8);
     }
 
     #[test]
-    fn test_post_process_validation_clamps() {
+    fn the_ssao_strength_is_still_clamped() {
         let mut state = EditorState::new();
-        state.post_process.bloom_intensity = -5.0;
-        state.post_process.bloom_threshold = 999.0;
-        state.post_process.exposure = -1.0;
-        state.post_process.vignette = 2.0;
-        state.post_process.chromatic_aberration = 0.5;
+        state.post_process.ssao_strength = -3.0;
         state.validate_post_process();
-        assert_eq!(state.post_process.bloom_intensity, 0.0);
-        assert_eq!(state.post_process.bloom_threshold, 10.0);
-        assert_eq!(state.post_process.exposure, 0.01);
-        assert_eq!(state.post_process.vignette, 1.0);
-        assert_eq!(state.post_process.chromatic_aberration, 0.1);
-    }
-
-    #[test]
-    fn test_post_process_validation_noop_on_valid() {
-        let mut state = EditorState::new();
-        let orig_bloom = state.post_process.bloom_intensity;
-        let orig_exposure = state.post_process.exposure;
-        state.validate_post_process();
-        assert_eq!(state.post_process.bloom_intensity, orig_bloom);
-        assert_eq!(state.post_process.exposure, orig_exposure);
+        assert_eq!(state.post_process.ssao_strength, 0.0);
     }
 
     // =========================================================

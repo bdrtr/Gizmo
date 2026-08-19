@@ -112,8 +112,9 @@ pub fn execute_render_pipeline(
         .map(|t| t.elapsed() as f32)
         .unwrap_or(0.0);
 
-    // Built by `viewpoint::resolve` above, exposure included — the post block drives it from the
-    // editor's own slider and the scene block's copy is unread (see `SceneUniforms::new`).
+    // Built by `viewpoint::resolve` above, exposure included — the post block carries the ACTIVE
+    // CAMERA's exposure into it (see `passes.rs`), which is the value the exported build reads
+    // too; the scene block's copy is unread (see `SceneUniforms::new`).
     let camera = vp.camera;
     renderer.update_post_process(&renderer.queue, post_params.with_camera(&camera));
 

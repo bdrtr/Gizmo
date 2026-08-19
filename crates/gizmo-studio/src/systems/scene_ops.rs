@@ -60,6 +60,15 @@ pub fn handle_scene_operations(
                         gizmo::renderer::components::LightRole::Sun,
                     ),
                 ),
+                // `new()` and not a tuned look: the default is deliberately the engine's
+                // no-component behaviour, so adding one changes nothing until a slider moves.
+                // The environment panel's "🎨 Bu kameraya look ekle" button raises this same
+                // request, so an arm missing here would make that button log "Bilinmeyen
+                // component" at the user — the exact failure this sweep keeps finding.
+                "PostProcess" => world.add_component(
+                    ent,
+                    gizmo::renderer::components::PostProcess::new(),
+                ),
                 // 25°/35° half-angles: a readable cone rather than a pinprick or a hemisphere.
                 // The constructor clamps inner to outer, which is also what the inspector's two
                 // sliders enforce — an inner cone wider than its outer one inverts the falloff.

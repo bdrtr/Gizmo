@@ -36,7 +36,7 @@ pub fn full_scene_registry() -> SceneRegistry {
     {
         use gizmo_renderer::components::{
             BoneAttachment, Camera, DirectionalLight, MaterialDesc, MeshRenderer, ParticleEmitter,
-            PointLight, SpotLight, Terrain,
+            PointLight, PostProcess, SpotLight, Terrain,
         };
         // Registration is best-effort: a name collision is a bug in this file, not a reason
         // to take the application down mid-save. Warn loudly and keep the rest.
@@ -65,6 +65,11 @@ pub fn full_scene_registry() -> SceneRegistry {
         // shadow mode ("this hero prop stays sharp", "that blocker casts but is not drawn"), and
         // both went back to their defaults on every save-and-reopen with nothing to say so.
         reg_or_warn!(MeshRenderer, "MeshRenderer");
+        // The authored look. It had no file to live in at all: the editor's "World & Environment"
+        // panel wrote `EditorState::post_process`, which only the editor's own viewport read, and
+        // the engine's frame read the renderer's unrelated fields — so a tuned look was gone on
+        // reopen and absent from every exported build, while the panel said it was the scene's.
+        reg_or_warn!(PostProcess, "PostProcess");
         // The material a file CAN hold: `Material` owns a live wgpu bind group, `MaterialDesc` is
         // everything else it is. `gizmo_renderer::material_sync` keeps the pair in step — one pass
         // writes a description for every material so a save has something to write, the other

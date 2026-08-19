@@ -1,6 +1,8 @@
 
 use crate::editor_state::EditorState;
 use egui;
+use gizmo_core::World;
+use gizmo_renderer::components::{active_camera, Camera, PostProcess};
 
 /// One labelled slider, sized to the panel it is in.
 ///
@@ -32,42 +34,130 @@ fn slider_row(
     ui.add_space(6.0);
 }
 
-/// The environment rows — sky, ambient light and fog — which belong to the scene rather than to
-/// any one entity.
-pub fn draw_environment_settings(ui: &mut egui::Ui, state: &mut EditorState) {
+/// The scene's look — bloom, lens artefacts and depth of field — edited on the camera that
+/// renders it.
+///
+/// # Why this panel changed shape
+///
+/// It used to edit `EditorState::post_process`, and that was the defect rather than a detail: the
+/// struct is editor state, nothing wrote it to a file, and the engine's frame read a second,
+/// unrelated copy off the `Renderer`. So the look an author tuned here was gone on the next
+/// reopen and absent from every exported build — while the sentence at the top of this panel said,
+/// in as many words, that these were the *scene's* settings. It was live and it was a lie.
+///
+/// The look is now [`PostProcess`], a component on the camera, so it round-trips through the scene
+/// file like everything else a scene consists of and the shipped game reads exactly what the
+/// viewport showed. Exposure is edited here too but is written to [`Camera::exposure`], which is
+/// where it has always lived and the one post-process value an exported build has always honoured.
+///
+/// With no camera there is nothing to grade, and with no grade on the camera the panel offers to
+/// add one rather than editing a copy nobody reads — the whole failure mode, in one button.
+pub fn draw_environment_settings(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
     ui.heading("🌍 World & Environment Settings");
     ui.label(
         egui::RichText::new(
-            "Sahnedeki genel aydınlatma ve post-processing (kamera efektleri) ayarlarını buradan yapabilirsiniz.",
+            "Sahnenin look'u — aktif kameranın PostProcess bileşeninde yaşar, sahne dosyasıyla \
+             birlikte kaydedilir ve ihraç edilen oyuna geçer.",
         )
         .weak()
         .small(),
     );
     ui.separator();
 
+    let Some(cam_id) = active_camera(world) else {
+        ui.label(
+            egui::RichText::new(
+                "Sahnede kamera yok. Look bir kameranın özelliği — önce bir Camera ekleyin.",
+            )
+            .color(egui::Color32::from_rgb(180, 180, 180)),
+        );
+        return;
+    };
+
+    if world.borrow::<PostProcess>().get(cam_id).is_none() {
+        ui.label(
+            egui::RichText::new(
+                "Aktif kamera henüz derecelendirilmemiş: motorun nötr varsayılanlarıyla çiziliyor.",
+            )
+            .weak()
+            .small(),
+        );
+        ui.add_space(6.0);
+        if ui.button("🎨 Bu kameraya look ekle").clicked() {
+            if let Some(entity) = world.get_entity(cam_id) {
+                state.add_component_request = Some((entity, "PostProcess".to_string()));
+            }
+        }
+        ui.add_space(10.0);
+        ui.label(
+            egui::RichText::new(
+                "Eklenen look, eklendiği anda hiçbir şeyi değiştirmez: varsayılanı motorun \
+                 bileşensiz davranışının aynısıdır.",
+            )
+            .weak()
+            .small(),
+        );
+        return;
+    }
+
     egui::ScrollArea::vertical().show(ui, |ui| {
-        egui::CollapsingHeader::new(crate::theme::section_title("Post-Processing / Bloom"))
-            .default_open(true)
-            .show(ui, |ui| {
-                slider_row(ui, "Bloom Yoğunluğu", &mut state.post_process.bloom_intensity, 0.0..=5.0);
-                slider_row(ui, "Bloom Eşiği (Threshold)", &mut state.post_process.bloom_threshold, 0.0..=2.0);
-                slider_row(ui, "Film Greni (Grain)", &mut state.post_process.film_grain, 0.0..=1.0);
-            });
+        // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
+        // The same pattern every other inspector section uses.
+        let mut grades = unsafe { world.borrow_mut_unchecked::<PostProcess>() };
+        if let Some(mut grade) = grades.get_mut(cam_id) {
+            let before = *grade;
 
-        egui::CollapsingHeader::new(crate::theme::section_title("Camera Lens Effects"))
-            .default_open(true)
-            .show(ui, |ui| {
-                slider_row(ui, "Kamera Pozlaması (Exposure)", &mut state.post_process.exposure, 0.1..=5.0);
-                slider_row(ui, "Köşe Karartması (Vignette)", &mut state.post_process.vignette, 0.0..=1.0);
-                slider_row(ui, "Kromatik Sapma (Aberration)", &mut state.post_process.chromatic_aberration, 0.0..=0.05);
-            });
+            egui::CollapsingHeader::new(crate::theme::section_title("Post-Processing / Bloom"))
+                .default_open(true)
+                .show(ui, |ui| {
+                    slider_row(ui, "Bloom Yoğunluğu", &mut grade.bloom_intensity, 0.0..=5.0);
+                    slider_row(ui, "Bloom Eşiği (Threshold)", &mut grade.bloom_threshold, 0.0..=2.0);
+                    slider_row(ui, "Film Greni (Grain)", &mut grade.film_grain, 0.0..=1.0);
+                });
 
-        egui::CollapsingHeader::new(crate::theme::section_title("Depth of Field (Odak)"))
+            egui::CollapsingHeader::new(crate::theme::section_title("Camera Lens Effects"))
+                .default_open(true)
+                .show(ui, |ui| {
+                    slider_row(ui, "Köşe Karartması (Vignette)", &mut grade.vignette, 0.0..=1.0);
+                    slider_row(
+                        ui,
+                        "Kromatik Sapma (Aberration)",
+                        &mut grade.chromatic_aberration,
+                        0.0..=0.05,
+                    );
+                });
+
+            egui::CollapsingHeader::new(crate::theme::section_title("Depth of Field (Odak)"))
+                .default_open(true)
+                .show(ui, |ui| {
+                    slider_row(ui, "Odak Uzaklığı (metre)", &mut grade.dof_focus_dist, 0.1..=100.0);
+                    slider_row(ui, "Odak Aralığı (Net Alan)", &mut grade.dof_focus_range, 0.1..=50.0);
+                    slider_row(ui, "Arka Plan Bulanıklığı (0 = kapalı)", &mut grade.dof_blur_size, 0.0..=10.0);
+                });
+
+            // Clamped only when something moved, and only then: a file can carry values no slider
+            // can reach, and correcting them on the frame the user first touches the panel is
+            // honest, whereas rewriting them on a frame nobody edited is an edit the user did not
+            // make.
+            if *grade != before {
+                *grade = grade.clamped();
+            }
+        }
+        drop(grades);
+
+        // Exposure is the camera's own, and always was — it is the one post-process value an
+        // exported build has read all along. Editing it here rather than duplicating it into the
+        // grade is what keeps the viewport and the shipped frame from disagreeing about it, which
+        // they did for as long as this panel wrote an editor-only copy.
+        egui::CollapsingHeader::new(crate::theme::section_title("Pozlama (Camera)"))
             .default_open(true)
             .show(ui, |ui| {
-                slider_row(ui, "Odak Uzaklığı (metre)", &mut state.post_process.dof_focus_dist, 0.1..=100.0);
-                slider_row(ui, "Odak Aralığı (Net Alan)", &mut state.post_process.dof_focus_range, 0.1..=50.0);
-                slider_row(ui, "Arka Plan Bulanıklığı", &mut state.post_process.dof_blur_size, 0.0..=10.0);
+                // SAFETY: as above.
+                let mut cameras = unsafe { world.borrow_mut_unchecked::<Camera>() };
+                if let Some(mut cam) = cameras.get_mut(cam_id) {
+                    slider_row(ui, "Kamera Pozlaması (Exposure)", &mut cam.exposure, 0.1..=5.0);
+                    cam.exposure = cam.exposure.clamp(0.01, 20.0);
+                }
             });
 
         ui.add_space(20.0);

@@ -18,6 +18,29 @@ use crate::renderer::gpu_types::LightData;
 use crate::renderer::MAX_LIGHTS;
 use gizmo_physics_core::components::{GlobalTransform, Transform};
 
+/// The authored look of the camera the game renders from, or `None` if it carries none.
+///
+/// **One function because "which camera is graded" must have one answer.** The look is a
+/// [`PostProcess`](crate::renderer::components::PostProcess) component on a camera, and both hosts
+/// need it: the game's frame grades what it draws, and the editor's viewport has to preview the
+/// same grade or its picture is a lie about the shipped one. Two implementations of "primary, else
+/// the first" is exactly the kind of duplication this module exists to end — the cascade-split and
+/// shadow-culling fixes both had to be applied twice before it did.
+///
+/// The rule is the same one `default_render_pass` picks its matrices with, and the same one the
+/// audio listener follows: the camera flagged `primary`, falling back to the first camera in the
+/// world so the answer never depends on ECS iteration order.
+///
+/// Note that the editor's own viewport camera is deliberately **not** consulted. What is being
+/// previewed is the scene's look, not the look of the tool looking at it.
+pub fn active_camera_grade(world: &World) -> Option<crate::renderer::components::PostProcess> {
+    let active = crate::renderer::components::active_camera(world)?;
+    world
+        .borrow::<crate::renderer::components::PostProcess>()
+        .get(active)
+        .copied()
+}
+
 /// Point + spot + sun lights collected from the world for one frame, ready to be
 /// dropped into `SceneUniforms`.
 pub struct SceneLights {

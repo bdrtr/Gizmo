@@ -465,33 +465,24 @@ impl Default for ConsoleState {
 
 #[derive(Clone, Debug)]
 #[non_exhaustive]
-/// The post-process chain's settings, as the editor exposes them.
+/// The post-process controls that belong to the **editor**, and only those.
 ///
-/// Everything here is clamped into a safe range by `EditorState::clamp_post_process` before it
-/// reaches the renderer, so a slider dragged to an extreme cannot produce a frame that is all
-/// white or all NaN.
+/// The graded look — bloom, vignette, aberration, depth of field, film grain — used to live here
+/// too, and that was the defect: this struct is editor state, nothing wrote it to a file, and the
+/// engine's frame read a second unrelated copy off the `Renderer`. So a look an author tuned was
+/// gone on reopen and absent from every exported build, while the panel editing it said in as many
+/// words that these were the scene's settings. The look is now
+/// [`PostProcess`](gizmo_renderer::components::PostProcess), a component on the camera that renders
+/// it, and exposure is where it always was — `Camera::exposure`.
+///
+/// What is left is genuinely the tool's own: two viewport toggles that never travelled with a
+/// scene and never should.
 pub struct PostProcessSettings {
-    /// How much bloom is mixed back into the frame; 0 disables it.
-    pub bloom_intensity: f32,
-    /// The luminance above which a pixel blooms.
-    pub bloom_threshold: f32,
-    /// Exposure applied at tone-mapping; 1.0 leaves the HDR scene as rendered.
-    pub exposure: f32,
-    /// How much the frame darkens towards its corners, 0 for not at all.
-    pub vignette: f32,
-    /// How far the colour channels separate towards the edges, in pixels.
-    pub chromatic_aberration: f32,
-    /// Distance from the camera that is in focus, in metres.
-    pub dof_focus_dist: f32,
-    /// How deep that in-focus band is, in metres.
-    pub dof_focus_range: f32,
-    /// How much the out-of-focus part is blurred.
-    pub dof_blur_size: f32,
-    /// Film-grain strength, 0 for none.
-    pub film_grain: f32,
-    /// Whether FXAA runs as the last pass.
+    /// Whether FXAA runs as the last pass **of the editor viewport**.
     pub fxaa_enabled: bool,
-    /// Whether screen-space ambient occlusion is computed.
+    /// Whether screen-space ambient occlusion is computed. Inert in the editor — both studio views
+    /// draw through the forward path and SSAO needs the deferred G-buffer's normal target; the
+    /// Settings tab says so and disables the control.
     pub ssao_enabled: bool,
     /// How strongly that occlusion darkens the frame.
     pub ssao_strength: f32,
@@ -500,15 +491,6 @@ pub struct PostProcessSettings {
 impl Default for PostProcessSettings {
     fn default() -> Self {
         Self {
-            bloom_intensity: 0.8,
-            bloom_threshold: 0.85,
-            exposure: 1.0,
-            vignette: 0.2,
-            chromatic_aberration: 0.005,
-            dof_focus_dist: 10.0,
-            dof_focus_range: 20.0,
-            dof_blur_size: 2.0,
-            film_grain: 0.0,
             fxaa_enabled: true,
             ssao_enabled: true,
             ssao_strength: 0.8,

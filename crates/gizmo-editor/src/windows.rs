@@ -209,22 +209,24 @@ pub fn ui_settings_window(ui: &mut egui::Ui, state: &mut EditorState) {
                 });
                 
                 ui.separator();
-                ui.heading("Bloom (Parlama)");
-                ui.add(egui::Slider::new(&mut state.post_process.bloom_intensity, 0.0..=3.0).text("Şiddet (Intensity)"));
-                ui.add(egui::Slider::new(&mut state.post_process.bloom_threshold, 0.0..=2.0).text("Eşik (Threshold)"));
-                
-                ui.separator();
-                ui.heading("Tonemapping (Renk Filtreleri)");
-                ui.add(egui::Slider::new(&mut state.post_process.exposure, 0.1..=5.0).text("Pozlama (Exposure)"));
-                ui.add(egui::Slider::new(&mut state.post_process.vignette, 0.0..=1.0).text("Vignette (Kenar Karartması)"));
-                ui.add(egui::Slider::new(&mut state.post_process.chromatic_aberration, 0.0..=0.05).text("Chromatic Aberration"));
-                ui.add(egui::Slider::new(&mut state.post_process.film_grain, 0.0..=1.0).text("Film Grain"));
-
-                ui.separator();
-                ui.heading("Kamera Odak (Depth of Field)");
-                ui.add(egui::Slider::new(&mut state.post_process.dof_focus_dist, 0.1..=100.0).text("Odak Mesafesi"));
-                ui.add(egui::Slider::new(&mut state.post_process.dof_focus_range, 0.1..=50.0).text("Odak Alanı (Range)"));
-                ui.add(egui::Slider::new(&mut state.post_process.dof_blur_size, 0.0..=10.0).text("Bulanıklık Miktarı"));
+                // Bloom, tonemapping and depth of field used to be here as a second set of
+                // sliders over the same editor-only struct — two panels writing values that
+                // reached the editor viewport and nothing else. The look belongs to the scene, so
+                // it is a component on the camera now, and one panel edits it. Pointing at that
+                // panel is the honest thing for this section to do; drawing the sliders twice over
+                // a copy nobody reads is what the whole defect was.
+                ui.heading("Look / Post-Processing");
+                ui.label(
+                    egui::RichText::new(
+                        "Bloom, vignette, aberrasyon, alan derinliği ve pozlama artık aktif \
+                         kameranın üzerinde yaşıyor (PostProcess bileşeni + Camera::exposure), \
+                         böylece sahneyle kaydedilir ve ihraç edilen oyuna geçer.\n\
+                         Düzenlemek için: Inspector'da hiçbir şey seçili değilken açılan \
+                         \"🌍 World & Environment Settings\" paneli.",
+                    )
+                    .weak()
+                    .small(),
+                );
             });
 
         ui.separator();

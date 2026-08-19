@@ -1793,18 +1793,51 @@ which is what made them survive:
   — plus a test that the editor frame still **calls** it, because a drawing function nothing
   invokes is the same defect one layer up.
 
-**Measured and still open from this round:**
+**Closed, and it is the largest of the three: the authored look now lives on the camera.**
 
-- **Post-process authoring is live but not persistent.** The inspector's "🌍 World & Environment
-  Settings" panel says in as many words that these are the *scene's* lighting and post-processing
-  settings, and their only reader is the editor viewport (`render_pipeline/passes.rs`). `SceneData`
-  has no field for them and `EditorPrefs` does not carry them, so `EditorState::new` writes
-  `PostProcessSettings::default()` at every launch — the look an author tunes is gone on reopen,
-  and an exported build runs on the renderer's neutral defaults, so ▶ and the shipped game do not
-  look alike. (One correction to the first measurement: *exposure* is not in this group — the post
-  block reads `Camera::exposure`, which is scene data already. That mixed state is an argument for
-  putting the rest where exposure already lives.) The honest options are to make it scene data or
-  to relabel the panel as an editor preview, and §3392's post-process table measured liveness only.
+The inspector's "🌍 World & Environment Settings" panel said in as many words that these were the
+*scene's* lighting and post-processing settings. They were not settings of anything that could be
+saved: the panel wrote `EditorState::post_process`, which lives in `gizmo-editor`, which no file
+carries, and whose only reader was the editor's own viewport. The engine's frame read a **second,
+unrelated copy** — the `Renderer`'s own fields, settable from Rust alone. So a look an author tuned
+was gone at the next launch (`EditorState::new` writes the defaults) and absent from every exported
+build, and the two copies did not even start from the same values, so the viewport was never
+showing the picture the game would ship.
+
+`PostProcess` is a component on the camera now — bloom, vignette, aberration, depth of field, film
+grain — registered in `full_scene_registry`, so it round-trips like everything else a scene
+consists of. **The camera, and not a scene-wide block, because the precedent was already there:**
+`Camera::exposure` is a component field, it round-trips, and it is the one post-process value an
+exported build has always honoured. Exposure therefore stayed where it was rather than being
+duplicated into the grade — duplicating it would recreate the split this component exists to end —
+and the editor panel now writes it to `Camera::exposure`, which also closes a divergence nobody had
+named: the viewport was exposing from the editor's slider while the shipped frame exposed from the
+camera.
+
+Four things were done to make that one change safe rather than merely correct:
+
+- **The component's default is the no-component behaviour**, `dof_blur_size` included — the
+  renderer's `dof_enabled` is false and zeroes the blur, so the neutral value is 0.0 and not the
+  renderer's 4.0. Adding one from the ➕ menu therefore changes nothing until a slider moves, and a
+  test pins that, because a default that drifts turns "add a look" into a surprise edit.
+- **"Which camera is graded" has one implementation**, `components::active_camera`, in
+  `gizmo-renderer` where the facade, the studio and the editor panel can all reach it. The engine's
+  frame was rewritten to use it too: an inspector editing "the scene's camera" has to mean the
+  camera the frame renders from, or the panel is editing something the player never looks through.
+- **The editor's copy was reduced rather than left inert.** `PostProcessSettings` keeps only the
+  two viewport toggles that never travelled with a scene (FXAA, and the SSAO pair that is already
+  documented as doing nothing in the forward path). Leaving the graded fields there would have left
+  a struct whose sliders write values nobody reads — the exact defect being closed. The clamp moved
+  with them: `PostProcess::clamped` enforces the ranges `validate_post_process` used to, because a
+  scene file has no slider bounds and a rule that only runs in a panel does not cover a
+  hand-written one. The Settings tab's second copy of the sliders is gone, replaced by a line
+  saying where the look is edited.
+- **Both draw paths read it through `active_camera_grade`**, pinned by
+  `both_draw_paths_grade_from_the_active_cameras_component`, and a full save/load test asserts the
+  grade and the exposure come back together — "the look persisted" is only true if both halves do.
+
+§3392's post-process table measured liveness only and is unchanged by this; what it did not ask was
+where the numbers came from.
 
 **Small known limits (left open on purpose):**
 - Nothing raises `NavGrid::needs_rebuild` when static geometry changes; the scene's owner or the

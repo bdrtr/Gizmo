@@ -231,6 +231,26 @@ impl Camera {
     }
 }
 
+/// **Which camera the scene is rendered from.** One function, because every layer needs the answer
+/// and three implementations of it would be three answers.
+///
+/// The rule: the camera flagged [`primary`](Camera::primary) — the convention `spawn_camera` and
+/// `CameraBundle` maintain — falling back to the first camera in the world when none is marked, so
+/// the result never depends on the (unstable) ECS iteration order. The audio listener follows the
+/// same rule, and the render path picks its matrices with it.
+///
+/// It lives here rather than in the facade because the editor needs it too and sits below the
+/// facade: an inspector panel editing "the scene's" camera has to mean the same camera the frame
+/// renders from, or the panel is editing something the player will never look through.
+pub fn active_camera(world: &gizmo_core::World) -> Option<u32> {
+    let cameras = world.borrow::<Camera>();
+    cameras
+        .iter()
+        .find(|(_, c)| c.primary)
+        .or_else(|| cameras.iter().next())
+        .map(|(id, _)| id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

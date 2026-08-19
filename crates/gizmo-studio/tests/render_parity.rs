@@ -369,6 +369,32 @@ fn both_draw_loops_skip_a_hidden_object() {
     }
 }
 
+/// **Both draw paths must grade the frame from the camera**, and by the same rule.
+///
+/// The look — bloom, vignette, aberration, depth of field, film grain — existed in two unrelated
+/// places and an author could reach only the wrong one. The editor's "World & Environment" panel
+/// edited `EditorState::post_process`, which no file carried and only this viewport read; the
+/// engine's frame read the `Renderer`'s own fields, settable from Rust alone. So a tuned look was
+/// gone on reopen and absent from every exported build, while the panel said these were the
+/// scene's settings.
+///
+/// It is a `PostProcess` component on the camera now, and both paths must read it *through*
+/// `active_camera_grade` rather than each finding "the camera" its own way — a second rule would
+/// be a second answer, and the two paths would grade different cameras in the same scene.
+///
+/// In CODE, not in a comment, for the reason its siblings above give.
+#[test]
+fn both_draw_paths_grade_from_the_active_cameras_component() {
+    let (game, editor) = draw_path_sources();
+    for (path, text) in [("game", &game), ("editor", &editor)] {
+        assert!(
+            code_only(text).contains("active_camera_grade("),
+            "the {path} path does not read the camera's `PostProcess`, so an authored look either \
+             does not reach it or reaches it by a second rule"
+        );
+    }
+}
+
 /// **Both hosts must turn a `Terrain` recipe into a mesh**, and it must be the same conversion.
 ///
 /// The inventory below marks `Terrain` legitimate because it is a *recipe* and `Mesh` is what gets

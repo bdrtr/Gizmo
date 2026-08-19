@@ -27,7 +27,7 @@ use gizmo_core::World;
 pub fn ui_inspector(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
     let sel_len = state.selection.entities.len();
     if sel_len == 0 {
-        environment::draw_environment_settings(ui, state);
+        environment::draw_environment_settings(ui, world, state);
         return;
     }
 
