@@ -16,13 +16,23 @@ use std::time::Instant;
 /// The Analyzer's behaviour settings.
 #[derive(Debug, Clone)]
 pub struct AnalysisConfig {
-    /// While off, `collect` does nothing at all (zero cost).
+    /// While off, `collect` does nothing at all (zero cost). Live: read at the top of every
+    /// `collect`.
     pub enabled: bool,
-    /// How many frame snapshots to keep in the history (a ring buffer).
+    /// How many frame snapshots to keep in the history (a ring buffer). Live: lowering it drops
+    /// the oldest snapshots on the next `collect` rather than at the next restart.
     pub history_frames: usize,
-    /// How many values to keep in each metric series (a ring buffer).
+    /// How many values to keep in each metric series (a ring buffer). Live, through
+    /// [`MetricStore::set_capacity`](crate::MetricStore::set_capacity) — it used to be read
+    /// **once**, when the store was built, so turning it up mid-run did nothing at all.
     pub metric_history: usize,
     /// Collect the detailed archetype table.
+    ///
+    /// **Construction-time, unlike its three neighbours**, and the one exception this type has:
+    /// [`Analyzer::with_config`] hands the value to the built-in
+    /// [`EcsCollector`](crate::EcsCollector) it registers, and the collector owns it from then on
+    /// — a `Box<dyn Collector>` cannot be reached back into. Changing this field on a live
+    /// analyzer changes nothing; build the collector yourself if you need to toggle it.
     pub detailed_archetypes: bool,
 }
 
@@ -39,8 +49,10 @@ impl Default for AnalysisConfig {
 
 /// Merkezi analiz durumu.
 pub struct Analyzer {
-    /// What to collect and how much history to keep. Read every frame, so changing it mid-run
-    /// takes effect on the next `collect`.
+    /// What to collect and how much history to keep. Read at the top of every `collect`, so
+    /// changing `enabled`, `history_frames` or `metric_history` mid-run takes effect on the next
+    /// one — see [`AnalysisConfig::detailed_archetypes`] for the single field that is not live,
+    /// and why.
     pub config: AnalysisConfig,
     frame: u64,
     metrics: MetricStore,
@@ -134,6 +146,10 @@ impl Analyzer {
             return;
         }
 
+        // The config is read every frame, so a history size turned up (or down) mid-run takes
+        // effect here rather than at the next restart. One integer comparison when nothing moved.
+        self.metrics.set_capacity(self.config.metric_history);
+
         let now = Instant::now();
         let timestamp_ns = self.epoch.elapsed().as_nanos() as u64;
 
@@ -198,7 +214,10 @@ impl Analyzer {
         // `last()` artık geçmişin son elemanı).
         self.metrics.end_frame();
 
-        if self.history.len() == self.config.history_frames.max(1) {
+        // `while … >=` for the same reason the metric rings use it: `history_frames` can be
+        // LOWERED at run time, and an equality test never fires on a history that is already
+        // longer than the new limit.
+        while self.history.len() >= self.config.history_frames.max(1) {
             self.history.pop_front();
         }
         self.history.push_back(snap);
@@ -311,5 +330,100 @@ mod tests {
         assert_eq!(a.stats("ecs.entities").unwrap().last, 3.0);
         // frame_ms is always sampled once per collect.
         assert_eq!(a.stats("frame_ms").unwrap().count, 1);
+    }
+}
+
+#[cfg(test)]
+mod live_config_tests {
+    use super::*;
+    use gizmo_core::World;
+
+    /// **A history size turned down mid-run actually releases the memory.**
+    ///
+    /// Both rings trimmed only on the `==` boundary, which a ring that is *already* longer than
+    /// its new limit never reaches: lowering either number stopped nothing and freed nothing.
+    #[test]
+    fn lowering_the_history_sizes_trims_what_is_already_there() {
+        let world = World::new();
+        let mut a = Analyzer::with_config(AnalysisConfig {
+            history_frames: 50,
+            metric_history: 50,
+            ..Default::default()
+        });
+        for i in 0..40 {
+            a.gauge("x", i as f64);
+            a.collect(&world);
+        }
+        assert!(a.history().count() > 5, "there is something to trim");
+
+        a.config.history_frames = 5;
+        a.config.metric_history = 4;
+        a.collect(&world);
+
+        assert!(
+            a.history().count() <= 5,
+            "the frame history kept {} snapshots past its new limit",
+            a.history().count()
+        );
+        assert_eq!(a.metrics().capacity(), 4);
+        let series_len = a.metrics().get("x").map(|s| s.len()).unwrap_or(0);
+        assert!(series_len <= 4, "the metric ring kept {series_len} values");
+    }
+
+    /// Raising it keeps what is already collected and lets the rings fill further — a resize, not
+    /// a reset.
+    #[test]
+    fn raising_the_metric_history_keeps_what_was_collected() {
+        let world = World::new();
+        let mut a = Analyzer::with_config(AnalysisConfig {
+            metric_history: 3,
+            ..Default::default()
+        });
+        for i in 0..3 {
+            a.gauge("x", i as f64);
+            a.collect(&world);
+        }
+        let before = a.metrics().get("x").map(|s| s.len()).unwrap_or(0);
+        assert_eq!(before, 3, "the ring is full at its original capacity");
+
+        // The new capacity lands on the next `collect`, so a value written BEFORE that one is
+        // still bounded by the old ring — which is the honest contract for a per-frame read.
+        a.config.metric_history = 100;
+        a.collect(&world);
+        assert_eq!(
+            a.metrics().get("x").map(|s| s.len()).unwrap_or(0),
+            before,
+            "raising the capacity keeps what was collected — it resizes, it does not reset"
+        );
+
+        a.gauge("x", 99.0);
+        a.collect(&world);
+        assert_eq!(
+            a.metrics().get("x").map(|s| s.len()).unwrap_or(0),
+            before + 1,
+            "and the next value fits instead of pushing the oldest out"
+        );
+    }
+
+    /// The documented exception, pinned so the doc and the code cannot drift apart: this one
+    /// field is read when the analyzer is built and never again.
+    #[test]
+    fn detailed_archetypes_is_construction_time_and_says_so() {
+        let world = World::new();
+        let mut a = Analyzer::with_config(AnalysisConfig {
+            detailed_archetypes: false,
+            ..Default::default()
+        });
+        a.collect(&world);
+        let without = a.last().map(|s| s.archetypes.len()).unwrap_or(0);
+
+        a.config.detailed_archetypes = true; // the collector already owns its copy
+        a.collect(&world);
+        let after = a.last().map(|s| s.archetypes.len()).unwrap_or(0);
+
+        assert_eq!(
+            without, after,
+            "if this ever changes, `AnalysisConfig::detailed_archetypes`'s doc is now wrong"
+        );
     }
 }

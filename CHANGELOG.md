@@ -530,6 +530,21 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Two of `AnalysisConfig`'s four fields were documented as live and were read once.** The type
+  said "read every frame, so changing it mid-run takes effect on the next `collect`";
+  `metric_history` was read exactly once, when the `MetricStore` was built, and
+  `detailed_archetypes` once, when the built-in `EcsCollector` was registered. Turning either up
+  in a running game did nothing and reported nothing.
+
+  `metric_history` is live now (`MetricStore::set_capacity`, applied at the top of `collect`), and
+  `detailed_archetypes` is documented as the construction-time exception it is — a
+  `Box<dyn Collector>` cannot be reached back into, so the collector owns its copy.
+
+  Both ring buffers also trimmed on an `==` boundary, which a ring that is *already* longer than
+  its new limit never reaches: **lowering** either number would have stopped nothing and freed
+  nothing, and the frame history would have grown without bound from then on. Measured, with the
+  fix reverted: 41 snapshots kept past a limit of 5.
+
 - **A `NavAgent` could not be added in the editor and could not be saved — while the inspector
   drew a full section for it.** "AI NavAgent" with max speed, steering force, arrival radius and
   live state has been in the inspector for as long as the component has existed, and there was no

@@ -98,10 +98,21 @@ impl MetricSeries {
     }
 
     fn push_ring(&mut self, v: f64) {
-        if self.ring.len() == self.capacity {
+        // `while … >=`, not `if … ==`: the capacity can be lowered at run time
+        // ([`MetricStore::set_capacity`]), and an equality test on a ring that is already longer
+        // than its new capacity never fires — the series would grow without bound from then on.
+        while self.ring.len() >= self.capacity {
             self.ring.pop_front();
         }
         self.ring.push_back(v);
+    }
+
+    /// Resize the ring, dropping the oldest values if it no longer fits.
+    fn set_capacity(&mut self, capacity: usize) {
+        self.capacity = capacity.max(1);
+        while self.ring.len() > self.capacity {
+            self.ring.pop_front();
+        }
     }
 
     /// Accumulate over this frame (Counter). `end_frame` writes the delta into the ring.
@@ -215,6 +226,30 @@ impl MetricStore {
             capacity: capacity.max(1),
             warned: HashSet::new(),
         }
+    }
+
+    /// Change how many values each series keeps, from now on and retroactively.
+    ///
+    /// Lowering it drops the oldest values immediately, so the memory a lowered history promises
+    /// is released rather than merely stopping the growth. Raising it keeps what is already there
+    /// and lets the rings fill further. `0` is raised to `1`, as in [`MetricStore::new`].
+    ///
+    /// This exists because [`AnalysisConfig::metric_history`] is documented as live: it was read
+    /// exactly once, when the store was constructed, so turning it up mid-run did nothing.
+    pub fn set_capacity(&mut self, capacity: usize) {
+        let capacity = capacity.max(1);
+        if capacity == self.capacity {
+            return;
+        }
+        self.capacity = capacity;
+        for series in self.series.values_mut() {
+            series.set_capacity(capacity);
+        }
+    }
+
+    /// How many values each series keeps.
+    pub fn capacity(&self) -> usize {
+        self.capacity
     }
 
     /// Return the mutable series for `name`, creating it with `kind` on first use.
