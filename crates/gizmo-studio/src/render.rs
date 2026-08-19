@@ -505,6 +505,14 @@ pub fn render_studio(
         }
     }
 
+    // The block above answers "an edit asked for a terrain"; this answers "an entity HAS a terrain
+    // recipe and no mesh", which is the case a queue of edits cannot see. Loading a scene is the
+    // one that mattered: the `Terrain` component is registered and comes back, `Mesh` owns GPU
+    // buffers so no file can hold one, and nothing pushed a request on load — so a saved level
+    // reopened as an entity that says it is a terrain and draws nothing. The engine's own frame
+    // runs the same system, which is what makes the exported game agree with this viewport.
+    gizmo::systems::terrain::terrain_mesh_system(world, renderer);
+
     render_pipeline::execute_render_pipeline(world, state, encoder, view, renderer, light_time);
 }
 

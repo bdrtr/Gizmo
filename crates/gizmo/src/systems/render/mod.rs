@@ -163,6 +163,15 @@ pub fn default_render_pass(
     view: &wgpu::TextureView,
     renderer: &mut Renderer,
 ) {
+    // **A terrain is a recipe, and the mesh built from it is what gets drawn.** A loaded scene
+    // carries the recipe alone — `Mesh` owns GPU buffers, so no file can hold one — and until
+    // 2026-08-19 the only code that performed the conversion was the editor's, driven by a queue
+    // of editor edits. So a saved level came back with an entity that says it is a terrain and
+    // draws nothing, and an exported game never had one at all. Run before the transform pass
+    // below so the mesh it adds gets its `GlobalTransform` on the same frame.
+    #[cfg(feature = "physics")]
+    crate::systems::terrain::terrain_mesh_system(world, renderer);
+
     // Every renderable object needs an up-to-date `GlobalTransform` (the draw query
     // below requires it, and physics/gameplay only write the local `Transform`).
     // Realize the long-standing "update_transforms right before the pass" TODO here

@@ -342,6 +342,67 @@ fn both_paths_size_the_instance_buffer_for_the_frame() {
     }
 }
 
+/// **Both draw loops must skip a hidden object** — and `IsHidden` is where the inventory below
+/// could not look.
+///
+/// The capability test that follows scans `gizmo-renderer/src/components`, so a marker living in
+/// `gizmo-core` was never a subject. `IsHidden` is exactly that: the editor's 👁 button, the H
+/// shortcut and their undo entries are all built on it, its own doc says "do not display this
+/// entity", and until 2026-08-19 the only draw loop that ever asked was the editor's. So an
+/// object hidden in the editor was still drawn in the Game panel and in the exported game, and a
+/// game calling `world.add_component(e, IsHidden)` — the single use the doc describes — got
+/// nothing at all. The engine's own frame already gave the marker meaning elsewhere
+/// (`systems::streaming` will not stream textures for a hidden object), which is what made the
+/// gap read as wired.
+///
+/// In CODE, not in a comment, for the reason its two siblings above give: a path that deleted the
+/// gate and kept the note explaining it would otherwise pass.
+#[test]
+fn both_draw_loops_skip_a_hidden_object() {
+    let (game, editor) = draw_path_sources();
+    for (path, text) in [("game", &game), ("editor", &editor)] {
+        assert!(
+            code_only(text).contains("IsHidden"),
+            "the {path} draw path never asks whether an entity is hidden, so 👁 and \
+             `add_component(e, IsHidden)` do nothing to what it draws"
+        );
+    }
+}
+
+/// **Both hosts must turn a `Terrain` recipe into a mesh**, and it must be the same conversion.
+///
+/// The inventory below marks `Terrain` legitimate because it is a *recipe* and `Mesh` is what gets
+/// drawn — which answers who draws it and takes for granted that something converts it. Something
+/// did, in exactly one place: `gizmo-studio`'s render file, driven by an editor-only request queue
+/// that only two edits push to (a slider moving, the ➕ menu adding the component). Neither is
+/// true when a scene **loads**, and `Mesh` owns GPU buffers so no file can carry one — so a saved
+/// level came back as an entity that says it is a terrain and draws nothing, and an exported
+/// game, whose frame is `PlayLoop::step` + `default_render_pass`, never named `Terrain` at all.
+///
+/// Asserted at the two hosts rather than inside the draw loops because that is where the call
+/// belongs: the conversion needs a `wgpu::Device`, and building geometry is not the batcher's job.
+#[test]
+fn both_hosts_build_the_mesh_a_terrain_recipe_names() {
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("workspace root")
+        .to_path_buf();
+    let hosts = [
+        ("game", workspace.join("crates/gizmo/src/systems/render/mod.rs")),
+        ("editor", workspace.join("crates/gizmo-studio/src/render.rs")),
+    ];
+    for (host, file) in hosts {
+        let src = std::fs::read_to_string(&file)
+            .unwrap_or_else(|e| panic!("{}: {e}", file.display()));
+        assert!(
+            code_only(&src).contains("terrain_mesh_system("),
+            "the {host} host never builds the mesh a `Terrain` names, so a scene that loads with \
+             one shows an entity that draws nothing"
+        );
+    }
+}
+
 /// The capability inventory: a render component the engine exports must be known to **both** draw
 /// paths, or be named below with the reason it is not.
 ///
@@ -793,7 +854,7 @@ fn every_capability_neither_path_names_is_accounted_for() {
         // ── A member of a type the inventory does judge ────────────────────────────────────
         ("LodLevel", "one level inside `LodGroup`, which both paths know."),
         ("ProjectionMode", "the enum behind `Camera::projection`, which both paths know."),
-        ("Terrain", "a mesh *recipe*: the primitive builder turns it into a `Mesh`, and `Mesh` is what gets drawn."),
+        ("Terrain", "a mesh *recipe*: the primitive builder turns it into a `Mesh`, and `Mesh` is what gets drawn. That sentence answered which path DRAWS it and quietly assumed a converter existed on both hosts; until 2026-08-19 the only one was `gizmo-studio`'s, driven by a queue of editor edits, so a saved level reopened with the recipe and no mesh and an exported game never had one. `both_hosts_build_the_mesh_a_terrain_recipe_names` is the half this entry does not cover."),
         ("RenderTarget", "an app-level render-to-texture handle (`gizmo-app`'s editor runtime), not a per-picture capability; the editor's own two are in EXCEPTIONS above."),
 
         // ── Genuinely one-sided, measured, and NOT a one-line fix ──────────────────────────

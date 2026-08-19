@@ -32,6 +32,10 @@ pub mod spin;
 #[cfg(all(feature = "render", feature = "physics"))]
 /// Texture and mesh streaming: what is resident, and what is loaded as the camera approaches.
 pub mod streaming;
+#[cfg(all(feature = "render", feature = "physics"))]
+/// Turning a `Terrain` recipe into the `Mesh` a draw path can draw — on load and in an exported
+/// game, not only when an editor slider moves.
+pub mod terrain;
 /// Transform propagation — turning a hierarchy of local transforms into world matrices.
 pub mod transform;
 
@@ -54,4 +58,6 @@ pub use render::*;
 pub use spin::*;
 #[cfg(all(feature = "render", feature = "physics"))]
 pub use streaming::*;
+#[cfg(all(feature = "render", feature = "physics"))]
+pub use terrain::*;
 pub use transform::*;

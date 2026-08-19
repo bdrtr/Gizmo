@@ -302,6 +302,18 @@ pub(super) fn collect_draw_items(
     cam_pos: Vec3,
 ) -> (Vec<DrawItem>, u32) {
     let renderers = world.borrow::<MeshRenderer>();
+    // **`IsHidden` is honoured here, not only in `gizmo-studio`** — the same shape as `LodGroup`
+    // below. The marker's own doc says "do not display this entity" and the editor's 👁 button and
+    // H shortcut are built on it, but the only draw loop that ever asked was studio's own; this
+    // pass borrowed `Mesh`, `GlobalTransform` and `Material` and drew a hidden object anyway. So
+    // an object hidden in the editor came back in the Game panel and in the exported game, and a
+    // game calling `world.add_component(e, IsHidden)` — the single use the doc describes — got
+    // nothing. The engine's own frame already reads the marker elsewhere (`systems::streaming`
+    // will not stream textures for a hidden object), which is what made the gap invisible.
+    //
+    // Skipped whole, casting nothing, exactly as studio does it: two answers to "is this drawn"
+    // is worse than either.
+    let hidden = world.borrow::<crate::core::component::IsHidden>();
 
     let frustum = crate::math::Frustum::from_matrix(&unjittered_view_proj);
     // Per-cascade LIGHT frusta — shadow casters are culled against these, NOT the camera
@@ -337,6 +349,11 @@ pub(super) fn collect_draw_items(
                 
                 // Pooled (havuzda pasif) nesneleri render etme
                 if pooled_storage.get($e).is_some() {
+                    continue;
+                }
+
+                // Gizlenmiş nesneleri render etme — editörün 👁 düğmesi ve H kısayolu bu.
+                if hidden.contains($e) {
                     continue;
                 }
 
