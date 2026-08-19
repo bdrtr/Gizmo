@@ -294,9 +294,19 @@ impl Mesh {
     }
 }
 
-/// The ECS marker component saying an entity is a Mesh that can be drawn.
-/// It carries no fields; it only brings the entity into the render system.
-#[derive(Clone)]
+/// The ECS component saying an entity is a Mesh that can be drawn, and how it is drawn.
+///
+/// The doc above this said "it carries no fields" for as long as it had them, and the stale
+/// sentence had a cost: the two fields below are edited in the inspector's "Mesh Renderer"
+/// section, and nothing registered the component for save/load, so every artist decision here
+/// was lost on the next reopen — silently, because an unregistered component is simply not
+/// written. That is why this derives `Serialize`; `full_scene_registry` is where it is claimed.
+///
+/// `#[serde(default)]` because the defaults are the pre-existing behaviour rather than zero:
+/// a scene written before a field existed loads as "no LOD bias, casts shadows", not as a
+/// `lod_bias` of 0.0.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct MeshRenderer {
     /// Scales the distance used to pick a level of detail.
     ///
@@ -322,7 +332,7 @@ pub struct MeshRenderer {
 /// The third state is not a curiosity: a low-poly stand-in that casts for an expensive mesh, or a
 /// blocker that shapes a light without appearing, both need "cast but do not draw". It is the
 /// prototype's `On / Off / Only`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ShadowCasting {
     /// Drawn, and casts. The default, and what every object did before this existed.
     #[default]

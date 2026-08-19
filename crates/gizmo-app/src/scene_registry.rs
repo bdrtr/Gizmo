@@ -35,8 +35,8 @@ pub fn full_scene_registry() -> SceneRegistry {
     #[cfg(feature = "render")]
     {
         use gizmo_renderer::components::{
-            BoneAttachment, Camera, DirectionalLight, MaterialDesc, ParticleEmitter, PointLight,
-            SpotLight, Terrain,
+            BoneAttachment, Camera, DirectionalLight, MaterialDesc, MeshRenderer, ParticleEmitter,
+            PointLight, SpotLight, Terrain,
         };
         // Registration is best-effort: a name collision is a bug in this file, not a reason
         // to take the application down mid-save. Warn loudly and keep the rest.
@@ -58,6 +58,13 @@ pub fn full_scene_registry() -> SceneRegistry {
         reg_or_warn!(ParticleEmitter, "ParticleEmitter");
         reg_or_warn!(Terrain, "Terrain");
         reg_or_warn!(BoneAttachment, "BoneAttachment");
+        // `MeshRenderer` reached this list by a different route than those three, and it is why
+        // the test guarding the list had to be widened. It is **not** in the ➕ menu —
+        // `asset_loading` puts one beside every mesh it loads — so a check driven by the menu
+        // could not see it at all. What a user edits in its inspector section is a LOD bias and a
+        // shadow mode ("this hero prop stays sharp", "that blocker casts but is not drawn"), and
+        // both went back to their defaults on every save-and-reopen with nothing to say so.
+        reg_or_warn!(MeshRenderer, "MeshRenderer");
         // The material a file CAN hold: `Material` owns a live wgpu bind group, `MaterialDesc` is
         // everything else it is. `gizmo_renderer::material_sync` keeps the pair in step — one pass
         // writes a description for every material so a save has something to write, the other
