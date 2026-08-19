@@ -8,6 +8,16 @@ use wgpu::BindGroupLayout;
 
 /// Continuously scans the scene for newly added `MeshSource` and `MaterialSource` components and
 /// loads the `Mesh` and `Material` GPU components they are missing.
+///
+/// **A [`MaterialDesc`](crate::components::MaterialDesc) outranks a `MaterialSource`.** Both can
+/// build a material and they do not carry the same thing: a source holds albedo, roughness,
+/// metallic, an unlit flag and a texture path, while a description holds every field a `Material`
+/// has. A scene row saved after descriptions existed carries both — the source because it was
+/// authored before, the description because a save writes one for every live material — and if
+/// this system won, the richer record would be discarded and then *overwritten* by the poorer one
+/// on the next save. So an entity that has a description is left for
+/// `material_sync::resolve_material_descriptions`; it still gets its `MeshRenderer` here, because
+/// that pairing is this system's to guarantee.
 #[tracing::instrument(skip_all, level = "trace")]
 pub fn run_asset_loading_system(
     world: &mut World,
@@ -18,6 +28,9 @@ pub fn run_asset_loading_system(
 ) {
     let mut missing_meshes = Vec::new();
     let mut missing_materials = Vec::new();
+    // Entities whose material a DESCRIPTION will build (see this function's docs) but whose
+    // `MeshRenderer` is still this system's to add.
+    let mut renderer_only = Vec::new();
 
     // Hangi Entity'lerin Mesh/Material'ı eksik bul
     {
@@ -26,6 +39,7 @@ pub fn run_asset_loading_system(
 
         let material_sources = world.borrow::<MaterialSource>();
         let materials = world.borrow::<Material>();
+        let descs = world.borrow::<crate::components::MaterialDesc>();
 
         for e in world.iter_alive_entities() {
             let id = e.id();
@@ -40,7 +54,11 @@ pub fn run_asset_loading_system(
             // MaterialSource var ama GPU Material yok mu?
             if let Some(src) = material_sources.get(id) {
                 if materials.get(id).is_none() {
-                    missing_materials.push((id, src.clone()));
+                    if descs.get(id).is_some() {
+                        renderer_only.push(id);
+                    } else {
+                        missing_materials.push((id, src.clone()));
+                    }
                 }
             }
         }
@@ -157,5 +175,81 @@ pub fn run_asset_loading_system(
             // Her Material'ın yanında bir MeshRenderer olmalıdır (Render Pipeline için)
             world.add_component(entity, MeshRenderer::new());
         }
+    }
+
+    // The description-owned entities: their material arrives from `material_sync`, but the
+    // `MeshRenderer` that has to sit beside it is still this system's guarantee. Added only when
+    // missing, so an entity that already carries one keeps whatever flags it was given.
+    if !renderer_only.is_empty() {
+        let needed: Vec<u32> = {
+            let renderers = world.borrow::<MeshRenderer>();
+            renderer_only
+                .into_iter()
+                .filter(|id| renderers.get(*id).is_none())
+                .collect()
+        };
+        for id in needed {
+            if let Some(e) = world.get_entity(id) {
+                world.add_component(e, MeshRenderer::new());
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// Source with its comments removed — a `contains` over raw source is satisfied by the
+    /// paragraph explaining the rule, which is exactly what this must not accept.
+    fn code_only(src: &str) -> String {
+        src.lines()
+            .map(|line| {
+                let bytes = line.as_bytes();
+                let mut end = line.len();
+                let mut i = 0;
+                while i + 1 < bytes.len() {
+                    if bytes[i] == b'/' && bytes[i + 1] == b'/' && (i == 0 || bytes[i - 1] != b':') {
+                        end = i;
+                        break;
+                    }
+                    i += 1;
+                }
+                &line[..end]
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// **This system must consult `MaterialDesc` before building a material from a source.**
+    ///
+    /// Two records can build one material and they do not carry the same thing: a `MaterialSource`
+    /// holds albedo, roughness, metallic, an unlit flag and a texture path; a `MaterialDesc` holds
+    /// every field a `Material` has. A scene row saved after descriptions existed carries both, and
+    /// this system runs *before* the draw pass that resolves descriptions — so without the check a
+    /// user's emissive, transparency, double-sidedness and the rest are rebuilt from the poorer
+    /// record and then written back over the richer one by the next save.
+    ///
+    /// A source-shape guard because the behavioural version needs a GPU: building a `Material`
+    /// means building a bind group. Comments are cut first.
+    #[test]
+    fn a_description_outranks_a_source_when_building_a_material() {
+        let code: String = code_only(include_str!("asset_loading.rs"))
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap_or("")
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
+
+        assert!(
+            code.contains("MaterialDesc"),
+            "the asset-loading scan no longer looks at `MaterialDesc` — a scene authored after \
+             2026-08-19 will have its material rebuilt from the older, poorer `MaterialSource` and \
+             then overwritten by it on the next save"
+        );
+        assert!(
+            code.contains("descs.get(id).is_some()"),
+            "the check that defers to a description is gone; a `MaterialDesc` mentioned but not \
+             consulted is the same defect with a comment on top"
+        );
     }
 }
