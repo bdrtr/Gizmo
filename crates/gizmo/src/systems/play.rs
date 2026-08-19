@@ -414,11 +414,19 @@ impl PlayLoop {
         self.accumulator
     }
 
-    /// One frame of the running game: scripts first, then fixed-step physics. Returns how many
-    /// physics steps ran, which is what a profiler wants and what a test can assert.
+    /// One frame of the running game: scripts first, then fixed-step physics, then AI. Returns
+    /// how many physics steps ran, which is what a profiler wants and what a test can assert.
     ///
     /// Scripts before physics, because a script that sets a velocity this frame expects the
     /// solver to act on it this frame — the reverse order delays every input by a frame.
+    ///
+    /// **AI once per rendered frame, after the step**, matching the editor's own order — an agent
+    /// steers toward where things ended up, and the velocity it writes is spent by the next
+    /// frame's steps. Before this it ran in the *editor only*: `gizmo-studio`'s update hook
+    /// called the two navigation systems and nothing on this path did, so a `NavAgent` in an
+    /// exported game — or in the editor the moment ▶ was pressed — stopped being steered by
+    /// anything. Same shape as the fight clock and the animation drivers: one contract, and it
+    /// had been implemented in one of the two hosts.
     pub fn step(
         &mut self,
         world: &mut World,
@@ -432,7 +440,9 @@ impl PlayLoop {
         {
             let _ = (input, report);
         }
-        self.physics_pass(world, dt)
+        let steps = self.physics_pass(world, dt);
+        crate::ai::system::ai_frame(world, dt);
+        steps
     }
 
     /// The script half: the shared pass, the queued commands, then each entity's own update.
@@ -853,4 +863,46 @@ mod tests {
         );
         assert_eq!(failed.iter().collect::<Vec<_>>(), ["b.lua"]);
     }
+
+    /// **A `NavAgent` in a running game is steered.**
+    ///
+    /// Before this, the two navigation systems were called from exactly one place in the
+    /// workspace — `gizmo-studio`'s update hook — so an agent moved while the editor sat stopped
+    /// and froze the instant ▶ was pressed, and an exported game never steered one at all. This
+    /// drives the real play frame, and the only thing the caller supplies is the agent: the grid
+    /// navigation needs is built by the frame itself, because nothing else in the engine ever
+    /// built one.
+    ///
+    /// Negative control: with the `ai_frame` call removed from `step`, the velocity below stays
+    /// exactly `(0, 0, 0)` — which is the state every agent the engine has ever had was in.
+    #[test]
+    fn the_play_frame_steers_a_nav_agent() {
+        use crate::math::Vec3;
+
+        let mut world = World::new();
+        let agent = world.spawn();
+        world.add_component(agent, gizmo_physics_core::Transform::new(Vec3::ZERO));
+        world.add_component(
+            agent,
+            gizmo_physics_rigid::components::Velocity::default(),
+        );
+        let mut nav = crate::ai::components::NavAgent::default();
+        nav.target = Some(Vec3::new(12.0, 0.0, 0.0));
+        world.add_component(agent, nav);
+        let id = agent.id();
+
+        let mut loop_ = PlayLoop::new();
+        let input = crate::core::input::Input::default();
+        for _ in 0..4 {
+            loop_.step(&mut world, FIXED_DT, &input, &mut |_| {});
+        }
+
+        let velocities = world.borrow::<gizmo_physics_rigid::components::Velocity>();
+        let v = velocities.get(id).expect("the agent is still there").linear;
+        assert!(
+            v.x > 0.0,
+            "the play frame must steer the agent toward its target, got {v:?}"
+        );
+    }
+
 }

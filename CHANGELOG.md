@@ -530,6 +530,34 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **No `NavAgent` the engine ever created moved, and the one path that could have moved them hung
+  on a ground plane.** Two gaps stacked: `PlayLoop` — the editor's ▶ and every exported game —
+  never ran the navigation systems, so agents were steered only by `gizmo-studio`'s update hook,
+  i.e. only while the editor sat *stopped*; and underneath that, **nothing in the workspace ever
+  constructed a `NavGrid`**, which `ai_navigation_system` returns on its first line without. Lua
+  could ask for navigation (`ai.add_nav_agent`, `ai.set_target`) and the grid those need had no
+  way into a world at all.
+
+  `system::ai_frame` is now the one entry point — behaviour trees, then the grid, then the
+  navmesh rebuild, then steering, in the order that works — and both hosts call it, with the
+  editor's call on the same `editor_owns_the_physics_step` gate as its physics step so ▶ does not
+  steer every agent twice.
+
+  Three supporting changes, each measured rather than guessed. **A half-space `Plane` is no longer
+  rasterised into obstacles:** its AABB is a ±10 km broadphase sentinel, so a rebuild that met a
+  ground plane did ~8·10¹² cell insertions (measured: the regression test does not fail against the
+  old code, it does not return — 90 s timeout, `EXIT=124`), and had it finished, every cell of
+  every layer would have been an obstacle. The floor is not an obstacle; a half-space used as a
+  *wall* is not one either, so model those as boxes. **Rasterisation is clipped to the grid**, which
+  bounds a rebuild by the grid's size instead of the geometry's. And **`NavGrid` gained an
+  `origin`** (`centred_on`, `fitted_to`): the grid used to start at the world origin, so the
+  navigable area was the positive quadrant only and a scene laid out around the origin — the
+  editor's default scene, every demo — had agents permanently out of bounds. `NavGrid::new` still
+  leaves it at zero, so nothing existing moves.
+
+  The studio's *Rebuild NavMesh* button used to answer "NavGrid bulunamadı! AI aktif mi?"; the
+  honest answer was "no, nowhere". It now builds one fitted to the static geometry and says so.
+
 - **The analyzer counted physics steps as frames.** `AnalysisPlugin` registered its collector on
   `AppParts::schedule` — the **fixed-timestep** schedule, which a rendered frame runs `0..N` times.
   So a frame that stepped twice produced two samples and a frame that stepped none produced zero,

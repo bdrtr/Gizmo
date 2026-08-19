@@ -1427,7 +1427,7 @@ for rather than meeting one at a time. What the sweep found:
 | **skeletal animation** | **FIXED 2026-08-14.** `animation_update_system` and `animation_state_machine_update_system` lived in `gizmo-renderer` with `current_time += dt · speed` appearing nowhere else in the workspace, and nothing in the facade, in `gizmo-app` or in any demo ever called either. `default_render_pass` now calls both, before the draw path reads `Skeleton` | the draw path *consumes* `Skeleton` (skinning matrices in `collect_draw_items`), so the engine rendered a pose it never advanced — a clock with no hands, and everything downstream of it looked wired |
 | **`ParticleEmitter`** | **FIXED 2026-08-14.** The component, the GPU pipeline and the draw call were all present — `default_render_pass` already ran `update_params` and `compute_pass`, and `passes/forward` already drew the result. Nothing ever *put anything in it*: the emitter→GPU bridge lived only in `gizmo-studio`. It is now `systems::render::spawn_from_emitters`, called from the pass | exactly `LodGroup`'s shape: the whole path present, one link missing, and the link living in studio |
 | **`Sprite`** | **DELETED 2026-08-14.** Referenced by nothing in the workspace — not studio, not the editor, not a demo, not even `gizmo-app`'s scene registry, which registers its sibling `Camera2D` | dead, and unlike the other three there was no link to restore: wiring it meant writing a 2D pipeline (billboarding, layer sort, atlas UVs, transparency), which is a feature nothing asked for. An exported component that cannot be drawn is a promise the API does not keep, and the 1.0 surface is the wrong place to keep it |
-| **`gizmo-ai`'s systems** | `behavior_tree_system`, `ai_navigation_system`, `ai_navmesh_rebuild_system` are re-exported and never scheduled | the same shape, but plausibly deliberate: when AI ticks is a game's decision, not an engine's. Left alone, and named here so the next sweep does not re-find it as news |
+| **`gizmo-ai`'s systems** | **FIXED 2026-08-19, and this row was wrong twice over.** `PlayLoop::step` now calls `system::ai_frame`. "Never scheduled" was already false when it was written — `gizmo-studio/src/main.rs` called both navigation systems from its update hook — and "plausibly deliberate" was the wrong reading of the *same* studio-only wiring the rows above it are about: AI ran in the editor while it sat stopped and stopped the moment ▶ was pressed | exactly `LodGroup`'s shape, one row later. And underneath it a second gap the caller count could not see: **nothing in the workspace ever constructed a `NavGrid`**, so `ai_navigation_system` returned on its first line in the one host that did call it. See the section below |
 
 **Why it was never wired — and the first explanation here was wrong.** This section originally said
 both systems take `(&mut World, dt, &wgpu::Queue)`, that no ordinary system has a queue, and that
@@ -1611,6 +1611,56 @@ the per-substep pipeline is 1.8×.
 post-processing cannot be batched; both per-pair SIMD attempts regressed (the scalar code is
 already auto-vectorized). DO NOT RETRY without passing the step-0 gate again. (The
 "~82% narrowphase" figure is OBSOLETE.)
+
+### Navigasyon hiçbir yerde çalışmıyordu — ve düzeltilince ilk yeniden kurulum donuyordu (2026-08-19, DÜZELTİLDİ)
+
+Yukarıdaki tablonun `gizmo-ai` satırı iki kez yanlıştı, ve ikinci yanlış birincisinin altında
+saklıydı.
+
+**Birinci: "hiç zamanlanmıyor" yanlıştı, "muhtemelen bilerek" ise satırın kendi konusunu ıskalıyordu.**
+`gizmo-studio/src/main.rs` iki navigasyon sistemini update kancasından çağırıyordu — yani AI
+editörde, **durmuş** bir sahnede koşuyordu ve ▶'ye basıldığı anda duruyordu, çünkü `PlayLoop` onları
+çağırmıyordu. Dışa aktarılmış bir oyunda ise hiç koşmuyordu. Bu, tablonun üstündeki satırların
+tamamının şekli: bir yetenek studio'ya bağlanmış, motorun kendi yoluna bağlanmamış.
+
+**İkinci: hiçbir yerde bir `NavGrid` kurulmuyordu.** Ne editör, ne `PlayLoop`, ne sahne biçimi
+(kaynak serileştirilmiyor), ne de Lua — `ai.add_nav_agent` ve `ai.set_target` var, yani bir script
+navigasyon *isteyebiliyor*, ama o ikisinin ihtiyaç duyduğu ızgaranın dünyaya girecek hiçbir yolu
+yoktu. `ai_navigation_system` ızgarasız ilk satırında dönüyor. Yani motorun ömrü boyunca **hiçbir
+`NavAgent` hiç hareket etmedi**; çağıran sayan bir tarama bunu göremez, çünkü sistemin bir çağıranı
+vardı.
+
+**Ve düzeltmenin ilk hâli daha kötüydü.** Izgarayı kurup `Rebuild NavMesh`'e basmak,
+`update_from_physics_world` yarı-uzay `Plane` çarpıştırıcısını AABB'sinden rasterize ettiği için
+donuyor: bir düzlemin AABB'si ±10 000 m'lik bir **nöbetçi değer** (geniş faz için, geometri tarifi
+değil), yani 1 m hücrede ~8·10¹² hücre ekleme. Ölçüldü: eski davranışla test 90 saniyede bitmedi
+(`EXIT=124`, koşucu "has been running for over 60 seconds" diye bastı); yeni hâlde 0.00 s. Bitirse
+bile her katmanın her hücresi engel olurdu — `find_path` bloklu başlangıçta `None` döndüğü için tek
+bir zemin düzlemi bütün sahneyi gezilemez yapardı. **Zemin bir engel değildir.** Bedeli: *duvar*
+olarak kullanılan bir yarı-uzay da engel değil — navigasyonun görmesi gereken duvarlar kutu olarak
+modellenmeli.
+
+Üç yapısal değişiklik, üçü de ölçümden çıktı:
+
+- **`NavGrid::origin`.** Izgara dünya orijininden başlıyordu, yani gezilebilir alan yalnız pozitif
+  çeyrekti; orijin etrafında yazarlanmış her sahnede (editörün varsayılan sahnesi ve her demo)
+  ajanların bir kısmı kalıcı olarak sınır dışıydı. `centred_on` ve `fitted_to` ızgarayı sahnenin
+  olduğu yere koyuyor. `new` hâlâ orijini sıfır bırakıyor — eski davranış aynen duruyor.
+- **`fitted_to`.** Sınırlar artık statik geometriden **ölçülüyor** (dinamik gövdeler ve yarı-uzaylar
+  hariç), tahmin edilmiyor; ölçülecek geometri yoksa dünya merkezli 128×128'lik yedek.
+- **`ai_frame`.** Tek giriş noktası: davranış ağaçları, ızgara garantisi, navmesh yeniden kurulumu,
+  navigasyon — bu sırayla, çünkü sıra ücretsiz değil. İki host da (studio'nun update kancası ve
+  `PlayLoop`) aynı fonksiyonu çağırıyor; "iki host, tek sözleşme" bu oturumun beş kez tekrarlanan
+  dersi.
+
+Studio'nun çağrısı fizik adımıyla **aynı kapıya** alındı (`editor_owns_the_physics_step`): `PlayLoop`
+artık AI'yı kendisi koşturduğu için, kapısız bırakmak ▶ altında her ajanı kare başına iki kez
+sürerdi — fizik adımının aylar önce düşmüş olduğu tuzağın aynısı.
+
+Kalan sınırlar, bilerek: `NavAgent` sahne kaydına girmiyor (kayıt defterinde yok), yani bir ajanı
+yalnız Lua ya da Rust ekleyebilir; ızgara dikey olarak sınırsız (`LAYER_LIMIT` yalnız rasterizasyon
+koruması, yürünebilirlik kuralı değil); ve `needs_rebuild`'i statik geometri değişince yükselten
+şey hâlâ sahnenin sahibi.
 
 ---
 

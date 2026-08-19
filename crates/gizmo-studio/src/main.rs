@@ -35,11 +35,14 @@ fn main() {
         // Not unconditional: while ▶ is down `PlayLoop` owns the frame and stepping here as well
         // ran the simulation at ~2x wall-clock (and left ⏸ painting a pause overlay over falling
         // bodies). See `systems::simulation::editor_owns_the_physics_step`.
+        //
+        // AI rides the same gate for the same reason, now that `PlayLoop::step` runs `ai_frame`
+        // itself — and that call is what gives an exported game navigation at all: until then
+        // these two lines were the ONLY place in the workspace where an agent was ever steered.
         if gizmo_studio::systems::simulation::editor_owns_the_physics_step(world) {
             gizmo::systems::physics::cpu_physics_step_system(world, dt);
+            gizmo::ai::system::ai_frame(world, dt);
         }
-        gizmo::ai::system::ai_navmesh_rebuild_system(world, dt);
-        gizmo::ai::system::ai_navigation_system(world, dt);
         update::update_studio(world, state, dt, input);
     });
 
@@ -68,8 +71,11 @@ fn main() {
     app.run().expect("uygulama çalıştırılamadı");
 }
 
+// Named for what the binary itself is: two things it decides before any of the library's code
+// runs — the window's icon, and who owns the frame while ▶ is down. (It was `icon_tests` until
+// the second one landed in it.)
 #[cfg(test)]
-mod icon_tests {
+mod main_tests {
     /// The embedded logo must be something `winit` can actually take as a window icon.
     ///
     /// The runtime path is `if let Ok(image) = image::load_from_memory(..)` inside
@@ -136,6 +142,21 @@ mod icon_tests {
             gate < call,
             "the gate must come BEFORE the step — an ungated call runs the simulation twice \
              under ▶ and keeps it running under ⏸"
+        );
+
+        // Same gate, same reason, for AI: `PlayLoop::step` runs `ai_frame` too, so an ungated
+        // call here steers every agent twice per frame while ▶ is down.
+        let ai = code
+            .find("ai_frame(")
+            .expect("the editor still runs AI in edit mode; if that changed, so must this");
+        assert!(gate < ai, "the editor's AI frame must be gated on the play session too");
+        let close = code[gate..]
+            .find("\n        }")
+            .map(|o| gate + o)
+            .expect("the gated block must still be a block");
+        assert!(
+            ai < close,
+            "the AI call drifted out of the gated block — it reads as gated and is not"
         );
     }
 }

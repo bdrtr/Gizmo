@@ -22,6 +22,75 @@ use gizmo_math::Vec3;
 use gizmo_physics_core::Transform;
 use gizmo_physics_rigid::components::Velocity;
 
+/// Everything the AI subsystem does in one frame, in the one order that works.
+///
+/// **This is the entry point a host calls**, and it exists because there is more than one host:
+/// the editor's update hook and `PlayLoop` (the ▶ button and every exported game) both need AI,
+/// and a copy of "grid, then rebuild, then steer" in each of them is a contract with two
+/// implementations — the shape that had already put the fight clock, the animation drivers and
+/// GPU physics in only one of the two paths. The order is not free: navigation reads the grid
+/// [`ai_navmesh_rebuild_system`] fills, so the reverse plans one frame of paths against a stale
+/// one, and both read agents a behaviour tree may have retargeted.
+///
+/// Takes `&mut World` because [`ensure_nav_grid`] may have to *create* the grid resource, which
+/// the two systems below — which only mutate what already exists — do not.
+///
+/// Cheap on a scene with no AI in it: three empty component borrows and a resource lookup.
+pub fn ai_frame(world: &mut World, dt: f32) {
+    crate::behavior_tree::behavior_tree_system(world, dt);
+    ensure_nav_grid(world);
+    ai_navmesh_rebuild_system(world, dt);
+    ai_navigation_system(world, dt);
+}
+
+/// Gives the world a [`NavGrid`] if it has agents that need one and nothing supplied it.
+///
+/// **Nothing in the engine ever constructed a `NavGrid`.** Not the editor, not `PlayLoop`, not a
+/// scene (the resource is not serialised), and not Lua — `ai.add_nav_agent` and `ai.set_target`
+/// exist, so a script could ask for navigation, but the grid those two need had no way into a
+/// world at all. [`ai_navigation_system`] returns on its first line without one, so every
+/// `NavAgent` ever created stood still, in the editor and in exported games alike. This is the
+/// missing constructor, and it is the same call the studio's *Rebuild NavMesh* button makes.
+///
+/// Only fires when at least one [`NavAgent`] exists: a scene with no agents pays a component
+/// count per frame and nothing else, and — more to the point — a grid fitted before the level's
+/// geometry is loaded would be fitted to nothing.
+///
+/// The bounds come from [`NavGrid::fitted_to`], i.e. from the static geometry, because a
+/// hard-coded default would have to guess both size *and* position: the pre-`origin` grid always
+/// sat in the positive quadrant, so a scene laid out around the world origin — every demo, and
+/// the editor's default scene — would have had three quarters of itself out of bounds. A world
+/// with no `PhysicsWorld` at all gets the fallback grid rather than nothing, so a test (or a game
+/// that steers without simulating) still navigates.
+///
+/// Does nothing when a grid already exists, so a game that builds its own — coarser cells, tighter
+/// bounds, hand-placed obstacles — keeps it.
+pub fn ensure_nav_grid(world: &mut World) {
+    if world.get_resource::<NavGrid>().is_some() {
+        return;
+    }
+    if world.borrow::<NavAgent>().entities().next().is_none() {
+        return;
+    }
+
+    let grid = match world.get_resource::<gizmo_physics_rigid::world::PhysicsWorld>() {
+        Some(physics) => NavGrid::fitted_to(NavGrid::DEFAULT_CELL_SIZE, &physics),
+        None => NavGrid::centred_on(
+            NavGrid::DEFAULT_CELL_SIZE,
+            NavGrid::FALLBACK_CELLS,
+            NavGrid::FALLBACK_CELLS,
+            gizmo_math::Vec3::ZERO,
+        ),
+    };
+    tracing::info!(
+        width = grid.width,
+        height = grid.height,
+        cell_size = grid.cell_size,
+        "[AI] NavGrid yoktu — ajanlar için oluşturuldu"
+    );
+    world.insert_resource(grid);
+}
+
 /// Refills the [`NavGrid`] obstacle set from the physics world's non-dynamic colliders, but
 /// only when the grid's `needs_rebuild` flag is set.
 ///
@@ -348,5 +417,93 @@ pub fn ai_navigation_system(world: &World, dt: f32) {
             agent_count,
             "[AI] Bazı ajanlar için yol hesaplanamadı bu frame'de"
         );
+    }
+}
+
+#[cfg(test)]
+mod frame_tests {
+    use super::*;
+    use crate::components::NavAgentState;
+    use gizmo_math::Vec3;
+    use gizmo_physics_rigid::components::Velocity;
+
+    /// A world with one agent standing at `pos`, wanting to be at `target`.
+    fn world_with_agent(pos: Vec3, target: Option<Vec3>) -> (World, gizmo_core::Entity) {
+        let mut world = World::new();
+        let e = world.spawn();
+        world.add_component(e, Transform::new(pos));
+        world.add_component(e, Velocity::default());
+        let mut agent = NavAgent::default();
+        agent.target = target;
+        world.add_component(e, agent);
+        (world, e)
+    }
+
+    /// **The grid nothing ever built.** `ai_navigation_system` returns on its first line without
+    /// a `NavGrid`, and no host, scene or script ever inserted one — so this is the assertion
+    /// that navigation is reachable at all, not a detail of how the grid is sized.
+    #[test]
+    fn a_world_with_agents_and_no_grid_gets_one() {
+        let (mut world, _) = world_with_agent(Vec3::ZERO, None);
+        assert!(world.get_resource::<NavGrid>().is_none());
+
+        ensure_nav_grid(&mut world);
+
+        let grid = world.get_resource::<NavGrid>().expect("agents need a grid");
+        assert!(
+            grid.is_walkable(grid.world_to_grid(Vec3::ZERO)),
+            "an agent standing at the world origin must be inside the grid it was given"
+        );
+    }
+
+    /// Two things it must NOT do: build a grid for a world with no agents in it, and replace one
+    /// a game built for itself (coarser cells, tighter bounds, hand-placed obstacles).
+    #[test]
+    fn an_existing_grid_is_kept_and_an_agentless_world_gets_none() {
+        let mut empty = World::new();
+        ensure_nav_grid(&mut empty);
+        assert!(empty.get_resource::<NavGrid>().is_none());
+
+        let (mut world, _) = world_with_agent(Vec3::ZERO, None);
+        world.insert_resource(NavGrid::new(4.0, 7, 7));
+        ensure_nav_grid(&mut world);
+        let grid = world.get_resource::<NavGrid>().unwrap();
+        assert_eq!((grid.cell_size, grid.width), (4.0, 7));
+    }
+
+    /// One call, three systems, in the order that works — and the agent moves toward its target
+    /// without the caller having built anything.
+    #[test]
+    fn one_frame_of_ai_steers_an_agent_that_has_a_target() {
+        let (mut world, e) = world_with_agent(Vec3::ZERO, Some(Vec3::new(10.0, 0.0, 0.0)));
+
+        for _ in 0..3 {
+            ai_frame(&mut world, 1.0 / 60.0);
+        }
+
+        let velocities = world.borrow::<Velocity>();
+        let v = velocities.get(e.id()).unwrap().linear;
+        assert!(v.x > 0.0, "the agent should be steered toward +X, got {v:?}");
+        assert_eq!(v.y, 0.0, "navigation never adds vertical velocity");
+
+        let agents = world.borrow::<NavAgent>();
+        assert_eq!(agents.get(e.id()).unwrap().state, NavAgentState::Moving);
+    }
+
+    /// An agent with nothing to do is damped, not steered — the same call, the other branch.
+    #[test]
+    fn an_agent_without_a_target_is_brought_to_a_stop() {
+        let (mut world, e) = world_with_agent(Vec3::ZERO, None);
+        {
+            let mut velocities = world.borrow_mut::<Velocity>();
+            velocities.get_mut(e.id()).unwrap().linear = Vec3::new(4.0, 0.0, 0.0);
+        }
+
+        for _ in 0..30 {
+            ai_frame(&mut world, 1.0 / 60.0);
+        }
+
+        let velocities = world.borrow::<Velocity>();
+        assert!(velocities.get(e.id()).unwrap().linear.length() < 0.5);
     }
 }

@@ -122,12 +122,38 @@ pub fn handle_scene_operations(
     if editor_state.scene.rebuild_navmesh_request {
         editor_state.scene.rebuild_navmesh_request = false;
 
-        // Tetiklendiğinde gizmo-ai içindeki grid'in needs_rebuild bayrağını true yaparız
-        if let Some(mut grid) = world.get_resource_mut::<gizmo::ai::pathfinding::NavGrid>() {
-            grid.needs_rebuild = true;
+        // Tetiklendiğinde gizmo-ai içindeki grid'in needs_rebuild bayrağını true yaparız.
+        //
+        // Izgara yoksa ARTIK KURULUYOR: eskiden bu dal yalnız "NavGrid bulunamadı! AI aktif mi?"
+        // diye uyarıyordu ve doğru cevap "hayır, hiçbir yerde" idi — motorda bir NavGrid'i
+        // kuran tek bir satır yoktu. Sahnede ajan olmadan da kurulur; düğmeye basmak niyetin
+        // kendisi, `ensure_nav_grid`'in ajan koşulu ise otomatik yol için.
+        let existing = world
+            .get_resource_mut::<gizmo::ai::pathfinding::NavGrid>()
+            .map(|mut grid| {
+                grid.needs_rebuild = true;
+            })
+            .is_some();
+        if existing {
             editor_state.log_info("🤖 NavMesh yeniden oluşturulması talep edildi...");
         } else {
-            editor_state.log_warning("NavGrid bulunamadı! AI aktif mi?");
+            let grid = match world.get_resource::<gizmo::physics::world::PhysicsWorld>() {
+                Some(physics) => gizmo::ai::pathfinding::NavGrid::fitted_to(
+                    gizmo::ai::pathfinding::NavGrid::DEFAULT_CELL_SIZE,
+                    &physics,
+                ),
+                None => gizmo::ai::pathfinding::NavGrid::centred_on(
+                    gizmo::ai::pathfinding::NavGrid::DEFAULT_CELL_SIZE,
+                    gizmo::ai::pathfinding::NavGrid::FALLBACK_CELLS,
+                    gizmo::ai::pathfinding::NavGrid::FALLBACK_CELLS,
+                    gizmo::math::Vec3::ZERO,
+                ),
+            };
+            editor_state.log_info(&format!(
+                "🤖 NavGrid yoktu — statik geometriye göre kuruldu ({}×{} hücre, {} m)",
+                grid.width, grid.height, grid.cell_size
+            ));
+            world.insert_resource(grid);
         }
     }
 
