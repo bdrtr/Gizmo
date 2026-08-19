@@ -1860,6 +1860,17 @@ the *slope* gate is the one that guards it.
   ceiling is a test now, and the cluster-assignment cost is a benchmark. Where it is background,
   give it a date and say which way it drifts, so a reader can tell a measurement from a constant.
   A count with neither is a claim nobody can check and everybody will quote.
+- **The `#[ignore]` set was swept and is healthy — a negative result, recorded so nobody re-does
+  it (2026-08-19).** `cargo test --workspace --no-fail-fast -- --ignored`: **65 pass, 3 fail**, and
+  all three failures are deliberate. `ccd_makes_a_bounce_a_thud` carries
+  *"documents the CCD-loses-restitution limitation; un-ignore when it is fixed"* and still
+  documents it; `q1b_warm_start_at_the_acceptance_horizon` is a measurement whose own doc explains
+  the ringing it prints; `negative_control_starved_pile_must_fail_the_gate` is marked
+  *"retired — its premise was refuted"*. Exactly one test in the tree promises to be un-ignored
+  when something is fixed, and that something is not fixed. So there is no second
+  `soak_extreme_tower_n48` sitting ignored while quietly passing — the check that found that one is
+  worth re-running after any physics work, and it costs about twenty minutes in a debug build.
+
 - **A gate that stops at a failure you have decided to ignore covers less every time you ignore
   it.** This tree has a standing red — `gizmo-studio`'s icon test, which fails while the working
   copy's `media/logo.png` is not square — and every session simply reads past it. Measured
