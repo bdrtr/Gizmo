@@ -158,10 +158,16 @@ fn a_rollback_reproduces_the_run_it_rolled_back_into() {
     manager.rollback_target_tick = Some(u64::from(ROLLBACK_AT - REWIND));
     assert!(manager.begin_frame(&mut world), "the rollback should have fired");
 
-    // `end_frame` saves tick T *after* the (T+1)-th step, so restoring tick T leaves the world
-    // T+1 steps in. Getting that wrong is its own silent divergence — one extra step looks exactly
-    // like an incomplete restore.
-    let steps_done = ROLLBACK_AT - REWIND + 1;
+    // How many steps the world has already taken — asked of the manager rather than recomputed.
+    //
+    // This line used to be `ROLLBACK_AT - REWIND + 1`, a hand-written `+1` compensating for
+    // `begin_frame` reporting a tick one behind the state it restored (`end_frame` labels a
+    // snapshot with the tick just stepped, so "tick T" is the END of T). The manager carries that
+    // now, and `gizmo-app`'s catch-up loop — which had no such compensation and therefore
+    // re-simulated one tick too many, every rollback — is right by the same change. Reading the
+    // counter is also what keeps this test from being a second implementation of the arithmetic
+    // it guards.
+    let steps_done = u32::try_from(manager.current_tick).expect("tick fits");
     for _ in steps_done..TOTAL {
         step_in_world(&mut world);
         manager.record_resimulated_tick(&world);
@@ -284,7 +290,7 @@ fn a_joint_that_broke_inside_the_window_is_whole_again_after_the_rollback() {
         "the joint is still broken after rolling back to before it broke"
     );
 
-    let steps_done = ROLLBACK_AT - REWIND + 1;
+    let steps_done = u32::try_from(manager.current_tick).expect("tick fits");
     for _ in steps_done..TOTAL {
         step_in_world(&mut world);
         manager.record_resimulated_tick(&world);

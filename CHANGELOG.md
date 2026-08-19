@@ -39,6 +39,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   it, the script takes the health off — 92, not 100 (the event arrived) and not 84 (one hit per
   move).
 
+- **Every rollback re-simulated one tick too many.** `RollbackManager::end_frame` labels a snapshot
+  with the tick *just stepped*, so the state called "tick T" is the state at the **end** of T.
+  `begin_frame` restored it and set `current_tick = T`, leaving the world one step ahead of what
+  the counter claimed — and the host loop takes `latest_tick - current_tick` catch-up steps. A
+  30-tick world rewound to tick 24 came back at 31 steps: a divergence that never reconverges, and
+  that compounds per rollback, because the snapshots written during catch-up are labelled from the
+  inflated counter.
+
+  Fixed in `begin_frame` rather than at the call site, because the same public surface was lying to
+  both callers — and the giveaway was that the crate's own integration test wrote the missing `+1`
+  by hand (`ROLLBACK_AT - REWIND + 1`, under a comment explaining exactly why) while the engine's
+  loop did not. That test now asks the manager where it is instead of recomputing it.
+
 - **Every frame-time and FPS number the engine showed was a fragment of the real frame.**
   `Schedule::run` ended with `FrameProfiler::end_frame()`, which made the profiler's "frame" a
   schedule run. A windowed frame runs the fixed schedule `0..N` times and the update schedule once,

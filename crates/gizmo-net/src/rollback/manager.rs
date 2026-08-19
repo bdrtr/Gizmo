@@ -181,9 +181,10 @@ impl RollbackManager {
     pub fn begin_frame(&mut self, world: &mut World) -> bool {
         if let Some(target_tick) = self.rollback_target_tick {
             if let Some(past_state) = self.state_buffer.get(target_tick) {
-                // Motorun bu rollback'ten sonra current_tick'e tekrar ulaşmak için
-                // kaç kareyi sessizce yeniden simüle edeceği.
-                let resim_frames = self.current_tick.saturating_sub(target_tick);
+                // Motorun bu rollback'ten sonra latest_tick'e tekrar ulaşmak için kaç kareyi
+                // sessizce yeniden simüle edeceği. `target_tick + 1`'den sayılıyor, çünkü geri
+                // yüklenen durum o tick'in SONU (aşağıya bakın).
+                let resim_frames = self.current_tick.saturating_sub(target_tick + 1);
                 // Zaman Makinesi: Evreni (World) geçmişteki haline geri yükle.
                 // Two halves: the ECS components (poses, velocities, sleep flag) and the physics
                 // world's own carried state. Without the second the resimulation runs from the
@@ -199,8 +200,22 @@ impl RollbackManager {
                     );
                 }
 
-                // Engine tick'i geçmişe çek
-                self.current_tick = target_tick;
+                // Engine tick'i geçmişe çek — **`target_tick + 1`'e**, `target_tick`'e değil.
+                //
+                // `end_frame` anlık görüntüyü adımı ATTIKTAN SONRA `current_tick` etiketiyle
+                // kaydediyor, yani "tick T" etiketli durum T'nin SONUNDAKİ durum. Onu geri
+                // yükleyip sayacı T'ye koymak, dünyayı sayacın iddia ettiğinden bir adım ileride
+                // bırakıyordu — ve host döngüsü `latest_tick - current_tick` kadar adım attığı
+                // için her rollback bir fazla tick simüle ediyordu. 30 tick simüle edilmiş bir
+                // dünyada 24'e dönmek 31 adımlık bir dünya bırakıyordu; geri dönmeyen bir
+                // ıraksama, üstelik her rollback'te birikiyor, çünkü `record_resimulated_tick`
+                // de şişmiş sayaçtan etiketliyor.
+                //
+                // Bunu burada düzeltmek çağıranı düzeltmekten doğru: aynı public yüzey iki
+                // çağırana da yanlış tick'i söylüyordu — `rollback_completeness` testi eksik +1'i
+                // çağrı yerinde elle yazıyor (`ROLLBACK_AT - REWIND + 1`), `gizmo-app`'in döngüsü
+                // yazmıyordu.
+                self.current_tick = target_tick + 1;
                 self.rollback_target_tick = None; // Hedefe ulaşıldı
                 tracing::debug!(
                     target_tick,
@@ -296,8 +311,56 @@ mod tests {
             assert_eq!(trans.position.x, 10.0);
         }
 
-        // Manager'ın saati (current_tick) de 0'a çekilmiş olmalı
-        assert_eq!(manager.current_tick, 0);
+        // Manager'ın saati SİMÜLE EDİLECEK BİR SONRAKİ tick'i gösterir, geri yüklenen tick'i
+        // değil: "tick 0" etiketli anlık görüntü 0'ın SONUNDAKİ durum, dolayısıyla sıradaki
+        // tick 1. Burada 0 beklemek eski (yanlış) sözleşmeydi ve host döngüsünün
+        // `latest_tick - current_tick` sayımını her rollback'te bir fazla yapıyordu.
+        assert_eq!(manager.current_tick, 1);
+    }
+
+    /// **The catch-up after a rollback must not out-step the straight run.**
+    ///
+    /// The host loop (`gizmo_app`'s `service_rollback`) takes `latest_tick - current_tick` steps,
+    /// and whether that count is right depends entirely on where `begin_frame` leaves the counter.
+    /// It used to leave it one behind the state it had restored, so rewinding a 30-tick world to
+    /// tick 24 produced a 31-step world — a divergence that never comes back, and that compounds
+    /// per rollback because the re-simulated snapshots are labelled from the inflated counter.
+    /// This pins the arithmetic without needing the host.
+    #[test]
+    fn the_catch_up_step_count_matches_the_straight_run() {
+        const TOTAL: u64 = 30;
+        const REWIND_TO: u64 = 24;
+
+        let mut world = World::new();
+        world.insert_resource(gizmo_physics_rigid::world::PhysicsWorld::new());
+        let mut manager = RollbackManager::new(64);
+
+        // Düz koşu: TOTAL tick.
+        for _ in 0..TOTAL {
+            manager.end_frame(&world);
+        }
+        assert_eq!(manager.latest_tick, TOTAL, "düz koşu {TOTAL} tick ilerletti");
+
+        // 24'e dön: geri yüklenen durum 24'ün SONU, yani 25 adım atılmış bir dünya.
+        manager.rollback_target_tick = Some(REWIND_TO);
+        assert!(manager.begin_frame(&mut world));
+
+        let catch_up = manager.latest_tick - manager.current_tick;
+        assert_eq!(
+            catch_up,
+            TOTAL - (REWIND_TO + 1),
+            "host {} adım atacak; düz koşuyla aynı yere varmak için gereken sayı bu",
+            TOTAL - (REWIND_TO + 1)
+        );
+
+        // Ve o adımlar atıldığında sayaç tam olarak düz koşunun bıraktığı yerde olmalı.
+        for _ in 0..catch_up {
+            manager.record_resimulated_tick(&world);
+        }
+        assert_eq!(
+            manager.current_tick, TOTAL,
+            "yakalama bitince sayaç düz koşunun bıraktığı yerde değil"
+        );
     }
 
     // Nötr (0) tahminden sapan bir girdi üretir → rollback tetikleyebilir.
