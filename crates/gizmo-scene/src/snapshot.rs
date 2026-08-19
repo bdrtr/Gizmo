@@ -329,19 +329,39 @@ impl SceneSnapshot {
             despawned_count += 1;
         }
 
-        // 2. Snapshot'taki entity'lerin bileşenlerini mevcutların üzerine yaz
+        // 2. Her satıra bir hedef entity ata — ÖNCE HEPSİNE, sonra yazmaya başla.
+        //
+        // Bu iki aşama, tek aşamanın veri kaybettiği için var. Eskiden döngü satır satır
+        // ilerliyor ve ölü bir id için `world.spawn()` çağırıyordu; allocator'ın serbest listesi
+        // FIFO olduğundan o spawn, HENÜZ İŞLENMEMİŞ başka bir satırın id'sini geri verebiliyor.
+        // Sıra o satıra geldiğinde `get_entity` onu CANLI buluyor (az önce başka bir satır için
+        // yaratılmıştı) ve üstüne yazıyordu: iki satır tek varlığa iniyor, biri sessizce yok
+        // oluyordu.
+        //
+        // Kullanıcının gördüğü: ▶ bas, oyun sahnedeki iki nesneyi silsin (bir script `despawn`'ı,
+        // bir kırılma, bir toplanabilir), ⏹ bas — biri geri gelmiyor. Play sırasında yaratılıp
+        // 1. adımda silinen varlıklar serbest listeyi büyüttüğü için, bu iki silmeyle bile
+        // tetikleniyordu.
+        //
+        // Önce canlı olanlar sahipleniliyor, sonra kalanlar için yeni varlıklar yaratılıyor —
+        // ve ikinci aşama hiçbir zaman id ile ARAMA yapmadığı için bir satır bir başkasının
+        // varlığını ele geçiremiyor. (Ölü bir slot için gelen varlığın id'si farklı olabilir;
+        // bu tipin belgesi bunu zaten söylüyor ve değişmedi.)
+        let mut targets: Vec<(&EntitySnapshot, gizmo_core::entity::Entity)> =
+            Vec::with_capacity(self.entities.len());
+        let mut needs_spawn: Vec<&EntitySnapshot> = Vec::new();
         for snap_entity in &self.entities {
-            // Eğer entity silinmişse yeni bir tane oluştur (Not: Mesh gibi GPU verileri kaybolur, ideal değil ama çökmez)
-            let ent = if let Some(e) = world.get_entity(snap_entity.entity_id) {
-                if world.is_alive(e) {
-                    e
-                } else {
-                    world.spawn()
-                }
-            } else {
-                world.spawn()
-            };
+            match world.get_entity(snap_entity.entity_id) {
+                Some(e) if world.is_alive(e) => targets.push((snap_entity, e)),
+                _ => needs_spawn.push(snap_entity),
+            }
+        }
+        for snap_entity in needs_spawn {
+            let ent = world.spawn();
+            targets.push((snap_entity, ent));
+        }
 
+        for (snap_entity, ent) in targets {
             if let Some(ref name) = snap_entity.name {
                 world.add_component(ent, gizmo_core::EntityName::new(name));
             }
@@ -729,6 +749,81 @@ mod tests {
                 .into_iter()
                 .any(|e| names.get(e.id()).map(|n| n.0.as_str()) == Some("SpawnMarker")),
             "name-only entity must be recreated on restore"
+        );
+    }
+
+    /// **Two entities deleted during Play both come back, each with its own state.**
+    ///
+    /// One of them used to vanish. Restore walked the snapshot row by row and called
+    /// `world.spawn()` for a dead id; the allocator's free list is FIFO, so that spawn could hand
+    /// back the id of a row that had not been processed yet. When its turn came, that row found
+    /// its id alive — the entity another row had just been given — and wrote over it. Two rows,
+    /// one entity, one silent loss.
+    ///
+    /// Play-time entities make it easy to hit, because step 1 despawns them first and their ids
+    /// join the free list ahead of the ones the user's objects left.
+    #[test]
+    fn every_entity_deleted_during_play_comes_back_with_its_own_state() {
+        use gizmo_math::Vec3;
+        use gizmo_physics_core::Transform;
+
+        let mut world = World::new();
+        let registry = crate::registry::default_scene_registry();
+        let protected = std::collections::HashSet::new();
+
+        // Three authored objects at distinct positions.
+        let authored: Vec<_> = [("Crate", 1.0), ("Barrel", 2.0), ("Lamp", 3.0)]
+            .into_iter()
+            .map(|(name, x)| {
+                let e = world.spawn();
+                world.add_component(e, gizmo_core::EntityName::new(name));
+                world.add_component(e, Transform::new(Vec3::new(x, 0.0, 0.0)));
+                e
+            })
+            .collect();
+
+        let snapshot = SceneSnapshot::capture(&world, &registry, &protected);
+        assert_eq!(snapshot.entity_count(), 3);
+
+        // Play: two runtime entities appear, then the game deletes two authored ones.
+        let bullet_a = world.spawn();
+        world.add_component(bullet_a, gizmo_core::EntityName::new("BulletA"));
+        let bullet_b = world.spawn();
+        world.add_component(bullet_b, gizmo_core::EntityName::new("BulletB"));
+        // **Reverse id order on purpose.** The free list is FIFO, so deleting the higher id first
+        // makes the next `spawn()` hand back an id that belongs to a row further down the
+        // snapshot — which is the collision. Deleting in ascending order happens to line the free
+        // list up with the row order and hides the defect completely; the first version of this
+        // test did exactly that and passed against the broken code.
+        world.despawn(authored[2]);
+        world.despawn(authored[0]);
+
+        // Stop.
+        let result = snapshot.restore(&mut world, &registry, &protected);
+        assert_eq!(result.restored, 3, "all three rows must be written back");
+
+        let names = world.borrow::<gizmo_core::EntityName>();
+        let transforms = world.borrow::<Transform>();
+        let mut seen: Vec<(String, f32)> = world
+            .iter_alive_entities()
+            .into_iter()
+            .filter_map(|e| {
+                let name = names.get(e.id())?.0.clone();
+                let x = transforms.get(e.id())?.position.x;
+                Some((name, x))
+            })
+            .collect();
+        seen.sort_by(|a, b| a.0.cmp(&b.0));
+
+        assert_eq!(
+            seen,
+            vec![
+                ("Barrel".to_string(), 2.0),
+                ("Crate".to_string(), 1.0),
+                ("Lamp".to_string(), 3.0),
+            ],
+            "each object must come back exactly once and with ITS OWN transform — a missing or \
+             duplicated name is the row-collision this test exists for"
         );
     }
 }

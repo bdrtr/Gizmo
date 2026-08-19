@@ -39,6 +39,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   it, the script takes the health off — 92, not 100 (the event arrived) and not 84 (one hit per
   move).
 
+- **An object deleted during Play could fail to come back on Stop.** `SceneSnapshot::restore`
+  walked the snapshot row by row and called `world.spawn()` for a dead id. The entity allocator's
+  free list is FIFO, so that spawn could hand back the id of a row not yet processed; when its turn
+  came, that row found its id alive — the entity another row had just been given — and wrote over
+  it. Two rows, one entity, one object silently gone. Play-time entities make it easy to reach,
+  since Stop despawns them first and their ids join the free list.
+
+  Restore now assigns every row a target before writing anything: live ids are claimed, the rest
+  get fresh entities, and the second pass never looks anything up by id. (A dead slot can still
+  come back under a different id — that was already documented and is unchanged.)
+
 - **Every rollback re-simulated one tick too many.** `RollbackManager::end_frame` labels a snapshot
   with the tick *just stepped*, so the state called "tick T" is the state at the **end** of T.
   `begin_frame` restored it and set `current_tick = T`, leaving the world one step ahead of what
