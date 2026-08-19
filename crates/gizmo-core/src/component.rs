@@ -230,10 +230,16 @@ pub struct IsDeleted;
 /// A request to populate this entity from a named prefab, left on the entity until something
 /// fulfils it.
 ///
-/// The string is an opaque key: gizmo-core neither resolves nor validates it. No system in this
-/// workspace consumes the component — the Lua scripting bridge is its only in-tree producer —
-/// so it does nothing unless the application runs its own resolver, which must also remove the
-/// component afterwards, since nothing clears it automatically.
+/// The string is an opaque key: gizmo-core neither resolves nor validates it, and it does nothing
+/// here unless the application runs its own resolver, which must also remove the component
+/// afterwards since nothing clears it automatically.
+///
+/// That division of labour stood unanswered for as long as the component existed, and the cost was
+/// silent: the Lua bridge was the only in-tree producer and there was no consumer at all, so
+/// `entity.spawn_prefab` produced a named, empty transform and counted as applied. The facade
+/// supplies the resolver now — `gizmo::systems::prefab::prefab_request_system`, run from
+/// `PlayLoop::step`, which reads the key as a **path** because the one loader in the workspace
+/// takes one and there is no catalogue to turn a name into anything else.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PrefabRequest(pub String);
 

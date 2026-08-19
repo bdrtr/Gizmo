@@ -24,6 +24,10 @@ pub mod physics;
 /// what makes "the export behaves like Play" a fact rather than a promise.
 #[cfg(feature = "physics")]
 pub mod play;
+#[cfg(feature = "scene")]
+/// Fulfilling a `PrefabRequest` — the resolver `gizmo-core` says the application must supply, and
+/// which Lua's `entity.spawn_prefab` had been producing requests for with nothing to answer them.
+pub mod prefab;
 /// The facade's render path: gathering the scene, batching it and recording the frame.
 #[cfg(feature = "render")]
 pub mod render;
@@ -53,6 +57,8 @@ pub use lifetime::*;
 pub use physics::*;
 #[cfg(feature = "physics")]
 pub use play::{PlayLoop, PlayReport};
+#[cfg(feature = "scene")]
+pub use prefab::*;
 #[cfg(feature = "render")]
 pub use render::*;
 pub use spin::*;

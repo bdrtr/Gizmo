@@ -458,6 +458,17 @@ impl PlayLoop {
         {
             let _ = (input, report);
         }
+        // Straight after the scripts, because a script is what asks: `entity.spawn_prefab` queues
+        // a command that `flush_commands` turns into an entity carrying a `PrefabRequest`, and
+        // until this call nothing in the workspace read that component. So the call counted as
+        // applied and produced a named, empty transform — no mesh, no collider, nothing of the
+        // prefab, and no warning, because unlike the script commands this engine drops on purpose
+        // that one is not handed back to the caller. Resolving here rather than later in the frame
+        // means the entities it spawns are physics-stepped and drawn on the same frame they were
+        // asked for.
+        #[cfg(feature = "scene")]
+        crate::systems::prefab::prefab_request_system(world);
+
         let steps = self.physics_pass(world, dt);
         crate::ai::system::ai_frame(world, dt);
         // Two calls, because the halves need different things. `gizmo_audio::host` opens the
