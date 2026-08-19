@@ -2357,8 +2357,12 @@ the *slope* gate is the one that guards it.
   worth re-running after any physics work, and it costs about twenty minutes in a debug build.
 
 - **A gate that stops at a failure you have decided to ignore covers less every time you ignore
-  it.** This tree has a standing red — `gizmo-studio`'s icon test, which fails while the working
-  copy's `media/logo.png` is not square — and every session simply reads past it. Measured
+  it.** This tree had a standing red — `gizmo-studio`'s icon test, which fails while the working
+  copy's `media/logo.png` is not square — and every session simply read past it. **It is closed
+  (2026-08-20):** the new logo was already a square emblem on a 1408×768 canvas whose margins were
+  entirely transparent, so cropping to the artwork's own alpha bounding box lost no pixel and made
+  the file an icon again. The suite is 159/159. The measurement below is what the red cost while it
+  stood, and it is the reason the rule stays. Measured
   2026-08-19: `cargo test --workspace` ran **130** test binaries; the same command with
   `--no-fail-fast` ran **159**. Cargo stops launching further binaries after the first failure, so
   the ignored red was hiding 29 of them, `gizmo-studio`'s entire integration suite among them
