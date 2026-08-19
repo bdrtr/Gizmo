@@ -1921,6 +1921,35 @@ A packager that gets any of those wrong rewrites paths and breaks exports that w
 is worse than not having one. The audit is the part whose correctness can be established now, and
 it is also exactly the walk the packager will need, so it is not throwaway.
 
+### The sweep's fourth round found nothing, and that is the entry (2026-08-20)
+
+Three surfaces, **11 claims, 11 refuted**. Written down so the next session does not sweep them
+again: the WASM/browser path, `gizmo-core`'s user-facing surfaces, and the plain text of
+`README.md` / `CHANGELOG.md` / `demo-web/README.md`.
+
+What was checked and found **owned**: every `Events<T>` queue that is produced is also rotated and
+read (no dead queue); the editor's Profiler tab reads real `FrameProfiler` data — writer, closer
+and reader on one frame; `cvar` has a real console input line (backtick) and its registry is
+inserted before setup, so a game's variables are reachable; `Pooled` has no editor or game surface
+at all and therefore promises nobody anything. On the browser side the reduced pipeline is a
+**written, signed platform decision** rather than a forgotten wire — `post_process_wasm.wgsl` says
+in its own comment "NO DoF, NO Chromatic Aberration, NO Film Grain" — and the editor is not
+compiled for wasm at all (`grep wasm32 crates/gizmo-studio/src` → nothing), so "grade in the editor,
+run in the browser" is not a path a user has.
+
+**What the round did produce was three false sentences in user-facing prose**, which is a different
+defect and was fixed rather than filed: the README badge said Rust 1.92+ against a 1.96 floor the
+same file states 100 lines later; the README said "there is no mixer, bus routing or DSP yet" while
+all three exist and run on the engine's own audio pass; and `demo-web/README` said audio was not
+enabled by that crate, ten lines under its own description of the beep that proves it is.
+
+**And one of them was mine.** The round-2 entry above recorded that `README`/`CHANGELOG` overclaim
+"deterministic rollback netcode" — a sub-agent's claim, written here without being checked, and
+false: README's sentence is an *enabling* claim about determinism. Correcting it produced the same
+mistake one more time (a "Native-only" line about audio, taken from `CLAUDE.md`, which was itself
+stale). The rule this sweep applies to code applies to the sweep: **a claim is not a measurement,
+including one made by whoever is doing the measuring.**
+
 **Small known limits (left open on purpose):**
 - Nothing raises `NavGrid::needs_rebuild` when static geometry changes; the scene's owner or the
   editor's "Rebuild NavMesh" button raises it.
