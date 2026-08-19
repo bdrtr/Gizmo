@@ -39,6 +39,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   it, the script takes the health off — 92, not 100 (the event arrived) and not 84 (one hit per
   move).
 
+- **A reliable network message was sent exactly once, ever.** renet splits the per-frame drive in
+  two — the transport advances the netcode (encryption, keepalive, timeouts) and
+  `RenetServer`/`RenetClient::update` advances each connection (reliability, RTT, the resend
+  timer) — and Gizmo's wrappers called only the transport. Every connection's clock stayed at zero,
+  so the reliable channel's resend gate never opened. Because that channel is *ordered*, the first
+  dropped datagram stopped the peer receiving any further reliable message at all, the
+  undeliverable backlog grew, and renet eventually disconnected it. Two lines, one per wrapper.
+
 - **An object deleted during Play could fail to come back on Stop.** `SceneSnapshot::restore`
   walked the snapshot row by row and called `world.spawn()` for a dead id. The entity allocator's
   free list is FIFO, so that spawn could hand back the id of a row not yet processed; when its turn

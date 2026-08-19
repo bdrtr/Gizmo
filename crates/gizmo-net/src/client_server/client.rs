@@ -43,9 +43,15 @@ impl NetworkClient {
         Ok(Self { client, transport })
     }
 
-    /// Advances the transport by `dt_secs`, processing incoming packets. Call once per frame.
+    /// Advances the client by `dt_secs`, processing incoming packets. Call once per frame.
+    ///
+    /// Both halves — see `NetworkServer::update` for what the missing one cost. `RenetClient::update`
+    /// is the connection clock (reliability, resend timers, RTT); `NetcodeClientTransport::update`
+    /// is the netcode. Only the second was being called.
     pub fn update(&mut self, dt_secs: f64) {
         let dt = Duration::from_secs_f64(dt_secs);
+        // Connection clock first, then the netcode transport — the order renet's own examples use.
+        self.client.update(dt);
         if let Err(e) = self.transport.update(dt, &mut self.client) {
             tracing::warn!(error = %e, "İstemci taşıma güncellemesi başarısız");
         }
