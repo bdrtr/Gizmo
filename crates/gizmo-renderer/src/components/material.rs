@@ -124,6 +124,19 @@ pub struct Material {
     /// Whether back faces are drawn. Needed for anything modelled as a single sheet — foliage,
     /// cloth, a flat pane.
     pub is_double_sided: bool,
+    /// Discard texels whose final alpha falls below this. **0 disables it**, which is every
+    /// material that does not ask.
+    ///
+    /// A cut-out — foliage on a quad, a chain-link fence, a pierced railing — is opaque geometry
+    /// with holes in it, not a transparent surface. Blending it works only until something
+    /// coplanar has to stay put underneath: the sorted pass cannot hold a decal against the
+    /// surface it sits on. Discarding keeps the draw in the opaque pass, where depth is written
+    /// and order does not matter, so both survive.
+    ///
+    /// The G-buffer path has had this since the glTF loader learned `AlphaMode::Mask`; this is
+    /// the same threshold, reachable from a [`Material`] and honoured by the baked-lit pipeline
+    /// as well.
+    pub alpha_cutoff: f32,
 }
 
 /// Everything a [`Material`] is, minus the one thing a file cannot hold: the bind group.
@@ -167,6 +180,8 @@ pub struct MaterialDesc {
     pub is_transparent: bool,
     /// See [`Material::is_double_sided`].
     pub is_double_sided: bool,
+    /// See [`Material::alpha_cutoff`].
+    pub alpha_cutoff: f32,
 }
 
 impl From<&Material> for MaterialDesc {
@@ -190,6 +205,7 @@ impl From<&Material> for MaterialDesc {
             material_type,
             is_transparent,
             is_double_sided,
+            alpha_cutoff,
         } = m;
         Self {
             albedo: *albedo,
@@ -204,6 +220,7 @@ impl From<&Material> for MaterialDesc {
             material_type: *material_type,
             is_transparent: *is_transparent,
             is_double_sided: *is_double_sided,
+            alpha_cutoff: *alpha_cutoff,
         }
     }
 }
@@ -226,6 +243,7 @@ impl MaterialDesc {
             material_type: self.material_type,
             is_transparent: self.is_transparent,
             is_double_sided: self.is_double_sided,
+            alpha_cutoff: self.alpha_cutoff,
         }
     }
 }
@@ -250,6 +268,7 @@ impl Material {
             material_type: MaterialType::Pbr,
             is_transparent: false,
             is_double_sided: false,
+            alpha_cutoff: 0.0,
         }
     }
 
@@ -291,6 +310,13 @@ impl Material {
     /// chain.
     pub fn with_transparent(mut self, transparent: bool) -> Self {
         self.is_transparent = transparent;
+        self
+    }
+
+    /// Set the cut-out threshold. See [`Self::alpha_cutoff`]; `0.0` turns it off.
+    #[must_use]
+    pub fn with_alpha_cutoff(mut self, cutoff: f32) -> Self {
+        self.alpha_cutoff = cutoff.clamp(0.0, 1.0);
         self
     }
 

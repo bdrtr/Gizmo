@@ -140,6 +140,7 @@ mod tests {
             material_type: MaterialType::BakedLit,
             is_transparent: true,
             is_double_sided: true,
+            alpha_cutoff: 0.0,
         };
 
         let text = ron::to_string(&desc).expect("serialize");
@@ -164,6 +165,7 @@ mod tests {
             material_type: MaterialType::Pbr,
             is_transparent: false,
             is_double_sided: false,
+            alpha_cutoff: 0.0,
         };
         let back: MaterialDesc =
             ron::from_str(&ron::to_string(&desc).expect("serialize")).expect("deserialize");

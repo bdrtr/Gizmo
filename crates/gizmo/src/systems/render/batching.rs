@@ -467,7 +467,10 @@ pub(super) fn collect_draw_items(
                     // exactly the multiply chain it was before they existed.
                     $mat.ambient.to_array(),
                     $mat.emissive.to_array(),
-                );
+                )
+                // The cut-out threshold rides in `ambient.w`, which was padding. Zero unless the
+                // material asks, and zero is what every shader already reads there.
+                .with_alpha_cutoff($mat.alpha_cutoff);
                 let skel_bg = $skeleton.map(|s: &crate::renderer::components::Skeleton| s.bind_group.clone());
 
                 // Compute the pass-routing flags up front so they can be part of the

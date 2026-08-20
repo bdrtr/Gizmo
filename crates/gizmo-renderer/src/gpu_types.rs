@@ -417,6 +417,18 @@ impl InstanceRaw {
             emissive: [emissive[0].max(0.0), emissive[1].max(0.0), emissive[2].max(0.0), 0.0],
         }
     }
+
+    /// Carry a cut-out threshold in the slot `ambient.w` has always reserved.
+    ///
+    /// A separate step rather than an eleventh constructor argument: every caller that has no
+    /// cut-outs — which is most of them — keeps the call it already had, and the field it lands
+    /// in was padding, so the stride and every shader that indexes this buffer are untouched.
+    /// See [`Material::alpha_cutoff`](crate::components::Material::alpha_cutoff).
+    #[must_use]
+    pub fn with_alpha_cutoff(mut self, cutoff: f32) -> Self {
+        self.ambient[3] = cutoff.clamp(0.0, 1.0);
+        self
+    }
 }
 
 /// Per-material scalar parameters that accompany the textured-PBR bind group
@@ -586,6 +598,40 @@ mod tests {
         // Distinct values on both sides so a swapped pair cannot pass.
         assert_eq!(i.ambient, [0.01, 0.02, 0.03, 0.0], "ambient must not pick up emissive");
         assert_eq!(i.emissive, [4.0, 5.0, 6.0, 0.0], "emissive must not pick up ambient");
+    }
+
+    /// The cut-out threshold rides in `ambient.w`, and it is a *separate* step so that a caller
+    /// with no cut-outs keeps the constructor call it already had. Two things are locked here:
+    /// that it lands in the padding slot rather than disturbing the ambient colour, and that it
+    /// is clamped — a threshold above 1.0 would discard every texel and blank the surface, which
+    /// looks exactly like the mesh not being drawn.
+    #[test]
+    fn an_alpha_cutoff_rides_in_the_ambient_padding_and_is_clamped() {
+        let base = InstanceRaw::new(
+            [[0.0; 4]; 4],
+            [1.0; 4],
+            0.5,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            [0.01, 0.02, 0.03],
+            [0.04, 0.05, 0.06],
+        );
+        assert_eq!(base.ambient[3], 0.0, "no cut-out unless asked");
+
+        let cut = base.with_alpha_cutoff(0.5);
+        assert_eq!(cut.ambient[3], 0.5);
+        assert_eq!(
+            [cut.ambient[0], cut.ambient[1], cut.ambient[2]],
+            [0.01, 0.02, 0.03],
+            "the ambient colour is not disturbed"
+        );
+        assert_eq!(cut.emissive, base.emissive, "nor is emissive");
+
+        assert_eq!(base.with_alpha_cutoff(9.0).ambient[3], 1.0, "clamped above");
+        assert_eq!(base.with_alpha_cutoff(-1.0).ambient[3], 0.0, "clamped below");
     }
 
     #[test]

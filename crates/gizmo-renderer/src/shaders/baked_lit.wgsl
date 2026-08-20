@@ -38,8 +38,9 @@ struct InstanceRaw {
     model_matrix_3: vec4<f32>,
     albedo_color: vec4<f32>,
     pbr: vec4<f32>,
-    // xyz = ambient floor, xyz = emissive. Mirrors `gpu_types::InstanceRaw`; every shader that
-    // indexes this buffer must declare all eight slots or the stride is wrong.
+    // xyz = ambient floor, **w = the cut-out threshold**; xyz = emissive. Mirrors
+    // `gpu_types::InstanceRaw`; every shader that indexes this buffer must declare all eight
+    // slots or the stride is wrong.
     ambient: vec4<f32>,
     emissive: vec4<f32>,
 };
@@ -67,6 +68,7 @@ struct VertexOutput {
     @location(4) world_normal: vec3<f32>,
     @location(5) inst_ambient: vec3<f32>,
     @location(6) inst_emissive: vec3<f32>,
+    @location(7) inst_cutoff: f32,
 };
 
 @vertex
@@ -88,6 +90,7 @@ fn vs_main(input: VertexInput, @builtin(instance_index) i: u32) -> VertexOutput 
     out.inst_albedo = inst.albedo_color;
     out.inst_ambient = inst.ambient.rgb;
     out.inst_emissive = inst.emissive.rgb;
+    out.inst_cutoff = inst.ambient.w;
     // Only for the shadow's normal offset — nothing here shades with it.
     out.world_normal = normalize((model * vec4<f32>(input.normal, 0.0)).xyz);
     return out;
@@ -178,6 +181,17 @@ fn sun_visibility(world_pos: vec3<f32>, world_normal: vec3<f32>, view_depth: f32
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let tex = textureSample(t_diffuse, s_diffuse, in.tex_coords);
+
+    // **Cut-outs.** Foliage on a quad, a chain-link fence, a pierced railing: opaque geometry
+    // with holes in it. Discarding the holes keeps the draw in the opaque pass — depth written,
+    // order irrelevant — where blending it instead would lose anything coplanar underneath it,
+    // because the sorted pass cannot hold a decal against its own surface. Same threshold and
+    // same test as `gbuffer.wgsl`; zero disables it, which is every material that does not ask.
+    let final_alpha = in.color.a * in.inst_albedo.a * tex.a;
+    if (in.inst_cutoff > 0.0 && final_alpha < in.inst_cutoff) {
+        discard;
+    }
+
     let base = in.inst_albedo.rgb * tex.rgb;
 
     // The vertex colour is taken at face value. It used to be second-guessed here — a
@@ -211,5 +225,5 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Vertex alpha multiplies through with the instance's and the texture's. It only reaches the
     // framebuffer on the blended (transparent) variant of this pipeline — the opaque variant
     // writes it to the HDR target's unread alpha channel, exactly as it did before.
-    return vec4<f32>(colour, in.color.a * in.inst_albedo.a * tex.a);
+    return vec4<f32>(colour, final_alpha);
 }
