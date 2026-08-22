@@ -152,11 +152,44 @@ impl<State: 'static> AppSceneRenderExt for gizmo_app::App<State> {
     }
 }
 
+/// Offsets a projection matrix by a sub-pixel **NDC** jitter, in the column that projection's own
+/// `w` row makes correct.
+///
+/// **Which column it is depends on the projection, and getting it wrong is invisible until it
+/// isn't.** A perspective matrix divides by `w = −vz`, so an offset written into the z column
+/// (`M[0][2]`, `M[1][2]`) survives the divide as a constant NDC shift — the standard trick, and
+/// what this code did unconditionally. An **orthographic** matrix has `w = 1`: there is no
+/// divide, so the very same edit turns a sub-pixel offset into one **proportional to view
+/// depth**. Measured 2026-08-22 on a static orthographic scene (`demo/src/bin/bevy_orthographic.rs`,
+/// camera 8.7 units out): ±0.5 px of intended jitter became ±4 px of actual shift, TAA never
+/// converged, and consecutive frames of a scene whose every transform was bit-identical differed
+/// in **2.1 %** of their pixels — a visible shimmer. With the jitter in the translation column
+/// the same two frames are **bit-identical**.
+///
+/// The discriminator is the matrix itself rather than a flag passed alongside it: `M[3][2]`
+/// (`z_axis.w`) is how much `clip.w` depends on view depth, which is exactly the question being
+/// asked, and it stays right for any projection assembled elsewhere. (Naming the camera's
+/// projection *enum* here would also be a lie to `render_parity`'s inventory, which reads this
+/// directory as "what the game path knows about" — and this function knows a matrix, not a mode.)
+fn jitter_projection(mut proj: crate::math::Mat4, jx: f32, jy: f32) -> crate::math::Mat4 {
+    if proj.z_axis.w.abs() > 1e-6 {
+        // Perspective: clip.w = −vz, so new_clip.x = clip.x − jx·vz lands as NDC.x + jx.
+        proj.z_axis.x -= jx;
+        proj.z_axis.y -= jy;
+    } else {
+        // Orthographic: clip.w = 1, so the offset goes straight into the translation column.
+        proj.w_axis.x += jx;
+        proj.w_axis.y += jy;
+    }
+    proj
+}
+
 /// An out-of-the-box Render Engine that mimics Bevy's DefaultPlugins behavior, serving only
 /// to light the models and put them on screen quickly.
 /// It is used to avoid writing hundreds of lines of code in freshly opened, empty projects
 /// like `tut`.
 #[tracing::instrument(skip_all, name = "render_system")]
+
 pub fn default_render_pass(
     world: &mut World,
     encoder: &mut wgpu::CommandEncoder,
@@ -329,20 +362,18 @@ pub fn default_render_pass(
     #[cfg(not(feature = "physics"))]
     let underwater: Option<crate::renderer::UnderwaterFog> = None;
 
+
     // Save unjittered projection before applying TAA offset (needed for reprojection next frame).
     let unjittered_proj = proj;
 
-    // ── TAA Halton jitter: subpixel offset applied via z-column of projection ──
+    // ── TAA Halton jitter: subpixel offset applied to the projection ──
     if let Some(ref taa) = renderer.taa {
         if taa.enabled {
             let jp = crate::renderer::taa::TaaState::get_jitter(taa.frame_index);
             // Convert pixel jitter [−0.5, 0.5] to NDC offset (2 / viewport_size per axis)
             let jx = jp[0] * 2.0 / renderer.size.width as f32;
             let jy = jp[1] * 2.0 / renderer.size.height as f32;
-            // Adding jitter to NDC.x requires: new_clip.x = clip.x - jx*vz
-            // ↔ subtract jx from proj.z_axis.x (the M[0][2] element, row0·col2)
-            proj.z_axis.x -= jx;
-            proj.z_axis.y -= jy;
+            proj = jitter_projection(proj, jx, jy);
         }
     }
 
@@ -697,6 +728,77 @@ pub use shared::{
     SceneSetupInputs, ShadowCaster,
 };
 
+#[cfg(test)]
+mod taa_jitter_tests {
+    //! What [`jitter_projection`] has to be true of: the sub-pixel offset must land as the SAME
+    //! NDC shift at every depth. It did not for an orthographic camera, and the symptom was a
+    //! static scene that shimmered — see the function's own header for the measurement.
+
+    use super::jitter_projection;
+    use crate::math::{Mat4, Vec3, Vec4};
+
+    /// Where a view-space point ends up in NDC, under `proj`.
+    fn ndc(proj: Mat4, view_point: Vec3) -> (f32, f32) {
+        let clip = proj * Vec4::new(view_point.x, view_point.y, view_point.z, 1.0);
+        (clip.x / clip.w, clip.y / clip.w)
+    }
+
+    /// The jitter is a *sub-pixel* offset, so it must be the same shift at 2 m and at 200 m.
+    /// Depth-dependence is precisely the defect: on an orthographic camera the offset used to
+    /// scale with view depth, which is a several-pixel wobble rather than a sub-pixel one.
+    #[test]
+    fn orthographic_jitter_is_the_same_shift_at_every_depth() {
+        let proj = Mat4::orthographic_rh(-4.0, 4.0, -3.0, 3.0, 0.1, 500.0);
+        let (jx, jy) = (0.0011, -0.0007);
+        let jittered = jitter_projection(proj, jx, jy);
+
+        for depth in [-2.0f32, -20.0, -200.0] {
+            let p = Vec3::new(1.0, -0.5, depth);
+            let (x0, y0) = ndc(proj, p);
+            let (x1, y1) = ndc(jittered, p);
+            assert!(
+                (x1 - x0 - jx).abs() < 1e-6 && (y1 - y0 - jy).abs() < 1e-6,
+                "ortografik jitter {depth} m derinlikte kaydı: Δ=({}, {}) beklenen ({jx}, {jy})",
+                x1 - x0,
+                y1 - y0
+            );
+        }
+    }
+
+    /// The perspective path is the one that already worked; it is pinned so the fix cannot
+    /// have moved it.
+    #[test]
+    fn perspective_jitter_is_the_same_shift_at_every_depth() {
+        let proj = Mat4::perspective_rh(1.0, 16.0 / 9.0, 0.1, 500.0);
+        let (jx, jy) = (0.0011, -0.0007);
+        let jittered = jitter_projection(proj, jx, jy);
+
+        for depth in [-2.0f32, -20.0, -200.0] {
+            let p = Vec3::new(1.0, -0.5, depth);
+            let (x0, y0) = ndc(proj, p);
+            let (x1, y1) = ndc(jittered, p);
+            assert!(
+                (x1 - x0 - jx).abs() < 1e-6 && (y1 - y0 - jy).abs() < 1e-6,
+                "perspektif jitter {depth} m derinlikte kaydı: Δ=({}, {})",
+                x1 - x0,
+                y1 - y0
+            );
+        }
+    }
+
+    /// Zero jitter must leave the matrix alone, whichever branch it takes — a frame with TAA
+    /// disabled and one with a zero offset have to rasterise identically.
+    #[test]
+    fn zero_jitter_changes_nothing() {
+        for proj in [
+            Mat4::orthographic_rh(-4.0, 4.0, -3.0, 3.0, 0.1, 500.0),
+            Mat4::perspective_rh(1.0, 16.0 / 9.0, 0.1, 500.0),
+        ] {
+            assert_eq!(jitter_projection(proj, 0.0, 0.0), proj);
+        }
+    }
+}
+
 /// Golden render test: drive the REAL [`default_render_pass`] over a minimal scene
 /// (one lit cube + a camera + a sun) into an offscreen target and assert that geometry
 /// actually reaches the framebuffer — a sizeable central region must differ from the
@@ -947,6 +1049,98 @@ mod golden_render_tests {
                 "nothing moved and the picture swung by {worst}/255 between frames — at this size \
                  the temporal resolve is not resolving, it is replaying its own jitter (a broken \
                  reprojection measured 33–35 here, a correct one 18, and TAA switched off 0)"
+            );
+        });
+    }
+
+    /// The same probe, with an **orthographic** camera — the projection the perspective one
+    /// cannot speak for.
+    ///
+    /// Its sibling above spawns a `CameraBundle`, which is perspective, so for as long as it has
+    /// existed the jitter path was only ever tested through a matrix that divides by `w`. It does
+    /// not, for an orthographic one, and [`jitter_projection`] is where that is now decided:
+    /// writing the sub-pixel offset into the z column makes it scale with view depth when there
+    /// is no perspective divide to undo it.
+    ///
+    /// Measured 2026-08-22 at 128×128 on this scene: **44/255** with the offset in
+    /// the z column and **33/255** with it in the translation column, against the
+    /// perspective probe's 18. In a demo-sized window it was worse still — `bevy_orthographic`
+    /// swung 115/255 and 2.1 % of its pixels moved every frame on a scene whose transforms were
+    /// bit-identical, which is what a person sees as shimmer; fixed, that window settles into a
+    /// clean eight-frame cycle (frames 8 apart come out **byte-identical**) and the residual is
+    /// the intended sub-pixel jitter.
+    ///
+    /// The bar is 38: between the two measurements, like its sibling's 24, and for the same
+    /// reason — it separates a working resolve from a broken one rather than claiming
+    /// convergence. The 33 it passes at is *not* small, and the open question the sibling
+    /// records (a min/max clamp that cycles instead of settling) is the same one here.
+    #[test]
+    fn a_still_orthographic_scene_shimmers_no_worse_than_its_own_jitter() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available()) {
+            eprintln!("skipping the orthographic shimmer probe: no GPU adapter");
+            return;
+        }
+        if pollster::block_on(Renderer::headless_adapter_is_software()) {
+            eprintln!("skipping the orthographic shimmer probe: software adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            let mut asset_manager = AssetManager::new();
+            let mut world = World::new();
+            let mesh = AssetManager::create_cube(&renderer.device);
+            let tex = asset_manager.create_white_texture(
+                &renderer.device,
+                &renderer.queue,
+                &renderer.scene.texture_bind_group_layout,
+            );
+            let mat = Material::new(tex).with_pbr(Vec4::new(0.9, 0.15, 0.15, 1.0), 0.0, 1.0);
+            let cube = world.spawn();
+            world.add_component(cube, Transform::new(Vec3::ZERO));
+            world.add_component(cube, mesh);
+            world.add_component(cube, mat);
+            world.add_component(cube, MeshRenderer::new());
+            // Six units out, matching the perspective probe exactly so the two numbers can be
+            // read against each other. Standing further back was tried and is worse, not better:
+            // at 30 units the fixed resolve reads 45 rather than 33, because the camera-relative
+            // position buffer the reprojection samples loses precision faster than the defect
+            // grows. The defect's own depth scaling is measured where it matters instead — in a
+            // demo-sized window, below.
+            let camera = world.spawn_bundle(CameraBundle {
+                position: Vec3::new(-6.0, 0.0, 0.0),
+                primary: true,
+                ..Default::default()
+            });
+            // `CameraBundle` carries no projection field, so the mode is set on the component the
+            // bundle just wrote — the same three lines every orthographic demo needs.
+            let mut cameras = world.borrow_mut::<crate::renderer::components::Camera>();
+            if let Some(mut cam) = cameras.get_mut(camera.id()) {
+                cam.projection =
+                    crate::renderer::components::ProjectionMode::Orthographic { height: 6.0 };
+            }
+            drop(cameras);
+            world.spawn_bundle(DirectionalLightBundle::default());
+
+            let mut prev = render_world(&mut renderer, &mut world).await;
+            for _ in 0..8 {
+                prev = render_world(&mut renderer, &mut world).await;
+            }
+            let mut worst = 0u8;
+            for _ in 0..6 {
+                let cur = render_world(&mut renderer, &mut world).await;
+                worst = prev
+                    .iter()
+                    .zip(cur.iter())
+                    .map(|(a, b)| a.abs_diff(*b))
+                    .max()
+                    .unwrap_or(0)
+                    .max(worst);
+                prev = cur;
+            }
+            assert!(
+                worst <= 38,
+                "an orthographic camera on a still scene swung by {worst}/255 between frames —                  the jitter is being written into a column this projection does not divide away,                  so a sub-pixel offset became a depth-scaled one (see `jitter_projection`)"
             );
         });
     }

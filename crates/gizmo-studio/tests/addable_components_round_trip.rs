@@ -198,6 +198,8 @@ fn a_material_description_survives_the_file() {
             material_type: MaterialType::Pbr,
             is_transparent: false,
             is_double_sided: true,
+            // 550a7df ile eklendi: kesme yok (opak) — testin ilgilendiği tur, alanın kendisi değil.
+            alpha_cutoff: 0.0,
         },
     );
 
