@@ -7,7 +7,7 @@ license.workspace = true
 default-run = "bevy_3d_scene"
 
 [dependencies]
-gizmo = { package = "gizmo-engine", path = "../crates/gizmo", features = ["audio", "scripting", "scene", "editor", "render", "window", "ui"] }
+gizmo = { package = "gizmo-engine", path = "../crates/gizmo", features = ["audio", "scripting", "scene", "editor", "render", "window", "ui", "analysis"] }
 mimalloc = { workspace = true }
 pollster = "0.4"
 rand = "0.10.1"
