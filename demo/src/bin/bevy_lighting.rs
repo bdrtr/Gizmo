@@ -26,6 +26,12 @@
 //! küçük parlayan işaretçiler Bevy'de olduğu gibi ışığın ÇOCUĞU (`add_child`), yani konumları
 //! hiyerarşiden geliyor.
 //!
+//!
+//! **Bir motor tuzağı, ve Bevy'den gelen biri için görünmez:** `add_system` sistemi **sabit
+//! adımlı** çizelgeye kaydeder — kare başına sıfır ya da birkaç kez koşar. Girdi kenarları
+//! (`is_key_just_pressed`) ise kare başına bir kez yakalanıp temizlenir, yani o çizelgede
+//! okunursa basışlar kaçar ya da iki kez işlenir. Girdiye bakan her sistem bu yüzden
+//! `add_update_system` ile kaydediliyor (kare başına tam bir kez, gerçek `dt` ile).
 //! ## Kontroller
 //!   * **Ok tuşları** — küpü ve küreyi hareket ettir · **Space** — ortam ışığını aç/kapat
 //!   * **Sağ-tık + fare** — bak · **WASDQE** — kamera · **Shift** — hızlı hareket
@@ -196,8 +202,8 @@ fn main() {
             scene.spawn_camera(state, Vec3::new(-2.0, 2.5, 5.0), Vec3::new(0.0, 0.5, 0.0));
         })
         .add_plugin(SpinPlugin)
-        .add_system(movement.in_phase(Phase::Update))
-        .add_system(toggle_ambient_light.in_phase(Phase::Update))
+        .add_update_system(movement.in_phase(Phase::Update))
+        .add_update_system(toggle_ambient_light.in_phase(Phase::Update))
         .run()
         .expect("uygulama çalıştırılamadı");
 }

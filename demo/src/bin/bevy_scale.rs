@@ -85,8 +85,8 @@ fn main() {
 
             scene.spawn_camera(state, Vec3::new(0.0, 10.0, 20.0), Vec3::ZERO);
         })
-        .add_system(change_scale_direction.in_phase(Phase::Update))
-        .add_system(scale_cube.in_phase(Phase::Update))
+        .add_update_system(change_scale_direction.in_phase(Phase::Update))
+        .add_update_system(scale_cube.in_phase(Phase::Update))
         .run()
         .expect("uygulama çalıştırılamadı");
 }
