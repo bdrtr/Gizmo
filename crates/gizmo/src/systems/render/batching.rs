@@ -72,43 +72,6 @@ pub(crate) enum DrawLayer {
     Transparent,
 }
 
-#[cfg(test)]
-mod cutout_routing_tests {
-    //! [`draws_blended`]'s contract, which is [`Material::alpha_cutoff`]'s contract seen from the
-    //! batch list: a cut-out stays opaque even as its alpha falls, because falling alpha is what
-    //! the cutoff is *for*.
-
-    use super::draws_blended;
-
-    /// The plain inference, unchanged: alpha under 1 means blend.
-    #[test]
-    fn a_translucent_material_without_a_cutoff_blends() {
-        assert!(draws_blended(false, 0.5, 0.0));
-        assert!(!draws_blended(false, 1.0, 0.0));
-        assert!(draws_blended(true, 1.0, 0.0), "an explicit request always wins");
-    }
-
-    /// The defect this closes: the cutoff material used to change buckets the moment its alpha
-    /// moved, so it blended instead of cutting — including *below* its own threshold, where it
-    /// should have vanished outright.
-    #[test]
-    fn a_cutout_stays_opaque_at_every_alpha() {
-        for alpha in [0.0f32, 0.25, 0.49, 0.51, 0.9, 1.0] {
-            assert!(
-                !draws_blended(false, alpha, 0.5),
-                "alfa {alpha} ile kesme malzemesi saydam kovaya kaydı"
-            );
-        }
-    }
-
-    /// A cut-out can still be asked to blend, which is the one thing the early return must not
-    /// take away: `with_transparent(true)` is an explicit statement, not an inference.
-    #[test]
-    fn an_explicit_request_still_moves_a_cutout() {
-        assert!(draws_blended(true, 1.0, 0.5));
-    }
-}
-
 /// Whether a material's draw goes into the blended bucket rather than the opaque one.
 ///
 /// Two ways in: the material says so, or its albedo alpha is under 1 — the inference that lets
@@ -1034,5 +997,42 @@ mod transparent_order_tests {
             "premise: from a camera at z=-900 the 'near' panel is the farther one ({flipped_near} \
              vs {flipped_far}) — which is why a backdrop must not be sorted from the camera"
         );
+    }
+}
+
+#[cfg(test)]
+mod cutout_routing_tests {
+    //! [`draws_blended`]'s contract, which is [`Material::alpha_cutoff`]'s contract seen from the
+    //! batch list: a cut-out stays opaque even as its alpha falls, because falling alpha is what
+    //! the cutoff is *for*.
+
+    use super::draws_blended;
+
+    /// The plain inference, unchanged: alpha under 1 means blend.
+    #[test]
+    fn a_translucent_material_without_a_cutoff_blends() {
+        assert!(draws_blended(false, 0.5, 0.0));
+        assert!(!draws_blended(false, 1.0, 0.0));
+        assert!(draws_blended(true, 1.0, 0.0), "an explicit request always wins");
+    }
+
+    /// The defect this closes: the cutoff material used to change buckets the moment its alpha
+    /// moved, so it blended instead of cutting — including *below* its own threshold, where it
+    /// should have vanished outright.
+    #[test]
+    fn a_cutout_stays_opaque_at_every_alpha() {
+        for alpha in [0.0f32, 0.25, 0.49, 0.51, 0.9, 1.0] {
+            assert!(
+                !draws_blended(false, alpha, 0.5),
+                "alfa {alpha} ile kesme malzemesi saydam kovaya kaydı"
+            );
+        }
+    }
+
+    /// A cut-out can still be asked to blend, which is the one thing the early return must not
+    /// take away: `with_transparent(true)` is an explicit statement, not an inference.
+    #[test]
+    fn an_explicit_request_still_moves_a_cutout() {
+        assert!(draws_blended(true, 1.0, 0.5));
     }
 }
