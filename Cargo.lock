@@ -1773,6 +1773,7 @@ dependencies = [
  "mimalloc",
  "pollster",
  "rand 0.10.2",
+ "serde",
  "tracing",
  "tracing-subscriber",
  "tracing-tracy",

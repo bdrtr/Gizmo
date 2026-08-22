@@ -66,6 +66,14 @@ const EXCEPTIONS: &[(&str, &str)] = &[
          from anything that reads movement.",
     ),
     (
+        "demo/src/bin/bevy_keyboard_input.rs",
+        "the key is the SUBJECT, not a direction: this port of Bevy's `input/keyboard_input` \
+         watches one key (A, as the original does) to show the three edges apart — pressed, \
+         just-pressed, just-released — and nothing in it moves. Routing it through `move_axis` \
+         would blend the very edges the demo exists to separate, and the stick has nothing to \
+         contribute to a key-state readout.",
+    ),
+    (
         "demo/src/bin/car_demo.rs",
         "a vehicle's controls are not a movement vector: W/S are throttle and brake, A/D drive a \
          steering-angle target, and the two axes are independent. Folding them into a unit disc \
