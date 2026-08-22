@@ -72,6 +72,67 @@ pub(crate) enum DrawLayer {
     Transparent,
 }
 
+#[cfg(test)]
+mod cutout_routing_tests {
+    //! [`draws_blended`]'s contract, which is [`Material::alpha_cutoff`]'s contract seen from the
+    //! batch list: a cut-out stays opaque even as its alpha falls, because falling alpha is what
+    //! the cutoff is *for*.
+
+    use super::draws_blended;
+
+    /// The plain inference, unchanged: alpha under 1 means blend.
+    #[test]
+    fn a_translucent_material_without_a_cutoff_blends() {
+        assert!(draws_blended(false, 0.5, 0.0));
+        assert!(!draws_blended(false, 1.0, 0.0));
+        assert!(draws_blended(true, 1.0, 0.0), "an explicit request always wins");
+    }
+
+    /// The defect this closes: the cutoff material used to change buckets the moment its alpha
+    /// moved, so it blended instead of cutting — including *below* its own threshold, where it
+    /// should have vanished outright.
+    #[test]
+    fn a_cutout_stays_opaque_at_every_alpha() {
+        for alpha in [0.0f32, 0.25, 0.49, 0.51, 0.9, 1.0] {
+            assert!(
+                !draws_blended(false, alpha, 0.5),
+                "alfa {alpha} ile kesme malzemesi saydam kovaya kaydı"
+            );
+        }
+    }
+
+    /// A cut-out can still be asked to blend, which is the one thing the early return must not
+    /// take away: `with_transparent(true)` is an explicit statement, not an inference.
+    #[test]
+    fn an_explicit_request_still_moves_a_cutout() {
+        assert!(draws_blended(true, 1.0, 0.5));
+    }
+}
+
+/// Whether a material's draw goes into the blended bucket rather than the opaque one.
+///
+/// Two ways in: the material says so, or its albedo alpha is under 1 — the inference that lets
+/// `Material::with_pbr(colour_with_alpha, …)` do the obvious thing without a second call.
+///
+/// **A cut-out is the exception, and it used not to be.** [`Material::alpha_cutoff`]'s own
+/// contract is that discarding *keeps the draw in the opaque pass*, "where depth is written and
+/// order does not matter" — that is the whole reason a pierced fence is a cut-out and not a
+/// transparent surface. But the inference above fired on alpha alone, so a material with a cutoff
+/// stopped being a cut-out at exactly the moment its alpha fell below the threshold it was meant
+/// to be tested against: it moved to the sorted, depth-write-free bucket and blended smoothly
+/// instead of cutting. Found 2026-08-22 by porting Bevy's `3d/transparency_3d`, whose masked
+/// spheres are supposed to blink and instead faded like everything else.
+///
+/// Materials that carry a cutoff and a full alpha — every glTF `AlphaMode::Mask` import, which is
+/// what the field was added for — are unaffected either way.
+fn draws_blended(is_transparent: bool, alpha: f32, alpha_cutoff: f32) -> bool {
+    if alpha_cutoff > 0.0 {
+        // A cut-out decides per texel, in the opaque pass. Only an explicit request moves it.
+        return is_transparent;
+    }
+    is_transparent || alpha < 0.99
+}
+
 /// Which layer a batch belongs to, from its routing flags.
 ///
 /// `Backdrop` wins over `Transparent` deliberately. A backdrop material may well carry a
@@ -490,7 +551,7 @@ pub(super) fn collect_draw_items(
                 // same flag, and that is what keeps it out of the z-prepass, the G-buffer and both
                 // shadow passes without any further edit to them.
                 let unlit = routing.skips_deferred;
-                let is_transparent = $mat.is_transparent || $mat.albedo.w < 0.99;
+                let is_transparent = draws_blended($mat.is_transparent, $mat.albedo.w, $mat.alpha_cutoff);
                 // Honoured by this path since 2026-08-15. `Material::with_double_sided` has been
                 // public all along and only the editor acted on it, so a cloth or a leaf authored
                 // double-sided showed both faces in the viewport and lost its back faces in the

@@ -83,6 +83,9 @@ struct VertexOutput {
     @location(3) world_position: vec3<f32>,
     @location(4) inst_albedo: vec4<f32>,
     @location(5) inst_pbr: vec4<f32>,
+    // The cut-out threshold, carried in the instance's `ambient.w` — the same slot
+    // `baked_lit.wgsl` reads it from. See the discard in `fs_main`.
+    @location(6) inst_cutoff: f32,
 };
 
 @vertex
@@ -133,6 +136,7 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
     
     out.inst_albedo = inst.albedo_color;
     out.inst_pbr = inst.pbr;
+    out.inst_cutoff = inst.ambient.w;
 
     // Kameraya yansıt
     out.clip_position = scene.view_proj * world_pos;
@@ -154,9 +158,17 @@ fn select_cascade(view_depth: f32) -> u32 {
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let tex_color = textureSample(t_diffuse, s_diffuse, in.tex_coords);
     
-    // Alpha Cutoff (Alpha Test) - lowered to 0.01 to allow transparent/glass meshes to render without being discarded
     let final_alpha = in.inst_albedo.a * tex_color.a;
+    // **Two thresholds, and they are different questions.** The 0.01 is a floor: a fully
+    // transparent texel has nothing to contribute and shading it is waste. The material's own
+    // `alpha_cutoff` is a cut-out — foliage on a quad, a pierced fence — and it says where the
+    // surface simply is not. The forward path read only the floor until 2026-08-22, so a cut-out
+    // material shaded here faded instead of cutting, while the same material through the G-buffer
+    // or baked-lit path cut correctly. Found by porting Bevy's `3d/transparency_3d`.
     if (final_alpha < 0.01) {
+        discard;
+    }
+    if (in.inst_cutoff > 0.0 && final_alpha < in.inst_cutoff) {
         discard;
     }
 
