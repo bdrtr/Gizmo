@@ -125,6 +125,7 @@ Small individually; together they are what makes a Bevy snippet fail to compile.
 | `or_else` for run conditions | Repeated `run_if` ANDs; OR must be written inside one closure, which also makes the system exclusive | `bevy_run_conditions` |
 | `OnEnter` / `OnExit` state schedules | `State<S>` and `in_state` exist but nothing drives transitions | `bevy_states` |
 | `EventMutator` | `EventReader`/`EventWriter` only | `bevy_events` |
+| `iter_combinations` | No pairwise iteration, and the borrow rules make a one-pass hand-rolled version impossible: a query holding `Mut<T>` cannot even be iterated read-only (`iter` wants `ReadOnlyQuery`), so "read then write" is two `iter_mut` passes plus a `Vec`. Bevy's single call becomes three passes. Correctness of the hand-rolled loop was verified by conservation: total momentum stayed under 1e-5 over 1500 frames of a 12-body sim | `bevy_iter_combinations` |
 | Entity generations in `Children` | `Children` is `Vec<u32>`; a recycled id aliases. And a plain `despawn` on a child leaves a **dangling id** in the parent (measured), which `remove_child` cannot clean up afterwards because it takes an `Entity` | `bevy_hierarchy` |
 | A clear/sky colour setting | Fog only tints geometry; the empty background stays black | `bevy_fog` |
 | `AlphaToCoverage` | No MSAA to spread alpha across | `bevy_transparency_3d` |
