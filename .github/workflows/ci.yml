@@ -30,7 +30,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev pkg-config
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev pkg-config libwayland-dev libxkbcommon-dev
       - uses: Swatinem/rust-cache@v2
       - name: Build
         run: cargo build --locked --workspace --verbose
@@ -55,7 +55,7 @@ jobs:
         with:
           components: clippy, rustfmt
       - name: Install Linux dependencies
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev pkg-config
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev pkg-config libwayland-dev libxkbcommon-dev
       - uses: Swatinem/rust-cache@v2
       # Report-only: kod tabanı henüz tam rustfmt uyumlu değil (kademeli temizlenecek).
       - name: Rustfmt check (report-only)
@@ -89,7 +89,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: Install Linux dependencies
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev pkg-config
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev pkg-config libwayland-dev libxkbcommon-dev
       - uses: Swatinem/rust-cache@v2
       - name: Test Stage A crates with `reflect`
         run: cargo test --locked -p gizmo-core -p gizmo-physics-core -p gizmo-physics-rigid -p gizmo-scene --features reflect
@@ -240,7 +240,7 @@ jobs:
         with:
           toolchain: ${{ steps.msrv.outputs.version }}
       - name: Install Linux dependencies
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev pkg-config
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev pkg-config libwayland-dev libxkbcommon-dev
       - uses: Swatinem/rust-cache@v2
       - name: Check (workspace, MSRV toolchain)
         run: cargo check --locked --workspace
@@ -254,7 +254,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: Install Linux dependencies
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev pkg-config
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev pkg-config libwayland-dev libxkbcommon-dev
       - uses: Swatinem/rust-cache@v2
       - name: Headless stress test (200-box tower, 3 runs, hash match)
         run: cargo run --locked --release -p demo --bin headless_stress_test
@@ -274,7 +274,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: Install Linux dependencies
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev pkg-config
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev pkg-config libwayland-dev libxkbcommon-dev
       - uses: Swatinem/rust-cache@v2
       - name: Run all benchmarks once (criterion --test)
         run: cargo bench --locked --workspace --benches -- --test

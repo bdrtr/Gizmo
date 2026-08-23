@@ -83,7 +83,7 @@ pub fn render_studio(
         prefab_save_req = ed.prefab_save_request.take();
         prefab_load_req = ed.prefab_load_request.take();
         gltf_req = ed.gltf_load_request.take();
-        duplicate_reqs = ed.duplicate_requests.drain(..).collect();
+        duplicate_reqs = std::mem::take(&mut ed.duplicate_requests);
 
         if ed.play_start_request {
             ed.play_start_request = false;
@@ -132,8 +132,8 @@ pub fn render_studio(
     let mut completed_gltfs = Vec::new();
     let mut completed_errors = Vec::new();
     if let Some(mut asset_server) = world.get_resource_mut::<gizmo::asset_server::AssetServer>() {
-        completed_gltfs = asset_server.completed_gltfs.drain(..).collect();
-        completed_errors = asset_server.completed_gltf_errors.drain(..).collect();
+        completed_gltfs = std::mem::take(&mut asset_server.completed_gltfs);
+        completed_errors = std::mem::take(&mut asset_server.completed_gltf_errors);
     }
 
     for err in completed_errors {

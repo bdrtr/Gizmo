@@ -333,7 +333,7 @@ impl AnimationStateMachine {
                 "[Animation] draining FSM triggers"
             );
         }
-        self.pending_triggers.drain(..).collect()
+        std::mem::take(&mut self.pending_triggers)
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────

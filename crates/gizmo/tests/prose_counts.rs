@@ -30,8 +30,7 @@ fn workspace_root() -> PathBuf {
 /// Struct-variant bodies are skipped by brace depth, so a field called `id` is never mistaken for
 /// a variant, and doc comments are skipped because a variant name has to start the line.
 fn script_command_variants(root: &Path) -> Vec<String> {
-    let src = std::fs::read_to_string(root.join("crates/gizmo-scripting/src/commands.rs"))
-        .expect("commands.rs");
+    let src = read_normalised(root.join("crates/gizmo-scripting/src/commands.rs"), "commands.rs");
     let start = src.find("pub enum ScriptCommand {").expect("the enum");
     let body_start = src[start..].find('{').expect("its body") + start;
 
@@ -95,6 +94,22 @@ fn fn_body<'a>(src: &'a str, signature: &str) -> &'a str {
     &src[open..]
 }
 
+/// Reads a file with its line endings normalised to `\n`.
+///
+/// **Why this exists.** Several needles below span a line break — `` `ScriptCommand`'ın\n** ``
+/// is one — and the repository carries no `.gitattributes`, so a Windows checkout gets `\r\n`
+/// and those needles can never match. The failure is not a wrong count but a `None` from
+/// [`number_after`], which the `.expect` then reports as "the doc must still state the count" —
+/// a message that sends the reader looking for a missing sentence that is in fact right there.
+///
+/// Found 2026-08-23: this test was red on `Test (windows-latest)` and green on Linux and macOS
+/// for exactly this reason.
+fn read_normalised(path: std::path::PathBuf, what: &str) -> String {
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("{what} ({}): {e}", path.display()))
+        .replace("\r\n", "\n")
+}
+
 /// The number that follows `needle` in `text`, as a decimal integer.
 fn number_after(text: &str, needle: &str) -> Option<usize> {
     let rest = &text[text.find(needle)? + needle.len()..];
@@ -122,7 +137,7 @@ fn the_script_command_counts_in_prose_match_the_enum() {
          which would make this test pass by seeing nothing: {variants:?}"
     );
 
-    let play = std::fs::read_to_string(root.join("crates/gizmo/src/systems/play.rs")).expect("play.rs");
+    let play = read_normalised(root.join("crates/gizmo/src/systems/play.rs"), "play.rs");
     let in_play = number_after(&play, "Of `ScriptCommand`'s")
         .expect("play.rs's `apply_host_commands` doc must still state the variant count");
     assert_eq!(
@@ -131,8 +146,7 @@ fn the_script_command_counts_in_prose_match_the_enum() {
          {measured}"
     );
 
-    let engine_md =
-        std::fs::read_to_string(root.join("docs/ENGINE.md")).expect("docs/ENGINE.md");
+    let engine_md = read_normalised(root.join("docs/ENGINE.md"), "docs/ENGINE.md");
     let in_doc = number_after(&engine_md, "`ScriptCommand`'ın\n**")
         .expect("ENGINE.md's Scripting section must still state the variant count");
     assert_eq!(
@@ -151,8 +165,7 @@ fn the_applied_and_returned_split_matches_flush_commands() {
     let root = workspace_root();
     let total = script_command_variants(&root).len();
 
-    let engine_rs = std::fs::read_to_string(root.join("crates/gizmo-scripting/src/engine.rs"))
-        .expect("engine.rs");
+    let engine_rs = read_normalised(root.join("crates/gizmo-scripting/src/engine.rs"), "engine.rs");
     let body = fn_body(&engine_rs, "pub fn flush_commands");
     let applied = script_command_variants(&root)
         .iter()
@@ -160,7 +173,7 @@ fn the_applied_and_returned_split_matches_flush_commands() {
         .count();
 
     let play =
-        std::fs::read_to_string(root.join("crates/gizmo/src/systems/play.rs")).expect("play.rs");
+        read_normalised(root.join("crates/gizmo/src/systems/play.rs"), "play.rs");
     let claimed_applied = number_after(&play, "variants, ").expect("the applied count");
     let claimed_returned = number_after(&play, "the scripting crate and ").expect("the returned count");
 

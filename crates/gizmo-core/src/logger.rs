@@ -193,7 +193,7 @@ pub fn clear_logs() {
 
 /// Takes all log records and deletes them from the queue (drain).
 pub fn drain_logs() -> Vec<LogEntry> {
-    let drained = lock_logs().drain(..).collect();
+    let drained = std::mem::take(&mut *lock_logs());
     LOG_VERSION.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     drained
 }

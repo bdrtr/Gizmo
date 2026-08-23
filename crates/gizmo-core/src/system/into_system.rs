@@ -159,7 +159,13 @@ macro_rules! impl_into_system {
                     }
                 }
 
-                Box::new(MultiParamSystem {
+                // Turbofish şart: `MultiParamSystem` bu fonksiyonun İÇİNDE tanımlı, yani tür
+                // parametreleri dıştaki `impl`inkilerle bağlı değil — çıkarımla bulunmaları
+                // gerekiyor. `F`'nin iki `FnMut` sınırı olduğu için (biri `$P::Item<'_>`, öteki
+                // `$P`) aday birden fazla ve nightly bunu belirsiz sayıyor: E0282/E0283, ve
+                // `gizmo-core` nightly'de hiç derlenmiyordu — Miri işi de bu yüzden düşüyordu.
+                // Türleri açıkça yazmak belirsizliği kaldırıyor; sınırlar değişmiyor.
+                Box::new(MultiParamSystem::<F, $($P),+> {
                     func: self,
                     _marker: std::marker::PhantomData,
                 })

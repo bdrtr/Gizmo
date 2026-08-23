@@ -12,7 +12,7 @@ pub fn handle_scene_operations(
     _state: &mut StudioState,
 ) {
     // --- REFLECTION (JSON) GÜNCELLEMELERİ ---
-    let pending_json: Vec<_> = editor_state.pending_json_updates.drain(..).collect();
+    let pending_json: Vec<_> = std::mem::take(&mut editor_state.pending_json_updates);
     for (entity, set_json, val) in pending_json {
         if let Err(e) = set_json(world, entity, val) {
             editor_state.log_error(&format!("Reflection deserialization hatası: {}", e));
@@ -202,7 +202,7 @@ pub fn handle_scene_operations(
     if !editor_state.despawn_requests.is_empty() {
         let mut soft_deleted_entities = Vec::new();
         let despawn_reqs: Vec<gizmo::prelude::Entity> =
-            editor_state.despawn_requests.drain(..).collect();
+            std::mem::take(&mut editor_state.despawn_requests);
         for ent_id in despawn_reqs {
             editor_state.selection.entities.remove(&ent_id);
 
@@ -495,7 +495,8 @@ pub fn handle_scene_operations(
             }
 
             // === Otomatik bileşen ekleme (pending_child_components) ===
-            let pending_components: Vec<String> = editor_state.pending_child_components.drain(..).collect();
+            let pending_components: Vec<String> =
+                std::mem::take(&mut editor_state.pending_child_components);
             for comp_name in &pending_components {
                 match comp_name.as_str() {
                     "Hitbox" => {
@@ -535,7 +536,7 @@ pub fn handle_scene_operations(
             // gets the same cycle refusal and the same both-sides bookkeeping. It cannot cycle
             // here anyway — the parent was spawned a few lines ago and can be nobody's ancestor —
             // but going through a second implementation is how the first cycle bug happened.
-            let members: Vec<_> = editor_state.pending_group_members.drain(..).collect();
+            let members: Vec<_> = std::mem::take(&mut editor_state.pending_group_members);
             let mut grouped = 0usize;
             for member in members {
                 if member.id() == e.id() {
@@ -557,7 +558,7 @@ pub fn handle_scene_operations(
     }
 
     // --- GÖRÜNÜRLÜK AÇMA / KAPATMA ---
-    let toggle_requests: Vec<_> = editor_state.toggle_visibility_requests.drain(..).collect();
+    let toggle_requests: Vec<_> = std::mem::take(&mut editor_state.toggle_visibility_requests);
     for ent_id in toggle_requests {
         if let Some(ent) = world.get_entity(ent_id.id()) {
             let currently_hidden = world

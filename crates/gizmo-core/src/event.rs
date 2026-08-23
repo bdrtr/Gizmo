@@ -121,7 +121,9 @@ impl<T> Events<T> {
     /// **Caution:** This method consumes all the events (the previous frame). If there is more
     /// than one reader, the other readers miss the events. Prefer `iter()` when possible.
     pub fn drain(&mut self) -> std::vec::IntoIter<T> {
-        self.previous.drain(..).collect::<Vec<_>>().into_iter()
+        // `mem::take`, not `drain(..).collect()`: same result, one fewer allocation, and
+        // clippy's `drain_collect` (1.98) rejects the latter.
+        std::mem::take(&mut self.previous).into_iter()
     }
 }
 
