@@ -7,11 +7,31 @@
 //!
 //! | yetenek | Gizmo |
 //! |---------|-------|
-//! | bir kez, her şeyden önce koşan sistem | **`Startup` fazı yok** — [`Phase`] beş varyantlı kapalı bir enum |
+//! | bir kez, her şeyden önce koşan sistem | **`Startup` fazı yok** — ama `Phase::User(500)` artık `PreUpdate`'ten öncesini adlandırabiliyor |
 //! | kapatmanın sisteme dönüşmesi | **aynen çalışıyor** — `IntoSystem` her `FnMut` için uygulanmış |
 //! | aynı sistemin tür başına çizelgeye eklenmesi | **aynen çalışıyor** — düz Rust jenerikleri |
+//! | birçok parametreyi tek yapıda toplamak | **var** (2026-08-23) — `system_param!` |
 //!
-//! Yani üçünden **ikisi tam karşılanıyor**, biri karşılanmıyor.
+//! Dördünden üçü karşılanıyor. `Startup` hâlâ yok: `Phase::User(500)` "her şeyden önce" diyebiliyor
+//! ama "yalnız bir kez" diyemiyor — o mandalın işi, ve aşağıda ölçülü.
+//!
+//! ## Kompozit parametre: mühür ve neden orada olduğu
+//!
+//! Altı kaynak isteyen bir sistem altı parametre alıyordu, ve aynı altısını isteyen her sistem
+//! onları tekrar yazıyordu. Bir yapıda toplamak mümkün değildi çünkü `SystemParam` **mühürlü**.
+//!
+//! Mührün sebebi `fetch` değil, [`get_access_info`]. Eksik bildiren bir erişim beyanı hata
+//! vermiyor — çizelge, aynı kaynağa yazan iki sistemi yan yana koşturuyor, ve bozulmanın hangisinde
+//! olacağı rayon'un o karede hangisine önce ulaştığına bağlı.
+//!
+//! `system_param!` o beyanı **alan alan iletiyor**, yani elle yazılmadığı için sapamıyor. Motorun
+//! `the_scheduler_separates_a_composite_from_a_conflicting_writer` testi bunu çizelge seviyesinde
+//! kilitliyor: kompozitten `ResMut<Score>` yazan bir sistem ile düz `ResMut<Score>` yazan bir sistem
+//! **iki ayrı yığına** düşmeli. İletim kaldırılınca test kırmızıya dönüyor — "aynı kaynağa yazan iki
+//! sistem tek yığına kondu".
+//!
+//! Mühür duruyor ve anlamı değişmedi: `Sealed`'i elle uygulamak hâlâ derleniyor, ve hâlâ
+//! `get_access_info`'yu elle yazmak demek.
 //!
 //! ## Başlangıç sistemi: iki vekil, ve ikisi aynı şey değil
 //!
@@ -36,6 +56,8 @@
 //! | kapatma-sistem, koşu sayısı | **89** | kare 90'da 89 |
 //! | kapatmanın taşıdığı değer | **96** karakter | `"merhaba"` (7) + 89 = 96 |
 //! | jenerik `report_pool::<Health>` | 3 varlık, toplam **240** | 100+80+60 |
+//! | kompozit parametre, koşu sayısı | **89** | kapatmayla aynı |
+//! | kompozitin tek imzadan okuduğu | **health 240 · mana 120** | jeneriklerin sayılarıyla birebir |
 //! | jenerik `report_pool::<Mana>` | 2 varlık, toplam **120** | 50+70 |
 //!
 //! Üç şey okunuyor:
@@ -87,6 +109,27 @@ impl Pool for Mana {
     }
 }
 
+gizmo::core::system_param! {
+    /// Dört parametre yerine bir tane.
+    ///
+    /// `SystemParam` mühürlü, ve mührün sebebi `get_access_info`: eksik bildiren bir erişim
+    /// beyanı hata vermiyor, yalnız çizelgenin çakışan iki sistemi yan yana koşturmasına izin
+    /// veriyor. Makro o beyanı alan alan iletiyor, yani elle yazılmadığı için sapamıyor.
+    struct Bundle<'w> {
+        report: ResMut<FormReport>,
+        health: Query<&'static Health>,
+        mana: Query<&'static Mana>,
+    }
+}
+
+/// Kompozit parametreyi tek başına alan sistem. Üç şeyi tek imzadan okuyor.
+fn composite_reader(mut b: Bundle) {
+    let h: f32 = b.health.iter().map(|(_, x)| x.0).sum();
+    let m: f32 = b.mana.iter().map(|(_, x)| x.0).sum();
+    b.report.composite_runs += 1;
+    b.report.composite_seen = format!("health {h:.0} · mana {m:.0}");
+}
+
 /// Ölçüm defteri.
 #[derive(Default, Clone)]
 struct FormReport {
@@ -104,6 +147,10 @@ struct FormReport {
     closure_state: String,
     /// Jenerik sistemin tür başına raporu.
     generic: Vec<String>,
+    /// Kompozit parametreli sistemin koşu sayısı.
+    composite_runs: u32,
+    /// O sistemin kompozit üzerinden okuduğu üç değer — dördü de tek parametreden.
+    composite_seen: String,
 }
 gizmo::core::impl_component!(FormReport);
 
@@ -184,6 +231,9 @@ fn main() {
         // Aynı jenerik fonksiyon, iki farklı tür için iki ayrı sistem.
         .add_update_system(report_pool::<Health>.in_phase(Phase::PostUpdate))
         .add_update_system(report_pool::<Mana>.in_phase(Phase::PostUpdate))
+        // Kompozit parametre: üç şeyi tek imzadan alıyor, ve `ResMut<FormReport>` yazdığı için
+        // çizelge onu öteki yazıcılardan ayırıyor — beyan iletildiği için.
+        .add_update_system(composite_reader.in_phase(Phase::Render))
         .set_ui(|world, _state, ctx| {
             let Some(r) = world.get_resource::<FormReport>().map(|r| r.clone()) else {
                 return;
@@ -227,6 +277,12 @@ fn count_frames(mut report: ResMut<FormReport>) {
             report.closure_runs,
             report.closure_state.len(),
             report.generic
+        );
+        gizmo::gizmo_log!(
+            Info,
+            "kare 90 · kompozit parametre {} kez koştu · okuduğu: {}",
+            report.composite_runs,
+            report.composite_seen
         );
     }
 }

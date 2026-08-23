@@ -91,7 +91,17 @@ impl std::error::Error for SystemParamFetchError {
 // modüllerinde de var (EventReader/EventWriter @ event.rs, Commands @ commands.rs);
 // Sealed'a yalnızca crate içinden erişilebilir, dolayısıyla dış crate'ler hâlâ
 // SystemParam impl edemez.
-pub(crate) mod sealed {
+/// The seal on [`SystemParam`], and the one documented way through it.
+///
+/// `pub` and `#[doc(hidden)]` rather than `pub(crate)`, because
+/// [`system_param!`](crate::system_param) has to name it from the calling crate. That is the
+/// *only* intended use: implementing `Sealed` by hand still compiles, and still means writing
+/// `get_access_info` by hand, which is the thing the seal exists to prevent — an access
+/// declaration that under-reports is a data race the scheduler cannot see.
+#[doc(hidden)]
+pub mod sealed {
+    /// See the module docs. Implement it through [`system_param!`](crate::system_param), not
+    /// directly.
     pub trait Sealed {}
 }
 
@@ -306,6 +316,146 @@ impl<Q: crate::query::WorldQuery + 'static> SystemParam for crate::query::Query<
 
 
 #[cfg(test)]
+mod system_param_macro_tests {
+    use super::*;
+    use crate::world::World;
+
+    #[derive(Clone, Default, Debug, PartialEq)]
+    struct Clock(f32);
+    crate::impl_component!(Clock);
+    #[derive(Clone, Default, Debug, PartialEq)]
+    struct Score(u32);
+    crate::impl_component!(Score);
+    #[derive(Clone, Default, Debug, PartialEq)]
+    struct Level(u8);
+    crate::impl_component!(Level);
+
+    crate::system_param! {
+        /// Two reads and a write, grouped.
+        struct Ctx<'w> {
+            clock: Res<Clock>,
+            level: Res<Level>,
+            score: ResMut<Score>,
+        }
+    }
+
+    fn world() -> World {
+        let mut w = World::new();
+        w.insert_resource(Clock(1.5));
+        w.insert_resource(Level(3));
+        w.insert_resource(Score(10));
+        w
+    }
+
+    #[test]
+    fn a_composite_param_fetches_every_field() {
+        let w = world();
+        let ctx = Ctx::fetch(&w, 0.016).expect("all three resources are present");
+        assert_eq!(ctx.clock.0, 1.5);
+        assert_eq!(ctx.level.0, 3);
+        assert_eq!(ctx.score.0, 10);
+    }
+
+    #[test]
+    fn writing_through_a_composite_param_reaches_the_world() {
+        let w = world();
+        {
+            let mut ctx = Ctx::fetch(&w, 0.016).expect("present");
+            ctx.score.0 = 99;
+        }
+        assert_eq!(w.get_resource::<Score>().map(|s| s.0), Some(99));
+    }
+
+    /// **The reason the macro exists.** A hand-written `SystemParam` can under-report its access
+    /// and nothing fails — the scheduler simply co-runs it with a conflicting writer. So the
+    /// declaration is compared against the sum of the fields' own declarations, which is what the
+    /// macro forwards to.
+    #[test]
+    fn the_access_declaration_is_exactly_the_sum_of_the_fields() {
+        let mut composite = AccessInfo::new();
+        Ctx::get_access_info(&mut composite);
+
+        let mut separate = AccessInfo::new();
+        <Res<'static, Clock> as SystemParam>::get_access_info(&mut separate);
+        <Res<'static, Level> as SystemParam>::get_access_info(&mut separate);
+        <ResMut<'static, Score> as SystemParam>::get_access_info(&mut separate);
+
+        let mut a = composite.resource_reads.clone();
+        let mut b = separate.resource_reads.clone();
+        a.sort();
+        b.sort();
+        assert_eq!(a, b, "the composite under- or over-reports its reads");
+
+        let mut a = composite.resource_writes.clone();
+        let mut b = separate.resource_writes.clone();
+        a.sort();
+        b.sort();
+        assert_eq!(a, b, "the composite under- or over-reports its writes");
+
+        // And it is not empty, which an all-forwarding macro that forwarded nothing would also
+        // satisfy above.
+        assert_eq!(composite.resource_reads.len(), 2);
+        assert_eq!(composite.resource_writes.len(), 1);
+    }
+
+    /// The declaration has to reach the **scheduler**, not just be correct in isolation.
+    ///
+    /// Two systems that both write `Score` must not share a batch. One takes it as a plain
+    /// `ResMut`, the other through the composite — so this fails if the macro's forwarding stops
+    /// somewhere between `get_access_info` and the batch builder.
+    #[test]
+    fn the_scheduler_separates_a_composite_from_a_conflicting_writer() {
+        use crate::system::{IntoSystemConfig, Schedule};
+
+        fn through_composite(mut ctx: Ctx) {
+            ctx.score.0 += 1;
+        }
+        fn plain_writer(mut score: ResMut<Score>) {
+            score.0 += 1;
+        }
+
+        let mut schedule = Schedule::new();
+        schedule.add_di_system(through_composite.into_config());
+        schedule.add_di_system(plain_writer.into_config());
+        schedule.build();
+
+        assert_eq!(
+            schedule.legacy_batches.len(),
+            2,
+            "two writers of the same resource were put in one batch — the composite's write was \
+             not seen"
+        );
+
+        // And they really do both run: a separation that dropped one would also give 2 above if
+        // some third batch existed.
+        let mut world = World::new();
+        world.insert_resource(Clock(0.0));
+        world.insert_resource(Level(0));
+        world.insert_resource(Score(0));
+        schedule.run(&mut world, 0.016);
+        assert_eq!(
+            world.get_resource::<Score>().map(|s| s.0),
+            Some(2),
+            "both writers should have run exactly once"
+        );
+    }
+
+    #[test]
+    fn a_missing_resource_fails_the_whole_fetch() {
+        // Not `None` — that is `Option<P>`'s job, and a composite silently missing a field would
+        // be worse than a panic, because the system would run against a half-built context.
+        let mut w = World::new();
+        w.insert_resource(Clock(1.0));
+        w.insert_resource(Score(0));
+        // `Level` absent.
+        let Err(e) = Ctx::fetch(&w, 0.016) else {
+            panic!("Level is missing, so the fetch must fail")
+        };
+        assert!(e.is_absence(), "a missing resource should read as absence");
+    }
+}
+
+#[cfg(test)]
 mod optional_param_tests {
     use super::*;
     use crate::system::IntoSystem;
@@ -404,4 +554,104 @@ mod optional_param_tests {
             "a query that could not be built is not an absence"
         );
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// system_param! — a composite parameter, without opening the seal by hand
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Declares a struct that a system can take as a single parameter.
+///
+/// # What this is for
+///
+/// A system that needs six resources takes six parameters, and every system needing the same six
+/// repeats them. Grouping them in a struct is the obvious move, and it was not possible:
+/// [`SystemParam`] is sealed, so a game could not implement it, and implementing it is not the
+/// hard part — [`get_access_info`](SystemParam::get_access_info) is. An access declaration that
+/// under-reports does not fail; it lets the scheduler co-run two systems that write the same
+/// resource, and the corruption depends on which one rayon reached first.
+///
+/// So the macro writes it. Each field's declaration is forwarded to that field's own type, which
+/// is mechanical and cannot drift from what the struct actually fetches — which is exactly the
+/// information the seal exists to protect, produced by construction rather than by care.
+///
+/// # Use
+///
+/// Field types are written **without** their lifetime: `Res<Time>`, not `Res<'w, Time>`. The macro
+/// puts `'w` in the struct and `'static` in the impl, which is the same shape every built-in
+/// parameter already has (`impl SystemParam for Res<'static, T>`).
+///
+/// ```
+/// # use gizmo_core::prelude::*;
+/// # use gizmo_core::system::{Res, ResMut};
+/// # #[derive(Clone, Default)] struct Clock(f32);
+/// # gizmo_core::impl_component!(Clock);
+/// # #[derive(Clone, Default)] struct Score(u32);
+/// # gizmo_core::impl_component!(Score);
+/// gizmo_core::system_param! {
+///     /// Everything the scoring systems read together.
+///     pub struct Scoring<'w> {
+///         pub clock: Res<Clock>,
+///         pub score: ResMut<Score>,
+///     }
+/// }
+///
+/// fn award(mut s: Scoring) {
+///     s.score.0 += 1;
+///     let _ = s.clock.0;
+/// }
+/// ```
+///
+/// # What it does not do
+///
+/// It does not make [`SystemParam`] safe to implement by hand — the seal is still there and still
+/// means what it meant. It also does not check that two fields do not conflict with *each other*:
+/// a struct holding `ResMut<T>` twice declares two writes of `T` and panics on fetch, exactly as
+/// two `ResMut<T>` parameters would.
+#[macro_export]
+macro_rules! system_param {
+    (
+        $(#[$meta:meta])*
+        $vis:vis struct $name:ident<'w> {
+            $(
+                $(#[$fmeta:meta])*
+                $fvis:vis $field:ident : $outer:ident<$($arg:ty),+ $(,)?>
+            ),+ $(,)?
+        }
+    ) => {
+        $(#[$meta])*
+        $vis struct $name<'w> {
+            $(
+                $(#[$fmeta])*
+                $fvis $field: $outer<'w, $($arg),+>,
+            )+
+        }
+
+        impl<'w> $crate::system::params::sealed::Sealed for $name<'w> {}
+
+        impl<'a> $crate::system::SystemParam for $name<'a> {
+            type Item<'w> = $name<'w>;
+
+            fn fetch<'w>(
+                world: &'w $crate::world::World,
+                dt: f32,
+            ) -> ::std::result::Result<Self::Item<'w>, $crate::system::SystemParamFetchError> {
+                ::std::result::Result::Ok($name {
+                    $(
+                        $field: <$outer<'static, $($arg),+> as $crate::system::SystemParam>
+                            ::fetch(world, dt)?,
+                    )+
+                })
+            }
+
+            fn get_access_info(info: &mut $crate::system::AccessInfo) {
+                // Forwarded field by field. This is the line that makes the macro the honest way
+                // through the seal: it cannot report less than the struct fetches.
+                $(
+                    <$outer<'static, $($arg),+> as $crate::system::SystemParam>
+                        ::get_access_info(info);
+                )+
+            }
+        }
+    };
 }

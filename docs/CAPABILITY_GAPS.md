@@ -271,7 +271,7 @@ Measured in `ecs_extension_points`. Four traits are sealed and cannot be impleme
 
 | Trait | Consequence |
 |---|---|
-| `SystemParam` | A custom system parameter cannot be written. **Only four impls exist: `Res<T>`, `ResMut<T>`, `f32` (dt), `Query<Q>`** |
+| `SystemParam` | A *primitive* parameter still cannot be written. Six impls now: `Res<T>`, `ResMut<T>`, `f32` (dt), `Query<Q>`, `Option<P>`, and anything `system_param!` declares — the last being a **composite**, so grouping existing parameters no longer needs the seal opened |
 | `WorldQuery` | No derived query operand |
 | `ReadOnlyQuery` | — |
 | `FetchComponent` | No custom fetch |
@@ -279,7 +279,17 @@ Measured in `ecs_extension_points`. Four traits are sealed and cannot be impleme
 And two APIs are simply absent: **`pipe`** and **`run_system`** (one-shot systems). The seal is a
 deliberate design choice — the scheduler has to know statically what a parameter touches or
 parallel execution is unsound — but the consequence is real: several common patterns cannot be
-expressed, only approximated. Measured substitutes all work (filtered query 3/3, plain function
+expressed, only approximated.
+
+**Composite parameters no longer among them (2026-08-23).** `system_param!` declares a struct that
+is a single parameter, forwarding `get_access_info` field by field — which is precisely the
+information the seal protects, produced mechanically rather than by hand. `sealed::Sealed` became
+`#[doc(hidden)] pub` so the macro can name it from the calling crate; implementing it by hand still
+compiles and still means writing the access declaration by hand, so the seal means what it meant.
+Guarded at the scheduler, not only at the declaration: a composite writing `ResMut<T>` and a plain
+`ResMut<T>` writer must land in two batches, and that test goes red — "two writers of the same
+resource were put in one batch" — the moment the forwarding is removed. Measured in `system_forms`:
+one parameter carrying three, 89 runs, `health 240 · mana 120`. Measured substitutes all work (filtered query 3/3, plain function
 `−0.800`, latched system ran exactly 1 time in 120 frames); what is lost is *structure*, not
 behaviour.
 

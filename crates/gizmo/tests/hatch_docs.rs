@@ -44,6 +44,7 @@ const HATCHES: &[(&str, &str)] = &[
     ("VolumetricParams", "shader"),
     ("Phase::User", "position"),
     ("MaterialType::Custom", "MaterialRegistry"),
+    ("system_param", "get_access_info"),
     // `Option<P>`'s hatch is the other direction: the parameter is the hatch, and what it replaces
     // is the guard that skips the whole system.
     ("impl<P: SystemParam> SystemParam for Option<P>", "run_if"),
@@ -63,6 +64,7 @@ const HATCH_DECLS: &[(&str, &str)] = &[
     ("VolumetricParams", "pub struct VolumetricParams"),
     ("Phase::User", "User(u16)"),
     ("MaterialType::Custom", "Custom(crate::custom_material::MaterialId)"),
+    ("system_param", "macro_rules! system_param"),
     (
         "impl<P: SystemParam> SystemParam for Option<P>",
         "impl<P: SystemParam> SystemParam for Option<P>",
@@ -84,6 +86,7 @@ const HATCH_FILES: &[(&str, &str)] = &[
         "MaterialType::Custom",
         "crates/gizmo-renderer/src/components/material.rs",
     ),
+    ("system_param", "crates/gizmo-core/src/system/params.rs"),
     (
         "impl<P: SystemParam> SystemParam for Option<P>",
         "crates/gizmo-core/src/system/params.rs",

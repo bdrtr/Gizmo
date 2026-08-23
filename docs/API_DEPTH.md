@@ -110,8 +110,19 @@ What people actually reach for, and can be given without opening it:
   inside `gizmo-core` rather than by opening the seal. Measured in `error_handling`: `Res<T>`
   panics, the `run_if` guard runs 0 times, `Option<Res<T>>` runs 90 times seeing `None` in all 90.
   Only absence becomes `None` — a borrow conflict still panics, because it is a bug, not a state.
-- **a derive for composite params** — `#[derive(SystemParam)] struct Ctx<'w> { a: Res<'w, A>, b: Query<'w, &B> }`. The derive can emit the access declaration mechanically, which is exactly the
-  information the seal exists to protect. This is the honest way to open `SystemParam` (below).
+- ~~**a derive for composite params**~~ — **done 2026-08-23**, as `system_param!` rather than a
+  derive. A `macro_rules!` macro needs no proc-macro crate and no new workspace member, and it does
+  the one thing that mattered: forwards `get_access_info` field by field, so the declaration cannot
+  drift from what the struct fetches. That is exactly the information the seal exists to protect,
+  produced by construction rather than by care. `sealed::Sealed` is now `#[doc(hidden)] pub` so the
+  macro can name it — the seal still means what it meant, since implementing it by hand still means
+  writing the access declaration by hand.
+
+  Guarded at two levels: the declaration must equal the sum of the fields' own, and the
+  **scheduler** must separate a composite writer from a plain `ResMut` writer of the same resource.
+  Both go red when the forwarding is removed, the second with "two writers of the same resource
+  were put in one batch". Measured in `system_forms`: one parameter carrying three, 89 runs,
+  reading `health 240 · mana 120` — the same numbers the generic systems report separately.
 - **`iter_combinations`** — currently impossible to hand-roll in one pass, because a query holding
   `Mut<T>` cannot be iterated read-only at all. Measured in `iter_combinations`: one call becomes
   three passes plus a `Vec`.
@@ -348,8 +359,8 @@ Ordered by unlocked-capability per unit of work, not by size.
 1. **The hatch rule and its test.** ✅ **Done, 2026-08-23** — deliberately *after* the hatches,
    so it points at real doors rather than intentions. Six pairs registered; three defects found on
    the first run.
-2. **`Option<Res<T>>` — done — and the `SystemParam` derive.** The most-missed thing, and the
-   derive is what makes opening the trait honest later.
+2. **`Option<Res<T>>` and the composite-parameter macro.** ✅ **Both done, 2026-08-23** —
+   `Option<P>` and `system_param!`. `iter_combinations` is the one thing left on this list.
 3. **`Phase::User`, the `enabled` flags, `add_update_hook`, `VolumetricParams`.** A batch of
    incidental opens. Each is small; together they close `schedule_internals`, the SSR/volumetric
    on-off destruction, the `set_update` trap and a whole row of section B.
