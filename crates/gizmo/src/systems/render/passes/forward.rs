@@ -127,9 +127,16 @@ pub fn record_forward_and_fluid(
                 } else if item.unlit {
                     &renderer.scene.unlit_pipeline
                 } else if item.is_transparent {
-                    // No two-sided variant of the blended pipeline exists, and the editor does not
-                    // have one either — a transparent double-sided surface is single-sided in both
-                    // paths. Recorded rather than invented here.
+                    // There is no two-sided *variant* of the blended pipeline because the blended
+                    // pipeline already is one: `transparent` is built with `cull_mode: None`
+                    // (`pipelines.rs`, and `baked_lit_state(true)` says the same for the baked-lit
+                    // half). So transparent geometry is never back-face culled, and
+                    // `Material::double_sided` is a no-op here — redundant rather than ignored.
+                    //
+                    // This comment previously claimed the opposite ("single-sided in both paths").
+                    // Corrected 2026-08-23 against a measurement in `demo/src/bin/blend_modes.rs`:
+                    // a back-facing transparent plane renders, and toggling `with_double_sided`
+                    // produces a bit-identical frame.
                     &renderer.scene.transparent_pipeline
                 } else if item.is_double_sided {
                     &renderer.scene.render_double_sided_pipeline
