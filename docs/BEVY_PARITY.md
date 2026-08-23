@@ -71,6 +71,17 @@ is a workaround, not a feature.
 Measured in `bevy_pbr`: a metallic surface has no environment to reflect. SSR covers what is on
 screen (`bevy_ssr` measures it working well) and nothing else.
 
+### A5b. No split screen / multi-viewport
+
+`Camera` has no viewport rectangle, and the render path picks exactly one camera:
+`cameras.iter().find(|(_, c)| c.primary).or_else(|| cameras.iter().next())` is the whole of
+`active_camera`. `default_render_pass` takes no camera or region argument and writes the whole
+target, so calling it twice just overwrites. Measured in `bevy_split_screen`.
+
+What does work is *switching* cameras — enough for a replay or security-camera view, not for two
+views at once. But see the note in section D7: under `with_simple_scene` a second camera is
+overwritten every frame.
+
 ### A6. No MSAA
 
 Measured in `bevy_anti_aliasing`: every render target in the tree is `sample_count: 1`, and the
@@ -168,6 +179,14 @@ whole set, because they are one family:
    corners and a white material, `BakedLit` shows a channel separation of **60.6** and `Pbr` shows
    **0.9**. This also closes the loop left open in `bevy_deferred_rendering`, where `BakedLit` and
    `Unlit` rendered identically for want of vertex colours.
+
+7. **`with_simple_scene` overwrites every camera in the world.** Its `set_update` closure writes
+   the fly camera's position, rotation, yaw and pitch to every entity matching `(Transform, Camera)`
+   — there is no `primary` filter. A second camera is therefore silently stomped each frame.
+   Measured in `bevy_split_screen`: with `primary` correctly moved to the second camera, the two
+   frames were **bit-identical** (mean 0.00, max 0) until the demo re-applied the pose in
+   `set_render`; after that they differed on **41.3 %** of pixels. Not documented on
+   `with_simple_scene`.
 
 A full audit of this family was run (2026-08-23): of `Material`'s shading fields, the deferred
 G-buffer honours 6 (albedo, roughness, metallic, anisotropy, clear-coat, subsurface) and ignores
