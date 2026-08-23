@@ -586,7 +586,10 @@ mod tests {
             "SceneUniforms size shifted from 560 + 64*MAX_LIGHTS bytes!"
         );
         assert_eq!(std::mem::size_of::<crate::gpu_types::LightData>(), 64, "LightData size shifted from target 64 bytes!");
-        assert_eq!(std::mem::size_of::<crate::gpu_types::PostProcessUniforms>(), 64, "PostProcessUniforms size shifted from target 64 bytes (underwater+fog eklendi)!");
+        // 80 since 2026-08-24: the tone-mapping pair (curve + white point) is a fifth vec4. It was
+        // 64 when `underwater` + `fog` were added, and the number is asserted rather than derived
+        // so that the *next* field also has to be a deliberate change to this line.
+        assert_eq!(std::mem::size_of::<crate::gpu_types::PostProcessUniforms>(), 80, "PostProcessUniforms size shifted from target 80 bytes (tonemap vec4 eklendi)!");
         assert_eq!(std::mem::size_of::<crate::gpu_types::InstanceRaw>(), 128, "InstanceRaw size shifted from target 128 bytes!");
         // Textured-PBR per-material params: three std140 vec4 slots.
         assert_eq!(std::mem::size_of::<crate::gpu_types::MaterialParams>(), 48, "MaterialParams size shifted from target 48 bytes!");
