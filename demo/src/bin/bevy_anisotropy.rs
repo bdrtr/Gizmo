@@ -24,6 +24,11 @@ pub struct DemoState {
     pub ssgi_enabled: bool,
     pub volumetric_enabled: bool,
     pub light_mode: LightMode,
+    /// Pozlama. **`Camera`'nın alanı, `Renderer`'ınki değil** — bu kaydırak eskiden
+    /// `renderer.exposure`'a bağlıydı ve hiçbir şey yapmıyordu: oyun çizim yolu pozlamayı
+    /// `cam.exposure`'dan okuyor, `Renderer::exposure` alanını hiç okumuyor. Değer artık burada
+    /// duruyor ve `camera_orbit` her kare kameraya yazıyor.
+    pub exposure: f32,
 }
 
 fn main() {
@@ -185,6 +190,7 @@ fn main() {
                 ssr_enabled: false,
                 ssgi_enabled: false,
                 volumetric_enabled: true,
+                exposure: 1.15,
             });
         })
         .add_system(
@@ -466,7 +472,7 @@ fn main() {
                     ui.horizontal(|ui| {
                         ui.label("Exposure:");
                         ui.add(
-                            gizmo::egui::Slider::new(&mut renderer.exposure, 0.1..=4.0)
+                            gizmo::egui::Slider::new(&mut demo_state.exposure, 0.1..=4.0)
                                 .step_by(0.05),
                         );
                     });
@@ -748,6 +754,12 @@ fn camera_orbit(
     input: Res<Input>,
 ) {
     let dt = time.dt();
+
+    // Pozlamayı kameraya taşı: çizim yolunun okuduğu alan bu.
+    let exposure = state.exposure;
+    for (_entity, (_transform, mut camera)) in q_cam.iter_mut() {
+        camera.exposure = exposure;
+    }
 
     if state.camera_state == CameraState::Orbiting {
         state.orbit_time += dt;
