@@ -42,7 +42,7 @@
 //! çünkü sorgu türleri mühürlü (bkz. `bevy_ecs_extension_points`).
 //!
 //! ## Kontroller
-//!   * **D** — ortadaki üç küpü devre dışı bırak / geri aç
+//!   * **Z** — ortadaki üç küpü devre dışı bırak / geri aç
 //!   * **Sağ-tık + fare / WASDQE** — kamera
 
 use gizmo::core::input::Input;
@@ -158,7 +158,7 @@ fn main() {
                         ui.label("ekliyor — filtreyi unutmak MÜMKÜN DEĞİL.");
                         ui.label("Gizmo'da örtük filtre yok: her sorguda siz yazacaksınız.");
                         ui.separator();
-                        ui.label("D — devre dışı bırak / geri aç");
+                        ui.label("Z — devre dışı bırak / geri aç");
                     });
                 });
         })
@@ -173,7 +173,7 @@ fn toggle(world: &mut gizmo::core::World, input: &Input) {
     };
     report.frame += 1;
     let frame = report.frame;
-    let want = input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::KeyD as u32)
+    let want = input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::KeyZ as u32)
         || (frame == 60 && std::env::var("GIZMO_DISABLE_SELFTEST").is_ok());
     if !want {
         return;
