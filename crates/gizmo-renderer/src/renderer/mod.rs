@@ -231,6 +231,19 @@ pub struct Renderer {
     pub dof_blur_size: f32,
     /// Per-channel radial offset, in screen fractions. 0 = off.
     pub chromatic_aberration: f32,
+    /// How dark the frame's corners get, for a camera that carries no
+    /// [`PostProcess`](crate::components::PostProcess).
+    ///
+    /// The component's `vignette` is the authored value and wins where it exists; this is the
+    /// fallback, and it exists because there was none: the fallback branch simply did not write
+    /// the field, so every ungraded camera inherited `PostProcessUniforms::default()`'s `0.25`
+    /// and had no way to change it. Measured before the field existed
+    /// (`demo/src/bin/bevy_color_grading.rs`): corner/centre sat at 1.206 with no component,
+    /// between the 1.344 of an explicit `vignette = 0` and the 0.635 of `vignette = 0.9`.
+    ///
+    /// Defaults to that same `0.25`, so adding the field changed no pixel — it only made the
+    /// value reachable.
+    pub vignette_intensity: f32,
     /// Strength of the animated film grain. 0 = off.
     pub film_grain_intensity: f32,
     /// Whether point lights cast shadows this frame.

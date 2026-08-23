@@ -677,6 +677,9 @@ impl Renderer {
             // the sky) got out-of-place red/blue fringes. Opt-in artistic effect,
             // like DoF — scenes that want the cinematic look set it themselves.
             chromatic_aberration: 0.0,
+            // Matches `PostProcessUniforms::default()`, which is what an ungraded camera got before
+            // this field existed — so the default is the old behaviour exactly.
+            vignette_intensity: 0.25,
             film_grain_intensity: 0.012, // Photographic film grain — ince (statik olduğu için düşük; yüksekte düz yüzeylerde sabit gürültü kaplaması görünür)
             point_shadows_enabled: false,
             // The 100k-particle fluid system above is allocated but idle: its SSFR

@@ -20,36 +20,42 @@
 //! eğrisi), Gizmo'nunki bir **efekt paketi**. Renk derecelendirmenin kendisi — gamma, doygunluk,
 //! kontrast, lift/gain, renk dengesi — motorda hiç yok.
 //!
-//! ## Ölçülen bir asimetri: `vignette`'e yalnız bileşenden ulaşılıyor
+//! ## Ölçülen bir asimetri — ve kapatılışı
 //!
 //! Post-işlem ayarları iki kaynaktan geliyor (bkz. `bevy_depth_of_field`): kameranın taşıdığı
-//! [`PostProcess`] bileşeni, yoksa `Renderer`'ın alanları. Ama iki liste **aynı değil**:
+//! [`PostProcess`] bileşeni, yoksa `Renderer`'ın alanları. Port yazıldığında iki liste **aynı
+//! değildi**: `Renderer`'da `vignette` alanı **hiç yoktu**, yedek dal onu yazmıyordu, ve
+//! `PostProcessUniforms::default()`'un 0,25'i sızıyordu. Yani bileşen takmayan bir oyun köşe
+//! karartmasını ne açabiliyor ne kapatabiliyordu.
 //!
-//!   * `Renderer`'da `chromatic_aberration` ve `film_grain_intensity` var, ikisi de okunuyor.
-//!   * `Renderer`'da **`vignette` alanı hiç yok**. Yedek dalda o alan yazılmıyor, yani
-//!     `PostProcessUniforms::default()`'un 0,25'i kalıyor.
+//! **2026-08-23'te kapatıldı:** `Renderer::vignette_intensity` eklendi ve yedek dal onu okuyor.
+//! Varsayılan yine 0,25 — yani hiçbir piksel değişmedi, yalnız değer ulaşılabilir oldu.
 //!
-//! Sonuç: bileşen takmayan bir oyun köşe karartmasını **ne açabiliyor ne kapatabiliyor** — sabit
-//! 0,25'e mahkûm. Demo ikisini yan yana ölçüyor.
+//! ## Ölçüldü (2026-08-23, kare 240, düz duvar, bloom kapalı, hepsi TEK partide)
 //!
-//! Ölçüldü (2026-08-23, kare 240, düz gri bir duvar, bloom kapalı):
+//! | durum | köşe/merkez | gren (std) | kenarda \|R−B\| tepesi | eşiği aşan piksel |
+//! |-------|-------------|------------|----------------------|-------------------|
+//! | bileşen: `vignette = 0` | **1,095** | 0,40 | 10 | 0 |
+//! | bileşen: `vignette = 0,9` | **0,608** | — | 10 | 0 |
+//! | bileşen: `chromatic_aberration = 0,006` | 1,095 | 0,40 | **34** | **1343** |
+//! | bileşen: `film_grain = 0,12` | 1,094 | **3,23** | 10 | 0 |
+//! | bileşensiz: `renderer = 0,0` | **1,095** | — | 10 | 0 |
+//! | bileşensiz: `renderer = 0,25` | 1,001 | — | 10 | 0 |
+//! | bileşensiz: `renderer = 0,9` | **0,608** | — | 10 | 0 |
 //!
-//! | bakış | köşe/merkez | gren (std) | kenarda \|R−B\| tepesi |
-//! |-------|-------------|------------|----------------------|
-//! | bileşen takılı, `vignette = 0` | **1,344** | 0,43 | 10 |
-//! | `vignette = 0,9` | **0,635** | 0,84 | 10 |
-//! | `chromatic_aberration = 0,006` | 1,344 | 0,43 | **40** (720 piksel eşiği aşıyor) |
-//! | `film_grain = 0,12` | 1,343 | **3,22** | 10 |
-//! | **bileşen YOK** (yedek yol) | **1,206** | 0,43 | 10 |
+//! Üç efekt de çalışıyor: karartma 1,095'ten 0,608'e, gren sapması 0,40'tan 3,23'e (8 kat), renk
+//! sapması kenarda `|R−B|`'yi 10'dan 34'e çıkarıyor ve nötr karede eşiği aşan hiç piksel yokken
+//! burada 1343 tane var.
 //!
-//! Üç efekt de çalışıyor: köşe karartma oranı 1,344'ten 0,635'e (%53 karartma), gren sapması
-//! 0,43'ten 3,22'ye (7,5 kat), renk sapması kenarda `|R−B|`'yi 10'dan 40'a çıkarıyor ve nötr
-//! karede eşiği aşan hiç piksel yokken burada 720 tane var.
+//! **Ve simetri artık tam:** bileşenle `vignette = 0` ile bileşensiz `renderer = 0,0` **aynı**
+//! sayıyı veriyor (1,095), `0,9` de öyle (0,608). İki yol aynı ayarda aynı kareyi üretiyor.
 //!
-//! **Ve son satır asimetriyi kanıtlıyor.** Bileşen çıkarıldığında köşe/merkez oranı 1,206 —
-//! yani "vignette = 0"ın 1,344'ü ile "vignette = 0,9"un 0,635'inin **arasında**. Bu, kimsenin
-//! istemediği `PostProcessUniforms::default()`'un 0,25'i. Bileşen takmayan bir oyun köşe
-//! karartmasını ne açabiliyor ne kapatabiliyor; `Renderer`'da o alan yok.
+//! ### Ölçmenin kuralı, üçüncü kez
+//!
+//! İlk tablo iki ayrı partiden derlenmişti ve "bileşensiz 1,206" ile "renderer=0,25 → 1,001"
+//! çelişiyordu. Sebep motor değildi: **pencere boyutu koşular arasında değişmişti** (1028'e karşı
+//! 492 piksel), yani sabit piksel kutuları sahnenin başka yerine düşüyordu. Yukarıdaki tablonun
+//! tamamı tek boyutta, ve ölçüm betiği boyutları önce denetliyor.
 //!
 //! ## Kontroller
 //!   * **1** nötr · **2** köşe karartma · **3** renk sapması · **4** gren · **5** hepsi
@@ -152,6 +158,13 @@ fn main() {
             renderer.ssgi = None;
             // Yedek yolun karşılaştırılabilir olması için: bileşen yokken bloom da kapalı olsun.
             renderer.bloom_intensity = 0.0;
+            // Bileşensiz yolda köşe karartması artık ULAŞILABİLİR (2026-08-23'te eklendi).
+            // `GIZMO_VIGNETTE` verilmezse motorun kendi varsayılanı (0,25) korunuyor.
+            if let Ok(v) = std::env::var("GIZMO_VIGNETTE") {
+                if let Ok(v) = v.parse::<f32>() {
+                    renderer.vignette_intensity = v;
+                }
+            }
 
             apply_look(world);
 

@@ -148,11 +148,16 @@ whole set, because they are one family:
    *material uniform* (which only glTF loading fills), while game code writes the per-instance
    field. Only `baked_lit.wgsl` reads the instance field. Measured in `bevy_bloom_3d`.
 
-5. **`vignette` is reachable only through the `PostProcess` component.** The `Renderer` fallback
-   struct has no such field, so the branch that serves a camera without the component leaves
-   `PostProcessUniforms::default()`'s **0.25** in place. Measured in `bevy_color_grading`: with the
-   component the corner/centre ratio moves 1.344 → 0.635; with **no** component it sits at 1.206 —
-   a vignette the game never asked for and cannot switch off.
+5. ~~**`vignette` is reachable only through the `PostProcess` component.**~~ **CLOSED 2026-08-23.**
+   The `Renderer` fallback struct had no such field, so a camera without the component was stuck
+   with `PostProcessUniforms::default()`'s **0.25** — a vignette it never asked for and could not
+   switch off. `Renderer::vignette_intensity` now exists and the fallback branch reads it; the
+   default is still `0.25`, so **no pixel changed** — the value merely became reachable.
+
+   Verified in `bevy_color_grading`, one capture batch, size-checked: component `vignette = 0`
+   gives corner/centre **1.095** and fallback `renderer = 0.0` gives **1.095**; component `0.9`
+   gives **0.608** and fallback `0.9` gives **0.608**. The two paths now produce the same frame for
+   the same setting.
 
 A full audit of this family was run (2026-08-23): of `Material`'s shading fields, the deferred
 G-buffer honours 6 (albedo, roughness, metallic, anisotropy, clear-coat, subsurface) and ignores

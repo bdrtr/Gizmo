@@ -422,6 +422,10 @@ pub fn default_render_pass(
             bloom_threshold: renderer.bloom_threshold,
             exposure: cam_exposure,
             chromatic_aberration: renderer.chromatic_aberration,
+            // Was missing, and its absence was not visible: leaving it out let
+            // `PostProcessUniforms::default()`'s 0.25 through, so an ungraded camera had a
+            // vignette it never asked for and could not switch off.
+            vignette_intensity: renderer.vignette_intensity,
             film_grain_intensity: renderer.film_grain_intensity,
             dof_focus_dist: renderer.dof_focus_dist,
             dof_focus_range: renderer.dof_focus_range,
