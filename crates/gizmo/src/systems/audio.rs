@@ -56,13 +56,34 @@ impl Listener {
 /// Finds the primary camera and reads the listener off it. Falls back to a listener at the origin
 /// facing +X when there is no primary camera — a scene with no camera has no listening position,
 /// and silence is a worse answer than a sound placed at the origin.
+///
+/// # The right vector comes from the camera, not from its `Transform`
+///
+/// This used to read `Transform.rotation * X`, and that vector **disagreed with the camera the
+/// player was looking through**. A camera's orientation lives on the `Camera` component as
+/// yaw/pitch — that is what [`Camera::get_view`] builds the view matrix from — while
+/// `Transform.rotation` is written separately by whatever drives the camera, and the tree
+/// contains at least two different conventions for it:
+///
+/// | writer | `Transform.rotation * X` | vs [`Camera::get_right`] |
+/// |---|---|---|
+/// | `simple.rs`, `beamng`, `ocean_scene`, … (`rotation_y(-yaw + π/2)`) | `(sin y, 0, -cos y)` | dot **−1** — exactly inverted |
+/// | `fps_look.rs`, `kcc_scene`, … (`rotation_y(-yaw)`) | `(cos y, 0, sin y)` | dot **0** — the *forward* vector |
+///
+/// Measured 2026-08-23 with `demo/src/bin/bevy_spatial_audio.rs`: under the simple scene the dot
+/// product was `-1.00` on every frame, and a sound placed at the camera's own right came out
+/// **nearer the left ear**. Stereo panning was mirrored in every game built on that camera, and
+/// separated along the view axis (so barely panned at all) in every game built on `FpsLook`.
+///
+/// Taking [`Camera::get_right`] instead cannot drift: it is the same function `get_view` uses to
+/// build the up vector, so the ears are by construction square to what is on screen.
 pub fn listener(world: &World) -> Listener {
     let mut listener = Listener::default();
     if let Some(mut query) = world.query::<(&gizmo_renderer::Camera, &Transform)>() {
         for (e, (cam, t)) in query.iter_mut() {
             if cam.primary {
                 listener.position = t.position;
-                listener.right = t.rotation.mul_vec3(Vec3::new(1.0, 0.0, 0.0)).normalize();
+                listener.right = cam.get_right();
                 if let Some(v) = world.borrow::<Velocity>().get(e) {
                     listener.velocity = v.linear;
                 }
@@ -244,6 +265,59 @@ pub fn audio_spatial_system(world: &mut World, _dt: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression: the listener's ears used to be square to `Transform.rotation`, which the tree
+    /// writes with at least two conventions, neither matching the camera. Under the simple
+    /// scene's convention the vector was **exactly inverted** — a sound on the camera's right
+    /// reached the left ear — and under `FpsLook`'s it was the *forward* vector, so the ears sat
+    /// one behind the other and barely panned at all.
+    ///
+    /// The ears must be square to the camera the player is looking through, whatever any
+    /// `Transform` says, so this walks a full turn of yaw and holds the listener to the engine's
+    /// own [`Camera::get_right`] — including with a `Transform.rotation` deliberately set to each
+    /// of the two wrong conventions.
+    #[test]
+    fn the_listener_hears_along_the_camera_s_own_right_vector() {
+        use gizmo_renderer::Camera;
+
+        for step in 0..12 {
+            let yaw = step as f32 / 12.0 * std::f32::consts::TAU - std::f32::consts::PI;
+            let pitch = 0.3 - step as f32 * 0.05;
+
+            let mut world = World::new();
+            let entity = world.spawn();
+            world.add_component(entity, Camera::new(1.0, 0.1, 1000.0, yaw, pitch, true));
+            world.add_component(
+                entity,
+                Transform {
+                    position: Vec3::new(1.0, 2.0, 3.0),
+                    // The simple scene's convention — the one that produced the mirrored ears.
+                    rotation: gizmo_math::Quat::from_rotation_y(
+                        -yaw + std::f32::consts::FRAC_PI_2,
+                    ) * gizmo_math::Quat::from_rotation_x(pitch),
+                    ..Default::default()
+                },
+            );
+
+            let heard = listener(&world);
+            let want = Camera::right_from(yaw);
+            assert!(
+                heard.right.dot(want) > 0.999,
+                "yaw {yaw:.2}: ears point {:?}, camera's right is {want:?}",
+                heard.right
+            );
+
+            // And the thing the mirroring actually broke: a sound on the camera's right must be
+            // nearer the right ear.
+            let (left, right) = heard.ears();
+            let probe = heard.position + want * 5.0;
+            let d = |ear: [f32; 3]| (probe - Vec3::new(ear[0], ear[1], ear[2])).length();
+            assert!(
+                d(right) < d(left),
+                "yaw {yaw:.2}: a sound on the right was nearer the LEFT ear"
+            );
+        }
+    }
 
     // Regression: a finished one-shot 3D sound used to auto-restart every frame because the
     // guard only checked `_internal_sink_id.is_none() && is_3d`, and finishing the sound
