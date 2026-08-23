@@ -116,7 +116,7 @@ fn compute_convex_mass_props(vertices: &[Vec3], indices: &[u32]) -> (Vec3, f32) 
     }
     let mut vol6 = 0.0f32; // 6 × signed volume (Σ of triangle a·(b×c))
     let mut com_acc = Vec3::ZERO; // Σ (a+b+c)·v6_i, relative to vertex_centroid
-    for tri in indices.chunks_exact(3) {
+    for tri in indices.as_chunks::<3>().0 {
         let a = vertices[tri[0] as usize] - vertex_centroid;
         let b = vertices[tri[1] as usize] - vertex_centroid;
         let c = vertices[tri[2] as usize] - vertex_centroid;

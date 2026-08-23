@@ -23,7 +23,7 @@ fn normalize_skin_weights(w: [f32; 4]) -> [f32; 4] {
 }
 
 fn compute_flat_normals(vertices: &mut [Vertex]) {
-    for tri in vertices.chunks_exact_mut(3) {
+    for tri in vertices.as_chunks_mut::<3>().0 {
         let v0 = Vec3::from(tri[0].position);
         let v1 = Vec3::from(tri[1].position);
         let v2 = Vec3::from(tri[2].position);
@@ -153,7 +153,7 @@ impl crate::asset::AssetManager {
                     // (Skipping a single OOB index would shift every later vertex
                     // and corrupt the grouping of all following triangles.)
                     let idx: Vec<u32> = indices.into_u32().collect();
-                    for tri in idx.chunks_exact(3) {
+                    for tri in idx.as_chunks::<3>().0 {
                         if tri.iter().any(|&t| (t as usize) >= positions.len()) {
                             continue;
                         }

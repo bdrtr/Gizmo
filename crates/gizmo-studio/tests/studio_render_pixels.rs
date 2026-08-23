@@ -95,7 +95,7 @@ impl Frame {
     /// clear, which every "the editor is black" report has looked like.
     fn distinct_colours(&self) -> usize {
         let mut seen = std::collections::HashSet::new();
-        for px in self.pixels.chunks_exact(BPP as usize) {
+        for px in self.pixels.as_chunks::<{ BPP as usize }>().0.iter() {
             seen.insert([px[0], px[1], px[2]]);
         }
         seen.len()
@@ -794,7 +794,7 @@ fn the_show_grid_preference_hides_the_grid() {
 
     // And the direction: the grid ADDS light lines over a dark clear, so the frame with it is the
     // brighter one. Without this the test would also pass if the flag inverted.
-    let sum = |px: &[u8]| px.chunks_exact(4).map(|c| u64::from(c[0]) + u64::from(c[1]) + u64::from(c[2])).sum::<u64>();
+    let sum = |px: &[u8]| px.as_chunks::<4>().0.iter().map(|c| u64::from(c[0]) + u64::from(c[1]) + u64::from(c[2])).sum::<u64>();
     assert!(
         sum(&with_grid) > sum(&without),
         "the frame WITH the grid is not brighter than the one without — the flag is inverted"
@@ -974,8 +974,8 @@ fn per_object_shadow_casting_controls_the_shadow_and_the_object() {
     // version of this assertion guessed wrong — it picked a spot that was floor in both renders and
     // reported "Only still drew the cube" from two identical background pixels.
     let cube_pixels_changed = on
-        .chunks_exact(BPP as usize)
-        .zip(only.chunks_exact(BPP as usize))
+        .as_chunks::<{ BPP as usize }>().0.iter()
+        .zip(only.as_chunks::<{ BPP as usize }>().0.iter())
         .filter(|(a, b)| a != b)
         .count();
     assert!(
@@ -1226,8 +1226,10 @@ fn a_decal_is_visible_in_the_editor_viewport() {
     };
 
     let changed = with
-        .chunks_exact(4)
-        .zip(without.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(without.as_chunks::<4>().0.iter())
         .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 8))
         .count();
 

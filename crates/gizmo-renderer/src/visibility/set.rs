@@ -45,9 +45,7 @@ impl VisibleSet {
         match self.frame.checked_add(1) {
             Some(next) => self.frame = next,
             None => {
-                for s in &mut self.stamp {
-                    *s = 0;
-                }
+                self.stamp.fill(0);
                 self.frame = 1;
             }
         }

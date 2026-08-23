@@ -194,12 +194,8 @@ impl RenderAabbTree {
         self.nodes.clear();
         self.root = NIL;
         self.free_list = NIL;
-        for slot in &mut self.leaf_of {
-            *slot = NIL;
-        }
-        for slot in &mut self.key_pos {
-            *slot = NIL;
-        }
+        self.leaf_of.fill(NIL);
+        self.key_pos.fill(NIL);
         self.keys.clear();
     }
 

@@ -29,7 +29,7 @@ mod winding_tests {
             verts.len()
         );
         let mut checked = 0usize;
-        for tri in verts.chunks_exact(3) {
+        for tri in verts.as_chunks::<3>().0 {
             for v in tri {
                 let n = Vec3::from(v.normal);
                 assert!(
@@ -82,7 +82,7 @@ mod winding_tests {
     fn sphere_has_no_degenerate_triangles() {
         // Kutup dejenereleri kaldırıldı: hiçbir üçgenin iki köşesi çakışmamalı.
         let v = AssetManager::sphere_data(1.0, 8, 12);
-        for tri in v.chunks_exact(3) {
+        for tri in v.as_chunks::<3>().0 {
             let geo = (Vec3::from(tri[1].position) - Vec3::from(tri[0].position))
                 .cross(Vec3::from(tri[2].position) - Vec3::from(tri[0].position));
             assert!(geo.length() > 1e-9, "sphere dejenere üçgen üretti");

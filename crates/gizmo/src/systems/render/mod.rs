@@ -2555,7 +2555,7 @@ mod golden_render_tests {
     /// The mean of every RGB byte in a frame (alpha excluded).
     async fn render_mean_brightness(exposure: f32) -> f32 {
         let data = render_frame(exposure, false).await;
-        let sum: u64 = data.chunks_exact(4).map(|p| p[0] as u64 + p[1] as u64 + p[2] as u64).sum();
+        let sum: u64 = data.as_chunks::<4>().0.iter().map(|p| p[0] as u64 + p[1] as u64 + p[2] as u64).sum();
         sum as f32 / (data.len() / 4 * 3) as f32
     }
 
@@ -2624,7 +2624,7 @@ mod golden_render_tests {
             );
             // And the frame is a real render, not two identical blank targets.
             assert!(
-                gated.chunks_exact(4).any(|p| p[..3] != gated[..3]),
+                gated.as_chunks::<4>().0.iter().any(|p| p[..3] != gated[..3]),
                 "the frame is uniform — nothing was drawn, so the comparison proves nothing"
             );
         });

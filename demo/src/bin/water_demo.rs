@@ -433,7 +433,7 @@ fn capture_and_save(world: &mut World, renderer: &mut Renderer, raw_path: &str) 
     for row in 0..h as usize {
         let s = row * padded as usize;
         let line = &data[s..s + unpadded as usize];
-        for px in line.chunks_exact(4) {
+        for px in line.as_chunks::<4>().0 {
             if is_bgra {
                 out.extend_from_slice(&[px[2], px[1], px[0], px[3]]); // BGRA→RGBA
             } else {

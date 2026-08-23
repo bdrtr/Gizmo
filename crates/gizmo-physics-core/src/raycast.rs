@@ -805,7 +805,7 @@ impl Raycast {
                     }
                 } else {
                     // Fallback to naive loop if BVH is missing
-                    for chunk in tm.indices.chunks_exact(3) {
+                    for chunk in tm.indices.as_chunks::<3>().0 {
                         let v0 = tm.vertices[chunk[0] as usize];
                         let v1 = tm.vertices[chunk[1] as usize];
                         let v2 = tm.vertices[chunk[2] as usize];

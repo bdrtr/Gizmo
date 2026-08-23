@@ -152,7 +152,7 @@ pub fn texture_to_png(
             let start = row * padded_row as usize;
             let row_bytes = &mapped[start..start + unpadded_row as usize];
             if swap_rb {
-                for px in row_bytes.chunks_exact(4) {
+                for px in row_bytes.as_chunks::<4>().0 {
                     pixels.extend_from_slice(&[px[2], px[1], px[0], px[3]]);
                 }
             } else {

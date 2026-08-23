@@ -177,10 +177,11 @@ pub fn decode_obj_vertices_for_async(
 /// Returns the number of leftover vertices that could not form a complete
 /// triangle (should be 0 for well-formed meshes).
 fn compute_flat_normals_inplace(vertices: &mut [Vertex]) -> usize {
-    let chunks = vertices.chunks_exact_mut(3);
-    let remainder_len = chunks.into_remainder().len(); // borrow ends here
+    // `as_chunks_mut` returns (chunks, remainder) — the leftover is `.1`, where
+    // `chunks_exact_mut` needed `into_remainder()`.
+    let remainder_len = vertices.as_chunks_mut::<3>().1.len(); // borrow ends here
 
-    for tri in vertices.chunks_exact_mut(3) {
+    for tri in vertices.as_chunks_mut::<3>().0 {
         let v0 = Vec3::from(tri[0].position);
         let v1 = Vec3::from(tri[1].position);
         let v2 = Vec3::from(tri[2].position);

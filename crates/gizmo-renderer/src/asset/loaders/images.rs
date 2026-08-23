@@ -27,7 +27,7 @@ fn convert_image_to_rgba8(image: &gltf::image::Data, idx: usize, file_path: &str
             // silently ignoring a trailing 1 or 2 bytes. A trailing partial pixel is
             // a malformed file; padding it to opaque black is the safest recovery.
             let mut out = Vec::with_capacity(pixel_count * 4);
-            for chunk in image.pixels.chunks_exact(3) {
+            for chunk in image.pixels.as_chunks::<3>().0 {
                 out.extend_from_slice(&[chunk[0], chunk[1], chunk[2], 255]);
             }
             // Pad if the source was shorter than expected.
@@ -40,7 +40,7 @@ fn convert_image_to_rgba8(image: &gltf::image::Data, idx: usize, file_path: &str
             // Map R→R, G→G, B=0, A=opaque. (Previously broadcast R into RGB and put
             // G into alpha, losing the green channel.)
             let mut out = Vec::with_capacity(pixel_count * 4);
-            for chunk in image.pixels.chunks_exact(2) {
+            for chunk in image.pixels.as_chunks::<2>().0 {
                 out.extend_from_slice(&[chunk[0], chunk[1], 0, 255]);
             }
             out.resize(pixel_count * 4, 255);
