@@ -202,7 +202,11 @@ fn main() {
             });
             scene.spawn_camera(state, Vec3::new(0.0, 5.0, 8.0), Vec3::ZERO);
         })
-        .set_update(|world, _state, _dt, input| redistribute(world, input))
+        .set_update(|world, state, dt, input| {
+            // Bkz. `demo::simple_scene_update` — `set_update` basit sahnenin kancasını eziyor.
+            demo::simple_scene_update(world, state, dt, input);
+            redistribute(world, input);
+        })
         .set_ui(|world, _state, ctx| {
             let Some(r) = world.get_resource::<RelReport>().map(|r| r.clone()) else {
                 return;

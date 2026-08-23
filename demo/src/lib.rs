@@ -1,8 +1,9 @@
 //! Shared helpers for the demo binaries.
 //!
 //! The demos live in `src/bin/` and each one is a standalone showcase, but a few
-//! concerns are common enough that duplicating them across 39 files is worse than
-//! a small shared surface. Right now that is asset resolution.
+//! concerns are common enough that duplicating them across the binaries is worse than
+//! a small shared surface: asset resolution, and re-running the simple scene's own
+//! per-frame work when a demo needs an exclusive `&mut World` hook of its own.
 
 /// Locating optional model/texture assets that are **not** committed to the repository.
 ///
@@ -98,4 +99,77 @@ mod tests {
         unsafe { std::env::remove_var("GIZMO_ASSETS") };
         assert!(found.is_some(), "must fall through to the repo's assets/ dir");
     }
+}
+
+/// Re-running what [`SimpleAppExt::with_simple_scene`] does every frame.
+///
+/// **The trap this exists for.** `App::set_update` *replaces* the update hook — the builder
+/// stores `self.update_fn = Some(f)`, it does not chain. And `with_simple_scene` installs its
+/// own `set_update`, which does four things:
+///
+///   1. `state.fly_step(input, dt)` — turns mouse/WASD into a camera pose;
+///   2. stamps that pose onto every `(Transform, Camera)` pair in the world;
+///   3. steps the CPU physics in ≤16 ms slices;
+///   4. runs `TransformSyncSystem` and `TransformPropagateSystem`.
+///
+/// So a demo that wants its own exclusive hook — anything needing `&mut World`, which a
+/// scheduled system can never have — and writes `.with_simple_scene(..).set_update(..)` silently
+/// throws all four away. Measured 2026-08-23: the camera stops responding to input and
+/// `GlobalTransform` stops being propagated, with nothing logged and nothing failing to compile.
+///
+/// Call this at the top of such a hook and the demo gets both.
+///
+/// ```no_run
+/// # use gizmo::prelude::*;
+/// # use gizmo::simple::{SimpleAppExt, SimpleSceneState};
+/// # fn my_work(_: &mut gizmo::core::World) {}
+/// # let app = App::<SimpleSceneState>::new("x", 1, 1).with_simple_scene(|_, _| {});
+/// app.set_update(|world, state, dt, input| {
+///     demo::simple_scene_update(world, state, dt, input);
+///     my_work(world);
+/// })
+/// # ;
+/// ```
+///
+/// ## One thing it deliberately reproduces, warts and all
+///
+/// Step 2 stamps **every** camera, with no `primary` check. That is the engine's behaviour, not
+/// a simplification here: under the simple scene a second camera cannot hold its own pose, which
+/// is why split-screen and multi-pass demos have nothing to work with even though
+/// `default_render_pass` accepts any target view.
+pub fn simple_scene_update(
+    world: &mut gizmo::core::World,
+    state: &mut gizmo::simple::SimpleSceneState,
+    dt: f32,
+    input: &gizmo::core::input::Input,
+) {
+    use gizmo::core::system::System;
+    use gizmo::prelude::{Quat, Transform};
+    use std::f32::consts::FRAC_PI_2;
+
+    state.fly_step(input, dt);
+
+    if let Some(mut q) = world.query_mut::<(
+        gizmo::core::query::Mut<Transform>,
+        gizmo::core::query::Mut<gizmo::renderer::components::Camera>,
+    )>() {
+        let rot = Quat::from_rotation_y(-state.camera_yaw + FRAC_PI_2)
+            * Quat::from_rotation_x(state.camera_pitch);
+        for (_, (mut transform, mut camera)) in q.iter_mut() {
+            transform.position = state.camera_pos;
+            transform.rotation = rot;
+            camera.yaw = state.camera_yaw;
+            camera.pitch = state.camera_pitch;
+        }
+    }
+
+    let mut physics_dt = dt.min(0.1);
+    while physics_dt > 0.0 {
+        let step = physics_dt.min(0.016);
+        gizmo::systems::cpu_physics_step_system(world, step);
+        physics_dt -= step;
+    }
+
+    gizmo::systems::transform::TransformSyncSystem.run(world, dt);
+    gizmo::systems::transform::TransformPropagateSystem.run(world, dt);
 }

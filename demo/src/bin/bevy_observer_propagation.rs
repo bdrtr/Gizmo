@@ -188,7 +188,11 @@ fn main() {
             });
             scene.spawn_camera(state, Vec3::new(0.0, 2.5, 8.5), Vec3::ZERO);
         })
-        .set_update(|world, _state, _dt, input| drive(world, input))
+        .set_update(|world, state, dt, input| {
+            // Bkz. `demo::simple_scene_update` — `set_update` basit sahnenin kancasını eziyor.
+            demo::simple_scene_update(world, state, dt, input);
+            drive(world, input);
+        })
         .set_ui(|world, _state, ctx| {
             let Some(r) = world.get_resource::<PropReport>().map(|r| r.clone()) else {
                 return;

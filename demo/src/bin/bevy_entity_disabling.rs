@@ -122,7 +122,11 @@ fn main() {
         })
         // Devre dışı bırakma `set_update`'te: sorgu ham id veriyor ve onu `Entity`'ye güvenle
         // çevirmek `World::entity(id)` istiyor — çizelgeye kayıtlı bir sistem `&World` alamıyor.
-        .set_update(|world, _state, _dt, input| toggle(world, input))
+        .set_update(|world, state, dt, input| {
+            // Bkz. `demo::simple_scene_update` — `set_update` basit sahnenin kancasını eziyor.
+            demo::simple_scene_update(world, state, dt, input);
+            toggle(world, input);
+        })
         // Filtreyi HATIRLAYAN sistem: devre dışı olanları döndürmüyor.
         .add_update_system(spin_filtered.in_phase(Phase::Update).after("toggle"))
         // Filtreyi UNUTAN sistem: aynı işi yapıyor ama devre dışı olanları da sayıyor.

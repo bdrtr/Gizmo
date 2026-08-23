@@ -157,7 +157,12 @@ fn main() {
             });
             scene.spawn_camera(state, Vec3::new(0.0, 2.5, 8.0), Vec3::ZERO);
         })
-        .set_update(|world, _state, _dt, input| run_next(world, input))
+        .set_update(|world, state, dt, input| {
+            // ÖNCE bu: `set_update` basit sahnenin kendi kancasını DEĞİŞTİRİYOR, eklemiyor.
+            // Bu satır olmadan kamera denetimi, fizik adımı ve transform yayılımı sessizce gider.
+            demo::simple_scene_update(world, state, dt, input);
+            run_next(world, input);
+        })
         .set_ui(|world, _state, ctx| {
             let Some(r) = world.get_resource::<CallbackReport>().map(|r| r.clone()) else {
                 return;
