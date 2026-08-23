@@ -134,7 +134,7 @@ pub(super) fn record_studio_shadow_passes(
 ) {
         for (cascade_i, &cascade_view_proj) in light_view_proj_cascades.iter().enumerate() {
             renderer.queue.write_buffer(
-                &renderer.scene.shadow_cascade_uniform_buffers[cascade_i],
+                renderer.scene.view_shadow_cascade_buffer(cascade_i),
                 0,
                 gizmo::bytemuck::bytes_of(&gizmo::renderer::ShadowVsUniform {
                     light_view_proj: cascade_view_proj,
@@ -192,7 +192,7 @@ pub(super) fn record_studio_shadow_passes(
 
                 shadow_pass.set_bind_group(
                     0,
-                    &renderer.scene.shadow_pass_bind_groups[cascade_i],
+                    renderer.scene.view_shadow_pass_bind_group(cascade_i),
                     &[],
                 );
                 shadow_pass.set_bind_group(1, &*batch.skeleton_bg, &[]);

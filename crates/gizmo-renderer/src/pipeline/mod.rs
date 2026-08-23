@@ -169,10 +169,39 @@ pub struct SceneView {
     pub uniform_buffer: wgpu::Buffer,
     /// Its group-0 bind group, layout-identical to [`SceneState::global_bind_group`].
     pub bind_group: wgpu::BindGroup,
+
+    /// This view's clustered-light table and index list.
+    ///
+    /// Clusters are a **view-space** grid, so two cameras do not agree about them — sharing them
+    /// meant the second camera's upload overwrote the first's before either pass ran.
+    pub cluster_table_buffer: wgpu::Buffer,
+    /// The index list [`cluster_table_buffer`](Self::cluster_table_buffer) points into.
+    pub cluster_index_buffer: wgpu::Buffer,
+
+    /// This view's cascade light-view-projections, one per CSM cascade.
+    ///
+    /// The **shadow maps themselves are shared** and are not duplicated here: render passes execute
+    /// in the order they are recorded, so a view's shadow pass rewrites the same texture just
+    /// before that view's main pass reads it. What could not be shared is this — a uniform buffer,
+    /// written with `queue.write_buffer`, which orders against submission rather than recording.
+    ///
+    /// That is the same distinction `SceneView` exists for, and it is why a second camera costs
+    /// about **460 KB** rather than the 144 MB a second 3072²×4 cascade array would.
+    pub shadow_cascade_uniform_buffers: [wgpu::Buffer; 4],
+    /// The matching bind groups, one per cascade.
+    pub shadow_pass_bind_groups: [wgpu::BindGroup; 4],
+    /// This view's point-shadow face matrices, one per cube face.
+    pub point_shadow_uniform_buffers: [wgpu::Buffer; 6],
+    /// The matching bind groups, one per face.
+    pub point_shadow_pass_bind_groups: [wgpu::BindGroup; 6],
 }
 
 impl SceneView {
-    /// Builds a view against `scene`'s group-0 layout, sharing its cluster buffers.
+    /// Builds a view with its own camera uniform, cluster buffers and shadow-pass uniforms.
+    ///
+    /// Everything here is per-camera *derived* state written with `queue.write_buffer`. Textures
+    /// are not: the cascade array, the point-shadow cube and the G-buffer are all shared, because
+    /// render passes run in recording order and each view's passes rewrite them in turn.
     #[must_use]
     pub fn new(device: &wgpu::Device, scene: &SceneState, label: &str) -> Self {
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -181,6 +210,22 @@ impl SceneView {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+
+        // Sized from the shared ones rather than from the grid, so a view cannot disagree with the
+        // scene about how big a cluster table is.
+        let cluster_table_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size: scene.cluster_table_buffer.size(),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let cluster_index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size: scene.cluster_index_buffer.size(),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: &scene.global_bind_group_layout,
             entries: &[
@@ -190,18 +235,53 @@ impl SceneView {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: scene.cluster_table_buffer.as_entire_binding(),
+                    resource: cluster_table_buffer.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: scene.cluster_index_buffer.as_entire_binding(),
+                    resource: cluster_index_buffer.as_entire_binding(),
                 },
             ],
             label: Some(label),
         });
+
+        let mk_shadow_uniform = |i: usize, kind: &str| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(&format!("{label} {kind} {i}")),
+                size: std::mem::size_of::<crate::gpu_types::ShadowVsUniform>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        };
+        let mk_shadow_bg = |buf: &wgpu::Buffer, i: usize, kind: &str| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                layout: &scene.shadow_pass_bind_group_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buf.as_entire_binding(),
+                }],
+                label: Some(&format!("{label} {kind} bg {i}")),
+            })
+        };
+
+        let shadow_cascade_uniform_buffers: [wgpu::Buffer; 4] =
+            std::array::from_fn(|i| mk_shadow_uniform(i, "cascade"));
+        let shadow_pass_bind_groups: [wgpu::BindGroup; 4] =
+            std::array::from_fn(|i| mk_shadow_bg(&shadow_cascade_uniform_buffers[i], i, "cascade"));
+        let point_shadow_uniform_buffers: [wgpu::Buffer; 6] =
+            std::array::from_fn(|i| mk_shadow_uniform(i, "point"));
+        let point_shadow_pass_bind_groups: [wgpu::BindGroup; 6] =
+            std::array::from_fn(|i| mk_shadow_bg(&point_shadow_uniform_buffers[i], i, "point"));
+
         Self {
             uniform_buffer,
             bind_group,
+            cluster_table_buffer,
+            cluster_index_buffer,
+            shadow_cascade_uniform_buffers,
+            shadow_pass_bind_groups,
+            point_shadow_uniform_buffers,
+            point_shadow_pass_bind_groups,
         }
     }
 
@@ -224,20 +304,9 @@ impl SceneState {
     /// exactly the failure this type exists to end.
     #[must_use]
     pub fn view_bind_group(&self) -> &wgpu::BindGroup {
-        match self.active_view {
+        match self.active() {
             None => &self.global_bind_group,
-            Some(i) => {
-                &self
-                    .views
-                    .get(i)
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "active_view = Some({i}) but only {} view(s) exist",
-                            self.views.len()
-                        )
-                    })
-                    .bind_group
-            }
+            Some(v) => &v.bind_group,
         }
     }
 
@@ -255,20 +324,84 @@ impl SceneState {
     /// no view.
     #[must_use]
     pub fn view_uniform_buffer(&self) -> &wgpu::Buffer {
-        match self.active_view {
+        match self.active() {
             None => &self.global_uniform_buffer,
-            Some(i) => {
-                &self
-                    .views
-                    .get(i)
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "active_view = Some({i}) but only {} view(s) exist",
-                            self.views.len()
-                        )
-                    })
-                    .uniform_buffer
-            }
+            Some(v) => &v.uniform_buffer,
+        }
+    }
+
+    /// The active view, or `None` for the frame's own camera. The one place that resolves
+    /// [`active_view`](Self::active_view), so every selector below agrees about which view is meant.
+    fn active(&self) -> Option<&SceneView> {
+        self.active_view.map(|i| {
+            self.views.get(i).unwrap_or_else(|| {
+                panic!(
+                    "active_view = Some({i}) but only {} view(s) exist",
+                    self.views.len()
+                )
+            })
+        })
+    }
+
+    /// The shadow-pass bind group for cascade `i` in the active view.
+    ///
+    /// Per-view because the cascade split is derived from the *camera's* frustum: two cameras
+    /// disagree about where the splits are, and the uniform carrying that is written with
+    /// `queue.write_buffer`, which orders against submission rather than recording. The cascade
+    /// **texture** is shared — passes run in recording order, so each view's shadow pass rewrites
+    /// it just before that view's main pass reads it.
+    ///
+    /// # Panics
+    ///
+    /// If `active_view` names no view, or `i` is not a cascade index.
+    #[must_use]
+    pub fn view_shadow_pass_bind_group(&self, i: usize) -> &wgpu::BindGroup {
+        match self.active() {
+            None => &self.shadow_pass_bind_groups[i],
+            Some(v) => &v.shadow_pass_bind_groups[i],
+        }
+    }
+
+    /// The cascade light-view-projection buffer for cascade `i` in the active view.
+    ///
+    /// Write the matrices here, not to [`shadow_cascade_uniform_buffers`](Self::shadow_cascade_uniform_buffers)
+    /// — otherwise a view binds its own group and fills the frame's buffer, and the shadow pass
+    /// draws with the wrong camera's splits with nothing reporting it.
+    ///
+    /// # Panics
+    ///
+    /// Same condition as [`view_shadow_pass_bind_group`](Self::view_shadow_pass_bind_group).
+    #[must_use]
+    pub fn view_shadow_cascade_buffer(&self, i: usize) -> &wgpu::Buffer {
+        match self.active() {
+            None => &self.shadow_cascade_uniform_buffers[i],
+            Some(v) => &v.shadow_cascade_uniform_buffers[i],
+        }
+    }
+
+    /// The point-shadow bind group for cube face `i` in the active view.
+    ///
+    /// # Panics
+    ///
+    /// Same condition as [`view_shadow_pass_bind_group`](Self::view_shadow_pass_bind_group).
+    #[must_use]
+    pub fn view_point_shadow_pass_bind_group(&self, i: usize) -> &wgpu::BindGroup {
+        match self.active() {
+            None => &self.point_shadow_pass_bind_groups[i],
+            Some(v) => &v.point_shadow_pass_bind_groups[i],
+        }
+    }
+
+    /// The point-shadow face-matrix buffer for cube face `i` in the active view.
+    ///
+    /// # Panics
+    ///
+    /// Same condition as [`view_shadow_pass_bind_group`](Self::view_shadow_pass_bind_group).
+    #[must_use]
+    pub fn view_point_shadow_buffer(&self, i: usize) -> &wgpu::Buffer {
+        match self.active() {
+            None => &self.point_shadow_uniform_buffers[i],
+            Some(v) => &v.point_shadow_uniform_buffers[i],
         }
     }
 
@@ -320,19 +453,28 @@ impl SceneState {
     /// would light fragments from lights that are no longer there.
     ///
     /// `assignment.dropped` is the caller's to report; this is the transport, not the policy.
+    /// Uploads the clustered-light assignment **for the active view**.
+    ///
+    /// Clusters are a view-space grid, so two cameras genuinely disagree about them; this writes
+    /// to whichever view [`active_view`](Self::active_view) names, and the group-0 bind group that
+    /// view binds reads those same buffers.
+    ///
+    /// # Panics
+    ///
+    /// If `active_view` names no view.
     pub fn upload_clusters(
         &self,
         queue: &wgpu::Queue,
         assignment: &crate::clustered::ClusterAssignment,
     ) {
+        let (table_buf, index_buf) = match self.active() {
+            None => (&self.cluster_table_buffer, &self.cluster_index_buffer),
+            Some(v) => (&v.cluster_table_buffer, &v.cluster_index_buffer),
+        };
         let table: Vec<u32> = assignment.table.iter().flat_map(|pair| *pair).collect();
-        queue.write_buffer(&self.cluster_table_buffer, 0, bytemuck::cast_slice(&table));
+        queue.write_buffer(table_buf, 0, bytemuck::cast_slice(&table));
         if !assignment.indices.is_empty() {
-            queue.write_buffer(
-                &self.cluster_index_buffer,
-                0,
-                bytemuck::cast_slice(&assignment.indices),
-            );
+            queue.write_buffer(index_buf, 0, bytemuck::cast_slice(&assignment.indices));
         }
     }
 }

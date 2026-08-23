@@ -122,14 +122,30 @@ Measured on the off-screen target's three brightness bands: the trap gives `54.4
 per-camera-submit gives `88.80 / 101.40 / 63.07`, and `SceneView` in one encoder gives
 `89.70 / 99.02 / 86.14`.
 
-**The third band is a real remainder, and it was measured rather than reasoned about.** Replacing
-the sun with a shadowless `Generic` light makes `SceneView` and per-camera-submit agree to within
-1.5 on all three bands (`30.21 / 30.59 / 24.59` against `28.79 / 30.34 / 23.83`). So the whole
-difference is the shadow cascades: they are *derived* from the camera into
-`shadow_cascade_uniform_buffers`, and those — along with the cluster table `upload_clusters` fills
-— are still shared between passes. That is obstacle 3 again, one level down, and it is what a
-second camera needs next. `two_cameras_in_one_encoder_render_two_different_frames` guards the part
-that is done, pinning both the trap (two passes without a view are pixel-identical) and the fix.
+**The third band was a real remainder, measured rather than reasoned about — and closed
+2026-08-24.** Replacing the sun with a shadowless `Generic` light made the two agree to within 1.5
+on all three bands, so the whole difference was the shadow cascades: *derived* from the camera into
+`shadow_cascade_uniform_buffers`, and shared, along with the cluster table `upload_clusters` fills.
+Obstacle 3 again, one level down. Both now live on `SceneView`, reached through
+`view_shadow_cascade_buffer`, `view_point_shadow_buffer` and their bind-group pairs, and the lower
+band reads **62.82** against per-camera-submit's 63.07.
+
+**The shadow textures did not need copying**, which is the measurement that kept this cheap: render
+passes execute in recording order, so each view's shadow pass redraws the same cascade array
+immediately before that view's main pass samples it. Only the uniforms could not be shared, because
+`queue.write_buffer` orders against submission. A second view costs about **460 KB**, not the
+144 MB a second 3072²×4 cascade array would.
+
+`two_cameras_in_one_encoder_render_two_different_frames` guards it, and had to be rewritten to do
+so. Its original claim — "two passes without a view are pixel-identical" — was measuring the wrong
+half: the *second* pass reads the last camera written, so it is right by accident, and the **first**
+is the one rendering someone else's camera. It now compares the first pass against that camera
+rendered alone: 0 pixels of drift with per-view state, and reverting either separation is visible —
+**283 pixels** for the cascades, **2912** for the cluster table.
+
+**Still shared: temporal state.** TAA history and SSGI accumulation are per-renderer, not per-view.
+The test disables both, because with them on a single frame carries a 500-pixel noise floor that
+buries the camera's own difference. That is the next layer of this same gap.
 
 **Render-to-texture itself works**: `default_render_pass` accepts any `TextureView`.
 

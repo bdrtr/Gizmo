@@ -8,7 +8,8 @@
 //! |---------|-------|
 //! | çizim hedefini seçmek (pencere yerine doku) | **var** — [`default_render_pass`] bir `TextureView` alıyor |
 //! | aynı karede iki kameradan iki geçiş | **var** — `SceneView` ile tek encoder (2026-08-23) |
-//! | ikinci kameranın kendi gölge kaskadları | **yok** — kaskadlar ve kümeler hâlâ paylaşılıyor |
+//! | her kameranın kendi gölge kaskadları ve kümeleri | **var** (2026-08-24) |
+//! | her kameranın kendi TAA/SSGI geçmişi | **yok** — zamansal durum hâlâ paylaşımlı |
 //! | hedefin bir alt dikdörtgenine çizmek (alt-görüş) | **yok** — `Camera`'da bölge alanı yok |
 //!
 //! Hedef seçimi çalışıyor, çünkü çizim işlevinin imzası hedefi dışarıdan alıyor:
@@ -79,43 +80,42 @@
 //! Küme tablosu ve ışık dizini paylaşılıyor, çoğaltılmıyor: onlar sahneden türetiliyor, kameradan
 //! değil.
 //!
-//! ### Ölçüldü — ve `SceneView`'ın sınırı da ölçüldü
+//! ### Ölçüldü — ve sınırı da kapandı (2026-08-24)
 //!
 //! Çevrim dışı hedefin parlaklık profili (2026-08-23, 512×288, kare 90):
 //!
 //! | kip | üst %0-20 | orta %40-60 | alt %80-100 |
 //! |-----|-----------|-------------|-------------|
-//! | tek encoder (tuzak) | 54,42 | 139,18 | 84,39 |
-//! | ayrı encoder + hemen submit | 88,80 | 101,40 | **63,07** |
-//! | **`SceneView`, tek encoder** | 89,70 | 99,02 | **86,14** |
+//! | tek encoder (tuzak) | 54,42 | 139,19 | 84,40 |
+//! | ayrı encoder + hemen submit | 88,80 | 101,39 | 63,07 |
+//! | **`SceneView`, tek encoder** | **88,80** | **101,46** | **62,82** |
 //!
-//! Üst ve orta bant düzeliyor — tepeden bakan kamera kendi görüntüsünü çiziyor. **Alt bant
-//! düzelmiyor**, ve aradaki 23 puan `SceneView`'ın sınırı.
+//! Üç bant da kamera başına gönderim çözümüyle uyuşuyor: üst bant birebir, orta 0,07, alt 0,25.
 //!
-//! Sınırın sebebini tahmin etmek yerine ölçtüm. `GIZMO_RTT_NO_SHADOW=1` güneşi gölgesiz bir dolgu
-//! ışığına (`LightRole::Generic`) çeviriyor, ve o zaman:
+//! ### Ölçüm notu: bu tablo iki aşamada oluştu
 //!
-//! | kip (gölgesiz) | üst | orta | alt |
-//! |----------------|-----|------|-----|
-//! | tek encoder (tuzak) | 54,21 | 66,16 | 19,50 |
-//! | ayrı encoder + submit | 28,79 | 30,34 | 23,83 |
-//! | **`SceneView`, tek encoder** | **30,21** | **30,59** | **24,59** |
+//! `SceneView` ilk hâliyle yalnız **kamera uniform'unu** ayırıyordu, ve o zaman alt bant 86,14
+//! okuyordu — ayrı-encoder çözümünden **23 puan** uzak. Sebebini tahmin etmek yerine ölçtüm:
+//! `GIZMO_RTT_NO_SHADOW=1` güneşi gölgesiz bir dolgu ışığına çevirince üç bant da 1,5 puanın
+//! altında uyuşuyordu, yani farkın tamamı gölgeden geliyordu.
 //!
-//! Üç bant da **1,5 puanın altında** uyuşuyor. Yani `SceneView` gölge yokken ayrı-encoder
-//! çözümüyle eşdeğer, ve kalan bütün fark **gölge kaskadlarından** geliyor.
+//! Sorumlu, kameradan **türetilen** ikinci bir uniform ailesiydi: kaskad ışık-görüş matrisleri ve
+//! küme tablosu. İkisi de `queue.write_buffer` ile yazılıyor, yani engel 3'ün birebir aynısı bir
+//! seviye aşağıda. 2026-08-24'te ikisi de `SceneView`'a taşındı ve alt bant 62,82'ye indi.
 //!
-//! Sebep tutarlı: `SceneView` kamera uniform'unu ayırıyor, ama gölge kaskadları ve küme tablosu
-//! kameradan **türetilen** ayrı uniform aileleri (`shadow_cascade_uniform_buffers`,
-//! `upload_clusters`) ve hâlâ paylaşılıyor. Aynı encoder'da iki geçiş, ikisi de son yazılan
-//! kaskadları okuyor — engel 3'ün birebir aynısı, bir seviye aşağıda.
-//!
-//! Yani madde kapandı ama tamamlanmadı: kamera başına kaskad ve küme ayrı bir iş, ve
-//! `docs/CAPABILITY_GAPS.md`'de öyle duruyor.
+//! Gölge **dokusunun** kopyalanması gerekmedi, ve bu ayrı bir ölçüm: render geçişleri kaydedilme
+//! sırasına göre koşuyor, yani her görünümün gölge geçişi kendi ana geçişinden hemen önce aynı
+//! dokuyu yeniden çiziyor. Kopyalanması gereken tek şey uniform'lardı. Görünüm başına maliyet
+//! **~460 KB**, ikinci bir 3072²×4 kaskad dizisinin gerektireceği **144 MB** değil.
 //!
 //! ## Sonuç
 //!
 //! Dokuya çizim **çalışıyor**, iki geçiş **tek encoder'da mümkün**, ve `primary` çevirmek dışında
-//! bir geçici çözüm kalmadı. Motorun `two_cameras_in_one_encoder_render_two_different_frames`
+//! bir geçici çözüm kalmadı.
+//!
+//! Kalan tek paylaşılan şey **zamansal** durum: TAA geçmişi ve SSGI birikimi görünüm başına değil.
+//! Motorun golden testi bu yüzden ikisini kapatıyor — açıkken tek kare bile 500'ü aşkın piksellik
+//! bir taban gürültüsü üretiyor ve kameradan gelen farkı örtüyor. Motorun `two_cameras_in_one_encoder_render_two_different_frames`
 //! testi ikisini birden kilitliyor: görünümsüz iki geçiş **birebir aynı** kareyi vermeli (tuzak
 //! hâlâ orada), görünümlü iki geçiş farklı kareler vermeli.
 //!

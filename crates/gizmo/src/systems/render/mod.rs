@@ -494,7 +494,7 @@ pub fn default_render_pass(
 
         for (i, view_proj) in point_light_view_projs.iter().enumerate() {
             renderer.queue.write_buffer(
-                &renderer.scene.point_shadow_uniform_buffers[i],
+                renderer.scene.view_point_shadow_buffer(i),
                 0,
                 bytemuck::bytes_of(&crate::renderer::gpu_types::ShadowVsUniform {
                     light_view_proj: view_proj.to_cols_array_2d(),
@@ -517,7 +517,7 @@ pub fn default_render_pass(
     renderer.scene.upload_clusters(&renderer.queue, &setup.clusters);
     for (i, light_view_proj) in light_view_projs.iter().enumerate() {
         renderer.queue.write_buffer(
-            &renderer.scene.shadow_cascade_uniform_buffers[i],
+            renderer.scene.view_shadow_cascade_buffer(i),
             0,
             bytemuck::bytes_of(&crate::renderer::gpu_types::ShadowVsUniform {
                 light_view_proj: *light_view_proj,
@@ -3107,13 +3107,12 @@ mod golden_render_tests {
     /// come out identical. Without that half, a test that only asserts "they differ" would pass on
     /// a build where the second camera happened to be sampled by luck.
     ///
-    /// The light is `Generic`, not `Sun`, and that is not incidental — see
-    /// `SceneView`'s docs. `SceneView` separates the camera uniform; the shadow cascades and the
-    /// cluster table are *derived* from the camera into their own buffers and are still shared, so
-    /// with a shadow-casting sun the two passes still contaminate each other. Measured in
-    /// `render_to_texture`: with the sun, the offscreen target's lower band reads 63.07 with the
-    /// per-camera-submit workaround and 86.14 with `SceneView`; with a `Generic` light the same
-    /// two agree to within 0.8 across all three bands.
+    /// The light casts shadows, and that is not incidental. It used to be `Generic`, because
+    /// `SceneView` separated the camera uniform while the cascades and cluster table — *derived*
+    /// from the camera into their own buffers — stayed shared, so with a sun the two passes
+    /// contaminated each other and the offscreen target's lower band read 86.14 against the
+    /// per-camera-submit workaround's 63.07. Per-view derived state (2026-08-24) brought it to
+    /// **62.82**, so this now guards the scene that actually exercised the gap.
     #[test]
     #[ignore = "requires a GPU adapter"]
     fn two_cameras_in_one_encoder_render_two_different_frames() {
@@ -3125,20 +3124,40 @@ mod golden_render_tests {
             return;
         }
         pollster::block_on(async {
-            let (a_shared, b_shared) = render_two_cameras(false).await;
-            let (shared_diff, total) = changed_pixels(&a_shared, &b_shared, 128);
-            assert_eq!(
-                shared_diff, 0,
-                "without a second view the two passes differ on {shared_diff}/{total} pixels — \
-                 they should be identical, and if they are not this test proves nothing below",
+            // The reference: the first camera drawn by itself, nothing to collide with. A correct
+            // two-pass run has to reproduce this exactly, and "the two passes differ from each
+            // other" — this test's original claim — does not imply it.
+            let alone = render_first_camera_alone().await;
+
+            // Without a view, the FIRST pass must not match the reference. The trap stated as an
+            // observation rather than assumed: both passes read whichever camera was written last,
+            // so it is the first that renders the wrong one.
+            let (a_shared, _) = render_two_cameras(false).await;
+            let (trapped, total) = changed_pixels(&a_shared, &alone, 128);
+            assert!(
+                trapped >= 500,
+                "sharing one camera uniform left the first pass only {trapped}/{total} pixels \
+                 from the reference — the trap did not reproduce, so what follows proves nothing",
             );
 
+            // With a view, exactly. This is the claim the camera uniform alone could not satisfy:
+            // the cascade split is derived from the camera into its own uniform, and while that
+            // stayed shared the first pass drew the other camera's shadows.
             let (a, b) = render_two_cameras(true).await;
+            let (drift, total) = changed_pixels(&a, &alone, 128);
+            assert_eq!(
+                drift, 0,
+                "the first pass differs from that camera rendered alone on {drift}/{total} \
+                 pixels — something derived from the camera is still shared between the passes",
+            );
+
+            // And the two passes really are two different frames, so a build that rendered the
+            // same camera twice could not pass the assertion above by accident.
             let (changed, total) = changed_pixels(&a, &b, 128);
             assert!(
                 changed >= 1000,
-                "with a second view the two passes still differ on only {changed}/{total} \
-                 pixels — the second camera is not reaching its own pass",
+                "the two passes differ on only {changed}/{total} pixels — the second camera is \
+                 not reaching its own pass",
             );
         });
     }
@@ -3150,40 +3169,11 @@ mod golden_render_tests {
     async fn render_two_cameras(separate_views: bool) -> (Vec<u8>, Vec<u8>) {
         const W: u32 = 128;
         let mut renderer = crate::test_gpu::headless_renderer(W, W).await;
+        renderer.taa = None;
+        renderer.ssgi = None;
         let mut asset_manager = AssetManager::new();
         let mut world = World::new();
-        let tex = asset_manager.create_white_texture(
-            &renderer.device,
-            &renderer.queue,
-            &renderer.scene.texture_bind_group_layout,
-        );
-
-        // An off-centre cube: where it lands in frame is what separates the two cameras.
-        let cube = world.spawn();
-        world.add_component(cube, Transform::new(Vec3::new(1.2, 0.0, 0.0)));
-        world.add_component(cube, GlobalTransform::default());
-        world.add_component(cube, AssetManager::create_cube(&renderer.device));
-        world.add_component(
-            cube,
-            Material::new(tex).with_pbr(Vec4::new(0.9, 0.5, 0.2, 1.0), 0.5, 0.0),
-        );
-        world.add_component(cube, MeshRenderer::new());
-        // Generic, not Sun: the cascades are shared state this does not separate.
-        world.spawn_bundle(DirectionalLightBundle {
-            role: gizmo_renderer::components::LightRole::Generic,
-            intensity: 3.0,
-            ..Default::default()
-        });
-
-        // One camera, moved between the two recordings. Moving it is what makes the trap
-        // reproducible: the second write has to land after the first pass is already recorded.
-        let cam_a = world.spawn_bundle(CameraBundle {
-            position: Vec3::new(0.0, 0.5, 5.0),
-            yaw: -std::f32::consts::FRAC_PI_2,
-            pitch: 0.0,
-            primary: true,
-            ..Default::default()
-        });
+        let cam_a = two_camera_scene(&renderer, &mut asset_manager, &mut world);
 
         if separate_views {
             let v = gizmo_renderer::pipeline::SceneView::new(
@@ -3226,6 +3216,98 @@ mod golden_render_tests {
         let a = read_target(&renderer, &target_a, W).await;
         let b = read_target(&renderer, &target_b, W).await;
         (a, b)
+    }
+
+    /// The scene both two-camera fixtures use: an off-centre cube, a floor to receive its shadow,
+    /// a shadow-casting sun, and one camera.
+    ///
+    /// Shared so the single-camera reference and the two-pass run cannot drift — a reference that
+    /// rendered a different scene would compare nothing.
+    fn two_camera_scene(
+        renderer: &Renderer,
+        asset_manager: &mut AssetManager,
+        world: &mut World,
+    ) -> crate::core::Entity {
+        let tex = asset_manager.create_white_texture(
+            &renderer.device,
+            &renderer.queue,
+            &renderer.scene.texture_bind_group_layout,
+        );
+        let tex2 = tex.clone();
+
+        // An off-centre cube: where it lands in frame is what separates the two cameras.
+        let cube = world.spawn();
+        world.add_component(cube, Transform::new(Vec3::new(1.2, 0.0, 0.0)));
+        world.add_component(cube, GlobalTransform::default());
+        world.add_component(cube, AssetManager::create_cube(&renderer.device));
+        world.add_component(
+            cube,
+            Material::new(tex).with_pbr(Vec4::new(0.9, 0.5, 0.2, 1.0), 0.5, 0.0),
+        );
+        world.add_component(cube, MeshRenderer::new());
+
+        // A floor for the cube to cast onto. Without something receiving a shadow, the cascade
+        // split is unobservable and a test comparing frames measures only the camera.
+        let floor = world.spawn();
+        world.add_component(
+            floor,
+            Transform::new(Vec3::new(0.0, -1.5, 0.0)).with_scale(Vec3::new(12.0, 0.2, 12.0)),
+        );
+        world.add_component(floor, GlobalTransform::default());
+        world.add_component(floor, AssetManager::create_cube(&renderer.device));
+        world.add_component(
+            floor,
+            Material::new(tex2).with_pbr(Vec4::new(0.85, 0.85, 0.85, 1.0), 0.9, 0.0),
+        );
+        world.add_component(floor, MeshRenderer::new());
+
+        // A shadow-casting Sun, deliberately. This used to be `Generic`, because the cascades were
+        // shared state `SceneView` did not separate — with the sun in, the two passes contaminated
+        // each other's shadows and the test measured that instead of the camera. Per-view cascade
+        // uniforms (2026-08-24) closed it, so the harder scene is now the one worth guarding.
+        world.spawn_bundle(DirectionalLightBundle {
+            intensity: 3.0,
+            ..Default::default()
+        });
+        // A point light, so the **cluster table** is exercised too. Clusters are a view-space
+        // grid built from the camera's frustum; with only a directional sun in the scene the
+        // table is empty and separating it per view would be unmeasurable.
+        world.spawn_bundle(crate::bundles::PointLightBundle {
+            position: Vec3::new(2.0, 1.0, 1.0),
+            color: Vec3::new(1.0, 0.8, 0.6),
+            intensity: 14.0,
+            radius: 9.0,
+        });
+
+        // One camera, moved between the two recordings. Moving it is what makes the trap
+        // reproducible: the second write has to land after the first pass is already recorded.
+        world.spawn_bundle(CameraBundle {
+            position: Vec3::new(0.0, 0.5, 5.0),
+            yaw: -std::f32::consts::FRAC_PI_2,
+            pitch: 0.0,
+            primary: true,
+            ..Default::default()
+        })
+
+    }
+
+    /// The **first** camera's frame, drawn alone in its own encoder — no second pass to collide
+    /// with, so this is what a correct two-pass *first* frame has to equal.
+    ///
+    /// The first, not the second, and finding that out was the measurement. `queue.write_buffer`
+    /// orders against submission, so when the two passes share a uniform they both read whichever
+    /// camera was written **last** — which is the second one. The second pass is therefore right
+    /// by accident; the first is the one that renders someone else's camera.
+    async fn render_first_camera_alone() -> Vec<u8> {
+        const W: u32 = 128;
+        let mut renderer = crate::test_gpu::headless_renderer(W, W).await;
+        renderer.taa = None;
+        renderer.ssgi = None;
+        let mut asset_manager = AssetManager::new();
+        let mut world = World::new();
+        two_camera_scene(&renderer, &mut asset_manager, &mut world);
+        // Left where `two_camera_scene` puts it: this *is* the first recording's camera.
+        render_world(&mut renderer, &mut world).await
     }
 
     /// A colour target the render pass can draw into and `read_target` can copy out of.

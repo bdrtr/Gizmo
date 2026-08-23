@@ -305,13 +305,19 @@ Measured in `render_to_texture`, offscreen target, three modes: the trap reads 5
 across three bands, per-camera-submit reads 88.80/101.40/63.07, and `SceneView` in one encoder
 reads 89.70/99.02/86.14.
 
-**And the third band is the honest limit.** Rather than guess why it did not match, the demo
-measures it: with the sun replaced by a shadowless `Generic` light, `SceneView` and
-per-camera-submit agree to within 1.5 across all three bands (30.21/30.59/24.59 against
-28.79/30.34/23.83). So all of the remaining difference is the shadow cascades, which are *derived*
-from the camera into their own buffers and are still shared — obstacle 3 again, one level down.
-Per-camera cascades and clusters are separate work and are recorded as such in
-`CAPABILITY_GAPS.md`.
+**The third band was the honest limit, and it closed on 2026-08-24.** Rather than guess why it did
+not match, the demo measured it: with a shadowless light the two agreed to within 1.5 on all three
+bands, so all of the difference was the shadow cascades — *derived* from the camera into their own
+buffers and still shared. Those and the cluster table now live on `SceneView` too, and the lower
+band reads 62.82 against per-camera-submit's 63.07.
+
+The textures did not need copying: render passes run in recording order, so each view's shadow pass
+redraws the shared cascade array right before that view's main pass reads it. Only the uniforms
+could not be shared. A second view costs ~460 KB rather than 144 MB.
+
+What is still shared is **temporal** state — TAA history and SSGI accumulation are per-renderer.
+The guard test disables both, because with them on a single frame carries a 500-pixel noise floor
+that buries the camera's own difference.
 
 Guarded by `two_cameras_in_one_encoder_render_two_different_frames`, which pins both halves: two
 passes without a view must be **pixel-identical** (the trap is still there and still reproducible),
@@ -377,9 +383,9 @@ Ordered by unlocked-capability per unit of work, not by size.
 4. **The material bind-group builder.** ✅ **Done, 2026-08-23** as `AssetManager::material()`.
    Unlocks normal/MR/emissive/AO maps for hand-built scenes,
    which is the difference between 6 and 55 296 vertices for the same surface detail.
-5. **Per-pass uniforms.** ✅ **Done, 2026-08-23** as `SceneView`. Camera-derived state — shadow
-   cascades and the cluster table — is still shared, and that remainder is measured rather than
-   assumed.
+5. **Per-pass uniforms.** ✅ **Done** as `SceneView` (2026-08-23), **completed 2026-08-24** with
+   per-view cascades and cluster tables. Temporal state (TAA, SSGI) is still per-renderer, measured
+   rather than assumed.
 6. ~~**A bindable HDR target.**~~ **Withdrawn 2026-08-23 — the target was already bindable.**
    What the item was reaching for is a **compute reduction**: a user sensor is writable today and
    measured at 10 ms a sample, which is what makes it unusable rather than impossible.

@@ -25,7 +25,7 @@ pub fn record_shadow_passes(
             multiview_mask: None,
         });
         shadow_pass.set_pipeline(&renderer.scene.shadow_pipeline);
-        shadow_pass.set_bind_group(0, &renderer.scene.shadow_pass_bind_groups[i], &[]);
+        shadow_pass.set_bind_group(0, renderer.scene.view_shadow_pass_bind_group(i), &[]);
         shadow_pass.set_bind_group(2, &renderer.scene.instance_bind_group, &[]);
         for item in draw_items {
             // Per-object opt-out, on top of the material rules: `MeshRenderer::shadows`. A flag
@@ -107,7 +107,7 @@ pub fn record_shadow_passes(
         });
         // We reuse the directional shadow pipeline because it only does position transformation
         shadow_pass.set_pipeline(&renderer.scene.shadow_pipeline);
-        shadow_pass.set_bind_group(0, &renderer.scene.point_shadow_pass_bind_groups[i], &[]);
+        shadow_pass.set_bind_group(0, renderer.scene.view_point_shadow_pass_bind_group(i), &[]);
         shadow_pass.set_bind_group(2, &renderer.scene.instance_bind_group, &[]);
         for item in draw_items {
             // Per-object opt-out (`MeshRenderer::shadows`), same as the cascade pass above.
