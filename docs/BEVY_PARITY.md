@@ -119,7 +119,7 @@ Small individually; together they are what makes a Bevy snippet fail to compile.
 | Run conditions on observers | Bevy can `.run_if` an observer | `bevy_observers` |
 | A world handle inside observers/hooks | Callbacks get no world, so a chain reaction must go through captured state and advances **one ring per frame** (measured: 8 rings, 8 frames) | `bevy_observers` |
 | `Visibility` component | Hiding means `ShadowCasting::Only`, which still casts a shadow — not the same thing | `bevy_infinite_grid` |
-| `Transform::forward/right/up/looking_at` | Every direction has to be written by hand | `bevy_transform` |
+| ~~`Transform::forward/right/up/looking_at`~~ | **CLOSED 2026-08-23** — added to `Transform` with two tests (axes orthonormal and right-handed across a full turn of yaw; `looking_at` aims and survives degenerate input). `looking_at` returns the rotation rather than applying it, so it can be blended | `bevy_transform` |
 | `.chain()` | Ordering is per-edge `label()` + `after()`, and an unmatched constraint **warns and is dropped** rather than failing | `bevy_transform`, `bevy_animated_transform` |
 | `or_else` for run conditions | Repeated `run_if` ANDs; OR must be written inside one closure, which also makes the system exclusive | `bevy_run_conditions` |
 | `OnEnter` / `OnExit` state schedules | `State<S>` and `in_state` exist but nothing drives transitions | `bevy_states` |
@@ -184,8 +184,8 @@ and `emissive` (item 4, the only undocumented one). No further silent fields.
 2. **Post-process knobs (B).** Cheapest ratio of work to unblocked examples: these are uniform
    fields and shader constants that already exist, just not exposed. SSR and tone mapping are the
    two with the widest gap.
-3. **`Transform` direction helpers, `Visibility`, `Local<T>` (C).** Small, self-contained, and each
-   removes a recurring papercut.
+3. **`Visibility`, `Local<T>`, `or_else` (C).** Small, self-contained, and each removes a recurring
+   papercut. (`Transform`'s direction helpers were the first of this group and are done.)
 4. **Extrusion machinery (A4).** One feature, 15 examples.
 5. **User materials (A3).** The largest and most architectural; it interacts with `routing.rs`, the
    G-buffer budget and `render_parity`.
