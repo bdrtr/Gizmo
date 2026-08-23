@@ -529,13 +529,18 @@ and `emissive` (item 4, the only undocumented one). No further silent fields.
    is three items: the **spatial index** (F1 — and `occlusion_culling` measures the 8.46 ms/frame
    at 60 k entities it would attack), the **irradiance-volume subsystem** (F2), and the
    **post-process knobs** (B), which are uniform fields and shader constants that exist but are
-   not exposed. SSR and tone mapping have the widest gap.
+   not exposed. **Volumetric's six left B on 2026-08-23** (`VolumetricParams`), and all five
+   screen-space effects gained a reversible `enabled`; SSR's six shaping knobs and tone mapping's
+   single hard-coded curve are the widest remaining gap, and they are the same shape of work the
+   volumetric one turned out to be.
 3. **`Visibility`, `Local<T>`, `or_else`, default query filters (C).** Small, self-contained, and
    each removes a recurring papercut. (`Transform`'s direction helpers were the first of this group
    and are done.)
 4. **Extrusion machinery (A4).** One feature, 15 shapes.
-5. **User materials (A3).** The largest and most architectural; it interacts with `routing.rs`, the
-   G-buffer budget and `render_parity`.
+5. ~~**User materials (A3).**~~ **DONE 2026-08-23** — `MaterialType::Custom(MaterialId)`,
+   forward-only. The G-buffer budget it was said to depend on settled the question instead of
+   blocking it: 28 of 32 bytes are spent, so a custom material cannot bring a target and declares
+   itself forward. `routing.rs` stayed exhaustive and produced exactly one compile error.
 6. **2D pipeline (A1).** Largest of all; arguably a separate project.
 
 ---
