@@ -665,7 +665,7 @@ impl Renderer {
             exposure: 1.15,
             // Depth of field is an opt-in artistic effect, not a default: with it
             // ON, any scene whose subject isn't near `dof_focus_dist` (4.5 m) is
-            // uniformly blurred — e.g. bevy_3d_scene's camera sits ~10 m out, so
+            // uniformly blurred — e.g. 3d_scene's camera sits ~10 m out, so
             // the whole frame was smeared. Off by default; scenes enable it and
             // set the focus distance themselves.
             dof_enabled: false,

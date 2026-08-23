@@ -36,7 +36,7 @@ Gizmo Engine is a high-performance, data-driven, and fully modular game developm
 ## 🚀 Quickstart
 
 Gizmo Engine is designed to be highly modular and ergonomic. Here is a minimal
-example — the default `bevy_3d_scene` demo — that opens a window and renders a lit
+example — the default `3d_scene` demo — that opens a window and renders a lit
 3D scene (a ground disc, a cube, a directional light, and a camera) using the
 high-level `SimpleApp` API.
 
@@ -72,7 +72,7 @@ fn main() {
 }
 ```
 
-> The full source is [`demo/src/bin/bevy_3d_scene.rs`](demo/src/bin/bevy_3d_scene.rs).
+> The full source is [`demo/src/bin/3d_scene.rs`](demo/src/bin/3d_scene.rs).
 > For lower-level control, drop down to `App`, `Plugin`, `Commands`, `Query`,
 > `Res`/`ResMut`, and the `*Bundle` types in [`gizmo::prelude`](crates/gizmo/src/prelude.rs).
 

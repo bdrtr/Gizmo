@@ -9,7 +9,7 @@
 //! `gizmo-engine` is the all-in-one facade crate of the Gizmo game engine. It
 //! re-exports the individual subsystem crates (core ECS, math, app loop,
 //! physics, renderer, windowing, audio, scene, editor, UI, animation and AI)
-//! and adds an ergonomic, Bevy-like convenience layer on top: [`Color`],
+//! and adds an ergonomic convenience layer on top: [`Color`],
 //! ready-made [`bundles`], a [`spawner`] API and prefabricated scene helpers.
 //!
 //! Note that the published *package* is named `gizmo-engine`, while the *library*

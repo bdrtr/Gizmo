@@ -83,7 +83,7 @@ pub(crate) enum DrawLayer {
 /// transparent surface. But the inference above fired on alpha alone, so a material with a cutoff
 /// stopped being a cut-out at exactly the moment its alpha fell below the threshold it was meant
 /// to be tested against: it moved to the sorted, depth-write-free bucket and blended smoothly
-/// instead of cutting. Found 2026-08-22 by porting Bevy's `3d/transparency_3d`, whose masked
+/// instead of cutting. Found 2026-08-22 while building `demo/src/bin/transparency_3d.rs`, whose masked
 /// spheres are supposed to blink and instead faded like everything else.
 ///
 /// Materials that carry a cutoff and a full alpha — every glTF `AlphaMode::Mask` import, which is

@@ -1,4 +1,4 @@
-//! Bevy-like Command API — for spawning an object in a single line inside the setup closure.
+//! Command API — for spawning an object in a single line inside the setup closure.
 //!
 //! ```no_run
 //! use gizmo::prelude::*;

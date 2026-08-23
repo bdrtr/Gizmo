@@ -238,7 +238,7 @@ pub struct Renderer {
     /// fallback, and it exists because there was none: the fallback branch simply did not write
     /// the field, so every ungraded camera inherited `PostProcessUniforms::default()`'s `0.25`
     /// and had no way to change it. Measured before the field existed
-    /// (`demo/src/bin/bevy_color_grading.rs`): corner/centre sat at 1.206 with no component,
+    /// (`demo/src/bin/color_grading.rs`): corner/centre sat at 1.206 with no component,
     /// between the 1.344 of an explicit `vignette = 0` and the 0.635 of `vignette = 0.9`.
     ///
     /// Defaults to that same `0.25`, so adding the field changed no pixel — it only made the

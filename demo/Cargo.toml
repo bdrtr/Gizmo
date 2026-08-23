@@ -4,7 +4,7 @@ name = "demo"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-default-run = "bevy_3d_scene"
+default-run = "3d_scene"
 
 [dependencies]
 gizmo = { package = "gizmo-engine", path = "../crates/gizmo", features = ["audio", "scripting", "scene", "editor", "render", "window", "ui", "analysis"] }
@@ -16,7 +16,7 @@ bytemuck = "1.14"
 tracing = "0.1.44"
 tracing-subscriber = "0.3.23"
 tracing-tracy = "0.11.4"
-# bevy_world_serialization: kendi bileşenini kayıt defterine tanıtmak Serialize/Deserialize ister.
+# world_serialization: kendi bileşenini kayıt defterine tanıtmak Serialize/Deserialize ister.
 serde = { version = "1.0", features = ["derive"] }
 
 
@@ -45,9 +45,9 @@ name = "car_demo"
 path = "src/bin/car_demo.rs"
 
 [[bin]]
-name = "bevy_3d_scene"
-path = "src/bin/bevy_3d_scene.rs"
+name = "3d_scene"
+path = "src/bin/3d_scene.rs"
 
 [[bin]]
-name = "bevy_anisotropy"
-path = "src/bin/bevy_anisotropy.rs"
+name = "anisotropy"
+path = "src/bin/anisotropy.rs"

@@ -95,7 +95,7 @@ fn describe_copy(label: &str, src: &str, outcome: CopyOutcome) -> String {
 
 /// The binary an export ships: the runtime that opens a scene file, not a demo.
 ///
-/// This used to be `demo`, whose default binary is `bevy_3d_scene` — a fixed floor, cube, light
+/// This used to be `demo`, whose default binary is `3d_scene` — a fixed floor, cube, light
 /// and camera that reads no scene and runs no script. The export copied the user's `scenes/` and
 /// `scripts/` next to it and nothing on the other side ever opened them, while the log said
 /// "Oyununuz hazır". `gizmo_runtime` is the other side; see its module docs for the contract.
@@ -1082,7 +1082,7 @@ mod export_copy_tests {
     /// **What ships is the runtime, not a demo.**
     ///
     /// The export ran `cargo build --release -p demo` and copied `demo`'s default binary, which is
-    /// `bevy_3d_scene`: a fixed floor, cube, light and camera that opens no scene file and runs no
+    /// `3d_scene`: a fixed floor, cube, light and camera that opens no scene file and runs no
     /// script. Every target has to name the runtime, cross-compiled ones included — a Windows
     /// export shipping `demo.exe` is the same defect with a different extension.
     #[test]

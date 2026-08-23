@@ -320,7 +320,8 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let pos_sample       = textureLoad(t_position_rel_camera,   iuv, 0);
     let tangent_sample   = textureLoad(t_world_tangent,    iuv, 0);
 
-    // Unwritten pixels (skipped geometry, unlit objects) — render clean dark grey background (Bevy parity)
+    // Unwritten pixels (skipped geometry, unlit objects) — a clean dark grey, rather than
+    // whatever the G-buffer happened to still hold from the previous frame.
     if (pos_sample.w < 0.5) { 
         return vec4<f32>(0.05, 0.05, 0.05, 1.0);
     }

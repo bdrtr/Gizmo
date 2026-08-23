@@ -139,7 +139,8 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
                 let func_ref = &func;
 
                 // Her Archetype'ı cache dostu chunk'lar halinde ayırıp process ediyoruz
-                // Chunk size: 512 (Bevy benzeri)
+                // Chunk size: 512 — bir arketip satırı için önbellek dostu bir dilim;
+                // rayon'un görev başına yükünü amorti edecek kadar büyük, L1'i taşırmayacak kadar küçük.
                 (0..len)
                     .into_par_iter()
                     .with_min_len(512)

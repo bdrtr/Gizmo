@@ -24,8 +24,9 @@
 //!   Gameplay, cameras, UI, input edges. This is `App::update_schedule`, reached through
 //!   [`App::add_update_system`](crate::windowed::App::add_update_system).
 //!
-//! The split is the same one Bevy draws between `Update` and `FixedUpdate`, and for the
-//! same reason.
+//! The split exists because the two have incompatible timing needs: simulation has to advance
+//! in equal slices to stay reproducible, while input edges and camera motion have to be sampled
+//! once per rendered frame or they stutter and double-fire.
 //!
 //! # Ordering
 //!

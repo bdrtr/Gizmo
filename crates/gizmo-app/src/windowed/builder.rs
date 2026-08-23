@@ -167,10 +167,40 @@ impl<State: 'static> App<State> {
     ///
     /// Runs after input has been gathered for the frame and before the schedules, so
     /// `is_key_just_pressed` and the gamepad's edges are live here.
+    ///
+    /// # This REPLACES the hook; it does not chain
+    ///
+    /// There is one update hook, and the last caller wins. That matters because
+    /// [`SimpleAppExt::with_simple_scene`](../../gizmo/simple/trait.SimpleAppExt.html) installs
+    /// one of its own, which does four separate jobs every frame:
+    ///
+    ///   1. turns mouse/WASD into a camera pose (`SimpleSceneState::fly_step`);
+    ///   2. writes that pose onto the scene's cameras;
+    ///   3. steps the CPU physics in ≤16 ms slices;
+    ///   4. runs `TransformSyncSystem` and `TransformPropagateSystem`.
+    ///
+    /// So `.with_simple_scene(..).set_update(..)` — the obvious thing to write when a game needs
+    /// an exclusive `&mut World`, which a scheduled system can never have — **silently discards
+    /// all four**. Nothing fails to compile and the frame still renders; the camera just stops
+    /// responding to input and `GlobalTransform` stops being propagated. Found this way in six
+    /// demos on 2026-08-23.
+    ///
+    /// If you need both, call the simple scene's work yourself at the top of your hook. The demo
+    /// crate publishes exactly that as `demo::simple_scene_update`.
+    ///
+    /// Overwriting an already-installed hook logs a warning rather than doing it quietly.
     pub fn set_update<F>(mut self, f: F) -> Self
     where
         F: FnMut(&mut World, &mut State, f32, &gizmo_core::input::Input) + 'static,
     {
+        if self.update_fn.is_some() {
+            tracing::warn!(
+                "set_update replaced an existing update hook — if the previous one came from \
+                 `with_simple_scene`, camera control, CPU physics stepping and transform \
+                 propagation are now gone. Call `demo::simple_scene_update` (or equivalent) at \
+                 the top of the new hook to keep them."
+            );
+        }
         self.update_fn = Some(Box::new(f));
         self
     }

@@ -22,7 +22,7 @@ Physics demos need `--release`. In a debug build the broad/narrow-phase is slow 
 to look broken:
 
 ```sh
-cargo run --release -p demo --bin bevy_3d_scene   # default scene
+cargo run --release -p demo --bin 3d_scene   # default scene
 cargo run --release -p demo --bin car_demo        # vehicle dynamics
 ```
 

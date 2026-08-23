@@ -1,6 +1,6 @@
 //! # `gizmo_runtime` — the binary an exported game ships
 //!
-//! Studio's Build/Export packaged `demo`'s default binary, `bevy_3d_scene`: a fixed floor, cube,
+//! Studio's Build/Export packaged `demo`'s default binary, `3d_scene`: a fixed floor, cube,
 //! light and camera that reads no scene file and runs no script. The export copied the user's
 //! `scenes/` and `scripts/` next to it, and nothing on the other side ever opened them. This is
 //! the other side.

@@ -70,7 +70,7 @@ impl Listener {
 /// | `simple.rs`, `beamng`, `ocean_scene`, … (`rotation_y(-yaw + π/2)`) | `(sin y, 0, -cos y)` | dot **−1** — exactly inverted |
 /// | `fps_look.rs`, `kcc_scene`, … (`rotation_y(-yaw)`) | `(cos y, 0, sin y)` | dot **0** — the *forward* vector |
 ///
-/// Measured 2026-08-23 with `demo/src/bin/bevy_spatial_audio.rs`: under the simple scene the dot
+/// Measured 2026-08-23 with `demo/src/bin/spatial_audio.rs`: under the simple scene the dot
 /// product was `-1.00` on every frame, and a sound placed at the camera's own right came out
 /// **nearer the left ear**. Stereo panning was mirrored in every game built on that camera, and
 /// separated along the view axis (so barely panned at all) in every game built on `FpsLook`.

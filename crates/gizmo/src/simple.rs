@@ -455,6 +455,90 @@ impl<'a> SceneBuilder<'a> {
     }
 }
 
+/// Everything the simple scene does every frame, as a callable function.
+///
+/// [`SimpleAppExt::with_simple_scene`] installs this as its update hook. It is public because
+/// [`App::set_update`](crate::app::App::set_update) **replaces** that hook rather than chaining
+/// onto it: a game that needs its own exclusive `&mut World` pass — which a scheduled system can
+/// never have — would otherwise silently lose all four jobs below. Call this at the top of your
+/// own hook to keep them.
+///
+/// ```no_run
+/// # use gizmo::prelude::*;
+/// # use gizmo::simple::{simple_scene_update, SimpleAppExt, SimpleSceneState};
+/// # fn my_exclusive_work(_: &mut gizmo::core::World) {}
+/// # let app = App::<SimpleSceneState>::new("x", 1, 1).with_simple_scene(|_, _| {});
+/// app.set_update(|world, state, dt, input| {
+///     simple_scene_update(world, state, dt, input);
+///     my_exclusive_work(world);
+/// })
+/// # ;
+/// ```
+///
+/// The four jobs, in order:
+///
+///   1. turn mouse/WASD into a camera pose ([`SimpleSceneState::fly_step`]);
+///   2. write that pose onto **the scene's camera** — see below;
+///   3. step the CPU physics in ≤16 ms slices;
+///   4. run `TransformSyncSystem` then `TransformPropagateSystem`.
+///
+/// # Which camera step 2 writes to
+///
+/// Exactly the one the frame renders from, resolved through
+/// [`active_camera`](crate::renderer::components::active_camera) — the camera flagged `primary`,
+/// falling back to the first when none is.
+///
+/// It did not always. Until 2026-08-23 this loop wrote the pose to **every** entity matching
+/// `(Transform, Camera)` with no filter at all, so a scene holding a second camera had it stomped
+/// once per frame and could not keep its own pose. Measured while building
+/// `demo/src/bin/render_to_texture.rs`: a camera spawned at `(0, 7.0, 0.2)` with pitch −1.15 read
+/// back as `yaw −1.57 pitch −0.21 T(0, 1.4, 6.5)` at draw time — the *first* camera's pose. Using
+/// the same rule as the renderer is what makes "the camera the player flies" and "the camera the
+/// frame is drawn from" the same sentence.
+pub fn simple_scene_update(
+    world: &mut crate::core::World,
+    state: &mut SimpleSceneState,
+    dt: f32,
+    input: &Input,
+) {
+    state.fly_step(input, dt);
+
+    // The renderer's own rule, not a second copy of it: whichever camera `active_camera` names is
+    // the one the fly controls.
+    let target = crate::renderer::components::active_camera(world);
+    if let (Some(target), Some(mut q)) = (
+        target,
+        world.query_mut::<(
+            crate::core::query::Mut<Transform>,
+            crate::core::query::Mut<Camera>,
+        )>(),
+    ) {
+        let rot = Quat::from_rotation_y(-state.camera_yaw + FRAC_PI_2)
+            * Quat::from_rotation_x(state.camera_pitch);
+
+        for (id, (mut trans, mut cam)) in q.iter_mut() {
+            if id != target {
+                continue;
+            }
+            trans.position = state.camera_pos;
+            trans.rotation = rot;
+            cam.yaw = state.camera_yaw;
+            cam.pitch = state.camera_pitch;
+        }
+    }
+
+    let mut physics_dt = dt.min(0.1);
+    while physics_dt > 0.0 {
+        let step = physics_dt.min(0.016);
+        systems::cpu_physics_step_system(world, step);
+        physics_dt -= step;
+    }
+
+    use crate::core::system::System;
+    systems::transform::TransformSyncSystem.run(world, dt);
+    systems::transform::TransformPropagateSystem.run(world, dt);
+}
+
 /// Adds [`with_simple_scene`](SimpleAppExt::with_simple_scene) to an `App<SimpleSceneState>`.
 pub trait SimpleAppExt {
     /// Installs a setup closure that builds the scene through a [`SceneBuilder`], and wires the
@@ -492,38 +576,7 @@ impl SimpleAppExt for App<SimpleSceneState> {
             world.insert_resource(asset_manager);
             state
         })
-        .set_update(|world, state, dt, input| {
-            state.fly_step(input, dt);
-
-            if let Some(mut q) = world.query_mut::<(
-                crate::core::query::Mut<Transform>,
-                crate::core::query::Mut<Camera>,
-            )>() {
-                let yaw_rot = Quat::from_rotation_y(-state.camera_yaw + FRAC_PI_2);
-                let pitch_rot = Quat::from_rotation_x(state.camera_pitch);
-                let rot = yaw_rot * pitch_rot;
-
-                for (_, (mut trans, mut cam)) in q.iter_mut() {
-                    trans.position = state.camera_pos;
-                    trans.rotation = rot;
-                    cam.yaw = state.camera_yaw;
-                    cam.pitch = state.camera_pitch;
-                }
-            }
-
-            let mut physics_dt = dt.min(0.1);
-            while physics_dt > 0.0 {
-                let step = physics_dt.min(0.016);
-                systems::cpu_physics_step_system(world, step);
-                physics_dt -= step;
-            }
-
-            use crate::core::system::System;
-            let mut transform_sync = systems::transform::TransformSyncSystem;
-            let mut transform_propagate = systems::transform::TransformPropagateSystem;
-            transform_sync.run(world, dt);
-            transform_propagate.run(world, dt);
-        })
+        .set_update(simple_scene_update)
         .set_render(|world, _state, encoder, view, renderer, _light_time| {
             // Basit sahnelerde varsayılan olarak gelen GPU compute sistemlerini ve reflection'ları kapatıyoruz
             // Böylece sadece bizim eklediğimiz küp ve ışık temiz bir şekilde render edilecek.
@@ -631,6 +684,68 @@ mod fly_camera_tests {
             stick.camera_pos.length() < 9.0,
             "a half-tilted stick was normalised back up to full speed: {}",
             stick.camera_pos.length()
+        );
+    }
+
+    /// The fly camera writes to the camera the frame renders from, and to no other.
+    ///
+    /// Before 2026-08-23 this loop had no filter, so a scene holding a second camera had its pose
+    /// overwritten once per frame. Reverting the `id != target` guard turns this test red.
+    #[test]
+    fn the_fly_camera_writes_only_to_the_rendered_camera() {
+        use crate::core::World;
+        use crate::renderer::components::Camera;
+
+        let mut world = World::new();
+
+        // The scene's camera: marked primary, so `active_camera` names it.
+        let primary = world.spawn_bundle((
+            Transform::new(Vec3::ZERO),
+            Camera::new(1.0, 0.1, 100.0, 0.0, 0.0, true),
+        ));
+        // A second camera with a pose of its own that nothing should touch.
+        let other_pose = Vec3::new(0.0, 7.0, 0.2);
+        let other = world.spawn_bundle((
+            Transform::new(other_pose),
+            Camera::new(1.0, 0.1, 100.0, 0.0, -1.15, false),
+        ));
+
+        let mut state = SimpleSceneState {
+            camera_speed: 15.0,
+            camera_pitch: 0.25,
+            camera_yaw: 0.5,
+            camera_pos: Vec3::new(3.0, 4.0, 5.0),
+        };
+        simple_scene_update(&mut world, &mut state, 1.0 / 60.0, &Input::new());
+
+        let read = |entity: crate::core::Entity| {
+            let q = world
+                .query::<(&Transform, &Camera)>()
+                .expect("query buildable");
+            q.iter()
+                .find(|(id, _)| *id == entity.id())
+                .map(|(_, (t, c))| (t.position, c.pitch))
+                .expect("camera still present")
+        };
+
+        let (primary_pos, primary_pitch) = read(primary);
+        assert_eq!(
+            primary_pos, state.camera_pos,
+            "the rendered camera must follow the fly state"
+        );
+        assert!(
+            (primary_pitch - state.camera_pitch).abs() < 1e-6,
+            "the rendered camera must take the fly pitch, got {primary_pitch}"
+        );
+
+        let (other_pos, other_pitch) = read(other);
+        assert_eq!(
+            other_pos, other_pose,
+            "a second camera must keep its own position, got {other_pos:?}"
+        );
+        assert!(
+            (other_pitch - (-1.15)).abs() < 1e-6,
+            "a second camera must keep its own pitch, got {other_pitch}"
         );
     }
 

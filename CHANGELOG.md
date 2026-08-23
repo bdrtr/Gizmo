@@ -1025,7 +1025,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ordinary function (`cradle`'s headless server now does).
 
 - **Studio's Build/Export ships your scene, not the engine's sample.** It built `demo` and copied
-  that crate's default binary — `bevy_3d_scene`, a fixed floor/cube/light/camera that opens no
+  that crate's default binary — `3d_scene`, a fixed floor/cube/light/camera that opens no
   scene file and runs no script — then copied the project's `scenes/` and `scripts/` next to it,
   where nothing ever read them, and said "Oyununuz hazır". It now builds `gizmo_runtime` (new, in
   `demo/src/bin/`), writes the world the editor is showing to `export/gizmo_game/scenes/main.scene`,
@@ -2433,7 +2433,7 @@ breaking `0.x` bump. **Upgrading from `0.1.x`? See the
   neighbors`, `get_entity_component_types → entity_component_types`,
   `get_log_version → log_version`, `get_engine_torque → engine_torque`,
   `get_entity_names → entity_names`). Fallible `get_*` accessors that return
-  `Option`/`Result` keep the prefix, following the Bevy convention.
+  `Option`/`Result` keep the prefix, following the usual Rust convention.
 - **MSRV raised to `1.92`** (floor set by `egui 0.34`), up from `1.89`. Enforced
   by a CI `msrv` job. Earlier in the cycle the MSRV was empirically set to `1.89`
   (1.82/1.85 fail on transitive `crypto-common`/`wide`/`safe_arch`).

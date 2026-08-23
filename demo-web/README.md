@@ -1,6 +1,6 @@
 # demo-web — Gizmo Engine in the browser
 
-The browser (WebGPU/WASM) counterpart of `demo/src/bin/bevy_3d_scene.rs`: the
+The browser (WebGPU/WASM) counterpart of `demo/src/bin/3d_scene.rs`: the
 same high-level `SimpleAppExt` API and the same engine core, compiled to
 `wasm32-unknown-unknown`. The scene drops a stack of physics cubes onto a
 ground disk so the live simulation loop is visible.

@@ -7,7 +7,8 @@
 //! 3. **Irradiance baking**: the ambient lighting is computed for each probe
 //! 4. **Runtime lookup**: trilinear interpolation from the nearest probes, in the shader
 //!
-//! Equivalent to the light-probe systems in Bevy, Unity and Unreal.
+//! This is the standard light-probe approach to static indirect lighting: bake once, look up
+//! cheaply, and pay nothing per frame for light that never moves.
 
 use gizmo_math::Vec3;
 

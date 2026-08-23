@@ -56,13 +56,14 @@ still-large functions such as `update_vehicle` / `execute_render_pipeline` — a
 > refuted candidates in §7, method in §8. The audit report itself stays — it is dated evidence,
 > not a plan.
 
-> **2026-08-23:** 46 of Bevy 0.19.1's 412 examples were ported one at a time to
-> `demo/src/bin/bevy_*.rs`, each header recording — with a measurement — where the engine differs.
-> The aggregate is `docs/BEVY_PARITY.md`: what a Bevy user reaches for and does not find, ranked by
-> how much of the example corpus each gap blocks. It is measured, not estimated, and every claim
-> names the demo that can re-run it. The sweep also found six engine defects (all fixed or
-> reported; list at the end of that file). **First item of work named there: text/font rendering,
-> which the engine has no path for at all.**
+> **2026-08-23:** a demo suite was built out in `demo/src/bin/`, one capability at a time, each
+> header recording — with a measurement — where the engine falls short. The aggregate is
+> `docs/CAPABILITY_GAPS.md`: what a game built on this engine reaches for and does not find,
+> ranked by how much each gap blocks. It is measured, not estimated, and every claim names the
+> demo that can re-run it. The sweep also found seven engine defects (all fixed or reported) and
+> one complete subsystem — the irradiance-volume code in `gizmo-renderer::gi` — that is written,
+> tested, exported and **connected to nothing**. **First item of work named there: text/font
+> rendering, which the engine has no path for at all.**
 
 Phases 0–5 (stabilization, tests+CI, determinism, P2P rollback netcode, physics depth,
 renderer/WASM/editor) are **DONE**. Remaining:
@@ -2239,7 +2240,7 @@ the *slope* gate is the one that guards it.
   core, math, rustc-hash, serde, tracing), `gizmo-core` is one of only three Stage A crates with
   no glam on its surface, and physics-core's `gizmo-core` dependency is *optional*, so `Transform`
   works without an ECS today — a move would end that. If it is ever paid for, the two shapes are
-  (a) core takes glam, or (b) a separate spatial crate in the shape of `bevy_transform`; the
+  (a) core takes glam, or (b) a separate spatial crate in the shape of `transform`; the
   trigger is D1 (packaging the physics crates independently) actually happening, or a consumer who
   wants the type without the physics vocabulary.
 - **The prototype's four egui-0.34 limits** (left-aligned button labels, Lucide icons, a 2 px
@@ -3873,7 +3874,7 @@ Bir daha taranmasına gerek yok; bekçi `inspector_width_tests` olarak duruyor v
 
 Stüdyodaki "Build / Export", `cargo build --release -p demo` koşup çıkan binary'yi
 `export/gizmo_game/` altına kopyalıyor ve "Oyununuz hazır" diyor. `demo`'nun varsayılan binary'si
-`bevy_3d_scene` — zemin, küp, ışık ve kameradan ibaret **sabit** bir sahne. Hiçbir sahne dosyası
+`3d_scene` — zemin, küp, ışık ve kameradan ibaret **sabit** bir sahne. Hiçbir sahne dosyası
 okumuyor, hiçbir script çalıştırmıyor.
 
 Yani export kullanıcının sahnesini değil, motorun örneğini paketliyor. Kopyalanan `scenes/` ve

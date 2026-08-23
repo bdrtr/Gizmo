@@ -38,6 +38,17 @@ use gizmo_physics_core::Transform;
 /// Automatically despawns the entity after `remaining` seconds. Every frame the system
 /// decreases `remaining` by `dt`; when it is ≤ 0 the entity is deleted. (For bullet trails,
 /// sparks, confetti, a temporary sound/effect source…)
+///
+/// # Inert without [`LifetimePlugin`]
+///
+/// The system that reads this component ships with [`LifetimePlugin`], and that plugin is **not
+/// on by default**. Without it the component attaches, nothing reads it, the entity never dies,
+/// and **nothing warns** — entities simply accumulate.
+///
+/// Measured 2026-08-23 while building `demo/src/bin/delayed_commands.rs`: the same scene run
+/// with and without the plugin grew 5 → 10 → 15 live entities in one case and drained correctly
+/// in the other. It was caught only because that demo ran a hand-built delay queue beside the
+/// engine's and could see the two diverge.
 #[derive(Debug, Clone, Copy)]
 pub struct DespawnAfter {
     /// Remaining lifetime (seconds). Can be changed at runtime (e.g. extend the lifetime).

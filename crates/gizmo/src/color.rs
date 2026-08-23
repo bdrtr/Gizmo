@@ -1,6 +1,6 @@
 use gizmo_math::Vec4;
 
-/// Bevy-like color type. Holds RGBA float values (0.0 - 1.0).
+/// RGBA colour, held as four floats in the 0.0 – 1.0 range.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Color(pub Vec4);
 

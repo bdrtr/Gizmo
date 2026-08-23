@@ -1,4 +1,4 @@
-//! Bevy-style predefined Bundle structures.
+//! Predefined bundles — ready-made component sets.
 //!
 //! Used to add more than one component to an entity in a single go.
 //!

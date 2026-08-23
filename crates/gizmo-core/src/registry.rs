@@ -152,7 +152,7 @@ pub struct ComponentRegistry {
     name_to_type: BTreeMap<String, TypeId>,
     /// TypeId → Reflection & Serialization Registration
     type_to_reg: BTreeMap<TypeId, TypeRegistration>,
-    /// Bevy Reflect based type registrations — only present with the `reflect` feature.
+    /// `bevy_reflect`-based type registrations — only present with the `reflect` feature.
     #[cfg(feature = "reflect")]
     pub reflect_registry: bevy_reflect::TypeRegistry,
 }

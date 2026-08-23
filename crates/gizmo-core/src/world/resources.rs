@@ -225,7 +225,7 @@ impl World {
 
     /// Temporarily takes a resource out of the world, passes it to a closure, and then puts it
     /// back. This is the cleanest way to keep the borrow checker happy when you need to use
-    /// `&mut World` while inside the resource (similar to `resource_scope` in Bevy).
+    /// `&mut World` while inside the resource.
     ///
     /// # Example
     /// ```

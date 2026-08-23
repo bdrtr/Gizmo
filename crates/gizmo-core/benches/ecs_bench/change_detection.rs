@@ -13,10 +13,11 @@ fn all_added_detection_generic<T: Component + Default + Clone>(group: &mut crite
                 || {
                     let mut world = World::new();
                     let entities: Vec<_> = world.spawn_batch(std::iter::repeat_n((T::default(),), entity_count as usize)).collect();
-                    world.increment_tick(); // Wait, added entities were added at the old tick, and query uses the current tick? No, they were added with world's current tick. Incrementing the tick makes the current tick different from the added tick. Wait, if we increment the tick, then `ticks.added == current_tick` will be false!
-                    // Wait, Bevy's `Added` checks if `added_tick` is newer than `last_run_tick`.
-                    // Gizmo's `Added` (which I just implemented) checks `ticks.added == tick`. `tick` is `world.tick`.
-                    // So if we don't increment the tick, `ticks.added == world.tick` will be true.
+                    // `Added` here is an EQUALITY test — `ticks.added == world.tick` — not a
+                    // "newer than the last run" comparison. So the tick has to be advanced past
+                    // the spawn for this bench to measure the miss path: leave it where it is and
+                    // every entity matches, and the benchmark times the hit path instead.
+                    world.increment_tick();
                     (world, entities)
                 },
                 |(world, _)| {

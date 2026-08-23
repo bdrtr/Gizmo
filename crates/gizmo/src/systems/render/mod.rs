@@ -160,7 +160,7 @@ impl<State: 'static> AppSceneRenderExt for gizmo_app::App<State> {
 /// (`M[0][2]`, `M[1][2]`) survives the divide as a constant NDC shift — the standard trick, and
 /// what this code did unconditionally. An **orthographic** matrix has `w = 1`: there is no
 /// divide, so the very same edit turns a sub-pixel offset into one **proportional to view
-/// depth**. Measured 2026-08-22 on a static orthographic scene (`demo/src/bin/bevy_orthographic.rs`,
+/// depth**. Measured 2026-08-22 on a static orthographic scene (`demo/src/bin/orthographic.rs`,
 /// camera 8.7 units out): ±0.5 px of intended jitter became ±4 px of actual shift, TAA never
 /// converged, and consecutive frames of a scene whose every transform was bit-identical differed
 /// in **2.1 %** of their pixels — a visible shimmer. With the jitter in the translation column
@@ -184,8 +184,8 @@ fn jitter_projection(mut proj: crate::math::Mat4, jx: f32, jy: f32) -> crate::ma
     proj
 }
 
-/// An out-of-the-box Render Engine that mimics Bevy's DefaultPlugins behavior, serving only
-/// to light the models and put them on screen quickly.
+/// A batteries-included render path, serving only to light the models and put them on screen
+/// quickly.
 /// It is used to avoid writing hundreds of lines of code in freshly opened, empty projects
 /// like `tut`.
 #[tracing::instrument(skip_all, name = "render_system")]
@@ -1068,7 +1068,7 @@ mod golden_render_tests {
     ///
     /// Measured 2026-08-22 at 128×128 on this scene: **44/255** with the offset in
     /// the z column and **33/255** with it in the translation column, against the
-    /// perspective probe's 18. In a demo-sized window it was worse still — `bevy_orthographic`
+    /// perspective probe's 18. In a demo-sized window it was worse still — `orthographic`
     /// swung 115/255 and 2.1 % of its pixels moved every frame on a scene whose transforms were
     /// bit-identical, which is what a person sees as shimmer; fixed, that window settles into a
     /// clean eight-frame cycle (frames 8 apart come out **byte-identical**) and the residual is

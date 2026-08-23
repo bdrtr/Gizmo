@@ -164,7 +164,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // `alpha_cutoff` is a cut-out — foliage on a quad, a pierced fence — and it says where the
     // surface simply is not. The forward path read only the floor until 2026-08-22, so a cut-out
     // material shaded here faded instead of cutting, while the same material through the G-buffer
-    // or baked-lit path cut correctly. Found by porting Bevy's `3d/transparency_3d`.
+    // or baked-lit path cut correctly. Found while building `demo/src/bin/transparency_3d.rs`.
     if (final_alpha < 0.01) {
         discard;
     }

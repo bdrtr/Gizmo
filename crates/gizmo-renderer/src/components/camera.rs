@@ -205,9 +205,9 @@ impl Camera {
     }
 
     /// Build a world-space picking ray from a screen/cursor pixel through this
-    /// camera — the engine's screen→world unproject (à la Bevy's
-    /// `Camera::viewport_to_world`). Combine with `PhysicsWorld::raycast` (or a
-    /// plane intersection) to pick / drag the object under the cursor.
+    /// camera — the engine's screen→world unproject. Combine with
+    /// `PhysicsWorld::raycast` (or a plane intersection) to pick / drag the object
+    /// under the cursor.
     ///
     /// * `screen` — cursor position in pixels, origin **top-left** (matches
     ///   [`gizmo_core`]'s `Input::mouse_position`).

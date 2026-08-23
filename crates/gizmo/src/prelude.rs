@@ -34,7 +34,7 @@ pub use crate::core::{Commands, EntityCommands};
 // === Matematik ===
 pub use crate::math::{EulerRot, Mat4, Quat, Ray, Vec2, Vec3, Vec4};
 
-// === Sadelik API (Bevy tarzı) ===
+// === Sadelik API ===
 pub use crate::app::{App, Plugin};
 #[cfg(feature = "render")]
 pub use crate::asset_server::AssetServer;

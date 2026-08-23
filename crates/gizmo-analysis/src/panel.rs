@@ -16,6 +16,10 @@
 //! });
 //! # });
 //! # assert!(!out.shapes.is_empty(), "the panel always draws something");
+//! # // REQUIRED: `TexturesDelta` panics if it is merely dropped — egui hands back deltas it
+//! # // expects the caller to apply. Without this the doctest fails with
+//! # // "Dropped TexturesDelta with 1 unapplied deltas".
+//! # out.drop_without_applying_deltas();
 //! ```
 
 use crate::analyzer::Analyzer;

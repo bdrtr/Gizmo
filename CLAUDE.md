@@ -35,7 +35,7 @@ cargo test -p gizmo-physics-rigid --features experimental-multibody
 
 # Demos live in demo/src/bin/ (39 of them). ALWAYS use --release for physics demos —
 # a debug build hits a severe broad/narrow-phase CPU bottleneck.
-cargo run --release -p demo                      # default: bevy_3d_scene (PBR + physics)
+cargo run --release -p demo                      # default: 3d_scene (PBR + physics)
 cargo run --release -p demo --bin car_demo
 cargo run --release -p demo --bin advanced_physics
 

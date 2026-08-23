@@ -1,6 +1,6 @@
 //! Gizmo Engine — tarayıcı (WebGPU/WASM) demosu.
 //!
-//! `demo/src/bin/bevy_3d_scene.rs`'in web karşılığı: aynı yüksek seviye
+//! `demo/src/bin/3d_scene.rs`'in web karşılığı: aynı yüksek seviye
 //! `SimpleAppExt` API'si, aynı motor çekirdeği — hedef `wasm32-unknown-unknown`.
 //! Sahneye havadan bırakılan bir küp yığını eklendi ki canlı fizik döngüsü
 //! tarayıcıda gözle görülür olsun (küpler düşer, çarpışır, yerleşir).
@@ -33,7 +33,7 @@ mod web {
             .with_simple_scene(|scene, state| {
                 scene.spawn_ground(6.0);
 
-                // Zemindeki referans küpü (bevy_3d_scene ile aynı).
+                // Zemindeki referans küpü (3d_scene ile aynı).
                 scene.spawn_cube(Vec3::new(0.0, 0.5, 0.0), 1.0, Vec3::new(0.20, 0.28, 1.0));
 
                 // Havadan bırakılan yığın: canlı fizik kanıtı.
