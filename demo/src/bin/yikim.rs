@@ -280,7 +280,7 @@ fn confetti(g: &mut Game, world: &mut World, at: Vec3) {
 }
 
 // --------------------------------------------------------------- setup
-fn setup(world: &mut World, renderer: &Renderer) -> Game {
+fn setup(world: &mut World, renderer: &mut Renderer) -> Game {
     let mut assets = AssetManager::new();
     let white = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
     let checker = assets.create_checkerboard_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);

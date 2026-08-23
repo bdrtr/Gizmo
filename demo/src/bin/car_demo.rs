@@ -976,7 +976,7 @@ fn wheel_mesh_radius(world: &World, wheel_id: u32, scale_y: f32) -> f32 {
     0.3 // makul varsayılan
 }
 
-fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> CarDemoState {
+fn setup_scene(world: &mut World, renderer: &mut gizmo::renderer::Renderer) -> CarDemoState {
     println!("Araba Demo Yükleniyor...");
 
     let config = CarConfig::default();

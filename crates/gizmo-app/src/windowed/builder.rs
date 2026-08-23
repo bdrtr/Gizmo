@@ -153,7 +153,7 @@ impl<State: 'static> App<State> {
     /// hook is handed. It runs exactly once, on the first `resumed` event.
     pub fn set_setup<F>(mut self, f: F) -> Self
     where
-        F: FnOnce(&mut World, &Renderer) -> State + 'static,
+        F: FnOnce(&mut World, &mut Renderer) -> State + 'static,
     {
         self.setup_fn = Some(Box::new(f));
         self

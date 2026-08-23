@@ -235,7 +235,7 @@ fn create_tetra_box(
     (nodes, elements, index_buffer, surface_indices.len() as u32)
 }
 
-fn setup(world: &mut World, renderer: &Renderer) -> BeamNGState {
+fn setup(world: &mut World, renderer: &mut Renderer) -> BeamNGState {
     let mut asset_manager = AssetManager::new();
 
     // Gökyüzü (skybox) — ters küp, tek varlık

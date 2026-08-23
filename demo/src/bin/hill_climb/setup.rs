@@ -2,7 +2,7 @@ use gizmo::physics::world::PhysicsWorld;
 use gizmo::prelude::*;
 use super::DemoState;
 
-pub(super) fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
+pub(super) fn setup(world: &mut World, renderer: &mut Renderer) -> DemoState {
     // --- Geliştirici Konsolu (CVar) Kayıtları ---
     if let Some(mut registry) = world.get_resource_mut::<gizmo::core::cvar::CVarRegistry>() {
         registry.register(

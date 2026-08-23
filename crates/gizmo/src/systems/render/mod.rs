@@ -3297,6 +3297,146 @@ mod golden_render_tests {
         out
     }
 
+    /// A registered material draws with its own shader, and a dangling id draws nothing.
+    ///
+    /// Two halves, and the second is the one worth having. `MaterialType::Custom(id)` routes
+    /// through `MaterialRegistry`; an id with no entry behind it must draw **nothing** rather than
+    /// falling through to PBR. A silent fallback is exactly how `routing.rs`'s own module docs
+    /// describe two capabilities dying — an object shaded as something else is a wrong answer,
+    /// while an object that vanishes is a question.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_registered_material_draws_and_a_dangling_id_draws_nothing() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let pbr = render_custom_material_cube(CustomCase::Pbr).await;
+            let custom = render_custom_material_cube(CustomCase::Registered).await;
+            let dangling = render_custom_material_cube(CustomCase::Dangling).await;
+            let empty = render_custom_material_cube(CustomCase::NoCube).await;
+
+            let (differs, total) = changed_pixels(&pbr, &custom, 128);
+            assert!(
+                differs >= 300,
+                "a registered material changed {differs}/{total} pixels against PBR — its shader \
+                 is not reaching the frame",
+            );
+
+            let (leaked, total) = changed_pixels(&dangling, &empty, 128);
+            assert_eq!(
+                leaked, 0,
+                "an unregistered id drew {leaked}/{total} pixels — it fell through to some \
+                 engine pipeline instead of drawing nothing",
+            );
+        });
+    }
+
+    /// Which material the cube in `render_custom_material_cube` carries.
+    #[derive(Clone, Copy, PartialEq)]
+    enum CustomCase {
+        /// The engine's own PBR — the reference.
+        Pbr,
+        /// A registered custom material.
+        Registered,
+        /// `MaterialType::Custom` with an id nothing was registered under.
+        Dangling,
+        /// No cube at all — what "drew nothing" has to look like.
+        NoCube,
+    }
+
+    /// The smallest custom shader that is unmistakably not one of the engine's: flat magenta.
+    ///
+    /// It declares only groups 0 and `#{INSTANCE_GROUP}`, which is the minimum a forward draw
+    /// needs, and it goes through the same composer the engine's shaders do — so `#import` and the
+    /// group-index defs work here exactly as they do in `unlit.wgsl`.
+    const TEST_CUSTOM_WGSL: &str = r#"
+#import gizmo::common::{SceneUniforms}
+@group(0) @binding(0) var<uniform> scene: SceneUniforms;
+struct InstanceRaw {
+    m0: vec4<f32>, m1: vec4<f32>, m2: vec4<f32>, m3: vec4<f32>,
+    albedo_color: vec4<f32>, pbr: vec4<f32>, ambient: vec4<f32>, emissive: vec4<f32>,
+};
+@group(#{INSTANCE_GROUP}) @binding(0) var<storage, read> instances: array<InstanceRaw>;
+struct VIn {
+    @location(0) position: vec3<f32>, @location(1) color: vec3<f32>,
+    @location(2) normal: vec3<f32>, @location(3) tex_coords: vec2<f32>,
+    @location(4) joint_indices: vec4<u32>, @location(5) joint_weights: vec4<f32>,
+};
+struct VOut { @builtin(position) clip_position: vec4<f32> };
+@vertex
+fn vs_main(@builtin(instance_index) idx: u32, input: VIn) -> VOut {
+    let i = instances[idx];
+    let model = mat4x4<f32>(i.m0, i.m1, i.m2, i.m3);
+    var out: VOut;
+    out.clip_position = scene.view_proj * model * vec4<f32>(input.position, 1.0);
+    return out;
+}
+@fragment
+fn fs_main(in: VOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(1.0, 0.0, 1.0, 1.0);
+}
+"#;
+
+    /// One cube in front of a camera, shaded four different ways.
+    async fn render_custom_material_cube(case: CustomCase) -> Vec<u8> {
+        const W: u32 = 128;
+        let mut renderer = crate::test_gpu::headless_renderer(W, W).await;
+        let mut asset_manager = AssetManager::new();
+        let mut world = World::new();
+        let tex = asset_manager.create_white_texture(
+            &renderer.device,
+            &renderer.queue,
+            &renderer.scene.texture_bind_group_layout,
+        );
+
+        let id = {
+            let m = gizmo_renderer::custom_material::CustomMaterial::from_wgsl(
+                &renderer.device,
+                &renderer.scene,
+                "test_custom",
+                TEST_CUSTOM_WGSL,
+                gizmo_renderer::custom_material::CustomPipelineOptions::default(),
+            );
+            renderer.custom_materials.register(m)
+        };
+
+        if case != CustomCase::NoCube {
+            let cube = world.spawn();
+            world.add_component(cube, Transform::new(Vec3::ZERO));
+            world.add_component(cube, GlobalTransform::default());
+            world.add_component(cube, AssetManager::create_cube(&renderer.device));
+            let mut mat =
+                Material::new(tex).with_pbr(Vec4::new(0.8, 0.4, 0.2, 1.0), 0.5, 0.0);
+            mat.material_type = match case {
+                CustomCase::Pbr => gizmo_renderer::components::MaterialType::Pbr,
+                CustomCase::Registered => {
+                    gizmo_renderer::components::MaterialType::Custom(id)
+                }
+                // One past the end: registered ids start at 0, so this resolves to nothing.
+                CustomCase::Dangling => gizmo_renderer::components::MaterialType::Custom(
+                    gizmo_renderer::custom_material::MaterialId(id.0 + 1),
+                ),
+                CustomCase::NoCube => unreachable!(),
+            };
+            world.add_component(cube, mat);
+            world.add_component(cube, MeshRenderer::new());
+        }
+
+        world.spawn_bundle(CameraBundle {
+            position: Vec3::new(0.0, 0.0, 4.0),
+            yaw: -std::f32::consts::FRAC_PI_2,
+            ..Default::default()
+        });
+        world.spawn_bundle(DirectionalLightBundle::default());
+
+        render_world(&mut renderer, &mut world).await
+    }
+
     /// A normal map bound through `AssetManager::material` has to reach the shading.
     ///
     /// The 7-entry material layout has always had a normal slot; what it did not have was a public

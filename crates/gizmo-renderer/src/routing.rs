@@ -56,6 +56,14 @@ pub struct Routing {
     pub is_grid: bool,
     /// A painted backdrop, camera-locked or placed. Mirrors [`crate::backdrop::is_backdrop`].
     pub is_backdrop: bool,
+    /// The game's own material, and which one.
+    ///
+    /// `Some(id)` means the draw loop must fetch the pipeline from
+    /// [`MaterialRegistry`](crate::custom_material::MaterialRegistry) rather than choosing one of
+    /// the engine's. Every other field is still filled in, because a custom material is still
+    /// forward, still not a skybox, still not a grid — the id says *which* pipeline, not *whether*
+    /// the rest of the routing applies.
+    pub custom: Option<crate::custom_material::MaterialId>,
     /// Drawn forward rather than through the G-buffer.
     ///
     /// Skybox, baked-lit, backdrop and unlit all skip the deferred path. They part company in the
@@ -69,6 +77,14 @@ pub struct Routing {
 pub fn route(material_type: MaterialType) -> Routing {
     // No `_` arm. Adding a variant to `MaterialType` must fail to compile here, which is the whole
     // point of the module: one compile error beats two silent misroutes.
+    // Which registered material, if any. Pulled out first because it is the only arm that carries
+    // data, and threading an `Option` through the six-tuple below would make every other arm say
+    // `None` for no reason.
+    let custom = match material_type {
+        MaterialType::Custom(id) => Some(id),
+        _ => None,
+    };
+
     let (instance_flag, unlit_material, baked_lit, is_skybox, is_grid, is_backdrop) =
         match material_type {
             MaterialType::Pbr => (0.0, false, false, false, false, false),
@@ -82,6 +98,10 @@ pub fn route(material_type: MaterialType) -> Routing {
             // The engine path had no arm for this at all and gave it 0.0 through its wildcard;
             // studio routes it to its own pipeline. 0.0 preserves what the engine path did.
             MaterialType::Grid => (0.0, false, false, false, true, false),
+            // A registered material: forward, and nothing else the engine recognises. `1.0` is the
+            // "not deferred PBR" flag every other forward type carries, so a loop that only reads
+            // the flag routes it correctly even before it learns about the registry.
+            MaterialType::Custom(_) => (1.0, false, false, false, false, false),
         };
 
     Routing {
@@ -91,7 +111,8 @@ pub fn route(material_type: MaterialType) -> Routing {
         is_skybox,
         is_grid,
         is_backdrop,
-        skips_deferred: is_skybox || baked_lit || is_backdrop || unlit_material,
+        custom,
+        skips_deferred: is_skybox || baked_lit || is_backdrop || unlit_material || custom.is_some(),
     }
 }
 
@@ -132,6 +153,7 @@ mod tests {
             MaterialType::BackdropPlaced,
             MaterialType::Water,
             MaterialType::Grid,
+            MaterialType::Custom(crate::custom_material::MaterialId(0)),
         ];
         for t in all {
             let r = route(t);
@@ -144,6 +166,43 @@ mod tests {
                 crate::backdrop::is_backdrop(t),
                 "{t:?}: routing and backdrop::is_backdrop disagree"
             );
+        }
+    }
+
+    /// A registered material routes forward, and says which one it is.
+    ///
+    /// `custom` is what the draw loop reads to fetch a pipeline from the registry; every other
+    /// field still has to be filled in, because a custom material is still not a skybox and still
+    /// not a grid. `skips_deferred` is the one that matters: a custom shader writes a colour, not
+    /// four G-buffer targets, so routing it through the deferred path would feed the lighting
+    /// pass garbage.
+    #[test]
+    fn a_custom_material_routes_forward_and_carries_its_id() {
+        let id = crate::custom_material::MaterialId(3);
+        let r = route(MaterialType::Custom(id));
+        assert_eq!(r.custom, Some(id));
+        assert!(r.skips_deferred, "a custom shader cannot fill the G-buffer");
+        assert_eq!(r.instance_flag, 1.0, "the shared 'not deferred PBR' flag");
+        assert!(!r.is_skybox && !r.is_grid && !r.is_backdrop && !r.baked_lit);
+        // Not `unlit`: that flag means exactly `MaterialType::Unlit`, and the shadow pass reads it.
+        // A custom material decides shadows for itself through `CustomMaterial::casts_shadows`.
+        assert!(!r.unlit_material);
+    }
+
+    /// Every built-in still answers `None`, so `custom` cannot be read as "has a routing".
+    #[test]
+    fn a_built_in_material_carries_no_custom_id() {
+        for t in [
+            MaterialType::Pbr,
+            MaterialType::Unlit,
+            MaterialType::BakedLit,
+            MaterialType::Skybox,
+            MaterialType::Backdrop,
+            MaterialType::BackdropPlaced,
+            MaterialType::Water,
+            MaterialType::Grid,
+        ] {
+            assert_eq!(route(t).custom, None, "{t:?} claimed to be a custom material");
         }
     }
 

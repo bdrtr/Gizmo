@@ -143,7 +143,7 @@ fn build_cloth_mesh(device: &gizmo::wgpu::Device, cloth: &Cloth, grid: usize) ->
     )
 }
 
-fn setup(world: &mut World, renderer: &Renderer) -> ClothDemo {
+fn setup(world: &mut World, renderer: &mut Renderer) -> ClothDemo {
     let mut assets = AssetManager::new();
     let tex = assets.create_white_texture(
         &renderer.device,

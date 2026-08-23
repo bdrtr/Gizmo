@@ -57,6 +57,16 @@ pub enum MaterialType {
     Water,
     /// The editor's ground grid — lines that fade with distance and never write depth.
     Grid,
+    /// A material the game registered: its own pipeline and shader, drawn forward.
+    ///
+    /// The id comes from [`MaterialRegistry::register`](crate::custom_material::MaterialRegistry::register).
+    /// Forward rather than deferred is a budget fact, not a policy — see
+    /// [`crate::custom_material`] for the 28-of-32 bytes that decide it.
+    ///
+    /// This is a variant rather than a wrapper enum around `MaterialType` because it costs nothing:
+    /// `Material::material_type` keeps its type, all 56 existing uses keep compiling, and
+    /// [`routing`](crate::routing) stays exhaustive — which is the property that module exists for.
+    Custom(crate::custom_material::MaterialId),
 }
 
 /// How a surface is shaded: its textures (behind the bind group), its PBR scalars, and which

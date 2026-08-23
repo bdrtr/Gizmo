@@ -26,7 +26,7 @@ The instability is not there. It is one layer down, where the doors are locked:
 | its own system parameter | `SystemParam` is sealed — **4 impls exist**: `Res`, `ResMut`, `f32`, `Query` | `ecs_extension_points` |
 | a derived query operand | `WorldQuery` / `ReadOnlyQuery` / `FetchComponent` all sealed | `ecs_extension_points` |
 | ~~a schedule phase of its own~~ | **opened 2026-08-23** — `Phase::User(u16)`, positioned | `schedule_internals` |
-| its own material or shader | `MaterialType` is a closed enum; `routing.rs` is exhaustive on purpose | `deferred_rendering` |
+| ~~its own material or shader~~ | **opened 2026-08-23** — `MaterialType::Custom(MaterialId)` | `custom_material` |
 | ~~a normal map on a hand-built material~~ | **opened 2026-08-23** — `AssetManager::material()` | `parallax_mapping` |
 | two camera passes in one frame | one `global_uniform_buffer`, written with `queue.write_buffer` | `render_to_texture` |
 | a post-pass that reads the frame | the surface has no `TEXTURE_BINDING` | `post_processing` |
@@ -218,7 +218,47 @@ the effect already moves 19.55 % of pixels, max 134, and none of it is reachable
 
 ### Architectural — real design, sequence them deliberately
 
-**`MaterialType` → user materials.** The largest one, and `ENGINE.md` §4 has a stake in it: a
+**`MaterialType` → user materials.** ✅ **Done, 2026-08-23**, and the G-buffer question the plan
+said to settle first turned out to settle itself. The four targets share a 32-byte
+`max_color_attachment_bytes_per_sample` budget and already spend 28 (4 + 8 + 8 + 8). Four bytes
+left is one more `Rgba8` and not one `Rgba16Float`, so a custom material bringing its own channel
+would spend the last of a shared budget on one feature. It declares itself forward instead.
+
+The shape also differs from the sketch below, deliberately. `MaterialType::Custom(MaterialId)` is a
+variant rather than a `MaterialKind { BuiltIn, Custom }` wrapper, and the variant costs nothing the
+wrapper would have bought: `Material::material_type` keeps its type, all 56 existing uses keep
+compiling, and `routing.rs` stays exhaustive — which it proved by producing exactly one compile
+error when the variant landed, in exactly the place the module exists to put it.
+
+Two things had to open behind it, and both were walls the door would otherwise have faced:
+
+* **`CustomMaterial::from_wgsl`.** Asking a game for a `wgpu::RenderPipeline` means asking it to
+  know the bind-group order *per platform*, the vertex layout, the target format and the depth
+  state — all engine contract, and each one wrong is a validation error naming none of it. The
+  WGSL goes through the same composer the engine's own shaders use, so `#import` and
+  `#{INSTANCE_GROUP}` work in a game's shader too.
+* **`set_setup` now hands out `&mut Renderer`** (and with it `SceneBuilder::renderer`). It was
+  `&Renderer`, which put the registry out of reach at scene-build time — a game could register a
+  material only from inside the frame loop, one frame after spawning the entities using it. 24
+  files carried an explicit signature; the rest inferred.
+
+**There is no spare bind group**, which is the other measured constraint: native asks for 6 and
+spends 5, the web asks for 4 and spends 4. A design giving custom materials their own group would
+work on the desktop and fail to compile a shader in the browser. The room is inside group 1 —
+four textures and a uniform buffer, whose meaning a custom shader is free to redefine.
+
+Measured in `custom_material`: three spheres, PBR / `Unlit` / registered. Mean and standard
+deviation separate them weakly (200.97/28.89, 216.64/12.16, 192.97/31.05); the banding does not.
+FFT of each sphere's vertical brightness profile puts the custom material's dominant cycle at
+**854.5 power, 13.3 % of its spectrum, against PBR's 99.8** — 8.5×. It also casts shadows (408
+ground pixels against PBR's 374), which needed its own fix: a custom material routes as `unlit`,
+and the shadow pass dropped everything `unlit && !baked_lit`, so `casts_shadows: true` would have
+been a field that read true and did nothing.
+
+An id with nothing behind it draws **nothing** rather than falling back to PBR. Verified red:
+restoring the fallback leaks 5770/16384 pixels.
+
+*(the plan as written)* The largest one, and `ENGINE.md` §4 has a stake in it: a
 material trait that hands out a `wgpu::RenderPipeline` puts wgpu on a Stage-A-adjacent surface.
 The shape that survives that constraint is an opaque handle:
 
@@ -321,8 +361,8 @@ Ordered by unlocked-capability per unit of work, not by size.
 6. ~~**A bindable HDR target.**~~ **Withdrawn 2026-08-23 — the target was already bindable.**
    What the item was reaching for is a **compute reduction**: a user sensor is writable today and
    measured at 10 ms a sample, which is what makes it unusable rather than impossible.
-7. **User materials.** Largest and most architectural; wants the G-buffer budget question settled
-   first, and interacts with `routing.rs` and `render_parity`.
+7. **User materials.** ✅ **Done, 2026-08-23.** The G-buffer budget settled the question rather
+   than blocking it: 28 of 32 bytes spent means forward-only, measured rather than argued.
 
 Items 5, 6 and 7 are also the three that would let the two unwired subsystems
 (`gizmo-renderer::visibility` and `::gi`, `CAPABILITY_GAPS.md` §F) be plugged in without a user

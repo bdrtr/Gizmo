@@ -44,7 +44,7 @@ fn bone_color(bt: RagdollBoneType) -> Vec4 {
     }
 }
 
-fn setup(world: &mut World, renderer: &Renderer) -> RagdollDemo {
+fn setup(world: &mut World, renderer: &mut Renderer) -> RagdollDemo {
     let mut assets = AssetManager::new();
     let tex = assets.create_white_texture(
         &renderer.device,

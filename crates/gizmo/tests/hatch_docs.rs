@@ -43,6 +43,7 @@ const HATCHES: &[(&str, &str)] = &[
     ("add_update_hook", "set_update"),
     ("VolumetricParams", "shader"),
     ("Phase::User", "position"),
+    ("MaterialType::Custom", "MaterialRegistry"),
     // `Option<P>`'s hatch is the other direction: the parameter is the hatch, and what it replaces
     // is the guard that skips the whole system.
     ("impl<P: SystemParam> SystemParam for Option<P>", "run_if"),
@@ -61,6 +62,7 @@ const HATCH_DECLS: &[(&str, &str)] = &[
     ("add_update_hook", "pub fn add_update_hook"),
     ("VolumetricParams", "pub struct VolumetricParams"),
     ("Phase::User", "User(u16)"),
+    ("MaterialType::Custom", "Custom(crate::custom_material::MaterialId)"),
     (
         "impl<P: SystemParam> SystemParam for Option<P>",
         "impl<P: SystemParam> SystemParam for Option<P>",
@@ -79,6 +81,10 @@ const HATCH_FILES: &[(&str, &str)] = &[
     ("VolumetricParams", "crates/gizmo-renderer/src/volumetric.rs"),
     ("Phase::User", "crates/gizmo-core/src/system/mod.rs"),
     (
+        "MaterialType::Custom",
+        "crates/gizmo-renderer/src/components/material.rs",
+    ),
+    (
         "impl<P: SystemParam> SystemParam for Option<P>",
         "crates/gizmo-core/src/system/params.rs",
     ),
@@ -90,9 +96,8 @@ const HATCH_FILES: &[(&str, &str)] = &[
 /// it comes out of the list and the scan starts requiring it — and if the plan stops proposing it,
 /// the entry here is what makes that visible.
 const PROPOSED: &[&str] = &[
-    // Item 7: user materials. Wants the four-target G-buffer budget settled first.
-    "MaterialId",
-    // Item 2's second half, alongside the `SystemParam` derive.
+    // Item 2's second half, alongside the `SystemParam` derive. The last entry in this list:
+    // items 1 and 3–7 have all landed, and `MaterialId` left it on 2026-08-23.
     "iter_combinations",
 ];
 

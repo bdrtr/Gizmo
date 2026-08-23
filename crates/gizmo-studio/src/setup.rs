@@ -6,7 +6,10 @@ use gizmo::prelude::*;
 
 /// Builds the studio's starting scene — editor camera, grid, default light, debug assets — and
 /// returns the state the update hook carries from then on.
-pub fn setup_studio_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> StudioState {
+pub fn setup_studio_scene(
+    world: &mut World,
+    renderer: &mut gizmo::renderer::Renderer,
+) -> StudioState {
     // --- Setup Editor Scene (Grid & Axes) ---
     let mut asset_manager = gizmo::renderer::asset::AssetManager::new();
     let white_tex = asset_manager.create_white_texture(

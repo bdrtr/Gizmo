@@ -43,7 +43,7 @@ struct PlatformerState {
     respawn_point: Vec3,
 }
 
-fn setup(world: &mut World, renderer: &Renderer) -> PlatformerState {
+fn setup(world: &mut World, renderer: &mut Renderer) -> PlatformerState {
     println!("🏃 3D PLATFORMER DEMO BAŞLIYOR 🏃");
 
     let mut asset_manager = AssetManager::new();

@@ -337,7 +337,7 @@ fn load_level(g: &mut Game, world: &mut World, idx: usize) {
 }
 
 // --------------------------------------------------------------- setup
-fn setup(world: &mut World, renderer: &Renderer) -> Game {
+fn setup(world: &mut World, renderer: &mut Renderer) -> Game {
     let mut assets = AssetManager::new();
     let white = assets.create_white_texture(
         &renderer.device,

@@ -150,11 +150,11 @@ impl<State: 'static> App<State> {
         );
 
         let state = if let Some(setup) = self.setup_fn.take() {
-            let r = self
+            let mut r = self
                 .world
                 .remove_resource::<Renderer>()
                 .ok_or(crate::AppError::MissingResource("Renderer"))?;
-            let state = setup(&mut self.world, &r);
+            let state = setup(&mut self.world, &mut r);
             self.world.insert_resource(r);
             tracing::info!("[App] user setup hook complete");
             state

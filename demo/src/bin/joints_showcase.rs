@@ -39,7 +39,7 @@ struct Showcase {
     time: f32,
 }
 
-fn setup(world: &mut World, renderer: &Renderer) -> Showcase {
+fn setup(world: &mut World, renderer: &mut Renderer) -> Showcase {
     let mut assets = AssetManager::new();
     let tex = assets.create_white_texture(
         &renderer.device,

@@ -64,7 +64,7 @@ fn pitch_yaw_quat(pitch: f32, yaw: f32) -> Quat {
 }
 
 // --------------------------------------------------------------- setup
-fn setup(world: &mut World, renderer: &Renderer) -> DestructionGame {
+fn setup(world: &mut World, renderer: &mut Renderer) -> DestructionGame {
     println!("##################################################");
     println!("    Voronoi Yıkım Demosu Başlıyor...");
     println!("    Binayı parçalamak için SPACE (BOŞLUK) tuşuna bas!");

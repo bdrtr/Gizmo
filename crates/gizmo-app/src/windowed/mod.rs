@@ -85,7 +85,7 @@ pub struct App<State: 'static = ()> {
     window_title: String,
     window_size: (u32, u32),
 
-    setup_fn: Option<Box<dyn FnOnce(&mut World, &Renderer) -> State + 'static>>,
+    setup_fn: Option<Box<dyn FnOnce(&mut World, &mut Renderer) -> State + 'static>>,
     /// The per-frame game hooks, in the order they were installed.
     ///
     /// A `Vec` rather than an `Option` so that

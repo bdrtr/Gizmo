@@ -90,7 +90,7 @@ fn emit_smoke(t: f32) -> Vec<GpuParticle> {
     v
 }
 
-fn setup(world: &mut World, renderer: &Renderer) -> Smoke {
+fn setup(world: &mut World, renderer: &mut Renderer) -> Smoke {
     let mut assets = AssetManager::new();
     let white = assets.create_white_texture(
         &renderer.device,

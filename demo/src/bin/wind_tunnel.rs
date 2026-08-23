@@ -106,7 +106,7 @@ fn main() {
         .expect("uygulama çalıştırılamadı");
 }
 
-fn setup(world: &mut World, renderer: &gizmo::renderer::Renderer) -> WindTunnel {
+fn setup(world: &mut World, renderer: &mut gizmo::renderer::Renderer) -> WindTunnel {
     let mut assets = AssetManager::new();
     let white = assets.create_white_texture(
         &renderer.device,

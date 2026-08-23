@@ -165,6 +165,15 @@ pub struct Renderer {
     /// Screen-space ambient occlusion. Requires [`deferred`](Renderer::deferred).
     pub ssao: Option<crate::ssao::SsaoState>,
 
+    // === Custom materials ===
+    /// Materials the game registered — see [`crate::custom_material`].
+    ///
+    /// Empty by default. A `MaterialType::Custom(id)` whose id is not in here draws nothing rather
+    /// than falling back to PBR: a silent fallback is how `routing.rs`'s own module docs describe
+    /// two capabilities dying, and an object that vanishes is a question, while an object shaded
+    /// as something else is a wrong answer.
+    pub custom_materials: crate::custom_material::MaterialRegistry,
+
     // === SSR — Screen-Space Reflections ===
     /// Screen-space reflections. Requires [`deferred`](Renderer::deferred).
     pub ssr: Option<crate::ssr::SsrState>,

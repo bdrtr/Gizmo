@@ -157,6 +157,9 @@ pub struct DrawItem {
     /// A painted backdrop: `backdrop.wgsl` + the backdrop pipeline, drawn first
     /// (`DrawLayer::Backdrop`). See `gizmo_renderer::backdrop`.
     pub(super) is_backdrop: bool,
+    /// A material the game registered. `Some(id)` sends this batch to
+    /// `MaterialRegistry`'s pipeline instead of any of the engine's.
+    pub(super) custom: Option<gizmo_renderer::custom_material::MaterialId>,
     /// The material asked for both faces (`Material::with_double_sided`). Selects the cull-off
     /// variant of whichever pipeline this item lands in; see `passes::geometry`.
     pub(super) is_double_sided: bool,
@@ -283,6 +286,10 @@ pub(crate) struct BatchKey {
     casts_shadows: bool,
     /// Per-object visibility; `ShadowCasting::Only` casts without being drawn.
     visible_in_camera: bool,
+    /// Which registered material, if any — in the key for the same reason as every flag above,
+    /// and more sharply: two custom materials sharing a mesh and a texture bind group differ *only*
+    /// here, so without this they would merge and one of the two pipelines would draw both.
+    custom: Option<gizmo_renderer::custom_material::MaterialId>,
 }
 
 pub(crate) struct BatchData {
@@ -299,6 +306,7 @@ pub(crate) struct BatchData {
     is_double_sided: bool,
     casts_shadows: bool,
     visible_in_camera: bool,
+    custom: Option<gizmo_renderer::custom_material::MaterialId>,
     skeleton_bind_group: Option<std::sync::Arc<wgpu::BindGroup>>,
     is_transparent: bool,
     instances: Vec<crate::renderer::gpu_types::InstanceRaw>,
@@ -538,6 +546,7 @@ pub(super) fn collect_draw_items(
                     is_double_sided,
                     casts_shadows,
                     visible_in_camera,
+                    custom: routing.custom,
                 };
 
                 let batch = cache.batches.entry(key).or_insert_with(|| BatchData {
@@ -554,6 +563,7 @@ pub(super) fn collect_draw_items(
                     is_double_sided,
                     casts_shadows,
                     visible_in_camera,
+                    custom: routing.custom,
                     skeleton_bind_group: skel_bg,
                     is_transparent,
                     instances: Vec::new(),
@@ -675,6 +685,7 @@ pub(super) fn collect_draw_items(
                 baked_lit: batch.baked_lit,
                 is_skybox: batch.is_skybox,
                 is_backdrop: batch.is_backdrop,
+                custom: batch.custom,
                 is_double_sided: batch.is_double_sided,
                 casts_shadows: batch.casts_shadows,
                 visible_in_camera: batch.visible_in_camera,
@@ -777,6 +788,7 @@ mod batch_key_tests {
             is_double_sided: false,
             casts_shadows: true,
             visible_in_camera: true,
+            custom: None,
         };
         let no_cast = BatchKey { casts_shadows: false, ..base.clone() };
         let shadow_only = BatchKey { visible_in_camera: false, ..base.clone() };
@@ -799,6 +811,7 @@ mod batch_key_tests {
             is_double_sided: false,
             casts_shadows: true,
             visible_in_camera: true,
+            custom: None,
         };
         let transparent = BatchKey {
             is_transparent: true,

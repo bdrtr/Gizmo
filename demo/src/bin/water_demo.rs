@@ -44,7 +44,7 @@ struct WaterState {
     audio: Option<gizmo::prelude::AudioManager>,
 }
 
-fn setup(world: &mut World, renderer: &Renderer) -> WaterState {
+fn setup(world: &mut World, renderer: &mut Renderer) -> WaterState {
     println!("Su demosu yükleniyor... (sağ-tık+fare=bak, WASD=yüz, Space=yüksel, Ctrl=dal)");
 
     let mut asset = AssetManager::new();

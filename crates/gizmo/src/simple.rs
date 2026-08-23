@@ -176,8 +176,14 @@ pub enum EditorState {
 pub struct SceneBuilder<'a> {
     /// The world being populated.
     pub world: &'a mut World,
-    /// The live renderer, for creating meshes and textures.
-    pub renderer: &'a Renderer,
+    /// The live renderer, for creating meshes and textures — and, since it is `&mut`, for
+    /// registering things that live on it.
+    ///
+    /// Mutable because a scene may need to *add* to the renderer, not only read from it:
+    /// [`Renderer::custom_materials`](gizmo_renderer::Renderer::custom_materials) is registered
+    /// here, and a `&Renderer` made the registry reachable only from `set_render`, i.e. from
+    /// inside the frame loop, one frame after the entities that use it were spawned.
+    pub renderer: &'a mut Renderer,
     /// The asset manager the created meshes and textures are registered with.
     pub asset_manager: &'a mut AssetManager,
 }

@@ -50,7 +50,7 @@ struct ChunkAssets {
     ground_mat: gizmo::renderer::components::Material,
 }
 
-fn setup(world: &mut World, renderer: &Renderer) -> RpgState {
+fn setup(world: &mut World, renderer: &mut Renderer) -> RpgState {
     println!("⚔️ GIZMO ENGINE RPG TEST BAŞLIYOR ⚔️");
     let mut asset_manager = AssetManager::new();
     let phys_world = PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0));

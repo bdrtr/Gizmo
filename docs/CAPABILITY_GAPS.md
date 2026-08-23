@@ -46,15 +46,40 @@ they all look like debug overlays.
 **This is the gap the project owner has named as the first to close.** Scope notes are in
 section E.
 
-### A3. No user-authored shaders or materials
+### A3. User-authored shaders — **open since 2026-08-23**, forward-only
 
-`MaterialType` is a fixed enum (`Pbr`, `Water`, `Unlit`, `BakedLit`, `Skybox`, `Backdrop`,
-`BackdropPlaced`, `Grid`). A game cannot add a variant, cannot supply its own WGSL, and cannot
-attach its own uniform block. There is no material trait to implement.
+`MaterialType` was a fixed enum: a game could not add a variant, supply its own WGSL, or attach its
+own uniform block. `MaterialType::Custom(MaterialId)` closes that, with
+`MaterialRegistry::register` minting the id and `CustomMaterial::from_wgsl` compiling the shader
+against the engine's contract — the same composer the engine's own shaders use, so `#import` and
+`#{INSTANCE_GROUP}` work in a game's WGSL too.
 
-Consequence measured in `deferred_rendering`: choosing the forward path means *changing the
-material type*, which also changes the shading — two axes that ought to be separate are one axis
-here. **A PBR material cannot be drawn forward at all.**
+**Forward-only, and that is a measurement rather than a policy.** The four G-buffer targets share a
+32-byte `max_color_attachment_bytes_per_sample` budget and spend 28 (albedo `Rgba8` 4 + normal,
+position and tangent `Rgba16Float` 8 each). Four bytes left is one more `Rgba8` and not one
+`Rgba16Float`, so a custom material bringing its own G-buffer channel would spend the last of a
+shared budget on one feature.
+
+**There is also no spare bind group**, measured the same way: native asks for
+`max_bind_groups: 6` and spends 5 (`0` scene, `1` material, `2` shadow, `3` skeleton, `4`
+instance); the web asks for 4 and spends 4. A design giving a custom material its own group would
+work on the desktop and fail to compile a shader in the browser. The room is inside group 1 —
+seven entries, four of them textures, whose meaning a custom shader redefines.
+
+Measured in `custom_material`, three spheres rendered alone: mean and standard deviation separate
+PBR / `Unlit` / custom weakly (200.97/28.89, 216.64/12.16, 192.97/31.05), but the FFT of each
+sphere's vertical brightness profile does not — the custom material's dominant cycle carries
+**854.5 power, 13.3 % of its spectrum, against PBR's 99.8**. It casts shadows like PBR (408 ground
+pixels against 374), which took its own fix: a custom material routes as `unlit`, and the shadow
+pass dropped everything `unlit && !baked_lit`, so `CustomMaterial::casts_shadows` would have been a
+field that read true and did nothing. An id with nothing behind it draws **nothing** rather than
+falling back to PBR; restoring the fallback leaks 5770/16384 pixels, which is what the guard test
+measures.
+
+Still open: choosing the forward path for a *built-in* material. Measured in
+`deferred_rendering` — doing so means changing the material type, which also changes the shading,
+so two axes that ought to be separate are one axis. **A PBR material cannot be drawn forward at
+all**, and a custom material cannot be drawn deferred.
 
 ### A4. No extrusion / 2D-shape-to-mesh machinery
 

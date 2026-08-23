@@ -31,7 +31,7 @@ struct KccState {
     pitch: f32,
 }
 
-fn setup(world: &mut World, renderer: &Renderer) -> KccState {
+fn setup(world: &mut World, renderer: &mut Renderer) -> KccState {
     let mut assets = AssetManager::new();
 
     // Manuel fizik dünyası — bu demo PhysicsPlugin KULLANMAZ; adımları update'te elle atar.

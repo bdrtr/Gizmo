@@ -100,7 +100,7 @@ fn print_report(report: PlayReport<'_>) {
 /// `AssetManager` is not optional decoration: `App::load_scene` takes it out of the world to load
 /// into, and logs "AssetManager bulunamadı, sahne yüklenemiyor" and skips the scene entirely if it
 /// is not there.
-fn setup(world: &mut World, _renderer: &Renderer) -> RuntimeState {
+fn setup(world: &mut World, _renderer: &mut Renderer) -> RuntimeState {
     world.insert_resource(gizmo::physics::world::PhysicsWorld::new());
 
     // Register asset identities before the scene loads, so a reference whose path has gone stale

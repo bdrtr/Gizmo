@@ -42,7 +42,7 @@ struct VehicleState {
     wheel_entities: [Entity; 4],
 }
 
-fn setup(world: &mut World, renderer: &Renderer) -> VehicleState {
+fn setup(world: &mut World, renderer: &mut Renderer) -> VehicleState {
     let mut asset_manager = AssetManager::new();
     let phys_world = PhysicsWorld::new();
 

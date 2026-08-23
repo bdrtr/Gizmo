@@ -96,7 +96,7 @@ fn main() {
         .expect("çalıştırılamadı");
 }
 
-fn setup(world: &mut World, renderer: &Renderer) -> S {
+fn setup(world: &mut World, renderer: &mut Renderer) -> S {
     let mut assets = AssetManager::new();
     let white = assets.create_white_texture(
         &renderer.device,

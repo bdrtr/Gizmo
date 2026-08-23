@@ -94,7 +94,7 @@ struct Cradle {
 }
 
 // --------------------------------------------------------------- setup
-fn setup(world: &mut World, renderer: &Renderer) -> Cradle {
+fn setup(world: &mut World, renderer: &mut Renderer) -> Cradle {
     let mut assets = AssetManager::new();
     let tex = assets.create_white_texture(
         &renderer.device,

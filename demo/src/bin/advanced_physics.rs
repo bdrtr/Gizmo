@@ -53,7 +53,7 @@ struct DemoState {
     chunk_material: Material,
 }
 
-fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
+fn setup(world: &mut World, renderer: &mut Renderer) -> DemoState {
     let mut asset_manager = AssetManager::new();
 
     // Kamera — Transform + Camera + isim tek spawn_bundle'da.

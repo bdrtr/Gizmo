@@ -631,6 +631,7 @@ impl Renderer {
         ));
 
         Self {
+            custom_materials: crate::custom_material::MaterialRegistry::new(),
             surface,
             device,
             queue,

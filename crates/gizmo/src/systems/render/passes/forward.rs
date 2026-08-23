@@ -103,7 +103,19 @@ pub fn record_forward_and_fluid(
                 .unwrap_or(&renderer.scene.dummy_skeleton_bind_group);
 
             if draw_solid {
-                let pipeline = if item.is_backdrop {
+                // A registered material is checked BEFORE every engine branch below, because it is
+                // the one case where the engine has no opinion: the game named a pipeline and the
+                // chain of `else if`s would otherwise route it by flags it never set. An id with no
+                // entry in the registry draws nothing at all — see `Renderer::custom_materials` for
+                // why that is deliberate.
+                //
+                // Not `continue`: the wireframe overlay below is a debugging view and a custom
+                // material has no business being exempt from it.
+                let custom_pipeline = item
+                    .custom
+                    .map(|id| renderer.custom_materials.get(id).map(|c| &c.pipeline));
+
+                let engine_pipeline = if item.is_backdrop {
                     // FIRST, ahead of the `unlit` and `is_transparent` branches below: a
                     // backdrop sets `unlit` (that is what keeps it out of the deferred and
                     // shadow passes) and may well be transparent, and either of those
@@ -143,10 +155,21 @@ pub fn record_forward_and_fluid(
                 } else {
                     &renderer.scene.render_pipeline
                 };
-                render_pass.set_pipeline(pipeline);
-                render_pass.set_bind_group(1, &*item.bind_group, &[]);
-                render_pass.set_bind_group(BG_SKELETON, skel_bg.as_ref(), &[]);
-                item.record_draw(&mut render_pass, inst_start..inst_end);
+
+                // `Some(None)` is a registered id with nothing behind it: draw nothing rather than
+                // fall through to `engine_pipeline`, which would shade it as ordinary PBR.
+                let pipeline = match custom_pipeline {
+                    Some(Some(p)) => Some(p),
+                    Some(None) => None,
+                    None => Some(engine_pipeline),
+                };
+
+                if let Some(pipeline) = pipeline {
+                    render_pass.set_pipeline(pipeline);
+                    render_pass.set_bind_group(1, &*item.bind_group, &[]);
+                    render_pass.set_bind_group(BG_SKELETON, skel_bg.as_ref(), &[]);
+                    item.record_draw(&mut render_pass, inst_start..inst_end);
+                }
             }
 
             if draw_wire {

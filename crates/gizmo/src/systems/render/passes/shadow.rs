@@ -33,11 +33,26 @@ pub fn record_shadow_passes(
             if !item.casts_shadows {
                 continue;
             }
-            // Baked-lit geometry casts. It is `unlit` in the sense of skipping the deferred path,
-            // but it is a solid world and a world that does not occlude the sun has no shadows in
-            // it at all.
-            if (item.unlit && !item.baked_lit) || item.is_transparent {
-                continue;
+            // A custom material routes as `unlit` — that is what keeps it out of the deferred
+            // path — but "skips the G-buffer" is not "is not solid". The shadow pass writes depth
+            // only and does not care how a fragment would have shaded, so the material itself
+            // decides, through `CustomMaterial::casts_shadows`. Without this arm the flag would be
+            // a field that reads `true` and does nothing, which is the exact defect
+            // `CAPABILITY_GAPS.md` §D keeps a list of.
+            match item
+                .custom
+                .map(|id| renderer.custom_materials.get(id).is_some_and(|c| c.casts_shadows))
+            {
+                Some(true) => {}
+                Some(false) => continue,
+                None => {
+                    // Baked-lit geometry casts. It is `unlit` in the sense of skipping the
+                    // deferred path, but it is a solid world and a world that does not occlude the
+                    // sun has no shadows in it at all.
+                    if (item.unlit && !item.baked_lit) || item.is_transparent {
+                        continue;
+            }
+                }
             }
             let skel_bg = item
                 .skeleton_bind_group
@@ -97,7 +112,19 @@ pub fn record_shadow_passes(
         for item in draw_items {
             // Per-object opt-out (`MeshRenderer::shadows`), same as the cascade pass above.
             if !item.casts_shadows { continue; }
-            if (item.unlit && !item.baked_lit) || item.is_transparent { continue; }
+            // Same decision as the cascade pass above, and for the same reason.
+            match item
+                .custom
+                .map(|id| renderer.custom_materials.get(id).is_some_and(|c| c.casts_shadows))
+            {
+                Some(true) => {}
+                Some(false) => continue,
+                None => {
+                    if (item.unlit && !item.baked_lit) || item.is_transparent {
+                        continue;
+                    }
+                }
+            }
             let skel_bg = item
                 .skeleton_bind_group
                 .as_ref()

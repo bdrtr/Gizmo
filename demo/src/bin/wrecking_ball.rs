@@ -46,7 +46,7 @@ struct Wrecking {
     resets: Vec<BodyReset>,
 }
 
-fn setup(world: &mut World, renderer: &Renderer) -> Wrecking {
+fn setup(world: &mut World, renderer: &mut Renderer) -> Wrecking {
     let mut assets = AssetManager::new();
     let tex = assets.create_white_texture(
         &renderer.device,
