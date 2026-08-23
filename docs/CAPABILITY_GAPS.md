@@ -410,6 +410,11 @@ and `emissive` (item 4, the only undocumented one). No further silent fields.
 
 ## E. Suggested order of work
 
+> Sequenced by capability. For the *shape* the surface should take as these land — layered access,
+> and the rule that every convenience must name its escape hatch — see `docs/API_DEPTH.md`. Several
+> entries below are one unlock away from each other there: per-pass uniforms alone would close
+> multi-viewport, planar reflections and reflection probes.
+
 1. **Text / font rendering (A2).** Named first by the project owner. It is already tracked as
    **M7.6** in `ENGINE.md` §3 (Phase 7), and `gizmo-ui`'s own crate docs name the same gap and the
    same landing site: *"expect the component set to change when rendering lands (a `Text` component

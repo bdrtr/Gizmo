@@ -835,6 +835,12 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
 
 ## 4. Public-surface contract (was: "Release Strategy — Staged 1.0")
 
+> **Companion, added 2026-08-23:** `docs/API_DEPTH.md` covers a *different axis* and does not
+> compete with this section. §4 governs which foreign types may appear on a public surface and
+> what each one costs. `API_DEPTH.md` governs how far down a user may go before the engine stops
+> them — the sealed traits, the closed enums and the `pub(crate)` constructors that make a
+> convenience a ceiling instead of a staircase. A change can satisfy one and violate the other.
+
 > **Reframed 2026-08-17.** Nothing in this section is waiting for a release any more (§3). The
 > staging *plan* — Stage A crates going to `1.x` on their own version line — is **not being
 > pursued**; the workspace keeps one `0.x` version. Everything else here is kept word for word,
