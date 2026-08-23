@@ -370,10 +370,12 @@ Ordered by unlocked-capability per unit of work, not by size.
    the first run.
 2. **`Option<Res<T>>`, the composite-parameter macro, `iter_combinations`.** ✅ **All done,
    2026-08-23** — `Option<P>`, `system_param!`, and read-only pair iteration.
-3. **`Phase::User`, the `enabled` flags, `add_update_hook`, `VolumetricParams`.** A batch of
+3. **`Phase::User`, the `enabled` flags, `add_update_hook`, `VolumetricParams`.** ✅ **All four
+   done, 2026-08-23.** *(as planned:)* A batch of
    incidental opens. Each is small; together they close `schedule_internals`, the SSR/volumetric
    on-off destruction, the `set_update` trap and a whole row of section B.
-4. **The material bind-group builder.** Unlocks normal/MR/emissive/AO maps for hand-built scenes,
+4. **The material bind-group builder.** ✅ **Done, 2026-08-23** as `AssetManager::material()`.
+   Unlocks normal/MR/emissive/AO maps for hand-built scenes,
    which is the difference between 6 and 55 296 vertices for the same surface detail.
 5. **Per-pass uniforms.** ✅ **Done, 2026-08-23** as `SceneView`. Camera-derived state — shadow
    cascades and the cluster table — is still shared, and that remainder is measured rather than
