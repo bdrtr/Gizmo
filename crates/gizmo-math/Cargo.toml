@@ -20,7 +20,7 @@ glam = { version = "0.32", features = ["serde", "bytemuck", "rand"] }
 serde = { version = "1.0.228", features = ["derive"] }
 
 [dev-dependencies]
-criterion = "0.5.1"
+criterion = "0.8.2"
 bevy_math = "0.19"
 rand = "0.10.1"
 bevy_picking = { version = "0.19", features = ["mesh_picking"] }
