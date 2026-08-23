@@ -217,6 +217,9 @@ pub fn record_deferred_geometry(
         light_pass.set_bind_group(0, renderer.scene.view_bind_group(), &[]);
         light_pass.set_bind_group(1, &renderer.scene.shadow_bind_group, &[]);
         light_pass.set_bind_group(2, &def.gbuffer_bind_group, &[]);
+        // Group 3 is always bound because the pipeline layout always declares it; an empty grid
+        // is a one-probe buffer of zeros and `gi_sample` returns black for it.
+        light_pass.set_bind_group(3, &def.irradiance.bind_group, &[]);
         light_pass.draw(0..3, 0..1);
     }
 

@@ -566,8 +566,9 @@ and `emissive` (item 4, the only undocumented one). No further silent fields.
 2. **Wire up what already exists.** ~~Cheapest ratio of work to capability in the whole list~~ —
    **and the spatial index turned out not to be** (F1, measured 2026-08-24: wiring it makes the
    frame 90 % slower on a scene with shadow cascades, because their union culls nothing). It is
-   wired as an opt-in resource with its conditions documented. What remains here is the
-   **irradiance-volume subsystem** (F2), and the
+   wired as an opt-in resource with its conditions documented. **F2 landed 2026-08-24** — the
+   probe grid now reaches the deferred lighting pass, measured against the CPU path at correlation
+   0.99887. What remains here is the
    **post-process knobs** (B), which are uniform fields and shader constants that exist but are
    not exposed. **Volumetric's six left B on 2026-08-23** (`VolumetricParams`), and all five
    screen-space effects gained a reversible `enabled`; SSR's six shaping knobs and tone mapping's
@@ -651,7 +652,7 @@ touch.
 Its docs are honest about the limits: *"Measure on your own scene before believing any of the
 above"*, and it is explicitly **not** an occlusion structure.
 
-### F2. Irradiance volumes — `gizmo_renderer::gi`
+### F2. Irradiance volumes — wired 2026-08-24
 
 This one contains a complete irradiance-volume implementation: `SHCoeffs` with
 `add_directional_light` / `evaluate` / `lerp` / `to_gpu_data`, `LightProbe`, and `ProbeGrid` with
@@ -666,10 +667,39 @@ And nothing uses it. Measured 2026-08-23:
 | shaders reading SH coefficients | **none** |
 | demos using it (before `irradiance_volumes`) | **none** |
 
-Written, tested, exported, unplugged. `irradiance_volumes` drives it by hand to show the maths is
-sound — 48 probes baked from the scene lights, sampled per object, applied to albedo on the CPU
-because the pipeline cannot. The blend is correct: red-dominant `(0.935 0.462 0.333)` on the left,
-blue-dominant `(0.366 0.533 0.902)` on the right, smooth through the middle.
+Written, tested, exported, unplugged — until 2026-08-24. `irradiance_volumes` drove it by hand to
+show the maths was sound: 48 probes baked from the scene lights, sampled per object, applied to
+albedo on the CPU because the pipeline could not. The blend was correct: red-dominant
+`(0.935 0.462 0.333)` on the left, blue-dominant `(0.366 0.533 0.902)` on the right.
+
+**Now the pipeline can.** `IrradianceState` uploads the grid — probes as `SHCoeffs::to_gpu_data`'s
+existing 28-float layout, so there is one definition of it rather than two — and `irradiance.wgsl`
+is a direct port of `ProbeGrid::sample` + `SHCoeffs::evaluate`: same trilinear blend over the same
+eight corners, same basis constants, same clamp. Bind group 3 of the deferred lighting pipeline,
+which was free. Always bound, because wgpu requires a declared group to be: a renderer with no
+baked GI binds one zeroed probe and the shader returns black.
+
+Measured by running both paths over the same grid and the same scene, with only the application
+route differing. The red-minus-blue difference across the seven spheres:
+
+| sphere | CPU | GPU |
+|---|---|---|
+| −3 | +17.6 | +46.9 |
+| +0 | −9.0 | −8.1 |
+| +3 | −48.9 | −79.7 |
+
+Both fall monotonically, **correlation 0.99887**, scale factor 1.92. The scale difference is not an
+error: the CPU path folds irradiance into albedo (0.18 base + irradiance, then multiplied by direct
+light) while the GPU path leaves the sphere white and adds the indirect term separately. The
+*shape* of the blend — what the probes are for — is the same curve.
+
+`a_baked_probe_grid_reaches_the_frame_with_the_right_colour` guards both halves: the grid changes
+the frame (0 pixels when the shader's contribution is removed) and changes it in the direction the
+coefficients say (red-baked raises red more than blue — which fails when `evaluate` is replaced by
+its magnitude).
+
+Still missing: a **component**. The grid is uploaded by hand; there is no `IrradianceVolume` an
+entity carries and no automatic selection between overlapping grids.
 
 ### F3. The water material route
 

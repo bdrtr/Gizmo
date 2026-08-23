@@ -13,6 +13,11 @@ const COMMON_WGSL: &str = include_str!("../shaders/common.wgsl");
 /// AFTER it below.
 const PBR_EXT_WGSL: &str = include_str!("../shaders/pbr_ext.wgsl");
 
+/// Irradiance-volume sampling (`#define_import_path gizmo::irradiance`): the WGSL port of
+/// `gi::ProbeGrid::sample` and `gi::SHCoeffs::evaluate`. Only `deferred_lighting.wgsl` imports it,
+/// and it declares bind group 3, so registering it here is inert for every other shader.
+const IRRADIANCE_WGSL: &str = include_str!("../shaders/irradiance.wgsl");
+
 /// Shader-defs for the NATIVE render schema: 5 bind groups with the CSM shadow group in the
 /// middle. `SHADOWS` keeps the `#ifdef SHADOWS` shadow bindings + PCF block; the group
 /// indices place skeleton at 3 and instance at 4 (see build_core_pipelines' native layout).
@@ -76,6 +81,14 @@ pub(crate) fn compose_module(
             ..Default::default()
         })
         .map_err(|e| format!("composing pbr_ext.wgsl failed: {e}"))?;
+    composer
+        .add_composable_module(ComposableModuleDescriptor {
+            source: IRRADIANCE_WGSL,
+            file_path: "gizmo/irradiance.wgsl",
+            language: ShaderLanguage::Wgsl,
+            ..Default::default()
+        })
+        .map_err(|e| format!("composing irradiance.wgsl failed: {e}"))?;
 
     let module = composer
         .make_naga_module(NagaModuleDescriptor {

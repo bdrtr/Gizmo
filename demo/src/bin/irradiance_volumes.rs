@@ -4,9 +4,9 @@
 //! küresel harmoniklerle saklanır, ve nesneler aralarındaki değerden **karıştırarak** okur.
 //! Statik dolaylı aydınlatmanın klasik yolu.
 //!
-//! ## Motorda matematiğin tamamı var — ve **render'a bağlı değil**
+//! ## Motorda matematiğin tamamı vardı — ve **2026-08-24'te render'a bağlandı**
 //!
-//! Bu demonun asıl bulgusu bu. `gizmo_renderer::gi` içinde tam bir altyapı duruyor:
+//! Bu demonun asıl bulgusu buydu. `gizmo_renderer::gi` içinde tam bir altyapı duruyordu:
 //! [`SHCoeffs`] (L0+L1, `add_directional_light` / `evaluate` / `lerp` / `to_gpu_data`),
 //! [`LightProbe`], ve trilineer örneklemeli [`ProbeGrid`] — üstelik yedi testi de var.
 //!
@@ -19,19 +19,48 @@
 //! | SH katsayısı okuyan shader | **yok** |
 //! | `ProbeGrid` kullanan demo | (bu demodan önce) **yok** |
 //!
-//! Yani özellik yazılmış, test edilmiş, dışa açılmış — ve **fişi takılmamış**. Bir oyun bunu
-//! kullanmak isterse örneklemeyi kendi yapıp sonucu kendi uygulamak zorunda; boru hattı SH'den
-//! haberdar değil.
+//! Yani özellik yazılmış, test edilmiş, dışa açılmış — ve **fişi takılmamıştı**. Bir oyun bunu
+//! kullanmak isterse örneklemeyi kendi yapıp sonucu kendi uygulamak zorundaydı.
 //!
-//! Bu demo tam olarak onu yapıyor: ızgarayı kuruyor, sahnenin ışıklarından pişiriyor, nesne
-//! başına örnekleyip sonucu malzemenin rengine **CPU tarafında** işliyor.
+//! **Fiş takıldı.** `IrradianceState` ızgarayı GPU'ya yüklüyor, `irradiance.wgsl`
+//! `ProbeGrid::sample` + `SHCoeffs::evaluate`'in birebir portu, ve ertelenmiş aydınlatma geçişi
+//! grup 3'ten okuyup dolaylı ışığı albedoya çarpıyor. Demo iki yolu da koşturuyor:
+//! `GIZMO_IRR_GPU=1` ile GPU, onsuz eski CPU yolu.
+//!
+//! ## Ölçülen 0: iki yol aynı karışım eğrisini veriyor
+//!
+//! Aynı ızgara, aynı sahne, tek değişen uygulama yolu. Yedi kürenin merkezinden okunan
+//! **kırmızı − mavi** farkı (2026-08-24, kare 200):
+//!
+//! | küre | CPU (K−M) | GPU (K−M) |
+//! |------|-----------|-----------|
+//! | −3 | +17,6 | +46,9 |
+//! | −2 | +13,5 | +38,5 |
+//! | −1 | +4,0 | +20,9 |
+//! | +0 | −9,0 | −8,1 |
+//! | +1 | −25,4 | −41,3 |
+//! | +2 | −43,6 | −70,6 |
+//! | +3 | −48,9 | −79,7 |
+//!
+//! | | |
+//! |---|---|
+//! | ikisi de tekdüze düşüyor | **evet** |
+//! | korelasyon | **0,99887** |
+//! | ölçek oranı (GPU/CPU) | 1,920 |
+//!
+//! Aynı eğri, farklı ölçek. Ölçek farkı bir hata değil, iki yolun **nereye** uyguladığından:
+//! CPU yolu ışınımı albedoya işliyor (0,18 taban + ışınım, sonra doğrudan ışıkla çarpılıyor), GPU
+//! yolu küreyi beyaz bırakıp dolaylı terimi ayrıca ekliyor. Karışımın *şekli* — probların
+//! aralarındaki geçiş — ikisinde de aynı, ve ölçülen şey oydu.
 //!
 //! ## Yetenek dökümü
 //!
 //! | yetenek | Gizmo |
 //! |---------|-------|
-//! | render'a bağlı ışınım hacmi bileşeni | **yok** — `ProbeGrid` elle sürülüyor |
-//! | voxel dokusundan GPU örneklemesi | **yok** — örnekleme CPU'da |
+//! | render'a bağlı ışınım hacmi | **var** (2026-08-24) — `DeferredState::irradiance` |
+//! | GPU'da SH örneklemesi | **var** — `irradiance.wgsl`, grup 3 |
+//! | ışınım hacmi **bileşeni** (varlığa takılan) | **yok** — ızgara elle yükleniyor |
+//! | voxel dokusundan örnekleme | **yok** — storage buffer, doku değil |
 //! | ışık probu bileşeni + otomatik seçim | **yok** |
 //! | proplar arası karışım | **var** — `ProbeGrid::sample` trilineer |
 //! | katsayı karışımı | **var** — `SHCoeffs::lerp` |
@@ -68,6 +97,7 @@
 //! L1 terimi ters işaretli). Örnekleme kürelerin hizasına (y = 0,6) çekildi.
 //!
 //! ## Kontroller
+//!   * `GIZMO_IRR_GPU=1` — ışınımı GPU'da uygula (kapalıyken CPU yolu)
 //!   * **Sağ-tık + fare / WASDQE** — kamera
 
 use gizmo::prelude::*;
@@ -95,9 +125,15 @@ gizmo::core::impl_component!(GiReport);
 
 const RES: [u32; 3] = [4, 3, 4];
 
+/// Işınımı GPU'da mı uygulayalım. `GIZMO_IRR_GPU=1`.
+fn gpu_path() -> bool {
+    std::env::var("GIZMO_IRR_GPU").is_ok()
+}
+
 fn main() {
+    let gpu_path = gpu_path();
     App::<SimpleSceneState>::new("Gizmo Engine - Irradiance Volumes", 1280, 720)
-        .with_simple_scene(|scene, state| {
+        .with_simple_scene(move |scene, state| {
             let white = scene.asset_manager.create_white_texture(
                 &scene.renderer.device,
                 &scene.renderer.queue,
@@ -127,6 +163,21 @@ fn main() {
                 Vec3::splat(0.03),
             );
 
+            // 2026-08-24: ızgara artık GPU'ya yüklenebiliyor. Ertelenmiş aydınlatma geçişi
+            // grup 3'ten okuyup dolaylı ışığı albedoya çarpıyor — yani bu demonun CPU'da yaptığı
+            // işin aynısını, boru hattının içinde.
+            if gpu_path {
+                let (device, queue) = (&scene.renderer.device, &scene.renderer.queue);
+                if let Some(def) = scene.renderer.deferred.as_mut() {
+                    def.irradiance.upload(device, queue, &grid);
+                    gizmo::gizmo_log!(
+                        Info,
+                        "prob ızgarası GPU'ya yüklendi: {} prob",
+                        def.irradiance.probe_count
+                    );
+                }
+            }
+
             // Sahne: bir sıra küre. Her birinin rengi kendi konumundaki ışınımdan geliyor.
             let mut samples = Vec::new();
             for i in 0..7 {
@@ -140,15 +191,21 @@ fn main() {
                     Transform::new(position).with_scale(Vec3::splat(0.55)),
                     GlobalTransform::default(),
                     sphere.clone(),
-                    // Uygulama CPU'da: örneklenen ışınım doğrudan albedoya işleniyor.
-                    // Boru hattı SH bilmediği için başka yolu yok.
+                    // `GIZMO_IRR_GPU=1` ile uygulama GPU'da: küre beyaz kalıyor ve ışınımı
+                    // ertelenmiş aydınlatma geçişi prob ızgarasından okuyup ekliyor. Kapalıyken
+                    // eski yol — örneklenen ışınım doğrudan albedoya işleniyor, çünkü boru hattı
+                    // SH bilmiyordu.
                     Material::new(white.clone()).with_pbr(
-                        Vec4::new(
-                            (0.18 + irradiance.x).min(1.0),
-                            (0.18 + irradiance.y).min(1.0),
-                            (0.18 + irradiance.z).min(1.0),
-                            1.0,
-                        ),
+                        if gpu_path {
+                            Vec4::new(1.0, 1.0, 1.0, 1.0)
+                        } else {
+                            Vec4::new(
+                                (0.18 + irradiance.x).min(1.0),
+                                (0.18 + irradiance.y).min(1.0),
+                                (0.18 + irradiance.z).min(1.0),
+                                1.0,
+                            )
+                        },
                         0.55,
                         0.0,
                     ),

@@ -101,6 +101,17 @@ pub struct DeferredState {
     /// light.
     pub lighting_pipeline: wgpu::RenderPipeline,
 
+    /// The irradiance probe grid the lighting pass samples for indirect light.
+    ///
+    /// Lives here rather than on `Renderer` because the lighting pipeline's layout names its bind
+    /// group layout — the two are built together and a mismatch between them is a validation error
+    /// at draw time, not at construction.
+    ///
+    /// Empty by default. Upload a baked [`ProbeGrid`](crate::gi::ProbeGrid) with
+    /// [`IrradianceState::upload`](crate::irradiance::IrradianceState::upload) and the pass starts
+    /// reading it; until then it contributes nothing.
+    pub irradiance: crate::irradiance::IrradianceState,
+
     // Bind group used by the lighting pass to read the G-buffers
     /// The layout of the four-target bind group, kept so other passes (SSAO, SSR, decals) can
     /// declare a matching one.
@@ -152,8 +163,13 @@ impl DeferredState {
             Self::create_gbuffer_pipeline(device, scene, Some(wgpu::Face::Back), "GBuffer Pipeline");
         let gbuffer_double_sided_pipeline =
             Self::create_gbuffer_pipeline(device, scene, None, "GBuffer TwoSided Pipeline");
-        let lighting_pipeline =
-            Self::create_lighting_pipeline(device, scene, &gbuffer_bind_group_layout);
+        let irradiance = crate::irradiance::IrradianceState::new(device);
+        let lighting_pipeline = Self::create_lighting_pipeline(
+            device,
+            scene,
+            &gbuffer_bind_group_layout,
+            &irradiance.bind_group_layout,
+        );
 
         Self {
             albedo_metallic_tex,
@@ -169,6 +185,7 @@ impl DeferredState {
             z_prepass_pipeline,
             z_prepass_double_sided_pipeline,
             lighting_pipeline,
+            irradiance,
             gbuffer_bind_group_layout,
             gbuffer_bind_group,
             gbuf_sampler,
@@ -508,6 +525,7 @@ impl DeferredState {
         device: &wgpu::Device,
         scene: &SceneState,
         gbuffer_layout: &wgpu::BindGroupLayout,
+        irradiance_layout: &wgpu::BindGroupLayout,
     ) -> wgpu::RenderPipeline {
         let shader = load_shader_composed(
             device,
@@ -522,6 +540,10 @@ impl DeferredState {
                 Some(&scene.global_bind_group_layout), // 0: SceneUniforms
                 Some(&scene.shadow_bind_group_layout), // 1: shadow CSM
                 Some(gbuffer_layout),                  // 2: G-buffers
+                // 3: the irradiance probe grid. Always declared, so always bound — a renderer
+                // with no baked GI binds a one-probe grid of zeros and the shader adds nothing.
+                // Two pipeline variants would cost more than a 112-byte buffer.
+                Some(irradiance_layout),
             ],
             immediate_size: 0,
         });

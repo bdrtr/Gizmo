@@ -3380,6 +3380,138 @@ mod golden_render_tests {
         out
     }
 
+    /// A baked probe grid has to reach the frame, and reach it as the CPU path computes it.
+    ///
+    /// `gi::ProbeGrid` was written, tested and unplugged — `to_gpu_data` had exactly one caller,
+    /// its own test. Uploading it is only half the job: the shader's sampling has to be the same
+    /// sampling, or the GPU path and the CPU path are two different features that happen to share
+    /// a name.
+    ///
+    /// So this checks both halves. The grid changes the frame at all, and it changes it in the
+    /// direction the coefficients say: a grid baked from a red light makes the red channel rise
+    /// more than the blue.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_baked_probe_grid_reaches_the_frame_with_the_right_colour() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let none = render_with_probes(None).await;
+            let red = render_with_probes(Some(Vec3::new(1.0, 0.05, 0.05))).await;
+            let blue = render_with_probes(Some(Vec3::new(0.05, 0.05, 1.0))).await;
+
+            let (lit, total) = changed_pixels(&none, &red, 128);
+            assert!(
+                lit >= 500,
+                "a baked grid changed {lit}/{total} pixels — it is not reaching the lighting pass",
+            );
+
+            // Direction, not just magnitude. Mean channel deltas against the unlit reference.
+            let d_red = mean_channel_delta(&none, &red);
+            let d_blue = mean_channel_delta(&none, &blue);
+            assert!(
+                d_red[0] > d_red[2] + 1.0,
+                "a red-baked grid raised red by {:.2} and blue by {:.2} — the coefficients are \
+                 not being evaluated, only their magnitude",
+                d_red[0],
+                d_red[2],
+            );
+            assert!(
+                d_blue[2] > d_blue[0] + 1.0,
+                "a blue-baked grid raised blue by {:.2} and red by {:.2}",
+                d_blue[2],
+                d_blue[0],
+            );
+        });
+    }
+
+    /// Mean per-channel difference between two RGBA8 frames, as `[r, g, b]`.
+    fn mean_channel_delta(a: &[u8], b: &[u8]) -> [f32; 3] {
+        let (a_px, _) = a.as_chunks::<4>();
+        let (b_px, _) = b.as_chunks::<4>();
+        let mut sums = [0.0f64; 3];
+        for (pa, pb) in a_px.iter().zip(b_px) {
+            for c in 0..3 {
+                sums[c] += f64::from(pb[c]) - f64::from(pa[c]);
+            }
+        }
+        let n = a_px.len().max(1) as f64;
+        [
+            (sums[0] / n) as f32,
+            (sums[1] / n) as f32,
+            (sums[2] / n) as f32,
+        ]
+    }
+
+    /// A white floor under a dim sun, optionally with a probe grid baked from one coloured light.
+    ///
+    /// The floor is white and rough so the indirect term is the only thing distinguishing the
+    /// three runs; a coloured material would tint the result and hide a grid that did nothing.
+    async fn render_with_probes(probe_colour: Option<Vec3>) -> Vec<u8> {
+        const W: u32 = 128;
+        let mut renderer = crate::test_gpu::headless_renderer(W, W).await;
+        renderer.taa = None;
+        let mut asset_manager = AssetManager::new();
+        let mut world = World::new();
+        let tex = asset_manager.create_white_texture(
+            &renderer.device,
+            &renderer.queue,
+            &renderer.scene.texture_bind_group_layout,
+        );
+
+        let floor = world.spawn();
+        world.add_component(
+            floor,
+            Transform::new(Vec3::new(0.0, -1.0, 0.0)).with_scale(Vec3::new(12.0, 0.2, 12.0)),
+        );
+        world.add_component(floor, GlobalTransform::default());
+        world.add_component(floor, AssetManager::create_cube(&renderer.device));
+        world.add_component(
+            floor,
+            Material::new(tex).with_pbr(Vec4::new(1.0, 1.0, 1.0, 1.0), 0.95, 0.0),
+        );
+        world.add_component(floor, MeshRenderer::new());
+
+        world.spawn_bundle(CameraBundle {
+            position: Vec3::new(0.0, 1.5, 4.0),
+            yaw: -std::f32::consts::FRAC_PI_2,
+            pitch: -0.35,
+            primary: true,
+            ..Default::default()
+        });
+        // Dim, so the indirect term is not lost under direct light.
+        world.spawn_bundle(DirectionalLightBundle {
+            intensity: 0.3,
+            ..Default::default()
+        });
+
+        if let Some(colour) = probe_colour {
+            let mut grid = gizmo_renderer::gi::ProbeGrid::new(
+                Vec3::new(-8.0, -2.0, -8.0),
+                Vec3::new(8.0, 4.0, 8.0),
+                [3, 3, 3],
+            );
+            // Bake by hand rather than through `add_directional_light`, so the test states the
+            // coefficients it expects to see rather than trusting a second function to produce
+            // them. L0 alone is a uniform sky of this colour.
+            for p in &mut grid.probes {
+                p.coeffs.l0 = colour;
+            }
+            if let Some(def) = renderer.deferred.as_mut() {
+                let (device, queue) = (&renderer.device, &renderer.queue);
+                def.irradiance.upload(device, queue, &grid);
+                assert_eq!(def.irradiance.probe_count, 27, "the grid did not upload");
+            }
+        }
+
+        render_world(&mut renderer, &mut world).await
+    }
+
     /// The spatial index must not change what is drawn — only how fast the decision is reached.
     ///
     /// This is the assertion that makes the index safe to turn on. An index in front of the

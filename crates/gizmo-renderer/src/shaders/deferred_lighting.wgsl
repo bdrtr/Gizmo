@@ -9,6 +9,9 @@
 #import gizmo::common::{SceneUniforms, LightData, compute_direct_lighting, gizmo_cluster_index}
 #import gizmo::pbr_ext::{approximate_env_brdf, compute_direct_lighting_anisotropic, compute_clear_coat}
 
+// Irradiance volumes: group 3. See `irradiance.wgsl` and `gizmo_renderer::irradiance`.
+#import gizmo::irradiance::{gi_sample}
+
 @group(0) @binding(0) var<uniform> scene: SceneUniforms;
 
 
@@ -599,7 +602,16 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     // Exposure is NOT applied here anymore — it is a single post-process knob applied over
     // the whole composited HDR (deferred + sky + unlit), so it can't compound or skip the
     // sky/unlit forward objects. scene.exposure is left in the uniform for layout stability.
-    var final_color = ambient + total_lighting + specular_ibl;
+    // Indirect light from the probe grid, if one is uploaded. `gi_sample` returns black when
+    // `probe_count == 0`, which is what a renderer with no baked GI binds — so this line costs a
+    // branch and nothing else until a scene actually bakes a grid.
+    //
+    // Added to `ambient` rather than replacing it: the constant ambient term is what a scene
+    // without probes relies on, and taking it away would darken every existing scene the moment
+    // this shipped. A scene that bakes GI is expected to lower its own ambient.
+    let indirect = gi_sample(world_pos, N) * albedo;
+
+    var final_color = ambient + indirect + total_lighting + specular_ibl;
 
     // Apply volumetric analytical height fog
     let fog = compute_height_fog(world_pos, scene.camera_pos.xyz);
