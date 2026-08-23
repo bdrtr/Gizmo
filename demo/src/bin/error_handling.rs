@@ -13,17 +13,25 @@
 //! | genel hata işleyici | **yok** |
 //! | sistem başına hata politikası | **yok** |
 //! | eksik kaynak | **panik** — uygulama duruyor |
-//! | eksik kaynağa dayanıklılık | yalnız `run_if` — `Option<Res<T>>` **parametre değil** |
+//! | eksik kaynağa dayanıklılık | **`Option<Res<T>>`** — 2026-08-23'te eklendi, aşağıda ölçüldü |
 //!
 //! Ve bu bir eksiklik değil, **yazılı bir karar**. Motorun panik mesajının kendisi gerekçeyi
 //! taşıyor: *"Gizmo Engine, hataların sessizce yok sayılmasını önlemek için sistemi durdurdu."*
 //!
-//! ### Ve motorun sistem parametresi listesi çok kısa
+//! ### Motorun sistem parametresi listesi kısa — ve bu demo onu bir uzattı
 //!
-//! `SystemParam` için yalnız **dört** uygulama var: `Res<T>`, `ResMut<T>`, `f32` (dt) ve
-//! `Query<Q>`. `Option<Res<T>>` yok — yani en yaygın "hataya dayanıklı parametre"
-//! deseni burada **derlenmiyor**. Ve trait mühürlü olduğu için dışarıdan da eklenemiyor
-//! (bkz. [`ecs_extension_points`](../ecs_extension_points/index.html)).
+//! `SystemParam` için **beş** uygulama var: `Res<T>`, `ResMut<T>`, `f32` (dt), `Query<Q>` ve
+//! `Option<P>`. Sonuncusu ilk yazımda **yoktu**, ve yokluğu bu demoda ölçüldü: en yaygın
+//! "hataya dayanıklı parametre" deseni derlenmiyordu. Trait mühürlü olduğu için dışarıdan
+//! eklenemiyordu, o yüzden motorun içine kondu (2026-08-23).
+//!
+//! Mühür duruyor — `Option<P>` onu açmıyor, sadece en çok istenen tek eksiği kapatıyor.
+//! Genel uzatılabilirlik hâlâ açık soru; bkz. `docs/API_DEPTH.md`.
+//!
+//! **Ve `Option<P>` her hatayı yutmuyor.** Yalnız *yokluk* `None` oluyor; ödünç alma
+//! çakışması yine panikliyor, çünkü o bir durum değil hata: aynı parametre listesinde iki
+//! `ResMut<T>`, ya da yazma kilidini tutan bir sistemin içinden `get_resource`. Onu `None`'a
+//! çevirmek, bir çizelgeleme hatasını sıradan yokluk denetimi gibi göstermek olurdu.
 //!
 //! ## Ölçüldü: politikanın gerçekten bu olduğu
 //!
@@ -32,14 +40,21 @@
 //!
 //! Ölçüldü (2026-08-23):
 //!
-//! | deneme | sonuç |
-//! |--------|-------|
-//! | kaydı olmayan kaynağı `Res<T>` ile isteyen sistem | **panikledi** — `❌ FATAL ECS ERROR ❌` |
-//! | aynı kaynak, `run_if` ile korunmuş sistem | **0** kez koştu, panik yok |
-//! | iş mantığı hatası, kaynağa yazılıyor | 2 kayıt, **uygulama çalışmaya devam etti** |
+//! Aynı eksik kaynak, üç farklı biçim, tek kare (kare 120):
 //!
-//! Yani politika gerçekten "panikle": koruma varsayılan değil, siz koyacaksınız. Ve koruma
-//! koymanın bedeli sistemin **hiç çalışmaması** — yedek davranış yazacak bir yer yok.
+//! | biçim | sonuç |
+//! |-------|-------|
+//! | `Res<T>` | **panikledi** — `❌ FATAL ECS ERROR ❌` |
+//! | `run_if` ile korunmuş `Res<T>` | **0** kez koştu — sistem hiç girmedi |
+//! | **`Option<Res<T>>`** | **90** kez koştu, **90** kez `None` gördü |
+//! | iş mantığı hatası, kaynağa yazılıyor | 2 kayıt, uygulama çalışmaya devam etti |
+//!
+//! Üç satır üç ayrı davranış, ve ortadaki ikisinin farkı önemli: `run_if` sisteme **hiç
+//! girmiyor**, yani yedek dal yazacak yer yok. `Option<Res<T>>` giriyor ve yokluğu kendisi ele
+//! alıyor — 90 karenin 90'ında.
+//!
+//! Politika hâlâ "panikle", ve öyle kalmalı: koruma varsayılan değil, siz koyacaksınız. Değişen
+//! şey, koruma koymanın artık iki biçimi olması.
 //!
 //! ## Karşılığı ne
 //!
@@ -77,6 +92,10 @@ struct ErrorLog {
     frame: u32,
     /// Korumalı sistemin kaç kez koştuğu — kaynak yok, yani 0 kalmalı.
     guarded_runs: u32,
+    /// `Option<Res<..>>` alan sistemin kaç kez koştuğu — kaynak yok ama sistem giriyor.
+    optional_runs: u32,
+    /// O sistemin kaç kez `None` gördüğü.
+    optional_none: u32,
 }
 gizmo::core::impl_component!(ErrorLog);
 
@@ -135,13 +154,16 @@ fn main() {
             scene.spawn_camera(state, Vec3::new(0.0, 2.5, 8.0), Vec3::ZERO);
         })
         .add_update_system(count_frames.in_phase(Phase::PreUpdate).label("frames"))
-        // Dayanıklılığın TEK yolu: sistemi hiç koşturmamak. `Option<Res<T>>` bir parametre değil.
+        // `run_if` yolu: sistem hiç koşmuyor. Artık tek yol DEĞİL — `Option<Res<T>>` de var,
+        // ve ikisi farklı şeyler: bu, sisteme hiç girmiyor; öteki giriyor ve yedek dal yazabiliyor.
         .add_update_system(
             guarded
                 .in_phase(Phase::Update)
                 .after("frames")
                 .run_if(|world: &World| world.get_resource::<NeverRegistered>().is_some()),
         )
+        // Öteki yol: sistem KOŞUYOR ve yokluğu kendisi ele alıyor.
+        .add_update_system(tolerant.in_phase(Phase::Update).after("frames"))
         .add_update_system(business_logic.in_phase(Phase::Update))
         .set_ui(|world, _state, ctx| {
             let Some(r) = world.get_resource::<ErrorLog>().map(|r| r.clone()) else {
@@ -163,6 +185,10 @@ fn main() {
                             r.frame, r.guarded_runs
                         ));
                         ui.label("(kaynak hiç eklenmedi -> run_if hep false -> 0)");
+                        ui.label(format!(
+                            "Option<Res<..>> alan sistem {} kez koştu · {} kez None gördü",
+                            r.optional_runs, r.optional_none
+                        ));
                         ui.separator();
                         ui.label(format!("iş mantığı hataları ({}):", r.entries.len()));
                         for line in r.entries.iter().rev().take(5) {
@@ -211,13 +237,23 @@ fn probe_missing_resource(world: &mut World) -> String {
     }
 }
 
+/// `Option<Res<T>>` yolu: kaynak yokken de koşuyor, ve yedek dalını yazabiliyor.
+///
+/// `run_if`'ten farkı tam burada: orada sistem hiç girmiyor, burada giriyor ve `None`'ı görüyor.
+fn tolerant(missing: Option<Res<NeverRegistered>>, mut log: ResMut<ErrorLog>) {
+    log.optional_runs += 1;
+    if missing.is_none() {
+        log.optional_none += 1;
+    }
+}
+
 /// Kareyi sayar — koşulsuz.
 fn count_frames(mut log: ResMut<ErrorLog>) {
     log.frame += 1;
 }
 
 /// Eksik kaynağa **dayanıklı** yol: `run_if` kaynağın varlığını soruyor, yoksa sistem hiç
-/// çalışmıyor. `Option<Res<T>>` yazılamadığı için başka seçenek yok.
+/// çalışmıyor — yedek davranış yazacak bir yer yok. `Option<Res<T>>` tam bunun için var.
 ///
 /// Dikkat: bu, "eksikse şunu yap" demek DEĞİL — sistem hiç girmiyor, yani yedek davranış
 /// yazılacak bir yer yok. `Result` döndüren bir sistem orada bir `else` dalı yazabilirdi.
@@ -246,8 +282,10 @@ fn business_logic(
     }
     gizmo::gizmo_log!(
         Info,
-        "iş mantığı hatası üretildi · defterde {} kayıt · korumalı sistem {} kez koştu · uygulama ÇALIŞMAYA DEVAM EDİYOR",
+        "iş mantığı hatası üretildi · defterde {} kayıt · korumalı sistem {} kez koştu · Option'lı sistem {} kez koştu ({} kez None) · uygulama ÇALIŞMAYA DEVAM EDİYOR",
         log.entries.len(),
-        log.guarded_runs
+        log.guarded_runs,
+        log.optional_runs,
+        log.optional_none
     );
 }

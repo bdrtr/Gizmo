@@ -90,9 +90,10 @@ compile error for undefined behaviour.
 
 What people actually reach for, and can be given without opening it:
 
-- **`Option<Res<T>>`** — the single most-missed parameter. Today a missing resource panics
-  (`❌ FATAL ECS ERROR ❌`, deliberately) and the only guard is `run_if`, which skips the system
-  entirely, so there is nowhere to put fallback behaviour. Measured in `error_handling`.
+- ~~**`Option<Res<T>>`**~~ — **done 2026-08-23.** `Option<P>` for any `P: SystemParam`, added
+  inside `gizmo-core` rather than by opening the seal. Measured in `error_handling`: `Res<T>`
+  panics, the `run_if` guard runs 0 times, `Option<Res<T>>` runs 90 times seeing `None` in all 90.
+  Only absence becomes `None` — a borrow conflict still panics, because it is a bug, not a state.
 - **a derive for composite params** — `#[derive(SystemParam)] struct Ctx<'w> { a: Res<'w, A>, b: Query<'w, &B> }`. The derive can emit the access declaration mechanically, which is exactly the
   information the seal exists to protect. This is the honest way to open `SystemParam` (below).
 - **`iter_combinations`** — currently impossible to hand-roll in one pass, because a query holding
@@ -199,8 +200,8 @@ Ordered by unlocked-capability per unit of work, not by size.
 
 1. **The hatch rule and its test.** Costs nothing, changes how everything after it is reviewed,
    and immediately documents the L2 routes that already exist and nobody knows about.
-2. **`Option<Res<T>>` and the `SystemParam` derive.** The most-missed thing, and the derive is
-   what makes opening the trait honest later.
+2. **`Option<Res<T>>` — done — and the `SystemParam` derive.** The most-missed thing, and the
+   derive is what makes opening the trait honest later.
 3. **`Phase::User`, the `enabled` flags, `add_update_hook`, `VolumetricParams`.** A batch of
    incidental opens. Each is small; together they close `custom_schedule`, the SSR/volumetric
    on-off destruction, the `set_update` trap and a whole row of section B.

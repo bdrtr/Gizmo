@@ -235,10 +235,16 @@ expressed, only approximated. Measured substitutes all work (filtered query 3/3,
 `−0.800`, latched system ran exactly 1 time in 120 frames); what is lost is *structure*, not
 behaviour.
 
-**A knock-on effect:** because `SystemParam` is sealed and `Option<Res<T>>` is not among the four
-impls, the common "tolerate a missing resource" parameter **does not compile**. The only route is
-`run_if`, which skips the system entirely — so there is nowhere to put fallback behaviour
-(`error_handling`).
+~~**A knock-on effect:** because `SystemParam` is sealed and `Option<Res<T>>` is not among the four
+impls, the common "tolerate a missing resource" parameter does not compile.~~ **CLOSED 2026-08-23.**
+`Option<P>` is now a parameter for any `P: SystemParam`, so there are five impls. The seal stays —
+this was added inside `gizmo-core` rather than by opening the trait, which is the first item of
+`docs/API_DEPTH.md`'s sequence.
+
+Measured in `error_handling`, same missing resource in one frame: `Res<T>` panics, the
+`run_if`-guarded system runs **0** times, and `Option<Res<T>>` runs **90** times seeing `None` in
+all 90 — so there is now somewhere to put fallback behaviour. Only *absence* becomes `None`; a
+borrow conflict still panics, because it is a scheduling bug rather than a state.
 
 ### C1. Individual gaps
 

@@ -35,6 +35,27 @@ pub enum SystemParamFetchError {
     QueryError,
 }
 
+impl SystemParamFetchError {
+    /// Whether this is "the thing was never there", as opposed to "it is there and I could not
+    /// have it".
+    ///
+    /// The distinction is what makes [`Option<P>`](SystemParam) safe to offer: an absent resource
+    /// is a state a game can reasonably be in and recover from, while a borrow conflict is a
+    /// scheduling bug — two `ResMut<T>` in one parameter list, or a `get_resource` call made from
+    /// inside a system that already holds the write lock. Turning the second into `None` would
+    /// hide it behind a branch that looks like ordinary absence handling.
+    ///
+    /// `QueryError` is **not** an absence: query construction returning nothing means the world
+    /// could not produce the view at all.
+    #[must_use]
+    pub fn is_absence(&self) -> bool {
+        matches!(
+            self,
+            SystemParamFetchError::Resource(crate::world::ResourceFetchError::NotFound(_))
+        )
+    }
+}
+
 impl From<crate::world::ResourceFetchError> for SystemParamFetchError {
     fn from(value: crate::world::ResourceFetchError) -> Self {
         Self::Resource(value)
@@ -187,6 +208,58 @@ impl<T: 'static> SystemParam for ResMut<'static, T> {
     }
 }
 
+/// An optional parameter: `None` when the underlying one is not there yet.
+///
+/// # Why this exists
+///
+/// Every other parameter treats a failed fetch as a setup mistake and **panics** the system with a
+/// diagnostic — deliberately, so a missing resource is never silently skipped. That is the right
+/// default and it does not change. But it leaves no way to write "use it if it is there", and the
+/// only guard available otherwise is `run_if`, which skips the whole system: there is nowhere to
+/// put the fallback branch.
+///
+/// ```no_run
+/// # use gizmo_core::prelude::*;
+/// # use gizmo_core::system::Res;
+/// # struct Analytics;
+/// # gizmo_core::impl_component!(Analytics);
+/// // Runs every frame whether or not the resource was inserted.
+/// fn report(analytics: Option<Res<Analytics>>) {
+///     match analytics {
+///         Some(_a) => { /* send it */ }
+///         None => { /* the game was built without analytics — carry on */ }
+///     }
+/// }
+/// ```
+///
+/// # It tolerates absence, not conflict
+///
+/// Only [`SystemParamFetchError::is_absence`] becomes `None`. A borrow conflict still panics,
+/// because it is a bug rather than a state: two `ResMut<T>` in one parameter list, or a
+/// `get_resource` from inside a system already holding the write lock. Mapping that to `None`
+/// would disguise a scheduling error as ordinary absence.
+///
+/// # The access is still declared
+///
+/// `get_access_info` forwards to the inner parameter **unconditionally**. If the resource is
+/// present the system really does touch it, so the scheduler has to know — an `Option` that
+/// declared nothing would be co-scheduled with a conflicting writer and race the moment the
+/// resource appeared.
+impl<P: SystemParam> sealed::Sealed for Option<P> {}
+impl<P: SystemParam> SystemParam for Option<P> {
+    type Item<'w> = Option<P::Item<'w>>;
+    fn fetch<'w>(world: &'w World, dt: f32) -> Result<Self::Item<'w>, SystemParamFetchError> {
+        match P::fetch(world, dt) {
+            Ok(v) => Ok(Some(v)),
+            Err(e) if e.is_absence() => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+    fn get_access_info(info: &mut AccessInfo) {
+        P::get_access_info(info);
+    }
+}
+
 impl sealed::Sealed for f32 {}
 impl SystemParam for f32 {
     type Item<'w> = f32;
@@ -225,3 +298,104 @@ impl<Q: crate::query::WorldQuery + 'static> SystemParam for crate::query::Query<
     }
 }
 
+
+#[cfg(test)]
+mod optional_param_tests {
+    use super::*;
+    use crate::system::IntoSystem;
+
+    #[derive(Clone, Copy, PartialEq, Debug)]
+    struct Present(u32);
+    #[derive(Clone, Copy)]
+    struct Absent;
+
+    /// The whole point: a system whose resource was never inserted still runs.
+    #[test]
+    fn an_absent_resource_becomes_none_instead_of_a_panic() {
+        let world = World::new();
+        let seen = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let s = seen.clone();
+        let mut system = (move |a: Option<Res<Absent>>| {
+            assert!(a.is_none(), "nothing was inserted, so it cannot be Some");
+            s.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        })
+        .into_system();
+
+        system.run(&world, 0.016);
+        assert_eq!(
+            seen.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "the body must have run — without `Option` this fetch panics the system"
+        );
+    }
+
+    /// And a present one still arrives, with its value intact.
+    #[test]
+    fn a_present_resource_still_arrives() {
+        let mut world = World::new();
+        world.insert_resource(Present(7));
+        let got = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let g = got.clone();
+        let mut system = (move |p: Option<Res<Present>>| {
+            *g.lock().unwrap() = p.map(|v| *v);
+        })
+        .into_system();
+
+        system.run(&world, 0.016);
+        assert_eq!(*got.lock().unwrap(), Some(Present(7)));
+    }
+
+    /// `Option<ResMut<T>>` writes through, so it is not read-only by accident.
+    #[test]
+    fn the_mutable_form_writes_through() {
+        let mut world = World::new();
+        world.insert_resource(Present(1));
+        let mut system = (|p: Option<ResMut<Present>>| {
+            if let Some(mut p) = p {
+                p.0 = 42;
+            }
+        })
+        .into_system();
+
+        system.run(&world, 0.016);
+        assert_eq!(world.get_resource::<Present>().map(|r| *r), Some(Present(42)));
+    }
+
+    /// **The access must still be declared.** An `Option` that reported nothing would be
+    /// co-scheduled with a conflicting writer and race the moment the resource appeared.
+    #[test]
+    fn the_access_is_declared_even_though_the_value_may_be_absent() {
+        let mut bare = AccessInfo::new();
+        <Res<'static, Present> as SystemParam>::get_access_info(&mut bare);
+        let mut wrapped = AccessInfo::new();
+        <Option<Res<'static, Present>> as SystemParam>::get_access_info(&mut wrapped);
+        assert_eq!(
+            bare.resource_reads, wrapped.resource_reads,
+            "Option must declare exactly what the inner parameter declares"
+        );
+
+        let mut w = AccessInfo::new();
+        <Option<ResMut<'static, Present>> as SystemParam>::get_access_info(&mut w);
+        assert_eq!(w.resource_writes.len(), 1, "the write must be declared too");
+    }
+
+    /// Absence is tolerated; a borrow conflict is not.
+    #[test]
+    fn a_borrow_conflict_is_not_an_absence() {
+        let missing = SystemParamFetchError::Resource(
+            crate::world::ResourceFetchError::NotFound(std::any::TypeId::of::<Present>()),
+        );
+        let conflict = SystemParamFetchError::Resource(
+            crate::world::ResourceFetchError::BorrowConflict(std::any::TypeId::of::<Present>()),
+        );
+        assert!(missing.is_absence(), "a never-inserted resource is an absence");
+        assert!(
+            !conflict.is_absence(),
+            "a borrow conflict is a scheduling bug — turning it into None would hide it"
+        );
+        assert!(
+            !SystemParamFetchError::QueryError.is_absence(),
+            "a query that could not be built is not an absence"
+        );
+    }
+}
