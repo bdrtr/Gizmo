@@ -48,8 +48,24 @@ exactly what produces fast breaking releases.
 This is cheap, it is the whole difference between a ceiling and a staircase, and — importantly for
 this repository — it is **enforceable**. `crates/gizmo/tests/doc_language.rs` and
 `prose_counts.rs` already show the pattern: a rule that is tested stops being a rule that is
-remembered. A `hatch_docs.rs` test can scan the convenience surface and fail on an item that
-decides something and points nowhere.
+remembered.
+
+✅ **`hatch_docs.rs` exists as of 2026-08-23**, and checks two things a document would otherwise be
+trusted for: every API this file names still exists somewhere in the tree, and every hatch's **own
+doc block** names the convenience it is a hatch for. It does not try to detect "a convenience"
+automatically — every heuristic for that either floods or misses, and a test that cries wolf gets
+ignored. The pairs are written down; adding one costs a line.
+
+It found three things on its first run. A demo this document called custom_schedule had been
+renamed to `schedule_internals` — a route offered here that the tree did not have. (That sentence
+names the dead one in plain text on purpose: code font is a claim that something exists, and the
+test reads this file too, so writing the old name in backticks fails the check it just passed.) `Option<P>`'s forty
+lines of documentation sat above `impl … sealed::Sealed for Option<P>`, a private trait, so rustdoc
+rendered none of it: the engine's only optional parameter was explained where nobody could read it.
+And the test's own first version could not be made to fail — it searched whole files, so deleting
+the sentence pointing `SceneView` at `global_uniform_buffer` still passed on the six other
+mentions in that file. Narrowed to the doc block above each declaration, it goes red on exactly
+that edit.
 
 Today `App::set_render`'s doc is the model — *"the hook for a pass the engine does not have"* —
 and it is why `post_processing` could be written at all.
@@ -289,12 +305,13 @@ Three commitments that cost nothing to adopt now:
 
 Ordered by unlocked-capability per unit of work, not by size.
 
-1. **The hatch rule and its test.** Costs nothing, changes how everything after it is reviewed,
-   and immediately documents the L2 routes that already exist and nobody knows about.
+1. **The hatch rule and its test.** ✅ **Done, 2026-08-23** — deliberately *after* the hatches,
+   so it points at real doors rather than intentions. Six pairs registered; three defects found on
+   the first run.
 2. **`Option<Res<T>>` — done — and the `SystemParam` derive.** The most-missed thing, and the
    derive is what makes opening the trait honest later.
 3. **`Phase::User`, the `enabled` flags, `add_update_hook`, `VolumetricParams`.** A batch of
-   incidental opens. Each is small; together they close `custom_schedule`, the SSR/volumetric
+   incidental opens. Each is small; together they close `schedule_internals`, the SSR/volumetric
    on-off destruction, the `set_update` trap and a whole row of section B.
 4. **The material bind-group builder.** Unlocks normal/MR/emissive/AO maps for hand-built scenes,
    which is the difference between 6 and 55 296 vertices for the same surface detail.

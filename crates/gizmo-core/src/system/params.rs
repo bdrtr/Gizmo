@@ -208,6 +208,12 @@ impl<T: 'static> SystemParam for ResMut<'static, T> {
     }
 }
 
+impl<P: SystemParam> sealed::Sealed for Option<P> {}
+
+// The block above documents THIS impl. It used to sit over the `Sealed` one, where rustdoc never
+// renders it: `sealed::Sealed` is private, so forty lines explaining the only optional parameter
+// in the engine were invisible on docs.rs. Found by `hatch_docs.rs`, which reads the doc block
+// above each hatch's own declaration and could not find `run_if` in this one.
 /// An optional parameter: `None` when the underlying one is not there yet.
 ///
 /// # Why this exists
@@ -246,7 +252,6 @@ impl<T: 'static> SystemParam for ResMut<'static, T> {
 /// present the system really does touch it, so the scheduler has to know — an `Option` that
 /// declared nothing would be co-scheduled with a conflicting writer and race the moment the
 /// resource appeared.
-impl<P: SystemParam> sealed::Sealed for Option<P> {}
 impl<P: SystemParam> SystemParam for Option<P> {
     type Item<'w> = Option<P::Item<'w>>;
     fn fetch<'w>(world: &'w World, dt: f32) -> Result<Self::Item<'w>, SystemParamFetchError> {
