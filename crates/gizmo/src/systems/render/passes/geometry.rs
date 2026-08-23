@@ -26,7 +26,7 @@ pub fn record_deferred_geometry(
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        z_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
+        z_pass.set_bind_group(0, renderer.scene.view_bind_group(), &[]);
         z_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
         z_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
         // The cull mode is baked into the pipeline, so a double-sided material needs its own.
@@ -116,7 +116,7 @@ pub fn record_deferred_geometry(
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        gbuf_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
+        gbuf_pass.set_bind_group(0, renderer.scene.view_bind_group(), &[]);
         gbuf_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
         gbuf_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
         let mut two_sided_bound: Option<bool> = None;
@@ -182,7 +182,7 @@ pub fn record_deferred_geometry(
             });
 
             decal_pass.set_pipeline(&decal_state.pipeline);
-            decal_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
+            decal_pass.set_bind_group(0, renderer.scene.view_bind_group(), &[]);
             decal_pass.set_bind_group(1, &decal_state.world_pos_bg, &[]);
             decal_pass.set_vertex_buffer(0, decal_state.vertex_buffer.slice(..));
 
@@ -214,7 +214,7 @@ pub fn record_deferred_geometry(
             multiview_mask: None,
         });
         light_pass.set_pipeline(&def.lighting_pipeline);
-        light_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
+        light_pass.set_bind_group(0, renderer.scene.view_bind_group(), &[]);
         light_pass.set_bind_group(1, &renderer.scene.shadow_bind_group, &[]);
         light_pass.set_bind_group(2, &def.gbuffer_bind_group, &[]);
         light_pass.draw(0..3, 0..1);

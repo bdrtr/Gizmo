@@ -60,7 +60,21 @@ pub struct SceneState {
     /// Its layout. Every pipeline in the engine declares this as group 0.
     pub global_bind_group_layout: wgpu::BindGroupLayout,
     /// Its bind group.
+    ///
+    /// Read it through [`view_bind_group`](SceneState::view_bind_group) rather than directly,
+    /// unless you specifically mean "the frame's own camera regardless of which view is active".
     pub global_bind_group: wgpu::BindGroup,
+    /// Extra scene-uniform views, each with its own camera. Empty by default.
+    ///
+    /// See [`SceneView`] for why a second camera needs a second buffer rather than a second write
+    /// to this one.
+    pub views: Vec<SceneView>,
+    /// Which of [`views`](SceneState::views) the next recorded pass binds, or `None` for the
+    /// frame's own camera.
+    ///
+    /// Set it, record a pass, set it back. Nothing reads it outside pass recording, so it is a
+    /// cursor rather than state — see [`view_bind_group`](SceneState::view_bind_group).
+    pub active_view: Option<usize>,
     /// Clustered lights: `(offset, count)` per cluster. Allocated for the worst case so the bind
     /// group is built once — see [`crate::clustered::index_bytes`].
     pub cluster_table_buffer: wgpu::Buffer,
@@ -112,7 +126,152 @@ pub struct SceneState {
     pub instance_capacity: usize,
 }
 
+/// A second camera for the same frame, with its own scene-uniform buffer.
+///
+/// # Why a second buffer and not a second write
+///
+/// The camera matrices live in one [`SceneState::global_uniform_buffer`], written with
+/// `queue.write_buffer`. Those writes order against **submission**, not against encoder recording,
+/// so two passes recorded into one encoder both read whichever camera was written last — recording
+/// order is not write order. Measured in the `render_to_texture` demo: an offscreen pass and a
+/// window pass gave byte-identical brightness profiles until the offscreen one was moved into its
+/// own encoder and submitted immediately, at which point all three sampled bands changed
+/// (54.07/113.55/83.28 → 87.95/95.83/60.11).
+///
+/// So the workaround was one encoder and one submit *per camera*, which is neither documented nor
+/// cheap, and does not scale to the several views a planar mirror or a reflection probe wants.
+///
+/// A `SceneView` owns its own uniform buffer, so the writes have nowhere to collide: two views can
+/// be written, then two passes recorded into one encoder, then one submit.
+///
+/// # Use
+///
+/// ```no_run
+/// # use gizmo_renderer::pipeline::{SceneState, SceneView};
+/// # fn demo(device: &wgpu::Device, queue: &wgpu::Queue, scene: &mut SceneState,
+/// #         mirror: &gizmo_renderer::gpu_types::SceneUniforms) {
+/// // Once, at setup:
+/// scene.views.push(SceneView::new(device, scene, "mirror"));
+///
+/// // Each frame, before recording the mirror's pass:
+/// scene.views[0].write(queue, mirror);
+/// scene.active_view = Some(0);
+/// // ... record the pass ...
+/// scene.active_view = None;
+/// # }
+/// ```
+///
+/// The cluster table and light index list are shared with the frame's own view rather than
+/// duplicated: they are built from the *scene*, not from the camera, so a second camera does not
+/// need a second copy.
+pub struct SceneView {
+    /// This view's [`SceneUniforms`](crate::gpu_types::SceneUniforms) buffer.
+    pub uniform_buffer: wgpu::Buffer,
+    /// Its group-0 bind group, layout-identical to [`SceneState::global_bind_group`].
+    pub bind_group: wgpu::BindGroup,
+}
+
+impl SceneView {
+    /// Builds a view against `scene`'s group-0 layout, sharing its cluster buffers.
+    #[must_use]
+    pub fn new(device: &wgpu::Device, scene: &SceneState, label: &str) -> Self {
+        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size: std::mem::size_of::<crate::gpu_types::SceneUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &scene.global_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: scene.cluster_table_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: scene.cluster_index_buffer.as_entire_binding(),
+                },
+            ],
+            label: Some(label),
+        });
+        Self {
+            uniform_buffer,
+            bind_group,
+        }
+    }
+
+    /// Writes this view's camera. Independent of every other view's write, which is the point.
+    pub fn write(&self, queue: &wgpu::Queue, uniforms: &crate::gpu_types::SceneUniforms) {
+        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(uniforms));
+    }
+}
+
 impl SceneState {
+    /// The group-0 bind group the next recorded pass should use.
+    ///
+    /// [`active_view`](Self::active_view) selects it; `None` means the frame's own camera. Every
+    /// pass in the engine binds through here, which is what makes setting `active_view` enough.
+    ///
+    /// # Panics
+    ///
+    /// If `active_view` names an index that is not in [`views`](Self::views). That is a caller
+    /// bug and silently falling back to the wrong camera would render a plausible wrong frame —
+    /// exactly the failure this type exists to end.
+    #[must_use]
+    pub fn view_bind_group(&self) -> &wgpu::BindGroup {
+        match self.active_view {
+            None => &self.global_bind_group,
+            Some(i) => {
+                &self
+                    .views
+                    .get(i)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "active_view = Some({i}) but only {} view(s) exist",
+                            self.views.len()
+                        )
+                    })
+                    .bind_group
+            }
+        }
+    }
+
+    /// The scene-uniform buffer the next recorded pass will read, selected the same way
+    /// [`view_bind_group`](Self::view_bind_group) selects its group.
+    ///
+    /// A pass that writes the camera must write *here*, not to
+    /// [`global_uniform_buffer`](Self::global_uniform_buffer) — otherwise setting `active_view`
+    /// binds one view's group and fills another view's buffer, which renders the wrong camera
+    /// with no error anywhere.
+    ///
+    /// # Panics
+    ///
+    /// Same condition as [`view_bind_group`](Self::view_bind_group): an `active_view` that names
+    /// no view.
+    #[must_use]
+    pub fn view_uniform_buffer(&self) -> &wgpu::Buffer {
+        match self.active_view {
+            None => &self.global_uniform_buffer,
+            Some(i) => {
+                &self
+                    .views
+                    .get(i)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "active_view = Some({i}) but only {} view(s) exist",
+                            self.views.len()
+                        )
+                    })
+                    .uniform_buffer
+            }
+        }
+    }
+
     /// Grows the instance buffer to hold at least `needed` instances, rebuilding its bind group,
     /// and returns whether it reallocated. A caller holding the old bind group must re-read it
     /// when this returns `true`.
@@ -363,6 +522,8 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         global_uniform_buffer,
         global_bind_group_layout: layouts.global,
         global_bind_group,
+        views: Vec::new(),
+        active_view: None,
         cluster_table_buffer,
         cluster_index_buffer,
         shadow_bind_group_layout: layouts.shadow,

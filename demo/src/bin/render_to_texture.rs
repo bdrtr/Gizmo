@@ -2,12 +2,13 @@
 //!
 //! Sahneyi pencereye değil bir **dokuya** çizmek, ve aynı kareyi birden fazla kez çizmek.
 //!
-//! ## Motorda hedef seçilebiliyor — ikinci kameraya giden yolda üç engel vardı, biri kapandı
+//! ## Motorda hedef seçilebiliyor — ikinci kameraya giden üç engelin üçü de kapandı
 //!
 //! | yetenek | Gizmo |
 //! |---------|-------|
 //! | çizim hedefini seçmek (pencere yerine doku) | **var** — [`default_render_pass`] bir `TextureView` alıyor |
-//! | aynı karede iki kameradan iki geçiş | **var, ama iki engel aşılarak** (aşağıda) |
+//! | aynı karede iki kameradan iki geçiş | **var** — `SceneView` ile tek encoder (2026-08-23) |
+//! | ikinci kameranın kendi gölge kaskadları | **yok** — kaskadlar ve kümeler hâlâ paylaşılıyor |
 //! | hedefin bir alt dikdörtgenine çizmek (alt-görüş) | **yok** — `Camera`'da bölge alanı yok |
 //!
 //! Hedef seçimi çalışıyor, çünkü çizim işlevinin imzası hedefi dışarıdan alıyor:
@@ -52,40 +53,79 @@
 //! Demonun taşıdığı geçici çözüm bu yüzden **kaldırıldı**: ikinci kamera artık hiçbir şey
 //! yapmadan kendi yerinde duruyor.
 //!
-//! ### Engel 3 (asıl olan): tek bir uniform tamponu var
+//! ### Engel 3 (asıl olan): tek bir uniform tamponu vardı — **kapatıldı**
 //!
 //! Duruş geri yazıldıktan sonra bile iki geçiş **aynı görüntüyü** verdi. Sebep boru hattının
-//! kendisinde: kamera matrisleri **tek** bir `global_uniform_buffer`'a
-//! `renderer.queue.write_buffer(...)` ile yazılıyor. `write_buffer` yazımları encoder'a kaydetme
+//! kendisindeydi: kamera matrisleri **tek** bir `global_uniform_buffer`'a
+//! `renderer.queue.write_buffer(...)` ile yazılıyordu. `write_buffer` yazımları encoder'a kaydetme
 //! anına göre değil **gönderime** göre sıralanıyor — yani iki geçiş aynı encoder'a kaydedilirse
 //! ikisi de son yazılan kamerayı okur.
 //!
-//! Çare: birinci geçişi **kendi encoder'ına** kaydedip hemen `submit` etmek. Ölçüldü — çevrim
-//! dışı hedefin parlaklık profili (2026-08-23, 512×288):
+//! O zamanki çare birinci geçişi **kendi encoder'ına** kaydedip hemen `submit` etmekti: kamera
+//! başına bir gönderim, belgelenmemiş, ve bir düzlemsel aynanın ya da yansıma probunun istediği
+//! kaç görünüm varsa o kadar gönderim demek.
 //!
-//! | | üst %0-20 | orta %40-60 | alt %80-100 |
-//! |---|-----------|-------------|-------------|
-//! | tek encoder | 54,07 | 113,55 | 83,28 |
-//! | ayrı encoder + hemen submit | **87,95** | **95,83** | **60,11** |
+//! **2026-08-23: `SceneView`.** Kendi uniform tamponu ve kendi grup-0 bağlama grubu olan bir
+//! görünüm. İki yazımın çarpışacağı yer kalmıyor, o yüzden tek encoder ve tek gönderim yetiyor:
 //!
-//! Üç bant da tanınmayacak kadar değişiyor: tepeden bakan kamera nihayet kendi görüntüsünü
-//! çiziyor. Tek encoder satırı ise pencereninkiyle aynı — yani o koşuda ikinci kamera hiç
-//! kullanılmamış.
+//! ```ignore
+//! renderer.scene.views.push(SceneView::new(&renderer.device, &renderer.scene, "ayna"));
+//! renderer.scene.active_view = Some(0);
+//! default_render_pass(world, encoder, &hedef, renderer);   // 1. kamera
+//! renderer.scene.active_view = None;
+//! default_render_pass(world, encoder, pencere, renderer);  // 2. kamera, aynı encoder
+//! ```
+//!
+//! Küme tablosu ve ışık dizini paylaşılıyor, çoğaltılmıyor: onlar sahneden türetiliyor, kameradan
+//! değil.
+//!
+//! ### Ölçüldü — ve `SceneView`'ın sınırı da ölçüldü
+//!
+//! Çevrim dışı hedefin parlaklık profili (2026-08-23, 512×288, kare 90):
+//!
+//! | kip | üst %0-20 | orta %40-60 | alt %80-100 |
+//! |-----|-----------|-------------|-------------|
+//! | tek encoder (tuzak) | 54,42 | 139,18 | 84,39 |
+//! | ayrı encoder + hemen submit | 88,80 | 101,40 | **63,07** |
+//! | **`SceneView`, tek encoder** | 89,70 | 99,02 | **86,14** |
+//!
+//! Üst ve orta bant düzeliyor — tepeden bakan kamera kendi görüntüsünü çiziyor. **Alt bant
+//! düzelmiyor**, ve aradaki 23 puan `SceneView`'ın sınırı.
+//!
+//! Sınırın sebebini tahmin etmek yerine ölçtüm. `GIZMO_RTT_NO_SHADOW=1` güneşi gölgesiz bir dolgu
+//! ışığına (`LightRole::Generic`) çeviriyor, ve o zaman:
+//!
+//! | kip (gölgesiz) | üst | orta | alt |
+//! |----------------|-----|------|-----|
+//! | tek encoder (tuzak) | 54,21 | 66,16 | 19,50 |
+//! | ayrı encoder + submit | 28,79 | 30,34 | 23,83 |
+//! | **`SceneView`, tek encoder** | **30,21** | **30,59** | **24,59** |
+//!
+//! Üç bant da **1,5 puanın altında** uyuşuyor. Yani `SceneView` gölge yokken ayrı-encoder
+//! çözümüyle eşdeğer, ve kalan bütün fark **gölge kaskadlarından** geliyor.
+//!
+//! Sebep tutarlı: `SceneView` kamera uniform'unu ayırıyor, ama gölge kaskadları ve küme tablosu
+//! kameradan **türetilen** ayrı uniform aileleri (`shadow_cascade_uniform_buffers`,
+//! `upload_clusters`) ve hâlâ paylaşılıyor. Aynı encoder'da iki geçiş, ikisi de son yazılan
+//! kaskadları okuyor — engel 3'ün birebir aynısı, bir seviye aşağıda.
+//!
+//! Yani madde kapandı ama tamamlanmadı: kamera başına kaskad ve küme ayrı bir iş, ve
+//! `docs/CAPABILITY_GAPS.md`'de öyle duruyor.
 //!
 //! ## Sonuç
 //!
-//! Dokuya çizim **çalışıyor** ve iki geçiş **mümkün**, ama hâlâ motorun kolay yolunun dışında:
-//! `primary` çevir, birinci geçişi ayrı encoder'a kaydedip hemen gönder. İkisi de belgelenmiş bir
-//! desen değil.
+//! Dokuya çizim **çalışıyor**, iki geçiş **tek encoder'da mümkün**, ve `primary` çevirmek dışında
+//! bir geçici çözüm kalmadı. Motorun `two_cameras_in_one_encoder_render_two_different_frames`
+//! testi ikisini birden kilitliyor: görünümsüz iki geçiş **birebir aynı** kareyi vermeli (tuzak
+//! hâlâ orada), görünümlü iki geçiş farklı kareler vermeli.
 //!
-//! Üçüncü adım — duruşu geri yazmak — artık gerekmiyor, çünkü bu demo onu bulunca motor
-//! düzeltildi. Bir demo yazıp ölçmenin karşılığı bu: üç engelden biri kapandı.
-//!
-//! Ve hedefin bir alt dikdörtgenine çizmek — alt-görüş — hiç yok.
+//! Ve hedefin bir alt dikdörtgenine çizmek — alt-görüş — hâlâ hiç yok.
 //!
 //! ## Kontroller
 //!   * `GIZMO_RTT_DUMP=<dizin>` — iki geçişin çıktısını PNG olarak yaz
+//!   * `GIZMO_RTT_SCENE_VIEW=1` — `SceneView` ile tek encoder (2026-08-23'ün çözümü)
 //!   * `GIZMO_RTT_ONE_ENCODER=1` — 3. engeli geri getir, iki geçiş aynı kareyi versin
+//!   * `GIZMO_RTT_NO_SHADOW=1` — güneşi gölgesiz dolgu ışığına çevir (sınırı ölçmek için)
 //!   * **Sağ-tık + fare / WASDQE** — kamera
 
 use gizmo::core::query::Mut;
@@ -165,6 +205,14 @@ fn main() {
             scene.world.spawn_bundle(DirectionalLightBundle {
                 rotation: Quat::from_rotation_y(0.5) * Quat::from_rotation_x(-0.6),
                 intensity: 2.6,
+                // `GIZMO_RTT_NO_SHADOW=1` güneşi gölgesiz bir dolgu ışığına çeviriyor. Ölçüm
+                // için: SceneView kamerayı ayırıyor, ama gölge kaskadları kameradan TÜRETİLEN
+                // ayrı bir uniform ailesi. Sorumluyu ayırmanın yolu bu.
+                role: if std::env::var("GIZMO_RTT_NO_SHADOW").is_ok() {
+                    gizmo::renderer::components::LightRole::Generic
+                } else {
+                    gizmo::renderer::components::LightRole::Sun
+                },
                 ..Default::default()
             });
 
@@ -237,7 +285,22 @@ fn main() {
             // anına göre değil GÖNDERİME göre sıralanıyor, yani iki geçiş aynı encoder'a
             // kaydedilirse ikisi de SON yazılan kamerayı okur. `GIZMO_RTT_ONE_ENCODER=1` ile
             // eski (yanlış) hâline dönülüp fark görülebiliyor.
-            if std::env::var("GIZMO_RTT_ONE_ENCODER").is_ok() {
+            if std::env::var("GIZMO_RTT_SCENE_VIEW").is_ok() {
+                // 2026-08-23: engel 3'ün gerçek çözümü. Ayrı bir `SceneView`, yani ayrı bir
+                // uniform tamponu — iki yazımın çarpışacağı bir yer kalmıyor, o yüzden TEK
+                // encoder ve TEK gönderim yetiyor.
+                if renderer.scene.views.is_empty() {
+                    let v = gizmo::renderer::pipeline::SceneView::new(
+                        &renderer.device,
+                        &renderer.scene,
+                        "render_to_texture::offscreen_view",
+                    );
+                    renderer.scene.views.push(v);
+                }
+                renderer.scene.active_view = Some(0);
+                gizmo::systems::default_render_pass(world, encoder, &target.view, renderer);
+                renderer.scene.active_view = None;
+            } else if std::env::var("GIZMO_RTT_ONE_ENCODER").is_ok() {
                 gizmo::systems::default_render_pass(world, encoder, &target.view, renderer);
             } else {
                 let mut first = renderer

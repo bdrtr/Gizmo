@@ -87,7 +87,7 @@ pub fn record_taa_and_overlays(
             });
             debug_renderer.render(
                 &mut pass,
-                &renderer.scene.global_bind_group,
+                renderer.scene.view_bind_group(),
                 gizmos.depth_test,
             );
         }

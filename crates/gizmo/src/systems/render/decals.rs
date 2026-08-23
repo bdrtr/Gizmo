@@ -117,7 +117,7 @@ pub fn record_forward_decals(
         multiview_mask: None,
     });
     pass.set_pipeline(&decal_state.forward_pipeline);
-    pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
+    pass.set_bind_group(0, renderer.scene.view_bind_group(), &[]);
     pass.set_bind_group(1, &depth_bg, &[]);
     pass.set_vertex_buffer(0, decal_state.vertex_buffer.slice(..));
     for (i, bind_group) in bind_groups.iter().enumerate() {

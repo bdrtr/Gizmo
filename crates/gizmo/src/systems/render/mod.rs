@@ -62,7 +62,7 @@ pub fn record_fluid_surface(
         &renderer.post.hdr_texture,
         &renderer.post.hdr_texture_view,
         &renderer.depth_texture_view,
-        &renderer.scene.global_bind_group,
+        renderer.scene.view_bind_group(),
         active_particles,
     );
 }
@@ -505,8 +505,10 @@ pub fn default_render_pass(
 
 
     let scene_uniform_data = crate::renderer::SceneUniforms::new(&setup.frame);
+    // Through the selector, not straight at `global_uniform_buffer`: with `active_view` set, the
+    // passes below bind that view's group, so the camera has to land in that view's buffer.
     renderer.queue.write_buffer(
-        &renderer.scene.global_uniform_buffer,
+        renderer.scene.view_uniform_buffer(),
         0,
         bytemuck::cast_slice(&[scene_uniform_data]),
     );
@@ -555,7 +557,7 @@ pub fn default_render_pass(
 
         physics.compute_pass(encoder);
         physics.debug_compute_pass(encoder);
-        physics.cull_pass(encoder, &renderer.scene.global_bind_group);
+        physics.cull_pass(encoder, renderer.scene.view_bind_group());
     }
 
     // Compute LOD (Level of Detail) Scaling.
@@ -3091,6 +3093,208 @@ mod golden_render_tests {
                  should not change what it renders this much (measured 6)",
             );
         });
+    }
+
+    /// Two cameras, one encoder, one submit — which is what `SceneView` exists for.
+    ///
+    /// Camera matrices used to live in one buffer written with `queue.write_buffer`, and those
+    /// writes order against *submission*, not against recording. So two passes recorded into one
+    /// encoder both read whichever camera was written last, and the only workaround was an encoder
+    /// and a submit per camera. This renders the same world twice into two targets from two
+    /// cameras in one encoder, and requires the two targets to differ.
+    ///
+    /// It also pins the failure it replaces: the same pair of passes *without* a second view must
+    /// come out identical. Without that half, a test that only asserts "they differ" would pass on
+    /// a build where the second camera happened to be sampled by luck.
+    ///
+    /// The light is `Generic`, not `Sun`, and that is not incidental — see
+    /// `SceneView`'s docs. `SceneView` separates the camera uniform; the shadow cascades and the
+    /// cluster table are *derived* from the camera into their own buffers and are still shared, so
+    /// with a shadow-casting sun the two passes still contaminate each other. Measured in
+    /// `render_to_texture`: with the sun, the offscreen target's lower band reads 63.07 with the
+    /// per-camera-submit workaround and 86.14 with `SceneView`; with a `Generic` light the same
+    /// two agree to within 0.8 across all three bands.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn two_cameras_in_one_encoder_render_two_different_frames() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let (a_shared, b_shared) = render_two_cameras(false).await;
+            let (shared_diff, total) = changed_pixels(&a_shared, &b_shared, 128);
+            assert_eq!(
+                shared_diff, 0,
+                "without a second view the two passes differ on {shared_diff}/{total} pixels — \
+                 they should be identical, and if they are not this test proves nothing below",
+            );
+
+            let (a, b) = render_two_cameras(true).await;
+            let (changed, total) = changed_pixels(&a, &b, 128);
+            assert!(
+                changed >= 1000,
+                "with a second view the two passes still differ on only {changed}/{total} \
+                 pixels — the second camera is not reaching its own pass",
+            );
+        });
+    }
+
+    /// Records two passes into ONE encoder from two cameras and reads both targets back.
+    ///
+    /// With `separate_views`, the first pass binds a `SceneView` of its own; without, both passes
+    /// share the frame's buffer, which is the failure being pinned.
+    async fn render_two_cameras(separate_views: bool) -> (Vec<u8>, Vec<u8>) {
+        const W: u32 = 128;
+        let mut renderer = crate::test_gpu::headless_renderer(W, W).await;
+        let mut asset_manager = AssetManager::new();
+        let mut world = World::new();
+        let tex = asset_manager.create_white_texture(
+            &renderer.device,
+            &renderer.queue,
+            &renderer.scene.texture_bind_group_layout,
+        );
+
+        // An off-centre cube: where it lands in frame is what separates the two cameras.
+        let cube = world.spawn();
+        world.add_component(cube, Transform::new(Vec3::new(1.2, 0.0, 0.0)));
+        world.add_component(cube, GlobalTransform::default());
+        world.add_component(cube, AssetManager::create_cube(&renderer.device));
+        world.add_component(
+            cube,
+            Material::new(tex).with_pbr(Vec4::new(0.9, 0.5, 0.2, 1.0), 0.5, 0.0),
+        );
+        world.add_component(cube, MeshRenderer::new());
+        // Generic, not Sun: the cascades are shared state this does not separate.
+        world.spawn_bundle(DirectionalLightBundle {
+            role: gizmo_renderer::components::LightRole::Generic,
+            intensity: 3.0,
+            ..Default::default()
+        });
+
+        // One camera, moved between the two recordings. Moving it is what makes the trap
+        // reproducible: the second write has to land after the first pass is already recorded.
+        let cam_a = world.spawn_bundle(CameraBundle {
+            position: Vec3::new(0.0, 0.5, 5.0),
+            yaw: -std::f32::consts::FRAC_PI_2,
+            pitch: 0.0,
+            primary: true,
+            ..Default::default()
+        });
+
+        if separate_views {
+            let v = gizmo_renderer::pipeline::SceneView::new(
+                &renderer.device,
+                &renderer.scene,
+                "test_view",
+            );
+            renderer.scene.views.push(v);
+        }
+
+        let (target_a, view_a) = mk_target(&renderer, W);
+        let (target_b, view_b) = mk_target(&renderer, W);
+
+        let mut encoder = renderer
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("two_cameras"),
+            });
+
+        // Pass one: camera A, at x = 0.
+        if separate_views {
+            renderer.scene.active_view = Some(0);
+        }
+        default_render_pass(&mut world, &mut encoder, &view_a, &mut renderer);
+        renderer.scene.active_view = None;
+
+        // Pass two: move the camera well to the side. Same entity — what matters is that the
+        // second write lands after the first pass was *recorded*, which is the whole trap.
+        if let Some(mut q) = world.query_mut::<crate::core::query::Mut<Transform>>() {
+            for (id, mut t) in q.iter_mut() {
+                if id == cam_a.id() {
+                    t.position = Vec3::new(-4.0, 0.5, 5.0);
+                }
+            }
+        }
+        default_render_pass(&mut world, &mut encoder, &view_b, &mut renderer);
+
+        renderer.queue.submit(std::iter::once(encoder.finish()));
+
+        let a = read_target(&renderer, &target_a, W).await;
+        let b = read_target(&renderer, &target_b, W).await;
+        (a, b)
+    }
+
+    /// A colour target the render pass can draw into and `read_target` can copy out of.
+    fn mk_target(renderer: &Renderer, w: u32) -> (wgpu::Texture, wgpu::TextureView) {
+        let t = renderer.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("two_cameras_target"),
+            size: wgpu::Extent3d {
+                width: w,
+                height: w,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: renderer.config.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let v = t.create_view(&wgpu::TextureViewDescriptor::default());
+        (t, v)
+    }
+
+    /// Copies a target back as RGBA8 bytes. `w * 4` is 512 here, already 256-aligned.
+    async fn read_target(renderer: &Renderer, tex: &wgpu::Texture, w: u32) -> Vec<u8> {
+        let staging = renderer.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("two_cameras_readback"),
+            size: (w * w * 4) as u64,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut enc = renderer
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        enc.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(w * 4),
+                    rows_per_image: Some(w),
+                },
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: w,
+                depth_or_array_layers: 1,
+            },
+        );
+        renderer.queue.submit(std::iter::once(enc.finish()));
+        let slice = staging.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |v| tx.send(v).unwrap());
+        let _ = renderer.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
+        rx.recv().unwrap().unwrap();
+        let out = slice
+            .get_mapped_range()
+            .expect("a just-mapped buffer's full range is always valid")
+            .to_vec();
+        staging.unmap();
+        out
     }
 
     /// A normal map bound through `AssetManager::material` has to reach the shading.

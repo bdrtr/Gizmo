@@ -24,7 +24,7 @@ pub fn record_screen_space_effects(encoder: &mut wgpu::CommandEncoder, renderer:
             multiview_mask: None,
             });
             pass.set_pipeline(&ssr.ssr_pipeline);
-            pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
+            pass.set_bind_group(0, renderer.scene.view_bind_group(), &[]);
             pass.set_bind_group(1, &ssr.ssr_bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
@@ -74,7 +74,7 @@ pub fn record_screen_space_effects(encoder: &mut wgpu::CommandEncoder, renderer:
             multiview_mask: None,
             });
             pass.set_pipeline(&ssgi.ssgi_pipeline);
-            pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
+            pass.set_bind_group(0, renderer.scene.view_bind_group(), &[]);
             pass.set_bind_group(1, &ssgi.ssgi_bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
@@ -179,7 +179,7 @@ pub fn record_screen_space_effects(encoder: &mut wgpu::CommandEncoder, renderer:
             multiview_mask: None,
             });
             pass.set_pipeline(&vol.volumetric_pipeline);
-            pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
+            pass.set_bind_group(0, renderer.scene.view_bind_group(), &[]);
             pass.set_bind_group(1, &renderer.scene.shadow_bind_group, &[]);
             pass.set_bind_group(2, &vol.volumetric_bind_group, &[]);
             pass.draw(0..3, 0..1);

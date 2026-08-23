@@ -217,12 +217,29 @@ registry. The four-target G-buffer budget is the real constraint here, and it is
 architectural rather than incidental: a custom material either fits the existing G-buffer
 contract or declares itself forward-only.
 
-**One `global_uniform_buffer`.** `render_to_texture` measured three obstacles between here and a
-second camera and found the third decisive: uniform writes order against *submission*, not against
-encoder recording, so two passes in one encoder both read the last camera written. The fix is a
-per-pass uniform slice (or an explicit `RenderView` the pass carries), and it is the prerequisite
-for split-screen, planar mirrors, and reflection probes — three separate capability gaps that all
-terminate here.
+**One `global_uniform_buffer`.** ✅ **Done, 2026-08-23** — as `SceneView`, an explicit view the
+caller selects rather than a per-pass slice. `SceneState` gained `views: Vec<SceneView>` and
+`active_view: Option<usize>`; every pass in the engine now binds through `view_bind_group()` and
+writes the camera through `view_uniform_buffer()`, which is what makes setting one cursor enough.
+Each view owns its uniform buffer, so two writes have nowhere to collide: write both, record both
+into one encoder, submit once. The cluster table and light index list are shared rather than
+duplicated — they are built from the scene, not the camera.
+
+Measured in `render_to_texture`, offscreen target, three modes: the trap reads 54.42/139.18/84.39
+across three bands, per-camera-submit reads 88.80/101.40/63.07, and `SceneView` in one encoder
+reads 89.70/99.02/86.14.
+
+**And the third band is the honest limit.** Rather than guess why it did not match, the demo
+measures it: with the sun replaced by a shadowless `Generic` light, `SceneView` and
+per-camera-submit agree to within 1.5 across all three bands (30.21/30.59/24.59 against
+28.79/30.34/23.83). So all of the remaining difference is the shadow cascades, which are *derived*
+from the camera into their own buffers and are still shared — obstacle 3 again, one level down.
+Per-camera cascades and clusters are separate work and are recorded as such in
+`CAPABILITY_GAPS.md`.
+
+Guarded by `two_cameras_in_one_encoder_render_two_different_frames`, which pins both halves: two
+passes without a view must be **pixel-identical** (the trap is still there and still reproducible),
+and two passes with one must differ.
 
 **A frame the user's pass can read.** The surface is `RENDER_ATTACHMENT` (+`COPY_SRC`) with no
 `TEXTURE_BINDING`, so a user pass can blend but never sample. Position-only effects work; a user
@@ -264,8 +281,9 @@ Ordered by unlocked-capability per unit of work, not by size.
    on-off destruction, the `set_update` trap and a whole row of section B.
 4. **The material bind-group builder.** Unlocks normal/MR/emissive/AO maps for hand-built scenes,
    which is the difference between 6 and 55 296 vertices for the same surface detail.
-5. **Per-pass uniforms.** One change, three capabilities: multi-viewport, planar reflections,
-   reflection probes.
+5. **Per-pass uniforms.** ✅ **Done, 2026-08-23** as `SceneView`. Camera-derived state — shadow
+   cascades and the cluster table — is still shared, and that remainder is measured rather than
+   assumed.
 6. **A bindable HDR target.** Unlocks user post-processing that reads the frame, and with it
    auto-exposure's missing sensor.
 7. **User materials.** Largest and most architectural; wants the G-buffer budget question settled

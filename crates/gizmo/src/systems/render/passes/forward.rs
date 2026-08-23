@@ -66,7 +66,7 @@ pub fn record_forward_and_fluid(
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        render_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
+        render_pass.set_bind_group(0, renderer.scene.view_bind_group(), &[]);
         // Web şemasında shadow grubu pipeline layout'unda yok (4-grup limiti).
         #[cfg(not(target_arch = "wasm32"))]
         render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
@@ -159,8 +159,8 @@ pub fn record_forward_and_fluid(
 
         // Draw GPU Physics Spheres!
         if let Some(physics) = &renderer.gpu_physics {
-            physics.render_pass(&mut render_pass, &renderer.scene.global_bind_group);
-            physics.debug_render_pass(&mut render_pass, &renderer.scene.global_bind_group);
+            physics.render_pass(&mut render_pass, renderer.scene.view_bind_group());
+            physics.debug_render_pass(&mut render_pass, renderer.scene.view_bind_group());
         }
 
         // No fluid here. `GpuFluidSystem::render_pass` was called on this line and its body was
@@ -199,7 +199,7 @@ pub fn record_forward_and_fluid(
             });
             particles.render_pass(
                 &mut ppass,
-                &renderer.scene.global_bind_group,
+                renderer.scene.view_bind_group(),
                 &depth_bg,
                 active_parts,
             );
@@ -223,7 +223,7 @@ pub fn record_forward_and_fluid(
             encoder,
             &renderer.device,
             &renderer.queue,
-            &renderer.scene.global_bind_group,
+            renderer.scene.view_bind_group(),
             &renderer.post.hdr_texture_view,
             &renderer.depth_texture_view,
             time,

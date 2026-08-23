@@ -522,6 +522,8 @@ impl Renderer {
             global_uniform_buffer: scene.global_uniform_buffer,
             global_bind_group_layout: scene.global_bind_group_layout,
             global_bind_group: scene.global_bind_group,
+            views: scene.views,
+            active_view: scene.active_view,
             cluster_table_buffer: scene.cluster_table_buffer,
             cluster_index_buffer: scene.cluster_index_buffer,
             shadow_bind_group_layout: scene.shadow_bind_group_layout,

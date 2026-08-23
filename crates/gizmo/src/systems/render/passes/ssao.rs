@@ -20,7 +20,7 @@ pub fn record_ssao(encoder: &mut wgpu::CommandEncoder, renderer: &Renderer) {
             multiview_mask: None,
         });
         pass.set_pipeline(&ssao.ssao_pipeline);
-        pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
+        pass.set_bind_group(0, renderer.scene.view_bind_group(), &[]);
         pass.set_bind_group(1, &ssao.ssao_gbuf_bind_group, &[]);
         pass.draw(0..3, 0..1);
     }

@@ -272,7 +272,7 @@ pub(super) fn record_studio_main_pass(
                 let safe_end =
                     std::cmp::min(batch.end_instance, renderer.scene.instance_capacity as u32);
 
-                render_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
+                render_pass.set_bind_group(0, renderer.scene.view_bind_group(), &[]);
                 render_pass.set_bind_group(1, &*batch.bind_group, &[]);
                 render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
                 render_pass.set_bind_group(3, &*batch.skeleton_bg, &[]);
@@ -311,7 +311,7 @@ pub(super) fn record_studio_main_pass(
                 let safe_end =
                     std::cmp::min(batch.end_instance, renderer.scene.instance_capacity as u32);
 
-                render_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
+                render_pass.set_bind_group(0, renderer.scene.view_bind_group(), &[]);
                 render_pass.set_bind_group(1, &*batch.bind_group, &[]);
                 render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
                 render_pass.set_bind_group(3, &*batch.skeleton_bg, &[]);
@@ -336,7 +336,7 @@ pub(super) fn record_studio_main_pass(
                 let safe_end =
                     std::cmp::min(batch.end_instance, renderer.scene.instance_capacity as u32);
 
-                render_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
+                render_pass.set_bind_group(0, renderer.scene.view_bind_group(), &[]);
                 render_pass.set_bind_group(1, &*batch.bind_group, &[]);
                 render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
                 render_pass.set_bind_group(3, &*batch.skeleton_bg, &[]);
@@ -346,7 +346,7 @@ pub(super) fn record_studio_main_pass(
 
             // --- DRAW GPU PHYSICS SPHERES (Katı Obje olarak farz ediliyor) ---
             if let Some(physics) = &renderer.gpu_physics {
-                physics.render_pass(&mut render_pass, &renderer.scene.global_bind_group);
+                physics.render_pass(&mut render_pass, renderer.scene.view_bind_group());
             }
 
 
@@ -362,7 +362,7 @@ pub(super) fn record_studio_main_pass(
                 let safe_end =
                     std::cmp::min(batch.end_instance, renderer.scene.instance_capacity as u32);
 
-                render_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
+                render_pass.set_bind_group(0, renderer.scene.view_bind_group(), &[]);
                 render_pass.set_bind_group(1, &*batch.bind_group, &[]);
                 render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]); // sky.wgsl içinde boş da olsa bağlı kalması gerek
                 render_pass.set_bind_group(3, &*batch.skeleton_bg, &[]);
@@ -382,7 +382,7 @@ pub(super) fn record_studio_main_pass(
                 let safe_end =
                     std::cmp::min(batch.end_instance, renderer.scene.instance_capacity as u32);
 
-                render_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
+                render_pass.set_bind_group(0, renderer.scene.view_bind_group(), &[]);
                 render_pass.set_bind_group(1, &*batch.bind_group, &[]);
                 render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
                 render_pass.set_bind_group(3, &*batch.skeleton_bg, &[]);
@@ -417,7 +417,7 @@ pub(super) fn record_studio_main_pass(
                     let safe_end =
                         std::cmp::min(batch.end_instance, renderer.scene.instance_capacity as u32);
 
-                    render_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
+                    render_pass.set_bind_group(0, renderer.scene.view_bind_group(), &[]);
                     render_pass.set_bind_group(1, &*batch.bind_group, &[]);
                     render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
                     render_pass.set_bind_group(3, &*batch.skeleton_bg, &[]);
@@ -447,7 +447,7 @@ pub(super) fn record_studio_main_pass(
                         debug_renderer.update(&renderer.queue, &gizmos);
                         debug_renderer.render(
                             &mut render_pass,
-                            &renderer.scene.global_bind_group,
+                            renderer.scene.view_bind_group(),
                             gizmos.depth_test,
                         );
                     }
@@ -456,7 +456,7 @@ pub(super) fn record_studio_main_pass(
 
             if show_colliders && draw_chrome {
                 if let Some(physics) = &renderer.gpu_physics {
-                    physics.debug_render_pass(&mut render_pass, &renderer.scene.global_bind_group);
+                    physics.debug_render_pass(&mut render_pass, renderer.scene.view_bind_group());
                 }
             }
 }
@@ -510,7 +510,7 @@ pub(super) fn record_studio_particle_pass(
     });
     particles.render_pass(
         &mut ppass,
-        &renderer.scene.global_bind_group,
+        renderer.scene.view_bind_group(),
         &depth_bg,
         particles.active_particles,
     );

@@ -71,7 +71,7 @@ is a workaround, not a feature.
 Measured in `pbr`: a metallic surface has no environment to reflect. SSR covers what is on
 screen (`ssr` measures it working well) and nothing else.
 
-### A5b. No split screen / multi-viewport — and the reason is three deep
+### A5b. No split screen / multi-viewport — two of the three obstacles are closed
 
 `Camera` has no viewport rectangle, and the render path picks exactly one camera:
 `cameras.iter().find(|(_, c)| c.primary).or_else(|| cameras.iter().next())` is the whole of
@@ -84,15 +84,27 @@ found **three separate obstacles** between here and a second camera:
 2. ~~**`with_simple_scene` stamps one pose onto every camera.**~~ **CLOSED 2026-08-23** (D7) —
    found by this demo and fixed in the engine. The second camera, spawned at `(0, 7.0, 0.2)` with
    pitch −1.15, used to read back as `yaw −1.57 pitch −0.21 T(0, 1.4, 6.5)` at draw time.
-3. **There is one `global_uniform_buffer`, written with `queue.write_buffer`.** Those writes order
-   against *submission*, not against encoder recording — so two passes recorded into one encoder
-   both read the **last** camera written. This is the deepest of the three and was invisible until
-   the first two were worked around.
+3. ~~**There is one `global_uniform_buffer`, written with `queue.write_buffer`.**~~ **CLOSED
+   2026-08-23** — as `SceneView`. Those writes order against *submission*, not against encoder
+   recording, so two passes recorded into one encoder both read the **last** camera written; this
+   was the deepest of the three and was invisible until the first two were worked around. A
+   `SceneView` owns its own uniform buffer and group-0 bind group, `SceneState` gained
+   `views` + `active_view`, and every pass now binds through `view_bind_group()` and writes through
+   `view_uniform_buffer()`. Two views, one encoder, one submit.
 
-Two remain, and `render_to_texture` shows how to get past them: flip `primary`, and record the
-first pass into its own encoder submitted immediately. The proof is in the pixels — the off-screen
-target's brightness bands go `54.07 / 113.55 / 83.28` to `87.95 / 95.83 / 60.11`. Neither is a
-documented pattern.
+One remains — flipping `primary` between calls — and the encoder-per-camera workaround is gone.
+Measured on the off-screen target's three brightness bands: the trap gives `54.42 / 139.18 / 84.39`,
+per-camera-submit gives `88.80 / 101.40 / 63.07`, and `SceneView` in one encoder gives
+`89.70 / 99.02 / 86.14`.
+
+**The third band is a real remainder, and it was measured rather than reasoned about.** Replacing
+the sun with a shadowless `Generic` light makes `SceneView` and per-camera-submit agree to within
+1.5 on all three bands (`30.21 / 30.59 / 24.59` against `28.79 / 30.34 / 23.83`). So the whole
+difference is the shadow cascades: they are *derived* from the camera into
+`shadow_cascade_uniform_buffers`, and those — along with the cluster table `upload_clusters` fills
+— are still shared between passes. That is obstacle 3 again, one level down, and it is what a
+second camera needs next. `two_cameras_in_one_encoder_render_two_different_frames` guards the part
+that is done, pinning both the trap (two passes without a view are pixel-identical) and the fix.
 
 **Render-to-texture itself works**: `default_render_pass` accepts any `TextureView`.
 
@@ -437,8 +449,10 @@ and `emissive` (item 4, the only undocumented one). No further silent fields.
 
 > Sequenced by capability. For the *shape* the surface should take as these land — layered access,
 > and the rule that every convenience must name its escape hatch — see `docs/API_DEPTH.md`. Several
-> entries below are one unlock away from each other there: per-pass uniforms alone would close
-> multi-viewport, planar reflections and reflection probes.
+> entries below are one unlock away from each other there. Per-pass uniforms — expected to close
+> multi-viewport, planar reflections and reflection probes on its own — landed 2026-08-23 as
+> `SceneView` and closed the camera half of all three; the shadow cascades and cluster table are
+> still shared per encoder, and that is what the three now wait on (A5b, item 3).
 
 1. **Text / font rendering (A2).** Named first by the project owner. It is already tracked as
    **M7.6** in `ENGINE.md` §3 (Phase 7), and `gizmo-ui`'s own crate docs name the same gap and the
