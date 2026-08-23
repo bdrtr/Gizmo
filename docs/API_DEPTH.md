@@ -341,10 +341,17 @@ arithmetic says it should (bright station 0.3656 → exposure 0.492; dark 0.0534
 gap between the two stations' rendered brightness falls from 118.18 to 20.93 — 82 % of what eye
 adaptation is for.
 
-And the cost is the finding: **10.1–10.9 ms per sample**, all of it `map_async` + `poll(Wait)`
-stalling the GPU. At one sample every twelve frames that is 0.87 ms per frame, 5 % of a 60 Hz
-budget, for a single number a compute reduction would produce in microseconds. So the real item is
-"a reduction pass", not "a bindable target", and it is sized: 10 ms.
+And the cost was the finding: **10.1–10.9 ms per sample**, all of it `map_async` + `poll(Wait)`
+stalling the GPU. So the real item was "a reduction pass", not "a bindable target".
+
+✅ **That landed 2026-08-24** — `LuminanceReduce`, two dispatches — and measuring it corrected the
+estimate. Recording the reduction costs **2 µs**, as expected. But reducing on the GPU and reading
+the answer back still costs a whole frame's worth of stall (0.785 ms mean frame against the CPU
+readback's 0.825 — a 5 % difference), because both stall the same way and the size of the copy
+barely matters. The win is in not reading it back: `gpu-only` lands inside the baseline's own noise
+(0.185/0.199 against 0.168/0.200), so the honest statement is "too small to measure" rather than a
+number. `result_buffer()` is the hatch that makes it usable; wiring it into `post_process.wgsl` is
+the remaining half.
 
 ## The version half
 

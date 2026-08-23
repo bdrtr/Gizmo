@@ -209,10 +209,32 @@ pixel, drive `Camera::exposure` toward `0.18 / measured`. It lands exactly where
 says (0.3656 → 0.492, 0.0534 → 3.370) and closes 82 % of the gap between the two stations
 (118.18 → 20.93 in rendered brightness).
 
-**What is missing is a reduction, and it is priced: 10.1–10.9 ms a sample**, all of it
-`map_async` + `poll(Wait)` stalling the GPU — 0.87 ms per frame at one sample per twelve. None of
-the nine compute shaders in the tree is a reduction or a histogram, and that single compute pass is
-the whole remaining gap; it would produce the same number in microseconds.
+**The reduction landed 2026-08-24** as `gizmo_renderer::luminance::LuminanceReduce` — two
+dispatches, tile partials then a final sum, `sums[0]` holding the mean. Four unit tests pin it
+against known inputs: a flat frame, a half-black/half-white split (which is what catches a tree
+reduction dropping tiles), Rec. 709 weights rather than a plain average, and an infinite texel not
+poisoning the mean.
+
+**And measuring it corrected the estimate above.** The demo now runs four modes as four separate
+runs and times whole frames rather than one call:
+
+| mode | mean frame (two runs) | sensor call |
+|---|---|---|
+| no sensor | 0.168 · 0.200 ms | — |
+| CPU frame readback | 0.825 · 0.822 ms | — |
+| GPU reduce + 4-byte readback | 0.785 · 0.787 ms | 7.1–7.2 ms |
+| GPU reduce, **no readback** | 0.185 · 0.199 ms | **0.002 ms** |
+
+Recording the reduction costs 2 µs, as expected. What was wrong was the conclusion drawn from it:
+adding a reduction buys nothing on its own. Reducing on the GPU and then reading the answer back
+(0.785) beats pulling the whole frame (0.825) by **5 %**, because both do the same thing — stall on
+`poll(Wait)` — and whether the copy is 4 bytes or 4 MB barely matters. The win is in **not reading
+it back at all**, and its size should not be quoted from one run: `gpu-only` measured 0.017 ms above
+the baseline in the first and 0.001 ms *below* it in the second, so it sits inside the noise.
+
+`LuminanceReduce::result_buffer()` is where the number stays. Feeding it to the next frame's
+post-process — closing the loop without the CPU ever seeing it — is the remaining work, and needs
+`post_process.wgsl` to read exposure from that buffer.
 
 ### A7d. No planar reflections, and SSR's limit priced
 

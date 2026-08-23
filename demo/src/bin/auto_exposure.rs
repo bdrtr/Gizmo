@@ -9,7 +9,9 @@
 //! |---------|-------|
 //! | pozlamayı **uygulamak** | var — [`Camera::exposure`], doğrusal bir çarpan |
 //! | kare parlaklığını **okumak** | var — `renderer.post.hdr_texture` genel, `COPY_SRC` taşıyor |
-//! | yerleşik indirgeme geçişi / histogram | **yok** — ve asıl eksik olan bu |
+//! | yerleşik indirgeme geçişi | **var** (2026-08-24) — `LuminanceReduce`, iki dispatch |
+//! | histogram (yalnız ortalama değil) | **yok** |
+//! | pozlamayı CPU'ya uğramadan uygulamak | **yok** — sayı GPU'da ama post-process onu okumuyor |
 //! | uyum hızı / yumuşatma sabiti | **yok** — oyun kendi yazıyor (bu demo yazıyor) |
 //! | en düşük/en yüksek EV, hedef parlaklık | **yok** — aynı şekilde |
 //! | ölçüm maskesi (merkez ağırlıklı, spot) | **yok** |
@@ -48,19 +50,55 @@
 //! İki istasyonun arasındaki fark **118,18'den 20,93'e** düşüyor — yani göz uyumunun yapması
 //! gereken şeyin **%82'si**. Parlak taraf kısılıyor, karanlık taraf açılıyor.
 //!
-//! ### Ölçülen 1: ve bu yüzden asıl eksik indirgeme
+//! ### Ölçülen 1: asıl maliyet indirgeme değil, **geri okuma**
 //!
-//! Bir ölçümün maliyeti **10,1–10,9 ms** (ilk ölçüm 15–17 ms, ısınma). 12 karede bir yapıldığı
-//! için kare başına ~0,87 ms — 60 Hz'lik bir karenin **%5'i**, tek bir sayı için.
+//! 2026-08-24'te motora bir compute indirgeme geçişi eklendi
+//! ([`gizmo::renderer::luminance::LuminanceReduce`]): iki dispatch, tile'lar ve son toplam. Demo
+//! artık dört kipi ayrı ayrı koşturuyor ve **kare süresini** ölçüyor — tek bir çağrının süresini
+//! değil, çünkü sensörün gerçek bedeli o.
 //!
-//! Maliyetin tamamı `map_async` + `poll(Wait)`: GPU bekletiliyor. Bir compute indirgeme aynı sayıyı
-//! mikrosaniye mertebesinde verirdi ve GPU'yu hiç durdurmazdı. Yani "sensör yazılabilir" ile
-//! "sensör kullanılabilir" arasındaki fark tam olarak bu 10 ms, ve motorun kapatması gereken boşluk
-//! da bu — hedefe erişim değil.
+//! Ölçüldü (2026-08-24, 600 kare, ilk 60'ı ısınma sayılıp atılarak, `GIZMO_AE_SENSOR=<kip>`):
+//!
+//! | kip | ortalama kare (iki koşu) | sensör çağrısı | okunan luma |
+//! |-----|--------------------------|----------------|-------------|
+//! | sensör yok | **0,168** · **0,200 ms** | — | — |
+//! | `cpu` (kareyi CPU'ya çek) | **0,825** · **0,822 ms** | — | 0,0535 |
+//! | `gpu` (indirge + 4 bayt geri oku) | **0,785** · **0,787 ms** | 7,1–7,2 ms | 0,0534 |
+//! | `gpu-only` (indirge, **geri okuma yok**) | **0,185** · **0,199 ms** | **0,002 ms** | GPU'da |
+//!
+//! Beklentim "compute indirgeme mikrosaniye alır" idi ve doğru çıktı — **0,002 ms**. Yanlış olan
+//! kısım şuydu: indirgemeyi eklemek tek başına hiçbir şey kazandırmıyor. GPU'da indirgeyip sonucu
+//! geri okumak (0,785) kareyi CPU'ya çekmekten (0,825) yalnız **%5** ucuz, çünkü ikisi de aynı şeyi
+//! yapıyor: `poll(Wait)` ile GPU'yu durduruyor. Kopyanın 4 bayt mı 4 MB mı olduğu neredeyse
+//! önemsiz.
+//!
+//! Kazanç sayıyı **GPU'da bırakmaktan** geliyor, ve büyüklüğü tek koşudan okunmamalı: ilk koşuda
+//! `gpu-only` tabandan 0,017 ms yüksekti, ikincisinde 0,001 ms **düşük**. Yani sensörün maliyeti
+//! ölçüm gürültüsünün (0,168–0,200 ms'lik taban dalgalanması) içinde kalıyor — sayabileceğim tek
+//! dürüst ifade bu: **ölçülemeyecek kadar az**.
+//!
+//! Motorun kapattığı boşluk da buydu: hedefe erişim değildi, indirgeme de tek başına değil,
+//! **stall etmeden bir sayı üretebilmek**.
+//!
+//! `LuminanceReduce::result_buffer()` o sayının durduğu yer, 0. yuvada. Onu bir sonraki karenin
+//! post-process'ine beslemek — yani halkayı hiç CPU'ya uğramadan kapatmak — henüz yok ve ayrı bir
+//! iş: `post_process.wgsl`'in pozlamayı o tampondan okuması gerekiyor.
 //!
 //! Bir de bir karelik gecikme var: sensör `default_render_pass`'ten sonra okuyor ama ana encoder
 //! henüz gönderilmemiş, yani HDR hedefinde bir önceki karenin sonucu duruyor. Uyum zaten
 //! yumuşatmalı olduğu için sonucu değiştirmiyor, ama saklanacak bir şey de değil.
+//!
+//! ### Ölçüm notu: iki sensörü aynı karede ölçmek ikisini de bozuyor
+//!
+//! İlk kurulumda CPU ve GPU sensörleri **aynı karede** koşuyordu, karşılaştırma kolay olsun diye.
+//! Sonuç: CPU ölçümü 10,5 ms'den **0,64 ms**'ye düştü. Sensör hızlanmadı — GPU indirgemesi önce
+//! koşup `poll(Wait)` ile kuyruğu boşaltmıştı, yani CPU okumasının bekleyeceği iş kalmamıştı.
+//!
+//! İki ölçüm aracı yan yana konduğunda ilki ikincinin ölçtüğü şeyi yok ediyordu. `GIZMO_AE_SENSOR`
+//! bu yüzden **tek** kip seçiyor ve tablodaki dört satır dört ayrı koşu.
+//!
+//! Aynı ders `occlusion_culling`'de de yazılı: ölçüm aracı ölçtüğü şeyin bir parçası olduğunda
+//! sayı makul görünüp yanlış olur.
 //!
 //! ### İki ölü kardeş alan
 //!
@@ -114,6 +152,7 @@
 //! PNG kodluyor. Kare başına çalıştırılacak bir şey değil.
 //!
 //! ## Kontroller
+//!   * `GIZMO_AE_SENSOR=cpu|gpu|gpu-only` — hangi sensör (boş: sensör yok, kare süresi tabanı)
 //!   * `GIZMO_AE_LOOP=1` — halkayı kapat (sensör + uyum)
 //!   * `GIZMO_AE_SELFTEST=1` — her ölçümü konsola yaz
 //!   * `GIZMO_AE_POS=parlak|karanlik` — kamerayı iki istasyondan birine koy
@@ -121,7 +160,7 @@
 //!   * **Sağ-tık + fare / WASDQE** — kamera (ölçüm için dokunmayın)
 
 use gizmo::core::query::{Mut, Query};
-use gizmo::core::system::{IntoSystemConfig, Phase, ResMut};
+use gizmo::core::system::{IntoSystemConfig, Phase};
 use gizmo::prelude::*;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
 
@@ -142,8 +181,51 @@ struct Ae {
     samples: u32,
     /// Bir ölçümün maliyeti, milisaniye.
     last_cost_ms: f32,
+    /// GPU indirgemesinin okuduğu luma.
+    gpu_measured: f32,
+    /// GPU indirgemesinin maliyeti, milisaniye.
+    gpu_cost_ms: f32,
+    /// Kare sürelerinin toplamı ve sayısı — ortalama için.
+    frame_ms_total: f32,
+    frame_ms_count: u32,
 }
 gizmo::core::impl_component!(Ae);
+
+/// Hangi sensör koşuyor.
+///
+/// Ayrı koşularda ölçülmek **zorundalar**: ikisi aynı karede koştuğunda ilki `poll(Wait)` ile
+/// GPU'yu senkronize ediyor ve ikincinin bekleyeceği iş kalmıyor. Ölçüm notuna bakın.
+#[derive(Clone, Copy, PartialEq)]
+enum Sensor {
+    /// Sensör yok: kare süresinin tabanı.
+    None,
+    /// HDR hedefini CPU'ya çekip ortalamasını al.
+    Cpu,
+    /// GPU'da indirge, sonucu **4 baytla** geri oku.
+    GpuReadback,
+    /// GPU'da indirge, geri okuma **yok** — sayı GPU'da kalıyor.
+    GpuOnly,
+}
+
+impl Sensor {
+    fn name(self) -> &'static str {
+        match self {
+            Sensor::None => "yok",
+            Sensor::Cpu => "cpu",
+            Sensor::GpuReadback => "gpu",
+            Sensor::GpuOnly => "gpu-only",
+        }
+    }
+}
+
+fn sensor() -> Sensor {
+    match std::env::var("GIZMO_AE_SENSOR").as_deref() {
+        Ok("cpu") => Sensor::Cpu,
+        Ok("gpu") => Sensor::GpuReadback,
+        Ok("gpu-only") => Sensor::GpuOnly,
+        _ => Sensor::None,
+    }
+}
 
 /// Sensörün kaç karede bir okuduğu. Okuma GPU'yu bekletiyor, o yüzden her kare değil — maliyeti
 /// aşağıda ölçülü.
@@ -285,6 +367,9 @@ fn config() -> (f32, bool) {
 
 fn main() {
     let (exposure, dark) = config();
+    // İlk karede kurulup saklanıyor: HDR hedefinin boyutunu ancak renderer canlıyken biliyoruz.
+    let mut reducer: Option<gizmo::renderer::luminance::LuminanceReduce> = None;
+    let mode = sensor();
 
     App::<SimpleSceneState>::new("Gizmo Engine - Auto Exposure", 1280, 720)
         .with_simple_scene(move |scene, state| {
@@ -360,6 +445,10 @@ fn main() {
                 measured: 0.0,
                 samples: 0,
                 last_cost_ms: 0.0,
+                gpu_measured: 0.0,
+                gpu_cost_ms: 0.0,
+                frame_ms_total: 0.0,
+                frame_ms_count: 0,
             });
             gizmo::gizmo_log!(
                 Info,
@@ -370,44 +459,96 @@ fn main() {
         })
         // Pozlama her karede yazılıyor: aktüatörün canlı olduğunu göstermenin yolu bu.
         .add_update_system(apply_exposure.in_phase(Phase::Update))
-        .set_render(|world, _state, encoder, view, renderer, _lt| {
+        .set_render(move |world, _state, encoder, view, renderer, _lt| {
+            // Kare süresi: sensörün gerçek bedeli bu, tek bir çağrının süresi değil. Çizimden
+            // ÖNCE damgalanıyor ki ölçülen şey bu karenin tamamı olsun.
+            let frame_start = std::time::Instant::now();
+
             gizmo::systems::default_render_pass(world, encoder, view, renderer);
 
             let Some(mut ae) = world.get_resource::<Ae>().map(|a| *a) else {
                 return;
             };
-            if !ae.closed_loop || !ae.frame.is_multiple_of(SENSE_EVERY) {
-                return;
-            }
 
-            // Sensör, çizimden SONRA — ama `encoder` henüz gönderilmedi, yani HDR hedefinde
-            // duran bir ÖNCEKİ karenin sonucu. Bir karelik gecikme; uyum zaten yumuşatmalı
-            // olduğu için bir sorun değil, ama gizlenecek bir şey de değil.
-            if let Some((lum, cost)) = sense_luminance(renderer) {
-                ae.measured = lum;
-                ae.samples += 1;
-                ae.last_cost_ms = cost;
+            if ae.frame.is_multiple_of(SENSE_EVERY) {
+                // Sensör, çizimden SONRA — ama `encoder` henüz gönderilmedi, yani HDR hedefinde
+                // duran bir ÖNCEKİ karenin sonucu. Bir karelik gecikme; uyum zaten yumuşatmalı
+                // olduğu için sonucu değiştirmiyor, ama gizlenecek bir şey de değil.
+                match mode {
+                    Sensor::None => {}
+                    Sensor::Cpu => {
+                        if let Some((lum, cost)) = sense_luminance(renderer) {
+                            ae.measured = lum;
+                            ae.samples += 1;
+                            ae.last_cost_ms = cost;
+                        }
+                    }
+                    Sensor::GpuReadback | Sensor::GpuOnly => {
+                        let t0 = std::time::Instant::now();
+                        let reduce = reducer.get_or_insert_with(|| {
+                            gizmo::renderer::luminance::LuminanceReduce::new(
+                                &renderer.device,
+                                &renderer.post.hdr_texture_view,
+                                renderer.post.hdr_texture.width(),
+                                renderer.post.hdr_texture.height(),
+                            )
+                        });
+                        // Ana encoder'a kaydediliyor: ayrı bir gönderim indirgemenin kendisinden
+                        // pahalı olurdu.
+                        reduce.record(encoder);
+                        if mode == Sensor::GpuReadback {
+                            if let Some(v) = reduce.read_back(&renderer.device, &renderer.queue) {
+                                ae.gpu_measured = v;
+                            }
+                        }
+                        // GpuOnly'de geri okuma yok: sayı `result_buffer()`'ın 0. yuvasında kalıyor
+                        // ve oradan bir başka geçişe beslenebilir. Ölçülen şey de tam olarak
+                        // "GPU'da bırakmanın" bedeli.
+                        ae.samples += 1;
+                        ae.gpu_cost_ms = t0.elapsed().as_secs_f32() * 1000.0;
+                    }
+                }
 
-                // Ölç -> yumuşat -> uygula. Hedefe götürecek pozlama TARGET/ölçüm; oraya
-                // ADAPT oranında yaklaşılıyor.
-                if lum > 1e-5 {
+                // Halka: hangi sensör koşuyorsa onun sayısıyla.
+                let lum = match mode {
+                    Sensor::Cpu => ae.measured,
+                    Sensor::GpuReadback => ae.gpu_measured,
+                    _ => 0.0,
+                };
+                if ae.closed_loop && lum > 1e-5 {
                     let want = (TARGET / lum).clamp(0.05, 16.0);
                     ae.exposure += (want - ae.exposure) * ADAPT * SENSE_EVERY as f32;
                     ae.exposure = ae.exposure.clamp(0.05, 16.0);
                 }
-
-                if std::env::var("GIZMO_AE_SELFTEST").is_ok() {
-                    gizmo::gizmo_log!(
-                        Info,
-                        "kare {:>4} · ölçülen luma {:.4} · pozlama {:.3} · ölçüm {:.2} ms",
-                        ae.frame,
-                        ae.measured,
-                        ae.exposure,
-                        ae.last_cost_ms
-                    );
-                }
-                world.insert_resource(ae);
             }
+
+            ae.frame += 1;
+            // İlk 60 kare sayılmıyor: boru hattı ısınması ortalamayı ölçülen şeyden çok kendisiyle
+            // doldururdu.
+            if ae.frame > 60 {
+                ae.frame_ms_total += frame_start.elapsed().as_secs_f32() * 1000.0;
+                ae.frame_ms_count += 1;
+            }
+
+            if std::env::var("GIZMO_AE_SELFTEST").is_ok() && ae.frame.is_multiple_of(120) {
+                let avg = if ae.frame_ms_count > 0 {
+                    ae.frame_ms_total / ae.frame_ms_count as f32
+                } else {
+                    0.0
+                };
+                gizmo::gizmo_log!(
+                    Info,
+                    "kip {:9} · kare {:>4} · ortalama kare {:.3} ms · örnek {} · CPU {:.4} · GPU {:.4} · sensör {:.3} ms",
+                    mode.name(),
+                    ae.frame,
+                    avg,
+                    ae.samples,
+                    ae.measured,
+                    ae.gpu_measured,
+                    ae.gpu_cost_ms
+                );
+            }
+            world.insert_resource(ae);
         })
         .set_ui(|world, _state, ctx| {
             let Some(a) = world.get_resource::<Ae>().map(|a| *a) else {
@@ -459,8 +600,9 @@ fn main() {
 }
 
 /// Pozlamayı kameraya yazar. Motorda bunu **otomatik** yapan bir şey yok; değeri veren biziz.
-fn apply_exposure(mut cameras: Query<Mut<Camera>>, mut ae: ResMut<Ae>) {
-    ae.frame += 1;
+fn apply_exposure(mut cameras: Query<Mut<Camera>>, ae: Res<Ae>) {
+    // `frame` artık `set_render` içinde artıyor: kare süresi orada ölçülüyor ve ikisi aynı sayacı
+    // kullanmak zorunda.
     let e = ae.exposure;
     for (_entity, mut camera) in cameras.iter_mut() {
         camera.exposure = e;

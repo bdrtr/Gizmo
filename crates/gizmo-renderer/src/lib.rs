@@ -124,6 +124,7 @@ pub mod backdrop;
 pub mod capture;
 pub mod routing;
 pub mod custom_material;
+pub mod luminance;
 pub mod components;
 pub mod csm;
 /// The immediate-mode line renderer behind the debug gizmos.
