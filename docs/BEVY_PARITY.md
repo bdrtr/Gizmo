@@ -159,6 +159,13 @@ whole set, because they are one family:
    gives **0.608** and fallback `0.9` gives **0.608**. The two paths now produce the same frame for
    the same setting.
 
+6. **Vertex colour is read only by `baked_lit.wgsl`.** The attribute is always present — the one
+   vertex layout carries it and an uncoloured import is normalised to opaque white — but the
+   deferred PBR path never reads it. Measured in `bevy_vertex_colors`: on a mesh with red/green/blue
+   corners and a white material, `BakedLit` shows a channel separation of **60.6** and `Pbr` shows
+   **0.9**. This also closes the loop left open in `bevy_deferred_rendering`, where `BakedLit` and
+   `Unlit` rendered identically for want of vertex colours.
+
 A full audit of this family was run (2026-08-23): of `Material`'s shading fields, the deferred
 G-buffer honours 6 (albedo, roughness, metallic, anisotropy, clear-coat, subsurface) and ignores
 three — `ambient` (**documented** as PBR-path-excluded, intentional), `alpha_cutoff` (known, item 1)
