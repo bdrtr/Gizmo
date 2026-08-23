@@ -27,7 +27,7 @@ The instability is not there. It is one layer down, where the doors are locked:
 | a derived query operand | `WorldQuery` / `ReadOnlyQuery` / `FetchComponent` all sealed | `ecs_extension_points` |
 | ~~a schedule phase of its own~~ | **opened 2026-08-23** — `Phase::User(u16)`, positioned | `schedule_internals` |
 | its own material or shader | `MaterialType` is a closed enum; `routing.rs` is exhaustive on purpose | `deferred_rendering` |
-| a normal map on a hand-built material | `assemble_material_bind_group` is `pub(crate)`; `Layouts` is `pub(super)` | `parallax_mapping` |
+| ~~a normal map on a hand-built material~~ | **opened 2026-08-23** — `AssetManager::material()` | `parallax_mapping` |
 | two camera passes in one frame | one `global_uniform_buffer`, written with `queue.write_buffer` | `render_to_texture` |
 | a post-pass that reads the frame | the surface has no `TEXTURE_BINDING` | `post_processing` |
 | ~~to keep the simple scene *and* add an exclusive pass~~ | **opened 2026-08-23** — `add_update_hook` | `update_hooks` |
@@ -127,7 +127,24 @@ derived one would have sorted every `User` behind every built-in and defeated th
 is `#[non_exhaustive]` so a sixth built-in phase is not another breaking change. Measured: 599 of
 600 frames held the expected ten-probe sequence, 0 deviated.
 
-**`assemble_material_bind_group` (`pub(crate)`) and `Layouts` (`pub(super)`).** The material bind
+**`assemble_material_bind_group` (`pub(crate)`) and `Layouts` (`pub(super)`).** ✅ **Done,
+2026-08-23** — as `AssetManager::material()`, a builder rather than the raw 10-argument function.
+Every one of the seven slots is optional and takes a neutral default, base colour and sampler
+included, so `AssetManager::material().normal(&view).build(..)` is a complete material and the
+automatic part stays automatic. `params` is nameable too, so a game can own the buffer the shader
+reads its per-material constants from — that is the "no floor" half.
+
+`Layouts` stayed `pub(super)` and did not need opening: `renderer.scene.texture_bind_group_layout`
+was already public, which is what `build` takes.
+
+Measured in `parallax_mapping`, now three slabs from one height field, each rendered alone
+(`GIZMO_PX_SLAB`): flat 6 verts / shading σ 3.03, geometric 55 296 verts / σ 39.27, normal-mapped
+**6 verts / σ 38.98**. The map reproduces **99.3 %** of the geometry's shading variation for
+1/9216 of the vertices. Guarded by
+`a_normal_map_bound_through_the_builder_changes_the_shading`, verified red when the `.normal()`
+call is dropped.
+
+*(the plan as written)* The material bind
 group has seven entries, four of them detail maps — normal, MR, emissive, AO — filled with
 defaults. A game outside `gizmo-renderer` cannot supply any of them; the only route is the glTF
 loader. `parallax_mapping` prices the workaround at **6 verts → 55 296** for 2.87× the shading

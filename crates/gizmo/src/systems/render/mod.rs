@@ -3093,6 +3093,146 @@ mod golden_render_tests {
         });
     }
 
+    /// A normal map bound through `AssetManager::material` has to reach the shading.
+    ///
+    /// The 7-entry material layout has always had a normal slot; what it did not have was a public
+    /// door, so a hand-built scene could bind base colour and nothing else and the only way to add
+    /// surface detail was to add geometry. This renders one flat quad twice — once with the
+    /// builder's defaults, once with a generated normal map as its only non-default slot — and
+    /// requires the second to be shaded differently.
+    ///
+    /// The map is `Rgba8Unorm` on purpose. A normal map is data, not colour; as sRGB the engine
+    /// would linearise it and every slope would come out wrong, which is the kind of thing that
+    /// looks plausible in a screenshot and is wrong everywhere.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_normal_map_bound_through_the_builder_changes_the_shading() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let plain = render_normal_mapped_quad(false).await;
+            let mapped = render_normal_mapped_quad(true).await;
+            let (changed, total) = changed_pixels(&plain, &mapped, 128);
+            assert!(
+                changed >= 400,
+                "binding a normal map changed {changed}/{total} pixels — it is not reaching the \
+                 shading",
+            );
+        });
+    }
+
+    /// One flat quad under a raking light. `mapped` binds a generated normal map through the
+    /// builder; otherwise the two runs are identical, geometry included.
+    async fn render_normal_mapped_quad(mapped: bool) -> Vec<u8> {
+        const W: u32 = 128;
+        const MAP: u32 = 256;
+        let renderer = crate::test_gpu::headless_renderer(W, W).await;
+        let mut asset_manager = AssetManager::new();
+        let mut world = World::new();
+
+        let bind_group = if mapped {
+            // Ridges along one axis: a raking light turns them into stripes, and a flat normal
+            // cannot produce stripes at all.
+            let mut pixels = vec![0u8; (MAP * MAP * 4) as usize];
+            for y in 0..MAP {
+                for x in 0..MAP {
+                    let u = x as f32 / MAP as f32;
+                    let slope = (u * std::f32::consts::TAU * 8.0).sin() * 0.9;
+                    let n = Vec3::new(-slope, 0.0, 1.0).normalize();
+                    let i = ((y * MAP + x) * 4) as usize;
+                    pixels[i] = ((n.x * 0.5 + 0.5) * 255.0) as u8;
+                    pixels[i + 1] = ((n.y * 0.5 + 0.5) * 255.0) as u8;
+                    pixels[i + 2] = ((n.z * 0.5 + 0.5) * 255.0) as u8;
+                    pixels[i + 3] = 255;
+                }
+            }
+            let tex = renderer.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("test_normal_map"),
+                size: wgpu::Extent3d {
+                    width: MAP,
+                    height: MAP,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            renderer.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &tex,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &pixels,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(MAP * 4),
+                    rows_per_image: Some(MAP),
+                },
+                wgpu::Extent3d {
+                    width: MAP,
+                    height: MAP,
+                    depth_or_array_layers: 1,
+                },
+            );
+            let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+            AssetManager::material()
+                .normal(&view)
+                .label("test_mapped")
+                .build(
+                    &mut asset_manager,
+                    &renderer.device,
+                    &renderer.queue,
+                    &renderer.scene.texture_bind_group_layout,
+                )
+        } else {
+            // The same door, everything default — so the comparison is the map and nothing else.
+            AssetManager::material().label("test_plain").build(
+                &mut asset_manager,
+                &renderer.device,
+                &renderer.queue,
+                &renderer.scene.texture_bind_group_layout,
+            )
+        };
+
+        let quad = world.spawn();
+        world.add_component(
+            quad,
+            Transform::new(Vec3::new(0.0, 0.0, 0.0)).with_scale(Vec3::new(3.0, 3.0, 0.1)),
+        );
+        world.add_component(quad, GlobalTransform::default());
+        world.add_component(quad, AssetManager::create_cube(&renderer.device));
+        world.add_component(
+            quad,
+            Material::new(bind_group).with_pbr(Vec4::new(0.8, 0.7, 0.6, 1.0), 0.6, 0.0),
+        );
+        world.add_component(quad, MeshRenderer::new());
+
+        world.spawn_bundle(CameraBundle {
+            position: Vec3::new(0.0, 0.0, 5.0),
+            yaw: -std::f32::consts::FRAC_PI_2,
+            ..Default::default()
+        });
+        // Raking light: almost along the surface, so a slope change is a brightness change.
+        world.spawn_bundle(DirectionalLightBundle {
+            rotation: gizmo_math::Quat::from_rotation_y(1.35) * gizmo_math::Quat::from_rotation_x(-0.15),
+            intensity: 3.5,
+            ..Default::default()
+        });
+
+        let mut renderer = renderer;
+        render_world(&mut renderer, &mut world).await
+    }
+
     /// Same scene, but with a `ParticleEmitter` on the cube, rendered over several frames from
     /// ONE renderer — particles need time to be spawned and to move.
     async fn render_emitter_scene(with_emitter: bool, frames: u32) -> Vec<u8> {

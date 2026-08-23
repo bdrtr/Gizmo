@@ -436,6 +436,26 @@ impl AssetManager {
         }))
     }
 
+    /// Starts a [`MaterialBuilder`].
+    ///
+    /// This is the public door to the 7-entry PBR bind group. Set only what you have; **every**
+    /// slot left alone takes a neutral default, base colour and sampler included, so
+    /// `AssetManager::material().normal(&view).build(..)` is a complete material. See
+    /// [`MaterialBuilder`] for what "neutral" means for each and for why this exists.
+    #[must_use]
+    pub fn material<'a>() -> MaterialBuilder<'a> {
+        MaterialBuilder {
+            base: None,
+            sampler: None,
+            normal: None,
+            metallic_roughness: None,
+            emissive: None,
+            occlusion: None,
+            params: None,
+            label: None,
+        }
+    }
+
     /// Borrow the shared material defaults (only `Some` after
     /// [`ensure_material_defaults`](Self::ensure_material_defaults) has run).
     pub(crate) fn material_defaults(&self) -> Option<&MaterialDefaults> {
@@ -1056,5 +1076,174 @@ mod scan_does_not_write_tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MaterialBuilder — the assembler, opened
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Builds a full PBR material bind group, filling in whatever you do not supply.
+///
+/// The 7-entry layout — base colour, sampler, normal, metallic-roughness, emissive, occlusion,
+/// params — was reachable only through [`AssetManager::assemble_material_bind_group`], which is
+/// `pub(crate)`. So a hand-built scene could bind exactly one texture, through
+/// [`create_white_texture`](AssetManager::create_white_texture) and friends, and the other four
+/// maps were unreachable: the only way to add surface detail was to add geometry.
+///
+/// The cost of that is measurable and large. A surface whose bumps come from a normal map is 6
+/// vertices; the same bumps modelled are 55 296.
+///
+/// # The two ends
+///
+/// Nothing at all, and every slot is a neutral default — white base colour, the shared sampler, a
+/// flat normal, white metallic-roughness, no emission, no occlusion, the shared params buffer. So
+/// naming one map is a complete material:
+///
+/// ```no_run
+/// # use gizmo_renderer::asset::AssetManager;
+/// # fn demo(am: &mut AssetManager, device: &wgpu::Device, queue: &wgpu::Queue,
+/// #         layout: &wgpu::BindGroupLayout, normal: &wgpu::TextureView) {
+/// // A complete material whose only non-default slot is the normal map.
+/// let bg = AssetManager::material()
+///     .normal(normal)
+///     .build(am, device, queue, layout);
+/// # }
+/// ```
+///
+/// Or every slot your own, including the params buffer the shader reads its per-material
+/// constants from:
+///
+/// ```no_run
+/// # use gizmo_renderer::asset::AssetManager;
+/// # fn demo(am: &mut AssetManager, device: &wgpu::Device, queue: &wgpu::Queue,
+/// #         layout: &wgpu::BindGroupLayout, view: &wgpu::TextureView,
+/// #         sampler: &wgpu::Sampler, normal: &wgpu::TextureView,
+/// #         mr: &wgpu::TextureView, emissive: &wgpu::TextureView,
+/// #         ao: &wgpu::TextureView, params: &wgpu::Buffer) {
+/// let bg = AssetManager::material()
+///     .base_colour(view)
+///     .sampler(sampler)
+///     .normal(normal)
+///     .metallic_roughness(mr)
+///     .emissive(emissive)
+///     .occlusion(ao)
+///     .params(params)
+///     .label("my_material")
+///     .build(am, device, queue, layout);
+/// # }
+/// ```
+///
+/// Anything in between works too; a slot left unset takes the neutral default rather than
+/// forcing you to name one. That is the whole point — the automatic part stays automatic, and
+/// the detailed part has no floor.
+///
+/// # Layout compatibility
+///
+/// The result is layout-compatible with `texture_bind_group_layout` by construction: the builder
+/// calls the same assembler the engine's own loaders call. Passing a different layout is where
+/// it can go wrong, and wgpu will say so.
+pub struct MaterialBuilder<'a> {
+    base: Option<&'a wgpu::TextureView>,
+    sampler: Option<&'a wgpu::Sampler>,
+    normal: Option<&'a wgpu::TextureView>,
+    metallic_roughness: Option<&'a wgpu::TextureView>,
+    emissive: Option<&'a wgpu::TextureView>,
+    occlusion: Option<&'a wgpu::TextureView>,
+    params: Option<&'a wgpu::Buffer>,
+    label: Option<&'a str>,
+}
+
+impl<'a> MaterialBuilder<'a> {
+    /// The base-colour (albedo) texture. Unset, plain white — which leaves the `Material`'s
+    /// `albedo` tint in charge, and is what every hand-built scene in this repo already renders
+    /// with.
+    #[must_use]
+    pub fn base_colour(mut self, view: &'a wgpu::TextureView) -> Self {
+        self.base = Some(view);
+        self
+    }
+
+    /// The sampler every texture in this material is read through. Unset, the shared default.
+    #[must_use]
+    pub fn sampler(mut self, sampler: &'a wgpu::Sampler) -> Self {
+        self.sampler = Some(sampler);
+        self
+    }
+
+    /// The tangent-space normal map. Unset, a flat normal — the surface stays as the geometry
+    /// describes it.
+    #[must_use]
+    pub fn normal(mut self, view: &'a wgpu::TextureView) -> Self {
+        self.normal = Some(view);
+        self
+    }
+
+    /// The metallic-roughness map: roughness in green, metalness in blue, glTF's packing. Unset,
+    /// white, which leaves the `Material`'s scalar `roughness` and `metallic` in charge.
+    #[must_use]
+    pub fn metallic_roughness(mut self, view: &'a wgpu::TextureView) -> Self {
+        self.metallic_roughness = Some(view);
+        self
+    }
+
+    /// The emissive map, multiplied by the material's emissive colour. Unset, white — which emits
+    /// nothing, because the multiplier is what decides.
+    #[must_use]
+    pub fn emissive(mut self, view: &'a wgpu::TextureView) -> Self {
+        self.emissive = Some(view);
+        self
+    }
+
+    /// The ambient-occlusion map. Unset, white: no occlusion.
+    #[must_use]
+    pub fn occlusion(mut self, view: &'a wgpu::TextureView) -> Self {
+        self.occlusion = Some(view);
+        self
+    }
+
+    /// The per-material parameter buffer the shader reads. Unset, the shared default buffer —
+    /// which is also why materials built without one cannot disagree about their constants.
+    #[must_use]
+    pub fn params(mut self, buffer: &'a wgpu::Buffer) -> Self {
+        self.params = Some(buffer);
+        self
+    }
+
+    /// A debug label, which is what a wgpu validation error names when something is wrong.
+    #[must_use]
+    pub fn label(mut self, label: &'a str) -> Self {
+        self.label = Some(label);
+        self
+    }
+
+    /// Assembles the bind group, filling every unset slot from the shared neutral defaults.
+    ///
+    /// Takes `&mut AssetManager` because the defaults are created on first use and cached there;
+    /// the second call onwards costs nothing extra.
+    pub fn build(
+        self,
+        assets: &mut AssetManager,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        layout: &wgpu::BindGroupLayout,
+    ) -> Arc<wgpu::BindGroup> {
+        assets.ensure_material_defaults(device, queue);
+        let d = assets
+            .material_defaults
+            .as_ref()
+            .expect("material defaults ensured above");
+        AssetManager::assemble_material_bind_group(
+            device,
+            layout,
+            self.base.unwrap_or(&d.white_view),
+            self.sampler.unwrap_or(&d.sampler),
+            self.normal.unwrap_or(&d.flat_normal_view),
+            self.metallic_roughness.unwrap_or(&d.white_view),
+            self.emissive.unwrap_or(&d.white_view),
+            self.occlusion.unwrap_or(&d.white_view),
+            self.params.unwrap_or(&d.params_buffer),
+            self.label.unwrap_or("material"),
+        )
     }
 }
