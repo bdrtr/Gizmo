@@ -1,0 +1,17 @@
+[package]
+name = "gizmo-network"
+version = "0.1.8"
+edition = "2021"
+rust-version = "1.96"
+authors = ["Bedir"]
+description = "DEPRECATED — renamed to gizmo-net."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/bdrtr/Gizmo"
+readme = "README.md"
+keywords = ["deprecated"]
+categories = ["game-development"]
+
+# A tombstone: no dependencies, no code, nothing to build. Its whole purpose is to be the last
+# release under this name so the crates.io page answers "where did this go?" instead of handing
+# out 0.1.7 (2026-06-02).
+[dependencies]

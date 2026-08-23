@@ -9,7 +9,13 @@ members = [
 ]
 # Rakip motorla kıyas düzeneği. Üye DEĞİL: `rapier3d` motorun bağımlılık grafiğine
 # girmesin diye. `benchmarks/vs-rapier` içine girip `cargo run --release` ile koşulur.
-exclude = ["benchmarks"]
+exclude = [
+    "benchmarks",
+    # Tombstones for three crates.io names the move from the old repository left behind. Not
+    # members and not built by CI: they must never enter the engine's dependency graph. See
+    # `deprecated/README.md`.
+    "deprecated",
+]
 
 [workspace.package]
 version = "0.10.0"

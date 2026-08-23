@@ -1,5 +1,37 @@
 # Changelog
 
+## crates.io — three names from the previous repository closed out (2026-08-23)
+
+`gizmo-physics`, `gizmo-network` and `gizmo-studio` were published from the old self-hosted
+repository and were left behind by the move here. All three still carried
+`repository = git.bedirkaraabali.com/bdrtr/Yelbegen-engine` and — word for word — the same
+description as the live crates, so `cargo add gizmo-physics` handed out a 0.1.2 from May 2026
+with nothing to say it was the wrong line.
+
+The cleanup after the move *was* done for the names that survived it: `gizmo-engine` and
+`gizmo-core` both have their pre-move versions yanked. These three were simply missed, and the
+repository kept no record of the old generation at all — "Yelbegen" appears nowhere in it, which
+is why nobody noticed. `docs/AUDIT-2026-08.md` had caught half of it, flagging a README claim
+about a `gizmo-physics` crate as wrong because no such crate is in the workspace; what it did not
+check was whether the *name* was still live on crates.io.
+
+Each got a final release that says where it went, and every earlier version was yanked:
+
+| name | tombstone | points at |
+|---|---|---|
+| `gizmo-physics` | 0.1.3 | `gizmo-physics-core`, `-rigid`, `-dynamics`, `-soft` |
+| `gizmo-network` | 0.1.8 | `gizmo-net` |
+| `gizmo-studio` | 0.1.8 | nothing — the editor ships with the repository, `publish = false` |
+
+The tombstones stay unyanked on purpose. A crate with every version yanked still shows up in
+search but answers nothing; this way the page answers the question the searcher actually has.
+Sources are in `deprecated/`, excluded from the workspace so they can never enter the engine's
+dependency graph.
+
+Verified end to end: `cargo add gizmo-physics` now resolves to 0.1.3, building against it emits
+`use of deprecated crate gizmo_physics: DEPRECATED — split into …`, and pinning `=0.1.2` fails
+with `version 0.1.2 is yanked`.
+
 All notable changes to the Gizmo engine are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
