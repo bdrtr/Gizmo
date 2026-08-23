@@ -123,11 +123,17 @@ What people actually reach for, and can be given without opening it:
   Both go red when the forwarding is removed, the second with "two writers of the same resource
   were put in one batch". Measured in `system_forms`: one parameter carrying three, 89 runs,
   reading `health 240 · mana 120` — the same numbers the generic systems report separately.
-- ~~**`iter_combinations`**~~ — **done 2026-08-23**, read-only. Every unordered pair once, from
-  `&self` with `Q: ReadOnlyQuery`, so both halves are shared borrows. There is no `_mut`: that
-  would hand out two `&mut` into the same storage, sound only because `i != j`, which the borrow
-  checker cannot see — so it needs `unsafe`, and until that is written and justified a writing loop
-  reads pairs here and applies them in a second pass.
+- ~~**`iter_combinations`**~~ — **done 2026-08-23** read-only, **and `_mut` 2026-08-24**. Every
+  unordered pair once; the mutable form hands out both halves writable, which is two `&mut` into the
+  same storage and sound only because `i != j`. The borrow checker cannot see that, so the invariant
+  lives in the iterator's structure — `j` starts at `i + 1` and only advances, and the ids come from
+  one scan that yields each row once.
+
+  **Miri is what made that claim worth anything.** The first version passed all six unit tests and
+  Miri rejected it: the lifetime was extended with `transmute_copy` + `mem::forget`, and `forget`
+  *moves*, a move is a retag, and the retag invalidated the copy's own tag. Going through
+  `get_inner(&self)` — the route `iter_mut` already takes — needs no transmute and is clean under
+  Miri. A test suite passing is not evidence that an `unsafe` block is sound.
 
   Measured in `iter_combinations`, which now runs both loops side by side in a `Phase::User(2500)`
   auditor: **66 pairs each, and a largest acceleration difference of exactly 0.000000000** over

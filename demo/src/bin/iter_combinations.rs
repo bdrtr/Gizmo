@@ -8,15 +8,26 @@
 //! `Query::iter_combinations` her ikiliyi bir kez veriyor: `[a, b, c]` için `(a,b)`, `(a,c)`,
 //! `(b,c)` — asla `(a,a)`, asla hem `(a,b)` hem `(b,a)`.
 //!
-//! **Salt okunur, ve `_mut` yok.** `&self` alıyor ve `Q: ReadOnlyQuery` istiyor, yani bir çiftin
-//! iki yarısı da paylaşılan ödünç — istenildiği kadar bir arada yaşayabilirler. Yazan bir sürüm
-//! aynı depoya aynı anda iki `&mut` vermek zorunda kalırdı; bu yalnız `i != j` olduğu için sağlam
-//! ve ödünç denetleyicisi bunu göremiyor, yani `unsafe` gerektirirdi. Yazılıp gerekçelendirilene
-//! kadar yazan döngüler çiftleri buradan okuyup sonucu ikinci bir geçişte uyguluyor — bu demonun
-//! yaptığı da tam olarak bu.
+//! **İki sürüm var: salt okunur ve yazan.** `iter_combinations` `&self` alıyor ve `ReadOnlyQuery`
+//! istiyor. `iter_combinations_mut` (2026-08-24) `&mut self` alıyor ve iki yarıyı da yazılabilir
+//! veriyor — aynı depoya aynı anda iki `&mut`, ki bu yalnız `i != j` olduğu için sağlam ve ödünç
+//! denetleyicisi bunu göremiyor.
 //!
-//! Yani `gravity` hâlâ üç geçişli, ve sebebi ödünç alma kuralı: `Mut<T>` taşıyan bir sorgu
-//! salt-okunur bile gezilemiyor.
+//! Değişmez, tipte değil **yineleyicinin yapısında** taşınıyor: `j` her zaman `i + 1`'den başlayıp
+//! ileri gidiyor, ve kimlikler tek bir taramadan geliyor — o da her satırı bir kez veriyor.
+//! `&mut self` ödünçü de bunu dışarıdan anlamlı kılan şey: yineleyici yaşarken sorgunun başka bir
+//! görünümü var olamıyor.
+//!
+//! ### Ölçüm notu: testler geçiyordu, Miri geçmiyordu
+//!
+//! İlk yazımda ömür uzatması `transmute_copy` + `mem::forget` idi: kopyala, orijinali unut. Altı
+//! birim testinin hepsi geçti. **Miri geçmedi:** `forget` argümanını *taşıyor*, taşıma bir retag,
+//! ve retag kopyanın kendi etiketini geçersiz kılıyor — *"trying to retag from <...> but that tag
+//! does not exist in the borrow stack"*.
+//!
+//! Doğrusu `get_inner(&self)`'den geçmek — `iter_mut`'ın kendi yolu — ve o zaman hiçbir
+//! `transmute` gerekmiyor. Dersi: **bir `unsafe` bloğunun testlerden geçmesi sağlam olduğunu
+//! göstermiyor.** Miri altında altı test de temiz.
 //!
 //! ## Ölçülen: elle yazılan döngü doğru mu
 //!
@@ -69,6 +80,30 @@
 //! toplayıp iki iç içe indeks döngüsü kuruyor; motorun yolu tek çağrı, ve indeks aritmetiği yok —
 //! yani bir çifti iki kez saymanın ya da bir cismi kendisiyle eşleştirmenin yolu da yok.
 //!
+//! ## Ölçülen 3: tek geçişli döngü aynı fiziği veriyor
+//!
+//! `GIZMO_NBODY_ONEPASS=1` çekimi `iter_combinations_mut` ile tek geçişte uyguluyor: kuvvet
+//! hesaplandığı anda iki cismin de hızına yazılıyor, ara `Vec` yok, indeks aritmetiği yok.
+//!
+//! Ölçüldü (2026-08-24, 12 cisim, 1500 kare):
+//!
+//! | kare | üç geçişli momentum | tek geçişli momentum | üç geçişli kinetik | tek geçişli kinetik |
+//! |------|---------------------|----------------------|--------------------|---------------------|
+//! | 900 | 0,000003 | 0,000007 | 55,905 | 55,905 |
+//! | 1200 | 0,000003 | 0,000025 | 64,584 | 64,585 |
+//! | 1500 | 0,000006 | 0,000012 | 40,142 | 40,142 |
+//!
+//! Kinetik enerji birebir aynı — yani iki döngü aynı kuvvetleri aynı çiftlere uyguluyor. Momentum
+//! ikisinde de **10⁻⁴'ün altında**; tek geçişlinin biraz yüksek olması toplama sırasından: üç
+//! geçişli ivmeleri önce toplayıp sonra uyguluyor, tek geçişli anında yazıyor, ve kayan noktada bu
+//! iki şey aynı değil.
+//!
+//! Kazanç yine satır sayısı değil: ara `Vec<Vec3>` ve iki iç içe indeks döngüsü ortadan kalkıyor —
+//! bir çifti iki kez saymanın yolu da onlarla birlikte.
+//!
+//! Konum ilerletmesi hâlâ ayrı bir geçiş, ve öyle kalmak zorunda: bir ikili döngüsü her cismi
+//! `n-1` kez ziyaret ediyor, konum bir kez ilerlemeli.
+//!
 //! ### Ödünç alma kuralının ikinci yüzü
 //!
 //! İlk yazımda toplama geçişi `iter()` kullanıyordu ve derlenmedi: **`Mut<T>` taşıyan bir sorgu
@@ -76,6 +111,7 @@
 //! demek bile aynı sorgunun `iter_mut`'ını iki kez çağırmak demek — toplamda üç geçiş.
 //!
 //! ## Kontroller
+//!   * `GIZMO_NBODY_ONEPASS=1` — çekimi `iter_combinations_mut` ile tek geçişte uygula
 //!   * **Sağ-tık + fare / WASDQE** — kamera
 
 use gizmo::core::query::{Mut, Query};
@@ -183,7 +219,16 @@ fn main() {
             });
             scene.spawn_camera(state, Vec3::new(0.0, 4.0, 16.0), Vec3::ZERO);
         })
-        .add_update_system(gravity.in_phase(Phase::Update))
+        .add_update_system(
+            gravity
+                .in_phase(Phase::Update)
+                .run_if(|_: &World| std::env::var("GIZMO_NBODY_ONEPASS").is_err()),
+        )
+        .add_update_system(
+            gravity_one_pass
+                .in_phase(Phase::Update)
+                .run_if(|_: &World| std::env::var("GIZMO_NBODY_ONEPASS").is_ok()),
+        )
         // Denetleyici `gravity`'den SONRA: aynı karenin konumlarını ölçüyor, bir öncekinin
         // değil. `Phase::User(2500)` — Update ile Physics arasında, madde 3'ün açtığı yer.
         .add_update_system(pair_audit.in_phase(Phase::User(2500)))
@@ -270,6 +315,53 @@ fn pair_audit(bodies: Query<(&Transform, &Body)>, mut report: ResMut<Conservatio
         .zip(&engine)
         .map(|(m, e)| (*m - *e).length())
         .fold(0.0f32, f32::max);
+}
+
+/// Tek geçişli çekim: her ikili bir kez, ve kuvvet **o anda** uygulanıyor.
+///
+/// `iter_combinations_mut` gelmeden önce bu yazılamıyordu: ikilinin iki yarısına aynı anda yazmak
+/// aynı depoya iki `&mut` demek. `GIZMO_NBODY_ONEPASS=1` ile açılıyor, ve `pair_audit` iki yolun
+/// aynı sonucu verdiğini ölçüyor.
+fn gravity_one_pass(
+    mut bodies: Query<(Mut<Transform>, Mut<Body>)>,
+    mut report: ResMut<Conservation>,
+) {
+    // 1. geçiş: kuvvetler doğrudan hıza. Ara `Vec` yok, indeks aritmetiği yok.
+    for ((_, (ta, mut ba)), (_, (tb, mut bb))) in bodies.iter_combinations_mut() {
+        let delta = tb.position - ta.position;
+        let dist2 = delta.length_squared() + SOFTENING * SOFTENING;
+        let dir = delta * (1.0 / (dist2 * dist2.sqrt()));
+        // Eşit ve zıt — ve ikisi de burada yazılıyor, bir sonraki geçişte değil.
+        let (ma, mb) = (ba.mass, bb.mass);
+        ba.velocity += dir * (G * mb) * STEP;
+        bb.velocity -= dir * (G * ma) * STEP;
+    }
+
+    // 2. geçiş: konumları ilerlet ve korunumu ölç. Bu ayrı kalmak zorunda — bir ikili döngüsü
+    // her cismi n-1 kez ziyaret ediyor, konum bir kez ilerlemeli.
+    let mut momentum = Vec3::ZERO;
+    let mut kinetic = 0.0;
+    for (_entity, (mut transform, body)) in bodies.iter_mut() {
+        transform.position += body.velocity * STEP;
+        momentum += body.velocity * body.mass;
+        kinetic += 0.5 * body.mass * body.velocity.length_squared();
+    }
+
+    report.frame += 1;
+    report.momentum = momentum.length();
+    report.kinetic = kinetic;
+    if report.frame == 1 {
+        report.initial_momentum = report.momentum;
+    }
+    if std::env::var("GIZMO_NBODY_SELFTEST").is_ok() && report.frame.is_multiple_of(300) {
+        gizmo::gizmo_log!(
+            Info,
+            "TEK GEÇİŞ · kare {} · momentum {:.6} · kinetik {:.3}",
+            report.frame,
+            report.momentum,
+            report.kinetic
+        );
+    }
 }
 
 fn gravity(mut bodies: Query<(Mut<Transform>, Mut<Body>)>, mut report: ResMut<Conservation>, time: Res<Time>) {

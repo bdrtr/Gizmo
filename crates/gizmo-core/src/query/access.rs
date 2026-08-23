@@ -191,6 +191,54 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
         self.get_inner(entity_id)
     }
 
+    /// Every unordered pair of matching rows, **both halves mutable**.
+    ///
+    /// The writing counterpart of [`iter_combinations`](Self::iter_combinations). An n-body force
+    /// loop applies equal and opposite impulses to `a` and `b` in one visit; without this it reads
+    /// pairs, buffers accelerations into a `Vec`, and writes them back in a second pass.
+    ///
+    /// ```
+    /// # use gizmo_core::prelude::*;
+    /// # use gizmo_core::query::Mut;
+    /// # #[derive(Clone, Debug)] struct Charge(f32);
+    /// # gizmo_core::impl_component!(Charge);
+    /// # let mut world = World::new();
+    /// # for _ in 0..3 { let e = world.spawn(); world.add_component(e, Charge(1.0)); }
+    /// let mut q = world.query_mut::<Mut<Charge>>().unwrap();
+    /// for ((_, mut a), (_, mut b)) in q.iter_combinations_mut() {
+    ///     // Equal and opposite: what a two-pass version has to reconstruct.
+    ///     a.0 += 1.0;
+    ///     b.0 -= 1.0;
+    /// }
+    /// ```
+    ///
+    /// # Why this needs `unsafe`, and what makes it sound
+    ///
+    /// Both halves of a pair are `&mut` into the same component storage at the same time. That is
+    /// sound **because `i != j`** — the two halves are always different rows — and unsound the
+    /// moment they are not. The borrow checker cannot see that, so the invariant is carried by the
+    /// iterator's own structure rather than by a type: `j` starts at `i + 1` and only ever runs
+    /// ahead, and the ids come from one `iter()` scan, which yields each matching row exactly once.
+    ///
+    /// The `&mut self` borrow is what keeps that invariant meaningful from the outside: no second
+    /// view of this query can exist while the iterator does, so nothing else can be looking at
+    /// either row.
+    ///
+    /// # Cost
+    ///
+    /// The same as the read-only version: one `Vec<u32>` of ids up front, then `n(n-1)/2` pairs of
+    /// lookups.
+    pub fn iter_combinations_mut<'a>(&'a mut self) -> QueryCombinationsMut<'a, 'w, Q> {
+        let ids: Vec<u32> = self.iter_mut().map(|(id, _)| id).collect();
+        QueryCombinationsMut {
+            query: self as *mut Self,
+            ids,
+            i: 0,
+            j: 1,
+            _marker: PhantomData,
+        }
+    }
+
     /// Generation-validated mutable access (see [`Query::get_entity`]).
     #[inline]
     pub fn get_mut_entity(&mut self, entity: Entity) -> Option<Q::Item<'_>> {
@@ -413,6 +461,73 @@ impl<'a, 'w, Q: ReadOnlyQuery> Iterator for QueryCombinations<'a, 'w, Q> {
     }
 }
 
+
+
+/// Every unordered pair of matching rows, both halves mutable. Built by
+/// [`Query::iter_combinations_mut`].
+///
+/// Holds the query as a raw pointer because two `Q::Item<'a>` from one `&mut Query` cannot be
+/// expressed safely — see [`Query::iter_combinations_mut`] for the invariant that makes it sound.
+/// The `PhantomData` re-ties the lifetime the pointer erased, so this cannot outlive the query.
+pub struct QueryCombinationsMut<'a, 'w, Q: WorldQuery> {
+    query: *mut Query<'w, Q>,
+    ids: Vec<u32>,
+    i: usize,
+    j: usize,
+    _marker: PhantomData<&'a mut Query<'w, Q>>,
+}
+
+impl<'a, 'w, Q: WorldQuery> Iterator for QueryCombinationsMut<'a, 'w, Q> {
+    type Item = ((u32, Q::Item<'a>), (u32, Q::Item<'a>));
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if self.i + 1 >= self.ids.len() {
+                return None;
+            }
+            if self.j >= self.ids.len() {
+                self.i += 1;
+                self.j = self.i + 1;
+                continue;
+            }
+            let (a_id, b_id) = (self.ids[self.i], self.ids[self.j]);
+            self.j += 1;
+
+            // The invariant, stated where it is relied on: `j` begins at `i + 1` and only
+            // increases, so `a_id` and `b_id` are different entries of `ids`; and `ids` came from
+            // one `iter_mut()` scan, which yields each matching row exactly once, so different
+            // entries are different entities and therefore different rows.
+            debug_assert_ne!(a_id, b_id, "a pair must never be an entity with itself");
+
+            // SAFETY: `get_inner` takes `&self` and hands back `Q::Item` tied to that shared
+            // borrow, so two calls produce two items with no `&mut Query` anywhere — the same
+            // route `iter_mut` takes through `iter_inner`. What the two items may contain is
+            // `&mut T` into component storage, and *that* is what `a_id != b_id` settles: the two
+            // ids name two different rows (`j` starts at `i + 1` and only advances; `ids` came
+            // from one scan, which yields each row once), so the two `&mut` are disjoint.
+            //
+            // The pointer is live for `'a`: it came from a `&'a mut Query`, `PhantomData` keeps
+            // this iterator from outliving it, and that `&mut` means no other view of the query
+            // exists while this runs.
+            //
+            // An earlier version reached the same lifetime with `transmute_copy` + `forget`.
+            // Miri rejected it: `forget` *moves* its argument, a move is a retag, and the retag
+            // invalidated the copy's own tag — "trying to retag from <...> but that tag does not
+            // exist in the borrow stack". The tests passed. Going through `get_inner` needs no
+            // transmute at all.
+            let q: &'a Query<'w, Q> = unsafe { &*self.query };
+            let a = q.get_inner(a_id)?;
+            let b = q.get_inner(b_id)?;
+            return Some(((a_id, a), (b_id, b)));
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let n = self.ids.len();
+        (0, Some(n.saturating_mul(n.saturating_sub(1)) / 2))
+    }
+}
+
 #[cfg(test)]
 mod combination_tests {
     use crate::world::World;
@@ -476,6 +591,94 @@ mod combination_tests {
             assert_eq!(ea.0, a.0, "the first id does not name the first item");
             assert_eq!(eb.0, b.0, "the second id does not name the second item");
         }
+    }
+
+    /// Both halves are writable, and each write lands on **its own** entity.
+    ///
+    /// The failure this guards is the one `unsafe` makes possible: if the two halves aliased, the
+    /// second write would land on the first's row and the totals would come out wrong in a way no
+    /// borrow error announces. Equal-and-opposite deltas make that visible — with correct pairing
+    /// the sum is conserved, with aliasing it is not.
+    #[test]
+    fn both_halves_of_a_pair_write_to_their_own_row() {
+        // Starting values are large enough that the negative half cannot underflow a `u32` —
+        // the first run of this test panicked on `attempt to subtract with overflow`, which
+        // measured the fixture rather than the pairing.
+        let mut w = World::new();
+        for i in 0..5u32 {
+            let e = w.spawn();
+            w.add_component(e, Tag(1000 + i));
+        }
+        {
+            let mut q = w.query_mut::<crate::query::Mut<Tag>>().expect("registered");
+            for ((_, mut a), (_, mut b)) in q.iter_combinations_mut() {
+                a.0 += 10;
+                b.0 -= 10;
+            }
+        }
+        // 5 entities, 10 pairs. Each entity is `a` in (4 - i) pairs and `b` in i, so its net
+        // change is 10 * (4 - 2i) — and the total across all of them is zero.
+        let q = w.query::<&Tag>().expect("registered");
+        let values: Vec<i64> = q.iter().map(|(_, t)| i64::from(t.0)).collect();
+        assert_eq!(values.len(), 5);
+        let initial: i64 = (0..5).map(|i| 1000 + i).sum();
+        let total: i64 = values.iter().sum();
+        assert_eq!(
+            total, initial,
+            "equal and opposite deltas did not cancel: {values:?} — a pair aliased or was \
+             counted twice"
+        );
+        // And they really did move, so a run that wrote nothing cannot pass the sum check.
+        assert_ne!(
+            values,
+            (0..5).map(|i| 1000 + i).collect::<Vec<i64>>(),
+            "nothing was written"
+        );
+    }
+
+    /// The mutable version pairs exactly like the read-only one.
+    #[test]
+    fn the_mutable_version_visits_the_same_pairs() {
+        for n in [0u32, 1, 2, 3, 6] {
+            let mut w = world_with(n);
+            let readonly: Vec<(u32, u32)> = {
+                let q = w.query::<&Tag>().expect("registered");
+                q.iter_combinations()
+                    .map(|((a, _), (b, _))| (a, b))
+                    .collect()
+            };
+            let mutable: Vec<(u32, u32)> = {
+                let mut q = w.query_mut::<crate::query::Mut<Tag>>().expect("registered");
+                q.iter_combinations_mut()
+                    .map(|((a, _), (b, _))| (a, b))
+                    .collect()
+            };
+            assert_eq!(readonly, mutable, "n = {n}: the two versions disagree about pairs");
+        }
+    }
+
+    /// Writes made through a pair are visible to the next pair.
+    ///
+    /// Not an accident of ordering — it is what makes an accumulating loop (forces, constraints)
+    /// work at all, and a version that handed out stale copies would still pass the sum test above.
+    #[test]
+    fn a_write_is_visible_to_the_pairs_that_follow() {
+        let mut w = world_with(3);
+        {
+            let mut q = w.query_mut::<crate::query::Mut<Tag>>().expect("registered");
+            for ((_, mut a), (_, mut b)) in q.iter_combinations_mut() {
+                // Each pair doubles both halves. Entity 0 is in pairs (0,1) and (0,2), so if the
+                // second sees the first's write it ends at 0 * 4; a stale copy would give 0 * 2.
+                let (va, vb) = (a.0, b.0);
+                a.0 = va * 2;
+                b.0 = vb * 2;
+            }
+        }
+        let q = w.query::<&Tag>().expect("registered");
+        let mut values: Vec<u32> = q.iter().map(|(_, t)| t.0).collect();
+        values.sort_unstable();
+        // 1 is in pairs (0,1) and (1,2) → ×4; 2 is in (0,2) and (1,2) → ×4.
+        assert_eq!(values, vec![0, 4, 8], "a write was not visible to the following pair");
     }
 
     /// `size_hint`'s upper bound has to hold, or a caller that pre-allocates from it under-sizes.
