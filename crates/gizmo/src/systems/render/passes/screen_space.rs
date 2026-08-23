@@ -4,7 +4,7 @@ pub fn record_screen_space_effects(encoder: &mut wgpu::CommandEncoder, renderer:
 
 
     // ── SSR: Screen Space Reflections ───────────────────────────────────────────
-    if let Some(ref ssr) = renderer.ssr {
+    if let Some(ssr) = renderer.ssr.as_ref().filter(|s| s.enabled) {
         // Pass 1: SSR Raymarch
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -54,7 +54,7 @@ pub fn record_screen_space_effects(encoder: &mut wgpu::CommandEncoder, renderer:
     }
 
     // ── SSGI: Screen Space Global Illumination ────────────────────────────────
-    if let Some(ref ssgi) = renderer.ssgi {
+    if let Some(ssgi) = renderer.ssgi.as_ref().filter(|s| s.enabled) {
         // Pass 1: SSGI Raymarch
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -153,7 +153,7 @@ pub fn record_screen_space_effects(encoder: &mut wgpu::CommandEncoder, renderer:
     }
 
     // ── Volumetric Lighting (God Rays) ──────────────────────────────────────────
-    if let Some(ref vol) = renderer.volumetric {
+    if let Some(vol) = renderer.volumetric.as_ref().filter(|s| s.enabled) {
         // Pass 1: Volumetric Raymarch
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

@@ -2636,6 +2636,11 @@ mod golden_render_tests {
         None,
         Ssgi,
         Ssr,
+        /// The same two passes switched off the *reversible* way — the state stays built, the
+        /// `enabled` flag is cleared. A frame from these must be identical to a frame from the
+        /// destructive variant above, or the flag is not a real off switch.
+        SsgiDisabled,
+        SsrDisabled,
     }
 
     /// A lit cube standing on a wide mirror floor, seen from a raised camera — a scene where a
@@ -2651,6 +2656,12 @@ mod golden_render_tests {
             Effect::None => {}
             Effect::Ssgi => renderer.ssgi = None,
             Effect::Ssr => renderer.ssr = None,
+            Effect::SsgiDisabled => {
+                renderer.ssgi.as_mut().expect("ssgi built").enabled = false;
+            }
+            Effect::SsrDisabled => {
+                renderer.ssr.as_mut().expect("ssr built").enabled = false;
+            }
         }
         let mut asset_manager = AssetManager::new();
         let mut world = World::new();
@@ -2738,6 +2749,53 @@ mod golden_render_tests {
                     changed >= floor,
                     "removing {name} changed {changed}/{total} pixels — the pass runs but does \
                      not reach the frame (expected at least {floor})",
+                );
+            }
+        });
+    }
+
+    /// The reversible off switch has to produce the *same* frame as the destructive one.
+    ///
+    /// Before this, the only way to switch a screen-space pass off was `renderer.ssr = None`,
+    /// which frees the GPU objects: a comparison render could be turned off but not back on, and
+    /// the engine's own tests above are written that way because there was nothing else. An
+    /// `enabled: bool` is only worth having if it means exactly the same thing to the frame, so
+    /// that is what this measures — pixel for pixel, not approximately.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn switching_an_effect_off_reversibly_renders_the_same_frame_as_destroying_it() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available()) {
+            eprintln!("skipping: no GPU adapter");
+            return;
+        }
+        if pollster::block_on(Renderer::headless_adapter_is_software()) {
+            eprintln!("skipping: software adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let all_on = render_mirror_scene(Effect::None).await;
+            for (name, destroyed, disabled) in [
+                ("SSGI", Effect::Ssgi, Effect::SsgiDisabled),
+                ("SSR", Effect::Ssr, Effect::SsrDisabled),
+            ] {
+                let gone = render_mirror_scene(destroyed).await;
+                let off = render_mirror_scene(disabled).await;
+
+                // 1. The flag must reach the frame at all — otherwise an all-equal result below
+                //    would pass for the wrong reason (the effect never showing up anywhere).
+                let (reaches, _) = changed_pixels(&all_on, &off, 128);
+                assert!(
+                    reaches > 0,
+                    "{name}: clearing `enabled` changed nothing — the flag is not consulted",
+                );
+
+                // 2. And the two ways of switching it off must agree exactly.
+                let (differ, total) = changed_pixels(&gone, &off, 128);
+                assert_eq!(
+                    differ, 0,
+                    "{name}: `enabled = false` and `= None` disagree on {differ}/{total} pixels — \
+                     the reversible switch is not the same switch",
                 );
             }
         });

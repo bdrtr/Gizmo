@@ -2,7 +2,7 @@ use super::super::*;
 
 pub fn record_ssao(encoder: &mut wgpu::CommandEncoder, renderer: &Renderer) {
     // ── SSAO: hemisphere sampling → raw AO texture ────────────────────────────
-    if let Some(ref ssao) = renderer.ssao {
+    if let Some(ssao) = renderer.ssao.as_ref().filter(|s| s.enabled) {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("SSAO Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -26,7 +26,7 @@ pub fn record_ssao(encoder: &mut wgpu::CommandEncoder, renderer: &Renderer) {
     }
 
     // ── SSAO blur: 5×5 box filter → blurred AO texture ───────────────────────
-    if let Some(ref ssao) = renderer.ssao {
+    if let Some(ssao) = renderer.ssao.as_ref().filter(|s| s.enabled) {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("SSAO Blur Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -49,7 +49,7 @@ pub fn record_ssao(encoder: &mut wgpu::CommandEncoder, renderer: &Renderer) {
     }
 
     // ── SSAO apply: multiply AO into HDR (multiply blend) ─────────────────────
-    if let Some(ref ssao) = renderer.ssao {
+    if let Some(ssao) = renderer.ssao.as_ref().filter(|s| s.enabled) {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("SSAO Apply Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {

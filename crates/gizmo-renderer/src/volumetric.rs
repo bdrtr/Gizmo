@@ -30,6 +30,19 @@ pub struct VolumetricState {
     pub width: u32,
     /// Its height.
     pub height: u32,
+    /// Whether the pass runs this frame.
+    ///
+    /// This is the **reversible** off switch. The destructive one — setting the renderer's
+    /// `Option` field to `None` — frees the GPU objects and cannot be undone without rebuilding
+    /// them; that is the only switch the engine used to have, and it is why a comparison render
+    /// could not be turned back on.
+    ///
+    /// Off, the pass is skipped entirely rather than drawing a neutral result. That is safe here
+    /// because every texture this state owns is read only by this state's own apply pass, which is
+    /// skipped with it, and the apply pass composites into the HDR target with `LoadOp::Load` —
+    /// so a skipped effect leaves the frame exactly as it found it. Resizing still happens while
+    /// off, so switching back on costs no rebuild.
+    pub enabled: bool,
 }
 
 impl VolumetricState {
@@ -70,6 +83,7 @@ impl VolumetricState {
         let apply_pipeline = Self::mk_apply_pipeline(device, &apply_bgl);
 
         Self {
+            enabled: true,
             volumetric_texture,
             volumetric_view,
             volumetric_pipeline,

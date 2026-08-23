@@ -161,7 +161,9 @@ pub fn record_deferred_geometry(
     }
 
     if !decal_draws.is_empty() {
-        if let (Some(ref decal_state), Some(ref def)) = (&renderer.decal, &renderer.deferred) {
+        if let (Some(decal_state), Some(ref def)) =
+            (renderer.decal.as_ref().filter(|d| d.enabled), &renderer.deferred)
+        {
             let mut decal_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Decal Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {

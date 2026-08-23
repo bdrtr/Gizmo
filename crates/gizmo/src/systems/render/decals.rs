@@ -79,7 +79,7 @@ pub fn record_forward_decals(
     world: &World,
     cam_pos: Vec3,
 ) {
-    let Some(decal_state) = &renderer.decal else {
+    let Some(decal_state) = renderer.decal.as_ref().filter(|d| d.enabled) else {
         return;
     };
     let (uniforms, bind_groups) = collect_decals(world, cam_pos);

@@ -182,7 +182,7 @@ author it. The middle column is what a full implementation offers.
 
 | Effect | Full capability | Gizmo | Measured in |
 |---|---|---|---|
-| Screen-space reflections | 6 knobs | **0** (on/off only, and no `enabled` flag — turning it off *destroys* the state) | `ssr` |
+| Screen-space reflections | 6 knobs | **0 shaping knobs.** On/off is now reversible (`SsrState::enabled`, 2026-08-23) but nothing about the reflection can be shaped | `ssr` |
 | Tone mapping | 7 curves + dither | **1** curve (ACES, hard-coded) + exposure | `tonemapping` |
 | Bloom | 7 knobs | **2** (`intensity`, `threshold`) | `bloom_3d` |
 | Depth of field | 6 optical knobs | **3** numbers + enable | `depth_of_field` |
@@ -198,7 +198,7 @@ author it. The middle column is what a full implementation offers.
 | Shadow caster / receiver | per-object cast **and** receive toggles | **caster only**, but richer there: `ShadowCasting::{On, Off, Only}` — `Only` casts without being drawn, which a plain cast toggle cannot express. **Receiving cannot be disabled at all.** Measured dark-pixel fractions 1.06 % / 2.07 % / 4.23 % | `shadow_caster_receiver` |
 | Baked lighting | lightmap texture + second UV set | **vertex colour** via `MaterialType::BakedLit` — resolution is the mesh's tessellation, not a texture's. Still receives the sun's cascades, so mixed lighting works. Measured: the blue-minus-red balance flips sign, `+1.35` under `Pbr` and `−4.74` under `BakedLit`, because `BakedLit` does not see point lights | `lightmaps` |
 | Irradiance volumes | component + GPU voxel sampling | the **maths exists and is unwired** — see F2 | `irradiance_volumes` |
-| Volumetric / god rays | scattering, steps, phase, distance | **0 shaping fields.** `VolumetricState` exposes only GPU objects. Every number is a shader literal — phase 0.55, 16 steps, 100 m cap, sun scatter 0.0015, bulb 0.0008, bias 0.16 — and there is no `enabled` flag, so the only off switch destroys the state. Measured working: 19.55 % of pixels, max 134 | `volumetric_fog` |
+| Volumetric / god rays | scattering, steps, phase, distance | **0 shaping fields.** `VolumetricState` exposes only GPU objects. Every number is a shader literal — phase 0.55, 16 steps, 100 m cap, sun scatter 0.0015, bulb 0.0008, bias 0.16 — An `enabled` flag now exists (2026-08-23), so switching it off is reversible — but that is the only control. Measured working: 19.55 % of pixels, max 134 | `volumetric_fog` |
 | Blend modes | alpha / additive / multiply / premultiplied | **1** — `ALPHA_BLENDING`, and no `BlendMode` type to select another | `blend_modes` |
 | Specular tint | a colour F0 | **0** — F0 is the literal 0.04; the only lever is `metallic`, which kills the diffuse (luminance −24 %) and cannot deliver the colour anyway for want of an environment (measured: red−blue +9.04 → −0.17) | `transmission` |
 | Transmission / thickness / IOR | per-material | **0 fields** | `transmission` |

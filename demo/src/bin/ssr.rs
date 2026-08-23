@@ -8,6 +8,7 @@
 //!
 //! | yetenek | Gizmo |
 //! |---------|-------|
+//! | kare kare açıp kapamak | **var** (2026-08-23, `SsrState::enabled`) |
 //! | yansımanın vazgeçeceği pürüz eşiği | **yok** |
 //! | yüzey kalınlığı varsayımı | **yok** |
 //! | doğrusal tarama adımı sayısı | **yok** |
@@ -19,16 +20,47 @@
 //! Yansımanın ne kadar uzağa bakacağı, hangi pürüzden sonra vazgeçeceği, kaç adımda tarayacağı
 //! shader'ın içinde.
 //!
-//! ## Açıp kapatmak da tek yönlü
+//! ## Açıp kapatmak artık iki yönlü
 //!
-//! TAA ve FXAA'nın `enabled` bayrağı var (bkz. `anti_aliasing`), yani kare kare
-//! açılıp kapanabiliyorlar. **SSR'de yoktu:** `Renderer::ssr` bir `Option<SsrState>`, ve bir
-//! uygulamanın elindeki tek hareket onu `None` yapmak — yani durumu **yok etmek**. Geri açmak
-//! `SsrState::new` ile yeniden kurmayı gerektiriyor (cihaz, format ve boyutla). Bu yüzden demo
-//! kipi çalışma anında değil **başlangıçta** seçiyor: `GIZMO_SSR=0` kapalı, `1` açık.
+//! TAA ve FXAA'nın `enabled` bayrağı vardı (bkz. `anti_aliasing`), yani kare kare açılıp
+//! kapanabiliyorlardı. **SSR'de yoktu:** `Renderer::ssr` bir `Option<SsrState>`, ve bir
+//! uygulamanın elindeki tek hareket onu `None` yapmaktı — yani durumu **yok etmek**. Geri açmak
+//! `SsrState::new` ile cihaz, format ve boyutla yeniden kurmayı gerektiriyordu, o yüzden bu demo
+//! kipi çalışma anında değil başlangıçta seçiyordu.
 //!
-//! Aynı şey SSGI için de geçerli. Serideki bütün demoların `set_render` kapanışında
-//! `renderer.ssr = None` yazmasının sebebi de bu: kapatmanın tek yolu bu.
+//! **2026-08-23: beş efektin de `enabled` bayrağı var** — `ssr`, `ssgi`, `volumetric`, `ssao`,
+//! `decal`. Bayrak kapalıyken geçiş atlanıyor, durum ayakta kalıyor, yeniden boyutlandırma yine
+//! işliyor; geri açmak bir atama.
+//!
+//! ### Ölçüldü: aynı koşuda kapanıyor **ve geri açılıyor**
+//!
+//! Demo her 60 karede bir kendiliğinden çeviriyor. 420 karelik koşuda (2026-08-23):
+//!
+//! | | |
+//! |---|---|
+//! | kapanma | **4** |
+//! | **geri** açılma | **3** |
+//!
+//! `= None` ile ikinci sayı hep 0 olurdu — durum yok olduğu için ikinci bir açılma yok.
+//!
+//! Ve bayrak gerçekten kareye ulaşıyor. Kare 450 (kapalı) ile kare 510 (açık) — aynı koşu, aynı
+//! kamera, tek değişen bayrak. Zeminin küplerin altındaki bölgesinde ortalama RGB:
+//!
+//! | bölge | kapalı | açık | kanal farkı |
+//! |-------|--------|------|-------------|
+//! | kırmızı küpün altı | (32,2 · 34,3 · 38,9) | (69,8 · 43,1 · 47,7) | (**+37,6** · +8,8 · +8,8) |
+//! | yeşil küpün altı | (29,3 · 31,3 · 35,9) | (43,6 · 92,4 · 53,8) | (+14,3 · **+61,1** · +18,0) |
+//! | mavi küpün altı | (32,6 · 34,7 · 39,4) | (44,4 · 53,1 · 78,1) | (+11,8 · +18,5 · **+38,7**) |
+//!
+//! Karenin alt yarısında (arayüz dışında) **%5,85** piksel değişiyor.
+//!
+//! Motorun kendi golden testi de aynı iddiayı daha sert kuruyor: `enabled = false` ile
+//! `= None` **piksel piksel aynı** kareyi üretiyor
+//! (`switching_an_effect_off_reversibly_renders_the_same_frame_as_destroying_it`). Yani bayrak
+//! kapatmanın *başka* bir yolu değil, **aynı** yolu — tersine çevrilebilir olanı.
+//!
+//! Serideki bütün demoların `set_render` kapanışında hâlâ `renderer.ssr = None` yazması artık bir
+//! zorunluluk değil, alışkanlık: onların SSR'yi geri açma ihtiyacı yok.
 //!
 //! ## Ölçülen: yansıma bir sayıdır
 //!
@@ -38,8 +70,8 @@
 //!
 //! Ölçüt de bu: zeminin o bölgesindeki renk kanallarının küpün rengine kayması.
 //!
-//! Ölçüldü (2026-08-23, kare 240, `GIZMO_SSR=<0|1>`). Zeminin, küpün tam altındaki bölgesinde
-//! ortalama RGB:
+//! Ölçüldü (2026-08-23, kare 240, `GIZMO_SSR=<0|1>` ile iki ayrı koşu — yukarıdaki tablo aynı
+//! şeyi tek koşuda ölçüyor). Zeminin, küpün tam altındaki bölgesinde ortalama RGB:
 //!
 //! | bölge | SSR kapalı | SSR açık | kanal farkı |
 //! |-------|------------|----------|-------------|
@@ -52,6 +84,8 @@
 //! katı. Yansıma doğru rengi doğru yere taşıyor.
 //!
 //! ## Kontroller
+//!   * `GIZMO_SSR=0` — **başlangıçta** kapalı başlat (anahtar yine 60 karede bir çeviriyor)
+//!   * `GIZMO_SSR_SELFTEST=1` — her çevirmede sayacı konsola yaz
 //!   * **Sağ-tık + fare / WASDQE** — kamera
 
 use gizmo::prelude::*;
@@ -64,16 +98,32 @@ const CUBES: [(f32, Vec4); 3] = [
     (3.2, Vec4::new(0.20, 0.35, 0.95, 1.0)),
 ];
 
-/// SSR açık mı — başlangıçta seçiliyor, çalışma anında değiştirilemiyor.
+/// SSR başlangıçta açık mı. Artık yalnız *başlangıç* değeri — anahtar çalışma anında da var.
 fn ssr_enabled() -> bool {
     std::env::var("GIZMO_SSR").map(|v| v != "0").unwrap_or(true)
 }
+
+/// Kaç karede bir kendiliğinden açılıp kapanılacağı. Ölçüm koşusunda kapanma ve **geri açılma**
+/// bunun sayesinde tek koşuda görülüyor; eskiden geri açılma hiç görülemiyordu.
+const TOGGLE_EVERY: u32 = 60;
+
+/// Ölçüm defteri: SSR'nin kaç kez kapanıp açıldığı.
+#[derive(Default, Clone)]
+struct SsrToggleReport {
+    frame: u32,
+    on: bool,
+    /// Kapanma sayısı.
+    turned_off: u32,
+    /// **Geri** açılma sayısı — durumu yok etmek bunu imkânsız kılıyordu.
+    turned_back_on: u32,
+}
+gizmo::core::impl_component!(SsrToggleReport);
 
 fn main() {
     let enabled = ssr_enabled();
 
     App::<SimpleSceneState>::new("Gizmo Engine - SSR", 1280, 720)
-        .with_simple_scene(|scene, state| {
+        .with_simple_scene(move |scene, state| {
             let white = scene.asset_manager.create_white_texture(
                 &scene.renderer.device,
                 &scene.renderer.queue,
@@ -107,6 +157,10 @@ fn main() {
                 ..Default::default()
             });
 
+            scene.world.insert_resource(SsrToggleReport {
+                on: enabled,
+                ..Default::default()
+            });
             scene.spawn_camera(state, Vec3::new(0.0, 2.2, 8.5), Vec3::new(0.0, 0.6, 0.0));
         })
         .set_render(move |world, _state, encoder, view, renderer, _light_time| {
@@ -114,29 +168,65 @@ fn main() {
             renderer.gpu_fluid = None;
             renderer.gpu_particles = None;
             renderer.ssgi = None;
-            // SSR'yi kapatmanın tek yolu durumu yok etmek: `enabled` bayrağı yok.
-            if !enabled {
-                renderer.ssr = None;
+
+            // SSR artık bir bayrakla kapanıyor: durum ayakta kalıyor, dokular ve boru hattı
+            // yerinde. `= None` hâlâ mümkün ama geri dönüşü yok — aradaki fark tam olarak
+            // aşağıdaki sayaç.
+            if let Some(mut report) = world.get_resource::<SsrToggleReport>().map(|r| r.clone()) {
+                report.frame += 1;
+                if report.frame.is_multiple_of(TOGGLE_EVERY) {
+                    report.on = !report.on;
+                    if report.on {
+                        report.turned_back_on += 1;
+                    } else {
+                        report.turned_off += 1;
+                    }
+                    if std::env::var("GIZMO_SSR_SELFTEST").is_ok() {
+                        gizmo::gizmo_log!(
+                            Info,
+                            "kare {:>4} · SSR {} · kapandı {} · GERİ açıldı {}",
+                            report.frame,
+                            if report.on { "AÇIK " } else { "kapalı" },
+                            report.turned_off,
+                            report.turned_back_on
+                        );
+                    }
+                }
+                if let Some(ssr) = renderer.ssr.as_mut() {
+                    ssr.enabled = report.on;
+                }
+                world.insert_resource(report);
             }
 
             gizmo::systems::default_render_pass(world, encoder, view, renderer);
         })
-        .set_ui(move |_world, _state, ctx| {
+        .set_ui(move |world, _state, ctx| {
+            let report = world
+                .get_resource::<SsrToggleReport>()
+                .map(|r| r.clone())
+                .unwrap_or_default();
             gizmo::egui::Area::new("ssr".into())
                 .anchor(gizmo::egui::Align2::LEFT_TOP, [12.0, 12.0])
                 .show(ctx, |ui| {
                     gizmo::egui::Frame::popup(ui.style()).show(ui, |ui| {
                         ui.set_min_width(430.0);
                         ui.heading("Ekran uzayı yansıması");
-                        ui.label(format!("SSR: {}", if enabled { "açık" } else { "kapalı" }));
+                        ui.label(format!(
+                            "SSR: {} · kare {}",
+                            if report.on { "açık" } else { "kapalı" },
+                            report.frame
+                        ));
                         ui.label("zemin: pürüz 0,08 · metaliklik 0,9");
                         ui.separator();
                         ui.label("motorda SSR'nin AYAR DÜĞMESİ YOK — açık ya da kapalı.");
                         ui.label("pürüz eşiği, kalınlık, adım sayısı, adım üsteli,");
                         ui.label("ikiye bölme adımı, sekant: hiçbiri ayarlanamıyor.");
                         ui.separator();
-                        ui.label("enabled bayrağı da yok: kapatmak durumu YOK ETMEK demek,");
-                        ui.label("o yüzden kip başlangıçta seçiliyor (GIZMO_SSR=0|1).");
+                        ui.label(format!(
+                            "SsrState::enabled ile {} kez kapandı, {} kez GERİ açıldı",
+                            report.turned_off, report.turned_back_on
+                        ));
+                        ui.label("`= None` ile geri açılma sayısı hep 0 olurdu: durum yok olur.");
                     });
                 });
         })

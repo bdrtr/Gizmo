@@ -31,7 +31,7 @@ The instability is not there. It is one layer down, where the doors are locked:
 | two camera passes in one frame | one `global_uniform_buffer`, written with `queue.write_buffer` | `render_to_texture` |
 | a post-pass that reads the frame | the surface has no `TEXTURE_BINDING` | `post_processing` |
 | to keep the simple scene *and* add an exclusive pass | `set_update` replaces the hook | `demo::simple_scene_update` |
-| less volumetric rather than none | no `enabled` flag; the off switch destroys the state | `volumetric_fog` |
+| less volumetric rather than none | **half-opened 2026-08-23** — an `enabled` flag exists; shaping still does not | `volumetric_fog` |
 
 Every row is a **ceiling, not a missing feature**. In each case the engine can already do the
 thing — it just will not let the game ask. That is what makes the API feel unstable: a user who
@@ -138,7 +138,18 @@ assembler public behind a builder is a visibility change with a documented layou
 `gizmo::simple::simple_scene_update` is public. The rest is an additive form —
 `add_update_hook(f)` — with `set_update` kept as the deliberate replace.
 
-**Effect on/off flags.** `renderer.volumetric = None` destroys the state; turning it back on means
+**Effect on/off flags.** ✅ **Done, 2026-08-23**, and wider than the plan asked: `ssr`, `ssgi`,
+`volumetric`, `ssao` and `decal` all carry `enabled: bool` now, matching the flag TAA and FXAA
+already had. Off, the pass is skipped rather than drawing a neutral result — safe because each
+state's textures are read only by its own apply pass, which composites with `LoadOp::Load`, so a
+skipped effect leaves the frame as it found it. Resize still runs while off, so switching back on
+costs no rebuild. Verified the strong way, not the plausible way: a golden test renders the same
+scene with `enabled = false` and with `= None` and requires them **pixel-identical**, plus a
+separate assertion that clearing the flag changes the frame at all — without which an all-equal
+result would pass for the wrong reason. Measured in `ssr` over 420 frames: 4 switch-offs and
+**3 switch-back-ons** in one run; with `= None` the second number is structurally 0.
+
+*(historical)* `renderer.volumetric = None` destroys the state; turning it back on means
 `VolumetricState::new(device, scene, deferred, w, h)`. Same shape in SSR. An `enabled: bool`
 beside each is a field, not a redesign.
 
