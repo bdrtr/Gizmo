@@ -9,8 +9,8 @@ time, under one rule: **do not hide where the engine falls short — write the s
 demo's header, with a measurement.** This file is the aggregate of those headers. Every claim
 below names the demo that measured it, so it can be re-run rather than believed.
 
-The sweep also found **eight real engine defects** and one whole subsystem wired to nothing; they
-are listed at the bottom.
+The sweep also found **eight real engine defects** and **two complete subsystems wired to nothing**;
+they are listed at the bottom.
 
 Read this next to `ENGINE.md` §3 (roadmap). It is not a wishlist: it is the list of things a game
 built on this engine would reach for and not find, ranked by how much each one blocks.
@@ -118,6 +118,19 @@ All three engine lights are punctual: `PointLight`, `DirectionalLight`, `SpotLig
 **A trap worth naming:** `PointLight::radius` is **range**, not source size. Growing it widens and
 dims the light rather than softening its shadow — measured scene brightness rising
 `136.13 → 139.09 → 143.16` as radius goes `2 → 6 → 20`.
+
+### A7b. No occlusion culling — and frustum culling currently buys nothing
+
+There is no hierarchical depth buffer, no query-based culling, no reprojected visibility. Frustum
+culling **does** exist (`frustum_cull.rs`, with its own tests, and it culls shadow casters against
+the cascades too) and is correct — measured 0 of 60 000 objects passing when the camera looks away.
+
+But it saves no time, for the reason set out in F1: the per-object walk happens before the cull
+decision, and it is the whole cost. Adding occlusion culling would land in the same loop and buy
+the same nothing. The order of work is the walk first, then a culling strategy — and the tool for
+the walk is already in the tree.
+
+Measured in `occlusion_culling`.
 
 ### A8. No render-world extraction, no runtime component definition, no immutable components, no system hot-patching
 
@@ -373,9 +386,10 @@ and `emissive` (item 4, the only undocumented one). No further silent fields.
    rasteriser must build there; and `BackgroundColor` is currently written and never read, so the
    same draw path should consume it and close that dangling component at the same time.
 2. **Wire up what already exists.** Cheapest ratio of work to capability in the whole list, and it
-   is now two items: the **irradiance-volume subsystem** (F, below — fully written, fully tested,
-   connected to nothing) and the **post-process knobs** (B), which are uniform fields and shader
-   constants that exist but are not exposed. SSR and tone mapping have the widest gap.
+   is three items: the **spatial index** (F1 — and `occlusion_culling` measures the 8.46 ms/frame
+   at 60 k entities it would attack), the **irradiance-volume subsystem** (F2), and the
+   **post-process knobs** (B), which are uniform fields and shader constants that exist but are
+   not exposed. SSR and tone mapping have the widest gap.
 3. **`Visibility`, `Local<T>`, `or_else`, default query filters (C).** Small, self-contained, and
    each removes a recurring papercut. (`Transform`'s direction helpers were the first of this group
    and are done.)
@@ -386,9 +400,50 @@ and `emissive` (item 4, the only undocumented one). No further silent fields.
 
 ---
 
-## F. A subsystem wired to nothing
+## F. Two subsystems wired to nothing
 
-`gizmo_renderer::gi` contains a complete irradiance-volume implementation: `SHCoeffs` with
+### F1. The spatial index — `gizmo_renderer::visibility`
+
+`RenderAabbTree` is a complete BVH over renderable AABBs: `insert` / `remove` / `retain`,
+`query_frustum` / `query_frustum_full_mask` / `query_frusta` / `query_aabb`, a `VisibleSet`
+companion, a benchmark suite, an independently-written verification harness
+(`tests/visibility_independent.rs`), and `differential.rs`, which exists solely to prove the
+indexed path and the linear path agree entity-for-entity. Its module doc carries a correctness
+argument and a measured crossover table.
+
+**No render path calls it.** Verified 2026-08-23: outside `visibility/`, every mention of
+`RenderAabbTree` is the `pub use` in `lib.rs`, the doc example there, the benchmark, or its own
+test — and that test *prints the fact* at line 1411. Both draw paths
+(`batching.rs:424`, `gizmo-studio/src/render_pipeline/mod.rs:255`) call
+`classify_visibility_world` linearly on every mesh with no index in front of it.
+
+The framing that makes this "unwired" rather than "unfinished": `lib.rs` positions the tree as
+game-facing API — *the renderer does not iterate entities, so the cull is yours* — but the engine
+ships two paths that **do** iterate entities, and neither uses it.
+
+Why this matters is measured in `occlusion_culling`. At 60 000 entities the frame costs 18.94 ms
+with **every object culled** and 18.54 ms with every object drawn — culling saves nothing, because
+the per-object walk that precedes the cull decision is the whole cost. Decomposed:
+
+| | ms | attributable to |
+|---|----|-----------------|
+| 0 entities | 5.82 | baseline |
+| 60 000, transforms only (no `MeshRenderer`) | 10.48 | **+4.66** transform systems |
+| 60 000, all frustum-culled | 18.94 | **+8.46** batcher walk |
+| 60 000, all drawn | 18.54 | **−0.40** the actual drawing — inside noise |
+
+Drawing 60 000 cubes is unmeasurable next to deciding whether to draw them. The batcher's walk is
+the single biggest term, and an index in front of it is precisely what removes that walk for
+culled objects. The module's own table puts the crossover for cull *time alone* between 8 k and
+32 k meshes; the walk it would skip is a larger term than the test it would accelerate
+(0.141 µs/entity of walk against 0.022 µs/entity of test at 32 k).
+
+Its docs are honest about the limits: *"Measure on your own scene before believing any of the
+above"*, and it is explicitly **not** an occlusion structure.
+
+### F2. Irradiance volumes — `gizmo_renderer::gi`
+
+This one contains a complete irradiance-volume implementation: `SHCoeffs` with
 `add_directional_light` / `evaluate` / `lerp` / `to_gpu_data`, `LightProbe`, and `ProbeGrid` with
 analytic baking and trilinear sampling. It has **seven tests**. It is `pub use`d from `lib.rs`.
 
@@ -406,7 +461,8 @@ sound — 48 probes baked from the scene lights, sampled per object, applied to 
 because the pipeline cannot. The blend is correct: red-dominant `(0.935 0.462 0.333)` on the left,
 blue-dominant `(0.366 0.533 0.902)` on the right, smooth through the middle.
 
-This is the single largest ratio of existing work to delivered capability in the engine.
+These two are the largest ratio of existing work to delivered capability in the engine: both are
+finished, both are tested, and neither is plugged in.
 
 ---
 
