@@ -9,16 +9,40 @@
 //! | yetenek | Gizmo |
 //! |---------|-------|
 //! | kare kare açıp kapamak | **var** (2026-08-23, `SsrState::enabled`) |
-//! | yansımanın vazgeçeceği pürüz eşiği | **yok** |
-//! | yüzey kalınlığı varsayımı | **yok** |
-//! | doğrusal tarama adımı sayısı | **yok** |
+//! | yansımanın vazgeçeceği pürüz eşiği | **var** (2026-08-24, `SsrParams::roughness_cutoff`) |
+//! | yüzey kalınlığı varsayımı | **var** — `::thickness` |
+//! | doğrusal tarama adımı sayısı | **var** — `::max_steps` |
+//! | tarama adım boyu | **var** — `::step_size` |
+//! | pürüz solma aralığı | **var** — `::fade_start` / `::fade_end` |
+//! | başlangıç ofseti, kenar solma | **var** — `::start_offset` / `::edge_fade` |
 //! | doğrusal tarama adımının üsteli | **yok** |
-//! | ikiye bölerek incelme adımı sayısı | **yok** |
-//! | kesişimi sekantla arama | **yok** |
+//! | ikiye bölerek incelme adımı sayısı | **yok** — motorda hiç yazılmamış |
+//! | kesişimi sekantla arama | **yok** — motorda hiç yazılmamış |
 //!
-//! `SsrState`'in ayarlanabilir tek alanı genişlik ve yükseklik — yani yalnız hedef boyutu.
-//! Yansımanın ne kadar uzağa bakacağı, hangi pürüzden sonra vazgeçeceği, kaç adımda tarayacağı
-//! shader'ın içinde.
+//! Sekiz sayı 32 baytlık tek bir uniform'da ve her kare yükleniyor. Varsayılanlar shader'da duran
+//! değerlerin ta kendisi — motorun `the_ssr_defaults_are_the_shader_literals` testi bunu piksel
+//! piksel kilitliyor.
+//!
+//! ### Ölçülen: beş düğmenin beşi de kareye ulaşıyor
+//!
+//! `GIZMO_SSR_KNOB=<0..5>` bir ayarı sabitliyor (anahtar hâlâ 60 karede bir çevirdiği için ölçüm
+//! bunu kullanmak zorunda). Kare 510, sol yarı, alt yarı (2026-08-24):
+//!
+//! | ayar | farklı piksel | en büyük kanal farkı |
+//! |------|---------------|----------------------|
+//! | varsayılan (referans) | %0,00 | 0 |
+//! | pürüz eşiği 0,0 | **%15,53** | 167 |
+//! | kalınlık 0,001 | **%15,53** | 167 |
+//! | kalınlık 12,0 | **%18,81** | 104 |
+//! | başlangıç ofseti 3,0 | **%11,49** | 167 |
+//! | kenar solma 0,45 | **%18,62** | 167 |
+//!
+//! İlk ikisi aynı sayıyı veriyor ve bu doğru: ikisi de yansımayı tamamen kapatıyor — biri ışını
+//! hiç göndermeyerek, öteki hiçbir isabeti kabul etmeyerek.
+//!
+//! `max_steps` bu ölçümde yok, ve sebebi bir eksiklik değil: bu sahnede yansıma **ilk adımda**
+//! bulunuyor, yani 20'den 4'e — hatta 1'e — inmek hiçbir pikseli değiştirmiyor. Menzil düğmesi, ve
+//! bu sahnenin kaybedecek menzili yok.
 //!
 //! ## Açıp kapatmak artık iki yönlü
 //!
@@ -85,6 +109,7 @@
 //!
 //! ## Kontroller
 //!   * `GIZMO_SSR=0` — **başlangıçta** kapalı başlat (anahtar yine 60 karede bir çeviriyor)
+//!   * `GIZMO_SSR_KNOB=<0..5>` — bir şekillendirme ayarını sabitle (ölçüm için)
 //!   * `GIZMO_SSR_SELFTEST=1` — her çevirmede sayacı konsola yaz
 //!   * **Sağ-tık + fare / WASDQE** — kamera
 
@@ -106,6 +131,16 @@ fn ssr_enabled() -> bool {
 /// Kaç karede bir kendiliğinden açılıp kapanılacağı. Ölçüm koşusunda kapanma ve **geri açılma**
 /// bunun sayesinde tek koşuda görülüyor; eskiden geri açılma hiç görülemiyordu.
 const TOGGLE_EVERY: u32 = 60;
+
+/// Ayar turu: her adım bir alanı varsayılanından uzağa itiyor.
+const KNOBS: [(&str, fn(&mut gizmo::renderer::ssr::SsrParams)); 6] = [
+    ("varsayılan", |_| {}),
+    ("pürüz eşiği 0,0 (kapalı)", |p| p.roughness_cutoff = 0.0),
+    ("kalınlık 0,001", |p| p.thickness = 0.001),
+    ("kalınlık 12,0", |p| p.thickness = 12.0),
+    ("başlangıç offseti 3,0", |p| p.start_offset = 3.0),
+    ("kenar solma 0,45", |p| p.edge_fade = 0.45),
+];
 
 /// Ölçüm defteri: SSR'nin kaç kez kapanıp açıldığı.
 #[derive(Default, Clone)]
@@ -194,6 +229,17 @@ fn main() {
                 }
                 if let Some(ssr) = renderer.ssr.as_mut() {
                     ssr.enabled = report.on;
+                    // `GIZMO_SSR_KNOB=<0..5>` bir ayarı sabitliyor. Ölçüm bunu kullanmak zorunda:
+                    // anahtar 60 karede bir çevrildiği için iki farklı karenin farkı ayarın değil
+                    // anahtarın farkı olurdu.
+                    let k = std::env::var("GIZMO_SSR_KNOB")
+                        .ok()
+                        .and_then(|v| v.parse::<usize>().ok())
+                        .unwrap_or(0)
+                        .min(KNOBS.len() - 1);
+                    let mut p = gizmo::renderer::ssr::SsrParams::default();
+                    KNOBS[k].1(&mut p);
+                    ssr.params = p;
                 }
                 world.insert_resource(report);
             }
@@ -218,9 +264,10 @@ fn main() {
                         ));
                         ui.label("zemin: pürüz 0,08 · metaliklik 0,9");
                         ui.separator();
-                        ui.label("motorda SSR'nin AYAR DÜĞMESİ YOK — açık ya da kapalı.");
-                        ui.label("pürüz eşiği, kalınlık, adım sayısı, adım üsteli,");
-                        ui.label("ikiye bölme adımı, sekant: hiçbiri ayarlanamıyor.");
+                        ui.label("SsrParams: sekiz şekillendirme alanı (2026-08-24).");
+                        ui.label("pürüz eşiği · kalınlık · adım sayısı · adım boyu");
+                        ui.label("solma aralığı · başlangıç ofseti · kenar solma");
+                        ui.label("adım üsteli, ikiye bölme, sekant: motorda hiç yok.");
                         ui.separator();
                         ui.label(format!(
                             "SsrState::enabled ile {} kez kapandı, {} kez GERİ açıldı",

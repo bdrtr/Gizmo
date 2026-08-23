@@ -1,4 +1,58 @@
 use crate::deferred::DeferredState;
+
+/// The six numbers that shape the screen-space reflection march.
+///
+/// Every one of these was a literal in `ssr.wgsl`, which is why `CAPABILITY_GAPS.md` §B recorded
+/// "0 shaping knobs" against a pass that demonstrably works — the `ssr` demo measures the floor
+/// under each cube picking up that cube's colour, +37.6 R / +61.1 G / +38.7 B.
+///
+/// The defaults are the shader's own values, so a state built and left alone renders exactly what
+/// it rendered before this struct existed — locked by `the_ssr_defaults_are_the_shader_literals`.
+///
+/// Written to the GPU each frame from [`SsrState::params`]; changing a field is enough.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct SsrParams {
+    /// Roughness above which a surface reflects nothing at all. Shader default **0.5**.
+    ///
+    /// A hard cut, not a fade: this is the early-out that keeps the march off matte surfaces
+    /// entirely. [`fade_start`](Self::fade_start) and [`fade_end`](Self::fade_end) shape what
+    /// happens below it.
+    pub roughness_cutoff: f32,
+    /// Where the reflection begins to fade with roughness. Shader default **0.1**.
+    pub fade_start: f32,
+    /// Where that fade reaches zero. Shader default **0.5**.
+    pub fade_end: f32,
+    /// World-space distance per march step. Shader default **1.0**.
+    pub step_size: f32,
+    /// How many steps a ray takes before giving up. The cost knob. Shader default **20**.
+    pub max_steps: f32,
+    /// How thick a surface is assumed to be when deciding whether the ray hit it, in metres.
+    ///
+    /// Too small and the ray passes through thin geometry; too large and it reports a hit on
+    /// something well behind the surface. Shader default **1.0**.
+    pub thickness: f32,
+    /// How far along the reflection vector the march starts, to avoid self-intersection at the
+    /// origin. Shader default **0.1**.
+    pub start_offset: f32,
+    /// Width of the screen-edge fade, in UV. Shader default **0.1**.
+    pub edge_fade: f32,
+}
+
+impl Default for SsrParams {
+    fn default() -> Self {
+        Self {
+            roughness_cutoff: 0.5,
+            fade_start: 0.1,
+            fade_end: 0.5,
+            step_size: 1.0,
+            max_steps: 20.0,
+            thickness: 1.0,
+            start_offset: 0.1,
+            edge_fade: 0.1,
+        }
+    }
+}
 use crate::pipeline::{load_shader, load_shader_composed, SceneState};
 
 /// Screen-space reflections: reflections marched through the depth buffer.
@@ -43,6 +97,11 @@ pub struct SsrState {
     /// so a skipped effect leaves the frame exactly as it found it. Resizing still happens while
     /// off, so switching back on costs no rebuild.
     pub enabled: bool,
+
+    /// The eight shaping numbers. Write to them directly; they reach the GPU on the next frame.
+    pub params: SsrParams,
+    /// Their uniform buffer.
+    pub params_buffer: wgpu::Buffer,
 }
 
 impl SsrState {
@@ -70,6 +129,16 @@ impl SsrState {
         let ssr_bgl = Self::mk_ssr_bgl(device);
         let apply_bgl = Self::mk_apply_bgl(device);
 
+        let params = SsrParams::default();
+        let params_buffer = wgpu::util::DeviceExt::create_buffer_init(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("ssr_params"),
+                contents: bytemuck::bytes_of(&params),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            },
+        );
+
         let ssr_bind_group = Self::mk_ssr_bg(
             device,
             &ssr_bgl,
@@ -77,6 +146,7 @@ impl SsrState {
             &deferred.normal_roughness_view,
             &deferred.world_position_view,
             &linear_sampler,
+            &params_buffer,
         );
 
         let apply_bind_group = Self::mk_apply_bg(device, &apply_bgl, &ssr_view, &linear_sampler);
@@ -86,6 +156,8 @@ impl SsrState {
 
         Self {
             enabled: true,
+            params,
+            params_buffer,
             ssr_texture,
             ssr_view,
             ssr_pipeline,
@@ -120,6 +192,7 @@ impl SsrState {
             &deferred.normal_roughness_view,
             &deferred.world_position_view,
             &self.nearest_sampler,
+            &self.params_buffer,
         );
         self.apply_bind_group =
             Self::mk_apply_bg(device, &self.apply_bgl, &ssr_view, &self.nearest_sampler);
@@ -193,6 +266,17 @@ impl SsrState {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    // params — the eight shaping numbers, see `SsrParams`.
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         })
     }
@@ -228,6 +312,7 @@ impl SsrState {
         normal_view: &wgpu::TextureView,
         pos_view: &wgpu::TextureView,
         sampler: &wgpu::Sampler,
+        params: &wgpu::Buffer,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("ssr_bg"),
@@ -248,6 +333,10 @@ impl SsrState {
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: wgpu::BindingResource::Sampler(sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: params.as_entire_binding(),
                 },
             ],
         })

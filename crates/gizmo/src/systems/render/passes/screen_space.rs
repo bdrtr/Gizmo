@@ -5,6 +5,11 @@ pub fn record_screen_space_effects(encoder: &mut wgpu::CommandEncoder, renderer:
 
     // ── SSR: Screen Space Reflections ───────────────────────────────────────────
     if let Some(ssr) = renderer.ssr.as_ref().filter(|s| s.enabled) {
+        // The shaping numbers go up every frame — 32 bytes, no rebuild.
+        renderer
+            .queue
+            .write_buffer(&ssr.params_buffer, 0, bytemuck::bytes_of(&ssr.params));
+
         // Pass 1: SSR Raymarch
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

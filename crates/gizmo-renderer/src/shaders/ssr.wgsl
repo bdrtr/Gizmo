@@ -9,6 +9,20 @@
 @group(1) @binding(2) var t_position_rel_camera: texture_2d<f32>;
 @group(1) @binding(3) var s_nearest: sampler;
 
+// The eight numbers that used to be literals in this file. See `SsrParams` on the Rust side; the
+// defaults there are exactly the values that stood here, so nothing changed by being moved.
+struct SsrParams {
+    roughness_cutoff: f32,
+    fade_start: f32,
+    fade_end: f32,
+    step_size: f32,
+    max_steps: f32,
+    thickness: f32,
+    start_offset: f32,
+    edge_fade: f32,
+}
+@group(1) @binding(4) var<uniform> params: SsrParams;
+
 @vertex
 fn vs_main(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
     var pos = array<vec2<f32>, 3>(vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));
@@ -24,7 +38,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let pos_sample = textureLoad(t_position_rel_camera, iuv, 0);
 
     // Skip unwritten pixels or rough surfaces
-    if (pos_sample.w < 0.5 || normal_roughness.w > 0.5) {
+    if (pos_sample.w < 0.5 || normal_roughness.w > params.roughness_cutoff) {
         return vec4(0.0);
     }
 
@@ -39,12 +53,12 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     // Fresnel effect
     let cos_theta = max(dot(-view_dir, normal), 0.0);
     let fresnel = 0.04 + (1.0 - 0.04) * pow(1.0 - cos_theta, 5.0);
-    let fade_roughness = 1.0 - smoothstep(0.1, 0.5, normal_roughness.w);
+    let fade_roughness = 1.0 - smoothstep(params.fade_start, params.fade_end, normal_roughness.w);
 
     // Ray marching params
-    let step_size = 1.0;
-    let max_steps = 20;
-    var current_pos = world_pos + R * 0.1; // offset slightly
+    let step_size = params.step_size;
+    let max_steps = i32(max(params.max_steps, 1.0));
+    var current_pos = world_pos + R * params.start_offset;
     
     for (var i = 0; i < max_steps; i++) {
         current_pos += R * step_size;
@@ -81,12 +95,13 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
             let depth_diff = length(current_pos - scene.camera_pos.xyz) - length(scene_pos.xyz);
             
             // Hit condition
-            if (depth_diff > 0.0 && depth_diff < 1.0) {
+            if (depth_diff > 0.0 && depth_diff < params.thickness) {
                 let hit_color = textureLoad(t_hdr, sample_iuv, 0).rgb;
                 
                 // Edge fade
-                let edge_fade = smoothstep(0.0, 0.1, screen_uv.x) * smoothstep(1.0, 0.9, screen_uv.x) *
-                                smoothstep(0.0, 0.1, screen_uv.y) * smoothstep(1.0, 0.9, screen_uv.y);
+                let ef = params.edge_fade;
+                let edge_fade = smoothstep(0.0, ef, screen_uv.x) * smoothstep(1.0, 1.0 - ef, screen_uv.x) *
+                                smoothstep(0.0, ef, screen_uv.y) * smoothstep(1.0, 1.0 - ef, screen_uv.y);
                 
                 let reflection_intensity = fresnel * fade_roughness * edge_fade;
                 return vec4(hit_color * reflection_intensity, 1.0);

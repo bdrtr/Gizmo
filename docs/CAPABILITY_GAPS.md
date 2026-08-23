@@ -268,7 +268,7 @@ author it. The middle column is what a full implementation offers.
 
 | Effect | Full capability | Gizmo | Measured in |
 |---|---|---|---|
-| Screen-space reflections | 6 knobs | **0 shaping knobs.** On/off is now reversible (`SsrState::enabled`, 2026-08-23) but nothing about the reflection can be shaped | `ssr` |
+| Screen-space reflections | 6 knobs | **8 shaping fields since 2026-08-24** — `SsrParams::{roughness_cutoff, fade_start, fade_end, step_size, max_steps, thickness, start_offset, edge_fade}`, one 32-byte uniform per frame, defaults pixel-identical to the shader literals they replaced. Plus `enabled` (2026-08-23). Measured: five of them move 11–19 % of the frame; `max_steps` moves nothing on that scene because the reflection is found on the first step, which is a property of the fixture rather than of the field. Still absent, and never written: step exponent, binary refinement, secant search | `ssr` |
 | Tone mapping | 7 curves + dither | **1** curve (ACES, hard-coded) + exposure | `tonemapping` |
 | Bloom | 7 knobs | **2** (`intensity`, `threshold`) | `bloom_3d` |
 | Depth of field | 6 optical knobs | **3** numbers + enable | `depth_of_field` |
@@ -570,10 +570,9 @@ and `emissive` (item 4, the only undocumented one). No further silent fields.
    probe grid now reaches the deferred lighting pass, measured against the CPU path at correlation
    0.99887. What remains here is the
    **post-process knobs** (B), which are uniform fields and shader constants that exist but are
-   not exposed. **Volumetric's six left B on 2026-08-23** (`VolumetricParams`), and all five
-   screen-space effects gained a reversible `enabled`; SSR's six shaping knobs and tone mapping's
-   single hard-coded curve are the widest remaining gap, and they are the same shape of work the
-   volumetric one turned out to be.
+   not exposed. **Volumetric's six left B on 2026-08-23** (`VolumetricParams`) and **SSR's eight on
+   2026-08-24** (`SsrParams`); all five screen-space effects also gained a reversible `enabled`.
+   What remains in B is tone mapping's single hard-coded ACES curve.
 3. **`Visibility`, `Local<T>`, `or_else`, default query filters (C).** Small, self-contained, and
    each removes a recurring papercut. (`Transform`'s direction helpers were the first of this group
    and are done.)

@@ -2644,6 +2644,13 @@ mod golden_render_tests {
         /// destructive variant above, or the flag is not a real off switch.
         SsgiDisabled,
         SsrDisabled,
+        /// SSR with its parameters written out by hand as the literals that used to stand in
+        /// `ssr.wgsl`. Must be pixel-identical to the defaults.
+        SsrLiterals,
+        /// SSR whose roughness cut-out rejects every surface. Nothing may reflect.
+        SsrNoRough,
+        /// SSR whose surfaces are assumed 1 mm thick, so no depth difference counts as a hit.
+        SsrThin,
     }
 
     /// A lit cube standing on a wide mirror floor, seen from a raised camera — a scene where a
@@ -2664,6 +2671,25 @@ mod golden_render_tests {
             }
             Effect::SsrDisabled => {
                 renderer.ssr.as_mut().expect("ssr built").enabled = false;
+            }
+            Effect::SsrLiterals => {
+                let p = &mut renderer.ssr.as_mut().expect("ssr built").params;
+                p.roughness_cutoff = 0.5;
+                p.fade_start = 0.1;
+                p.fade_end = 0.5;
+                p.step_size = 1.0;
+                p.max_steps = 20.0;
+                p.thickness = 1.0;
+                p.start_offset = 0.1;
+                p.edge_fade = 0.1;
+            }
+            Effect::SsrNoRough => {
+                let p = &mut renderer.ssr.as_mut().expect("ssr built").params;
+                p.roughness_cutoff = 0.0;
+            }
+            Effect::SsrThin => {
+                let p = &mut renderer.ssr.as_mut().expect("ssr built").params;
+                p.thickness = 0.001;
             }
         }
         let mut asset_manager = AssetManager::new();
@@ -2801,6 +2827,59 @@ mod golden_render_tests {
                      the reversible switch is not the same switch",
                 );
             }
+        });
+    }
+
+    /// Moving SSR's constants out of the shader has to be a move, not an edit.
+    ///
+    /// Same reasoning as `the_defaults_are_the_shader_literals_they_replaced` does for volumetric:
+    /// `SsrParams::default()` claims to be the values that stood in `ssr.wgsl`, and if the claim
+    /// is wrong every reflective surface in every existing scene changed silently. Checked as an
+    /// identity — the default march must be pixel-identical to one whose parameters are typed out
+    /// by hand.
+    ///
+    /// Plus one field proved to reach the shader, because an all-equal result would otherwise pass
+    /// for the wrong reason: a params buffer nobody reads.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn the_ssr_defaults_are_the_shader_literals() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let defaults = render_mirror_scene(Effect::None).await;
+            let literals = render_mirror_scene(Effect::SsrLiterals).await;
+            let (differ, total) = changed_pixels(&defaults, &literals, 128);
+            assert_eq!(
+                differ, 0,
+                "the defaults disagree with the shader literals on {differ}/{total} pixels — \
+                 moving the numbers out of the shader changed what they render",
+            );
+
+            // Two fields proved to reach the shader, from opposite ends of the march: the
+            // roughness cut-out, which decides whether a ray is cast at all, and the thickness,
+            // which decides whether a hit counts.
+            for (name, effect) in [
+                ("roughness_cutoff", Effect::SsrNoRough),
+                ("thickness", Effect::SsrThin),
+            ] {
+                let moved = render_mirror_scene(effect).await;
+                let (changed, total) = changed_pixels(&defaults, &moved, 128);
+                assert!(
+                    changed > 0,
+                    "{name} changed {changed}/{total} pixels — the params buffer is not being read",
+                );
+            }
+
+            // `max_steps` is deliberately not among them, and that is a measurement rather than an
+            // omission: on this scene the reflection is found on the **first** step, so cutting
+            // the march from 20 to 4 — or to 1 — changes nothing. It is a range knob, and this
+            // fixture has no range to lose. Asserting on it here would be asserting on the
+            // fixture's geometry.
         });
     }
 
