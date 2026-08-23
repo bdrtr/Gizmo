@@ -156,11 +156,31 @@ and `emissive` (item 4, the only undocumented one). No further silent fields.
 
 ## E. Suggested order of work
 
-1. **Text / font rendering (A2).** Named first by the project owner. Minimum useful shape: a font
-   asset (`ttf` via `ab_glyph`/`fontdue`), a glyph atlas on the GPU, a `Text` component with a
-   world-space and a screen-space mode, and one draw path that batches by atlas. It does **not**
-   need layout richness to be useful — a single-line, single-font label unblocks most of the
-   corpus's text usage.
+1. **Text / font rendering (A2).** Named first by the project owner. It is already tracked as
+   **M7.6** in `ENGINE.md` §3 (Phase 7), and `gizmo-ui`'s own crate docs name the same gap and the
+   same landing site: *"expect the component set to change when rendering lands (a `Text` component
+   and a draw-list output are the obvious additions)"*.
+
+   The ground is better prepared than the gap suggests. `gizmo-ui` already resolves boxes through
+   `taffy` and publishes them as `Node` rects; it just emits no vertices. So the work splits
+   cleanly:
+
+   - **Rasteriser + atlas** (in `gizmo-renderer`): load a `ttf`, rasterise on demand into a GPU
+     atlas, evict nothing at first. The dependency is the one decision that needs `ENGINE.md` §4
+     review — `ab_glyph` and `fontdue` are both rasteriser-only and can be sealed behind an opaque
+     atlas handle so no foreign type reaches a `pub` signature.
+   - **`Text` component** (in `gizmo-ui::components`): string, font handle, size, colour, and an
+     anchor. Single-line and single-font is enough to be useful; layout richness is a later axis.
+   - **Two draw modes**: screen-space (a UI quad batch, consuming `Node`) and world-space (a
+     camera-facing quad, so 3D labels work). Both batch by atlas texture, which fits the existing
+     `BatchKey` (the atlas is just a texture bind group).
+   - **Acceptance**: a golden render test, because that is the only thing that can prove a glyph
+     landed where it should. The repo already has that machinery
+     (`crates/gizmo/src/systems/render/mod.rs`, `golden_render_tests`).
+
+   Two constraints the sweep already established: the wasm target is a **separate CI gate**, so the
+   rasteriser must build there; and `BackgroundColor` is currently written and never read, so the
+   same draw path should consume it and close that dangling component at the same time.
 2. **Post-process knobs (B).** Cheapest ratio of work to unblocked examples: these are uniform
    fields and shader constants that already exist, just not exposed. SSR and tone mapping are the
    two with the widest gap.
