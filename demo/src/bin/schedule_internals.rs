@@ -8,10 +8,35 @@
 //!
 //! | yetenek | Gizmo |
 //! |---------|-------|
-//! | uygulamaya özel bir çizelge eklemek | **yok** — [`Phase`] beş varyantlı **kapalı** bir enum |
+//! | uygulamaya özel bir faz eklemek | **var** — `Phase::User(konum)`, aşağıda ölçüldü |
 //! | yürütücüyü seçmek ya da değiştirmek | **yok** — yürütücü `Schedule::run_batches`, özel ve değiştirilemez |
 //! | kısıtsız sistem sırasının değişkenliği | **kısmen** — aşağıda ölçüldü |
 //! | sistem sistem ilerletme (adımlama) | **yok** — ama `Schedule::run` açık, adımlamayı uygulama kurabilir |
+//!
+//! ## Ölçülen 0: kullanıcı fazı yerleşiklerin **arasına** giriyor
+//!
+//! `Phase` eskiden beş varyantlı kapalı bir enum'du ve bu satır "uygulamaya özel çizelge: yok"
+//! diyordu. Artık `Phase::User(u16)` var, ve taşıdığı sayı yerleşiklerin oturduğu ölçekteki
+//! **konumu**: `PreUpdate`=1000, `Update`=2000, `Physics`=3000, `PostUpdate`=4000, `Render`=5000.
+//! Yani `User(3500)` "fizik oturduktan sonra, dönüşümler yayılmadan önce" demek — sona eklemek
+//! değil, araya girmek.
+//!
+//! Bu demo on probe koşuyor: beş yerleşik faz, ve aralarına + iki ucuna serpilmiş beş kullanıcı
+//! fazı (`500`, `1500`, `2500`, `3500`, `4500`). Ekleme sırası kasten karışık. Ölçüldü
+//! (2026-08-23, 600 kare):
+//!
+//! | | |
+//! |---|---|
+//! | beklenen dizi | `0P1U2F3O4R` |
+//! | beklenen sırayla koşan kare | **599** |
+//! | sapan kare | **0** |
+//!
+//! Diziyi okuyan sistemin kendisi de ölçümün parçası: `Phase::User(5001)`'de, yani
+//! **`Render`'dan sonra**. Motorda `Render`'dan sonra iş yapmanın yolu daha önce yoktu.
+//!
+//! Sıralama türetilmiş `Ord`'dan gelemezdi — türetilmiş bir `Ord` veri taşıyan varyantı bildirim
+//! sırasına göre *her* yerleşik fazın arkasına atardı ve yukarıdaki tablo kurulamazdı. Bu yüzden
+//! `Ord` elle yazılı ve tek ölçüsü `Phase::position()`.
 //!
 //! ## Ölçülen 1: yığın düzeni deterministik, yığın **içi** değil
 //!
@@ -56,6 +81,17 @@
 //! Dersi genel: **"ölçtüm, değişmedi" ile "değişmez" aynı şey değil.** Küçük bir çizelgede
 //! kısıtsız sıra kararlı görünüp üretimde bozulabilir.
 //!
+//! ### Ölçüm notu: aynı ders ikinci kez, ters yönden
+//!
+//! Yukarıdaki tablo (78 ve 54 farklı sıralama) faz probe'ları **eklenmeden önceki** koşulardan.
+//! On probe eklendikten sonra aynı sekiz yazıcı 600 karede **180** farklı sıralama üretti, 575
+//! sıra değişimi — üç kattan fazla. Yazıcılara dokunulmadı; değişen tek şey çizelgede başka
+//! sistemlerin olması, yani havuzun daha çok bölünmesi.
+//!
+//! Bu ilk ölçüm notunun ikinci yarısı: sekiz yazıcı da "değişkenliğin tamamını" göstermiyordu.
+//! Bir sayıyı düşürmek için değil, **yükseltmek** için de komşu iş yeter — yani kısıtsız sıranın
+//! değişkenliği o sistemin kendi özelliği değil, çizelgenin o anki yükünün özelliği.
+//!
 //! ### Ve çare gerçekten çalışıyor
 //!
 //! Aynı sekiz sistem `after` zinciriyle bağlandığında (`GIZMO_SCHEDULE_CHAIN=1`) 600 karede
@@ -87,6 +123,17 @@ fn order_log() -> &'static Mutex<Vec<u8>> {
     ORDER_LOG.get_or_init(|| Mutex::new(Vec::new()))
 }
 
+/// Faz sırasını kaydeden ayrı defter. Yazıcılarınkinden ayrı, çünkü ölçtükleri şey farklı:
+/// bu, faz*lar arası* sırayı ölçüyor, yazıcılar faz *içi* sırayı.
+static PHASE_LOG: OnceLock<Mutex<Vec<u8>>> = OnceLock::new();
+
+fn phase_log() -> &'static Mutex<Vec<u8>> {
+    PHASE_LOG.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// On probe'un beklenen sırası: yerleşikler ve aralarına yerleştirilmiş beş kullanıcı fazı.
+const EXPECTED_PHASE_ORDER: &str = "0P1U2F3O4R";
+
 /// Kaç kısıtsız yazıcı var. İkisi rayon'un iş çalmasına yetmiyor — aşağıdaki ölçüm notuna bakın.
 const WRITERS: usize = 8;
 
@@ -99,6 +146,12 @@ struct ScheduleReport {
     /// Sıranın bir önceki kareye göre değiştiği kare sayısı.
     flips: u32,
     last: String,
+    /// Faz probe'larının beklenen sırayla koştuğu kare sayısı.
+    phase_ok: u32,
+    /// Beklenenden sapan kare sayısı.
+    phase_bad: u32,
+    /// Sapma görüldüyse son sapan dizi.
+    phase_last_bad: String,
 }
 gizmo::core::impl_component!(ScheduleReport);
 
@@ -176,6 +229,20 @@ fn main() {
         .add_update_system(chained(writer_h.in_phase(Phase::Update).label("w_h"), Some("w_g")))
         // Sırayı okuyan sistem `PostUpdate`'te — faz sınırı, yığın sınırından güçlü.
         .add_update_system(tally.in_phase(Phase::PostUpdate))
+        // Faz probe'ları: beş yerleşik fazın arasına ve iki ucuna yerleştirilmiş beş kullanıcı
+        // fazı. Ekleme sırası kasten karışık — sıra fazdan gelmeli, buradan değil.
+        .add_update_system(probe_render.in_phase(Phase::Render))
+        .add_update_system(probe_physics_to_post.in_phase(Phase::User(3500)))
+        .add_update_system(probe_pre.in_phase(Phase::PreUpdate))
+        .add_update_system(probe_post_to_render.in_phase(Phase::User(4500)))
+        .add_update_system(probe_update.in_phase(Phase::Update))
+        .add_update_system(probe_before_pre.in_phase(Phase::User(500)))
+        .add_update_system(probe_post.in_phase(Phase::PostUpdate))
+        .add_update_system(probe_update_to_physics.in_phase(Phase::User(2500)))
+        .add_update_system(probe_physics.in_phase(Phase::Physics))
+        .add_update_system(probe_pre_to_update.in_phase(Phase::User(1500)))
+        // Ve okuyucu `Render`'dan sonra.
+        .add_update_system(phase_tally.in_phase(Phase::User(5001)))
         .set_ui(|world, _state, ctx| {
             let Some(r) = world.get_resource::<ScheduleReport>().map(|r| r.clone()) else {
                 return;
@@ -186,9 +253,21 @@ fn main() {
                     gizmo::egui::Frame::popup(ui.style()).show(ui, |ui| {
                         ui.set_min_width(480.0);
                         ui.heading("Çizelgenin iç yapısı");
-                        ui.label("Phase: kapalı 5 varyant — özel çizelge eklenemiyor.");
+                        ui.label("Phase: 5 yerleşik + Phase::User(konum) — özel faz VAR.");
                         ui.label("yürütücü: Schedule::run_batches, özel ve değiştirilemez.");
                         ui.label("adımlama (stepping) API'si yok.");
+                        ui.separator();
+                        ui.monospace(format!("faz sırası beklenen: {EXPECTED_PHASE_ORDER}"));
+                        ui.label(format!(
+                            "tutan kare: {} · sapan: {}",
+                            r.phase_ok, r.phase_bad
+                        ));
+                        if !r.phase_last_bad.is_empty() {
+                            ui.colored_label(
+                                gizmo::egui::Color32::from_rgb(230, 160, 80),
+                                format!("son sapma: {}", r.phase_last_bad),
+                            );
+                        }
                         ui.separator();
                         ui.label(format!(
                             "kare: {} · {} yazıcı · zincir: {}",
@@ -243,6 +322,50 @@ writer!(writer_f, b'F');
 writer!(writer_g, b'G');
 writer!(writer_h, b'H');
 
+/// Faz probe'ları. Her biri kendi fazında tek harf yazıyor; sırayı `phase_tally` okuyor.
+///
+/// Rakamlar kullanıcı fazları, harfler yerleşikler — beklenen dizi
+/// [`EXPECTED_PHASE_ORDER`]. Bunlar hiçbir kaynağa **yazmıyor**: yazsalardı erişimleri çakışır ve
+/// çizelge onları zaten ayırırdı, yani ölçüm aracı ölçülecek şeyi kendisi kurmuş olurdu.
+macro_rules! phase_probe {
+    ($name:ident, $tag:expr) => {
+        fn $name(_input: Res<Input>) {
+            phase_log().lock().unwrap().push($tag);
+        }
+    };
+}
+phase_probe!(probe_before_pre, b'0');
+phase_probe!(probe_pre, b'P');
+phase_probe!(probe_pre_to_update, b'1');
+phase_probe!(probe_update, b'U');
+phase_probe!(probe_update_to_physics, b'2');
+phase_probe!(probe_physics, b'F');
+phase_probe!(probe_physics_to_post, b'3');
+phase_probe!(probe_post, b'O');
+phase_probe!(probe_post_to_render, b'4');
+phase_probe!(probe_render, b'R');
+
+/// Faz dizisini okur. Kendisi `Phase::User(5001)`'de, yani **`Render`'dan sonra** — okuduğu şeyin
+/// tamamlanmış olması bu yüzden garanti, ve bu sistemin var olabilmesi ölçümün kendisi:
+/// `Render`'dan sonra iş yapmanın yolu daha önce yoktu.
+fn phase_tally(mut report: ResMut<ScheduleReport>) {
+    let order: String = {
+        let mut log = phase_log().lock().unwrap();
+        let s = String::from_utf8_lossy(&log).to_string();
+        log.clear();
+        s
+    };
+    if order.len() != EXPECTED_PHASE_ORDER.len() {
+        return; // yarım kare — sayma
+    }
+    if order == EXPECTED_PHASE_ORDER {
+        report.phase_ok += 1;
+    } else {
+        report.phase_bad += 1;
+        report.phase_last_bad = order;
+    }
+}
+
 /// Kareyi kapatır ve o karenin sıralamasını deftere işler. Ayrı bir **fazda**, yani yazıcılarla
 /// aynı yığına düşemez.
 fn tally(mut report: ResMut<ScheduleReport>) {
@@ -270,6 +393,18 @@ fn tally(mut report: ResMut<ScheduleReport>) {
     if std::env::var("GIZMO_SCHEDULE_SELFTEST").is_ok() && report.frame.is_multiple_of(200) {
         let mut top = report.seen.clone();
         top.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
+        gizmo::gizmo_log!(
+            Info,
+            "faz sırası: beklenen {} · tutan {} kare · sapan {} kare{}",
+            EXPECTED_PHASE_ORDER,
+            report.phase_ok,
+            report.phase_bad,
+            if report.phase_last_bad.is_empty() {
+                String::new()
+            } else {
+                format!(" · son sapma {}", report.phase_last_bad)
+            }
+        );
         gizmo::gizmo_log!(
             Info,
             "kare {:>4} · zincir {} · farklı sıralama {} · sıra değişimi {} · en sık {:?}",

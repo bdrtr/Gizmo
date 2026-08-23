@@ -309,12 +309,21 @@ entities with `spawn_batch`: the world gained 4 relationships, **the index gaine
 silently missing — exactly the 1-in-4 the table predicts. An index maintained by hooks is only as
 complete as the code paths that reach it.
 
-### C4. No custom schedules, executor, or stepping
+### C4. No custom executor or stepping — but phases of your own now exist
 
-Measured in `schedule_internals`. `Phase` is a **sealed 5-variant enum**, `run_batches` is private,
-and there is no stepping API. There is also **no `Startup` phase**: the two substitutes run at
+Measured in `schedule_internals`. `run_batches` is private and there is no stepping API. There is
+also **no `Startup` phase**: the two substitutes run at
 different times (setup closure at frame 0, a latched system at frame 1), and nothing can be both
 "takes a `Query`" and "runs before the schedule's first turn" (`system_forms`).
+
+**Closed (2026-08-23): `Phase::User(u16)`.** `Phase` used to be a sealed 5-variant enum, which is
+what made "a schedule phase of its own" a locked door. It now carries a *position* on the scale the
+built-ins sit on — `PreUpdate`=1000 … `Render`=5000 — so `User(3500)` means "after physics settles,
+before transforms propagate", and `User(5001)` means after `Render`, which nothing could express
+before. `Ord` is hand-written over `Phase::position()`; a derived one would sort every `User` behind
+every built-in and the whole point would be lost. Measured in `schedule_internals` over 600 frames:
+ten probes, expected sequence `0P1U2F3O4R`, **599 frames held it, 0 deviated** — and the system that
+reads the sequence is itself in `User(5001)`.
 
 Two things that *do* work with no engine support at all: a **closure** as a system (measured
 carrying state across 89 calls, 7 → 96 characters) and a **generic** system registered per type

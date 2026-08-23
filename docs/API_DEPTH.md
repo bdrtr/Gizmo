@@ -25,7 +25,7 @@ The instability is not there. It is one layer down, where the doors are locked:
 |---|---|---|
 | its own system parameter | `SystemParam` is sealed — **4 impls exist**: `Res`, `ResMut`, `f32`, `Query` | `ecs_extension_points` |
 | a derived query operand | `WorldQuery` / `ReadOnlyQuery` / `FetchComponent` all sealed | `ecs_extension_points` |
-| a schedule phase of its own | `Phase` is a closed 5-variant enum | `schedule_internals` |
+| ~~a schedule phase of its own~~ | **opened 2026-08-23** — `Phase::User(u16)`, positioned | `schedule_internals` |
 | its own material or shader | `MaterialType` is a closed enum; `routing.rs` is exhaustive on purpose | `deferred_rendering` |
 | a normal map on a hand-built material | `assemble_material_bind_group` is `pub(crate)`; `Layouts` is `pub(super)` | `parallax_mapping` |
 | two camera passes in one frame | one `global_uniform_buffer`, written with `queue.write_buffer` | `render_to_texture` |
@@ -119,9 +119,13 @@ staircase, applied to the ECS.
 
 ### Incidental — open these
 
-**`Phase`.** A closed 5-variant enum with no invariant behind it; the scheduler sorts phases by
-their ordinal. `Phase::User(u16)` slotted between the built-ins costs nothing and closes
-`custom_schedule` outright.
+**`Phase`.** ✅ **Done, 2026-08-23.** It was a closed 5-variant enum with no invariant behind it;
+the scheduler sorted phases by their ordinal. `Phase::User(u16)` now carries a *position* on a
+scale where the built-ins sit at round thousands, so a user phase can be placed *between* two
+built-ins rather than only after them — and `Ord` is hand-written over `position()`, because a
+derived one would have sorted every `User` behind every built-in and defeated the point. The enum
+is `#[non_exhaustive]` so a sixth built-in phase is not another breaking change. Measured: 599 of
+600 frames held the expected ten-probe sequence, 0 deviated.
 
 **`assemble_material_bind_group` (`pub(crate)`) and `Layouts` (`pub(super)`).** The material bind
 group has seven entries, four of them detail maps — normal, MR, emissive, AO — filled with

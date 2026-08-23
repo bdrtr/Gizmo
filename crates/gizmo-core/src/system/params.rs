@@ -221,6 +221,7 @@ impl<T: 'static> SystemParam for ResMut<'static, T> {
 /// ```no_run
 /// # use gizmo_core::prelude::*;
 /// # use gizmo_core::system::Res;
+/// # #[derive(Clone)]
 /// # struct Analytics;
 /// # gizmo_core::impl_component!(Analytics);
 /// // Runs every frame whether or not the resource was inserted.

@@ -112,27 +112,101 @@ impl AccessInfo {
 // ==============================================================
 
 /// Physics-engine style phase ordering.
-/// Systems are assigned to a phase and the phases run in a fixed order:
-/// `PreUpdate → Update → Physics → PostUpdate → Render`
 ///
-/// Systems within the same phase are run in parallel with DAG batching.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
+/// Systems are assigned to a phase and the phases run in order. The five built-in phases are
+/// `PreUpdate → Update → Physics → PostUpdate → Render`, and systems within one phase run in
+/// parallel with DAG batching.
+///
+/// # Phases of your own
+///
+/// [`Phase::User`] carries a position on the same scale the built-ins sit on, so a game can put
+/// work *between* two built-in phases rather than only after them:
+///
+/// | position | |
+/// |---|---|
+/// | `0 … 999` | before `PreUpdate` |
+/// | **1000** | `PreUpdate` |
+/// | `1001 … 1999` | between `PreUpdate` and `Update` |
+/// | **2000** | `Update` |
+/// | `2001 … 2999` | between `Update` and `Physics` |
+/// | **3000** | `Physics` |
+/// | `3001 … 3999` | between `Physics` and `PostUpdate` |
+/// | **4000** | `PostUpdate` |
+/// | `4001 … 4999` | between `PostUpdate` and `Render` |
+/// | **5000** | `Render` |
+/// | `5001 …` | after `Render` |
+///
+/// ```
+/// # use gizmo_core::system::Phase;
+/// // "after physics has settled, before transforms propagate"
+/// let cleanup = Phase::User(3500);
+/// assert!(Phase::Physics < cleanup && cleanup < Phase::PostUpdate);
+/// ```
+///
+/// The ordering is [`Phase::position`], not declaration order, which is why this is a manual
+/// `Ord`: a derived one would sort every `User` after every built-in and the table above could
+/// not exist.
+///
+/// # Why the enum is `#[non_exhaustive]`
+///
+/// So that a sixth built-in phase is not a breaking change. Match on it with a `_` arm, or use
+/// [`Phase::position`] when what you want is the order rather than the identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub enum Phase {
-    /// Input polling, time update, event cleanup
-    PreUpdate = 0,
-    /// Game logic, AI, scripting
+    /// Input polling, time update, event cleanup. Position **1000**.
+    PreUpdate,
+    /// Game logic, AI, scripting. Position **2000**.
     #[default]
-    Update = 1,
-    /// Physics simulation (with a fixed timestep)
-    Physics = 2,
-    /// Transform propagation, cleanup
-    PostUpdate = 3,
-    /// Rendering preparation
-    Render = 4,
+    Update,
+    /// Physics simulation (with a fixed timestep). Position **3000**.
+    Physics,
+    /// Transform propagation, cleanup. Position **4000**.
+    PostUpdate,
+    /// Rendering preparation. Position **5000**.
+    Render,
+    /// A phase belonging to the game, ordered by its position on the scale above.
+    ///
+    /// Two systems in `User(n)` with the same `n` share a phase and batch together, exactly as
+    /// two systems in `Update` do.
+    User(u16),
+}
+
+impl PartialOrd for Phase {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Phase {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.position().cmp(&other.position())
+    }
 }
 
 impl Phase {
-    /// Returns all the phases in order.
+    /// Where this phase sits in the frame.
+    ///
+    /// The built-ins are at round thousands so a [`Phase::User`] can be placed between any two of
+    /// them; see the type's docs for the table. This is the *only* thing that decides phase
+    /// order — [`Ord`] is written in terms of it.
+    #[must_use]
+    pub const fn position(&self) -> u32 {
+        match self {
+            Phase::PreUpdate => 1000,
+            Phase::Update => 2000,
+            Phase::Physics => 3000,
+            Phase::PostUpdate => 4000,
+            Phase::Render => 5000,
+            Phase::User(n) => *n as u32,
+        }
+    }
+
+    /// The five **built-in** phases, in order.
+    ///
+    /// Not every phase a schedule may contain: a [`Phase::User`] is not here and cannot be, since
+    /// there are 65 536 of them. Code that wants "every phase in this schedule" must read the
+    /// schedule, not this constant.
     pub const ALL: [Phase; 5] = [
         Phase::PreUpdate,
         Phase::Update,
@@ -142,6 +216,10 @@ impl Phase {
     ];
 
     /// Returns the phase name (for tracing spans).
+    ///
+    /// Every [`Phase::User`] answers `"user"`; the number that separates them is in
+    /// [`Phase::position`]. The return type is `&'static str` so that naming a phase inside the
+    /// frame loop cannot allocate, and `User(n)` has no static name to give.
     pub const fn name(&self) -> &'static str {
         match self {
             Phase::PreUpdate => "pre_update",
@@ -149,6 +227,7 @@ impl Phase {
             Phase::Physics => "physics",
             Phase::PostUpdate => "post_update",
             Phase::Render => "render",
+            Phase::User(_) => "user",
         }
     }
 }
@@ -382,6 +461,98 @@ mod tests {
 
         // Bu çağrı panic atmalı
         schedule.build();
+    }
+
+    // --- Phase::User: kullanıcının kendi fazı ---
+
+    #[test]
+    fn a_user_phase_sorts_by_its_position_not_by_declaration_order() {
+        // Türetilmiş bir Ord her User'ı her yerleşik fazın *arkasına* atardı. Manuel Ord'un
+        // varlık sebebi tam olarak bu satır: 3500 fiziğin sonrası, PostUpdate'in öncesi.
+        assert!(Phase::Physics < Phase::User(3500));
+        assert!(Phase::User(3500) < Phase::PostUpdate);
+
+        // Ve ölçeğin iki ucu
+        assert!(Phase::User(500) < Phase::PreUpdate);
+        assert!(Phase::Render < Phase::User(5001));
+
+        // Ord, position() ile aynı şeyi söylemeli — biri değişip diğeri kalırsa test kırılsın.
+        let mut phases = [
+            Phase::Render,
+            Phase::User(2500),
+            Phase::PreUpdate,
+            Phase::User(999),
+            Phase::Update,
+        ];
+        phases.sort();
+        let positions: Vec<u32> = phases.iter().map(Phase::position).collect();
+        assert_eq!(positions, vec![999, 1000, 2000, 2500, 5000]);
+    }
+
+    #[test]
+    fn a_user_phase_runs_between_the_two_built_ins_it_was_placed_between() {
+        let mut schedule = Schedule::new();
+        let log = RunLog::new();
+
+        // Ekleme sırası kasten ters: sıra fazdan gelmeli, ekleme sırasından değil.
+        schedule.add_di_system(create_system("post", log.clone()).in_phase(Phase::PostUpdate));
+        schedule.add_di_system(create_system("mine", log.clone()).in_phase(Phase::User(3500)));
+        schedule.add_di_system(create_system("physics", log.clone()).in_phase(Phase::Physics));
+
+        schedule.build();
+
+        assert!(schedule.uses_phases);
+        assert_eq!(schedule.phase_batches.len(), 3);
+        assert_eq!(schedule.phase_batches[1].0, Phase::User(3500));
+
+        let mut world = World::new();
+        schedule.run(&mut world, 0.016);
+        assert_eq!(log.get(), vec!["physics", "mine", "post"]);
+    }
+
+    #[test]
+    fn two_systems_in_the_same_user_phase_share_it_and_different_numbers_do_not() {
+        let mut schedule = Schedule::new();
+        let log = RunLog::new();
+
+        schedule.add_di_system(create_system("a", log.clone()).in_phase(Phase::User(2500)));
+        schedule.add_di_system(create_system("b", log.clone()).in_phase(Phase::User(2500)));
+        schedule.add_di_system(create_system("c", log.clone()).in_phase(Phase::User(2600)));
+
+        schedule.build();
+
+        // İki faz grubu: {a, b} ve {c}. Aynı sayı aynı faz demek.
+        assert_eq!(schedule.phase_batches.len(), 2);
+        assert_eq!(schedule.phase_batches[0].0, Phase::User(2500));
+        assert_eq!(schedule.phase_batches[1].0, Phase::User(2600));
+    }
+
+    #[test]
+    fn a_user_phase_alone_still_switches_the_schedule_into_phase_mode() {
+        // has_explicit_phase, `phase != Phase::Update` diye bakıyor. User(2000) Update ile aynı
+        // *konumda* ama aynı faz değil — çizelge yine de faz kipine geçmeli.
+        let mut schedule = Schedule::new();
+        let log = RunLog::new();
+        schedule.add_di_system(create_system("only", log.clone()).in_phase(Phase::User(2000)));
+        schedule.build();
+
+        assert!(schedule.uses_phases);
+        assert_eq!(schedule.phase_batches.len(), 1);
+        assert_eq!(schedule.phase_batches[0].0, Phase::User(2000));
+
+        let mut world = World::new();
+        schedule.run(&mut world, 0.016);
+        assert_eq!(log.get(), vec!["only"]);
+    }
+
+    #[test]
+    fn all_is_the_built_ins_and_says_so() {
+        // ALL bir "her faz" listesi değil; User onun dışında. Bu test o iddiayı kilitliyor,
+        // çünkü ALL üzerinde dönen kod User'ı sessizce atlar.
+        assert_eq!(Phase::ALL.len(), 5);
+        assert!(!Phase::ALL.contains(&Phase::User(2000)));
+        let positions: Vec<u32> = Phase::ALL.iter().map(Phase::position).collect();
+        assert_eq!(positions, vec![1000, 2000, 3000, 4000, 5000]);
     }
 
     #[test]
