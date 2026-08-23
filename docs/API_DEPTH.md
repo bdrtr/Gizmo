@@ -31,7 +31,7 @@ The instability is not there. It is one layer down, where the doors are locked:
 | two camera passes in one frame | one `global_uniform_buffer`, written with `queue.write_buffer` | `render_to_texture` |
 | a post-pass that reads the frame | the surface has no `TEXTURE_BINDING` | `post_processing` |
 | ~~to keep the simple scene *and* add an exclusive pass~~ | **opened 2026-08-23** — `add_update_hook` | `update_hooks` |
-| less volumetric rather than none | **half-opened 2026-08-23** — an `enabled` flag exists; shaping still does not | `volumetric_fog` |
+| ~~less volumetric rather than none~~ | **opened 2026-08-23** — `VolumetricParams`, six fields | `volumetric_fog` |
 
 Every row is a **ceiling, not a missing feature**. In each case the engine can already do the
 thing — it just will not let the game ask. That is what makes the API feel unstable: a user who
@@ -163,7 +163,22 @@ result would pass for the wrong reason. Measured in `ssr` over 420 frames: 4 swi
 `VolumetricState::new(device, scene, deferred, w, h)`. Same shape in SSR. An `enabled: bool`
 beside each is a field, not a redesign.
 
-**Effect parameters.** `VolumetricState` exposes textures, views, pipelines and dimensions — not
+**Effect parameters.** ✅ **Done for volumetric, 2026-08-23.** Six shader literals became
+`VolumetricParams` — one 32-byte uniform written each frame, so `vol.params.steps = 8.0` is the
+whole gesture. The defaults *are* the literals, locked pixel-for-pixel by
+`the_defaults_are_the_shader_literals_they_replaced`, so no existing scene changed.
+
+Proving each field reaches the shader took more care than adding them. Two need a scene that can
+show them: `bulb_scatter` scales a loop that runs only for point and spot lights (0 pixels without
+a lamp, 3590 with one), and `shadow_bias` has to be pushed *negative*, because raising it in a
+scene with no volumetric shadow asks for "even more lit", which is not a state (0 at +8, 2379 at
+−40). And `steps` produced a confident zero for the wrong reason: scattering sums as
+`Σ contribution × step_size` with `step_size = max_distance / steps`, so where the contribution is
+constant the sum is step-count-independent by construction. Read without the 8-per-channel
+threshold, 4 steps against 64 differ on 2755 pixels with a largest delta of 6 — it is a cost knob,
+and the test now asserts that shape instead of a difference it will never have.
+
+*(the plan as written)* **Effect parameters.** `VolumetricState` exposes textures, views, pipelines and dimensions — not
 one shaping field. Phase 0.55, 16 steps, a 100 m cap, sun scatter 0.0015, bulb 0.0008, bias 0.16
 are all shader literals. A `VolumetricParams` uniform is mechanical work with a measured payoff:
 the effect already moves 19.55 % of pixels, max 134, and none of it is reachable.

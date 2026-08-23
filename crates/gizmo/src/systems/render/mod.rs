@@ -2808,8 +2808,31 @@ mod golden_render_tests {
     /// the Henyey-Greenstein lobe. Sky pixels also march the full 100-unit default instead of
     /// stopping a few metres away on the floor.
     async fn render_sunbeam(volumetric: bool) -> Vec<u8> {
+        render_sunbeam_with(volumetric, |_| {}).await
+    }
+
+    /// The same scene, with a chance to reshape the march before it runs. `tweak` is handed
+    /// `VolumetricParams` — the six numbers that used to be shader literals.
+    async fn render_sunbeam_with(
+        volumetric: bool,
+        tweak: impl FnOnce(&mut gizmo_renderer::volumetric::VolumetricParams),
+    ) -> Vec<u8> {
+        render_sunbeam_full(volumetric, false, tweak).await
+    }
+
+    /// As above, plus an optional point light standing in the beam — `bulb_scatter` is the one
+    /// parameter the sun alone cannot exercise, since the bulb loop only runs for point and spot
+    /// lights.
+    async fn render_sunbeam_full(
+        volumetric: bool,
+        bulb: bool,
+        tweak: impl FnOnce(&mut gizmo_renderer::volumetric::VolumetricParams),
+    ) -> Vec<u8> {
         const W: u32 = 128;
         let mut renderer = crate::test_gpu::headless_renderer(W, W).await;
+        if let Some(vol) = renderer.volumetric.as_mut() {
+            tweak(&mut vol.params);
+        }
         if !volumetric {
             renderer.volumetric = None;
         }
@@ -2857,6 +2880,17 @@ mod golden_render_tests {
             ..Default::default()
         });
         world.spawn_bundle(DirectionalLightBundle::default());
+        if bulb {
+            // A bulb standing between the camera and the pillar, well inside its own radius so the
+            // march passes through it. `bulb_scatter` is the one parameter the sun cannot exercise:
+            // the loop it scales runs only for point and spot lights.
+            world.spawn_bundle(crate::bundles::PointLightBundle {
+                position: Vec3::new(0.0, 1.0, 2.0),
+                color: Vec3::new(1.0, 0.85, 0.6),
+                intensity: 20.0,
+                radius: 14.0,
+            });
+        }
 
         render_world(&mut renderer, &mut world).await
     }
@@ -2889,6 +2923,172 @@ mod golden_render_tests {
                 changed >= 400,
                 "removing the volumetric pass changed {changed}/{total} pixels with the camera \
                  pointed into the sun — the god rays are not reaching the frame (measured 2376)",
+            );
+        });
+    }
+
+    /// Moving a constant out of a shader has to be a move, not an edit.
+    ///
+    /// The six volumetric numbers were literals in `volumetric.wgsl`; `VolumetricParams::default()`
+    /// claims to be those same values. If the claim is wrong the effect changed silently for every
+    /// existing scene, so it is checked the only way that means anything: the default march must be
+    /// pixel-identical to a march whose parameters are written out by hand as the literals that
+    /// stood in the shader.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn the_defaults_are_the_shader_literals_they_replaced() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let defaults = render_sunbeam(true).await;
+            let literals = render_sunbeam_with(true, |p| {
+                p.phase_g = 0.55;
+                p.steps = 16.0;
+                p.max_distance = 100.0;
+                p.sun_scatter = 0.0015;
+                p.bulb_scatter = 0.0008;
+                p.shadow_bias = 0.16;
+            })
+            .await;
+            let (differ, total) = changed_pixels(&defaults, &literals, 128);
+            assert_eq!(
+                differ, 0,
+                "the defaults disagree with the shader literals on {differ}/{total} pixels — \
+                 moving the numbers out of the shader changed what they render",
+            );
+        });
+    }
+
+    /// Every one of the six has to actually reach the frame, or it is a field, not a control.
+    ///
+    /// Each parameter needs the scene that can show it, and finding those was most of the work:
+    ///
+    /// * `bulb_scatter` scales a loop that runs only for point and spot lights, so the sun alone
+    ///   cannot move it. Measured 0/16384 without a lamp and **3590** with one.
+    /// * `shadow_bias` has to be pushed *negative*. Raising it changes nothing because this scene
+    ///   has no volumetric shadow to begin with — every march sample is already lit, and "even
+    ///   more lit" is not a state. Measured 0 at +8 and **2379** at −40, which is also what proves
+    ///   the shadow branch is entered at all.
+    /// * `steps` is the odd one, and it is handled in its own test below, because measuring it
+    ///   with this one's threshold gives a confident zero for the wrong reason.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn every_volumetric_parameter_changes_the_frame() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let base = render_sunbeam(true).await;
+            for (name, floor, tweak) in [
+                (
+                    "phase_g",
+                    600,
+                    Box::new(|p: &mut gizmo_renderer::volumetric::VolumetricParams| p.phase_g = 0.0)
+                        as Box<dyn FnOnce(&mut gizmo_renderer::volumetric::VolumetricParams)>,
+                ),
+                (
+                    "max_distance",
+                    150,
+                    Box::new(|p: &mut gizmo_renderer::volumetric::VolumetricParams| {
+                        p.max_distance = 5.0
+                    }),
+                ),
+                (
+                    "sun_scatter",
+                    1200,
+                    Box::new(|p: &mut gizmo_renderer::volumetric::VolumetricParams| {
+                        p.sun_scatter = 0.006
+                    }),
+                ),
+                (
+                    "shadow_bias",
+                    1000,
+                    Box::new(|p: &mut gizmo_renderer::volumetric::VolumetricParams| {
+                        p.shadow_bias = -40.0
+                    }),
+                ),
+            ] {
+                let moved = render_sunbeam_with(true, tweak).await;
+                let (changed, total) = changed_pixels(&base, &moved, 128);
+                assert!(
+                    changed >= floor,
+                    "{name} changed {changed}/{total} pixels, expected at least {floor} — the \
+                     field is not reaching the shader",
+                );
+            }
+
+            // The bulb loop needs a bulb. Both runs have the lamp; the only difference is the
+            // coefficient, so a lit scene cannot pass this by being lit.
+            let bulb_base = render_sunbeam_full(true, true, |_| {}).await;
+            let bulb_moved = render_sunbeam_full(true, true, |p| p.bulb_scatter = 0.05).await;
+            let (changed, total) = changed_pixels(&bulb_base, &bulb_moved, 128);
+            assert!(
+                changed >= 1500,
+                "bulb_scatter changed {changed}/{total} pixels with a point light in the beam, \
+                 expected at least 1500 (measured 3590)",
+            );
+        });
+    }
+
+    /// `steps` is a cost knob, not a look knob, and the measurement has to be told that.
+    ///
+    /// Scattering accumulates as `Σ contribution × step_size` with `step_size = max_distance /
+    /// steps`, so over a stretch where the contribution is constant the sum is `contribution ×
+    /// max_distance` — **identical for any step count**. Step count only changes how finely a
+    /// *varying* contribution is sampled, which is accuracy, not value.
+    ///
+    /// So `changed_pixels` reports 0/16384 for 4 steps against 64, at its 8-per-channel threshold,
+    /// and that zero means "the difference is small", not "the field is dead". Read without the
+    /// threshold the same pair differs on **2755** pixels with a largest channel delta of **6**.
+    /// This test asserts the shape that is actually true: many pixels move, none of them far.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn the_step_count_refines_the_march_without_changing_what_it_renders() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            // With the lamp: its sphere is where the contribution varies along the ray, so this is
+            // where step count can matter at all.
+            let coarse = render_sunbeam_full(true, true, |p| p.steps = 4.0).await;
+            let fine = render_sunbeam_full(true, true, |p| p.steps = 64.0).await;
+
+            let (coarse_px, _) = coarse.as_chunks::<4>();
+            let (fine_px, _) = fine.as_chunks::<4>();
+            let differing = coarse_px
+                .iter()
+                .zip(fine_px)
+                .filter(|(a, b)| (0..3).any(|c| a[c] != b[c]))
+                .count();
+            let largest = coarse_px
+                .iter()
+                .zip(fine_px)
+                .flat_map(|(a, b)| (0..3).map(move |c| a[c].abs_diff(b[c])))
+                .max()
+                .unwrap_or(0);
+
+            assert!(
+                differing >= 1000,
+                "4 steps and 64 steps differ on only {differing} pixels — `steps` is not reaching \
+                 the shader (measured 2755)",
+            );
+            assert!(
+                largest <= 24,
+                "4 steps and 64 steps differ by up to {largest} per channel — refining the march \
+                 should not change what it renders this much (measured 6)",
             );
         });
     }

@@ -3,28 +3,33 @@
 //! Işığın havadaki toza çarpıp **görünür** hâle gelmesi: pencereden düşen huzmeler, ormanda
 //! ağaçların arasından süzülen ışık. Yüzeye değil, aradaki hacme uygulanan bir etki.
 //!
-//! ## Motorda var — ve **hiçbir ayarı yok**
+//! ## Motorda var — ve **2026-08-23'ten beri altı ayarı da var**
 //!
 //! Tanrı ışınları çalışıyor: [`VolumetricState`] bir ışın yürütme geçişi kuruyor ve kareye
-//! uyguluyor. Ama `VolumetricState`'in genel yüzeyi yalnız GPU nesneleri — doku, görünüm, boru
-//! hattı, bağlama grubu, genişlik, yükseklik. **Tek bir şekillendirme alanı yok.**
+//! uyguluyor. Eskiden `VolumetricState`'in genel yüzeyi yalnız GPU nesneleriydi — doku, görünüm,
+//! boru hattı, bağlama grubu, genişlik, yükseklik — ve etkiyi belirleyen her sayı
+//! gölgelendiricide gömülüydü:
 //!
-//! Etkiyi belirleyen her sayı gölgelendiricide gömülü:
+//! | ne | gölgelendiricideki değer | şimdi |
+//! |----|--------------------------|-------|
+//! | faz anizotropisi (g) | `0.55` | `VolumetricParams::phase_g` |
+//! | ışın yürütme adımı | `16` | `::steps` |
+//! | yürütme mesafesi tavanı | `100.0` m | `::max_distance` |
+//! | güneş saçılım katsayısı | `0.0015` | `::sun_scatter` |
+//! | ampul saçılım katsayısı | `0.0008` | `::bulb_scatter` |
+//! | gölge sapması | `0.16` | `::shadow_bias` |
 //!
-//! | ne | değer | nerede |
-//! |----|-------|--------|
-//! | faz anizotropisi (g) | `0.55` | `volumetric.wgsl:105` |
-//! | ışın yürütme adımı | `16` | `:91` |
-//! | yürütme mesafesi tavanı | `100.0` m | `:79`, `:83` |
-//! | güneş saçılım katsayısı | `0.0015` | `:106` |
-//! | ampul saçılım katsayısı | `0.0008` | `:152` |
-//! | gölge sapması | `0.16` | `:129` |
+//! Altısı 32 baytlık tek bir uniform'da ve her kare yükleniyor: `vol.params.steps = 8.0` demek
+//! yeterli, yeniden kurulacak bir şey yok. Varsayılanlar gölgelendiricide duran değerlerin ta
+//! kendisi — `the_defaults_are_the_shader_literals_they_replaced` bunu piksel piksel kilitliyor,
+//! yani sabitleri dışarı çıkarmak hiçbir sahnenin görünüşünü değiştirmedi.
 //!
-//! ## Ve kapatmanın da bir yolu yok — yalnız yok etmenin
+//! ## Kapatmak da artık yok etmek değil
 //!
-//! `enabled` diye bir bayrak yok. Tek kapatma yolu `renderer.volumetric = None`, ve bu **durumu
-//! yok ediyor**: geri açmak `VolumetricState::new(device, scene, deferred, w, h)` ile yeniden
-//! kurmak demek. Aynı desen SSR'da da var (`docs/CAPABILITY_GAPS.md` §B).
+//! `VolumetricState::enabled` var (2026-08-23). Eskiden tek kapatma yolu `renderer.volumetric =
+//! None`'du ve bu **durumu yok ediyordu**: geri açmak `VolumetricState::new(device, scene,
+//! deferred, w, h)` ile yeniden kurmak demekti. Aynı bayrak SSR, SSGI, SSAO ve dekallerde de var
+//! (`docs/CAPABILITY_GAPS.md` §B).
 //!
 //! ## Mesafe sisi de sabit, ve tabanı kıpırdamıyor
 //!
@@ -60,16 +65,81 @@
 //! ve zayıf da değil. Parlaklığın **düşmesi** de doğru işaret: hacimsel saçılım yalnız ışık
 //! eklemiyor, ışığın önünü de kesiyor.
 //!
-//! Ama bu 134'ün hiçbir yanı ayarlanabilir değil. Yukarıdaki altı sabitin hiçbirine Rust
-//! tarafından ulaşılmıyor, ve `enabled` bayrağı olmadığı için "biraz daha az" demenin bir yolu
-//! yok — yalnız "hiç" demenin, o da durumu yok ederek.
+//! ## Ölçülen 2: altı ayarın beşi bu sahnede kareyi değiştiriyor
+//!
+//! `GIZMO_VOL_KNOB=<0..6>` ayarı tek bir adıma kilitliyor; her adım varsayılandan başlıyor, yani
+//! tek değişken adı yazan alan. Aynı kare (240), sol yarı, 948×1028 (2026-08-23):
+//!
+//! | ayar | en büyük kanal farkı | ortalama parlaklık |
+//! |------|----------------------|--------------------|
+//! | varsayılan (referans) | 0 | 120,26 |
+//! | `g = 0,0` izotropik | **12** | 121,11 (+0,85) |
+//! | `g = 0,9` ileri saçılım | **8** | 120,07 (−0,19) |
+//! | `adım = 4` | **4** | 120,23 |
+//! | `tavan = 20 m` | **4** | 120,25 |
+//! | `güneş ×4` | **10** | 120,90 (+0,64) |
+//! | `ampul ×60` | 0 | 120,26 |
+//!
+//! Faz iki yönde de doğru davranıyor: izotropik yapmak huzmeyi yayıyor ve kareyi aydınlatıyor,
+//! ileri saçılıma itmek toparlayıp karartıyor.
+//!
+//! `ampul` sıfır çünkü **bu sahnede nokta ışık yok** — ölçtüğü döngü yalnız nokta ve spot ışıklar
+//! için koşuyor. Bağlı olduğu ayrı ölçülü: motorun `every_volumetric_parameter_changes_the_frame`
+//! testi ışının içine bir lamba koyup 3590/16384 piksel oynattığını gösteriyor.
+//!
+//! `adım`ın 4'te kalması da doğru davranış, kusur değil: saçılım `Σ katkı × adım_boyu` olarak
+//! toplanıyor ve `adım_boyu = tavan / adım`, yani katkının sabit olduğu bir aralıkta toplam adım
+//! sayısından **bağımsız**. Adım sayısı değeri değil *doğruluğu* değiştiriyor — motorun
+//! `the_step_count_refines_the_march_without_changing_what_it_renders` testi tam bu şekli
+//! ölçüyor: 4 ile 64 adım 2755 pikselde farklı, ama en büyük kanal farkı 6.
+//!
+//! ### Ölçüm notu: turu ölçmek gürültüyü ölçmekti
+//!
+//! İlk ölçüm turu koşarken alındı — her 60 karede bir ayar değişiyor, ve kare 30'un varsayılanı
+//! kare 90'ın izotropiğiyle karşılaştırılıyordu. Sayılar makul görünüyordu (%0,66 farklı piksel,
+//! 77 kanal farkı) ama hepsi çöptü: **aynı ayarın** kare 30'u ile kare 45'i arasında %1,09 fark
+//! ve **96** kanal farkı var. Sahnenin ışığı zamanla dönüyor, yani iki farklı karenin farkı
+//! ayarın değil zamanın farkı, ve gürültü tabanı ölçmeye çalıştığım etkiden büyüktü.
+//!
+//! `GIZMO_VOL_KNOB` bunun için var: ayar sabitleniyor, kare sabitleniyor, geriye tek değişken
+//! kalıyor. O kurulumda aynı ayarın iki ayrı koşusu **birebir aynı** kareyi veriyor — gürültü
+//! tabanı 0 — ve 4 seviyelik bir fark bile gerçek.
+//!
+//! Dersi: **bir ölçümün gürültü tabanını ölçmeden sayısına güvenilmez.** Yukarıdaki 12 ve 10,
+//! tabanı 96 olan bir kurulumda görünmezdi.
 //!
 //! ## Kontroller
-//!   * `GIZMO_VOL=0` — hacimsel geçişi yok et (tek kapatma yolu)
+//!   * `GIZMO_VOL=0` — hacimsel geçişi kapat (artık `enabled` bayrağıyla, yok etmeden)
+//!   * `GIZMO_VOL_KNOB=<0..6>` — ayar turunu tek adıma kilitle (ölçüm için gerekli)
+//!   * `GIZMO_VOL_SELFTEST=1` — tur her adım değiştirdiğinde konsola yaz
 //!   * **Sağ-tık + fare / WASDQE** — kamera (ölçüm için dokunmayın)
 
 use gizmo::prelude::*;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
+
+/// Bir ayarın canlı değiştirilmesi için tutulan defter. `VolumetricParams`'ın kendisini tutmak
+/// yerine bir kopya, çünkü `set_render` kapanışı `Renderer`'a ancak orada erişiyor.
+#[derive(Clone, Copy)]
+struct FogKnobs {
+    params: gizmo::renderer::volumetric::VolumetricParams,
+    /// Kaç karede bir gezilecek. Ölçüm koşusu bunun sayesinde tek koşuda altı ayarı da geziyor.
+    frame: u32,
+}
+gizmo::core::impl_component!(FogKnobs);
+
+/// Ayar turu: her adım bir alanı varsayılanından uzağa itiyor. Ölçüm bu turu geziyor.
+const SWEEP: [(&str, fn(&mut gizmo::renderer::volumetric::VolumetricParams)); 7] = [
+    ("varsayılan", |_| {}),
+    ("g = 0,0 (izotropik)", |p| p.phase_g = 0.0),
+    ("g = 0,9 (ileri saçılım)", |p| p.phase_g = 0.9),
+    ("adım = 4", |p| p.steps = 4.0),
+    ("tavan = 20 m", |p| p.max_distance = 20.0),
+    ("güneş ×4", |p| p.sun_scatter = 0.006),
+    ("ampul ×60", |p| p.bulb_scatter = 0.048),
+];
+
+/// Her ayarın kaç kare gösterileceği.
+const SWEEP_EVERY: u32 = 60;
 
 fn main() {
     let on = !matches!(std::env::var("GIZMO_VOL").as_deref(), Ok("0"));
@@ -122,18 +192,60 @@ fn main() {
             renderer.gpu_particles = None;
             renderer.ssr = None;
             renderer.ssgi = None;
-            // Kapatmanın TEK yolu: durumu yok etmek. `enabled` bayrağı yok, ve geri açmak
-            // `VolumetricState::new(...)` ile yeniden kurmak demek.
-            if !on {
-                renderer.volumetric = None;
+
+            // Kapatmak artık durumu yok etmiyor: bir bayrak.
+            if let Some(vol) = renderer.volumetric.as_mut() {
+                vol.enabled = on;
+
+                let mut knobs = world
+                    .get_resource::<FogKnobs>()
+                    .map(|k| *k)
+                    .unwrap_or(FogKnobs {
+                        params: Default::default(),
+                        frame: 0,
+                    });
+                knobs.frame += 1;
+
+                // Ayarı her SWEEP_EVERY karede bir değiştir. Her adım varsayılandan başlıyor,
+                // yani turdaki tek değişken adı yazan alan.
+                //
+                // `GIZMO_VOL_KNOB=<n>` turu durdurup tek adıma kilitliyor. Ölçüm bunu kullanmak
+                // ZORUNDA: sahnenin ışığı zamanla dönüyor, yani iki farklı karenin farkı ayarın
+                // değil zamanın farkı. Ölçüm notuna bakın.
+                let step = match std::env::var("GIZMO_VOL_KNOB").ok().and_then(|v| v.parse::<usize>().ok())
+                {
+                    Some(n) => n.min(SWEEP.len() - 1),
+                    None => (knobs.frame / SWEEP_EVERY) as usize % SWEEP.len(),
+                };
+                let mut p = gizmo::renderer::volumetric::VolumetricParams::default();
+                SWEEP[step].1(&mut p);
+                knobs.params = p;
+                vol.params = p;
+
+                if std::env::var("GIZMO_VOL_SELFTEST").is_ok()
+                    && knobs.frame.is_multiple_of(SWEEP_EVERY)
+                {
+                    gizmo::gizmo_log!(
+                        Info,
+                        "kare {:>4} · ayar {:24} · g {:.2} adım {:.0} tavan {:.0} güneş {:.4} \
+                         ampul {:.4} sapma {:.2}",
+                        knobs.frame,
+                        SWEEP[step].0,
+                        p.phase_g,
+                        p.steps,
+                        p.max_distance,
+                        p.sun_scatter,
+                        p.bulb_scatter,
+                        p.shadow_bias
+                    );
+                }
+                world.insert_resource(knobs);
             }
+
             gizmo::systems::default_render_pass(world, encoder, view, renderer);
         })
         .set_ui(move |world, _state, ctx| {
-            let live = world
-                .get_resource::<gizmo::renderer::Renderer>()
-                .is_some();
-            let _ = live;
+            let knobs = world.get_resource::<FogKnobs>().map(|k| *k);
             gizmo::egui::Area::new("vf".into())
                 .anchor(gizmo::egui::Align2::RIGHT_TOP, [-12.0, 12.0])
                 .show(ctx, |ui| {
@@ -142,14 +254,23 @@ fn main() {
                         ui.heading("Hacimsel sis");
                         ui.label(format!("hacimsel geçiş: {}", if on { "açık" } else { "yok edildi" }));
                         ui.separator();
-                        ui.label("çalışıyor — ama ŞEKİLLENDİRME ALANI YOK.");
-                        ui.monospace("  g = 0.55 · adım = 16 · tavan = 100 m");
-                        ui.monospace("  güneş 0.0015 · ampul 0.0008 · sapma 0.16");
-                        ui.label("altısı da gölgelendiricide gömülü sabit.");
+                        if let Some(k) = knobs {
+                            let step = (k.frame / SWEEP_EVERY) as usize % SWEEP.len();
+                            ui.label(format!("ayar turu: {}", SWEEP[step].0));
+                            ui.monospace(format!(
+                                "  g = {:.2} · adım = {:.0} · tavan = {:.0} m",
+                                k.params.phase_g, k.params.steps, k.params.max_distance
+                            ));
+                            ui.monospace(format!(
+                                "  güneş {:.4} · ampul {:.4} · sapma {:.2}",
+                                k.params.sun_scatter, k.params.bulb_scatter, k.params.shadow_bias
+                            ));
+                            ui.label("altısı da VolumetricParams alanı — canlı yazılıyor.");
+                        }
                         ui.separator();
                         ui.colored_label(
-                            gizmo::egui::Color32::from_rgb(230, 160, 80),
-                            "enabled bayrağı yok — kapatmak = yok etmek",
+                            gizmo::egui::Color32::from_rgb(120, 200, 130),
+                            "enabled bayrağı var — kapatmak yok etmek değil",
                         );
                         ui.separator();
                         ui.label("mesafe sisi: 4 preset + karışım katsayısı.");

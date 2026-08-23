@@ -2,6 +2,55 @@
 use crate::deferred::DeferredState;
 use crate::pipeline::{load_shader, load_shader_composed, SceneState};
 
+/// The six numbers that shape the volumetric march.
+///
+/// Every one of these used to be a literal inside `volumetric.wgsl`, which is why
+/// `CAPABILITY_GAPS.md` recorded "0 shaping fields" against an effect that demonstrably moves
+/// 19.55 % of the frame. They are the shader's own defaults, so a state built and left alone
+/// renders exactly what it rendered before this struct existed — locked by
+/// `the_defaults_are_the_shader_literals_they_replaced`.
+///
+/// Written to the GPU each frame from [`VolumetricState::params`]; changing a field is enough,
+/// there is nothing to rebuild.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct VolumetricParams {
+    /// Henyey-Greenstein asymmetry, `g`. 0 scatters evenly in every direction; approaching 1
+    /// throws the light forward, so a shaft is bright only when the camera looks near the sun.
+    /// Shader default **0.55**.
+    pub phase_g: f32,
+    /// Raymarch steps per pixel. The single cost knob: halving it roughly halves the pass, at the
+    /// price of banding the jitter has to hide. Shader default **16**.
+    pub steps: f32,
+    /// How far a ray marches when it hits no geometry, in metres — the sky's march length, and the
+    /// cap on every other ray. Shader default **100**.
+    pub max_distance: f32,
+    /// Scattering coefficient for the directional light. Shader default **0.0015**.
+    pub sun_scatter: f32,
+    /// Scattering coefficient for point and spot bulbs inside their radius. Shader default
+    /// **0.0008**.
+    pub bulb_scatter: f32,
+    /// Shadow-comparison bias, scaled by the cascade's depth range exactly as the shader did with
+    /// the literal. Shader default **0.16**.
+    pub shadow_bias: f32,
+    /// Padding to a 32-byte uniform. Not a knob.
+    pub _pad: [f32; 2],
+}
+
+impl Default for VolumetricParams {
+    fn default() -> Self {
+        Self {
+            phase_g: 0.55,
+            steps: 16.0,
+            max_distance: 100.0,
+            sun_scatter: 0.0015,
+            bulb_scatter: 0.0008,
+            shadow_bias: 0.16,
+            _pad: [0.0; 2],
+        }
+    }
+}
+
 /// Volumetric lighting — the shafts of light ("god rays") raymarched through the shadow cascades.
 ///
 /// Marched at reduced resolution and then applied over the HDR target: the effect is low-frequency,
@@ -43,6 +92,11 @@ pub struct VolumetricState {
     /// so a skipped effect leaves the frame exactly as it found it. Resizing still happens while
     /// off, so switching back on costs no rebuild.
     pub enabled: bool,
+
+    /// The six shaping numbers. Write to them directly; they reach the GPU on the next frame.
+    pub params: VolumetricParams,
+    /// Their uniform buffer.
+    pub params_buffer: wgpu::Buffer,
 }
 
 impl VolumetricState {
@@ -69,11 +123,22 @@ impl VolumetricState {
         let volumetric_bgl = Self::mk_volumetric_bgl(device);
         let apply_bgl = Self::mk_apply_bgl(device);
 
+        let params = VolumetricParams::default();
+        let params_buffer = wgpu::util::DeviceExt::create_buffer_init(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("volumetric_params"),
+                contents: bytemuck::bytes_of(&params),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            },
+        );
+
         let volumetric_bind_group = Self::mk_volumetric_bg(
             device,
             &volumetric_bgl,
             &deferred.world_position_view,
             &linear_sampler,
+            &params_buffer,
         );
 
         let apply_bind_group =
@@ -84,6 +149,8 @@ impl VolumetricState {
 
         Self {
             enabled: true,
+            params,
+            params_buffer,
             volumetric_texture,
             volumetric_view,
             volumetric_pipeline,
@@ -117,6 +184,7 @@ impl VolumetricState {
             &self.volumetric_bgl,
             &deferred.world_position_view,
             &self.linear_sampler,
+            &self.params_buffer,
         );
 
         self.apply_bind_group = Self::mk_apply_bg(
@@ -171,6 +239,17 @@ impl VolumetricState {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    // params
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         })
     }
@@ -204,6 +283,7 @@ impl VolumetricState {
         layout: &wgpu::BindGroupLayout,
         pos_view: &wgpu::TextureView,
         sampler: &wgpu::Sampler,
+        params: &wgpu::Buffer,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("volumetric_bg"),
@@ -216,6 +296,10 @@ impl VolumetricState {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::Sampler(sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: params.as_entire_binding(),
                 },
             ],
         })

@@ -12,6 +12,19 @@
 @group(2) @binding(0) var t_position_rel_camera: texture_2d<f32>;
 @group(2) @binding(1) var s_linear: sampler;
 
+// The six numbers that used to be literals in this file. See `VolumetricParams` on the Rust side;
+// the defaults there are exactly the values that stood here, so nothing changed by being moved.
+struct VolumetricParams {
+    phase_g: f32,
+    steps: f32,
+    max_distance: f32,
+    sun_scatter: f32,
+    bulb_scatter: f32,
+    shadow_bias: f32,
+    _pad: vec2<f32>,
+}
+@group(2) @binding(2) var<uniform> params: VolumetricParams;
+
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) screen_uv: vec2<f32>,
@@ -76,11 +89,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // G-buffer position is camera-relative (see gbuffer.wgsl); put it back in world space.
     var target_pos = pos_sample.xyz + scene.camera_pos.xyz;
     var ray_dir = ray_dir_reconstructed;
-    var max_dist = 100.0; // Default far clip for skybox God Rays
+    var max_dist = params.max_distance; // Far clip for skybox god rays
     
     if (pos_sample.w >= 0.5) {
         let diff = target_pos - cam_pos;
-        max_dist = min(length(diff), 100.0);
+        max_dist = min(length(diff), params.max_distance);
         ray_dir = normalize(diff);
     }
     
@@ -88,7 +101,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         return vec4(0.0);
     }
     
-    let steps = 16.0; 
+    let steps = max(params.steps, 1.0);
     let step_size = max_dist / steps;
     
     var current_pos = cam_pos;
@@ -102,8 +115,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Sun Directional Light Precalculations
     let L_sun = normalize(-scene.sun_direction.xyz);
     let cos_theta = dot(ray_dir, L_sun);
-    let sun_phase = phase_function(0.55, cos_theta); 
-    let sun_intensity = scene.sun_color.rgb * scene.sun_color.w * 0.0015;
+    let sun_phase = phase_function(params.phase_g, cos_theta);
+    let sun_intensity = scene.sun_color.rgb * scene.sun_color.w * params.sun_scatter;
     
     for (var i = 0.0; i < steps; i += 1.0) {
         current_pos += ray_dir * step_size;
@@ -126,7 +139,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 // bias that changes meaning when an unrelated constant moves is not something to
                 // leave in four places and fix in three.
                 let sz = length(vec3<f32>(m[0][2], m[1][2], m[2][2]));
-                let bias = 0.16 * sz;
+                let bias = params.shadow_bias * sz;
                 let shadow_val = textureSampleCompareLevel(t_shadow, s_shadow, shadow_uv, ci, light_ndc.z - bias);
                 
                 if (shadow_val > 0.0) {
@@ -149,7 +162,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             if (dist < radius) {
                 let atten = clamp(1.0 - (dist / radius), 0.0, 1.0);
                 // Dynamic volumetric light scattering factor
-                let scatter = color * intensity * 0.0008 * atten * atten;
+                let scatter = color * intensity * params.bulb_scatter * atten * atten;
                 total_scatter += scatter * step_size;
             }
         }

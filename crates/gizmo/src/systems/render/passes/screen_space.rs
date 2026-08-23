@@ -154,6 +154,12 @@ pub fn record_screen_space_effects(encoder: &mut wgpu::CommandEncoder, renderer:
 
     // ── Volumetric Lighting (God Rays) ──────────────────────────────────────────
     if let Some(vol) = renderer.volumetric.as_ref().filter(|s| s.enabled) {
+        // The shaping numbers go up every frame, so `vol.params.steps = 8.0` is the whole gesture
+        // — no rebuild, no bind-group churn. 32 bytes.
+        renderer
+            .queue
+            .write_buffer(&vol.params_buffer, 0, bytemuck::bytes_of(&vol.params));
+
         // Pass 1: Volumetric Raymarch
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
