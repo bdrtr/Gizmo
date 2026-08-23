@@ -96,6 +96,7 @@ author it. Counts are Bevy's knobs vs the engine's.
 | Distance fog | component with colour/falloff/mode | **4 baked presets** + a blend factor; the numbers live in `deferred_lighting.wgsl` | `bevy_fog` |
 | Volumetric | — | **0** knobs | — |
 | Cascaded shadows | configurable | **all constants** in `csm.rs` (4 cascades, 3072², 100 m, λ 0.75) | `bevy_shadow_biases` |
+| Level of detail | per-level distances + crossfade | **one** level, **one** rule (`distance > radius × 15`), no crossfade — and generation is gated on `vertex_count > 20000`, which **no engine primitive reaches** (`new_indexed` de-duplicates first; the largest primitive is 561 unique vertices). Measured: `create_sphere(1.0, 48, 72)` gets 0 LOD buffers at 3 575 vertices, while the same sphere via `from_vertices` gets one at 20 736. The better construction path is the one that loses LOD | `bevy_visibility_range` |
 | Clearcoat | strength + layer roughness + 3 textures | **1** (`Material::clear_coat`), and measurably near-binary: the peak jumps 161 → 205 from 0 to 0.2 and then flattens | `bevy_clearcoat` |
 
 Two measured caveats worth keeping:
