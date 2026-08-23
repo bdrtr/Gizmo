@@ -563,9 +563,11 @@ and `emissive` (item 4, the only undocumented one). No further silent fields.
    Two constraints the sweep already established: the wasm target is a **separate CI gate**, so the
    rasteriser must build there; and `BackgroundColor` is currently written and never read, so the
    same draw path should consume it and close that dangling component at the same time.
-2. **Wire up what already exists.** Cheapest ratio of work to capability in the whole list, and it
-   is three items: the **spatial index** (F1 — and `occlusion_culling` measures the 8.46 ms/frame
-   at 60 k entities it would attack), the **irradiance-volume subsystem** (F2), and the
+2. **Wire up what already exists.** ~~Cheapest ratio of work to capability in the whole list~~ —
+   **and the spatial index turned out not to be** (F1, measured 2026-08-24: wiring it makes the
+   frame 90 % slower on a scene with shadow cascades, because their union culls nothing). It is
+   wired as an opt-in resource with its conditions documented. What remains here is the
+   **irradiance-volume subsystem** (F2), and the
    **post-process knobs** (B), which are uniform fields and shader constants that exist but are
    not exposed. **Volumetric's six left B on 2026-08-23** (`VolumetricParams`), and all five
    screen-space effects gained a reversible `enabled`; SSR's six shaping knobs and tone mapping's
@@ -585,7 +587,7 @@ and `emissive` (item 4, the only undocumented one). No further silent fields.
 
 ## F. Three subsystems wired to nothing
 
-### F1. The spatial index — `gizmo_renderer::visibility`
+### F1. The spatial index — wired opt-in, and the cascades decide whether it helps
 
 `RenderAabbTree` is a complete BVH over renderable AABBs: `insert` / `remove` / `retain`,
 `query_frustum` / `query_frustum_full_mask` / `query_frusta` / `query_aabb`, a `VisibleSet`
@@ -594,7 +596,7 @@ companion, a benchmark suite, an independently-written verification harness
 indexed path and the linear path agree entity-for-entity. Its module doc carries a correctness
 argument and a measured crossover table.
 
-**No render path calls it.** Verified 2026-08-23: outside `visibility/`, every mention of
+**No render path called it until 2026-08-24**, and what happened when one did is below. Verified 2026-08-23: outside `visibility/`, every mention of
 `RenderAabbTree` is the `pub use` in `lib.rs`, the doc example there, the benchmark, or its own
 test — and that test *prints the fact* at line 1411. Both draw paths
 (`batching.rs:424`, `gizmo-studio/src/render_pipeline/mod.rs:255`) call
@@ -616,10 +618,35 @@ the per-object walk that precedes the cull decision is the whole cost. Decompose
 | 60 000, all drawn | 18.54 | **−0.40** the actual drawing — inside noise |
 
 Drawing 60 000 cubes is unmeasurable next to deciding whether to draw them. The batcher's walk is
-the single biggest term, and an index in front of it is precisely what removes that walk for
-culled objects. The module's own table puts the crossover for cull *time alone* between 8 k and
-32 k meshes; the walk it would skip is a larger term than the test it would accelerate
-(0.141 µs/entity of walk against 0.022 µs/entity of test at 32 k).
+the single biggest term.
+
+**Wired 2026-08-24 as an opt-in resource, and measuring it corrected the paragraph that used to be
+here.** That paragraph read "an index in front of it is precisely what removes that walk for culled
+objects". True of the camera frustum, false of what the batcher actually queries: the union of the
+camera **and the four shadow cascades**, because an off-screen caster still has to reach the shadow
+maps. Traced on the same 60 000-cube scene:
+
+| scene | candidates | query |
+|---|---|---|
+| sun on, all cubes in view | 60 000 | 12.3 ms |
+| sun on, all cubes behind the camera | **60 000** | 5.4 ms |
+| sun off, all cubes behind the camera | **0** | **0.005 ms** |
+
+With a shadow-casting sun the index culls nothing in either case — the cascades cover the scene, so
+their union accepts everything the camera rejected — and then pays to write 60 000 keys into a
+`Vec` and sort them. Frame time with the index wired in: **18.84 → 35.75 ms** (all visible) and
+**19.73 → 27.23 ms** (all behind the camera). Without cascades the same scene culls completely and
+goes **12.72 → 10.14 ms**, a 20 % win.
+
+So `VisibilityIndex` exists as a resource the batcher uses when present, default absent, with the
+three conditions written on it: static scene, high cull rate, and cascades that do not cover
+everything. `the_spatial_index_renders_the_same_frame_as_the_linear_walk` guards correctness
+pixel-for-pixel and goes red on a single dropped entity (227 pixels).
+
+The module's own table puts the crossover for cull *time alone* between 8 k and 32 k meshes
+(0.141 µs/entity of walk against 0.022 µs/entity of test at 32 k) — which is the number that made
+this look unconditionally worth doing, and it measures the half of the problem the cascades do not
+touch.
 
 Its docs are honest about the limits: *"Measure on your own scene before believing any of the
 above"*, and it is explicitly **not** an occlusion structure.

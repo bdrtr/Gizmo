@@ -94,7 +94,80 @@
 //! Yok. Ama bu ölçüm, eklemenin **bu ölçekte tek başına işe yaramayacağını** söylüyor: occlusion
 //! sınaması da aynı nesne-başına döngünün içine düşerdi, yani frustum sınamasının kazandırdığı
 //! kadar kazandırırdı — ölçülene göre hiç. Sıra önce yürüyüşü kısaltmakta, ve onun aracı
-//! zaten depoda.
+//! zaten depoda — ama "Ölçülen 2"nin gösterdiği gibi, aracı takmak tek başına kazanç değil.
+//!
+//! ## Ölçülen 2: indeksi bağlamak **her zaman** kazanç değil
+//!
+//! Yukarıdaki tablo "yürüyüşü kısaltmanın aracı zaten depoda" diyordu — `RenderAabbTree`
+//! (`CAPABILITY_GAPS.md` §F1). Demo artık o aracı aynı karede doğrusal yürüyüşle yan yana
+//! ölçüyor, ve cevap tek yönlü değil.
+//!
+//! Ölçüldü (2026-08-24, 60 000 küp, kare 620, ağaç **bir kez** kurulmuş —
+//! `GIZMO_CULL_INDEX_STATIC=1`):
+//!
+//! | kip | indeks sorgusu | doğrusal yürüyüş | |
+//! |-----|----------------|------------------|---|
+//! | görünür (hiçbir şey elenmiyor) | **5,020 ms** | 1,864 ms | ağaç **2,7× yavaş** |
+//! | gizli (tamamı eleniyor) | **0,001 ms** | 1,241 ms | ağaç **1240× hızlı** |
+//!
+//! Uçlar arası fark bir milyon kat. Sebebi basit: eleme yapıldığında kök tek bir düzlem testinde
+//! reddediliyor ve sorgu biter; eleme yapılmadığında ağaç 60 000 anahtarı bir `Vec`'e yazmak
+//! zorunda, ve **yazmak testten pahalı**.
+//!
+//! ### Ve ağacı güncel tutmak kazancın çoğunu yiyor
+//!
+//! Aynı ölçüm, ağaç **her kare** güncellenirse:
+//!
+//! | kip | güncelleme | sorgu | toplam | doğrusal |
+//! |-----|------------|-------|--------|----------|
+//! | görünür | 2,143 ms | 4,987 ms | **7,130 ms** | 2,278 ms |
+//! | gizli | 1,413 ms | 0,001 ms | **1,415 ms** | 1,652 ms |
+//!
+//! Elemenin tam olduğu kipte bile kazanç **%14**'e düşüyor. 12 000 küpte ağaç her iki kipte de
+//! kaybediyor (0,671 ms'ye karşı 0,224 ms).
+//!
+//! `insert` hareketsiz bir nesne için kısayol taşıyor — yeni kutu yaprağın içindeyse ağaca
+//! dokunmuyor — ve bu sahnedeki küpler hiç hareket etmiyor. Yani 1,4 ms'nin tamamı **kısayolun
+//! kendi maliyeti**: 60 000 çağrı, her biri bir arama ve bir kapsama testi.
+//!
+//! ## Ölçülen 3: gölge kaskadları kararı veriyor
+//!
+//! Yukarıdaki sayılar tek bir frustum içindi. Yığınlayıcı ise **kamera ve dört kaskadın
+//! birleşimini** soruyor, çünkü kadraj dışındaki bir gölge atıcı da gölge haritasına çizilmeli.
+//! `VisibilityIndex` kaynağı takılıp aday sayısı izlendiğinde (2026-08-24, 60 000 küp):
+//!
+//! | sahne | aday | sorgu |
+//! |-------|------|-------|
+//! | güneş açık, hepsi kadrajda | 60 000 | 12,3 ms |
+//! | güneş açık, hepsi **kameranın arkasında** | **60 000** | 5,4 ms |
+//! | güneş kapalı, hepsi kameranın arkasında | **0** | **0,005 ms** |
+//!
+//! Gölge atan bir güneş varken indeks **hiçbir şey elemiyor** — ikisinde de. Kaskadlar sahneyi
+//! kapsıyor, yani birleşimleri kameranın reddettiği her şeyi kabul ediyor. Üstüne 60 000 anahtarı
+//! bir `Vec`'e yazıp sıralamanın bedeli biniyor.
+//!
+//! Kare süresine yansıması (`GIZMO_CULL_USE_INDEX=1`):
+//!
+//! | sahne | indekssiz | indeksli | |
+//! |-------|-----------|----------|---|
+//! | güneş açık, görünür | 18,84 ms | **35,75 ms** | %90 **yavaş** |
+//! | güneş açık, gizli | 19,73 ms | **27,23 ms** | %38 **yavaş** |
+//! | güneş kapalı, gizli | 12,72 ms | **10,14 ms** | %20 **hızlı** |
+//!
+//! ### Kararı ne veriyor
+//!
+//! `CAPABILITY_GAPS.md` §F1 şöyle diyordu: *"an index in front of it is precisely what removes
+//! that walk for culled objects"*. Bu, **kamera frustumu için doğru, yığınlayıcının gerçekte
+//! sorduğu birleşim için yanlış** — ve aradaki fark çoğu sahnede kararı tersine çeviriyor.
+//!
+//! Yani indeks bir kapı, varsayılan değil, ve koşulları üstünde yazılı:
+//!
+//!   * sahne statik olmalı (her kare güncelleme kazancı yiyor: %14'e düşüyor),
+//!   * eleme oranı yüksek olmalı (düşükse çıktıyı yazmak testten pahalı),
+//!   * ve **kaskadlar sahnenin tamamını kapsamamalı** — beni şaşırtan koşul bu oldu.
+//!
+//! Ağacın kendi modül belgesi zaten uyarıyordu: *"Measure on your own scene before believing any
+//! of the above"*. Bu demo o ölçümü motorun kendi sahnesinde yaptı ve uyarı haklı çıktı.
 //!
 //! ### Ölçüm notu: ilk kurulumda ölçen şey ölçülen şeydi
 //!
@@ -106,6 +179,9 @@
 //! ## Kontroller
 //!   * `GIZMO_CULL_MODE=görünür|gizli|arkada|duvar|transform` — beş yapılandırma
 //!   * `GIZMO_CULL_COUNT=<n>` — küp sayısı (varsayılan 12000)
+//!   * `GIZMO_CULL_INDEX_STATIC=1` — uzamsal indeksi her kare değil bir kez kur
+//!   * `GIZMO_CULL_USE_INDEX=1` — indeksi motorun çizim yoluna gerçekten tak
+//!   * `GIZMO_CULL_NO_SUN=1` — güneşi gölgesiz dolgu ışığına çevir (kaskad yok)
 //!   * **Sağ-tık + fare / WASDQE** — kamera (ölçüm için dokunmayın)
 
 use gizmo::analysis::{AnalysisPlugin, Analyzer};
@@ -170,8 +246,37 @@ struct Bench {
     frame: u32,
     /// Frustum sınamasının bu karede kaç küpü geçirdiği — motorun kendi işlevi çağrılarak.
     in_frustum: usize,
+    /// Uzamsal indeksi bu karede güncellemenin süresi, ms.
+    index_update_ms: f32,
+    /// Onu sorgulamanın süresi, ms.
+    index_query_ms: f32,
+    /// Doğrusal yürüyüşün aynı karedeki süresi, karşılaştırma için.
+    linear_ms: f32,
+    /// İndeksin döndürdüğü aday sayısı.
+    index_hits: usize,
+    /// Kamera + kaskad birleşimini sorgulamanın süresi — yığınlayıcının gerçekte yaptığı iş.
+    index_union_ms: f32,
+    /// O birleşimin aday sayısı.
+    index_union_hits: usize,
 }
 gizmo::core::impl_component!(Bench);
+
+/// Uzamsal indeks ve sorgu tamponu.
+///
+/// `Bench`'in içinde değil: `Component` `Clone` istiyor ve bir BVH'yi kare başına klonlamak
+/// ölçülmek istenen şeyin yanında anlamsız bir maliyet olurdu.
+static INDEX: std::sync::OnceLock<
+    std::sync::Mutex<(gizmo::renderer::visibility::RenderAabbTree, Vec<u32>)>,
+> = std::sync::OnceLock::new();
+
+fn index() -> &'static std::sync::Mutex<(gizmo::renderer::visibility::RenderAabbTree, Vec<u32>)> {
+    INDEX.get_or_init(|| {
+        std::sync::Mutex::new((
+            gizmo::renderer::visibility::RenderAabbTree::new(),
+            Vec::new(),
+        ))
+    })
+}
 
 fn cube_count() -> usize {
     std::env::var("GIZMO_CULL_COUNT")
@@ -235,6 +340,13 @@ fn main() {
             scene.world.spawn_bundle(DirectionalLightBundle {
                 rotation: Quat::from_rotation_y(0.4) * Quat::from_rotation_x(-0.7),
                 intensity: 2.4,
+                // `GIZMO_CULL_NO_SUN=1` güneşi gölgesiz dolgu ışığına çeviriyor: kaskad yok, yani
+                // yığınlayıcı yalnız kamera frustumunu soruyor. İndeksin eleme oranı buna bağlı.
+                role: if std::env::var("GIZMO_CULL_NO_SUN").is_ok() {
+                    gizmo::renderer::components::LightRole::Generic
+                } else {
+                    gizmo::renderer::components::LightRole::Sun
+                },
                 ..Default::default()
             });
             let _ = white;
@@ -248,11 +360,30 @@ fn main() {
             scene.spawn_camera(state, Vec3::new(0.0, 0.0, 6.0), look);
 
             gizmo::gizmo_log!(Info, "kip: {} · küp: {}", mode.label(), cubes);
+            // `GIZMO_CULL_USE_INDEX=1` indeksi motorun çizim yoluna gerçekten takıyor:
+            // `VisibilityIndex` kaynağı varsa yığınlayıcı her mesh'i gezmek yerine ağacın
+            // adaylarını geziyor. Bir kez kuruluyor — bu sahne hareketsiz, ve "Ölçülen 2"
+            // her kare kurmanın kazancı yediğini gösteriyor.
+            if std::env::var("GIZMO_CULL_USE_INDEX").is_ok() {
+                gizmo::systems::ensure_global_transforms(scene.world);
+                let mut index =
+                    gizmo::systems::render::visibility_index::VisibilityIndex::default();
+                index.rebuild_from(scene.world);
+                gizmo::gizmo_log!(Info, "uzamsal indeks kuruldu: {} varlık", index.len());
+                scene.world.insert_resource(index);
+            }
+
             scene.world.insert_resource(Bench {
                 mode,
                 cubes,
                 frame: 0,
                 in_frustum: 0,
+                index_update_ms: 0.0,
+                index_query_ms: 0.0,
+                linear_ms: 0.0,
+                index_hits: 0,
+                index_union_ms: 0.0,
+                index_union_hits: 0,
             });
         })
         .add_update_system(measure.in_phase(Phase::Update))
@@ -298,6 +429,11 @@ fn main() {
 
 /// Kare süresini deftere yazar, ve motorun kendi frustum sınamasını çağırarak kaç küpün
 /// geçtiğini sayar.
+///
+/// Ayrıca **uzamsal indeksin** aynı işi ne kadar sürede yaptığını ölçer: `RenderAabbTree` motorda
+/// yazılı ama hiçbir çizim yolu onu çağırmıyor (`CAPABILITY_GAPS.md` §F1). Bağlamaya değip
+/// değmediğini söyleyecek olan şey, ağacı **güncel tutmanın** maliyetinin sorguda kazandırdığından
+/// az olup olmadığı — ve bu ölçülmeden bilinmiyor.
 fn measure(
     cubes: Query<(&Transform, With<MeshRenderer>)>,
     mut cameras: Query<(Mut<Camera>, Mut<Transform>)>,
@@ -326,6 +462,8 @@ fn measure(
             min: Vec3::splat(-0.5).into(),
             max: Vec3::splat(0.5).into(),
         };
+        // ── Doğrusal yürüyüş: batcher'ın yaptığı işin aynısı ────────────────
+        let t_linear = std::time::Instant::now();
         let mut n = 0usize;
         for (_e, (t, _)) in cubes.iter() {
             let m = Mat4::from_scale_rotation_translation(t.scale, t.rotation, t.position);
@@ -334,6 +472,49 @@ fn measure(
             }
         }
         bench.in_frustum = n;
+        bench.linear_ms = t_linear.elapsed().as_secs_f32() * 1000.0;
+
+        // ── Uzamsal indeks: güncelle, sonra sorgula ─────────────────────────
+        //
+        // Güncelleme her varlık için bir `insert` — ve `insert` ucuz bir kısayol taşıyor: yeni
+        // kutu mevcut yaprağın içinde kalıyorsa ağaca dokunmuyor. Yani hareketsiz bir sahnede
+        // güncelleme neredeyse bedava, hareketli bir sahnede değil. Ölçülecek şey tam olarak bu.
+        let mut guard = index().lock().expect("index mutex");
+        let (tree, out) = &mut *guard;
+
+        // `GIZMO_CULL_INDEX_STATIC=1` ağacı yalnız bir kez kuruyor. Sahne hareketsiz olduğu için
+        // sonucu değiştirmiyor — değiştirdiği tek şey, güncelleme maliyetinin ölçüme girip
+        // girmediği. İkisi de ölçülmeli, çünkü "ağaç kazanır mı" sorusunun cevabı buna bağlı.
+        let rebuild_every_frame = std::env::var("GIZMO_CULL_INDEX_STATIC").is_err();
+        let t_update = std::time::Instant::now();
+        if rebuild_every_frame || tree.is_empty() {
+            for (e, (t, _)) in cubes.iter() {
+                let m = Mat4::from_scale_rotation_translation(t.scale, t.rotation, t.position);
+                tree.insert(e, unit.transform(&m));
+            }
+        }
+        bench.index_update_ms = t_update.elapsed().as_secs_f32() * 1000.0;
+
+        let t_query = std::time::Instant::now();
+        out.clear();
+        tree.query_frustum(&frustum, out);
+        bench.index_query_ms = t_query.elapsed().as_secs_f32() * 1000.0;
+        bench.index_hits = out.len();
+
+        // Yığınlayıcının gerçekten yaptığı sorgu bu değil: o, kamera **ve dört kaskad**
+        // frustumunun birleşimini istiyor, çünkü kadraj dışındaki bir gölge atıcı da çizilmeli.
+        // Aradaki fark ölçülmeli — kaskadlar sahnenin çoğunu kapsıyorsa eleme oranı çöker.
+        let cascade_frusta: Vec<gizmo::math::Frustum> = (0..4)
+            .map(|_| frustum) // kaba yaklaşım: gerçek kaskadlar daha geniş, yani bu bir ALT sınır
+            .collect();
+        let mut all = Vec::with_capacity(1 + cascade_frusta.len());
+        all.push(frustum);
+        all.extend_from_slice(&cascade_frusta);
+        let t_union = std::time::Instant::now();
+        let mut union_out = Vec::new();
+        tree.query_frusta(&all, &mut union_out);
+        bench.index_union_ms = t_union.elapsed().as_secs_f32() * 1000.0;
+        bench.index_union_hits = union_out.len();
     }
 
     if std::env::var("GIZMO_CULL_SELFTEST").is_ok() {
@@ -346,6 +527,22 @@ fn measure(
                 bench.in_frustum,
                 s.mean,
                 s.p95
+            );
+            gizmo::gizmo_log!(
+                Info,
+                "  indeks: güncelleme {:.3} ms · sorgu {:.3} ms · toplam {:.3} ms · aday {} \
+                 | doğrusal {:.3} ms",
+                bench.index_update_ms,
+                bench.index_query_ms,
+                bench.index_update_ms + bench.index_query_ms,
+                bench.index_hits,
+                bench.linear_ms
+            );
+            gizmo::gizmo_log!(
+                Info,
+                "  birleşim (kamera+4 kaskad): {:.3} ms · aday {} — yığınlayıcının yaptığı bu",
+                bench.index_union_ms,
+                bench.index_union_hits
             );
         }
     }

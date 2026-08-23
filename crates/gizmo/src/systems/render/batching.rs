@@ -595,16 +595,53 @@ pub(super) fn collect_draw_items(
         // reached from a `GlobalTransform` here and from the assembled model matrix there. The
         // three-case answer itself is `LodGroup::pick`, so only that route is ours.
         let lod_groups = world.borrow::<crate::renderer::components::LodGroup>();
+
+        // The spatial index, if the scene put one in. Queried once for the union of the camera
+        // frustum and the cascades — the same set `classify_visibility_world` decides between
+        // below, so the index narrows the walk without deciding anything the walk would not.
+        //
+        // Empty index → walk everything. An index that is present but empty is far more likely to
+        // be one nobody filled than a scene with nothing in it, and drawing nothing is the worse
+        // failure. See `visibility_index` for why this is opt-in at all: measured, it wins by
+        // three orders of magnitude when the cull rate is high and loses when it is not.
+        let index_candidates: Option<Vec<u32>> = {
+            let idx = world.try_get_resource::<super::visibility_index::VisibilityIndex>().ok();
+            idx.filter(|i| !i.is_empty()).map(|i| {
+                let mut frusta = Vec::with_capacity(1 + cascade_frusta.len());
+                frusta.push(frustum);
+                frusta.extend_from_slice(&cascade_frusta);
+                let mut out = Vec::new();
+                i.tree.query_frusta(&frusta, &mut out);
+                out
+            })
+        };
+
         if let Some(mut q) = world.query::<(&Mesh, &gizmo_physics_core::components::GlobalTransform, &Material)>() {
-            for (e, (mesh, trans, mat)) in q.iter_mut() {
-                let Some(mesh) = crate::renderer::components::LodGroup::pick(
-                    lod_groups.get(e),
-                    mesh,
-                    cam_pos.distance(trans.matrix.w_axis.truncate()),
-                ) else {
-                    continue;
-                };
-                process_mesh!(e, mesh, trans, mat, skeletons.get(e));
+            if let Some(candidates) = index_candidates.as_ref() {
+                for &e in candidates {
+                    let Some((mesh, trans, mat)) = q.get(e) else {
+                        continue;
+                    };
+                    let Some(mesh) = crate::renderer::components::LodGroup::pick(
+                        lod_groups.get(e),
+                        mesh,
+                        cam_pos.distance(trans.matrix.w_axis.truncate()),
+                    ) else {
+                        continue;
+                    };
+                    process_mesh!(e, mesh, trans, mat, skeletons.get(e));
+                }
+            } else {
+                for (e, (mesh, trans, mat)) in q.iter_mut() {
+                    let Some(mesh) = crate::renderer::components::LodGroup::pick(
+                        lod_groups.get(e),
+                        mesh,
+                        cam_pos.distance(trans.matrix.w_axis.truncate()),
+                    ) else {
+                        continue;
+                    };
+                    process_mesh!(e, mesh, trans, mat, skeletons.get(e));
+                }
             }
         }
         

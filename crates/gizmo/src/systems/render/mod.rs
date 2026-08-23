@@ -720,6 +720,7 @@ impl<'a> RenderContextExt for crate::renderer::RenderContext<'a> {
 mod batching;
 pub use batching::{clear_render_cache, DrawItem, RenderCache};
 
+pub mod visibility_index;
 mod passes;
 
 mod decals;
@@ -3377,6 +3378,131 @@ mod golden_render_tests {
             .to_vec();
         staging.unmap();
         out
+    }
+
+    /// The spatial index must not change what is drawn — only how fast the decision is reached.
+    ///
+    /// This is the assertion that makes the index safe to turn on. An index in front of the
+    /// batcher's walk is a *cull*: anything it does not return is not drawn. So the only way it can
+    /// be correct is by returning everything the linear walk would have kept, and the only way to
+    /// know that is to render both and compare.
+    ///
+    /// Pixel-identical, not approximately: a candidate set missing one entity shows up as a hole,
+    /// and a hole is exactly what a threshold would forgive.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn the_spatial_index_renders_the_same_frame_as_the_linear_walk() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let linear = render_scattered_cubes(false).await;
+            let indexed = render_scattered_cubes(true).await;
+            let (differ, total) = changed_pixels(&linear, &indexed, 128);
+            assert_eq!(
+                differ, 0,
+                "the indexed path differs from the linear one on {differ}/{total} pixels — the \
+                 index dropped something the walk would have drawn",
+            );
+
+            // And the scene is not trivially empty: a blank frame compared against a blank frame
+            // would pass the assertion above and prove nothing.
+            let empty = render_scattered_cubes_empty().await;
+            let (drawn, _) = changed_pixels(&linear, &empty, 128);
+            assert!(
+                drawn >= 500,
+                "the fixture drew only {drawn} pixels of geometry — it cannot detect a dropped \
+                 entity",
+            );
+        });
+    }
+
+    /// A grid of cubes spread across the view, half of them behind the camera.
+    ///
+    /// Spread on purpose: a cluster in one spot lands in one BVH leaf and the index would agree
+    /// with the walk for the wrong reason.
+    async fn render_scattered_cubes(with_index: bool) -> Vec<u8> {
+        const W: u32 = 128;
+        let mut renderer = crate::test_gpu::headless_renderer(W, W).await;
+        renderer.taa = None;
+        let mut asset_manager = AssetManager::new();
+        let mut world = World::new();
+        scattered_cube_scene(&renderer, &mut asset_manager, &mut world, 64);
+
+        if with_index {
+            // `GlobalTransform` has to be current before the index reads bounds from it — the
+            // transform systems have not run yet at this point in a headless fixture.
+            crate::systems::ensure_global_transforms(&mut world);
+            let mut index = crate::systems::render::visibility_index::VisibilityIndex::default();
+            index.rebuild_from(&world);
+            assert!(!index.is_empty(), "the index rebuilt to nothing");
+            world.insert_resource(index);
+        }
+
+        render_world(&mut renderer, &mut world).await
+    }
+
+    /// The same scene with no cubes — the reference for "did anything draw at all".
+    async fn render_scattered_cubes_empty() -> Vec<u8> {
+        const W: u32 = 128;
+        let mut renderer = crate::test_gpu::headless_renderer(W, W).await;
+        renderer.taa = None;
+        let mut asset_manager = AssetManager::new();
+        let mut world = World::new();
+        scattered_cube_scene(&renderer, &mut asset_manager, &mut world, 0);
+        render_world(&mut renderer, &mut world).await
+    }
+
+    /// `n` cubes on a grid in front of the camera, plus a light and a camera.
+    fn scattered_cube_scene(
+        renderer: &Renderer,
+        asset_manager: &mut AssetManager,
+        world: &mut World,
+        n: usize,
+    ) {
+        let tex = asset_manager.create_white_texture(
+            &renderer.device,
+            &renderer.queue,
+            &renderer.scene.texture_bind_group_layout,
+        );
+        let mesh = AssetManager::create_cube(&renderer.device);
+        for i in 0..n {
+            // An 8×8 grid spanning the view, **all at one depth**. Varying z was the first version
+            // and it made the test blind: cubes at different depths overlap in perspective, so
+            // removing one from the index changed no pixels — it was hidden behind a nearer one.
+            // A single plane means every cube owns pixels of its own, which is what lets a dropped
+            // entity show up. The BVH still has x and y to split on.
+            let (gx, gy) = (i % 8, i / 8);
+            let x = (gx as f32 - 3.5) * 1.1;
+            let y = (gy as f32 - 3.5) * 1.1;
+            let z = -6.0;
+            world.spawn_bundle((
+                Transform::new(Vec3::new(x, y, z)).with_scale(Vec3::splat(0.4)),
+                GlobalTransform::default(),
+                mesh.clone(),
+                Material::new(tex.clone()).with_pbr(
+                    Vec4::new(0.9, 0.5 + (i % 3) as f32 * 0.15, 0.3, 1.0),
+                    0.5,
+                    0.0,
+                ),
+                MeshRenderer::new(),
+            ));
+        }
+        world.spawn_bundle(CameraBundle {
+            position: Vec3::new(0.0, 0.0, 2.0),
+            yaw: -std::f32::consts::FRAC_PI_2,
+            pitch: 0.0,
+            primary: true,
+            ..Default::default()
+        });
+        world.spawn_bundle(DirectionalLightBundle {
+            intensity: 3.0,
+            ..Default::default()
+        });
     }
 
     /// A registered material draws with its own shader, and a dangling id draws nothing.
