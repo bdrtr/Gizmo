@@ -3,15 +3,20 @@
 //! Bir sorgunun **her ikilisini** gezmek. Demo bir N-cisim çekim benzetimi: her cisim her cisme
 //! kuvvet uyguluyor.
 //!
-//! ## Motorda ikili yineleme yok
+//! ## Motorda ikili yineleme **var** (2026-08-23) — okuma tarafında
 //!
-//! `Query`'nin yüzeyi `iter` / `iter_mut` / `iter_chunks` / `par_for_each` ile bitiyor;
-//! `iter_combinations` diye bir şey yok. Ve eksikliği yalnız bir kolaylık meselesi değil —
-//! ödünç alma kuralı yüzünden **elle yazmak da doğrudan mümkün değil**: aynı sorguyu hem okumak
-//! hem yazmak için aynı anda iki görünüm açılamıyor.
+//! `Query::iter_combinations` her ikiliyi bir kez veriyor: `[a, b, c]` için `(a,b)`, `(a,c)`,
+//! `(b,c)` — asla `(a,a)`, asla hem `(a,b)` hem `(b,a)`.
 //!
-//! Bu yüzden demo iki geçişli: önce konum ve kütleler bir `Vec`'e toplanıyor, kuvvetler orada
-//! hesaplanıyor, sonra hızlar geri yazılıyor.
+//! **Salt okunur, ve `_mut` yok.** `&self` alıyor ve `Q: ReadOnlyQuery` istiyor, yani bir çiftin
+//! iki yarısı da paylaşılan ödünç — istenildiği kadar bir arada yaşayabilirler. Yazan bir sürüm
+//! aynı depoya aynı anda iki `&mut` vermek zorunda kalırdı; bu yalnız `i != j` olduğu için sağlam
+//! ve ödünç denetleyicisi bunu göremiyor, yani `unsafe` gerektirirdi. Yazılıp gerekçelendirilene
+//! kadar yazan döngüler çiftleri buradan okuyup sonucu ikinci bir geçişte uyguluyor — bu demonun
+//! yaptığı da tam olarak bu.
+//!
+//! Yani `gravity` hâlâ üç geçişli, ve sebebi ödünç alma kuralı: `Mut<T>` taşıyan bir sorgu
+//! salt-okunur bile gezilemiyor.
 //!
 //! ## Ölçülen: elle yazılan döngü doğru mu
 //!
@@ -40,6 +45,29 @@
 //!
 //! Kinetik enerjinin salınması beklenen: korunan şey toplam enerji, ve kinetik olan sürekli çekim
 //! potansiyeline dönüşüyor.
+//!
+//! ## Ölçülen 2: motorun yolu elle yazılanla **bit-eş**
+//!
+//! `pair_audit` sistemi aynı çiftleri iki yoldan geziyor — elle `j = i+1` döngüsü ve
+//! `iter_combinations` — ve iki ivme dizisini karşılaştırıyor. Ayrı bir sistem, çünkü `gravity`
+//! `Mut<Transform>` alıyor ve `iter_combinations` `ReadOnlyQuery` istiyor; aynı sistemde iki sorgu
+//! açmak erişim çakışması olurdu. `Phase::User(2500)`'de koşuyor, yani `Update` ile `Physics`
+//! arasında — aynı karenin konumlarını görmesi için.
+//!
+//! Ölçüldü (2026-08-23, 12 cisim, 1500 kare):
+//!
+//! | | motor | elle |
+//! |---|-------|------|
+//! | çift sayısı | **66** | **66** |
+//! | en büyük ivme farkı | **0,000000000** | |
+//!
+//! Fark yuvarlama seviyesinde bile değil, **tam sıfır** — yani iki döngü aynı çiftleri aynı
+//! sırayla geziyor ve aynı kayan nokta işlemlerini aynı sırada yapıyor. Ziyaret sırası da
+//! eşleşiyor demek bu.
+//!
+//! Kazanılan şey satır sayısı değil, **ara yapı**: elle yol konum ve kütleleri bir `Vec`'e
+//! toplayıp iki iç içe indeks döngüsü kuruyor; motorun yolu tek çağrı, ve indeks aritmetiği yok —
+//! yani bir çifti iki kez saymanın ya da bir cismi kendisiyle eşleştirmenin yolu da yok.
 //!
 //! ### Ödünç alma kuralının ikinci yüzü
 //!
@@ -74,6 +102,12 @@ struct Conservation {
     /// Toplam kinetik enerji (korunmuyor, çekim potansiyeline dönüşüyor — yalnız bilgi).
     kinetic: f32,
     bodies: usize,
+    /// `iter_combinations`'ın saydığı çift sayısı.
+    engine_pairs: usize,
+    /// Elle döngünün saydığı çift sayısı — aynı olmalı.
+    manual_pairs: usize,
+    /// İki yolun hesapladığı ivme toplamları arasındaki en büyük fark.
+    accel_gap: f32,
 }
 gizmo::core::impl_component!(Conservation);
 
@@ -150,6 +184,9 @@ fn main() {
             scene.spawn_camera(state, Vec3::new(0.0, 4.0, 16.0), Vec3::ZERO);
         })
         .add_update_system(gravity.in_phase(Phase::Update))
+        // Denetleyici `gravity`'den SONRA: aynı karenin konumlarını ölçüyor, bir öncekinin
+        // değil. `Phase::User(2500)` — Update ile Physics arasında, madde 3'ün açtığı yer.
+        .add_update_system(pair_audit.in_phase(Phase::User(2500)))
         .set_ui(|world, _state, ctx| {
             let Some(c) = world.get_resource::<Conservation>().map(|c| *c) else {
                 return;
@@ -182,6 +219,59 @@ fn main() {
 ///
 /// Burada iki geçiş — ve ikinci geçişin varlığı bir üslup tercihi değil, ödünç alma kuralının
 /// sonucu.
+/// **Denetleyici.** Aynı çiftleri motorun `iter_combinations`'ıyla gezip elle döngünün sonucuyla
+/// karşılaştırıyor.
+///
+/// Ayrı bir sistem, çünkü `gravity` `Mut<Transform>` alıyor ve `iter_combinations`
+/// `ReadOnlyQuery` istiyor — aynı sistemde iki sorgu açmak erişim çakışması olurdu. Çizelge bu
+/// ikisini zaten ayırıyor: biri yazıyor, öteki okuyor.
+fn pair_audit(bodies: Query<(&Transform, &Body)>, mut report: ResMut<Conservation>) {
+    // Elle döngünün gerektirdiği ara `Vec` — karşılaştırmanın öteki yakası.
+    let state: Vec<(Vec3, f32)> = bodies
+        .iter()
+        .map(|(_, (t, b))| (t.position, b.mass))
+        .collect();
+
+    let mut manual = vec![Vec3::ZERO; state.len()];
+    let mut manual_pairs = 0usize;
+    for i in 0..state.len() {
+        for j in (i + 1)..state.len() {
+            manual_pairs += 1;
+            let delta = state[j].0 - state[i].0;
+            let dist2 = delta.length_squared() + SOFTENING * SOFTENING;
+            let dir = delta * (1.0 / (dist2 * dist2.sqrt()));
+            manual[i] += dir * (G * state[j].1);
+            manual[j] -= dir * (G * state[i].1);
+        }
+    }
+
+    // Motorun yolu: tek çağrı, ara `Vec` yok, indeks aritmetiği yok.
+    let index: std::collections::HashMap<u32, usize> = bodies
+        .iter()
+        .enumerate()
+        .map(|(i, (id, _))| (id, i))
+        .collect();
+    let mut engine = vec![Vec3::ZERO; state.len()];
+    let mut engine_pairs = 0usize;
+    for ((a_id, (ta, ba)), (b_id, (tb, bb))) in bodies.iter_combinations() {
+        engine_pairs += 1;
+        let (ia, ib) = (index[&a_id], index[&b_id]);
+        let delta = tb.position - ta.position;
+        let dist2 = delta.length_squared() + SOFTENING * SOFTENING;
+        let dir = delta * (1.0 / (dist2 * dist2.sqrt()));
+        engine[ia] += dir * (G * bb.mass);
+        engine[ib] -= dir * (G * ba.mass);
+    }
+
+    report.engine_pairs = engine_pairs;
+    report.manual_pairs = manual_pairs;
+    report.accel_gap = manual
+        .iter()
+        .zip(&engine)
+        .map(|(m, e)| (*m - *e).length())
+        .fold(0.0f32, f32::max);
+}
+
 fn gravity(mut bodies: Query<(Mut<Transform>, Mut<Body>)>, mut report: ResMut<Conservation>, time: Res<Time>) {
     let _ = time;
 
@@ -228,6 +318,14 @@ fn gravity(mut bodies: Query<(Mut<Transform>, Mut<Body>)>, mut report: ResMut<Co
     }
 
     if std::env::var("GIZMO_NBODY_SELFTEST").is_ok() && report.frame.is_multiple_of(300) {
+        gizmo::gizmo_log!(
+            Info,
+            "kare {} · çift: motor {} / elle {} · ivme farkı {:.9}",
+            report.frame,
+            report.engine_pairs,
+            report.manual_pairs,
+            report.accel_gap
+        );
         gizmo::gizmo_log!(
             Info,
             "kare {} · momentum {:.6} (başlangıç {:.6}) · kinetik {:.3}",

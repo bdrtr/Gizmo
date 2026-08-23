@@ -268,6 +268,49 @@ impl<'w, Q: ReadOnlyQuery> Query<'w, Q> {
         self.iter_inner()
     }
 
+    /// Every unordered **pair** of matching rows, each yielded once.
+    ///
+    /// `[a, b, c]` gives `(a,b)`, `(a,c)`, `(b,c)` — never `(a,a)`, and never both `(a,b)` and
+    /// `(b,a)`. That is the property an n-body force loop or a broad-phase collision check needs,
+    /// and getting it wrong is not loud: a pair counted twice, or an entity paired with itself,
+    /// produces motion that still looks plausible.
+    ///
+    /// ```
+    /// # use gizmo_core::prelude::*;
+    /// # #[derive(Clone, Debug)] struct Mass(f32);
+    /// # gizmo_core::impl_component!(Mass);
+    /// # let mut world = World::new();
+    /// # for m in [1.0, 2.0, 3.0] { let e = world.spawn(); world.add_component(e, Mass(m)); }
+    /// let q = world.query::<&Mass>().unwrap();
+    /// let pairs: Vec<_> = q.iter_combinations().map(|((_, a), (_, b))| (a.0, b.0)).collect();
+    /// assert_eq!(pairs.len(), 3); // 3 choose 2
+    /// ```
+    ///
+    /// # Read-only, and why there is no `_mut`
+    ///
+    /// This takes `&self` and requires `Q: ReadOnlyQuery`, so both halves of a pair are shared
+    /// borrows and any number may coexist. A mutable version would have to hand out two `&mut`
+    /// into the same storage at once; that is sound only because `i != j`, which the borrow
+    /// checker cannot see, so it would need `unsafe`. Until that is written and justified, a loop
+    /// that *writes* still reads pairs here and applies the results in a second pass — which is
+    /// what `demo/src/bin/iter_combinations.rs` does and measures.
+    ///
+    /// # Cost
+    ///
+    /// One `Vec<u32>` of matching ids up front, then `n(n-1)/2` pairs of [`get`](Self::get)
+    /// lookups. The ids are collected once rather than re-scanned per pair, and they are captured
+    /// before the first pair is yielded — so a structural change during iteration is impossible
+    /// anyway (the query holds a borrow), and the visit order is the one [`QueryIter`] documents.
+    pub fn iter_combinations<'a>(&'a self) -> QueryCombinations<'a, 'w, Q> {
+        let ids: Vec<u32> = self.iter().map(|(id, _)| id).collect();
+        QueryCombinations {
+            query: self,
+            ids,
+            i: 0,
+            j: 1,
+        }
+    }
+
     /// Read-only SIMD-friendly chunk iteration (returns `&[T]`). It does NOT AFFECT change
     /// detection — use it for reading components.
     ///
@@ -324,5 +367,125 @@ impl<'w, Q: ReadOnlyQuery> Query<'w, Q> {
         F: Fn((u32, Q::Item<'_>)) + Send + Sync,
     {
         self.par_inner(func);
+    }
+}
+
+/// Every unordered pair of matching rows. Built by [`Query::iter_combinations`].
+///
+/// `(i, j)` walks the upper triangle: `j` runs ahead of `i`, so `i == j` never happens and each
+/// pair is produced in exactly one order.
+pub struct QueryCombinations<'a, 'w, Q: ReadOnlyQuery> {
+    query: &'a Query<'w, Q>,
+    /// The matching ids, collected once. Re-scanning per pair would be `n` times the work for the
+    /// same answer.
+    ids: Vec<u32>,
+    i: usize,
+    j: usize,
+}
+
+impl<'a, 'w, Q: ReadOnlyQuery> Iterator for QueryCombinations<'a, 'w, Q> {
+    type Item = ((u32, Q::Item<'a>), (u32, Q::Item<'a>));
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if self.i + 1 >= self.ids.len() {
+                return None;
+            }
+            if self.j >= self.ids.len() {
+                self.i += 1;
+                self.j = self.i + 1;
+                continue;
+            }
+            let (a_id, b_id) = (self.ids[self.i], self.ids[self.j]);
+            self.j += 1;
+            // Both must still resolve. They were collected from this same query a moment ago and
+            // the query holds a borrow, so this is belt-and-braces rather than a real branch —
+            // but returning a half pair would be worse than skipping one.
+            if let (Some(a), Some(b)) = (self.query.get(a_id), self.query.get(b_id)) {
+                return Some(((a_id, a), (b_id, b)));
+            }
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let n = self.ids.len();
+        (0, Some(n.saturating_mul(n.saturating_sub(1)) / 2))
+    }
+}
+
+#[cfg(test)]
+mod combination_tests {
+    use crate::world::World;
+
+    #[derive(Clone, Debug, PartialEq)]
+    struct Tag(u32);
+    crate::impl_component!(Tag);
+
+    fn world_with(n: u32) -> World {
+        let mut w = World::new();
+        for i in 0..n {
+            let e = w.spawn();
+            w.add_component(e, Tag(i));
+        }
+        w
+    }
+
+    /// The three properties that make a pair loop correct, each of which fails quietly.
+    ///
+    /// A pair counted twice, a pair missed, or an entity paired with itself all produce motion
+    /// that still looks plausible in an n-body demo — which is why this is asserted on the
+    /// combinatorics rather than on a simulation's output.
+    #[test]
+    fn every_pair_appears_exactly_once_and_nothing_pairs_with_itself() {
+        for n in [0u32, 1, 2, 3, 5, 8] {
+            let w = world_with(n);
+            let q = w.query::<&Tag>().expect("Tag is registered");
+            let pairs: Vec<(u32, u32)> = q
+                .iter_combinations()
+                .map(|((_, a), (_, b))| (a.0, b.0))
+                .collect();
+
+            let expected = (n as usize * (n as usize).saturating_sub(1)) / 2;
+            assert_eq!(pairs.len(), expected, "n = {n}: wrong number of pairs");
+
+            for (a, b) in &pairs {
+                assert_ne!(a, b, "n = {n}: an entity was paired with itself");
+            }
+
+            // Unordered: (a,b) and (b,a) are the same pair and only one may appear.
+            let mut seen: Vec<(u32, u32)> =
+                pairs.iter().map(|&(a, b)| if a < b { (a, b) } else { (b, a) }).collect();
+            seen.sort_unstable();
+            let before = seen.len();
+            seen.dedup();
+            assert_eq!(before, seen.len(), "n = {n}: a pair appeared more than once");
+        }
+    }
+
+    /// The ids travel with the items, and they are the ids of *those* items.
+    ///
+    /// A loop that yielded the right pair of components under the wrong pair of ids would pass
+    /// the test above and still write forces to the wrong entities.
+    #[test]
+    fn each_half_carries_its_own_entity_id() {
+        let w = world_with(4);
+        let q = w.query::<&Tag>().expect("registered");
+        for ((a_id, a), (b_id, b)) in q.iter_combinations() {
+            let ea = q.get(a_id).expect("a resolves");
+            let eb = q.get(b_id).expect("b resolves");
+            assert_eq!(ea.0, a.0, "the first id does not name the first item");
+            assert_eq!(eb.0, b.0, "the second id does not name the second item");
+        }
+    }
+
+    /// `size_hint`'s upper bound has to hold, or a caller that pre-allocates from it under-sizes.
+    #[test]
+    fn the_size_hint_bounds_the_real_count() {
+        let w = world_with(6);
+        let q = w.query::<&Tag>().expect("registered");
+        let it = q.iter_combinations();
+        let (_, upper) = it.size_hint();
+        assert_eq!(upper, Some(15));
+        assert_eq!(it.count(), 15);
     }
 }

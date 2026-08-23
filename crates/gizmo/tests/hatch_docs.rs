@@ -95,14 +95,10 @@ const HATCH_FILES: &[(&str, &str)] = &[
 
 /// APIs the plan **proposes** rather than records: named as future work, absent by design.
 ///
-/// This list is the plan's remaining scope, in a form that cannot drift. When one of these lands
-/// it comes out of the list and the scan starts requiring it — and if the plan stops proposing it,
-/// the entry here is what makes that visible.
-const PROPOSED: &[&str] = &[
-    // Item 2's second half, alongside the `SystemParam` derive. The last entry in this list:
-    // items 1 and 3–7 have all landed, and `MaterialId` left it on 2026-08-23.
-    "iter_combinations",
-];
+/// **Empty as of 2026-08-23**, when `iter_combinations` landed and left it. It stays as an empty
+/// list rather than being deleted, for the same reason `doc_language.rs`'s `BUDGET` does: the
+/// shape is what the rule needs, so the next proposal gets an entry here instead of an exemption.
+const PROPOSED: &[&str] = &[];
 
 /// Backticked names in `API_DEPTH.md` that are prose, not identifiers.
 ///

@@ -123,9 +123,18 @@ What people actually reach for, and can be given without opening it:
   Both go red when the forwarding is removed, the second with "two writers of the same resource
   were put in one batch". Measured in `system_forms`: one parameter carrying three, 89 runs,
   reading `health 240 · mana 120` — the same numbers the generic systems report separately.
-- **`iter_combinations`** — currently impossible to hand-roll in one pass, because a query holding
-  `Mut<T>` cannot be iterated read-only at all. Measured in `iter_combinations`: one call becomes
-  three passes plus a `Vec`.
+- ~~**`iter_combinations`**~~ — **done 2026-08-23**, read-only. Every unordered pair once, from
+  `&self` with `Q: ReadOnlyQuery`, so both halves are shared borrows. There is no `_mut`: that
+  would hand out two `&mut` into the same storage, sound only because `i != j`, which the borrow
+  checker cannot see — so it needs `unsafe`, and until that is written and justified a writing loop
+  reads pairs here and applies them in a second pass.
+
+  Measured in `iter_combinations`, which now runs both loops side by side in a `Phase::User(2500)`
+  auditor: **66 pairs each, and a largest acceleration difference of exactly 0.000000000** over
+  1500 frames. Not rounding-level — zero, meaning the two loops visit the same pairs in the same
+  order and do the same float operations in the same order. What is gained is not lines but the
+  intermediate: the hand-rolled path collects positions into a `Vec` and runs two index loops, and
+  index arithmetic is where a pair gets counted twice.
 
 ### `SystemParam` — load-bearing, but openable with the invariant made explicit
 
@@ -359,8 +368,8 @@ Ordered by unlocked-capability per unit of work, not by size.
 1. **The hatch rule and its test.** ✅ **Done, 2026-08-23** — deliberately *after* the hatches,
    so it points at real doors rather than intentions. Six pairs registered; three defects found on
    the first run.
-2. **`Option<Res<T>>` and the composite-parameter macro.** ✅ **Both done, 2026-08-23** —
-   `Option<P>` and `system_param!`. `iter_combinations` is the one thing left on this list.
+2. **`Option<Res<T>>`, the composite-parameter macro, `iter_combinations`.** ✅ **All done,
+   2026-08-23** — `Option<P>`, `system_param!`, and read-only pair iteration.
 3. **`Phase::User`, the `enabled` flags, `add_update_hook`, `VolumetricParams`.** A batch of
    incidental opens. Each is small; together they close `schedule_internals`, the SSR/volumetric
    on-off destruction, the `set_update` trap and a whole row of section B.
