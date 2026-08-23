@@ -55,30 +55,26 @@
 //! Köşegen açık: her küp, odağı kendi derinliğine en yakın olan ayarda en keskin, ve odaktan
 //! uzaklaştıkça ~0,50'ye oturuyor — `coc` 1'e doyduğu yer orası.
 //!
-//! ## Çözülemeyen: odak sayısı metre mi
+//! ## Odak sayısı gerçekten metre — ve bunu doğrulamak iki deneme aldı
 //!
-//! İnce bir tarama (aynı sahne, aynı boyutlu kareler, odak 2'den 12'ye) **tepeyi küpün kendi
-//! derinliğinde bulmadı**:
+//! Yukarıdaki sahnede küpler eksen dışında (en yakını x = −4,75) ve ilk ince tarama tepeyi
+//! küpün derinliğinde bulmadı: 4 m'lik küp odak 7'de en keskin çıktı. Bu, "odak sayısı görüş
+//! derinliğinin metresi değil" gibi okunuyordu.
 //!
-//! | odak | 4 m küpü | 8 m küpü |
-//! |------|----------|----------|
-//! | 4 | 4,66 | 5,22 |
-//! | 6 | 6,23 | 5,03 |
-//! | **7** | **6,43** | 5,96 |
-//! | 8 | 6,38 | 7,39 |
-//! | 10 | 5,32 | 9,87 |
-//! | 12 | 3,34 | **10,11** |
+//! Kesin sınav tek küple, **tam eksende** yapıldı — kamera orijinde, küp `z = −8`'de, yani
+//! öklidyen uzaklık ile dik derinlik eşit (`GIZMO_DOF_AXIS=8`):
 //!
-//! (DOF kapalı: 6,44 ve 10,19 — yani iki tepe de tavana değiyor.)
+//! | odak | 4 | 5 | 6 | **7** | 8 | 9 | 10 | 12 |
+//! |------|---|---|---|-------|---|---|----|----|
+//! | oran | 0,74 | 0,87 | 0,96 | **1,00** | 0,99 | 0,93 | 0,82 | 0,55 |
 //!
-//! 4 m'deki küp odak **7**'de, 8 m'deki küp odak **12 ve ötesinde** en keskin. İki bağımsız
-//! derinlikte de tepe, beklenen yerin **3–4 m ötesinde**. Yani `dof_focus_dist` bu kurulumda
-//! görüş derinliğinin metresiyle birebir örtüşmüyor gibi görünüyor.
+//! Tepe 7–8 arasında, ve küpün **ön yüzü** tam olarak orada: 2 birimlik küp 0,7 ölçekle
+//! yerleştiği için ön yüzü `8 − 0,7 = 7,3` m'de. Derinlik tamponu ön yüzü kaydeder. Yani
+//! `dof_focus_dist` metre cinsinden ve doğru kalibre.
 //!
-//! **Sebebi bu port sırasında saptanamadı** ve tahmin yazılmıyor. Kalibrasyonu tek küple izole
-//! etmeye çalıştım ama o koşuda pencere boyutu değiştiği için ölçüm geçersiz oldu (sabit piksel
-//! kutusu boşluğa düştü). Yukarıdaki iki tablo aynı boyutlu karelerden ve doğru kırpmayla; bulgu
-//! bu kadarıyla kayda geçiyor, mekanizması açık bir soru.
+//! İlk taramadaki sapma sahnenin eksen dışı yerleşiminden geliyordu; o veri kalibrasyon iddiası
+//! için kullanılamaz. Buraya ders olarak yazılıyor: **bir kalibrasyonu eksen dışı bir nesneyle
+//! sınamayın.**
 //!
 //! ## Kontroller
 //!   * **1/2/3/4** — odak 4 / 10 / 16 / 24 m · **0** — DOF kapalı
@@ -108,7 +104,7 @@ impl Default for Dof {
             enabled: focus > 0.0,
             focus: focus.max(0.1),
             // Motorun kendi varsayılanları: menzil 2,0 ve bulanıklık 4,0.
-            range: 6.0,
+            range: std::env::var("GIZMO_DOF_RANGE").ok().and_then(|v| v.parse().ok()).unwrap_or(6.0f32),
             blur: 6.0,
         }
     }
@@ -135,6 +131,21 @@ fn main() {
             );
 
             let cube = AssetManager::create_cube(device);
+            // Eksen üstü sınama: tek küp, x=0, kamera tam arkasında. Burada öklidyen uzaklık
+            // ile dik derinlik eşit, yani odak sayısının hangisini ölçtüğü ayırt edilebiliyor.
+            if let Ok(d) = std::env::var("GIZMO_DOF_AXIS") {
+                let depth: f32 = d.parse().unwrap_or(8.0);
+                scene.world.spawn_bundle((
+                    Transform::new(Vec3::new(0.0, 0.0, -depth)).with_scale(Vec3::splat(0.7)),
+                    GlobalTransform::default(),
+                    cube.clone(),
+                    Material::new(checker.clone()).with_pbr(Vec4::ONE, 0.7, 0.0),
+                    MeshRenderer::new(),
+                ));
+                scene.world.insert_resource(Dof::default());
+                scene.spawn_camera(state, Vec3::ZERO, Vec3::new(0.0, 0.0, -1.0));
+                return;
+            }
             for (i, depth) in DEPTHS.into_iter().enumerate() {
                 // Küpler hem uzaklaşıyor hem yana kayıyor: hiçbiri öbürünü kapatmasın.
                 let x = (i as f32 - 2.5) * 1.9;
