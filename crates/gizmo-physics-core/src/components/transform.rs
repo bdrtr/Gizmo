@@ -192,6 +192,55 @@ impl Transform {
         self.update_local_matrix();
     }
 
+    /// The direction this transform faces.
+    ///
+    /// Right-handed, **−Z forward** — the same convention the renderer uses everywhere
+    /// (`Mat4::look_at_rh`, `Vec3::NEG_Z`), so this agrees with what a camera built from the same
+    /// rotation would see.
+    #[inline]
+    #[must_use]
+    pub fn forward(&self) -> Vec3 {
+        self.rotation * Vec3::NEG_Z
+    }
+
+    /// The local **right** axis: [`forward`](Self::forward) crossed with local up.
+    #[inline]
+    #[must_use]
+    pub fn right(&self) -> Vec3 {
+        self.rotation * Vec3::X
+    }
+
+    /// The local **up** axis.
+    #[inline]
+    #[must_use]
+    pub fn up(&self) -> Vec3 {
+        self.rotation * Vec3::Y
+    }
+
+    /// The rotation that would aim [`forward`](Self::forward) at `target` from this transform's
+    /// current position, with `up` deciding the roll.
+    ///
+    /// Returns the rotation rather than applying it, so it can be blended — aiming a turret over
+    /// several frames is `rotation.lerp(t.looking_at(…), w)`, which is what the caller usually
+    /// wants and what applying it directly would take away.
+    ///
+    /// Two degenerate inputs are answered rather than producing a `NaN` pose: a target on top of
+    /// the position, and an `up` parallel to the view direction, both return the current rotation
+    /// unchanged. `look_at_rh` builds a *view* matrix — the transform that moves the world in
+    /// front of an eye — so the object's own rotation is its inverse.
+    #[must_use]
+    pub fn looking_at(&self, target: Vec3, up: Vec3) -> Quat {
+        let offset = target - self.position;
+        if offset.length_squared() < 1e-12 || up.length_squared() < 1e-12 {
+            return self.rotation;
+        }
+        // Parallel `up` makes the view basis degenerate; keep the current pose instead of a NaN.
+        if offset.normalize().cross(up.normalize()).length_squared() < 1e-12 {
+            return self.rotation;
+        }
+        Quat::from_mat4(&Mat4::look_at_rh(self.position, target, up)).inverse()
+    }
+
     /// Rebuilds the cached matrix from the current fields, composing scale, then rotation,
     /// then translation.
     ///
@@ -266,6 +315,55 @@ gizmo_core::impl_component!(GlobalTransform);
 
 #[cfg(test)]
 mod tests {
+    /// The three axes must be orthonormal and match the renderer's right-handed, −Z-forward
+    /// convention for every rotation, not just the identity — this is the property that lets a
+    /// camera and an object built from the same quaternion agree about "right".
+    #[test]
+    fn the_direction_axes_are_orthonormal_and_right_handed() {
+        for step in 0..12 {
+            let yaw = step as f32 / 12.0 * std::f32::consts::TAU;
+            let t = Transform::new(Vec3::ZERO)
+                .with_rotation(Quat::from_rotation_y(yaw) * Quat::from_rotation_x(0.3));
+            let (f, r, u) = (t.forward(), t.right(), t.up());
+            for v in [f, r, u] {
+                assert!((v.length() - 1.0).abs() < 1e-4, "axis not unit at yaw {yaw}");
+            }
+            assert!(f.dot(r).abs() < 1e-4, "forward/right not square at yaw {yaw}");
+            assert!(f.dot(u).abs() < 1e-4, "forward/up not square at yaw {yaw}");
+            assert!(r.dot(u).abs() < 1e-4, "right/up not square at yaw {yaw}");
+            // Right-handed: right × up = −forward for a −Z-forward basis.
+            assert!(
+                r.cross(u).dot(-f) > 0.999,
+                "basis is left-handed at yaw {yaw}"
+            );
+        }
+    }
+
+    /// `looking_at` must aim `forward` at the target, and must answer the two degenerate inputs
+    /// with the current rotation rather than a `NaN` pose.
+    #[test]
+    fn looking_at_aims_forward_and_survives_degenerate_input() {
+        let mut t = Transform::new(Vec3::new(1.0, 2.0, 3.0));
+        for target in [
+            Vec3::new(5.0, 2.0, 3.0),
+            Vec3::new(1.0, 2.0, -4.0),
+            Vec3::new(-3.0, 7.0, 0.0),
+        ] {
+            t.rotation = t.looking_at(target, Vec3::Y);
+            let want = (target - t.position).normalize();
+            assert!(
+                t.forward().dot(want) > 0.999,
+                "forward {:?} does not aim at {target:?}",
+                t.forward()
+            );
+        }
+
+        let before = t.rotation;
+        assert_eq!(t.looking_at(t.position, Vec3::Y), before, "target on the eye");
+        assert_eq!(t.looking_at(t.position + Vec3::Y * 4.0, Vec3::Y), before, "up parallel to view");
+        assert_eq!(t.looking_at(Vec3::ZERO, Vec3::ZERO), before, "degenerate up");
+    }
+
     use super::*;
 
     const EPS: f32 = 1e-5;

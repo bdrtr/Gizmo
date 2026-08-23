@@ -56,6 +56,14 @@ still-large functions such as `update_vehicle` / `execute_render_pipeline` — a
 > refuted candidates in §7, method in §8. The audit report itself stays — it is dated evidence,
 > not a plan.
 
+> **2026-08-23:** 46 of Bevy 0.19.1's 412 examples were ported one at a time to
+> `demo/src/bin/bevy_*.rs`, each header recording — with a measurement — where the engine differs.
+> The aggregate is `docs/BEVY_PARITY.md`: what a Bevy user reaches for and does not find, ranked by
+> how much of the example corpus each gap blocks. It is measured, not estimated, and every claim
+> names the demo that can re-run it. The sweep also found six engine defects (all fixed or
+> reported; list at the end of that file). **First item of work named there: text/font rendering,
+> which the engine has no path for at all.**
+
 Phases 0–5 (stabilization, tests+CI, determinism, P2P rollback netcode, physics depth,
 renderer/WASM/editor) are **DONE**. Remaining:
 

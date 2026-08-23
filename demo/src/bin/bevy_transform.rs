@@ -4,18 +4,21 @@
 //! biraz küreye doğru dönüp kendi önüne doğru ilerleyerek), ve küre küpün başlangıç noktasından
 //! ne kadar uzaklaştığına göre **küçülüyor**.
 //!
-//! ## Bu port bir eksiği görünür kılıyor: `Transform`'un yön yardımcıları yok
+//! ## Bu port bir eksik buldu — ve o eksik artık kapalı
 //!
 //! Bevy'nin örneği neredeyse tamamen `transform.forward()`, `transform.local_y()` ve
-//! `transform.looking_at(hedef, yukarı)` üzerine kurulu. Gizmo'nun [`Transform`]'unda **üçü de
-//! yok** — yüzeyi `new/with_*/set_*/rotate_{x,y,z}/translate/compute_matrix` ile bitiyor. Demo bu
-//! yüzden üçünü de yerel fonksiyon olarak yazıyor ([`forward`], [`local_y`], [`looking_at`]),
-//! ve hepsi tek satır. Motorun bunları taşımamasının bir gerekçesi yok; kapatılmaya değer bir
-//! boşluk olarak buraya not düşülüyor.
+//! `transform.looking_at(hedef, yukarı)` üzerine kurulu. Port yazıldığında Gizmo'nun
+//! [`Transform`]'unda **üçü de yoktu**; demo üçünü de yerel fonksiyon olarak yazmak zorunda
+//! kalmıştı.
 //!
-//! Yönün işareti uydurma değil, motorun kendi kuralı: renderer her yerde `Mat4::look_at_rh` ve
-//! `Vec3::NEG_Z` kullanıyor, yani **sağ elli, ileri −Z**. Bevy'nin kuralı da aynı, o yüzden
-//! örneğin sayıları olduğu gibi taşındı.
+//! **2026-08-23'te motora eklendi:** [`Transform::forward`], [`Transform::right`],
+//! [`Transform::up`] ve [`Transform::looking_at`]. Demo artık motorun kendi metotlarını
+//! çağırıyor. İşaretler uydurma değil, motorun kendi kuralı: renderer her yerde
+//! `Mat4::look_at_rh` ve `Vec3::NEG_Z` kullanıyor, yani **sağ elli, ileri −Z**. Bevy'nin kuralı da
+//! aynı, o yüzden örneğin sayıları olduğu gibi taşındı.
+//!
+//! `looking_at` dönüşü **uygulamıyor, döndürüyor** — çünkü bu örneğin yaptığı şey tam olarak onu
+//! harmanlamak (`rotation.lerp(hedef, ağırlık)`), ve doğrudan uygulasaydı o imkân elden giderdi.
 //!
 //! ## İkinci fark: `.chain()` yok, sıralama etiketle kuruluyor
 //!
@@ -148,7 +151,7 @@ fn main() {
                     ui.label(format!("kürenin ölçeği: {:.3}", probe.sphere_scale));
                     ui.separator();
                     ui.label("dönüş + ileri hareket = daire");
-                    ui.label("Transform'da forward()/looking_at() yok — elle yazıldı");
+                    ui.label("forward()/looking_at() artık motorun kendi metotları");
                 });
         })
         .run()
@@ -158,7 +161,7 @@ fn main() {
 /// Küpü kendi **önüne** doğru taşır (Bevy'nin `move_cube`'ü).
 fn move_cube(mut cubes: Query<(Mut<Transform>, &CubeState)>, time: Res<Time>) {
     for (_entity, (mut transform, cube)) in cubes.iter_mut() {
-        let ahead = forward(transform.rotation);
+        let ahead = transform.forward();
         let delta = ahead * cube.move_speed * time.dt();
         transform.position += delta;
     }
@@ -181,7 +184,7 @@ fn rotate_cube(
 
     for (_entity, (mut transform, cube, _)) in cubes.iter_mut() {
         // Küreye tam baksaydı hangi dönüş olurdu — ve o dönüşe doğru küçük bir adım.
-        let target = looking_at(transform.position, center, local_y(transform.rotation));
+        let target = transform.looking_at(center, transform.up());
         let weight = cube.turn_speed * time.dt();
         transform.rotation = transform.rotation.lerp(target, weight);
     }
@@ -225,30 +228,4 @@ fn scale_center(
             probe.sphere_scale
         );
     }
-}
-
-// ── `Transform`'un taşımadığı üç yardımcı ────────────────────────────────────────────────────
-
-/// Bir dönüşün **ileri** yönü. Motorun kuralı sağ elli / −Z (`Mat4::look_at_rh`, `Vec3::NEG_Z`).
-fn forward(rotation: Quat) -> Vec3 {
-    rotation * Vec3::NEG_Z
-}
-
-/// Bir dönüşün **yerel yukarı** yönü — Bevy'de `Transform::local_y`.
-fn local_y(rotation: Quat) -> Vec3 {
-    rotation * Vec3::Y
-}
-
-/// `eye`'dan `target`'a bakan dönüş — Bevy'de `Transform::looking_at`.
-///
-/// `look_at_rh` bir **görüş** matrisi üretir, yani dünyayı kameranın önüne taşıyan ters dönüşüm;
-/// nesnenin kendi dönüşü onun tersidir. Hedef göz ile çakışırsa matris tekilleşeceği için o
-/// durumda dönüş olduğu gibi bırakılır.
-fn looking_at(eye: Vec3, target: Vec3, up: Vec3) -> Quat {
-    let offset = target - eye;
-    if offset.length_squared() < 1e-12 {
-        return Quat::IDENTITY;
-    }
-    let view = Mat4::look_at_rh(eye, target, up);
-    Quat::from_mat4(&view).inverse()
 }
