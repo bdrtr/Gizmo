@@ -241,11 +241,28 @@ Guarded by `two_cameras_in_one_encoder_render_two_different_frames`, which pins 
 passes without a view must be **pixel-identical** (the trap is still there and still reproducible),
 and two passes with one must differ.
 
-**A frame the user's pass can read.** The surface is `RENDER_ATTACHMENT` (+`COPY_SRC`) with no
-`TEXTURE_BINDING`, so a user pass can blend but never sample. Position-only effects work; a user
-FXAA, radial blur or frame histogram cannot be written at all — and that last one is also why
-`auto_exposure` has an actuator and no sensor. An intermediate HDR target the user can bind
-closes all of it.
+**A frame the user's pass can read.** ❌ **This entry was wrong, and checking it is what showed
+that** (2026-08-23). It said the frame could not be sampled because the surface is
+`RENDER_ATTACHMENT` (+`COPY_SRC`) with no `TEXTURE_BINDING`. True of the *surface* — and irrelevant,
+because the post-process chain does not read the surface. It reads `PostProcessState::hdr_texture`,
+which is built `RENDER_ATTACHMENT | TEXTURE_BINDING | COPY_SRC`, and whose texture, view and bind
+group are all public. Nothing needed opening. I had looked at the wrong target and written the
+conclusion down as a gap.
+
+What is actually missing is one level further in: **a reduction**. None of the nine compute shaders
+in the tree is a reduction or a histogram, so a game that wants a number out of the frame has to
+pull the whole frame to the CPU.
+
+Measured by writing exactly that, in `auto_exposure`: read `hdr_texture` back, sample every eighth
+pixel, drive `Camera::exposure` toward `0.18 / measured`. The loop closes and lands where the
+arithmetic says it should (bright station 0.3656 → exposure 0.492; dark 0.0534 → 3.370), and the
+gap between the two stations' rendered brightness falls from 118.18 to 20.93 — 82 % of what eye
+adaptation is for.
+
+And the cost is the finding: **10.1–10.9 ms per sample**, all of it `map_async` + `poll(Wait)`
+stalling the GPU. At one sample every twelve frames that is 0.87 ms per frame, 5 % of a 60 Hz
+budget, for a single number a compute reduction would produce in microseconds. So the real item is
+"a reduction pass", not "a bindable target", and it is sized: 10 ms.
 
 ## The version half
 
@@ -284,8 +301,9 @@ Ordered by unlocked-capability per unit of work, not by size.
 5. **Per-pass uniforms.** ✅ **Done, 2026-08-23** as `SceneView`. Camera-derived state — shadow
    cascades and the cluster table — is still shared, and that remainder is measured rather than
    assumed.
-6. **A bindable HDR target.** Unlocks user post-processing that reads the frame, and with it
-   auto-exposure's missing sensor.
+6. ~~**A bindable HDR target.**~~ **Withdrawn 2026-08-23 — the target was already bindable.**
+   What the item was reaching for is a **compute reduction**: a user sensor is writable today and
+   measured at 10 ms a sample, which is what makes it unusable rather than impossible.
 7. **User materials.** Largest and most architectural; wants the G-buffer budget question settled
    first, and interacts with `routing.rs` and `render_parity`.
 

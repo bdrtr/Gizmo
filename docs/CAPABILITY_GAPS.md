@@ -155,12 +155,23 @@ and none of the G-buffer's four targets is velocity.
 What exists is most of the camera half: TAA already keeps the previous unjittered view-projection
 and the G-buffer already writes `world_position` — the two inputs a camera-blur shader needs.
 
-**Auto exposure.** The actuator is live and has authority; the sensor does not exist. Measured in
-`auto_exposure`: a bright and a dark station differ 2.64× in mean luminance and neither drifts over
-580 frames (+0.128 and +0.015 — capture noise). Sweeping `Camera::exposure` 0.5 → 4.0 moves screen
-luminance 31.8 → 130.4, more than enough to close that gap. Nothing measures frame luminance: no
-histogram, no reduction pass, and none of the nine compute shaders in the tree is a downsample.
-Closing the loop in game code means the `capture` path, which blocks and encodes a PNG.
+**Auto exposure.** The actuator is live and has authority. Measured in `auto_exposure`: a bright
+and a dark station differ 2.64× in mean luminance and neither drifts over 580 frames (+0.128 and
++0.015 — capture noise). Sweeping `Camera::exposure` 0.5 → 4.0 moves screen luminance 31.8 → 130.4,
+more than enough to close that gap.
+
+**The sensor is writable, and that corrects what this entry used to say.** It read "the sensor does
+not exist"; what does not exist is a *built-in* one. `PostProcessState::hdr_texture` is
+`RENDER_ATTACHMENT | TEXTURE_BINDING | COPY_SRC` with texture, view and bind group all public, so a
+game can read the frame it is about to tone-map. The demo now does: read back, sample every eighth
+pixel, drive `Camera::exposure` toward `0.18 / measured`. It lands exactly where the arithmetic
+says (0.3656 → 0.492, 0.0534 → 3.370) and closes 82 % of the gap between the two stations
+(118.18 → 20.93 in rendered brightness).
+
+**What is missing is a reduction, and it is priced: 10.1–10.9 ms a sample**, all of it
+`map_async` + `poll(Wait)` stalling the GPU — 0.87 ms per frame at one sample per twelve. None of
+the nine compute shaders in the tree is a reduction or a histogram, and that single compute pass is
+the whole remaining gap; it would produce the same number in microseconds.
 
 ### A7d. No planar reflections, and SSR's limit priced
 
@@ -281,7 +292,7 @@ borrow conflict still panics, because it is a scheduling bug rather than a state
 | A clear/sky colour setting | Fog only tints geometry; the empty background stays black | `fog` |
 | `AlphaToCoverage` | No MSAA to spread alpha across | `transparency_3d` |
 | Binding a normal / MR / emissive / AO map | **Open since 2026-08-23** — `AssetManager::material()` is a builder over the seven-entry material bind group, every slot optional with a neutral default (base colour and sampler included), so `material().normal(&view).build(..)` is a complete material. `params` is nameable too. Before it, `assemble_material_bind_group` was `pub(crate)` and the public surface gave base colour only, with the glTF loader as the sole route to the other four. Cost measured then and now: the same height field as geometry is 55 296 verts at shading σ 39.27; as a normal map it is **6 verts at σ 38.98**, 99.3 % of the variation for 1/9216 of the geometry | `parallax_mapping` |
-| A user post-pass that reads the frame | `set_render` really does let a game add its own full-screen pass (measured: 38.67 % of pixels, and the untouched rows stay bit-identical, so `LoadOp::Load` preserves the engine's frame). But the surface is `RENDER_ATTACHMENT` (+`COPY_SRC` where supported) with **no `TEXTURE_BINDING`**, so the pass cannot sample what it draws over. Position-only effects work; a user FXAA, radial blur or frame histogram cannot be written | `post_processing` |
+| A user post-pass that reads the frame | `set_render` really does let a game add its own full-screen pass (measured: 38.67 % of pixels, and the untouched rows stay bit-identical, so `LoadOp::Load` preserves the engine's frame). The *surface* has no `TEXTURE_BINDING`, so a pass cannot sample the swapchain — but it does not have to: `PostProcessState::hdr_texture` is `TEXTURE_BINDING | COPY_SRC` and its texture, view and bind group are public, which is the frame the chain itself reads. A user FXAA or radial blur is writable through it; what is missing is a **compute reduction**, priced at 10 ms a CPU readback in `auto_exposure` | `post_processing`, `auto_exposure` |
 | Fallible system params | A parameter that cannot be fetched **panics** (measured: `❌ FATAL ECS ERROR ❌`). That is deliberate — the message says so. The only guard is `run_if`, measured working (guarded system ran 0 times, no panic). Cost: the system does not run at all, so there is no `else` branch | `fallible_params`, `error_handling` |
 | Systems returning `Result`, `?`, an error handler | None of the three exist. Business-logic errors must be written to a resource | `error_handling` |
 | Default query filters | There is no way to add an implicit filter to every query. This is the whole of "entity disabling": the marker component is trivial, the implicit filter is the feature. Measured cost of forgetting it once: **543 extra updates over 180 frames** | `entity_disabling` |
