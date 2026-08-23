@@ -35,6 +35,9 @@ struct PostProcessParams {
     cam_far: f32,
     underwater: f32,       // 0 = havada, 1 = kamera su altında
     fog: vec4<f32>,        // rgb = su-altı sis rengi, a = yoğunluk (offset 48, 16-hizalı)
+    // Tone mapping: eğri seçimi ve beyaz noktası. Ayrı bir vec4, çünkü `fog`'dan sonra blok
+    // 16-hizalı bir sınırda ve tek bir f32 eklemek onu bozardı.
+    tonemap: vec4<f32>,    // x = eğri (0..3), y = beyaz nokta, zw = pad
 };
 
 @group(2) @binding(0)
@@ -114,6 +117,30 @@ fn aces_tonemap(x: vec3<f32>) -> vec3<f32> {
     return clamp((x * (a * x + b)) / (x * (c * x + d) + e), vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
+// The curve `params.tonemap.x` selects. See `TonemapCurve` on the Rust side; the numbering is
+// that enum's, and ACES is 3 because it is the default and changing the default would restyle
+// every scene built on the engine.
+fn apply_tonemap(x: vec3<f32>) -> vec3<f32> {
+    let curve = params.tonemap.x;
+    let white = max(params.tonemap.y, 0.0001);
+
+    if (curve < 0.5) {
+        // None: clamp. Everything above white clips flat, which is what makes it useful for
+        // checking whether a frame was ever really in HDR.
+        return clamp(x, vec3<f32>(0.0), vec3<f32>(1.0));
+    }
+    if (curve < 1.5) {
+        // Reinhard: never clips, and pulls midtones down noticeably.
+        return x / (1.0 + x);
+    }
+    if (curve < 2.5) {
+        // Reinhard with a white point: reaches exactly 1.0 at `white`, so highlights keep their
+        // separation instead of asymptoting together.
+        return clamp((x * (1.0 + x / (white * white))) / (1.0 + x), vec3<f32>(0.0), vec3<f32>(1.0));
+    }
+    return aces_tonemap(x);
+}
+
 @fragment
 fn fs_composite(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     // 1. Chromatic Aberration
@@ -169,8 +196,8 @@ fn fs_composite(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let bloom_color = textureSample(t_bloom, s_bloom, in.uv).rgb;
     let combined = (dof_color + bloom_color * params.bloom_intensity) * params.exposure;
     
-    // 3. ACES Tone Mapping
-    let mapped = aces_tonemap(combined);
+    // 3. Tone mapping — ACES by default, `TonemapCurve` chooses.
+    let mapped = apply_tonemap(combined);
     
     // Swapchain is configured as an sRGB format (Bgra8UnormSrgb/Rgba8UnormSrgb)
     // Hardware automatically applies gamma correction upon writing.

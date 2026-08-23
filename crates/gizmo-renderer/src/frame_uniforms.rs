@@ -305,6 +305,12 @@ impl Default for PostProcessUniforms {
             fog_g: 0.0,
             fog_b: 0.0,
             fog_density: 0.0,
+            // ACES, which is what the shader hard-coded and what every existing scene was
+            // authored against. Changing this default would restyle every game built on the
+            // engine, silently.
+            tonemap_curve: crate::gpu_types::TonemapCurve::Aces.as_f32(),
+            tonemap_white_point: 4.0,
+            _tonemap_pad: [0.0; 2],
         }
     }
 }

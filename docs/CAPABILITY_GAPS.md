@@ -269,7 +269,7 @@ author it. The middle column is what a full implementation offers.
 | Effect | Full capability | Gizmo | Measured in |
 |---|---|---|---|
 | Screen-space reflections | 6 knobs | **8 shaping fields since 2026-08-24** — `SsrParams::{roughness_cutoff, fade_start, fade_end, step_size, max_steps, thickness, start_offset, edge_fade}`, one 32-byte uniform per frame, defaults pixel-identical to the shader literals they replaced. Plus `enabled` (2026-08-23). Measured: five of them move 11–19 % of the frame; `max_steps` moves nothing on that scene because the reflection is found on the first step, which is a property of the fixture rather than of the field. Still absent, and never written: step exponent, binary refinement, secant search | `ssr` |
-| Tone mapping | 7 curves + dither | **1** curve (ACES, hard-coded) + exposure | `tonemapping` |
+| Tone mapping | 7 curves + dither | **4 curves since 2026-08-24** — `TonemapCurve::{None, Reinhard, ReinhardExtended, Aces}` via `Renderer::tonemap_curve`, **default still ACES** and locked as such in three places, because every existing scene was authored under it. Measured on one scene: they differ from ACES by 4.91 / 7.20 / 5.41 % of pixels. Still absent: luminance-Reinhard, AgX, SBDT, Tony McMapface, Blender Filmic, deband dither | `tonemapping` |
 | Bloom | 7 knobs | **2** (`intensity`, `threshold`) | `bloom_3d` |
 | Depth of field | 6 optical knobs | **3** numbers + enable | `depth_of_field` |
 | SSAO | 5 quality levels + temporal denoise | **1** (`strength`) | `ssao` |
@@ -572,7 +572,10 @@ and `emissive` (item 4, the only undocumented one). No further silent fields.
    **post-process knobs** (B), which are uniform fields and shader constants that exist but are
    not exposed. **Volumetric's six left B on 2026-08-23** (`VolumetricParams`) and **SSR's eight on
    2026-08-24** (`SsrParams`); all five screen-space effects also gained a reversible `enabled`.
-   What remains in B is tone mapping's single hard-coded ACES curve.
+   **Tone mapping's curve selector landed 2026-08-24** (four curves, ACES still the default).
+   What remains in B is the narrower end of each table — luminance-Reinhard and the film-emulation
+   curves, SSR's step exponent and refinement passes — none of which is code that exists and is
+   unexposed; they were never written.
 3. **`Visibility`, `Local<T>`, `or_else`, default query filters (C).** Small, self-contained, and
    each removes a recurring papercut. (`Transform`'s direction helpers were the first of this group
    and are done.)

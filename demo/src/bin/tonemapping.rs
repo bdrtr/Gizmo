@@ -2,21 +2,40 @@
 //!
 //! Ton eşleme: sınırsız (HDR) ışık değerlerini ekranın taşıyabileceği 0–1 aralığına indiren eğri.
 //!
-//! ## Envanter: motorun tek eğrisi
+//! ## Envanter: dört eğri (2026-08-24)
 //!
 //! | yetenek | Gizmo |
 //! |---------|-------|
-//! | eğriyi tamamen kapatma (ham HDR) | **yok** |
-//! | Reinhard | **yok** |
+//! | eğriyi tamamen kapatma (ham HDR, clamp) | **var** — `TonemapCurve::None` |
+//! | Reinhard | **var** — `::Reinhard` |
+//! | Reinhard (beyaz noktalı) | **var** — `::ReinhardExtended` |
+//! | ACES | **var, varsayılan** — `::Aces` |
 //! | Reinhard (parlaklık üzerinden) | **yok** |
-//! | ACES | tek seçenek, `post_process.wgsl`'de gömülü |
 //! | AgX | **yok** |
 //! | Somewhat Boring Display Transform | **yok** |
 //! | Tony McMapface | **yok** |
 //! | Blender Filmic | **yok** |
 //! | deband dither açık/kapalı | **yok** |
 //!
-//! Motorun eğrisi seçilemiyor; `aces_tonemap` fonksiyonu shader'ın içinde ve tek çağrı yeri var.
+//! Eğri `Renderer::tonemap_curve` ile seçiliyor ve `PostProcessUniforms`'un içinden shader'a
+//! gidiyor. **Varsayılan hâlâ ACES**, ve öyle kalması gerekiyor: eğri gömülüyken yazılmış her
+//! sahne onun altında ayarlanmış, yani varsayılanı değiştirmek her oyunu sessizce yeniden
+//! renklendirirdi. Motorun `every_default_is_still_aces` testi bunu üç ayrı yerde kilitliyor.
+//!
+//! ### Ölçülen: dördü de ayrışıyor
+//!
+//! `GIZMO_TM_CURVE=<eğri>` ile aynı sahne, kare 200, alt %70 (2026-08-24):
+//!
+//! | eğri | ortalama parlaklık | ACES'ten farklı | en büyük kanal farkı |
+//! |------|--------------------|-----------------|----------------------|
+//! | `aces` (varsayılan) | 74,16 | %0,00 | 0 |
+//! | `none` (clamp) | 74,70 | %4,91 | 87 |
+//! | `reinhard` | 70,98 | **%7,20** | 86 |
+//! | `reinhard-ext` | 71,66 | %5,41 | 86 |
+//!
+//! Reinhard beklendiği gibi en çok karartan: parlak yerleri asimptota sıkıştırıyor. Beyaz noktalı
+//! sürümü aradan geçiyor — `W`'de tam 1,0'a ulaştığı için parlaklıklar birbirinden ayrı kalıyor.
+//! `none` ortalamada ACES'e yakın ama %4,91'lik farkı tamamen parlak uçlarda: orada düz kesiyor.
 //! Ayarlanabilen tek şey **pozlama**: [`Renderer::exposure`], eğriden *önce* uygulanan doğrusal
 //! bir çarpan.
 //!
@@ -62,6 +81,7 @@
 //! alanına yazıyor ve `camera_orbit` her kare kameraya taşıyor.
 //!
 //! ## Kontroller
+//!   * `GIZMO_TM_CURVE=none|reinhard|reinhard-ext|aces` — eğriyi seç (varsayılan aces)
 //!   * **1/2/3/4** — pozlama 0,3 / 0,6 / 1,15 / 2,5
 //!   * **Sağ-tık + fare / WASDQE** — kamera (ölçüm için dokunmayın)
 
@@ -133,7 +153,13 @@ fn main() {
             // okunamaz hâle getiriyordu. Ölçülmek istenen şey ton eğrisi, ton eğrisi + hale değil.
             renderer.bloom_intensity = 0.0;
 
-
+            // `GIZMO_TM_CURVE=none|reinhard|reinhard-ext|aces` eğriyi seçiyor (2026-08-24).
+            renderer.tonemap_curve = match std::env::var("GIZMO_TM_CURVE").as_deref() {
+                Ok("none") => gizmo::renderer::gpu_types::TonemapCurve::None,
+                Ok("reinhard") => gizmo::renderer::gpu_types::TonemapCurve::Reinhard,
+                Ok("reinhard-ext") => gizmo::renderer::gpu_types::TonemapCurve::ReinhardExtended,
+                _ => gizmo::renderer::gpu_types::TonemapCurve::Aces,
+            };
 
             gizmo::systems::default_render_pass(world, encoder, view, renderer);
         })

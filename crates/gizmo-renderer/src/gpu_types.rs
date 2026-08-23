@@ -228,6 +228,52 @@ pub struct PostProcessUniforms {
     pub fog_b: f32,
     /// How quickly the underwater fog closes in with distance.
     pub fog_density: f32,
+
+    // ── Tone mapping ──
+    /// Which curve maps HDR to display range. See [`TonemapCurve`].
+    ///
+    /// A float rather than a `u32` because the block's other 16 fields are floats and WGSL would
+    /// pad a lone integer into its own 16-byte slot; the shader compares it against small
+    /// constants, which f32 represents exactly.
+    pub tonemap_curve: f32,
+    /// White point for the curves that take one ([`TonemapCurve::ReinhardExtended`]). Ignored by
+    /// the others.
+    pub tonemap_white_point: f32,
+    /// Padding to the next 16-byte boundary. Not a knob.
+    pub _tonemap_pad: [f32; 2],
+}
+
+/// Which curve maps HDR to the display range.
+///
+/// ACES was the only one, hard-coded in `post_process.wgsl`, which is what `CAPABILITY_GAPS.md`
+/// §B recorded as "1 curve + exposure" against a table of seven. These are the four that differ
+/// from each other in ways a game would choose between; the value is what
+/// [`PostProcessUniforms::tonemap_curve`] carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[repr(u32)]
+pub enum TonemapCurve {
+    /// No curve: clamp to `[0, 1]`. Everything above white clips flat.
+    ///
+    /// Useful for checking what the curve is doing rather than for shipping — a frame that looks
+    /// right here and wrong under a curve is a frame that was never in HDR.
+    None = 0,
+    /// `x / (1 + x)`. Never clips, desaturates highlights, and pulls midtones down noticeably.
+    Reinhard = 1,
+    /// Reinhard with a white point: `x(1 + x/W²) / (1 + x)`. Reaches exactly 1 at `W`, so
+    /// highlights keep their separation instead of asymptoting.
+    ReinhardExtended = 2,
+    /// The ACES filmic approximation. **The default**, and what every existing scene was authored
+    /// against.
+    #[default]
+    Aces = 3,
+}
+
+impl TonemapCurve {
+    /// The value to write into [`PostProcessUniforms::tonemap_curve`].
+    #[must_use]
+    pub fn as_f32(self) -> f32 {
+        self as u32 as f32
+    }
 }
 
 /// Uniform block for the shadow pass vertex shader only (one cascade matrix per draw).
@@ -511,6 +557,46 @@ impl UvTransform {
     /// True when this transform leaves UVs unchanged (identity).
     pub fn is_identity(&self) -> bool {
         self.offset == [0.0, 0.0] && self.rotation == 0.0 && self.scale == [1.0, 1.0]
+    }
+}
+
+#[cfg(test)]
+mod tonemap_default_tests {
+    use super::*;
+
+    /// **Upgrading must not restyle a game.** ACES was hard-coded in `post_process.wgsl`; making
+    /// the curve selectable is only safe while the default is still ACES, in every place a
+    /// default is produced.
+    ///
+    /// Three places, because they are three separate defaults and any one of them drifting would
+    /// change what an existing scene renders with nothing failing to compile.
+    #[test]
+    fn every_default_is_still_aces() {
+        assert_eq!(TonemapCurve::default(), TonemapCurve::Aces);
+        assert_eq!(TonemapCurve::Aces.as_f32(), 3.0);
+        assert_eq!(
+            PostProcessUniforms::default().tonemap_curve,
+            TonemapCurve::Aces.as_f32(),
+            "the uniform block's default curve is no longer ACES"
+        );
+    }
+
+    /// The shader selects on `< 0.5`, `< 1.5`, `< 2.5`, else ACES — so the discriminants have to
+    /// be 0, 1, 2, 3 and no others. A reordering that kept them distinct would still misroute.
+    #[test]
+    fn the_discriminants_are_the_ones_the_shader_branches_on() {
+        assert_eq!(TonemapCurve::None.as_f32(), 0.0);
+        assert_eq!(TonemapCurve::Reinhard.as_f32(), 1.0);
+        assert_eq!(TonemapCurve::ReinhardExtended.as_f32(), 2.0);
+        assert_eq!(TonemapCurve::Aces.as_f32(), 3.0);
+    }
+
+    /// The block stays 16-byte aligned after the tone-mapping pair, or every field the shader
+    /// reads after `fog` shifts.
+    #[test]
+    fn the_block_is_still_a_whole_number_of_vec4s() {
+        assert_eq!(std::mem::size_of::<PostProcessUniforms>() % 16, 0);
+        assert_eq!(std::mem::size_of::<PostProcessUniforms>(), 80);
     }
 }
 

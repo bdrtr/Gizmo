@@ -433,6 +433,13 @@ pub fn default_render_pass(
             ..Default::default()
         },
     };
+    // The curve is the renderer's in both branches: `PostProcess` is the authored *grade*, and a
+    // grade that carried its own tone map would fight the camera it is composited with.
+    let post = crate::renderer::PostProcessUniforms {
+        tonemap_curve: renderer.tonemap_curve.as_f32(),
+        tonemap_white_point: renderer.tonemap_white_point,
+        ..post
+    };
     renderer.update_post_process(
         &renderer.queue,
         post.with_camera(&camera).with_underwater(underwater),
@@ -2828,6 +2835,112 @@ mod golden_render_tests {
                 );
             }
         });
+    }
+
+    /// Four tone-mapping curves, and the default is still the one every scene was authored under.
+    ///
+    /// ACES was hard-coded in `post_process.wgsl`. Selecting between curves is only safe if the
+    /// default is bit-for-bit what it was — otherwise every existing game gets restyled by an
+    /// upgrade — so that is checked as an identity, and the other three are checked to differ from
+    /// it and from each other.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn the_tonemap_curves_differ_and_aces_is_unchanged() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        use gizmo_renderer::gpu_types::TonemapCurve;
+        pollster::block_on(async {
+            let aces = render_bright_scene(TonemapCurve::Aces).await;
+            let none = render_bright_scene(TonemapCurve::None).await;
+            let reinhard = render_bright_scene(TonemapCurve::Reinhard).await;
+            let extended = render_bright_scene(TonemapCurve::ReinhardExtended).await;
+
+            // Every pair must differ, or a curve is selecting nothing.
+            for (an, a) in [
+                ("None", &none),
+                ("Reinhard", &reinhard),
+                ("ReinhardExtended", &extended),
+            ] {
+                let (changed, total) = changed_pixels(&aces, a, 128);
+                assert!(
+                    changed >= 200,
+                    "{an} differs from ACES on only {changed}/{total} pixels — the curve \
+                     selector is not reaching the shader",
+                );
+            }
+            let (r_vs_e, total) = changed_pixels(&reinhard, &extended, 128);
+            assert!(
+                r_vs_e >= 100,
+                "Reinhard and its extended form differ on only {r_vs_e}/{total} pixels — the \
+                 white point is not being applied",
+            );
+
+            // And the ordering the curves imply: on a bright frame, ACES holds highlights higher
+            // than Reinhard, which pulls everything down. Directional, so a build that shuffled
+            // the enum's numbering fails here rather than passing on "they differ".
+            let mean = |f: &[u8]| -> f64 {
+                let (px, _) = f.as_chunks::<4>();
+                px.iter()
+                    .map(|p| f64::from(p[0]) + f64::from(p[1]) + f64::from(p[2]))
+                    .sum::<f64>()
+                    / (px.len().max(1) * 3) as f64
+            };
+            assert!(
+                mean(&aces) > mean(&reinhard),
+                "ACES ({:.1}) should hold a bright frame above Reinhard ({:.1})",
+                mean(&aces),
+                mean(&reinhard),
+            );
+        });
+    }
+
+    /// A brightly lit white floor — bright enough that the curve's shoulder is what decides the
+    /// output. A dim scene would sit on the linear part of every curve and they would all agree.
+    async fn render_bright_scene(curve: gizmo_renderer::gpu_types::TonemapCurve) -> Vec<u8> {
+        const W: u32 = 128;
+        let mut renderer = crate::test_gpu::headless_renderer(W, W).await;
+        renderer.taa = None;
+        renderer.tonemap_curve = curve;
+        let mut asset_manager = AssetManager::new();
+        let mut world = World::new();
+        let tex = asset_manager.create_white_texture(
+            &renderer.device,
+            &renderer.queue,
+            &renderer.scene.texture_bind_group_layout,
+        );
+
+        let floor = world.spawn();
+        world.add_component(
+            floor,
+            Transform::new(Vec3::new(0.0, -1.0, 0.0)).with_scale(Vec3::new(14.0, 0.2, 14.0)),
+        );
+        world.add_component(floor, GlobalTransform::default());
+        world.add_component(floor, AssetManager::create_cube(&renderer.device));
+        world.add_component(
+            floor,
+            Material::new(tex).with_pbr(Vec4::new(1.0, 1.0, 1.0, 1.0), 0.8, 0.0),
+        );
+        world.add_component(floor, MeshRenderer::new());
+
+        world.spawn_bundle(CameraBundle {
+            position: Vec3::new(0.0, 1.5, 4.0),
+            yaw: -std::f32::consts::FRAC_PI_2,
+            pitch: -0.3,
+            primary: true,
+            ..Default::default()
+        });
+        // Deliberately over-bright: the point is to land past every curve's linear region.
+        world.spawn_bundle(DirectionalLightBundle {
+            intensity: 8.0,
+            ..Default::default()
+        });
+
+        render_world(&mut renderer, &mut world).await
     }
 
     /// Moving SSR's constants out of the shader has to be a move, not an edit.

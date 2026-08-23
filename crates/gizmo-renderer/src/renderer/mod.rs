@@ -224,6 +224,15 @@ pub struct Renderer {
     pub environment_preset_2: u32,
     /// How far between the two: 0 = fully the first, 1 = fully the second.
     pub environment_blend_t: f32,
+    /// Which tone-mapping curve the post-process chain applies.
+    ///
+    /// [`TonemapCurve::Aces`](crate::gpu_types::TonemapCurve::Aces) by default, which is what the
+    /// shader hard-coded before this existed — so changing the default would restyle every scene
+    /// built on the engine, and does not happen by upgrading.
+    pub tonemap_curve: crate::gpu_types::TonemapCurve,
+    /// White point for [`TonemapCurve::ReinhardExtended`](crate::gpu_types::TonemapCurve::ReinhardExtended);
+    /// ignored by the other curves.
+    pub tonemap_white_point: f32,
     /// How much bloom is added back over the frame.
     pub bloom_intensity: f32,
     /// The luminance above which a texel blooms.

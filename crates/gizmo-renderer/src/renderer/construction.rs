@@ -631,6 +631,8 @@ impl Renderer {
         ));
 
         Self {
+            tonemap_curve: crate::gpu_types::TonemapCurve::Aces,
+            tonemap_white_point: 4.0,
             custom_materials: crate::custom_material::MaterialRegistry::new(),
             surface,
             device,
