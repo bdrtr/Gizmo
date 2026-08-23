@@ -86,7 +86,13 @@ pub struct App<State: 'static = ()> {
     window_size: (u32, u32),
 
     setup_fn: Option<Box<dyn FnOnce(&mut World, &Renderer) -> State + 'static>>,
-    update_fn: Option<Box<dyn FnMut(&mut World, &mut State, f32, &gizmo_core::input::Input)>>, // dt, input
+    /// The per-frame game hooks, in the order they were installed.
+    ///
+    /// A `Vec` rather than an `Option` so that
+    /// [`add_update_hook`](App::add_update_hook) can add one without destroying what is
+    /// already there. [`set_update`](App::set_update) still clears the list first, which
+    /// is what makes its documented "the last caller wins" true.
+    update_fns: Vec<Box<dyn FnMut(&mut World, &mut State, f32, &gizmo_core::input::Input)>>, // dt, input
     render_fn: Option<
         Box<
             dyn FnMut(
@@ -155,7 +161,7 @@ impl<State: 'static> std::fmt::Debug for App<State> {
         ds.field("window_title", &self.window_title)
             .field("window_size", &self.window_size)
             .field("setup_fn", &self.setup_fn.as_ref().map(|_| "<closure>"))
-            .field("update_fn", &self.update_fn.as_ref().map(|_| "<closure>"))
+            .field("update_fns", &format!("<{} closures>", self.update_fns.len()))
             .field("render_fn", &self.render_fn.as_ref().map(|_| "<closure>"))
             .field(
                 "simple_render_fn",

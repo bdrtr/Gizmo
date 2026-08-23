@@ -463,6 +463,10 @@ impl<'a> SceneBuilder<'a> {
 /// never have — would otherwise silently lose all four jobs below. Call this at the top of your
 /// own hook to keep them.
 ///
+/// [`App::add_update_hook`](crate::app::App::add_update_hook) is the direct answer to the same
+/// problem and needs no call to this function; what the loss actually costs, job by job, is
+/// measured under `set_update`'s own docs and in the `update_hooks` demo.
+///
 /// ```no_run
 /// # use gizmo::prelude::*;
 /// # use gizmo::simple::{simple_scene_update, SimpleAppExt, SimpleSceneState};

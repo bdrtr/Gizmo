@@ -684,7 +684,7 @@ impl<State: 'static> App<State> {
                             }
 
                             // Kullanıcı update hook'u (render dt ile — kamera, UI, vb.)
-                            if let Some(update_hk) = self.update_fn.as_mut() {
+                            for update_hk in self.update_fns.iter_mut() {
                                 update_hk(&mut self.world, &mut state, dt, &self.input);
                             }
 

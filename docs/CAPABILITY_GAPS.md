@@ -384,15 +384,25 @@ whole set, because they are one family:
    drawn from" are now the same sentence. The closure was also lifted out as the public
    `gizmo::simple::simple_scene_update` (see item 8), and locked by
    `the_fly_camera_writes_only_to_the_rendered_camera`, which goes red if the filter is removed.
-8. **`App::set_update` replaces the update hook; it does not chain.** The builder stores
+8. **`App::set_update` replaces the update hook; it does not chain.** The builder stored
    `self.update_fn = Some(f)`. So a demo or game that writes
    `.with_simple_scene(..).set_update(..)` — the obvious thing to write when it needs an exclusive
-   `&mut World` — silently discards *all four* of the simple scene's per-frame jobs: camera
-   control, CPU physics stepping, `TransformSyncSystem` and `TransformPropagateSystem`. Nothing
-   warns and nothing fails to compile; the camera simply stops responding.
+   `&mut World` — silently discards *all four* of the simple scene's per-frame jobs. Found
+   2026-08-23 in six of this repo's own demos.
 
-   Found 2026-08-23 in six of this repo's own demos. `demo::simple_scene_update` now exists as the
-   shared fix, and its doc comment carries the warning.
+   **Fixed 2026-08-23:** `App::add_update_hook` installs beside the existing hooks (`update_fn`
+   became `update_fns: Vec<_>`); `set_update` still clears the list and still warns.
+
+   **And the cost was not what this item said it was.** The `update_hooks` demo measures all three
+   forms over 300 frames. CPU physics really stops — a free-falling body descends **0.000** units
+   under the trap against ~6.9 either working way. But `TransformSyncSystem` and
+   `TransformPropagateSystem` do *not* stop: propagation also runs in `TransformPlugin`'s scheduled
+   system and in `ensure_global_transforms` before each draw, so `set_update` swallows one of
+   three. What is lost is the hook seeing a current `GlobalTransform` **in its own frame**, and the
+   measured signature is a single 2.5-unit step on frame one — exactly the child's distance from
+   its parent — as `Mat4::IDENTITY` is replaced by the real pose. The camera is the one job with no
+   second home, and it is the one that could not be measured windowless, since `fly_step` reads
+   input.
 9. **`DespawnAfter` is inert without `LifetimePlugin`**, which is not on by default. The component
    attaches, nothing reads it, the entity never dies, and **nothing warns**. Found in
    `delayed_commands` only because the demo ran the engine's path beside a hand-built one and saw

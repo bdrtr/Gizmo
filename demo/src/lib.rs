@@ -81,9 +81,18 @@ pub mod assets {
 ///
 /// So a demo that wants its own exclusive hook — anything needing `&mut World`, which a scheduled
 /// system can never have — and writes `.with_simple_scene(..).set_update(..)` silently throws all
-/// four away. Measured 2026-08-23: the camera stops responding to input and `GlobalTransform`
-/// stops being propagated, with nothing logged and nothing failing to compile. Six demos in this
-/// crate had the bug.
+/// four away, with nothing logged and nothing failing to compile. Six demos in this crate had the
+/// bug.
+///
+/// What that costs is measured in the `update_hooks` demo, and it is not what this note used to
+/// claim. **CPU physics really stops** — a free-falling body descends 0.000 units over 300 frames
+/// instead of ~6.9. **Propagation does not**: it runs in two other places as well, so what is lost
+/// is the hook seeing a current `GlobalTransform` in its own frame, a one-frame lag whose measured
+/// signature is a single 2.5-unit jump on frame one. The camera has no second home but could not
+/// be measured windowless, since `fly_step` reads input.
+///
+/// `App::add_update_hook` (2026-08-23) installs beside the existing hooks and avoids the whole
+/// question; this function stays for the hand-chained form.
 ///
 /// Call this at the top of such a hook and the demo gets both:
 ///

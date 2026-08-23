@@ -30,7 +30,7 @@ The instability is not there. It is one layer down, where the doors are locked:
 | a normal map on a hand-built material | `assemble_material_bind_group` is `pub(crate)`; `Layouts` is `pub(super)` | `parallax_mapping` |
 | two camera passes in one frame | one `global_uniform_buffer`, written with `queue.write_buffer` | `render_to_texture` |
 | a post-pass that reads the frame | the surface has no `TEXTURE_BINDING` | `post_processing` |
-| to keep the simple scene *and* add an exclusive pass | `set_update` replaces the hook | `demo::simple_scene_update` |
+| ~~to keep the simple scene *and* add an exclusive pass~~ | **opened 2026-08-23** — `add_update_hook` | `update_hooks` |
 | less volumetric rather than none | **half-opened 2026-08-23** — an `enabled` flag exists; shaping still does not | `volumetric_fog` |
 
 Every row is a **ceiling, not a missing feature**. In each case the engine can already do the
@@ -134,9 +134,19 @@ loader. `parallax_mapping` prices the workaround at **6 verts → 55 296** for 2
 variation, because geometry is the only surface detail a hand-built scene can get. Making the
 assembler public behind a builder is a visibility change with a documented layout, not a design.
 
-**`set_update` replacing rather than composing.** Half-fixed already: it warns on overwrite and
-`gizmo::simple::simple_scene_update` is public. The rest is an additive form —
-`add_update_hook(f)` — with `set_update` kept as the deliberate replace.
+**`set_update` replacing rather than composing.** ✅ **Done, 2026-08-23.** `App::add_update_hook`
+installs beside the existing hooks; `set_update` still clears the list, because "set" has to keep
+meaning what its warning says. The single `Option` behind it became a `Vec`.
+
+Writing the demo for it also **falsified a claim this repo had been making**. `set_update`'s docs,
+`demo::simple_scene_update`'s docs and item 8 of `CAPABILITY_GAPS.md` §G all said the trap stopped
+`GlobalTransform` from being propagated. Measured over 300 frames in `update_hooks`: it does not.
+`TransformPropagateSystem` runs in three places and `set_update` swallows one, so what is lost is
+the hook seeing a current transform *in its own frame* — a one-frame lag, whose signature is a
+single 2.5-unit step on frame one as `Mat4::IDENTITY` is replaced. CPU physics genuinely does stop
+(a falling body descends 0.000 units against ~6.9). All three notes are corrected. The lesson is
+the ordinary one: a consequence that follows obviously from reading the code is still a guess until
+something measures it.
 
 **Effect on/off flags.** ✅ **Done, 2026-08-23**, and wider than the plan asked: `ssr`, `ssgi`,
 `volumetric`, `ssao` and `decal` all carry `enabled: bool` now, matching the flag TAA and FXAA

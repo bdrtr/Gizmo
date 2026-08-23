@@ -18,7 +18,7 @@ impl<State: 'static> App<State> {
             window_title: title.to_string(),
             window_size: (width, height),
             setup_fn: None,
-            update_fn: None,
+            update_fns: Vec::new(),
             render_fn: None,
             simple_render_fn: None,
             input_fn: None,
@@ -181,27 +181,81 @@ impl<State: 'static> App<State> {
     ///
     /// So `.with_simple_scene(..).set_update(..)` — the obvious thing to write when a game needs
     /// an exclusive `&mut World`, which a scheduled system can never have — **silently discards
-    /// all four**. Nothing fails to compile and the frame still renders; the camera just stops
-    /// responding to input and `GlobalTransform` stops being propagated. Found this way in six
+    /// all four**. Nothing fails to compile and the frame still renders. Found this way in six
     /// demos on 2026-08-23.
     ///
-    /// If you need both, call the simple scene's work yourself at the top of your hook. The demo
-    /// crate publishes exactly that as `demo::simple_scene_update`.
+    /// # What it actually costs, measured
+    ///
+    /// Not all four cost the same, because two of them have a second home. Measured in the
+    /// `update_hooks` demo over 300 frames, three ways of installing the same hook:
+    ///
+    /// * **CPU physics really does stop.** A free-falling body descends 0.000 units under the
+    ///   trap and ~6.9 under either working form. This is the loud one, and it is silent.
+    /// * **Propagation does not stop** — it arrives one frame late. `TransformPropagateSystem`
+    ///   runs in three places: here, in `TransformPlugin`'s scheduled system, and inside
+    ///   `ensure_global_transforms` just before the frame is drawn. `set_update` swallows only
+    ///   the first. What the hook loses is seeing a *current* `GlobalTransform` in its own frame:
+    ///   the measured signature is a single 2.5-unit step on frame one, exactly the child's
+    ///   distance from its parent, as `Mat4::IDENTITY` is replaced by the real pose.
+    /// * **The camera** is the one job with no second home — nothing else writes a pose onto
+    ///   `active_camera`. Not measured: `fly_step` is driven by input, and a windowless run has
+    ///   none.
+    ///
+    /// An earlier version of this note claimed propagation stopped outright. It does not; the
+    /// demo was written to check and the check failed.
+    ///
+    /// # Keeping both
+    ///
+    /// [`add_update_hook`](Self::add_update_hook) installs a hook *beside* the existing ones and
+    /// is the direct answer. Calling the simple scene's work at the top of your own hook also
+    /// works — the demo crate publishes it as `demo::simple_scene_update`.
     ///
     /// Overwriting an already-installed hook logs a warning rather than doing it quietly.
     pub fn set_update<F>(mut self, f: F) -> Self
     where
         F: FnMut(&mut World, &mut State, f32, &gizmo_core::input::Input) + 'static,
     {
-        if self.update_fn.is_some() {
+        if !self.update_fns.is_empty() {
             tracing::warn!(
                 "set_update replaced an existing update hook — if the previous one came from \
-                 `with_simple_scene`, camera control, CPU physics stepping and transform \
-                 propagation are now gone. Call `demo::simple_scene_update` (or equivalent) at \
-                 the top of the new hook to keep them."
+                 `with_simple_scene`, camera control and CPU physics stepping are now gone, and \
+                 transform propagation reaches your hook a frame late. Use `add_update_hook` to \
+                 install beside it instead, or call `demo::simple_scene_update` (or equivalent) \
+                 at the top of the new hook."
             );
         }
-        self.update_fn = Some(Box::new(f));
+        self.update_fns.clear();
+        self.update_fns.push(Box::new(f));
+        self
+    }
+
+    /// Adds a per-frame game hook **beside** the ones already installed, instead of replacing
+    /// them.
+    ///
+    /// Same signature and same moment in the frame as [`set_update`](Self::set_update); the only
+    /// difference is that nothing is discarded. Hooks run in the order they were added, each
+    /// seeing what the previous one wrote.
+    ///
+    /// This is the additive form of the trap `set_update` documents at length: after
+    /// `.with_simple_scene(..)` there is already a hook doing camera control, CPU physics stepping
+    /// and transform propagation, and `set_update` throws all of it away. `add_update_hook` keeps
+    /// it and runs afterwards, which is what most callers meant.
+    ///
+    /// ```no_run
+    /// # use gizmo_app::App;
+    /// # fn demo(app: App<()>) -> App<()> {
+    /// app.add_update_hook(|_world, _state, _dt, _input| { /* runs after the simple scene's */ })
+    ///    .add_update_hook(|_world, _state, _dt, _input| { /* and this one after that */ })
+    /// # }
+    /// ```
+    ///
+    /// [`set_update`](Self::set_update) still clears the whole list, including hooks added here —
+    /// "set" means what it says.
+    pub fn add_update_hook<F>(mut self, f: F) -> Self
+    where
+        F: FnMut(&mut World, &mut State, f32, &gizmo_core::input::Input) + 'static,
+    {
+        self.update_fns.push(Box::new(f));
         self
     }
 
@@ -319,5 +373,43 @@ impl<State: 'static> App<State> {
         tracing::debug!(scene = %path, "[App] initial scene queued");
         self.initial_scene = Some(path.to_string());
         self
+    }
+}
+
+#[cfg(test)]
+mod update_hook_tests {
+    use super::*;
+
+    /// The builder without a window. `App::new` does not open one — that happens on the
+    /// first `resumed` event — so the hook list can be inspected here even though *running* a
+    /// hook cannot.
+    fn app() -> App<()> {
+        App::<()>::new("test", 64, 64)
+    }
+
+    #[test]
+    fn add_update_hook_keeps_what_is_already_there() {
+        let app = app()
+            .set_update(|_, _, _, _| {})
+            .add_update_hook(|_, _, _, _| {})
+            .add_update_hook(|_, _, _, _| {});
+        assert_eq!(app.update_fns.len(), 3);
+    }
+
+    #[test]
+    fn set_update_still_clears_the_list_including_added_hooks() {
+        // "set" means what it says. If this ever becomes additive, the warning `set_update` logs
+        // — about `with_simple_scene`'s camera and transform work being discarded — turns into a
+        // lie, so the two have to change together.
+        let app = app()
+            .add_update_hook(|_, _, _, _| {})
+            .add_update_hook(|_, _, _, _| {})
+            .set_update(|_, _, _, _| {});
+        assert_eq!(app.update_fns.len(), 1);
+    }
+
+    #[test]
+    fn a_fresh_app_has_no_update_hooks() {
+        assert!(app().update_fns.is_empty());
     }
 }
