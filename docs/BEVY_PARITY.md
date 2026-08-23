@@ -128,6 +128,7 @@ Small individually; together they are what makes a Bevy snippet fail to compile.
 | Entity generations in `Children` | `Children` is `Vec<u32>`; a recycled id aliases. And a plain `despawn` on a child leaves a **dangling id** in the parent (measured), which `remove_child` cannot clean up afterwards because it takes an `Entity` | `bevy_hierarchy` |
 | A clear/sky colour setting | Fog only tints geometry; the empty background stays black | `bevy_fog` |
 | `AlphaToCoverage` | No MSAA to spread alpha across | `bevy_transparency_3d` |
+| Fallible system params | A parameter that cannot be fetched **panics** (`into_system.rs`: *"stopped the system so errors are not silently ignored"*) where Bevy skips the system for that frame. `SystemParam::fetch` does return a `Result`; there is simply no soft variant (`Option<Res<T>>`). The engine's answer is `run_if`, whose docs promise the parameter fetch is skipped too — measured working (guarded run exits 0 and starts one frame after the resource appears; the same system unguarded exits 101 on frame one). Cost: the closure form makes the system exclusive | `bevy_fallible_params` |
 
 ---
 
