@@ -9,8 +9,8 @@ time, under one rule: **do not hide where the engine falls short — write the s
 demo's header, with a measurement.** This file is the aggregate of those headers. Every claim
 below names the demo that measured it, so it can be re-run rather than believed.
 
-The sweep also found **eight real engine defects** and **two complete subsystems wired to nothing**;
-they are listed at the bottom.
+The sweep also found **eight real engine defects**, **three complete subsystems wired to nothing**,
+and one behaviour whose own source comment described it backwards; they are listed at the bottom.
 
 Read this next to `ENGINE.md` §3 (roadmap). It is not a wishlist: it is the list of things a game
 built on this engine would reach for and not find, ranked by how much each one blocks.
@@ -132,6 +132,32 @@ the walk is already in the tree.
 
 Measured in `occlusion_culling`.
 
+### A7c. No motion blur, and no auto exposure
+
+**Motion blur.** Measured in `motion_blur`: three camera speeds captured at the same angle give
+edge energy `9.977 / 9.977 / 9.977`, and the frames differ only in the HUD text — sixteen times
+the speed, bit-identical pixels. The frame is a zero-duration sample. Object motion blur is closed
+at the data layer: `InstanceRaw` carries only `model`, no previous `Transform` is kept anywhere,
+and none of the G-buffer's four targets is velocity.
+
+What exists is most of the camera half: TAA already keeps the previous unjittered view-projection
+and the G-buffer already writes `world_position` — the two inputs a camera-blur shader needs.
+
+**Auto exposure.** The actuator is live and has authority; the sensor does not exist. Measured in
+`auto_exposure`: a bright and a dark station differ 2.64× in mean luminance and neither drifts over
+580 frames (+0.128 and +0.015 — capture noise). Sweeping `Camera::exposure` 0.5 → 4.0 moves screen
+luminance 31.8 → 130.4, more than enough to close that gap. Nothing measures frame luminance: no
+histogram, no reduction pass, and none of the nine compute shaders in the tree is a downsample.
+Closing the loop in game code means the `capture` path, which blocks and encodes a PNG.
+
+### A7d. No planar reflections, and SSR's limit priced
+
+No reflection-plane concept, no oblique frustum, no stencil buffer, and a render target cannot be
+bound back onto a material (same `pub(crate)` wall as C1). What remains is SSR, and
+`mirror` puts a number on what it cannot do: a red column facing a smooth metallic floor
+contributes +7.91 of red−blue to it while on screen and **exactly nothing** once it moves behind
+the camera. Showing what the camera cannot see is the case a mirror exists for.
+
 ### A8. No render-world extraction, no runtime component definition, no immutable components, no system hot-patching
 
 Measured in `ecs_absent_apis`:
@@ -171,7 +197,11 @@ author it. The middle column is what a full implementation offers.
 | Clearcoat | strength + layer roughness + 3 textures | **1** (`Material::clear_coat`), and measurably near-binary: the peak jumps 161 → 205 from 0 to 0.2 and then flattens | `clearcoat` |
 | Shadow caster / receiver | per-object cast **and** receive toggles | **caster only**, but richer there: `ShadowCasting::{On, Off, Only}` — `Only` casts without being drawn, which a plain cast toggle cannot express. **Receiving cannot be disabled at all.** Measured dark-pixel fractions 1.06 % / 2.07 % / 4.23 % | `shadow_caster_receiver` |
 | Baked lighting | lightmap texture + second UV set | **vertex colour** via `MaterialType::BakedLit` — resolution is the mesh's tessellation, not a texture's. Still receives the sun's cascades, so mixed lighting works. Measured: the blue-minus-red balance flips sign, `+1.35` under `Pbr` and `−4.74` under `BakedLit`, because `BakedLit` does not see point lights | `lightmaps` |
-| Irradiance volumes | component + GPU voxel sampling | the **maths exists and is unwired** — see F | `irradiance_volumes` |
+| Irradiance volumes | component + GPU voxel sampling | the **maths exists and is unwired** — see F2 | `irradiance_volumes` |
+| Volumetric / god rays | scattering, steps, phase, distance | **0 shaping fields.** `VolumetricState` exposes only GPU objects. Every number is a shader literal — phase 0.55, 16 steps, 100 m cap, sun scatter 0.0015, bulb 0.0008, bias 0.16 — and there is no `enabled` flag, so the only off switch destroys the state. Measured working: 19.55 % of pixels, max 134 | `volumetric_fog` |
+| Blend modes | alpha / additive / multiply / premultiplied | **1** — `ALPHA_BLENDING`, and no `BlendMode` type to select another | `blend_modes` |
+| Specular tint | a colour F0 | **0** — F0 is the literal 0.04; the only lever is `metallic`, which kills the diffuse (luminance −24 %) and cannot deliver the colour anyway for want of an environment (measured: red−blue +9.04 → −0.17) | `transmission` |
+| Transmission / thickness / IOR | per-material | **0 fields** | `transmission` |
 
 Two measured caveats worth keeping:
 
@@ -232,6 +262,8 @@ impls, the common "tolerate a missing resource" parameter **does not compile**. 
 | `Entity` from a query | Queries yield **raw `u32` ids**. Converting one safely needs `World::entity(id)`, which needs `&World` — and a scheduled system can never hold it (see C2). `Entity::new(id, 0)` compiles and is wrong for a recycled id | `state_scoped`, `entity_disabling` |
 | A clear/sky colour setting | Fog only tints geometry; the empty background stays black | `fog` |
 | `AlphaToCoverage` | No MSAA to spread alpha across | `transparency_3d` |
+| Binding a normal / MR / emissive / AO map | The material bind group has seven entries and four are detail maps, filled with defaults. The function that fills them, `AssetManager::assemble_material_bind_group`, is `pub(crate)`. The public surface is `create_white_texture`, `load_material_texture` (base colour from a path) and two built-in patterns — so a game outside `gizmo-renderer` gets base colour only, and the sole route to the other four is the glTF loader. Cost measured: matching a normal map's shading variation with geometry took 6 verts → 55 296, a 9 216× increase for 2.87× the variation | `parallax_mapping` |
+| A user post-pass that reads the frame | `set_render` really does let a game add its own full-screen pass (measured: 38.67 % of pixels, and the untouched rows stay bit-identical, so `LoadOp::Load` preserves the engine's frame). But the surface is `RENDER_ATTACHMENT` (+`COPY_SRC` where supported) with **no `TEXTURE_BINDING`**, so the pass cannot sample what it draws over. Position-only effects work; a user FXAA, radial blur or frame histogram cannot be written | `post_processing` |
 | Fallible system params | A parameter that cannot be fetched **panics** (measured: `❌ FATAL ECS ERROR ❌`). That is deliberate — the message says so. The only guard is `run_if`, measured working (guarded system ran 0 times, no panic). Cost: the system does not run at all, so there is no `else` branch | `fallible_params`, `error_handling` |
 | Systems returning `Result`, `?`, an error handler | None of the three exist. Business-logic errors must be written to a resource | `error_handling` |
 | Default query filters | There is no way to add an implicit filter to every query. This is the whole of "entity disabling": the marker component is trivial, the implicit filter is the feature. Measured cost of forgetting it once: **543 extra updates over 180 frames** | `entity_disabling` |
@@ -351,6 +383,24 @@ whole set, because they are one family:
    `delayed_commands` only because the demo ran the engine's path beside a hand-built one and saw
    the engine side grow 5 → 10 → 15 while the hand-built side drained correctly.
 
+10. **`MaterialType::Skybox` draws nothing in the game path — cause unknown.** Measured in
+    `atmosphere`: removing the skybox entity changes **0 pixels, max 0**. Every sky pixel comes
+    from the deferred environment term. Eliminated as causes: scale (400/100/30/12 all identical),
+    `GlobalTransform` present or absent, `Skybox` vs `Unlit` material, inverted vs ordinary cube,
+    the far plane (1500, cube at ±200), mesh validity (24 indexed verts, bounds ±1), pipeline
+    binding (`forward.rs:115`), face culling (sky pipeline is `cull_mode: None`), alpha (returns
+    1.0), depth (`Clear(1.0)` with `LessEqual`) and pass order (forward runs after deferred
+    lighting). Other cubes in the same scene draw. **Open question**, recorded with its elimination
+    list rather than closed with a guess.
+
+11. ~~**`Material::double_sided` is ignored on a transparent surface.**~~ **Not a defect — the
+    source comment was.** `passes/forward.rs` claimed "a transparent double-sided surface is
+    single-sided in both paths". Measured in `blend_modes`: a back-facing transparent plane
+    renders, and toggling `with_double_sided` gives a bit-identical frame. The `transparent`
+    pipeline is built with `cull_mode: None` (and `baked_lit_state(true)` agrees), so transparent
+    geometry is never back-face culled — the flag is redundant, not ignored. Comment corrected
+    2026-08-23.
+
 A full audit of this family was run (2026-08-23): of `Material`'s shading fields, the deferred
 G-buffer honours 6 (albedo, roughness, metallic, anisotropy, clear-coat, subsurface) and ignores
 three — `ambient` (**documented** as PBR-path-excluded, intentional), `alpha_cutoff` (known, item 1)
@@ -400,7 +450,7 @@ and `emissive` (item 4, the only undocumented one). No further silent fields.
 
 ---
 
-## F. Two subsystems wired to nothing
+## F. Three subsystems wired to nothing
 
 ### F1. The spatial index — `gizmo_renderer::visibility`
 
@@ -461,8 +511,17 @@ sound — 48 probes baked from the scene lights, sampled per object, applied to 
 because the pipeline cannot. The blend is correct: red-dominant `(0.935 0.462 0.333)` on the left,
 blue-dominant `(0.366 0.533 0.902)` on the right, smooth through the middle.
 
-These two are the largest ratio of existing work to delivered capability in the engine: both are
-finished, both are tested, and neither is plugged in.
+### F3. The water material route
+
+`water.wgsl` is written, `water_pipeline` compiles and is stored in both `renderer.scene` and
+`Renderer`, and **no pass ever binds it**. `MaterialType::Water` appears only in tests, benches and
+routing tables; no game code produces it and no draw path selects it. Verified 2026-08-23 in
+`transmission`.
+
+---
+
+These three are the largest ratio of existing work to delivered capability in the engine: all are
+finished, all are tested, and none is plugged in.
 
 ---
 
