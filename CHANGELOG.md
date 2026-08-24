@@ -50,6 +50,30 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The editor viewport ignored `alpha_cutoff` — the workspace's one standing red, closed.**
+  `render_parity`'s capability inventory had reported `alpha_cutoff` as game-path-only since
+  `05fcbff7` on 2026-08-22, and that assertion had been failing ever since: a gate left red is a
+  gate that covers less every time it is ignored.
+
+  It was a real defect, not a scanner artefact. The editor built its instances without the
+  threshold and chose its bucket from `is_transparent` alone, so a pierced fence was solid in the
+  viewport and pierced in the game. Measured before the fix at **11 654 of 16 384** pixels that
+  every texel's alpha said should have been discarded. The test is binary by construction — a white
+  texture and albedo alpha 0.3 against a 0.5 cutoff put *everything* under the threshold, so the
+  correct frame is empty and "it faded a bit less" cannot pass.
+
+  Two changes. The threshold now rides on the editor's instances (`ambient.w`, which `shader.wgsl`
+  already discards on). And `draws_blended` is `pub`, shared by both loops, for the reason
+  `gizmo-renderer::routing` exists: which bucket a material draws in is a *decision*, and a
+  cut-out's contract is that discarding keeps the draw in the **opaque** pass — reading
+  `is_transparent` alone moved it into the sorted blended bucket the moment its alpha fell under
+  the threshold it was supposed to be tested against.
+
+  `cargo test --workspace --no-fail-fast` is **244 binaries, 2 470 tests, 0 failures** — the first
+  fully green run since the red appeared. The other half of that old sentence stays open and is not
+  the same problem: deferred `alpha_cutoff` still needs the z-prepass to gain a fragment stage,
+  while the editor draws forward, where the threshold only had to reach the instance.
+
 - **Extrusion, and the sweep around an axis: one machine for fifteen shapes.** `3d_shapes` counted a
   26-mesh catalogue against the engine's six ready-made builders and found that **15 of the 20
   missing ones were one absent capability** — eight extrusions and seven ring extrusions. A prism, a

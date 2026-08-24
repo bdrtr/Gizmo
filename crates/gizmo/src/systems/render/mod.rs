@@ -728,7 +728,7 @@ impl<'a> RenderContextExt for crate::renderer::RenderContext<'a> {
 }
 
 mod batching;
-pub use batching::{clear_render_cache, DrawItem, RenderCache};
+pub use batching::{clear_render_cache, draws_blended, DrawItem, RenderCache};
 
 pub mod visibility_index;
 mod passes;

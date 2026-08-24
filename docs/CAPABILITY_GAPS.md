@@ -510,11 +510,20 @@ another; the insertion order appeared barely half the time.
 
 ## D. Game-path / editor-path asymmetries
 
-`render_parity` exists precisely to catch these, and it is currently red on one. Recording the
-whole set, because they are one family:
+`render_parity` exists precisely to catch these. It was **red on one for two days** and is green
+again as of 2026-08-24. Recording the whole set, because they are one family:
 
-1. **`alpha_cutoff` is known to the game path only** — the editor draw path never learnt it.
-   Pre-existing since `550a7df`; `render_parity` reports it.
+1. ~~**`alpha_cutoff` is known to the game path only.**~~ **CLOSED 2026-08-24.** The editor draw
+   path never learnt it: it built its instances without the threshold and chose its bucket from
+   `is_transparent` alone, so a pierced fence was solid in the viewport and pierced in the game.
+   Measured before the fix — **11 654 of 16 384** pixels that every texel's alpha said should have
+   been discarded — by `a_cut_out_material_cuts_in_the_editor_viewport`, which is binary by
+   construction: a white texture and albedo alpha 0.3 against a 0.5 cutoff means *everything* is
+   under the threshold, so the correct frame is empty. The fix is the threshold on the instance and
+   `draws_blended` made `pub`, because "which bucket" is a decision and two loops answering it
+   separately is exactly what `gizmo-renderer::routing` exists to prevent. `render_parity`'s
+   inventory went green with it, and the workspace suite with it: **244 binaries, 2 470 tests, 0
+   failures** — the first fully green run since `05fcbff7` on 2026-08-22.
 2. **`RenderStats` (draw calls / triangles / instances) is filled by `gizmo-studio` only.**
    `default_render_pass` publishes nothing, so a *game* cannot read its own draw-call count.
    Measured in `many_cubes`.
@@ -593,7 +602,8 @@ whole set, because they are one family:
 
 A full audit of this family was run (2026-08-23): of `Material`'s shading fields, the deferred
 G-buffer honours 6 (albedo, roughness, metallic, anisotropy, clear-coat, subsurface) and ignores
-three — `ambient` (**documented** as PBR-path-excluded, intentional), `alpha_cutoff` (known, item 1)
+three — `ambient` (**documented** as PBR-path-excluded, intentional), `alpha_cutoff` (item 1, and
+its editor half closed 2026-08-24)
 and `emissive` (item 4, the only undocumented one). No further silent fields.
 
 ---
@@ -867,6 +877,7 @@ Eight, all with regression coverage or an explicit report:
 | Orthographic cameras jittered TAA into the wrong matrix column — a static scene had 2.1 % of pixels moving | Fixed + unit tests + a golden render test |
 | A cut-out material fell into the transparent bucket as its alpha dropped, contradicting `Material::alpha_cutoff`'s own contract | Fixed in `batching.rs` + tests |
 | The forward shader ignored `alpha_cutoff` entirely | Fixed in `shader.wgsl` |
+| The **editor** draw path ignored it too — no threshold on its instances, and its bucket chosen from `is_transparent` alone. Found by `render_parity`'s inventory on 2026-08-22 and left standing; measured 2026-08-24 at 11 654/16 384 pixels that should have been discarded | Threshold on the instance + `draws_blended` shared between the two loops, and a studio pixel test that is empty when it works |
 | Spatial audio's ears were **mirrored**: `listener.right` was the negation of `Camera::get_right()`, so a sound on the camera's right reached the left ear in every simple-scene game | Fixed + a regression test that sweeps a full turn of yaw |
 | `Renderer::exposure` is read by nothing; the game path reads `Camera::exposure`. A demo's exposure slider was wired to the dead field | Slider rewired; dead field documented |
 | `vignette` was unreachable without the `PostProcess` component (D5) | `Renderer::vignette_intensity` added; no pixel changed |
@@ -879,5 +890,8 @@ hook (D8), but it warns when it overwrites one and its docs say so, and
 `gizmo::simple::simple_scene_update` is public so the four jobs can be kept; `DespawnAfter` is
 still inert without `LifetimePlugin` (D9), but its own docs now say so.
 
-Reported, not fixed: deferred `alpha_cutoff` needs the z-prepass to gain a fragment stage; the
-editor path never learnt `alpha_cutoff`; `Material::emissive` is dead in the deferred path (D4).
+Reported, not fixed: deferred `alpha_cutoff` needs the z-prepass to gain a fragment stage;
+`Material::emissive` is dead in the deferred path (D4). ~~the editor path never learnt
+`alpha_cutoff`~~ — **closed 2026-08-24, see D1.** The two were one sentence and are not one
+problem: the editor draws *forward*, where the threshold only had to reach the instance, while the
+deferred route needs a fragment stage that does not exist yet.

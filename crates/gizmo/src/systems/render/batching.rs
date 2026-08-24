@@ -88,7 +88,12 @@ pub(crate) enum DrawLayer {
 ///
 /// Materials that carry a cutoff and a full alpha — every glTF `AlphaMode::Mask` import, which is
 /// what the field was added for — are unaffected either way.
-fn draws_blended(is_transparent: bool, alpha: f32, alpha_cutoff: f32) -> bool {
+/// `pub` since 2026-08-24, and for the reason `gizmo-renderer::routing` is: this is a *decision*,
+/// and two draw loops answering it separately is how a capability dies. `gizmo-studio` used
+/// `mat.is_transparent` alone, so a cut-out material blended in the viewport and cut in the game —
+/// measured at **11 654 of 16 384** pixels that should have been discarded.
+#[must_use]
+pub fn draws_blended(is_transparent: bool, alpha: f32, alpha_cutoff: f32) -> bool {
     if alpha_cutoff > 0.0 {
         // A cut-out decides per texel, in the opaque pass. Only an explicit request moves it.
         return is_transparent;

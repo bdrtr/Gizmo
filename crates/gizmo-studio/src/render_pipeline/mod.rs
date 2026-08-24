@@ -329,7 +329,13 @@ pub fn execute_render_pipeline(
                     mat.subsurface,
                     mat.ambient.to_array(),
                     mat.emissive.to_array(),
-                );
+                )
+                // The cut-out threshold, which this loop did not carry until 2026-08-24. It rides
+                // in `ambient.w` and `shader.wgsl` discards on it, so leaving it at zero meant a
+                // pierced fence was solid in the viewport and pierced in the game — 11 654 of
+                // 16 384 pixels that should have been discarded, measured in
+                // `a_cut_out_material_cuts_in_the_editor_viewport`.
+                .with_alpha_cutoff(mat.alpha_cutoff);
 
                 // --- SKELETON (KEMİK) ARAMASI ---
                 // Skeleton bind group, skinned mesh'ler spawn edilirken doğrudan entity'ye önbelleklenmelidir.
@@ -371,9 +377,20 @@ pub fn execute_render_pipeline(
                 let casts_shadows = shadows.casts();
                 let visible_in_camera = shadows.visible();
 
+                // Which bucket, decided by the engine's own rule rather than by `is_transparent`
+                // alone — `draws_blended` is `pub` for the same reason `routing::route` is. The
+                // difference is the cut-out: its contract is that discarding keeps the draw in the
+                // OPAQUE pass, where depth is written and order does not matter, and reading the
+                // flag alone moved a cut-out material into the sorted blended bucket the moment
+                // its alpha fell under the threshold it was supposed to be tested against.
+                let blended = gizmo::systems::render::draws_blended(
+                    mat.is_transparent,
+                    mat.albedo.w,
+                    mat.alpha_cutoff,
+                );
                 // Water goes in the opaque map whatever its alpha: it has its own pass with its
                 // own pipeline, and the transparent pass would draw it with `shader.wgsl`.
-                let batches = if mat.is_transparent && !is_water {
+                let batches = if blended && !is_water {
                     &mut *transparent_batches
                 } else if mat.is_double_sided {
                     &mut *opaque_double_sided_batches

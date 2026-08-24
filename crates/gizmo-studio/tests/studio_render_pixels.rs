@@ -1588,3 +1588,175 @@ fn render_water_frame(water: bool, elapsed: f32) -> Option<Vec<u8>> {
         Some(pixels)
     })
 }
+
+
+/// A cut-out material cuts in the editor viewport, not only in the game.
+///
+/// `Material::alpha_cutoff` says where a surface simply *is not* — foliage on a quad, a pierced
+/// fence — and its contract is that the discard happens per texel while the draw stays in the
+/// opaque pass. The game path has honoured it since 2026-08-22. This viewport never learnt it:
+/// `render_parity`'s capability inventory reported `alpha_cutoff` as **game-path-only** and that
+/// assertion has been the workspace's one standing red ever since.
+///
+/// The fixture makes the answer binary rather than a matter of degree. The texture is white, so
+/// the shader's `final_alpha` is just the albedo's alpha; with alpha 0.3 and a cutoff of 0.5 every
+/// texel is under the threshold, so a viewport that honours the cutoff draws **nothing** and one
+/// that ignores it draws the whole quad at 30 % opacity.
+#[test]
+fn a_cut_out_material_cuts_in_the_editor_viewport() {
+    let _gpu = gpu_lock();
+    let (Some(faded), Some(cut), Some(empty)) = (
+        render_cutout_frame(Some(0.0)),
+        render_cutout_frame(Some(0.5)),
+        render_cutout_frame(None),
+    ) else {
+        return;
+    };
+
+    // The quad is there to begin with — otherwise "it vanished" proves nothing.
+    let drawn = differing_pixels(&empty, &faded);
+    assert!(
+        drawn >= 500,
+        "a 30 %-opaque quad changed {drawn} of {} pixels against an empty scene — the fixture is \
+         not drawing it",
+        (W * H) as usize
+    );
+
+    let leftover = differing_pixels(&empty, &cut);
+    assert_eq!(
+        leftover, 0,
+        "a material with `alpha_cutoff = 0.5` and alpha 0.3 left {leftover} pixels in the editor \
+         viewport — every texel is under the threshold, so all of them should have been \
+         discarded. This viewport is ignoring `alpha_cutoff`, which is what `render_parity`'s \
+         inventory has been reporting.",
+    );
+}
+
+/// The editor's pipeline over one quad, with a given cut-out threshold.
+///
+/// `None` spawns no quad at all — the reference the other two are measured against.
+fn render_cutout_frame(cutoff: Option<f32>) -> Option<Vec<u8>> {
+    if !pollster::block_on(Renderer::headless_adapter_available())
+        || pollster::block_on(Renderer::headless_adapter_is_software())
+    {
+        eprintln!("skipping: no usable GPU adapter");
+        return None;
+    }
+
+    pollster::block_on(async {
+        let mut renderer = shared_device_renderer(W, H).await;
+        let mut asset_manager = AssetManager::new();
+        let mut world = World::new();
+        let tex = asset_manager.create_white_texture(
+            &renderer.device,
+            &renderer.queue,
+            &renderer.scene.texture_bind_group_layout,
+        );
+
+        if let Some(cutoff) = cutoff {
+            let e = world.spawn();
+            world.add_component(
+                e,
+                Transform::new(Vec3::ZERO).with_scale(Vec3::new(2.0, 2.0, 0.2)),
+            );
+            world.add_component(e, GlobalTransform::default());
+            world.add_component(e, AssetManager::create_cube(&renderer.device));
+            world.add_component(
+                e,
+                Material::new(tex.clone())
+                    // Alpha 0.3 and a 0.5 cutoff: every texel under the threshold.
+                    .with_pbr(Vec4::new(0.9, 0.2, 0.2, 0.3), 0.5, 0.0)
+                    .with_alpha_cutoff(cutoff),
+            );
+            world.add_component(e, MeshRenderer::new());
+        }
+
+        let cam = world.spawn();
+        world.add_component(cam, Transform::new(Vec3::new(0.0, 0.0, 6.0)));
+        world.add_component(cam, GlobalTransform::default());
+        world.add_component(
+            cam,
+            gizmo::renderer::components::Camera::new(
+                std::f32::consts::FRAC_PI_4,
+                0.1,
+                1000.0,
+                -std::f32::consts::FRAC_PI_2,
+                0.0,
+                true,
+            ),
+        );
+        world.spawn_bundle(gizmo::prelude::DirectionalLightBundle::default());
+
+        let state = StudioState {
+            current_fps: 60.0,
+            actual_dt: 1.0 / 60.0,
+            editor_camera: cam.id(),
+            game_camera: 4242,
+            do_raycast: false,
+            play: gizmo::systems::PlayLoop::new(),
+            asset_watcher: None,
+            gc_timer: 0.0,
+            autosave_timer: 0.0,
+            visible_entity_count: 0,
+            draw_call_count: 0,
+        };
+
+        let format = renderer.config.format;
+        let target = renderer.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("studio-cutout-target"),
+            size: wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = renderer
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        execute_render_pipeline(&mut world, &state, &mut encoder, &view, &mut renderer, 0.0);
+
+        let staging = renderer.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("studio-cutout-readback"),
+            size: u64::from(W * H * BPP),
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &target,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(W * BPP),
+                    rows_per_image: Some(H),
+                },
+            },
+            wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 1 },
+        );
+        renderer.queue.submit(std::iter::once(encoder.finish()));
+
+        let slice = staging.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        let _ = renderer
+            .device
+            .poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        rx.recv().expect("readback channel").expect("readback");
+        let pixels = slice
+            .get_mapped_range()
+            .expect("a just-mapped buffer's full range is always valid")
+            .to_vec();
+        staging.unmap();
+        Some(pixels)
+    })
+}
