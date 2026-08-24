@@ -50,6 +50,26 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Hiding is inherited — and the entry that asked for it had the facts backwards.**
+  `docs/CAPABILITY_GAPS.md` listed a missing `Visibility` component whose consequence was *"hiding
+  means `ShadowCasting::Only`, which still casts a shadow"*, and `infinite_grid` said the same and
+  built its P key on it. Both were false, and already four days stale when the demo was written:
+  `IsHidden` reached the game path on 2026-08-19 and it is a **full** hide — the entity is dropped
+  before it becomes a draw item, so it is neither drawn nor cast. Measured now rather than argued:
+  an `IsHidden` cube gives a frame **0 pixels** different from having no cube in the world at all,
+  while `ShadowCasting::Only` leaves its shadow behind, which is what that variant is *for*.
+
+  What was actually missing is the part nobody had written down. Both draw loops asked
+  `hidden.contains(entity)` per entity, so hiding a parent left its children on screen — **1 886 of
+  a parent/child pair's 2 946** pixels survived. `gizmo::systems::render::collect_hidden` walks
+  `Children` down from every marked entity, both paths share it (two answers to "is this drawn" is
+  what the 2026-08-19 fix was about), and it is `O(hidden subtree)`: a frame with nothing hidden
+  visits nothing. A hierarchy cycle terminates rather than hanging the pass, which the unit tests
+  build by hand because `add_child` should make one impossible.
+
+  `infinite_grid`'s P key hides with `IsHidden` now, and its header says what the old one got
+  wrong instead of quietly dropping it.
+
 - **Run conditions combine: `or`, `and`, `not` — and the typed path could not be called at all.**
   Repeated `run_if` already ANDs (each call wraps the previous), but an OR had to be written inside
   one `run_if(|world| …)` closure, and that form is opaque: the scheduler cannot see what the

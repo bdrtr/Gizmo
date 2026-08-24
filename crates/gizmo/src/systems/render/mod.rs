@@ -742,6 +742,9 @@ pub use particles::spawn_from_emitters;
 mod text;
 pub use text::record_text;
 
+mod hidden;
+pub use hidden::collect_hidden;
+
 mod shared;
 pub use shared::{
     active_camera_grade, collect_scene_lights, collect_scene_setup, SceneLights, SceneSetup,
@@ -5038,6 +5041,181 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
                 );
             }
         }
+
+        render_world(&mut renderer, &mut world).await
+    }
+
+    /// What hiding an object actually does — and what the docs said it did.
+    ///
+    /// `docs/CAPABILITY_GAPS.md` listed a missing `Visibility` component whose consequence was
+    /// *"hiding means `ShadowCasting::Only`, which still casts a shadow"*, and `infinite_grid`
+    /// said the same. Both were already false when written: `IsHidden` reached the game path on
+    /// 2026-08-19 and it drops the entity before it becomes a draw item, so no shadow either.
+    ///
+    /// Three frames pin the difference the prose had backwards. `IsHidden` removes the object AND
+    /// its shadow; `ShadowCasting::Only` removes the object and keeps the shadow. Asserting both
+    /// is the point — either one alone is satisfied by a renderer that simply drew nothing.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn hiding_an_object_removes_its_shadow_and_shadow_casting_only_keeps_it() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let absent = render_hidden_scene(HiddenCase::NoCube).await;
+            let shown = render_hidden_scene(HiddenCase::Shown).await;
+            let hidden = render_hidden_scene(HiddenCase::IsHidden).await;
+            let shadow_only = render_hidden_scene(HiddenCase::ShadowCastingOnly).await;
+
+            let (drawn, total) = changed_pixels(&absent, &shown, 128);
+            assert!(
+                drawn >= 500,
+                "the cube changed {drawn}/{total} pixels against an empty scene — the fixture is \
+                 not drawing it, so nothing below means anything",
+            );
+
+            // `IsHidden` is a full hide: the frame is the one with no cube in the world at all.
+            let (leftover, _) = changed_pixels(&absent, &hidden, 128);
+            assert_eq!(
+                leftover, 0,
+                "an `IsHidden` cube left {leftover} pixels behind — it is not a full hide, which \
+                 is what the capability list used to claim",
+            );
+
+            // `ShadowCasting::Only` is not: the cube goes, the shadow stays.
+            let (residue, _) = changed_pixels(&absent, &shadow_only, 128);
+            assert!(
+                residue >= 100,
+                "`ShadowCasting::Only` left {residue} pixels — it is supposed to keep casting, so \
+                 either the shadow is gone or the fixture has no shadow to lose",
+            );
+            let (still_drawn, _) = changed_pixels(&shown, &shadow_only, 128);
+            assert!(
+                still_drawn >= 300,
+                "`ShadowCasting::Only` changed only {still_drawn} pixels against the visible cube \
+                 — the cube itself is still being drawn",
+            );
+
+            // And hiding is INHERITED: a hidden parent takes its children with it. It did not
+            // until 2026-08-24 — both loops asked `contains(entity)` per entity, so 1 886 of a
+            // pair's 2 946 pixels survived the parent being hidden.
+            let pair = render_hidden_scene(HiddenCase::ParentWithChild).await;
+            let hidden_parent = render_hidden_scene(HiddenCase::HiddenParentWithChild).await;
+            let (pair_drawn, _) = changed_pixels(&absent, &pair, 128);
+            assert!(
+                pair_drawn >= 1000,
+                "the parent/child pair changed {pair_drawn} pixels (measured 2 946) — the fixture \
+                 is not drawing both, so the next assertion proves nothing",
+            );
+            let (child_left, _) = changed_pixels(&absent, &hidden_parent, 128);
+            assert_eq!(
+                child_left, 0,
+                "hiding the parent left {child_left} pixels — its child is still drawn. Measured \
+                 1 886 before `collect_hidden` walked the hierarchy.",
+            );
+        });
+    }
+
+    /// Which cube [`render_hidden_scene`] puts in front of the light.
+    #[derive(Clone, Copy, PartialEq)]
+    enum HiddenCase {
+        /// No cube at all — the reference every other case is measured against.
+        NoCube,
+        Shown,
+        IsHidden,
+        ShadowCastingOnly,
+        /// A parent cube marked hidden, with a visible child beside it.
+        HiddenParentWithChild,
+        /// The same pair with nothing hidden.
+        ParentWithChild,
+    }
+
+    /// A lit floor and a cube above it, so the cube has a shadow to keep or lose.
+    async fn render_hidden_scene(case: HiddenCase) -> Vec<u8> {
+        const W: u32 = 128;
+        let mut renderer = crate::test_gpu::headless_renderer(W, W).await;
+        renderer.taa = None;
+        let mut asset_manager = AssetManager::new();
+        let mut world = World::new();
+        let tex = asset_manager.create_white_texture(
+            &renderer.device,
+            &renderer.queue,
+            &renderer.scene.texture_bind_group_layout,
+        );
+
+        let floor = world.spawn();
+        world.add_component(
+            floor,
+            Transform::new(Vec3::new(0.0, -2.0, 0.0)).with_scale(Vec3::new(14.0, 0.2, 14.0)),
+        );
+        world.add_component(floor, GlobalTransform::default());
+        world.add_component(floor, AssetManager::create_cube(&renderer.device));
+        world.add_component(
+            floor,
+            Material::new(tex.clone()).with_pbr(Vec4::new(0.85, 0.85, 0.9, 1.0), 0.9, 0.0),
+        );
+        world.add_component(floor, MeshRenderer::new());
+
+        let cube = |world: &mut World, x: f32| -> gizmo_core::entity::Entity {
+            let e = world.spawn();
+            world.add_component(e, Transform::new(Vec3::new(x, 0.0, 0.0)));
+            world.add_component(e, GlobalTransform::default());
+            world.add_component(e, AssetManager::create_cube(&renderer.device));
+            world.add_component(
+                e,
+                Material::new(tex.clone()).with_pbr(Vec4::new(0.2, 0.5, 0.9, 1.0), 0.4, 0.0),
+            );
+            world.add_component(e, MeshRenderer::new());
+            e
+        };
+
+        match case {
+            HiddenCase::NoCube => {}
+            HiddenCase::Shown => {
+                cube(&mut world, 0.0);
+            }
+            HiddenCase::IsHidden => {
+                let e = cube(&mut world, 0.0);
+                world.add_component(e, crate::core::component::IsHidden);
+            }
+            HiddenCase::ShadowCastingOnly => {
+                let e = cube(&mut world, 0.0);
+                world.add_component(
+                    e,
+                    MeshRenderer::new()
+                        .with_shadows(gizmo_renderer::components::ShadowCasting::Only),
+                );
+            }
+            HiddenCase::ParentWithChild | HiddenCase::HiddenParentWithChild => {
+                let parent = cube(&mut world, -1.6);
+                let child = cube(&mut world, 1.6);
+                use crate::core::hierarchy::HierarchyExt;
+                world.add_child(parent, child);
+                if case == HiddenCase::HiddenParentWithChild {
+                    world.add_component(parent, crate::core::component::IsHidden);
+                }
+            }
+        }
+
+        // The sun is overhead and to one side, so the cube's shadow lands on the floor beside it
+        // rather than under it where the cube would hide its own evidence.
+        world.spawn_bundle(DirectionalLightBundle {
+            rotation: gizmo_math::Quat::from_rotation_x(-0.9)
+                * gizmo_math::Quat::from_rotation_y(0.6),
+            intensity: 3.0,
+            ..Default::default()
+        });
+        world.spawn_bundle(CameraBundle {
+            position: Vec3::new(0.0, 2.5, 7.0),
+            yaw: -std::f32::consts::FRAC_PI_2,
+            pitch: -0.3,
+            primary: true,
+            ..Default::default()
+        });
 
         render_world(&mut renderer, &mut world).await
     }

@@ -23,23 +23,29 @@
 //! `routing.rs`'in "0.0 oyun yolunun yaptığını korur" notu ekranda böyle görünüyor: `Grid`
 //! malzemesi oyun içinde ızgara değil, sadece bir düzlem.
 //!
-//! ## İkinci eksik: `Visibility` bileşeni yok
+//! ## Gizleme: bu bölüm 2026-08-24'e kadar YANLIŞTI
 //!
-//! Bir nesneyi elle gizleyen bir görünürlük bileşeni motorda **yok**; `Visibility` adında bir tip
-//! var ama o kare başına hesaplanan frustum sonucudur, kullanıcı bileşeni değil. Görünürlüğü
-//! kapatmanın motordaki tek yolu [`ShadowCasting::Only`]: nesne çizilmez ama **gölgesini
-//! düşürmeye devam eder**. Yani bu tam anlamıyla bir "gizle" değil, ve demo bunu ekranda
-//! gösteriyor — zemin kaybolur, gölgesi durur.
+//! Burada "motorda görünürlük bileşeni yok, gizlemenin tek yolu `ShadowCasting::Only`, o da
+//! gölgeyi bırakır" yazıyordu. Yanlıştı, ve yazıldığında zaten dört gün eskiydi: `IsHidden`
+//! 2026-08-19'da iki çizim yoluna da bağlanmıştı ve **tam bir gizleme**. Ölçüldü — `IsHidden`
+//! taşıyan bir küp, o küp sahnede hiç yokmuş gibi bir kare veriyor: **0 piksel** fark.
+//! `ShadowCasting::Only` ise gerçekten gölgeyi bırakıyor; ikisi farklı şeyler ve demo artık
+//! doğru olanı kullanıyor.
+//!
+//! `Visibility` diye bir tip var ama o kare başına hesaplanan frustum sonucu, kullanıcı bileşeni
+//! değil — o kadarı doğruydu. Kullanıcının bileşeni `gizmo::core::component::IsHidden`, ve
+//! 2026-08-24'ten beri **kalıtımlı**: gizlenen bir ebeveyn çocuklarını da gizliyor (öncesinde bir
+//! çiftin 2 946 pikselinin 1 886'sı ekranda kalıyordu).
 //!
 //! ## Kontroller
 //!   * **P** — ızgarayı gizle/göster · **G** — motor malzemesi ↔ gizmo çizgileri
 //!   * **Sağ-tık + fare / WASDQE** — kamera
 
 use gizmo::core::input::Input;
-use gizmo::core::query::{Mut, Query, With};
+use gizmo::core::commands::Commands;
+use gizmo::core::query::{Query, With};
 use gizmo::core::system::{IntoSystemConfig, Phase, Res, ResMut};
 use gizmo::prelude::*;
-use gizmo::renderer::components::mesh::ShadowCasting;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
 
 /// Motorun `MaterialType::Grid` malzemesini taşıyan zeminin işareti.
@@ -144,7 +150,7 @@ fn main() {
                     ));
                     ui.separator();
                     ui.label("grid_pipeline motorda var — ama onu yalnız editör çağırıyor");
-                    ui.label("Visibility bileşeni yok: gizlemek = ShadowCasting::Only");
+                    ui.label("gizleme = IsHidden (tam gizler, kalıtımlı)");
                     ui.separator();
                     ui.label("P — gizle/göster · G — kaynağı değiştir");
                 });
@@ -155,12 +161,16 @@ fn main() {
 
 /// **P** görünürlüğü, **G** kaynağı çevirir.
 ///
-/// Görünürlük [`ShadowCasting`] üzerinden yazılıyor, çünkü motorda `Visibility` bileşeni yok.
-/// `Only` "çizme ama gölge düşürmeye devam et" demek — tam anlamıyla bir gizleme değil, ve fark
-/// ekranda görünüyor.
+/// Gizleme `IsHidden` ile — motorun gerçek gizleme mekanizması bu, ve tam: nesne çizilmiyor ve
+/// gölge de düşürmüyor. `ShadowCasting::Only` BAŞKA bir şey ("çizme ama gölgeyi bırak") ve bu
+/// demo eskiden gizleme diye onu kullanıyordu.
+///
+/// `Commands` ile, çünkü bir bileşeni takıp çıkarmak yapısal bir değişiklik ve bir sistem
+/// `&mut World` tutamıyor (bkz. `docs/CAPABILITY_GAPS.md` C2).
 fn toggle_grid(
     mut grid: ResMut<GridState>,
-    mut planes: Query<(Mut<MeshRenderer>, With<EngineGrid>)>,
+    planes: Query<(&EngineGrid, With<EngineGrid>)>,
+    mut commands: Commands,
     input: Res<Input>,
 ) {
     use gizmo::winit::keyboard::KeyCode;
@@ -172,12 +182,16 @@ fn toggle_grid(
     }
 
     let draw_plane = grid.visible && grid.use_engine_material;
-    for (_entity, (mut renderer, _)) in planes.iter_mut() {
-        renderer.shadows = if draw_plane {
-            ShadowCasting::On
+    for (entity, _) in planes.iter() {
+        // `Entity::new(id, 0)`: sorgular ham `u32` veriyor ve geri çevirmek `&World` istiyor —
+        // C1'de yazılı bir boşluk. Burada güvenli, çünkü bu varlık kurulumda doğuruldu ve hiç
+        // silinmedi, yani kuşağı sıfır.
+        let e = gizmo::core::entity::Entity::new(entity, 0);
+        if draw_plane {
+            commands.entity(e).remove::<gizmo::core::component::IsHidden>();
         } else {
-            ShadowCasting::Only
-        };
+            commands.entity(e).insert(gizmo::core::component::IsHidden);
+        }
     }
 }
 

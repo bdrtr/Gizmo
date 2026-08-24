@@ -87,7 +87,15 @@ pub fn execute_render_pipeline(
     let (aspect, ed_shading_mode, show_colliders, post_params, game_view_visible) =
         sync_editor_settings(world, renderer);
 
+    // Hidden entities, INCLUDING everything under one — `collect_hidden` is the engine's own
+    // walk, shared with the game path, because two answers to "is this drawn" is what the
+    // 2026-08-19 fix was about. The `IsHidden` borrow is still taken here rather than inside the
+    // helper so this loop keeps naming the marker in code, which `render_parity` asserts.
     let _is_hidden_guard = world.borrow::<gizmo::core::component::IsHidden>();
+    let hidden = gizmo::systems::render::collect_hidden(
+        &_is_hidden_guard,
+        &world.borrow::<gizmo::core::component::Children>(),
+    );
 
     // Which camera this frame is drawn from — and, separately, which one it culls against. Both
     // decisions, and the reasons for them, live in `viewpoint` where they are tested.
@@ -218,8 +226,8 @@ pub fn execute_render_pipeline(
                     continue;
                 }
 
-                // Gizli olarak işaretlenmiş objeleri atla
-                if _is_hidden_guard.contains(e) {
+                // Gizli olarak işaretlenmiş objeleri (ve gizli bir ebeveynin altındakileri) atla
+                if hidden.contains(&e) {
                     continue;
                 }
 

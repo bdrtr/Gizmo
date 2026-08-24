@@ -354,8 +354,16 @@ pub(super) fn collect_draw_items(
     // will not stream textures for a hidden object), which is what made the gap invisible.
     //
     // Skipped whole, casting nothing, exactly as studio does it: two answers to "is this drawn"
-    // is worse than either.
+    // is worse than either. Measured, because the capability list claimed the opposite until
+    // 2026-08-24: an `IsHidden` cube gives a frame 0 pixels different from having no cube at all,
+    // while `ShadowCasting::Only` leaves its shadow behind.
+    //
+    // INHERITED since 2026-08-24 — `collect_hidden` walks `Children` down from every marked
+    // entity, so hiding a vehicle hides its wheels. Before it, a hidden parent left 1 886 of a
+    // pair's 2 946 pixels on screen. The set is built from the same two borrows both paths hold,
+    // and it costs nothing on a frame with nothing hidden.
     let hidden = world.borrow::<crate::core::component::IsHidden>();
+    let hidden = super::collect_hidden(&hidden, &world.borrow::<crate::core::component::Children>());
 
     let frustum = crate::math::Frustum::from_matrix(&unjittered_view_proj);
     // Per-cascade LIGHT frusta — shadow casters are culled against these, NOT the camera
@@ -395,7 +403,7 @@ pub(super) fn collect_draw_items(
                 }
 
                 // Gizlenmiş nesneleri render etme — editörün 👁 düğmesi ve H kısayolu bu.
-                if hidden.contains($e) {
+                if hidden.contains(&$e) {
                     continue;
                 }
 
