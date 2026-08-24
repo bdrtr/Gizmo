@@ -80,10 +80,13 @@ pub type ReplaceHook = Box<dyn FnMut(&mut World, Entity) + Send + Sync>;
 /// Hooks are therefore not a complete audit trail of every value the component ever took: a
 /// cloned prefab, in particular, appears without firing `on_add` or `on_set`.
 #[derive(Default)]
+#[non_exhaustive]
 pub struct ComponentHooks {
-    /// Filled by `World::register_on_add`, and by `World::add_observer`, which is nothing more
-    /// than an `on_add` hook that builds an `On<Insert, T>` for its closure. Entirely skipped
-    /// by an overwrite of an existing value.
+    /// Filled by `World::register_on_add`, and by `World::add_observer` when its closure asks
+    /// for `On<Insert, T>` — that call is an `on_add` hook that builds the `On`, and since
+    /// 2026-08-24 the same call reaches [`Self::on_replace`] and [`Self::on_remove`] too,
+    /// chosen by the marker in the closure's own signature. Entirely skipped by an overwrite of
+    /// an existing value.
     pub on_add: Vec<AddHook>,
     /// The only one of the four lists a whole-entity `World::despawn` runs: it fires once per
     /// component type the entity still holds. The order *across* component types comes from a

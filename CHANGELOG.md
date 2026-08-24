@@ -50,6 +50,35 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Untargeted events: `World::observe_global` / `trigger_global`.**
+  The third door. `add_observer` is keyed to a component type and `observe` to a target entity; an
+  event that belongs to neither — "the level loaded", "the round ended", "the save finished" — had
+  no synchronous route at all and had to be an `Events<T>` queue read by a system a frame later.
+
+  Dispatch is synchronous and in registration order: the listeners run inside the `trigger_global`
+  call and can see and change the world before it returns. `Events<T>` is still the right choice
+  when the reaction wants to be a *scheduled system* — batched, parallelisable, able to declare its
+  access — and the documentation says which to reach for rather than leaving it implied.
+
+  **The event needs no `Clone`.** The entity path requires it because a bubbling walk hands the
+  same value to several entities; there is no walk here, so the listener takes the event by
+  reference and an event carrying a `String` or a `Vec` costs nothing to publish.
+
+  Re-entrancy follows the rule the rest of the module already had: the listener list is owned by
+  the dispatch for its duration, so republishing the **same** type from inside terminates while a
+  **different** type runs nested. A listener registered from inside a dispatch is appended after
+  the ones already there and runs from the next publish — the merge-back is load-bearing and a
+  mutation that overwrote instead of appending is caught by
+  `a_listener_registered_during_a_dispatch_is_kept`.
+
+  `observers` demonstrates it with two **independent** subscribers that do not know about each
+  other, and a publisher that knows about neither: one records the result for the HUD, one logs.
+  The cascade announces `ChainSettled` when it stops — measured at "26 mines · 8 rings" through the
+  queue and "26 mines · 1 ring" when the listener drives it. Changing the mode changes when the
+  announcement happens, not the announcement.
+
+  Still open in that area: an observer cannot be gated by a run condition.
+
 - **A listener can end a propagating walk: `World::stop_propagation()`.**
   Call it from inside a `World::observe` listener and the walk stops once that listener returns,
   instead of continuing up the `Parent` chain.
@@ -86,10 +115,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   written to captured state and picked up by a later system.
 
   **The gap this closes was half wrong when it was written.** It read "callbacks get no world",
-  naming observers *and* hooks. All five hook types have taken a `&mut World` all along —
-  `AddHook`, `SetHook`, `ReplaceHook`, `RemoveHook`, `DespawnHook` — and a lifecycle observer's
-  `On` is built by one of them, so `register_on_add` and its siblings were always the layer
-  underneath. `observe` was the one route with nothing underneath it.
+  naming observers *and* hooks. The hook types have taken a `&mut World` all along — `AddHook`,
+  `SetHook`, `RemoveHook`, `DespawnHook`, and `ReplaceHook` was born with one earlier the same
+  day — and a lifecycle observer's `On` is built by one of them, so `register_on_add` and its
+  siblings were always the layer underneath. `observe` was the one route with nothing under it.
 
   **Measured, both ways, on the same chain.** `observers` drops a mine field of 70 and detonates
   the centre. Through the captured queue it reaches 26 mines in **8 frames**, one ring per frame.
@@ -147,7 +176,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ties `Replace` to something checkable: a mine is overwritten when it explodes, so the replace
   count must track the explosion count.
 
-  Thirteen tests, and the two load-bearing ones were mutation-checked. Wiring `Remove` to the
+  Nine tests, and the two load-bearing ones were mutation-checked. Wiring `Remove` to the
   `on_add` list turned `remove_reaches_an_observer_by_both_routes` green **for the wrong reason** —
   the spawn filled the ledger and the end-state assertion could not tell that from a working remove
   path. It now asserts the ledger is empty before each detachment, and fails under that mutation.
@@ -997,6 +1026,30 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   before.
 
 ### Fixed
+
+- **A nested `trigger` re-ran listeners that had already finished — the guarantee three documents
+  promised was false.** `World::trigger` detached an entity's whole listener list once, then put
+  each listener *back* as soon as it returned, inside the loop. So by the time the second listener
+  ran, the first was live in the map again: a nested `trigger` at that same entity — precisely the
+  case the termination guarantee is about — re-entered it.
+
+  With two listeners where the second re-triggers at its own entity, the first ran **twice** for
+  one logical event. With *k* such listeners the dispatch performs `2^k − 1` invocations instead of
+  `k`; at k = 25 that is 33 million calls, a frame hang from a construct documented as terminating.
+
+  **A test with one listener could never see it**, which is exactly why
+  `a_listener_retriggering_its_own_entity_terminates` had been green since the day it was written.
+  The put-back now happens after the loop, the way `run_hooks` and `trigger_global` already did it,
+  which also fixes a second defect nobody had noticed: a listener registered from inside a dispatch
+  used to land *in front of* the listeners that had already run, breaking the documented
+  registration order. Two regression tests, one per defect.
+
+  Found by an adversarial review of the observer arc before any of it was released; four of five
+  independent review lenses converged on it.
+
+- **`trigger_global` did not save the propagation flag**, so a global listener calling
+  `stop_propagation` truncated whatever entity walk it happened to be nested inside. `trigger` had
+  the save/restore from the start; the global path was simply left out of it. Same review.
 
 - **⏸ did not reach the audio device.** `PlayLoop::step` is what drives audio and a paused editor
   does not call it, so pausing froze the frame and left the level's ambience playing over it.

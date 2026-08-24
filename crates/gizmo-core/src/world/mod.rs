@@ -63,6 +63,13 @@ pub struct World {
     entities_to_despawn: Vec<Entity>,
     is_despawning: bool,
     pub(crate) entity_observers: HashMap<TypeId, Box<dyn std::any::Any + Send + Sync>>,
+    /// Listeners for events that belong to no entity and no component type — the third door,
+    /// keyed only by the event's own `TypeId`. See [`World::observe_global`].
+    ///
+    /// Separate from `entity_observers` rather than folded into it under a sentinel entity: a
+    /// global event has no target to bubble from, so sharing the map would mean a walk that has
+    /// to be skipped and an `On::entity` that has to be lied about.
+    pub(crate) global_observers: HashMap<TypeId, Box<dyn std::any::Any + Send + Sync>>,
     /// Frame counter stamped into a component's `ComponentTicks` every time it is written;
     /// with `change_ref_tick` it is the whole of change detection.
     ///
@@ -123,6 +130,7 @@ impl World {
             entities_to_despawn: Vec::new(),
             is_despawning: false,
             entity_observers: HashMap::new(),
+            global_observers: HashMap::new(),
             tick: 1,
             change_ref_tick: 0,
             default_query_filters: crate::query::DefaultQueryFilters::new(),

@@ -33,8 +33,8 @@
 //! ## Ölçüldü
 //!
 //! Beş halkalık zincir, kök = 0, yaprak = 4. Olay **yaprakta** tetikleniyor.
-//! Ölçüldü (2026-08-23; dinleyiciye `&mut World` verildikten sonra 2026-08-24’te yeniden
-//! ölçüldü, dördü de aynı — `GIZMO_PROP_SELFTEST=1`):
+//! Ölçüldü (`GIZMO_PROP_SELFTEST=1`). Kabaran/kabarmayan/kesik satırları 2026-08-23'ten beri
+//! aynı ve 2026-08-24'te yeniden ölçüldü; veto satırı 2026-08-24'te eklendi:
 //!
 //! | ne | uğradığı halkalar | vetodan sonra |
 //! |----|-------------------|---------------|
@@ -77,8 +77,9 @@ impl EntityEvent for Damage {
     fn target(&self) -> Entity {
         self.target
     }
-    /// Kabarma buradan açılıyor. Kapatmanın **başka** yolu yok, ve açıldıktan sonra
-    /// hiçbir dinleyici yürüyüşü kesemiyor.
+    /// Kabarma buradan açılıyor — olay tipi başına, bir kez. Tek tek bir gönderim için
+    /// kapatmanın yolu yok; ama açıldıktan sonra bir dinleyici yürüyüşü
+    /// `world.stop_propagation()` ile kesebiliyor (2026-08-24).
     fn can_propagate(&self) -> bool {
         true
     }

@@ -2,13 +2,14 @@
 //!
 //! Bir bileşen bir varlığa **takıldığında, yazıldığında, söküldüğünde** kod çalıştırmak.
 //!
-//! ## Motorda kancalar var — ve üçü de kayıtlı API
+//! ## Motorda kancalar var — dördü de kayıtlı API
 //!
 //! | yetenek | Gizmo |
 //! |--------------|-------|
 //! | bileşen ilk takıldığında | [`World::register_on_add`] |
-//! | takma ve üstüne yazmayı tek kancada toplamak | **yok** — `on_add` + `on_set` birlikte aynı işi görüyor |
-//! | eski değerin üstüne yazılmadan hemen önce | **yok** |
+//! | **var olan bir değerin üstüne yazıldığında** | [`World::register_on_replace`] — 2026-08-24 |
+//! | takma ve üstüne yazmayı tek kancada toplamak | `on_set`, ikisini de görüyor |
+//! | eski değerin üstüne yazılmadan **hemen önce** | **yok** — `on_replace` yazmadan sonra koşuyor, eski değer o an çoktan düşürülmüş |
 //! | bileşen söküldüğünde | [`World::register_on_remove`] |
 //! | varlık yok edildiğinde | [`World::register_despawn_hook`] — ama **bileşen başına değil, küresel** |
 //! | her *yazma*da | [`World::register_on_set`] |
@@ -22,25 +23,39 @@
 //! ateşlemeden ortaya çıkar". Demo bunu **tekrarlamıyor, ölçüyor**: on bir farklı yoldan bileşen
 //! takıp söküyor ve her yoldan sonra sayaçları okuyor.
 //!
-//! Ölçüldü (2026-08-23, `Tracked` Table depolu, `TrackedSparse` SparseSet depolu):
+//! Ölçüldü (2026-08-24, `Tracked` Table depolu, `TrackedSparse` SparseSet depolu). **rep**
+//! sütunu `on_replace`, dördüncü kanca listesi — 2026-08-24'te eklendi:
 //!
-//! | yol | add | set | remove | despawn |
-//! |-----|-----|-----|--------|---------|
-//! | `spawn_bundle((Tracked,))` | 1 | 1 | 0 | 0 |
-//! | `add_component` (yeni) | 1 | 1 | 0 | 0 |
-//! | `add_component` (üstüne yaz) | **0** | 1 | 0 | 0 |
-//! | `remove_component` | 0 | 0 | 1 | 0 |
-//! | `add_bundle` (hepsi Table) | **0** | **0** | **0** | **0** |
-//! | `remove_bundle::<(Tracked,)>` | **0** | **0** | **0** | **0** |
-//! | `insert_batch` (3 varlık) | 3 | 3 | 0 | 0 |
-//! | `remove_batch` (3 varlık) | 0 | 0 | 3 | 0 |
-//! | `spawn_batch` (**4** varlık, Table) | **1** | **1** | 0 | 0 |
-//! | `clone_entity` (3 kopya) | **0** | **0** | **0** | **0** |
-//! | `despawn` | 0 | 0 | 1 | 1 |
+//! | yol | add | set | rep | remove | despawn |
+//! |-----|-----|-----|-----|--------|---------|
+//! | `spawn_bundle((Tracked,))` | 1 | 1 | 0 | 0 | 0 |
+//! | `add_component` (yeni) | 1 | 1 | 0 | 0 | 0 |
+//! | `add_component` (üstüne yaz) | **0** | 1 | **1** | 0 | 0 |
+//! | `remove_component` | 0 | 0 | 0 | 1 | 0 |
+//! | `add_bundle` (hepsi Table) | **0** | **0** | **0** | **0** | **0** |
+//! | `remove_bundle::<(Tracked,)>` | 0 | 0 | 0 | **1** | 0 |
+//! | `insert_batch` (3 varlık) | 3 | 3 | 0 | 0 | 0 |
+//! | `remove_batch` (3 varlık) | 0 | 0 | 0 | 3 | 0 |
+//! | `spawn_batch` (**4** varlık, Table) | **1** | **1** | 0 | 0 | 0 |
+//! | `clone_entity` (3 kopya) | **0** | **0** | **0** | **0** | **0** |
+//! | `despawn` | 0 | 0 | 0 | 1 | 1 |
 //!
-//! Dokümanın söylediği üç şey de doğru çıktı: `add_bundle`/`remove_bundle`'ın Table yolu ve
-//! `clone_entity` **hiçbir** kanca ateşlemiyor, ve `spawn_batch` dört varlık doğurup **bir** kanca
-//! ateşliyor — geri kalan üçü sütunlara doğrudan yazılıyor.
+//! **İki satır 2026-08-23'ten beri değişti ve ikisi de bu demonun ölçtüğü şeydi.**
+//!
+//! `remove_bundle` (Table) **0/0/0/0** idi — demet Table bileşenlerini arketip göçüyle sessizce
+//! koparıyordu. `On<Remove, T>`'ye dağıtım yolu açılınca aynı bileşenin iki farklı yolla
+//! kaldırılınca iki farklı cevap vermesi içeride bir tuhaflık olmaktan çıkıp bozulmuş bir söz
+//! hâline geldi ve düzeltildi; satır artık **remove = 1**.
+//!
+//! `add_component` (üstüne yaz) satırına **rep = 1** eklendi. `on_set` her yazmada koşuyor,
+//! `on_add` yalnız ilkinde; aradaki farkı — "üstüne yazıldı" — çağıranın kendi defterini
+//! tutmadan görmesinin yolu yoktu. `on_replace` o farkı dağıtım anında ayırıyor: her yazma
+//! `on_add` **ya da** `on_replace` tetikliyor, ikisini birden değil.
+//!
+//! Geriye **iki** sessiz yol kalıyor, ve ikisi de sütunlara doğrudan yazan toplu yollar:
+//! `add_bundle` (hepsi Table) ve `clone_entity`. `spawn_batch` de dört varlık doğurup **bir**
+//! kanca ateşliyor — geri kalan üçü sütunlara doğrudan yazılıyor. Yani kanca hâlâ bir denetim
+//! izi değil; sessiz yolların listesi kısaldı, sıfırlanmadı.
 //!
 //! ## Kancaya değer gelmiyor — ve `World`'de tipli okuyucu yok
 //!
@@ -89,6 +104,10 @@ gizmo::core::impl_component!(TrackedSparse; gizmo::core::component::StorageType:
 struct Tally {
     add: AtomicUsize,
     set: AtomicUsize,
+    /// Dördüncü liste, 2026-08-24'te geldi: **var olan bir değerin üstüne yazıldığında**.
+    /// `on_set` her yazmada koşuyor, bu yalnız üstüne yazmada — ikisi birlikte `on_add` ile
+    /// örtüşmeyen bir bölüntü yapıyor.
+    replace: AtomicUsize,
     remove: AtomicUsize,
     despawn: AtomicUsize,
     /// `on_set` kancasının dünyadan **geri okuduğu** son değer. Kancaya yalnız varlık
@@ -97,10 +116,11 @@ struct Tally {
 }
 
 impl Tally {
-    fn read(&self) -> (usize, usize, usize, usize) {
+    fn read(&self) -> (usize, usize, usize, usize, usize) {
         (
             self.add.load(Ordering::Relaxed),
             self.set.load(Ordering::Relaxed),
+            self.replace.load(Ordering::Relaxed),
             self.remove.load(Ordering::Relaxed),
             self.despawn.load(Ordering::Relaxed),
         )
@@ -113,13 +133,14 @@ struct Row {
     path: &'static str,
     add: usize,
     set: usize,
+    replace: usize,
     remove: usize,
     despawn: usize,
 }
 
 impl Row {
     fn silent(&self) -> bool {
-        self.add + self.set + self.remove + self.despawn == 0
+        self.add + self.set + self.replace + self.remove + self.despawn == 0
     }
 }
 
@@ -133,13 +154,18 @@ struct HookReport {
 gizmo::core::impl_component!(HookReport);
 
 /// İki okuma arasındaki farkı bir satıra çevirir.
-fn delta(path: &'static str, before: (usize, usize, usize, usize), after: (usize, usize, usize, usize)) -> Row {
+fn delta(
+    path: &'static str,
+    before: (usize, usize, usize, usize, usize),
+    after: (usize, usize, usize, usize, usize),
+) -> Row {
     Row {
         path,
         add: after.0 - before.0,
         set: after.1 - before.1,
-        remove: after.2 - before.2,
-        despawn: after.3 - before.3,
+        replace: after.2 - before.2,
+        remove: after.3 - before.3,
+        despawn: after.4 - before.4,
     }
 }
 
@@ -240,6 +266,10 @@ fn main() {
                     }
                 }));
                 let t = tally.clone();
+                scene.world.register_on_replace::<Tracked>(Box::new(move |_, _| {
+                    t.replace.fetch_add(1, Ordering::Relaxed);
+                }));
+                let t = tally.clone();
                 scene.world.register_on_remove::<Tracked>(Box::new(move |_, _| {
                     t.remove.fetch_add(1, Ordering::Relaxed);
                 }));
@@ -250,6 +280,10 @@ fn main() {
                 let t = tally.clone();
                 scene.world.register_on_set::<TrackedSparse>(Box::new(move |_, _| {
                     t.set.fetch_add(1, Ordering::Relaxed);
+                }));
+                let t = tally.clone();
+                scene.world.register_on_replace::<TrackedSparse>(Box::new(move |_, _| {
+                    t.replace.fetch_add(1, Ordering::Relaxed);
                 }));
                 let t = tally.clone();
                 scene.world.register_on_remove::<TrackedSparse>(Box::new(move |_, _| {
@@ -263,14 +297,15 @@ fn main() {
 
             let rows = probe(scene.world, &tally);
 
-            gizmo::gizmo_log!(Info, "{:<32} add set rem desp", "yol");
+            gizmo::gizmo_log!(Info, "{:<32} add set rep rem desp", "yol");
             for row in &rows {
                 gizmo::gizmo_log!(
                     Info,
-                    "{:<32} {:>3} {:>3} {:>3} {:>4}  {}",
+                    "{:<32} {:>3} {:>3} {:>3} {:>3} {:>4}  {}",
                     row.path,
                     row.add,
                     row.set,
+                    row.replace,
                     row.remove,
                     row.despawn,
                     if row.silent() { "<- SESSİZ" } else { "" }
@@ -288,7 +323,7 @@ fn main() {
             let count = rows.len();
             for (index, row) in rows.iter().enumerate() {
                 let x = (index as f32 - (count as f32 - 1.0) * 0.5) * 1.15;
-                let fired = row.add + row.set + row.remove + row.despawn;
+                let fired = row.add + row.set + row.replace + row.remove + row.despawn;
                 scene.world.spawn_bundle((
                     // Yükseklik = ateşlenen kanca sayısı; sıfırsa yassı kalıyor.
                     Transform::new(Vec3::new(x, fired as f32 * 0.22, 0.0))
@@ -341,11 +376,14 @@ fn main() {
                         ui.heading("Bileşen yaşam döngüsü kancaları");
                         ui.label("hangi yol kanca ateşliyor — ölçüldü, varsayılmadı");
                         ui.separator();
-                        ui.monospace(format!("{:<30}{:>4}{:>4}{:>4}{:>5}", "yol", "add", "set", "rem", "desp"));
+                        ui.monospace(format!(
+                            "{:<30}{:>4}{:>4}{:>4}{:>4}{:>5}",
+                            "yol", "add", "set", "rep", "rem", "desp"
+                        ));
                         for row in &report.rows {
                             let text = format!(
-                                "{:<30}{:>4}{:>4}{:>4}{:>5}",
-                                row.path, row.add, row.set, row.remove, row.despawn
+                                "{:<30}{:>4}{:>4}{:>4}{:>4}{:>5}",
+                                row.path, row.add, row.set, row.replace, row.remove, row.despawn
                             );
                             if row.silent() {
                                 ui.colored_label(gizmo::egui::Color32::from_rgb(230, 90, 80), text);

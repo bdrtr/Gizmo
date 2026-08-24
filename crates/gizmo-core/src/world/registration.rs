@@ -139,24 +139,34 @@ impl World {
                 }
             }
 
-            for mut listener in hooks_to_run.drain(..) {
+            for listener in hooks_to_run.iter_mut() {
                 let e = crate::observer::On {
                     event: event.clone(),
                     entity: current_entity,
                     _marker: std::marker::PhantomData,
                 };
-                // The listener holds the world for the length of its call, and its own entry
-                // is out of the map while it does — so triggering this event back at this
-                // entity from inside terminates rather than recursing. Any other entity's
-                // listeners are live and run nested.
+                // This entity's WHOLE list is out of the map for the whole of this loop, so
+                // triggering the event back at this entity from inside finds nothing and
+                // terminates. Any other entity's listeners are live and run nested.
                 listener(self, e);
+            }
 
-                // Geri koy
+            // Put back after the loop, not inside it. Inside, a listener that had already
+            // finished was live again by the time the next one ran, so a nested trigger at this
+            // same entity re-ran it — the exact case the termination guarantee is about, and
+            // invisible to a test with only one listener. Found by review 2026-08-24.
+            //
+            // Anything registered during the dispatch is in the map now; the originals go back
+            // in front of it, which is what keeps "listeners run in registration order" true.
+            if !hooks_to_run.is_empty() {
                 if let Some(map_any) = self.entity_observers.get_mut(&TypeId::of::<E>()) {
                     if let Some(map) = map_any
                         .downcast_mut::<HashMap<Entity, Vec<crate::observer::EntityListener<E>>>>()
                     {
-                        map.entry(current_entity).or_default().push(listener);
+                        let slot = map.entry(current_entity).or_default();
+                        hooks_to_run.append(slot);
+                        *slot = hooks_to_run;
+                        hooks_to_run = Vec::new();
                     }
                 }
             }
@@ -186,6 +196,98 @@ impl World {
         }
 
         self.propagation_stopped = outer_stop;
+    }
+
+    /// Attaches a listener for an event that belongs to **no entity and no component type** —
+    /// "the level loaded", "the round ended", "the save finished".
+    ///
+    /// The third door. [`add_observer`](Self::add_observer) is keyed to a component type and
+    /// [`observe`](Self::observe) to a target entity; until 2026-08-24 an event that was neither
+    /// had no synchronous route at all and had to be an [`Events<T>`](crate::event::Events)
+    /// queue, read by a system a frame later.
+    ///
+    /// ```
+    /// # use gizmo_core::world::World;
+    /// # let mut world = World::new();
+    /// struct LevelLoaded { name: String }
+    ///
+    /// world.observe_global::<LevelLoaded, _>(|world: &mut World, e: &LevelLoaded| {
+    ///     let _ = (&e.name, world.entity_count());
+    /// });
+    /// world.trigger_global(LevelLoaded { name: "hangar".into() });
+    /// ```
+    ///
+    /// The listener takes the event **by reference** and the event needs no `Clone`: there is no
+    /// hierarchy walk here, so no second recipient needs a second copy. An event carrying a
+    /// `String` or a `Vec` costs nothing to publish.
+    ///
+    /// **Choosing between this and `Events<T>`.** This is synchronous — the listeners run inside
+    /// the `trigger_global` call, in registration order, and can see and change the world before
+    /// it returns. An `Events<T>` queue is the opposite trade and still the right one when the
+    /// reaction wants to be a scheduled system: batched, parallelisable, and able to declare its
+    /// access.
+    ///
+    /// Re-entrancy follows the same rule as the rest of this module: the listener list is owned
+    /// by the dispatch for its duration, so a listener that publishes the **same** event type
+    /// terminates instead of recursing, while a different event type runs nested.
+    ///
+    /// Registrations accumulate for the life of the world; there is no unregister.
+    pub fn observe_global<E: Send + Sync + 'static, F>(&mut self, listener: F) -> &mut Self
+    where
+        F: FnMut(&mut World, &E) + Send + Sync + 'static,
+    {
+        let type_id = TypeId::of::<E>();
+        let list_any = self
+            .global_observers
+            .entry(type_id)
+            .or_insert_with(|| Box::new(Vec::<crate::observer::GlobalListener<E>>::new()));
+
+        let list = list_any
+            .downcast_mut::<Vec<crate::observer::GlobalListener<E>>>()
+            .expect("global observer list is keyed by the event's own TypeId");
+        list.push(Box::new(listener));
+        self
+    }
+
+    /// Publishes an untargeted event to every [`observe_global`](Self::observe_global) listener
+    /// for `E`, synchronously, in registration order.
+    ///
+    /// Nothing happens if there are none — publishing into an empty world is not an error, which
+    /// is what lets a subsystem announce things nobody has subscribed to yet.
+    pub fn trigger_global<E: Send + Sync + 'static>(&mut self, event: E) {
+        let type_id = TypeId::of::<E>();
+        // Taken out for the duration, like every other dispatch here: a listener that publishes
+        // `E` again finds an empty list and stops, rather than recursing forever.
+        let mut listeners: Vec<crate::observer::GlobalListener<E>> = match self
+            .global_observers
+            .get_mut(&type_id)
+            .and_then(|any| any.downcast_mut::<Vec<crate::observer::GlobalListener<E>>>())
+        {
+            Some(list) => std::mem::take(list),
+            None => return,
+        };
+
+        // Saved and restored for the same reason `trigger` does it: a global publish can happen
+        // from inside an entity walk, and a global listener calling `stop_propagation` must not
+        // truncate that walk. Found by review 2026-08-24 — the global path had been left out.
+        let outer_stop = std::mem::replace(&mut self.propagation_stopped, false);
+
+        for listener in &mut listeners {
+            listener(self, &event);
+        }
+
+        self.propagation_stopped = outer_stop;
+
+        // Put back, and keep anything registered from inside the dispatch — appended after,
+        // matching how component hooks merge a registration made during their own run.
+        if let Some(list) = self
+            .global_observers
+            .get_mut(&type_id)
+            .and_then(|any| any.downcast_mut::<Vec<crate::observer::GlobalListener<E>>>())
+        {
+            listeners.append(list);
+            *list = listeners;
+        }
     }
 
     /// Ends the current [`trigger`](Self::trigger) walk after the running listener returns.
@@ -294,7 +396,7 @@ impl World {
     /// handed only the entity and cannot tell the two cases apart. The dispatcher can, so it
     /// does it here.
     ///
-    /// Runs immediately after that same write's `on_set` hooks. See [`ReplaceHook`].
+    /// Runs immediately after that same write's `on_set` hooks. See [`ReplaceHook`](crate::world::ReplaceHook).
     ///
     /// This is the **hatch under [`add_observer`](Self::add_observer)**. That one hands the
     /// closure an `On<Replace, T>` and nothing else; this one hands it the `&mut World` the

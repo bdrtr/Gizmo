@@ -32,8 +32,9 @@
 //! **Üçüncü satır bu demonun bulduğu kusurdu ve artık kapalı.** `remove_bundle` demetin
 //! yalnız seyrek (SparseSet) bileşenleri için tetikliyordu; Table depolamalı olanlar
 //! `move_entity_to` ile sessizce kopuyordu, yani aynı bileşen iki farklı yolla kaldırılınca
-//! iki farklı cevap veriyordu. `On<Remove, T>`'ye dağıtım yolu açılınca bu içerideki bir
-//! tuhaflık olmaktan çıkıp bozulmuş bir söz hâline geldi ve aynı değişiklikte düzeltildi.
+//! iki farklı cevap veriyordu. 2026-08-24'te `On<Remove, T>`'ye dağıtım yolu açılınca bu
+//! içerideki bir tuhaflık olmaktan çıkıp bozulmuş bir söz hâline geldi ve **aynı gün, aynı
+//! değişiklikte** düzeltildi — yani o tarih sessizliğin başladığı değil, bittiği gün.
 //!
 //! Beş yol artık **beş** kanca çağrısı üretiyor, ve bu sayı da HUD'da. Demoda iki depolama
 //! türü de duruyor: fark kapandı diye ayrımın kendisi kaybolmadı — `remove_bundle` hâlâ
@@ -297,7 +298,7 @@ fn apply_removals(world: &mut gizmo::core::World) {
     if let Some(Some(entity)) = entities.get(1) {
         world.remove_batch::<MyComponent>(&[*entity]);
     }
-    // 3) Demet, Table depolamalı bileşenle — belgeye göre SESSİZ.
+    // 3) Demet, Table depolamalı bileşenle — 2026-08-24'e kadar SESSİZDİ, artık kanca çalışır.
     if let Some(Some(entity)) = entities.get(2) {
         world.remove_bundle::<(MyComponent, Companion)>(*entity);
     }

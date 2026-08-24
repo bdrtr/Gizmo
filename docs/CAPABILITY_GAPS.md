@@ -416,7 +416,7 @@ borrow conflict still panics, because it is a scheduling bug rather than a state
 |---|---|---|
 | ~~`Local<T>` system param~~ | **CLOSED 2026-08-24.** Per-system state had to be a world resource, which made it visible to every other system *and to the scheduler*: two systems each keeping their own tally in a `ResMut<T>` declare a write of the same type, so the batcher keeps them apart and they never run in parallel. `Local<T>` declares nothing — measured: two systems holding a `Local<u32>` land in **1** batch, the same two written with a resource land in **2**. The price §E under-counted was real and was paid: `SystemParam` grew a `type State`, `fetch` a third argument, and that reached nine impls, the `system_param!` macro (composites hold their fields' states as a tuple, so a composite may contain a `Local`), the 1..12 `IntoSystem` macros, the 1..6 `IntoCondition` macros, and four call sites outside `gizmo-core`. `fetch_stateless` is the provided method a caller with no state uses, because `&'w mut ()` cannot be conjured from a temporary. One API consequence: a **`pub`** composite now needs its field types at least as public as itself, since `State` names them | `ecs_guide` |
 | ~~`On<Remove, T>` / `On<Replace, T>` dispatch~~ | **CLOSED 2026-08-24.** `add_observer` is generic over the marker and the marker comes from the closure's own signature — `add_observer(\|e: On<Remove, Hp>\| …)` — so the ordinary call needs no turbofish and the phase is readable at the registration. The three now **partition** a component's life: a write fires `Insert` **xor** `Replace`, never both and never neither; a detachment fires `Remove`. `Replace` needed a fourth hook list rather than a reuse of `on_set`, because `on_set` fires on the first write too and a hook that is handed only an entity cannot tell the cases apart — the dispatcher can, so it does it once instead of every caller keeping a per-entity ledger. **The gap understated itself in one place:** giving `Remove` a dispatch path turned an internal quirk into a broken promise, because `remove_bundle` fired `on_remove` for a bundle's sparse components and detached its Table components in silence — the same component, removed two ways, answering differently. Fixed in the same change and re-measured in the demo, whose header table had recorded the silence as a fact: five removal paths, **five** hook calls now, four before | `removal_detection`, `observers` |
-| Global (non-entity) observers | Both doors are keyed to something: `add_observer` to a component type, `observe` to a target entity. An event that belongs to neither — "the level loaded", "the round ended" — has no counterpart and has to be an `Events<T>` queue read by a system a frame later. (This row said `add_observer` was `On<Insert, T>` only until 2026-08-24; it now takes all three lifecycle phases, which does not help here — the key is still a component type) | `observers` |
+| ~~Global (non-entity) observers~~ | **CLOSED 2026-08-24.** `World::observe_global` / `trigger_global`, keyed only by the event's own type — the third door, next to `add_observer`'s component type and `observe`'s target entity. Synchronous: the listeners run inside the `trigger_global` call, in registration order, and see the world before it returns. **No `Clone` bound**, unlike the entity path — there is no hierarchy walk, so no second recipient needs a second copy, and the listener takes the event by reference; an event carrying a `String` costs nothing to publish. `Events<T>` remains the right choice when the reaction wants to be a scheduled system, and the docs say so rather than leaving it implied. Demonstrated with two *independent* subscribers that do not know about each other and a publisher that knows about neither: `observers` announces `ChainSettled` when its cascade stops, measured at "26 mines · 8 rings" queued and "26 mines · 1 ring" immediate | `observers` |
 | Run conditions on observers | An observer cannot be gated | `observers` |
 | ~~A world handle inside observers/hooks~~ | **CLOSED 2026-08-24 — and the row was half wrong when written.** All five *hook* types have taken a `&mut World` all along (`AddHook`, `SetHook`, `ReplaceHook`, `RemoveHook`, `DespawnHook`); what had no world was the *observer* end, and only one of its two forms had no layer to drop down to: a lifecycle observer's `On` is built by a hook that holds a world, so `register_on_add` and its siblings were always the route, but `World::observe`'s listener was handed the `On` and nothing else, with nothing underneath it. It now takes `(&mut World, On<E>)`. The measured consequence is the one the row named, inverted: `observers` runs the same chain both ways and reaches the **same 26 of 70 mines with the same 26 bubbled events** — in **8 frames** through the captured queue, and in **1** when the listener drives it, calling `trigger` from inside the dispatch. Re-entrancy terminates structurally: the notified entity's listeners are owned by the dispatch for the length of the call, so an event sent back at its own target finds nothing, while another entity's listeners run nested. One measurement moved while writing this: the immediate path first reported **73** bubbled rather than 26, because it collected its neighbour list as a snapshot and triggered entries the cascade had already reached — an event bubbles even when its target's listener returns early | `observers` |
 | ~~`Visibility` component~~ | **THE ENTRY WAS WRONG, and stale when written.** It said hiding meant `ShadowCasting::Only`, "which still casts a shadow". The engine's hide is `gizmo_core::component::IsHidden`, both draw loops have honoured it since 2026-08-19, and it is a *full* hide — the entity is dropped before it becomes a draw item. Measured 2026-08-24: an `IsHidden` cube gives a frame **0 pixels** different from having no cube in the world, while `ShadowCasting::Only` leaves its shadow, which is what that variant is for. What WAS missing is **inheritance**, and that is the part nobody had written down: both loops asked `contains(entity)` per entity, so hiding a parent left its children drawn — **1 886 of a pair's 2 946** pixels survived. `collect_hidden` walks `Children` down from every marked entity now, shared by both paths, `O(hidden subtree)` so a frame with nothing hidden pays nothing | `infinite_grid` |
@@ -450,23 +450,35 @@ engine's own `LifetimeSystem` takes the same route (`query_unchecked` + `world.e
 
 ### C3. Component hooks are not an audit trail
 
-Hooks exist (`register_on_add` / `on_set` / `on_remove`, plus a global despawn hook — a superset
-of the usual three in one respect, since the lists accumulate). But several paths write components
-**without firing anything**. Measured in `component_hooks`:
+Hooks exist — `register_on_add` / `on_set` / `on_replace` / `on_remove`, plus a global despawn
+hook, and the lists accumulate. But several paths write components **without firing anything**.
+Re-measured in `component_hooks` on 2026-08-24, when `on_replace` was added and `remove_bundle`'s
+Table half stopped being silent:
 
-| path | add | set | remove | despawn |
-|---|---|---|---|---|
-| `spawn_bundle` | 1 | 1 | 0 | 0 |
-| `add_component` (new) | 1 | 1 | 0 | 0 |
-| `add_component` (overwrite) | **0** | 1 | 0 | 0 |
-| `remove_component` | 0 | 0 | 1 | 0 |
-| `add_bundle` (all-Table) | **0** | **0** | **0** | **0** |
-| `remove_bundle` (Table) | **0** | **0** | **0** | **0** |
-| `insert_batch` (3) | 3 | 3 | 0 | 0 |
-| `remove_batch` (3) | 0 | 0 | 3 | 0 |
-| `spawn_batch` (**4**) | **1** | **1** | 0 | 0 |
-| `clone_entity` (3) | **0** | **0** | **0** | **0** |
-| `despawn` | 0 | 0 | 1 | 1 |
+| path | add | set | replace | remove | despawn |
+|---|---|---|---|---|---|
+| `spawn_bundle` | 1 | 1 | 0 | 0 | 0 |
+| `add_component` (new) | 1 | 1 | 0 | 0 | 0 |
+| `add_component` (overwrite) | **0** | 1 | **1** | 0 | 0 |
+| `remove_component` | 0 | 0 | 0 | 1 | 0 |
+| `add_bundle` (all-Table) | **0** | **0** | **0** | **0** | **0** |
+| `remove_bundle` (Table) | 0 | 0 | 0 | **1** | 0 |
+| `insert_batch` (3) | 3 | 3 | 0 | 0 | 0 |
+| `remove_batch` (3) | 0 | 0 | 0 | 3 | 0 |
+| `spawn_batch` (**4**) | **1** | **1** | 0 | 0 | 0 |
+| `clone_entity` (3) | **0** | **0** | **0** | **0** | **0** |
+| `despawn` | 0 | 0 | 0 | 1 | 1 |
+
+Two rows moved on 2026-08-24 and both were this table's own findings. `remove_bundle` (Table) read
+**0/0/0/0** because the bundle's Table members went out through the archetype migration in silence;
+giving `On<Remove, T>` a dispatch path turned that from an internal quirk into a broken promise and
+it was fixed in the same change. `add_component` (overwrite) gained the **replace** column: `on_set`
+fires on every write and `on_add` only on the first, so "this overwrote something" was a question
+only the caller could answer, by keeping a per-entity ledger. The dispatcher knows which branch it
+took, so `on_replace` answers it — every write fires `on_add` **xor** `on_replace`.
+
+**The silent list is shorter, not empty**, and that is what keeps this row open: `add_bundle`
+(all-Table) and `clone_entity` still fire nothing, and `spawn_batch` fires once for four entities.
 
 The cost is concrete. `relationships` hand-builds a reverse index from hooks, then adds four
 entities with `spawn_batch`: the world gained 4 relationships, **the index gained 1**. Three

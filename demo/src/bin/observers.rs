@@ -31,10 +31,19 @@
 //! Demo üçünü de sayıyor. Ham kanca (`register_on_remove` ve kardeşleri) kaçış kapısı olarak
 //! duruyor: gözlemcinin alamadığı `&mut World`'ü isteyen oradan iniyor.
 //!
-//! **3. Genel (varlığa bağlı olmayan) gözlemci yok, koşul da yok.** Motorda iki kapı var:
-//! bileşen ekleme (`add_observer`) ve **bir varlığa** bağlı olay (`observe`). Hedefsiz bir
-//! olayı dinlemenin — ya da bir gözlemciye koşul takmanın — yolu **yok**; demo hedefsiz olayı
-//! düz bir fonksiyona çeviriyor.
+//! **3. ~~Genel (varlığa bağlı olmayan) gözlemci yok~~ — 2026-08-24'te üçüncü kapı açıldı;
+//! koşul hâlâ yok.** Motorda iki kapı vardı: bileşen türüne bağlı (`add_observer`) ve **bir
+//! varlığa** bağlı (`observe`). İkisine de ait olmayan bir haber — "seviye yüklendi", "tur
+//! bitti" — ya bir `Events<T>` kuyruğuna yazılıp bir kare sonra okunuyor ya da düz bir
+//! fonksiyon çağrısına çevriliyordu; demo ikincisini yapıyordu.
+//!
+//! `observe_global` / `trigger_global` bunu kapatıyor. Demo zincir durunca `ChainSettled`
+//! yayınlıyor ve olayın **iki bağımsız abonesi** var: biri sonucu deftere yazıyor (HUD'da
+//! görünüyor), biri günlüğe basıyor. Birbirlerinden habersizler, yayınlayan da onları tanımıyor
+//! — yayının anlamı bu. İkisi de `trigger_global` çağrısının İÇİNDE koşuyor, bir kare sonra
+//! değil. Olay `Clone` gerektirmiyor, çünkü kabarma yok: dinleyiciye referansla geliyor.
+//!
+//! **Koşul takmak** hâlâ yok: bir gözlemciyi `run_if` ile kapatmanın yolu bulunmuyor.
 //!
 //! ## Motorun fazlası: olay hiyerarşide yukarı kabarıyor
 //!
@@ -51,6 +60,10 @@
 //! |-----|------|----------|---------|
 //! | kuyruk (`M` ile) | **8** | 26/70 | 26 |
 //! | anında (`GIZMO_OBSERVER_IMMEDIATE=1`) | **1** | 26/70 | 26 |
+//!
+//! Hedefsiz olay ikisinde de yayınlanıyor ve iki abonesi de koşuyor — kuyrukta *"26 mayın ·
+//! 8 halka"*, anında *"26 mayın · 1 halka"*. Kip değişince yayın değişmiyor, yalnız ne zaman
+//! yayınlandığı değişiyor.
 //!
 //! Patlayan kümesi birebir aynı — 26 mayın, tarlanın merkezdeki mayına bağlı parçası. Değişen
 //! yalnız ne zaman bittiği.
@@ -115,6 +128,18 @@ gizmo::core::impl_component!(Mine);
 struct Field;
 gizmo::core::impl_component!(Field);
 
+/// **Hedefsiz olay**: zincir durdu. Bir varlığa ait değil, bir bileşene de — "seviye yüklendi"
+/// ya da "tur bitti" gibi. `observe_global` / `trigger_global` bunun için var, ve 2026-08-24
+/// öncesinde motorda karşılığı yoktu: böyle bir haber ya bir `Events<T>` kuyruğuna yazılıp bir
+/// kare sonra okunuyor ya da düz bir fonksiyon çağrısına çevriliyordu (demo ikincisini yapıyordu).
+///
+/// `Clone` gerektirmiyor — kabaran bir olay aynı değeri birkaç varlığa dağıttığı için klonlanmak
+/// zorunda, bunun tek bir düz listesi var ve dinleyiciye referansla geliyor.
+struct ChainSettled {
+    exploded: usize,
+    rings: u32,
+}
+
 /// Zincirin hangi kiple yürüdüğü. **Dinleyici bunu dünyadan okuyor** — yani kaynağın kendisi
 /// dinleyicinin artık `&mut World` aldığının en kısa kanıtı.
 #[derive(Clone, Copy, Default)]
@@ -159,6 +184,8 @@ struct Fuse {
     indexed: Arc<Mutex<u32>>,
     replaced: Arc<Mutex<u32>>,
     removed: Arc<Mutex<u32>>,
+    /// Hedefsiz `ChainSettled` olayının ilk abonesinin yazdığı yer: (patlayan, halka).
+    settled: Arc<Mutex<Option<(usize, u32)>>>,
 }
 gizmo::core::impl_component!(Fuse);
 
@@ -175,6 +202,9 @@ struct Report {
     removed: u32,
     /// Zincirin hangi kiple yürüdüğü — HUD bunu yazıyor.
     immediate: bool,
+    /// Hedefsiz olayın KAYIT TUTAN abonesinin yazdığı sonuç. Günlüğe basan abone ayrı; ikisinin
+    /// birden dolu olması yayının gerçekten iki bağımsız aboneye gittiğini gösteriyor.
+    settled: Option<(usize, u32)>,
     frame: u32,
     /// İmlecin zemin düzlemine düştüğü nokta — HUD'da ve tıklamada kullanılıyor.
     aim: Vec3,
@@ -234,6 +264,24 @@ fn main() {
             scene.world.add_observer(move |_: On<Replace, Mine>| {
                 *replaced.lock().expect("sayaç kilidi") += 1;
             });
+            // HEDEFSİZ olayın iki bağımsız abonesi. Birbirlerinden habersizler ve olayı
+            // yayınlayan da onları tanımıyor — yayının anlamı bu. İkisi de aynı `trigger_global`
+            // çağrısının İÇİNDE koşuyor, bir kare sonra değil.
+            let settled = fuse.settled.clone();
+            scene.world.observe_global::<ChainSettled, _>(move |_world, e: &ChainSettled| {
+                *settled.lock().expect("sayaç kilidi") = Some((e.exploded, e.rings));
+            });
+            scene.world.observe_global::<ChainSettled, _>(|_world, e: &ChainSettled| {
+                if std::env::var("GIZMO_OBSERVER_SELFTEST").is_ok() {
+                    gizmo::gizmo_log!(
+                        Info,
+                        "HEDEFSİZ olay · zincir durdu · {} mayın · {} halka",
+                        e.exploded,
+                        e.rings
+                    );
+                }
+            });
+
             // Çıkarma tarafı — 2026-08-24'e kadar burada ham bir `register_on_remove` kancası
             // vardı, çünkü `On<Remove, T>` hiçbir yere dağıtılmıyordu.
             let removed = fuse.removed.clone();
@@ -301,6 +349,12 @@ fn main() {
                         "tarlaya KABARAN olay: {} (tek dinleyici)",
                         report.bubbled
                     ));
+                    if let Some((exploded, rings)) = report.settled {
+                        ui.label(format!(
+                            "HEDEFSİZ olay (observe_global): {} mayın · {} halka",
+                            exploded, rings
+                        ));
+                    }
                     ui.separator();
                     ui.label(if report.immediate {
                         "kip: ANINDA — dinleyici zinciri kendi içinden yürütüyor (M)"
@@ -367,15 +421,20 @@ fn drive_chain(world: &mut gizmo::core::World, clicked: bool) {
         .get_resource::<Report>()
         .map(|r| (r.frame, r.aim))
         .unwrap_or((0, Vec3::ZERO));
+    // Bu çağrıda bir zincir başlatıldı mı — anında kipte "zincir bitti" anı tam olarak burası,
+    // çünkü `trigger_explode` özyinelemesi geri dönmüş oluyor.
+    let mut started = false;
     if std::env::var("GIZMO_OBSERVER_SELFTEST").is_ok() && frame == SELFTEST_FRAME {
         if let Some(entity) = nearest_mine(world, Vec3::ZERO) {
             trigger_explode(world, entity);
+            started = true;
         }
     }
     // Tıklama: imlecin düştüğü noktayı KAPSAYAN mayına bas — yarıçapa bakılıyor.
     if clicked {
         if let Some(entity) = mine_under(world, aim) {
             trigger_explode(world, entity);
+            started = true;
         }
     }
 
@@ -389,9 +448,14 @@ fn drive_chain(world: &mut gizmo::core::World, clicked: bool) {
         .get_resource::<ChainMode>()
         .map(|m| m.immediate)
         .unwrap_or(false);
-    if immediate_mode && std::env::var("GIZMO_OBSERVER_SELFTEST").is_ok() && frame == SELFTEST_FRAME
-    {
+    if immediate_mode && started {
         sync_report(world, &fuse, false);
+        // Zincir bu noktada bitti: `trigger_explode` özyinelemesi döndü. Hedefsiz olay burada
+        // yayınlanıyor — ve iki abone de bu çağrının içinde koşuyor.
+        let done = world.get_resource::<Report>().map(|r| (r.exploded, r.rings));
+        if let Some((exploded, rings)) = done {
+            world.trigger_global(ChainSettled { exploded, rings: rings.max(1) });
+        }
         let report = world.get_resource::<Report>().map(|r| r.clone());
         if let Some(r) = report {
             gizmo::gizmo_log!(
@@ -456,6 +520,7 @@ fn drive_chain(world: &mut gizmo::core::World, clicked: bool) {
             }
         }
     }
+    let last_ring = next.is_empty();
     for id in next {
         if let Some(entity) = world.get_entity(id) {
             trigger_explode(world, entity);
@@ -463,6 +528,15 @@ fn drive_chain(world: &mut gizmo::core::World, clicked: bool) {
     }
 
     sync_report(world, &fuse, true);
+
+    // Kuyruk kipinde zincir, yeni halka üretmeyen halkada duruyor. Aynı hedefsiz olay, aynı iki
+    // abone — kip değişince yayının kendisi değişmiyor, yalnız ne zaman yayınlandığı değişiyor.
+    if last_ring {
+        let done = world.get_resource::<Report>().map(|r| (r.exploded, r.rings));
+        if let Some((exploded, rings)) = done {
+            world.trigger_global(ChainSettled { exploded, rings });
+        }
+    }
 }
 
 /// Bir mayını **dinleyicinin içinden** patlatır: işaretle, boya, menzildekileri tetikle.
@@ -589,6 +663,7 @@ fn sync_report(world: &mut gizmo::core::World, fuse: &Fuse, advanced: bool) {
         report.replaced = replaced;
         report.removed = removed;
         report.immediate = immediate;
+        report.settled = *fuse.settled.lock().expect("sayaç kilidi");
         if advanced {
             report.rings += 1;
             if std::env::var("GIZMO_OBSERVER_SELFTEST").is_ok() {

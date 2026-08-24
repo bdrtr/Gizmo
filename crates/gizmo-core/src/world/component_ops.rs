@@ -152,9 +152,14 @@ impl World {
     /// The migration swap-removes the entity's old row, so another entity in the source
     /// archetype may change position (its data is preserved).
     ///
-    /// Hook asymmetry to know about: `on_remove` fires for `B`'s `SparseSet`-storage
-    /// components, but its Table-storage components are detached by the archetype migration
-    /// with no hook at all. [`World::remove_component`] fires `on_remove` for both.
+    /// Hooks: `on_remove` fires once for each of `B`'s components the entity actually held,
+    /// whatever its storage — sparse ones from the explicit loop, Table ones after the archetype
+    /// migration, which is where [`World::remove_component`] fires for the same storage.
+    ///
+    /// Until 2026-08-24 the Table half fired nothing: the components went out through the block
+    /// move in silence, so the same component removed two ways answered differently. Nothing had
+    /// to care while `On<Remove, T>` was undeliverable; giving it a dispatch path made the
+    /// asymmetry a broken promise.
     pub fn remove_bundle<B: crate::component::Bundle>(&mut self, entity: Entity) {
         if !self.is_alive(entity) { return; }
         let eid = entity.id();
@@ -270,8 +275,11 @@ impl World {
     /// attach migrates the entity to the archetype with `T` added, swap-removing its old
     /// row, so another entity in the source archetype may change position.
     ///
-    /// Hooks: a first attach fires `on_add` then `on_set`; an overwrite fires `on_set`
-    /// only. That holds identically for `Table` and `SparseSet` storage.
+    /// Hooks: a first attach fires `on_add` then `on_set`; an overwrite fires `on_set` then
+    /// `on_replace`. Exactly one of `on_add` / `on_replace` runs per write — they partition the
+    /// writes `on_set` sees. That holds identically for `Table` and `SparseSet` storage, though
+    /// the two reach the decision differently: Table storage reads it off which branch the
+    /// migration took, sparse storage asks the set whether the entity was already in it.
     ///
     /// One asymmetry to watch for on entities whose id was *reserved* from the allocator but
     /// never passed to [`World::flush_spawn`]: they are [`World::is_alive`] but have no

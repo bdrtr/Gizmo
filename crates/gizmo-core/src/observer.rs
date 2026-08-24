@@ -1,7 +1,8 @@
 //! Push-side notification — callbacks that run at the instant something happens, as opposed
 //! to the [`event`](crate::event) queues, which systems poll a frame later.
 //!
-//! Two unrelated mechanisms are spelled with the types in this module:
+//! Three mechanisms are spelled with the types in this module, and what separates them is what
+//! each is **keyed to**: a component type, a target entity, or nothing at all.
 //!
 //! * **Component lifecycle.** `World::add_observer::<E, T, _>` appends a hook for `T` on the
 //!   phase `E` names — [`Insert`], [`Replace`] or [`Remove`] — and the marker comes from the
@@ -13,20 +14,31 @@
 //!   not an audit trail.
 //! * **Entity-targeted events.** `World::observe` attaches a listener for one
 //!   [`EntityEvent`] type to one entity; `World::trigger` dispatches a value to that
-//!   entity's listeners and, if the event opts in, on up the `Parent` chain.
+//!   entity's listeners and, if the event opts in, on up the `Parent` chain — until a listener
+//!   calls [`World::stop_propagation`](crate::world::World::stop_propagation).
+//! * **Untargeted events.** `World::observe_global` and `World::trigger_global`, keyed only by
+//!   the event's own type: "the level loaded", "the round ended". No hierarchy, so no `Clone`
+//!   bound — the listener is handed the event by reference. Added 2026-08-24; before it, such a
+//!   thing had to be an [`Events`](crate::event::Events) queue read a frame later.
 //!
-//! Both run synchronously on the calling thread, inside the `&mut World` call that caused
-//! them, and **both reach a `&mut World`** — the entity-event listener is handed one
-//! directly, and a lifecycle observer's `On` is built by a hook that has one, so the world is
-//! one layer down at [`register_on_add`](crate::world::World::register_on_add) and its
-//! siblings. Until 2026-08-24 neither did, which is why a chain reaction had to be written as
-//! a captured queue drained by a later system, and therefore advanced one link per frame.
+//! All three run synchronously on the calling thread, inside the `&mut World` call that caused
+//! them. The two **event** paths hand their listener a `&mut World` directly; a **lifecycle**
+//! observer does not — its `On` is built by a hook that has one, so the world is one layer down
+//! at [`register_on_add`](crate::world::World::register_on_add) and its siblings, and a
+//! lifecycle callback that needs the world registers there instead. Until 2026-08-24 none of
+//! them reached a world, which is why a chain reaction had to be written as a captured queue
+//! drained by a later system, and therefore advanced one link per frame.
 //!
-//! **Re-entrancy is bounded by detachment, not by prohibition.** While a callback runs, the
-//! list it came from is out of the world: a component type's hook lists during a hook, and one
-//! entity's listeners during a trigger. So a callback that provokes the same notification at
-//! the same target terminates instead of recursing, while any *other* target's callbacks are
-//! live and run nested.
+//! **Re-entrancy is bounded by detachment, not by prohibition.** For the whole of a dispatch the
+//! list it draws from is out of the world — a component type's hook lists during a hook, one
+//! entity's listeners during a trigger, one event type's listeners during a global publish. So a
+//! callback that provokes the same notification at the same target terminates instead of
+//! recursing, while any *other* target's callbacks are live and run nested.
+//!
+//! *For the whole of a dispatch* is the load-bearing half. `trigger` used to return each listener
+//! to the map as soon as it finished, so by the second listener the first was live again and a
+//! nested trigger at the same entity re-ran it. Corrected 2026-08-24, with the test that a single
+//! listener could never have caught.
 //!
 //! Listeners registered against the same entity and event type run in registration order.
 //! Neither mechanism has an unregister: registrations accumulate for the life of the world,
@@ -62,9 +74,11 @@ pub struct Insert;
 pub struct Remove;
 /// Lifecycle marker meaning "a write replaced a value the entity already had".
 ///
-/// The strict complement of [`Insert`] within a write: every write fires the component's set
-/// hooks, and exactly one of `On<Insert, T>` or `On<Replace, T>` alongside them — never both,
-/// never neither. That is the distinction an observer cannot draw for itself, because it is
+/// The strict complement of [`Insert`] within a write: a write that notifies at all fires the
+/// component's set hooks and exactly one of `On<Insert, T>` or `On<Replace, T>` alongside them —
+/// never both, never neither. *That notifies at all* is the caveat: the bulk paths listed on
+/// [`ComponentHooks`](crate::world::ComponentHooks) write columns directly and fire nothing, so
+/// the partition holds over the writes that are announced, not over every write that happens. That is the distinction an observer cannot draw for itself, because it is
 /// handed the entity and nothing else; the dispatcher knows which branch it took, so it says.
 ///
 /// Zero-sized like the others: it witnesses *that* a value was replaced, never what it was.
@@ -99,7 +113,8 @@ mod sealed {
 ///
 /// There is no fourth marker for "despawned": a despawn already reaches `On<Remove, T>` once
 /// per component the entity held, and the whole-entity notification is
-/// `World::register_on_despawn`, which is not per-component and so cannot be an `On<_, T>`.
+/// [`World::register_despawn_hook`](crate::world::World::register_despawn_hook), which is not
+/// per-component and so cannot be an `On<_, T>`.
 pub trait Lifecycle: sealed::SealedLifecycle + Copy + Send + Sync + 'static {
     /// The zero-sized witness handed to the observer as `On::event`.
     fn witness() -> Self;
@@ -150,6 +165,15 @@ impl Lifecycle for Replace {
 /// silently returned `None`, i.e. a listener that was never called and no error anywhere.
 pub type EntityListener<E> =
     Box<dyn FnMut(&mut crate::world::World, On<E>) + Send + Sync + 'static>;
+
+/// One registered [`World::observe_global`](crate::world::World::observe_global) listener.
+///
+/// It takes the event by **reference**, which is the whole difference from
+/// [`EntityListener`]: a global event is delivered to a flat list rather than walked up a
+/// hierarchy, so there is no second recipient to hand a second copy to and therefore no
+/// `Clone` bound on the event type. An event holding a `Vec` costs nothing to publish.
+pub type GlobalListener<E> =
+    Box<dyn FnMut(&mut crate::world::World, &E) + Send + Sync + 'static>;
 
 /// A user-defined event delivered to listeners attached to individual entities
 /// (`World::observe`) and dispatched by `World::trigger`, as opposed to an
@@ -532,6 +556,58 @@ mod tests {
         assert_eq!(*hits.lock().unwrap(), 1, "the nested trigger re-entered the same listener");
     }
 
+    /// **The whole entity's list is detached, not just the listener currently running.**
+    ///
+    /// Found by review 2026-08-24, and it was a real defect rather than a doc quibble: `trigger`
+    /// used to put each listener back *inside* its loop, so by the time the second listener ran,
+    /// the first was live in the map again. A nested trigger at the same entity — the case the
+    /// termination guarantee is about — re-ran every listener that had already finished. One
+    /// listener could not see it, which is exactly why
+    /// `a_listener_retriggering_its_own_entity_terminates` stayed green.
+    #[test]
+    fn a_nested_trigger_does_not_rerun_listeners_that_already_finished() {
+        let mut world = World::new();
+        let e = world.spawn();
+        let runs = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let (first, second) = (runs.clone(), runs.clone());
+
+        world.observe::<Ping, _>(e, move |_w: &mut World, _on| {
+            first.lock().unwrap().push(1);
+        });
+        world.observe::<Ping, _>(e, move |world: &mut World, on| {
+            second.lock().unwrap().push(2);
+            // The nested dispatch must find nothing: listener 1 has run, but the entity's list
+            // belongs to the outer dispatch until it finishes.
+            world.trigger(Ping { target: on.entity, bubble: false });
+        });
+
+        world.trigger(Ping { target: e, bubble: false });
+        assert_eq!(*runs.lock().unwrap(), vec![1, 2], "a finished listener was re-run by a nested trigger");
+    }
+
+    /// A listener registered from **inside** a dispatch lands after the ones already there, and
+    /// runs from the next trigger — the same merge-back order the global path uses.
+    #[test]
+    fn an_entity_listener_registered_during_a_dispatch_keeps_its_place() {
+        let mut world = World::new();
+        let e = world.spawn();
+        let runs = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let (outer, inner) = (runs.clone(), runs.clone());
+
+        world.observe::<Ping, _>(e, move |world: &mut World, _on| {
+            outer.lock().unwrap().push(1);
+            let inner = inner.clone();
+            world.observe::<Ping, _>(e, move |_w: &mut World, _on| {
+                inner.lock().unwrap().push(2);
+            });
+        });
+
+        world.trigger(Ping { target: e, bubble: false });
+        assert_eq!(*runs.lock().unwrap(), vec![1], "the new listener ran during its own registration");
+        world.trigger(Ping { target: e, bubble: false });
+        assert_eq!(*runs.lock().unwrap(), vec![1, 1, 2], "registration order was not preserved");
+    }
+
     /// …and the listener is **put back**, so the next trigger reaches it again. The detachment
     /// is for the duration of one dispatch, not a de-registration.
     #[test]
@@ -728,6 +804,163 @@ mod tests {
         world.stop_propagation();
         world.trigger(Ping { target: leaf, bubble: true });
         assert_eq!(*trail.lock().unwrap(), vec![0, 1, 2], "a stale flag truncated the next walk");
+    }
+
+    /// An untargeted event carrying a non-`Clone` payload — the bound the global path drops.
+    struct LevelLoaded {
+        name: String,
+    }
+
+    /// **An event that belongs to nothing reaches a listener** — the third door.
+    ///
+    /// The payload is a `String` on purpose: the entity path requires `Clone` because a
+    /// bubbling walk hands the same event to several entities, and this path does not.
+    #[test]
+    fn a_global_event_reaches_its_listeners_in_order() {
+        let mut world = World::new();
+        let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+        let (first, second) = (seen.clone(), seen.clone());
+        world.observe_global::<LevelLoaded, _>(move |_w: &mut World, e: &LevelLoaded| {
+            first.lock().unwrap().push(format!("1:{}", e.name));
+        });
+        world.observe_global::<LevelLoaded, _>(move |_w: &mut World, e: &LevelLoaded| {
+            second.lock().unwrap().push(format!("2:{}", e.name));
+        });
+
+        world.trigger_global(LevelLoaded { name: "hangar".into() });
+        assert_eq!(*seen.lock().unwrap(), vec!["1:hangar", "2:hangar"]);
+    }
+
+    /// The listener gets the world, like the other two doors.
+    #[test]
+    fn a_global_listener_can_act_on_the_world() {
+        let mut world = World::new();
+        world.observe_global::<LevelLoaded, _>(|world: &mut World, _e| {
+            world.spawn();
+        });
+        let before = world.entity_count();
+        world.trigger_global(LevelLoaded { name: "x".into() });
+        assert_eq!(world.entity_count(), before + 1);
+    }
+
+    /// Publishing with nobody listening is a no-op, not an error.
+    #[test]
+    fn a_global_event_with_no_listener_is_a_no_op() {
+        let mut world = World::new();
+        world.trigger_global(LevelLoaded { name: "x".into() });
+    }
+
+    /// Re-entrancy: republishing the **same** type from inside terminates; a **different** type
+    /// runs nested. Same rule as the entity path, and for the same reason.
+    #[test]
+    fn a_global_listener_republishing_its_own_type_terminates() {
+        struct Other;
+        let mut world = World::new();
+        let same = Arc::new(Mutex::new(0));
+        let other = Arc::new(Mutex::new(0));
+        let (s, o) = (same.clone(), other.clone());
+
+        world.observe_global::<Other, _>(move |_w: &mut World, _e: &Other| {
+            *o.lock().unwrap() += 1;
+        });
+        world.observe_global::<LevelLoaded, _>(move |world: &mut World, _e| {
+            *s.lock().unwrap() += 1;
+            world.trigger_global(Other);
+            world.trigger_global(LevelLoaded { name: "again".into() });
+        });
+
+        world.trigger_global(LevelLoaded { name: "first".into() });
+        assert_eq!(*same.lock().unwrap(), 1, "the same type re-entered its own dispatch");
+        assert_eq!(*other.lock().unwrap(), 1, "a different type failed to run nested");
+    }
+
+    /// …and the listeners are put back, so the next publish reaches them again.
+    #[test]
+    fn global_listeners_survive_the_dispatch_that_took_them() {
+        let mut world = World::new();
+        let hits = Arc::new(Mutex::new(0));
+        let counter = hits.clone();
+        world.observe_global::<LevelLoaded, _>(move |_w: &mut World, _e| {
+            *counter.lock().unwrap() += 1;
+        });
+
+        world.trigger_global(LevelLoaded { name: "a".into() });
+        world.trigger_global(LevelLoaded { name: "b".into() });
+        assert_eq!(*hits.lock().unwrap(), 2, "the first dispatch consumed the listener");
+    }
+
+    /// A listener registered from **inside** a dispatch is kept, and runs from the next one.
+    ///
+    /// The merge-back has to append rather than overwrite; getting it backwards loses either the
+    /// original listeners or the new one, and both losses are silent.
+    #[test]
+    fn a_listener_registered_during_a_dispatch_is_kept() {
+        let mut world = World::new();
+        let seen = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let (outer, inner) = (seen.clone(), seen.clone());
+
+        world.observe_global::<LevelLoaded, _>(move |world: &mut World, _e| {
+            outer.lock().unwrap().push(1);
+            let inner = inner.clone();
+            world.observe_global::<LevelLoaded, _>(move |_w: &mut World, _e| {
+                inner.lock().unwrap().push(2);
+            });
+        });
+
+        world.trigger_global(LevelLoaded { name: "a".into() });
+        assert_eq!(*seen.lock().unwrap(), vec![1], "the new listener ran during its own registration");
+        world.trigger_global(LevelLoaded { name: "b".into() });
+        assert_eq!(*seen.lock().unwrap(), vec![1, 1, 2], "the registration made inside was lost");
+    }
+
+    /// A **global** listener calling `stop_propagation` does not truncate the entity walk it is
+    /// nested inside.
+    ///
+    /// `trigger` saves and restores the flag around its own walk, but a global publish is a
+    /// different dispatcher and had been left out of that discipline — a listener on an
+    /// unrelated broadcast could end somebody else's bubbling. Found by review 2026-08-24.
+    #[test]
+    fn a_global_listener_cannot_cancel_an_entity_walk_it_is_inside() {
+        struct Beep;
+        let mut world = World::new();
+        let [root, mid, leaf] = three_deep(&mut world);
+
+        world.observe_global::<Beep, _>(|world: &mut World, _e: &Beep| world.stop_propagation());
+
+        let trail = Arc::new(Mutex::new(Vec::<usize>::new()));
+        for (index, entity) in [leaf, mid, root].iter().enumerate() {
+            let t = trail.clone();
+            world.observe::<Ping, _>(*entity, move |world: &mut World, _on| {
+                t.lock().unwrap().push(index);
+                if index == 0 {
+                    world.trigger_global(Beep);
+                }
+            });
+        }
+
+        world.trigger(Ping { target: leaf, bubble: true });
+        assert_eq!(
+            *trail.lock().unwrap(),
+            vec![0, 1, 2],
+            "a global listener's stop_propagation ended the entity walk around it"
+        );
+    }
+
+    /// Two event types do not see each other's listeners — the map is keyed by the event's own
+    /// `TypeId`, and a `downcast_mut` that quietly returned `None` would look like silence.
+    #[test]
+    fn global_event_types_are_independent() {
+        struct A;
+        struct B;
+        let mut world = World::new();
+        let a_hits = Arc::new(Mutex::new(0));
+        let counter = a_hits.clone();
+        world.observe_global::<A, _>(move |_w: &mut World, _e: &A| *counter.lock().unwrap() += 1);
+
+        world.trigger_global(B);
+        assert_eq!(*a_hits.lock().unwrap(), 0, "B woke A's listener");
+        world.trigger_global(A);
+        assert_eq!(*a_hits.lock().unwrap(), 1);
     }
 
     #[test]
