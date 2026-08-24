@@ -48,6 +48,9 @@ const HATCHES: &[(&str, &str)] = &[
     // `Option<P>`'s hatch is the other direction: the parameter is the hatch, and what it replaces
     // is the guard that skips the whole system.
     ("impl<P: SystemParam> SystemParam for Option<P>", "run_if"),
+    // The default query filter decides, on the user's behalf, that a system does not see an
+    // entity. `IgnoreDefaultFilters` is the door out, and its docs have to name what it undoes.
+    ("IgnoreDefaultFilters", "DefaultQueryFilters"),
 ];
 
 /// The line each hatch is declared on, as a prefix.
@@ -69,6 +72,7 @@ const HATCH_DECLS: &[(&str, &str)] = &[
         "impl<P: SystemParam> SystemParam for Option<P>",
         "impl<P: SystemParam> SystemParam for Option<P>",
     ),
+    ("IgnoreDefaultFilters", "pub struct IgnoreDefaultFilters"),
 ];
 
 /// Where each hatch's documentation lives.
@@ -91,6 +95,7 @@ const HATCH_FILES: &[(&str, &str)] = &[
         "impl<P: SystemParam> SystemParam for Option<P>",
         "crates/gizmo-core/src/system/params.rs",
     ),
+    ("IgnoreDefaultFilters", "crates/gizmo-core/src/query/mod.rs"),
 ];
 
 /// APIs the plan **proposes** rather than records: named as future work, absent by design.

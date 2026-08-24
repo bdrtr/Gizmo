@@ -437,7 +437,7 @@ borrow conflict still panics, because it is a scheduling bug rather than a state
 | A user post-pass that reads the frame | `set_render` really does let a game add its own full-screen pass (measured: 38.67 % of pixels, and the untouched rows stay bit-identical, so `LoadOp::Load` preserves the engine's frame). The *surface* has no `TEXTURE_BINDING`, so a pass cannot sample the swapchain — but it does not have to: `PostProcessState::hdr_texture` is `TEXTURE_BINDING | COPY_SRC` and its texture, view and bind group are public, which is the frame the chain itself reads. A user FXAA or radial blur is writable through it; what is missing is a **compute reduction**, priced at 10 ms a CPU readback in `auto_exposure` | `post_processing`, `auto_exposure` |
 | Fallible system params | A parameter that cannot be fetched **panics** (measured: `❌ FATAL ECS ERROR ❌`). That is deliberate — the message says so. The only guard is `run_if`, measured working (guarded system ran 0 times, no panic). Cost: the system does not run at all, so there is no `else` branch | `fallible_params`, `error_handling` |
 | Systems returning `Result`, `?`, an error handler | None of the three exist. Business-logic errors must be written to a resource | `error_handling` |
-| Default query filters | There is no way to add an implicit filter to every query. This is the whole of "entity disabling": the marker component is trivial, the implicit filter is the feature. Measured cost of forgetting it once: **543 extra updates over 180 frames**. **Also priced 2026-08-24**: the filter has to be consulted at every entry point that can yield an entity — seven of them across `query/` (`iter`, `iter_mut`, `get`, `get_mut`, `contains`, `count`, `iter_combinations`) — and each has to be able to *opt out*, or the systems that manage the disabled entities cannot see them. So it is two features, not one: a world-level filter and a per-query escape hatch, the second being what `docs/API_DEPTH.md` would insist on. Larger than the rest of C1 combined | `entity_disabling` |
+| ~~Default query filters~~ | **CLOSED 2026-08-24.** `World::default_query_filters_mut().add::<T>()`, and an entity carrying `T` is invisible to every query a system **declares as a parameter**. The hatch is the `IgnoreDefaultFilters` operand, in the signature. **The pricing was wrong twice, in opposite directions.** It predicted "seven entry points, each needing an opt-out": there are seventeen public `Query` methods and they all read one archetype list, so the filter is one predicate applied at construction — nothing per row, `has_row_filter` untouched, chunk iteration intact, and `entity_count`/`len` become exact rather than over-counts. But it also missed the only hard question, *which constructor*, and the first answer was **wrong**: filtering `World::query_unchecked` looked like "the system path" (the parameter impl goes through it) and is in fact the engine's mutable-from-shared hatch — **98 sites in 37 files, nine of them editor panels and seven of those the inspector**. Review traced four consequences before it shipped: the inspector went blank for a disabled entity with no UI left to re-enable it; transform propagation froze whole subtrees, stranding *enabled* descendants; `sync_bodies` **destroyed** a disabled rigid body rather than pausing it, leaving joints dangling and rollback snapshots invalid; and netcode captured unfiltered while restoring filtered, i.e. a desync. The boundary is therefore the parameter itself — `SystemParam for Query`'s fetch, one function — covering the **44** demo files and **3** engine files that declare a `Query` parameter. **Named limitation:** disabling hides an entity from *your systems*; it does not pause physics, transform propagation, audio or rollback, all of which read the world directly, and the four consequences above are why they must keep doing so | `entity_disabling` |
 | Custom relationships | No relationship trait or derive; only the fixed `Parent`/`Children`. A reverse index can be hand-built from hooks — but see C3 for the hole that leaves | `relationships` |
 | Observer propagation control | Bubbling works (measured `[4, 3, 2, 1, 0]` from leaf to root), but **no listener can cancel the walk** — measured 2 more links visited after one tried — and the path is always the `Parent` chain | `observer_propagation` |
 
@@ -656,9 +656,11 @@ and `emissive` (item 4, the only undocumented one). No further silent fields.
    What remains in B is the narrower end of each table — luminance-Reinhard and the film-emulation
    curves, SSR's step exponent and refinement passes — none of which is code that exists and is
    unexposed; they were never written.
-3. **~~`Visibility`~~, `Local<T>`, ~~`or_else`~~, default query filters (C).** Filed as "small,
-   self-contained, each removes a recurring papercut". **Half of that held.** (`Transform`'s
-   direction helpers were the first of this group and are done.)
+3. ~~**`Visibility`, `Local<T>`, `or_else`, default query filters (C).**~~ **ALL FOUR DONE
+   2026-08-24.** Filed as "small, self-contained, each removes a recurring papercut". **Half of
+   that held**: two were papercuts, `Local<T>` was a change to the core of the ECS, and the
+   `Visibility` entry was simply wrong about what the engine already did. (`Transform`'s direction
+   helpers were the first of this group and are done.)
 
    - ~~**`or_else`**~~ **DONE 2026-08-24** — `or`/`and`/`not` on the typed path, so a combined
      condition keeps its access declaration. Building them found that the typed path had never been
@@ -670,9 +672,19 @@ and `emissive` (item 4, the only undocumented one). No further silent fields.
      than a papercut, exactly as the pricing above said: `SystemParam` grew a `type State` and
      `fetch` a third argument, reaching nine impls, three macro families and four call sites
      outside `gizmo-core`. It is in its own commit for that reason.
-   - **Default query filters** is the one still misfiled: seven entry points and an opt-out each,
-     which is two features rather than one. C1 carries the price. Not blocked — just not a
-     one-sitting item, and reading §E as though it were is how it gets started and abandoned.
+   - ~~**Default query filters**~~ **DONE 2026-08-24 — and worth reading C1 for how.** The
+     pricing ("seven entry points and an opt-out each") described the surface rather than the
+     machinery: seventeen public `Query` methods share one archetype list, so the filter is one
+     predicate. The hard question was *which constructor*, the first answer was wrong, and an
+     adversarial review caught it before it shipped — filtering `query_unchecked` would have
+     blanked the editor inspector, frozen transform subtrees and made physics **destroy** a
+     disabled body. C1 carries the four traced consequences, because they are now the justification
+     for where the boundary sits.
+
+   With this, **§E's list is closed down to item 6** — the 2-D pipeline, which the list itself calls
+   arguably a separate project. Item 2 is closed *as scoped*: everything that existed and was
+   unwired is wired, and what B still lists is the narrower end of each table, which was never
+   written and so was never in item 2's scope.
 4. ~~**Extrusion machinery (A4).**~~ **DONE 2026-08-24** — one feature, 15 shapes, and the count
    held: `create_extrusion` + `create_sweep` over a shared outline module. The part §E did not say
    is where the work was: cap triangulation, which is a fan for a convex outline and ear clipping

@@ -81,6 +81,14 @@ pub struct World {
     /// "the ones changed since the last frame" are reported correctly. (It used to be
     /// `== tick`, and since the tick never advanced it matched either nothing or everything.)
     pub change_ref_tick: u32,
+
+    /// Component types whose presence hides an entity from every **system** query.
+    ///
+    /// Empty by default, so the feature costs nothing until a game asks for it. Reached through
+    /// [`World::default_query_filters`] / [`World::default_query_filters_mut`]; see
+    /// [`DefaultQueryFilters`](crate::query::DefaultQueryFilters) for where it applies and — as
+    /// importantly — where it deliberately does not.
+    pub(crate) default_query_filters: crate::query::DefaultQueryFilters,
 }
 
 impl World {
@@ -107,6 +115,7 @@ impl World {
             entity_observers: HashMap::new(),
             tick: 1,
             change_ref_tick: 0,
+            default_query_filters: crate::query::DefaultQueryFilters::new(),
         };
         world.insert_resource(crate::commands::CommandQueue::new());
         world.insert_resource(Entities::new());

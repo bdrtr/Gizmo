@@ -13,9 +13,11 @@ use crate::world::World;
 use std::any::TypeId;
 use std::marker::PhantomData;
 
+mod default_filters;
 mod fetch;
 mod iter;
 
+pub use default_filters::DefaultQueryFilters;
 pub use fetch::{FetchComponent, Mut};
 pub use iter::{QueryChunksIter, QueryIter};
 
@@ -137,6 +139,15 @@ pub trait WorldQuery: sealed::SealedQuery {
     /// queries (see [`Query::iter_chunks`]). `false` for Table `With`/`Without`
     /// (matches_archetype suffices) → chunk iteration with them is safe.
     fn has_row_filter() -> bool {
+        false
+    }
+
+    /// Does this query opt out of the world's [`DefaultQueryFilters`]?
+    ///
+    /// `false` for everything except [`IgnoreDefaultFilters`], and a tuple answers `true` if any
+    /// of its operands does. Defaulted, so a query operand that has never heard of default filters
+    /// keeps the safe answer — which is the direction a default has to fail in.
+    fn ignores_default_filters() -> bool {
         false
     }
 }
@@ -425,6 +436,55 @@ impl<T0: FetchComponent> WorldQuery for T0 where T0::Component: crate::component
 impl<T: crate::component::Component> sealed::SealedReadOnly for &T {}
 impl<T: crate::component::Component> ReadOnlyQuery for &T {}
 
+/// Query operand that switches the world's [`DefaultQueryFilters`] **off** for this query.
+///
+/// A system query is filtered by default — that is the whole point of the mechanism (see
+/// [`DefaultQueryFilters`] for where it applies and where it deliberately does not). The system
+/// that manages the filtered entities has to see them, and this is how it says so:
+///
+/// ```ignore
+/// fn re_enable(mut q: Query<(Mut<Health>, With<Disabled>, IgnoreDefaultFilters)>) { … }
+/// ```
+///
+/// It is in the **signature**, not in a comment or a builder call, so a reader of the system knows
+/// its view differs from every other system's without leaving the line. It narrows nothing on its
+/// own: `IgnoreDefaultFilters` alone widens the query and matches everything the operands allow.
+///
+/// All or nothing — it turns off *every* registered filter for this query, not one of them. See
+/// [`DefaultQueryFilters`] for why.
+pub struct IgnoreDefaultFilters(PhantomData<()>);
+
+impl sealed::SealedQuery for IgnoreDefaultFilters {}
+impl sealed::SealedReadOnly for IgnoreDefaultFilters {}
+impl ReadOnlyQuery for IgnoreDefaultFilters {}
+impl WorldQuery for IgnoreDefaultFilters {
+    type StaticType = IgnoreDefaultFilters;
+    type Fetch<'w> = ();
+    type Item<'w> = ();
+    type Slice<'w> = ();
+
+    unsafe fn fetch_raw<'w>(_world: &'w World, _arch: &Archetype, _tick: u32) -> Option<Self::Fetch<'w>> {
+        Some(())
+    }
+    fn check_aliasing(_types: &mut Vec<(TypeId, bool)>) {}
+    fn matches_archetype(_arch: &Archetype) -> bool {
+        true
+    }
+    unsafe fn get_item<'w>(_f: Self::Fetch<'w>, _r: usize, _e: u32) -> Self::Item<'w> {}
+    unsafe fn filter_row<'w>(_f: Self::Fetch<'w>, _r: usize, _e: u32, _t: u32) -> bool {
+        true
+    }
+    unsafe fn get_slice<'w>(_f: Self::Fetch<'w>, _l: usize) -> Self::Slice<'w> {}
+    /// **False.** It admits every archetype and every row, so chunk iteration can still serve a
+    /// query carrying it — the operand changes which archetypes are *offered*, not which rows pass.
+    fn has_row_filter() -> bool {
+        false
+    }
+    fn ignores_default_filters() -> bool {
+        true
+    }
+}
+
 impl_tick_filter!(
     /// Filter matching only entities whose `T` changed since the system last ran
     /// (`deref_mut` on `Mut<T>` stamps the change tick). Use as a query operand.
@@ -474,6 +534,11 @@ macro_rules! impl_query_tuple {
             }
             fn has_row_filter() -> bool {
                 $($t::has_row_filter() ||)* false
+            }
+            fn ignores_default_filters() -> bool {
+                // OR, not AND: one operand asking to see everything is the whole query asking.
+                // The hatch has to be reachable by adding a term, never by removing one.
+                $($t::ignores_default_filters() ||)* false
             }
         }
     };
@@ -582,6 +647,14 @@ impl<T1: WorldQuery, T2: WorldQuery> WorldQuery for Or<T1, T2> {
 
     fn has_row_filter() -> bool {
         true
+    }
+
+    /// Forwarded like `check_aliasing` and `has_row_filter`, and for a sharper reason: without it
+    /// `Or<IgnoreDefaultFilters, With<X>>` compiles, reads as an opt-out, and is filtered anyway —
+    /// no error, no panic, just a query quietly missing rows. Found by review 2026-08-24, before
+    /// the feature shipped.
+    fn ignores_default_filters() -> bool {
+        T1::ignores_default_filters() || T2::ignores_default_filters()
     }
 }
 

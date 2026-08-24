@@ -421,7 +421,14 @@ impl<Q: crate::query::WorldQuery + 'static> SystemParam for crate::query::Query<
         // other query mutably aliases the same components. This is the documented contract
         // of `query_unchecked` — the safe `query`/`query_mut` split can't express it because
         // a system only ever holds a shared `&World`.
-        if let Some(query) = unsafe { world.query_unchecked::<Q>() } {
+        // `Query::new_for_system`, not `world.query_unchecked` — and the difference is the whole
+        // boundary of `DefaultQueryFilters`. `query_unchecked` is `pub unsafe` and is ALSO the
+        // engine's mutable-from-shared hatch: 98 call sites use it from editor panels, physics,
+        // netcode and audio, none of which is a system parameter. Filtering there filtered them
+        // too, which blanked the inspector, froze transform subtrees and made `sync_bodies`
+        // *destroy* a disabled rigid body. This function is the one place a query is built as a
+        // PARAMETER, so it is the one place the filter belongs.
+        if let Some(query) = crate::query::Query::<Q>::new_for_system(world) {
             Ok(query)
         } else {
             Err(SystemParamFetchError::QueryError)

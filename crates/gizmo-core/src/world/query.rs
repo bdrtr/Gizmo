@@ -6,6 +6,31 @@ impl World {
     // ERGONOMİK SORGULAR (QUERY API)
     // ==========================================================
 
+    /// The component types whose presence hides an entity from every **system** query.
+    ///
+    /// Empty until a game registers one:
+    ///
+    /// ```
+    /// # use gizmo_core::world::World;
+    /// # #[derive(Clone, Copy)] pub struct Disabled;
+    /// # gizmo_core::impl_component!(Disabled);
+    /// let mut world = World::new();
+    /// world.default_query_filters_mut().add::<Disabled>();
+    /// ```
+    ///
+    /// Read [`DefaultQueryFilters`](crate::query::DefaultQueryFilters) before registering one: the
+    /// filter applies to queries a **system** receives as a parameter and not to the queries on
+    /// this type, and that line is the whole of the design.
+    #[must_use]
+    pub fn default_query_filters(&self) -> &crate::query::DefaultQueryFilters {
+        &self.default_query_filters
+    }
+
+    /// Mutable access to [`default_query_filters`](Self::default_query_filters).
+    pub fn default_query_filters_mut(&mut self) -> &mut crate::query::DefaultQueryFilters {
+        &mut self.default_query_filters
+    }
+
     /// Creates a read-only [`Query`](crate::query::Query) (shared component access).
     ///
     /// Because it is bounded by `Q: ReadOnlyQuery`, this entry point CANNOT PRODUCE `&mut T` —

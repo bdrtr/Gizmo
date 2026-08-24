@@ -19,6 +19,34 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
         })
     }
 
+    /// [`new`](Self::new), plus the world's [`DefaultQueryFilters`](crate::query::DefaultQueryFilters).
+    ///
+    /// Called from exactly one place — `SystemParam for Query`'s fetch — and that is the whole
+    /// boundary. Every other way of building a query sees the world entire, `query_unchecked` and
+    /// `borrow_mut_unchecked` included: those are the engine's mutable-from-shared hatch, used at
+    /// 98 sites in 37 files, nine of them editor panels that are not systems at all.
+    /// Filtering there blanked the inspector, froze transform subtrees and made `sync_bodies`
+    /// destroy a disabled rigid body — see [`DefaultQueryFilters`](crate::query::DefaultQueryFilters).
+    ///
+    /// The filter is applied to the **archetype list**, so it costs one predicate per archetype at
+    /// construction and nothing per row, and `has_row_filter` is untouched — a query carrying no
+    /// row filter can still be chunk-iterated after being filtered. That is possible only because
+    /// a filter type must be `Table`-stored, which `DefaultQueryFilters::add` enforces.
+    pub(crate) fn new_for_system(world: &'w World) -> Option<Self> {
+        let mut query = Self::new(world)?;
+        // Two early outs, in the order that makes the common case free: no filters registered at
+        // all (every world that never asked for the feature), then this query opting out.
+        if world.default_query_filters.is_empty() || Q::ignores_default_filters() {
+            return Some(query);
+        }
+        let filters = &world.default_query_filters;
+        let archetypes = &world.archetype_index.archetypes;
+        query
+            .matching_archetypes
+            .retain(|&idx| !filters.excludes(&archetypes[idx]));
+        Some(query)
+    }
+
     pub(crate) fn new_cached(world: &'w mut World) -> Option<Self> {
         let mut used_types = Vec::new();
         Q::check_aliasing(&mut used_types);

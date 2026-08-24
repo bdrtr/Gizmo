@@ -50,6 +50,61 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Default query filters: an entity can be disabled instead of destroyed.**
+  `World::default_query_filters_mut().add::<Disabled>()` and an entity carrying `Disabled` is
+  invisible to every query a system **declares as a parameter**. The marker is yours — the engine
+  imposes none, because the mechanism takes any `Table`-stored type, several if you like. The hatch
+  is a query operand: `Query<(&Hp, With<Disabled>, IgnoreDefaultFilters)>` is how the system that
+  re-enables entities is written, and it is in the signature rather than in a comment.
+
+  **The gap's pricing was wrong twice, in opposite directions, and the second one nearly shipped.**
+
+  It predicted "seven entry points in `query/`, each needing an opt-out". There are seventeen public
+  `Query` methods and they all read one archetype list, so the filter is one predicate applied at
+  construction: nothing per row, `has_row_filter` untouched — which is why chunk iteration still
+  serves a filtered query — and `entity_count`/`len` become exact rather than over-counts. That
+  shape is only available because a filter type must be `Table`-stored; `add` panics on a sparse
+  one rather than filtering nothing silently.
+
+  But it missed the only hard question — *which constructor* — and the first answer was **wrong**.
+  Filtering `World::query_unchecked` looked like "the system path", because the parameter impl goes
+  through it. It is also the engine's mutable-from-shared hatch: **98 call sites in 37 files, nine
+  of them editor panels and seven of those the inspector** — egui draw functions taking `&World`,
+  with no system near them. An adversarial review traced four consequences in the code before it shipped:
+
+  - the **editor inspector went blank** for a disabled entity, and the scene-view manipulator with
+    it, leaving no UI to re-enable it from;
+  - **transform propagation froze whole subtrees**: its BFS enqueues children inside the `if let`
+    that fetches the parent's `GlobalTransform`, so one disabled node stranded every *enabled*
+    descendant in stale world space;
+  - `sync_bodies` **destroyed** a disabled rigid body rather than pausing it — a body absent from
+    the incoming list is removed, which permutes the component arrays, leaves joints dangling and
+    invalidates earlier rollback snapshots. "Disabled" is supposed to mean the data is kept;
+  - netcode rollback captured **unfiltered** and restored **filtered**, which is a desync.
+
+  So the boundary is the parameter itself: `SystemParam for Query`'s fetch, one function. It covers
+  the **44** demo files and **3** engine files that declare a `Query` parameter — game code writes
+  systems, the engine reads the world directly.
+
+  **Named limitation, because it is the price of that boundary.** Disabling hides an entity from
+  *your systems' queries*. It does not pause the engine: physics still simulates it, transform
+  propagation still updates it, audio still plays it, rollback still captures it. The four
+  consequences above are why they must keep reading the whole world. The marker is a **view**, not
+  a **state**.
+
+  `nothing_but_a_system_parameter_is_filtered` asserts every constructor, `unsafe` ones included,
+  and goes red if the rejected boundary comes back. Review also found `Or` silently swallowing the
+  opt-out — it forwards `check_aliasing` and `has_row_filter` explicitly and had not been given the
+  third, so `Or<IgnoreDefaultFilters, _>` compiled, read as an escape hatch and was filtered anyway.
+  Fixed, with a test.
+
+  `entity_disabling`'s old measurement — two systems, one remembering `Without<Disabled>` and one
+  forgetting, diverging by 543 extra updates by frame 240 — is now an engine test asserting the
+  divergence is zero over the same 240 frames, because the forgetful system can no longer be
+  written. The demo's own replacement counter was rejected too and rewritten: it compared a
+  filtered query against a filtered query, so it would have read zero even if the filter did
+  nothing.
+
 - **`Local<T>`: per-system state that the scheduler cannot see.** Until now a counter, a "did I
   already do this", a scratch buffer — anything a system wanted to keep between runs — had to be a
   world resource. That made it visible to every other system, and worse, visible to the *batcher*:
