@@ -128,15 +128,37 @@ Still open: choosing the forward path for a *built-in* material. Measured in
 so two axes that ought to be separate are one axis. **A PBR material cannot be drawn forward at
 all**, and a custom material cannot be drawn deferred.
 
-### A4. No extrusion / 2D-shape-to-mesh machinery
+### A4. Extrusion / 2D-shape-to-mesh machinery — **landed 2026-08-24**
 
-Measured in `3d_shapes`: of the 26 meshes that demo wants, **6** have a ready-made constructor in
-`AssetManager`. **15 of the remaining 20 come from this single gap** (8 extrusions + 7 ring
+Measured in `3d_shapes`: of the 26 meshes that demo wants, **6** had a ready-made constructor in
+`AssetManager`, and **15 of the remaining 20 came from this single gap** (8 extrusions + 7 ring
 extrusions). The other five are individually missing: tetrahedron, conical frustum, icosphere,
-3D segment, polyline.
+3D segment, polyline — and they still are.
 
-`Mesh::from_vertices` makes hand-rolling possible — the demo hand-builds three of them — but that
-is a workaround, not a feature.
+`asset::primitives::extrude` is the machine. Two entry points, because a prism, a pentagonal prism,
+a rounded slab and a torus of square section are not four features but four **outlines**:
+
+- `AssetManager::create_extrusion(outline, depth)` — a closed 2-D outline along Z: two caps and one
+  quad per edge.
+- `AssetManager::create_sweep(profile, radius, segments)` — the same outline carried around the Y
+  axis. A circular profile is a torus, a rectangle a square-section ring.
+
+Outlines live in `extrude::outline` — `circle` (and `circle(r, 5)` *is* the pentagon; there is no
+separate regular-polygon builder because there is no separate shape), `ellipse`, `rectangle`,
+`stadium`, `star`. A new shape is a function returning `Vec<Vec2>`, not another `create_*`.
+
+**The caps are the half with a decision in it.** Walls are one quad per edge. Caps need the outline
+triangulated, and a **fan** — the obvious answer, and what the demo's own hand-rolled pentagon
+used — is correct only for a *convex* outline; a star, an L or an arrow fanned from one vertex puts
+triangles outside the shape. `triangulate` is ear clipping, so concave outlines come out right.
+Tested by **area**, not by triangle count: a wrong triangulation still returns `n − 2` triangles,
+and the shoelace sum is what notices that they do not cover the outline. A self-intersecting
+outline is refused rather than approximated, and the loop that refuses it is bounded — an ear
+clipper with no ear available otherwise spins forever inside a mesh builder.
+
+What it does not do: holes (an annulus is a sweep here, not an extrusion), bevels, self-intersecting
+outlines, or smooth normals — every face is flat, matching `create_cube` and the rest of the
+directory.
 
 ### A5. No environment cubemap / reflection probe
 
@@ -638,7 +660,10 @@ and `emissive` (item 4, the only undocumented one). No further silent fields.
      to the core of the ECS rather than papercuts, and C1 now carries what each would cost. Neither
      is blocked — they are simply not one-sitting items, and reading §E as though they were is how
      one of them gets started and abandoned.
-4. **Extrusion machinery (A4).** One feature, 15 shapes.
+4. ~~**Extrusion machinery (A4).**~~ **DONE 2026-08-24** — one feature, 15 shapes, and the count
+   held: `create_extrusion` + `create_sweep` over a shared outline module. The part §E did not say
+   is where the work was: cap triangulation, which is a fan for a convex outline and ear clipping
+   for anything else. See A4.
 5. ~~**User materials (A3).**~~ **DONE 2026-08-23** — `MaterialType::Custom(MaterialId)`,
    forward-only. The G-buffer budget it was said to depend on settled the question instead of
    blocking it: 28 of 32 bytes are spent, so a custom material cannot bring a target and declares

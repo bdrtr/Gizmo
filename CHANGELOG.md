@@ -50,6 +50,37 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Extrusion, and the sweep around an axis: one machine for fifteen shapes.** `3d_shapes` counted a
+  26-mesh catalogue against the engine's six ready-made builders and found that **15 of the 20
+  missing ones were one absent capability** — eight extrusions and seven ring extrusions. A prism, a
+  pentagonal prism, a rounded slab and a torus of square section are not four features; they are
+  four *outlines* handed to one machine.
+
+  `AssetManager::create_extrusion(outline, depth)` takes a closed 2-D outline along Z (two caps, one
+  quad per edge); `create_sweep(profile, radius, segments)` carries the same outline around the Y
+  axis. Outlines are in `asset::primitives::extrude::outline` — `circle`, `ellipse`, `rectangle`,
+  `stadium`, `star` — and `circle(r, 5)` *is* the pentagon, because a segment count is the only
+  thing that separates them and two names for it would drift.
+
+  **The caps are the half with a decision in them.** A triangle fan — the obvious answer, and what
+  this demo's own hand-rolled pentagon used — is correct only for a *convex* outline; a star, an L
+  or an arrow fanned from one vertex puts triangles outside the shape. `triangulate` is ear
+  clipping, so a concave outline comes out right, and it is tested by **area** rather than triangle
+  count: a wrong triangulation still returns `n − 2` triangles, and only the shoelace sum notices
+  they do not cover the outline. A self-intersecting outline is refused rather than approximated,
+  and the refusing loop is bounded — an ear clipper with no ear available otherwise spins forever
+  inside a mesh builder.
+
+  Winding is normalised rather than demanded: a clockwise outline extrudes to the same solid, which
+  the existing `winding_tests` harness now checks for every generated shape in both directions —
+  the extruder's winding is *derived* (from the outline, through the triangulation, reversed once
+  for the back cap), so there are three places to get a sign wrong and each produces a solid that
+  looks fine from one side.
+
+  Not done: holes (an annulus is a sweep here, not an extrusion), bevels, smooth normals, and the
+  five shapes that were never part of this gap — tetrahedron, conical frustum, icosphere, 3D
+  segment, polyline. `3d_shapes` keeps hand-building the first two and says why.
+
 - **Hiding is inherited — and the entry that asked for it had the facts backwards.**
   `docs/CAPABILITY_GAPS.md` listed a missing `Visibility` component whose consequence was *"hiding
   means `ShadowCasting::Only`, which still casts a shadow"*, and `infinite_grid` said the same and

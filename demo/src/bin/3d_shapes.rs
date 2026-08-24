@@ -17,18 +17,34 @@
 //! | koni                       | `create_cone`                |
 //! | küre (uv)                  | `create_sphere`              |
 //!
-//! Kalan 20'sinin yapıcısı yok, ve eksikler bir liste değil **bir kavram**: motorda
-//! **ekstrüzyon makinesi hiç yok**. 15 girdi (8 ekstrüzyon + 7 halka) tek bir eksik yetenekten
-//! geliyor. Geri kalan beşi ayrı ayrı eksik: dörtyüzlü, kesik koni, ikoza küre,
-//! doğru parçası ve kırık çizgi.
+//! Kalan 20'sinin yapıcısı yoktu, ve eksikler bir liste değil **bir kavram**: 15 girdi
+//! (8 ekstrüzyon + 7 halka) tek bir eksik yetenekten geliyordu.
 //!
-//! ## Eksik olan kapatılabilir, ve bedeli demoda görünüyor
+//! ## O yetenek 2026-08-24'te geldi: `primitives::extrude`
 //!
-//! [`Mesh::from_vertices`] bir üçgen listesinden mesh kuruyor, yani eksik şekiller elle
-//! yazılabilir. Demo üç tanesini yazıyor ve satır sayısını saklamıyor: **dörtyüzlü** (4 üçgen),
-//! **kesik koni** (silindirin iki farklı yarıçaplısı) ve **beşgenin
-//! ekstrüzyonu** (düzgün çokgene 1.0 derinlik vermek: iki kapak +
-//! yan yüzler). Üçü de üst sırada, motorun hazır altısı alt sırada duruyor.
+//! Bir prizma, beşgen prizma, yuvarlatılmış dilim ve kare kesitli halka dört ayrı özellik değil;
+//! tek bir makineye verilen dört **anahat**. Motorda artık ikisi var:
+//!
+//!   * `AssetManager::create_extrusion(outline, depth)` — kapalı bir 2B anahattı Z boyunca
+//!     hacme çıkarır: iki kapak + her kenara bir dörtgen.
+//!   * `AssetManager::create_sweep(profile, radius, segments)` — aynı anahattı Y ekseni etrafında
+//!     döndürür. Dairesel profil torus, dikdörtgen profil kare kesitli halka verir.
+//!
+//! Anahatlar `extrude::outline` altında: `circle` (ki `circle(r, 5)` beşgendir — ayrı bir
+//! "düzgün çokgen" yok, çünkü ayrı bir şekil yok), `ellipse`, `rectangle`, `stadium`, `star`.
+//! Yeni bir şekil yeni bir `create_*` değil, `Vec<Vec2>` döndüren bir fonksiyon.
+//!
+//! **Zor olan yarısı kapaklar.** Duvar önemsiz — her kenar bir dörtgen. Kapaklar anahattın
+//! üçgenlenmesini istiyor ve **üçgen yelpazesi** yalnız DIŞBÜKEY anahatta doğru; bu demonun eski
+//! elle yazılmış beşgeni onu kullanıyordu. Yıldız, L ya da ok yelpazelenirse şeklin dışına üçgen
+//! taşar. Motorunki kulak-kırpma, yani içbükey anahat da doğru çıkıyor — testi alan karşılaştırıyor,
+//! üçgen sayısını değil, çünkü yanlış bir üçgenleme de doğru sayıda üçgen üretir.
+//!
+//! ## Hâlâ elle yazılanlar
+//!
+//! Beş şekil bu makineden çıkmıyor ve demo ikisini elle kuruyor: **dörtyüzlü** (4 üçgen) ve
+//! **kesik koni** (iki farklı yarıçaplı silindir — sabit profilli bir süpürme değil, o yüzden
+//! `create_sweep` onu vermiyor). Kalanlar: ikoza küre, doğru parçası, kırık çizgi.
 //!
 //! Bir şey hazır geliyor: çalışma anında üretilen UV hata ayıklama dokusu motorda var —
 //! [`AssetManager::create_uv_debug_texture`].
@@ -41,9 +57,10 @@ use gizmo::core::input::Input;
 use gizmo::core::query::{Mut, Query, With};
 use gizmo::core::system::{IntoSystemConfig, Phase, Res, ResMut};
 use gizmo::prelude::*;
+use gizmo::renderer::asset::primitives::extrude::outline;
 use gizmo::renderer::gpu_types::Vertex;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
-use std::f32::consts::{PI, TAU};
+use std::f32::consts::TAU;
 
 /// Dönen şekillerin işareti.
 #[derive(Clone, Copy)]
@@ -83,23 +100,50 @@ fn main() {
                 AssetManager::create_sphere(device, 0.7, 18, 32),
             ];
 
-            // Üst sıra: motorda olmayan, elle kurulanlar.
-            let handmade: [Mesh; 3] = [
+            // Orta sıra: tek makineden çıkan ekstrüzyonlar — beşi de aynı çağrı, farklı anahat.
+            // Sonuncusu YILDIZ, yani içbükey: kapakları yelpaze ile üçgenleyen bir motor onu
+            // gözle görülür biçimde yanlış çizer.
+            let extrusions: [Mesh; 5] = [
+                AssetManager::create_extrusion(device, &outline::rectangle(1.2, 0.8), 0.8)
+                    .expect("dikdörtgen ekstrüde olur"),
+                AssetManager::create_extrusion(device, &outline::circle(0.7, 5), 1.0)
+                    .expect("beşgen ekstrüde olur"),
+                AssetManager::create_extrusion(device, &outline::circle(0.7, 24), 1.0)
+                    .expect("daire ekstrüde olur"),
+                AssetManager::create_extrusion(device, &outline::stadium(0.35, 0.9, 8), 0.7)
+                    .expect("stadyum ekstrüde olur"),
+                AssetManager::create_extrusion(device, &outline::star(0.8, 0.33, 5), 0.5)
+                    .expect("yıldız ekstrüde olur"),
+            ];
+
+            // Üst sıra: aynı anahatların Y ekseni etrafında süpürülmüş hâlleri (halka
+            // ekstrüzyonu). Süpürme kapak istemediği için üçgenleme de istemiyor.
+            let sweeps: [Mesh; 4] = [
+                AssetManager::create_sweep(device, &outline::circle(0.22, 12), 0.7, 24)
+                    .expect("torus"),
+                AssetManager::create_sweep(device, &outline::rectangle(0.35, 0.35), 0.7, 24)
+                    .expect("kare kesitli halka"),
+                AssetManager::create_sweep(device, &outline::stadium(0.12, 0.3, 6), 0.7, 24)
+                    .expect("yuvarlatılmış halka"),
+                AssetManager::create_sweep(device, &outline::star(0.3, 0.12, 5), 0.75, 24)
+                    .expect("yıldız kesitli halka"),
+            ];
+
+            // En üst sıra: makineden ÇIKMAYAN, hâlâ elle yazılan ikisi.
+            let handmade: [Mesh; 2] = [
                 Mesh::from_vertices(device, &tetrahedron(0.9), "3d_shapes::tetrahedron"),
                 Mesh::from_vertices(
                     device,
                     &conical_frustum(0.7, 0.3, 1.2, 24),
                     "3d_shapes::conical_frustum",
                 ),
-                Mesh::from_vertices(
-                    device,
-                    &extruded_polygon(0.7, 5, 1.0),
-                    "3d_shapes::extruded_pentagon",
-                ),
             ];
 
-            spawn_row(scene.world, &ready, &texture, 0.0);
-            spawn_row(scene.world, &handmade, &texture, 2.4);
+            spawn_row(scene.world, &ready, &texture, 0.0, 0.0);
+            spawn_row(scene.world, &extrusions, &texture, 2.4, 0.0);
+            // Halkalar XZ düzleminde; kameraya kenarlarından bakmasınlar diye dikilmiş.
+            spawn_row(scene.world, &sweeps, &texture, 4.6, -1.2);
+            spawn_row(scene.world, &handmade, &texture, 6.8, 0.0);
 
             scene.world.spawn_bundle((
                 Transform::new(Vec3::new(0.0, -2.0, 0.0)),
@@ -115,7 +159,8 @@ fn main() {
             });
 
             scene.world.insert_resource(Spinning(true));
-            scene.spawn_camera(state, Vec3::new(0.0, 3.0, 14.0), Vec3::new(0.0, 1.0, 0.0));
+            // Dört sıra var (y = 0 · 2,4 · 4,6 · 6,8), yani kamera hepsini alacak kadar geride.
+            scene.spawn_camera(state, Vec3::new(0.0, 4.2, 19.0), Vec3::new(0.0, 3.2, 0.0));
         })
         .add_update_system(rotate.in_phase(Phase::Update))
         .set_ui(|world, _state, ctx| {
@@ -128,14 +173,19 @@ fn main() {
                 .show(ctx, |ui| {
                     ui.set_min_width(420.0);
                     ui.heading("Şekil ilkelleri");
-                    ui.label("alt sıra: motorun hazır yapıcıları (6)");
-                    ui.label("üst sıra: elle kurulanlar (3)");
+                    ui.label("1. sıra: motorun hazır yapıcıları (6)");
+                    ui.label("2. sıra: create_extrusion — tek makine, beş anahat");
+                    ui.label("3. sıra: create_sweep — aynı anahatlar, Y ekseni etrafında");
+                    ui.label("4. sıra: hâlâ elle yazılan ikisi");
                     ui.separator();
                     ui.label("katalogda 26 mesh:");
                     ui.label("  6  motorda hazır");
-                    ui.label("  15 ekstrüzyon/halka — motorda ekstrüzyon makinesi YOK");
+                    ui.label("  15 ekstrüzyon/halka — 2026-08-24'te tek makineyle geldi");
                     ui.label("  5  tek tek eksik (dörtyüzlü, kesik koni, ikoza küre,");
                     ui.label("     doğru parçası, kırık çizgi)");
+                    ui.separator();
+                    ui.label("2. sıranın sonundaki YILDIZ içbükey: kapakları");
+                    ui.label("yelpazeleyen bir motor onu yanlış çizer.");
                     ui.separator();
                     ui.label(format!(
                         "dönüş: {} (R)",
@@ -166,11 +216,16 @@ fn rotate(
 }
 
 /// Bir mesh dizisini yatay sıraya dizer.
+///
+/// `tilt` X ekseni etrafında bir yatırma: süpürme halkaları XZ düzleminde duruyor, yani
+/// yatırılmazlarsa kameraya kenarlarından bakıyorlar ve düz birer disk gibi görünüyorlar. Şeklin
+/// kendisiyle ilgisi yok, bakış açısıyla ilgisi var.
 fn spawn_row(
     world: &mut gizmo::core::World,
     meshes: &[Mesh],
     texture: &std::sync::Arc<gizmo::wgpu::BindGroup>,
     y: f32,
+    tilt: f32,
 ) {
     let count = meshes.len();
     for (i, mesh) in meshes.iter().enumerate() {
@@ -180,7 +235,7 @@ fn spawn_row(
             0.0
         };
         world.spawn_bundle((
-            Transform::new(Vec3::new(x, y, 0.0)),
+            Transform::new(Vec3::new(x, y, 0.0)).with_rotation(Quat::from_rotation_x(tilt)),
             GlobalTransform::default(),
             mesh.clone(),
             Material::new(texture.clone()).with_pbr(Vec4::ONE, 0.55, 0.0),
@@ -259,52 +314,6 @@ fn conical_frustum(bottom: f32, top: f32, height: f32, segments: u32) -> Vec<Ver
             t1p,
             [[0.5, 0.5], [u0, 0.0], [u1, 0.0]],
         );
-    }
-    out
-}
-
-/// Ekstrüzyon: bir düzgün çokgeni `depth` kadar derinlik vererek hacme çıkarmak.
-///
-/// **Motorda böyle bir makine yok** ve katalogdaki 26 girdinin 15'i tam olarak bundan geliyor —
-/// yani buradaki otuz satır, eksik listesinin yarısından çoğunun tek gerekçesi.
-fn extruded_polygon(radius: f32, sides: u32, depth: f32) -> Vec<Vertex> {
-    let half = depth / 2.0;
-    let corner = |i: u32, z: f32| {
-        // Çokgen bir köşesi yukarı bakacak şekilde döndürülüyor.
-        let angle = i as f32 / sides as f32 * TAU + PI / 2.0;
-        Vec3::new(angle.cos() * radius, angle.sin() * radius, z)
-    };
-    let uv_of = |p: Vec3| {
-        [
-            p.x / (radius * 2.0) + 0.5,
-            0.5 - p.y / (radius * 2.0),
-        ]
-    };
-
-    let mut out = Vec::new();
-    for i in 0..sides {
-        let (a0, a1) = (corner(i, half), corner((i + 1) % sides, half));
-        let (b0, b1) = (corner(i, -half), corner((i + 1) % sides, -half));
-
-        // Ön ve arka kapak — yelpaze üçgenleri.
-        push_triangle(
-            &mut out,
-            Vec3::new(0.0, 0.0, half),
-            a0,
-            a1,
-            [[0.5, 0.5], uv_of(a0), uv_of(a1)],
-        );
-        push_triangle(
-            &mut out,
-            Vec3::new(0.0, 0.0, -half),
-            b1,
-            b0,
-            [[0.5, 0.5], uv_of(b1), uv_of(b0)],
-        );
-        // Yan yüz.
-        let (u0, u1) = (i as f32 / sides as f32, (i + 1) as f32 / sides as f32);
-        push_triangle(&mut out, a0, b0, b1, [[u0, 0.0], [u0, 1.0], [u1, 1.0]]);
-        push_triangle(&mut out, a0, b1, a1, [[u0, 0.0], [u1, 1.0], [u1, 0.0]]);
     }
     out
 }

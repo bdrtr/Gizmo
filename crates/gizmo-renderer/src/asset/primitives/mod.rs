@@ -3,6 +3,8 @@
 //! in the submodules.
 
 mod cuboid;
+/// Extrusion and sweeping: one machine, and the 2-D outlines it eats.
+pub mod extrude;
 mod flat;
 mod round;
 mod terrain;
@@ -96,6 +98,46 @@ mod winding_tests {
         }
         // And zero is clamped to one rather than producing an empty mesh.
         assert_eq!(AssetManager::plane_subdivided_data(4.0, 0).len(), plain.len());
+    }
+
+    /// Everything the extruder builds is checked by the same rule as every hand-written builder.
+    ///
+    /// It is the check that matters most here, because the extruder's winding is *derived* — from
+    /// the outline's, through ear clipping, and then reversed once for the back cap. Three places
+    /// to get a sign wrong, and each one produces a solid that looks fine from one side.
+    #[test]
+    fn extrusions_and_sweeps_wind_outward() {
+        use crate::asset::primitives::extrude::{extrude_data, outline, sweep_data};
+
+        for (name, points) in [
+            ("rectangle", outline::rectangle(2.0, 1.0)),
+            ("pentagon", outline::circle(1.0, 5)),
+            ("circle-24", outline::circle(1.0, 24)),
+            ("stadium", outline::stadium(0.4, 1.2, 8)),
+            // Concave: the cap triangles here are the ones a fan would get wrong, and a wrong one
+            // is also wound wrong.
+            ("star", outline::star(1.0, 0.4, 5)),
+        ] {
+            let v = extrude_data(&points, 1.0).unwrap_or_else(|| panic!("{name} did not extrude"));
+            assert_outward(&format!("extrude({name})"), &v);
+            // And wound the other way — the extruder normalises, so the result must be identical
+            // in orientation rather than inside-out.
+            let reversed: Vec<_> = points.iter().rev().copied().collect();
+            let v = extrude_data(&reversed, 1.0).expect("reversed outline extrudes");
+            assert_outward(&format!("extrude({name} reversed)"), &v);
+        }
+
+        for (name, profile) in [
+            ("circle", outline::circle(0.25, 12)),
+            ("rectangle", outline::rectangle(0.4, 0.3)),
+            ("star", outline::star(0.4, 0.15, 5)),
+        ] {
+            let v = sweep_data(&profile, 1.0, 16).unwrap_or_else(|| panic!("{name} did not sweep"));
+            assert_outward(&format!("sweep({name})"), &v);
+            let reversed: Vec<_> = profile.iter().rev().copied().collect();
+            let v = sweep_data(&reversed, 1.0, 16).expect("reversed profile sweeps");
+            assert_outward(&format!("sweep({name} reversed)"), &v);
+        }
     }
 
     #[test]
