@@ -119,6 +119,12 @@ impl World {
         use crate::component::Parent;
         let mut current_entity = event.target();
 
+        // Saved and restored around this walk. A listener may itself `trigger`, and that nested
+        // walk gets a clean flag; whatever it decided about its own propagation must not end
+        // the walk it was called from. Restored on every exit path — hence the single `break`
+        // discipline in the loop below rather than early returns.
+        let outer_stop = std::mem::replace(&mut self.propagation_stopped, false);
+
         loop {
             // Observer'ları bu entity için bul ve çalıştır
             let mut hooks_to_run = Vec::new();
@@ -155,7 +161,9 @@ impl World {
                 }
             }
 
-            if !event.can_propagate() {
+            // The listener's answer, read after it returns rather than taken from it: the
+            // return channel is the `&mut World` it already holds.
+            if self.propagation_stopped || !event.can_propagate() {
                 break;
             }
 
@@ -176,6 +184,46 @@ impl World {
                 break;
             }
         }
+
+        self.propagation_stopped = outer_stop;
+    }
+
+    /// Ends the current [`trigger`](Self::trigger) walk after the running listener returns.
+    ///
+    /// Call it from inside a [`observe`](Self::observe) listener: the remaining listeners on
+    /// *this* entity still run — the flag is read once the entity is finished, not between
+    /// listeners — and the walk then stops instead of continuing to the ancestors.
+    ///
+    /// ```
+    /// # use gizmo_core::world::World;
+    /// # use gizmo_core::observer::{EntityEvent, On};
+    /// # use gizmo_core::entity::Entity;
+    /// # #[derive(Clone)] struct Damage { target: Entity, amount: f32 }
+    /// # impl EntityEvent for Damage {
+    /// #     fn target(&self) -> Entity { self.target }
+    /// #     fn can_propagate(&self) -> bool { true }
+    /// # }
+    /// # let mut world = World::new();
+    /// # let e = world.spawn();
+    /// world.observe::<Damage, _>(e, |world: &mut World, on: On<Damage>| {
+    ///     if on.event.amount > 50.0 {
+    ///         world.stop_propagation();   // armour absorbed it; the parent never hears
+    ///     }
+    /// });
+    /// ```
+    ///
+    /// **Nesting.** `trigger` saves the flag and restores it when its walk ends, so a listener
+    /// that triggers another event and *that* event's listener stops propagation does not end
+    /// the outer walk. Each walk answers for itself.
+    ///
+    /// Outside a dispatch it sets a flag the next `trigger` immediately clears, so it is inert
+    /// rather than an error — there is no dispatch to end.
+    ///
+    /// The channel is the world rather than the listener's return type on purpose: handing the
+    /// listener a `&mut World` (2026-08-24) is what made a return channel exist at all, and
+    /// `CAPABILITY_GAPS.md` had recorded the missing cancel as needing one.
+    pub fn stop_propagation(&mut self) {
+        self.propagation_stopped = true;
     }
 
     /// Is a given component type registered?

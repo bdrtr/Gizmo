@@ -50,6 +50,35 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A listener can end a propagating walk: `World::stop_propagation()`.**
+  Call it from inside a `World::observe` listener and the walk stops once that listener returns,
+  instead of continuing up the `Parent` chain.
+
+  **The gap had already diagnosed itself, and the fix is that diagnosis taken literally.** The
+  entry read: *"what is missing is not access but a return channel — `On` arrives by value and the
+  listener returns `()`, so the dispatch loop has nowhere to read an answer."* Handing the listener
+  a `&mut World` earlier the same day **is** that channel. `stop_propagation` sets a flag on the
+  world and `trigger` reads it after each listener returns, so the listener's return type never had
+  to change — which also means the `observe` signature changed once this week rather than twice.
+
+  Measured on the same five-link chain the gap entry was written from. Bubbling from the leaf
+  visits `[4, 3, 2, 1, 0]`, and with a listener at link 2 *trying* to veto, **2** more links are
+  still visited — that was the number in the entry. With the veto able to land, the same event
+  visits `[4, 3, 2]` and **0** more. `observer_propagation` keeps both on `V`, because the size of
+  a closed gap is only visible as a comparison.
+
+  Two decisions the tests pin rather than leave to reading:
+
+  - the vetoing entity's **other listeners still run** — the flag is read once that entity is
+    finished, not between its listeners;
+  - `trigger` **saves and restores** the flag around its own walk, so a nested dispatch that
+    cancels itself cannot truncate the walk that called it. Both halves of that save/restore are
+    load-bearing, and a different test catches each: dropping the reset-on-entry breaks
+    `stopping_outside_a_dispatch_is_inert`, dropping the restore-on-exit breaks
+    `a_nested_walk_does_not_cancel_the_outer_one`.
+
+  Still missing from that row, and it stays open: the walk's *path* is always the `Parent` chain.
+
 - **An entity-event listener is handed the world, so a chain reaction resolves in one frame.**
   `World::observe`'s listener now takes `(&mut World, On<E>)` — the same world the dispatch is
   running inside — so it can spawn, despawn, write components and call `trigger` again. Until now

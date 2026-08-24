@@ -13,20 +13,22 @@
 //! | dinleyicinin dünyayı görmesi | 2026-08-24'ten beri **var** — `(&mut World, On<E>)` |
 //! | olayı gönderme | `trigger` |
 //! | **yürüyüşün yolunu seçmek** | **yok** — yol her zaman `Parent` zinciri |
-//! | **kabarmayı durdurmak** | **yok** — hiçbir dinleyici yürüyüşü kesemiyor |
+//! | **kabarmayı durdurmak** | 2026-08-24'ten beri **var** — `world.stop_propagation()` |
 //! | dinleyicinin bir şey döndürmesi | **yok** — `On<E>` değerle veriliyor, dönüş `()` |
 //!
-//! Üçüncüsü en can alıcı olanı, ve motorun kendi belgesi açıkça yazıyor: *"Listeners along the
-//! chain all receive equal clones of the same event; **none of them can cancel the walk**."*
+//! Durduramamak uzun süre bu demonun asıl konusuydu; motorun kendi belgesi de öyle yazıyordu:
+//! *"Listeners along the chain all receive equal clones of the same event; **none of them can
+//! cancel the walk**."* Yapılabilecek tek şey olayın *etkisini* bir bayrakla bastırmaktı, ama
+//! dinleyiciler yine de çalışıyordu.
 //!
-//! Bir dinleyicinin olayı yakalayıp yukarı çıkmasını engellemesi motorda **yazılamıyor**;
-//! yapılabilecek şey olayın *etkisini* bir bayrakla bastırmak, ama dinleyiciler yine de
-//! çalışıyor.
+//! **2026-08-24'te kapandı, ve nasıl kapandığı asıl öğretici olan.** Eksik olan erişim değil,
+//! dinleyiciden `trigger` döngüsüne giden **dönüş kanalı**ydı: `On` değerle geliyor, dinleyici
+//! `()` dönüyor, yani döngünün okuyacağı bir cevap yoktu. Aynı gün dinleyiciye `&mut World`
+//! verilince kanal kendiliğinden ortaya çıktı — `world.stop_propagation()` bir bayrak koyuyor,
+//! `trigger` döngüsü dinleyici döndükten sonra onu okuyor. Yani dönüş tipi hiç değişmedi.
 //!
-//! **Dinleyicinin 2026-08-24'te `&mut World` alması bunu değiştirmedi, ve nedeni öğretici:**
-//! eksik olan erişim değil, dinleyiciden `trigger` döngüsüne giden **dönüş kanalı**. `On`
-//! değerle geliyor, dinleyici `()` dönüyor, yani döngünün okuyacağı bir cevap yok. Dinleyici
-//! artık dünyada her şeyi yapabiliyor — yürüyüşü durdurmak hariç.
+//! Demo iki durumu da tutuyor (`V`), çünkü kapanan boşluğun ölçüsü ancak karşılaştırmayla
+//! görünüyor.
 //!
 //! ## Ölçüldü
 //!
@@ -34,15 +36,17 @@
 //! Ölçüldü (2026-08-23; dinleyiciye `&mut World` verildikten sonra 2026-08-24’te yeniden
 //! ölçüldü, dördü de aynı — `GIZMO_PROP_SELFTEST=1`):
 //!
-//! | ne | uğradığı halkalar |
-//! |----|-------------------|
-//! | kabaran olay (`can_propagate` = `true`) | **`[4, 3, 2, 1, 0]`** — yapraktan köke, beşi de |
-//! | kabarmayan olay | **`[4]`** — yalnız hedef |
-//! | halka 2 yok edildikten sonra kabaran olay | **`[4, 3]`** — ölü ata yürüyüşü durduruyor |
+//! | ne | uğradığı halkalar | vetodan sonra |
+//! |----|-------------------|---------------|
+//! | kabaran olay (`can_propagate` = `true`) | **`[4, 3, 2, 1, 0]`** — yapraktan köke, beşi de | 2 halka |
+//! | aynı olay, **veto açık** (`V`) | **`[4, 3, 2]`** — halka 2'de duruyor | **0 halka** |
+//! | kabarmayan olay | **`[4]`** — yalnız hedef | — |
+//! | halka 2 yok edildikten sonra kabaran olay | **`[4, 3]`** — ölü ata yürüyüşü durduruyor | — |
 //!
-//! Ve durdurulamazlığın ölçüsü: halka **2**'deki dinleyici "burada dursun" diyebilseydi yürüyüş
-//! orada biterdi. Bitmiyor — ondan sonra **2 halka daha** (1 ve 0) ziyaret ediliyor. Yürüyüşü
-//! kesebilen bir çağrı olsaydı bu sayı 0 olurdu.
+//! İkinci satır kapanan boşluğun ölçüsü. Bu belge "yürüyüşü kesebilen bir çağrı olsaydı bu sayı
+//! **0** olurdu" diye yazıyordu; çağrı geldi ve sayı 0 oldu. Vetonun kendi halkasının
+//! dinleyicileri yine de koşuyor — bayrak, o varlık bittikten sonra okunuyor, dinleyiciler
+//! arasında değil.
 //!
 //! Üçüncü satır da bir belge iddiasını doğruluyor: `Parent` nesilsiz ham bir id tutuyor, ve
 //! `trigger` onu `World::entity` ile çözüyor — ölü bir id yürüyüşü **çökertmek yerine durduruyor**.
@@ -50,6 +54,7 @@
 //! ## Kontroller
 //!   * **Boşluk** — yaprakta kabaran bir olay tetikle
 //!   * **N** — kabarmayan bir olay tetikle (yalnız hedefe gider)
+//!   * **V** — aynı kabaran olay ama halka 2'deki dinleyici yürüyüşü kesiyor
 //!   * **X** — zincirin ortasındaki halkayı yok et (yürüyüş orada durmalı)
 //!   * **Sağ-tık + fare / WASDQE** — kamera
 
@@ -106,8 +111,13 @@ struct PropReport {
     visited_no_prop: Vec<usize>,
     /// "Durdurmak isteyen" dinleyicinin kaçıncı halkada olduğu.
     veto_at: usize,
-    /// Veto denemesinden SONRA kaç halka daha ziyaret edildi — yürüyüş kesilebilseydi 0 olurdu.
+    /// Veto KAPALIYKEN denemeden sonra kaç halka daha ziyaret edildi. 2026-08-24 öncesi tek
+    /// mümkün cevap buydu ve 0 olamıyordu.
     after_veto: usize,
+    /// Veto AÇIKKEN aynı olayın uğradığı halkalar — `stop_propagation` ile.
+    visited_vetoed: Vec<usize>,
+    /// Veto açık koşu yapıldı mı.
+    veto_done: bool,
     /// Zincir kesildikten sonraki ziyaret sayısı.
     visited_after_cut: Vec<usize>,
     cut_done: bool,
@@ -117,6 +127,14 @@ gizmo::core::impl_component!(PropReport);
 /// Zincirin derinliği ve vetoyu deneyen halka.
 const DEPTH: usize = 5;
 const VETO_AT: usize = 2;
+
+/// Veto açık mı — **dinleyici bunu dünyadan okuyor**, ve okuyabiliyor olmasının kendisi
+/// 2026-08-24'te dinleyiciye `&mut World` verilmesinin sonucu.
+#[derive(Clone, Copy, Default)]
+struct VetoMode {
+    enabled: bool,
+}
+gizmo::core::impl_component!(VetoMode);
 
 /// Dinleyicilerin dışarı yazdığı defter — `On<E>` dönüş kanalı taşımadığı için tek yol bu.
 type Trail = Arc<Mutex<Vec<usize>>>;
@@ -159,14 +177,19 @@ fn main() {
                 let t = trail.clone();
                 scene.world.observe::<Damage, _>(
                     *entity,
-                    move |_world: &mut gizmo::core::World, on: On<Damage>| {
+                    move |world: &mut gizmo::core::World, on: On<Damage>| {
                         t.lock().unwrap().push(depth);
-                        // Yürüyüşü burada durduracak bir çağrı YOK — ve dinleyicinin artık
-                        // `&mut World` alıyor olması bunu değiştirmiyor. Eksik olan dünyaya
-                        // erişim değil, dinleyiciden `trigger` döngüsüne giden DÖNÜŞ kanalı:
-                        // `On` değerle geliyor, dönüş `()`, ve döngü dinleyicinin ne yaptığına
-                        // bakmıyor. Bu satır o yüzden hâlâ burada.
                         let _ = on.event.amount;
+                        // Yürüyüşü burada kesen çağrı. Dönüş kanalı dinleyicinin dönüş tipi
+                        // değil, elindeki dünya: `stop_propagation` bir bayrak koyuyor ve
+                        // `trigger` döngüsü bu dinleyici döndükten sonra onu okuyor.
+                        let veto_on = world
+                            .get_resource::<VetoMode>()
+                            .map(|v| v.enabled)
+                            .unwrap_or(false);
+                        if veto_on && depth == VETO_AT {
+                            world.stop_propagation();
+                        }
                     },
                 );
                 let t = trail.clone();
@@ -201,6 +224,7 @@ fn main() {
                 veto_at: VETO_AT,
                 ..Default::default()
             });
+            scene.world.insert_resource(VetoMode::default());
             scene.spawn_camera(state, Vec3::new(0.0, 2.5, 8.5), Vec3::ZERO);
         })
         .set_update(|world, state, dt, input| {
@@ -222,22 +246,34 @@ fn main() {
                         ui.separator();
                         ui.monospace(format!("kabaran olay  : {:?}", r.visited));
                         ui.monospace(format!("kabarmayan    : {:?}", r.visited_no_prop));
+                        if r.veto_done {
+                            ui.monospace(format!("veto açık (V) : {:?}", r.visited_vetoed));
+                        }
                         if r.cut_done {
                             ui.monospace(format!("zincir kesik  : {:?}", r.visited_after_cut));
                         }
                         ui.separator();
-                        ui.label(format!("halka {} \"durdurmak istedi\"", r.veto_at));
-                        if r.after_veto > 0 {
+                        ui.label(format!("halka {} yürüyüşü kesiyor", r.veto_at));
+                        ui.colored_label(
+                            gizmo::egui::Color32::from_rgb(230, 160, 80),
+                            format!("veto KAPALI: sonrasında {} halka daha", r.after_veto),
+                        );
+                        if r.veto_done {
+                            let after = r
+                                .visited_vetoed
+                                .iter()
+                                .filter(|d| **d < r.veto_at)
+                                .count();
                             ui.colored_label(
-                                gizmo::egui::Color32::from_rgb(230, 160, 80),
-                                format!("ama {} halka daha ziyaret edildi", r.after_veto),
+                                gizmo::egui::Color32::from_rgb(140, 200, 140),
+                                format!("veto AÇIK  : sonrasında {} halka daha", after),
                             );
                         }
                         ui.separator();
                         ui.label("yol her zaman Parent zinciri — seçilemiyor.");
-                        ui.label("yürüyüşü kesecek bir çağrı YOK.");
+                        ui.label("kesme kanalı dinleyicinin dönüşü değil, elindeki dünya.");
                         ui.separator();
-                        ui.label("boşluk — kabaran · N — kabarmayan · X — zinciri kes");
+                        ui.label("boşluk — kabaran · N — kabarmayan · V — veto · X — zinciri kes");
                     });
                 });
         })
@@ -307,8 +343,39 @@ fn drive(world: &mut World, input: &Input) {
         }
     }
 
+    // Aynı kabaran olay, ama veto AÇIK. `V` ile elle de denenebiliyor.
+    if input.is_key_just_pressed(KeyCode::KeyV as u32) || (frame_bump && once(world, 2)) {
+        if let Some(mut mode) = world.get_resource_mut::<VetoMode>() {
+            mode.enabled = true;
+        }
+        chain.trail.lock().unwrap().clear();
+        world.trigger(Damage {
+            target: leaf,
+            amount: 10.0,
+        });
+        let visited: Vec<usize> = chain.trail.lock().unwrap().clone();
+        // Vetoyu geri kapat: sonraki adım (zinciri kesme) düz yürüyüşü ölçüyor.
+        if let Some(mut mode) = world.get_resource_mut::<VetoMode>() {
+            mode.enabled = false;
+        }
+        tint_visited(world, &visited);
+        let after = visited.iter().filter(|d| **d < VETO_AT).count();
+        if let Some(mut r) = world.get_resource_mut::<PropReport>() {
+            r.visited_vetoed = visited.clone();
+            r.veto_done = true;
+        }
+        if selftest {
+            gizmo::gizmo_log!(
+                Info,
+                "VETO AÇIK · uğradığı halkalar {:?} · vetodan sonra {} halka daha",
+                visited,
+                after
+            );
+        }
+    }
+
     // Zinciri kes: ortadaki halkayı yok et. Belge bunu söylüyor — ölü bir ata yürüyüşü durdurur.
-    if input.is_key_just_pressed(KeyCode::KeyX as u32) || (frame_bump && once(world, 2)) {
+    if input.is_key_just_pressed(KeyCode::KeyX as u32) || (frame_bump && once(world, 3)) {
         // Halkayı dizin sırasına göre değil, taşıdığı `Link` derinliğine göre bul — zincir
         // yeniden düzenlense de doğru halkayı keser.
         let middle_id = world.query::<&Link>().and_then(|q| {
@@ -369,7 +436,7 @@ fn once(world: &mut World, slot: usize) -> bool {
     let mut fired = world
         .get_resource::<Fired>()
         .map(|f| f.0)
-        .unwrap_or([false; 3]);
+        .unwrap_or([false; 4]);
     // Adımlar sırayla: her biri bir öncekinin karesinden sonra.
     let frame = world.tick;
     if fired[slot] || frame < (slot as u32 + 1) * 30 {
@@ -382,5 +449,5 @@ fn once(world: &mut World, slot: usize) -> bool {
 
 /// Kendi kendine sınama mandalları.
 #[derive(Clone, Copy, Default)]
-struct Fired([bool; 3]);
+struct Fired([bool; 4]);
 gizmo::core::impl_component!(Fired);

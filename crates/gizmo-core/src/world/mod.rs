@@ -89,6 +89,16 @@ pub struct World {
     /// [`DefaultQueryFilters`](crate::query::DefaultQueryFilters) for where it applies and — as
     /// importantly — where it deliberately does not.
     pub(crate) default_query_filters: crate::query::DefaultQueryFilters,
+
+    /// Set by [`World::stop_propagation`] and read by `trigger` after each listener returns.
+    ///
+    /// It lives on the world rather than in a return value because the return channel the walk
+    /// needed already existed once the listener was handed a `&mut World` — and because adding
+    /// it to the listener's signature would have changed that signature twice in two commits.
+    ///
+    /// `trigger` saves and restores it around its own walk, so a nested dispatch cancelling
+    /// itself does not cancel the walk it was called from.
+    pub(crate) propagation_stopped: bool,
 }
 
 impl World {
@@ -116,6 +126,7 @@ impl World {
             tick: 1,
             change_ref_tick: 0,
             default_query_filters: crate::query::DefaultQueryFilters::new(),
+            propagation_stopped: false,
         };
         world.insert_resource(crate::commands::CommandQueue::new());
         world.insert_resource(Entities::new());

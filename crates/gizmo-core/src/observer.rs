@@ -173,9 +173,10 @@ pub trait EntityEvent: Send + Sync + 'static + Clone {
     ///
     /// `false` by default: only [`target`](Self::target) is notified. When `true`, dispatch
     /// walks up the `Parent` chain, running each ancestor's listeners for this event type,
-    /// and stops at the first entity that has no `Parent` component or whose recorded parent
-    /// id is no longer alive. Listeners along the chain all receive equal clones of the same
-    /// event; none of them can cancel the walk.
+    /// and stops at the first entity that has no `Parent` component, whose recorded parent id
+    /// is no longer alive, or whose listener called
+    /// [`World::stop_propagation`](crate::world::World::stop_propagation). Listeners along the
+    /// chain all receive equal clones of the same event.
     fn can_propagate(&self) -> bool { false }
 }
 
@@ -187,10 +188,11 @@ pub trait EntityEvent: Send + Sync + 'static + Clone {
 ///   the observer was registered for;
 /// * [`EntityEvent`] listeners — `E` is the event value and `T` stays at its default `()`.
 ///
-/// It is handed to the listener *by value* and the listener returns `()`, so there is no
-/// return channel to the dispatcher — a listener cannot report that it handled the delivery,
-/// and in particular cannot stop a propagating walk (that gap is still open). What it *can*
-/// do is act, because the entity-event listener also receives the `&mut World`.
+/// It is handed to the listener *by value* and the listener returns `()`. There is still no
+/// return channel through the *type* — a listener cannot report that it handled the delivery —
+/// but there is one through the world: an entity-event listener receives `&mut World`, and
+/// [`World::stop_propagation`](crate::world::World::stop_propagation) is read by the dispatch
+/// loop once the listener returns. The signature never had to change.
 ///
 /// `Clone` requires only `E: Clone`, never `T: Clone`, since `T` is a phantom tag.
 pub struct On<E, T = ()> {
@@ -599,6 +601,133 @@ mod tests {
         world.trigger(Ping { target: child, bubble: true });
         assert_eq!(*seen.lock().unwrap(), vec![child.id(), parent.id()], "the walk");
         assert_eq!(world.entity_count(), before + 2, "both hops reached the world");
+    }
+
+    /// Builds `root -> mid -> leaf` and returns the three, root first.
+    fn three_deep(world: &mut World) -> [Entity; 3] {
+        use crate::hierarchy::HierarchyExt;
+        let root = world.spawn();
+        let mid = world.spawn();
+        let leaf = world.spawn();
+        world.add_child(root, mid);
+        world.add_child(mid, leaf);
+        [root, mid, leaf]
+    }
+
+    /// Registers a listener on each of `entities` that records its index, and optionally stops
+    /// the walk at one of them.
+    fn record_walk(world: &mut World, entities: &[Entity], stop_at: Option<usize>) -> Arc<Mutex<Vec<usize>>> {
+        let trail = Arc::new(Mutex::new(Vec::new()));
+        for (index, entity) in entities.iter().enumerate() {
+            let t = trail.clone();
+            world.observe::<Ping, _>(*entity, move |world: &mut World, _on| {
+                t.lock().unwrap().push(index);
+                if stop_at == Some(index) {
+                    world.stop_propagation();
+                }
+            });
+        }
+        trail
+    }
+
+    /// **A listener ends the walk** — the gap `CAPABILITY_GAPS.md` measured as "2 more links
+    /// visited after one tried".
+    ///
+    /// The control is the first assertion: the identical chain with nobody calling
+    /// `stop_propagation` visits all three, so the second assertion is measuring the call and
+    /// not the hierarchy.
+    #[test]
+    fn a_listener_can_end_the_walk() {
+        let mut world = World::new();
+        let [root, mid, leaf] = three_deep(&mut world);
+        let free = record_walk(&mut world, &[leaf, mid, root], None);
+        world.trigger(Ping { target: leaf, bubble: true });
+        assert_eq!(*free.lock().unwrap(), vec![0, 1, 2], "the uncancelled walk");
+
+        let mut world = World::new();
+        let [root, mid, leaf] = three_deep(&mut world);
+        // Index 1 is `mid`: stop there, and `root` must never hear it.
+        let stopped = record_walk(&mut world, &[leaf, mid, root], Some(1));
+        world.trigger(Ping { target: leaf, bubble: true });
+        assert_eq!(*stopped.lock().unwrap(), vec![0, 1], "the walk continued past the veto");
+    }
+
+    /// Stopping at the **target** means the ancestors hear nothing at all.
+    #[test]
+    fn stopping_at_the_target_reaches_no_ancestor() {
+        let mut world = World::new();
+        let [root, mid, leaf] = three_deep(&mut world);
+        let trail = record_walk(&mut world, &[leaf, mid, root], Some(0));
+        world.trigger(Ping { target: leaf, bubble: true });
+        assert_eq!(*trail.lock().unwrap(), vec![0]);
+    }
+
+    /// The other listeners **on the same entity** still run: the flag is read once that entity
+    /// is finished, not between its listeners.
+    ///
+    /// Worth pinning because either answer is defensible and the docs promise this one.
+    #[test]
+    fn stopping_does_not_cut_the_entitys_own_listeners_short() {
+        let mut world = World::new();
+        let [root, mid, leaf] = three_deep(&mut world);
+        let _ = (root, mid);
+        let seen = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let (first, second) = (seen.clone(), seen.clone());
+        world.observe::<Ping, _>(leaf, move |world: &mut World, _on| {
+            first.lock().unwrap().push(1);
+            world.stop_propagation();
+        });
+        world.observe::<Ping, _>(leaf, move |_world: &mut World, _on| {
+            second.lock().unwrap().push(2);
+        });
+
+        world.trigger(Ping { target: leaf, bubble: true });
+        assert_eq!(*seen.lock().unwrap(), vec![1, 2], "the second listener on the target was skipped");
+    }
+
+    /// **A nested walk answers for itself.** An inner dispatch that stops propagation must not
+    /// end the outer one — the flag is saved and restored per `trigger`.
+    ///
+    /// This is the whole reason the flag is not simply a bool anyone can set: without the
+    /// save/restore, one unrelated event cancelling itself would silently truncate the walk
+    /// that happened to be running.
+    #[test]
+    fn a_nested_walk_does_not_cancel_the_outer_one() {
+        let mut world = World::new();
+        let [root, mid, leaf] = three_deep(&mut world);
+        let other = world.spawn();
+
+        let trail = Arc::new(Mutex::new(Vec::<usize>::new()));
+        for (index, entity) in [leaf, mid, root].iter().enumerate() {
+            let t = trail.clone();
+            world.observe::<Ping, _>(*entity, move |world: &mut World, _on| {
+                t.lock().unwrap().push(index);
+                if index == 0 {
+                    // A different, unrelated dispatch that cancels itself.
+                    world.trigger(Ping { target: other, bubble: false });
+                }
+            });
+        }
+        world.observe::<Ping, _>(other, |world: &mut World, _on| world.stop_propagation());
+
+        world.trigger(Ping { target: leaf, bubble: true });
+        assert_eq!(
+            *trail.lock().unwrap(),
+            vec![0, 1, 2],
+            "a nested dispatch's cancellation truncated the outer walk"
+        );
+    }
+
+    /// Calling it with no dispatch running is inert rather than an error, and does not poison
+    /// the next `trigger`.
+    #[test]
+    fn stopping_outside_a_dispatch_is_inert() {
+        let mut world = World::new();
+        let [root, mid, leaf] = three_deep(&mut world);
+        let trail = record_walk(&mut world, &[leaf, mid, root], None);
+        world.stop_propagation();
+        world.trigger(Ping { target: leaf, bubble: true });
+        assert_eq!(*trail.lock().unwrap(), vec![0, 1, 2], "a stale flag truncated the next walk");
     }
 
     #[test]
