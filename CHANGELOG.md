@@ -50,6 +50,21 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`Gizmos::depth_test` did nothing — the two pipelines it chose between were identical.**
+  `GizmoRendererSystem` builds a "depth-tested" pipeline and a "no-depth" one, and both were
+  `CompareFunction::Always`: the flag selected between two copies of the same state, and the
+  field's own documentation — *"whether the lines are occluded by the scene"* — was false. Found
+  while building the text overlay pass, which is the same pipeline pattern one slot earlier in the
+  frame.
+
+  **No picture the engine draws changes.** `Gizmos` derives `Default` (so `depth_test` is `false`)
+  and `gizmo-studio` sets it to `false` explicitly, so the broken half was never selected — which
+  is also why nothing caught it. What changes is that the flag now means what it says.
+  `a_depth_tested_gizmo_is_hidden_by_geometry_and_an_untested_one_is_not` asserts the pair rather
+  than either half: a line behind a wall leaks **115 of 16 384** pixels with the old state and
+  **0** with the new, and the same line still draws when the flag is off — because "hidden" is
+  something a line that is never drawn also satisfies.
+
 - **The engine draws text.** Until now nothing drew a glyph except `egui`, a debug/editor UI layer
   — which is why every demo that wanted a label looked like a debug overlay. `docs/CAPABILITY_GAPS.md`
   §A2 was that gap and §E named it the first to close.

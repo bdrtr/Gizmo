@@ -166,7 +166,10 @@ impl GpuGizmoVertex {
 
 /// The GPU side of the debug lines: two pipelines and one growable vertex buffer.
 pub struct GizmoRendererSystem {
-    /// The depth-tested pipeline.
+    /// The depth-tested pipeline — a line behind geometry is hidden by it.
+    ///
+    /// It genuinely is one since 2026-08-24; before that it was built with
+    /// `CompareFunction::Always`, identical to [`pipeline_no_depth`](Self::pipeline_no_depth).
     pub pipeline: wgpu::RenderPipeline,
     /// The same pipeline without the depth test, for lines that must stay visible through
     /// geometry.
@@ -227,8 +230,10 @@ impl GizmoRendererSystem {
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: depth_format,
+                // Never written: a debug line is an overlay, and one that wrote depth would
+                // occlude the next one drawn behind it.
                 depth_write_enabled: Some(false),
-                depth_compare: Some(wgpu::CompareFunction::Always), // Unconditionally pass depth testing for all gizmos
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
@@ -239,7 +244,14 @@ impl GizmoRendererSystem {
 
         let pipeline = device.create_render_pipeline(&desc);
 
-        // Variant without depth testing (to overlay unconditionally)
+        // Variant without depth testing (to overlay unconditionally).
+        //
+        // This arm said `CompareFunction::Always` and so did the one above it — the two pipelines
+        // were built from identical state, so `Gizmos::depth_test` selected between two copies of
+        // the same thing and the field's own doc ("whether the lines are occluded by the scene")
+        // was false. Nothing caught it because nothing in the workspace sets the flag to `true`:
+        // `Gizmos` derives `Default` (false) and `gizmo-studio` writes `false` explicitly, so
+        // fixing it changes no picture the engine draws today and makes the flag mean what it says.
         desc.depth_stencil = Some(wgpu::DepthStencilState {
             format: depth_format,
             depth_write_enabled: Some(false),

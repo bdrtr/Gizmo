@@ -4766,4 +4766,106 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
 
         render_world(&mut renderer, &mut world).await
     }
+
+    /// `Gizmos::depth_test` selects between two pipelines, and they have to be two.
+    ///
+    /// They were not. Both were built with `CompareFunction::Always`, so the flag chose between
+    /// identical copies and `Gizmos::depth_test`'s own doc — *"whether the lines are occluded by
+    /// the scene"* — was false. Nothing caught it because nothing in the workspace sets the flag:
+    /// `Gizmos` derives `Default` (false) and `gizmo-studio` writes `false` explicitly, so the
+    /// broken half was never selected.
+    ///
+    /// The assertion is the pair, not either half. A depth-tested line hidden behind a cube proves
+    /// nothing on its own — a line that is never drawn passes that too — so the same line has to
+    /// appear when the flag is off.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_depth_tested_gizmo_is_hidden_by_geometry_and_an_untested_one_is_not() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let none = render_gizmo_scene(None).await;
+            let over = render_gizmo_scene(Some(false)).await;
+            let behind = render_gizmo_scene(Some(true)).await;
+
+            let (drawn, total) = changed_pixels(&none, &over, 128);
+            assert!(
+                drawn >= 60,
+                "a gizmo line with the depth test off changed {drawn}/{total} pixels (measured \
+                 115 — two one-pixel lines across a 128² frame) — it is not being drawn at all, \
+                 so the other half proves nothing",
+            );
+            let (leaked, _) = changed_pixels(&none, &behind, 128);
+            assert_eq!(
+                leaked, 0,
+                "a gizmo line BEHIND a cube changed {leaked} pixels with `depth_test = true` — \
+                 the depth-tested pipeline is not depth-tested. It was built with \
+                 `CompareFunction::Always`, identical to the other one, until 2026-08-24 — and \
+                 with that restored this reads 115, i.e. the whole line.",
+            );
+        });
+    }
+
+    /// A cube filling the view, and a debug line drawn behind it.
+    ///
+    /// `None` draws no line at all — the reference. `Some(depth_test)` draws one and sets the flag.
+    async fn render_gizmo_scene(depth_test: Option<bool>) -> Vec<u8> {
+        const W: u32 = 128;
+        let mut renderer = crate::test_gpu::headless_renderer(W, W).await;
+        renderer.taa = None;
+        let mut asset_manager = AssetManager::new();
+        let mut world = World::new();
+        let tex = asset_manager.create_white_texture(
+            &renderer.device,
+            &renderer.queue,
+            &renderer.scene.texture_bind_group_layout,
+        );
+
+        // A wall at the origin, wide enough to cover the middle of the frame.
+        let wall = world.spawn();
+        world.add_component(
+            wall,
+            Transform::new(Vec3::ZERO).with_scale(Vec3::new(4.0, 4.0, 0.2)),
+        );
+        world.add_component(wall, GlobalTransform::default());
+        world.add_component(wall, AssetManager::create_cube(&renderer.device));
+        world.add_component(
+            wall,
+            Material::new(tex).with_pbr(Vec4::new(0.6, 0.6, 0.65, 1.0), 0.8, 0.0),
+        );
+        world.add_component(wall, MeshRenderer::new());
+
+        world.spawn_bundle(CameraBundle {
+            position: Vec3::new(0.0, 0.0, 8.0),
+            yaw: -std::f32::consts::FRAC_PI_2,
+            pitch: 0.0,
+            primary: true,
+            ..Default::default()
+        });
+        world.spawn_bundle(DirectionalLightBundle::default());
+
+        if let Some(depth_test) = depth_test {
+            let mut gizmos = crate::renderer::Gizmos { depth_test, ..Default::default() };
+            // Behind the wall (the camera is at +8 looking down −Z), and across the middle of it,
+            // so "hidden" and "drawn" differ in the same pixels.
+            gizmos.draw_line(
+                Vec3::new(-3.0, 0.0, -4.0),
+                Vec3::new(3.0, 0.0, -4.0),
+                [1.0, 0.0, 0.0, 1.0],
+            );
+            gizmos.draw_line(
+                Vec3::new(0.0, -3.0, -4.0),
+                Vec3::new(0.0, 3.0, -4.0),
+                [1.0, 0.0, 0.0, 1.0],
+            );
+            world.insert_resource(gizmos);
+        }
+
+        render_world(&mut renderer, &mut world).await
+    }
 }

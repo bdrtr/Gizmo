@@ -825,6 +825,7 @@ Eight, all with regression coverage or an explicit report:
 | `vignette` was unreachable without the `PostProcess` component (D5) | `Renderer::vignette_intensity` added; no pixel changed |
 | A `#[cfg(test)]` module placed mid-file truncated what `render_parity` could see, mis-reporting 14 capabilities as editor-only | Module moved to the end of the file |
 | The fly camera wrote its pose to **every** camera in the world, so a second camera could not hold its own (D7) | Filtered to the camera `active_camera` names + a regression test that goes red on revert |
+| `Gizmos::depth_test` selected between two pipelines built from **identical** state — both `CompareFunction::Always` — so the field's own doc ("whether the lines are occluded by the scene") was false. Found 2026-08-24 while building the text overlay pass, which is the same pipeline pattern | The depth-tested one is `LessEqual` now + a golden test that goes red on revert (a line behind a wall leaks 115 px with the old state, 0 with the new). **No picture the engine draws changes today**: `Gizmos` derives `Default` (false) and `gizmo-studio` writes `false` explicitly, so the broken half was never selected |
 
 Reported and now documented rather than changed: `set_update` still replaces the simple scene's
 hook (D8), but it warns when it overwrites one and its docs say so, and
