@@ -101,7 +101,7 @@ impl gizmo_core::system::System for LifetimeSystem {
         use gizmo_core::commands::Commands;
         use gizmo_core::system::SystemParam;
 
-        let mut commands = match Commands::fetch(world, dt) {
+        let mut commands = match Commands::fetch_stateless(world, dt) {
             Ok(c) => c,
             // Sessiz `Err(_) => return` yutması yerine: CommandQueue yoksa hiçbir varlık
             // despawn edilemez (yaşam-döngüsü komponentleri atıl kalır). Kalıcı, per-frame

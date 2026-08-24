@@ -81,7 +81,8 @@ pub use registry::{ComponentRegistry, RegistryError};
 pub use state::{in_state, State};
 
 pub use system::{
-    IntoSystem, IntoSystemConfig, Phase, Res, ResMut, Schedule, System, SystemConfig, SystemParam,
+    IntoSystem, IntoSystemConfig, Local, Phase, Res, ResMut, Schedule, System, SystemConfig,
+    SystemParam,
 };
 pub use time::{PhysicsTime, Time};
 pub use window::WindowInfo;
@@ -120,7 +121,8 @@ pub mod prelude {
     pub use super::{
         ActionMap, Bundle, Changed, CommandQueue, Commands, Component, Entity, EntityName,
         EventReader, EventWriter, Events, FrameProfiler, Input, InputBinding, IntoSystem,
-        IntoSystemConfig, IsHidden, IsDeleted, Mut, Phase, PhysicsTime, PoolManager, Pooled, PrefabRequest,
+        IntoSystemConfig, IsHidden, IsDeleted, Local, Mut, Phase, PhysicsTime, PoolManager, Pooled,
+        PrefabRequest,
         Query, ReadOnlyQuery, Res, ResMut, Schedule, StorageView, StorageViewMut, System,
         SystemConfig, SystemParam, Time, WindowInfo, World,
     };

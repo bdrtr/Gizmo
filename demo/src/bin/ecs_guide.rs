@@ -10,9 +10,13 @@
 //!
 //! ## Motorda olmayan üç şey — üçü de burada elle yazıldı
 //!
-//! **1. Sisteme ait yerel durum yok.** Sisteme ait olan, dünyada görünmeyen bir sayaç tutmanın
-//! yolu yok; karşılığı sıradan bir kaynak ([`RoundLog`]). Fark yalnız üslup değil: kaynak dünyada
-//! durur, yani başka her sistem onu okuyabilir ve çakışma çizelgeye görünür.
+//! **1. ~~Sisteme ait yerel durum yok.~~ 2026-08-24'te geldi: [`Local<T>`].** Bu satır eskiden
+//! "yok" diyordu ve demo sayacını sıradan bir kaynakta ([`RoundLog`]) tutuyordu. Fark yalnız üslup
+//! değildi: kaynak dünyada durur, yani başka her sistem onu okuyabilir **ve çakışma çizelgeye
+//! görünür** — kendi sayacını `ResMut<T>` içinde tutan iki sistem aynı türe yazdıklarını beyan
+//! eder, o yüzden zamanlayıcı onları ayırır ve asla paralel koşmazlar. `Local` hiçbir şey beyan
+//! etmiyor: ölçüldü, `Local<u32>` tutan iki sistem **tek** partide, aynı ikisi kaynakla **iki**
+//! partide. Demo artık `Local` kullanıyor; `RoundLog` gitti.
 //!
 //! **2. `exclusive()` bir yetki değil, bariyer.** Dışlayıcı bir sistemin `&mut World` alıp dünyayı
 //! doğrudan değiştirmesi beklenebilir; Gizmo'nun [`SystemConfig::exclusive`]'i — kendi belgesinin
@@ -50,7 +54,7 @@
 use gizmo::app::headless::App;
 use gizmo::core::commands::Commands;
 use gizmo::core::query::{Mut, Query};
-use gizmo::core::system::{IntoSystemConfig, Res, ResMut, SetConfig, SystemSet};
+use gizmo::core::system::{IntoSystemConfig, Local, Res, ResMut, SetConfig, SystemSet};
 
 // ── BİLEŞENLER ───────────────────────────────────────────────────────────────────────────────
 
@@ -106,13 +110,6 @@ struct GameRules {
     max_players: u32,
 }
 gizmo::core::impl_component!(GameRules);
-
-/// Sisteme ait olamayan, o yüzden dünyada duran sayaç.
-#[derive(Default, Clone, Copy)]
-struct RoundLog {
-    times_printed: u32,
-}
-gizmo::core::impl_component!(RoundLog);
 
 /// Belirleyici "zar" — `rand` yerine, çıktının her koşuda aynı olması için.
 #[derive(Clone, Copy)]
@@ -210,10 +207,14 @@ fn score_check_system(
     }
 }
 
-/// Tur sonu kaydı — sisteme ait yerel sayaç yerine [`RoundLog`] kaynağıyla.
-fn print_at_end_round(mut log: ResMut<RoundLog>) {
-    log.times_printed += 1;
-    println!("  'son' kümesinde {}. kez", log.times_printed);
+/// Tur sonu kaydı — sayaç sistemin KENDİSİNDE, dünyada değil.
+///
+/// `Local<u32>` sistemin kendi değeri: dünyada görünmüyor, `insert_resource` istemiyor, ve
+/// zamanlayıcıya hiçbir erişim beyan etmediği için bu sistemi kimseden ayırmıyor. Aynı fonksiyon
+/// iki kez kaydedilseydi iki ayrı sayaç olurdu — "sistem" derken kastedilen KURULMUŞ sistem.
+fn print_at_end_round(mut times_printed: Local<u32>) {
+    *times_printed += 1;
+    println!("  'son' kümesinde {}. kez", *times_printed);
 }
 
 /// Ertelenmiş yapısal değişiklik: yeni oyuncuyu [`Commands`] kuyruğa alır, çizelge partiden
@@ -280,7 +281,6 @@ fn setup(world: &mut gizmo::core::World) {
         max_rounds: 10,
         max_players: 4,
     });
-    world.insert_resource(RoundLog::default());
     world.insert_resource(Dice(0x2545_F491));
 
     for name in ["Ayşe", "Bora"] {

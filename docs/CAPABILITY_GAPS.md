@@ -378,7 +378,7 @@ Measured in `ecs_extension_points`. Four traits are sealed and cannot be impleme
 
 | Trait | Consequence |
 |---|---|
-| `SystemParam` | A *primitive* parameter still cannot be written. **Eight** impls (counted 2026-08-24; this line said six and omitted `Commands`, `EventReader` and `EventWriter`): `Res<T>`, `ResMut<T>`, `f32` (dt), `Query<Q>`, `Option<P>`, `Commands`, `EventReader<T>`, `EventWriter<T>` — plus anything `system_param!` declares, which is a **composite**, so grouping existing parameters no longer needs the seal opened. `fetch` is static, which is what rules out a `Local<T>`; see C1 |
+| `SystemParam` | A *primitive* parameter still cannot be written **downstream**. **Nine** impls (2026-08-24; this line said six and omitted `Commands`, `EventReader` and `EventWriter`, then gained `Local`): `Res<T>`, `ResMut<T>`, `f32` (dt), `Query<Q>`, `Option<P>`, `Commands`, `EventReader<T>`, `EventWriter<T>`, `Local<T>` — plus anything `system_param!` declares, which is a **composite**, so grouping existing parameters no longer needs the seal opened. `Local` is the first primitive added since the seal was written, and it needed the trait to grow a `type State`: `fetch` had no per-system identity, so there was nowhere for a value to live |
 | `WorldQuery` | No derived query operand |
 | `ReadOnlyQuery` | — |
 | `FetchComponent` | No custom fetch |
@@ -415,7 +415,7 @@ borrow conflict still panics, because it is a scheduling bug rather than a state
 
 | Missing | Effect | Measured in |
 |---|---|---|
-| `Local<T>` system param | Per-system state must become a world resource, so it is visible to every other system and to the scheduler's conflict analysis. **Priced 2026-08-24, and it is not the small item §E filed it under.** `SystemParam::fetch(world, dt)` is a *static* function: it is handed no per-system identity, so `Local<T>` cannot be added as a ninth impl the way `Option<P>` was — there is nowhere for the value to live. Making it possible means the trait grows a per-system state slot (`type State` + `fetch(.., &mut Self::State)`), and that reaches **eight** `SystemParam` impls, the `system_param!` macro (whose expansion lives in *downstream* crates, so the signature change is breaking for anyone who used it), the 1..12 `IntoSystem` macros, the 1..6 `IntoCondition` macros, and the three files outside `gizmo-core` that call `fetch` directly. Doable, but it is a change to the most load-bearing part of the ECS and wants its own commit and its own soak | `ecs_guide` |
+| ~~`Local<T>` system param~~ | **CLOSED 2026-08-24.** Per-system state had to be a world resource, which made it visible to every other system *and to the scheduler*: two systems each keeping their own tally in a `ResMut<T>` declare a write of the same type, so the batcher keeps them apart and they never run in parallel. `Local<T>` declares nothing — measured: two systems holding a `Local<u32>` land in **1** batch, the same two written with a resource land in **2**. The price §E under-counted was real and was paid: `SystemParam` grew a `type State`, `fetch` a third argument, and that reached nine impls, the `system_param!` macro (composites hold their fields' states as a tuple, so a composite may contain a `Local`), the 1..12 `IntoSystem` macros, the 1..6 `IntoCondition` macros, and four call sites outside `gizmo-core`. `fetch_stateless` is the provided method a caller with no state uses, because `&'w mut ()` cannot be conjured from a temporary. One API consequence: a **`pub`** composite now needs its field types at least as public as itself, since `State` names them | `ecs_guide` |
 | `On<Remove, T>` / `On<Replace, T>` dispatch | The markers exist; `observer.rs` says there is "no dispatch path yet". Removal is observable only through a raw `RemoveHook` | `removal_detection`, `observers` |
 | Global (non-entity) observers | `add_observer` is `On<Insert, T>` only; `observe` needs a target entity. An untargeted event has no counterpart | `observers` |
 | Run conditions on observers | An observer cannot be gated | `observers` |
@@ -666,10 +666,13 @@ and `emissive` (item 4, the only undocumented one). No further silent fields.
    - ~~**`Visibility`**~~ **The entry was wrong.** `IsHidden` was already the engine's hide, on both
      paths since 2026-08-19, and already a full one. What was missing was inheritance, and that
      landed 2026-08-24. See C1 for the measurements that corrected it.
-   - **`Local<T>`** and **default query filters** are the two that were misfiled: both are changes
-     to the core of the ECS rather than papercuts, and C1 now carries what each would cost. Neither
-     is blocked — they are simply not one-sitting items, and reading §E as though they were is how
-     one of them gets started and abandoned.
+   - ~~**`Local<T>`**~~ **DONE 2026-08-24** — and it *was* a change to the core of the ECS rather
+     than a papercut, exactly as the pricing above said: `SystemParam` grew a `type State` and
+     `fetch` a third argument, reaching nine impls, three macro families and four call sites
+     outside `gizmo-core`. It is in its own commit for that reason.
+   - **Default query filters** is the one still misfiled: seven entry points and an opt-out each,
+     which is two features rather than one. C1 carries the price. Not blocked — just not a
+     one-sitting item, and reading §E as though it were is how it gets started and abandoned.
 4. ~~**Extrusion machinery (A4).**~~ **DONE 2026-08-24** — one feature, 15 shapes, and the count
    held: `create_extrusion` + `create_sweep` over a shared outline module. The part §E did not say
    is where the work was: cap triangulation, which is a fan for a convex outline and ear clipping

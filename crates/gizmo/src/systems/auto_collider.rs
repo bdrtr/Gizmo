@@ -137,7 +137,7 @@ impl gizmo_core::system::System for AutoBoxColliderSystem {
 
         // Commands YOKSA nazikçe küçül: yine de boyutlandır (Added geçidi doğruluğu korur),
         // yalnız işaret kaldırma atlanır → işaret öylece kalır (atıl).
-        let mut commands = Commands::fetch(world, dt).ok();
+        let mut commands = Commands::fetch_stateless(world, dt).ok();
         if commands.is_none() {
             tracing::trace!(
                 "AutoBoxColliderSystem: Commands (CommandQueue) yok — işaretler boyutlanacak ama kaldırılamayacak"

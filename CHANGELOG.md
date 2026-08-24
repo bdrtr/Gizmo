@@ -50,6 +50,41 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`Local<T>`: per-system state that the scheduler cannot see.** Until now a counter, a "did I
+  already do this", a scratch buffer — anything a system wanted to keep between runs — had to be a
+  world resource. That made it visible to every other system, and worse, visible to the *batcher*:
+  two systems each keeping their own tally in a `ResMut<T>` declare a write of the same type, so
+  they are kept apart and never run in parallel.
+
+  `Local<T>` declares nothing at all. Measured: two systems holding a `Local<u32>` land in **1**
+  batch, and the same two written with a resource land in **2** — the test asserts both halves,
+  because the resource form is what the comparison is against.
+
+  **It cost what `docs/CAPABILITY_GAPS.md` priced it at, and that is why it is its own commit.**
+  `SystemParam::fetch` was a *static* function handed no per-system identity, so there was nowhere
+  for a value to live and `Local` could not be added as another impl the way `Option<P>` was. The
+  trait grew a `type State`, `fetch` a third argument, and the change reached nine impls, the
+  `system_param!` macro, the 1..12 `IntoSystem` macros, the 1..6 `IntoCondition` macros and four
+  call sites outside `gizmo-core`.
+
+  Details worth knowing before meeting them:
+
+  - **Per *built* system, not per function.** Registering the same function twice gives two
+    independent values, which is also the answer to "why did my counter reset".
+  - **Composites can hold one.** `system_param!`'s `State` is the tuple of its fields', so a
+    `Local` inside a composite keeps its own value. Had that line been left as `()` the composite
+    would have compiled and its counter would have reset every frame.
+  - **Conditions can hold one.** A condition's state lives in the closure `into_condition` builds,
+    so it is per condition — the same rule `distributive_run_if` already documents.
+  - **`fetch_stateless`** is the provided method a caller with no state to hand over uses: `fetch`
+    takes `&'w mut Self::State` because `Local` hands that reference to the system body, and a
+    temporary `&mut ()` does not live long enough. It costs nothing — `()` is zero-sized.
+  - One API consequence: a **`pub`** composite now needs its field types at least as public as
+    itself, because `State` names them. Private composites — most of them — never meet it.
+
+  `ecs_guide`'s header said "there is no per-system local state" and hand-rolled a `RoundLog`
+  resource for its round counter. Both are gone.
+
 - **The editor viewport ignored `alpha_cutoff` — the workspace's one standing red, closed.**
   `render_parity`'s capability inventory had reported `alpha_cutoff` as game-path-only since
   `05fcbff7` on 2026-08-22, and that assertion had been failing ever since: a gate left red is a

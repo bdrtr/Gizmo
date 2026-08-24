@@ -186,8 +186,13 @@ impl<'w, T: 'static> EventReader<'w, T> {
 impl<T: 'static> crate::system::sealed::Sealed for EventReader<'static, T> {}
 impl<T: 'static> SystemParam for EventReader<'static, T> {
     type Item<'w> = EventReader<'w, T>;
-    fn fetch<'w>(world: &'w World, _dt: f32) -> Result<Self::Item<'w>, SystemParamFetchError> {
-        let events = Res::<Events<T>>::fetch(world, _dt)?;
+    type State = ();
+    fn fetch<'w>(
+        world: &'w World,
+        _dt: f32,
+        _state: &'w mut (),
+    ) -> Result<Self::Item<'w>, SystemParamFetchError> {
+        let events = Res::<Events<T>>::fetch_stateless(world, _dt)?;
         Ok(EventReader { events })
     }
     fn get_access_info(info: &mut AccessInfo) {
@@ -234,8 +239,13 @@ impl<'w, T: 'static> EventWriter<'w, T> {
 impl<T: 'static> crate::system::sealed::Sealed for EventWriter<'static, T> {}
 impl<T: 'static> SystemParam for EventWriter<'static, T> {
     type Item<'w> = EventWriter<'w, T>;
-    fn fetch<'w>(world: &'w World, _dt: f32) -> Result<Self::Item<'w>, SystemParamFetchError> {
-        let events = ResMut::<Events<T>>::fetch(world, _dt)?;
+    type State = ();
+    fn fetch<'w>(
+        world: &'w World,
+        _dt: f32,
+        _state: &'w mut (),
+    ) -> Result<Self::Item<'w>, SystemParamFetchError> {
+        let events = ResMut::<Events<T>>::fetch_stateless(world, _dt)?;
         Ok(EventWriter { events })
     }
     fn get_access_info(info: &mut AccessInfo) {

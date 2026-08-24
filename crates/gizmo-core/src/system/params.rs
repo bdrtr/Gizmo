@@ -119,6 +119,18 @@ pub trait SystemParam: sealed::Sealed {
     /// signature writes plain `Res<Foo>` and lets elision supply `'w`.
     type Item<'w>;
 
+    /// State this parameter keeps **between runs, per system**.
+    ///
+    /// `()` for everything that keeps none, which is every parameter but [`Local`]. It is the
+    /// system that owns it — one `Local<u32>` per system, created with [`Default`] the first time
+    /// the system is built and handed back on every run — so two systems asking for the same type
+    /// get two independent values, which is exactly the difference from a resource.
+    ///
+    /// `Send + Sync` because a system may run on any thread of the pool; `Default` because the
+    /// state has to exist before the world does anything, and a parameter that needed the world to
+    /// build its state would be a resource.
+    type State: Default + Send + Sync + 'static;
+
     /// Produces the parameter for a single run.
     ///
     /// Called once per parameter, in declaration order, immediately before the system body,
@@ -129,7 +141,32 @@ pub trait SystemParam: sealed::Sealed {
     ///
     /// Fails rather than blocks; see [`SystemParamFetchError`] for what the callers do with
     /// the error (they panic).
-    fn fetch<'w>(world: &'w World, dt: f32) -> Result<Self::Item<'w>, SystemParamFetchError>;
+    fn fetch<'w>(
+        world: &'w World,
+        dt: f32,
+        state: &'w mut Self::State,
+    ) -> Result<Self::Item<'w>, SystemParamFetchError>;
+
+    /// [`fetch`](Self::fetch) for a parameter that keeps no state, so a caller with none to hand
+    /// it need not invent a borrow that outlives the call.
+    ///
+    /// `fetch` takes `&'w mut Self::State` because [`Local`] hands that reference straight to the
+    /// system body — so the state has to live as long as the fetched value. A caller that has no
+    /// state cannot satisfy that with a local `let mut () = ();`: the temporary dies at the end of
+    /// the statement and `'w` does not. This is the way out, and it costs nothing at run time:
+    /// `()` is zero-sized, so `Box::new(())` allocates nothing and leaking it leaks nothing.
+    ///
+    /// Only for `State = ()`, which the bound enforces — there is no way to reach it from a
+    /// parameter that would actually lose its state.
+    fn fetch_stateless<'w>(
+        world: &'w World,
+        dt: f32,
+    ) -> Result<Self::Item<'w>, SystemParamFetchError>
+    where
+        Self: SystemParam<State = ()>,
+    {
+        Self::fetch(world, dt, Box::leak(Box::new(())))
+    }
 
     /// Appends this parameter's accesses to `info`.
     ///
@@ -169,7 +206,12 @@ impl<'w, T: 'static> std::ops::Deref for Res<'w, T> {
 impl<T: 'static> sealed::Sealed for Res<'static, T> {}
 impl<T: 'static> SystemParam for Res<'static, T> {
     type Item<'w> = Res<'w, T>;
-    fn fetch<'w>(world: &'w World, _dt: f32) -> Result<Self::Item<'w>, SystemParamFetchError> {
+    type State = ();
+    fn fetch<'w>(
+        world: &'w World,
+        _dt: f32,
+        _state: &'w mut (),
+    ) -> Result<Self::Item<'w>, SystemParamFetchError> {
         let value = world.try_get_resource::<T>()?;
         Ok(Res::<T> { value })
     }
@@ -209,7 +251,12 @@ impl<'w, T: 'static> std::ops::DerefMut for ResMut<'w, T> {
 impl<T: 'static> sealed::Sealed for ResMut<'static, T> {}
 impl<T: 'static> SystemParam for ResMut<'static, T> {
     type Item<'w> = ResMut<'w, T>;
-    fn fetch<'w>(world: &'w World, _dt: f32) -> Result<Self::Item<'w>, SystemParamFetchError> {
+    type State = ();
+    fn fetch<'w>(
+        world: &'w World,
+        _dt: f32,
+        _state: &'w mut (),
+    ) -> Result<Self::Item<'w>, SystemParamFetchError> {
         let value = world.try_get_resource_mut::<T>()?;
         Ok(ResMut::<T> { value })
     }
@@ -264,8 +311,15 @@ impl<P: SystemParam> sealed::Sealed for Option<P> {}
 /// resource appeared.
 impl<P: SystemParam> SystemParam for Option<P> {
     type Item<'w> = Option<P::Item<'w>>;
-    fn fetch<'w>(world: &'w World, dt: f32) -> Result<Self::Item<'w>, SystemParamFetchError> {
-        match P::fetch(world, dt) {
+    /// The inner parameter's, forwarded: `Option<Local<u32>>` is still one `u32` per system, and
+    /// absence is about the *world*, not about the state.
+    type State = P::State;
+    fn fetch<'w>(
+        world: &'w World,
+        dt: f32,
+        state: &'w mut Self::State,
+    ) -> Result<Self::Item<'w>, SystemParamFetchError> {
+        match P::fetch(world, dt, state) {
             Ok(v) => Ok(Some(v)),
             Err(e) if e.is_absence() => Ok(None),
             Err(e) => Err(e),
@@ -276,10 +330,77 @@ impl<P: SystemParam> SystemParam for Option<P> {
     }
 }
 
+/// Per-system state that lives across runs: `fn sys(mut count: Local<u32>)`.
+///
+/// # Why this is not a resource
+///
+/// It could be one, and that is exactly what it cost. A counter, a "did I already do this", a
+/// scratch `Vec` — all of them had to become world resources, which makes them **visible to every
+/// other system** and, worse, visible to the *scheduler*: two systems each keeping their own tally
+/// in a `ResMut<Tally>` declare a write of the same type, so the batcher must keep them apart and
+/// they never run in parallel. A `Local` declares nothing at all
+/// ([`get_access_info`](SystemParam::get_access_info) appends nothing), so two systems holding
+/// `Local<u32>` are as independent as if neither existed.
+///
+/// # One per system, and "system" means the built one
+///
+/// The value is created with [`Default`] when the system is turned into a [`System`](super::System)
+/// and belongs to that instance. Registering the same function twice gives **two** independent
+/// values — which is the same rule `distributive_run_if` already documents for a stateful
+/// condition, and the answer to "why did my counter reset" is almost always that the system was
+/// rebuilt.
+///
+/// A `Local` inside a [`system_param!`](crate::system_param) composite works and keeps its own
+/// value; the composite's state is the tuple of its fields'.
+pub struct Local<'w, T: 'static> {
+    value: &'w mut T,
+}
+
+impl<T: 'static> std::ops::Deref for Local<'_, T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        self.value
+    }
+}
+
+impl<T: 'static> std::ops::DerefMut for Local<'_, T> {
+    fn deref_mut(&mut self) -> &mut T {
+        self.value
+    }
+}
+
+impl<T: std::fmt::Debug + 'static> std::fmt::Debug for Local<'_, T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(self.value, f)
+    }
+}
+
+impl<T: Default + Send + Sync + 'static> sealed::Sealed for Local<'static, T> {}
+impl<T: Default + Send + Sync + 'static> SystemParam for Local<'static, T> {
+    type Item<'w> = Local<'w, T>;
+    type State = T;
+    fn fetch<'w>(
+        _world: &'w World,
+        _dt: f32,
+        state: &'w mut Self::State,
+    ) -> Result<Self::Item<'w>, SystemParamFetchError> {
+        Ok(Local { value: state })
+    }
+    /// **Nothing.** That is the whole point: a `Local` touches no world state, so it puts no
+    /// constraint on the batcher. Declaring a phantom access here would silently undo the one
+    /// advantage this parameter has over a resource.
+    fn get_access_info(_info: &mut AccessInfo) {}
+}
+
 impl sealed::Sealed for f32 {}
 impl SystemParam for f32 {
     type Item<'w> = f32;
-    fn fetch<'w>(_world: &'w World, dt: f32) -> Result<Self::Item<'w>, SystemParamFetchError> {
+    type State = ();
+    fn fetch<'w>(
+        _world: &'w World,
+        dt: f32,
+        _state: &'w mut (),
+    ) -> Result<Self::Item<'w>, SystemParamFetchError> {
         Ok(dt)
     }
     fn get_access_info(_info: &mut AccessInfo) {}
@@ -288,7 +409,12 @@ impl SystemParam for f32 {
 impl<Q: crate::query::WorldQuery + 'static> sealed::Sealed for crate::query::Query<'static, Q> {}
 impl<Q: crate::query::WorldQuery + 'static> SystemParam for crate::query::Query<'static, Q> {
     type Item<'w> = crate::query::Query<'w, Q>;
-    fn fetch<'w>(world: &'w World, _dt: f32) -> Result<Self::Item<'w>, SystemParamFetchError> {
+    type State = ();
+    fn fetch<'w>(
+        world: &'w World,
+        _dt: f32,
+        _state: &'w mut (),
+    ) -> Result<Self::Item<'w>, SystemParamFetchError> {
         // SAFETY: the scheduler validates that co-batched systems have disjoint component
         // access (`AccessInfo`/`is_compatible_with`) before running them in parallel, and
         // runs `is_exclusive` systems alone. So while this system's `Query` is live, no
@@ -350,7 +476,8 @@ mod system_param_macro_tests {
     #[test]
     fn a_composite_param_fetches_every_field() {
         let w = world();
-        let ctx = Ctx::fetch(&w, 0.016).expect("all three resources are present");
+        let mut state = Default::default();
+        let ctx = Ctx::fetch(&w, 0.016, &mut state).expect("all three resources are present");
         assert_eq!(ctx.clock.0, 1.5);
         assert_eq!(ctx.level.0, 3);
         assert_eq!(ctx.score.0, 10);
@@ -360,7 +487,8 @@ mod system_param_macro_tests {
     fn writing_through_a_composite_param_reaches_the_world() {
         let w = world();
         {
-            let mut ctx = Ctx::fetch(&w, 0.016).expect("present");
+            let mut state = Default::default();
+            let mut ctx = Ctx::fetch(&w, 0.016, &mut state).expect("present");
             ctx.score.0 = 99;
         }
         assert_eq!(w.get_resource::<Score>().map(|s| s.0), Some(99));
@@ -448,7 +576,7 @@ mod system_param_macro_tests {
         w.insert_resource(Clock(1.0));
         w.insert_resource(Score(0));
         // `Level` absent.
-        let Err(e) = Ctx::fetch(&w, 0.016) else {
+        let Err(e) = Ctx::fetch(&w, 0.016, &mut Default::default()) else {
             panic!("Level is missing, so the fetch must fail")
         };
         assert!(e.is_absence(), "a missing resource should read as absence");
@@ -581,12 +709,17 @@ mod optional_param_tests {
 /// puts `'w` in the struct and `'static` in the impl, which is the same shape every built-in
 /// parameter already has (`impl SystemParam for Res<'static, T>`).
 ///
+/// A `pub` composite needs its field types to be **at least as public as itself**: the impl's
+/// `State` is the tuple of the fields' states, so it names them, and a `pub` struct over a private
+/// resource is `E0446`. Most composites are private and never meet this; the ones that are not
+/// were already leaking those types through their `pub` fields.
+///
 /// ```
 /// # use gizmo_core::prelude::*;
 /// # use gizmo_core::system::{Res, ResMut};
-/// # #[derive(Clone, Default)] struct Clock(f32);
+/// # #[derive(Clone, Default)] pub struct Clock(f32);
 /// # gizmo_core::impl_component!(Clock);
-/// # #[derive(Clone, Default)] struct Score(u32);
+/// # #[derive(Clone, Default)] pub struct Score(u32);
 /// # gizmo_core::impl_component!(Score);
 /// gizmo_core::system_param! {
 ///     /// Everything the scoring systems read together.
@@ -632,14 +765,26 @@ macro_rules! system_param {
         impl<'a> $crate::system::SystemParam for $name<'a> {
             type Item<'w> = $name<'w>;
 
+            // The tuple of the fields' own states, in declaration order — so a composite may hold
+            // a `Local` and it keeps its own value, per system, like a bare one would.
+            type State = (
+                $(
+                    <$outer<'static, $($arg),+> as $crate::system::SystemParam>::State,
+                )+
+            );
+
             fn fetch<'w>(
                 world: &'w $crate::world::World,
                 dt: f32,
+                state: &'w mut Self::State,
             ) -> ::std::result::Result<Self::Item<'w>, $crate::system::SystemParamFetchError> {
+                // Destructured so each field gets its OWN `&mut` — one borrow of the whole tuple
+                // would be one borrow for all of them.
+                let ( $($field,)+ ) = state;
                 ::std::result::Result::Ok($name {
                     $(
                         $field: <$outer<'static, $($arg),+> as $crate::system::SystemParam>
-                            ::fetch(world, dt)?,
+                            ::fetch(world, dt, $field)?,
                     )+
                 })
             }
@@ -654,4 +799,207 @@ macro_rules! system_param {
             }
         }
     };
+}
+
+
+#[cfg(test)]
+mod local_tests {
+    use super::*;
+    use crate::system::{IntoSystemConfig, Schedule};
+    use crate::world::World;
+
+    #[derive(Default)]
+    struct Reported(Vec<u32>);
+
+    /// Counts its own runs in a `Local` and reports each value into a resource, so the test can
+    /// see the sequence rather than only the last value.
+    fn counting(mut runs: Local<u32>, mut out: ResMut<Reported>) {
+        *runs += 1;
+        out.0.push(*runs);
+    }
+
+    fn world() -> World {
+        let mut w = World::new();
+        w.insert_resource(Reported::default());
+        w
+    }
+
+    /// The value survives from one run to the next — the whole reason the parameter exists.
+    #[test]
+    fn a_local_keeps_its_value_between_runs() {
+        let mut w = world();
+        let mut schedule = Schedule::new();
+        schedule.add_di_system(counting.into_config());
+        schedule.build();
+        for _ in 0..4 {
+            schedule.run(&mut w, 0.0);
+        }
+        assert_eq!(
+            w.get_resource::<Reported>().map(|r| r.0.clone()),
+            Some(vec![1, 2, 3, 4]),
+            "the local reset between runs — it is being rebuilt rather than kept",
+        );
+    }
+
+    /// Two systems asking for `Local<u32>` get **two** values, which is the difference from a
+    /// resource in one sentence.
+    ///
+    /// The second system runs twice as often as the first here, so a shared value would show up as
+    /// interleaving rather than as two independent counts.
+    #[test]
+    fn two_systems_each_get_their_own() {
+        fn first(mut runs: Local<u32>, mut out: ResMut<Reported>) {
+            *runs += 1;
+            out.0.push(*runs);
+        }
+        fn second(mut runs: Local<u32>, mut out: ResMut<Reported>) {
+            *runs += 100;
+            out.0.push(*runs);
+        }
+
+        let mut w = world();
+        let mut schedule = Schedule::new();
+        schedule.add_di_system(first.into_config());
+        schedule.add_di_system(second.into_config());
+        schedule.build();
+        schedule.run(&mut w, 0.0);
+        schedule.run(&mut w, 0.0);
+
+        let mut reported = w.get_resource::<Reported>().map(|r| r.0.clone()).unwrap_or_default();
+        reported.sort_unstable();
+        assert_eq!(
+            reported,
+            vec![1, 2, 100, 200],
+            "the two systems shared one value — a `Local` is per system, not per type",
+        );
+    }
+
+    /// Registering the same function twice gives two independent values.
+    ///
+    /// Worth pinning separately: "per system" could plausibly mean "per function", and the answer
+    /// is that it means per *built* system — which is also the answer to "why did my counter
+    /// reset".
+    #[test]
+    fn the_same_function_registered_twice_has_two_locals() {
+        let mut w = world();
+        let mut schedule = Schedule::new();
+        schedule.add_di_system(counting.into_config());
+        schedule.add_di_system(counting.into_config());
+        schedule.build();
+        schedule.run(&mut w, 0.0);
+
+        assert_eq!(
+            w.get_resource::<Reported>().map(|r| r.0.clone()),
+            Some(vec![1, 1]),
+            "both registrations reported 1 only if each has its own local; a shared one gives 1, 2",
+        );
+    }
+
+    /// **The measurable win: a `Local` declares nothing, so it constrains nothing.**
+    ///
+    /// This is what the parameter is *for*. Before it, per-system state had to be a world
+    /// resource — and two systems each keeping their own tally in a `ResMut<T>` declare a write of
+    /// the same type, so the batcher must keep them apart and they never run in parallel. Two
+    /// systems with a `Local` land in one batch; the same two written with a resource land in two.
+    #[test]
+    fn a_local_does_not_separate_two_systems_the_way_a_resource_does() {
+        #[derive(Default)]
+        struct Tally(u32);
+
+        fn with_local_a(mut n: Local<u32>) {
+            *n += 1;
+        }
+        fn with_local_b(mut n: Local<u32>) {
+            *n += 1;
+        }
+        fn with_resource_a(mut n: ResMut<Tally>) {
+            n.0 += 1;
+        }
+        fn with_resource_b(mut n: ResMut<Tally>) {
+            n.0 += 1;
+        }
+
+        let mut schedule = Schedule::new();
+        schedule.add_di_system(with_local_a.into_config());
+        schedule.add_di_system(with_local_b.into_config());
+        schedule.build();
+        assert_eq!(
+            schedule.legacy_batches.len(),
+            1,
+            "two systems holding a `Local` were put in separate batches — the parameter is \
+             declaring an access it does not perform, which throws away its only advantage over a \
+             resource",
+        );
+
+        let mut schedule = Schedule::new();
+        schedule.add_di_system(with_resource_a.into_config());
+        schedule.add_di_system(with_resource_b.into_config());
+        schedule.build();
+        assert_eq!(
+            schedule.legacy_batches.len(),
+            2,
+            "the resource form is what the `Local` is being compared against; if it does not \
+             separate them, this whole test proves nothing",
+        );
+    }
+
+    /// It composes: `Option<Local<T>>` is still one value per system, and a `Local` beside a real
+    /// parameter does not disturb it.
+    #[test]
+    fn a_local_sits_beside_other_parameters() {
+        #[derive(Default)]
+        struct Score(u32);
+
+        fn mixed(mut runs: Local<u32>, score: Res<Score>, mut out: ResMut<Reported>) {
+            *runs += 1;
+            out.0.push(*runs + score.0);
+        }
+
+        let mut w = world();
+        w.insert_resource(Score(10));
+        let mut schedule = Schedule::new();
+        schedule.add_di_system(mixed.into_config());
+        schedule.build();
+        schedule.run(&mut w, 0.0);
+        schedule.run(&mut w, 0.0);
+        assert_eq!(w.get_resource::<Reported>().map(|r| r.0.clone()), Some(vec![11, 12]));
+    }
+
+    /// A `Local` inside a `system_param!` composite keeps its own value too.
+    ///
+    /// The composite's state is the tuple of its fields', and that is the line that would silently
+    /// be `()` if the macro had been left alone — the composite would compile and its counter
+    /// would reset every frame.
+    #[test]
+    fn a_composite_can_hold_a_local() {
+        #[derive(Default)]
+        struct Score(u32);
+
+        crate::system_param! {
+            /// A composite with state in it.
+            struct Ctx<'w> {
+                runs: Local<u32>,
+                score: Res<Score>,
+            }
+        }
+
+        fn through_composite(mut ctx: Ctx, mut out: ResMut<Reported>) {
+            *ctx.runs += 1;
+            out.0.push(*ctx.runs + ctx.score.0);
+        }
+
+        let mut w = world();
+        w.insert_resource(Score(100));
+        let mut schedule = Schedule::new();
+        schedule.add_di_system(through_composite.into_config());
+        schedule.build();
+        schedule.run(&mut w, 0.0);
+        schedule.run(&mut w, 0.0);
+        schedule.run(&mut w, 0.0);
+        assert_eq!(
+            w.get_resource::<Reported>().map(|r| r.0.clone()),
+            Some(vec![101, 102, 103]),
+            "the composite's local reset — its `State` is not the tuple of its fields'",
+        );
+    }
 }

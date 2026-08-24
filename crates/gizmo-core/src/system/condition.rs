@@ -57,7 +57,7 @@ where
 }
 
 macro_rules! impl_into_condition {
-    ($($P:ident),+) => {
+    ($($P:ident $s:ident),+) => {
         #[allow(non_snake_case)]
         impl<F, $($P),+> IntoCondition<($($P,)+)> for F
         where
@@ -75,8 +75,13 @@ macro_rules! impl_into_condition {
             $($P: SystemParam + 'static,)+
         {
             fn into_condition(mut self) -> Box<dyn FnMut(&World) -> bool + Send + Sync> {
+                // A condition's parameters keep state across evaluations exactly as a system's do,
+                // and the closure is the condition's "instance" — so the tuple lives here, one per
+                // `into_condition`, and a `Local` in a condition counts per condition.
+                let mut state = <($($P::State,)+)>::default();
                 Box::new(move |world| {
-                    $(let $P = $P::fetch(world, 0.0).unwrap();)+
+                    let ($($s,)+) = &mut state;
+                    $(let $P = $P::fetch(world, 0.0, $s).unwrap();)+
                     (self)($($P),+)
                 })
             }
@@ -89,12 +94,12 @@ macro_rules! impl_into_condition {
     };
 }
 
-impl_into_condition!(P1);
-impl_into_condition!(P1, P2);
-impl_into_condition!(P1, P2, P3);
-impl_into_condition!(P1, P2, P3, P4);
-impl_into_condition!(P1, P2, P3, P4, P5);
-impl_into_condition!(P1, P2, P3, P4, P5, P6);
+impl_into_condition!(P1 s1);
+impl_into_condition!(P1 s1, P2 s2);
+impl_into_condition!(P1 s1, P2 s2, P3 s3);
+impl_into_condition!(P1 s1, P2 s2, P3 s3, P4 s4);
+impl_into_condition!(P1 s1, P2 s2, P3 s3, P4 s4, P5 s5);
+impl_into_condition!(P1 s1, P2 s2, P3 s3, P4 s4, P5 s5, P6 s6);
 
 // ==============================================================
 // COMBINATORS — AND, OR, NOT over typed conditions

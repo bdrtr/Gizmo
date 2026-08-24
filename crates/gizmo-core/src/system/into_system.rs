@@ -119,7 +119,7 @@ impl<ParamA, SystemA: IntoSystem<ParamA>> SystemExt<ParamA> for SystemA {
 
 /// Generates the IntoSystem implementations for 1-8 parameters.
 macro_rules! impl_into_system {
-    ($($P:ident),+) => {
+    ($($P:ident $s:ident),+) => {
         #[allow(non_snake_case)]
         impl<F, $($P),+> IntoSystem<($($P,)+)> for F
         where
@@ -127,8 +127,12 @@ macro_rules! impl_into_system {
             $($P: SystemParam + 'static,)+
         {
             fn into_system(self) -> Box<dyn System> {
-                struct MultiParamSystem<F, $($P),+> {
+                struct MultiParamSystem<F, $($P: SystemParam),+> {
                     func: F,
+                    /// The parameters' own state, one tuple per BUILT system — which is what makes
+                    /// `Local<T>` per-system rather than per-type. Created with `Default` here,
+                    /// never touched again except by the parameters themselves.
+                    state: ($($P::State,)+),
                     _marker: std::marker::PhantomData<fn() -> ($($P,)+)>,
                 }
 
@@ -138,8 +142,13 @@ macro_rules! impl_into_system {
                     $($P: SystemParam + 'static,)+
                 {
                     fn run(&mut self, world: &World, dt: f32) {
+                        // Split the borrow: the fetched parameters hold `&mut` into `state` for the
+                        // whole body, and `func` needs `&mut` to be called. Destructuring `self` is
+                        // what lets both be live at once.
+                        let Self { func, state, .. } = self;
+                        let ($($s,)+) = state;
                         $(
-                            let $P = match $P::fetch(world, dt) {
+                            let $P = match $P::fetch(world, dt, $s) {
                                 Ok(v) => v,
                                 Err(e) => {
                                     panic!(
@@ -150,7 +159,7 @@ macro_rules! impl_into_system {
                                 }
                             };
                         )+
-                        (self.func)($($P),+);
+                        (func)($($P),+);
                     }
                     fn access_info(&self) -> AccessInfo {
                         let mut info = AccessInfo::new();
@@ -167,6 +176,7 @@ macro_rules! impl_into_system {
                 // Türleri açıkça yazmak belirsizliği kaldırıyor; sınırlar değişmiyor.
                 Box::new(MultiParamSystem::<F, $($P),+> {
                     func: self,
+                    state: Default::default(),
                     _marker: std::marker::PhantomData,
                 })
             }
@@ -174,18 +184,18 @@ macro_rules! impl_into_system {
     };
 }
 
-impl_into_system!(P1);
-impl_into_system!(P1, P2);
-impl_into_system!(P1, P2, P3);
-impl_into_system!(P1, P2, P3, P4);
-impl_into_system!(P1, P2, P3, P4, P5);
-impl_into_system!(P1, P2, P3, P4, P5, P6);
-impl_into_system!(P1, P2, P3, P4, P5, P6, P7);
-impl_into_system!(P1, P2, P3, P4, P5, P6, P7, P8);
-impl_into_system!(P1, P2, P3, P4, P5, P6, P7, P8, P9);
-impl_into_system!(P1, P2, P3, P4, P5, P6, P7, P8, P9, P10);
-impl_into_system!(P1, P2, P3, P4, P5, P6, P7, P8, P9, P10, P11);
-impl_into_system!(P1, P2, P3, P4, P5, P6, P7, P8, P9, P10, P11, P12);
+impl_into_system!(P1 s1);
+impl_into_system!(P1 s1, P2 s2);
+impl_into_system!(P1 s1, P2 s2, P3 s3);
+impl_into_system!(P1 s1, P2 s2, P3 s3, P4 s4);
+impl_into_system!(P1 s1, P2 s2, P3 s3, P4 s4, P5 s5);
+impl_into_system!(P1 s1, P2 s2, P3 s3, P4 s4, P5 s5, P6 s6);
+impl_into_system!(P1 s1, P2 s2, P3 s3, P4 s4, P5 s5, P6 s6, P7 s7);
+impl_into_system!(P1 s1, P2 s2, P3 s3, P4 s4, P5 s5, P6 s6, P7 s7, P8 s8);
+impl_into_system!(P1 s1, P2 s2, P3 s3, P4 s4, P5 s5, P6 s6, P7 s7, P8 s8, P9 s9);
+impl_into_system!(P1 s1, P2 s2, P3 s3, P4 s4, P5 s5, P6 s6, P7 s7, P8 s8, P9 s9, P10 s10);
+impl_into_system!(P1 s1, P2 s2, P3 s3, P4 s4, P5 s5, P6 s6, P7 s7, P8 s8, P9 s9, P10 s10, P11 s11);
+impl_into_system!(P1 s1, P2 s2, P3 s3, P4 s4, P5 s5, P6 s6, P7 s7, P8 s8, P9 s9, P10 s10, P11 s11, P12 s12);
 
 // Func returning &World and using f32 but acts as an Exclusive Barrier!
 impl<F> System for F

@@ -249,7 +249,7 @@ pub fn physics_fracture_system(world: &World, dt: f32) {
         }
     };
 
-    let mut commands = match Commands::fetch(world, dt) {
+    let mut commands = match Commands::fetch_stateless(world, dt) {
         Ok(c) => c,
         // Commands are the ECS deferred-op channel; without them every fracture spawn is
         // silently dropped — a hidden failure worth surfacing (debug: infra-level).
@@ -565,7 +565,7 @@ pub fn physics_explosion_system(world: &World, dt: f32) {
     use gizmo_core::commands::Commands;
     use gizmo_core::system::SystemParam;
 
-    let mut commands = match Commands::fetch(world, dt) {
+    let mut commands = match Commands::fetch_stateless(world, dt) {
         Ok(c) => c,
         // Without Commands the explosion despawns/impulses can't be issued — surface it.
         Err(e) => {

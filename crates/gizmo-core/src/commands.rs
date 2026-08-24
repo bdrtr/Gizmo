@@ -113,13 +113,15 @@ impl crate::system::sealed::Sealed for Commands<'static> {}
 impl SystemParam for Commands<'static> {
     type Item<'w> = Commands<'w>;
 
+    type State = ();
     fn fetch<'w>(
         world: &'w World,
         dt: f32,
+        _state: &'w mut (),
     ) -> Result<Self::Item<'w>, crate::system::SystemParamFetchError> {
-        let queue = <Res<'static, CommandQueue> as SystemParam>::fetch(world, dt)?;
+        let queue = <Res<'static, CommandQueue> as SystemParam>::fetch_stateless(world, dt)?;
         let entities =
-            <Res<'static, crate::entity::allocator::Entities> as SystemParam>::fetch(world, dt)?;
+            <Res<'static, crate::entity::allocator::Entities> as SystemParam>::fetch_stateless(world, dt)?;
         Ok(Commands { queue, entities })
     }
 
@@ -317,7 +319,7 @@ mod tests {
 
         // Use a standard (&World, f32) system to access query and manually fetch Commands
         schedule.add_system(|world: &World, dt: f32| {
-            let mut commands = Commands::fetch(world, dt).unwrap();
+            let mut commands = Commands::fetch_stateless(world, dt).unwrap();
             if let Some(q) = world.query::<&ComponentA>() {
                 for (id, c) in q.iter() {
                     if c.0 == 10 {
@@ -348,7 +350,7 @@ mod tests {
         let mut schedule = Schedule::new();
 
         schedule.add_system(|world: &World, dt: f32| {
-            let mut commands = Commands::fetch(world, dt).unwrap();
+            let mut commands = Commands::fetch_stateless(world, dt).unwrap();
             if let Some(q) = world.query::<&ComponentA>() {
                 for (id, _) in q.iter() {
                     commands.entity(Entity::new(id, 0)).remove::<ComponentA>();
