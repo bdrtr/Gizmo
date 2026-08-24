@@ -356,7 +356,7 @@ Measured in `ecs_extension_points`. Four traits are sealed and cannot be impleme
 
 | Trait | Consequence |
 |---|---|
-| `SystemParam` | A *primitive* parameter still cannot be written. Six impls now: `Res<T>`, `ResMut<T>`, `f32` (dt), `Query<Q>`, `Option<P>`, and anything `system_param!` declares — the last being a **composite**, so grouping existing parameters no longer needs the seal opened |
+| `SystemParam` | A *primitive* parameter still cannot be written. **Eight** impls (counted 2026-08-24; this line said six and omitted `Commands`, `EventReader` and `EventWriter`): `Res<T>`, `ResMut<T>`, `f32` (dt), `Query<Q>`, `Option<P>`, `Commands`, `EventReader<T>`, `EventWriter<T>` — plus anything `system_param!` declares, which is a **composite**, so grouping existing parameters no longer needs the seal opened. `fetch` is static, which is what rules out a `Local<T>`; see C1 |
 | `WorldQuery` | No derived query operand |
 | `ReadOnlyQuery` | — |
 | `FetchComponent` | No custom fetch |
@@ -393,7 +393,7 @@ borrow conflict still panics, because it is a scheduling bug rather than a state
 
 | Missing | Effect | Measured in |
 |---|---|---|
-| `Local<T>` system param | Per-system state must become a world resource, so it is visible to every other system and to the scheduler's conflict analysis | `ecs_guide` |
+| `Local<T>` system param | Per-system state must become a world resource, so it is visible to every other system and to the scheduler's conflict analysis. **Priced 2026-08-24, and it is not the small item §E filed it under.** `SystemParam::fetch(world, dt)` is a *static* function: it is handed no per-system identity, so `Local<T>` cannot be added as a ninth impl the way `Option<P>` was — there is nowhere for the value to live. Making it possible means the trait grows a per-system state slot (`type State` + `fetch(.., &mut Self::State)`), and that reaches **eight** `SystemParam` impls, the `system_param!` macro (whose expansion lives in *downstream* crates, so the signature change is breaking for anyone who used it), the 1..12 `IntoSystem` macros, the 1..6 `IntoCondition` macros, and the three files outside `gizmo-core` that call `fetch` directly. Doable, but it is a change to the most load-bearing part of the ECS and wants its own commit and its own soak | `ecs_guide` |
 | `On<Remove, T>` / `On<Replace, T>` dispatch | The markers exist; `observer.rs` says there is "no dispatch path yet". Removal is observable only through a raw `RemoveHook` | `removal_detection`, `observers` |
 | Global (non-entity) observers | `add_observer` is `On<Insert, T>` only; `observe` needs a target entity. An untargeted event has no counterpart | `observers` |
 | Run conditions on observers | An observer cannot be gated | `observers` |
@@ -415,7 +415,7 @@ borrow conflict still panics, because it is a scheduling bug rather than a state
 | A user post-pass that reads the frame | `set_render` really does let a game add its own full-screen pass (measured: 38.67 % of pixels, and the untouched rows stay bit-identical, so `LoadOp::Load` preserves the engine's frame). The *surface* has no `TEXTURE_BINDING`, so a pass cannot sample the swapchain — but it does not have to: `PostProcessState::hdr_texture` is `TEXTURE_BINDING | COPY_SRC` and its texture, view and bind group are public, which is the frame the chain itself reads. A user FXAA or radial blur is writable through it; what is missing is a **compute reduction**, priced at 10 ms a CPU readback in `auto_exposure` | `post_processing`, `auto_exposure` |
 | Fallible system params | A parameter that cannot be fetched **panics** (measured: `❌ FATAL ECS ERROR ❌`). That is deliberate — the message says so. The only guard is `run_if`, measured working (guarded system ran 0 times, no panic). Cost: the system does not run at all, so there is no `else` branch | `fallible_params`, `error_handling` |
 | Systems returning `Result`, `?`, an error handler | None of the three exist. Business-logic errors must be written to a resource | `error_handling` |
-| Default query filters | There is no way to add an implicit filter to every query. This is the whole of "entity disabling": the marker component is trivial, the implicit filter is the feature. Measured cost of forgetting it once: **543 extra updates over 180 frames** | `entity_disabling` |
+| Default query filters | There is no way to add an implicit filter to every query. This is the whole of "entity disabling": the marker component is trivial, the implicit filter is the feature. Measured cost of forgetting it once: **543 extra updates over 180 frames**. **Also priced 2026-08-24**: the filter has to be consulted at every entry point that can yield an entity — seven of them across `query/` (`iter`, `iter_mut`, `get`, `get_mut`, `contains`, `count`, `iter_combinations`) — and each has to be able to *opt out*, or the systems that manage the disabled entities cannot see them. So it is two features, not one: a world-level filter and a per-query escape hatch, the second being what `docs/API_DEPTH.md` would insist on. Larger than the rest of C1 combined | `entity_disabling` |
 | Custom relationships | No relationship trait or derive; only the fixed `Parent`/`Children`. A reverse index can be hand-built from hooks — but see C3 for the hole that leaves | `relationships` |
 | Observer propagation control | Bubbling works (measured `[4, 3, 2, 1, 0]` from leaf to root), but **no listener can cancel the walk** — measured 2 more links visited after one tried — and the path is always the `Parent` chain | `observer_propagation` |
 
@@ -624,9 +624,20 @@ and `emissive` (item 4, the only undocumented one). No further silent fields.
    What remains in B is the narrower end of each table — luminance-Reinhard and the film-emulation
    curves, SSR's step exponent and refinement passes — none of which is code that exists and is
    unexposed; they were never written.
-3. **`Visibility`, `Local<T>`, `or_else`, default query filters (C).** Small, self-contained, and
-   each removes a recurring papercut. (`Transform`'s direction helpers were the first of this group
-   and are done.)
+3. **~~`Visibility`~~, `Local<T>`, ~~`or_else`~~, default query filters (C).** Filed as "small,
+   self-contained, each removes a recurring papercut". **Half of that held.** (`Transform`'s
+   direction helpers were the first of this group and are done.)
+
+   - ~~**`or_else`**~~ **DONE 2026-08-24** — `or`/`and`/`not` on the typed path, so a combined
+     condition keeps its access declaration. Building them found that the typed path had never been
+     *callable* with a parameter closure; see C1.
+   - ~~**`Visibility`**~~ **The entry was wrong.** `IsHidden` was already the engine's hide, on both
+     paths since 2026-08-19, and already a full one. What was missing was inheritance, and that
+     landed 2026-08-24. See C1 for the measurements that corrected it.
+   - **`Local<T>`** and **default query filters** are the two that were misfiled: both are changes
+     to the core of the ECS rather than papercuts, and C1 now carries what each would cost. Neither
+     is blocked — they are simply not one-sitting items, and reading §E as though they were is how
+     one of them gets started and abandoned.
 4. **Extrusion machinery (A4).** One feature, 15 shapes.
 5. ~~**User materials (A3).**~~ **DONE 2026-08-23** — `MaterialType::Custom(MaterialId)`,
    forward-only. The G-buffer budget it was said to depend on settled the question instead of
