@@ -18,22 +18,29 @@
 //! dıştaki önce değerlendirilir ve hepsinin geçmesi gerekir — yani art arda yazılan koşullar
 //! **VE**'lenir.
 //!
-//! **2. VEYA için birleştirici YOK.** Gizmo'da `or_else` yok; iki koşulun VEYA'sı isteniyorsa
-//! **tek bir kapanışın içinde** yazılır. Demo bunu [`either`] yardımcısıyla gösteriyor — üç
-//! satır, ve motorun eksiği olarak duruyor.
+//! **2. VEYA, VE ve DEĞİL birleştiricileri VAR (2026-08-24).** `or` / `and` / `not`, ve önemli
+//! olan tipli olmaları: bu demo eskiden VEYA'yı tek bir kapanışın içine yazıyordu ve bunun bir
+//! bedeli vardı (aşağıda). Sol küp artık `or(...)` kullanıyor ve **paralel kalıyor**.
 //!
 //! **3. Kapanış biçiminin bir bedeli var, ve motor onu yazıyor.** `run_if(|world| …)` koşulun
 //! neye dokunduğunu zamanlayıcıya söyleyemez, bu yüzden sarmalanan sistem **exclusive** olur:
-//! kendi grubunda tek başına koşar. Paralel kalması istenen bir koşul için tipli yol var
-//! (`SystemExtRunIf::run_if_sys` / `IntoCondition`), o erişimi çıkarabiliyor. Bu demo okunurluk
-//! için kapanış biçimini kullanıyor ve bedeli burada söylüyor.
+//! kendi grubunda tek başına koşar. Tipli yol (`run_if_sys` + `IntoCondition`) erişimi
+//! çıkarabiliyor, yani sistem kendi grubunu işgal etmiyor. Demo ikisini yan yana kullanıyor:
+//! sol ve sağ küp tipli, orta küp kapanış biçiminde — kasten, bedeli görünür kalsın diye.
+//!
+//! **Ve tipli yol 2026-08-24'e kadar parametreli bir kapanışla ÇAĞRILAMIYORDU.** `IntoCondition`
+//! yalnız `FnMut(P::Item<'_>) -> bool` ile sınırlıydı; `P::Item<'_>` geri çalıştırılamayan bir
+//! izdüşüm olduğu için derleyici `|s: Res<Score>|`'dan `P1`'i çıkaramıyordu ve her çağrı
+//! `E0283` veriyordu. `IntoSystem`'in baştan beri taşıdığı ikinci `FnMut` sınırı eklendi.
 //!
 //! ## Kontroller
 //!   * **Space** ya da **sol tık** — sayacı artır · **Sağ-tık + fare / WASDQE** — kamera
 
 use gizmo::core::input::Input;
 use gizmo::core::query::{Mut, Query, With};
-use gizmo::core::system::{IntoSystemConfig, Phase, Res, ResMut};
+use gizmo::core::system::{
+    and, not, or, IntoCondition, IntoSystem, IntoSystemConfig, Phase, Res, ResMut, SystemExtRunIf,
+};
 use gizmo::core::World;
 use gizmo::prelude::*;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
@@ -112,25 +119,31 @@ fn main() {
         })
         // Sayacı artıran sistemin kendi kapısı yok — girdiyi o okuyor.
         .add_update_system(count_input.in_phase(Phase::Update))
-        // VEYA: motorda birleştirici olmadığı için tek kapanışta.
+        // VEYA — TİPLİ yol: `or` iki koşulun erişimini birleştirip zamanlayıcıya veriyor, yani
+        // sistem exclusive olmuyor. Kısa devre: Space basılıysa fare hiç okunmuyor.
         .add_update_system(
             grow_with_counter
-                .in_phase(Phase::Update)
-                .run_if(either(space_is_down, left_click_is_down)),
+                .into_system()
+                .run_if_sys(or(space_down, left_click_down))
+                .into_config()
+                .in_phase(Phase::Update),
         )
-        // VE: iki `run_if` art arda — ikincisi birincinin içine sarılır.
+        // VE — KAPANIŞ biçimi, kasten: art arda iki `run_if` iç içe geçiyor ve sistemi exclusive
+        // yapıyor. Bedeli görünür kalsın diye burada bırakıldı.
         .add_update_system(
             spin_on_change
                 .in_phase(Phase::Update)
                 .run_if(counter_exists)
                 .run_if(counter_changed_recently),
         )
-        // Zaman penceresi: `time_passed(2)` VE `not(time_passed(4))`.
+        // Zaman penceresi — TİPLİ: `and(2 sn geçti, not(4 sn geçti))`. Eskiden art arda iki
+        // `run_if` idi; `not` artık motorun.
         .add_update_system(
             show_in_window
-                .in_phase(Phase::Update)
-                .run_if(time_passed(2.0))
-                .run_if(not(time_passed(4.0))),
+                .into_system()
+                .run_if_sys(and(after(2.0), not(after(4.0))))
+                .into_config()
+                .in_phase(Phase::Update),
         )
         .set_ui(|world, _state, ctx| {
             let counter = world.get_resource::<InputCounter>().map(|c| *c).unwrap_or_default();
@@ -147,8 +160,8 @@ fn main() {
                     ui.label(format!("orta küp (sayaç var VE değişti): {}", mark(ran.spin)));
                     ui.label(format!("sağ küp  (2 sn sonra VE 4 sn öncesi): {}", mark(ran.window)));
                     ui.separator();
-                    ui.label("kapanış biçimi sistemi exclusive yapar;");
-                    ui.label("paralel kalması için tipli run_if_sys yolu var.");
+                    ui.label("sol/sağ küp: tipli or/and/not — paralel kalır.");
+                    ui.label("orta küp: kapanış biçimi — kendi grubunda tek başına.");
                 });
         })
         .run()
@@ -173,45 +186,28 @@ fn counter_changed_recently(world: &World) -> bool {
     counter.value > 0 && time.frame().saturating_sub(counter.changed_frame) < 30
 }
 
-/// Space basılı mı.
-fn space_is_down(world: &World) -> bool {
-    world
-        .get_resource::<Input>()
-        .is_some_and(|input| input.is_key_pressed(gizmo::winit::keyboard::KeyCode::Space as u32))
-}
-
-/// Sol tık basılı mı.
-fn left_click_is_down(world: &World) -> bool {
-    world
-        .get_resource::<Input>()
-        .is_some_and(|input| input.is_mouse_button_pressed(0))
-}
-
-/// **VEYA birleştiricisi — motorda olmadığı için burada.**
+/// Space basılı mı — TİPLİ koşul: aldığı `Res<Input>` zamanlayıcıya bir OKUMA olarak bildiriliyor.
 ///
-/// İki `run_if` VE'lendiği için VEYA tek bir kapanışta ifade edilmeli. Kısa devre Rust'ın
-/// `||`'ından geliyor: ilki doğruysa ikinci hiç çağrılmaz.
-fn either(
-    mut a: impl FnMut(&World) -> bool + Send + Sync + 'static,
-    mut b: impl FnMut(&World) -> bool + Send + Sync + 'static,
-) -> impl FnMut(&World) -> bool + Send + Sync + 'static {
-    move |world| a(world) || b(world)
+/// `&World` alan biçimden tek farkı bu, ve fark her şey: kapanış biçiminde zamanlayıcı koşulun
+/// `Input`'a dokunduğunu bilemez, o yüzden sistemi kendi grubuna alır.
+fn space_down(input: Res<Input>) -> bool {
+    input.is_key_pressed(gizmo::winit::keyboard::KeyCode::Space as u32)
 }
 
-/// Bir koşulu tersine çevirir.
-fn not(
-    mut condition: impl FnMut(&World) -> bool + Send + Sync + 'static,
-) -> impl FnMut(&World) -> bool + Send + Sync + 'static {
-    move |world| !condition(world)
+/// Sol tık basılı mı — aynı biçim.
+fn left_click_down(input: Res<Input>) -> bool {
+    input.is_mouse_button_pressed(0)
 }
 
-/// `time_passed(secs)` üreticisi: uygulama başlayalı `secs` saniye geçti mi.
-fn time_passed(secs: f64) -> impl FnMut(&World) -> bool + Send + Sync + 'static {
-    move |world| {
-        world
-            .get_resource::<Time>()
-            .is_some_and(|time| time.elapsed() >= secs)
-    }
+/// `after(secs)`: uygulama başlayalı `secs` saniye geçti mi, tipli biçimde.
+///
+/// Dönüş tipi `impl IntoCondition<...>`, `impl FnMut(...)` DEĞİL — ve bu bir üslup tercihi değil.
+/// `impl FnMut(Res<Time>) -> bool` yazıldığında `IntoCondition`'ın ihtiyaç duyduğu ikinci
+/// `FnMut(P)` sınırı opak tipin arkasında kalıyor ve motor koşulu tanımıyor. Koşul ÜRETEN her
+/// fonksiyonun böyle yazılması gerekiyor, ve parametre listesi `'static` ile yazılıyor
+/// (`Res<'static, Time>`) çünkü `SystemParam`'ın `'static` yazımı o.
+fn after(secs: f64) -> impl IntoCondition<(Res<'static, Time>,)> {
+    move |time: Res<Time>| time.elapsed() >= secs
 }
 
 // ── Sistemler ───────────────────────────────────────────────────────────────────────────────

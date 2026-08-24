@@ -50,6 +50,32 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Run conditions combine: `or`, `and`, `not` — and the typed path could not be called at all.**
+  Repeated `run_if` already ANDs (each call wraps the previous), but an OR had to be written inside
+  one `run_if(|world| …)` closure, and that form is opaque: the scheduler cannot see what the
+  predicate touches, so it marks the system **exclusive** and runs it alone in its batch. That was
+  the cost, and it is now measured rather than asserted — a typed `or` and an unrelated system land
+  in **1** batch; the same condition as a closure gives **2**.
+
+  The combinators are typed, so the combined access reaches the scheduler from both sides: a system
+  guarded by `or(reads Score, reads Paused)` is kept out of a batch with a writer of *either*. The
+  union is declared even though `or` short-circuits — batches are decided before the step, so
+  "might read" has to mean "reads".
+
+  **Building them found that the typed path had never been usable.** `IntoCondition` was bounded
+  only on `FnMut(P::Item<'_>) -> bool`, and `P::Item<'_>` is a projection the compiler cannot run
+  backwards: given `|s: Res<Score>| …` it could not work out that `P1` is `Res<'static, Score>`, so
+  every call was `E0283 type annotations needed` with no annotation a caller could write. The
+  parallelisable half of run conditions existed, was documented as the way to keep a system out of
+  its own batch, and could not be reached with anything taking a parameter. Fixed by the second
+  `FnMut` bound that `IntoSystem` has carried all along.
+
+  A consequence worth knowing before hitting it: a function that *returns* a condition must be
+  written `-> impl IntoCondition<(Res<'static, T>,)>`, not `-> impl FnMut(Res<T>) -> bool`, or the
+  second bound disappears behind the opaque type. Both `IntoCondition`'s docs and the
+  `run_conditions` demo say so; the demo now drives two of its three cubes through the typed path
+  and deliberately leaves the third on the closure form so the cost stays visible.
+
 - **`gizmo-ui` draws.** The crate computed flexbox boxes and hover state from the day it was
   written and emitted nothing: its own docs said *"this crate emits no vertices and no draw calls"*
   and *"`BackgroundColor` is written and never read"*. Both were true, and both are now false.
