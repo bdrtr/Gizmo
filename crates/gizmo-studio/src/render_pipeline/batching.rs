@@ -20,6 +20,10 @@ pub(super) type BatchKey = (
     bool, // is_grid
     bool, // is_unlit
     bool, // is_backdrop
+    // Water. In the key for a sharper version of the reason above: water and unlit both route
+    // forward, and an untextured plane of each shares the cached white-texture bind group, so
+    // without this the two batches have an identical key and one draws with the other's pipeline.
+    bool, // is_water
     // Editor furniture (`EditorOnly`) is keyed apart for the same reason as the routing flags,
     // and one more: the game view skips these batches, so a light icon sharing a batch with a
     // scene mesh would drag the scene mesh out of the game picture with it.
@@ -56,6 +60,9 @@ pub(super) struct BatchData {
     /// A painted backdrop (`gizmo_renderer::backdrop`): drawn FIRST, from the mesh's own
     /// texture and vertex colour, locked to the camera and writing no depth.
     pub(super) is_backdrop: bool,
+    /// The Gerstner water surface (`gizmo_renderer::routing::Routing::is_water`): its own forward
+    /// pipeline, whose vertex stage displaces the mesh. Every other draw loop must skip it.
+    pub(super) is_water: bool,
     /// The editor's own furniture — see [`gizmo::renderer::components::EditorOnly`]. Drawn into
     /// the scene view, never into the game view.
     pub(super) is_editor_only: bool,
@@ -96,6 +103,8 @@ pub(super) struct FlatBatchData {
     /// See [`BatchData::is_backdrop`]. Every other draw loop in `passes.rs` must skip these;
     /// the backdrop loop draws them before anything else in the frame.
     pub(super) is_backdrop: bool,
+    /// See [`BatchData::is_water`].
+    pub(super) is_water: bool,
     /// See [`BatchData::is_editor_only`].
     pub(super) is_editor_only: bool,
     /// See [`BatchData::casts_shadows`].
@@ -108,8 +117,8 @@ impl FlatBatchData {
     /// Binds this batch's geometry and issues the draw call for `instances`.
     ///
     /// The studio's counterpart to the engine's `DrawItem::record_draw`, and it exists for the
-    /// same reason: the passes in this file have six draw sites (shadow, opaque, double-sided,
-    /// transparent, grid, skybox), and drawing indexed at one and non-indexed at another
+    /// same reason: the passes in this file have seven draw sites (shadow, opaque, double-sided,
+    /// water, transparent, grid, skybox), and drawing indexed at one and non-indexed at another
     /// produces an inconsistent frame.
     pub(super) fn record_draw(
         &self,

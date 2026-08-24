@@ -505,6 +505,7 @@ impl Renderer {
             sky_pipeline: scene.sky_pipeline,
             backdrop_pipeline: scene.backdrop_pipeline,
             water_pipeline: scene.water_pipeline,
+            water_double_sided_pipeline: scene.water_double_sided_pipeline,
             shadow_pipeline: scene.shadow_pipeline,
             transparent_pipeline: scene.transparent_pipeline,
             grid_pipeline: scene.grid_pipeline,

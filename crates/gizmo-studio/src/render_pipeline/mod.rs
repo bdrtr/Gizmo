@@ -348,6 +348,12 @@ pub fn execute_render_pipeline(
                 let is_grid = routing.is_grid;
                 let is_unlit = routing.unlit_material;
                 let is_backdrop = routing.is_backdrop;
+                // Wired 2026-08-24 alongside the game path. Before it, `route(Water)` returned
+                // `route(Pbr)`'s answer and this viewport shaded water as PBR by accident; once
+                // the game path started routing it forward, the same material's instance flag
+                // became 1.0 — which `shader.wgsl` reads as "skip the lights" — so leaving this
+                // loop alone would have turned editor water FLAT rather than merely different.
+                let is_water = routing.is_water;
                 // Editor furniture, so the game view can leave it out. Not derivable from the
                 // material: a light icon is an ordinary unlit cube.
                 let is_editor_only = editor_only.get(e).is_some();
@@ -357,7 +363,9 @@ pub fn execute_render_pipeline(
                 let casts_shadows = shadows.casts();
                 let visible_in_camera = shadows.visible();
 
-                let batches = if mat.is_transparent {
+                // Water goes in the opaque map whatever its alpha: it has its own pass with its
+                // own pipeline, and the transparent pass would draw it with `shader.wgsl`.
+                let batches = if mat.is_transparent && !is_water {
                     &mut *transparent_batches
                 } else if mat.is_double_sided {
                     &mut *opaque_double_sided_batches
@@ -374,6 +382,7 @@ pub fn execute_render_pipeline(
                         is_grid,
                         is_unlit,
                         is_backdrop,
+                        is_water,
                         is_editor_only,
                         casts_shadows,
                         visible_in_camera,
@@ -396,6 +405,7 @@ pub fn execute_render_pipeline(
                         is_grid,
                         is_unlit,
                         is_backdrop,
+                        is_water,
                         is_editor_only,
                         casts_shadows,
                         visible_in_camera,
@@ -463,6 +473,7 @@ pub fn execute_render_pipeline(
                         is_grid: batch.is_grid,
                         is_unlit: batch.is_unlit,
                         is_backdrop: batch.is_backdrop,
+                        is_water: batch.is_water,
                         is_editor_only: batch.is_editor_only,
                         casts_shadows: batch.casts_shadows,
                         visible_in_camera: batch.visible_in_camera,

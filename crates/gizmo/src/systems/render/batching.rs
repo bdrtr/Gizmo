@@ -160,6 +160,10 @@ pub struct DrawItem {
     /// A material the game registered. `Some(id)` sends this batch to
     /// `MaterialRegistry`'s pipeline instead of any of the engine's.
     pub(super) custom: Option<gizmo_renderer::custom_material::MaterialId>,
+    /// The Gerstner water surface: `water.wgsl` and the water pipeline, chosen in
+    /// `passes::forward`. Rides `unlit` out of the deferred and shadow passes like every other
+    /// forward type, and this flag is what says *which* forward pipeline.
+    pub(super) is_water: bool,
     /// The material asked for both faces (`Material::with_double_sided`). Selects the cull-off
     /// variant of whichever pipeline this item lands in; see `passes::geometry`.
     pub(super) is_double_sided: bool,
@@ -290,6 +294,11 @@ pub(crate) struct BatchKey {
     /// and more sharply: two custom materials sharing a mesh and a texture bind group differ *only*
     /// here, so without this they would merge and one of the two pipelines would draw both.
     custom: Option<gizmo_renderer::custom_material::MaterialId>,
+    /// Water, for the same sharp reason. Water and unlit both set `unlit` (= `skips_deferred`),
+    /// so a water material and an unlit one sharing a mesh and a cached texture bind group have
+    /// an otherwise **identical** key — and the batch would inherit whichever the ECS iteration
+    /// reached first, drawing one of the two with the other's pipeline.
+    is_water: bool,
 }
 
 pub(crate) struct BatchData {
@@ -307,6 +316,7 @@ pub(crate) struct BatchData {
     casts_shadows: bool,
     visible_in_camera: bool,
     custom: Option<gizmo_renderer::custom_material::MaterialId>,
+    is_water: bool,
     skeleton_bind_group: Option<std::sync::Arc<wgpu::BindGroup>>,
     is_transparent: bool,
     instances: Vec<crate::renderer::gpu_types::InstanceRaw>,
@@ -512,7 +522,7 @@ pub(super) fn collect_draw_items(
                 // because this loop and `gizmo-studio`'s each used to decide it with a wildcard
                 // match and the wildcards disagreed: `BakedLit` was routed here and defaulted
                 // there, `Grid` the other way round. `MaterialType` is `#[non_exhaustive]`, so a
-                // wildcard is obligatory *here* and a ninth variant could never be a compile error
+                // wildcard is obligatory *here* and a tenth variant could never be a compile error
                 // in this file — which is why the decision moved to the crate that defines it.
                 let is_skybox = routing.is_skybox;
                 let baked_lit = routing.baked_lit;
@@ -522,6 +532,8 @@ pub(super) fn collect_draw_items(
                 // same flag, and that is what keeps it out of the z-prepass, the G-buffer and both
                 // shadow passes without any further edit to them.
                 let unlit = routing.skips_deferred;
+                // Which forward pipeline, once `unlit` has said "not the deferred one".
+                let is_water = routing.is_water;
                 let is_transparent = draws_blended($mat.is_transparent, $mat.albedo.w, $mat.alpha_cutoff);
                 // Honoured by this path since 2026-08-15. `Material::with_double_sided` has been
                 // public all along and only the editor acted on it, so a cloth or a leaf authored
@@ -547,6 +559,7 @@ pub(super) fn collect_draw_items(
                     casts_shadows,
                     visible_in_camera,
                     custom: routing.custom,
+                    is_water,
                 };
 
                 let batch = cache.batches.entry(key).or_insert_with(|| BatchData {
@@ -564,6 +577,7 @@ pub(super) fn collect_draw_items(
                     casts_shadows,
                     visible_in_camera,
                     custom: routing.custom,
+                    is_water,
                     skeleton_bind_group: skel_bg,
                     is_transparent,
                     instances: Vec::new(),
@@ -723,6 +737,7 @@ pub(super) fn collect_draw_items(
                 is_skybox: batch.is_skybox,
                 is_backdrop: batch.is_backdrop,
                 custom: batch.custom,
+                is_water: batch.is_water,
                 is_double_sided: batch.is_double_sided,
                 casts_shadows: batch.casts_shadows,
                 visible_in_camera: batch.visible_in_camera,
@@ -826,6 +841,7 @@ mod batch_key_tests {
             casts_shadows: true,
             visible_in_camera: true,
             custom: None,
+            is_water: false,
         };
         let no_cast = BatchKey { casts_shadows: false, ..base.clone() };
         let shadow_only = BatchKey { visible_in_camera: false, ..base.clone() };
@@ -849,6 +865,7 @@ mod batch_key_tests {
             casts_shadows: true,
             visible_in_camera: true,
             custom: None,
+            is_water: false,
         };
         let transparent = BatchKey {
             is_transparent: true,
@@ -882,6 +899,14 @@ mod batch_key_tests {
         assert_ne!(base, unlit, "PBR and unlit must be separate batches");
         assert_ne!(base, skybox, "PBR and skybox must be separate batches");
         assert_ne!(unlit, backdrop, "unlit and backdrop must be separate batches");
+
+        // Water shares `unlit` with a plain unlit material for the same reason a backdrop does —
+        // both mean "not the deferred path" — so these two keys differ in exactly one bool. An
+        // untextured water plane and an untextured unlit one also share the cached white-texture
+        // bind group, which is the shape this whole test is about.
+        let water = BatchKey { unlit: true, is_water: true, ..base.clone() };
+        assert_ne!(unlit, water, "unlit and water must be separate batches");
+        assert_ne!(backdrop, water, "backdrop and water must be separate batches");
 
         // Identical routing + shared texture/mesh → same batch (instancing preserved).
         assert_eq!(base, base.clone(), "identical materials must still batch together");

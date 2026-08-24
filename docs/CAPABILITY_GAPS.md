@@ -568,7 +568,9 @@ and `emissive` (item 4, the only undocumented one). No further silent fields.
    frame 90 % slower on a scene with shadow cascades, because their union culls nothing). It is
    wired as an opt-in resource with its conditions documented. **F2 landed 2026-08-24** — the
    probe grid now reaches the deferred lighting pass, measured against the CPU path at correlation
-   0.99887. What remains here is the
+   0.99887. **F3 landed 2026-08-24 too** — water draws through its own forward pipeline, and the
+   line that kept it dead was `route(Water)` returning exactly `route(Pbr)`'s answer. That closes
+   section F entirely. What remains here is the
    **post-process knobs** (B), which are uniform fields and shader constants that exist but are
    not exposed. **Volumetric's six left B on 2026-08-23** (`VolumetricParams`) and **SSR's eight on
    2026-08-24** (`SsrParams`); all five screen-space effects also gained a reversible `enabled`.
@@ -588,7 +590,7 @@ and `emissive` (item 4, the only undocumented one). No further silent fields.
 
 ---
 
-## F. Three subsystems wired to nothing
+## F. Three subsystems wired to nothing — all three closed 2026-08-24
 
 ### F1. The spatial index — wired opt-in, and the cascades decide whether it helps
 
@@ -703,17 +705,74 @@ its magnitude).
 Still missing: a **component**. The grid is uploaded by hand; there is no `IrradianceVolume` an
 entity carries and no automatic selection between overlapping grids.
 
-### F3. The water material route
+### F3. The water material route — wired 2026-08-24
 
-`water.wgsl` is written, `water_pipeline` compiles and is stored in both `renderer.scene` and
-`Renderer`, and **no pass ever binds it**. `MaterialType::Water` appears only in tests, benches and
-routing tables; no game code produces it and no draw path selects it. Verified 2026-08-23 in
+`water.wgsl` was written, `water_pipeline` compiled and was stored in both `renderer.scene` and
+`Renderer`, and **no pass ever bound it**. `MaterialType::Water` appeared only in tests, benches and
+routing tables; no game code produced it and no draw path selected it. Verified 2026-08-23 in
 `transmission`.
+
+The cause was one line of `routing.rs`: `MaterialType::Water` returned **exactly** `Pbr`'s answer —
+instance flag `0.0`, `skips_deferred` false. So a water material was a PBR material that happened to
+carry a different name, and the pipeline named after it compiled every run for nothing.
+
+**What wiring it required.** `Routing::is_water`, and forward-only. Not for the reason the other
+forward types are forward: water displaces its own vertices in the vertex stage, so a G-buffer
+filled by a shader that does not would record the *flat plane's* depth and normals while the visible
+surface is somewhere else — the difference between the passes is geometry, not shading. That also
+takes it out of the z-prepass and both shadow passes, which is the same exemption `unlit` already
+carries. `is_water` then joins `BatchKey`, because water and unlit both set `unlit` and an
+untextured plane of each shares the cached white-texture bind group: without it the two batches
+have an identical key and one of them draws with the other's pipeline.
+
+| | measured |
+|---|---|
+| same surface, `with_water` vs `with_pbr` at the same albedo/roughness/metallic | **10 568 / 16 384** pixels differ |
+| the same comparison with the `Water` arm of `route` put back | **0** — bit-identical frames |
+| two seconds of elapsed time, water vs water | **3 730 / 16 384** pixels differ |
+| the same comparison with the shader's old clock restored | **0** |
+
+**Wiring it uncovered a second dead thing inside the first.** `water.wgsl` read elapsed time from
+`scene.camera_pos.w` — a slot `frame_uniforms.rs` fills with a constant `1.0` and `gpu_types.rs`
+documents as unused. Time lives in `cascade_params.z`. So even once bound, the ocean would have been
+a *fixed* displaced surface, frozen at t = 1.0, which is entirely plausible in a still frame and
+invisible to any single-frame test. Only comparing two times catches it, which is why
+`the_water_surface_is_drawn_by_its_own_pipeline_and_moves` renders three frames rather than two.
+
+**And a third thing the route needed and the engine did not have: geometry.** The displacement is
+per vertex and `AssetManager::create_plane` is four vertices, so a Gerstner ocean built on it is a
+quad with four moving corners. `create_plane_subdivided(size, segments)` is the missing primitive —
+same winding, same normals, same world-unit UVs, checked against `plane_data` exactly at
+`segments = 1`.
+
+**Limits, written down rather than discovered later.** The water pipeline alpha-blends *and* writes
+depth (a surface, not a pane), and it culls back faces — so `Material::with_double_sided` is
+load-bearing here, unlike on the transparent pipeline which is `cull_mode: None` already; the
+`water_double_sided_pipeline` variant exists for the swimmer looking up. Water casts no shadow,
+which also took it out of `classify_visibility_world`'s caster predicate — an off-screen water
+surface was being kept and uploaded for a shadow map nothing writes. It does not refract: the
+Fresnel term adds a sky reflection and the alpha blends, but the scene behind it is not bent, so the
+transmission gap in `demo/src/bin/transmission.rs` is untouched by this.
+
+**The editor path was wired in the same change, and had to be.** `gizmo-studio` picks pipelines in
+its own passes and had no water branch — the same shape as its missing custom-material branch — but
+here silence was not neutral. Water's instance flag went from `0.0` to `1.0`, and `shader.wgsl`
+reads `1.0` as *skip the lights and return the albedo*, so the editor's opaque pass would have
+turned the ocean into a flat rectangle: strictly worse than the accidental PBR it had before. It now
+has its own water pass, and skips water in the opaque, double-sided, transparent and shadow loops.
+
+That test is worth one note, because the obvious version of it passes while broken. Brightness does
+not separate the two states — with the water pass removed the frame's σ was **8.99** against
+**11.62** wired, since post-processing and the editor grid put variation in both. Displacement is
+the one thing only `water.wgsl` does, so the assertion is about *time*: the same editor scene two
+seconds apart differs by **4 633/16 384** pixels wired and **0** without, and a water-free scene is
+carried alongside as the control that shows the clock moves nothing by itself.
 
 ---
 
-These three are the largest ratio of existing work to delivered capability in the engine: all are
-finished, all are tested, and none is plugged in.
+All three are now plugged in — the spatial index opt-in with its conditions, the probe grid into the
+deferred lighting pass, and water into the forward pass. They were the largest ratio of existing
+work to delivered capability in the engine: all finished, all tested, and none reachable.
 
 ---
 

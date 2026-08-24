@@ -43,6 +43,67 @@ impl crate::asset::AssetManager {
         )
     }
 
+    /// The same square, cut into `segments`×`segments` cells. Pure data.
+    ///
+    /// [`plane_data`](Self::plane_data) is four vertices, which is enough for anything that
+    /// shades a flat surface and not enough for anything that *moves* one. `water.wgsl` displaces
+    /// per vertex, so a Gerstner ocean built on the four-vertex plane is a quad with four moving
+    /// corners — the waves are in the shader and there is no geometry for them to happen on.
+    ///
+    /// Winding, normals and the world-unit UVs match `plane_data` exactly, so the two are
+    /// interchangeable everywhere except in how much surface there is to bend.
+    pub(crate) fn plane_subdivided_data(size: f32, segments: u32) -> Vec<Vertex> {
+        let segments = segments.max(1);
+        let half = size / 2.0;
+        let step = size / segments as f32;
+        let def_j = [0; 4];
+        let def_w = [0.0; 4];
+        // UVs are in world units, as in `plane_data`: the corner at −half maps to 0.
+        let vtx = |x: f32, z: f32| Vertex {
+            position: [x, 0.0, z],
+            color: [1.0, 1.0, 1.0, 1.0],
+            normal: [0.0, 1.0, 0.0],
+            tex_coords: [x + half, z + half],
+            joint_indices: def_j,
+            joint_weights: def_w,
+            ..Default::default()
+        };
+
+        let mut vertices = Vec::with_capacity((segments * segments * 6) as usize);
+        for iz in 0..segments {
+            let z0 = -half + iz as f32 * step;
+            let z1 = z0 + step;
+            for ix in 0..segments {
+                let x0 = -half + ix as f32 * step;
+                let x1 = x0 + step;
+                // Same two triangles as `plane_data`, per cell: A→C→B then A→D→C, which is CCW
+                // seen from +Y and therefore visible in the Ccw + back-cull pipelines.
+                vertices.push(vtx(x0, z0));
+                vertices.push(vtx(x1, z1));
+                vertices.push(vtx(x1, z0));
+                vertices.push(vtx(x0, z0));
+                vertices.push(vtx(x0, z1));
+                vertices.push(vtx(x1, z1));
+            }
+        }
+        vertices
+    }
+
+    /// A square in the XZ plane facing up, cut into `segments`×`segments` cells.
+    ///
+    /// Reach for this instead of [`create_plane`](Self::create_plane) when a shader displaces
+    /// vertices — a water surface, a flag, a heat haze. `segments` is clamped to at least 1, at
+    /// which point this *is* `create_plane`.
+    pub fn create_plane_subdivided(device: &wgpu::Device, size: f32, segments: u32) -> Mesh {
+        let vertices = Self::plane_subdivided_data(size, segments);
+        Mesh::new_indexed(
+            device,
+            &vertices,
+            Vec3::ZERO,
+            format!("plane_{size}_{segments}"),
+        )
+    }
+
     /// The vertices of a round disc (a circular base), facing +Y. Pure data.
     pub(crate) fn circle_data(radius: f32, segments: u32) -> Vec<Vertex> {
         let segments = segments.max(3);

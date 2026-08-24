@@ -16,7 +16,7 @@
 //! | kalınlık / soğurma | **yok** (malzemede) |
 //! | kırılma indisi | **yok** |
 //! | speküler renk (F0 tinti) | **yok** — F0 sabit `0.04` |
-//! | `MaterialType::Water` | **var ama ölü** — aşağıda |
+//! | `MaterialType::Water` | **artık canlı** (2026-08-24) — aşağıda |
 //!
 //! `Material`'ın gölgeleme alanları şunlar ve hepsi bu: `roughness`, `metallic`, `anisotropy`,
 //! `clear_coat`, `subsurface`, `alpha_cutoff`, artı `albedo`, `ambient`, `emissive`. Geçirgenlik
@@ -52,14 +52,27 @@
 //! (`kD = (1 - F) * (1 - metallic)`). Demo bunu ölçüyor: metalikliği artırmak yansımayı
 //! renklendiriyor ama nesneyi de karartıyor. İkisi ayrılamıyor.
 //!
-//! ## Üçüncü ölü rota: `MaterialType::Water`
+//! ## Üçüncü ölü rota — 2026-08-24'te bağlandı: `MaterialType::Water`
 //!
-//! `water.wgsl` yazılmış, `water_pipeline` derleniyor, `renderer.scene`'e ve `Renderer`'a
-//! konuyor — ve **hiçbir geçiş onu `set_pipeline` ile bağlamıyor**. `MaterialType::Water` yalnız
-//! testlerde, kıyaslamalarda ve yönlendirme tablolarında geçiyor; hiçbir oyun kodu üretmiyor,
-//! hiçbir çizim yolu seçmiyor. Doğrulandı 2026-08-23.
+//! 2026-08-23'te burada şu yazıyordu: `water.wgsl` yazılmış, `water_pipeline` derleniyor,
+//! `renderer.scene`'e ve `Renderer`'a konuyor — ve **hiçbir geçiş onu `set_pipeline` ile
+//! bağlamıyor**. Doğruydu: `route(Water)` tam olarak `route(Pbr)`'nin cevabını veriyordu, yani
+//! su yüzeyi sıradan ertelenmiş PBR olarak gölgeleniyordu.
 //!
-//! Bu, `gizmo-renderer::gi` ve `gizmo-renderer::visibility`'den sonra **üçüncüsü**.
+//! Artık `Routing::is_water` var, su ileri yola gidiyor (kendi vertex'lerini oynattığı için
+//! G-tamponuna giremez) ve `passes::forward` su boru hattını bağlıyor. Ölçüldü: aynı yüzey su
+//! ve PBR olarak 16 384 pikselin **10 568**'inde farklı, ve yönlendirme geri alınınca fark
+//! **tam sıfır** — iki kare bit-bit aynıydı.
+//!
+//! Bağlarken ikinci bir ölü şey çıktı: gölgelendirici zamanı `camera_pos.w`'den okuyordu, o slot
+//! sabit `1,0`. Dalgalar t = 1,0'da donmuştu. Gerçek zaman `cascade_params.z`; düzeltildi, ve
+//! iki farklı ana bakan iddia geri alınca yine tam sıfır veriyor.
+//!
+//! **Bu boşluğa etkisi yok.** Su boru hattı geçirgenlik yapmıyor: Fresnel'le gökyüzü yansıması
+//! ekliyor ve alfa harmanlıyor, arkasındaki sahneyi kırmıyor. Yukarıdaki dört satır hâlâ **yok**.
+//!
+//! Bu, `gizmo-renderer::gi` ve `gizmo-renderer::visibility`'den sonra bağlanan **üçüncüsü** —
+//! ve üçünün üçü de 2026-08-24'te kapandı.
 //!
 //! ## Ölçüldü — F0'ı oynatmanın tek yolu, iki şeyi birden bozuyor
 //!
@@ -168,8 +181,8 @@ fn main() {
                         ui.label("ve o difüzü de kapatıyor: kD = (1-F)(1-metallic).");
                         ui.separator();
                         ui.colored_label(
-                            gizmo::egui::Color32::from_rgb(230, 160, 80),
-                            "MaterialType::Water: derleniyor, hiç bağlanmıyor",
+                            gizmo::egui::Color32::from_rgb(140, 200, 140),
+                            "MaterialType::Water: 2026-08-24'te bağlandı — ama geçirgen değil",
                         );
                     });
                 });

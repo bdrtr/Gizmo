@@ -63,6 +63,41 @@ mod winding_tests {
         assert_outward("plane", &AssetManager::plane_data(2.0));
     }
 
+    /// The subdivided plane has to face the same way as the four-vertex one at every cell —
+    /// a grid built with one triangle wound the other way loses half its surface to the cull,
+    /// and a displaced ocean is exactly where that would read as "the waves have holes".
+    #[test]
+    fn subdivided_plane_winding_faces_up() {
+        for segments in [1, 2, 5, 16] {
+            let v = AssetManager::plane_subdivided_data(2.0, segments);
+            assert_eq!(
+                v.len(),
+                (segments * segments * 6) as usize,
+                "{segments}² cells should be {} vertices",
+                segments * segments * 6
+            );
+            assert_outward(&format!("plane_subdivided({segments})"), &v);
+        }
+    }
+
+    /// `segments = 1` must reproduce `plane_data` — same corners, same UVs, same order.
+    ///
+    /// Not a stylistic wish: the two are documented as interchangeable, and the one-cell case is
+    /// the only place that claim can be checked exactly rather than by eye.
+    #[test]
+    fn one_segment_is_the_plain_plane() {
+        let plain = AssetManager::plane_data(4.0);
+        let one = AssetManager::plane_subdivided_data(4.0, 1);
+        assert_eq!(one.len(), plain.len());
+        for (a, b) in plain.iter().zip(&one) {
+            assert_eq!(a.position, b.position, "corner order differs");
+            assert_eq!(a.tex_coords, b.tex_coords, "UVs differ");
+            assert_eq!(a.normal, b.normal);
+        }
+        // And zero is clamped to one rather than producing an empty mesh.
+        assert_eq!(AssetManager::plane_subdivided_data(4.0, 0).len(), plain.len());
+    }
+
     #[test]
     fn circle_winding_faces_up() {
         assert_outward("circle", &AssetManager::circle_data(1.0, 16));

@@ -44,8 +44,15 @@ pub struct SceneState {
     /// camera-locked. Unlike `sky_pipeline` it draws the mesh's texture and vertex colour
     /// instead of an invented gradient. See [`crate::backdrop`].
     pub backdrop_pipeline: wgpu::RenderPipeline,
-    /// The animated water surface.
+    /// The animated water surface: `shaders/water.wgsl`, Gerstner displacement in the vertex
+    /// stage and a Fresnel sky term in the fragment stage. Forward-only — the G-buffer is filled
+    /// by a shader that does not displace, so a water surface routed through it would be shaded at
+    /// the flat plane's depth. Selected by [`Routing::is_water`](crate::routing::Routing::is_water).
     pub water_pipeline: wgpu::RenderPipeline,
+    /// The same with culling off, for a water surface marked
+    /// [`double_sided`](crate::components::Material::with_double_sided) — looking up at the
+    /// underside of the ocean is the ordinary case, not the exotic one.
+    pub water_double_sided_pipeline: wgpu::RenderPipeline,
     /// Depth-only, for rendering into the shadow cascades.
     pub shadow_pipeline: wgpu::RenderPipeline,
     /// Line-topology, for wireframe views.
@@ -658,6 +665,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         sky_pipeline: core_pipelines.sky,
         backdrop_pipeline: core_pipelines.backdrop,
         water_pipeline: core_pipelines.water,
+        water_double_sided_pipeline: core_pipelines.water_double_sided,
         transparent_pipeline: core_pipelines.transparent,
         grid_pipeline: core_pipelines.grid,
         shadow_pipeline,
@@ -726,6 +734,7 @@ pub fn rebuild_pipelines(renderer: &mut crate::Renderer) {
     renderer.scene.sky_pipeline = core_pipelines.sky;
     renderer.scene.backdrop_pipeline = core_pipelines.backdrop;
     renderer.scene.water_pipeline = core_pipelines.water;
+    renderer.scene.water_double_sided_pipeline = core_pipelines.water_double_sided;
     renderer.scene.transparent_pipeline = core_pipelines.transparent;
     renderer.scene.grid_pipeline = core_pipelines.grid;
     renderer.scene.shadow_pipeline = shadow_pipeline;

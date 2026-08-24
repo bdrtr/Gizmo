@@ -18,7 +18,7 @@
 //!
 //! `MaterialType` is `#[non_exhaustive]`, so a downstream crate is *obliged* to write a wildcard —
 //! which is exactly why the decision cannot live downstream. Inside this crate an exhaustive match
-//! is legal, so a ninth variant becomes a compile error **here**, once, instead of two silent
+//! is legal, so a tenth variant becomes a compile error **here**, once, instead of two silent
 //! misroutes out there.
 //!
 //! # What it does not do
@@ -56,6 +56,14 @@ pub struct Routing {
     pub is_grid: bool,
     /// A painted backdrop, camera-locked or placed. Mirrors [`crate::backdrop::is_backdrop`].
     pub is_backdrop: bool,
+    /// The Gerstner water surface: `water.wgsl` and the water pipeline.
+    ///
+    /// Forward-only for a reason the other forward types do not share. Water displaces its own
+    /// vertices in the vertex shader, so the G-buffer — filled by a shader that does not — would
+    /// record the flat plane's depth and normals while the visible surface is somewhere else. It
+    /// is not that the fragment shader writes the wrong thing; it is that the *geometry* differs
+    /// between the two passes.
+    pub is_water: bool,
     /// The game's own material, and which one.
     ///
     /// `Some(id)` means the draw loop must fetch the pipeline from
@@ -66,9 +74,9 @@ pub struct Routing {
     pub custom: Option<crate::custom_material::MaterialId>,
     /// Drawn forward rather than through the G-buffer.
     ///
-    /// Skybox, baked-lit, backdrop and unlit all skip the deferred path. They part company in the
-    /// **shadow** pass, where baked-lit casts and the others do not — so this flag is not a licence
-    /// to treat them alike beyond pass selection.
+    /// Skybox, baked-lit, backdrop, unlit and water all skip the deferred path. They part company
+    /// in the **shadow** pass, where baked-lit casts and the others do not — so this flag is not a
+    /// licence to treat them alike beyond pass selection.
     pub skips_deferred: bool,
 }
 
@@ -85,10 +93,21 @@ pub fn route(material_type: MaterialType) -> Routing {
         _ => None,
     };
 
+    // A single-variant test, like `custom` above and unlike the six flags below, several of which
+    // more than one variant sets. Exhaustiveness — the property this module exists for — is carried
+    // by the tuple match below; a tenth variant still fails to compile there, and whoever fixes it
+    // is standing in this function.
+    let is_water = matches!(material_type, MaterialType::Water);
+
     let (instance_flag, unlit_material, baked_lit, is_skybox, is_grid, is_backdrop) =
         match material_type {
             MaterialType::Pbr => (0.0, false, false, false, false, false),
-            MaterialType::Water => (0.0, false, false, false, false, false),
+            // `1.0` is the shared "not deferred PBR" flag, for the same reason `Custom` carries
+            // it: a loop that reads only the flag keeps water out of the G-buffer even before it
+            // learns the water pipeline exists. It was `0.0` until 2026-08-24, which is precisely
+            // how the water route stayed dead — routed as PBR, shaded as PBR, and the pipeline it
+            // was named for compiled every run and was never bound.
+            MaterialType::Water => (1.0, false, false, false, false, false),
             MaterialType::Unlit => (1.0, true, false, false, false, false),
             MaterialType::BakedLit => (1.0, false, true, false, false, false),
             MaterialType::Skybox => (2.0, false, false, true, false, false),
@@ -111,8 +130,14 @@ pub fn route(material_type: MaterialType) -> Routing {
         is_skybox,
         is_grid,
         is_backdrop,
+        is_water,
         custom,
-        skips_deferred: is_skybox || baked_lit || is_backdrop || unlit_material || custom.is_some(),
+        skips_deferred: is_skybox
+            || baked_lit
+            || is_backdrop
+            || unlit_material
+            || is_water
+            || custom.is_some(),
     }
 }
 
@@ -203,6 +228,44 @@ mod tests {
             MaterialType::Grid,
         ] {
             assert_eq!(route(t).custom, None, "{t:?} claimed to be a custom material");
+        }
+    }
+
+    /// Water names its own pipeline, and it is the only variant that does.
+    ///
+    /// The route was written and then routed as PBR: `Water` returned exactly `Pbr`'s answer, so
+    /// `water.wgsl` compiled every run and no pass ever bound it. This test is the fact that
+    /// stopped being true — and `is_water` is deliberately not `unlit_material`, because the
+    /// shadow pass reads that one and water is not a lamp.
+    #[test]
+    fn water_routes_to_its_own_forward_pipeline() {
+        let r = route(MaterialType::Water);
+        assert!(r.is_water);
+        assert!(
+            r.skips_deferred,
+            "water displaces its vertices in its own vertex shader; a G-buffer filled by a shader \
+             that does not would record the flat plane"
+        );
+        assert_eq!(r.instance_flag, 1.0, "the shared 'not deferred PBR' flag");
+        assert_ne!(route(MaterialType::Pbr), r, "Water answered exactly what Pbr answered");
+        assert!(!r.unlit_material && !r.baked_lit && !r.is_skybox && !r.is_grid && !r.is_backdrop);
+        assert_eq!(r.custom, None);
+    }
+
+    /// And nothing else claims to be water.
+    #[test]
+    fn only_water_is_water() {
+        for t in [
+            MaterialType::Pbr,
+            MaterialType::Unlit,
+            MaterialType::BakedLit,
+            MaterialType::Skybox,
+            MaterialType::Backdrop,
+            MaterialType::BackdropPlaced,
+            MaterialType::Grid,
+            MaterialType::Custom(crate::custom_material::MaterialId(0)),
+        ] {
+            assert!(!route(t).is_water, "{t:?} routed to the water pipeline");
         }
     }
 

@@ -12,8 +12,14 @@
 // Idiom notu: varlıklar `world.spawn_bundle((...))` ile tek çağrıda kurulur (spawn+add_component
 // zinciri yok); bakış yönleri `Camera::forward_from`/`right_from` paylaşılan yardımcılarından.
 // Fizik ELLE, sabit-adımla sürülür (PhysicsPlugin YOK) → ömür komponentleri/otomatik schedule
-// yok. Render, gerçek özel iş yaptığından KORUNUR: `gpu_fluid=None` (su shader'ı deferred'da)
+// yok. Render, gerçek özel iş yaptığından KORUNUR: `gpu_fluid=None` (su yüzeyi ayrı bir yol)
 // ve `--shot` headless GPU-readback ekran görüntüsü.
+//
+// 2026-08-24'e kadar bu dosyanın yukarıdaki satırı "su shader'ı deferred'da" diyordu ve yanlıştı:
+// `MaterialType::Water` sıradan ertelenmiş PBR'ye düşüyordu, `water.wgsl` hiç bağlanmıyordu.
+// Artık İLERİ yolda kendi boru hattıyla çiziliyor — ve bu demo dalgaları gerçekten gösteren ilk
+// yer, çünkü Gerstner öteleme vertex başına: dört köşeli `create_plane` üstünde okyanus, dört
+// köşesi oynayan bir dörtgenden ibaret kalıyordu.
 //
 // Çalıştır: cargo run -p demo --bin water_demo
 
@@ -94,12 +100,18 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> WaterState {
         DirectionalLight::new(Vec3::new(1.0, 0.96, 0.85), 3.0, LightRole::Sun),
     ));
 
-    // ── OKYANUS YÜZEYİ (Gerstner su shader'ı) ────────────────────────────────
+    // ── OKYANUS YÜZEYİ (Gerstner su yüzeyi) ──────────────────────────────────
     // Material::with_water → MaterialType::Water → water.wgsl (Gerstner dalga + Fresnel).
-    // Çift-taraflı: su altından yukarı bakınca da görünür.
+    // Çift-taraflı: su altından yukarı bakınca da görünür — ve su boru hattı arka yüzleri
+    // ELİYOR (saydam boru hattı elemez), yani burada `with_double_sided` gerçekten iş yapıyor.
+    //
+    // Bölümlenmiş düzlem, düz olan değil: öteleme vertex başına. 400 birim / 200 bölüm = hücre
+    // başına 2 birim, yani en uzun dalga (λ=12) altı hücreye, en kısası (λ=1,8) bir hücrenin
+    // altına düşüyor — büyük şişkinlik görünür, en ince tırtıklanma çözünmez. Bölümü artırmak
+    // doğrudan vertex sayısını artırır (200² hücre ≈ 40 k tekil vertex).
     world.spawn_bundle((
         Transform::new(Vec3::new(0.0, WATER_SURFACE_Y, 0.0)),
-        AssetManager::create_plane(&renderer.device, 400.0),
+        AssetManager::create_plane_subdivided(&renderer.device, 400.0, 200),
         Material::new(white.clone())
             .with_water(Vec4::new(0.10, 0.35, 0.50, 0.80))
             .with_double_sided(true),

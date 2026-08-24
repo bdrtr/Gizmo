@@ -1379,3 +1379,212 @@ fn render_decal_frame(with_decal: bool) -> Option<Vec<u8>> {
         Some(pixels)
     })
 }
+
+/// The editor draws water with the water pipeline, not as flat colour.
+///
+/// This viewport shaded water as ordinary PBR until 2026-08-24 — by accident, because
+/// `route(MaterialType::Water)` returned exactly `route(Pbr)`'s answer, so nothing here had to
+/// know what water was. Wiring the game path changed the answer, and that made this loop's silence
+/// dangerous rather than merely different: water's instance flag became `1.0`, which `shader.wgsl`
+/// reads as "skip the lights and return the albedo", so leaving the opaque pass to draw it would
+/// have turned the editor's ocean into a flat rectangle.
+///
+/// The assertion that actually separates the two is **time**, not brightness. A frame that merely
+/// "changed" proves nothing here — flat-unlit is not PBR either, so it changes too, and measured
+/// on the wrong statistic the failing state passes: with the water pass removed, the frame's
+/// brightness σ was 8.99 against 11.62 wired, because post-processing and the editor grid put
+/// variation in both. Displacement is the one thing only `water.wgsl` does, and it is driven by
+/// elapsed time — so the same scene rendered two seconds apart must differ, and does not when the
+/// pass is gone.
+#[test]
+fn the_editor_draws_water_with_the_water_pipeline() {
+    let _gpu = gpu_lock();
+    let (Some(water_t0), Some(pbr_t0)) = (render_water_frame(true, 0.0), render_water_frame(false, 0.0))
+    else {
+        return;
+    };
+    let (Some(water_t2), Some(pbr_t2)) = (render_water_frame(true, 2.0), render_water_frame(false, 2.0))
+    else {
+        return;
+    };
+    let total = (W * H) as usize;
+
+    // Measured 11 474/16 384.
+    let routed = differing_pixels(&water_t0, &pbr_t0);
+    assert!(
+        routed >= 4000,
+        "the same surface as water and as PBR differs in {routed} of {total} pixels (measured \
+         11 474) — this viewport is shading water through `shader.wgsl` again"
+    );
+
+    // The control for the assertion below: elapsed time must move NOTHING in this scene by
+    // itself. If it does, the water comparison is measuring the clock rather than the waves.
+    let pbr_drift = differing_pixels(&pbr_t0, &pbr_t2);
+    assert_eq!(
+        pbr_drift, 0,
+        "two seconds moved {pbr_drift} pixels of a scene with no water in it — something other \
+         than the displacement reads the clock, so the next assertion proves nothing"
+    );
+
+    // Measured 4 633/16 384, and exactly 0 with the water pass removed.
+    let moved = differing_pixels(&water_t0, &water_t2);
+    assert!(
+        moved >= 1500,
+        "two seconds of elapsed time moved {moved} of {total} pixels of the editor's water \
+         (measured 4 633) — the surface is not being displaced, so it is not the water pipeline \
+         drawing it"
+    );
+}
+
+/// Pixels whose R, G or B differ by more than 8 between two RGBA8 frames.
+fn differing_pixels(a: &[u8], b: &[u8]) -> usize {
+    a.as_chunks::<4>()
+        .0
+        .iter()
+        .zip(b.as_chunks::<4>().0.iter())
+        .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 8))
+        .count()
+}
+
+/// The editor's pipeline over a tessellated plane, shaded as water or as PBR, at a given elapsed
+/// time.
+///
+/// The plane is subdivided because the displacement is per vertex; on the four-vertex
+/// `create_plane` the whole surface is a quad with four moving corners. Both materials carry the
+/// same albedo, roughness and metallic, so the pipeline is the only difference.
+fn render_water_frame(water: bool, elapsed: f32) -> Option<Vec<u8>> {
+    if !pollster::block_on(Renderer::headless_adapter_available())
+        || pollster::block_on(Renderer::headless_adapter_is_software())
+    {
+        eprintln!("skipping: no usable GPU adapter");
+        return None;
+    }
+
+    pollster::block_on(async {
+        let mut renderer = shared_device_renderer(W, H).await;
+        let mut asset_manager = AssetManager::new();
+        let mut world = World::new();
+        let tex = asset_manager.create_white_texture(
+            &renderer.device,
+            &renderer.queue,
+            &renderer.scene.texture_bind_group_layout,
+        );
+
+        // The clock the shader reads. `execute_render_pipeline`'s last parameter is
+        // `_light_time` and genuinely unused — elapsed time comes from this resource — and it is
+        // advanced in whole `Time::update` steps because `max_dt` caps a single one at 50 ms, so
+        // asking for two seconds in one call would silently give 0.05.
+        let mut time = gizmo::core::time::Time::new();
+        while (time.elapsed() as f32) < elapsed {
+            time.update(0.05);
+        }
+        world.insert_resource(time);
+
+        let albedo = Vec4::new(0.10, 0.35, 0.50, 1.0);
+        let surface = world.spawn();
+        world.add_component(surface, Transform::new(Vec3::ZERO));
+        world.add_component(surface, GlobalTransform::default());
+        world.add_component(
+            surface,
+            AssetManager::create_plane_subdivided(&renderer.device, 60.0, 48),
+        );
+        world.add_component(
+            surface,
+            if water {
+                Material::new(tex.clone()).with_water(albedo)
+            } else {
+                // The numbers `with_water` sets, written out.
+                Material::new(tex.clone()).with_pbr(albedo, 0.05, 0.0)
+            },
+        );
+        world.add_component(surface, MeshRenderer::new());
+
+        let cam = world.spawn();
+        world.add_component(cam, Transform::new(Vec3::new(0.0, 3.0, 16.0)));
+        world.add_component(cam, GlobalTransform::default());
+        world.add_component(
+            cam,
+            gizmo::renderer::components::Camera::new(
+                std::f32::consts::FRAC_PI_4,
+                0.1,
+                1000.0,
+                -std::f32::consts::FRAC_PI_2,
+                -0.22,
+                true,
+            ),
+        );
+        world.spawn_bundle(gizmo::prelude::DirectionalLightBundle::default());
+
+        let state = StudioState {
+            current_fps: 60.0,
+            actual_dt: 1.0 / 60.0,
+            editor_camera: cam.id(),
+            game_camera: 4242,
+            do_raycast: false,
+            play: gizmo::systems::PlayLoop::new(),
+            asset_watcher: None,
+            gc_timer: 0.0,
+            autosave_timer: 0.0,
+            visible_entity_count: 0,
+            draw_call_count: 0,
+        };
+
+        let format = renderer.config.format;
+        let target = renderer.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("studio-water-target"),
+            size: wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = renderer
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        execute_render_pipeline(&mut world, &state, &mut encoder, &view, &mut renderer, elapsed);
+
+        let staging = renderer.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("studio-water-readback"),
+            size: u64::from(W * H * BPP),
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &target,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(W * BPP),
+                    rows_per_image: Some(H),
+                },
+            },
+            wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 1 },
+        );
+        renderer.queue.submit(std::iter::once(encoder.finish()));
+
+        let slice = staging.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        let _ = renderer
+            .device
+            .poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        rx.recv().expect("readback channel").expect("readback");
+        let pixels = slice
+            .get_mapped_range()
+            .expect("a just-mapped buffer's full range is always valid")
+            .to_vec();
+        staging.unmap();
+        Some(pixels)
+    })
+}

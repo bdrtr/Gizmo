@@ -125,6 +125,23 @@ pub fn record_forward_and_fluid(
                     &renderer.scene.backdrop_pipeline
                 } else if item.is_skybox {
                     &renderer.scene.sky_pipeline
+                } else if item.is_water {
+                    // Ahead of the `unlit` and `is_transparent` branches below, for the same
+                    // reason the backdrop branch is first: water sets `unlit` — that is what keeps
+                    // it out of the z-prepass, the G-buffer and both shadow passes — and a water
+                    // material with albedo alpha < 1 declares itself transparent too, so either of
+                    // those branches would draw the ocean with a vertex shader that does not
+                    // displace it. `water.wgsl` is the only pipeline in this chain whose *geometry*
+                    // differs from everyone else's, which is why it cannot fall through.
+                    //
+                    // Unlike the transparent pipeline, this one culls back faces, so the
+                    // double-sided flag is load-bearing here rather than redundant: a swimmer
+                    // looking up at the surface is the ordinary case.
+                    if item.is_double_sided {
+                        &renderer.scene.water_double_sided_pipeline
+                    } else {
+                        &renderer.scene.water_pipeline
+                    }
                 } else if item.baked_lit {
                     // A baked-lit material that declared itself transparent gets the blended
                     // variant. Every other stage already routes it as transparent (sorted

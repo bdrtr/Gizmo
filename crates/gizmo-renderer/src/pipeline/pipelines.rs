@@ -57,6 +57,8 @@ pub(super) struct CorePipelines {
     /// The mesh's own painted sky/panorama — see `crate::backdrop`.
     pub(super) backdrop: wgpu::RenderPipeline,
     pub(super) water: wgpu::RenderPipeline,
+    /// The same, culling off — an ocean surface is looked at from underneath.
+    pub(super) water_double_sided: wgpu::RenderPipeline,
     pub(super) transparent: wgpu::RenderPipeline,
     pub(super) grid: wgpu::RenderPipeline,
 }
@@ -307,11 +309,26 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
             backdrop.blend,
             wgpu::PolygonMode::Fill,
         ),
+        // Alpha-blended AND depth-writing, which the transparent pipeline is not. Water is a
+        // surface rather than a pane: what is under it should be occluded by it, and two water
+        // batches at different depths should resolve against each other rather than against the
+        // order the batcher happened to drain them in.
         water: create_main(
             &water_shader,
             "Water Pipeline",
             true,
             Some(wgpu::Face::Back),
+            Some(wgpu::BlendState::ALPHA_BLENDING),
+            wgpu::PolygonMode::Fill,
+        ),
+        // `Material::with_double_sided` on water is not the no-op it is on the transparent
+        // pipeline (which is built `cull_mode: None` already): the water pipeline culls back
+        // faces, so a swimmer looking up at the surface sees nothing without this variant.
+        water_double_sided: create_main(
+            &water_shader,
+            "Water Double-Sided Pipeline",
+            true,
+            None,
             Some(wgpu::BlendState::ALPHA_BLENDING),
             wgpu::PolygonMode::Fill,
         ),

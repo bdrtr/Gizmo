@@ -172,6 +172,12 @@ pub(super) fn record_studio_shadow_passes(
                     || batch.is_grid
                     || batch.is_unlit
                     || batch.is_backdrop
+                    // Water draws forward with a vertex shader that displaces it; the shadow
+                    // pipeline's does not, so its shadow would be the flat plane's. The game
+                    // path skips it for the same reason (it rides `unlit` out of both shadow
+                    // passes there), and this viewport must agree or the editor shows a shadow
+                    // the build does not have.
+                    || batch.is_water
                 {
                     continue;
                 }
@@ -299,9 +305,10 @@ pub(super) fn record_studio_main_pass(
                     || batch.is_skybox
                     || batch.is_grid
                     || batch.is_backdrop
+                    || batch.is_water
                 {
                     continue;
-                } // Şeffafları, Skybox'ı, Çift Yönlüleri, Grid'i ve Backdrop'u atla
+                } // Şeffafları, Skybox'ı, Çift Yönlüleri, Grid'i, Backdrop'u ve Su'yu atla
                 if !batch.visible_in_camera {
                     continue; // ShadowCasting::Only — casts, is not drawn
                 }
@@ -327,6 +334,7 @@ pub(super) fn record_studio_main_pass(
                     || batch.is_skybox
                     || batch.is_grid
                     || batch.is_backdrop
+                    || batch.is_water
                 {
                     continue;
                 }
@@ -349,6 +357,44 @@ pub(super) fn record_studio_main_pass(
                 physics.render_pass(&mut render_pass, renderer.scene.view_bind_group());
             }
 
+
+            // 2b. SU YÜZEYİ — kendi boru hattı, kendi geçişi.
+            //
+            // Ayrı bir geçiş, çünkü `water.wgsl` VERTEX aşamasında Gerstner ötelemesi yapıyor:
+            // yukarıdaki opak döngü onu `shader.wgsl` ile çizerdi, o da düzlemi düz bırakır. Ve
+            // 2026-08-24'ten beri suyun örnek bayrağı 1,0 ("ertelenmiş PBR değil"), ki
+            // `shader.wgsl` bunu "ışıkları atla" diye okuyor — yani orada kalsaydı su yalnız
+            // farklı değil, DÜMDÜZ görünürdü.
+            //
+            // Oyun yolundaki `passes::forward` ile aynı seçim: `with_double_sided` burada gerçek
+            // iş yapıyor, çünkü su boru hattı saydam boru hattının aksine arka yüzleri eliyor.
+            for two_sided in [false, true] {
+                render_pass.set_pipeline(if two_sided {
+                    &renderer.scene.water_double_sided_pipeline
+                } else {
+                    &renderer.scene.water_pipeline
+                });
+                for batch in flat_batches {
+                    if !batch.is_water || batch.is_double_sided != two_sided {
+                        continue;
+                    }
+                    if !batch.visible_in_camera {
+                        continue; // ShadowCasting::Only — casts, is not drawn
+                    }
+                    if batch.start_instance >= renderer.scene.instance_capacity as u32 {
+                        continue;
+                    }
+                    let safe_end =
+                        std::cmp::min(batch.end_instance, renderer.scene.instance_capacity as u32);
+
+                    render_pass.set_bind_group(0, renderer.scene.view_bind_group(), &[]);
+                    render_pass.set_bind_group(1, &*batch.bind_group, &[]);
+                    render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
+                    render_pass.set_bind_group(3, &*batch.skeleton_bg, &[]);
+                    render_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
+                    batch.record_draw(&mut render_pass, batch.start_instance..safe_end);
+                }
+            }
 
             // 3. SKYBOX YAKALAMA VE ÖZEL PIPELINE İLE ÇİZİM
             render_pass.set_pipeline(&renderer.scene.sky_pipeline);
@@ -373,9 +419,9 @@ pub(super) fn record_studio_main_pass(
             // 4. TRANSPARENT OBJELERİ ÇİZ (Depth yazması kapalı, Opaque'nin üstüne blend olur)
             render_pass.set_pipeline(&renderer.scene.transparent_pipeline);
             for batch in flat_batches {
-                if !batch.is_transparent || batch.is_grid || batch.is_backdrop {
+                if !batch.is_transparent || batch.is_grid || batch.is_backdrop || batch.is_water {
                     continue;
-                } // Sadece saydamları çiz (backdrop kendi geçişinde, en başta çizildi)
+                } // Sadece saydamları çiz (backdrop ve su kendi geçişlerinde çizildi)
                 if batch.start_instance >= renderer.scene.instance_capacity as u32 {
                     continue;
                 }

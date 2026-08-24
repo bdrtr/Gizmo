@@ -50,6 +50,58 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Water draws through its own pipeline, and the waves move.** `water.wgsl` was written,
+  `water_pipeline` compiled every run and was stored in both `renderer.scene` and `Renderer`, and
+  **no pass had ever bound any of it**. The cause was one line: `route(MaterialType::Water)`
+  returned exactly `route(Pbr)`'s answer, so a water material was a PBR material with a different
+  name. `Routing::is_water` now sends it forward — not for the reason the other forward types are
+  forward, but because water displaces its own vertices, so a G-buffer filled by a shader that does
+  not would record the flat plane's depth and normals while the visible surface is elsewhere. It
+  joins `BatchKey` too: water and unlit both set `skips_deferred`, and an untextured plane of each
+  shares the cached white-texture bind group, so without it the two keys are identical and one
+  batch draws with the other's pipeline. Measured: the same surface as water and as PBR differs in
+  **10 568 of 16 384** pixels, and **0** with the routing put back — the two frames were
+  bit-identical.
+
+  **Wiring it uncovered a second dead thing inside the first.** The shader read elapsed time from
+  `scene.camera_pos.w`, a slot `frame_uniforms.rs` fills with a constant `1.0` and `gpu_types.rs`
+  documents as unused; time is `cascade_params.z`. So even once bound, the ocean would have been
+  frozen at t = 1.0 — entirely plausible in a still frame, and invisible to any single-frame test.
+  Two seconds of elapsed time now move **3 730 of 16 384** pixels, and **0** with the old slot
+  restored. `the_water_surface_is_drawn_by_its_own_pipeline_and_moves` renders three frames rather
+  than two for exactly this reason.
+
+  **And a third thing the route needed that the engine did not have.** The displacement is per
+  vertex and `AssetManager::create_plane` is four of them, so a Gerstner ocean on it is a quad with
+  four moving corners. `AssetManager::create_plane_subdivided(size, segments)` is the new
+  primitive — same winding, same normals, same world-unit UVs, and checked against `plane_data`
+  vertex for vertex at `segments = 1`. `water_demo` uses it (400 units / 200 segments) and is the
+  first place the waves are visible at all.
+
+  **The editor got a water pass in the same change, and had to.** `gizmo-studio` picks pipelines in
+  its own passes and had no water branch — the same shape as its missing custom-material branch —
+  but here silence was not neutral: water's instance flag went from `0.0` to `1.0`, and
+  `shader.wgsl` reads `1.0` as *skip the lights and return the albedo*, so the editor's opaque pass
+  would have turned the ocean into a flat rectangle, strictly worse than the accidental PBR it had
+  before. Its test is worth a note because the obvious version passes while broken: brightness does
+  not separate the two states (σ **8.99** broken against **11.62** wired — post-processing and the
+  editor grid put variation in both), so the assertion is about *time*. Two seconds apart the
+  editor's water differs by **4 633/16 384** pixels and **0** without the pass, with a water-free
+  scene carried alongside as the control that the clock moves nothing by itself.
+
+  Limits, recorded rather than discovered later: the water pipeline alpha-blends **and** writes
+  depth (a surface, not a pane) and culls back faces, so `with_double_sided` is load-bearing here
+  unlike on the transparent pipeline — hence `water_double_sided_pipeline`, for the swimmer looking
+  up. Water casts no shadow, which also took it out of `classify_visibility_world`'s caster
+  predicate — an off-screen water surface was being kept and uploaded for a shadow map nothing
+  writes. It does not refract.
+
+  This closes section F of `docs/CAPABILITY_GAPS.md` — the three subsystems that were finished,
+  tested, exported and reachable by nothing. `deferred_rendering`'s measured table was re-run
+  against the change: `Water`'s shadow column went from **−26.51** to **−2.50** against a fit noise
+  floor of ±2.15 (it no longer casts), and it is now the only row that moves between runs, because
+  it is the only one whose geometry depends on elapsed time.
+
 - **The events had no reader: `PlayLoop` now rotates its event queues, and Lua can see the hits.**
   `Events<T>` is double-buffered — `send` writes this frame, `iter` reads the last one — and
   **something must call `update()` once a frame** or nothing ever becomes readable. Nothing did on

@@ -1,5 +1,8 @@
-// SceneUniforms from gizmo::common (camera_pos.w carries light_time). No shadow group;
-// skeleton/instance from #{SKELETON_GROUP}/#{INSTANCE_GROUP} (3/4 native, 2/3 web).
+// SceneUniforms from gizmo::common. Elapsed time is `cascade_params.z` — this file read it from
+// `camera_pos.w` until 2026-08-24, which is a slot `frame_uniforms.rs` fills with a constant 1.0
+// and `gpu_types.rs` documents as unused. Nothing caught it because no pass had ever bound this
+// pipeline: the waves were frozen at t = 1.0 in a shader nobody was drawing.
+// No shadow group; skeleton/instance from #{SKELETON_GROUP}/#{INSTANCE_GROUP} (3/4 native, 2/3 web).
 #import gizmo::common::{SceneUniforms}
 
 @group(0) @binding(0)
@@ -98,7 +101,7 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
     // ESKİDEN 3 üst-üste sinüs (yalnız dikey) + kaba normal vardı. Gerstner yatay öteleme de
     // yaparak gerçek okyanus tepe/vadi profili verir; normal analitik (ışık doğru kırılır).
     var pos = input.position;
-    let time = scene.camera_pos.w;
+    let time = scene.cascade_params.z;  // x=znear, y=1/shadowRes, z=time, w=point-caster idx+1
     let p0 = pos.xz;
 
     var nrm = vec3<f32>(0.0, 1.0, 0.0);

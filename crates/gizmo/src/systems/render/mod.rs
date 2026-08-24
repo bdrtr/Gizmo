@@ -4468,4 +4468,114 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
             );
         });
     }
+
+    /// The water route reaches the frame, and the waves in it actually move.
+    ///
+    /// `water.wgsl`, `water_pipeline` and `MaterialType::Water` were all written, all compiled
+    /// every run, and **no pass ever called `set_pipeline` with any of them** — the material type
+    /// routed to exactly `Pbr`'s answer, so a water surface was shaded as ordinary deferred PBR.
+    /// That is the half this test's first assertion closes.
+    ///
+    /// The second half is the defect the wiring uncovered. The shader took its clock from
+    /// `scene.camera_pos.w`, a slot `frame_uniforms.rs` fills with a constant `1.0` and
+    /// `gpu_types.rs` documents as unused; elapsed time is `cascade_params.z`. So even once bound,
+    /// the ocean would have been a fixed displaced surface — frozen at t = 1.0, which looks
+    /// entirely plausible in a still frame. Comparing two *times* is the only thing that catches
+    /// it, and this assertion goes red the moment the shader reads the old slot again.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn the_water_surface_is_drawn_by_its_own_pipeline_and_moves() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let pbr = render_water_scene(false, 0.0).await;
+            let t0 = render_water_scene(true, 0.0).await;
+            let t2 = render_water_scene(true, 2.0).await;
+
+            // Measured 10 568/16 384 wired, and exactly **0** with the `Water` arm of `route`
+            // put back the way it was — the two frames were bit-identical, which is what "the
+            // pipeline compiled and nothing bound it" looks like from the outside.
+            let (routed, total) = changed_pixels(&pbr, &t0, 128);
+            assert!(
+                routed >= 4000,
+                "the same surface shaded as water and as PBR differs in {routed}/{total} pixels \
+                 (measured 10 568) — `MaterialType::Water` is falling through to the deferred PBR \
+                 path again",
+            );
+
+            // Measured 3 730/16 384, and exactly **0** with `let time = scene.camera_pos.w`
+            // restored. Zero, not "few": a constant clock gives the identical frame twice.
+            let (moved, _) = changed_pixels(&t0, &t2, 128);
+            assert!(
+                moved >= 1200,
+                "two seconds of elapsed time moved {moved}/{total} pixels of the ocean (measured \
+                 3 730) — the Gerstner phase is not advancing, so the shader is reading a \
+                 constant for time",
+            );
+        });
+    }
+
+    /// A tessellated water plane under a sun, at a given elapsed time.
+    ///
+    /// `water` selects between `Material::with_water` and a `with_pbr` carrying the **same**
+    /// albedo, roughness and metallic — so the two frames differ by the pipeline and nothing else.
+    /// The plane is subdivided because the displacement is per-vertex: on the four-vertex
+    /// `create_plane` the whole ocean is a quad with four moving corners.
+    async fn render_water_scene(water: bool, elapsed: f32) -> Vec<u8> {
+        const W: u32 = 128;
+        let mut renderer = crate::test_gpu::headless_renderer(W, W).await;
+        renderer.taa = None;
+        let mut asset_manager = AssetManager::new();
+        let mut world = World::new();
+        let tex = asset_manager.create_white_texture(
+            &renderer.device,
+            &renderer.queue,
+            &renderer.scene.texture_bind_group_layout,
+        );
+
+        // The clock the shader reads, advanced in whole `Time::update` steps — `max_dt` caps a
+        // single one at 50 ms, so asking for two seconds in one call would silently give 0.05.
+        let mut time = gizmo_core::time::Time::new();
+        while (time.elapsed() as f32) < elapsed {
+            time.update(0.05);
+        }
+        world.insert_resource(time);
+
+        let albedo = Vec4::new(0.10, 0.35, 0.50, 1.0);
+        let material = if water {
+            Material::new(tex).with_water(albedo)
+        } else {
+            // The numbers `with_water` sets, written out: same colour, same 0.05 roughness, same
+            // metallic. Whatever separates the two frames is the pipeline.
+            Material::new(tex).with_pbr(albedo, 0.05, 0.0)
+        };
+
+        let surface = world.spawn();
+        world.add_component(surface, Transform::new(Vec3::ZERO));
+        world.add_component(surface, GlobalTransform::default());
+        world.add_component(
+            surface,
+            AssetManager::create_plane_subdivided(&renderer.device, 60.0, 48),
+        );
+        world.add_component(surface, material);
+        world.add_component(surface, MeshRenderer::new());
+
+        // Low and looking along the surface: a grazing view is where water stops looking like a
+        // flat blue floor, and it is what the Fresnel term in `water.wgsl` shapes.
+        world.spawn_bundle(CameraBundle {
+            position: Vec3::new(0.0, 3.0, 16.0),
+            yaw: -std::f32::consts::FRAC_PI_2,
+            pitch: -0.22,
+            primary: true,
+            ..Default::default()
+        });
+        world.spawn_bundle(DirectionalLightBundle::default());
+
+        render_world(&mut renderer, &mut world).await
+    }
 }

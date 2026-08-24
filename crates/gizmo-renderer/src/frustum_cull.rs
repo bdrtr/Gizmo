@@ -95,6 +95,10 @@ pub fn classify_visibility_world(
                 | crate::components::MaterialType::Backdrop
                 | crate::components::MaterialType::BackdropPlaced
                 | crate::components::MaterialType::Grid
+                // Water draws in a forward pass with its own pipeline and is skipped by every
+                // shadow pass in both hosts, so an off-screen water surface kept as a caster is
+                // an instance uploaded and a range drawn for a shadow map nothing writes.
+                | crate::components::MaterialType::Water
         );
     if is_caster
         && cascade_frusta
@@ -164,10 +168,13 @@ mod tests {
             classify_visibility(&cam, &[cascade], &behind, unit_aabb(), MaterialType::Pbr, false, 1.0),
             Visibility::ShadowOnly
         );
-        // Water is lit too → also a caster.
+        // Water is NOT — it was until 2026-08-24, when it was still routed as PBR and this line
+        // asserted `ShadowOnly` with the comment "water is lit too". It draws in a forward pass
+        // now and every shadow pass in both hosts skips it, so keeping an off-screen water
+        // surface would upload an instance for a shadow map nothing writes.
         assert_eq!(
             classify_visibility(&cam, &[cascade], &behind, unit_aabb(), MaterialType::Water, false, 1.0),
-            Visibility::ShadowOnly
+            Visibility::Culled
         );
     }
 
