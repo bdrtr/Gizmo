@@ -38,6 +38,13 @@ rand = "0.10.0"
 uuid = { version = "1.23.0", features = ["v4", "serde"] }
 ron = "0.12.1"
 tracing = "0.1.44"
+# Glyph rasterisation for `text.rs`. Rasteriser-only — no shaping, no layout, no font
+# enumeration — which is why it can be sealed: no `ab_glyph` type appears on a `pub` signature,
+# the surface is `FontId` + `GlyphAtlas` + our own metric structs. It is already in the lockfile
+# (winit's Wayland decorations pull it in through `sctk-adwaita`), and its whole tree is four
+# small pure-Rust crates that build for wasm.
+ab_glyph = "0.2"
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 meshopt = "0.6.2"
 

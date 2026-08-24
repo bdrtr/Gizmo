@@ -33,7 +33,9 @@ cargo test -p gizmo-core -p gizmo-physics-core -p gizmo-physics-rigid -p gizmo-s
 cargo test -p gizmo-core --features tracing-layer   # the tracing_subscriber bridge, off by default
 cargo test -p gizmo-physics-rigid --features experimental-multibody
 
-# Demos live in demo/src/bin/ (39 of them). ALWAYS use --release for physics demos —
+# Demos live in demo/src/bin/ — `ls demo/src/bin/*.rs | wc -l` if you need the count; this line
+# said 39 while there were 122, which is the same rot §3 warns about for the `#[non_exhaustive]`
+# tally: count it, do not quote it. ALWAYS use --release for physics demos —
 # a debug build hits a severe broad/narrow-phase CPU bottleneck.
 cargo run --release -p demo                      # default: 3d_scene (PBR + physics)
 cargo run --release -p demo --bin car_demo

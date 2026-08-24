@@ -162,6 +162,8 @@ pub mod ssgi;
 pub mod ssr;
 /// Temporal anti-aliasing.
 pub mod taa;
+/// Fonts, glyph rasterisation and text layout.
+pub mod text;
 #[cfg(test)]
 mod shader_contract;
 #[cfg(test)]

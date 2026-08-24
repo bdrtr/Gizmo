@@ -36,15 +36,46 @@ sprites; the demo had to become 3D cubes), `removal_detection`.
 
 Blocks the largest single share of the out-of-reach bucket.
 
-### A2. No text / font rendering
+### A2. Text / font rendering — **the engine draws glyphs since 2026-08-24**
 
-Nothing draws a glyph in world space or screen space except `egui`, which is a debug/editor UI
-layer, not a game text system: no font asset, no text mesh, no layout, no rich text, no
-world-space labels. Every demo in the sweep that wanted a label used an `egui` panel, which is why
-they all look like debug overlays.
+Until then nothing drew a glyph in world space or screen space except `egui`, which is a
+debug/editor UI layer rather than a game text system: no font asset, no text mesh, no layout, no
+rich text, no world-space labels. Every demo in the sweep that wanted a label used an `egui` panel,
+which is why they all looked like debug overlays. This was the gap the project owner named as the
+first to close.
 
-**This is the gap the project owner has named as the first to close.** Scope notes are in
-section E.
+**What exists now.** `gizmo-renderer::text` — a font library, a glyph atlas, layout — plus a `Text`
+component with two spaces, nine anchors and a colour, drawn by **both** hosts through one shared
+pass (`gizmo::systems::render::record_text`, which `gizmo-studio` calls rather than copying).
+
+| | |
+|---|---|
+| screen space (window pixels, top-left origin) | yes |
+| world space (camera-facing quad) | yes, **depth-tested** — a label behind a wall is behind it |
+| anchors | nine |
+| lines | `\n`, and nothing else breaks one |
+| kerning | from the face's own `kern` table |
+| **wrapping, shaping, bidi, font fallback, rich text** | **no** |
+
+Measured: the same scene with and without text differs in **869/16 384** pixels; a string anchored
+at (8, 8) changes **869** pixels in the top-left quadrant and **0** in the bottom-right (the
+assertion a flipped y axis fails); a world label behind a wall changes **0**, and **1 589** with
+`CompareFunction::Always` in the world pipeline's place.
+
+**Three things had to exist that did not.** The rasteriser (`ab_glyph`, sealed — no foreign type on
+a `pub` signature, and already in the lockfile through winit's Wayland decorations); a **font for
+the tests**, since the repository ships none and a typeface is a licensing decision rather than a
+technical one — so `text::synthetic` builds a real TrueType file in memory with known metrics, and
+every assertion is a derivation rather than a measurement of somebody else's face; and the atlas's
+shelf packer, whose placement is checked for overlap as a property rather than by sampling.
+
+**Still missing, and named rather than discovered later.** No default font — a `Text` whose face was
+never loaded draws nothing rather than substituting one. Text is drawn into the HDR target before
+tone mapping, so it is exposed and bloomed with the rest of the frame: right for a world label, and
+the first thing to revisit when there is a post-tonemap pass to hang UI on. And **`gizmo-ui` is not
+connected to it**: `Node` still emits no vertices, `BackgroundColor` is still written and never
+read, and a UI rect is not yet handed to a `Text`. That is the next piece, and it is a smaller one
+than this was — see section E.
 
 ### A3. User-authored shaders — **open since 2026-08-23**, forward-only
 
@@ -538,31 +569,35 @@ and `emissive` (item 4, the only undocumented one). No further silent fields.
 > `SceneView` and closed the camera half of all three; the shadow cascades and cluster table are
 > still shared per encoder, and that is what the three now wait on (A5b, item 3).
 
-1. **Text / font rendering (A2).** Named first by the project owner. It is already tracked as
-   **M7.6** in `ENGINE.md` §3 (Phase 7), and `gizmo-ui`'s own crate docs name the same gap and the
-   same landing site: *"expect the component set to change when rendering lands (a `Text` component
-   and a draw-list output are the obvious additions)"*.
+1. ~~**Text / font rendering (A2).**~~ **The engine half landed 2026-08-24** — `gizmo-renderer::text`,
+   a `Text` component in two spaces, one shared pass both hosts call. What is left of this item is
+   the **`gizmo-ui` half**, and it is smaller than what landed: `Node` publishes absolute
+   window-pixel rects already, and `TextSpace::Screen` takes absolute window pixels, so connecting
+   them is a system that copies one into the other — plus consuming `BackgroundColor`, which is
+   still written and never read. The layering allows it: `gizmo-ui` sits *above* `gizmo-app`, so it
+   can see the renderer's types, while the renderer cannot see `Node`. That is also why the
+   component landed in `gizmo-renderer::components` rather than in `gizmo-ui` as the note below
+   assumed — a `Text` in `gizmo-ui` would have been invisible to both draw paths.
 
-   The ground is better prepared than the gap suggests. `gizmo-ui` already resolves boxes through
-   `taffy` and publishes them as `Node` rects; it just emits no vertices. So the work splits
-   cleanly:
+   Two things the sweep listed as constraints held: the wasm target is a separate CI gate and the
+   rasteriser builds there, and the golden render test is the acceptance, because a picture is the
+   only thing that can say a glyph landed where it should.
 
-   - **Rasteriser + atlas** (in `gizmo-renderer`): load a `ttf`, rasterise on demand into a GPU
-     atlas, evict nothing at first. The dependency is the one decision that needs `ENGINE.md` §4
-     review — `ab_glyph` and `fontdue` are both rasteriser-only and can be sealed behind an opaque
-     atlas handle so no foreign type reaches a `pub` signature.
-   - **`Text` component** (in `gizmo-ui::components`): string, font handle, size, colour, and an
-     anchor. Single-line and single-font is enough to be useful; layout richness is a later axis.
-   - **Two draw modes**: screen-space (a UI quad batch, consuming `Node`) and world-space (a
-     camera-facing quad, so 3D labels work). Both batch by atlas texture, which fits the existing
-     `BatchKey` (the atlas is just a texture bind group).
-   - **Acceptance**: a golden render test, because that is the only thing that can prove a glyph
-     landed where it should. The repo already has that machinery
-     (`crates/gizmo/src/systems/render/mod.rs`, `golden_render_tests`).
+   *The original note, kept because its landing sites were right:* it was tracked as **M7.6** in
+   `ENGINE.md` §3 (Phase 7), and `gizmo-ui`'s own crate docs named the same gap and the same site —
+   *"expect the component set to change when rendering lands (a `Text` component and a draw-list
+   output are the obvious additions)"*.
 
-   Two constraints the sweep already established: the wasm target is a **separate CI gate**, so the
-   rasteriser must build there; and `BackgroundColor` is currently written and never read, so the
-   same draw path should consume it and close that dangling component at the same time.
+   Of the four pieces the plan listed, three are done: the **rasteriser + atlas** (`ab_glyph`,
+   sealed; nothing evicted, and the atlas says so through `is_full` rather than dropping glyphs
+   quietly), the **`Text` component** — in `gizmo-renderer::components`, not `gizmo-ui`, for the
+   layering reason above — and **both draw modes**, which turned out not to want the existing
+   `BatchKey`: a glyph is an instance rather than a mesh, so text is one instance buffer and two
+   draw calls, not a batch per atlas texture.
+
+   What is left is the **`gizmo-ui` connection**: a system that copies each `Node` rect into a
+   `Text`'s `TextSpace::Screen` position, and a draw of `BackgroundColor`, which is still written
+   and read by nothing.
 2. **Wire up what already exists.** ~~Cheapest ratio of work to capability in the whole list~~ —
    **and the spatial index turned out not to be** (F1, measured 2026-08-24: wiring it makes the
    frame 90 % slower on a scene with shadow cascades, because their union culls nothing). It is

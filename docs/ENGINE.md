@@ -956,6 +956,18 @@ its precision, and a section that silently rewrites itself cannot be checked.
   sentence the seal would buy a 1.0 that quietly reserves the right to change its own on-disk
   format underneath a frozen API.
 
+- **`ab_glyph` — added 2026-08-24, to `gizmo-renderer` (Stage B), sealed on arrival.** Glyph
+  rasterisation for `text.rs`. It is a *rasteriser*: outlines to coverage plus metric queries, no
+  shaping, no bidi, no font enumeration, no fallback — and that narrowness is what makes sealing it
+  cheap. No `ab_glyph` type appears on a `pub` signature: the surface is `FontId` (an opaque index),
+  `LineMetrics`, `PositionedGlyph`, `GlyphEntry` and `FontError`, all ours, and `FontError::Invalid`
+  deliberately carries no parser payload so a rasteriser major cannot break anyone's `match`.
+  Resolved at 0.2.32. Two things worth recording because they are the reasons this entry is cheap
+  rather than a cost: the crate was **already in the lockfile** — winit's Wayland client-side
+  decorations pull it in through `sctk-adwaita` — and its whole tree is four small pure-Rust crates
+  (`ab_glyph`, `ab_glyph_rasterizer`, `owned_ttf_parser`, `ttf-parser`) that build for wasm, which
+  the separate wasm gate checks. It is on no Stage A surface and is not reachable from one.
+
 - **`web-time` — removed from gizmo-scene's public API 2026-08-09; it was MISSING from this
   contract entirely** and nobody had noticed it before the audit. `SceneSnapshot::timestamp` was
   `pub`, and on `wasm32` the type of that field is `web_time::Instant`, not `std::time::Instant`.

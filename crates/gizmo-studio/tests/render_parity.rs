@@ -880,6 +880,7 @@ fn every_capability_neither_path_names_is_accounted_for() {
         // ── A member of a type the inventory does judge ────────────────────────────────────
         ("LodLevel", "one level inside `LodGroup`, which both paths know."),
         ("ProjectionMode", "the enum behind `Camera::projection`, which both paths know."),
+        ("TextAnchor", "which corner of a `Text`'s box sits on its anchor point — resolved inside `gizmo_renderer::text::render`, which is the code BOTH paths reach through `record_text`. `TextSpace` is the same shape and is named by both anyway, because a draw loop deciding where a label sits is the divergence this file exists to catch and saying so in writing is cheap."),
         ("Terrain", "a mesh *recipe*: the primitive builder turns it into a `Mesh`, and `Mesh` is what gets drawn. That sentence answered which path DRAWS it and quietly assumed a converter existed on both hosts; until 2026-08-19 the only one was `gizmo-studio`'s, driven by a queue of editor edits, so a saved level reopened with the recipe and no mesh and an exported game never had one. `both_hosts_build_the_mesh_a_terrain_recipe_names` is the half this entry does not cover."),
         ("RenderTarget", "an app-level render-to-texture handle (`gizmo-app`'s editor runtime), not a per-picture capability; the editor's own two are in EXCEPTIONS above."),
 

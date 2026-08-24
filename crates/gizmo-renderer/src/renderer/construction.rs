@@ -494,6 +494,14 @@ impl Renderer {
             wgpu::TextureFormat::Rgba16Float,
             wgpu::TextureFormat::Depth32Float,
         ));
+        // The same two formats the debug lines use, and for the same reason: text is drawn into
+        // the HDR target after the world, against the main depth buffer.
+        let text = Some(crate::text::TextRenderer::new(
+            &device,
+            &scene.global_bind_group_layout,
+            wgpu::TextureFormat::Rgba16Float,
+            wgpu::TextureFormat::Depth32Float,
+        ));
 
         let scene_state = SceneState {
             render_pipeline: scene.render_pipeline,
@@ -656,6 +664,7 @@ impl Renderer {
             gpu_fluid,
             smoke: None,
             debug_renderer,
+            text,
             asset_manager: std::sync::RwLock::new(crate::asset::AssetManager::new()),
             web_profile: crate::web_profile::WebProfile::auto(),
             shading_mode: 0,

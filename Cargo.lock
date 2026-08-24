@@ -2805,6 +2805,7 @@ dependencies = [
 name = "gizmo-renderer"
 version = "0.10.0"
 dependencies = [
+ "ab_glyph",
  "bytemuck",
  "criterion 0.8.2",
  "getrandom 0.3.4",

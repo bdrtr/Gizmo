@@ -20,6 +20,8 @@ pub mod mesh;
 pub mod misc;
 /// The authored look — bloom, vignette, depth of field — on the camera that renders it.
 pub mod post_process;
+/// The [`Text`](text::Text) component — a string the engine draws.
+pub mod text;
 
 pub use animation::*;
 pub use camera::*;
@@ -29,6 +31,7 @@ pub use material::*;
 pub use mesh::*;
 pub use misc::*;
 pub use post_process::*;
+pub use text::*;
 
 gizmo_core::impl_component!(
     Mesh,
@@ -48,6 +51,7 @@ gizmo_core::impl_component!(
     GameRenderTarget,
     RenderStats,
     Decal,
-    PostProcess
+    PostProcess,
+    Text
 );
 gizmo_core::impl_component!(FluidParticle, FluidHandle, FluidPhase, FluidInteractor);

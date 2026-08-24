@@ -50,6 +50,51 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The engine draws text.** Until now nothing drew a glyph except `egui`, a debug/editor UI layer
+  — which is why every demo that wanted a label looked like a debug overlay. `docs/CAPABILITY_GAPS.md`
+  §A2 was that gap and §E named it the first to close.
+
+  `gizmo-renderer::text` is the font library, the glyph atlas and the layout; `Text` is the
+  component, with two spaces (window pixels, or a camera-facing quad in the world), nine anchors, a
+  colour and `\n`. **Both hosts draw it through one shared pass** — `gizmo-studio` calls
+  `gizmo::systems::render::record_text` rather than keeping a copy, for the reason
+  `render_parity.rs` exists.
+
+  Measured, with the control in the same test: the same scene with and without text differs in
+  **869/16 384** pixels and **0** with the pass not called; a string anchored at (8, 8) changes
+  **869** pixels in the top-left quadrant and **0** in the bottom-right, which is the assertion a
+  flipped y axis fails; a world label behind a wall changes **0**, and **1 589** with
+  `CompareFunction::Always` in the world pipeline's place.
+
+  **The tests build their own font.** The repository ships no typeface — that is a licensing
+  decision belonging to the project rather than to a renderer — and a test reaching for a system
+  font asserts against whichever face the machine happened to have. So `text::synthetic` emits a
+  real TrueType file in memory: known em size, known ascent and descent, a known advance, one glyph
+  that is a filled box of known side. Every number in the text tests is then a derivation rather
+  than a measurement, and they run in CI and on wasm.
+
+  **`ab_glyph`, sealed.** No `ab_glyph` type reaches a `pub` signature: the surface is `FontId`,
+  `LineMetrics`, `PositionedGlyph`, `GlyphEntry` and `FontError`, all ours. It was **already in the
+  lockfile** (winit's Wayland decorations pull it in through `sctk-adwaita`) and its whole tree is
+  four small pure-Rust crates that build for wasm. Recorded in `docs/ENGINE.md` §4.
+
+  **What it does not do, named rather than discovered later.** No default font — a `Text` whose face
+  was never loaded draws nothing rather than substituting one. No wrapping, no shaping (so no Arabic
+  joining, no Indic reordering, no ligatures), no bidi, no font fallback, no rich text; lines break
+  on `\n` and nowhere else. Nothing is evicted from the atlas — it reports `is_full` instead of
+  quietly dropping glyphs. Text is drawn into the HDR target before tone mapping, so it is exposed
+  and bloomed with the frame: right for a world label, and the first thing to revisit when there is
+  a post-tonemap pass to hang UI on. And **`gizmo-ui` is not connected to it yet** — `Node` still
+  emits no vertices and `BackgroundColor` is still written and read by nothing. That is the next
+  piece, and a smaller one: `Node` already publishes absolute window-pixel rects and
+  `TextSpace::Screen` already takes them.
+
+  `Renderer::load_font` / `load_font_file` are the entry points, and `demo/src/bin/text.rs` shows
+  the lot: eight anchors on the window's edges, a size sweep, a multi-line note, and two world
+  labels of which one sits behind a wall. It takes a face from `GIZMO_FONT`, falls back to a few
+  system paths, and falls back again to the synthetic one — saying on screen that it did, because
+  someone seeing boxes blames the engine first.
+
 - **Water draws through its own pipeline, and the waves move.** `water.wgsl` was written,
   `water_pipeline` compiled every run and was stored in both `renderer.scene` and `Renderer`, and
   **no pass had ever bound any of it**. The cause was one line: `route(MaterialType::Water)`

@@ -211,6 +211,11 @@ mod tests {
             // and it is the only stage of that shader this crate can reach without one.
             ("backdrop.wgsl", include_str!("../shaders/backdrop.wgsl")),
             ("grid.wgsl", include_str!("../shaders/grid.wgsl")),
+            // Text composes under both schemas because it binds only groups 0 and 1 — no shadow
+            // group to strip, no skeleton or instance group to shift. Checked here anyway: it
+            // imports `SceneUniforms` like the rest, so a field renamed in `common.wgsl` breaks it
+            // exactly as it breaks them, and this is the only gate that says so without a GPU.
+            ("text.wgsl", include_str!("../shaders/text.wgsl")),
         ];
         for (name, src) in web_capable {
             compose_wgsl(src, name, native_render_defs());

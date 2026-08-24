@@ -203,6 +203,14 @@ pub struct Renderer {
     /// The debug line renderer — gizmos, wireframes, physics overlays.
     pub debug_renderer: Option<crate::debug_renderer::GizmoRendererSystem>,
 
+    // === METİN ===
+    /// Fonts, the glyph atlas and the text pipelines — see [`crate::text`].
+    ///
+    /// Allocated by every construction path, so `Option` is about *ordering* rather than about a
+    /// profile: it is built after the pipelines, because it needs their global bind group layout.
+    /// A renderer with no font loaded still has one; it simply draws nothing.
+    pub text: Option<crate::text::TextRenderer>,
+
     // === DAHİLİ ASSET YÖNETİCİSİ (Kolaylık metodları için cache) ===
     /// The texture/mesh cache behind the convenience loaders. Behind a lock because the
     /// convenience methods take `&self`, and loading mutates the cache.
@@ -294,6 +302,40 @@ impl Renderer {
         );
         physics.enable_debug(&self.device, 0);
         self.gpu_physics = Some(physics);
+    }
+
+    /// Loads a font from `ttf`/`otf` bytes and returns the handle a [`Text`](crate::components::Text)
+    /// carries.
+    ///
+    /// The engine ships **no** font: a typeface is a licensing decision that belongs to the
+    /// project, not to the renderer, so there is no default and no fallback. A `Text` whose font
+    /// was never loaded draws nothing rather than substituting one.
+    ///
+    /// # Errors
+    ///
+    /// [`FontError::Invalid`](crate::text::FontError::Invalid) if the bytes are not a font this
+    /// engine can read.
+    pub fn load_font(&mut self, bytes: Vec<u8>) -> Result<crate::text::FontId, crate::text::FontError> {
+        let Some(text) = self.text.as_mut() else {
+            // Every construction path builds one; this arm exists so a renderer assembled by hand
+            // says so instead of panicking.
+            return Err(crate::text::FontError::Invalid);
+        };
+        text.load_font(bytes)
+    }
+
+    /// The same from a file.
+    ///
+    /// # Errors
+    ///
+    /// See [`load_font`](Self::load_font); additionally
+    /// [`FontError::Io`](crate::text::FontError::Io) if the file cannot be read.
+    pub fn load_font_file(
+        &mut self,
+        path: impl AsRef<std::path::Path>,
+    ) -> Result<crate::text::FontId, crate::text::FontError> {
+        let bytes = std::fs::read(path).map_err(crate::text::FontError::Io)?;
+        self.load_font(bytes)
     }
 
     /// Compiles a shader, preferring a copy on disk over the one compiled in.

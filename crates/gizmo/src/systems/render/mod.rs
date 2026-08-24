@@ -689,6 +689,9 @@ pub fn default_render_pass(
         ssgi.advance_frame();
     }
     passes::record_taa_and_overlays(encoder, renderer, world);
+    // After the overlays and before post-processing: text is an overlay too, and it is the one
+    // whose smear a temporal resolve makes most obvious.
+    record_text(encoder, renderer, world);
 
     renderer.run_post_processing(encoder, view);
 }
@@ -735,6 +738,9 @@ pub use decals::{collect_decals, record_forward_decals};
 
 mod particles;
 pub use particles::spawn_from_emitters;
+
+mod text;
+pub use text::record_text;
 
 mod shared;
 pub use shared::{
@@ -4575,6 +4581,188 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
             ..Default::default()
         });
         world.spawn_bundle(DirectionalLightBundle::default());
+
+        render_world(&mut renderer, &mut world).await
+    }
+
+    /// Text reaches the frame, lands where it was told to, and a world label is occluded.
+    ///
+    /// The engine could not draw a glyph before this: `docs/CAPABILITY_GAPS.md` §A2, the gap its
+    /// §E names first. Three assertions, because "some pixels changed" would pass for a renderer
+    /// that draws the right number of boxes in the wrong place:
+    ///
+    /// 1. **It draws at all** — the frame differs from the same scene with no `Text`.
+    /// 2. **It draws where it was put** — screen text in the top-left changes the top-left and
+    ///    leaves the bottom-right alone. That is the assertion a y-flip error fails.
+    /// 3. **A world label is depth-tested** — the same label vanishes behind a wall put in front
+    ///    of it, which is the only thing separating the world pipeline from the screen one.
+    ///
+    /// The font is built in memory (`gizmo_renderer::text::synthetic`): this repository ships no
+    /// typeface, and a test that reaches for a system font asserts against whichever one the
+    /// machine happened to have.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn text_reaches_the_frame_where_it_was_placed_and_a_world_label_is_occluded() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let blank = render_text_scene(TextCase::None).await;
+            let screen = render_text_scene(TextCase::ScreenTopLeft).await;
+
+            let (changed, total) = changed_pixels(&blank, &screen, 128);
+            assert!(
+                changed >= 300,
+                "drawing text changed {changed}/{total} pixels (measured 869) — no glyph reached \
+                 the frame",
+            );
+
+            // Where it landed. The string is anchored at (8, 8) in window pixels, so it belongs in
+            // the top-left quadrant and nowhere near the bottom-right.
+            let (tl, br) = (quadrant_changes(&blank, &screen, 0, 0), quadrant_changes(&blank, &screen, 64, 64));
+            assert!(
+                tl > 300 && br == 0,
+                "text anchored at (8, 8) changed {tl} pixels top-left and {br} bottom-right \
+                 (measured 869 and 0) — it is drawn at the wrong end of the screen, which is what \
+                 a flipped y axis looks like",
+            );
+
+            // Depth. The same world label, once in the open and once behind a wall.
+            let open = render_text_scene(TextCase::WorldLabel).await;
+            let hidden = render_text_scene(TextCase::WorldLabelBehindWall).await;
+            let wall_only = render_text_scene(TextCase::WallOnly).await;
+            let (visible, _) = changed_pixels(&blank, &open, 128);
+            assert!(
+                visible >= 500,
+                "a world label changed {visible} pixels in the open (measured 1 702) — it is not \
+                 being drawn",
+            );
+            let (leaked, _) = changed_pixels(&wall_only, &hidden, 128);
+            assert_eq!(
+                leaked, 0,
+                "a world label behind a wall changed {leaked} pixels — the world text pipeline is \
+                 not depth-tested, so every label draws through the level. Measured 1 589 with \
+                 `CompareFunction::Always` in its place, and 0 with the test back.",
+            );
+        });
+    }
+
+    /// How many pixels of one 64×64 quadrant differ between two frames.
+    fn quadrant_changes(a: &[u8], b: &[u8], x0: u32, y0: u32) -> usize {
+        const W: usize = 128;
+        let mut changed = 0;
+        for y in y0 as usize..y0 as usize + 64 {
+            for x in x0 as usize..x0 as usize + 64 {
+                let i = (y * W + x) * 4;
+                if (0..3).any(|c| a[i + c].abs_diff(b[i + c]) > 8) {
+                    changed += 1;
+                }
+            }
+        }
+        changed
+    }
+
+    /// What [`render_text_scene`] puts in the world besides the floor.
+    #[derive(Clone, Copy)]
+    enum TextCase {
+        /// Nothing — the reference frame.
+        None,
+        /// Screen-space text anchored near the top-left corner.
+        ScreenTopLeft,
+        /// A world label at the origin, in the open.
+        WorldLabel,
+        /// The same label, with a wall between it and the camera.
+        WorldLabelBehindWall,
+        /// The wall alone, which is the reference the occluded case is compared against.
+        WallOnly,
+    }
+
+    /// A lit floor, a camera, and whichever text case is asked for.
+    async fn render_text_scene(case: TextCase) -> Vec<u8> {
+        const W: u32 = 128;
+        let mut renderer = crate::test_gpu::headless_renderer(W, W).await;
+        renderer.taa = None;
+        let mut asset_manager = AssetManager::new();
+        let mut world = World::new();
+        let tex = asset_manager.create_white_texture(
+            &renderer.device,
+            &renderer.queue,
+            &renderer.scene.texture_bind_group_layout,
+        );
+
+        let floor = world.spawn();
+        world.add_component(
+            floor,
+            Transform::new(Vec3::new(0.0, -2.0, 0.0)).with_scale(Vec3::new(12.0, 0.2, 12.0)),
+        );
+        world.add_component(floor, GlobalTransform::default());
+        world.add_component(floor, AssetManager::create_cube(&renderer.device));
+        world.add_component(
+            floor,
+            Material::new(tex.clone()).with_pbr(Vec4::new(0.2, 0.2, 0.25, 1.0), 0.9, 0.0),
+        );
+        world.add_component(floor, MeshRenderer::new());
+
+        world.spawn_bundle(CameraBundle {
+            position: Vec3::new(0.0, 0.0, 6.0),
+            yaw: -std::f32::consts::FRAC_PI_2,
+            pitch: 0.0,
+            primary: true,
+            ..Default::default()
+        });
+        world.spawn_bundle(DirectionalLightBundle::default());
+
+        let wall = |world: &mut World, renderer: &Renderer| {
+            let e = world.spawn();
+            world.add_component(
+                e,
+                Transform::new(Vec3::new(0.0, 0.0, 3.0)).with_scale(Vec3::new(3.0, 3.0, 0.2)),
+            );
+            world.add_component(e, GlobalTransform::default());
+            world.add_component(e, AssetManager::create_cube(&renderer.device));
+            world.add_component(
+                e,
+                Material::new(tex.clone()).with_pbr(Vec4::new(0.8, 0.3, 0.3, 1.0), 0.7, 0.0),
+            );
+            world.add_component(e, MeshRenderer::new());
+        };
+
+        let font = renderer
+            .load_font(gizmo_renderer::text::synthetic::synthetic_face())
+            .expect("the synthetic face must parse");
+
+        match case {
+            TextCase::None => {}
+            TextCase::ScreenTopLeft => {
+                let e = world.spawn();
+                world.add_component(
+                    e,
+                    gizmo_renderer::components::Text::screen(
+                        "AAA",
+                        font,
+                        24.0,
+                        gizmo_math::Vec2::new(8.0, 8.0),
+                    ),
+                );
+            }
+            TextCase::WorldLabel | TextCase::WorldLabelBehindWall => {
+                if matches!(case, TextCase::WorldLabelBehindWall) {
+                    wall(&mut world, &renderer);
+                }
+                let e = world.spawn();
+                world.add_component(e, Transform::new(Vec3::ZERO));
+                world.add_component(e, GlobalTransform::default());
+                world.add_component(
+                    e,
+                    gizmo_renderer::components::Text::world("AAA", font, 48.0, 24.0),
+                );
+            }
+            TextCase::WallOnly => wall(&mut world, &renderer),
+        }
 
         render_world(&mut renderer, &mut world).await
     }

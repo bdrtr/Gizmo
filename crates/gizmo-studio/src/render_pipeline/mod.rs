@@ -732,6 +732,13 @@ pub fn execute_render_pipeline(
             // rather than the game's distance-scaled slice: an editor shows what is there, which
             // is the same reasoning the render-parity exceptions already record for `lod_vbufs`.
             gizmo::systems::render::record_fluid_surface(encoder, renderer, studio_fluid_particles(renderer));
+            // `Text`, the engine's own pass for the third time and for the same reason: a label's
+            // place in the world is one decision, and the version of it the editor shows has to be
+            // the version the game draws. Both `TextSpace` variants come with it — a world label
+            // depth-tested against this viewport's own depth, screen text over all of it — because
+            // the placement lives in `gizmo_renderer::text`, not in either loop. Last of the world
+            // passes for exactly that reason.
+            gizmo::systems::render::record_text(encoder, renderer, world);
 
     }); // Cikis: CACHE.with bloğu
 

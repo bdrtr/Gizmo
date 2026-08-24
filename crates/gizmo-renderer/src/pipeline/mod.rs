@@ -740,7 +740,19 @@ pub fn rebuild_pipelines(renderer: &mut crate::Renderer) {
     renderer.scene.shadow_pipeline = shadow_pipeline;
 
     crate::post_process::rebuild_post_pipelines(renderer, &post_shader);
-    tracing::info!("[Pipeline] core + shadow + post-process pipelines rebuilt");
+
+    // Text's two pipelines, rebuilt from the same disk-first source as everything above — without
+    // this, `text.wgsl` is the one shader in the engine that hot reload silently ignores. The
+    // fonts and the rasterised glyphs are kept; only the pipelines are replaced.
+    if let Some(text) = renderer.text.as_mut() {
+        text.rebuild_pipelines(
+            &renderer.device,
+            &renderer.scene.global_bind_group_layout,
+            wgpu::TextureFormat::Rgba16Float,
+            wgpu::TextureFormat::Depth32Float,
+        );
+    }
+    tracing::info!("[Pipeline] core + shadow + post-process + text pipelines rebuilt");
 }
 
 #[cfg(test)]
@@ -850,6 +862,7 @@ mod tests {
                 // here — this test auto-composes any src containing `#import`.
                 ("physics_render.wgsl", include_str!("../shaders/physics_render.wgsl")),
                 ("particle_render.wgsl", include_str!("../shaders/particle_render.wgsl")),
+                ("text.wgsl", include_str!("../shaders/text.wgsl")),
             ];
 
             // Shaders that go through the wasm `load_shader_composed_web` path: validate BOTH
