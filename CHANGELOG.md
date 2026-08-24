@@ -50,6 +50,43 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Lifecycle observers cover a component's whole life: `Insert`, `Replace`, `Remove`.**
+  `World::add_observer` is generic over the marker, and the marker comes from the closure's own
+  signature — `world.add_observer(|e: On<Remove, Hp>| …)` — so the ordinary call needs no turbofish
+  and the phase is readable at the registration rather than inferred from the function name. Until
+  now it built an `Insert` and nothing else; `Remove` and `Replace` were markers whose own
+  documentation said "no dispatch path yet", and detachment was reachable only through a raw
+  `RemoveHook`.
+
+  The three **partition** a component's life. A write fires `Insert` **xor** `Replace` — never both,
+  never neither — and a detachment fires `Remove`.
+
+  `Replace` needed a fourth hook list rather than a reuse of `on_set`. `on_set` fires on the first
+  write as well as every later one, and a hook is handed the entity and nothing else, so it cannot
+  tell the two apart; subtracting the inserts means every caller keeping a per-entity ledger. The
+  dispatcher already knows which branch it took — it is the only thing that does — so it says so
+  once. `register_on_replace` is the raw hatch, and the sealed `Lifecycle` trait is what lets one
+  closure's argument type pick a list.
+
+  **Closing the gap turned an internal quirk into a broken promise, so that was fixed too.**
+  `remove_bundle` fired `on_remove` for a bundle's sparse components and let its Table components
+  out through `move_entity_to` in silence: the same component, removed two ways, answered
+  differently. Nobody had to care while `Remove` was unreachable; `On<Remove, T>` makes it a
+  contract. The bundle's Table members are now notified after the migration, which is where
+  `remove_component` notifies for the same storage, and only for members the entity actually held.
+
+  `removal_detection` had **measured** that silence and recorded it in its header as a fact — five
+  removal paths, four hook calls. It now grows a `GIZMO_REMOVAL_SELFTEST=1` mode that prints the
+  table instead of leaving it to be read off a HUD, and the re-measurement is five paths, **five**
+  hook calls. `observers` drops its raw removal hook for the observer, counts all three phases, and
+  ties `Replace` to something checkable: a mine is overwritten when it explodes, so the replace
+  count must track the explosion count.
+
+  Thirteen tests, and the two load-bearing ones were mutation-checked. Wiring `Remove` to the
+  `on_add` list turned `remove_reaches_an_observer_by_both_routes` green **for the wrong reason** —
+  the spawn filled the ledger and the end-state assertion could not tell that from a working remove
+  path. It now asserts the ledger is empty before each detachment, and fails under that mutation.
+
 - **Default query filters: an entity can be disabled instead of destroyed.**
   `World::default_query_filters_mut().add::<Disabled>()` and an entity carrying `Disabled` is
   invisible to every query a system **declares as a parameter**. The marker is yours — the engine

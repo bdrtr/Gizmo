@@ -17,10 +17,14 @@
 //! bir halka patlıyor, sonraki halka bir sonraki karede. Gözlemci zinciri kendi içinden
 //! kurabilseydi hepsi tek karede biterdi.
 //!
-//! **2. `On<Remove, T>` var ama hiçbir yere bağlı değil.** Motorun `observer.rs`'i bunu açıkça
-//! yazıyor: `Remove` ve `Replace` işaretçileri *"henüz dağıtım yolu yok"*, ve `add_observer`
-//! her zaman `Insert` kuruyor. Çıkarmayı yakalamanın tek yolu ham bir
-//! `register_on_remove` kancası (bkz. `removal_detection`); demo ikisini de kullanıyor.
+//! **2. ~~`On<Remove, T>` var ama hiçbir yere bağlı değil.~~ 2026-08-24'te bağlandı.** Bu satır
+//! eskiden motorun `observer.rs`'ini alıntılıyordu: `Remove` ve `Replace` işaretçileri *"henüz
+//! dağıtım yolu yok"*, ve `add_observer` her zaman `Insert` kuruyor. Artık `add_observer`
+//! işaretin kendisi üzerinden genel: kapanın **kendi imzasındaki** `On<E, T>` hangi kanca
+//! listesine yazılacağını seçiyor, ve üçü bir bileşenin ömrünü bölüyor — bir yazma `Insert`
+//! **ya da** `Replace` tetikliyor, ikisini birden değil, hiçbirini de değil; bir kopma `Remove`.
+//! Demo üçünü de sayıyor. Ham kanca (`register_on_remove` ve kardeşleri) kaçış kapısı olarak
+//! duruyor: gözlemcinin alamadığı `&mut World`'ü isteyen oradan iniyor.
 //!
 //! **3. Genel (varlığa bağlı olmayan) gözlemci yok, koşul da yok.** Motorda iki kapı var:
 //! bileşen ekleme (`add_observer`) ve **bir varlığa** bağlı olay (`observe`). Hedefsiz bir
@@ -66,6 +70,7 @@
 //!   * **Sağ-tık + fare / WASDQE** — kamera
 
 use gizmo::core::input::Input;
+use gizmo::core::observer::{Insert, On, Remove, Replace};
 use gizmo::core::query::{Mut, Query};
 use gizmo::core::system::{IntoSystemConfig, Phase, Res, ResMut};
 use gizmo::prelude::*;
@@ -113,8 +118,11 @@ struct Fuse {
     fired: Arc<Mutex<Vec<u32>>>,
     /// Tarlanın dinleyicisinin saydığı toplam — kabarmanın kanıtı.
     bubbled: Arc<Mutex<u32>>,
-    /// `add_observer` ile sayılan mayın eklemeleri, `register_on_remove` ile sayılan çıkarmalar.
+    /// Bir bileşenin ömrünün üç evresi, üçü de `add_observer` ile — `On<Insert, Mine>`,
+    /// `On<Replace, Mine>`, `On<Remove, Mine>`. `replaced` ile `indexed` toplamı, `Mine`'a
+    /// yapılan bütün yazmaları verir; ikisi örtüşmez.
     indexed: Arc<Mutex<u32>>,
+    replaced: Arc<Mutex<u32>>,
     removed: Arc<Mutex<u32>>,
 }
 gizmo::core::impl_component!(Fuse);
@@ -128,6 +136,7 @@ struct Report {
     rings: u32,
     bubbled: u32,
     indexed: u32,
+    replaced: u32,
     removed: u32,
     frame: u32,
     /// İmlecin zemin düzlemine düştüğü nokta — HUD'da ve tıklamada kullanılıyor.
@@ -171,19 +180,24 @@ fn main() {
             scene.world.insert_resource(fuse.clone());
             scene.world.insert_resource(Report::default());
 
-            // `Mine` bir varlığa eklendiğinde koşar. Motorda bu `add_observer`'ın **tek**
-            // kipi — `On<Insert, T>`.
+            // Bir bileşenin ömrünün üç evresi, üç gözlemci. Hangi kanca listesine yazıldığını
+            // kapanın kendi argüman tipi seçiyor — turbofish yok, işaret imzada duruyor.
             let indexed = fuse.indexed.clone();
-            scene.world.add_observer::<Mine, _>(move |_on| {
+            scene.world.add_observer(move |_: On<Insert, Mine>| {
                 *indexed.lock().expect("sayaç kilidi") += 1;
             });
-            // Çıkarma tarafı. `On<Remove, T>` motorda dağıtılmadığı için ham kanca.
+            // `Mine` üzerine yeniden yazılınca. `Insert` ile ÖRTÜŞMEZ: ilk yazma insert,
+            // sonrakiler replace.
+            let replaced = fuse.replaced.clone();
+            scene.world.add_observer(move |_: On<Replace, Mine>| {
+                *replaced.lock().expect("sayaç kilidi") += 1;
+            });
+            // Çıkarma tarafı — 2026-08-24'e kadar burada ham bir `register_on_remove` kancası
+            // vardı, çünkü `On<Remove, T>` hiçbir yere dağıtılmıyordu.
             let removed = fuse.removed.clone();
-            scene
-                .world
-                .register_on_remove::<Mine>(Box::new(move |_world, _entity| {
-                    *removed.lock().expect("sayaç kilidi") += 1;
-                }));
+            scene.world.add_observer(move |_: On<Remove, Mine>| {
+                *removed.lock().expect("sayaç kilidi") += 1;
+            });
 
             build_field(scene.world, device, &white, &fuse);
             scene.spawn_camera(state, Vec3::new(0.0, 14.0, 15.0), Vec3::ZERO);
@@ -220,11 +234,15 @@ fn main() {
                     ));
                     ui.separator();
                     ui.label(format!(
-                        "add_observer (Insert) saydı: {} ekleme",
+                        "On<Insert, Mine>  : {} ekleme",
                         report.indexed
                     ));
                     ui.label(format!(
-                        "register_on_remove saydı: {} çıkarma",
+                        "On<Replace, Mine> : {} üzerine yazma",
+                        report.replaced
+                    ));
+                    ui.label(format!(
+                        "On<Remove, Mine>  : {} çıkarma",
                         report.removed
                     ));
                     ui.label(format!(
@@ -233,7 +251,8 @@ fn main() {
                     ));
                     ui.separator();
                     ui.label("gözlemci dünyayı görmez: zincir kare kare ilerler");
-                    ui.label("On<Remove,T> motorda dağıtılmıyor — ham kanca gerekiyor");
+                    ui.label("üç evre de add_observer ile — işaret kapanın imzasında");
+                    ui.label("Insert ile Replace örtüşmez: yazma sayısı ikisinin toplamı");
                     ui.separator();
                     ui.label("sol tık — mayına bas");
                 });
@@ -416,6 +435,7 @@ fn sync_report(world: &mut gizmo::core::World, fuse: &Fuse, advanced: bool) {
         .unwrap_or((0, 0));
     let bubbled = *fuse.bubbled.lock().expect("sayaç kilidi");
     let indexed = *fuse.indexed.lock().expect("sayaç kilidi");
+    let replaced = *fuse.replaced.lock().expect("sayaç kilidi");
     let removed = *fuse.removed.lock().expect("sayaç kilidi");
 
     if let Some(mut report) = world.get_resource_mut::<Report>() {
@@ -423,17 +443,28 @@ fn sync_report(world: &mut gizmo::core::World, fuse: &Fuse, advanced: bool) {
         report.exploded = exploded;
         report.bubbled = bubbled;
         report.indexed = indexed;
+        report.replaced = replaced;
         report.removed = removed;
         if advanced {
             report.rings += 1;
             if std::env::var("GIZMO_OBSERVER_SELFTEST").is_ok() {
                 gizmo::gizmo_log!(
                     Info,
-                    "halka {} · patlayan {}/{} · kabaran {}",
+                    "halka {} · patlayan {}/{} · kabaran {} · Insert {} Replace {} Remove {}",
                     report.rings,
                     exploded,
                     mines,
-                    bubbled
+                    bubbled,
+                    indexed,
+                    replaced,
+                    removed
+                );
+                // Ölçülebilir bağ: bir mayın patlarken `Mine` üzerine `add_component` ile
+                // yeniden yazılıyor, ve bu bir REPLACE. Yani sayaç patlayan sayısını takip
+                // etmeli — etmiyorsa ya evre ayrımı yanlış ya da bir yazma kaçtı.
+                debug_assert_eq!(
+                    replaced as usize, exploded,
+                    "Replace sayacı patlayan sayısından koptu"
                 );
             }
         }

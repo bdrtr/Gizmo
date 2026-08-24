@@ -186,9 +186,22 @@ impl World {
         };
 
         let mut new_types = self.archetype_index.archetypes[old_arch_id].sorted_component_types();
+        // Which of the bundle's Table components the entity actually holds. Collected here,
+        // before the migration edits `new_types`, because afterwards the old archetype no
+        // longer says what this entity had. They are notified below, after the move, which
+        // is where `remove_component` notifies for the same storage.
+        //
+        // Until 2026-08-24 they were not notified at all: the sparse loop above fired
+        // `on_remove` and the Table half went out through `move_entity_to` in silence, so the
+        // same component removed two ways answered differently. `On<Remove, T>` made that a
+        // public promise rather than an internal quirk.
+        let mut detached_table_types = Vec::new();
         for info in &infos {
             if let Ok(pos) = new_types.binary_search(&info.type_id) {
                 new_types.remove(pos);
+                if info.storage_type == crate::component::StorageType::Table {
+                    detached_table_types.push(info.type_id);
+                }
             }
         }
 
@@ -238,6 +251,14 @@ impl World {
             row: new_row,
         };
         self.archetype_index.entity_archetype.insert(eid, target_arch_id);
+
+        for tid in detached_table_types {
+            self.run_hooks(tid, |h, w| {
+                for hook in &mut h.on_remove {
+                    hook(w, entity);
+                }
+            });
+        }
     }
 
     /// Attaches `component` to `entity`, overwriting any value already there, and registers
@@ -287,6 +308,12 @@ impl World {
                     for hook in &mut h.on_add { hook(w, entity); }
                 }
                 for hook in &mut h.on_set { hook(w, entity); }
+                // `existed` is the whole distinction, and the sparse path is the only one
+                // that has to compute it — the Table paths get it from which branch they
+                // are in. Same partition either way: add XOR replace, never both.
+                if existed {
+                    for hook in &mut h.on_replace { hook(w, entity); }
+                }
             });
             return;
         }
@@ -324,22 +351,20 @@ impl World {
                         .write(crate::archetype::ComponentTicks::new(self.tick));
                 }
             }
-            // Trigger OnSet hooks
-            let mut hooks = self.component_hooks.remove(&type_id);
-            if let Some(ref mut h) = hooks {
+            // An overwrite: `on_set` for every write, then `on_replace` for the half of
+            // them that had something to replace. `on_add` is deliberately absent — that is
+            // what makes the two lists a partition rather than an overlap.
+            //
+            // This used to hand-roll `run_hooks`'s take-and-merge-back, which is how a
+            // fourth hook list becomes a silent bug: the copy would have kept merging three.
+            self.run_hooks(type_id, |h, w| {
                 for hook in &mut h.on_set {
-                    hook(self, entity);
+                    hook(w, entity);
                 }
-            }
-            if let Some(h) = hooks {
-                if let Some(existing) = self.component_hooks.get_mut(&type_id) {
-                    existing.on_add.extend(h.on_add);
-                    existing.on_set.extend(h.on_set);
-                    existing.on_remove.extend(h.on_remove);
-                } else {
-                    self.component_hooks.insert(type_id, h);
+                for hook in &mut h.on_replace {
+                    hook(w, entity);
                 }
-            }
+            });
             return;
         }
 
@@ -402,24 +427,17 @@ impl World {
             .entity_archetype
             .insert(eid, target_arch_id);
 
-        let mut hooks = self.component_hooks.remove(&type_id);
-        if let Some(ref mut h) = hooks {
+        // A genuinely new insert — the entity migrated to a different archetype to get here,
+        // so there was no old value and `on_replace` must stay silent. The other
+        // hand-rolled copy of `run_hooks` in this file, for the same reason as the first.
+        self.run_hooks(type_id, |h, w| {
             for hook in &mut h.on_add {
-                hook(self, entity);
+                hook(w, entity);
             }
             for hook in &mut h.on_set {
-                hook(self, entity);
+                hook(w, entity);
             }
-        }
-        if let Some(h) = hooks {
-            if let Some(existing) = self.component_hooks.get_mut(&type_id) {
-                existing.on_add.extend(h.on_add);
-                existing.on_set.extend(h.on_set);
-                existing.on_remove.extend(h.on_remove);
-            } else {
-                self.component_hooks.insert(type_id, h);
-            }
-        }
+        });
     }
 
     /// Getting a raw Component Pointer (for Reflection/Editor)
@@ -600,6 +618,9 @@ impl World {
                 self.run_hooks(type_id, |h, w| {
                     for e in &group_entities {
                         for hook in &mut h.on_set {
+                            hook(w, *e);
+                        }
+                        for hook in &mut h.on_replace {
                             hook(w, *e);
                         }
                     }

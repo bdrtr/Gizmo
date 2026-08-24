@@ -135,6 +135,7 @@ impl World {
             if let Some(existing) = self.component_hooks.get_mut(&type_id) {
                 existing.on_add.extend(h.on_add);
                 existing.on_set.extend(h.on_set);
+                existing.on_replace.extend(h.on_replace);
                 existing.on_remove.extend(h.on_remove);
             } else {
                 self.component_hooks.insert(type_id, h);

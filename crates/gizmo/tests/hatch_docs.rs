@@ -51,6 +51,10 @@ const HATCHES: &[(&str, &str)] = &[
     // The default query filter decides, on the user's behalf, that a system does not see an
     // entity. `IgnoreDefaultFilters` is the door out, and its docs have to name what it undoes.
     ("IgnoreDefaultFilters", "DefaultQueryFilters"),
+    // `add_observer` decides one thing on the caller's behalf: that the callback does not need
+    // the world. `register_on_replace` and its siblings are the same hook lists with the
+    // `&mut World` left in, so the raw registration has to say which convenience it is under.
+    ("register_on_replace", "add_observer"),
 ];
 
 /// The line each hatch is declared on, as a prefix.
@@ -73,6 +77,7 @@ const HATCH_DECLS: &[(&str, &str)] = &[
         "impl<P: SystemParam> SystemParam for Option<P>",
     ),
     ("IgnoreDefaultFilters", "pub struct IgnoreDefaultFilters"),
+    ("register_on_replace", "pub fn register_on_replace"),
 ];
 
 /// Where each hatch's documentation lives.
@@ -96,6 +101,7 @@ const HATCH_FILES: &[(&str, &str)] = &[
         "crates/gizmo-core/src/system/params.rs",
     ),
     ("IgnoreDefaultFilters", "crates/gizmo-core/src/query/mod.rs"),
+    ("register_on_replace", "crates/gizmo-core/src/world/registration.rs"),
 ];
 
 /// APIs the plan **proposes** rather than records: named as future work, absent by design.

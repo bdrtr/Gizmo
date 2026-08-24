@@ -3,13 +3,14 @@
 //! Bir bileşen bir varlıktan koptuğunda haberdar olmak: bileşen kalkınca bir geri çağrının
 //! çalışması ve demoda küpü camgöbeğine boyaması.
 //!
-//! ## Gizmo'da gözlemci **var**, ama yalnız ekleme için
+//! ## Gözlemci de var, kanca da — ve bu demo kancayı seçiyor
 //!
-//! [`World::add_observer`] motorda mevcut — ve imzası `On<Insert, T>`'e sabitli. Yani
-//! **kaldırma** tarafında bir gözlemcinin doğrudan karşılığı **yok**. Kaldırmanın kapısı
-//! yaşam döngüsü kancaları: [`World::register_on_remove`]. Motorun kendi belgesi zaten
-//! `add_observer`'ı "bir `on_add` kancasından ibaret" diye tarif ediyor, yani ikisi aynı
-//! mekanizmanın iki ucu.
+//! [`World::add_observer`] 2026-08-24'ten beri üç evrenin hepsini alıyor:
+//! `On<Insert, T>`, `On<Replace, T>`, `On<Remove, T>` (bkz. `observers` demosu). Bu demo yine
+//! de ham [`World::register_on_remove`] kancasını kullanıyor, çünkü ölçtüğü şey kancaya
+//! verilen **`&mut World`**: geri çağrı içeriden malzemeyi boyuyor ve deftere yazıyor.
+//! Gözlemci `On`'dan başka bir şey almaz, yani bu demoyu gözlemciyle yazmak mümkün değil —
+//! ikisi aynı listenin iki ucu ve fark tam olarak burada görünüyor.
 //!
 //! ## Asıl ölçülen şey: hangi yol kancayı tetikliyor, hangisi sessiz
 //!
@@ -18,21 +19,25 @@
 //! beş yol; iki saniye sonra her biri kendi yoluyla bileşenini kaybediyor, kanca çalışırsa küp
 //! camgöbeğine dönüyor (`srgb(0.5, 1, 1)`) ve HUD "çalıştı" yazıyor.
 //!
-//! Ölçüldü (2026-08-23, kare 400):
+//! Ölçüldü (`GIZMO_REMOVAL_SELFTEST=1`, 2026-08-24):
 //!
-//! | yol                       | kanca   |
-//! |---------------------------|---------|
-//! | `remove_component::<T>`   | çalıştı |
-//! | `remove_batch::<T>`       | çalıştı |
-//! | `remove_bundle` (Table)   | **sessiz** |
-//! | `remove_bundle` (Sparse)  | çalıştı |
-//! | `despawn`                 | çalıştı |
+//! | yol                       | kanca   | 2026-08-23'te |
+//! |---------------------------|---------|---------------|
+//! | `remove_component::<T>`   | çalıştı | çalıştı |
+//! | `remove_batch::<T>`       | çalıştı | çalıştı |
+//! | `remove_bundle` (Table)   | çalıştı | **sessizdi** |
+//! | `remove_bundle` (Sparse)  | çalıştı | çalıştı |
+//! | `despawn`                 | çalıştı | çalıştı |
 //!
-//! Yani `remove_bundle` demetin **yalnız seyrek (SparseSet) bileşenleri için** tetikliyor; Table
-//! depolamalı olanlar sessizce kopuyor. Demoda ikisi de var — aynı çağrı, iki farklı depolama,
-//! iki farklı sonuç — çünkü aradaki farkı yaratan çağrı değil, bileşenin depolama türü.
+//! **Üçüncü satır bu demonun bulduğu kusurdu ve artık kapalı.** `remove_bundle` demetin
+//! yalnız seyrek (SparseSet) bileşenleri için tetikliyordu; Table depolamalı olanlar
+//! `move_entity_to` ile sessizce kopuyordu, yani aynı bileşen iki farklı yolla kaldırılınca
+//! iki farklı cevap veriyordu. `On<Remove, T>`'ye dağıtım yolu açılınca bu içerideki bir
+//! tuhaflık olmaktan çıkıp bozulmuş bir söz hâline geldi ve aynı değişiklikte düzeltildi.
 //!
-//! Beş yol dört kanca çağrısı üretiyor, ve bu sayı da HUD'da: sessiz kalan yol hiç saymıyor.
+//! Beş yol artık **beş** kanca çağrısı üretiyor, ve bu sayı da HUD'da. Demoda iki depolama
+//! türü de duruyor: fark kapandı diye ayrımın kendisi kaybolmadı — `remove_bundle` hâlâ
+//! seyrek olanları ayrı bir döngüde, Table olanları göçün ardından bildiriyor.
 //!
 //! ## Kancanın kendisi hakkında bilinmesi gerekenler
 //!
@@ -337,9 +342,29 @@ fn rebuild(world: &mut gizmo::core::World) {
 }
 
 /// **R** yeniden kurulum ister; ayrıca geçen süreyi biriktirir.
+///
+/// `GIZMO_REMOVAL_SELFTEST=1` ile: yollar uygulandıktan bir saniye sonra beş yolun sonucunu
+/// günlüğe basar. Başlıktaki tablo bu çıktıdır — elle okunmuş bir HUD değil, yeniden
+/// üretilebilir bir ölçüm; `remove_bundle`'ın Table yarısı 2026-08-24'te sustuğu için o
+/// tablonun bir satırı zaten bir kez bayatladı.
 fn watch_restart(mut audit: ResMut<RemovalAudit>, input: Res<Input>, time: Res<Time>) {
+    let before = audit.elapsed;
     audit.elapsed += time.dt();
     if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::KeyR as u32) {
         audit.restart = true;
+    }
+
+    let report_at = TRIGGER_AT + 1.0;
+    if before < report_at && audit.elapsed >= report_at && std::env::var("GIZMO_REMOVAL_SELFTEST").is_ok() {
+        for probe in &audit.probes {
+            gizmo::gizmo_log!(
+                Info,
+                "{:26} uygulandı={} kanca={}",
+                probe.path,
+                probe.applied,
+                probe.fired
+            );
+        }
+        gizmo::gizmo_log!(Info, "toplam kanca çağrısı: {}", audit.hook_calls);
     }
 }

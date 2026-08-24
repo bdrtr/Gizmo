@@ -35,16 +35,32 @@ pub type AddHook = Box<dyn FnMut(&mut World, Entity) + Send + Sync>;
 /// Callback invoked when the registered component type is detached from an entity.
 ///
 /// When the hook runs relative to the data actually disappearing depends on the path:
-/// `World::remove_component`, `World::remove_batch` and the sparse half of
-/// `World::despawn` fire it *after* the value is gone; the Table-storage half of
+/// `World::remove_component`, `World::remove_batch`, `World::remove_bundle` and the sparse
+/// half of `World::despawn` fire it *after* the value is gone; the Table-storage half of
 /// `World::despawn` fires it *before* the row is dropped, so there the component is still
-/// readable. `World::remove_bundle` fires it only for the bundle's sparse components — its
-/// Table components are detached silently.
+/// readable. `remove_bundle`'s Table components joined the list on 2026-08-24 — until then
+/// they were detached silently, so the same component removed two ways answered
+/// differently.
 pub type RemoveHook = Box<dyn FnMut(&mut World, Entity) + Send + Sync>;
 
 /// Callback invoked on every write of the registered component type: the initial insert
 /// (right after the [`AddHook`]s) and every later overwrite of the same entity's value.
 pub type SetHook = Box<dyn FnMut(&mut World, Entity) + Send + Sync>;
+
+/// Callback invoked when a write **overwrote a value the entity already had** — the strict
+/// complement of [`AddHook`] within [`SetHook`].
+///
+/// `on_set` fires on both the first write and every later one, so a caller that wants "the
+/// value changed" rather than "the value was written" has to keep its own per-entity ledger
+/// to subtract the inserts. This list is that subtraction, done by the dispatcher, which is
+/// the only place that knows which case it is in: every site that fires an [`AddHook`] fires
+/// no `ReplaceHook`, and every site that fires a `SetHook` without an `AddHook` fires one.
+///
+/// It is handed the entity only — like every other hook here, it can see neither the value
+/// that was overwritten nor the one that replaced it. Reading the component back out of the
+/// world gives the **new** value; the old one is already dropped by then, because the write
+/// is an assignment (`*ptr = ..`) precisely so a `T: Drop` does not leak.
+pub type ReplaceHook = Box<dyn FnMut(&mut World, Entity) + Send + Sync>;
 
 /// The hook lists registered against one component type; the world keeps one of these per
 /// `TypeId`. The `World::register_on_*` APIs are what fill them.
@@ -69,7 +85,7 @@ pub struct ComponentHooks {
     /// than an `on_add` hook that builds an `On<Insert, T>` for its closure. Entirely skipped
     /// by an overwrite of an existing value.
     pub on_add: Vec<AddHook>,
-    /// The only one of the three lists a whole-entity `World::despawn` runs: it fires once per
+    /// The only one of the four lists a whole-entity `World::despawn` runs: it fires once per
     /// component type the entity still holds. The order *across* component types comes from a
     /// `HashMap` and is arbitrary.
     pub on_remove: Vec<RemoveHook>,
@@ -78,4 +94,12 @@ pub struct ComponentHooks {
     /// either the old or the new value without reading it back out of the world. On a first
     /// insert they run after [`Self::on_add`], never before.
     pub on_set: Vec<SetHook>,
+    /// Run on a write that **replaced an existing value**, and never on a first insert — so
+    /// `on_add` and `on_replace` partition the writes that `on_set` sees, with no overlap and
+    /// no gap. Filled by `World::register_on_replace` and by `World::add_observer` when its
+    /// closure asks for `On<Replace, T>`.
+    ///
+    /// They run immediately after [`Self::on_set`], not before, so a replace observer sees a
+    /// world in which every set hook for the same write has already had its turn.
+    pub on_replace: Vec<ReplaceHook>,
 }

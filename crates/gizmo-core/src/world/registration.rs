@@ -17,24 +17,52 @@ impl World {
             .or_insert_with(ComponentInfo::of::<T>);
     }
 
-    /// Registers a Component hook (Observer) for `OnInsert`.
-    pub fn add_observer<T: Component, F>(&mut self, mut system: F) -> &mut Self
+    /// Registers a lifecycle observer for `T`, on the phase named by the closure's own
+    /// `On<E, T>` — [`Insert`](crate::observer::Insert),
+    /// [`Replace`](crate::observer::Replace) or [`Remove`](crate::observer::Remove).
+    ///
+    /// ```
+    /// # use gizmo_core::world::World;
+    /// # use gizmo_core::observer::{On, Insert, Remove};
+    /// # #[derive(Clone, Copy)] pub struct Hp(u32);
+    /// # gizmo_core::impl_component!(Hp);
+    /// # let mut world = World::new();
+    /// world.add_observer(|e: On<Insert, Hp>| println!("gained {:?}", e.entity));
+    /// world.add_observer(|e: On<Remove, Hp>| println!("lost {:?}", e.entity));
+    /// ```
+    ///
+    /// Until 2026-08-24 this took only `Insert`, and `Remove`/`Replace` were markers no API
+    /// accepted; the generic parameter is why the call has three of them now and the one
+    /// turbofish in the tree grew a term. Inference covers the ordinary case — the marker is
+    /// already written in the closure's argument type.
+    ///
+    /// The **hatch** is [`register_on_add`](Self::register_on_add) and its three siblings:
+    /// this is exactly one of those hooks with an [`On`](crate::observer::On) built for it, so
+    /// a caller who needs the `&mut World` the hook gets and the observer does not can drop
+    /// down one layer without giving up the phase. Everything the hook lists document applies
+    /// unchanged — including which write paths fire nothing at all.
+    ///
+    /// Registrations accumulate for the life of the world; there is no unregister, and
+    /// registering the same closure twice makes it fire twice.
+    pub fn add_observer<E: crate::observer::Lifecycle, T: Component, F>(
+        &mut self,
+        mut system: F,
+    ) -> &mut Self
     where
-        F: FnMut(crate::observer::On<crate::observer::Insert, T>) + Send + Sync + 'static,
+        F: FnMut(crate::observer::On<E, T>) + Send + Sync + 'static,
     {
         let type_id = TypeId::of::<T>();
-        let mut hooks = self.component_hooks.remove(&type_id).unwrap_or_default();
+        let hooks = self.component_hooks.entry(type_id).or_default();
 
-        hooks.on_add.push(Box::new(move |_world, entity| {
+        E::list(hooks).push(Box::new(move |_world, entity| {
             let event = crate::observer::On {
-                event: crate::observer::Insert,
+                event: E::witness(),
                 entity,
                 _marker: std::marker::PhantomData,
             };
             system(event);
         }));
 
-        self.component_hooks.insert(type_id, hooks);
         self
     }
 
@@ -143,8 +171,7 @@ impl World {
     /// [`World::register_on_add`].
     ///
     /// Read [`RemoveHook`] before relying on it: whether the component is still readable
-    /// when the hook runs depends on the removal path and on `T`'s storage type, and
-    /// `World::remove_bundle` does not fire it for Table-storage components at all.
+    /// when the hook runs depends on the removal path and on `T`'s storage type.
     pub fn register_on_remove<T: Component>(&mut self, hook: RemoveHook) {
         self.component_hooks
             .entry(TypeId::of::<T>())
@@ -165,6 +192,31 @@ impl World {
             .entry(TypeId::of::<T>())
             .or_default()
             .on_set
+            .push(hook);
+    }
+
+    /// Appends a hook fired only when a write **overwrote a value the entity already had** —
+    /// the strict complement of [`World::register_on_add`] within [`World::register_on_set`].
+    /// Same accumulate-and-never-unregister rules.
+    ///
+    /// Use it when "the value changed hands" is the question and the first insert is not an
+    /// answer to it: an `on_set` hook counting writes has to subtract the inserts itself, and
+    /// doing that from inside the hook means keeping a per-entity ledger, because the hook is
+    /// handed only the entity and cannot tell the two cases apart. The dispatcher can, so it
+    /// does it here.
+    ///
+    /// Runs immediately after that same write's `on_set` hooks. See [`ReplaceHook`].
+    ///
+    /// This is the **hatch under [`add_observer`](Self::add_observer)**. That one hands the
+    /// closure an `On<Replace, T>` and nothing else; this one hands it the `&mut World` the
+    /// dispatch is running inside, which is the only way a replace notification can read the
+    /// new value, look at the rest of the entity, or queue work. The observer is the shorter
+    /// spelling of the same list — not a different mechanism.
+    pub fn register_on_replace<T: Component>(&mut self, hook: crate::world::ReplaceHook) {
+        self.component_hooks
+            .entry(TypeId::of::<T>())
+            .or_default()
+            .on_replace
             .push(hook);
     }
 
