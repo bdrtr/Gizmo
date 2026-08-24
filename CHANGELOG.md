@@ -50,6 +50,42 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **An entity-event listener is handed the world, so a chain reaction resolves in one frame.**
+  `World::observe`'s listener now takes `(&mut World, On<E>)` — the same world the dispatch is
+  running inside — so it can spawn, despawn, write components and call `trigger` again. Until now
+  it received the `On` and nothing else, and anything a notification wanted to *do* had to be
+  written to captured state and picked up by a later system.
+
+  **The gap this closes was half wrong when it was written.** It read "callbacks get no world",
+  naming observers *and* hooks. All five hook types have taken a `&mut World` all along —
+  `AddHook`, `SetHook`, `ReplaceHook`, `RemoveHook`, `DespawnHook` — and a lifecycle observer's
+  `On` is built by one of them, so `register_on_add` and its siblings were always the layer
+  underneath. `observe` was the one route with nothing underneath it.
+
+  **Measured, both ways, on the same chain.** `observers` drops a mine field of 70 and detonates
+  the centre. Through the captured queue it reaches 26 mines in **8 frames**, one ring per frame.
+  With the listener driving it — `trigger` called from inside the dispatch — it reaches **the same
+  26 mines with the same 26 bubbled events in 1 frame**. The demo keeps both, on `M`, because
+  watching the chain propagate is half of what it is for; it is now a choice rather than a
+  constraint.
+
+  One number moved while measuring, and it is worth keeping. The immediate path first reported
+  **73** bubbled events instead of 26: it collects its neighbour list as a snapshot, and by the
+  time it triggers the third entry the cascade from the first has already reached it. An event
+  bubbles to its ancestors even when the target's own listener returns early, so the redundant
+  triggers were not free. Re-checking before triggering brought it to 26 — the queued path had
+  been doing that de-duplication in its drain all along.
+
+  **Re-entrancy terminates structurally, not by a check.** The notified entity's listeners are
+  owned by the dispatch for the length of the call, so an event sent back at its own target finds
+  nothing to run, while another entity's listeners are live and run nested. That is the same shape
+  component hooks already had. Five tests cover it, including that a listener survives the dispatch
+  that detached it — the detachment lasts one dispatch, it is not a de-registration.
+
+  `EntityListener<E>` names the boxed closure type, because three places have to spell it and a
+  mismatch there means a `downcast_mut` that quietly returns `None`: a listener that is never
+  called, with no error anywhere.
+
 - **Lifecycle observers cover a component's whole life: `Insert`, `Replace`, `Remove`.**
   `World::add_observer` is generic over the marker, and the marker comes from the closure's own
   signature — `world.add_observer(|e: On<Remove, Hp>| …)` — so the ordinary call needs no turbofish

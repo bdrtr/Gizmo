@@ -66,17 +66,50 @@ impl World {
         self
     }
 
-    /// Entity-based Observer registration for custom EntityEvents
+    /// Attaches a listener for one [`EntityEvent`](crate::observer::EntityEvent) type to one
+    /// entity. [`trigger`](Self::trigger) dispatches to it, and on up the `Parent` chain if the
+    /// event opts in.
+    ///
+    /// The listener is handed **`&mut World`** — the same world the dispatch is running inside,
+    /// so it can spawn, despawn, write components, read anything, and call `trigger` again:
+    ///
+    /// ```
+    /// # use gizmo_core::world::World;
+    /// # use gizmo_core::observer::{EntityEvent, On};
+    /// # use gizmo_core::entity::Entity;
+    /// # #[derive(Clone)] struct Ping(Entity);
+    /// # impl EntityEvent for Ping { fn target(&self) -> Entity { self.0 } }
+    /// # let mut world = World::new();
+    /// # let e = world.spawn();
+    /// world.observe::<Ping, _>(e, |world: &mut World, _on: On<Ping>| {
+    ///     world.spawn();
+    /// });
+    /// ```
+    ///
+    /// Until 2026-08-24 it was handed the `On` and nothing else, which is why a chain reaction
+    /// had to be written as a queue drained by some later system — and therefore advanced one
+    /// link per frame. The five lifecycle hook types had taken a `&mut World` all along; this
+    /// path was the one with no layer underneath it to drop down to.
+    ///
+    /// **Re-entrancy.** The listeners for the entity currently being notified are detached from
+    /// the world for the duration of the call — the same shape as component hooks — so a
+    /// listener that triggers the same event back at its own entity terminates instead of
+    /// recursing. Any *other* entity's listeners are live and will run nested.
+    ///
+    /// Listeners on one entity and event type run in registration order. There is no
+    /// unregister; registering the same closure twice makes it fire twice.
     pub fn observe<E: crate::observer::EntityEvent, F>(&mut self, entity: Entity, listener: F) -> &mut Self
     where
-        F: FnMut(crate::observer::On<E>) + Send + Sync + 'static,
+        F: FnMut(&mut World, crate::observer::On<E>) + Send + Sync + 'static,
     {
         let type_id = TypeId::of::<E>();
         let map_any = self.entity_observers.entry(type_id).or_insert_with(|| {
-            Box::new(HashMap::<Entity, Vec<Box<dyn FnMut(crate::observer::On<E>) + Send + Sync + 'static>>>::new())
+            Box::new(HashMap::<Entity, Vec<crate::observer::EntityListener<E>>>::new())
         });
 
-        let map = map_any.downcast_mut::<HashMap<Entity, Vec<Box<dyn FnMut(crate::observer::On<E>) + Send + Sync + 'static>>>>().unwrap();
+        let map = map_any
+            .downcast_mut::<HashMap<Entity, Vec<crate::observer::EntityListener<E>>>>()
+            .unwrap();
         map.entry(entity).or_default().push(Box::new(listener));
         self
     }
@@ -91,7 +124,9 @@ impl World {
             let mut hooks_to_run = Vec::new();
 
             if let Some(map_any) = self.entity_observers.get_mut(&TypeId::of::<E>()) {
-                if let Some(map) = map_any.downcast_mut::<HashMap<Entity, Vec<Box<dyn FnMut(crate::observer::On<E>) + Send + Sync + 'static>>>>() {
+                if let Some(map) =
+                    map_any.downcast_mut::<HashMap<Entity, Vec<crate::observer::EntityListener<E>>>>()
+                {
                     if let Some(listeners) = map.remove(&current_entity) {
                         hooks_to_run = listeners;
                     }
@@ -104,11 +139,17 @@ impl World {
                     entity: current_entity,
                     _marker: std::marker::PhantomData,
                 };
-                listener(e);
+                // The listener holds the world for the length of its call, and its own entry
+                // is out of the map while it does — so triggering this event back at this
+                // entity from inside terminates rather than recursing. Any other entity's
+                // listeners are live and run nested.
+                listener(self, e);
 
                 // Geri koy
                 if let Some(map_any) = self.entity_observers.get_mut(&TypeId::of::<E>()) {
-                    if let Some(map) = map_any.downcast_mut::<HashMap<Entity, Vec<Box<dyn FnMut(crate::observer::On<E>) + Send + Sync + 'static>>>>() {
+                    if let Some(map) = map_any
+                        .downcast_mut::<HashMap<Entity, Vec<crate::observer::EntityListener<E>>>>()
+                    {
                         map.entry(current_entity).or_default().push(listener);
                     }
                 }

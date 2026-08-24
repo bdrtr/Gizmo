@@ -141,6 +141,12 @@ fn add_listeners_to_hierarchy<const DENSITY_PARAM: usize, const N: usize>(
     }
 }
 
-fn empty_listener<const N: usize>(event: gizmo_core::observer::On<TestEvent<N>>) {
+fn empty_listener<const N: usize>(
+    world: &mut gizmo_core::world::World,
+    event: gizmo_core::observer::On<TestEvent<N>>,
+) {
+    // The world is black-boxed too: the benchmark measures dispatch, and an optimiser that
+    // noticed the parameter was dead could hoist the call away entirely.
+    std::hint::black_box(&*world);
     std::hint::black_box(event);
 }

@@ -6,16 +6,21 @@
 //!
 //! ## Motorda gözlemci var, ama üç sınırı var ve üçü de burada görünüyor
 //!
-//! **1. Geri çağrıya dünya verilmiyor.** Motorun kendi belgesi böyle diyor: *"ikisi de çağrıldığı
-//! `&mut World` çağrısının içinde, eşzamanlı koşar, ve hiçbiri geri çağrıya bir dünya vermez.
-//! Bir şey değiştirmesi gereken geri çağrı, yakaladığı bir durumdan geçmek zorundadır."* Yani
-//! gözlemcinin `Commands` alıp içinden zinciri kendi kurması **imkânsız**. Zincir bu yüzden
-//! yakalanmış bir kuyruktan yürüyor: gözlemci patlamayı kuyruğa yazıyor, kuyruğu `&mut World`
-//! gören bir yer boşaltıyor.
+//! **1. ~~Geri çağrıya dünya verilmiyor.~~ 2026-08-24'te verildi — ve demo iki kipi de tutuyor.**
+//! Motorun belgesi eskiden şöyle diyordu: *"hiçbiri geri çağrıya bir dünya vermez. Bir şey
+//! değiştirmesi gereken geri çağrı, yakaladığı bir durumdan geçmek zorundadır."* Yani zincir
+//! yakalanmış bir kuyruktan yürümek zorundaydı — gözlemci patlamayı kuyruğa yazıyor, kuyruğu
+//! `&mut World` gören bir yer bir sonraki karede boşaltıyordu. Görünür sonucu: zincir **kare
+//! kare** ilerliyordu.
 //!
-//! Bunun görünür bir sonucu var ve demo onu saklamıyor: zincir **kare kare** ilerliyor. Her kare
-//! bir halka patlıyor, sonraki halka bir sonraki karede. Gözlemci zinciri kendi içinden
-//! kurabilseydi hepsi tek karede biterdi.
+//! `observe`'un dinleyicisi artık `&mut World` alıyor, yani zinciri kendi içinden yürütebiliyor:
+//! `world.trigger` dinleyicinin içinden yeniden çağrılıyor ve dağıtım özyineliyor. **M** ile iki
+//! kip arasında geçiliyor, çünkü zinciri halka halka İZLEMEK demonun yarısı — ama artık bir
+//! zorunluluk değil, bir tercih.
+//!
+//! Özyineleme kendiliğinden bitiyor ve sebebi motorda: dağıtım süresince o an bildirilen
+//! varlığın dinleyicileri dünyadan **ayrılıyor**, yani bir dinleyicinin aynı olayı kendi
+//! varlığına geri göndermesi sonsuz döngü değil sessiz bir duruş. Kancalarda da aynı şekil.
 //!
 //! **2. ~~`On<Remove, T>` var ama hiçbir yere bağlı değil.~~ 2026-08-24'te bağlandı.** Bu satır
 //! eskiden motorun `observer.rs`'ini alıntılıyordu: `Remove` ve `Replace` işaretçileri *"henüz
@@ -38,7 +43,25 @@
 //! görünmez bir "tarla" varlığının çocuğu, ve tarlanın dinleyicisi her patlamayı sayıyor. Yani
 //! HUD'daki toplam sayaç tek bir dinleyiciden geliyor, mayınlardan değil.
 //!
-//! ## Ölçüldü (2026-08-23, 70 mayın, `GIZMO_OBSERVER_SELFTEST=1`)
+//! ## Ölçüldü (2026-08-24, 70 mayın, `GIZMO_OBSERVER_SELFTEST=1`)
+//!
+//! **İki kip aynı zincire ulaşıyor, farklı sürede.** Merkezdeki aynı mayından başlatıldığında:
+//!
+//! | kip | kare | patlayan | kabaran |
+//! |-----|------|----------|---------|
+//! | kuyruk (`M` ile) | **8** | 26/70 | 26 |
+//! | anında (`GIZMO_OBSERVER_IMMEDIATE=1`) | **1** | 26/70 | 26 |
+//!
+//! Patlayan kümesi birebir aynı — 26 mayın, tarlanın merkezdeki mayına bağlı parçası. Değişen
+//! yalnız ne zaman bittiği.
+//!
+//! Kabaran sayısının da eşit çıkması ayrı bir düzeltmenin sonucu: anında kip menzildeki
+//! mayınların listesini bir anlık görüntü olarak topluyor, ve listedeki ikinciyi tetiklerken
+//! birincinin zinciri onu çoktan patlatmış olabiliyor. Olay hedef patlamış olsa bile yukarı
+//! kabardığı için ilk ölçüm 26 yerine **73** verdi; tetiklemeden önce yeniden bakınca 26'ya
+//! indi. Kuyruk kipi bu ayıklamayı zaten boşaltma sırasında yapıyordu.
+//!
+//! ### Kuyruk kipinin halka halka tablosu (2026-08-23'ten beri değişmedi)
 //!
 //! Merkezdeki tek mayından başlayan zincir, halka halka:
 //!
@@ -56,9 +79,9 @@
 //! Sekiz halka, yani **sekiz kare**, ve 70 mayının 26'sı — tarlanın merkezdeki mayına bağlı olan
 //! parçası. Zincir kopukluğun olduğu yerde duruyor, ekranda da öyle görünüyor.
 //!
-//! Kabaran sayacın patlayan sayısını **bir halka önden** götürmesi de gözlemcinin dünyayı
-//! görmemesinin doğrudan sonucu: kabarma `trigger` anında, patlama ise kuyruk boşaltılırken
-//! oluyor.
+//! Kabaran sayacın patlayan sayısını bu kipte **bir halka önden** götürmesi kuyruğun doğrudan
+//! sonucu: kabarma `trigger` anında, patlama ise kuyruk bir sonraki karede boşaltılırken oluyor.
+//! Anında kipte ikisi aynı çağrının içinde, yani böyle bir gecikme yok.
 //!
 //! ## Doğrulama
 //!
@@ -67,6 +90,7 @@
 //!
 //! ## Kontroller
 //!   * **Sol tık** — mayına bas
+//!   * **M** — zincir kipi: kuyruk (halka başına bir kare) ↔ anında (tek kare)
 //!   * **Sağ-tık + fare / WASDQE** — kamera
 
 use gizmo::core::input::Input;
@@ -90,6 +114,17 @@ gizmo::core::impl_component!(Mine);
 #[derive(Clone, Copy)]
 struct Field;
 gizmo::core::impl_component!(Field);
+
+/// Zincirin hangi kiple yürüdüğü. **Dinleyici bunu dünyadan okuyor** — yani kaynağın kendisi
+/// dinleyicinin artık `&mut World` aldığının en kısa kanıtı.
+#[derive(Clone, Copy, Default)]
+struct ChainMode {
+    /// `true`: dinleyici zinciri kendi içinden yürütür, hepsi tek karede biter.
+    /// `false`: dinleyici yalnız kuyruğa yazar, zincir kare kare ilerler (2026-08-24 öncesi
+    /// tek seçenek buydu, çünkü dinleyicinin dünyası yoktu).
+    immediate: bool,
+}
+gizmo::core::impl_component!(ChainMode);
 
 /// `Explode`: bir varlığa yönelmiş özel olay.
 #[derive(Clone, Copy)]
@@ -138,6 +173,8 @@ struct Report {
     indexed: u32,
     replaced: u32,
     removed: u32,
+    /// Zincirin hangi kiple yürüdüğü — HUD bunu yazıyor.
+    immediate: bool,
     frame: u32,
     /// İmlecin zemin düzlemine düştüğü nokta — HUD'da ve tıklamada kullanılıyor.
     aim: Vec3,
@@ -179,6 +216,11 @@ fn main() {
             let fuse = Fuse::default();
             scene.world.insert_resource(fuse.clone());
             scene.world.insert_resource(Report::default());
+            // Kip: kendi kendini sınayan koşu ANINDA kiple başlıyor, çünkü ölçülecek asıl şey
+            // o. Elle oynarken varsayılan kuyruk kipi — zinciri halka halka görmek için.
+            scene.world.insert_resource(ChainMode {
+                immediate: std::env::var("GIZMO_OBSERVER_IMMEDIATE").is_ok(),
+            });
 
             // Bir bileşenin ömrünün üç evresi, üç gözlemci. Hangi kanca listesine yazıldığını
             // kapanın kendi argüman tipi seçiyor — turbofish yok, işaret imzada duruyor.
@@ -211,10 +253,20 @@ fn main() {
             renderer.ssr = None;
             renderer.ssgi = None;
 
-            let clicked = world
+            let (clicked, toggled) = world
                 .get_resource::<gizmo::core::input::Input>()
-                .map(|i| i.is_mouse_button_just_pressed(0))
-                .unwrap_or(false);
+                .map(|i| {
+                    (
+                        i.is_mouse_button_just_pressed(0),
+                        i.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::KeyM as u32),
+                    )
+                })
+                .unwrap_or((false, false));
+            if toggled {
+                if let Some(mut mode) = world.get_resource_mut::<ChainMode>() {
+                    mode.immediate = !mode.immediate;
+                }
+            }
             drive_chain(world, clicked);
 
             gizmo::systems::default_render_pass(world, encoder, view, renderer);
@@ -250,7 +302,11 @@ fn main() {
                         report.bubbled
                     ));
                     ui.separator();
-                    ui.label("gözlemci dünyayı görmez: zincir kare kare ilerler");
+                    ui.label(if report.immediate {
+                        "kip: ANINDA — dinleyici zinciri kendi içinden yürütüyor (M)"
+                    } else {
+                        "kip: KUYRUK — dinleyici kuyruğa yazıyor, halka başına bir kare (M)"
+                    });
                     ui.label("üç evre de add_observer ile — işaret kapanın imzasında");
                     ui.label("Insert ile Replace örtüşmez: yazma sayısı ikisinin toplamı");
                     ui.separator();
@@ -299,10 +355,12 @@ fn aim_at_ground(
     }
 }
 
-/// Zincirin bir halkası: kuyruğu boşalt, patlayanları boya, menzildekileri tetikle.
+/// **Kuyruk kipi**: kuyruğu boşalt, patlayanları boya, menzildekileri tetikle — halka başına
+/// bir kare. Anında kipte kuyruk hep boş kalır ve bu fonksiyon yalnız defteri günceller.
 ///
-/// Gözlemci yalnız kuyruğa yazabildiği için gerçek iş `&mut World` gören bu fonksiyonda — ve
-/// zincir her karede bir halka ilerliyor.
+/// Bu, 2026-08-24 öncesi tek seçenekti: dinleyicinin dünyası yoktu, yani gerçek iş `&mut World`
+/// gören bir yere ertelenmek zorundaydı, ve o yer bir sonraki kareydi. Kip olarak duruyor
+/// çünkü zinciri halka halka İZLEMEK demonun yarısı — ama artık zorunluluk değil, tercih.
 fn drive_chain(world: &mut gizmo::core::World, clicked: bool) {
     // Kendi kendine sınama: fare yoksa merkeze en yakın mayını tetikle.
     let (frame, aim) = world
@@ -324,6 +382,28 @@ fn drive_chain(world: &mut gizmo::core::World, clicked: bool) {
     let Some(fuse) = world.get_resource::<Fuse>().map(|f| f.clone()) else {
         return;
     };
+
+    // Anında kipte zincir yukarıdaki `trigger_explode` içinde ZATEN bitti. Sınama çıktısı
+    // burada, tek satır — kuyruk kipinin halka halka tablosunun karşılığı.
+    let immediate_mode = world
+        .get_resource::<ChainMode>()
+        .map(|m| m.immediate)
+        .unwrap_or(false);
+    if immediate_mode && std::env::var("GIZMO_OBSERVER_SELFTEST").is_ok() && frame == SELFTEST_FRAME
+    {
+        sync_report(world, &fuse, false);
+        let report = world.get_resource::<Report>().map(|r| r.clone());
+        if let Some(r) = report {
+            gizmo::gizmo_log!(
+                Info,
+                "ANINDA · tek karede · patlayan {}/{} · kabaran {} · halka 1",
+                r.exploded,
+                r.mines,
+                r.bubbled
+            );
+        }
+        return;
+    }
     let fired: Vec<u32> = {
         let mut queue = fuse.fired.lock().expect("fitil kilidi");
         std::mem::take(&mut *queue)
@@ -385,6 +465,65 @@ fn drive_chain(world: &mut gizmo::core::World, clicked: bool) {
     sync_report(world, &fuse, true);
 }
 
+/// Bir mayını **dinleyicinin içinden** patlatır: işaretle, boya, menzildekileri tetikle.
+///
+/// `drive_chain`'in mayın başına yaptığı işin aynısı — fark, bunun bir kare beklemeden, olayın
+/// dağıtımı sürerken koşması. `world.trigger` buradan yeniden çağrılıyor, yani dağıtım kendi
+/// içinde özyineliyor ve bütün zincir **tek** `trigger` çağrısında bitiyor.
+///
+/// İki şey özyinelemeyi bitiriyor ve ikisi de kasıtlı:
+///
+///   * patlamış bir mayın erken dönüyor, yani halka yeniden ziyaret edilmiyor;
+///   * motor, o an bildirilen varlığın dinleyicilerini dağıtım süresince dünyadan **ayırıyor**,
+///     yani bir dinleyicinin aynı olayı kendi varlığına geri göndermesi sonsuz döngü değil,
+///     sessiz bir duruş. Başka varlıkların dinleyicileri canlı ve iç içe koşuyor.
+fn explode_now(world: &mut gizmo::core::World, entity: gizmo::core::entity::Entity) {
+    let id = entity.id();
+    let mine = world
+        .query::<&Mine>()
+        .and_then(|q| q.iter().find(|(e, _)| *e == id).map(|(_, m)| *m));
+    let Some(mine) = mine else { return };
+    if mine.exploded {
+        return;
+    }
+
+    world.add_component(entity, Mine { exploded: true, ..mine });
+    if let Some(mut query) = world.query_mut::<Mut<Material>>() {
+        if let Some(mut material) = query.get_mut_entity(entity) {
+            material.albedo = FIRED;
+        }
+    }
+
+    let mut next = Vec::new();
+    if let Some(query) = world.query::<&Mine>() {
+        for (other, candidate) in query.iter() {
+            if candidate.exploded {
+                continue;
+            }
+            if (candidate.position - mine.position).length() < candidate.radius + mine.radius {
+                next.push(other);
+            }
+        }
+    }
+    for other in next {
+        // `next` bir ANLIK GÖRÜNTÜ: listedeki ikinci mayını tetiklerken birincinin zinciri
+        // onu çoktan patlatmış olabiliyor. Tetiklemeden önce yeniden bakmak gerekiyor, çünkü
+        // olay hedef patlamış olsa bile `Parent` zincirinde yukarı KABARIYOR — dinleyici erken
+        // dönüyor ama yürüyüş sürüyor. İlk ölçümde bu, kuyruk kipinin 26 kabarmasını anında
+        // kipte 73'e çıkarmıştı: aynı zincir, üç katı olay.
+        let still_armed = world
+            .query::<&Mine>()
+            .and_then(|q| q.iter().find(|(e, _)| *e == other).map(|(_, m)| !m.exploded))
+            .unwrap_or(false);
+        if !still_armed {
+            continue;
+        }
+        if let Some(target) = world.get_entity(other) {
+            world.trigger(Explode { target });
+        }
+    }
+}
+
 /// Bir mayına `Explode` olayını gönderir.
 fn trigger_explode(world: &mut gizmo::core::World, entity: gizmo::core::entity::Entity) {
     world.trigger(Explode { target: entity });
@@ -437,6 +576,10 @@ fn sync_report(world: &mut gizmo::core::World, fuse: &Fuse, advanced: bool) {
     let indexed = *fuse.indexed.lock().expect("sayaç kilidi");
     let replaced = *fuse.replaced.lock().expect("sayaç kilidi");
     let removed = *fuse.removed.lock().expect("sayaç kilidi");
+    let immediate = world
+        .get_resource::<ChainMode>()
+        .map(|m| m.immediate)
+        .unwrap_or(false);
 
     if let Some(mut report) = world.get_resource_mut::<Report>() {
         report.mines = mines;
@@ -445,6 +588,7 @@ fn sync_report(world: &mut gizmo::core::World, fuse: &Fuse, advanced: bool) {
         report.indexed = indexed;
         report.replaced = replaced;
         report.removed = removed;
+        report.immediate = immediate;
         if advanced {
             report.rings += 1;
             if std::env::var("GIZMO_OBSERVER_SELFTEST").is_ok() {
@@ -487,7 +631,7 @@ fn build_field(
         Field,
     ));
     let bubbled = fuse.bubbled.clone();
-    world.observe::<Explode, _>(field, move |_on| {
+    world.observe::<Explode, _>(field, move |_world, _on| {
         *bubbled.lock().expect("sayaç kilidi") += 1;
     });
 
@@ -521,10 +665,19 @@ fn build_field(
         ));
         world.add_child(field, entity);
 
-        // Varlığa bağlı dinleyici (`observe`). Dünyayı göremediği için yalnız kuyruğa yazıyor.
+        // Varlığa bağlı dinleyici (`observe`) — ve artık `&mut World` alıyor. İki kip de
+        // buradan çıkıyor: kipi dünyadan okumak zaten yeni yeteneğin kendisi.
         let fired = fuse.fired.clone();
-        world.observe::<Explode, _>(entity, move |on| {
-            fired.lock().expect("fitil kilidi").push(on.entity.id());
+        world.observe::<Explode, _>(entity, move |world, on| {
+            let immediate = world
+                .get_resource::<ChainMode>()
+                .map(|m| m.immediate)
+                .unwrap_or(false);
+            if !immediate {
+                fired.lock().expect("fitil kilidi").push(on.entity.id());
+                return;
+            }
+            explode_now(world, on.entity);
         });
     }
 }

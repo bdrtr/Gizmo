@@ -10,6 +10,7 @@
 //! |---------|-------|
 //! | olayı kabarmaya açmak | [`EntityEvent::can_propagate`] -> `true` |
 //! | varlığa bağlı dinleyici | `On<E>`, `world.observe(entity, ..)` |
+//! | dinleyicinin dünyayı görmesi | 2026-08-24'ten beri **var** — `(&mut World, On<E>)` |
 //! | olayı gönderme | `trigger` |
 //! | **yürüyüşün yolunu seçmek** | **yok** — yol her zaman `Parent` zinciri |
 //! | **kabarmayı durdurmak** | **yok** — hiçbir dinleyici yürüyüşü kesemiyor |
@@ -22,10 +23,16 @@
 //! yapılabilecek şey olayın *etkisini* bir bayrakla bastırmak, ama dinleyiciler yine de
 //! çalışıyor.
 //!
+//! **Dinleyicinin 2026-08-24'te `&mut World` alması bunu değiştirmedi, ve nedeni öğretici:**
+//! eksik olan erişim değil, dinleyiciden `trigger` döngüsüne giden **dönüş kanalı**. `On`
+//! değerle geliyor, dinleyici `()` dönüyor, yani döngünün okuyacağı bir cevap yok. Dinleyici
+//! artık dünyada her şeyi yapabiliyor — yürüyüşü durdurmak hariç.
+//!
 //! ## Ölçüldü
 //!
 //! Beş halkalık zincir, kök = 0, yaprak = 4. Olay **yaprakta** tetikleniyor.
-//! Ölçüldü (2026-08-23, `GIZMO_PROP_SELFTEST=1`):
+//! Ölçüldü (2026-08-23; dinleyiciye `&mut World` verildikten sonra 2026-08-24’te yeniden
+//! ölçüldü, dördü de aynı — `GIZMO_PROP_SELFTEST=1`):
 //!
 //! | ne | uğradığı halkalar |
 //! |----|-------------------|
@@ -150,17 +157,26 @@ fn main() {
             let trail: Trail = Arc::new(Mutex::new(Vec::new()));
             for (depth, entity) in chain.iter().enumerate() {
                 let t = trail.clone();
-                scene.world.observe::<Damage, _>(*entity, move |on: On<Damage>| {
-                    t.lock().unwrap().push(depth);
-                    // Yürüyüşü burada durduracak bir çağrı YOK: `On` değerle geliyor, dönüş
-                    // `()`, ve `trigger` döngüsü dinleyicinin ne yaptığına bakmıyor.
-                    let _ = on.event.amount;
-                });
+                scene.world.observe::<Damage, _>(
+                    *entity,
+                    move |_world: &mut gizmo::core::World, on: On<Damage>| {
+                        t.lock().unwrap().push(depth);
+                        // Yürüyüşü burada durduracak bir çağrı YOK — ve dinleyicinin artık
+                        // `&mut World` alıyor olması bunu değiştirmiyor. Eksik olan dünyaya
+                        // erişim değil, dinleyiciden `trigger` döngüsüne giden DÖNÜŞ kanalı:
+                        // `On` değerle geliyor, dönüş `()`, ve döngü dinleyicinin ne yaptığına
+                        // bakmıyor. Bu satır o yüzden hâlâ burada.
+                        let _ = on.event.amount;
+                    },
+                );
                 let t = trail.clone();
-                scene.world.observe::<Poke, _>(*entity, move |_on: On<Poke>| {
-                    // Kabarmayan olay için ayrı bir iz — 1000 ekleyerek ayırt ediliyor.
-                    t.lock().unwrap().push(1000 + depth);
-                });
+                scene.world.observe::<Poke, _>(
+                    *entity,
+                    move |_world: &mut gizmo::core::World, _on: On<Poke>| {
+                        // Kabarmayan olay için ayrı bir iz — 1000 ekleyerek ayırt ediliyor.
+                        t.lock().unwrap().push(1000 + depth);
+                    },
+                );
             }
 
             scene.world.spawn_bundle((

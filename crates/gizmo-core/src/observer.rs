@@ -16,10 +16,17 @@
 //!   entity's listeners and, if the event opts in, on up the `Parent` chain.
 //!
 //! Both run synchronously on the calling thread, inside the `&mut World` call that caused
-//! them, and neither hands the callback a world. A callback that has to change something
-//! must go through state it captured — a channel, a shared cell, a
-//! [`CommandQueue`](crate::CommandQueue) applied later — which also means a callback cannot
-//! re-enter the world and perturb the dispatch it is part of.
+//! them, and **both reach a `&mut World`** — the entity-event listener is handed one
+//! directly, and a lifecycle observer's `On` is built by a hook that has one, so the world is
+//! one layer down at [`register_on_add`](crate::world::World::register_on_add) and its
+//! siblings. Until 2026-08-24 neither did, which is why a chain reaction had to be written as
+//! a captured queue drained by a later system, and therefore advanced one link per frame.
+//!
+//! **Re-entrancy is bounded by detachment, not by prohibition.** While a callback runs, the
+//! list it came from is out of the world: a component type's hook lists during a hook, and one
+//! entity's listeners during a trigger. So a callback that provokes the same notification at
+//! the same target terminates instead of recursing, while any *other* target's callbacks are
+//! live and run nested.
 //!
 //! Listeners registered against the same entity and event type run in registration order.
 //! Neither mechanism has an unregister: registrations accumulate for the life of the world,
@@ -136,6 +143,14 @@ impl Lifecycle for Replace {
     }
 }
 
+/// One registered [`World::observe`](crate::world::World::observe) listener.
+///
+/// Named because three places have to spell it — the registration, the map it lives in, and
+/// the dispatch that takes it out — and a signature typo used to mean a `downcast_mut` that
+/// silently returned `None`, i.e. a listener that was never called and no error anywhere.
+pub type EntityListener<E> =
+    Box<dyn FnMut(&mut crate::world::World, On<E>) + Send + Sync + 'static>;
+
 /// A user-defined event delivered to listeners attached to individual entities
 /// (`World::observe`) and dispatched by `World::trigger`, as opposed to an
 /// [`Events`](crate::event::Events) queue, which is read by systems.
@@ -173,7 +188,9 @@ pub trait EntityEvent: Send + Sync + 'static + Clone {
 /// * [`EntityEvent`] listeners — `E` is the event value and `T` stays at its default `()`.
 ///
 /// It is handed to the listener *by value* and the listener returns `()`, so there is no
-/// return channel to the dispatcher — a listener cannot report that it handled the delivery.
+/// return channel to the dispatcher — a listener cannot report that it handled the delivery,
+/// and in particular cannot stop a propagating walk (that gap is still open). What it *can*
+/// do is act, because the entity-event listener also receives the `&mut World`.
 ///
 /// `Clone` requires only `E: Clone`, never `T: Clone`, since `T` is a phantom tag.
 pub struct On<E, T = ()> {
@@ -454,6 +471,134 @@ mod tests {
         assert_eq!(*hits.lock().unwrap(), 0, "the insert is not a replace");
         world.add_component(e, Health(2.0));
         assert_eq!(*hits.lock().unwrap(), 1);
+    }
+
+    /// An event whose target is chosen at construction; `can_propagate` is off unless asked.
+    #[derive(Clone)]
+    struct Ping {
+        target: Entity,
+        bubble: bool,
+    }
+    impl EntityEvent for Ping {
+        fn target(&self) -> Entity {
+            self.target
+        }
+        fn can_propagate(&self) -> bool {
+            self.bubble
+        }
+    }
+
+    /// **The entity-event listener gets a usable `&mut World`** — the capability the whole
+    /// change is about, asserted by doing something only a world can do.
+    ///
+    /// Before 2026-08-24 the listener was handed the `On` and nothing else, so acting on a
+    /// notification meant writing to captured state and waiting for a later system to read it.
+    #[test]
+    fn an_entity_listener_can_act_on_the_world() {
+        let mut world = World::new();
+        let e = world.spawn();
+        world.observe::<Ping, _>(e, |world: &mut World, _on| {
+            world.spawn();
+        });
+
+        let before = world.entity_count();
+        world.trigger(Ping { target: e, bubble: false });
+        assert_eq!(world.entity_count(), before + 1, "the listener could not reach the world");
+    }
+
+    /// A listener that triggers the **same** event back at its **own** entity terminates.
+    ///
+    /// Not a special case in the dispatcher: the entity's listeners are **owned by the dispatch**
+    /// for the length of the call — moved out of the map, not borrowed from it — so the nested
+    /// trigger finds nothing to run at that entity. Termination is therefore structural rather
+    /// than checked, and this test records the contract rather than guarding a branch: a
+    /// mutation swapping the `remove` for a `mem::take` left it green, because either way the
+    /// list is empty while the listener runs. What it would catch is a redesign — one that
+    /// notified from a live list, or deferred nested triggers to a queue.
+    #[test]
+    fn a_listener_retriggering_its_own_entity_terminates() {
+        let mut world = World::new();
+        let e = world.spawn();
+        let hits = Arc::new(Mutex::new(0));
+        let counter = hits.clone();
+        world.observe::<Ping, _>(e, move |world: &mut World, on| {
+            *counter.lock().unwrap() += 1;
+            world.trigger(Ping { target: on.entity, bubble: false });
+        });
+
+        world.trigger(Ping { target: e, bubble: false });
+        assert_eq!(*hits.lock().unwrap(), 1, "the nested trigger re-entered the same listener");
+    }
+
+    /// …and the listener is **put back**, so the next trigger reaches it again. The detachment
+    /// is for the duration of one dispatch, not a de-registration.
+    #[test]
+    fn a_listener_survives_the_dispatch_that_detached_it() {
+        let mut world = World::new();
+        let e = world.spawn();
+        let hits = Arc::new(Mutex::new(0));
+        let counter = hits.clone();
+        world.observe::<Ping, _>(e, move |world: &mut World, on| {
+            *counter.lock().unwrap() += 1;
+            world.trigger(Ping { target: on.entity, bubble: false });
+        });
+
+        world.trigger(Ping { target: e, bubble: false });
+        world.trigger(Ping { target: e, bubble: false });
+        assert_eq!(*hits.lock().unwrap(), 2, "the listener was lost by the first dispatch");
+    }
+
+    /// A nested trigger at a **different** entity does run — the detachment is per entity, and
+    /// this is the half that makes a chain reaction resolvable inside one dispatch.
+    #[test]
+    fn a_nested_trigger_at_another_entity_runs() {
+        let mut world = World::new();
+        let first = world.spawn();
+        let second = world.spawn();
+        let order = Arc::new(Mutex::new(Vec::<u8>::new()));
+
+        let (a, b) = (order.clone(), order.clone());
+        world.observe::<Ping, _>(second, move |_world: &mut World, _on| {
+            b.lock().unwrap().push(2);
+        });
+        world.observe::<Ping, _>(first, move |world: &mut World, _on| {
+            a.lock().unwrap().push(1);
+            world.trigger(Ping { target: second, bubble: false });
+            a.lock().unwrap().push(3);
+        });
+
+        world.trigger(Ping { target: first, bubble: false });
+        assert_eq!(
+            *order.lock().unwrap(),
+            vec![1, 2, 3],
+            "the nested dispatch did not run inside the outer listener"
+        );
+    }
+
+    /// Bubbling still reaches the ancestors, and each hop's listener gets the world too.
+    #[test]
+    fn a_bubbling_event_hands_every_hop_the_world() {
+        use crate::hierarchy::HierarchyExt;
+        let mut world = World::new();
+        let parent = world.spawn();
+        let child = world.spawn();
+        world.add_child(parent, child);
+
+        let seen = Arc::new(Mutex::new(Vec::<u32>::new()));
+        let (c, p) = (seen.clone(), seen.clone());
+        world.observe::<Ping, _>(child, move |world: &mut World, on| {
+            c.lock().unwrap().push(on.entity.id());
+            world.spawn();
+        });
+        world.observe::<Ping, _>(parent, move |world: &mut World, on| {
+            p.lock().unwrap().push(on.entity.id());
+            world.spawn();
+        });
+
+        let before = world.entity_count();
+        world.trigger(Ping { target: child, bubble: true });
+        assert_eq!(*seen.lock().unwrap(), vec![child.id(), parent.id()], "the walk");
+        assert_eq!(world.entity_count(), before + 2, "both hops reached the world");
     }
 
     #[test]
