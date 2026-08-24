@@ -48,25 +48,37 @@
 //! conversion, the hit-test predicate and the interaction state machine. That
 //! is the part you can rely on.
 //!
-//! # What does NOT work
+//! # What this crate does not do itself — and what now reads it
 //!
-//! **This crate emits no vertices and no draw calls.** Its dependencies are
-//! `gizmo-core`, `gizmo-math`, `taffy` and (optionally, `app` feature)
+//! **This crate still emits no vertices and no draw calls.** Its dependencies
+//! are `gizmo-core`, `gizmo-math`, `taffy` and (optionally, `app` feature)
 //! `gizmo-app` with default features off — no renderer, no `wgpu`. Grepping
 //! `src/` for `wgpu`, `vertex`, `draw`, `shader`, `texture`, `font` or `glyph`
-//! matched nothing but this paragraph. Concretely:
+//! matches nothing but this paragraph.
 //!
-//! - **There is no text rendering** — no `Text` component, no font loading, no
-//!   glyph rasterisation, neither here nor in `gizmo-renderer`. This is the
-//!   single largest missing piece and the reason this crate is labelled
-//!   experimental (tracked as D7 in the repository's `docs/ENGINE.md`).
-//! - **[`BackgroundColor`] is written and never read.** The bundles attach it,
-//!   and no crate in this workspace consumes it. The only consumer of
-//!   `gizmo-ui` in the workspace at all is the facade's `pub use gizmo_ui as
-//!   ui` re-export.
+//! What changed on 2026-08-24 is that something else reads the output.
+//! `gizmo-renderer` gained fonts, a glyph atlas and a `Text` component, and the
+//! engine's facade paints what this crate computes: [`BackgroundColor`] becomes
+//! a solid quad over the [`Node`]'s box, and a `Text` on the same entity is
+//! placed in that box, its anchor choosing which corner. The bridge lives in the
+//! facade and not here for a layering reason that will not change: this crate
+//! sits **above** `gizmo-app`, so the renderer cannot see a [`Node`].
+//!
+//! Used standalone — [`register`] on a bare `World`, no engine renderer — this
+//! crate is what it always was: geometry and hover state, and the drawing is
+//! yours.
+//!
+//! Concretely still missing:
+//!
+//! - **No rich text, wrapping, shaping, bidi or font fallback.** What the engine
+//!   draws is one font per label, breaking only on `\n`; a string longer than its
+//!   box overflows it, because there is no clipping either (below).
 //! - **No z-order or occlusion.** The hit-test is a flat loop over every
-//!   [`Node`], so two overlapping elements both report `Hovered`. The
-//!   limitation is noted inline in `interaction.rs`.
+//!   [`Node`], so two overlapping elements both report `Hovered` — and the
+//!   drawing has no per-element order either: every background is painted, then
+//!   every glyph, so a label is always above every panel. Right for a button,
+//!   wrong for two overlapping windows, and there is no `z` on [`Node`] to sort
+//!   by. The hit-test half is noted inline in `interaction.rs`.
 //! - **No click/focus events, no keyboard handling, no scrolling, no clipping,
 //!   no text input.** [`Interaction`] is a per-frame recomputed state, not an
 //!   event stream.
@@ -82,19 +94,24 @@
 //!
 //! # What it is good for, and what to use instead
 //!
-//! Use `gizmo-ui` when you want the engine to solve box geometry and hover/press
-//! state for you and you intend to do the drawing yourself: read [`Node`] and
-//! [`BackgroundColor`] from your own render pass. Layout and hit-testing are the
-//! product here; pixels are your problem.
+//! Under `gizmo-engine`, spawn a [`NodeBundle`] or [`ButtonBundle`], give it a
+//! [`BackgroundColor`] and hang a `Text` on the same entity: the engine paints
+//! both. `demo/src/bin/ui_layout.rs` is a row of buttons doing exactly that,
+//! including one whose label overflows its box on purpose.
 //!
-//! If you want a HUD that is actually visible today, use the `egui` integration
-//! in `gizmo-engine` (the `egui` feature, and the `editor` feature on top of
-//! it). That path does render, text included, and it does not go through this
-//! crate.
+//! Standalone — [`register`] on a bare `World` with no engine renderer — use
+//! this crate when you want box geometry and hover/press state solved for you
+//! and you intend to do the drawing yourself: read [`Node`] and
+//! [`BackgroundColor`] from your own render pass.
+//!
+//! For a **debug/editor** overlay — panels, sliders, an immediate-mode inspector
+//! — the `egui` integration in `gizmo-engine` is still the shorter path, and it
+//! does not go through this crate. What this one gives you that `egui` does not
+//! is a UI made of ECS entities: a button is an entity, so it can carry your own
+//! components and be driven by your own systems.
 //!
 //! Note that `gizmo-engine` enables its `ui` feature **by default**, so these
-//! types arrive in `gizmo::prelude::*` whether or not you asked for them. Their
-//! presence in the prelude is not evidence that anything is being drawn.
+//! types arrive in `gizmo::prelude::*` whether or not you asked for them.
 //!
 //! # Stability
 //!

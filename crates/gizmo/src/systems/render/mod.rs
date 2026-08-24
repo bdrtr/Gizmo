@@ -4868,4 +4868,177 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
 
         render_world(&mut renderer, &mut world).await
     }
+
+    /// A laid-out UI box paints, and a label on it follows the box rather than its own position.
+    ///
+    /// `gizmo-ui` computed boxes and drew nothing from the day it was written: `BackgroundColor`
+    /// was attached by its own bundles and read by no crate in the workspace, and there was no text
+    /// to put in a button. Both halves are checked here, and the second is the one with a control
+    /// worth having — the `Text` is authored at (100, 100), far outside the box, so a bridge that
+    /// did nothing would draw it there and the "nothing outside the box" assertion would fail.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    #[cfg(feature = "ui")]
+    fn a_ui_box_paints_and_its_label_follows_it() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        // The box, in window pixels on a 128² target.
+        const BOX_POS: [u32; 2] = [10, 10];
+        const BOX_SIZE: [u32; 2] = [60, 30];
+
+        pollster::block_on(async {
+            let blank = render_ui_scene(false, false).await;
+            let boxed = render_ui_scene(true, false).await;
+            let labelled = render_ui_scene(true, true).await;
+
+            // 1. The background paints, and it paints the box's own rectangle. A solid colour over
+            //    60×30 is 1 800 pixels; the count is asserted loosely and the *placement* exactly,
+            //    because "some pixels went red" is satisfied by a quad anywhere.
+            let (painted, _) = changed_pixels(&blank, &boxed, 128);
+            assert!(
+                painted >= 1500,
+                "a `BackgroundColor` on a laid-out node changed {painted} pixels (measured 1 978 — \
+                 60×30 is 1 800 and the rest is bloom) — it is not being drawn",
+            );
+            // The halo, not the quad. UI is drawn into the HDR target before tone mapping, so a
+            // bright box blooms: measured 178 pixels outside a 1 800-pixel rectangle, a one-to-two
+            // pixel rim. A quad drawn at the wrong place would put ~1 800 out here, so the bound is
+            // loose enough for the bloom and nowhere near loose enough for a misplacement.
+            let halo = changed_outside_box(&blank, &boxed, BOX_POS, BOX_SIZE);
+            assert!(
+                halo <= 400,
+                "the background changed {halo} pixels outside its own node rectangle (measured \
+                 178, which is the bloom rim) — a quad that far out is drawn somewhere else",
+            );
+
+            // 2. The label lands inside the box, not at the position the component carries.
+            let inside = changed_inside_box(&boxed, &labelled, BOX_POS, BOX_SIZE);
+            assert!(
+                inside >= 60,
+                "the label changed {inside} pixels inside its box (measured 221) — it is not being \
+                 drawn there",
+            );
+            assert_eq!(
+                changed_outside_box(&boxed, &labelled, BOX_POS, BOX_SIZE),
+                0,
+                "the label drew outside its node — it is being placed at the position the `Text` \
+                 carries (100, 100) rather than at the box, i.e. the UI bridge is not running",
+            );
+        });
+    }
+
+    /// Pixels that differ between two frames *inside* a window-pixel rectangle.
+    #[cfg(feature = "ui")]
+    fn changed_inside_box(a: &[u8], b: &[u8], pos: [u32; 2], size: [u32; 2]) -> usize {
+        box_changes(a, b, pos, size, true)
+    }
+
+    /// …and outside it.
+    #[cfg(feature = "ui")]
+    fn changed_outside_box(a: &[u8], b: &[u8], pos: [u32; 2], size: [u32; 2]) -> usize {
+        box_changes(a, b, pos, size, false)
+    }
+
+    #[cfg(feature = "ui")]
+    fn box_changes(a: &[u8], b: &[u8], pos: [u32; 2], size: [u32; 2], inside: bool) -> usize {
+        const W: usize = 128;
+        let mut changed = 0;
+        for y in 0..W {
+            for x in 0..W {
+                let in_box = x >= pos[0] as usize
+                    && x < (pos[0] + size[0]) as usize
+                    && y >= pos[1] as usize
+                    && y < (pos[1] + size[1]) as usize;
+                if in_box != inside {
+                    continue;
+                }
+                let i = (y * W + x) * 4;
+                if (0..3).any(|c| a[i + c].abs_diff(b[i + c]) > 8) {
+                    changed += 1;
+                }
+            }
+        }
+        changed
+    }
+
+    /// A dark floor, and optionally a laid-out UI box with a background and a label.
+    ///
+    /// The `Node` is written directly rather than through `gizmo-ui`'s layout system: what is being
+    /// tested is the *bridge*, and driving taffy here would make a layout regression look like a
+    /// text one. `gizmo-ui`'s own 27 tests cover what fills a `Node`.
+    #[cfg(feature = "ui")]
+    async fn render_ui_scene(ui_box: bool, label: bool) -> Vec<u8> {
+        const W: u32 = 128;
+        let mut renderer = crate::test_gpu::headless_renderer(W, W).await;
+        renderer.taa = None;
+        let mut asset_manager = AssetManager::new();
+        let mut world = World::new();
+        let tex = asset_manager.create_white_texture(
+            &renderer.device,
+            &renderer.queue,
+            &renderer.scene.texture_bind_group_layout,
+        );
+
+        let floor = world.spawn();
+        world.add_component(
+            floor,
+            Transform::new(Vec3::new(0.0, -2.0, 0.0)).with_scale(Vec3::new(12.0, 0.2, 12.0)),
+        );
+        world.add_component(floor, GlobalTransform::default());
+        world.add_component(floor, AssetManager::create_cube(&renderer.device));
+        world.add_component(
+            floor,
+            Material::new(tex).with_pbr(Vec4::new(0.2, 0.2, 0.25, 1.0), 0.9, 0.0),
+        );
+        world.add_component(floor, MeshRenderer::new());
+
+        world.spawn_bundle(CameraBundle {
+            position: Vec3::new(0.0, 0.0, 6.0),
+            yaw: -std::f32::consts::FRAC_PI_2,
+            pitch: 0.0,
+            primary: true,
+            ..Default::default()
+        });
+        world.spawn_bundle(DirectionalLightBundle::default());
+
+        let font = renderer
+            .load_font(gizmo_renderer::text::synthetic::synthetic_face())
+            .expect("the synthetic face must parse");
+
+        if ui_box {
+            let e = world.spawn();
+            world.add_component(
+                e,
+                crate::ui::Node {
+                    position: gizmo_math::Vec2::new(10.0, 10.0),
+                    size: gizmo_math::Vec2::new(60.0, 30.0),
+                },
+            );
+            world.add_component(
+                e,
+                crate::ui::BackgroundColor(Vec4::new(0.9, 0.2, 0.2, 1.0)),
+            );
+            if label {
+                // Authored FAR from the box on purpose: with the bridge working this position is
+                // ignored, and without it the text lands here and the test says so.
+                world.add_component(
+                    e,
+                    gizmo_renderer::components::Text::screen(
+                        "AAA",
+                        font,
+                        16.0,
+                        gizmo_math::Vec2::new(100.0, 100.0),
+                    )
+                    .with_color(Vec4::new(0.05, 0.05, 0.05, 1.0)),
+                );
+            }
+        }
+
+        render_world(&mut renderer, &mut world).await
+    }
 }

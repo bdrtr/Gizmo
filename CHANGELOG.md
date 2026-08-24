@@ -50,6 +50,37 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`gizmo-ui` draws.** The crate computed flexbox boxes and hover state from the day it was
+  written and emitted nothing: its own docs said *"this crate emits no vertices and no draw calls"*
+  and *"`BackgroundColor` is written and never read"*. Both were true, and both are now false.
+
+  The bridge is small because both halves already spoke the same units — `Node` publishes absolute
+  window-pixel rects and `TextSpace::Screen` takes them. `BackgroundColor` becomes a solid quad and
+  a `Text` on the same entity is placed in that node's box, its own anchor choosing the corner
+  (`Center` centres the label in the button; `TopLeft` puts it in the corner). The `Text`'s authored
+  position is ignored when a `Node` is present, which is the only thing putting both on one entity
+  can sensibly mean.
+
+  **A background costs no pipeline.** The glyph atlas carries a fully-opaque patch, so a solid quad
+  is a glyph quad whose coverage happens to be 1 — same shader, same instance buffer, one more
+  instance. Quads are painted under every glyph in the frame whatever order they were queued in.
+
+  Measured, with controls: a 60×30 node with a background changes **1 978/16 384** pixels (1 800 is
+  the rectangle, the rest bloom) and the test fails with the quad not queued; a label authored at
+  (100, 100) and given a box at (10, 10) changes **221** pixels inside the box and **0** outside —
+  and drawing at the authored position instead is exactly what that 0 catches.
+
+  The bridge lives in the facade and cannot live anywhere else: `gizmo-ui` sits *above* `gizmo-app`,
+  so `gizmo-renderer` cannot see a `Node` and never will. `gizmo-studio` calls the same function, so
+  the editor viewport shows the UI the game draws.
+
+  `demo/src/bin/ui_layout.rs` is a taffy-laid row of buttons with labels and hover recolouring,
+  including one deliberately narrow button whose label overflows — because there is still no
+  clipping. Still missing and now named on the crate's own page rather than only in the repository:
+  no z-order (the paint order is global — every background, then every glyph — so a label is always
+  above every panel), no clipping, no click events, no keyboard focus, and one widget shape.
+  `gizmo-ui`'s crates.io description said "there is no text rendering yet"; it does not now.
+
 - **`Gizmos::depth_test` did nothing — the two pipelines it chose between were identical.**
   `GizmoRendererSystem` builds a "depth-tested" pipeline and a "no-depth" one, and both were
   `CompareFunction::Always`: the flag selected between two copies of the same state, and the

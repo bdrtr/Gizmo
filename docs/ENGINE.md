@@ -97,8 +97,19 @@ state instead.
   the type and at `RigidBody::new`. Verified 2026-08-17.
 
 **Phase 7 — Product layer (a shippable game)**
-- M7.4 authoritative client-server netcode; M7.6 UI font/text/widget/z-index; M7.7 WASM feature
-  parities, editor panels + AssetServer hot-reload.
+- M7.4 authoritative client-server netcode; M7.7 WASM feature parities, editor panels +
+  AssetServer hot-reload.
+
+- **M7.6 — font and text landed 2026-08-24; widgets and z-index have not.** `gizmo-renderer::text`
+  is fonts, a glyph atlas and layout; `Text` is a component with two spaces and nine anchors, drawn
+  by both hosts through one shared pass; and `gizmo-ui`'s `Node` and `BackgroundColor` are painted
+  from it, so the crate that computed boxes and drew nothing now draws. What the item still names
+  and does not have: **z-index** — the paint order is global (every background, then every glyph),
+  which is right for a button and wrong for two overlapping panels, and `Node` carries no `z` to
+  sort by — and **widgets**, of which there is exactly one shape (a box with a colour and a label).
+  Clipping, click events and keyboard focus are absent with them. No default font ships and none
+  will without a licensing decision: a `Text` whose face was never loaded draws nothing rather than
+  substituting one.
 
 - **M7.5 — the mixer landed 2026-08-18; the DSP half has not.** `gizmo_audio::Mixer` holds named
   buses (`music`/`sfx`/`ui`/`voice`, created on demand so a game's own names need no engine

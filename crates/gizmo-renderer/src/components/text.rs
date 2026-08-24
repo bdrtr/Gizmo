@@ -118,6 +118,20 @@ impl TextSpace {
             Self::World { .. } => true,
         }
     }
+
+    /// The authored window-pixel anchor, or `None` for a text that lives in the world.
+    ///
+    /// Here for the same reason as [`needs_world_position`](Self::needs_world_position): reading
+    /// the position out of the enum is a `match`, and a `match` downstream is a wildcard. A host
+    /// that overrides the position — the UI bridge does, from a `Node` — needs the authored value
+    /// as its fallback, and this is how it gets one without opening the enum.
+    #[must_use]
+    pub fn screen_position(self) -> Option<Vec2> {
+        match self {
+            Self::Screen { position } => Some(position),
+            Self::World { .. } => None,
+        }
+    }
 }
 
 /// Which corner or edge of a text's box sits on its anchor point.

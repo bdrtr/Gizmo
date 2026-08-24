@@ -314,6 +314,13 @@ pub struct GlyphAtlas {
     bind_group: wgpu::BindGroup,
     layout: wgpu::BindGroupLayout,
     packer: ShelfPacker,
+    /// Texture coordinates of a fully-opaque patch, packed before any glyph.
+    ///
+    /// It is what lets a solid quad — a UI background, a highlight — go through the same pipeline
+    /// and the same instance buffer as the text: sample this and the coverage is 1 everywhere, so
+    /// the fragment is the instance's own colour. The alternative is a second pipeline whose only
+    /// difference is that it does not sample a texture.
+    solid_uv: [f32; 4],
     entries: HashMap<GlyphKey, GlyphEntry>,
     /// Set once a glyph did not fit. Sticky: the atlas does not recover by itself.
     full: bool,
@@ -381,12 +388,14 @@ impl std::fmt::Debug for GlyphAtlas {
 const GLYPH_PADDING: u32 = 1;
 
 impl GlyphAtlas {
-    /// Allocates a `size`×`size` single-channel atlas and its bind group.
+    /// Allocates a `size`×`size` single-channel atlas, its bind group, and the solid patch.
     ///
     /// 1024 is the size the engine uses: at 32 px that is roughly a thousand glyphs, and it costs
-    /// one megabyte.
+    /// one megabyte. The `queue` is needed at construction because the solid patch is uploaded
+    /// here — an atlas that could not draw a background until its first glyph arrived would be a
+    /// startup order nobody would guess.
     #[must_use]
-    pub fn new(device: &wgpu::Device, size: u32) -> Self {
+    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, size: u32) -> Self {
         let size = size.max(64);
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Glyph Atlas"),
@@ -446,12 +455,45 @@ impl GlyphAtlas {
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) },
             ],
         });
+        let mut packer = ShelfPacker::new(size);
+        // Packed FIRST, so it exists whatever happens to the atlas later — a full atlas must still
+        // be able to draw a background. `SOLID` is larger than the one texel a solid quad needs:
+        // the UV below addresses the middle of it, so a linear sampler at any scale stays inside
+        // the patch instead of blending in whatever glyph was packed beside it.
+        const SOLID: u32 = 4;
+        let (sx, sy) = packer
+            .reserve(SOLID, SOLID)
+            .expect("an atlas is at least 64 px and the solid patch is 4");
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x: sx, y: sy, z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            },
+            &[0xFF; (SOLID * SOLID) as usize],
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(SOLID),
+                rows_per_image: Some(SOLID),
+            },
+            wgpu::Extent3d { width: SOLID, height: SOLID, depth_or_array_layers: 1 },
+        );
+        let s = size as f32;
+        let solid_uv = [
+            (sx + 1) as f32 / s,
+            (sy + 1) as f32 / s,
+            (sx + SOLID - 1) as f32 / s,
+            (sy + SOLID - 1) as f32 / s,
+        ];
+
         Self {
             texture,
             view,
             bind_group,
             layout,
-            packer: ShelfPacker::new(size),
+            packer,
+            solid_uv,
             entries: HashMap::new(),
             full: false,
         }
@@ -467,6 +509,12 @@ impl GlyphAtlas {
     #[must_use]
     pub fn bind_group_layout(&self) -> &wgpu::BindGroupLayout {
         &self.layout
+    }
+
+    /// Texture coordinates of the fully-opaque patch — what a solid quad samples.
+    #[must_use]
+    pub fn solid_uv(&self) -> [f32; 4] {
+        self.solid_uv
     }
 
     /// The atlas texture, for a caller that wants to look at it.
@@ -776,7 +824,7 @@ mod tests {
             return;
         };
         let (lib, id) = library();
-        let mut atlas = GlyphAtlas::new(&device, 64);
+        let mut atlas = GlyphAtlas::new(&device, &queue, 64);
         assert!(atlas.is_empty());
 
         const SIZE: f32 = 32.0;

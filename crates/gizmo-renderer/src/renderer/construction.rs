@@ -498,6 +498,7 @@ impl Renderer {
         // the HDR target after the world, against the main depth buffer.
         let text = Some(crate::text::TextRenderer::new(
             &device,
+            &queue,
             &scene.global_bind_group_layout,
             wgpu::TextureFormat::Rgba16Float,
             wgpu::TextureFormat::Depth32Float,

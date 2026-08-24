@@ -6,10 +6,13 @@ authors.workspace = true
 # Deliberately NOT `description.workspace = true`. The workspace description
 # ("A custom ECS and physics engine...") would let a crates.io visitor assume
 # this is a usable UI toolkit. It is not: the crate computes taffy layout and
-# pointer hit-testing and emits no vertices or draw calls, and the engine has no
-# text rendering at all. This string is the first thing crates.io shows, so it
-# is the right place to say so. See README.md / the crate-level docs.
-description = "EXPERIMENTAL: flexbox UI layout and pointer hit-testing for the Gizmo engine's ECS. Computes box geometry and hover/press state only — it renders nothing, and there is no text rendering yet."
+# pointer hit-testing and emits no vertices or draw calls of its own. What it
+# computes IS drawn since 2026-08-24 — the engine gained text rendering and the
+# facade paints `Node` + `BackgroundColor` — so the old "there is no text
+# rendering yet" clause was removed rather than left on a published page. The
+# remaining gaps (z-order, clipping, events, keyboard) are still named here,
+# because this string is the first thing crates.io shows.
+description = "EXPERIMENTAL: flexbox UI layout and pointer hit-testing for the Gizmo engine's ECS. Computes box geometry and hover/press state; it emits no vertices itself, but the engine's renderer now paints what it computes (backgrounds and labels). No z-order, clipping, click events or keyboard handling."
 license.workspace = true
 repository.workspace = true
 # Crate-local, unlike the other crates' `readme.workspace = true` (which resolves

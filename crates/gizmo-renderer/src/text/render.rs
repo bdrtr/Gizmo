@@ -22,7 +22,7 @@
 //! There is no batching by font: every glyph is an instance and every instance carries its own
 //! colour, so a thousand-glyph frame is one draw call and 64 kB.
 
-use gizmo_math::{Vec2, Vec3};
+use gizmo_math::{Vec2, Vec3, Vec4};
 
 use super::{FontError, FontId, FontLibrary, GlyphAtlas};
 use crate::components::{Text, TextSpace};
@@ -73,9 +73,13 @@ pub struct TextRenderer {
     /// This frame's world-space glyphs, then its screen-space ones. Two lists rather than one with
     /// a flag, because each is a contiguous instance range for its own pipeline.
     world: Vec<GlyphInstance>,
+    /// Solid screen-space quads — UI backgrounds. Their own list because they must be painted
+    /// UNDER the glyphs, and the buffer's order is the paint order: nothing here depth-tests.
+    rects: Vec<GlyphInstance>,
     screen: Vec<GlyphInstance>,
     /// How many of each actually reached the buffer, so the draw ranges cannot outrun it.
     uploaded_world: u32,
+    uploaded_rects: u32,
     uploaded_screen: u32,
 }
 
@@ -103,11 +107,12 @@ impl TextRenderer {
     #[must_use]
     pub fn new(
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         global_bind_group_layout: &wgpu::BindGroupLayout,
         color_format: wgpu::TextureFormat,
         depth_format: wgpu::TextureFormat,
     ) -> Self {
-        let atlas = GlyphAtlas::new(device, ATLAS_SIZE);
+        let atlas = GlyphAtlas::new(device, queue, ATLAS_SIZE);
         let (pipeline_world, pipeline_screen) = Self::build_pipelines(
             device,
             global_bind_group_layout,
@@ -131,8 +136,10 @@ impl TextRenderer {
             buffer,
             capacity: INITIAL_CAPACITY,
             world: Vec::new(),
+            rects: Vec::new(),
             screen: Vec::new(),
             uploaded_world: 0,
+            uploaded_rects: 0,
             uploaded_screen: 0,
         }
     }
@@ -275,13 +282,44 @@ impl TextRenderer {
     /// Drops last frame's quads. Call once per frame before any [`queue`](Self::queue).
     pub fn begin_frame(&mut self) {
         self.world.clear();
+        self.rects.clear();
         self.screen.clear();
     }
 
     /// Whether this frame has anything to draw.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.world.is_empty() && self.screen.is_empty()
+        self.world.is_empty() && self.rects.is_empty() && self.screen.is_empty()
+    }
+
+    /// Adds a solid screen-space quad — a UI background, a highlight, a separator.
+    ///
+    /// `top_left` and `size` are window pixels with the origin at the top-left, the same
+    /// coordinates `gizmo-ui`'s `Node` publishes, so a laid-out box can be handed straight over.
+    /// Quads are painted **under** every glyph this frame whatever order they were queued in,
+    /// which is the only order a UI can mean.
+    ///
+    /// It goes through the text pipeline: the atlas holds a fully-opaque patch, so a "solid" quad
+    /// is a glyph quad whose coverage happens to be 1. That is why a background costs no pipeline,
+    /// no shader and no second buffer.
+    pub fn queue_rect(&mut self, top_left: Vec2, size: Vec2, color: Vec4, screen_size: Vec2) {
+        if size.x <= 0.0 || size.y <= 0.0 || color.w <= 0.0 {
+            return;
+        }
+        let to_ndc = |p: Vec2| {
+            Vec2::new(
+                p.x / screen_size.x.max(1.0) * 2.0 - 1.0,
+                1.0 - p.y / screen_size.y.max(1.0) * 2.0,
+            )
+        };
+        let a = to_ndc(top_left);
+        let b = to_ndc(top_left + size);
+        self.rects.push(GlyphInstance {
+            rect: [a.x, a.y, b.x, b.y],
+            uv: self.atlas.solid_uv(),
+            color: color.to_array(),
+            origin: [0.0, 0.0, 0.0, -1.0],
+        });
     }
 
     /// Adds one `Text` to this frame, rasterising any glyph the atlas has not seen.
@@ -291,6 +329,10 @@ impl TextRenderer {
     /// rather than two methods keeps the caller's loop one branch shorter, and neither is
     /// expensive to compute.
     ///
+    /// `screen_anchor` **overrides** the position the component authored, and `None` means "use
+    /// what it says". That is how a UI `Node` positions a label without this crate knowing what a
+    /// `Node` is: the host resolves the box, this draws at it.
+    ///
     /// A `Text` whose font is not loaded, whose content is empty, or whose glyphs no longer fit in
     /// the atlas contributes nothing. It is not an error: the frame still renders, and
     /// [`GlyphAtlas::is_full`] is where a full atlas is visible.
@@ -299,6 +341,7 @@ impl TextRenderer {
         queue: &wgpu::Queue,
         text: &Text,
         world_origin: Vec3,
+        screen_anchor: Option<Vec2>,
         screen_size: Vec2,
     ) {
         let Some(layout) = self.library.layout(text.font, text.size_px, &text.content) else {
@@ -311,15 +354,16 @@ impl TextRenderer {
         let Self { atlas, library, world, screen, .. } = self;
         let size_px = text.size_px;
         let font = text.font;
-        place(&layout, text, world_origin, screen_size, world, screen, |glyph| {
+        place(&layout, text, world_origin, screen_anchor, screen_size, world, screen, |glyph| {
             atlas.glyph(queue, library, font, glyph, size_px)
         });
     }
 
     /// Uploads this frame's quads, growing the buffer if it has to.
     pub fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
-        let needed = (self.world.len() + self.screen.len()) as u32;
+        let needed = (self.world.len() + self.rects.len() + self.screen.len()) as u32;
         self.uploaded_world = 0;
+        self.uploaded_rects = 0;
         self.uploaded_screen = 0;
         if needed == 0 {
             return;
@@ -338,10 +382,15 @@ impl TextRenderer {
             });
             self.capacity = capacity;
         }
-        queue.write_buffer(&self.buffer, 0, bytemuck::cast_slice(&self.world));
-        let offset = std::mem::size_of_val(self.world.as_slice()) as u64;
-        queue.write_buffer(&self.buffer, offset, bytemuck::cast_slice(&self.screen));
+        // World, then the solid quads, then the glyphs — the order they are drawn in, and the
+        // reason a background never lands on top of its own label.
+        let mut offset = 0u64;
+        for chunk in [&self.world, &self.rects, &self.screen] {
+            queue.write_buffer(&self.buffer, offset, bytemuck::cast_slice(chunk));
+            offset += std::mem::size_of_val(chunk.as_slice()) as u64;
+        }
         self.uploaded_world = self.world.len() as u32;
+        self.uploaded_rects = self.rects.len() as u32;
         self.uploaded_screen = self.screen.len() as u32;
     }
 
@@ -350,7 +399,8 @@ impl TextRenderer {
     /// The pass needs a depth attachment — the world pipeline tests against it — and the caller is
     /// expected to have run [`upload`](Self::upload) into the same frame's encoder.
     pub fn render<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, global_bind_group: &'a wgpu::BindGroup) {
-        if self.uploaded_world == 0 && self.uploaded_screen == 0 {
+        let overlay = self.uploaded_rects + self.uploaded_screen;
+        if self.uploaded_world == 0 && overlay == 0 {
             return;
         }
         pass.set_bind_group(0, global_bind_group, &[]);
@@ -360,21 +410,23 @@ impl TextRenderer {
             pass.set_pipeline(&self.pipeline_world);
             pass.draw(0..6, 0..self.uploaded_world);
         }
-        if self.uploaded_screen > 0 {
+        if overlay > 0 {
+            // One draw for the quads AND the glyphs: they are contiguous, share a pipeline, and
+            // the buffer already holds them in paint order.
             pass.set_pipeline(&self.pipeline_screen);
             let start = self.uploaded_world;
-            pass.draw(0..6, start..start + self.uploaded_screen);
+            pass.draw(0..6, start..start + overlay);
         }
     }
 
-    /// This frame's quad counts, `(world, screen)` — what the draw would issue.
+    /// This frame's quad counts, `(world glyphs, solid quads, screen glyphs)`.
     ///
     /// Exposed because "the text did not appear" has two very different causes: nothing was
     /// queued, or something was queued and drawn off-screen. A count separates them without a
     /// screenshot.
     #[must_use]
-    pub fn queued(&self) -> (usize, usize) {
-        (self.world.len(), self.screen.len())
+    pub fn queued(&self) -> (usize, usize, usize) {
+        (self.world.len(), self.rects.len(), self.screen.len())
     }
 }
 
@@ -384,10 +436,12 @@ impl TextRenderer {
 /// fit, and either way it contributes nothing. Pulled out of [`TextRenderer::queue`] so the
 /// placement can be checked without an adapter — it is the half that decides where a glyph lands,
 /// and a sign error here is a picture that is upside down rather than a compile error.
+#[allow(clippy::too_many_arguments)]
 fn place(
     layout: &super::TextLayout,
     text: &Text,
     world_origin: Vec3,
+    screen_anchor: Option<Vec2>,
     screen_size: Vec2,
     world: &mut Vec<GlyphInstance>,
     screen: &mut Vec<GlyphInstance>,
@@ -409,6 +463,8 @@ fn place(
 
         match text.space {
             TextSpace::Screen { position } => {
+                // The host's answer wins; the component's own is the fallback.
+                let position = screen_anchor.unwrap_or(position);
                 // Window pixels (y down, origin top-left) to NDC (y up, origin centre).
                 let to_ndc = |p: Vec2| {
                     Vec2::new(
@@ -472,7 +528,7 @@ mod tests {
 
     fn quads(t: &Text, layout: &TextLayout, e: GlyphEntry) -> (Vec<GlyphInstance>, Vec<GlyphInstance>) {
         let (mut w, mut s) = (Vec::new(), Vec::new());
-        place(layout, t, Vec3::new(1.0, 2.0, 3.0), Vec2::new(100.0, 200.0), &mut w, &mut s, |_| Some(e));
+        place(layout, t, Vec3::new(1.0, 2.0, 3.0), None, Vec2::new(100.0, 200.0), &mut w, &mut s, |_| Some(e));
         (w, s)
     }
 
@@ -587,7 +643,7 @@ mod tests {
         };
         let t = text(TextSpace::Screen { position: Vec2::ZERO }, TextAnchor::TopLeft);
         let (mut w, mut s) = (Vec::new(), Vec::new());
-        place(&layout, &t, Vec3::ZERO, Vec2::new(100.0, 100.0), &mut w, &mut s, |g| {
+        place(&layout, &t, Vec3::ZERO, None, Vec2::new(100.0, 100.0), &mut w, &mut s, |g| {
             (g != 2).then(|| entry([0.0, 0.0]))
         });
         assert_eq!(s.len(), 2, "the missing glyph took its neighbours with it");
@@ -598,10 +654,47 @@ mod tests {
     fn an_empty_layout_queues_nothing() {
         let t = text(TextSpace::Screen { position: Vec2::ZERO }, TextAnchor::TopLeft);
         let (mut w, mut s) = (Vec::new(), Vec::new());
-        place(&TextLayout::default(), &t, Vec3::ZERO, Vec2::new(100.0, 100.0), &mut w, &mut s, |_| {
+        place(&TextLayout::default(), &t, Vec3::ZERO, None, Vec2::new(100.0, 100.0), &mut w, &mut s, |_| {
             unreachable!("an empty layout must not ask the atlas for anything")
         });
         assert!(w.is_empty() && s.is_empty());
+    }
+
+    /// A host-supplied anchor replaces the component's own, and changes nothing else.
+    ///
+    /// This is the whole UI bridge in one assertion: `gizmo-ui` publishes a box, the facade hands
+    /// its corner over, and the text lands there rather than where the component was authored. The
+    /// second half matters as much — an override that also moved the glyphs relative to each other
+    /// would be a layout bug wearing a placement bug's clothes.
+    #[test]
+    fn a_supplied_anchor_replaces_the_authored_one_and_moves_nothing_else() {
+        let t = text(TextSpace::Screen { position: Vec2::new(10.0, 10.0) }, TextAnchor::TopLeft);
+        let (mut w1, mut s1) = (Vec::new(), Vec::new());
+        place(&one_glyph(), &t, Vec3::ZERO, None, Vec2::new(100.0, 100.0), &mut w1, &mut s1, |_| {
+            Some(entry([0.0, 0.0]))
+        });
+        let (mut w2, mut s2) = (Vec::new(), Vec::new());
+        place(
+            &one_glyph(),
+            &t,
+            Vec3::ZERO,
+            Some(Vec2::new(60.0, 10.0)),
+            Vec2::new(100.0, 100.0),
+            &mut w2,
+            &mut s2,
+            |_| Some(entry([0.0, 0.0])),
+        );
+        assert!(w1.is_empty() && w2.is_empty());
+        // 50 px to the right on a 100 px-wide target is one NDC unit.
+        assert!(
+            (s2[0].rect[0] - s1[0].rect[0] - 1.0).abs() < 1e-5,
+            "the override moved the text by {} NDC, expected 1.0",
+            s2[0].rect[0] - s1[0].rect[0]
+        );
+        assert!((s2[0].rect[1] - s1[0].rect[1]).abs() < 1e-6, "it moved vertically too");
+        let width = |i: &GlyphInstance| i.rect[2] - i.rect[0];
+        assert!((width(&s1[0]) - width(&s2[0])).abs() < 1e-6, "the override resized the glyph");
+        assert_eq!(s1[0].uv, s2[0].uv);
     }
 
     /// The library says `None` for an id it did not hand out, which is what `queue` returns on.

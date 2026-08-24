@@ -2,9 +2,15 @@
 
 Flexbox **layout** and pointer **hit-testing** for the [Gizmo engine](https://github.com/bdrtr/Gizmo)'s ECS.
 
-**This crate draws nothing.** It has no renderer dependency and no graphics code.
-If you are here looking for a UI toolkit, read the next two sections before you
-spend an afternoon on it.
+**This crate still draws nothing itself** — it has no renderer dependency and no
+graphics code — but since 2026-08-24 what it computes *is* drawn. The engine's
+facade (`gizmo::systems::render::record_text`) reads `Node` and
+`BackgroundColor` and paints them, and a `Text` on the same entity is placed in
+that node's box. The bridge is in the facade because this crate sits **above**
+`gizmo-app`: the renderer cannot see a `Node` and never will.
+
+If you are here looking for a full UI toolkit, read "What does not work" before
+you spend an afternoon on it — the list is still long.
 
 ## What works
 
@@ -39,7 +45,9 @@ let button = world.spawn_bundle(ButtonBundle {
 
 schedule.run(&mut world, dt);
 // `button`'s `Node` now holds the computed box and `Interaction` the pointer
-// state. Turning those into pixels is your job — see "What does not work".
+// state. Under the engine's renderer that box is painted (`BackgroundColor`)
+// and a `Text` on the same entity is laid into it; standalone, turning them
+// into pixels is still your job.
 ```
 
 ## `Style` is our own type
@@ -61,17 +69,23 @@ The properties `Style` does **not** model — CSS Grid, `overflow`, `box_sizing`
 
 ## What does not work
 
-- **No text rendering.** No `Text` component, no font loading, no glyph
-  rasterisation — not in this crate and not in `gizmo-renderer`. This is the
-  single largest missing piece, and the reason for the "experimental" label.
-- **No drawing of any kind.** No vertices, no draw calls, no renderer
-  integration. `BackgroundColor` is stored on the entity and read by nothing in
-  the workspace.
+- **No drawing in *this* crate.** Still no vertices and no draw calls here; what
+  changed on 2026-08-24 is that something else reads the output. `gizmo-renderer`
+  gained fonts, a glyph atlas and a `Text` component, and the facade's text pass
+  paints `BackgroundColor` and places a `Text` in its `Node`. Used standalone —
+  `register` on a bare `World`, no engine renderer — this crate is what it always
+  was: geometry and hover state, and the drawing is yours.
+- **No rich text, wrapping, shaping, bidi or font fallback.** What the engine
+  draws is one font per `Text`, breaking only on `\n`. A label longer than its box
+  overflows it, because there is no clipping either (below).
 - **No CSS Grid.** `Style` covers flexbox and block layout only. taffy's grid
   algorithm is compiled in but unreachable — there is no way to say
   `display: grid` or to describe a track template.
 - **No z-order or occlusion.** The hit-test is a flat loop, so overlapping
-  elements all report `Hovered`.
+  elements all report `Hovered` — and the drawing has no per-element order
+  either: the engine paints every background and then every glyph, so a label is
+  always above every panel. That is right for a button and wrong for two
+  overlapping windows, and there is no `z` on `Node` to sort by.
 - **No click/focus events, keyboard handling, scrolling, clipping or text
   input.** `Interaction` is recomputed each frame; it is state, not an event
   stream.

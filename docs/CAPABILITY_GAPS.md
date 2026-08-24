@@ -69,13 +69,29 @@ technical one — so `text::synthetic` builds a real TrueType file in memory wit
 every assertion is a derivation rather than a measurement of somebody else's face; and the atlas's
 shelf packer, whose placement is checked for overlap as a property rather than by sampling.
 
+**`gizmo-ui` is connected to it (same day, second commit).** The crate computed boxes and drew
+nothing from the day it was written — its own docs said *"this crate emits no vertices and no draw
+calls"* and *"`BackgroundColor` is written and never read"*. Both are now false, and the bridge is
+small because both halves already spoke the same units: `Node` publishes absolute window-pixel
+rects and `TextSpace::Screen` takes them. `BackgroundColor` is painted as a solid quad — through
+the *text* pipeline, because the atlas carries a fully-opaque patch, so a background costs no
+pipeline and no second buffer — and a `Text` on the same entity is placed in that node's box, its
+own anchor choosing the corner. The bridge lives in the facade and cannot live anywhere else:
+`gizmo-ui` sits above `gizmo-app`, so the renderer cannot see a `Node`.
+
+Measured: a 60×30 node with a background changes **1 978/16 384** pixels (1 800 is the rectangle,
+the rest is bloom) and **0** with the quad not queued; a label authored at (100, 100) and given a
+box at (10, 10) changes **221** pixels inside the box and **0** outside it — and drawing at its
+authored position instead is what the outside count catches.
+
 **Still missing, and named rather than discovered later.** No default font — a `Text` whose face was
 never loaded draws nothing rather than substituting one. Text is drawn into the HDR target before
 tone mapping, so it is exposed and bloomed with the rest of the frame: right for a world label, and
-the first thing to revisit when there is a post-tonemap pass to hang UI on. And **`gizmo-ui` is not
-connected to it**: `Node` still emits no vertices, `BackgroundColor` is still written and never
-read, and a UI rect is not yet handed to a `Text`. That is the next piece, and it is a smaller one
-than this was — see section E.
+the first thing to revisit when there is a post-tonemap pass to hang UI on. **No z-order**: the
+paint order is global — every background, then every glyph — so a label is always above every
+panel, which is right for a button and wrong for two overlapping windows, and `Node` carries no `z`
+to sort by. No clipping, so a label longer than its box overflows it; no click events, no keyboard
+focus; and no widget beyond "a box with a colour and a label".
 
 ### A3. User-authored shaders — **open since 2026-08-23**, forward-only
 
@@ -569,35 +585,30 @@ and `emissive` (item 4, the only undocumented one). No further silent fields.
 > `SceneView` and closed the camera half of all three; the shadow cascades and cluster table are
 > still shared per encoder, and that is what the three now wait on (A5b, item 3).
 
-1. ~~**Text / font rendering (A2).**~~ **The engine half landed 2026-08-24** — `gizmo-renderer::text`,
-   a `Text` component in two spaces, one shared pass both hosts call. What is left of this item is
-   the **`gizmo-ui` half**, and it is smaller than what landed: `Node` publishes absolute
-   window-pixel rects already, and `TextSpace::Screen` takes absolute window pixels, so connecting
-   them is a system that copies one into the other — plus consuming `BackgroundColor`, which is
-   still written and never read. The layering allows it: `gizmo-ui` sits *above* `gizmo-app`, so it
-   can see the renderer's types, while the renderer cannot see `Node`. That is also why the
-   component landed in `gizmo-renderer::components` rather than in `gizmo-ui` as the note below
-   assumed — a `Text` in `gizmo-ui` would have been invisible to both draw paths.
+1. ~~**Text / font rendering (A2).**~~ **DONE 2026-08-24, both halves.** `gizmo-renderer::text` —
+   fonts, a glyph atlas, layout — a `Text` component in two spaces drawn by one pass both hosts
+   call, and `gizmo-ui`'s `Node` + `BackgroundColor` painted from it. Details and the measurements
+   are in A2.
 
-   Two things the sweep listed as constraints held: the wasm target is a separate CI gate and the
+   Three things the plan got wrong, kept because being wrong in writing is the useful part:
+
+   - **The component belongs in `gizmo-renderer::components`, not `gizmo-ui`.** `gizmo-ui` sits
+     *above* `gizmo-app`, so a `Text` there is invisible to both draw paths. The direction the
+     layering allows is the other one — `gizmo-ui` can see renderer types — which is why the
+     *bridge* is in the facade and the *component* is in the renderer.
+   - **The draw modes did not want the existing `BatchKey`.** A glyph is an instance, not a mesh:
+     text is one instance buffer and two draw calls, not a batch per atlas texture.
+   - **`BackgroundColor` needed no draw path of its own.** The atlas carries a fully-opaque patch,
+     so a solid quad is a glyph quad whose coverage is 1 — same pipeline, same buffer.
+
+   Two constraints the sweep named did hold: the wasm target is a separate CI gate and the
    rasteriser builds there, and the golden render test is the acceptance, because a picture is the
    only thing that can say a glyph landed where it should.
 
-   *The original note, kept because its landing sites were right:* it was tracked as **M7.6** in
-   `ENGINE.md` §3 (Phase 7), and `gizmo-ui`'s own crate docs named the same gap and the same site —
-   *"expect the component set to change when rendering lands (a `Text` component and a draw-list
-   output are the obvious additions)"*.
+   *Its landing sites were right:* tracked as **M7.6** in `ENGINE.md` §3 (Phase 7) — whose z-index
+   and widget halves are still open — and `gizmo-ui`'s own crate docs named the same site,
+   *"expect the component set to change when rendering lands"*.
 
-   Of the four pieces the plan listed, three are done: the **rasteriser + atlas** (`ab_glyph`,
-   sealed; nothing evicted, and the atlas says so through `is_full` rather than dropping glyphs
-   quietly), the **`Text` component** — in `gizmo-renderer::components`, not `gizmo-ui`, for the
-   layering reason above — and **both draw modes**, which turned out not to want the existing
-   `BatchKey`: a glyph is an instance rather than a mesh, so text is one instance buffer and two
-   draw calls, not a batch per atlas texture.
-
-   What is left is the **`gizmo-ui` connection**: a system that copies each `Node` rect into a
-   `Text`'s `TextSpace::Screen` position, and a draw of `BackgroundColor`, which is still written
-   and read by nothing.
 2. **Wire up what already exists.** ~~Cheapest ratio of work to capability in the whole list~~ —
    **and the spatial index turned out not to be** (F1, measured 2026-08-24: wiring it makes the
    frame 90 % slower on a scene with shadow cascades, because their union culls nothing). It is
