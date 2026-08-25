@@ -29,7 +29,14 @@ Desktop.ini
 .vscode/
 .idea/
 .aider*
-.claude/
+.claude/*
+# …except the skills, which are project knowledge rather than machine state: `CLAUDE.md` points at
+# them, so a clone that did not carry them would be reading a promise the repo cannot keep.
+# Everything else under `.claude/` (settings.local.json, local state) stays ignored. Note the
+# pattern above excludes the CONTENTS (`.claude/*`) rather than the directory (`.claude/`): git
+# cannot re-include anything inside an excluded directory, so the negation below only works
+# against the first form.
+!.claude/skills/
 
 # Scratch / one-off files
 scratch/
