@@ -1027,6 +1027,37 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A breakable whose entity id had been recycled survived its own destruction — and an explosion
+  in the same position re-detonated every frame.** ECS query iteration yields a bare `u32` with no
+  generation, and both physics systems rebuilt an `Entity` from it as `Entity::new(id, 0)`. That
+  is the right handle only while an id is on its *first* life. `World::despawn` bumps the
+  generation and `Entities::reserve_entity` drains the free list before growing the id space, so
+  the very next spawn after any despawn lands on a recycled slot at generation 1 — ordinary in any
+  game that pools or destroys anything, not an edge case.
+
+  Six sites, three symptoms, and they fail in opposite directions:
+
+  - **the explosion-driven shatter** despawned through the stale handle. `World::despawn` skips a
+    handle that fails its liveness check *silently*, so the original stayed in the scene while the
+    debris still spawned and `is_broken` latched on it. Every damage path is gated on
+    `!is_broken` and nothing ever clears it, so the survivor is **permanently undamageable**: one
+    blast leaves a duplicate that gameplay can never remove.
+  - **the explosion entity itself** was collected and despawned the same way, so a recycled one
+    stayed `is_active` and **re-detonated on every subsequent frame**, re-impulsing bodies and
+    re-damaging whatever survived the first pass — against `Explosion`'s own documentation, which
+    promises it applies exactly once and then despawns.
+  - **the collision path** fails the other way: there the stale handle was rejected by
+    `get_mut_entity`, so a recycled-id breakable took **no contact damage at all**. That direction
+    corrupts nothing, which is why it could sit unnoticed — an invulnerable crate reads as a
+    tuning problem. The comment at that call site claimed the generation check was preventing a
+    write into a reused slot; with the generation pinned to 0 it was rejecting every reused slot.
+
+  All six now resolve through `World::entity`, which returns the id's current generation and
+  `None` for a dead id — the documented way to turn a raw id into a handle, whose own rustdoc
+  warns against fabricating one and notes that this class was already the root of several audit
+  bugs. Four regression tests, one per site including the copy-pasted `entity_b` twin, each
+  verified by reverting its own site and confirming it is the only test that goes red.
+
 - **A component hook that despawned during `insert_batch`/`remove_batch` corrupted a later group.**
   Both functions compute *every* group up front and then process them one at a time, running each
   group's hooks before the next group starts — and `run_hooks` hands every hook a `&mut World`

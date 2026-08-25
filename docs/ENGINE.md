@@ -108,13 +108,18 @@ state instead.
     cascades (delete, GC, selection highlight), and `gizmo-editor`'s hierarchy panel — which
     recurses, so it overflows the stack and aborts rather than hanging. `despawn_recursive`,
     `collect_hidden`, transform propagation and (since 2026-08-24) `World::trigger` are guarded.
-  - **`gizmo-physics-rigid` fabricates `Entity::new(id, 0)` from raw query ids.** Query iteration
-    yields a bare `u32`; the explosion system rebuilds a handle at generation 0 and despawns
-    through it. `World::despawn` silently skips a handle that fails `is_alive`, so for any
-    recycled id the despawn does nothing while the debris still spawns and `is_broken` latches:
-    an intact, permanently undamageable body plus a full set of chunks. The explosion entity
-    itself is despawned the same way, so a recycled one re-detonates every frame. `World::entity`
-    is the documented way to resolve a raw id and its own rustdoc warns against exactly this.
+  - ~~**`gizmo-physics-rigid` fabricates `Entity::new(id, 0)` from raw query ids.**~~
+    **CLOSED 2026-08-25.** Query iteration yields a bare `u32`, and both `physics_fracture_system`
+    and `physics_explosion_system` rebuilt handles at generation 0 — correct only while an id is
+    on its first life, and `Entities::reserve_entity` drains the free list first, so the very next
+    spawn after any despawn lands on a recycled slot. Six sites, three symptoms:
+    the explosion-driven shatter despawned through a stale handle (silently skipped, while the
+    debris still spawned and `is_broken` latched — an intact, permanently undamageable body beside
+    its own chunks); the explosion entity was despawned the same way, so a recycled one
+    re-detonated every frame against its own documented contract; and on the collision path the
+    stale handle was rejected by `get_mut_entity` instead, so a recycled-id breakable took no
+    contact damage at all. All six now resolve through `World::entity`, whose rustdoc had warned
+    against exactly this. Four regression tests, one per site, each isolated by mutation.
   - ~~**`insert_batch` / `remove_batch` do not revalidate later groups after hooks run.**~~
     **CLOSED 2026-08-25.** Hooks fire at the end of each group and are documented as free to
     despawn; a despawn sets the victim's location to `EntityLocation::INVALID`, and a later group

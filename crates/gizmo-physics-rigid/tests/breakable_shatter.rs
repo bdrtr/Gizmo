@@ -404,3 +404,186 @@ fn the_box_path_is_bit_identical() {
         );
     }
 }
+
+// ── Recycled id slots ────────────────────────────────────────────────────────────────────
+//
+// Query iteration yields a bare `u32` — no generation — and this system rebuilt handles from it
+// as `Entity::new(id, 0)`. That is the right handle only while the id is on its FIRST life.
+// `World::despawn` bumps the generation and `Entities::reserve_entity` drains the free list
+// first, so the very next spawn after any despawn lands on a recycled slot at generation 1 —
+// ordinary, not exotic, in any game that pools or destroys anything.
+//
+// A fabricated generation-0 handle then fails `World::despawn`'s `is_alive` check and the
+// despawn is skipped ENTIRELY AND SILENTLY. Everything else in the frame still happens, which is
+// what makes the result worse than a no-op.
+//
+// `World::entity` is the documented way to turn a raw id into a live handle, and its own rustdoc
+// warns against fabricating one; the same class was already fixed in gizmo-scene twice.
+
+/// A breakable in a recycled id slot must shatter, not survive alongside its own debris.
+///
+/// Pre-fix this produced the strictly worst outcome available: the despawn was skipped, the
+/// debris spawned anyway, and `is_broken` latched on the original — and since every damage path
+/// is gated on `!is_broken` and nothing ever clears it, the survivor is *permanently
+/// undamageable*. One blast leaves a duplicate that can never be removed by gameplay.
+#[test]
+fn a_recycled_id_breakable_shatters_instead_of_outliving_its_own_debris() {
+    let mut world = World::new();
+
+    // Burn one id so the next spawn is handed the same id at a bumped generation.
+    let throwaway = world.spawn();
+    world.despawn(throwaway);
+
+    let e = spawn_breakable(&mut world, Collider::sphere(0.5), Vec3::new(2.0, 0.0, 0.0));
+    assert_eq!(e.id(), throwaway.id(), "sanity: the allocator recycled the id");
+    assert_ne!(
+        e.generation(),
+        0,
+        "sanity: a recycled handle must carry a bumped generation, or this test proves nothing"
+    );
+
+    blast_once(&mut world);
+
+    assert!(
+        !world.is_alive(e),
+        "a breakable in a recycled id slot was left in the scene — its despawn went to a \
+         fabricated generation-0 handle and was silently skipped"
+    );
+    assert!(
+        !debris_positions(&world).is_empty(),
+        "the debris must still spawn; the bug is the original surviving it, not the debris"
+    );
+    assert!(
+        world.borrow::<Breakable>().get(e.id()).is_none(),
+        "no Breakable may remain on the recycled id — a survivor here is latched is_broken and \
+         can never be damaged again"
+    );
+}
+
+/// An explosion entity in a recycled id slot must fire once and then be gone.
+///
+/// The same defect on the other end of the same function: the explosion is collected as
+/// `Entity::new(ent_id, 0)` and despawned through that handle at the end of the pass. On a
+/// recycled slot the despawn is skipped, `is_active` stays true, and the blast re-detonates on
+/// EVERY SUBSEQUENT FRAME — re-impulsing bodies and re-damaging breakables that survived the
+/// first pass. `Explosion`'s own documentation promises it "applies an active explosion exactly
+/// once and then despawns the entity".
+#[test]
+fn a_recycled_id_explosion_fires_once_and_then_despawns() {
+    let mut world = World::new();
+
+    let throwaway = world.spawn();
+    world.despawn(throwaway);
+
+    // The blast lands on the recycled id.
+    let blast = world.spawn();
+    assert_eq!(blast.id(), throwaway.id(), "sanity: the allocator recycled the id");
+    assert_ne!(blast.generation(), 0, "sanity: bumped generation");
+    world.add_component(
+        blast,
+        Explosion {
+            force_radius: 10.0,
+            force: 500.0,
+            damage: 1000.0,
+            damage_radius: 10.0,
+            falloff: ExplosionFalloff::Linear,
+            offset: Vec3::ZERO,
+            is_active: true,
+        },
+    );
+    world.add_component(blast, Transform::new(Vec3::ZERO));
+
+    physics_explosion_system(&world, 1.0 / 60.0);
+    world.apply_commands();
+
+    assert!(
+        !world.is_alive(blast),
+        "an explosion in a recycled id slot stayed alive, so it re-detonates every frame"
+    );
+    assert!(
+        world.query::<&Explosion>().map(|q| q.iter().count()).unwrap_or(0) == 0,
+        "no Explosion component may survive the pass that consumed it"
+    );
+}
+
+/// The third symptom, and the quietest: on the COLLISION path a breakable in a recycled id slot
+/// took no contact damage at all.
+///
+/// Here the fabricated handle failed `get_mut_entity`'s own generation check rather than
+/// `despawn`'s, so the entity was skipped before any damage was applied. That direction fails
+/// *safe* — nothing is corrupted — which is exactly why it could sit unnoticed: the object simply
+/// never breaks, and an invulnerable crate reads as a tuning problem rather than a bug. The
+/// comment at that call site claimed the generation check was protecting against writing into a
+/// reused slot; with the generation pinned to 0 it was rejecting every reused slot instead.
+///
+/// Driven through `physics_fracture_system` with a hand-built `CollisionEvent`, because the
+/// impulse is read straight off `ContactPoint::normal_impulse` — no stepped contact, and no body
+/// fixture, is needed to reach the branch.
+#[test]
+fn a_recycled_id_breakable_still_takes_contact_damage() {
+    use gizmo_physics_core::{BodyHandle, CollisionEvent, CollisionEventType, ContactPoint, ContactPoints};
+    use gizmo_physics_rigid::system::physics_fracture_system;
+    use gizmo_physics_rigid::PhysicsWorld;
+
+    let mut world = World::new();
+
+    let throwaway = world.spawn();
+    world.despawn(throwaway);
+    let e = spawn_breakable(&mut world, Collider::sphere(0.5), Vec3::ZERO);
+    assert_eq!(e.id(), throwaway.id(), "sanity: the allocator recycled the id");
+    assert_ne!(e.generation(), 0, "sanity: bumped generation");
+
+    // A SECOND breakable, also on a recycled slot, so the event pair can be filled both ways.
+    // `entity_a` and `entity_b` are handled by two copy-pasted blocks in the system, and a
+    // half-applied fix there is exactly the failure a single-slot test would wave through.
+    let throwaway2 = world.spawn();
+    world.despawn(throwaway2);
+    let f = spawn_breakable(&mut world, Collider::sphere(0.5), Vec3::new(5.0, 0.0, 0.0));
+    assert_ne!(f.generation(), 0, "sanity: the second slot is recycled too");
+
+    let hard_hit = || {
+        let mut points = ContactPoints::new();
+        points.push(ContactPoint {
+            // Far above the breakable's threshold of 1.0 and its 100 health, so the branch is
+            // not reached or missed on an arithmetic detail.
+            normal_impulse: 500.0,
+            normal: Vec3::Y,
+            ..Default::default()
+        });
+        points
+    };
+
+    let mut pw = PhysicsWorld::default();
+    // `e` in the entity_a slot…
+    pw.collision_events.push(CollisionEvent {
+        entity_a: BodyHandle::from_id(e.id()),
+        entity_b: BodyHandle::from_id(9999),
+        event_type: CollisionEventType::Started,
+        contact_points: hard_hit(),
+    });
+    // …and `f` in the entity_b slot.
+    pw.collision_events.push(CollisionEvent {
+        entity_a: BodyHandle::from_id(9999),
+        entity_b: BodyHandle::from_id(f.id()),
+        event_type: CollisionEventType::Started,
+        contact_points: hard_hit(),
+    });
+    world.insert_resource(pw);
+
+    physics_fracture_system(&world, 1.0 / 60.0);
+    world.apply_commands();
+
+    assert!(
+        !world.is_alive(e),
+        "entity_a slot: a breakable in a recycled id slot took no contact damage — the \
+         fabricated generation-0 handle was rejected by `get_mut_entity`, so it was skipped"
+    );
+    assert!(
+        !world.is_alive(f),
+        "entity_b slot: same defect in the copy-pasted twin of the block above"
+    );
+    assert!(
+        !debris_positions(&world).is_empty(),
+        "they must actually shatter, not merely be reached"
+    );
+}

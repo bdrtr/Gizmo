@@ -335,10 +335,19 @@ pub fn physics_fracture_system(world: &World, dt: f32) {
 
         // Check Entity A
         if !shattered.contains(&event.entity_a.id()) {
-            // get_entity: çarpışma olayı despawn edilmiş bir entity'ye işaret edebilir;
-            // generation kontrolü yeniden kullanılan slota yanlış yazmayı engeller.
-            if let Some((mut breakable, transform, collider, vel, _)) =
-                query.get_mut_entity(Entity::new(event.entity_a.id(), 0))
+            // `BodyHandle` is a bare id, so the ECS handle must be RESOLVED, not fabricated.
+            // `World::entity` returns the id's CURRENT generation and `None` for an id that is
+            // dead — which is exactly the check the comment below claims. Building
+            // `Entity::new(id, 0)` here instead (until 2026-08-25) made that claim false for
+            // every recycled slot: `get_mut_entity` rejected the stale handle, so a breakable
+            // whose id had been reused once was silently immune to contact damage, and the
+            // shatter below would have despawned through the same stale handle.
+            //
+            // Generation kontrolü, çarpışma olayı üretildikten sonra yeniden kullanılmış bir
+            // slota yanlış yazmayı engeller.
+            let resolved_a = world.entity(event.entity_a.id());
+            if let Some((entity_a, (mut breakable, transform, collider, vel, _))) =
+                resolved_a.and_then(|e| query.get_mut_entity(e).map(|q| (e, q)))
             {
                 if !breakable.is_broken && max_impulse > breakable.threshold {
                     breakable.current_health -= max_impulse;
@@ -346,7 +355,7 @@ pub fn physics_fracture_system(world: &World, dt: f32) {
                         // Latch only if it really broke — see `shatter_entity`.
                         let broke = shatter_entity(
                             &mut commands,
-                            Entity::new(event.entity_a.id(), 0),
+                            entity_a,
                             &breakable,
                             transform,
                             collider,
@@ -365,15 +374,17 @@ pub fn physics_fracture_system(world: &World, dt: f32) {
 
         // Check Entity B
         if !shattered.contains(&event.entity_b.id()) {
-            if let Some((mut breakable, transform, collider, vel, _)) =
-                query.get_mut_entity(Entity::new(event.entity_b.id(), 0))
+            // Resolved rather than fabricated — see the note on entity A above.
+            let resolved_b = world.entity(event.entity_b.id());
+            if let Some((entity_b, (mut breakable, transform, collider, vel, _))) =
+                resolved_b.and_then(|e| query.get_mut_entity(e).map(|q| (e, q)))
             {
                 if !breakable.is_broken && max_impulse > breakable.threshold {
                     breakable.current_health -= max_impulse;
                     if breakable.current_health <= 0.0 {
                         let broke = shatter_entity(
                             &mut commands,
-                            Entity::new(event.entity_b.id(), 0),
+                            entity_b,
                             &breakable,
                             transform,
                             collider,
@@ -584,9 +595,18 @@ pub fn physics_explosion_system(world: &World, dt: f32) {
     if let Some(exp_query) = &explosion_query_opt {
         for (ent_id, (explosion, transform, _)) in exp_query.iter() {
             if explosion.is_active {
+                // Resolved, not fabricated: this handle is what despawns the explosion at the
+                // end of the pass. A generation-0 handle to a recycled slot fails
+                // `World::despawn`'s liveness check SILENTLY, leaving `is_active` set — so the
+                // blast re-detonates on every subsequent frame, against `Explosion`'s own
+                // documented contract that it applies exactly once and then despawns.
+                let exp_entity = match world.entity(ent_id) {
+                    Some(e) => e,
+                    None => continue,
+                };
                 // Apply offset to transform position
                 active_explosions.push((
-                    Entity::new(ent_id, 0),
+                    exp_entity,
                     *explosion,
                     transform.position + explosion.offset,
                 ));
@@ -648,9 +668,19 @@ pub fn physics_explosion_system(world: &World, dt: f32) {
                             let dir = diff / dist;
                             let mut exp_vel = *vel;
                             exp_vel.linear += dir * impulse_mag * 0.1; // Estimate mass
+                            // Resolved, not fabricated. A generation-0 handle to a recycled
+                            // slot makes `shatter_entity`'s despawn a silent no-op while the
+                            // debris still spawns and `is_broken` latches below — leaving the
+                            // original in the scene beside its own debris and, since every
+                            // damage path is gated on `!is_broken` and nothing clears it,
+                            // permanently undamageable.
+                            let entity = match world.entity(id) {
+                                Some(e) => e,
+                                None => continue,
+                            };
                             let broke = shatter_entity(
                                 &mut commands,
-                                Entity::new(id, 0),
+                                entity,
                                 &breakable,
                                 transform,
                                 collider,
