@@ -148,8 +148,13 @@ pub struct Parent(pub u32);
 /// Entries are not validated: a child despawned outside `HierarchyExt` leaves a dangling id.
 /// Duplicates and cycles are impossible through `HierarchyExt` (it rejects self-parenting and
 /// any reparent that would close a loop) but perfectly possible via direct component writes or
-/// a hand-edited scene file, so `despawn_recursive` carries a visited set rather than assuming
-/// the graph is acyclic.
+/// a scene file, whose parent edges `SceneData::instantiate_entities` writes verbatim.
+///
+/// **A walker must therefore carry a visited set**, and whether one does is per-walker rather
+/// than guaranteed anywhere. In this crate `despawn_recursive` and (since 2026-08-24)
+/// `World::trigger` carry one, as do `collect_hidden` and transform propagation in `gizmo`; a
+/// sweep on 2026-08-25 found six that do not, listed in `docs/ENGINE.md` §3. If you are writing
+/// a walk over this field or over [`Parent`], assume the graph is cyclic.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Children(pub Vec<u32>);
 
@@ -435,15 +440,26 @@ pub trait Bundle {
     /// right archetype.
     ///
     /// Each component is appended when its column is still short of `row`, and otherwise raw-
-    /// written into slot `row` — treating that slot as *uninitialised*, so an already-live value
-    /// there is overwritten without being dropped (a leak for anything owning an allocation).
-    /// Either way the row's ticks are reset to `tick` in both fields, i.e. it reads as freshly
-    /// added, not merely changed.
+    /// written into slot `row`. **Both cases treat the destination as uninitialised** — nothing
+    /// here drops what it lands on, and nothing here can, because the two situations that reach
+    /// the second case are indistinguishable from inside a column: an already-live value, and
+    /// the hole `Archetype::move_entity_to` leaves when it extends a column it did not fill.
+    /// `row < col.len()` proves only that the row is *inside* the column. Either way the row's
+    /// ticks are reset to `tick` in both fields, i.e. it reads as freshly added rather than
+    /// merely changed.
     ///
     /// # Safety
     /// `arch` must contain the component columns that `Self::get_infos()` returns, and `_row`
     /// must be a valid row reserved in this archetype. The data is copied raw; ownership is
     /// transferred to the archetype.
+    ///
+    /// **Every slot this writes must be uninitialised on entry.** That is the caller's
+    /// obligation, not this method's: a caller that lets it land on a live value leaks whatever
+    /// that value owned, and a caller that "fixes" the leak by dropping inside the write frees a
+    /// garbage pointer the first time it meets a hole.
+    /// [`World::add_bundle`](crate::world::World::add_bundle) discharges the
+    /// obligation by dropping the live rows itself first, which it can do because it knows —
+    /// before the migration — which of the bundle's components the entity already carried.
     unsafe fn write_to_archetype(self, arch: &mut crate::archetype::Archetype, _row: usize, tick: u32);
     /// Attaches the bundle to an entity that already exists, component by component, through
     /// `World::add_component`.
@@ -464,10 +480,18 @@ pub trait Bundle {
 ///
 /// Composition is purely type-level: `get_infos` lists `B`'s components followed by `C`, and
 /// `write_to_archetype` writes `B` first and `C` second. If `C` also occurs in `B` the later
-/// write wins by overwriting the slot in place — without dropping what was there, which leaks
-/// whatever that value owned. An archetype with no column for `C` (a `SparseSet` `C`, or simply
-/// the wrong archetype) is a bare `unwrap` panic, without the explanation the single-component
-/// path prints.
+/// write wins by overwriting the slot in place — **without dropping what was there, which leaks
+/// whatever that value owned**.
+///
+/// That leak is not the caller's to close, which is why it is still here. `World::add_bundle`
+/// does drop the live value before the write, but exactly once — it has to deduplicate by type,
+/// since dropping one slot twice is a double free — so the *second* of the two writes lands on a
+/// slot the *first* one just filled, and nothing outside this function knows that slot changed
+/// hands. Pinned by `a_with_composed_duplicate_leaks_the_inner_value_and_says_so`, so closing it
+/// means turning that test red on purpose rather than by accident.
+///
+/// An archetype with no column for `C` (a `SparseSet` `C`, or simply the wrong archetype) is a
+/// bare `unwrap` panic, without the explanation the single-component path prints.
 ///
 /// **Known limitation.** This type does not override [`Bundle::apply`], so it inherits the
 /// no-op default: passing a `DynamicBundle` to `World::spawn_bundle` — or to `World::add_bundle`
@@ -497,6 +521,21 @@ impl<B: Bundle, C: Component> Bundle for DynamicBundle<B, C> {
             col.push_raw(&self.component as *const _ as *const u8, tick);
             std::mem::forget(self.component);
         } else {
+            // `ptr::write`, NOT assignment — and the reason is worth the paragraph, because the
+            // obvious reading of this branch is wrong and was briefly committed here.
+            //
+            // "The slot is below `len`, so it holds a live value, so overwriting it without
+            // dropping leaks whatever it owned" is true of the OVERRIDE case and false of the
+            // other one: `Archetype::move_entity_to` extends every target column by a row and
+            // leaves the newly-added ones UNINITIALISED for this write to fill. A hole and a
+            // live value both sit below `len` and are indistinguishable from here. Assignment
+            // drops before it writes, so on a hole it frees a garbage pointer — measured
+            // 2026-08-25, `world.spawn()` followed by `add_bundle(e, (T,))` for any `T` owning
+            // a heap allocation aborted with `free(): invalid pointer`.
+            //
+            // The slot is therefore uninitialised BY CONTRACT. `World::add_bundle` drops
+            // whatever was live before it calls this — see `drop_live_bundle_rows` there,
+            // which is the only place that knows which slots those are.
             let ptr = col.get_mut_ptr(row) as *mut C;
             std::ptr::write(ptr, self.component);
             *col.ticks_ptr_mut().add(row) = crate::archetype::ComponentTicks::new(tick);
@@ -547,6 +586,11 @@ impl<T: Component> Bundle for T {
             col.push_raw(&self as *const _ as *const u8, tick);
             std::mem::forget(self);
         } else {
+            // `ptr::write`, not assignment — see the `DynamicBundle` impl above for the full
+            // reason. In short: this branch is reached both for a live slot (`add_bundle`
+            // re-asserting a component the entity already carries) and for an uninitialised
+            // hole (`move_entity_to` pre-extends the columns a migration is about to fill),
+            // and nothing visible from here separates them. The caller drops the live ones.
             let ptr = col.get_mut_ptr(row) as *mut T;
             std::ptr::write(ptr, self);
             *col.ticks_ptr_mut().add(row) = crate::archetype::ComponentTicks::new(tick);

@@ -138,7 +138,6 @@ impl World {
         };
         world.insert_resource(crate::commands::CommandQueue::new());
         world.insert_resource(Entities::new());
-        world.insert_resource(Entities::new());
         world
     }
 
@@ -544,6 +543,77 @@ mod tests {
         assert!(
             world.query_entity::<&SparseC>(e2.id()).is_none(),
             "reused entity id inherited a stale sparse component from the despawned entity"
+        );
+    }
+
+    // Regression: the same hazard as the test directly above, on the wholesale-reset path
+    // instead of the per-entity one — and the harder of the two to notice. `clear_entities`
+    // reset the archetype rows, the entity locations and the id allocator, and never touched
+    // `sparse_sets`, so the first entity spawned afterwards took id 0 back and inherited
+    // whatever id 0 used to hold. Nothing dangles and nothing panics; the new entity simply
+    // *has* a component nobody gave it.
+    //
+    // It is worse here than after a `despawn` for a reason the despawn case does not have:
+    // `Entities::clear` resets the GENERATIONS too, so the recycled handle is identical bit for
+    // bit rather than merely sharing an id. `observer::tests::clear_entities_drops_entity_listeners`
+    // is the other half of that — the world's second per-entity map, found by the sweep this
+    // fix asked for.
+    #[test]
+    fn clear_entities_clears_sparse_components() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        #[derive(Clone, Debug, PartialEq)]
+        struct SparseC(i32);
+        impl crate::component::Component for SparseC {
+            fn storage_type() -> crate::component::StorageType {
+                crate::component::StorageType::SparseSet
+            }
+        }
+
+        static ADDS: AtomicUsize = AtomicUsize::new(0);
+        ADDS.store(0, Ordering::SeqCst);
+
+        let mut world = World::new();
+        world.register_component_type::<SparseC>();
+        world.register_on_add::<SparseC>(Box::new(|_, _| {
+            ADDS.fetch_add(1, Ordering::SeqCst);
+        }));
+
+        let e = world.spawn();
+        world.add_component(e, SparseC(5));
+        assert_eq!(ADDS.load(Ordering::SeqCst), 1, "sanity: a first attach fires on_add");
+
+        world.clear_entities();
+
+        // Pin the id reuse the whole scenario rests on, so this cannot pass for the wrong
+        // reason if the allocator ever stops restarting at 0.
+        let e2 = world.spawn();
+        assert_eq!(e2.id(), e.id(), "sanity: clear_entities restarts ids");
+
+        assert!(
+            world.query_entity::<&SparseC>(e2.id()).is_none(),
+            "an entity spawned after clear_entities inherited a stale sparse component"
+        );
+        assert_eq!(
+            world.query::<&SparseC>().unwrap().iter().count(),
+            0,
+            "clear_entities leaked a sparse component into the query iterator"
+        );
+        assert!(
+            !world
+                .entity_component_types(e2)
+                .contains(&std::any::TypeId::of::<SparseC>()),
+            "entity_component_types reports a stale sparse component after clear_entities"
+        );
+
+        // The stale row also corrupted the WRITE path: `add_component`'s sparse branch reads
+        // `set.contains(id)` to choose add-vs-overwrite, so a leftover entry made a genuine
+        // first attach look like an overwrite and swallowed `on_add`.
+        world.add_component(e2, SparseC(7));
+        assert_eq!(
+            ADDS.load(Ordering::SeqCst),
+            2,
+            "a first attach after clear_entities was mistaken for an overwrite"
         );
     }
 

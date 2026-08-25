@@ -41,8 +41,12 @@
 //! listener could never have caught.
 //!
 //! Listeners registered against the same entity and event type run in registration order.
-//! Neither mechanism has an unregister: registrations accumulate for the life of the world,
-//! and registering the same closure twice makes it fire twice.
+//! Neither mechanism has an unregister, and registering the same closure twice makes it fire
+//! twice. Registrations then accumulate for the life of the world — with one exception, and it
+//! is an exception rather than a hatch: [`World::clear_entities`](crate::world::World::clear_entities)
+//! destroys every `observe` listener, because it destroys every entity they were keyed to and
+//! hands the same `Entity` values back to strangers. Type-keyed registrations — the lifecycle
+//! hooks and `observe_global` — survive it, since they were never about a particular entity.
 
 use crate::entity::Entity;
 use std::marker::PhantomData;
@@ -196,11 +200,21 @@ pub trait EntityEvent: Send + Sync + 'static + Clone {
     /// have run (bubbling).
     ///
     /// `false` by default: only [`target`](Self::target) is notified. When `true`, dispatch
-    /// walks up the `Parent` chain, running each ancestor's listeners for this event type,
-    /// and stops at the first entity that has no `Parent` component, whose recorded parent id
-    /// is no longer alive, or whose listener called
-    /// [`World::stop_propagation`](crate::world::World::stop_propagation). Listeners along the
-    /// chain all receive equal clones of the same event.
+    /// walks up the `Parent` chain, running each ancestor's listeners for this event type, and
+    /// stops at the first entity that
+    ///
+    /// * has no `Parent` component,
+    /// * whose recorded parent id is no longer alive,
+    /// * whose listener called [`World::stop_propagation`](crate::world::World::stop_propagation), or
+    /// * **this walk has already visited** — the cycle guard, added 2026-08-24. `Parent` is a
+    ///   bare id that can be written directly, so a chain can loop; without this the walk did
+    ///   not terminate.
+    ///
+    /// Listeners along the chain all receive equal clones of the same event.
+    ///
+    /// This is read once per step of the walk, so an implementation that returns different
+    /// answers at different times gets an unspecified walk rather than an interesting one —
+    /// return a constant, or a value fixed when the event is constructed.
     fn can_propagate(&self) -> bool { false }
 }
 
@@ -944,6 +958,99 @@ mod tests {
             vec![0, 1, 2],
             "a global listener's stop_propagation ended the entity walk around it"
         );
+    }
+
+    /// A `Parent` cycle terminates the walk instead of hanging the frame.
+    ///
+    /// `add_child` refuses to build one, which is why the guard is worth having: this test
+    /// builds the cycle by writing `Parent` directly, the same way
+    /// `gizmo::systems::render::hidden`'s cycle test does, and a scene file can do it too.
+    /// `trigger` was the `Parent` walker in this crate without a visited set, while
+    /// `despawn_recursive`, `collect_hidden` and transform propagation all carried one. Found
+    /// by review 2026-08-24. (Six walkers in other crates still carry none — see the note in
+    /// `World::trigger`.)
+    ///
+    /// A listener attached to an entity does not survive `clear_entities` and fire for that
+    /// entity's replacement.
+    ///
+    /// The same hazard the sparse-set half of this change closes, one turn sharper.
+    /// `Entities::clear` resets the GENERATIONS as well as the id counter, so the first entity
+    /// spawned after a clear is `Entity(0, gen 0)` — the same 64 bits as the entity 0 that was
+    /// just destroyed, not merely the same id. An ordinary `despawn` bumps the generation, and
+    /// that bump is exactly what makes a stale `Entity` key harmless everywhere else in the
+    /// crate; here there is no bump, so the key matches its unrelated successor exactly.
+    ///
+    /// The `assert_eq!(b, a)` is a sanity check, not decoration: if the allocator ever stops
+    /// resetting generations, the collision this test is about disappears and the rest of it
+    /// would pass for the wrong reason.
+    ///
+    /// Found by review 2026-08-25, in the sweep the sparse-set fix asked for.
+    #[test]
+    fn clear_entities_drops_entity_listeners() {
+        let mut world = World::new();
+        let a = world.spawn();
+
+        let hits = Arc::new(Mutex::new(0));
+        let c = hits.clone();
+        world.observe::<Ping, _>(a, move |_w: &mut World, _on| {
+            *c.lock().unwrap() += 1;
+        });
+        world.trigger(Ping { target: a, bubble: false });
+        assert_eq!(*hits.lock().unwrap(), 1, "sanity: the listener is attached and fires");
+
+        world.clear_entities();
+
+        let b = world.spawn();
+        assert_eq!(b, a, "sanity: clear_entities hands the handle back bit for bit");
+
+        world.trigger(Ping { target: b, bubble: false });
+        assert_eq!(
+            *hits.lock().unwrap(),
+            1,
+            "a listener registered for a cleared entity fired for its replacement"
+        );
+    }
+
+    /// **The fuse in the listener is load-bearing.** Without the guard the walk is unbounded,
+    /// and an unbounded loop has no assertion to disagree with: the plain version of this test
+    /// does not fail, it HANGS — measured 2026-08-25, it ran past 60 s and had to be killed.
+    /// A suite that hangs covers less than one that goes red, which is the same argument
+    /// `CLAUDE.md` makes for `--no-fail-fast`. So the listener cuts the walk itself once the
+    /// visit count passes what a two-entity cycle can honestly produce, through the engine's
+    /// own `stop_propagation`, and the overrun arrives as a number in the assertion instead of
+    /// as a stopped clock.
+    #[test]
+    fn a_bubbling_walk_terminates_on_a_parent_cycle() {
+        use crate::component::Parent;
+        /// Two entities, one visit each — anything above this is the walk failing to terminate.
+        const FUSE: i32 = 8;
+
+        let mut world = World::new();
+        let a = world.spawn();
+        let b = world.spawn();
+        world.add_component(a, Parent(b.id()));
+        world.add_component(b, Parent(a.id()));
+
+        let hits = Arc::new(Mutex::new(0));
+        for entity in [a, b] {
+            let c = hits.clone();
+            world.observe::<Ping, _>(entity, move |w: &mut World, _on| {
+                let mut n = c.lock().unwrap();
+                *n += 1;
+                if *n > FUSE {
+                    w.stop_propagation();
+                }
+            });
+        }
+
+        world.trigger(Ping { target: a, bubble: true });
+
+        let hits = *hits.lock().unwrap();
+        assert!(
+            hits <= FUSE,
+            "the walk did not terminate on a `Parent` cycle — the fuse cut it after {hits} visits"
+        );
+        assert_eq!(hits, 2, "each entity of the cycle is visited exactly once");
     }
 
     /// Two event types do not see each other's listeners — the map is keyed by the event's own

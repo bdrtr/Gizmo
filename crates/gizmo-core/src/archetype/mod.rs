@@ -281,9 +281,30 @@ impl Archetype {
     }
 
     /// Moves an entity's data from one archetype to another (Migration).
-    /// `source_row`: The row in the source archetype.
-    /// `target`: The target archetype.
-    /// Return value: The new row index in the target archetype.
+    ///
+    /// `source_row` is the row in the source archetype, `target` the destination, and the
+    /// return value is the new row in the target, paired with the source entity that got
+    /// swapped into `source_row` (if any).
+    ///
+    /// **It returns with the target archetype in an INVALID state, and the caller must finish
+    /// the job.** Every one of the target's columns is extended by one row, but only those the
+    /// source also had are filled — the rest are left **uninitialised below `len`**, for the
+    /// caller to write. Until it does, that archetype cannot be read, iterated, dropped or
+    /// migrated out of: each of those would touch a hole.
+    ///
+    /// The alternative — leaving the new columns short and having the caller push — was
+    /// rejected because it makes column length disagree with `entities` for the same window,
+    /// and a short column is just as unusable as one with a hole. What matters is that the
+    /// window exists at all, and this is the paragraph that says so.
+    ///
+    /// **The hole is invisible from inside the column**, which is the trap. `len` counts it, so
+    /// `row < col.len()` does NOT mean "row holds a live value" — it means "row is inside the
+    /// column", and after this call the two are different claims. A caller that reads the first
+    /// as the second and drops the slot before writing it frees a garbage pointer; that is
+    /// exactly what a fix to `add_bundle` did on 2026-08-24, and it turned an ordinary
+    /// `spawn()` + `add_bundle(e, (T,))` into `free(): invalid pointer` for any `T` owning a
+    /// heap allocation. The distinction is recoverable only *before* the move, from whether the
+    /// SOURCE archetype had that column — see `live_after_move` in `World::add_bundle`.
     pub(crate) unsafe fn move_entity_to(
         &mut self,
         source_row: usize,

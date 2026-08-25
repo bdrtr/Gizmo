@@ -212,6 +212,20 @@ impl Column {
         self.ticks.swap_remove(row);
     }
 
+    /// Drops the value at `row` in place, leaving the slot uninitialised and both the column's
+    /// length and its tick entry untouched.
+    ///
+    /// The tick is left alone deliberately: the caller writes a fresh value into the slot and
+    /// stamps it, so a tick removed here would only have to be put straight back.
+    ///
+    /// # Safety
+    /// As [`BlobVec::drop_in_place_at`]: `row < self.len()`, the slot must be live, and the
+    /// caller must initialise it before anything reads or drops it.
+    #[inline]
+    pub unsafe fn drop_row_in_place(&mut self, row: usize) {
+        self.data.drop_in_place_at(row);
+    }
+
     /// Compacts the column memory.
     pub fn shrink_to_fit(&mut self) {
         self.data.shrink_to_fit();

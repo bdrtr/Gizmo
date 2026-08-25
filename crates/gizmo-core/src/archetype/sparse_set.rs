@@ -43,10 +43,12 @@ pub struct ComponentSparseSet {
     /// when the entity has no such component.
     ///
     /// Indexed *directly* by entity id, so its length is `highest inserted id + 1` and its
-    /// memory cost tracks the largest entity id ever inserted rather than the number of
-    /// entries. It grows on insert and is never shortened by `remove`, which only writes
-    /// the `u32::MAX` sentinel. An id past the end of this vector is simply absent, so
-    /// every read must bounds-check before indexing.
+    /// memory cost tracks the largest entity id inserted since the last
+    /// [`clear`](ComponentSparseSet::clear) rather than the number of entries. It grows on
+    /// insert; `remove` never shortens it, only writing the `u32::MAX` sentinel, and `clear` —
+    /// which empties it outright — is the only thing that gives the memory back. An id past
+    /// the end of this vector is simply absent, so every read must bounds-check before
+    /// indexing.
     pub sparse: Vec<u32>,   // Entity ID -> dense row index (Yoksa u32::MAX)
 }
 
@@ -124,6 +126,25 @@ impl ComponentSparseSet {
             self.entities.push(entity);
             self.sparse[e] = row;
         }
+    }
+
+    /// Drops every entity's data and empties the set, keeping the four arrays in step.
+    ///
+    /// The values are **dropped**, not forgotten: `BlobVec::clear` runs the type's own
+    /// `drop_fn` per element, so a component owning a heap allocation releases it. That is the
+    /// whole reason this is a method here rather than four `.clear()` calls at the call site —
+    /// the invariant that `dense`, `ticks`, `entities` and `sparse` agree is this type's, and
+    /// `sparse` is the one that has to be emptied rather than truncated, since it is indexed by
+    /// entity id and a stale `u32::MAX`-free slot would still claim a row.
+    ///
+    /// Added 2026-08-24 for [`World::clear_entities`](crate::world::World::clear_entities),
+    /// which reset the archetypes and the id allocator and left these sets populated — so the
+    /// first entity spawned afterwards took id 0 back and inherited whatever id 0 used to hold.
+    pub fn clear(&mut self) {
+        self.dense.clear();
+        self.ticks.clear();
+        self.entities.clear();
+        self.sparse.clear();
     }
 
     /// Deletes an entity's data at O(1) speed.

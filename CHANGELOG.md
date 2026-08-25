@@ -1027,6 +1027,99 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`add_bundle` leaked the component it replaced — and the obvious fix was worse than the leak.**
+  `Bundle::write_to_archetype` copies raw bytes into the archetype column, so it never dropped
+  what it overwrote: every `add_bundle` that re-asserted a component the entity already carried
+  leaked whatever the old value owned. A bundle used as a "set these fields" call — the common
+  case — leaked once per call.
+
+  Making the write an assignment, so that it drops before it writes, is the fix that suggests
+  itself, and it is **unsound**. `Archetype::move_entity_to` extends *every* column of the target
+  archetype by one row and fills only the ones the source also had; the rest it leaves
+  **uninitialised below `len`**, for the bundle write to fill. So `row < col.len()` does not mean
+  "this slot holds a live value" — it means "this slot is inside the column", and from inside the
+  write a hole and a live value are the same thing. Assignment drops the hole, which frees a
+  garbage pointer: `world.spawn()` followed by `add_bundle(e, (T,))` for any `T` owning a heap
+  allocation aborted with `free(): invalid pointer`.
+
+  **The whole suite stayed green under that**, because every component the tests hand to
+  `add_bundle` is plain data whose drop glue is a no-op. What caught it was writing a test with a
+  `String` in it.
+
+  The distinction is recoverable, but only *before* the migration and only by the caller: a
+  bundle component arrives at the new row alive exactly when the old archetype had a column for
+  it. `add_bundle` now computes that set first and drops those rows itself — `drop_live_bundle_rows`,
+  deduplicated by type, because `BundleExt::with` appends rather than substitutes and a bundle may
+  legitimately name one component twice, where dropping one slot twice would be a double free.
+  `write_to_archetype` keeps its `ptr::write` and now states the contract it was always relying
+  on, and `move_entity_to`'s documentation says that it returns with a hole in the target — the
+  omission that made the wrong fix look right.
+
+  One regression test covers all three write shapes, because a fix that satisfies any two of them
+  is exactly the fix that was wrong: filling a hole must not drop, replacing in place must, and
+  replacing *across a migration* must. Each of the three has its own mutation that turns it red.
+  A second test pins the one case that still leaks — a `with`-composed bundle naming the same
+  component twice, which `DynamicBundle`'s own rustdoc has always documented as leaking — so that
+  closing it later is a decision taken with a red test and an updated doc, rather than a silent
+  side effect.
+
+- **`clear_entities` left both of the world's per-entity maps behind, so the next entity spawned
+  inherited a stranger's state.** It reset the archetypes, the entity locations and the id
+  allocator, and touched neither the sparse-set component storage nor the entity-event listeners.
+
+  Both are keyed by the entity, and `Entities::clear` resets the **generation** counter as well as
+  the id counter — so the first entity spawned afterwards is `Entity(0, gen 0)`, the same 64 bits
+  as the entity 0 that was just destroyed. That is what separates this from an ordinary `despawn`,
+  where the generation bump is precisely what keeps a stale key dead forever.
+
+  The sparse half was invisible in the worst way: nothing dangles and nothing panics, the new
+  entity simply *has* a component it was never given. It corrupted the write path too, since
+  `add_component`'s sparse branch reads "is this entity already in the set?" to choose
+  add-versus-overwrite — so a genuine first attach looked like an overwrite and swallowed
+  `on_add`. The listener half is louder: a `World::observe` listener registered against the old
+  entity 0 runs for the new one, which the second half of this fix closes.
+
+  `clear_entities` also gained the documentation it never had (its entire doc comment was "Clears
+  all entities."). It runs **no hooks** — not `on_remove`, not the despawn hooks — where every
+  other destruction path in the crate does, so a game that releases a physics body or a GPU buffer
+  from `on_remove` leaks every one of them across a level change. That is a defensible choice
+  about teardown cost; what it was not, until now, was a written one.
+
+  Found by the sweep the sparse-set fix asked for. Two siblings from that sweep are recorded in
+  `docs/ENGINE.md` §3 rather than fixed here: `World::compact` never shrinks sparse storage (its
+  rustdoc, which promised otherwise, is corrected), and a queued `Commands` closure that captured
+  an entity handle survives a clear and then lands on that handle's bit-identical replacement
+  instead of missing harmlessly.
+
+- **A `Parent` cycle hung the frame instead of ending the walk.** `World::trigger` followed the
+  `Parent` chain with no visited set, so a cycle looped forever inside the dispatch. `add_child`
+  refuses to build one, but `Parent` is a bare id that `add_component` will write directly, and
+  `SceneData::instantiate_entities` writes the parent edges out of a RON file verbatim with no
+  cycle rejection anywhere on that path.
+
+  The guard is a `HashSet` allocated per walk and touched only when the event bubbles at all, so a
+  targeted event pays for an empty `HashSet::new()` and nothing more.
+
+  **The test fuses itself**, because the failure it guards against is not a wrong answer but the
+  absence of one: an unbounded loop has no assertion to disagree with, so the plain version of
+  this test does not fail, it hangs — measured, past 60 s before it had to be killed. The listener
+  cuts the walk with the engine's own `stop_propagation` once the visit count passes what a
+  two-entity cycle can honestly produce, and the overrun then arrives as a number in the assertion
+  instead of as a stopped clock. A suite that hangs covers less than one that goes red, which is
+  the argument `CLAUDE.md` already makes for `--no-fail-fast`.
+
+  **The comment this fix first carried claimed too much, and is corrected here.** The three
+  walkers next door do carry guards — `despawn_recursive`, `collect_hidden`, transform propagation
+  — but they are not all of them, and writing "every other walker has one" would have told the
+  next reader that an invariant is enforced somewhere when it is not. A sweep found **six**
+  unguarded hierarchy walks elsewhere in the workspace: gizmo-physics-rigid's compound-collider
+  gather and gizmo-animation's target resolve, both inside per-frame work; three studio cascades;
+  and the editor's hierarchy panel, which recurses and so overflows the stack rather than hanging.
+  Those are not fixed here; they are recorded in `docs/ENGINE.md` §3, together with two further
+  findings from the same sweep — `gizmo-physics-rigid` despawning through fabricated
+  generation-0 handles, and `insert_batch`/`remove_batch` not revalidating a group after a hook
+  has despawned into it.
+
 - **A nested `trigger` re-ran listeners that had already finished — the guarantee three documents
   promised was false.** `World::trigger` detached an entity's whole listener list once, then put
   each listener *back* as soon as it returned, inside the loop. So by the time the second listener

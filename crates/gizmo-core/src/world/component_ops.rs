@@ -5,6 +5,46 @@ use crate::entity::Entity;
 
 use std::any::TypeId;
 
+/// Drops the live value at `row` in each of `types`' columns, leaving every slot uninitialised
+/// for the bundle write that follows.
+///
+/// Exists because [`Bundle::write_to_archetype`](crate::component::Bundle::write_to_archetype)
+/// copies raw bytes and so cannot drop what it replaces, while the same call is also used on
+/// the uninitialised holes [`Archetype::move_entity_to`](crate::archetype::Archetype) allocates
+/// — where dropping would be undefined. Both sit below the column's `len`, so the write cannot
+/// tell them apart; `World::add_bundle` can, and this is how it says so.
+///
+/// **Deduplicated by `TypeId`**, because a bundle may legitimately name one component twice —
+/// `BundleExt::with` appends rather than substitutes — and dropping one slot twice is a double
+/// free. A linear scan, not a set: a bundle is a handful of types and the allocation would cost
+/// more than the comparisons.
+///
+/// Types the archetype has no column for are skipped rather than treated as an error, so the
+/// caller may pass a superset.
+///
+/// # Safety
+/// `row` must be a live row of `arch`, every named column's slot at `row` must hold a live
+/// value, and the caller must re-initialise each dropped slot before anything reads the
+/// archetype.
+unsafe fn drop_live_bundle_rows(
+    arch: &crate::archetype::Archetype,
+    types: &[TypeId],
+    row: usize,
+) {
+    let mut dropped: Vec<TypeId> = Vec::new();
+    for &type_id in types {
+        if dropped.contains(&type_id) {
+            continue;
+        }
+        dropped.push(type_id);
+        // SAFETY: the caller guarantees `row` is live in this column; `get_column_mut` hands
+        // out one `&mut Column` per type and each type is visited once, so they never overlap.
+        if let Some(col) = arch.get_column_mut(type_id) {
+            col.drop_row_in_place(row);
+        }
+    }
+}
+
 impl World {
     /// Adding a component to the system — moves the data into the archetype column.
     ///
@@ -13,6 +53,15 @@ impl World {
     /// before its queue is applied): it is [`World::is_alive`] yet owns no archetype row, so
     /// there is nowhere to write. That mirrors [`World::add_component`]'s documented
     /// behaviour for the same entity state.
+    ///
+    /// **A component the entity already carries is replaced, and the old value is dropped.**
+    /// Until 2026-08-25 it was overwritten in place without being dropped, so re-asserting a
+    /// component that owned a heap allocation leaked it once per call — which a bundle used as
+    /// a "set these fields" call does every frame. [`World::add_component`] documents the same
+    /// sentence for the single-component path, and the two now agree.
+    ///
+    /// The drop is **silent**: it is not a `Remove`, and no hook or observer sees it. The
+    /// bundle path fires nothing at all (below), so there is no phase for it to be reported in.
     ///
     /// Hooks: an all-`Table` bundle takes the block-move fast path and fires **no**
     /// `on_add`/`on_set` hooks — observers registered with [`World::add_observer`] do not see
@@ -80,6 +129,12 @@ impl World {
             }
         }
 
+        // The bundle's component types, in bundle order and with duplicates intact — a bundle
+        // may legitimately name one type twice, since `BundleExt::with` appends rather than
+        // substitutes. `drop_live_bundle_rows` is what deduplicates them, because dropping one
+        // slot twice is a double free.
+        let bundle_types: Vec<TypeId> = infos.iter().map(|i| i.type_id).collect();
+
         let target_arch_id = if let Some(&id) = self.archetype_index.set_to_id.get(&new_types) {
             id
         } else {
@@ -97,6 +152,18 @@ impl World {
             // Sadece override
             let loc = self.entity_locations[eid as usize];
             let arch = &mut self.archetype_index.archetypes[target_arch_id];
+            // Every column this bundle is about to write already holds a LIVE value — same
+            // archetype, same row — and `write_to_archetype` copies raw bytes, so it cannot
+            // drop what it replaces. Dropping is therefore this function's job, and it has to
+            // be: the same write also lands on the uninitialised holes `move_entity_to` leaves
+            // behind (see the migration path below), where dropping would be undefined. From
+            // inside the write the two are indistinguishable — both sit below the column's
+            // `len` — so only the caller can tell them apart.
+            //
+            // SAFETY: `target_arch_id == old_arch_id`, so this archetype has a column for every
+            // one of `bundle_types` and `loc.row` is the entity's live row in all of them; the
+            // write below re-initialises every slot dropped here.
+            unsafe { drop_live_bundle_rows(arch, &bundle_types, loc.row as usize); }
             // SAFETY: `write_to_archetype`'s contract is that the bundle writes EVERY column of
             // this archetype at this row — the archetype was chosen for exactly this bundle's
             // component set, and `loc.row` is the entity's live row. A bundle that skipped a
@@ -114,6 +181,17 @@ impl World {
         );
 
         let old_loc = self.entity_locations[eid as usize];
+
+        // Which of the bundle's components will arrive at the new row ALIVE: exactly those the
+        // old archetype already had, which `move_entity_to` copies across. Everything else is
+        // one of the holes it allocates and leaves uninitialised for this write to fill, and
+        // dropping a hole frees a garbage pointer. Computed BEFORE the move, because the move
+        // is what makes the distinction unrecoverable.
+        let live_after_move: Vec<TypeId> = {
+            let old_arch = &self.archetype_index.archetypes[old_arch_id];
+            bundle_types.iter().copied().filter(|t| old_arch.has_component(*t)).collect()
+        };
+
         let (new_row, moved_eid) = {
             // İki archetype'ı FARKLI indekslerden disjoint ödünç al. Aynı Vec'ten
             // iki `&mut ...[i] as *mut` almak, ikinci retag ile ilk pointer'ın
@@ -133,6 +211,14 @@ impl World {
         }
 
         let arch = &mut self.archetype_index.archetypes[target_arch_id];
+        // The components the entity already carried came across the migration alive; the ones
+        // the bundle is ADDING are holes. Drop the first group and only the first group — that
+        // distinction is the whole reason `live_after_move` was computed before the move.
+        //
+        // SAFETY: every type in `live_after_move` was a column of the OLD archetype, so
+        // `move_entity_to` moved its value into `new_row` of the target's matching column and
+        // that slot is live; the write below re-initialises each one.
+        unsafe { drop_live_bundle_rows(arch, &live_after_move, new_row as usize); }
         // SAFETY: as above, for the row just pushed into the target archetype during the move.
         unsafe { bundle.write_to_archetype(arch, new_row as usize, self.tick); }
 
@@ -773,6 +859,7 @@ impl World {
 #[cfg(test)]
 mod tests {
     use crate::component::Component;
+    use crate::entity::Entity;
     use crate::world::World;
 
     #[derive(Clone, PartialEq, Debug)]
@@ -878,4 +965,137 @@ mod tests {
         assert_eq!(world.borrow::<Pos>().get(survivor.id()).unwrap().0, 2);
         assert!(world.entity_component_types(recycled).is_empty());
     }
+
+    // ── `add_bundle`'s drop discipline. These two live HERE rather than in `world/tests`
+    // because this module is one of the six the CI Miri job runs
+    // (`cargo miri test -p gizmo-core --lib world::component_ops`), and the whole point of that
+    // job is to fence the archetype-migration unsafe surface. A migration test that Miri never
+    // sees is a test the gate does not cover; measured 2026-08-25, these run under Tree Borrows
+    // in 1.8 s, while the module they came from takes over ten minutes.
+
+    // Regression: `add_bundle` must drop the value it replaces — and must NOT drop the hole
+    // it fills. Those are the same line of code seen from two sides, which is the whole
+    // difficulty, and it is why the three shapes below are one test rather than three.
+    //
+    // `Bundle::write_to_archetype` copies raw bytes, so it never drops what it overwrites: a
+    // re-asserted component leaked whatever the old value owned. The obvious fix — make the
+    // write an assignment, which drops first — was committed on 2026-08-24 and is UNSOUND.
+    // `Archetype::move_entity_to` extends every target column by one row and leaves the
+    // newly-added ones uninitialised for the write to fill, so from inside the write a hole
+    // and a live value are indistinguishable: both sit below `len`. Assignment frees a garbage
+    // pointer on the hole, and the ordinary `spawn()` + `add_bundle(e, (T,))` aborted with
+    // `free(): invalid pointer` for any `T` owning a heap allocation.
+    //
+    // 337 tests stayed green under that, because every component they hand to `add_bundle` is
+    // plain data whose drop glue is a no-op. So the counter here is a `Drop` impl, and the
+    // component owns a `String`: the leak is an absence and needs something that would have
+    // spoken, and the unsoundness needs an allocation real enough for the allocator to reject.
+    #[test]
+    fn add_bundle_drops_what_it_replaces_and_not_what_it_fills() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        static DROPS: AtomicUsize = AtomicUsize::new(0);
+
+        #[derive(Clone)]
+        struct Loud(String);
+        impl Drop for Loud {
+            fn drop(&mut self) {
+                DROPS.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        impl Component for Loud {}
+
+        /// A second component, so a bundle can force an archetype MIGRATION while still
+        /// re-asserting `Loud` — the third shape, and the one neither of the others reaches.
+        #[derive(Clone)]
+        struct Tag;
+        impl Component for Tag {}
+
+        let read = |w: &World, e: Entity| w.query_entity::<&Loud>(e.id()).map(|l| l.0.clone());
+
+        DROPS.store(0, Ordering::SeqCst);
+        let mut world = World::new();
+
+        // ── 1. FILLING A HOLE. The entity has no `Loud`, so the bundle migrates it to a new
+        // archetype and writes into the slot `move_entity_to` just allocated. There is nothing
+        // there to drop, and dropping it is the unsoundness.
+        let e = world.spawn();
+        world.add_bundle(e, (Loud("first".into()),));
+        assert_eq!(DROPS.load(Ordering::SeqCst), 0, "a first attach has nothing to drop");
+        assert_eq!(read(&world, e).as_deref(), Some("first"));
+
+        // ── 2. REPLACING IN PLACE. Same archetype, same row: the override path, where the slot
+        // is live and the old value is the one that used to leak.
+        world.add_bundle(e, (Loud("second".into()),));
+        assert_eq!(
+            DROPS.load(Ordering::SeqCst),
+            1,
+            "add_bundle overwrote a live component without dropping it"
+        );
+        assert_eq!(read(&world, e).as_deref(), Some("second"), "the fix must not lose the write");
+
+        // ── 3. REPLACING ACROSS A MIGRATION. The bundle re-asserts `Loud` *and* adds `Tag`, so
+        // the entity changes archetype: `Loud` arrives at the new row alive (copied by the
+        // move) while `Tag` arrives as a hole. One write, two slots, opposite obligations —
+        // this is the case that decides whether the fix understood the problem or just moved it.
+        world.add_bundle(e, (Loud("third".into()), Tag));
+        assert_eq!(
+            DROPS.load(Ordering::SeqCst),
+            2,
+            "a component carried across a migration was overwritten without being dropped"
+        );
+        assert_eq!(read(&world, e).as_deref(), Some("third"));
+
+        world.despawn(e);
+        assert_eq!(DROPS.load(Ordering::SeqCst), 3, "the last value must be dropped by despawn");
+    }
+
+    // The `BundleExt::with` composition path, which has its own copy of `write_to_archetype`
+    // and so its own copy of the hazard above. It is separated from the test before it because
+    // what it pins is a KNOWN LIMITATION rather than a fixed bug: `with` appends rather than
+    // substitutes, so a bundle naming one component twice writes that column twice, and the
+    // second write overwrites a value this code path has no way to know is live. That value
+    // leaks — exactly as `DynamicBundle`'s own documentation says it does.
+    //
+    // Asserting the leak rather than ignoring it is the point: closing it later should be a
+    // decision, taken with this test going red and the rustdoc updated in the same change,
+    // not a silent side effect. What is NOT negotiable is the part this asserts first — that
+    // the duplicate write does not abort, and that the appended component is the survivor.
+    #[test]
+    fn a_with_composed_duplicate_leaks_the_inner_value_and_says_so() {
+        use crate::component::BundleExt;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        static DROPS: AtomicUsize = AtomicUsize::new(0);
+
+        #[derive(Clone)]
+        struct Loud(String);
+        impl Drop for Loud {
+            fn drop(&mut self) {
+                DROPS.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        impl Component for Loud {}
+
+        DROPS.store(0, Ordering::SeqCst);
+        let mut world = World::new();
+        let e = world.spawn();
+        world.add_bundle(e, (Loud("inner".into()),).with(Loud("outer".into())));
+
+        assert_eq!(
+            world.query_entity::<&Loud>(e.id()).map(|l| l.0.clone()).as_deref(),
+            Some("outer"),
+            "`with` documents the appended component as the one that survives"
+        );
+        assert_eq!(
+            DROPS.load(Ordering::SeqCst),
+            0,
+            "the inner value is documented as leaked — if this is now 1, the limitation was \
+             closed and `DynamicBundle`'s rustdoc must stop claiming otherwise"
+        );
+
+        world.despawn(e);
+        assert_eq!(DROPS.load(Ordering::SeqCst), 1, "the surviving value is dropped by despawn");
+    }
+
 }

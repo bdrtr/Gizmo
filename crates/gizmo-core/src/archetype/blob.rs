@@ -286,6 +286,32 @@ impl BlobVec {
         self.len -= 1;
     }
 
+    /// Runs the element's own drop glue on the value at `index`, leaving the slot
+    /// **uninitialised** and the length unchanged.
+    ///
+    /// The odd one out among the removal methods: it does not shorten the vec, so on return
+    /// there is a hole below `len`, and reading it, dropping it again, or letting the vec's own
+    /// `Drop` run over it is undefined. The caller must write a fresh value into that slot
+    /// before anything else touches the column.
+    ///
+    /// Added 2026-08-25 for [`World::add_bundle`](crate::world::World::add_bundle), whose bundle
+    /// write copies raw bytes and so cannot drop what it replaces. That same write also lands on
+    /// the freshly allocated holes `Archetype::move_entity_to` leaves behind, where dropping
+    /// would be undefined — so "is this slot live?" is a question only the caller can answer, and
+    /// this is how it acts on the answer.
+    ///
+    /// # Safety
+    /// - `index < self.len` must hold.
+    /// - The slot must hold a **live** value. Calling this twice on one slot without an
+    ///   intervening write is a double free.
+    /// - The caller must initialise the slot before it is read, dropped or moved.
+    pub unsafe fn drop_in_place_at(&mut self, index: usize) {
+        debug_assert!(index < self.len);
+        if let Some(drop_fn) = self.drop_fn {
+            drop_fn(self.get_unchecked_mut(index));
+        }
+    }
+
     /// Removes the element at the specified index by swap-and-pop (the last element is moved
     /// into its place), moving the old value out to the `out` pointer (does not drop it).
     ///

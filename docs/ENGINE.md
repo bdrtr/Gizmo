@@ -76,13 +76,57 @@ a milestone does to work — it turns "not done yet" into "not looked at". None 
 to happen, so none of it is scheduled against one any more. Each item below carries its measured
 state instead.
 
-- **`unsafe` contracts — CLOSED (2026-08-17).** Every `unsafe` block in the workspace states why
-  it is sound, and the lint that says so is a ratchet in **all 20 crates**:
-  `#![deny(clippy::undocumented_unsafe_blocks)]`. `gizmo-core` was the last and the real one — the
-  ECS holds most of the workspace's `unsafe` — and the arguments there are the three the storage
-  actually rests on: the `Component: Send + Sync` bound behind the `Send`/`Sync` impls on
-  `BlobVec` / `Archetype` / `ComponentSparseSet`, the caller-side no-aliasing contract behind the
-  `UnsafeCell` column access, and row liveness behind every raw pointer.
+- **`unsafe` contracts — CLOSED (2026-08-17), with the third argument amended (2026-08-25).**
+  Every `unsafe` block in the workspace states why it is sound, and the lint that says so is a
+  ratchet in **all 20 crates**: `#![deny(clippy::undocumented_unsafe_blocks)]`. `gizmo-core` was
+  the last and the real one — the ECS holds most of the workspace's `unsafe` — and the arguments
+  there are the three the storage actually rests on: the `Component: Send + Sync` bound behind
+  the `Send`/`Sync` impls on `BlobVec` / `Archetype` / `ComponentSparseSet`, the caller-side
+  no-aliasing contract behind the `UnsafeCell` column access, and **row liveness** behind every
+  raw pointer.
+
+  The third one was doing double duty and this line said so without noticing. *In range* and
+  *live* are two claims, and `Archetype::move_entity_to` is where they come apart: it extends
+  every target column by one row and fills only the ones the source also had, so a row can
+  satisfy `row < col.len()` and hold nothing at all. An `add_bundle` fix written against the
+  merged reading — "below `len`, therefore live, therefore drop before overwriting" — turned an
+  ordinary `spawn()` + `add_bundle(e, (T,))` into `free(): invalid pointer` for any `T` owning
+  an allocation, and the whole test suite stayed green because no test hands `add_bundle` a
+  component whose drop glue does anything. Fixed 2026-08-25 by moving the drop to the one place
+  that can still tell the two apart — the caller, before the migration — and the invariant is
+  now stated where it can be read: on `move_entity_to`, on `Bundle::write_to_archetype`'s
+  `# Safety`, and on `Column::len`. The item stays closed; what changed is that the third
+  argument now names the distinction instead of assuming it.
+
+- **Open, found by the 2026-08-25 ECS sweep and deliberately not fixed in that change.** Each was
+  verified against the code by an adversarial second pass, so these are work items, not leads:
+  - **Six hierarchy walks carry no cycle guard.** `Parent`/`Children` can loop — `add_child`
+    refuses to build one, but `add_component` writes `Parent` directly and
+    `SceneData::instantiate_entities` writes a file's parent edges verbatim with no rejection.
+    Unguarded: `gizmo-physics-rigid`'s compound-collider gather and `gizmo-animation`'s
+    target resolve (both per-frame, so a cyclic scene hangs on load), three `gizmo-studio`
+    cascades (delete, GC, selection highlight), and `gizmo-editor`'s hierarchy panel — which
+    recurses, so it overflows the stack and aborts rather than hanging. `despawn_recursive`,
+    `collect_hidden`, transform propagation and (since 2026-08-24) `World::trigger` are guarded.
+  - **`gizmo-physics-rigid` fabricates `Entity::new(id, 0)` from raw query ids.** Query iteration
+    yields a bare `u32`; the explosion system rebuilds a handle at generation 0 and despawns
+    through it. `World::despawn` silently skips a handle that fails `is_alive`, so for any
+    recycled id the despawn does nothing while the debris still spawns and `is_broken` latches:
+    an intact, permanently undamageable body plus a full set of chunks. The explosion entity
+    itself is despawned the same way, so a recycled one re-detonates every frame. `World::entity`
+    is the documented way to resolve a raw id and its own rustdoc warns against exactly this.
+  - **`insert_batch` / `remove_batch` do not revalidate later groups after hooks run.** Hooks fire
+    at the end of each group and are documented as free to despawn; a despawn sets the victim's
+    location to `EntityLocation::INVALID`, and a later group re-reads that location without
+    checking it. `row == u32::MAX` then reaches `move_entity_to` (a safe-index panic) or, on the
+    same-archetype branch, `Column::get_ptr` — which is unchecked.
+  - **`World::compact` never touches sparse storage**, though its rustdoc promises RAM "back to
+    the initial defragmented state". A sparse set's reverse index is sized by the largest entity
+    id ever inserted and is the largest allocation in the world. Doc corrected 2026-08-25; the
+    behaviour is the open item.
+  - **`clear_entities` does not drain the `CommandQueue`.** A queued closure that captured an
+    entity handle survives the clear, and since a clear resets generations the handle comes back
+    bit-identical — so the command lands on an unrelated entity instead of missing harmlessly.
 - **"Freeze the public API" — dropped.** There is no freeze event to schedule. What that item was
   reaching for is §4's external-type contract, and that is enforced continuously: every dependency
   on a public surface is listed there with its cost, and `crates/gizmo/tests/crate_staging.rs`

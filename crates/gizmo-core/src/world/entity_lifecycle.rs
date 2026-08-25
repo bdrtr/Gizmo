@@ -281,11 +281,55 @@ impl World {
         entities.into_iter()
     }
 
-    /// Clears all entities.
+    /// Destroys every entity and every component, and resets the id allocator so the next
+    /// spawn starts again from `Entity(0, gen 0)`.
+    ///
+    /// **No hooks run.** Not `on_remove`, not `on_replace`, not the despawn hooks — every other
+    /// destruction path in this crate runs them and this one does not. That is deliberate: a
+    /// teardown is not a sequence of removals, and a hook firing once per component per entity
+    /// on a million-entity clear would cost more than the clear. It is written down here
+    /// because it cannot be discovered any other way, and because a game that releases an
+    /// external resource from `on_remove` — a physics body, a GPU buffer, an audio voice — will
+    /// leak every one of them across a level change unless it releases them itself first.
+    ///
+    /// **Handles are recycled bit for bit**, not merely by id: the generation counter is reset
+    /// along with the id counter, so an `Entity` captured before the call can compare equal to
+    /// an unrelated entity spawned after it. That is the opposite of what an ordinary `despawn`
+    /// guarantees, where the generation bump is what keeps a stale handle dead forever. Anything
+    /// holding entity handles across a clear — a queued `Commands` closure, a selection list, a
+    /// cache keyed by `Entity` — is holding live-looking pointers to strangers. The world's own
+    /// per-entity state is cleared here for exactly this reason.
     pub fn clear_entities(&mut self) {
         self.archetype_index.clear_entities();
         self.entity_locations.clear();
         self.entities_to_despawn.clear();
+
+        // SparseSet components live outside the archetypes, so clearing the archetypes does not
+        // touch them. Until 2026-08-24 this line was missing and the omission was invisible in
+        // the obvious way — nothing dangles, nothing panics — because a sparse set is keyed by
+        // the RAW entity id: `Entities::clear` restarts ids at 0, so the next entity spawned
+        // took id 0 back and inherited the sparse components of whoever held id 0 before. It
+        // also made a genuine first attach look like an overwrite, since `add_component`'s
+        // sparse branch asks the set whether the entity is already in it.
+        for set in self.sparse_sets.values_mut() {
+            set.clear();
+        }
+
+        // The world's OTHER per-entity map, and the same omission one turn sharper.
+        // `Entities::clear` resets the GENERATIONS as well as the id counter, so the first
+        // entity spawned after this call is `Entity(0, gen 0)` — the same 64 bits as the
+        // entity 0 just destroyed, not merely the same id. The generation bump is what makes a
+        // stale `Entity` key harmless after an ordinary `despawn`; there is no bump here, so
+        // the key matches its unrelated successor exactly and that entity's listeners run for
+        // it.
+        //
+        // The whole map goes, outer keys included. Its values are type-erased
+        // `HashMap<Entity, Vec<EntityListener<E>>>` behind `Box<dyn Any>`, so pruning a single
+        // entity out of them is not expressible without knowing `E` — and after a clear there
+        // is no entity left whose listeners could still be wanted. `global_observers` and the
+        // component hooks are keyed by TYPE, not by entity, and stay: they describe the world's
+        // rules rather than its population.
+        self.entity_observers.clear();
 
         // Entities resource'unu temizle (allocator state)
         if let Some(entities) = self.get_resource::<Entities>() {
@@ -415,8 +459,16 @@ impl World {
     }
 
     /// Compacts the gaps in memory and, by deleting the unused (empty) Archetype tables, brings
-    /// RAM and system performance back to their initial defragmented (clean) state.
+    /// RAM and system performance back towards their initial defragmented (clean) state.
     /// Calling it on Loading screens or at low-intensity moments is recommended.
+    ///
+    /// **`SparseSet` storage is not compacted**, and it is the piece most worth compacting: a
+    /// sparse set's reverse index is indexed directly by entity id, so it is sized by the
+    /// largest id ever inserted rather than by the number of components, and neither `remove`
+    /// nor this function shortens it. Only [`World::clear_entities`] gives that memory back,
+    /// and it does so by destroying every entity. A world that spawned a million entities
+    /// carrying a sparse component keeps that index's four megabytes per component type across
+    /// every `compact`.
     #[tracing::instrument(skip_all, name = "compact")]
     pub fn compact(&mut self) {
         // 1. Önce eski, kullanılmayan boş archetype'ları silelim (GC)

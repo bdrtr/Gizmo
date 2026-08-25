@@ -98,6 +98,13 @@ impl World {
     ///
     /// Listeners on one entity and event type run in registration order. There is no
     /// unregister; registering the same closure twice makes it fire twice.
+    ///
+    /// The one thing that removes a listener is [`World::clear_entities`], which drops every
+    /// one of them for every event type. That is not a hatch to unregister through — it is
+    /// what destroying every entity implies. The listener is keyed by the `Entity`, and a clear
+    /// resets the generation counter as well as the id counter, so the handle it is filed under
+    /// comes back attached to an unrelated entity; keeping the listener would mean running it
+    /// for a stranger, which is what used to happen.
     pub fn observe<E: crate::observer::EntityEvent, F>(&mut self, entity: Entity, listener: F) -> &mut Self
     where
         F: FnMut(&mut World, crate::observer::On<E>) + Send + Sync + 'static,
@@ -114,7 +121,29 @@ impl World {
         self
     }
 
-    /// Triggers an Event and propagates it upwards through the hierarchy (bubble-up)
+    /// Delivers `event` to its target's listeners, then — if the event
+    /// [`can_propagate`](crate::observer::EntityEvent::can_propagate) — to each ancestor's in
+    /// turn, walking up the `Parent` chain.
+    ///
+    /// Dispatch is synchronous: every listener has run before this returns. Listeners on one
+    /// entity run in registration order and each receives its own clone of the event, which is
+    /// why an [`EntityEvent`](crate::observer::EntityEvent) must be `Clone` where a
+    /// [`trigger_global`](Self::trigger_global) event need not be.
+    ///
+    /// **The walk always terminates.** It stops at an entity with no `Parent`, at a parent id
+    /// that is no longer alive, at a listener that called [`stop_propagation`](Self::stop_propagation)
+    /// — and at an entity this walk has already visited. That last one is the cycle guard:
+    /// `add_child` refuses to build a `Parent` loop, but `Parent` is a bare id that
+    /// `add_component` writes directly and that scene loading writes out of a file verbatim, so
+    /// a loop is reachable and used to hang the frame. The visited set is keyed by raw entity
+    /// **id**, not by the handle, and is only consulted for an event that bubbles at all — a
+    /// targeted event allocates nothing.
+    ///
+    /// **Re-entrancy.** The listeners of the entity being notified are detached for the length
+    /// of that entity's dispatch, so re-triggering the same event at the same entity from
+    /// inside a listener finds nothing to run; another entity's listeners are live and run
+    /// nested. The propagation flag is saved and restored around the walk, so a nested dispatch
+    /// that cancels itself cannot truncate the walk that called it.
     pub fn trigger<E: crate::observer::EntityEvent>(&mut self, event: E) {
         use crate::component::Parent;
         let mut current_entity = event.target();
@@ -125,7 +154,28 @@ impl World {
         // discipline in the loop below rather than early returns.
         let outer_stop = std::mem::replace(&mut self.propagation_stopped, false);
 
+        // The walk's cycle guard. `add_child` refuses to build a `Parent` cycle, but "refuses to"
+        // is what turns an unbounded loop into a hung frame: `Parent` is a bare id anyone can
+        // write directly with `add_component`, and `SceneData::instantiate_entities` writes the
+        // parent edges out of a RON file verbatim, with no cycle rejection anywhere.
+        //
+        // The three walkers next door carry a guard already — `despawn_recursive`,
+        // `collect_hidden`, transform propagation — and this one did not, until review found it
+        // on 2026-08-24. What would be comfortable to write here and is FALSE is that they are
+        // all of them: a sweep on 2026-08-25 found six unguarded hierarchy walks elsewhere in
+        // the workspace, in gizmo-physics-rigid, gizmo-animation, gizmo-studio (three) and
+        // gizmo-editor — the last recursive, so it overflows the stack instead of hanging.
+        // Adding one here is not evidence that the next one is safe.
+        //
+        // Allocated per walk and only touched when the event bubbles at all, so a targeted
+        // event pays for nothing but an empty `HashSet::new()`.
+        let mut visited: std::collections::HashSet<u32> = std::collections::HashSet::new();
+
         loop {
+            if event.can_propagate() && !visited.insert(current_entity.id()) {
+                break;
+            }
+
             // Observer'ları bu entity için bul ve çalıştır
             let mut hooks_to_run = Vec::new();
 

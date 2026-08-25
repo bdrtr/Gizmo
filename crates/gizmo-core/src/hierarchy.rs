@@ -35,8 +35,16 @@ impl HierarchyExt for World {
     fn add_child(&mut self, parent: Entity, child: Entity) {
         // Refuse a link that would create a `Children` cycle: an entity can't be its
         // own parent, and `child` must not already be an ancestor of `parent`
-        // (dragging a node onto its own descendant). A cycle hangs transform
-        // propagation / despawn_recursive / scene save.
+        // (dragging a node onto its own descendant).
+        //
+        // This refusal is a courtesy, not a guarantee, and no walker may lean on it: `Parent`
+        // and `Children` are ordinary components that `add_component` writes directly, and
+        // `SceneData::instantiate_entities` writes a file's parent edges verbatim without
+        // passing through here. The three walks this comment used to name as the victims —
+        // transform propagation, `despawn_recursive`, scene save — are the wrong list twice
+        // over: the first two carry visited sets (the one for `despawn_recursive` is eleven
+        // lines above), while six walks elsewhere in the workspace carry none and are listed
+        // in `docs/ENGINE.md` §3. What a cycle costs depends on who walks it, not on this line.
         if parent.id() == child.id() || self.is_ancestor(child.id(), parent.id()) {
             return;
         }
