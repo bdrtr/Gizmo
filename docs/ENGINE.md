@@ -115,11 +115,17 @@ state instead.
     an intact, permanently undamageable body plus a full set of chunks. The explosion entity
     itself is despawned the same way, so a recycled one re-detonates every frame. `World::entity`
     is the documented way to resolve a raw id and its own rustdoc warns against exactly this.
-  - **`insert_batch` / `remove_batch` do not revalidate later groups after hooks run.** Hooks fire
-    at the end of each group and are documented as free to despawn; a despawn sets the victim's
-    location to `EntityLocation::INVALID`, and a later group re-reads that location without
-    checking it. `row == u32::MAX` then reaches `move_entity_to` (a safe-index panic) or, on the
-    same-archetype branch, `Column::get_ptr` — which is unchecked.
+  - ~~**`insert_batch` / `remove_batch` do not revalidate later groups after hooks run.**~~
+    **CLOSED 2026-08-25.** Hooks fire at the end of each group and are documented as free to
+    despawn; a despawn sets the victim's location to `EntityLocation::INVALID`, and a later group
+    re-read that location without checking it. Both functions now re-filter the group against
+    liveness and current archetype before using it. Three symptoms, of which only two crashed:
+    `move_entity_to` panicked on the safe index, `Column::get_ptr` wrote through a wild pointer
+    (its bounds check is a `debug_assert`, so release builds had none) — and a despawned FIRST
+    member made `get_add_component_target` return `None`, skipping the whole group in silence.
+    That third one is why the regression tests assert a surviving entity's write rather than
+    watching for a crash: group order comes from a `HashMap`, and the first version of the
+    overwrite test passed 7 runs in 20.
   - **`World::compact` never touches sparse storage**, though its rustdoc promises RAM "back to
     the initial defragmented state". A sparse set's reverse index is sized by the largest entity
     id ever inserted and is the largest allocation in the world. Doc corrected 2026-08-25; the

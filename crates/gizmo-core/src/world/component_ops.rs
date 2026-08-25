@@ -684,6 +684,45 @@ impl World {
         }
 
         for (source_arch_id, group_entities) in groups {
+            // Re-check the snapshot before using it. EVERY group was computed above, before any
+            // of them was processed, and each group's hooks run before the next group starts —
+            // `run_hooks` hands each hook a `&mut World` that `hooks.rs` documents as free to
+            // spawn, despawn and mutate. So by the time this group is reached, a hook fired for
+            // an EARLIER group may have despawned some of its members, or moved them to another
+            // archetype by adding a component. Within a group there is no such window: its hooks
+            // fire only after all of its entities have migrated.
+            //
+            // Three things went wrong without this, and they are why the fix is a filter here
+            // rather than a bounds check at one of the three use sites. A despawned entity's
+            // location is `EntityLocation::INVALID`, whose row is `u32::MAX`:
+            //
+            //   · the MIGRATION branch handed it to `move_entity_to`, which indexes
+            //     `self.entities[source_row]` safely — a panic, and the mildest outcome;
+            //   · the SAME-ARCHETYPE branch handed it to `Column::get_ptr`, whose bounds check
+            //     is a `debug_assert` and therefore ABSENT in release: a write through a pointer
+            //     `u32::MAX * size_of::<T>()` bytes past the column;
+            //   · and with no crash at all, the target archetype is looked up from
+            //     `group_entities[0]`, so a despawned FIRST member returned `None` and skipped
+            //     the whole group — every live entity in it silently not getting the component.
+            //
+            // The `is_alive` test is not redundant with the location test: a hook that despawns
+            // and then spawns can put a NEW entity in the freed id's slot, and a fresh entity
+            // lands in the empty archetype — which is a real `source_arch_id` when the group is
+            // the component-less one. Only the generation separates them.
+            let group_entities: Vec<Entity> = group_entities
+                .into_iter()
+                .filter(|e| {
+                    self.is_alive(*e)
+                        && self
+                            .entity_locations
+                            .get(e.id() as usize)
+                            .is_some_and(|loc| loc.archetype_id == source_arch_id)
+                })
+                .collect();
+            if group_entities.is_empty() {
+                continue;
+            }
+
             let target_arch_id = match self.archetype_index.get_add_component_target(
                 group_entities[0].id(), type_id, &self.component_infos
             ) {
@@ -804,6 +843,25 @@ impl World {
         }
 
         for (source_arch_id, group_entities) in groups {
+            // Same re-check as `insert_batch`, for the same reason and with the same window: the
+            // groups are a snapshot taken before any hook ran, and this function's `on_remove`
+            // hooks fire between groups. See the long note there. Only the migration branch is
+            // reachable here — an entity whose target archetype equals its source is skipped
+            // below — so the symptom was the `move_entity_to` panic rather than the wild write.
+            let group_entities: Vec<Entity> = group_entities
+                .into_iter()
+                .filter(|e| {
+                    self.is_alive(*e)
+                        && self
+                            .entity_locations
+                            .get(e.id() as usize)
+                            .is_some_and(|loc| loc.archetype_id == source_arch_id)
+                })
+                .collect();
+            if group_entities.is_empty() {
+                continue;
+            }
+
             let target_arch_id = match self.archetype_index.get_remove_component_target(
                 group_entities[0].id(), type_id, &self.component_infos
             ) {
@@ -964,6 +1022,216 @@ mod tests {
         // Survivor untouched: no bogus row move happened.
         assert_eq!(world.borrow::<Pos>().get(survivor.id()).unwrap().0, 2);
         assert!(world.entity_component_types(recycled).is_empty());
+    }
+
+    /// A hook that despawns during `insert_batch` must not leave a later group holding a
+    /// dead entity's row.
+    ///
+    /// `insert_batch` computes EVERY group up front and then processes them one at a time,
+    /// running that group's `on_add`/`on_set` hooks before the next group starts. `run_hooks`
+    /// hands each hook a `&mut World` and `hooks.rs` documents it as free to spawn, despawn and
+    /// mutate — so a hook fired for group A can despawn a member of group B, which has not been
+    /// touched yet. Nothing revalidated the snapshot, and a despawned entity's location is
+    /// `EntityLocation::INVALID`, whose row is `u32::MAX`.
+    ///
+    /// Both branches were reachable and they fail differently, which is why the fix is a filter
+    /// rather than a bounds check in one of them:
+    ///
+    /// * the MIGRATION branch feeds `u32::MAX` to `move_entity_to`, which indexes
+    ///   `self.entities[source_row]` safely and panics;
+    /// * the SAME-ARCHETYPE branch feeds it to `Column::get_ptr`, which is unchecked — a wild
+    ///   pointer written through, not a panic.
+    ///
+    /// There is a third symptom with no crash at all: `get_add_component_target` is asked about
+    /// `group_entities[0]`, so if the despawned entity happened to be first, it returned `None`
+    /// and the whole group was skipped — every live entity in it silently not getting the
+    /// component.
+    ///
+    /// **Both groups take the migration branch here on purpose.** Group order comes from a
+    /// `HashMap`, so it differs run to run; making both groups fail the same way is what makes
+    /// the test deterministic, and choosing the branch that panics rather than the one that
+    /// writes through a wild pointer keeps the pre-fix failure observable instead of undefined.
+    /// The same-archetype branch is covered by the sibling test below.
+    ///
+    /// Found by review 2026-08-25.
+    #[test]
+    fn a_hook_despawning_during_insert_batch_cannot_strand_a_later_group() {
+        use std::sync::Mutex;
+
+        #[derive(Clone, PartialEq, Debug)]
+        struct Tag(i32);
+        impl Component for Tag {}
+
+        static VICTIMS: Mutex<Vec<Entity>> = Mutex::new(Vec::new());
+
+        let mut world = World::new();
+
+        // Two source archetypes, so `insert_batch` sees two groups. Neither carries `Tag`, so
+        // both take the migration branch whichever order the map yields them in.
+        let a1 = world.spawn();
+        world.add_component(a1, Pos(1));
+        let a2 = world.spawn();
+        world.add_component(a2, Pos(2));
+        let b1 = world.spawn();
+        world.add_component(b1, Vel(1));
+        let b2 = world.spawn();
+        world.add_component(b2, Vel(2));
+
+        // One victim per group, so whichever group is processed first, the hook it fires
+        // despawns a member of the group that has NOT been processed.
+        *VICTIMS.lock().unwrap() = vec![a2, b2];
+
+        world.register_component_type::<Tag>();
+        world.register_on_add::<Tag>(Box::new(|w, _e| {
+            let victims: Vec<Entity> = std::mem::take(&mut *VICTIMS.lock().unwrap());
+            for v in victims {
+                w.despawn(v);
+            }
+        }));
+
+        world.insert_batch(&[a1, a2, b1, b2], Tag(7));
+
+        // The survivors got the component…
+        assert_eq!(world.query_entity::<&Tag>(a1.id()).map(|t| t.0), Some(7), "a1 lost its insert");
+        assert_eq!(world.query_entity::<&Tag>(b1.id()).map(|t| t.0), Some(7), "b1 lost its insert");
+        // …and kept what they already had, so no row was moved out from under them.
+        assert_eq!(world.query_entity::<&Pos>(a1.id()).map(|p| p.0), Some(1));
+        assert_eq!(world.query_entity::<&Vel>(b1.id()).map(|v| v.0), Some(1));
+        // The despawned ones are gone rather than half-written.
+        assert!(!world.is_alive(a2) && !world.is_alive(b2), "the victims should be despawned");
+        assert_eq!(world.query::<&Tag>().unwrap().iter().count(), 2, "exactly the survivors carry Tag");
+    }
+
+    /// The same hazard on `insert_batch`'s SAME-ARCHETYPE branch, plus the symptom that never
+    /// crashes at all.
+    ///
+    /// Group order comes from a `HashMap` and differs run to run, so this test is built to fail
+    /// in BOTH orders — and they fail differently, which is the point:
+    ///
+    /// * **overwrite group first** — its hooks despawn `a1`, the FIRST member of the migration
+    ///   group. `get_add_component_target` is asked about `group_entities[0]`, gets `None` for a
+    ///   dead entity, and `continue`s the whole group: `a2` silently never receives the
+    ///   component. No panic, no warning, just a missing write — which is why `a2` exists and is
+    ///   asserted on. An earlier version of this test had no `a2`, and passed 7 times in 20.
+    /// * **migration group first** — its hooks despawn `b2`, and the overwrite loop then feeds
+    ///   `b2`'s `u32::MAX` row to `Column::get_ptr`, whose bounds check is a `debug_assert`:
+    ///   a panic here, a write through a wild pointer in release.
+    ///
+    /// Both are the same defect and the same one-line fix, but only the second one crashes, so a
+    /// test that watched for a crash would have graded the fix on a coin flip.
+    #[test]
+    fn a_hook_despawning_during_insert_batch_cannot_strand_an_overwrite_group() {
+        use std::sync::Mutex;
+
+        #[derive(Clone, PartialEq, Debug)]
+        struct Mark(i32);
+        impl Component for Mark {}
+
+        static VICTIMS: Mutex<Vec<Entity>> = Mutex::new(Vec::new());
+
+        let mut world = World::new();
+
+        // Migration group (`Pos`, no `Mark`): `a1` is the victim AND first in the group, which is
+        // what exposes the silent-skip symptom; `a2` is the survivor whose write proves it.
+        let a1 = world.spawn();
+        world.add_component(a1, Pos(1));
+        let a2 = world.spawn();
+        world.add_component(a2, Pos(2));
+        // Overwrite group (already carries `Mark`): `b1` survives, `b2` is the victim.
+        let b1 = world.spawn();
+        world.add_component(b1, Vel(1));
+        world.add_component(b1, Mark(0));
+        let b2 = world.spawn();
+        world.add_component(b2, Vel(2));
+        world.add_component(b2, Mark(0));
+
+        *VICTIMS.lock().unwrap() = vec![a1, b2];
+
+        let despawn_victims = |w: &mut World, _e: Entity| {
+            let victims: Vec<Entity> = std::mem::take(&mut *VICTIMS.lock().unwrap());
+            for v in victims {
+                w.despawn(v);
+            }
+        };
+        world.register_on_add::<Mark>(Box::new(despawn_victims));
+        world.register_on_set::<Mark>(Box::new(despawn_victims));
+
+        world.insert_batch(&[a1, a2, b1, b2], Mark(9));
+
+        assert!(!world.is_alive(a1) && !world.is_alive(b2), "the victims should be despawned");
+        assert_eq!(
+            world.query_entity::<&Mark>(a2.id()).map(|m| m.0),
+            Some(9),
+            "the migration group was skipped wholesale because its first member was despawned"
+        );
+        assert_eq!(
+            world.query_entity::<&Mark>(b1.id()).map(|m| m.0),
+            Some(9),
+            "the surviving member of the overwrite group lost its write"
+        );
+        // Neither survivor had a row moved out from under it.
+        assert_eq!(world.query_entity::<&Pos>(a2.id()).map(|p| p.0), Some(2));
+        assert_eq!(world.query_entity::<&Vel>(b1.id()).map(|v| v.0), Some(1));
+    }
+
+    /// The same hazard on `remove_batch`, which shares the snapshot-then-process shape and runs
+    /// its `on_remove` hooks in the same place — between groups.
+    ///
+    /// Only the migration branch is reachable here (a group whose target archetype equals its
+    /// source is skipped), so before the fix this was the `move_entity_to` panic rather than the
+    /// wild write. Covered separately anyway, because the fix is a separate edit: a single
+    /// function fixed and its twin forgotten is the failure mode a shared explanation invites.
+    #[test]
+    fn a_hook_despawning_during_remove_batch_cannot_strand_a_later_group() {
+        use std::sync::Mutex;
+
+        #[derive(Clone, PartialEq, Debug)]
+        struct Doomed(i32);
+        impl Component for Doomed {}
+
+        static VICTIMS: Mutex<Vec<Entity>> = Mutex::new(Vec::new());
+
+        let mut world = World::new();
+
+        // Two source archetypes, both carrying `Doomed`, so both groups migrate when it goes.
+        let a1 = world.spawn();
+        world.add_component(a1, Pos(1));
+        world.add_component(a1, Doomed(1));
+        let a2 = world.spawn();
+        world.add_component(a2, Pos(2));
+        world.add_component(a2, Doomed(2));
+        let b1 = world.spawn();
+        world.add_component(b1, Vel(1));
+        world.add_component(b1, Doomed(3));
+        let b2 = world.spawn();
+        world.add_component(b2, Vel(2));
+        world.add_component(b2, Doomed(4));
+
+        // One victim per group, so whichever group runs first strands a member of the other.
+        *VICTIMS.lock().unwrap() = vec![a2, b2];
+
+        world.register_on_remove::<Doomed>(Box::new(|w, _e| {
+            let victims: Vec<Entity> = std::mem::take(&mut *VICTIMS.lock().unwrap());
+            for v in victims {
+                w.despawn(v);
+            }
+        }));
+
+        world.remove_batch::<Doomed>(&[a1, a2, b1, b2]);
+
+        assert!(!world.is_alive(a2) && !world.is_alive(b2), "the victims should be despawned");
+        assert!(
+            world.query_entity::<&Doomed>(a1.id()).is_none(),
+            "a1 kept the component remove_batch was asked to take"
+        );
+        assert!(
+            world.query_entity::<&Doomed>(b1.id()).is_none(),
+            "b1 kept the component remove_batch was asked to take"
+        );
+        // The survivors keep everything else, so no row was moved out from under them.
+        assert_eq!(world.query_entity::<&Pos>(a1.id()).map(|p| p.0), Some(1));
+        assert_eq!(world.query_entity::<&Vel>(b1.id()).map(|v| v.0), Some(1));
+        assert_eq!(world.query::<&Doomed>().unwrap().iter().count(), 0);
     }
 
     // ── `add_bundle`'s drop discipline. These two live HERE rather than in `world/tests`

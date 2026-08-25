@@ -1027,6 +1027,37 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A component hook that despawned during `insert_batch`/`remove_batch` corrupted a later group.**
+  Both functions compute *every* group up front and then process them one at a time, running each
+  group's hooks before the next group starts — and `run_hooks` hands every hook a `&mut World`
+  that the hook documentation explicitly describes as free to spawn, despawn and mutate. Nothing
+  re-checked the snapshot, so a hook fired for one group could despawn a member of a group that
+  had not been touched yet. A despawned entity's location is `EntityLocation::INVALID`, whose row
+  is `u32::MAX`.
+
+  Three symptoms, and **only two of them crashed**:
+
+  - the migration branch fed `u32::MAX` to `move_entity_to`, which indexes `self.entities[row]`
+    safely — a panic, and the mildest outcome;
+  - the same-archetype overwrite branch fed it to `Column::get_ptr`, whose bounds check is a
+    `debug_assert` and therefore **absent in release**: a write through a pointer
+    `u32::MAX * size_of::<T>()` bytes past the column;
+  - and with no crash at all, the target archetype is looked up from `group_entities[0]`, so a
+    despawned *first* member made that lookup return `None` and the whole group was `continue`d —
+    every live entity in it silently never receiving the component.
+
+  Both functions now re-filter each group against liveness and current archetype before using it,
+  which is also the only one of the three that a bounds check at the use site would not have
+  fixed. Within a group there was never a window: its hooks run only after all of its entities
+  have migrated.
+
+  **The silent symptom is why the tests assert a survivor's write instead of watching for a
+  crash.** Group order comes from a `HashMap` and differs run to run, so the first version of the
+  overwrite test graded the fix on a coin flip: it passed **7 runs in 20** with the fix removed,
+  because in that order the group was skipped rather than corrupted and nothing in the test looked
+  at the entity that lost its write. Restructured so both orders fail, all three regression tests
+  now fail 20/20 with their fix reverted and pass 20/20 with it in place.
+
 - **`add_bundle` leaked the component it replaced — and the obvious fix was worse than the leak.**
   `Bundle::write_to_archetype` copies raw bytes into the archetype column, so it never dropped
   what it overwrote: every `add_bundle` that re-asserted a component the entity already carried
