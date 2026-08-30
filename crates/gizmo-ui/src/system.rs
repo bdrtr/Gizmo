@@ -32,26 +32,57 @@ pub fn ui_layout_system(
     // 2. Reclaim the layout nodes of entities that lost their Style (or died).
     ctx.retain_entities(&current_entities);
 
-    // 3. Mirror the ECS hierarchy into the layout tree.
+    // 3. Decide the roots, then mirror the ECS hierarchy into the layout tree from them
+    //    downward — CYCLE-SAFELY.
+    //
+    // A root is any node without a Parent, or without a parent that has a Style.
+    // Technically we should check if the parent also has a Style.
+    // For simplicity, we assume the ECS hierarchy accurately represents the UI tree.
+    let roots: Vec<u32> = current_entities
+        .iter()
+        .copied()
+        .filter(|&entity| parents.get(entity).is_none())
+        .collect();
+
+    // This pass used to hand every `Children` list to the layout engine verbatim, and a
+    // `Children` loop reaching a root was then an ABORT rather than a hang: the recursion is
+    // taffy's, inside `compute_root_layout` below, and nothing between the component and that
+    // call checks for a cycle. `add_child` refuses to build one, but `Children` is an ordinary
+    // component that `add_component` writes directly and that scene loading writes verbatim
+    // out of a file. The write-back walk at the bottom of this function has carried a
+    // `visited` set against exactly this since it was written; this pass, thirty lines above
+    // it, had none.
+    //
+    // Descending from the roots with one shared `mirrored` set is what drops the back-edge:
+    // an entity is given a parent by whoever reaches it first, so the edge that would close
+    // the loop is simply never mirrored, and a diamond's shared child lands under one parent
+    // instead of being reparented by whichever list was iterated last.
+    //
+    // Style'd entities no root reaches are CLEARED rather than left alone. Layout nodes
+    // outlive a frame, so a child list mirrored before the cycle appeared would otherwise stay
+    // in the tree and put it straight back.
+    let mut mirrored: std::collections::HashSet<u32> = roots.iter().copied().collect();
+    let mut to_mirror = roots.clone();
+    while let Some(entity) = to_mirror.pop() {
+        let kids: Vec<u32> = match children.get(entity) {
+            Some(children_comp) => children_comp
+                .0
+                .iter()
+                .copied()
+                .filter(|&child| mirrored.insert(child))
+                .collect(),
+            None => Vec::new(),
+        };
+        ctx.set_children(entity, &kids);
+        to_mirror.extend(kids);
+    }
     for (entity, _) in styles.iter() {
-        match children.get(entity) {
-            Some(children_comp) => ctx.set_children(entity, &children_comp.0),
-            None => ctx.set_children(entity, &[]),
+        if !mirrored.contains(&entity) {
+            ctx.set_children(entity, &[]);
         }
     }
 
     // 4. Compute layout for roots.
-    // A root is any node without a Parent, or without a parent that has a Style.
-    let roots: Vec<u32> = current_entities
-        .iter()
-        .copied()
-        .filter(|&entity| {
-            // Technically we should check if the parent also has a Style.
-            // For simplicity, we assume the ECS hierarchy accurately represents the UI tree.
-            parents.get(entity).is_none()
-        })
-        .collect();
-
     for &root in &roots {
         ctx.compute_root_layout(root);
     }
@@ -272,6 +303,47 @@ mod tests {
             pl.x > loc_leaf.x + 1.0 && pl.y > loc_leaf.y + 1.0,
             "grandchild absolute {pl:?} must exceed its parent-relative {loc_leaf:?}"
         );
+    }
+
+    /// A `Children` cycle must not reach the layout engine.
+    ///
+    /// The recursion this guards is not ours. Step 3 mirrors the ECS edges into the layout
+    /// tree and `compute_root_layout` walks them, so before the fix a loop hanging off a root
+    /// recursed inside taffy until the stack was gone — and a stack overflow in Rust is an
+    /// immediate ABORT, with no unwind and no `catch_unwind`. That is also why this test needs
+    /// no deadline harness: the pre-fix failure kills the test binary, and cargo reports that.
+    ///
+    /// The cycle is written straight into `Children`, because that is how one arrives:
+    /// `add_child` refuses to build one, but scene loading writes a file's parent edges
+    /// verbatim, and a UI tree is as loadable as any other.
+    #[test]
+    fn a_children_cycle_under_a_root_does_not_reach_the_layout_engine() {
+        let (mut world, mut schedule) = make_world();
+        set_window(&mut world, 800.0, 600.0);
+
+        let root = world.spawn();
+        let a = world.spawn();
+        let b = world.spawn();
+        for e in [root, a, b] {
+            world.add_component(e, sized_style(100.0, 50.0));
+            world.add_component(e, Node::default());
+        }
+        // root -> a -> b -> root. Only `root` is parentless, so it is the only root and the
+        // descent has to reach the loop through it.
+        world.add_component(a, Parent(root.id()));
+        world.add_component(b, Parent(a.id()));
+        world.add_component(root, Children(vec![a.id()]));
+        world.add_component(a, Children(vec![b.id()]));
+        world.add_component(b, Children(vec![root.id()]));
+
+        schedule.run(&mut world, 0.016);
+
+        // Terminating at all is the assertion. The sizes are the evidence that the tree was
+        // still laid out rather than abandoned — and `b`, on the far side of the back-edge,
+        // is the one a guard that stopped too early would leave at `Node::default()`.
+        assert_vec2(node_of(&world, root).size, 100.0, 50.0);
+        assert_vec2(node_of(&world, a).size, 100.0, 50.0);
+        assert_vec2(node_of(&world, b).size, 100.0, 50.0);
     }
 
     #[test]

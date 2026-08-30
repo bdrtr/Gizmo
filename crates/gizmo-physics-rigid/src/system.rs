@@ -49,12 +49,31 @@ pub fn physics_step_system(world: &World, dt: f32) {
                     Box::new(col.shape.clone()),
                 ));
 
-                // Check children recursively
+                // Check children recursively.
+                //
+                // `visited` is the cycle guard, and this walk is inside the per-frame step: a
+                // `Children` loop — which `add_component` can write directly and scene loading
+                // writes verbatim out of a file — meant this step never returned, on the FIRST
+                // tick after such a scene loaded. Unguarded until 2026-08-30.
+                //
+                // `stack` is not what grew: this walk pops before it pushes, so a simple cycle
+                // holds one id in it forever. `compound_shapes` is the one that climbs, because
+                // the loop body appends a sub-shape per child it visits — so the body being
+                // assembled swells for as long as the step spins.
+                //
+                // The same `visited.insert` also keeps a DIAMOND from adding the same child
+                // collider to the compound body twice, which is the quieter half: it terminates
+                // on its own and just builds a body nobody authored.
+                let mut visited = std::collections::HashSet::new();
+                visited.insert(id);
                 let mut stack = vec![id];
                 while let Some(curr_id) = stack.pop() {
                     if let Some(children_query_ref) = &mut children_query {
                         if let Some(children) = children_query_ref.get(curr_id) {
                             for &child_id in &children.0 {
+                                if !visited.insert(child_id) {
+                                    continue;
+                                }
                                 stack.push(child_id);
                                 if let (Some(tq), Some(cq)) = (&trans_query, &col_query) {
                                     if let (Some(child_trans), Some(child_col)) = (tq.get(child_id), cq.get(child_id)) {

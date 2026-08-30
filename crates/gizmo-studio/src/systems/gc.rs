@@ -7,6 +7,7 @@
 use crate::state::StudioState;
 use gizmo::editor::EditorState;
 use gizmo::prelude::*;
+use gizmo::core::HierarchyExt;
 
 /// The garbage-collection interval, in seconds
 const GC_INTERVAL: f32 = 3.0;
@@ -38,21 +39,11 @@ pub fn garbage_collection_system(
         if !to_despawn.is_empty() {
             let count = to_despawn.len();
             for id in to_despawn {
-                // BFS ile tüm torunları (cascade) bul
-                let mut all_ids = vec![id];
-                {
-                    let children = world.borrow::<gizmo::core::component::Children>();
-                    let mut i = 0;
-                    while i < all_ids.len() {
-                        let current = all_ids[i];
-                        if let Some(c) = children.get(current) {
-                            for &child_id in &c.0 {
-                                all_ids.push(child_id);
-                            }
-                        }
-                        i += 1;
-                    }
-                }
+                // BFS ile tüm torunları (cascade) bul — cycle-safe ve tekrarsız.
+                // Unguarded until 2026-08-30: this walked an index cursor along a vector it
+                // never drained, so a cycle anywhere under an `IsDeleted` entity grew `all_ids`
+                // without bound until the process was killed.
+                let all_ids = world.descendants_inclusive(id);
 
                 // Tüm torunları ve kendisini sil (ters sıra — yapraklardan başla)
                 for &del_id in all_ids.iter().rev() {

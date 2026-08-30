@@ -1,6 +1,7 @@
 use crate::state::StudioState;
 use gizmo::editor::EditorState;
 use gizmo::prelude::*;
+use gizmo::core::HierarchyExt;
 
 /// The studio's per-frame update: input and picking, camera, shortcuts, scene operations, play
 /// mode, gizmos and the housekeeping timers, in that order.
@@ -56,7 +57,6 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
 
         let meshes = world.borrow::<gizmo::renderer::components::Mesh>();
         let global_transforms = world.borrow::<gizmo::physics::components::GlobalTransform>();
-        let children_comp = world.borrow::<gizmo::core::component::Children>();
         let Some(editor_state) = world.get_resource::<gizmo::editor::EditorState>() else { return; };
 
         const ORANGE: [f32; 4] = [1.0, 0.5, 0.0, 1.0];
@@ -67,19 +67,15 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
         ];
 
         for &selected_entity in editor_state.selection.entities.iter() {
-            // BFS: Bu entity + tüm torunları
-            let mut descendants = vec![selected_entity];
-            let mut i = 0;
-            while i < descendants.len() {
-                if let Some(children) = children_comp.get(descendants[i].id()) {
-                    for &child_id in &children.0 {
-                        if let Some(child_ent) = world.get_entity(child_id) {
-                            descendants.push(child_ent);
-                        }
-                    }
-                }
-                i += 1;
-            }
+            // BFS: Bu entity + tüm torunları — cycle-safe ve tekrarsız.
+            // Unguarded until 2026-08-30, and this one runs EVERY FRAME per selected entity, so
+            // a cycle under a selected entity froze the studio on selection rather than on an
+            // action the user took deliberately.
+            let descendants: Vec<_> = world
+                .descendants_inclusive(selected_entity.id())
+                .into_iter()
+                .filter_map(|id| world.get_entity(id))
+                .collect();
 
             // İlk mesh'li entity'nin GT matrisini "referans frame" olarak al.
             // Diğer çocukların bounds'larını bu frame'e dönüştürüp local-space

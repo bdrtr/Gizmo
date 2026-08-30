@@ -100,14 +100,44 @@ state instead.
 
 - **Open, found by the 2026-08-25 ECS sweep and deliberately not fixed in that change.** Each was
   verified against the code by an adversarial second pass, so these are work items, not leads:
-  - **Six hierarchy walks carry no cycle guard.** `Parent`/`Children` can loop — `add_child`
-    refuses to build one, but `add_component` writes `Parent` directly and
-    `SceneData::instantiate_entities` writes a file's parent edges verbatim with no rejection.
-    Unguarded: `gizmo-physics-rigid`'s compound-collider gather and `gizmo-animation`'s
-    target resolve (both per-frame, so a cyclic scene hangs on load), three `gizmo-studio`
-    cascades (delete, GC, selection highlight), and `gizmo-editor`'s hierarchy panel — which
-    recurses, so it overflows the stack and aborts rather than hanging. `despawn_recursive`,
-    `collect_hidden`, transform propagation and (since 2026-08-24) `World::trigger` are guarded.
+  - ~~**Six hierarchy walks carry no cycle guard.**~~ **CLOSED 2026-08-30 — and there were
+    SEVEN.** `Parent`/`Children` can loop: `add_child` refuses to build one, but `add_component`
+    writes `Children` directly and `SceneData::instantiate_entities` writes a file's parent edges
+    verbatim with no rejection anywhere on that path. The six named here were
+    `gizmo-physics-rigid`'s compound-collider gather, `gizmo-animation`'s target resolve, three
+    `gizmo-studio` cascades (delete, GC, selection highlight) and `gizmo-editor`'s hierarchy
+    panel. **The seventh is not a walk of ours at all:** `gizmo-ui`'s layout system mirrored every
+    `Children` list into taffy verbatim, so the recursion that then blew the stack was taffy's,
+    inside `compute_root_layout` — thirty lines above a write-back walk in the same function that
+    had carried a `visited` set against exactly this since it was written.
+
+    **This entry's own summary of the six was wrong twice, and the corrections are the part worth
+    keeping** — because they decide what a test for one of these can assert. (1) Grouping them all
+    as unbounded growth is false: the two per-frame walks **pop before they push**, so on the
+    simple cycle A→B→C→A their stack holds ONE id for the whole infinite run. The symptom there is
+    a frame that never returns **at flat memory**, not an OOM kill; memory climbs only where the
+    loop body appends per child regardless — `compound_shapes` does, the animation name map does
+    not. The three `gizmo-studio` cascades are the ones that grew without bound, each stepping an
+    index cursor along a vector it never drained. (2) "so a cyclic scene hangs on load"
+    understated the animation one: target resolution re-runs on **every frame** while
+    `target_entities` is empty, and a clip whose track names match nothing keeps it empty forever
+    — so the loop is not a one-shot load-path risk, it is the first frame in which that player is
+    playing. The two recursive sites (the editor panel, and taffy under `gizmo-ui`) neither hang
+    nor grow: they exhaust the thread's stack and **abort** — no unwind, no `catch_unwind`, no
+    chance to save the scene.
+
+    Three sites now call one guarded walker, `HierarchyExt::descendants_inclusive` (root first,
+    then breadth-first, cycle-safe and duplicate-free); the other four carry an inline `visited`
+    set, because each needs something the shared walker cannot give — per-node work interleaved
+    with the descent, a set threaded through a recursion, or a mirror rather than a walk.
+    **Duplicate-freedom is a defect separate from termination:** a *diamond* — the same id in two
+    `Children` lists — terminates on its own, and was double-counting a delete cascade and adding
+    the same child collider to a compound body twice. Regression tests at every site; the ones
+    whose pre-fix failure is a hang rather than a wrong answer run their body on a worker thread
+    behind a ten-second deadline, so the suite goes RED instead of stopping — a suite that hangs
+    covers less than one that fails, which is the argument `CLAUDE.md` already makes for
+    `--no-fail-fast`. `despawn_recursive`, `collect_hidden`, transform propagation and (since
+    2026-08-24) `World::trigger` were already guarded and are unchanged.
   - ~~**`gizmo-physics-rigid` fabricates `Entity::new(id, 0)` from raw query ids.**~~
     **CLOSED 2026-08-25.** Query iteration yields a bare `u32`, and both `physics_fracture_system`
     and `physics_explosion_system` rebuilt handles at generation 0 — correct only while an id is

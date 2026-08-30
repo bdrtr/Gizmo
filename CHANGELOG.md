@@ -50,6 +50,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **One guarded hierarchy walk: `HierarchyExt::descendants_inclusive`.** Returns every entity
+  reachable from a root down the `Children` links — the root first, then breadth-first —
+  **cycle-safe and duplicate-free**. It exists because the same child-list descent was being
+  hand-written at every call site that needed it, and a sweep found seven copies with no visited
+  set at all (see *Fixed*, below). Having one guarded walker is the point: the next person to
+  need this should not have to remember the guard. Ids are returned rather than `Entity` handles
+  and are not checked for liveness — a `Children` list may name a despawned id, so resolve with
+  `World::entity` and expect `None`.
+
 - **Untargeted events: `World::observe_global` / `trigger_global`.**
   The third door. `add_observer` is keyed to a component type and `observe` to a target entity; an
   event that belongs to neither — "the level loaded", "the round ended", "the save finished" — had
@@ -1026,6 +1035,51 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   before.
 
 ### Fixed
+
+- **A cycle in the `Children` graph froze, exhausted or aborted the engine at seven different
+  places — and the seven failed in three different ways.** `Parent`/`Children` can loop:
+  `HierarchyExt::add_child` refuses to build a cycle, but `Children` is an ordinary component that
+  `add_component` writes directly, and `SceneData::instantiate_entities` writes a scene file's
+  parent edges verbatim with no cycle rejection anywhere on that path. A rig or a UI tree loaded
+  from a file is exactly where one arrives.
+
+  Which walk you hit decided what happened, so no single symptom describes the class:
+
+  - **the two per-frame walks** — `gizmo-physics-rigid`'s compound-collider gather and
+    `gizmo-animation`'s target resolve — *pop before they push*, so on the simple cycle A→B→C→A
+    their stack holds one id for the whole infinite run. The symptom is a frame that never
+    returns **at flat memory**: not a crash, not an out-of-memory kill, just a hung process. The
+    physics one does grow, because its loop body appends a sub-shape per child it visits, so the
+    body being assembled swells while the step spins. And the animation one is not a load-path
+    risk that passes: resolution re-runs every frame while `target_entities` is empty, and a clip
+    whose track names match nothing keeps it empty forever.
+  - **the three `gizmo-studio` cascades** — delete, GC, selection highlight — each stepped an
+    index cursor along a vector they never drained, so a cycle grew that vector until the process
+    was killed. The delete cascade runs on a **Delete keypress** and the selection highlight runs
+    **every frame per selected entity**, so selecting the wrong entity was enough.
+  - **the two recursive sites** — `gizmo-editor`'s hierarchy panel, and taffy's `compute_root_layout`
+    under `gizmo-ui`, which received the cycle because the layout system mirrored every `Children`
+    list into the layout tree verbatim — exhaust the thread's stack. A stack overflow in Rust is an
+    immediate **abort**: no unwind, no `catch_unwind`, no chance to save the scene. In the editor.
+
+  A **diamond** — the same id named by two `Children` lists — is the quieter half of the same
+  defect. It terminates on its own, so nothing hangs; it just visits the shared child twice, which
+  double-counted the delete cascade's report and added the same child collider to a compound
+  rigid body twice, giving the body a doubled sub-shape nobody authored.
+
+  Three of the sites now call one guarded walker, the new
+  **`HierarchyExt::descendants_inclusive`** (root first, then breadth-first, cycle-safe and
+  duplicate-free); the other four carry an inline `visited` set, because each needs something the
+  shared walker cannot give — per-node work interleaved with the descent, a set threaded through a
+  recursion, or a mirror rather than a walk. `gizmo-ui`'s mirror now descends from the roots with
+  one shared set, which drops the back-edge instead of following it, and clears the child list of
+  any styled entity no root reaches (layout nodes outlive a frame, so a list mirrored before the
+  cycle appeared would otherwise put the cycle straight back).
+
+  Regression tests at every site. The ones whose pre-fix failure is a hang rather than a wrong
+  answer run their body on a worker thread behind a ten-second deadline, because a walk that never
+  ends has no assertion to disagree with: the natural test does not fail, it *hangs*, and a suite
+  that hangs covers less than one that goes red.
 
 - **A breakable whose entity id had been recycled survived its own destruction — and an explosion
   in the same position re-detonated every frame.** ECS query iteration yields a bare `u32` with no

@@ -225,21 +225,13 @@ pub fn handle_scene_operations(
                 continue;
             }
 
-            // 1. Tüm çocuklarını topla (kendisi dahil)
-            let mut ids_to_delete = vec![ent_id.id()];
-            {
-                let children_storage = world.borrow::<gizmo::core::component::Children>();
-                let mut i = 0;
-                while i < ids_to_delete.len() {
-                    let current = ids_to_delete[i];
-                    if let Some(c) = children_storage.get(current) {
-                        for &child in &c.0 {
-                            ids_to_delete.push(child);
-                        }
-                    }
-                    i += 1;
-                }
-            }
+            // 1. Tüm çocuklarını topla (kendisi dahil) — cycle-safe ve tekrarsız.
+            //
+            // This was a hand-rolled breadth-first walk with no visited set until 2026-08-30.
+            // A `Children` cycle grew `ids_to_delete` without bound — on a Delete keypress, so
+            // the editor hung and then died — and a diamond counted the shared child twice in
+            // the message below. `descendants_inclusive` owns the guard now.
+            let ids_to_delete = world.descendants_inclusive(ent_id.id());
 
             // 2. Etiketleri ekle (Soft Delete)
             for &id in &ids_to_delete {
@@ -673,6 +665,62 @@ mod tests {
             }
     }
 
+
+    /// Runs `f` on a worker thread and fails if it has not finished within `secs`.
+    ///
+    /// The pre-fix failure here is a walk that never ends, and a walk that never ends has no
+    /// assertion to disagree with: the natural test does not fail, it hangs, and a suite that
+    /// hangs covers less than one that goes red.
+    fn within<T: Send + 'static>(secs: u64, f: impl FnOnce() -> T + Send + 'static) -> T {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(f());
+        });
+        match rx.recv_timeout(std::time::Duration::from_secs(secs)) {
+            Ok(value) => value,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                panic!("the delete cascade did not finish within {secs}s — a `Children` cycle looped")
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("the worker panicked before answering; its own message is above")
+            }
+        }
+    }
+
+    /// A Delete keypress on an entity inside a `Children` cycle must not take the editor down.
+    ///
+    /// The cascade itself is now one call to [`HierarchyExt::descendants_inclusive`], and that is
+    /// where the guard lives and where the cycle/diamond cases are tested directly. What this
+    /// test pins is the CALL SITE: it used to be a hand-rolled walk stepping an index cursor
+    /// along a vector it never drained, so a cycle grew `ids_to_delete` without bound — on a
+    /// keypress, which is the worst place for it — and re-inlining one would restore that with
+    /// nothing in the suite to notice. The GC cascade and the selection highlight were the same
+    /// walk copied; this covers the class.
+    #[test]
+    fn deleting_into_a_children_cycle_terminates_and_tags_each_entity_once() {
+        let tagged = within(10, || {
+            let mut world = World::new();
+            let (a, b, c) = (world.spawn(), world.spawn(), world.spawn());
+            // a -> b -> c -> a. Written directly: `add_child` refuses to build a cycle, but
+            // `SceneData::instantiate_entities` writes a file's parent edges verbatim.
+            world.add_component(a, Children(vec![b.id()]));
+            world.add_component(b, Children(vec![c.id()]));
+            world.add_component(c, Children(vec![a.id()]));
+            world.add_component(b, Parent(a.id()));
+            world.add_component(c, Parent(b.id()));
+
+            let mut ed = EditorState::default();
+            ed.despawn_requests.push(a);
+            handle_scene_operations(&mut world, &mut ed, &mut studio_state());
+
+            world.borrow::<gizmo::core::component::IsDeleted>().iter().count()
+        });
+
+        assert_eq!(
+            tagged, 3,
+            "every entity of the cycle is soft-deleted, and each of them exactly once"
+        );
+    }
 
     // ── The ➕ menu ──────────────────────────────────────────────────────────────────────────
     //

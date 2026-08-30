@@ -159,6 +159,9 @@ pub fn ui_hierarchy(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
 
         // Rows the list actually draws. The header's number is this, painted after the fact.
         let mut listed = 0_usize;
+        // Shared by every root's descent, so an entity reachable from two roots is drawn once
+        // and a `Children` cycle cannot exhaust the stack. See `draw_entity_node`.
+        let mut visited: std::collections::HashSet<u32> = std::collections::HashSet::new();
 
         // ROOT entity'leri filtrele (Iter alive bazından cachelenir) O(N) tek geçiş
         let root_entities: Vec<gizmo_core::entity::Entity> = world
@@ -188,6 +191,7 @@ pub fn ui_hierarchy(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
                 &editor_only_markers,
                 &filter_lower,
                 &mut listed,
+                &mut visited,
             );
         }
         listed
@@ -221,7 +225,29 @@ fn draw_entity_node(
     editor_only_markers: &gizmo_core::StorageView<gizmo_core::component::EditorOnly>,
     filter_lower: &str,
     listed: &mut usize,
+    // Ids this draw has already descended into — the cycle guard.
+    //
+    // Unlike the five ITERATIVE walks this defect was found alongside — three index-cursor
+    // queues in `gizmo-studio`, two `stack.pop()` walks in the per-frame systems — this one
+    // RECURSES, so a `Children` loop does not hang it: it exhausts the thread's stack and the
+    // process ABORTS, with no unwind and no chance to save. (Calling those five breadth-first
+    // was wrong twice over: two of them pop before they push, which is depth-first, and on a
+    // simple cycle their stack never grows at all.) `add_child` refuses to build a cycle, but
+    // `Children` is an ordinary component that `add_component` writes directly and that scene
+    // loading writes verbatim out of a file — and the editor is precisely where someone opens a
+    // file they did not write. Unguarded until 2026-08-30.
+    //
+    // Threaded through the recursion rather than kept as a per-call local because the guard has
+    // to span the whole descent; shared across roots, so an entity reachable from two of them is
+    // drawn once rather than duplicated in the list.
+    visited: &mut std::collections::HashSet<u32>,
 ) {
+    // Already drawn on this pass — through another root, another parent, or the way back
+    // round a cycle. Returning here is what bounds the recursion: `insert` answers false for an
+    // id already in the set, and every descent below runs *after* this line.
+    if !visited.insert(entity.id()) {
+        return;
+    }
     let entity_name = names
         .get(entity.id())
         .map(|n| n.0.clone())
@@ -260,6 +286,7 @@ fn draw_entity_node(
                             editor_only_markers,
                             filter_lower,
                             listed,
+                            visited,
                         );
                     }
                 }
@@ -573,6 +600,7 @@ fn draw_entity_node(
                                     editor_only_markers,
                                     filter_lower,
                                     listed,
+                                    visited,
                                 );
                             }
                         }
@@ -712,6 +740,51 @@ mod hierarchy_count_tests {
             "2",
             "the filter left two rows on screen; a header that still says 3 is telling the reader \
              their filter did not work"
+        );
+    }
+
+    /// A `Children` cycle must not take the editor down with it.
+    ///
+    /// This walk RECURSES, so unlike the breadth-first ones it does not hang on a cycle — it
+    /// exhausts the thread's stack, and a stack overflow in Rust is an immediate abort: no
+    /// unwind, no `catch_unwind`, no chance to save the scene. Which is also why this test needs
+    /// no deadline harness: the pre-fix failure kills the test binary, and cargo reports that.
+    ///
+    /// The cycle is built by writing `Children` directly, because that is how one actually
+    /// arrives: `add_child` refuses to create one, but `SceneData::instantiate_entities` writes
+    /// a file's parent edges verbatim with no cycle rejection — and the editor is exactly where
+    /// somebody opens a file they did not write.
+    #[test]
+    fn a_children_cycle_does_not_blow_the_hierarchy_panels_stack() {
+        use gizmo_core::component::Children;
+
+        let mut world = World::new();
+        let a = world.spawn();
+        let b = world.spawn();
+        let c = world.spawn();
+        for (e, name) in [(a, "A"), (b, "B"), (c, "C")] {
+            world.add_component(e, EntityName(name.to_string()));
+        }
+        // A → B → C → A. Written directly, bypassing `add_child`'s refusal.
+        world.add_component(a, Children(vec![b.id()]));
+        world.add_component(b, Children(vec![c.id()]));
+        world.add_component(c, Children(vec![a.id()]));
+        // Only `a` is a root — B and C carry `Parent`, so the root query skips them and the
+        // descent has to reach them through the cycle.
+        world.add_component(b, gizmo_core::component::Parent(a.id()));
+        world.add_component(c, gizmo_core::component::Parent(b.id()));
+
+        let mut state = EditorState {
+            hide_editor_entities: true,
+            ..Default::default()
+        };
+
+        // Drawing at all is the assertion; the count is the evidence that it drew the right
+        // thing rather than bailing out early.
+        assert_eq!(
+            header_number(&world, &mut state),
+            "3",
+            "each entity of the cycle must be drawn exactly once"
         );
     }
 }
