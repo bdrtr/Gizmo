@@ -713,12 +713,63 @@ mod tests {
             ed.despawn_requests.push(a);
             handle_scene_operations(&mut world, &mut ed, &mut studio_state());
 
-            world.borrow::<gizmo::core::component::IsDeleted>().iter().count()
+            // Two numbers, because they answer different halves of the defect. The IsDeleted
+            // count answers COMPLETENESS — the walk reached all three. It cannot answer
+            // duplicate-freedom: `add_component` is idempotent, so a walk that visited an
+            // entity twice produces the same count. The undo record can: the cascade pushes
+            // one entry per VISIT, so a second visit shows up there and nowhere else.
+            let tagged = world.borrow::<gizmo::core::component::IsDeleted>().iter().count();
+            let recorded = match ed.history.undo_stack().back() {
+                Some(gizmo::editor::history::EditorAction::EntityDespawned { entity_ids }) => {
+                    entity_ids.len()
+                }
+                other => panic!("expected an EntityDespawned action on the history, got {other:?}"),
+            };
+            (tagged, recorded)
         });
 
+        let (tagged, recorded) = tagged;
+        assert_eq!(tagged, 3, "every entity of the cycle is soft-deleted");
         assert_eq!(
-            tagged, 3,
-            "every entity of the cycle is soft-deleted, and each of them exactly once"
+            recorded, 3,
+            "and each was visited exactly once — the undo record holds one entry per visit, so \
+             4 here means the shared/looping id was cascaded twice"
+        );
+    }
+
+    /// A DIAMOND terminates on its own, so this is the half the cycle test above cannot reach:
+    /// it is about counting, not hanging. The shared child must be cascaded once.
+    ///
+    /// It has to be asserted through the undo record. `IsDeleted` is added with
+    /// `add_component`, which is idempotent, so tagging the same entity twice leaves the world
+    /// indistinguishable — the cascade's own per-visit push is the only witness. That push
+    /// feeds `EditorAction::EntityDespawned`, i.e. the list a Ctrl+Z would restore, so a
+    /// double-count is not cosmetic: it puts the same entity in the undo payload twice.
+    #[test]
+    fn deleting_into_a_diamond_cascades_the_shared_child_once() {
+        let mut world = World::new();
+        let (a, b, c, d) = (world.spawn(), world.spawn(), world.spawn(), world.spawn());
+        // a -> {b, c}, and BOTH name `d`. Acyclic, so nothing here can hang.
+        world.add_component(a, Children(vec![b.id(), c.id()]));
+        world.add_component(b, Children(vec![d.id()]));
+        world.add_component(c, Children(vec![d.id()]));
+        world.add_component(b, Parent(a.id()));
+        world.add_component(c, Parent(a.id()));
+        world.add_component(d, Parent(b.id()));
+
+        let mut ed = EditorState::default();
+        ed.despawn_requests.push(a);
+        handle_scene_operations(&mut world, &mut ed, &mut studio_state());
+
+        let recorded = match ed.history.undo_stack().back() {
+            Some(gizmo::editor::history::EditorAction::EntityDespawned { entity_ids }) => {
+                entity_ids.len()
+            }
+            other => panic!("expected an EntityDespawned action on the history, got {other:?}"),
+        };
+        assert_eq!(
+            recorded, 4,
+            "a, b, c, d — `d` once. 5 means the walk reached it down both arms of the diamond"
         );
     }
 

@@ -89,6 +89,17 @@ impl History {
         !self.redo_stack.is_empty()
     }
 
+    /// The recorded actions, oldest first — a read-only view.
+    ///
+    /// [`History::can_undo`] answers whether there is *an* action; this answers **what**, which
+    /// is what a caller needs to describe the next undo in the UI, and what a test needs to
+    /// check that an operation recorded exactly the work it did. The delete cascade, for one,
+    /// pushes an id per entity it VISITS, so the length of its `EntityDespawned` entry is the
+    /// only place a duplicated visit is observable — tagging is idempotent and leaves no trace.
+    pub fn undo_stack(&self) -> &VecDeque<EditorAction> {
+        &self.undo_stack
+    }
+
     /// Records a new action in the history
     pub fn push(&mut self, action: EditorAction) {
         self.redo_stack.clear();

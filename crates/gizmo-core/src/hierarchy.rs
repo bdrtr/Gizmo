@@ -38,15 +38,28 @@ pub trait HierarchyExt {
     /// difference is not cosmetic, because it decides what a test for one of them can assert.
     /// The three `gizmo-studio` copies walked an index cursor along a vector they never drained,
     /// so a cycle grew it until the process was killed. The two per-frame walks pop before they
-    /// push: on the simple cycle A→B→C→A their stack holds ONE id for the whole infinite run, so
-    /// the symptom is a frame that never returns at flat memory, and memory climbs only where
-    /// the loop body appends per child regardless (`gizmo-physics-rigid`'s `compound_shapes`
-    /// does; `gizmo-animation`'s name map does not). The editor's panel recurses, so it
-    /// overflows the stack and ABORTS — no unwind, no `catch_unwind`, no chance to save.
+    /// push: on the simple cycle A→B→C→A their stack holds ONE id for the whole infinite run,
+    /// so *the stack* is flat. Whether MEMORY is flat is a separate question, answered by the
+    /// loop body rather than by the walk — `gizmo-physics-rigid`'s `compound_shapes` appends a
+    /// sub-shape per visit, and `gizmo-animation`'s body queues a boxed `CommandQueue` closure
+    /// per name-matched visit against a queue nothing drains until the schedule flushes, which
+    /// a walk that never returns never reaches. Measured 2026-08-31 on the animation walk with
+    /// its guard removed, ten seconds each: a cycle containing a track-named entity peaked at
+    /// **523 MB and climbing**; the same cycle built out of nameless entities peaked at
+    /// **5.4 MB, flat**. The first version of this paragraph called both walks flat-memory and
+    /// was wrong about that one.
     ///
     /// A seventh site is not a walk of ours at all: `gizmo-ui` mirrored each `Children` list
     /// into its layout engine verbatim, and the recursion that then blew the stack was taffy's,
     /// inside `compute_layout`. It is guarded where it mirrors, not by calling this.
+    ///
+    /// **The two recursive sites do not fail alike either**, which is the other thing the first
+    /// version flattened. Both were run with their guard removed on 2026-08-31, capped at 1 GB:
+    /// the `gizmo-ui`/taffy one printed `fatal runtime error: stack overflow, aborting` and
+    /// died on SIGABRT, the textbook case; the `gizmo-editor` panel never overflowed anything —
+    /// egui allocates per recursion level (a fresh `CollapsingState` id, an indented `Ui`,
+    /// shapes) far faster than it consumes stack, so it was killed by the allocator past 1 GB.
+    /// Both end the process without unwinding. Only one of them is a stack overflow.
     ///
     /// **A cycle is reachable.** `add_child` refuses to build one, but `Children` and [`Parent`]
     /// are ordinary components that `add_component` writes directly, and scene loading writes a

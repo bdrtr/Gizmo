@@ -53,8 +53,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **One guarded hierarchy walk: `HierarchyExt::descendants_inclusive`.** Returns every entity
   reachable from a root down the `Children` links — the root first, then breadth-first —
   **cycle-safe and duplicate-free**. It exists because the same child-list descent was being
-  hand-written at every call site that needed it, and a sweep found seven copies with no visited
-  set at all (see *Fixed*, below). Having one guarded walker is the point: the next person to
+  hand-written at every call site that needed it, and a sweep found **six** unguarded copies (see
+  *Fixed*, below — a seventh site is in that entry too, but it is a *mirror* into another
+  library's tree rather than a copy of this descent, and only three of the six could be replaced
+  by a shared walker at all). Having one guarded walker is still the point: the next person to
   need this should not have to remember the guard. Ids are returned rather than `Entity` handles
   and are not checked for liveness — a `Children` list may name a despawned id, so resolve with
   `World::entity` and expect `None`.
@@ -1036,6 +1038,30 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The UI's clickable rectangle could stop matching its visible one, and an unstyled entity
+  could take a child out of the layout tree entirely.** Both are consequences of the cycle guard
+  added to `gizmo-ui`'s layout mirror in the entry below, found by the audit of that change.
+
+  `ui_layout_system` mirrors the ECS hierarchy into taffy (step 3), lets taffy lay the tree out
+  (step 4), then walks the tree again accumulating ancestor offsets so `Node.position` ends up in
+  absolute window coordinates (step 5) — the field `ui_interaction_system` hit-tests against.
+  Once step 3 started **pruning** the graph it mirrored, the two walks stopped agreeing:
+
+  - step 3 claims a shared child at *push* time, so the shallowest reacher wins; step 5 read
+    `Children` and deduped at *pop* time, so it could reach that child through a different
+    ancestor. `local` is measured by taffy against the parent it actually gave the node, so
+    adding it to some other ancestor's origin puts `Node.position` where the box is not. On
+    `R.Children = [B, A]` with `A.Children = [B]`, `B` was laid out at the top of `R` but
+    hit-tested over `A` — both siblings answering to `A`'s rectangle, and `B` unclickable. Step 5
+    now walks the same pruned adjacency step 3 handed taffy, so the two cannot disagree; its own
+    cycle guard is gone because that tree is a forest by construction.
+  - `set_children` is a no-op for a parent with no layout node, but the pruning descent still let
+    such a parent *claim* a child. An unstyled entity whose `Children` names a UI entity — which
+    a scene file is free to say — took the child from the styled parent that could have held it,
+    leaving it attached to nothing, never laid out, and its `Node` overwritten from taffy's zero
+    default: a zero-size box at the window origin. Only tracked entities claim children now.
+    Before the descent existed this could not happen, because step 3 iterated styled entities.
+
 - **A cycle in the `Children` graph froze, exhausted or aborted the engine at seven different
   places — and the seven failed in three different ways.** `Parent`/`Children` can loop:
   `HierarchyExt::add_child` refuses to build a cycle, but `Children` is an ordinary component that
@@ -1047,20 +1073,28 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
   - **the two per-frame walks** — `gizmo-physics-rigid`'s compound-collider gather and
     `gizmo-animation`'s target resolve — *pop before they push*, so on the simple cycle A→B→C→A
-    their stack holds one id for the whole infinite run. The symptom is a frame that never
-    returns **at flat memory**: not a crash, not an out-of-memory kill, just a hung process. The
-    physics one does grow, because its loop body appends a sub-shape per child it visits, so the
-    body being assembled swells while the step spins. And the animation one is not a load-path
-    risk that passes: resolution re-runs every frame while `target_entities` is empty, and a clip
-    whose track names match nothing keeps it empty forever.
+    their **stack** holds one id for the whole infinite run. Whether *memory* is flat is a
+    separate question the loop body answers: the physics one appends a sub-shape per child it
+    visits, so the body being assembled swells while the step spins, and the animation one
+    queues a boxed command per name-matched visit against a queue nothing drains until the
+    schedule flushes — which a walk that never returns never reaches. Measured with the guard
+    removed, ten seconds each: a cycle containing a track-named entity peaked at **523 MB and
+    climbing**, the same cycle built from nameless entities at **5.4 MB, flat**. And the
+    animation one is not a load-path risk that passes: resolution re-runs every frame while
+    `target_entities` is empty, and a clip whose track names match nothing keeps it empty
+    forever.
   - **the three `gizmo-studio` cascades** — delete, GC, selection highlight — each stepped an
     index cursor along a vector they never drained, so a cycle grew that vector until the process
     was killed. The delete cascade runs on a **Delete keypress** and the selection highlight runs
     **every frame per selected entity**, so selecting the wrong entity was enough.
   - **the two recursive sites** — `gizmo-editor`'s hierarchy panel, and taffy's `compute_root_layout`
     under `gizmo-ui`, which received the cycle because the layout system mirrored every `Children`
-    list into the layout tree verbatim — exhaust the thread's stack. A stack overflow in Rust is an
-    immediate **abort**: no unwind, no `catch_unwind`, no chance to save the scene. In the editor.
+    list into the layout tree verbatim — end the process outright: no unwind, no `catch_unwind`,
+    no chance to save the scene. In the editor. They do **not** end it the same way, which is
+    worth knowing before writing a test for either: run with their guards removed under a 1 GB
+    cap, the taffy one printed `fatal runtime error: stack overflow, aborting` and died on
+    SIGABRT, while the editor panel never overflowed anything — egui allocates per recursion
+    level far faster than it consumes stack, so the allocator killed it first.
 
   A **diamond** — the same id named by two `Children` lists — is the quieter half of the same
   defect. It terminates on its own, so nothing hangs; it just visits the shared child twice, which

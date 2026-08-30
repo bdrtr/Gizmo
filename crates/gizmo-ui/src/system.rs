@@ -61,20 +61,38 @@ pub fn ui_layout_system(
     // Style'd entities no root reaches are CLEARED rather than left alone. Layout nodes
     // outlive a frame, so a child list mirrored before the cycle appeared would otherwise stay
     // in the tree and put it straight back.
+    //
+    // ONLY A TRACKED ENTITY MAY CLAIM A CHILD. `set_children` is a no-op for a parent with no
+    // layout node (`UiContext::set_children` returns early), so letting an untracked entity
+    // claim one would attach nothing while permanently taking that child away from a styled
+    // parent that could actually hold it — the child would end the frame parented to nothing,
+    // never laid out, and its `Node` overwritten from taffy's zero default. That is reachable
+    // whenever an unstyled entity's `Children` happens to name a UI entity, which a scene file
+    // is free to say. Before this pass descended the graph it could not happen: the loop was
+    // over `styles.iter()`, so only a styled entity ever wrote a child list.
     let mut mirrored: std::collections::HashSet<u32> = roots.iter().copied().collect();
+    // The adjacency the mirror actually handed taffy, pruned exactly as taffy received it.
+    // Step 5 walks THIS rather than `Children` — see the comment there for why the two must
+    // not be allowed to disagree.
+    let mut mirrored_children: std::collections::HashMap<u32, Vec<u32>> =
+        std::collections::HashMap::new();
     let mut to_mirror = roots.clone();
     while let Some(entity) = to_mirror.pop() {
+        if !ctx.is_tracked(entity) {
+            continue;
+        }
         let kids: Vec<u32> = match children.get(entity) {
             Some(children_comp) => children_comp
                 .0
                 .iter()
                 .copied()
-                .filter(|&child| mirrored.insert(child))
+                .filter(|&child| ctx.is_tracked(child) && mirrored.insert(child))
                 .collect(),
             None => Vec::new(),
         };
         ctx.set_children(entity, &kids);
-        to_mirror.extend(kids);
+        to_mirror.extend(kids.iter().copied());
+        mirrored_children.insert(entity, kids);
     }
     for (entity, _) in styles.iter() {
         if !mirrored.contains(&entity) {
@@ -93,13 +111,18 @@ pub fn ui_layout_system(
     //    subtree top-down, accumulating ancestor offsets, so a child laid out at
     //    parent-offset (10,10) under a root at (500,500) gets Node.position
     //    (510,510) — not (10,10) (which would hit-test at the window corner).
+    //
+    //    IT WALKS THE MIRRORED TREE, NOT `Children`. `local` is measured by taffy against the
+    //    node taffy considers this one's parent, so adding it to any OTHER ancestor's origin
+    //    produces a `Node.position` that is simply wrong — and `Node.position` is what
+    //    `ui_interaction_system` hit-tests, so the box a user can click stops matching the box
+    //    they can see. Reading `Children` here made that reliable rather than lucky once step 3
+    //    started pruning: step 3 claims a shared child at PUSH time (shallowest reacher wins)
+    //    while this walk dedups at POP time, so on `R.Children = [B, A]` with `A.Children = [B]`
+    //    the mirror gives B to R and this walk would give B the origin of A.
     let mut stack: Vec<(u32, gizmo_math::Vec2)> =
         roots.iter().map(|&e| (e, gizmo_math::Vec2::ZERO)).collect();
-    let mut visited = std::collections::HashSet::new();
     while let Some((entity, parent_origin)) = stack.pop() {
-        if !visited.insert(entity) {
-            continue; // guard against a Children cycle
-        }
         let Some((size, local)) = ctx.relative_layout(entity) else {
             continue;
         };
@@ -108,8 +131,13 @@ pub fn ui_layout_system(
             node.size = size;
             node.position = abs;
         }
-        if let Some(children_comp) = children.get(entity) {
-            for &child_id in &children_comp.0 {
+        // No `visited` set: the mirror gives every node exactly one parent and never names a
+        // root as anyone's child, so `mirrored_children` is a forest by construction and this
+        // walk cannot revisit. The cycle guard that used to live here has moved to the pass
+        // that builds the tree, which is the only place it can also keep taffy's own recursion
+        // (inside `compute_root_layout`, thirty lines above) off the back-edge.
+        if let Some(kids) = mirrored_children.get(&entity) {
+            for &child_id in kids {
                 stack.push((child_id, abs));
             }
         }
@@ -153,6 +181,16 @@ mod tests {
 
     fn sized_style(w: f32, h: f32) -> Style {
         Style { width: Val::Px(w), height: Val::Px(h), ..Default::default() }
+    }
+
+    /// A container that stacks its children vertically, so a sibling's offset is readable.
+    fn column_style(w: f32, h: f32) -> Style {
+        Style {
+            width: Val::Px(w),
+            height: Val::Px(h),
+            flex_direction: crate::components::FlexDirection::Column,
+            ..Default::default()
+        }
     }
 
     /// Style with an explicit size and left/top padding (right/bottom zero).
@@ -344,6 +382,86 @@ mod tests {
         assert_vec2(node_of(&world, root).size, 100.0, 50.0);
         assert_vec2(node_of(&world, a).size, 100.0, 50.0);
         assert_vec2(node_of(&world, b).size, 100.0, 50.0);
+    }
+
+    /// `Node.position` must be built from the parent **taffy** gave the node, not from whichever
+    /// ancestor a second walk happens to reach it through.
+    ///
+    /// Step 3 claims a shared child at PUSH time, so the shallowest reacher wins; the write-back
+    /// used to read `Children` and dedup at POP time, which on this fixture resolves the same
+    /// child to a different parent. `local` is measured by taffy against the parent it actually
+    /// has, so adding it to the other ancestor's origin puts `Node.position` somewhere the box
+    /// is not — and `Node.position` is what `ui_interaction_system` hit-tests, so the clickable
+    /// rectangle stops matching the visible one.
+    #[test]
+    fn the_write_back_uses_the_parent_taffy_actually_gave_the_node() {
+        let (mut world, mut schedule) = make_world();
+        set_window(&mut world, 800.0, 600.0);
+
+        let root = world.spawn();
+        let a = world.spawn();
+        let b = world.spawn();
+        world.add_component(root, column_style(300.0, 300.0));
+        for e in [a, b] {
+            world.add_component(e, sized_style(100.0, 50.0));
+        }
+        for e in [root, a, b] {
+            world.add_component(e, Node::default());
+        }
+        world.add_component(a, Parent(root.id()));
+        world.add_component(b, Parent(a.id()));
+        // `root` names BOTH of them and lists `b` first; `a` also names `b`. The mirror pops
+        // `a` before `b` (LIFO), so the pre-fix write-back reached `b` through `a` and added
+        // `b`'s root-relative offset to `a`'s origin.
+        world.add_component(root, Children(vec![b.id(), a.id()]));
+        world.add_component(a, Children(vec![b.id()]));
+
+        schedule.run(&mut world, 0.016);
+
+        // Column: taffy stacks the root's two children, `b` first.
+        assert_vec2(node_of(&world, b).position, 0.0, 0.0);
+        assert_vec2(node_of(&world, a).position, 0.0, 50.0);
+    }
+
+    /// An entity with no `Style` has no layout node, so it can parent nothing — and must not be
+    /// able to take a child away from a styled parent that can.
+    ///
+    /// `UiContext::set_children` returns early for an untracked parent, so the claim attaches
+    /// nothing; before the guard it still consumed the child, leaving it parented to nothing,
+    /// never laid out, and its `Node` written from taffy's zero default. An unstyled entity
+    /// whose `Children` names a UI entity is something a scene file is free to say.
+    #[test]
+    fn an_unstyled_entity_cannot_take_a_child_out_of_the_layout_tree() {
+        let (mut world, mut schedule) = make_world();
+        set_window(&mut world, 800.0, 600.0);
+
+        let root = world.spawn();
+        let styled_parent = world.spawn();
+        let unstyled = world.spawn();
+        let child = world.spawn();
+
+        world.add_component(root, column_style(400.0, 400.0));
+        world.add_component(styled_parent, padded_style(200.0, 100.0, 10.0, 20.0));
+        world.add_component(child, sized_style(50.0, 25.0));
+        for e in [root, styled_parent, child] {
+            world.add_component(e, Node::default());
+        }
+        // `unstyled` gets NO Style — it never enters `current_entities` and has no layout node.
+        world.add_component(styled_parent, Parent(root.id()));
+        world.add_component(unstyled, Parent(root.id()));
+        world.add_component(child, Parent(styled_parent.id()));
+
+        // Both name `child`. `unstyled` is listed second, so the mirror pops it FIRST.
+        world.add_component(root, Children(vec![styled_parent.id(), unstyled.id()]));
+        world.add_component(styled_parent, Children(vec![child.id()]));
+        world.add_component(unstyled, Children(vec![child.id()]));
+
+        schedule.run(&mut world, 0.016);
+
+        // A zero size is the pre-fix signature: taffy answers for a node it never computed, so
+        // the orphaned child's `Node` is written from the default layout rather than left alone.
+        assert_vec2(node_of(&world, child).size, 50.0, 25.0);
+        assert_vec2(node_of(&world, child).position, 10.0, 20.0);
     }
 
     #[test]

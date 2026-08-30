@@ -114,17 +114,28 @@ state instead.
     **This entry's own summary of the six was wrong twice, and the corrections are the part worth
     keeping** — because they decide what a test for one of these can assert. (1) Grouping them all
     as unbounded growth is false: the two per-frame walks **pop before they push**, so on the
-    simple cycle A→B→C→A their stack holds ONE id for the whole infinite run. The symptom there is
-    a frame that never returns **at flat memory**, not an OOM kill; memory climbs only where the
-    loop body appends per child regardless — `compound_shapes` does, the animation name map does
-    not. The three `gizmo-studio` cascades are the ones that grew without bound, each stepping an
-    index cursor along a vector it never drained. (2) "so a cyclic scene hangs on load"
-    understated the animation one: target resolution re-runs on **every frame** while
-    `target_entities` is empty, and a clip whose track names match nothing keeps it empty forever
-    — so the loop is not a one-shot load-path risk, it is the first frame in which that player is
-    playing. The two recursive sites (the editor panel, and taffy under `gizmo-ui`) neither hang
-    nor grow: they exhaust the thread's stack and **abort** — no unwind, no `catch_unwind`, no
-    chance to save the scene.
+    simple cycle A→B→C→A their *stack* holds ONE id for the whole infinite run. The three
+    `gizmo-studio` cascades are the ones whose queue grew without bound, each stepping an index
+    cursor along a vector it never drained. (2) "so a cyclic scene hangs on load" understated the
+    animation one: target resolution re-runs on **every frame** while `target_entities` is empty,
+    and a clip whose track names match nothing keeps it empty forever — so the loop is not a
+    one-shot load-path risk, it is the first frame in which that player is playing.
+
+    **And the correction itself was wrong twice, found by the audit that followed and MEASURED on
+    2026-08-31 rather than argued.** (a) "Flat memory" is a claim about the *stack*, not about the
+    process. The loop body decides the rest, and `gizmo-animation`'s queues a boxed `CommandQueue`
+    closure per name-matched visit — against a queue nothing drains until the schedule flushes,
+    which a walk that never returns never reaches. With its guard removed, ten seconds each: a
+    cycle containing a track-named entity peaked at **523 MB and climbing**; the same cycle built
+    out of nameless entities peaked at **5.4 MB, flat**. The regression test was rebuilt to the
+    second shape for that reason — a test whose failure mode is unbounded allocation takes the
+    machine down instead of going red, beside every other test `--no-fail-fast` keeps running.
+    (b) **The two recursive sites do not die alike.** Run with their guards removed under a 1 GB
+    cap: `gizmo-ui`/taffy printed `fatal runtime error: stack overflow, aborting` and died on
+    SIGABRT — the textbook case. The `gizmo-editor` panel never overflowed anything; egui
+    allocates per recursion level (a fresh `CollapsingState` id in `ctx.memory`, an indented
+    `Ui`, the row's shapes) far faster than it consumes stack, so the allocator killed it first.
+    Both end the process without unwinding, and only one of them is a stack overflow.
 
     Three sites now call one guarded walker, `HierarchyExt::descendants_inclusive` (root first,
     then breadth-first, cycle-safe and duplicate-free); the other four carry an inline `visited`

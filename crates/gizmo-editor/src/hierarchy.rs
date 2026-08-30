@@ -229,10 +229,21 @@ fn draw_entity_node(
     //
     // Unlike the five ITERATIVE walks this defect was found alongside — three index-cursor
     // queues in `gizmo-studio`, two `stack.pop()` walks in the per-frame systems — this one
-    // RECURSES, so a `Children` loop does not hang it: it exhausts the thread's stack and the
-    // process ABORTS, with no unwind and no chance to save. (Calling those five breadth-first
-    // was wrong twice over: two of them pop before they push, which is depth-first, and on a
-    // simple cycle their stack never grows at all.) `add_child` refuses to build a cycle, but
+    // RECURSES, so a `Children` loop does not hang it: it ends the process outright, with no
+    // unwind and no chance to save. (Calling those five breadth-first was wrong twice over:
+    // two of them pop before they push, which is depth-first, and on a simple cycle their
+    // stack never grows at all.)
+    //
+    // It does NOT end it by overflowing the stack, which is what this comment first said.
+    // Measured 2026-08-31 with the guard below made inert and the process capped at 1 GB: it
+    // was killed by the allocator without ever printing `has overflowed its stack`, because
+    // egui allocates per recursion level — a fresh `CollapsingState` id stored in `ctx.memory`,
+    // an indented `Ui`, the row's shapes — far faster than it consumes stack. The `gizmo-ui`
+    // site, whose recursion is taffy's, IS the textbook case: run the same way it printed
+    // `fatal runtime error: stack overflow, aborting` and died on SIGABRT. Two recursive
+    // sites, two different deaths.
+    //
+    // `add_child` refuses to build a cycle, but
     // `Children` is an ordinary component that `add_component` writes directly and that scene
     // loading writes verbatim out of a file — and the editor is precisely where someone opens a
     // file they did not write. Unguarded until 2026-08-30.
@@ -745,10 +756,12 @@ mod hierarchy_count_tests {
 
     /// A `Children` cycle must not take the editor down with it.
     ///
-    /// This walk RECURSES, so unlike the breadth-first ones it does not hang on a cycle — it
-    /// exhausts the thread's stack, and a stack overflow in Rust is an immediate abort: no
-    /// unwind, no `catch_unwind`, no chance to save the scene. Which is also why this test needs
-    /// no deadline harness: the pre-fix failure kills the test binary, and cargo reports that.
+    /// This walk RECURSES, so unlike the five ITERATIVE ones — three index-cursor queues in
+    /// `gizmo-studio`, two `stack.pop()` (i.e. depth-first) walks in the per-frame systems — it
+    /// does not hang on a cycle: it kills the process, with no unwind and no chance to save the
+    /// scene. Which is also why this test needs no deadline harness: the pre-fix failure kills
+    /// the test binary, and cargo reports that. Measured 2026-08-31, the death is the
+    /// ALLOCATOR's rather than the stack's — see the note on the `visited` parameter.
     ///
     /// The cycle is built by writing `Children` directly, because that is how one actually
     /// arrives: `add_child` refuses to create one, but `SceneData::instantiate_entities` writes

@@ -59,10 +59,17 @@ pub fn animation_system(
             // keeps it empty forever — so a `Children` loop under an animated root was not a
             // one-shot risk: the first frame in which that player is playing never completes.
             //
-            // The symptom is a FROZEN frame at flat memory, not an out-of-memory kill. This
-            // walk pops before it pushes, so on the simple cycle A→B→C→A the stack holds one
-            // id for the whole infinite run; it grows only when an entity inside the cycle has
-            // more than one child. Unguarded until 2026-08-30.
+            // WHAT AN UNGUARDED CYCLE COSTS DEPENDS ON WHAT IS INSIDE IT, and the first
+            // version of this comment got that wrong. The *stack* is flat: this walk pops
+            // before it pushes, so on the simple cycle A→B→C→A it holds one id for the whole
+            // infinite run, and it grows only where an entity in the cycle has more than one
+            // child. But the loop body is not free. If any entity in the cycle carries an
+            // `EntityName` matching a track, the `commands.entity(entity).insert(Animated)`
+            // below fires on every revisit, and `EntityCommands::insert` pushes a BOXED
+            // closure onto a `CommandQueue` that nothing drains until the schedule flushes —
+            // which a walk that never returns never reaches. So a named entity in the cycle
+            // turns the frozen frame into unbounded heap growth. Corrected 2026-08-31, after
+            // the audit; unguarded until 2026-08-30.
             let mut visited = std::collections::HashSet::new();
             visited.insert(root_id);
             let mut stack = vec![root_id];
@@ -215,6 +222,18 @@ mod tests {
     /// The cycle is written straight into `Children`: `add_child` refuses to build one, but
     /// `SceneData::instantiate_entities` writes a file's parent edges verbatim, and an animated
     /// rig is exactly the kind of thing that arrives out of a file.
+    ///
+    /// **THE NAMED BONE IS DELIBERATELY OUTSIDE THE CYCLE**, and the first version of this test
+    /// had it inside. That matters because it decides how the test fails when the guard is
+    /// removed. A name-matched entity reached inside the loop runs
+    /// `commands.entity(entity).insert(Animated)` on every revisit, and each of those pushes a
+    /// boxed closure onto a `CommandQueue` nothing drains until the schedule flushes — which a
+    /// walk that never returns never reaches. `within` bounds the WAIT, not the work, so the
+    /// worker stays detached and allocating after the deadline fires: on the ~13 GB machine
+    /// `CLAUDE.md` describes, a clear red would turn into an allocation abort taking the rest
+    /// of this binary's tests with it under `--no-fail-fast`. With the cycle built out of
+    /// nameless entities the pre-fix failure is a spin at flat memory, which is the same choice
+    /// `compound_children_cycle.rs` makes and documents for the physics walk.
     #[test]
     fn a_children_cycle_under_an_animated_root_does_not_hang_the_frame() {
         let resolved = within(10, || {
@@ -233,6 +252,8 @@ mod tests {
 
             let root = world.spawn();
             let bone = world.spawn();
+            let loop_a = world.spawn();
+            let loop_b = world.spawn();
 
             let track = Track::new(
                 "bone",
@@ -252,10 +273,15 @@ mod tests {
             );
             world.add_component(bone, EntityName("bone".into()));
             world.add_component(bone, Transform::default());
+            // `loop_a`/`loop_b` carry no `EntityName`, so no track can match them and the
+            // pre-fix spin queues no commands. See the note above.
 
-            // root -> bone -> root. Written directly, bypassing `add_child`'s refusal.
-            world.add_component(root, Children(vec![bone.id()]));
-            world.add_component(bone, Children(vec![root.id()]));
+            // root -> {bone, loop_a}, and loop_a -> loop_b -> loop_a. Written directly,
+            // bypassing `add_child`'s refusal. `loop_a` is listed last, so the walk — which
+            // pops — enters the cycle FIRST and only reaches `bone` if it gets out again.
+            world.add_component(root, Children(vec![bone.id(), loop_a.id()]));
+            world.add_component(loop_a, Children(vec![loop_b.id()]));
+            world.add_component(loop_b, Children(vec![loop_a.id()]));
 
             schedule.run(&mut world, 0.016);
 
@@ -268,7 +294,7 @@ mod tests {
         // Terminating at all is the assertion. These two are the evidence that the frame did
         // the work rather than bailing out early: a system skipped for a missing resource would
         // leave both at zero and pass this test even with the guard deleted.
-        assert_eq!(targets, 1, "the walk reached `bone` through the cycle and resolved it");
+        assert_eq!(targets, 1, "the walk left the cycle and went on to resolve `bone`");
         assert!(elapsed > 0.0, "the player advanced, so the system really ran");
     }
 
