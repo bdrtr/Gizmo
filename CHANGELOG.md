@@ -1038,6 +1038,40 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A malformed glTF file could abort the editor on import, or turn a few hundred bytes into an
+  exponential number of GPU uploads.** The glTF spec says a document's nodes form a disjoint
+  union of strict trees. Nothing enforces it: `gltf` 1.4.1 validates index bounds and vocabulary
+  only — its whole error vocabulary is `IndexOutOfBounds | Invalid | Missing | Oversize |
+  Unsupported`, the word "cycle" appears nowhere in `gltf-json`, and children are stored as plain
+  indices resolved lazily. So `nodes: [{children:[1]}, {children:[0]}]` imports `Ok`.
+
+  `parse_gltf_node` then recursed over `node.children()` with no visited set, no depth cap and no
+  de-duplication, and the two malformed shapes broke it two ways:
+
+  - a **cycle** recursed until the stack was gone — measured with the guard removed:
+    `fatal runtime error: stack overflow, aborting`, SIGABRT. `gltf::import` runs on a worker
+    thread, but this runs on the **main** one, so it takes the editor and its unsaved scene down.
+  - a **DAG** — the same node index named as a child twice — terminates, and is the quieter and
+    more expensive half: each path materialised a separate subtree, re-running the primitive loop
+    and re-uploading its vertex buffers (`mesh_cache` is written at the end of that loop and never
+    consulted before it). A file whose node `i` names node `i+1` twice turns N nodes into 2^N
+    materialisations.
+
+  One `HashSet<usize>` of node indices, shared across every scene root of an import, is both
+  guards. For a conforming file it never fires, so nothing about loading a valid model changes.
+
+  A second, independent walk in the same loader had the same gap in the other direction:
+  `compute_armature_root_transform` climbs the node-parent map from a skin's first joint, and its
+  only exits were reaching a bone of that skin or a node with no parent. A parent loop among
+  non-joint nodes never left it — and this one *grows* while it spins, pushing a `Mat4` per step,
+  so the failure is unbounded allocation rather than a stall. It now stops at the back-edge and
+  keeps the ancestors gathered so far, which is the degradation `gizmo-animation`'s
+  `SkeletonHierarchy::calculate_global_matrices` already documents for the equivalent bone-level
+  walk: a partial transform, not a file that refuses to load.
+
+  Both were found by the audit of the `Children`-cycle sweep below, looking for the walks that
+  sweep's six-site list never named. They are the eighth and ninth.
+
 - **The UI's clickable rectangle could stop matching its visible one, and an unstyled entity
   could take a child out of the layout tree entirely.** Both are consequences of the cycle guard
   added to `gizmo-ui`'s layout mirror in the entry below, found by the audit of that change.

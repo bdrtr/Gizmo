@@ -172,6 +172,17 @@ state instead.
     That third one is why the regression tests assert a surviving entity's write rather than
     watching for a crash: group order comes from a `HashMap`, and the first version of the
     overwrite test passed 7 runs in 20.
+  - **The six-site list was not the whole class, and the method that produced it is the lesson.**
+    It was built by grepping for the ECS `Children` component, so it found every walk that names
+    that type and nothing else. Two more unguarded descents over a *file's* hierarchy sat one
+    layer below it, in `gizmo-renderer`'s glTF loader, and were closed 2026-08-31:
+    `parse_gltf_node` recursed over `node.children()` (a cycle overflows the stack and aborts on
+    the main thread, a DAG materialises 2^N subtrees and re-uploads their vertex buffers), and
+    `compute_armature_root_transform` climbed the node-parent map with no visited set and pushed
+    a `Mat4` per step, so a parent loop grew without bound. `gltf` 1.4.1 does not reject either
+    shape: it validates index bounds and vocabulary only. Both now carry a set; for a conforming
+    file neither fires. **The next sweep of this class should search by SHAPE — a descent over a
+    child list, wherever the list comes from — not by the name of one component.**
   - **`World::compact` never touches sparse storage**, though its rustdoc promises RAM "back to
     the initial defragmented state". A sparse set's reverse index is sized by the largest entity
     id ever inserted and is the largest allocation in the world. Doc corrected 2026-08-25; the

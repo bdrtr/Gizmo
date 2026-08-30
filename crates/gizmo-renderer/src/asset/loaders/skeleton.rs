@@ -103,11 +103,28 @@ fn compute_armature_root_transform(
 
     let mut current_idx = first_joint.index();
     let mut ancestor_transforms: Vec<gizmo_math::Mat4> = Vec::new();
+    // The cycle guard. This walks `node_parents` UPWARD, and its only other exits are reaching a
+    // bone of this skin or a node with no parent entry — so a parent loop among non-joint nodes
+    // never left it. Unlike the descending walks elsewhere in the engine this one also GROWS:
+    // `ancestor_transforms` gains a `Mat4` every step, so the failure is 64 bytes per iteration
+    // until the allocator gives up, not a spin at flat memory. `node_parents` is built from every
+    // node's child list (`loaders/mod.rs`), and nothing on that path rejects a cyclic node graph
+    // — `gltf` 1.4.1 validates index bounds and vocabulary only. `gizmo-animation`'s
+    // `SkeletonHierarchy::calculate_global_matrices` already models the right answer for the
+    // equivalent bone-level walk: bound it, and degrade a loop to identity rather than spin.
+    // Unguarded until 2026-08-31.
+    let mut seen: std::collections::HashSet<usize> = std::collections::HashSet::from([current_idx]);
 
     while let Some(&parent_idx) = node_parents.get(&current_idx) {
         // Stop when we reach another bone — its transform is already baked
         // into the skeleton hierarchy.
         if node_to_bone.contains_key(&parent_idx) {
+            break;
+        }
+        // Back where we started: the chain loops, so there is no root above it. Stopping here
+        // keeps the ancestors gathered so far, which is the same degradation the animation
+        // crate's walk chose — a partial transform, not a refusal to load the file.
+        if !seen.insert(parent_idx) {
             break;
         }
 
@@ -128,4 +145,60 @@ fn compute_armature_root_transform(
     }
 
     root_transform
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The armature-root walk climbs `node_parents` and must not follow a loop.
+    ///
+    /// Unlike the descending walks elsewhere in the engine this one GROWS as it spins —
+    /// `ancestor_transforms` gains a `Mat4` per step — so the failure is unbounded allocation,
+    /// not a spin at flat memory. `node_parents` is built from every node's child list, and
+    /// nothing on that path rejects a cyclic node graph.
+    ///
+    /// A loop is degraded to the ancestors gathered so far rather than refused, which is the
+    /// same choice `gizmo-animation`'s `SkeletonHierarchy::calculate_global_matrices` documents
+    /// for the equivalent bone-level walk: a partial transform, not a file that will not load.
+    #[test]
+    fn a_node_parent_cycle_above_a_joint_terminates() {
+        // Node 0 is the skin's joint; 1 and 2 are non-joint ancestors that name each other, so
+        // climbing from 0 reaches 1, then 2, then 1 again.
+        let json = r#"{
+          "asset": { "version": "2.0" },
+          "nodes": [
+            { "translation": [1.0, 0.0, 0.0] },
+            { "translation": [0.0, 1.0, 0.0], "children": [0] },
+            { "translation": [0.0, 0.0, 1.0], "children": [1] }
+          ],
+          "skins": [ { "joints": [0] } ]
+        }"#;
+        let doc = gltf::Gltf::from_slice(json.as_bytes()).expect("the fixture parses");
+        let skin = doc.skins().next().expect("one skin");
+        let nodes_by_index: Vec<gltf::Node> = doc.nodes().collect();
+
+        // Built the way `load_gltf_from_import` builds it, plus the edge that closes the loop:
+        // 1's parent is 2, and 2's parent is 1.
+        let node_parents: std::collections::HashMap<usize, usize> =
+            [(0, 1), (1, 2), (2, 1)].into_iter().collect();
+        // No node is a bone of this skin except the joint itself, so the "reached a bone" exit
+        // cannot fire and the loop is the only thing left to stop the walk.
+        let node_to_bone: std::collections::HashMap<usize, usize> =
+            [(0usize, 0usize)].into_iter().collect();
+
+        let m = compute_armature_root_transform(&skin, &node_parents, &node_to_bone, &nodes_by_index);
+
+        // Terminating at all is the assertion. The value is the evidence that it gathered the
+        // two real ancestors before the back-edge stopped it rather than bailing out at once:
+        // node 2's translation applied above node 1's.
+        let expected = gizmo_math::Mat4::from_translation(Vec3::new(0.0, 0.0, 1.0))
+            * gizmo_math::Mat4::from_translation(Vec3::new(0.0, 1.0, 0.0));
+        assert!(
+            (m.to_cols_array()[13] - expected.to_cols_array()[13]).abs() < 1e-6
+                && (m.to_cols_array()[14] - expected.to_cols_array()[14]).abs() < 1e-6,
+            "expected the two ancestors composed, got {m:?}"
+        );
+    }
 }

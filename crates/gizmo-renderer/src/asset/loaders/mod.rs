@@ -148,14 +148,22 @@ impl super::AssetManager {
 
         // ── 3. Node tree ──────────────────────────────────────────────────
         let mut roots = Vec::new();
+        // One guard for the whole import, not one per root: a node named by two scenes — or
+        // twice by one scene's root list — is the same duplicate as a node named by two
+        // parents, and it materialises the same subtree twice. See `parse_gltf_node`.
+        let mut materialised: std::collections::HashSet<usize> = std::collections::HashSet::new();
         for scene in document.scenes() {
             for node in scene.nodes() {
+                if !materialised.insert(node.index()) {
+                    continue;
+                }
                 roots.push(self.parse_gltf_node(
                     device,
                     &node,
                     &buffers,
                     &gltf_materials,
                     file_path,
+                    &mut materialised,
                 ));
             }
         }

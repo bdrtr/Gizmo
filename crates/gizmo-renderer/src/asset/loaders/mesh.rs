@@ -46,6 +46,30 @@ fn compute_flat_normals(vertices: &mut [Vertex]) {
 }
 
 impl crate::asset::AssetManager {
+    /// Materialises one glTF node and its subtree.
+    ///
+    /// `materialised` is the cycle-and-DAG guard, shared across every scene root of one import:
+    /// a node index already in it is not descended into a second time. The glTF spec says the
+    /// node graph MUST be a disjoint union of strict trees, so for a conforming file this set
+    /// never fires and nothing changes — but nothing enforces it. `gltf` 1.4.1 validates index
+    /// bounds and vocabulary only (`IndexOutOfBounds | Invalid | Missing | Oversize |
+    /// Unsupported`); the word "cycle" does not appear in `gltf-json` at all, and children are
+    /// stored as plain indices resolved lazily. So `[{children:[1]},{children:[0]}]` imports
+    /// `Ok`, and both malformed shapes were reachable from the studio's asset browser — which
+    /// is exactly where somebody opens a file they did not write:
+    ///
+    /// - a **cycle** recursed forever. Measured with this guard removed: `fatal runtime error:
+    ///   stack overflow, aborting`, SIGABRT — the textbook case, unlike `gizmo-editor`'s
+    ///   hierarchy panel, whose per-level egui allocations reach the allocator's limit before
+    ///   the stack's. `gltf::import` runs on a worker thread, but THIS runs on the main one, so
+    ///   it takes the editor and its unsaved scene with it.
+    /// - a **DAG** terminates and was the quieter, worse one. Each path materialised a separate
+    ///   `GltfNodeData`, re-running the primitive loop and re-uploading its vertex buffers —
+    ///   `mesh_cache` is written at the end of that loop and never consulted before it. A file
+    ///   whose node `i` names node `i+1` twice gives 2^N materialisations from N nodes.
+    ///
+    /// A skipped node is dropped from the tree rather than shared: `GltfNodeData` owns its
+    /// children, so it cannot represent a DAG, and the alternative to dropping is duplicating.
     pub(super) fn parse_gltf_node(
         &mut self,
         device: &wgpu::Device,
@@ -53,6 +77,7 @@ impl crate::asset::AssetManager {
         buffers: &[gltf::buffer::Data],
         materials: &[Material],
         file_name: &str,
+        materialised: &mut std::collections::HashSet<usize>,
     ) -> GltfNodeData {
         let (translation, rotation, scale) = node.transform().decomposed();
 
@@ -202,7 +227,12 @@ impl crate::asset::AssetManager {
 
         let children = node
             .children()
-            .map(|child| self.parse_gltf_node(device, &child, buffers, materials, file_name))
+            .filter(|child| materialised.insert(child.index()))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|child| {
+                self.parse_gltf_node(device, &child, buffers, materials, file_name, materialised)
+            })
             .collect();
 
         GltfNodeData {
@@ -224,6 +254,84 @@ mod tests {
 
     fn wsum(w: [f32; 4]) -> f32 {
         w[0] + w[1] + w[2] + w[3]
+    }
+
+    /// Every node index the tree materialises, depth-first.
+    fn indices(node: &GltfNodeData, out: &mut Vec<usize>) {
+        out.push(node.index);
+        for child in &node.children {
+            indices(child, out);
+        }
+    }
+
+    /// Parses `json`'s first scene root through `parse_gltf_node`, returning the node indices it
+    /// materialised. `None` when the machine has no usable adapter — the crate-wide way a GPU
+    /// test skips rather than fails (see `test_gpu`).
+    ///
+    /// The fixtures below carry no meshes, so nothing is uploaded; the device is needed only
+    /// because it is in the signature.
+    fn materialised_indices(json: &str) -> Option<Vec<usize>> {
+        let _gpu = crate::test_gpu::gpu_lock();
+        let (device, _queue) = pollster::block_on(crate::test_gpu::headless_device())?;
+        let doc = gltf::Gltf::from_slice(json.as_bytes()).expect("the fixture parses");
+        let mut manager = crate::asset::AssetManager::new();
+        let mut seen = std::collections::HashSet::new();
+        let root = doc.scenes().next()?.nodes().next()?;
+        seen.insert(root.index());
+        let tree = manager.parse_gltf_node(&device, &root, &[], &[], "fixture.gltf", &mut seen);
+        let mut out = Vec::new();
+        indices(&tree, &mut out);
+        Some(out)
+    }
+
+    /// A cyclic node graph must not recurse forever.
+    ///
+    /// The glTF spec says the node graph is a disjoint union of strict trees, but nothing
+    /// enforces it: `gltf` 1.4.1 validates index bounds and vocabulary only, children are plain
+    /// lazily-resolved indices, and this document imports `Ok`. The pre-fix failure is not a
+    /// hang — the recursion allocates a `GltfNodeData` per level — so it ends the process, on
+    /// the main thread, taking the editor and its unsaved scene with it.
+    #[test]
+    fn a_cyclic_node_graph_terminates_instead_of_recursing_forever() {
+        let json = r#"{
+          "asset": { "version": "2.0" },
+          "scenes": [ { "nodes": [0] } ],
+          "nodes": [ { "children": [1] }, { "children": [0] } ]
+        }"#;
+        let Some(out) = materialised_indices(json) else {
+            eprintln!("no usable GPU adapter; skipping");
+            return;
+        };
+        // Reaching this line at all is the assertion. The identities are the evidence that the
+        // walk did the work rather than bailing out at the root.
+        assert_eq!(out, vec![0, 1], "each node of the cycle materialised exactly once");
+    }
+
+    /// A node named as a child twice must be materialised once.
+    ///
+    /// This one terminates on its own, which is what makes it the quieter and more expensive
+    /// half: each path used to materialise a SEPARATE subtree, re-running the primitive loop and
+    /// re-uploading its vertex buffers (`mesh_cache` is written at the end of that loop and never
+    /// consulted before it). A ladder whose node `i` names node `i+1` twice turns N nodes into
+    /// 2^N materialisations from a file of a few hundred bytes.
+    #[test]
+    fn a_node_named_twice_is_materialised_once() {
+        let json = r#"{
+          "asset": { "version": "2.0" },
+          "scenes": [ { "nodes": [0] } ],
+          "nodes": [
+            { "children": [1, 2] },
+            { "children": [3] },
+            { "children": [3] },
+            {}
+          ]
+        }"#;
+        let Some(out) = materialised_indices(json) else {
+            eprintln!("no usable GPU adapter; skipping");
+            return;
+        };
+        assert_eq!(out.len(), 4, "0, 1, 2, 3 — node 3 once, not twice: {out:?}");
+        assert_eq!(out.iter().filter(|&&i| i == 3).count(), 1);
     }
 
     #[test]
