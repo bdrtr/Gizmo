@@ -83,10 +83,17 @@ impl ComponentSparseSet {
     /// Writes the data for an entity into the SparseSet. (Adds it or overwrites it).
     ///
     /// # Safety
-    /// `data_ptr` must point to a valid and aligned component instance compatible with
-    /// this set's `info.layout` value. Ownership of the pointer is transferred to the
-    /// SparseSet (the caller must not additionally `drop` the copied value — see
-    /// `std::mem::forget`).
+    /// - `data_ptr` must point to a valid and aligned component instance compatible with this
+    ///   set's `info.layout` value.
+    /// - **Ownership transfers on ENTRY, on every path including an unwind out of this
+    ///   function.** The caller must have relinquished the value *before* calling — a
+    ///   `ManuallyDrop` around it, or a raw buffer it frees without dropping. Forgetting it
+    ///   afterwards is not enough and has not been since 2026-08-31: the overwrite branch copies
+    ///   the incoming bytes in before it drops what they replace, so a panic out of that `Drop`
+    ///   leaves the set owning the new value while a `mem::forget` on the next line never runs —
+    ///   a double free of the value that was just inserted.
+    /// - `data_ptr` must **not** point into this set's own `dense`. The overwrite branch pushes,
+    ///   and `BlobVec::push` may reallocate before it reads the source.
     pub unsafe fn insert(&mut self, entity: u32, data_ptr: *const u8, tick: u32) {
         let e = entity as usize;
         if e >= self.sparse.len() {
@@ -95,23 +102,41 @@ impl ComponentSparseSet {
 
         let existing_row = self.sparse[e];
         if existing_row != u32::MAX {
-            // Zaten var, üzerine yaz
+            // ÜZERİNE YAZMA. The old value still has to be dropped — a component owning heap
+            // memory would leak its allocation on re-insert otherwise — but it is dropped LAST,
+            // out of a slot nothing counts any more.
+            //
+            // Dropping it in place first and copying over it afterwards is what this used to do,
+            // and a component whose `Drop` panics made that undefined: the slot was left
+            // destroyed while `dense.len`, `ticks`, `entities` and `sparse[e]` all still counted
+            // it, so every later read handed out a dangling value and teardown dropped it again.
+            // Nothing here is inconsistent enough for an assertion to notice, which is why the
+            // shape survived the sweep that closed ten of its siblings.
+            //
+            // The fix needs no temporary buffer and no allocation, contrary to the note this
+            // replaces: `dense`'s own tail is the temporary. Push the incoming value at the end,
+            // then swap-remove the row — which puts the new value in place, moves the old one
+            // past `len`, and only then runs its drop glue.
             let row = existing_row as usize;
-            // SAFETY: `row` came from `sparse`, which only ever holds live `dense` indices, so it
-            // is in range. `&mut self` here, so no other reference into `dense` is alive. The old
-            // value is dropped before the overwrite a few lines down — without that, a component
-            // owning heap memory would leak its allocation on re-insert.
-            unsafe {
-                let slot = self.dense.get_unchecked_mut(row);
-                // Üzerine yazmadan ÖNCE eski değeri düşür; aksi halde heap sahibi
-                // bir bileşen (String/Vec) yeniden eklenince eski tahsis sızardı
-                // (çağıran taraf yeni değeri mem::forget ediyor).
-                if let Some(drop_fn) = self.info.drop_fn {
-                    drop_fn(slot);
-                }
-                std::ptr::copy_nonoverlapping(data_ptr, slot, self.info.layout.size());
-            }
+            // Stamped before the drop: everything the set will show has to be final before user
+            // code gets control.
             self.ticks[row].get_mut().changed = tick;
+            // SAFETY: `data_ptr` points at a live value of this set's layout and ownership of it
+            // transferred to this set on entry (see the contract above); it does not point into
+            // `dense`, so the `reserve` inside `push` cannot invalidate it. No pointer is taken
+            // across the push for the same reason.
+            unsafe {
+                self.dense.push(data_ptr);
+            }
+            // SAFETY: `row` came from `sparse`, which only ever holds live `dense` indices, and
+            // the push above only made the vector longer. `swap_remove_and_drop` swaps the new
+            // value at the end down into `row`, decrements `len` — restoring
+            // `dense.len() == ticks.len() == entities.len()` — and drops the old value only
+            // then. A panic out of that `Drop` therefore abandons bytes that are already out of
+            // range: a leak, which is safe, and the set is left holding the new value.
+            unsafe {
+                self.dense.swap_remove_and_drop(row);
+            }
         } else {
             // Yeni satır oluştur
             let row = self.dense.len() as u32;
@@ -312,6 +337,12 @@ impl ComponentSparseSet {
         // exactly `layout`, and `insert` then memcpys it and takes ownership — so the buffer is
         // freed WITHOUT dropping the moved-out value. `src_ptr` is consumed before `insert` can
         // reallocate `dense`, so it cannot dangle.
+        //
+        // This is the second caller of `insert` and it already meets the stricter contract that
+        // function documents. Ownership is relinquished on entry — nothing here would ever drop
+        // `tmp`'s contents — and `tmp` is a fresh allocation rather than a pointer into `dense`,
+        // which the push in the overwrite branch requires. If `insert` unwinds, the set owns the
+        // clone and only the raw `tmp` block leaks; a leak on a panic path is safe.
         unsafe {
             if layout.size() == 0 {
                 let z = std::ptr::NonNull::<u8>::dangling().as_ptr();

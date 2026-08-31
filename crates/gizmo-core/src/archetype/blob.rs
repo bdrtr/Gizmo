@@ -299,6 +299,45 @@ impl BlobVec {
         }
     }
 
+    /// Appends a **bytewise duplicate** of the element at `row`, without cloning it.
+    ///
+    /// After this call the same value exists twice: once at `row` and once at the new last
+    /// index. That is deliberately not a state this type can be left in — exactly one of the two
+    /// must eventually be dropped and the other abandoned (see [`BlobVec::forget_above`]) — and
+    /// it is the whole point. It lets a caller that is about to overwrite a live slot with a
+    /// write it does not control put the old value somewhere *outside* the visible range first,
+    /// so that whatever the write does, no slot is ever both counted and destroyed.
+    ///
+    /// Added 2026-08-31 for [`World::add_bundle`](crate::world::World::add_bundle)'s
+    /// same-archetype branch: it duplicates the row it is about to overwrite, lets
+    /// `Bundle::write_to_archetype` write over the live copy exactly as before, and then drops
+    /// the duplicate — which is a `swap_remove_and_drop` of the last index, and therefore does
+    /// its bookkeeping before it runs any user code. A panic anywhere in between leaves every
+    /// live slot holding either its original value or the new one, and the duplicates above
+    /// `len` are abandoned.
+    ///
+    /// The `reserve` happens **before** the source pointer is taken. Taking it first and pushing
+    /// afterwards would read through a pointer that `grow`'s `realloc` had already moved.
+    ///
+    /// # Safety
+    /// - `row < self.len` must hold, and the slot must be live.
+    /// - The caller must ensure exactly one of the two copies is dropped, and that the other is
+    ///   forgotten rather than dropped.
+    pub(crate) unsafe fn push_copy_of_row(&mut self, row: usize) {
+        debug_assert!(row < self.len);
+        let item_size = self.item_layout.size();
+        if item_size == 0 {
+            self.len += 1;
+            return;
+        }
+        self.reserve(1);
+        // Taken AFTER `reserve`, which is the only step that can move the allocation.
+        let src = self.get_unchecked(row);
+        let dst = self.data.as_ptr().add(self.len * item_size);
+        ptr::copy_nonoverlapping(src, dst, item_size);
+        self.len += 1;
+    }
+
     /// Runs the element's own drop glue on the value at `index`, leaving the slot
     /// **uninitialised** and the length unchanged.
     ///

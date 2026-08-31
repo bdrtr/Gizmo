@@ -400,20 +400,74 @@ state instead.
     touches a counter makes the defect visible to the counter and invisible to Miri, which was
     measured before the fixture was changed.
 
-    **Still open, three shapes.** (1) The SAME-ARCHETYPE branch of `add_bundle` has the identical
-    drop-then-refill shape with no migration involved, and the staging protocol cannot reach it —
-    there is no staged row to abandon, only live slots being overwritten in place. (2) `ComponentSparseSet::insert`'s overwrite
-    branch drops the old value in place before copying the new one over it; the fix needs a
-    temporary of the component's layout, since the source pointer is `*const` and writing through
-    it would be UB. (3) The raw `*ptr = component` assignments in `add_component` and
-    `insert_batch`'s same-archetype branches are the same shape with no `drop_fn` in sight, so
-    any guard placed inside the drop helpers misses them.
+    **The three remaining shapes are answered, 2026-08-31 — but only two of them were defects,
+    and finding that out took reverting the fix and running the tests rather than reading the
+    code.** They had been named here as one family; they are not one.
+
+    (1) **The SAME-ARCHETYPE branch of `add_bundle`. Real, and closed.** Same drop-then-refill,
+    no migration, so the staging protocol has no staged row to abandon — only live slots
+    overwritten in place. The answer is the staging fact used the other way round: `Archetype::len`
+    is `entities.len()`, so a column longer than `entities` is a row nothing can see, and each of
+    the bundle's columns now gets a **bytewise duplicate** of the live row pushed above
+    `entities` (`Column::push_copy_of_row`) *before* the write. `write_to_archetype` then runs at
+    the live row, unchanged and unconstrained, and the duplicates — which are the old values —
+    are dropped afterwards by a `swap_remove_and_drop` of the last index, which shortens before
+    it runs drop glue. Two outcomes and no third: a panic in the write leaves every live slot
+    holding its original value or the new one and abandons the duplicates (which, being
+    duplicates, costs nothing); a panic in the drop loop leaves the bundle fully applied and
+    leaks what it did not reach. Writing into the duplicate row instead and swapping afterwards
+    also works and was rejected: it moves the branch onto `write_to_archetype`'s append path and
+    makes "you must append for every type you name" a new obligation on out-of-crate implementors
+    — and this workspace already ships five `Bundle` impls whose write body is empty.
+
+    (2) **`ComponentSparseSet::insert`'s overwrite branch. Real, and closed — and the fix this
+    file prescribed was not needed.** The line above used to say it "needs a temporary of the
+    component's layout, since the source pointer is `*const`". The premise is true and the
+    conclusion is false: nothing writes through the source pointer, and `dense`'s own tail is the
+    temporary. `push` the incoming bytes at the end, then `swap_remove_and_drop(row)` — which
+    swaps the new value down into place, shortens the vec, and only then drops the old one.
+    Allocation-free, no new `unsafe` argument, three already-audited primitives. It moved the
+    ownership boundary, though, and that half is not optional: the set owns the incoming value
+    from the push onward, so `World::add_component` must relinquish it **before** the call
+    (`ManuallyDrop`) rather than `mem::forget` it after. Left as it was, the fix would have turned
+    an old-value double drop into a new-value double free.
+
+    (3) **The raw `*ptr = component` assignments. NOT A DEFECT — this entry was wrong.** It read
+    the assignment as drop-then-move. Measured on rustc 1.98, against the tree with the
+    assignment still in place: after a panic out of the old value's `Drop`, the slot already held
+    the new value and the drop count was **1**, not 2. rustc lowers `place = value` to move-out,
+    write, drop-the-temporary — `ptr::replace` by another name, and panic-safe. The two
+    regression tests written for this shape are the only ones in the group that stayed **green**
+    when the fix was reverted, which is how it was caught; the other three abort the test binary
+    with a double free.
+
+    What *was* wrong at those two sites is one line later: the tick stamp came after the user
+    code, so a panicking `Drop` left the row holding the new value under the OLD timestamp —
+    invisible to `Changed<T>` and `Added<T>` for good. Measured `(3, 3)` where `(7, 7)` was due.
+    Both sites go through `Column::replace_typed` now, which reads, writes and stamps before it
+    hands the old value back, so the ordering is the code's own rather than a property of the
+    compiler's drop elaboration.
 
     **And a second hazard that is not a double drop at all:** every composite operation updates
     parallel arrays — a column's `len`, `entities`, `ticks`, `sparse` — one after another, so an
     unwind anywhere in the middle leaves them disagreeing. Column bounds are `debug_assert` only,
     so a release build then indexes past the column. Fixing the drops does not fix that; it wants
     the composites to be written so the last write is the one that makes the change visible.
+    `Column::swap_remove_and_drop` is the root and is fixed (ticks first, then the data — the
+    tick half is `Copy` and cannot unwind, the data half runs the element's `Drop` and can).
+    **Still open above it**, from a sweep run 2026-08-31 with the three shapes above closed:
+    `Archetype::swap_remove_entity` and `Archetype::clear` run every column's drop glue before
+    touching `entities`; `stage_entity_into`'s source-only drop loop runs user code while the
+    source `entities` is still at full length; `ComponentSparseSet::remove` and `::clear` repair
+    all four arrays only after the drops; `World::spawn_batch` calls `push_entity` *before*
+    `write_to_archetype`, which is the exact inverse of the staged-row protocol; and
+    `Archetype::batch_clone_row` grows every column with user `Clone` calls before pushing any
+    id. All are reachable from safe code, and all but the last leave `entities` LONGER than some
+    column — the direction `query::fetch` turns into an unchecked read, since it bounds itself by
+    `Archetype::len()` and never checks a column. `batch_clone_row` fails the other way and is
+    therefore corruption rather than unsafety: its columns end longer than `entities`, so nothing
+    reads them, but the archetype is permanently torn between its own columns and every later
+    row index lands somewhere different in each.
 
     **The shape that generates violations is checkable, done 2026-08-31.**
     `Archetype::move_entity_to` does not take an entity — it takes a ROW, and moves whoever is

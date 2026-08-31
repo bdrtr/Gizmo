@@ -59,7 +59,10 @@ pub type SetHook = Box<dyn FnMut(&mut World, Entity) + Send + Sync>;
 /// It is handed the entity only — like every other hook here, it can see neither the value
 /// that was overwritten nor the one that replaced it. Reading the component back out of the
 /// world gives the **new** value; the old one is already dropped by then, because the write
-/// is an assignment (`*ptr = ..`) precisely so a `T: Drop` does not leak.
+/// hands it back undropped ([`Column::replace_typed`](crate::archetype::Column::replace_typed))
+/// and the caller drops it before dispatching — so a `T: Drop` does not leak. That drop is the
+/// only user code between the write and this hook, and it can panic, in which case the value is
+/// installed and stamped and no hook fires at all.
 pub type ReplaceHook = Box<dyn FnMut(&mut World, Entity) + Send + Sync>;
 
 /// The hook lists registered against one component type; the world keeps one of these per

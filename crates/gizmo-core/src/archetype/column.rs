@@ -197,8 +197,64 @@ impl Column {
     /// `row < self.len()` must hold.
     #[inline]
     pub unsafe fn swap_remove_and_drop(&mut self, row: usize) {
-        self.data.swap_remove_and_drop(row);
+        // TICKS FIRST, and the order is the whole safety property. `ComponentTicks` is `Copy`,
+        // so this line runs no user code and cannot unwind; the line below runs the element's
+        // own `Drop`, which can. With the old order a panicking `Drop` left `ticks` one entry
+        // longer than `data` — `BlobVec::swap_remove_and_drop` decrements its own `len` before
+        // calling the drop glue, so the data half repairs itself and the tick half did not.
+        // A column whose two arrays disagree is indexed past the end of the shorter one by
+        // `query::fetch`, whose bounds are `debug_assert` only. Both arrays are permuted the
+        // same way whichever runs first, so this costs nothing on the normal path.
         self.ticks.swap_remove(row);
+        self.data.swap_remove_and_drop(row);
+    }
+
+    /// Appends a bytewise duplicate of `row` — data and tick alike — without cloning.
+    ///
+    /// See [`BlobVec::push_copy_of_row`]: on return the value exists twice and exactly one of
+    /// the two copies may ever be dropped.
+    ///
+    /// # Safety
+    /// - `row < self.len()` must hold and the slot must be live.
+    /// - The caller must drop exactly one of the two copies and forget the other.
+    #[inline]
+    pub unsafe fn push_copy_of_row(&mut self, row: usize) {
+        self.data.push_copy_of_row(row);
+        self.ticks.push(self.ticks[row]);
+    }
+
+    /// Moves `value` into `row`, stamps the row's tick, and hands the **old value back
+    /// undropped**.
+    ///
+    /// The typed counterpart of `drop_row_in_place` + a write, and it exists so that the two
+    /// callers that overwrite a live component slot cannot get the order wrong.
+    ///
+    /// `*ptr = value` through a raw pointer is **not** the hazard it looks like, and that was
+    /// measured rather than reasoned: rustc lowers it to move-out, write, drop-the-temporary, so
+    /// the slot already holds the new value when the old one's `Drop` runs and a panic there
+    /// leaves nothing destroyed-but-counted. What the assignment does not do is stamp the tick —
+    /// that was the statement *after* it, so a panicking `Drop` left the row holding a new value
+    /// under its old timestamp, invisible to `Changed<T>` and `Added<T>` for good.
+    ///
+    /// So this method buys two things: the tick lands inside the same infallible run as the
+    /// write, and the ordering becomes a property of this code rather than of the compiler's
+    /// drop elaboration. The read, the write and the tick store are memcpys and a `Copy` store,
+    /// so nothing here can unwind; by the time the caller drops what it gets back, the row is
+    /// fully valid and fully stamped, and a panic out of that `Drop` costs the caller its hooks
+    /// rather than its memory.
+    ///
+    /// # Safety
+    /// - `row < self.len()` must hold and the slot must hold a live value.
+    /// - `T` must be this column's component type (`self.type_id() == TypeId::of::<T>()`).
+    #[inline]
+    pub unsafe fn replace_typed<T: 'static>(&mut self, row: usize, value: T, tick: u32) -> T {
+        debug_assert!(row < self.len());
+        debug_assert_eq!(self.type_id, TypeId::of::<T>());
+        let ptr = self.get_mut_ptr(row) as *mut T;
+        let old = ptr::read(ptr);
+        ptr::write(ptr, value);
+        self.ticks_ptr_mut().add(row).write(ComponentTicks::new(tick));
+        old
     }
 
     /// Removes the specified row via swap-remove, moves the value into `out`.

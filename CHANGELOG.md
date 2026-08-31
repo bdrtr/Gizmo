@@ -1043,6 +1043,29 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The last three sites where a panicking component `Drop` could corrupt the world — two of
+  them real.** `add_bundle`'s *same-archetype* branch dropped every component the bundle names
+  and refilled the slots one statement later, so a panic out of a `Drop` or out of a
+  `Bundle` impl left slots that `entities` and the column both still counted holding a destroyed
+  or uninitialised value. The old values are now duplicated bytewise into a row above `entities`
+  — which no query can reach — before the write, and dropped after it, so the two possible
+  outcomes are "the bundle did not land and every old value is intact" and "the bundle landed and
+  what was not reached is leaked". `ComponentSparseSet::insert`'s overwrite branch had the same
+  shape and is fixed the same way, using the dense array's own tail as the temporary rather than
+  the allocation the engineering notes had assumed it would need; the incoming value's ownership
+  now transfers on *entry*, which `World::add_component` had to be changed to respect.
+
+  **The third was not a defect.** The `*ptr = component` assignments in `add_component` and
+  `insert_batch` had been recorded as drop-then-move. Measured on rustc 1.98: they are
+  move-out/write/drop, so the slot is never left destroyed. What *was* wrong is that the change
+  tick was stamped after the user code, so a panicking `Drop` left the row holding a new value
+  under its old timestamp — permanently invisible to `Changed<T>` and `Added<T>`. Both sites now
+  write and stamp in one infallible step.
+
+  Under it all, `Column::swap_remove_and_drop` now shortens its tick array before it runs the
+  element's drop glue rather than after, so a panicking `Drop` can no longer leave a column's two
+  halves disagreeing about how long it is.
+
 - **A panicking component `Drop` could leave the engine running drop glue over uninitialised
   memory.** `World::add_bundle`'s migration branch extended every target column by a row, left
   the columns the bundle was adding uninitialised, and only then called user code — the `Drop` of

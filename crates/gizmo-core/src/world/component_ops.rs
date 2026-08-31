@@ -63,6 +63,17 @@ impl World {
     /// The drop is **silent**: it is not a `Remove`, and no hook or observer sees it. The
     /// bundle path fires nothing at all (below), so there is no phase for it to be reported in.
     ///
+    /// **If a component's `Drop` or the `Bundle` impl panics**, the two branches answer
+    /// differently and both answers are deliberate. A bundle that changes the entity's
+    /// archetype abandons its staged row: the entity survives with **no components and no
+    /// archetype row**, in the same reserved-but-unflushed state a `Commands::spawn` id sits in.
+    /// A bundle that does not change it keeps the entity exactly where it was, with **every
+    /// column holding a live value** — some the new one, some the old — because the old values
+    /// are duplicated out of reach before the write rather than dropped before it. Whatever was
+    /// not reached is leaked, which is the safe answer on a panic path. Neither branch can leave
+    /// a slot that is counted and destroyed; that was possible until 2026-08-31 and needed no
+    /// `unsafe` from the caller to reach.
+    ///
     /// Hooks: an all-`Table` bundle takes the block-move fast path and fires **no**
     /// `on_add`/`on_set` hooks — observers registered with [`World::add_observer`] do not see
     /// it. A bundle carrying a `SparseSet` component is routed through
@@ -149,9 +160,8 @@ impl World {
         };
 
         if old_arch_id == target_arch_id {
-            // Sadece override
-            let loc = self.entity_locations[eid as usize];
-            let arch = &mut self.archetype_index.archetypes[target_arch_id];
+            // SADECE ÜZERİNE YAZMA — no migration, and therefore no staged row to abandon.
+            //
             // Every column this bundle is about to write already holds a LIVE value — same
             // archetype, same row — and `write_to_archetype` copies raw bytes, so it cannot
             // drop what it replaces. Dropping is therefore this function's job, and it has to
@@ -160,16 +170,151 @@ impl World {
             // inside the write the two are indistinguishable — both sit below the column's
             // `len` — so only the caller can tell them apart.
             //
-            // SAFETY: `target_arch_id == old_arch_id`, so this archetype has a column for every
-            // one of `bundle_types` and `loc.row` is the entity's live row in all of them; the
-            // write below re-initialises every slot dropped here.
-            unsafe { drop_live_bundle_rows(arch, &bundle_types, loc.row as usize); }
-            // SAFETY: `write_to_archetype`'s contract is that the bundle writes EVERY column of
-            // this archetype at this row — the archetype was chosen for exactly this bundle's
-            // component set, and `loc.row` is the entity's live row. A bundle that skipped a
-            // column would desync column length from `entities`; `debug_assert_consistent`
-            // catches that in debug builds.
-            unsafe { bundle.write_to_archetype(arch, loc.row as usize, self.tick); }
+            // WHAT THIS USED TO DO WAS DROP THEM FIRST. `drop_live_bundle_rows` walked the
+            // bundle's types calling each column's drop glue, and the write refilled them one
+            // statement later. Both are user code — a component's `Drop`, and a public trait
+            // method any caller may implement — so a panic out of either left slots that
+            // `entities` and the column's own `len` both still counted holding a destroyed or
+            // uninitialised value, and the world's teardown ran the drop glue over them. No
+            // `unsafe` from the caller, no contract broken, and no assertion fires along the
+            // way: every column length still equals `entities.len()`, so
+            // `debug_assert_consistent` passes and `assert_inv` passes.
+            //
+            // THE FIX IS TO PUT THE OLD VALUE OUT OF REACH BEFORE THE WRITE, NOT AFTER IT.
+            // `Archetype::len` is `entities.len()` and every query bounds itself by it, so a
+            // column longer than `entities` is a row nothing can see — the same fact the
+            // migration branch's staged row rests on. Here it is used the other way round: each
+            // of the bundle's columns gets a bytewise DUPLICATE of the live row appended above
+            // `entities`, the bundle writes over the live copy exactly as it always did, and the
+            // duplicate is then dropped by a `swap_remove_and_drop` of the last index, which
+            // does its bookkeeping before it runs the drop glue.
+            //
+            // The panic algebra has only two outcomes, and no third:
+            //   · a panic in the write — every live slot still holds either its original value
+            //     or the new one, and `forget_rows_above` abandons the duplicates. Since they
+            //     are duplicates, the slots the write did not reach lose nothing at all.
+            //   · a panic in the drop loop — the bundle is fully applied, and the old values not
+            //     yet reached are abandoned. A leak on a panic path is safe.
+            // Neither ever leaves a slot both counted and destroyed, which is the only thing
+            // that was ever undefined here.
+            //
+            // Writing the bundle into the duplicate row instead, and swapping afterwards, also
+            // works and was tried. It is worse: it moves every same-archetype `add_bundle` onto
+            // `write_to_archetype`'s append branch, which nothing else in the crate reaches from
+            // this function, and it makes "an implementation must append for every type
+            // `get_infos` names" a new obligation on out-of-crate implementors. This workspace
+            // already ships five `Bundle` impls whose `write_to_archetype` body is empty. Writing
+            // at the live row keeps tick stamping, duplicate-type leak semantics and ZST
+            // handling byte-identical to today by construction rather than by argument.
+            let loc = self.entity_locations[eid as usize];
+            let row = loc.row as usize;
+            let tick = self.tick;
+
+            // Deduplicated by `TypeId`, in bundle order — the same rule `drop_live_bundle_rows`
+            // uses, and load-bearing for the same reason: one column must be duplicated once and
+            // dropped once. A bundle may legitimately name a type twice (`BundleExt::with`
+            // appends rather than substitutes).
+            let mut dedup: Vec<TypeId> = Vec::with_capacity(bundle_types.len());
+            for &t in &bundle_types {
+                if !dedup.contains(&t) {
+                    dedup.push(t);
+                }
+            }
+
+            // THE EVERY-FRAME CASE PAYS NOTHING. If no column this bundle writes has drop glue
+            // there is no old value to drop, no user `Drop` can run, and the plain write was
+            // already sound: whatever a panicking `Bundle` impl does, every slot ends holding a
+            // valid value of the right type — the old one or the new one. This is the shape this
+            // function's own rustdoc calls the "set these fields" call.
+            if dedup.is_empty() || infos.iter().all(|i| i.drop_fn.is_none()) {
+                let arch = &mut self.archetype_index.archetypes[target_arch_id];
+                // SAFETY: as the general path below, minus the duplicates — `target_arch_id ==
+                // old_arch_id`, so every one of the bundle's columns exists here and `row` is
+                // the entity's live row in all of them.
+                unsafe { bundle.write_to_archetype(arch, row, tick) };
+                return;
+            }
+
+            let arch = &mut self.archetype_index.archetypes[target_arch_id];
+            let base_len = arch.len();
+            debug_assert!(row < base_len);
+            #[cfg(debug_assertions)]
+            arch.debug_assert_consistent();
+            // Buy the duplicate row's capacity up front. Not needed for the sound path — every
+            // panic below is caught — but it means a release build whose `Bundle` impl grew a
+            // column behind our back still indexes inside the allocation.
+            arch.reserve_row();
+
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                // 1. Duplicate each of the bundle's live slots above `entities`. Raw memcpy of
+                //    data and tick alike: no clone, no user code, no panic point.
+                for &t in &dedup {
+                    // SAFETY: `&mut Archetype` here, and each type is visited once, so no two
+                    // `&mut Column` overlap.
+                    if let Some(col) = unsafe { arch.get_column_mut(t) } {
+                        // SAFETY: the archetype has a column for every bundle type (same
+                        // archetype) and `row` is the entity's live row in it. Every duplicate
+                        // made here is either dropped by step 3 or abandoned by
+                        // `forget_rows_above` — exactly one of the two copies, which is
+                        // `push_copy_of_row`'s obligation.
+                        unsafe { col.push_copy_of_row(row) };
+                    }
+                }
+
+                // 2. The write, at the LIVE row and unchanged from what it always was. Every
+                //    column is now one row longer than `entities`, so `col.len() > row` holds
+                //    for the bundle's columns exactly as it did before — the same overwrite
+                //    branch, the same tick stamp, the same duplicate-type behaviour.
+                //
+                // SAFETY: `write_to_archetype`'s contract is that the bundle writes every column
+                // it names at this row; the archetype was chosen for this bundle's component set
+                // and `row` is the entity's live row.
+                unsafe { bundle.write_to_archetype(arch, row, tick) };
+
+                // 3. Drop the duplicates, which are the OLD values. `base_len` is the last
+                //    index, so this is a pop-and-drop: `Column::swap_remove_and_drop` shortens
+                //    ticks and data before it calls any drop glue, so a panicking `Drop` leaks
+                //    the values not yet reached rather than leaving one counted and destroyed.
+                for &t in &dedup {
+                    // SAFETY: as step 1 — `&mut Archetype`, one visit per type, so no two
+                    // `&mut Column` overlap.
+                    let col = unsafe { arch.get_column_mut(t) };
+                    let Some(col) = col else { continue };
+                    debug_assert_eq!(
+                        col.len(),
+                        base_len + 1,
+                        "add_bundle: a Bundle impl changed a column's length behind the write"
+                    );
+                    if col.len() != base_len + 1 {
+                        continue;
+                    }
+                    // SAFETY: `base_len` is the duplicate pushed in step 1 and is the column's
+                    // last index; it is out of `entities`' range, so nothing else can see it.
+                    unsafe { col.swap_remove_and_drop(base_len) };
+                }
+            }));
+
+            if let Err(payload) = outcome {
+                // Nothing above ever touched `entities`, so `base_len` is still the entity count
+                // and the only thing that can be out of step is a column one row long. A no-op
+                // for every column that never grew, `entities` included. The entity keeps its
+                // row, its location and its archetype entry — there is nothing else to undo.
+                //
+                // SAFETY: `base_len == entities.len()` and every column is `base_len` or
+                // `base_len + 1` long, which is `forget_rows_above`'s precondition.
+                unsafe {
+                    self.archetype_index.archetypes[target_arch_id].forget_rows_above(base_len)
+                };
+                tracing::warn!(
+                    entity = eid,
+                    "add_bundle: a component `Drop` or `Bundle` impl panicked during a \
+                     same-archetype overwrite; the entity keeps its row and every column holds \
+                     a live value, but some old or new values were abandoned"
+                );
+                std::panic::resume_unwind(payload);
+            }
+            #[cfg(debug_assertions)]
+            self.archetype_index.archetypes[target_arch_id].debug_assert_consistent();
             return;
         }
 
@@ -463,11 +608,18 @@ impl World {
             // only). Previously SparseSet unconditionally fired on_add, so re-adding a
             // SparseSet component double-fired Insert observers — storage-dependent behavior.
             let existed = set.contains(eid);
-            let ptr = &component as *const T as *const u8;
-            // SAFETY: `ptr`, set'in `info.layout`'u ile birebir eşleşen `T` bileşenini gösterir;
-            // sahiplik set'e devredilir ve aşağıda `forget` ile çift-drop engellenir.
+            // OWNERSHIP IS RELINQUISHED BEFORE THE CALL, not after it. `insert`'s overwrite
+            // branch copies these bytes into the set before it drops the value they replace, so
+            // a panic out of that `Drop` unwinds straight out of `add_component` — and a
+            // `mem::forget` sitting on the line after the call would never run, leaving this
+            // frame to drop a value the set already owns. `ManuallyDrop` is the form that cannot
+            // get that wrong: nothing here drops `component` on any path.
+            let component = std::mem::ManuallyDrop::new(component);
+            let ptr = &*component as *const T as *const u8;
+            // SAFETY: `ptr` points at a live `T`, whose layout is exactly the set's `info.layout`
+            // (the set was created from `T`'s own `ComponentInfo`), and it is a stack local
+            // rather than a pointer into `dense`. Ownership passes to the set here.
             unsafe { set.insert(eid, ptr, self.tick); }
-            std::mem::forget(component);
 
             self.run_hooks(type_id, |h, w| {
                 if !existed {
@@ -501,22 +653,25 @@ impl World {
 
         if old_loc.archetype_id == target_arch_id as u32 {
             // Zaten bu archetype'ta (aynı tip tekrar eklenmiş olabilir) — sadece üzerine yaz
-            {
+            let old = {
                 let arch = &self.archetype_index.archetypes[target_arch_id];
                 // SAFETY: query/scheduler bu archetype sütununa ayrık erişimi garanti eder.
                 let col = unsafe { arch.get_column_mut(type_id) }
                     .expect("component column missing in current archetype");
-                // SAFETY: `type_id` is `T`'s, so the column's layout is `T`'s, and `old_loc.row`
-                // is the entity's live row. Assignment (not `ptr::write`) is deliberate: the slot
-                // already holds a live `T` and `*ptr = ..` drops it, where a write would leak.
-                unsafe {
-                    let ptr = col.get_ptr(old_loc.row as usize) as *mut T;
-                    *ptr = component;
-                    col.ticks_ptr_mut()
-                        .add(old_loc.row as usize)
-                        .write(crate::archetype::ComponentTicks::new(self.tick));
-                }
-            }
+                // The old value comes back UNDROPPED and is dropped below, after the slot holds
+                // the new value AND the tick is stamped. `*ptr = component` was already safe in
+                // the first respect — rustc lowers an assignment to move-out/write/drop, which
+                // was measured rather than assumed — but the stamp was the statement after it,
+                // so a component whose `Drop` panicked left the row holding the new value under
+                // the old timestamp, which no tick filter would ever report again.
+                //
+                // SAFETY: `type_id` is `T`'s, so the column's component type is `T`, and
+                // `old_loc.row` is the entity's live row in it.
+                unsafe { col.replace_typed::<T>(old_loc.row as usize, component, self.tick) }
+            };
+            // Before `run_hooks`, deliberately: `ReplaceHook` documents the old value as already
+            // dropped by the time a hook sees the entity.
+            drop(old);
             // An overwrite: `on_set` for every write, then `on_replace` for the half of
             // them that had something to replace. `on_add` is deliberately absent — that is
             // what makes the two lists a partition rather than an overlap.
@@ -850,18 +1005,24 @@ impl World {
                 // SAFETY: batch insert sırasında bu sütuna tekil erişim.
                 let col = unsafe { arch.get_column_mut(type_id) }.unwrap();
                 for e in &group_entities {
+                    // CLONE FIRST, on its own line — the same rule the migration branch below
+                    // states. `*place = component.clone()` happened to evaluate in this order
+                    // too, but only because the language says the value operand goes first;
+                    // written out, the ordering is the code's rather than the reference's.
+                    let value = component.clone();
                     let row = self.entity_locations[e.id() as usize].row as usize;
+                    // Same-archetype overwrite: the slot already holds a live `T`, so the old
+                    // value has to be dropped and `ptr::write` alone would leak it (a
+                    // String/Vec/Handle re-asserted every frame is unbounded heap growth). It
+                    // comes back undropped and is dropped once the slot and the tick are both
+                    // final — the tick being the half the assignment left after the user code.
+                    // See `Column::replace_typed`, and `add_component`'s twin above.
+                    //
                     // SAFETY: every entity in this group is in `target_arch_id` (that is how the
                     // group was formed), so `row` is a live row of the column just taken, and
                     // `type_id` is `T`'s.
-                    unsafe {
-                        // Same-archetype overwrite: the slot already holds a live `T`.
-                        // Assignment (`*ptr = ..`) drops the old value; `ptr::write` would
-                        // leak it for any `T: Drop` (e.g. String/Vec/Handle re-asserted each
-                        // frame → unbounded heap growth). Mirrors `add_component`'s path.
-                        *(col.get_ptr(row) as *mut T) = component.clone();
-                        col.ticks_ptr_mut().add(row).write(crate::archetype::ComponentTicks::new(self.tick));
-                    }
+                    let old = unsafe { col.replace_typed::<T>(row, value, self.tick) };
+                    drop(old);
                 }
                 self.run_hooks(type_id, |h, w| {
                     for e in &group_entities {
@@ -1522,4 +1683,427 @@ mod tests {
         assert_eq!(DROPS.load(Ordering::SeqCst), 1, "the surviving value is dropped by despawn");
     }
 
+    // ── A component whose `Drop` panics, in the three places that overwrite a LIVE slot. ──
+    //
+    // The class: an operation that drops the old value in place and refills the slot one
+    // statement later. A panic out of that drop leaves the slot destroyed while the column's
+    // `len` and the archetype's `entities` both still count it, and the world's teardown then
+    // runs the drop glue over it a second time. It needs no `unsafe` from the caller and breaks
+    // no documented contract — `catch_unwind` is safe std and nothing here promises a
+    // component's `Drop` will not panic.
+    //
+    // WHAT THESE TESTS LOOK LIKE WHEN THEY FAIL is worth knowing before running them. The
+    // payload owns a `String`, so the second drop is an invalid free rather than a count that is
+    // one too high: on an unfixed tree the process ABORTS at teardown (glibc "double free
+    // detected"), taking the whole test binary with it, and under Miri it is reported as a use
+    // after free at the read. A payload whose drop only bumps a counter would make the defect
+    // visible to the counter and INVISIBLE to Miri — measured, not assumed, when the migration
+    // branch was fixed (see `an_abandoned_migration_never_drops_the_column_it_had_not_written_yet`).
+    //
+    // Every fixture declares its component types and its statics INSIDE the test function. The
+    // harness runs tests in parallel, and a shared `ARMED` flag can be consumed by another
+    // test's ordinary drop — which turns "the fixture is wrong if not" into a random failure.
+
+    /// `add_bundle`'s SAME-ARCHETYPE branch: re-asserting components an entity already has.
+    ///
+    /// The bundle's types are already the archetype's, so no migration happens and the staged
+    /// row the migration branch abandons on a panic does not exist here. The old values are
+    /// duplicated above `entities` instead, the write lands on the live row exactly as it always
+    /// did, and the duplicates are dropped afterwards — so the entity ends up with the bundle
+    /// applied and one destructor's worth of leak, rather than with a corpse in its row.
+    #[test]
+    fn a_panicking_drop_during_a_same_archetype_bundle_overwrite_leaves_no_corpse() {
+        use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::SeqCst};
+
+        static PAYLOAD_DROPS: AtomicU32 = AtomicU32::new(0);
+        static ARMED: AtomicBool = AtomicBool::new(false);
+
+        /// Owns a heap allocation. This is the value whose slot used to be left destroyed and
+        /// counted, so its second drop is a genuine invalid free.
+        #[derive(Clone)]
+        struct Payload(String);
+        impl Component for Payload {}
+        impl Drop for Payload {
+            fn drop(&mut self) {
+                PAYLOAD_DROPS.fetch_add(1, SeqCst);
+                // Reads the buffer. `is_empty()` would only read the inline length field, which
+                // stays perfectly initialised on a corpse — the read has to reach the heap for
+                // Miri to have anything to report.
+                let _ = std::hint::black_box(self.0.as_bytes().first().copied());
+            }
+        }
+
+        /// Owns nothing, and is the one that panics — so the value abandoned on the panic path
+        /// leaks no memory and the test stays clean without `-Zmiri-ignore-leaks`.
+        #[derive(Clone)]
+        struct Fuse(&'static str);
+        impl Component for Fuse {}
+        impl Drop for Fuse {
+            fn drop(&mut self) {
+                // Disarmed before it panics: the point of the test is what happens to the OTHER
+                // column, and a second panic during the unwind would abort instead.
+                if self.0 == "BOOM" && ARMED.swap(false, SeqCst) {
+                    panic!("Fuse::drop");
+                }
+            }
+        }
+
+        let mut world = World::new();
+        let e = world.spawn();
+        // First attach: a migration, nothing to drop. Establishes archetype {Payload, Fuse}.
+        world.add_bundle(e, (Payload("old".into()), Fuse("BOOM")));
+        PAYLOAD_DROPS.store(0, SeqCst);
+        ARMED.store(true, SeqCst);
+
+        // Same type set → same archetype → the branch under test. `Payload`'s old value is
+        // dropped cleanly, then `Fuse`'s old value panics.
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            world.add_bundle(e, (Payload("new".into()), Fuse("quiet")));
+        }));
+        assert!(unwound.is_err(), "the drop was supposed to panic; the fixture is wrong if not");
+
+        assert_eq!(
+            PAYLOAD_DROPS.load(SeqCst),
+            1,
+            "exactly one `Payload` was disposed of: the old one. Two means the bundle's own \
+             value was released by the unwind because the write never happened."
+        );
+        assert_eq!(
+            world.query_entity::<&Payload>(e.id()).map(|p| p.0.clone()).as_deref(),
+            Some("new"),
+            "the bundle was applied before any destructor ran, so the row holds the new value"
+        );
+
+        let before = PAYLOAD_DROPS.load(SeqCst);
+        drop(world);
+        assert_eq!(
+            PAYLOAD_DROPS.load(SeqCst),
+            before + 1,
+            "teardown must drop the one live value exactly once"
+        );
+    }
+
+    /// The other half of the same branch: the panic comes out of `Bundle::write_to_archetype`
+    /// rather than out of a `Drop`.
+    ///
+    /// Implementing a trait's `unsafe fn` is something safe code may do, and nothing in
+    /// `write_to_archetype`'s contract says it must return. Half a bundle therefore lands, and
+    /// the columns it did not reach keep their ORIGINAL values — which is only true because the
+    /// old values were duplicated before the write instead of dropped before it.
+    #[test]
+    fn a_bundle_that_gives_up_mid_write_leaves_every_same_archetype_slot_live() {
+        use std::sync::atomic::{AtomicU32, Ordering::SeqCst};
+
+        static PAYLOAD_DROPS: AtomicU32 = AtomicU32::new(0);
+
+        #[derive(Clone)]
+        struct Payload(String);
+        impl Component for Payload {}
+        impl Drop for Payload {
+            fn drop(&mut self) {
+                PAYLOAD_DROPS.fetch_add(1, SeqCst);
+                let _ = std::hint::black_box(self.0.as_bytes().first().copied());
+            }
+        }
+        #[derive(Clone)]
+        struct Tail(String);
+        impl Component for Tail {}
+
+        /// Names two components and writes one.
+        struct HalfWritten(Payload, Tail);
+        impl crate::component::Bundle for HalfWritten {
+            fn get_infos() -> Vec<crate::archetype::ComponentInfo> {
+                vec![
+                    crate::archetype::ComponentInfo::of::<Payload>(),
+                    crate::archetype::ComponentInfo::of::<Tail>(),
+                ]
+            }
+            unsafe fn write_to_archetype(
+                self,
+                arch: &mut crate::archetype::Archetype,
+                row: usize,
+                tick: u32,
+            ) {
+                // SAFETY: forwarded verbatim to the single-component impl, at the row and
+                // archetype this bundle was handed.
+                unsafe { crate::component::Bundle::write_to_archetype(self.0, arch, row, tick) };
+                // Bound so it is released by the unwind rather than left as a dead field — the
+                // ordinary fate of a bundle member an implementation never gets to.
+                let _unwritten = self.1;
+                panic!("HalfWritten::write_to_archetype");
+            }
+        }
+
+        let mut world = World::new();
+        let e = world.spawn();
+        world.add_bundle(e, (Payload("old".into()), Tail("tail".into())));
+        PAYLOAD_DROPS.store(0, SeqCst);
+
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            world.add_bundle(e, HalfWritten(Payload("new".into()), Tail("unused".into())));
+        }));
+        assert!(unwound.is_err(), "the bundle was supposed to panic; the fixture is wrong if not");
+
+        assert_eq!(
+            PAYLOAD_DROPS.load(SeqCst),
+            0,
+            "the write was abandoned before any duplicate was dropped, so nothing was disposed \
+             of yet — a 1 here means the old value was destroyed before the write, which is the \
+             defect"
+        );
+        assert_eq!(
+            world.query_entity::<&Payload>(e.id()).map(|p| p.0.clone()).as_deref(),
+            Some("new"),
+            "the write reached `Payload` before giving up"
+        );
+        assert_eq!(
+            world.query_entity::<&Tail>(e.id()).map(|t| t.0.clone()).as_deref(),
+            Some("tail"),
+            "the write never reached `Tail`, so it must still hold its original value — not a \
+             hole left by a drop that happened up front"
+        );
+
+        drop(world);
+        assert_eq!(
+            PAYLOAD_DROPS.load(SeqCst),
+            1,
+            "teardown drops the live `Payload` once; the abandoned old value is leaked, which \
+             is the safe answer on a panic path"
+        );
+    }
+
+    /// `add_component`'s same-archetype overwrite — the `*ptr = component` shape, and the one
+    /// place in this family where the defect turned out **not to be there**.
+    ///
+    /// `docs/ENGINE.md` §3 listed these assignments as the third open shape, on the reading that
+    /// `*ptr = value` drops the old value and then moves the new one in. It does not.
+    /// **Measured on rustc 1.98**, against the tree with the assignment still in place: after a
+    /// panic out of the old value's `Drop` the slot already held `"new"` and the drop count was
+    /// **1**, not 2 — so rustc lowers the assignment to move-out, write, drop-the-temporary,
+    /// which is `ptr::replace` by another name and is panic-safe. The corpse the doc predicted
+    /// was never there, and the two tests that pin this shape are the only ones in this group
+    /// that stayed GREEN when the fix was reverted.
+    ///
+    /// What *was* wrong is the line after it: the tick stamp came after the user code, so a
+    /// panicking `Drop` left the row holding the new value under the OLD timestamp, invisible to
+    /// `Changed<T>` and `Added<T>` for good. That is what this test fails on without the fix,
+    /// and it is why the site was still worth rewriting — `Column::replace_typed` makes the
+    /// ordering the code's own rather than a property of the compiler's drop elaboration, and
+    /// puts the stamp in front of the drop.
+    #[test]
+    fn a_panicking_drop_during_an_overwrite_leaves_the_new_value_installed() {
+        use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::SeqCst};
+
+        static DROPS: AtomicU32 = AtomicU32::new(0);
+        static ARMED: AtomicBool = AtomicBool::new(false);
+
+        #[derive(Clone)]
+        struct Loud(String);
+        impl Component for Loud {}
+        impl Drop for Loud {
+            fn drop(&mut self) {
+                DROPS.fetch_add(1, SeqCst);
+                let _ = std::hint::black_box(self.0.as_bytes().first().copied());
+                if self.0 == "old" && ARMED.swap(false, SeqCst) {
+                    panic!("Loud::drop");
+                }
+            }
+        }
+
+        let mut world = World::new();
+        world.tick = 3;
+        let e = world.spawn();
+        world.add_component(e, Loud("old".into()));
+        DROPS.store(0, SeqCst);
+        ARMED.store(true, SeqCst);
+        world.tick = 7;
+
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            world.add_component(e, Loud("new".into()));
+        }));
+        assert!(unwound.is_err(), "the drop was supposed to panic; the fixture is wrong if not");
+
+        assert_eq!(
+            DROPS.load(SeqCst),
+            1,
+            "only the old value was disposed of. A 2 is the new value being released by the \
+             unwind because the write never happened."
+        );
+        assert_eq!(
+            world.query_entity::<&Loud>(e.id()).map(|l| l.0.clone()).as_deref(),
+            Some("new"),
+            "the slot is refilled before the old value's `Drop` gets control"
+        );
+        // THE HALF THAT WAS ACTUALLY BROKEN. The stamp used to be the statement after the
+        // assignment, so the panic skipped it and the row kept tick 3 while holding "new".
+        assert_eq!(
+            tick_of::<Loud>(&world, e),
+            (7, 7),
+            "the row must be stamped before the old value's `Drop` can unwind past the stamp"
+        );
+
+        drop(world);
+        assert_eq!(DROPS.load(SeqCst), 2, "teardown drops the live value exactly once");
+    }
+
+    /// `(added, changed)` of `T`'s row for `entity`, read straight out of the column.
+    ///
+    /// Change detection is the only thing that can see whether the tick stamp of an overwrite
+    /// happened before or after the user code that may unwind past it, and no query filter
+    /// exposes the raw pair.
+    fn tick_of<T: Component>(world: &World, entity: Entity) -> (u32, u32) {
+        let loc = world.entity_location(entity.id());
+        let arch = &world.archetype_index.archetypes[loc.archetype_id as usize];
+        let col = arch
+            .get_column(std::any::TypeId::of::<T>())
+            .expect("component column missing");
+        let t = col.ticks[loc.row as usize];
+        (t.added, t.changed)
+    }
+
+    /// `insert_batch`'s same-archetype group — `add_component`'s twin, once per member.
+    ///
+    /// The same measurement applies: the assignment was already panic-safe, and the stamp was
+    /// not. The victim is the MIDDLE entity, so the members before it are already written when
+    /// the panic happens and the ones after it are never reached; all three rows must hold a
+    /// live value whichever side of the panic they are on, and the victim's own row must carry
+    /// the tick of the write that landed in it.
+    #[test]
+    fn a_panicking_drop_in_an_insert_batch_group_leaves_every_row_live() {
+        use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::SeqCst};
+
+        static DROPS: AtomicU32 = AtomicU32::new(0);
+        static ARMED: AtomicBool = AtomicBool::new(false);
+
+        #[derive(Clone)]
+        struct Batched(String);
+        impl Component for Batched {}
+        impl Drop for Batched {
+            fn drop(&mut self) {
+                DROPS.fetch_add(1, SeqCst);
+                let _ = std::hint::black_box(self.0.as_bytes().first().copied());
+                if self.0 == "BOOM" && ARMED.swap(false, SeqCst) {
+                    panic!("Batched::drop");
+                }
+            }
+        }
+
+        let mut world = World::new();
+        world.tick = 3;
+        let a = world.spawn();
+        let b = world.spawn();
+        let c = world.spawn();
+        world.add_component(a, Batched("a".into()));
+        world.add_component(b, Batched("BOOM".into()));
+        world.add_component(c, Batched("c".into()));
+        DROPS.store(0, SeqCst);
+        ARMED.store(true, SeqCst);
+        world.tick = 7;
+
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            world.insert_batch(&[a, b, c], Batched("new".into()));
+        }));
+        assert!(unwound.is_err(), "the drop was supposed to panic; the fixture is wrong if not");
+
+        let read = |w: &World, e: Entity| w.query_entity::<&Batched>(e.id()).map(|v| v.0.clone());
+        assert_eq!(read(&world, a).as_deref(), Some("new"), "written before the panic");
+        assert_eq!(
+            read(&world, b).as_deref(),
+            Some("new"),
+            "the victim's own row: refilled before its old value's `Drop` ran"
+        );
+        assert_eq!(read(&world, c).as_deref(), Some("c"), "never reached");
+        assert_eq!(
+            tick_of::<Batched>(&world, b),
+            (7, 7),
+            "the victim's row is stamped before its old value's `Drop` can unwind past the stamp"
+        );
+        assert_eq!(tick_of::<Batched>(&world, c), (3, 3), "never reached, so never restamped");
+
+        // "a"'s old value and "BOOM" itself. "c" was never touched, and the template value and
+        // the clone destined for "c" are released by the unwind.
+        let after_unwind = DROPS.load(SeqCst);
+        drop(world);
+        assert_eq!(
+            DROPS.load(SeqCst) - after_unwind,
+            3,
+            "teardown drops exactly the three live values"
+        );
+    }
+
+    /// `ComponentSparseSet::insert`'s overwrite branch, reached through `add_component`.
+    ///
+    /// Sparse storage has no archetype row to stage or abandon, and the four arrays that
+    /// describe it never disagreed here — the slot was simply destroyed in place with everything
+    /// still counting it. The incoming value goes to the end of `dense` first now, and the
+    /// swap-remove that puts it in place is also what puts the old value out of range before its
+    /// destructor runs.
+    #[test]
+    fn a_panicking_drop_during_a_sparse_overwrite_leaves_the_new_value_installed() {
+        use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::SeqCst};
+
+        static DROPS: AtomicU32 = AtomicU32::new(0);
+        static ARMED: AtomicBool = AtomicBool::new(false);
+
+        #[derive(Clone)]
+        struct SparseLoud(String);
+        impl Component for SparseLoud {
+            fn storage_type() -> crate::component::StorageType {
+                crate::component::StorageType::SparseSet
+            }
+        }
+        impl Drop for SparseLoud {
+            fn drop(&mut self) {
+                DROPS.fetch_add(1, SeqCst);
+                let _ = std::hint::black_box(self.0.as_bytes().first().copied());
+                if self.0 == "old" && ARMED.swap(false, SeqCst) {
+                    panic!("SparseLoud::drop");
+                }
+            }
+        }
+
+        let mut world = World::new();
+        // A second entry, so the set is not a single row and the swap-remove has to permute.
+        let keep = world.spawn();
+        world.add_component(keep, SparseLoud("keep".into()));
+        let e = world.spawn();
+        world.add_component(e, SparseLoud("old".into()));
+        DROPS.store(0, SeqCst);
+        ARMED.store(true, SeqCst);
+
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            world.add_component(e, SparseLoud("new".into()));
+        }));
+        assert!(unwound.is_err(), "the drop was supposed to panic; the fixture is wrong if not");
+
+        // The set's four arrays must still describe each other. `dense` grew by one for the
+        // incoming value and the swap-remove put it back; a panic between the two would have
+        // left them disagreeing.
+        let set = &world.sparse_sets[&std::any::TypeId::of::<SparseLoud>()];
+        assert_eq!(set.dense.len(), set.ticks.len());
+        assert_eq!(set.dense.len(), set.entities.len());
+        for (id, &row) in set.sparse.iter().enumerate() {
+            if row != u32::MAX {
+                assert!((row as usize) < set.dense.len(), "sparse[{id}] names row {row}");
+                assert_eq!(set.entities[row as usize], id as u32);
+            }
+        }
+
+        assert_eq!(
+            DROPS.load(SeqCst),
+            1,
+            "only the old value was disposed of. A 2 is the new value being dropped by the \
+             unwind while the set already owns a copy of it — a double free, and what happens \
+             if the caller relinquishes ownership after the call instead of before it."
+        );
+        assert_eq!(
+            world.query_entity::<&SparseLoud>(e.id()).map(|l| l.0.clone()).as_deref(),
+            Some("new"),
+            "the incoming value is in the set before the old one's destructor runs"
+        );
+
+        let before = DROPS.load(SeqCst);
+        drop(world);
+        assert_eq!(DROPS.load(SeqCst), before + 2, "teardown drops \"new\" and \"keep\"");
+    }
 }

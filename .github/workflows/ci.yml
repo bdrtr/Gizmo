@@ -374,3 +374,12 @@ jobs:
           # despawn/bundle sparse routing, and type-erased sparse ptr access
           # (world::tests::*sparse*).
           cargo miri test -p gizmo-core --lib sparse
+          # The panicking-`Drop` regressions for `add_bundle`'s migration branch live in
+          # `world::tests`, and until 2026-08-31 no filter above reached them — the `sparse` line
+          # matches only the ones with "sparse" in the name, so one of those tests documented
+          # itself as the Miri-visible half of its pair while never being interpreted.
+          #
+          # The filter is the two test NAMES, not the module. `--lib world::tests` was measured
+          # first and abandoned: it was still running after 21 minutes on a developer machine,
+          # against a 45-minute budget this job already spends seven filters out of.
+          cargo miri test -p gizmo-core --lib migration
