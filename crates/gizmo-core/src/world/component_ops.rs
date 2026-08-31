@@ -216,6 +216,28 @@ impl World {
             self.entity_locations[moved as usize].row = old_loc.row;
         }
 
+        // RECORD THE NEW LOCATION BEFORE ANY USER CODE RUNS.
+        //
+        // `move_entity_to` has already put this entity in the target archetype's entity list, so
+        // from here until these two writes the world says two different things about where it
+        // lives. The next two statements both call into user code — `drop_live_bundle_rows` runs
+        // the `Drop` of every component that came across, and `write_to_archetype` is a trait
+        // method a caller can implement — and a panic from either unwinds straight past the
+        // repair, leaving the entity listed in the target with a location naming the source: a
+        // row that by then may not even exist. `catch_unwind` is safe std, nothing here promises
+        // panic safety, and no assertion fires during it. The same reordering closed the
+        // equivalent window in `despawn` and `insert_batch`; this was the third and last of them,
+        // found 2026-08-31 by the second round of the sweep that ruled out truncating
+        // `entity_locations`.
+        //
+        // Both statements below only need `arch` and `new_row`, which are already in hand, so
+        // moving the writes up costs nothing.
+        self.entity_locations[eid as usize] = EntityLocation {
+            archetype_id: target_arch_id as u32,
+            row: new_row,
+        };
+        self.archetype_index.entity_archetype.insert(eid, target_arch_id);
+
         let arch = &mut self.archetype_index.archetypes[target_arch_id];
         // The components the entity already carried came across the migration alive; the ones
         // the bundle is ADDING are holes. Drop the first group and only the first group — that
@@ -227,12 +249,6 @@ impl World {
         unsafe { drop_live_bundle_rows(arch, &live_after_move, new_row as usize); }
         // SAFETY: as above, for the row just pushed into the target archetype during the move.
         unsafe { bundle.write_to_archetype(arch, new_row as usize, self.tick); }
-
-        self.entity_locations[eid as usize] = EntityLocation {
-            archetype_id: target_arch_id as u32,
-            row: new_row,
-        };
-        self.archetype_index.entity_archetype.insert(eid, target_arch_id);
     }
 
     /// Removes every component listed by `B` from `entity` in one archetype migration.
@@ -824,6 +840,16 @@ impl World {
             let migrated = group_entities.len();
             for e in &group_entities {
                 let eid = e.id();
+
+                // CLONE FIRST. `T::clone` is user code, and calling it between the migration and
+                // the location write below would run it in the one window where this entity has
+                // a row in the target archetype and a location still naming the source — the
+                // same inconsistency `despawn` was reordered to close. It cannot reach `&mut
+                // World` without the caller's own `unsafe`, so this is not a soundness fix; it
+                // is the window not existing rather than being hard to reach. Hoisting it out of
+                // the loop instead would be wrong: one clone per entity is the point.
+                let value = component.clone();
+
                 let old_loc = self.entity_locations[eid as usize];
                 let old_row = old_loc.row as usize;
 
@@ -856,7 +882,7 @@ impl World {
                     // uninitialised and `ptr::write` is correct; `type_id` is `T`'s, so the
                     // column's layout matches what is written.
                     unsafe {
-                        std::ptr::write(col.get_ptr(new_row as usize) as *mut T, component.clone());
+                        std::ptr::write(col.get_ptr(new_row as usize) as *mut T, value);
                         col.ticks_ptr_mut().add(new_row as usize).write(crate::archetype::ComponentTicks::new(self.tick));
                     }
                 }

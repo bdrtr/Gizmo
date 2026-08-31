@@ -540,6 +540,26 @@ impl World {
                 }
             }
 
+            // THE ROW IS GONE, SO THE LOCATION MUST GO WITH IT — before any more user code
+            // runs, not at the end of the function.
+            //
+            // The sparse `on_remove` hooks below get a `&mut World`, and until 2026-08-31 they
+            // got it while this entity's location still named the row that had just been
+            // swap-removed out from under it. That row now belongs to whoever was last in the
+            // archetype. A hook that did anything routing through the location — `add_component`
+            // is enough — handed that stale row to `move_entity_to`, which moves whoever is
+            // sitting in it, and dragged a stranger into the target archetype under this
+            // entity's id. (In a debug build `Moved`'s assertion catches that now; in release it
+            // was silent.) Clearing both the location and the archetype-map entry here makes the
+            // world consistent for the hooks instead: the entity has no row and no location, so
+            // every path that asks either question gets the same answer, and `add_component`
+            // returns early through `get_add_component_target`'s `None` rather than acting on a
+            // row that is not this entity's.
+            self.archetype_index.entity_archetype.remove(&id);
+            if let Some(slot) = self.entity_locations.get_mut(id as usize) {
+                *slot = EntityLocation::INVALID;
+            }
+
             // SparseSet components live outside the archetype, so the swap-remove
             // above never touched them. Remove the entity from every sparse set
             // (firing on_remove) BEFORE the id is freed — otherwise the component
@@ -561,6 +581,19 @@ impl World {
                 }
             }
 
+            // A hook cannot be allowed to put the entity BACK while it is being destroyed.
+            // `flush_spawn` on a deferred spawn is enough to do it, and is that function's
+            // documented purpose — the entity is still alive here, so its own liveness guard
+            // does not fire. The row such a hook adds is orphaned the moment the location is
+            // cleared, and orphaned rows are what stop `compact` from truncating the location
+            // table (see there, and `docs/ENGINE.md` §3). Release behaviour is unchanged; a
+            // debug build now names it at the despawn that caused it.
+            debug_assert!(
+                !self.entity_location(id).is_valid(),
+                "an `on_remove` hook re-listed entity {id} into an archetype while it was being \
+                 despawned; that row is about to be orphaned"
+            );
+
             {
                 let entities = self
                     .get_resource::<Entities>()
@@ -568,10 +601,10 @@ impl World {
                 entities.free(e);
             }
 
+            // Cleared above, before the hooks ran. Repeated because a hook may have written a
+            // location for this id in between — see the assertion — and a dead entity must not
+            // be left with a live-looking one whatever else is wrong.
             self.archetype_index.entity_archetype.remove(&id);
-            // Guard: a reserved-but-unflushed entity has no `entity_locations` slot
-            // (see the bounds-safe read above); its location is already effectively
-            // INVALID, so there is nothing to clear.
             if let Some(slot) = self.entity_locations.get_mut(id as usize) {
                 *slot = EntityLocation::INVALID;
             }

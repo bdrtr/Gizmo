@@ -311,14 +311,60 @@ state instead.
       now checked against the bundle's component set, not merely for existence, and that message
       names both ways of reaching it.
 
-    **The one still open, and the reason the list is not shorter:** `despawn` invalidates the
-    location LAST, after its sparse `on_remove` hooks have run with a `&mut World`, while the
-    entity is still alive and its id not yet retired. A hook that puts that id back into an
-    archetype — `flush_spawn` on a deferred spawn is enough, and is that function's documented
-    purpose — leaves the row behind when the final unconditional `INVALID` write lands. The
-    liveness guard above does not help: at that point the entity has not been freed yet. Fixing
-    it means either ordering `despawn` so nothing can re-list the entity after its row is gone,
-    or making the re-list impossible while `is_despawning` names it.
+    - **`despawn` showed its sparse `on_remove` hooks a location naming somebody else's row.**
+      Closed 2026-08-31 by ordering. The hooks run after the archetype row has been swap-removed,
+      and the location was not cleared until the very end of the function — so throughout that
+      window the entity's location named a row that by then belonged to whoever had been last in
+      the archetype. A hook doing anything that routes through the location (`add_component` is
+      enough) handed that row to `move_entity_to`, which moves whoever is *in* a row rather than
+      whoever the caller meant, and dragged a stranger into the target under the dying entity's
+      id. The location and the `entity_archetype` entry are now cleared immediately after the row
+      goes, so the hooks see an entity with no row and no location — one answer to both questions
+      — and `add_component` returns early instead of acting.
+
+      The other half of that window is a hook putting the entity BACK, which `flush_spawn` on a
+      deferred spawn does and which is that function's documented purpose. It cannot be caught by
+      liveness (the id is not retired until after the hooks), so it is a `debug_assert` at the
+      despawn: release behaviour is unchanged, a debug build names it at the cause.
+
+    - **`insert_batch` ran `T::clone` inside the migration window.** Closed 2026-08-31, the last
+      of the ten. The clone sat between `move_entity_to` and the location write, i.e. in the one
+      moment where the entity has a row in the target and a location still naming the source —
+      the same inconsistency `despawn` was reordered to close, reached through user code instead
+      of a hook. It is not a soundness hole for safe code (`Clone::clone(&self)` cannot reach a
+      `&mut World` without the caller's own `unsafe`), which is exactly why it was worth fixing
+      by construction rather than arguing about: the clone happens before the migration now, so
+      the window is not hard to reach, it does not exist. One clone per entity either way.
+
+    - **`add_bundle` ran user code inside its migration window.** Closed 2026-08-31, and it is
+      the ELEVENTH — found by re-running the sweep against the tree with the other ten closed,
+      which is the whole argument for re-running it. Between `move_entity_to` putting the entity
+      in the target archetype and the location write recording that, `add_bundle` called two
+      pieces of user code: the `Drop` of every component carried across, and
+      `Bundle::write_to_archetype`. A panic out of either unwinds past the repair, leaving the
+      entity listed in the target with a location naming the source — a row that by then may not
+      exist. No `unsafe`, no contract broken, no assertion fired: `catch_unwind` is safe std and
+      nothing in the crate promises a component's `Drop` will not panic. Measured with the
+      ordering restored: `entity 1 at archetype 2 row 0, location says archetype 1 row 1`. The
+      location writes moved ahead of the user code — the same reordering `despawn` and
+      `insert_batch` received, and the third and last site with that shape.
+
+    **So all eleven are answered**, eight by the fixes above and three by the observation that
+    they require calling `flush_spawn` twice for one reserved id, which its own contract forbids
+    in writing and which is now a `debug_assert` rather than silent corruption. That still does
+    not make the truncation safe — "no construction the sweep found" is not "no construction",
+    and round two proved the point by finding one after round one had been declared complete. But
+    each round is now cheap and each has come back smaller: ten, then one.
+
+  - **A component whose `Drop` panics is dropped a second time at teardown.** Found 2026-08-31
+    while building the fixture for the item above, and not fixed there. `Column::drop_row_in_place`
+    calls `ptr::drop_in_place`; a panic part-way leaves the value partially destroyed while the
+    column still counts the slot as live, so `BlobVec::clear` drops it again when the world goes.
+    Dropping an already-dropped value is UB, and the regression test above has to arm its panic
+    for exactly one drop to avoid tripping over it. Closing it means either treating a panicking
+    drop as fatal for that slot (mark it dead before calling the drop glue) or documenting that a
+    component's `Drop` must not panic — the first is the honest one, since nothing can enforce
+    the second.
 
     **The shape that generates violations is checkable, done 2026-08-31.**
     `Archetype::move_entity_to` does not take an entity — it takes a ROW, and moves whoever is

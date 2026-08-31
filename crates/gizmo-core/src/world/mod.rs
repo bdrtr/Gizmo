@@ -885,6 +885,137 @@ mod tests {
         }
     }
 
+    /// A sparse `on_remove` hook runs after the entity's archetype row has already been
+    /// swap-removed. Until the location was cleared first, the hook saw a location still naming
+    /// that row — which by then belonged to whoever had been last in the archetype — and
+    /// anything routing through it acted on a stranger.
+    ///
+    /// `add_component` is the shortest way there: it reads the location, hands the row to
+    /// `move_entity_to`, and that function moves whoever is *in* the row rather than whoever the
+    /// caller meant.
+    #[test]
+    fn a_sparse_on_remove_hook_does_not_see_a_location_pointing_at_someone_elses_row() {
+        #[derive(Clone, Debug, PartialEq)]
+        struct SparseTag(u32);
+        impl crate::component::Component for SparseTag {
+            fn storage_type() -> crate::component::StorageType {
+                crate::component::StorageType::SparseSet
+            }
+        }
+        #[derive(Clone, Debug, PartialEq)]
+        struct Late(u32);
+        impl crate::component::Component for Late {}
+
+        let mut world = World::new();
+        world.register_component_type::<SparseTag>();
+        world.register_component_type::<Late>();
+        world.register_on_remove::<SparseTag>(Box::new(|w: &mut World, e: Entity| {
+            // The entity is mid-despawn: no row, no location. This must be a no-op rather than
+            // an action on the row that used to be its.
+            w.add_component(e, Late(1));
+        }));
+
+        // Several entities in one archetype so the victim's row is NOT the last one — that is
+        // what makes the swap-remove move a different entity into it.
+        let a = world.spawn_bundle(Late(10));
+        let victim = world.spawn_bundle(Late(11));
+        let tail = world.spawn_bundle(Late(12));
+        world.add_component(victim, SparseTag(1));
+
+        world.despawn(victim);
+
+        assert_inv(&world, "after a despawn whose sparse on_remove hook touched the world");
+        // The survivors keep their own values: nothing was dragged anywhere.
+        assert_eq!(world.query_entity::<&Late>(a.id()).map(|c| c.0), Some(10));
+        assert_eq!(world.query_entity::<&Late>(tail.id()).map(|c| c.0), Some(12));
+        assert!(!world.is_alive(victim));
+    }
+
+    /// The other half of the same window: a hook that puts the entity BACK. It cannot be
+    /// allowed — the row it adds is orphaned the moment the despawn finishes clearing the
+    /// location — and `flush_spawn`'s own liveness guard does not catch it, because the id is
+    /// not freed until after the hooks. A debug build names it at the despawn.
+    #[test]
+    #[should_panic(expected = "re-listed entity")]
+    fn an_on_remove_hook_that_re_lists_the_entity_is_reported() {
+        #[derive(Clone, Debug, PartialEq)]
+        struct SparseBack(u32);
+        impl crate::component::Component for SparseBack {
+            fn storage_type() -> crate::component::StorageType {
+                crate::component::StorageType::SparseSet
+            }
+        }
+
+        let mut world = World::new();
+        world.register_component_type::<SparseBack>();
+        world.register_on_remove::<SparseBack>(Box::new(|w: &mut World, e: Entity| {
+            w.flush_spawn(e);
+        }));
+
+        let e = world.spawn();
+        world.add_component(e, SparseBack(1));
+        world.despawn(e);
+    }
+
+    /// A component whose `Drop` panics must not leave the world describing an entity two ways.
+    ///
+    /// `add_bundle`'s migration branch calls two pieces of user code AFTER the entity has been
+    /// moved into the target archetype and BEFORE its location is updated: the `Drop` of every
+    /// component that came across, and `Bundle::write_to_archetype`. A panic from either unwinds
+    /// past the location write, leaving the entity listed in the target while its location still
+    /// names the source — and a row there that no longer exists.
+    ///
+    /// Nothing in the crate promises panic safety for a component's `Drop`, `catch_unwind` is
+    /// safe std, and no assertion fires along the way, so this was reachable without `unsafe` and
+    /// without breaking any documented contract. The location is written before the user code
+    /// now, so an unwind leaves the world merely missing a value rather than lying about where
+    /// an entity is.
+    #[test]
+    fn a_panicking_component_drop_during_a_migration_does_not_strand_the_entity() {
+        // The panic is ARMED for exactly one drop. A component whose drop panics leaves its
+        // column slot half-dropped, so the same value is dropped a second time when the world
+        // is torn down at the end of the test — and a second panic there is a double panic, not
+        // the thing under test. (That half-dropped slot is its own question and is not this
+        // test's; see `docs/ENGINE.md` §3.)
+        static ARMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+        #[derive(Clone, Debug)]
+        struct Loud(&'static str);
+        impl crate::component::Component for Loud {}
+        impl Drop for Loud {
+            fn drop(&mut self) {
+                if self.0 == "BOOM"
+                    && ARMED.swap(false, std::sync::atomic::Ordering::SeqCst)
+                {
+                    panic!("Loud::drop");
+                }
+            }
+        }
+        #[derive(Clone, Debug)]
+        struct Tag;
+        impl crate::component::Component for Tag {}
+
+        let mut world = World::new();
+        let neighbour = world.spawn();
+        world.add_bundle(neighbour, (Loud("n"),));
+        let victim = world.spawn();
+        world.add_bundle(victim, (Loud("BOOM"),));
+        assert_inv(&world, "before");
+
+        // The migration {Loud} -> {Loud, Tag} drops the carried-across `Loud("BOOM")` to make
+        // room for the bundle's own value, and that drop panics.
+        ARMED.store(true, std::sync::atomic::Ordering::SeqCst);
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            world.add_bundle(victim, (Loud("x"), Tag));
+        }));
+        assert!(unwound.is_err(), "the drop was supposed to panic; the fixture is wrong if not");
+
+        // Reaching this line at all is most of the assertion — before the fix the world was
+        // internally inconsistent and the next structural touch read a row that was gone.
+        assert_inv(&world, "after an unwind out of the middle of a migration");
+        assert!(world.is_alive(neighbour) && world.is_alive(victim));
+    }
+
     /// A deferred spawn whose entity is despawned before the queue is flushed.
     ///
     /// `Commands::spawn` reserves the id now and queues a `flush_spawn` for later. Despawning

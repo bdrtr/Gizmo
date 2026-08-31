@@ -1043,6 +1043,43 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`add_bundle` could strand an entity between two archetypes if a component's `Drop` panicked.**
+  Its migration branch put the entity in the target archetype, then ran two pieces of user code —
+  the `Drop` of every component carried across, and `Bundle::write_to_archetype` — and only then
+  recorded the new location. A panic out of either unwinds past that record, leaving the entity
+  listed in the target while its location still names the source, at a row that by then may not
+  exist. The next structural touch reads that row.
+
+  Nothing about this needs `unsafe` or breaks a documented contract: `catch_unwind` is safe std,
+  and the crate nowhere promises a component's `Drop` will not panic. Measured with the old
+  ordering: `entity 1 at archetype 2 row 0, location says archetype 1 row 1`. The location writes
+  happen before the user code now — the same reordering `despawn` and `insert_batch` received,
+  and the third and last place with that shape.
+
+- **`insert_batch` cloned the component in the middle of a migration.** `T::clone` is user code,
+  and it was called between the archetype move and the location write — the one moment where the
+  entity has a row in the target archetype and a location still naming the source. Anything that
+  re-entered the world from there saw the same inconsistency a `despawn` hook used to see. It
+  needs the caller's own `unsafe` to reach a `&mut World` from `Clone::clone`, so this is not a
+  soundness fix; the clone simply happens before the migration now, so the window does not exist
+  rather than being hard to reach. Still one clone per entity.
+
+- **A `SparseSet` `on_remove` hook saw the dying entity pointing at somebody else's row.**
+  `despawn` swap-removes the archetype row, then runs the sparse `on_remove` hooks with a
+  `&mut World`, and only cleared the location at the very end of the function. For the whole of
+  that window the entity's location still named the row it had just vacated — a row that now
+  belongs to whichever entity was last in the archetype. A hook doing anything that routes
+  through the location, and `add_component` is enough, handed that row to a migration, which
+  moves whoever is *in* a row rather than whoever the caller meant, and dragged an unrelated
+  entity into the target archetype under the dying entity's id.
+
+  The location and the archetype-map entry are now cleared as soon as the row is gone, so the
+  hooks see an entity with no row and no location and the paths that ask either question agree.
+  A hook that puts the entity *back* — `flush_spawn` on a deferred spawn does, and that is its
+  documented purpose — cannot be caught by liveness, because the id is not retired until after
+  the hooks; that one is a `debug_assert` at the despawn, so release behaviour is unchanged and a
+  debug build names it at the cause.
+
 - **A deferred spawn whose entity was destroyed before the queue ran still took a row.**
   `Commands::spawn` reserves the id and hands the handle out immediately, queuing the storage
   commit for later; despawning that handle before the queue is applied is ordinary use, and the
