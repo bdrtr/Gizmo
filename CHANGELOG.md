@@ -1043,6 +1043,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A migration that moves the wrong entity now says so, at the line that caused it.**
+  `Archetype::move_entity_to` does not take an entity — it takes a *row*, and moves whoever is
+  sitting in it. Every caller has an entity in mind and derives that row from the entity's
+  recorded location, so the two agree only while the location is fresh; when it is stale the
+  migration moves a stranger and the caller files the new row under its own id, leaving two
+  entities wrong and nothing to notice. That is not hypothetical — it is exactly what the
+  duplicated-batch defect below did.
+
+  It now returns a `Moved` naming the entity it actually took, and every call site
+  `debug_assert_eq!`s that against the entity it meant. Nothing changes in release; in tests,
+  under Miri and in CI a stale row is reported as `migration moved entity 3 while the caller
+  meant 0: a stale row` at the migration itself, rather than surfacing later as whatever trips
+  over the corruption first.
+
 - **A duplicated entity in an `insert_batch` or `remove_batch` slice silently corrupted the
   world.** Neither grouping loop deduplicated, so one entity named twice in the caller's slice
   landed in its group twice. The migration loop reads each member's location fresh — and the

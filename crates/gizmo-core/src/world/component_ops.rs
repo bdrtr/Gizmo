@@ -192,7 +192,7 @@ impl World {
             bundle_types.iter().copied().filter(|t| old_arch.has_component(*t)).collect()
         };
 
-        let (new_row, moved_eid) = {
+        let crate::archetype::Moved { moved, new_row, swapped: moved_eid } = {
             // İki archetype'ı FARKLI indekslerden disjoint ödünç al. Aynı Vec'ten
             // iki `&mut ...[i] as *mut` almak, ikinci retag ile ilk pointer'ın
             // provenance'ını geçersiz kılıp onu kullanınca UB üretiyordu (Miri
@@ -205,6 +205,12 @@ impl World {
             // SAFETY: move_entity_to raw sütun kopyaları yapar; ödünçler disjoint.
             unsafe { old_arch.move_entity_to(old_loc.row as usize, target_arch) }
         };
+        // `move_entity_to` takes a ROW and moves whoever is in it. This says the
+        // row was still the one this entity owns — see `Moved`.
+        debug_assert_eq!(
+            moved, eid,
+            "migration moved entity {moved} while the caller meant {eid}: a stale row"
+        );
 
         if let Some(moved) = moved_eid {
             self.entity_locations[moved as usize].row = old_loc.row;
@@ -319,7 +325,7 @@ impl World {
         );
 
         let old_loc = self.entity_locations[eid as usize];
-        let (new_row, moved_eid) = {
+        let crate::archetype::Moved { moved, new_row, swapped: moved_eid } = {
             // İki archetype'ı FARKLI indekslerden disjoint ödünç al. Aynı Vec'ten
             // iki `&mut ...[i] as *mut` almak, ikinci retag ile ilk pointer'ın
             // provenance'ını geçersiz kılıp onu kullanınca UB üretiyordu (Miri
@@ -332,6 +338,12 @@ impl World {
             // SAFETY: move_entity_to raw sütun kopyaları yapar; ödünçler disjoint.
             unsafe { old_arch.move_entity_to(old_loc.row as usize, target_arch) }
         };
+        // `move_entity_to` takes a ROW and moves whoever is in it. This says the
+        // row was still the one this entity owns — see `Moved`.
+        debug_assert_eq!(
+            moved, eid,
+            "migration moved entity {moved} while the caller meant {eid}: a stale row"
+        );
 
         if let Some(moved) = moved_eid {
             self.entity_locations[moved as usize].row = old_loc.row;
@@ -480,7 +492,7 @@ impl World {
         // pointer'ın provenance'ını geçersiz kılıp onu kullanınca UB üretiyordu
         // (Miri Stacked Borrows ihlali). `get_disjoint_mut` iki ayrı indekse
         // aliasing'siz `&mut` verir — unsafe'e gerek yok.
-        let (new_row, moved_eid) = {
+        let crate::archetype::Moved { moved, new_row, swapped: moved_eid } = {
             let [old_arch, target_arch] = self
                 .archetype_index
                 .archetypes
@@ -489,6 +501,12 @@ impl World {
             // SAFETY: move_entity_to raw sütun kopyaları yapar; ödünçler disjoint.
             unsafe { old_arch.move_entity_to(old_row, target_arch) }
         };
+        // `move_entity_to` takes a ROW and moves whoever is in it. This says the
+        // row was still the one this entity owns — see `Moved`.
+        debug_assert_eq!(
+            moved, eid,
+            "migration moved entity {moved} while the caller meant {eid}: a stale row"
+        );
 
         if let Some(moved) = moved_eid {
             self.entity_locations[moved as usize].row = old_row as u32;
@@ -622,7 +640,7 @@ impl World {
 
         // 2. Migration — iki archetype'ı FARKLI indekslerden disjoint ödünç al
         // (aynı Vec'ten iki `&mut ... as *mut` = geçersiz-kılınan-provenance UB'si).
-        let (new_row, moved_eid) = {
+        let crate::archetype::Moved { moved, new_row, swapped: moved_eid } = {
             let [old_arch, target_arch] = self
                 .archetype_index
                 .archetypes
@@ -631,6 +649,12 @@ impl World {
             // SAFETY: move_entity_to raw sütun kopyaları yapar; ödünçler disjoint.
             unsafe { old_arch.move_entity_to(old_loc.row as usize, target_arch) }
         };
+        // `move_entity_to` takes a ROW and moves whoever is in it. This says the
+        // row was still the one this entity owns — see `Moved`.
+        debug_assert_eq!(
+            moved, eid,
+            "migration moved entity {moved} while the caller meant {eid}: a stale row"
+        );
 
         if let Some(moved) = moved_eid {
             self.entity_locations[moved as usize].row = old_loc.row;
@@ -804,7 +828,7 @@ impl World {
                 let old_row = old_loc.row as usize;
 
                 // Disjoint ödünç (source != target, yukarıda 422'de guard'landı).
-                let (new_row, moved_eid) = {
+                let crate::archetype::Moved { moved, new_row, swapped: moved_eid } = {
                     let [old_arch, target_arch] = self
                         .archetype_index
                         .archetypes
@@ -812,7 +836,13 @@ impl World {
                         .expect("source and target archetype indices are distinct and in bounds");
                     // SAFETY: move_entity_to raw sütun kopyaları yapar; ödünçler disjoint.
                     unsafe { old_arch.move_entity_to(old_row, target_arch) }
-                };
+        };
+        // `move_entity_to` takes a ROW and moves whoever is in it. This says the
+        // row was still the one this entity owns — see `Moved`.
+        debug_assert_eq!(
+            moved, eid,
+            "migration moved entity {moved} while the caller meant {eid}: a stale row"
+        );
 
                 if let Some(moved) = moved_eid {
                     self.entity_locations[moved as usize].row = old_row as u32;
@@ -928,7 +958,7 @@ impl World {
                 let old_loc = self.entity_locations[eid as usize];
 
                 // Disjoint ödünç (source != target, yukarıda 520'de guard'landı).
-                let (new_row, moved_eid) = {
+                let crate::archetype::Moved { moved, new_row, swapped: moved_eid } = {
                     let [old_arch, target_arch] = self
                         .archetype_index
                         .archetypes
@@ -936,7 +966,13 @@ impl World {
                         .expect("source and target archetype indices are distinct and in bounds");
                     // SAFETY: move_entity_to raw sütun kopyaları yapar; ödünçler disjoint.
                     unsafe { old_arch.move_entity_to(old_loc.row as usize, target_arch) }
-                };
+        };
+        // `move_entity_to` takes a ROW and moves whoever is in it. This says the
+        // row was still the one this entity owns — see `Moved`.
+        debug_assert_eq!(
+            moved, eid,
+            "migration moved entity {moved} while the caller meant {eid}: a stale row"
+        );
 
                 if let Some(moved) = moved_eid {
                     self.entity_locations[moved as usize].row = old_loc.row;

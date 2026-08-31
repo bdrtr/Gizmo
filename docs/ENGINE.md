@@ -287,11 +287,20 @@ state instead.
     now hold; whether any other generator exists is the open question, and re-running the audit
     against the fixed tree is the next step rather than writing the truncation.
 
-    What is already settled: `move_entity_to` is the shape to watch. It takes
-    `entity_id = self.entities[source_row]` and pushes THAT id into the target, while every
-    caller writes the new location under *its own* `eid` — so any caller whose `old_row` is stale
-    moves the wrong entity and records it under the wrong id. Making it return the id it actually
-    moved, and having callers key on that, would retire the invariant instead of re-proving it.
+    **The shape that generates violations is now checkable, done 2026-08-31.**
+    `Archetype::move_entity_to` does not take an entity — it takes a ROW, and moves whoever is
+    sitting in it, while every caller has an entity in mind and derives the row from that
+    entity's recorded location. The two agree only while that location is fresh. It now returns
+    a `Moved { moved, new_row, swapped }` naming the entity it actually took, and all six call
+    sites `debug_assert_eq!` it against the entity they meant. Free in release; in the suite,
+    under Miri and in CI a stale row is now a named failure at the line that caused it —
+    `migration moved entity 3 while the caller meant 0: a stale row` — instead of corruption
+    found later by whatever trips over it. Verified by removing the batch de-duplication and
+    watching the assertion fire at the migration rather than at the invariant check.
+
+    That does not by itself prove the truncation safe; it makes the assumption it rests on
+    enforced wherever tests run, which is the difference between re-proving the invariant on
+    every future change and being told when it breaks.
 
     **Two counts of this were written down before that one and both were wrong** — 34, then 31 —
     the first by counting the two mentions inside comments, the second by missing that four sites

@@ -117,6 +117,31 @@ unsafe impl Send for Archetype {}
 // `&mut Column` goes through an `unsafe fn` whose contract forbids aliasing.
 unsafe impl Sync for Archetype {}
 
+/// What one [`Archetype::move_entity_to`] actually did.
+///
+/// `moved` exists because the function does not take an entity — it takes a ROW, and moves
+/// whoever is sitting in it. Every caller has an entity in mind and derives the row from that
+/// entity's recorded location, so the two agree only while that location is fresh. When it is
+/// stale the migration moves a stranger and the caller records the new row under its own id,
+/// leaving two entities wrong and nothing to notice: one listed in an archetype its location
+/// does not name, the other pointing at a row it does not occupy.
+///
+/// That is not hypothetical. Until 2026-08-31 a duplicated entity in an `insert_batch` slice
+/// produced exactly it, silently, because the first pass moved the location the second pass then
+/// read. The duplicate is de-duplicated now — and returning the id makes the assumption checkable
+/// instead of assumed, so every call site `debug_assert_eq!`s it against the entity it meant.
+/// In release the check is gone and nothing changes; in the test suite, under Miri and in CI, a
+/// stale row is a named failure at the line that caused it rather than corruption found later.
+pub(crate) struct Moved {
+    /// The entity actually taken from `source_row` — whoever was there, not whoever was meant.
+    pub(crate) moved: u32,
+    /// Its row in the target archetype.
+    pub(crate) new_row: u32,
+    /// The entity swap-removed into the vacated source row, if the source was not the last row.
+    /// Its own recorded row is now `source_row` and the caller has to store that.
+    pub(crate) swapped: Option<u32>,
+}
+
 impl Archetype {
     /// Creates a new empty archetype for the specified component types.
     pub fn new(id: u32, component_infos: &[ComponentInfo]) -> Self {
@@ -309,7 +334,7 @@ impl Archetype {
         &mut self,
         source_row: usize,
         target: &mut Archetype,
-    ) -> (u32, Option<u32>) {
+    ) -> Moved {
         let entity_id = self.entities[source_row];
 
         // 1. Hedef archetype'ın TÜM sütunlarını genişlet (ortak olanları taşı, olmayanları boş bırak)
@@ -357,7 +382,11 @@ impl Archetype {
 
         // 3. Hedef archetype'a entity ID'sini kaydet
         let new_row = target.push_entity(entity_id);
-        (new_row, moved_entity)
+        Moved {
+            moved: entity_id,
+            new_row,
+            swapped: moved_entity,
+        }
     }
 
     /// Get the transition target for the specified type from the edge cache
