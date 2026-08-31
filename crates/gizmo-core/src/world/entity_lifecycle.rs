@@ -237,7 +237,28 @@ impl World {
         let first_entity = self.spawn_bundle(first_bundle);
         entities.push(first_entity);
 
-        let loc = self.entity_locations[first_entity.id() as usize];
+        // `spawn_bundle` fires `on_add`/`on_set`, and `run_hooks` hands those a `&mut World`
+        // that `hooks.rs` documents as free to spawn, despawn and mutate. A hook that despawns
+        // the very entity it was handed leaves this batch with nothing to append to: the
+        // location reads INVALID, whose `archetype_id` is `u32::MAX`, and the loop below
+        // indexed `self.archetype_index.archetypes` with it — "index out of bounds" for any
+        // batch of two or more. The read was also raw, so once `compact` learns to truncate
+        // the location table it would panic one line earlier instead.
+        //
+        // Falling back to the per-entity path is the answer this function already gives when
+        // it cannot use its fast path (see the sparse-component branch above): correct, and
+        // slower only in a case that has already gone strange.
+        let loc = self.entity_location(first_entity.id());
+        if !loc.is_valid() {
+            tracing::debug!(
+                entity = first_entity.id(),
+                "spawn_batch: the first entity did not survive its own hooks; per-entity fallback"
+            );
+            for bundle in iter {
+                entities.push(self.spawn_bundle(bundle));
+            }
+            return entities.into_iter();
+        }
         let target_arch_id = loc.archetype_id as usize;
 
         for bundle in iter {
@@ -443,8 +464,15 @@ impl World {
                     });
                 }
 
-                // Re-fetch location safely after hooks might have mutated state
-                let loc = self.entity_locations[id as usize];
+                // Re-fetch the location after the hooks, which `run_hooks` hands a `&mut World`
+                // and which are documented as free to spawn, despawn and mutate. This line said
+                // "safely" while indexing RAW, which is the one thing that is not safe here: a
+                // hook that reaches `clear_entities` empties this vector outright, and the
+                // re-fetch then panicked with "index out of bounds" on the entity being
+                // despawned. The entry read forty lines up is bounds-checked and carries a
+                // comment explaining why; this one — added precisely because state may have
+                // changed underneath — was not. Fixed 2026-08-31.
+                let loc = self.entity_location(id);
                 if loc.is_valid() {
                     // Archetype'tan verileri temizle
                     if let Some(moved_eid) = self.archetype_index.archetypes

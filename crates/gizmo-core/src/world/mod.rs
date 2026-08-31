@@ -594,6 +594,232 @@ mod tests {
         );
     }
 
+    /// `remove_component` on an entity that was RESERVED but never flushed must be a no-op, not
+    /// a panic.
+    ///
+    /// `Commands::spawn` hands out an id before its queued `flush_spawn` runs, so between those
+    /// two moments the entity is `is_alive` yet owns no archetype row and has no slot in
+    /// `entity_locations`. `remove_component` read that slot *before* the lookup that would have
+    /// told it so, and indexed out of bounds. `add_component` and `add_bundle` both order those
+    /// two steps the other way round — `add_bundle` even carries a comment explaining this exact
+    /// entity — which is what made the asymmetry findable.
+    #[test]
+    fn removing_a_component_from_a_reserved_but_unflushed_entity_is_a_no_op() {
+        #[derive(Clone, Debug, PartialEq)]
+        struct Tbl(u32);
+        impl crate::component::Component for Tbl {}
+
+        let mut world = World::new();
+        world.register_component_type::<Tbl>();
+        // Give the world one flushed entity first, so `entity_locations` is non-empty and the
+        // failure is an out-of-range index rather than an empty-vector one.
+        world.spawn();
+
+        let reserved = {
+            let entities = world
+                .get_resource::<crate::entity::allocator::Entities>()
+                .expect("World::new installs an Entities allocator");
+            entities.reserve_entity()
+        };
+        assert!(
+            world.is_alive(reserved),
+            "a reserved id is alive — which is why the is_alive check at the top does not catch it"
+        );
+
+        // Reaching the next line at all is the assertion.
+        world.remove_component::<Tbl>(reserved);
+
+        assert!(
+            world.query_entity::<&Tbl>(reserved.id()).is_none(),
+            "and nothing was invented for it"
+        );
+    }
+
+    /// The same defect in the batch APIs. Both grouping loops read the location raw between
+    /// `is_alive` — which a reserved id passes — and `is_valid()`, which would have rejected it;
+    /// the raw index is the step in between, so the check that was supposed to catch this ran one
+    /// line too late. A batch is the likelier way to meet it in practice: the caller collects a
+    /// slice of entities from somewhere and hands the whole thing over, so it takes only one
+    /// unflushed member to take the call down.
+    #[test]
+    fn the_batch_apis_skip_a_reserved_but_unflushed_entity_instead_of_panicking() {
+        #[derive(Clone, Debug, PartialEq)]
+        struct Tag(u32);
+        impl crate::component::Component for Tag {}
+
+        let mut world = World::new();
+        world.register_component_type::<Tag>();
+
+        let real = world.spawn_bundle(Tag(1));
+        let reserved = {
+            let entities = world
+                .get_resource::<crate::entity::allocator::Entities>()
+                .expect("World::new installs an Entities allocator");
+            entities.reserve_entity()
+        };
+
+        // A mixed batch — one flushed entity, one reserved-but-unflushed.
+        let batch = [real, reserved];
+        world.insert_batch(&batch, Tag(7));
+        world.remove_batch::<Tag>(&batch);
+
+        // Reaching this line is the assertion; the rest is evidence the real entity was still
+        // processed rather than the whole call bailing out.
+        assert!(
+            world.query_entity::<&Tag>(real.id()).is_none(),
+            "the flushed entity's component was removed by the batch"
+        );
+        assert!(world.is_alive(reserved), "and the reserved id is untouched");
+    }
+
+    /// A hook that tears the world down mid-despawn must not take the despawn with it.
+    ///
+    /// `run_hooks` hands each `on_remove` hook a `&mut World`, and `hooks.rs` documents them as
+    /// free to spawn, despawn and mutate. `World::clear_entities` empties `entity_locations`
+    /// outright, so the re-fetch `despawn` performs *after* its hooks — the one whose whole
+    /// reason for existing is that state may have changed — indexed a vector that was no longer
+    /// there. The entry read is bounds-checked and says so in a comment; the re-fetch said
+    /// "safely" and was not.
+    #[test]
+    fn an_on_remove_hook_that_clears_the_world_does_not_crash_the_despawn() {
+        #[derive(Clone, Debug, PartialEq)]
+        struct Doomed(u32);
+        impl crate::component::Component for Doomed {}
+
+        let mut world = World::new();
+        world.register_component_type::<Doomed>();
+        world.register_on_remove::<Doomed>(Box::new(|w: &mut World, _e: Entity| {
+            w.clear_entities();
+        }));
+
+        let e = world.spawn_bundle(Doomed(1));
+        // Reaching the line after this is the assertion.
+        world.despawn(e);
+
+        // And the world is consistent afterwards: the clear ran, so ids restart.
+        let fresh = world.spawn();
+        assert_eq!(fresh.id(), 0, "the hook's clear took effect");
+        assert!(world.is_alive(fresh));
+    }
+
+    /// `spawn_batch` spawns its first bundle normally to discover the archetype the rest are
+    /// appended into. That first spawn fires `on_add`/`on_set`, and a hook may despawn the
+    /// entity it was just handed — leaving the batch with no archetype at all.
+    ///
+    /// The location then reads `INVALID`, whose `archetype_id` is `u32::MAX`, and the append
+    /// loop indexed the archetype vector with it. So this is not a truncation hazard waiting to
+    /// happen; it is a live "index out of bounds" for any batch of two or more, and a one-element
+    /// batch hides it because the loop body never runs.
+    #[test]
+    fn spawn_batch_survives_a_hook_that_despawns_its_first_entity() {
+        #[derive(Clone, Debug, PartialEq)]
+        struct Suicidal(u32);
+        impl crate::component::Component for Suicidal {}
+
+        let mut world = World::new();
+        world.register_component_type::<Suicidal>();
+        world.register_on_add::<Suicidal>(Box::new(|w: &mut World, e: Entity| {
+            w.despawn(e);
+        }));
+
+        // Three bundles, so the append loop below the first spawn really runs.
+        let spawned: Vec<Entity> = world
+            .spawn_batch((0..3).map(Suicidal))
+            .collect();
+
+        // Reaching this line at all is the assertion.
+        assert_eq!(spawned.len(), 3, "every bundle is still accounted for");
+        // The hook killed each of them, which is what the caller asked for — the point is that
+        // it did so without taking the batch down.
+        for e in spawned {
+            assert!(!world.is_alive(e), "the hook despawned it, as written");
+        }
+    }
+
+    /// Every entity listed in an archetype's row must have a location naming that archetype and
+    /// that row. Nothing enforces it; this checks it.
+    fn assert_locations_agree_with_archetypes(world: &World, context: &str) {
+        for (arch_idx, arch) in world.archetype_index.archetypes.iter().enumerate() {
+            for (row, &id) in arch.entities().iter().enumerate() {
+                let loc = world.entity_location(id);
+                assert!(
+                    loc.is_valid(),
+                    "{context}: entity {id} sits at archetype {arch_idx} row {row} but its \
+                     location is INVALID — it is a ghost, present in the archetype and \
+                     unreachable through the location table"
+                );
+                assert_eq!(
+                    (loc.archetype_id as usize, loc.row as usize),
+                    (arch_idx, row),
+                    "{context}: entity {id} sits at archetype {arch_idx} row {row} but its \
+                     location says archetype {} row {}",
+                    loc.archetype_id,
+                    loc.row
+                );
+            }
+        }
+    }
+
+    /// A duplicated entity in a batch slice must not corrupt the world.
+    ///
+    /// The grouping loop does not deduplicate, so one entity named twice in the caller's slice
+    /// lands in its group twice. The migration loop then re-reads its location — which the first
+    /// pass has just moved to the TARGET archetype — and hands that row to `move_entity_to` on
+    /// the SOURCE archetype, which is a different archetype entirely. So it drags whichever
+    /// entity now occupies that source row into the target and records the new row under the
+    /// duplicated entity's id, leaving the dragged one listed in an archetype it does not
+    /// believe it is in.
+    ///
+    /// Nothing in `insert_batch`'s documentation forbids duplicates, and a caller who collects
+    /// entities from two overlapping sources has no reason to expect them to be forbidden.
+    #[test]
+    fn a_duplicated_entity_in_an_insert_batch_does_not_corrupt_the_world() {
+        #[derive(Clone, Debug, PartialEq)]
+        struct A(u32);
+        impl crate::component::Component for A {}
+        #[derive(Clone, Debug, PartialEq)]
+        struct B(u32);
+        impl crate::component::Component for B {}
+
+        let mut world = World::new();
+        world.register_component_type::<A>();
+        world.register_component_type::<B>();
+
+        let ents: Vec<Entity> = (0..4).map(|i| world.spawn_bundle(A(i))).collect();
+        assert_locations_agree_with_archetypes(&world, "before");
+
+        world.insert_batch(&[ents[0], ents[0]], B(9));
+
+        assert_locations_agree_with_archetypes(&world, "after a duplicated insert_batch");
+        // And the component actually arrived, exactly once, on exactly that entity.
+        assert_eq!(world.query_entity::<&B>(ents[0].id()).map(|c| c.0), Some(9));
+        assert_eq!(world.query::<&B>().unwrap().iter().count(), 1);
+    }
+
+    /// The same shape through `remove_batch`, whose grouping loop is the same code.
+    #[test]
+    fn a_duplicated_entity_in_a_remove_batch_does_not_corrupt_the_world() {
+        #[derive(Clone, Debug, PartialEq)]
+        struct A2(u32);
+        impl crate::component::Component for A2 {}
+        #[derive(Clone, Debug, PartialEq)]
+        struct B2(u32);
+        impl crate::component::Component for B2 {}
+
+        let mut world = World::new();
+        world.register_component_type::<A2>();
+        world.register_component_type::<B2>();
+
+        let ents: Vec<Entity> = (0..4).map(|i| world.spawn_bundle((A2(i), B2(i)))).collect();
+        assert_locations_agree_with_archetypes(&world, "before");
+
+        world.remove_batch::<B2>(&[ents[0], ents[0]]);
+
+        assert_locations_agree_with_archetypes(&world, "after a duplicated remove_batch");
+        assert!(world.query_entity::<&B2>(ents[0].id()).is_none());
+        assert_eq!(world.query::<&B2>().unwrap().iter().count(), 3);
+    }
+
     /// A sparse set's reverse index is sized by the largest entity id ever inserted, not by the
     /// number of entries, and nothing but `clear_entities` used to give that back. `compact`
     /// existed to return RAM "towards the initial defragmented state" and walked straight past

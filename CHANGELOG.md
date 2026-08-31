@@ -1043,6 +1043,62 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A duplicated entity in an `insert_batch` or `remove_batch` slice silently corrupted the
+  world.** Neither grouping loop deduplicated, so one entity named twice in the caller's slice
+  landed in its group twice. The migration loop reads each member's location fresh — and the
+  first pass has just moved that location to the **target** archetype — so the second pass handed
+  a target row to `move_entity_to` on the **source** archetype. That drags whichever entity now
+  occupies that source row into the target and records the new row under the duplicate's id.
+
+  Two entities end up wrong: the dragged one is listed in an archetype its own location does not
+  name, and the duplicate's location points at a row it does not occupy. Neither panics. Every
+  later read and write through those locations lands on a different entity's data — measured as
+  `entity 0 sits at archetype 2 row 0 but its location says archetype 2 row 1`. Nothing in either
+  function's documentation forbids duplicates, and a slice collected from two overlapping sources
+  is an ordinary way to produce one. Duplicates are now collapsed rather than rejected.
+
+- **Five places indexed the entity-location table raw, and each of them could panic.** Three
+  share one cause, the fourth is its mirror image, and the fifth is a live crash in `spawn_batch`.
+
+  **`remove_component`, `insert_batch` and `remove_batch` panicked on an entity that had been
+  reserved but not yet flushed.** `Commands::spawn` hands out an id before the `flush_spawn` it
+  queues has run. Between those two moments the entity is `is_alive` — it has an id and a
+  generation — but owns no archetype row, and if its id is past the end of the location table it
+  has no slot there at all. All three functions checked `is_alive` and then indexed
+  `entity_locations[id]` **raw**, so the call died with `index out of bounds` rather than doing
+  nothing.
+
+  The two batch APIs are the likelier way to meet it: their grouping loops read the location raw
+  *between* `is_alive` and the `loc.is_valid()` test that was meant to catch exactly this, so the
+  guard ran one line too late, and a caller who collects a slice of entities needs only one
+  unflushed member in it to take the whole call down.
+
+  **`despawn` panicked when one of its own hooks cleared the world.** Its re-fetch of the
+  location *after* the `on_remove` hooks — the read whose entire reason for existing is that a
+  hook may have changed things, and which is commented "Re-fetch location safely" — was the raw
+  one. `run_hooks` hands each hook a `&mut World` and `hooks.rs` documents them as free to spawn,
+  despawn and mutate; a hook that reaches `clear_entities` empties the table, and the re-fetch
+  then indexed a vector of length 0. The entry read forty lines above it is bounds-checked and
+  carries a comment explaining why. The one added because state may have changed was not.
+
+  **`spawn_batch` crashed when a hook despawned its first entity.** It spawns the first bundle
+  normally to discover the archetype the rest are appended into. That spawn fires `on_add`/
+  `on_set`, and a hook may despawn the entity it was handed — leaving the batch with no
+  archetype. The location then reads `INVALID`, whose `archetype_id` is `u32::MAX`, and the
+  append loop indexed the archetype vector with it: `index out of bounds` for any batch of two or
+  more. A one-element batch hides it, because the loop body never runs. It now falls back to the
+  per-entity path, which is the same answer the function already gives when it cannot use its
+  fast path.
+
+  All five now read through `World::entity_location`, the bounds-checked accessor that answers
+  `INVALID` for an id past the end — which every branch below them already handled.
+
+  **The class was already known**, which is the part worth recording: `add_bundle` carries a
+  comment describing this exact entity and guards against it, `despawn` handles it, and both have
+  regression tests. Three sites were simply missed. Found while auditing `entity_locations`'
+  indexers for a *different* change — the one below, which reclaims the sparse index and
+  deliberately leaves the location table for its own commit.
+
 - **`World::compact` walked past one of the two largest allocations in the world.** Its
   documentation
   promised RAM "back towards the initial defragmented state"; it shrank the archetypes, the

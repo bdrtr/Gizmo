@@ -233,6 +233,39 @@ state instead.
     `entity_observers` could have its whole map cleared because every value in it was per-entity;
     the resource map holds `Time`, `Input` and the world's own machinery, so it cannot. Closing
     it needs an event-type registry, which is a different change from this one.
+- **Closed 2026-08-31, and found by looking somewhere else.** Auditing the ~30
+  `entity_locations[..]` indexers — to decide whether the location table could be truncated the
+  way the sparse index now is — turned up **six live defects and no truncation**. Five panic
+  today; the sixth corrupts silently, which is worse. `remove_component`, `insert_batch` and `remove_batch` all checked `is_alive` and then
+  indexed the location table raw, and `is_alive` is true for an id `Commands::spawn` reserved but
+  whose queued `flush_spawn` has not run: alive, no archetype row, possibly no slot at all. The
+  two batch loops did it *between* `is_alive` and the `loc.is_valid()` test meant to catch this,
+  so the guard was one line too late to run. The fourth is the mirror image: `despawn` re-reads
+  the location *after* its `on_remove` hooks, precisely because a hook may have changed things —
+  and read it raw. A hook that reaches `clear_entities` empties the table, so the read that
+  exists to survive hook mutation is the one that does not. The fifth is `spawn_batch`: it spawns
+  its first bundle to discover the batch's archetype, that spawn fires `on_add`, and a hook that
+  despawns the entity it was handed leaves the location `INVALID` — `archetype_id == u32::MAX` —
+  which the append loop then used to index the archetype vector. Any batch of two or more; a
+  one-element batch hides it because the loop body never runs.
+
+  **The sixth does not panic, and is the one to be sorry about.** Neither batch grouping loop
+  deduplicated its input, so an entity named twice in the caller's slice was migrated twice. The
+  second pass reads the location the first pass just moved to the TARGET archetype and hands that
+  row to `move_entity_to` on the SOURCE — dragging whichever entity now sits there into the
+  target and recording the new row under the duplicate's id. Two entities are left wrong: one
+  listed in an archetype its location does not name, the other pointing at a row it does not
+  occupy. Measured: `entity 0 sits at archetype 2 row 0 but its location says archetype 2 row 1`.
+  Every later read and write through those locations lands on another entity's data, silently.
+  Duplicates are now collapsed.
+
+  **The class was already understood.** `add_bundle` carries a paragraph describing this exact
+  entity and guards against it; `despawn` handles it; both have regression tests. Three sites were
+  missed anyway. That is the argument for auditing by SHAPE rather than by memory of what was
+  fixed — the same lesson the `Children` sweep learned when its six sites turned out to be nine —
+  and the shape here is one line: `entity_locations[` with no bounds check and no proof that the
+  entity owns a row. All three now read through `World::entity_location`.
+
 - **Open, filed 2026-08-31 by the audit that closed the last two sweep items.** Each was verified
   against the code by an adversarial second pass — six of that audit's twenty claims were refuted,
   so these are the survivors, not the raw list:
@@ -244,8 +277,21 @@ state instead.
     2026-08-31: `entity_locations[..]` is indexed from **33 places in code**, of which **4 carry
     their own length check and 29 do not** — against the single blind indexer `sparse` has — and
     each of the 29 would have to be shown to run only for an entity that owns an archetype row.
-    Deliberately not folded into the sparse change: that proof is its own commit, and mixing it in
-    would have made the sparse fix unreviewable.
+
+    **That audit was run, function by function with an adversarial second pass, and it FAILED —
+    usefully.** Every one of the eleven enclosing functions was first proved safe; the skeptics
+    then broke five of those proofs, and four of the five broke on the same thing: the argument
+    needs an invariant the code does not enforce — *an entity listed in an archetype's row has a
+    valid location naming that archetype and that row*. The only demonstrated generator of
+    violations was the duplicate-batch corruption above, which is now closed, so those four may
+    now hold; whether any other generator exists is the open question, and re-running the audit
+    against the fixed tree is the next step rather than writing the truncation.
+
+    What is already settled: `move_entity_to` is the shape to watch. It takes
+    `entity_id = self.entities[source_row]` and pushes THAT id into the target, while every
+    caller writes the new location under *its own* `eid` — so any caller whose `old_row` is stale
+    moves the wrong entity and records it under the wrong id. Making it return the id it actually
+    moved, and having callers key on that, would retire the invariant instead of re-proving it.
 
     **Two counts of this were written down before that one and both were wrong** — 34, then 31 —
     the first by counting the two mentions inside comments, the second by missing that four sites

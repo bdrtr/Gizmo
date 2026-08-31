@@ -591,7 +591,14 @@ impl World {
         }
 
 
-        let old_loc = self.entity_locations[eid as usize];
+        // `entity_location`, not `entity_locations[eid]`. An id RESERVED from the allocator but
+        // never flushed — `Commands::spawn` hands one out before its queued `flush_spawn` runs —
+        // is `is_alive`, so the check at the top of this function lets it through, yet it owns
+        // no archetype row and may have no slot in the location table at all. Indexing raw
+        // PANICKED with "index out of bounds" for such an id; the accessor answers `INVALID`,
+        // which every branch below already handles. `add_bundle` documents the same entity at
+        // its own guard. Fixed 2026-08-31, here and in `insert_batch`/`remove_batch`.
+        let old_loc = self.entity_location(eid);
 
         // 1. Hedef archetype'ı belirle
         let target_arch_id_opt =
@@ -599,7 +606,7 @@ impl World {
                 .get_remove_component_target(eid, type_id, &self.component_infos);
         let target_arch_id = match target_arch_id_opt {
             Some(id) => id,
-            None => return, // Zaten yok veya hata
+            None => return, // Zaten yok, ya da entity'nin hiç satırı yok
         };
 
         if old_loc.archetype_id == target_arch_id as u32 {
@@ -661,6 +668,15 @@ impl World {
     /// assert_eq!(q.iter().count(), 3);
     /// assert_eq!(q.get(ids[2].id()).unwrap().0, 2);
     /// ```
+    ///
+    /// **A repeated entity in `entities` is applied once.** Duplicates are collapsed rather than
+    /// rejected — a slice collected from two overlapping sources is an ordinary way to make one,
+    /// and there is nothing a second application could usefully mean. Until 2026-08-31 they were
+    /// neither collapsed nor rejected but *migrated twice*, which corrupted the location table
+    /// silently; see the note in the grouping loop.
+    ///
+    /// Entities that are not alive, and ids reserved from the allocator but never flushed, are
+    /// skipped.
     #[tracing::instrument(skip_all, name = "insert_batch")]
     pub fn insert_batch<T: Component + Clone>(&mut self, entities: &[Entity], component: T) {
         if T::storage_type() == crate::component::StorageType::SparseSet {
@@ -675,11 +691,26 @@ impl World {
 
         // 1. Gruplama: source_arch_id -> Vec<Entity>
         let mut groups: std::collections::HashMap<u32, Vec<Entity>> = std::collections::HashMap::new();
+        // Ids already placed in a group — see the note at the `insert` below.
+        let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
 
         for &e in entities {
             if !self.is_alive(e) { continue; }
-            let loc = self.entity_locations[e.id() as usize];
+            // Bounds-checked: `is_alive` is true for an id reserved but never flushed, which
+            // owns no row and may have no slot at all. See `remove_component`.
+            let loc = self.entity_location(e.id());
             if !loc.is_valid() { continue; }
+            // A DUPLICATE IN THE CALLER'S SLICE IS NOT HARMLESS. The migration loop below reads
+            // each member's location fresh, and the first pass writes that location to the
+            // TARGET archetype — so a second pass hands a target row to `move_entity_to` on the
+            // SOURCE archetype, dragging whichever entity now sits at that row into the target
+            // and recording the new row under the duplicate's id. The dragged entity is then
+            // listed in an archetype its own location does not name, and the duplicate's
+            // location points at a row it does not occupy: every later read and write through
+            // it lands on a different entity's data, silently. Nothing here forbids duplicates
+            // and nothing about a slice collected from two overlapping sources suggests they
+            // are forbidden, so they are collapsed rather than rejected. Fixed 2026-08-31.
+            if !seen.insert(e.id()) { continue; }
             groups.entry(loc.archetype_id).or_default().push(e);
         }
 
@@ -822,7 +853,11 @@ impl World {
         }
     }
 
-    /// Batch component removal
+    /// Batch component removal — one archetype lookup per source group instead of per entity.
+    ///
+    /// Same contract as [`World::insert_batch`] on the input: **a repeated entity is applied
+    /// once**, and entities that are not alive or were reserved but never flushed are skipped.
+    /// Removing a component an entity does not have is a no-op for that entity, not an error.
     #[tracing::instrument(skip_all, name = "remove_batch")]
     pub fn remove_batch<T: Component>(&mut self, entities: &[Entity]) {
         if T::storage_type() == crate::component::StorageType::SparseSet {
@@ -834,11 +869,26 @@ impl World {
 
         let type_id = TypeId::of::<T>();
         let mut groups: std::collections::HashMap<u32, Vec<Entity>> = std::collections::HashMap::new();
+        // Ids already placed in a group — see the note at the `insert` below.
+        let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
 
         for &e in entities {
             if !self.is_alive(e) { continue; }
-            let loc = self.entity_locations[e.id() as usize];
+            // Bounds-checked: `is_alive` is true for an id reserved but never flushed, which
+            // owns no row and may have no slot at all. See `remove_component`.
+            let loc = self.entity_location(e.id());
             if !loc.is_valid() { continue; }
+            // A DUPLICATE IN THE CALLER'S SLICE IS NOT HARMLESS. The migration loop below reads
+            // each member's location fresh, and the first pass writes that location to the
+            // TARGET archetype — so a second pass hands a target row to `move_entity_to` on the
+            // SOURCE archetype, dragging whichever entity now sits at that row into the target
+            // and recording the new row under the duplicate's id. The dragged entity is then
+            // listed in an archetype its own location does not name, and the duplicate's
+            // location points at a row it does not occupy: every later read and write through
+            // it lands on a different entity's data, silently. Nothing here forbids duplicates
+            // and nothing about a slice collected from two overlapping sources suggests they
+            // are forbidden, so they are collapsed rather than rejected. Fixed 2026-08-31.
+            if !seen.insert(e.id()) { continue; }
             groups.entry(loc.archetype_id).or_default().push(e);
         }
 
