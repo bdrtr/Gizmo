@@ -376,13 +376,33 @@ state instead.
     source-side drops and `ComponentSparseSet::remove` — all of which inherited the double drop
     and none of which needed touching.
 
-    **Still open, three shapes.** (1) `BlobVec::drop_in_place_at` deliberately leaves the slot
-    uninitialised and unchanged in length, because its caller is about to refill it —
-    `drop_live_bundle_rows` under both branches of `add_bundle`. A panic skips the refill, and in
-    the migration branch it is worse than a double drop: `move_entity_to` has already extended
-    the target's columns with uninitialised holes, so teardown runs drop glue over garbage.
-    Closing it needs take-write-drop (move the old values out, let the bundle fill the slots,
-    then drop the temporaries) or an abort guard. (2) `ComponentSparseSet::insert`'s overwrite
+    **The migration branch of `add_bundle` — the worst of them — closed 2026-08-31**, and the
+    design is worth stating because two obvious answers had already been ruled out. Take-write-
+    drop addresses the drop but not the holes `move_entity_to` leaves, so a panic in
+    `write_to_archetype` still strands them. Catch-and-repair needs to know how far that write
+    got, and nothing reports it.
+
+    What works is not repairing. `Archetype::len` is `entities.len()` and every query bounds
+    itself by it, so a column longer than `entities` is a row nothing can reach — only the drop
+    paths follow a column's own length. So the row is now STAGED: `stage_entity_into` does
+    everything the migration used to except push the id, `write_to_archetype` fills a row no
+    query can see, and `commit_staged_row` — one store into capacity reserved up front, so it
+    cannot fail — is the single instant the row exists. If anything panics first,
+    `forget_rows_above` puts every column's length back and abandons the bytes. **That recovery
+    is identical whatever was written**, which is exactly why not knowing became an acceptable
+    answer. It leaks; a leak on a panic path is safe, and it is the only sound thing to do with
+    memory that is part live and part uninitialised with no way to tell which.
+
+    Verified with Miri rather than argued. With the old ordering:
+    `Undefined Behavior: reading memory at alloc…, but memory is uninitialized`, pointing at
+    `archetype/mod.rs`'s hole and `blob.rs`'s drop loop. With the staging protocol, clean. The
+    regression test's added component owns a `String` for that reason — a payload whose drop only
+    touches a counter makes the defect visible to the counter and invisible to Miri, which was
+    measured before the fixture was changed.
+
+    **Still open, three shapes.** (1) The SAME-ARCHETYPE branch of `add_bundle` has the identical
+    drop-then-refill shape with no migration involved, and the staging protocol cannot reach it —
+    there is no staged row to abandon, only live slots being overwritten in place. (2) `ComponentSparseSet::insert`'s overwrite
     branch drops the old value in place before copying the new one over it; the fix needs a
     temporary of the component's layout, since the source pointer is `*const` and writing through
     it would be UB. (3) The raw `*ptr = component` assignments in `add_component` and

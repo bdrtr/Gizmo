@@ -1047,6 +1047,86 @@ mod tests {
         assert!(world.is_alive(neighbour) && world.is_alive(victim));
     }
 
+    /// The bundle-added column must never be dropped when the migration is abandoned.
+    ///
+    /// This is the sharper half of the panicking-`Drop` defect, and the one the earlier
+    /// invariant test could not see. `stage_entity_into` gives the target a row in EVERY column,
+    /// and the columns this bundle is adding start out as uninitialised bytes that
+    /// `write_to_archetype` is about to fill. If the migration is abandoned before that — a
+    /// `Drop` panicking one statement earlier is enough — those bytes used to stay counted, and
+    /// the world's teardown then ran the component's drop glue over them. Drop of garbage, not
+    /// merely a value dropped twice.
+    ///
+    /// A drop counter on the added type is how that becomes observable: it must stay at zero,
+    /// because no value of it was ever constructed.
+    #[test]
+    fn an_abandoned_migration_never_drops_the_column_it_had_not_written_yet() {
+        static BOOM_ARMED: std::sync::atomic::AtomicBool =
+            std::sync::atomic::AtomicBool::new(false);
+        static TAG_DROPS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+        #[derive(Clone, Debug)]
+        struct Carried(&'static str);
+        impl crate::component::Component for Carried {}
+        impl Drop for Carried {
+            fn drop(&mut self) {
+                if self.0 == "BOOM"
+                    && BOOM_ARMED.swap(false, std::sync::atomic::Ordering::SeqCst)
+                {
+                    panic!("Carried::drop");
+                }
+            }
+        }
+
+        /// The component the BUNDLE ADDS. Its column gets a row from the stage and a value only
+        /// from `write_to_archetype`, so between those two it is uninitialised.
+        ///
+        /// It OWNS A HEAP ALLOCATION on purpose. A payload whose drop only touches a static
+        /// counter makes the defect visible to the counter but invisible to Miri, because
+        /// nothing ever reads the uninitialised bytes — measured, not assumed. Reading the
+        /// `String` in the drop is what turns "a count that is one too high" into a genuine
+        /// use of uninitialised memory, which is what this actually is.
+        #[derive(Clone, Debug)]
+        struct Added(String);
+        impl crate::component::Component for Added {}
+        impl Drop for Added {
+            fn drop(&mut self) {
+                if !self.0.is_empty() {
+                    TAG_DROPS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+            }
+        }
+
+        let mut world = World::new();
+        let neighbour = world.spawn();
+        world.add_bundle(neighbour, (Carried("n"),));
+        let victim = world.spawn();
+        world.add_bundle(victim, (Carried("BOOM"),));
+        TAG_DROPS.store(0, std::sync::atomic::Ordering::SeqCst);
+
+        // {Carried} -> {Carried, Added}. The stage gives `Added` a row of uninitialised bytes;
+        // dropping the carried-across `Carried("BOOM")` to make room for the bundle's own copy
+        // panics before anything fills it.
+        BOOM_ARMED.store(true, std::sync::atomic::Ordering::SeqCst);
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            world.add_bundle(victim, (Carried("x"), Added("payload".to_string())));
+        }));
+        assert!(unwound.is_err(), "the drop was supposed to panic; the fixture is wrong if not");
+
+        assert_inv(&world, "after an abandoned migration");
+        // The bundle's own `Added` is dropped once as the unwind carries the bundle away.
+        // Anything MORE than that is drop glue over the row that was never written.
+        let after_unwind = TAG_DROPS.load(std::sync::atomic::Ordering::SeqCst);
+
+        drop(world);
+        assert_eq!(
+            TAG_DROPS.load(std::sync::atomic::Ordering::SeqCst),
+            after_unwind,
+            "tearing the world down dropped an `Added` that was never constructed — the \
+             abandoned row was still counted"
+        );
+    }
+
     /// A deferred spawn whose entity is despawned before the queue is flushed.
     ///
     /// `Commands::spawn` reserves the id now and queues a `flush_spawn` for later. Despawning

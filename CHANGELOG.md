@@ -1043,6 +1043,27 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A panicking component `Drop` could leave the engine running drop glue over uninitialised
+  memory.** `World::add_bundle`'s migration branch extended every target column by a row, left
+  the columns the bundle was adding uninitialised, and only then called user code — the `Drop` of
+  each component carried across, and `Bundle::write_to_archetype`. A panic out of either unwound
+  past the fill, leaving a row that `entities` counted and whose new columns held garbage; the
+  world's teardown then ran the component's drop glue over it. Worse than a double drop, and
+  reachable with no `unsafe` from the caller: `catch_unwind` is safe std and nothing promised a
+  component's `Drop` would not panic.
+
+  The row is now **staged rather than committed**. `Archetype::len` is `entities.len()` and every
+  query bounds itself by it, so a column longer than `entities` is a row nothing can reach —
+  only the drop paths follow a column's own length. The bundle therefore writes into a row no
+  query can see, and a single store makes it exist. If anything panics first, every column's
+  length goes back and the bytes above it are abandoned: that recovery is the same whatever was
+  written, which is what makes it possible at all. It leaks what those rows owned, which on a
+  panic path is safe and is the only sound answer for memory that is part live and part
+  uninitialised with no way to tell which.
+
+  Confirmed with Miri, not argued: the old ordering reports
+  `Undefined Behavior: … memory is uninitialized`, and the new one is clean.
+
 - **`World::reset_epoch` is new** — how many times `World::clear_entities` has run, and the one
   thing a cache keyed by `Entity` can check itself against. A clear resets the generation counter
   as well as the id counter, so every handle it destroys comes back **bit-identical** attached to

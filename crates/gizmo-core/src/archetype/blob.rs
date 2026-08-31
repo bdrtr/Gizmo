@@ -439,6 +439,27 @@ impl BlobVec {
         self.capacity = self.len;
     }
 
+    /// Abandons every element at or above `len` **without running their drop glue**, and
+    /// without touching the allocation.
+    ///
+    /// This LEAKS whatever those elements owned, deliberately. It exists for one caller:
+    /// `Archetype::forget_rows_above`, which runs when a migration has been abandoned part-way
+    /// and some of the rows above `len` are initialised while others are not — and nothing can
+    /// say which. Dropping them would be drop glue over uninitialised bytes; leaving them
+    /// counted would be the same thing later, at teardown. Forgetting them is the only sound
+    /// answer, and a leak on a panic path is an acceptable one.
+    ///
+    /// It cannot fail: one integer store, no allocation, no user code. That is the whole reason
+    /// the abandon protocol is built on it.
+    ///
+    /// # Safety
+    /// `len <= self.len`. Growing the length this way would count uninitialised memory as live.
+    #[inline]
+    pub(crate) unsafe fn forget_above(&mut self, len: usize) {
+        debug_assert!(len <= self.len);
+        self.len = len;
+    }
+
     /// Drops all elements (without releasing the memory).
     ///
     /// **The length is zeroed BEFORE the drops run**, which is what makes this safe when one of

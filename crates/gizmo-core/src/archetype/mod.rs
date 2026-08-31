@@ -330,19 +330,102 @@ impl Archetype {
     /// `spawn()` + `add_bundle(e, (T,))` into `free(): invalid pointer` for any `T` owning a
     /// heap allocation. The distinction is recoverable only *before* the move, from whether the
     /// SOURCE archetype had that column — see `live_after_move` in `World::add_bundle`.
+    /// Pre-pays every allocation the staged-row protocol will need.
+    ///
+    /// After this, pushing one row into every column and one id into `entities` is a sequence of
+    /// stores — no `realloc`, so no OOM abort and no unwind. That is what lets
+    /// [`Archetype::commit_staged_row`] and [`Archetype::forget_rows_above`] be infallible, and
+    /// their being infallible is what makes the abandon protocol sound.
+    pub(crate) fn reserve_row(&mut self) {
+        for cell in &self.columns {
+            // SAFETY: `&mut self`, and each cell is visited once, so no two `&mut Column`
+            // overlap. Reserving touches only the allocation, not any element.
+            let col = unsafe { &mut *cell.get() };
+            col.data.reserve(1);
+            col.ticks.reserve(1);
+        }
+        self.entities.reserve(1);
+    }
+
+    /// Abandons every row at or above `len` — no drop glue, no allocation, no user code.
+    ///
+    /// The recovery action for a migration that was given up part-way. It does not need to know
+    /// how far the caller got, and that is the point: everything above `len` is about to become
+    /// unreachable, so whether a particular slot holds a live value or uninitialised bytes stops
+    /// mattering. Live ones are leaked, which is safe; uninitialised ones are never touched,
+    /// which is the whole problem being avoided.
+    ///
+    /// # Safety
+    /// `len <= self.entities.len()` and `len <= col.data.len` for every column.
+    pub(crate) unsafe fn forget_rows_above(&mut self, len: usize) {
+        for cell in &self.columns {
+            // SAFETY: as `reserve_row`. `ComponentTicks` is `Copy`, so truncating cannot run
+            // user code either.
+            let col = &mut *cell.get();
+            col.data.forget_above(len);
+            col.ticks.truncate(len);
+        }
+        self.entities.truncate(len);
+    }
+
+    /// Makes a staged row visible.
+    ///
+    /// `Archetype::len` is `entities.len()` and every query bounds itself by it, so a column
+    /// that is longer than `entities` is a row no query can reach. Pushing the id is therefore
+    /// the single moment the row exists — one store into capacity [`reserve_row`] already
+    /// bought, which is why it cannot fail half-way.
+    pub(crate) fn commit_staged_row(&mut self, entity_id: u32) {
+        debug_assert!(
+            self.columns.iter().all(|c| {
+                // SAFETY: shared read of a length under `&mut self`.
+                let col = unsafe { &*c.get() };
+                col.data.len == self.entities.len() + 1
+            }),
+            "commit_staged_row: every column must hold exactly one row beyond `entities`"
+        );
+        self.entities.push(entity_id);
+    }
+
+    /// [`Archetype::stage_entity_into`] followed immediately by
+    /// [`Archetype::commit_staged_row`] — the shape every caller wants that runs no user code
+    /// between the two.
+    ///
+    /// `World::add_bundle` is the exception and calls the halves itself, because it has to write
+    /// the bundle into the staged row before the row may exist. See there.
     pub(crate) unsafe fn move_entity_to(
+        &mut self,
+        source_row: usize,
+        target: &mut Archetype,
+    ) -> Moved {
+        let moved = self.stage_entity_into(source_row, target);
+        target.commit_staged_row(moved.moved);
+        moved
+    }
+
+    /// Everything `move_entity_to` does EXCEPT making the target row visible.
+    ///
+    /// On return the target's columns each hold one row more than its `entities`, at index
+    /// `Moved::new_row`. The row is addressable — `write_to_archetype` writes into it — and
+    /// invisible to every query, because queries bound by `entities.len()`. Until
+    /// [`Archetype::commit_staged_row`] runs it can be abandoned with
+    /// [`Archetype::forget_rows_above`] at no cost and with no knowledge of what was written.
+    ///
+    /// The source is left fully consistent before this returns: its row is gone and its
+    /// `entities` popped, so a caller that abandons the target does not have to undo the source.
+    pub(crate) unsafe fn stage_entity_into(
         &mut self,
         source_row: usize,
         target: &mut Archetype,
     ) -> Moved {
         let entity_id = self.entities[source_row];
 
+        // Buy every allocation up front so nothing below this line can fail on one.
+        target.reserve_row();
+
         // 1. Hedef archetype'ın TÜM sütunlarını genişlet (ortak olanları taşı, olmayanları boş bırak)
         for (type_id, &dst_col_idx) in &target.column_indices {
             let dst_col = &mut *target.columns[dst_col_idx].get();
 
-            // Hedefte her zaman yer açmalıyız ki sütun boyu entity listesiyle uyuşsun
-            dst_col.data.reserve(1);
             let row_to_write = dst_col.data.len;
             dst_col.data.len += 1; // Önce boyutu artır ki get_unchecked_mut geçsin
 
@@ -380,11 +463,11 @@ impl Archetype {
             None
         };
 
-        // 3. Hedef archetype'a entity ID'sini kaydet
-        let new_row = target.push_entity(entity_id);
+        // 3. The row is staged, not committed: the columns hold it, `target.entities` does not
+        //    yet, so no query can see it. `commit_staged_row` is what makes it exist.
         Moved {
             moved: entity_id,
-            new_row,
+            new_row: target.entities.len() as u32,
             swapped: moved_entity,
         }
     }

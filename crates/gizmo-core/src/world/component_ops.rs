@@ -192,6 +192,32 @@ impl World {
             bundle_types.iter().copied().filter(|t| old_arch.has_component(*t)).collect()
         };
 
+        // THE ROW IS STAGED, NOT COMMITTED, AND THAT IS THE WHOLE FIX.
+        //
+        // Both statements further down call USER CODE — `drop_live_bundle_rows` runs the `Drop`
+        // of every component that came across, and `write_to_archetype` is a public trait method
+        // a caller implements. A panic out of either used to unwind past everything after it,
+        // leaving the target archetype holding a row that `entities` counted and whose
+        // bundle-added columns held uninitialised bytes. Teardown then ran drop glue over
+        // garbage, which is worse than a double drop and needs no `unsafe` from the caller to
+        // reach: `catch_unwind` is safe std and nothing here promises a component's `Drop` will
+        // not panic.
+        //
+        // Neither of the two obvious repairs works. Taking the old values out to temporaries
+        // fixes the drop but not the holes the migration itself leaves. Catching the unwind and
+        // repairing needs to know how far `write_to_archetype` got, and nothing reports that.
+        //
+        // What works is not repairing. `Archetype::len` is `entities.len()` and every query
+        // bounds itself by it, so a column longer than `entities` is a row nothing can reach —
+        // only the drop paths follow a column's own length. So the row is written while it is
+        // still invisible, and `commit_staged_row` — one store into capacity `stage_entity_into`
+        // already reserved — is the single instant it exists. If anything panics first,
+        // `forget_rows_above` puts every column's length back and the bytes above it are
+        // abandoned. That recovery is IDENTICAL whatever was written, which is exactly why not
+        // knowing is an acceptable answer. It leaks whatever those rows owned; a leak on a panic
+        // path is safe, and it is the only sound thing to do with memory that is part live and
+        // part uninitialised with no way to tell which.
+        let base_len = self.archetype_index.archetypes[target_arch_id].len();
         let crate::archetype::Moved { moved, new_row, swapped: moved_eid } = {
             // İki archetype'ı FARKLI indekslerden disjoint ödünç al. Aynı Vec'ten
             // iki `&mut ...[i] as *mut` almak, ikinci retag ile ilk pointer'ın
@@ -202,10 +228,11 @@ impl World {
                 .archetypes
                 .get_disjoint_mut([old_arch_id, target_arch_id])
                 .expect("old and target archetype indices are distinct and in bounds");
-            // SAFETY: move_entity_to raw sütun kopyaları yapar; ödünçler disjoint.
-            unsafe { old_arch.move_entity_to(old_loc.row as usize, target_arch) }
+            // SAFETY: raw sütun kopyaları yapar; ödünçler disjoint. The SOURCE is left fully
+            // consistent by this call, so abandoning the target below does not have to undo it.
+            unsafe { old_arch.stage_entity_into(old_loc.row as usize, target_arch) }
         };
-        // `move_entity_to` takes a ROW and moves whoever is in it. This says the
+        // `stage_entity_into` takes a ROW and moves whoever is in it. This says the
         // row was still the one this entity owns — see `Moved`.
         debug_assert_eq!(
             moved, eid,
@@ -216,39 +243,56 @@ impl World {
             self.entity_locations[moved as usize].row = old_loc.row;
         }
 
-        // RECORD THE NEW LOCATION BEFORE ANY USER CODE RUNS.
-        //
-        // `move_entity_to` has already put this entity in the target archetype's entity list, so
-        // from here until these two writes the world says two different things about where it
-        // lives. The next two statements both call into user code — `drop_live_bundle_rows` runs
-        // the `Drop` of every component that came across, and `write_to_archetype` is a trait
-        // method a caller can implement — and a panic from either unwinds straight past the
-        // repair, leaving the entity listed in the target with a location naming the source: a
-        // row that by then may not even exist. `catch_unwind` is safe std, nothing here promises
-        // panic safety, and no assertion fires during it. The same reordering closed the
-        // equivalent window in `despawn` and `insert_batch`; this was the third and last of them,
-        // found 2026-08-31 by the second round of the sweep that ruled out truncating
-        // `entity_locations`.
-        //
-        // Both statements below only need `arch` and `new_row`, which are already in hand, so
-        // moving the writes up costs nothing.
-        self.entity_locations[eid as usize] = EntityLocation {
-            archetype_id: target_arch_id as u32,
-            row: new_row,
-        };
-        self.archetype_index.entity_archetype.insert(eid, target_arch_id);
+        // Out of the source and not yet in the target: for the length of the window below this
+        // entity owns no row anywhere, and INVALID is the only true thing to say about it. It is
+        // also not a new state — it is the "reserved but never flushed" one that `add_component`,
+        // `remove_component`, `despawn` and this function's own entry guard all already handle.
+        self.entity_locations[eid as usize] = EntityLocation::INVALID;
 
+        let tick = self.tick;
         let arch = &mut self.archetype_index.archetypes[target_arch_id];
-        // The components the entity already carried came across the migration alive; the ones
-        // the bundle is ADDING are holes. Drop the first group and only the first group — that
-        // distinction is the whole reason `live_after_move` was computed before the move.
-        //
-        // SAFETY: every type in `live_after_move` was a column of the OLD archetype, so
-        // `move_entity_to` moved its value into `new_row` of the target's matching column and
-        // that slot is live; the write below re-initialises each one.
-        unsafe { drop_live_bundle_rows(arch, &live_after_move, new_row as usize); }
-        // SAFETY: as above, for the row just pushed into the target archetype during the move.
-        unsafe { bundle.write_to_archetype(arch, new_row as usize, self.tick); }
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            // The components the entity already carried came across the migration alive; the
+            // ones the bundle is ADDING are holes. Drop the first group and only the first —
+            // that distinction is the whole reason `live_after_move` was computed before the
+            // move.
+            //
+            // SAFETY: every type in `live_after_move` was a column of the OLD archetype, so the
+            // stage moved its value into `new_row` of the target's matching column and that slot
+            // is live; the write below re-initialises each one.
+            unsafe { drop_live_bundle_rows(arch, &live_after_move, new_row as usize) };
+            // SAFETY: as above, for the row the stage just prepared in the target archetype.
+            unsafe { bundle.write_to_archetype(arch, new_row as usize, tick) };
+            // Everything is written. THIS is where the row starts existing.
+            arch.commit_staged_row(eid);
+        }));
+
+        match outcome {
+            Ok(()) => {
+                self.entity_locations[eid as usize] = EntityLocation {
+                    archetype_id: target_arch_id as u32,
+                    row: new_row,
+                };
+                self.archetype_index.entity_archetype.insert(eid, target_arch_id);
+            }
+            Err(payload) => {
+                // SAFETY: `base_len` is the target's entity count from before the stage, and the
+                // stage only ever added rows above it. Nothing has committed, so `entities` is
+                // still at `base_len` and every column is one longer.
+                unsafe {
+                    self.archetype_index.archetypes[target_arch_id].forget_rows_above(base_len)
+                };
+                // The entity is in no archetype now. Its location is already INVALID; this is
+                // the other half of saying so.
+                self.archetype_index.entity_archetype.remove(&eid);
+                tracing::warn!(
+                    entity = eid,
+                    "add_bundle: a component `Drop` or `Bundle` impl panicked mid-migration; the \
+                     entity's components are abandoned and it now owns no archetype row"
+                );
+                std::panic::resume_unwind(payload);
+            }
+        }
     }
 
     /// Removes every component listed by `B` from `entity` in one archetype migration.
