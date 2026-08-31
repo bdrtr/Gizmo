@@ -400,7 +400,13 @@ impl BlobVec {
         }
         let item_size = self.item_layout.size();
         if item_size == 0 {
-            self.capacity = self.len;
+            // A ZST vec has no allocation to shrink, and its capacity is the `usize::MAX`
+            // sentinel `new` sets to mean "never needs to grow" — which `grow` relies on by
+            // returning early for ZSTs without updating it. Writing `capacity = len` here, as
+            // this used to, contradicted that sentinel for the rest of the vec's life. Harmless
+            // in practice, because `push` short-circuits on ZSTs before consulting capacity at
+            // all, but `compact` runs this over every ZST marker column on every GC tick, so
+            // the invariant was false almost everywhere. Leave it alone. Fixed 2026-08-31.
             return;
         }
 
@@ -592,6 +598,45 @@ mod tests {
             3,
             "victim + two survivors, once each; 4 means the destroyed victim was still counted"
         );
+    }
+
+    /// Shrinking a ZST vec must leave its capacity sentinel alone.
+    ///
+    /// `new` sets a zero-sized element type's capacity to `usize::MAX` to mean "never needs to
+    /// grow", and `grow` relies on that by returning early for ZSTs without updating it.
+    /// `shrink_to_fit` used to write `capacity = len` instead, contradicting the sentinel — and
+    /// `World::compact` runs it over every ZST marker column on every GC tick, so the invariant
+    /// was false almost everywhere. Nothing broke, because `push` short-circuits on ZSTs before
+    /// looking at capacity; a type whose own documented invariant is routinely false is still
+    /// how the next reader gets misled.
+    #[test]
+    fn shrinking_a_zst_column_keeps_its_capacity_sentinel() {
+        struct Marker;
+        let mut v = BlobVec::new(Layout::new::<Marker>(), None);
+        assert_eq!(v.capacity, usize::MAX, "a ZST vec starts at the sentinel");
+
+        for _ in 0..3 {
+            let mut m = Marker;
+            // SAFETY: `m` is a live `Marker` of this vec's layout; `push` takes ownership by
+            // memcpy, which for a ZST copies nothing. No `mem::forget` after it, unlike the
+            // `Bomb` pushes elsewhere in this module: `Marker` has no `Drop`, so there is
+            // nothing for the caller to hand over and nothing to leak.
+            unsafe { v.push(&mut m as *mut Marker as *const u8) };
+        }
+        assert_eq!(v.len(), 3);
+
+        v.shrink_to_fit();
+        assert_eq!(
+            v.capacity,
+            usize::MAX,
+            "there is no allocation to give back, and `grow` reads this to decide it never has \
+             to run for a ZST"
+        );
+        // …and the vec still works afterwards, which is what the sentinel is protecting.
+        let mut m = Marker;
+        // SAFETY: as above.
+        unsafe { v.push(&mut m as *mut Marker as *const u8) };
+        assert_eq!(v.len(), 4);
     }
 
     #[test]

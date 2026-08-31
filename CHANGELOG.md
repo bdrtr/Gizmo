@@ -1043,6 +1043,22 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`WorldStats::sparse_component_bytes` is new** — the memory a `SparseSet` component actually costs,
+  which the existing `component_bytes` could never show because it sums archetype columns and
+  sparse storage lives outside them. It reports both halves: `dense`, which scales with the
+  number of entries, and the reverse index, which is **four bytes per id up to the largest ever
+  inserted** whether or not those ids still carry the component. The second is the one that
+  surprises — a set with one entry can hold megabytes — and it is what `World::compact` truncates,
+  so that reclamation is now visible in the numbers the engine prints about itself rather than
+  only in a debugger.
+
+- **`BlobVec::shrink_to_fit` contradicted its own zero-sized-type sentinel.** `new` sets a ZST
+  vector's capacity to `usize::MAX` to mean "never needs to grow", and `grow` relies on it by
+  returning early without updating it; `shrink_to_fit` wrote `capacity = len` instead. Nothing
+  broke — `push` short-circuits on ZSTs before consulting capacity — but `World::compact` runs
+  this over every ZST marker column on every garbage-collection tick, so the invariant was false
+  almost everywhere rather than in some corner.
+
 - **A component whose `Drop` panicked could be dropped a second time.** Dropping an
   already-dropped value is undefined behaviour, and two primitives in the archetype storage
   allowed it: `BlobVec::clear` set its length to zero *after* its drop loop, so a panic left the

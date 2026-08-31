@@ -69,8 +69,23 @@ pub struct WorldStats {
     pub sparse_set_components: usize,
     /// The number of registered resources.
     pub resources: usize,
-    /// The total component bytes in the archetype columns (approximately the live ECS memory).
+    /// Live component bytes in the archetype columns — `layout.size() * rows`, summed.
+    ///
+    /// Table storage only, and deliberately so now that [`WorldStats::sparse_component_bytes`]
+    /// exists beside it. Until 2026-08-31 this was the only figure, and it made an entire
+    /// storage class invisible: a `SparseSet` component contributed nothing here however many
+    /// entities carried it, so the memory `World::compact` reclaims from a sparse set's reverse
+    /// index — the largest per-type allocation in the world — could not be seen in the numbers
+    /// the engine prints about itself.
     pub component_bytes: usize,
+    /// Live component bytes in the sparse sets, plus the reverse indices that address them.
+    ///
+    /// Two things, because they scale differently and the second is the one that surprises:
+    /// `dense` is `layout.size() * entries`, but `sparse` is **four bytes per id up to the
+    /// largest ever inserted**, whether or not those ids still carry the component. A set with
+    /// one entry can hold megabytes. That is what `World::compact` truncates, and this is where
+    /// to watch it happen.
+    pub sparse_component_bytes: usize,
     /// The world tick.
     pub tick: u32,
 }
@@ -137,6 +152,18 @@ impl World {
             }
         }
 
+        // SparseSet storage lives outside the archetypes, so the loop above cannot see any of
+        // it. `dense` scales with entries; `sparse` scales with the largest id ever inserted,
+        // which is the interesting half.
+        let sparse_component_bytes: usize = self
+            .sparse_sets
+            .values()
+            .map(|set| {
+                set.info.layout.size() * set.dense.len()
+                    + std::mem::size_of::<u32>() * set.sparse.len()
+            })
+            .sum();
+
         WorldStats {
             entities,
             archetypes: self.archetype_index.archetypes.len(),
@@ -145,6 +172,7 @@ impl World {
             sparse_set_components: self.sparse_sets.len(),
             resources: self.resources.len(),
             component_bytes,
+            sparse_component_bytes,
             tick: self.tick,
         }
     }
@@ -196,6 +224,65 @@ impl World {
 #[cfg(test)]
 mod tests {
     use crate::world::World;
+
+    /// A sparse set's memory has to be visible in the numbers the engine prints about itself,
+    /// and the reverse index is the half worth seeing: it is four bytes per id up to the largest
+    /// ever inserted, so a set with ONE entry can be arbitrarily large.
+    ///
+    /// This is also the only place `World::compact`'s sparse reclamation is observable from
+    /// outside the crate. A fix nobody can see in the reporting is a fix nobody can confirm.
+    #[test]
+    fn world_stats_sees_sparse_storage_and_its_reverse_index() {
+        #[derive(Clone, Debug, PartialEq)]
+        struct SparseW(u64);
+        impl crate::component::Component for SparseW {
+            fn storage_type() -> crate::component::StorageType {
+                crate::component::StorageType::SparseSet
+            }
+        }
+
+        let mut world = World::new();
+        world.register_component_type::<SparseW>();
+
+        const N: usize = 512;
+        let ents: Vec<_> = (0..N).map(|_| world.spawn()).collect();
+        for &e in &ents {
+            world.add_component(e, SparseW(1));
+        }
+        let full = world.world_stats();
+        assert_eq!(
+            full.component_bytes, 0,
+            "a SparseSet component is not in an archetype column, so the table figure stays 0"
+        );
+        assert_eq!(
+            full.sparse_component_bytes,
+            std::mem::size_of::<SparseW>() * N + std::mem::size_of::<u32>() * N,
+            "512 live values plus a 512-entry reverse index"
+        );
+
+        // Drop all but the lowest id. The dense side collapses; the reverse index does NOT,
+        // because it is sized by the largest id ever inserted.
+        for &e in &ents[1..] {
+            world.despawn(e);
+        }
+        let sparse_only = world.world_stats();
+        assert_eq!(
+            sparse_only.sparse_component_bytes,
+            std::mem::size_of::<SparseW>() + std::mem::size_of::<u32>() * N,
+            "one value left, and the whole index still addressing 512 ids"
+        );
+
+        // …until `compact` truncates it, which is the thing that was invisible before.
+        world.compact();
+        let compacted = world.world_stats();
+        assert_eq!(
+            compacted.sparse_component_bytes,
+            std::mem::size_of::<SparseW>() + std::mem::size_of::<u32>(),
+            "compaction is now visible in the reporting"
+        );
+        assert!(compacted.sparse_component_bytes < sparse_only.sparse_component_bytes);
+    }
+
 
     #[derive(Clone)]
     struct Position {

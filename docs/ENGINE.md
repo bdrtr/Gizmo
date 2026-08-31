@@ -441,16 +441,20 @@ state instead.
     against a stale handle is `World::is_alive` — which a bit-identically recycled id passes.
     Documented on `clear_entities` as the caller's to rebuild; making it correct by construction
     would mean the pool holding something more than a raw `Entity`.
-  - **`WorldStats::component_bytes` counts archetype columns only**, so every byte the sparse
-    compaction now reclaims — and every byte it still holds — is invisible to the engine's own
-    memory reporting. A fix that cannot be seen in the numbers the tooling prints is a fix nobody
-    can confirm from outside a debugger.
-  - **`BlobVec::shrink_to_fit` breaks its own ZST sentinel.** `new` sets a zero-sized element
-    type's capacity to `usize::MAX` (meaning "never needs to grow") and `grow` returns early for
-    them, but `shrink_to_fit` writes `capacity = len`. Harmless today — `push` short-circuits on
-    ZSTs before consulting capacity, and `compact` has been doing this to every ZST marker column
-    through `Archetype::shrink_to_fit` for a long time with no symptom — but it is a documented
-    invariant that the code contradicts, which is how the next reader gets misled.
+  - ~~**`WorldStats::component_bytes` counts archetype columns only.**~~ **CLOSED 2026-08-31.**
+    `WorldStats::sparse_component_bytes` sits beside it now and reports both halves of a sparse
+    set: `dense`, which scales with entries, and `sparse`, which is four bytes per id up to the
+    largest ever inserted whether or not those ids still carry the component. The second is the
+    one worth watching — a set with a single entry can hold megabytes — and it is what `compact`
+    truncates, so the reclamation is finally observable from outside a debugger. The test walks
+    all three states: 512 entries, then one entry with the index still addressing 512 ids, then
+    after `compact`.
+  - ~~**`BlobVec::shrink_to_fit` breaks its own ZST sentinel.**~~ **CLOSED 2026-08-31.** It
+    returns early for a zero-sized element type now, leaving the `usize::MAX` that `new` sets and
+    `grow` relies on. Still harmless in behaviour — `push` short-circuits on ZSTs before
+    consulting capacity — but `compact` runs this over every ZST marker column on every GC tick,
+    so the invariant was false almost everywhere rather than in a corner. A type whose documented
+    invariant is routinely false is how the next reader gets misled.
 - **"Freeze the public API" — dropped.** There is no freeze event to schedule. What that item was
   reaching for is §4's external-type contract, and that is enforced continuously: every dependency
   on a public surface is listed there with its cost, and `crates/gizmo/tests/crate_staging.rs`
