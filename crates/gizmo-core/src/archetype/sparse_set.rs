@@ -151,6 +151,9 @@ impl ComponentSparseSet {
             self.entities.push(entity);
             self.sparse[e] = row;
         }
+
+        #[cfg(debug_assertions)]
+        self.debug_assert_consistent();
     }
 
     /// Drops every entity's data and empties the set, keeping the four arrays in step.
@@ -165,11 +168,28 @@ impl ComponentSparseSet {
     /// Added 2026-08-24 for [`World::clear_entities`](crate::world::World::clear_entities),
     /// which reset the archetypes and the id allocator and left these sets populated — so the
     /// first entity spawned afterwards took id 0 back and inherited whatever id 0 used to hold.
+    ///
+    /// **The three lookup arrays are emptied before `dense` is**, for the reason
+    /// [`ComponentSparseSet::remove`] gives: `dense.clear()` runs every element's destructor and
+    /// one of those can panic. `sparse` is this type's visibility switch — `contains`,
+    /// `ticks_for`, `get_ptr`, `get_ptr_mut`, `remove`, `clone_entry` and `query::fetch`'s sparse
+    /// branch all reach `dense` through it and nothing else — so emptying it first means a panic
+    /// partway through the drops leaks what it did not reach and leaves all four arrays empty
+    /// and in step. The old order left an empty `dense` under a fully populated `sparse`, where
+    /// every entity in the set still claimed a row of a zero-length vector.
     pub fn clear(&mut self) {
-        self.dense.clear();
+        // `u32` and `ComponentTicks` have no drop glue: none of these three lines runs user code
+        // or can unwind, and once they are done the set shows nothing.
         self.ticks.clear();
         self.entities.clear();
         self.sparse.clear();
+        // The only user code in the function, and now the last thing in it. `BlobVec::clear`
+        // zeroes its own length before it runs any destructor, so a panic here leaks rather than
+        // double-drops — and the three arrays above are already empty, so the invariant holds
+        // whether it completes or not. That is also why there is no `debug_assert_consistent`
+        // call here: on the success path it could only compare `0 == 0`, and on the failure path
+        // the unwind is out of the last statement, so nothing after it runs either way.
+        self.dense.clear();
     }
 
     /// Gives back every byte this set is holding beyond what its live entries need.
@@ -223,6 +243,15 @@ impl ComponentSparseSet {
     }
 
     /// Deletes an entity's data at O(1) speed.
+    ///
+    /// **The four arrays are repaired BEFORE the value's `Drop` runs**, and that ordering is the
+    /// safety property rather than a style choice. It used to drop first —
+    /// `BlobVec::swap_remove_and_drop` decrements its own length before it calls the drop glue,
+    /// so `dense` repaired itself and `ticks`, `entities` and `sparse` did not. A panicking
+    /// destructor then left `sparse[entity]` naming a row that now holds the *survivor's* value,
+    /// and `sparse[last_entity]` naming `dense.len()` — one past the end. Both are indexed with
+    /// no bounds check in release, by `get_ptr` and by `query::fetch`'s sparse branch. Fixed
+    /// 2026-08-31, the same reordering as `Column::swap_remove_and_drop`.
     pub fn remove(&mut self, entity: u32) -> bool {
         let e = entity as usize;
         if e >= self.sparse.len() || self.sparse[e] == u32::MAX {
@@ -231,26 +260,63 @@ impl ComponentSparseSet {
 
         let row = self.sparse[e] as usize;
         let last_row = self.dense.len() - 1;
-
-        // SAFETY: `row` is a live `dense` index (it came from `sparse`, checked above) and
-        // `&mut self` excludes any other reference. `ticks` is swap-removed at the same index on
-        // the next line, which is what keeps the two arrays in step.
-        unsafe {
-            self.dense.swap_remove_and_drop(row);
-        }
-        self.ticks.swap_remove(row);
+        // Read before anything is permuted — `Vec::swap_remove` returns the VICTIM, not the
+        // survivor, so this cannot be folded into the call below. It also turns an already
+        // corrupt set into a clean index panic here rather than a wild offset inside `dense`.
         let last_entity = self.entities[last_row];
+
+        // ── Everything from here to the drop is a `Copy` store or a `Vec` op on plain data:
+        //    no drop glue, no user code, nothing that can unwind. ──
+        self.ticks.swap_remove(row);
         self.entities.swap_remove(row);
 
         self.sparse[e] = u32::MAX;
 
         // Eğer silinen eleman dizinin sonundaki eleman değilse,
         // son sıradan alıp silinen yere taşıdığımız (swap) objenin sparse indexini güncelliyoruz.
+        // When `row == last_row` the victim IS the survivor, so writing this would undo the
+        // sentinel on the line above.
         if row != last_row {
             self.sparse[last_entity as usize] = row as u32;
         }
 
+        // The set is final: three arrays of length `n - 1` that agree, and no `sparse` entry
+        // names the victim's row. ONLY NOW the destructor.
+        //
+        // SAFETY: `row` is a live `dense` index (it came from `sparse`, checked above) and
+        // nothing between the read and this line touched `dense`, so its length is still `n`.
+        // `swap_remove_and_drop` puts the victim out of range before running its drop glue, so a
+        // panic there abandons bytes nothing counts — a leak, which is safe.
+        unsafe {
+            self.dense.swap_remove_and_drop(row);
+        }
+
+        #[cfg(debug_assertions)]
+        self.debug_assert_consistent();
         true
+    }
+
+    /// Debug-only invariant check: the three packed arrays must be the same length.
+    ///
+    /// `dense`, `ticks` and `entities` are one entry per stored component, and every desync in
+    /// this family is a disagreement between them — a destructor that panicked between two of
+    /// the updates. `get_ptr` and `query::fetch`'s sparse branch validate against `sparse` alone
+    /// and then index `dense` unchecked, so nothing outside this type can see a violation coming.
+    ///
+    /// **`sparse` itself is deliberately NOT walked.** The reverse index is as long as the
+    /// highest entity id ever inserted, so checking it on every `insert` and `remove` is `O(n)`
+    /// per operation and quadratic over a batch — measured, not guessed: the CI Miri job's
+    /// `sparse` filter went from 190 s to over six minutes with the walk in place. The length
+    /// check is `O(1)` and catches the shape this exists for; the reverse index is checked by
+    /// the regression test that needs it.
+    #[cfg(debug_assertions)]
+    pub(crate) fn debug_assert_consistent(&self) {
+        debug_assert_eq!(self.dense.len(), self.ticks.len(), "sparse set: dense/ticks desync");
+        debug_assert_eq!(
+            self.dense.len(),
+            self.entities.len(),
+            "sparse set: dense/entities desync"
+        );
     }
 
     /// Whether `entity` currently has this component. `O(1)` and total: an id beyond the

@@ -71,7 +71,14 @@ pub struct World {
     /// global event has no target to bubble from, so sharing the map would mean a walk that has
     /// to be skipped and an `On::entity` that has to be lied about.
     pub(crate) global_observers: HashMap<TypeId, Box<dyn std::any::Any + Send + Sync>>,
-    /// How many times [`World::clear_entities`] has run.
+    /// How many times [`World::clear_entities`] has been **entered**.
+    ///
+    /// Attempted rather than completed, since 2026-08-31, and the distinction only exists on a
+    /// panic path: the counter is bumped with the rest of the infallible resets, before the two
+    /// clears that run component destructors. A destructor that panics therefore leaves the
+    /// epoch advanced over a world whose entities are all unreachable anyway — every table that
+    /// could name one is already empty — which is the answer a stale cache wants. Bumping it
+    /// last would leave that cache believing it was still current.
     ///
     /// The one thing a cache keyed by `Entity` can compare itself against. `clear_entities`
     /// resets the generation counter as well as the id counter, so every handle it destroys

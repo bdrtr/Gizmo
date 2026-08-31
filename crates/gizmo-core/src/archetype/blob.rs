@@ -499,6 +499,54 @@ impl BlobVec {
         self.len = len;
     }
 
+    /// Runs the element's drop glue on a slot that is **already out of range**.
+    ///
+    /// The counterpart of [`BlobVec::forget_above`], and the reason the two exist as a pair: a
+    /// removal that has to run user code can shorten first — one integer store, infallible — and
+    /// then dispose of the value the shortening left behind. Between the two calls the vec is
+    /// completely consistent and the value belongs to nobody, so a panic out of the drop glue
+    /// leaks it and changes no length at all.
+    ///
+    /// # Safety
+    /// - `index >= self.len`, and the slot must still hold the live value that `forget_above`
+    ///   (or a `len` decrement) put above the length.
+    /// - Exactly once per slot. Nothing may read, drop or overwrite it afterwards — in
+    ///   particular a `push` into that index would make this drop glue run over the pushed
+    ///   value's bytes instead.
+    #[inline]
+    pub(crate) unsafe fn drop_abandoned_at(&mut self, index: usize) {
+        debug_assert!(index >= self.len);
+        if let Some(drop_fn) = self.drop_fn {
+            // SAFETY: the caller guarantees the slot is live; the pointer is computed exactly as
+            // `get_unchecked` computes it, including the dangling-but-fixed base a ZST uses.
+            unsafe { drop_fn(self.data.as_ptr().add(index * self.item_layout.size())) };
+        }
+    }
+
+    /// Drops the `count` values at `0..count` of an allocation this vec no longer counts.
+    ///
+    /// The bulk form of [`BlobVec::drop_abandoned_at`], for a `clear` that has to be split into
+    /// an infallible half and a fallible one so that several vecs can be emptied *together*:
+    /// every length is zeroed, then every value is dropped. [`BlobVec::clear`] is this and
+    /// nothing else, with the two halves adjacent.
+    ///
+    /// # Safety
+    /// - `self.len == 0`.
+    /// - `0..count` hold live values of this vec's layout, and `count` is what the length was.
+    /// - Exactly once, and nothing reads those slots again.
+    pub(crate) unsafe fn drop_forgotten_prefix(&mut self, count: usize) {
+        debug_assert_eq!(self.len, 0);
+        if let Some(drop_fn) = self.drop_fn {
+            let item_size = self.item_layout.size();
+            for i in 0..count {
+                // SAFETY: `i < count`, the length this vec had before it was zeroed, so the
+                // address is inside the allocation and the element there was live and owned by
+                // this vec. `self.len` is 0, so nothing can reach any of these again.
+                unsafe { drop_fn(self.data.as_ptr().add(i * item_size)) };
+            }
+        }
+    }
+
     /// Drops all elements (without releasing the memory).
     ///
     /// **The length is zeroed BEFORE the drops run**, which is what makes this safe when one of
@@ -515,19 +563,9 @@ impl BlobVec {
     pub fn clear(&mut self) {
         // Take the length first: from here on this vec owns nothing, whatever happens below.
         let len = std::mem::replace(&mut self.len, 0);
-        if let Some(drop_fn) = self.drop_fn {
-            let item_size = self.item_layout.size();
-            for i in 0..len {
-                // SAFETY: `i < len`, the length this vec had on entry, so `i * item_size` stays
-                // inside the allocation and the element there was live and owned by this vec —
-                // `drop_fn` is the type's own dropper, recorded at construction for exactly this
-                // layout. `self.len` is already 0, so no path can reach any of these again.
-                unsafe {
-                    let ptr = self.data.as_ptr().add(i * item_size);
-                    drop_fn(ptr);
-                }
-            }
-        }
+        // SAFETY: `len` is what the length was and `self.len` is now 0, which is exactly
+        // `drop_forgotten_prefix`'s contract; nothing else can reach those slots.
+        unsafe { self.drop_forgotten_prefix(len) };
     }
 }
 

@@ -373,6 +373,19 @@ impl World {
                 .archetypes
                 .get_disjoint_mut([old_arch_id, target_arch_id])
                 .expect("old and target archetype indices are distinct and in bounds");
+            // THIS PATH NEVER DETACHES, which is why it calls the stage directly and owes no
+            // `drop_detached_rows`. `new_types` is the union of the old archetype's types and
+            // the bundle's, so the target has a column for every one of the source's and the
+            // stage's detach loop never runs. `move_entity_to` is the composition that does owe
+            // the disposal, and it performs it after its own commit.
+            debug_assert!(
+                old_arch
+                    .component_types()
+                    .iter()
+                    .all(|t| target_arch.has_component(*t)),
+                "add_bundle: the target lost a source column, so the stage detached a row nobody \
+                 will dispose of"
+            );
             // SAFETY: raw sütun kopyaları yapar; ödünçler disjoint. The SOURCE is left fully
             // consistent by this call, so abandoning the target below does not have to undo it.
             unsafe { old_arch.stage_entity_into(old_loc.row as usize, target_arch) }
@@ -2105,5 +2118,268 @@ mod tests {
         let before = DROPS.load(SeqCst);
         drop(world);
         assert_eq!(DROPS.load(SeqCst), before + 2, "teardown drops \"new\" and \"keep\"");
+    }
+
+    // ── The world-level half of the same family: `entities` is the visibility switch. ──
+    //
+    // These live here rather than beside the operations they test because the Miri job filters
+    // by module path, and `world::component_ops` is one of the names it lists. Each of them
+    // arms one destructor, catches the unwind, and asserts a length or an index invariant —
+    // deterministic in both profiles, unlike the out-of-bounds read the invariant prevents.
+
+    /// Reads every archetype and asserts that no column is out of step with its entity list.
+    ///
+    /// This is the property the whole family is about: `Archetype::len()` is `entities.len()`,
+    /// queries bound themselves by it, and `query::fetch` then indexes the column with no check
+    /// in either profile.
+    fn assert_columns_match_entities(world: &World, context: &str) {
+        for (idx, arch) in world.archetype_index.archetypes.iter().enumerate() {
+            let n = arch.entities().len();
+            for t in arch.component_types() {
+                let col = arch.get_column(t).expect("column for a type the archetype has");
+                assert_eq!(
+                    col.len(),
+                    n,
+                    "{context}: archetype {idx} has {n} entities and a column of {}",
+                    col.len()
+                );
+            }
+        }
+    }
+
+    /// `World::despawn` — the removal every frame runs, and the one with the widest reach.
+    ///
+    /// One component type on purpose: `Archetype`'s column order is sorted `TypeId`, not
+    /// declaration order, so a two-column fixture cannot say which column the panic lands in.
+    #[test]
+    fn a_panicking_drop_during_a_despawn_leaves_the_world_indexable() {
+        use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::SeqCst};
+
+        static ARMED: AtomicBool = AtomicBool::new(false);
+        static DROPS: AtomicU32 = AtomicU32::new(0);
+
+        #[derive(Clone)]
+        struct Fuse(&'static str);
+        impl Component for Fuse {}
+        impl Drop for Fuse {
+            fn drop(&mut self) {
+                DROPS.fetch_add(1, SeqCst);
+                if self.0 == "BOOM" && ARMED.swap(false, SeqCst) {
+                    panic!("Fuse::drop");
+                }
+            }
+        }
+
+        let mut world = World::new();
+        let victim = world.spawn();
+        let survivor = world.spawn();
+        world.add_component(victim, Fuse("BOOM"));
+        world.add_component(survivor, Fuse("quiet"));
+        // The victim must NOT be the last row, so the survivor has to be swap-moved into its
+        // place — that fixup is the part that used to run after the destructor.
+        assert_eq!(world.entity_location(victim.id()).row, 0);
+        DROPS.store(0, SeqCst);
+        ARMED.store(true, SeqCst);
+
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            world.despawn(victim);
+        }));
+        assert!(unwound.is_err(), "the drop was supposed to panic; the fixture is wrong if not");
+
+        assert_columns_match_entities(&world, "after a panicking despawn");
+        // The survivor's recorded row has to be the one it actually occupies. Left where it was
+        // — after the removal — the unwind stranded it naming a row the archetype no longer has,
+        // which `query_entity` and `get_component_ptr` index with no bound check at all.
+        let loc = world.entity_location(survivor.id());
+        assert_eq!(loc.row, 0, "the survivor's location must name the row it was moved into");
+        assert_eq!(
+            world.query_entity::<&Fuse>(survivor.id()).map(|f| f.0),
+            Some("quiet"),
+            "reading the survivor must give the survivor"
+        );
+        // The victim owns no row and no location, but its id is still `is_alive`: `Entities::free`
+        // is further down `despawn` and the unwind escaped before it. That is the same
+        // reserved-but-unflushed state a `Commands::spawn` id sits in, which every path already
+        // handles, and it is unchanged by this fix — recorded here so it is a documented outcome
+        // rather than a surprise for the next reader.
+        assert!(!world.entity_location(victim.id()).is_valid());
+        assert!(world.query_entity::<&Fuse>(victim.id()).is_none());
+    }
+
+    /// `ComponentSparseSet::remove`, reached through `World::remove_component`.
+    ///
+    /// A sparse set has no archetype row; its four parallel arrays are the invariant, and a
+    /// panicking destructor used to leave `sparse` naming rows that `dense` no longer had.
+    #[test]
+    fn a_panicking_drop_during_a_sparse_remove_leaves_the_set_consistent() {
+        use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
+
+        static ARMED: AtomicBool = AtomicBool::new(false);
+
+        #[derive(Clone)]
+        struct SparseFuse(&'static str);
+        impl Component for SparseFuse {
+            fn storage_type() -> crate::component::StorageType {
+                crate::component::StorageType::SparseSet
+            }
+        }
+        impl Drop for SparseFuse {
+            fn drop(&mut self) {
+                if self.0 == "BOOM" && ARMED.swap(false, SeqCst) {
+                    panic!("SparseFuse::drop");
+                }
+            }
+        }
+
+        let mut world = World::new();
+        let a = world.spawn();
+        let victim = world.spawn();
+        let tail = world.spawn();
+        world.add_component(a, SparseFuse("a"));
+        world.add_component(victim, SparseFuse("BOOM"));
+        world.add_component(tail, SparseFuse("tail"));
+        ARMED.store(true, SeqCst);
+
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            world.remove_component::<SparseFuse>(victim);
+        }));
+        assert!(unwound.is_err(), "the drop was supposed to panic; the fixture is wrong if not");
+
+        // THE ASSERTION. Before the reorder, `dense` had shortened itself and the other three
+        // had not: `sparse[victim]` still named a row now holding `tail`'s value, and
+        // `sparse[tail]` named `dense.len()` — one past the end, indexed with no bounds check by
+        // `get_ptr` and by `query::fetch`'s sparse branch.
+        let set = &world.sparse_sets[&std::any::TypeId::of::<SparseFuse>()];
+        assert_eq!(set.dense.len(), set.ticks.len(), "dense/ticks desync");
+        assert_eq!(set.dense.len(), set.entities.len(), "dense/entities desync");
+        for (id, &row) in set.sparse.iter().enumerate() {
+            if row == u32::MAX {
+                continue;
+            }
+            assert!((row as usize) < set.dense.len(), "sparse[{id}] names row {row}");
+            assert_eq!(set.entities[row as usize], id as u32, "sparse[{id}] names a stranger");
+        }
+        // The removal completed as far as anything can see.
+        assert!(world.query_entity::<&SparseFuse>(victim.id()).is_none());
+        assert_eq!(world.query_entity::<&SparseFuse>(tail.id()).map(|f| f.0), Some("tail"));
+    }
+
+    /// `World::clear_entities` over a world that has already survived one caught panic.
+    ///
+    /// **This one is green before the fix as well, and it is here on purpose.** It is the check
+    /// that the family closes: `clear_entities` is the recovery a caller reaches for after
+    /// catching a destructor panic, so it must not itself be the thing that turns a survivable
+    /// state into a double free. It was measured against the unfixed tree and against the fixed
+    /// one, and it passes on both — which is the claim, not an oversight.
+    ///
+    /// It also fences a design choice that is otherwise invisible. `Archetype::clear` takes one
+    /// row count PER COLUMN rather than one `entities.len()` for the whole archetype. With every
+    /// site in this commit closed, no reachable operation can leave a column shorter than
+    /// `entities`, so the two are equivalent today — but the shared count would be a double free
+    /// the first time anything reintroduced a tear, and this is the function whose whole job is
+    /// to survive one.
+    #[test]
+    fn clearing_a_world_after_a_caught_panicking_despawn_drops_nothing_twice() {
+        use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::SeqCst};
+
+        static ARMED: AtomicBool = AtomicBool::new(false);
+        static LIVE: AtomicU32 = AtomicU32::new(0);
+
+        #[derive(Clone)]
+        struct Counted(&'static str);
+        impl Component for Counted {}
+        impl Drop for Counted {
+            fn drop(&mut self) {
+                LIVE.fetch_sub(1, SeqCst);
+                if self.0 == "BOOM" && ARMED.swap(false, SeqCst) {
+                    panic!("Counted::drop");
+                }
+            }
+        }
+
+        let mut world = World::new();
+        LIVE.store(0, SeqCst);
+        for tag in ["BOOM", "b", "c"] {
+            let e = world.spawn();
+            LIVE.fetch_add(1, SeqCst);
+            world.add_component(e, Counted(tag));
+        }
+        let victim = world.entity(0).expect("entity 0 is alive");
+        ARMED.store(true, SeqCst);
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            world.despawn(victim);
+        }));
+        assert!(unwound.is_err(), "the drop was supposed to panic; the fixture is wrong if not");
+        // The victim's own value is gone either way — its destructor ran, panic and all.
+        assert_eq!(LIVE.load(SeqCst), 2, "two values are still live at this point");
+
+        world.clear_entities();
+        // Every remaining value dropped exactly once. A negative wrap here is the double free.
+        assert_eq!(LIVE.load(SeqCst), 0, "clear_entities dropped a value twice, or missed one");
+        assert_columns_match_entities(&world, "after clear_entities");
+    }
+
+    /// `World::spawn_batch` — the addition side, where the row used to become visible before any
+    /// column held data for it.
+    #[test]
+    fn a_bundle_that_panics_mid_spawn_batch_leaves_no_row_without_data() {
+        #[derive(Clone)]
+        struct Head(u32);
+        impl Component for Head {}
+        #[derive(Clone)]
+        struct Tail(#[allow(dead_code)] u32);
+        impl Component for Tail {}
+
+        /// Names two components and writes one, then gives up — which safe code may do:
+        /// nothing in `write_to_archetype`'s contract says an implementation has to return.
+        struct HalfWritten(Head, Tail);
+        impl crate::component::Bundle for HalfWritten {
+            fn get_infos() -> Vec<crate::archetype::ComponentInfo> {
+                vec![
+                    crate::archetype::ComponentInfo::of::<Head>(),
+                    crate::archetype::ComponentInfo::of::<Tail>(),
+                ]
+            }
+            fn apply(self, world: &mut World, entity: Entity) {
+                world.add_component(entity, self.0);
+                world.add_component(entity, self.1);
+            }
+            unsafe fn write_to_archetype(
+                self,
+                arch: &mut crate::archetype::Archetype,
+                row: usize,
+                tick: u32,
+            ) {
+                if self.0 .0 == 0 {
+                    // The first bundle writes properly, so the batch discovers its archetype and
+                    // takes the fast path at all.
+                    // SAFETY: forwarded verbatim to the single-component impls.
+                    unsafe {
+                        crate::component::Bundle::write_to_archetype(self.0, arch, row, tick);
+                        crate::component::Bundle::write_to_archetype(self.1, arch, row, tick);
+                    }
+                    return;
+                }
+                // SAFETY: as above, for the one column this implementation does write.
+                unsafe { crate::component::Bundle::write_to_archetype(self.0, arch, row, tick) };
+                let _unwritten = self.1;
+                panic!("HalfWritten::write_to_archetype");
+            }
+        }
+
+        let mut world = World::new();
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = world.spawn_batch(vec![
+                HalfWritten(Head(0), Tail(0)),
+                HalfWritten(Head(1), Tail(1)),
+            ]);
+        }));
+        assert!(unwound.is_err(), "the bundle was supposed to panic; the fixture is wrong if not");
+
+        // THE ASSERTION. The row the panic interrupted was never pushed into `entities`, so the
+        // archetype counts only the rows that are complete. Pushing the id first — which is what
+        // this used to do — left `entities` one longer than every column it had not reached, and
+        // an ordinary `world.query::<&Head>()` then read past the end of one.
+        assert_columns_match_entities(&world, "after a panicking spawn_batch");
     }
 }

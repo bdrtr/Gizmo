@@ -257,6 +257,30 @@ impl Column {
         old
     }
 
+    /// Swap-removes `row` **without dropping it**, leaving the value at the column's new length.
+    ///
+    /// The infallible half of `swap_remove_and_drop`, for a caller that has more to make final
+    /// before user code may run. On return the column is exactly one shorter and completely
+    /// consistent, and the removed value is reachable only through
+    /// [`BlobVec::drop_abandoned_at`] at index `self.len()`.
+    ///
+    /// # Safety
+    /// - `row < self.len()` must hold.
+    /// - The value at `self.len()` afterwards must be dropped exactly once, or deliberately
+    ///   leaked. Nothing may push into this column before that happens — a push would land on
+    ///   the detached value's bytes.
+    #[inline]
+    pub(crate) unsafe fn detach_row(&mut self, row: usize) {
+        // Ticks first, as everywhere else here: `Copy`, cannot unwind.
+        self.ticks.swap_remove(row);
+        let last = self.data.len() - 1;
+        // SAFETY: `row` and `last` are both live indices; this is a byte swap that early-returns
+        // when they coincide and for a zero-sized element.
+        unsafe { self.data.swap_rows(row, last) };
+        // SAFETY: `last` is one below the current length, so it is a legal new length.
+        unsafe { self.data.forget_above(last) };
+    }
+
     /// Removes the specified row via swap-remove, moves the value into `out`.
     ///
     /// # Safety
@@ -290,8 +314,42 @@ impl Column {
 
     /// Clears all the data in the column (without releasing the memory).
     pub fn clear(&mut self) {
-        self.data.clear();
+        let n = self.forget_rows();
+        // SAFETY: `n` is what `forget_rows` just returned for this column, nothing has touched
+        // it since, and this is the matching half.
+        unsafe { self.drop_forgotten_rows(n) };
+    }
+
+    /// The infallible half of [`Column::clear`]: both lengths go to zero and the values are left
+    /// where they are, uncounted. Returns how many there were.
+    ///
+    /// It exists because an archetype has to empty several columns and its `entities` list
+    /// *together*. A `clear` per column makes each column self-consistent and leaves the
+    /// archetype torn if one of the destructors panics — the columns after the panicking one
+    /// still hold their rows while the ones before it are empty, and `entities` still counts
+    /// them all. Zeroing every length first and running every destructor afterwards is the only
+    /// shape where an unwind leaks and nothing else.
+    ///
+    /// # Safety
+    /// Not `unsafe` to call — a column of forgotten rows is a leak, not a hazard — but the
+    /// returned count is only meaningful until something else touches this column.
+    pub(crate) fn forget_rows(&mut self) -> usize {
+        let n = self.data.len();
+        // Ticks first, as everywhere else here: `ComponentTicks` is `Copy` and cannot unwind.
         self.ticks.clear();
+        // SAFETY: 0 is never above the current length.
+        unsafe { self.data.forget_above(0) };
+        n
+    }
+
+    /// The fallible half: runs the drop glue over the `n` rows [`Column::forget_rows`] abandoned.
+    ///
+    /// # Safety
+    /// `n` must be what the matching `forget_rows` returned, nothing may have touched the column
+    /// in between, and this runs exactly once for those rows.
+    pub(crate) unsafe fn drop_forgotten_rows(&mut self, n: usize) {
+        // SAFETY: forwarded from this function's own contract.
+        unsafe { self.data.drop_forgotten_prefix(n) };
     }
 }
 

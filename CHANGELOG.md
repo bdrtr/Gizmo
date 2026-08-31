@@ -1043,6 +1043,29 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Six composite operations left the ECS indexable past the end of a column when a component
+  destructor panicked.** `Archetype::len()` is its entity count, every query bounds itself by
+  that, and the fetch path turns a row into a raw offset with no bounds check in either build
+  profile — so an operation that shortened a column while the entity list still counted the row
+  handed safe code a reference past the end of an allocation. All six ran their destructors, or
+  a user `Clone`, while their parallel arrays still disagreed.
+
+  The rule they now follow is that the entity list is the visibility switch: a removal shortens
+  everything *before* any destructor runs, an addition pushes the id *after* every column is
+  filled, and the removed values wait above the length where nothing can reach them.
+  `Archetype::swap_remove_entity` splits into a detach and a drop; `Archetype::clear` and
+  `ArchetypeIndex::clear_entities` empty every archetype before dropping anything in any of
+  them; `ComponentSparseSet::remove` and `::clear` repair their four arrays first;
+  `World::spawn_batch` stages its row and commits it last; `Archetype::batch_clone_row` abandons
+  a half-cloned batch rather than leaving its columns torn against each other; and
+  `World::clear_entities` performs every infallible reset before the two clears that run
+  destructors, so an unwind can no longer skip the location table, the id allocator and the
+  pending command queue.
+
+  A panic on any of these paths now leaks whatever it did not reach — safe, and the only sound
+  answer — instead of leaving something reachable and wrong. `ComponentSparseSet` also gained an `O(1)`
+  debug-only length check across `dense`, `ticks` and `entities` that `insert` and `remove` run.
+
 - **The last three sites where a panicking component `Drop` could corrupt the world — two of
   them real.** `add_bundle`'s *same-archetype* branch dropped every component the bundle names
   and refilled the slots one statement later, so a panic out of a `Drop` or out of a

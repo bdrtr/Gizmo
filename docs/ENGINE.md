@@ -455,19 +455,61 @@ state instead.
     the composites to be written so the last write is the one that makes the change visible.
     `Column::swap_remove_and_drop` is the root and is fixed (ticks first, then the data — the
     tick half is `Copy` and cannot unwind, the data half runs the element's `Drop` and can).
-    **Still open above it**, from a sweep run 2026-08-31 with the three shapes above closed:
-    `Archetype::swap_remove_entity` and `Archetype::clear` run every column's drop glue before
-    touching `entities`; `stage_entity_into`'s source-only drop loop runs user code while the
-    source `entities` is still at full length; `ComponentSparseSet::remove` and `::clear` repair
-    all four arrays only after the drops; `World::spawn_batch` calls `push_entity` *before*
-    `write_to_archetype`, which is the exact inverse of the staged-row protocol; and
-    `Archetype::batch_clone_row` grows every column with user `Clone` calls before pushing any
-    id. All are reachable from safe code, and all but the last leave `entities` LONGER than some
-    column — the direction `query::fetch` turns into an unchecked read, since it bounds itself by
-    `Archetype::len()` and never checks a column. `batch_clone_row` fails the other way and is
-    therefore corruption rather than unsafety: its columns end longer than `entities`, so nothing
-    reads them, but the archetype is permanently torn between its own columns and every later
-    row index lands somewhere different in each.
+    **The six composites above it were closed 2026-08-31**, and the rule they all now follow is
+    one sentence: **`entities` is the visibility switch.** `Archetype::len()` IS `entities.len()`,
+    `query/iter.rs` bounds every iteration by it and `query/fetch.rs` turns a row into a raw
+    offset with no bounds check in either profile — the `debug_assert`s live in
+    `BlobVec::get_unchecked`, which the query path never calls. So a removal shortens before any
+    destructor runs, an addition pushes the id after every column is filled, and every step that
+    can unwind comes before the step that makes the change visible.
+
+    - `Archetype::swap_remove_entity` dropped column by column and popped `entities` afterwards.
+      It is now `detach_entity_row` + `drop_detached_row`: the first is one infallible pass that
+      leaves the archetype in its final shape with the removed values sitting above every length,
+      the second runs the drop glue over them. Popping `entities` first is NOT enough on its own —
+      it fixes the length direction and leaves the columns at different lengths from each other,
+      permanently, so the next `push_entity` lands at a different index in each. `World::despawn`
+      calls the halves itself, because the survivor's location fixup has to be final too.
+    - `Archetype::clear` cleared each column and then `entities`. It is now
+      `forget_all_rows` + `drop_forgotten_rows`, and `ArchetypeIndex::clear_entities` runs the
+      first over EVERY archetype before the second over any — a panic in archetype `j` otherwise
+      leaves `j+1..` fully populated and still iterable. The row count is taken **per column**
+      rather than once from `entities.len()`: they agree in every reachable state now, and this
+      is precisely the function that must not assume it, since it is the recovery a caller
+      reaches for after catching a panic.
+    - `stage_entity_into`'s source-only drop loop ran user code while the source `entities` was
+      still at full length. It detaches now, and the disposal moved out of it entirely: the
+      stage leaves the values above each column's length and `move_entity_to` runs
+      `drop_detached_rows` **after** `commit_staged_row`. Dropping them inside the stage — the
+      first shape this took — put the only user code in the migration before the commit, so a
+      panicking destructor left the target holding a staged row nothing commits and nothing
+      abandons. `add_bundle` calls the stage directly and owes no disposal, because its target is
+      a superset of its source and the detach loop never runs; a `debug_assert` says so there.
+    - `ComponentSparseSet::remove` and `::clear` repaired their four arrays after the drops.
+      Both are reordered, and the type carries an `O(1)` `debug_assert_consistent` over
+      `dense`/`ticks`/`entities` that `insert` and `remove` call. `sparse` is deliberately not
+      walked — it is as long as the highest id ever inserted, and checking it per operation cost
+      the Miri `sparse` filter 190 s to over six minutes, measured.
+    - `World::spawn_batch` called `push_entity` *before* `write_to_archetype` — the exact inverse
+      of the staged-row protocol. It stages and commits now, with one `catch_unwind` hoisted out
+      of the batch loop (`entities.len()` is the number of fully written rows at every instant,
+      so the recovery needs no base to carry).
+    - `Archetype::batch_clone_row` grew every column with user `Clone` calls before pushing any
+      id. That one is not repairable by reordering — growing M columns is M fallible steps and a
+      panic in the k-th always leaves k-1 grown — so it takes the abandon protocol.
+    - `World::clear_entities` itself did its two drop-bearing clears first and its infallible
+      resets afterwards, so an unwind skipped the location table, the id allocator and the
+      command queue. Reversed; `reset_epoch` now counts entered rather than completed clears,
+      which is the answer a stale cache wants.
+
+    **Still open, and named rather than implied:** a panic out of `drop_detached_rows` escapes
+    before the CALLER writes the entity locations, so `remove_component`, `remove_bundle` and
+    `remove_batch` can still leave a stale location behind — the migrated entity naming its old
+    archetype and row, and the entity swapped into that row naming the row it came from. That is
+    the separate stale-location hazard, the one `despawn`, `insert_batch` and `add_bundle` were
+    reordered to close, reached through a different door. Both outputs are knowable before the
+    migration (`new_row` is `target.len()`, the swapped id is the source's last entity), so the
+    fix is to compute and write them first rather than after.
 
     **The shape that generates violations is checkable, done 2026-08-31.**
     `Archetype::move_entity_to` does not take an entity — it takes a ROW, and moves whoever is

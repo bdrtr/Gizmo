@@ -142,6 +142,25 @@ pub(crate) struct Moved {
     pub(crate) swapped: Option<u32>,
 }
 
+/// A row that has been removed from an archetype but whose values have not been dropped yet.
+///
+/// Returned by [`Archetype::detach_entity_row`] and consumed by
+/// [`Archetype::drop_detached_row`]. Between the two the archetype is completely consistent and
+/// the values belong to nobody, which is the entire point: the destructors — the only user code
+/// in a removal, and the only thing that can unwind — run when there is no length left to
+/// corrupt.
+///
+/// It carries `row` only so the second half can check it against the archetype's current length;
+/// a token from another archetype, or one used after something pushed, is caught in debug.
+#[must_use = "a detached row still owns its values"]
+pub(crate) struct DetachedRow {
+    /// The entity swap-moved into the vacated row, if it was not the last one. Its recorded row
+    /// is now the vacated one and the caller has to store that.
+    pub(crate) moved: Option<u32>,
+    /// Where the detached values sit: the archetype's length after the removal.
+    row: usize,
+}
+
 impl Archetype {
     /// Creates a new empty archetype for the specified component types.
     pub fn new(id: u32, component_infos: &[ComponentInfo]) -> Self {
@@ -277,31 +296,72 @@ impl Archetype {
         row
     }
 
-    /// Removes the entity at the specified row via swap-remove.
-    /// Returns the ID of the moved entity (the one previously in the last row).
-    /// If the removed one was already in the last position, returns None.
-    pub(crate) fn swap_remove_entity(&mut self, row: usize) -> Option<u32> {
+    /// The infallible half of a removal: the row stops existing, and its values are left where
+    /// nothing can reach them.
+    ///
+    /// The whole archetype is FINAL on return — `entities` and every column are exactly one
+    /// shorter, every visible row is coherent across every column, and the removed values sit at
+    /// index `entities.len()`, above every length. Only [`Archetype::drop_detached_row`] can
+    /// still reach them.
+    ///
+    /// This is a split rather than a reordering because neither half of the obvious answer works
+    /// alone. The old body dropped column by column and popped `entities` afterwards, so a
+    /// panicking destructor left the columns it had reached one shorter than `entities` — the
+    /// direction `query::fetch` turns into an unchecked read, since it bounds itself by
+    /// `Archetype::len()` and never looks at a column. Popping `entities` first fixes that and
+    /// leaves the columns at *different* lengths from each other, permanently: the next
+    /// `push_entity` lands the new value at a different index in each, and every row after it is
+    /// off by one somewhere. Doing all the swapping in one infallible pass is what makes the
+    /// post-unwind archetype exactly as consistent as a clean removal, for every column.
+    ///
+    /// # Panics
+    /// If `row` is not a live row. That was an unchecked `entities.len() - 1` underflow in
+    /// release before, feeding `usize::MAX` into the column operations.
+    #[must_use = "the detached row still owns its values; pass the token to drop_detached_row"]
+    pub(crate) fn detach_entity_row(&mut self, row: usize) -> DetachedRow {
+        assert!(
+            row < self.entities.len(),
+            "detach_entity_row: row {row} of {} rows",
+            self.entities.len()
+        );
         let last = self.entities.len() - 1;
+        // Byte swaps, `Vec::swap` over `Copy` ticks and one `Vec::swap` of ids. No drop glue, no
+        // allocation, no panic point; `Archetype::swap_rows` early-returns when `row == last`.
+        // SAFETY: both indices are live rows — `row` by the assertion above, `last` because
+        // `entities` is non-empty.
+        unsafe { self.swap_rows(row, last) };
+        // The survivor now sits at `row`. Read before the truncation, which is what removes it
+        // from the end.
+        let moved = (row != last).then(|| self.entities[row]);
+        // SAFETY: every column is `last + 1` long (the archetype invariant) and so is
+        // `entities`, so `last` is a legal new length for all of them.
+        unsafe { self.forget_rows_above(last) };
+        DetachedRow { moved, row: last }
+    }
 
-        // Tüm sütunlarda swap_remove_and_drop
-        for col_cell in &self.columns {
-            // SAFETY: `&mut self` here, so no other reference into this archetype exists; each
-            // cell is visited once, so the `&mut Column`s never overlap. `row` is in range —
-            // `last` was computed from a non-empty `entities`, and every column is kept the same
-            // length as `entities` (the invariant `debug_assert_consistent` checks).
-            unsafe {
-                (&mut *col_cell.get()).swap_remove_and_drop(row);
-            }
-        }
-
-        if row != last {
-            let moved_entity = self.entities[last];
-            self.entities.swap(row, last);
-            self.entities.pop();
-            Some(moved_entity)
-        } else {
-            self.entities.pop();
-            None
+    /// The fallible half: runs the removed row's drop glue, one column at a time.
+    ///
+    /// Every call here acts on a slot that is already outside every length in the archetype, so
+    /// a panicking destructor leaks the columns it did not reach — safe — and moves no length at
+    /// all. After the unwind the archetype is byte-for-byte as consistent as after a clean
+    /// removal.
+    ///
+    /// # Safety
+    /// `token` must have come from [`Archetype::detach_entity_row`] on **this** archetype, with
+    /// nothing touching it in between, and must be used exactly once.
+    pub(crate) unsafe fn drop_detached_row(&mut self, token: DetachedRow) {
+        debug_assert_eq!(
+            token.row,
+            self.entities.len(),
+            "drop_detached_row: the token does not describe this archetype's current state"
+        );
+        for cell in &self.columns {
+            // SAFETY: `&mut self`, one visit per cell. The slot at `token.row` is the one
+            // `detach_entity_row` put above the length and nothing else can see it.
+            let col = unsafe { &mut *cell.get() };
+            // SAFETY: `token.row` is the index `detach_entity_row` left the value at, above
+            // this column's length, and each token is consumed exactly once.
+            unsafe { col.data.drop_abandoned_at(token.row) };
         }
     }
 
@@ -386,6 +446,32 @@ impl Archetype {
         self.entities.push(entity_id);
     }
 
+    /// Runs the drop glue over the rows [`Archetype::stage_entity_into`] detached — the
+    /// components the target archetype does not have, i.e. the ones the migration removed.
+    ///
+    /// Separate from the stage, and called only after the target's row is committed, because
+    /// this is the migration's only user code: a destructor that panics here unwinds out of the
+    /// caller, and everything the caller could still be holding half-done has to be finished
+    /// first. Each value sits at its column's own `len`, out of range for every reader, so a
+    /// panic leaks the ones not yet reached and moves no length at all.
+    ///
+    /// # Safety
+    /// `target` must be the archetype the matching `stage_entity_into` staged into — the set of
+    /// detached columns is re-derived from it — nothing may have pushed into this archetype in
+    /// between, and this must run exactly once per stage.
+    pub(crate) unsafe fn drop_detached_rows(&mut self, target: &Archetype) {
+        for (type_id, &src_col_idx) in &self.column_indices {
+            if !target.column_indices.contains_key(type_id) {
+                // SAFETY: `&mut self`, one visit per column index. The value at `data.len` is the
+                // one `detach_row` left above the length and nothing else can reach it.
+                let src_col = unsafe { &mut *self.columns[src_col_idx].get() };
+                // SAFETY: `data.len` is where `Column::detach_row` left the removed value —
+                // above the length, so nothing else can reach it — and this pass runs once.
+                unsafe { src_col.data.drop_abandoned_at(src_col.data.len) };
+            }
+        }
+    }
+
     /// [`Archetype::stage_entity_into`] followed immediately by
     /// [`Archetype::commit_staged_row`] — the shape every caller wants that runs no user code
     /// between the two.
@@ -399,6 +485,12 @@ impl Archetype {
     ) -> Moved {
         let moved = self.stage_entity_into(source_row, target);
         target.commit_staged_row(moved.moved);
+        // The removed components' destructors, LAST — after the target's row exists. Run before
+        // the commit they could unwind past it, leaving the target holding a staged row that
+        // nothing commits and nothing abandons.
+        // SAFETY: `target` is the archetype the stage above staged into, nothing has touched
+        // either archetype in between, and this is the one disposal of those rows.
+        unsafe { self.drop_detached_rows(target) };
         moved
     }
 
@@ -443,15 +535,25 @@ impl Archetype {
             }
         }
 
-        // 2. Hedefte olmayan ama kaynakta olan component'ları temizle
+        // 2. DETACH the components the target does not have — the ones this migration is
+        //    REMOVING. Their destructors are the only user code in the whole function, and they
+        //    do not run here.
+        //
+        //    They used to, through `swap_remove_and_drop`, and at the worst possible moment:
+        //    loop 1 has already shortened every SHARED source column to `n - 1` while
+        //    `self.entities` is still `n`, so a panicking destructor escaped with the source
+        //    archetype claiming one more row than most of its columns hold — the direction
+        //    `query::fetch` turns into an unchecked read. Detaching is memcpy and two integer
+        //    stores, so the source reaches its final shape below with nothing having been able
+        //    to unwind.
         for (type_id, &src_col_idx) in &self.column_indices {
             if !target.column_indices.contains_key(type_id) {
                 let src_col = &mut *self.columns[src_col_idx].get();
-                src_col.swap_remove_and_drop(source_row);
+                src_col.detach_row(source_row);
             }
         }
 
-        // 2. Kaynak archetype'tan entity listesini güncelle (sütunlar zaten swap_remove edildi)
+        // 3. Kaynak archetype'tan entity listesini güncelle (sütunlar zaten swap_remove edildi)
         let last = self.entities.len() - 1;
         let moved_entity = if source_row != last {
             let moved = self.entities[last];
@@ -463,7 +565,14 @@ impl Archetype {
             None
         };
 
-        // 3. The row is staged, not committed: the columns hold it, `target.entities` does not
+        // 4. The SOURCE is now final: `entities` and every column are `n - 1`, and the removed
+        //    values sit above that length where nothing can reach them. THE DROP GLUE IS THE
+        //    CALLER'S, through `drop_detached_rows`, and it must not run until the target's row
+        //    is committed — a destructor panicking here would otherwise unwind past
+        //    `commit_staged_row` and leave the target holding a staged row nothing commits and
+        //    nothing abandons.
+        //
+        // 5. The row is staged, not committed: the columns hold it, `target.entities` does not
         //    yet, so no query can see it. `commit_staged_row` is what makes it exist.
         Moved {
             moved: entity_id,
@@ -510,9 +619,33 @@ impl Archetype {
             return Vec::new();
         }
 
-        for col_cell in &self.columns {
-            let col = &mut *col_cell.get();
-            col.push_cloned_batch_from_row(row, count, tick);
+        // THE ROWS ARE ABANDONED IF A CLONE PANICS, and no reordering can replace that. The ids
+        // are already pushed last, so the addition rule is satisfied; the problem is that
+        // growing M columns by `count` user `Clone` calls is M separate fallible operations and
+        // a panic in the k-th always leaves k-1 of them grown. The columns then disagree with
+        // each other permanently — every later row lands at a different index in each, and no
+        // query can see it because `entities` never moved. So the recovery is the same abandon
+        // protocol the migration paths use.
+        let base_len = self.entities.len();
+        // Only `entities` needs pre-bought capacity: `push_cloned_batch_from_row` reserves its
+        // own, and a failure there is inside the guard below.
+        self.entities.reserve(count);
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            for col_cell in &self.columns {
+                // SAFETY: forwarded from this function's contract — `row` is a live row and each
+                // cell is visited once, so no two `&mut Column` overlap.
+                let col = unsafe { &mut *col_cell.get() };
+                // SAFETY: `row` is a live row of this column — forwarded from this function's
+                // own contract — and the clones land above the current length.
+                unsafe { col.push_cloned_batch_from_row(row, count, tick) };
+            }
+        }));
+        if let Err(payload) = outcome {
+            // SAFETY: `entities` was never touched, so `base_len` is still its length, and every
+            // column is either `base_len` or `base_len + count` long — the panicking one repairs
+            // itself, because `BlobVec` raises its length only after the whole clone loop.
+            unsafe { self.forget_rows_above(base_len) };
+            std::panic::resume_unwind(payload);
         }
 
         let mut new_rows = Vec::with_capacity(count);
@@ -538,14 +671,49 @@ impl Archetype {
 
     /// Quickly clears all row data in this archetype table.
     pub fn clear(&mut self) {
-        for col_cell in &mut self.columns {
-            // SAFETY: `&mut self`, one visit per cell. `clear` drops every live element and
-            // leaves the column empty; `self.entities.clear()` below keeps the two in step.
-            unsafe {
-                (&mut *col_cell.get()).clear();
-            }
-        }
+        let mut counts = Vec::with_capacity(self.columns.len());
+        self.forget_all_rows(&mut counts);
+        // SAFETY: `counts` is what `forget_all_rows` just produced for this archetype and
+        // nothing has touched it since.
+        unsafe { self.drop_forgotten_rows(&counts) };
+    }
+
+    /// The infallible half of [`Archetype::clear`]: `entities` and every column length go to
+    /// zero, and the values are left uncounted. One count per column is pushed onto `out`, in
+    /// `self.columns` order.
+    ///
+    /// **The count is each column's OWN length, not `entities.len()`.** Those agree in every
+    /// healthy archetype, and this is exactly the function that must not assume it: it is the
+    /// recovery a caller reaches for *after* something else left the archetype torn, and one
+    /// shared count would then run drop glue over a row a shorter column had already disposed
+    /// of. For the same reason there is no `debug_assert_consistent` here.
+    pub(crate) fn forget_all_rows(&mut self, out: &mut Vec<usize>) {
+        // The visibility switch first: after this line no query can reach any row, whatever
+        // happens to the columns.
         self.entities.clear();
+        for cell in &self.columns {
+            // SAFETY: `&mut self`, one visit per cell, so no two `&mut Column` overlap.
+            let col = unsafe { &mut *cell.get() };
+            out.push(col.forget_rows());
+        }
+    }
+
+    /// The fallible half: runs the drop glue over the rows [`Archetype::forget_all_rows`]
+    /// abandoned. This is the only part that runs user code, and by the time it does, every
+    /// length in the archetype is already final.
+    ///
+    /// # Safety
+    /// `counts` must be what the matching `forget_all_rows` produced, in the same order, with
+    /// nothing touching this archetype in between, and this must run exactly once for them.
+    pub(crate) unsafe fn drop_forgotten_rows(&mut self, counts: &[usize]) {
+        debug_assert_eq!(counts.len(), self.columns.len());
+        for (cell, &n) in self.columns.iter().zip(counts) {
+            // SAFETY: as above for the borrow; `n` is this column's own abandoned count.
+            let col = unsafe { &mut *cell.get() };
+            // SAFETY: `n` is what this same column returned from `forget_rows`, and nothing has
+            // touched it since — the caller's contract on this function.
+            unsafe { col.drop_forgotten_rows(n) };
+        }
     }
 }
 
@@ -732,10 +900,19 @@ mod tests {
         arch.push_entity(99);
 
         // row 0'ı çıkar (entity 42) → entity 99 row 0'a taşınmalı
-        let moved = arch.swap_remove_entity(0);
-        assert_eq!(moved, Some(99));
+        let detached = arch.detach_entity_row(0);
+        assert_eq!(detached.moved, Some(99));
+        // The archetype is already final HERE, before any value is dropped — that is the whole
+        // point of the split, and it is what a panicking destructor used to be able to break.
         assert_eq!(arch.len(), 1);
         assert_eq!(arch.entities()[0], 99);
+        for cell in &arch.columns {
+            // SAFETY: `&mut arch` is not held; this is a shared read of a length.
+            assert_eq!(unsafe { (*cell.get()).len() }, 1);
+        }
+        // SAFETY: the token came from this archetype and nothing has touched it since.
+        unsafe { arch.drop_detached_row(detached) };
+        assert_eq!(arch.len(), 1);
     }
 
     #[test]
@@ -808,6 +985,211 @@ mod tests {
             assert_eq!(*(blob.get_unchecked(0) as *const u32), 10);
             assert_eq!(*(blob.get_unchecked(1) as *const u32), 40);
             assert_eq!(*(blob.get_unchecked(2) as *const u32), 30);
+        }
+    }
+
+    // ── `entities` is the visibility switch, and these three composites had it backwards. ──
+    //
+    // `Archetype::len()` IS `entities.len()`, and the query path bounds itself by that and then
+    // indexes a column with no check in either profile — `query/fetch.rs` never calls
+    // `BlobVec::get_unchecked`, so its `debug_assert` is not on the path. A column SHORTER than
+    // `entities` is therefore read out of bounds by an ordinary `world.query::<&T>()`.
+    //
+    // Every one of these operations used to run its component destructors — user code, free to
+    // panic — while its arrays still disagreed. Each test below arms exactly one destructor,
+    // catches the unwind, and asserts the lengths rather than trying to provoke the read: the
+    // assertion is deterministic in both profiles, and the read it prevents is not.
+    //
+    // A NOTE ON COLUMN ORDER, measured rather than assumed: `self.columns` is in SORTED `TypeId`
+    // order, not declaration order — `World` builds every archetype from a `binary_search`ed
+    // `Vec<TypeId>`. A test that needs "the bomb is column k" can only get it by constructing the
+    // `Archetype` by hand, as these do, or by using a single component type.
+
+    /// A component whose `Drop` panics once, plus a counter for a second type that must not be
+    /// dropped twice. Built by hand so the column order is the declaration order.
+    #[test]
+    fn a_panicking_drop_during_a_removal_leaves_every_column_at_the_entity_count() {
+        use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::SeqCst};
+
+        static ARMED: AtomicBool = AtomicBool::new(false);
+        static PAYLOAD_DROPS: AtomicU32 = AtomicU32::new(0);
+
+        #[derive(Clone)]
+        struct Fuse(&'static str);
+        impl Component for Fuse {}
+        impl Drop for Fuse {
+            fn drop(&mut self) {
+                if self.0 == "BOOM" && ARMED.swap(false, SeqCst) {
+                    panic!("Fuse::drop");
+                }
+            }
+        }
+        #[derive(Clone)]
+        struct Payload(#[allow(dead_code)] &'static str);
+        impl Component for Payload {}
+        impl Drop for Payload {
+            fn drop(&mut self) {
+                PAYLOAD_DROPS.fetch_add(1, SeqCst);
+            }
+        }
+
+        // Declaration order IS column order here, so `Fuse` is column 0 and `Payload` — the one
+        // that must not be reached — is column 1.
+        let infos = vec![ComponentInfo::of::<Fuse>(), ComponentInfo::of::<Payload>()];
+        let mut arch = Archetype::new(0, &infos);
+        let push = |arch: &mut Archetype, f: Fuse, p: Payload, id: u32| {
+            // SAFETY: test-local — the values match the layouts this archetype was built with,
+            // and each is pushed exactly once into its own column.
+            unsafe {
+                arch.get_column_mut(TypeId::of::<Fuse>()).unwrap().push_raw(&f as *const Fuse as *const u8, 1);
+                arch.get_column_mut(TypeId::of::<Payload>()).unwrap().push_raw(&p as *const Payload as *const u8, 1);
+            }
+            std::mem::forget(f);
+            std::mem::forget(p);
+            arch.push_entity(id)
+        };
+        push(&mut arch, Fuse("BOOM"), Payload("victim"), 7);
+        push(&mut arch, Fuse("quiet"), Payload("survivor"), 9);
+        PAYLOAD_DROPS.store(0, SeqCst);
+        ARMED.store(true, SeqCst);
+
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let detached = arch.detach_entity_row(0);
+            // SAFETY: the token came from this archetype and nothing has touched it since.
+            unsafe { arch.drop_detached_row(detached) };
+        }));
+        assert!(unwound.is_err(), "the drop was supposed to panic; the fixture is wrong if not");
+
+        // THE ASSERTION. The removal is complete as far as anything can see: one entity left,
+        // and every column exactly as long. Before the split, `entities` was popped after the
+        // drop loop, so this was 2 against a `Fuse` column of 1.
+        assert_eq!(arch.len(), 1);
+        for cell in &arch.columns {
+            // SAFETY: a shared read of a length; no `&mut Column` is alive here.
+            assert_eq!(unsafe { (*cell.get()).len() }, arch.len(), "column/entities desync");
+        }
+        assert_eq!(arch.entities()[0], 9, "the survivor moved into the vacated row");
+        // The victim's `Payload` was abandoned above the length rather than dropped — the
+        // accepted leak on a panic path. A 1 here would mean the drop loop got past the fuse.
+        assert_eq!(PAYLOAD_DROPS.load(SeqCst), 0);
+
+        // And the archetype is still usable: nothing is torn, so teardown drops exactly the one
+        // surviving row.
+        drop(arch);
+        assert_eq!(PAYLOAD_DROPS.load(SeqCst), 1);
+    }
+
+    /// `Archetype::clear` — the same shape, one operation wider.
+    #[test]
+    fn a_panicking_drop_during_a_clear_empties_every_column_on_the_unwind() {
+        use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
+
+        static ARMED: AtomicBool = AtomicBool::new(false);
+
+        #[derive(Clone)]
+        struct Fuse(&'static str);
+        impl Component for Fuse {}
+        impl Drop for Fuse {
+            fn drop(&mut self) {
+                if self.0 == "BOOM" && ARMED.swap(false, SeqCst) {
+                    panic!("Fuse::drop");
+                }
+            }
+        }
+        #[derive(Clone)]
+        struct Tail(#[allow(dead_code)] &'static str);
+        impl Component for Tail {}
+
+        let infos = vec![ComponentInfo::of::<Fuse>(), ComponentInfo::of::<Tail>()];
+        let mut arch = Archetype::new(0, &infos);
+        for (i, tag) in ["BOOM", "quiet"].iter().enumerate() {
+            // `ManuallyDrop`: the columns take the bytes, so these locals must not run drop
+            // glue on any path.
+            let f = std::mem::ManuallyDrop::new(Fuse(tag));
+            let t = std::mem::ManuallyDrop::new(Tail("t"));
+            // SAFETY: test-local, as above.
+            unsafe {
+                arch.get_column_mut(TypeId::of::<Fuse>()).unwrap().push_raw(&*f as *const Fuse as *const u8, 1);
+                arch.get_column_mut(TypeId::of::<Tail>()).unwrap().push_raw(&*t as *const Tail as *const u8, 1);
+            }
+            arch.push_entity(i as u32);
+        }
+        ARMED.store(true, SeqCst);
+
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| arch.clear()));
+        assert!(unwound.is_err(), "the drop was supposed to panic; the fixture is wrong if not");
+
+        // Every length went to zero BEFORE any destructor ran, so the unwind leaks the values it
+        // did not reach and leaves nothing that can be indexed. Before the split, the `Tail`
+        // column was still 2 long under an `entities` of 2, with the `Fuse` column at 0.
+        assert_eq!(arch.len(), 0);
+        for cell in &arch.columns {
+            // SAFETY: a shared read of a length.
+            assert_eq!(unsafe { (*cell.get()).len() }, 0, "a column outlived the clear");
+        }
+    }
+
+    /// `Archetype::batch_clone_row` — the addition side, where the user code is `Clone`.
+    ///
+    /// The panic is triggered off PROGRESS rather than off which type it is. This archetype is
+    /// hand-built, so column order really is declaration order and the test could have named a
+    /// victim — but the property under test is "no column is left grown", which holds whichever
+    /// column the panic lands in, and a progress trigger says that instead of assuming it.
+    /// Whichever column comes first finishes its three clones; the second panics on its first.
+    #[test]
+    fn a_panicking_clone_during_a_batch_clone_abandons_every_grown_column() {
+        use std::sync::atomic::{AtomicU32, Ordering::SeqCst};
+
+        static CLONES: AtomicU32 = AtomicU32::new(0);
+
+        #[derive(Default)]
+        struct Counted(u32);
+        impl Component for Counted {}
+        impl Clone for Counted {
+            fn clone(&self) -> Self {
+                if CLONES.fetch_add(1, SeqCst) >= 3 {
+                    panic!("Counted::clone");
+                }
+                Counted(self.0)
+            }
+        }
+        #[derive(Default)]
+        struct Other(u32);
+        impl Component for Other {}
+        impl Clone for Other {
+            fn clone(&self) -> Self {
+                if CLONES.fetch_add(1, SeqCst) >= 3 {
+                    panic!("Other::clone");
+                }
+                Other(self.0)
+            }
+        }
+
+        let infos = vec![ComponentInfo::of::<Counted>(), ComponentInfo::of::<Other>()];
+        let mut arch = Archetype::new(0, &infos);
+        let a = std::mem::ManuallyDrop::new(Counted(1));
+        let b = std::mem::ManuallyDrop::new(Other(2));
+        // SAFETY: test-local, as above.
+        unsafe {
+            arch.get_column_mut(TypeId::of::<Counted>()).unwrap().push_raw(&*a as *const Counted as *const u8, 1);
+            arch.get_column_mut(TypeId::of::<Other>()).unwrap().push_raw(&*b as *const Other as *const u8, 1);
+        }
+        arch.push_entity(0);
+        CLONES.store(0, SeqCst);
+
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // SAFETY: row 0 is live and `new_eids` has exactly `count` ids.
+            unsafe { arch.batch_clone_row(0, 3, &[1, 2, 3], 1) }
+        }));
+        assert!(unwound.is_err(), "the clone was supposed to panic; the fixture is wrong if not");
+
+        // The finished column is truncated back rather than left three rows longer than its
+        // neighbour. Without the abandon protocol one column is 4 and the other 1, permanently,
+        // and every later row lands at a different index in each.
+        assert_eq!(arch.len(), 1);
+        for cell in &arch.columns {
+            // SAFETY: a shared read of a length.
+            assert_eq!(unsafe { (*cell.get()).len() }, 1, "a half-grown column survived");
         }
     }
 }

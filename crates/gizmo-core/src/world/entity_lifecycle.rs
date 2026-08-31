@@ -316,33 +316,77 @@ impl World {
         }
         let target_arch_id = loc.archetype_id as usize;
 
-        for bundle in iter {
-            let entity = {
-                let e_res = self.get_resource::<crate::entity::allocator::Entities>().expect("Entities not init");
-                e_res.reserve_entity()
-            };
-            let eid = entity.id();
+        // The staged-row argument below rests on every column being exactly `arch.len()` long on
+        // entry, which is the archetype invariant. Checked rather than assumed, the same way
+        // `add_bundle`'s same-archetype branch checks it.
+        #[cfg(debug_assertions)]
+        self.archetype_index.archetypes[target_arch_id].debug_assert_consistent();
 
-            let new_row = {
-                let arch = &mut self.archetype_index.archetypes[target_arch_id];
-                let row = arch.push_entity(eid);
-                // SAFETY: the row was just pushed into the archetype chosen for this bundle's
-                // component set, so the bundle writes every column of it exactly once.
-                unsafe { crate::component::Bundle::write_to_archetype(bundle, arch, row as usize, self.tick); }
-                row
-            };
+        // ONE landing pad for the whole batch, not one per entity — and it can be hoisted out of
+        // the loop precisely because the row is staged: `entities.len()` is the number of FULLY
+        // written rows at every instant, so `forget_rows_above(arch.len())` is the right recovery
+        // wherever the panic landed, with no base to carry. Nothing in the loop hands the world
+        // to user code (`write_to_archetype` gets an `&mut Archetype` and this path fires no
+        // hooks), which is what makes the hoist sound; if hooks are ever added here it has to
+        // move back inside.
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            for bundle in iter {
+                let entity = {
+                    let e_res = self.get_resource::<crate::entity::allocator::Entities>().expect("Entities not init");
+                    e_res.reserve_entity()
+                };
+                let eid = entity.id();
 
-            let loc_idx = eid as usize;
-            if loc_idx >= self.entity_locations.len() {
-                self.entity_locations.resize(loc_idx + 1, crate::archetype::EntityLocation::INVALID);
+                // Grown BEFORE anything fallible, so nothing after the commit can allocate.
+                let loc_idx = eid as usize;
+                if loc_idx >= self.entity_locations.len() {
+                    self.entity_locations.resize(loc_idx + 1, crate::archetype::EntityLocation::INVALID);
+                }
+
+                let new_row = {
+                    let arch = &mut self.archetype_index.archetypes[target_arch_id];
+                    // THE ROW IS STAGED, NOT PUSHED. `push_entity` first is the exact inverse of
+                    // the protocol the migration paths use: it makes the row VISIBLE — every
+                    // query bounds itself by `entities.len()` — before any column holds data for
+                    // it, so a panic out of `write_to_archetype` left `entities` one longer than
+                    // the columns and ordinary iteration read past the end of every one of them.
+                    //
+                    // `row == arch.len()` is the same value `push_entity` used to return, so each
+                    // column still takes `write_to_archetype`'s append branch exactly as before;
+                    // the difference is only that `entities` learns about the row last.
+                    let row = arch.len() as u32;
+                    arch.reserve_row();
+                    // SAFETY: the archetype was chosen for this bundle's component set and every
+                    // column is `row` long, so the bundle appends to each of them exactly once.
+                    unsafe { crate::component::Bundle::write_to_archetype(bundle, arch, row as usize, self.tick); }
+                    // One store into capacity `reserve_row` already bought: this is the instant
+                    // the row exists.
+                    arch.commit_staged_row(eid);
+                    row
+                };
+
+                self.entity_locations[loc_idx] = crate::archetype::EntityLocation {
+                    archetype_id: target_arch_id as u32,
+                    row: new_row,
+                };
+                self.archetype_index.entity_archetype.insert(eid, target_arch_id);
+
+                entities.push(entity);
             }
-            self.entity_locations[loc_idx] = crate::archetype::EntityLocation {
-                archetype_id: target_arch_id as u32,
-                row: new_row,
-            };
-            self.archetype_index.entity_archetype.insert(eid, target_arch_id);
+        }));
 
-            entities.push(entity);
+        if let Err(payload) = outcome {
+            let arch = &mut self.archetype_index.archetypes[target_arch_id];
+            let committed = arch.len();
+            // SAFETY: the staged protocol keeps `entities.len()` equal to the number of fully
+            // written rows at every instant, so every column is at least that long.
+            unsafe { arch.forget_rows_above(committed) };
+            tracing::warn!(
+                archetype = target_arch_id,
+                "spawn_batch: a `Bundle` impl panicked mid-write; the partial row is abandoned \
+                 and its id is not spawned"
+            );
+            std::panic::resume_unwind(payload);
         }
 
         // Değişmez: batch sonunda her sütun uzunluğu entity sayısına eşit olmalı.
@@ -397,20 +441,22 @@ impl World {
     /// id passes. A pool that survives a clear will hand out entities belonging to the new
     /// scene. Rebuild the pools after a clear.
     pub fn clear_entities(&mut self) {
-        self.archetype_index.clear_entities();
+        // THE TWO CLEARS THAT DESTROY COMPONENTS GO LAST. Reordered 2026-08-31: a component's
+        // `Drop` is user code, it may panic, and it unwinds straight out of this function. With
+        // the archetypes and the sparse sets cleared FIRST, everything below them was skipped —
+        // `entity_locations` still fully populated and pointing into archetypes that had just
+        // been emptied, the id allocator never reset, the command queue still holding closures
+        // that captured entities that no longer exist.
+        //
+        // Precisely what moves above them, and why it is not simply "everything infallible":
+        // dropping `entity_observers` and clearing the command queue run user code too — both
+        // hold boxed closures whose captures have destructors. What separates them is that
+        // neither can leave a COLUMN out of step with its entity list, which is the state that
+        // is unsafe rather than merely incomplete. So the ordering rule here is by damage, not
+        // by fallibility: the two that can desync an archetype run when nothing else is left to
+        // skip, and each is internally panic-safe in its own right.
         self.entity_locations.clear();
         self.entities_to_despawn.clear();
-
-        // SparseSet components live outside the archetypes, so clearing the archetypes does not
-        // touch them. Until 2026-08-24 this line was missing and the omission was invisible in
-        // the obvious way — nothing dangles, nothing panics — because a sparse set is keyed by
-        // the RAW entity id: `Entities::clear` restarts ids at 0, so the next entity spawned
-        // took id 0 back and inherited the sparse components of whoever held id 0 before. It
-        // also made a genuine first attach look like an overwrite, since `add_component`'s
-        // sparse branch asks the set whether the entity is already in it.
-        for set in self.sparse_sets.values_mut() {
-            set.clear();
-        }
 
         // The world's OTHER per-entity map, and the same omission one turn sharper.
         // `Entities::clear` resets the GENERATIONS as well as the id counter, so the first
@@ -454,6 +500,25 @@ impl World {
         // look current.
         self.reset_epoch = self.reset_epoch.saturating_add(1);
 
+        // ── LAST: the two clears that destroy components. By this line no table in the world
+        //    names a row any more, so an unwind here cannot leave one reachable. Each of the two
+        //    is internally panic-safe as well — the archetype index empties EVERY archetype
+        //    before it drops anything in any of them, and each sparse set empties its own lookup
+        //    arrays before it drops anything — so a destructor that panics leaks what it did not
+        //    reach and leaves every length in step.
+        self.archetype_index.clear_entities();
+
+        // SparseSet components live outside the archetypes, so clearing the archetypes does not
+        // touch them. Until 2026-08-24 this line was missing and the omission was invisible in
+        // the obvious way — nothing dangles, nothing panics — because a sparse set is keyed by
+        // the RAW entity id: `Entities::clear` restarts ids at 0, so the next entity spawned
+        // took id 0 back and inherited the sparse components of whoever held id 0 before. It
+        // also made a genuine first attach look like an overwrite, since `add_component`'s
+        // sparse branch asks the set whether the entity is already in it.
+        for set in self.sparse_sets.values_mut() {
+            set.clear();
+        }
+
         tracing::debug!(
             dropped_commands,
             reset_epoch = self.reset_epoch,
@@ -489,6 +554,25 @@ impl World {
         }
         self.is_despawning = true;
 
+        // THE RE-ENTRANCY FLAG IS CLEARED ON EVERY PATH, including an unwind. A component's
+        // `Drop` runs inside the loop below and may panic; until 2026-08-31 the flag was cleared
+        // only at the end, so one caught panic left it `true` for the life of the world and
+        // every later `despawn` became a silent push onto `entities_to_despawn` that nothing
+        // drained — entities that the caller had asked to destroy simply staying alive, with no
+        // error anywhere. `catch_unwind` rather than a drop guard, for the reason `add_bundle`
+        // gives: a guard would have to hold `&mut self` across the loop that also needs it.
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.despawn_drain();
+        }));
+        self.is_despawning = false;
+        if let Err(payload) = outcome {
+            std::panic::resume_unwind(payload);
+        }
+    }
+
+    /// The body of [`World::despawn`]'s drain loop, split out so the re-entrancy flag can be
+    /// cleared on the unwind path as well as the normal one.
+    fn despawn_drain(&mut self) {
         while let Some(e) = self.entities_to_despawn.pop() {
             if !self.is_alive(e) {
                 continue;
@@ -538,14 +622,37 @@ impl World {
                 // changed underneath — was not. Fixed 2026-08-31.
                 let loc = self.entity_location(id);
                 if loc.is_valid() {
-                    // Archetype'tan verileri temizle
-                    if let Some(moved_eid) = self.archetype_index.archetypes
-                        [loc.archetype_id as usize]
-                        .swap_remove_entity(loc.row as usize)
-                    {
+                    // THE ROW IS DETACHED FIRST AND DROPPED LAST, and the statements in
+                    // between are the reason the two halves exist as a pair at all.
+                    // A component's `Drop` is user code and may panic; by
+                    // the time it runs, everything that describes this entity or its neighbour
+                    // has to be final, and the survivor's row fixup is not inside the archetype.
+                    // Left where it was — after the removal — an unwind stranded the survivor
+                    // recording a row the archetype no longer has, which `World::query_entity`
+                    // and `get_component_ptr` index with no bound check at all.
+                    let detached = self.archetype_index.archetypes[loc.archetype_id as usize]
+                        .detach_entity_row(loc.row as usize);
+                    if let Some(moved_eid) = detached.moved {
                         // Kayan entity'nin location bilgisini güncelle
-                        self.entity_locations[moved_eid as usize].row = loc.row;
+                        if let Some(slot) = self.entity_locations.get_mut(moved_eid as usize) {
+                            slot.row = loc.row;
+                        }
                     }
+                    // The same two statements the block below performs, done here as well — not
+                    // hoisted out of it. That block also has to run for an entity whose location
+                    // was never valid (a `Commands::spawn` id that was never flushed, or one a
+                    // hook cleared), which this branch never reaches. Both are idempotent.
+                    self.archetype_index.entity_archetype.remove(&id);
+                    if let Some(slot) = self.entity_locations.get_mut(id as usize) {
+                        *slot = EntityLocation::INVALID;
+                    }
+                    // SAFETY: the token came from this archetype three statements ago and
+                    // nothing has touched it since — the writes above are to `entity_locations`
+                    // and `entity_archetype`, neither of which is part of an archetype.
+                    unsafe {
+                        self.archetype_index.archetypes[loc.archetype_id as usize]
+                            .drop_detached_row(detached)
+                    };
                 }
             }
 
@@ -632,7 +739,6 @@ impl World {
                 *slot = EntityLocation::INVALID;
             }
         }
-        self.is_despawning = false;
     }
 
     /// Compacts the gaps in memory and, by deleting the unused (empty) Archetype tables, brings

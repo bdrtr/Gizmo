@@ -155,7 +155,7 @@ impl ArchetypeIndex {
     pub(crate) fn on_despawn(&mut self, entity_id: u32) {
         if let Some(_arch_id) = self.entity_archetype.remove(&entity_id) {
             // Satır bilgisini EntityLocation'dan alacağız, burada sadece remove edebiliriz
-            // Ama Archetype::swap_remove_entity row bekler.
+            // Ama Archetype::detach_entity_row row bekler.
             // World::despawn içinde location bilgisi olduğu için oradan çağırmak daha sağlıklı.
             self.cache_dirty = true;
         }
@@ -298,10 +298,32 @@ impl ArchetypeIndex {
     }
 
     pub(crate) fn clear_entities(&mut self) {
+        // Clearing one archetype at a time is not enough, and the reason is the same one
+        // `Archetype::clear` splits itself for, one level up: a destructor in archetype `j` can
+        // panic, and every archetype after it is then still fully populated and still iterable —
+        // queries walk archetypes directly, so the ones that were never reached are not hidden
+        // by anything. So the whole index is emptied first and every destructor runs afterwards.
+        //
+        // The one allocation is bought before anything is touched; if it fails, nothing changed.
+        let mut counts: Vec<usize> =
+            Vec::with_capacity(self.archetypes.iter().map(|a| a.columns.len()).sum());
+        // ── PHASE 1: infallible, index-wide. No drop glue anywhere in here. ──
+        let mut spans: Vec<usize> = Vec::with_capacity(self.archetypes.len());
         for arch in &mut self.archetypes {
-            arch.clear();
+            let before = counts.len();
+            arch.forget_all_rows(&mut counts);
+            spans.push(counts.len() - before);
         }
         self.entity_archetype.clear();
         self.cache_dirty = true;
+
+        // ── PHASE 2: the only user code, over an index that already shows nothing. ──
+        let mut at = 0;
+        for (arch, span) in self.archetypes.iter_mut().zip(spans) {
+            // SAFETY: `counts[at..at + span]` is exactly what this archetype pushed in phase 1,
+            // in order, and nothing has touched it since.
+            unsafe { arch.drop_forgotten_rows(&counts[at..at + span]) };
+            at += span;
+        }
     }
 }
