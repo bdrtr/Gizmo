@@ -116,7 +116,7 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> RpgState {
 
     let empty_prefab = world.spawn();
     let mut pool_manager = gizmo::core::PoolManager::new();
-    pool_manager.register_pool("chunk_obj", empty_prefab);
+    pool_manager.register_pool(world, "chunk_obj", empty_prefab);
     world.insert_resource(pool_manager);
 
     // --- YAPAY ZEKA NPCLER ---

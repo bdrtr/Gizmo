@@ -61,6 +61,15 @@ impl ObjectPool {
 /// particles or enemies — instead of allocating them every single time.
 pub struct PoolManager {
     pools: HashMap<String, ObjectPool>,
+    /// The [`World::reset_epoch`] every pool here was registered against.
+    ///
+    /// A pool holds `Entity` handles — the prefab and everything parked — and
+    /// [`World::clear_entities`] resets the generation counter, so after one those handles come
+    /// back bit-identical attached to entities of the NEW scene. `is_alive` passes for every one
+    /// of them, which is why the two liveness checks in [`PoolManager::instantiate`] do not
+    /// reach this case and nothing per-handle ever could. Comparing the epoch is the only thing
+    /// that can, and every method taking a `&World` does it first.
+    epoch: u64,
 }
 
 impl Default for PoolManager {
@@ -80,12 +89,41 @@ impl PoolManager {
     pub fn new() -> Self {
         Self {
             pools: HashMap::new(),
+            epoch: 0,
+        }
+    }
+
+    /// Drops every pool if the world has been cleared since they were registered.
+    ///
+    /// Called first by everything here that takes a `&World`. It is a whole-manager reset rather
+    /// than a per-pool one because a clear destroys every entity there is: no pool can survive
+    /// it, and a pool whose prefab and parked instances are all strangers is worse than no pool.
+    /// `instantiate` then reports the name as unknown, which is true.
+    fn discard_if_world_was_cleared(&mut self, world: &World) {
+        let now = world.reset_epoch();
+        if self.epoch != now {
+            if !self.pools.is_empty() {
+                tracing::debug!(
+                    pools = self.pools.len(),
+                    from = self.epoch,
+                    to = now,
+                    "PoolManager: the world was cleared; every pool's handles name other \
+                     entities now, so all of them are dropped"
+                );
+            }
+            self.pools.clear();
+            self.epoch = now;
         }
     }
 
     /// Creates a new pool using a prefab object as its source.
-    /// The prefab is automatically marked with `Pooled`, so the render and physics systems skip it.
-    pub fn register_pool(&mut self, name: &str, prefab_entity: Entity) {
+    ///
+    /// Takes the world since 2026-08-31, and only to read [`World::reset_epoch`]: a pool
+    /// registered before a [`World::clear_entities`] must not survive it, and one registered
+    /// *after* must not be swept away with the ones that came before. Distinguishing those two
+    /// needs the epoch at registration time, which is the whole reason for the parameter.
+    pub fn register_pool(&mut self, world: &World, name: &str, prefab_entity: Entity) {
+        self.discard_if_world_was_cleared(world);
         self.pools
             .insert(name.to_string(), ObjectPool::new(prefab_entity));
     }
@@ -93,6 +131,7 @@ impl PoolManager {
     /// The same as `register_pool`, but it additionally marks the prefab entity with `Pooled`.
     /// This way the prefab is never rendered and is not simulated by the physics system.
     pub fn register_pool_hidden(&mut self, world: &mut World, name: &str, prefab_entity: Entity) {
+        self.discard_if_world_was_cleared(world);
         world.add_component(prefab_entity, Pooled);
         self.pools
             .insert(name.to_string(), ObjectPool::new(prefab_entity));
@@ -107,7 +146,7 @@ impl PoolManager {
         bundle: B,
     ) {
         let prefab = world.spawn_bundle(bundle);
-        self.register_pool(name, prefab);
+        self.register_pool(world, name, prefab);
     }
 
     /// Takes an object from the pool. If the pool is empty it produces a new object by cloning
@@ -122,6 +161,7 @@ impl PoolManager {
     /// A despawned prefab makes the pool unable to produce anything new, and that is reported as
     /// `None` rather than by cloning whatever now occupies its id slot.
     pub fn instantiate(&mut self, world: &mut World, name: &str) -> Option<Entity> {
+        self.discard_if_world_was_cleared(world);
         let pool = self.pools.get_mut(name)?;
 
         while let Some(entity) = pool.inactive.pop_front() {
@@ -166,6 +206,7 @@ impl PoolManager {
     ///
     /// If `name` is not a registered pool the entity is despawned outright instead.
     pub fn destroy(&mut self, world: &mut World, name: &str, entity: Entity) {
+        self.discard_if_world_was_cleared(world);
         if let Some(pool) = self.pools.get_mut(name) {
             // Membership + liveness guard. `inactive` is a bare queue with no index, so
             // nothing used to stop the same entity being parked twice; `instantiate` then
@@ -220,7 +261,7 @@ mod tests {
         let prefab = world.spawn();
         world.add_component(prefab, Bullet);
         let mut pools = PoolManager::new();
-        pools.register_pool("bullets", prefab);
+        pools.register_pool(&world, "bullets", prefab);
         (world, pools)
     }
 
@@ -279,6 +320,72 @@ mod tests {
         assert_ne!(handed_out, a, "the dead entry must not be handed out");
         assert_eq!(handed_out, b);
         assert!(world.is_alive(handed_out));
+    }
+
+    /// After a `clear_entities` the pool must not hand out entities of the new scene.
+    ///
+    /// This is the case neither liveness check can reach, and the reason is structural rather
+    /// than an oversight: a clear resets the generation counter as well as the id counter, so
+    /// every parked handle and the prefab come back BIT-IDENTICAL attached to whatever the new
+    /// scene spawns. `is_alive` returns true for all of them. Only `World::reset_epoch` can tell
+    /// the difference, because it is about the world rather than about any one handle.
+    #[test]
+    fn a_world_clear_empties_the_pools_instead_of_recycling_the_new_scene() {
+        #[derive(Clone, Copy)]
+        struct Newcomer;
+        crate::impl_component!(Newcomer);
+
+        let (mut world, mut pools) = setup();
+        let parked = pools.instantiate(&mut world, "bullets").expect("clone from prefab");
+        pools.destroy(&mut world, "bullets", parked);
+
+        world.clear_entities();
+
+        // The new scene takes the ids the pool is still holding, generation and all. Spawn far
+        // enough to reach the parked id — ids restart at 0, so one spawn is not necessarily it.
+        let mut newcomer = None;
+        for _ in 0..=parked.id() {
+            let e = world.spawn();
+            if e == parked {
+                newcomer = Some(e);
+            }
+        }
+        let newcomer = newcomer.expect("the freed ids come back in order, so one of them is it");
+        world.add_component(newcomer, Newcomer);
+        assert!(
+            world.is_alive(parked),
+            "the parked handle passes the liveness check — that is the whole problem, and it \
+             is why no per-handle test can close this case"
+        );
+
+        assert!(
+            pools.instantiate(&mut world, "bullets").is_none(),
+            "the pool's handles all name entities of the new scene, so the pool is gone"
+        );
+        assert_eq!(
+            world.query::<&Newcomer>().map(|q| q.iter().count()),
+            Some(1),
+            "and the new scene's entity was neither handed out nor cloned"
+        );
+    }
+
+    /// A pool registered AFTER a clear must survive — the sweep is not indiscriminate.
+    ///
+    /// Without an epoch recorded at registration this is the case that breaks: a manager that
+    /// simply compared "my epoch" against the world's would drop the pool it had just been given
+    /// on the next call. That is why `register_pool` takes the world.
+    #[test]
+    fn a_pool_registered_after_a_clear_is_kept() {
+        let (mut world, mut pools) = setup();
+        world.clear_entities();
+
+        let prefab = world.spawn();
+        world.add_component(prefab, Bullet);
+        pools.register_pool(&world, "bullets", prefab);
+
+        let made = pools.instantiate(&mut world, "bullets");
+        assert!(made.is_some(), "a pool registered after the clear is current, not stale");
+        assert!(world.is_alive(made.unwrap()));
     }
 
     /// Retiring the same entity twice must park it ONCE.

@@ -446,8 +446,17 @@ impl World {
         if let Some(entities) = self.get_resource::<Entities>() {
             entities.clear();
         }
+        // Everything holding an `Entity` across this call is now holding a handle to a stranger,
+        // and no per-handle check can notice — the generation reset is what makes them
+        // bit-identical. The world's own state is cleared above; this is what a caller's cache
+        // compares against. Saturating rather than wrapping: a world that has been cleared
+        // 2^64 times has other problems, and silently returning to 0 would make a stale cache
+        // look current.
+        self.reset_epoch = self.reset_epoch.saturating_add(1);
+
         tracing::debug!(
             dropped_commands,
+            reset_epoch = self.reset_epoch,
             "clear_entities: all entities and archetype rows reset"
         );
     }

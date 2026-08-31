@@ -236,7 +236,7 @@ impl World {
     /// # let prefab = world.spawn();
     /// # world.add_component(prefab, Enemy);
     /// # let mut pools = PoolManager::new();
-    /// # pools.register_pool("enemy", prefab);
+    /// # pools.register_pool(&world, "enemy", prefab);
     /// # world.insert_resource(pools);
     /// // The third parameter is the closure's own type, so it can only be `_`.
     /// world.resource_scope::<PoolManager, (), _>(|world, pool| {

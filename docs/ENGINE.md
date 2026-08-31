@@ -452,13 +452,24 @@ state instead.
       silently does nothing — exactly the failure the parking guard exists to prevent, one step
       later. Dead entries are discarded on the way out now.
 
-    **Still open: the `clear_entities` case itself.** A clear resets the generation counter, so
-    every parked handle and the prefab come back bit-identical and pass `is_alive`. Liveness
-    cannot distinguish them by construction, which is why neither fix above reaches it. Closing
-    it needs the world to expose something a cache can compare against — a reset counter bumped
-    by `clear_entities` — and that would serve the whole class `clear_entities` already warns
-    about in prose ("a selection list, a cache keyed by `Entity`"), not just the pool. It is an
-    API addition and a design decision, so it is filed rather than slipped in.
+    - **And the `clear_entities` case, closed the same day by the addition it was filed as
+      needing.** A clear resets the generation counter, so every parked handle and the prefab
+      come back bit-identical and pass `is_alive`; liveness cannot distinguish them **by
+      construction**, which is why neither fix above reaches it and why no per-handle test can.
+      `World::reset_epoch` is a count of how many times `clear_entities` has run — the one thing
+      a cache keyed by `Entity` can compare itself against, because it is about the world rather
+      than about any one handle. `PoolManager` records it and drops every pool when it changes.
+
+      **`register_pool` takes a `&World` now, and only for this.** Without an epoch stamped at
+      registration, a manager that simply compared its own against the world's would sweep away
+      the pool it had just been handed — a pool registered AFTER a clear is current, not stale,
+      and that distinction needs the epoch at registration time. It has its own test, because
+      "drop everything on a clear" and "drop the right things" both pass the first one.
+
+      The addition is deliberately general rather than pool-shaped: `clear_entities` warns in
+      prose about "a selection list, a cache keyed by `Entity`", and until now there was nothing
+      for such a cache to check. `Events<T>` is the remaining member of that class, and it still
+      needs a registry of which resource types are event queues before anything can drain it.
   - ~~**`WorldStats::component_bytes` counts archetype columns only.**~~ **CLOSED 2026-08-31.**
     `WorldStats::sparse_component_bytes` sits beside it now and reports both halves of a sparse
     set: `dense`, which scales with entries, and `sparse`, which is four bytes per id up to the

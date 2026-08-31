@@ -71,6 +71,18 @@ pub struct World {
     /// global event has no target to bubble from, so sharing the map would mean a walk that has
     /// to be skipped and an `On::entity` that has to be lied about.
     pub(crate) global_observers: HashMap<TypeId, Box<dyn std::any::Any + Send + Sync>>,
+    /// How many times [`World::clear_entities`] has run.
+    ///
+    /// The one thing a cache keyed by `Entity` can compare itself against. `clear_entities`
+    /// resets the generation counter as well as the id counter, so every handle it destroys
+    /// comes back **bit-identical** attached to an unrelated entity — which means `is_alive`,
+    /// the usual defence against a stale handle, cannot tell the two apart by construction.
+    /// That is why the function's own documentation has to warn about "a selection list, a
+    /// cache keyed by `Entity`" in prose: there was nothing for such a cache to check.
+    ///
+    /// Read it with [`World::reset_epoch`], store it beside whatever holds handles, and discard
+    /// that when the two differ. `PoolManager` is the worked example.
+    reset_epoch: u64,
     /// Frame counter stamped into a component's `ComponentTicks` every time it is written;
     /// with `change_ref_tick` it is the whole of change detection.
     ///
@@ -130,6 +142,7 @@ impl World {
             despawn_hooks: Vec::new(),
             entities_to_despawn: Vec::new(),
             is_despawning: false,
+            reset_epoch: 0,
             entity_observers: HashMap::new(),
             global_observers: HashMap::new(),
             tick: 1,
@@ -187,6 +200,16 @@ impl World {
         }
         tracing::trace!(tick = self.tick, ref_tick, "begin_change_frame");
         self.tick
+    }
+
+    /// How many times [`World::clear_entities`] has run — see the field for what it is for.
+    ///
+    /// Starts at 0 and only ever increases. A cache that records this when it is built and
+    /// compares on use knows, without asking about any individual handle, that every `Entity`
+    /// it holds now belongs to somebody else.
+    #[inline]
+    pub fn reset_epoch(&self) -> u64 {
+        self.reset_epoch
     }
 
     /// Processes the deferred command queue (CommandQueue).

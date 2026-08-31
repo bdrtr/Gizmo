@@ -1043,6 +1043,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`World::reset_epoch` is new** — how many times `World::clear_entities` has run, and the one
+  thing a cache keyed by `Entity` can check itself against. A clear resets the generation counter
+  as well as the id counter, so every handle it destroys comes back **bit-identical** attached to
+  an unrelated entity: `is_alive`, the usual defence against a stale handle, cannot tell the two
+  apart by construction. That is why `clear_entities` has always had to warn about "a selection
+  list, a cache keyed by `Entity`" in prose — there was nothing for such a cache to compare.
+  Record it beside whatever holds handles and discard that when the two differ.
+
+  `PoolManager` is the worked example and now closes its own case: it drops every pool when the
+  epoch moves. `PoolManager::register_pool` takes a `&World` for this reason and no other — a
+  pool registered *after* a clear is current rather than stale, and telling those apart needs the
+  epoch recorded at registration.
+
 - **An object pool could clone a stranger, or hand out a corpse.** Two independent stale-handle
   defects in `PoolManager`, both reachable without destroying the world:
 
