@@ -1043,6 +1043,25 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The three component removals left two stale `EntityLocation`s behind when a component
+  destructor panicked.** `World::remove_component`, `World::remove_bundle` and
+  `World::remove_batch` migrate the entity to a smaller archetype and then repair three tables:
+  the row of the entity that was swap-moved into the vacated row, the migrated entity's own
+  location, and the archetype map. The removed components' destructors — the migration's only
+  user code — ran *inside* `Archetype::move_entity_to`, before any of the three. A panicking
+  `Drop` therefore escaped with the migrated entity still naming the row it had just left, which
+  the swapped entity now occupies, and the swapped entity still naming a row the source archetype
+  no longer has. `World::query_entity` and `World::get_component_ptr` index both with no bounds
+  check in either build profile.
+
+  This is the other direction of the invariant the entry below fixes, and it is invisible to that
+  entry's check: every column already matches its entity list. `Archetype::move_entity_to_deferred`
+  now returns a `#[must_use]` token instead of running the destructors, and each of the three
+  callers consumes it after all three writes — so the drop glue runs over a world in which no
+  table names a row that is not there. `move_entity_to` keeps the immediate disposal for
+  `add_component` and `insert_batch`, whose target archetype is a superset of their source: they
+  detach nothing and run no user code in the migration at all.
+
 - **Six composite operations left the ECS indexable past the end of a column when a component
   destructor panicked.** `Archetype::len()` is its entity count, every query bounds itself by
   that, and the fetch path turns a row into a raw offset with no bounds check in either build

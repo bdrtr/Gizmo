@@ -161,6 +161,39 @@ pub(crate) struct DetachedRow {
     row: usize,
 }
 
+/// The rows one MIGRATION detached and has not disposed of yet — the columns the target
+/// archetype does not have, which is exactly the set of components the migration removed.
+///
+/// The plural sibling of [`DetachedRow`], over a wider window and on purpose. Between
+/// `detach_entity_row` and `drop_detached_row` only the ARCHETYPE has to be made final. Between
+/// [`Archetype::move_entity_to_deferred`] and [`Archetype::drop_detached_rows`] the archetype is
+/// final and the WORLD is not: `entity_locations` still names the old archetype and row, and the
+/// entity swap-moved into the vacated row still names the row it came from. Those two writes live
+/// outside `Archetype`, which cannot see the location table, so the obligation cannot be
+/// discharged in here — the token is that obligation made explicit and, in debug, checkable.
+///
+/// Dropping it without consuming it LEAKS the removed values and corrupts nothing: the source
+/// reached its final shape inside the stage, the values sit above every column's length where
+/// nothing can reach them, and no length moves. That is the same outcome a panic half-way through
+/// the disposal produces, which is what makes it an acceptable failure mode rather than a second
+/// hazard.
+#[must_use = "the detached rows still own their values; pass the token to drop_detached_rows"]
+pub(crate) struct DetachedRows {
+    /// The archetype the values were detached FROM. Disposing on any other one would drop a slot
+    /// above a length that belongs to somebody else.
+    source_id: u32,
+    /// The archetype the stage staged INTO. The disposal re-derives *which* columns to drop from
+    /// it, so a different target names a different set: a missed destructor on one side and drop
+    /// glue over a live, still-reachable value on the other.
+    target_id: u32,
+    /// The source's `entities.len()` AFTER the removal — the same convention `DetachedRow::row`
+    /// uses, and for the same reason: it is also every source column's length, and therefore the
+    /// index each detached value sits at. Anything that pushed into the source in between would
+    /// have landed ON those values. Nothing can push inside the window as it is written; this is
+    /// what makes that a checked claim rather than a remembered one.
+    source_len: usize,
+}
+
 impl Archetype {
     /// Creates a new empty archetype for the specified component types.
     pub fn new(id: u32, component_infos: &[ComponentInfo]) -> Self {
@@ -456,15 +489,26 @@ impl Archetype {
     /// panic leaks the ones not yet reached and moves no length at all.
     ///
     /// # Safety
-    /// `target` must be the archetype the matching `stage_entity_into` staged into — the set of
-    /// detached columns is re-derived from it — nothing may have pushed into this archetype in
-    /// between, and this must run exactly once per stage.
-    pub(crate) unsafe fn drop_detached_rows(&mut self, target: &Archetype) {
+    /// `rows` must have come from a [`Archetype::move_entity_to_deferred`] on **this** archetype
+    /// that staged into `target` — the set of detached columns is re-derived from it — nothing
+    /// may have pushed into this archetype in between, and it must be consumed exactly once.
+    pub(crate) unsafe fn drop_detached_rows(&mut self, target: &Archetype, rows: DetachedRows) {
+        debug_assert_eq!(rows.source_id, self.id, "drop_detached_rows: wrong source archetype");
+        debug_assert_eq!(rows.target_id, target.id, "drop_detached_rows: wrong target archetype");
+        debug_assert_eq!(
+            rows.source_len,
+            self.entities.len(),
+            "drop_detached_rows: the source has changed length since the detach"
+        );
         for (type_id, &src_col_idx) in &self.column_indices {
             if !target.column_indices.contains_key(type_id) {
                 // SAFETY: `&mut self`, one visit per column index. The value at `data.len` is the
                 // one `detach_row` left above the length and nothing else can reach it.
                 let src_col = unsafe { &mut *self.columns[src_col_idx].get() };
+                debug_assert_eq!(
+                    src_col.data.len, rows.source_len,
+                    "drop_detached_rows: a detached column is not at the archetype's length"
+                );
                 // SAFETY: `data.len` is where `Column::detach_row` left the removed value —
                 // above the length, so nothing else can reach it — and this pass runs once.
                 unsafe { src_col.data.drop_abandoned_at(src_col.data.len) };
@@ -472,25 +516,68 @@ impl Archetype {
         }
     }
 
-    /// [`Archetype::stage_entity_into`] followed immediately by
-    /// [`Archetype::commit_staged_row`] — the shape every caller wants that runs no user code
-    /// between the two.
+    /// [`Archetype::stage_entity_into`] + [`Archetype::commit_staged_row`], with the removed
+    /// components' destructors left for the caller to run.
     ///
-    /// `World::add_bundle` is the exception and calls the halves itself, because it has to write
-    /// the bundle into the staged row before the row may exist. See there.
+    /// The shape a migration that REMOVES components wants, and the reason is not inside this
+    /// type. On return the two archetypes are final and the disposal is the only step left that
+    /// can unwind — but the WORLD is not final: the migrated entity's `EntityLocation` still
+    /// names the source archetype and the row it just left, and the entity swap-moved into that
+    /// row still names the row it came from. Both are read with no bounds check. So the caller
+    /// takes the token, makes its own bookkeeping final, and only then consumes it.
+    ///
+    /// The obligation is deferred rather than predicted. Writing the locations *before* the
+    /// migration also puts them ahead of the destructors — both outputs are knowable, `new_row`
+    /// is the target's length and the swapped id is the source's last entity — but it publishes
+    /// a location for a row that does not exist yet, across a stage that still indexes
+    /// `entities[source_row]` and reserves capacity. This predicts nothing and publishes nothing
+    /// early.
+    ///
+    /// # Safety
+    /// As [`Archetype::stage_entity_into`]: `source_row` must be a live row of this archetype and
+    /// `target` a different archetype. The returned token must be consumed by
+    /// [`Archetype::drop_detached_rows`] with this same pair, or deliberately leaked.
+    pub(crate) unsafe fn move_entity_to_deferred(
+        &mut self,
+        source_row: usize,
+        target: &mut Archetype,
+    ) -> (Moved, DetachedRows) {
+        // SAFETY: forwarded from this function's own contract.
+        let moved = unsafe { self.stage_entity_into(source_row, target) };
+        target.commit_staged_row(moved.moved);
+        // Minted after the stage, from the state the stage left, so the token describes what is
+        // actually there rather than what was intended.
+        let rows = DetachedRows {
+            source_id: self.id,
+            target_id: target.id,
+            source_len: self.entities.len(),
+        };
+        (moved, rows)
+    }
+
+    /// [`Archetype::move_entity_to_deferred`] with the disposal run immediately — the shape for a
+    /// migration whose target is a SUPERSET of its source, where the stage detaches nothing and
+    /// the disposal is therefore a no-op that can neither run user code nor unwind.
+    ///
+    /// `World::add_component` and `World::insert_batch` are those callers. A migration that
+    /// removes anything must use the deferred form instead: here the destructors would run
+    /// before the caller has repaired a single location.
+    ///
+    /// `World::add_bundle` is a third shape and calls the stage and the commit by hand, because
+    /// it has to write the bundle into the staged row before the row may exist. See there.
     pub(crate) unsafe fn move_entity_to(
         &mut self,
         source_row: usize,
         target: &mut Archetype,
     ) -> Moved {
-        let moved = self.stage_entity_into(source_row, target);
-        target.commit_staged_row(moved.moved);
+        // SAFETY: forwarded from this function's own contract.
+        let (moved, rows) = unsafe { self.move_entity_to_deferred(source_row, target) };
         // The removed components' destructors, LAST — after the target's row exists. Run before
         // the commit they could unwind past it, leaving the target holding a staged row that
         // nothing commits and nothing abandons.
-        // SAFETY: `target` is the archetype the stage above staged into, nothing has touched
-        // either archetype in between, and this is the one disposal of those rows.
-        unsafe { self.drop_detached_rows(target) };
+        // SAFETY: `rows` came from the call above, on this pair, and nothing has touched either
+        // archetype in between.
+        unsafe { self.drop_detached_rows(target, rows) };
         moved
     }
 
@@ -570,7 +657,9 @@ impl Archetype {
         //    CALLER'S, through `drop_detached_rows`, and it must not run until the target's row
         //    is committed — a destructor panicking here would otherwise unwind past
         //    `commit_staged_row` and leave the target holding a staged row nothing commits and
-        //    nothing abandons.
+        //    nothing abandons. For a caller that keeps bookkeeping of its own, the commit is not
+        //    far enough either: see `move_entity_to_deferred`, which hands the obligation out so
+        //    the destructors run after the entity locations are repaired as well.
         //
         // 5. The row is staged, not committed: the columns hold it, `target.entities` does not
         //    yet, so no query can see it. `commit_staged_row` is what makes it exist.

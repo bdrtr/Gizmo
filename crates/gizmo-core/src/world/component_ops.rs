@@ -543,7 +543,10 @@ impl World {
         );
 
         let old_loc = self.entity_locations[eid as usize];
-        let crate::archetype::Moved { moved, new_row, swapped: moved_eid } = {
+        // THE DEFERRED FORM, as `remove_component`: the bundle's destructors are user code and
+        // this function's own bookkeeping has to be final before they run. This is the caller
+        // that can detach MORE THAN ONE column, so more than one destructor waits on it.
+        let (crate::archetype::Moved { moved, new_row, swapped: moved_eid }, detached) = {
             // İki archetype'ı FARKLI indekslerden disjoint ödünç al. Aynı Vec'ten
             // iki `&mut ...[i] as *mut` almak, ikinci retag ile ilk pointer'ın
             // provenance'ını geçersiz kılıp onu kullanınca UB üretiyordu (Miri
@@ -553,10 +556,10 @@ impl World {
                 .archetypes
                 .get_disjoint_mut([old_arch_id, target_arch_id])
                 .expect("old and target archetype indices are distinct and in bounds");
-            // SAFETY: move_entity_to raw sütun kopyaları yapar; ödünçler disjoint.
-            unsafe { old_arch.move_entity_to(old_loc.row as usize, target_arch) }
+            // SAFETY: move_entity_to_deferred raw sütun kopyaları yapar; ödünçler disjoint.
+            unsafe { old_arch.move_entity_to_deferred(old_loc.row as usize, target_arch) }
         };
-        // `move_entity_to` takes a ROW and moves whoever is in it. This says the
+        // `move_entity_to_deferred` takes a ROW and moves whoever is in it. This says the
         // row was still the one this entity owns — see `Moved`.
         debug_assert_eq!(
             moved, eid,
@@ -572,6 +575,21 @@ impl World {
             row: new_row,
         };
         self.archetype_index.entity_archetype.insert(eid, target_arch_id);
+
+        // ONLY NOW the destructors — see `remove_component` for what running them inside the
+        // migration left behind. A panic out of one of them still skips the `on_remove` hooks
+        // below, which is a behavioural loss rather than an unsafe one: the removal has
+        // physically completed and every table agrees about it.
+        {
+            let [old_arch, target_arch] = self
+                .archetype_index
+                .archetypes
+                .get_disjoint_mut([old_arch_id, target_arch_id])
+                .expect("old and target archetype indices are distinct and in bounds");
+            // SAFETY: `detached` came from the migration above, on this same pair, with only
+            // `entity_locations` and `entity_archetype` touched in between.
+            unsafe { old_arch.drop_detached_rows(target_arch, detached) };
+        }
 
         for tid in detached_table_types {
             self.run_hooks(tid, |h, w| {
@@ -868,16 +886,20 @@ impl World {
 
         // 2. Migration — iki archetype'ı FARKLI indekslerden disjoint ödünç al
         // (aynı Vec'ten iki `&mut ... as *mut` = geçersiz-kılınan-provenance UB'si).
-        let crate::archetype::Moved { moved, new_row, swapped: moved_eid } = {
+        //
+        // THE DEFERRED FORM, because `T`'s destructor is user code and this function has
+        // bookkeeping of its own that has to be final before it runs. See the disposal below.
+        let old_arch_id = old_loc.archetype_id as usize;
+        let (crate::archetype::Moved { moved, new_row, swapped: moved_eid }, detached) = {
             let [old_arch, target_arch] = self
                 .archetype_index
                 .archetypes
-                .get_disjoint_mut([old_loc.archetype_id as usize, target_arch_id])
+                .get_disjoint_mut([old_arch_id, target_arch_id])
                 .expect("old and target archetype indices are distinct and in bounds");
-            // SAFETY: move_entity_to raw sütun kopyaları yapar; ödünçler disjoint.
-            unsafe { old_arch.move_entity_to(old_loc.row as usize, target_arch) }
+            // SAFETY: move_entity_to_deferred raw sütun kopyaları yapar; ödünçler disjoint.
+            unsafe { old_arch.move_entity_to_deferred(old_loc.row as usize, target_arch) }
         };
-        // `move_entity_to` takes a ROW and moves whoever is in it. This says the
+        // `move_entity_to_deferred` takes a ROW and moves whoever is in it. This says the
         // row was still the one this entity owns — see `Moved`.
         debug_assert_eq!(
             moved, eid,
@@ -896,6 +918,26 @@ impl World {
         self.archetype_index
             .entity_archetype
             .insert(eid, target_arch_id);
+
+        // 4. ONLY NOW `T`'s destructor. Everything above is an integer store or a map insert —
+        //    nothing that runs user code, nothing that can unwind — so by the time the drop glue
+        //    runs, no table in the world names a row that is not there. Run inside the migration,
+        //    as it was until 2026-09-01, a panicking `Drop` escaped before all three writes and
+        //    left two stale locations behind: this entity naming the row it had just left, which
+        //    the survivor now occupies, and the survivor naming a row the source archetype no
+        //    longer has. `World::query_entity` and `World::get_component_ptr` index both with no
+        //    bounds check.
+        {
+            let [old_arch, target_arch] = self
+                .archetype_index
+                .archetypes
+                .get_disjoint_mut([old_arch_id, target_arch_id])
+                .expect("old and target archetype indices are distinct and in bounds");
+            // SAFETY: `detached` came from the migration above, on this same pair, and the only
+            // things touched in between are `entity_locations` and `entity_archetype` — neither
+            // is part of an archetype.
+            unsafe { old_arch.drop_detached_rows(target_arch, detached) };
+        }
 
         self.run_hooks(type_id, |h, w| {
             for hook in &mut h.on_remove {
@@ -1202,16 +1244,20 @@ impl World {
                 let old_loc = self.entity_locations[eid as usize];
 
                 // Disjoint ödünç (source != target, yukarıda 520'de guard'landı).
-                let crate::archetype::Moved { moved, new_row, swapped: moved_eid } = {
+                // THE DEFERRED FORM, as the two single-entity removals. It matters more here,
+                // not less: the fixup below is what makes the NEXT iteration's `old_loc` read
+                // correct, so a destructor running before it would strand the rest of the group
+                // as well as the entity that was swap-moved.
+                let (crate::archetype::Moved { moved, new_row, swapped: moved_eid }, detached) = {
                     let [old_arch, target_arch] = self
                         .archetype_index
                         .archetypes
                         .get_disjoint_mut([source_arch_id as usize, target_arch_id])
                         .expect("source and target archetype indices are distinct and in bounds");
-                    // SAFETY: move_entity_to raw sütun kopyaları yapar; ödünçler disjoint.
-                    unsafe { old_arch.move_entity_to(old_loc.row as usize, target_arch) }
+                    // SAFETY: move_entity_to_deferred raw sütun kopyaları yapar; ödünçler disjoint.
+                    unsafe { old_arch.move_entity_to_deferred(old_loc.row as usize, target_arch) }
         };
-        // `move_entity_to` takes a ROW and moves whoever is in it. This says the
+        // `move_entity_to_deferred` takes a ROW and moves whoever is in it. This says the
         // row was still the one this entity owns — see `Moved`.
         debug_assert_eq!(
             moved, eid,
@@ -1227,6 +1273,20 @@ impl World {
                     row: new_row,
                 };
                 self.archetype_index.entity_archetype.insert(eid, target_arch_id);
+
+                // ONLY NOW `T`'s destructor. A panic here abandons the rest of the group — every
+                // entity before this one is fully migrated AND correctly bookkept, this one is
+                // too, and the ones after it never move.
+                {
+                    let [old_arch, target_arch] = self
+                        .archetype_index
+                        .archetypes
+                        .get_disjoint_mut([source_arch_id as usize, target_arch_id])
+                        .expect("source and target archetype indices are distinct and in bounds");
+                    // SAFETY: `detached` came from the migration above, on this same pair, with
+                    // only `entity_locations` and `entity_archetype` touched in between.
+                    unsafe { old_arch.drop_detached_rows(target_arch, detached) };
+                }
             }
 
             self.run_hooks(type_id, |h, w| {
@@ -2381,5 +2441,236 @@ mod tests {
         // this used to do — left `entities` one longer than every column it had not reached, and
         // an ordinary `world.query::<&Head>()` then read past the end of one.
         assert_columns_match_entities(&world, "after a panicking spawn_batch");
+    }
+
+    // ── The stale-LOCATION half of the family, closed 2026-09-01. ──
+    //
+    // A different invariant from the one above, and `assert_columns_match_entities` cannot see
+    // it: every column already matches its entity list. What is wrong is the OTHER direction —
+    // `entity_locations` naming a row that is not the entity's, or is not there at all — which
+    // `World::query_entity` and `World::get_component_ptr` index with no bounds check in either
+    // profile. The migration's destructors used to run inside `move_entity_to`, so a panicking
+    // `Drop` escaped before the caller had repaired a single location.
+
+    /// The location table and the archetypes must agree in both directions: every row of every
+    /// archetype names an entity whose `EntityLocation` points back at exactly that row.
+    ///
+    /// A copy of `world::tests::assert_inv`, which is private to that module's `mod tests` and
+    /// unreachable from here — and here is where the test has to live, because CI's Miri job
+    /// filters on `world::component_ops` and not on `world::tests`.
+    fn assert_locations_agree(world: &World, context: &str) {
+        for (arch_idx, arch) in world.archetype_index.archetypes.iter().enumerate() {
+            let mut seen = std::collections::HashSet::new();
+            for (row, &id) in arch.entities().iter().enumerate() {
+                assert!(
+                    seen.insert(id),
+                    "{context}: entity {id} is listed TWICE in archetype {arch_idx}"
+                );
+                let loc = world.entity_location(id);
+                assert!(
+                    loc.is_valid()
+                        && loc.archetype_id as usize == arch_idx
+                        && loc.row as usize == row,
+                    "{context}: entity {id} sits at archetype {arch_idx} row {row}, but its \
+                     location says archetype {} row {}",
+                    loc.archetype_id,
+                    loc.row
+                );
+            }
+        }
+    }
+
+    /// `World::remove_component` — the single-entity removal, and the narrowest fixture that
+    /// produces BOTH stale locations at once.
+    ///
+    /// One Table component on purpose: `Archetype`'s column order is sorted `TypeId`, so a
+    /// two-column fixture cannot say which column the panic lands in. The payload owns a `String`
+    /// rather than being a plain tag, because a stale row read is then a genuine use of a freed
+    /// allocation and Miri sees it; a counter-only payload makes the defect visible to the
+    /// counter and invisible to the interpreter.
+    #[test]
+    fn a_panicking_drop_during_a_remove_component_leaves_no_stale_location() {
+        use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
+
+        static ARMED: AtomicBool = AtomicBool::new(false);
+
+        #[derive(Clone)]
+        struct Fuse {
+            tag: &'static str,
+            owned: String,
+        }
+        impl Component for Fuse {}
+        impl Drop for Fuse {
+            fn drop(&mut self) {
+                if self.tag == "BOOM" && ARMED.swap(false, SeqCst) {
+                    panic!("Fuse::drop");
+                }
+            }
+        }
+        fn fuse(tag: &'static str) -> Fuse {
+            Fuse { tag, owned: tag.to_string() }
+        }
+
+        let mut world = World::new();
+        let victim = world.spawn();
+        let survivor = world.spawn();
+        world.add_component(victim, fuse("BOOM"));
+        world.add_component(survivor, fuse("quiet"));
+        // The victim must NOT be the last row, so the survivor is swap-moved into its place and
+        // the survivor's location has to be repaired as well as the victim's.
+        let source_arch = world.entity_location(victim.id()).archetype_id;
+        assert_eq!(world.entity_location(victim.id()).row, 0);
+        assert_eq!(world.entity_location(survivor.id()).row, 1);
+        ARMED.store(true, SeqCst);
+
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            world.remove_component::<Fuse>(victim);
+        }));
+        assert!(unwound.is_err(), "the drop was supposed to panic; the fixture is wrong if not");
+
+        // THE ASSERTION. Before the fix the victim's location still named the source archetype
+        // and row 0 — the row the survivor now occupies, so reading the victim gave the survivor
+        // — and the survivor's still named row 1, one past the end of a one-row archetype.
+        assert_locations_agree(&world, "after a panicking remove_component");
+        assert_columns_match_entities(&world, "after a panicking remove_component");
+
+        let victim_loc = world.entity_location(victim.id());
+        assert!(victim_loc.is_valid(), "the migration completed; the victim owns a target row");
+        assert_ne!(
+            victim_loc.archetype_id, source_arch,
+            "the victim's location must name the archetype it migrated INTO"
+        );
+        assert_eq!(
+            world.archetype_index.entity_archetype.get(&victim.id()).copied(),
+            Some(victim_loc.archetype_id as usize),
+            "the archetype map and the location table must agree about where the victim went"
+        );
+        assert!(
+            world.query_entity::<&Fuse>(victim.id()).is_none(),
+            "the removal completed as far as anything can see"
+        );
+
+        let survivor_loc = world.entity_location(survivor.id());
+        assert_eq!(survivor_loc.archetype_id, source_arch);
+        assert_eq!(survivor_loc.row, 0, "the survivor was swap-moved into the vacated row");
+        assert_eq!(
+            world.query_entity::<&Fuse>(survivor.id()).map(|f| f.owned.clone()),
+            Some("quiet".to_string()),
+            "reading the survivor must give the survivor"
+        );
+    }
+
+    /// `World::remove_bundle` — the only removal that can detach MORE THAN ONE column.
+    ///
+    /// Exactly one of the two detached types has a destructor, and that is a requirement rather
+    /// than a simplification: `drop_detached_rows` walks `column_indices`, a `HashMap` with the
+    /// default `RandomState`, so which of two panicking types goes first varies per process.
+    #[test]
+    fn a_panicking_drop_during_a_remove_bundle_leaves_no_stale_location() {
+        use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
+
+        static ARMED: AtomicBool = AtomicBool::new(false);
+
+        #[derive(Clone)]
+        struct Fuse {
+            tag: &'static str,
+            owned: String,
+        }
+        impl Component for Fuse {}
+        impl Drop for Fuse {
+            fn drop(&mut self) {
+                if self.tag == "BOOM" && ARMED.swap(false, SeqCst) {
+                    panic!("Fuse::drop");
+                }
+            }
+        }
+        /// The second detached column, and deliberately destructor-free.
+        #[derive(Clone, Copy)]
+        struct Tag(#[allow(dead_code)] u32);
+        impl Component for Tag {}
+
+        let mut world = World::new();
+        let victim = world.spawn();
+        let survivor = world.spawn();
+        world.add_component(victim, Fuse { tag: "BOOM", owned: "BOOM".to_string() });
+        world.add_component(victim, Tag(1));
+        world.add_component(survivor, Fuse { tag: "quiet", owned: "quiet".to_string() });
+        world.add_component(survivor, Tag(2));
+        let source_arch = world.entity_location(victim.id()).archetype_id;
+        assert_eq!(world.entity_location(victim.id()).row, 0);
+        ARMED.store(true, SeqCst);
+
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            world.remove_bundle::<(Fuse, Tag)>(victim);
+        }));
+        assert!(unwound.is_err(), "the drop was supposed to panic; the fixture is wrong if not");
+
+        assert_locations_agree(&world, "after a panicking remove_bundle");
+        assert_columns_match_entities(&world, "after a panicking remove_bundle");
+        assert!(world.query_entity::<&Fuse>(victim.id()).is_none());
+        assert_eq!(world.entity_location(survivor.id()).archetype_id, source_arch);
+        assert_eq!(world.entity_location(survivor.id()).row, 0);
+        assert_eq!(
+            world.query_entity::<&Fuse>(survivor.id()).map(|f| f.owned.clone()),
+            Some("quiet".to_string())
+        );
+        assert_eq!(world.query_entity::<&Tag>(survivor.id()).map(|t| t.0), Some(2));
+    }
+
+    /// `World::remove_batch` — where the repair the destructor used to precede is also what makes
+    /// the NEXT iteration's location read correct.
+    ///
+    /// The panic lands on the first entity of the group, so the two behind it never migrate. That
+    /// is the accepted outcome; what must not survive it is a location naming a row that moved.
+    #[test]
+    fn a_panicking_drop_during_a_remove_batch_leaves_no_stale_location() {
+        use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
+
+        static ARMED: AtomicBool = AtomicBool::new(false);
+
+        #[derive(Clone)]
+        struct Fuse {
+            tag: &'static str,
+            owned: String,
+        }
+        impl Component for Fuse {}
+        impl Drop for Fuse {
+            fn drop(&mut self) {
+                if self.tag == "BOOM" && ARMED.swap(false, SeqCst) {
+                    panic!("Fuse::drop");
+                }
+            }
+        }
+
+        let mut world = World::new();
+        let mut ids = Vec::new();
+        for tag in ["BOOM", "middle", "last"] {
+            let e = world.spawn();
+            world.add_component(e, Fuse { tag, owned: tag.to_string() });
+            ids.push(e);
+        }
+        let source_arch = world.entity_location(ids[0].id()).archetype_id;
+        ARMED.store(true, SeqCst);
+
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            world.remove_batch::<Fuse>(&ids);
+        }));
+        assert!(unwound.is_err(), "the drop was supposed to panic; the fixture is wrong if not");
+
+        assert_locations_agree(&world, "after a panicking remove_batch");
+        assert_columns_match_entities(&world, "after a panicking remove_batch");
+        // The first entity migrated; the last was swap-moved into the row it vacated; the middle
+        // one never moved and never migrated.
+        assert!(world.query_entity::<&Fuse>(ids[0].id()).is_none());
+        assert_eq!(world.entity_location(ids[2].id()).archetype_id, source_arch);
+        assert_eq!(world.entity_location(ids[2].id()).row, 0);
+        assert_eq!(
+            world.query_entity::<&Fuse>(ids[2].id()).map(|f| f.owned.clone()),
+            Some("last".to_string())
+        );
+        assert_eq!(
+            world.query_entity::<&Fuse>(ids[1].id()).map(|f| f.owned.clone()),
+            Some("middle".to_string())
+        );
     }
 }

@@ -502,14 +502,33 @@ state instead.
       command queue. Reversed; `reset_epoch` now counts entered rather than completed clears,
       which is the answer a stale cache wants.
 
-    **Still open, and named rather than implied:** a panic out of `drop_detached_rows` escapes
-    before the CALLER writes the entity locations, so `remove_component`, `remove_bundle` and
-    `remove_batch` can still leave a stale location behind — the migrated entity naming its old
-    archetype and row, and the entity swapped into that row naming the row it came from. That is
-    the separate stale-location hazard, the one `despawn`, `insert_batch` and `add_bundle` were
-    reordered to close, reached through a different door. Both outputs are knowable before the
-    migration (`new_row` is `target.len()`, the swapped id is the source's last entity), so the
-    fix is to compute and write them first rather than after.
+    **The stale-LOCATION half of it, closed 2026-09-01.** A panic out of `drop_detached_rows`
+    escaped before the CALLER wrote the entity locations, so `remove_component`, `remove_bundle`
+    and `remove_batch` left two stale locations behind — the migrated entity naming its old
+    archetype and the row it had just left, which the entity swapped into that row now occupies,
+    and that entity naming the row it came from, one past the end of the shortened archetype.
+    Both are read with no bounds check by `World::query_entity` and `World::get_component_ptr`.
+    It is a different invariant from the one above and
+    `assert_columns_match_entities` cannot see it: every column already matches its entity list.
+
+    `Archetype::move_entity_to_deferred` is `stage_entity_into` + `commit_staged_row` returning a
+    `#[must_use] DetachedRows` token, and the three removals consume it — with a second
+    `get_disjoint_mut` of the same pair — only after all three of their writes
+    (`entity_locations[swapped].row`, `entity_locations[eid]`, `entity_archetype`). Everything
+    between the migration and the disposal is an integer store or a map insert, so the
+    destructors now run over a world in which no table names a row that is not there.
+    `move_entity_to` stays as the immediate-disposal composition for `add_component` and
+    `insert_batch`, whose target is a SUPERSET of their source: nothing is detached there, the
+    disposal is a no-op, and no user code runs in their migration at all.
+
+    **The rejected alternative is worth recording, because it is the one this document proposed.**
+    Both outputs *are* knowable before the migration — `new_row` is `target.len()` and the
+    swapped id is the source's last entity — so the caller could write the locations first and
+    call the unchanged `move_entity_to`. That publishes a location for a row that does not exist
+    yet, across a stage that still indexes `entities[source_row]` and calls `reserve_row`, whose
+    `BlobVec::grow` ends in a `Layout` overflow `expect`. Neither is user code, but both unwind,
+    and each would leave a location naming a migration that never happened — the mirror image of
+    the bug. Deferring the disposal predicts nothing and publishes nothing early.
 
     **The shape that generates violations is checkable, done 2026-08-31.**
     `Archetype::move_entity_to` does not take an entity — it takes a ROW, and moves whoever is
