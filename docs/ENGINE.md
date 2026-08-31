@@ -98,8 +98,12 @@ state instead.
   `# Safety`, and on `Column::len`. The item stays closed; what changed is that the third
   argument now names the distinction instead of assuming it.
 
-- **Open, found by the 2026-08-25 ECS sweep and deliberately not fixed in that change.** Each was
-  verified against the code by an adversarial second pass, so these are work items, not leads:
+- **The 2026-08-25 ECS sweep's five items — ALL CLOSED as of 2026-08-31.** Each was verified
+  against the code by an adversarial second pass when it was filed, so none turned out to be a
+  lead rather than a work item; the record of what each one actually was is kept below, because
+  three of the five turned out to be described wrongly in ways that changed the fix. The list is
+  left in place rather than deleted: what it cost to close each one is the only measurement of
+  whether filing them was worth it, and two of them grew extra sites while being closed.
   - ~~**Six hierarchy walks carry no cycle guard.**~~ **CLOSED 2026-08-30 — and there were
     SEVEN.** `Parent`/`Children` can loop: `add_child` refuses to build one, but `add_component`
     writes `Children` directly and `SceneData::instantiate_entities` writes a file's parent edges
@@ -183,13 +187,95 @@ state instead.
     shape: it validates index bounds and vocabulary only. Both now carry a set; for a conforming
     file neither fires. **The next sweep of this class should search by SHAPE — a descent over a
     child list, wherever the list comes from — not by the name of one component.**
-  - **`World::compact` never touches sparse storage**, though its rustdoc promises RAM "back to
-    the initial defragmented state". A sparse set's reverse index is sized by the largest entity
-    id ever inserted and is the largest allocation in the world. Doc corrected 2026-08-25; the
-    behaviour is the open item.
-  - **`clear_entities` does not drain the `CommandQueue`.** A queued closure that captured an
-    entity handle survives the clear, and since a clear resets generations the handle comes back
-    bit-identical — so the command lands on an unrelated entity instead of missing harmlessly.
+  - ~~**`World::compact` never touches sparse storage.**~~ **CLOSED 2026-08-31.** Its rustdoc
+    promised RAM "back towards the initial defragmented state" while walking past the largest
+    allocation in the world: a sparse set's reverse index is indexed *directly by entity id*, so
+    its length is `largest id ever inserted + 1` rather than the number of entries, `remove` only
+    writes a `u32::MAX` sentinel into it, and nothing but `clear_entities` — which destroys every
+    entity — ever gave it back. Four megabytes per component type, held across every `compact`,
+    for a world that once spawned a million entities.
+
+    **`shrink_to_fit` alone would have been the wrong fix**, and this is the part worth keeping:
+    a `Vec`'s doubling slack is bounded by the number of entries, so shrinking the four arrays
+    reclaims a constant factor while the id-sized index stays exactly as long as it was. What
+    reclaims it is **truncating** past the last non-sentinel entry, because a trailing sentinel
+    and an id past the end of the vector mean the same thing — absent. That is sound only because
+    every reader treats a short index as absence: `contains`, `ticks_for`, `get_ptr`,
+    `get_ptr_mut`, `remove` and `clone_entry` all bounds-check, and the one place that indexes
+    blind — `query::fetch`'s `get_item` — is reached only for an entity the query already matched
+    through `contains`, whose entry is therefore below the new length by construction.
+
+    Two tests, because one cannot pin this: a survivor at the LOWEST id proves the index shrinks,
+    and a survivor at the HIGHEST id proves it does not shrink past what is still in it.
+    "Truncate to the last live entry" and "truncate to the *number* of live entries" differ by
+    everything and the first test passes for both. The sets themselves are deliberately kept even
+    when empty — a `sparse_sets` entry is what records that a component type is registered with
+    SparseSet storage.
+  - ~~**`clear_entities` does not drain the `CommandQueue`.**~~ **CLOSED 2026-08-31.** A queued
+    closure captured an `Entity` by value and survived the clear. This is sharper than an ordinary
+    use-after-despawn: `World::despawn` bumps the slot's generation so a stale handle stays dead
+    and the command misses harmlessly, but `Entities::clear` resets the generations *and* the id
+    counter, so the first entity spawned afterwards is `Entity(0, gen 0)` — the same 64 bits. The
+    command does not miss; it lands on a stranger, giving it a component nobody asked for or
+    despawning it outright. The regression test asserts that premise rather than assuming it.
+
+    **Discarded, not applied.** Applying the queue first would look like the generous choice, and
+    it would run a queued `despawn` — and with it the `on_remove` hooks that `clear_entities`
+    documents itself as *not* running. "Finish the queue first" would quietly reintroduce the one
+    thing that contract rules out. A caller who wants the pending work should call
+    `World::apply_commands` before the clear, while the entities those commands name still exist;
+    that is now written on both functions.
+
+    **The remaining edge is named rather than closed:** an `Events<T>` queue has the same defect
+    and cannot be fixed at this layer. `CollisionEvent`, `TriggerEvent` and `HitEvent` all carry
+    `Entity` handles, but `Events<T>` is an ordinary resource, type-erased in the resource map
+    with no registry of which types are event queues — so there is nothing generic to drain.
+    `entity_observers` could have its whole map cleared because every value in it was per-entity;
+    the resource map holds `Time`, `Input` and the world's own machinery, so it cannot. Closing
+    it needs an event-type registry, which is a different change from this one.
+- **Open, filed 2026-08-31 by the audit that closed the last two sweep items.** Each was verified
+  against the code by an adversarial second pass — six of that audit's twenty claims were refuted,
+  so these are the survivors, not the raw list:
+  - **`World::entity_locations` is the same defect `compact`'s sparse fix just closed, one size
+    larger.** Also indexed directly by entity id, at **8 bytes per id** against a sparse index's
+    4, also only ever grown (`despawn` writes `EntityLocation::INVALID` and never shortens), and
+    `compact` still only reclaims its slack. Truncating past the last valid slot is the same
+    argument that made the sparse truncation sound; it is not the same *audit*. Measured
+    2026-08-31: `entity_locations[..]` is indexed from **33 places in code**, of which **4 carry
+    their own length check and 29 do not** — against the single blind indexer `sparse` has — and
+    each of the 29 would have to be shown to run only for an entity that owns an archetype row.
+    Deliberately not folded into the sparse change: that proof is its own commit, and mixing it in
+    would have made the sparse fix unreviewable.
+
+    **Two counts of this were written down before that one and both were wrong** — 34, then 31 —
+    the first by counting the two mentions inside comments, the second by missing that four sites
+    carry their own guard. It is the same trap CLAUDE.md names for the `#[non_exhaustive]` tally:
+    a grep hit is not a call site. Count it when you need it; do not quote this line either. A
+    first pass suggests roughly half the 29 already sit behind an `entity_location(..).is_valid()`
+    test, which is bounds-checked and returns `INVALID` past the end — so the real work is the
+    other half, not all 29.
+  - **`entity_observers` is never pruned when an entity despawns.** Entries are added by
+    `World::observe` and removed only by `clear_entities`, which drops the whole map. A game that
+    attaches per-entity observers and destroys entities accumulates dead ones for the life of the
+    world, and `compact` cannot help: the values are `Box<dyn Any>` over
+    `HashMap<Entity, Vec<EntityListener<E>>>`, so pruning one entity out of them is not
+    expressible without knowing `E`. Closing it needs the same thing the `Events<T>` case needs —
+    a per-type erased hook — which suggests doing them together.
+  - **`PoolManager` hands out entities from the previous scene after a `clear_entities`.** It is
+    a plain struct rather than a resource, so the clear cannot reach it, and its own defence
+    against a stale handle is `World::is_alive` — which a bit-identically recycled id passes.
+    Documented on `clear_entities` as the caller's to rebuild; making it correct by construction
+    would mean the pool holding something more than a raw `Entity`.
+  - **`WorldStats::component_bytes` counts archetype columns only**, so every byte the sparse
+    compaction now reclaims — and every byte it still holds — is invisible to the engine's own
+    memory reporting. A fix that cannot be seen in the numbers the tooling prints is a fix nobody
+    can confirm from outside a debugger.
+  - **`BlobVec::shrink_to_fit` breaks its own ZST sentinel.** `new` sets a zero-sized element
+    type's capacity to `usize::MAX` (meaning "never needs to grow") and `grow` returns early for
+    them, but `shrink_to_fit` writes `capacity = len`. Harmless today — `push` short-circuits on
+    ZSTs before consulting capacity, and `compact` has been doing this to every ZST marker column
+    through `Archetype::shrink_to_fit` for a long time with no symptom — but it is a documented
+    invariant that the code contradicts, which is how the next reader gets misled.
 - **"Freeze the public API" — dropped.** There is no freeze event to schedule. What that item was
   reaching for is §4's external-type contract, and that is enforced continuously: every dependency
   on a public surface is listed there with its cost, and `crates/gizmo/tests/crate_staging.rs`

@@ -153,8 +153,12 @@ pub struct Parent(pub u32);
 /// **A walker must therefore carry a visited set**, and whether one does is per-walker rather
 /// than guaranteed anywhere. In this crate `despawn_recursive` and (since 2026-08-24)
 /// `World::trigger` carry one, as do `collect_hidden` and transform propagation in `gizmo`; a
-/// sweep on 2026-08-25 found six that do not, listed in `docs/ENGINE.md` §3. If you are writing
-/// a walk over this field or over [`Parent`], assume the graph is cyclic.
+/// sweep on 2026-08-25 found six that did not, and a second pass found three more one layer out
+/// (`gizmo-ui`'s mirror into taffy, and two descents in the glTF loader); all are closed, and the
+/// history is in `docs/ENGINE.md` §3. That the count went from six to nine while being closed is
+/// the reason the next sentence is not softened: if you are writing a walk over this field or
+/// over [`Parent`], assume the graph is cyclic. [`HierarchyExt::descendants_inclusive`]
+/// (crate::hierarchy::HierarchyExt::descendants_inclusive) is the guarded one to reach for.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Children(pub Vec<u32>);
 

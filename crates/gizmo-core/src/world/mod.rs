@@ -407,6 +407,359 @@ mod tests {
         assert_eq!(bf.iter().count(), n, "column/entities tutarsızlığı");
     }
 
+    /// A command queued before a clear must not be delivered to an unrelated entity after it.
+    ///
+    /// This is sharper than an ordinary use-after-despawn. `World::despawn` bumps the slot's
+    /// generation, so a stale handle stays dead and the command misses harmlessly; `Entities::clear`
+    /// resets the generations *and* the id counter, so the first entity spawned afterwards is
+    /// `Entity(0, gen 0)` — the same 64 bits the queued command captured. It does not miss. It
+    /// hits a stranger.
+    #[test]
+    fn a_command_queued_before_a_clear_is_not_delivered_to_the_id_that_replaces_it() {
+        #[derive(Clone, Debug, PartialEq)]
+        struct Marker(u32);
+        impl crate::component::Component for Marker {}
+
+        let mut world = World::new();
+        world.register_component_type::<Marker>();
+
+        let doomed = world.spawn();
+        {
+            let queue = world
+                .get_resource::<crate::commands::CommandQueue>()
+                .expect("World::new installs a CommandQueue");
+            queue.push(move |w: &mut World| {
+                w.add_component(doomed, Marker(1));
+            });
+        }
+
+        world.clear_entities();
+
+        let stranger = world.spawn();
+        // The premise, asserted rather than assumed: the id really does come back identical.
+        assert_eq!(stranger, doomed, "a clear resets generations, so the handle is reused exactly");
+
+        world.apply_commands();
+
+        assert!(
+            world.query_entity::<&Marker>(stranger.id()).is_none(),
+            "a command queued for an entity destroyed by clear_entities was delivered to its \
+             bit-identical successor"
+        );
+    }
+
+    /// Compacting a set that has become EMPTY takes `BlobVec::shrink_to_fit`'s other branch: at
+    /// `len == 0` it deallocates outright and leaves a dangling pointer behind, which nothing
+    /// else in the suite reaches. The set must survive that and still accept an insert
+    /// afterwards — a dangling `BlobVec` that cannot be pushed to again would turn a memory
+    /// reclamation into a component type that silently stops working after a GC tick.
+    #[test]
+    fn compacting_an_emptied_sparse_set_leaves_it_usable() {
+        #[derive(Clone, Debug, PartialEq)]
+        struct SparseE(String);
+        impl crate::component::Component for SparseE {
+            fn storage_type() -> crate::component::StorageType {
+                crate::component::StorageType::SparseSet
+            }
+        }
+
+        let mut world = World::new();
+        world.register_component_type::<SparseE>();
+
+        // A heap-owning component on purpose: the dealloc branch runs the type's drop glue, and
+        // a leak or a double free here is what a ZST payload would hide.
+        let a = world.spawn();
+        world.add_component(a, SparseE("first".into()));
+        world.remove_component::<SparseE>(a);
+
+        world.compact();
+
+        {
+            let set = &world.sparse_sets[&std::any::TypeId::of::<SparseE>()];
+            assert_eq!(set.sparse.len(), 0, "an emptied index truncates to nothing");
+            assert_eq!(set.dense.len(), 0);
+            assert_eq!(set.dense.capacity, 0, "and the blob gave its allocation back");
+        }
+
+        // The set is kept rather than dropped, so this must be an ordinary insert into the same
+        // set — not a re-registration — and it must read back.
+        let b = world.spawn();
+        world.add_component(b, SparseE("second".into()));
+        assert_eq!(
+            world.query_entity::<&SparseE>(b.id()).map(|c| c.0.clone()),
+            Some("second".to_string()),
+            "a compacted-empty set must still accept and return a value"
+        );
+    }
+
+    /// `clear_entities` reached from INSIDE a queued command cancels the rest of that same
+    /// flush, because `CommandQueue::apply` pops from the queue the clear just emptied. That is
+    /// a consequence of the drain, not a bug in it — a command that tore the world down has no
+    /// business having its siblings run against the wreckage — but it is invisible from the call
+    /// site, so it is pinned here rather than left to be discovered.
+    #[test]
+    fn clear_entities_from_inside_a_flush_cancels_the_commands_behind_it() {
+        #[derive(Clone, Debug, PartialEq)]
+        struct Late(u32);
+        impl crate::component::Component for Late {}
+
+        let mut world = World::new();
+        world.register_component_type::<Late>();
+        let survivor = world.spawn();
+
+        {
+            let queue = world
+                .get_resource::<crate::commands::CommandQueue>()
+                .expect("World::new installs a CommandQueue");
+            queue.push(move |w: &mut World| {
+                w.clear_entities();
+            });
+            // Queued AFTER the clear command, so `apply` would reach it next.
+            queue.push(move |w: &mut World| {
+                w.add_component(survivor, Late(1));
+            });
+        }
+
+        world.apply_commands();
+
+        let fresh = world.spawn();
+        assert_eq!(fresh, survivor, "ids restart, so this is the same handle the second command holds");
+        assert!(
+            world.query_entity::<&Late>(fresh.id()).is_none(),
+            "the command queued behind the clear must not have run — and must certainly not \
+             have landed on the id that replaced its target"
+        );
+    }
+
+    /// The destructive variant, and the one `ENGINE.md` actually names: a queued `despawn`.
+    /// The `insert` case above leaves a stranger holding a component nobody asked for; this one
+    /// deletes the stranger outright. Both come from the same queue, so one guard covers both —
+    /// but they fail so differently that a reader would not predict the second from the first.
+    #[test]
+    fn a_queued_despawn_from_before_a_clear_does_not_kill_the_id_that_replaces_it() {
+        let mut world = World::new();
+
+        let doomed = world.spawn();
+        {
+            let queue = world
+                .get_resource::<crate::commands::CommandQueue>()
+                .expect("World::new installs a CommandQueue");
+            queue.push(move |w: &mut World| {
+                w.despawn(doomed);
+            });
+        }
+
+        world.clear_entities();
+
+        let stranger = world.spawn();
+        assert_eq!(stranger, doomed, "a clear resets generations, so the handle is reused exactly");
+
+        world.apply_commands();
+
+        assert!(
+            world.is_alive(stranger),
+            "a despawn queued for an entity destroyed by clear_entities killed its \
+             bit-identical successor"
+        );
+    }
+
+    /// The counterpart, so the fix is "discard at the clear" and not "the queue never runs":
+    /// a command queued *after* the clear must still be applied.
+    #[test]
+    fn a_command_queued_after_a_clear_still_applies() {
+        #[derive(Clone, Debug, PartialEq)]
+        struct Kept(u32);
+        impl crate::component::Component for Kept {}
+
+        let mut world = World::new();
+        world.register_component_type::<Kept>();
+        world.spawn();
+        world.clear_entities();
+
+        let e = world.spawn();
+        {
+            let queue = world
+                .get_resource::<crate::commands::CommandQueue>()
+                .expect("World::new installs a CommandQueue");
+            queue.push(move |w: &mut World| {
+                w.add_component(e, Kept(7));
+            });
+        }
+        world.apply_commands();
+
+        assert_eq!(
+            world.query_entity::<&Kept>(e.id()).map(|c| c.0),
+            Some(7),
+            "clearing the queue at teardown must not disable it afterwards"
+        );
+    }
+
+    /// A sparse set's reverse index is sized by the largest entity id ever inserted, not by the
+    /// number of entries, and nothing but `clear_entities` used to give that back. `compact`
+    /// existed to return RAM "towards the initial defragmented state" and walked straight past
+    /// one of the two largest allocations in the world — the other being `entity_locations`,
+    /// which is the same shape at twice the bytes per id and is not truncated (see `compact`).
+    ///
+    /// The assertion is on `len()`, not `capacity()`: `Vec::shrink_to_fit` is allowed to keep
+    /// more than it needs, so an exact capacity is not a promise the standard library makes.
+    /// What IS exact is that every trailing entry was the absent-sentinel and is gone.
+    #[test]
+    fn compact_reclaims_a_sparse_sets_reverse_index() {
+        #[derive(Clone, Debug, PartialEq)]
+        struct SparseC(i32);
+        impl crate::component::Component for SparseC {
+            fn storage_type() -> crate::component::StorageType {
+                crate::component::StorageType::SparseSet
+            }
+        }
+
+        let mut world = World::new();
+        world.register_component_type::<SparseC>();
+
+        const N: usize = 2_000;
+        let ents: Vec<_> = (0..N)
+            .map(|i| {
+                let e = world.spawn();
+                world.add_component(e, SparseC(i as i32));
+                e
+            })
+            .collect();
+        // Everything except the first entity goes. The survivor is the LOWEST id on purpose:
+        // it is the shape that leaves the whole index behind describing one entry.
+        for &e in &ents[1..] {
+            world.despawn(e);
+        }
+
+        let set_id = std::any::TypeId::of::<SparseC>();
+        let before = world.sparse_sets[&set_id].sparse.len();
+        assert_eq!(before, N, "the index is sized by the largest id inserted");
+
+        world.compact();
+
+        let set = &world.sparse_sets[&set_id];
+        assert_eq!(set.sparse.len(), 1, "trailing absent entries are pure absence and must go");
+        assert!(set.sparse.capacity() < before, "and the allocation must actually shrink");
+        // The other three arrays hold one row each and always did — `len` alone would stay green
+        // if their `shrink_to_fit` calls were deleted, because it was never the length that was
+        // wasted there but the capacity a million pushes doubled their way to.
+        assert_eq!(set.dense.len(), 1);
+        assert_eq!(set.entities.len(), 1);
+        assert_eq!(set.ticks.len(), 1);
+        assert!(set.entities.capacity() < before, "entities kept its grown capacity");
+        assert!(set.ticks.capacity() < before, "ticks kept its grown capacity");
+        assert!(set.dense.capacity < before, "dense kept its grown capacity");
+
+        // The survivor is still reachable — a truncation that went one entry too far would
+        // make this `None` (or, on the unchecked query path, panic).
+        assert_eq!(
+            world.query_entity::<&SparseC>(ents[0].id()).map(|c| c.0),
+            Some(0),
+            "compaction must not lose the entry it kept"
+        );
+    }
+
+    /// After compaction, a **live entity id can be larger than `sparse.len()`** — a world state
+    /// that was structurally impossible before, because the index only ever grew. Every query
+    /// path has to keep reading that as "absent" rather than panicking or, worse, matching.
+    ///
+    /// The two tests around it prove the index shrinks and that it does not shrink too far.
+    /// Neither visits an id past the new end, which is precisely the state the shrinking creates.
+    #[test]
+    fn a_live_id_past_the_compacted_index_reads_as_absent_on_every_query_path() {
+        #[derive(Clone, Debug, PartialEq)]
+        struct SparseP(i32);
+        impl crate::component::Component for SparseP {
+            fn storage_type() -> crate::component::StorageType {
+                crate::component::StorageType::SparseSet
+            }
+        }
+        #[derive(Clone, Debug, PartialEq)]
+        struct Tableish(i32);
+        impl crate::component::Component for Tableish {}
+
+        let mut world = World::new();
+        world.register_component_type::<SparseP>();
+        world.register_component_type::<Tableish>();
+
+        const N: usize = 512;
+        let ents: Vec<_> = (0..N).map(|_| world.spawn()).collect();
+        // The low id keeps the set non-empty; the high id pushes `sparse` out to N and then
+        // gives its entry back — so after compaction the index is 1 long while ids 1..N-1 are
+        // all still ALIVE and all past its end.
+        world.add_component(ents[0], SparseP(0));
+        world.add_component(ents[N - 1], SparseP(1));
+        world.remove_component::<SparseP>(ents[N - 1]);
+        // …and a table component, so a query has a reason to visit that high id at all.
+        world.add_component(ents[N - 1], Tableish(9));
+
+        world.compact();
+
+        assert_eq!(
+            world.sparse_sets[&std::any::TypeId::of::<SparseP>()].sparse.len(),
+            1,
+            "the index is now SHORTER than the live id range — the state under test"
+        );
+
+        // A bare read must skip the out-of-range ids rather than index them.
+        assert_eq!(
+            world.query::<&SparseP>().unwrap().iter().count(),
+            1,
+            "only the entity that still has the component"
+        );
+        assert!(world.query_entity::<&SparseP>(ents[N - 1].id()).is_none());
+        // The high entity is alive and keeps its table component: sparse compaction must not
+        // have reached anything but the sparse side.
+        assert_eq!(
+            world.query_entity::<&Tableish>(ents[N - 1].id()).map(|c| c.0),
+            Some(9)
+        );
+        assert_eq!(world.query::<&Tableish>().unwrap().iter().count(), 1);
+    }
+
+    /// The other direction: a surviving HIGH id pins the index, and compaction must not shorten
+    /// past it. Without this, "truncate to the last live entry" and "truncate to the number of
+    /// live entries" — which differ by everything — both pass the test above.
+    #[test]
+    fn compact_keeps_the_reverse_index_long_enough_for_a_high_surviving_id() {
+        #[derive(Clone, Debug, PartialEq)]
+        struct SparseH(i32);
+        impl crate::component::Component for SparseH {
+            fn storage_type() -> crate::component::StorageType {
+                crate::component::StorageType::SparseSet
+            }
+        }
+
+        let mut world = World::new();
+        world.register_component_type::<SparseH>();
+
+        const N: usize = 512;
+        let ents: Vec<_> = (0..N)
+            .map(|i| {
+                let e = world.spawn();
+                world.add_component(e, SparseH(i as i32));
+                e
+            })
+            .collect();
+        // This time the LAST id survives.
+        for &e in &ents[..N - 1] {
+            world.despawn(e);
+        }
+
+        world.compact();
+
+        let set = &world.sparse_sets[&std::any::TypeId::of::<SparseH>()];
+        assert_eq!(
+            set.sparse.len(),
+            N,
+            "the surviving entry sits at the far end; the index has to reach it"
+        );
+        assert_eq!(set.dense.len(), 1, "…while the dense side holds exactly one row");
+        assert_eq!(
+            world.query_entity::<&SparseH>(ents[N - 1].id()).map(|c| c.0),
+            Some(N as i32 - 1),
+        );
+    }
+
     // Regression: spawn_batch's fast path wrote every bundle straight into
     // archetype columns, but SparseSet components have no column — so the 2nd+
     // entity panicked ("Component column missing in Archetype"). A bundle with a

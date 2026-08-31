@@ -65,6 +65,44 @@ impl CommandQueue {
         self.queue.push(Box::new(command));
     }
 
+    /// Drops every pending command without running any of them, and returns how many went.
+    ///
+    /// This is the teardown counterpart to [`apply`](Self::apply), and it exists for
+    /// [`World::clear_entities`](crate::world::World::clear_entities). A queued command names
+    /// entities that no longer exist after a clear — and worse than that, `clear_entities` resets
+    /// the generation counter, so the ids come back **bit for bit**. A command holding
+    /// `Entity(0, gen 0)` does not miss harmlessly after a clear; it lands on whatever unrelated
+    /// entity is spawned first.
+    ///
+    /// Discarding rather than applying is the deliberate choice: applying would run a queued
+    /// `despawn` and with it the `on_remove` hooks that `clear_entities` documents itself as not
+    /// running, so "finish the queue first" would quietly reintroduce the thing that contract
+    /// rules out. A caller who does want the pending work to happen should call
+    /// [`World::apply_commands`](crate::world::World::apply_commands) *before* the clear, while
+    /// the entities those commands name are still the ones they meant.
+    ///
+    /// Every clone shares one `Arc`, so this empties the queue for all of them — which is the
+    /// same queue by definition, not a surprise.
+    ///
+    /// Concurrent pushes are not fenced out: this pops until the queue reports empty, so a
+    /// command pushed by another thread mid-drain may survive. `clear_entities` takes
+    /// `&mut World`, so nothing else is running there.
+    ///
+    /// **It takes `&self`, so anything holding a `Commands` can reach it** — including a system
+    /// running beside others that have already queued work, whose commands this would throw
+    /// away. And a command that reaches `World::clear_entities` while [`apply`](Self::apply) is
+    /// draining cancels the rest of its OWN flush, because `apply` pops from the queue this
+    /// just emptied. Neither is a reason for `&mut self` (the queue is an `Arc` and every clone
+    /// is the same queue, so exclusivity would be a lie), but both are reasons to treat this as
+    /// a teardown operation rather than a general-purpose one.
+    pub fn clear(&self) -> usize {
+        let mut dropped = 0;
+        while self.queue.pop().is_some() {
+            dropped += 1;
+        }
+        dropped
+    }
+
     /// Whether the queue holds no pending commands *at this instant*.
     ///
     /// With other threads pushing, the answer can already be stale by the time it is

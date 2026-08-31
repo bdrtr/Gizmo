@@ -50,6 +50,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`CommandQueue::clear`** — drops every pending command without running any, returning how many
+  went. The teardown counterpart to `apply`, and what `World::clear_entities` now calls (see
+  *Fixed*). A caller that wants the pending work to happen should `apply_commands()` *before* a
+  clear, while the entities those commands name still exist.
+
 - **One guarded hierarchy walk: `HierarchyExt::descendants_inclusive`.** Returns every entity
   reachable from a root down the `Children` links — the root first, then breadth-first —
   **cycle-safe and duplicate-free**. It exists because the same child-list descent was being
@@ -1037,6 +1042,49 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   before.
 
 ### Fixed
+
+- **`World::compact` walked past one of the two largest allocations in the world.** Its
+  documentation
+  promised RAM "back towards the initial defragmented state"; it shrank the archetypes, the
+  location table and the id allocator, and never touched sparse storage. A `SparseSet` component's
+  reverse index is indexed *directly by entity id*, so its length is `largest id ever inserted + 1`
+  rather than the number of entries — `remove` only writes an absent-sentinel into it, and nothing
+  but `clear_entities`, which destroys every entity, ever gave it back. A world that had once
+  spawned a million entities carrying such a component kept four megabytes **per component type**
+  across every `compact`, and the studio calls `compact` from its garbage collector every three
+  seconds.
+
+  Shrinking the arrays would not have fixed it: a `Vec`'s doubling slack is bounded by the number
+  of entries, so it reclaims a constant factor while the id-sized index stays exactly as long.
+  What reclaims it is **truncating** past the last non-sentinel entry — a trailing sentinel and an
+  id past the end of the vector already mean the same thing, absent — and every reader
+  bounds-checks, so a short index reads as absence rather than as an error.
+
+  **`World::entity_locations` is the same defect one size larger and is deliberately left for its
+  own change.** It too is indexed directly by entity id, at 8 bytes per id against a sparse
+  index's 4, and `compact` still only reclaims its slack. Truncating it is the same argument;
+  it is not the same audit, because 29 of the 33 places that index it in code carry no bounds
+  check, against the one that `sparse` has. `compact`'s rustdoc now says so rather than leaving the
+  omission to be rediscovered.
+
+- **A command queued before `World::clear_entities` was delivered to an unrelated entity after
+  it.** This is sharper than an ordinary use-after-despawn. `despawn` bumps the slot's generation,
+  so a stale handle stays dead and a queued command misses harmlessly; `clear_entities` resets the
+  generations *and* the id counter, so the first entity spawned afterwards is `Entity(0, gen 0)` —
+  the same 64 bits the closure captured. It does not miss. It gives a stranger a component nobody
+  asked for, or despawns it.
+
+  The queue is now discarded at the clear, not applied: applying would run a queued `despawn` and
+  with it the `on_remove` hooks that `clear_entities` documents itself as not running. The
+  function's own rustdoc had named "a queued `Commands` closure" as an example of the hazard while
+  leaving the queue full.
+
+  **One case is named rather than closed:** an `Events<T>` queue has the same defect and cannot be
+  fixed at that layer. `CollisionEvent`, `TriggerEvent` and `HitEvent` all carry `Entity` handles,
+  but `Events<T>` is an ordinary resource with no registry of which resource types are event
+  queues, so there is nothing generic to drain — and unlike the per-entity observer map, whose
+  whole contents could go, the resource map also holds `Time`, `Input` and the world's machinery.
+  Both `clear_entities` and `ENGINE.md` now say so.
 
 - **A malformed glTF file could abort the editor on import, or turn a few hundred bytes into an
   exponential number of GPU uploads.** The glTF spec says a document's nodes form a disjoint

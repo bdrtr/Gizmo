@@ -298,7 +298,28 @@ impl World {
     /// guarantees, where the generation bump is what keeps a stale handle dead forever. Anything
     /// holding entity handles across a clear — a queued `Commands` closure, a selection list, a
     /// cache keyed by `Entity` — is holding live-looking pointers to strangers. The world's own
-    /// per-entity state is cleared here for exactly this reason.
+    /// per-entity state is cleared here for exactly this reason: the archetypes, the location
+    /// table, the pending-despawn list, every sparse set, the per-entity observers, and — since
+    /// 2026-08-31 — **the deferred [`CommandQueue`](crate::commands::CommandQueue)**, which this
+    /// paragraph named as a hazard for six days while leaving it full. Those commands are
+    /// *discarded*, not applied: applying would run a queued `despawn` and with it the hooks the
+    /// paragraph above promises do not run here. To have them applied, call
+    /// [`World::apply_commands`] **before** this, while the entities they name still exist.
+    ///
+    /// **What is still yours to reset:** an `Events<T>` queue. `CollisionEvent`, `TriggerEvent`
+    /// and `HitEvent` all carry `Entity` handles, and a queue holding them across a clear has
+    /// exactly the problem above. It cannot be closed here: `Events<T>` is an ordinary resource,
+    /// type-erased in the resource map with no registry of which types are event queues, so
+    /// there is nothing generic to drain — and unlike `entity_observers`, whose whole map could
+    /// go because every value in it was per-entity, the resource map holds `Time`, `Input` and
+    /// the world's own machinery. Drain the queues your game registered, or read them before the
+    /// clear.
+    ///
+    /// [`PoolManager`](crate::pool::PoolManager) is the same shape and worse in one way: it is
+    /// not a resource at all, so this function could not reach it even if it wanted to, and its
+    /// own guard against a stale handle is `World::is_alive` — which a bit-identically recycled
+    /// id passes. A pool that survives a clear will hand out entities belonging to the new
+    /// scene. Rebuild the pools after a clear.
     pub fn clear_entities(&mut self) {
         self.archetype_index.clear_entities();
         self.entity_locations.clear();
@@ -331,11 +352,28 @@ impl World {
         // rules rather than its population.
         self.entity_observers.clear();
 
+        // The deferred command queue is per-entity state too, and the sharpest case of it. A
+        // queued closure captured an `Entity` by value; after this call the ids restart at 0 with
+        // generation 0, so that handle is not stale-and-harmless, it is bit-identical to the
+        // FIRST entity spawned next. Applying it later lands the command on a stranger:
+        // `insert` gives a component nobody asked for, `despawn` kills the wrong entity.
+        //
+        // Cloning first, then dropping the guard, is what lets this run: `CommandQueue::clear`
+        // takes `&self`, but holding the resource guard across the call would keep `self`
+        // borrowed. The queue is an `Arc`, so the clone is the same queue.
+        let queue = self
+            .get_resource::<crate::commands::CommandQueue>()
+            .map(|q| (*q).clone());
+        let dropped_commands = queue.map_or(0, |q| q.clear());
+
         // Entities resource'unu temizle (allocator state)
         if let Some(entities) = self.get_resource::<Entities>() {
             entities.clear();
         }
-        tracing::debug!("clear_entities: all entities and archetype rows reset");
+        tracing::debug!(
+            dropped_commands,
+            "clear_entities: all entities and archetype rows reset"
+        );
     }
 
     /// Destroys an entity: runs the despawn hooks, then the `on_remove` hooks of every
@@ -462,13 +500,29 @@ impl World {
     /// RAM and system performance back towards their initial defragmented (clean) state.
     /// Calling it on Loading screens or at low-intensity moments is recommended.
     ///
-    /// **`SparseSet` storage is not compacted**, and it is the piece most worth compacting: a
-    /// sparse set's reverse index is indexed directly by entity id, so it is sized by the
-    /// largest id ever inserted rather than by the number of components, and neither `remove`
-    /// nor this function shortens it. Only [`World::clear_entities`] gives that memory back,
-    /// and it does so by destroying every entity. A world that spawned a million entities
-    /// carrying a sparse component keeps that index's four megabytes per component type across
-    /// every `compact`.
+    /// **`SparseSet` storage is compacted too, since 2026-08-31**, and it is the piece most worth
+    /// compacting. A sparse set's reverse index is indexed directly by entity id, so it is sized
+    /// by the largest id ever inserted rather than by the number of components, and `remove` only
+    /// writes a sentinel into it. Until this call learned about it, a world that had spawned a
+    /// million entities carrying a sparse component kept that index's four megabytes **per
+    /// component type** across every `compact`, and only [`World::clear_entities`] — which
+    /// destroys every entity — gave it back. Each set now drops its trailing absent entries and
+    /// shrinks all four of its arrays; see
+    /// [`ComponentSparseSet::shrink_to_fit`](crate::archetype::sparse_set::ComponentSparseSet::shrink_to_fit).
+    ///
+    /// What it still does not reclaim: an empty set's `HashMap` entry — after shrinking, such a
+    /// set holds no heap at all, so dropping it would buy a slot and would change
+    /// `WorldStats::sparse_set_components`. And, deliberately, **`entity_locations`**, which is
+    /// the same defect one size larger: it too is indexed directly by entity id, at 8 bytes per
+    /// id against a sparse index's 4, and this function only `shrink_to_fit`s it. Truncating it
+    /// is the same argument — everything past the last valid slot is absent — but it is not the
+    /// same *audit*: `entity_locations[..]` is indexed from **dozens** of places against the one
+    /// blind indexer `sparse` has, and each would have to be shown to run only for an entity that
+    /// owns a row. Count them rather than trusting a number here — the first two counts written
+    /// down for this were both wrong, once by including the two mentions inside comments and once
+    /// by missing that four sites carry their own length check. `grep -rn 'entity_locations\['`
+    /// over `crates/gizmo-core/src`, drop the comment lines, then drop the ones whose preceding
+    /// lines test `entity_locations.len()`. That is its own change, not a rider on this one.
     #[tracing::instrument(skip_all, name = "compact")]
     pub fn compact(&mut self) {
         // 1. Önce eski, kullanılmayan boş archetype'ları silelim (GC)
@@ -486,6 +540,15 @@ impl World {
         // 3. World seviyesindeki listeleri daraltalım.
         self.entities_to_despawn.shrink_to_fit();
         self.entity_locations.shrink_to_fit();
+
+        // 4. SparseSet depolaması archetype'ların dışında yaşıyor, o yüzden yukarıdaki hiçbir
+        //    adım ona dokunmuyor — ve en büyük iki tahsisten biri orada (öbürü, id başına iki
+        //    katı yer tutan `entity_locations`; bkz. yukarıdaki not). Ters indeks entity id ile
+        //    indexlendiği için uzunluğu "eklenmiş en büyük id + 1"; `remove` onu kısaltmaz,
+        //    yalnız sentinel yazar.
+        for set in self.sparse_sets.values_mut() {
+            set.shrink_to_fit();
+        }
 
         let entities = self
             .get_resource::<Entities>()

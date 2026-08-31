@@ -147,6 +147,56 @@ impl ComponentSparseSet {
         self.sparse.clear();
     }
 
+    /// Gives back every byte this set is holding beyond what its live entries need.
+    ///
+    /// Two different reclamations, and the second is the one that matters:
+    ///
+    /// 1. `shrink_to_fit` on the four arrays, which returns the slack a `Vec`'s doubling growth
+    ///    leaves behind — bounded by the number of entries, so at most a constant factor.
+    /// 2. **Truncating [`sparse`](Self::sparse)**, which is bounded by the largest entity id ever
+    ///    inserted instead. `insert` resizes it to `id + 1` and `remove` only writes the
+    ///    `u32::MAX` sentinel, so a world that spawned a million entities carrying this component
+    ///    and despawned all but the first holds a million-entry reverse index describing one
+    ///    entry — 4 MB to say where entity 0 lives. Every trailing sentinel is pure absence, and
+    ///    absence is what an id past the end already means, so they can go.
+    ///
+    /// Truncating is sound because every reader treats a short `sparse` as "not present":
+    /// `contains`, `ticks_for`, `get_ptr`, `get_ptr_mut`, `remove` and `clone_entry` all
+    /// bounds-check before indexing, and `insert` grows it back. Exactly one place indexes
+    /// without a check — the sparse branch of `query::fetch`'s `get_item` — and it is reached
+    /// only for an entity the query already matched through `contains`, whose entry is therefore
+    /// non-sentinel and below the new length by construction.
+    ///
+    /// **That leaves one standing obligation on this crate rather than on this function.**
+    /// `World::hierarchy_sort` also calls `get_item` directly, for a row it took from an
+    /// archetype rather than from a `contains` check. It is safe today only because it fetches
+    /// [`Children`](crate::component::Children), which is `StorageType::Table`, so the sparse
+    /// branch is never entered. Giving `Children` — or anything else that walk fetches — SparseSet
+    /// storage would index this vector blind for an entity that need not be in the set.
+    ///
+    /// The set itself is kept even when empty, and it is nearly free to keep: after this call an
+    /// empty set holds **no heap allocation at all** (`BlobVec::shrink_to_fit` deallocates at
+    /// `len == 0`, and an emptied `Vec` shrinks to capacity 0), so dropping the map entry would
+    /// buy one `HashMap` slot. It would also change `WorldStats::sparse_set_components`, which
+    /// reports how many sparse component types the world has. Registration itself is *not* the
+    /// reason — that lives in `World::component_infos`; these entries are created lazily on the
+    /// first insert, and every reader already handles a missing one with `?`.
+    pub fn shrink_to_fit(&mut self) {
+        // Everything past the last live entry is the `u32::MAX` sentinel, which says exactly
+        // what running off the end of the vector says.
+        let live_end = self
+            .sparse
+            .iter()
+            .rposition(|&row| row != u32::MAX)
+            .map_or(0, |i| i + 1);
+        self.sparse.truncate(live_end);
+
+        self.sparse.shrink_to_fit();
+        self.entities.shrink_to_fit();
+        self.ticks.shrink_to_fit();
+        self.dense.shrink_to_fit();
+    }
+
     /// Deletes an entity's data at O(1) speed.
     pub fn remove(&mut self, entity: u32) -> bool {
         let e = entity as usize;
