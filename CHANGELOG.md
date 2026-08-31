@@ -1043,6 +1043,26 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A deferred spawn whose entity was destroyed before the queue ran still took a row.**
+  `Commands::spawn` reserves the id and hands the handle out immediately, queuing the storage
+  commit for later; despawning that handle before the queue is applied is ordinary use, and the
+  queued `flush_spawn` then ran anyway. It consults neither the allocator nor the existing
+  location, so it appended a row for a dead id — and because the despawn had returned that id to
+  the allocator, the next `spawn` took it back and appended a **second** row, leaving the empty
+  archetype listing one id twice with only the later row recorded. Anything reaching that entity
+  afterwards reads or writes the wrong row. A flush for an id that is no longer alive is a no-op
+  now; a second flush for the same live id — which the function's contract already forbade — is a
+  `debug_assert` rather than silent corruption.
+
+- **`spawn_batch` could write a batch into an archetype that has no columns for it.** It spawns
+  its first bundle normally to discover the archetype the rest are appended into, and that
+  spawn's `on_add` hooks run in between. A hook that *removes* the component it was just given
+  migrates the entity to a different archetype — a perfectly valid location naming the wrong
+  place — and the append loop then wrote into columns that do not exist there. It panicked with a
+  message asserting the cause was SparseSet storage, which had nothing to do with it. The
+  archetype is now checked against the bundle's own component set rather than merely for
+  existence, and that panic message names both ways of reaching it.
+
 - **A migration that moves the wrong entity now says so, at the line that caused it.**
   `Archetype::move_entity_to` does not take an entity — it takes a *row*, and moves whoever is
   sitting in it. Every caller has an entity in mind and derives that row from the entity's

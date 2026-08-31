@@ -820,6 +820,113 @@ mod tests {
         assert_eq!(world.query::<&B2>().unwrap().iter().count(), 3);
     }
 
+    /// `spawn_batch` discovers the batch's archetype from its first entity, and hooks run
+    /// between the spawn and the read. A hook that MOVES that entity to a different archetype —
+    /// by removing the component it was just given, say — leaves the discovered archetype
+    /// pointing somewhere whose columns do not match the bundle at all.
+    ///
+    /// The guard added for the despawn case only asks whether the location is valid. This one
+    /// is valid; it is just wrong.
+    #[test]
+    fn spawn_batch_survives_a_hook_that_moves_its_first_entity_to_another_archetype() {
+        #[derive(Clone, Debug, PartialEq)]
+        struct Tag(u32);
+        impl crate::component::Component for Tag {}
+
+        let mut world = World::new();
+        world.register_component_type::<Tag>();
+        // The hook takes the component straight back off, which migrates the entity out of the
+        // archetype `spawn_bundle` had just put it in.
+        world.register_on_add::<Tag>(Box::new(|w: &mut World, e: Entity| {
+            w.remove_component::<Tag>(e);
+        }));
+
+        let spawned: Vec<Entity> = world.spawn_batch((0..3).map(Tag)).collect();
+        assert_eq!(spawned.len(), 3);
+
+        // Whatever the hook did to each entity, the world must still agree with itself: every
+        // entity listed in an archetype has a location naming that archetype and that row.
+        for (arch_idx, arch) in world.archetype_index.archetypes.iter().enumerate() {
+            for (row, &id) in arch.entities().iter().enumerate() {
+                let loc = world.entity_location(id);
+                assert!(
+                    loc.is_valid()
+                        && loc.archetype_id as usize == arch_idx
+                        && loc.row as usize == row,
+                    "entity {id} is listed at archetype {arch_idx} row {row} but its location \
+                     says archetype {} row {}",
+                    loc.archetype_id,
+                    loc.row
+                );
+            }
+        }
+    }
+
+    /// Asserts INV: every entity listed in an archetype row has a location naming that row.
+    fn assert_inv(world: &World, context: &str) {
+        for (arch_idx, arch) in world.archetype_index.archetypes.iter().enumerate() {
+            let mut seen = std::collections::HashSet::new();
+            for (row, &id) in arch.entities().iter().enumerate() {
+                assert!(
+                    seen.insert(id),
+                    "{context}: entity {id} is listed TWICE in archetype {arch_idx}"
+                );
+                let loc = world.entity_location(id);
+                assert!(
+                    loc.is_valid()
+                        && loc.archetype_id as usize == arch_idx
+                        && loc.row as usize == row,
+                    "{context}: entity {id} at archetype {arch_idx} row {row}, location says \
+                     archetype {} row {}",
+                    loc.archetype_id,
+                    loc.row
+                );
+            }
+        }
+    }
+
+    /// A deferred spawn whose entity is despawned before the queue is flushed.
+    ///
+    /// `Commands::spawn` reserves the id now and queues a `flush_spawn` for later. Despawning
+    /// that handle in between is ordinary — it is a handle, it is alive, `despawn` accepts it —
+    /// and it frees the id. The queued `flush_spawn` then runs anyway: it consults neither the
+    /// allocator nor the existing location, so it appends a row for a dead id.
+    ///
+    /// Nothing here breaks `flush_spawn`'s documented contract, which is "call it exactly once
+    /// per reserved id". It is called exactly once.
+    #[test]
+    fn a_deferred_spawn_despawned_before_its_flush_leaves_no_ghost() {
+        let mut world = World::new();
+        // Exactly what `Commands::spawn` does: reserve the id now, queue the flush for later.
+        let e = {
+            let entities = world
+                .get_resource::<crate::entity::allocator::Entities>()
+                .expect("Entities");
+            let e = entities.reserve_entity();
+            drop(entities);
+            let queue = world
+                .get_resource::<crate::commands::CommandQueue>()
+                .expect("CommandQueue");
+            queue.push(move |w: &mut World| w.flush_spawn(e));
+            e
+        };
+        world.despawn(e);
+        world.apply_commands();
+        assert_inv(&world, "after flushing a deferred spawn that was despawned first");
+
+        // …and the id is now free, so the next spawn takes it back. `flush_spawn` appended a row
+        // for it a moment ago without consulting the allocator, so the archetype can end up
+        // listing one id twice with only the second row recorded.
+        let reused = world.spawn();
+        assert_inv(&world, "after the freed id was recycled by a later spawn");
+        assert!(world.is_alive(reused));
+        assert_eq!(
+            world.query::<&crate::component::EntityName>().map(|q| q.iter().count()),
+            Some(0),
+            "sanity: nothing invented a component"
+        );
+    }
+
     /// A sparse set's reverse index is sized by the largest entity id ever inserted, not by the
     /// number of entries, and nothing but `clear_entities` used to give that back. `compact`
     /// existed to return RAM "towards the initial defragmented state" and walked straight past

@@ -31,6 +31,15 @@ enum Op {
     Add { is_a: bool, idx: usize, val: u64 },
     Remove { is_a: bool, idx: usize },
     Despawn { idx: usize },
+    /// `World::compact`, interleaved with the rest rather than run once at the end.
+    ///
+    /// It is here because compaction is not a no-op on state any more: it truncates the
+    /// id-indexed `entity_locations` and every sparse set's reverse index past their last live
+    /// entry, and it asserts — in debug, which is every run of this test — that each archetype
+    /// member's location still names it. Running it at the END would only ever see one shape of
+    /// world; running it BETWEEN operations means the oracle comparison below has to hold across
+    /// a compaction that happened while entities were still being added and destroyed.
+    Compact,
 }
 
 fn arb_op() -> impl Strategy<Value = Op> {
@@ -40,6 +49,7 @@ fn arb_op() -> impl Strategy<Value = Op> {
             .prop_map(|(is_a, idx, val)| Op::Add { is_a, idx, val }),
         2 => (any::<bool>(), 0usize..64).prop_map(|(is_a, idx)| Op::Remove { is_a, idx }),
         1 => (0usize..64).prop_map(|idx| Op::Despawn { idx }),
+        1 => Just(Op::Compact),
     ]
 }
 
@@ -106,6 +116,13 @@ proptest! {
                     let removed = live.remove(i);
                     world.despawn(removed.e);
                     stale.push(removed.e);
+                }
+                Op::Compact => {
+                    // The model does not change: compaction is supposed to give memory back and
+                    // nothing else. That is the whole assertion — everything checked after the
+                    // loop has to still hold, including the component values of entities whose
+                    // rows and whose location table just moved underneath them.
+                    world.compact();
                 }
             }
         }

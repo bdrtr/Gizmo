@@ -578,11 +578,17 @@ impl<T: Component> Bundle for T {
     unsafe fn write_to_archetype(self, arch: &mut crate::archetype::Archetype, row: usize, tick: u32) {
         let col = arch.get_column_mut(std::any::TypeId::of::<T>()).unwrap_or_else(|| {
             panic!(
-                "Component column for `{}` missing in Archetype. The bundle fast-path \
-                 (write_to_archetype) only handles Table-storage components; SparseSet \
-                 components must be routed via World::add_component. spawn_batch already \
-                 falls back for sparse bundles — reaching here means another bundle path \
-                 wrote a sparse component into the archetype.",
+                "Component column for `{}` missing in Archetype. Two ways to get here, and \
+                 the first version of this message named only one. (1) STORAGE: the bundle \
+                 fast-path only reaches Table-storage components, so a SparseSet one must be \
+                 routed via World::add_component — `spawn_batch` falls back for sparse bundles, \
+                 so reaching here that way means another bundle path wrote one into an \
+                 archetype. (2) WRONG ARCHETYPE: the caller aimed the write at an archetype \
+                 that does not hold this bundle\'s columns at all. `spawn_batch` discovers its \
+                 archetype from its first entity, and the hooks that spawn fires can MOVE that \
+                 entity — an `on_add` that removes the component it was just given migrates it \
+                 — so the discovered archetype was a different one. That was live until \
+                 2026-08-31 and is guarded there now; this arm is what it looked like.",
                 std::any::type_name::<T>()
             )
         });

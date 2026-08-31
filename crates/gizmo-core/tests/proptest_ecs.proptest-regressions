@@ -1,0 +1,15 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+# PROVENANCE of the one seed below, because a saved seed with no story attached is a puzzle for
+# whoever reads it next: it did not come from a defect found in the wild. It was produced on
+# 2026-08-31 while deliberately breaking a candidate `World::compact` — truncating
+# `entity_locations` to the live COUNT instead of past the last live INDEX — to check that this
+# test could tell the two apart. It could, and this is the shrunk case that did it. The
+# truncation itself was then removed for unrelated reasons (see `docs/ENGINE.md` §3), so the seed
+# passes on this tree and is kept only because it is a cheap, precise exercise of
+# spawn/despawn/compact ordering.
+cc 4dd69a0cef4a79ae1e2f7b778cfaf6669025bbb0286bb45a8fcb73b5cdfa01f1 # shrinks to ops = [Spawn, Spawn, Despawn { idx: 30 }, Compact, Compact]

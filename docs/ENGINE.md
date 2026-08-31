@@ -287,7 +287,40 @@ state instead.
     now hold; whether any other generator exists is the open question, and re-running the audit
     against the fixed tree is the next step rather than writing the truncation.
 
-    **The shape that generates violations is now checkable, done 2026-08-31.**
+    **THE INVARIANT IS FALSE TODAY, and that is the answer — measured 2026-08-31.** An
+    adversarial sweep along five independent angles produced **ten** constructions of an entity
+    listed in an archetype whose location does not name it; every one was reproduced against the
+    tree by a second agent and **none was refuted**. So the truncation is not merely unproven, it
+    is unsound, and `compact` does not do it. What `compact` DOES do is check the invariant in
+    every debug build and name the violation at the GC tick, which is how any of these will be
+    noticed from now on instead of surfacing as a wrong component value somewhere else.
+
+    Two generators are closed, both live defects reachable without misusing anything:
+    - **`flush_spawn` committed storage for an id that had been freed since its reservation.**
+      `Commands::spawn` hands the handle out the moment it reserves the id; despawning it before
+      the queue is applied is ordinary, and the queued flush then appended a row for a dead id —
+      which the next `spawn` recycled, appending a second and leaving the empty archetype listing
+      one id twice. Measured: `entity 0 at archetype 0 row 0, location says archetype 0 row 1`.
+      It is a no-op for a dead id now, and a `debug_assert` for the double-flush the contract
+      already forbade.
+    - **`spawn_batch` reused an archetype its bundle does not fit.** It discovers the batch's
+      archetype from its first entity, and that entity's `on_add` hooks run in between — one that
+      removes the component it was just given MIGRATES it, leaving a location that is perfectly
+      valid and names the wrong archetype. The rest of the batch was then written into columns
+      that do not exist, panicking with a message that blamed SparseSet storage. The archetype is
+      now checked against the bundle's component set, not merely for existence, and that message
+      names both ways of reaching it.
+
+    **The one still open, and the reason the list is not shorter:** `despawn` invalidates the
+    location LAST, after its sparse `on_remove` hooks have run with a `&mut World`, while the
+    entity is still alive and its id not yet retired. A hook that puts that id back into an
+    archetype — `flush_spawn` on a deferred spawn is enough, and is that function's documented
+    purpose — leaves the row behind when the final unconditional `INVALID` write lands. The
+    liveness guard above does not help: at that point the entity has not been freed yet. Fixing
+    it means either ordering `despawn` so nothing can re-list the entity after its row is gone,
+    or making the re-list impossible while `is_despawning` names it.
+
+    **The shape that generates violations is checkable, done 2026-08-31.**
     `Archetype::move_entity_to` does not take an entity — it takes a ROW, and moves whoever is
     sitting in it, while every caller has an entity in mind and derives the row from that
     entity's recorded location. The two agree only while that location is fresh. It now returns

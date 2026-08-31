@@ -57,11 +57,39 @@ impl World {
     /// half of [`World::spawn`], exposed so a deferred spawn can hand out the id from
     /// `&World` and commit the storage later under `&mut World`.
     ///
-    /// Call it exactly once per reserved id. It neither consults the allocator nor checks
-    /// for an existing location: a second call pushes another row for the same id into the
-    /// empty archetype and overwrites the recorded location, orphaning whatever storage the
-    /// entity already had.
+    /// Call it exactly once per reserved id. A second call for the same id pushes another row
+    /// into the empty archetype and overwrites the recorded location, orphaning the first —
+    /// that is still the caller's to avoid, and it is a `debug_assert` here rather than a
+    /// silent corruption.
+    ///
+    /// **A flush for an id that is no longer alive is a no-op, since 2026-08-31.** That is not
+    /// a contract the caller can be asked to keep: `Commands::spawn` hands the handle out the
+    /// moment it reserves the id, and despawning it before the queue is applied is ordinary
+    /// use. The queued flush then ran anyway and appended a row for a dead id — and because
+    /// `despawn` returned that id to the allocator, the very next `spawn` took it back and
+    /// appended a SECOND row, leaving the empty archetype listing one id twice with only the
+    /// later row recorded. Measured before the fix: `entity 0 at archetype 0 row 0, location
+    /// says archetype 0 row 1`.
+    ///
+    /// Anything reachable from an entity in that state reads or writes the wrong row, and it is
+    /// also the reason `World::compact` cannot yet truncate `entity_locations`: an entity
+    /// listed in an archetype with no matching location is exactly what truncation must not
+    /// find. See `docs/ENGINE.md` §3.
     pub fn flush_spawn(&mut self, entity: Entity) {
+        if !self.is_alive(entity) {
+            tracing::debug!(
+                entity = entity.id(),
+                "flush_spawn: id was freed between its reservation and this flush; skipped"
+            );
+            return;
+        }
+        debug_assert!(
+            !self.entity_location(entity.id()).is_valid(),
+            "flush_spawn called twice for entity {}: the first row it was given is now \
+             orphaned, listed in the archetype with nothing pointing at it",
+            entity.id()
+        );
+
         // Yeni entity'yi boş archetype'a kaydet
         self.archetype_index.on_spawn(entity.id());
 
@@ -248,11 +276,38 @@ impl World {
         // Falling back to the per-entity path is the answer this function already gives when
         // it cannot use its fast path (see the sparse-component branch above): correct, and
         // slower only in a case that has already gone strange.
+        // The hooks `spawn_bundle` just fired get a `&mut World` and may have done anything to
+        // the entity whose archetype this batch is about to reuse. Two shapes matter, and the
+        // second is not caught by checking the first:
+        //
+        //   · it was DESPAWNED. The location reads INVALID, whose `archetype_id` is `u32::MAX`,
+        //     and the append loop below indexed `archetypes` with it.
+        //   · it was MOVED — an `on_add` that removes the component it was just given migrates
+        //     it to a different archetype. That location is perfectly VALID; it just names an
+        //     archetype whose columns do not match this bundle, so `write_to_archetype` hit a
+        //     missing column and panicked with a message blaming SparseSet storage, which had
+        //     nothing to do with it.
+        //
+        // So the archetype is checked against the bundle rather than merely for existence.
+        // Falling back to the per-entity path is what this function already does when it cannot
+        // use its fast path, and it is correct for both shapes.
         let loc = self.entity_location(first_entity.id());
-        if !loc.is_valid() {
+        let mut bundle_types: Vec<std::any::TypeId> =
+            <I::Item as crate::component::Bundle>::get_infos()
+                .iter()
+                .map(|info| info.type_id)
+                .collect();
+        bundle_types.sort();
+        let usable = loc.is_valid()
+            && self
+                .archetype_index
+                .archetypes
+                .get(loc.archetype_id as usize)
+                .is_some_and(|arch| arch.sorted_component_types() == bundle_types);
+        if !usable {
             tracing::debug!(
                 entity = first_entity.id(),
-                "spawn_batch: the first entity did not survive its own hooks; per-entity fallback"
+                "spawn_batch: hooks moved or destroyed the first entity; per-entity fallback"
             );
             for bundle in iter {
                 entities.push(self.spawn_bundle(bundle));
@@ -576,6 +631,43 @@ impl World {
         //    yalnız sentinel yazar.
         for set in self.sparse_sets.values_mut() {
             set.shrink_to_fit();
+        }
+
+        // 5. THE INVARIANT CHECK, and the truncation it was written for is NOT here.
+        //
+        // `entity_locations` is the same id-indexed shape as a sparse index at twice the bytes
+        // per id, and truncating it past the last VALID slot would be the same fix. It is not
+        // done, because truncation is only sound while every entity listed in an archetype has
+        // a location naming it — and an adversarial sweep on 2026-08-31 constructed that
+        // violation ten different ways, all confirmed, several through ordinary public API.
+        // Two of the generators are fixed (see `flush_spawn` and `spawn_batch`); the rest are
+        // filed in `docs/ENGINE.md` §3, and `despawn`'s sparse `on_remove` window is the one
+        // that still has no answer.
+        //
+        // The check stays anyway, and is the useful half. It runs in every debug build — the
+        // whole test suite, the property test, Miri — and reports the violation at the GC tick
+        // with its own shape named. Without it the same corruption surfaces later as a wrong
+        // component value or an out-of-bounds write in whatever migration trips over it, with
+        // nothing to say why.
+        #[cfg(debug_assertions)]
+        for (arch_idx, arch) in self.archetype_index.archetypes.iter().enumerate() {
+            for (row, &id) in arch.entities().iter().enumerate() {
+                let loc = self
+                    .entity_locations
+                    .get(id as usize)
+                    .copied()
+                    .unwrap_or(crate::archetype::EntityLocation::INVALID);
+                debug_assert!(
+                    loc.is_valid()
+                        && loc.archetype_id as usize == arch_idx
+                        && loc.row as usize == row,
+                    "compact: entity {id} is listed at archetype {arch_idx} row {row}, but its \
+                     location says archetype {} row {} — truncating would drop a slot that is \
+                     still in use",
+                    loc.archetype_id,
+                    loc.row
+                );
+            }
         }
 
         let entities = self
