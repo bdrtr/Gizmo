@@ -262,28 +262,41 @@ impl BlobVec {
     ///
     /// # Safety
     /// `index < self.len` must hold.
+    /// **The bookkeeping happens before the drop**, which is what makes this safe when the
+    /// element's own `Drop` panics. It used to drop first and decrement afterwards, so a panic
+    /// left a destroyed value still counted inside `len` — and `Drop for BlobVec` then dropped it
+    /// a second time, which is undefined behaviour. The victim is swapped to the end and put out
+    /// of range first now, so a panic leaks it instead. `Vec::swap_remove` has the same shape.
+    /// Fixed 2026-08-31.
+    ///
+    /// The swap is a byte swap rather than the old copy-over: copying the last element onto the
+    /// victim before dropping it would overwrite a live value, and dropping the victim before
+    /// copying is the ordering this is fixing.
     pub unsafe fn swap_remove_and_drop(&mut self, index: usize) {
         debug_assert!(index < self.len);
         let last = self.len - 1;
+        let item_size = self.item_layout.size();
 
         if index != last {
-            let src = self.get_unchecked(last);
-            let dst = self.get_unchecked_mut(index);
-            // Önce eski değeri düşür
-            if let Some(drop_fn) = self.drop_fn {
-                drop_fn(dst);
-            }
-            // Sonra son elemanı kopyala
-            ptr::copy_nonoverlapping(src, dst, self.item_layout.size());
-        } else {
-            // Son eleman zaten silinecek olan — sadece düşür
-            if let Some(drop_fn) = self.drop_fn {
-                let ptr = self.get_unchecked_mut(index);
-                drop_fn(ptr);
-            }
+            // Both pointers are into this vec's own allocation at distinct indices, so the
+            // regions are non-overlapping. `get_unchecked_mut` hands out a raw pointer, so no
+            // two `&mut` exist at once.
+            let a = self.get_unchecked_mut(index);
+            let b = self.get_unchecked_mut(last);
+            ptr::swap_nonoverlapping(a, b, item_size);
         }
 
+        // The victim now sits at `last`, and this puts it out of range. Everything still inside
+        // `len` is live and untouched, so the drop below cannot leave the vec inconsistent
+        // however it ends.
         self.len -= 1;
+
+        if let Some(drop_fn) = self.drop_fn {
+            // SAFETY: `last` was a live index on entry and holds the victim after the swap; it
+            // is now beyond `len`, so nothing else will ever look at it again.
+            let ptr = self.data.as_ptr().add(last * item_size);
+            drop_fn(ptr);
+        }
     }
 
     /// Runs the element's own drop glue on the value at `index`, leaving the slot
@@ -421,22 +434,34 @@ impl BlobVec {
     }
 
     /// Drops all elements (without releasing the memory).
+    ///
+    /// **The length is zeroed BEFORE the drops run**, which is what makes this safe when one of
+    /// them panics. It used to be set afterwards, and the SAFETY comment below used to say — of
+    /// that arrangement — "`len` is set to 0 right after the loop, so nothing is dropped twice".
+    /// True on the normal path and false on the unwind path: a panic at element `i` left `len`
+    /// untouched, so `Drop for BlobVec` called `clear` again and re-dropped `0..i`. Dropping an
+    /// already-dropped value is undefined behaviour, and this is the primitive
+    /// `Column::clear`, `Archetype::clear` and `ComponentSparseSet::clear` are all built on.
+    ///
+    /// Zeroing first turns that into a LEAK of the elements after the panicking one, which is
+    /// safe. It is what `Vec::clear` does for the same reason. Fixed 2026-08-31.
     #[inline]
     pub fn clear(&mut self) {
+        // Take the length first: from here on this vec owns nothing, whatever happens below.
+        let len = std::mem::replace(&mut self.len, 0);
         if let Some(drop_fn) = self.drop_fn {
             let item_size = self.item_layout.size();
-            for i in 0..self.len {
-                // SAFETY: `i < len`, so `i * item_size` stays inside the allocation, and the
-                // element there is live and owned by this vec — `drop_fn` is the type's own
-                // dropper, recorded at construction for exactly this layout. `len` is set to 0
-                // right after the loop, so nothing is dropped twice.
+            for i in 0..len {
+                // SAFETY: `i < len`, the length this vec had on entry, so `i * item_size` stays
+                // inside the allocation and the element there was live and owned by this vec —
+                // `drop_fn` is the type's own dropper, recorded at construction for exactly this
+                // layout. `self.len` is already 0, so no path can reach any of these again.
                 unsafe {
                     let ptr = self.data.as_ptr().add(i * item_size);
                     drop_fn(ptr);
                 }
             }
         }
-        self.len = 0;
     }
 }
 
@@ -466,6 +491,108 @@ impl Drop for BlobVec {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU32, Ordering};
+
+    /// A value whose `Drop` panics on demand and counts every drop it is asked for.
+    ///
+    /// The counter is what the two tests below actually assert on: a value dropped twice is
+    /// undefined behaviour, and the observable shadow of it is a count that is one too high.
+    struct Bomb {
+        armed: bool,
+        counter: &'static AtomicU32,
+    }
+    impl Drop for Bomb {
+        fn drop(&mut self) {
+            self.counter.fetch_add(1, Ordering::SeqCst);
+            if self.armed {
+                self.armed = false;
+                panic!("Bomb");
+            }
+        }
+    }
+
+    /// `clear` must not re-drop what it already dropped when one of the drops panics.
+    ///
+    /// It used to set `len = 0` AFTER the loop, so an unwind left the length untouched and
+    /// `Drop for BlobVec` — which calls `clear` — ran the whole prefix again. Three values, the
+    /// middle one armed: the correct behaviour is four drop calls in total (three from the
+    /// clear, the last of which panics, then nothing at teardown), and the old ordering gave
+    /// six, re-dropping the first two.
+    #[test]
+    fn a_panicking_drop_during_clear_does_not_drop_anything_twice() {
+        static DROPS: AtomicU32 = AtomicU32::new(0);
+        DROPS.store(0, Ordering::SeqCst);
+
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut v = BlobVec::new(
+                Layout::new::<Bomb>(),
+                Some(|ptr: *mut u8| {
+                    // SAFETY: this thunk is only ever called by `BlobVec` on a slot of the
+                    // layout it was constructed with, which is `Bomb`'s, holding a live value.
+                    unsafe { std::ptr::drop_in_place(ptr as *mut Bomb) }
+                }),
+            );
+            for armed in [false, true, false] {
+                let mut b = Bomb { armed, counter: &DROPS };
+                // SAFETY: `b` is a live `Bomb` of this vec's layout; `push` takes ownership by
+                // memcpy, which is why it is forgotten rather than dropped.
+                unsafe { v.push(&mut b as *mut Bomb as *const u8) };
+                std::mem::forget(b);
+            }
+            v.clear();
+            // Unreachable: the middle drop panics.
+            drop(v);
+        }));
+        assert!(unwound.is_err(), "the armed drop was supposed to panic");
+
+        assert_eq!(
+            DROPS.load(Ordering::SeqCst),
+            2,
+            "the first value and the armed one were dropped once each; the third is leaked by \
+             the unwind, which is safe — anything above 2 means something was dropped twice"
+        );
+    }
+
+    /// `swap_remove_and_drop` must not leave a destroyed value inside `len`.
+    ///
+    /// It used to drop first and decrement afterwards, so a panicking drop left the victim
+    /// counted and `Drop for BlobVec` dropped it again.
+    #[test]
+    fn a_panicking_drop_during_swap_remove_does_not_drop_the_victim_twice() {
+        static DROPS: AtomicU32 = AtomicU32::new(0);
+        DROPS.store(0, Ordering::SeqCst);
+
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut v = BlobVec::new(
+                Layout::new::<Bomb>(),
+                Some(|ptr: *mut u8| {
+                    // SAFETY: this thunk is only ever called by `BlobVec` on a slot of the
+                    // layout it was constructed with, which is `Bomb`'s, holding a live value.
+                    unsafe { std::ptr::drop_in_place(ptr as *mut Bomb) }
+                }),
+            );
+            // The armed value is at index 0, so it is NOT the last row — the branch that swaps,
+            // which is the one whose ordering was wrong.
+            for armed in [true, false, false] {
+                let mut b = Bomb { armed, counter: &DROPS };
+                // SAFETY: as above.
+                unsafe { v.push(&mut b as *mut Bomb as *const u8) };
+                std::mem::forget(b);
+            }
+            // SAFETY: index 0 is live and the vec holds three rows.
+            unsafe { v.swap_remove_and_drop(0) };
+            drop(v);
+        }));
+        assert!(unwound.is_err(), "the armed drop was supposed to panic");
+
+        // Three: the victim once, and the two survivors once each when `v` is dropped during
+        // the unwind — `clear` still owns them and is right to. FOUR is the old behaviour and
+        // the whole point: the victim stayed inside `len`, so teardown dropped it a second time.
+        assert_eq!(
+            DROPS.load(Ordering::SeqCst),
+            3,
+            "victim + two survivors, once each; 4 means the destroyed victim was still counted"
+        );
+    }
 
     #[test]
     fn blobvec_drop_called() {

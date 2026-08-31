@@ -356,15 +356,44 @@ state instead.
     and round two proved the point by finding one after round one had been declared complete. But
     each round is now cheap and each has come back smaller: ten, then one.
 
-  - **A component whose `Drop` panics is dropped a second time at teardown.** Found 2026-08-31
-    while building the fixture for the item above, and not fixed there. `Column::drop_row_in_place`
-    calls `ptr::drop_in_place`; a panic part-way leaves the value partially destroyed while the
-    column still counts the slot as live, so `BlobVec::clear` drops it again when the world goes.
-    Dropping an already-dropped value is UB, and the regression test above has to arm its panic
-    for exactly one drop to avoid tripping over it. Closing it means either treating a panicking
-    drop as fatal for that slot (mark it dead before calling the drop glue) or documenting that a
-    component's `Drop` must not panic — the first is the honest one, since nothing can enforce
-    the second.
+  - **A component whose `Drop` panics is dropped a second time.** Found 2026-08-31 while
+    building the fixture for the item above; **the two root primitives are fixed, the rest is
+    still open**, and the split is worth stating because a sweep found ten sites where one had
+    been reported.
+
+    **Fixed, by reordering — free, no new `unsafe`, and what `Vec` and `bevy` both do.**
+    `BlobVec::clear` set `len = 0` *after* its drop loop, so a panic left the length untouched
+    and `Drop for BlobVec` re-dropped the prefix; its own SAFETY comment asserted the opposite
+    ("`len` is set to 0 right after the loop, so nothing is dropped twice" — true on the normal
+    path, false on the unwind path). `BlobVec::swap_remove_and_drop` dropped first and
+    decremented after, leaving a destroyed value counted. Both now do the bookkeeping first, so a
+    panic LEAKS the remainder instead of double-dropping — a leak is safe. Measured by two tests
+    that count drops: with the old ordering the clear test sees 5 drops where 2 are correct, and
+    the swap test 4 where 3 are correct.
+
+    That is the root under `Column::clear`, `Archetype::clear`, `ComponentSparseSet::clear`,
+    `Column::swap_remove_and_drop`, `Archetype::swap_remove_entity`, `Archetype::move_entity_to`'s
+    source-side drops and `ComponentSparseSet::remove` — all of which inherited the double drop
+    and none of which needed touching.
+
+    **Still open, three shapes.** (1) `BlobVec::drop_in_place_at` deliberately leaves the slot
+    uninitialised and unchanged in length, because its caller is about to refill it —
+    `drop_live_bundle_rows` under both branches of `add_bundle`. A panic skips the refill, and in
+    the migration branch it is worse than a double drop: `move_entity_to` has already extended
+    the target's columns with uninitialised holes, so teardown runs drop glue over garbage.
+    Closing it needs take-write-drop (move the old values out, let the bundle fill the slots,
+    then drop the temporaries) or an abort guard. (2) `ComponentSparseSet::insert`'s overwrite
+    branch drops the old value in place before copying the new one over it; the fix needs a
+    temporary of the component's layout, since the source pointer is `*const` and writing through
+    it would be UB. (3) The raw `*ptr = component` assignments in `add_component` and
+    `insert_batch`'s same-archetype branches are the same shape with no `drop_fn` in sight, so
+    any guard placed inside the drop helpers misses them.
+
+    **And a second hazard that is not a double drop at all:** every composite operation updates
+    parallel arrays — a column's `len`, `entities`, `ticks`, `sparse` — one after another, so an
+    unwind anywhere in the middle leaves them disagreeing. Column bounds are `debug_assert` only,
+    so a release build then indexes past the column. Fixing the drops does not fix that; it wants
+    the composites to be written so the last write is the one that makes the change visible.
 
     **The shape that generates violations is checkable, done 2026-08-31.**
     `Archetype::move_entity_to` does not take an entity — it takes a ROW, and moves whoever is

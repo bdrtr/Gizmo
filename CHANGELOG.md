@@ -1043,6 +1043,25 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A component whose `Drop` panicked could be dropped a second time.** Dropping an
+  already-dropped value is undefined behaviour, and two primitives in the archetype storage
+  allowed it: `BlobVec::clear` set its length to zero *after* its drop loop, so a panic left the
+  length untouched and the vector's own `Drop` re-dropped everything before the panicking
+  element; `BlobVec::swap_remove_and_drop` dropped the victim before decrementing, so a panic
+  left a destroyed value still counted. `clear`'s SAFETY comment asserted the opposite in so many
+  words — true on the normal path, false on the unwind path.
+
+  Both now do the bookkeeping first, so a panic **leaks** the remainder instead of double-dropping
+  it, which is safe and is what `Vec` does for the same reason. Nothing was added: no guard, no
+  `unsafe`, no cost on the normal path. It is the root under `Column::clear`, `Archetype::clear`,
+  `ComponentSparseSet::clear`, `Column::swap_remove_and_drop`, `Archetype::swap_remove_entity`,
+  `Archetype::move_entity_to` and `ComponentSparseSet::remove`, none of which needed touching.
+
+  Reachable without `unsafe`: `catch_unwind` is safe std and nothing here promised a component's
+  `Drop` would not panic. Three narrower shapes remain open and are listed in `docs/ENGINE.md`
+  §3, along with a separate hazard the same sweep turned up — composite operations update their
+  parallel arrays one at a time, so an unwind in the middle leaves them disagreeing.
+
 - **Per-entity event listeners outlived their entity.** `World::observe` files a listener under
   an `Entity`, and nothing removed it when that entity was despawned — only `clear_entities`,
   dropping every listener for every event type. A game that pairs `observe` with destroying
