@@ -959,7 +959,14 @@ mod tests {
     /// allowed — the row it adds is orphaned the moment the despawn finishes clearing the
     /// location — and `flush_spawn`'s own liveness guard does not catch it, because the id is
     /// not freed until after the hooks. A debug build names it at the despawn.
+    // DEBUG ONLY, and this is the one `should_panic` in the crate that needs saying so: every
+    // other one is driven by a real `panic!` or `assert!`, while the failure under test here is
+    // a `debug_assert!`. `cargo bench --benches -- --test` — which CI runs as a smoke gate —
+    // builds the RELEASE profile, where that assertion is compiled out, so without this the test
+    // reports "did not panic as expected" and reds a job that has nothing to do with it. Found
+    // exactly that way on 2026-08-31, by running the bench gate rather than by reasoning.
     #[test]
+    #[cfg(debug_assertions)]
     #[should_panic(expected = "re-listed entity")]
     fn an_on_remove_hook_that_re_lists_the_entity_is_reported() {
         #[derive(Clone, Debug, PartialEq)]
