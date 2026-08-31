@@ -23,25 +23,34 @@ crate::impl_component!(Pooled);
 /// Nothing here checks that a parked entity is still alive, that it appears only once, or
 /// that it originally came from this pool.
 ///
-/// Note `prefab_id` is a raw id, not an [`Entity`]: it carries no generation, so it neither
-/// keeps the prefab alive nor notices when the prefab is despawned and its id slot recycled.
-/// In that case cloning silently copies whatever entity now occupies the slot.
 pub struct ObjectPool {
-    /// The original prefab object (this object will be multiplied by cloning)
-    pub prefab_id: u32,
+    /// The prefab every new instance is cloned from.
+    ///
+    /// **An `Entity`, not a raw id, since 2026-08-31.** It used to be a bare `u32`, and this
+    /// doc used to describe the consequence rather than fix it: an id carries no generation, so
+    /// nothing noticed when the prefab was despawned and its slot recycled — `instantiate` then
+    /// cloned whatever entity happened to occupy that slot, silently, and handed the result out
+    /// as a bullet. Keeping the generation is what lets `instantiate` tell the two apart.
+    ///
+    /// It still does not keep the prefab alive. A despawned prefab makes the pool unable to
+    /// produce new instances, which `instantiate` reports by returning `None` rather than by
+    /// inventing one.
+    pub prefab: Entity,
     /// The list of unused, idle objects in the pool
     pub inactive: VecDeque<Entity>,
 }
 
 impl ObjectPool {
-    /// An empty pool sourcing from `prefab_id`, so the first instantiate clones the prefab
-    /// instead of reusing anything.
+    /// An empty pool sourcing from `prefab`, so the first instantiate clones it instead of
+    /// reusing anything.
     ///
-    /// Touches no world state: `prefab_id` is not checked for liveness and the prefab is not
-    /// marked [`Pooled`] — see [`PoolManager::register_pool_hidden`] for that.
-    pub fn new(prefab_id: u32) -> Self {
+    /// Touches no world state: the prefab is not checked for liveness here and not marked
+    /// [`Pooled`] — see [`PoolManager::register_pool_hidden`] for the second, and
+    /// [`PoolManager::instantiate`] for the first, which is where liveness has to be rechecked
+    /// anyway because the prefab can die at any point after this call.
+    pub fn new(prefab: Entity) -> Self {
         Self {
-            prefab_id,
+            prefab,
             inactive: VecDeque::new(),
         }
     }
@@ -78,7 +87,7 @@ impl PoolManager {
     /// The prefab is automatically marked with `Pooled`, so the render and physics systems skip it.
     pub fn register_pool(&mut self, name: &str, prefab_entity: Entity) {
         self.pools
-            .insert(name.to_string(), ObjectPool::new(prefab_entity.id()));
+            .insert(name.to_string(), ObjectPool::new(prefab_entity));
     }
 
     /// The same as `register_pool`, but it additionally marks the prefab entity with `Pooled`.
@@ -86,7 +95,7 @@ impl PoolManager {
     pub fn register_pool_hidden(&mut self, world: &mut World, name: &str, prefab_entity: Entity) {
         world.add_component(prefab_entity, Pooled);
         self.pools
-            .insert(name.to_string(), ObjectPool::new(prefab_entity.id()));
+            .insert(name.to_string(), ObjectPool::new(prefab_entity));
     }
 
     /// Registers a bundle (MeshBundle etc.) and its chained components directly into the pool.
@@ -101,24 +110,50 @@ impl PoolManager {
         self.register_pool(name, prefab);
     }
 
-    /// Takes an object from the pool. If the pool is empty it produces a new object by cloning the prefab.
+    /// Takes an object from the pool. If the pool is empty it produces a new object by cloning
+    /// the prefab.
+    ///
+    /// **Both halves check liveness, and neither used to.** `destroy` refuses to park a dead
+    /// entity, but nothing kept a parked one alive afterwards — anything holding the handle can
+    /// despawn it, and `clear_entities` destroys the lot — so the queue could hand out a corpse
+    /// on which every later component insert silently does nothing. Dead entries are discarded
+    /// here and the search continues, falling through to a clone if the whole queue is stale.
+    ///
+    /// A despawned prefab makes the pool unable to produce anything new, and that is reported as
+    /// `None` rather than by cloning whatever now occupies its id slot.
     pub fn instantiate(&mut self, world: &mut World, name: &str) -> Option<Entity> {
         let pool = self.pools.get_mut(name)?;
 
-        if let Some(entity) = pool.inactive.pop_front() {
+        while let Some(entity) = pool.inactive.pop_front() {
+            if !world.is_alive(entity) {
+                tracing::debug!(
+                    entity = entity.id(),
+                    pool = name,
+                    "PoolManager::instantiate: parked entity died while pooled; discarded"
+                );
+                continue;
+            }
             // Nesne havuzdan çıkarıldı, `Pooled` tag'i siliniyor.
             world.remove_component::<Pooled>(entity);
-            Some(entity)
-        } else {
-            // Havuz boş, prefab klonlanarak yeni obje yaratılacak!
-            // `clone_entity` fonksiyonumuz O(1) prefab kopyalama desteği sunuyor
-            let new_entities = world.clone_entity(pool.prefab_id, 1)?;
-            let new_ent = new_entities[0];
-            // Prefab Pooled olarak işaretlenmiş olabilir (register_pool_hidden),
-            // klonlanan entity'den Pooled tag'ını kaldır ki aktif olarak doğsun.
-            world.remove_component::<Pooled>(new_ent);
-            Some(new_ent)
+            return Some(entity);
         }
+
+        // Havuz boş (ya da tamamı bayattı) — prefab klonlanarak yeni obje yaratılacak.
+        if !world.is_alive(pool.prefab) {
+            tracing::debug!(
+                pool = name,
+                prefab = pool.prefab.id(),
+                "PoolManager::instantiate: the prefab is gone; the pool cannot produce more"
+            );
+            return None;
+        }
+        // `clone_entity` fonksiyonumuz O(1) prefab kopyalama desteği sunuyor
+        let new_entities = world.clone_entity(pool.prefab.id(), 1)?;
+        let new_ent = new_entities[0];
+        // Prefab Pooled olarak işaretlenmiş olabilir (register_pool_hidden),
+        // klonlanan entity'den Pooled tag'ını kaldır ki aktif olarak doğsun.
+        world.remove_component::<Pooled>(new_ent);
+        Some(new_ent)
     }
 
     /// Instead of destroying an object outright (despawn), sends it back to the pool.
@@ -187,6 +222,63 @@ mod tests {
         let mut pools = PoolManager::new();
         pools.register_pool("bullets", prefab);
         (world, pools)
+    }
+
+    /// A despawned prefab must stop the pool, not make it clone a stranger.
+    ///
+    /// `ObjectPool` stored the prefab as a raw `u32`, and its own doc described what that cost
+    /// without fixing it: an id carries no generation, so once the prefab was despawned and its
+    /// slot recycled, `instantiate` cloned whatever entity had taken the slot and handed the
+    /// copy out as a pooled object. Ordinary use gets there — `Entities::reserve_entity` drains
+    /// the free list first, so the very next spawn after the despawn lands on that slot.
+    #[test]
+    fn a_despawned_prefab_stops_the_pool_instead_of_cloning_its_replacement() {
+        #[derive(Clone, Copy)]
+        struct Stranger;
+        crate::impl_component!(Stranger);
+
+        let (mut world, mut pools) = setup();
+        let prefab = pools.pools["bullets"].prefab;
+
+        world.despawn(prefab);
+        // The next spawn takes the freed slot, so the raw id now names somebody else entirely.
+        let replacement = world.spawn();
+        world.add_component(replacement, Stranger);
+        assert_eq!(replacement.id(), prefab.id(), "the id really was recycled");
+
+        assert!(
+            pools.instantiate(&mut world, "bullets").is_none(),
+            "the pool has no prefab any more and must say so"
+        );
+        assert_eq!(
+            world.query::<&Stranger>().map(|q| q.iter().count()),
+            Some(1),
+            "and nothing cloned the entity that took the prefab's slot"
+        );
+    }
+
+    /// A parked entity that dies while pooled must not be handed out.
+    ///
+    /// `destroy` refuses to park a dead entity, but nothing kept a parked one alive afterwards:
+    /// anything holding the handle can despawn it. The queue then handed out a corpse, on which
+    /// every later component insert silently does nothing — the same failure the parking guard
+    /// was written to prevent, one step later.
+    #[test]
+    fn a_parked_entity_that_dies_while_pooled_is_discarded_not_handed_out() {
+        let (mut world, mut pools) = setup();
+
+        let a = pools.instantiate(&mut world, "bullets").expect("clone from prefab");
+        let b = pools.instantiate(&mut world, "bullets").expect("clone from prefab");
+        pools.destroy(&mut world, "bullets", a);
+        pools.destroy(&mut world, "bullets", b);
+
+        // Something else destroys the first parked one behind the pool's back.
+        world.despawn(a);
+
+        let handed_out = pools.instantiate(&mut world, "bullets").expect("one live entry left");
+        assert_ne!(handed_out, a, "the dead entry must not be handed out");
+        assert_eq!(handed_out, b);
+        assert!(world.is_alive(handed_out));
     }
 
     /// Retiring the same entity twice must park it ONCE.

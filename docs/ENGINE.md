@@ -436,11 +436,29 @@ state instead.
     world owns for this purpose, so there is no registration point at which to record a thunk and
     no registry of which resource types are event queues. Closing that one needs the registry
     first.
-  - **`PoolManager` hands out entities from the previous scene after a `clear_entities`.** It is
-    a plain struct rather than a resource, so the clear cannot reach it, and its own defence
-    against a stale handle is `World::is_alive` — which a bit-identically recycled id passes.
-    Documented on `clear_entities` as the caller's to rebuild; making it correct by construction
-    would mean the pool holding something more than a raw `Entity`.
+  - **`PoolManager` and stale handles — two of the three closed 2026-08-31, the third is the
+    hard one.** Looking at the `clear_entities` case turned up two defects that need no clear at
+    all, both reachable from ordinary use:
+
+    - **The prefab was a raw `u32`.** `ObjectPool`'s own doc described the consequence instead of
+      fixing it: an id carries no generation, so once the prefab was despawned and its slot
+      recycled — and `Entities::reserve_entity` drains the free list first, so the very next
+      spawn lands there — `instantiate` cloned whichever entity had taken the slot and handed
+      the copy out as a pooled object. It stores an `Entity` now and reports a gone prefab as
+      `None` rather than inventing an instance.
+    - **A parked entity that died while pooled was still handed out.** `destroy` refuses to park
+      a dead entity, but nothing keeps a parked one alive afterwards; anything holding the handle
+      can despawn it. The queue then produced a corpse, on which every later component insert
+      silently does nothing — exactly the failure the parking guard exists to prevent, one step
+      later. Dead entries are discarded on the way out now.
+
+    **Still open: the `clear_entities` case itself.** A clear resets the generation counter, so
+    every parked handle and the prefab come back bit-identical and pass `is_alive`. Liveness
+    cannot distinguish them by construction, which is why neither fix above reaches it. Closing
+    it needs the world to expose something a cache can compare against — a reset counter bumped
+    by `clear_entities` — and that would serve the whole class `clear_entities` already warns
+    about in prose ("a selection list, a cache keyed by `Entity`"), not just the pool. It is an
+    API addition and a design decision, so it is filed rather than slipped in.
   - ~~**`WorldStats::component_bytes` counts archetype columns only.**~~ **CLOSED 2026-08-31.**
     `WorldStats::sparse_component_bytes` sits beside it now and reports both halves of a sparse
     set: `dense`, which scales with entries, and `sparse`, which is four bytes per id up to the

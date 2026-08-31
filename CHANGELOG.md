@@ -1043,6 +1043,25 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **An object pool could clone a stranger, or hand out a corpse.** Two independent stale-handle
+  defects in `PoolManager`, both reachable without destroying the world:
+
+  `ObjectPool` stored its prefab as a raw `u32`. An id carries no generation, so once the prefab
+  was despawned and its slot recycled — and the allocator drains its free list first, so the very
+  next spawn lands there — `instantiate` cloned whatever entity had taken the slot and handed the
+  copy out as a pooled object. The struct's own documentation described this rather than
+  preventing it. It stores an `Entity` now, and a pool whose prefab is gone reports `None`
+  instead of producing something from a stranger.
+
+  And a parked entity that died *while* pooled was still handed out. `destroy` refuses to park a
+  dead entity, but nothing keeps a parked one alive afterwards, so the queue could produce a
+  corpse — on which every later component insert silently does nothing, which is the exact
+  failure the parking guard was added to prevent. Dead entries are now discarded on the way out,
+  falling through to a clone if the whole queue is stale.
+
+  `ObjectPool::prefab_id: u32` is now `ObjectPool::prefab: Entity`, and `ObjectPool::new` takes
+  an `Entity`. Both are `pub`; the crate is `0.x`.
+
 - **`WorldStats::sparse_component_bytes` is new** — the memory a `SparseSet` component actually costs,
   which the existing `component_bytes` could never show because it sums archetype columns and
   sparse storage lives outside them. It reports both halves: `dense`, which scales with the
