@@ -62,7 +62,8 @@ pub struct World {
     despawn_hooks: Vec<DespawnHook>,
     entities_to_despawn: Vec<Entity>,
     is_despawning: bool,
-    pub(crate) entity_observers: HashMap<TypeId, Box<dyn std::any::Any + Send + Sync>>,
+    pub(crate) entity_observers:
+        HashMap<TypeId, Box<dyn crate::observer::EntityObserverMap>>,
     /// Listeners for events that belong to no entity and no component type — the third door,
     /// keyed only by the event's own `TypeId`. See [`World::observe_global`].
     ///

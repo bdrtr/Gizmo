@@ -388,13 +388,25 @@ state instead.
     first pass suggests roughly half the 29 already sit behind an `entity_location(..).is_valid()`
     test, which is bounds-checked and returns `INVALID` past the end — so the real work is the
     other half, not all 29.
-  - **`entity_observers` is never pruned when an entity despawns.** Entries are added by
-    `World::observe` and removed only by `clear_entities`, which drops the whole map. A game that
-    attaches per-entity observers and destroys entities accumulates dead ones for the life of the
-    world, and `compact` cannot help: the values are `Box<dyn Any>` over
-    `HashMap<Entity, Vec<EntityListener<E>>>`, so pruning one entity out of them is not
-    expressible without knowing `E`. Closing it needs the same thing the `Events<T>` case needs —
-    a per-type erased hook — which suggests doing them together.
+  - ~~**`entity_observers` is never pruned when an entity despawns.**~~ **CLOSED 2026-08-31.**
+    The diagnosis was right and so was the prescription: the values are per-event-type, so
+    `despawn` — holding an `Entity` and no `E` — had nothing to downcast to, and only
+    `clear_entities` dropping the whole map ever removed one. The map's values are now
+    `Box<dyn EntityObserverMap>` instead of `Box<dyn Any>`, a trait with one real method that
+    records the removal where `E` is still known. Same trick as `ComponentInfo`'s drop thunk: the
+    type is erased, the operation is not.
+
+    Worth stating what this was and was not: a **leak**, not a correctness bug. The map is keyed
+    by `Entity`, which carries a generation, and `despawn` bumps it — so a listener filed under a
+    dead handle could never match the id's next occupant. It simply accumulated forever, once per
+    despawned entity that had ever been observed. Measured by the regression test: sixty-four
+    despawns left sixty-four entries.
+
+    **`Events<T>` is still open and this does NOT generalise to it**, which the original entry
+    guessed it would. An `Events<T>` queue is an ordinary *resource*, not an entry in a map the
+    world owns for this purpose, so there is no registration point at which to record a thunk and
+    no registry of which resource types are event queues. Closing that one needs the registry
+    first.
   - **`PoolManager` hands out entities from the previous scene after a `clear_entities`.** It is
     a plain struct rather than a resource, so the clear cannot reach it, and its own defence
     against a stale handle is `World::is_alive` — which a bit-identically recycled id passes.

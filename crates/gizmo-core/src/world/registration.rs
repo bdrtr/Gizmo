@@ -99,12 +99,20 @@ impl World {
     /// Listeners on one entity and event type run in registration order. There is no
     /// unregister; registering the same closure twice makes it fire twice.
     ///
-    /// The one thing that removes a listener is [`World::clear_entities`], which drops every
-    /// one of them for every event type. That is not a hatch to unregister through — it is
-    /// what destroying every entity implies. The listener is keyed by the `Entity`, and a clear
-    /// resets the generation counter as well as the id counter, so the handle it is filed under
-    /// comes back attached to an unrelated entity; keeping the listener would mean running it
-    /// for a stranger, which is what used to happen.
+    /// **A listener is dropped when its entity is despawned**, and by
+    /// [`World::clear_entities`], which drops every one of them for every event type. Neither is
+    /// a hatch to unregister through — they are what destroying the entity implies.
+    ///
+    /// Despawn did not do this until 2026-08-31, and the reason it did not is worth knowing: the
+    /// listener map is keyed by the event's `TypeId` and its values are per-event-type, so
+    /// `despawn` — which has an `Entity` and no `E` — had nothing it could downcast to. The
+    /// entries were harmless, since the key carries a generation and a despawn bumps it, so a
+    /// stale listener can never match a later occupant of that id. They simply accumulated
+    /// forever. The removal is now recorded at registration, where `E` is known.
+    ///
+    /// The clear is the sharper case and stays: it resets the generation counter as well as the
+    /// id counter, so a surviving listener's key comes back attached to an unrelated entity and
+    /// would run for a stranger, which is what used to happen.
     pub fn observe<E: crate::observer::EntityEvent, F>(&mut self, entity: Entity, listener: F) -> &mut Self
     where
         F: FnMut(&mut World, crate::observer::On<E>) + Send + Sync + 'static,
@@ -115,6 +123,7 @@ impl World {
         });
 
         let map = map_any
+            .as_any_mut()
             .downcast_mut::<HashMap<Entity, Vec<crate::observer::EntityListener<E>>>>()
             .unwrap();
         map.entry(entity).or_default().push(Box::new(listener));
@@ -180,8 +189,9 @@ impl World {
             let mut hooks_to_run = Vec::new();
 
             if let Some(map_any) = self.entity_observers.get_mut(&TypeId::of::<E>()) {
-                if let Some(map) =
-                    map_any.downcast_mut::<HashMap<Entity, Vec<crate::observer::EntityListener<E>>>>()
+                if let Some(map) = map_any
+                    .as_any_mut()
+                    .downcast_mut::<HashMap<Entity, Vec<crate::observer::EntityListener<E>>>>()
                 {
                     if let Some(listeners) = map.remove(&current_entity) {
                         hooks_to_run = listeners;
@@ -211,6 +221,7 @@ impl World {
             if !hooks_to_run.is_empty() {
                 if let Some(map_any) = self.entity_observers.get_mut(&TypeId::of::<E>()) {
                     if let Some(map) = map_any
+                        .as_any_mut()
                         .downcast_mut::<HashMap<Entity, Vec<crate::observer::EntityListener<E>>>>()
                     {
                         let slot = map.entry(current_entity).or_default();

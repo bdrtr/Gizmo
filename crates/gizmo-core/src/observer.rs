@@ -170,6 +170,39 @@ impl Lifecycle for Replace {
 pub type EntityListener<E> =
     Box<dyn FnMut(&mut crate::world::World, On<E>) + Send + Sync + 'static>;
 
+/// The per-event-type listener map, behind a trait so the world can prune one entity out of it
+/// without knowing `E`.
+///
+/// `World::entity_observers` is keyed by the event's `TypeId` and its values are
+/// `HashMap<Entity, Vec<EntityListener<E>>>` — a different concrete type per event. That made
+/// pruning inexpressible: `despawn` has an `Entity` and no `E`, so the only thing it could ever
+/// do was leave the entry, and the only thing that ever removed one was `clear_entities`
+/// dropping the whole map. The entries were harmless — the key carries a generation, and a
+/// despawn bumps it, so a stale listener can never match a later entity — but they accumulated
+/// for the life of the world in any game that pairs `observe` with destroying things.
+///
+/// One method, recorded where `E` is still known, is enough to close that. Same trick as
+/// `ComponentInfo`'s drop thunk: the type is erased, the operation is not.
+pub(crate) trait EntityObserverMap: std::any::Any + Send + Sync {
+    /// Drops every listener registered for `entity`. A no-op if it has none.
+    fn remove_entity(&mut self, entity: crate::entity::Entity);
+    /// Downcast hatch, so dispatch can still get at the concrete map. Dispatch knows `E`; only
+    /// the pruning above does not, which is the whole reason this trait exists rather than the
+    /// `Box<dyn Any>` that was here before.
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
+}
+
+impl<E: EntityEvent> EntityObserverMap
+    for std::collections::HashMap<crate::entity::Entity, Vec<EntityListener<E>>>
+{
+    fn remove_entity(&mut self, entity: crate::entity::Entity) {
+        self.remove(&entity);
+    }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+
 /// One registered [`World::observe_global`](crate::world::World::observe_global) listener.
 ///
 /// It takes the event by **reference**, which is the whole difference from
@@ -526,6 +559,58 @@ mod tests {
         fn can_propagate(&self) -> bool {
             self.bubble
         }
+    }
+
+    /// How many entities the `Ping` listener map still tracks. The test knows `E`, so it can
+    /// take the downcast hatch rather than asking the trait for a count nothing else wants.
+    fn ping_listener_entities(world: &mut World) -> usize {
+        world
+            .entity_observers
+            .get_mut(&std::any::TypeId::of::<Ping>())
+            .and_then(|m| {
+                m.as_any_mut()
+                    .downcast_mut::<std::collections::HashMap<Entity, Vec<EntityListener<Ping>>>>()
+            })
+            .map_or(0, |m| m.len())
+    }
+
+    /// A despawned entity's listeners go with it.
+    ///
+    /// They could not, until the map learned to prune without knowing its event type: it is
+    /// keyed by the event's `TypeId` and its values are per-event-type, so `despawn` — holding
+    /// an `Entity` and no `E` — had nothing to downcast to. Only `clear_entities`, dropping the
+    /// whole map, ever removed one.
+    ///
+    /// The stale entries were harmless: the key carries a generation and `despawn` bumps it, so
+    /// a listener filed under a dead handle can never match the id's next occupant. They just
+    /// accumulated for the life of the world, which a game that pairs `observe` with destroying
+    /// things does on every kill.
+    #[test]
+    fn a_despawned_entitys_listeners_are_dropped_with_it() {
+        let mut world = World::new();
+        let keep = world.spawn();
+        world.observe::<Ping, _>(keep, |_w: &mut World, _on| {});
+
+        for _ in 0..64 {
+            let doomed = world.spawn();
+            world.observe::<Ping, _>(doomed, |_w: &mut World, _on| {});
+            world.despawn(doomed);
+        }
+
+        assert_eq!(
+            ping_listener_entities(&mut world),
+            1,
+            "sixty-four despawned entities left their listeners behind"
+        );
+
+        // The survivor's listener is untouched — pruning must not be a blunt clear.
+        let fired = std::sync::Arc::new(std::sync::Mutex::new(0));
+        let f = fired.clone();
+        world.observe::<Ping, _>(keep, move |_w: &mut World, _on| {
+            *f.lock().unwrap() += 1;
+        });
+        world.trigger(Ping { target: keep, bubble: false });
+        assert_eq!(*fired.lock().unwrap(), 1, "the surviving entity still gets its events");
     }
 
     /// **The entity-event listener gets a usable `&mut World`** — the capability the whole

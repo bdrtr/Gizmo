@@ -1043,6 +1043,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Per-entity event listeners outlived their entity.** `World::observe` files a listener under
+  an `Entity`, and nothing removed it when that entity was despawned — only `clear_entities`,
+  dropping every listener for every event type. A game that pairs `observe` with destroying
+  things leaked one entry per kill, for the life of the world. Sixty-four despawns left
+  sixty-four entries.
+
+  It was a leak and not a correctness bug: the key carries a generation and a despawn bumps it,
+  so a listener filed under a dead handle could never match the id's next occupant. What blocked
+  the fix was expressiveness — the listener map's values are per-event-type, so `despawn`, which
+  has an `Entity` and no event type to downcast with, had nothing it could call. The map now
+  holds a small trait object instead of `Box<dyn Any>`, recording the removal at registration
+  where the type is still known; the same shape `ComponentInfo` already uses for drop glue.
+
 - **`add_bundle` could strand an entity between two archetypes if a component's `Drop` panicked.**
   Its migration branch put the entity in the target archetype, then ran two pieces of user code —
   the `Drop` of every component carried across, and `Bundle::write_to_archetype` — and only then

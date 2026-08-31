@@ -594,6 +594,20 @@ impl World {
                  despawned; that row is about to be orphaned"
             );
 
+            // Per-entity listeners go with the entity. Until 2026-08-31 nothing removed them
+            // except `clear_entities` dropping the whole map, because the map's values are
+            // per-event-type and `despawn` has no `E` to downcast with. They were harmless —
+            // the key carries a generation and `free` below bumps it, so a stale listener can
+            // never match a later occupant of the id — but they accumulated for the life of the
+            // world in any game that pairs `observe` with destroying things. `EntityObserverMap`
+            // records the removal where `E` is still known, the same way `ComponentInfo` records
+            // a drop thunk.
+            //
+            // Before `free`, so the handle here is still the one the listener was filed under.
+            for map in self.entity_observers.values_mut() {
+                map.remove_entity(e);
+            }
+
             {
                 let entities = self
                     .get_resource::<Entities>()
