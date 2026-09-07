@@ -36,9 +36,12 @@ use std::ptr::{self, NonNull};
 ///
 /// **Zero-sized elements** are supported and never allocate — not on construction, not on
 /// `reserve`, and nothing is freed on drop. The data pointer stays at
-/// `NonNull::<u8>::dangling()` (it is never dereferenced, and is not adjusted for an
-/// over-aligned element type). `capacity` carries no meaning in this case: it starts at
-/// `usize::MAX` and is not maintained afterwards, so read `len` and ignore it.
+/// [`dangling_for`]`(item_layout)` — the element's own ALIGNMENT as an address, which is what
+/// makes a reference built from it well-formed. It used to be `NonNull::<u8>::dangling()`
+/// (address 1) with a note here saying it is never dereferenced; `query::fetch` dereferences it
+/// for every row of a ZST column, so an over-aligned marker component was undefined behaviour.
+/// `capacity` carries no meaning in this case: it starts at `usize::MAX` and is not maintained
+/// afterwards, so read `len` and ignore it.
 ///
 /// **Growth** is amortised — reserving at least doubles the capacity, with a floor of four
 /// elements — and reallocates in place where the allocator can, so any pointer obtained
@@ -80,6 +83,33 @@ fn checked_array_layout(item_size: usize, count: usize, align: usize) -> Option<
     Layout::from_size_align(total, align).ok()
 }
 
+/// The base pointer a `BlobVec` carries while it owns no allocation — empty, or zero-sized.
+///
+/// It is `layout.align()`, not `NonNull::<u8>::dangling()` (address 1), and the difference is
+/// not cosmetic. A reference must be aligned for its type even when the type has no bytes, and
+/// `query::fetch`'s `get_item` builds `&*ptr` straight out of this pointer for every row of a
+/// ZST column — so `#[repr(align(16))] struct Marker;`, a perfectly legal component, produced a
+/// `&Marker` at address 1 and undefined behaviour that a debug build catches as
+/// "misaligned pointer dereference: address must be a multiple of 0x10 but is 0x1".
+/// `slice::from_raw_parts` demands the same of an EMPTY slice, which `get_slice` builds from a
+/// column that `shrink_to_fit` has released.
+///
+/// This is what `Vec` does for the same reason, and it is built the way `NonNull::dangling`
+/// builds its own: `ptr::without_provenance_mut`, **not** an `as` cast. An integer-to-pointer
+/// cast is not merely untidy here — Miri reports it, Tree Borrows does not model it
+/// ("Tree Borrows does not support integer-to-pointer casts, so the program is likely to go
+/// wrong when this pointer gets used"), and CI runs its ECS soundness gate under exactly that.
+/// A cast in this function would have degraded that gate for every column in the crate.
+#[inline]
+pub(crate) fn dangling_for(layout: Layout) -> NonNull<u8> {
+    // SAFETY: `Layout` guarantees a non-zero power-of-two alignment, so this address is
+    // non-null, which is `NonNull`'s whole requirement. Whether it is ever dereferenced is
+    // deliberately NOT part of the argument — assuming it is not is the mistake this function
+    // exists to undo. It is aligned for the element, so a zero-sized read through it is
+    // well-formed, and any allocation replaces it before a sized one can happen.
+    unsafe { NonNull::new_unchecked(std::ptr::without_provenance_mut::<u8>(layout.align())) }
+}
+
 impl BlobVec {
     /// Creates a new empty BlobVec.
     ///
@@ -89,9 +119,9 @@ impl BlobVec {
     pub fn new(item_layout: Layout, drop_fn: Option<unsafe fn(*mut u8)>) -> Self {
         // ZST (zero-sized type) kontrolü
         let (data, capacity) = if item_layout.size() == 0 {
-            (NonNull::dangling(), usize::MAX)
+            (dangling_for(item_layout), usize::MAX)
         } else {
-            (NonNull::dangling(), 0)
+            (dangling_for(item_layout), 0)
         };
 
         Self {
@@ -459,7 +489,7 @@ impl BlobVec {
             // (`clear`/`swap_remove` handled ownership). The pointer is not used again before
             // being replaced with a dangling one on the next line.
             unsafe { alloc::dealloc(self.data.as_ptr(), old_layout) };
-            self.data = NonNull::dangling();
+            self.data = dangling_for(self.item_layout);
             self.capacity = 0;
             return;
         }
@@ -595,6 +625,62 @@ impl Drop for BlobVec {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU32, Ordering};
+
+    /// The base pointer of a vec that owns no allocation must be ALIGNED for its element.
+    ///
+    /// It was `NonNull::<u8>::dangling()` — address 1 — for every element type, and this file
+    /// said so with the excuse that it "is never dereferenced". `query::fetch`'s `get_item`
+    /// dereferences it for every row of a zero-sized column, and `get_slice` hands it to
+    /// `slice::from_raw_parts`, which requires an aligned pointer even for a length of zero. A
+    /// reference must be aligned for its type whether or not the type has bytes to read, so
+    /// `#[repr(align(16))] struct Marker;` — a legal component — was undefined behaviour on the
+    /// ordinary query path. The world-level proof is
+    /// `query::tests::a_query_over_an_overaligned_zst_hands_out_an_aligned_reference`, which
+    /// aborts the test binary with "misaligned pointer dereference" against the old pointer.
+    ///
+    /// Both states are covered, because they are two different lines: a vec that never
+    /// allocated (`new`) and one that gave its allocation back (`shrink_to_fit` at `len == 0`,
+    /// which `World::compact` runs over every column on every GC tick).
+    #[test]
+    fn a_vec_with_no_allocation_carries_a_pointer_aligned_for_its_element() {
+        for align in [1usize, 2, 4, 8, 16, 32, 64] {
+            // Zero-sized: never allocates at all, so this pointer is the one every row uses.
+            let zst = BlobVec::new(Layout::from_size_align(0, align).unwrap(), None);
+            assert_eq!(
+                zst.as_ptr() as usize % align,
+                0,
+                "a ZST column of alignment {align} handed out a base pointer of {:#x}",
+                zst.as_ptr() as usize,
+            );
+
+            // Sized but empty: nothing allocated yet.
+            let fresh = BlobVec::new(Layout::from_size_align(align, align).unwrap(), None);
+            assert_eq!(
+                fresh.as_ptr() as usize % align,
+                0,
+                "an unallocated column of alignment {align} handed out {:#x}",
+                fresh.as_ptr() as usize,
+            );
+
+            // Allocated, filled, emptied, then shrunk — the `compact` path that deallocates and
+            // installs a fresh dangling pointer.
+            let mut used = BlobVec::new(Layout::from_size_align(align, align).unwrap(), None);
+            let bytes = vec![0u8; align];
+            for _ in 0..3 {
+                // SAFETY: `bytes` is exactly one element's layout for this vec.
+                unsafe { used.push(bytes.as_ptr()) };
+            }
+            used.clear();
+            used.shrink_to_fit();
+            assert_eq!(used.capacity, 0, "the allocation must actually have gone back");
+            assert_eq!(
+                used.as_ptr() as usize % align,
+                0,
+                "a column of alignment {align} shrunk to nothing handed out {:#x}",
+                used.as_ptr() as usize,
+            );
+        }
+    }
 
     /// A value whose `Drop` panics on demand and counts every drop it is asked for.
     ///

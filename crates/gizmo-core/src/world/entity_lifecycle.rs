@@ -770,7 +770,11 @@ impl World {
     /// lines test `entity_locations.len()`. That is its own change, not a rider on this one.
     #[tracing::instrument(skip_all, name = "compact")]
     pub fn compact(&mut self) {
-        // 1. Önce eski, kullanılmayan boş archetype'ları silelim (GC)
+        // 1. Önce eski, kullanılmayan boş archetype'ları silelim (GC).
+        //    It also RENUMBERS the locations of the archetype it moves down into each freed
+        //    slot, and until 2026-09-07 it did so one field at a time over any slot it found —
+        //    which turned an orphaned row's `INVALID` location into one that reports valid with
+        //    `row == u32::MAX`. See `ArchetypeIndex::gc_empty_archetypes`.
         let removed = self
             .archetype_index
             .gc_empty_archetypes(&mut self.entity_locations);
@@ -802,9 +806,11 @@ impl World {
         // done, because truncation is only sound while every entity listed in an archetype has
         // a location naming it — and an adversarial sweep on 2026-08-31 constructed that
         // violation ten different ways, all confirmed, several through ordinary public API.
-        // Two of the generators are fixed (see `flush_spawn` and `spawn_batch`); the rest are
-        // filed in `docs/ENGINE.md` §3, and `despawn`'s sparse `on_remove` window is the one
-        // that still has no answer.
+        // ALL ELEVEN are answered now (an eleventh turned up when the sweep was re-run against
+        // the tree with the first ten closed); `docs/ENGINE.md` §3 carries what each one was.
+        // What is not answered is whether a TWELFTH exists, and the round that closed
+        // `gc_empty_archetypes` below did not settle it: that defect was in the renumbering
+        // rather than in a generator, so it neither adds to the list nor shortens it.
         //
         // The check stays anyway, and is the useful half. It runs in every debug build — the
         // whole test suite, the property test, Miri — and reports the violation at the GC tick

@@ -32,6 +32,27 @@ impl ArchetypeIndex {
         }
     }
 
+    /// Appends a new archetype and returns its index. **The only way one may be created.**
+    ///
+    /// The append itself is trivial; the `cache_dirty` store is the point. `matching_archetypes`
+    /// memoises "which archetype indices match this query type", and a new archetype changes
+    /// that answer for every query it matches. Nothing else in this type can: an entity moving
+    /// between existing archetypes does not, because the cache holds indices and the predicate
+    /// reads a component set that never changes for a given archetype.
+    ///
+    /// Until 2026-09-07 the five creation sites — three here, two in `World`'s own
+    /// `add_bundle`/`remove_bundle`, which push onto `archetypes` directly — set nothing, and
+    /// `cache_dirty` was written only when an archetype was REMOVED (`gc_empty_archetypes`) or
+    /// the world cleared. So `World::query_cached` answered from the archetype list that existed
+    /// when it first ran and silently missed every row added afterwards. No panic, no assertion,
+    /// no `unsafe`: a public query quietly returning fewer entities than it has.
+    pub(crate) fn push_archetype(&mut self, infos: &[ComponentInfo]) -> usize {
+        let id = self.archetypes.len();
+        self.archetypes.push(Archetype::new(id as u32, infos));
+        self.cache_dirty = true;
+        id
+    }
+
     /// Entity spawn — add to the empty archetype
     pub(crate) fn on_spawn(&mut self, entity_id: u32) {
         self.archetypes[0].push_entity(entity_id);
@@ -48,8 +69,7 @@ impl ArchetypeIndex {
         if let Some(&id) = self.set_to_id.get(&new_types) {
             id
         } else {
-            let id = self.archetypes.len();
-            self.archetypes.push(Archetype::new(id as u32, infos));
+            let id = self.push_archetype(infos);
             self.set_to_id.insert(new_types, id);
             id
         }
@@ -82,7 +102,6 @@ impl ArchetypeIndex {
         let new_arch_id = if let Some(&id) = self.set_to_id.get(&new_types) {
             id
         } else {
-            let id = self.archetypes.len();
             // Yeni archetype oluşturmak için ComponentInfo gerekir
             let mut infos = Vec::new();
             for &t in &new_types {
@@ -93,7 +112,7 @@ impl ArchetypeIndex {
                         .unwrap_or_else(|| ComponentInfo::of_type_id(t)),
                 );
             }
-            self.archetypes.push(Archetype::new(id as u32, &infos));
+            let id = self.push_archetype(&infos);
             self.set_to_id.insert(new_types, id);
             id
         };
@@ -129,7 +148,6 @@ impl ArchetypeIndex {
         let new_arch_id = if let Some(&id) = self.set_to_id.get(&new_types) {
             id
         } else {
-            let id = self.archetypes.len();
             let mut infos = Vec::new();
             for &t in &new_types {
                 infos.push(
@@ -139,7 +157,7 @@ impl ArchetypeIndex {
                         .unwrap_or_else(|| ComponentInfo::of_type_id(t)),
                 );
             }
-            self.archetypes.push(Archetype::new(id as u32, &infos));
+            let id = self.push_archetype(&infos);
             self.set_to_id.insert(new_types, id);
             id
         };
@@ -183,6 +201,29 @@ impl ArchetypeIndex {
                 }
             }
             self.query_cache.insert(query_type_id, matching_indices);
+        }
+
+        // The cache is correct only while EVERY archetype creation has dirtied it, and that is
+        // a property of the five call sites rather than of this function. So a debug build
+        // re-derives the answer and compares instead of trusting it: the same move `Moved` makes
+        // for a stale row, and the reason a sixth creation site added later cannot reintroduce
+        // 2026-09-07's silently-short `query_cached` without a named failure at the query that
+        // suffered it. Release is unchanged — the predicate does not run per archetype there.
+        #[cfg(debug_assertions)]
+        {
+            let fresh: Vec<usize> = self
+                .archetypes
+                .iter()
+                .enumerate()
+                .filter(|(_, arch)| predicate(arch))
+                .map(|(idx, _)| idx)
+                .collect();
+            debug_assert_eq!(
+                self.query_cache.get(&query_type_id).map(Vec::as_slice),
+                Some(fresh.as_slice()),
+                "the archetype-match cache is stale: an archetype was created without going \
+                 through `ArchetypeIndex::push_archetype`, so this query is about to miss rows"
+            );
         }
 
         self.query_cache.get(&query_type_id).unwrap()
@@ -243,11 +284,37 @@ impl ArchetypeIndex {
                 if target_id != last_id {
                     self.archetypes[i].id = target_id;
 
-                    // Bu archetype içindeki entity_location referanslarını güncelle
+                    // Bu archetype içindeki entity_location referanslarını güncelle.
+                    //
+                    // ONLY the locations that actually NAME the archetype being moved. This
+                    // used to store `archetype_id` unconditionally, and `EntityLocation`'s own
+                    // documentation forbids that shape in as many words: `is_valid` inspects
+                    // `archetype_id` alone, so writing a real archetype into an `INVALID` slot
+                    // leaves `row == u32::MAX` under a location that then reports valid, and
+                    // every read path turns a row into an unchecked byte offset.
+                    //
+                    // The slot is `INVALID` for an ORPHANED row — an entity listed in an
+                    // archetype whose location does not name it. `World::despawn` builds one
+                    // whenever an `on_remove` hook re-lists the dying entity; it names that in a
+                    // `debug_assert` and leaves release behaviour unchanged, on the ground that
+                    // the row is unreachable BECAUSE its location is invalid. `World::compact`'s
+                    // rustdoc calls such rows harmless for the same reason. This write was what
+                    // falsified the ground, from `compact()`, which is ordinary maintenance.
+                    //
+                    // The comparison covers the length check as well as the validity one:
+                    // `last_id` is an index into `archetypes`, so it is never `u32::MAX`, and a
+                    // slot that equals it is therefore valid by construction.
+                    //
+                    // `entity_archetype` is updated UNCONDITIONALLY and that asymmetry is
+                    // correct rather than an oversight: the map answers "which archetype holds
+                    // this entity", and every id in `entities()` IS held by this archetype
+                    // whatever its location says.
                     for &entity in self.archetypes[i].entities() {
                         let e_idx = entity as usize;
-                        if e_idx < entity_locations.len() {
-                            entity_locations[e_idx].archetype_id = target_id;
+                        if let Some(loc) = entity_locations.get_mut(e_idx) {
+                            if loc.archetype_id == last_id {
+                                loc.archetype_id = target_id;
+                            }
                         }
                         self.entity_archetype.insert(entity, target_id as usize);
                     }

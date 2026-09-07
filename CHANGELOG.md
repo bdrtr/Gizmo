@@ -1043,6 +1043,54 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`World::compact` promoted an invalid `EntityLocation` into a valid one pointing at row
+  `u32::MAX`.** Reclaiming an empty archetype swap-removes it and moves the last archetype down
+  into the freed slot, then renumbers the locations of every entity that archetype lists.
+  `ArchetypeIndex::gc_empty_archetypes` did that one field at a time — `loc.archetype_id =
+  target_id` — over whatever the slot happened to hold, and `EntityLocation::is_valid` inspects
+  `archetype_id` alone. So a slot holding `INVALID` came back as a real archetype with `row`
+  still `u32::MAX`, and `World::query_entity`, `World::get_component_ptr` and `Query::get` turn a
+  row into an unchecked byte offset in both build profiles.
+
+  The slot holds `INVALID` for an *orphaned row* — an entity listed in an archetype whose
+  location does not name it. `World::despawn` builds one whenever an `on_remove` hook re-lists
+  the dying entity; it names that in a `debug_assert` and leaves release behaviour unchanged, on
+  the stated ground that the row is unreachable *because* its location is invalid, and
+  `compact`'s own documentation called such rows harmless for the same reason. This write was
+  what falsified that ground, from ordinary maintenance. The renumbering now touches only
+  locations that actually name the archetype being moved. `entity_archetype` keeps its
+  unconditional update, which is correct rather than an oversight: every id in `entities()` *is*
+  held by that archetype whatever its location says.
+
+- **A zero-sized component with an alignment was undefined behaviour on the query path.**
+  `#[repr(align(16))] struct Marker;` is a legal component. `BlobVec` gave every column that owns
+  no allocation the same base pointer regardless of its element — `NonNull::<u8>::dangling()`,
+  address 1 — and this was documented as safe on the ground that the pointer "is never
+  dereferenced". `query::fetch`'s `get_item` dereferences it for every row of a zero-sized
+  column, and `get_slice` hands it to `slice::from_raw_parts`, which requires an aligned pointer
+  even for a length of zero. A reference must be aligned for its type whether or not the type has
+  bytes to read, so a plain `world.query::<&Marker>()` handed safe code a misaligned reference; a
+  debug build aborts on it with `misaligned pointer dereference: address must be a multiple of
+  0x10 but is 0x1`. The pointer is now the element's own alignment as an address, at all three
+  places that install one — construction, the zero-sized branch, and the deallocation
+  `shrink_to_fit` performs (which `compact` runs over every column on every GC tick).
+
+  The same root had a fourth site: `ComponentSparseSet::clone_entry` passed address 1 to the
+  component's cloner as a *destination* for a zero-sized type, and `ptr::write` requires an
+  aligned destination too — so an over-aligned sparse-stored marker was undefined behaviour when
+  cloned, which is what prefab instantiation and `ObjectPool` do.
+
+- **`World::query_cached` silently missed every entity in an archetype created after its first
+  call.** The archetype index memoises which archetype indices match a query type and invalidated
+  that cache only when an archetype was *removed* or the world cleared. Creating one — which
+  every first `spawn_bundle` of a new component combination does, and every `add_component` that
+  migrates an entity into a shape no entity held yet — set nothing, across five creation sites,
+  two of which push onto the archetype vector from `World` rather than through the index. No
+  panic, no assertion, no `unsafe`: a public query returning fewer entities than it has.
+  Creation now goes through one `ArchetypeIndex::push_archetype`, and a debug build re-derives
+  the match list and compares rather than trusting it, so a sixth creation site added later
+  cannot reintroduce this without a named failure at the query that suffered it.
+
 - **The three component removals left two stale `EntityLocation`s behind when a component
   destructor panicked.** `World::remove_component`, `World::remove_bundle` and
   `World::remove_batch` migrate the entity to a smaller archetype and then repair three tables:

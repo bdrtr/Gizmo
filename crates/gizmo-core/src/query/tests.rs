@@ -17,6 +17,14 @@ struct Velocity {
 }
 impl_component!(Velocity);
 
+/// A zero-sized component with an alignment of its own. Legal, and the shape that made
+/// `BlobVec`'s dangling base pointer observable — see
+/// `a_query_over_an_overaligned_zst_hands_out_an_aligned_reference`.
+#[derive(Debug, Clone, PartialEq)]
+#[repr(align(16))]
+struct Aligned16;
+impl_component!(Aligned16);
+
 /// An attempt at double mutable access to the same type, such as
 /// `Query<(Mut<Position>, Mut<Position>)>`, must be blocked with a panic.
 #[test]
@@ -627,4 +635,81 @@ mod default_filter_tests {
             w.forgot, w.remembered,
         );
     }
+}
+
+/// A zero-sized component may be **over-aligned** — `#[repr(align(16))] struct Marker;` is a
+/// legal component type — and until this test `BlobVec` gave every column the same base
+/// pointer whatever its element's alignment: `NonNull::<u8>::dangling()`, i.e. address 1.
+///
+/// `BlobVec`'s own documentation excused it — "it is never dereferenced, and is not adjusted
+/// for an over-aligned element type" — and the first half of that sentence was false.
+/// `query::fetch`'s `get_item` is `fetch.0.add(row * size_of::<T>()) as *const T` followed by
+/// `&*ptr`, and for a ZST the offset is zero, so every row of such a column produced a
+/// `&Marker` at address 1 against an alignment requirement of 16. A misaligned reference is
+/// undefined behaviour whether or not the type has any bytes to read, and this one is handed
+/// to safe code by a safe `iter()`.
+#[test]
+fn a_query_over_an_overaligned_zst_hands_out_an_aligned_reference() {
+    let mut world = World::new();
+    world.register_component_type::<Aligned16>();
+
+    for _ in 0..3 {
+        let e = world.spawn();
+        world.add_component(e, Aligned16);
+    }
+
+    let q = world.query::<&Aligned16>().expect("a registered component type has a query");
+    let mut seen = 0;
+    for (_entity, item) in q.iter() {
+        let addr = item as *const Aligned16 as usize;
+        assert_eq!(
+            addr % std::mem::align_of::<Aligned16>(),
+            0,
+            "the query handed out `&Aligned16` at {addr:#x}, which is not {}-aligned",
+            std::mem::align_of::<Aligned16>(),
+        );
+        seen += 1;
+    }
+    assert_eq!(seen, 3, "all three rows must be visited");
+}
+
+/// `World::query_cached` memoises "which archetypes match this query" in the archetype index,
+/// and the index marked that cache dirty only when an archetype was REMOVED
+/// (`gc_empty_archetypes`) or the world cleared. **Creating** one — which every first
+/// `spawn_bundle` of a new component combination does, and every `add_component` that migrates
+/// an entity into a shape no entity had yet — left the cache naming exactly the archetypes that
+/// existed when the query first ran.
+///
+/// So the second call below returned the same one-archetype list as the first and silently
+/// missed the entity that had just been given the component. No panic, no assertion, no
+/// `unsafe`: a public query quietly missing rows, which is the same failure the neighbouring
+/// `or_forwards_the_opt_out` test exists for.
+#[test]
+fn query_cached_sees_an_archetype_created_after_it_first_ran() {
+    let mut world = World::new();
+    world.register_component_type::<Position>();
+    world.register_component_type::<Velocity>();
+
+    let a = world.spawn();
+    world.add_component(a, Position { x: 0.0, y: 0.0 });
+
+    // Warms the cache for `&Position`: exactly one archetype carries it right now.
+    assert_eq!(
+        world.query_cached::<&Position>().map(|q| q.iter().count()),
+        Some(1),
+        "the warm-up itself must see the one entity that exists",
+    );
+
+    // `(Position, Velocity)` is a shape no entity has held yet, so this CREATES an archetype
+    // rather than reusing one — the event the cache was never told about.
+    let b = world.spawn();
+    world.add_component(b, Position { x: 1.0, y: 1.0 });
+    world.add_component(b, Velocity { x: 1.0, y: 1.0 });
+
+    assert_eq!(
+        world.query_cached::<&Position>().map(|q| q.iter().count()),
+        Some(2),
+        "`query_cached` is still answering from the archetype list it cached before \
+         `(Position, Velocity)` existed",
+    );
 }

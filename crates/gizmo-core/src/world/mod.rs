@@ -893,6 +893,78 @@ mod tests {
         }
     }
 
+    /// `gc_empty_archetypes` renumbers the archetype it moves down into a freed slot, and it
+    /// wrote ONE FIELD of each affected entity's location — `archetype_id` — without looking at
+    /// what that slot held. `EntityLocation`'s own documentation forbids exactly that shape:
+    /// `is_valid` inspects `archetype_id` alone, so stamping a real archetype onto an `INVALID`
+    /// slot leaves `row == u32::MAX` behind a location that now reports **valid**, and every
+    /// read path (`World::query_entity`, `World::get_component_ptr`, `Query::get`) turns a row
+    /// into an unchecked byte offset.
+    ///
+    /// The slot is `INVALID` for an ORPHANED row — an entity listed in an archetype whose
+    /// location does not name it. That state is not hypothetical and it is not an accident:
+    /// `World::despawn` builds it whenever an `on_remove` hook re-lists the dying entity, names
+    /// it in a `debug_assert`, and leaves **release behaviour unchanged** on the stated ground
+    /// that the row is unreachable *because* its location is invalid. `World::compact`'s own
+    /// rustdoc calls such rows harmless for the same reason. This write is what falsified that
+    /// ground, and it is reached from `compact()`, which is ordinary maintenance.
+    ///
+    /// The orphan is built by hand here rather than through the hook, because the hook route
+    /// trips that `debug_assert` and a test binary is a debug build. What is under test is the
+    /// renumbering, not the door the orphan came through.
+    #[test]
+    fn gc_renumbers_only_the_locations_that_name_the_archetype_it_moved() {
+        #[derive(Clone, Debug, PartialEq)]
+        struct A(u32);
+        impl crate::component::Component for A {}
+        #[derive(Clone, Debug, PartialEq)]
+        struct B(u32);
+        impl crate::component::Component for B {}
+
+        let mut world = World::new();
+        world.register_component_type::<A>();
+        world.register_component_type::<B>();
+
+        // Archetype 1 = {A}, and it is emptied again so the GC has something to reclaim.
+        let doomed = world.spawn();
+        world.add_component(doomed, A(1));
+        world.despawn(doomed);
+
+        // Archetype 2 = {B}, holding two rows. It is the LAST archetype, so the GC will
+        // swap-remove archetype 1 and move this one down into slot 1, renumbering both rows.
+        let orphan = world.spawn();
+        world.add_component(orphan, B(2));
+        let stranger = world.spawn();
+        world.add_component(stranger, B(3));
+
+        assert_eq!(world.archetype_index.archetypes.len(), 3, "0 = {{}}, 1 = {{A}}, 2 = {{B}}");
+        assert!(world.archetype_index.archetypes[1].is_empty(), "archetype 1 is the GC's target");
+
+        // THE TWO SHAPES THE RENUMBERING MUST NOT TOUCH.
+        // (1) an orphaned row: listed in archetype 2, location says nothing at all.
+        world.entity_locations[orphan.id() as usize] = crate::archetype::EntityLocation::INVALID;
+        // (2) a row whose id has been recycled: still listed in archetype 2, but the location
+        //     now belongs to the live entity that took the id back, and names another archetype.
+        let elsewhere = crate::archetype::EntityLocation { archetype_id: 0, row: 7 };
+        world.entity_locations[stranger.id() as usize] = elsewhere;
+
+        world
+            .archetype_index
+            .gc_empty_archetypes(&mut world.entity_locations);
+
+        assert_eq!(
+            world.entity_locations[orphan.id() as usize],
+            crate::archetype::EntityLocation::INVALID,
+            "the GC promoted an INVALID location to a valid one with row u32::MAX — \
+             `query_entity` would index that row with no bounds check",
+        );
+        assert_eq!(
+            world.entity_locations[stranger.id() as usize], elsewhere,
+            "the GC renumbered a location that never named the archetype it moved, so a live \
+             entity that recycled this id now points at the wrong archetype",
+        );
+    }
+
     /// Asserts INV: every entity listed in an archetype row has a location naming that row.
     fn assert_inv(world: &World, context: &str) {
         for (arch_idx, arch) in world.archetype_index.archetypes.iter().enumerate() {

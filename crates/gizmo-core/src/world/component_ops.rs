@@ -149,12 +149,14 @@ impl World {
         let target_arch_id = if let Some(&id) = self.archetype_index.set_to_id.get(&new_types) {
             id
         } else {
-            let id = self.archetype_index.archetypes.len();
             let mut new_infos = Vec::new();
             for &t in &new_types {
                 new_infos.push(self.component_infos.get(&t).cloned().unwrap());
             }
-            self.archetype_index.archetypes.push(crate::archetype::Archetype::new(id as u32, &new_infos));
+            // `push_archetype`, not a bare push: creating an archetype has to invalidate the
+            // query cache, and these two sites are outside `ArchetypeIndex` where that was easy
+            // to miss. See there.
+            let id = self.archetype_index.push_archetype(&new_infos);
             self.archetype_index.set_to_id.insert(new_types, id);
             id
         };
@@ -523,12 +525,14 @@ impl World {
         let target_arch_id = if let Some(&id) = self.archetype_index.set_to_id.get(&new_types) {
             id
         } else {
-            let id = self.archetype_index.archetypes.len();
             let mut new_infos = Vec::new();
             for &t in &new_types {
                 new_infos.push(self.component_infos.get(&t).cloned().unwrap());
             }
-            self.archetype_index.archetypes.push(crate::archetype::Archetype::new(id as u32, &new_infos));
+            // `push_archetype`, not a bare push: creating an archetype has to invalidate the
+            // query cache, and these two sites are outside `ArchetypeIndex` where that was easy
+            // to miss. See there.
+            let id = self.archetype_index.push_archetype(&new_infos);
             self.archetype_index.set_to_id.insert(new_types, id);
             id
         };

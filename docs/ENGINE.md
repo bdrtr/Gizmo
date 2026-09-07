@@ -552,6 +552,86 @@ state instead.
     first pass suggests roughly half the 29 already sit behind an `entity_location(..).is_valid()`
     test, which is bounds-checked and returns `INVALID` past the end — so the real work is the
     other half, not all 29.
+  - **Round three of the sweep, 2026-09-07 — three defects, and none of them a generator.**
+    The item above ends by saying each round has come back smaller (ten, then one) and that
+    re-running it against the fixed tree is what the truncation question needs. It was re-run:
+    ten angle-specific finders over `gizmo-core`, every candidate put to three refuting lenses, a
+    completeness critic, then a gap-driven second round. 44 candidates, 27 of which the panel
+    let through.
+
+    **Hand-verification cut 27 to three, and the arithmetic is the lesson rather than the
+    finding.** Agreement between angles is not evidence: five independent angles reported the
+    `gc_empty_archetypes` write below and seven reported a `clear_entities` claim that is simply
+    wrong — the same wrong claim, because they all read the same ordering and all inverted the
+    same argument. Volume of agreement measures how obvious a shape is, not whether it is a
+    defect. Four verify runs did refute the `clear_entities` claim; the panel contradicted itself
+    and could not settle it, which is what the by-hand pass is for.
+
+    - **`ArchetypeIndex::gc_empty_archetypes` promoted an `INVALID` location to a valid one at
+      row `u32::MAX`.** Reclaiming an empty archetype swap-removes it, moves the last archetype
+      down into the freed slot and renumbers the locations of every entity that archetype lists.
+      It did that **one field at a time** — `loc.archetype_id = target_id` — over whatever the
+      slot held, and `is_valid` inspects `archetype_id` alone. `EntityLocation`'s own rustdoc
+      forbids exactly this shape in as many words ("a half-built location with a real archetype
+      but `row == u32::MAX` reports valid and will then index out of bounds. Construct invalid
+      locations from `INVALID`, never field by field") — written for the other direction and
+      never applied to this one.
+
+      **What makes it a defect rather than hardening** is that the state it mishandles is one
+      this engine deliberately tolerates. `despawn` builds an orphaned row whenever an
+      `on_remove` hook re-lists the dying entity; it names that in a `debug_assert` and leaves
+      **release behaviour unchanged**, on the stated ground that the row is unreachable BECAUSE
+      its location is invalid, and `compact`'s rustdoc calls such rows harmless for the same
+      reason. This write was what falsified that ground — from `compact()`, which is ordinary
+      maintenance. Measured: `EntityLocation { archetype_id: 1, row: 4294967295 }`, which
+      `is_valid()` accepts and `query_entity` indexes with no bounds check.
+
+      Fixed by renumbering only the locations that actually name the archetype being moved; the
+      comparison covers validity too, since `last_id` is an index and never `u32::MAX`.
+      `entity_archetype` keeps its unconditional update and that asymmetry is **correct**: the
+      map answers "which archetype holds this entity", and every id in `entities()` is held by
+      it whatever its location says. (An angle filed the asymmetry itself as a bug. It is not.)
+
+    - **A zero-sized component with an alignment was UB on the ordinary query path.**
+      `#[repr(align(16))] struct Marker;` is a legal component. `BlobVec` gave every column that
+      owns no allocation `NonNull::<u8>::dangling()` — address 1 — whatever its element's
+      alignment, and **said so in its own type documentation with the excuse that the pointer
+      "is never dereferenced"**. `query::fetch`'s `get_item` dereferences it for every row of a
+      ZST column; `get_slice` hands it to `slice::from_raw_parts`, which demands an aligned
+      pointer even at length zero. A reference must be aligned for its type whether or not the
+      type has bytes to read. `world.query::<&Marker>()` — safe, public, no hooks, no panic —
+      aborts a debug build with `misaligned pointer dereference: address must be a multiple of
+      0x10 but is 0x1`, which is how it was confirmed; no Miri needed, rustc's own check catches
+      it. The base pointer is now the element's alignment as an address at all three sites that
+      install one, including the dealloc branch of `shrink_to_fit` that `compact` runs over every
+      column on every GC tick. Same shape as the `shrink_to_fit` ZST sentinel closed 2026-08-31,
+      and the same moral: a type whose documented invariant is false is how the next reader gets
+      misled.
+
+      **A fourth site fell out of grepping for the root once the fix existed**, which is the
+      cheap half of this method and the reason to do it every time.
+      `ComponentSparseSet::clone_entry`'s zero-sized branch handed the same address 1 to
+      `clone_fn` as a *destination*, and `ptr::write` requires an aligned destination whether or
+      not the type has bytes — so an over-aligned sparse-stored marker was UB on the prefab and
+      `ObjectPool` paths rather than the query path. One `dangling_for` there too.
+
+    - **`World::query_cached` silently missed every archetype created after its first call.**
+      The index memoises which archetype indices match a query type and marked that cache dirty
+      only when an archetype was REMOVED (`gc_empty_archetypes`) or the world cleared. Creation
+      — five sites, two of them pushing onto `archetypes` from `World::add_bundle`/`remove_bundle`
+      rather than through the index — set nothing. Measured: a query that must see 2 saw 1. No
+      panic, no assertion, no `unsafe`; the same failure mode as the `Or` opt-out defect, "a
+      query quietly missing rows". Creation now goes through one `push_archetype`, and
+      `matching_archetypes` re-derives the list and compares it in debug rather than trusting it,
+      so a sixth site added later cannot reintroduce this silently.
+
+    **The truncation question is NOT advanced by this round.** All three are real and none is a
+    generator of "an entity listed in an archetype whose location does not name it" — the gc one
+    *consumes* that state rather than producing it. So the standing answer stands: eleven
+    generators found and closed, no twelfth found by this round, and "no construction the sweep
+    found" is still not "no construction". What did change is that the one documented consumer
+    of an orphaned row no longer turns it into an out-of-bounds read.
+
   - ~~**`entity_observers` is never pruned when an entity despawns.**~~ **CLOSED 2026-08-31.**
     The diagnosis was right and so was the prescription: the values are per-event-type, so
     `despawn` — holding an `Entity` and no `E` — had nothing to downcast to, and only
@@ -2791,6 +2871,17 @@ stating precisely rather than as reassurance: this change is invisible to the de
 the *slope* gate is the one that guards it.
 
 ### Do not re-chase (carried from the campaign)
+
+- **`World::clear_entities` clearing `entity_locations` before the two user-code steps.** Seven
+  independent sweep angles reported this on 2026-09-07 as an unwind hazard — a panicking capture
+  in `entity_observers` or the command queue leaves every archetype row with no location — and it
+  is not one. The residue is rows the location table cannot name, so every blind
+  `entity_locations[eid]` becomes a **bounds panic** rather than a bad read; the bounds-checked
+  accessor answers `INVALID`, which every branch already handles. The proposed fix — clear the
+  locations last — reintroduces the direction that IS unsafe: a location naming a row that
+  `archetype_index.clear_entities` has just destroyed, read with no bounds check. The function's
+  own comment states the rule it was written to ("the ordering rule here is by damage, not by
+  fallibility"), and four of the verify runs did refute it. Do not re-order it.
 
 - **`gizmo-audio`'s cfg-gated `unsafe impl Send/Sync`.** Correct, and justified in place: a
   single-threaded wasm build with `atomics` off, and the impls disappear if `atomics` is enabled.

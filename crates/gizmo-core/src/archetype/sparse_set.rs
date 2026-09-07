@@ -411,7 +411,13 @@ impl ComponentSparseSet {
         // clone and only the raw `tmp` block leaks; a leak on a panic path is safe.
         unsafe {
             if layout.size() == 0 {
-                let z = std::ptr::NonNull::<u8>::dangling().as_ptr();
+                // `dangling_for`, not `NonNull::<u8>::dangling()`: this pointer is WRITTEN
+                // THROUGH — `clone_fn` is `ptr::write(dst as *mut T, ..)` — and `ptr::write`
+                // requires an aligned destination even for a type with no bytes. Address 1
+                // against `#[repr(align(16))] struct Marker;`, a legal sparse component, is
+                // undefined behaviour on the ordinary `clone_entry` path (pools and prefab
+                // instantiation reach it). Same root as `BlobVec`'s base pointer; see there.
+                let z = crate::archetype::blob::dangling_for(layout).as_ptr();
                 clone_fn(src_ptr, z, 1);
                 self.insert(dst, z, tick);
             } else {
