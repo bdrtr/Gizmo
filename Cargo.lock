@@ -3866,9 +3866,9 @@ dependencies = [
 
 [[package]]
 name = "naga"
-version = "30.0.0"
+version = "30.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23bf0a141a9ab6f07dbb492db53245e464bc9db42f407772d9ae03d83a2c1033"
+checksum = "a616d2fb8c89516ac2723a581f69d6c18576046bed761bd6b305e5618e6ae130"
 dependencies = [
  "arrayvec",
  "bit-set 0.10.0",
@@ -6173,9 +6173,9 @@ dependencies = [
 
 [[package]]
 name = "transform-gizmo"
-version = "0.10.0"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "24ce689c975cfc290813f5cf8dbd71296eb4d7e4930e4c21d15135921818aa30"
+checksum = "fcd9584531c33435ec2e9c2f194a27e60c65a36a2168f0519e1483e06934c8ec"
 dependencies = [
  "ahash",
  "ecolor",
@@ -6189,9 +6189,9 @@ dependencies = [
 
 [[package]]
 name = "transform-gizmo-egui"
-version = "0.10.0"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9dc2b430ae8d66919ef3c5f93693172b50ef7e0aede58332e79f9c364ae766b"
+checksum = "54832e69fb355472e05a768d88616459cd7cc321512a2f2d988bca201bdebc67"
 dependencies = [
  "egui",
  "transform-gizmo",
@@ -6645,9 +6645,9 @@ checksum = "a28ac98ddc8b9274cb41bb4d9d4d5c425b6020c50c46f25559911905610b4a88"
 
 [[package]]
 name = "wgpu"
-version = "30.0.0"
+version = "30.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d8f4bd44d92da5270f03409dba9f952dab24f128e05d6a554926101d1bf9114"
+checksum = "527ccdf43dd5b2e8676eed9984ce00e2bbb0a1b85b70c1969dcb6cd2eb55ab9e"
 dependencies = [
  "arrayvec",
  "bitflags 2.13.1",
