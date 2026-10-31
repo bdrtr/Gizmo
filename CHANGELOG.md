@@ -50,6 +50,28 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Sprites — the engine's first 2D path (`docs/CAPABILITY_GAPS.md` §A1).** A `Sprite` component
+  (`gizmo_renderer::components`) draws a textured quad either in the entity's local XY plane,
+  placed by its `GlobalTransform` (`SpriteSpace::World` — so it moves, rotates and scales with the
+  entity, and a 2D game is an orthographic camera looking down `-Z`), or in window pixels
+  (`SpriteSpace::Screen`, a HUD). Tint, sub-rectangle (`uv_rect`, `with_frame`/`set_frame` for a
+  regular sprite sheet), `flip_x`/`flip_y`, a fractional anchor and an `i32` `layer`.
+  Images load through `Renderer::load_sprite_image` / `_file` / `_rgba`, each with a
+  `SpriteFilter` (`Linear`, or `Nearest` for pixel art); the decoder's error type does not leak.
+  Order is layer, then — for world sprites — back to front by clip-space depth (a key that works
+  under orthographic projection, where clip `w` is constant), then entity order; consecutive
+  sprites sharing an image are one draw call. World sprites test the scene depth and write none.
+  `IsHidden` hides a sprite exactly as it hides a mesh, ancestors included.
+  Both hosts draw them through one shared pass, `gizmo::systems::render::record_sprites`, just
+  before `record_text`. Corners are projected on the CPU with the **unjittered** view-projection,
+  because the pass runs after TAA and the jittered matrix would make pixel art shimmer.
+  Guarded by `sprites_reach_the_frame_in_place_in_order_and_behind_walls` (GPU): it fails with
+  **890** px when the depth key is reversed and **784** px when the world pipeline's depth test is
+  `Always`. Demo: `sprite_2d` — every image procedurally generated, nothing added to the repo.
+  Not yet: mipmaps, atlas packing, a post-tonemap slot (sprites are exposed with the frame, so a
+  saturated HUD colour comes out washed — visible in the demo's energy bar), 2D physics, a
+  tilemap and a sprite-animation component.
+
 - **`CommandQueue::clear`** — drops every pending command without running any, returning how many
   went. The teardown counterpart to `apply`, and what `World::clear_entities` now calls (see
   *Fixed*). A caller that wants the pending work to happen should `apply_commands()` *before* a

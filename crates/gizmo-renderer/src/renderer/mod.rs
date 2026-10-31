@@ -211,6 +211,11 @@ pub struct Renderer {
     /// A renderer with no font loaded still has one; it simply draws nothing.
     pub text: Option<crate::text::TextRenderer>,
 
+    // === SPRITE ===
+    /// Loaded sprite images and the sprite pipelines — see [`crate::sprite`]. `Option` for the
+    /// same ordering reason as [`text`](Self::text).
+    pub sprites: Option<crate::sprite::SpriteRenderer>,
+
     // === DAHİLİ ASSET YÖNETİCİSİ (Kolaylık metodları için cache) ===
     /// The texture/mesh cache behind the convenience loaders. Behind a lock because the
     /// convenience methods take `&self`, and loading mutates the cache.
@@ -322,6 +327,58 @@ impl Renderer {
             return Err(crate::text::FontError::Invalid);
         };
         text.load_font(bytes)
+    }
+
+    /// Decodes an encoded image (PNG, JPEG, WebP, …) and returns the handle a
+    /// [`Sprite`](crate::components::Sprite) carries.
+    ///
+    /// # Errors
+    ///
+    /// [`SpriteError::Invalid`](crate::sprite::SpriteError::Invalid) if the bytes do not decode,
+    /// or [`SpriteError::TooLarge`](crate::sprite::SpriteError::TooLarge) past the device limit.
+    pub fn load_sprite_image(
+        &mut self,
+        bytes: &[u8],
+        filter: crate::sprite::SpriteFilter,
+    ) -> Result<crate::sprite::SpriteImageId, crate::sprite::SpriteError> {
+        let Some(sprites) = self.sprites.as_mut() else {
+            return Err(crate::sprite::SpriteError::Invalid);
+        };
+        sprites.load_encoded(&self.device, &self.queue, bytes, filter)
+    }
+
+    /// The same from a file.
+    ///
+    /// # Errors
+    ///
+    /// See [`load_sprite_image`](Self::load_sprite_image); additionally
+    /// [`SpriteError::Io`](crate::sprite::SpriteError::Io) if the file cannot be read.
+    pub fn load_sprite_image_file(
+        &mut self,
+        path: impl AsRef<std::path::Path>,
+        filter: crate::sprite::SpriteFilter,
+    ) -> Result<crate::sprite::SpriteImageId, crate::sprite::SpriteError> {
+        let bytes = std::fs::read(path).map_err(crate::sprite::SpriteError::Io)?;
+        self.load_sprite_image(&bytes, filter)
+    }
+
+    /// Uploads raw `width × height` RGBA8 pixels (sRGB, straight alpha, top row first) — for
+    /// images generated at runtime.
+    ///
+    /// # Errors
+    ///
+    /// See [`SpriteRenderer::load_rgba`](crate::sprite::SpriteRenderer::load_rgba).
+    pub fn load_sprite_rgba(
+        &mut self,
+        rgba: &[u8],
+        width: u32,
+        height: u32,
+        filter: crate::sprite::SpriteFilter,
+    ) -> Result<crate::sprite::SpriteImageId, crate::sprite::SpriteError> {
+        let Some(sprites) = self.sprites.as_mut() else {
+            return Err(crate::sprite::SpriteError::Invalid);
+        };
+        sprites.load_rgba(&self.device, &self.queue, rgba, width, height, filter)
     }
 
     /// The same from a file.

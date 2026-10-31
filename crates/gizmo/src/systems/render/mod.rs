@@ -689,8 +689,10 @@ pub fn default_render_pass(
         ssgi.advance_frame();
     }
     passes::record_taa_and_overlays(encoder, renderer, world);
-    // After the overlays and before post-processing: text is an overlay too, and it is the one
-    // whose smear a temporal resolve makes most obvious.
+    // After the overlays and before post-processing: sprites and text are overlays too, and the
+    // ones whose smear a temporal resolve makes most obvious. Sprites first, so a HUD label lands
+    // on its HUD image; with the UNJITTERED matrix, so a sprite drawn past TAA does not shimmer.
+    record_sprites(encoder, renderer, world, unjittered_view_proj);
     record_text(encoder, renderer, world);
 
     renderer.run_post_processing(encoder, view);
@@ -738,6 +740,9 @@ pub use decals::{collect_decals, record_forward_decals};
 
 mod particles;
 pub use particles::spawn_from_emitters;
+
+mod sprite;
+pub use sprite::record_sprites;
 
 mod text;
 pub use text::record_text;
@@ -4652,6 +4657,150 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
                  `CompareFunction::Always` in its place, and 0 with the test back.",
             );
         });
+    }
+
+    /// `Sprite` reaches the frame, in the right place, in the right order, and not through walls.
+    ///
+    /// Each half is asserted as a pair against a reference, because a sprite that is never drawn
+    /// passes every "is it hidden" check on its own:
+    ///
+    /// 1. **Screen placement** — a sprite at (8, 8) changes the top-left quadrant and leaves the
+    ///    bottom-right alone (the y flip).
+    /// 2. **World depth** — a world sprite is visible in the open and changes 0 pixels behind a
+    ///    wall (the world pipeline's depth test).
+    /// 3. **Order** — two identical opaque screen sprites: the higher `layer` wins whichever was
+    ///    spawned first, so the frame equals that sprite alone. Two world sprites: the nearer one
+    ///    wins although it was spawned first, which is the back-to-front sort and not queue order.
+    /// 4. **`IsHidden`** — a hidden sprite draws nothing.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn sprites_reach_the_frame_in_place_in_order_and_behind_walls() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        use SpriteCase as C;
+        pollster::block_on(async {
+            let blank = render_sprite_scene(&[]).await;
+
+            let screen = render_sprite_scene(&[C::Screen { layer: 0, blue: false }]).await;
+            let (tl, br) = (quadrant_changes(&blank, &screen, 0, 0), quadrant_changes(&blank, &screen, 64, 64));
+            assert!(
+                tl > 300 && br == 0,
+                "a 24 px sprite at (8, 8) changed {tl} pixels top-left and {br} bottom-right — \
+                 either nothing is drawn or it is drawn at the wrong end of the screen",
+            );
+
+            let open = render_sprite_scene(&[C::World { z: 0.0, blue: false }]).await;
+            let (visible, total) = changed_pixels(&blank, &open, 128);
+            assert!(visible >= 300, "a world sprite changed {visible}/{total} pixels — it is not drawn");
+            let wall = render_sprite_scene(&[C::Wall]).await;
+            let behind = render_sprite_scene(&[C::Wall, C::World { z: 0.0, blue: false }]).await;
+            let (leaked, _) = changed_pixels(&wall, &behind, 128);
+            assert_eq!(leaked, 0, "a world sprite behind a wall changed {leaked} pixels — not depth-tested (measured 784 with \
+                 `CompareFunction::Always` in the world pipeline, 0 with `LessEqual`)");
+
+            let blue_alone = render_sprite_scene(&[C::Screen { layer: 1, blue: true }]).await;
+            let layered = render_sprite_scene(&[C::Screen { layer: 1, blue: true }, C::Screen { layer: 0, blue: false }]).await;
+            let (diff, _) = changed_pixels(&blue_alone, &layered, 128);
+            assert_eq!(diff, 0, "the layer-0 sprite spawned second was painted over the layer-1 one ({diff} px)");
+
+            let near_alone = render_sprite_scene(&[C::World { z: 1.5, blue: true }]).await;
+            let sorted = render_sprite_scene(&[C::World { z: 1.5, blue: true }, C::World { z: 0.0, blue: false }]).await;
+            let (diff, _) = changed_pixels(&near_alone, &sorted, 128);
+            assert_eq!(
+                diff, 0,
+                "the farther world sprite, spawned second, showed over the nearer one ({diff} px) — \
+                 world sprites are drawn in queue order instead of back to front (measured 890 with the \
+                 depth key reversed)",
+            );
+
+            let hidden = render_sprite_scene(&[C::HiddenScreen]).await;
+            let (diff, _) = changed_pixels(&blank, &hidden, 128);
+            assert_eq!(diff, 0, "an `IsHidden` sprite changed {diff} pixels");
+        });
+    }
+
+    /// One thing [`render_sprite_scene`] puts in the world.
+    #[derive(Clone, Copy)]
+    enum SpriteCase {
+        /// A 24 px opaque screen sprite at (8, 8).
+        Screen { layer: i32, blue: bool },
+        /// The same, carrying `IsHidden`.
+        HiddenScreen,
+        /// A 1.5-unit opaque world sprite on the camera's axis at depth `z`.
+        World { z: f32, blue: bool },
+        /// A wall at z = 3, between the camera and the origin.
+        Wall,
+    }
+
+    /// The text scene's camera and light, a floor, and `cases` in order.
+    async fn render_sprite_scene(cases: &[SpriteCase]) -> Vec<u8> {
+        use gizmo_renderer::components::Sprite;
+        use gizmo_renderer::sprite::SpriteFilter;
+        const W: u32 = 128;
+        let mut renderer = crate::test_gpu::headless_renderer(W, W).await;
+        renderer.taa = None;
+        let mut asset_manager = AssetManager::new();
+        let mut world = World::new();
+        let tex = asset_manager.create_white_texture(
+            &renderer.device,
+            &renderer.queue,
+            &renderer.scene.texture_bind_group_layout,
+        );
+        world.spawn_bundle(CameraBundle {
+            position: Vec3::new(0.0, 0.0, 6.0),
+            yaw: -std::f32::consts::FRAC_PI_2,
+            pitch: 0.0,
+            primary: true,
+            ..Default::default()
+        });
+        world.spawn_bundle(DirectionalLightBundle::default());
+
+        let white = renderer
+            .load_sprite_rgba(&[255; 4], 1, 1, SpriteFilter::Nearest)
+            .expect("a 1×1 image must load");
+        let tint = |blue: bool| if blue { Vec4::new(0.1, 0.2, 1.0, 1.0) } else { Vec4::new(1.0, 0.2, 0.1, 1.0) };
+        for case in cases {
+            let e = world.spawn();
+            match *case {
+                SpriteCase::Screen { layer, blue } => world.add_component(
+                    e,
+                    Sprite::screen(white, gizmo_math::Vec2::splat(24.0), gizmo_math::Vec2::splat(8.0))
+                        .with_layer(layer)
+                        .with_color(tint(blue)),
+                ),
+                SpriteCase::HiddenScreen => {
+                    world.add_component(
+                        e,
+                        Sprite::screen(white, gizmo_math::Vec2::splat(24.0), gizmo_math::Vec2::splat(8.0)),
+                    );
+                    world.add_component(e, gizmo_core::component::IsHidden);
+                }
+                SpriteCase::World { z, blue } => {
+                    world.add_component(e, Transform::new(Vec3::new(0.0, 0.0, z)));
+                    world.add_component(e, GlobalTransform::default());
+                    world.add_component(e, Sprite::world(white, gizmo_math::Vec2::splat(1.5)).with_color(tint(blue)));
+                }
+                SpriteCase::Wall => {
+                    world.add_component(
+                        e,
+                        Transform::new(Vec3::new(0.0, 0.0, 3.0)).with_scale(Vec3::new(3.0, 3.0, 0.2)),
+                    );
+                    world.add_component(e, GlobalTransform::default());
+                    world.add_component(e, AssetManager::create_cube(&renderer.device));
+                    world.add_component(
+                        e,
+                        Material::new(tex.clone()).with_pbr(Vec4::new(0.8, 0.3, 0.3, 1.0), 0.7, 0.0),
+                    );
+                    world.add_component(e, MeshRenderer::new());
+                }
+            }
+        }
+        render_world(&mut renderer, &mut world).await
     }
 
     /// How many pixels of one 64×64 quadrant differ between two frames.

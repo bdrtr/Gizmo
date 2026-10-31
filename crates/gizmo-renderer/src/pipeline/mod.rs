@@ -752,7 +752,14 @@ pub fn rebuild_pipelines(renderer: &mut crate::Renderer) {
             wgpu::TextureFormat::Depth32Float,
         );
     }
-    tracing::info!("[Pipeline] core + shadow + post-process + text pipelines rebuilt");
+    if let Some(sprites) = renderer.sprites.as_mut() {
+        sprites.rebuild_pipelines(
+            &renderer.device,
+            wgpu::TextureFormat::Rgba16Float,
+            wgpu::TextureFormat::Depth32Float,
+        );
+    }
+    tracing::info!("[Pipeline] core + shadow + post-process + text + sprite pipelines rebuilt");
 }
 
 #[cfg(test)]

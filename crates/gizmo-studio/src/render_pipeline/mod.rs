@@ -763,6 +763,10 @@ pub fn execute_render_pipeline(
             // depth-tested against this viewport's own depth, screen text over all of it — because
             // the placement lives in `gizmo_renderer::text`, not in either loop. Last of the world
             // passes for exactly that reason.
+            // `Sprite`, the engine's own pass for the same reason as `Text` below it — and before
+            // it, so a HUD label lands on its HUD image. The editor has no TAA jitter, so its
+            // camera's own matrix is the unjittered one the pass asks for.
+            gizmo::systems::render::record_sprites(encoder, renderer, world, vp.camera.view_proj);
             gizmo::systems::render::record_text(encoder, renderer, world);
 
     }); // Cikis: CACHE.with bloğu

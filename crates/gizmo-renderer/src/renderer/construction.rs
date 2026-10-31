@@ -503,6 +503,12 @@ impl Renderer {
             wgpu::TextureFormat::Rgba16Float,
             wgpu::TextureFormat::Depth32Float,
         ));
+        // Same target and depth as text: sprites are drawn into the HDR image just before it.
+        let sprites = Some(crate::sprite::SpriteRenderer::new(
+            &device,
+            wgpu::TextureFormat::Rgba16Float,
+            wgpu::TextureFormat::Depth32Float,
+        ));
 
         let scene_state = SceneState {
             render_pipeline: scene.render_pipeline,
@@ -666,6 +672,7 @@ impl Renderer {
             smoke: None,
             debug_renderer,
             text,
+            sprites,
             asset_manager: std::sync::RwLock::new(crate::asset::AssetManager::new()),
             web_profile: crate::web_profile::WebProfile::auto(),
             shading_mode: 0,

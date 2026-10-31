@@ -28,13 +28,38 @@ capabilities in section A.
 
 These are not missing knobs. Each one closes off a whole category of work.
 
-### A1. No 2D / sprite pipeline
+### A1. 2D / sprite pipeline — **the engine draws sprites since 2026-11-01**
 
-There is no sprite, no 2D camera, no 2D transform stack. Every 2D and UI-adjacent capability has
-no path. Demos that ran into this: `texture`, `parallel_query` (the reference version moves 128
-sprites; the demo had to become 3D cubes), `removal_detection`.
+Until then there was no sprite, no 2D camera, no 2D transform stack, and every 2D and
+UI-adjacent capability had no path. Demos that ran into this: `texture`, `parallel_query` (the
+reference version moves 128 sprites; the demo had to become 3D cubes), `removal_detection`.
 
-Blocks the largest single share of the out-of-reach bucket.
+**What exists now.** `gizmo-renderer::sprite` — an image library (`SpriteImageId`, `Linear` or
+`Nearest` sampling) and a pass — plus a `Sprite` component, drawn by **both** hosts through one
+shared `gizmo::systems::render::record_sprites`. The "2D camera" turned out not to need a new
+type: the existing `ProjectionMode::Orthographic` looking down `-Z` is one, and the "2D transform
+stack" is the 3D one restricted to a plane — a world sprite lies in its entity's local XY plane.
+
+| | |
+|---|---|
+| world space (entity's XY plane, follows `GlobalTransform`) | yes, **depth-tested**, no depth write |
+| screen space (window pixels, top-left origin) | yes |
+| draw order | `layer`, then back to front (world), then entity order |
+| sprite sheets | `uv_rect`, `with_frame` / `set_frame` for a regular grid |
+| flip, tint, fractional anchor | yes |
+| `IsHidden` (and inherited) | yes |
+| batching | one draw call per run of consecutive same-image sprites |
+| **mipmaps, atlas packing, post-tonemap HUD slot** | **no** |
+| **2D physics, tilemap, sprite-animation component** | **no** |
+
+Measured (`sprites_reach_the_frame_in_place_in_order_and_behind_walls`): a world sprite behind a
+wall changes **0** pixels, and **784** with `CompareFunction::Always` in the world pipeline; two
+overlapping world sprites spawned near-first come out right, and **890** pixels wrong with the
+depth key reversed. Demo: `sprite_2d` — parallax, a sprite sheet, collection via `IsHidden`, a HUD.
+
+**The visible limit** is the one text has: sprites are drawn into the HDR target before tone
+mapping, so a saturated HUD colour reaches the screen desaturated (the demo's green energy bar
+comes out mint). The fix is a post-tonemap overlay slot, shared with text.
 
 ### A2. Text / font rendering — **the engine draws glyphs since 2026-08-24**
 

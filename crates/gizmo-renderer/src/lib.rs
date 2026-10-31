@@ -164,6 +164,8 @@ pub mod ssr;
 pub mod taa;
 /// Fonts, glyph rasterisation and text layout.
 pub mod text;
+/// Sprites: loaded images and the 2D quad pass.
+pub mod sprite;
 #[cfg(test)]
 mod shader_contract;
 #[cfg(test)]
