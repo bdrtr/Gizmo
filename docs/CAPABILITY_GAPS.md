@@ -761,7 +761,11 @@ and `emissive` (item 4, the only undocumented one). No further silent fields.
    forward-only. The G-buffer budget it was said to depend on settled the question instead of
    blocking it: 28 of 32 bytes are spent, so a custom material cannot bring a target and declares
    itself forward. `routing.rs` stayed exhaustive and produced exactly one compile error.
-6. **2D pipeline (A1).** Largest of all; arguably a separate project.
+6. ~~**2D pipeline (A1).**~~ **The drawing half DONE 2026-11-01** — "largest of all; arguably a
+   separate project" turned out to be one component and one pass, because the 2D camera and the
+   2D transform stack already existed as an orthographic camera and a plane. What remains is the
+   2D *game* layer around it, measured by building one (§C9): 2D collision shapes, a tilemap, a
+   sprite-animation component, sprite↔collider sizing, an orthographic camera that fits the window.
 
 ---
 

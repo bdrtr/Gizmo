@@ -105,6 +105,10 @@ Gizmo is a workspace of small crates layered bottom-up, so you can depend on the
 </p>
 
 
+## 🧭 Where it stands
+
+[`docs/STATUS.md`](docs/STATUS.md) is one page on what the engine does today, what it does not, and which document holds the details. [`docs/CAPABILITY_GAPS.md`](docs/CAPABILITY_GAPS.md) is the measured list of what is missing.
+
 ## 🛠️ Building and Running
 
 To compile the engine and test the showcase scene with advanced physics and rendering:
