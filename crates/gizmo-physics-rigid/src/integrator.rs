@@ -204,6 +204,13 @@ impl Integrator {
         // Apply axis locks to a local copy — do not mutate the stored velocity here.
         let mut masked = *vel;
         rb.enforce_locks(&mut masked);
+        // The PRE-velocities too: Heun integrates `(pre + current) / 2`, and `pre_*` is copied
+        // from the solver's output before locks run, so a locked axis leaked half of the
+        // solver's velocity on it into the position — a body locked to the XY plane drifted off
+        // it by ~1e-3 per contact (measured, `tests/planar_xy.rs`).
+        let (pre_linear, pre_angular) = rb.mask_locked(masked.pre_linear, masked.pre_angular);
+        masked.pre_linear = pre_linear;
+        masked.pre_angular = pre_angular;
 
         // ── Translation ───────────────────────────────────────────────────
         // Heun's Method (Trapezoidal Rule) for position:

@@ -19,7 +19,8 @@
 //! ## Motorda bulunan eksikler (bu oyunu yazarken)
 //!
 //! - **2D çarpışma şekli yok.** Kutular 3D `Collider::box_collider`, taş 3D küre; düzlemde
-//!   tutan şey `RigidBody`'nin eksen kilitleri. Çalışıyor, ama "2D fizik" diye bir yol yok.
+//!   tutan şey `RigidBody::planar_xy()` (eksen kilitleri). Çalışıyor, ama 2D şekil ya da 2D
+//!   çözücü yok.
 //! - **Görsel ile collider:** collider `gizmo::physics::sprite_collider` ile sprite'tan
 //!   türetiliyor (boyut ve anchor). Bu yardımcı yokken `spawn_box` ikisini aynı yarı-boydan elle
 //!   türetiyordu.
@@ -260,7 +261,7 @@ fn spawn_box(world: &mut World, center: Vec2, half: Vec2, mass: Option<f32>, ima
     let sprite = Sprite::world(image, half * 2.0).with_color(tint);
     let collider = sprite_collider(&sprite, 1.0).expect("dünya sprite'ı, alanı var");
     let body = match mass {
-        Some(m) => planar(RigidBody::new(m, true)),
+        Some(m) => RigidBody::new(m, true).planar_xy(),
         None => RigidBody::new_static(),
     };
     world.spawn_bundle((
@@ -272,14 +273,6 @@ fn spawn_box(world: &mut World, center: Vec2, half: Vec2, mass: Option<f32>, ima
         Velocity::default(),
         collider,
     ))
-}
-
-/// Gövdeyi XY düzlemine kilitler: Z'de kayamaz, yalnız Z ekseni etrafında döner.
-fn planar(mut body: RigidBody) -> RigidBody {
-    body.lock_translation_z = true;
-    body.lock_rotation_x = true;
-    body.lock_rotation_y = true;
-    body
 }
 
 fn update(world: &mut World, dt: f32, input: &gizmo::core::input::Input) {
@@ -366,7 +359,7 @@ fn launch_velocity(angle: f32, power: f32) -> Vec2 {
 fn fire(world: &mut World, game: &Game) {
     let v = launch_velocity(game.angle, game.power);
     let r = 0.35;
-    let mut body = planar(RigidBody::new(4.0, true));
+    let mut body = RigidBody::new(4.0, true).planar_xy();
     body.ccd_enabled = true;
     world.spawn_bundle((
         Level,

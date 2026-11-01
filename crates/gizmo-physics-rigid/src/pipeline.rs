@@ -968,6 +968,9 @@ current_cache.insert(pair, (false, Some(cached)));
                 // (hız kanalına dokunmadan → resting jitter yok, cisimler uyuyabilir).
                 for (entity, dlin, dang) in pos_corrections {
                     if let Some(&idx) = entity_map.get(&entity.id()) {
+                        // Axis locks hold here too: this moves the transform without a
+                        // velocity, so the velocity-level `enforce_locks` cannot see it.
+                        let (dlin, dang) = self.rigid_bodies[idx].mask_locked(dlin, dang);
                         let t = &mut self.transforms[idx];
                         t.position += dlin;
                         if dang.length_squared() > 1e-12 {

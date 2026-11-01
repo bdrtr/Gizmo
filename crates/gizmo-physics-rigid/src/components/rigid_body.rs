@@ -399,6 +399,24 @@ impl RigidBody {
         self
     }
 
+    /// Confines the body to the **world XY plane** — the 2-D game setup: no movement along Z, no
+    /// rotation except about Z. Chainable.
+    ///
+    /// Sets [`lock_translation_z`](Self::lock_translation_z),
+    /// [`lock_rotation_x`](Self::lock_rotation_x) and [`lock_rotation_y`](Self::lock_rotation_y)
+    /// — the three lines every side-on game in this repository wrote out by hand (`kule_yikici`,
+    /// and `hill_climb` twice). Like every lock it constrains rates, not position: spawn the body
+    /// on the plane you mean, usually `z = 0`.
+    ///
+    /// This is how the engine does 2-D physics today: 3-D shapes with their depth along Z,
+    /// confined to the plane. There are no 2-D shapes or 2-D solver.
+    pub fn planar_xy(mut self) -> Self {
+        self.lock_translation_z = true;
+        self.lock_rotation_x = true;
+        self.lock_rotation_y = true;
+        self
+    }
+
     /// Clears the sleep flag and resets [`sleep_counter`](Self::sleep_counter), so the
     /// body is integrated again next step and must serve the full quiet run before it can
     /// sleep once more.
@@ -547,6 +565,37 @@ impl RigidBody {
         if self.lock_rotation_z {
             vel.angular.z = 0.0;
         }
+    }
+
+    /// [`enforce_locks`](Self::enforce_locks) for a **displacement** rather than a velocity: the
+    /// locked world axes of a linear `(dx, dy, dz)` and an angular scaled-axis step are zeroed.
+    ///
+    /// The contact solver's positional correction moves a transform directly, without passing
+    /// through a velocity, so `enforce_locks` never saw it; neither did the `pre_*` velocities
+    /// Heun's position step averages in. Together they let a body locked to the XY plane drift
+    /// off it on contact (measured, `tests/planar_xy.rs`). The pipeline masks the correction with
+    /// this, and position integration masks the pre-velocities.
+    #[inline]
+    pub fn mask_locked(&self, mut linear: Vec3, mut angular: Vec3) -> (Vec3, Vec3) {
+        if self.lock_translation_x {
+            linear.x = 0.0;
+        }
+        if self.lock_translation_y {
+            linear.y = 0.0;
+        }
+        if self.lock_translation_z {
+            linear.z = 0.0;
+        }
+        if self.lock_rotation_x {
+            angular.x = 0.0;
+        }
+        if self.lock_rotation_y {
+            angular.y = 0.0;
+        }
+        if self.lock_rotation_z {
+            angular.z = 0.0;
+        }
+        (linear, angular)
     }
 
     /// Inverse mass in kg⁻¹, or `0.0` meaning "infinite mass — cannot be accelerated".

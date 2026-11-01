@@ -166,10 +166,8 @@ pub(super) fn setup(world: &mut World, renderer: &mut Renderer) -> DemoState {
         rb.update_inertia_from_collider(&col);
         rb.ccd_enabled = false;
 
-        // 2.5D Constraints: Z ekseninde hareketi kısıtla
-        rb.lock_translation_z = true;
-        rb.lock_rotation_x = true;
-        rb.lock_rotation_y = true;
+        // 2.5D: XY düzlemine kilitle (Z'de kayma yok, yalnız Z etrafında dönüş).
+        rb = rb.planar_xy();
 
         world.add_component(bx, col);
         world.add_component(bx, rb);
@@ -290,10 +288,7 @@ pub(super) fn setup(world: &mut World, renderer: &mut Renderer) -> DemoState {
     // World X = Devrilme (Roll) -> KİLİTLE
     // World Y = Sağa/Sola dönme (Yaw) -> KİLİTLE
     // World Z = Burnu kaldırıp/indirme (Pitch) -> İZİN VER! (False)
-    chassis_rb.lock_translation_z = true;
-    chassis_rb.lock_rotation_x = true;
-    chassis_rb.lock_rotation_y = true;
-    chassis_rb.lock_rotation_z = false;
+    chassis_rb = chassis_rb.planar_xy();
 
     world.add_component(chassis, car_col);
     world.add_component(chassis, chassis_rb);

@@ -50,6 +50,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`RigidBody::planar_xy()` — the 2-D setup in one call.** Locks Z translation and X/Y rotation,
+  the three lines `kule_yikici` and `hill_climb` (twice) wrote by hand; all three use it now.
+
 - **`gizmo::physics::tilemap_collider(&map, depth, solid)` — collision for a tile level.** The
   tiles `solid` accepts become one static compound collider in the map's own frame, with cells
   merged into as few boxes as the grid allows (row runs, then equal runs in consecutive rows): a
@@ -1178,6 +1181,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   before.
 
 ### Fixed
+
+- **Axis locks leaked through two position paths; a body locked to a plane drifted off it.**
+  Locks are velocity-level, and the transform was moved past them twice: Heun's position step
+  averages `pre_linear`/`pre_angular`, copied from the solver's output before locks run, and the
+  contact solver's positional correction is applied to the transform directly. A box with
+  `planar_xy()` dropped off-centre onto a sphere ended 4·10⁻⁴ off z = 0; it now stays at exactly
+  0 (`gizmo-physics-rigid/tests/planar_xy.rs`, which fails with either fix removed). New
+  `RigidBody::mask_locked` does the masking for displacements. Bodies without locks are
+  bit-identical (`headless_stress_test` hash unchanged); locked bodies change slightly, by design.
 
 - **A `PhysicsMaterial` component on an entity now sets its surface — for the contact solver and
   for vehicle tyres.** It is an ECS component, `world.add_component(ground,
