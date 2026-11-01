@@ -4829,6 +4829,91 @@ mod golden_render_tests {
         });
     }
 
+    /// **Contact shadows catch what the shadow map cannot.** A 3 cm step on a floor under a sun
+    /// 15° above the horizon: the step's shadow, ~11 cm long, is shorter than the shadow map's
+    /// depth bias, so the cascades lose it. With `contact_shadow_length` the screen-space march
+    /// finds the step and darkens the strip behind it; with 0 (the default) the frame is exactly
+    /// what it was before contact shadows existed.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn contact_shadows_find_a_step_the_shadow_map_misses() {
+        use crate::renderer::components::{DirectionalLight, LightRole};
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        async fn step_frame(contact: f32) -> Vec<u8> {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssao = None;
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(
+                &renderer.device,
+                &renderer.queue,
+                &renderer.scene.texture_bind_group_layout,
+            );
+            for (pos, scale) in [
+                (Vec3::new(0.0, -0.2, 0.0), Vec3::new(20.0, 0.2, 20.0)),
+                (Vec3::new(0.0, 0.015, 0.0), Vec3::new(0.6, 0.015, 0.6)),
+            ] {
+                let e = world.spawn();
+                world.add_component(e, Transform::new(pos).with_scale(scale));
+                world.add_component(e, GlobalTransform::default());
+                world.add_component(e, AssetManager::create_cube(&renderer.device));
+                world.add_component(e, Material::new(tex.clone()).with_pbr(Vec4::new(0.8, 0.8, 0.8, 1.0), 0.9, 0.0));
+                world.add_component(e, MeshRenderer::new());
+            }
+            let elevation = 15f32.to_radians();
+            let sun_dir = Vec3::new(elevation.cos(), -elevation.sin(), 0.0);
+            let sun = world.spawn();
+            world.add_component(
+                sun,
+                Transform::new(Vec3::ZERO).with_rotation(crate::math::Quat::from_rotation_arc(Vec3::NEG_Z, sun_dir)),
+            );
+            world.add_component(sun, GlobalTransform::default());
+            world.add_component(
+                sun,
+                DirectionalLight::new(Vec3::ONE, 3.0, LightRole::Sun).with_contact_shadows(contact),
+            );
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.6, 1.2, 0.0),
+                yaw: 0.0,
+                pitch: -std::f32::consts::FRAC_PI_2 + 0.01,
+                primary: true,
+                ..Default::default()
+            });
+            render_world(&mut renderer, &mut world).await
+        }
+        // Pixels darker than 60 % of the frame's brightest — the shadowed ones.
+        fn dark(frame: &[u8]) -> usize {
+            let luma: Vec<f32> = frame.as_chunks::<4>().0.iter().map(|p| (p[0] as f32 + p[1] as f32 + p[2] as f32) / 3.0).collect();
+            let hi = luma.iter().cloned().fold(0.0f32, f32::max);
+            luma.iter().filter(|&&v| v < hi * 0.6).count()
+        }
+        pollster::block_on(async {
+            let (off, on) = (step_frame(0.0).await, step_frame(0.3).await);
+            // Measured: 363 dark pixels without (the step's own unlit side), 697 with (the strip
+            // behind it as well).
+            assert!(dark(&on) > dark(&off) + 50, "contact shadows darkened {} more pixels", dark(&on) as i64 - dark(&off) as i64);
+            // And only there: open floor, the top and bottom 40 rows (the step crosses the middle),
+            // must not change at all. A march that went away from the sun dives into the floor and
+            // shadows the floor itself everywhere — it passes the count above and fails this.
+            let rows = |frame: &[u8]| -> Vec<u8> {
+                (0..40usize).chain(88..128).flat_map(|y| frame[y * 512..(y + 1) * 512].to_vec()).collect()
+            };
+            let (moved, total) = (
+                rows(&off).iter().zip(rows(&on)).filter(|(a, b)| a.abs_diff(*b) > 8).count(),
+                80 * 512,
+            );
+            assert!(moved == 0, "contact shadows changed {moved}/{total} bytes of open floor — false self-shadowing");
+        });
+    }
+
     /// What a split-screen frame does once, it must do once: the HUD is drawn a single time over
     /// the whole target (drawn per view, a half-transparent sprite is laid over itself and comes
     /// out brighter), and the frame's animation advances by one `dt` however many cameras draw.

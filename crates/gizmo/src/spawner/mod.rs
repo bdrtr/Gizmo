@@ -292,6 +292,7 @@ impl<'a> Commands<'a> {
                 intensity,
                 role: crate::renderer::components::LightRole::Sun,
                 angular_radius: 0.0,
+                contact_shadow_length: 0.0,
             },
         );
         EntityBuilder {

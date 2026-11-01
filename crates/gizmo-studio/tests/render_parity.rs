@@ -72,7 +72,7 @@ fn sunlit_scene() -> World {
     world.add_component(sun, GlobalTransform::default());
     world.add_component(
         sun,
-        DirectionalLight { color: Vec3::new(1.0, 0.95, 0.9), intensity: 3.0, role: LightRole::Sun, angular_radius: 0.0 },
+        DirectionalLight { color: Vec3::new(1.0, 0.95, 0.9), intensity: 3.0, role: LightRole::Sun, angular_radius: 0.0, contact_shadow_length: 0.0 },
     );
     let lamp = world.spawn();
     world.add_component(lamp, GlobalTransform::default());

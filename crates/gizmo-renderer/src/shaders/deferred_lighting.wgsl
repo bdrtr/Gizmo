@@ -205,6 +205,46 @@ fn search_blockers(
     return vec2<f32>(num_blockers, sum_depth);
 }
 
+// **Contact shadows**: a short screen-space march from the surface toward the sun, `length` metres
+// (`cluster_depth.z`; 0 = off) in 16 steps. Each step is projected into the frame and compared with
+// the G-buffer surface there: if that surface is nearer the camera than the step — by a little,
+// not by more than a `thickness` that would mean an unrelated object far in front — something
+// small sits between this pixel and the sun. That is what the shadow map misses: anything shorter
+// than its bias or finer than its texels. Steps leaving the frame, or landing on sky, see nothing.
+fn contact_shadow(world_pos: vec3<f32>, n: vec3<f32>, l: vec3<f32>) -> f32 {
+    let length = scene.cluster_depth.z;
+    if (length <= 0.0) {
+        return 1.0;
+    }
+    let dims = vec2<f32>(textureDimensions(t_position_rel_camera));
+    let fwd = scene.camera_forward.xyz;
+    let thickness = max(length * 0.5, 0.05);
+    let start = world_pos + n * 0.01;
+    for (var i = 1; i <= 16; i = i + 1) {
+        let p = start + l * (length * f32(i) / 16.0);
+        let clip = scene.view_proj * vec4<f32>(p, 1.0);
+        if (clip.w <= 0.0) {
+            return 1.0;
+        }
+        let ndc = clip.xy / clip.w;
+        if (abs(ndc.x) > 1.0 || abs(ndc.y) > 1.0) {
+            return 1.0;
+        }
+        let pixel = vec2<i32>(vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5) * dims);
+        let stored = textureLoad(t_position_rel_camera, pixel, 0);
+        if (stored.w < 0.5) {
+            continue; // sky
+        }
+        let ray_depth = dot(p - scene.camera_pos.xyz, fwd);
+        let surface_depth = dot(stored.xyz, fwd);
+        let gap = ray_depth - surface_depth;
+        if (gap > 0.005 && gap < thickness) {
+            return 0.0;
+        }
+    }
+    return 1.0;
+}
+
 fn filter_pcss(
     shadow_uv: vec2<f32>, receiver_depth: f32, ci: u32, bias: f32, texel: f32
 ) -> f32 {
@@ -489,6 +529,9 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
             // so the end of the shadow maps is a gradient rather than a line.
             shadow_visibility = mix(1.0, filter_pcss(shadow_uv, light_ndc.z, ci, bias, texel), shadow_fade);
         }
+    }
+    if (scene.sun_direction.w > 0.5 && shadow_visibility > 0.0) {
+        shadow_visibility = min(shadow_visibility, contact_shadow(world_pos, N, normalize(-scene.sun_direction.xyz)));
     }
 
     var total_lighting = vec3<f32>(0.0);

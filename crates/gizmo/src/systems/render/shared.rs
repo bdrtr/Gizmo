@@ -66,6 +66,8 @@ pub struct SceneLights {
     pub has_sun: bool,
     /// The sun's angular radius, radians — its shadows' softness (0 with no sun).
     pub sun_angular_radius: f32,
+    /// The sun's contact-shadow length, metres (0 = off, and with no sun).
+    pub sun_contact_shadow_length: f32,
     /// Index into `lights` of the point light that owns the single point-shadow cube,
     /// or `-1` when there is no point light. There is only one point-shadow cubemap, so
     /// exactly one point light casts; the caller renders that light's cube and the shader
@@ -251,6 +253,7 @@ pub fn collect_scene_lights(
     let mut sun_col = Vec4::new(0.0, 0.0, 0.0, 0.0); // w = 0 → no sun
     let mut has_sun = false;
     let mut sun_angular_radius = 0.0;
+    let mut sun_contact_shadow_length = 0.0;
     if let Some(q) = world.query::<&DirectionalLight>() {
         for (e, light) in q.iter() {
             if light.role == LightRole::Sun {
@@ -260,6 +263,7 @@ pub fn collect_scene_lights(
                     sun_col = Vec4::new(light.color.x, light.color.y, light.color.z, light.intensity);
                     has_sun = true;
                     sun_angular_radius = light.angular_radius;
+                    sun_contact_shadow_length = light.contact_shadow_length;
                 }
                 break; // first sun wins
             }
@@ -273,6 +277,7 @@ pub fn collect_scene_lights(
         sun_col,
         has_sun,
         sun_angular_radius,
+        sun_contact_shadow_length,
         shadow_point_index,
     }
 }
@@ -431,6 +436,7 @@ pub fn collect_scene_setup(world: &World, inputs: &SceneSetupInputs) -> SceneSet
                 ],
                 present: lights.has_sun,
                 angular_radius: lights.sun_angular_radius,
+                contact_shadow_length: lights.sun_contact_shadow_length,
             },
             lights: lights.lights,
             num_lights: lights.num_lights,

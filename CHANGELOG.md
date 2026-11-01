@@ -50,6 +50,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Contact shadows: `DirectionalLight::contact_shadow_length` / `with_contact_shadows`.** A
+  16-step screen-space march toward the sun in the deferred lighting pass, for what the shadow map
+  misses: anything shorter than its depth bias or finer than its texels — a step, the line where an
+  object meets the floor. 0 (the default) is off. Carried in `SceneUniforms::cluster_depth.z`
+  (previously unused); `SunFrame` gained `contact_shadow_length`.
+
 - **Soft sun shadows: `DirectionalLight::angular_radius` / `with_angular_radius`.** The sun's
   angular radius (radians) sets a physical PCSS penumbra, `2·d·tan θ` — sharp at contact, soft
   with distance from the caster. 0 (the default) keeps the previous near-crisp edge: the deferred

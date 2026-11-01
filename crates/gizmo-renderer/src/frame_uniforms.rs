@@ -127,11 +127,21 @@ pub struct SunFrame {
     /// `DirectionalLight::angular_radius`. Reaches the shaders as `tan()` of it in
     /// `camera_forward.w`, a slot that was free.
     pub angular_radius: f32,
+    /// How far, in metres, contact shadows look toward the sun — see
+    /// `DirectionalLight::contact_shadow_length`. 0 = off. Reaches the shaders as
+    /// `cluster_depth.z`, a slot that was free.
+    pub contact_shadow_length: f32,
 }
 
 impl Default for SunFrame {
     fn default() -> Self {
-        Self { direction: Vec3::new(0.0, -1.0, 0.0), color: [1.0, 1.0, 1.0, 0.0], present: false, angular_radius: 0.0 }
+        Self {
+            direction: Vec3::new(0.0, -1.0, 0.0),
+            color: [1.0, 1.0, 1.0, 0.0],
+            present: false,
+            angular_radius: 0.0,
+            contact_shadow_length: 0.0,
+        }
     }
 }
 
@@ -257,7 +267,9 @@ impl SceneUniforms {
             cluster_depth: {
                 let g = crate::clustered::ClusterGrid::default();
                 let [scale, bias] = crate::clustered::depth_params(g, camera.near, camera.far);
-                [scale, bias, 0.0, 0.0]
+                // z = contact-shadow length (metres, 0 = off): a free slot, read by the deferred
+                // lighting pass's `contact_shadow`.
+                [scale, bias, sun.contact_shadow_length.max(0.0), 0.0]
             },
             // Read by nothing today — the post composite owns exposure and `deferred_lighting.wgsl`
             // says as much next to the field it no longer reads. Fed from the camera in both paths
@@ -411,7 +423,7 @@ mod tests {
         assert_eq!(dark.sun_direction[3], 0.0);
 
         let lit = SceneUniforms::new(&SceneFrame {
-            sun: SunFrame { direction: Vec3::new(0.0, -1.0, 0.0), color: [1.0; 4], present: true, angular_radius: 0.0 },
+            sun: SunFrame { direction: Vec3::new(0.0, -1.0, 0.0), color: [1.0; 4], present: true, angular_radius: 0.0, contact_shadow_length: 0.0 },
             ..Default::default()
         });
         assert_eq!(lit.sun_direction[3], 1.0);

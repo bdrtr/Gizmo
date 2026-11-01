@@ -385,7 +385,14 @@ All three engine lights are punctual: `PointLight`, `DirectionalLight`, `SpotLig
 
 - **No rectangular or spherical area light.** Nothing resembling an LTC path exists.
 - **No light texture (cookie/gobo).**
-- **No contact shadows.**
+- ~~**No contact shadows.**~~ **CLOSED 2026-11-01:** `DirectionalLight::contact_shadow_length`
+  (metres, 0 = off, the default). The deferred lighting pass marches 16 steps from each pixel toward
+  the sun in screen space and compares each with the G-buffer surface there. Measured on a 3 cm
+  step under a 15° sun — a shadow shorter than the cascades' 4.2 cm depth bias, which they lose:
+  363 dark pixels without (the step's own unlit side), 697 with, and not one byte of open floor
+  changed. A march pointed away from the sun dives into the floor and self-shadows it everywhere
+  (28 416 of 40 960 open-floor bytes); the test pins that, and a length never uploaded. Sun only;
+  the forward pass has none.
 - ~~**No percentage-closer soft shadows.**~~ **Corrected and closed 2026-11-01.** This line
   described the *forward* path's fixed 3×3 PCF. The deferred path did have PCSS — a blocker search
   and a penumbra estimate — but with the light size a constant (`0.004`) and the filter clamped to

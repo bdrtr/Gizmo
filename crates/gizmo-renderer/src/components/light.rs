@@ -61,6 +61,13 @@ pub struct DirectionalLight {
     /// `#[serde(default)]`.
     #[serde(default)]
     pub angular_radius: f32,
+    /// **Contact shadows**, in metres: how far toward the sun each pixel looks, in screen space,
+    /// for something in the way. They catch what the shadow map cannot — a step, a coin, the line
+    /// where an object meets the floor — anything shorter than the shadow map's bias (about 4 cm)
+    /// or finer than its texels. `0` (the default) turns them off; 0.2–0.5 suits a human-scale
+    /// scene. Only the `Sun` role. `#[serde(default)]`.
+    #[serde(default)]
+    pub contact_shadow_length: f32,
 }
 
 impl DirectionalLight {
@@ -72,7 +79,15 @@ impl DirectionalLight {
             intensity,
             role,
             angular_radius: 0.0,
+            contact_shadow_length: 0.0,
         }
+    }
+
+    /// This light with contact shadows reaching `metres` toward it (see
+    /// [`contact_shadow_length`](Self::contact_shadow_length)), clamped to 0..=5.
+    pub fn with_contact_shadows(mut self, metres: f32) -> Self {
+        self.contact_shadow_length = if metres.is_finite() { metres.clamp(0.0, 5.0) } else { 0.0 };
+        self
     }
 
     /// This light with soft shadows from a disc of `radians` angular radius (see
