@@ -62,6 +62,14 @@ struct GridMeta {
 pub struct IrradianceState {
     probes_buffer: wgpu::Buffer,
     meta_buffer: wgpu::Buffer,
+    /// Bindings 2–4: the reflection cube the specular term reads, its sampler, and
+    /// `[enabled, max_mip, intensity, 0]`. A 1×1 placeholder cube and `enabled = 0` until
+    /// [`set_reflection`](Self::set_reflection) is given a probe — then the lighting pass leaves
+    /// the procedural sky alone and frames are bit-identical to before probes existed.
+    reflection_params: wgpu::Buffer,
+    reflection_sampler: wgpu::Sampler,
+    reflection_placeholder: wgpu::TextureView,
+    reflection_view: Option<wgpu::TextureView>,
     /// Group 3 of the deferred lighting pipeline.
     pub bind_group: wgpu::BindGroup,
     /// Its layout, needed when the pipeline is built.
@@ -102,8 +110,61 @@ impl IrradianceState {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::Cube,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
+        let reflection_params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("reflection_params"),
+            contents: bytemuck::cast_slice(&[0.0f32; 4]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        let reflection_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("reflection_sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            ..Default::default()
+        });
+        let reflection_placeholder = device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("reflection_placeholder"),
+                size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 6 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba16Float,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&wgpu::TextureViewDescriptor {
+                dimension: Some(wgpu::TextureViewDimension::Cube),
+                ..Default::default()
+            });
 
         let probes_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("irradiance_probes"),
@@ -120,11 +181,21 @@ impl IrradianceState {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
-        let bind_group = Self::mk_bind_group(device, &bind_group_layout, &probes_buffer, &meta_buffer);
+        let bind_group = Self::mk_bind_group(
+            device,
+            &bind_group_layout,
+            &probes_buffer,
+            &meta_buffer,
+            (&reflection_placeholder, &reflection_sampler, &reflection_params),
+        );
 
         Self {
             probes_buffer,
             meta_buffer,
+            reflection_params,
+            reflection_sampler,
+            reflection_placeholder,
+            reflection_view: None,
             bind_group,
             bind_group_layout,
             probe_count: 0,
@@ -137,6 +208,7 @@ impl IrradianceState {
         layout: &wgpu::BindGroupLayout,
         probes: &wgpu::Buffer,
         meta: &wgpu::Buffer,
+        (cube, sampler, params): (&wgpu::TextureView, &wgpu::Sampler, &wgpu::Buffer),
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("irradiance_bg"),
@@ -150,8 +222,39 @@ impl IrradianceState {
                     binding: 1,
                     resource: meta.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(cube) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(sampler) },
+                wgpu::BindGroupEntry { binding: 4, resource: params.as_entire_binding() },
             ],
         })
+    }
+
+    fn rebind(&mut self, device: &wgpu::Device) {
+        let cube = self.reflection_view.as_ref().unwrap_or(&self.reflection_placeholder);
+        self.bind_group = Self::mk_bind_group(
+            device,
+            &self.bind_group_layout,
+            &self.probes_buffer,
+            &self.meta_buffer,
+            (cube, &self.reflection_sampler, &self.reflection_params),
+        );
+    }
+
+    /// Points the specular term at a reflection probe's cube (`view`, with `mip_count` mips,
+    /// scaled by `intensity`), or back at the procedural sky with `None`.
+    pub fn set_reflection(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        probe: Option<(&wgpu::TextureView, u32, f32)>,
+    ) {
+        let params = match probe {
+            Some((_, mips, intensity)) => [1.0, mips.saturating_sub(1) as f32, intensity, 0.0],
+            None => [0.0; 4],
+        };
+        queue.write_buffer(&self.reflection_params, 0, bytemuck::cast_slice(&params));
+        self.reflection_view = probe.map(|(view, _, _)| view.clone());
+        self.rebind(device);
     }
 
     /// Uploads a baked grid, reallocating only if it needs more room.
@@ -175,12 +278,7 @@ impl IrradianceState {
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             });
             self.capacity = count.max(1);
-            self.bind_group = Self::mk_bind_group(
-                device,
-                &self.bind_group_layout,
-                &self.probes_buffer,
-                &self.meta_buffer,
-            );
+            self.rebind(device);
         } else {
             queue.write_buffer(&self.probes_buffer, 0, bytemuck::cast_slice(&data));
         }

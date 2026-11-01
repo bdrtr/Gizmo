@@ -50,6 +50,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Reflection probes: `ReflectionProbe` component, `gizmo_renderer::reflection`.** The scene
+  captured from the probe's position into a prefiltered HDR cube (six 90° renders, GGX mips by
+  roughness), read by the deferred lighting pass's specular term in place of the procedural sky —
+  a chrome sphere in a red room now reflects red. Captured on the first frame and after
+  `request_capture()`. No probe: the sky, bit-identical. One probe at a time, by direction only (no
+  parallax). `IrradianceState` gained bindings 2–4 and `set_reflection`. Demo: `pbr` with
+  `GIZMO_PROBE=1`.
+
 - **Camera motion blur: `PostProcess::motion_blur`.** A shutter fraction on the camera's grade
   (0 = off, the default; 0.5 = 180°). The composite pass reprojects each pixel with the last frame's
   unjittered view-projection (`Renderer::previous_view_proj`, per split-screen view) and averages

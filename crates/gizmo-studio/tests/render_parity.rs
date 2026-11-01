@@ -547,6 +547,15 @@ fn every_render_capability_is_known_to_both_draw_paths() {
     /// Declared asymmetries: (component, which path, why).
     const EXCEPTIONS: &[(&str, Path, &str)] = &[
         (
+            "ReflectionProbe",
+            Path::GameOnly,
+            "the probe is captured by the game path (`capture_reflection_probes`: six full draws \
+             of the game's own frame function into a cube). The studio's viewport draws through \
+             its own pass list, so it keeps the procedural sky in reflections; a probe shows when \
+             the game runs. Wiring it in means the studio drawing six game-path frames, which it \
+             has no entry point for.",
+        ),
+        (
             "Viewport",
             Path::GameOnly,
             "a camera's rectangle of the target, for split screen: `render_viewports` composes one \

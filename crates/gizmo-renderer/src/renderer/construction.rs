@@ -685,6 +685,7 @@ impl Renderer {
             cas,
             auto_exposure,
             previous_view_proj: None,
+            reflection_probe: None,
             gpu_particles,
             gpu_physics,
             gpu_fluid,

@@ -210,6 +210,8 @@ pub struct Renderer {
     /// composite's `reproject` matrix maps back to. `None` until a camera has drawn once (no
     /// motion on the first frame). Per split-screen view, like TAA's history.
     pub previous_view_proj: Option<[[f32; 4]; 4]>,
+    /// The captured reflection probe, if the scene has one. See [`crate::reflection`].
+    pub reflection_probe: Option<crate::reflection::ReflectionProbeGpu>,
 
     // === GIZMO HATA AYIKLAMA (Debug Lines) ===
     /// The debug line renderer — gizmos, wireframes, physics overlays.

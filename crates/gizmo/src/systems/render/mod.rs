@@ -205,9 +205,10 @@ pub fn default_render_pass(
         return;
     }
     prepare_frame(world, renderer);
+    capture_reflection_probes(world, renderer);
     let camera = crate::renderer::components::active_camera(world);
     let lods = step_gpu_simulations(world, encoder, renderer, &[camera_world_position(world, camera)]);
-    draw_camera_view(world, encoder, view, renderer, camera, lods, None, true);
+    draw_camera_view(world, encoder, view, renderer, camera, lods, None, true, None);
 }
 
 /// Whether any camera in `world` asks for a [`Viewport`](crate::renderer::components::Viewport).
@@ -253,16 +254,18 @@ pub fn render_viewports(
         .collect();
     if views.is_empty() {
         prepare_frame(world, renderer);
+        capture_reflection_probes(world, renderer);
         let camera = crate::renderer::components::active_camera(world);
         let lods =
             step_gpu_simulations(world, encoder, renderer, &[camera_world_position(world, camera)]);
-        draw_camera_view(world, encoder, view, renderer, camera, lods, None, true);
+        draw_camera_view(world, encoder, view, renderer, camera, lods, None, true, None);
         return;
     }
     views.sort_by_key(|&(order, id, _)| (order, id));
     let size = view.texture().size();
 
     prepare_frame(world, renderer);
+    capture_reflection_probes(world, renderer);
     let positions: Vec<Vec3> =
         views.iter().map(|&(_, id, _)| camera_world_position(world, Some(id))).collect();
 
@@ -295,13 +298,91 @@ pub fn render_viewports(
     for (index, &(_, camera, viewport)) in views.iter().enumerate() {
         let region = viewport.to_pixels(size.width, size.height);
         renderer.with_view_history(index, |renderer| {
-            draw_camera_view(world, &mut frame, view, renderer, Some(camera), lods, Some(region), false);
+            draw_camera_view(world, &mut frame, view, renderer, Some(camera), lods, Some(region), false, None);
         });
         let done = std::mem::replace(&mut frame, new_encoder(renderer));
         renderer.queue.submit(std::iter::once(done.finish()));
     }
     tracing::trace!(views = views.len(), "[Render] split screen");
     renderer.record_overlay(encoder, view);
+}
+
+/// **Reflection probes:** renders the scene into the probe's cube when it asks for it — the first
+/// frame it exists, or after `ReflectionProbe::request_capture` — prefilters the mips, and points
+/// the lighting pass's specular term at it. With no probe, puts the procedural sky back.
+///
+/// Each face is a full draw from the probe, 90° and square, stopped at the HDR target and copied
+/// into the cube; each in **its own submission**, for the reason `render_viewports` gives (the draw
+/// path's `queue.write_buffer` uploads order against submission). For the capture the renderer's
+/// TAA, SSGI and motion-blur history are set aside and put back: a probe face is one still frame,
+/// not part of the camera's sequence.
+fn capture_reflection_probes(world: &mut World, renderer: &mut Renderer) {
+    use crate::renderer::components::ReflectionProbe;
+    let probe = world.borrow::<ReflectionProbe>().iter().next().map(|(id, p)| (id, *p));
+    let Some((entity, probe)) = probe else {
+        if renderer.reflection_probe.take().is_some() {
+            if let Some(def) = renderer.deferred.as_mut() {
+                def.irradiance.set_reflection(&renderer.device, &renderer.queue, None);
+            }
+        }
+        return;
+    };
+    if probe.captured && renderer.reflection_probe.is_some() {
+        return;
+    }
+    let size = probe.resolution.clamp(8, 1024).next_power_of_two();
+    if renderer.reflection_probe.as_ref().is_none_or(|g| g.size != size) {
+        renderer.reflection_probe =
+            Some(crate::renderer::reflection::ReflectionProbeGpu::new(&renderer.device, size));
+    }
+    let position = camera_world_position(world, Some(entity));
+
+    let taa = renderer.taa.take();
+    let ssgi = renderer.ssgi.take();
+    let history = renderer.previous_view_proj.take();
+    for face in 0..crate::renderer::reflection::FACES {
+        let (forward, up) = crate::renderer::reflection::face_basis(face);
+        let mut encoder = renderer.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("reflection_probe_face"),
+        });
+        let fixed = FixedView {
+            position,
+            forward,
+            up,
+            near: probe.near,
+            far: probe.far.max(probe.near + 0.1),
+        };
+        // The HDR target stands in for the output view: a capture stops before the post chain, so
+        // nothing is ever written through it.
+        let hdr = renderer.post.hdr_texture_view.clone();
+        draw_camera_view(world, &mut encoder, &hdr, renderer, None, (0.0, 0.0), None, false, Some(fixed));
+        if let Some(gpu) = renderer.reflection_probe.as_ref() {
+            gpu.record_face(&renderer.device, &mut encoder, &renderer.post.hdr_texture_view, face);
+        }
+        renderer.queue.submit(std::iter::once(encoder.finish()));
+    }
+    renderer.taa = taa;
+    renderer.ssgi = ssgi;
+    renderer.previous_view_proj = history;
+
+    if let Some(gpu) = renderer.reflection_probe.as_ref() {
+        let mut encoder = renderer.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("reflection_probe_prefilter"),
+        });
+        gpu.record_prefilter(&renderer.device, &mut encoder);
+        renderer.queue.submit(std::iter::once(encoder.finish()));
+        if let Some(def) = renderer.deferred.as_mut() {
+            def.irradiance.set_reflection(
+                &renderer.device,
+                &renderer.queue,
+                Some((&gpu.cube_view, gpu.mip_count, probe.intensity)),
+            );
+        }
+    }
+    if let Some(mut p) = world.borrow_mut::<ReflectionProbe>().get_mut(entity) {
+        p.captured = true;
+    }
+    tracing::debug!(entity, size, "[Render] reflection probe captured");
 }
 
 /// Where `camera` is in the world: its synced `GlobalTransform`, else its own `Transform`, else the
@@ -493,9 +574,21 @@ fn step_gpu_simulations(
     (particle_lod, fluid_lod)
 }
 
+/// A view that is not a camera entity: a reflection probe's cube face. Square, 90°, looking along
+/// `forward` with `up`; drawn into the HDR target and stopped there — no post chain, no HUD.
+#[derive(Clone, Copy)]
+struct FixedView {
+    position: Vec3,
+    forward: Vec3,
+    up: Vec3,
+    near: f32,
+    far: f32,
+}
+
 /// One camera's picture: from its matrices to the post chain, into `region` of `view` (the whole
 /// of it when `None`), with the HUD when `overlay`. `camera` is an entity id; `None` draws from
 /// the origin, as a frame with no camera always has. `lods` comes from [`step_gpu_simulations`].
+/// With `capture`, that fixed view replaces the camera and the frame ends in the HDR target.
 #[allow(clippy::too_many_arguments)]
 fn draw_camera_view(
     world: &mut World,
@@ -506,6 +599,7 @@ fn draw_camera_view(
     lods: (f32, f32),
     region: Option<[f32; 4]>,
     overlay: bool,
+    capture: Option<FixedView>,
 ) {
     // Post-process params are written AFTER the active camera is resolved (below), so the
     // single exposure knob can be the camera's exposure — see the update_post_process call
@@ -584,6 +678,16 @@ fn draw_camera_view(
                 cam_fov = cam.fov;
             }
         }
+    }
+    if let Some(fixed) = capture {
+        cam_fov = std::f32::consts::FRAC_PI_2;
+        cam_near = fixed.near;
+        cam_far = fixed.far;
+        proj = Mat4::perspective_rh(cam_fov, 1.0, cam_near, cam_far);
+        view_mat = Mat4::look_to_rh(fixed.position, fixed.forward, fixed.up);
+        cam_pos = fixed.position;
+        cam_forward = fixed.forward;
+        cam_exposure = 1.0;
     }
 
     // ── Su-altı atmosferi: kamera bir fluid zone içindeyse derinlik-bazlı sis uygula (W3+W4).
@@ -891,6 +995,10 @@ fn draw_camera_view(
     record_sprites(encoder, renderer, world, unjittered_view_proj);
     record_text(encoder, renderer, world);
 
+    // A probe face stops at the HDR target: what it captures is radiance, not a graded picture.
+    if capture.is_some() {
+        return;
+    }
     // Auto exposure adapts in real time: a paused or slowed game still lets the eye adjust.
     let exposure_dt = world
         .get_resource::<gizmo_core::time::Time>()
@@ -3921,6 +4029,262 @@ mod golden_render_tests {
                 still_drift, 0,
                 "a camera that did not move was smeared on {still_drift}/{total} pixels — the history is stale or carries something that is not motion",
             );
+        });
+    }
+
+    /// A closed room around `centre`: six walls 5 m out, each its own colour (+X red, −X green,
+    /// +Y blue, −Y yellow, +Z magenta, −Z cyan), plus a white quarter on the +X wall (y > 0,
+    /// z > 0) and on the ceiling (x > 0, z > 0) — so a face mirrored or flipped puts the white in
+    /// the wrong quarter — and a point light in the middle. Returns the albedo texture used.
+    fn probe_room(renderer: &Renderer, world: &mut World, centre: Vec3) {
+        let mut assets = AssetManager::new();
+        let tex = assets.create_white_texture(
+            &renderer.device,
+            &renderer.queue,
+            &renderer.scene.texture_bind_group_layout,
+        );
+        let mut slab = |pos: Vec3, scale: Vec3, colour: Vec4| {
+            let e = world.spawn();
+            world.add_component(e, Transform::new(centre + pos).with_scale(scale));
+            world.add_component(e, GlobalTransform::default());
+            world.add_component(e, AssetManager::create_cube(&renderer.device));
+            world.add_component(e, Material::new(tex.clone()).with_pbr(colour, 0.9, 0.0));
+            world.add_component(e, MeshRenderer::new());
+        };
+        // `create_cube` spans −1..1, so a scale is a HALF-extent: these walls are 10.4 m square
+        // and 0.4 m thick, their inner faces 4.8 m out.
+        let (d, big, thin) = (5.0, 5.2, 0.2);
+        slab(Vec3::new(d, 0.0, 0.0), Vec3::new(thin, big, big), Vec4::new(0.9, 0.05, 0.05, 1.0));
+        slab(Vec3::new(-d, 0.0, 0.0), Vec3::new(thin, big, big), Vec4::new(0.05, 0.9, 0.05, 1.0));
+        slab(Vec3::new(0.0, d, 0.0), Vec3::new(big, thin, big), Vec4::new(0.05, 0.05, 0.9, 1.0));
+        slab(Vec3::new(0.0, -d, 0.0), Vec3::new(big, thin, big), Vec4::new(0.9, 0.9, 0.05, 1.0));
+        slab(Vec3::new(0.0, 0.0, d), Vec3::new(big, big, thin), Vec4::new(0.9, 0.05, 0.9, 1.0));
+        slab(Vec3::new(0.0, 0.0, -d), Vec3::new(big, big, thin), Vec4::new(0.05, 0.9, 0.9, 1.0));
+        // The white quarters, just inside their walls and starting half a metre off the axis, so
+        // the axis direction itself meets plain wall rather than a quarter's edge.
+        slab(Vec3::new(d - 0.35, 3.0, 3.0), Vec3::new(0.1, 2.5, 2.5), Vec4::new(1.0, 1.0, 1.0, 1.0));
+        slab(Vec3::new(3.0, d - 0.35, 3.0), Vec3::new(2.5, 0.1, 2.5), Vec4::new(1.0, 1.0, 1.0, 1.0));
+        world.spawn_bundle(crate::bundles::PointLightBundle {
+            position: centre,
+            color: Vec3::ONE,
+            intensity: 60.0,
+            radius: 30.0,
+        });
+    }
+
+    /// Samples mip 0 of `cube` along each of `dirs` on the GPU, through the hardware's own cube
+    /// addressing — the same lookup the lighting pass makes.
+    fn sample_cube(renderer: &Renderer, cube: &wgpu::TextureView, dirs: &[Vec3]) -> Vec<[f32; 4]> {
+        use wgpu::util::DeviceExt;
+        let device = &renderer.device;
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("sample_cube"),
+            source: wgpu::ShaderSource::Wgsl(
+                "@group(0) @binding(0) var t: texture_cube<f32>;
+                 @group(0) @binding(1) var s: sampler;
+                 @group(0) @binding(2) var<storage, read> dirs: array<vec4<f32>>;
+                 @group(0) @binding(3) var<storage, read_write> out: array<vec4<f32>>;
+                 @compute @workgroup_size(1) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+                     out[id.x] = textureSampleLevel(t, s, dirs[id.x].xyz, 0.0);
+                 }"
+                .into(),
+            ),
+        });
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("sample_cube"),
+            layout: None,
+            module: &module,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        let data: Vec<[f32; 4]> = dirs.iter().map(|d| [d.x, d.y, d.z, 0.0]).collect();
+        let dir_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: bytemuck::cast_slice(&data),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+        let size = (dirs.len() * 16) as u64;
+        let out_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let staging = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor::default());
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(cube) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) },
+                wgpu::BindGroupEntry { binding: 2, resource: dir_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: out_buf.as_entire_binding() },
+            ],
+        });
+        let mut encoder = device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &group, &[]);
+            pass.dispatch_workgroups(dirs.len() as u32, 1, 1);
+        }
+        encoder.copy_buffer_to_buffer(&out_buf, 0, &staging, 0, size);
+        renderer.queue.submit(Some(encoder.finish()));
+        let slice = staging.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        let out = bytemuck::cast_slice::<u8, [f32; 4]>(&slice.get_mapped_range().expect("mapped")).to_vec();
+        out
+    }
+
+    /// **A reflection probe captures the room the right way round.** Sampled through the
+    /// hardware's cube addressing, each axis direction reads its own wall's colour, and the white
+    /// quarters land where they are — on the +X wall (a side face) and on the ceiling (+Y, whose
+    /// "up" is a different axis) — and not in the mirrored or flipped quarter. A face rendered the
+    /// wrong way round fails here even when its centre is right.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_reflection_probe_captures_each_direction_the_right_way_round() {
+        use crate::renderer::components::ReflectionProbe;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            let mut world = World::new();
+            probe_room(&renderer, &mut world, Vec3::ZERO);
+            world.spawn_bundle((Transform::new(Vec3::ZERO), GlobalTransform::default(), ReflectionProbe::new()));
+            world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 0.0, 3.0), primary: true, ..Default::default() });
+            render_world(&mut renderer, &mut world).await;
+            assert!(
+                world.borrow::<ReflectionProbe>().iter().all(|(_, p)| p.captured),
+                "the probe did not capture on its first frame"
+            );
+            let cube = renderer.reflection_probe.as_ref().expect("a probe was captured").cube_view.clone();
+            let n = |x: f32, y: f32, z: f32| Vec3::new(x, y, z).normalize();
+            let cases: [(&str, Vec3, &str); 12] = [
+                ("+X", Vec3::X, "red"),
+                ("-X", Vec3::NEG_X, "green"),
+                ("+Y", Vec3::Y, "blue"),
+                ("-Y", Vec3::NEG_Y, "yellow"),
+                ("+Z", Vec3::Z, "magenta"),
+                ("-Z", Vec3::NEG_Z, "cyan"),
+                ("+X up +Z", n(1.0, 0.5, 0.5), "white"),
+                ("+X up -Z", n(1.0, 0.5, -0.5), "red"),
+                ("+X down +Z", n(1.0, -0.5, 0.5), "red"),
+                ("+Y +X +Z", n(0.5, 1.0, 0.5), "white"),
+                ("+Y -X +Z", n(-0.5, 1.0, 0.5), "blue"),
+                ("+Y +X -Z", n(0.5, 1.0, -0.5), "blue"),
+            ];
+            let dirs: Vec<Vec3> = cases.iter().map(|c| c.1).collect();
+            let got = sample_cube(&renderer, &cube, &dirs);
+            let classify = |c: [f32; 4]| {
+                let (r, g, b) = (c[0], c[1], c[2]);
+                let m = r.max(g).max(b).max(1e-6);
+                let (r, g, b) = (r / m > 0.5, g / m > 0.5, b / m > 0.5);
+                match (r, g, b) {
+                    (true, false, false) => "red",
+                    (false, true, false) => "green",
+                    (false, false, true) => "blue",
+                    (true, true, false) => "yellow",
+                    (true, false, true) => "magenta",
+                    (false, true, true) => "cyan",
+                    (true, true, true) => "white",
+                    _ => "black",
+                }
+            };
+            let wrong: Vec<String> = cases
+                .iter()
+                .zip(&got)
+                .filter(|((_, _, want), c)| classify(**c) != *want)
+                .map(|((name, _, want), c)| format!("{name}: want {want}, got {} {:?}", classify(*c), &c[..3]))
+                .collect();
+            assert!(wrong.is_empty(), "the probe's cube is the wrong way round:\n{}", wrong.join("\n"));
+        });
+    }
+
+    /// **A mirror reflects the room, not the sky.** A metallic, nearly smooth cube faces the
+    /// camera in the probe room; its front face reflects straight back, at the magenta wall behind
+    /// the camera. With a probe the middle of that face is magenta; without one it reflects the
+    /// procedural sky. And taking the probe away again restores the no-probe frame exactly — the
+    /// specular term is back on the sky, bit for bit.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_mirror_reflects_the_probe_room_and_not_the_sky() {
+        use crate::renderer::components::ReflectionProbe;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssr = None;
+            let mut world = World::new();
+            probe_room(&renderer, &mut world, Vec3::ZERO);
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(
+                &renderer.device,
+                &renderer.queue,
+                &renderer.scene.texture_bind_group_layout,
+            );
+            let mirror = world.spawn();
+            world.add_component(mirror, Transform::new(Vec3::new(0.0, 0.0, -2.0)).with_scale(Vec3::splat(0.8)));
+            world.add_component(mirror, GlobalTransform::default());
+            world.add_component(mirror, AssetManager::create_cube(&renderer.device));
+            world.add_component(mirror, Material::new(tex).with_pbr(Vec4::new(0.95, 0.95, 0.95, 1.0), 0.05, 1.0));
+            world.add_component(mirror, MeshRenderer::new());
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.0, 0.0, 2.0),
+                yaw: -std::f32::consts::FRAC_PI_2,
+                primary: true,
+                ..Default::default()
+            });
+            // The mirror's face, minus its middle (the point light's highlight is there): is it
+            // magenta — red and blue above green? Tone mapping lifts the reflected wall to a pale
+            // pink, around (230, 190, 230), hence the modest margin.
+            let magenta = |frame: &[u8]| {
+                let mut n = 0;
+                for y in 42..86usize {
+                    for x in 42..86usize {
+                        if (54..74).contains(&x) && (54..74).contains(&y) {
+                            continue;
+                        }
+                        let p = &frame[(y * 128 + x) * 4..][..3];
+                        if p[0] as i32 > p[1] as i32 + 15 && p[2] as i32 > p[1] as i32 + 15 {
+                            n += 1;
+                        }
+                    }
+                }
+                n
+            };
+            let sky = render_world(&mut renderer, &mut world).await;
+            let probe = world.spawn_bundle((Transform::new(Vec3::ZERO), GlobalTransform::default(), ReflectionProbe::new()));
+            let room = render_world(&mut renderer, &mut world).await;
+            world.despawn(probe);
+            let back = render_world(&mut renderer, &mut world).await;
+
+            assert!(magenta(&sky) <= 20, "without a probe the mirror already shows {} magenta pixels", magenta(&sky));
+            assert!(magenta(&room) >= 1200, "with a probe the mirror shows only {}/1536 magenta pixels", magenta(&room));
+            let (drift, total) = changed_pixels(&sky, &back, 128);
+            assert_eq!(drift, 0, "removing the probe left {drift}/{total} pixels different from the no-probe frame");
         });
     }
 

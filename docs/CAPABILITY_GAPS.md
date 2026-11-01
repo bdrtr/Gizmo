@@ -200,10 +200,31 @@ What it does not do: holes (an annulus is a sweep here, not an extrusion), bevel
 outlines, or smooth normals — every face is flat, matching `create_cube` and the rest of the
 directory.
 
-### A5. No environment cubemap / reflection probe
+### A5. Reflection probe — **one probe, CLOSED 2026-11-01**; parallax and blending open
 
 Measured in `pbr`: a metallic surface has no environment to reflect. SSR covers what is on
 screen (`ssr` measures it working well) and nothing else.
+
+**`ReflectionProbe` (component) + `gizmo_renderer::reflection`.** The game path renders the scene
+from the probe's position six times — 90°, square, stopped at the HDR target — copies each into a
+`Rgba16Float` cube, and prefilters the mips by roughness (GGX, filtered importance sampling). The
+deferred lighting pass's specular term then reads `cube(R, roughness × max_mip)` instead of the
+procedural sky (group 3, bindings 2–4, alongside the irradiance volume). Captured on the first frame
+and again after `request_capture()`; each face in its own submission; TAA, SSGI and motion-blur
+history set aside during it. With no probe the term reads the sky exactly as before.
+
+Tested: the cube is the right way round — six axis directions read their wall, and white quarters
+on a side wall and on the ceiling land where they are (the cube convention is left-handed, so a
+right-handed render of each face is copied mirrored; dropping the mirror or flipping the ceiling's
+up vector fails it); a mirror in a coloured room reflects the wall behind the camera with the probe
+(1 200+ of 1 536 pixels) and the sky without; removing the probe restores the no-probe frame to the
+pixel. Five mutations red. `pbr` with `GIZMO_PROBE=1` shows the smooth metals reflecting their
+neighbours.
+
+Not done: one probe at a time, looked up by direction only (no box-projected parallax, no blending
+between probes); the prefilter's rough mips are not separately tested; transparent (forward) and
+clear-coat specular still read the sky; the studio's viewport does not capture (render_parity
+lists `ReflectionProbe` as game-only, with the reason).
 
 ### A5b. Split screen / multi-viewport — **CLOSED 2026-11-01**
 

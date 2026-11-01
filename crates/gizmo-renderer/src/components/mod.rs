@@ -20,6 +20,8 @@ pub mod mesh;
 pub mod misc;
 /// The authored look — bloom, vignette, depth of field — on the camera that renders it.
 pub mod post_process;
+/// Where the scene is captured for specular reflections.
+pub mod reflection_probe;
 /// The [`Sprite`](sprite::Sprite) component — an image the engine draws.
 pub mod sprite;
 /// The [`Text`](text::Text) component — a string the engine draws.
@@ -35,6 +37,7 @@ pub use material::*;
 pub use mesh::*;
 pub use misc::*;
 pub use post_process::*;
+pub use reflection_probe::*;
 pub use sprite::*;
 pub use text::*;
 pub use tilemap::*;
@@ -58,6 +61,7 @@ gizmo_core::impl_component!(
     RenderStats,
     Decal,
     PostProcess,
+    ReflectionProbe,
     Sprite,
     SpriteAnimation,
     Text,

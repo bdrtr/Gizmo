@@ -5,6 +5,13 @@
 //! parametrenin görüntüyü nasıl değiştirdiği tek bakışta okunuyor. Sol alttaki tek küre ise
 //! **`unlit`**: ışıktan hiç etkilenmeyen düz renk, karşılaştırma için.
 //!
+//! ## Yansıma sondası (2026-11-01): `GIZMO_PROBE=1`
+//!
+//! Aşağıdaki paragraf yazıldığında motorda yansıma sondası yoktu; artık var
+//! (`ReflectionProbe` bileşeni). `GIZMO_PROBE=1` ızgaranın önüne bir tane koyuyor: metaller o
+//! zaman prosedürel gök yerine sahneyi yansıtıyor. Varsayılan koşu eskisi gibi, karşılaştırma
+//! için.
+//!
 //! ## Dürüst olmak gereken yer: ortam haritası (IBL) yok
 //!
 //! Metalik satırların gördüğü ışığın neredeyse tamamı bir ortam haritasından gelmelidir, çünkü
@@ -76,6 +83,17 @@ fn main() {
                 intensity: 2.0,
                 ..Default::default()
             });
+
+            // `GIZMO_PROBE=1`: ızgaranın önünde bir yansıma sondası (2026-11-01). Metaller o zaman
+            // prosedürel gök yerine sondanın yakaladığı sahneyi — çizilen gökyüzünü, zemini ve
+            // komşu küreleri — yansıtıyor.
+            if std::env::var("GIZMO_PROBE").is_ok() {
+                scene.world.spawn_bundle((
+                    Transform::new(Vec3::new(0.0, 0.5, 2.0)),
+                    GlobalTransform::default(),
+                    gizmo::renderer::components::ReflectionProbe::new(),
+                ));
+            }
 
             // Ortografik kamera — küreler ekranın her yerinde aynı boyutta görünsün diye.
             scene.spawn_camera(state, Vec3::new(0.0, 0.0, 8.0), Vec3::ZERO);

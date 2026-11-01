@@ -31,6 +31,13 @@ var<storage, read> cluster_light_indices: array<u32>;
 @group(2) @binding(3) var s_gbuf: sampler;
 @group(2) @binding(4) var t_world_tangent:    texture_2d<f32>;
 
+// Reflection probe (group 3, after the irradiance volume's two bindings): the scene captured into
+// a prefiltered cube. `reflection_params` = [enabled, max_mip, intensity, 0]; while `enabled` is 0
+// the specular term reads the procedural sky exactly as before probes existed.
+@group(3) @binding(2) var t_reflection: texture_cube<f32>;
+@group(3) @binding(3) var s_reflection: sampler;
+@group(3) @binding(4) var<uniform> reflection_params: vec4<f32>;
+
 // Fullscreen triangle — no vertex buffer needed.
 @vertex
 fn vs_main(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
@@ -378,7 +385,12 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         R = normalize(mix(R, anisotropic_direction, anisotropy_stretch));
     }
     let R_rough = normalize(mix(R, N, roughness)); 
-    let specular_env = get_procedural_environment(R_rough, roughness);
+    var specular_env = get_procedural_environment(R_rough, roughness);
+    if (reflection_params.x > 0.5) {
+        // Prefiltered by roughness already, so the mirror direction and a mip, not the bent ray.
+        specular_env = textureSampleLevel(t_reflection, s_reflection, R, roughness * reflection_params.y).rgb
+            * reflection_params.z;
+    }
     
     // 3. Environment BRDF (Lazarov Analytical Split-Sum LUT approximation)
     let env_brdf_lut = approximate_env_brdf(NdV, roughness);
