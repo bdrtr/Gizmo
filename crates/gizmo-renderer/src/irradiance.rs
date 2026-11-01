@@ -58,32 +58,53 @@ struct GridMeta {
     resolution: [u32; 4],
 }
 
-/// A captured reflection probe, as [`IrradianceState::set_reflection`] takes it.
+/// Floats in the reflection uniform: a header vec4, then three vec4s per probe slot.
+const REFLECTION_FLOATS: usize = 4 + 12 * crate::reflection::MAX_PROBES;
+
+/// One captured probe, as [`ReflectionSet`] carries it.
 #[non_exhaustive]
-pub struct ReflectionSource<'a> {
-    /// The prefiltered cube.
-    pub view: &'a wgpu::TextureView,
-    /// Its mip count; mip `roughness × (count − 1)` is read.
-    pub mip_count: u32,
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ReflectionSource {
     /// Multiplies what it reflects.
     pub intensity: f32,
     /// Where it was captured, in world space.
     pub position: [f32; 3],
-    /// Half-extents of the world-aligned box around `position` for box-projected parallax; `None`
-    /// looks reflections up by direction alone.
+    /// Half-extents of the world-aligned box around `position` it influences, with box-projected
+    /// parallax inside it; `None` makes it the scene's background reflection instead.
     pub box_half_extents: Option<[f32; 3]>,
+    /// How far inside its box the probe fades in from nothing to full weight, in metres.
+    pub blend_distance: f32,
 }
 
-impl<'a> ReflectionSource<'a> {
-    /// A probe's cube, at `position`, with no parallax box.
-    pub fn new(view: &'a wgpu::TextureView, mip_count: u32, intensity: f32, position: [f32; 3]) -> Self {
-        Self { view, mip_count, intensity, position, box_half_extents: None }
+impl ReflectionSource {
+    /// A probe at `position`, without a box.
+    pub fn new(intensity: f32, position: [f32; 3]) -> Self {
+        Self { intensity, position, box_half_extents: None, blend_distance: 0.5 }
     }
 
-    /// With box-projected parallax over `half_extents` around the probe.
-    pub fn with_box(mut self, half_extents: Option<[f32; 3]>) -> Self {
+    /// With an influence box of `half_extents` around the probe, fading in over `blend_distance`.
+    pub fn with_box(mut self, half_extents: Option<[f32; 3]>, blend_distance: f32) -> Self {
         self.box_half_extents = half_extents;
+        self.blend_distance = blend_distance;
         self
+    }
+}
+
+/// The captured probes and their cube array, as [`IrradianceState::set_reflection`] takes them.
+#[non_exhaustive]
+pub struct ReflectionSet<'a> {
+    /// The prefiltered cube array, slot `i` holding `probes[i]`.
+    pub view: &'a wgpu::TextureView,
+    /// Its mip count; mip `roughness × (count − 1)` is read.
+    pub mip_count: u32,
+    /// Up to [`MAX_PROBES`](crate::reflection::MAX_PROBES); the rest are ignored.
+    pub probes: Vec<ReflectionSource>,
+}
+
+impl<'a> ReflectionSet<'a> {
+    /// The probes in `view`'s slots.
+    pub fn new(view: &'a wgpu::TextureView, mip_count: u32, probes: Vec<ReflectionSource>) -> Self {
+        Self { view, mip_count, probes }
     }
 }
 
@@ -144,7 +165,7 @@ impl IrradianceState {
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         multisampled: false,
-                        view_dimension: wgpu::TextureViewDimension::Cube,
+                        view_dimension: wgpu::TextureViewDimension::CubeArray,
                         sample_type: wgpu::TextureSampleType::Float { filterable: true },
                     },
                     count: None,
@@ -169,7 +190,7 @@ impl IrradianceState {
         });
         let reflection_params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("reflection_params"),
-            contents: bytemuck::cast_slice(&[0.0f32; 16]),
+            contents: bytemuck::cast_slice(&[0.0f32; REFLECTION_FLOATS]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
         let reflection_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -191,7 +212,7 @@ impl IrradianceState {
                 view_formats: &[],
             })
             .create_view(&wgpu::TextureViewDescriptor {
-                dimension: Some(wgpu::TextureViewDimension::Cube),
+                dimension: Some(wgpu::TextureViewDimension::CubeArray),
                 ..Default::default()
             });
 
@@ -269,26 +290,36 @@ impl IrradianceState {
         );
     }
 
-    /// Points the specular term at a reflection probe's cube, or back at the procedural sky with
-    /// `None`.
-    pub fn set_reflection(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, probe: Option<ReflectionSource<'_>>) {
-        // [enabled, max_mip, intensity, 0] · [origin, box on] · [box min, 0] · [box max, 0]
-        let mut data = [0.0f32; 16];
-        if let Some(p) = &probe {
-            data[0] = 1.0;
-            data[1] = p.mip_count.saturating_sub(1) as f32;
-            data[2] = p.intensity;
-            data[4..7].copy_from_slice(&p.position);
-            if let Some(half) = p.box_half_extents {
-                data[7] = 1.0;
-                for axis in 0..3 {
-                    data[8 + axis] = p.position[axis] - half[axis].abs();
-                    data[12 + axis] = p.position[axis] + half[axis].abs();
+    /// Points the specular term at a set of reflection probes, or back at the procedural sky with
+    /// `None`. See `deferred_lighting.wgsl`'s `probe_environment` for how they combine.
+    pub fn set_reflection(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, set: Option<ReflectionSet<'_>>) {
+        // Header [count, max_mip, background slot or −1, 0], then per slot
+        // [origin, has box] · [box min, blend distance] · [box max, intensity].
+        let mut data = [0.0f32; REFLECTION_FLOATS];
+        data[2] = -1.0;
+        if let Some(set) = &set {
+            let probes = &set.probes[..set.probes.len().min(crate::reflection::MAX_PROBES)];
+            data[0] = probes.len() as f32;
+            data[1] = set.mip_count.saturating_sub(1) as f32;
+            if let Some(background) = probes.iter().position(|p| p.box_half_extents.is_none()) {
+                data[2] = background as f32;
+            }
+            for (slot, p) in probes.iter().enumerate() {
+                let at = 4 + 12 * slot;
+                data[at..at + 3].copy_from_slice(&p.position);
+                data[at + 11] = p.intensity;
+                if let Some(half) = p.box_half_extents {
+                    data[at + 3] = 1.0;
+                    data[at + 7] = p.blend_distance.max(1e-3);
+                    for axis in 0..3 {
+                        data[at + 4 + axis] = p.position[axis] - half[axis].abs();
+                        data[at + 8 + axis] = p.position[axis] + half[axis].abs();
+                    }
                 }
             }
         }
         queue.write_buffer(&self.reflection_params, 0, bytemuck::cast_slice(&data));
-        self.reflection_view = probe.map(|p| p.view.clone());
+        self.reflection_view = set.map(|s| s.view.clone());
         self.rebind(device);
     }
 

@@ -307,9 +307,10 @@ pub fn render_viewports(
     renderer.record_overlay(encoder, view);
 }
 
-/// **Reflection probes:** renders the scene into the probe's cube when it asks for it — the first
-/// frame it exists, or after `ReflectionProbe::request_capture` — prefilters the mips, and points
-/// the lighting pass's specular term at it. With no probe, puts the procedural sky back.
+/// **Reflection probes:** renders the scene into each probe's slot of the cube array when it asks
+/// for it — the first frame it exists, after `ReflectionProbe::request_capture`, or when the set of
+/// probes changes — prefilters the mips, and points the lighting pass at the set. With no probe,
+/// puts the procedural sky back.
 ///
 /// Each face is a full draw from the probe, 90° and square, stopped at the HDR target and copied
 /// into the cube; each in **its own submission**, for the reason `render_viewports` gives (the draw
@@ -318,74 +319,114 @@ pub fn render_viewports(
 /// not part of the camera's sequence.
 fn capture_reflection_probes(world: &mut World, renderer: &mut Renderer) {
     use crate::renderer::components::ReflectionProbe;
-    let probe = world.borrow::<ReflectionProbe>().iter().next().map(|(id, p)| (id, *p));
-    let Some((entity, probe)) = probe else {
+    use crate::renderer::reflection::{ReflectionProbeGpu, FACES, MAX_PROBES};
+    let mut probes: Vec<(u32, ReflectionProbe)> =
+        world.borrow::<ReflectionProbe>().iter().map(|(id, p)| (id, *p)).collect();
+    probes.sort_by_key(|&(id, _)| id);
+    probes.truncate(MAX_PROBES);
+    if probes.is_empty() {
         if renderer.reflection_probe.take().is_some() {
             if let Some(def) = renderer.deferred.as_mut() {
                 def.irradiance.set_reflection(&renderer.device, &renderer.queue, None);
             }
         }
         return;
-    };
-    if probe.captured && renderer.reflection_probe.is_some() {
+    }
+    let owners: Vec<u32> = probes.iter().map(|&(id, _)| id).collect();
+    let size = probes
+        .iter()
+        .map(|(_, p)| p.resolution.clamp(8, 1024).next_power_of_two())
+        .max()
+        .unwrap_or(128);
+    // A different set of probes, or a different size, is a new array — and every slot in it is
+    // captured afresh.
+    let rebuild = renderer
+        .reflection_probe
+        .as_ref()
+        .is_none_or(|g| g.size != size || g.owners != owners);
+    if rebuild {
+        let mut gpu = ReflectionProbeGpu::new(&renderer.device, size, owners.len() as u32);
+        gpu.owners = owners.clone();
+        renderer.reflection_probe = Some(gpu);
+    }
+    let pending: Vec<usize> = (0..probes.len()).filter(|&slot| rebuild || !probes[slot].1.captured).collect();
+    let positions: Vec<Vec3> = owners.iter().map(|&id| camera_world_position(world, Some(id))).collect();
+
+    let taa = if pending.is_empty() { None } else { renderer.taa.take() };
+    let ssgi = if pending.is_empty() { None } else { renderer.ssgi.take() };
+    let history = if pending.is_empty() { None } else { renderer.previous_view_proj.take() };
+    for &slot in &pending {
+        let probe = probes[slot].1;
+        if let Some(gpu) = renderer.reflection_probe.as_mut() {
+            gpu.captured_at[slot] = positions[slot].to_array();
+        }
+        for face in 0..FACES {
+            let (forward, up) = crate::renderer::reflection::face_basis(face);
+            let mut encoder = renderer.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("reflection_probe_face"),
+            });
+            let fixed = FixedView {
+                position: positions[slot],
+                forward,
+                up,
+                near: probe.near,
+                far: probe.far.max(probe.near + 0.1),
+            };
+            // The HDR target stands in for the output view: a capture stops before the post
+            // chain, so nothing is ever written through it.
+            let hdr = renderer.post.hdr_texture_view.clone();
+            draw_camera_view(world, &mut encoder, &hdr, renderer, None, (0.0, 0.0), None, false, Some(fixed));
+            if let Some(gpu) = renderer.reflection_probe.as_ref() {
+                gpu.record_face(&renderer.device, &mut encoder, &renderer.post.hdr_texture_view, slot as u32, face);
+            }
+            renderer.queue.submit(std::iter::once(encoder.finish()));
+        }
+        if let Some(gpu) = renderer.reflection_probe.as_ref() {
+            let mut encoder = renderer.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("reflection_probe_prefilter"),
+            });
+            gpu.record_prefilter(&renderer.device, &mut encoder, slot as u32);
+            renderer.queue.submit(std::iter::once(encoder.finish()));
+        }
+    }
+    if !pending.is_empty() {
+        renderer.taa = taa;
+        renderer.ssgi = ssgi;
+        renderer.previous_view_proj = history;
+    }
+
+    // The parameters go up whenever they change, not only on a capture: an `intensity`,
+    // `influence` or `blend_distance` edited later takes effect on the next frame. Positions are
+    // where each slot was captured, not where the entity is now (see `captured_at`).
+    if let Some(gpu) = renderer.reflection_probe.as_mut() {
+        let sources: Vec<_> = probes
+            .iter()
+            .zip(&gpu.captured_at)
+            .map(|((_, p), at)| {
+                crate::renderer::irradiance::ReflectionSource::new(p.intensity, *at)
+                    .with_box(p.influence.map(|h| h.to_array()), p.blend_distance)
+            })
+            .collect();
+        if !pending.is_empty() || sources != gpu.uploaded {
+            gpu.uploaded = sources.clone();
+            let set = crate::renderer::irradiance::ReflectionSet::new(&gpu.cube_view, gpu.mip_count, sources);
+            if let Some(def) = renderer.deferred.as_mut() {
+                def.irradiance.set_reflection(&renderer.device, &renderer.queue, Some(set));
+            }
+        }
+    }
+    if pending.is_empty() {
         return;
     }
-    let size = probe.resolution.clamp(8, 1024).next_power_of_two();
-    if renderer.reflection_probe.as_ref().is_none_or(|g| g.size != size) {
-        renderer.reflection_probe =
-            Some(crate::renderer::reflection::ReflectionProbeGpu::new(&renderer.device, size));
-    }
-    let position = camera_world_position(world, Some(entity));
-
-    let taa = renderer.taa.take();
-    let ssgi = renderer.ssgi.take();
-    let history = renderer.previous_view_proj.take();
-    for face in 0..crate::renderer::reflection::FACES {
-        let (forward, up) = crate::renderer::reflection::face_basis(face);
-        let mut encoder = renderer.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("reflection_probe_face"),
-        });
-        let fixed = FixedView {
-            position,
-            forward,
-            up,
-            near: probe.near,
-            far: probe.far.max(probe.near + 0.1),
-        };
-        // The HDR target stands in for the output view: a capture stops before the post chain, so
-        // nothing is ever written through it.
-        let hdr = renderer.post.hdr_texture_view.clone();
-        draw_camera_view(world, &mut encoder, &hdr, renderer, None, (0.0, 0.0), None, false, Some(fixed));
-        if let Some(gpu) = renderer.reflection_probe.as_ref() {
-            gpu.record_face(&renderer.device, &mut encoder, &renderer.post.hdr_texture_view, face);
-        }
-        renderer.queue.submit(std::iter::once(encoder.finish()));
-    }
-    renderer.taa = taa;
-    renderer.ssgi = ssgi;
-    renderer.previous_view_proj = history;
-
-    if let Some(gpu) = renderer.reflection_probe.as_ref() {
-        let mut encoder = renderer.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("reflection_probe_prefilter"),
-        });
-        gpu.record_prefilter(&renderer.device, &mut encoder);
-        renderer.queue.submit(std::iter::once(encoder.finish()));
-        if let Some(def) = renderer.deferred.as_mut() {
-            let source = crate::renderer::irradiance::ReflectionSource::new(
-                &gpu.cube_view,
-                gpu.mip_count,
-                probe.intensity,
-                position.to_array(),
-            )
-            .with_box(probe.influence.map(|h| h.to_array()));
-            def.irradiance.set_reflection(&renderer.device, &renderer.queue, Some(source));
+    {
+        let mut stored = world.borrow_mut::<ReflectionProbe>();
+        for &slot in &pending {
+            if let Some(mut p) = stored.get_mut(owners[slot]) {
+                p.captured = true;
+            }
         }
     }
-    if let Some(mut p) = world.borrow_mut::<ReflectionProbe>().get_mut(entity) {
-        p.captured = true;
-    }
-    tracing::debug!(entity, size, "[Render] reflection probe captured");
+    tracing::debug!(captured = pending.len(), probes = owners.len(), size, "[Render] reflection probes captured");
 }
 
 /// Where `camera` is in the world: its synced `GlobalTransform`, else its own `Transform`, else the
@@ -4184,7 +4225,15 @@ mod golden_render_tests {
                 world.borrow::<ReflectionProbe>().iter().all(|(_, p)| p.captured),
                 "the probe did not capture on its first frame"
             );
-            let cube = renderer.reflection_probe.as_ref().expect("a probe was captured").cube_view.clone();
+            // Slot 0 of the cube array, as a plain cube.
+            let cube = renderer.reflection_probe.as_ref().expect("a probe was captured").texture.create_view(
+                &wgpu::TextureViewDescriptor {
+                    dimension: Some(wgpu::TextureViewDimension::Cube),
+                    base_array_layer: 0,
+                    array_layer_count: Some(6),
+                    ..Default::default()
+                },
+            );
             let n = |x: f32, y: f32, z: f32| Vec3::new(x, y, z).normalize();
             let cases: [(&str, Vec3, &str); 12] = [
                 ("+X", Vec3::X, "red"),
@@ -4486,6 +4535,141 @@ mod golden_render_tests {
                 coat > bare + 1.0,
                 "a clear coat added {:.2} of magenta (bare {bare:.2}, coated {coat:.2}) — it is not reflecting the probe",
                 coat - bare
+            );
+        });
+    }
+
+    /// **Two probes, two rooms.** Two closed rooms 30 m apart, each with its own boxed probe and a
+    /// mirror facing the wall behind its camera — magenta in room A, painted white in room B. Each
+    /// mirror must reflect its own room: room B's mirror reads white only if its pixels pick B's
+    /// slot of the cube array, and reads sky (no box covers it) if only the first probe is used,
+    /// or magenta if every probe samples slot 0.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn each_room_s_mirror_reflects_its_own_probe() {
+        use crate::renderer::components::{Camera, ReflectionProbe};
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssr = None;
+            let mut world = World::new();
+            let (a, b) = (Vec3::ZERO, Vec3::new(30.0, 0.0, 0.0));
+            probe_room(&renderer, &mut world, a);
+            probe_room(&renderer, &mut world, b);
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(
+                &renderer.device,
+                &renderer.queue,
+                &renderer.scene.texture_bind_group_layout,
+            );
+            let mut slab = |pos: Vec3, scale: Vec3, colour: Vec4, roughness: f32, metallic: f32| {
+                let e = world.spawn();
+                world.add_component(e, Transform::new(pos).with_scale(scale));
+                world.add_component(e, GlobalTransform::default());
+                world.add_component(e, AssetManager::create_cube(&renderer.device));
+                world.add_component(e, Material::new(tex.clone()).with_pbr(colour, roughness, metallic));
+                world.add_component(e, MeshRenderer::new());
+            };
+            // Room B's +Z wall, painted white over its whole inner face.
+            slab(b + Vec3::new(0.0, 0.0, 4.65), Vec3::new(4.8, 4.8, 0.1), Vec4::ONE, 0.9, 0.0);
+            for c in [a, b] {
+                slab(c + Vec3::new(0.0, 0.0, -2.0), Vec3::splat(0.8), Vec4::new(0.95, 0.95, 0.95, 1.0), 0.05, 1.0);
+            }
+            for c in [a, b] {
+                world.spawn_bundle((
+                    Transform::new(c),
+                    GlobalTransform::default(),
+                    ReflectionProbe::new().with_influence(Vec3::splat(4.8)),
+                ));
+            }
+            let cam_a = world.spawn_bundle(CameraBundle {
+                position: a + Vec3::new(0.0, 0.0, 2.0),
+                yaw: -std::f32::consts::FRAC_PI_2,
+                primary: true,
+                ..Default::default()
+            });
+            let cam_b = world.spawn_bundle(CameraBundle {
+                position: b + Vec3::new(0.0, 0.0, 2.0),
+                yaw: -std::f32::consts::FRAC_PI_2,
+                primary: false,
+                ..Default::default()
+            });
+            // (white, magenta) over the mirror's face, minus its middle.
+            let colours = |frame: &[u8]| {
+                let (mut white, mut magenta) = (0, 0);
+                for y in 42..86usize {
+                    for x in 42..86usize {
+                        if (54..74).contains(&x) && (54..74).contains(&y) {
+                            continue;
+                        }
+                        let p = &frame[(y * 128 + x) * 4..][..3];
+                        let (r, g, b) = (p[0] as i32, p[1] as i32, p[2] as i32);
+                        if r > g + 15 && b > g + 15 {
+                            magenta += 1;
+                        } else if r.min(g).min(b) > 150 && r.max(g).max(b) - r.min(g).min(b) < 25 {
+                            white += 1;
+                        }
+                    }
+                }
+                (white, magenta)
+            };
+            // Mean magenta excess, (r + b)/2 − g, over the same ring: a fade is a matter of degree.
+            let excess = |frame: &[u8]| {
+                let (mut sum, mut n) = (0.0f64, 0.0f64);
+                for y in 42..86usize {
+                    for x in 42..86usize {
+                        if (54..74).contains(&x) && (54..74).contains(&y) {
+                            continue;
+                        }
+                        let p = &frame[(y * 128 + x) * 4..][..3];
+                        sum += (p[0] as f64 + p[2] as f64) / 2.0 - p[1] as f64;
+                        n += 1.0;
+                    }
+                }
+                sum / n
+            };
+            let frame_a = render_world(&mut renderer, &mut world).await;
+            let in_a = colours(&frame_a);
+            let excess_in = excess(&frame_a);
+            for (id, primary) in [(cam_a.id(), false), (cam_b.id(), true)] {
+                if let Some(mut c) = world.borrow_mut::<Camera>().get_mut(id) {
+                    c.primary = primary;
+                }
+            }
+            let in_b = colours(&render_world(&mut renderer, &mut world).await);
+            assert!(in_a.1 >= 1200, "room A's mirror should reflect its magenta wall: {in_a:?} (white, magenta)");
+            assert!(in_b.0 >= 1200, "room B's mirror should reflect its white wall: {in_b:?} (white, magenta)");
+
+            // **The fade, and a parameter edited after the capture.** The probes fading in over
+            // 20 m instead of 0.5: room A's mirror, ~3.6 m inside its box, now weighs its probe at
+            // under a fifth and the sky at the rest. Measured as mean magenta excess, not a pixel
+            // count: the wall is so much brighter than the sky in HDR that a fifth of it still
+            // tone-maps to pink — the fade shows as a fall in degree. (Room A, not B: the procedural
+            // sky reflects a light grey the white test cannot tell from the white wall.) Nothing is
+            // recaptured; the change has to reach the lighting pass on its own.
+            for (_, mut p) in world.borrow_mut::<ReflectionProbe>().iter_mut() {
+                p.blend_distance = 20.0;
+            }
+            for (id, primary) in [(cam_a.id(), true), (cam_b.id(), false)] {
+                if let Some(mut c) = world.borrow_mut::<Camera>().get_mut(id) {
+                    c.primary = primary;
+                }
+            }
+            let excess_faded = excess(&render_world(&mut renderer, &mut world).await);
+            // Measured: 39.17 fully in, 23.14 faded; 39.17 again with no fade, or with the edit
+            // only uploaded on a capture.
+            assert!(
+                excess_faded < excess_in * 0.6,
+                "with a 20 m fade room A's mirror keeps {excess_faded:.2} of magenta excess (fully in: \
+                 {excess_in:.2}) — the fade or the edited parameter does not reach the lighting pass",
             );
         });
     }

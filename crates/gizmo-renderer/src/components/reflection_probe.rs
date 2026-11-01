@@ -7,11 +7,14 @@
 /// [`request_capture`](Self::request_capture) — six full renders is a cost for a level load, not
 /// for every frame. Move the probe or change the room, then ask for a recapture.
 ///
-/// One probe at a time (the first found). Without an [`influence`](Self::influence) box it is
-/// looked up by direction only: right near the probe, drifting with distance from it. With one —
-/// the room's inner bounds — each reflected ray is traced to the box's walls first (box-projected
-/// parallax), so a mirror on the far side of the room reflects the part of the wall it faces.
-/// Particles and fluid are not captured.
+/// Up to four at a time (the first four by entity order). A probe **with** an
+/// [`influence`](Self::influence) box — the room's inner bounds — is local: it applies only inside
+/// the box, fading in over [`blend_distance`](Self::blend_distance) from its walls, and traces each
+/// reflected ray to those walls first (box-projected parallax), so a mirror on the far side of the
+/// room reflects the part of the wall it faces. Where boxes overlap, they blend. A probe
+/// **without** a box is the background: it fills whatever the boxed probes leave uncovered, looked
+/// up by direction; with no such probe, that is the procedural sky. Particles and fluid are not
+/// captured.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 #[non_exhaustive]
@@ -28,6 +31,9 @@ pub struct ReflectionProbe {
     /// captured scene is projected onto — usually the room the probe sits in. `None` (the default)
     /// looks reflections up by direction alone. A surface outside the box also falls back to that.
     pub influence: Option<gizmo_math::Vec3>,
+    /// How far inside its box, in metres, the probe fades in from nothing to full weight — the
+    /// width of the blend at a doorway. 0.5 by default.
+    pub blend_distance: f32,
     /// Whether the current cube is up to date. Cleared by [`request_capture`](Self::request_capture);
     /// not saved, so a loaded scene captures on its first frame.
     #[serde(skip)]
@@ -36,7 +42,7 @@ pub struct ReflectionProbe {
 
 impl Default for ReflectionProbe {
     fn default() -> Self {
-        Self { resolution: 128, intensity: 1.0, near: 0.05, far: 500.0, influence: None, captured: false }
+        Self { resolution: 128, intensity: 1.0, near: 0.05, far: 500.0, influence: None, blend_distance: 0.5, captured: false }
     }
 }
 

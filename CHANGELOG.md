@@ -50,6 +50,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Several reflection probes, blended: `ReflectionProbe::blend_distance`.** Up to four probes in
+  one cube array. Boxed probes apply inside their boxes, fading in from the walls and normalised
+  where they overlap; the first unboxed probe (else the sky) fills the rest. Probe parameters edited
+  after a capture now reach the lighting pass without a recapture (they did not). A single boxed
+  probe no longer reflects itself outside its box — the sky does. `IrradianceState::set_reflection`
+  takes a `ReflectionSet`; binding 2 is a `texture_cube_array`.
+
 - **The clear-coat layer reflects the reflection probe.** It read the procedural sky even with a
   probe in the scene; now it reads the probe at its own 0.08 roughness, through the parallax lookup.
   The probe's prefiltered rough mips are tested (saturation and the gap between opposite walls fall

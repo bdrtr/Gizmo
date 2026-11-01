@@ -235,8 +235,19 @@ excess with a coat against 0.16 bare — and 0.17 with the coat still reading th
 are tested: at the roughest mip the +X wall's saturation and the gap to the −X wall both fall; a
 prefilter that only copied mip 0 down keeps them (0.71 against 0.74).
 
-Not done: one probe at a time (no blending between probes); transparent (forward) specular still
-reads the sky; the studio's viewport does not capture (render_parity lists `ReflectionProbe` as
+**Several probes, blended, same day.** Up to four, in one cube array (the lighting pass has no bind
+group left for more textures). Boxed probes are local: each weighs in only inside its box, fading
+in over `blend_distance` from the walls, normalised where boxes overlap; whatever they leave is the
+background — the first probe without a box, else the sky. Tested with two closed rooms 30 m apart:
+each mirror reflects its own room (only-the-first-probe leaves room B's mirror on the sky,
+every-probe-reads-slot-0 gives it room A's magenta). And an edit after the capture —
+`blend_distance` 0.5 → 20 — reaches the lighting pass without a recapture: room A's magenta excess
+39.17 → 23.14. Before that it did not: parameters went up only with a capture, so `intensity`,
+`influence` and `blend_distance` changed nothing until the next one. Positions stay where each slot
+was captured. Behaviour change: a single boxed probe now leaves surfaces outside its box to the sky
+instead of reflecting itself by direction there.
+
+Not done: transparent (forward) specular still reads the sky; the studio's viewport does not capture (render_parity lists `ReflectionProbe` as
 game-only, with the reason).
 
 ### A5b. Split screen / multi-viewport — **CLOSED 2026-11-01**

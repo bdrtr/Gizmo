@@ -10,13 +10,18 @@
 //! lighting pass reads. Rendering the six faces is the game path's (`gizmo`'s
 //! `capture_reflection_probes`), because only it knows how to draw the world.
 //!
-//! One probe, at infinity: reflections are looked up by direction only, so they are right for
-//! objects near the probe and drift with distance from it (no box-projected parallax yet).
+//! Up to [`MAX_PROBES`] probes share one cube **array** (six layers per slot), because the
+//! lighting pass has no bind group left to give each its own. The lighting shader blends them by
+//! their influence boxes (see `ReflectionProbe::influence`).
 
 use wgpu::util::DeviceExt;
 
 /// Cube faces, in WebGPU's layer order: +X, −X, +Y, −Y, +Z, −Z.
 pub const FACES: usize = 6;
+
+/// How many probes the lighting pass reads at once. A scene with more uses the first four by
+/// entity order.
+pub const MAX_PROBES: usize = 4;
 
 /// Rendering parameters for face `face`: the direction it looks along and the camera "up" that
 /// makes a right-handed render of it the cube's face mirrored left-right (see the shader).
@@ -32,13 +37,24 @@ pub fn face_basis(face: usize) -> (gizmo_math::Vec3, gizmo_math::Vec3) {
     }
 }
 
-/// The captured cube and the passes that fill it.
+/// The captured cubes and the passes that fill them.
 #[non_exhaustive]
 pub struct ReflectionProbeGpu {
-    /// The cube: `size`², [`mip_count`](Self::mip_count) mips, `Rgba16Float`.
+    /// The cube array: `size`², [`mip_count`](Self::mip_count) mips, six layers per slot,
+    /// `Rgba16Float`.
     pub texture: wgpu::Texture,
-    /// The whole cube as a `Cube` view — what the lighting pass samples.
+    /// The whole array as a `CubeArray` view — what the lighting pass samples.
     pub cube_view: wgpu::TextureView,
+    /// How many probe slots the array has.
+    pub slots: u32,
+    /// Which entity each slot was captured for — the game path rebuilds the array when this set
+    /// changes.
+    pub owners: Vec<u32>,
+    /// Where each slot was captured. A probe moved without a recapture keeps reflecting from here,
+    /// so its parallax stays consistent with the picture it holds.
+    pub captured_at: Vec<[f32; 3]>,
+    /// The parameters last uploaded to the lighting pass, so they are re-sent only when they change.
+    pub uploaded: Vec<crate::irradiance::ReflectionSource>,
     /// Edge length of mip 0, in texels.
     pub size: u32,
     /// Mips, from `size` down to 4 texels.
@@ -59,13 +75,15 @@ const PREFILTER_SAMPLES: f32 = 64.0;
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
 impl ReflectionProbeGpu {
-    /// Builds an empty cube of `size` texels per edge (rounded up to a power of two, at least 8).
-    pub fn new(device: &wgpu::Device, size: u32) -> Self {
+    /// Builds an empty array of `slots` cubes (1..=[`MAX_PROBES`]) of `size` texels per edge
+    /// (rounded up to a power of two, at least 8).
+    pub fn new(device: &wgpu::Device, size: u32, slots: u32) -> Self {
         let size = size.clamp(8, 1024).next_power_of_two();
+        let slots = slots.clamp(1, MAX_PROBES as u32);
         let mip_count = size.trailing_zeros() - 1; // down to 4 texels
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("reflection_probe_cube"),
-            size: wgpu::Extent3d { width: size, height: size, depth_or_array_layers: FACES as u32 },
+            size: wgpu::Extent3d { width: size, height: size, depth_or_array_layers: FACES as u32 * slots },
             mip_level_count: mip_count,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -77,7 +95,7 @@ impl ReflectionProbeGpu {
         });
         let cube_view = texture.create_view(&wgpu::TextureViewDescriptor {
             label: Some("reflection_probe_cube_view"),
-            dimension: Some(wgpu::TextureViewDimension::Cube),
+            dimension: Some(wgpu::TextureViewDimension::CubeArray),
             ..Default::default()
         });
 
@@ -195,6 +213,10 @@ impl ReflectionProbeGpu {
         Self {
             texture,
             cube_view,
+            slots,
+            owners: Vec::new(),
+            captured_at: vec![[0.0; 3]; slots as usize],
+            uploaded: Vec::new(),
             size,
             mip_count,
             copy_pipeline,
@@ -207,13 +229,13 @@ impl ReflectionProbeGpu {
         }
     }
 
-    fn face_view(&self, mip: u32, face: usize) -> wgpu::TextureView {
+    fn face_view(&self, mip: u32, slot: u32, face: usize) -> wgpu::TextureView {
         self.texture.create_view(&wgpu::TextureViewDescriptor {
             label: Some("reflection_probe_face"),
             dimension: Some(wgpu::TextureViewDimension::D2),
             base_mip_level: mip,
             mip_level_count: Some(1),
-            base_array_layer: face as u32,
+            base_array_layer: slot * FACES as u32 + face as u32,
             array_layer_count: Some(1),
             ..Default::default()
         })
@@ -252,28 +274,38 @@ impl ReflectionProbeGpu {
     }
 
     /// Records copying `frame` — the HDR target, just rendered by a 90° square camera looking
-    /// along [`face_basis`]`(face)` — into mip 0 of that face.
-    pub fn record_face(&self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, frame: &wgpu::TextureView, face: usize) {
+    /// along [`face_basis`]`(face)` — into mip 0 of that face of slot `slot`.
+    pub fn record_face(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        frame: &wgpu::TextureView,
+        slot: u32,
+        face: usize,
+    ) {
         let group = self.bind(device, &self.jobs[face], frame, &self.dummy_cube);
-        self.fullscreen(encoder, &self.face_view(0, face), &self.copy_pipeline, &group);
+        self.fullscreen(encoder, &self.face_view(0, slot, face), &self.copy_pipeline, &group);
     }
 
-    /// Records prefiltering every mip above 0 from the ones below it. Call once all six faces are
-    /// in mip 0.
-    pub fn record_prefilter(&self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder) {
+    /// Records prefiltering every mip above 0 of slot `slot` from the ones below it. Call once all
+    /// six of its faces are in mip 0.
+    pub fn record_prefilter(&self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, slot: u32) {
         for mip in 1..self.mip_count {
-            // Every mip below this one, as a cube: disjoint from the mip being written.
+            // This slot's six layers, every mip below this one, as a cube: disjoint from the mip
+            // being written.
             let source = self.texture.create_view(&wgpu::TextureViewDescriptor {
                 label: Some("reflection_probe_source"),
                 dimension: Some(wgpu::TextureViewDimension::Cube),
                 base_mip_level: 0,
                 mip_level_count: Some(mip),
+                base_array_layer: slot * FACES as u32,
+                array_layer_count: Some(FACES as u32),
                 ..Default::default()
             });
             for face in 0..FACES {
                 let job = &self.jobs[mip as usize * FACES + face];
                 let group = self.bind(device, job, &self.dummy_frame, &source);
-                self.fullscreen(encoder, &self.face_view(mip, face), &self.prefilter_pipeline, &group);
+                self.fullscreen(encoder, &self.face_view(mip, slot, face), &self.prefilter_pipeline, &group);
             }
         }
     }
