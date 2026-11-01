@@ -569,10 +569,12 @@ What it had to build for itself, each recorded in the file's header:
 - **No fixed-step driver for a game that owns its camera.** `simple_scene_update` steps physics
   but also flies the camera with WASD/mouse, so a game with a fixed camera cannot use it; the
   accumulator is in the game (`FIXED_DT`, `MAX_STEPS`).
-- **An orthographic camera does not fit the window's shape.** `Orthographic { height }` fixes the
-  vertical extent; in a portrait window (948×1028, measured) the visible width was ±7.4 units and
-  the catapult at x = −11 was off screen. The game recomputes the height from the aspect ratio
-  every frame.
+- ~~**An orthographic camera does not fit the window's shape.**~~ **Closed 2026-11-01.**
+  `Orthographic { height }` fixes the vertical extent; in a portrait window (948×1028, measured)
+  the visible width was ±7.4 units and the catapult at x = −11 was off screen, so the game
+  recomputed the height from the aspect ratio every frame. `ProjectionMode::OrthographicFit
+  { width, height }` now shows at least that box in any window shape, and
+  `ProjectionMode::view_extent(aspect)` says what is actually visible; the game uses both.
 
 ---
 
@@ -765,7 +767,8 @@ and `emissive` (item 4, the only undocumented one). No further silent fields.
    separate project" turned out to be one component and one pass, because the 2D camera and the
    2D transform stack already existed as an orthographic camera and a plane. What remains is the
    2D *game* layer around it, measured by building one (§C9): 2D collision shapes, a tilemap, a
-   sprite-animation component, sprite↔collider sizing, an orthographic camera that fits the window.
+   sprite-animation component, sprite↔collider sizing. (The window-fitting orthographic camera
+   was closed 2026-11-01.)
 
 ---
 

@@ -184,7 +184,8 @@ fn main() {
             scene.spawn_camera(state, Vec3::new(0.0, 5.0, 20.0), Vec3::new(0.0, 5.0, 0.0));
             if let Some(mut q) = scene.world.query_mut::<(Mut<Camera>, Mut<Transform>)>() {
                 for (_, (mut cam, _)) in q.iter_mut() {
-                    cam.projection = ProjectionMode::Orthographic { height: 16.0 };
+                    cam.projection =
+                        ProjectionMode::OrthographicFit { width: VIEW_WIDTH, height: VIEW_MIN_HEIGHT };
                 }
             }
 
@@ -352,18 +353,22 @@ fn update(world: &mut World, dt: f32, input: &gizmo::core::input::Input) {
 const VIEW_WIDTH: f32 = 30.0;
 const VIEW_MIN_HEIGHT: f32 = 16.0;
 
-/// Ortografik yüksekliği pencerenin en-boy oranına göre seçer: yatay pencerede yükseklik
-/// belirler, dikey pencerede genişlik. Sabit bir yükseklik, dikey bir pencerede mancınığı ekran
-/// dışında bırakıyordu (ölçüldü: 948×1028'de görünen genişlik ±7,4 birim, mancınık x = −11).
+/// Kamerayı zemine oturtur. Sığdırmayı motor yapıyor (`OrthographicFit`: pencere hangi şekilde
+/// olursa olsun en az 30 × 16 birim gösterir); burada kalan iş, görünen yüksekliği
+/// (`view_extent`) okuyup görüşün alt kenarını zeminin hemen altına koymak.
+///
+/// Bu fonksiyon önce yüksekliği en-boy oranından elle hesaplıyordu: sabit `Orthographic
+/// { height }` dikey bir pencerede mancınığı ekran dışında bırakıyordu (ölçüldü: 948×1028'de
+/// görünen genişlik ±7,4 birim, mancınık x = −11).
 fn fit_camera(world: &mut World) {
     let Some(info) = world.get_resource::<gizmo::core::window::WindowInfo>().map(|i| *i) else { return };
-    let aspect = (info.width / info.height.max(1.0)).max(0.1);
-    let height = VIEW_MIN_HEIGHT.max(VIEW_WIDTH / aspect);
+    let aspect = info.width / info.height.max(1.0);
     if let Some(mut q) = world.query_mut::<(Mut<Camera>, Mut<Transform>)>() {
-        for (_, (mut cam, mut t)) in q.iter_mut() {
-            cam.projection = ProjectionMode::Orthographic { height };
-            // Zemin ekranın altına otursun: görüşün alt kenarı y ≈ −1.
-            t.position.y = height * 0.5 - 1.0;
+        for (_, (cam, mut t)) in q.iter_mut() {
+            if let Some(extent) = cam.projection.view_extent(aspect) {
+                // Zemin ekranın altına otursun: görüşün alt kenarı y ≈ −1.
+                t.position.y = extent.y * 0.5 - 1.0;
+            }
         }
     }
 }

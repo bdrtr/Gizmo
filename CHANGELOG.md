@@ -50,6 +50,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`ProjectionMode::OrthographicFit { width, height }` — an orthographic camera that fits the
+  window.** Plain `Orthographic { height }` fixes only the vertical extent, so a portrait window
+  cut the sides off a 2D playfield (measured in `kule_yikici`: 948×1028 showed ±7.4 units, the
+  catapult at x = −11 was off screen). The new mode shows at least `width × height` in any window
+  shape. Also `ProjectionMode::view_extent(aspect)` (what an orthographic view actually shows) and
+  `ProjectionMode::is_orthographic()`. **Breaking for exhaustive matches** on `ProjectionMode`
+  inside this workspace only — the enum is `#[non_exhaustive]`, so downstream code already has a
+  wildcard arm.
+
 - **Five vehicle setup knobs that were fixed constants.** Real car data gives each of these
   separately, and a downstream racing project had to approximate all five:
   `Wheel::suspension_rebound_damping` (was always 2.5 × bump; data can give rebound ≈ bump),

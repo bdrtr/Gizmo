@@ -13,6 +13,47 @@ pub enum ProjectionMode {
         /// The vertical extent of the view volume, in world units.
         height: f32,
     },
+    /// Orthographic projection that **always shows at least** `width × height` world units,
+    /// whatever shape the window is: the axis the window is long in gets the extra room.
+    ///
+    /// [`Orthographic`](Self::Orthographic) fixes only the vertical extent, so a portrait window
+    /// cuts the sides off — measured in `kule_yikici`, a 948×1028 window showed ±7.4 units across
+    /// and the catapult at x = −11 was off screen. A 2D game that has to keep its whole playfield
+    /// visible wants this instead; [`ProjectionMode::view_extent`] says what the window actually
+    /// shows, for placing the camera against an edge.
+    OrthographicFit {
+        /// The smallest horizontal extent shown, in world units.
+        width: f32,
+        /// The smallest vertical extent shown, in world units.
+        height: f32,
+    },
+}
+
+impl ProjectionMode {
+    /// The `(width, height)` in world units an orthographic view shows in a viewport of the given
+    /// aspect ratio (width / height). `None` for a perspective view, whose extent depends on the
+    /// distance.
+    #[must_use]
+    pub fn view_extent(self, aspect: f32) -> Option<gizmo_math::Vec2> {
+        let aspect = aspect.max(0.001);
+        let height = match self {
+            Self::Perspective => return None,
+            Self::Orthographic { height } => height,
+            Self::OrthographicFit { width, height } => height.max(width / aspect),
+        }
+        .max(0.002);
+        Some(gizmo_math::Vec2::new(height * aspect, height))
+    }
+
+    /// Whether this is one of the orthographic modes — for code outside this crate that cannot
+    /// `match` the `#[non_exhaustive]` enum without a wildcard that would swallow a new mode.
+    #[must_use]
+    pub fn is_orthographic(self) -> bool {
+        match self {
+            Self::Perspective => false,
+            Self::Orthographic { .. } | Self::OrthographicFit { .. } => true,
+        }
+    }
 }
 
 /// A 3-D camera: where it looks, how far it sees, and how the result is projected.
@@ -96,7 +137,9 @@ impl Camera {
             ProjectionMode::Perspective => ProjectionMode::Orthographic {
                 height: 2.0 * distance.abs().max(0.001) * (self.fov * 0.5).tan(),
             },
-            ProjectionMode::Orthographic { .. } => ProjectionMode::Perspective,
+            ProjectionMode::Orthographic { .. } | ProjectionMode::OrthographicFit { .. } => {
+                ProjectionMode::Perspective
+            }
         };
     }
 
@@ -124,6 +167,13 @@ impl Camera {
                 let half_w = half_h * aspect.max(0.001);
                 gizmo_math::Mat4::orthographic_rh(
                     -half_w, half_w, -half_h, half_h, self.near, self.far,
+                )
+            }
+            mode @ ProjectionMode::OrthographicFit { .. } => {
+                // `view_extent` is `Some` for every orthographic mode.
+                let half = mode.view_extent(aspect).unwrap_or(gizmo_math::Vec2::ONE) * 0.5;
+                gizmo_math::Mat4::orthographic_rh(
+                    -half.x, half.x, -half.y, half.y, self.near, self.far,
                 )
             }
         }
@@ -378,5 +428,42 @@ mod tests {
             matches!(cam.projection, ProjectionMode::Orthographic { .. }),
             "the toggle must actually reach orthographic"
         );
+    }
+
+    /// The fit mode keeps the whole `width × height` box in view in a wide, a square and a tall
+    /// window — the tall one is the case plain `Orthographic { height }` cuts the sides off.
+    #[test]
+    fn orthographic_fit_shows_the_whole_box_in_any_window_shape() {
+        let mode = ProjectionMode::OrthographicFit { width: 30.0, height: 16.0 };
+        for aspect in [16.0 / 9.0, 1.0, 948.0 / 1028.0, 0.3] {
+            let e = mode.view_extent(aspect).unwrap();
+            assert!(e.x >= 30.0 - 1e-3 && e.y >= 16.0 - 1e-3, "aspect {aspect}: {e:?}");
+            assert!((e.x / e.y - aspect).abs() < 1e-4, "keeps the window's shape");
+            // Tight on one axis: it does not show more than it has to.
+            assert!((e.x - 30.0).abs() < 1e-3 || (e.y - 16.0).abs() < 1e-3, "{e:?}");
+        }
+        // The projection agrees with the extent: the box corner lands on the NDC edge or inside.
+        let mut cam = Camera::new(1.0, 0.1, 100.0, -std::f32::consts::FRAC_PI_2, 0.0, true);
+        cam.projection = mode;
+        let tall = 948.0 / 1028.0;
+        let p = cam.get_projection(tall) * gizmo_math::Vec4::new(15.0, 8.0, -1.0, 1.0);
+        assert!((p.x - 1.0).abs() < 1e-4, "the box's side is the window's side, got {}", p.x);
+        assert!(p.y.abs() < 1.0);
+        // Plain Orthographic in the same window loses it — the measured kule_yikici failure.
+        let plain = ProjectionMode::Orthographic { height: 16.0 }.view_extent(tall).unwrap();
+        assert!(plain.x < 30.0);
+        assert_eq!(ProjectionMode::Perspective.view_extent(1.0), None);
+        assert!(mode.is_orthographic() && !ProjectionMode::Perspective.is_orthographic());
+    }
+
+    /// The fit mode toggles back to perspective like the plain one, and survives a scene round trip.
+    #[test]
+    fn orthographic_fit_toggles_and_serializes() {
+        let mut cam = Camera::new(1.0, 0.1, 100.0, 0.0, 0.0, true);
+        cam.projection = ProjectionMode::OrthographicFit { width: 4.0, height: 3.0 };
+        let text = ron::to_string(&cam).unwrap();
+        assert_eq!(ron::from_str::<Camera>(&text).unwrap(), cam);
+        cam.toggle_projection(5.0);
+        assert_eq!(cam.projection, ProjectionMode::Perspective);
     }
 }

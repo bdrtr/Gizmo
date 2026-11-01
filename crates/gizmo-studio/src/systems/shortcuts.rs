@@ -235,10 +235,7 @@ pub fn handle_editor_shortcuts(
         let mut cam_mut = world.borrow_mut::<gizmo::renderer::components::Camera>();
         if let Some(mut cam) = cam_mut.get_mut(state.editor_camera) {
             cam.toggle_projection(editor_state.prefs.camera_focus_distance.max(1.0));
-            let mode = match cam.projection {
-                gizmo::renderer::components::ProjectionMode::Orthographic { .. } => "Ortografik",
-                _ => "Perspektif",
-            };
+            let mode = if cam.projection.is_orthographic() { "Ortografik" } else { "Perspektif" };
             editor_state.status_message = format!("📐 Kamera: {} (Numpad5)", mode);
         }
     }
