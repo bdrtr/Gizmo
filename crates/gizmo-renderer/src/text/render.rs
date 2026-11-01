@@ -357,9 +357,10 @@ impl TextRenderer {
         screen_anchor: Option<Vec2>,
         screen_size: Vec2,
     ) {
-        let Some(layout) = self.library.layout_wrapped(text.font, text.size_px, &text.content, text.max_width) else {
+        let Some(mut layout) = self.library.layout_wrapped(text.font, text.size_px, &text.content, text.max_width) else {
             return;
         };
+        layout.align(text.align.factor());
         // Split so the rasteriser is the only part of this that needs a GPU: `place` is pure
         // arithmetic over glyph entries, and it is where the anchor, the y flip and the pixels →
         // NDC conversion live — i.e. where the bugs are. The closure is what keeps the atlas
@@ -563,10 +564,11 @@ mod tests {
     /// One glyph on the baseline at pen 0, in a 10-wide, 20-tall box.
     fn one_glyph() -> TextLayout {
         TextLayout {
-            glyphs: vec![PositionedGlyph { glyph: 1, x: 0.0, y: 0.0 }],
+            glyphs: vec![PositionedGlyph { glyph: 1, x: 0.0, y: 0.0, line: 0 }],
             width: 10.0,
             height: 20.0,
             lines: 1,
+            line_widths: vec![10.0],
         }
     }
 
@@ -684,13 +686,14 @@ mod tests {
     fn a_missing_atlas_entry_drops_that_glyph_and_no_other() {
         let layout = TextLayout {
             glyphs: vec![
-                PositionedGlyph { glyph: 1, x: 0.0, y: 0.0 },
-                PositionedGlyph { glyph: 2, x: 10.0, y: 0.0 },
-                PositionedGlyph { glyph: 3, x: 20.0, y: 0.0 },
+                PositionedGlyph { glyph: 1, x: 0.0, y: 0.0, line: 0 },
+                PositionedGlyph { glyph: 2, x: 10.0, y: 0.0, line: 0 },
+                PositionedGlyph { glyph: 3, x: 20.0, y: 0.0, line: 0 },
             ],
             width: 30.0,
             height: 20.0,
             lines: 1,
+            line_widths: vec![30.0],
         };
         let t = text(TextSpace::Screen { position: Vec2::ZERO }, TextAnchor::TopLeft);
         let (mut w, mut s) = (Vec::new(), Vec::new());

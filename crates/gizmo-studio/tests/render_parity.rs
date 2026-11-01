@@ -886,6 +886,7 @@ fn every_capability_neither_path_names_is_accounted_for() {
         // ── A member of a type the inventory does judge ────────────────────────────────────
         ("LodLevel", "one level inside `LodGroup`, which both paths know."),
         ("ProjectionMode", "the enum behind `Camera::projection`, which both paths know."),
+        ("TextAlign", "how a multi-line `Text`'s lines line up — applied inside `gizmo_renderer::text::render` (`TextLayout::align`), which BOTH paths reach through `record_text`, so neither loop has a reason to name it."),
         ("TextAnchor", "which corner of a `Text`'s box sits on its anchor point — resolved inside `gizmo_renderer::text::render`, which is the code BOTH paths reach through `record_text`. `TextSpace` is the same shape and is named by both anyway, because a draw loop deciding where a label sits is the divergence this file exists to catch and saying so in writing is cheap."),
         ("SpriteAnimation", "advanced by `sprite_animation_system`, which BOTH paths call with `animation_dt` — `both_draw_paths_run_the_same_per_frame_drivers` holds that; it only writes `Sprite::uv_rect`, which the shared `record_sprites` then draws, so neither loop has a reason to name the type."),
         ("SpriteSpace", "where a `Sprite` is drawn — decided inside `gizmo_renderer::sprite::place`, reached by BOTH paths through `record_sprites`; the shared pass asks `needs_world_transform()` rather than matching the `#[non_exhaustive]` enum, so neither loop has a reason to name it."),

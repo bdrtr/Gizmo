@@ -43,6 +43,10 @@ pub struct Text {
     /// In glyph pixels in both spaces, like [`size_px`](Self::size_px): a world label 256 px wide
     /// at 64 px per unit wraps at 4 world units.
     pub max_width: Option<f32>,
+    /// How lines of different widths line up inside the text's box — left (the default), centred
+    /// or right. The box itself is placed by [`anchor`](Self::anchor); this moves lines within
+    /// it, so it matters only for text with more than one line.
+    pub align: TextAlign,
 }
 
 impl Text {
@@ -57,6 +61,7 @@ impl Text {
             anchor: TextAnchor::TopLeft,
             space: TextSpace::Screen { position },
             max_width: None,
+            align: TextAlign::Left,
         }
     }
 
@@ -75,6 +80,7 @@ impl Text {
             anchor: TextAnchor::Center,
             space: TextSpace::World { px_per_unit },
             max_width: None,
+            align: TextAlign::Left,
         }
     }
 
@@ -92,11 +98,44 @@ impl Text {
         self
     }
 
+    /// Replaces the line alignment — see [`align`](Self::align).
+    #[must_use]
+    pub fn with_align(mut self, align: TextAlign) -> Self {
+        self.align = align;
+        self
+    }
+
     /// Wraps lines at `max_width` glyph pixels — see [`max_width`](Self::max_width).
     #[must_use]
     pub fn with_max_width(mut self, max_width: f32) -> Self {
         self.max_width = Some(max_width);
         self
+    }
+}
+
+/// How the lines of a multi-line [`Text`] line up with each other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum TextAlign {
+    /// Flush left — every line starts at the box's left edge.
+    #[default]
+    Left,
+    /// Each line centred in the box.
+    Center,
+    /// Flush right.
+    Right,
+}
+
+impl TextAlign {
+    /// How far across the slack each line moves: 0 left, 0.5 centre, 1 right — the argument
+    /// [`TextLayout::align`](crate::text::TextLayout::align) takes.
+    #[must_use]
+    pub fn factor(self) -> f32 {
+        match self {
+            Self::Left => 0.0,
+            Self::Center => 0.5,
+            Self::Right => 1.0,
+        }
     }
 }
 

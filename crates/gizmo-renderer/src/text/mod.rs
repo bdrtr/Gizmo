@@ -134,6 +134,8 @@ pub struct PositionedGlyph {
     pub x: f32,
     /// Baseline of the line this glyph is on.
     pub y: f32,
+    /// Which line (0-based) the glyph is on — what [`TextLayout::align`] shifts it by.
+    pub line: u32,
 }
 
 /// What [`layout`] produced: the glyphs, and the box they occupy.
@@ -148,8 +150,26 @@ pub struct TextLayout {
     pub width: f32,
     /// `lines * line_height`.
     pub height: f32,
-    /// How many lines `\n` produced. Always at least 1, including for the empty string.
+    /// How many lines there are — from `\n` and from wrapping. Always at least 1, including for
+    /// the empty string.
     pub lines: u32,
+    /// Each line's own width, in order: `line_widths.len() == lines`. `width` is the largest.
+    pub line_widths: Vec<f32>,
+}
+
+impl TextLayout {
+    /// Moves each line across the box: `0.0` keeps lines flush left (as laid out), `0.5` centres
+    /// each one in the widest line's width, `1.0` makes them flush right. A one-line text does
+    /// not move — its line *is* the box.
+    pub fn align(&mut self, factor: f32) {
+        if factor == 0.0 || !factor.is_finite() {
+            return;
+        }
+        for g in &mut self.glyphs {
+            let line_width = self.line_widths.get(g.line as usize).copied().unwrap_or(self.width);
+            g.x += (self.width - line_width) * factor;
+        }
+    }
 }
 
 /// The loaded faces.
@@ -332,12 +352,13 @@ fn layout(face: &ab_glyph::FontVec, px: f32, text: &str, max_width: Option<f32>)
             // advances the pen and rasterises to nothing. Keeping it out of `glyphs` is what lets
             // every consumer treat the list as "things to draw".
             if face.outline(id).is_some() {
-                out.glyphs.push(PositionedGlyph { glyph: id.0, x: pen, y: baseline });
+                out.glyphs.push(PositionedGlyph { glyph: id.0, x: pen, y: baseline, line: line_index as u32 });
             }
             pen += scaled.h_advance(id);
             previous = Some(id);
         }
         widest = widest.max(pen);
+        out.line_widths.push(pen);
         out.lines = u32::try_from(line_index + 1).unwrap_or(u32::MAX);
     }
     out.width = widest;
@@ -830,6 +851,27 @@ mod tests {
         assert!(cut.width <= 2.5 * adv);
         let tiny = lib.layout_wrapped(id, PX, "AAA", Some(1.0)).expect("layout");
         assert_eq!((tiny.lines, tiny.glyphs.len()), (3, 3), "one character per line, none lost");
+    }
+
+    /// Centred and right-aligned lines sit in the widest line's box; left is what layout gives.
+    #[test]
+    fn align_moves_each_line_across_the_widest_one() {
+        let (lib, id) = library();
+        let adv = ADVANCE as f32;
+        let base = lib.layout(id, PX, "AAA\nA").expect("layout");
+        assert_eq!(base.line_widths.len(), 2);
+        assert!((base.line_widths[0] - 3.0 * adv).abs() < 0.5 && (base.line_widths[1] - adv).abs() < 0.5);
+        let short_line_x = |l: &TextLayout| l.glyphs.iter().find(|g| g.line == 1).unwrap().x;
+
+        let mut centre = base.clone();
+        centre.align(0.5);
+        assert!((short_line_x(&centre) - adv).abs() < 0.5, "centred: one advance in, got {}", short_line_x(&centre));
+        let mut right = base.clone();
+        right.align(1.0);
+        assert!((short_line_x(&right) - 2.0 * adv).abs() < 0.5);
+        // The widest line never moves, and neither does the box.
+        assert_eq!(right.glyphs[0].x, base.glyphs[0].x);
+        assert_eq!((right.width, right.height), (base.width, base.height));
     }
 
     #[test]

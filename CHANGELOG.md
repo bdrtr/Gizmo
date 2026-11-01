@@ -55,6 +55,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is cut between characters rather than overflowing. In glyph pixels in both spaces. `None`, the
   default, keeps the old behaviour of breaking only at `\n`. A `gizmo-ui` `Node` does not wrap its
   text on its own — `gizmo-ui` never measures text, so its box can be narrower than any word.
+  Lines of a multi-line text can be aligned: `Text::align` / `with_align(TextAlign::Center)`
+  (`Left` default, `Right`), backed by `TextLayout::align` and `TextLayout::line_widths`; the
+  `text` demo shows a wrapped, centred paragraph.
 
 - **`RigidBody::planar_xy()` — the 2-D setup in one call.** Locks Z translation and X/Y rotation,
   the three lines `kule_yikici` and `hill_climb` (twice) wrote by hand; all three use it now.

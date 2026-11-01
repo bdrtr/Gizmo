@@ -26,8 +26,9 @@
 //! | dünya uzayı (kameraya dönük dörtgen) | var, **derinlik testli** |
 //! | dokuz çapa | var |
 //! | `\n` ile satır | var |
+//! | genişlikte sarma (`with_max_width`) ve satır hizası (`with_align`) | var — soldaki paragraf |
 //! | kerning | fontun `kern` tablosundan |
-//! | sarma, şekillendirme (shaping), iki yönlü metin, font yedeklemesi | **yok** |
+//! | şekillendirme (shaping), iki yönlü metin, font yedeklemesi | **yok** |
 //!
 //! Ölçülen: aynı sahne metinli ve metinsiz 16 384 pikselin **869**'unda farklı; sol-üste
 //! yerleştirilen yazı sol-üst çeyrekte 869, sağ-alt çeyrekte **0** piksel değiştiriyor; ve önüne
@@ -37,7 +38,7 @@
 //!   * **Sağ-tık + fare** — bak · **WASDQE** — kamera
 
 use gizmo::prelude::*;
-use gizmo::renderer::components::{Text, TextAnchor};
+use gizmo::renderer::components::{Text, TextAlign, TextAnchor};
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
 
 /// Font aranacak bilinen yollar. Bulunan ilki kullanılır.
@@ -125,6 +126,17 @@ fn main() {
                 .with_anchor(TextAnchor::TopCenter)
                 .with_color(Vec4::new(1.0, 0.95, 0.7, 1.0)),));
             layout.0.push((e.id(), Vec2::new(0.5, 0.72), 0.0));
+
+            // Solda: 300 piksellik bir sütuna sarılan, satırları ortalanmış bir paragraf. Satırlar
+            // boşluklarda kırılıyor; sığmayan tek bir kelime karakter arasından bölünüyor.
+            let paragraph = "Bu paragraf 300 piksel genisliginde bir sutuna sariliyor ve her satiri \
+                             ortalaniyor. Cokuzunbirkelimesigmayincakarakterarasindanboluniyor.";
+            let e = scene.world.spawn_bundle((Text::screen(paragraph, font, 20.0, Vec2::ZERO)
+                .with_anchor(TextAnchor::CenterLeft)
+                .with_max_width(300.0)
+                .with_align(TextAlign::Center)
+                .with_color(Vec4::new(0.75, 0.9, 1.0, 1.0)),));
+            layout.0.push((e.id(), Vec2::new(0.0, 0.32), MARGIN));
 
             // ── Boyut taraması ───────────────────────────────────────────────────────────
             // Aynı dize, artan `size_px`. Atlas HER BOYUTU ayrı raster tutuyor (bkz. `GlyphKey`),
