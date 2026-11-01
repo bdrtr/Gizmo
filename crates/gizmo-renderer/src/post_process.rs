@@ -31,6 +31,9 @@ pub struct PostProcessState {
     /// The composite pass's group 3: the exposure it multiplies by. `None` in the browser, whose
     /// reduced post shader has no such stage. See [`ExposureBinding`].
     pub exposure: Option<ExposureBinding>,
+    /// The composite pass's group 4: the G-buffer's velocity target, for object motion blur.
+    /// `None` in the browser. See [`VelocityBinding`].
+    pub velocity: Option<VelocityBinding>,
     /// The extract pass's output.
     pub bloom_extract_texture_view: wgpu::TextureView,
     /// It as an input to the blur.
@@ -209,6 +212,10 @@ pub fn build_post_process_resources(
     let exposure = Some(build_exposure_binding(device));
     #[cfg(target_arch = "wasm32")]
     let exposure: Option<ExposureBinding> = None;
+    #[cfg(not(target_arch = "wasm32"))]
+    let velocity = Some(build_velocity_binding(device));
+    #[cfg(target_arch = "wasm32")]
+    let velocity: Option<VelocityBinding> = None;
 
     let (bloom_extract_pipeline, bloom_blur_pipeline, composite_pipeline) = build_post_pipelines(
         device,
@@ -218,6 +225,7 @@ pub fn build_post_process_resources(
         &composite_bloom_bind_group_layout,
         &post_params_bind_group_layout,
         exposure.as_ref().map(|e| &e.layout),
+        velocity.as_ref().map(|v| &v.layout),
         surface_format,
     );
 
@@ -266,6 +274,7 @@ pub fn build_post_process_resources(
         blur_h_bind_group,
         blur_v_bind_group,
         exposure,
+        velocity,
     }
 }
 
@@ -283,6 +292,63 @@ pub struct ExposureBinding {
     pub neutral_buffer: wgpu::Buffer,
     /// Group 3 bound to [`neutral_buffer`](Self::neutral_buffer).
     pub neutral_bind_group: wgpu::BindGroup,
+}
+
+/// The composite pass's **velocity input** — group 4, one texture: the G-buffer's per-pixel motion
+/// (`DeferredState::velocity_view`, see [`crate::motion`]), which camera *and object* motion blur
+/// read. Built per frame around the deferred state's view; a renderer without one binds
+/// [`placeholder_bind_group`](Self::placeholder_bind_group), a 1×1 zero.
+#[non_exhaustive]
+pub struct VelocityBinding {
+    /// The group-4 layout.
+    pub layout: wgpu::BindGroupLayout,
+    /// Group 4 bound to a 1×1 texture of zero velocity.
+    pub placeholder_bind_group: wgpu::BindGroup,
+}
+
+/// The layout of the composite pass's velocity group (see [`VelocityBinding`]).
+pub fn velocity_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("velocity_bind_group_layout"),
+        entries: &[wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                multisampled: false,
+                view_dimension: wgpu::TextureViewDimension::D2,
+                sample_type: wgpu::TextureSampleType::Float { filterable: false },
+            },
+            count: None,
+        }],
+    })
+}
+
+/// Group 4 around `view` — a velocity texture.
+pub fn velocity_bind_group(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, view: &wgpu::TextureView) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("velocity_bind_group"),
+        layout,
+        entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(view) }],
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn build_velocity_binding(device: &wgpu::Device) -> VelocityBinding {
+    let layout = velocity_layout(device);
+    let placeholder = device
+        .create_texture(&wgpu::TextureDescriptor {
+            label: Some("velocity_placeholder"),
+            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: crate::motion::VELOCITY_FORMAT,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        })
+        .create_view(&Default::default());
+    let placeholder_bind_group = velocity_bind_group(device, &layout, &placeholder);
+    VelocityBinding { layout, placeholder_bind_group }
 }
 
 /// The layout of the composite pass's exposure group (see [`ExposureBinding`]).
@@ -327,6 +393,7 @@ fn build_post_pipelines(
     composite_bloom_bgl: &wgpu::BindGroupLayout,
     post_params_bgl: &wgpu::BindGroupLayout,
     exposure_bgl: Option<&wgpu::BindGroupLayout>,
+    velocity_bgl: Option<&wgpu::BindGroupLayout>,
     surface_format: wgpu::TextureFormat,
 ) -> (
     wgpu::RenderPipeline,
@@ -409,7 +476,12 @@ fn build_post_pipelines(
             Some(composite_bloom_bgl),
             Some(post_params_bgl),
             exposure_bgl,
-        ][..if exposure_bgl.is_some() { 4 } else { 3 }],
+            velocity_bgl,
+        ][..match (exposure_bgl, velocity_bgl) {
+            (Some(_), Some(_)) => 5,
+            (Some(_), None) => 4,
+            _ => 3,
+        }],
         immediate_size: 0,
     });
     let composite_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -459,6 +531,7 @@ pub fn rebuild_post_pipelines(renderer: &mut crate::Renderer, post_shader: &wgpu
         &renderer.post.composite_bloom_bind_group_layout,
         &renderer.post.post_params_bind_group_layout,
         renderer.post.exposure.as_ref().map(|e| &e.layout),
+        renderer.post.velocity.as_ref().map(|v| &v.layout),
         renderer.config.format,
     );
     renderer.post.bloom_extract_pipeline = e;
@@ -693,6 +766,12 @@ pub fn run_post_processing(
         pass.draw(0..3, 0..1);
     }
     // Pass 3: Composite + Tone Mapping
+    // Group 4, the G-buffer's velocity, for motion blur: around this frame's target when there is
+    // a deferred state, else the 1×1 zero.
+    let velocity_group = renderer.post.velocity.as_ref().map(|v| match renderer.deferred.as_ref() {
+        Some(def) => velocity_bind_group(&renderer.device, &v.layout, &def.velocity_view),
+        None => v.placeholder_bind_group.clone(),
+    });
     {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Composite + Tone Mapping Pass"),
@@ -729,6 +808,9 @@ pub fn run_post_processing(
                 .map(|a| a.composite_bind_group())
                 .unwrap_or(&exposure.neutral_bind_group);
             pass.set_bind_group(3, group, &[]);
+        }
+        if let Some(group) = velocity_group.as_ref() {
+            pass.set_bind_group(4, group, &[]);
         }
         pass.draw(0..3, 0..1);
     }

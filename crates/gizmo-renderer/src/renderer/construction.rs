@@ -627,6 +627,7 @@ impl Renderer {
             post_params_bind_group_layout: post_res.post_params_bind_group_layout,
             post_params_bind_group: post_res.post_params_bind_group,
             exposure: post_res.exposure,
+            velocity: post_res.velocity,
         };
 
         // Built, not enabled: an authored exposure stays authored until the scene asks.

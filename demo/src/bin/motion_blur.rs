@@ -9,7 +9,10 @@
 //! Kameranın `PostProcess` bileşeninde deklanşör oranı (0 = kapalı, 0,5 = 180°). Composite pası
 //! her pikselin derinliğinden geçen karedeki ekran konumunu buluyor (`reproject` matrisi:
 //! önceki × şimdiki⁻¹, ikisi de titremesiz) ve HDR kareyi o yol boyunca 12 örnekle ortalıyor.
-//! Yalnız **kameranın** hareketi: duran bir görüşte dönen nesne bulanmıyor (aşağıda neden).
+//! Nesne hareketi de (aynı gün): G-tamponu artık her pikselin hızını yazıyor
+//! (`gizmo_renderer::motion`), ve bulanıklık geometride onu okuyor — `GIZMO_BLUR_SPIN=1` ile dönen
+//! nesneler duran kamerada da bulanıyor. Aşağıdaki "nesne tarafı veri katmanında kapalı" notu o
+//! güne kadardı.
 //! `GIZMO_BLUR_SHUTTER=0.5` ile açılıyor.
 //!
 //! **Ve bu demonun kamerası 2026-11-01'e kadar hiç hareket etmiyordu.** `drive` kamerayı

@@ -432,7 +432,7 @@ the walk is already in the tree.
 
 Measured in `occlusion_culling`.
 
-### A7c. Camera motion blur and auto exposure **CLOSED 2026-11-01**; object motion blur open
+### A7c. Motion blur (camera and object) and auto exposure — **CLOSED 2026-11-01**
 
 **Camera motion blur: `PostProcess::motion_blur`** (shutter fraction, 0 = off, the default). The
 composite pass reprojects each pixel through `previous_view_proj · inverse(view_proj)` (both
@@ -454,7 +454,17 @@ cubes, one moved 0.3 m between frames under a still camera: the still one reads 
 one 0.047 of the screen (= its 6 px at 20 px a metre); the first frame is zero everywhere. Three
 mutations red. That took the G-buffer to 36 bytes per sample — WebGPU counts `Rgba8UnormSrgb` as 8,
 so it was already at the default 32, not at the 28 its shader comment said — and native devices
-now ask for up to 64. The blur does not read the target yet.
+now ask for up to 64.
+
+**Object motion blur, same day.** The composite reads that target (group 4, native): geometry blurs
+along its G-buffer velocity — object and camera motion — and the sky along the camera's reprojection
+as before. Velocity exists only where an object *is*, so the background it just uncovered would read
+zero and the smear would stay inside the silhouette; a neighbour-max search (McGuire et al. 2012,
+without the tiles: eight taps along both axes out to the blur's reach) carries it out. Measured under
+a still camera, one cube moved 0.3 m: its strip's edge energy 1 122 066 shut, 313 386 open (700 320
+without the neighbour max), its trail reaching the background beside it (12 of 72 pixels without),
+and the still cube's strip byte-identical. Transparent (forward) objects are not in the G-buffer and
+take the velocity of what is behind them.
 
 **Auto exposure is built in** (`renderer.auto_exposure`, off by default, native). The loop this entry
 asked for, closed without the CPU: `LuminanceReduce` measures, one compute invocation moves the

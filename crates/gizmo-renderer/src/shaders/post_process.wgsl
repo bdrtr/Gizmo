@@ -55,13 +55,47 @@ fn camera_motion_blur(uv: vec2<f32>, base: vec3<f32>, depth: f32) -> vec3<f32> {
     if (shutter <= 0.0) {
         return base;
     }
-    let ndc = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
-    let prev_clip = params.reproject * vec4<f32>(ndc, depth, 1.0);
-    if (prev_clip.w <= 1e-6) {
-        return base;
+    var velocity = vec2<f32>(0.0);
+    // **Neighbour max** (after McGuire et al. 2012, without the tiles): velocity exists only where a
+    // moving object IS, so the background it just uncovered — where its trail belongs — reads zero,
+    // and the smear would stay inside the silhouette. Look along both axes as far as a blur can
+    // reach and take the fastest motion found: a pixel next to a moving object blurs with it.
+    let dims = vec2<f32>(textureDimensions(t_velocity));
+    let reach = params.motion.y;
+    var neighbour = vec2<f32>(0.0);
+    for (var k = -2; k <= 2; k = k + 1) {
+        if (k == 0) { continue; }
+        let step = f32(k) * 0.5 * reach;
+        for (var axis = 0; axis < 2; axis = axis + 1) {
+            let offset = select(vec2<f32>(0.0, step), vec2<f32>(step, 0.0), axis == 0);
+            let p = vec2<i32>(clamp((uv + offset) * dims, vec2<f32>(0.0), dims - 1.0));
+            let v = textureLoad(t_velocity, p, 0).xy;
+            if (dot(v, v) > dot(neighbour, neighbour)) {
+                neighbour = v;
+            }
+        }
     }
-    let prev_ndc = prev_clip.xy / prev_clip.w;
-    var velocity = (ndc - prev_ndc) * vec2<f32>(0.5, -0.5) * shutter;
+    if (depth < 1.0) {
+        // Geometry: the G-buffer's velocity — object motion as well as the camera's.
+        let pixel = vec2<i32>(clamp(uv * dims, vec2<f32>(0.0), dims - 1.0));
+        velocity = textureLoad(t_velocity, pixel, 0).xy;
+        if (dot(neighbour, neighbour) > dot(velocity, velocity)) {
+            velocity = neighbour;
+        }
+        velocity = velocity * shutter;
+    } else if (dot(neighbour, neighbour) > 0.0) {
+        // Sky right beside moving geometry: its trail.
+        velocity = neighbour * shutter;
+    } else {
+        // Sky: nothing in the G-buffer, so the camera's own reprojection.
+        let ndc = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+        let prev_clip = params.reproject * vec4<f32>(ndc, depth, 1.0);
+        if (prev_clip.w <= 1e-6) {
+            return base;
+        }
+        let prev_ndc = prev_clip.xy / prev_clip.w;
+        velocity = (ndc - prev_ndc) * vec2<f32>(0.5, -0.5) * shutter;
+    }
     let len = length(velocity);
     let max_len = params.motion.y;
     if (len > max_len) {
@@ -86,6 +120,11 @@ var<uniform> params: PostProcessParams;
 // off — so the product below is bit-identical then. On top of `params.exposure`, the camera's.
 @group(3) @binding(0)
 var<storage, read> auto_exposure: array<f32>;
+
+// The G-buffer's per-pixel motion since last frame, in screen UV (`crate::motion`): object and
+// camera motion together, zero where the G-buffer drew nothing (the sky).
+@group(4) @binding(0)
+var t_velocity: texture_2d<f32>;
 
 // Düzgün 2B hash (Dave Hoskins). Eski film-grain `fract(sin(dot(uv,K))*M)` düz UV'de
 // sin'in ekstremumlarında donup STATİK DİAGONAL BANTLAR üretiyordu; bu, piksel

@@ -5090,6 +5090,96 @@ mod golden_render_tests {
         });
     }
 
+    /// **Object motion blur.** Under a still camera, one cube slides 0.3 m between two frames and
+    /// one stays. With the shutter open the moving cube's edges smear — its strip of the frame loses
+    /// edge energy against the same frame with the shutter shut — and the still cube's strip is
+    /// identical to the shutter shut, to the byte. Camera-only blur (before the G-buffer had a
+    /// velocity) left the moving cube as sharp as the still one.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn object_motion_blur_smears_what_moved_and_nothing_else() {
+        use crate::renderer::components::PostProcess;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        async fn second_frame(shutter: f32) -> Vec<u8> {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(
+                &renderer.device,
+                &renderer.queue,
+                &renderer.scene.texture_bind_group_layout,
+            );
+            let mut cube = |x: f32| {
+                let e = world.spawn();
+                world.add_component(e, Transform::new(Vec3::new(x, 0.0, 0.0)).with_scale(Vec3::splat(0.5)));
+                world.add_component(e, GlobalTransform::default());
+                world.add_component(e, AssetManager::create_cube(&renderer.device));
+                world.add_component(e, Material::new(tex.clone()).with_pbr(Vec4::new(0.9, 0.3, 0.2, 1.0), 0.6, 0.0));
+                world.add_component(e, MeshRenderer::new());
+                e
+            };
+            let _still = cube(-1.2);
+            let moving = cube(1.0);
+            world.spawn_bundle(DirectionalLightBundle { intensity: 3.0, ..Default::default() });
+            let cam = world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.0, 0.0, 6.0),
+                yaw: -std::f32::consts::FRAC_PI_2,
+                primary: true,
+                ..Default::default()
+            });
+            let mut grade = PostProcess::default();
+            grade.film_grain = 0.0;
+            grade.motion_blur = shutter;
+            world.add_component(cam, grade);
+            render_world(&mut renderer, &mut world).await;
+            if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(moving.id()) {
+                t.position.x += 0.3;
+            }
+            render_world(&mut renderer, &mut world).await
+        }
+        // Squared horizontal gradient over columns x0..x1 — how steep the edges there are.
+        fn edge(frame: &[u8], x0: usize, x1: usize) -> u64 {
+            let mut sum = 0u64;
+            for y in 0..128usize {
+                for x in x0.max(1)..x1 {
+                    let (a, b) = ((y * 128 + x - 1) * 4, (y * 128 + x) * 4);
+                    sum += (0..3).map(|c| (frame[a + c].abs_diff(frame[b + c]) as u64).pow(2)).sum::<u64>();
+                }
+            }
+            sum
+        }
+        pollster::block_on(async {
+            let (shut, open) = (second_frame(0.0).await, second_frame(1.0).await);
+            // The still cube spans about pixels 32–51, the moving one 78–98 (see the velocity test).
+            let still = |f: &[u8]| -> Vec<u8> { (0..128usize).flat_map(|y| f[(y * 128 + 26) * 4..(y * 128 + 58) * 4].to_vec()).collect() };
+            assert_eq!(still(&shut), still(&open), "the still cube's strip changed with the shutter open");
+            let (sharp, smeared) = (edge(&shut, 70, 110), edge(&open, 70, 110));
+            // Measured: 1 122 066 shut, 313 386 open. Without the neighbour-max search the smear
+            // stays inside the silhouette (700 320) and the next assertion fails.
+            //
+            // The trail leaves the silhouette: background just right of the moving cube (columns
+            // 99–104, its rows) changes with the shutter open. Velocity exists only where the cube
+            // is now, so only the neighbour-max search can carry it out there.
+            let trail = (58..70usize)
+                .flat_map(|y| (99..105usize).map(move |x| (y * 128 + x) * 4))
+                .filter(|&i| (0..3).any(|c| shut[i + c].abs_diff(open[i + c]) > 4))
+                .count();
+            assert!(trail >= 20, "only {trail} of 72 background pixels beside the moving cube show its trail");
+            assert!(
+                (smeared as f64) < sharp as f64 * 0.8,
+                "the moving cube keeps edge energy {smeared} with the shutter open, {sharp} shut — it is not blurred",
+            );
+        });
+    }
+
     /// What a split-screen frame does once, it must do once: the HUD is drawn a single time over
     /// the whole target (drawn per view, a half-transparent sprite is laid over itself and comes
     /// out brighter), and the frame's animation advances by one `dt` however many cameras draw.

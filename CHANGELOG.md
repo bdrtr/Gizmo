@@ -50,6 +50,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Object motion blur.** `PostProcess::motion_blur` now blurs moving objects too, not only camera
+  motion: the composite reads the G-buffer's velocity (group 4 on native, `VelocityBinding`) for
+  geometry, with a neighbour-max search so a moving object's trail reaches the background it just
+  uncovered; the sky keeps the camera's reprojection. Under a still camera a cube moved 0.3 m loses
+  72 % of its edge energy while a still cube's pixels do not change. Transparent objects are not in
+  the G-buffer and blur with what is behind them.
+
 - **Per-object velocity in the G-buffer: `gizmo_renderer::motion`, `Renderer::motion_history`,
   `DeferredState::velocity_view`.** Each entity's previous model matrix is kept and uploaded beside
   the instance buffer; the G-buffer pass writes RT4 `velocity` (`Rg16Float`, screen-UV motion, object
