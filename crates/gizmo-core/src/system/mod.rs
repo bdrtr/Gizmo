@@ -381,6 +381,56 @@ mod tests {
         }
     }
 
+    /// A system may return `Result<(), E>` and use `?`: an `Err` goes to the world's
+    /// `SystemErrorHandler`, named after the system, and the system runs again next frame; `Ok`
+    /// reaches no handler. With no handler inserted the default logs instead of panicking.
+    #[test]
+    fn a_system_may_return_a_result() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static ERRORS: AtomicUsize = AtomicUsize::new(0);
+        static LAST: Mutex<String> = Mutex::new(String::new());
+        fn count(system: &str, error: &dyn std::fmt::Display) {
+            ERRORS.fetch_add(1, Ordering::SeqCst);
+            *LAST.lock().unwrap() = format!("{system}: {error}");
+        }
+
+        struct Budget(i32);
+        #[derive(Debug)]
+        struct Overdrawn(i32);
+        impl std::fmt::Display for Overdrawn {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "overdrawn by {}", self.0)
+            }
+        }
+        fn check(amount: i32) -> Result<(), Overdrawn> {
+            if amount < 0 { Err(Overdrawn(-amount)) } else { Ok(()) }
+        }
+        fn spend(budget: Res<Budget>) -> Result<(), Overdrawn> {
+            check(budget.0)?;
+            Ok(())
+        }
+
+        let mut world = World::new();
+        world.insert_resource(Budget(5));
+        world.insert_resource(SystemErrorHandler(count));
+        let mut schedule = Schedule::new();
+        schedule.add_di_system(spend);
+        schedule.add_di_system(|| -> Result<(), String> { Ok(()) });
+        schedule.run(&mut world, 0.016);
+        assert_eq!(ERRORS.load(Ordering::SeqCst), 0, "Ok reaches no handler");
+
+        world.insert_resource(Budget(-3));
+        schedule.run(&mut world, 0.016);
+        schedule.run(&mut world, 0.016);
+        assert_eq!(ERRORS.load(Ordering::SeqCst), 2, "an Err each frame — the system keeps running");
+        let last = LAST.lock().unwrap().clone();
+        assert!(last.contains("spend") && last.ends_with("overdrawn by 3"), "named and described: {last}");
+
+        world.remove_resource::<SystemErrorHandler>();
+        schedule.run(&mut world, 0.016);
+        assert_eq!(ERRORS.load(Ordering::SeqCst), 2, "the default handler logs; it does not call ours");
+    }
+
     #[test]
     fn test_schedule_access_info_compatibility() {
         let mut info1 = AccessInfo::new();

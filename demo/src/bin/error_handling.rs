@@ -8,9 +8,9 @@
 //!
 //! | yetenek | Gizmo |
 //! |---------|-------|
-//! | sistemin `Result` döndürebilmesi | **hayır** — `IntoSystem` yalnız `()` döndüren `FnMut` için |
-//! | sistemde `?` operatörü | **hayır** |
-//! | genel hata işleyici | **yok** |
+//! | sistemin `Result` döndürebilmesi | **evet, 2026-11-02'den beri** — `Result<(), E: Display>` |
+//! | sistemde `?` operatörü | **evet** |
+//! | genel hata işleyici | **var** — `SystemErrorHandler` kaynağı; yoksa `tracing::error!` |
 //! | sistem başına hata politikası | **yok** |
 //! | eksik kaynak | **panik** — uygulama duruyor |
 //! | eksik kaynağa dayanıklılık | **`Option<Res<T>>`** — 2026-08-23'te eklendi, aşağıda ölçüldü |
@@ -64,8 +64,10 @@
 //!    çalışmıyor — "eksikse şunu yap" yazılamıyor, ancak "eksikse hiç girme" yazılabiliyor.
 //! 2. **Beklenmeyen yokluk** -> hiçbir şey yapmayın; motor zaten paniklesin. Sessiz atlamak
 //!    hatayı gizler.
-//! 3. **İş mantığı hatası** -> bir kaynağa yazıp başka bir sistemde okuyun. Demo bunu yapıyor:
-//!    `ErrorLog` kaynağı, hataların toplandığı yer.
+//! 3. **İş mantığı hatası** -> sistem `Result` döndürsün, `?` kullansın; `Err` dünyanın
+//!    `SystemErrorHandler`'ına gider (varsayılan: sistemin adıyla bir `tracing::error!` satırı) ve
+//!    sistem sonraki karede yine çalışır. Bu demo, o yokken yazıldı ve hataları bir kaynağa
+//!    (`ErrorLog`) yazan eski yolu gösteriyor — ekranda toplamak istiyorsanız hâlâ geçerli bir yol.
 //!
 //! ## Kontroller
 //!   * **H** — iş mantığı hatası üret (kaynağa yazılır, uygulama durmaz)
@@ -175,7 +177,7 @@ fn main() {
                     gizmo::egui::Frame::popup(ui.style()).show(ui, |ui| {
                         ui.set_min_width(500.0);
                         ui.heading("Hata yönetimi");
-                        ui.label("sistem Result DÖNDÜREMİYOR · ? yok · hata işleyici yok");
+                        ui.label("sistem Result döndürebilir · ? var · SystemErrorHandler");
                         ui.separator();
                         ui.label("motorun politikası, ölçüldü:");
                         ui.monospace(format!("  {}", r.fatal_probe));

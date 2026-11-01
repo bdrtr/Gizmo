@@ -23,22 +23,66 @@ pub trait IntoSystem<Params> {
     fn into_system(self) -> Box<dyn System>;
 }
 
+/// What a system function may return: `()`, or `Result<(), E>` for any `E: Display` — so a
+/// system can use `?`.
+///
+/// An `Err` does not stop the frame or the system; it is handed to the world's
+/// [`SystemErrorHandler`] (by default a `tracing::error!` naming the system), and the system runs
+/// again next frame. A panic is still a panic.
+pub trait SystemOutput {
+    /// Deals with this run's outcome; `system` is the system's type name.
+    fn handle(self, world: &World, system: &'static str);
+}
+
+impl SystemOutput for () {
+    fn handle(self, _world: &World, _system: &'static str) {}
+}
+
+impl<E: std::fmt::Display> SystemOutput for Result<(), E> {
+    fn handle(self, world: &World, system: &'static str) {
+        if let Err(error) = self {
+            let handler = world.get_resource::<SystemErrorHandler>().map(|h| h.0).unwrap_or(log_system_error);
+            handler(system, &error);
+        }
+    }
+}
+
+/// Where a system's `Err` goes. Insert one as a resource to replace the default — which logs it
+/// with `tracing::error!` — with, say, a counter, a panic in tests, or an in-game console line.
+///
+/// A plain `fn` rather than a closure: it is read, unsynchronised, by systems running in
+/// parallel, and a function pointer has no state to race on.
+#[derive(Clone, Copy)]
+pub struct SystemErrorHandler(pub fn(system: &str, error: &dyn std::fmt::Display));
+
+impl Default for SystemErrorHandler {
+    fn default() -> Self {
+        Self(log_system_error)
+    }
+}
+
+/// The default [`SystemErrorHandler`]: one `tracing::error!` line with the system and the error.
+pub fn log_system_error(system: &str, error: &dyn std::fmt::Display) {
+    tracing::error!(system, %error, "[ECS] system returned an error");
+}
+
 // 0 Parametre
-impl<F> IntoSystem<()> for F
+impl<F, Out> IntoSystem<()> for F
 where
-    F: FnMut() + Send + Sync + 'static,
+    F: FnMut() -> Out + Send + Sync + 'static,
+    Out: SystemOutput + 'static,
 {
     fn into_system(self) -> Box<dyn System> {
-        struct ZeroParamSystem<F>(F);
-        impl<F: FnMut() + Send + Sync + 'static> System for ZeroParamSystem<F> {
-            fn run(&mut self, _world: &World, _dt: f32) {
-                (self.0)();
+        struct ZeroParamSystem<F, Out>(F, std::marker::PhantomData<fn() -> Out>);
+        impl<F: FnMut() -> Out + Send + Sync + 'static, Out: SystemOutput + 'static> System for ZeroParamSystem<F, Out> {
+            fn run(&mut self, world: &World, _dt: f32) {
+                (self.0)().handle(world, std::any::type_name::<F>());
             }
             fn access_info(&self) -> AccessInfo {
                 AccessInfo::new()
             }
         }
-        Box::new(ZeroParamSystem(self))
+        Box::new(ZeroParamSystem(self, std::marker::PhantomData))
     }
 }
 
@@ -121,24 +165,26 @@ impl<ParamA, SystemA: IntoSystem<ParamA>> SystemExt<ParamA> for SystemA {
 macro_rules! impl_into_system {
     ($($P:ident $s:ident),+) => {
         #[allow(non_snake_case)]
-        impl<F, $($P),+> IntoSystem<($($P,)+)> for F
+        impl<F, Out, $($P),+> IntoSystem<($($P,)+)> for F
         where
-            F: FnMut($($P::Item<'_>),+) + FnMut($($P),+) + Send + Sync + 'static,
+            F: FnMut($($P::Item<'_>),+) -> Out + FnMut($($P),+) -> Out + Send + Sync + 'static,
+            Out: SystemOutput + 'static,
             $($P: SystemParam + 'static,)+
         {
             fn into_system(self) -> Box<dyn System> {
-                struct MultiParamSystem<F, $($P: SystemParam),+> {
+                struct MultiParamSystem<F, Out, $($P: SystemParam),+> {
                     func: F,
                     /// The parameters' own state, one tuple per BUILT system — which is what makes
                     /// `Local<T>` per-system rather than per-type. Created with `Default` here,
                     /// never touched again except by the parameters themselves.
                     state: ($($P::State,)+),
-                    _marker: std::marker::PhantomData<fn() -> ($($P,)+)>,
+                    _marker: std::marker::PhantomData<fn() -> ($($P,)+ Out)>,
                 }
 
-                impl<F, $($P),+> System for MultiParamSystem<F, $($P),+>
+                impl<F, Out, $($P),+> System for MultiParamSystem<F, Out, $($P),+>
                 where
-                    F: FnMut($($P::Item<'_>),+) + FnMut($($P),+) + Send + Sync + 'static,
+                    F: FnMut($($P::Item<'_>),+) -> Out + FnMut($($P),+) -> Out + Send + Sync + 'static,
+                    Out: SystemOutput + 'static,
                     $($P: SystemParam + 'static,)+
                 {
                     fn run(&mut self, world: &World, dt: f32) {
@@ -159,7 +205,7 @@ macro_rules! impl_into_system {
                                 }
                             };
                         )+
-                        (func)($($P),+);
+                        (func)($($P),+).handle(world, std::any::type_name::<F>());
                     }
                     fn access_info(&self) -> AccessInfo {
                         let mut info = AccessInfo::new();
@@ -174,7 +220,7 @@ macro_rules! impl_into_system {
                 // `$P`) aday birden fazla ve nightly bunu belirsiz sayıyor: E0282/E0283, ve
                 // `gizmo-core` nightly'de hiç derlenmiyordu — Miri işi de bu yüzden düşüyordu.
                 // Türleri açıkça yazmak belirsizliği kaldırıyor; sınırlar değişmiyor.
-                Box::new(MultiParamSystem::<F, $($P),+> {
+                Box::new(MultiParamSystem::<F, Out, $($P),+> {
                     func: self,
                     state: Default::default(),
                     _marker: std::marker::PhantomData,

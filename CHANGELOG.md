@@ -64,6 +64,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   bytes per sample, so native devices request `max_color_attachment_bytes_per_sample` up to 64.
   Groundwork for object motion blur; nothing reads the target yet.
 
+- **Systems may return `Result`.** A system function returning `Result<(), E>` (`E: Display`)
+  can use `?`; an `Err` goes to the world's `SystemErrorHandler` resource (a `fn(system, error)`),
+  or by default to a `tracing::error!` naming the system, and the system runs again next frame.
+  `SystemOutput` is the trait behind it; `()` systems are unchanged.
+
 - **System chains: `(a, b, c).chain()`.** `IntoSystemChain` (in the prelude) turns a tuple of 2–8
   systems, bare or configured, into a `SystemChain` that runs them in the listed order: each gets a
   generated label and an `after` on the one before. `Schedule::add_chain`,
