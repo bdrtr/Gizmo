@@ -212,6 +212,9 @@ pub struct Renderer {
     pub previous_view_proj: Option<[[f32; 4]; 4]>,
     /// The captured reflection probe, if the scene has one. See [`crate::reflection`].
     pub reflection_probe: Option<crate::reflection::ReflectionProbeGpu>,
+    /// The model matrix every entity was drawn with this frame and last — the object half of the
+    /// G-buffer's velocity. Advanced once per frame by the game path. See [`crate::motion`].
+    pub motion_history: crate::motion::MotionHistory,
 
     // === GIZMO HATA AYIKLAMA (Debug Lines) ===
     /// The debug line renderer — gizmos, wireframes, physics overlays.

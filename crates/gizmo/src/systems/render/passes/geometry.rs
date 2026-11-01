@@ -29,6 +29,7 @@ pub fn record_deferred_geometry(
         z_pass.set_bind_group(0, renderer.scene.view_bind_group(), &[]);
         z_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
         z_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
+        z_pass.set_bind_group(5, &def.motion.bind_group, &[]);
         // The cull mode is baked into the pipeline, so a double-sided material needs its own.
         // Tracked and set only on change rather than per item: the batches are not sorted by this
         // flag and a scene is overwhelmingly one-sided, so this is a handful of switches at most.
@@ -103,6 +104,17 @@ pub fn record_deferred_geometry(
                         store: wgpu::StoreOp::Store,
                     },
                 }),
+                // RT4: velocity — zero wherever no G-buffer geometry lands (the sky), so the
+                // post pass falls back to the camera's own motion there.
+                Some(wgpu::RenderPassColorAttachment {
+                    view: &def.velocity_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                }),
             ],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                 view: &renderer.depth_texture_view,
@@ -119,6 +131,7 @@ pub fn record_deferred_geometry(
         gbuf_pass.set_bind_group(0, renderer.scene.view_bind_group(), &[]);
         gbuf_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
         gbuf_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
+        gbuf_pass.set_bind_group(5, &def.motion.bind_group, &[]);
         let mut two_sided_bound: Option<bool> = None;
         for item in draw_items {
             if !item.visible_in_camera {

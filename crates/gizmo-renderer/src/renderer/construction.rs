@@ -144,12 +144,7 @@ impl Renderer {
             .request_device(
                 &wgpu::DeviceDescriptor {
                     required_features: wgpu::Features::POLYGON_MODE_LINE,
-                    required_limits: wgpu::Limits {
-                        max_bind_groups: 6,
-                        max_storage_buffers_per_shader_stage: 8,
-                        max_storage_buffer_binding_size: 256 << 20, // 256 MB buffer limit
-                        ..wgpu::Limits::default()
-                    },
+                    required_limits: native_device_limits(&adapter),
                     label: None,
                     experimental_features: wgpu::ExperimentalFeatures::default(),
                     memory_hints: wgpu::MemoryHints::default(),
@@ -367,12 +362,7 @@ impl Renderer {
         adapter
             .request_device(&wgpu::DeviceDescriptor {
                 required_features: wgpu::Features::POLYGON_MODE_LINE,
-                required_limits: wgpu::Limits {
-                    max_bind_groups: 6,
-                    max_storage_buffers_per_shader_stage: 8,
-                    max_storage_buffer_binding_size: 256 << 20,
-                    ..wgpu::Limits::default()
-                },
+                required_limits: native_device_limits(&adapter),
                 label: None,
                 experimental_features: wgpu::ExperimentalFeatures::default(),
                 memory_hints: wgpu::MemoryHints::default(),
@@ -686,6 +676,7 @@ impl Renderer {
             auto_exposure,
             previous_view_proj: None,
             reflection_probe: None,
+            motion_history: Default::default(),
             gpu_particles,
             gpu_physics,
             gpu_fluid,
@@ -730,5 +721,22 @@ impl Renderer {
             // non-fluid scene got a stray mottled ocean drawn over it.
             fluid_enabled: false,
         }
+    }
+}
+
+/// The limits every native renderer device is asked for.
+///
+/// `max_color_attachment_bytes_per_sample` is raised past the default 32 because the G-buffer
+/// pass writes 36 since 2026-11-01: WebGPU's table counts `Rgba8UnormSrgb` as 8, the three
+/// `Rgba16Float` targets 8 each, and the velocity target ([`crate::motion`]) 4. (A comment in
+/// `gbuffer.wgsl` had added it up to 28 and called the budget unspent; it was full.) Desktop
+/// adapters report 64 and more; this asks for what the adapter has, up to 64.
+pub(crate) fn native_device_limits(adapter: &wgpu::Adapter) -> wgpu::Limits {
+    wgpu::Limits {
+        max_bind_groups: 6,
+        max_storage_buffers_per_shader_stage: 8,
+        max_storage_buffer_binding_size: 256 << 20, // 256 MB buffer limit
+        max_color_attachment_bytes_per_sample: adapter.limits().max_color_attachment_bytes_per_sample.clamp(32, 64),
+        ..wgpu::Limits::default()
     }
 }

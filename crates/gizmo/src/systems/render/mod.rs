@@ -456,6 +456,8 @@ fn camera_world_position(world: &World, camera: Option<u32>) -> Vec3 {
 /// The part of a frame that happens **once**, however many cameras then draw it: meshes for
 /// terrains, transforms, materials, animation, bone attachments, the CPU side of GPU physics.
 fn prepare_frame(world: &mut World, renderer: &mut Renderer) {
+    // One step of object-motion history per frame, however many views then draw it.
+    renderer.motion_history.begin_frame();
     // **A terrain is a recipe, and the mesh built from it is what gets drawn.** A loaded scene
     // carries the recipe alone — `Mesh` owns GPU buffers, so no file can hold one — and until
     // 2026-08-19 the only code that performed the conversion was the editor's, driven by a queue
@@ -841,6 +843,11 @@ fn draw_camera_view(
         Some(previous) => Mat4::from_cols_array_2d(&previous) * unjittered_view_proj.inverse(),
         None => Mat4::IDENTITY,
     };
+    // The G-buffer's velocity needs the same pair, before the history moves on.
+    if let Some(def) = renderer.deferred.as_ref() {
+        let now = unjittered_view_proj.to_cols_array_2d();
+        def.motion.set_view_projs(&renderer.queue, now, renderer.previous_view_proj.unwrap_or(now));
+    }
     renderer.previous_view_proj = Some(unjittered_view_proj.to_cols_array_2d());
     let post = crate::renderer::PostProcessUniforms {
         reproject: reproject.to_cols_array_2d(),
@@ -4978,6 +4985,107 @@ mod golden_render_tests {
             assert!(
                 (sphere_mean - point_mean).abs() < point_mean * 0.05,
                 "the frame's mean went from {point_mean:.2} to {sphere_mean:.2} — energy was added, not spread",
+            );
+        });
+    }
+
+    /// **The G-buffer's velocity is object motion as well as camera motion.** Two cubes under a
+    /// still camera; between two frames one slides 0.3 m to the right and the other stays. On the
+    /// second frame the still cube's velocity must be exactly zero and the moving one's must point
+    /// right by about the distance it moved on screen. Before `crate::motion` there was no per-object
+    /// history at all — only the camera's own reprojection — so a moving object under a still camera
+    /// had no velocity anywhere.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn the_velocity_target_records_object_motion_and_nothing_else() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        fn half(bits: u16) -> f32 {
+            let sign = if bits >> 15 == 1 { -1.0 } else { 1.0 };
+            let exp = ((bits >> 10) & 0x1f) as i32;
+            let frac = (bits & 0x3ff) as f32;
+            sign * match exp {
+                0 => frac * 2f32.powi(-24),
+                31 => f32::INFINITY,
+                _ => (1.0 + frac / 1024.0) * 2f32.powi(exp - 15),
+            }
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(
+                &renderer.device,
+                &renderer.queue,
+                &renderer.scene.texture_bind_group_layout,
+            );
+            let mut cube = |x: f32| {
+                let e = world.spawn();
+                world.add_component(e, Transform::new(Vec3::new(x, 0.0, 0.0)).with_scale(Vec3::splat(0.5)));
+                world.add_component(e, GlobalTransform::default());
+                world.add_component(e, AssetManager::create_cube(&renderer.device));
+                world.add_component(e, Material::new(tex.clone()).with_pbr(Vec4::new(0.8, 0.8, 0.8, 1.0), 0.6, 0.0));
+                world.add_component(e, MeshRenderer::new());
+                e
+            };
+            let still = cube(-1.2);
+            let moving = cube(1.0);
+            world.spawn_bundle(DirectionalLightBundle { intensity: 3.0, ..Default::default() });
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.0, 0.0, 6.0),
+                yaw: -std::f32::consts::FRAC_PI_2,
+                primary: true,
+                ..Default::default()
+            });
+            render_world(&mut renderer, &mut world).await;
+            // The first frame has no last frame: every velocity is zero, not a streak from
+            // wherever an unseen entity is assumed to have been.
+            {
+                let tex = &renderer.deferred.as_ref().expect("the deferred path").velocity_tex;
+                let first = read_target(&renderer, tex, 128).await;
+                let moved = first.as_chunks::<2>().0.iter().filter(|h| half(u16::from_le_bytes(**h)) != 0.0).count();
+                assert_eq!(moved, 0, "the first frame has {moved} non-zero velocity components");
+            }
+            if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(moving.id()) {
+                t.position.x += 0.3;
+            }
+            render_world(&mut renderer, &mut world).await;
+            let tex = &renderer.deferred.as_ref().expect("the deferred path").velocity_tex;
+            let bytes = read_target(&renderer, tex, 128).await;
+            let velocity = |x: usize, y: usize| {
+                let i = (y * 128 + x) * 4;
+                (half(u16::from_le_bytes([bytes[i], bytes[i + 1]])), half(u16::from_le_bytes([bytes[i + 2], bytes[i + 3]])))
+            };
+            // Measured placement: the 1 m moving cube spans pixels 78–98 of the 128 (20 px a metre
+            // at its depth), the still one (x = −1.2) around pixels 32–51.
+            let mut still_max = 0.0f32;
+            for y in 58..70 {
+                for x in 36..48 {
+                    let (vx, vy) = velocity(x, y);
+                    still_max = still_max.max(vx.abs()).max(vy.abs());
+                }
+            }
+            let (mut moving_sum, mut n) = (0.0f32, 0.0f32);
+            for y in 58..70 {
+                for x in 82..96 {
+                    moving_sum += velocity(x, y).0;
+                    n += 1.0;
+                }
+            }
+            let moving_mean = moving_sum / n;
+            // 0.3 m at 20 px a metre is 6 px: 6 / 128 = 0.047 of the screen. Measured 0.047.
+            let _ = still;
+            assert_eq!(still_max, 0.0, "a cube that did not move has velocity up to {still_max}");
+            assert!(
+                (0.040..0.055).contains(&moving_mean),
+                "the moving cube's velocity is {moving_mean} of the screen to the right; 0.047 expected",
             );
         });
     }

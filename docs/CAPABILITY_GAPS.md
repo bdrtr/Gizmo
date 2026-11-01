@@ -443,8 +443,18 @@ bit-identical to the shutter closed. Four mutations red. In `motion_blur` it sho
 first: **that demo's camera had never moved** — the simple scene's fly camera overwrote the pose
 `drive` wrote, so the "sixteen times the speed, bit-identical" table below measured a still camera.
 Re-measured with the camera actually orbiting: edge energy 1.000 / 0.994 / 0.964 at 1, 4 and 16
-turns with the shutter at 0.5, and flat with it at 0. Object motion blur still needs per-object
-velocity (below), and nothing of that half changed.
+turns with the shutter at 0.5, and flat with it at 0.
+
+**Object velocity, same day — the data layer this entry said was closed.** `gizmo_renderer::motion`:
+`Renderer::motion_history` keeps each entity's model matrix frame to frame (advanced once per frame,
+so a split screen's second view gets the same answer); the game path uploads it in step with the
+instance buffer as the G-buffer pass's group 5, with both unjittered view-projections; and the
+G-buffer gained RT4, `velocity` (`Rg16Float`, screen-UV motion — object and camera together). Two
+cubes, one moved 0.3 m between frames under a still camera: the still one reads exactly 0, the moved
+one 0.047 of the screen (= its 6 px at 20 px a metre); the first frame is zero everywhere. Three
+mutations red. That took the G-buffer to 36 bytes per sample — WebGPU counts `Rgba8UnormSrgb` as 8,
+so it was already at the default 32, not at the 28 its shader comment said — and native devices
+now ask for up to 64. The blur does not read the target yet.
 
 **Auto exposure is built in** (`renderer.auto_exposure`, off by default, native). The loop this entry
 asked for, closed without the CPU: `LuminanceReduce` measures, one compute invocation moves the

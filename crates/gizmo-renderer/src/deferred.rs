@@ -73,6 +73,13 @@ pub struct DeferredState {
     pub world_tangent_tex: wgpu::Texture,
     /// Its view.
     pub world_tangent_view: wgpu::TextureView,
+    /// RT4: how far each surface moved on screen since last frame, in UV units — object and camera
+    /// motion together. See [`crate::motion`]. `COPY_SRC` so a test can read it.
+    pub velocity_tex: wgpu::Texture,
+    /// Its view.
+    pub velocity_view: wgpu::TextureView,
+    /// Group 5 of the G-buffer pass: last frame's model per instance and both view-projections.
+    pub motion: crate::motion::MotionGpu,
 
     // Geometry pass (writes to 4 MRTs)
     /// The geometry pass, writing all four targets at once.
@@ -155,14 +162,26 @@ impl DeferredState {
             &gbuf_sampler,
         );
 
-        let z_prepass_pipeline =
-            Self::create_z_prepass_pipeline(device, scene, Some(wgpu::Face::Back), "Z-Prepass Pipeline");
+        let motion = crate::motion::MotionGpu::new(device, 1024);
+        let z_prepass_pipeline = Self::create_z_prepass_pipeline(
+            device,
+            scene,
+            &motion.layout,
+            Some(wgpu::Face::Back),
+            "Z-Prepass Pipeline",
+        );
         let z_prepass_double_sided_pipeline =
-            Self::create_z_prepass_pipeline(device, scene, None, "Z-Prepass TwoSided Pipeline");
-        let gbuffer_pipeline =
-            Self::create_gbuffer_pipeline(device, scene, Some(wgpu::Face::Back), "GBuffer Pipeline");
+            Self::create_z_prepass_pipeline(device, scene, &motion.layout, None, "Z-Prepass TwoSided Pipeline");
+        let gbuffer_pipeline = Self::create_gbuffer_pipeline(
+            device,
+            scene,
+            &motion.layout,
+            Some(wgpu::Face::Back),
+            "GBuffer Pipeline",
+        );
         let gbuffer_double_sided_pipeline =
-            Self::create_gbuffer_pipeline(device, scene, None, "GBuffer TwoSided Pipeline");
+            Self::create_gbuffer_pipeline(device, scene, &motion.layout, None, "GBuffer TwoSided Pipeline");
+        let (velocity_tex, velocity_view) = Self::create_velocity_texture(device, width, height);
         let irradiance = crate::irradiance::IrradianceState::new(device);
         let lighting_pipeline = Self::create_lighting_pipeline(
             device,
@@ -180,6 +199,9 @@ impl DeferredState {
             world_position_view,
             world_tangent_tex,
             world_tangent_view,
+            velocity_tex,
+            velocity_view,
+            motion,
             gbuffer_pipeline,
             gbuffer_double_sided_pipeline,
             z_prepass_pipeline,
@@ -220,6 +242,9 @@ impl DeferredState {
             &world_tangent_view,
             &gbuf_sampler,
         );
+        let (velocity_tex, velocity_view) = Self::create_velocity_texture(device, width, height);
+        self.velocity_tex = velocity_tex;
+        self.velocity_view = velocity_view;
 
         self.albedo_metallic_tex = albedo_metallic_tex;
         self.albedo_metallic_view = albedo_metallic_view;
@@ -383,9 +408,27 @@ impl DeferredState {
         })
     }
 
+    fn create_velocity_texture(device: &wgpu::Device, width: u32, height: u32) -> (wgpu::Texture, wgpu::TextureView) {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("gbuf_velocity"),
+            size: wgpu::Extent3d { width: width.max(1), height: height.max(1), depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: crate::motion::VELOCITY_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        (texture, view)
+    }
+
     fn create_gbuffer_pipeline(
         device: &wgpu::Device,
         scene: &SceneState,
+        motion_layout: &wgpu::BindGroupLayout,
         cull_mode: Option<wgpu::Face>,
         label: &str,
     ) -> wgpu::RenderPipeline {
@@ -404,6 +447,7 @@ impl DeferredState {
                 Some(&scene.shadow_bind_group_layout), // 2: shadow (unused in G-pass but slot must exist)
                 Some(&scene.skeleton_bind_group_layout), // 3: skeleton
                 Some(&scene.instance_bind_group_layout), // 4: instances
+                Some(motion_layout),                     // 5: last frame's models + view-projs
             ],
             immediate_size: 0,
         });
@@ -446,6 +490,12 @@ impl DeferredState {
                         blend: None,
                         write_mask: wgpu::ColorWrites::ALL,
                     }),
+                    // RT4: velocity — the last four of the 32 bytes per sample.
+                    Some(wgpu::ColorTargetState {
+                        format: crate::motion::VELOCITY_FORMAT,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    }),
                 ],
             }),
             primitive: wgpu::PrimitiveState {
@@ -470,6 +520,7 @@ impl DeferredState {
     fn create_z_prepass_pipeline(
         device: &wgpu::Device,
         scene: &SceneState,
+        motion_layout: &wgpu::BindGroupLayout,
         cull_mode: Option<wgpu::Face>,
         label: &str,
     ) -> wgpu::RenderPipeline {
@@ -488,6 +539,8 @@ impl DeferredState {
                 Some(&scene.shadow_bind_group_layout),  // 2: shadow
                 Some(&scene.skeleton_bind_group_layout), // 3: skeleton
                 Some(&scene.instance_bind_group_layout), // 4: instances
+                // 5: the motion group — the same `vs_main` as the G-buffer pass reads it.
+                Some(motion_layout),
             ],
             immediate_size: 0,
         });

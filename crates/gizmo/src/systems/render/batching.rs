@@ -328,6 +328,11 @@ pub(crate) struct BatchData {
     /// Casters outside the camera frustum but inside a shadow cascade's light frustum —
     /// must be drawn into the shadow maps so off-screen objects still cast visible shadows.
     shadow_instances: Vec<crate::renderer::gpu_types::InstanceRaw>,
+    /// The model each of `instances` was drawn with last frame (`renderer.motion_history`),
+    /// index for index — the G-buffer's object velocity.
+    previous: Vec<[[f32; 4]; 4]>,
+    /// The same for `shadow_instances`; never read by the G-buffer, kept so indices line up.
+    shadow_previous: Vec<[[f32; 4]; 4]>,
 }
 
 /// Collect visible + shadow-casting meshes into instanced draw batches for one frame.
@@ -395,6 +400,8 @@ pub(super) fn collect_draw_items(
         for batch in cache.batches.values_mut() {
             batch.instances.clear();
             batch.shadow_instances.clear();
+            batch.previous.clear();
+            batch.shadow_previous.clear();
         }
         cache.instances.clear();
         cache.draw_items.clear();
@@ -534,6 +541,8 @@ pub(super) fn collect_draw_items(
                 // The cut-out threshold rides in `ambient.w`, which was padding. Zero unless the
                 // material asks, and zero is what every shader already reads there.
                 .with_alpha_cutoff($mat.alpha_cutoff);
+                // Where this entity was drawn last frame — the object half of its velocity.
+                let previous_model = renderer.motion_history.previous($e, upload_model.to_cols_array_2d());
                 let skel_bg = $skeleton.map(|s: &crate::renderer::components::Skeleton| s.bind_group.clone());
 
                 // Compute the pass-routing flags up front so they can be part of the
@@ -603,12 +612,16 @@ pub(super) fn collect_draw_items(
                     is_transparent,
                     instances: Vec::new(),
                     shadow_instances: Vec::new(),
+                    previous: Vec::new(),
+                    shadow_previous: Vec::new(),
                 });
                 if camera_visible {
                     batch.instances.push(instance_data);
+                    batch.previous.push(previous_model);
                 } else {
                     // Off-screen caster kept above for shadow maps only.
                     batch.shadow_instances.push(instance_data);
+                    batch.shadow_previous.push(previous_model);
                 }
             };
         }
@@ -702,6 +715,7 @@ pub(super) fn collect_draw_items(
         
         let mut local_instances: Vec<crate::renderer::gpu_types::InstanceRaw> = std::mem::take(&mut cache.instances);
         let mut local_draw_items: Vec<DrawItem> = std::mem::take(&mut cache.draw_items);
+        let mut local_previous: Vec<[[f32; 4]; 4]> = Vec::new();
 
         // Two-region instance layout. Region A = EVERY batch's camera-visible instances;
         // region B (appended after A) = EVERY batch's shadow-only casters. The old layout
@@ -720,6 +734,10 @@ pub(super) fn collect_draw_items(
         for batch in cache.batches.values_mut() {
             if batch.is_transparent || batch.is_backdrop {
                 crate::renderer::sort_back_to_front(&mut batch.instances, cam_pos);
+                // The sort reorders `instances` but not `previous`. Neither layer is drawn into
+                // the G-buffer, so their velocity is never read — give them none rather than
+                // another instance's history.
+                batch.previous = batch.instances.iter().map(|i| i.model).collect();
             }
         }
 
@@ -746,6 +764,7 @@ pub(super) fn collect_draw_items(
                 0.0
             };
             local_instances.extend(&batch.instances);
+            local_previous.extend(&batch.previous);
             local_draw_items.push(DrawItem {
                 vbuf: batch.vbuf.clone(),
                 vertex_count: batch.vertex_count,
@@ -779,6 +798,7 @@ pub(super) fn collect_draw_items(
         for (i, batch) in batches.iter().enumerate() {
             let shadow_first_instance = local_instances.len() as u32;
             local_instances.extend(&batch.shadow_instances);
+            local_previous.extend(&batch.shadow_previous);
             let item = &mut local_draw_items[draw_item_base + i];
             item.shadow_first_instance = shadow_first_instance;
             item.shadow_count = batch.shadow_instances.len() as u32;
@@ -822,6 +842,11 @@ pub(super) fn collect_draw_items(
                 0,
                 bytemuck::cast_slice(instances_slice),
             );
+        }
+        // Last frame's models, in the same order and cut at the same length as the instances.
+        if let Some(def) = renderer.deferred.as_mut() {
+            let n = instances_slice.len().min(local_previous.len());
+            def.motion.upload_previous(&renderer.device, &renderer.queue, &local_previous[..n]);
         }
         
         // Pass draw_items to rendering logic by cloning the small struct (Arc clones are cheap).

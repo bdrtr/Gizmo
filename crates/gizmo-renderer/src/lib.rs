@@ -126,6 +126,8 @@ pub mod routing;
 pub mod custom_material;
 pub mod irradiance;
 pub mod luminance;
+/// Per-object motion: last frame's model matrices and the G-buffer velocity target.
+pub mod motion;
 /// Reflection probes: the scene captured into a prefiltered cube for specular lighting.
 pub mod reflection;
 /// Auto exposure: the luminance sensor fed back into the composite pass, on the GPU.

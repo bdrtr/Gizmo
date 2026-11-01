@@ -80,6 +80,8 @@ struct VertexOutput {
     @location(4) inst_albedo:   vec4<f32>,
     @location(5) inst_pbr:      vec4<f32>,
     @location(6) world_tangent:  vec4<f32>,
+    @location(7) motion_now:     vec4<f32>,
+    @location(8) motion_before:  vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> scene: SceneUniforms;
@@ -92,6 +94,16 @@ struct VertexOutput {
 @group(1) @binding(6) var<uniform> material: MaterialParams;
 @group(3) @binding(0) var<uniform> skeleton: SkeletonData;
 @group(4) @binding(0) var<storage, read> instances: array<InstanceData>;
+
+// Motion (`crate::motion`): this and last frame's UNJITTERED view-projections, and the model each
+// instance was drawn with last frame, in instance order. The velocity target is the difference
+// between the two projections of the same skinned point — object and camera motion together.
+struct Motion {
+    view_proj: mat4x4<f32>,
+    prev_view_proj: mat4x4<f32>,
+};
+@group(5) @binding(0) var<uniform> motion: Motion;
+@group(5) @binding(1) var<storage, read> previous_models: array<mat4x4<f32>>;
 
 @vertex
 fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> VertexOutput {
@@ -138,19 +150,26 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
     out.inst_albedo = inst.albedo_color;
     out.inst_pbr    = inst.pbr;
     out.clip_position = scene.view_proj * world_pos;
+    out.motion_now    = motion.view_proj * world_pos;
+    out.motion_before = motion.prev_view_proj * (previous_models[instance_idx] * vec4<f32>(skinned_pos.xyz, 1.0));
     return out;
 }
 
-// G-Buffer output (4 MRTs fit the 32 bytes/sample color-attachment budget: 4+8+8+8=28):
+// G-Buffer output — 36 bytes per sample in WebGPU's accounting (Rgba8UnormSrgb counts 8, not 4:
+// the old note here added these up to 28), past the default 32, so the native device asks for more
+// (`native_device_limits`):
 //   RT0  albedo_metallic  Rgba8Unorm   — rgb=albedo,  a=metallic
 //   RT1  normal_roughness Rgba16Float  — rgb=normal,  a=roughness
 //   RT2  world_position   Rgba16Float  — rgb=pos,     a=written-flag + packed subsurface/anisotropy
 //   RT3  world_tangent    Rgba16Float  — rgb=tangent, a=handedness + packed clear-coat
+//   RT4  velocity         Rg16Float    — screen-UV motion since last frame (`crate::motion`)
 struct GBufferOut {
     @location(0) albedo_metallic:  vec4<f32>,
     @location(1) normal_roughness: vec4<f32>,
     @location(2) world_position:   vec4<f32>,
     @location(3) world_tangent:    vec4<f32>,
+    // RT4: screen-UV distance moved since last frame (x right, y down).
+    @location(4) velocity:         vec4<f32>,
 };
 
 @fragment
@@ -265,5 +284,8 @@ fn fs_main(in: VertexOutput) -> GBufferOut {
     let packed_ss_aniso = (0.5 + 0.49 * anisotropy_raw) + floor(100.0 * subsurface_raw);
     out.world_position   = vec4<f32>(in.world_position - scene.camera_pos.xyz, packed_ss_aniso);
     out.world_tangent    = vec4<f32>(T, packed_tangent_w);
+    let now_ndc    = in.motion_now.xy / in.motion_now.w;
+    let before_ndc = in.motion_before.xy / in.motion_before.w;
+    out.velocity   = vec4<f32>((now_ndc - before_ndc) * vec2<f32>(0.5, -0.5), 0.0, 0.0);
     return out;
 }

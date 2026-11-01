@@ -50,6 +50,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Per-object velocity in the G-buffer: `gizmo_renderer::motion`, `Renderer::motion_history`,
+  `DeferredState::velocity_view`.** Each entity's previous model matrix is kept and uploaded beside
+  the instance buffer; the G-buffer pass writes RT4 `velocity` (`Rg16Float`, screen-UV motion, object
+  and camera together; exactly zero for a still object under a still camera). The G-buffer is now 36
+  bytes per sample, so native devices request `max_color_attachment_bytes_per_sample` up to 64.
+  Groundwork for object motion blur; nothing reads the target yet.
+
 - **Sphere lights: `PointLight::source_radius`, `SpotLight::source_radius` (`with_source_radius`).**
   A light's source as a sphere: specular uses the representative point on it nearest the reflected
   ray, renormalised so a bigger source spreads its energy rather than adding to it — a glossy
