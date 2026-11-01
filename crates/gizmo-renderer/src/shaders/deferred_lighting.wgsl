@@ -6,7 +6,7 @@
 // in by load_shader_composed (naga_oil). Only binding-dependent deferred code lives below:
 // the fullscreen pass, procedural environment/IBL and PCSS shadows (they read `scene` and the
 // shadow textures, so per the common.wgsl convention they stay out of the pure modules).
-#import gizmo::common::{SceneUniforms, LightData, compute_direct_lighting, compute_sphere_lighting, gizmo_cluster_index}
+#import gizmo::common::{SceneUniforms, LightData, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, gizmo_cluster_index}
 #import gizmo::pbr_ext::{approximate_env_brdf, compute_direct_lighting_anisotropic, compute_clear_coat}
 
 // Irradiance volumes: group 3. See `irradiance.wgsl` and `gizmo_renderer::irradiance`.
@@ -666,6 +666,12 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
             light_color_contrib = compute_direct_lighting_anisotropic(
                 N, V, L, T, B, albedo, min_roughness, metallic, anisotropy, f0,
                 light.color.rgb, intensity, atten
+            );
+        } else if (light_type == 0u && light.params.w > 0.0) {
+            // A tube light.
+            light_color_contrib = compute_tube_lighting(
+                N, V, light.position.xyz - world_pos, light.direction.xyz, light.params.w, light.params.z,
+                albedo, min_roughness, metallic, f0, light.color.rgb, intensity, atten
             );
         } else if (light_type != 2u && light.params.z > 0.0) {
             // A sphere-sourced point or spot light.

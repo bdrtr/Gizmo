@@ -5,7 +5,7 @@
 // dropped on web. That divergence is expressed at the SOURCE via `#ifdef SHADOWS` (shadow
 // bindings + PCF block) and `@group(#{SKELETON_GROUP})` / `@group(#{INSTANCE_GROUP})`
 // (3/4 native, 2/3 web) — never by grepping naga's reformatted output.
-#import gizmo::common::{SceneUniforms, compute_direct_lighting, compute_sphere_lighting, gizmo_cluster_index}
+#import gizmo::common::{SceneUniforms, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, gizmo_cluster_index}
 #ifdef PROBES
 #import gizmo::reflection_probes::{probe_environment}
 #endif
@@ -332,7 +332,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             }
         }
         var light_color_contrib = vec3<f32>(0.0);
-        if (light_type != 2u && light.params.z > 0.0) {
+        if (light_type == 0u && light.params.w > 0.0) {
+            // A tube light (`compute_tube_lighting`).
+            light_color_contrib = compute_tube_lighting(
+                N, view_dir, light.position.xyz - in.world_position, light.direction.xyz, light.params.w,
+                light.params.z, base_color, min_roughness, metallic, f0, light.color.rgb, intensity, attenuation
+            );
+        } else if (light_type != 2u && light.params.z > 0.0) {
             // A sphere-sourced point or spot light (`compute_sphere_lighting`).
             light_color_contrib = compute_sphere_lighting(
                 N, view_dir, light.position.xyz - in.world_position, light.params.z, base_color,

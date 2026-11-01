@@ -5180,6 +5180,78 @@ mod golden_render_tests {
         });
     }
 
+    /// **A tube light's highlight is a streak along the tube.** The glossy floor of the sphere-light
+    /// test, under a 1 m tube (`source_length`, along the entity's local X = the screen's horizontal)
+    /// against a sphere of the same 5 cm thickness. The saturated highlight's width-to-height ratio
+    /// must grow clearly, and the frame's mean must not run away: the lobe is renormalised along the
+    /// length, so a longer tube spreads its light.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_tube_light_stretches_its_highlight_along_the_tube() {
+        use crate::renderer::components::PointLight;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        // (width / height of the ≥ 250 highlight, frame mean)
+        async fn highlight(length: f32) -> (f32, f32) {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssr = None;
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(
+                &renderer.device,
+                &renderer.queue,
+                &renderer.scene.texture_bind_group_layout,
+            );
+            let floor = world.spawn();
+            world.add_component(floor, Transform::new(Vec3::new(0.0, -0.2, 0.0)).with_scale(Vec3::new(20.0, 0.2, 20.0)));
+            world.add_component(floor, GlobalTransform::default());
+            world.add_component(floor, AssetManager::create_cube(&renderer.device));
+            world.add_component(floor, Material::new(tex).with_pbr(Vec4::new(0.9, 0.9, 0.9, 1.0), 0.15, 1.0));
+            world.add_component(floor, MeshRenderer::new());
+            let lamp = world.spawn();
+            world.add_component(lamp, Transform::new(Vec3::new(0.0, 1.0, 0.0)));
+            world.add_component(lamp, GlobalTransform::default());
+            world.add_component(
+                lamp,
+                PointLight::new(Vec3::ONE, 8.0, 20.0).with_source_radius(0.05).with_source_length(length),
+            );
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.0, 1.5, 3.0),
+                yaw: -std::f32::consts::FRAC_PI_2,
+                pitch: -0.55,
+                primary: true,
+                ..Default::default()
+            });
+            let frame = render_world(&mut renderer, &mut world).await;
+            let luma: Vec<f32> = frame.as_chunks::<4>().0.iter().map(|p| (p[0] as f32 + p[1] as f32 + p[2] as f32) / 3.0).collect();
+            let mut bbox = [usize::MAX, usize::MAX, 0usize, 0usize];
+            for (i, &v) in luma.iter().enumerate() {
+                if v >= 250.0 {
+                    let (x, y) = (i % 128, i / 128);
+                    bbox = [bbox[0].min(x), bbox[1].min(y), bbox[2].max(x + 1), bbox[3].max(y + 1)];
+                }
+            }
+            let aspect = (bbox[2].saturating_sub(bbox[0])) as f32 / (bbox[3].saturating_sub(bbox[1])).max(1) as f32;
+            (aspect, luma.iter().sum::<f32>() / luma.len() as f32)
+        }
+        pollster::block_on(async {
+            let (sphere_aspect, sphere_mean) = highlight(0.0).await;
+            let (tube_aspect, tube_mean) = highlight(1.0).await;
+            // Measured: aspect 0.72 → 3.36, mean 85.82 → 87.74 (+2 %). Without the line
+            // renormalisation the mean reads 95.38 (+11 %); with the axis never uploaded the
+            // tube collapses to its centre and the aspect to 0.30.
+            assert!(tube_aspect > sphere_aspect * 1.5, "the tube's highlight is {tube_aspect:.2} wide per height, the sphere's {sphere_aspect:.2}");
+            assert!(tube_mean < sphere_mean * 1.07, "the frame's mean went {sphere_mean:.2} → {tube_mean:.2} — energy added along the tube");
+        });
+    }
+
     /// What a split-screen frame does once, it must do once: the HUD is drawn a single time over
     /// the whole target (drawn per view, a half-transparent sprite is laid over itself and comes
     /// out brighter), and the frame's animation advances by one `dt` however many cameras draw.

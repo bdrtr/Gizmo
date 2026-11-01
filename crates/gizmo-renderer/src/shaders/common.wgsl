@@ -16,6 +16,7 @@ const INV_PI: f32 = 0.31830988618; // 1 / PI — Lambert diffuse normalization
 //   direction.xyz= spot/dir axis,    direction.w= inner cutoff cos
 //   params.x     = outer cutoff cos, params.y   = light type (0=point,1=spot,2=dir)
 //   params.z     = source radius (metres; 0 = a point — see compute_sphere_lighting)
+//   params.w     = tube length along direction.xyz (point lights only; see compute_tube_lighting)
 struct LightData {
     position:  vec4<f32>,
     color:     vec4<f32>,
@@ -175,6 +176,63 @@ fn compute_sphere_lighting(
     let alpha = roughness * roughness;
     let alpha_wide = clamp(alpha + source_radius / (2.0 * dist), 0.0, 1.0);
     let norm = (alpha / max(alpha_wide, 1e-4)) * (alpha / max(alpha_wide, 1e-4));
+
+    let D = D_GGX(NoH, roughness) * norm;
+    let Vis = V_SmithJointGGX(NoV, NoLs, roughness);
+    let F = F_Schlick(VoH, f0);
+    let kD = (vec3<f32>(1.0) - F) * (1.0 - metallic);
+    let diffuse = kD * albedo * NoL * INV_PI;
+    let specular = D * Vis * F * NoLs;
+    return (diffuse + specular) * light_color * intensity * atten;
+}
+
+// A TUBE light: a segment `tube_length` metres long through `to_light` (the centre, relative to the
+// surface) along `axis`, `source_radius` thick (Karis 2013, "tube lights"). Diffuse averages the
+// cosine to the two ends. Specular takes the point on the segment nearest the reflected ray, then
+// the sphere step around it, and renormalises the lobe once per widened dimension — (α/α'_line) for
+// the length, (α/α'_sphere)² for the thickness — so a longer tube spreads its energy rather than
+// adding it.
+fn compute_tube_lighting(
+    N: vec3<f32>,
+    V: vec3<f32>,
+    to_light: vec3<f32>,
+    axis: vec3<f32>,
+    tube_length: f32,
+    source_radius: f32,
+    albedo: vec3<f32>,
+    roughness: f32,
+    metallic: f32,
+    f0: vec3<f32>,
+    light_color: vec3<f32>,
+    intensity: f32,
+    atten: f32
+) -> vec3<f32> {
+    let half_axis = axis * (tube_length * 0.5);
+    let l0 = to_light - half_axis;
+    let l1 = to_light + half_axis;
+    let dist = max(length(to_light), 1e-4);
+    let NoL = clamp(0.5 * (dot(N, l0) / max(length(l0), 1e-4) + dot(N, l1) / max(length(l1), 1e-4)), 0.0, 1.0);
+
+    let r = reflect(-V, N);
+    let ld = l1 - l0;
+    let r_ld = dot(r, ld);
+    let t = clamp((dot(r, l0) * r_ld - dot(l0, ld)) / max(dot(ld, ld) - r_ld * r_ld, 1e-6), 0.0, 1.0);
+    let on_line = l0 + ld * t;
+    let center_to_ray = dot(on_line, r) * r - on_line;
+    let closest = on_line + center_to_ray * clamp(source_radius / max(length(center_to_ray), 1e-5), 0.0, 1.0);
+    let Ls = normalize(closest);
+    let NoLs = max(dot(N, Ls), 0.0);
+    if (NoL <= 0.0 && NoLs <= 0.0) {
+        return vec3<f32>(0.0);
+    }
+    let H = normalize(V + Ls);
+    let NoV = max(dot(N, V), 0.001);
+    let NoH = max(dot(N, H), 0.0);
+    let VoH = max(dot(V, H), 0.0);
+    let alpha = roughness * roughness;
+    let alpha_line = clamp(alpha + tube_length / (3.0 * dist), 0.0, 1.0);
+    let alpha_sphere = clamp(alpha + source_radius / (2.0 * dist), 0.0, 1.0);
+    let norm = (alpha / max(alpha_line, 1e-4)) * (alpha / max(alpha_sphere, 1e-4)) * (alpha / max(alpha_sphere, 1e-4));
 
     let D = D_GGX(NoH, roughness) * norm;
     let Vis = V_SmithJointGGX(NoV, NoLs, roughness);

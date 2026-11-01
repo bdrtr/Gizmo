@@ -394,7 +394,15 @@ All three engine lights are punctual: `PointLight`, `DirectionalLight`, `SpotLig
   reflected ray), the lobe is widened and renormalised by (α/α')². Measured, a glossy metal floor
   under a lamp 1 m up: the saturated highlight 186 → 464 px as a 0.3 m sphere while the frame's
   mean holds (88.20 → 87.79); without the renormalisation, 829 px and a mean of 98.25 — energy
-  added. **Rectangular and tube lights are still absent** — those need an LTC path.
+  added.
+- **Tube lights: CLOSED 2026-11-01** — `PointLight::source_length` (metres along the light's local
+  +X, 0 = off, the default), with `source_radius` as the capsule's radius, through
+  `compute_tube_lighting`. The representative point is the point on the segment nearest the
+  reflected ray, then the sphere step around it; the lobe is renormalised by (α/α_line)·(α/α')².
+  Measured, a 1.2 m tube against a 0.3 m sphere over the same glossy floor: the highlight's
+  width-per-height 0.72 → 3.36 while the frame's mean holds (85.82 → 87.74); without the line
+  renormalisation the mean reads 95.38 — energy added; with the axis never uploaded, 0.30.
+  **Rectangular lights are still absent** — those need an LTC path (two lookup tables).
 - **No light texture (cookie/gobo).**
 - ~~**No contact shadows.**~~ **CLOSED 2026-11-01:** `DirectionalLight::contact_shadow_length`
   (metres, 0 = off, the default). The deferred lighting pass marches 16 steps from each pixel toward

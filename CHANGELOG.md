@@ -64,6 +64,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   bytes per sample, so native devices request `max_color_attachment_bytes_per_sample` up to 64.
   Groundwork for object motion blur; nothing reads the target yet.
 
+- **Tube lights: `PointLight::source_length` (`with_source_length`).** A point light whose source is
+  a capsule along the light's local +X: specular takes the representative point on the segment
+  nearest the reflected ray (Karis 2013), the lobe is renormalised for the line as well as for the
+  sphere, so a long fluorescent tube shows a long highlight without adding energy. Combines with
+  `source_radius` (the capsule's radius). 0 (the default) is the previous light. The axis rides in
+  `LightData::direction` and the length in `params.w`; `compute_tube_lighting` in `common.wgsl`, both
+  draw paths.
+
 - **Sphere lights: `PointLight::source_radius`, `SpotLight::source_radius` (`with_source_radius`).**
   A light's source as a sphere: specular uses the representative point on it nearest the reflected
   ray, renormalised so a bigger source spreads its energy rather than adding to it — a glossy

@@ -136,11 +136,12 @@ pub struct LightData {
     pub position: [f32; 4],
     /// `rgb` = linear colour, `a` = radius (the distance the falloff reaches zero at).
     pub color: [f32; 4],
-    /// `xyz` = direction the light points (spot/directional), `w` = cosine of the inner cone
-    /// angle. Cosines rather than angles because the shader compares them against a dot product.
+    /// `xyz` = direction the light points (spot/directional) or a tube light's axis (point with
+    /// `params.w > 0`), `w` = cosine of the inner cone angle. Cosines rather than angles because
+    /// the shader compares them against a dot product.
     pub direction: [f32; 4],
     /// `x` = cosine of the outer cone angle, `y` = the light type (0 = point, 1 = spot,
-    /// 2 = directional), `zw` unused.
+    /// 2 = directional), `z` = source radius (point/spot, 0 = a point), `w` = tube length (point).
     pub params: [f32; 4],
 }
 

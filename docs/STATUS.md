@@ -38,7 +38,7 @@ Ranked and measured in [`CAPABILITY_GAPS.md`](CAPABILITY_GAPS.md); the short ver
 - **Rendering:** reflection probes — up to four, box parallax, blended, transparent surfaces
   included on native (§A5) — no MSAA — by decision, TAA +
   FXAA (four quality presets) + CAS sharpening instead (§A6) — no SMAA, no area lights
-  (§A7: sphere lights exist, `source_radius`; no rectangle or tube lights. Soft sun shadows and
+  (§A7: sphere and tube lights exist, `source_radius` / `source_length`; no rectangle lights. Soft sun shadows and
   contact shadows are `DirectionalLight::angular_radius` / `contact_shadow_length`), no occlusion culling (§A7b), motion blur
   covers camera and objects but not transparent ones (§A7c, `PostProcess::motion_blur`; auto exposure
   is `renderer.auto_exposure`). Split screen works on the game path (`Camera::viewport`, §A5b); the studio previews a

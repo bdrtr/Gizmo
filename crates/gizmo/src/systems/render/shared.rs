@@ -177,17 +177,21 @@ pub fn collect_scene_lights(
 
     if let Some(q) = world.query::<&PointLight>() {
         for (e, light) in q.iter() {
-            let Some((pos, _)) = world_tf(e) else { continue };
+            let Some((pos, rot)) = world_tf(e) else { continue };
             let Some((surface_dist, reach)) = score(pos, light.intensity, light.radius) else {
                 continue;
             };
+            // A tube light's axis is the entity's local X; a point light had no use for
+            // `direction`, so it carries the axis (only read when params.w > 0).
+            let axis = rot.mul_vec3(Vec3::X).normalize_or_zero();
             candidates.push(Candidate {
                 data: LightData {
                     position: [pos.x, pos.y, pos.z, light.intensity],
                     color: [light.color.x, light.color.y, light.color.z, light.radius],
-                    direction: [0.0, -1.0, 0.0, 0.0],
-                    // params.y = 0 → PointLight; params.z = source radius (0 = a point).
-                    params: [0.0, 0.0, light.source_radius.max(0.0), 0.0],
+                    direction: if light.source_length > 0.0 { [axis.x, axis.y, axis.z, 0.0] } else { [0.0, -1.0, 0.0, 0.0] },
+                    // params.y = 0 → PointLight; params.z = source radius, params.w = tube length
+                    // (both 0 = a point).
+                    params: [0.0, 0.0, light.source_radius.max(0.0), light.source_length.max(0.0)],
                 },
                 is_point: true,
                 surface_dist,

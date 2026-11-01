@@ -18,6 +18,13 @@ pub struct PointLight {
     /// energy-normalised), diffuse the centre. `#[serde(default)]`.
     #[serde(default)]
     pub source_radius: f32,
+    /// Length of the light's source along the entity's **local X axis**, in metres — a tube
+    /// (fluorescent, neon) of [`source_radius`](Self::source_radius) thickness instead of a sphere.
+    /// A glossy surface shows a streak as long as the tube's reflection. `0` (the default) is a
+    /// sphere, or a point. Specular takes the point on the tube nearest the reflected ray; diffuse
+    /// averages the two ends. `#[serde(default)]`.
+    #[serde(default)]
+    pub source_length: f32,
 }
 
 impl PointLight {
@@ -31,7 +38,15 @@ impl PointLight {
             intensity,
             radius,
             source_radius: 0.0,
+            source_length: 0.0,
         }
+    }
+
+    /// This light as a tube `metres` long along the entity's local X axis (see
+    /// [`source_length`](Self::source_length)).
+    pub fn with_source_length(mut self, metres: f32) -> Self {
+        self.source_length = if metres.is_finite() { metres.max(0.0) } else { 0.0 };
+        self
     }
 
     /// This light as a sphere of `metres` radius (see [`source_radius`](Self::source_radius)).
