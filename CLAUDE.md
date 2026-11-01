@@ -31,6 +31,9 @@ cargo test --workspace --no-fail-fast   # ALWAYS --no-fail-fast — see below
 # a machine-wide flock on its first GPU test (`hold_machine_gpu_lock`, in every `gpu_lock`) — the
 # driver does not survive several live devices, see `gizmo-renderer/src/test_gpu.rs`. That GPU
 # chain (`gizmo` lib + `studio_render_pixels` + `gizmo-renderer` lib) is now the floor.
+# Tests that assert on WALL-CLOCK time (`EXCLUSIVE` in the script) are skipped in the pool and run
+# alone afterwards: next to three other binaries on a loaded desktop, `test_performance_10k_particles`
+# took 30–54 s against a 30 s ceiling, and 6 s alone (measured 2026-11-01).
 # CI still runs plain `cargo test`; this is the local gate.
 scripts/test-parallel.py                         # = cargo test --workspace --no-fail-fast
 scripts/test-parallel.py -p gizmo-net --features client-server,rollback

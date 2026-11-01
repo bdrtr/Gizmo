@@ -44,6 +44,15 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# Tests that assert on WALL-CLOCK time, run alone after the pool rather than inside it: `(target
+# name, test path)`. Next to three other binaries — and whatever else the machine is doing — a
+# timing ceiling measures the neighbours. Measured 2026-11-01: `test_performance_10k_particles`
+# takes 6 s alone and 30–54 s in the pool on a loaded desktop, against a 30 s ceiling. It still
+# runs every time; it just runs by itself.
+EXCLUSIVE = [
+    ("gizmo_renderer", "gpu_fluid::fluid_tests::tests::test_performance_10k_particles"),
+]
 TIMES = os.path.join(ROOT, "target", "test-parallel-times.json")
 DOC_LABEL = "doc tests"
 
@@ -162,10 +171,17 @@ def main():
 
     times = load_times()
     jobs = [] if args.no_doc else [(DOC_LABEL, lambda: run_doc(cargo_args, test_args))]
+    exclusive = []  # (label, fn) run alone once the pool is done
     for exe, root, name, version, target, kind in binaries:
         label = f"{name} :: {target} ({kind})"
-        jobs.append((label, lambda e=exe, r=root, n=name, v=version, t=target:
-                     run_binary(e, r, n, v, t, test_args)))
+        alone = [t for (tgt, t) in EXCLUSIVE if tgt == target and "lib" in kind.split("+")]
+        skips = [a for t in alone for a in ("--skip", t)]
+        jobs.append((label, lambda e=exe, r=root, n=name, v=version, t=target, s=skips:
+                     run_binary(e, r, n, v, t, test_args + s)))
+        for t in alone:
+            exclusive.append((f"{label} · {t.rsplit('::', 1)[-1]} (alone)",
+                              lambda e=exe, r=root, n=name, v=version, tg=target, tt=t:
+                              run_binary(e, r, n, v, tg, [tt, "--exact"] + test_args)))
     # Longest first; unknown ones count as long so a new GPU binary is not started last.
     jobs.sort(key=lambda j: -times.get(j[0], 1e9))
 
@@ -179,6 +195,12 @@ def main():
             results.append((label, code, out, secs))
             if code != 0:
                 print(f"FAILED  {label}  ({secs:.1f} s)", flush=True)
+    # The timing-sensitive tests, one at a time, with nothing else running.
+    for label, fn in exclusive:
+        code, out, secs = fn()
+        results.append((label, code, out, secs))
+        if code != 0:
+            print(f"FAILED  {label}  ({secs:.1f} s)", flush=True)
     t_run = time.monotonic() - t1
     if not test_args:  # a filtered run's times say nothing about the full one
         times.update({label: round(secs, 2) for label, _, _, secs in results})
