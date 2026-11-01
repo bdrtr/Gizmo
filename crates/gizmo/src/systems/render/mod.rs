@@ -4078,6 +4078,11 @@ mod golden_render_tests {
     /// Samples mip 0 of `cube` along each of `dirs` on the GPU, through the hardware's own cube
     /// addressing — the same lookup the lighting pass makes.
     fn sample_cube(renderer: &Renderer, cube: &wgpu::TextureView, dirs: &[Vec3]) -> Vec<[f32; 4]> {
+        sample_cube_lod(renderer, cube, dirs, 0.0)
+    }
+
+    /// [`sample_cube`] at mip `lod`.
+    fn sample_cube_lod(renderer: &Renderer, cube: &wgpu::TextureView, dirs: &[Vec3], lod: f32) -> Vec<[f32; 4]> {
         use wgpu::util::DeviceExt;
         let device = &renderer.device;
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -4088,7 +4093,7 @@ mod golden_render_tests {
                  @group(0) @binding(2) var<storage, read> dirs: array<vec4<f32>>;
                  @group(0) @binding(3) var<storage, read_write> out: array<vec4<f32>>;
                  @compute @workgroup_size(1) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-                     out[id.x] = textureSampleLevel(t, s, dirs[id.x].xyz, 0.0);
+                     out[id.x] = textureSampleLevel(t, s, dirs[id.x].xyz, dirs[id.x].w);
                  }"
                 .into(),
             ),
@@ -4101,7 +4106,7 @@ mod golden_render_tests {
             compilation_options: Default::default(),
             cache: None,
         });
-        let data: Vec<[f32; 4]> = dirs.iter().map(|d| [d.x, d.y, d.z, 0.0]).collect();
+        let data: Vec<[f32; 4]> = dirs.iter().map(|d| [d.x, d.y, d.z, lod]).collect();
         let dir_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: None,
             contents: bytemuck::cast_slice(&data),
@@ -4120,7 +4125,10 @@ mod golden_render_tests {
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor::default());
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            ..Default::default()
+        });
         let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: &pipeline.get_bind_group_layout(0),
@@ -4216,6 +4224,35 @@ mod golden_render_tests {
                 .map(|((name, _, want), c)| format!("{name}: want {want}, got {} {:?}", classify(*c), &c[..3]))
                 .collect();
             assert!(wrong.is_empty(), "the probe's cube is the wrong way round:\n{}", wrong.join("\n"));
+
+            // **The rough mips are prefiltered.** At the roughest mip a direction gathers light
+            // from a wide lobe, so opposite walls' colours move toward each other and lose
+            // saturation. A prefilter that only copied mip 0 down would leave them as far apart
+            // and as saturated as at mip 0.
+            let top = renderer.reflection_probe.as_ref().map(|g| g.mip_count - 1).unwrap() as f32;
+            let axes = [Vec3::X, Vec3::NEG_X];
+            let sharp = sample_cube_lod(&renderer, &cube, &axes, 0.0);
+            let rough = sample_cube_lod(&renderer, &cube, &axes, top);
+            let sat = |c: [f32; 4]| {
+                let (hi, lo) = (c[0].max(c[1]).max(c[2]), c[0].min(c[1]).min(c[2]));
+                (hi - lo) / hi.max(1e-6)
+            };
+            let gap = |a: [f32; 4], b: [f32; 4]| {
+                let (na, nb) = (a[0] + a[1] + a[2], b[0] + b[1] + b[2]);
+                (0..3).map(|i| (a[i] / na.max(1e-6) - b[i] / nb.max(1e-6)).abs()).sum::<f32>()
+            };
+            assert!(
+                sat(rough[0]) < sat(sharp[0]) * 0.8,
+                "the roughest mip of +X is as saturated as mip 0 ({} vs {}) — the mips are not prefiltered",
+                sat(rough[0]),
+                sat(sharp[0])
+            );
+            assert!(
+                gap(rough[0], rough[1]) < gap(sharp[0], sharp[1]) * 0.7,
+                "opposite walls are as different at the roughest mip ({}) as at mip 0 ({})",
+                gap(rough[0], rough[1]),
+                gap(sharp[0], sharp[1])
+            );
         });
     }
 
@@ -4377,6 +4414,78 @@ mod golden_render_tests {
             assert!(
                 white_box >= 1400 && magenta_box <= 50,
                 "with the room's box it should see the white it faces: {white_box} white, {magenta_box} magenta",
+            );
+        });
+    }
+
+    /// **A clear coat reflects the probe too.** A dark, rough, non-metallic cube in the probe room:
+    /// its base reflects almost nothing sharp, so what a clear coat adds on top is a near-mirror
+    /// reflection of the magenta wall behind the camera. With the coat the face turns magenta
+    /// against the same cube without it; if the coat still read the procedural sky it would add a
+    /// grey-blue sheen instead.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_clear_coat_reflects_the_probe_room() {
+        use crate::renderer::components::ReflectionProbe;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        async fn coated(coat: f32) -> f64 {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssr = None;
+            let mut world = World::new();
+            probe_room(&renderer, &mut world, Vec3::ZERO);
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(
+                &renderer.device,
+                &renderer.queue,
+                &renderer.scene.texture_bind_group_layout,
+            );
+            let mut material = Material::new(tex).with_pbr(Vec4::new(0.04, 0.04, 0.04, 1.0), 0.9, 0.0);
+            material.clear_coat = coat;
+            let cube = world.spawn();
+            world.add_component(cube, Transform::new(Vec3::new(0.0, 0.0, -2.0)).with_scale(Vec3::splat(0.8)));
+            world.add_component(cube, GlobalTransform::default());
+            world.add_component(cube, AssetManager::create_cube(&renderer.device));
+            world.add_component(cube, material);
+            world.add_component(cube, MeshRenderer::new());
+            world.spawn_bundle((Transform::new(Vec3::ZERO), GlobalTransform::default(), ReflectionProbe::new()));
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.0, 0.0, 2.0),
+                yaw: -std::f32::consts::FRAC_PI_2,
+                primary: true,
+                ..Default::default()
+            });
+            let frame = render_world(&mut renderer, &mut world).await;
+            // Mean magenta excess, (r + b)/2 − g, over the face minus its middle.
+            let (mut sum, mut n) = (0.0f64, 0.0f64);
+            for y in 42..86usize {
+                for x in 42..86usize {
+                    if (54..74).contains(&x) && (54..74).contains(&y) {
+                        continue;
+                    }
+                    let p = &frame[(y * 128 + x) * 4..][..3];
+                    sum += (p[0] as f64 + p[2] as f64) / 2.0 - p[1] as f64;
+                    n += 1.0;
+                }
+            }
+            sum / n
+        }
+        pollster::block_on(async {
+            let (bare, coat) = (coated(0.0).await, coated(1.0).await);
+            // Measured: bare 0.16, coated 1.79, and 0.17 with the coat still reading the sky. Small
+            // in absolute terms — a coat reflects ~4 % head-on — but ten times the bare cube's and
+            // nothing at all from the sky.
+            assert!(
+                coat > bare + 1.0,
+                "a clear coat added {:.2} of magenta (bare {bare:.2}, coated {coat:.2}) — it is not reflecting the probe",
+                coat - bare
             );
         });
     }

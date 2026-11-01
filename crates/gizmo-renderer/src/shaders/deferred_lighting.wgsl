@@ -433,7 +433,16 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         specular_ibl = specular_ibl * coat_atten_env;
 
         let R_coat = normalize(mix(reflect(-V, N), N, 0.08));
-        let specular_env_coat = get_procedural_environment(R_coat, 0.08);
+        var specular_env_coat = get_procedural_environment(R_coat, 0.08);
+        // The coat is a second, nearly smooth layer: it reflects the probe too, at its own 0.08.
+        if (reflection.params.x > 0.5) {
+            specular_env_coat = textureSampleLevel(
+                t_reflection,
+                s_reflection,
+                reflection_lookup(reflect(-V, N), world_pos),
+                0.08 * reflection.params.y,
+            ).rgb * reflection.params.z;
+        }
         let env_brdf_lut_coat = approximate_env_brdf(NdV, 0.08);
         let specular_ibl_coat = specular_env_coat * (0.04 * env_brdf_lut_coat.x + env_brdf_lut_coat.y);
 

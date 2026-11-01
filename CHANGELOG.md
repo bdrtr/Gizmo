@@ -50,6 +50,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The clear-coat layer reflects the reflection probe.** It read the procedural sky even with a
+  probe in the scene; now it reads the probe at its own 0.08 roughness, through the parallax lookup.
+  The probe's prefiltered rough mips are tested (saturation and the gap between opposite walls fall
+  at the roughest mip).
+
 - **Box-projected parallax for reflection probes: `ReflectionProbe::influence` /
   `with_influence(half_extents)`.** Reflected rays are traced to the probe's box (the room) before
   the cube lookup, so a mirror away from the probe reflects the part of the room it faces. Measured:

@@ -229,9 +229,15 @@ Measured with a mirror 3 m beside the probe, facing a wall half white on its sid
 origin, so forgetting to subtract the probe's position or centre the box on it fails the test;
 four mutations red.
 
-Not done: one probe at a time (no blending between probes); the prefilter's rough mips are not separately tested; transparent (forward) and
-clear-coat specular still read the sky; the studio's viewport does not capture (render_parity
-lists `ReflectionProbe` as game-only, with the reason).
+**Clear coat and the rough mips, same day.** The clear-coat layer reflects the probe too (at its own
+0.08 roughness, through the same parallax lookup): a dark, rough cube's face gains 1.79 of magenta
+excess with a coat against 0.16 bare — and 0.17 with the coat still reading the sky. The rough mips
+are tested: at the roughest mip the +X wall's saturation and the gap to the −X wall both fall; a
+prefilter that only copied mip 0 down keeps them (0.71 against 0.74).
+
+Not done: one probe at a time (no blending between probes); transparent (forward) specular still
+reads the sky; the studio's viewport does not capture (render_parity lists `ReflectionProbe` as
+game-only, with the reason).
 
 ### A5b. Split screen / multi-viewport — **CLOSED 2026-11-01**
 
