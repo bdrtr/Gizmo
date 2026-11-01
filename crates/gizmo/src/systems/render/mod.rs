@@ -5252,6 +5252,197 @@ mod golden_render_tests {
         });
     }
 
+    /// A rectangle light seen from straight below, over a matte floor. Three things, each a
+    /// different way to get it wrong:
+    ///
+    /// - a small panel (5 cm) facing down lights the floor under it like a point light of the same
+    ///   intensity — the radiance is `intensity / area`, so the polygon integral must come out to
+    ///   the point light's inverse square;
+    /// - the same panel turned to face up lights **nothing**: it is one-sided, and its
+    ///   orientation must actually reach the shader;
+    /// - a 1.5 m panel spreads its light: the floor's lit area grows while the spot under it
+    ///   does not brighten past the small panel's.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn a_rect_light_lights_one_side_like_a_point_light_seen_face_on() {
+        use crate::renderer::components::{PointLight, RectLight};
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        enum Lamp {
+            None,
+            Point,
+            Rect { size: f32, facing_down: bool },
+        }
+        // (mean luma of the 8×8 centre, pixels brighter than 150 — the unlit floor reads 66,
+        // mean of the left half, mean of the right half)
+        async fn floor(lamp: Lamp) -> (f32, usize, f32, f32) {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssr = None;
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(
+                &renderer.device,
+                &renderer.queue,
+                &renderer.scene.texture_bind_group_layout,
+            );
+            let floor = world.spawn();
+            world.add_component(floor, Transform::new(Vec3::new(0.0, -0.2, 0.0)).with_scale(Vec3::new(20.0, 0.2, 20.0)));
+            world.add_component(floor, GlobalTransform::default());
+            world.add_component(floor, AssetManager::create_cube(&renderer.device));
+            world.add_component(floor, Material::new(tex).with_pbr(Vec4::new(0.8, 0.8, 0.8, 1.0), 1.0, 0.0));
+            world.add_component(floor, MeshRenderer::new());
+            let half_pi = std::f32::consts::FRAC_PI_2;
+            match lamp {
+                Lamp::None => {}
+                Lamp::Point => {
+                    let e = world.spawn();
+                    world.add_component(e, Transform::new(Vec3::new(0.0, 1.0, 0.0)));
+                    world.add_component(e, GlobalTransform::default());
+                    world.add_component(e, PointLight::new(Vec3::ONE, 3.0, 20.0));
+                }
+                Lamp::Rect { size, facing_down } => {
+                    // The panel emits along its local −Z: −90° about X turns that to −Y, and
+                    // −90° about Y to +X — standing on edge, lighting one side of the room.
+                    let rotation = if facing_down {
+                        gizmo_math::Quat::from_rotation_x(-half_pi)
+                    } else {
+                        gizmo_math::Quat::from_rotation_y(-half_pi)
+                    };
+                    let e = world.spawn();
+                    world.add_component(e, Transform::new(Vec3::new(0.0, 1.0, 0.0)).with_rotation(rotation));
+                    world.add_component(e, GlobalTransform::default());
+                    world.add_component(e, RectLight::new(Vec3::ONE, 3.0, 20.0, size, size));
+                }
+            }
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.0, 3.0, 0.0),
+                yaw: -half_pi,
+                pitch: -1.5,
+                primary: true,
+                ..Default::default()
+            });
+            let frame = render_world(&mut renderer, &mut world).await;
+            let luma: Vec<f32> = frame.as_chunks::<4>().0.iter().map(|p| (p[0] as f32 + p[1] as f32 + p[2] as f32) / 3.0).collect();
+            let mut centre = 0.0;
+            for y in 60..68 {
+                for x in 60..68 {
+                    centre += luma[y * 128 + x];
+                }
+            }
+            let half = |left: bool| {
+                let xs = if left { 0..64 } else { 64..128 };
+                let mut sum = 0.0;
+                for y in 0..128 {
+                    for x in xs.clone() {
+                        sum += luma[y * 128 + x];
+                    }
+                }
+                sum / (64.0 * 128.0)
+            };
+            (centre / 64.0, luma.iter().filter(|&&v| v > 150.0).count(), half(true), half(false))
+        }
+        pollster::block_on(async {
+            let (dark, _, dark_l, dark_r) = floor(Lamp::None).await;
+            let (point, _, _, _) = floor(Lamp::Point).await;
+            let (small, small_lit, _, _) = floor(Lamp::Rect { size: 0.05, facing_down: true }).await;
+            let (_, _, side_l, side_r) = floor(Lamp::Rect { size: 0.5, facing_down: false }).await;
+            let (big, big_lit, _, _) = floor(Lamp::Rect { size: 1.5, facing_down: true }).await;
+            // Measured: unlit 66.24 (halves 61.39 / 61.39), point 228.45, 5 cm panel 226.71 with
+            // 5258 pixels over 150, on edge 61.41 behind / 115.33 in front, 1.5 m panel 202.64 with
+            // 6018. Caught: orientation never uploaded (148.34 under the panel — it faces −Z),
+            // diffuse taken from the centre (6018 → 5244: no spread), the area halved (247.64),
+            // the volumetric pass scattering behind the panel (67.33 behind).
+            assert!(point > dark + 40.0, "the point light must light the floor at all: {dark:.2} → {point:.2}");
+            assert!((small - point).abs() < 0.05 * (point - dark), "a 5 cm panel face on is a point light of the same intensity: {small:.2} vs {point:.2}");
+            // Standing on edge, facing +X: one half of the screen is behind it — floor and air.
+            let (behind, behind_dark, front, front_dark) =
+                if side_l < side_r { (side_l, dark_l, side_r, dark_r) } else { (side_r, dark_r, side_l, dark_l) };
+            assert!((behind - behind_dark).abs() < 0.5, "behind the panel nothing is lit, floor or air: {behind:.2}, unlit {behind_dark:.2}");
+            assert!(front > front_dark + 10.0, "in front of it the floor is: {front_dark:.2} → {front:.2}");
+            assert!(big_lit > small_lit * 11 / 10, "a 1.5 m panel spreads its light: {small_lit} → {big_lit} lit pixels");
+            assert!(big < small, "…without brightening the spot under it: {small:.2} → {big:.2}");
+        });
+    }
+
+    /// A rectangle light's reflection in a glossy floor is the panel's shape, without the energy
+    /// running away. The camera and floor are the tube test's; a 1.2 m × 5 cm panel (long along the
+    /// screen's horizontal) against a 5 cm square. The saturated highlight's width-to-height ratio
+    /// must grow clearly, and the frame's mean must hold — the lobe is renormalised across each
+    /// extent.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn a_rect_light_reflects_as_a_panel() {
+        use crate::renderer::components::RectLight;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        // (width / height of the ≥ 250 highlight, frame mean)
+        async fn highlight(width: f32) -> (f32, f32) {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssr = None;
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(
+                &renderer.device,
+                &renderer.queue,
+                &renderer.scene.texture_bind_group_layout,
+            );
+            let floor = world.spawn();
+            world.add_component(floor, Transform::new(Vec3::new(0.0, -0.2, 0.0)).with_scale(Vec3::new(20.0, 0.2, 20.0)));
+            world.add_component(floor, GlobalTransform::default());
+            world.add_component(floor, AssetManager::create_cube(&renderer.device));
+            world.add_component(floor, Material::new(tex).with_pbr(Vec4::new(0.9, 0.9, 0.9, 1.0), 0.15, 1.0));
+            world.add_component(floor, MeshRenderer::new());
+            let lamp = world.spawn();
+            world.add_component(
+                lamp,
+                Transform::new(Vec3::new(0.0, 1.0, 0.0))
+                    .with_rotation(gizmo_math::Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)),
+            );
+            world.add_component(lamp, GlobalTransform::default());
+            world.add_component(lamp, RectLight::new(Vec3::ONE, 8.0, 20.0, width, 0.05));
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.0, 1.5, 3.0),
+                yaw: -std::f32::consts::FRAC_PI_2,
+                pitch: -0.55,
+                primary: true,
+                ..Default::default()
+            });
+            let frame = render_world(&mut renderer, &mut world).await;
+            let luma: Vec<f32> = frame.as_chunks::<4>().0.iter().map(|p| (p[0] as f32 + p[1] as f32 + p[2] as f32) / 3.0).collect();
+            let mut bbox = [usize::MAX, usize::MAX, 0usize, 0usize];
+            for (i, &v) in luma.iter().enumerate() {
+                if v >= 250.0 {
+                    let (x, y) = (i % 128, i / 128);
+                    bbox = [bbox[0].min(x), bbox[1].min(y), bbox[2].max(x + 1), bbox[3].max(y + 1)];
+                }
+            }
+            let aspect = (bbox[2].saturating_sub(bbox[0])) as f32 / (bbox[3].saturating_sub(bbox[1])).max(1) as f32;
+            (aspect, luma.iter().sum::<f32>() / luma.len() as f32)
+        }
+        pollster::block_on(async {
+            let (square_aspect, square_mean) = highlight(0.05).await;
+            let (panel_aspect, panel_mean) = highlight(1.2).await;
+            // Measured: aspect 0.80 → 4.44, mean 80.89 → 83.65 (+3 %). Without the
+            // renormalisation the mean reads 94.47 (+14 % over its own square).
+            assert!(panel_aspect > square_aspect * 1.5, "the panel's highlight is {panel_aspect:.2} wide per height, the square's {square_aspect:.2}");
+            assert!(panel_mean < square_mean * 1.07, "the frame's mean went {square_mean:.2} → {panel_mean:.2} — energy added across the panel");
+        });
+    }
+
     /// What a split-screen frame does once, it must do once: the HUD is drawn a single time over
     /// the whole target (drawn per view, a half-transparent sprite is laid over itself and comes
     /// out brighter), and the frame's animation advances by one `dt` however many cameras draw.

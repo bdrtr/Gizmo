@@ -641,6 +641,7 @@ fn entity_badges(world: &World, id: u32) -> Vec<&'static str> {
     if world.borrow::<gizmo_renderer::components::DirectionalLight>().get(id).is_some()
         || world.borrow::<gizmo_renderer::components::PointLight>().get(id).is_some()
         || world.borrow::<gizmo_renderer::components::SpotLight>().get(id).is_some()
+        || world.borrow::<gizmo_renderer::components::RectLight>().get(id).is_some()
     {
         tags.push("lit");
     }

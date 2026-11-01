@@ -2,7 +2,7 @@
 // SceneUniforms and LightData come from gizmo::common (composed in by load_shader_composed).
 // Only volumetric-specific helpers stay local. The NDC→world unprojection reads the
 // CPU-computed scene.inv_view_proj instead of inverting view_proj per fragment.
-#import gizmo::common::{SceneUniforms, LightData}
+#import gizmo::common::{SceneUniforms, LightData, rotate_by_quat}
 
 @group(0) @binding(0) var<uniform> scene: SceneUniforms;
 
@@ -159,7 +159,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             let to_light = light_pos - current_pos;
             let dist = length(to_light);
             
-            if (dist < radius) {
+            // A rectangle light (type 3) emits from one face: the air behind it stays dark.
+            let behind_rect = u32(light.params.y) == 3u
+                && dot(-to_light, rotate_by_quat(light.direction, vec3<f32>(0.0, 0.0, -1.0))) <= 0.0;
+            if (dist < radius && !behind_rect) {
                 let atten = clamp(1.0 - (dist / radius), 0.0, 1.0);
                 // Dynamic volumetric light scattering factor
                 let scatter = color * intensity * params.bulb_scatter * atten * atten;

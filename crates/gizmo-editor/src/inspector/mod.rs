@@ -89,6 +89,7 @@ pub fn ui_inspector(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
         light::draw_point_light_section(ui, world, entity_id, state);
         light::draw_directional_light_section(ui, world, entity_id, state);
         light::draw_spot_light_section(ui, world, entity_id, state);
+        light::draw_rect_light_section(ui, world, entity_id, state);
         material::draw_material_section(ui, world, entity_id, state);
 
         misc::draw_particle_emitter_section(ui, world, entity_id, state);

@@ -406,6 +406,7 @@ fn every_component_the_inspector_edits_survives_a_save() {
         ("draw_rigidbody_section", "RigidBody"),
         ("draw_script_section", "Script"),
         ("draw_spot_light_section", "SpotLight"),
+        ("draw_rect_light_section", "RectLight"),
         ("draw_terrain_section", "Terrain"),
         ("draw_transform_section", "Transform"),
         ("draw_velocity_section", "Velocity"),

@@ -322,6 +322,7 @@ world.insert_resource(editor_state);
     // `inspector/light.rs` is already one section per type.
     let _ = component_registry.register::<gizmo::renderer::components::DirectionalLight>("DirectionalLight");
     let _ = component_registry.register::<gizmo::renderer::components::SpotLight>("SpotLight");
+    let _ = component_registry.register::<gizmo::renderer::components::RectLight>("RectLight");
     // The authored look. Reachable from the ➕ menu as well as from the environment panel's own
     // button, because a scene can have more than one camera and only the panel's copy is about
     // "the" camera. Its default is the engine's no-component behaviour, so adding one is safe.

@@ -78,6 +78,11 @@ pub fn handle_scene_operations(
                         35.0_f32.to_radians(),
                     ),
                 ),
+                // A 1 m × 0.5 m panel: a softbox, big enough that its reflection reads as a panel.
+                "RectLight" => world.add_component(
+                    ent,
+                    gizmo::renderer::components::RectLight::new(Vec3::new(1.0, 1.0, 1.0), 5.0, 20.0, 1.0, 0.5),
+                ),
                 "Material" => {
                     let white_tex = world
                         .get_resource::<DebugAssets>()
@@ -1151,13 +1156,13 @@ mod tests {
     /// "Bilinmeyen component" at the user and is worse than no entry at all.
     #[test]
     fn every_light_the_engine_draws_can_be_added_in_the_editor() {
-        use gizmo::renderer::components::{DirectionalLight, PointLight, SpotLight};
+        use gizmo::renderer::components::{DirectionalLight, PointLight, RectLight, SpotLight};
 
         let mut world = World::new();
         let ent = spawn(&mut world);
         let mut ed = EditorState::default();
 
-        for name in ["PointLight", "DirectionalLight", "SpotLight"] {
+        for name in ["PointLight", "DirectionalLight", "SpotLight", "RectLight"] {
             ed.add_component_request = Some((ent, name.to_string()));
             handle_scene_operations(&mut world, &mut ed, &mut studio_state());
         }
@@ -1174,6 +1179,9 @@ mod tests {
              of the cone — the default must not ship that"
         );
         assert!(spot.radius > 0.0 && spot.intensity > 0.0);
+        let rects = world.borrow::<RectLight>();
+        let rect = rects.get(ent.id()).expect("a rectangle light can be added");
+        assert!(rect.width > 0.0 && rect.height > 0.0 && rect.intensity > 0.0);
     }
 
     /// Is `name`'s component on `id`? Written as a match rather than generically because the

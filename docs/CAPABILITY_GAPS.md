@@ -383,10 +383,11 @@ changed at Low / High / Ultra.
 
 Still missing: **SMAA**.
 
-### A7. No area lights, light textures, or contact/soft shadows
+### A7. Area lights, contact and soft shadows — **CLOSED 2026-11-01**; light textures open
 
-All three engine lights are punctual: `PointLight`, `DirectionalLight`, `SpotLight`. Measured in
-`area_lights`:
+Sphere, tube and rectangle lights exist, and so do soft and contact sun shadows; what is left is a
+light texture (cookie/gobo). The `area_lights` demo shows the three area lights side by side over a
+glossy floor. Each item:
 
 - **Spherical area lights: CLOSED 2026-11-01** — `PointLight::source_radius` / `SpotLight::source_radius`
   (metres, 0 = a point, the default), through `compute_sphere_lighting` in `common.wgsl`, both
@@ -402,7 +403,24 @@ All three engine lights are punctual: `PointLight`, `DirectionalLight`, `SpotLig
   Measured, a 1.2 m tube against a 0.3 m sphere over the same glossy floor: the highlight's
   width-per-height 0.72 → 3.36 while the frame's mean holds (85.82 → 87.74); without the line
   renormalisation the mean reads 95.38 — energy added; with the axis never uploaded, 0.30.
-  **Rectangular lights are still absent** — those need an LTC path (two lookup tables).
+- **Rectangle lights: CLOSED 2026-11-01** — `RectLight` (`width` × `height` metres in the
+  entity's local XY, lighting the side its forward axis, local −Z, faces), light type 3, through
+  `compute_rect_lighting`. **Not LTC**, deliberately: LTC needs two fitted 64×64 tables shipped as
+  data, and what it buys over this is an exact *specular* lobe. Here diffuse is exact before horizon
+  clipping (Lambert's polygon formula: ½·Σ θ_e n̂_e · N over the four edges) and specular takes the
+  representative point (the reflected ray's hit on the light's plane, clamped into the rectangle)
+  renormalised across each extent. `intensity` is the on-axis intensity (radiance = intensity /
+  area), so a small panel face on lights like a point light of the same intensity. One-sided —
+  in the surface terms, in the anisotropic and clear-coat terms (the deferred loop zeroes its
+  attenuation behind the panel) and in the volumetric pass, which lit the air behind it until the
+  test caught it. Measured over a matte floor from straight above: a 5 cm panel 226.71 under it
+  against a point light's 228.45; on edge, the half behind it 61.41 against 61.39 unlit; a 1.5 m
+  panel 5258 → 6018 pixels over 150 while the spot under it dims (226.71 → 202.64). Over the glossy
+  floor, a 1.2 m × 5 cm panel's highlight 0.80 → 4.44 wide per height, the frame's mean 80.89 →
+  83.65. Each was confirmed by breaking it: orientation never uploaded, diffuse from the centre,
+  the area halved, the volumetric gate removed, the renormalisation removed — all five fail. Not
+  shadow casters; the volumetric pass still scatters every light as a point otherwise (spot cones
+  included, as before).
 - **No light texture (cookie/gobo).**
 - ~~**No contact shadows.**~~ **CLOSED 2026-11-01:** `DirectionalLight::contact_shadow_length`
   (metres, 0 = off, the default). The deferred lighting pass marches 16 steps from each pixel toward

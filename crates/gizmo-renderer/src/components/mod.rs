@@ -9,7 +9,7 @@ pub mod animation;
 pub mod camera;
 /// Projected decals.
 pub mod decal;
-/// Punctual lights: point, spot and directional.
+/// Lights: point (sphere, tube), spot, directional and rectangle.
 pub mod light;
 /// Materials and the shading route each one takes.
 pub mod material;
@@ -53,6 +53,7 @@ gizmo_core::impl_component!(
     Terrain,
     DirectionalLight,
     SpotLight,
+    RectLight,
     LodGroup,
     LodLevel,
     ParticleEmitter,

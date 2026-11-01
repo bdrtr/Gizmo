@@ -6,7 +6,7 @@
 // in by load_shader_composed (naga_oil). Only binding-dependent deferred code lives below:
 // the fullscreen pass, procedural environment/IBL and PCSS shadows (they read `scene` and the
 // shadow textures, so per the common.wgsl convention they stay out of the pure modules).
-#import gizmo::common::{SceneUniforms, LightData, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, gizmo_cluster_index}
+#import gizmo::common::{SceneUniforms, LightData, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, rotate_by_quat, gizmo_cluster_index}
 #import gizmo::pbr_ext::{approximate_env_brdf, compute_direct_lighting_anisotropic, compute_clear_coat}
 
 // Irradiance volumes: group 3. See `irradiance.wgsl` and `gizmo_renderer::irradiance`.
@@ -592,6 +592,8 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         let intensity  = light.position.w;
         var L: vec3<f32>;
         var atten: f32 = 1.0;
+        // The range falloff alone, without the inverse square — what a rectangle light takes.
+        var window: f32 = 1.0;
 
         if (light_type == 2u) {
             L = normalize(-light.direction.xyz);
@@ -602,9 +604,18 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
             L = normalize(to_light);
             let d_over_r = dist / radius;
             atten = clamp(1.0 - d_over_r * d_over_r * d_over_r * d_over_r, 0.0, 1.0);
-            atten = (atten * atten) / (dist * dist + 0.01);
+            window = atten * atten;
+            atten = window / (dist * dist + 0.01);
 
-            if (light_type == 1u) {
+            if (light_type == 3u) {
+                // A rectangle lights one side: nothing behind it, for the anisotropic and
+                // clear-coat terms below as much as for its own.
+                let emit = rotate_by_quat(light.direction, vec3<f32>(0.0, 0.0, -1.0));
+                if (dot(-L, emit) <= 0.0) {
+                    atten = 0.0;
+                    window = 0.0;
+                }
+            } else if (light_type == 1u) {
                 let spot_dir = normalize(light.direction.xyz);
                 let cos_a    = dot(-L, spot_dir);
                 let inner    = light.direction.w;
@@ -662,7 +673,13 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         }
 
         var light_color_contrib = vec3<f32>(0.0);
-        if (anisotropy > 0.0) {
+        if (light_type == 3u) {
+            // A rectangle light.
+            light_color_contrib = compute_rect_lighting(
+                N, V, light.position.xyz - world_pos, light.direction, light.params.z, light.params.w,
+                albedo, min_roughness, metallic, f0, light.color.rgb, intensity, window
+            );
+        } else if (anisotropy > 0.0) {
             light_color_contrib = compute_direct_lighting_anisotropic(
                 N, V, L, T, B, albedo, min_roughness, metallic, anisotropy, f0,
                 light.color.rgb, intensity, atten

@@ -13,7 +13,7 @@
 
 use crate::core::World;
 use crate::math::{Vec3, Vec4};
-use crate::renderer::components::{DirectionalLight, LightRole, PointLight, SpotLight};
+use crate::renderer::components::{DirectionalLight, LightRole, PointLight, RectLight, SpotLight};
 use crate::renderer::gpu_types::LightData;
 use crate::renderer::MAX_LIGHTS;
 use gizmo_physics_core::components::{GlobalTransform, Transform};
@@ -222,6 +222,31 @@ pub fn collect_scene_lights(
                     direction: [dir.x, dir.y, dir.z, light.inner_angle.cos()],
                     // params.y = 1 → SpotLight; params.z = source radius (0 = a point).
                     params: [light.outer_angle.cos(), 1.0, light.source_radius.max(0.0), 0.0],
+                },
+                is_point: false,
+                surface_dist,
+                reach,
+                entity_id: e,
+            });
+        }
+    }
+
+    if let Some(q) = world.query::<&RectLight>() {
+        for (e, light) in q.iter() {
+            let Some((pos, rot)) = world_tf(e) else { continue };
+            let Some((surface_dist, reach)) = score(pos, light.intensity, light.radius) else {
+                continue;
+            };
+            let rot = rot.normalize();
+            candidates.push(Candidate {
+                data: LightData {
+                    position: [pos.x, pos.y, pos.z, light.intensity],
+                    color: [light.color.x, light.color.y, light.color.z, light.radius],
+                    // The orientation as a quaternion: the shader rebuilds the rectangle's two
+                    // axes from it, which one vec4 could not carry as vectors.
+                    direction: [rot.x, rot.y, rot.z, rot.w],
+                    // params.y = 3 → RectLight; params.zw = half width, half height.
+                    params: [0.0, 3.0, light.width.max(0.0) * 0.5, light.height.max(0.0) * 0.5],
                 },
                 is_point: false,
                 surface_dist,
@@ -484,6 +509,28 @@ mod tests {
     // `SpotLight` stores the cone half-angles in radians. The game render path fed
     // the raw radians (broken cone), and unifying light collection briefly spread
     // that to the studio too; collection must convert the angles to cosines.
+    /// A `RectLight` reaches the shader as type 3 with its half extents and its orientation — the
+    /// shader rebuilds both axes from that quaternion, so a dropped or unnormalised rotation is a
+    /// panel facing the wrong way.
+    #[test]
+    fn a_rect_light_is_packed_with_its_half_extents_and_orientation() {
+        use crate::renderer::components::RectLight;
+        let mut world = World::new();
+        let e = world.spawn();
+        let rot = gizmo_math::Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
+        world.add_component(e, Transform::new(Vec3::new(0.0, 1.0, 0.0)).with_rotation(rot));
+        world.add_component(e, RectLight::new(Vec3::ONE, 4.0, 10.0, 2.0, 0.5));
+        let l = collect_scene_lights(&world, Vec3::new(0.0, 0.0, 5.0), wide_view());
+        assert_eq!(l.num_lights, 1);
+        let d = l.lights[0];
+        assert_eq!(d.params[1], 3.0, "params.y == 3 marks a rectangle light");
+        assert_eq!([d.params[2], d.params[3]], [1.0, 0.25], "half width, half height");
+        let q = gizmo_math::Quat::from_xyzw(d.direction[0], d.direction[1], d.direction[2], d.direction[3]);
+        let emit = q * Vec3::new(0.0, 0.0, -1.0);
+        assert!(emit.distance(Vec3::new(0.0, -1.0, 0.0)) < 1e-5, "the panel faces down: {emit:?}");
+        assert_eq!(l.shadow_point_index, -1, "a rectangle light is not the point-shadow caster");
+    }
+
     #[test]
     fn spotlight_cutoffs_are_stored_as_cosines() {
         let mut world = World::new();

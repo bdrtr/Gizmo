@@ -65,7 +65,7 @@ pub use gizmo_math::Aabb;
 pub use crate::renderer::asset::AssetManager;
 #[cfg(feature = "render")]
 pub use crate::renderer::components::{
-    Camera, DirectionalLight, LightRole, Material, Mesh, MeshRenderer, PointLight, SpotLight,
+    Camera, DirectionalLight, LightRole, Material, Mesh, MeshRenderer, PointLight, RectLight, SpotLight,
 };
 #[cfg(feature = "render")]
 pub use crate::renderer::RenderContext;

@@ -14,7 +14,8 @@ const INV_PI: f32 = 0.31830988618; // 1 / PI — Lambert diffuse normalization
 //   position.xyz = world pos,        position.w = intensity
 //   color.rgb    = colour,           color.a    = radius
 //   direction.xyz= spot/dir axis,    direction.w= inner cutoff cos
-//   params.x     = outer cutoff cos, params.y   = light type (0=point,1=spot,2=dir)
+//   params.x     = outer cutoff cos, params.y   = light type (0=point,1=spot,2=dir,3=rect)
+//   (rect: direction = orientation quaternion, params.zw = half width, half height)
 //   params.z     = source radius (metres; 0 = a point — see compute_sphere_lighting)
 //   params.w     = tube length along direction.xyz (point lights only; see compute_tube_lighting)
 struct LightData {
@@ -241,6 +242,111 @@ fn compute_tube_lighting(
     let diffuse = kD * albedo * NoL * INV_PI;
     let specular = D * Vis * F * NoLs;
     return (diffuse + specular) * light_color * intensity * atten;
+}
+
+// `v` turned by the unit quaternion `q` (xyzw).
+fn rotate_by_quat(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
+    let t = 2.0 * cross(q.xyz, v);
+    return v + q.w * t + cross(q.xyz, t);
+}
+
+// One edge's share of the vector form factor of a polygon: θ · n̂, with θ the angle between the two
+// corner directions and n̂ the normal of the plane through them. `atan2` rather than `acos` keeps
+// it stable for the near-parallel edges a distant light has; θ / sin θ → 1 as they close.
+fn rect_edge(v1: vec3<f32>, v2: vec3<f32>) -> vec3<f32> {
+    let c = cross(v1, v2);
+    let s = length(c);
+    return c * (atan2(s, dot(v1, v2)) / max(s, 1e-7));
+}
+
+// A one-sided rectangular emitter (`RectLight`): centre `to_light` from the surface, oriented by the
+// quaternion `orientation`, half extents `half_w` along its local X and `half_h` along its local Y,
+// emitting along its local −Z. `window` is the light's range falloff alone — the inverse square is
+// in the integral below, not in it.
+//
+// Diffuse is exact for a Lambertian receiver, before horizon clipping: the cosine-weighted solid
+// angle of the rectangle is ½·Σ θ_e n̂_e · N over its edges (Lambert's polygon formula). `intensity`
+// is the light's on-axis radiant intensity — the rectangle's radiance is intensity / area — so from
+// far away, seen face on, it lights like a point light of the same intensity.
+//
+// Specular takes the representative point: where the reflected ray meets the light's plane,
+// clamped into the rectangle, with the lobe widened across each extent and renormalised so the
+// highlight spreads its energy instead of adding to it — the tube light's line step, twice.
+fn compute_rect_lighting(
+    N: vec3<f32>,
+    V: vec3<f32>,
+    to_light: vec3<f32>,
+    orientation: vec4<f32>,
+    half_w: f32,
+    half_h: f32,
+    albedo: vec3<f32>,
+    roughness: f32,
+    metallic: f32,
+    f0: vec3<f32>,
+    light_color: vec3<f32>,
+    intensity: f32,
+    window: f32
+) -> vec3<f32> {
+    let right = rotate_by_quat(orientation, vec3<f32>(1.0, 0.0, 0.0));
+    let up = rotate_by_quat(orientation, vec3<f32>(0.0, 1.0, 0.0));
+    let emit = -normalize(cross(right, up));
+    let dist = max(length(to_light), 1e-4);
+    // Behind the emitting face: nothing.
+    let facing = dot(-to_light, emit) / dist;
+    if (facing <= 0.0) {
+        return vec3<f32>(0.0);
+    }
+
+    let a = right * half_w;
+    let b = up * half_h;
+    let p0 = normalize(to_light - a - b);
+    let p1 = normalize(to_light + a - b);
+    let p2 = normalize(to_light + a + b);
+    let p3 = normalize(to_light - a + b);
+    var form = 0.5 * (rect_edge(p0, p1) + rect_edge(p1, p2) + rect_edge(p2, p3) + rect_edge(p3, p0));
+    // The winding's sign depends on which side the surface sees; the vector form factor points at
+    // the light either way.
+    if (dot(form, to_light) < 0.0) {
+        form = -form;
+    }
+    let diffuse_integral = max(dot(form, N), 0.0);
+
+    let r = reflect(-V, N);
+    let denom = dot(r, emit);
+    var on_plane: vec3<f32>;
+    let t = dot(to_light, emit) / select(denom, -1e-6, abs(denom) < 1e-6);
+    if (denom < -1e-6 && t > 0.0) {
+        on_plane = r * t;
+    } else {
+        // The ray never meets the face: walk its in-plane direction far out and clamp back.
+        on_plane = to_light + (r - emit * denom) * 1e4;
+    }
+    let local = on_plane - to_light;
+    let closest = to_light + right * clamp(dot(local, right), -half_w, half_w)
+                           + up * clamp(dot(local, up), -half_h, half_h);
+    let Ls = normalize(closest);
+    let NoLs = max(dot(N, Ls), 0.0);
+    if (diffuse_integral <= 0.0 && NoLs <= 0.0) {
+        return vec3<f32>(0.0);
+    }
+
+    let H = normalize(V + Ls);
+    let NoV = max(dot(N, V), 0.001);
+    let NoH = max(dot(N, H), 0.0);
+    let VoH = max(dot(V, H), 0.0);
+    let alpha = roughness * roughness;
+    let alpha_w = clamp(alpha + (2.0 * half_w) / (3.0 * dist), 0.0, 1.0);
+    let alpha_h = clamp(alpha + (2.0 * half_h) / (3.0 * dist), 0.0, 1.0);
+    let norm = (alpha / max(alpha_w, 1e-4)) * (alpha / max(alpha_h, 1e-4));
+
+    let D = D_GGX(NoH, roughness) * norm;
+    let Vis = V_SmithJointGGX(NoV, NoLs, roughness);
+    let F = F_Schlick(VoH, f0);
+    let kD = (vec3<f32>(1.0) - F) * (1.0 - metallic);
+    let area = max(4.0 * half_w * half_h, 1e-6);
+    let diffuse = kD * albedo * INV_PI * (diffuse_integral / area);
+    let specular = D * Vis * F * NoLs * facing / (dist * dist + 0.01);
+    return (diffuse + specular) * light_color * intensity * window;
 }
 
 // Full 4x4 inverse (used for NDC → world unprojection in fullscreen passes).

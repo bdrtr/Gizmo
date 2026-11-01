@@ -1,94 +1,50 @@
 //! # Alan ışıkları ve yumuşak gölgeler
 //!
-//! Bu demo altı ayrı yeteneği birden ele alıyor, çünkü altısının da cevabı aynı yerden geliyor:
-//! **motorda bu ışık/gölge türü yok.**
+//! Parlak bir metal zeminin üstünde üç **alan ışığı** yan yana, ve yumuşak gölgeli bir güneş:
 //!
-//! Motorda üç ışık var, ve üçü de **noktasal**: [`PointLight`], [`DirectionalLight`],
-//! [`SpotLight`]. Alanı olan ışık, dokusu olan ışık, ve yumuşaklığı mesafeye göre değişen gölge
-//! yok.
+//! | ışık | bileşen | zemindeki yansıması |
+//! |------|---------|---------------------|
+//! | küre (ampul) | `PointLight::with_source_radius` | ampulün yansıması kadar bir leke |
+//! | tüp (floresan) | `PointLight::with_source_length` | tüp boyunca uzanan bir çizgi |
+//! | dikdörtgen panel (softbox) | `RectLight` | panelin şekli |
 //!
-//! | yetenek | Gizmo |
-//! |---------|-------|
-//! | dikdörtgen alan ışığı (LTC) | **yok** — `ltc`/`area_light` diye bir şey aranmıyor bile |
-//! | küresel alan ışığı, yarıçapı gölgeyi yumuşatır | **yok** — `PointLight::radius` **menzil**, kaynak boyutu değil |
-//! | ışığa doku (cookie/gobo) takmak | **yok** |
-//! | ekran uzayında temas gölgesi | **yok** |
-//! | mesafeye göre yumuşayan gölge (blocker araması) | **yok** — PCF **sabit ~1 teksel** |
-//! | paralaks düzeltmeli küp haritası yansıması | **yok** |
+//! Üçünde de specular **temsilî nokta** yöntemiyle hesaplanıyor (yansıyan ışına kaynağın en yakın
+//! noktası) ve lob enerjisi yeniden normalize ediliyor: büyük kaynak, ışığını yayar, **eklemez**.
+//! Dikdörtgenin diffuse'u Lambert'in çokgen formülüyle tam — duvara yakın büyük bir panel duvarı
+//! panel gibi aydınlatır, ortasındaki bir ampul gibi değil. Panel **tek yüzlü**: arkası karanlık.
+//!
+//! Güneş `with_angular_radius` (PCSS: gölge, düşüren nesneden uzaklaştıkça yumuşar — soldaki alçak
+//! kutunun gölgesi keskin, sağdaki yüksek kutununki yumuşak) ve `with_contact_shadows` (gölge
+//! haritasının kaçırdığı ince temas çizgisi) ile.
 //!
 //! ## `PointLight::radius` bir tuzak
 //!
-//! `radius` adı **kaynağın fiziksel boyutunu** düşündürüyor: büyüdükçe gölgenin yumuşadığı, ışığın
-//! alan ışığına dönüştüğü o boyut. Motorda aynı isim **menzil** demek — belgesi açık: *"düşüşün
-//! sıfıra ulaştığı mesafe, ve aynı zamanda ayıklama sınırı."*
+//! `radius` **menzil**dir — düşüşün sıfıra ulaştığı mesafe ve ayıklama sınırı — kaynak boyutu
+//! **değil**. Büyütmek ışığı yayar ve zayıflatır; gölgeyi yumuşatmaz, yansımayı büyütmez. Kaynak
+//! boyutu `source_radius`. Ölçüldü (2026-08-23): `radius` 2 → 6 → 20 iken sahnenin ortalama
+//! parlaklığı 136,13 → 139,09 → 143,16.
 //!
-//! Yani `radius`'u büyüten biri yumuşak gölge bekler, **daha geniş ve daha zayıf bir aydınlatma**
-//! bulur. Demo bunu ölçüyor.
-//!
-//! ## Gölge yumuşaklığı sabittir
-//!
-//! `pcss`'in ölçtüğü şey "gölge, gölgeyi düşüren nesneden uzaklaştıkça yumuşar mı". Gizmo'da
-//! yumuşaklık `cascade_params[1] = 1 / gölge haritası çözünürlüğü`, yani **sabit bir teksel** —
-//! mesafeden bağımsız. Demo bunu da ölçüyor: aynı ışık, iki farklı yükseklikteki kutu, gölge
-//! kenarının keskinliği karşılaştırılıyor.
-//!
-//! ## Ölçüldü — 1: `radius` menzil, kaynak boyutu değil
-//!
-//! Üç koşu, tek değişen nokta ışığının yarıçapı. Ölçüm sol yarı (panel sağda),
-//! ölçüldü (2026-08-23, 948×492, kare 90):
-//!
-//! | `radius` | sahnenin ortalama parlaklığı |
-//! |----------|------------------------------|
-//! | 2 | 136,13 |
-//! | 6 | 139,09 |
-//! | 20 | **143,16** |
-//!
-//! Yarıçap on kat büyüyünce sahne **aydınlanıyor** — daha çok yüzey menzile giriyor. Kaynak
-//! boyutu olsaydı aynı hareket ışığı bir alan ışığına çevirir ve gölgeleri yumuşatırdı; burada
-//! yalnız erişim genişliyor. İsim aynı, anlam farklı.
-//!
-//! ## Ölçüldü — 2: gölge yumuşaklığı sabit (koddan)
-//!
-//! `pcss`'in ölçtüğü şey gölge kenarının gölgeyi düşüren nesneye uzaklıkla yumuşaması. Gizmo'da
-//! bu değişken yok, ve kanıtı gölge örneklemesinin kendisinde (`shaders/shader.wgsl`):
-//!
-//! ```wgsl
-//! let texel_size = scene.cascade_params.y;      // = 1 / gölge haritası çözünürlüğü
-//! for (var x = -1; x <= 1; x++) {
-//!     for (var y = -1; y <= 1; y++) {
-//!         let offset = vec2<f32>(f32(x), f32(y)) * texel_size;
-//! ```
-//!
-//! Çekirdek **sabit 3×3**, adımı **sabit bir teksel**, ve `cascade_params.y`'nin gerçekten
-//! `1 / SHADOW_MAP_RES` olduğunu `frame_uniforms.rs`'deki bir doğrulama (`"y = PCF texel size"`)
-//! iddia ediyor. PCSS'in değiştirdiği büyüklük — engelleyici mesafesine göre arama yarıçapı —
-//! burada hiç hesaplanmıyor.
-//!
-//! ### Ölçüm notu: bunu pikselle ölçmeyi denedim, olmadı
-//!
-//! İlk plan iki kutunun (biri alçak, biri yüksek) gölge kenarlarını piksel piksel karşılaştırmaktı.
-//! Olmadı: bu kurulumda zeminin gölge kontrastı ölçülemeyecek kadar zayıf — görüntünün en koyu
-//! %5'i gölgeler değil, ufkun üstündeki **gökyüzü** çıktı. Sahneyi kontrastı zorlayacak biçimde
-//! yeniden kurmak yerine iddia kodun kendisinden doğrulandı, çünkü orada kesin: değişken yok.
+//! Ölçümler ve testler: `docs/CAPABILITY_GAPS.md` §A7.
 //!
 //! ## Kontroller
-//!   * `GIZMO_LIGHT_RADIUS=<sayı>` — nokta ışığının yarıçapı (varsayılan 6)
+//!   * `GIZMO_SOURCE_SCALE=<sayı>` — üç kaynağın boyutunu birlikte ölçekler (varsayılan 1;
+//!     0 noktasal ışıkların eski hâli)
 //!   * **Sağ-tık + fare / WASDQE** — kamera
 
 use gizmo::prelude::*;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
 
-/// Nokta ışığının yarıçapı — kaynak boyutu değil, menzil.
-fn light_radius() -> f32 {
-    std::env::var("GIZMO_LIGHT_RADIUS")
+/// Üç kaynağın boyut çarpanı.
+fn source_scale() -> f32 {
+    std::env::var("GIZMO_SOURCE_SCALE")
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(6.0f32)
-        .clamp(0.5, 40.0)
+        .unwrap_or(1.0f32)
+        .clamp(0.0, 5.0)
 }
 
 fn main() {
-    let radius = light_radius();
+    let k = source_scale();
     App::<SimpleSceneState>::new("Gizmo Engine - Area Lights", 1280, 720)
         .with_simple_scene(move |scene, state| {
             let white = scene.asset_manager.create_white_texture(
@@ -99,71 +55,82 @@ fn main() {
             let device = &scene.renderer.device;
             let cube = AssetManager::create_cube(device);
 
-            // İki kutu, farklı yükseklikte. `pcss`'in ölçtüğü şey: alçaktakinin gölgesi keskin,
-            // yüksektekinin yumuşak olmalı. Gizmo'da ikisi de aynı keskinlikte olacak.
-            for (x, y) in [(-2.6f32, 0.25f32), (2.6, 2.2)] {
+            // İki kutu, farklı yükseklikte: alçaktakinin gölgesi keskin, yüksektekinin yumuşak.
+            for (x, y) in [(-3.2f32, 0.25f32), (3.2, 2.2)] {
                 scene.world.spawn_bundle((
-                    Transform::new(Vec3::new(x, y, 0.0)).with_scale(Vec3::splat(0.5)),
+                    Transform::new(Vec3::new(x, y, -1.5)).with_scale(Vec3::splat(0.5)),
                     GlobalTransform::default(),
                     cube.clone(),
-                    Material::new(white.clone()).with_pbr(
-                        Vec4::new(0.80, 0.55, 0.35, 1.0),
-                        0.5,
-                        0.0,
-                    ),
+                    Material::new(white.clone()).with_pbr(Vec4::new(0.80, 0.55, 0.35, 1.0), 0.5, 0.0),
                     MeshRenderer::new(),
                 ));
             }
 
+            // Parlak metal zemin: alan ışıklarının yansıması burada görünür.
             scene.world.spawn_bundle((
                 Transform::new(Vec3::new(0.0, -0.3, 0.0)),
                 GlobalTransform::default(),
                 AssetManager::create_plane(device, 26.0),
-                Material::new(white).with_pbr(Vec4::new(0.62, 0.62, 0.65, 1.0), 0.9, 0.0),
+                Material::new(white).with_pbr(Vec4::new(0.85, 0.85, 0.88, 1.0), 0.18, 1.0),
                 MeshRenderer::new(),
             ));
 
-            // Nokta ışığı: yarıçapı ölçüm koşuları arasında değişiyor.
-            scene.world.spawn_bundle(PointLightBundle {
-                position: Vec3::new(0.0, 2.6, 2.6),
-                color: Vec3::new(1.0, 0.92, 0.80),
-                intensity: 9.0,
-                radius,
-            });
-            // Güneş: gölgeyi düşüren şey bu (nokta ışıkları gölge düşürmüyor).
-            scene.world.spawn_bundle(DirectionalLightBundle {
-                rotation: Quat::from_rotation_y(0.25) * Quat::from_rotation_x(-0.7),
-                intensity: 2.6,
-                ..Default::default()
-            });
+            let warm = Vec3::new(1.0, 0.85, 0.65);
+            // Küre: 15 cm yarıçaplı bir ampul.
+            scene.world.spawn_bundle((
+                Transform::new(Vec3::new(-2.4, 1.2, 0.0)),
+                GlobalTransform::default(),
+                PointLight::new(warm, 6.0, 12.0).with_source_radius(0.15 * k),
+            ));
+            // Tüp: 1,2 m'lik bir floresan, varlığın yerel X ekseni boyunca.
+            scene.world.spawn_bundle((
+                Transform::new(Vec3::new(0.0, 1.2, 0.0)),
+                GlobalTransform::default(),
+                PointLight::new(Vec3::new(0.75, 0.9, 1.0), 6.0, 12.0)
+                    .with_source_radius(0.03 * k)
+                    .with_source_length(1.2 * k),
+            ));
+            // Dikdörtgen: 1 m × 0,6 m bir softbox, aşağı bakıyor (yerel −Z, X etrafında −90°).
+            scene.world.spawn_bundle((
+                Transform::new(Vec3::new(2.4, 1.2, 0.0))
+                    .with_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)),
+                GlobalTransform::default(),
+                RectLight::new(warm, 6.0, 12.0, (1.0 * k).max(0.001), (0.6 * k).max(0.001)),
+            ));
 
-            gizmo::gizmo_log!(Info, "nokta ışığı yarıçapı (MENZİL, kaynak boyutu değil): {}", radius);
-            scene.spawn_camera(state, Vec3::new(0.0, 3.6, 8.0), Vec3::new(0.0, 0.3, 0.0));
+            // Güneş: 1,2° açısal yarıçap (yumuşak gölge) ve 30 cm temas gölgesi.
+            scene.world.spawn_bundle((
+                Transform::new(Vec3::ZERO)
+                    .with_rotation(Quat::from_rotation_y(0.25) * Quat::from_rotation_x(-0.7)),
+                GlobalTransform::default(),
+                DirectionalLight::new(Vec3::ONE, 1.2, LightRole::Sun)
+                    .with_angular_radius(0.02)
+                    .with_contact_shadows(0.3),
+            ));
+            gizmo::gizmo_log!(Info, "alan ışıkları: kaynak çarpanı {}", k);
+            scene.spawn_camera(state, Vec3::new(0.0, 3.0, 7.5), Vec3::new(0.0, 0.0, 0.0));
         })
         .set_ui(move |_world, _state, ctx| {
             gizmo::egui::Area::new("area".into())
                 .anchor(gizmo::egui::Align2::RIGHT_TOP, [-12.0, 12.0])
                 .show(ctx, |ui| {
                     gizmo::egui::Frame::popup(ui.style()).show(ui, |ui| {
-                        ui.set_min_width(430.0);
+                        ui.set_min_width(400.0);
                         ui.heading("Alan ışıkları ve yumuşak gölgeler");
-                        ui.label(format!("nokta ışığı yarıçapı: {radius}"));
+                        ui.label(format!("kaynak çarpanı: {k}  (GIZMO_SOURCE_SCALE)"));
                         ui.separator();
-                        ui.label("motorda üç ışık var, üçü de NOKTASAL:");
-                        ui.label("  PointLight · DirectionalLight · SpotLight");
+                        ui.label("soldan sağa: küre · tüp · dikdörtgen panel");
+                        ui.label("  PointLight::with_source_radius");
+                        ui.label("  PointLight::with_source_length");
+                        ui.label("  RectLight (tek yüzlü, arkası karanlık)");
                         ui.separator();
-                        ui.label("YOK: dikdörtgen alan ışığı · küresel alan ışığı");
-                        ui.label("YOK: ışık dokusu (cookie) · temas gölgesi");
-                        ui.label("YOK: PCSS (mesafeyle yumuşayan gölge) · PCCM");
+                        ui.label("güneş: with_angular_radius (PCSS) · with_contact_shadows");
+                        ui.label("alçak kutunun gölgesi keskin, yüksek kutununki yumuşak.");
                         ui.separator();
                         ui.colored_label(
                             gizmo::egui::Color32::from_rgb(230, 160, 80),
-                            "radius = MENZİL, kaynak boyutu DEĞİL",
+                            "PointLight::radius = MENZİL, kaynak boyutu DEĞİL",
                         );
-                        ui.label("büyütmek gölgeyi yumuşatmaz, ışığı yayar ve zayıflatır.");
-                        ui.separator();
-                        ui.label("soldaki kutu alçak, sağdaki yüksek —");
-                        ui.label("PCSS olsaydı gölge kenarları farklı olurdu.");
                     });
                 });
         })

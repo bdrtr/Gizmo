@@ -36,7 +36,7 @@ pub fn full_scene_registry() -> SceneRegistry {
     {
         use gizmo_renderer::components::{
             BoneAttachment, Camera, DirectionalLight, MaterialDesc, MeshRenderer, ParticleEmitter,
-            PointLight, PostProcess, SpotLight, Terrain,
+            PointLight, PostProcess, RectLight, SpotLight, Terrain,
         };
         // Registration is best-effort: a name collision is a bug in this file, not a reason
         // to take the application down mid-save. Warn loudly and keep the rest.
@@ -51,6 +51,7 @@ pub fn full_scene_registry() -> SceneRegistry {
         reg_or_warn!(PointLight, "PointLight");
         reg_or_warn!(DirectionalLight, "DirectionalLight");
         reg_or_warn!(SpotLight, "SpotLight");
+        reg_or_warn!(RectLight, "RectLight");
         // These three were addable in the editor and unsaveable: a user could put a particle
         // emitter, a terrain or a bone attachment on an entity, save, reopen, and find it gone —
         // silently, because a component the registry does not know is simply not written. All
@@ -174,7 +175,7 @@ mod tests {
     #[cfg(feature = "render")]
     fn lights_and_cameras_are_registered() {
         let reg = full_scene_registry();
-        for name in ["Camera", "PointLight", "DirectionalLight", "SpotLight"] {
+        for name in ["Camera", "PointLight", "DirectionalLight", "SpotLight", "RectLight"] {
             assert!(
                 reg.contains_name(name),
                 "{name} must round-trip; a scene that loses its lights is not a scene"

@@ -3,7 +3,7 @@ use crate::editor_state::EditorState;
 use egui;
 use gizmo_core::World;
 use gizmo_math::Vec3;
-use gizmo_renderer::components::{PointLight, DirectionalLight, SpotLight};
+use gizmo_renderer::components::{PointLight, DirectionalLight, RectLight, SpotLight};
 
 
 /// The point-light rows: colour, intensity and radius.
@@ -153,4 +153,60 @@ pub fn draw_spot_light_section(
     }
 }
 
-
+/// The `RectLight` section: colour, intensity, range and the panel's two extents. Which way the
+/// panel faces is the entity's rotation (its forward axis, local −Z), as for a spot light.
+pub fn draw_rect_light_section(
+    ui: &mut egui::Ui,
+    world: &World,
+    entity_id: gizmo_core::entity::Entity,
+    _state: &mut EditorState,
+) {
+    // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
+    let mut lights = unsafe { world.borrow_mut_unchecked::<RectLight>() };
+    if let Some(mut light) = lights.get_mut(entity_id.id()) {
+        egui::CollapsingHeader::new(crate::theme::section_title("Rect Light"))
+            .default_open(true)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Renk:");
+                    let mut color = [light.color.x, light.color.y, light.color.z];
+                    if ui.color_edit_button_rgb(&mut color).changed() {
+                        light.color = Vec3::new(color[0], color[1], color[2]);
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Yoğunluk:");
+                    ui.add(egui::DragValue::new(&mut light.intensity).speed(0.1).range(0.0..=100.0));
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Menzil:");
+                    ui.add(
+                        egui::DragValue::new(&mut light.radius)
+                            .speed(0.1)
+                            .range(0.001..=500.0)
+                            .suffix(" m"),
+                    );
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Genişlik:");
+                    ui.add(
+                        egui::DragValue::new(&mut light.width)
+                            .speed(0.01)
+                            .range(0.001..=50.0)
+                            .suffix(" m"),
+                    );
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Yükseklik:");
+                    ui.add(
+                        egui::DragValue::new(&mut light.height)
+                            .speed(0.01)
+                            .range(0.001..=50.0)
+                            .suffix(" m"),
+                    );
+                });
+                ui.label(egui::RichText::new("Panel, varlığın 'Transform' rotasyonunun ileri ekseni (−Z) yönünde, tek yüzünden ışık verir.").weak().small());
+            });
+        ui.separator();
+    }
+}

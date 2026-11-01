@@ -182,6 +182,48 @@ impl SpotLight {
     }
 }
 
+/// A rectangular area light — a softbox, a window, a lit panel — emitting from one face.
+///
+/// The rectangle is centred on the entity, `width` along its local X, `height` along its local Y,
+/// and it lights the side its **forward axis** (local −Z, as for [`SpotLight`]) faces; nothing
+/// behind it is lit. Diffuse is the exact cosine-weighted solid angle of the rectangle (Lambert's
+/// polygon formula), so a large panel close to a wall lights it as a panel, not as a bulb at its
+/// centre. Specular takes the point on the rectangle nearest the reflected ray, energy-normalised:
+/// a glossy floor shows the panel's reflection, not a pinpoint.
+///
+/// `intensity` is the on-axis intensity — the rectangle's radiance is `intensity / area` — so a
+/// panel seen face on from far away lights like a [`PointLight`] of the same intensity, and
+/// dimmer off axis, as a flat emitter does. No shadows: rectangle lights are not shadow casters.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct RectLight {
+    /// Linear RGB colour.
+    pub color: Vec3,
+    /// On-axis brightness (see the type's documentation).
+    pub intensity: f32,
+    /// The distance the falloff reaches zero at, as for [`PointLight::radius`] — and, likewise,
+    /// the culling bound.
+    pub radius: f32,
+    /// Extent along the entity's local X, in metres.
+    pub width: f32,
+    /// Extent along the entity's local Y, in metres.
+    pub height: f32,
+}
+
+impl RectLight {
+    /// A rectangle light, with intensity floored at zero, the radius kept above 0.001 and each
+    /// extent above 1 mm (a zero-area rectangle has no radiance to speak of).
+    pub fn new(color: Vec3, intensity: f32, radius: f32, width: f32, height: f32) -> Self {
+        let extent = |m: f32| if m.is_finite() { m.max(0.001) } else { 0.001 };
+        Self {
+            color,
+            intensity: intensity.max(0.0),
+            radius: radius.max(0.001),
+            width: extent(width),
+            height: extent(height),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

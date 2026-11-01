@@ -884,6 +884,7 @@ fn every_capability_neither_path_names_is_accounted_for() {
         ("PointLight", "lights are gathered by the shared collector both paths call."),
         ("DirectionalLight", "same collector."),
         ("SpotLight", "same collector."),
+        ("RectLight", "same collector."),
         ("LightRole", "the tag that collector sorts by."),
 
         // ── A member of a type the inventory does judge ────────────────────────────────────

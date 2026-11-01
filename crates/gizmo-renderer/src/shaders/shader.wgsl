@@ -5,7 +5,7 @@
 // dropped on web. That divergence is expressed at the SOURCE via `#ifdef SHADOWS` (shadow
 // bindings + PCF block) and `@group(#{SKELETON_GROUP})` / `@group(#{INSTANCE_GROUP})`
 // (3/4 native, 2/3 web) — never by grepping naga's reformatted output.
-#import gizmo::common::{SceneUniforms, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, gizmo_cluster_index}
+#import gizmo::common::{SceneUniforms, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, gizmo_cluster_index}
 #ifdef PROBES
 #import gizmo::reflection_probes::{probe_environment}
 #endif
@@ -310,6 +310,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let intensity = light.position.w;
         var L: vec3<f32>;
         var attenuation: f32 = 1.0;
+        var window: f32 = 1.0;
         if (light_type == 2u) {
             L = normalize(-light.direction.xyz);
             attenuation = 1.0;
@@ -320,7 +321,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             L = normalize(to_light);
             let d_over_r = distance / radius;
             attenuation = clamp(1.0 - d_over_r * d_over_r * d_over_r * d_over_r, 0.0, 1.0);
-            attenuation = (attenuation * attenuation) / (distance * distance + 1.0);
+            window = attenuation * attenuation;
+            attenuation = window / (distance * distance + 1.0);
             if (light_type == 1u) {
                 let spot_dir = normalize(light.direction.xyz);
                 let cos_angle = dot(-L, spot_dir);
@@ -332,7 +334,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             }
         }
         var light_color_contrib = vec3<f32>(0.0);
-        if (light_type == 0u && light.params.w > 0.0) {
+        if (light_type == 3u) {
+            // A rectangle light (`compute_rect_lighting`; one-sided, so it gates itself).
+            light_color_contrib = compute_rect_lighting(
+                N, view_dir, light.position.xyz - in.world_position, light.direction, light.params.z,
+                light.params.w, base_color, min_roughness, metallic, f0, light.color.rgb, intensity, window
+            );
+        } else if (light_type == 0u && light.params.w > 0.0) {
             // A tube light (`compute_tube_lighting`).
             light_color_contrib = compute_tube_lighting(
                 N, view_dir, light.position.xyz - in.world_position, light.direction.xyz, light.params.w,

@@ -64,6 +64,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   bytes per sample, so native devices request `max_color_attachment_bytes_per_sample` up to 64.
   Groundwork for object motion blur; nothing reads the target yet.
 
+- **Rectangle lights: `RectLight`.** A one-sided panel (`width` × `height` in the entity's local XY,
+  lighting along its forward axis, local −Z): diffuse is the exact cosine-weighted solid angle of the
+  rectangle (Lambert's polygon formula), specular the representative point on it, renormalised
+  across each extent. `intensity` is on-axis, so a small panel face on lights like a `PointLight`.
+  Light type 3 in `LightData` (orientation quaternion in `direction`, half extents in `params.zw`);
+  `compute_rect_lighting` in `common.wgsl`, both draw paths, and the volumetric pass keeps the air
+  behind it dark. Saved in scenes, editable in the inspector, addable in the studio. Not a shadow
+  caster. The `area_lights` demo now shows the sphere, tube and rectangle lights over a glossy floor.
+
 - **Tube lights: `PointLight::source_length` (`with_source_length`).** A point light whose source is
   a capsule along the light's local +X: specular takes the representative point on the segment
   nearest the reflected ray (Karis 2013), the lobe is renormalised for the line as well as for the
