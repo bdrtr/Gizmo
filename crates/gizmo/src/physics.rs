@@ -162,6 +162,181 @@ fn box_for_quad(
     })
 }
 
+/// A static collider covering a [`Tilemap`](crate::renderer::components::Tilemap)'s solid
+/// tiles — the ground, walls and platforms of a tile level — as few boxes as the grid allows.
+///
+/// `solid` says which tile numbers collide, so grass tufts, background and other decoration on the
+/// same map stay walk-through. Put the result on the tilemap's own entity with a static body:
+/// it is built in the map's local frame (origin at the top-left, rows going down), so the boxes
+/// line up with the drawn tiles wherever the entity is. `depth` is the thickness along local Z.
+///
+/// **Boxes are merged.** Runs of solid cells in a row become one box, and runs with the same
+/// columns in consecutive rows merge into one taller box, so a flat 120 × 4 ground is **one** box
+/// rather than 480. That is not only cheaper (the narrowphase tests a compound's parts one by
+/// one): a body sliding across a seam between two separate boxes can catch on the inner edge,
+/// and a merged floor has no seams to catch on.
+///
+/// `None` when the map has no solid tile. Like [`sprite_collider`], `Transform::scale` is not
+/// applied — the physics does not scale colliders — so build it for an unscaled entity.
+#[cfg(feature = "render")]
+pub fn tilemap_collider(
+    map: &crate::renderer::components::Tilemap,
+    depth: f32,
+    solid: impl Fn(u32) -> bool,
+) -> Option<components::Collider> {
+    let (width, height) = map.size();
+    let rects = merge_solid_cells(width, height, |x, y| map.get(x, y).is_some_and(&solid));
+    rects_to_collider(&rects, map.tile_size, depth)
+}
+
+/// Covers the solid cells of a `width × height` grid with rectangles `(x0, y0, x1, y1)`, ends
+/// exclusive: horizontal runs per row, then runs with equal columns in consecutive rows merged.
+#[cfg(feature = "render")]
+fn merge_solid_cells(width: u32, height: u32, solid: impl Fn(u32, u32) -> bool) -> Vec<[u32; 4]> {
+    let mut done: Vec<[u32; 4]> = Vec::new();
+    // Rectangles that reached the previous row and may still grow downward.
+    let mut open: Vec<[u32; 4]> = Vec::new();
+    for y in 0..height {
+        let mut runs = Vec::new();
+        let mut x = 0;
+        while x < width {
+            if solid(x, y) {
+                let start = x;
+                while x < width && solid(x, y) {
+                    x += 1;
+                }
+                runs.push((start, x));
+            } else {
+                x += 1;
+            }
+        }
+        let mut next = Vec::with_capacity(runs.len());
+        for (x0, x1) in runs {
+            match open.iter().position(|r| r[0] == x0 && r[2] == x1) {
+                Some(i) => {
+                    let mut r = open.swap_remove(i);
+                    r[3] = y + 1;
+                    next.push(r);
+                }
+                None => next.push([x0, y, x1, y + 1]),
+            }
+        }
+        done.append(&mut open);
+        open = next;
+    }
+    done.append(&mut open);
+    // A stable order, so the same map always builds the same collider.
+    done.sort_unstable_by_key(|r| (r[1], r[0]));
+    done
+}
+
+#[cfg(feature = "render")]
+fn rects_to_collider(rects: &[[u32; 4]], tile: gizmo_math::Vec2, depth: f32) -> Option<components::Collider> {
+    use gizmo_math::Vec3;
+    if rects.is_empty() || !(tile.x > 0.0 && tile.y > 0.0 && tile.is_finite()) {
+        return None;
+    }
+    let half_z = (depth.abs() * 0.5).max(1e-3);
+    let parts = rects
+        .iter()
+        .map(|&[x0, y0, x1, y1]| {
+            let centre = Vec3::new(
+                (x0 + x1) as f32 * 0.5 * tile.x,
+                -((y0 + y1) as f32 * 0.5 * tile.y),
+                0.0,
+            );
+            let half = Vec3::new((x1 - x0) as f32 * 0.5 * tile.x, (y1 - y0) as f32 * 0.5 * tile.y, half_z);
+            (
+                components::Transform::new(centre),
+                Box::new(components::ColliderShape::Box(components::BoxShape { half_extents: half })),
+            )
+        })
+        .collect();
+    // `Collider` is `#[non_exhaustive]` and has no compound constructor; `shape` is public.
+    let mut collider = components::Collider::box_collider(Vec3::ONE);
+    collider.shape = components::ColliderShape::Compound(parts);
+    Some(collider)
+}
+
+#[cfg(all(test, feature = "render"))]
+mod tilemap_collider_tests {
+    use super::*;
+    use gizmo_math::{Vec2, Vec3};
+
+    fn grid(rows: &[&str]) -> Vec<[u32; 4]> {
+        let w = rows.iter().map(|r| r.len()).max().unwrap_or(0) as u32;
+        merge_solid_cells(w, rows.len() as u32, |x, y| rows[y as usize].as_bytes().get(x as usize) == Some(&b'#'))
+    }
+
+    #[test]
+    fn a_solid_block_is_one_box_and_shapes_take_few() {
+        assert_eq!(grid(&["####", "####", "####"]), vec![[0, 0, 4, 3]]);
+        // An L: the stem and the foot cannot share columns, so two boxes.
+        assert_eq!(grid(&["#...", "#...", "####"]), vec![[0, 0, 1, 2], [0, 2, 4, 3]]);
+        // A hole splits a row into two runs.
+        assert_eq!(grid(&["#.##"]), vec![[0, 0, 1, 1], [2, 0, 4, 1]]);
+        assert!(grid(&["....", ""]).is_empty());
+    }
+
+    /// Every solid cell is covered exactly once and nothing else is — on an irregular map.
+    #[test]
+    fn the_boxes_cover_exactly_the_solid_cells() {
+        let rows = ["##..##.#", "###.##..", ".#######", "....#..#", "########"];
+        let rects = grid(&rows);
+        for (y, row) in rows.iter().enumerate() {
+            for (x, c) in row.bytes().enumerate() {
+                let n = rects
+                    .iter()
+                    .filter(|r| (r[0]..r[2]).contains(&(x as u32)) && (r[1]..r[3]).contains(&(y as u32)))
+                    .count();
+                assert_eq!(n, usize::from(c == b'#'), "cell ({x}, {y})");
+            }
+        }
+    }
+
+    /// The boxes sit where the tiles are drawn: right and DOWN from the origin.
+    #[test]
+    fn boxes_are_placed_in_the_maps_frame() {
+        let c = rects_to_collider(&[[1, 2, 3, 3]], Vec2::new(2.0, 1.0), 1.0).unwrap();
+        let components::ColliderShape::Compound(parts) = &c.shape else { panic!("compound") };
+        assert_eq!(parts[0].0.position, Vec3::new(4.0, -2.5, 0.0));
+        let components::ColliderShape::Box(b) = &*parts[0].1 else { panic!("box") };
+        assert_eq!(b.half_extents, Vec3::new(2.0, 0.5, 0.5));
+        assert!(rects_to_collider(&[], Vec2::ONE, 1.0).is_none());
+    }
+
+    /// End to end: a ball dropped on a tile floor comes to rest on top of it — the floor's top
+    /// is the map's origin row, so it lands at `origin.y + radius`.
+    #[test]
+    fn a_ball_lands_on_a_tile_floor() {
+        // `Tilemap` needs an image id, which only a renderer hands out; the map's geometry does
+        // not depend on it, so the rows go through the same merge directly.
+        let rects = grid(&["##########", "##########"]);
+        assert_eq!(rects.len(), 1);
+        let floor = rects_to_collider(&rects, Vec2::ONE, 1.0).unwrap();
+
+        let mut world = crate::core::World::new();
+        world.insert_resource(world::PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0)));
+        world.spawn_bundle((
+            components::Transform::new(Vec3::new(-5.0, 0.0, 0.0)),
+            RigidBody::new_static(),
+            Velocity::default(),
+            floor,
+        ));
+        let ball = world.spawn_bundle((
+            components::Transform::new(Vec3::new(0.0, 3.0, 0.0)),
+            RigidBody::new(1.0, true),
+            Velocity::default(),
+            components::Collider::sphere(0.5),
+        ));
+        for _ in 0..240 {
+            system::physics_step_system(&world, 1.0 / 60.0);
+        }
+        let y = world.borrow::<components::Transform>().get(ball.id()).unwrap().position.y;
+        assert!((y - 0.5).abs() < 0.05, "the ball rests at y = {y}, the floor top is 0 and its radius 0.5");
+    }
+}
+
 #[cfg(all(test, feature = "render"))]
 mod sprite_collider_tests {
     use super::*;

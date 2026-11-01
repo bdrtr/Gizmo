@@ -53,7 +53,8 @@ stack" is the 3D one restricted to a plane — a world sprite lies in its entity
 | **mipmaps, atlas packing** | **no** |
 | sprite-sheet animation (`SpriteAnimation`, advanced by both draw paths) | yes, since 2026-11-01 |
 | `Tilemap` (one tileset, one entity, one draw call; both draw paths) | yes, since 2026-11-01 |
-| **2D physics** | **no** |
+| collision from a tilemap (`tilemap_collider`: solid tiles → merged static boxes) | yes, since 2026-11-01 |
+| **2D physics** (2D shapes and solver) | **no** — 3D shapes with axis locks stand in |
 
 Measured (`sprites_reach_the_frame_in_place_in_order_and_behind_walls`): a world sprite behind a
 wall changes **0** pixels, and **784** with `CompareFunction::Always` in the world pipeline; two

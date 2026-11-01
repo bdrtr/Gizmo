@@ -31,8 +31,8 @@ hash replays bit-for-bit, which is what rollback netcode and the regression soak
 
 Ranked and measured in [`CAPABILITY_GAPS.md`](CAPABILITY_GAPS.md); the short version:
 
-- **2D game layer:** no 2D collision shapes (3D shapes + axis locks work), and a tilemap has no
-  collision of its own (§C9).
+- **2D game layer:** no 2D collision shapes — 3D shapes + axis locks work, and
+  `gizmo::physics::tilemap_collider` turns a tilemap's solid tiles into merged static boxes (§C9).
 - **Rendering:** no environment cubemap / reflection probes (§A5), no MSAA (§A6), no area lights
   or soft contact shadows (§A7), no occlusion culling (§A7b), no motion blur or auto exposure
   (§A7c), split screen half-done (§A5b).

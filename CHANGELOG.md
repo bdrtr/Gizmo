@@ -50,6 +50,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`gizmo::physics::tilemap_collider(&map, depth, solid)` — collision for a tile level.** The
+  tiles `solid` accepts become one static compound collider in the map's own frame, with cells
+  merged into as few boxes as the grid allows (row runs, then equal runs in consecutive rows): a
+  flat ground of any size is one box, which also leaves no seams for a sliding body to catch on.
+  Tested end to end — a ball dropped on a tile floor rests on its top edge.
+
 - **`Tilemap` — a grid of tiles from one tileset image, as one component.** Built empty
   (`new`), from text rows with a legend (`from_rows`), or edited with `set` / `fill`; `get`,
   `tiles`, `cell_at` (the cell under a local point) and `cell_center`. Tile `(0, 0)` is the
