@@ -128,7 +128,9 @@ impl DirectionalLight {
 }
 
 /// A cone of light from the entity's position, aimed along its `Transform`'s forward axis.
-#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+///
+/// Not `Copy` since it can name a [`cookie`](Self::cookie).
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SpotLight {
     /// Linear RGB colour.
     pub color: Vec3,
@@ -148,6 +150,13 @@ pub struct SpotLight {
     /// energy-normalised), diffuse the centre. `#[serde(default)]`.
     #[serde(default)]
     pub source_radius: f32,
+    /// An image projected through the cone (a cookie, or gobo): its colour multiplies the light's,
+    /// so black blocks it — a window frame, leaves, a flashlight's uneven beam. The image fills the
+    /// outer cone; its up is world up as seen down the cone. A name registered with
+    /// `Renderer::insert_light_cookie`, or on native a path read from disk on first use. `None`
+    /// (the default) is a plain cone. See `gizmo_renderer::cookies`. `#[serde(default)]`.
+    #[serde(default)]
+    pub cookie: Option<String>,
 }
 
 impl SpotLight {
@@ -171,7 +180,14 @@ impl SpotLight {
             inner_angle,
             outer_angle,
             source_radius: 0.0,
+            cookie: None,
         }
+    }
+
+    /// This light projecting the cookie `name` (see [`cookie`](Self::cookie)).
+    pub fn with_cookie(mut self, name: impl Into<String>) -> Self {
+        self.cookie = Some(name.into());
+        self
     }
 
     /// This light with a spherical source of `metres` radius (see

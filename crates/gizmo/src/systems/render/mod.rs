@@ -868,6 +868,9 @@ fn draw_camera_view(
     // Lights, cascades and the whole scene block — via the shared setup helper, so the game and
     // studio renderers can only differ in what they pass it. The game always casts from the sun;
     // the editor's fallback to a point light is the other `ShadowCaster`.
+    // Cookies a spot names by path are read from disk the first frame they are needed.
+    #[cfg(not(target_arch = "wasm32"))]
+    renderer.sync_light_cookies(world);
     let setup = collect_scene_setup(
         world,
         &SceneSetupInputs {
@@ -883,6 +886,7 @@ fn draw_camera_view(
             },
             point_shadows_enabled: renderer.point_shadows_enabled,
             elapsed_time,
+            light_cookies: renderer.light_cookies.table(),
         },
     );
     let scene_lights = &setup.lights;
@@ -5440,6 +5444,105 @@ mod golden_render_tests {
             // renormalisation the mean reads 94.47 (+14 % over its own square).
             assert!(panel_aspect > square_aspect * 1.5, "the panel's highlight is {panel_aspect:.2} wide per height, the square's {square_aspect:.2}");
             assert!(panel_mean < square_mean * 1.07, "the frame's mean went {square_mean:.2} → {panel_mean:.2} — energy added across the panel");
+        });
+    }
+
+    /// A spot light's cookie is projected through its cone, the right way round. A spot points
+    /// straight down at a matte floor, seen from above (world +X is the screen's right — measured in
+    /// the rectangle-light test). Its cookie is black on the left, white on the right, so the pool
+    /// of light must be cut in half: the right half lit, the left half as dark as no light at all.
+    /// Without a cookie both halves are lit alike, and a cookie named but never found (no such
+    /// file) must behave as no cookie rather than as layer 0's image or as black.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn a_spot_light_projects_its_cookie_the_right_way_round() {
+        use crate::renderer::components::SpotLight;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        // (mean luma of the left half, of the right half); `lit = false` leaves the lamp out.
+        async fn halves(cookie: Option<&str>, lit: bool) -> (f32, f32) {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssr = None;
+            renderer.volumetric = None;
+            // 2×1: black, white.
+            renderer
+                .insert_light_cookie("half", &[0, 0, 0, 255, 255, 255, 255, 255], 2, 1)
+                .expect("one cookie fits");
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(
+                &renderer.device,
+                &renderer.queue,
+                &renderer.scene.texture_bind_group_layout,
+            );
+            let floor = world.spawn();
+            world.add_component(floor, Transform::new(Vec3::new(0.0, -0.2, 0.0)).with_scale(Vec3::new(20.0, 0.2, 20.0)));
+            world.add_component(floor, GlobalTransform::default());
+            world.add_component(floor, AssetManager::create_cube(&renderer.device));
+            world.add_component(floor, Material::new(tex).with_pbr(Vec4::new(0.8, 0.8, 0.8, 1.0), 1.0, 0.0));
+            world.add_component(floor, MeshRenderer::new());
+            let half_pi = std::f32::consts::FRAC_PI_2;
+            let lamp = world.spawn();
+            // Spots aim along local −Z: −90° about X aims straight down.
+            world.add_component(
+                lamp,
+                Transform::new(Vec3::new(0.0, 1.5, 0.0)).with_rotation(gizmo_math::Quat::from_rotation_x(-half_pi)),
+            );
+            world.add_component(lamp, GlobalTransform::default());
+            let mut spot = SpotLight::new(Vec3::ONE, if lit { 6.0 } else { 0.0 }, 20.0, 0.5, 0.6);
+            spot.cookie = cookie.map(str::to_string);
+            world.add_component(lamp, spot);
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.0, 3.0, 0.0),
+                yaw: -half_pi,
+                pitch: -1.5,
+                primary: true,
+                ..Default::default()
+            });
+            let frame = render_world(&mut renderer, &mut world).await;
+            let luma: Vec<f32> = frame.as_chunks::<4>().0.iter().map(|p| (p[0] as f32 + p[1] as f32 + p[2] as f32) / 3.0).collect();
+            let half = |left: bool| {
+                let xs = if left { 0..64 } else { 64..128 };
+                let mut sum = 0.0;
+                for y in 0..128 {
+                    for x in xs.clone() {
+                        sum += luma[y * 128 + x];
+                    }
+                }
+                sum / (64.0 * 128.0)
+            };
+            (half(true), half(false))
+        }
+        pollster::block_on(async {
+            let (dark_l, dark_r) = halves(None, false).await;
+            let (plain_l, plain_r) = halves(None, true).await;
+            let (cut_l, cut_r) = halves(Some("half"), true).await;
+            let (missing_l, missing_r) = halves(Some("no/such/cookie.png"), true).await;
+            // Measured: unlit 61.39 / 61.39, plain 93.82 / 93.80, cut 65.56 / 88.48 (the 2-texel
+            // image's bilinear ramp crosses the middle), missing = plain. Caught: u mirrored
+            // (88.50 / 65.56), the layer off by one (an empty, black layer: 61.39 both), the cookie
+            // sampled but not applied and never packed (both = plain).
+            assert!(plain_l > dark_l + 10.0, "the spot must light the floor: {dark_l:.2} → {plain_l:.2}");
+            assert!((plain_l - plain_r).abs() < 0.5, "without a cookie the pool is symmetric: {plain_l:.2} / {plain_r:.2}");
+            assert!(
+                cut_l - dark_l < 0.2 * (plain_l - dark_l),
+                "the cookie's black half blocks the light: left {cut_l:.2}, unlit {dark_l:.2}, plain {plain_l:.2}"
+            );
+            assert!(
+                cut_r - dark_r > 0.6 * (plain_r - dark_r),
+                "its white half lets it through: right {cut_r:.2}, unlit {dark_r:.2}, plain {plain_r:.2}"
+            );
+            assert!(
+                (missing_l - plain_l).abs() < 0.1 && (missing_r - plain_r).abs() < 0.1,
+                "a cookie that never loaded is no cookie: {missing_l:.2}/{missing_r:.2} vs {plain_l:.2}/{plain_r:.2}"
+            );
         });
     }
 

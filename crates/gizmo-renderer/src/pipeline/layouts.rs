@@ -87,6 +87,24 @@ pub(super) fn build_layouts(device: &wgpu::Device) -> Layouts {
                 },
                 count: None,
             },
+            // Light cookies (`crate::cookies`): beside the shadow maps because a spot's cookie is
+            // sampled where its shadow is, and a fixed-size array never needs the group rebuilt.
+            wgpu::BindGroupLayoutEntry {
+                binding: 3,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    multisampled: false,
+                    view_dimension: wgpu::TextureViewDimension::D2Array,
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 4,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
         ],
     });
 

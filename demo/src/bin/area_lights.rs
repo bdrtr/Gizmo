@@ -13,6 +13,10 @@
 //! Dikdörtgenin diffuse'u Lambert'in çokgen formülüyle tam — duvara yakın büyük bir panel duvarı
 //! panel gibi aydınlatır, ortasındaki bir ampul gibi değil. Panel **tek yüzlü**: arkası karanlık.
 //!
+//! Arkada bir spot ışığı bir **cookie** (ışık dokusu) yansıtıyor: kodda üretilmiş dört camlı bir
+//! pencere çerçevesi (`Renderer::insert_light_cookie`, `SpotLight::with_cookie`). Bir dosya yolu
+//! da verilebilir — native'de ilk kullanıldığı karede diskten okunur.
+//!
 //! Güneş `with_angular_radius` (PCSS: gölge, düşüren nesneden uzaklaştıkça yumuşar — soldaki alçak
 //! kutunun gölgesi keskin, sağdaki yüksek kutununki yumuşak) ve `with_contact_shadows` (gölge
 //! haritasının kaçırdığı ince temas çizgisi) ile.
@@ -71,7 +75,7 @@ fn main() {
                 Transform::new(Vec3::new(0.0, -0.3, 0.0)),
                 GlobalTransform::default(),
                 AssetManager::create_plane(device, 26.0),
-                Material::new(white).with_pbr(Vec4::new(0.85, 0.85, 0.88, 1.0), 0.18, 1.0),
+                Material::new(white.clone()).with_pbr(Vec4::new(0.85, 0.85, 0.88, 1.0), 0.18, 1.0),
                 MeshRenderer::new(),
             ));
 
@@ -98,6 +102,33 @@ fn main() {
                 RectLight::new(warm, 6.0, 12.0, (1.0 * k).max(0.001), (0.6 * k).max(0.001)),
             ));
 
+            // Cookie: 64×64 dört camlı bir pencere — açık camlar, koyu kayıtlar.
+            let window: Vec<u8> = (0..64u32 * 64)
+                .flat_map(|i| {
+                    let (x, y) = (i % 64, i / 64);
+                    let bar = |v: u32| !(4..60).contains(&v) || (30..34).contains(&v);
+                    if bar(x) || bar(y) { [8, 8, 8, 255] } else { [255, 240, 210, 255] }
+                })
+                .collect();
+            if let Err(e) = scene.renderer.insert_light_cookie("pencere", &window, 64, 64) {
+                gizmo::gizmo_log!(Warning, "cookie yüklenemedi: {}", e);
+            }
+            // Cookie'nin düştüğü mat bir zemin parçası: metal zemin diffuse yansıtmaz, tepeden
+            // düşen bir spotun deseni onda görünmezdi.
+            scene.world.spawn_bundle((
+                Transform::new(Vec3::new(0.0, -0.28, -3.5)).with_scale(Vec3::new(2.4, 0.02, 2.0)),
+                GlobalTransform::default(),
+                AssetManager::create_cube(&scene.renderer.device),
+                Material::new(white).with_pbr(Vec4::new(0.75, 0.75, 0.75, 1.0), 0.95, 0.0),
+                MeshRenderer::new(),
+            ));
+            scene.world.spawn_bundle((
+                Transform::new(Vec3::new(0.0, 3.0, -3.5))
+                    .with_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)),
+                GlobalTransform::default(),
+                SpotLight::new(Vec3::ONE, 10.0, 12.0, 0.45, 0.5).with_cookie("pencere"),
+            ));
+
             // Güneş: 1,2° açısal yarıçap (yumuşak gölge) ve 30 cm temas gölgesi.
             scene.world.spawn_bundle((
                 Transform::new(Vec3::ZERO)
@@ -112,7 +143,7 @@ fn main() {
         })
         .set_ui(move |_world, _state, ctx| {
             gizmo::egui::Area::new("area".into())
-                .anchor(gizmo::egui::Align2::RIGHT_TOP, [-12.0, 12.0])
+                .anchor(gizmo::egui::Align2::RIGHT_BOTTOM, [-12.0, -12.0])
                 .show(ctx, |ui| {
                     gizmo::egui::Frame::popup(ui.style()).show(ui, |ui| {
                         ui.set_min_width(400.0);
@@ -123,6 +154,7 @@ fn main() {
                         ui.label("  PointLight::with_source_radius");
                         ui.label("  PointLight::with_source_length");
                         ui.label("  RectLight (tek yüzlü, arkası karanlık)");
+                        ui.label("arkada: SpotLight::with_cookie — pencere ışık dokusu");
                         ui.separator();
                         ui.label("güneş: with_angular_radius (PCSS) · with_contact_shadows");
                         ui.label("alçak kutunun gölgesi keskin, yüksek kutununki yumuşak.");

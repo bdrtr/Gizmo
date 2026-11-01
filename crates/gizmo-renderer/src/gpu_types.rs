@@ -142,7 +142,7 @@ pub struct LightData {
     pub direction: [f32; 4],
     /// `x` = cosine of the outer cone angle, `y` = the light type (0 = point, 1 = spot,
     /// 2 = directional, 3 = rectangle), `z` = source radius (point/spot, 0 = a point), `w` = tube
-    /// length (point). A rectangle carries its orientation quaternion in `direction` and its half
+    /// length (point) or cookie layer + 1 (spot, 0 = none). A rectangle carries its orientation quaternion in `direction` and its half
     /// width and half height in `zw`.
     pub params: [f32; 4],
 }

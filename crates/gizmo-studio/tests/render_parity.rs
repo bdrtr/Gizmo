@@ -48,6 +48,7 @@ fn game_inputs() -> SceneSetupInputs {
         environment: EnvironmentFrame { preset: 2, preset_2: 3, blend_t: 0.5, shading_mode: 0 },
         point_shadows_enabled: true,
         elapsed_time: 7.5,
+        light_cookies: Default::default(),
     }
 }
 
@@ -63,6 +64,7 @@ fn editor_inputs() -> SceneSetupInputs {
         environment: EnvironmentFrame { shading_mode: 4, ..Default::default() },
         point_shadows_enabled: false,
         elapsed_time: 7.5,
+        light_cookies: Default::default(),
     }
 }
 

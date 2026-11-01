@@ -147,6 +147,19 @@ pub fn draw_spot_light_section(
                     light.inner_angle = inner_deg.min(outer_deg).to_radians();
                 }
 
+                // Cookie: a name registered in code, or a path read from disk on first use.
+                // Empty is no cookie.
+                ui.horizontal(|ui| {
+                    ui.label("Cookie:");
+                    let mut text = light.cookie.clone().unwrap_or_default();
+                    if ui
+                        .add(egui::TextEdit::singleline(&mut text).hint_text("yok — görsel yolu"))
+                        .changed()
+                    {
+                        let text = text.trim();
+                        light.cookie = (!text.is_empty()).then(|| text.to_string());
+                    }
+                });
                 ui.label(egui::RichText::new("Koninin baktığı yön varlığın 'Transform' rotasyonundan gelir.").weak().small());
             });
         ui.separator();

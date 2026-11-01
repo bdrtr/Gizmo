@@ -5,7 +5,7 @@
 // dropped on web. That divergence is expressed at the SOURCE via `#ifdef SHADOWS` (shadow
 // bindings + PCF block) and `@group(#{SKELETON_GROUP})` / `@group(#{INSTANCE_GROUP})`
 // (3/4 native, 2/3 web) — never by grepping naga's reformatted output.
-#import gizmo::common::{SceneUniforms, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, gizmo_cluster_index}
+#import gizmo::common::{SceneUniforms, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, spot_cookie_uv, gizmo_cluster_index}
 #ifdef PROBES
 #import gizmo::reflection_probes::{probe_environment}
 #endif
@@ -40,6 +40,12 @@ var t_shadow: texture_depth_2d_array;
 
 @group(2) @binding(1)
 var s_shadow: sampler_comparison;
+
+// Light cookies (`gizmo_renderer::cookies`) — beside the shadow maps, so native only.
+@group(2) @binding(3)
+var t_cookie: texture_2d_array<f32>;
+@group(2) @binding(4)
+var s_cookie: sampler;
 #endif
 
 @group(1) @binding(0)
@@ -311,6 +317,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         var L: vec3<f32>;
         var attenuation: f32 = 1.0;
         var window: f32 = 1.0;
+        var cookie = vec3<f32>(1.0);
         if (light_type == 2u) {
             L = normalize(-light.direction.xyz);
             attenuation = 1.0;
@@ -331,31 +338,39 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 let epsilon = max(inner_cos - outer_cos, 0.001);
                 let spot_factor = clamp((cos_angle - outer_cos) / epsilon, 0.0, 1.0);
                 attenuation *= spot_factor * spot_factor;
+#ifdef SHADOWS
+                if (light.params.w > 0.0) {
+                    cookie = textureSampleLevel(
+                        t_cookie, s_cookie, spot_cookie_uv(light, in.world_position), i32(light.params.w) - 1, 0.0
+                    ).rgb;
+                }
+#endif
             }
         }
+        let light_rgb = light.color.rgb * cookie;
         var light_color_contrib = vec3<f32>(0.0);
         if (light_type == 3u) {
             // A rectangle light (`compute_rect_lighting`; one-sided, so it gates itself).
             light_color_contrib = compute_rect_lighting(
                 N, view_dir, light.position.xyz - in.world_position, light.direction, light.params.z,
-                light.params.w, base_color, min_roughness, metallic, f0, light.color.rgb, intensity, window
+                light.params.w, base_color, min_roughness, metallic, f0, light_rgb, intensity, window
             );
         } else if (light_type == 0u && light.params.w > 0.0) {
             // A tube light (`compute_tube_lighting`).
             light_color_contrib = compute_tube_lighting(
                 N, view_dir, light.position.xyz - in.world_position, light.direction.xyz, light.params.w,
-                light.params.z, base_color, min_roughness, metallic, f0, light.color.rgb, intensity, attenuation
+                light.params.z, base_color, min_roughness, metallic, f0, light_rgb, intensity, attenuation
             );
         } else if (light_type != 2u && light.params.z > 0.0) {
             // A sphere-sourced point or spot light (`compute_sphere_lighting`).
             light_color_contrib = compute_sphere_lighting(
                 N, view_dir, light.position.xyz - in.world_position, light.params.z, base_color,
-                min_roughness, metallic, f0, light.color.rgb, intensity, attenuation
+                min_roughness, metallic, f0, light_rgb, intensity, attenuation
             );
         } else {
             light_color_contrib = compute_direct_lighting(
                 N, view_dir, L, base_color, min_roughness, metallic, f0,
-                light.color.rgb, intensity, attenuation
+                light_rgb, intensity, attenuation
             );
         }
         total_lighting += light_color_contrib;

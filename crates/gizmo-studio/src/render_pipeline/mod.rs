@@ -137,6 +137,7 @@ pub fn execute_render_pipeline(
     // editor does differently is an argument here, with its reason, and `tests/render_parity.rs`
     // holds the two argument sets side by side. This block used to be forty lines of light
     // conversion, shadow-direction choice and cascade fallback written out a second time.
+    renderer.sync_light_cookies(world);
     let setup = gizmo::systems::render::collect_scene_setup(
         world,
         &gizmo::systems::render::SceneSetupInputs {
@@ -156,6 +157,7 @@ pub fn execute_render_pipeline(
             // enabling the lookup would read whatever the game path left in it.
             point_shadows_enabled: false,
             elapsed_time,
+            light_cookies: renderer.light_cookies.table(),
         },
     );
     let cascade_mats = setup.cascade_view_projs;
@@ -887,6 +889,7 @@ fn record_game_view(
         }
     };
 
+    renderer.sync_light_cookies(world);
     let setup = gizmo::systems::render::collect_scene_setup(
         world,
         &gizmo::systems::render::SceneSetupInputs {
@@ -900,6 +903,7 @@ fn record_game_view(
             },
             point_shadows_enabled: false,
             elapsed_time,
+            light_cookies: renderer.light_cookies.table(),
         },
     );
     let cascades = setup.cascade_view_projs.map(|m| m.to_cols_array_2d());

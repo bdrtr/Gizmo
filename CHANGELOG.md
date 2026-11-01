@@ -64,6 +64,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   bytes per sample, so native devices request `max_color_attachment_bytes_per_sample` up to 64.
   Groundwork for object motion blur; nothing reads the target yet.
 
+- **Light cookies: `SpotLight::cookie` / `with_cookie`, `Renderer::insert_light_cookie`,
+  `gizmo_renderer::cookies`.** A spot projects an image through its cone (a window frame, leaves,
+  a coloured gel): its colour multiplies the light's. Up to eight cookies resident at once, 256²
+  each, in one texture array bound beside the shadow maps (shadow group, bindings 3 and 4). A
+  cookie is a name registered from memory, or on native a path read from disk the first frame a
+  spot names it (a missing file is logged once and the spot stays a plain cone). The image's up is
+  world up as seen down the cone. Native only: the web forward pipeline has no shadow group. The
+  `area_lights` demo projects a procedural window.
+
 - **Rectangle lights: `RectLight`.** A one-sided panel (`width` × `height` in the entity's local XY,
   lighting along its forward axis, local −Z): diffuse is the exact cosine-weighted solid angle of the
   rectangle (Lambert's polygon formula), specular the representative point on it, renormalised
@@ -2421,6 +2430,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   linted for wasm.
 
 ### Changed
+
+- **`SpotLight` is no longer `Copy`**: it can name a cookie (`cookie: Option<String>`). `.clone()`
+  where a copy was taken; nothing in the workspace needed one. `SceneSetupInputs` gained
+  `light_cookies` and `collect_scene_lights` a `&CookieTable` — pass
+  `renderer.light_cookies.table()`, or `Default::default()` for no cookies.
 
 - **`FighterInputBuffer::check_combo_strict` matches a press edge only — holding the buttons is no
   longer performing the motion.** It used to accept `just_pressed || pressed`, which is not a

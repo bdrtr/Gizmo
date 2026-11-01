@@ -137,6 +137,7 @@ pub fn collect_scene_lights(
     world: &World,
     cam_pos: Vec3,
     view_proj: gizmo_math::Mat4,
+    cookies: &crate::renderer::cookies::CookieTable,
 ) -> SceneLights {
     let frustum = gizmo_math::Frustum::from_matrix(&view_proj);
     let globals = world.borrow::<GlobalTransform>();
@@ -220,8 +221,14 @@ pub fn collect_scene_lights(
                     position: [pos.x, pos.y, pos.z, light.intensity],
                     color: [light.color.x, light.color.y, light.color.z, light.radius],
                     direction: [dir.x, dir.y, dir.z, light.inner_angle.cos()],
-                    // params.y = 1 → SpotLight; params.z = source radius (0 = a point).
-                    params: [light.outer_angle.cos(), 1.0, light.source_radius.max(0.0), 0.0],
+                    // params.y = 1 → SpotLight; params.z = source radius (0 = a point);
+                    // params.w = cookie layer + 1 (0 = none, or a cookie not resident yet).
+                    params: [
+                        light.outer_angle.cos(),
+                        1.0,
+                        light.source_radius.max(0.0),
+                        light.cookie.as_deref().and_then(|c| cookies.layer(c)).map_or(0.0, |l| l as f32 + 1.0),
+                    ],
                 },
                 is_point: false,
                 surface_dist,
@@ -372,6 +379,8 @@ pub struct SceneSetupInputs {
     pub point_shadows_enabled: bool,
     /// Time since the scene started, in seconds; what animated shaders advance on.
     pub elapsed_time: f32,
+    /// Which cookie name is in which layer — `renderer.light_cookies.table()`.
+    pub light_cookies: crate::renderer::cookies::CookieTable,
 }
 
 /// Build one frame's scene state, for either render path.
@@ -392,7 +401,7 @@ pub struct SceneSetupInputs {
 pub fn collect_scene_setup(world: &World, inputs: &SceneSetupInputs) -> SceneSetup {
     use gizmo_math::Mat4;
 
-    let lights = collect_scene_lights(world, inputs.camera.position, inputs.camera.view_proj);
+    let lights = collect_scene_lights(world, inputs.camera.position, inputs.camera.view_proj, &inputs.light_cookies);
 
     let shadow_dir = match inputs.shadow_caster {
         // Always fits, sun or not. `sun_dir` is the collector's down-vector default when the
@@ -509,6 +518,26 @@ mod tests {
     // `SpotLight` stores the cone half-angles in radians. The game render path fed
     // the raw radians (broken cone), and unifying light collection briefly spread
     // that to the studio too; collection must convert the angles to cosines.
+    /// A spot's cookie reaches the shader as its layer + 1 in params.w — but only once it is
+    /// resident: a name nobody registered (yet) is a plain cone, not layer 0's image.
+    #[test]
+    fn a_spot_cookie_is_packed_as_its_layer_plus_one() {
+        let table = crate::renderer::cookies::CookieTable::from_names(["leaves.png", "window.png"]);
+        let pack = |cookie: Option<&str>| {
+            let mut world = World::new();
+            let e = world.spawn();
+            world.add_component(e, Transform::new(Vec3::new(0.0, 0.0, 5.0)));
+            let mut spot = SpotLight::new(Vec3::ONE, 7.0, 20.0, 0.3, 0.5);
+            spot.cookie = cookie.map(str::to_string);
+            world.add_component(e, spot);
+            collect_scene_lights(&world, Vec3::ZERO, wide_view(), &table).lights[0].params[3]
+        };
+        assert_eq!(pack(Some("window.png")), 2.0, "layer 1 → 2");
+        assert_eq!(pack(Some("leaves.png")), 1.0, "layer 0 → 1, distinct from no cookie");
+        assert_eq!(pack(Some("missing.png")), 0.0, "not resident → no cookie");
+        assert_eq!(pack(None), 0.0);
+    }
+
     /// A `RectLight` reaches the shader as type 3 with its half extents and its orientation — the
     /// shader rebuilds both axes from that quaternion, so a dropped or unnormalised rotation is a
     /// panel facing the wrong way.
@@ -520,7 +549,7 @@ mod tests {
         let rot = gizmo_math::Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
         world.add_component(e, Transform::new(Vec3::new(0.0, 1.0, 0.0)).with_rotation(rot));
         world.add_component(e, RectLight::new(Vec3::ONE, 4.0, 10.0, 2.0, 0.5));
-        let l = collect_scene_lights(&world, Vec3::new(0.0, 0.0, 5.0), wide_view());
+        let l = collect_scene_lights(&world, Vec3::new(0.0, 0.0, 5.0), wide_view(), &Default::default());
         assert_eq!(l.num_lights, 1);
         let d = l.lights[0];
         assert_eq!(d.params[1], 3.0, "params.y == 3 marks a rectangle light");
@@ -539,7 +568,7 @@ mod tests {
         // inner_angle = 0.4 rad, outer_angle = 0.6 rad (radians, ctor clamps inner ≤ outer).
         world.add_component(e, SpotLight::new(Vec3::ONE, 10.0, 30.0, 0.4, 0.6));
 
-        let l = collect_scene_lights(&world, Vec3::ZERO, wide_view());
+        let l = collect_scene_lights(&world, Vec3::ZERO, wide_view(), &Default::default());
         assert_eq!(l.num_lights, 1);
         let spot = l.lights[0];
         assert_eq!(spot.params[1], 1.0, "params.y == 1 marks a spot light");
@@ -578,7 +607,7 @@ mod tests {
         world.add_component(s, Transform::new(Vec3::new(1.0, 2.0, 3.0)));
         world.add_component(s, SpotLight::new(Vec3::ONE, 7.0, 20.0, 0.3, 0.5));
 
-        let l = collect_scene_lights(&world, Vec3::ZERO, wide_view());
+        let l = collect_scene_lights(&world, Vec3::ZERO, wide_view(), &Default::default());
         assert_eq!(l.num_lights, 2);
         assert_eq!(l.lights[0].params[1], 1.0, "the nearby spot outranks the distant point");
         assert_eq!(l.lights[1].params[1], 0.0);
@@ -597,7 +626,7 @@ mod tests {
         world.add_component(s, GlobalTransform::default());
         world.add_component(s, SpotLight::new(Vec3::ONE, 7.0, 20.0, 0.3, 0.5));
 
-        let l = collect_scene_lights(&world, Vec3::ZERO, wide_view());
+        let l = collect_scene_lights(&world, Vec3::ZERO, wide_view(), &Default::default());
         assert_eq!(l.num_lights, 1);
         assert_eq!(l.shadow_point_index, -1, "no point light → no point-shadow caster");
     }
@@ -629,7 +658,7 @@ mod tests {
             point_at(&mut world, i as f32 * 100.0);
         }
 
-        let l = collect_scene_lights(&world, Vec3::ZERO, wide_view());
+        let l = collect_scene_lights(&world, Vec3::ZERO, wide_view(), &Default::default());
         assert_eq!(l.num_lights as usize, MAX_LIGHTS, "the array is full");
         assert_eq!(
             selected_z(&l),
@@ -651,7 +680,7 @@ mod tests {
         for i in 1..=12 {
             lights.push(point_at(&mut world, i as f32 * 10.0));
         }
-        let before = collect_scene_lights(&world, Vec3::ZERO, wide_view());
+        let before = collect_scene_lights(&world, Vec3::ZERO, wide_view(), &Default::default());
 
         // Move three of the winners into a different archetype, leaving them the same lights in
         // the same places. (`GlobalTransform::default()` is the identity, and the collector
@@ -666,7 +695,7 @@ mod tests {
                 },
             );
         }
-        let after = collect_scene_lights(&world, Vec3::ZERO, wide_view());
+        let after = collect_scene_lights(&world, Vec3::ZERO, wide_view(), &Default::default());
 
         assert_eq!(selected_z(&before), selected_z(&after), "same world, same ten lights");
         assert_eq!(before.shadow_point_index, after.shadow_point_index);
@@ -688,7 +717,7 @@ mod tests {
         world.add_component(s, Transform::new(Vec3::new(0.0, 0.0, 2.0)));
         world.add_component(s, SpotLight::new(Vec3::ONE, 7.0, 20.0, 0.3, 0.5));
 
-        let l = collect_scene_lights(&world, Vec3::ZERO, wide_view());
+        let l = collect_scene_lights(&world, Vec3::ZERO, wide_view(), &Default::default());
         assert_eq!(l.num_lights as usize, MAX_LIGHTS);
         assert_eq!(l.lights[0].params[1], 1.0, "the spot at the camera is lit, and ranks first");
         assert!(
@@ -708,14 +737,14 @@ mod tests {
         let behind = {
             let mut world = World::new();
             point_at(&mut world, -50.0); // camera looks down +Z, so this is behind it
-            collect_scene_lights(&world, Vec3::ZERO, wide_view())
+            collect_scene_lights(&world, Vec3::ZERO, wide_view(), &Default::default())
         };
         assert_eq!(behind.num_lights, 0, "a light behind the camera lights nothing on screen");
 
         let in_front = {
             let mut world = World::new();
             point_at(&mut world, 50.0);
-            collect_scene_lights(&world, Vec3::ZERO, wide_view())
+            collect_scene_lights(&world, Vec3::ZERO, wide_view(), &Default::default())
         };
         assert_eq!(in_front.num_lights, 1, "the same light in view must be collected");
 
@@ -726,7 +755,7 @@ mod tests {
             let e = world.spawn();
             world.add_component(e, Transform::new(Vec3::new(0.0, 0.0, -2.0)));
             world.add_component(e, PointLight::new(Vec3::ONE, 5.0, 20.0));
-            collect_scene_lights(&world, Vec3::ZERO, wide_view())
+            collect_scene_lights(&world, Vec3::ZERO, wide_view(), &Default::default())
         };
         assert_eq!(
             straddling.num_lights, 1,

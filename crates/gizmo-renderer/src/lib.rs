@@ -130,6 +130,8 @@ pub mod luminance;
 pub mod motion;
 /// Reflection probes: the scene captured into a prefiltered cube for specular lighting.
 pub mod reflection;
+/// Light cookies: images a spot light projects through its cone.
+pub mod cookies;
 /// Auto exposure: the luminance sensor fed back into the composite pass, on the GPU.
 pub mod auto_exposure;
 /// Contrast-adaptive sharpening, the last post pass.

@@ -215,6 +215,9 @@ pub struct Renderer {
     /// The model matrix every entity was drawn with this frame and last — the object half of the
     /// G-buffer's velocity. Advanced once per frame by the game path. See [`crate::motion`].
     pub motion_history: crate::motion::MotionHistory,
+    /// Which cookie image sits in which layer of `scene.cookies`. See [`crate::cookies`] and
+    /// [`insert_light_cookie`](Self::insert_light_cookie).
+    pub light_cookies: crate::cookies::LightCookies,
 
     // === GIZMO HATA AYIKLAMA (Debug Lines) ===
     /// The debug line renderer — gizmos, wireframes, physics overlays.

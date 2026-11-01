@@ -16,6 +16,7 @@ const INV_PI: f32 = 0.31830988618; // 1 / PI — Lambert diffuse normalization
 //   direction.xyz= spot/dir axis,    direction.w= inner cutoff cos
 //   params.x     = outer cutoff cos, params.y   = light type (0=point,1=spot,2=dir,3=rect)
 //   (rect: direction = orientation quaternion, params.zw = half width, half height)
+//   (spot: params.w = cookie layer + 1, 0 = no cookie)
 //   params.z     = source radius (metres; 0 = a point — see compute_sphere_lighting)
 //   params.w     = tube length along direction.xyz (point lights only; see compute_tube_lighting)
 struct LightData {
@@ -242,6 +243,22 @@ fn compute_tube_lighting(
     let diffuse = kD * albedo * NoL * INV_PI;
     let specular = D * Vis * F * NoLs;
     return (diffuse + specular) * light_color * intensity * atten;
+}
+
+// Where `world_pos` falls on a spot light's cookie (`gizmo_renderer::cookies`): the outer cone
+// fills [0,1]², row 0 at the top. The cone's roll is not packed, so the image's up is world up as
+// seen down the cone — world −Z for a cone pointing straight up or down.
+fn spot_cookie_uv(light: LightData, world_pos: vec3<f32>) -> vec2<f32> {
+    let d = normalize(light.direction.xyz);
+    let up_ref = select(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(0.0, 0.0, -1.0), abs(d.y) > 0.99);
+    let right = normalize(cross(d, up_ref));
+    let up = cross(right, d);
+    let v = world_pos - light.position.xyz;
+    let z = max(dot(v, d), 1e-4);
+    let c = clamp(light.params.x, 1e-4, 0.9999);
+    let tan_outer = sqrt(1.0 - c * c) / c;
+    let p = vec2<f32>(dot(v, right), dot(v, up)) / (z * tan_outer);
+    return vec2<f32>(0.5 + 0.5 * p.x, 0.5 - 0.5 * p.y);
 }
 
 // `v` turned by the unit quaternion `q` (xyzw).

@@ -383,11 +383,12 @@ changed at Low / High / Ultra.
 
 Still missing: **SMAA**.
 
-### A7. Area lights, contact and soft shadows — **CLOSED 2026-11-01**; light textures open
+### A7. Area lights, light cookies, contact and soft shadows — **CLOSED 2026-11-02**
 
-Sphere, tube and rectangle lights exist, and so do soft and contact sun shadows; what is left is a
-light texture (cookie/gobo). The `area_lights` demo shows the three area lights side by side over a
-glossy floor. Each item:
+Sphere, tube and rectangle lights exist, spot lights project cookies, and the sun has soft and
+contact shadows. The `area_lights` demo shows all of it. What is left is narrower than the heading
+ever was: no cube cookies for point lights, no cookies on web, and rectangle lights cast no
+shadows. Each item:
 
 - **Spherical area lights: CLOSED 2026-11-01** — `PointLight::source_radius` / `SpotLight::source_radius`
   (metres, 0 = a point, the default), through `compute_sphere_lighting` in `common.wgsl`, both
@@ -421,7 +422,15 @@ glossy floor. Each item:
   the area halved, the volumetric gate removed, the renormalisation removed — all five fail. Not
   shadow casters; the volumetric pass still scatters every light as a point otherwise (spot cones
   included, as before).
-- **No light texture (cookie/gobo).**
+- ~~**No light texture (cookie/gobo).**~~ **CLOSED 2026-11-02:** `SpotLight::cookie` — a name
+  registered with `Renderer::insert_light_cookie`, or on native a path loaded on first use. Eight
+  256² layers in one array beside the shadow maps; the outer cone fills the image, its up is world
+  up seen down the cone (the packed spot has no roll). Measured with a black-left/white-right
+  cookie on a spot aimed straight down: the floor's halves 65.56 / 88.48 against 93.82 / 93.80
+  without it and 61.39 unlit; a cookie named but never found reads exactly as none. Caught when
+  broken: the image mirrored (88.50 / 65.56), the layer off by one (61.39 both — an empty layer is
+  black), the cookie sampled but not applied, and never packed. **Spot only, native only** (the web
+  forward pipeline has no shadow group); point lights have no cube cookie.
 - ~~**No contact shadows.**~~ **CLOSED 2026-11-01:** `DirectionalLight::contact_shadow_length`
   (metres, 0 = off, the default). The deferred lighting pass marches 16 steps from each pixel toward
   the sun in screen space and compares each with the G-buffer surface there. Measured on a 3 cm

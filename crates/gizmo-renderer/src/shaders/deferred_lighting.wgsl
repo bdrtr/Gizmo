@@ -6,7 +6,7 @@
 // in by load_shader_composed (naga_oil). Only binding-dependent deferred code lives below:
 // the fullscreen pass, procedural environment/IBL and PCSS shadows (they read `scene` and the
 // shadow textures, so per the common.wgsl convention they stay out of the pure modules).
-#import gizmo::common::{SceneUniforms, LightData, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, rotate_by_quat, gizmo_cluster_index}
+#import gizmo::common::{SceneUniforms, LightData, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, rotate_by_quat, spot_cookie_uv, gizmo_cluster_index}
 #import gizmo::pbr_ext::{approximate_env_brdf, compute_direct_lighting_anisotropic, compute_clear_coat}
 
 // Irradiance volumes: group 3. See `irradiance.wgsl` and `gizmo_renderer::irradiance`.
@@ -25,6 +25,9 @@ var<storage, read> cluster_light_indices: array<u32>;
 @group(1) @binding(0) var t_shadow: texture_depth_2d_array;
 @group(1) @binding(1) var s_shadow: sampler_comparison;
 @group(1) @binding(2) var t_point_shadow: texture_depth_cube;
+// Light cookies (`gizmo_renderer::cookies`): a spot's params.w = layer + 1.
+@group(1) @binding(3) var t_cookie: texture_2d_array<f32>;
+@group(1) @binding(4) var s_cookie: sampler;
 
 @group(2) @binding(0) var t_albedo_metallic:  texture_2d<f32>;
 @group(2) @binding(1) var t_normal_roughness: texture_2d<f32>;
@@ -594,6 +597,8 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         var atten: f32 = 1.0;
         // The range falloff alone, without the inverse square — what a rectangle light takes.
         var window: f32 = 1.0;
+        // A spot's cookie colour (white = none).
+        var cookie = vec3<f32>(1.0);
 
         if (light_type == 2u) {
             L = normalize(-light.direction.xyz);
@@ -623,6 +628,11 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
                 let eps      = max(inner - outer, 0.001);
                 let sf       = clamp((cos_a - outer) / eps, 0.0, 1.0);
                 atten *= sf * sf;
+                if (light.params.w > 0.0) {
+                    cookie = textureSampleLevel(
+                        t_cookie, s_cookie, spot_cookie_uv(light, world_pos), i32(light.params.w) - 1, 0.0
+                    ).rgb;
+                }
             } else if (light_type == 0u) {
                 // Point Light Shadow (optional). There is a single point-shadow cube;
                 // it belongs to ONE designated caster whose cubemap was rendered this
@@ -672,34 +682,35 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
             }
         }
 
+        let light_rgb = light.color.rgb * cookie;
         var light_color_contrib = vec3<f32>(0.0);
         if (light_type == 3u) {
             // A rectangle light.
             light_color_contrib = compute_rect_lighting(
                 N, V, light.position.xyz - world_pos, light.direction, light.params.z, light.params.w,
-                albedo, min_roughness, metallic, f0, light.color.rgb, intensity, window
+                albedo, min_roughness, metallic, f0, light_rgb, intensity, window
             );
         } else if (anisotropy > 0.0) {
             light_color_contrib = compute_direct_lighting_anisotropic(
                 N, V, L, T, B, albedo, min_roughness, metallic, anisotropy, f0,
-                light.color.rgb, intensity, atten
+                light_rgb, intensity, atten
             );
         } else if (light_type == 0u && light.params.w > 0.0) {
             // A tube light.
             light_color_contrib = compute_tube_lighting(
                 N, V, light.position.xyz - world_pos, light.direction.xyz, light.params.w, light.params.z,
-                albedo, min_roughness, metallic, f0, light.color.rgb, intensity, atten
+                albedo, min_roughness, metallic, f0, light_rgb, intensity, atten
             );
         } else if (light_type != 2u && light.params.z > 0.0) {
             // A sphere-sourced point or spot light.
             light_color_contrib = compute_sphere_lighting(
                 N, V, light.position.xyz - world_pos, light.params.z, albedo, min_roughness, metallic, f0,
-                light.color.rgb, intensity, atten
+                light_rgb, intensity, atten
             );
         } else {
             light_color_contrib = compute_direct_lighting(
                 N, V, L, albedo, min_roughness, metallic, f0,
-                light.color.rgb, intensity, atten
+                light_rgb, intensity, atten
             );
         }
 
@@ -709,7 +720,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
             let F_c = 0.04 + (1.0 - 0.04) * pow(1.0 - VoH, 5.0);
             let coat_atten = 1.0 - clear_coat * F_c;
 
-            let coat_spec = compute_clear_coat(N, V, L, light.color.rgb, intensity, atten);
+            let coat_spec = compute_clear_coat(N, V, L, light_rgb, intensity, atten);
             light_color_contrib = light_color_contrib * coat_atten + coat_spec * clear_coat;
         }
 

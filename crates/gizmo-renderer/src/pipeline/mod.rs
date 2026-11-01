@@ -97,6 +97,8 @@ pub struct SceneState {
     pub shadow_cascade_layer_views: [wgpu::TextureView; 4],
     /// The cascade depth texture itself — a depth array, one layer per cascade.
     pub shadow_depth_texture: wgpu::Texture,
+    /// The light-cookie array the shadow group carries at bindings 3 and 4. See [`crate::cookies`].
+    pub cookies: crate::cookies::CookieTextures,
     /// The point-light shadow cube's depth texture.
     pub point_shadow_depth_texture: wgpu::Texture,
     /// It as a cube view, for sampling.
@@ -501,6 +503,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         point_shadow_face_views,
     ) = build_shadow_resources(device);
     let layouts = build_layouts(device);
+    let cookies = crate::cookies::CookieTextures::new(device);
 
     let grid = crate::clustered::ClusterGrid::default();
     let cluster_table_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -549,6 +552,14 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
             wgpu::BindGroupEntry {
                 binding: 2,
                 resource: wgpu::BindingResource::TextureView(&point_shadow_cube_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(&cookies.view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::Sampler(&cookies.sampler),
             },
         ],
         label: Some("shadow_bind_group"),
@@ -683,6 +694,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         shadow_texture_view,
         shadow_cascade_layer_views,
         shadow_depth_texture,
+        cookies,
         point_shadow_depth_texture,
         point_shadow_cube_view,
         point_shadow_face_views,
