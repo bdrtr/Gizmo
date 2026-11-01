@@ -50,6 +50,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **CAS sharpening: `renderer.cas` (`gizmo_renderer::cas::CasState`).** Contrast-adaptive
+  sharpening as the last post pass — composite → FXAA → CAS → output — to give back the detail TAA
+  and FXAA blur away. Off by default (it changes every frame's look); `cas.enabled = true` and
+  `set_sharpness(queue, 0..=1)`. Flat areas are left exactly as they are; split-screen views and
+  the HUD are handled like FXAA's. Measured in `anti_aliasing`: TAA + CAS mean gradient 2.60 →
+  3.24, hardest step 145 → 184 (key 5 / `GIZMO_AA=taa_cas`). MSAA stays out by decision (deferred
+  G-buffer; see CAPABILITY_GAPS §A6).
+
 - **Split screen: `Camera::viewport` and `Camera::order`, drawn by `render_viewports`.** Give a
   camera a rectangle of the target (`Viewport::left_half()`, `quarter(i)`, `new(x, y, w, h)` — fractions,
   top-left origin) and `default_render_pass` draws every such camera into its own rectangle, lower

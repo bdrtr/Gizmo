@@ -35,7 +35,8 @@ Ranked and measured in [`CAPABILITY_GAPS.md`](CAPABILITY_GAPS.md); the short ver
   separate 2D solver (§C9); one-way platforms with `Collider::one_way`. A side-on character is the
   kinematic `CharacterController` with `target_velocity.x` — it jumps up through one-way platforms,
   lands on them and drops off them (`drop_through_timer`), and stays in its plane.
-- **Rendering:** no environment cubemap / reflection probes (§A5), no MSAA (§A6), no area lights
+- **Rendering:** no environment cubemap / reflection probes (§A5), no MSAA — by decision, TAA +
+  FXAA + CAS sharpening instead (§A6) — no SMAA, no area lights
   or soft contact shadows (§A7), no occlusion culling (§A7b), no motion blur or auto exposure
   (§A7c). Split screen works on the game path (`Camera::viewport`, §A5b); the studio previews a
   split-screen game through its primary camera.

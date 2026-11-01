@@ -294,11 +294,28 @@ buries the camera's own difference. That is the next layer of this same gap.
 
 **Render-to-texture itself works**: `default_render_pass` accepts any `TextureView`.
 
-### A6. No MSAA
+### A6. No MSAA — **by decision**; CAS sharpening added 2026-11-01
 
 Measured in `anti_aliasing`: every render target in the tree is `sample_count: 1`, and the
-deferred G-buffer path is not MSAA-shaped anyway. FXAA and TAA both exist and both measurably work;
-SMAA and CAS sharpening do not exist.
+deferred G-buffer path is not MSAA-shaped anyway. FXAA and TAA both exist and both measurably work.
+
+**MSAA stays out, deliberately.** On a deferred path it means every G-buffer target multisampled
+and lighting run per sample (or edge-detected and run per sample there) — at ×4, four times the
+G-buffer memory — to fix the one thing TAA + FXAA already measurably fix: the hardest step falls
+191 → 126 with both on. What TAA costs is softness, and that is what was missing.
+
+**CAS — contrast-adaptive sharpening — is now the last post pass** (`gizmo-renderer::cas`,
+`renderer.cas`, off by default, `set_sharpness(0..=1)`). Composite → FXAA → CAS → output, so it
+sharpens the final image, writes a split-screen view's rectangle, and the HUD is drawn after it.
+Measured in `anti_aliasing` (frame 240): TAA + CAS raises the mean gradient TAA lowered (2.60 →
+3.24, above the 2.90 of no AA at all) and gives back part of the hardest step (145 → 184) — detail
+and stair-stepping are the two ends of one axis, and sharpness picks the point. Tests: a soft edge
+is steepened and a flat area left alone, sharpness reaches the shader (each of three shader
+mutations red); in a frame, CAS present but disabled changes **0** pixels, enabled it raises the
+edge sum 36 830 → 95 540 at sharpness 1; with CAS on, split screen still writes only each view's
+rectangle.
+
+Still missing: **SMAA**, and FXAA has no quality presets (on/off only).
 
 ### A7. No area lights, light textures, or contact/soft shadows
 

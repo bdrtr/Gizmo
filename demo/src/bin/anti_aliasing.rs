@@ -11,7 +11,12 @@
 //! | FXAA (3 duyarlılık kademesi) | **var**, ama açık/kapalı — duyarlılık düğmesi yok |
 //! | SMAA (4 hazır ayar) | **yok** |
 //! | TAA | **var** (Halton titreşimi + geçmiş tamponu) |
-//! | CAS keskinleştirme | **yok** |
+//! | CAS keskinleştirme | **var** (2026-11-01) — `renderer.cas`, varsayılan kapalı, `set_sharpness(0..1)` |
+//!
+//! MSAA **bilerek yok**: ertelenmiş hatta MSAA, G-buffer'ın her hedefini çok örnekli yapmak ve
+//! aydınlatmayı örnek başına koşturmak demek — ×4'te G-buffer belleği dört kat. TAA + FXAA en sert
+//! basamağı zaten 191'den 126'ya indiriyor (aşağıdaki tablo); TAA'nın bedeli olan yumuşaklığı da
+//! CAS geri veriyor.
 //!
 //! İkisi de `Renderer`'ın `Option` alanı ve ikisinin de `enabled` bayrağı var; demo dördünü de
 //! (kapalı / FXAA / TAA / ikisi) tuşla geziyor.
@@ -40,6 +45,25 @@
 //!
 //! "Daha yumuşak görünüyor" bir ölçüm değildir; bu tablo ölçümdür.
 //!
+//! ### CAS eklenince (2026-11-01)
+//!
+//! Aynı ölçüt, aynı kare (240), bu kez HUD'un panelinin dikdörtgeni (sol üst 460×260) hariç —
+//! pencere boyutu ve hariç tutulan alan değiştiği için eski satırlarla değil, kendi aralarında
+//! karşılaştırın:
+//!
+//! | kip | kenar pikseli | ortalama \|grad\| | maks basamak |
+//! |-----|---------------|-------------------|--------------|
+//! | kapalı | %4,24 | 2,90 | 191 |
+//! | TAA | %5,78 | 2,60 | 145 |
+//! | **TAA + CAS** (keskinlik 0,5) | %6,46 | **3,24** | 184 |
+//! | FXAA + TAA | %6,02 | 2,59 | **126** |
+//!
+//! CAS'ın yaptığı tam olarak bu: TAA'nın düşürdüğü ortalama gradyanı (detayı) geri getiriyor —
+//! kapalıdan bile fazla — ve bunun bedeli, TAA'nın kırptığı en sert basamağın büyük kısmını geri
+//! vermesi (145 → 184). Keskinlik ile tırtık aynı eksenin iki ucu; `set_sharpness` o eksende bir
+//! nokta seçmek. Detay isteyen sahne (doku, yazı, uzak geometri) için TAA + CAS, en temiz kenar
+//! için FXAA + TAA.
+//!
 //! ## TAA'nın bir şartı var
 //!
 //! TAA geçmiş kareyi karıştırıyor, yani **duran bir sahnede** yakınsıyor; kamera her kare
@@ -60,16 +84,18 @@ use gizmo::simple::{SimpleAppExt, SimpleSceneState};
 struct AaMode {
     fxaa: bool,
     taa: bool,
+    cas: bool,
 }
 
 impl Default for AaMode {
     fn default() -> Self {
         // Başsız bir karede tuşa basacak kimse yok.
         match std::env::var("GIZMO_AA").as_deref() {
-            Ok("fxaa") => Self { fxaa: true, taa: false },
-            Ok("taa") => Self { fxaa: false, taa: true },
-            Ok("both") => Self { fxaa: true, taa: true },
-            _ => Self { fxaa: false, taa: false },
+            Ok("fxaa") => Self { fxaa: true, taa: false, cas: false },
+            Ok("taa") => Self { fxaa: false, taa: true, cas: false },
+            Ok("both") => Self { fxaa: true, taa: true, cas: false },
+            Ok("taa_cas") => Self { fxaa: false, taa: true, cas: true },
+            _ => Self { fxaa: false, taa: false, cas: false },
         }
     }
 }
@@ -146,6 +172,9 @@ fn main() {
                 if let Some(fxaa) = renderer.fxaa.as_mut() {
                     fxaa.set_enabled(&queue, mode.fxaa);
                 }
+                if let Some(cas) = renderer.cas.as_mut() {
+                    cas.enabled = mode.cas;
+                }
             }
 
             gizmo::systems::default_render_pass(world, encoder, view, renderer);
@@ -161,18 +190,19 @@ fn main() {
                         ui.set_min_width(400.0);
                         ui.heading("Kenar yumuşatma");
                         ui.label(format!(
-                            "FXAA: {} · TAA: {}",
+                            "FXAA: {} · TAA: {} · CAS: {}",
                             if mode.fxaa { "açık" } else { "kapalı" },
-                            if mode.taa { "açık" } else { "kapalı" }
+                            if mode.taa { "açık" } else { "kapalı" },
+                            if mode.cas { "açık" } else { "kapalı" }
                         ));
                         ui.separator();
-                        ui.label("motorda MSAA YOK — her hedef sample_count: 1");
-                        ui.label("SMAA ve CAS keskinleştirme de yok");
+                        ui.label("MSAA bilerek yok — ertelenmiş hat; TAA + FXAA + CAS");
+                        ui.label("SMAA yok");
                         ui.label("FXAA açık/kapalı; duyarlılık kademeleri yok");
                         ui.separator();
                         ui.label("TAA duran sahnede yakınsar: kamerayı oynatmayın");
                         ui.separator();
-                        ui.label("1 kapalı · 2 FXAA · 3 TAA · 4 ikisi");
+                        ui.label("1 kapalı · 2 FXAA · 3 TAA · 4 ikisi · 5 TAA + CAS");
                     });
                 });
         })
@@ -180,18 +210,18 @@ fn main() {
         .expect("uygulama çalıştırılamadı");
 }
 
-/// Dört kipi gezen tuşlar. Rakamlar bilerek: WASDQE kameranın.
+/// Beş kipi gezen tuşlar. Rakamlar bilerek: WASDQE kameranın.
 fn aa_input(mut mode: ResMut<AaMode>, input: Res<Input>) {
     use gizmo::winit::keyboard::KeyCode;
-    for (key, fxaa, taa) in [
-        (KeyCode::Digit1, false, false),
-        (KeyCode::Digit2, true, false),
-        (KeyCode::Digit3, false, true),
-        (KeyCode::Digit4, true, true),
+    for (key, fxaa, taa, cas) in [
+        (KeyCode::Digit1, false, false, false),
+        (KeyCode::Digit2, true, false, false),
+        (KeyCode::Digit3, false, true, false),
+        (KeyCode::Digit4, true, true, false),
+        (KeyCode::Digit5, false, true, true),
     ] {
         if input.is_key_just_pressed(key as u32) {
-            mode.fxaa = fxaa;
-            mode.taa = taa;
+            *mode = AaMode { fxaa, taa, cas };
         }
     }
 }

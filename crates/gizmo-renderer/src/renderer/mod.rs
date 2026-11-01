@@ -200,6 +200,9 @@ pub struct Renderer {
     /// FXAA, the last pass in the chain. When present and enabled, post-processing writes into
     /// its input texture rather than straight to the swapchain.
     pub fxaa: Option<crate::fxaa::FxaaState>,
+    /// Contrast-adaptive sharpening, after FXAA — the very last pass. Present but **disabled** by
+    /// default; see [`crate::cas`].
+    pub cas: Option<crate::cas::CasState>,
 
     // === GIZMO HATA AYIKLAMA (Debug Lines) ===
     /// The debug line renderer — gizmos, wireframes, physics overlays.
@@ -584,6 +587,9 @@ impl Renderer {
             if let Some(ref mut fxaa) = self.fxaa {
                 fxaa.resize(&self.device, &self.queue, self.config.format, new_size.width, new_size.height);
             }
+            if let Some(ref mut cas) = self.cas {
+                cas.resize(&self.device, self.config.format, new_size.width, new_size.height);
+            }
             // GPU fluid SSFR render targets. Previously never rebuilt, so after any
             // resize the fluid rendered into a stale sub-rectangle / the composite
             // copied the wrong extent. Fluid composites into the HDR target.
@@ -629,26 +635,29 @@ impl Renderer {
         region: Option<[f32; 4]>,
         overlay: bool,
     ) {
-        if let Some(ref fxaa) = self.fxaa {
-            if fxaa.enabled {
-                // Composite → FXAA input texture → FXAA → output_view. The composite fills the
-                // whole FXAA input; only the last pass, the one writing the output, takes the
-                // region.
-                crate::post_process::run_post_processing(
-                    self,
-                    encoder,
-                    &fxaa.input_texture_view,
-                    None,
-                );
-                crate::fxaa::run_fxaa_pass(fxaa, encoder, output_view, region);
-                if overlay {
-                    crate::overlay::record(self, encoder, output_view);
-                }
-                return;
+        // composite → [FXAA] → [CAS] → output_view. Each enabled stage renders into the next
+        // one's input texture at full size; only the LAST stage writes the output, and only it
+        // takes the region.
+        let fxaa = self.fxaa.as_ref().filter(|f| f.enabled);
+        let cas = self.cas.as_ref().filter(|c| c.enabled);
+        let after_composite = fxaa
+            .map(|f| &f.input_texture_view)
+            .or(cas.map(|c| &c.input_texture_view));
+        crate::post_process::run_post_processing(
+            self,
+            encoder,
+            after_composite.unwrap_or(output_view),
+            if after_composite.is_some() { None } else { region },
+        );
+        if let Some(fxaa) = fxaa {
+            match cas {
+                Some(cas) => crate::fxaa::run_fxaa_pass(fxaa, encoder, &cas.input_texture_view, None),
+                None => crate::fxaa::run_fxaa_pass(fxaa, encoder, output_view, region),
             }
         }
-        // FXAA kapalıysa doğrudan output'a yaz
-        crate::post_process::run_post_processing(self, encoder, output_view, region);
+        if let Some(cas) = cas {
+            crate::cas::run_cas_pass(cas, encoder, output_view, region);
+        }
         // After the whole post chain, FXAA included: a HUD is pixels, not radiance, and an edge
         // filter run over a glyph only blurs it. See `crate::overlay`.
         if overlay {

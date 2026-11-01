@@ -3675,6 +3675,65 @@ mod golden_render_tests {
         });
     }
 
+    /// **CAS reaches the frame and gives back what TAA blurs.** Four frames of the split-screen
+    /// scene with TAA on, then the same with CAS: the summed horizontal gradient — how much edge the
+    /// picture has — must rise, and nothing else may: the pass is opt-in, so with it present but
+    /// disabled the frame must be identical to a renderer without it.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn cas_sharpens_the_frame_and_changes_nothing_while_off() {
+        use crate::renderer::components::Viewport;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        fn edge(frame: &[u8]) -> u64 {
+            let mut sum = 0u64;
+            for y in 0..128usize {
+                for x in 1..128usize {
+                    let (a, b) = ((y * 128 + x - 1) * 4, (y * 128 + x) * 4);
+                    sum += (0..3).map(|c| frame[a + c].abs_diff(frame[b + c]) as u64).sum::<u64>();
+                }
+            }
+            sum
+        }
+        pollster::block_on(async {
+            let mut frames = Vec::new();
+            for mode in 0..3 {
+                let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+                renderer.ssgi = None;
+                match mode {
+                    0 => renderer.cas = None,
+                    1 => {} // present, disabled
+                    _ => {
+                        if let Some(cas) = renderer.cas.as_mut() {
+                            cas.enabled = true;
+                            cas.set_sharpness(&renderer.queue, 1.0);
+                        }
+                    }
+                }
+                let mut world = World::new();
+                split_screen_scene(&renderer, &mut world);
+                split_camera(&mut world, -20.0, Viewport::FULL, true);
+                let mut frame = Vec::new();
+                for _ in 0..4 {
+                    frame = render_world(&mut renderer, &mut world).await;
+                }
+                frames.push(frame);
+            }
+            let (off_drift, total) = changed_pixels(&frames[0], &frames[1], 128);
+            assert_eq!(off_drift, 0, "CAS present but disabled changed {off_drift}/{total} pixels");
+            let (soft, sharp) = (edge(&frames[0]), edge(&frames[2]));
+            assert!(
+                sharp as f64 > soft as f64 * 1.05,
+                "with CAS the frame's edge sum is {sharp}, without {soft} — it is not sharpening",
+            );
+        });
+    }
+
     /// What a split-screen frame does once, it must do once: the HUD is drawn a single time over
     /// the whole target (drawn per view, a half-transparent sprite is laid over itself and comes
     /// out brighter), and the frame's animation advances by one `dt` however many cameras draw.
@@ -3713,6 +3772,11 @@ mod golden_render_tests {
             time.update(1.0 / 20.0);
             world.insert_resource(time);
 
+            // CAS on: it is the last pass, so it is the one that has to write only the view's
+            // rectangle — the HUD and the black bottom half below prove it did.
+            if let Some(cas) = renderer.cas.as_mut() {
+                cas.enabled = true;
+            }
             let frame = render_world(&mut renderer, &mut world).await;
             let hud = frame[(102 * 128 + 52) * 4];
             assert!(

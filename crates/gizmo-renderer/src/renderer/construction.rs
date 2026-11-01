@@ -646,6 +646,9 @@ impl Renderer {
             size.height,
         ));
 
+        // Built, not enabled: sharpening changes every frame's look, so it is opt-in.
+        let cas = Some(crate::cas::CasState::new(&device, config.format, size.width, size.height));
+
         Self {
             tonemap_curve: crate::gpu_types::TonemapCurve::Aces,
             tonemap_white_point: 4.0,
@@ -667,6 +670,7 @@ impl Renderer {
             taa,
             view_history: Vec::new(),
             fxaa,
+            cas,
             gpu_particles,
             gpu_physics,
             gpu_fluid,

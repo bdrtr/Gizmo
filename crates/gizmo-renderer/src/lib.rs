@@ -126,6 +126,8 @@ pub mod routing;
 pub mod custom_material;
 pub mod irradiance;
 pub mod luminance;
+/// Contrast-adaptive sharpening, the last post pass.
+pub mod cas;
 pub mod components;
 pub mod csm;
 /// The immediate-mode line renderer behind the debug gizmos.
@@ -242,3 +244,4 @@ pub use ssao::{SsaoParams, SsaoState};
 pub use ssgi::SsgiState;
 pub use taa::TaaState;
 pub use fxaa::FxaaState;
+pub use cas::CasState;
