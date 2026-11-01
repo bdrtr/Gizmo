@@ -23,10 +23,10 @@
 //!
 //! - **No mipmaps.** A large image drawn small aliases. Right for pixel art and for UI drawn near
 //!   its native size; wrong for a big texture shrunk on a distant card.
-//! - **Pre-tonemap.** Like text, sprites are drawn into the HDR target and so are exposed and
-//!   bloomed with the frame: a sprite's colours are scene radiance, not final pixel values. For a
-//!   2D game with neutral exposure that is invisible; for HUD chrome over a dark 3D scene with
-//!   auto-exposure it is not, and it is the same thing to revisit when there is a post-tonemap pass.
+//! - **World sprites are pre-tonemap.** They are drawn into the HDR target with the scene and so
+//!   are exposed and bloomed with it — right for a card standing in a lit level. **Screen**
+//!   sprites are not: they go onto the final image after the post chain ([`crate::overlay`]), so a
+//!   HUD colour reaches the screen as authored.
 //! - **No texture atlas packing.** One image is one texture and one bind group; a sheet of frames
 //!   is one image with [`Sprite::uv_rect`](crate::components::Sprite::uv_rect) choosing the cell.
 
@@ -170,8 +170,8 @@ pub struct SpriteRenderer {
     images: Vec<Image>,
     /// Depth-tested against the scene, writing none.
     pipeline_world: wgpu::RenderPipeline,
-    /// Over everything.
-    pipeline_screen: wgpu::RenderPipeline,
+    /// Screen sprites, drawn onto the FINAL image after tone mapping — see [`crate::overlay`].
+    overlay: crate::overlay::OverlayPipelines,
     buffer: wgpu::Buffer,
     capacity: u32,
     world: Vec<Queued>,
@@ -238,7 +238,7 @@ impl SpriteRenderer {
         };
         let linear = sampler("Sprite Sampler (linear)", wgpu::FilterMode::Linear);
         let nearest = sampler("Sprite Sampler (nearest)", wgpu::FilterMode::Nearest);
-        let (pipeline_world, pipeline_screen) =
+        let (pipeline_world, overlay) =
             Self::build_pipelines(device, &layout, color_format, depth_format);
         let buffer = Self::instance_buffer(device, INITIAL_CAPACITY);
         Self {
@@ -247,7 +247,7 @@ impl SpriteRenderer {
             nearest,
             images: Vec::new(),
             pipeline_world,
-            pipeline_screen,
+            overlay,
             buffer,
             capacity: INITIAL_CAPACITY,
             world: Vec::new(),
@@ -273,7 +273,7 @@ impl SpriteRenderer {
         image_layout: &wgpu::BindGroupLayout,
         color_format: wgpu::TextureFormat,
         depth_format: wgpu::TextureFormat,
-    ) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
+    ) -> (wgpu::RenderPipeline, crate::overlay::OverlayPipelines) {
         #[cfg(not(target_arch = "wasm32"))]
         let shader = crate::pipeline::load_shader_composed(
             device,
@@ -337,10 +337,15 @@ impl SpriteRenderer {
                 cache: None,
             })
         };
-        (
-            make("Sprite Pipeline (world)", wgpu::CompareFunction::LessEqual),
-            make("Sprite Pipeline (screen)", wgpu::CompareFunction::Always),
-        )
+        let world = make("Sprite Pipeline (world)", wgpu::CompareFunction::LessEqual);
+        let overlay = crate::overlay::OverlayPipelines::new(
+            "Sprite Pipeline (overlay)",
+            shader.clone(),
+            layout.clone(),
+            SpriteInstance::desc,
+            ("fs_main", "fs_main_encoded"),
+        );
+        (world, overlay)
     }
 
     /// Recompiles `sprite.wgsl` and rebuilds both pipelines, keeping every loaded image.
@@ -350,9 +355,9 @@ impl SpriteRenderer {
         color_format: wgpu::TextureFormat,
         depth_format: wgpu::TextureFormat,
     ) {
-        let (world, screen) = Self::build_pipelines(device, &self.layout, color_format, depth_format);
+        let (world, overlay) = Self::build_pipelines(device, &self.layout, color_format, depth_format);
         self.pipeline_world = world;
-        self.pipeline_screen = screen;
+        self.overlay = overlay;
     }
 
     /// Uploads `width × height` RGBA8 pixels (sRGB, straight alpha, rows top to bottom).
@@ -505,26 +510,45 @@ impl SpriteRenderer {
         self.runs_screen = runs(&self.screen, self.world.len() as u32);
     }
 
-    /// Draws world sprites (depth-tested), then screen sprites (over everything).
+    /// Draws this frame's **world** sprites, depth-tested, into the HDR pass.
     ///
-    /// The pass needs a depth attachment, and [`upload`](Self::upload) must have run this frame.
+    /// Screen sprites are not drawn here: they go onto the final image after tone mapping,
+    /// through [`crate::overlay`]. The pass needs a depth attachment, and [`upload`](Self::upload)
+    /// must have run this frame.
     pub fn render<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {
-        if self.runs_world.is_empty() && self.runs_screen.is_empty() {
+        if self.runs_world.is_empty() {
             return;
         }
         pass.set_vertex_buffer(0, self.buffer.slice(..));
-        for (pipeline, list) in
-            [(&self.pipeline_world, &self.runs_world), (&self.pipeline_screen, &self.runs_screen)]
-        {
-            if list.is_empty() {
-                continue;
-            }
-            pass.set_pipeline(pipeline);
-            for run in list {
-                pass.set_bind_group(0, &self.images[run.image as usize].bind_group, &[]);
-                pass.draw(0..6, run.start..run.end);
-            }
+        pass.set_pipeline(&self.pipeline_world);
+        self.draw_runs(pass, &self.runs_world);
+    }
+
+    fn draw_runs(&self, pass: &mut wgpu::RenderPass<'_>, list: &[Run]) {
+        for run in list {
+            pass.set_bind_group(0, &self.images[run.image as usize].bind_group, &[]);
+            pass.draw(0..6, run.start..run.end);
         }
+    }
+
+    /// Whether this frame has screen sprites for the overlay.
+    pub(crate) fn has_overlay(&self) -> bool {
+        !self.runs_screen.is_empty()
+    }
+
+    /// Draws this frame's screen sprites onto the final image — [`crate::overlay`]'s middle step.
+    pub(crate) fn render_overlay(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+    ) {
+        if self.runs_screen.is_empty() {
+            return;
+        }
+        pass.set_pipeline(&self.overlay.get(device, format));
+        pass.set_vertex_buffer(0, self.buffer.slice(..));
+        self.draw_runs(pass, &self.runs_screen);
     }
 
     /// This frame's quad counts, `(world, screen)`.

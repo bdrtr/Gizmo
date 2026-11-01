@@ -68,9 +68,24 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Guarded by `sprites_reach_the_frame_in_place_in_order_and_behind_walls` (GPU): it fails with
   **890** px when the depth key is reversed and **784** px when the world pipeline's depth test is
   `Always`. Demo: `sprite_2d` — every image procedurally generated, nothing added to the repo.
-  Not yet: mipmaps, atlas packing, a post-tonemap slot (sprites are exposed with the frame, so a
-  saturated HUD colour comes out washed — visible in the demo's energy bar), 2D physics, a
-  tilemap and a sprite-animation component.
+  Not yet: mipmaps, atlas packing, 2D physics, a tilemap and a sprite-animation component.
+
+- **The HUD is drawn after tone mapping.** Screen-space sprites, screen text and `gizmo-ui`
+  backgrounds are now drawn onto the final image by a post-tonemap overlay
+  (`gizmo-renderer`'s private `overlay` module), from inside `Renderer::run_post_processing` — the
+  one function every output of both hosts goes through, FXAA path included — in the order
+  backgrounds, sprites, glyphs. They used to go into the HDR target with the world, so a HUD was
+  exposed, bloomed, tone-mapped and vignetted: an opaque `(0, 1, 0)` screen sprite read back as
+  `(0, 219, 0)`, and now reads `(0, 255, 0)`. World sprites and labels stay in the HDR pass.
+  Overlay pipelines are built per output format on first use; on a non-sRGB target the shader
+  encodes to sRGB itself (linear 0.5 reads 188 on both `Rgba8UnormSrgb` and `Rgba8Unorm`, 128
+  with the encode bypassed). `TextRenderer::begin_frame` now also forgets the upload counts and
+  `record_text`'s early return calls it — otherwise the overlay, which draws from those counts,
+  repainted a removed HUD forever (468 px measured). `TextRenderer::render` and
+  `SpriteRenderer::render` draw world-space content only.
+  The previous entry blamed tone mapping for the `sprite_2d` energy bar coming out mint; most of
+  that was the colour: `Sprite::color` is linear, and `(0.35, 0.9, 0.45)` is sRGB
+  `(160, 243, 179)`. The demo now uses saturated colours and says why.
 
 - **`CommandQueue::clear`** — drops every pending command without running any, returning how many
   went. The teardown counterpart to `apply`, and what `World::clear_entities` now calls (see

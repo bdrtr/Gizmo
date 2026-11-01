@@ -69,10 +69,29 @@ fn vs_main(@builtin(vertex_index) vi: u32, inst: GlyphInstance) -> VertexOutput 
     return out;
 }
 
-@fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+fn shade(in: VertexOutput) -> vec4<f32> {
     // The atlas is single-channel coverage, not colour: it says how much of this pixel the glyph
     // covers, and the text's own colour says what to paint there.
     let coverage = textureSample(atlas, atlas_sampler, in.uv).r;
     return vec4<f32>(in.color.rgb, in.color.a * coverage);
+}
+
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    return shade(in);
+}
+
+// The overlay's entry for a target that is NOT sRGB: the post chain's output there is already
+// encoded, so a linear colour written raw would come out too dark. An sRGB target encodes in
+// hardware and uses the plain entry.
+fn linear_to_srgb(c: vec3<f32>) -> vec3<f32> {
+    let lo = c * 12.92;
+    let hi = 1.055 * pow(max(c, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.4)) - 0.055;
+    return select(hi, lo, c <= vec3<f32>(0.0031308));
+}
+
+@fragment
+fn fs_main_encoded(in: VertexOutput) -> @location(0) vec4<f32> {
+    let c = shade(in);
+    return vec4<f32>(linear_to_srgb(c.rgb), c.a);
 }

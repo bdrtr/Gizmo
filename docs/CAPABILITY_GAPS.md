@@ -49,7 +49,8 @@ stack" is the 3D one restricted to a plane — a world sprite lies in its entity
 | flip, tint, fractional anchor | yes |
 | `IsHidden` (and inherited) | yes |
 | batching | one draw call per run of consecutive same-image sprites |
-| **mipmaps, atlas packing, post-tonemap HUD slot** | **no** |
+| screen sprites / text / UI backgrounds after tone mapping | yes, since the same day — see below |
+| **mipmaps, atlas packing** | **no** |
 | **2D physics, tilemap, sprite-animation component** | **no** |
 
 Measured (`sprites_reach_the_frame_in_place_in_order_and_behind_walls`): a world sprite behind a
@@ -57,9 +58,16 @@ wall changes **0** pixels, and **784** with `CompareFunction::Always` in the wor
 overlapping world sprites spawned near-first come out right, and **890** pixels wrong with the
 depth key reversed. Demo: `sprite_2d` — parallax, a sprite sheet, collection via `IsHidden`, a HUD.
 
-**The visible limit** is the one text has: sprites are drawn into the HDR target before tone
-mapping, so a saturated HUD colour reaches the screen desaturated (the demo's green energy bar
-comes out mint). The fix is a post-tonemap overlay slot, shared with text.
+**The HUD is drawn after tone mapping** (`gizmo-renderer::overlay`, same day). Screen sprites,
+screen text and UI backgrounds used to go into the HDR target with the world, so they were
+exposed, bloomed, tone-mapped and vignetted: an opaque `(0, 1, 0)` screen sprite read back as
+`(0, 219, 0)`. They are now drawn onto the final image inside `Renderer::run_post_processing` —
+the one function every output of both hosts goes through — and read back as `(0, 255, 0)`. World
+sprites and labels stay in the HDR pass, lit and occluded with the scene.
+
+A correction to the first version of this entry, which blamed tone mapping for the demo's
+energy bar coming out mint: most of that was the colour itself. `Sprite::color` is **linear**, and
+`(0.35, 0.9, 0.45)` is sRGB `(160, 243, 179)` — mint, whatever the pipeline does with it.
 
 ### A2. Text / font rendering — **the engine draws glyphs since 2026-08-24**
 

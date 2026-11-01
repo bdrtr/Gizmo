@@ -17,11 +17,14 @@ use crate::renderer::Renderer;
 /// `view_proj` must be the **unjittered** view-projection: sprites are drawn after TAA, so the
 /// jittered matrix the scene uniforms carry would make them shimmer — see `gizmo_renderer::sprite`.
 ///
-/// Runs after TAA and **before** [`record_text`](super::record_text), into the HDR target against
-/// the main depth buffer: a world sprite behind a wall is hidden by it, and a HUD label drawn over
-/// a HUD image reads on top of it. An entity hidden by `IsHidden` — on itself or on an ancestor —
-/// is skipped, exactly as a mesh is. A world sprite with no `GlobalTransform` is skipped too: at
-/// the origin it would look placed and be wrong.
+/// World sprites are drawn here, after TAA and before [`record_text`](super::record_text), into
+/// the HDR target against the main depth buffer: a sprite behind a wall is hidden by it. Screen
+/// sprites are only queued here; `Renderer::run_post_processing` draws them onto the final image
+/// after tone mapping, under screen text, so a HUD keeps its authored colours.
+///
+/// An entity hidden by `IsHidden` — on itself or on an ancestor — is skipped, exactly as a mesh
+/// is. A world sprite with no `GlobalTransform` is skipped too: at the origin it would look placed
+/// and be wrong.
 pub fn record_sprites(
     encoder: &mut wgpu::CommandEncoder,
     renderer: &mut Renderer,
@@ -62,7 +65,9 @@ pub fn record_sprites(
         state.queue(sprite, model, view_proj, screen);
     }
     state.upload(device, queue);
-    if state.queued() == (0, 0) {
+    // Screen sprites are drawn later, onto the final image, by the overlay in
+    // `Renderer::run_post_processing`. This pass is only for world sprites.
+    if state.queued().0 == 0 {
         return;
     }
 

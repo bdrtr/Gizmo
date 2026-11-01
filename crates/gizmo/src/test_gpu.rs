@@ -45,6 +45,16 @@ pub(crate) fn gpu_lock() -> std::sync::MutexGuard<'static, ()> {
 /// The device is created once, on the first call, and lives for the process — which is what makes
 /// the count 1 no matter how many renderers the suite builds.
 pub(crate) async fn headless_renderer(width: u32, height: u32) -> gizmo_renderer::Renderer {
+    headless_renderer_as(width, height, None).await
+}
+
+/// [`headless_renderer`] with an output format other than the default `Rgba8UnormSrgb` — the
+/// post chain's pipelines are built for it, so a frame can be rendered into a target of it.
+pub(crate) async fn headless_renderer_as(
+    width: u32,
+    height: u32,
+    format: Option<wgpu::TextureFormat>,
+) -> gizmo_renderer::Renderer {
     use std::sync::OnceLock;
     static DEVICE: OnceLock<(wgpu::Device, wgpu::Queue)> = OnceLock::new();
 
@@ -60,6 +70,6 @@ pub(crate) async fn headless_renderer(width: u32, height: u32) -> gizmo_renderer
         queue.clone(),
         width,
         height,
-        None,
+        format,
     )
 }

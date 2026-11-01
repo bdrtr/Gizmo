@@ -58,8 +58,10 @@ fn ui_boxes(_world: &World) -> Vec<UiBox> {
 /// debug gizmos use, and for the same reason: a temporal resolve smears an overlay that changes
 /// every frame, and text is the most legible thing in a frame and so the most obviously smeared.
 ///
-/// World labels are depth-tested (a label behind a wall is behind the wall); screen text and UI
-/// backgrounds are not. A `Text` with no `GlobalTransform` still draws if it is screen-space — a
+/// World labels are drawn here and depth-tested (a label behind a wall is behind the wall).
+/// Screen text and UI backgrounds are only laid out and uploaded here: `Renderer::
+/// run_post_processing` draws them onto the final image after tone mapping, so they are neither
+/// exposed nor bloomed with the scene. A `Text` with no `GlobalTransform` still draws if it is screen-space — a
 /// HUD element has no place in the world — and is skipped if it is not.
 ///
 /// # What a `Node` on the same entity does
@@ -83,6 +85,11 @@ pub fn record_text(
     let texts = world.borrow::<Text>();
     let boxes = ui_boxes(world);
     if texts.iter().next().is_none() && boxes.iter().all(|(_, _, _, bg)| bg.is_none()) {
+        // Nothing to draw — but the overlay draws from what was last uploaded, so forget it, or
+        // a HUD removed this frame would stay on screen.
+        if let Some(text) = renderer.text.as_mut() {
+            text.begin_frame();
+        }
         return;
     }
     let transforms = world.borrow::<crate::prelude::GlobalTransform>();
@@ -130,7 +137,9 @@ pub fn record_text(
         text.queue(queue, item, origin, anchor, screen);
     }
     text.upload(device, queue);
-    if text.queued() == (0, 0, 0) {
+    // Screen text and UI backgrounds are drawn later, onto the final image, by the overlay in
+    // `Renderer::run_post_processing`. This pass is only for world labels.
+    if text.queued().0 == 0 {
         return;
     }
 

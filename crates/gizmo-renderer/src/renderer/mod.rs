@@ -594,6 +594,10 @@ impl Renderer {
     /// When FXAA is present and enabled the chain writes into FXAA's input texture and FXAA writes
     /// the result out, so the anti-aliasing sees the final tone-mapped image rather than the HDR
     /// one.
+    ///
+    /// Then the **overlay** — this frame's screen sprites, UI backgrounds and screen text — is
+    /// drawn onto `output_view`, so every output a host post-processes gets the HUD, untouched by
+    /// exposure, bloom, tone mapping, vignette or FXAA. See [`crate::overlay`].
     pub fn run_post_processing(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -604,11 +608,15 @@ impl Renderer {
                 // Composite → FXAA input texture → FXAA → output_view
                 crate::post_process::run_post_processing(self, encoder, &fxaa.input_texture_view);
                 crate::fxaa::run_fxaa_pass(fxaa, encoder, output_view);
+                crate::overlay::record(self, encoder, output_view);
                 return;
             }
         }
         // FXAA kapalıysa doğrudan output'a yaz
         crate::post_process::run_post_processing(self, encoder, output_view);
+        // After the whole post chain, FXAA included: a HUD is pixels, not radiance, and an edge
+        // filter run over a glyph only blurs it. See `crate::overlay`.
+        crate::overlay::record(self, encoder, output_view);
     }
 
     /// Uploads the post-process parameters for this frame.

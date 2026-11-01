@@ -166,6 +166,8 @@ pub mod taa;
 pub mod text;
 /// Sprites: loaded images and the 2D quad pass.
 pub mod sprite;
+/// The post-tonemap overlay: screen sprites, UI backgrounds and screen text on the final image.
+mod overlay;
 #[cfg(test)]
 mod shader_contract;
 #[cfg(test)]

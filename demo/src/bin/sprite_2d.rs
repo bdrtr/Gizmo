@@ -41,6 +41,11 @@ const GROUND_TOP: f32 = -4.5;
 const HILL_WIDTH: f32 = 24.0;
 /// Enerji çubuğunun dolu genişliği, piksel.
 const BAR_WIDTH: f32 = 200.0;
+/// Çubuğun renkleri. `Sprite::color` LİNEER uzayda: 0,35 ekranda sRGB 160 olur, yani
+/// `(0,35, 0,9, 0,45)` doygun yeşil değil nane rengidir. Doygun bir renk için düşük kanallar
+/// gerçekten düşük olmalı.
+const BAR_FULL: Vec4 = Vec4::new(0.04, 0.75, 0.08, 1.0);
+const BAR_LOW: Vec4 = Vec4::new(0.9, 0.06, 0.03, 1.0);
 
 struct Game {
     player: u32,
@@ -143,7 +148,7 @@ fn main() {
             let bar_fill = hud(
                 scene.world,
                 Sprite::screen(white, Vec2::new(BAR_WIDTH, 20.0), Vec2::new(19.0, 19.0))
-                    .with_color(Vec4::new(0.35, 0.9, 0.45, 1.0))
+                    .with_color(BAR_FULL)
                     .with_layer(1),
             );
             let coin_icons = (0..coins.len())
@@ -281,7 +286,7 @@ fn update(world: &mut World, dt: f32, input: &gizmo::core::input::Input) {
         if let Some(mut s) = sprites.get_mut(g.bar_fill) {
             s.size.x = (BAR_WIDTH * g.energy).max(0.0);
             let low = g.energy < 0.3;
-            s.color = if low { Vec4::new(0.95, 0.35, 0.25, 1.0) } else { Vec4::new(0.35, 0.9, 0.45, 1.0) };
+            s.color = if low { BAR_LOW } else { BAR_FULL };
         }
     }
 

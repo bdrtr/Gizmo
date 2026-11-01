@@ -4724,6 +4724,135 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
         });
     }
 
+    /// A HUD colour reaches the screen as authored — not exposed, bloomed, tone-mapped or
+    /// vignetted with the scene.
+    ///
+    /// A pure-green opaque screen sprite must read back as pure green. Drawn into the HDR target
+    /// (where screen sprites and text went until the post-tonemap overlay existed) it did not.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_screen_sprite_keeps_its_authored_colour() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let frame = render_sprite_scene(&[SpriteCase::Pure]).await;
+            // The middle of the 24 px sprite at (8, 8).
+            let i = (20 * 128 + 20) * 4;
+            let px = [frame[i], frame[i + 1], frame[i + 2]];
+            eprintln!("pure green HUD pixel read back as {px:?}");
+            // Measured (0, 219, 0) through the HDR pass, (0, 255, 0) through the overlay.
+            assert!(
+                px[1] >= 250 && px[0] <= 5 && px[2] <= 5,
+                "a (0, 1, 0) screen sprite read back as {px:?} — it is going through the scene's \
+                 tone mapping instead of over it",
+            );
+        });
+    }
+
+    /// A HUD removed from the world leaves the screen on the next frame — sprite and text both.
+    ///
+    /// The overlay is drawn from what each renderer last *uploaded*, and `record_text` returns
+    /// early on a frame with no `Text` at all. Without `begin_frame` forgetting the upload counts
+    /// on that path, the last label would be repainted forever.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_removed_hud_does_not_stay_on_screen() {
+        use gizmo_renderer::components::{Sprite, Text};
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            let mut world = World::new();
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.0, 0.0, 6.0),
+                yaw: -std::f32::consts::FRAC_PI_2,
+                primary: true,
+                ..Default::default()
+            });
+            let white = renderer
+                .load_sprite_rgba(&[255; 4], 1, 1, gizmo_renderer::sprite::SpriteFilter::Nearest)
+                .unwrap();
+            let font = renderer
+                .load_font(gizmo_renderer::text::synthetic::synthetic_face())
+                .unwrap();
+
+            let before = render_world(&mut renderer, &mut world).await;
+            let sprite = world.spawn_bundle((Sprite::screen(
+                white,
+                gizmo_math::Vec2::splat(24.0),
+                gizmo_math::Vec2::splat(8.0),
+            )
+            .with_color(Vec4::new(0.0, 1.0, 0.0, 1.0)),));
+            let label = world.spawn_bundle((Text::screen("AAA", font, 24.0, gizmo_math::Vec2::new(8.0, 72.0)),));
+            let with_hud = render_world(&mut renderer, &mut world).await;
+            let shown = quadrant_changes(&before, &with_hud, 0, 0) + quadrant_changes(&before, &with_hud, 0, 64);
+            assert!(shown > 300, "the HUD changed only {shown} pixels — it is not drawn, so its removal proves nothing");
+
+            world.remove_component::<Sprite>(sprite);
+            world.remove_component::<Text>(label);
+            let after = render_world(&mut renderer, &mut world).await;
+            let left = quadrant_changes(&before, &after, 0, 0) + quadrant_changes(&before, &after, 0, 64);
+            assert_eq!(
+                left, 0,
+                "{left} pixels of a removed HUD are still on screen (measured 468 with \
+                 `record_text`'s early return not calling `begin_frame`)",
+            );
+        });
+    }
+
+    /// On a target that is not sRGB the overlay encodes its colour itself.
+    ///
+    /// Linear 0.5 grey is sRGB 188. Written raw into an `Rgba8Unorm` target it reads 128 — a HUD a
+    /// gamma step too dark — so both targets must read the same ~188.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn the_overlay_encodes_its_colour_on_a_linear_target() {
+        use gizmo_renderer::components::Sprite;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut read = Vec::new();
+            for format in [wgpu::TextureFormat::Rgba8UnormSrgb, wgpu::TextureFormat::Rgba8Unorm] {
+                let mut renderer = crate::test_gpu::headless_renderer_as(128, 128, Some(format)).await;
+                renderer.taa = None;
+                let mut world = World::new();
+                world.spawn_bundle(CameraBundle { primary: true, ..Default::default() });
+                let white = renderer
+                    .load_sprite_rgba(&[255; 4], 1, 1, gizmo_renderer::sprite::SpriteFilter::Nearest)
+                    .unwrap();
+                world.spawn_bundle((Sprite::screen(white, gizmo_math::Vec2::splat(24.0), gizmo_math::Vec2::splat(8.0))
+                    .with_color(Vec4::new(0.5, 0.5, 0.5, 1.0)),));
+                let frame = render_world(&mut renderer, &mut world).await;
+                let i = (20 * 128 + 20) * 4;
+                read.push((format, [frame[i], frame[i + 1], frame[i + 2]]));
+            }
+            eprintln!("linear 0.5 grey read back as {read:?}");
+            for (format, px) in &read {
+                assert!(
+                    px.iter().all(|&c| c.abs_diff(188) <= 2),
+                    "{format:?}: linear 0.5 read back as {px:?}, expected sRGB 188 — a linear target \
+                     needs the `fs_main_encoded` entry (measured 128 with it bypassed)",
+                );
+            }
+        });
+    }
+
     /// One thing [`render_sprite_scene`] puts in the world.
     #[derive(Clone, Copy)]
     enum SpriteCase {
@@ -4731,6 +4860,8 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
         Screen { layer: i32, blue: bool },
         /// The same, carrying `IsHidden`.
         HiddenScreen,
+        /// The same, pure green `(0, 1, 0, 1)`.
+        Pure,
         /// A 1.5-unit opaque world sprite on the camera's axis at depth `z`.
         World { z: f32, blue: bool },
         /// A wall at z = 3, between the camera and the origin.
@@ -4772,6 +4903,11 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
                     Sprite::screen(white, gizmo_math::Vec2::splat(24.0), gizmo_math::Vec2::splat(8.0))
                         .with_layer(layer)
                         .with_color(tint(blue)),
+                ),
+                SpriteCase::Pure => world.add_component(
+                    e,
+                    Sprite::screen(white, gizmo_math::Vec2::splat(24.0), gizmo_math::Vec2::splat(8.0))
+                        .with_color(Vec4::new(0.0, 1.0, 0.0, 1.0)),
                 ),
                 SpriteCase::HiddenScreen => {
                     world.add_component(

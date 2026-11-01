@@ -11,14 +11,14 @@
 //! Screen text is positioned on the CPU, where the window size is known, and reaches the shader
 //! already in clip space. World text carries an anchor and a local offset in world units, and the
 //! shader builds a camera-facing basis for it. They are told apart by one sign in the instance, so
-//! there is one shader — but there are two *pipelines*, because they disagree about depth: a world
-//! label must be hidden by the wall in front of it, and a screen label must not be.
+//! there is one shader — but they go to different *places*: a world label is drawn into the HDR
+//! pass against the scene's depth (hidden by the wall in front of it, exposed with the scene it
+//! sits in), and screen text and UI backgrounds are drawn onto the final image after tone mapping
+//! by [`crate::overlay`] — so a HUD keeps the colour it was given. Until 2026-11-01 both went into
+//! the HDR target, and an opaque HUD colour came out tone-mapped.
 //!
 //! # What it does not do
 //!
-//! Text is drawn into the HDR target, before tone mapping — so it is exposed and bloomed with the
-//! rest of the frame. That is right for a world label lit by the same scene and wrong for crisp UI
-//! chrome, and it is the first thing to revisit when there is a post-tonemap pass to hang UI on.
 //! There is no batching by font: every glyph is an instance and every instance carries its own
 //! colour, so a thousand-glyph frame is one draw call and 64 kB.
 
@@ -66,8 +66,9 @@ pub struct TextRenderer {
     atlas: GlyphAtlas,
     /// Depth-tested, for world labels: a label behind a wall is behind the wall.
     pipeline_world: wgpu::RenderPipeline,
-    /// Depth ignored, for screen text: UI is on top of the picture by definition.
-    pipeline_screen: wgpu::RenderPipeline,
+    /// Screen text and UI backgrounds, drawn onto the FINAL image after tone mapping — see
+    /// [`crate::overlay`]. One pipeline per output format, built on first use.
+    overlay: crate::overlay::OverlayPipelines,
     buffer: wgpu::Buffer,
     capacity: u32,
     /// This frame's world-space glyphs, then its screen-space ones. Two lists rather than one with
@@ -113,7 +114,7 @@ impl TextRenderer {
         depth_format: wgpu::TextureFormat,
     ) -> Self {
         let atlas = GlyphAtlas::new(device, queue, ATLAS_SIZE);
-        let (pipeline_world, pipeline_screen) = Self::build_pipelines(
+        let (pipeline_world, overlay) = Self::build_pipelines(
             device,
             global_bind_group_layout,
             atlas.bind_group_layout(),
@@ -132,7 +133,7 @@ impl TextRenderer {
             library: FontLibrary::new(),
             atlas,
             pipeline_world,
-            pipeline_screen,
+            overlay,
             buffer,
             capacity: INITIAL_CAPACITY,
             world: Vec::new(),
@@ -154,7 +155,7 @@ impl TextRenderer {
         atlas_layout: &wgpu::BindGroupLayout,
         color_format: wgpu::TextureFormat,
         depth_format: wgpu::TextureFormat,
-    ) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
+    ) -> (wgpu::RenderPipeline, crate::overlay::OverlayPipelines) {
         #[cfg(not(target_arch = "wasm32"))]
         let shader = crate::pipeline::load_shader_composed(
             device,
@@ -219,10 +220,15 @@ impl TextRenderer {
             })
         };
 
-        (
-            make("Text Pipeline (world)", wgpu::CompareFunction::LessEqual),
-            make("Text Pipeline (screen)", wgpu::CompareFunction::Always),
-        )
+        let world = make("Text Pipeline (world)", wgpu::CompareFunction::LessEqual);
+        let overlay = crate::overlay::OverlayPipelines::new(
+            "Text Pipeline (overlay)",
+            shader.clone(),
+            layout.clone(),
+            GlyphInstance::desc,
+            ("fs_main", "fs_main_encoded"),
+        );
+        (world, overlay)
     }
 
     /// Recompiles `text.wgsl` and rebuilds both pipelines, keeping the fonts and the atlas.
@@ -238,7 +244,7 @@ impl TextRenderer {
         color_format: wgpu::TextureFormat,
         depth_format: wgpu::TextureFormat,
     ) {
-        let (world, screen) = Self::build_pipelines(
+        let (world, overlay) = Self::build_pipelines(
             device,
             global_bind_group_layout,
             self.atlas.bind_group_layout(),
@@ -246,7 +252,7 @@ impl TextRenderer {
             depth_format,
         );
         self.pipeline_world = world;
-        self.pipeline_screen = screen;
+        self.overlay = overlay;
     }
 
     /// Loads a face from `ttf`/`otf` bytes.
@@ -280,10 +286,17 @@ impl TextRenderer {
     }
 
     /// Drops last frame's quads. Call once per frame before any [`queue`](Self::queue).
+    ///
+    /// Also forgets what was uploaded: the overlay is drawn from the upload counts by
+    /// [`Renderer::run_post_processing`](crate::Renderer::run_post_processing), so a frame that
+    /// queues nothing must not repaint last frame's HUD.
     pub fn begin_frame(&mut self) {
         self.world.clear();
         self.rects.clear();
         self.screen.clear();
+        self.uploaded_world = 0;
+        self.uploaded_rects = 0;
+        self.uploaded_screen = 0;
     }
 
     /// Whether this frame has anything to draw.
@@ -394,29 +407,67 @@ impl TextRenderer {
         self.uploaded_screen = self.screen.len() as u32;
     }
 
-    /// Draws this frame's text: world labels depth-tested, screen text over everything.
+    /// Draws this frame's **world** labels, depth-tested, into the HDR pass.
     ///
-    /// The pass needs a depth attachment — the world pipeline tests against it — and the caller is
-    /// expected to have run [`upload`](Self::upload) into the same frame's encoder.
+    /// Screen text and UI backgrounds are not drawn here: they go onto the final image after tone
+    /// mapping, through [`crate::overlay`]. The pass needs a depth attachment, and
+    /// [`upload`](Self::upload) must have run this frame.
     pub fn render<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, global_bind_group: &'a wgpu::BindGroup) {
-        let overlay = self.uploaded_rects + self.uploaded_screen;
-        if self.uploaded_world == 0 && overlay == 0 {
+        if self.uploaded_world == 0 {
             return;
         }
         pass.set_bind_group(0, global_bind_group, &[]);
         pass.set_bind_group(1, self.atlas.bind_group(), &[]);
         pass.set_vertex_buffer(0, self.buffer.slice(..));
-        if self.uploaded_world > 0 {
-            pass.set_pipeline(&self.pipeline_world);
-            pass.draw(0..6, 0..self.uploaded_world);
+        pass.set_pipeline(&self.pipeline_world);
+        pass.draw(0..6, 0..self.uploaded_world);
+    }
+
+    /// Whether this frame has screen text or UI backgrounds for the overlay.
+    pub(crate) fn has_overlay(&self) -> bool {
+        self.uploaded_rects + self.uploaded_screen > 0
+    }
+
+    /// The overlay's first half: UI backgrounds, under everything else in it.
+    pub(crate) fn render_overlay_rects(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        global_bind_group: &wgpu::BindGroup,
+    ) {
+        let start = self.uploaded_world;
+        self.draw_overlay(pass, device, format, global_bind_group, start..start + self.uploaded_rects);
+    }
+
+    /// The overlay's last half: screen glyphs, over everything else in it.
+    pub(crate) fn render_overlay_glyphs(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        global_bind_group: &wgpu::BindGroup,
+    ) {
+        let start = self.uploaded_world + self.uploaded_rects;
+        self.draw_overlay(pass, device, format, global_bind_group, start..start + self.uploaded_screen);
+    }
+
+    fn draw_overlay(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        global_bind_group: &wgpu::BindGroup,
+        range: std::ops::Range<u32>,
+    ) {
+        if range.is_empty() {
+            return;
         }
-        if overlay > 0 {
-            // One draw for the quads AND the glyphs: they are contiguous, share a pipeline, and
-            // the buffer already holds them in paint order.
-            pass.set_pipeline(&self.pipeline_screen);
-            let start = self.uploaded_world;
-            pass.draw(0..6, start..start + overlay);
-        }
+        pass.set_pipeline(&self.overlay.get(device, format));
+        pass.set_bind_group(0, global_bind_group, &[]);
+        pass.set_bind_group(1, self.atlas.bind_group(), &[]);
+        pass.set_vertex_buffer(0, self.buffer.slice(..));
+        pass.draw(0..6, range);
     }
 
     /// This frame's quad counts, `(world glyphs, solid quads, screen glyphs)`.
