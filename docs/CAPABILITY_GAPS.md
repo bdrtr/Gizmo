@@ -561,9 +561,11 @@ What it had to build for itself, each recorded in the file's header:
 - **No 2D collision shapes.** Boxes are 3D `Collider::box_collider`s with depth 1, the stone a 3D
   sphere; what keeps them on the plane is `RigidBody`'s axis locks (`lock_translation_z`,
   `lock_rotation_x/y`). It works, but there is no "2D physics" to ask for.
-- **A sprite and its collider are sized separately.** Nothing links `Sprite::size` to the
-  collider's half-extents; the game's `spawn_box` derives both from one number so they cannot
-  disagree.
+- ~~**A sprite and its collider are sized separately.**~~ **Closed 2026-11-01.** Nothing linked
+  `Sprite::size` to the collider's half-extents, so the game's `spawn_box` derived both from one
+  number. `gizmo::physics::sprite_collider(&sprite, depth)` (and `sprite_collider_scaled` for an
+  entity with a `Transform::scale`, which the renderer applies and the physics does not) derives
+  the box from the sprite — size and anchor; the game uses it.
 - ~~**No level-reset helper.**~~ **Not a gap — a discoverability miss (2026-11-01).** The game
   wrote a despawn loop over a `Level` marker by hand; `World::despawn_all_with::<C>()` already did
   exactly that, with a doc example naming this very case. The game now calls it.
@@ -771,8 +773,8 @@ and `emissive` (item 4, the only undocumented one). No further silent fields.
    separate project" turned out to be one component and one pass, because the 2D camera and the
    2D transform stack already existed as an orthographic camera and a plane. What remains is the
    2D *game* layer around it, measured by building one (§C9): 2D collision shapes, a tilemap, a
-   sprite-animation component, sprite↔collider sizing. (The window-fitting orthographic camera
-   was closed 2026-11-01.)
+   sprite-animation component. (The window-fitting orthographic camera and sprite↔collider
+   sizing were closed 2026-11-01.)
 
 ---
 

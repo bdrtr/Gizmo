@@ -50,6 +50,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`gizmo::physics::sprite_collider` / `sprite_collider_scaled` — a box collider derived from a
+  world-space `Sprite`.** Size and anchor both carry over: a centred sprite gets a
+  `Collider::box_collider`, any other anchor an `offset_box` placed where the renderer puts the
+  quad. The scaled variant applies `Transform::scale`, which the renderer applies to a sprite and
+  the physics does not apply to a collider. `None` for a screen sprite or one with no area.
+  (Requires the `render` and `physics` features.)
+
 - **`gizmo::simple::FixedPhysics` and `gizmo::simple::sync_transforms` — fixed-step physics for a
   game that owns its camera.** `simple_scene_update` steps physics but also flies the camera with
   WASD and the mouse, and slices the frame delta into ≤16 ms pieces, so how many steps run depends
