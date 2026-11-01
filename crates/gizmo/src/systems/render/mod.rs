@@ -5640,6 +5640,95 @@ mod golden_render_tests {
         });
     }
 
+    /// `bloom_radius` and `bloom_iterations` widen the halo. A small, very bright cube (about
+    /// 12 px across) in a dark scene; the halo is the mean brightness of a ring 8–24 px from its
+    /// centre. The default blur's taps are one full-frame texel apart, so its halo barely leaves
+    /// the cube — a ring at 25 px read the same with bloom on and off. Before these two existed
+    /// that reach was fixed (`bloom_3d`: exactly 0.00 beyond 80 px at every intensity).
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn bloom_radius_and_iterations_widen_the_halo() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        // Mean luma of the ring's horizontal arms, of its vertical arms (the blur is separable, so
+        // each axis has its own step), and of the cube's centre.
+        async fn halo(radius: f32, iterations: u32, intensity: f32) -> ([f32; 2], f32) {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssr = None;
+            renderer.volumetric = None;
+            renderer.bloom_radius = radius;
+            renderer.bloom_iterations = iterations;
+            renderer.bloom_intensity = intensity;
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(
+                &renderer.device,
+                &renderer.queue,
+                &renderer.scene.texture_bind_group_layout,
+            );
+            let glow = world.spawn();
+            world.add_component(glow, Transform::new(Vec3::new(0.0, 0.0, -5.0)).with_scale(Vec3::splat(0.2)));
+            world.add_component(glow, GlobalTransform::default());
+            world.add_component(glow, AssetManager::create_cube(&renderer.device));
+            world.add_component(glow, Material::new(tex).with_unlit(Vec4::new(30.0, 30.0, 30.0, 1.0)));
+            world.add_component(glow, MeshRenderer::new());
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::ZERO,
+                yaw: -std::f32::consts::FRAC_PI_2,
+                pitch: 0.0,
+                primary: true,
+                ..Default::default()
+            });
+            let frame = render_world(&mut renderer, &mut world).await;
+            let luma = |x: usize, y: usize| {
+                let p = &frame[(y * 128 + x) * 4..];
+                (p[0] as f32 + p[1] as f32 + p[2] as f32) / 3.0
+            };
+            let (mut arms, mut n) = ([0.0f32; 2], [0.0f32; 2]);
+            for y in 0..128 {
+                for x in 0..128 {
+                    let (dx, dy) = (x as f32 - 63.5, y as f32 - 63.5);
+                    let d = (dx * dx + dy * dy).sqrt();
+                    if (8.0..24.0).contains(&d) {
+                        // Horizontal arm: within 30° of the X axis; vertical: of the Y axis.
+                        let axis = if dy.abs() < dx.abs() * 0.577 {
+                            0
+                        } else if dx.abs() < dy.abs() * 0.577 {
+                            1
+                        } else {
+                            continue;
+                        };
+                        arms[axis] += luma(x, y);
+                        n[axis] += 1.0;
+                    }
+                }
+            }
+            ([arms[0] / n[0], arms[1] / n[1]], luma(64, 64))
+        }
+        pollster::block_on(async {
+            let (none, _) = halo(1.0, 1, 0.0).await;
+            let (base, centre) = halo(1.0, 1, 0.8).await;
+            let (wide, _) = halo(3.0, 1, 0.8).await;
+            let (soft, _) = halo(1.0, 4, 0.8).await;
+            // Measured (horizontal / vertical arm): no bloom 61.29 / 61.31, default 67.99 / 67.99
+            // (centre 255), radius 3 132.80 / 132.82, four rounds 101.02 / 101.03. Caught: either
+            // step never rewritten (that arm stays at the default's) and the rounds ignored.
+            assert!(centre > 250.0, "the cube is saturated: {centre:.1}");
+            for (axis, name) in [(0, "horizontal"), (1, "vertical")] {
+                assert!(base[axis] > none[axis] + 3.0, "the default bloom reaches the {name} arm: {none:?} → {base:?}");
+                assert!(wide[axis] > base[axis] + 20.0, "radius 3 spreads the {name} arm: {base:?} → {wide:?}");
+                assert!(soft[axis] > base[axis] + 10.0, "four rounds spread the {name} arm: {base:?} → {soft:?}");
+            }
+        });
+    }
+
     /// What a split-screen frame does once, it must do once: the HUD is drawn a single time over
     /// the whole target (drawn per view, a half-transparent sprite is laid over itself and comes
     /// out brighter), and the frame's animation advances by one `dt` however many cameras draw.

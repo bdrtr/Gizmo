@@ -599,7 +599,7 @@ author it. The middle column is what a full implementation offers.
 |---|---|---|---|
 | Screen-space reflections | 6 knobs | **8 shaping fields since 2026-08-24** — `SsrParams::{roughness_cutoff, fade_start, fade_end, step_size, max_steps, thickness, start_offset, edge_fade}`, one 32-byte uniform per frame, defaults pixel-identical to the shader literals they replaced. Plus `enabled` (2026-08-23). Measured: five of them move 11–19 % of the frame; `max_steps` moves nothing on that scene because the reflection is found on the first step, which is a property of the fixture rather than of the field. Still absent, and never written: step exponent, binary refinement, secant search | `ssr` |
 | Tone mapping | 7 curves + dither | **4 curves since 2026-08-24** — `TonemapCurve::{None, Reinhard, ReinhardExtended, Aces}` via `Renderer::tonemap_curve`, **default still ACES** and locked as such in three places, because every existing scene was authored under it. Measured on one scene: they differ from ACES by 4.91 / 7.20 / 5.41 % of pixels. Still absent: luminance-Reinhard, AgX, SBDT, Tony McMapface, Blender Filmic, deband dither | `tonemapping` |
-| Bloom | 7 knobs | **2** (`intensity`, `threshold`) | `bloom_3d` |
+| Bloom | 7 knobs | **4** — `intensity`, `threshold`, and since 2026-11-02 `Renderer::bloom_radius` (tap spacing, 1 = the old blur) and `Renderer::bloom_iterations` (rounds of the separable blur, 1–8). Defaults write exactly the old steps. The last two are renderer-wide rather than per-camera `PostProcess` fields, since the blur passes read their own buffers. Measured, a ring 8–24 px around a small saturated cube (horizontal / vertical arm): no bloom 61.29 / 61.31, default 67.99 / 67.99, radius 3 132.80 / 132.82, four rounds 101.02 / 101.03; either axis's step left unwritten, or the rounds ignored, fails the test. Still absent: a mip-chain (dual-filter) bloom, a low-frequency boost, per-camera radius | `bloom_3d` |
 | Depth of field | 6 optical knobs | **3** numbers + enable | `depth_of_field` |
 | SSAO | 5 quality levels + temporal denoise | **1** (`strength`) | `ssao` |
 | Anti-aliasing | 5 techniques | **2** (FXAA, TAA) | `anti_aliasing` |
@@ -619,9 +619,12 @@ author it. The middle column is what a full implementation offers.
 
 Two measured caveats worth keeping:
 
-- **Bloom's radius is not adjustable and is tight.** `bloom_3d` measured the halo contributing
-  `+18.9` in the 60–80 px band and **exactly 0.00 beyond 80 px** at every intensity. Scale,
-  max-mip and low-frequency-boost controls are precisely what would widen it.
+- ~~**Bloom's radius is not adjustable and is tight.**~~ **Adjustable since 2026-11-02**
+  (`bloom_radius`, `bloom_iterations` — see the row above). `bloom_3d` had measured the halo
+  contributing `+18.9` in the 60–80 px band and **exactly 0.00 beyond 80 px** at every intensity;
+  the default is still that blur, and the default's taps are one full-frame texel apart, so on a
+  small source its halo barely leaves the source (a ring at 25 px read the same with bloom on and
+  off).
 - **The fog knob is not a fog knob.** `environment_preset` also selects the sky and the overall
   lighting mood, so fog cannot be changed independently of the scene's look.
 

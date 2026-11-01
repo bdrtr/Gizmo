@@ -64,6 +64,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   bytes per sample, so native devices request `max_color_attachment_bytes_per_sample` up to 64.
   Groundwork for object motion blur; nothing reads the target yet.
 
+- **Bloom reach: `Renderer::bloom_radius` and `Renderer::bloom_iterations`.** The radius spreads
+  the blur's taps (1 = the previous blur, clamped to 0..=16); the iterations run the separable
+  blur again (1–8). Defaults are bit-for-bit the old steps. Native only, as bloom is.
+  `gizmo_renderer::post_process::blur_steps` is the step arithmetic.
+
 - **Blend modes: `BlendMode` and `Material::with_blend_mode`.** `Alpha` (the default and the
   previous behaviour), `Additive` (fire, sparks, glows), `Multiply` (tinted glass, stains — alpha
   is not consulted; fade toward white) and `Premultiplied`. Any mode but `Alpha` makes the
@@ -2438,6 +2443,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   linted for wasm.
 
 ### Changed
+
+- **`post_process::create_blur_buffers` returns the vertical step's buffer too** —
+  `(h_buffer, v_buffer, h_group, v_group)` — and `PostProcessState` keeps it as
+  `blur_v_params_buffer`. `blur_params_buffer`'s documentation said it held both steps; it only
+  ever held the horizontal one, which is why nothing could rewrite the vertical step.
 
 - **`Material` and `MaterialDesc` gained `blend_mode`**: a struct literal of either needs the
   field (`BlendMode::Alpha` is the old behaviour; `Material::new` and `..Default` paths are

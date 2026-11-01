@@ -270,6 +270,13 @@ pub struct Renderer {
     pub bloom_intensity: f32,
     /// The luminance above which a texel blooms.
     pub bloom_threshold: f32,
+    /// How far apart the bloom blur's taps are, in texels of the full frame: 1 (the default) is
+    /// the blur this engine always had; 2 doubles the halo's reach at the cost of a coarser
+    /// falloff. Clamped to 0..=16. Native only, as is bloom.
+    pub bloom_radius: f32,
+    /// How many times the separable blur runs (1–8, default 1). Each round spreads the halo
+    /// again — wider and smoother than a larger radius, at two passes a round.
+    pub bloom_iterations: u32,
     /// Linear exposure multiplier applied before tone mapping.
     pub exposure: f32,
     /// Whether depth of field runs.
@@ -550,13 +557,14 @@ impl Renderer {
             self.post.bloom_blur_bind_group = bb_bg;
             self.post.composite_bloom_bind_group = cb_bg;
 
-            let (buf, h_bg, v_bg) = crate::post_process::create_blur_buffers(
+            let (buf, v_buf, h_bg, v_bg) = crate::post_process::create_blur_buffers(
                 &self.device,
                 &self.post.blur_params_bind_group_layout,
                 new_size.width,
                 new_size.height,
             );
             self.post.blur_params_buffer = buf;
+            self.post.blur_v_params_buffer = v_buf;
             self.post.blur_h_bind_group = h_bg;
             self.post.blur_v_bind_group = v_bg;
 

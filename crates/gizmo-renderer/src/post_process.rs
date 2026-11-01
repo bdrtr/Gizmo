@@ -44,8 +44,11 @@ pub struct PostProcessState {
     pub bloom_blur_bind_group: wgpu::BindGroup,
     /// The blurred bloom and the depth buffer, as the composite pass reads them.
     pub composite_bloom_bind_group: wgpu::BindGroup,
-    /// The blur direction buffer, holding both the horizontal and the vertical step.
+    /// The horizontal blur's step (this said "both steps"; it only ever held the horizontal one).
+    /// Rewritten every frame from `Renderer::bloom_radius`.
     pub blur_params_buffer: wgpu::Buffer,
+    /// The vertical blur's step, likewise.
+    pub blur_v_params_buffer: wgpu::Buffer,
     /// The horizontal blur's parameters — a texel step along X.
     pub blur_h_bind_group: wgpu::BindGroup,
     /// The vertical blur's — a texel step along Y. One separable blur run twice costs `2n`
@@ -249,7 +252,7 @@ pub fn build_post_process_resources(
         depth_view,
     );
 
-    let (blur_params_buffer, blur_h_bind_group, blur_v_bind_group) =
+    let (blur_params_buffer, blur_v_params_buffer, blur_h_bind_group, blur_v_bind_group) =
         create_blur_buffers(device, &blur_params_bind_group_layout, width, height);
 
     PostProcessState {
@@ -271,6 +274,7 @@ pub fn build_post_process_resources(
         bloom_blur_bind_group,
         composite_bloom_bind_group,
         blur_params_buffer,
+        blur_v_params_buffer,
         blur_h_bind_group,
         blur_v_bind_group,
         exposure,
@@ -657,9 +661,8 @@ pub fn create_blur_buffers(
     bgl: &wgpu::BindGroupLayout,
     width: u32,
     height: u32,
-) -> (wgpu::Buffer, wgpu::BindGroup, wgpu::BindGroup) {
-    let h_data: [f32; 4] = [1.0 / width as f32, 0.0, 0.0, 0.0];
-    let v_data: [f32; 4] = [0.0, 1.0 / height as f32, 0.0, 0.0];
+) -> (wgpu::Buffer, wgpu::Buffer, wgpu::BindGroup, wgpu::BindGroup) {
+    let [h_data, v_data] = blur_steps(width, height, 1.0);
 
     let h_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Blur H Params"),
@@ -687,7 +690,15 @@ pub fn create_blur_buffers(
         }],
         label: Some("blur_v_bind_group"),
     });
-    (h_buf, h_bg, v_bg)
+    (h_buf, v_buf, h_bg, v_bg)
+}
+
+/// The bloom blur's horizontal and vertical steps, in UV, for a `width × height` frame and a
+/// [`Renderer::bloom_radius`](crate::Renderer::bloom_radius) of `radius` (1 = one texel of the
+/// full frame between taps, the blur this engine always had).
+pub fn blur_steps(width: u32, height: u32, radius: f32) -> [[f32; 4]; 2] {
+    let r = if radius.is_finite() { radius.clamp(0.0, 16.0) } else { 1.0 };
+    [[r / width.max(1) as f32, 0.0, 0.0, 0.0], [0.0, r / height.max(1) as f32, 0.0, 0.0]]
 }
 
 /// Runs the post-processing render passes in order.
@@ -721,50 +732,63 @@ pub fn run_post_processing(
         pass.set_bind_group(2, &renderer.post.post_params_bind_group, &[]);
         pass.draw(0..3, 0..1);
     }
-    // Pass 2a: Yatay Blur (WASM'da KAPALI)
+    // Pass 2: the separable blur, horizontal then vertical, `bloom_iterations` times (WASM'da
+    // KAPALI). Each round widens the halo by about the kernel's reach again, so three rounds reach
+    // roughly √3 as far as one; `bloom_radius` spreads the taps themselves.
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Bloom Blur Horizontal"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &renderer.post.bloom_blur_texture_view,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            ..Default::default()
-        });
-        pass.set_pipeline(&renderer.post.bloom_blur_pipeline);
-        pass.set_bind_group(0, &renderer.post.bloom_extract_bind_group, &[]);
-        pass.set_bind_group(1, &renderer.post.blur_h_bind_group, &[]);
-        pass.draw(0..3, 0..1);
+        let [h, v] = blur_steps(renderer.config.width, renderer.config.height, renderer.bloom_radius);
+        renderer.queue.write_buffer(&renderer.post.blur_params_buffer, 0, bytemuck::cast_slice(&h));
+        renderer.queue.write_buffer(&renderer.post.blur_v_params_buffer, 0, bytemuck::cast_slice(&v));
     }
-    // Pass 2b: Dikey Blur (ping-pong) (WASM'da KAPALI)
     #[cfg(not(target_arch = "wasm32"))]
-    {
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Bloom Blur Vertical"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &renderer.post.bloom_extract_texture_view,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            ..Default::default()
-        });
-        pass.set_pipeline(&renderer.post.bloom_blur_pipeline);
-        pass.set_bind_group(0, &renderer.post.bloom_blur_bind_group, &[]);
-        pass.set_bind_group(1, &renderer.post.blur_v_bind_group, &[]);
-        pass.draw(0..3, 0..1);
+    for _ in 0..renderer.bloom_iterations.clamp(1, 8) {
+        // Pass 2a: Yatay Blur (WASM'da KAPALI)
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Bloom Blur Horizontal"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &renderer.post.bloom_blur_texture_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                ..Default::default()
+            });
+            pass.set_pipeline(&renderer.post.bloom_blur_pipeline);
+            pass.set_bind_group(0, &renderer.post.bloom_extract_bind_group, &[]);
+            pass.set_bind_group(1, &renderer.post.blur_h_bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        // Pass 2b: Dikey Blur (ping-pong) (WASM'da KAPALI)
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Bloom Blur Vertical"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &renderer.post.bloom_extract_texture_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                ..Default::default()
+            });
+            pass.set_pipeline(&renderer.post.bloom_blur_pipeline);
+            pass.set_bind_group(0, &renderer.post.bloom_blur_bind_group, &[]);
+            pass.set_bind_group(1, &renderer.post.blur_v_bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
     }
+
     // Pass 3: Composite + Tone Mapping
     // Group 4, the G-buffer's velocity, for motion blur: around this frame's target when there is
     // a deferred state, else the 1×1 zero.

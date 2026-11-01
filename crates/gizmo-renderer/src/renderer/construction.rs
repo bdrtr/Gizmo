@@ -621,6 +621,7 @@ impl Renderer {
             bloom_blur_pipeline: post_res.bloom_blur_pipeline,
             composite_pipeline: post_res.composite_pipeline,
             blur_params_buffer: post_res.blur_params_buffer,
+            blur_v_params_buffer: post_res.blur_v_params_buffer,
             blur_params_bind_group_layout: post_res.blur_params_bind_group_layout,
             blur_h_bind_group: post_res.blur_h_bind_group,
             blur_v_bind_group: post_res.blur_v_bind_group,
@@ -701,6 +702,8 @@ impl Renderer {
             environment_blend_t: 0.0,
             bloom_intensity: 0.8,
             bloom_threshold: 0.85,
+            bloom_radius: 1.0,
+            bloom_iterations: 1,
             exposure: 1.15,
             // Depth of field is an opt-in artistic effect, not a default: with it
             // ON, any scene whose subject isn't near `dof_focus_dist` (4.5 m) is
