@@ -877,6 +877,12 @@ fn draw_camera_view(
     record_sprites(encoder, renderer, world, unjittered_view_proj);
     record_text(encoder, renderer, world);
 
+    // Auto exposure adapts in real time: a paused or slowed game still lets the eye adjust.
+    let exposure_dt = world
+        .get_resource::<gizmo_core::time::Time>()
+        .map(|t| t.raw_dt())
+        .unwrap_or(1.0 / 60.0);
+    renderer.update_auto_exposure(exposure_dt);
     renderer.run_post_processing_in(encoder, view, region, overlay);
 }
 
@@ -3730,6 +3736,90 @@ mod golden_render_tests {
             assert!(
                 sharp as f64 > soft as f64 * 1.05,
                 "with CAS the frame's edge sum is {sharp}, without {soft} — it is not sharpening",
+            );
+        });
+    }
+
+    /// **Auto exposure closes the loop**: the same sunlit floor under a sun ten times brighter.
+    /// Measured mean brightness: 232 against 119 without it (1.95×, the bright one held down only
+    /// by tone mapping), 171 against 135 with it (1.27× — the rest is light that does not scale
+    /// with the sun). And while it is present but off, the frame is bit-identical to a renderer
+    /// without it: the composite multiplies by a buffer holding exactly 1.0.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn auto_exposure_evens_out_a_bright_and_a_dark_scene() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        fn mean(frame: &[u8]) -> f64 {
+            let (px, _) = frame.as_chunks::<4>();
+            px.iter().map(|p| (p[0] as f64 + p[1] as f64 + p[2] as f64) / 3.0).sum::<f64>() / px.len() as f64
+        }
+        pollster::block_on(async {
+            // mode 0: no auto exposure at all · 1: present, disabled · 2: enabled.
+            let mut means = [[0.0f64; 2]; 3];
+            let mut frames: Vec<Vec<u8>> = Vec::new();
+            for (mode, mode_means) in means.iter_mut().enumerate() {
+                for (i, sun) in [8.0f32, 0.8].into_iter().enumerate() {
+                    let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+                    renderer.taa = None;
+                    renderer.ssgi = None;
+                    match mode {
+                        0 => renderer.auto_exposure = None,
+                        1 => {}
+                        _ => {
+                            if let Some(ae) = renderer.auto_exposure.as_mut() {
+                                ae.enabled = true;
+                            }
+                        }
+                    }
+                    // A sunlit floor filling the frame, no sky in view: the sun is what the frame's
+                    // brightness is made of. (Looking at the horizon instead, the sky dominates and
+                    // a sun ten times brighter moved the mean only 1.17×.)
+                    let mut world = World::new();
+                    let mut assets = AssetManager::new();
+                    let tex = assets.create_white_texture(
+                        &renderer.device,
+                        &renderer.queue,
+                        &renderer.scene.texture_bind_group_layout,
+                    );
+                    let floor = world.spawn();
+                    world.add_component(
+                        floor,
+                        Transform::new(Vec3::new(0.0, -1.0, 0.0)).with_scale(Vec3::new(60.0, 0.2, 60.0)),
+                    );
+                    world.add_component(floor, GlobalTransform::default());
+                    world.add_component(floor, AssetManager::create_cube(&renderer.device));
+                    world.add_component(
+                        floor,
+                        Material::new(tex).with_pbr(Vec4::new(0.6, 0.6, 0.6, 1.0), 0.8, 0.0),
+                    );
+                    world.add_component(floor, MeshRenderer::new());
+                    world.spawn_bundle(DirectionalLightBundle { intensity: sun, ..Default::default() });
+                    world.spawn_bundle(CameraBundle {
+                        position: Vec3::new(0.0, 3.0, 0.0),
+                        yaw: -std::f32::consts::FRAC_PI_2,
+                        pitch: -1.2,
+                        primary: true,
+                        ..Default::default()
+                    });
+                    let frame = render_world(&mut renderer, &mut world).await;
+                    mode_means[i] = mean(&frame);
+                    frames.push(frame);
+                }
+            }
+            let (drift, total) = changed_pixels(&frames[0], &frames[2], 128);
+            assert_eq!(drift, 0, "auto exposure present but off changed {drift}/{total} pixels");
+            let off_ratio = means[0][0] / means[0][1];
+            let on_ratio = means[2][0] / means[2][1];
+            assert!(off_ratio > 1.5, "a sun ten times brighter only changed the frame {off_ratio:.2}× — the scene does not test anything");
+            assert!(
+                on_ratio < 1.0 + (off_ratio - 1.0) * 0.5,
+                "with auto exposure the bright/dark ratio is {on_ratio:.2}, without {off_ratio:.2} — it is not evening them out",
             );
         });
     }

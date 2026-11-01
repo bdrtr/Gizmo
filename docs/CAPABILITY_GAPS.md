@@ -347,7 +347,22 @@ the walk is already in the tree.
 
 Measured in `occlusion_culling`.
 
-### A7c. No motion blur, and no auto exposure
+### A7c. No motion blur — auto exposure **CLOSED 2026-11-01**
+
+**Auto exposure is built in** (`renderer.auto_exposure`, off by default, native). The loop this entry
+asked for, closed without the CPU: `LuminanceReduce` measures, one compute invocation moves the
+exposure toward `key / mean` in stops at `1 − e^(−dt·speed)` (separate `adapt_to_bright` /
+`adapt_to_dark`, clamped to `min_exposure..=max_exposure`, snapping on the first enabled frame),
+and the composite pass reads it from a storage buffer as group 3 — `Camera::exposure` becomes
+compensation. Off, group 3 holds exactly 1.0 and frames are bit-identical (0 pixels, tested). Per
+split-screen view, like TAA. Measured in `auto_exposure` (`GIZMO_AE_SENSOR=engine`): the two
+stations' gap 131.0 → 35.8, frame time 0.52 → 0.54 ms (noise; the CPU-readback loop was 0.82). A
+sunlit floor under a ten-times-brighter sun: 232 vs 119 off, 171 vs 135 on. Six mutations red — a
+linear instead of log2 blend, swapped speeds, no clamp, no snap, the step never recorded, the
+composite ignoring it. Not built: a histogram (it meters the mean), metering masks, physical camera
+units.
+
+The history below is how it got here.
 
 **Motion blur.** Measured in `motion_blur`: three camera speeds captured at the same angle give
 edge energy `9.977 / 9.977 / 9.977`, and the frames differ only in the HUD text — sixteen times

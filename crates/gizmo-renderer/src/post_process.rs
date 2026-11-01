@@ -28,6 +28,9 @@ pub struct PostProcessState {
     pub hdr_texture_view: wgpu::TextureView,
     /// It as an input to the chain.
     pub hdr_bind_group: wgpu::BindGroup,
+    /// The composite pass's group 3: the exposure it multiplies by. `None` in the browser, whose
+    /// reduced post shader has no such stage. See [`ExposureBinding`].
+    pub exposure: Option<ExposureBinding>,
     /// The extract pass's output.
     pub bloom_extract_texture_view: wgpu::TextureView,
     /// It as an input to the blur.
@@ -202,6 +205,11 @@ pub fn build_post_process_resources(
         label: Some("post_params_bind_group"),
     });
 
+    #[cfg(not(target_arch = "wasm32"))]
+    let exposure = Some(build_exposure_binding(device));
+    #[cfg(target_arch = "wasm32")]
+    let exposure: Option<ExposureBinding> = None;
+
     let (bloom_extract_pipeline, bloom_blur_pipeline, composite_pipeline) = build_post_pipelines(
         device,
         &post_shader,
@@ -209,6 +217,7 @@ pub fn build_post_process_resources(
         &blur_params_bind_group_layout,
         &composite_bloom_bind_group_layout,
         &post_params_bind_group_layout,
+        exposure.as_ref().map(|e| &e.layout),
         surface_format,
     );
 
@@ -256,9 +265,60 @@ pub fn build_post_process_resources(
         blur_params_buffer,
         blur_h_bind_group,
         blur_v_bind_group,
+        exposure,
     }
 }
 
+/// The composite pass's **exposure input** — group 3, one read-only storage `f32`.
+///
+/// It is where [`AutoExposureState`](crate::auto_exposure::AutoExposureState) delivers its result
+/// without the CPU seeing it. While auto exposure is off the pass binds
+/// [`neutral_bind_group`](Self::neutral_bind_group), whose buffer holds exactly `1.0`, so the
+/// multiplication leaves every pixel bit-identical.
+#[non_exhaustive]
+pub struct ExposureBinding {
+    /// The group-3 layout, shared by the neutral group and every auto-exposure state's.
+    pub layout: wgpu::BindGroupLayout,
+    /// A buffer holding `1.0`.
+    pub neutral_buffer: wgpu::Buffer,
+    /// Group 3 bound to [`neutral_buffer`](Self::neutral_buffer).
+    pub neutral_bind_group: wgpu::BindGroup,
+}
+
+/// The layout of the composite pass's exposure group (see [`ExposureBinding`]).
+pub fn exposure_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("exposure_bind_group_layout"),
+        entries: &[wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        }],
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn build_exposure_binding(device: &wgpu::Device) -> ExposureBinding {
+    let layout = exposure_layout(device);
+    let neutral_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("neutral_exposure"),
+        contents: bytemuck::cast_slice(&[1.0f32, 0.0, 0.0, 0.0]),
+        usage: wgpu::BufferUsages::STORAGE,
+    });
+    let neutral_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("neutral_exposure"),
+        layout: &layout,
+        entries: &[wgpu::BindGroupEntry { binding: 0, resource: neutral_buffer.as_entire_binding() }],
+    });
+    ExposureBinding { layout, neutral_buffer, neutral_bind_group }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn build_post_pipelines(
     device: &wgpu::Device,
     post_shader: &wgpu::ShaderModule,
@@ -266,6 +326,7 @@ fn build_post_pipelines(
     blur_bgl: &wgpu::BindGroupLayout,
     composite_bloom_bgl: &wgpu::BindGroupLayout,
     post_params_bgl: &wgpu::BindGroupLayout,
+    exposure_bgl: Option<&wgpu::BindGroupLayout>,
     surface_format: wgpu::TextureFormat,
 ) -> (
     wgpu::RenderPipeline,
@@ -342,7 +403,13 @@ fn build_post_pipelines(
 
     let composite_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Composite Pipeline Layout"),
-        bind_group_layouts: &[Some(post_bgl), Some(composite_bloom_bgl), Some(post_params_bgl)],
+        // Group 3 only where the composite reads an exposure buffer (native).
+        bind_group_layouts: &[
+            Some(post_bgl),
+            Some(composite_bloom_bgl),
+            Some(post_params_bgl),
+            exposure_bgl,
+        ][..if exposure_bgl.is_some() { 4 } else { 3 }],
         immediate_size: 0,
     });
     let composite_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -391,6 +458,7 @@ pub fn rebuild_post_pipelines(renderer: &mut crate::Renderer, post_shader: &wgpu
         &renderer.post.blur_params_bind_group_layout,
         &renderer.post.composite_bloom_bind_group_layout,
         &renderer.post.post_params_bind_group_layout,
+        renderer.post.exposure.as_ref().map(|e| &e.layout),
         renderer.config.format,
     );
     renderer.post.bloom_extract_pipeline = e;
@@ -653,6 +721,15 @@ pub fn run_post_processing(
         pass.set_bind_group(0, &renderer.post.hdr_bind_group, &[]);
         pass.set_bind_group(1, &renderer.post.composite_bloom_bind_group, &[]);
         pass.set_bind_group(2, &renderer.post.post_params_bind_group, &[]);
+        if let Some(exposure) = &renderer.post.exposure {
+            let group = renderer
+                .auto_exposure
+                .as_ref()
+                .filter(|a| a.enabled)
+                .map(|a| a.composite_bind_group())
+                .unwrap_or(&exposure.neutral_bind_group);
+            pass.set_bind_group(3, group, &[]);
+        }
         pass.draw(0..3, 0..1);
     }
 

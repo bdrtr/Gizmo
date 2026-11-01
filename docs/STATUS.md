@@ -37,8 +37,8 @@ Ranked and measured in [`CAPABILITY_GAPS.md`](CAPABILITY_GAPS.md); the short ver
   lands on them and drops off them (`drop_through_timer`), and stays in its plane.
 - **Rendering:** no environment cubemap / reflection probes (§A5), no MSAA — by decision, TAA +
   FXAA + CAS sharpening instead (§A6) — no SMAA, no area lights
-  or soft contact shadows (§A7), no occlusion culling (§A7b), no motion blur or auto exposure
-  (§A7c). Split screen works on the game path (`Camera::viewport`, §A5b); the studio previews a
+  or soft contact shadows (§A7), no occlusion culling (§A7b), no motion blur
+  (§A7c; auto exposure exists, `renderer.auto_exposure`). Split screen works on the game path (`Camera::viewport`, §A5b); the studio previews a
   split-screen game through its primary camera.
 - **Text:** no shaping, bidi or font fallback; the engine ships no font (§A2).
 - **Extensibility:** several extension points are sealed (§C0).

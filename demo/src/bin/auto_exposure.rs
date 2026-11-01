@@ -11,9 +11,9 @@
 //! | kare parlaklığını **okumak** | var — `renderer.post.hdr_texture` genel, `COPY_SRC` taşıyor |
 //! | yerleşik indirgeme geçişi | **var** (2026-08-24) — `LuminanceReduce`, iki dispatch |
 //! | histogram (yalnız ortalama değil) | **yok** |
-//! | pozlamayı CPU'ya uğramadan uygulamak | **yok** — sayı GPU'da ama post-process onu okumuyor |
-//! | uyum hızı / yumuşatma sabiti | **yok** — oyun kendi yazıyor (bu demo yazıyor) |
-//! | en düşük/en yüksek EV, hedef parlaklık | **yok** — aynı şekilde |
+//! | pozlamayı CPU'ya uğramadan uygulamak | **var** (2026-11-01) — `renderer.auto_exposure`, varsayılan kapalı |
+//! | uyum hızı / yumuşatma sabiti | **var** — `adapt_to_bright` / `adapt_to_dark`, saniye başına, kare hızından bağımsız |
+//! | en düşük/en yüksek pozlama, hedef parlaklık | **var** — `min_exposure` / `max_exposure`, `key` (0,18) |
 //! | ölçüm maskesi (merkez ağırlıklı, spot) | **yok** |
 //! | fiziksel kamera (diyafram/enstantane/ISO) | **yok** — `exposure` ham bir çarpan, EV değil |
 //!
@@ -26,6 +26,25 @@
 //! Eksik olan **erişim değil, indirgeme**: ağaçtaki dokuz compute shader'ının hiçbiri indirgeme ya
 //! da histogram değil, ve pozlama tek bir yerde, ACES eğrisinin hemen öncesinde, doğrusal olarak
 //! uygulanıyor (`post_process.wgsl`).
+//!
+//! ## Motorun halkası (2026-11-01): `GIZMO_AE_SENSOR=engine`
+//!
+//! Aşağıdaki ölçümlerin vardığı yer: sensör GPU'da kalırsa bedava, ve eksik olan onu
+//! post-process'e beslemekti. `renderer.auto_exposure` bunu yapıyor — ölç (`LuminanceReduce`),
+//! uyum (tek compute çağrısı, `key / ortalama`'ya **stop** cinsinden, `1 − e^(−dt·hız)` oranında),
+//! uygula (composite pası, `Camera::exposure`'ın üstüne). CPU sayıyı hiç görmüyor.
+//!
+//! Ölçüldü (kare 400, sağ yarı, alt üçte iki; kare süresi ilk 60 kare atılarak):
+//!
+//! | | halka yok | motorun halkası |
+//! |---|---|---|
+//! | parlak istasyon | 185,36 | **150,44** |
+//! | karanlık istasyon | 54,33 | **114,60** |
+//! | fark | 131,03 | **35,84** (%73 kapandı) |
+//! | ortalama kare | 0,516 / 0,495 ms | 0,536 / 0,512 ms |
+//!
+//! Kare süresi gürültü içinde değişiyor — aşağıdaki CPU geri okumalı halkanın 0,82 ms'sine karşı.
+//! Demonun kendi halkası (`GIZMO_AE_LOOP=1`) öğretici olarak duruyor.
 //!
 //! ## Ölçülen 0: halka kapanıyor, ve bedeli 10 ms
 //!
@@ -205,6 +224,8 @@ enum Sensor {
     GpuReadback,
     /// GPU'da indirge, geri okuma **yok** — sayı GPU'da kalıyor.
     GpuOnly,
+    /// Motorun kendi halkası: `renderer.auto_exposure` — ölç, uyum, uygula, hepsi GPU'da.
+    Engine,
 }
 
 impl Sensor {
@@ -214,6 +235,7 @@ impl Sensor {
             Sensor::Cpu => "cpu",
             Sensor::GpuReadback => "gpu",
             Sensor::GpuOnly => "gpu-only",
+            Sensor::Engine => "engine",
         }
     }
 }
@@ -223,6 +245,7 @@ fn sensor() -> Sensor {
         Ok("cpu") => Sensor::Cpu,
         Ok("gpu") => Sensor::GpuReadback,
         Ok("gpu-only") => Sensor::GpuOnly,
+        Ok("engine") => Sensor::Engine,
         _ => Sensor::None,
     }
 }
@@ -464,6 +487,10 @@ fn main() {
             // ÖNCE damgalanıyor ki ölçülen şey bu karenin tamamı olsun.
             let frame_start = std::time::Instant::now();
 
+            // Motorun halkası: tek bayrak. Açıkken `Camera::exposure` telafi oluyor.
+            if let Some(engine_ae) = renderer.auto_exposure.as_mut() {
+                engine_ae.enabled = mode == Sensor::Engine;
+            }
             gizmo::systems::default_render_pass(world, encoder, view, renderer);
 
             let Some(mut ae) = world.get_resource::<Ae>().map(|a| *a) else {
@@ -475,7 +502,7 @@ fn main() {
                 // duran bir ÖNCEKİ karenin sonucu. Bir karelik gecikme; uyum zaten yumuşatmalı
                 // olduğu için sonucu değiştirmiyor, ama gizlenecek bir şey de değil.
                 match mode {
-                    Sensor::None => {}
+                    Sensor::None | Sensor::Engine => {}
                     Sensor::Cpu => {
                         if let Some((lum, cost)) = sense_luminance(renderer) {
                             ae.measured = lum;

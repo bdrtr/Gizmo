@@ -636,7 +636,19 @@ impl Renderer {
             post_params_buffer: post_res.post_params_buffer,
             post_params_bind_group_layout: post_res.post_params_bind_group_layout,
             post_params_bind_group: post_res.post_params_bind_group,
+            exposure: post_res.exposure,
         };
+
+        // Built, not enabled: an authored exposure stays authored until the scene asks.
+        let auto_exposure = post_state.exposure.as_ref().map(|e| {
+            crate::auto_exposure::AutoExposureState::new(
+                &device,
+                &post_state.hdr_texture_view,
+                size.width,
+                size.height,
+                &e.layout,
+            )
+        });
 
         // === FXAA Başlatma ===
         let fxaa = Some(crate::fxaa::FxaaState::new(
@@ -671,6 +683,7 @@ impl Renderer {
             view_history: Vec::new(),
             fxaa,
             cas,
+            auto_exposure,
             gpu_particles,
             gpu_physics,
             gpu_fluid,

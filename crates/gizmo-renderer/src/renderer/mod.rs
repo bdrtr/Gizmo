@@ -203,6 +203,9 @@ pub struct Renderer {
     /// Contrast-adaptive sharpening, after FXAA — the very last pass. Present but **disabled** by
     /// default; see [`crate::cas`].
     pub cas: Option<crate::cas::CasState>,
+    /// Auto exposure — present but **disabled** by default on native, `None` in the browser. See
+    /// [`crate::auto_exposure`].
+    pub auto_exposure: Option<crate::auto_exposure::AutoExposureState>,
 
     // === GIZMO HATA AYIKLAMA (Debug Lines) ===
     /// The debug line renderer — gizmos, wireframes, physics overlays.
@@ -590,6 +593,9 @@ impl Renderer {
             if let Some(ref mut cas) = self.cas {
                 cas.resize(&self.device, self.config.format, new_size.width, new_size.height);
             }
+            if let Some(ref mut ae) = self.auto_exposure {
+                ae.resize(&self.device, &self.queue, &self.post.hdr_texture_view, new_size.width, new_size.height);
+            }
             // GPU fluid SSFR render targets. Previously never rebuilt, so after any
             // resize the fluid rendered into a stale sub-rectangle / the composite
             // copied the wrong extent. Fluid composites into the HDR target.
@@ -638,6 +644,10 @@ impl Renderer {
         // composite → [FXAA] → [CAS] → output_view. Each enabled stage renders into the next
         // one's input texture at full size; only the LAST stage writes the output, and only it
         // takes the region.
+        // Auto exposure measures the finished HDR frame and adapts before the composite reads it.
+        if let Some(ae) = self.auto_exposure.as_ref().filter(|a| a.enabled) {
+            ae.record(encoder);
+        }
         let fxaa = self.fxaa.as_ref().filter(|f| f.enabled);
         let cas = self.cas.as_ref().filter(|c| c.enabled);
         let after_composite = fxaa
@@ -673,6 +683,15 @@ impl Renderer {
         crate::overlay::record(self, encoder, output_view);
     }
 
+    /// Feeds auto exposure this frame's `dt`, if it is on. The game path calls it once per view,
+    /// before drawing; a host that never does snaps to the target every frame (see
+    /// [`AutoExposureState::update`](crate::auto_exposure::AutoExposureState::update)).
+    pub fn update_auto_exposure(&mut self, dt: f32) {
+        if let Some(ae) = self.auto_exposure.as_mut() {
+            ae.update(&self.queue, dt);
+        }
+    }
+
     /// Runs `f` with view `view`'s temporal state in place of the renderer's own.
     ///
     /// TAA and SSGI accumulate over frames: each keeps last frame's image and camera and blends
@@ -695,6 +714,14 @@ impl Renderer {
         let mut history = std::mem::take(&mut self.view_history[slot]);
         let swap_taa = self.taa.is_some() && history.taa.is_some();
         let swap_ssgi = self.ssgi.is_some() && history.ssgi.is_some();
+        let swap_exposure = self.auto_exposure.is_some() && history.auto_exposure.is_some();
+        if swap_exposure {
+            if let (Some(own), Some(view_ae)) = (&self.auto_exposure, &mut history.auto_exposure) {
+                view_ae.enabled = own.enabled;
+                view_ae.settings = own.settings;
+            }
+            std::mem::swap(&mut self.auto_exposure, &mut history.auto_exposure);
+        }
         if swap_taa {
             if let (Some(own), Some(view_taa)) = (&self.taa, &mut history.taa) {
                 view_taa.enabled = own.enabled;
@@ -710,6 +737,9 @@ impl Renderer {
         }
         if swap_ssgi {
             std::mem::swap(&mut self.ssgi, &mut history.ssgi);
+        }
+        if swap_exposure {
+            std::mem::swap(&mut self.auto_exposure, &mut history.auto_exposure);
         }
         self.view_history[slot] = history;
         out
@@ -730,6 +760,16 @@ impl Renderer {
                     h,
                 )
             }),
+            auto_exposure: match (&self.auto_exposure, &self.post.exposure) {
+                (Some(_), Some(binding)) => Some(crate::auto_exposure::AutoExposureState::new(
+                    &self.device,
+                    &self.post.hdr_texture_view,
+                    w,
+                    h,
+                    &binding.layout,
+                )),
+                _ => None,
+            },
             ssgi: self.ssgi.as_ref().map(|_| {
                 crate::ssgi::SsgiState::new(
                     &self.device,
@@ -1082,4 +1122,5 @@ mod tests {
 pub(crate) struct ViewHistory {
     taa: Option<crate::taa::TaaState>,
     ssgi: Option<crate::ssgi::SsgiState>,
+    auto_exposure: Option<crate::auto_exposure::AutoExposureState>,
 }

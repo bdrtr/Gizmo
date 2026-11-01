@@ -126,6 +126,8 @@ pub mod routing;
 pub mod custom_material;
 pub mod irradiance;
 pub mod luminance;
+/// Auto exposure: the luminance sensor fed back into the composite pass, on the GPU.
+pub mod auto_exposure;
 /// Contrast-adaptive sharpening, the last post pass.
 pub mod cas;
 pub mod components;

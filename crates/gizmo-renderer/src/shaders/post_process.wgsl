@@ -43,6 +43,11 @@ struct PostProcessParams {
 @group(2) @binding(0)
 var<uniform> params: PostProcessParams;
 
+// The exposure auto exposure computed this frame (`auto_exposure.wgsl`), or exactly 1.0 while it is
+// off — so the product below is bit-identical then. On top of `params.exposure`, the camera's.
+@group(3) @binding(0)
+var<storage, read> auto_exposure: array<f32>;
+
 // Düzgün 2B hash (Dave Hoskins). Eski film-grain `fract(sin(dot(uv,K))*M)` düz UV'de
 // sin'in ekstremumlarında donup STATİK DİAGONAL BANTLAR üretiyordu; bu, piksel
 // koordinatından düzgün beyaz-gürültü verir (yapısal bant yok).
@@ -194,7 +199,7 @@ fn fs_composite(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
 
     // 3. Bloom Addition
     let bloom_color = textureSample(t_bloom, s_bloom, in.uv).rgb;
-    let combined = (dof_color + bloom_color * params.bloom_intensity) * params.exposure;
+    let combined = (dof_color + bloom_color * params.bloom_intensity) * params.exposure * auto_exposure[0];
     
     // 3. Tone mapping — ACES by default, `TonemapCurve` chooses.
     let mapped = apply_tonemap(combined);

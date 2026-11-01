@@ -50,6 +50,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Auto exposure: `renderer.auto_exposure` (`gizmo_renderer::auto_exposure`).** The luminance
+  sensor (`LuminanceReduce`) fed back into tone mapping entirely on the GPU: one compute step moves
+  the exposure toward `key / mean` in stops at a frame-rate-independent rate
+  (`AutoExposureSettings { key, adapt_to_bright, adapt_to_dark, min_exposure, max_exposure }`), and
+  the composite pass reads it as group 3 on top of `Camera::exposure`. Off by default — then group 3
+  holds 1.0 and frames are bit-identical. Native only. Per split-screen view. Measured in
+  `auto_exposure` (`GIZMO_AE_SENSOR=engine`): bright/dark station gap 131.0 → 35.8 at no measurable
+  frame cost.
+
 - **CAS sharpening: `renderer.cas` (`gizmo_renderer::cas::CasState`).** Contrast-adaptive
   sharpening as the last post pass — composite → FXAA → CAS → output — to give back the detail TAA
   and FXAA blur away. Off by default (it changes every frame's look); `cas.enabled = true` and
