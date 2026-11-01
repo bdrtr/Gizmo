@@ -135,6 +135,12 @@ pub fn draw_environment_settings(ui: &mut egui::Ui, world: &World, state: &mut E
                     slider_row(ui, "Arka Plan Bulanıklığı (0 = kapalı)", &mut grade.dof_blur_size, 0.0..=10.0);
                 });
 
+            egui::CollapsingHeader::new(crate::theme::section_title("Motion Blur (Hareket)"))
+                .default_open(true)
+                .show(ui, |ui| {
+                    slider_row(ui, "Deklanşör (0 = kapalı, 0.5 = 180°)", &mut grade.motion_blur, 0.0..=1.0);
+                });
+
             // Clamped only when something moved, and only then: a file can carry values no slider
             // can reach, and correcting them on the frame the user first touches the panel is
             // honest, whereas rewriting them on a frame nobody edited is an edit the user did not

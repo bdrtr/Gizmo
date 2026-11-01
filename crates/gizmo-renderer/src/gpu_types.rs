@@ -241,6 +241,19 @@ pub struct PostProcessUniforms {
     pub tonemap_white_point: f32,
     /// Padding to the next 16-byte boundary. Not a knob.
     pub _tonemap_pad: [f32; 2],
+
+    // ── Camera motion blur ──
+    /// The shutter fraction, [`PostProcess::motion_blur`](crate::components::PostProcess::motion_blur).
+    /// 0 skips the blur entirely.
+    pub motion_blur: f32,
+    /// The longest smear, as a fraction of the screen — a teleport or a cut would otherwise blur
+    /// the whole frame into one streak.
+    pub motion_blur_max: f32,
+    /// Padding to the next 16-byte boundary. Not a knob.
+    pub _motion_pad: [f32; 2],
+    /// Maps this frame's clip space to the last frame's: `previous_view_proj · inverse(view_proj)`,
+    /// both unjittered. Identity — no motion — when there is no last frame.
+    pub reproject: [[f32; 4]; 4],
 }
 
 /// Which curve maps HDR to the display range.
@@ -591,12 +604,13 @@ mod tonemap_default_tests {
         assert_eq!(TonemapCurve::Aces.as_f32(), 3.0);
     }
 
-    /// The block stays 16-byte aligned after the tone-mapping pair, or every field the shader
-    /// reads after `fog` shifts.
+    /// The block stays 16-byte aligned after the tone-mapping pair and the motion-blur vec4 +
+    /// matrix, or every field the shader reads after `fog` shifts.
     #[test]
     fn the_block_is_still_a_whole_number_of_vec4s() {
         assert_eq!(std::mem::size_of::<PostProcessUniforms>() % 16, 0);
-        assert_eq!(std::mem::size_of::<PostProcessUniforms>(), 80);
+        assert_eq!(std::mem::size_of::<PostProcessUniforms>(), 160);
+        assert_eq!(std::mem::offset_of!(PostProcessUniforms, reproject), 96, "the matrix must start on a vec4 boundary");
     }
 }
 

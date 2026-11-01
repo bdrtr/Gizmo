@@ -50,6 +50,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Camera motion blur: `PostProcess::motion_blur`.** A shutter fraction on the camera's grade
+  (0 = off, the default; 0.5 = 180°). The composite pass reprojects each pixel with the last frame's
+  unjittered view-projection (`Renderer::previous_view_proj`, per split-screen view) and averages
+  the HDR frame along the motion, capped at 5 % of the screen. A still camera and the first frame
+  are bit-identical to the shutter closed. Editor: a "Motion Blur" slider in the camera's grade.
+  `PostProcessUniforms` grew to 160 bytes (`motion_blur`, `motion_blur_max`, `reproject`). Only the
+  camera's motion: there is no per-object velocity.
+
 - **Auto exposure: `renderer.auto_exposure` (`gizmo_renderer::auto_exposure`).** The luminance
   sensor (`LuminanceReduce`) fed back into tone mapping entirely on the GPU: one compute step moves
   the exposure toward `key / mean` in stops at a frame-rate-independent rate
@@ -1252,6 +1260,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   before.
 
 ### Fixed
+
+- **`motion_blur` demo: the camera never moved.** It was posed in PreUpdate and the simple scene's
+  fly camera overwrote it every frame, so its "same pixels at sixteen times the speed" measurement
+  was of a still camera. Posed in `set_render` now; re-measured.
 
 - **Axis locks leaked through two position paths; a body locked to a plane drifted off it.**
   Locks are velocity-level, and the transform was moved past them twice: Heun's position step

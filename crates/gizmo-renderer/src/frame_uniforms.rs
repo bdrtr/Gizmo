@@ -311,6 +311,11 @@ impl Default for PostProcessUniforms {
             tonemap_curve: crate::gpu_types::TonemapCurve::Aces.as_f32(),
             tonemap_white_point: 4.0,
             _tonemap_pad: [0.0; 2],
+            // Off: a still frame is the picture every scene was authored against.
+            motion_blur: 0.0,
+            motion_blur_max: 0.05,
+            _motion_pad: [0.0; 2],
+            reproject: gizmo_math::Mat4::IDENTITY.to_cols_array_2d(),
         }
     }
 }

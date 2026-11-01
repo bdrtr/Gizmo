@@ -684,6 +684,7 @@ impl Renderer {
             fxaa,
             cas,
             auto_exposure,
+            previous_view_proj: None,
             gpu_particles,
             gpu_physics,
             gpu_fluid,

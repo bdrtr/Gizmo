@@ -56,6 +56,9 @@ pub(super) fn sync_editor_settings(
             vignette_intensity: g.vignette,
             chromatic_aberration: g.chromatic_aberration,
             film_grain_intensity: g.film_grain,
+            // The shutter carries over; the editor keeps no last-frame matrix, so `reproject` stays
+            // identity and its viewport never smears — a fly-through would be unreadable otherwise.
+            motion_blur: g.motion_blur,
             dof_focus_dist: g.dof_focus_dist,
             dof_focus_range: g.dof_focus_range,
             dof_blur_size: g.dof_blur_size,

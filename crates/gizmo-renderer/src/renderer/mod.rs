@@ -206,6 +206,10 @@ pub struct Renderer {
     /// Auto exposure — present but **disabled** by default on native, `None` in the browser. See
     /// [`crate::auto_exposure`].
     pub auto_exposure: Option<crate::auto_exposure::AutoExposureState>,
+    /// The last frame's **unjittered** view-projection, kept for camera motion blur — what the
+    /// composite's `reproject` matrix maps back to. `None` until a camera has drawn once (no
+    /// motion on the first frame). Per split-screen view, like TAA's history.
+    pub previous_view_proj: Option<[[f32; 4]; 4]>,
 
     // === GIZMO HATA AYIKLAMA (Debug Lines) ===
     /// The debug line renderer — gizmos, wireframes, physics overlays.
@@ -731,7 +735,9 @@ impl Renderer {
         if swap_ssgi {
             std::mem::swap(&mut self.ssgi, &mut history.ssgi);
         }
+        std::mem::swap(&mut self.previous_view_proj, &mut history.previous_view_proj);
         let out = f(self);
+        std::mem::swap(&mut self.previous_view_proj, &mut history.previous_view_proj);
         if swap_taa {
             std::mem::swap(&mut self.taa, &mut history.taa);
         }
@@ -760,6 +766,7 @@ impl Renderer {
                     h,
                 )
             }),
+            previous_view_proj: None,
             auto_exposure: match (&self.auto_exposure, &self.post.exposure) {
                 (Some(_), Some(binding)) => Some(crate::auto_exposure::AutoExposureState::new(
                     &self.device,
@@ -860,7 +867,9 @@ mod tests {
         // 80 since 2026-08-24: the tone-mapping pair (curve + white point) is a fifth vec4. It was
         // 64 when `underwater` + `fog` were added, and the number is asserted rather than derived
         // so that the *next* field also has to be a deliberate change to this line.
-        assert_eq!(std::mem::size_of::<crate::gpu_types::PostProcessUniforms>(), 80, "PostProcessUniforms size shifted from target 80 bytes (tonemap vec4 eklendi)!");
+        // 160 since 2026-11-01: camera motion blur, a vec4 (shutter, max, pad) and the reprojection
+        // matrix.
+        assert_eq!(std::mem::size_of::<crate::gpu_types::PostProcessUniforms>(), 160, "PostProcessUniforms size shifted from target 160 bytes (motion blur eklendi)!");
         assert_eq!(std::mem::size_of::<crate::gpu_types::InstanceRaw>(), 128, "InstanceRaw size shifted from target 128 bytes!");
         // Textured-PBR per-material params: three std140 vec4 slots.
         assert_eq!(std::mem::size_of::<crate::gpu_types::MaterialParams>(), 48, "MaterialParams size shifted from target 48 bytes!");
@@ -1123,4 +1132,5 @@ pub(crate) struct ViewHistory {
     taa: Option<crate::taa::TaaState>,
     ssgi: Option<crate::ssgi::SsgiState>,
     auto_exposure: Option<crate::auto_exposure::AutoExposureState>,
+    previous_view_proj: Option<[[f32; 4]; 4]>,
 }

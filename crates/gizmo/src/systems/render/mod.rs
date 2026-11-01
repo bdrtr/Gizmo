@@ -655,6 +655,7 @@ fn draw_camera_view(
             // No `dof_enabled` gate here: a blur size of 0 IS the off state, which is why the
             // component's default carries 0 rather than the renderer's 4.0.
             dof_blur_size: g.dof_blur_size,
+            motion_blur: g.motion_blur,
             ..Default::default()
         },
         None => crate::renderer::PostProcessUniforms {
@@ -678,6 +679,19 @@ fn draw_camera_view(
     let post = crate::renderer::PostProcessUniforms {
         tonemap_curve: renderer.tonemap_curve.as_f32(),
         tonemap_white_point: renderer.tonemap_white_point,
+        ..post
+    };
+    // **Camera motion blur's one input**: where this frame's clip space was last frame. Both
+    // matrices unjittered — TAA's sub-pixel jitter is not motion. The history is per view
+    // (`Renderer::with_view_history` swaps it), and kept whether or not the blur is on, so turning
+    // it on mid-game has a last frame to blur against.
+    let reproject = match renderer.previous_view_proj {
+        Some(previous) => Mat4::from_cols_array_2d(&previous) * unjittered_view_proj.inverse(),
+        None => Mat4::IDENTITY,
+    };
+    renderer.previous_view_proj = Some(unjittered_view_proj.to_cols_array_2d());
+    let post = crate::renderer::PostProcessUniforms {
+        reproject: reproject.to_cols_array_2d(),
         ..post
     };
     renderer.update_post_process(
@@ -3820,6 +3834,92 @@ mod golden_render_tests {
             assert!(
                 on_ratio < 1.0 + (off_ratio - 1.0) * 0.5,
                 "with auto exposure the bright/dark ratio is {on_ratio:.2}, without {off_ratio:.2} — it is not evening them out",
+            );
+        });
+    }
+
+    /// **Camera motion blur** (`PostProcess::motion_blur`) smears what the camera's own motion moved
+    /// and nothing else. Against the same frame with the shutter at 0:
+    /// - a camera that turned since the last frame loses edge energy, and a half-open shutter
+    ///   loses less than a fully open one;
+    /// - a camera that did **not** move renders bit-identically. What that catches is a history
+    ///   that is stale or carries TAA's jitter — not the matrix's direction: with no motion every
+    ///   order of the pair is identity, and the kernel is symmetric, so a reversed reprojection
+    ///   blurs exactly as much;
+    /// - the first frame, with no last frame to compare, renders bit-identically too.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn motion_blur_smears_camera_motion_and_leaves_a_still_camera_alone() {
+        use crate::renderer::components::{Camera, PostProcess};
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        // Squared, not absolute: a smeared edge spreads the same total step over more pixels, so
+        // the sum of |differences| barely moves (measured: 4 %) while its square — how *steep*
+        // the steps are — falls.
+        fn edge(frame: &[u8]) -> u64 {
+            let mut sum = 0u64;
+            for y in 0..128usize {
+                for x in 1..128usize {
+                    let (a, b) = ((y * 128 + x - 1) * 4, (y * 128 + x) * 4);
+                    sum += (0..3).map(|c| (frame[a + c].abs_diff(frame[b + c]) as u64).pow(2)).sum::<u64>();
+                }
+            }
+            sum
+        }
+        // Two frames; between them the camera turns by `turn` radians. Returns both frames.
+        async fn two_frames(shutter: f32, turn: f32) -> (Vec<u8>, Vec<u8>) {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            let mut world = World::new();
+            split_screen_scene(&renderer, &mut world);
+            let cam = world.spawn_bundle(CameraBundle {
+                position: Vec3::new(-20.0, 0.0, 4.0),
+                yaw: -std::f32::consts::FRAC_PI_2,
+                primary: true,
+                ..Default::default()
+            });
+            // No grain: it is added after the blur, everywhere, and would be most of the edge
+            // energy measured — with it, the smear moved the sum only 5 %.
+            let mut grade = PostProcess::default();
+            grade.film_grain = 0.0;
+            grade.motion_blur = shutter;
+            world.add_component(cam, grade);
+            let first = render_world(&mut renderer, &mut world).await;
+            if let Some(mut c) = world.borrow_mut::<Camera>().get_mut(cam.id()) {
+                c.yaw += turn;
+            }
+            let second = render_world(&mut renderer, &mut world).await;
+            (first, second)
+        }
+        pollster::block_on(async {
+            let (sharp_first, sharp_turned) = two_frames(0.0, 0.06).await;
+            let (blur_first, blur_turned) = two_frames(1.0, 0.06).await;
+            let (_, half_turned) = two_frames(0.5, 0.06).await;
+            let (first_drift, total) = changed_pixels(&sharp_first, &blur_first, 128);
+            assert_eq!(first_drift, 0, "the first frame has no last frame, yet the shutter changed {first_drift}/{total} pixels");
+            let (sharp, smeared) = (edge(&sharp_turned), edge(&blur_turned));
+            assert!(
+                (smeared as f64) < sharp as f64 * 0.9,
+                "a turning camera's frame keeps edge energy {smeared} with the shutter open, {sharp} closed — it is not blurred",
+            );
+            let half = edge(&half_turned);
+            assert!(
+                smeared < half && half < sharp,
+                "edge energy should fall with the shutter: 0 → {sharp}, 0.5 → {half}, 1 → {smeared}",
+            );
+
+            let (_, sharp_still) = two_frames(0.0, 0.0).await;
+            let (_, blur_still) = two_frames(1.0, 0.0).await;
+            let (still_drift, total) = changed_pixels(&sharp_still, &blur_still, 128);
+            assert_eq!(
+                still_drift, 0,
+                "a camera that did not move was smeared on {still_drift}/{total} pixels — the history is stale or carries something that is not motion",
             );
         });
     }

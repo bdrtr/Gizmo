@@ -38,7 +38,46 @@ struct PostProcessParams {
     // Tone mapping: eğri seçimi ve beyaz noktası. Ayrı bir vec4, çünkü `fog`'dan sonra blok
     // 16-hizalı bir sınırda ve tek bir f32 eklemek onu bozardı.
     tonemap: vec4<f32>,    // x = eğri (0..3), y = beyaz nokta, zw = pad
+    // Camera motion blur: x = shutter fraction (0 = off), y = longest smear in screen fractions.
+    motion: vec4<f32>,
+    // This frame's clip space → the last frame's (both unjittered).
+    reproject: mat4x4<f32>,
 };
+
+// Camera motion blur. A pixel's depth puts it back in clip space; `reproject` says where that
+// point was on screen last frame, and the difference is how far the CAMERA moved it. The HDR frame
+// is averaged along that path, centred on the pixel (the shutter opens before and closes after the
+// instant drawn), over `shutter` of the frame interval. Only camera motion: an object moving in a
+// still view has no velocity here. Sky pixels sit at depth 1 and reproject at the far plane, so a
+// turning camera smears the sky too, and a translating one barely does — as with a real lens.
+fn camera_motion_blur(uv: vec2<f32>, base: vec3<f32>, depth: f32) -> vec3<f32> {
+    let shutter = params.motion.x;
+    if (shutter <= 0.0) {
+        return base;
+    }
+    let ndc = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+    let prev_clip = params.reproject * vec4<f32>(ndc, depth, 1.0);
+    if (prev_clip.w <= 1e-6) {
+        return base;
+    }
+    let prev_ndc = prev_clip.xy / prev_clip.w;
+    var velocity = (ndc - prev_ndc) * vec2<f32>(0.5, -0.5) * shutter;
+    let len = length(velocity);
+    let max_len = params.motion.y;
+    if (len > max_len) {
+        velocity = velocity * (max_len / len);
+    }
+    if (length(velocity * vec2<f32>(textureDimensions(t_source))) < 0.5) {
+        return base;
+    }
+    let samples = 12;
+    var sum = vec3<f32>(0.0);
+    for (var i = 0; i < samples; i = i + 1) {
+        let t = (f32(i) + 0.5) / f32(samples) - 0.5;
+        sum += textureSampleLevel(t_source, s_source, uv - velocity * t, 0.0).rgb;
+    }
+    return sum / f32(samples);
+}
 
 @group(2) @binding(0)
 var<uniform> params: PostProcessParams;
@@ -155,7 +194,7 @@ fn fs_composite(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let r = textureSample(t_source, s_source, in.uv + vec2<f32>(ca_offset, 0.0)).r;
     let g = textureSample(t_source, s_source, in.uv).g;
     let b = textureSample(t_source, s_source, in.uv - vec2<f32>(ca_offset, 0.0)).b;
-    let hdr_color = vec3<f32>(r, g, b);
+    let hdr_color_raw = vec3<f32>(r, g, b);
 
     // 2. Depth of Field (DoF)
     let depth_dims = textureDimensions(t_depth, 0);
@@ -168,6 +207,7 @@ fn fs_composite(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let n = params.cam_near;
     let f = params.cam_far;
     let view_dist = (n * f) / (f - depth_val * (f - n));
+    let hdr_color = camera_motion_blur(in.uv, hdr_color_raw, depth_val);
     
     let coc = clamp(abs(view_dist - params.dof_focus_dist) / params.dof_focus_range, 0.0, 1.0);
     

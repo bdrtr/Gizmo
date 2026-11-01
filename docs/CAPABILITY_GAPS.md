@@ -347,7 +347,19 @@ the walk is already in the tree.
 
 Measured in `occlusion_culling`.
 
-### A7c. No motion blur — auto exposure **CLOSED 2026-11-01**
+### A7c. Camera motion blur and auto exposure **CLOSED 2026-11-01**; object motion blur open
+
+**Camera motion blur: `PostProcess::motion_blur`** (shutter fraction, 0 = off, the default). The
+composite pass reprojects each pixel through `previous_view_proj · inverse(view_proj)` (both
+unjittered, per split-screen view, kept in `Renderer::previous_view_proj`) and averages the HDR
+frame along that path with 12 samples, capped at 5 % of the screen. Tested: a turning camera loses
+edge energy and a half shutter loses less than a full one; a still camera and the first frame are
+bit-identical to the shutter closed. Four mutations red. In `motion_blur` it showed something else
+first: **that demo's camera had never moved** — the simple scene's fly camera overwrote the pose
+`drive` wrote, so the "sixteen times the speed, bit-identical" table below measured a still camera.
+Re-measured with the camera actually orbiting: edge energy 1.000 / 0.994 / 0.964 at 1, 4 and 16
+turns with the shutter at 0.5, and flat with it at 0. Object motion blur still needs per-object
+velocity (below), and nothing of that half changed.
 
 **Auto exposure is built in** (`renderer.auto_exposure`, off by default, native). The loop this entry
 asked for, closed without the CPU: `LuminanceReduce` measures, one compute invocation moves the

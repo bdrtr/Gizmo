@@ -4,11 +4,37 @@
 //! kaldığı süre boyunca ışığın birikmesi; bir çizim motorunda ise ya hız tamponundan ya da
 //! önceki karenin dönüşümünden türetilir.
 //!
-//! ## Motorda yok — ve iki yarısı farklı derinlikte yok
+//! ## Kamera yarısı var (2026-11-01) — `PostProcess::motion_blur`
+//!
+//! Kameranın `PostProcess` bileşeninde deklanşör oranı (0 = kapalı, 0,5 = 180°). Composite pası
+//! her pikselin derinliğinden geçen karedeki ekran konumunu buluyor (`reproject` matrisi:
+//! önceki × şimdiki⁻¹, ikisi de titremesiz) ve HDR kareyi o yol boyunca 12 örnekle ortalıyor.
+//! Yalnız **kameranın** hareketi: duran bir görüşte dönen nesne bulanmıyor (aşağıda neden).
+//! `GIZMO_BLUR_SHUTTER=0.5` ile açılıyor.
+//!
+//! **Ve bu demonun kamerası 2026-11-01'e kadar hiç hareket etmiyordu.** `drive` kamerayı
+//! PreUpdate'te yerleştiriyordu; basit sahnenin uçan kamerası ardından kendi duruşunu her kare
+//! birincil kameranın üstüne yazıyordu. Aşağıdaki "on altı kat hız, bit bit aynı" ölçümü bu yüzden
+//! **duran bir kamerayı** ölçmüş — sonucu doğruydu (bulanıklık yoktu), sebebi yanlıştı. Yeni
+//! bulanıklık burada hiçbir şey yapmayınca bulundu: geçen karenin görüntü-izdüşümü her kare
+//! aynıydı. Kamera artık `set_render`'da, uçan kameradan sonra yerleştiriliyor.
+//!
+//! Ölçüldü (kare 1200, sol yarı, Sobel kenar enerjisi; aynı açı, üç hız):
+//!
+//! | deklanşör | 1 tur | 4 tur | 16 tur |
+//! |-----------|-------|-------|--------|
+//! | 0 | 10,328 (1,0000) | 10,389 (1,0059) | 10,350 (1,0022) |
+//! | 0,5 | 10,298 (1,0000) | 10,236 (**0,9939**) | 9,929 (**0,9641**) |
+//!
+//! Deklanşör kapalıyken hız kareyi değiştirmiyor; açıkken kenar enerjisi hızla düşüyor. Oran
+//! küçük, çünkü kamera merkeze bakarak dönüyor: merkezdeki küpler ekranda neredeyse yerinde
+//! kalıyor, bulanan önde ve arkada kalanlar (gözle bakınca belirgin).
+//!
+//! ## Önceki envanter (2026-08-23) — nesne yarısı hâlâ böyle
 //!
 //! | yetenek | Gizmo |
 //! |---------|-------|
-//! | deklanşör süresi / şiddet / örnek sayısı ayarı | **yok** |
+//! | deklanşör süresi / şiddet / örnek sayısı ayarı | deklanşör **var** (yukarıda); örnek sayısı sabit 12 |
 //! | hız (velocity) tamponu | **yok** — G-tamponunun dört hedefi var, hiçbiri hız değil |
 //! | nesne başına önceki dönüşüm | **yok** — `InstanceRaw` yalnız `model` taşıyor |
 //! | bulanıklık geçişi | **yok** — `PostProcess`'in sekiz alanı var, hiçbiri hareket değil |
@@ -27,7 +53,7 @@
 //! `Transform` tutulmuyor, ve `InstanceRaw`'a ikinci bir matris eklemek iki çizim yolunun da
 //! aynı biçimde doldurması gereken bir alan demek.
 //!
-//! ## Ölçüldü — kamera tarafı kesin
+//! ## Ölçüldü — kamera tarafı (2026-08-23; kamera o sırada **duruyordu**, yukarıya bakın)
 //!
 //! Üç hız, **aynı açıda** yakalanıyor: kamera 1200 karede 1, 4 ya da 16 tur atıyor, ve açı
 //! kareden tam hesaplandığı (biriktirilmediği) için yakalama karesinde üçü de tam sıfırda.
@@ -79,6 +105,7 @@
 use gizmo::core::query::{Mut, Query, With};
 use gizmo::core::system::{IntoSystemConfig, Phase, ResMut};
 use gizmo::prelude::*;
+use gizmo::renderer::components::PostProcess;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
 use std::f32::consts::TAU;
 
@@ -195,6 +222,39 @@ fn main() {
             if std::env::var("GIZMO_BLUR_NO_TAA").is_ok() {
                 renderer.taa = None;
             }
+            // `GIZMO_BLUR_SHUTTER=0.5`: kameraya deklanşörü açık bir `PostProcess`. Bileşenin
+            // varsayılanı bileşensiz davranış, yani değişen tek şey bulanıklık.
+            if let Some(shutter) = std::env::var("GIZMO_BLUR_SHUTTER").ok().and_then(|v| v.parse::<f32>().ok()) {
+                let cams: Vec<u32> = world.borrow::<Camera>().iter().map(|(id, _)| id).collect();
+                for id in cams {
+                    if world.borrow::<PostProcess>().get(id).is_none() {
+                        if let Some(e) = world.get_entity(id) {
+                            let mut grade = PostProcess::default();
+                            grade.motion_blur = shutter;
+                            world.add_component(e, grade);
+                        }
+                    }
+                }
+            }
+            // **The camera is placed HERE, not in `drive`.** `drive` runs in PreUpdate, and the
+            // simple scene's fly camera then writes its own pose over the primary camera every
+            // frame — so until 2026-11-01 this demo's camera never moved at all, and the "sixteen
+            // times the speed, bit-identical pixels" measurement above was a still camera. Found
+            // when the new motion blur did nothing here: the last frame's view-projection was the
+            // same on every frame. `set_render` runs after the fly camera, so this pose sticks.
+            if let Some(m) = world.get_resource::<Motion>().map(|m| *m) {
+                if !m.spin_object {
+                    let pos = Vec3::new(m.angle.cos() * ORBIT_RADIUS, 1.2, m.angle.sin() * ORBIT_RADIUS);
+                    let dir = (-pos).normalize();
+                    if let Some(mut q) = world.query_mut::<(Mut<Transform>, Mut<Camera>)>() {
+                        for (_, (mut t, mut cam)) in q.iter_mut() {
+                            t.position = pos;
+                            cam.yaw = dir.z.atan2(dir.x);
+                            cam.pitch = dir.y.asin();
+                        }
+                    }
+                }
+            }
             gizmo::systems::default_render_pass(world, encoder, view, renderer);
         })
         .set_ui(move |world, _state, ctx| {
@@ -219,14 +279,9 @@ fn main() {
                             "kamera dönüyor, nesne duruyor"
                         });
                         ui.separator();
-                        ui.colored_label(
-                            gizmo::egui::Color32::from_rgb(230, 160, 80),
-                            "motorda hareket bulanıklığı YOK",
-                        );
-                        ui.label("hız tamponu yok · önceki dönüşüm yok · geçiş yok");
-                        ui.separator();
-                        ui.label("ama kamera yarısının girdisi hazır:");
-                        ui.label("TAA'nın prev_view_proj'u + G-tamponun world_position'ı");
+                        ui.label("kamera bulanıklığı: PostProcess::motion_blur");
+                        ui.label("GIZMO_BLUR_SHUTTER=0.5 ile açılır");
+                        ui.label("nesne bulanıklığı yok: hız tamponu, önceki dönüşüm yok");
                     });
                 });
         })
@@ -272,9 +327,9 @@ fn drive(
             t.rotation = Quat::from_rotation_y(a);
         }
     } else {
-        for (_e, (mut t, _)) in cameras.iter_mut() {
-            t.position = Vec3::new(a.cos() * ORBIT_RADIUS, 1.2, a.sin() * ORBIT_RADIUS);
-        }
+        // The camera's pose is written in `set_render` (see there): written here, the fly camera
+        // overwrote it before every frame.
+        let _ = &mut cameras;
     }
 
     if (CAPTURE_FRAME - 2..=CAPTURE_FRAME + 2).contains(&motion.frame) {

@@ -52,6 +52,11 @@ pub struct PostProcess {
     pub dof_blur_size: f32,
     /// Strength of the animated grain. 0 = none.
     pub film_grain: f32,
+    /// Camera motion blur: the fraction of the frame the shutter stays open — **0 switches it
+    /// off** (the default), 0.5 is a film camera's 180° shutter, 1 smears across the whole frame
+    /// interval. Only the camera's own motion blurs; objects moving in a still view do not (no
+    /// per-object velocity exists). `#[serde(default)]`.
+    pub motion_blur: f32,
 }
 
 impl Default for PostProcess {
@@ -67,6 +72,7 @@ impl Default for PostProcess {
             // what a camera without the component actually gets.
             dof_blur_size: 0.0,
             film_grain: 0.012,
+            motion_blur: 0.0,
         }
     }
 }
