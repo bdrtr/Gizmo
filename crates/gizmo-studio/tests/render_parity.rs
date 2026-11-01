@@ -816,6 +816,7 @@ fn both_draw_paths_run_the_same_per_frame_drivers() {
             "ensure_global_transforms(",
             "animation_update_system(",
             "animation_state_machine_update_system(",
+            "sprite_animation_system(",
             "BoneAttachmentSystem",
             "gpu_physics_submit_system(",
             "gpu_physics_readback_system(",
@@ -831,9 +832,14 @@ fn both_draw_paths_run_the_same_per_frame_drivers() {
             );
         }
 
-        for driver in ["animation_update_system(", "animation_state_machine_update_system("] {
+        for driver in [
+            "animation_update_system(",
+            "animation_state_machine_update_system(",
+            "sprite_animation_system(",
+        ] {
             assert!(
-                code.contains(&format!("{driver}world,animation_dt,")),
+                code.contains(&format!("{driver}world,animation_dt,"))
+                    || code.contains(&format!("{driver}world,animation_dt)")),
                 "the {path_name} path must advance animation by `animation_dt`, the delta both \
                  paths take from the clock — a raw frame delta here is a viewport that ignores \
                  `set_time_scale` and keeps walking through ⏸"
@@ -881,6 +887,7 @@ fn every_capability_neither_path_names_is_accounted_for() {
         ("LodLevel", "one level inside `LodGroup`, which both paths know."),
         ("ProjectionMode", "the enum behind `Camera::projection`, which both paths know."),
         ("TextAnchor", "which corner of a `Text`'s box sits on its anchor point — resolved inside `gizmo_renderer::text::render`, which is the code BOTH paths reach through `record_text`. `TextSpace` is the same shape and is named by both anyway, because a draw loop deciding where a label sits is the divergence this file exists to catch and saying so in writing is cheap."),
+        ("SpriteAnimation", "advanced by `sprite_animation_system`, which BOTH paths call with `animation_dt` — `both_draw_paths_run_the_same_per_frame_drivers` holds that; it only writes `Sprite::uv_rect`, which the shared `record_sprites` then draws, so neither loop has a reason to name the type."),
         ("SpriteSpace", "where a `Sprite` is drawn — decided inside `gizmo_renderer::sprite::place`, reached by BOTH paths through `record_sprites`; the shared pass asks `needs_world_transform()` rather than matching the `#[non_exhaustive]` enum, so neither loop has a reason to name it."),
         ("Terrain", "a mesh *recipe*: the primitive builder turns it into a `Mesh`, and `Mesh` is what gets drawn. That sentence answered which path DRAWS it and quietly assumed a converter existed on both hosts; until 2026-08-19 the only one was `gizmo-studio`'s, driven by a queue of editor edits, so a saved level reopened with the recipe and no mesh and an exported game never had one. `both_hosts_build_the_mesh_a_terrain_recipe_names` is the half this entry does not cover."),
         ("RenderTarget", "an app-level render-to-texture handle (`gizmo-app`'s editor runtime), not a per-picture capability; the editor's own two are in EXCEPTIONS above."),

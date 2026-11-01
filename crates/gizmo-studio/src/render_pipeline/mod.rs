@@ -65,6 +65,7 @@ pub fn execute_render_pipeline(
     let animation_dt = crate::systems::simulation::animation_delta(world);
     gizmo::renderer::animation_update_system(world, animation_dt, &renderer.queue);
     gizmo::renderer::animation_state_machine_update_system(world, animation_dt, &renderer.queue);
+    gizmo::renderer::components::sprite_animation_system(world, animation_dt);
     let delta_time = state.actual_dt;
     
     let mut bone_att = gizmo::systems::transform::BoneAttachmentSystem;

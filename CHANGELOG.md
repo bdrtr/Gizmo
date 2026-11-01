@@ -50,6 +50,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`SpriteAnimation` — sprite-sheet animation as a component.** Plays cells `first..=last` of a
+  `columns × rows` sheet at `fps`, looping or once (`once()`, `finished()`), forwards or
+  backwards, pausable (`playing`). `set_run(first, last)` switches runs and restarts only on a
+  change, so a game can pick the run from its state every frame. Both draw paths advance it with
+  the clock's delta (`sprite_animation_system`, beside the skeletal animation drivers), so
+  `set_time_scale` and pause apply; `render_parity` holds both paths to it. `sprite_2d`'s player
+  uses it in place of its hand-computed frame.
+
 - **`gizmo::physics::sprite_collider` / `sprite_collider_scaled` — a box collider derived from a
   world-space `Sprite`.** Size and anchor both carry over: a centred sprite gets a
   `Collider::box_collider`, any other anchor an `offset_box` placed where the renderer puts the

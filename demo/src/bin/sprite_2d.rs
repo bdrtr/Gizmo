@@ -7,7 +7,7 @@
 //!
 //! | gösterilen | nasıl |
 //! |---|---|
-//! | sprite sheet animasyonu | oyuncu 4 karelik bir şeritten, [`Sprite::set_frame`] |
+//! | sprite sheet animasyonu | oyuncu 4 karelik bir şeritten, [`SpriteAnimation`] — duruma göre `set_run` |
 //! | yöne göre çevirme | `flip_x`, sola giderken |
 //! | katman sırası | gökyüzü −10, uzak tepe −6, yakın tepe −5, zemin 0, coin 1, oyuncu 2 |
 //! | paralaks | iki tepe katmanı kamerayı farklı oranlarda izliyor |
@@ -22,12 +22,14 @@
 //!
 //! Bu bir sprite **çizimi**; etrafındaki 2D oyun altyapısı henüz yok: 2D fizik/çarpışma (coin
 //! toplama burada elle bir mesafe testi), tilemap bileşeni (zemin 120 ayrı sprite — tek görüntü
-//! olduğu için tek çizim çağrısı), sprite animasyon bileşeni (kare seçimi bu dosyada elle).
+//! olduğu için tek çizim çağrısı). Kare seçimi eskiden bu dosyada elle yapılıyordu; artık
+//! `SpriteAnimation` bileşeni (motor her karede ilerletiyor) ve oyunun durumundan seçilen bir
+//! aralık (`set_run`).
 
 use gizmo::core::component::IsHidden;
 use gizmo::core::system::System;
 use gizmo::prelude::*;
-use gizmo::renderer::components::{ProjectionMode, Sprite};
+use gizmo::renderer::components::{ProjectionMode, Sprite, SpriteAnimation};
 use gizmo::renderer::sprite::SpriteFilter;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
 use gizmo::winit::keyboard::KeyCode;
@@ -137,6 +139,8 @@ fn main() {
                     .with_frame(0, 4, 1)
                     .with_layer(2),
             );
+            // 4 karelik şerit, saniyede 10 kare. Hangi aralığın oynayacağını `update` seçiyor.
+            scene.world.add_component(scene.world.get_entity(player).expect("az önce doğdu"), SpriteAnimation::new(4, 1, 0, 3, 10.0));
 
             // ── HUD ──────────────────────────────────────────────────────────────────────
             let hud = |world: &mut World, sprite: Sprite| world.spawn_bundle((sprite,)).id();
@@ -276,11 +280,16 @@ fn update(world: &mut World, dt: f32, input: &gizmo::core::input::Input) {
         }
     }
 
+    // Durumdan bir aralık seçiliyor; kareyi motor ilerletiyor. Aynı aralığı her karede seçmek
+    // döngüyü bozmaz — `set_run` yalnızca değişince başa sarar.
+    if let Some(mut anim) = world.borrow_mut::<SpriteAnimation>().get_mut(g.player) {
+        let (first, last) = if !on_ground { (3, 3) } else if g.walk_time > 0.0 { (0, 3) } else { (0, 0) };
+        anim.set_run(first, last);
+    }
+
     {
         let mut sprites = world.borrow_mut::<Sprite>();
         if let Some(mut s) = sprites.get_mut(g.player) {
-            let frame = if !on_ground { 3 } else if g.walk_time > 0.0 { (g.walk_time * 10.0) as u32 % 4 } else { 0 };
-            s.set_frame(frame, 4, 1);
             s.flip_x = g.facing_left;
         }
         if let Some(mut s) = sprites.get_mut(g.bar_fill) {

@@ -250,6 +250,8 @@ pub fn default_render_pass(
             animation_dt,
             &renderer.queue,
         );
+        // Sprite-sheet animation rides the same clock: `set_time_scale` and pause apply to it.
+        crate::renderer::components::sprite_animation_system(world, animation_dt);
     }
 
     // Post-process params are written AFTER the active camera is resolved (below), so the

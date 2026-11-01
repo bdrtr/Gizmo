@@ -21,7 +21,7 @@ hash replays bit-for-bit, which is what rollback netcode and the regression soak
 | Rigid physics | GJK/EPA + box SAT, TGS-Soft solver, CCD, joints, vehicles, character, axis locks. Deterministic on one platform. A game with its own update hook steps it at a fixed rate with `gizmo::simple::FixedPhysics`. | ENGINE.md §5, §7 |
 | Soft physics | FEM soft bodies, XPBD cloth and rope, Voronoi fracture. | ENGINE.md §1 |
 | 3D rendering | Deferred PBR, CSM shadows, SSAO, SSGI, SSR, bloom, volumetrics, TAA/FXAA, decals, irradiance volumes, user materials (forward). | CAPABILITY_GAPS §A, §F |
-| 2D rendering | `Sprite` in world space (entity's plane, depth-tested) or screen space; sheets, flips, layers, pixel-art sampling. `ProjectionMode::OrthographicFit` keeps a playfield in view in any window shape; `gizmo::physics::sprite_collider` derives a box collider from a sprite. | CAPABILITY_GAPS §A1 |
+| 2D rendering | `Sprite` in world space (entity's plane, depth-tested) or screen space; sheets, flips, layers, pixel-art sampling. `ProjectionMode::OrthographicFit` keeps a playfield in view in any window shape; `gizmo::physics::sprite_collider` derives a box collider from a sprite; `SpriteAnimation` plays a sheet. | CAPABILITY_GAPS §A1 |
 | Text and HUD | `Text` in world or screen space; screen text, screen sprites and `gizmo-ui` backgrounds are drawn **after** tone mapping, so a HUD keeps its colours. No wrapping or shaping. | CAPABILITY_GAPS §A2 |
 | Browser | `wasm32` with a reduced forward pipeline (no shadows/AO/GI/TAA); audio works there, networking and Lua do not. | `demo-web/README.md` |
 | Editor | `gizmo-editor` panels; `gizmo-studio` app (not published). A game's own components join the in-engine editor with `gizmo::register_editor_component`: inspected, edited, added, removed, saved. | README, CHANGELOG |
@@ -31,8 +31,7 @@ hash replays bit-for-bit, which is what rollback netcode and the regression soak
 
 Ranked and measured in [`CAPABILITY_GAPS.md`](CAPABILITY_GAPS.md); the short version:
 
-- **2D game layer:** no 2D collision shapes (3D shapes + axis locks work), no tilemap, no
-  sprite-animation component (§C9).
+- **2D game layer:** no 2D collision shapes (3D shapes + axis locks work), no tilemap (§C9).
 - **Rendering:** no environment cubemap / reflection probes (§A5), no MSAA (§A6), no area lights
   or soft contact shadows (§A7), no occlusion culling (§A7b), no motion blur or auto exposure
   (§A7c), split screen half-done (§A5b).

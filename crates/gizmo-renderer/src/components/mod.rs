@@ -56,6 +56,7 @@ gizmo_core::impl_component!(
     Decal,
     PostProcess,
     Sprite,
+    SpriteAnimation,
     Text
 );
 gizmo_core::impl_component!(FluidParticle, FluidHandle, FluidPhase, FluidInteractor);
