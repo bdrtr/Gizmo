@@ -50,6 +50,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The studio captures reflection probes.** It calls the now-public
+  `gizmo::systems::render::capture_reflection_probes` before its passes, so the editor viewport
+  reflects what the game will. The game path's draw list skips `EditorOnly` entities, so editor
+  furniture never reaches a probe (and never reached a game frame anyway).
+
 - **Transparent surfaces reflect reflection probes (native).** The forward pass's specular
   environment was a hemispheric stand-in; it now reads the probes through `probe_environment`,
   moved into a shared shader module (`gizmo::reflection_probes`). The lit forward pipelines gained

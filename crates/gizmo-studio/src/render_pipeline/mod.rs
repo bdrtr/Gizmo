@@ -50,6 +50,12 @@ pub fn execute_render_pipeline(
     gizmo::renderer::material_sync::resolve_material_descriptions(world, renderer);
     gizmo::renderer::material_sync::sync_material_descriptions(world);
 
+    // **Reflection probes** (`ReflectionProbe`): captured by the game path's own function, so the
+    // editor's probes are the game's — six draws of the world from the probe, furniture excluded
+    // there. It submits its own work, ahead of this frame's, and returns at once when nothing
+    // needs capturing.
+    gizmo::systems::render::capture_reflection_probes(world, renderer);
+
     // --- SKELETAL ANIMATION UPDATE (Done before any ECS borrows!) ---
     //
     // BOTH drivers, because there are two: `AnimationPlayer` (a clip and a playhead) and

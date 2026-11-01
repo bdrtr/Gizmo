@@ -369,6 +369,11 @@ pub(super) fn collect_draw_items(
     // and it costs nothing on a frame with nothing hidden.
     let hidden = world.borrow::<crate::core::component::IsHidden>();
     let hidden = super::collect_hidden(&hidden, &world.borrow::<crate::core::component::Children>());
+    // **Editor furniture never draws here.** A game has none, so for a game this is a no-op; it
+    // matters since 2026-11-01, when the studio started capturing reflection probes through this
+    // path (`capture_reflection_probes`) — without it the grid, light icons and gizmo handles
+    // would be baked into every probe the editor captured.
+    let editor_only = world.borrow::<crate::core::component::EditorOnly>();
 
     let frustum = crate::math::Frustum::from_matrix(&unjittered_view_proj);
     // Per-cascade LIGHT frusta — shadow casters are culled against these, NOT the camera
@@ -409,6 +414,9 @@ pub(super) fn collect_draw_items(
 
                 // Gizlenmiş nesneleri render etme — editörün 👁 düğmesi ve H kısayolu bu.
                 if hidden.contains(&$e) {
+                    continue;
+                }
+                if editor_only.get($e).is_some() {
                     continue;
                 }
 

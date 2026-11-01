@@ -317,7 +317,11 @@ pub fn render_viewports(
 /// path's `queue.write_buffer` uploads order against submission). For the capture the renderer's
 /// TAA, SSGI and motion-blur history are set aside and put back: a probe face is one still frame,
 /// not part of the camera's sequence.
-fn capture_reflection_probes(world: &mut World, renderer: &mut Renderer) {
+///
+/// `default_render_pass` calls it every frame (it returns at once when nothing needs capturing).
+/// **`gizmo-studio` calls it too**, before its own passes: the capture draws the world through this
+/// path, which skips `EditorOnly` furniture, so the editor's probes match the game's.
+pub fn capture_reflection_probes(world: &mut World, renderer: &mut Renderer) {
     use crate::renderer::components::ReflectionProbe;
     use crate::renderer::reflection::{ReflectionProbeGpu, FACES, MAX_PROBES};
     let mut probes: Vec<(u32, ReflectionProbe)> =

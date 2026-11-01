@@ -1791,3 +1791,165 @@ fn render_cutout_frame(cutoff: Option<f32>) -> Option<Vec<u8>> {
         Some(pixels)
     })
 }
+
+/// **The editor captures reflection probes too, without its furniture.** A closed room: the wall
+/// behind the camera is magenta, a mirror stands in front of the camera, a probe sits between them.
+/// Just inside the magenta wall, covering it, is a green slab marked `EditorOnly` — editor
+/// furniture, behind the camera, so the viewport can only ever show it through a reflection.
+///
+/// The mirror must show magenta. Sky would mean the studio never captured the probe (it read the
+/// procedural sky before 2026-11-01); green would mean the capture drew the editor's furniture
+/// into the probe.
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn the_editor_viewport_reflects_a_probe_captured_without_furniture() {
+    let _gpu = gpu_lock();
+    if !pollster::block_on(Renderer::headless_adapter_available())
+        || pollster::block_on(Renderer::headless_adapter_is_software())
+    {
+        eprintln!("skipping: no usable GPU adapter");
+        return;
+    }
+    let pixels = pollster::block_on(async {
+        let mut renderer = shared_device_renderer(W, H).await;
+        renderer.taa = None;
+        renderer.ssgi = None;
+        renderer.ssr = None;
+        let mut assets = AssetManager::new();
+        let mut world = World::new();
+        let tex = assets.create_white_texture(
+            &renderer.device,
+            &renderer.queue,
+            &renderer.scene.texture_bind_group_layout,
+        );
+        let slab = |world: &mut World, pos: Vec3, scale: Vec3, colour: Vec4, roughness: f32, metallic: f32| {
+            let e = world.spawn();
+            world.add_component(e, Transform::new(pos).with_scale(scale));
+            world.add_component(e, GlobalTransform::default());
+            world.add_component(e, AssetManager::create_cube(&renderer.device));
+            world.add_component(e, Material::new(tex.clone()).with_pbr(colour, roughness, metallic));
+            world.add_component(e, MeshRenderer::new());
+            e
+        };
+        // `create_cube` spans −1..1: scales are half-extents. A closed 10 m room.
+        let grey = Vec4::new(0.5, 0.5, 0.5, 1.0);
+        for (pos, scale) in [
+            (Vec3::new(5.0, 0.0, 0.0), Vec3::new(0.2, 5.2, 5.2)),
+            (Vec3::new(-5.0, 0.0, 0.0), Vec3::new(0.2, 5.2, 5.2)),
+            (Vec3::new(0.0, 5.0, 0.0), Vec3::new(5.2, 0.2, 5.2)),
+            (Vec3::new(0.0, -5.0, 0.0), Vec3::new(5.2, 0.2, 5.2)),
+            (Vec3::new(0.0, 0.0, -5.0), Vec3::new(5.2, 5.2, 0.2)),
+        ] {
+            slab(&mut world, pos, scale, grey, 0.9, 0.0);
+        }
+        slab(&mut world, Vec3::new(0.0, 0.0, 5.0), Vec3::new(5.2, 5.2, 0.2), Vec4::new(0.9, 0.05, 0.9, 1.0), 0.9, 0.0);
+        let furniture =
+            slab(&mut world, Vec3::new(0.0, 0.0, 4.6), Vec3::new(4.8, 4.8, 0.1), Vec4::new(0.05, 0.9, 0.05, 1.0), 0.9, 0.0);
+        world.add_component(furniture, gizmo::core::component::EditorOnly);
+        slab(&mut world, Vec3::new(0.0, 0.0, -2.0), Vec3::splat(0.8), Vec4::new(0.95, 0.95, 0.95, 1.0), 0.05, 1.0);
+        world.spawn_bundle(gizmo::bundles::PointLightBundle {
+            position: Vec3::ZERO,
+            color: Vec3::ONE,
+            intensity: 60.0,
+            radius: 30.0,
+        });
+        world.spawn_bundle((
+            Transform::new(Vec3::ZERO),
+            GlobalTransform::default(),
+            gizmo::renderer::components::ReflectionProbe::new(),
+        ));
+        let cam = world.spawn();
+        world.add_component(cam, Transform::new(Vec3::new(0.0, 0.0, 2.0)));
+        world.add_component(cam, GlobalTransform::default());
+        world.add_component(
+            cam,
+            gizmo::renderer::components::Camera::new(
+                std::f32::consts::FRAC_PI_4,
+                0.1,
+                1000.0,
+                -std::f32::consts::FRAC_PI_2,
+                0.0,
+                true,
+            ),
+        );
+        let state = StudioState {
+            current_fps: 60.0,
+            actual_dt: 1.0 / 60.0,
+            editor_camera: cam.id(),
+            game_camera: 4242,
+            do_raycast: false,
+            play: gizmo::systems::PlayLoop::new(),
+            asset_watcher: None,
+            gc_timer: 0.0,
+            autosave_timer: 0.0,
+            visible_entity_count: 0,
+            draw_call_count: 0,
+        };
+        let format = renderer.config.format;
+        let target = renderer.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("studio-probe-target"),
+            size: wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = renderer.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        execute_render_pipeline(&mut world, &state, &mut encoder, &view, &mut renderer, 0.0);
+        let staging = renderer.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("studio-probe-readback"),
+            size: u64::from(W * H * BPP),
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &target,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging,
+                layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(W * BPP), rows_per_image: Some(H) },
+            },
+            wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 1 },
+        );
+        renderer.queue.submit(std::iter::once(encoder.finish()));
+        let slice = staging.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        let _ = renderer.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        let mut px = slice.get_mapped_range().expect("mapped").to_vec();
+        if matches!(format.remove_srgb_suffix(), wgpu::TextureFormat::Bgra8Unorm) {
+            for p in px.as_chunks_mut::<4>().0 {
+                p.swap(0, 2);
+            }
+        }
+        px
+    });
+    // The mirror's face, minus its middle (the point light's highlight), as mean magenta excess,
+    // (r + b)/2 − g: positive for the magenta wall, negative for the green furniture. The editor
+    // exposes and blooms more than the game path, so the wall comes out a pale pink — a margin, not
+    // a hue threshold. Measured: 15.33; −14.12 with the furniture captured (the `EditorOnly` skip
+    // removed); 1.63 with the studio never capturing.
+    let (mut magenta, mut n) = (0.0f64, 0.0f64);
+    for y in 42..86usize {
+        for x in 42..86usize {
+            if (54..74).contains(&x) && (54..74).contains(&y) {
+                continue;
+            }
+            let p = &pixels[(y * W as usize + x) * 4..][..3];
+            magenta += (p[0] as f64 + p[2] as f64) / 2.0 - p[1] as f64;
+            n += 1.0;
+        }
+    }
+    let magenta = magenta / n;
+    assert!(
+        magenta > 8.0,
+        "the editor's mirror has magenta excess {magenta:.2} — negative is the furniture captured \
+         into the probe, near zero is the probe never captured",
+    );
+}

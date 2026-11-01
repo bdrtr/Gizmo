@@ -547,15 +547,6 @@ fn every_render_capability_is_known_to_both_draw_paths() {
     /// Declared asymmetries: (component, which path, why).
     const EXCEPTIONS: &[(&str, Path, &str)] = &[
         (
-            "ReflectionProbe",
-            Path::GameOnly,
-            "the probe is captured by the game path (`capture_reflection_probes`: six full draws \
-             of the game's own frame function into a cube). The studio's viewport draws through \
-             its own pass list, so it keeps the procedural sky in reflections; a probe shows when \
-             the game runs. Wiring it in means the studio drawing six game-path frames, which it \
-             has no entry point for.",
-        ),
-        (
             "Viewport",
             Path::GameOnly,
             "a camera's rectangle of the target, for split screen: `render_viewports` composes one \
@@ -583,15 +574,6 @@ fn every_render_capability_is_known_to_both_draw_paths() {
              `StudioState::draw_call_count` was a field nothing ever wrote. Publishing stats with \
              no consumer would be the same mistake facing the other way. Wire it into the game \
              path when a game overlay wants it, not before.",
-        ),
-        (
-            "EditorOnly",
-            Path::EditorOnly,
-            "the marker that says an entity is the editor's own furniture — grid, light icons, \
-             handles. The game path has no furniture to exclude, so there is nothing for it to \
-             read. It exists because the editor draws two pictures from one world and only one of \
-             them may contain this: without it the game view showed the editor's light icons, \
-             since an icon is an ordinary unlit cube and no material flag can tell them apart.",
         ),
         (
             "lod_vbufs",

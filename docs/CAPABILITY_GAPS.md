@@ -255,8 +255,16 @@ group bound at 5 — the native device's sixth, which nothing used. With no prob
 stand-in, unchanged. Measured: a half-transparent metal cube's magenta excess 0.38 → 4.80 with a
 probe, 0.39 with the forward shader ignoring it. Native only: the web's four groups are all spent.
 
-Not done: the studio's viewport does not capture (render_parity lists `ReflectionProbe` as
-game-only, with the reason).
+**The studio captures too, same day.** `gizmo-studio` calls the game path's
+`capture_reflection_probes` before its own passes, so an editor viewport reflects the same probes a
+game does. The game path's draw list now skips `EditorOnly` furniture (a no-op in a game, which has
+none); without that the grid and light icons would be baked into every probe the editor captured.
+Tested in the studio's own pipeline with green furniture covering the wall a mirror faces: magenta
+excess 15.33; −14.12 with the furniture skip removed; 1.63 with the studio not capturing.
+`render_parity` dropped both the `ReflectionProbe` and the `EditorOnly` exceptions — each type is
+now known to both paths.
+
+Not done for probes: real-time recapture (a probe is a level-load cost), probes on the web.
 
 ### A5b. Split screen / multi-viewport — **CLOSED 2026-11-01**
 
