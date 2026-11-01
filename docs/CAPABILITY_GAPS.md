@@ -564,8 +564,9 @@ What it had to build for itself, each recorded in the file's header:
 - **A sprite and its collider are sized separately.** Nothing links `Sprite::size` to the
   collider's half-extents; the game's `spawn_box` derives both from one number so they cannot
   disagree.
-- **No level-reset helper.** "Everything that belongs to the level" is a marker component and a
-  hand-written despawn loop.
+- ~~**No level-reset helper.**~~ **Not a gap — a discoverability miss (2026-11-01).** The game
+  wrote a despawn loop over a `Level` marker by hand; `World::despawn_all_with::<C>()` already did
+  exactly that, with a doc example naming this very case. The game now calls it.
 - ~~**No fixed-step driver for a game that owns its camera.**~~ **Closed 2026-11-01.**
   `simple_scene_update` steps physics but also flies the camera with WASD/mouse, so a game with a
   fixed camera could not use it, and the accumulator lived in the game (`FIXED_DT`, `MAX_STEPS`).

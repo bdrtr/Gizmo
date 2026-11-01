@@ -22,8 +22,9 @@
 //!   tutan şey `RigidBody`'nin eksen kilitleri. Çalışıyor, ama "2D fizik" diye bir yol yok.
 //! - **Görsel ile collider elle eşleniyor.** Bir sprite'ın boyu ile collider'ın yarı-boyu iki ayrı
 //!   sayı; `spawn_box` ikisini aynı yerden türetsin diye yazıldı. Motor bunu bağlamıyor.
-//! - **Oyun yeniden başlatma yardımcısı yok.** "Bölüme ait her şey" bir işaretleyici bileşenle
-//!   (`Level`) toplanıp elle siliniyor.
+//! - **Bölümü sıfırlamak:** "bölüme ait her şey" bir işaretleyici bileşen (`Level`) ve
+//!   `World::despawn_all_with::<Level>()`. Bu yardımcı motorda zaten vardı; oyun ilk yazıldığında
+//!   bulunamadı ve döngü elle yazıldı — eksik olan özellik değil, bulunabilirlikti.
 //! - **Fontsuz metin.** Repo font taşımıyor (lisans kararı); sistemde font yoksa sentetik yüz
 //!   kutular çiziyor. `GIZMO_FONT` ile seçilebilir.
 
@@ -214,12 +215,7 @@ fn main() {
 
 /// Bölümü kurar: zemin, platform, kule, hedefler. Önceki bölümden kalan her şeyi siler.
 fn build_level(world: &mut World, game: &mut Game) {
-    let old: Vec<u32> = world.borrow::<Level>().iter().map(|(id, _)| id).collect();
-    for id in old {
-        if let Some(e) = world.get_entity(id) {
-            world.despawn(e);
-        }
-    }
+    world.despawn_all_with::<Level>();
 
     let img = game.images;
     // Zemin ve platform: statik gövdeler.
