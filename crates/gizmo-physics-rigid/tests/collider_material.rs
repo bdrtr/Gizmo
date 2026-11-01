@@ -177,3 +177,60 @@ fn a_collision_layer_authored_in_the_ecs_filters_in_the_solver() {
         "and B must not have been pushed by a collision that should have been filtered out"
     );
 }
+
+/// **A `PhysicsMaterial` component on the entity is the surface the solver uses**, over the
+/// collider's own material.
+///
+/// The same elastic collision as `collider_material_restitution_reaches_the_solver`, with the
+/// colliders left at the default material and the elastic one given as a component instead. Until
+/// 2026-11-01 the component compiled and was read by nothing, so this collision came out
+/// near-inelastic. The world's own copy of the collider is checked too, because that copy is what
+/// the vehicle wheels read their grip from.
+#[test]
+fn a_physics_material_component_overrides_the_collider_material() {
+    let mut world = World::new();
+    world.insert_resource(PhysicsWorld::new().with_gravity(Vec3::ZERO));
+
+    let a = world.spawn();
+    world.add_component(a, Transform::new(Vec3::new(-1.02, 0.0, 0.0)));
+    world.add_component(a, RigidBody::new(1.0, false));
+    world.add_component(a, Velocity::new(Vec3::new(5.0, 0.0, 0.0)));
+    world.add_component(a, Collider::sphere(0.5));
+    world.add_component(a, elastic());
+
+    let b = world.spawn();
+    world.add_component(b, Transform::new(Vec3::ZERO));
+    world.add_component(b, RigidBody::new(1.0, false));
+    world.add_component(b, Velocity::default());
+    world.add_component(b, Collider::sphere(0.5));
+    world.add_component(b, elastic());
+
+    for _ in 0..40 {
+        gizmo_physics_rigid::system::physics_step_system(&world, 1.0 / 120.0);
+    }
+
+    let vs = world.borrow::<Velocity>();
+    let vb = vs.get(b.id()).unwrap().linear.x;
+    assert!(vb > 3.5, "the component's restitution 1 did not reach the solver: vb = {vb}");
+    drop(vs);
+
+    let pw = world.get_resource::<PhysicsWorld>().unwrap();
+    let i = *pw.entity_index_map.get(&a.id()).expect("A is in the physics world");
+    assert_eq!(pw.colliders[i].material, elastic(), "the world's collider — what wheels read — kept the default");
+}
+
+/// Without a component nothing changes: the collider's own material still decides.
+#[test]
+fn without_a_component_the_collider_material_still_decides() {
+    let mut world = World::new();
+    world.insert_resource(PhysicsWorld::new().with_gravity(Vec3::ZERO));
+    let a = world.spawn();
+    world.add_component(a, Transform::new(Vec3::ZERO));
+    world.add_component(a, RigidBody::new(1.0, false));
+    world.add_component(a, Velocity::default());
+    world.add_component(a, Collider::sphere(0.5).with_material(PhysicsMaterial::ICE));
+    gizmo_physics_rigid::system::physics_step_system(&world, 1.0 / 120.0);
+    let pw = world.get_resource::<PhysicsWorld>().unwrap();
+    let i = *pw.entity_index_map.get(&a.id()).unwrap();
+    assert_eq!(pw.colliders[i].material, PhysicsMaterial::ICE);
+}

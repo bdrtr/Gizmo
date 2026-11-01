@@ -349,8 +349,9 @@ pub struct Wheel {
     /// produces no grip at all in either axis. Zeroed while airborne.
     pub suspension_force: f32,
     /// The dynamic friction of the ground being touched (for the grip multiplier). Captured
-    /// from the PhysicsMaterial of the collider hit by the first-pass raycast; falls back to
-    /// ASPHALT while airborne.
+    /// from the material of the body hit by the first-pass raycast — its `PhysicsMaterial`
+    /// component if it has one, else its collider's own (`Collider::material_with`); falls back
+    /// to ASPHALT while airborne.
     /// grip_mult = surface_friction / ASPHALT.dynamic_friction → ice/sand/asphalt give real
     /// grip.
     pub surface_friction: f32,

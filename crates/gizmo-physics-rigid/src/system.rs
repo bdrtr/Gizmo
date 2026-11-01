@@ -41,6 +41,9 @@ pub fn physics_step_system(world: &World, dt: f32) {
             let mut children_query = world.query::<&gizmo_core::component::Children>();
             let trans_query = world.query::<&Transform>();
             let col_query = world.query::<&Collider>();
+            // An entity's `PhysicsMaterial` component overrides its collider's own material —
+            // see `Collider::material_with`, which `gizmo-physics-dynamics` applies too.
+            let material_query = world.query::<&gizmo_physics_core::components::PhysicsMaterial>();
 
             for (id, (col, transform, _rb, _, _)) in query.iter() {
                 let mut compound_shapes = Vec::new();
@@ -117,7 +120,7 @@ pub fn physics_step_system(world: &World, dt: f32) {
                 //
                 // Cloning the authored collider and replacing only the shape ends the class:
                 // a field added tomorrow travels without anyone remembering this line.
-                let final_collider = if compound_shapes.is_empty() {
+                let mut final_collider = if compound_shapes.is_empty() {
                     Collider::default() // Should technically not be simulated
                 } else if compound_shapes.len() == 1 {
                     // Single collider, avoid nesting in Compound
@@ -131,6 +134,8 @@ pub fn physics_step_system(world: &World, dt: f32) {
                     rebuilt
                 };
 
+                final_collider.material =
+                    col.material_with(material_query.as_ref().and_then(|q| q.get(id)));
                 compound_shapes_map.insert(id, final_collider);
             }
         }

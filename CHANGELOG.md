@@ -1115,6 +1115,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A `PhysicsMaterial` component on an entity now sets its surface — for the contact solver and
+  for vehicle tyres.** It is an ECS component, `world.add_component(ground,
+  PhysicsMaterial::ASPHALT)` compiled, and nothing read it: the solver and the wheels both took
+  `Collider::material`, which `Collider::trimesh` leaves at the default (dynamic friction 0.5). A
+  downstream racing project measured the cost: every tyre held 0.5 / 0.65 = 77 % of its asphalt
+  grip, and a car's lateral limit read 0.62 g instead of 0.84 g with the asphalt component on the
+  road. The rule is now `Collider::material_with(component)` — the component wins — applied by both
+  ECS→physics bridges (`physics_step_system`, and the wheels' first-frame ECS fallback), so a body
+  cannot have one surface for collisions and another for tyres. Without a component nothing
+  changes: `headless_stress_test` still hashes `A462C9EB8A09D5CA`.
+
 - **`World::compact` promoted an invalid `EntityLocation` into a valid one pointing at row
   `u32::MAX`.** Reclaiming an empty archetype swap-removes it and moves the last archetype down
   into the freed slot, then renumbers the locations of every entity that archetype lists.

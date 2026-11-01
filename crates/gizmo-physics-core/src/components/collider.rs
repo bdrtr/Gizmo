@@ -538,6 +538,25 @@ impl Collider {
         self
     }
 
+    /// The surface this collider presents once the entity's own `PhysicsMaterial` **component**
+    /// is taken into account: the component, when there is one, wins over
+    /// [`material`](Self::material).
+    ///
+    /// The one rule both ECS→physics bridges apply — `gizmo-physics-rigid`'s step, which builds
+    /// what the contact solver sees, and `gizmo-physics-dynamics`' wheel fallback — so a body
+    /// cannot have one surface for collisions and another for tyres.
+    ///
+    /// It exists because the component used to be inert. `PhysicsMaterial` is an ECS component,
+    /// `world.add_component(ground, PhysicsMaterial::ASPHALT)` compiles, and nothing read it: the
+    /// solver and the wheels both took `Collider::material`, which a `Collider::trimesh` leaves at
+    /// the default (dynamic friction 0.5). Measured downstream: every tyre then held
+    /// 0.5 / 0.65 = 77 % of its asphalt grip, and a car's lateral limit read 0.62 g instead of
+    /// 0.84 g — with the asphalt component sitting on the road the whole time.
+    #[must_use]
+    pub fn material_with(&self, component: Option<&PhysicsMaterial>) -> PhysicsMaterial {
+        component.copied().unwrap_or(self.material)
+    }
+
     /// Bounciness (restitution) shortcut — set it on one line without building a full material.
     /// E.g.: `Collider::sphere(0.5).with_restitution(0.9)` (a ball that bounces many times).
     pub fn with_restitution(mut self, restitution: f32) -> Self {

@@ -74,9 +74,12 @@ fn resolve_combine_mode(m1: CombineMode, m2: CombineMode) -> CombineMode {
 /// clamp, but a struct literal is not validated, so a hand-built material can hold values
 /// (negative friction, restitution above 1) that the solver has no sensible answer for.
 ///
-/// A material belongs to a collider — [`Collider::material`](crate::components::Collider) —
-/// and reaches the contact solver from there; adding this as a standalone ECS component next
-/// to a body does not give that body a surface. Two materials never negotiate at runtime:
+/// A material reaches the contact solver and the vehicle wheels in one of two ways: as the
+/// collider's own [`Collider::material`](crate::components::Collider), or as a `PhysicsMaterial`
+/// **component** on the same entity — which wins when both are present
+/// ([`Collider::material_with`](crate::components::Collider::material_with)). Until 2026-11-01
+/// the component was read by nothing: adding it compiled and changed nothing, while the prose
+/// here was the only place that said so. Two materials never negotiate at runtime:
 /// merging is the pure, stateless [`combine`](Self::combine), which makes the contact
 /// coefficients a deterministic function of the pair alone and safe to recompute during
 /// replay or rollback.

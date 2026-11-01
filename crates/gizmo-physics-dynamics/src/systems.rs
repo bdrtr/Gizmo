@@ -65,9 +65,14 @@ use crate::vehicle::{
 /// that never enter a `PhysicsWorld` (see this module's tests).
 fn gather_colliders(world: &World) -> Vec<(BodyHandle, Transform, Collider)> {
     let mut colliders = Vec::new();
+    // The same material rule as the rigid step (`Collider::material_with`), so the first-frame
+    // fallback and the broadphase path agree on how much grip a surface has.
+    let materials = world.query::<&gizmo_physics_core::components::PhysicsMaterial>();
     if let Some(query) = world.query::<(&Transform, &Collider, Without<IsDeleted>)>() {
         for (id, (transform, collider, _)) in query.iter() {
-            colliders.push((BodyHandle::from_id(id), *transform, collider.clone()));
+            let mut collider = collider.clone();
+            collider.material = collider.material_with(materials.as_ref().and_then(|q| q.get(id)));
+            colliders.push((BodyHandle::from_id(id), *transform, collider));
         }
     }
     colliders
@@ -118,7 +123,8 @@ fn gather_colliders(world: &World) -> Vec<(BodyHandle, Transform, Collider)> {
 ///   `PhysicsWorld::add_body`, without the matching components, is evicted on the first step
 ///   and is then invisible to the wheels as well as to the solver.
 /// * **A wheel sees the collider the *solver* sees**, which is the entity's own shape merged
-///   with its children into a `Compound`, carrying the entity's `PhysicsMaterial` — and,
+///   with its children into a `Compound`, carrying the entity's material (its `PhysicsMaterial`
+///   component when it has one, else `Collider::material` — `Collider::material_with`) — and,
 ///   today, `is_trigger == false` regardless of what the ECS `Collider` says, because
 ///   `physics_step_system` drops that flag when it rebuilds the collider. So an ECS trigger
 ///   volume that also has a `RigidBody` is now drivable. That is a defect in the ECS→solver
@@ -944,6 +950,37 @@ mod tests {
         vehicle_controller_system(&world, dt);
 
         assert_eq!(grounded_flags(&world, car), vec![true; 4]);
+    }
+
+    /// **A `PhysicsMaterial` component on the ground is the grip the tyres feel** — on both
+    /// paths: the pre-first-step ECS fallback and the broadphase.
+    ///
+    /// The ground's collider is left at the default material and ICE is given as a component.
+    /// Until 2026-11-01 the component was read by nothing, so every wheel reported the collider's
+    /// default 0.5 and the car gripped on "ice" like on a mid-range surface.
+    #[test]
+    fn a_physics_material_component_on_the_ground_reaches_the_wheels_on_both_paths() {
+        use gizmo_physics_core::components::PhysicsMaterial;
+        let surface = |world: &World, car: Entity| -> Vec<f32> {
+            let q = world.query::<&VehicleController>().unwrap();
+            q.get(car.id()).unwrap().wheels.iter().map(|w| w.surface_friction).collect()
+        };
+        let mut world = World::new();
+        world.insert_resource(PhysicsWorld::new());
+        let ground = spawn_ground(&mut world);
+        world.add_component(ground, PhysicsMaterial::ICE);
+        let car = spawn_vehicle(&mut world, 0.0);
+        let ice = PhysicsMaterial::ICE.dynamic_friction;
+        assert_ne!(ice, box_collider(1.0, 1.0, 1.0).material.dynamic_friction, "the test needs two different values");
+
+        // First step: the physics world is empty, so this is the ECS fallback.
+        vehicle_controller_system(&world, 1.0 / 120.0);
+        assert_eq!(surface(&world, car), vec![ice; 4], "fallback path ignored the component");
+
+        // After a step: the broadphase path, reading the world's rebuilt collider.
+        physics_step_system(&world, 1.0 / 120.0);
+        vehicle_controller_system(&world, 1.0 / 120.0);
+        assert_eq!(surface(&world, car), vec![ice; 4], "broadphase path ignored the component");
     }
 
     /// Before the world's first `physics_step_system` the `PhysicsWorld` holds no bodies at
