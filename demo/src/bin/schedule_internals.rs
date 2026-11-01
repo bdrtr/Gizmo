@@ -96,8 +96,8 @@
 //!
 //! Aynı sekiz sistem `after` zinciriyle bağlandığında (`GIZMO_SCHEDULE_CHAIN=1`) 600 karede
 //! **tek** sıralama görülüyor, sıfır değişim. Yani `label`/`after` kısıtları sırayı gerçekten
-//! sabitliyor — sadece elle yazmak gerekiyor: bir sistem listesini tek çağrıda zincirleyen
-//! kolaylık **yok**.
+//! sabitliyor. Bunu her kenarda elle yazmak gerekiyordu; 2026-11-02'den beri tek çağrı:
+//! `(a, b, c, …).chain()` ve `App::add_update_chain` — zincir modu artık onunla kuruluyor.
 //!
 //! Bir uyarı: kısıtı **çalıştırma anında** takıp çıkarmak mümkün değil, çizelge kurulurken
 //! belirleniyor. Karşılaştırma bu yüzden iki ayrı koşu.
@@ -155,18 +155,26 @@ struct ScheduleReport {
 }
 gizmo::core::impl_component!(ScheduleReport);
 
-/// Zincir modu açıksa sisteme `after` kısıtını takar, kapalıysa dokunmaz.
+/// Sekiz yazıcıyı ekler: zincir modunda `.chain()` ile sıralı, değilse kısıtsız.
 ///
 /// Kısıtı **çalıştırma anında** eklemek mümkün değil — çizelge kurulurken belirleniyor. Bu yüzden
 /// karşılaştırma iki ayrı koşuyla yapılıyor, tek koşu içinde bir tuşla değil.
-fn chained(
-    config: gizmo::core::system::SystemConfig,
-    after: Option<&'static str>,
-) -> gizmo::core::system::SystemConfig {
-    match (chain_enabled(), after) {
-        (true, Some(label)) => config.after(label),
-        _ => config,
+fn add_writers(app: App<SimpleSceneState>) -> App<SimpleSceneState> {
+    if chain_enabled() {
+        return app.add_update_chain(
+            (writer_a, writer_b, writer_c, writer_d, writer_e, writer_f, writer_g, writer_h)
+                .chain()
+                .in_phase(Phase::Update),
+        );
     }
+    app.add_update_system(writer_a.in_phase(Phase::Update))
+        .add_update_system(writer_b.in_phase(Phase::Update))
+        .add_update_system(writer_c.in_phase(Phase::Update))
+        .add_update_system(writer_d.in_phase(Phase::Update))
+        .add_update_system(writer_e.in_phase(Phase::Update))
+        .add_update_system(writer_f.in_phase(Phase::Update))
+        .add_update_system(writer_g.in_phase(Phase::Update))
+        .add_update_system(writer_h.in_phase(Phase::Update))
 }
 
 /// Zincir modu açık mı.
@@ -175,7 +183,7 @@ fn chain_enabled() -> bool {
 }
 
 fn main() {
-    App::<SimpleSceneState>::new("Gizmo Engine - Schedule Internals", 1280, 720)
+    let app = App::<SimpleSceneState>::new("Gizmo Engine - Schedule Internals", 1280, 720)
         .with_simple_scene(|scene, state| {
             let white = scene.asset_manager.create_white_texture(
                 &scene.renderer.device,
@@ -215,18 +223,11 @@ fn main() {
             });
             scene.world.insert_resource(ScheduleReport::default());
             scene.spawn_camera(state, Vec3::new(0.0, 2.5, 9.0), Vec3::ZERO);
-        })
-        // Kasıtlı olarak KISITSIZ ve hepsi `Commands` alıyor: belgenin adlandırdığı delik bu.
-        // `GIZMO_SCHEDULE_CHAIN=1` ile aynı sekiz sistem `after` zinciriyle bağlanıyor —
-        // karşılaştırma böyle kuruluyor.
-        .add_update_system(chained(writer_a.in_phase(Phase::Update).label("w_a"), None))
-        .add_update_system(chained(writer_b.in_phase(Phase::Update).label("w_b"), Some("w_a")))
-        .add_update_system(chained(writer_c.in_phase(Phase::Update).label("w_c"), Some("w_b")))
-        .add_update_system(chained(writer_d.in_phase(Phase::Update).label("w_d"), Some("w_c")))
-        .add_update_system(chained(writer_e.in_phase(Phase::Update).label("w_e"), Some("w_d")))
-        .add_update_system(chained(writer_f.in_phase(Phase::Update).label("w_f"), Some("w_e")))
-        .add_update_system(chained(writer_g.in_phase(Phase::Update).label("w_g"), Some("w_f")))
-        .add_update_system(chained(writer_h.in_phase(Phase::Update).label("w_h"), Some("w_g")))
+        });
+    // Kasıtlı olarak KISITSIZ ve hepsi `Commands` alıyor: belgenin adlandırdığı delik bu.
+    // `GIZMO_SCHEDULE_CHAIN=1` ile aynı sekiz sistem `.chain()` ile sıralanıyor — karşılaştırma
+    // böyle kuruluyor.
+    add_writers(app)
         // Sırayı okuyan sistem `PostUpdate`'te — faz sınırı, yığın sınırından güçlü.
         .add_update_system(tally.in_phase(Phase::PostUpdate))
         // Faz probe'ları: beş yerleşik fazın arasına ve iki ucuna yerleştirilmiş beş kullanıcı

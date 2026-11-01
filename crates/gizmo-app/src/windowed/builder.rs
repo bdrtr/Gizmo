@@ -380,6 +380,20 @@ impl<State: 'static> App<State> {
         self
     }
 
+    /// Registers a chain of systems on the per-frame (update) schedule, run in the order listed —
+    /// `(a, b, c).chain()`; see [`gizmo_core::system::SystemChain`].
+    pub fn add_update_chain(mut self, chain: gizmo_core::system::SystemChain) -> Self {
+        self.update_schedule.add_chain(chain);
+        self
+    }
+
+    /// Registers a chain of systems on the fixed-timestep schedule, run in the order listed —
+    /// `(a, b, c).chain()`; see [`gizmo_core::system::SystemChain`].
+    pub fn add_system_chain(mut self, chain: gizmo_core::system::SystemChain) -> Self {
+        self.schedule.add_chain(chain);
+        self
+    }
+
     /// [`add_update_system`](Self::add_update_system) for the `&mut self` builder style.
     pub fn add_update_system_mut<Params, S: gizmo_core::system::IntoSystemConfig<Params>>(
         &mut self,

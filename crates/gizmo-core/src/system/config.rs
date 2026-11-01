@@ -516,3 +516,91 @@ impl_into_system_configs!(P1 S1, P2 S2, P3 S3, P4 S4, P5 S5, P6 S6);
 impl_into_system_configs!(P1 S1, P2 S2, P3 S3, P4 S4, P5 S5, P6 S6, P7 S7);
 impl_into_system_configs!(P1 S1, P2 S2, P3 S3, P4 S4, P5 S5, P6 S6, P7 S7, P8 S8);
 
+/// Systems that run one after another, in the order they were listed — built by
+/// [`IntoSystemChain::chain`], added with [`Schedule::add_chain`].
+///
+/// Each system gets a generated label and an `after` constraint on the one before it, which is
+/// exactly what writing `label` / `after` by hand on every edge does — and the generated labels
+/// cannot be misspelt, which the hand-written ones can: an `after` naming a label nobody has is
+/// dropped with a warning, not an error. Systems keep whatever else their configs carry (their
+/// own labels, sets, access, run conditions). A chain only orders; it does not make its systems
+/// exclusive, so other systems may still share their batches.
+pub struct SystemChain(pub(crate) Vec<SystemConfig>);
+
+impl SystemChain {
+    /// Puts every system of the chain in `phase`.
+    pub fn in_phase(mut self, phase: Phase) -> Self {
+        for config in &mut self.0 {
+            config.phase = phase;
+        }
+        self
+    }
+
+    /// How many systems the chain holds.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Whether the chain holds no systems — never, for one built by [`IntoSystemChain::chain`].
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+/// A tuple of 2–8 systems (bare functions or configured [`SystemConfig`]s) that can be chained:
+/// `(spawn, move_things, despawn).chain()` runs them in that order every time.
+pub trait IntoSystemChain<Marker> {
+    /// Orders the systems as listed — see [`SystemChain`].
+    fn chain(self) -> SystemChain;
+}
+
+/// A fresh label for the `index`th system of a new chain. Leaked: labels are `&'static str`
+/// throughout the scheduler, and a chain is built once, at setup.
+fn chain_label(chain: u64, index: usize) -> &'static str {
+    Box::leak(format!("chain#{chain}/{index}").into_boxed_str())
+}
+
+fn link(configs: Vec<SystemConfig>) -> SystemChain {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let chain = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let mut previous: Option<&'static str> = None;
+    let linked = configs
+        .into_iter()
+        .enumerate()
+        .map(|(i, config)| {
+            let label = chain_label(chain, i);
+            let config = config.label(label);
+            let config = match previous {
+                Some(p) => config.after(p),
+                None => config,
+            };
+            previous = Some(label);
+            config
+        })
+        .collect();
+    SystemChain(linked)
+}
+
+macro_rules! impl_into_system_chain {
+    ($($P:ident $S:ident),+) => {
+        impl<$($P, $S),+> IntoSystemChain<($($P,)+)> for ($($S,)+)
+        where
+            $($S: IntoSystemConfig<$P>,)+
+        {
+            fn chain(self) -> SystemChain {
+                #[allow(non_snake_case)]
+                let ($($S,)+) = self;
+                link(vec![$($S.into_config()),+])
+            }
+        }
+    };
+}
+
+impl_into_system_chain!(P1 S1, P2 S2);
+impl_into_system_chain!(P1 S1, P2 S2, P3 S3);
+impl_into_system_chain!(P1 S1, P2 S2, P3 S3, P4 S4);
+impl_into_system_chain!(P1 S1, P2 S2, P3 S3, P4 S4, P5 S5);
+impl_into_system_chain!(P1 S1, P2 S2, P3 S3, P4 S4, P5 S5, P6 S6);
+impl_into_system_chain!(P1 S1, P2 S2, P3 S3, P4 S4, P5 S5, P6 S6, P7 S7);
+impl_into_system_chain!(P1 S1, P2 S2, P3 S3, P4 S4, P5 S5, P6 S6, P7 S7, P8 S8);
+

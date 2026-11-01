@@ -64,6 +64,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   bytes per sample, so native devices request `max_color_attachment_bytes_per_sample` up to 64.
   Groundwork for object motion blur; nothing reads the target yet.
 
+- **System chains: `(a, b, c).chain()`.** `IntoSystemChain` (in the prelude) turns a tuple of 2–8
+  systems, bare or configured, into a `SystemChain` that runs them in the listed order: each gets a
+  generated label and an `after` on the one before. `Schedule::add_chain`,
+  `App::add_update_chain` / `add_system_chain`, `SystemChain::in_phase`. The `schedule_internals`
+  demo's chain mode uses it (one ordering in 650 frames).
+
 - **Driven state machines: `App::add_state`, `App::on_enter`, `App::on_exit`, `DespawnOnExit`.**
   `add_state(initial)` makes `State<S>` a machine the app loop drives: once a frame, before the
   fixed and update schedules, a queued `State::set` is applied and the hooks run (`on_exit` of the

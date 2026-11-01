@@ -8,7 +8,7 @@ pub use crate::core::{
     asset::{Assets, Handle},
     component::{Children, Parent},
     in_state,
-    system::IntoSystemConfig,
+    system::{IntoSystemChain, IntoSystemConfig},
     Bundle, BundleExt, Component, DespawnOnExit, Entity, EntityName, EventReader, EventWriter, Events,
     PoolManager, Pooled, Res, ResMut, Schedule, State, Time, WindowInfo, World,
 };

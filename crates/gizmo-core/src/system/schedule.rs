@@ -319,6 +319,14 @@ impl Schedule {
         self.invalidate();
     }
 
+    /// Adds a [`SystemChain`](super::SystemChain): its systems run in the order they were
+    /// listed, every time. `schedule.add_chain((a, b, c).chain())`.
+    /// Invalidates the compiled batches (see the type-level warning).
+    pub fn add_chain(&mut self, chain: super::SystemChain) {
+        self.unbuilt_configs.extend(chain.0);
+        self.invalidate();
+    }
+
     /// Adds a tuple of up to 8 bare systems (or a single one) in one call.
     ///
     /// Each element is added exactly as [`add_system`](Self::add_system) would add it:

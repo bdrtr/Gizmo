@@ -328,6 +328,59 @@ mod tests {
         }
     }
 
+    /// Eight systems that touch nothing would share one parallel batch in an unspecified order;
+    /// chained, they get eight batches and run in the listed order, every frame. A label a
+    /// chained system carried before is kept, so others can still order against it.
+    #[test]
+    fn a_chain_runs_in_the_listed_order() {
+        let log = RunLog::new();
+        let names = ["s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7"];
+        let mut loose = Schedule::new();
+        loose.add_systems((
+            create_system(names[0], log.clone()),
+            create_system(names[1], log.clone()),
+            create_system(names[2], log.clone()),
+            create_system(names[3], log.clone()),
+            create_system(names[4], log.clone()),
+            create_system(names[5], log.clone()),
+            create_system(names[6], log.clone()),
+            create_system(names[7], log.clone()),
+        ));
+        loose.build();
+        assert_eq!(loose.legacy_batches.len(), 1, "unchained, nothing orders them");
+
+        let log = RunLog::new();
+        let mut schedule = Schedule::new();
+        schedule.add_chain(
+            (
+                create_system(names[0], log.clone()),
+                create_system(names[1], log.clone()).label("mine"),
+                create_system(names[2], log.clone()),
+                create_system(names[3], log.clone()),
+                create_system(names[4], log.clone()),
+                create_system(names[5], log.clone()),
+                create_system(names[6], log.clone()),
+                create_system(names[7], log.clone()),
+            )
+                .chain(),
+        );
+        schedule.add_di_system(create_system("after_mine", log.clone()).after("mine"));
+        schedule.build();
+        assert_eq!(schedule.legacy_batches.len(), 8, "one batch per link");
+
+        let mut world = World::new();
+        for _ in 0..50 {
+            log.log.lock().unwrap().clear();
+            schedule.run(&mut world, 0.016);
+            let ran = log.get();
+            let chained: Vec<_> = ran.iter().copied().filter(|n| *n != "after_mine").collect();
+            assert_eq!(chained, names, "the chain's order, every frame");
+            let mine = ran.iter().position(|n| *n == "s1").unwrap();
+            let after = ran.iter().position(|n| *n == "after_mine").unwrap();
+            assert!(after > mine, "a label the chain kept still orders others: {ran:?}");
+        }
+    }
+
     #[test]
     fn test_schedule_access_info_compatibility() {
         let mut info1 = AccessInfo::new();

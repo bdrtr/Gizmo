@@ -145,6 +145,13 @@ impl<State: 'static> App<State> {
         self
     }
 
+    /// Registers a chain of systems on the fixed-timestep schedule, run in the order listed —
+    /// `(a, b, c).chain()`; see [`gizmo_core::system::SystemChain`].
+    pub fn add_system_chain(mut self, chain: gizmo_core::system::SystemChain) -> Self {
+        self.schedule.add_chain(chain);
+        self
+    }
+
     /// Configures a system set on the fixed-timestep schedule — ordering and run conditions.
     pub fn configure_set(mut self, config: gizmo_core::system::SetConfig) -> Self {
         self.schedule.configure_set(config);
