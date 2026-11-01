@@ -122,6 +122,11 @@ pub fn run_fixed_and_update<F>(
 where
     F: FnMut(&mut World),
 {
+    // State machines first (`gizmo_core::state::add_state`): a switch requested last frame is
+    // applied, its `on_exit` / `on_enter` hooks run, and then every schedule of this frame — fixed
+    // steps and update alike — sees the one state. Nothing happens in a world without one.
+    gizmo_core::state::run_state_drivers(world);
+
     if world.get_resource::<PhysicsTime>().is_none() {
         world.insert_resource(PhysicsTime::default());
     }
@@ -552,5 +557,39 @@ mod tests {
                  where a headless game had no clock and `set_time_scale` did nothing"
             );
         }
+    }
+
+    /// A driven state switch is applied before either schedule runs, so the frame it lands in is
+    /// one state throughout: an update system reading `State` sees the new value on that very
+    /// frame, and an `on_enter` hook has already run when it does.
+    #[test]
+    fn a_state_switch_lands_before_the_frames_schedules() {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        enum Mode {
+            Menu,
+            Play,
+        }
+        let mut world = World::new();
+        world.insert_resource(PhysicsTime::new(60));
+        gizmo_core::state::add_state(&mut world, Mode::Menu);
+        let entered = Arc::new(AtomicU32::new(0));
+        let e = entered.clone();
+        gizmo_core::state::on_enter(&mut world, Mode::Play, move |_| {
+            e.fetch_add(1, Ordering::Relaxed);
+        });
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (s, e) = (seen.clone(), entered.clone());
+        let mut update = Schedule::new();
+        update.add_system(move |world: &World, _dt: f32| {
+            let mode = *world.get_resource::<gizmo_core::state::State<Mode>>().unwrap().get();
+            s.lock().unwrap().push((mode, e.load(Ordering::Relaxed)));
+        });
+        let mut fixed = Schedule::new();
+
+        run_fixed_and_update(&mut world, &mut fixed, &mut update, 0.001, 0.001, |_| {});
+        world.get_resource_mut::<gizmo_core::state::State<Mode>>().unwrap().set(Mode::Play);
+        run_fixed_and_update(&mut world, &mut fixed, &mut update, 0.001, 0.001, |_| {});
+
+        assert_eq!(*seen.lock().unwrap(), [(Mode::Menu, 0), (Mode::Play, 1)]);
     }
 }

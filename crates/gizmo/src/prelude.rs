@@ -9,7 +9,7 @@ pub use crate::core::{
     component::{Children, Parent},
     in_state,
     system::IntoSystemConfig,
-    Bundle, BundleExt, Component, Entity, EntityName, EventReader, EventWriter, Events,
+    Bundle, BundleExt, Component, DespawnOnExit, Entity, EntityName, EventReader, EventWriter, Events,
     PoolManager, Pooled, Res, ResMut, Schedule, State, Time, WindowInfo, World,
 };
 

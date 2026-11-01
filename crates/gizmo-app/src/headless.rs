@@ -86,6 +86,35 @@ impl<State: 'static> App<State> {
         self
     }
 
+    /// Makes `S` a state machine the app drives, starting in `initial` — see
+    /// [`gizmo_core::state::add_state`]. Once a frame, before any schedule, a queued
+    /// `State::set` is applied and the [`on_exit`](Self::on_exit) / [`on_enter`](Self::on_enter)
+    /// hooks run; the first frame enters `initial`.
+    pub fn add_state<S: Clone + PartialEq + Eq + Send + Sync + 'static>(mut self, initial: S) -> Self {
+        gizmo_core::state::add_state(&mut self.world, initial);
+        self
+    }
+
+    /// Runs `hook` with the world every time `state` is entered, the initial state included.
+    pub fn on_enter<S, F>(mut self, state: S, hook: F) -> Self
+    where
+        S: Clone + PartialEq + Eq + Send + Sync + 'static,
+        F: FnMut(&mut World) + Send + Sync + 'static,
+    {
+        gizmo_core::state::on_enter(&mut self.world, state, hook);
+        self
+    }
+
+    /// Runs `hook` with the world every time `state` is left.
+    pub fn on_exit<S, F>(mut self, state: S, hook: F) -> Self
+    where
+        S: Clone + PartialEq + Eq + Send + Sync + 'static,
+        F: FnMut(&mut World) + Send + Sync + 'static,
+    {
+        gizmo_core::state::on_exit(&mut self.world, state, hook);
+        self
+    }
+
     /// Builds the simulation's own state once, before the first tick. No renderer is passed —
     /// that is the whole difference from the windowed runtime's `set_setup`.
     pub fn set_setup<F>(mut self, f: F) -> Self

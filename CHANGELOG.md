@@ -64,6 +64,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   bytes per sample, so native devices request `max_color_attachment_bytes_per_sample` up to 64.
   Groundwork for object motion blur; nothing reads the target yet.
 
+- **Driven state machines: `App::add_state`, `App::on_enter`, `App::on_exit`, `DespawnOnExit`.**
+  `add_state(initial)` makes `State<S>` a machine the app loop drives: once a frame, before the
+  fixed and update schedules, a queued `State::set` is applied and the hooks run (`on_exit` of the
+  old state, its `DespawnOnExit` entities despawned with their children, `on_enter` of the new).
+  Hooks get `&mut World`. **The initial state's `on_enter` runs on the first frame** — a bare
+  `State` never reports it. Also as free functions in `gizmo_core::state` (`add_state`, `on_enter`,
+  `on_exit`, `run_state_drivers`) for custom loops. The `states` demo now uses it, without the
+  render-closure request resource it needed before.
+
 - **Bloom reach: `Renderer::bloom_radius` and `Renderer::bloom_iterations`.** The radius spreads
   the blur's taps (1 = the previous blur, clamped to 0..=16); the iterations run the separable
   blur again (1–8). Defaults are bit-for-bit the old steps. Native only, as bloom is.

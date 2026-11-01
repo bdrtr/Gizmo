@@ -26,9 +26,10 @@ impl<S: Clone + PartialEq + Eq + Send + Sync + 'static> State<S> {
     /// world resource and answers `false` when there is none, so until the machine is inserted
     /// as a resource every gated system is switched *off*, not on.
     ///
-    /// Note that nothing in the engine drives this type: no scheduling phase in this workspace
-    /// calls [`State::apply_transitions`], so the application owns that call — typically once
-    /// a frame, before the systems that branch on the state.
+    /// A bare `State` is driven by nobody: the application owns the
+    /// [`State::apply_transitions`] call. [`add_state`] makes it a driven machine instead —
+    /// applied once a frame by the app loop, with `on_enter` / `on_exit` hooks and the initial
+    /// state reported.
     pub fn new(initial: S) -> Self {
         Self {
             current: initial,
@@ -81,6 +82,156 @@ where
             *current_state.get() == state
         } else {
             false
+        }
+    }
+}
+
+/// A callback run on entering or leaving a state. It gets the whole world, mutably: spawning a
+/// level, despawning a menu, resetting a score.
+pub type StateHook = Box<dyn FnMut(&mut World) + Send + Sync>;
+
+/// What runs on entering and leaving each value of `S` — the `OnEnter` / `OnExit` half of a state
+/// machine, which [`State`] alone leaves to the application.
+///
+/// Built by [`add_state`]; filled by [`on_enter`] and [`on_exit`]; run by [`run_state_drivers`],
+/// which the application loop calls once a frame before any schedule. The value is a world
+/// resource, taken out while its hooks run so that they can have `&mut World`.
+pub struct StateHooks<S: Clone + PartialEq + Eq + Send + Sync + 'static> {
+    enter: Vec<(S, StateHook)>,
+    exit: Vec<(S, StateHook)>,
+    /// Whether the initial state's `on_enter` hooks have run. [`State::new`] starts *in* its
+    /// state, which no `apply_transitions` reports — so the driver reports it, once.
+    entered_initial: bool,
+}
+
+impl<S: Clone + PartialEq + Eq + Send + Sync + 'static> Default for StateHooks<S> {
+    fn default() -> Self {
+        Self { enter: Vec::new(), exit: Vec::new(), entered_initial: false }
+    }
+}
+
+/// Marks an entity that belongs to one state: when that state is left, [`run_state_drivers`]
+/// despawns it, with its children. A menu's buttons, a level's enemies, a pause overlay.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DespawnOnExit<S>(pub S);
+
+impl<S: Clone + PartialEq + Eq + Send + Sync + 'static> crate::Component for DespawnOnExit<S> {}
+
+/// The per-type drivers [`add_state`] registered: one function per state type, kept as a world
+/// resource so the loop that calls them needs to know no state type.
+#[derive(Default)]
+pub struct StateDrivers(Vec<(std::any::TypeId, fn(&mut World))>);
+
+/// Makes `S` a driven state machine starting in `initial`: inserts [`State<S>`] and an empty
+/// [`StateHooks<S>`], and registers its driver with [`run_state_drivers`]. Calling it again for
+/// the same `S` resets the state to `initial` and keeps the hooks already added.
+///
+/// From then on, once a frame: the first run enters `initial` (its `on_enter` hooks run — the
+/// initial state *is* reported, unlike with a bare [`State`]); every later run applies a queued
+/// [`State::set`], and if it switched, runs the old state's `on_exit` hooks, despawns its
+/// [`DespawnOnExit`] entities, then runs the new state's `on_enter` hooks. One switch a frame: a
+/// `set` made inside a hook is applied on the next.
+pub fn add_state<S: Clone + PartialEq + Eq + Send + Sync + 'static>(world: &mut World, initial: S) {
+    world.insert_resource(State::new(initial));
+    if world.get_resource::<StateHooks<S>>().is_none() {
+        world.insert_resource(StateHooks::<S>::default());
+    }
+    if world.get_resource::<StateDrivers>().is_none() {
+        world.insert_resource(StateDrivers::default());
+    }
+    let mut drivers = world.get_resource_mut::<StateDrivers>().expect("just ensured");
+    let id = std::any::TypeId::of::<S>();
+    if !drivers.0.iter().any(|(t, _)| *t == id) {
+        drivers.0.push((id, drive_state::<S>));
+    }
+}
+
+/// Runs `hook` every time `state` is entered — including the initial state, on the first frame.
+/// Hooks for one state run in the order they were added. Needs [`add_state`] first.
+pub fn on_enter<S, F>(world: &mut World, state: S, hook: F)
+where
+    S: Clone + PartialEq + Eq + Send + Sync + 'static,
+    F: FnMut(&mut World) + Send + Sync + 'static,
+{
+    hooks_of::<S>(world).enter.push((state, Box::new(hook)));
+}
+
+/// Runs `hook` every time `state` is left, before the next state's `on_enter`.
+pub fn on_exit<S, F>(world: &mut World, state: S, hook: F)
+where
+    S: Clone + PartialEq + Eq + Send + Sync + 'static,
+    F: FnMut(&mut World) + Send + Sync + 'static,
+{
+    hooks_of::<S>(world).exit.push((state, Box::new(hook)));
+}
+
+fn hooks_of<S: Clone + PartialEq + Eq + Send + Sync + 'static>(
+    world: &mut World,
+) -> crate::world::resources::ResourceWriteGuard<'_, StateHooks<S>> {
+    if world.get_resource::<StateHooks<S>>().is_none() {
+        world.insert_resource(StateHooks::<S>::default());
+    }
+    world.get_resource_mut::<StateHooks<S>>().expect("just ensured")
+}
+
+/// Runs every driver [`add_state`] registered, in registration order. The application loop calls
+/// this once a frame, before the fixed-step and update schedules, so every system of the frame
+/// sees the frame's state; a world with no driven state does nothing.
+pub fn run_state_drivers(world: &mut World) {
+    let Some(drivers) = world.get_resource::<StateDrivers>().map(|d| d.0.iter().map(|(_, f)| *f).collect::<Vec<_>>())
+    else {
+        return;
+    };
+    for drive in drivers {
+        drive(world);
+    }
+}
+
+fn drive_state<S: Clone + PartialEq + Eq + Send + Sync + 'static>(world: &mut World) {
+    let Some(mut hooks) = world.remove_resource::<StateHooks<S>>() else { return };
+    let Some(current) = world.get_resource::<State<S>>().map(|s| s.get().clone()) else {
+        world.insert_resource(hooks);
+        return;
+    };
+    if !hooks.entered_initial {
+        hooks.entered_initial = true;
+        run_hooks(&mut hooks.enter, &current, world);
+    } else {
+        let switched = world.get_resource_mut::<State<S>>().map(|mut s| s.apply_transitions()).unwrap_or(false);
+        if switched {
+            let next = world.get_resource::<State<S>>().map(|s| s.get().clone()).expect("checked above");
+            run_hooks(&mut hooks.exit, &current, world);
+            despawn_scoped(world, &current);
+            run_hooks(&mut hooks.enter, &next, world);
+        }
+    }
+    // A hook may have added hooks for this type (through `on_enter`), which created a fresh
+    // resource while ours was out; keep both.
+    if let Some(added) = world.remove_resource::<StateHooks<S>>() {
+        hooks.enter.extend(added.enter);
+        hooks.exit.extend(added.exit);
+    }
+    world.insert_resource(hooks);
+}
+
+fn run_hooks<S: PartialEq>(hooks: &mut [(S, StateHook)], state: &S, world: &mut World) {
+    for (s, hook) in hooks.iter_mut() {
+        if s == state {
+            hook(world);
+        }
+    }
+}
+
+fn despawn_scoped<S: Clone + PartialEq + Eq + Send + Sync + 'static>(world: &mut World, left: &S) {
+    use crate::hierarchy::HierarchyExt;
+    let ids: Vec<u32> = match world.query::<&DespawnOnExit<S>>() {
+        Some(q) => q.iter().filter(|(_, d)| d.0 == *left).map(|(id, _)| id).collect(),
+        None => return,
+    };
+    for id in ids {
+        // A child despawned with its parent above is already gone.
+        if let Some(entity) = world.entity(id) {
+            world.despawn_recursive(entity);
         }
     }
 }
@@ -189,5 +340,91 @@ mod tests {
             .apply_transitions();
         assert!(!in_menu(&world));
         assert!(in_play(&world));
+    }
+
+    /// The order of everything a driven switch does, written to a log the hooks share.
+    #[derive(Default)]
+    struct Log(Vec<String>);
+
+    fn log(world: &mut World, line: &str) {
+        world.get_resource_mut::<Log>().expect("log").0.push(line.to_string());
+    }
+
+    fn driven() -> World {
+        let mut world = World::new();
+        world.insert_resource(Log::default());
+        add_state(&mut world, Screen::Menu);
+        on_enter(&mut world, Screen::Menu, |w| log(w, "enter menu"));
+        on_exit(&mut world, Screen::Menu, |w| log(w, "exit menu"));
+        on_enter(&mut world, Screen::Playing, |w| log(w, "enter playing"));
+        world
+    }
+
+    fn lines(world: &World) -> Vec<String> {
+        world.get_resource::<Log>().expect("log").0.clone()
+    }
+
+    /// The gap a bare `State` leaves: entering the initial state. Driven, it is reported on the
+    /// first run and never again.
+    #[test]
+    fn a_driven_machine_enters_its_initial_state_once() {
+        let mut world = driven();
+        run_state_drivers(&mut world);
+        run_state_drivers(&mut world);
+        run_state_drivers(&mut world);
+        assert_eq!(lines(&world), ["enter menu"]);
+    }
+
+    /// A switch: the old state's exit, its scoped entities gone (children included), then the new
+    /// state's enter — and an entity scoped to another state, or to none, left alone.
+    #[test]
+    fn a_switch_exits_despawns_then_enters() {
+        use crate::hierarchy::HierarchyExt;
+        let mut world = driven();
+        run_state_drivers(&mut world);
+        let button = world.spawn();
+        world.add_component(button, DespawnOnExit(Screen::Menu));
+        let label = world.spawn();
+        world.add_child(button, label);
+        let hud = world.spawn();
+        world.add_component(hud, DespawnOnExit(Screen::Playing));
+        let level = world.spawn();
+
+        world.get_resource_mut::<State<Screen>>().unwrap().set(Screen::Playing);
+        assert_eq!(lines(&world), ["enter menu"], "nothing happens at the call");
+        run_state_drivers(&mut world);
+
+        assert_eq!(lines(&world), ["enter menu", "exit menu", "enter playing"]);
+        assert_eq!(*world.get_resource::<State<Screen>>().unwrap().get(), Screen::Playing);
+        assert!(world.entity(button.id()).is_none(), "the menu's button went with the menu");
+        assert!(world.entity(label.id()).is_none(), "and its child with it");
+        assert!(world.entity(hud.id()).is_some(), "the playing HUD stays");
+        assert!(world.entity(level.id()).is_some(), "an unscoped entity stays");
+    }
+
+    /// A `set` made inside a hook is the next frame's switch, not this one's; and a hook added
+    /// from inside a hook is kept rather than lost while the hooks are out of the world.
+    #[test]
+    fn a_hook_can_queue_a_switch_and_add_hooks() {
+        let mut world = driven();
+        on_enter(&mut world, Screen::Playing, |w| {
+            w.get_resource_mut::<State<Screen>>().unwrap().set(Screen::Paused);
+            on_enter(w, Screen::Paused, |w| log(w, "enter paused"));
+        });
+        run_state_drivers(&mut world);
+        world.get_resource_mut::<State<Screen>>().unwrap().set(Screen::Playing);
+        run_state_drivers(&mut world);
+        assert_eq!(*world.get_resource::<State<Screen>>().unwrap().get(), Screen::Playing, "one switch a frame");
+        run_state_drivers(&mut world);
+        assert_eq!(*world.get_resource::<State<Screen>>().unwrap().get(), Screen::Paused);
+        assert_eq!(lines(&world), ["enter menu", "exit menu", "enter playing", "enter paused"]);
+    }
+
+    /// No driven state, nothing to do — the app loop calls this every frame for every world.
+    #[test]
+    fn a_world_without_a_driven_state_is_untouched() {
+        let mut world = World::new();
+        run_state_drivers(&mut world);
+        assert!(world.get_resource::<StateDrivers>().is_none());
     }
 }

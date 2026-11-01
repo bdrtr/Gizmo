@@ -78,7 +78,7 @@ pub use query::{
     Changed, FetchComponent, Mut, Or, Query, ReadOnlyQuery, With, Without, WorldQuery,
 };
 pub use registry::{ComponentRegistry, RegistryError};
-pub use state::{in_state, State};
+pub use state::{in_state, DespawnOnExit, State};
 
 pub use system::{
     IntoSystem, IntoSystemConfig, Local, Phase, Res, ResMut, Schedule, System, SystemConfig,

@@ -6,18 +6,22 @@
 //! ([`states`](../states/index.html) demosu `State`/`in_state`'in kendisini anlatıyor;
 //! burada ondan farklı olan tek şeye bakılıyor: **varlık ömrünün duruma bağlanması**.)
 //!
-//! ## Motorda otomatik temizlik yok
+//! ## Motor bunu artık kendisi yapıyor (2026-11-02)
 //!
 //! | yetenek | Gizmo |
 //! |---------|-------|
-//! | durumdan çıkınca varlığı kendiliğinden silmek | **yok** |
-//! | duruma girince varlığı kendiliğinden silmek | **yok** |
-//! | duruma giriş/çıkışta koşan ayrı çizelgeler | **yok** |
-//! | ilk duruma girişin de bildirilmesi | **bildirilmez** — bkz. aşağıdaki tuzak |
-//! | durum kaynağı ve duruma göre sistem süzme | `State<S>` + `in_state` — **var** |
+//! | durumdan çıkınca varlığı kendiliğinden silmek | **var** — `DespawnOnExit(S::X)`, çocuklarıyla |
+//! | duruma girince varlığı kendiliğinden silmek | yok — gerekirse `on_enter` hook'u ile |
+//! | duruma giriş/çıkışta koşan hook'lar | **var** — `App::on_enter` / `App::on_exit`, `&mut World` ile |
+//! | ilk duruma girişin de bildirilmesi | **bildiriliyor** — `App::add_state` ile sürülen makinede |
+//! | durum kaynağı ve duruma göre sistem süzme | `State<S>` + `in_state` — var |
 //!
-//! Yani "durumdan çıkınca sil" davranışı elde kalıyor. Demo onu bir bileşen (`ScopedTo`) ve bir
-//! sistemle kuruyor, sonra **çalışıp çalışmadığını sayıyor**.
+//! Bu demo, motorda bunların hiçbiri yokken yazıldı ve elle kurulmuş sürümünü (`ScopedTo` ve bir
+//! sistem) **bilerek koruyor**: aşağıdaki ölçüm, motorun neyin yerini aldığını ve elle yazılan
+//! sürümün hangi tuzağa düştüğünü gösteriyor. Yeni kod için [`states`](../states/index.html)
+//! demosundaki biçime bakın: `add_state`, `on_enter`, `DespawnOnExit`. Motorun kendi sürümünün
+//! testleri: `gizmo_core::state` (`a_switch_exits_despawns_then_enters`,
+//! `a_driven_machine_enters_its_initial_state_once`).
 //!
 //! ## Tuzak: ilk duruma giriş hiç bildirilmiyor
 //!
