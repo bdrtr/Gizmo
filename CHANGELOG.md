@@ -65,8 +65,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   top-left and rows go down, from the entity's origin. Drawn through `record_sprites` on both
   draw paths, so a map sorts on its `layer` with world sprites and costs one draw call — a GPU
   test holds it pixel-identical to the same tiles drawn as sprites. `sprite_2d`'s ground is one
-  `Tilemap` instead of 240 sprite entities. Not yet: collision from tiles, and culling of
-  off-screen tiles (every tile is queued every frame).
+  `Tilemap` instead of 240 sprite entities. Only the cells the camera can see are queued
+  (`visible_cells`, conservative — a view past the horizon gets the whole map): a 2000 × 2000 map
+  queues 100 tiles in the GPU test and draws the same picture as a 40 × 40 patch. Collision:
+  `tilemap_collider`.
 
 - **`SpriteAnimation` — sprite-sheet animation as a component.** Plays cells `first..=last` of a
   `columns × rows` sheet at `fps`, looping or once (`once()`, `finished()`), forwards or

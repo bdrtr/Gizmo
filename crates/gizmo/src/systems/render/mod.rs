@@ -4789,6 +4789,27 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
             let (diff, _) = changed_pixels(&sprite_frame, &map_frame, 128);
             assert_eq!(diff, 0, "the tilemap differs from its tiles drawn as sprites in {diff} pixels");
             assert_eq!(calls, Some((1, 0)), "a map of one tileset must be one world draw call");
+
+            // A map far bigger than the view queues what is on screen, not all of it — and draws
+            // the same picture as a map holding only the tiles around the view.
+            let mut huge = World::new();
+            huge.spawn_bundle(camera());
+            let mut big = Tilemap::new(tileset, 2, 1, 2000, 2000, Vec2::ONE);
+            big.fill(0, 0, 2000, 2000, Some(1));
+            huge.spawn_bundle((Transform::new(Vec3::new(-1000.0, 1000.0, 0.0)), GlobalTransform::default(), big));
+            let huge_frame = render_world(&mut renderer, &mut huge).await;
+            let queued = renderer.sprites.as_ref().map(|s| s.queued().0).unwrap_or(0);
+            eprintln!("2000 × 2000 map: {queued} tiles queued");
+            assert!(queued > 0 && queued < 2_000, "{queued} of 4 000 000 tiles queued — the map is not culled");
+
+            let mut local = World::new();
+            local.spawn_bundle(camera());
+            let mut patch = Tilemap::new(tileset, 2, 1, 40, 40, Vec2::ONE);
+            patch.fill(0, 0, 40, 40, Some(1));
+            local.spawn_bundle((Transform::new(Vec3::new(-20.0, 20.0, 0.0)), GlobalTransform::default(), patch));
+            let local_frame = render_world(&mut renderer, &mut local).await;
+            let (diff, _) = changed_pixels(&local_frame, &huge_frame, 128);
+            assert_eq!(diff, 0, "culling dropped {diff} pixels of tiles that were on screen");
         });
     }
 

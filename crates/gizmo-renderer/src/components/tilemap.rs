@@ -1,4 +1,4 @@
-use gizmo_math::{Vec2, Vec4};
+use gizmo_math::{Mat4, Vec2, Vec3, Vec4};
 
 use crate::sprite::SpriteImageId;
 
@@ -190,9 +190,62 @@ impl Tilemap {
         Vec2::new((x as f32 + 0.5) * self.tile_size.x, -(y as f32 + 0.5) * self.tile_size.y)
     }
 
+    /// The cells a camera can see, as `[x0, y0, x1, y1)` (ends exclusive), given the matrix from
+    /// the map's local plane to clip space (`view_proj * entity_matrix`).
+    ///
+    /// The four corners of the screen are cast through the view onto the map's plane, and the
+    /// cells under the hull of those four points — plus one cell of margin — are the visible
+    /// ones. **Conservative**: when any corner's ray misses the plane (a perspective camera that
+    /// sees past the horizon, a view edge-on to the map) or the matrix cannot be inverted, the
+    /// whole map is returned. Never smaller than what is on screen; that is what the tests hold.
+    #[must_use]
+    pub fn visible_cells(&self, clip_from_map: Mat4) -> [u32; 4] {
+        let all = [0, 0, self.width, self.height];
+        if self.width == 0 || self.height == 0 || !(self.tile_size.x > 0.0 && self.tile_size.y > 0.0) {
+            return all;
+        }
+        let inv = clip_from_map.inverse();
+        if !inv.is_finite() {
+            return all;
+        }
+        let (mut lo, mut hi) = (Vec2::splat(f32::INFINITY), Vec2::splat(f32::NEG_INFINITY));
+        for ndc in [Vec2::new(-1.0, -1.0), Vec2::new(1.0, -1.0), Vec2::new(-1.0, 1.0), Vec2::new(1.0, 1.0)] {
+            // Near (z = 0) and far (z = 1) points of this corner's ray, in map space.
+            let unproject = |z: f32| {
+                let p = inv * Vec4::new(ndc.x, ndc.y, z, 1.0);
+                (p.w.abs() > 1e-12).then(|| p.truncate() / p.w)
+            };
+            let (Some(a), Some(b)) = (unproject(0.0), unproject(1.0)) else { return all };
+            let Some(hit) = ray_hits_plane(a, b) else { return all };
+            lo = lo.min(hit);
+            hi = hi.max(hit);
+        }
+        if !(lo.is_finite() && hi.is_finite()) {
+            return all;
+        }
+        // Map space: x right, y UP; cells count rows DOWN from y = 0.
+        let col = |x: f32| (x / self.tile_size.x).floor();
+        let row = |y: f32| (-y / self.tile_size.y).floor();
+        let clamp = |v: f32, max: u32| v.clamp(0.0, max as f32) as u32;
+        let x0 = clamp(col(lo.x) - 1.0, self.width);
+        let x1 = clamp(col(hi.x) + 2.0, self.width);
+        let y0 = clamp(row(hi.y) - 1.0, self.height);
+        let y1 = clamp(row(lo.y) + 2.0, self.height);
+        [x0, y0, x1.max(x0), y1.max(y0)]
+    }
+
     /// Each non-empty tile as the [`Sprite`] that draws it, with its offset from the map's origin.
     /// What the draw path queues; a tile whose number is past the tileset's last cell is skipped.
     pub fn tile_sprites(&self) -> impl Iterator<Item = (Vec2, Sprite)> + '_ {
+        self.tile_sprites_in([0, 0, self.width, self.height])
+    }
+
+    /// [`tile_sprites`](Self::tile_sprites) for the cells `[x0, y0, x1, y1)` only — what the draw
+    /// path asks for with [`visible_cells`](Self::visible_cells), so an off-screen tile costs
+    /// nothing.
+    pub fn tile_sprites_in(&self, cells: [u32; 4]) -> impl Iterator<Item = (Vec2, Sprite)> + '_ {
+        let [x0, y0, x1, y1] = cells;
+        let (x1, y1) = (x1.min(self.width), y1.min(self.height));
         let base = Sprite {
             image: self.tileset,
             size: self.tile_size,
@@ -204,13 +257,28 @@ impl Tilemap {
             layer: self.layer,
             space: SpriteSpace::World,
         };
-        let cells = self.tileset_columns.saturating_mul(self.tileset_rows);
-        self.tiles().filter(move |&(_, _, t)| t < cells).map(move |(x, y, t)| {
+        let sheet = self.tileset_columns.saturating_mul(self.tileset_rows);
+        (y0..y1)
+            .flat_map(move |y| (x0..x1).map(move |x| (x, y)))
+            .filter_map(move |(x, y)| self.get(x, y).map(|t| (x, y, t)))
+            .filter(move |&(_, _, t)| t < sheet)
+            .map(move |(x, y, t)| {
             let mut s = base.clone();
             s.set_frame(t, self.tileset_columns, self.tileset_rows);
             (Vec2::new(x as f32 * self.tile_size.x, -(y as f32) * self.tile_size.y), s)
         })
     }
+}
+
+/// Where the segment `a → b`, extended into a line, meets the plane `z = 0` — `None` when it runs
+/// parallel to the plane or meets it only behind `a` (the camera).
+fn ray_hits_plane(a: Vec3, b: Vec3) -> Option<Vec2> {
+    let d = b - a;
+    if d.z.abs() < 1e-9 {
+        return None;
+    }
+    let t = -a.z / d.z;
+    (t >= 0.0).then(|| (a + d * t).truncate())
 }
 
 #[cfg(test)]
@@ -278,5 +346,56 @@ mod tests {
         let mut bad = Tilemap::new(SpriteImageId(0), 2, 1, 1, 1, Vec2::ONE);
         bad.set(0, 0, Some(2));
         assert_eq!(bad.tile_sprites().count(), 0);
+    }
+
+    fn ortho_view(centre: Vec2, half: Vec2) -> Mat4 {
+        let proj = Mat4::orthographic_rh(-half.x, half.x, -half.y, half.y, 0.1, 100.0);
+        let view = Mat4::look_at_rh(centre.extend(10.0), centre.extend(0.0), Vec3::Y);
+        proj * view
+    }
+
+    fn big_map() -> Tilemap {
+        let mut m = Tilemap::new(SpriteImageId(0), 1, 1, 1000, 500, Vec2::ONE);
+        m.fill(0, 0, 1000, 500, Some(0));
+        m
+    }
+
+    /// A small orthographic view of a big map asks for a small window of it — and every tile
+    /// whose quad reaches the screen is inside that window.
+    #[test]
+    fn an_orthographic_view_sees_a_window_that_holds_every_tile_on_screen() {
+        let m = big_map();
+        // Looking at x ∈ [90, 110], y ∈ [-55, -45] → columns 90..110, rows 45..55.
+        let vp = ortho_view(Vec2::new(100.0, -50.0), Vec2::new(10.0, 5.0));
+        let [x0, y0, x1, y1] = m.visible_cells(vp);
+        assert!((x1 - x0) * (y1 - y0) < 400, "asked for {} cells of 500 000", (x1 - x0) * (y1 - y0));
+        let window: std::collections::HashSet<_> = m.tile_sprites_in([x0, y0, x1, y1]).map(|(o, _)| o.to_array().map(f32::to_bits)).collect();
+        let mut on_screen = 0;
+        for (offset, s) in m.tile_sprites() {
+            // Any corner inside the clip box means the tile is on screen.
+            let visible = [(0.0, 0.0), (1.0, 0.0), (0.0, -1.0), (1.0, -1.0)].iter().any(|&(dx, dy)| {
+                let c = vp * Vec4::new(offset.x + dx * s.size.x, offset.y + dy * s.size.y, 0.0, 1.0);
+                c.x.abs() < c.w && c.y.abs() < c.w
+            });
+            if visible {
+                on_screen += 1;
+                assert!(window.contains(&offset.to_array().map(f32::to_bits)), "tile at {offset:?} is on screen but culled");
+            }
+        }
+        assert!(on_screen >= 200, "the probe saw only {on_screen} tiles — it checks nothing");
+    }
+
+    /// A perspective camera tilted to see past the horizon cannot bound the map, so it gets all of
+    /// it; one looking straight at it gets a window.
+    #[test]
+    fn a_view_that_sees_the_horizon_gets_the_whole_map() {
+        let m = big_map();
+        let proj = Mat4::perspective_rh(1.0, 1.6, 0.1, 1000.0);
+        let straight = proj * Mat4::look_at_rh(Vec3::new(100.0, -50.0, 20.0), Vec3::new(100.0, -50.0, 0.0), Vec3::Y);
+        let [x0, y0, x1, y1] = m.visible_cells(straight);
+        assert!(x1 - x0 < 100 && y1 - y0 < 100, "{:?}", [x0, y0, x1, y1]);
+        let grazing = proj * Mat4::look_at_rh(Vec3::new(100.0, -50.0, 2.0), Vec3::new(100.0, 50.0, 1.5), Vec3::Z);
+        assert_eq!(m.visible_cells(grazing), [0, 0, 1000, 500]);
+        assert_eq!(m.visible_cells(Mat4::ZERO), [0, 0, 1000, 500], "a singular matrix culls nothing");
     }
 }

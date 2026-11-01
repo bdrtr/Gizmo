@@ -75,7 +75,10 @@ pub fn record_sprites(
             continue;
         }
         let Some(t) = transforms.get(id) else { continue };
-        for (offset, tile) in map.tile_sprites() {
+        // Only the cells this camera can see: a level far larger than the screen costs what is
+        // on screen. Conservative — a view that cannot bound the map gets all of it.
+        let cells = map.visible_cells(view_proj * t.matrix);
+        for (offset, tile) in map.tile_sprites_in(cells) {
             let model = t.matrix * Mat4::from_translation(offset.extend(0.0));
             state.queue(&tile, model, view_proj, screen);
         }
