@@ -388,7 +388,13 @@ Still missing: **SMAA**.
 All three engine lights are punctual: `PointLight`, `DirectionalLight`, `SpotLight`. Measured in
 `area_lights`:
 
-- **No rectangular or spherical area light.** Nothing resembling an LTC path exists.
+- **Spherical area lights: CLOSED 2026-11-01** — `PointLight::source_radius` / `SpotLight::source_radius`
+  (metres, 0 = a point, the default), through `compute_sphere_lighting` in `common.wgsl`, both
+  draw paths. Specular takes the representative point (the point on the sphere nearest the
+  reflected ray), the lobe is widened and renormalised by (α/α')². Measured, a glossy metal floor
+  under a lamp 1 m up: the saturated highlight 186 → 464 px as a 0.3 m sphere while the frame's
+  mean holds (88.20 → 87.79); without the renormalisation, 829 px and a mean of 98.25 — energy
+  added. **Rectangular and tube lights are still absent** — those need an LTC path.
 - **No light texture (cookie/gobo).**
 - ~~**No contact shadows.**~~ **CLOSED 2026-11-01:** `DirectionalLight::contact_shadow_length`
   (metres, 0 = off, the default). The deferred lighting pass marches 16 steps from each pixel toward

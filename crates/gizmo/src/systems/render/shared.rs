@@ -186,7 +186,8 @@ pub fn collect_scene_lights(
                     position: [pos.x, pos.y, pos.z, light.intensity],
                     color: [light.color.x, light.color.y, light.color.z, light.radius],
                     direction: [0.0, -1.0, 0.0, 0.0],
-                    params: [0.0, 0.0, 0.0, 0.0], // params.y = 0 → PointLight
+                    // params.y = 0 → PointLight; params.z = source radius (0 = a point).
+                    params: [0.0, 0.0, light.source_radius.max(0.0), 0.0],
                 },
                 is_point: true,
                 surface_dist,
@@ -215,7 +216,8 @@ pub fn collect_scene_lights(
                     position: [pos.x, pos.y, pos.z, light.intensity],
                     color: [light.color.x, light.color.y, light.color.z, light.radius],
                     direction: [dir.x, dir.y, dir.z, light.inner_angle.cos()],
-                    params: [light.outer_angle.cos(), 1.0, 0.0, 0.0], // params.y = 1 → SpotLight
+                    // params.y = 1 → SpotLight; params.z = source radius (0 = a point).
+                    params: [light.outer_angle.cos(), 1.0, light.source_radius.max(0.0), 0.0],
                 },
                 is_point: false,
                 surface_dist,

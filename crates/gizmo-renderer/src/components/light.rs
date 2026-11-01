@@ -11,6 +11,13 @@ pub struct PointLight {
     /// only considered for surfaces inside this radius, so an over-large radius costs
     /// performance and a too-small one clips the light off visibly.
     pub radius: f32,
+    /// Radius of the light's **source**, in metres — a bulb's size, not its reach (that is
+    /// [`radius`](Self::radius)). A sphere light's highlight on a glossy surface is as big as the
+    /// sphere's reflection, not a pinpoint; `0` (the default) is the old point source. Specular
+    /// uses the representative-point method (the point on the sphere nearest the reflected ray,
+    /// energy-normalised), diffuse the centre. `#[serde(default)]`.
+    #[serde(default)]
+    pub source_radius: f32,
 }
 
 impl PointLight {
@@ -23,7 +30,14 @@ impl PointLight {
             color,
             intensity,
             radius,
+            source_radius: 0.0,
         }
+    }
+
+    /// This light as a sphere of `metres` radius (see [`source_radius`](Self::source_radius)).
+    pub fn with_source_radius(mut self, metres: f32) -> Self {
+        self.source_radius = if metres.is_finite() { metres.max(0.0) } else { 0.0 };
+        self
     }
 }
 
@@ -112,6 +126,13 @@ pub struct SpotLight {
     /// Half-angle at which the light reaches zero. Between the two the edge falls off smoothly;
     /// equal angles give a hard-edged cone.
     pub outer_angle: f32,
+    /// Radius of the light's **source**, in metres — a bulb's size, not its reach (that is
+    /// [`radius`](Self::radius)). A sphere-sourced spot's highlight on a glossy surface is as big as the
+    /// sphere's reflection, not a pinpoint; `0` (the default) is the old point source. Specular
+    /// uses the representative-point method (the point on the sphere nearest the reflected ray,
+    /// energy-normalised), diffuse the centre. `#[serde(default)]`.
+    #[serde(default)]
+    pub source_radius: f32,
 }
 
 impl SpotLight {
@@ -134,7 +155,15 @@ impl SpotLight {
             radius,
             inner_angle,
             outer_angle,
+            source_radius: 0.0,
         }
+    }
+
+    /// This light with a spherical source of `metres` radius (see
+    /// [`source_radius`](Self::source_radius)).
+    pub fn with_source_radius(mut self, metres: f32) -> Self {
+        self.source_radius = if metres.is_finite() { metres.max(0.0) } else { 0.0 };
+        self
     }
 }
 

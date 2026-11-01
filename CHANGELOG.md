@@ -50,6 +50,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Sphere lights: `PointLight::source_radius`, `SpotLight::source_radius` (`with_source_radius`).**
+  A light's source as a sphere: specular uses the representative point on it nearest the reflected
+  ray, renormalised so a bigger source spreads its energy rather than adding to it — a glossy
+  surface shows a highlight the size of the bulb's reflection. 0 (the default) is the previous point
+  source. Carried in `LightData::params.z` (previously unused); `compute_sphere_lighting` in
+  `common.wgsl`, both draw paths.
+
 - **FXAA quality presets: `FxaaQuality` and `FxaaState::set_quality`.** Low / Medium / High / Ultra,
   after the classic FXAA presets (contrast threshold, minimum threshold, search steps). `High` is
   the default and exactly the previous pass. `FxaaParams::_padding` is now `quality`.

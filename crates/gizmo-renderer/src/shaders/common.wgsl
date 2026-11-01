@@ -15,6 +15,7 @@ const INV_PI: f32 = 0.31830988618; // 1 / PI — Lambert diffuse normalization
 //   color.rgb    = colour,           color.a    = radius
 //   direction.xyz= spot/dir axis,    direction.w= inner cutoff cos
 //   params.x     = outer cutoff cos, params.y   = light type (0=point,1=spot,2=dir)
+//   params.z     = source radius (metres; 0 = a point — see compute_sphere_lighting)
 struct LightData {
     position:  vec4<f32>,
     color:     vec4<f32>,
@@ -135,6 +136,52 @@ fn compute_direct_lighting(
     let diffuse = kD * albedo * NoL * INV_PI; // Lambert: albedo / PI
     let specular = D * Vis * F * NoL;
 
+    return (diffuse + specular) * light_color * intensity * atten;
+}
+
+// A light with a SPHERICAL source of `source_radius` metres, centred `to_light` away. Diffuse
+// uses the centre. Specular uses the representative point (Karis, "Real Shading in Unreal Engine
+// 4", 2013): the point on the sphere nearest the reflected ray, so a glossy surface shows a highlight
+// as big as the sphere's reflection rather than a pinpoint — with the distribution widened to match
+// and renormalised by (α / α')², so a bigger source spreads the same energy rather than adding it.
+fn compute_sphere_lighting(
+    N: vec3<f32>,
+    V: vec3<f32>,
+    to_light: vec3<f32>,
+    source_radius: f32,
+    albedo: vec3<f32>,
+    roughness: f32,
+    metallic: f32,
+    f0: vec3<f32>,
+    light_color: vec3<f32>,
+    intensity: f32,
+    atten: f32
+) -> vec3<f32> {
+    let dist = max(length(to_light), 1e-4);
+    let L = to_light / dist;
+    let NoL = max(dot(N, L), 0.0);
+    let r = reflect(-V, N);
+    let center_to_ray = dot(to_light, r) * r - to_light;
+    let closest = to_light + center_to_ray * clamp(source_radius / max(length(center_to_ray), 1e-5), 0.0, 1.0);
+    let Ls = normalize(closest);
+    let NoLs = max(dot(N, Ls), 0.0);
+    if (NoL <= 0.0 && NoLs <= 0.0) {
+        return vec3<f32>(0.0);
+    }
+    let H = normalize(V + Ls);
+    let NoV = max(dot(N, V), 0.001);
+    let NoH = max(dot(N, H), 0.0);
+    let VoH = max(dot(V, H), 0.0);
+    let alpha = roughness * roughness;
+    let alpha_wide = clamp(alpha + source_radius / (2.0 * dist), 0.0, 1.0);
+    let norm = (alpha / max(alpha_wide, 1e-4)) * (alpha / max(alpha_wide, 1e-4));
+
+    let D = D_GGX(NoH, roughness) * norm;
+    let Vis = V_SmithJointGGX(NoV, NoLs, roughness);
+    let F = F_Schlick(VoH, f0);
+    let kD = (vec3<f32>(1.0) - F) * (1.0 - metallic);
+    let diffuse = kD * albedo * NoL * INV_PI;
+    let specular = D * Vis * F * NoLs;
     return (diffuse + specular) * light_color * intensity * atten;
 }
 

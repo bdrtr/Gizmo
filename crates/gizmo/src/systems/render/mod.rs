@@ -4914,6 +4914,74 @@ mod golden_render_tests {
         });
     }
 
+    /// **A sphere light's highlight is as big as the sphere.** A glossy metal floor reflects a point
+    /// light hanging a metre above it. With `source_radius` 0 (the default) the highlight is the
+    /// old soft spot; with 0.3 m it is the sphere's reflection, a disc — its saturated core must
+    /// cover clearly more of the frame, while the frame's mean brightness stays put: the
+    /// representative-point method renormalises the wider lobe, so a bigger source spreads the same
+    /// energy rather than adding any. (The peak is no measure here: both clip at 255.)
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_sphere_light_spreads_its_highlight_without_adding_energy() {
+        use crate::renderer::components::PointLight;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        async fn highlight(source_radius: f32) -> (usize, f32) {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssr = None;
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(
+                &renderer.device,
+                &renderer.queue,
+                &renderer.scene.texture_bind_group_layout,
+            );
+            let floor = world.spawn();
+            world.add_component(floor, Transform::new(Vec3::new(0.0, -0.2, 0.0)).with_scale(Vec3::new(20.0, 0.2, 20.0)));
+            world.add_component(floor, GlobalTransform::default());
+            world.add_component(floor, AssetManager::create_cube(&renderer.device));
+            world.add_component(floor, Material::new(tex).with_pbr(Vec4::new(0.9, 0.9, 0.9, 1.0), 0.15, 1.0));
+            world.add_component(floor, MeshRenderer::new());
+            let lamp = world.spawn();
+            world.add_component(lamp, Transform::new(Vec3::new(0.0, 1.0, 0.0)));
+            world.add_component(lamp, GlobalTransform::default());
+            world.add_component(lamp, PointLight::new(Vec3::ONE, 8.0, 20.0).with_source_radius(source_radius));
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.0, 1.5, 3.0),
+                yaw: -std::f32::consts::FRAC_PI_2,
+                pitch: -0.55,
+                primary: true,
+                ..Default::default()
+            });
+            let frame = render_world(&mut renderer, &mut world).await;
+            let luma: Vec<f32> = frame.as_chunks::<4>().0.iter().map(|p| (p[0] as f32 + p[1] as f32 + p[2] as f32) / 3.0).collect();
+            let mean = luma.iter().sum::<f32>() / luma.len() as f32;
+            (luma.iter().filter(|&&v| v >= 250.0).count(), mean)
+        }
+        pollster::block_on(async {
+            let (point_area, point_mean) = highlight(0.0).await;
+            let (sphere_area, sphere_mean) = highlight(0.3).await;
+            // Measured: 186 px / mean 88.20 as a point, 464 px / 87.79 as a 0.3 m sphere. Without the
+            // (α/α')² renormalisation the sphere reads 829 px / 98.25 — energy added; with the
+            // radius never uploaded, the point's numbers exactly.
+            assert!(
+                sphere_area > point_area * 2,
+                "the saturated highlight covers {sphere_area} px with a 0.3 m source, {point_area} as a point",
+            );
+            assert!(
+                (sphere_mean - point_mean).abs() < point_mean * 0.05,
+                "the frame's mean went from {point_mean:.2} to {sphere_mean:.2} — energy was added, not spread",
+            );
+        });
+    }
+
     /// What a split-screen frame does once, it must do once: the HUD is drawn a single time over
     /// the whole target (drawn per view, a half-transparent sprite is laid over itself and comes
     /// out brighter), and the frame's animation advances by one `dt` however many cameras draw.
