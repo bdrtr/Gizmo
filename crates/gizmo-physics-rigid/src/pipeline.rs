@@ -407,6 +407,22 @@ impl PhysicsWorld {
                             }
                         }
 
+                        // One-way surfaces: drop the contacts a platform should not stop. Only
+                        // pairs with a one-way collider pay anything here.
+                        if collider_a.one_way.is_some() || collider_b.one_way.is_some() {
+                            let vel_a = self.velocities[idx_a].linear;
+                            let vel_b = self.velocities[idx_b].linear;
+                            if let Some(up) = collider_a.one_way {
+                                let up = transform_a.rotation * up;
+                                contacts.retain(|c| gizmo_physics_core::Collider::one_way_keeps(up, c.normal, vel_b - vel_a));
+                            }
+                            if let Some(up) = collider_b.one_way {
+                                // B is the platform: flip the pair so the rule sees it as A.
+                                let up = transform_b.rotation * up;
+                                contacts.retain(|c| gizmo_physics_core::Collider::one_way_keeps(up, -c.normal, vel_a - vel_b));
+                            }
+                        }
+
                         if contacts.is_empty() {
                             return None;
                         }

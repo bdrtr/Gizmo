@@ -55,6 +55,7 @@ stack" is the 3D one restricted to a plane — a world sprite lies in its entity
 | `Tilemap` (one tileset, one entity, one draw call; both draw paths) | yes, since 2026-11-01 |
 | collision from a tilemap (`tilemap_collider`: solid tiles → merged static boxes) | yes, since 2026-11-01 |
 | 2D shapes (`Collider::{polygon_2d, polyline_2d, circle_2d, rect_2d}`) on planar bodies (`RigidBody::planar_xy`) | yes, since 2026-11-01 — 3D shapes confined to the plane, one solver |
+| one-way (jump-through) platforms (`Collider::one_way`) | yes, since 2026-11-01 |
 | **a separate 2D solver** | **no, by decision** — see §C9 |
 
 Measured (`sprites_reach_the_frame_in_place_in_order_and_behind_walls`): a world sprite behind a

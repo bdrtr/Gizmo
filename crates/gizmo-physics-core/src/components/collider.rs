@@ -49,6 +49,12 @@ pub struct Collider {
     /// [`CollisionLayer::default`] — layer 0, mask `u32::MAX` — so filtering is opt-in:
     /// until you call [`Collider::with_layer`], this field excludes nothing.
     pub collision_layer: CollisionLayer,
+    /// Makes this a **one-way** surface — a platform you jump up through and land on — that
+    /// only stops bodies arriving from the side this direction points to. In the collider's own
+    /// frame, so it turns with the body; `Some(Vec3::Y)` is the usual platform. `None` (the
+    /// default) is an ordinary solid. See [`Collider::one_way`].
+    #[serde(default)]
+    pub one_way: Option<Vec3>,
 }
 
 impl Default for Collider {
@@ -58,6 +64,7 @@ impl Default for Collider {
             is_trigger: false,
             material: PhysicsMaterial::default(),
             collision_layer: CollisionLayer::default(),
+            one_way: None,
         }
     }
 }
@@ -672,6 +679,30 @@ impl Collider {
     pub fn with_layer(mut self, layer: CollisionLayer) -> Self {
         self.collision_layer = layer;
         self
+    }
+
+    /// Makes this collider a one-way surface that stops only bodies on the `up` side of it
+    /// (collider-local, normalised here) — the classic jump-through platform.
+    ///
+    /// The rule, applied to each contact pair in the pipeline: a contact is kept only when its
+    /// normal points out of the platform within 60° of `up`, **and** the other body is not
+    /// moving into the `up` direction relative to the platform faster than 0.1 m/s. So a body
+    /// rising from below passes through, a body falling onto it from above lands, and one that
+    /// stops rising while still inside falls through rather than being popped onto the top.
+    /// Everything else about the contact (material, layers, events) is unchanged. A zero or
+    /// non-finite `up` leaves the collider solid.
+    pub fn one_way(mut self, up: Vec3) -> Self {
+        let up = up.normalize_or_zero();
+        self.one_way = (up != Vec3::ZERO).then_some(up);
+        self
+    }
+
+    /// Whether a contact of this one-way collider (as body **A**, normal pointing from A to the
+    /// other body B) should be kept. `world_up` is the one-way direction already in world space;
+    /// `rel_vel_b` is B's velocity minus A's. Here, beside the field, so the rule has one home.
+    #[must_use]
+    pub fn one_way_keeps(world_up: Vec3, normal_a_to_b: Vec3, rel_vel_b: Vec3) -> bool {
+        normal_a_to_b.dot(world_up) >= 0.5 && rel_vel_b.dot(world_up) <= 0.1
     }
 
     /// Volume in cubic metres, used for buoyancy and for weighting the parts of a

@@ -50,6 +50,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **One-way platforms: `Collider::one_way(up)` (field `Collider::one_way: Option<Vec3>`).** A
+  collider that stops only bodies arriving from its `up` side (collider-local, turns with the
+  body): jump up through it from below, land on it from above. The pipeline drops a pair's
+  contacts unless the normal points out of the platform within 60° of `up` and the other body is
+  not rising through it faster than 0.1 m/s — the rule is `Collider::one_way_keeps`, in one place.
+  Pairs without a one-way collider pay nothing; `headless_stress_test`'s hash is unchanged.
+  `#[serde(default)]`, so scenes saved before load as solid. Tests pair each run with a solid
+  platform (which sends the ball back down) and an upside-down one (which blocks from below).
+
 - **2D shapes: `Collider::polygon_2d`, `polyline_2d`, `circle_2d`, `rect_2d`.** Built from points
   in the XY plane and extruded `depth` along Z, for bodies locked with `RigidBody::planar_xy`: a
   convex polygon becomes a convex-hull prism (ramps, wedges, triangles), a polyline a static strip

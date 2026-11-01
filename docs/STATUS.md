@@ -32,7 +32,8 @@ hash replays bit-for-bit, which is what rollback netcode and the regression soak
 Ranked and measured in [`CAPABILITY_GAPS.md`](CAPABILITY_GAPS.md); the short version:
 
 - **2D game layer:** 2D physics is 3D shapes on bodies locked to the XY plane — by decision, no
-  separate 2D solver (§C9). Not yet: one-way platforms, a 2D character controller.
+  separate 2D solver (§C9); one-way platforms with `Collider::one_way`. Not yet: a 2D character
+  controller.
 - **Rendering:** no environment cubemap / reflection probes (§A5), no MSAA (§A6), no area lights
   or soft contact shadows (§A7), no occlusion culling (§A7b), no motion blur or auto exposure
   (§A7c), split screen half-done (§A5b).
