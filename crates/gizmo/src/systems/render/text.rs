@@ -72,6 +72,10 @@ fn ui_boxes(_world: &World) -> Vec<UiBox> {
 /// ignored. That is the only thing putting both on one entity can sensibly mean, and it is what
 /// makes a laid-out button able to have a label. A `Node` does **not** clip the text and does not
 /// resize it: a string longer than its box overflows it, because `gizmo-ui` has no clipping.
+/// Nor does it wrap the text to its width on its own: `gizmo-ui` never measures text, so a box
+/// sized by layout can be narrower than any word, and wrapping to it would cut every label into
+/// single characters. Give the `Text` a [`max_width`](Text::max_width) — the box's width, if that
+/// is what you want — and it wraps there.
 ///
 /// [`BackgroundColor`](crate::ui::BackgroundColor) is drawn as a solid quad over the box, under
 /// every glyph in the frame. It had been written and read by nothing since the crate existed.

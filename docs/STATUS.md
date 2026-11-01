@@ -22,7 +22,7 @@ hash replays bit-for-bit, which is what rollback netcode and the regression soak
 | Soft physics | FEM soft bodies, XPBD cloth and rope, Voronoi fracture. | ENGINE.md §1 |
 | 3D rendering | Deferred PBR, CSM shadows, SSAO, SSGI, SSR, bloom, volumetrics, TAA/FXAA, decals, irradiance volumes, user materials (forward). | CAPABILITY_GAPS §A, §F |
 | 2D rendering | `Sprite` in world space (entity's plane, depth-tested) or screen space; sheets, flips, layers, pixel-art sampling. `ProjectionMode::OrthographicFit` keeps a playfield in view in any window shape; `gizmo::physics::sprite_collider` derives a box collider from a sprite; `SpriteAnimation` plays a sheet; `Tilemap` draws a level from one tileset in one draw call. | CAPABILITY_GAPS §A1 |
-| Text and HUD | `Text` in world or screen space; screen text, screen sprites and `gizmo-ui` backgrounds are drawn **after** tone mapping, so a HUD keeps its colours. No wrapping or shaping. | CAPABILITY_GAPS §A2 |
+| Text and HUD | `Text` in world or screen space, wrapping at `max_width`; screen text, screen sprites and `gizmo-ui` backgrounds are drawn **after** tone mapping, so a HUD keeps its colours. No shaping. | CAPABILITY_GAPS §A2 |
 | Browser | `wasm32` with a reduced forward pipeline (no shadows/AO/GI/TAA); audio works there, networking and Lua do not. | `demo-web/README.md` |
 | Editor | `gizmo-editor` panels; `gizmo-studio` app (not published). A game's own components join the in-engine editor with `gizmo::register_editor_component`: inspected, edited, added, removed, saved. | README, CHANGELOG |
 | Netcode | P2P rollback and client-server (`gizmo-net` features `rollback`, `client-server`). | ENGINE.md §1, §5 |
@@ -36,7 +36,7 @@ Ranked and measured in [`CAPABILITY_GAPS.md`](CAPABILITY_GAPS.md); the short ver
 - **Rendering:** no environment cubemap / reflection probes (§A5), no MSAA (§A6), no area lights
   or soft contact shadows (§A7), no occlusion culling (§A7b), no motion blur or auto exposure
   (§A7c), split screen half-done (§A5b).
-- **Text:** no wrapping, shaping, bidi or font fallback; the engine ships no font (§A2).
+- **Text:** no shaping, bidi or font fallback; the engine ships no font (§A2).
 - **Extensibility:** several extension points are sealed (§C0).
 - **Editor:** `gizmo-studio` is a separate binary and cannot see a game's types; the in-engine
   editor can.

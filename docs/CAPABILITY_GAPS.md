@@ -89,9 +89,9 @@ pass (`gizmo::systems::render::record_text`, which `gizmo-studio` calls rather t
 | screen space (window pixels, top-left origin) | yes |
 | world space (camera-facing quad) | yes, **depth-tested** — a label behind a wall is behind it |
 | anchors | nine |
-| lines | `\n`, and nothing else breaks one |
+| lines | `\n`, and `Text::max_width` wraps at spaces (or between characters for a word too long to fit) — since 2026-11-01 |
 | kerning | from the face's own `kern` table |
-| **wrapping, shaping, bidi, font fallback, rich text** | **no** |
+| **shaping, bidi, font fallback, rich text, per-line alignment** | **no** |
 
 Measured: the same scene with and without text differs in **869/16 384** pixels; a string anchored
 at (8, 8) changes **869** pixels in the top-left quadrant and **0** in the bottom-right (the

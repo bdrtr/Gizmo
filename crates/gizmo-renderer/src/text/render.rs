@@ -357,7 +357,7 @@ impl TextRenderer {
         screen_anchor: Option<Vec2>,
         screen_size: Vec2,
     ) {
-        let Some(layout) = self.library.layout(text.font, text.size_px, &text.content) else {
+        let Some(layout) = self.library.layout_wrapped(text.font, text.size_px, &text.content, text.max_width) else {
             return;
         };
         // Split so the rasteriser is the only part of this that needs a GPU: `place` is pure

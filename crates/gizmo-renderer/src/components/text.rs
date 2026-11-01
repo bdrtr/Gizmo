@@ -14,7 +14,7 @@ use crate::text::FontId;
 ///
 /// # What it does not do
 ///
-/// One font per `Text`, no wrapping (lines break on `\n` and nowhere else), no shaping — see
+/// One font per `Text`, no shaping — see
 /// [`crate::text`] for what that rules out. A `Text` with an unknown [`FontId`] draws nothing
 /// rather than falling back to another font: a silent substitution is how a missing asset stops
 /// looking like a missing asset.
@@ -37,6 +37,12 @@ pub struct Text {
     pub anchor: TextAnchor,
     /// Screen pixels, or a camera-facing quad in the world.
     pub space: TextSpace,
+    /// Wrap lines wider than this many glyph pixels — at spaces, or between characters for a
+    /// word that cannot fit on its own. `None` (the default) breaks only at `\n`.
+    ///
+    /// In glyph pixels in both spaces, like [`size_px`](Self::size_px): a world label 256 px wide
+    /// at 64 px per unit wraps at 4 world units.
+    pub max_width: Option<f32>,
 }
 
 impl Text {
@@ -50,6 +56,7 @@ impl Text {
             color: Vec4::ONE,
             anchor: TextAnchor::TopLeft,
             space: TextSpace::Screen { position },
+            max_width: None,
         }
     }
 
@@ -67,6 +74,7 @@ impl Text {
             color: Vec4::ONE,
             anchor: TextAnchor::Center,
             space: TextSpace::World { px_per_unit },
+            max_width: None,
         }
     }
 
@@ -81,6 +89,13 @@ impl Text {
     #[must_use]
     pub fn with_anchor(mut self, anchor: TextAnchor) -> Self {
         self.anchor = anchor;
+        self
+    }
+
+    /// Wraps lines at `max_width` glyph pixels — see [`max_width`](Self::max_width).
+    #[must_use]
+    pub fn with_max_width(mut self, max_width: f32) -> Self {
+        self.max_width = Some(max_width);
         self
     }
 }

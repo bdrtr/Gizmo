@@ -50,6 +50,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Text wrapping: `Text::max_width` / `with_max_width`, and `FontLibrary::layout_wrapped`.**
+  Lines wider than the width break at spaces (the space is dropped); a word too wide on its own
+  is cut between characters rather than overflowing. In glyph pixels in both spaces. `None`, the
+  default, keeps the old behaviour of breaking only at `\n`. A `gizmo-ui` `Node` does not wrap its
+  text on its own — `gizmo-ui` never measures text, so its box can be narrower than any word.
+
 - **`RigidBody::planar_xy()` — the 2-D setup in one call.** Locks Z translation and X/Y rotation,
   the three lines `kule_yikici` and `hill_climb` (twice) wrote by hand; all three use it now.
 

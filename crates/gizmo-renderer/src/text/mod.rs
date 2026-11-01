@@ -31,8 +31,10 @@
 //! # What it does not do
 //!
 //! No shaping (so no Arabic joining, no Indic reordering, no ligatures), no bidi, no font
-//! fallback, no rich text, no wrapping. Kerning comes from the font's `kern` table via
-//! `ab_glyph` and nothing more. Lines break on `\n` and nowhere else. These are named here rather
+//! fallback, no rich text. Kerning comes from the font's `kern` table via `ab_glyph` and nothing
+//! more. Lines break on `\n`, and — given a width ([`FontLibrary::layout_wrapped`]) — at spaces,
+//! which is right for scripts that separate words with spaces and wrong for those that do not
+//! (Chinese, Japanese, Thai wrap only between characters here). These are named here rather
 //! than discovered later: a text system that silently draws the wrong glyphs for a script is worse
 //! than one that says it cannot.
 
@@ -230,14 +232,73 @@ impl FontLibrary {
     /// empty layout, and the caller can tell the two apart.
     #[must_use]
     pub fn layout(&self, font: FontId, px: f32, text: &str) -> Option<TextLayout> {
+        self.layout_wrapped(font, px, text, None)
+    }
+
+    /// [`layout`](Self::layout), also breaking any line wider than `max_width` pixels.
+    ///
+    /// Lines break at spaces, and the space a line breaks at is dropped. A word wider than
+    /// `max_width` on its own is split between characters — text that overflows its box is the
+    /// failure a width exists to prevent, so it is not allowed even for one long word. `None`, or
+    /// a width that is not finite and positive, wraps nothing.
+    #[must_use]
+    pub fn layout_wrapped(&self, font: FontId, px: f32, text: &str, max_width: Option<f32>) -> Option<TextLayout> {
         let face = self.face(font)?;
-        Some(layout(face, px, text))
+        Some(layout(face, px, text, max_width.filter(|w| w.is_finite() && *w > 0.0)))
     }
 }
 
-/// Places `text` at `px`, breaking on `\n`. The library-free half, so it can be tested against a
-/// face directly.
-fn layout(face: &ab_glyph::FontVec, px: f32, text: &str) -> TextLayout {
+/// The pen advance of `s` on one line, kerning included — the width [`layout`] would give it.
+fn measure(face: &ab_glyph::FontVec, px: f32, s: &str) -> f32 {
+    let scaled = face.as_scaled(px);
+    let mut pen = 0.0;
+    let mut previous: Option<ab_glyph::GlyphId> = None;
+    for c in s.chars() {
+        let id = face.glyph_id(c);
+        if let Some(prev) = previous {
+            pen += scaled.kern(prev, id);
+        }
+        pen += scaled.h_advance(id);
+        previous = Some(id);
+    }
+    pen
+}
+
+/// Breaks one `\n`-free paragraph into lines no wider than `max` — see
+/// [`FontLibrary::layout_wrapped`] for the rule.
+fn wrap_paragraph(face: &ab_glyph::FontVec, px: f32, paragraph: &str, max: f32, out: &mut Vec<String>) {
+    let fits = |s: &str| measure(face, px, s) <= max;
+    let mut line = String::new();
+    let mut started = false;
+    // `split(' ')`, not `split_whitespace`: runs of spaces inside a line are kept as authored.
+    for word in paragraph.split(' ') {
+        let candidate = if started { format!("{line} {word}") } else { word.to_string() };
+        if !started || fits(&candidate) {
+            line = candidate;
+            started = true;
+        } else {
+            out.push(std::mem::replace(&mut line, word.to_string()));
+        }
+        // A word too wide on its own: cut it between characters, at least one per line.
+        while !fits(&line) && line.chars().nth(1).is_some() {
+            let mut cut = line.char_indices().nth(1).map_or(line.len(), |(i, _)| i);
+            for (i, _) in line.char_indices().skip(2) {
+                if fits(&line[..i]) {
+                    cut = i;
+                } else {
+                    break;
+                }
+            }
+            let rest = line.split_off(cut);
+            out.push(std::mem::replace(&mut line, rest));
+        }
+    }
+    out.push(line);
+}
+
+/// Places `text` at `px`, breaking on `\n` and, given a width, wherever a line would exceed it.
+/// The library-free half, so it can be tested against a face directly.
+fn layout(face: &ab_glyph::FontVec, px: f32, text: &str, max_width: Option<f32>) -> TextLayout {
     let scaled = face.as_scaled(px);
     let metrics = LineMetrics {
         ascent: scaled.ascent(),
@@ -248,7 +309,17 @@ fn layout(face: &ab_glyph::FontVec, px: f32, text: &str) -> TextLayout {
 
     let mut out = TextLayout { lines: 1, ..Default::default() };
     let mut widest: f32 = 0.0;
-    for (line_index, line) in text.split('\n').enumerate() {
+    let lines: Vec<std::borrow::Cow<'_, str>> = match max_width {
+        None => text.split('\n').map(std::borrow::Cow::Borrowed).collect(),
+        Some(max) => {
+            let mut wrapped = Vec::new();
+            for paragraph in text.split('\n') {
+                wrap_paragraph(face, px, paragraph, max, &mut wrapped);
+            }
+            wrapped.into_iter().map(std::borrow::Cow::Owned).collect()
+        }
+    };
+    for (line_index, line) in lines.iter().enumerate() {
         let baseline = metrics.ascent + line_index as f32 * line_height;
         let mut pen = 0.0_f32;
         let mut previous: Option<ab_glyph::GlyphId> = None;
@@ -722,6 +793,43 @@ mod tests {
             (two.width - one.width).abs() < 0.01,
             "two identical lines are as wide as one, not twice as wide"
         );
+    }
+
+    /// Words wrap at spaces; the box is as wide as the widest line and never wider than the width.
+    /// Every advance is 600 px at this size, so each expectation is arithmetic.
+    #[test]
+    fn a_width_wraps_at_spaces_and_drops_the_space_it_breaks_at() {
+        let (lib, id) = library();
+        let adv = ADVANCE as f32;
+        // "AA AA AA" in 2.2 advances: each "AA" fits, "AA AA" (5) does not.
+        let w = lib.layout_wrapped(id, PX, "AA AA AA", Some(2.2 * adv)).expect("layout");
+        assert_eq!(w.lines, 3);
+        assert!((w.width - 2.0 * adv).abs() < 0.5, "width {}", w.width);
+        assert_eq!(w.glyphs.len(), 6);
+        assert!(w.glyphs.iter().all(|g| g.x < 2.0 * adv), "a broken-at space shifted a line start");
+        // Wide enough for two words on a line: "AA AA" / "AA".
+        let two = lib.layout_wrapped(id, PX, "AA AA AA", Some(5.5 * adv)).expect("layout");
+        assert_eq!(two.lines, 2);
+        // No width, or a nonsense one, wraps nothing — the old behaviour.
+        for none in [None, Some(0.0), Some(f32::NAN), Some(-5.0)] {
+            assert_eq!(lib.layout_wrapped(id, PX, "AA AA AA", none).expect("layout").lines, 1);
+        }
+        // `\n` still breaks, and wrapping happens within each paragraph.
+        let paras = lib.layout_wrapped(id, PX, "AA AA\nAA", Some(2.2 * adv)).expect("layout");
+        assert_eq!(paras.lines, 3);
+    }
+
+    /// One word wider than the width is cut between characters rather than overflowing; a width
+    /// narrower than one character still puts one character on each line.
+    #[test]
+    fn a_word_wider_than_the_width_is_cut_between_characters() {
+        let (lib, id) = library();
+        let adv = ADVANCE as f32;
+        let cut = lib.layout_wrapped(id, PX, "AAAAA", Some(2.5 * adv)).expect("layout");
+        assert_eq!(cut.lines, 3, "AA / AA / A");
+        assert!(cut.width <= 2.5 * adv);
+        let tiny = lib.layout_wrapped(id, PX, "AAA", Some(1.0)).expect("layout");
+        assert_eq!((tiny.lines, tiny.glyphs.len()), (3, 3), "one character per line, none lost");
     }
 
     #[test]
