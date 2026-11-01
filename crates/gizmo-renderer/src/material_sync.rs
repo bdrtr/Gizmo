@@ -141,6 +141,7 @@ mod tests {
             is_transparent: true,
             is_double_sided: true,
             alpha_cutoff: 0.0,
+            blend_mode: crate::components::BlendMode::Additive,
         };
 
         let text = ron::to_string(&desc).expect("serialize");
@@ -166,6 +167,7 @@ mod tests {
             is_transparent: false,
             is_double_sided: false,
             alpha_cutoff: 0.0,
+            blend_mode: Default::default(),
         };
         let back: MaterialDesc =
             ron::from_str(&ron::to_string(&desc).expect("serialize")).expect("deserialize");

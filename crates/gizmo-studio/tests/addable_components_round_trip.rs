@@ -200,6 +200,7 @@ fn a_material_description_survives_the_file() {
             is_double_sided: true,
             // 550a7df ile eklendi: kesme yok (opak) — testin ilgilendiği tur, alanın kendisi değil.
             alpha_cutoff: 0.0,
+            blend_mode: gizmo::renderer::components::BlendMode::Multiply,
         },
     );
 
@@ -230,6 +231,7 @@ fn a_material_description_survives_the_file() {
         "and the texture path — which is what lets the load rebuild the bind group at all"
     );
     assert!(desc.is_double_sided, "and the flags");
+    assert_eq!(desc.blend_mode, gizmo::renderer::components::BlendMode::Multiply, "and how it blends");
 }
 
 /// **A navigation agent survives the file** — the whole point of registering it.

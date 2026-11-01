@@ -399,6 +399,8 @@ pub fn execute_render_pipeline(
                 );
                 // Water goes in the opaque map whatever its alpha: it has its own pass with its
                 // own pipeline, and the transparent pass would draw it with `shader.wgsl`.
+                // Only a blended draw blends — the game path's rule (`batching.rs`).
+                let blend_mode = if blended { mat.blend_mode } else { Default::default() };
                 let batches = if blended && !is_water {
                     &mut *transparent_batches
                 } else if mat.is_double_sided {
@@ -420,6 +422,7 @@ pub fn execute_render_pipeline(
                         is_editor_only,
                         casts_shadows,
                         visible_in_camera,
+                        blend_mode,
                     ))
                     .or_insert_with(|| BatchData {
                         vbuf: active_mesh.vbuf.clone(),
@@ -443,6 +446,7 @@ pub fn execute_render_pipeline(
                         is_editor_only,
                         casts_shadows,
                         visible_in_camera,
+                        blend_mode,
                     });
 
                 if camera_visible {
@@ -511,6 +515,7 @@ pub fn execute_render_pipeline(
                         is_editor_only: batch.is_editor_only,
                         casts_shadows: batch.casts_shadows,
                         visible_in_camera: batch.visible_in_camera,
+                        blend_mode: batch.blend_mode,
                     });
                 }
             };

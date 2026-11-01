@@ -160,7 +160,17 @@ pub fn record_forward_and_fluid(
                         &renderer.scene.baked_lit_pipeline
                     }
                 } else if item.unlit {
-                    &renderer.scene.unlit_pipeline
+                    // A transparent unlit draw blending other than by alpha — a glow, a spark —
+                    // takes that mode's variant, which also does not write depth.
+                    match item.is_transparent.then(|| renderer.scene.blend_variant(true, item.blend_mode)).flatten() {
+                        Some(p) => p,
+                        None => &renderer.scene.unlit_pipeline,
+                    }
+                } else if let Some(p) =
+                    item.is_transparent.then(|| renderer.scene.blend_variant(false, item.blend_mode)).flatten()
+                {
+                    // Transparent PBR blending additively, multiplicatively or premultiplied.
+                    p
                 } else if item.is_transparent {
                     // There is no two-sided *variant* of the blended pipeline because the blended
                     // pipeline already is one: `transparent` is built with `cull_mode: None`

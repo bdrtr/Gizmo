@@ -4,19 +4,24 @@
 //! (ateş, kıvılcım, cam parıltısı), çarpımsal (duman, renkli gölge) ve önceden-çarpılmış alfa da
 //! ayrı ayrı gerekiyor.
 //!
-//! ## Motorda tek karışım denklemi var
+//! ## Dört karışım kipi (2026-11-02'den beri)
 //!
 //! | yetenek | Gizmo |
 //! |---------|-------|
-//! | alfa karışımı | var — `BlendState::ALPHA_BLENDING` |
-//! | toplamalı (additive) | **yok** |
-//! | çarpımsal (multiply) | **yok** |
-//! | önceden çarpılmış alfa | **yok** |
-//! | kipi seçen bir alan | **yok** — `BlendMode` diye bir tür yok |
+//! | alfa karışımı | var — `BlendMode::Alpha`, varsayılan |
+//! | toplamalı (additive) | var — `BlendMode::Additive` |
+//! | çarpımsal (multiply) | var — `BlendMode::Multiply` (alfaya bakmaz; beyaza doğru solar) |
+//! | önceden çarpılmış alfa | var — `BlendMode::Premultiplied` |
+//! | kipi seçen bir alan | var — `Material::blend_mode` / `with_blend_mode`, inspector'da da |
 //! | saydam + çift taraflı | **zaten öyle** — aşağıda ölçüldü, ve kaynaktaki yorum yanlıştı |
 //!
-//! Bir malzemenin saydam olup olmadığı [`Material::with_transparent`] ile ya da albedo alfasından
-//! çıkarılıyor; **hangi denklemle** karışacağı seçilemiyor.
+//! Varsayılan sahne (`kipler`) dört kipi yan yana gösteriyor: aynı turuncu, yarı saydam, ışıksız
+//! levha, yarısı koyu yarısı açık bir şeridin önünde. Toplamalı her yeri aydınlatır, çarpımsal her
+//! yeri koyulaştırır, alfa ikisinin arasında karışır. Alfa dışındaki her kip malzemeyi saydam yapar.
+//! Ölçüm: `each_blend_mode_combines_with_what_is_behind_it` (oyun yolu) ve
+//! `the_editor_blends_by_the_materials_blend_mode` (editör).
+//!
+//! Aşağıdaki iki ölçüm kiplerden önce yapıldı ve hâlâ geçerli — sıralama kiplerden bağımsız.
 //!
 //! ## Saydam sıralaması örgü başına, üçgen başına değil
 //!
@@ -73,8 +78,8 @@
 //! üçgen başına olmadığı için o birleştirme de yanlış sırada. Bunu ayrı bir ölçüme bırakıyorum.
 //!
 //! ## Kontroller
-//!   * `GIZMO_BLEND_ORDER=ab|ba` — iki saydam levhayı hangi sırayla doğur
-//!   * `GIZMO_BLEND_SCENE=kesisen|cift_tarafli` — hangi sahne
+//!   * `GIZMO_BLEND_SCENE=kipler|kesisen|cift_tarafli` — hangi sahne (varsayılan `kipler`)
+//!   * `GIZMO_BLEND_ORDER=ab|ba` — kesişen sahnede iki levhayı hangi sırayla doğur
 //!   * `GIZMO_BLEND_DS=1` — çift taraflı sahnede `with_double_sided` aç
 //!   * `GIZMO_BLEND_FRONT=1` — levhayı ön yüzüyle çevir (kontrol)
 //!   * **Sağ-tık + fare / WASDQE** — kamera (ölçüm için dokunmayın)
@@ -85,6 +90,8 @@ use gizmo::simple::{SimpleAppExt, SimpleSceneState};
 /// Hangi sahne kurulacak.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Scene {
+    /// Dört karışım kipi yan yana.
+    Modes,
     /// İki saydam levha birbirinin içinden geçiyor — sıralamanın kırıldığı klasik durum.
     Crossing,
     /// Tek bir saydam levha, çift taraflı işaretli. Arkadan da görünmeli.
@@ -94,7 +101,8 @@ enum Scene {
 fn config() -> (Scene, bool) {
     let scene = match std::env::var("GIZMO_BLEND_SCENE").as_deref() {
         Ok("cift_tarafli") => Scene::DoubleSided,
-        _ => Scene::Crossing,
+        Ok("kesisen") => Scene::Crossing,
+        _ => Scene::Modes,
     };
     let swap = matches!(std::env::var("GIZMO_BLEND_ORDER").as_deref(), Ok("ba"));
     (scene, swap)
@@ -123,6 +131,30 @@ fn main() {
             ));
 
             match which {
+                Scene::Modes => {
+                    // Arka planın önünde koyu bir şerit: kiplerin farkı açık ve koyu zeminde
+                    // ayrı ayrı okunur.
+                    scene.world.spawn_bundle((
+                        Transform::new(Vec3::new(0.0, -0.9, -3.5)).with_scale(Vec3::new(14.0, 1.6, 0.1)),
+                        GlobalTransform::default(),
+                        cube.clone(),
+                        Material::new(white.clone()).with_unlit(Vec4::new(0.05, 0.06, 0.12, 1.0)),
+                        MeshRenderer::new(),
+                    ));
+                    let modes = [BlendMode::Alpha, BlendMode::Additive, BlendMode::Multiply, BlendMode::Premultiplied];
+                    for (i, mode) in modes.into_iter().enumerate() {
+                        scene.world.spawn_bundle((
+                            Transform::new(Vec3::new(-3.3 + 2.2 * i as f32, 0.0, 0.0))
+                                .with_scale(Vec3::new(0.85, 1.6, 0.03)),
+                            GlobalTransform::default(),
+                            cube.clone(),
+                            Material::new(white.clone())
+                                .with_unlit(Vec4::new(1.0, 0.55, 0.2, 0.6))
+                                .with_blend_mode(mode),
+                            MeshRenderer::new(),
+                        ));
+                    }
+                }
                 Scene::Crossing => {
                     // İki saydam levha, X biçiminde kesişiyor. Doğurma sırası ölçümün değişkeni.
                     let a = (
@@ -191,7 +223,11 @@ fn main() {
             gizmo::gizmo_log!(
                 Info,
                 "sahne: {} · doğurma sırası: {}",
-                if which == Scene::Crossing { "kesişen" } else { "çift taraflı" },
+                match which {
+                    Scene::Modes => "kipler",
+                    Scene::Crossing => "kesişen",
+                    Scene::DoubleSided => "çift taraflı",
+                },
                 if swap { "b,a" } else { "a,b" }
             );
         })
@@ -204,19 +240,19 @@ fn main() {
                         ui.heading("Karıştırma");
                         ui.label(format!(
                             "sahne: {} · sıra: {}",
-                            if which == Scene::Crossing { "kesişen levhalar" } else { "çift taraflı" },
+                            match which {
+                                Scene::Modes => "kipler",
+                                Scene::Crossing => "kesişen levhalar",
+                                Scene::DoubleSided => "çift taraflı",
+                            },
                             if swap { "b,a" } else { "a,b" }
                         ));
                         ui.separator();
-                        ui.label("tek karışım denklemi: ALPHA_BLENDING.");
-                        ui.label("toplamalı / çarpımsal / önceden-çarpılmış: YOK.");
-                        ui.label("kipi seçecek bir alan da yok.");
+                        ui.label("soldan sağa: Alpha · Additive · Multiply · Premultiplied");
+                        ui.label("Material::with_blend_mode(BlendMode::…)");
                         ui.separator();
                         ui.label("sıralama örgü başına — üçgen başına değil.");
-                        ui.colored_label(
-                            gizmo::egui::Color32::from_rgb(230, 160, 80),
-                            "saydam + çift taraflı boru hattı YOK",
-                        );
+                        ui.label("saydam yüzeyler zaten çift taraflı çiziliyor.");
                     });
                 });
         })

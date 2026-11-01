@@ -186,6 +186,9 @@ pub struct DrawItem {
     pub(super) visible_in_camera: bool,
     pub(super) skeleton_bind_group: Option<std::sync::Arc<wgpu::BindGroup>>,
     pub(super) is_transparent: bool,
+    /// How a transparent item blends (`Material::blend_mode`); `Alpha` for every opaque one.
+    /// Picks the forward pipeline — see `passes::forward`.
+    pub(super) blend_mode: crate::renderer::components::BlendMode,
     /// This batch's slot in the frame's paint order — see [`draw_layer`].
     pub(super) layer: DrawLayer,
     /// Start of this batch's CAMERA-visible instances in region A of the instance buffer.
@@ -281,6 +284,9 @@ pub(crate) struct BatchKey {
     // *which* one corrupts flips between frames. Keying on the routing flags keeps
     // same-routing instances batched while separating ones that render differently.
     is_transparent: bool,
+    /// The blend is baked into the pipeline, so — like every flag here — two materials that
+    /// differ only in it must not share a batch.
+    blend_mode: crate::renderer::components::BlendMode,
     unlit: bool,
     baked_lit: bool,
     is_skybox: bool,
@@ -324,6 +330,7 @@ pub(crate) struct BatchData {
     is_water: bool,
     skeleton_bind_group: Option<std::sync::Arc<wgpu::BindGroup>>,
     is_transparent: bool,
+    blend_mode: crate::renderer::components::BlendMode,
     instances: Vec<crate::renderer::gpu_types::InstanceRaw>,
     /// Casters outside the camera frustum but inside a shadow cascade's light frustum —
     /// must be drawn into the shadow maps so off-screen objects still cast visible shadows.
@@ -565,6 +572,9 @@ pub(super) fn collect_draw_items(
                 // Which forward pipeline, once `unlit` has said "not the deferred one".
                 let is_water = routing.is_water;
                 let is_transparent = draws_blended($mat.is_transparent, $mat.albedo.w, $mat.alpha_cutoff);
+                // Only a blended draw blends; an opaque one's mode is moot and must not split it
+                // from its opaque neighbours.
+                let blend_mode = if is_transparent { $mat.blend_mode } else { Default::default() };
                 // Honoured by this path since 2026-08-15. `Material::with_double_sided` has been
                 // public all along and only the editor acted on it, so a cloth or a leaf authored
                 // double-sided showed both faces in the viewport and lost its back faces in the
@@ -581,6 +591,7 @@ pub(super) fn collect_draw_items(
                     mat_id: std::sync::Arc::as_ptr(&$mat.bind_group) as usize,
                     skeleton_id: skel_bg.as_ref().map(|bg| std::sync::Arc::as_ptr(bg) as usize),
                     is_transparent,
+                    blend_mode,
                     unlit,
                     baked_lit,
                     is_skybox,
@@ -610,6 +621,7 @@ pub(super) fn collect_draw_items(
                     is_water,
                     skeleton_bind_group: skel_bg,
                     is_transparent,
+                    blend_mode,
                     instances: Vec::new(),
                     shadow_instances: Vec::new(),
                     previous: Vec::new(),
@@ -783,6 +795,7 @@ pub(super) fn collect_draw_items(
                 visible_in_camera: batch.visible_in_camera,
                 skeleton_bind_group: batch.skeleton_bind_group.clone(),
                 is_transparent: batch.is_transparent,
+                blend_mode: batch.blend_mode,
                 layer: draw_layer(batch.is_backdrop, batch.is_transparent),
                 first_instance,
                 camera_count,
@@ -879,6 +892,7 @@ mod batch_key_tests {
             mat_id: 42,
             skeleton_id: None,
             is_transparent: false,
+            blend_mode: Default::default(),
             unlit: false,
             baked_lit: false,
             is_skybox: false,
@@ -903,6 +917,7 @@ mod batch_key_tests {
             mat_id: 42, // same cached texture bind group as the variants below
             skeleton_id: None,
             is_transparent: false,
+            blend_mode: Default::default(),
             unlit: false,
             baked_lit: false,
             is_skybox: false,
@@ -915,6 +930,7 @@ mod batch_key_tests {
         };
         let transparent = BatchKey {
             is_transparent: true,
+            blend_mode: Default::default(),
             ..base.clone()
         };
         let unlit = BatchKey {

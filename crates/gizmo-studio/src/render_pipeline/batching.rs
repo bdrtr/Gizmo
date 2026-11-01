@@ -32,6 +32,8 @@ pub(super) type BatchKey = (
     // differently, so they cannot share a batch.
     bool, // casts_shadows
     bool, // visible_in_camera
+    // The blend is baked into the pipeline (`Material::blend_mode`); `Alpha` for opaque draws.
+    gizmo::renderer::components::BlendMode,
 );
 
 pub(super) struct BatchData {
@@ -70,6 +72,8 @@ pub(super) struct BatchData {
     pub(super) casts_shadows: bool,
     /// Goes into the camera's picture (`ShadowCasting::On | Off`).
     pub(super) visible_in_camera: bool,
+    /// How a transparent batch blends; `Alpha` for every opaque one.
+    pub(super) blend_mode: gizmo::renderer::components::BlendMode,
 }
 
 #[derive(Clone)]
@@ -111,6 +115,8 @@ pub(super) struct FlatBatchData {
     pub(super) casts_shadows: bool,
     /// See [`BatchData::visible_in_camera`].
     pub(super) visible_in_camera: bool,
+    /// See [`BatchData::blend_mode`].
+    pub(super) blend_mode: gizmo::renderer::components::BlendMode,
 }
 
 impl FlatBatchData {

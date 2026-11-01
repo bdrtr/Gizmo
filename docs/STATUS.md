@@ -43,7 +43,8 @@ Ranked and measured in [`CAPABILITY_GAPS.md`](CAPABILITY_GAPS.md); the short ver
   contact shadows are `DirectionalLight::angular_radius` / `contact_shadow_length`), no occlusion culling (§A7b), motion blur
   covers camera and objects but not transparent ones (§A7c, `PostProcess::motion_blur`; auto exposure
   is `renderer.auto_exposure`). Split screen works on the game path (`Camera::viewport`, §A5b); the studio previews a
-  split-screen game through its primary camera.
+  split-screen game through its primary camera. Transparent materials blend by
+  `Material::blend_mode` — alpha, additive, multiply, premultiplied (§B).
 - **Text:** no shaping, bidi or font fallback; the engine ships no font (§A2).
 - **Extensibility:** several extension points are sealed (§C0).
 - **Editor:** `gizmo-studio` is a separate binary and cannot see a game's types; the in-engine

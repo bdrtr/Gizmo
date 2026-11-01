@@ -69,6 +69,58 @@ pub enum MaterialType {
     Custom(crate::custom_material::MaterialId),
 }
 
+/// How a blended draw combines with what is already on screen behind it.
+///
+/// Every mode but [`Alpha`](Self::Alpha) makes the material transparent (sorted back to front, no
+/// depth write, skipped by the G-buffer, the z-prepass and the shadow pass) — a mode is a way of
+/// blending, and an opaque draw does not blend. Honoured by the PBR and unlit routes; baked-lit,
+/// water, sky and backdrop materials keep their own blending.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub enum BlendMode {
+    /// `src · a + dst · (1 − a)` — glass, a fading object, anything partly see-through. The
+    /// default, and the only blending before this type existed.
+    #[default]
+    Alpha,
+    /// `dst + src · a` — light added on top: fire, sparks, glows, a laser. Order-independent, and
+    /// it can only brighten.
+    Additive,
+    /// `dst · src` — the surface behind filtered through this colour: tinted glass, a dark
+    /// stain, a coloured shadow. Alpha is **not** consulted (fixed-function blending cannot
+    /// weigh a product by it without a premultiplied output); fade toward white instead, which
+    /// multiplies by one. It can only darken.
+    Multiply,
+    /// `src + dst · (1 − a)` — the colour is taken as already multiplied by alpha: a texture
+    /// authored premultiplied, or a glow that should add where its alpha is zero.
+    Premultiplied,
+}
+
+impl BlendMode {
+    /// The fixed-function blend state this mode is.
+    pub fn state(self) -> wgpu::BlendState {
+        use wgpu::{BlendComponent, BlendFactor as F, BlendOperation as Op};
+        // Destination alpha is left as it was by every mode but `Alpha`: the HDR target's alpha
+        // is not read as coverage anywhere, and keeping it means a glow cannot punch a hole in it.
+        let keep_alpha = BlendComponent { src_factor: F::Zero, dst_factor: F::One, operation: Op::Add };
+        match self {
+            Self::Alpha => wgpu::BlendState::ALPHA_BLENDING,
+            Self::Additive => wgpu::BlendState {
+                color: BlendComponent { src_factor: F::SrcAlpha, dst_factor: F::One, operation: Op::Add },
+                alpha: keep_alpha,
+            },
+            Self::Multiply => wgpu::BlendState {
+                color: BlendComponent { src_factor: F::Dst, dst_factor: F::Zero, operation: Op::Add },
+                alpha: keep_alpha,
+            },
+            Self::Premultiplied => wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
+        }
+    }
+
+    /// The three modes that need pipelines of their own, in the order
+    /// [`SceneState::blend_variant`](crate::pipeline::SceneState::blend_variant) stores them.
+    pub const VARIANTS: [BlendMode; 3] = [Self::Additive, Self::Multiply, Self::Premultiplied];
+}
+
 /// How a surface is shaded: its textures (behind the bind group), its PBR scalars, and which
 /// route through the renderer it takes.
 ///
@@ -147,6 +199,9 @@ pub struct Material {
     /// the same threshold, reachable from a [`Material`] and honoured by the baked-lit pipeline
     /// as well.
     pub alpha_cutoff: f32,
+    /// How this draw blends, if it is transparent — see [`BlendMode`]. Set it with
+    /// [`with_blend_mode`](Self::with_blend_mode), which also makes the material transparent.
+    pub blend_mode: BlendMode,
 }
 
 /// Everything a [`Material`] is, minus the one thing a file cannot hold: the bind group.
@@ -192,6 +247,9 @@ pub struct MaterialDesc {
     pub is_double_sided: bool,
     /// See [`Material::alpha_cutoff`].
     pub alpha_cutoff: f32,
+    /// See [`Material::blend_mode`]. `#[serde(default)]`: scenes saved before it read as alpha.
+    #[serde(default)]
+    pub blend_mode: BlendMode,
 }
 
 impl From<&Material> for MaterialDesc {
@@ -216,6 +274,7 @@ impl From<&Material> for MaterialDesc {
             is_transparent,
             is_double_sided,
             alpha_cutoff,
+            blend_mode,
         } = m;
         Self {
             albedo: *albedo,
@@ -231,6 +290,7 @@ impl From<&Material> for MaterialDesc {
             is_transparent: *is_transparent,
             is_double_sided: *is_double_sided,
             alpha_cutoff: *alpha_cutoff,
+            blend_mode: *blend_mode,
         }
     }
 }
@@ -254,6 +314,7 @@ impl MaterialDesc {
             is_transparent: self.is_transparent,
             is_double_sided: self.is_double_sided,
             alpha_cutoff: self.alpha_cutoff,
+            blend_mode: self.blend_mode,
         }
     }
 }
@@ -279,6 +340,7 @@ impl Material {
             is_transparent: false,
             is_double_sided: false,
             alpha_cutoff: 0.0,
+            blend_mode: BlendMode::Alpha,
         }
     }
 
@@ -327,6 +389,17 @@ impl Material {
     #[must_use]
     pub fn with_alpha_cutoff(mut self, cutoff: f32) -> Self {
         self.alpha_cutoff = cutoff.clamp(0.0, 1.0);
+        self
+    }
+
+    /// Blends this material with `mode` (see [`BlendMode`]). Any mode but `Alpha` also makes it
+    /// transparent; `Alpha` leaves transparency as it was.
+    #[must_use]
+    pub fn with_blend_mode(mut self, mode: BlendMode) -> Self {
+        self.blend_mode = mode;
+        if mode != BlendMode::Alpha {
+            self.is_transparent = true;
+        }
         self
     }
 

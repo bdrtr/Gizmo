@@ -435,11 +435,18 @@ pub(super) fn record_studio_main_pass(
             }
 
             // 4. TRANSPARENT OBJELERİ ÇİZ (Depth yazması kapalı, Opaque'nin üstüne blend olur)
-            render_pass.set_pipeline(&renderer.scene.transparent_pipeline);
             for batch in flat_batches {
                 if !batch.is_transparent || batch.is_grid || batch.is_backdrop || batch.is_water {
                     continue;
                 } // Sadece saydamları çiz (backdrop ve su kendi geçişlerinde çizildi)
+                // The game path's choice (`passes::forward`): the batch's blend mode picks a
+                // variant, and an unlit draw stays unlit — this loop used to shade every
+                // transparent batch with the lit shader, unlit ones included.
+                render_pass.set_pipeline(match renderer.scene.blend_variant(batch.is_unlit, batch.blend_mode) {
+                    Some(p) => p,
+                    None if batch.is_unlit => &renderer.scene.unlit_pipeline,
+                    None => &renderer.scene.transparent_pipeline,
+                });
                 if batch.start_instance >= renderer.scene.instance_capacity as u32 {
                     continue;
                 }

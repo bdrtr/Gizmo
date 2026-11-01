@@ -88,6 +88,28 @@ pub fn draw_material_section(
                             ui.checkbox(&mut mat.is_double_sided, "Double Sided").on_hover_text("Backface culling'i kapatır.");
                         });
 
+                        // --- Blend Mode --- Alpha dışındaki her kip malzemeyi saydam yapar
+                        // (`Material::with_blend_mode` ile aynı kural).
+                        ui.horizontal(|ui| {
+                            use gizmo_renderer::components::BlendMode;
+                            ui.label("Blend:");
+                            let mut mode = mat.blend_mode;
+                            egui::ComboBox::from_id_salt(format!("mat_blend_{}", entity_id.id()))
+                                .selected_text(format!("{mode:?}"))
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(&mut mode, BlendMode::Alpha, "Alpha");
+                                    ui.selectable_value(&mut mode, BlendMode::Additive, "Additive (ateş, parıltı)");
+                                    ui.selectable_value(&mut mode, BlendMode::Multiply, "Multiply (renkli cam, leke)");
+                                    ui.selectable_value(&mut mode, BlendMode::Premultiplied, "Premultiplied");
+                                });
+                            if mode != mat.blend_mode {
+                                mat.blend_mode = mode;
+                                if mode != BlendMode::Alpha {
+                                    mat.is_transparent = true;
+                                }
+                            }
+                        });
+
                         // --- Texture Source ---
                         let (rect, response) = ui.allocate_exact_size(
                             egui::vec2(ui.available_width(), 30.0),

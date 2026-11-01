@@ -64,6 +64,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   bytes per sample, so native devices request `max_color_attachment_bytes_per_sample` up to 64.
   Groundwork for object motion blur; nothing reads the target yet.
 
+- **Blend modes: `BlendMode` and `Material::with_blend_mode`.** `Alpha` (the default and the
+  previous behaviour), `Additive` (fire, sparks, glows), `Multiply` (tinted glass, stains — alpha
+  is not consulted; fade toward white) and `Premultiplied`. Any mode but `Alpha` makes the
+  material transparent. Honoured by the PBR and unlit routes in both draw paths through six new
+  pipelines (`SceneState::blend_variant`), saved in `MaterialDesc::blend_mode`
+  (`#[serde(default)]`), editable in the material inspector, and in the prelude. The
+  `blend_modes` demo opens on the four side by side.
+
 - **Light cookies: `SpotLight::cookie` / `with_cookie`, `Renderer::insert_light_cookie`,
   `gizmo_renderer::cookies`.** A spot projects an image through its cone (a window frame, leaves,
   a coloured gel): its colour multiplies the light's. Up to eight cookies resident at once, 256²
@@ -2430,6 +2438,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   linted for wasm.
 
 ### Changed
+
+- **`Material` and `MaterialDesc` gained `blend_mode`**: a struct literal of either needs the
+  field (`BlendMode::Alpha` is the old behaviour; `Material::new` and `..Default` paths are
+  unaffected).
+
+- **The editor draws unlit transparent materials with the unlit pipeline**, as the game always
+  has. Its transparent loop bound the lit `transparent_pipeline` for every transparent batch, so
+  an unlit, half-transparent material was shaded by lights in the viewport and not in the build.
 
 - **`SpotLight` is no longer `Copy`**: it can name a cookie (`cookie: Option<String>`). `.clone()`
   where a copy was taken; nothing in the workspace needed one. `SceneSetupInputs` gained

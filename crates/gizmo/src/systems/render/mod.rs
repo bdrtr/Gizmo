@@ -5546,6 +5546,100 @@ mod golden_render_tests {
         });
     }
 
+    /// Each `BlendMode` combines with what is behind it the way it says. A half-transparent grey
+    /// panel (0.5, alpha 0.5) in front of a blue-grey wall, all unlit so the arithmetic is the
+    /// blend's alone; the 8×8 centre of the frame is the panel over the wall. Tone mapping bends
+    /// the numbers, so the test asks for the orderings the four equations imply rather than for
+    /// values: additive brightens every channel past the wall, multiply darkens every one below
+    /// it, premultiplied adds the 0.25 alpha would have removed. The same additive panel lit (PBR)
+    /// must brighten too — the lit route has its own variants.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn each_blend_mode_combines_with_what_is_behind_it() {
+        use crate::renderer::components::BlendMode;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        // Mean RGB of the centre with the panel blending by `mode` (`None`: no panel).
+        async fn centre(mode: Option<BlendMode>, lit: bool) -> [f32; 3] {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssr = None;
+            renderer.volumetric = None;
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(
+                &renderer.device,
+                &renderer.queue,
+                &renderer.scene.texture_bind_group_layout,
+            );
+            let wall = world.spawn();
+            world.add_component(wall, Transform::new(Vec3::new(0.0, 0.0, -6.0)).with_scale(Vec3::new(20.0, 20.0, 0.1)));
+            world.add_component(wall, GlobalTransform::default());
+            world.add_component(wall, AssetManager::create_cube(&renderer.device));
+            world.add_component(wall, Material::new(tex.clone()).with_unlit(Vec4::new(0.2, 0.35, 0.6, 1.0)));
+            world.add_component(wall, MeshRenderer::new());
+            if let Some(mode) = mode {
+                let panel = world.spawn();
+                world.add_component(panel, Transform::new(Vec3::new(0.0, 0.0, -3.0)).with_scale(Vec3::new(1.0, 1.0, 0.05)));
+                world.add_component(panel, GlobalTransform::default());
+                world.add_component(panel, AssetManager::create_cube(&renderer.device));
+                let colour = Vec4::new(0.5, 0.5, 0.5, 0.5);
+                let material = if lit {
+                    Material::new(tex).with_pbr(colour, 0.9, 0.0).with_emissive(Vec3::splat(0.5))
+                } else {
+                    Material::new(tex).with_unlit(colour)
+                };
+                world.add_component(panel, material.with_blend_mode(mode));
+                world.add_component(panel, MeshRenderer::new());
+            }
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::ZERO,
+                yaw: -std::f32::consts::FRAC_PI_2,
+                pitch: 0.0,
+                primary: true,
+                ..Default::default()
+            });
+            let frame = render_world(&mut renderer, &mut world).await;
+            let mut sum = [0.0f32; 3];
+            for y in 60..68 {
+                for x in 60..68 {
+                    let p = &frame[(y * 128 + x) * 4..];
+                    for c in 0..3 {
+                        sum[c] += p[c] as f32 / 64.0;
+                    }
+                }
+            }
+            sum
+        }
+        pollster::block_on(async {
+            let wall = centre(None, false).await;
+            let alpha = centre(Some(BlendMode::Alpha), false).await;
+            let add = centre(Some(BlendMode::Additive), false).await;
+            let mul = centre(Some(BlendMode::Multiply), false).await;
+            let pre = centre(Some(BlendMode::Premultiplied), false).await;
+            let lit_alpha = centre(Some(BlendMode::Alpha), true).await;
+            let lit_add = centre(Some(BlendMode::Additive), true).await;
+            // Measured (R, G, B): wall 148.8 186.4 214.1 · alpha 197.5 201.8 208.1 · additive
+            // 236.0 240.1 244.5 · multiply 59.1 90.7 128.0 · premultiplied 238.7 239.6 241.0 ·
+            // lit alpha 142.5 137.9 159.0 · lit additive 191.0 201.8 220.6.
+            for c in 0..3 {
+                assert!(add[c] > wall[c] + 5.0, "additive brightens every channel: {add:?} over {wall:?}");
+                assert!(mul[c] < wall[c] - 20.0, "multiply darkens every channel: {mul:?} over {wall:?}");
+                assert!(pre[c] > alpha[c] + 5.0, "premultiplied keeps what alpha removes: {pre:?} vs {alpha:?}");
+                assert!(lit_add[c] > wall[c] + 3.0, "the lit route blends additively too: {lit_add:?} over {wall:?}");
+                assert!(lit_add[c] > lit_alpha[c] + 10.0, "lit additive is not lit alpha: {lit_add:?} vs {lit_alpha:?}");
+            }
+            // Alpha is a mix: grey 0.5 lifts the wall's red (0.2) and lowers its blue (0.6).
+            assert!(alpha[0] > wall[0] && alpha[2] < wall[2], "alpha mixes: {alpha:?} over {wall:?}");
+        });
+    }
+
     /// What a split-screen frame does once, it must do once: the HUD is drawn a single time over
     /// the whole target (drawn per view, a half-transparent sprite is laid over itself and comes
     /// out brighter), and the frame's animation advances by one `dt` however many cameras draw.

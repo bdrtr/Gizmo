@@ -61,6 +61,11 @@ pub(super) struct CorePipelines {
     pub(super) water_double_sided: wgpu::RenderPipeline,
     pub(super) transparent: wgpu::RenderPipeline,
     pub(super) grid: wgpu::RenderPipeline,
+    /// The lit transparent pipeline under each of `BlendMode::VARIANTS`.
+    pub(super) blend_lit: [wgpu::RenderPipeline; 3],
+    /// The unlit pipeline under each of them — and, unlike `unlit`, not writing depth: a blended
+    /// draw is sorted, and a glow writing depth would hide the glow behind it.
+    pub(super) blend_unlit: [wgpu::RenderPipeline; 3],
 }
 
 pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) -> CorePipelines {
@@ -374,6 +379,29 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
             Some(wgpu::BlendState::ALPHA_BLENDING),
             wgpu::PolygonMode::Fill,
         ),
+        // Same state as `transparent` (no depth write, no culling), each mode's blend.
+        blend_lit: crate::components::BlendMode::VARIANTS.map(|mode| {
+            create_main(
+                lit_layout,
+                &shader,
+                &format!("Transparent Pipeline ({mode:?})"),
+                false,
+                None,
+                Some(mode.state()),
+                wgpu::PolygonMode::Fill,
+            )
+        }),
+        blend_unlit: crate::components::BlendMode::VARIANTS.map(|mode| {
+            create_main(
+                &render_pipeline_layout,
+                &unlit_shader,
+                &format!("Unlit Pipeline ({mode:?})"),
+                false,
+                None,
+                Some(mode.state()),
+                wgpu::PolygonMode::Fill,
+            )
+        }),
     }
 }
 

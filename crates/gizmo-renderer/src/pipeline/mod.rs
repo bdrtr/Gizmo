@@ -61,6 +61,11 @@ pub struct SceneState {
     pub transparent_pipeline: wgpu::RenderPipeline,
     /// The editor's ground grid.
     pub grid_pipeline: wgpu::RenderPipeline,
+    /// The lit transparent pipeline under each of `BlendMode::VARIANTS` — see
+    /// [`blend_variant`](Self::blend_variant).
+    pub blend_lit_pipelines: [wgpu::RenderPipeline; 3],
+    /// The unlit pipeline under each of them, not writing depth.
+    pub blend_unlit_pipelines: [wgpu::RenderPipeline; 3],
     /// The [`SceneUniforms`](crate::gpu_types::SceneUniforms) buffer — group 0, rewritten each
     /// frame.
     pub global_uniform_buffer: wgpu::Buffer,
@@ -297,6 +302,16 @@ impl SceneView {
     /// Writes this view's camera. Independent of every other view's write, which is the point.
     pub fn write(&self, queue: &wgpu::Queue, uniforms: &crate::gpu_types::SceneUniforms) {
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(uniforms));
+    }
+}
+
+impl SceneState {
+    /// The pipeline a transparent draw blending with `mode` uses instead of the default one —
+    /// `None` for [`BlendMode::Alpha`](crate::components::BlendMode::Alpha), which is the
+    /// `transparent` / `unlit` pipeline itself.
+    pub fn blend_variant(&self, unlit: bool, mode: crate::components::BlendMode) -> Option<&wgpu::RenderPipeline> {
+        let i = crate::components::BlendMode::VARIANTS.iter().position(|m| *m == mode)?;
+        Some(if unlit { &self.blend_unlit_pipelines[i] } else { &self.blend_lit_pipelines[i] })
     }
 }
 
@@ -681,6 +696,8 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         water_double_sided_pipeline: core_pipelines.water_double_sided,
         transparent_pipeline: core_pipelines.transparent,
         grid_pipeline: core_pipelines.grid,
+        blend_lit_pipelines: core_pipelines.blend_lit,
+        blend_unlit_pipelines: core_pipelines.blend_unlit,
         shadow_pipeline,
         global_uniform_buffer,
         global_bind_group_layout: layouts.global,
@@ -753,6 +770,8 @@ pub fn rebuild_pipelines(renderer: &mut crate::Renderer) {
     renderer.scene.water_double_sided_pipeline = core_pipelines.water_double_sided;
     renderer.scene.transparent_pipeline = core_pipelines.transparent;
     renderer.scene.grid_pipeline = core_pipelines.grid;
+    renderer.scene.blend_lit_pipelines = core_pipelines.blend_lit;
+    renderer.scene.blend_unlit_pipelines = core_pipelines.blend_unlit;
     renderer.scene.shadow_pipeline = shadow_pipeline;
 
     crate::post_process::rebuild_post_pipelines(renderer, &post_shader);

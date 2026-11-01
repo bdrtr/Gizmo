@@ -1953,3 +1953,136 @@ fn the_editor_viewport_reflects_a_probe_captured_without_furniture() {
          into the probe, near zero is the probe never captured",
     );
 }
+
+/// The editor viewport blends by `Material::blend_mode`, as the game does
+/// (`each_blend_mode_combines_with_what_is_behind_it` in `gizmo`). Its transparent loop used to bind
+/// one pipeline for every transparent batch — alpha blending, the lit shader, unlit draws included —
+/// so an additive glow authored in the editor showed as a grey alpha panel there and as a glow in
+/// the build. A half-transparent unlit grey panel over an unlit blue-grey wall: additive must
+/// brighten every channel past the wall, multiply darken every one below it.
+#[test]
+fn the_editor_blends_by_the_materials_blend_mode() {
+    use gizmo::renderer::components::BlendMode;
+    let _gpu = gpu_lock();
+    if !pollster::block_on(Renderer::headless_adapter_available())
+        || pollster::block_on(Renderer::headless_adapter_is_software())
+    {
+        eprintln!("skipping: no usable GPU adapter");
+        return;
+    }
+    let (Some(wall), Some(add), Some(mul)) =
+        (blend_scene(None), blend_scene(Some(BlendMode::Additive)), blend_scene(Some(BlendMode::Multiply)))
+    else {
+        return;
+    };
+    let centre = |px: &[u8]| mean_rgb(px, 120, 120, 16);
+    let (w, a, m) = (centre(&wall), centre(&add), centre(&mul));
+    for (name, wall, add, mul) in [("first", w.0, a.0, m.0), ("second", w.1, a.1, m.1), ("third", w.2, a.2, m.2)] {
+        assert!(add > wall + 5.0, "additive brightens the {name} channel: {add:.1} over {wall:.1} ({a:?} vs {w:?})");
+        assert!(mul < wall - 20.0, "multiply darkens the {name} channel: {mul:.1} over {wall:.1} ({m:?} vs {w:?})");
+    }
+}
+
+/// An unlit wall and, unless `mode` is `None`, an unlit half-transparent panel in front of it
+/// blending by `mode`, seen head on through the editor camera.
+fn blend_scene(mode: Option<gizmo::renderer::components::BlendMode>) -> Option<Vec<u8>> {
+    const S: u32 = 256;
+    Some(pollster::block_on(async {
+        let mut renderer = shared_device_renderer(S, S).await;
+        let mut am = AssetManager::new();
+        let mut world = World::new();
+        let tex = am.create_white_texture(
+            &renderer.device,
+            &renderer.queue,
+            &renderer.scene.texture_bind_group_layout,
+        );
+        let wall = world.spawn();
+        world.add_component(wall, Transform::new(Vec3::new(0.0, 0.0, -6.0)).with_scale(Vec3::new(20.0, 20.0, 0.1)));
+        world.add_component(wall, AssetManager::create_cube(&renderer.device));
+        world.add_component(wall, Material::new(tex.clone()).with_unlit(Vec4::new(0.2, 0.35, 0.6, 1.0)));
+        world.add_component(wall, MeshRenderer::new());
+        if let Some(mode) = mode {
+            let panel = world.spawn();
+            world.add_component(panel, Transform::new(Vec3::new(0.0, 0.0, -3.0)).with_scale(Vec3::new(1.0, 1.0, 0.05)));
+            world.add_component(panel, AssetManager::create_cube(&renderer.device));
+            world.add_component(
+                panel,
+                Material::new(tex).with_unlit(Vec4::new(0.5, 0.5, 0.5, 0.5)).with_blend_mode(mode),
+            );
+            world.add_component(panel, MeshRenderer::new());
+        }
+        let cam = world.spawn();
+        world.add_component(cam, Transform::new(Vec3::ZERO));
+        world.add_component(
+            cam,
+            gizmo::renderer::components::Camera::new(
+                std::f32::consts::FRAC_PI_4,
+                0.1,
+                1000.0,
+                -std::f32::consts::FRAC_PI_2,
+                0.0,
+                true,
+            ),
+        );
+        let state = StudioState {
+            current_fps: 60.0,
+            actual_dt: 1.0 / 60.0,
+            editor_camera: cam.id(),
+            game_camera: 4242,
+            do_raycast: false,
+            play: gizmo::systems::PlayLoop::new(),
+            asset_watcher: None,
+            gc_timer: 0.0,
+            autosave_timer: 0.0,
+            visible_entity_count: 0,
+            draw_call_count: 0,
+        };
+        let format = renderer.config.format;
+        let target = renderer.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("blend-mode-target"),
+            size: wgpu::Extent3d { width: S, height: S, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut enc = renderer.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        execute_render_pipeline(&mut world, &state, &mut enc, &view, &mut renderer, 0.0);
+        let staging = renderer.device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: u64::from(S * S * BPP),
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        enc.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &target,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging,
+                layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(S * BPP), rows_per_image: Some(S) },
+            },
+            wgpu::Extent3d { width: S, height: S, depth_or_array_layers: 1 },
+        );
+        renderer.queue.submit(std::iter::once(enc.finish()));
+        let slice = staging.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        let _ = renderer.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        rx.recv().expect("channel").expect("map");
+        let px = slice
+            .get_mapped_range()
+            .expect("a just-mapped buffer's full range is always valid")
+            .to_vec();
+        staging.unmap();
+        px
+    }))
+}
