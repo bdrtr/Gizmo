@@ -36,7 +36,7 @@ tracing-layer = ["dep:tracing-subscriber"]
 # longer depends on `bevy_math`, the `reflect` feature enables it explicitly.
 bevy_reflect = { version = "0.19", features = ["functions", "glam"], optional = true }
 crossbeam-queue = "0.3.12"
-ron = "0.8"
+ron = "0.12"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 tracing = "0.1.44"
