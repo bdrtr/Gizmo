@@ -52,7 +52,8 @@ stack" is the 3D one restricted to a plane — a world sprite lies in its entity
 | screen sprites / text / UI backgrounds after tone mapping | yes, since the same day — see below |
 | **mipmaps, atlas packing** | **no** |
 | sprite-sheet animation (`SpriteAnimation`, advanced by both draw paths) | yes, since 2026-11-01 |
-| **2D physics, tilemap** | **no** |
+| `Tilemap` (one tileset, one entity, one draw call; both draw paths) | yes, since 2026-11-01 |
+| **2D physics** | **no** |
 
 Measured (`sprites_reach_the_frame_in_place_in_order_and_behind_walls`): a world sprite behind a
 wall changes **0** pixels, and **784** with `CompareFunction::Always` in the world pipeline; two
@@ -773,9 +774,9 @@ and `emissive` (item 4, the only undocumented one). No further silent fields.
 6. ~~**2D pipeline (A1).**~~ **The drawing half DONE 2026-11-01** — "largest of all; arguably a
    separate project" turned out to be one component and one pass, because the 2D camera and the
    2D transform stack already existed as an orthographic camera and a plane. What remains is the
-   2D *game* layer around it, measured by building one (§C9): 2D collision shapes and a tilemap.
-   (The window-fitting orthographic camera, sprite↔collider sizing and the sprite-animation
-   component were closed 2026-11-01.)
+   2D *game* layer around it, measured by building one (§C9): 2D collision shapes. (The
+   window-fitting orthographic camera, sprite↔collider sizing, the sprite-animation component and
+   the tilemap were closed 2026-11-01.)
 
 ---
 

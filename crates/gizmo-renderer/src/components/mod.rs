@@ -24,6 +24,8 @@ pub mod post_process;
 pub mod sprite;
 /// The [`Text`](text::Text) component — a string the engine draws.
 pub mod text;
+/// The [`Tilemap`](tilemap::Tilemap) component — a grid of tiles from one tileset image.
+pub mod tilemap;
 
 pub use animation::*;
 pub use camera::*;
@@ -35,6 +37,7 @@ pub use misc::*;
 pub use post_process::*;
 pub use sprite::*;
 pub use text::*;
+pub use tilemap::*;
 
 gizmo_core::impl_component!(
     Mesh,
@@ -57,6 +60,7 @@ gizmo_core::impl_component!(
     PostProcess,
     Sprite,
     SpriteAnimation,
-    Text
+    Text,
+    Tilemap
 );
 gizmo_core::impl_component!(FluidParticle, FluidHandle, FluidPhase, FluidInteractor);

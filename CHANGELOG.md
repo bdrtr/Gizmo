@@ -50,6 +50,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`Tilemap` — a grid of tiles from one tileset image, as one component.** Built empty
+  (`new`), from text rows with a legend (`from_rows`), or edited with `set` / `fill`; `get`,
+  `tiles`, `cell_at` (the cell under a local point) and `cell_center`. Tile `(0, 0)` is the
+  top-left and rows go down, from the entity's origin. Drawn through `record_sprites` on both
+  draw paths, so a map sorts on its `layer` with world sprites and costs one draw call — a GPU
+  test holds it pixel-identical to the same tiles drawn as sprites. `sprite_2d`'s ground is one
+  `Tilemap` instead of 240 sprite entities. Not yet: collision from tiles, and culling of
+  off-screen tiles (every tile is queued every frame).
+
 - **`SpriteAnimation` — sprite-sheet animation as a component.** Plays cells `first..=last` of a
   `columns × rows` sheet at `fps`, looping or once (`once()`, `finished()`), forwards or
   backwards, pausable (`playing`). `set_run(first, last)` switches runs and restarts only on a

@@ -4726,6 +4726,72 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
         });
     }
 
+    /// A `Tilemap` draws exactly what the same tiles draw as separate sprites — pixel for pixel —
+    /// and the whole map is one draw call.
+    ///
+    /// Compared against sprites rather than against "something changed", because a map that put
+    /// every tile one cell off, or showed the wrong tileset cell, or hung up instead of down would
+    /// still change pixels. The sprites are placed by hand from the documented rule (top-left
+    /// origin, rows going down), so this pins the rule as well as the drawing.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_tilemap_draws_what_its_tiles_would_as_sprites_in_one_draw_call() {
+        use gizmo_math::Vec2;
+        use gizmo_renderer::components::{Sprite, Tilemap};
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            // A 2 × 1 tileset: cell 0 red, cell 1 blue.
+            let tileset = renderer
+                .load_sprite_rgba(&[255, 0, 0, 255, 0, 0, 255, 255], 2, 1, gizmo_renderer::sprite::SpriteFilter::Nearest)
+                .unwrap();
+            let rows = ["01.", ".10"];
+            let origin = Vec3::new(-1.5, 1.0, 0.0);
+            let camera = || CameraBundle {
+                position: Vec3::new(0.0, 0.0, 6.0),
+                yaw: -std::f32::consts::FRAC_PI_2,
+                primary: true,
+                ..Default::default()
+            };
+
+            let mut blank = World::new();
+            blank.spawn_bundle(camera());
+            let empty = render_world(&mut renderer, &mut blank).await;
+
+            let mut as_map = World::new();
+            as_map.spawn_bundle(camera());
+            let map = Tilemap::from_rows(tileset, 2, 1, Vec2::ONE, &rows, |c| c.to_digit(10));
+            as_map.spawn_bundle((Transform::new(origin), GlobalTransform::default(), map));
+            let map_frame = render_world(&mut renderer, &mut as_map).await;
+            let calls = renderer.sprites.as_ref().map(|s| s.draw_calls());
+
+            let mut as_sprites = World::new();
+            as_sprites.spawn_bundle(camera());
+            for (y, row) in rows.iter().enumerate() {
+                for (x, c) in row.chars().enumerate() {
+                    let Some(cell) = c.to_digit(10) else { continue };
+                    let pos = origin + Vec3::new(x as f32, -(y as f32), 0.0);
+                    let sprite = Sprite::world(tileset, Vec2::ONE).with_anchor(Vec2::ZERO).with_frame(cell, 2, 1);
+                    as_sprites.spawn_bundle((Transform::new(pos), GlobalTransform::default(), sprite));
+                }
+            }
+            let sprite_frame = render_world(&mut renderer, &mut as_sprites).await;
+
+            let (drawn, total) = changed_pixels(&empty, &map_frame, 128);
+            assert!(drawn >= 500, "the tilemap changed {drawn}/{total} pixels — it is not drawn");
+            let (diff, _) = changed_pixels(&sprite_frame, &map_frame, 128);
+            assert_eq!(diff, 0, "the tilemap differs from its tiles drawn as sprites in {diff} pixels");
+            assert_eq!(calls, Some((1, 0)), "a map of one tileset must be one world draw call");
+        });
+    }
+
     /// A HUD colour reaches the screen as authored — not exposed, bloomed, tone-mapped or
     /// vignetted with the scene.
     ///

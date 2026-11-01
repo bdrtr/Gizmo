@@ -766,7 +766,9 @@ pub fn execute_render_pipeline(
             // passes for exactly that reason.
             // `Sprite`, the engine's own pass for the same reason as `Text` below it — and before
             // it, so a HUD label lands on its HUD image. The editor has no TAA jitter, so its
-            // camera's own matrix is the unjittered one the pass asks for.
+            // camera's own matrix is the unjittered one the pass asks for. `Tilemap` comes through
+            // the same call: its tiles join the sprite queue there, so a level drawn from tiles
+            // looks the same in the viewport and in the game.
             gizmo::systems::render::record_sprites(encoder, renderer, world, vp.camera.view_proj);
             gizmo::systems::render::record_text(encoder, renderer, world);
 

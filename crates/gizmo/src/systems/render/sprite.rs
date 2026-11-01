@@ -9,7 +9,7 @@
 use gizmo_math::{Mat4, Vec2};
 
 use crate::core::World;
-use crate::renderer::components::Sprite;
+use crate::renderer::components::{Sprite, Tilemap};
 use crate::renderer::Renderer;
 
 /// Places, sorts and draws this frame's [`Sprite`]s.
@@ -22,6 +22,9 @@ use crate::renderer::Renderer;
 /// sprites are only queued here; `Renderer::run_post_processing` draws them onto the final image
 /// after tone mapping, under screen text, so a HUD keeps its authored colours.
 ///
+/// [`Tilemap`]s are queued here too, one world sprite per tile, so a map sorts on its layer and
+/// batches into one draw call per run like any other sprites of one image.
+///
 /// An entity hidden by `IsHidden` — on itself or on an ancestor — is skipped, exactly as a mesh
 /// is. A world sprite with no `GlobalTransform` is skipped too: at the origin it would look placed
 /// and be wrong.
@@ -32,7 +35,8 @@ pub fn record_sprites(
     view_proj: Mat4,
 ) {
     let sprites = world.borrow::<Sprite>();
-    if sprites.iter().next().is_none() {
+    let tilemaps = world.borrow::<Tilemap>();
+    if sprites.iter().next().is_none() && tilemaps.iter().next().is_none() {
         if let Some(s) = renderer.sprites.as_mut() {
             // Last frame's runs must not survive into a frame that has none.
             s.begin_frame();
@@ -63,6 +67,18 @@ pub fn record_sprites(
             Mat4::IDENTITY
         };
         state.queue(sprite, model, view_proj, screen);
+    }
+    // A tilemap is a run of world sprites sharing one image: queued here, it is sorted and
+    // batched with them, so a whole map is one draw call on both draw paths.
+    for (id, map) in tilemaps.iter() {
+        if hidden.contains(&id) {
+            continue;
+        }
+        let Some(t) = transforms.get(id) else { continue };
+        for (offset, tile) in map.tile_sprites() {
+            let model = t.matrix * Mat4::from_translation(offset.extend(0.0));
+            state.queue(&tile, model, view_proj, screen);
+        }
     }
     state.upload(device, queue);
     // Screen sprites are drawn later, onto the final image, by the overlay in

@@ -11,6 +11,7 @@
 //! | yöne göre çevirme | `flip_x`, sola giderken |
 //! | katman sırası | gökyüzü −10, uzak tepe −6, yakın tepe −5, zemin 0, coin 1, oyuncu 2 |
 //! | paralaks | iki tepe katmanı kamerayı farklı oranlarda izliyor |
+//! | tilemap | zemin tek bir [`Tilemap`]: 120 × 4 tile, iki hücrelik tileset, tek çizim çağrısı |
 //! | gizleme | toplanan coin'e `IsHidden` ekleniyor — mesh'lerle aynı kural |
 //! | dönüş / ölçek | coin'ler `Transform` ölçeğiyle dönüyor; negatif ölçek arka yüzü gösteriyor |
 //! | ekran uzayı (HUD) | sol üstte enerji çubuğu, sağ üstte toplanan coin'ler |
@@ -21,15 +22,14 @@
 //! ## Ne yok
 //!
 //! Bu bir sprite **çizimi**; etrafındaki 2D oyun altyapısı henüz yok: 2D fizik/çarpışma (coin
-//! toplama burada elle bir mesafe testi), tilemap bileşeni (zemin 120 ayrı sprite — tek görüntü
-//! olduğu için tek çizim çağrısı). Kare seçimi eskiden bu dosyada elle yapılıyordu; artık
+//! toplama burada elle bir mesafe testi). Kare seçimi eskiden bu dosyada elle yapılıyordu; artık
 //! `SpriteAnimation` bileşeni (motor her karede ilerletiyor) ve oyunun durumundan seçilen bir
 //! aralık (`set_run`).
 
 use gizmo::core::component::IsHidden;
 use gizmo::core::system::System;
 use gizmo::prelude::*;
-use gizmo::renderer::components::{ProjectionMode, Sprite, SpriteAnimation};
+use gizmo::renderer::components::{ProjectionMode, Sprite, SpriteAnimation, Tilemap};
 use gizmo::renderer::sprite::SpriteFilter;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
 use gizmo::winit::keyboard::KeyCode;
@@ -76,7 +76,7 @@ fn main() {
             let sky = load(r, sky_gradient(), SpriteFilter::Linear);
             let far_hills = load(r, hills(128, 32, 0.55, [70, 96, 140]), SpriteFilter::Nearest);
             let near_hills = load(r, hills(128, 32, 0.8, [52, 120, 84]), SpriteFilter::Nearest);
-            let grass = load(r, grass_tile(), SpriteFilter::Nearest);
+            let ground_tiles = load(r, ground_tileset(), SpriteFilter::Nearest);
             let coin = load(r, coin_image(), SpriteFilter::Nearest);
             let hero = load(r, hero_sheet(), SpriteFilter::Nearest);
             let white = load(r, (vec![255; 4], 1, 1), SpriteFilter::Nearest);
@@ -106,21 +106,17 @@ fn main() {
                 }
             }
 
-            for i in -60..60 {
-                world_sprite(
-                    scene.world,
-                    Vec3::new(i as f32 + 0.5, GROUND_TOP, 0.0),
-                    Sprite::world(grass, Vec2::ONE).with_anchor(Vec2::new(0.5, 0.0)),
-                );
-                // Zeminin altını dolduran koyu toprak — aynı beyaz piksel, renk tonuyla.
-                world_sprite(
-                    scene.world,
-                    Vec3::new(i as f32 + 0.5, GROUND_TOP - 1.0, 0.0),
-                    Sprite::world(white, Vec2::new(1.0, 3.0))
-                        .with_anchor(Vec2::new(0.5, 0.0))
-                        .with_color(Vec4::new(0.16, 0.075, 0.03, 1.0)),
-                );
-            }
+            // Zemin: tek bir `Tilemap` — 120 × 4 tile, üst sıra çim (hücre 0), altı toprak
+            // (hücre 1). Eskiden 240 ayrı sprite'tı. Haritanın orijini sol üst köşesi; satırlar
+            // aşağı doğru iner.
+            let mut ground = Tilemap::new(ground_tiles, 2, 1, 120, 4, Vec2::ONE);
+            ground.fill(0, 0, 120, 1, Some(0));
+            ground.fill(0, 1, 120, 3, Some(1));
+            scene.world.spawn_bundle((
+                Transform::new(Vec3::new(-60.0, GROUND_TOP, 0.0)),
+                GlobalTransform::default(),
+                ground,
+            ));
 
             let coins: Vec<(u32, bool)> = (0..12)
                 .map(|i| {
@@ -334,8 +330,13 @@ fn hills(w: u32, h: u32, height: f32, rgb: [u8; 3]) -> (Vec<u8>, u32, u32) {
     })
 }
 
-fn grass_tile() -> (Vec<u8>, u32, u32) {
-    image(16, 16, |x, y| {
+/// İki hücrelik tileset, 32 × 16: solda çimli üst kenar, sağda toprak.
+fn ground_tileset() -> (Vec<u8>, u32, u32) {
+    image(32, 16, |x, y| {
+        if x >= 16 {
+            let speck = (x * 5 + y * 11) % 13 == 0;
+            return if speck { [62, 36, 18, 255] } else { [72, 42, 20, 255] };
+        }
         let blade = (x * 7 + 3) % 5 == 0;
         match y {
             0 if blade => [120, 210, 90, 255],
