@@ -372,11 +372,14 @@ fn capture_reflection_probes(world: &mut World, renderer: &mut Renderer) {
         gpu.record_prefilter(&renderer.device, &mut encoder);
         renderer.queue.submit(std::iter::once(encoder.finish()));
         if let Some(def) = renderer.deferred.as_mut() {
-            def.irradiance.set_reflection(
-                &renderer.device,
-                &renderer.queue,
-                Some((&gpu.cube_view, gpu.mip_count, probe.intensity)),
-            );
+            let source = crate::renderer::irradiance::ReflectionSource::new(
+                &gpu.cube_view,
+                gpu.mip_count,
+                probe.intensity,
+                position.to_array(),
+            )
+            .with_box(probe.influence.map(|h| h.to_array()));
+            def.irradiance.set_reflection(&renderer.device, &renderer.queue, Some(source));
         }
     }
     if let Some(mut p) = world.borrow_mut::<ReflectionProbe>().get_mut(entity) {
@@ -4285,6 +4288,96 @@ mod golden_render_tests {
             assert!(magenta(&room) >= 1200, "with a probe the mirror shows only {}/1536 magenta pixels", magenta(&room));
             let (drift, total) = changed_pixels(&sky, &back, 128);
             assert_eq!(drift, 0, "removing the probe left {drift}/{total} pixels different from the no-probe frame");
+        });
+    }
+
+    /// **Box-projected parallax.** The probe sits in the middle of the room; a mirror and the
+    /// camera stand 3 m to its side. Behind the camera the +Z wall is white on the mirror's side
+    /// (x > 0.5) and magenta in the middle. By direction alone the mirror sees what the *probe*
+    /// sees straight ahead — magenta; traced to the room's box, it sees the wall it actually faces
+    /// — white.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_probe_box_puts_the_reflection_where_the_mirror_faces() {
+        use crate::renderer::components::ReflectionProbe;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        async fn mirror_frame(influence: Option<Vec3>) -> Vec<u8> {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssr = None;
+            let mut world = World::new();
+            // Off the world origin, so a lookup that forgot to subtract the probe's position from the
+            // traced point would aim somewhere else entirely.
+            let c = Vec3::new(20.0, 0.0, 10.0);
+            probe_room(&renderer, &mut world, c);
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(
+                &renderer.device,
+                &renderer.queue,
+                &renderer.scene.texture_bind_group_layout,
+            );
+            let mut slab = |pos: Vec3, scale: Vec3, colour: Vec4, roughness: f32, metallic: f32| {
+                let e = world.spawn();
+                world.add_component(e, Transform::new(pos).with_scale(scale));
+                world.add_component(e, GlobalTransform::default());
+                world.add_component(e, AssetManager::create_cube(&renderer.device));
+                world.add_component(e, Material::new(tex.clone()).with_pbr(colour, roughness, metallic));
+                world.add_component(e, MeshRenderer::new());
+            };
+            // The +Z wall's x > 0.5 half, white, just inside it.
+            slab(c + Vec3::new(3.0, 0.0, 4.65), Vec3::new(2.5, 5.0, 0.1), Vec4::ONE, 0.9, 0.0);
+            // The mirror, 3 m off the probe.
+            slab(c + Vec3::new(3.0, 0.0, -2.0), Vec3::splat(0.8), Vec4::new(0.95, 0.95, 0.95, 1.0), 0.05, 1.0);
+            let mut probe = ReflectionProbe::new();
+            probe.influence = influence;
+            world.spawn_bundle((Transform::new(c), GlobalTransform::default(), probe));
+            world.spawn_bundle(CameraBundle {
+                position: c + Vec3::new(3.0, 0.0, 2.0),
+                yaw: -std::f32::consts::FRAC_PI_2,
+                primary: true,
+                ..Default::default()
+            });
+            render_world(&mut renderer, &mut world).await
+        }
+        // (white, magenta) over the mirror's face, minus its middle.
+        fn colours(frame: &[u8]) -> (usize, usize) {
+            let (mut white, mut magenta) = (0, 0);
+            for y in 42..86usize {
+                for x in 42..86usize {
+                    if (54..74).contains(&x) && (54..74).contains(&y) {
+                        continue;
+                    }
+                    let p = &frame[(y * 128 + x) * 4..][..3];
+                    let (r, g, b) = (p[0] as i32, p[1] as i32, p[2] as i32);
+                    if r > g + 15 && b > g + 15 {
+                        magenta += 1;
+                    } else if r.min(g).min(b) > 150 && r.max(g).max(b) - r.min(g).min(b) < 25 {
+                        white += 1;
+                    }
+                }
+            }
+            (white, magenta)
+        }
+        pollster::block_on(async {
+            let (white_dir, magenta_dir) = colours(&mirror_frame(None).await);
+            let (white_box, magenta_box) = colours(&mirror_frame(Some(Vec3::splat(4.8))).await);
+            // Measured: by direction 1008 magenta / 528 white (the face's edges reflect at angles
+            // that reach the white half even from the probe); with the box 1536 white / 0 magenta.
+            assert!(
+                magenta_dir > white_dir && magenta_dir >= 700,
+                "by direction alone the mirror should mostly see the probe's straight-ahead magenta: {magenta_dir} magenta, {white_dir} white",
+            );
+            assert!(
+                white_box >= 1400 && magenta_box <= 50,
+                "with the room's box it should see the white it faces: {white_box} white, {magenta_box} magenta",
+            );
         });
     }
 

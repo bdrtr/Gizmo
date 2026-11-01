@@ -200,7 +200,7 @@ What it does not do: holes (an annulus is a sweep here, not an extrusion), bevel
 outlines, or smooth normals — every face is flat, matching `create_cube` and the rest of the
 directory.
 
-### A5. Reflection probe — **one probe, CLOSED 2026-11-01**; parallax and blending open
+### A5. Reflection probe — **one probe with box parallax, CLOSED 2026-11-01**; blending open
 
 Measured in `pbr`: a metallic surface has no environment to reflect. SSR covers what is on
 screen (`ssr` measures it working well) and nothing else.
@@ -221,8 +221,15 @@ up vector fails it); a mirror in a coloured room reflects the wall behind the ca
 pixel. Five mutations red. `pbr` with `GIZMO_PROBE=1` shows the smooth metals reflecting their
 neighbours.
 
-Not done: one probe at a time, looked up by direction only (no box-projected parallax, no blending
-between probes); the prefilter's rough mips are not separately tested; transparent (forward) and
+**Box-projected parallax, same day:** `ReflectionProbe::influence` (half-extents of a world-aligned
+box around the probe, usually the room). The lighting pass traces each reflected ray from the
+surface to the box's far wall and looks the cube up toward that point as seen from the probe.
+Measured with a mirror 3 m beside the probe, facing a wall half white on its side: by direction
+1 008 magenta / 528 white, with the box 1 536 white / 0 magenta. The scene sits off the world
+origin, so forgetting to subtract the probe's position or centre the box on it fails the test;
+four mutations red.
+
+Not done: one probe at a time (no blending between probes); the prefilter's rough mips are not separately tested; transparent (forward) and
 clear-coat specular still read the sky; the studio's viewport does not capture (render_parity
 lists `ReflectionProbe` as game-only, with the reason).
 

@@ -58,6 +58,35 @@ struct GridMeta {
     resolution: [u32; 4],
 }
 
+/// A captured reflection probe, as [`IrradianceState::set_reflection`] takes it.
+#[non_exhaustive]
+pub struct ReflectionSource<'a> {
+    /// The prefiltered cube.
+    pub view: &'a wgpu::TextureView,
+    /// Its mip count; mip `roughness × (count − 1)` is read.
+    pub mip_count: u32,
+    /// Multiplies what it reflects.
+    pub intensity: f32,
+    /// Where it was captured, in world space.
+    pub position: [f32; 3],
+    /// Half-extents of the world-aligned box around `position` for box-projected parallax; `None`
+    /// looks reflections up by direction alone.
+    pub box_half_extents: Option<[f32; 3]>,
+}
+
+impl<'a> ReflectionSource<'a> {
+    /// A probe's cube, at `position`, with no parallax box.
+    pub fn new(view: &'a wgpu::TextureView, mip_count: u32, intensity: f32, position: [f32; 3]) -> Self {
+        Self { view, mip_count, intensity, position, box_half_extents: None }
+    }
+
+    /// With box-projected parallax over `half_extents` around the probe.
+    pub fn with_box(mut self, half_extents: Option<[f32; 3]>) -> Self {
+        self.box_half_extents = half_extents;
+        self
+    }
+}
+
 /// The uploaded probe grid and the bind group the lighting pass reads it through.
 pub struct IrradianceState {
     probes_buffer: wgpu::Buffer,
@@ -140,7 +169,7 @@ impl IrradianceState {
         });
         let reflection_params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("reflection_params"),
-            contents: bytemuck::cast_slice(&[0.0f32; 4]),
+            contents: bytemuck::cast_slice(&[0.0f32; 16]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
         let reflection_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -240,20 +269,26 @@ impl IrradianceState {
         );
     }
 
-    /// Points the specular term at a reflection probe's cube (`view`, with `mip_count` mips,
-    /// scaled by `intensity`), or back at the procedural sky with `None`.
-    pub fn set_reflection(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        probe: Option<(&wgpu::TextureView, u32, f32)>,
-    ) {
-        let params = match probe {
-            Some((_, mips, intensity)) => [1.0, mips.saturating_sub(1) as f32, intensity, 0.0],
-            None => [0.0; 4],
-        };
-        queue.write_buffer(&self.reflection_params, 0, bytemuck::cast_slice(&params));
-        self.reflection_view = probe.map(|(view, _, _)| view.clone());
+    /// Points the specular term at a reflection probe's cube, or back at the procedural sky with
+    /// `None`.
+    pub fn set_reflection(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, probe: Option<ReflectionSource<'_>>) {
+        // [enabled, max_mip, intensity, 0] · [origin, box on] · [box min, 0] · [box max, 0]
+        let mut data = [0.0f32; 16];
+        if let Some(p) = &probe {
+            data[0] = 1.0;
+            data[1] = p.mip_count.saturating_sub(1) as f32;
+            data[2] = p.intensity;
+            data[4..7].copy_from_slice(&p.position);
+            if let Some(half) = p.box_half_extents {
+                data[7] = 1.0;
+                for axis in 0..3 {
+                    data[8 + axis] = p.position[axis] - half[axis].abs();
+                    data[12 + axis] = p.position[axis] + half[axis].abs();
+                }
+            }
+        }
+        queue.write_buffer(&self.reflection_params, 0, bytemuck::cast_slice(&data));
+        self.reflection_view = probe.map(|p| p.view.clone());
         self.rebind(device);
     }
 

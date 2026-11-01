@@ -32,11 +32,38 @@ var<storage, read> cluster_light_indices: array<u32>;
 @group(2) @binding(4) var t_world_tangent:    texture_2d<f32>;
 
 // Reflection probe (group 3, after the irradiance volume's two bindings): the scene captured into
-// a prefiltered cube. `reflection_params` = [enabled, max_mip, intensity, 0]; while `enabled` is 0
-// the specular term reads the procedural sky exactly as before probes existed.
+// a prefiltered cube. `params` = [enabled, max_mip, intensity, 0]; while `enabled` is 0 the
+// specular term reads the procedural sky exactly as before probes existed. `origin.w` turns on
+// box-projected parallax over [box_min, box_max].
+struct ReflectionProbe {
+    params: vec4<f32>,
+    origin: vec4<f32>,
+    box_min: vec4<f32>,
+    box_max: vec4<f32>,
+};
 @group(3) @binding(2) var t_reflection: texture_cube<f32>;
 @group(3) @binding(3) var s_reflection: sampler;
-@group(3) @binding(4) var<uniform> reflection_params: vec4<f32>;
+@group(3) @binding(4) var<uniform> reflection: ReflectionProbe;
+
+// Box-projected parallax: trace the reflected ray from the surface to the probe's box and look the
+// cube up toward where it lands, as seen from the probe. Direction alone is right only at the
+// probe; this is right anywhere inside a box-shaped room. Outside the box, direction alone.
+fn reflection_lookup(r: vec3<f32>, world_pos: vec3<f32>) -> vec3<f32> {
+    if (reflection.origin.w < 0.5) {
+        return r;
+    }
+    let lo = reflection.box_min.xyz;
+    let hi = reflection.box_max.xyz;
+    if (any(world_pos < lo) || any(world_pos > hi)) {
+        return r;
+    }
+    let safe_r = select(r, vec3<f32>(1e-6), abs(r) < vec3<f32>(1e-6));
+    let to_hi = (hi - world_pos) / safe_r;
+    let to_lo = (lo - world_pos) / safe_r;
+    let far = max(to_hi, to_lo);
+    let dist = min(min(far.x, far.y), far.z);
+    return world_pos + r * dist - reflection.origin.xyz;
+}
 
 // Fullscreen triangle — no vertex buffer needed.
 @vertex
@@ -386,10 +413,11 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     }
     let R_rough = normalize(mix(R, N, roughness)); 
     var specular_env = get_procedural_environment(R_rough, roughness);
-    if (reflection_params.x > 0.5) {
+    if (reflection.params.x > 0.5) {
         // Prefiltered by roughness already, so the mirror direction and a mip, not the bent ray.
-        specular_env = textureSampleLevel(t_reflection, s_reflection, R, roughness * reflection_params.y).rgb
-            * reflection_params.z;
+        let lookup = reflection_lookup(R, world_pos);
+        specular_env = textureSampleLevel(t_reflection, s_reflection, lookup, roughness * reflection.params.y).rgb
+            * reflection.params.z;
     }
     
     // 3. Environment BRDF (Lazarov Analytical Split-Sum LUT approximation)

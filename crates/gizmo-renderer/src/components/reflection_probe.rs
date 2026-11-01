@@ -7,8 +7,11 @@
 /// [`request_capture`](Self::request_capture) — six full renders is a cost for a level load, not
 /// for every frame. Move the probe or change the room, then ask for a recapture.
 ///
-/// One probe at a time (the first found), looked up by direction only: reflections are right near
-/// the probe and drift with distance from it. Particles and fluid are not captured.
+/// One probe at a time (the first found). Without an [`influence`](Self::influence) box it is
+/// looked up by direction only: right near the probe, drifting with distance from it. With one —
+/// the room's inner bounds — each reflected ray is traced to the box's walls first (box-projected
+/// parallax), so a mirror on the far side of the room reflects the part of the wall it faces.
+/// Particles and fluid are not captured.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 #[non_exhaustive]
@@ -21,6 +24,10 @@ pub struct ReflectionProbe {
     pub near: f32,
     /// Far clip of the capture.
     pub far: f32,
+    /// Half-extents of the box, centred on the probe and aligned to the world axes, that the
+    /// captured scene is projected onto — usually the room the probe sits in. `None` (the default)
+    /// looks reflections up by direction alone. A surface outside the box also falls back to that.
+    pub influence: Option<gizmo_math::Vec3>,
     /// Whether the current cube is up to date. Cleared by [`request_capture`](Self::request_capture);
     /// not saved, so a loaded scene captures on its first frame.
     #[serde(skip)]
@@ -29,7 +36,7 @@ pub struct ReflectionProbe {
 
 impl Default for ReflectionProbe {
     fn default() -> Self {
-        Self { resolution: 128, intensity: 1.0, near: 0.05, far: 500.0, captured: false }
+        Self { resolution: 128, intensity: 1.0, near: 0.05, far: 500.0, influence: None, captured: false }
     }
 }
 
@@ -37,6 +44,12 @@ impl ReflectionProbe {
     /// A probe with the defaults.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// This probe with box-projected parallax over a box of `half_extents` around it.
+    pub fn with_influence(mut self, half_extents: gizmo_math::Vec3) -> Self {
+        self.influence = Some(half_extents.abs());
+        self
     }
 
     /// Recaptures on the next frame.

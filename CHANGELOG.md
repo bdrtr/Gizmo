@@ -50,6 +50,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Box-projected parallax for reflection probes: `ReflectionProbe::influence` /
+  `with_influence(half_extents)`.** Reflected rays are traced to the probe's box (the room) before
+  the cube lookup, so a mirror away from the probe reflects the part of the room it faces. Measured:
+  a mirror 3 m off the probe goes from 1 008 magenta / 528 white (direction only) to 1 536 white.
+  `IrradianceState::set_reflection` now takes a `ReflectionSource`.
+
 - **Reflection probes: `ReflectionProbe` component, `gizmo_renderer::reflection`.** The scene
   captured from the probe's position into a prefiltered HDR cube (six 90° renders, GGX mips by
   roughness), read by the deferred lighting pass's specular term in place of the procedural sky —
