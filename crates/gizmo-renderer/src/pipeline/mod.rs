@@ -639,6 +639,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         label: Some("instance_bind_group"),
     });
 
+    let indirect = crate::irradiance::IrradianceState::layout(device);
     let layout_refs = LayoutRefs {
         global: &layouts.global,
         shadow: &layouts.shadow,
@@ -646,6 +647,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         texture: &layouts.texture,
         skeleton: &layouts.skeleton,
         instance: &layouts.instance,
+        indirect: &indirect,
     };
     let core_pipelines = build_core_pipelines(device, &layout_refs);
     let shadow_pipeline = build_shadow_pipeline(device, &layout_refs);
@@ -713,6 +715,7 @@ pub fn rebuild_pipelines(renderer: &mut crate::Renderer) {
     );
 
     // Geçici LayoutRefs tutucusu, render pipeline'ı için mevcut layoutları referans alır
+    let indirect = crate::irradiance::IrradianceState::layout(device);
     let layouts = LayoutRefs {
         global: &renderer.scene.global_bind_group_layout,
         shadow: &renderer.scene.shadow_bind_group_layout,
@@ -720,6 +723,7 @@ pub fn rebuild_pipelines(renderer: &mut crate::Renderer) {
         texture: &renderer.scene.texture_bind_group_layout,
         skeleton: &renderer.scene.skeleton_bind_group_layout,
         instance: &renderer.scene.instance_bind_group_layout,
+        indirect: &indirect,
     };
 
     let core_pipelines = build_core_pipelines(device, &layouts);

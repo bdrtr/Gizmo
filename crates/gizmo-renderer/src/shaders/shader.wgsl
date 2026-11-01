@@ -6,6 +6,9 @@
 // bindings + PCF block) and `@group(#{SKELETON_GROUP})` / `@group(#{INSTANCE_GROUP})`
 // (3/4 native, 2/3 web) — never by grepping naga's reformatted output.
 #import gizmo::common::{SceneUniforms, compute_direct_lighting, gizmo_cluster_index}
+#ifdef PROBES
+#import gizmo::reflection_probes::{probe_environment}
+#endif
 
 // Inverse of a 3x3 matrix for correct normal transformation under non-uniform scale
 fn inverse_transpose_3x3(m: mat3x3<f32>) -> mat3x3<f32> {
@@ -276,7 +279,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let R = reflect(-view_dir, N);
     let reflect_mix = clamp(R.y * 0.5 + 0.5, 0.0, 1.0);
     let fake_env_color = mix(ground_ambient, vec3<f32>(1.0, 0.6, 0.4), reflect_mix);
-    let fake_ibl_specular = f0 * fake_env_color * ((1.0 - min_roughness) * (1.0 - min_roughness) * 2.0);
+    // With reflection probes in the scene the environment is theirs (native: group 5, the
+    // irradiance volume's); with none, `probe_environment` hands back the hemispheric stand-in it
+    // was given, unchanged.
+    var env_color = fake_env_color;
+#ifdef PROBES
+    env_color = probe_environment(R, in.world_position, min_roughness, fake_env_color);
+#endif
+    let fake_ibl_specular = f0 * env_color * ((1.0 - min_roughness) * (1.0 - min_roughness) * 2.0);
 
     var total_lighting = vec3<f32>(0.0);
 

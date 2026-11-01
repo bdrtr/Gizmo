@@ -247,7 +247,15 @@ every-probe-reads-slot-0 gives it room A's magenta). And an edit after the captu
 was captured. Behaviour change: a single boxed probe now leaves surfaces outside its box to the sky
 instead of reflecting itself by direction there.
 
-Not done: transparent (forward) specular still reads the sky; the studio's viewport does not capture (render_parity lists `ReflectionProbe` as
+**Transparent surfaces, same day.** The forward pass — transparent and double-sided lit
+materials — read neither the probes nor even the procedural sky: its specular environment was a
+hemispheric stand-in. It now reads the probes through the same `probe_environment`, now a shared
+shader module (`gizmo::reflection_probes`, at `#{REFLECTION_GROUP}`), with the irradiance volume's
+group bound at 5 — the native device's sixth, which nothing used. With no probe it still returns the
+stand-in, unchanged. Measured: a half-transparent metal cube's magenta excess 0.38 → 4.80 with a
+probe, 0.39 with the forward shader ignoring it. Native only: the web's four groups are all spent.
+
+Not done: the studio's viewport does not capture (render_parity lists `ReflectionProbe` as
 game-only, with the reason).
 
 ### A5b. Split screen / multi-viewport — **CLOSED 2026-11-01**

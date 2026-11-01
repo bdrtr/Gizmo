@@ -18,6 +18,11 @@ const PBR_EXT_WGSL: &str = include_str!("../shaders/pbr_ext.wgsl");
 /// and it declares bind group 3, so registering it here is inert for every other shader.
 const IRRADIANCE_WGSL: &str = include_str!("../shaders/irradiance.wgsl");
 
+/// Reflection-probe sampling (`#define_import_path gizmo::reflection_probes`): the cube array and
+/// `probe_environment`, at bind group `#{REFLECTION_GROUP}`. Imported by the deferred lighting
+/// pass (group 3) and, on native, by the forward pass (group 5).
+const REFLECTION_PROBES_WGSL: &str = include_str!("../shaders/reflection_probes.wgsl");
+
 /// Shader-defs for the NATIVE render schema: 5 bind groups with the CSM shadow group in the
 /// middle. `SHADOWS` keeps the `#ifdef SHADOWS` shadow bindings + PCF block; the group
 /// indices place skeleton at 3 and instance at 4 (see build_core_pipelines' native layout).
@@ -26,6 +31,10 @@ pub(crate) fn native_render_defs() -> HashMap<String, ShaderDefValue> {
         ("SHADOWS".to_string(), ShaderDefValue::Bool(true)),
         ("SKELETON_GROUP".to_string(), ShaderDefValue::UInt(3)),
         ("INSTANCE_GROUP".to_string(), ShaderDefValue::UInt(4)),
+        // The forward pass's sixth group (the native device asks for six): the irradiance
+        // volume's group, for its reflection probes. The web has no group left, so no `PROBES`.
+        ("PROBES".to_string(), ShaderDefValue::Bool(true)),
+        ("REFLECTION_GROUP".to_string(), ShaderDefValue::UInt(5)),
     ])
 }
 
@@ -89,6 +98,14 @@ pub(crate) fn compose_module(
             ..Default::default()
         })
         .map_err(|e| format!("composing irradiance.wgsl failed: {e}"))?;
+    composer
+        .add_composable_module(ComposableModuleDescriptor {
+            source: REFLECTION_PROBES_WGSL,
+            file_path: "gizmo/reflection_probes.wgsl",
+            language: ShaderLanguage::Wgsl,
+            ..Default::default()
+        })
+        .map_err(|e| format!("composing reflection_probes.wgsl failed: {e}"))?;
 
     let module = composer
         .make_naga_module(NagaModuleDescriptor {
@@ -152,8 +169,24 @@ pub fn load_shader_composed(
     fallback_src: &str,
     label: &str,
 ) -> wgpu::ShaderModule {
+    load_shader_composed_with(device, file_path, fallback_src, label, &[])
+}
+
+/// [`load_shader_composed`] with some native defs overridden — the deferred lighting pass sets
+/// `REFLECTION_GROUP` to 3, where its pipeline has the irradiance group.
+pub fn load_shader_composed_with(
+    device: &wgpu::Device,
+    file_path: &str,
+    fallback_src: &str,
+    label: &str,
+    overrides: &[(&str, ShaderDefValue)],
+) -> wgpu::ShaderModule {
     let source = std::fs::read_to_string(file_path).unwrap_or_else(|_| fallback_src.to_string());
-    let composed = compose_wgsl(&source, label, native_render_defs());
+    let mut defs = native_render_defs();
+    for (name, value) in overrides {
+        defs.insert((*name).to_string(), *value);
+    }
+    let composed = compose_wgsl(&source, label, defs);
     device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some(label),
         source: wgpu::ShaderSource::Wgsl(composed.into()),

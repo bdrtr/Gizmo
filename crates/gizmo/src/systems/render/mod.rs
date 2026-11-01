@@ -4674,6 +4674,77 @@ mod golden_render_tests {
         });
     }
 
+    /// **Transparent surfaces reflect the probes too.** A half-transparent metal cube — drawn by the
+    /// forward pass, not the deferred one — in the probe room, facing the magenta wall behind the
+    /// camera. With a probe its face gains magenta; without one, the forward pass's hemispheric
+    /// stand-in gives none of it.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_transparent_surface_reflects_the_probe_room() {
+        use crate::renderer::components::ReflectionProbe;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        async fn glass(with_probe: bool) -> f64 {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssr = None;
+            let mut world = World::new();
+            probe_room(&renderer, &mut world, Vec3::ZERO);
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(
+                &renderer.device,
+                &renderer.queue,
+                &renderer.scene.texture_bind_group_layout,
+            );
+            let cube = world.spawn();
+            world.add_component(cube, Transform::new(Vec3::new(0.0, 0.0, -2.0)).with_scale(Vec3::splat(0.8)));
+            world.add_component(cube, GlobalTransform::default());
+            world.add_component(cube, AssetManager::create_cube(&renderer.device));
+            world.add_component(cube, Material::new(tex).with_pbr(Vec4::new(0.95, 0.95, 0.95, 0.5), 0.05, 1.0));
+            world.add_component(cube, MeshRenderer::new());
+            if with_probe {
+                world.spawn_bundle((Transform::new(Vec3::ZERO), GlobalTransform::default(), ReflectionProbe::new()));
+            }
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.0, 0.0, 2.0),
+                yaw: -std::f32::consts::FRAC_PI_2,
+                primary: true,
+                ..Default::default()
+            });
+            let frame = render_world(&mut renderer, &mut world).await;
+            let (mut sum, mut n) = (0.0f64, 0.0f64);
+            for y in 42..86usize {
+                for x in 42..86usize {
+                    if (54..74).contains(&x) && (54..74).contains(&y) {
+                        continue;
+                    }
+                    let p = &frame[(y * 128 + x) * 4..][..3];
+                    sum += (p[0] as f64 + p[2] as f64) / 2.0 - p[1] as f64;
+                    n += 1.0;
+                }
+            }
+            sum / n
+        }
+        pollster::block_on(async {
+            let (bare, probed) = (glass(false).await, glass(true).await);
+            // Measured: 0.38 without, 4.80 with, and 0.39 with the forward shader ignoring the
+            // probes. Small — the forward pass's own IBL term is a light one and the cube is half
+            // see-through — but twelve times the bare figure.
+            assert!(
+                probed > bare + 2.0,
+                "a transparent metal face gained {:.2} of magenta from the probe (without {bare:.2}, with \
+                 {probed:.2}) — the forward pass is not reading it",
+                probed - bare
+            );
+        });
+    }
+
     /// What a split-screen frame does once, it must do once: the HUD is drawn a single time over
     /// the whole target (drawn per view, a half-transparent sprite is laid over itself and comes
     /// out brighter), and the frame's animation advances by one `dt` however many cameras draw.

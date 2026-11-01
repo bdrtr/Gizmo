@@ -131,13 +131,11 @@ pub struct IrradianceState {
 }
 
 impl IrradianceState {
-    /// Builds an empty state: one zeroed probe, `probe_count = 0`.
-    ///
-    /// The buffer is never zero-length — wgpu rejects a zero-sized binding, and a renderer with no
-    /// GI still has to bind something.
-    #[must_use]
-    pub fn new(device: &wgpu::Device) -> Self {
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+    /// The group's layout: the probe grid (0–1) and the reflection probes (2–4). Built here so a
+    /// pipeline made before any `IrradianceState` exists — the forward pass, which binds this
+    /// group at 5 on native — has an identical one; wgpu treats identical layouts as compatible.
+    pub fn layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("irradiance_bgl"),
             entries: &[
                 wgpu::BindGroupLayoutEntry {
@@ -187,7 +185,16 @@ impl IrradianceState {
                     count: None,
                 },
             ],
-        });
+        })
+    }
+
+    /// Builds an empty state: one zeroed probe, `probe_count = 0`.
+    ///
+    /// The buffer is never zero-length — wgpu rejects a zero-sized binding, and a renderer with no
+    /// GI still has to bind something.
+    #[must_use]
+    pub fn new(device: &wgpu::Device) -> Self {
+        let bind_group_layout = Self::layout(device);
         let reflection_params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("reflection_params"),
             contents: bytemuck::cast_slice(&[0.0f32; REFLECTION_FLOATS]),

@@ -1,5 +1,5 @@
 use crate::gpu_types::Vertex;
-use crate::pipeline::{load_shader, load_shader_composed, SceneState};
+use crate::pipeline::{load_shader, SceneState};
 
 // Single source of truth for the deferred G-buffer render-target formats.
 //
@@ -527,11 +527,12 @@ impl DeferredState {
         gbuffer_layout: &wgpu::BindGroupLayout,
         irradiance_layout: &wgpu::BindGroupLayout,
     ) -> wgpu::RenderPipeline {
-        let shader = load_shader_composed(
+        let shader = crate::pipeline::shaders::load_shader_composed_with(
             device,
             "demo/assets/shaders/deferred_lighting.wgsl",
             include_str!("shaders/deferred_lighting.wgsl"),
             "Deferred Lighting Shader",
+            &[("REFLECTION_GROUP", naga_oil::compose::ShaderDefValue::UInt(3))],
         );
 
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {

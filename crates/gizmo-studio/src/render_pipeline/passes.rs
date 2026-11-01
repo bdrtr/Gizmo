@@ -286,6 +286,9 @@ pub(super) fn record_studio_main_pass(
                 render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
                 render_pass.set_bind_group(3, &*batch.skeleton_bg, &[]);
                 render_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
+                if let Some(def) = renderer.deferred.as_ref() {
+                    render_pass.set_bind_group(5, &def.irradiance.bind_group, &[]);
+                }
                 batch.record_draw(&mut render_pass, batch.start_instance..safe_end);
             }
 
@@ -326,6 +329,9 @@ pub(super) fn record_studio_main_pass(
                 render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
                 render_pass.set_bind_group(3, &*batch.skeleton_bg, &[]);
                 render_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
+                if let Some(def) = renderer.deferred.as_ref() {
+                    render_pass.set_bind_group(5, &def.irradiance.bind_group, &[]);
+                }
                 batch.record_draw(&mut render_pass, batch.start_instance..safe_end);
             }
 
@@ -352,6 +358,9 @@ pub(super) fn record_studio_main_pass(
                 render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
                 render_pass.set_bind_group(3, &*batch.skeleton_bg, &[]);
                 render_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
+                if let Some(def) = renderer.deferred.as_ref() {
+                    render_pass.set_bind_group(5, &def.irradiance.bind_group, &[]);
+                }
                 batch.record_draw(&mut render_pass, batch.start_instance..safe_end);
             }
 
@@ -395,6 +404,9 @@ pub(super) fn record_studio_main_pass(
                     render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
                     render_pass.set_bind_group(3, &*batch.skeleton_bg, &[]);
                     render_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
+                    if let Some(def) = renderer.deferred.as_ref() {
+                        render_pass.set_bind_group(5, &def.irradiance.bind_group, &[]);
+                    }
                     batch.record_draw(&mut render_pass, batch.start_instance..safe_end);
                 }
             }
@@ -416,6 +428,9 @@ pub(super) fn record_studio_main_pass(
                 render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]); // sky.wgsl içinde boş da olsa bağlı kalması gerek
                 render_pass.set_bind_group(3, &*batch.skeleton_bg, &[]);
                 render_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
+                if let Some(def) = renderer.deferred.as_ref() {
+                    render_pass.set_bind_group(5, &def.irradiance.bind_group, &[]);
+                }
                 batch.record_draw(&mut render_pass, batch.start_instance..safe_end);
             }
 
@@ -436,6 +451,9 @@ pub(super) fn record_studio_main_pass(
                 render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
                 render_pass.set_bind_group(3, &*batch.skeleton_bg, &[]);
                 render_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
+                if let Some(def) = renderer.deferred.as_ref() {
+                    render_pass.set_bind_group(5, &def.irradiance.bind_group, &[]);
+                }
                 batch.record_draw(&mut render_pass, batch.start_instance..safe_end);
             }
 
@@ -471,6 +489,9 @@ pub(super) fn record_studio_main_pass(
                     render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
                     render_pass.set_bind_group(3, &*batch.skeleton_bg, &[]);
                     render_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
+                    if let Some(def) = renderer.deferred.as_ref() {
+                        render_pass.set_bind_group(5, &def.irradiance.bind_group, &[]);
+                    }
                     batch.record_draw(&mut render_pass, batch.start_instance..safe_end);
                 }
             }

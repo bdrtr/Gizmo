@@ -50,6 +50,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Transparent surfaces reflect reflection probes (native).** The forward pass's specular
+  environment was a hemispheric stand-in; it now reads the probes through `probe_environment`,
+  moved into a shared shader module (`gizmo::reflection_probes`). The lit forward pipelines gained
+  group 5 (the irradiance volume's group), bound once per forward pass in both the game path and the
+  studio. Without probes the stand-in is returned unchanged.
+
 - **Several reflection probes, blended: `ReflectionProbe::blend_distance`.** Up to four probes in
   one cube array. Boxed probes apply inside their boxes, fading in from the walls and normalised
   where they overlap; the first unboxed probe (else the sky) fills the rest. Probe parameters edited

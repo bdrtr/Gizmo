@@ -196,4 +196,8 @@ pub(super) struct LayoutRefs<'a> {
     pub(super) texture: &'a wgpu::BindGroupLayout,
     pub(super) skeleton: &'a wgpu::BindGroupLayout,
     pub(super) instance: &'a wgpu::BindGroupLayout,
+    /// The irradiance volume's group (with the reflection probes), group 5 of the native forward
+    /// pass.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(super) indirect: &'a wgpu::BindGroupLayout,
 }

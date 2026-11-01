@@ -71,6 +71,12 @@ pub fn record_forward_and_fluid(
         #[cfg(not(target_arch = "wasm32"))]
         render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
         render_pass.set_bind_group(BG_INSTANCE, &renderer.scene.instance_bind_group, &[]);
+        // Group 5 of the lit pipelines: the irradiance volume's group, for reflection probes.
+        // Bound once; it stays bound across the pipeline switches below.
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(def) = renderer.deferred.as_ref() {
+            render_pass.set_bind_group(5, &def.irradiance.bind_group, &[]);
+        }
 
         let show_wireframes = world.get_resource::<WireframeConfig>().map(|c| c.global).unwrap_or(false);
 

@@ -78,6 +78,23 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
         ],
         immediate_size: 0,
     });
+    // The lit forward shader's own layout: the same five plus the irradiance volume's group at 5,
+    // for its reflection probes (`shader.wgsl`'s `#ifdef PROBES`). Only pipelines built from that
+    // shader use it; unlit, grid and backdrop keep five. A forward pass binds group 5 once — a
+    // bound group stays bound across pipeline switches.
+    #[cfg(not(target_arch = "wasm32"))]
+    let lit_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Lit Forward Pipeline Layout"),
+        bind_group_layouts: &[
+            Some(layouts.global),
+            Some(layouts.texture),
+            Some(layouts.shadow),
+            Some(layouts.skeleton),
+            Some(layouts.instance),
+            Some(layouts.indirect), // 5
+        ],
+        immediate_size: 0,
+    });
     #[cfg(target_arch = "wasm32")]
     let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Render Pipeline Layout"),
@@ -161,7 +178,12 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
     #[cfg(target_arch = "wasm32")]
     let grid_shader = load_shader_composed_web(device, include_str!("../shaders/grid.wgsl"), "Grid Shader");
 
-    let create_main = |sm: &wgpu::ShaderModule,
+    #[cfg(not(target_arch = "wasm32"))]
+    let lit_layout = &lit_pipeline_layout;
+    #[cfg(target_arch = "wasm32")]
+    let lit_layout = &render_pipeline_layout;
+    let create_main = |layout: &wgpu::PipelineLayout,
+                       sm: &wgpu::ShaderModule,
                        label: &str,
                        depth_write: bool,
                        cull: Option<wgpu::Face>,
@@ -169,7 +191,7 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
                        polygon_mode: wgpu::PolygonMode| {
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(label),
-            layout: Some(&render_pipeline_layout),
+            layout: Some(layout),
             vertex: wgpu::VertexState {
                 module: sm,
                 entry_point: Some("vs_main"),
@@ -218,6 +240,7 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
 
     CorePipelines {
         render: create_main(
+            lit_layout,
             &shader,
             "Render Pipeline",
             true,
@@ -226,6 +249,7 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
             wgpu::PolygonMode::Fill,
         ),
         render_double_sided: create_main(
+            lit_layout,
             &shader,
             "Render TwoSided Pipeline",
             true,
@@ -234,6 +258,7 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
             wgpu::PolygonMode::Fill,
         ),
         wireframe: create_main(
+            lit_layout,
             &shader,
             "Wireframe Pipeline",
             true,
@@ -247,6 +272,7 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
             },
         ),
         transparent: create_main(
+            lit_layout,
             &shader,
             "Transparent Pipeline",
             false,
@@ -255,6 +281,7 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
             wgpu::PolygonMode::Fill,
         ),
         unlit: create_main(
+            &render_pipeline_layout,
             &unlit_shader,
             "Unlit Pipeline",
             true,
@@ -266,6 +293,7 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
         // than a decal or a billboard, so both halves of that are free wins: no blend, and no
         // second pass over every triangle facing away.
         baked_lit: create_main(
+            &render_pipeline_layout,
             &baked_lit_shader,
             "Baked-Lit Pipeline",
             opaque_state.depth_write,
@@ -281,6 +309,7 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
         // the road as opaque geometry. Same shader, transparent state, chosen by
         // `Material::is_transparent` (see `baked_lit_state`).
         baked_lit_transparent: create_main(
+            &render_pipeline_layout,
             &baked_lit_shader,
             "Baked-Lit Transparent Pipeline",
             blended_state.depth_write,
@@ -289,6 +318,7 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
             wgpu::PolygonMode::Fill,
         ),
         sky: create_main(
+            &render_pipeline_layout,
             &sky_shader,
             "Sky Pipeline",
             false,
@@ -302,6 +332,7 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
         // blending (so a cut-out skyline edge survives). The remaining property — drawn first
         // — belongs to the batcher, which is the only place that knows the frame's draw order.
         backdrop: create_main(
+            &render_pipeline_layout,
             &backdrop_shader,
             "Backdrop Pipeline",
             backdrop.depth_write,
@@ -314,6 +345,7 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
         // batches at different depths should resolve against each other rather than against the
         // order the batcher happened to drain them in.
         water: create_main(
+            &render_pipeline_layout,
             &water_shader,
             "Water Pipeline",
             true,
@@ -325,6 +357,7 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
         // pipeline (which is built `cull_mode: None` already): the water pipeline culls back
         // faces, so a swimmer looking up at the surface sees nothing without this variant.
         water_double_sided: create_main(
+            &render_pipeline_layout,
             &water_shader,
             "Water Double-Sided Pipeline",
             true,
@@ -333,6 +366,7 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
             wgpu::PolygonMode::Fill,
         ),
         grid: create_main(
+            &render_pipeline_layout,
             &grid_shader,
             "Grid Pipeline",
             false,
