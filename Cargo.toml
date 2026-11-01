@@ -93,3 +93,16 @@ debug = "line-tables-only"
 # küçük ve linkleme daha hızlı (Linux). (Not: binary'i başka yere taşırsan .o'lar gitmediği için
 # sembolleri kaybeder — yerinde çalıştırmada sorun yok.)
 split-debuginfo = "unpacked"
+
+# naga ve wgpu'nun KENDİ kodu dev'de de optimize derlenir (yalnız bu üç bağımlılık; motorun
+# crate'leri ve debug ayarları değişmez). Sebep test süresi: her GPU testi kendi `Renderer`'ını
+# kurar, yani bütün WGSL'i naga'ya parse/validate ettirip wgpu-core'dan geçirir, ve bunlar
+# optimizasyonsuz çalışıyordu. Ölçüldü 2026-11-01: `gizmo`'nun 44 golden render testi 84.5 s →
+# 67.0 s. Bedeli bir kerelik: üç crate'in ilk derlemesi biraz uzar, sonra önbellekte kalır.
+# Çalışan bir debug demosunun shader derlemesi de aynı oranda hızlanır.
+[profile.dev.package.naga]
+opt-level = 2
+[profile.dev.package.wgpu-core]
+opt-level = 2
+[profile.dev.package.wgpu-hal]
+opt-level = 2

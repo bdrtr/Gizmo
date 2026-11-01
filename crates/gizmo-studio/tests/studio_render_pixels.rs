@@ -65,7 +65,38 @@ async fn shared_device_renderer(width: u32, height: u32) -> Renderer {
 
 fn gpu_lock() -> std::sync::MutexGuard<'static, ()> {
     // A test that panicked while holding it poisoned it; that says nothing about the GPU.
-    GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    let guard = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    hold_machine_gpu_lock();
+    guard
+}
+
+/// Takes the **machine-wide** GPU test lock on first use and holds it until this process exits.
+///
+/// The `Mutex` in `gpu_lock` serialises GPU tests *within* one test binary. It cannot see another
+/// process, and `cargo test` never needed it to — it runs test binaries one after another. A
+/// runner that runs binaries side by side (`scripts/test-parallel.py`, or any other) would put two
+/// binaries' devices on the driver at once, which is the concurrency the measurements in
+/// `gizmo-renderer`'s `test_gpu` show this driver does not survive.
+///
+/// So the first GPU test of a binary `flock`s one shared file and the lock is never released:
+/// statics are not dropped, and the OS frees the lock when the process ends. That keeps today's
+/// guarantee exactly — one test binary's devices alive at a time, machine-wide — while every
+/// binary that never touches the GPU, and every CPU test inside one that does, runs freely.
+/// **The same file name is used in `gizmo-renderer/src/test_gpu.rs`, `gizmo/src/test_gpu.rs` and
+/// `gizmo-studio/tests/studio_render_pixels.rs`; one name, or it serialises nothing.** Best
+/// effort: if the file cannot be opened or locked, the test runs unlocked, as before.
+fn hold_machine_gpu_lock() {
+    static HELD: std::sync::OnceLock<Option<std::fs::File>> = std::sync::OnceLock::new();
+    HELD.get_or_init(|| {
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(std::env::temp_dir().join("gizmo-gpu-tests.lock"))
+            .ok()?;
+        file.lock().ok()?;
+        Some(file)
+    });
 }
 
 const W: u32 = 128;

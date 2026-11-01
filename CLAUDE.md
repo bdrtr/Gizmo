@@ -23,6 +23,19 @@ cargo test --workspace --no-fail-fast   # ALWAYS --no-fail-fast — see below
 # you have decided to ignore is a gate that covers less every time you ignore it. The whole suite
 # is 159/159 green — if you see 130, you are looking at a failure, not at a shorter suite.
 
+# The same suite, faster: builds what `cargo test` builds, then runs the test binaries 4 at a time
+# instead of one after another (cargo runs them sequentially). Measured 2026-11-01: the run phase
+# 307 s → ~155 s, same 2676 passed / 99 ignored. Every binary runs (no fail-fast), exit code is
+# non-zero on any failure, the slowest binaries are listed, and the longest start first (timings
+# kept in `target/test-parallel-times.json`). GPU test binaries still run ONE AT A TIME: each takes
+# a machine-wide flock on its first GPU test (`hold_machine_gpu_lock`, in every `gpu_lock`) — the
+# driver does not survive several live devices, see `gizmo-renderer/src/test_gpu.rs`. That GPU
+# chain (`gizmo` lib + `studio_render_pixels` + `gizmo-renderer` lib) is now the floor.
+# CI still runs plain `cargo test`; this is the local gate.
+scripts/test-parallel.py                         # = cargo test --workspace --no-fail-fast
+scripts/test-parallel.py -p gizmo-net --features client-server,rollback
+scripts/test-parallel.py -- --ignored            # args after `--` go to every test binary
+
 # Run a single test by name substring
 cargo test --workspace soak_resting_stacks_stay_bounded
 cargo test -p gizmo-physics-rigid <test_name>

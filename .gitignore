@@ -46,6 +46,8 @@ scratch.rs
 # virtual controller on /dev/uinput; without the script the test can only skip, and the method
 # note in docs/ENGINE.md §8 would point at a file nobody has.
 !crates/gizmo-app/tests/*.py
+# …and the repository's own tooling (`scripts/test-parallel.py`, the parallel local test gate).
+!scripts/*.py
 
 # Runtime / editor state
 editor_prefs.toml
