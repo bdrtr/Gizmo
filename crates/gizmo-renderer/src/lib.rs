@@ -247,5 +247,5 @@ pub use renderer::{RenderContext, Renderer};
 pub use ssao::{SsaoParams, SsaoState};
 pub use ssgi::SsgiState;
 pub use taa::TaaState;
-pub use fxaa::FxaaState;
+pub use fxaa::{FxaaQuality, FxaaState};
 pub use cas::CasState;

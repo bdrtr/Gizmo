@@ -50,6 +50,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **FXAA quality presets: `FxaaQuality` and `FxaaState::set_quality`.** Low / Medium / High / Ultra,
+  after the classic FXAA presets (contrast threshold, minimum threshold, search steps). `High` is
+  the default and exactly the previous pass. `FxaaParams::_padding` is now `quality`.
+
 - **Contact shadows: `DirectionalLight::contact_shadow_length` / `with_contact_shadows`.** A
   16-step screen-space march toward the sun in the deferred lighting pass, for what the shadow map
   misses: anything shorter than its depth bias or finer than its texels — a step, the line where an

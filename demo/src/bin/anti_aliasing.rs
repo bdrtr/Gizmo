@@ -8,7 +8,7 @@
 //! | yetenek | Gizmo |
 //! |---------|-------|
 //! | MSAA (kapalı / ×2 / ×4 / ×8) | **yok** — motorun her render hedefi `sample_count: 1`, ve ertelenmiş hat zaten MSAA'ya uygun değil |
-//! | FXAA (3 duyarlılık kademesi) | **var**, ama açık/kapalı — duyarlılık düğmesi yok |
+//! | FXAA (4 duyarlılık kademesi) | **var** — `fxaa.set_quality(queue, FxaaQuality::{Low, Medium, High, Ultra})`, varsayılan High (2026-11-01) |
 //! | SMAA (4 hazır ayar) | **yok** |
 //! | TAA | **var** (Halton titreşimi + geçmiş tamponu) |
 //! | CAS keskinleştirme | **var** (2026-11-01) — `renderer.cas`, varsayılan kapalı, `set_sharpness(0..1)` |
@@ -198,7 +198,7 @@ fn main() {
                         ui.separator();
                         ui.label("MSAA bilerek yok — ertelenmiş hat; TAA + FXAA + CAS");
                         ui.label("SMAA yok");
-                        ui.label("FXAA açık/kapalı; duyarlılık kademeleri yok");
+                        ui.label("FXAA kademeleri: Low / Medium / High / Ultra (set_quality)");
                         ui.separator();
                         ui.label("TAA duran sahnede yakınsar: kamerayı oynatmayın");
                         ui.separator();

@@ -376,7 +376,12 @@ mutations red); in a frame, CAS present but disabled changes **0** pixels, enabl
 edge sum 36 830 → 95 540 at sharpness 1; with CAS on, split screen still writes only each view's
 rectangle.
 
-Still missing: **SMAA**, and FXAA has no quality presets (on/off only).
+**FXAA quality presets, same day:** `FxaaQuality::{Low, Medium, High, Ultra}` through
+`FxaaState::set_quality` — the classic presets' contrast thresholds and search lengths; `High`, the
+default, is exactly the previous pass. Over stripes of rising edge contrast: 396 / 564 / 672 pixels
+changed at Low / High / Ultra.
+
+Still missing: **SMAA**.
 
 ### A7. No area lights, light textures, or contact/soft shadows
 

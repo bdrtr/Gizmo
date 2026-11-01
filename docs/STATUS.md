@@ -37,7 +37,7 @@ Ranked and measured in [`CAPABILITY_GAPS.md`](CAPABILITY_GAPS.md); the short ver
   lands on them and drops off them (`drop_through_timer`), and stays in its plane.
 - **Rendering:** reflection probes — up to four, box parallax, blended, transparent surfaces
   included on native (§A5) — no MSAA — by decision, TAA +
-  FXAA + CAS sharpening instead (§A6) — no SMAA, no area lights
+  FXAA (four quality presets) + CAS sharpening instead (§A6) — no SMAA, no area lights
   (§A7; soft sun shadows and contact shadows are `DirectionalLight::angular_radius` /
   `contact_shadow_length`), no occlusion culling (§A7b), no **object** motion blur
   (§A7c; camera motion blur is `PostProcess::motion_blur`, auto exposure `renderer.auto_exposure`). Split screen works on the game path (`Camera::viewport`, §A5b); the studio previews a

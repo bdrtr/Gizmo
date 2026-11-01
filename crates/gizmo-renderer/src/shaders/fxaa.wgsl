@@ -28,7 +28,7 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOutput {
 struct FxaaParams {
     inv_screen_size: vec2<f32>,  // 1.0 / vec2(width, height)
     fxaa_enabled: f32,           // 1.0 = açık, 0.0 = kapalı (bypass)
-    _padding: f32,
+    quality: f32,                // FxaaQuality: 0 Low, 1 Medium, 2 High (default), 3 Ultra
 };
 
 // ─── YARDIMCI FONKSİYONLAR ───
@@ -69,8 +69,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let lumaRange = lumaMax - lumaMin;
 
     // Kontrast eşiği — düşük kontrastlı alanları atla (performans)
-    let FXAA_EDGE_THRESHOLD: f32 = 0.125;
-    let FXAA_EDGE_THRESHOLD_MIN: f32 = 0.0625;
+    // Per `FxaaQuality`: Low, Medium, High (the values this pass always had), Ultra.
+    let preset = u32(clamp(params.quality, 0.0, 3.0) + 0.5);
+    let FXAA_EDGE_THRESHOLD: f32 = array<f32, 4>(0.25, 0.166, 0.125, 0.063)[preset];
+    let FXAA_EDGE_THRESHOLD_MIN: f32 = array<f32, 4>(0.0833, 0.0833, 0.0625, 0.0312)[preset];
 
     if (lumaRange < max(FXAA_EDGE_THRESHOLD_MIN, lumaMax * FXAA_EDGE_THRESHOLD)) {
         return vec4<f32>(rgbM, 1.0);
@@ -138,7 +140,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     var uv_neg = current_uv - step;
     var uv_pos = current_uv + step;
 
-    let FXAA_SEARCH_STEPS: i32 = 6;
+    let FXAA_SEARCH_STEPS: i32 = array<i32, 4>(3, 4, 6, 12)[preset];
     let FXAA_SEARCH_THRESHOLD: f32 = 0.25;
 
     var luma_end_neg = luma(textureSampleLevel(input_tex, input_sampler, uv_neg, 0.0).rgb) - luma_local_avg;
