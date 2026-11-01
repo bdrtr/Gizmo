@@ -52,6 +52,15 @@ pub struct DirectionalLight {
     pub intensity: f32,
     /// Whether this is the scene's sun — see [`LightRole`].
     pub role: LightRole,
+    /// The sun's **angular radius**, in radians — how big its disc is in the sky, and so how soft
+    /// the edges of the shadows it casts: a penumbra grows by `tan(angular_radius)` for every
+    /// metre between the caster and the surface the shadow falls on, so a contact stays sharp and a
+    /// tall caster's distant shadow blurs. The real sun is about 0.0046; an overcast sky, a few
+    /// tenths. `0` (the default) keeps the engine's fixed near-crisp edge (PCSS limited to about
+    /// one shadow-map texel), which is what scenes were made with. Only the `Sun` role casts.
+    /// `#[serde(default)]`.
+    #[serde(default)]
+    pub angular_radius: f32,
 }
 
 impl DirectionalLight {
@@ -62,7 +71,15 @@ impl DirectionalLight {
             color,
             intensity,
             role,
+            angular_radius: 0.0,
         }
+    }
+
+    /// This light with soft shadows from a disc of `radians` angular radius (see
+    /// [`angular_radius`](Self::angular_radius)), clamped to 0..=0.5.
+    pub fn with_angular_radius(mut self, radians: f32) -> Self {
+        self.angular_radius = if radians.is_finite() { radians.clamp(0.0, 0.5) } else { 0.0 };
+        self
     }
 }
 

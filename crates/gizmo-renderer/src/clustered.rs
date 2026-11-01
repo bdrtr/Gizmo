@@ -590,7 +590,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 far: view.far,
                 exposure: 1.0,
             },
-            sun: SunFrame { direction: Vec3::NEG_Y, color: [0.0; 4], present: false },
+            sun: SunFrame { direction: Vec3::NEG_Y, color: [0.0; 4], present: false, angular_radius: 0.0 },
             lights: [LightData::default(); crate::frame_uniforms::MAX_LIGHTS],
             num_lights: 0,
             shadows: ShadowFrame {

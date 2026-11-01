@@ -4749,6 +4749,86 @@ mod golden_render_tests {
         });
     }
 
+    /// **A bigger sun casts softer shadows.** A 3 m pillar under a 45° sun throws a long shadow; the
+    /// camera looks straight down on it. The far end of that shadow is ~4 m from the pillar, where a
+    /// penumbra `2·d·tan θ` wide is widest. Counted as the pixels whose brightness lies between the
+    /// frame's shadow and lit levels: `angular_radius` 0 (the default) keeps the fixed near-crisp
+    /// edge; 0.02 and 0.06 rad must widen it, and in that order.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_bigger_sun_casts_softer_shadows() {
+        use crate::renderer::components::{DirectionalLight, LightRole};
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        async fn penumbra_pixels(angular_radius: f32) -> usize {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssao = None;
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(
+                &renderer.device,
+                &renderer.queue,
+                &renderer.scene.texture_bind_group_layout,
+            );
+            for (pos, scale) in [
+                (Vec3::new(0.0, -0.2, 0.0), Vec3::new(20.0, 0.2, 20.0)),
+                (Vec3::new(0.0, 1.5, 0.0), Vec3::new(0.3, 1.5, 0.3)),
+            ] {
+                let e = world.spawn();
+                world.add_component(e, Transform::new(pos).with_scale(scale));
+                world.add_component(e, GlobalTransform::default());
+                world.add_component(e, AssetManager::create_cube(&renderer.device));
+                world.add_component(e, Material::new(tex.clone()).with_pbr(Vec4::new(0.8, 0.8, 0.8, 1.0), 0.9, 0.0));
+                world.add_component(e, MeshRenderer::new());
+            }
+            let sun_dir = Vec3::new(1.0, -1.0, 0.0).normalize();
+            let sun = world.spawn();
+            world.add_component(
+                sun,
+                Transform::new(Vec3::ZERO).with_rotation(crate::math::Quat::from_rotation_arc(Vec3::NEG_Z, sun_dir)),
+            );
+            world.add_component(sun, GlobalTransform::default());
+            world.add_component(
+                sun,
+                DirectionalLight::new(Vec3::ONE, 3.0, LightRole::Sun).with_angular_radius(angular_radius),
+            );
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(2.0, 7.0, 0.0),
+                yaw: 0.0,
+                pitch: -std::f32::consts::FRAC_PI_2 + 0.01,
+                primary: true,
+                ..Default::default()
+            });
+            let frame = render_world(&mut renderer, &mut world).await;
+            let luma: Vec<f32> = frame.as_chunks::<4>().0.iter().map(|p| (p[0] as f32 + p[1] as f32 + p[2] as f32) / 3.0).collect();
+            let (lo, hi) = luma.iter().fold((f32::MAX, 0.0f32), |(lo, hi), &v| (lo.min(v), hi.max(v)));
+            let span = hi - lo;
+            // Only along the shadow (rows 40..80, columns 40..90 of the 128² frame): counted over
+            // the whole frame the umbra shrinking as the penumbra grows hides most of the change.
+            (40..80usize)
+                .flat_map(|y| (40..90usize).map(move |x| y * 128 + x))
+                .filter(|&i| luma[i] > lo + 0.2 * span && luma[i] < hi - 0.2 * span)
+                .count()
+        }
+        pollster::block_on(async {
+            let (sharp, mid, soft) = (penumbra_pixels(0.0).await, penumbra_pixels(0.02).await, penumbra_pixels(0.06).await);
+            // Measured: 18 / 91 / 196. With the shader ignoring the radius, or reading the cascade's
+            // scale from `m[0][0]` alone (near zero under a 45° sun), all three are 18. The 128-texel
+            // cap is a quality bound the test does not pin: at 16 the soft case reads 165.
+            assert!(
+                soft > sharp * 2 && mid > sharp && soft > mid,
+                "penumbra pixels should grow with the sun: 0 → {sharp}, 0.02 → {mid}, 0.06 → {soft}",
+            );
+        });
+    }
+
     /// What a split-screen frame does once, it must do once: the HUD is drawn a single time over
     /// the whole target (drawn per view, a half-transparent sprite is laid over itself and comes
     /// out brighter), and the frame's animation advances by one `dt` however many cameras draw.

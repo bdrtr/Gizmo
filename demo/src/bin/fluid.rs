@@ -298,6 +298,7 @@ fn fluid_only_render_pass(
             direction: Vec3::new(0.3, -0.8, 0.2),
             color: [1.0, 0.95, 0.9, 1.0],
             present: true,
+            ..Default::default()
         },
         shadows: gizmo::renderer::ShadowFrame {
             cascade_splits: [10.0, 50.0, 200.0, 2000.0],

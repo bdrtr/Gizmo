@@ -182,13 +182,13 @@ fn get_procedural_environment(dir: vec3<f32>, roughness: f32) -> vec3<f32> {
 // binding-dependent PCSS shadow filter + procedural environment remain deferred-local.
 
 fn search_blockers(
-    shadow_uv: vec2<f32>, receiver_depth: f32, ci: u32, texel: f32
+    shadow_uv: vec2<f32>, receiver_depth: f32, ci: u32, texel: f32, search_step: f32
 ) -> vec2<f32> {
     var num_blockers = 0.0;
     var sum_depth = 0.0;
 
     let search_radius = 2; 
-    let step = texel * 1.5;
+    let step = search_step;
 
     for (var x = -search_radius; x <= search_radius; x++) {
         for (var y = -search_radius; y <= search_radius; y++) {
@@ -208,7 +208,24 @@ fn search_blockers(
 fn filter_pcss(
     shadow_uv: vec2<f32>, receiver_depth: f32, ci: u32, bias: f32, texel: f32
 ) -> f32 {
-    let blockers = search_blockers(shadow_uv, receiver_depth, ci, texel);
+    // `camera_forward.w` = tan(the sun's angular radius); 0 = the fixed near-crisp edge below.
+    let tan_sun = scene.camera_forward.w;
+    // The cascade is an orthographic projection of a ROTATED view, so its scales are row lengths,
+    // not single entries (the normal offset at the call site reads them the same way): row 0's
+    // length is NDC-x per metre, row 2's NDC-z per metre. A depth difference over row 2 is metres,
+    // and metres times row 0 / 2 is shadow-map UV. (`m[0][0]` alone is near zero under a 45° sun —
+    // the first version read it and every penumbra came out a fraction of a texel.)
+    let light_vp = scene.light_view_proj[ci];
+    let metres_per_depth = 1.0 / max(length(vec3<f32>(light_vp[0][2], light_vp[1][2], light_vp[2][2])), 1e-8);
+    let uv_per_metre = length(vec3<f32>(light_vp[0][0], light_vp[1][0], light_vp[2][0])) * 0.5;
+    // Where blockers can be: the penumbra a blocker halfway to the light would cast. Wider for a
+    // bigger sun, never narrower than the fixed search.
+    let search_step = select(
+        texel * 1.5,
+        clamp(receiver_depth * metres_per_depth * tan_sun * uv_per_metre * 0.25, texel * 1.5, texel * 32.0),
+        tan_sun > 0.0,
+    );
+    let blockers = search_blockers(shadow_uv, receiver_depth, ci, texel, search_step);
     let num_blockers = blockers.x;
     
     if (num_blockers < 0.5) {
@@ -216,6 +233,27 @@ fn filter_pcss(
     }
 
     let avg_blocker_depth = blockers.y / num_blockers;
+
+    if (tan_sun > 0.0) {
+        // **Physical penumbra:** a disc of angular radius θ casts an edge `2·d·tan θ` wide, d being
+        // the distance from blocker to receiver — at the 3072² map's resolution that is tens to
+        // hundreds of texels (0.06 rad, 4 m: ~150), so the cap is 128. Twenty-five taps that far
+        // apart would band, so the grid is turned by a per-texel angle: banding becomes fine noise,
+        // which TAA then averages away.
+        let width_uv = 2.0 * (receiver_depth - avg_blocker_depth) * metres_per_depth * tan_sun * uv_per_metre;
+        let radius = clamp(width_uv * 0.5, texel * 0.6, texel * 128.0);
+        let angle = fract(sin(dot(floor(shadow_uv / texel), vec2<f32>(12.9898, 78.233))) * 43758.5453) * 6.2831853;
+        let rot = mat2x2<f32>(cos(angle), sin(angle), -sin(angle), cos(angle));
+        var soft_sum = 0.0;
+        let soft_step = radius / 2.0;
+        for (var x = -2; x <= 2; x++) {
+            for (var y = -2; y <= 2; y++) {
+                let offset = rot * (vec2<f32>(f32(x), f32(y)) * soft_step);
+                soft_sum += textureSampleCompareLevel(t_shadow, s_shadow, shadow_uv + offset, ci, receiver_depth - bias);
+            }
+        }
+        return soft_sum / 25.0;
+    }
 
     // (receiver - blocker) / blocker * light_size
     // The sun is nearly a point source at infinity → small angular size → crisp

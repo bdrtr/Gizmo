@@ -50,6 +50,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Soft sun shadows: `DirectionalLight::angular_radius` / `with_angular_radius`.** The sun's
+  angular radius (radians) sets a physical PCSS penumbra, `2·d·tan θ` — sharp at contact, soft
+  with distance from the caster. 0 (the default) keeps the previous near-crisp edge: the deferred
+  path's PCSS had a constant light size and a filter clamped to about one texel, so it never
+  softened anything. Carried in `SceneUniforms::camera_forward.w` (previously unused).
+  `SunFrame` gained `angular_radius`: a struct literal needs it, or `..Default::default()`.
+
 - **The studio captures reflection probes.** It calls the now-public
   `gizmo::systems::render::capture_reflection_probes` before its passes, so the editor viewport
   reflects what the game will. The game path's draw list skips `EditorOnly` entities, so editor

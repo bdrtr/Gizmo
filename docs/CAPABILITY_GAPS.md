@@ -386,10 +386,16 @@ All three engine lights are punctual: `PointLight`, `DirectionalLight`, `SpotLig
 - **No rectangular or spherical area light.** Nothing resembling an LTC path exists.
 - **No light texture (cookie/gobo).**
 - **No contact shadows.**
-- **No percentage-closer soft shadows.** The PCF loop is a fixed 3×3 kernel stepping by a constant
-  texel — `let texel_size = scene.cascade_params.y;` with `frame_uniforms.rs` asserting that equals
-  `1 / SHADOW_MAP_RES`. The quantity PCSS varies, a blocker-distance search radius, is never
-  computed.
+- ~~**No percentage-closer soft shadows.**~~ **Corrected and closed 2026-11-01.** This line
+  described the *forward* path's fixed 3×3 PCF. The deferred path did have PCSS — a blocker search
+  and a penumbra estimate — but with the light size a constant (`0.004`) and the filter clamped to
+  0.6–1.2 texels, so every edge came out about one texel wide: PCSS in name. Now
+  `DirectionalLight::angular_radius` (radians, 0 = that fixed edge, the default) drives a physical
+  penumbra `2·d·tan θ`, converted to shadow-map UV through the cascade matrix's row lengths, up to
+  128 texels, its 25 taps turned per texel against banding. Measured, a 3 m pillar's 4 m shadow:
+  18 / 91 / 196 penumbra pixels at 0 / 0.02 / 0.06 rad — sharp at the base, soft at the tip. The
+  first version read the cascade's scale from `m[0][0]` alone, near zero under a tilted sun, and
+  softened nothing; the test pins that. The forward pass keeps its fixed PCF.
 
 **A trap worth naming:** `PointLight::radius` is **range**, not source size. Growing it widens and
 dims the light rather than softening its shadow — measured scene brightness rising

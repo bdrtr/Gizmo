@@ -123,11 +123,15 @@ pub struct SunFrame {
     /// the whole sun branch *and* the cascade lookup — a scene with no sun that claims one pays for
     /// a shadow sample against cascades built around a placeholder down-vector.
     pub present: bool,
+    /// The sun's angular radius in radians — its shadows' softness; see
+    /// `DirectionalLight::angular_radius`. Reaches the shaders as `tan()` of it in
+    /// `camera_forward.w`, a slot that was free.
+    pub angular_radius: f32,
 }
 
 impl Default for SunFrame {
     fn default() -> Self {
-        Self { direction: Vec3::new(0.0, -1.0, 0.0), color: [1.0, 1.0, 1.0, 0.0], present: false }
+        Self { direction: Vec3::new(0.0, -1.0, 0.0), color: [1.0, 1.0, 1.0, 0.0], present: false, angular_radius: 0.0 }
     }
 }
 
@@ -233,7 +237,9 @@ impl SceneUniforms {
             lights: *lights,
             light_view_proj: shadows.cascade_view_projs.map(|m| m.to_cols_array_2d()),
             cascade_splits: shadows.cascade_splits,
-            camera_forward: camera.forward.extend(0.0).to_array(),
+            // w = tan(sun angular radius): the soft-shadow size `filter_pcss` reads; 0 = the fixed
+            // near-crisp edge. The slot was unused padding.
+            camera_forward: camera.forward.extend(sun.angular_radius.max(0.0).tan()).to_array(),
             cascade_params: [
                 camera.near,
                 1.0 / SHADOW_MAP_RES as f32,
@@ -405,7 +411,7 @@ mod tests {
         assert_eq!(dark.sun_direction[3], 0.0);
 
         let lit = SceneUniforms::new(&SceneFrame {
-            sun: SunFrame { direction: Vec3::new(0.0, -1.0, 0.0), color: [1.0; 4], present: true },
+            sun: SunFrame { direction: Vec3::new(0.0, -1.0, 0.0), color: [1.0; 4], present: true, angular_radius: 0.0 },
             ..Default::default()
         });
         assert_eq!(lit.sun_direction[3], 1.0);

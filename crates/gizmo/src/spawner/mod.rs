@@ -291,6 +291,7 @@ impl<'a> Commands<'a> {
                 color: Vec3::new(color.0.x, color.0.y, color.0.z),
                 intensity,
                 role: crate::renderer::components::LightRole::Sun,
+                angular_radius: 0.0,
             },
         );
         EntityBuilder {
