@@ -35,3 +35,8 @@ image = "0.25"
 # The editor pixel tests drive the real pipeline on a headless device; `Renderer::new_headless`
 # is async and there is no runtime in a test binary.
 pollster = "0.4"
+# A game component in a test has to derive `Serialize`/`Deserialize` to be registered with the
+# editor, and its JSON edit is built with `json!` — the same two crates the engine's own registry
+# is written against. Test-only, like the two above.
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

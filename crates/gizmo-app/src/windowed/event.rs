@@ -614,6 +614,7 @@ impl<State: 'static> App<State> {
                                     &mut self.world,
                                     &mut editor,
                                 );
+                                crate::editor_runtime::process_component_requests(&mut self.world);
                                 crate::editor_runtime::process_scene_requests(&mut self.world);
                             }
 

@@ -100,9 +100,71 @@ pub fn full_scene_registry() -> SceneRegistry {
     reg
 }
 
+/// [`full_scene_registry`] plus whatever the game registered into the world's
+/// `ComponentRegistry` resource — the registry an **editor** save or load must use.
+///
+/// The engine's registry decides how built-ins are written; the world's can only add types to it
+/// ([`ComponentRegistry::extend_from`](gizmo_core::ComponentRegistry::extend_from) never
+/// overrides). Before this existed every editor save built `full_scene_registry()` from nothing,
+/// so a game component the inspector showed and edited was silently left out of the file.
+pub fn scene_registry_for_world(world: &gizmo_core::World) -> SceneRegistry {
+    let mut reg = full_scene_registry();
+    if let Some(game) = world.get_resource::<gizmo_core::ComponentRegistry>() {
+        // Serializable registrations only: an editor's registry also lists types for its ➕
+        // menu alone (studio registers `Material` that way), and each of those would make every
+        // save warn once per entity and count the component as dropped.
+        let added = reg.extend_serializable_from(&game);
+        tracing::debug!(added, "[Scene] game components merged into the scene registry");
+    }
+    reg
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A component the game registered into the world reaches the file and comes back — the
+    /// editor-save path end to end, minus the editor.
+    #[test]
+    fn a_game_component_registered_in_the_world_survives_a_save_and_load() {
+        #[derive(Clone, Debug, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+        struct Health {
+            hp: f32,
+            lives: u32,
+        }
+        gizmo_core::impl_component!(Health);
+
+        let dir = std::env::temp_dir().join(format!("gizmo_game_comp_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("scene.ron");
+        let path = path.to_str().unwrap();
+
+        let mut world = gizmo_core::World::new();
+        let mut game = gizmo_core::ComponentRegistry::new();
+        game.register_editable::<Health>("Health").unwrap();
+        world.insert_resource(game);
+        let e = world.spawn();
+        world.add_component(e, gizmo_core::EntityName::new("hero"));
+        world.add_component(e, Health { hp: 7.5, lives: 3 });
+
+        // The old path — the engine's registry alone — does not write it. That is the bug.
+        gizmo_scene::scene::SceneData::save(&world, path, &full_scene_registry()).unwrap();
+        assert!(
+            !std::fs::read_to_string(path).unwrap().contains("Health"),
+            "the engine-only registry wrote a component it was never told about?"
+        );
+
+        gizmo_scene::scene::SceneData::save(&world, path, &scene_registry_for_world(&world)).unwrap();
+        let mut loaded = gizmo_core::World::new();
+        let mut game = gizmo_core::ComponentRegistry::new();
+        game.register_editable::<Health>("Health").unwrap();
+        loaded.insert_resource(game);
+        let registry = scene_registry_for_world(&loaded);
+        gizmo_scene::scene::SceneData::load_into(path, &mut loaded, &registry).unwrap();
+        let healths: Vec<Health> = loaded.borrow::<Health>().iter().map(|(_, h)| h.clone()).collect();
+        assert_eq!(healths, vec![Health { hp: 7.5, lives: 3 }]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// The regression this module exists for: a scene is not just physics.
     ///

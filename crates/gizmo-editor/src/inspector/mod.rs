@@ -235,3 +235,71 @@ mod inspector_width_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod game_component_tests {
+    use super::*;
+
+    #[derive(Clone, Debug, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+    struct Health {
+        hp: f32,
+        lives: u32,
+        target: Option<u32>,
+    }
+    gizmo_core::impl_component!(Health);
+
+    #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+    struct Mana(f32);
+    gizmo_core::impl_component!(Mana);
+
+    /// Every piece of text one inspector frame painted.
+    fn painted_text(world: &World, state: &mut EditorState) -> Vec<String> {
+        fn scan(shape: &egui::Shape, out: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Vec(v) => v.iter().for_each(|s| scan(s, out)),
+                egui::Shape::Text(t) => out.push(t.galley.text().to_string()),
+                _ => {}
+            }
+        }
+        let ctx = egui::Context::default();
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| ui_inspector(ui, world, state));
+        let mut out = Vec::new();
+        output.shapes.iter().for_each(|s| scan(&s.shape, &mut out));
+        output.drop_without_applying_deltas();
+        out
+    }
+
+    fn select(world: &World, e: gizmo_core::entity::Entity) -> EditorState {
+        let _ = world;
+        let mut state = EditorState::default();
+        state.selection.entities.insert(e);
+        state.selection.primary = Some(e);
+        state
+    }
+
+    /// A game's own component, registered with `register_editable`, gets a section of its own:
+    /// its name, each field, an absent `Option` shown as absent rather than as "unsupported", and
+    /// a remove button.
+    #[test]
+    fn a_registered_game_component_gets_a_section_with_its_fields() {
+        let mut world = World::new();
+        let mut reg = gizmo_core::ComponentRegistry::new();
+        reg.register_editable::<Health>("Health").unwrap();
+        reg.register_serializable::<Mana>("Mana").unwrap();
+        world.insert_resource(reg);
+        let e = world.spawn();
+        world.add_component(e, Health { hp: 7.5, lives: 3, target: None });
+        world.add_component(e, Mana(2.0));
+
+        let text = painted_text(&world, &mut select(&world, e));
+        for needle in ["HEALTH", "hp", "lives", "target", "— (yok)", "MANA", "🗑 Bileşeni Sil"] {
+            assert!(text.iter().any(|t| t == needle), "{needle:?} was not painted; painted: {text:?}");
+        }
+        assert!(
+            !text.iter().any(|t| t.contains("Desteklenmeyen")),
+            "a field was drawn as unsupported: {text:?}"
+        );
+        // One remove button: Health's. Mana was registered without editor ops.
+        assert_eq!(text.iter().filter(|t| *t == "🗑 Bileşeni Sil").count(), 1, "{text:?}");
+    }
+}

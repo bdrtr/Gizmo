@@ -420,7 +420,15 @@ pub fn draw_ai_section(
 // === YARDIMCI FONKSİYONLAR ===
 
 
-/// The reflection-probe rows.
+/// One section per component the world's `ComponentRegistry` can turn into JSON and back that
+/// no dedicated section above already draws — which is how a **game's own** components appear.
+///
+/// Register them with `ComponentRegistry::register_editable` (or `gizmo::register_editor_component`)
+/// and they are shown, edited field by field, removable from here and addable from ➕. A type
+/// registered with plain `register_serializable` is shown and edited but has no remove button:
+/// the registry does not know how to take it off.
+///
+/// (Named for what it was once meant to be: it is not about reflection probes, and never was.)
 pub fn draw_reflection_section(
     ui: &mut egui::Ui,
     world: &World,
@@ -456,16 +464,34 @@ pub fn draw_reflection_section(
                     if let Some(ptr) = world.get_component_ptr(entity_id, tid) {
                         if let Ok(mut val) = get_json(ptr) {
                             let mut changed = false;
-                            egui::CollapsingHeader::new(format!("🧩 {}", reg.name))
+                            let mut remove = false;
+                            let removable = registry.remove_fn(&reg.name).is_some();
+                            egui::CollapsingHeader::new(crate::theme::section_title(&reg.name))
+                                .id_salt(("game_component", &reg.name))
                                 .default_open(true)
                                 .show(ui, |ui| {
-                                    if draw_json_value(ui, &reg.name, &mut val) {
-                                        changed = true;
+                                    // The top-level object's own label would repeat the header,
+                                    // so its fields are drawn directly.
+                                    if let serde_json::Value::Object(map) = &mut val {
+                                        for (k, v) in map.iter_mut() {
+                                            changed |= draw_json_value(ui, k, v);
+                                        }
+                                    } else {
+                                        changed |= draw_json_value(ui, "değer", &mut val);
+                                    }
+                                    if removable {
+                                        ui.separator();
+                                        if ui.button("🗑 Bileşeni Sil").clicked() {
+                                            remove = true;
+                                        }
                                     }
                                 });
                             ui.separator();
                             if changed {
                                 state.pending_json_updates.push((entity_id, set_json, val));
+                            }
+                            if remove {
+                                state.remove_component_request = Some((entity_id, reg.name.clone()));
                             }
                         }
                     }
@@ -613,28 +639,49 @@ pub fn draw_bone_attachment_section(
 pub fn draw_json_value(ui: &mut egui::Ui, name: &str, value: &mut serde_json::Value) -> bool {
     let mut changed = false;
     match value {
+        // Integers FIRST, and kept integers. `as_f64` answers for every number, so checking it
+        // first — as this did — showed a `u32` as a float drag and wrote `4.0` back, which
+        // `serde_json` refuses to deserialize into an integer: dragging a game's `lives` field
+        // did nothing but log an error. Unsigned stays non-negative, for the same reason.
+        serde_json::Value::Number(num) if num.is_u64() => {
+            let mut v = num.as_u64().unwrap_or(0);
+            ui.horizontal(|ui| {
+                ui.label(name);
+                if ui.add(egui::DragValue::new(&mut v)).changed() {
+                    *num = serde_json::Number::from(v);
+                    changed = true;
+                }
+            });
+        }
+        serde_json::Value::Number(num) if num.is_i64() => {
+            let mut v = num.as_i64().unwrap_or(0);
+            ui.horizontal(|ui| {
+                ui.label(name);
+                if ui.add(egui::DragValue::new(&mut v)).changed() {
+                    *num = serde_json::Number::from(v);
+                    changed = true;
+                }
+            });
+        }
         serde_json::Value::Number(num) => {
-            if let Some(f) = num.as_f64() {
-                let mut v = f;
-                ui.horizontal(|ui| {
-                    ui.label(name);
-                    if ui.add(egui::DragValue::new(&mut v).speed(0.1)).changed() {
-                        if let Some(n) = serde_json::Number::from_f64(v) {
-                            *num = n;
-                            changed = true;
-                        }
-                    }
-                });
-            } else if let Some(i) = num.as_i64() {
-                let mut v = i;
-                ui.horizontal(|ui| {
-                    ui.label(name);
-                    if ui.add(egui::DragValue::new(&mut v)).changed() {
-                        *num = serde_json::Number::from(v);
+            let mut v = num.as_f64().unwrap_or(0.0);
+            ui.horizontal(|ui| {
+                ui.label(name);
+                if ui.add(egui::DragValue::new(&mut v).speed(0.1)).changed() {
+                    if let Some(n) = serde_json::Number::from_f64(v) {
+                        *num = n;
                         changed = true;
                     }
-                });
-            }
+                }
+            });
+        }
+        // `Option::None`, and anything else serde writes as null: shown, not editable — there is
+        // no value to edit and no type to make one from.
+        serde_json::Value::Null => {
+            ui.horizontal(|ui| {
+                ui.label(name);
+                ui.label(egui::RichText::new("— (yok)").weak());
+            });
         }
         serde_json::Value::Bool(b) => {
             ui.horizontal(|ui| {
@@ -674,9 +721,6 @@ pub fn draw_json_value(ui: &mut egui::Ui, name: &str, value: &mut serde_json::Va
                     }
                 });
             });
-        }
-        _ => {
-            ui.label(format!("{}: <Desteklenmeyen tip>", name));
         }
     }
     changed

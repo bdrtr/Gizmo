@@ -155,6 +155,23 @@ pub struct ComponentRegistry {
     /// `bevy_reflect`-based type registrations — only present with the `reflect` feature.
     #[cfg(feature = "reflect")]
     pub reflect_registry: bevy_reflect::TypeRegistry,
+    /// Add/remove by type for the types registered through
+    /// [`register_editable`](Self::register_editable) — what an editor needs to put a component it
+    /// only knows by name onto an entity, or take it off. Private, and beside
+    /// [`TypeRegistration`] rather than in it, because that struct is a public literal and a new
+    /// field there would break every downstream construction of one.
+    editor_ops: BTreeMap<TypeId, EditorOps>,
+}
+
+/// Puts a default-valued component of one registered type onto an entity.
+pub type InsertDefaultFn = fn(&mut crate::world::World, crate::entity::Entity);
+/// Takes a component of one registered type off an entity.
+pub type RemoveFn = fn(&mut crate::world::World, crate::entity::Entity);
+
+#[derive(Clone, Copy)]
+struct EditorOps {
+    insert_default: InsertDefaultFn,
+    remove: RemoveFn,
 }
 
 impl ComponentRegistry {
@@ -170,6 +187,7 @@ impl ComponentRegistry {
             type_to_reg: BTreeMap::new(),
             #[cfg(feature = "reflect")]
             reflect_registry: bevy_reflect::TypeRegistry::default(),
+            editor_ops: BTreeMap::new(),
         }
     }
 
@@ -355,10 +373,106 @@ impl ComponentRegistry {
         Ok(())
     }
 
+    /// Everything [`register_serializable`](Self::register_serializable) does, plus what an
+    /// editor needs to **add** the component from a menu (its `Default`) and **remove** it again.
+    ///
+    /// This is the one call that makes a game's own component a first-class citizen of the
+    /// editor: the inspector shows and edits its fields (through the JSON accessors), the
+    /// ➕ menu can put it on an entity, its section can take it off, and an editor save writes it.
+    /// Register into the world's `ComponentRegistry` resource — `gizmo::register_editor_component`
+    /// does exactly that.
+    ///
+    /// # Errors
+    /// As [`register_serializable`](Self::register_serializable). On a name or type collision
+    /// nothing is installed.
+    pub fn register_editable<
+        T: crate::component::Component + serde::Serialize + serde::de::DeserializeOwned + Default,
+    >(
+        &mut self,
+        name: &str,
+    ) -> Result<(), RegistryError> {
+        self.register_serializable::<T>(name)?;
+        self.editor_ops.insert(
+            TypeId::of::<T>(),
+            EditorOps {
+                insert_default: |world, entity| world.add_component(entity, T::default()),
+                remove: |world, entity| world.remove_component::<T>(entity),
+            },
+        );
+        Ok(())
+    }
+
+    /// The default-insert for a type registered through
+    /// [`register_editable`](Self::register_editable), by its registered name.
+    ///
+    /// Returned as a plain `fn` so a caller holding the registry as a world resource can copy it
+    /// out, drop the borrow, and then call it with `&mut World`.
+    pub fn insert_default_fn(&self, name: &str) -> Option<InsertDefaultFn> {
+        let type_id = self.get_type_id(name)?;
+        self.editor_ops.get(&type_id).map(|ops| ops.insert_default)
+    }
+
+    /// The remove for a type registered through [`register_editable`](Self::register_editable),
+    /// by its registered name. See [`insert_default_fn`](Self::insert_default_fn) for the shape.
+    pub fn remove_fn(&self, name: &str) -> Option<RemoveFn> {
+        let type_id = self.get_type_id(name)?;
+        self.editor_ops.get(&type_id).map(|ops| ops.remove)
+    }
+
+    /// Copies in every registration of `other` that does not collide with one already here, and
+    /// returns how many it took.
+    ///
+    /// A name already registered here, or a type already registered under any name here, is left
+    /// as it is — this registry wins. That is the rule the engine's save path needs: the engine's
+    /// own registry (`full_scene_registry`) decides how built-ins are written, and a game's
+    /// registry, merged on top, can only *add* its own types. The `reflect` half of a registration
+    /// is copied too, but `other`'s `bevy_reflect::TypeRegistry` is not.
+    pub fn extend_from(&mut self, other: &ComponentRegistry) -> usize {
+        self.extend_where(other, |_| true)
+    }
+
+    /// [`extend_from`](Self::extend_from), taking only the registrations that can actually be
+    /// written to a scene — a serde serializer, or (with `reflect`) a reflect accessor.
+    ///
+    /// The difference matters for an editor's registry, which also lists types for the ➕ menu
+    /// alone (registered with plain [`register`](Self::register)): merged into a save registry,
+    /// each of those makes the save warn "registered but has no serializer" once per entity and
+    /// count the component as dropped.
+    pub fn extend_serializable_from(&mut self, other: &ComponentRegistry) -> usize {
+        self.extend_where(other, |reg| {
+            #[cfg(feature = "reflect")]
+            if reg.get_reflect_ptr_fn.is_some() {
+                return true;
+            }
+            reg.serialize_fn.is_some()
+        })
+    }
+
+    fn extend_where(&mut self, other: &ComponentRegistry, keep: impl Fn(&TypeRegistration) -> bool) -> usize {
+        let mut added = 0;
+        for (name, type_id) in &other.name_to_type {
+            if self.name_to_type.contains_key(name) || self.type_to_reg.contains_key(type_id) {
+                continue;
+            }
+            let Some(reg) = other.type_to_reg.get(type_id) else { continue };
+            if !keep(reg) {
+                continue;
+            }
+            self.name_to_type.insert(name.clone(), *type_id);
+            self.type_to_reg.insert(*type_id, reg.clone());
+            if let Some(ops) = other.editor_ops.get(type_id) {
+                self.editor_ops.insert(*type_id, *ops);
+            }
+            added += 1;
+        }
+        added
+    }
+
     /// Deletes a type's registration. The name and the TypeId mapping are removed together.
     /// Returns false if it is not registered.
     pub fn unregister<T: 'static>(&mut self) -> bool {
         let type_id = TypeId::of::<T>();
+        self.editor_ops.remove(&type_id);
         if let Some(reg) = self.type_to_reg.remove(&type_id) {
             self.name_to_type.remove(&reg.name);
             true
@@ -371,6 +485,7 @@ impl ComponentRegistry {
     pub fn unregister_by_name(&mut self, name: &str) -> bool {
         if let Some(type_id) = self.name_to_type.remove(name) {
             self.type_to_reg.remove(&type_id);
+            self.editor_ops.remove(&type_id);
             true
         } else {
             false
@@ -438,6 +553,87 @@ impl ComponentRegistry {
 impl Default for ComponentRegistry {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod editable_tests {
+    use super::*;
+    use crate::impl_component;
+
+    #[derive(serde::Serialize, serde::Deserialize, Clone, Default, Debug, PartialEq)]
+    struct Health {
+        hp: f32,
+        lives: u32,
+    }
+    impl_component!(Health);
+
+    #[derive(serde::Serialize, serde::Deserialize, Clone, Default)]
+    struct Mana(f32);
+    impl_component!(Mana);
+
+    #[test]
+    fn an_editable_type_can_be_added_by_name_and_removed_again() {
+        let mut reg = ComponentRegistry::new();
+        reg.register_editable::<Health>("Health").unwrap();
+        let mut world = crate::world::World::new();
+        let e = world.spawn();
+
+        let add = reg.insert_default_fn("Health").expect("registered editable");
+        add(&mut world, e);
+        assert_eq!(world.borrow::<Health>().get(e.id()).cloned(), Some(Health::default()));
+
+        let remove = reg.remove_fn("Health").expect("registered editable");
+        remove(&mut world, e);
+        assert!(world.borrow::<Health>().get(e.id()).is_none());
+    }
+
+    #[test]
+    fn a_plainly_registered_type_has_no_editor_ops() {
+        let mut reg = ComponentRegistry::new();
+        reg.register_serializable::<Mana>("Mana").unwrap();
+        assert!(reg.insert_default_fn("Mana").is_none());
+        assert!(reg.remove_fn("Mana").is_none());
+        assert!(reg.insert_default_fn("Nope").is_none());
+    }
+
+    #[test]
+    fn unregistering_drops_the_editor_ops_with_the_name() {
+        let mut reg = ComponentRegistry::new();
+        reg.register_editable::<Health>("Health").unwrap();
+        assert!(reg.unregister::<Health>());
+        reg.register_serializable::<Health>("Health").unwrap();
+        assert!(reg.insert_default_fn("Health").is_none(), "stale editor ops survived unregister");
+    }
+
+    /// The merge only adds: a name or a type this registry already has is not overwritten.
+    #[test]
+    fn extend_from_adds_new_types_and_never_overrides() {
+        let mut base = ComponentRegistry::new();
+        base.register_serializable::<Mana>("Mana").unwrap();
+
+        let mut game = ComponentRegistry::new();
+        game.register_editable::<Health>("Health").unwrap();
+        // Same type under another name, and another type under a taken name: both refused.
+        game.register::<Mana>("Mana2").unwrap();
+
+        assert_eq!(base.extend_from(&game), 1, "only Health is new");
+        assert!(base.contains_name("Health"));
+        assert!(base.insert_default_fn("Health").is_some(), "editor ops travel with the merge");
+        assert!(base.get_registration(TypeId::of::<Health>()).unwrap().get_json_fn.is_some());
+        assert_eq!(base.get_name::<Mana>(), Some("Mana"), "the existing name for a type wins");
+        assert!(!base.contains_name("Mana2"));
+        assert_eq!(base.extend_from(&game), 0, "a second merge is a no-op");
+    }
+
+    #[test]
+    fn extend_serializable_from_skips_menu_only_registrations() {
+        let mut editor = ComponentRegistry::new();
+        editor.register::<Mana>("Mana").unwrap();
+        editor.register_editable::<Health>("Health").unwrap();
+        let mut save = ComponentRegistry::new();
+        assert_eq!(save.extend_serializable_from(&editor), 1);
+        assert!(save.contains_name("Health") && !save.contains_name("Mana"));
     }
 }
 

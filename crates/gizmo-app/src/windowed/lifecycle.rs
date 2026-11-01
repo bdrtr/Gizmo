@@ -176,7 +176,7 @@ impl<State: 'static> App<State> {
                 {
                     // wasm32: gizmo-scripting (mlua) web'de derlenmez — sahneler
                     // Script bileşeni kaydı olmadan yüklenir (web scripting ertelendi).
-                    let registry = crate::scene_registry::full_scene_registry();
+                    let registry = crate::scene_registry::scene_registry_for_world(&self.world);
                     // With identity: an asset reference whose path has gone stale is repointed at
                     // the file it names, using the UUID the scene recorded next to that path. Costs
                     // nothing when the registry is empty (every lookup answers "don't know", every

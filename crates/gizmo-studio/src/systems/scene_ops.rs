@@ -11,13 +11,9 @@ pub fn handle_scene_operations(
     editor_state: &mut EditorState,
     _state: &mut StudioState,
 ) {
-    // --- REFLECTION (JSON) GÜNCELLEMELERİ ---
-    let pending_json: Vec<_> = std::mem::take(&mut editor_state.pending_json_updates);
-    for (entity, set_json, val) in pending_json {
-        if let Err(e) = set_json(world, entity, val) {
-            editor_state.log_error(&format!("Reflection deserialization hatası: {}", e));
-        }
-    }
+    // --- INSPECTOR JSON GÜNCELLEMELERİ ---
+    // The editor's own drain, shared with the in-engine editor, which used to drop these.
+    gizmo::editor::component_requests::apply_json_updates(world, editor_state);
 
     // --- DİNAMİK COMPONENT EKLEME İŞLEMİ ---
     if let Some((ent_id, comp_name)) = editor_state.add_component_request.take() {
@@ -139,7 +135,13 @@ pub fn handle_scene_operations(
                 // (5 m/s, 10 m/s², 0.5 m) — tuning is what the inspector is for.
                 "NavAgent" => world.add_component(ent, gizmo::ai::components::NavAgent::default()),
 
-                _ => editor_state.log_warning(&format!("Bilinmeyen component: {}", comp_name)),
+                // Not a built-in: a type registered with `register_editable` — a game's own
+                // component — can still be added, by the registry's own default-insert.
+                other => {
+                    if !gizmo::editor::component_requests::add_registered_component(world, ent, other) {
+                        editor_state.log_warning(&format!("Bilinmeyen component: {}", comp_name));
+                    }
+                }
             }
         }
     }
@@ -156,7 +158,11 @@ pub fn handle_scene_operations(
                 // now pins all four together rather than each on its own.
                 "FighterController" => { world.remove_component::<gizmo::physics::components::fighter::FighterController>(ent); }
                 "NavAgent" => { world.remove_component::<gizmo::ai::components::NavAgent>(ent); }
-                _ => editor_state.log_warning(&format!("Component turu silinemiyor: {}", comp_name)),
+                other => {
+                    if !gizmo::editor::component_requests::remove_registered_component(world, ent, other) {
+                        editor_state.log_warning(&format!("Component turu silinemiyor: {}", comp_name));
+                    }
+                }
             }
         }
     }
@@ -1092,6 +1098,43 @@ mod tests {
                 "the inspector's delete button for {name} left the component in place"
             );
         }
+    }
+
+    /// A game's own component — known to the studio only through the world's `ComponentRegistry`
+    /// — can be added from ➕, edited, and removed by its 🗑 button, through the same system that
+    /// answers the built-ins. Before, both requests fell into the `_` arm and were logged away.
+    #[test]
+    fn a_registered_game_component_is_added_edited_and_removed() {
+        #[derive(Clone, Debug, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+        struct Health {
+            hp: f32,
+            lives: u32,
+        }
+        gizmo::core::impl_component!(Health);
+
+        let mut world = World::new();
+        gizmo::register_editor_component::<Health>(&mut world, "Health").unwrap();
+        let ent = world.spawn();
+        let mut ed = EditorState::default();
+
+        ed.add_component_request = Some((ent, "Health".to_string()));
+        handle_scene_operations(&mut world, &mut ed, &mut studio_state());
+        assert_eq!(world.borrow::<Health>().get(ent.id()).cloned(), Some(Health::default()));
+
+        let set = world
+            .get_resource::<gizmo::core::ComponentRegistry>()
+            .unwrap()
+            .get_registration(std::any::TypeId::of::<Health>())
+            .unwrap()
+            .set_json_fn
+            .unwrap();
+        ed.pending_json_updates.push((ent, set, serde_json::json!({ "hp": 3.5, "lives": 9 })));
+        handle_scene_operations(&mut world, &mut ed, &mut studio_state());
+        assert_eq!(world.borrow::<Health>().get(ent.id()).map(|h| h.lives), Some(9));
+
+        ed.remove_component_request = Some((ent, "Health".to_string()));
+        handle_scene_operations(&mut world, &mut ed, &mut studio_state());
+        assert!(world.borrow::<Health>().get(ent.id()).is_none(), "🗑 left the game component in place");
     }
 
     /// **Every light type the engine draws can be created in the editor.**

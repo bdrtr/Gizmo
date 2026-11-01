@@ -177,6 +177,48 @@ pub fn full_scene_registry() -> scene::registry::SceneRegistry {
     app::scene_registry::full_scene_registry()
 }
 
+/// [`full_scene_registry`] plus every component the game registered into `world` with
+/// [`register_editor_component`] — what to save and load a scene with when the game has
+/// components of its own. The editor's save and load use exactly this.
+#[cfg(feature = "scene")]
+pub fn scene_registry_for(world: &core::World) -> scene::registry::SceneRegistry {
+    app::scene_registry::scene_registry_for_world(world)
+}
+
+/// Makes one of the game's own components a first-class citizen of the editor and of scene files.
+///
+/// Registers `T` under `name` in `world`'s `ComponentRegistry` resource (creating the resource if
+/// there is none), with everything an editor needs: the inspector shows and edits its fields, the
+/// ➕ menu adds it (as `T::default()`), its section removes it, and an editor save writes it —
+/// as does any save through [`scene_registry_for`].
+///
+/// ```no_run
+/// # use gizmo::prelude::*;
+/// #[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
+/// struct Health { hp: f32, lives: u32 }
+/// gizmo::core::impl_component!(Health);
+///
+/// # let mut world = World::new();
+/// gizmo::register_editor_component::<Health>(&mut world, "Health")
+///     .expect("the name must not collide with a built-in");
+/// ```
+///
+/// # Errors
+/// [`RegistryError`](core::RegistryError) if `name` is taken by another type or `T` is already
+/// registered under another name.
+pub fn register_editor_component<T>(world: &mut core::World, name: &str) -> Result<(), core::RegistryError>
+where
+    T: core::component::Component + serde::Serialize + serde::de::DeserializeOwned + Default,
+{
+    if world.get_resource::<core::ComponentRegistry>().is_none() {
+        world.insert_resource(core::ComponentRegistry::new());
+    }
+    let mut registry = world
+        .get_resource_mut::<core::ComponentRegistry>()
+        .expect("inserted just above");
+    registry.register_editable::<T>(name)
+}
+
 #[cfg(feature = "ui")]
 pub use gizmo_ui as ui;
 

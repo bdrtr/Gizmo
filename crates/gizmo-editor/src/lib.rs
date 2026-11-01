@@ -28,6 +28,8 @@ pub mod theme;
 pub mod asset_browser;
 /// The log console panel.
 pub mod console;
+/// Applying the inspector's requests for components known only by name — a game's own types.
+pub mod component_requests;
 pub mod editor_state;
 pub mod error;
 /// The game view tab — what the game camera sees, plus the fighting HUD overlay.

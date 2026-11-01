@@ -203,6 +203,18 @@ pub fn sync_render_targets(world: &mut World, editor: &mut EguiContext) {
     }
 }
 
+/// Applies the inspector's component requests for this frame: JSON field edits, and add/remove of
+/// components registered with `ComponentRegistry::register_editable` — a game's own types.
+///
+/// This host has no built-in `match` of its own, so everything goes through the registry. Before
+/// this existed the in-engine editor drew the generic section, accepted every edit, and applied
+/// none of them: `pending_json_updates` was drained only by `gizmo-studio`.
+pub fn process_component_requests(world: &mut World) {
+    world.resource_scope::<gizmo_editor::EditorState, (), _>(|world, state| {
+        gizmo_editor::component_requests::apply_registry_requests(world, state);
+    });
+}
+
 /// Services the editor's scene save / load / clear requests for this frame.
 ///
 /// Polls the async file-dialog channel and promotes a chosen path into a
@@ -276,7 +288,8 @@ pub fn process_scene_requests(world: &mut World) {
     if let Some(ref path) = save_req {
         // One assembled registry, not a hand-rolled one per call site — lights, cameras and
         // audio emitters were silently absent from every one of these before.
-        let registry = crate::scene_registry::full_scene_registry();
+        // The game's own components too — see `scene_registry_for_world`.
+        let registry = crate::scene_registry::scene_registry_for_world(world);
         match gizmo_scene::scene::SceneData::save(world, path, &registry) {
             Ok(()) => {
                 if let Some(mut ed) = world.get_resource_mut::<gizmo_editor::EditorState>() {
@@ -332,7 +345,7 @@ pub fn process_scene_requests(world: &mut World) {
             let r = world.remove_resource::<Renderer>().unwrap();
             let dummy_rgba = [255u8, 255, 255, 255];
             let _dummy_bg = r.create_texture(&dummy_rgba, 1, 1);
-            let registry = crate::scene_registry::full_scene_registry();
+            let registry = crate::scene_registry::scene_registry_for_world(world);
             let load_result = gizmo_scene::scene::SceneData::load_into(path, world, &registry);
             let ok = load_result.is_ok();
             match &load_result {

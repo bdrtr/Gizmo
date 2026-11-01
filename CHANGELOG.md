@@ -50,6 +50,34 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A game's own components in the editor, end to end.** One call —
+  `gizmo::register_editor_component::<T>(&mut world, "Name")`, i.e.
+  `ComponentRegistry::register_editable` on the world's registry, for any
+  `Component + Serialize + DeserializeOwned + Default` — and the in-engine editor shows the
+  component with a section of its own, edits its fields, adds it from ➕ (as `T::default()`),
+  removes it with 🗑, and writes it when it saves. Every link of that chain was broken before:
+  - **Nothing applied the edits in the in-engine editor.** It drew the generic section, accepted
+    the drag, queued `pending_json_updates` — and only `gizmo-studio` ever drained that queue.
+    `gizmo_editor::component_requests` is now the drain both hosts share
+    (`gizmo_app::editor_runtime::process_component_requests` runs it every frame).
+  - **Integer fields could not be edited.** `draw_json_value` asked `as_f64` first, which every
+    number answers, so a `u32` was shown as a float drag and written back as `4.0` — which
+    `serde_json` refuses for an integer. Integers are now drawn and written as integers (unsigned
+    stays non-negative); `null` (`Option::None`) is shown as absent instead of "unsupported type".
+  - **➕ and 🗑 only knew names spelled out in a `match`.** The registry now carries a
+    default-insert and a remove for editable types (`insert_default_fn` / `remove_fn`, kept in a
+    private map so `TypeRegistration` — a public literal — gains no field), and both hosts fall
+    back to them.
+  - **An editor save left the component out of the file.** Every save, load, play snapshot and
+    duplicate built `full_scene_registry()` from nothing. They now use
+    `gizmo::scene_registry_for(world)` (= `scene_registry_for_world` in `gizmo-app`), the engine's
+    registry plus the world's serializable registrations via the new
+    `ComponentRegistry::extend_serializable_from` — which only adds, never overrides a built-in,
+    and skips menu-only registrations (`gizmo-studio` lists `Material` that way, and each would
+    have made every save warn once per entity). Play → Stop now restores game components too.
+  `gizmo-studio` itself is a separate binary and cannot see a game's types; this is for the
+  editor embedded in a game (`editor` feature) and for a studio build that registers them.
+
 - **Sprites — the engine's first 2D path (`docs/CAPABILITY_GAPS.md` §A1).** A `Sprite` component
   (`gizmo_renderer::components`) draws a textured quad either in the entity's local XY plane,
   placed by its `GlobalTransform` (`SpriteSpace::World` — so it moves, rotates and scales with the

@@ -164,12 +164,18 @@ pub fn render_studio(
         }
     }
 
+    // One registry for every save, load, snapshot and duplicate below: the engine's built-ins
+    // plus whatever the game registered into the world with `register_editor_component`. With
+    // the engine's alone, a game's own component was edited in the inspector and then left out
+    // of the saved file, the play snapshot (so Stop did not restore it) and a duplicate.
+    let scene_registry = gizmo::scene_registry_for(world);
+
     if play_start {
         // 1. In-memory snapshot al (hızlı yol — fizik state dahil, GPU state korunur)
         let protected_ids = collect_protected_ids(world, state.editor_camera);
         let snapshot = gizmo::scene::SceneSnapshot::capture(
             world,
-            &gizmo::full_scene_registry(),
+            &scene_registry,
             &protected_ids,
         );
 
@@ -206,7 +212,7 @@ pub fn render_studio(
             let protected_ids = collect_protected_ids(world, state.editor_camera);
             let result = snapshot.restore(
                 world,
-                &gizmo::full_scene_registry(),
+                &scene_registry,
                 &protected_ids,
             );
             if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
@@ -234,10 +240,10 @@ pub fn render_studio(
             Some(m) => gizmo::scene::SceneData::save_with_identity(
                 world,
                 &path,
-                &gizmo::full_scene_registry(),
+                &scene_registry,
                 &gizmo::asset_identity::ManagerIdentity(m),
             ),
-            None => gizmo::scene::SceneData::save(world, &path, &gizmo::full_scene_registry()),
+            None => gizmo::scene::SceneData::save(world, &path, &scene_registry),
         };
         if let Some(m) = manager {
             world.insert_resource(m);
@@ -279,11 +285,11 @@ pub fn render_studio(
             Some(m) => gizmo::scene::SceneData::load_into_with_identity(
                 &path,
                 world,
-                &gizmo::full_scene_registry(),
+                &scene_registry,
                 &gizmo::asset_identity::ManagerIdentity(m),
             ),
             None => {
-                gizmo::scene::SceneData::load_into(&path, world, &gizmo::full_scene_registry())
+                gizmo::scene::SceneData::load_into(&path, world, &scene_registry)
             }
         };
         if let Some(m) = manager {
@@ -312,14 +318,14 @@ pub fn render_studio(
                 world,
                 ent_id.id(),
                 &path,
-                &gizmo::full_scene_registry(),
+                &scene_registry,
                 &gizmo::asset_identity::ManagerIdentity(m),
             ),
             None => gizmo::scene::SceneData::save_prefab(
                 world,
                 ent_id.id(),
                 &path,
-                &gizmo::full_scene_registry(),
+                &scene_registry,
             ),
         };
         if let Some(m) = manager {
@@ -343,14 +349,14 @@ pub fn render_studio(
                 &path,
                 parent.map(|p| p.id()),
                 world,
-                &gizmo::full_scene_registry(),
+                &scene_registry,
                 &gizmo::asset_identity::ManagerIdentity(m),
             ),
             None => gizmo::scene::SceneData::load_prefab(
                 &path,
                 parent.map(|p| p.id()),
                 world,
-                &gizmo::full_scene_registry(),
+                &scene_registry,
             ),
         };
         if let Some(m) = manager {
@@ -398,7 +404,7 @@ pub fn render_studio(
             world,
             ent_id.id(),
             &temp_path,
-            &gizmo::full_scene_registry(),
+            &scene_registry,
         );
         let outcome = match save {
             Err(e) => DuplicateOutcome::SaveFailed(e.to_string()),
@@ -406,7 +412,7 @@ pub fn render_studio(
                 &temp_path,
                 None,
                 world,
-                &gizmo::full_scene_registry(),
+                &scene_registry,
             ) {
                 Ok(Some(new_id)) => DuplicateOutcome::Duplicated(new_id),
                 Ok(None) => DuplicateOutcome::NothingLoaded,
