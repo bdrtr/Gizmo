@@ -50,6 +50,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The character controller honours one-way platforms; `CharacterController::drop_through_timer`.**
+  The kinematic `update_character` ignored `Collider::one_way`, so a character's upward sweep hit
+  the underside and it could not jump through. It now applies the pipeline's own rule
+  (`Collider::one_way_keeps`) at every ray, with two additions a capsule needs: only the **feet**
+  are caught (the body's middle and head rays pass through, or a character sinking through would
+  snag on its chest), and only feet that are on or above the top — a jump that leaves the feet
+  inside the slab falls back instead of being snapped up by the ground ray, which starts `radius`
+  above the feet. `drop_through_timer` (written by the game, counted down, `#[serde(skip)]`) makes
+  one-way colliders ignored while positive: down + jump. Tests compare each run with a solid
+  platform; four mutations of the rule (solid, no depth check, no drop, no feet-only) each break
+  at least one. A side-on character on this controller stays at `z == 0.0`. Demo: `platformer`'s
+  blue ledge, S + SPACE to drop.
+
 - **One-way platforms: `Collider::one_way(up)` (field `Collider::one_way: Option<Vec3>`).** A
   collider that stops only bodies arriving from its `up` side (collider-local, turns with the
   body): jump up through it from below, land on it from above. The pipeline drops a pair's

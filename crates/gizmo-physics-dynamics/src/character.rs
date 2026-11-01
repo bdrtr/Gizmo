@@ -5,10 +5,50 @@ use gizmo_physics_core::raycast::{Ray, Raycast};
 use gizmo_physics_core::BodyHandle;
 use gizmo_math::Vec3;
 
+/// How far, in metres, a character's feet may already be *below* a one-way platform's top and
+/// still be caught by it. Covers float rounding at an exact landing; anything deeper means the
+/// feet are inside the platform, which then lets them through.
+const ONE_WAY_SKIN: f32 = 1e-3;
+
+/// Whether a ray hit on `col` stops the character.
+///
+/// `d` is the hit distance from a ray origin that sits `radius` behind the character's surface
+/// (a capsule's sphere centre), `n` the hit normal and `motion` the character's velocity. Solid
+/// colliders always block. A one-way collider ([`Collider::one_way`]) blocks only:
+/// - when the character is not dropping through (`dropping`),
+/// - for the **feet** (`feet`) — the body's middle and head rays pass through it, or a character
+///   sinking through one would snag on it with its chest,
+/// - when the feet are on or above the surface (`d - radius >= -ONE_WAY_SKIN`), and
+/// - under the same normal/velocity rule the rigid pipeline applies to contacts
+///   ([`Collider::one_way_keeps`]): the top side, and not while moving up through it.
+///
+/// A ray that starts inside a shape reports its exit face, so a character rising through a
+/// platform sees the top face with an upward motion, and one sinking through it sees the bottom
+/// face — both rejected by that last rule.
+fn blocks(
+    col: &Collider,
+    col_trans: &Transform,
+    d: f32,
+    n: Vec3,
+    radius: f32,
+    motion: Vec3,
+    feet: bool,
+    dropping: bool,
+) -> bool {
+    let Some(up) = col.one_way else {
+        return true;
+    };
+    !dropping
+        && feet
+        && d - radius >= -ONE_WAY_SKIN
+        && Collider::one_way_keeps(col_trans.rotation * up, n, motion)
+}
+
 /// Advances a kinematic character controller by one fixed step.
 ///
 /// Resolves ground detection, gravity, slope movement, wall sliding and step
-/// climbing, mutating `transform` and `vel` in place. `colliders` must contain
+/// climbing, mutating `transform` and `vel` in place. One-way colliders are walked and jumped
+/// through and landed on (see [`CharacterController`]'s docs for the rule). `colliders` must contain
 /// all scene colliders to test against; the entry whose entity equals `_entity`
 /// (the character itself) is skipped automatically.
 #[tracing::instrument(
@@ -102,9 +142,14 @@ pub fn update_character(
     }
     kcc.is_submerged = false;
 
+    let dropping = kcc.drop_through_timer > 0.0;
+    if dropping {
+        kcc.drop_through_timer -= dt;
+    }
+
     for (_col_ent, col_trans, col) in &near_colliders {
         if let Some((d, n)) = Raycast::ray_shape(&ray, &col.shape, col_trans) {
-            if d < ground_dist {
+            if d < ground_dist && blocks(col, col_trans, d, n, radius, vel.linear, true, dropping) {
                 ground_dist = d;
                 ground_normal = n;
             }
@@ -214,7 +259,7 @@ pub fn update_character(
 
         let sweep_heights = [-height * 0.5 + radius, 0.0, height * 0.5 - radius];
 
-        for h_offset in sweep_heights {
+        for (i, h_offset) in sweep_heights.into_iter().enumerate() {
             let mut local_min_t = 1.0;
             let mut local_closest_n = Vec3::ZERO;
             let origin = current_pos + Vec3::new(0.0, h_offset, 0.0);
@@ -228,7 +273,9 @@ pub fn update_character(
                     // makes it a hair negative) still BLOCKS (min_t → 0) instead of being
                     // rejected by an `actual_d >= 0` test — which let the body walk
                     // straight through the wall.
-                    if d >= 0.0 {
+                    if d >= 0.0
+                        && blocks(col, col_trans, d, n, radius, vel.linear, i == 0, dropping)
+                    {
                         let actual_d = (d - radius).max(0.0);
                         if actual_d < move_dist * local_min_t {
                             local_min_t = actual_d / move_dist;
@@ -265,7 +312,9 @@ pub fn update_character(
                         if let Some((d, n)) =
                             Raycast::ray_shape(&step_down_ray, &col.shape, col_trans)
                         {
-                            if d < step_dist {
+                            if d < step_dist
+                                && blocks(col, col_trans, d, n, 0.0, vel.linear, true, dropping)
+                            {
                                 step_dist = d;
                                 step_normal = n;
                             }
@@ -368,12 +417,12 @@ fn swim_step(
         let mut min_t = 1.0;
         let mut closest_n = Vec3::ZERO;
         let mut hit = false;
-        for h in [-height * 0.5 + radius, 0.0, height * 0.5 - radius] {
+        for (i, h) in [-height * 0.5 + radius, 0.0, height * 0.5 - radius].into_iter().enumerate() {
             let origin = current + Vec3::new(0.0, h, 0.0);
             let move_ray = Ray::new(origin, dir);
             for (_e, ct, c) in near_colliders {
                 if let Some((d, n)) = Raycast::ray_shape(&move_ray, &c.shape, ct) {
-                    if d >= 0.0 {
+                    if d >= 0.0 && blocks(c, ct, d, n, radius, vel.linear, i == 0, false) {
                         let actual_d = (d - radius).max(0.0);
                         if actual_d < dist * min_t {
                             min_t = actual_d / dist;
@@ -710,5 +759,118 @@ mod tests {
             "yüzücü duvardan geçmemeli: merkez x={} (≲1.7 beklenir)",
             transform.position.x
         );
+    }
+
+    /// A 2D side-on scene: ground with its top at y = 0, and a thin platform (top at y = 2.6,
+    /// bottom at 2.4) over the character's head, `one_way` or solid.
+    fn platform_scene(one_way: bool) -> Vec<(BodyHandle, Transform, Collider)> {
+        let platform = box_collider(2.0, 0.1, 0.5);
+        let platform = if one_way { platform.one_way(Vec3::Y) } else { platform };
+        vec![
+            (BodyHandle::from_id(1), Transform::new(Vec3::new(0.0, -0.5, 0.0)), box_collider(50.0, 0.5, 0.5)),
+            (BodyHandle::from_id(2), Transform::new(Vec3::new(0.0, 2.5, 0.0)), platform),
+        ]
+    }
+
+    /// Steps a 1.8 m-tall, 0.3 m-radius character (`centre_y` = 0.9 stands on the ground,
+    /// 3.5 on the platform) for `seconds`, calling `each` before every step.
+    fn run_character(
+        colliders: &[(BodyHandle, Transform, Collider)],
+        centre_y: f32,
+        jump_speed: f32,
+        seconds: f32,
+        mut each: impl FnMut(usize, &mut CharacterController),
+    ) -> (Transform, CharacterController) {
+        let collider = box_collider(0.3, 0.9, 0.3);
+        let mut transform = Transform::new(Vec3::new(0.0, centre_y, 0.0));
+        let mut vel = Velocity::new(Vec3::ZERO);
+        let mut kcc = CharacterController { jump_speed, ..Default::default() };
+        let dt = 1.0 / 60.0;
+        for frame in 0..(seconds / dt) as usize {
+            each(frame, &mut kcc);
+            update_character(BodyHandle::from_id(0), &mut kcc, &mut transform, &mut vel, &collider, colliders, None, dt);
+        }
+        (transform, kcc)
+    }
+
+    /// Jump on frame 10 (the character has settled by then).
+    fn jump_at_10(frame: usize, kcc: &mut CharacterController) {
+        if frame == 10 {
+            kcc.jump_buffer_timer = 0.1;
+        }
+    }
+
+    /// The point of a one-way platform: jumped into from below, the character passes through
+    /// it and lands on top. The control — the same jump under a solid platform — bonks its head
+    /// and falls back to the ground, so the run is not passing because the jump missed.
+    /// Discriminating: treating one-way colliders as solid gives the control's result.
+    #[test]
+    fn a_character_jumps_up_through_a_one_way_platform_and_lands_on_it() {
+        // 8 m/s rises 3.26 m: the feet clear the top (2.6) with room to spare.
+        let (t, kcc) = run_character(&platform_scene(true), 0.9, 8.0, 3.0, jump_at_10);
+        assert!(kcc.is_grounded, "should end standing, at y = {}", t.position.y);
+        assert!((t.position.y - 3.5).abs() < 0.02, "feet on the platform top: centre y = {} (3.5)", t.position.y);
+        assert_eq!(t.position.z, 0.0, "a side-on character must stay in its plane");
+
+        let (t, _) = run_character(&platform_scene(false), 0.9, 8.0, 3.0, jump_at_10);
+        assert!((t.position.y - 0.9).abs() < 0.02, "a solid platform must stop it: centre y = {} (0.9)", t.position.y);
+    }
+
+    /// A jump that gets the feet only part of the way into the platform must fall back, not be
+    /// popped up onto it. The character's ground ray starts at its foot-sphere centre, `radius`
+    /// above the feet, so without the "feet on or above the top" condition that ray finds the
+    /// top surface at the apex and the ground snap lifts the body by up to `radius`.
+    /// Discriminating: dropping that condition lands it at 3.5.
+    #[test]
+    fn a_jump_that_leaves_the_feet_inside_a_one_way_platform_falls_back() {
+        // 6.95 m/s rises ~2.46 m: apex feet at ~2.46, inside the 2.4–2.6 slab, with the
+        // foot-sphere centre (feet + 0.3) above its top.
+        let (t, kcc) = run_character(&platform_scene(true), 0.9, 6.95, 3.0, jump_at_10);
+        assert!(kcc.is_grounded);
+        assert!((t.position.y - 0.9).abs() < 0.02, "should be back on the ground: centre y = {} (0.9)", t.position.y);
+    }
+
+    /// `drop_through_timer` lets a character standing on a one-way platform fall through it to
+    /// the ground. The control — no request — stays on the platform. Discriminating: ignoring the
+    /// timer leaves the character at 3.5.
+    #[test]
+    fn drop_through_timer_lets_a_character_fall_through_a_one_way_platform() {
+        let request = |frame: usize, kcc: &mut CharacterController| {
+            if frame == 30 {
+                kcc.drop_through_timer = 0.1;
+            }
+        };
+        let (t, kcc) = run_character(&platform_scene(true), 3.5, 5.0, 2.5, request);
+        assert!(kcc.is_grounded);
+        assert!((t.position.y - 0.9).abs() < 0.02, "should have dropped to the ground: centre y = {} (0.9)", t.position.y);
+
+        let (t, _) = run_character(&platform_scene(true), 3.5, 5.0, 2.5, |_, _| {});
+        assert!((t.position.y - 3.5).abs() < 0.02, "without a request it stays up: centre y = {} (3.5)", t.position.y);
+
+        // On a solid platform the request changes nothing.
+        let (t, _) = run_character(&platform_scene(false), 3.5, 5.0, 2.5, request);
+        assert!((t.position.y - 3.5).abs() < 0.02, "a solid platform ignores the request: centre y = {} (3.5)", t.position.y);
+    }
+
+    /// A one-way platform's sides do not block: a character walks straight through one at waist
+    /// height. The control — a solid one — stops it at the face.
+    #[test]
+    fn a_character_walks_through_the_side_of_a_one_way_platform() {
+        let scene = |one_way: bool| {
+            let slab = box_collider(0.5, 0.1, 0.5);
+            let slab = if one_way { slab.one_way(Vec3::Y) } else { slab };
+            vec![
+                (BodyHandle::from_id(1), Transform::new(Vec3::new(0.0, -0.5, 0.0)), box_collider(50.0, 0.5, 0.5)),
+                // Waist height (0.8–1.0, across the body's middle sweep ray at 0.9 — the
+                // controller sweeps three rays, and a slab between them is missed even when
+                // solid), near face at x = 2.5.
+                (BodyHandle::from_id(2), Transform::new(Vec3::new(3.0, 0.9, 0.0)), slab),
+            ]
+        };
+        let walk = |_: usize, kcc: &mut CharacterController| kcc.target_velocity = Vec3::new(3.0, 0.0, 0.0);
+        let (t, _) = run_character(&scene(true), 0.9, 5.0, 2.0, walk);
+        assert!(t.position.x > 5.5, "should walk through: x = {}", t.position.x);
+        let (t, _) = run_character(&scene(false), 0.9, 5.0, 2.0, walk);
+        assert!(t.position.x < 2.3, "a solid slab stops it: x = {}", t.position.x);
     }
 }

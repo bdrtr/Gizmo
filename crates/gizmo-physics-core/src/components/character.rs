@@ -12,10 +12,16 @@ use serde::{Deserialize, Serialize};
 /// the step — `speed` and `jump_buffer_time` are values the game reads and acts on (see their
 /// own docs), which is why changing them alone appears to do nothing.
 ///
-/// Four fields are `#[serde(skip)]` (`is_grounded`, `coyote_timer`, `jump_buffer_timer`,
-/// `is_submerged`), so a scene reload restores a character with no coyote grace, no buffered
-/// jump, and neither grounded nor submerged until its first step re-derives them; the tuning
-/// fields round-trip intact.
+/// Five fields are `#[serde(skip)]` (`is_grounded`, `coyote_timer`, `jump_buffer_timer`,
+/// `drop_through_timer`, `is_submerged`), so a scene reload restores a character with no coyote
+/// grace, no buffered jump or drop, and neither grounded nor submerged until its first step
+/// re-derives them; the tuning fields round-trip intact.
+///
+/// **One-way platforms** ([`Collider::one_way`](crate::Collider::one_way)) are honoured: the
+/// character jumps up through one, walks through its sides, and lands on its top — but only
+/// with its feet, and only if the feet were on or above that top, so a half-height jump that
+/// leaves the feet inside the platform falls back rather than being popped onto it. Set
+/// `drop_through_timer` to drop down through one.
 ///
 /// Units are SI throughout — lengths in metres, times in seconds, angles in radians — but
 /// the derived unit differs per field (m/s, m/s², per-second rates), so read each field's
@@ -122,6 +128,18 @@ pub struct CharacterController {
     #[serde(skip)]
     pub jump_buffer_timer: f32,
 
+    /// Seconds left during which the character ignores **one-way** colliders
+    /// ([`Collider::one_way`](crate::Collider::one_way)) entirely — how a game lets the player
+    /// drop down through the platform they are standing on (the usual "down + jump").
+    ///
+    /// Written by the game, counted down by `dt` by the step, same idiom as
+    /// `jump_buffer_timer`. It only has to last until the feet have sunk below the platform's
+    /// top: from then on the platform no longer carries the character anyway (a one-way
+    /// collider only ever catches feet that are on or above it). `0.1` s is ample at any step
+    /// rate. Solid colliders are unaffected. `#[serde(skip)]`.
+    #[serde(skip)]
+    pub drop_through_timer: f32,
+
     // ── Su / yüzme ──────────────────────────────────────────
     /// Net upward lift acceleration while submerged (m/s²). 0 = neutral buoyancy, >0 rises to the
     /// surface; together with drag it settles at a terminal ascent speed.
@@ -150,6 +168,7 @@ impl Default for CharacterController {
             coyote_timer: 0.0,
             jump_buffer_time: 0.1,
             jump_buffer_timer: 0.0,
+            drop_through_timer: 0.0,
             buoyancy: 2.0,
             water_drag: 2.0,
             swim_acceleration: 8.0,

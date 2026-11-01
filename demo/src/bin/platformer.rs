@@ -16,7 +16,11 @@
 //!   * Sahne render = `default_render_pass` doğrudan (SSR/SSGI/volumetric/TAA açık kalsın).
 //!
 //! ## Kontroller
-//!   * **W A S D** — hareket · **SPACE** — zıpla · **Sağ-tık + fare** — kamera
+//!   * **W A S D** — hareket · **SPACE** — zıpla · **S + SPACE** — tek yönlü çıkıntıdan aşağı in
+//!     · **Sağ-tık + fare** — kamera
+//!
+//! Başlangıcın ileri kenarının üstündeki mavi çıkıntı **tek yönlü** (`Collider::one_way`): altından zıplayınca
+//! içinden geçilir, üstüne inilir; üstündeyken S + SPACE (`drop_through_timer`) aşağı bırakır.
 
 use gizmo::physics::components::CharacterController;
 use gizmo::physics::world::PhysicsWorld;
@@ -74,6 +78,17 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> PlatformerState {
         MeshRenderer::new(),
         RigidBodyBundle::static_body()
             .with_collider(Collider::box_collider(Vec3::new(2.5, 0.5, 2.5))),
+    ));
+
+    // Tek yönlü çıkıntı, başlangıcın ileri (+X) kenarının üstünde — kamera +X'e bakar, oyuncunun
+    // önünde/yanında olsa takip kamerasıyla oyuncunun arasına girip onu örterdi: altından zıpla, içinden geç, üstüne in.
+    world.spawn_bundle((
+        Transform::new(Vec3::new(1.75, 4.5, 0.0)).with_scale(Vec3::new(1.5, 0.5, 3.0)),
+        cube_mesh.clone(),
+        Material::new(tex.clone()).with_pbr(Vec4::new(0.3, 0.7, 1.0, 1.0), 0.4, 0.0),
+        MeshRenderer::new(),
+        RigidBodyBundle::static_body()
+            .with_collider(Collider::box_collider(Vec3::new(0.75, 0.25, 1.5)).one_way(Vec3::Y)),
     ));
 
     // Hareketli platform 1 (kinematik — konumu update'te elle sürülür)
@@ -231,7 +246,12 @@ fn update(world: &mut World, state: &mut PlatformerState, dt: f32, input: &Input
                 .gamepad()
                 .is_some_and(|p| p.is_pressed(GamepadButton::South))
         {
-            kcc.jump_buffer_timer = kcc.jump_buffer_time;
+            // Geri + zıpla = tek yönlü platformdan aşağı in (katı zeminde hiçbir şey yapmaz).
+            if my < -0.5 {
+                kcc.drop_through_timer = 0.1;
+            } else {
+                kcc.jump_buffer_timer = kcc.jump_buffer_time;
+            }
         }
     }
 
