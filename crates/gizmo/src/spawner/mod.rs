@@ -197,6 +197,8 @@ impl<'a> Commands<'a> {
                 exposure: 1.0,
                 primary: true,
                 projection: Default::default(),
+                viewport: None,
+                order: 0,
             },
         );
         EntityBuilder {
@@ -233,6 +235,8 @@ impl<'a> Commands<'a> {
                 exposure: 1.0,
                 primary: true,
                 projection: Default::default(),
+                viewport: None,
+                order: 0,
             },
         );
         EntityBuilder {

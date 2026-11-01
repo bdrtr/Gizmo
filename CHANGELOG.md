@@ -50,6 +50,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Split screen: `Camera::viewport` and `Camera::order`, drawn by `render_viewports`.** Give a
+  camera a rectangle of the target (`Viewport::left_half()`, `quarter(i)`, `new(x, y, w, h)` — fractions,
+  top-left origin) and `default_render_pass` draws every such camera into its own rectangle, lower
+  `order` first (a picture-in-picture map is a small viewport with a higher order), then the HUD
+  once over the whole target. Each view is projected at its rectangle's aspect, submitted on its own
+  (the draw path's `queue.write_buffer` uploads — sprite vertices, culled instances, the grade —
+  order against submission, and in one encoder the first view drew the last view's instance list:
+  0 of its pixels right), and keeps its own TAA/SSGI history (`Renderer::with_view_history`).
+  Animation, GPU physics, fluid and particles still advance once per frame. New renderer methods:
+  `run_post_processing_in` (region + optional HUD) and `record_overlay`. Six mutations, each red.
+  Demo: `split_screen`. `Camera` gained two fields (`#[serde(default)]`; struct literals need
+  `viewport: None, order: 0`).
+
 - **The character controller honours one-way platforms; `CharacterController::drop_through_timer`.**
   The kinematic `update_character` ignored `Collider::one_way`, so a character's upward sweep hit
   the underside and it could not jump through. It now applies the pipeline's own rule

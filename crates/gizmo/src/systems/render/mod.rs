@@ -196,6 +196,137 @@ pub fn default_render_pass(
     view: &wgpu::TextureView,
     renderer: &mut Renderer,
 ) {
+    // **Split screen is this same call.** A scene with any camera that has a `viewport` is drawn
+    // by `render_viewports`, one view per such camera; every host that already calls this —
+    // `SimpleApp`, the editor's game view, a hand-written render loop — gets it without a second
+    // entry point to know about.
+    if any_camera_has_a_viewport(world) {
+        render_viewports(world, encoder, view, renderer);
+        return;
+    }
+    prepare_frame(world, renderer);
+    let camera = crate::renderer::components::active_camera(world);
+    let lods = step_gpu_simulations(world, encoder, renderer, &[camera_world_position(world, camera)]);
+    draw_camera_view(world, encoder, view, renderer, camera, lods, None, true);
+}
+
+/// Whether any camera in `world` asks for a [`Viewport`](crate::renderer::components::Viewport).
+fn any_camera_has_a_viewport(world: &World) -> bool {
+    world
+        .borrow::<Camera>()
+        .iter()
+        .any(|(_, c)| c.viewport.is_some())
+}
+
+/// **Split screen:** every camera with a [`viewport`](crate::renderer::components::Camera::viewport)
+/// drawn into its own rectangle of `view`, in [`order`](crate::renderer::components::Camera::order),
+/// then this frame's HUD once over the whole target. With no such camera this is
+/// [`default_render_pass`] (which also comes here by itself when one exists).
+///
+/// What a view gets of its own, and why each one is needed:
+/// - **its camera, at its rectangle's aspect** — the scene is rendered at the renderer's full
+///   internal size and resampled into the rectangle by the last post pass, so a half-width view
+///   is not stretched and is resolved at full width;
+/// - **its own command submission.** The draw path uploads camera-dependent data with
+///   `queue.write_buffer` — sprite vertices, the culled instance list, the post-process grade —
+///   and those writes order against *submission*, not against recording: two views recorded into
+///   one encoder would both draw whatever the last view wrote. So each view is recorded into an
+///   encoder of its own and submitted before the next view writes. **`encoder` itself receives
+///   only the HUD**, so anything recorded into it before this call executes *after* the views;
+///   record such work after this call, or submit it first;
+/// - **its own TAA and SSGI history** ([`Renderer::with_view_history`]), so neither accumulates
+///   another camera's picture into this one's.
+///
+/// What a frame does **once**, not once per view: transforms, materials, animation, GPU physics,
+/// fluid and particle simulation (at the level of detail of the nearest camera). Drawn per view,
+/// a split screen would play every animation and emit every particle twice as fast.
+pub fn render_viewports(
+    world: &mut World,
+    encoder: &mut wgpu::CommandEncoder,
+    view: &wgpu::TextureView,
+    renderer: &mut Renderer,
+) {
+    let mut views: Vec<(i32, u32, crate::renderer::components::Viewport)> = world
+        .borrow::<Camera>()
+        .iter()
+        .filter_map(|(id, c)| c.viewport.map(|v| (c.order, id, v)))
+        .collect();
+    if views.is_empty() {
+        prepare_frame(world, renderer);
+        let camera = crate::renderer::components::active_camera(world);
+        let lods =
+            step_gpu_simulations(world, encoder, renderer, &[camera_world_position(world, camera)]);
+        draw_camera_view(world, encoder, view, renderer, camera, lods, None, true);
+        return;
+    }
+    views.sort_by_key(|&(order, id, _)| (order, id));
+    let size = view.texture().size();
+
+    prepare_frame(world, renderer);
+    let positions: Vec<Vec3> =
+        views.iter().map(|&(_, id, _)| camera_world_position(world, Some(id))).collect();
+
+    let new_encoder = |renderer: &Renderer| {
+        renderer.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("split_screen_view"),
+        })
+    };
+    let mut frame = new_encoder(renderer);
+    // The views write only their own rectangles; whatever none of them covers is black, not last
+    // frame's picture.
+    frame.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("Split Screen Clear"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    });
+    let lods = step_gpu_simulations(world, &mut frame, renderer, &positions);
+
+    for (index, &(_, camera, viewport)) in views.iter().enumerate() {
+        let region = viewport.to_pixels(size.width, size.height);
+        renderer.with_view_history(index, |renderer| {
+            draw_camera_view(world, &mut frame, view, renderer, Some(camera), lods, Some(region), false);
+        });
+        let done = std::mem::replace(&mut frame, new_encoder(renderer));
+        renderer.queue.submit(std::iter::once(done.finish()));
+    }
+    tracing::trace!(views = views.len(), "[Render] split screen");
+    renderer.record_overlay(encoder, view);
+}
+
+/// Where `camera` is in the world: its synced `GlobalTransform`, else its own `Transform`, else the
+/// origin — the same fallback the camera's view matrix is built with, so the level of detail and
+/// the picture never disagree about where the camera stands.
+fn camera_world_position(world: &World, camera: Option<u32>) -> Vec3 {
+    let Some(camera) = camera else {
+        return Vec3::ZERO;
+    };
+    world
+        .borrow::<gizmo_physics_core::components::GlobalTransform>()
+        .get(camera)
+        .map(|g| g.matrix.to_scale_rotation_translation().2)
+        .or_else(|| {
+            world
+                .borrow::<gizmo_physics_core::components::Transform>()
+                .get(camera)
+                .map(|t| t.position)
+        })
+        .unwrap_or(Vec3::ZERO)
+}
+
+/// The part of a frame that happens **once**, however many cameras then draw it: meshes for
+/// terrains, transforms, materials, animation, bone attachments, the CPU side of GPU physics.
+fn prepare_frame(world: &mut World, renderer: &mut Renderer) {
     // **A terrain is a recipe, and the mesh built from it is what gets drawn.** A loaded scene
     // carries the recipe alone — `Mesh` owns GPU buffers, so no file can hold one — and until
     // 2026-08-19 the only code that performed the conversion was the editor's, driven by a queue
@@ -254,25 +385,6 @@ pub fn default_render_pass(
         crate::renderer::components::sprite_animation_system(world, animation_dt);
     }
 
-    // Post-process params are written AFTER the active camera is resolved (below), so the
-    // single exposure knob can be the camera's exposure — see the update_post_process call
-    // after camera selection. Exposure is applied ONCE here, over the whole composited HDR
-    // (deferred geometry + sky + unlit), instead of being baked per-geometry in the
-    // deferred pass and multiplied again by a separate global knob.
-
-    let aspect = if renderer.size.height > 0 {
-        renderer.size.width as f32 / renderer.size.height as f32
-    } else {
-        1.0
-    };
-    let mut proj = Mat4::perspective_rh(std::f32::consts::FRAC_PI_4, aspect, 0.1, 2000.0);
-    let mut view_mat = Mat4::from_translation(Vec3::ZERO);
-    let mut cam_pos = Vec3::ZERO;
-    let mut cam_forward = Vec3::new(0.0, 0.0, -1.0);
-
-    // TODO: Bütün nesnelerin (özellikle kamera ve çizilecek objelerin) global matrix'leri
-    // bu pass çağrılmadan hemen önce bir `update_transforms(world)` sistemiyle güncellenmiş olmalıdır.
-
     // **Bones carry what is attached to them.** `BoneAttachmentSystem` places every entity
     // parented to a joint — a sword in a hand, a hat on a head — onto the pose the animation
     // systems just wrote, so it belongs immediately after them and before anything reads a
@@ -291,6 +403,132 @@ pub fn default_render_pass(
         gpu_physics_readback_system(world, renderer);
     }
 
+}
+
+/// GPU simulation for the frame — physics, fluid, particles — recorded into `encoder` once.
+/// `cam_positions` are the cameras about to draw; the nearest sets the level of detail.
+/// Returns `(particle_lod, fluid_lod)` for the draws.
+fn step_gpu_simulations(
+    world: &mut World,
+    encoder: &mut wgpu::CommandEncoder,
+    renderer: &mut Renderer,
+    cam_positions: &[Vec3],
+) -> (f32, f32) {
+    if let Some(physics) = &renderer.gpu_physics {
+        // Her frame başında sıradaki state'i çekmek için WGPU CommandEncoder'a asenkron mapping iste.
+        physics.request_readback(encoder);
+
+        physics.compute_pass(encoder);
+        physics.debug_compute_pass(encoder);
+    }
+
+    // Compute LOD (Level of Detail) Scaling.
+    // `fluid_lod == 0` disables the fluid entirely (both `compute_pass` and
+    // `render_ssfr` early-return on a zero active count), so a scene that hasn't
+    // opted into fluid never simulates or composites the default 100k-particle
+    // ocean — previously its SSFR water surface rendered over every scene as a
+    // mottled overlay that read like broken shadows.
+    let fluid_pos = Vec3::new(0.0, 5.0, 0.0);
+    let lods_for = |cam_pos: Vec3| {
+    let dist_to_fluid = (cam_pos - fluid_pos).length();
+    let fluid_lod = if !renderer.fluid_enabled {
+        0.0
+    } else if dist_to_fluid < 40.0 {
+        1.0
+    } else if dist_to_fluid < 80.0 {
+        0.5
+    } else if dist_to_fluid < 150.0 {
+        0.1
+    } else {
+        0.0
+    };
+
+    let dist_to_origin = cam_pos.length();
+    let particle_lod = if dist_to_origin < 50.0 {
+        1.0
+    } else if dist_to_origin < 100.0 {
+        0.5
+    } else if dist_to_origin < 200.0 {
+        0.1
+    } else {
+        0.0
+    };
+    (particle_lod, fluid_lod)
+    };
+    // Every view is simulated for: the nearest camera sets the level of detail. One camera —
+    // the ordinary frame — gives exactly what that camera alone always gave.
+    let (particle_lod, fluid_lod) = if cam_positions.is_empty() {
+        lods_for(Vec3::ZERO)
+    } else {
+        cam_positions
+            .iter()
+            .map(|&p| lods_for(p))
+            .fold((0.0f32, 0.0f32), |(p0, f0), (p1, f1)| (p0.max(p1), f0.max(f1)))
+    };
+
+    // Gpu Fluid Processing
+    let active_fluid = renderer
+        .gpu_fluid
+        .as_ref()
+        .map(|f| (f.num_particles as f32 * fluid_lod) as u32)
+        .unwrap_or(0);
+    step_gpu_fluid(encoder, renderer, active_fluid);
+
+    // Gpu Particles Processing
+    if let Some(particles) = &renderer.gpu_particles {
+        let active_parts = (particles.max_particles as f32 * particle_lod) as u32;
+        let (dt, time) = world
+            .get_resource::<gizmo_core::time::Time>()
+            .map(|t| (t.dt(), t.elapsed() as f32))
+            .unwrap_or((0.016, 0.0));
+        particles.update_params(&renderer.queue, dt, time); // time → curl-noise evrimi
+        // Fill it from the scene. Without this the engine steps and draws a particle set that
+        // nothing ever puts anything into: the emitter-to-GPU bridge existed only inside
+        // `gizmo-studio`, so a `ParticleEmitter` on an entity emitted nothing for anyone using
+        // this pass. See `particles.rs`.
+        spawn_from_emitters(world, particles, &renderer.queue, dt);
+        particles.compute_pass(encoder, active_parts);
+    }
+
+    (particle_lod, fluid_lod)
+}
+
+/// One camera's picture: from its matrices to the post chain, into `region` of `view` (the whole
+/// of it when `None`), with the HUD when `overlay`. `camera` is an entity id; `None` draws from
+/// the origin, as a frame with no camera always has. `lods` comes from [`step_gpu_simulations`].
+#[allow(clippy::too_many_arguments)]
+fn draw_camera_view(
+    world: &mut World,
+    encoder: &mut wgpu::CommandEncoder,
+    view: &wgpu::TextureView,
+    renderer: &mut Renderer,
+    camera: Option<u32>,
+    lods: (f32, f32),
+    region: Option<[f32; 4]>,
+    overlay: bool,
+) {
+    // Post-process params are written AFTER the active camera is resolved (below), so the
+    // single exposure knob can be the camera's exposure — see the update_post_process call
+    // after camera selection. Exposure is applied ONCE here, over the whole composited HDR
+    // (deferred geometry + sky + unlit), instead of being baked per-geometry in the
+    // deferred pass and multiplied again by a separate global knob.
+
+    // A split-screen view takes its own rectangle's shape; the whole target otherwise.
+    let aspect = match region {
+        Some([_, _, w, h]) => w / h,
+        None if renderer.size.height > 0 => {
+            renderer.size.width as f32 / renderer.size.height as f32
+        }
+        None => 1.0,
+    };
+    let mut proj = Mat4::perspective_rh(std::f32::consts::FRAC_PI_4, aspect, 0.1, 2000.0);
+    let mut view_mat = Mat4::from_translation(Vec3::ZERO);
+    let mut cam_pos = Vec3::ZERO;
+    let mut cam_forward = Vec3::new(0.0, 0.0, -1.0);
+
+    // TODO: Bütün nesnelerin (özellikle kamera ve çizilecek objelerin) global matrix'leri
+    // bu pass çağrılmadan hemen önce bir `update_transforms(world)` sistemiyle güncellenmiş olmalıdır.
+
     let mut cam_exposure = 1.0;
     // Shadow cascades must follow the ACTIVE camera's near/far/fov, not hardcoded values
     // (otherwise splits/cascade matrices are wrong for any non-default camera).
@@ -302,7 +540,7 @@ pub fn default_render_pass(
     // renderer's own fields", which is what every camera got before `PostProcess` existed and is
     // what a scene that has never been graded still gets. Read through `shared` so the editor's
     // viewport previews the grade by the same rule this frame applies it by.
-    let grade = shared::active_camera_grade(world);
+    let grade = camera.and_then(|c| shared::camera_grade(world, c));
 
     // KAMERALARI BUL VE MATRIX YARAT
     let cameras = world.borrow::<Camera>();
@@ -319,7 +557,7 @@ pub fn default_render_pass(
         // environment panel and `shared::active_camera_grade` need the same answer and the panel
         // sits below this crate. A second copy of the rule is a second answer to "which camera is
         // the scene's", and this file has the history to show what that costs.
-        let active_cam = crate::renderer::components::active_camera(world);
+        let active_cam = camera;
         if let Some(active_cam) = active_cam {
             if let Some(cam) = cameras.get(active_cam) {
                 // Camera world position: prefer a synced GlobalTransform (needed when the
@@ -560,69 +798,11 @@ pub fn default_render_pass(
     let (draw_items, uploaded_instances) =
         batching::collect_draw_items(world, renderer, unjittered_view_proj, setup.cascade_view_projs, cam_pos);
 
+    // The GPU-physics cull reads the view's camera, so it is per view; its simulation is not.
     if let Some(physics) = &renderer.gpu_physics {
-        // Her frame başında sıradaki state'i çekmek için WGPU CommandEncoder'a asenkron mapping iste.
-        physics.request_readback(encoder);
-
-        physics.compute_pass(encoder);
-        physics.debug_compute_pass(encoder);
         physics.cull_pass(encoder, renderer.scene.view_bind_group());
     }
-
-    // Compute LOD (Level of Detail) Scaling.
-    // `fluid_lod == 0` disables the fluid entirely (both `compute_pass` and
-    // `render_ssfr` early-return on a zero active count), so a scene that hasn't
-    // opted into fluid never simulates or composites the default 100k-particle
-    // ocean — previously its SSFR water surface rendered over every scene as a
-    // mottled overlay that read like broken shadows.
-    let fluid_pos = Vec3::new(0.0, 5.0, 0.0);
-    let dist_to_fluid = (cam_pos - fluid_pos).length();
-    let fluid_lod = if !renderer.fluid_enabled {
-        0.0
-    } else if dist_to_fluid < 40.0 {
-        1.0
-    } else if dist_to_fluid < 80.0 {
-        0.5
-    } else if dist_to_fluid < 150.0 {
-        0.1
-    } else {
-        0.0
-    };
-
-    let dist_to_origin = cam_pos.length();
-    let particle_lod = if dist_to_origin < 50.0 {
-        1.0
-    } else if dist_to_origin < 100.0 {
-        0.5
-    } else if dist_to_origin < 200.0 {
-        0.1
-    } else {
-        0.0
-    };
-
-    // Gpu Fluid Processing
-    let active_fluid = renderer
-        .gpu_fluid
-        .as_ref()
-        .map(|f| (f.num_particles as f32 * fluid_lod) as u32)
-        .unwrap_or(0);
-    step_gpu_fluid(encoder, renderer, active_fluid);
-
-    // Gpu Particles Processing
-    if let Some(particles) = &renderer.gpu_particles {
-        let active_parts = (particles.max_particles as f32 * particle_lod) as u32;
-        let (dt, time) = world
-            .get_resource::<gizmo_core::time::Time>()
-            .map(|t| (t.dt(), t.elapsed() as f32))
-            .unwrap_or((0.016, 0.0));
-        particles.update_params(&renderer.queue, dt, time); // time → curl-noise evrimi
-        // Fill it from the scene. Without this the engine steps and draws a particle set that
-        // nothing ever puts anything into: the emitter-to-GPU bridge existed only inside
-        // `gizmo-studio`, so a `ParticleEmitter` on an entity emitted nothing for anyone using
-        // this pass. See `particles.rs`.
-        spawn_from_emitters(world, particles, &renderer.queue, dt);
-        particles.compute_pass(encoder, active_parts);
-    }
+    let (particle_lod, fluid_lod) = lods;
 
     // GPU cull pass removed since we use CPU instancing
 
@@ -697,7 +877,7 @@ pub fn default_render_pass(
     record_sprites(encoder, renderer, world, unjittered_view_proj);
     record_text(encoder, renderer, world);
 
-    renderer.run_post_processing(encoder, view);
+    renderer.run_post_processing_in(encoder, view, region, overlay);
 }
 
 // ============================================================
@@ -3368,6 +3548,185 @@ mod golden_render_tests {
                 "the two passes differ on only {changed}/{total} pixels — the second camera is \
                  not reaching its own pass",
             );
+        });
+    }
+
+    /// A camera drawn into `viewport` of the 128² target: placed at `x`, 6 m back, looking down −Z.
+    fn split_camera(world: &mut World, x: f32, viewport: crate::renderer::components::Viewport, primary: bool) {
+        let cam = world.spawn_bundle(CameraBundle {
+            position: Vec3::new(x, 0.0, 6.0),
+            yaw: -std::f32::consts::FRAC_PI_2,
+            pitch: 0.0,
+            primary,
+            ..Default::default()
+        });
+        if let Some(mut c) = world.borrow_mut::<crate::renderer::components::Camera>().get_mut(cam.id()) {
+            c.viewport = Some(viewport);
+        }
+    }
+
+    /// Two cubes 40 m apart — red at x = −20, blue at x = +20 — under a sun, so that a camera in
+    /// front of one cannot see the other: which colour a half of the frame shows says which camera
+    /// drew it.
+    fn split_screen_scene(renderer: &Renderer, world: &mut World) {
+        let mut assets = AssetManager::new();
+        let tex = assets.create_white_texture(
+            &renderer.device,
+            &renderer.queue,
+            &renderer.scene.texture_bind_group_layout,
+        );
+        for (x, colour) in [(-20.0, Vec4::new(0.9, 0.05, 0.05, 1.0)), (20.0, Vec4::new(0.05, 0.05, 0.9, 1.0))] {
+            let cube = world.spawn();
+            world.add_component(cube, Transform::new(Vec3::new(x, 0.0, 0.0)));
+            world.add_component(cube, GlobalTransform::default());
+            world.add_component(cube, AssetManager::create_cube(&renderer.device));
+            world.add_component(cube, Material::new(tex.clone()).with_pbr(colour, 0.5, 0.0));
+            world.add_component(cube, MeshRenderer::new());
+        }
+        world.spawn_bundle(DirectionalLightBundle { intensity: 3.0, ..Default::default() });
+    }
+
+    /// `(red, blue, red bounding box [x0, y0, x1, y1])` over the pixels of the 128²-frame with
+    /// `x0 <= x < x1`.
+    fn split_colours(frame: &[u8], x0: usize, x1: usize) -> (usize, usize, [usize; 4]) {
+        let (mut red, mut blue) = (0, 0);
+        let mut bbox = [usize::MAX, usize::MAX, 0, 0];
+        for y in 0..128usize {
+            for x in x0..x1 {
+                let p = &frame[(y * 128 + x) * 4..][..3];
+                let (r, g, b) = (p[0] as i32, p[1] as i32, p[2] as i32);
+                if r > b + 40 && r > g + 40 {
+                    red += 1;
+                    bbox = [bbox[0].min(x), bbox[1].min(y), bbox[2].max(x + 1), bbox[3].max(y + 1)];
+                }
+                if b > r + 40 && b > g + 20 {
+                    blue += 1;
+                }
+            }
+        }
+        (red, blue, bbox)
+    }
+
+    /// **Split screen:** two cameras with viewports, the left and right halves, each draws its own
+    /// cube into its own half — and at its half's aspect ratio, so a cube seen face-on stays
+    /// square instead of being squeezed to half its width.
+    ///
+    /// Discriminating three ways. Writing the whole target from every view (no region) leaves
+    /// only the last camera's picture, so the left half shows blue. Recording both views into one
+    /// submission draws the left view with the instance list the right view culled last — no red
+    /// cube at all. And building the projection at the target's aspect instead of the half's
+    /// gives a red box half as wide as it is tall.
+    ///
+    /// Then TAA on: each view keeps its own history (`Renderer::with_view_history`). With one
+    /// history between the two, every frame blends the other camera's picture into this one —
+    /// measured, though, TAA's neighbourhood clamp hides most of that (the left half's red count
+    /// drops 2067 → 1933, too close to threshold reliably), so the test pins the cause instead:
+    /// the renderer's own TAA has stepped once per frame. Shared, both views step it — twice per
+    /// frame — which is also what sends each view's jitter through every other Halton sample.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn split_screen_draws_each_camera_into_its_own_half() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        use crate::renderer::components::Viewport;
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            let mut world = World::new();
+            split_screen_scene(&renderer, &mut world);
+            split_camera(&mut world, -20.0, Viewport::left_half(), true);
+            split_camera(&mut world, 20.0, Viewport::right_half(), false);
+            let frame = render_world(&mut renderer, &mut world).await;
+
+            let (left_red, left_blue, bbox) = split_colours(&frame, 0, 64);
+            let (right_red, right_blue, _) = split_colours(&frame, 64, 128);
+            assert!(left_red >= 150, "the left half shows only {left_red} red pixels — camera A is not in it");
+            assert!(right_blue >= 150, "the right half shows only {right_blue} blue pixels — camera B is not in it");
+            assert!(left_blue <= 5 && right_red <= 5, "colours crossed halves: {left_blue} blue left, {right_red} red right");
+            let (w, h) = ((bbox[2] - bbox[0]) as f32, (bbox[3] - bbox[1]) as f32);
+            assert!(
+                (0.8..=1.25).contains(&(w / h)),
+                "a face-on cube is {w}×{h} px in its half — the projection is not using the half's aspect",
+            );
+
+            // TAA on: four frames, each view with its own history.
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.ssgi = None;
+            let mut frame = Vec::new();
+            for _ in 0..4 {
+                frame = render_world(&mut renderer, &mut world).await;
+            }
+            let (left_red, left_blue, _) = split_colours(&frame, 0, 64);
+            let (right_red, right_blue, _) = split_colours(&frame, 64, 128);
+            let steps = renderer.taa.as_ref().map(|t| t.frame_index);
+            assert_eq!(steps, Some(4), "four split-screen frames stepped view 0's TAA {steps:?} times — the views share it");
+            assert!(left_red >= 150 && right_blue >= 150, "with TAA: {left_red} red left, {right_blue} blue right");
+            assert!(
+                left_blue <= 5 && right_red <= 5,
+                "with TAA the views bleed into each other ({left_blue} blue left, {right_red} red \
+                 right) — they share one history",
+            );
+        });
+    }
+
+    /// What a split-screen frame does once, it must do once: the HUD is drawn a single time over
+    /// the whole target (drawn per view, a half-transparent sprite is laid over itself and comes
+    /// out brighter), and the frame's animation advances by one `dt` however many cameras draw.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_split_screen_frame_draws_the_hud_and_steps_animation_once() {
+        use crate::renderer::components::{Sprite, SpriteAnimation, Viewport};
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            let mut world = World::new();
+            split_screen_scene(&renderer, &mut world);
+            // The top two quarters; the bottom half is no view's, so it is cleared to black.
+            split_camera(&mut world, -20.0, Viewport::quarter(0), true);
+            split_camera(&mut world, 20.0, Viewport::quarter(1), false);
+
+            let white = renderer
+                .load_sprite_rgba(&[255; 4], 1, 1, gizmo_renderer::sprite::SpriteFilter::Nearest)
+                .unwrap();
+            // Half-transparent white over that black, then 30 fps animation stepped by 1/20 s:
+            // one step is frame 1, two would be frame 3.
+            world.spawn_bundle((
+                Sprite::screen(white, gizmo_math::Vec2::splat(24.0), gizmo_math::Vec2::new(40.0, 90.0))
+                    .with_color(Vec4::new(1.0, 1.0, 1.0, 0.5)),
+                SpriteAnimation::new(4, 1, 0, 3, 30.0),
+            ));
+            let mut time = crate::core::time::Time::new();
+            time.update(1.0 / 20.0);
+            world.insert_resource(time);
+
+            let frame = render_world(&mut renderer, &mut world).await;
+            let hud = frame[(102 * 128 + 52) * 4];
+            assert!(
+                (170..=205).contains(&hud),
+                "the HUD reads {hud} over black: linear 0.5 is sRGB ~188 drawn once (measured 241 drawn once per view)",
+            );
+            assert_eq!(frame[(120 * 128 + 10) * 4], 0, "the part of the target no view covers is not black");
+            let step = world
+                .borrow::<SpriteAnimation>()
+                .iter()
+                .map(|(_, a)| a.frame())
+                .next()
+                .unwrap();
+            assert_eq!(step, 1, "two views advanced the animation to frame {step}, not 1");
         });
     }
 

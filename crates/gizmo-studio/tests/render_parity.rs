@@ -381,6 +381,9 @@ fn both_draw_loops_skip_a_hidden_object() {
 /// It is a `PostProcess` component on the camera now, and both paths must read it *through*
 /// `active_camera_grade` rather than each finding "the camera" its own way — a second rule would
 /// be a second answer, and the two paths would grade different cameras in the same scene.
+/// Since split screen (2026-11-01) the game path reads it through `camera_grade`, the per-camera
+/// form `active_camera_grade` is itself built on: each view is graded by its own camera, through
+/// the same lookup. The check is on that shared name, which both spellings contain.
 ///
 /// In CODE, not in a comment, for the reason its siblings above give.
 #[test]
@@ -388,7 +391,7 @@ fn both_draw_paths_grade_from_the_active_cameras_component() {
     let (game, editor) = draw_path_sources();
     for (path, text) in [("game", &game), ("editor", &editor)] {
         assert!(
-            code_only(text).contains("active_camera_grade("),
+            code_only(text).contains("camera_grade("),
             "the {path} path does not read the camera's `PostProcess`, so an authored look either \
              does not reach it or reaches it by a second rule"
         );
@@ -543,6 +546,15 @@ fn silent_capabilities(workspace: &std::path::Path) -> Vec<String> {
 fn every_render_capability_is_known_to_both_draw_paths() {
     /// Declared asymmetries: (component, which path, why).
     const EXCEPTIONS: &[(&str, Path, &str)] = &[
+        (
+            "Viewport",
+            Path::GameOnly,
+            "a camera's rectangle of the target, for split screen: `render_viewports` composes one \
+             view per such camera into the game's frame. The editor's viewport draws the one \
+             editor camera by design, and its Game panel previews through the studio's own \
+             single-camera path, so a split-screen game shows its primary camera there and its \
+             split when run.",
+        ),
         (
             "EditorRenderTarget",
             Path::EditorOnly,

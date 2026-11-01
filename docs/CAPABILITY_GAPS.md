@@ -205,7 +205,43 @@ directory.
 Measured in `pbr`: a metallic surface has no environment to reflect. SSR covers what is on
 screen (`ssr` measures it working well) and nothing else.
 
-### A5b. No split screen / multi-viewport — two of the three obstacles are closed
+### A5b. Split screen / multi-viewport — **CLOSED 2026-11-01**
+
+**`Camera::viewport` + `Camera::order`, drawn by `render_viewports`** — which `default_render_pass`
+calls by itself as soon as any camera has a viewport, so every host that already renders a scene
+gets it. Each camera with a viewport draws into its own rectangle (fractions of the target, top-left
+origin; `Viewport::{left_half, right_half, top_half, bottom_half, quarter, FULL, new}`), lower
+`order` first, and the HUD is drawn once over the whole target. Demo: `split_screen` (B cycles side
+by side, stacked, picture-in-picture, single camera).
+
+What the remaining layer turned out to be — not the one this section predicted. Temporal state was
+the expected gap; the larger one was that **the draw path uploads camera-dependent data with
+`queue.write_buffer`** beyond the uniforms `SceneView` separated: sprite vertices (built with the
+camera's view-projection), the culled instance list, the post-process grade. Those writes order
+against submission, so two views in one encoder both draw what the last one wrote. Measured: with
+both views in one submission, the left view of `split_screen_draws_each_camera_into_its_own_half`
+shows **0** red pixels — it draws with the instance list the right view culled. Separating every
+such buffer per view would be a rewrite of the draw path; **one submission per view** fixes all of
+them at once and costs a submit per camera. The caller's encoder receives only the HUD.
+
+The rest, each pinned by a test that goes red when it is undone:
+- **the region**: the last post pass (composite, or FXAA when on) writes only the view's rectangle
+  and loads the rest; without it the last view covers the target;
+- **the aspect**: the projection is built for the rectangle; with the target's instead, a face-on
+  cube measured **22×44** px in a half;
+- **once per frame, not per view**: transforms, materials, animation, GPU physics, fluid, particles
+  (`prepare_frame`, `step_gpu_simulations`) — per view, a sprite animation stepped to the wrong
+  frame; the HUD is drawn once (per view it read **241** for half-white over black, against ~188);
+- **TAA and SSGI history per view** (`Renderer::with_view_history`): views 1.. get their own,
+  swapped in for their draw. TAA's neighbourhood clamp hides most of the cross-blending a shared
+  history causes (the left half's red count 2067 → 1933), so the test pins the cause: view 0's TAA
+  steps once per frame (shared, it stepped 8 times in 4 frames).
+
+Not covered: the studio's viewport and Game panel draw one camera (render_parity lists `Viewport`
+as game-only, with the reason); the scene is rendered at the renderer's full internal size per view,
+so a four-way split costs four full renders.
+
+**History of this section, kept for the measurements:**
 
 `Camera` has no viewport rectangle, and the render path picks exactly one camera:
 `cameras.iter().find(|(_, c)| c.primary).or_else(|| cameras.iter().next())` is the whole of
@@ -704,7 +740,8 @@ and `emissive` (item 4, the only undocumented one). No further silent fields.
 > entries below are one unlock away from each other there. Per-pass uniforms — expected to close
 > multi-viewport, planar reflections and reflection probes on its own — landed 2026-08-23 as
 > `SceneView` and closed the camera half of all three; the shadow cascades and cluster table are
-> still shared per encoder, and that is what the three now wait on (A5b, item 3).
+> still shared per encoder, and that is what the three now wait on (A5b, item 3). Multi-viewport
+> itself closed 2026-11-01 by a submission per view instead (A5b).
 
 1. ~~**Text / font rendering (A2).**~~ **DONE 2026-08-24, both halves.** `gizmo-renderer::text` —
    fonts, a glyph atlas, layout — a `Text` component in two spaces drawn by one pass both hosts

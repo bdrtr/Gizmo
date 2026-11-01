@@ -85,6 +85,97 @@ pub struct Camera {
     /// scenes saved before this field was added loading as perspective.
     #[serde(default)]
     pub projection: ProjectionMode,
+    /// Where on the render target this camera draws — `None` (the default) for the whole of it.
+    ///
+    /// Only read by the split-screen path (`gizmo::render_viewports`): it draws **every** camera
+    /// that has one, each into its own rectangle, and falls back to the single `primary` camera
+    /// when none does. The projection takes the rectangle's aspect ratio, so a half-width view
+    /// is not stretched. `#[serde(default)]`.
+    #[serde(default)]
+    pub viewport: Option<Viewport>,
+    /// Draw order among cameras with a [`viewport`](Self::viewport): lower first, so a higher one
+    /// lands on top — a picture-in-picture rear-view mirror is a small viewport with a higher
+    /// order. Ties go by entity order. `#[serde(default)]`.
+    #[serde(default)]
+    pub order: i32,
+}
+
+/// A rectangle of the render target, as **fractions** of its size with the origin at the
+/// top-left — so the same viewport fits any window size. See [`Camera::viewport`].
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Viewport {
+    /// Left edge, 0 = the target's left.
+    pub x: f32,
+    /// Top edge, 0 = the target's top.
+    pub y: f32,
+    /// Width, 1 = the whole target.
+    pub width: f32,
+    /// Height, 1 = the whole target.
+    pub height: f32,
+}
+
+impl Viewport {
+    /// The whole target.
+    pub const FULL: Self = Self { x: 0.0, y: 0.0, width: 1.0, height: 1.0 };
+
+    /// A rectangle from its top-left corner and size, all fractions of the target.
+    pub const fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
+        Self { x, y, width, height }
+    }
+
+    /// The left half — player one of a side-by-side split.
+    pub const fn left_half() -> Self {
+        Self::new(0.0, 0.0, 0.5, 1.0)
+    }
+
+    /// The right half.
+    pub const fn right_half() -> Self {
+        Self::new(0.5, 0.0, 0.5, 1.0)
+    }
+
+    /// The top half — player one of a stacked split.
+    pub const fn top_half() -> Self {
+        Self::new(0.0, 0.0, 1.0, 0.5)
+    }
+
+    /// The bottom half.
+    pub const fn bottom_half() -> Self {
+        Self::new(0.0, 0.5, 1.0, 0.5)
+    }
+
+    /// Quarter `index` (0–3, row by row from the top-left) of a four-way split; an index past 3
+    /// wraps.
+    pub const fn quarter(index: u32) -> Self {
+        let i = index % 4;
+        Self::new((i % 2) as f32 * 0.5, (i / 2) as f32 * 0.5, 0.5, 0.5)
+    }
+
+    /// This rectangle in pixels of a `width` × `height` target: `[x, y, w, h]`, clipped to the
+    /// target and at least one pixel in each direction, so it is always a valid wgpu viewport.
+    pub fn to_pixels(self, width: u32, height: u32) -> [f32; 4] {
+        let (tw, th) = (width.max(1) as f32, height.max(1) as f32);
+        let x0 = (self.x.clamp(0.0, 1.0) * tw).round();
+        let y0 = (self.y.clamp(0.0, 1.0) * th).round();
+        let x1 = ((self.x + self.width).clamp(0.0, 1.0) * tw).round();
+        let y1 = ((self.y + self.height).clamp(0.0, 1.0) * th).round();
+        let x0 = x0.min(tw - 1.0);
+        let y0 = y0.min(th - 1.0);
+        [x0, y0, (x1 - x0).max(1.0), (y1 - y0).max(1.0)]
+    }
+
+    /// The aspect ratio (width / height) this rectangle has on a `width` × `height` target —
+    /// what the camera's projection is built with.
+    pub fn aspect(self, width: u32, height: u32) -> f32 {
+        let [_, _, w, h] = self.to_pixels(width, height);
+        w / h
+    }
+}
+
+impl Default for Viewport {
+    fn default() -> Self {
+        Self::FULL
+    }
 }
 
 impl Camera {
@@ -121,7 +212,21 @@ impl Camera {
             exposure: 1.0, // Varsayılan pozlama 1.0
             primary,
             projection: ProjectionMode::Perspective,
+            viewport: None,
+            order: 0,
         }
+    }
+
+    /// This camera drawn into `viewport` of the target (see [`Camera::viewport`]).
+    pub fn with_viewport(mut self, viewport: Viewport) -> Self {
+        self.viewport = Some(viewport);
+        self
+    }
+
+    /// This camera's draw [`order`](Self::order) among viewport cameras.
+    pub fn with_order(mut self, order: i32) -> Self {
+        self.order = order;
+        self
     }
 
     /// Toggles between perspective and orthographic projection. When switching to

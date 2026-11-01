@@ -555,6 +555,7 @@ pub fn run_post_processing(
     renderer: &crate::Renderer,
     encoder: &mut wgpu::CommandEncoder,
     output_view: &wgpu::TextureView,
+    region: Option<[f32; 4]>,
 ) {
     // Pass 1: Bright Extract (WASM'da KAPALI)
     #[cfg(not(target_arch = "wasm32"))]
@@ -632,13 +633,22 @@ pub fn run_post_processing(
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    // Into a region of a shared target (split screen), the rest of the target is
+                    // another view's and must survive.
+                    load: if region.is_some() {
+                        wgpu::LoadOp::Load
+                    } else {
+                        wgpu::LoadOp::Clear(wgpu::Color::BLACK)
+                    },
                     store: wgpu::StoreOp::Store,
                 },
             })],
             depth_stencil_attachment: None,
             ..Default::default()
         });
+        if let Some([x, y, w, h]) = region {
+            pass.set_viewport(x, y, w, h, 0.0, 1.0);
+        }
         pass.set_pipeline(&renderer.post.composite_pipeline);
         pass.set_bind_group(0, &renderer.post.hdr_bind_group, &[]);
         pass.set_bind_group(1, &renderer.post.composite_bloom_bind_group, &[]);

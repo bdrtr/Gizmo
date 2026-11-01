@@ -665,6 +665,7 @@ impl Renderer {
             volumetric,
             decal,
             taa,
+            view_history: Vec::new(),
             fxaa,
             gpu_particles,
             gpu_physics,

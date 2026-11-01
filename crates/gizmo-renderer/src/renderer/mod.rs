@@ -193,6 +193,8 @@ pub struct Renderer {
     // === TAA — Temporal Anti-Aliasing (ping-pong history + Halton jitter) ===
     /// Temporal anti-aliasing: the history buffers and the Halton jitter sequence.
     pub taa: Option<crate::taa::TaaState>,
+    /// Temporal state of split-screen views 1.., see [`Renderer::with_view_history`].
+    pub(crate) view_history: Vec<ViewHistory>,
 
     // === FXAA — Fast Approximate Anti-Aliasing (son post-process pass) ===
     /// FXAA, the last pass in the chain. When present and enabled, post-processing writes into
@@ -540,6 +542,9 @@ impl Renderer {
             self.post.blur_h_bind_group = h_bg;
             self.post.blur_v_bind_group = v_bg;
 
+            // Split-screen views' own histories were built at the old size; they rebuild on use.
+            self.view_history.clear();
+
             // TAA history textures + bind groups (needs fresh hdr_view + position_view)
             if let (Some(ref mut taa), Some(ref def)) = (&mut self.taa, &self.deferred) {
                 taa.resize(
@@ -603,20 +608,130 @@ impl Renderer {
         encoder: &mut wgpu::CommandEncoder,
         output_view: &wgpu::TextureView,
     ) {
+        self.run_post_processing_in(encoder, output_view, None, true);
+    }
+
+    /// [`run_post_processing`](Self::run_post_processing) for one view of a split screen.
+    ///
+    /// With a `region` (`[x, y, w, h]` in pixels of `output_view`) the finished image is
+    /// resampled into that rectangle only, and the rest of the output is **kept** — it belongs to
+    /// the other views — rather than cleared. The scene behind it is still rendered at the
+    /// renderer's full internal size, with the camera's projection built for the region's aspect,
+    /// so a half-width view is resolved at full width and filtered down, not stretched.
+    ///
+    /// `overlay: false` leaves out the HUD. A split screen draws it once, over the whole target,
+    /// after the last view ([`record_overlay`](Self::record_overlay)); drawn per view it would be
+    /// laid over itself once per view, which doubles anything translucent.
+    pub fn run_post_processing_in(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        output_view: &wgpu::TextureView,
+        region: Option<[f32; 4]>,
+        overlay: bool,
+    ) {
         if let Some(ref fxaa) = self.fxaa {
             if fxaa.enabled {
-                // Composite → FXAA input texture → FXAA → output_view
-                crate::post_process::run_post_processing(self, encoder, &fxaa.input_texture_view);
-                crate::fxaa::run_fxaa_pass(fxaa, encoder, output_view);
-                crate::overlay::record(self, encoder, output_view);
+                // Composite → FXAA input texture → FXAA → output_view. The composite fills the
+                // whole FXAA input; only the last pass, the one writing the output, takes the
+                // region.
+                crate::post_process::run_post_processing(
+                    self,
+                    encoder,
+                    &fxaa.input_texture_view,
+                    None,
+                );
+                crate::fxaa::run_fxaa_pass(fxaa, encoder, output_view, region);
+                if overlay {
+                    crate::overlay::record(self, encoder, output_view);
+                }
                 return;
             }
         }
         // FXAA kapalıysa doğrudan output'a yaz
-        crate::post_process::run_post_processing(self, encoder, output_view);
+        crate::post_process::run_post_processing(self, encoder, output_view, region);
         // After the whole post chain, FXAA included: a HUD is pixels, not radiance, and an edge
         // filter run over a glyph only blurs it. See `crate::overlay`.
+        if overlay {
+            crate::overlay::record(self, encoder, output_view);
+        }
+    }
+
+    /// Draws this frame's HUD — screen sprites, UI backgrounds, screen text — onto `output_view`.
+    ///
+    /// [`run_post_processing`](Self::run_post_processing) already does this; it is separate for a
+    /// split screen, which composes several views with the overlay left out and then draws it once.
+    pub fn record_overlay(&self, encoder: &mut wgpu::CommandEncoder, output_view: &wgpu::TextureView) {
         crate::overlay::record(self, encoder, output_view);
+    }
+
+    /// Runs `f` with view `view`'s temporal state in place of the renderer's own.
+    ///
+    /// TAA and SSGI accumulate over frames: each keeps last frame's image and camera and blends
+    /// this frame into it. With two cameras drawn in one frame, one shared history would be
+    /// blended with the *other* camera's picture every frame. So view 0 uses the renderer's own
+    /// `taa`/`ssgi`, and every further view gets its own, built on first use with the renderer's
+    /// size and swapped into `self.taa`/`self.ssgi` only for the duration of `f` — which is why
+    /// the draw code needs no change to be per-view. A history is only made for an effect the
+    /// renderer has (a `None` stays `None`), and TAA's `enabled` follows the renderer's.
+    /// [`resize`](Self::resize) drops them; they rebuild at the new size.
+    pub fn with_view_history<R>(&mut self, view: usize, f: impl FnOnce(&mut Self) -> R) -> R {
+        if view == 0 {
+            return f(self);
+        }
+        let slot = view - 1;
+        while self.view_history.len() <= slot {
+            let fresh = self.new_view_history();
+            self.view_history.push(fresh);
+        }
+        let mut history = std::mem::take(&mut self.view_history[slot]);
+        let swap_taa = self.taa.is_some() && history.taa.is_some();
+        let swap_ssgi = self.ssgi.is_some() && history.ssgi.is_some();
+        if swap_taa {
+            if let (Some(own), Some(view_taa)) = (&self.taa, &mut history.taa) {
+                view_taa.enabled = own.enabled;
+            }
+            std::mem::swap(&mut self.taa, &mut history.taa);
+        }
+        if swap_ssgi {
+            std::mem::swap(&mut self.ssgi, &mut history.ssgi);
+        }
+        let out = f(self);
+        if swap_taa {
+            std::mem::swap(&mut self.taa, &mut history.taa);
+        }
+        if swap_ssgi {
+            std::mem::swap(&mut self.ssgi, &mut history.ssgi);
+        }
+        self.view_history[slot] = history;
+        out
+    }
+
+    fn new_view_history(&self) -> ViewHistory {
+        let Some(def) = &self.deferred else {
+            return ViewHistory::default();
+        };
+        let (w, h) = (self.size.width, self.size.height);
+        ViewHistory {
+            taa: self.taa.as_ref().map(|_| {
+                crate::taa::TaaState::new(
+                    &self.device,
+                    &self.post.hdr_texture_view,
+                    &def.world_position_view,
+                    w,
+                    h,
+                )
+            }),
+            ssgi: self.ssgi.as_ref().map(|_| {
+                crate::ssgi::SsgiState::new(
+                    &self.device,
+                    &self.scene,
+                    def,
+                    &self.post.hdr_texture_view,
+                    w,
+                    h,
+                )
+            }),
+        }
     }
 
     /// Uploads the post-process parameters for this frame.
@@ -950,4 +1065,12 @@ mod tests {
             );
         });
     }
+}
+
+/// The temporal state of one split-screen view after the first — see
+/// [`Renderer::with_view_history`].
+#[derive(Default)]
+pub(crate) struct ViewHistory {
+    taa: Option<crate::taa::TaaState>,
+    ssgi: Option<crate::ssgi::SsgiState>,
 }

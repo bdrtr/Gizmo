@@ -1,95 +1,66 @@
-//! # Bölünmüş ekran ve kamera değiştirme
+//! # Bölünmüş ekran — `Camera::viewport`
 //!
-//! Aynı kareyi ikiye bölüp iki farklı kameradan göstermek. Bunun için her kameraya hedef
-//! üstünde bir dikdörtgen (viewport) ve bir çizim sırası verilmesi gerekir; iki kamera
-//! aynı kareye, yan yana iki bölgeye çizer.
+//! Aynı kare iki kameradan: sahnenin uçan kamerası ve sahneye tepeden bakan ikinci bir kamera.
+//! Bir kameraya hedefin bir dikdörtgenini vermek yetiyor:
 //!
-//! ## Motorda bunun yolu **yok**, ve sebebi tek satır
-//!
-//! Oyun çizim yolu kareye **bir** kamera seçiyor:
-//!
-//! ```text
-//! cameras.iter().find(|(_, c)| c.primary).or_else(|| cameras.iter().next())
+//! ```ignore
+//! camera.viewport = Some(Viewport::left_half());
 //! ```
 //!
-//! `active_camera`'nın tamamı bu — işaretli olan, yoksa ilki. Ve seçtiği kamerayla `Camera` tipi
-//! üstünde **viewport dikdörtgeni diye bir alan yok**: `fov`, `near`, `far`, `yaw`, `pitch`,
-//! `primary`, `exposure`, izdüşüm kipi. Yani "şu kamerayı ekranın sol yarısına çiz" cümlesi
-//! kurulamıyor.
+//! `default_render_pass` bir kamerada `viewport` görünce kareyi `render_viewports` ile çiziyor:
+//! `viewport`'u olan **her** kamera kendi dikdörtgenine, `order` sırasıyla (küçük önce, büyük
+//! üstte), sonra HUD bir kez bütün hedefin üstüne. Hiçbir kamerada `viewport` yoksa kare eskisi
+//! gibi tek `primary` kameradan çiziliyor.
 //!
-//! `default_render_pass` de kamera ya da bölge parametresi almıyor; kendi geçişlerini kendi
-//! kuruyor ve hedefin tamamına yazıyor. İki kez çağırmak da işe yaramaz — ikincisi birincinin
-//! üstüne yazar, çünkü kırpılacağı bir bölge yok.
+//! Her görüşün kendine ait olanlar — ve her birinin neden gerektiği `render_viewports`'un
+//! belgesinde ölçümüyle:
+//!   * **dikdörtgeninin en-boy oranı** — yarım genişlikte bir küp kare kalıyor, ezilmiyor;
+//!   * **kendi gönderimi (submit)** — sprite köşeleri, ayıklanmış instance listesi ve post-process
+//!     ayarları `queue.write_buffer` ile yükleniyor, ve bu yazmalar kayda değil gönderime göre
+//!     sıralanıyor: iki görüş tek encoder'da olsa ikisi de son yazılanı çizerdi;
+//!   * **kendi TAA/SSGI geçmişi** — yoksa her kare öbür kameranın resmi bu kameranınkine
+//!     harmanlanırdı.
 //!
-//! ## Elde kalan: kamera **değiştirmek**
-//!
-//! Çoklu kamera tamamen yok değil — `primary` bayrağını çevirmek çalışıyor, ve bu bir oyunun
-//! ihtiyaç duyduğu şeylerin bir kısmını karşılıyor (tekrar kamerası, güvenlik kamerası, sinematik
-//! geçiş). Karşılamadığı şey aynı anda iki görüş.
-//!
-//! Demo iki kamera doğuruyor ve **B** ile aralarında geçiş yapıyor; hangisinin seçildiği
-//! `active_camera`'nın kuralıyla ölçülüyor.
-//!
-//! ## İkinci bulgu: basit sahne **her** kamerayı eziyor
-//!
-//! `with_simple_scene`'in `set_update` kapanışı uçan kameranın durumunu dünyadaki **her** kameraya
-//! yazıyor — `primary` filtresi yok. Yani ikinci bir kamera doğurmak yetmiyor, o kamera her kare
-//! siliniyor.
-//!
-//! Ölçümü şöyle çıktı: `primary` bayrağı doğru şekilde ikinci kameraya geçtiği hâlde (etkin varlık
-//! 6'dan 7'ye döndü) iki kare **bit bit aynıydı** — ortalama fark 0,00, maksimum 0. Kamera
-//! değişmişti, duruşu değişmemişti.
-//!
-//! Demo bunu `set_render` içinde duruşu geri yazarak telafi ediyor (o kapanış `set_update`'ten
-//! sonra koşuyor). Sonra:
-//!
-//! | | ortalama fark | maks | farklı piksel |
-//! |---|---------------|------|---------------|
-//! | duruş geri yazılmadan | **0,00** | **0** | %0,0 |
-//! | geri yazıldıktan sonra | 24,05 | 147 | **%41,3** |
-//!
-//! Yani kamera değiştirme **çalışıyor**, ama basit sahneyle birlikte kullanılacaksa ikinci
-//! kameranın duruşunu her kare geri koymak gerekiyor. Bu, `with_simple_scene`'in belgesinde
-//! yazmıyor.
-//!
-//! ## Ölçülen: kamera seçimi
-//!
-//! | | değer |
-//! |---|-------|
-//! | dünyadaki kamera | 2 |
-//! | `primary` işaretli | 1 |
-//! | `active_camera`'nın seçtiği | işaretli olan (6 → geçişten sonra 7) |
+//! Kare başına **bir kez** olanlar (görüş başına değil): dönüşümler, materyaller, animasyon, GPU
+//! fiziği, sıvı ve parçacıklar. Görüş başına olsalar bölünmüş ekranda her animasyon iki kat hızlı
+//! oynardı.
 //!
 //! ## Kontroller
-//!   * **B** — kameralar arasında geçiş
-//!   * **Sağ-tık + fare / WASDQE** — etkin kamera
+//!   * **B** — düzen: yan yana → üst üste → resim içinde resim → tek kamera
+//!   * **Sağ-tık + fare / WASDQE** — sahnenin kamerası (primary)
+//!
+//! Başsız koşuda B'ye basacak kimse yok: `GIZMO_SPLIT_LAYOUT=0..3` düzeni seçerek açıyor.
 
 use gizmo::core::input::Input;
-use gizmo::core::query::{Mut, Query};
+use gizmo::core::query::Mut;
 use gizmo::core::system::{IntoSystemConfig, Phase, Res, ResMut};
 use gizmo::prelude::*;
+use gizmo::renderer::components::Viewport;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
 
 /// İkinci kameranın işareti — birincisi basit sahnenin kendi kamerası.
 #[derive(Clone, Copy)]
-struct SecondCamera;
-gizmo::core::impl_component!(SecondCamera);
+struct TopDown;
+gizmo::core::impl_component!(TopDown);
 
-/// Defter.
-#[derive(Default, Clone)]
-struct Split {
-    /// Dünyadaki toplam kamera sayısı.
-    cameras: usize,
-    /// `primary` işaretli olanların sayısı.
-    primaries: usize,
-    /// `active_camera`'nın seçtiği varlık.
-    active: Option<u32>,
-    /// İkinci kamera mı etkin.
-    second_active: bool,
-    switch: bool,
-    logged: bool,
+/// Seçili düzen.
+#[derive(Default, Clone, Copy)]
+struct Layout(u32);
+gizmo::core::impl_component!(Layout);
+
+const LAYOUTS: [&str; 4] = ["yan yana", "üst üste", "resim içinde resim", "tek kamera"];
+
+/// `(sahnenin kamerası, tepeden bakan)` için `(viewport, order)` — düzene göre.
+fn layout(index: u32) -> [(Option<Viewport>, i32); 2] {
+    match index % 4 {
+        0 => [(Some(Viewport::left_half()), 0), (Some(Viewport::right_half()), 0)],
+        1 => [(Some(Viewport::top_half()), 0), (Some(Viewport::bottom_half()), 0)],
+        // Tam ekran ve sağ üstte küçük bir harita; harita `order` 1 ile üstte.
+        2 => [(Some(Viewport::FULL), 0), (Some(Viewport::new(0.72, 0.04, 0.25, 0.3)), 1)],
+        // Hiçbir kamerada viewport yok: tek kamera, eski yol.
+        _ => [(None, 0), (None, 0)],
+    }
 }
-gizmo::core::impl_component!(Split);
 
 fn main() {
     App::<SimpleSceneState>::new("Gizmo Engine - Split Screen", 1280, 720)
@@ -135,68 +106,41 @@ fn main() {
                 ..Default::default()
             });
 
-            scene.world.insert_resource(Split::default());
-            // Basit sahnenin kamerası: primary = true.
+            // Basit sahnenin kamerası: primary, uçan kamera onu sürüyor.
             scene.spawn_camera(state, Vec3::new(0.0, 3.0, 8.0), Vec3::ZERO);
-
-            // İkinci kamera: aynı sahneye tepeden bakıyor, ama primary DEĞİL.
-            let second = scene.world.spawn_bundle(CameraBundle {
+            // İkinci kamera: tepeden, primary DEĞİL — uçan kamera ona dokunmuyor.
+            let top = scene.world.spawn_bundle(CameraBundle {
                 position: Vec3::new(0.0, 9.0, 0.1),
                 yaw: -std::f32::consts::FRAC_PI_2,
                 pitch: -1.4,
                 primary: false,
                 ..Default::default()
             });
-            scene.world.add_component(second, SecondCamera);
+            scene.world.add_component(top, TopDown);
 
-            // Başsız koşuda B'ye basacak kimse yok: `GIZMO_SPLIT_SECOND=1` ikinci kamerayla
-            // açıyor. `primary` bayrağı tek olmalı — `active_camera` ilk işaretliyi alıyor.
-            if std::env::var("GIZMO_SPLIT_SECOND").is_ok() {
-                if let Some(mut q) = scene.world.query_mut::<Mut<Camera>>() {
-                    for (entity, mut camera) in q.iter_mut() {
-                        camera.primary = entity == second.id();
-                    }
-                }
-            }
+            let start = std::env::var("GIZMO_SPLIT_LAYOUT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0);
+            scene.world.insert_resource(Layout(start));
         })
         .add_update_system(watch.in_phase(Phase::Update))
         .set_render(|world, _state, encoder, view, renderer, _light_time| {
             renderer.gpu_physics = None;
             renderer.gpu_fluid = None;
             renderer.gpu_particles = None;
-            renderer.ssr = None;
-            renderer.ssgi = None;
-
-            switch_camera(world);
-
+            apply_layout(world);
+            // Bölünmüş ekran için ayrı bir çağrı yok: viewport'u olan bir kamera varsa bu çağrı
+            // kareyi kendisi böler.
             gizmo::systems::default_render_pass(world, encoder, view, renderer);
         })
         .set_ui(|world, _state, ctx| {
-            let Some(s) = world.get_resource::<Split>().map(|s| s.clone()) else {
-                return;
-            };
+            let index = world.get_resource::<Layout>().map(|l| l.0).unwrap_or(0);
             gizmo::egui::Area::new("split".into())
-                .anchor(gizmo::egui::Align2::LEFT_TOP, [12.0, 12.0])
+                .anchor(gizmo::egui::Align2::LEFT_BOTTOM, [12.0, -12.0])
                 .show(ctx, |ui| {
                     gizmo::egui::Frame::popup(ui.style()).show(ui, |ui| {
-                        ui.set_min_width(470.0);
-                        ui.heading("Bölünmüş ekran");
-                        ui.label(format!(
-                            "dünyada {} kamera · {} tanesi primary",
-                            s.cameras, s.primaries
-                        ));
-                        ui.label(format!(
-                            "etkin: {} ({})",
-                            s.active.map(|e| e.to_string()).unwrap_or_else(|| "-".into()),
-                            if s.second_active { "tepeden bakan" } else { "sahnenin kamerası" }
-                        ));
-                        ui.separator();
-                        ui.label("Camera tipinde VIEWPORT DİKDÖRTGENİ YOK.");
-                        ui.label("active_camera tek satır: ilk primary, yoksa ilk kamera.");
-                        ui.label("default_render_pass kamera/bölge parametresi almıyor ve");
-                        ui.label("hedefin tamamına yazıyor — iki kez çağırmak üstüne yazar.");
-                        ui.separator();
-                        ui.label("elde kalan: kamera DEĞİŞTİRMEK (B), aynı anda ikisi değil");
+                        ui.label(format!("düzen: {} — B ile değiştir", LAYOUTS[(index % 4) as usize]));
                     });
                 });
         })
@@ -204,82 +148,25 @@ fn main() {
         .expect("uygulama çalıştırılamadı");
 }
 
-/// **B**'yi dinler ve defteri doldurur.
-fn watch(cameras: Query<(&Camera, &Transform)>, mut split: ResMut<Split>, input: Res<Input>) {
+/// **B**: bir sonraki düzen.
+fn watch(mut layout: ResMut<Layout>, input: Res<Input>) {
     if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::KeyB as u32) {
-        split.switch = true;
+        layout.0 = layout.0.wrapping_add(1);
     }
-    split.cameras = cameras.iter().count();
-    split.primaries = cameras.iter().filter(|(_, (c, _))| c.primary).count();
 }
 
-/// İkinci kameranın duruşu — basit sahne onu her kare ezdiği için her kare geri yazılıyor.
-const SECOND_POS: Vec3 = Vec3::new(0.0, 9.0, 0.1);
-const SECOND_YAW: f32 = -std::f32::consts::FRAC_PI_2;
-const SECOND_PITCH: f32 = -1.4;
-
-/// `primary` bayrağını çevirir ve ikinci kameranın duruşunu geri yazar.
-///
-/// **Geri yazma zorunlu.** `with_simple_scene`'in `set_update` kapanışı uçan kameranın durumunu
-/// dünyadaki **her** kameraya yazıyor — `primary` filtresi yok:
-///
-/// ```text
-/// for (_, (mut trans, mut cam)) in q.iter_mut() {
-///     trans.position = state.camera_pos;  trans.rotation = rot;
-///     cam.yaw = state.camera_yaw;         cam.pitch = state.camera_pitch;
-/// }
-/// ```
-///
-/// Yani ikinci kamera her kare siliniyor. `set_render` `set_update`'ten sonra koştuğu için duruşu
-/// burada geri koymak işe yarıyor; ilk yazımda bu yoktu ve iki kamera **bit bit aynı** kareyi
-/// veriyordu.
-fn switch_camera(world: &mut gizmo::core::World) {
-    let asked = world.get_resource::<Split>().map(|s| s.switch).unwrap_or(false);
-
-    // Etkin kamerayı motorun kendi kuralıyla oku — demo kendi kuralını uydurmuyor.
-    let active = gizmo::renderer::components::active_camera(world);
-    let second = world
-        .query::<(&SecondCamera, &Camera)>()
+/// Seçili düzenin dikdörtgenlerini iki kameraya yazar.
+fn apply_layout(world: &mut gizmo::core::World) {
+    let index = world.get_resource::<Layout>().map(|l| l.0).unwrap_or(0);
+    let [scene_cam, top_cam] = layout(index);
+    let top = world
+        .query::<(&TopDown, &Camera)>()
         .and_then(|q| q.iter().next().map(|(entity, _)| entity));
-    let second_active = matches!((active, second), (Some(a), Some(s)) if a == s);
-
-    if asked {
-        if let Some(mut q) = world.query_mut::<Mut<Camera>>() {
-            for (entity, mut camera) in q.iter_mut() {
-                let is_second = second == Some(entity);
-                // Hedef: ikinci kamera etkinse sahnenin kamerasına dön, değilse ikinciye geç.
-                camera.primary = if second_active { !is_second } else { is_second };
-            }
-        }
-    }
-
-    // İkinci kameranın duruşunu geri yaz — basit sahne onu az önce ezdi.
-    if let Some(second) = second {
-        if let Some(entity) = world.get_entity(second) {
-            if let Some(mut q) = world.query_mut::<(Mut<Transform>, Mut<Camera>)>() {
-                if let Some((mut transform, mut camera)) = q.get_mut_entity(entity) {
-                    transform.position = SECOND_POS;
-                    camera.yaw = SECOND_YAW;
-                    camera.pitch = SECOND_PITCH;
-                }
-            }
-        }
-    }
-
-    if let Some(mut split) = world.get_resource_mut::<Split>() {
-        split.active = active;
-        split.second_active = second_active;
-        split.switch = false;
-        if !split.logged {
-            split.logged = true;
-            gizmo::gizmo_log!(
-                Info,
-                "kamera {} · primary {} · etkin {:?} (ikinci mi: {})",
-                split.cameras,
-                split.primaries,
-                active,
-                second_active
-            );
+    if let Some(mut q) = world.query_mut::<Mut<Camera>>() {
+        for (entity, mut camera) in q.iter_mut() {
+            let (viewport, order) = if Some(entity) == top { top_cam } else { scene_cam };
+            camera.viewport = viewport;
+            camera.order = order;
         }
     }
 }

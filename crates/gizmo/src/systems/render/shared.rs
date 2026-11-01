@@ -34,10 +34,14 @@ use gizmo_physics_core::components::{GlobalTransform, Transform};
 /// Note that the editor's own viewport camera is deliberately **not** consulted. What is being
 /// previewed is the scene's look, not the look of the tool looking at it.
 pub fn active_camera_grade(world: &World) -> Option<crate::renderer::components::PostProcess> {
-    let active = crate::renderer::components::active_camera(world)?;
+    camera_grade(world, crate::renderer::components::active_camera(world)?)
+}
+
+/// [`active_camera_grade`] for a given camera — what each view of a split screen is graded by.
+pub fn camera_grade(world: &World, camera: u32) -> Option<crate::renderer::components::PostProcess> {
     world
         .borrow::<crate::renderer::components::PostProcess>()
-        .get(active)
+        .get(camera)
         .copied()
 }
 

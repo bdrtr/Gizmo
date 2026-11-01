@@ -250,12 +250,15 @@ impl FxaaState {
 }
 
 /// Runs the FXAA render pass.
-/// `input_view` is the composite's output, `output_view` the screen/swapchain.
+/// `input_view` is the composite's output, `output_view` the screen/swapchain. With a `region`
+/// (split screen, `[x, y, w, h]` in pixels) only that rectangle of the output is written and the
+/// rest is loaded, not cleared.
 #[tracing::instrument(skip_all, level = "trace")]
 pub fn run_fxaa_pass(
     fxaa: &FxaaState,
     encoder: &mut wgpu::CommandEncoder,
     output_view: &wgpu::TextureView,
+    region: Option<[f32; 4]>,
 ) {
     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some("FXAA Pass"),
@@ -264,13 +267,20 @@ pub fn run_fxaa_pass(
             depth_slice: None,
             resolve_target: None,
             ops: wgpu::Operations {
-                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                load: if region.is_some() {
+                    wgpu::LoadOp::Load
+                } else {
+                    wgpu::LoadOp::Clear(wgpu::Color::BLACK)
+                },
                 store: wgpu::StoreOp::Store,
             },
         })],
         depth_stencil_attachment: None,
         ..Default::default()
     });
+    if let Some([x, y, w, h]) = region {
+        pass.set_viewport(x, y, w, h, 0.0, 1.0);
+    }
     pass.set_pipeline(&fxaa.pipeline);
     pass.set_bind_group(0, &fxaa.bind_group, &[]);
     pass.draw(0..3, 0..1);
