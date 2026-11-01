@@ -550,6 +550,30 @@ another; the insertion order appeared barely half the time.
 > thread. Eight writers exposed it immediately. "I measured it and it did not vary" is not
 > "it cannot vary".
 
+### C9. What a finished game reached for (2026-11-01, `kule_yikici`)
+
+The demos test one capability each; `demo/src/bin/kule_yikici.rs` is a small **complete** game —
+a catapult, a tower of crates on real rigid bodies, five shots, win/lose, restart, a HUD — built
+on the sprite path and the post-tonemap overlay the same day. It works: the tower stands at rest
+(400 frames, no drift visible), collapses plausibly under a hit, and the HUD counts what fell.
+What it had to build for itself, each recorded in the file's header:
+
+- **No 2D collision shapes.** Boxes are 3D `Collider::box_collider`s with depth 1, the stone a 3D
+  sphere; what keeps them on the plane is `RigidBody`'s axis locks (`lock_translation_z`,
+  `lock_rotation_x/y`). It works, but there is no "2D physics" to ask for.
+- **A sprite and its collider are sized separately.** Nothing links `Sprite::size` to the
+  collider's half-extents; the game's `spawn_box` derives both from one number so they cannot
+  disagree.
+- **No level-reset helper.** "Everything that belongs to the level" is a marker component and a
+  hand-written despawn loop.
+- **No fixed-step driver for a game that owns its camera.** `simple_scene_update` steps physics
+  but also flies the camera with WASD/mouse, so a game with a fixed camera cannot use it; the
+  accumulator is in the game (`FIXED_DT`, `MAX_STEPS`).
+- **An orthographic camera does not fit the window's shape.** `Orthographic { height }` fixes the
+  vertical extent; in a portrait window (948×1028, measured) the visible width was ±7.4 units and
+  the catapult at x = −11 was off screen. The game recomputes the height from the aspect ratio
+  every frame.
+
 ---
 
 ## D. Game-path / editor-path asymmetries

@@ -50,6 +50,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`kule_yikici` — a small, complete game on the engine.** A catapult, a tower of crates on real
+  rigid bodies kept to the XY plane by axis locks, five shots, win/lose, restart, a ballistic aim
+  line and a HUD (sprites and text over the tone-mapped image). Every image is generated in code.
+  What it had to build for itself — no 2D collision shapes, sprite and collider sized separately,
+  no level-reset helper, no fixed-step driver for a game that owns its camera, and an orthographic
+  camera that does not fit a portrait window — is in its header and `docs/CAPABILITY_GAPS.md` §C9.
+
 - **A game's own components in the editor, end to end.** One call —
   `gizmo::register_editor_component::<T>(&mut world, "Name")`, i.e.
   `ComponentRegistry::register_editable` on the world's registry, for any
