@@ -56,6 +56,17 @@ fn anti_roll_force(is_left: bool, diff: f32, stiffness: f32) -> f32 {
     signed * stiffness
 }
 
+/// The "dynamic pressure" the lift term uses: `½ρ·v^n` for [`AeroPackage::downforce_speed_exponent`]
+/// `n`. For `n == 2` it returns `q` — the drag term's own `½ρ·v·v` — unchanged, because `powf(2.0)`
+/// is not guaranteed to be bit-identical to `v·v`, and the default must not move a single bit.
+fn lift_pressure(exponent: f32, speed: f32, q: f32) -> f32 {
+    if exponent == 2.0 {
+        q
+    } else {
+        0.5 * 1.225 * speed.powf(exponent)
+    }
+}
+
 /// The ground-effect downforce multiplier: as the chassis `clearance` (the vertical gap between
 /// the body's underside and the ground, in metres) shrinks, it ramps SMOOTHLY from `1.0` to
 /// `multiplier`. `clearance ≥ height` → 1.0 (no effect); `clearance = 0` → `multiplier`; linear
@@ -329,7 +340,8 @@ pub fn update_vehicle_with_query(
 
     let drag_dir = if spd > 0.1 { -v_com / spd } else { Vec3::ZERO };
     let drag_force = drag_dir * (a.drag_coefficient * a.frontal_area * q);
-    let lift_force = up * (a.lift_coefficient * a.frontal_area * q * ge_factor);
+    let q_lift = lift_pressure(a.downforce_speed_exponent, spd, q);
+    let lift_force = up * (a.lift_coefficient * a.frontal_area * q_lift * ge_factor);
 
     // Aero kuvvetini basınç merkezinden uygula (tork üretir)
     let cop_world =
@@ -440,11 +452,11 @@ pub fn update_vehicle_with_query(
             0.0
         };
 
-        // Fren dağıtımı (%60 ön / %40 arka)
+        // Fren dağıtımı — varsayılan %60 ön / %40 arka (`brake_bias_front/rear`).
         let bias = if wheel.axle_type == Axle::Front {
-            0.6
+            vehicle.tuning.brake_bias_front
         } else {
-            0.4
+            vehicle.tuning.brake_bias_rear
         };
         wheel.brake_torque = vehicle.brake_input * vehicle.tuning.max_brake_torque * bias;
     }
@@ -515,7 +527,8 @@ pub fn update_vehicle_with_query(
                 let damper_coeff = if susp_vel > 0.0 {
                     wheel.suspension_damping // baskı katsayısı
                 } else {
-                    wheel.suspension_damping * 2.5 // rebound (daha sert)
+                    // rebound — ayrı verildiyse o, yoksa eski kural: 2.5× baskı
+                    wheel.suspension_rebound_damping.unwrap_or(wheel.suspension_damping * 2.5)
                 };
                 let mut damper_force = damper_coeff * susp_vel;
                 // Rebound damper'ı (2.5×) statik yay yükünü İPTAL etmesin. Açık (explicit)
@@ -554,8 +567,13 @@ pub fn update_vehicle_with_query(
                     Axle::Front => front_diff,
                     Axle::Rear => rear_diff,
                 };
-                let arb_force =
-                    anti_roll_force(wheel.is_left, axle_diff, vehicle.tuning.anti_roll_stiffness);
+                let t = &vehicle.tuning;
+                let arb_stiffness = match wheel.axle_type {
+                    Axle::Front => t.anti_roll_front,
+                    Axle::Rear => t.anti_roll_rear,
+                }
+                .unwrap_or(t.anti_roll_stiffness);
+                let arb_force = anti_roll_force(wheel.is_left, axle_diff, arb_stiffness);
 
                 wheel.suspension_force =
                     (spring_force + damper_force + bump_stop_force + arb_force).max(0.0);
@@ -591,12 +609,13 @@ pub fn update_vehicle_with_query(
                 let normal_load = wheel.suspension_force;
 
                 // Kombine Pacejka MF — sürtünme çemberi dahilinde
-                let (final_long, final_lat) = pacejka_combined(
+                let (final_long, final_lat) = pacejka_combined_with_floor(
                     &wheel.pacejka_long,
                     &wheel.pacejka_lat,
                     slip_ratio,
                     slip_angle,
                     normal_load,
+                    wheel.sliding_grip_floor,
                 );
 
                 // Yüzey materyali (buz/kum/asfalt) + hava durumu (yağmur/kar) grip çarpanı.
@@ -1086,6 +1105,135 @@ mod tests {
     /// must add up-force to the lower (left) corner and remove it from the higher
     /// (right) corner. The old code flipped both signs (pro-roll), so `left < 0`
     /// and `right > 0` — this locks the corrected convention.
+    #[test]
+    fn lift_pressure_is_quadratic_by_default_and_follows_the_exponent_otherwise() {
+        let v = 30.0_f32;
+        let q = 0.5 * 1.225 * v * v;
+        assert_eq!(lift_pressure(2.0, v, q).to_bits(), q.to_bits(), "the default must be the old q, bit for bit");
+        assert!((lift_pressure(1.0, v, q) - 0.5 * 1.225 * v).abs() < 1e-4, "n = 1 is linear in speed");
+        let ratio = lift_pressure(1.0, 2.0 * v, q) / lift_pressure(1.0, v, q);
+        assert!((ratio - 2.0).abs() < 1e-5, "doubling speed doubles linear downforce, got ×{ratio}");
+    }
+
+    /// The default floor reproduces `pacejka_combined` bit for bit; a higher floor keeps more of
+    /// one axis' grip while the other slides hard, and never pushes past the friction circle.
+    #[test]
+    fn sliding_grip_floor_defaults_to_the_old_value_and_raises_sliding_grip() {
+        let p = PacejkaParams::default();
+        let fz = 4000.0;
+        for (sr, sa) in [(0.0, 0.0), (0.15, 0.1), (5.0, 0.12), (0.3, 0.8)] {
+            let a = pacejka_combined(&p, &p, sr, sa, fz);
+            let b = pacejka_combined_with_floor(&p, &p, sr, sa, fz, DEFAULT_SLIDING_GRIP_FLOOR);
+            assert_eq!((a.0.to_bits(), a.1.to_bits()), (b.0.to_bits(), b.1.to_bits()));
+        }
+        // Wheel spinning (slip ratio 5) while cornering: lateral grip is what the floor keeps.
+        let (_, low) = pacejka_combined_with_floor(&p, &p, 5.0, 0.12, fz, 0.35);
+        let (_, high) = pacejka_combined_with_floor(&p, &p, 5.0, 0.12, fz, 0.8);
+        assert!(high.abs() > low.abs() * 1.5, "floor 0.8 kept {high:.0} N vs {low:.0} N at 0.35");
+        let (fx, fy) = pacejka_combined_with_floor(&p, &p, 5.0, 0.12, fz, 1.0);
+        assert!((fx * fx + fy * fy).sqrt() <= fz * p.d * 1.2 + 1e-2, "past the friction circle");
+    }
+
+    /// Brake torque per wheel is `brake_input · max_brake_torque · bias` with each axle's own
+    /// bias — and the default biases are exactly 0.6 / 0.4.
+    #[test]
+    fn brake_bias_sets_each_axles_share() {
+        let t = VehicleTuning::default();
+        assert_eq!((t.brake_bias_front, t.brake_bias_rear), (0.6, 0.4));
+        let (mut rb, t0, mut vel, mut vc) = probe_car();
+        vc.tuning.brake_bias_front = 0.7;
+        vc.tuning.brake_bias_rear = 0.3;
+        vc.brake_input = 1.0;
+        let cols = probe_ground();
+        update_vehicle(BodyHandle::from_id(2), &mut vc, &mut rb, &t0, &mut vel, &cols, 1.0, 1.0 / 120.0);
+        for w in &vc.wheels {
+            let want = vc.tuning.max_brake_torque * if w.axle_type == Axle::Front { 0.7 } else { 0.3 };
+            assert_eq!(w.brake_torque, want, "{:?} wheel", w.axle_type);
+        }
+    }
+
+    /// `suspension_rebound_damping: None` is the old 2.5× rule bit for bit; a value of its own
+    /// changes the result.
+    #[test]
+    fn rebound_damping_defaults_to_two_and_a_half_times_bump() {
+        assert_eq!(Wheel::default().suspension_rebound_damping, None);
+        let run = |rebound: Option<f32>| {
+            let (mut rb, mut t, mut vel, mut vc) = probe_car();
+            for w in &mut vc.wheels {
+                w.suspension_rebound_damping = rebound.map(|r| r * w.suspension_damping);
+            }
+            let cols = probe_ground();
+            for _ in 0..240 {
+                update_vehicle(BodyHandle::from_id(2), &mut vc, &mut rb, &t, &mut vel, &cols, 1.0, 1.0 / 120.0);
+                vel.linear.y -= 9.81 / 120.0;
+                t.position += vel.linear / 120.0;
+            }
+            t.position.y.to_bits()
+        };
+        assert_eq!(run(None), run(Some(2.5)), "None must be exactly 2.5 × bump");
+        assert_ne!(run(None), run(Some(1.0)), "a separate rebound rate changed nothing");
+    }
+
+    /// A per-axle anti-roll rate overrides the shared one on that axle only; `None` keeps it.
+    #[test]
+    fn anti_roll_can_be_set_per_axle() {
+        let t = VehicleTuning::default();
+        assert_eq!((t.anti_roll_front, t.anti_roll_rear), (None, None));
+        let roll_after_turn = |front: Option<f32>, rear: Option<f32>| {
+            let (mut rb, mut t, mut vel, mut vc) = probe_car();
+            vc.tuning.anti_roll_front = front;
+            vc.tuning.anti_roll_rear = rear;
+            vc.tuning.anti_roll_stiffness = 20000.0;
+            let cols = probe_ground();
+            for step in 0..600 {
+                vc.throttle_input = 1.0;
+                vc.steering_input = if step > 240 { 1.0 } else { 0.0 };
+                update_vehicle(BodyHandle::from_id(2), &mut vc, &mut rb, &t, &mut vel, &cols, 1.0, 1.0 / 120.0);
+                vel.linear.y -= 9.81 / 120.0;
+                t.position += vel.linear / 120.0;
+                let w = vel.angular / 120.0;
+                if w.length() > 0.0 {
+                    t.rotation = (gizmo_math::Quat::from_scaled_axis(w) * t.rotation).normalize();
+                }
+            }
+            t.position.to_array().map(f32::to_bits)
+        };
+        let shared = roll_after_turn(None, None);
+        assert_eq!(shared, roll_after_turn(Some(20000.0), Some(20000.0)), "explicit = shared must be identical");
+        assert_ne!(shared, roll_after_turn(Some(0.0), None), "a front-only override changed nothing");
+    }
+
+    fn probe_ground() -> Vec<(BodyHandle, Transform, Collider)> {
+        vec![(
+            BodyHandle::from_id(1),
+            Transform::new(Vec3::new(0.0, -1.0, 0.0)),
+            Collider::box_collider(Vec3::new(2000.0, 1.0, 2000.0)),
+        )]
+    }
+
+    /// A 1200 kg four-wheeled car sitting on `probe_ground`, awake.
+    fn probe_car() -> (RigidBody, Transform, Velocity, VehicleController) {
+        let mut rb = RigidBody::new(1200.0, true);
+        rb.calculate_box_inertia(1.4, 0.7, 2.4);
+        rb.wake_up();
+        let mut vc = VehicleController::new();
+        for (x, z, front) in [(0.7_f32, 1.2_f32, true), (-0.7, 1.2, true), (0.7, -1.2, false), (-0.7, -1.2, false)] {
+            vc.add_wheel(Wheel {
+                attachment_local_pos: Vec3::new(x, 0.2, z),
+                radius: 0.3,
+                axle_type: if front { Axle::Front } else { Axle::Rear },
+                is_left: x > 0.0,
+                suspension_rest_length: 0.2,
+                suspension_max_travel: 0.15,
+                suspension_stiffness: 40000.0,
+                suspension_damping: 3000.0,
+                wheel_mass: 25.0,
+                ..Default::default()
+            });
+        }
+        (rb, Transform::new(Vec3::new(0.0, 0.8, 0.0)), Velocity::default(), vc)
+    }
+
     #[test]
     fn anti_roll_bar_resists_roll_not_amplifies() {
         let k = 3000.0;

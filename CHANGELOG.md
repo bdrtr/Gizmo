@@ -50,6 +50,22 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Five vehicle setup knobs that were fixed constants.** Real car data gives each of these
+  separately, and a downstream racing project had to approximate all five:
+  `Wheel::suspension_rebound_damping` (was always 2.5 × bump; data can give rebound ≈ bump),
+  `VehicleTuning::brake_bias_front` / `brake_bias_rear` (was 60 / 40),
+  `VehicleTuning::anti_roll_front` / `anti_roll_rear` (one rate served both axles — the main
+  under/oversteer balance knob), `Wheel::sliding_grip_floor` (the 0.35 a sliding tyre keeps of
+  its other axis — now also `pacejka_combined_with_floor` and `DEFAULT_SLIDING_GRIP_FLOOR`), and
+  `AeroPackage::downforce_speed_exponent` (downforce grew only with v²; `1.0` makes it linear).
+  **Every default is the old behaviour bit for bit**, measured by an A/B probe — a car driven
+  3600 steps through throttle, braking, steering and speed, its state hashed per step — run on
+  the old and new code: `0f0f276ca1978a09` both times. The probe is sensitive: a 1e-7 change
+  to any of three knobs changes the hash. That is why the brake bias is two fields and not
+  `bias` and `1 − bias`: in `f32`, `1.0 − 0.6` is `0.39999998`, which alone changed the hash.
+  New fields on `Wheel`, `VehicleTuning` and `AeroPackage`: a struct literal without
+  `..Default::default()` needs them added.
+
 - **`kule_yikici` — a small, complete game on the engine.** A catapult, a tower of crates on real
   rigid bodies kept to the XY plane by axis locks, five shots, win/lose, restart, a ballistic aim
   line and a HUD (sprites and text over the tone-mapped image). Every image is generated in code.

@@ -70,9 +70,9 @@ impl PacejkaParams {
         d * inner.sin()
     }
 
-    /// The combined-slip weighting function (Lorentzian falloff).
+    /// The combined-slip weighting function (Lorentzian falloff), never below `floor`.
     /// σ_other = the normalised slip in the perpendicular direction.
-    fn weighting_lorentzian(&self, sigma_other: f32) -> f32 {
+    fn weighting_lorentzian(&self, sigma_other: f32, floor: f32) -> f32 {
         let k = self.b * sigma_other;
         // Lorentzian falloff, KİNETİK sürtünme tabanıyla (0.35).
         // Neden taban: `sigma_other` (özellikle boyuna slip_ratio) SINIRSIZ; patinajda
@@ -84,28 +84,58 @@ impl PacejkaParams {
         // korur; tabanı bu artık grip'i modelliyor. Kombine limiti hâlâ aşağıdaki
         // sürtünme çemberi kırpması belirler (çift-bastırma değil). sigma_other=0 →
         // taban bağlanmaz (weighting=1) → saf-eksen kuvvet testleri korunur.
-        (1.0 / (1.0 + k * k).sqrt()).max(0.35)
+        // The floor is `Wheel::sliding_grip_floor` (default `DEFAULT_SLIDING_GRIP_FLOOR`).
+        (1.0 / (1.0 + k * k).sqrt()).max(floor)
     }
 }
 
 /// A `PacejkaLat` alias, kept for backwards compatibility.
 pub type PacejkaLat = PacejkaParams;
 
+/// The share of an axis' grip a tyre keeps however hard the *other* axis slides — the default
+/// for [`Wheel::sliding_grip_floor`], and the value [`pacejka_combined`] uses.
+pub const DEFAULT_SLIDING_GRIP_FLOOR: f32 = 0.35;
+
+/// [`pacejka_combined`] with an explicit sliding-grip floor — see
+/// [`Wheel::sliding_grip_floor`]. `pacejka_combined` is this with
+/// [`DEFAULT_SLIDING_GRIP_FLOOR`].
+pub fn pacejka_combined_with_floor(
+    long: &PacejkaParams,
+    lat: &PacejkaParams,
+    slip_ratio: f32,
+    slip_angle: f32,
+    normal_load: f32,
+    sliding_grip_floor: f32,
+) -> (f32, f32) {
+    combined(long, lat, slip_ratio, slip_angle, normal_load, sliding_grip_floor)
+}
+
 /// Combined Pacejka: compute the longitudinal and lateral forces together,
 /// keeping them inside the friction circle.
 pub fn pacejka_combined(
     long: &PacejkaParams,
     lat: &PacejkaParams,
+    slip_ratio: f32,
+    slip_angle: f32,
+    normal_load: f32,
+) -> (f32, f32) {
+    combined(long, lat, slip_ratio, slip_angle, normal_load, DEFAULT_SLIDING_GRIP_FLOOR)
+}
+
+fn combined(
+    long: &PacejkaParams,
+    lat: &PacejkaParams,
     slip_ratio: f32, // longitudinal (σx)
     slip_angle: f32, // lateral (radyan, σy)
     normal_load: f32,
+    floor: f32,
 ) -> (f32, f32) {
     let fx_pure = long.calculate_force(slip_ratio, normal_load);
     let fy_pure = lat.calculate_force(slip_angle, normal_load);
 
     // Kombine weighting: her eksen diğerini kısmen bastırır
-    let gx = long.weighting_lorentzian(slip_angle);
-    let gy = lat.weighting_lorentzian(slip_ratio);
+    let gx = long.weighting_lorentzian(slip_angle, floor);
+    let gy = lat.weighting_lorentzian(slip_ratio, floor);
 
     let fx = fx_pure * gx;
     let fy = fy_pure * gy;
@@ -259,11 +289,19 @@ pub struct Wheel {
     /// static ride height is roughly `corner_weight / suspension_stiffness` below the rest
     /// length, so a rate far too low simply parks the car on its bump stops.
     pub suspension_stiffness: f32,
-    /// Damper rate in N·s/m for the **compression** stroke. The rebound stroke uses 2.5× this
-    /// value, and the resulting damper force is floored at `−0.5 ×` the spring force so a
-    /// stiff rebound can never cancel the static spring load: if it could, the normal load
-    /// would reach zero, and with it every Pacejka tyre force (which is proportional to `Fz`).
+    /// Damper rate in N·s/m for the **compression** stroke. The rebound stroke uses
+    /// [`suspension_rebound_damping`](Self::suspension_rebound_damping), or 2.5× this value
+    /// when that is `None`, and the resulting damper force is floored at `−0.5 ×` the spring
+    /// force so a stiff rebound can never cancel the static spring load: if it could, the normal
+    /// load would reach zero, and with it every Pacejka tyre force (which is proportional to `Fz`).
     pub suspension_damping: f32,
+    /// Damper rate in N·s/m for the **rebound** stroke. `None` (the default) keeps the old
+    /// fixed rule — 2.5 × [`suspension_damping`](Self::suspension_damping) — bit for bit.
+    ///
+    /// Separate because real setups are not a fixed ratio: measured car data commonly gives
+    /// bump and rebound per axle, and some are close to equal (e.g. 5.4 / 5.6 kN·s/m), which the
+    /// fixed 2.5× could not express. The `−0.5 × spring` floor above still applies.
+    pub suspension_rebound_damping: Option<f32>,
 
     /// Magic-Formula coefficients for the longitudinal (drive/brake) axis, evaluated against
     /// the slip ratio `(angular_velocity · radius − v_forward) / max(|v_forward|, 0.5)`.
@@ -355,6 +393,15 @@ pub struct Wheel {
     /// grip_mult = surface_friction / ASPHALT.dynamic_friction → ice/sand/asphalt give real
     /// grip.
     pub surface_friction: f32,
+    /// The share of one axis' grip the tyre keeps however hard the other axis slides — the floor
+    /// under the combined-slip falloff. With a wheel spinning flat out, the bare falloff would
+    /// leave it ~1 % of its cornering grip; this keeps a sliding tyre's kinetic grip instead.
+    ///
+    /// Default [`DEFAULT_SLIDING_GRIP_FLOOR`] (0.35), the value that used to be hard-coded. Raise
+    /// it for a tyre whose sliding grip is close to its peak (data giving peak 1.70 / sliding
+    /// 1.40 suggests ~0.8); lower it for one that lets go. The friction circle still caps the
+    /// combined force, so this cannot add grip past the peak.
+    pub sliding_grip_floor: f32,
 }
 
 impl Default for Wheel {
@@ -369,6 +416,7 @@ impl Default for Wheel {
             suspension_max_travel: 0.2,
             suspension_stiffness: 25000.0,
             suspension_damping: 3000.0,
+            suspension_rebound_damping: None,
             pacejka_long: PacejkaParams::default(),
             pacejka_lat: PacejkaLat::default(),
             wheel_mass: 20.0,
@@ -382,6 +430,7 @@ impl Default for Wheel {
             angular_velocity: 0.0,
             suspension_force: 0.0,
             surface_friction: PhysicsMaterial::ASPHALT.dynamic_friction,
+            sliding_grip_floor: DEFAULT_SLIDING_GRIP_FLOOR,
         }
     }
 }
@@ -442,6 +491,15 @@ pub struct AeroPackage {
     /// multiplier. It is bounded only by the suspension's travel clamp. Values below 1.0 are
     /// not rejected and invert the effect.
     pub ground_effect_multiplier: f32,
+    /// The power of speed the lift (downforce) term grows with: `½ · ρ · Cl · A · v^n`.
+    /// Default `2.0` — physical aero, and exactly the old formula (the `2.0` case is computed
+    /// as `v · v`, not `powf`, so it stays bit-identical).
+    ///
+    /// Not every model is quadratic: measured game data has downforce growing **linearly** with
+    /// speed, which is `1.0` here. For any `n ≠ 2` the coefficient no longer has the units of a
+    /// lift coefficient — tune `lift_coefficient` against the force you want at a reference
+    /// speed. Drag is always quadratic.
+    pub downforce_speed_exponent: f32,
 }
 
 impl Default for AeroPackage {
@@ -453,6 +511,7 @@ impl Default for AeroPackage {
             center_of_pressure: Vec3::new(0.0, 0.3, 0.2),
             ground_effect_height: 0.15,
             ground_effect_multiplier: 1.8,
+            downforce_speed_exponent: 2.0,
         }
     }
 }
@@ -525,6 +584,12 @@ pub struct VehicleTuning {
     /// *grounded* corner — with one wheel of an axle in the air the other keeps its share and
     /// nothing cancels it.
     pub anti_roll_stiffness: f32,
+    /// Front-axle anti-roll rate in N/m, overriding [`anti_roll_stiffness`](Self::anti_roll_stiffness)
+    /// on that axle. `None` (default) uses the shared value. Front and rear bars are tuned
+    /// separately on real cars — it is the main balance knob between under- and oversteer.
+    pub anti_roll_front: Option<f32>,
+    /// Rear-axle anti-roll rate in N/m; see [`anti_roll_front`](Self::anti_roll_front).
+    pub anti_roll_rear: Option<f32>,
     /// Peak crankshaft torque in newton-metres for the built-in bell curve, reached 40 % of the
     /// way from [`idle_rpm`](VehicleTuning::idle_rpm) to [`max_rpm`](VehicleTuning::max_rpm)
     /// and never falling below 5 % of it anywhere in the band.
@@ -532,9 +597,18 @@ pub struct VehicleTuning {
     /// **Ignored entirely** when [`torque_curve`](VehicleTuning::torque_curve) is non-empty.
     pub max_engine_torque: f32,
     /// Brake torque in newton-metres commanded at full brake input, **per wheel and before the
-    /// front/rear bias** — a front wheel receives 0.6× this and a rear wheel 0.4×. It is not a
-    /// total for the car, so it does not need dividing by the wheel count.
+    /// front/rear bias** — a front wheel receives [`brake_bias_front`](Self::brake_bias_front)×
+    /// this (0.6 by default) and a rear wheel [`brake_bias_rear`](Self::brake_bias_rear)× (0.4).
+    /// It is not a total for the car, so it does not need dividing by the wheel count.
     pub max_brake_torque: f32,
+    /// Share of [`max_brake_torque`](Self::max_brake_torque) each **front** wheel gets. Default 0.6.
+    ///
+    /// Two fields rather than one bias and `1 − bias`, on purpose: in `f32`, `1.0 − 0.6` is
+    /// `0.39999998`, not `0.4`, so deriving the rear would have changed every braking car's
+    /// result. They are per-wheel multipliers and need not sum to 1.
+    pub brake_bias_front: f32,
+    /// Share of [`max_brake_torque`](Self::max_brake_torque) each **rear** wheel gets. Default 0.4.
+    pub brake_bias_rear: f32,
     /// Drag, downforce and ground-effect parameters. Aero is applied to the chassis every step
     /// regardless of whether any wheel is grounded.
     pub aero: AeroPackage,
@@ -569,8 +643,12 @@ impl Default for VehicleTuning {
             wheelbase: 2.8,
             track_width: 1.6,
             anti_roll_stiffness: 3000.0,
+            anti_roll_front: None,
+            anti_roll_rear: None,
             max_engine_torque: 350.0,
             max_brake_torque: 1500.0,
+            brake_bias_front: 0.6,
+            brake_bias_rear: 0.4,
             aero: AeroPackage::default(),
             // Boş = çan eğrisi. Varsayılanın davranışı değişmiyor.
             torque_curve: Vec::new(),
@@ -1252,27 +1330,27 @@ mod tests {
     fn lorentzian_weighting_floor_symmetry_and_monotonicity() {
         let p = PacejkaParams::default();
 
-        assert_eq!(p.weighting_lorentzian(0.0), 1.0, "no cross-slip → full grip preserved");
+        assert_eq!(p.weighting_lorentzian(0.0, DEFAULT_SLIDING_GRIP_FLOOR), 1.0, "no cross-slip → full grip preserved");
 
         // Even in the argument.
         assert!(
-            (p.weighting_lorentzian(0.05) - p.weighting_lorentzian(-0.05)).abs() < 1e-6,
+            (p.weighting_lorentzian(0.05, DEFAULT_SLIDING_GRIP_FLOOR) - p.weighting_lorentzian(-0.05, DEFAULT_SLIDING_GRIP_FLOOR)).abs() < 1e-6,
             "weighting must be even"
         );
 
         // Monotone decreasing (until the floor) as the other axis slips more.
         assert!(
-            p.weighting_lorentzian(0.02) > p.weighting_lorentzian(0.1),
+            p.weighting_lorentzian(0.02, DEFAULT_SLIDING_GRIP_FLOOR) > p.weighting_lorentzian(0.1, DEFAULT_SLIDING_GRIP_FLOOR),
             "more cross-slip → less grip"
         );
 
         // Floored at 0.35, capped at 1.0, everywhere.
         for s in [0.0_f32, 0.1, 1.0, 10.0, 1000.0, -500.0] {
-            let w = p.weighting_lorentzian(s);
+            let w = p.weighting_lorentzian(s, DEFAULT_SLIDING_GRIP_FLOOR);
             assert!((0.35 - 1e-9..=1.0 + 1e-9).contains(&w), "weighting {w} out of [0.35, 1] at {s}");
         }
         assert!(
-            (p.weighting_lorentzian(1000.0) - 0.35).abs() < 1e-6,
+            (p.weighting_lorentzian(1000.0, DEFAULT_SLIDING_GRIP_FLOOR) - 0.35).abs() < 1e-6,
             "huge cross-slip pins the weighting to the 0.35 floor"
         );
     }
