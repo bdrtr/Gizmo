@@ -24,26 +24,20 @@
 //!   sayı; `spawn_box` ikisini aynı yerden türetsin diye yazıldı. Motor bunu bağlamıyor.
 //! - **Oyun yeniden başlatma yardımcısı yok.** "Bölüme ait her şey" bir işaretleyici bileşenle
 //!   (`Level`) toplanıp elle siliniyor.
-//! - **Sabit adımlı fizik için hazır bir sürücü yok** bu yolda: `simple_scene_update` fiziği
-//!   adımlıyor ama uçan kamerayı da sürüyor, ve kameranın sabit kalması gereken bir oyunda
-//!   kullanılamıyor. Adım döngüsü burada (`FIXED_DT`).
 //! - **Fontsuz metin.** Repo font taşımıyor (lisans kararı); sistemde font yoksa sentetik yüz
 //!   kutular çiziyor. `GIZMO_FONT` ile seçilebilir.
 
-use gizmo::core::system::System;
 use gizmo::physics::{Collider, RigidBody, Velocity};
 use gizmo::prelude::*;
 use gizmo::renderer::components::{ProjectionMode, Sprite, Text, TextAnchor};
 use gizmo::renderer::sprite::{SpriteFilter, SpriteImageId};
 use gizmo::renderer::text::FontId;
-use gizmo::simple::{SimpleAppExt, SimpleSceneState};
+use gizmo::simple::{sync_transforms, FixedPhysics, SimpleAppExt, SimpleSceneState};
 use gizmo::winit::keyboard::KeyCode;
 
-/// Fizik adımı. Kare süresinden bağımsız: aynı atış her makinede aynı yere düşer.
-const FIXED_DT: f32 = 1.0 / 120.0;
-/// Bir karede en fazla kaç fizik adımı — takılan bir karenin ardından simülasyon "yetişmeye"
-/// çalışıp kendini boğmasın.
-const MAX_STEPS: u32 = 8;
+/// Saniyede kaç fizik adımı. `FixedPhysics` sayesinde kare süresinden bağımsız: aynı atış her
+/// makinede aynı yere düşer.
+const PHYSICS_HZ: u32 = 120;
 const SHOTS: u32 = 5;
 /// Mancınığın taşı bıraktığı nokta.
 const LAUNCH: Vec2 = Vec2::new(-11.0, 1.6);
@@ -88,7 +82,8 @@ struct Game {
     since_last_shot: f32,
     targets_total: usize,
     outcome: Outcome,
-    accumulator: f32,
+    /// Sabit adımlı fizik. `simple_scene_update` kullanılamıyor, çünkü kamerayı da WASD ile uçuruyor.
+    physics: FixedPhysics,
     hud_text: u32,
     banner: u32,
     power_fill: u32,
@@ -198,7 +193,7 @@ fn main() {
                 since_last_shot: 0.0,
                 targets_total: 0,
                 outcome: Outcome::Playing,
-                accumulator: 0.0,
+                physics: FixedPhysics::new(PHYSICS_HZ),
                 hud_text,
                 banner,
                 power_fill,
@@ -211,8 +206,7 @@ fn main() {
         })
         .set_update(|world, _state, dt, input| {
             update(world, dt.min(0.1), input);
-            gizmo::systems::transform::TransformSyncSystem.run(world, dt);
-            gizmo::systems::transform::TransformPropagateSystem.run(world, dt);
+            sync_transforms(world);
         })
         .run()
         .expect("uygulama çalıştırılamadı");
@@ -259,6 +253,8 @@ fn build_level(world: &mut World, game: &mut Game) {
     game.outcome = Outcome::Playing;
     game.power = 0.0;
     game.charging = false;
+    // Yeniden başlarken birikmiş fizik zamanı yeni bölüme taşınmasın.
+    game.physics.reset();
 }
 
 /// Bir kutu: görseli ve collider'ı AYNI yarı-boydan. `mass: None` statik demek.
@@ -317,16 +313,7 @@ fn update(world: &mut World, dt: f32, input: &gizmo::core::input::Input) {
     game.since_last_shot += dt;
 
     // Sabit adımlı fizik.
-    game.accumulator += dt;
-    let mut steps = 0;
-    while game.accumulator >= FIXED_DT && steps < MAX_STEPS {
-        gizmo::systems::cpu_physics_step_system(world, FIXED_DT);
-        game.accumulator -= FIXED_DT;
-        steps += 1;
-    }
-    if steps == MAX_STEPS {
-        game.accumulator = 0.0;
-    }
+    game.physics.advance(world, dt);
 
     // Oyun durumu: hedeflerden kaçı platformun altına indi?
     let down = {

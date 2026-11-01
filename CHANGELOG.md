@@ -50,6 +50,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`gizmo::simple::FixedPhysics` and `gizmo::simple::sync_transforms` — fixed-step physics for a
+  game that owns its camera.** `simple_scene_update` steps physics but also flies the camera with
+  WASD and the mouse, and slices the frame delta into ≤16 ms pieces, so how many steps run depends
+  on the frame rate. A game that needed neither wrote its own accumulator (`kule_yikici` did).
+  `FixedPhysics::new(hz)` steps at exactly `1/hz`, runs at most 8 steps per call (adjustable with
+  `with_max_steps`) and drops the debt past that, and exposes `alpha()` and `reset()`.
+  `sync_transforms` is the transform sync + propagate that `simple_scene_update` ends with. The
+  game owns the driver, so it does not share the windowed runtime's `PhysicsTime`.
+
 - **`ProjectionMode::OrthographicFit { width, height }` — an orthographic camera that fits the
   window.** Plain `Orthographic { height }` fixes only the vertical extent, so a portrait window
   cut the sides off a 2D playfield (measured in `kule_yikici`: 948×1028 showed ±7.4 units, the

@@ -18,7 +18,7 @@ hash replays bit-for-bit, which is what rollback netcode and the regression soak
 | Area | State | Read |
 |---|---|---|
 | ECS (`gizmo-core`) | Archetype + sparse-set storage, borrow-checked queries, commands, events, observers, hierarchy. Under an ongoing soundness sweep; each round has come back smaller. | ENGINE.md §3 (Phase 6) |
-| Rigid physics | GJK/EPA + box SAT, TGS-Soft solver, CCD, joints, vehicles, character, axis locks. Deterministic on one platform. | ENGINE.md §5, §7 |
+| Rigid physics | GJK/EPA + box SAT, TGS-Soft solver, CCD, joints, vehicles, character, axis locks. Deterministic on one platform. A game with its own update hook steps it at a fixed rate with `gizmo::simple::FixedPhysics`. | ENGINE.md §5, §7 |
 | Soft physics | FEM soft bodies, XPBD cloth and rope, Voronoi fracture. | ENGINE.md §1 |
 | 3D rendering | Deferred PBR, CSM shadows, SSAO, SSGI, SSR, bloom, volumetrics, TAA/FXAA, decals, irradiance volumes, user materials (forward). | CAPABILITY_GAPS §A, §F |
 | 2D rendering | `Sprite` in world space (entity's plane, depth-tested) or screen space; sheets, flips, layers, pixel-art sampling. `ProjectionMode::OrthographicFit` keeps a playfield in view in any window shape. | CAPABILITY_GAPS §A1 |

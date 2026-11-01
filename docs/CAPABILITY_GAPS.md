@@ -566,9 +566,12 @@ What it had to build for itself, each recorded in the file's header:
   disagree.
 - **No level-reset helper.** "Everything that belongs to the level" is a marker component and a
   hand-written despawn loop.
-- **No fixed-step driver for a game that owns its camera.** `simple_scene_update` steps physics
-  but also flies the camera with WASD/mouse, so a game with a fixed camera cannot use it; the
-  accumulator is in the game (`FIXED_DT`, `MAX_STEPS`).
+- ~~**No fixed-step driver for a game that owns its camera.**~~ **Closed 2026-11-01.**
+  `simple_scene_update` steps physics but also flies the camera with WASD/mouse, so a game with a
+  fixed camera could not use it, and the accumulator lived in the game (`FIXED_DT`, `MAX_STEPS`).
+  `gizmo::simple::FixedPhysics` is that accumulator (fixed step, per-call ceiling, `alpha`,
+  `reset`) and `gizmo::simple::sync_transforms` is `simple_scene_update`'s last job on its own;
+  the game uses both.
 - ~~**An orthographic camera does not fit the window's shape.**~~ **Closed 2026-11-01.**
   `Orthographic { height }` fixes the vertical extent; in a portrait window (948×1028, measured)
   the visible width was ±7.4 units and the catapult at x = −11 was off screen, so the game

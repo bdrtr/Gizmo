@@ -544,9 +544,144 @@ pub fn simple_scene_update(
         physics_dt -= step;
     }
 
+    sync_transforms(world);
+}
+
+/// Copies physics poses into `Transform`s and propagates them down the hierarchy into
+/// `GlobalTransform` — the last job of [`simple_scene_update`], on its own.
+///
+/// A hook that replaces `simple_scene_update` and steps physics itself (with [`FixedPhysics`],
+/// say) calls this once a frame after the step, or every sprite and mesh is drawn where it stood
+/// a frame ago — or, for a body spawned this frame, at the origin.
+pub fn sync_transforms(world: &mut crate::core::World) {
     use crate::core::system::System;
-    systems::transform::TransformSyncSystem.run(world, dt);
-    systems::transform::TransformPropagateSystem.run(world, dt);
+    // Neither system reads its `dt`.
+    systems::transform::TransformSyncSystem.run(world, 0.0);
+    systems::transform::TransformPropagateSystem.run(world, 0.0);
+}
+
+/// A fixed-step physics driver for a game that runs its own update hook — one that owns its
+/// camera, and so cannot use [`simple_scene_update`], which also flies the camera with WASD and
+/// the mouse.
+///
+/// Every step advances the simulation by exactly [`step`](Self::step) seconds whatever the frame
+/// rate, so the same shot lands in the same place on every machine. `simple_scene_update` does
+/// **not** promise that: it slices the frame delta into ≤16 ms pieces, so the steps it takes
+/// depend on the frame rate. Until this existed, a game that needed the fixed step wrote the
+/// accumulator itself (`kule_yikici`'s `FIXED_DT`/`MAX_STEPS`, `docs/CAPABILITY_GAPS.md` §C9).
+///
+/// The game owns the value — in its state or a resource — rather than the world holding one,
+/// because the windowed runtime already feeds a [`PhysicsTime`](crate::core::time::PhysicsTime)
+/// resource for its fixed schedule, and two drivers spending one accumulator would each see half
+/// the time.
+///
+/// ```no_run
+/// # use gizmo::prelude::*;
+/// # use gizmo::simple::{FixedPhysics, SimpleAppExt, SimpleSceneState, sync_transforms};
+/// # let app = App::<SimpleSceneState>::new("x", 1, 1).with_simple_scene(|_, _| {});
+/// let mut physics = FixedPhysics::new(120);
+/// app.set_update(move |world, _state, dt, _input| {
+///     // …game logic that sets velocities…
+///     physics.advance(world, dt);
+///     sync_transforms(world);
+/// })
+/// # ;
+/// ```
+///
+/// # When a frame takes too long
+///
+/// At most [`max_steps`](Self::with_max_steps) steps run per call (8 by default). When a frame
+/// hits that ceiling the rest of the debt is **dropped**, not carried: a stall — a breakpoint, a
+/// window drag — then costs one slow frame instead of a run of them, each slower than the last
+/// as it tries to catch up. The game falls behind wall-clock instead, which for a game is the
+/// right failure.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FixedPhysics {
+    step: f32,
+    max_steps: u32,
+    accumulator: f32,
+}
+
+impl FixedPhysics {
+    /// The per-call step ceiling [`new`](Self::new) starts with.
+    pub const DEFAULT_MAX_STEPS: u32 = 8;
+
+    /// A driver that steps `hz` times per simulated second. `hz` of 0 is taken as 1.
+    #[must_use]
+    pub fn new(hz: u32) -> Self {
+        Self::with_step(1.0 / hz.max(1) as f32)
+    }
+
+    /// A driver with an explicit step length in seconds — for a step that is not `1/hz` of an
+    /// integer, or one already stored as seconds. Non-positive or non-finite values become 1/60.
+    #[must_use]
+    pub fn with_step(step: f32) -> Self {
+        let step = if step.is_finite() && step > 0.0 { step } else { 1.0 / 60.0 };
+        Self { step, max_steps: Self::DEFAULT_MAX_STEPS, accumulator: 0.0 }
+    }
+
+    /// Replaces the per-call step ceiling — see the type's docs. 0 is taken as 1.
+    #[must_use]
+    pub fn with_max_steps(mut self, max_steps: u32) -> Self {
+        self.max_steps = max_steps.max(1);
+        self
+    }
+
+    /// Spends `dt` seconds of frame time in whole steps of physics, and returns how many ran.
+    ///
+    /// Time short of a full step is kept for the next call; a negative or non-finite `dt` adds
+    /// nothing. This steps physics only — call [`sync_transforms`] afterwards to make the result
+    /// visible.
+    pub fn advance(&mut self, world: &mut crate::core::World, dt: f32) -> u32 {
+        let steps = self.plan(dt);
+        for _ in 0..steps {
+            systems::cpu_physics_step_system(world, self.step);
+        }
+        steps
+    }
+
+    /// The bookkeeping half of [`advance`](Self::advance), without a world: adds `dt`, takes the
+    /// whole steps out, applies the ceiling.
+    fn plan(&mut self, dt: f32) -> u32 {
+        if dt.is_finite() && dt > 0.0 {
+            self.accumulator += dt;
+        }
+        let mut steps = 0;
+        while self.accumulator >= self.step && steps < self.max_steps {
+            self.accumulator -= self.step;
+            steps += 1;
+        }
+        if steps == self.max_steps {
+            self.accumulator = 0.0;
+        }
+        steps
+    }
+
+    /// The step length, in seconds.
+    #[must_use]
+    pub fn step(&self) -> f32 {
+        self.step
+    }
+
+    /// How far the simulation is into the next step, `0.0..1.0` — the coefficient for
+    /// `lerp(previous_pose, current_pose, alpha)` if the game keeps previous poses to blend.
+    #[must_use]
+    pub fn alpha(&self) -> f32 {
+        (self.accumulator / self.step).clamp(0.0, 1.0)
+    }
+
+    /// Forgets the time owed — for a pause, or a level restart, where the time that passed
+    /// should not be simulated afterwards.
+    pub fn reset(&mut self) {
+        self.accumulator = 0.0;
+    }
+}
+
+impl Default for FixedPhysics {
+    /// 60 steps per second.
+    fn default() -> Self {
+        Self::new(60)
+    }
 }
 
 /// Adds [`with_simple_scene`](SimpleAppExt::with_simple_scene) to an `App<SimpleSceneState>`.
@@ -843,5 +978,88 @@ mod tests {
         
         state = EditorState::Paused;
         assert_eq!(state, EditorState::Paused);
+    }
+}
+
+#[cfg(test)]
+mod fixed_physics_tests {
+    use super::*;
+
+    /// The step count is fixed by the time spent, not by how it was split into frames: 1 s at
+    /// 120 Hz is 120 steps whether it arrives as 60 frames, 144 frames or 37 uneven ones.
+    #[test]
+    fn the_same_time_takes_the_same_steps_at_any_frame_rate() {
+        for frames in [60u32, 144, 240] {
+            let mut p = FixedPhysics::new(120);
+            let total: u32 = (0..frames).map(|_| p.plan(1.0 / frames as f32)).sum();
+            assert!((119..=120).contains(&total), "{frames} fps: {total} steps");
+        }
+        // Uneven frames that add up to one second.
+        let mut p = FixedPhysics::new(100);
+        let pattern: [f32; 5] = [0.004, 0.031, 0.017, 0.009, 0.039];
+        let mut t = 0.0;
+        let mut total = 0;
+        while t < 0.999 {
+            let dt = pattern[total as usize % pattern.len()].min(1.0 - t);
+            t += dt;
+            total += p.plan(dt);
+        }
+        assert!((99..=100).contains(&total), "{total}");
+    }
+
+    /// A stall runs the ceiling and then forgets the rest instead of owing it.
+    #[test]
+    fn a_stall_runs_the_ceiling_and_drops_the_rest() {
+        let mut p = FixedPhysics::new(60).with_max_steps(4);
+        assert_eq!(p.plan(10.0), 4);
+        assert_eq!(p.alpha(), 0.0, "the debt was dropped");
+        assert_eq!(p.plan(1.0 / 60.0), 1, "the next ordinary frame is ordinary");
+    }
+
+    #[test]
+    fn short_frames_bank_their_time_and_bad_input_adds_none() {
+        let mut p = FixedPhysics::new(10);
+        assert_eq!(p.plan(0.06), 0);
+        assert!((p.alpha() - 0.6).abs() < 1e-5);
+        assert_eq!(p.plan(f32::NAN), 0);
+        assert_eq!(p.plan(-1.0), 0);
+        assert_eq!(p.plan(0.05), 1);
+        p.reset();
+        assert_eq!(p.alpha(), 0.0);
+        assert_eq!(FixedPhysics::with_step(0.0).step(), 1.0 / 60.0);
+        assert_eq!(FixedPhysics::new(0).step(), 1.0);
+    }
+
+    /// `advance` actually moves the world: a falling body falls exactly `steps` steps' worth, and
+    /// the same total time split two ways leaves it bit-identical.
+    #[test]
+    fn advance_steps_the_world_independently_of_the_frame_split() {
+        fn world_with_ball() -> (crate::core::World, u32) {
+            let mut w = crate::core::World::new();
+            w.insert_resource(
+                PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0)),
+            );
+            let e = w.spawn_bundle((
+                Transform::new(Vec3::new(0.0, 10.0, 0.0)),
+                crate::physics::RigidBody::new(1.0, true),
+                crate::physics::Velocity::default(),
+                crate::physics::Collider::sphere(0.5),
+            ));
+            (w, e.id())
+        }
+        let y = |w: &crate::core::World, id: u32| w.borrow::<Transform>().get(id).unwrap().position.y;
+
+        // Powers of two, so the frame times are exact in f32 and both splits owe the same steps.
+        let (mut a, ida) = world_with_ball();
+        let mut pa = FixedPhysics::new(128);
+        let steps_a: u32 = (0..64).map(|_| pa.advance(&mut a, 1.0 / 64.0)).sum();
+
+        let (mut b, idb) = world_with_ball();
+        let mut pb = FixedPhysics::new(128);
+        let steps_b: u32 = (0..256).map(|_| pb.advance(&mut b, 1.0 / 256.0)).sum();
+
+        assert_eq!((steps_a, steps_b), (128, 128));
+        assert!(y(&a, ida) < 9.0, "the ball fell: {}", y(&a, ida));
+        assert_eq!(y(&a, ida).to_bits(), y(&b, idb).to_bits(), "same steps, same world");
     }
 }
