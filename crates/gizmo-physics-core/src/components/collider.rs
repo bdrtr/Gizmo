@@ -1,4 +1,4 @@
-use gizmo_math::{Quat, Vec3};
+use gizmo_math::{Quat, Vec2, Vec3};
 use serde::{Deserialize, Serialize};
 
 use super::{CollisionLayer, PhysicsMaterial, Transform};
@@ -590,6 +590,74 @@ impl Collider {
     /// size `2x × 2y × 2z` — the name reads like full dimensions and is not.
     pub fn new_aabb(x: f32, y: f32, z: f32) -> Self {
         Self::box_collider(Vec3::new(x, y, z))
+    }
+
+    // ── 2-D shapes ──────────────────────────────────────────────────────────────────────────
+    //
+    // The engine does 2-D physics as 3-D shapes confined to the XY plane
+    // (`RigidBody::planar_xy` in `gizmo-physics-rigid`): one solver, one determinism contract,
+    // and 2-D bodies that collide with 3-D ones for free. What a 2-D game was missing was not a
+    // solver but the *shapes* — a ramp, a triangle, a hilly ground line — which these build from
+    // points in the plane. Each one is centred on z = 0 and `depth` thick along Z.
+
+    /// A circle of `radius` in the XY plane — a sphere, which on a body locked to the plane
+    /// behaves as a disc. Named for the 2-D author looking for it.
+    pub fn circle_2d(radius: f32) -> Self {
+        Self::sphere(radius)
+    }
+
+    /// A `size.x × size.y` rectangle in the XY plane, centred on the origin, `depth` thick.
+    pub fn rect_2d(size: Vec2, depth: f32) -> Self {
+        Self::box_collider((size * 0.5).abs().extend(Self::half_depth(depth)))
+    }
+
+    /// A convex polygon in the XY plane — a ramp, a wedge, a triangle — extruded `depth` along Z.
+    ///
+    /// The points are in the collider's local frame, in any order. A non-convex outline collides
+    /// as its **convex hull** (an L collides as the hull stretched around it): for a concave solid,
+    /// build it from several polygons, or use [`polyline_2d`](Self::polyline_2d) for static
+    /// ground. Fewer than three distinct points, or points all on one line, have no area and give
+    /// a thin sliver rather than nothing; give the polygon an area.
+    ///
+    /// Collides through GJK/EPA, like every [`ConvexHull`](ColliderShape::ConvexHull). A body
+    /// using it computes its inertia with `RigidBody::update_inertia_from_collider` like any
+    /// other shape.
+    pub fn polygon_2d(points: &[Vec2], depth: f32) -> Self {
+        let hz = Self::half_depth(depth);
+        let prism: Vec<Vec3> = points
+            .iter()
+            .flat_map(|p| [p.extend(-hz), p.extend(hz)])
+            .collect();
+        Self::convex_hull(&prism)
+    }
+
+    /// A **static** chain of segments through `points` in the XY plane — hilly ground, a slope, a
+    /// cave ceiling — extruded `depth` along Z into a strip of quads.
+    ///
+    /// The chain is open: it does not close back to the first point, and it is a surface, not a
+    /// solid — a body can be on either side of it. Built as a [`trimesh`](Self::trimesh), which
+    /// is meant for static bodies. Fewer than two points build a mesh with no triangles, which
+    /// collides with nothing.
+    pub fn polyline_2d(points: &[Vec2], depth: f32) -> Self {
+        let hz = Self::half_depth(depth);
+        let vertices: Vec<Vec3> = points
+            .iter()
+            .flat_map(|p| [p.extend(-hz), p.extend(hz)])
+            .collect();
+        let mut indices = Vec::with_capacity(points.len().saturating_sub(1) * 6);
+        for i in 0..points.len().saturating_sub(1) as u32 {
+            let (a0, a1, b0, b1) = (2 * i, 2 * i + 1, 2 * i + 2, 2 * i + 3);
+            indices.extend_from_slice(&[a0, b0, b1, a0, b1, a1]);
+        }
+        Self::trimesh(vertices, indices)
+    }
+
+    fn half_depth(depth: f32) -> f32 {
+        if depth.is_finite() {
+            (depth.abs() * 0.5).max(1e-3)
+        } else {
+            0.5
+        }
     }
 
     /// Back-compatibility alias for [`Collider::capsule`]; same local +Y axis and the

@@ -54,7 +54,8 @@ stack" is the 3D one restricted to a plane — a world sprite lies in its entity
 | sprite-sheet animation (`SpriteAnimation`, advanced by both draw paths) | yes, since 2026-11-01 |
 | `Tilemap` (one tileset, one entity, one draw call; both draw paths) | yes, since 2026-11-01 |
 | collision from a tilemap (`tilemap_collider`: solid tiles → merged static boxes) | yes, since 2026-11-01 |
-| **2D physics** (2D shapes and solver) | **no** — 3D shapes with axis locks stand in |
+| 2D shapes (`Collider::{polygon_2d, polyline_2d, circle_2d, rect_2d}`) on planar bodies (`RigidBody::planar_xy`) | yes, since 2026-11-01 — 3D shapes confined to the plane, one solver |
+| **a separate 2D solver** | **no, by decision** — see §C9 |
 
 Measured (`sprites_reach_the_frame_in_place_in_order_and_behind_walls`): a world sprite behind a
 wall changes **0** pixels, and **784** with `CompareFunction::Always` in the world pipeline; two
@@ -562,9 +563,15 @@ on the sprite path and the post-tonemap overlay the same day. It works: the towe
 (400 frames, no drift visible), collapses plausibly under a hit, and the HUD counts what fell.
 What it had to build for itself, each recorded in the file's header:
 
-- **No 2D collision shapes.** Boxes are 3D `Collider::box_collider`s with depth 1, the stone a 3D
-  sphere; what keeps them on the plane is `RigidBody`'s axis locks (`lock_translation_z`,
-  `lock_rotation_x/y`). It works, but there is no "2D physics" to ask for.
+- ~~**No 2D collision shapes.**~~ **Closed 2026-11-01, as shapes rather than a second solver.**
+  Boxes were 3D `Collider::box_collider`s with depth 1, the stone a 3D sphere, kept on the plane
+  by hand-written axis locks. Now: `RigidBody::planar_xy()` for the locks, and
+  `Collider::{polygon_2d, polyline_2d, circle_2d, rect_2d}` build the shapes a 2D game asks for
+  (ramps, wedges, hilly ground) from points in the plane, extruded along Z. A separate 2D solver
+  was considered and **not** built: it would be a second physics engine beside a deterministic
+  one, with its own contract to keep, and 2D bodies could not touch 3D ones. Writing the
+  `planar_xy` test also found that the locks leaked through two position paths — fixed the same
+  day (CHANGELOG, "Axis locks leaked…").
 - ~~**A sprite and its collider are sized separately.**~~ **Closed 2026-11-01.** Nothing linked
   `Sprite::size` to the collider's half-extents, so the game's `spawn_box` derived both from one
   number. `gizmo::physics::sprite_collider(&sprite, depth)` (and `sprite_collider_scaled` for an
@@ -776,9 +783,10 @@ and `emissive` (item 4, the only undocumented one). No further silent fields.
 6. ~~**2D pipeline (A1).**~~ **The drawing half DONE 2026-11-01** — "largest of all; arguably a
    separate project" turned out to be one component and one pass, because the 2D camera and the
    2D transform stack already existed as an orthographic camera and a plane. What remains is the
-   2D *game* layer around it, measured by building one (§C9): 2D collision shapes. (The
-   window-fitting orthographic camera, sprite↔collider sizing, the sprite-animation component and
-   the tilemap were closed 2026-11-01.)
+   2D *game* layer around it, measured by building one (§C9) — and every item that game listed
+   was closed 2026-11-01: the window-fitting orthographic camera, sprite↔collider sizing, the
+   sprite-animation component, the tilemap (drawing, culling, collision) and 2D shapes on planar
+   bodies.
 
 ---
 

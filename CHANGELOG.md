@@ -50,6 +50,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **2D shapes: `Collider::polygon_2d`, `polyline_2d`, `circle_2d`, `rect_2d`.** Built from points
+  in the XY plane and extruded `depth` along Z, for bodies locked with `RigidBody::planar_xy`: a
+  convex polygon becomes a convex-hull prism (ramps, wedges, triangles), a polyline a static strip
+  of quads (hilly ground). No solver change — the engine's 2D physics stays 3D shapes on the
+  plane, so 2D and 3D bodies collide with each other. Tested end to end: a triangle settles on its
+  base, a ball rolls down a polyline slope and stays on it (a strip with no area lets it fall
+  through, which the test catches).
+
 - **Text wrapping: `Text::max_width` / `with_max_width`, and `FontLibrary::layout_wrapped`.**
   Lines wider than the width break at spaces (the space is dropped); a word too wide on its own
   is cut between characters rather than overflowing. In glyph pixels in both spaces. `None`, the
