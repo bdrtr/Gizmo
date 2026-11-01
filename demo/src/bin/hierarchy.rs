@@ -20,7 +20,14 @@
 //! bir kimlik geri dönüştürülüp başka bir varlığa verilirse, listede kalmış eski kayıt yanlış
 //! varlığı gösterir.
 //!
-//! **3. Ve asıl ölçüm: düz `despawn` ebeveynin listesini temizlemiyor.** Bir çocuğu düz
+//! **Düzeltildi (2026-11-02):** düz `despawn` artık ebeveynin listesinden de siliyor, ve ölen bir
+//! ebeveynin doğrudan çocuklarını kök yapıyor (`Parent` bağlarını kaldırıyor). Aşağıdaki ölçüm
+//! düzeltmeden önceki hâli kaydediyor; demo bugün çalıştırılırsa 2,0 s satırı "1 kayıt, 1'i
+//! yaşıyor" gösterir ve asılı kimlik uyarısı hiç çıkmaz. Testler:
+//! `despawning_a_child_takes_it_out_of_its_parents_list`,
+//! `despawning_a_parent_makes_its_children_roots` (`gizmo_core::hierarchy`).
+//!
+//! **3. Ve asıl ölçüm (düzeltmeden önce): düz `despawn` ebeveynin listesini temizlemiyordu.** Bir çocuğu düz
 //! `despawn` ile yok edip ebeveynin listesinin kısalmasını beklerseniz kısalmıyor: bu bakım
 //! [`HierarchyExt::remove_child`]'ın işi, ve düz `despawn` çağrısı ebeveynde **asılı bir kimlik**
 //! bırakıyor.

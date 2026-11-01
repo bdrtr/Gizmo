@@ -570,6 +570,30 @@ impl World {
         }
     }
 
+    /// Removes `e` from its parent's [`Children`](crate::component::Children) and takes the
+    /// [`Parent`](crate::component::Parent) link off each of its direct children whose link
+    /// names it. Part of every despawn.
+    fn unlink_from_hierarchy(&mut self, e: Entity) {
+        use crate::component::{Children, Parent};
+        let id = e.id();
+        let parent = self.query::<&Parent>().and_then(|q| q.get(id).map(|p| p.0));
+        if let Some(parent) = parent.filter(|p| *p != id) {
+            if let Some(mut q) = self.query_mut::<crate::query::Mut<Children>>() {
+                if let Some(mut children) = q.get_mut(parent) {
+                    children.0.retain(|&c| c != id);
+                }
+            }
+        }
+        let children: Vec<u32> =
+            self.query::<&Children>().and_then(|q| q.get(id).map(|c| c.0.clone())).unwrap_or_default();
+        for child in children {
+            let points_here = self.query::<&Parent>().and_then(|q| q.get(child).map(|p| p.0 == id)).unwrap_or(false);
+            if let (true, Some(handle)) = (points_here && child != id, self.entity(child)) {
+                self.remove_component::<Parent>(handle);
+            }
+        }
+    }
+
     /// The body of [`World::despawn`]'s drain loop, split out so the re-entrancy flag can be
     /// cleared on the unwind path as well as the normal one.
     fn despawn_drain(&mut self) {
@@ -583,6 +607,13 @@ impl World {
                 hook(self, e);
             }
             self.despawn_hooks.extend(hooks);
+
+            // HIERARCHY LINKS, both ways, before the row goes. A plain `despawn` (not
+            // `despawn_recursive`) used to leave the parent's `Children` naming this id and every
+            // child's `Parent` naming it too — both raw ids, so once the id was recycled the
+            // parent listed a stranger as its child and the orphans hung off it, inheriting its
+            // transform. Now the parent forgets it and the direct children become roots.
+            self.unlink_from_hierarchy(e);
 
             let id = e.id();
             // Bounds-safe: an entity RESERVED via `Commands::spawn` (its generation is

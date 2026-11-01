@@ -479,4 +479,55 @@ mod tests {
         let (out, b) = out;
         assert!(out.contains(&b), "the id is returned; liveness is the caller's to check");
     }
+
+    /// A plain `despawn` of a child takes it out of its parent's list. Before, the id stayed —
+    /// and once recycled, the parent listed whatever entity got the id next as its child.
+    #[test]
+    fn despawning_a_child_takes_it_out_of_its_parents_list() {
+        let mut world = World::new();
+        let parent = world.spawn();
+        let a = world.spawn();
+        let b = world.spawn();
+        world.add_child(parent, a);
+        world.add_child(parent, b);
+        world.despawn(a);
+        let children = world.borrow::<Children>().get(parent.id()).map(|c| c.0.clone());
+        assert_eq!(children, Some(vec![b.id()]), "only the living child is listed");
+        let stranger = world.spawn();
+        assert_eq!(stranger.id(), a.id(), "the id is recycled — which is what made the old list lie");
+        let children = world.borrow::<Children>().get(parent.id()).map(|c| c.0.clone());
+        assert_eq!(children, Some(vec![b.id()]), "and the stranger is not the parent's child");
+    }
+
+    /// A plain `despawn` of a parent leaves its children alive, as roots: their `Parent` named an
+    /// id that a recycled entity would answer to.
+    #[test]
+    fn despawning_a_parent_makes_its_children_roots() {
+        let mut world = World::new();
+        let grandparent = world.spawn();
+        let parent = world.spawn();
+        let child = world.spawn();
+        world.add_child(grandparent, parent);
+        world.add_child(parent, child);
+        world.despawn(parent);
+        assert!(world.is_alive(child), "a plain despawn does not take the children");
+        assert!(world.borrow::<Parent>().get(child.id()).is_none(), "the orphan is a root now");
+        let listed = world.borrow::<Children>().get(grandparent.id()).map(|c| c.0.clone());
+        assert_eq!(listed, Some(vec![]), "and the grandparent no longer lists the parent");
+    }
+
+    /// `despawn_recursive` still takes the whole subtree, now that each despawn also unlinks.
+    #[test]
+    fn despawn_recursive_still_takes_the_subtree() {
+        let mut world = World::new();
+        let root = world.spawn();
+        let mid = world.spawn();
+        let leaf = world.spawn();
+        let other = world.spawn();
+        world.add_child(root, mid);
+        world.add_child(mid, leaf);
+        world.despawn_recursive(root);
+        assert!(!world.is_alive(root) && !world.is_alive(mid) && !world.is_alive(leaf));
+        assert!(world.is_alive(other));
+    }
 }
