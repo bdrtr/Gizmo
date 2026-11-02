@@ -36,6 +36,8 @@
 /// app's own initial-scene load uses it, and every game gets identity repair without wiring it.
 #[cfg(all(feature = "scene", feature = "render"))]
 pub mod asset_identity;
+/// [`save::SaveData`] — a game's settings, scores and progress, kept between runs.
+pub mod save;
 /// The in-engine developer console: a `~`-style overlay that reads and writes
 /// [`gizmo_core::cvar`] variables and prints the engine's log buffer. Drawn by the windowed
 /// loop when the `egui` feature is on, over whatever the game is rendering.
