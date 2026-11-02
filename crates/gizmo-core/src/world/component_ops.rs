@@ -802,6 +802,25 @@ impl World {
         });
     }
 
+    /// `entity`'s `T`, if the entity is alive and has one — the typed single-entity read.
+    ///
+    /// For the places a whole [`Query`](crate::query::Query) is too much: a lifecycle hook handed
+    /// one `Entity`, a debug print, a lookup by a stored handle. Checks the entity's generation,
+    /// so a stale handle whose id was recycled reads `None` rather than the new entity's value.
+    /// Read-only on purpose: a write must go through `query_mut`, which marks the change for
+    /// `Changed<T>` filters; a raw `&mut T` handed out here could not.
+    pub fn get<T: Component>(&self, entity: Entity) -> Option<&T> {
+        if !self.is_alive(entity) {
+            return None;
+        }
+        let ptr = self.get_component_ptr(entity, TypeId::of::<T>())?;
+        // SAFETY: the pointer was looked up by `TypeId::of::<T>()`, so it addresses a live `T` in
+        // a column or sparse set this world owns. The returned reference borrows `self`, so no
+        // structural change (which needs `&mut self`) can move or drop it while it lives — the
+        // same footing as `World::borrow::<T>()`'s `&T` items.
+        Some(unsafe { &*(ptr as *const T) })
+    }
+
     /// Getting a raw Component Pointer (for Reflection/Editor)
     pub fn get_component_ptr(&self, entity: Entity, type_id: TypeId) -> Option<*const u8> {
         // SparseSet components live outside the archetype — otherwise type-erased
@@ -2676,5 +2695,46 @@ mod tests {
             world.query_entity::<&Fuse>(ids[1].id()).map(|f| f.owned.clone()),
             Some("middle".to_string())
         );
+    }
+
+    /// `World::get` reads one entity's component, from either storage, and answers `None` for a
+    /// missing component, a despawned entity and — the case a raw id gets wrong — a stale handle
+    /// whose id now belongs to someone else.
+    #[test]
+    fn get_reads_one_entity_and_refuses_a_stale_handle() {
+        #[derive(Clone, PartialEq, Debug)]
+        struct Tag(u8);
+        crate::impl_component!(Tag; crate::component::StorageType::SparseSet);
+
+        let mut world = World::new();
+        let e = world.spawn();
+        world.add_component(e, Pos(7));
+        world.add_component(e, Tag(3));
+        assert_eq!(world.get::<Pos>(e), Some(&Pos(7)), "table storage");
+        assert_eq!(world.get::<Tag>(e), Some(&Tag(3)), "sparse-set storage");
+        assert_eq!(world.get::<Vel>(e), None, "no such component");
+
+        world.despawn(e);
+        assert_eq!(world.get::<Pos>(e), None, "despawned");
+        let stranger = world.spawn();
+        world.add_component(stranger, Pos(99));
+        assert_eq!(stranger.id(), e.id(), "the id is recycled");
+        assert_eq!(world.get::<Pos>(e), None, "the old handle does not read the stranger's value");
+        assert_eq!(world.get::<Pos>(stranger), Some(&Pos(99)));
+    }
+
+    /// The case the gap was written from: a lifecycle hook is handed only the entity, and now reads
+    /// the value it fired for without building a query.
+    #[test]
+    fn a_hook_reads_the_value_it_fired_for() {
+        use std::sync::atomic::{AtomicI32, Ordering};
+        static SEEN: AtomicI32 = AtomicI32::new(0);
+        let mut world = World::new();
+        world.register_on_add::<Pos>(Box::new(|w: &mut World, e: Entity| {
+            SEEN.store(w.get::<Pos>(e).map_or(-1, |p| p.0), Ordering::SeqCst);
+        }));
+        let e = world.spawn();
+        world.add_component(e, Pos(11));
+        assert_eq!(SEEN.load(Ordering::SeqCst), 11);
     }
 }

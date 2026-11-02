@@ -64,6 +64,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   bytes per sample, so native devices request `max_color_attachment_bytes_per_sample` up to 64.
   Groundwork for object motion blur; nothing reads the target yet.
 
+- **`World::get::<T>(entity)`** — one entity's component without building a query, from either
+  storage. Checks the entity's generation, so a stale handle reads `None` rather than whatever
+  entity now has its id. Read-only; writes still go through `query_mut`, which marks changes.
+
 - **Systems may return `Result`.** A system function returning `Result<(), E>` (`E: Display`)
   can use `?`; an `Err` goes to the world's `SystemErrorHandler` resource (a `fn(system, error)`),
   or by default to a `tracing::error!` naming the system, and the system runs again next frame.
