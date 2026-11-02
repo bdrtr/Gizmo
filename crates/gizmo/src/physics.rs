@@ -77,7 +77,7 @@ pub mod cloth {
     pub use gizmo_physics_soft::cloth::*;
 }
 
-pub use system::{physics_fracture_system, physics_explosion_system, physics_step_system};
+pub use system::{apply_impulse, physics_fracture_system, physics_explosion_system, physics_step_system};
 
 // Gameplay controller systems (Pacejka vehicle + kinematic character). These drive
 // `VehicleController` / `CharacterController` and must run *before* `physics_step_system`

@@ -4,6 +4,28 @@ use gizmo_core::entity::Entity;
 use gizmo_core::query::Mut;
 use gizmo_core::world::World;
 
+/// Gives the body of entity `id` an instantaneous `impulse` (N·s, world space) at world `point`
+/// — linear and angular, about its centre of mass — and wakes it. Returns whether the entity has
+/// a body it could push: `false` for a missing entity, one without `RigidBody`/`Transform`/
+/// `Velocity`, or a static or kinematic one, which an impulse does not move.
+///
+/// The ECS form of [`PhysicsWorld::apply_impulse`](crate::world::PhysicsWorld::apply_impulse),
+/// for the thing a game does on a hit: `id` is what a raycast's
+/// [`RaycastHit::entity`](gizmo_physics_core::raycast::RaycastHit) names, and the next physics
+/// step carries the velocity it writes. Before this a game borrowed the three components itself,
+/// woke the body by hand and reached into `Integrator` — which the facade does not even export
+/// (`poligon`, 2026-11-02).
+pub fn apply_impulse(world: &mut World, id: u32, impulse: gizmo_math::Vec3, point: gizmo_math::Vec3) -> bool {
+    let Some(mut q) = world.query_mut::<(Mut<RigidBody>, &Transform, Mut<Velocity>)>() else { return false };
+    let Some((mut rb, transform, mut vel)) = q.get_mut(id) else { return false };
+    if !rb.is_dynamic() {
+        return false;
+    }
+    rb.wake_up();
+    crate::integrator::Integrator::apply_impulse_at_point(&rb, transform, &mut vel, impulse, point);
+    true
+}
+
 /// Exclusive system that updates the entire physics simulation.
 /// It reads all rigid and soft bodies from the ECS, steps the physics world,
 /// and writes the transformed positions and velocities back to the ECS.
@@ -845,3 +867,42 @@ pub fn physics_explosion_system(world: &World, dt: f32) {
 }
 
 
+
+#[cfg(test)]
+mod apply_impulse_tests {
+    use super::*;
+    use gizmo_math::Vec3;
+
+    fn body(world: &mut World, rb: RigidBody) -> u32 {
+        let e = world.spawn();
+        world.add_component(e, Transform::new(Vec3::ZERO));
+        world.add_component(e, rb);
+        world.add_component(e, Velocity::default());
+        world.add_component(e, Collider::sphere(0.5));
+        e.id()
+    }
+
+    /// Through the centre: pure linear, `impulse / mass`. Off the centre: it spins too. A
+    /// sleeping body is woken. A static body and a missing entity are refused.
+    #[test]
+    fn an_impulse_moves_a_dynamic_body_and_nothing_else() {
+        let mut world = World::new();
+        let mut rb = RigidBody::new(2.0, true);
+        rb.update_inertia_from_collider(&Collider::sphere(0.5));
+        rb.is_sleeping = true;
+        let ball = body(&mut world, rb);
+        assert!(apply_impulse(&mut world, ball, Vec3::new(4.0, 0.0, 0.0), Vec3::ZERO));
+        let v = *world.borrow::<Velocity>().get(ball).unwrap();
+        assert!((v.linear - Vec3::new(2.0, 0.0, 0.0)).length() < 1e-5, "{v:?}");
+        assert!(v.angular.length() < 1e-6, "through the centre must not spin it");
+        assert!(!world.borrow::<RigidBody>().get(ball).unwrap().is_sleeping, "still asleep");
+
+        assert!(apply_impulse(&mut world, ball, Vec3::new(4.0, 0.0, 0.0), Vec3::new(0.0, 0.5, 0.0)));
+        assert!(world.borrow::<Velocity>().get(ball).unwrap().angular.length() > 0.1, "off-centre must spin it");
+
+        let wall = body(&mut world, RigidBody::new_static());
+        assert!(!apply_impulse(&mut world, wall, Vec3::X, Vec3::ZERO));
+        assert_eq!(world.borrow::<Velocity>().get(wall).unwrap().linear, Vec3::ZERO);
+        assert!(!apply_impulse(&mut world, 9999, Vec3::X, Vec3::ZERO));
+    }
+}
