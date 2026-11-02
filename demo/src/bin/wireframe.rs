@@ -7,7 +7,7 @@
 //! | yetenek | Gizmo |
 //! |---------|-------|
 //! | genel tel kafes anahtarı | [`WireframeConfig::global`] |
-//! | varsayılan tel kafes rengi | **yok** |
+//! | tel kafes rengi | **var, 2026-11-02'den beri** — `WireframeConfig::color` (native) |
 //! | nesne bazında tel kafes açma (bu nesneyi tel kafes çiz) | **yok** |
 //! | nesne bazında hariç tutma (bunu hariç tut) | **yok** |
 //! | nesne başına tel kafes rengi | **yok** |
@@ -126,9 +126,11 @@ fn main() {
             renderer.ssr = None;
             renderer.ssgi = None;
 
-            // Tek bayrak, tek kaynak — nesne başına seçim yok.
+            // Tek kaynak — nesne başına seçim yok. Renk, açık malzemede görünmez kalan çizgiyi
+            // okunur yapıyor; `GIZMO_WIRE_LIT=1` eski hâli (aydınlatılmış renk) gösterir.
             let on = world.get_resource::<Wire>().map(|w| w.0).unwrap_or(false);
-            world.insert_resource(WireframeConfig { global: on });
+            let color = std::env::var("GIZMO_WIRE_LIT").is_err().then_some([0.05, 1.0, 0.3]);
+            world.insert_resource(WireframeConfig { global: on, color });
 
             gizmo::systems::default_render_pass(world, encoder, view, renderer);
         })

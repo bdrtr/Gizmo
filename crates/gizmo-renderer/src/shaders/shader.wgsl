@@ -169,6 +169,13 @@ fn select_cascade(view_depth: f32) -> u32 {
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let tex_color = textureSample(t_diffuse, s_diffuse, in.tex_coords);
+#ifdef WIREFRAME
+    // `WireframeConfig::color`: one flat colour for every line, readable on any material. Alpha 0
+    // means none was asked for, and the lines keep the lit colour below.
+    if ((scene.wireframe_color >> 24u) != 0u) {
+        return unpack4x8unorm(scene.wireframe_color);
+    }
+#endif
     
     let final_alpha = in.inst_albedo.a * tex_color.a;
     // **Two thresholds, and they are different questions.** The 0.01 is a floor: a fully

@@ -45,7 +45,7 @@ fn game_inputs() -> SceneSetupInputs {
         cam_fov: 0.8,
         shadow_caster: ShadowCaster::SunOnly,
         // Live renderer state in the real call; the values themselves are not the subject here.
-        environment: EnvironmentFrame { preset: 2, preset_2: 3, blend_t: 0.5, shading_mode: 0, clear_color: None },
+        environment: EnvironmentFrame { preset: 2, preset_2: 3, blend_t: 0.5, shading_mode: 0, clear_color: None, wireframe_color: None },
         point_shadows_enabled: true,
         elapsed_time: 7.5,
         light_cookies: Default::default(),
@@ -165,6 +165,7 @@ fn the_two_paths_agree_on_everything_the_world_decides() {
 
     // And nothing else. Every field of the block is either compared above or named here.
     assert_eq!(g._pre_align_pad, e._pre_align_pad);
+    assert_eq!(g.wireframe_color, e.wireframe_color);
     // Both read the rendered camera's `clear_color` (the editor's game view from the game camera).
     assert_eq!(g.clear_color, e.clear_color);
     assert_eq!(

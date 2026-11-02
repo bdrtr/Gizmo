@@ -81,6 +81,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   or by default to a `tracing::error!` naming the system, and the system runs again next frame.
   `SystemOutput` is the trait behind it; `()` systems are unchanged.
 
+- **Wireframe colour: `WireframeConfig::color`.** One colour for every wireframe line, readable
+  on any material (the lit lines nearly vanished on a pale one). Native only. `WireframeConfig`
+  gained the field (a struct literal needs it; it is no longer `Eq`), `SceneUniforms`'
+  `_pre_align_pad` became `wireframe_color` + a one-word pad, and `EnvironmentFrame` gained
+  `wireframe_color`.
+
 - **Gated observers: `World::add_observer_if(condition, system)`.** A lifecycle observer that runs
   only while a `run_if`-shaped condition holds (`in_state(..)` works as is). The plain
   `add_observer` closure is never shown the world, so it could not gate itself.

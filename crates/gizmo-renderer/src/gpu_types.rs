@@ -345,7 +345,12 @@ pub struct SceneUniforms {
     /// Linear exposure multiplier, for the forward path that tone-maps in place.
     pub exposure: f32,
     /// Explicit padding, to keep the fields below at the offsets the shaders declare.
-    pub _pre_align_pad: [u32; 2], // offset 1064-1071
+    /// `WireframeConfig::color` as RGBA8 (red in the low byte); alpha 0 = none, the wireframe
+    /// keeps the lit colour. Read only by the wireframe pipeline. Was the first word of
+    /// `_pre_align_pad`.
+    pub wireframe_color: u32,
+    /// Padding.
+    pub _pre_align_pad: u32,
     /// Explicit padding, as above.
     /// The camera's background (`Camera::clear_color`), linear RGB; a negative red channel means
     /// "none" and the deferred pass keeps its own. Was `_align_pad: [u32; 3]` — same size and

@@ -188,6 +188,9 @@ pub struct EnvironmentFrame {
     /// The rendered camera's background, linear RGB (`Camera::clear_color`); `None` keeps the
     /// path's own.
     pub clear_color: Option<[f32; 3]>,
+    /// The colour a wireframe is drawn in (`WireframeConfig::color`); `None` keeps the lit
+    /// colour.
+    pub wireframe_color: Option<[f32; 3]>,
 }
 
 /// One frame's worth of scene state, in the terms the caller has it.
@@ -278,7 +281,11 @@ impl SceneUniforms {
             // says as much next to the field it no longer reads. Fed from the camera in both paths
             // regardless, so a shader that starts reading it does not find two different answers.
             exposure: camera.exposure,
-            _pre_align_pad: [0; 2],
+            wireframe_color: environment.wireframe_color.map_or(0, |[r, g, b]| {
+                let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u32;
+                byte(r) | (byte(g) << 8) | (byte(b) << 16) | (255 << 24)
+            }),
+            _pre_align_pad: 0,
             clear_color: environment.clear_color.unwrap_or([-1.0, 0.0, 0.0]),
             environment_blend_t: environment.blend_t,
             environment_preset: environment.preset,
@@ -453,7 +460,8 @@ mod tests {
     #[test]
     fn the_padding_is_zeroed_and_the_block_is_the_size_the_shaders_expect() {
         let u = SceneUniforms::new(&SceneFrame { camera: a_camera(), ..Default::default() });
-        assert_eq!(u._pre_align_pad, [0; 2]);
+        assert_eq!(u._pre_align_pad, 0);
+        assert_eq!(u.wireframe_color, 0, "no wireframe colour asked for: alpha 0, the lit colour");
         assert_eq!(u.clear_color, [-1.0, 0.0, 0.0], "no background asked for reads as 'none'");
         // Written against MAX_LIGHTS rather than as literals: the light array is the block's only
         // variable-length part, so `FIXED + MAX_LIGHTS * 64` still fails on any *other* field

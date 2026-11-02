@@ -40,7 +40,9 @@ struct SceneUniforms {
     cascade_params:  vec4<f32>,   // x=znear, y=1/shadowRes, z=time, w=point-shadow caster idx+1
     num_lights: u32,
     exposure: f32,
-    _pre_align_pad: vec2<u32>,
+    // `WireframeConfig::color`, RGBA8; alpha 0 = none. Read by the WIREFRAME build of shader.wgsl.
+    wireframe_color: u32,
+    _pre_align_pad: u32,
     // `Camera::clear_color`; red < 0 = none (the deferred pass's own dark grey).
     clear_color: vec3<f32>,
     environment_blend_t: f32,

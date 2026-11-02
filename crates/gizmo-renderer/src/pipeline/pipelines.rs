@@ -121,6 +121,21 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
     );
     #[cfg(target_arch = "wasm32")]
     let shader = load_shader_composed_web(device, include_str!("../shaders/shader.wgsl"), "Shader");
+    // The wireframe draws the same shader with `WIREFRAME` on, which lets a frame's
+    // `wireframe_color` replace the lit colour. Native only: the web has no line mode, so its
+    // "wireframe" is a fill and keeps the lit shader.
+    #[cfg(not(target_arch = "wasm32"))]
+    let wire_shader_module = super::shaders::load_shader_composed_with(
+        device,
+        "demo/assets/shaders/shader.wgsl",
+        include_str!("../shaders/shader.wgsl"),
+        "Wireframe Shader",
+        &[("WIREFRAME", naga_oil::compose::ShaderDefValue::Bool(true))],
+    );
+    #[cfg(not(target_arch = "wasm32"))]
+    let wire_shader = &wire_shader_module;
+    #[cfg(target_arch = "wasm32")]
+    let wire_shader = &shader;
 
     #[cfg(not(target_arch = "wasm32"))]
     let unlit_shader = load_shader_composed(
@@ -264,7 +279,7 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
         ),
         wireframe: create_main(
             lit_layout,
-            &shader,
+            wire_shader,
             "Wireframe Pipeline",
             true,
             None,

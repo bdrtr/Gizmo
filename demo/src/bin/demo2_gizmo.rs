@@ -324,7 +324,7 @@ fn main() {
 
             world.insert_resource(phys_world);
             world.insert_resource(asset_manager);
-            world.insert_resource(gizmo::systems::render::WireframeConfig { global: false });
+            world.insert_resource(gizmo::systems::render::WireframeConfig { global: false, color: None });
             world.insert_resource(Gizmos::default());
 
             world.insert_resource(DemoState {

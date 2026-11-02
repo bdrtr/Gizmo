@@ -9,12 +9,16 @@ use crate::renderer::{
 use bytemuck;
 use wgpu;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 /// Whether the frame is drawn as wireframe.
 #[allow(clippy::derivable_impls)]
 pub struct WireframeConfig {
     /// Draw everything as wireframe, whatever the individual materials say.
     pub global: bool,
+    /// One colour for every wireframe line (linear RGB, 0..1). `None` keeps each surface's lit
+    /// colour — which is nearly invisible on a light material (`wireframe` measured the edge
+    /// energy at ×1.20). Native only: the web has no line mode.
+    pub color: Option<[f32; 3]>,
 }
 
 
@@ -918,6 +922,7 @@ fn draw_camera_view(
                 blend_t: renderer.environment_blend_t,
                 shading_mode: renderer.shading_mode,
                 clear_color,
+                wireframe_color: world.get_resource::<WireframeConfig>().and_then(|w| w.color),
             },
             point_shadows_enabled: renderer.point_shadows_enabled,
             elapsed_time,
@@ -6195,6 +6200,53 @@ mod golden_render_tests {
             assert!(plain.0[0].abs_diff(plain.0[2]) <= 2, "no colour asked for: the path's own grey {plain:?}");
             assert!(red.0[0] > 120 && red.0[1] < 20 && red.0[2] < 20, "the background is the camera's red: {red:?}");
             assert_eq!(red.1, plain.1, "the cube still draws over it");
+        });
+    }
+
+    /// `WireframeConfig::color` draws every line in one colour. On a pale material the lit lines
+    /// are close to invisible — the gap `wireframe` measured — so the test counts strongly green
+    /// pixels: next to none with the lit colour, many with green asked for.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn a_wireframe_colour_makes_the_lines_readable() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        async fn green_pixels(color: Option<[f32; 3]>) -> usize {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let e = world.spawn();
+            world.add_component(e, Transform::new(Vec3::new(0.0, 0.0, -3.0)).with_rotation(gizmo_math::Quat::from_rotation_y(0.6)));
+            world.add_component(e, GlobalTransform::default());
+            world.add_component(e, AssetManager::create_sphere(&renderer.device, 1.0, 12, 16));
+            world.add_component(e, Material::new(tex).with_pbr(Vec4::new(0.9, 0.9, 0.9, 1.0), 0.6, 0.0));
+            world.add_component(e, MeshRenderer::new());
+            world.spawn_bundle(crate::bundles::DirectionalLightBundle::default());
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::ZERO,
+                yaw: -std::f32::consts::FRAC_PI_2,
+                pitch: 0.0,
+                primary: true,
+                ..Default::default()
+            });
+            world.insert_resource(super::super::WireframeConfig { global: true, color });
+            let f = render_world(&mut renderer, &mut world).await;
+            f.as_chunks::<4>().0.iter().filter(|p| p[1] as i32 > p[0] as i32 + 60 && p[1] as i32 > p[2] as i32 + 60).count()
+        }
+        pollster::block_on(async {
+            let lit = green_pixels(None).await;
+            let green = green_pixels(Some([0.0, 1.0, 0.0])).await;
+            // Measured: 0 strongly green pixels with the lit colour, 594 with green. Without the
+            // shader's WIREFRAME branch the coloured run reads 0 too.
+            assert!(lit < 20, "lit lines on a pale sphere are not green: {lit}");
+            assert!(green > 300, "the asked-for colour draws the lines: {green}");
         });
     }
 
