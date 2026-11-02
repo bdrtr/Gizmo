@@ -114,6 +114,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - **`MeshSource("cylinder")` and `"cone"`**, sized like their colliders, and
     `AssetManager::PRIMITIVE_MESH_KEYS` as the one list of primitive keys (the studio's
     missing-asset check now uses it instead of its own copy).
+- **Particles work in `SimpleApp` games, and emitters can burst.** The simple scene switched the
+  GPU particle system (and SSR, SSGI, GPU physics and fluid) off **every frame**, so
+  `ParticleEmitter` did nothing in any `SimpleApp` game and a game could not turn SSR back on.
+  The particle system now skips its dispatch and draw while nothing alive is in it
+  (`GpuParticleSystem::is_idle`) and stays on; the other defaults are set once, before the game's
+  setup. `ParticleEmitter::one_shot(n)`, `burst(n)` and `with_burst(n)` emit `n` at once; the
+  emission rule is one function (`gizmo::systems::render::emit`) both draw paths call — the
+  studio carried a copy of the loop.
 - **Saving between runs: `gizmo::app::save::SaveData`.** A game's settings, scores and progress
   as typed key/values (`get::<T>`, `set`, `remove`, `save`), in `<data dir>/<game>/save.json` on
   the desktop and `localStorage` in the browser. Writes are atomic (temporary file + rename); a

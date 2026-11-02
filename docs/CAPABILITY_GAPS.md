@@ -943,6 +943,20 @@ None of the earlier games touched `gizmo-ai`, `gizmo-ui` or picking. What it fou
   the ground underneath. `gizmo::ui::pointer_over_ui(world)` tests every `Node`.
 - ~~**No click event; no optional query component.**~~ Both closed the same day for this game
   (`Clicked`, `Option<&T>`/`Option<Mut<T>>` — §C1).
+- ~~**No particles in any `SimpleApp` game; no bursts anywhere.**~~ **Closed 2026-11-02.** The
+  simple scene's render closure set `gpu_particles`, `ssr`, `ssgi`, `gpu_physics` and `gpu_fluid`
+  to `None` **every frame** — so `ParticleEmitter` emitted nothing in every `SimpleApp` game, and a
+  game that turned SSR on in its setup had it turned off again a frame later. The particle system
+  was switched off because it dispatches and draws its whole ring (100 000) every frame, alive or
+  not; it now skips both while nothing it ever spawned can still be alive
+  (`GpuParticleSystem::is_idle`), so idle costs nothing and it stays on. The simple scene sets
+  its other defaults once, before the game's setup, which may undo them. An emitter only streamed
+  at `spawn_rate`; `ParticleEmitter::one_shot(n)` / `burst(n)` put `n` out at once (capped at
+  4096), and the rule lives in one function (`gizmo::systems::render::emit`) that the studio now
+  calls instead of its own copy of the loop. Tested: the clock (idle before any spawn, busy while
+  anything spawned lives, idle after), a GPU test going busy → idle as an emitter is removed, the
+  burst arithmetic, and a source guard on the simple scene's render closure. `kale` sparks on
+  hits and bursts on kills.
 - ~~**A grid change did not make agents replan.**~~ **Closed 2026-11-02.** They picked it up at
   their next recalculation (0.5 s by default) and walked into the new wall until then, so the
   game cleared every agent's path by hand. `NavGrid` now keeps a revision —

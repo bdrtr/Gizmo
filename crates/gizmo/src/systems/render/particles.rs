@@ -44,6 +44,11 @@ use gizmo_physics_core::components::Transform;
 /// nobody sees, instead of a frame-rate collapse, which everybody does.
 const MAX_SPAWNS_PER_FRAME: u32 = 100;
 
+/// How many particles one emitter's [`burst`](ParticleEmitter::burst) may put out in a frame.
+/// Larger than the rate cap — a burst is meant to be big and happens once — but bounded, so a
+/// mistyped count does not stall a frame on a giant upload.
+const MAX_BURST: u32 = 4096;
+
 /// Advance every active emitter and spawn what it owes into the GPU particle system.
 ///
 /// Call once per frame, before the particle compute pass — the particles spawned here are stepped
@@ -78,7 +83,7 @@ pub fn spawn_from_emitters(
         let Some(mut emitter) = emitters.get_mut(id) else {
             continue;
         };
-        if !emitter.is_active || emitter.spawn_rate <= 0.0 {
+        if !emitter.is_active {
             continue;
         }
 
@@ -90,38 +95,91 @@ pub fn spawn_from_emitters(
             None => emitter.local_offset,
         };
 
-        emitter.add_time(dt);
-        let interval = 1.0 / emitter.spawn_rate;
-        let mut this_frame = 0;
         // One stream per (frame, emitter): the same frame replays the same sparks, and neighbouring
         // emitters do not emit in lockstep.
         let mut rng = gizmo_math::Rng::with_stream(frame, u64::from(id));
-        while emitter.get_accumulator() >= interval && this_frame < MAX_SPAWNS_PER_FRAME {
-            emitter.consume_time(interval);
-            this_frame += 1;
-
-            let jitter = Vec3::new(
-                rng.signed() * emitter.velocity_randomness,
-                rng.signed() * emitter.velocity_randomness,
-                rng.signed() * emitter.velocity_randomness,
-            );
-            let velocity = emitter.initial_velocity + jitter;
-            let life = (emitter.lifespan + rng.signed() * emitter.lifespan_randomness).max(0.1);
-
-            spawned.push(GpuParticle {
-                position: [origin.x, origin.y, origin.z],
-                life: 0.0,
-                velocity: [velocity.x, velocity.y, velocity.z],
-                max_life: life,
-                color: emitter.color_start.into(),
-                size_start: emitter.size_start,
-                size_end: emitter.size_end,
-                _padding: [0.0; 2],
-            });
-        }
+        emit(&mut emitter, origin, dt, &mut rng, &mut spawned);
     }
 
     if !spawned.is_empty() {
         particles.spawn_particles(queue, &spawned);
+    }
+}
+
+/// What one emitter puts out this frame, appended to `out`: its pending
+/// [`burst`](ParticleEmitter::burst) all at once, then what its `spawn_rate` owes for `dt`.
+///
+/// The one place the emission rule lives, so the game's draw path ([`spawn_from_emitters`]) and the
+/// studio's agree. They used to be two copies of the loop — the studio's comment said "the two
+/// must change together" — and a burst added to one would have been a burst in one picture only.
+pub fn emit(
+    emitter: &mut ParticleEmitter,
+    origin: Vec3,
+    dt: f32,
+    rng: &mut gizmo_math::Rng,
+    out: &mut Vec<GpuParticle>,
+) {
+    for _ in 0..emitter.take_burst().min(MAX_BURST) {
+        out.push(particle(emitter, origin, rng));
+    }
+    if emitter.spawn_rate <= 0.0 {
+        return;
+    }
+    emitter.add_time(dt);
+    let interval = 1.0 / emitter.spawn_rate;
+    let mut this_frame = 0;
+    while emitter.get_accumulator() >= interval && this_frame < MAX_SPAWNS_PER_FRAME {
+        emitter.consume_time(interval);
+        this_frame += 1;
+        out.push(particle(emitter, origin, rng));
+    }
+}
+
+/// One particle as `emitter` makes them, at `origin`.
+fn particle(emitter: &ParticleEmitter, origin: Vec3, rng: &mut gizmo_math::Rng) -> GpuParticle {
+    let jitter = Vec3::new(
+        rng.signed() * emitter.velocity_randomness,
+        rng.signed() * emitter.velocity_randomness,
+        rng.signed() * emitter.velocity_randomness,
+    );
+    let velocity = emitter.initial_velocity + jitter;
+    let life = (emitter.lifespan + rng.signed() * emitter.lifespan_randomness).max(0.1);
+    GpuParticle {
+        position: [origin.x, origin.y, origin.z],
+        life: 0.0,
+        velocity: [velocity.x, velocity.y, velocity.z],
+        max_life: life,
+        color: emitter.color_start.into(),
+        size_start: emitter.size_start,
+        size_end: emitter.size_end,
+        _padding: [0.0; 2],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A one-shot emitter puts its whole burst out on its first frame and nothing after; a rate
+    /// emitter's burst comes on top of its rate.
+    #[test]
+    fn a_burst_comes_out_at_once_and_only_once() {
+        let mut rng = gizmo_math::Rng::new(1);
+        let mut boom = ParticleEmitter::one_shot(250);
+        let mut out = Vec::new();
+        emit(&mut boom, Vec3::ZERO, 1.0 / 60.0, &mut rng, &mut out);
+        assert_eq!(out.len(), 250);
+        out.clear();
+        emit(&mut boom, Vec3::ZERO, 1.0 / 60.0, &mut rng, &mut out);
+        assert!(out.is_empty(), "a one-shot emitter emitted again");
+
+        let mut stream = ParticleEmitter::with_rate(60.0).with_burst(10);
+        emit(&mut stream, Vec3::new(1.0, 2.0, 3.0), 1.0 / 60.0, &mut rng, &mut out);
+        assert_eq!(out.len(), 11, "ten from the burst and one from a frame at 60 a second");
+        assert!(out.iter().all(|p| p.position == [1.0, 2.0, 3.0]));
+        out.clear();
+        stream.burst(5000);
+        emit(&mut stream, Vec3::ZERO, 0.0, &mut rng, &mut out);
+        assert_eq!(out.len(), MAX_BURST as usize, "a burst is capped");
     }
 }

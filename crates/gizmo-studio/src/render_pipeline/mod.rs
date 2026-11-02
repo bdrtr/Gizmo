@@ -570,15 +570,13 @@ pub fn execute_render_pipeline(
             // --- YENİ PARTİCÜL SPAWNLAMA (CPU -> GPU) ---
             //
             // Bu blok yıllarca YALNIZCA burada durdu, yani motorun kendi geçidini kullanan bir
-            // oyunda `ParticleEmitter` hiçbir şey yaymıyordu. Motor tarafı artık kendi kopyasını
+            // oyunda `ParticleEmitter` hiçbir şey yaymıyordu. Motor tarafı artık kendi yolunu
             // taşıyor: `gizmo::systems::render::spawn_from_emitters` (2026-08-14).
             //
-            // Buradan ONA çağrı yapılamıyor ve sebebi teknik: o fonksiyon `&mut World` alıyor —
-            // ödünçleme önkoşulu olmayan, sağlam bir imza — oysa bu boru hattı blok boyunca canlı
-            // bir okuma ödünçlemesi (`_is_hidden_guard`, satır ~34) tutuyor. `&World` alan bir
-            // varyant ikisini de idare ederdi ama çağıranın hangi ödünçlemeleri tuttuğuna bağlı,
-            // koşullu güvenli bir genel API olurdu; o takas bu tekrardan kötü. Tekrar burada
-            // yazılı duruyor ki gizli kalmasın: ikisi birlikte değişmeli.
+            // `spawn_from_emitters`'ı buradan çağıramıyoruz (`&mut World` alıyor, bu boru hattı ise
+            // blok boyunca canlı bir okuma ödünçlemesi tutuyor), ama yayıcı başına kuralı — patlama
+            // ve oran — artık paylaşıyoruz: `gizmo::systems::render::emit` (2026-11-02). Önceden
+            // döngünün bir kopyasıydı.
             // Collect emitter entities up front through a read borrow that is dropped at the
             // end of this statement, so the mutable ParticleEmitter query below never coexists
             // with a same-type read borrow.
@@ -594,65 +592,22 @@ pub fn execute_render_pipeline(
             {
                 let transforms = world.borrow::<Transform>();
                 {
-                    // rand 0.10 split the trait: `Rng` is the core one (re-exported from
-                    // rand_core) and the convenience methods — `random_range` here — moved to
-                    // `RngExt`. Importing the old one leaves them out of scope with an
-                    // "unused import" warning as the only clue.
-                    use rand::RngExt;
-                    let mut rng = rand::rng();
+                    // The emission rule is the game path's own function (`emit`): a burst and a
+                    // rate, the same stream per (frame, emitter). This was a copy of the loop.
+                    let frame = world.get_resource::<gizmo::core::time::Time>().map_or(0, |t| t.frame());
                     let mut all_new_particles = Vec::new();
-
                     for e_id in emitter_entities {
                         if let Some(mut emitter) = emitters.get_mut(e_id) {
-                            if !emitter.is_active || emitter.spawn_rate <= 0.0 {
+                            if !emitter.is_active {
                                 continue;
                             }
-
                             let base_pos = if let Some(t) = transforms.get(e_id) {
                                 t.position + t.rotation.mul_vec3(emitter.local_offset)
                             } else {
                                 emitter.local_offset
                             };
-
-                            emitter.add_time(delta_time);
-                            // Güvenlik limiti: Frame drop olursa bir frame'de 100'den fazla spawnlamasın
-                            // Aksi takdirde 1 saniye donup binlerce üreterek FPS'i çökertir
-                            let spawn_interval = 1.0 / emitter.spawn_rate;
-                            let mut spawned_this_frame = 0;
-
-                            while emitter.get_accumulator() >= spawn_interval
-                                && spawned_this_frame < 100
-                            {
-                                emitter.consume_time(spawn_interval);
-                                spawned_this_frame += 1;
-
-                                let rand_v_x =
-                                    rng.random_range(-1.0..=1.0) * emitter.velocity_randomness;
-                                let rand_v_y =
-                                    rng.random_range(-1.0..=1.0) * emitter.velocity_randomness;
-                                let rand_v_z =
-                                    rng.random_range(-1.0..=1.0) * emitter.velocity_randomness;
-
-                                let out_dir = Vec3::new(rand_v_x, rand_v_y, rand_v_z);
-                                let vel = emitter.initial_velocity + out_dir;
-
-                                let rand_life =
-                                    rng.random_range(-1.0..=1.0) * emitter.lifespan_randomness;
-                                let max_life = (emitter.lifespan + rand_life).max(0.1);
-
-                                all_new_particles.push(
-                                    gizmo::renderer::gpu_particles::GpuParticle {
-                                        position: [base_pos.x, base_pos.y, base_pos.z],
-                                        life: 0.0,
-                                        velocity: [vel.x, vel.y, vel.z],
-                                        max_life,
-                                        color: emitter.color_start.into(),
-                                        size_start: emitter.size_start,
-                                        size_end: emitter.size_end,
-                                        _padding: [0.0; 2],
-                                    },
-                                );
-                            }
+                            let mut rng = gizmo::math::Rng::with_stream(frame, u64::from(e_id));
+                            gizmo::systems::render::emit(&mut emitter, base_pos, delta_time, &mut rng, &mut all_new_particles);
                         }
                     }
 

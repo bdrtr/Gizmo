@@ -195,9 +195,13 @@ mod lod_tests {
 /// hundreds of thousands.
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct ParticleEmitter {
-    /// Particles spawned per second.
+    /// Particles spawned per second. `0` emits only [`burst`](Self::burst)s.
     pub spawn_rate: f32,
     accumulator: f32,
+    /// Particles owed all at once on the next frame — see [`burst`](Self::burst). Not saved: a
+    /// pending burst is a moment, not a setting.
+    #[serde(skip)]
+    pending_burst: u32,
     /// Where particles appear, relative to the emitter entity.
     pub local_offset: Vec3,
     /// The velocity a particle starts with, before randomisation.
@@ -237,6 +241,7 @@ impl ParticleEmitter {
         Self {
             spawn_rate: 10.0,
             accumulator: 0.0,
+            pending_burst: 0,
             local_offset: Vec3::ZERO,
             initial_velocity: Vec3::new(0.0, 1.0, 0.0),
             velocity_randomness: 0.5,
@@ -249,6 +254,38 @@ impl ParticleEmitter {
             texture_source: None,
             is_active: true,
         }
+    }
+
+    /// An emitter that emits `count` particles once, on the next frame, and nothing after — an
+    /// explosion, a hit spark, a puff of dust. The default preset otherwise; tune it like any
+    /// emitter (`velocity_randomness` is how far they fly apart).
+    ///
+    /// Before this an emitter could only stream at `spawn_rate`, so a game wanting a burst set a
+    /// high rate and switched it off a frame later by hand.
+    #[must_use]
+    pub fn one_shot(count: u32) -> Self {
+        let mut e = Self::new();
+        e.spawn_rate = 0.0;
+        e.pending_burst = count;
+        e
+    }
+
+    /// Adds `count` particles to emit all at once on the next frame, on top of the rate. Calling
+    /// it again before that frame adds to the burst; a burst only waits for `is_active`.
+    pub fn burst(&mut self, count: u32) {
+        self.pending_burst = self.pending_burst.saturating_add(count);
+    }
+
+    /// [`burst`](Self::burst), as a builder.
+    #[must_use]
+    pub fn with_burst(mut self, count: u32) -> Self {
+        self.burst(count);
+        self
+    }
+
+    /// The burst owed on the next frame, taken (it is then zero).
+    pub fn take_burst(&mut self) -> u32 {
+        std::mem::take(&mut self.pending_burst)
     }
 
     /// Creates a new particle emitter, validating its parameters.

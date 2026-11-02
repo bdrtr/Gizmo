@@ -34,6 +34,12 @@
 //!   çağırıyordu. **Kapatıldı:** `NavGrid` bir revizyon tutuyor (`add_obstacle_world`,
 //!   `remove_obstacle_world`, yeniden kurma ve `mark_changed` artırıyor), navigasyon değiştiği
 //!   kare bütün ajanları yeniden planlatıyor.
+//! - **Patlama efekti yoktu, aslında parçacık hiç yoktu.** `SimpleApp` her karede GPU parçacık
+//!   sistemini kapatıyordu (ve SSR/SSGI'yi, oyunun açmasına izin vermeden); `ParticleEmitter`
+//!   hiçbir SimpleApp oyununda bir şey yaymıyordu. Yayıcı da yalnızca sürekli akış biliyordu.
+//!   **Kapatıldı:** parçacık sistemi boştayken (canlı parçacık yokken) hesap ve çizimi atlıyor,
+//!   SimpleApp onu artık kapatmıyor ve varsayılanlarını yalnızca kurulumda bir kez koyuyor;
+//!   `ParticleEmitter::one_shot(n)` / `burst(n)`. İsabetlerde kıvılcım, ölümlerde patlama.
 //!
 //! ## Ortam değişkenleri
 //!   * `GIZMO_FONT=<yol>` — HUD fontu
@@ -365,6 +371,9 @@ fn towers_fire(world: &mut World, game: &mut Game, dt: f32) {
             Flash(0.08),
         ));
         play(world, "ates");
+        // İsabet noktasında bir avuç kıvılcım — tek seferlik bir yayıcı, `Flash` ile birlikte silinir
+        // (parçacıklar GPU'da kendi ömürlerini sürüyor).
+        world.spawn_bundle((Transform::new(to), GlobalTransform::default(), sparks(16, Vec4::new(1.0, 0.85, 0.3, 1.0)), Flash(0.1)));
         let dead = {
             let mut es = world.borrow_mut::<Enemy>();
             match es.get_mut(enemy) {
@@ -376,6 +385,7 @@ fn towers_fire(world: &mut World, game: &mut Game, dt: f32) {
             }
         };
         if dead {
+            world.spawn_bundle((Transform::new(to), GlobalTransform::default(), sparks(70, Vec4::new(1.0, 0.3, 0.15, 1.0)), Flash(0.1)));
             world.despawn_by_id(enemy);
             game.gold += 3;
             play(world, "olum");
@@ -387,6 +397,20 @@ fn towers_fire(world: &mut World, game: &mut Game, dt: f32) {
             }
         }
     }
+}
+
+/// Tek seferlik bir parçacık patlaması.
+fn sparks(count: u32, colour: Vec4) -> gizmo::renderer::components::ParticleEmitter {
+    let mut e = gizmo::renderer::components::ParticleEmitter::one_shot(count);
+    e.initial_velocity = Vec3::new(0.0, 1.5, 0.0);
+    e.velocity_randomness = 3.0;
+    e.lifespan = 0.4;
+    e.lifespan_randomness = 0.15;
+    e.size_start = 0.3;
+    e.size_end = 0.0;
+    e.color_start = colour;
+    e.color_end = Vec4::new(colour.x, colour.y * 0.5, 0.0, 0.0);
+    e
 }
 
 fn enemies_arrive(world: &mut World, game: &mut Game) {
