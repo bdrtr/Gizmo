@@ -537,6 +537,12 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     if (scene.sun_direction.w > 0.5 && shadow_visibility > 0.0) {
         shadow_visibility = min(shadow_visibility, contact_shadow(world_pos, N, normalize(-scene.sun_direction.xyz)));
     }
+    // `MeshRenderer::receives_shadows == false` (RT5's alpha): no shadow falls here — not the
+    // cascades, not contact shadows, and below, not the point-light cube.
+    let receives_shadows = textureLoad(t_emissive_gbuf, iuv, 0).w < 0.5;
+    if (!receives_shadows) {
+        shadow_visibility = 1.0;
+    }
 
     var total_lighting = vec3<f32>(0.0);
 
@@ -642,7 +648,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
                 // EVERY point light using each light's own position, so every light but
                 // the caster got a shadow centred on the wrong place.
                 let sp_idx = u32(scene.cascade_params.w);
-                if (scene.point_shadows_enabled > 0u && sp_idx > 0u && i == sp_idx - 1u) {
+                if (receives_shadows && scene.point_shadows_enabled > 0u && sp_idx > 0u && i == sp_idx - 1u) {
                     let dir_from_light = world_pos - light.position.xyz;
                     let abs_dir = abs(dir_from_light);
                     let z_near = 0.1;

@@ -865,6 +865,8 @@ pub fn draw_mesh_renderer_section(
                     ],
                 );
             });
+            ui.checkbox(&mut renderer.receives_shadows, "Receive shadows")
+                .on_hover_text("Kapalıyken bu nesneye gölge düşmez (güneş, nokta ışığı, temas gölgesi).");
         });
     ui.separator();
 }

@@ -627,7 +627,8 @@ mod baked_lit_shading_tests {
     fn the_shader_still_computes_the_mirrored_expression() {
         let src = include_str!("../shaders/baked_lit.wgsl");
         assert!(
-            src.contains("let colour = (lit + in.inst_ambient) * base + in.inst_emissive;"),
+            // `.xyz` since the instance emissive's `w` carries `receives_shadows` (2026-11-02).
+            src.contains("let colour = (lit + in.inst_ambient) * base + in.inst_emissive.xyz;"),
             "baked_lit.wgsl no longer matches `baked_lit_rgb` — update both or neither"
         );
         assert!(

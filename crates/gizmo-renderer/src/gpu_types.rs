@@ -491,6 +491,16 @@ impl InstanceRaw {
         self.ambient[3] = cutoff.clamp(0.0, 1.0);
         self
     }
+
+    /// Carry [`MeshRenderer::receives_shadows`](crate::components::MeshRenderer::receives_shadows)
+    /// in `emissive.w`, padding until now: `1.0` means "no shadow falls on this", `0.0` (what
+    /// [`new`](Self::new) writes) the usual. The G-buffer copies it to RT5's alpha for the
+    /// lighting pass; the forward shader reads it directly.
+    #[must_use]
+    pub fn with_shadow_receiving(mut self, receives: bool) -> Self {
+        self.emissive[3] = if receives { 0.0 } else { 1.0 };
+        self
+    }
 }
 
 /// Per-material scalar parameters that accompany the textured-PBR bind group

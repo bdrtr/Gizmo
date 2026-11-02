@@ -325,6 +325,11 @@ pub struct MeshRenderer {
     /// else cast), so two crates sharing one material could not differ. A light fixture's glowing
     /// panel and the wall behind it often want opposite answers.
     pub shadows: ShadowCasting,
+    /// Whether shadows fall on this object — the receiving half that [`shadows`](Self::shadows)
+    /// does not cover. `false` keeps it lit wherever its light reaches: a lamp's own shade, a
+    /// character that must stay readable, a HUD-like object placed in the world. The sun's
+    /// cascades, the point-light cube and contact shadows all skip it. `true` by default.
+    pub receives_shadows: bool,
 }
 
 /// What an object contributes to the shadow maps and to the picture.
@@ -358,7 +363,7 @@ impl ShadowCasting {
 impl MeshRenderer {
     /// The default render settings: no LOD bias, casting and receiving shadows.
     pub fn new() -> Self {
-        Self { lod_bias: 1.0, shadows: ShadowCasting::On }
+        Self { lod_bias: 1.0, shadows: ShadowCasting::On, receives_shadows: true }
     }
 
     /// Builder form: `MeshRenderer::new().with_lod_bias(2.0)`.
@@ -370,6 +375,13 @@ impl MeshRenderer {
     /// Builder form: `MeshRenderer::new().with_shadows(ShadowCasting::Only)`.
     pub fn with_shadows(mut self, shadows: ShadowCasting) -> Self {
         self.shadows = shadows;
+        self
+    }
+
+    /// Builder form: `MeshRenderer::new().with_receives_shadows(false)` — see
+    /// [`receives_shadows`](Self::receives_shadows).
+    pub fn with_receives_shadows(mut self, receives: bool) -> Self {
+        self.receives_shadows = receives;
         self
     }
 }

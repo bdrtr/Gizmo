@@ -67,7 +67,7 @@ struct VertexOutput {
     @location(3) world_pos: vec3<f32>,
     @location(4) world_normal: vec3<f32>,
     @location(5) inst_ambient: vec3<f32>,
-    @location(6) inst_emissive: vec3<f32>,
+    @location(6) inst_emissive: vec4<f32>,  // w = 1: receives no shadows
     @location(7) inst_cutoff: f32,
 };
 
@@ -89,7 +89,7 @@ fn vs_main(input: VertexInput, @builtin(instance_index) i: u32) -> VertexOutput 
     out.tex_coords = input.tex_coords;
     out.inst_albedo = inst.albedo_color;
     out.inst_ambient = inst.ambient.rgb;
-    out.inst_emissive = inst.emissive.rgb;
+    out.inst_emissive = inst.emissive;
     out.inst_cutoff = inst.ambient.w;
     // Only for the shadow's normal offset — nothing here shades with it.
     out.world_normal = normalize((model * vec4<f32>(input.normal, 0.0)).xyz);
@@ -207,7 +207,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // the depth of anything off-axis, so it picked a cascade too far out at the screen edges
     // and put the range boundary on a sphere instead of a plane.)
     let view_depth = dot(in.world_pos - scene.camera_pos.xyz, scene.camera_forward.xyz);
-    let vis = sun_visibility(in.world_pos, in.world_normal, view_depth);
+    // `MeshRenderer::receives_shadows == false` keeps the sun's share whole.
+    let vis = select(sun_visibility(in.world_pos, in.world_normal, view_depth), 1.0, in.inst_emissive.w > 0.5);
 
     // The shadow darkens rather than replaces. Baked lighting already includes the sky and the
     // bounce; a shadowed patch of it is dimmer, not black, and multiplying the whole thing by the
@@ -220,7 +221,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // lifted scene still shows its albedo instead of flooding to grey. `emissive` is the surface
     // emitting, so it is added after and owes nothing to albedo. Both default to zero, which
     // leaves this expression exactly `lit * base`.
-    let colour = (lit + in.inst_ambient) * base + in.inst_emissive;
+    let colour = (lit + in.inst_ambient) * base + in.inst_emissive.xyz;
 
     // Vertex alpha multiplies through with the instance's and the texture's. It only reaches the
     // framebuffer on the blended (transparent) variant of this pipeline — the opaque variant

@@ -5991,6 +5991,74 @@ mod golden_render_tests {
         });
     }
 
+    /// `MeshRenderer::with_receives_shadows(false)` keeps a surface out of every shadow, on both
+    /// draw paths. A cube over a matte floor under a high sun: the pixels that are darker (by 20+)
+    /// when the floor receives than when it refuses are the cube's shadow on it. Opaque floor →
+    /// deferred (the flag rides RT5's alpha); a barely transparent one → the forward shader.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn a_surface_can_refuse_shadows_on_both_paths() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        async fn frame(receives: bool, transparent: bool) -> Vec<u8> {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssr = None;
+            renderer.ssao = None;
+            renderer.volumetric = None;
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let alpha = if transparent { 0.99 } else { 1.0 };
+            let floor_mat = Material::new(tex.clone()).with_pbr(Vec4::new(0.8, 0.8, 0.8, alpha), 0.9, 0.0);
+            let floor = world.spawn();
+            world.add_component(floor, Transform::new(Vec3::new(0.0, -0.2, 0.0)).with_scale(Vec3::new(20.0, 0.2, 20.0)));
+            world.add_component(floor, GlobalTransform::default());
+            world.add_component(floor, AssetManager::create_cube(&renderer.device));
+            world.add_component(floor, if transparent { floor_mat.with_transparent(true) } else { floor_mat });
+            world.add_component(floor, MeshRenderer::new().with_receives_shadows(receives));
+            let cube = world.spawn();
+            world.add_component(cube, Transform::new(Vec3::new(0.0, 1.0, 0.0)).with_scale(Vec3::splat(0.6)));
+            world.add_component(cube, GlobalTransform::default());
+            world.add_component(cube, AssetManager::create_cube(&renderer.device));
+            world.add_component(cube, Material::new(tex).with_pbr(Vec4::new(0.8, 0.3, 0.3, 1.0), 0.9, 0.0));
+            world.add_component(cube, MeshRenderer::new());
+            world.spawn_bundle(crate::bundles::DirectionalLightBundle {
+                rotation: gizmo_math::Quat::from_rotation_z(-0.3) * gizmo_math::Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2),
+                intensity: 3.0,
+                ..Default::default()
+            });
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.0, 6.0, 6.0),
+                yaw: -std::f32::consts::FRAC_PI_2,
+                pitch: -0.8,
+                primary: true,
+                ..Default::default()
+            });
+            render_world(&mut renderer, &mut world).await
+        }
+        let luma = |f: &[u8], i: usize| (f[i * 4] as i32 + f[i * 4 + 1] as i32 + f[i * 4 + 2] as i32) / 3;
+        pollster::block_on(async {
+            let mut found = Vec::new();
+            for transparent in [false, true] {
+                let receiving = frame(true, transparent).await;
+                let refusing = frame(false, transparent).await;
+                found.push((0..128 * 128).filter(|&i| luma(&receiving, i) + 20 < luma(&refusing, i)).count());
+            }
+            // Measured: 171 shadow pixels on the opaque floor, 174 on the transparent one. Caught:
+            // the lighting pass ignoring RT5's alpha (opaque 0), the forward shader ignoring the
+            // instance flag (transparent 0), and the batcher never writing it (both 0).
+            assert!(found[0] > 80, "the deferred path honours it: {} shadow pixels", found[0]);
+            assert!(found[1] > 80, "the forward path honours it: {} shadow pixels", found[1]);
+        });
+    }
+
     /// `bloom_radius` and `bloom_iterations` widen the halo. A small, very bright cube (about
     /// 12 px across) in a dark scene; the halo is the mean brightness of a ring 8–24 px from its
     /// centre. The default blur's taps are one full-frame texel apart, so its halo barely leaves

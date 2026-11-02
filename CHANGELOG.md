@@ -81,6 +81,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   or by default to a `tracing::error!` naming the system, and the system runs again next frame.
   `SystemOutput` is the trait behind it; `()` systems are unchanged.
 
+- **Surfaces can refuse shadows: `MeshRenderer::receives_shadows`** (`with_receives_shadows`,
+  and an inspector checkbox). `false` keeps the sun's cascades, contact shadows and the
+  point-light cube off that surface, in the deferred, forward and baked-lit paths; it rides the
+  instance's `emissive.w` (`InstanceRaw::with_shadow_receiving`) into the G-buffer's RT5 alpha.
+  Scenes saved before it load as receiving.
+
 - **Shadow reach: `Renderer::shadow_settings`** (`ShadowSettings::{distance, lambda}`, with
   `with_distance` / `with_lambda`). How far the sun's cascades reach (100 m by default) and how the
   four split it (λ 0.75) were constants; both paths read the setting now.
@@ -1421,6 +1427,31 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   before.
 
 ### Fixed
+
+- **A `Grid` material draws a grid in the game**, as it always did in the editor: `route(Grid)` is
+  forward, and the game's forward pass binds `grid_pipeline`. It drew as a plain opaque PBR plane.
+- **The game-path skybox draws** — `CAPABILITY_GAPS` §D10 had it drawing nothing, cause unknown.
+  It no longer reproduces (a sky cube repaints the frame; `atmosphere` differs in 10066 sky
+  pixels with and without its cube); `a_skybox_draws_in_the_game_path` pins it.
+
+- **The deferred PBR path reads vertex colour**, at face value as `baked_lit.wgsl` does. A mesh
+  with coloured vertices drew uncoloured in the game and coloured in the editor. The forward
+  shader's rule that a near-black vertex colour counts as white is gone too — it turned a surface
+  painted black white, and an uncoloured source is already white at import. Engine primitives
+  are white and unchanged.
+
+- **`Material::emissive` glows.** The deferred path never read the per-instance emissive that
+  `with_emissive` sets (only `baked_lit.wgsl` did), and the forward shader read none at all; a
+  glTF emissive was added to the 8-bit albedo, lit and clamped at 1. The G-buffer gained an RT5
+  (`emissive`, `Rgba16Float`; `DeferredState::emissive_view`, 44 bytes per sample) that the
+  lighting pass adds unlit and in HDR, and the forward shader adds the instance's emissive too.
+  **Visible change:** glTF emissive surfaces are brighter than before, and PBR materials with
+  `with_emissive` glow for the first time.
+
+- **A plain `despawn` no longer leaves dangling hierarchy links.** The despawned entity is taken
+  out of its parent's `Children`, and its direct children lose their `Parent` link and become
+  roots. Before, both kept naming the raw id, so once it was recycled a parent listed a stranger
+  as its child and orphans hung off — and inherited the transform of — whatever entity got it.
 
 - **`motion_blur` demo: the camera never moved.** It was posed in PreUpdate and the simple scene's
   fly camera overwrote it every frame, so its "same pixels at sixteen times the speed" measurement

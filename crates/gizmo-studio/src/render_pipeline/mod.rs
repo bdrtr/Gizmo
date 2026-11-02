@@ -345,7 +345,8 @@ pub fn execute_render_pipeline(
                 // pierced fence was solid in the viewport and pierced in the game — 11 654 of
                 // 16 384 pixels that should have been discarded, measured in
                 // `a_cut_out_material_cuts_in_the_editor_viewport`.
-                .with_alpha_cutoff(mat.alpha_cutoff);
+                .with_alpha_cutoff(mat.alpha_cutoff)
+                .with_shadow_receiving(renderers.get(e).map(|r| r.receives_shadows).unwrap_or(true));
 
                 // --- SKELETON (KEMİK) ARAMASI ---
                 // Skeleton bind group, skinned mesh'ler spawn edilirken doğrudan entity'ye önbelleklenmelidir.

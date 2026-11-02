@@ -84,7 +84,7 @@ struct VertexOutput {
     @location(7) motion_now:     vec4<f32>,
     @location(8) motion_before:  vec4<f32>,
     // `Material::emissive`, per instance — what game code sets with `with_emissive`.
-    @location(9) inst_emissive:  vec3<f32>,
+    @location(9) inst_emissive:  vec4<f32>,  // w = 1: receives no shadows
 };
 
 @group(0) @binding(0) var<uniform> scene: SceneUniforms;
@@ -152,7 +152,7 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
 
     out.inst_albedo = inst.albedo_color;
     out.inst_pbr    = inst.pbr;
-    out.inst_emissive = inst.emissive.xyz;
+    out.inst_emissive = inst.emissive;
     out.clip_position = scene.view_proj * world_pos;
     out.motion_now    = motion.view_proj * world_pos;
     out.motion_before = motion.prev_view_proj * (previous_models[instance_idx] * vec4<f32>(skinned_pos.xyz, 1.0));
@@ -247,17 +247,15 @@ fn fs_main(in: VertexOutput) -> GBufferOut {
     // HDR, by the lighting pass. It used to be added to the albedo instead — lit, and clamped to
     // 1 by the 8-bit target — and the per-instance half was read by nobody but `baked_lit.wgsl`:
     // `with_emissive` on a PBR material changed no pixel of the deferred frame.
-    let emissive = in.inst_emissive
+    let emissive = in.inst_emissive.xyz
                  + material.emissive_and_normal_scale.xyz * textureSample(t_emissive, s_diffuse, uv).rgb;
 
-    // Vertex colour, as the forward shader reads it: a mesh that carries none (all zero) counts as
-    // white. Every engine primitive and every uncoloured import is white already; this only
-    // changes meshes that colour their vertices, which the deferred path used to draw as if they
-    // did not — while the editor's forward path showed the colours.
-    var vertex_color = in.color;
-    if (length(vertex_color) < 0.0001) {
-        vertex_color = vec3<f32>(1.0);
-    }
+    // Vertex colour, taken at face value — `baked_lit.wgsl`'s rule and its reason: a source with
+    // no colours is already opaque white (`gpu_types::Vertex::default`, and import normalises), so
+    // rewriting a near-black colour to white only turns a surface painted black white. Every engine
+    // primitive is white; this changes only meshes that colour their vertices, which the deferred
+    // path used to draw as if they did not.
+    let vertex_color = in.color;
 
     // Base albedo, modulated by AO (the G-buffer has no channel of its own for AO).
     var albedo = in.inst_albedo.rgb * tex_color.rgb * vertex_color;
@@ -303,6 +301,7 @@ fn fs_main(in: VertexOutput) -> GBufferOut {
     let now_ndc    = in.motion_now.xy / in.motion_now.w;
     let before_ndc = in.motion_before.xy / in.motion_before.w;
     out.velocity   = vec4<f32>((now_ndc - before_ndc) * vec2<f32>(0.5, -0.5), 0.0, 0.0);
-    out.emissive   = vec4<f32>(max(emissive, vec3<f32>(0.0)), 0.0);
+    // .w: `MeshRenderer::receives_shadows == false` — the lighting pass skips every shadow term.
+    out.emissive   = vec4<f32>(max(emissive, vec3<f32>(0.0)), in.inst_emissive.w);
     return out;
 }
