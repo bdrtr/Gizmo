@@ -10,6 +10,7 @@
 //! | **fare** · sağ çubuk | nişan al |
 //! | **sol tık** (basılı) · sağ tetik | ateş |
 //! | **R** · Start | yeniden başla |
+//! | **dokunmatik**: sol çubuk · sağ çubuk | yürü · nişan al ve ateş et |
 //!
 //! ## Motorda bulunan eksikler (bu oyunu yazarken)
 //!
@@ -21,6 +22,12 @@
 //!   başarısızlık bir kez oluyor (önbellekte boş mesh; onu tutan kalmayınca toplanıyor, sonradan
 //!   gelen dosya yine yükleniyor) ve uzantısız bir ad için hata geçerli ilkel anahtarlarını
 //!   sayıyor.
+//!
+//! - **Telefonda oynanamıyordu.** Dokunma gelince ilk parmak fare oluyor; ama ikiz çubuklu bir
+//!   oyun iki başparmak ister, ve ikinci parmağı izleyecek bir arayüz öğesi yoktu. **Kapatıldı:**
+//!   `gizmo::ui::VirtualStick` ve `VirtualButton` — her biri kendi kutusuna inen parmağı sahipleniyor
+//!   ve kalkana kadar onu izliyor (kutudan çıksa da); parmak yoksa fareye uyuyor. Ekrana ilk
+//!   dokunuşta iki çubuk beliriyor; masaüstünde hiç görünmüyor.
 //!
 //! Gerisi motorda vardı ve ilk denemede çalıştı: `Input::move_axis` (WASD + sol çubuk),
 //! `Gamepad::right_stick`/`right_trigger`, `pointer::cursor_on_plane`, `Timer` (ateş hızı ve doğma
@@ -39,6 +46,7 @@ use gizmo::renderer::components::{ParticleEmitter, Text, TextAlign, TextAnchor};
 use gizmo::renderer::screen_fade::ScreenFade;
 use gizmo::renderer::text::FontId;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
+use gizmo::ui::{BackgroundColor, NodeBundle, PositionType, Style, UiPlugin, UiRect, Val, VirtualStick};
 
 /// Arenanın yarı genişliği/derinliği.
 const ARENA: f32 = 12.0;
@@ -82,10 +90,13 @@ struct Game {
     aim: Vec3,
     auto: bool,
     t: f32,
+    /// Dokunmatik çubuklar: ilk dokunuşta kuruluyor (hareket, nişan).
+    sticks: Option<(u32, u32)>,
 }
 
 fn main() {
     App::<SimpleSceneState>::new("Gizmo Engine - Nişancı", 1280, 720)
+        .add_plugin(UiPlugin)
         // Kıvılcım varlıkları `DespawnAfter` ile kendini siliyor.
         .add_plugin(gizmo::systems::lifetime::LifetimePlugin)
         .with_simple_scene(|scene, _state| {
@@ -167,6 +178,7 @@ fn main() {
                 aim: Vec3::X,
                 auto: std::env::var_os("NISANCI_OTO").is_some(),
                 t: 0.0,
+                sticks: None,
             });
         })
         .set_update(update)
@@ -184,6 +196,10 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
         restart(world, &mut game);
     }
 
+    // Oto modda da kuruluyor: ekran görüntüsünde yerleşimleri görünsün (oto oynayış onları okumuyor).
+    if game.sticks.is_none() && (!input.touches().is_empty() || game.auto) {
+        game.sticks = Some(spawn_sticks(world));
+    }
     if game.lives > 0 {
         move_player(world, &mut game, input, dt);
         aim_and_fire(world, &mut game, input, dt);
@@ -204,6 +220,8 @@ fn move_player(world: &mut World, game: &mut Game, input: &Input, dt: f32) {
     let (mx, my) = if game.auto {
         // Arenada yavaş bir daire.
         ((game.t * 0.6).cos(), (game.t * 0.6).sin())
+    } else if let Some(v) = stick(world, game.sticks.map(|s| s.0)).filter(|v| *v != Vec2::ZERO) {
+        (v.x, v.y)
     } else {
         input.move_axis()
     };
@@ -234,6 +252,13 @@ fn aim_and_fire(world: &mut World, game: &mut Game, input: &Input, dt: f32) {
         if let Some(n) = nearest {
             game.aim = (n - me).with_y(0.0).normalize_or(game.aim);
         }
+    } else if let Some(v) = self::stick(world, game.sticks.map(|s| s.1)).filter(|v| v.length() > 0.3) {
+        // Sağ çubuk: ittiğin yöne nişan al ve ateş et.
+        game.aim = Vec3::new(v.x, 0.0, -v.y).normalize_or(game.aim);
+        firing = true;
+    } else if game.sticks.is_some() {
+        // Dokunmatik oyunda ilk parmak fareyi de sürüyor; sol çubuğu tutan parmak ateş etmesin.
+        firing = false;
     } else if stick.0.hypot(stick.1) > 0.3 {
         game.aim = Vec3::new(stick.0, 0.0, -stick.1).normalize_or(game.aim);
         firing = pad.is_some_and(|p| p.right_trigger() > 0.3) || stick.0.hypot(stick.1) > 0.85;
@@ -263,6 +288,32 @@ fn aim_and_fire(world: &mut World, game: &mut Game, input: &Input, dt: f32) {
     if shots > 0 {
         play(world, "ates");
     }
+}
+
+/// Dokunmatik çubuklar: ekranın sol alt ve sağ alt köşelerinde iki yarı saydam kutu.
+fn spawn_sticks(world: &mut World) -> (u32, u32) {
+    let mut spawn = |left: Val, right: Val| {
+        let e = world.spawn_bundle(NodeBundle {
+            style: Style {
+                position_type: PositionType::Absolute,
+                inset: UiRect { left, right, top: Val::Auto, bottom: Val::Percent(3.0) },
+                // Pencereye oranlı: telefonda yatay ekranın iki alt köşesi, masaüstünde küçük.
+                width: Val::Percent(30.0),
+                height: Val::Percent(40.0),
+                ..Default::default()
+            },
+            background_color: BackgroundColor(Vec4::new(1.0, 1.0, 1.0, 0.08)),
+            ..Default::default()
+        });
+        world.add_component(e, VirtualStick::new(70.0));
+        e.id()
+    };
+    (spawn(Val::Percent(2.0), Val::Auto), spawn(Val::Auto, Val::Percent(2.0)))
+}
+
+/// Bir dokunmatik çubuğun değeri (yoksa `None`).
+fn stick(world: &World, id: Option<u32>) -> Option<Vec2> {
+    world.borrow::<VirtualStick>().get(id?).map(|s| s.value())
 }
 
 fn spawn_enemies(world: &mut World, game: &mut Game, dt: f32) {

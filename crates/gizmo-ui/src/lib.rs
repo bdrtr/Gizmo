@@ -132,6 +132,8 @@ pub mod system;
 pub mod interaction;
 /// [`text_input::TextInput`] — a field the player types into.
 pub mod text_input;
+/// On-screen controls for touchscreens — [`VirtualStick`], [`VirtualButton`].
+pub mod touch_controls;
 /// Bundles that spawn a complete widget in one call.
 pub mod bundles;
 
@@ -142,6 +144,7 @@ pub use bundles::*;
 pub use layout::*;
 pub use interaction::{pointer_over_ui, ui_drag_system, ui_layer, ui_scroll_system, ui_slider_system, UiNavigation};
 pub use text_input::{text_input_system, TextInput};
+pub use touch_controls::{touch_controls_system, VirtualButton, VirtualStick};
 
 /// Registers the UI components + [`UiContext`] resource and schedules the layout
 /// and interaction systems on a [`World`]/[`Schedule`] directly.
@@ -159,6 +162,8 @@ pub fn register(world: &mut World, schedule: &mut Schedule) {
     world.register_component_type::<Scroll>();
     world.register_component_type::<Drag>();
     world.register_component_type::<Slider>();
+    world.register_component_type::<VirtualStick>();
+    world.register_component_type::<VirtualButton>();
     world.register_component_type::<text_input::TextInput>();
     world.register_component_type::<BackgroundColor>();
     world.register_component_type::<UiRoot>();
@@ -182,6 +187,12 @@ pub fn register(world: &mut World, schedule: &mut Schedule) {
         interaction::ui_interaction_system
             .into_config()
             .label("ui_interaction")
+            .after("ui_layout"),
+    );
+    schedule.add_di_system(
+        touch_controls::touch_controls_system
+            .into_config()
+            .label("ui_touch_controls")
             .after("ui_layout"),
     );
     schedule.add_di_system(

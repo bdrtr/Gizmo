@@ -44,12 +44,21 @@ fn ui_boxes(world: &World) -> Vec<UiBox> {
     let nodes = world.borrow::<crate::ui::Node>();
     let backgrounds = world.borrow::<crate::ui::BackgroundColor>();
     let sliders = world.borrow::<crate::ui::Slider>();
+    let sticks = world.borrow::<crate::ui::VirtualStick>();
     let mut out = Vec::new();
     for (id, node) in nodes.iter() {
         out.push((id, node.position, node.size, backgrounds.get(id).map(|c| c.0)));
         if let Some(s) = sliders.get(id) {
             let w = node.size.x * s.value.clamp(0.0, 1.0);
             out.push((id, node.position, Vec2::new(w, node.size.y), Some(s.fill)));
+        }
+        // A stick's knob: at rest in the middle of its box; held, where the finger came down plus
+        // the push (screen `y` is down, the stick's is up).
+        if let Some(s) = sticks.get(id) {
+            let side = node.size.x.min(node.size.y) * 0.35;
+            let rest = if s.is_held() { s.centre() } else { node.position + node.size * 0.5 };
+            let at = rest + Vec2::new(s.value().x, -s.value().y) * s.radius;
+            out.push((id, at - Vec2::splat(side * 0.5), Vec2::splat(side), Some(s.knob)));
         }
     }
     out
@@ -355,6 +364,18 @@ mod clip_tests {
             code.contains(concat!("text_input_display(world,id)", ".or_else(||localized_display(world,id))")),
             "record_text no longer draws localized labels"
         );
+    }
+
+    /// A stick's knob sits in the middle of its box at rest — and is a box after the stick's own.
+    #[test]
+    fn a_virtual_stick_draws_its_knob_in_the_middle_at_rest() {
+        let mut world = World::new();
+        let s = world.spawn_bundle((node(0.0, 0.0, 200.0, 100.0), crate::ui::VirtualStick::new(40.0)));
+        let boxes = ui_boxes(&world);
+        assert_eq!(boxes.len(), 2);
+        assert_eq!(boxes[1].0, s.id());
+        assert_eq!(boxes[1].2, Vec2::splat(35.0));
+        assert_eq!(boxes[1].1 + boxes[1].2 * 0.5, Vec2::new(100.0, 50.0));
     }
 
     /// A scrolling list clips like a `ClipContent` panel: its rows scroll out of sight.

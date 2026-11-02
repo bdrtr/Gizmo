@@ -1172,6 +1172,17 @@ an old recording without touches loads); removing the emulated press, letting ev
 the mouse or skipping the per-frame roll each fails them. **Not yet tried on a real touchscreen.**
 Still missing: gestures (pinch, swipe) — a game builds them from `touches()`.
 
+~~**Two thumbs could not play.**~~ **Closed 2026-11-03.** Only the first finger drives the mouse, so
+nothing built on `Interaction` could follow a second one — and a twin-stick game needs two.
+`gizmo::ui::VirtualStick` and `VirtualButton` read `Input::touches` directly: each **claims the
+finger that lands on it** and follows it until it lifts, even out of its box; a finger already
+holding one control is never claimed by another; a tap inside one frame is a press and a release.
+A stick is floating (centred where the thumb lands), `y` up like a gamepad's, clamped to the unit
+circle; the engine draws its knob. With no fingers on the screen they answer to the mouse.
+Tested with two fingers at once, landings outside and slides over, and the mouse; dropping the
+`y` flip, releasing on leaving the box, or ignoring the fingers each fails them. `nisanci` grows
+two sticks on its first touch (move; aim and fire) and stops taking the emulated mouse as fire.
+
 ### C17. Music that changes (2026-11-02, `menu`)
 
 ~~**No fades, and a game's own `AudioManager` was never ticked.**~~ **Closed 2026-11-02.**
