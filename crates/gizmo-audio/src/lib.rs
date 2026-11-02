@@ -394,6 +394,59 @@ impl AudioManager {
         }
     }
 
+    /// [`update`](Self::update) plus the fades: advances every [`fade_to`](Self::fade_to) /
+    /// [`fade_out`](Self::fade_out) by `dt` seconds, re-prices the sinks they moved and stops the
+    /// ones whose fade-out ended.
+    ///
+    /// **The engine calls this once a frame** for an `AudioManager` in the world's resources
+    /// (`gizmo-app`'s frame loop, with the frame's real `dt`, so a fade runs through a paused
+    /// game). Call it yourself only if you hold the manager somewhere else.
+    pub fn tick(&mut self, dt: f32) {
+        let step = self.mixer.advance_fades(dt);
+        for id in &step.changed {
+            self.apply_mix(*id);
+        }
+        for id in step.stop {
+            self.stop(id);
+        }
+        self.update();
+    }
+
+    /// Moves a playing sound's volume to `factor` × what it was asked to play at, over `secs`
+    /// seconds, from wherever a previous fade left it. Advanced by [`tick`](Self::tick). Does
+    /// nothing for a sound that is not playing.
+    ///
+    /// The factor sits apart from the sound's volume, its bus and the master, so a music slider
+    /// moved mid-fade, or the 3D system rewriting a spatial sound's volume every frame, does not
+    /// undo it.
+    pub fn fade_to(&mut self, id: u64, factor: f32, secs: f32) {
+        self.mixer.start_fade(id, factor, secs, false);
+    }
+
+    /// Fades a playing sound to silence over `secs` seconds, then stops it.
+    pub fn fade_out(&mut self, id: u64, secs: f32) {
+        self.mixer.start_fade(id, 0.0, secs, true);
+    }
+
+    /// Starts `name` looping on the [`Mixer::MUSIC`] bus from silence and fades it in over `secs`
+    /// seconds, fading `from` (the track playing now, if any) out and stopping it — the switch
+    /// from a menu's music to a level's.
+    ///
+    /// # Errors
+    ///
+    /// As [`play_looped`](Self::play_looped); `from` keeps playing if the new track cannot start.
+    pub fn crossfade(&mut self, from: Option<u64>, name: &str, secs: f32) -> Result<u64, AudioError> {
+        let id = self.play_looped(name)?;
+        self.mixer.set_sink_bus(id, Mixer::MUSIC);
+        self.mixer.set_fade(id, 0.0);
+        self.apply_mix(id);
+        self.mixer.start_fade(id, 1.0, secs, false);
+        if let Some(old) = from {
+            self.fade_out(old, secs);
+        }
+        Ok(id)
+    }
+
     /// The buses, the master gain and the environment — read-only. See [`Mixer`].
     #[inline]
     pub fn mixer(&self) -> &Mixer {

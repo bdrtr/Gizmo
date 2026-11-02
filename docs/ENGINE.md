@@ -767,6 +767,16 @@ state instead.
   the device as `NaN` samples), and the sink garbage collector now drops routes with their sinks,
   which it must: one leaked route per sound ever played is one per footstep.
 
+  **That garbage collector did not run for a game's own manager until 2026-11-02.** It lives in
+  `AudioManager::update`, and the only caller was the opt-in 3D system — so a game that inserted
+  an `AudioManager` and called `play` (every demo with sound) kept every finished sink and route
+  for the session, and a bus or master gain moved while a loop played never reached the loop.
+  `gizmo-app`'s frame loop now calls `AudioManager::tick(frame_dt)` on the resource every frame,
+  which is `update` plus **fades**: a per-route factor apart from the volume (the 3D system
+  rewrites the volume every frame and would undo a fade riding on it), moved by `fade_to` /
+  `fade_out` / `crossfade` on the real frame time. Device-free tests on the mixer; the loop's half
+  is a hardware test (`the_frame_loop_ticks_the_audio_manager`, `#[ignore]`d).
+
   **The first piece of the DSP half landed the same day: a real low-pass** (`gizmo_audio::filter`).
   The muffle's stand-in was a 0.85× playback speed, and the reason it was a stand-in is written into
   rodio's API: once a source is `append`ed the `Player` owns it, so `BltFilter::to_low_pass` cannot

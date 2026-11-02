@@ -33,6 +33,13 @@
 //!   tıklanınca odaklanan, Backspace/Enter/Esc bilen, değeri `Text`'in yer tutucusunun yerine
 //!   imleçle çizilen bir alan. Odaktayken `UiNavigation` tuşları ona bırakıyor.
 //!
+//! - **Müzik geçişi yoktu, ve ses ayarı çalan müziğe ulaşmıyordu.** Oyunun eklediği
+//!   `AudioManager`'ı her kare kimse ilerletmiyordu: biten her ses yöneticide kalıyordu, ses
+//!   ayarı yalnızca *sonra* başlayan seslere uygulanıyordu, ve bir sesi zamanla kısmanın yolu
+//!   yoktu. **Kapatıldı:** kare döngüsü `AudioManager::tick(dt)`'yi kendisi çağırıyor;
+//!   `fade_to` / `fade_out` / `crossfade`. Menünün bir müziği var; Başla öbür parçaya 1.5 saniyede
+//!   geçiyor, Ses düğmesi çalan müziği o an kısıyor.
+//!
 //! ## Ortam değişkenleri
 //!   * `GIZMO_FONT=<yol>` — font
 
@@ -66,6 +73,22 @@ gizmo::core::impl_component!(MenuButton);
 struct Menu {
     volume: u32,
     banner: u32,
+    /// Çalan müzik ve hangisi olduğu (menü mü, "oyun" mu).
+    music: Option<u64>,
+    in_game: bool,
+}
+
+/// İki saniyelik, kendine dikişsiz bağlanan yumuşak bir akor: her frekans iki saniyede tam sayıda
+/// devir yapıyor, nefes alan genlik de bir devir. Döngüde tık yok.
+fn pad(freqs: [f32; 3]) -> Vec<f32> {
+    const RATE: f32 = 44_100.0;
+    (0..(2.0 * RATE) as usize)
+        .map(|i| {
+            let t = i as f32 / RATE;
+            let tone: f32 = freqs.iter().map(|f| (std::f32::consts::TAU * f * t).sin()).sum();
+            tone / 3.0 * 0.18 * (0.75 + 0.25 * (std::f32::consts::TAU * 0.5 * t).sin())
+        })
+        .collect()
 }
 
 fn fill(i: Interaction) -> Vec4 {
@@ -170,12 +193,16 @@ fn main() {
                 nav.focus(first);
             }
 
+            let mut music = None;
             if let Ok(mut audio) = AudioManager::new() {
                 audio.load_sound_bytes("tik", Blip::new(Wave::Sine, 880.0, 0.05).with_volume(0.5).wav());
                 audio.mixer_mut().set_master_gain(volume as f32 / 100.0);
+                audio.load_samples("menu", &pad([220.0, 261.5, 330.0]), 44_100);
+                audio.load_samples("oyun", &pad([196.0, 247.0, 293.5]), 44_100);
+                music = audio.crossfade(None, "menu", 2.0).ok();
                 scene.world.insert_resource(audio);
             }
-            scene.world.insert_resource(Menu { volume, banner });
+            scene.world.insert_resource(Menu { volume, banner, music, in_game: false });
         })
         .set_update(update)
         .run()
@@ -221,7 +248,17 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, _dt: f32, _input: &I
     for (id, action) in clicked {
         let label = match action {
             Action::Start => {
-                set_banner(world, menu.banner, "Oyun burada başlardı.");
+                // Öbür parçaya geç: yenisi sessizden açılıyor, eskisi kısılıp duruyor.
+                menu.in_game = !menu.in_game;
+                let (track, text) = if menu.in_game {
+                    ("oyun", "Oyun burada başlardı — müzik değişti.")
+                } else {
+                    ("menu", "Menüye dönüldü.")
+                };
+                if let Some(mut audio) = world.get_resource_mut::<AudioManager>() {
+                    menu.music = audio.crossfade(menu.music, track, 1.5).ok().or(menu.music);
+                }
+                set_banner(world, menu.banner, text);
                 None
             }
             Action::Fullscreen => {

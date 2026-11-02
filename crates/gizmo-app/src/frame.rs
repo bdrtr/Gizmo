@@ -171,6 +171,16 @@ where
     // line the whole module exists for.
     update_schedule.run(world, frame_dt);
 
+    // A game's `AudioManager` is a resource it inserts itself, and until 2026-11-02 nothing ticked
+    // it: every sound it played stayed in the manager after it ended (a sink and a mixer route
+    // each, for every footstep of the session), and a volume slider moved while music played
+    // never reached the music — both are `update`'s job, and only the opt-in 3D audio system
+    // called it. Now every frame does, fades included, on the real frame time.
+    #[cfg(feature = "audio")]
+    if let Some(mut audio) = world.get_resource_mut::<gizmo_audio::AudioManager>() {
+        audio.tick(frame_dt);
+    }
+
     if fixed_steps > 0 {
         tracing::debug!(
             steps = fixed_steps,
@@ -591,5 +601,40 @@ mod tests {
         run_fixed_and_update(&mut world, &mut fixed, &mut update, 0.001, 0.001, |_| {});
 
         assert_eq!(*seen.lock().unwrap(), [(Mode::Menu, 0), (Mode::Play, 1)]);
+    }
+
+    /// The frame loop ticks a game's `AudioManager`: a sound faded out over 0.1 s is stopped
+    /// after 0.2 s of frames, with nobody but the loop calling into the manager.
+    ///
+    /// Needs a real output device (CI has none): `cargo test -p gizmo-app --features audio --
+    /// --ignored the_frame_loop_ticks`.
+    #[cfg(feature = "audio")]
+    #[test]
+    #[ignore = "needs a real audio output device — run with --ignored"]
+    fn the_frame_loop_ticks_the_audio_manager() {
+        use gizmo_audio::AudioManager;
+        let mut audio = AudioManager::new().expect("an audio output device");
+        audio.load_samples("hum", &vec![0.0; 4410], 44_100);
+        let id = audio.play_looped("hum").unwrap();
+        audio.fade_out(id, 0.1);
+        let mut world = World::new();
+        world.insert_resource(audio);
+        let (mut fixed, mut update) = (Schedule::new(), Schedule::new());
+        for _ in 0..12 {
+            run_fixed_and_update(&mut world, &mut fixed, &mut update, 1.0 / 60.0, 1.0 / 60.0, |_| {});
+        }
+        assert_eq!(world.get_resource::<AudioManager>().unwrap().mixer().fade_of(id), 0.0, "the fade ran");
+        // `stop` is a request to rodio's thread; poll for it with a ceiling, as the audio
+        // crate's own stop test does.
+        let mut stopped = false;
+        for _ in 0..100 {
+            run_fixed_and_update(&mut world, &mut fixed, &mut update, 0.0, 0.0, |_| {});
+            if !world.get_resource::<AudioManager>().unwrap().is_playing(id) {
+                stopped = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(stopped, "the faded-out loop was stopped");
     }
 }

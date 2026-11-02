@@ -73,6 +73,28 @@ struct Route {
     bus: String,
     volume: f32,
     pitch: f32,
+    /// The fade's own factor, apart from `volume`: the spatial system rewrites `volume` every
+    /// frame from the distance, and a fade riding on it would be undone by the next frame.
+    fade: f32,
+}
+
+/// A sink's fade factor on its way somewhere: linear from `from` to `to` over `secs`, and the
+/// sink stopped at the end when `stop` says so.
+#[derive(Debug, Clone, Copy)]
+struct Fade {
+    from: f32,
+    to: f32,
+    secs: f32,
+    t: f32,
+    stop: bool,
+}
+
+/// What [`Mixer::advance_fades`] moved: the sinks whose volume changed, and the ones whose
+/// fade-out ended and are to be stopped.
+#[derive(Debug, Default)]
+pub(crate) struct FadeStep {
+    pub(crate) changed: Vec<u64>,
+    pub(crate) stop: Vec<u64>,
 }
 
 /// Volume multiplier while the listener is underwater. Water attenuates, so the level drops —
@@ -121,6 +143,7 @@ pub struct Mixer {
     buses: HashMap<String, Bus>,
     underwater: bool,
     routes: HashMap<u64, Route>,
+    fades: HashMap<u64, Fade>,
     /// Set by every mutator, cleared by [`Mixer::take_dirty`]. It exists because a game can reach
     /// the mixer directly (`mixer_mut()`), so the manager cannot know a gain moved unless it is
     /// told — and re-writing every sink's two atomics on every frame to avoid asking is a cost
@@ -158,6 +181,7 @@ impl Mixer {
             buses: HashMap::new(),
             underwater: false,
             routes: HashMap::new(),
+            fades: HashMap::new(),
             dirty: false,
         }
     }
@@ -250,7 +274,7 @@ impl Mixer {
     /// Registers a freshly started sink on `bus` at unity, replacing any route under that id.
     pub(crate) fn route(&mut self, id: u64, bus: &str) {
         self.routes
-            .insert(id, Route { bus: bus.to_string(), volume: 1.0, pitch: 1.0 });
+            .insert(id, Route { bus: bus.to_string(), volume: 1.0, pitch: 1.0, fade: 1.0 });
         self.buses.entry(bus.to_string()).or_default();
     }
 
@@ -291,6 +315,72 @@ impl Mixer {
     /// without it a long session leaks one `Route` per sound ever played.
     pub(crate) fn retain_routes(&mut self, keep: impl Fn(u64) -> bool) {
         self.routes.retain(|id, _| keep(*id));
+        self.fades.retain(|id, _| keep(*id));
+    }
+
+    // ── fades ────────────────────────────────────────────────────────────────
+
+    /// Starts moving a live sink's fade factor — a multiplier on top of its volume, bus and
+    /// master — to `to` over `secs` seconds, from wherever it is now (a fade already running is
+    /// replaced from its current point, so reversing one does not jump). `stop` stops the sink
+    /// when it arrives. `false` for a sink the mixer has never seen.
+    ///
+    /// `secs <= 0` (or NaN) arrives on the next [`advance_fades`](Self::advance_fades), whatever
+    /// its `dt`.
+    pub(crate) fn start_fade(&mut self, id: u64, to: f32, secs: f32, stop: bool) -> bool {
+        let Some(route) = self.routes.get(&id) else {
+            return false;
+        };
+        let secs = if secs.is_finite() { secs.max(0.0) } else { 0.0 };
+        self.fades.insert(id, Fade { from: route.fade, to: sanitize_gain(to), secs, t: 0.0, stop });
+        true
+    }
+
+    /// Sets a sink's fade factor at once, cancelling any fade — `0.0` before fading a sound in.
+    pub(crate) fn set_fade(&mut self, id: u64, factor: f32) {
+        self.fades.remove(&id);
+        if let Some(route) = self.routes.get_mut(&id) {
+            route.fade = sanitize_gain(factor);
+        }
+    }
+
+    /// A sink's fade factor: `1.0` unless a fade has moved it.
+    pub fn fade_of(&self, id: u64) -> f32 {
+        self.routes.get(&id).map_or(1.0, |r| r.fade)
+    }
+
+    /// Whether a sink is fading.
+    pub fn is_fading(&self, id: u64) -> bool {
+        self.fades.contains_key(&id)
+    }
+
+    /// Advances every fade by `dt` seconds, writing each sink's fade factor, and reports what
+    /// moved. A finished fade is forgotten; a finished fade-out is reported for stopping.
+    pub(crate) fn advance_fades(&mut self, dt: f32) -> FadeStep {
+        let mut step = FadeStep::default();
+        if self.fades.is_empty() {
+            return step;
+        }
+        let dt = if dt.is_finite() { dt.max(0.0) } else { 0.0 };
+        let mut done = Vec::new();
+        for (&id, fade) in &mut self.fades {
+            fade.t += dt;
+            let k = if fade.secs <= 0.0 { 1.0 } else { (fade.t / fade.secs).min(1.0) };
+            if let Some(route) = self.routes.get_mut(&id) {
+                route.fade = fade.from + (fade.to - fade.from) * k;
+                step.changed.push(id);
+            }
+            if k >= 1.0 {
+                done.push(id);
+                if fade.stop {
+                    step.stop.push(id);
+                }
+            }
+        }
+        for id in done {
+            self.fades.remove(&id);
+        }
+        step
     }
 
     /// How many live sinks the mixer is pricing. (A leak check, and a debug-HUD number.)
@@ -301,7 +391,7 @@ impl Mixer {
 
     // ── the composition ──────────────────────────────────────────────────────
 
-    /// The volume to write to this sink: intent × bus × master × environment.
+    /// The volume to write to this sink: intent × fade × bus × master × environment.
     ///
     /// `0.0` for an id with no route — a sound the mixer cannot price is one it will not let
     /// through at an arbitrary volume.
@@ -311,7 +401,7 @@ impl Mixer {
         };
         let bus = self.buses.get(&route.bus).copied().unwrap_or_default();
         let environment = if self.underwater { UNDERWATER_VOLUME } else { 1.0 };
-        route.volume * bus.factor() * self.master.factor() * environment
+        route.volume * route.fade * bus.factor() * self.master.factor() * environment
     }
 
     /// The playback speed to write to this sink: the pitch the game asked for, sanitised.
@@ -526,5 +616,51 @@ mod tests {
         let mut names: Vec<&str> = mixer.buses().collect();
         names.sort_unstable();
         assert_eq!(names, vec![Mixer::MUSIC, Mixer::VOICE]);
+    }
+
+    /// A fade moves the factor linearly and lands exactly, a fade-out asks for its sink to be
+    /// stopped once, and the spatial system rewriting the volume every frame does not undo it.
+    #[test]
+    fn a_fade_moves_its_factor_and_survives_volume_writes() {
+        let mut mixer = Mixer::new();
+        mixer.route(1, Mixer::MUSIC);
+        mixer.set_sink_volume(1, 0.5);
+        assert!(mixer.start_fade(1, 0.0, 2.0, true));
+        let step = mixer.advance_fades(0.5);
+        assert_eq!(step.changed, vec![1]);
+        assert!(step.stop.is_empty());
+        assert!((mixer.fade_of(1) - 0.75).abs() < 1e-6);
+        // What `update_spatial_sink` does every frame: write the distance volume.
+        mixer.set_sink_volume(1, 0.5);
+        assert!((mixer.volume_for(1) - 0.5 * 0.75).abs() < 1e-6, "the fade is still applied");
+        assert!(mixer.is_fading(1));
+        let step = mixer.advance_fades(5.0);
+        assert_eq!(step.stop, vec![1], "the fade-out ended: stop it");
+        assert_eq!(mixer.fade_of(1), 0.0);
+        assert_eq!(mixer.volume_for(1), 0.0);
+        assert!(!mixer.is_fading(1));
+        assert!(mixer.advance_fades(1.0).stop.is_empty(), "and only once");
+        assert!(!mixer.start_fade(99, 1.0, 1.0, false), "no such sink");
+    }
+
+    /// Reversing mid-fade starts from where it is, not from the start; a zero-length fade lands
+    /// on the next step; a fade-in from silence ends at the target and stops nothing.
+    #[test]
+    fn a_reversed_or_instant_fade_does_not_jump() {
+        let mut mixer = Mixer::new();
+        mixer.route(2, Mixer::MUSIC);
+        mixer.set_fade(2, 0.0);
+        mixer.start_fade(2, 1.0, 1.0, false);
+        mixer.advance_fades(0.4);
+        mixer.start_fade(2, 0.0, 1.0, false);
+        mixer.advance_fades(0.0);
+        assert!((mixer.fade_of(2) - 0.4).abs() < 1e-6, "reversed from 0.4: {}", mixer.fade_of(2));
+        mixer.start_fade(2, 0.8, 0.0, false);
+        let step = mixer.advance_fades(0.0);
+        assert_eq!(mixer.fade_of(2), 0.8);
+        assert!(step.stop.is_empty() && !mixer.is_fading(2));
+        mixer.start_fade(2, 0.3, 1.0, false);
+        mixer.retain_routes(|_| false);
+        assert!(!mixer.is_fading(2), "a dead sink takes its fade with it");
     }
 }

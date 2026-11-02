@@ -1076,6 +1076,22 @@ once-stays-finished, paused/negative/NaN/zero/infinite inputs; dropping the rema
 once per tick or ignoring pause each fails them. `balon`'s spawner and `kale`'s spawner and tower
 reload use it.
 
+### C17. Music that changes (2026-11-02, `menu`)
+
+~~**No fades, and a game's own `AudioManager` was never ticked.**~~ **Closed 2026-11-02.**
+`AudioManager::update` — which collects finished sounds and applies a moved bus or master gain to
+the ones still playing — had one caller, the opt-in 3D audio system. A game that inserted its own
+manager (every demo with sound) leaked a sink and a mixer route per sound played, and the menu's
+volume button reached only sounds started after it. And there was no way to change a sound's
+volume over time, so a menu-to-level music switch was a cut. Now `gizmo-app`'s frame loop calls
+`AudioManager::tick(frame_dt)` on the resource every frame; `fade_to(id, factor, secs)`,
+`fade_out(id, secs)` (stops at the end) and `crossfade(from, name, secs)` (the new track looping
+on the music bus from silence). The fade is its own factor in the mixer's composition, so the 3D
+system rewriting a spatial sound's volume each frame, or a slider moving mid-fade, does not undo
+it. Tested on the mixer without a device (linear, lands exactly, survives volume writes, stops
+once, reverses without a jump); the loop's half on hardware. `menu` has music, crossfaded by
+Start.
+
 ---
 
 ## D. Game-path / editor-path asymmetries
