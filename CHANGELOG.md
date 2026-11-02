@@ -114,6 +114,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - **`MeshSource("cylinder")` and `"cone"`**, sized like their colliders, and
     `AssetManager::PRIMITIVE_MESH_KEYS` as the one list of primitive keys (the studio's
     missing-asset check now uses it instead of its own copy).
+- **Colour tweens: `ColorTween`.** `ColorTween::to(colour, s)` and `fade_to(alpha, s)` ease the
+  colour of an entity's `Sprite`, `Text` and `Material`, with `Tween`'s curves and repeats (the
+  pass arithmetic is now one function, `Repeat::position`). Both draw paths advance it on the
+  animation clock. `balon`, a 2D balloon-popping game, fades its popped balloons with it.
 - **Particles work in `SimpleApp` games, and emitters can burst.** The simple scene switched the
   GPU particle system (and SSR, SSGI, GPU physics and fluid) off **every frame**, so
   `ParticleEmitter` did nothing in any `SimpleApp` game and a game could not turn SSR back on.

@@ -1000,6 +1000,21 @@ slowing down" kept its own start, duration, clock and curve per moving thing.
   both must run. Tested: curve endpoints and shapes, exact landing, untouched parts, loop and
   ping-pong, zero duration, and a paused clock moving nothing.
 
+### C14b. A 2D game with all of it (2026-11-02, `balon`)
+
+`demo/src/bin/balon.rs`: balloons rise on an orthographic 2D view; click one and it grows, fades
+and bursts into particles. `cursor_on_plane` worked through the orthographic camera unchanged.
+
+- ~~**Tweens drove `Transform` only.**~~ **Closed 2026-11-02.** A popping balloon could grow but
+  not fade; the first version lowered its sprite's alpha by hand with its own timer.
+  `ColorTween` (`to(colour, s)`, `fade_to(alpha, s)`) eases the colour of a `Sprite`, `Text` and
+  `Material` (whichever the entity has) with the same curves and repeats as `Tween` — the pass
+  arithmetic is now one function, `Repeat::position`, shared by both. Both draw paths advance it
+  beside `tween_system`, and `render_parity` lists it. Tested: easing and exact landing, a fade
+  moving only alpha, the system writing both a sprite and a text, a paused clock writing nothing.
+- *Not a gap:* `Sprite::color` is linear, so `0.15` shows as about `0.4` in sRGB; the first
+  palette looked washed out and measured exactly as that predicts.
+
 ### C15. The menu every game has (2026-11-02, `menu`)
 
 `demo/src/bin/menu.rs` is a title menu — Start, Fullscreen, Volume, Quit — usable with the
