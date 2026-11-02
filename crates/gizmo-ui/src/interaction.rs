@@ -1,7 +1,7 @@
 use gizmo_core::query::{Query, Mut};
 use gizmo_core::system::{Res, ResMut};
 use gizmo_core::input::{GamepadButton, Input};
-use crate::components::{Clicked, ClipContent, Interaction, Node, Scroll, ZIndex};
+use crate::components::{Clicked, ClipContent, Drag, Interaction, Node, Scroll, ZIndex};
 use gizmo_core::component::Parent;
 
 /// The layer `entity` is on: its own [`ZIndex`], or the nearest one up its parents, or `0`.
@@ -239,6 +239,25 @@ fn navigate(
             || input.is_key_just_pressed(key("space"))
             || pad_just(GamepadButton::South));
     (nav.focused, activate)
+}
+
+/// Advances every [`Drag`]: a press that begins on the element (it is `Pressed` on the frame the
+/// button went down) starts one, and it follows the pointer until the button is released,
+/// wherever the pointer goes. Runs after `ui_interaction_system`, whose `Pressed` it reads.
+pub fn ui_drag_system(input: Res<Input>, mut drags: Query<(&Interaction, Mut<Drag>)>) {
+    let (x, y) = input.mouse_position();
+    let pointer = gizmo_math::Vec2::new(x, y);
+    let down_now = input.is_mouse_button_just_pressed(0);
+    let held = input.is_mouse_button_pressed(0) && !input.is_mouse_button_just_released(0);
+    for (_, (interaction, mut drag)) in drags.iter_mut() {
+        let pressed_here = down_now && *interaction == Interaction::Pressed;
+        // Only write when something changes, so `Changed<Drag>` means a moving drag.
+        let mut next = *drag;
+        next.step(pressed_here, held, pointer);
+        if next != *drag {
+            *drag = next;
+        }
+    }
 }
 
 /// The mouse wheel scrolls the innermost [`Scroll`] node under the cursor — by its `speed` a
@@ -528,6 +547,49 @@ mod tests {
         assert_eq!(offset(&world, inner), 25.0, "wheel up goes back");
         wheel(&mut world, (500.0, 500.0), -1.0);
         assert_eq!((offset(&world, inner), offset(&world, outer)), (25.0, 40.0), "outside both");
+    }
+
+    /// One frame of interaction then drag, the order `register` schedules them in.
+    fn drag_frame(world: &mut gizmo_core::World, at: (f32, f32), down: bool) {
+        use gizmo_core::system::{IntoSystemConfig, Schedule};
+        frame(world, at, down);
+        let mut s = Schedule::new();
+        s.add_di_system(ui_drag_system.into_config());
+        s.build();
+        s.run(world, 0.0);
+    }
+
+    /// A drag starts on a press on the element, follows the pointer **off** it (captured) until
+    /// the release, reports the drop for one frame — and a held button sliding onto the element
+    /// starts nothing.
+    #[test]
+    fn a_drag_is_captured_from_press_to_release() {
+        let mut world = gizmo_core::World::new();
+        world.insert_resource(Input::new());
+        let knob = world.spawn_bundle(crate::ButtonBundle { node: node((0.0, 0.0), (100.0, 40.0)), ..Default::default() });
+        world.add_component(knob, Drag::default());
+        let drag = |w: &gizmo_core::World| *w.borrow::<Drag>().get(knob.id()).unwrap();
+
+        drag_frame(&mut world, (50.0, 20.0), true);
+        let d = drag(&world);
+        assert!(d.is_dragging() && d.just_started());
+        assert_eq!(d.start(), Vec2::new(50.0, 20.0));
+        drag_frame(&mut world, (300.0, 200.0), true);
+        let d = drag(&world);
+        assert!(d.is_dragging() && !d.just_started(), "lost the drag when the pointer left the element");
+        assert_eq!(d.delta(), Vec2::new(250.0, 180.0));
+        assert_eq!(world.borrow::<Interaction>().get(knob.id()), Some(&Interaction::None));
+        drag_frame(&mut world, (310.0, 200.0), false);
+        let d = drag(&world);
+        assert!(!d.is_dragging() && d.just_ended());
+        assert_eq!(d.position(), Vec2::new(310.0, 200.0), "dropped where it was released");
+        drag_frame(&mut world, (310.0, 200.0), false);
+        assert!(!drag(&world).just_ended(), "the drop is one frame");
+
+        // Pressed elsewhere, then slid on with the button held: not a drag of this element.
+        drag_frame(&mut world, (500.0, 500.0), true);
+        drag_frame(&mut world, (50.0, 20.0), true);
+        assert!(!drag(&world).is_dragging());
     }
 
     /// Pressed on, dragged off, released: cancelled, like a desktop button.

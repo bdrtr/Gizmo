@@ -1081,6 +1081,16 @@ mouse, the keyboard and a gamepad. Three of its four buttons were impossible:
   struct, a wrong-typed read, a corrupt file kept twice over, safe names; removing the move-aside
   fails it. The menu remembers its volume and fullscreen, `kristal_avcisi` its best score.
 
+- ~~**Nothing could be dragged.**~~ **Closed 2026-11-02.** The volume control was a button that
+  stepped by 25 % because a slider needs a drag, and `Interaction` is a per-frame state with no
+  notion of one. `gizmo::ui::Drag` (opt-in on any element): it starts on a press that **begins**
+  on the element — sliding onto it with the button held starts nothing — follows the pointer
+  **off** the element until the release (captured), and reports the drop for one frame
+  (`just_ended`), with `start`, `position` and `delta`. Under a finger it works the same, the first
+  finger being the mouse. Tested on a press-drag-off-release-slide-on sequence; dropping the
+  capture or starting on a slide fails it. The menu's volume is now a slider (drag sets the level,
+  Enter/gamepad still steps it).
+
 ### C16. Every game wrote the same three lines (2026-11-02)
 
 ~~**No timer.**~~ **Closed 2026-11-02.** `balon`, `kale` and `yikim_ustasi` each counted down by

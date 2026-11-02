@@ -386,6 +386,82 @@ pub enum Interaction {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Clicked(pub bool);
 
+/// Makes an element draggable, and says how the drag is going — a slider's knob, an inventory
+/// item, a window's title bar. Add it to any element that has an [`Interaction`].
+///
+/// A drag starts when the primary button goes **down on** the element (not when it slides onto it
+/// already held) and lasts until the button is released — **wherever the pointer goes meanwhile**.
+/// That capture is the point: a slider whose track is 8 px tall would otherwise lose the drag the
+/// moment the hand wavers. Under a finger it works the same, since the first finger is the mouse.
+///
+/// The element is not moved for you — read [`delta`](Self::delta) or
+/// [`position`](Self::position) and move or set what you like.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Drag {
+    active: bool,
+    start: Vec2,
+    position: Vec2,
+    just_started: bool,
+    just_ended: bool,
+}
+
+impl Drag {
+    /// Whether a drag is under way (`true` from the press through the release frame's end).
+    #[must_use]
+    pub fn is_dragging(&self) -> bool {
+        self.active
+    }
+
+    /// Where the drag began, window pixels.
+    #[must_use]
+    pub fn start(&self) -> Vec2 {
+        self.start
+    }
+
+    /// Where the pointer is now (or was when the drag ended), window pixels.
+    #[must_use]
+    pub fn position(&self) -> Vec2 {
+        self.position
+    }
+
+    /// How far the pointer has moved since the drag began.
+    #[must_use]
+    pub fn delta(&self) -> Vec2 {
+        self.position - self.start
+    }
+
+    /// The drag began this frame.
+    #[must_use]
+    pub fn just_started(&self) -> bool {
+        self.just_started
+    }
+
+    /// The drag ended this frame — the drop.
+    #[must_use]
+    pub fn just_ended(&self) -> bool {
+        self.just_ended
+    }
+
+    /// Advances the drag for one frame: `pressed_here` is a press that began on the element this
+    /// frame, `held` the button's state, `pointer` where it is.
+    pub(crate) fn step(&mut self, pressed_here: bool, held: bool, pointer: Vec2) {
+        self.just_started = false;
+        self.just_ended = false;
+        if self.active {
+            self.position = pointer;
+            if !held {
+                self.active = false;
+                self.just_ended = true;
+            }
+        } else if pressed_here {
+            self.active = true;
+            self.just_started = true;
+            self.start = pointer;
+            self.position = pointer;
+        }
+    }
+}
+
 /// Fill color of a UI element, stored as a linear RGBA vector with each
 /// channel in the `0.0..=1.0` range.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -469,7 +545,7 @@ impl Scroll {
 /// Marker component for the root of a UI tree.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UiRoot;
-gizmo_core::impl_component!(Style, Node, Interaction, Clicked, BackgroundColor, UiRoot, ClipContent, ZIndex, Scroll);
+gizmo_core::impl_component!(Style, Node, Interaction, Clicked, BackgroundColor, UiRoot, ClipContent, ZIndex, Scroll, Drag);
 
 #[cfg(test)]
 mod tests {

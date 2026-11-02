@@ -45,7 +45,8 @@
 //!
 //! Around them since 2026-11-02: clicks ([`Clicked`]), keyboard and gamepad focus
 //! ([`UiNavigation`]), clipping ([`ClipContent`]), layers ([`ZIndex`]), wheel scrolling
-//! ([`Scroll`], driven by [`ui_scroll_system`]) and a text field ([`TextInput`]).
+//! ([`Scroll`], driven by [`ui_scroll_system`]), a text field ([`TextInput`]) and drags
+//! ([`Drag`], captured from press to release — sliders, inventory items).
 //!
 //! The unit tests cover those, the layout write-back, node lifecycle, the [`Style`] → taffy
 //! conversion, the hit-test predicate and the interaction state machine. That is the part you
@@ -138,7 +139,7 @@ use gizmo_core::world::World;
 pub use components::*;
 pub use bundles::*;
 pub use layout::*;
-pub use interaction::{pointer_over_ui, ui_layer, ui_scroll_system, UiNavigation};
+pub use interaction::{pointer_over_ui, ui_drag_system, ui_layer, ui_scroll_system, UiNavigation};
 pub use text_input::{text_input_system, TextInput};
 
 /// Registers the UI components + [`UiContext`] resource and schedules the layout
@@ -155,6 +156,7 @@ pub fn register(world: &mut World, schedule: &mut Schedule) {
     world.register_component_type::<ClipContent>();
     world.register_component_type::<ZIndex>();
     world.register_component_type::<Scroll>();
+    world.register_component_type::<Drag>();
     world.register_component_type::<text_input::TextInput>();
     world.register_component_type::<BackgroundColor>();
     world.register_component_type::<UiRoot>();
@@ -179,6 +181,12 @@ pub fn register(world: &mut World, schedule: &mut Schedule) {
             .into_config()
             .label("ui_interaction")
             .after("ui_layout"),
+    );
+    schedule.add_di_system(
+        interaction::ui_drag_system
+            .into_config()
+            .label("ui_drag")
+            .after("ui_interaction"),
     );
     schedule.add_di_system(
         text_input::text_input_system
@@ -217,7 +225,7 @@ pub mod prelude {
     pub use crate::{
         components::{
             AlignContent, AlignItems, AlignSelf, BackgroundColor, Display, FlexDirection,
-            Clicked, ClipContent, FlexWrap, Interaction, JustifyContent, Scroll, ZIndex, Node, PositionType, Style, UiRect, UiRoot, Val,
+            Clicked, ClipContent, Drag, FlexWrap, Interaction, JustifyContent, Scroll, ZIndex, Node, PositionType, Style, UiRect, UiRoot, Val,
         },
         bundles::{NodeBundle, ButtonBundle},
     };

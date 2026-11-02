@@ -114,6 +114,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - **`MeshSource("cylinder")` and `"cone"`**, sized like their colliders, and
     `AssetManager::PRIMITIVE_MESH_KEYS` as the one list of primitive keys (the studio's
     missing-asset check now uses it instead of its own copy).
+- **UI drags: `gizmo::ui::Drag`.** Opt-in on any element: starts on a press that begins on it,
+  follows the pointer anywhere until the release (captured), reports the drop for one frame.
+  The menu demo's volume is a slider built on it.
 - **Touch input.** `WindowEvent::Touch` was dropped, so nothing could be pressed on a phone or a
   touchscreen. `Input::on_touch` / `touches()` / `touch(id)` / `primary_touch()`; the first finger
   drives the mouse (cursor + left button), so UI clicks and mouse-written games work under a
