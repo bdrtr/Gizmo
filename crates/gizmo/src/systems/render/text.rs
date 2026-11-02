@@ -47,12 +47,20 @@ fn ui_boxes(world: &World) -> Vec<UiBox> {
     let sticks = world.borrow::<crate::ui::VirtualStick>();
     let bars = world.borrow::<crate::ui::ProgressBar>();
     let toggles = world.borrow::<crate::ui::Toggle>();
+    let scrolls = world.borrow::<crate::ui::Scroll>();
     let mut out = Vec::new();
     for (id, node) in nodes.iter() {
         out.push((id, node.position, node.size, backgrounds.get(id).map(|c| c.0)));
         if let Some(s) = sliders.get(id) {
             let w = node.size.x * s.value.clamp(0.0, 1.0);
             out.push((id, node.position, Vec2::new(w, node.size.y), Some(s.fill)));
+        }
+        // A scrolling list's thumb, while something overflows: brighter while it is held.
+        if let Some(s) = scrolls.get(id) {
+            if let Some((at, size)) = s.thumb(node) {
+                let alpha = if s.is_dragging_thumb() { 0.7 } else { 0.4 };
+                out.push((id, at, size, Some(Vec4::new(1.0, 1.0, 1.0, alpha))));
+            }
         }
         if let Some(b) = bars.get(id) {
             let w = node.size.x * b.value.clamp(0.0, 1.0);

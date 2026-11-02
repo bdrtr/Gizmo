@@ -1172,6 +1172,15 @@ mouse, the keyboard and a gamepad. Three of its four buttons were impossible:
   channel stays silent, switching off is heard on the next sample; cutting the tail with the input
   or sharing one channel's state fails them. `poligon` plays in a hall, **V** toggles it.
 
+- ~~**A list could only be scrolled with a wheel.**~~ **Closed 2026-11-03.** A touchpad without a
+  wheel, or a finger, could not reach the end of a `Scroll` list. Its thumb is drawn now (its
+  length the visible share of the content, its place the offset's share of the travel) and can be
+  dragged — captured until the release, clamped; a press on the track jumps there. The strip along
+  the right edge belongs to the bar: a press there is not a press on the list item under it, or
+  dragging the bar would click whatever it was released over. Tested on the thumb's geometry, a
+  drag past the box, the clamp, the release and the strip; dropping the strip rule, the grab
+  offset or the capture each fails it.
+
 ### C16. Every game wrote the same three lines (2026-11-02)
 
 ~~**No timer.**~~ **Closed 2026-11-02.** `balon`, `kale` and `yikim_ustasi` each counted down by

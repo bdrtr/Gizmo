@@ -139,6 +139,11 @@ pub fn ui_interaction_system(
                 if (c.is_some() || s.is_some()) && !point_in_node(mouse_pos, n) {
                     return false;
                 }
+                // The scrollbar's strip belongs to the bar: a press there is not on the list item
+                // under it, or dragging the bar would click whatever it was released over.
+                if s.is_some_and(|s| s.in_bar_strip(n, gizmo_math::Vec2::new(mouse_pos.0, mouse_pos.1))) {
+                    return false;
+                }
             }
             at = layers.get(a).and_then(|(_, p)| p.map(|p| p.0));
         }
@@ -326,11 +331,27 @@ pub fn ui_drag_system(input: Res<Input>, mut drags: Query<(&Interaction, Mut<Dra
 /// The mouse wheel scrolls the innermost [`Scroll`] node under the cursor — by its `speed` a
 /// notch, wheel up showing earlier content. The layout clamps the result.
 pub fn ui_scroll_system(input: Res<Input>, mut scrolls: Query<(&Node, Mut<Scroll>)>) {
+    // The scrollbar first: a press in the strip takes the thumb, and it follows the pointer until
+    // the release — what a touchpad without a wheel, and a finger, scroll a list with.
+    let p = input.mouse_position();
+    let pointer = gizmo_math::Vec2::new(p.0, p.1);
+    let pressed = input.is_mouse_button_just_pressed(0);
+    let held = input.is_mouse_button_pressed(0) && !input.is_mouse_button_just_released(0);
+    for (_, (node, mut scroll)) in scrolls.iter_mut() {
+        if !(pressed || scroll.is_dragging_thumb()) {
+            continue;
+        }
+        let mut next = *scroll;
+        next.drag_thumb(node, pressed, held, pointer);
+        if next != *scroll {
+            *scroll = next;
+        }
+    }
+
     let wheel = input.mouse_scroll();
     if wheel == 0.0 {
         return;
     }
-    let p = input.mouse_position();
     let target = scrolls
         .iter_mut()
         .filter(|(_, (n, _))| point_in_node(p, n))
@@ -748,6 +769,47 @@ mod tests {
         step(&mut world, (50.0, 20.0), true);
         step(&mut world, (50.0, 20.0), false);
         assert!(!t(&world).on, "the second click flips it back");
+    }
+
+    /// The scrollbar: its thumb is the visible share of the content, dragging it scrolls in
+    /// proportion (captured past the box, clamped), a press on the track jumps there, and the
+    /// release lets go — and a press in the bar's strip is not a press on the list item under it.
+    #[test]
+    fn the_scrollbar_thumb_drags_the_list_and_owns_its_strip() {
+        use gizmo_core::hierarchy::HierarchyExt;
+        use gizmo_core::system::{IntoSystemConfig, Schedule};
+        let mut world = gizmo_core::World::new();
+        world.insert_resource(Input::new());
+        let list_node = node((0.0, 0.0), (100.0, 100.0));
+        let mut scroll = Scroll::default();
+        scroll.fit(Vec2::new(0.0, 300.0)); // 400 px of content in a 100 px box
+        let list = world.spawn_bundle((list_node, scroll));
+        let item = world.spawn_bundle(crate::ButtonBundle { node: node((0.0, 0.0), (100.0, 40.0)), ..Default::default() });
+        world.add_child(list, item);
+
+        let (at, size) = scroll.thumb(&list_node).expect("it overflows");
+        assert_eq!((at, size), (Vec2::new(92.0, 0.0), Vec2::new(6.0, 25.0)), "a quarter of the track");
+
+        let run = |w: &mut gizmo_core::World, p: (f32, f32), down: bool| {
+            frame(w, p, down);
+            let mut s = Schedule::new();
+            s.add_di_system(ui_scroll_system.into_config());
+            s.build();
+            s.run(w, 0.0);
+        };
+        let offset = |w: &gizmo_core::World| w.borrow::<Scroll>().get(list.id()).unwrap().offset.y;
+        run(&mut world, (95.0, 10.0), true); // on the thumb, 10 px into it
+        assert_eq!(world.borrow::<Interaction>().get(item.id()), Some(&Interaction::None), "the press went to the item under the bar");
+        run(&mut world, (300.0, 47.5), true); // thumb top to 37.5 of 75 travel, off the box
+        assert!((offset(&world) - 150.0).abs() < 1e-3, "{}", offset(&world));
+        run(&mut world, (95.0, 500.0), true);
+        assert_eq!(offset(&world), 300.0, "clamped at the end");
+        run(&mut world, (95.0, 500.0), false);
+        run(&mut world, (95.0, 0.0), false);
+        assert_eq!(offset(&world), 300.0, "released: moving does not scroll");
+        // A press on the item itself, left of the strip, is the item's.
+        run(&mut world, (50.0, 10.0), true);
+        assert_eq!(world.borrow::<Interaction>().get(item.id()), Some(&Interaction::Pressed));
     }
 
     /// Pressed on, dragged off, released: cancelled, like a desktop button.

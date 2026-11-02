@@ -83,8 +83,9 @@
 //!   hit-tests layer by layer since 2026-11-02 — a panel in front hides the labels behind it and
 //!   takes the pointer from them. Two overlapping nodes on the *same* layer still both report
 //!   `Hovered`, and every background of a layer is painted before its labels.
-//! - **Scrolling is the wheel's alone.** [`Scroll`] draws no scrollbar, nothing drags it, and
-//!   keyboard focus does not scroll a focused button into view. [`Interaction`] itself is
+//! - **Scrolling is the wheel and a scrollbar.** [`Scroll`]'s thumb is drawn and can be dragged
+//!   (mouse, or the first finger); the content itself cannot be flicked, and keyboard focus does
+//!   not scroll a focused button into view. [`Interaction`] itself is
 //!   still a per-frame state, not an event stream.
 //! - **No CSS Grid.** [`Style`] models the flexbox/block surface only; taffy's
 //!   grid algorithm is compiled in but unreachable, because there is no way to

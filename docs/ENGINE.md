@@ -724,8 +724,8 @@ state instead.
   clicks (`Clicked`), keyboard/gamepad focus (`UiNavigation`), clipping (`ClipContent`), layers
   (`ZIndex`), text fields (`TextInput`), wheel scrolling (`Scroll`), drags (`Drag`), sliders
   (`Slider`), progress bars (`ProgressBar`), on/off switches (`Toggle`) and on-screen touch
-  controls (`VirtualStick`, `VirtualButton`). Still missing: a dropdown / select list, and a
-  scrollbar (`Scroll` is wheel-only). No default font ships and none
+  controls (`VirtualStick`, `VirtualButton`); `Scroll` has a draggable scrollbar since 2026-11-03.
+  Still missing: a dropdown / select list, and flicking a list's content. No default font ships and none
   will without a licensing decision: a `Text` whose face was never loaded draws nothing rather than
   substituting one.
 

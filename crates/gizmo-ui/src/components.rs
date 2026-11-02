@@ -671,13 +671,21 @@ pub struct Scroll {
     /// Pixels per mouse-wheel notch.
     pub speed: f32,
     max: Vec2,
+    /// While the scrollbar's thumb is held: where on the thumb the pointer took it.
+    grab: Option<f32>,
 }
 
 impl Default for Scroll {
     fn default() -> Self {
-        Self { offset: Vec2::ZERO, speed: 40.0, max: Vec2::ZERO }
+        Self { offset: Vec2::ZERO, speed: 40.0, max: Vec2::ZERO, grab: None }
     }
 }
+
+/// The vertical scrollbar's width, and its gap from the box's right edge.
+const BAR_WIDTH: f32 = 6.0;
+const BAR_GAP: f32 = 2.0;
+/// How wide the strip that takes the pointer for the bar is — wider than the bar, for a thumb.
+const BAR_GRAB_WIDTH: f32 = 16.0;
 
 impl Scroll {
     /// Pixels per mouse-wheel notch instead of the default 40.
@@ -685,6 +693,62 @@ impl Scroll {
     pub fn with_speed(mut self, px: f32) -> Self {
         self.speed = px;
         self
+    }
+
+    /// The vertical scrollbar's thumb in `node`'s box — top-left and size, window pixels — or
+    /// `None` when nothing overflows. Its length is the visible share of the content and its place
+    /// the offset's share of the travel; under `gizmo-engine` it is drawn, and it can be dragged.
+    #[must_use]
+    pub fn thumb(&self, node: &Node) -> Option<(Vec2, Vec2)> {
+        if self.max.y <= 0.0 || node.size.y <= 0.0 {
+            return None;
+        }
+        let track = node.size.y;
+        let length = (track * track / (track + self.max.y)).max(track.min(20.0));
+        let travel = track - length;
+        let y = node.position.y + travel * (self.offset.y / self.max.y).clamp(0.0, 1.0);
+        let x = node.position.x + node.size.x - BAR_WIDTH - BAR_GAP;
+        Some((Vec2::new(x, y), Vec2::new(BAR_WIDTH, length)))
+    }
+
+    /// Whether `point` is in the strip along the right edge that belongs to the scrollbar — which
+    /// is only there while something overflows.
+    pub(crate) fn in_bar_strip(&self, node: &Node, point: Vec2) -> bool {
+        self.max.y > 0.0
+            && point.x >= node.position.x + node.size.x - BAR_GRAB_WIDTH
+            && point.x < node.position.x + node.size.x
+            && point.y >= node.position.y
+            && point.y < node.position.y + node.size.y
+    }
+
+    /// One frame of the thumb's drag: `pressed` a press that began this frame, `held` the button,
+    /// `pointer` where it is.
+    pub(crate) fn drag_thumb(&mut self, node: &Node, pressed: bool, held: bool, pointer: Vec2) {
+        let Some((at, size)) = self.thumb(node) else {
+            self.grab = None;
+            return;
+        };
+        if pressed && self.in_bar_strip(node, pointer) {
+            // On the thumb: hold it where it was taken. On the track: centre it under the pointer.
+            let on_thumb = pointer.y >= at.y && pointer.y < at.y + size.y;
+            self.grab = Some(if on_thumb { pointer.y - at.y } else { size.y * 0.5 });
+        }
+        if !held {
+            self.grab = None;
+        }
+        if let Some(grab) = self.grab {
+            let travel = node.size.y - size.y;
+            if travel > 0.0 {
+                let share = ((pointer.y - grab - node.position.y) / travel).clamp(0.0, 1.0);
+                self.offset.y = share * self.max.y;
+            }
+        }
+    }
+
+    /// Whether the thumb is being dragged.
+    #[must_use]
+    pub fn is_dragging_thumb(&self) -> bool {
+        self.grab.is_some()
     }
 
     /// How far it can scroll, from the last layout: the children's extent past the box.

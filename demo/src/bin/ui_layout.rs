@@ -21,7 +21,8 @@
 //!
 //! - **Kaydırma** (2026-11-02): soldaki liste `Scroll` taşıyor — on iki satır, sığdığı kutu
 //!   altısına yetiyor. Fare tekerleği üstündeyken kaydırıyor, kutunun dışına kayan satırlar
-//!   kırpılıyor ve tıklanmıyor (görünmeyen bir düğme basılmaz). Önceden `ClipContent` uzun bir
+//!   kırpılıyor ve tıklanmıyor (görünmeyen bir düğme basılmaz). Sağ kenardaki kaydırma çubuğu
+//!   (2026-11-03) sürüklenebiliyor — tekerleği olmayan bir touchpad ya da parmak için. Önceden `ClipContent` uzun bir
 //!   listeyi kesebiliyordu ama geri kalanına ulaşmanın yolu yoktu. (Klavyeyle gezinme de var:
 //!   `UiNavigation`, `menu` demosunda.)
 //! - **Katman sırası** (2026-11-02): `ZIndex` taşıyan bir kutu (ve onu devralan torunları)

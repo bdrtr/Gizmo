@@ -114,6 +114,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - **`MeshSource("cylinder")` and `"cone"`**, sized like their colliders, and
     `AssetManager::PRIMITIVE_MESH_KEYS` as the one list of primitive keys (the studio's
     missing-asset check now uses it instead of its own copy).
+- **`Scroll` has a scrollbar** — drawn while something overflows, its thumb dragged by the mouse
+  or a finger; its strip does not pass presses to the list items under it.
 - **Reverb: `AudioManager::set_reverb`** (`gizmo::audio::reverb::Reverb::{room, hall, cave}`) —
   Freeverb inside every source, live on sounds already playing, bit-exact when off, tails that
   ring past the sound's end. `poligon` plays in a hall (V toggles).
