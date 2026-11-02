@@ -659,7 +659,10 @@ fn step_gpu_simulations(
         // `gizmo-studio`, so a `ParticleEmitter` on an entity emitted nothing for anyone using
         // this pass. See `particles.rs`.
         spawn_from_emitters(world, particles, &renderer.queue, dt);
-        particles.compute_pass(encoder, active_parts);
+        // Nothing alive: no dispatch over the whole ring (see `GpuParticleSystem::is_idle`).
+        if !particles.is_idle() {
+            particles.compute_pass(encoder, active_parts);
+        }
     }
 
     (particle_lod, fluid_lod)
@@ -1160,7 +1163,7 @@ mod decals;
 pub use decals::{collect_decals, record_forward_decals};
 
 mod particles;
-pub use particles::spawn_from_emitters;
+pub use particles::{emit, spawn_from_emitters};
 
 mod sprite;
 pub use sprite::record_sprites;
@@ -7661,6 +7664,55 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
                 changed >= 40,
                 "an emitter spawning 400 particles a second changed {changed}/{total} pixels over                  ten frames — nothing is reaching the frame (measured 197)",
             );
+        });
+    }
+
+    /// The particle system is busy while an emitter feeds it and idle once the emitter is gone and
+    /// the last particle has had time to die — the state the draw path skips the whole ring on.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn the_particle_system_goes_idle_when_the_last_particle_dies() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(64, 64).await;
+            let mut world = World::new();
+            world.insert_resource(gizmo_core::time::Time::new());
+            world.spawn_bundle(CameraBundle { primary: true, ..Default::default() });
+            let idle = |r: &Renderer| r.gpu_particles.as_ref().map(|p| p.is_idle());
+            let frame = |world: &mut World, dt: f32| {
+                if let Some(mut t) = world.get_resource_mut::<gizmo_core::time::Time>() {
+                    t.update(dt);
+                }
+            };
+            frame(&mut world, 1.0 / 60.0);
+            render_world(&mut renderer, &mut world).await;
+            assert_eq!(idle(&renderer), Some(true), "nothing has spawned yet");
+
+            let emitter = world.spawn_bundle((
+                Transform::new(Vec3::ZERO),
+                GlobalTransform::default(),
+                crate::renderer::components::ParticleEmitter::with_rate(200.0),
+            ));
+            for _ in 0..5 {
+                frame(&mut world, 1.0 / 60.0);
+                render_world(&mut renderer, &mut world).await;
+            }
+            assert_eq!(idle(&renderer), Some(false), "an emitter is spawning");
+
+            world.despawn(emitter);
+            // The default preset lives 2 s give or take its randomness: five seconds is past all.
+            // In ordinary frames — `Time` clamps a long frame, so big steps would not get there.
+            for _ in 0..300 {
+                frame(&mut world, 1.0 / 60.0);
+                render_world(&mut renderer, &mut world).await;
+            }
+            assert_eq!(idle(&renderer), Some(true), "the emitter is gone and every particle has died");
         });
     }
 

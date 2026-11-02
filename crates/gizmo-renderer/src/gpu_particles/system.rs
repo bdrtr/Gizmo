@@ -24,6 +24,8 @@ pub struct GpuParticleSystem {
     /// Where the next spawn writes. Atomic because spawning happens from `&self`, so several
     /// emitters can spawn in the same frame without taking a lock.
     pub ring_head: std::sync::atomic::AtomicU32,
+    /// When the last particle spawned so far dies — see [`is_idle`](Self::is_idle).
+    clock: std::sync::Mutex<ParticleClock>,
     /// Simulation gravity (m/s²), subtracted from each particle's `velocity.y` every frame.
     /// Defaults to 9.81 (sparks and smoke fall). For horizontal flow or streamlines set it to
     /// `0.0`, so particles run straight instead of sagging (a wind tunnel, say). Changeable at
@@ -153,6 +155,7 @@ impl GpuParticleSystem {
             quad_vertex_buffer,
             active_particles: max_particles,
             ring_head: std::sync::atomic::AtomicU32::new(0),
+            clock: std::sync::Mutex::new(ParticleClock::default()),
             gravity: 9.81,
             drag: 0.8,
             obstacles: Vec::new(),
@@ -272,8 +275,25 @@ impl GpuParticleSystem {
         self.set_flipbook(device, queue, &rgba, size, size, tiles);
     }
 
+    /// Whether nothing spawned so far can still be alive — no spawn yet, or the elapsed time is
+    /// past the end of the longest-lived particle ever spawned.
+    ///
+    /// The simulation dispatch and the draw both cover the whole ring (`max_particles`, 100 000 by
+    /// default) every frame, alive or not, and that is why `SimpleApp` used to switch the system
+    /// off for every game — which made `ParticleEmitter` do nothing in all of them. The draw path
+    /// skips both while this is true instead, so an idle particle system costs nothing and an
+    /// emitter works everywhere. Every write into the ring goes through
+    /// [`spawn_particles`](Self::spawn_particles), which is what keeps this honest.
+    #[must_use]
+    pub fn is_idle(&self) -> bool {
+        self.clock.lock().map(|c| c.idle()).unwrap_or(false)
+    }
+
     /// Uploads this frame's timestep and elapsed time.
     pub fn update_params(&self, queue: &wgpu::Queue, dt: f32, time: f32) {
+        if let Ok(mut c) = self.clock.lock() {
+            c.now = time;
+        }
         let count = self.obstacles.len().min(crate::gpu_particles::types::MAX_PARTICLE_OBSTACLES);
         let mut obstacles = [[0.0f32; 4]; crate::gpu_particles::types::MAX_PARTICLE_OBSTACLES];
         obstacles[..count].copy_from_slice(&self.obstacles[..count]);
@@ -309,6 +329,11 @@ impl GpuParticleSystem {
     pub fn spawn_particles(&self, queue: &wgpu::Queue, new_particles: &[GpuParticle]) {
         if new_particles.is_empty() {
             return;
+        }
+
+        if let Ok(mut c) = self.clock.lock() {
+            let longest = new_particles.iter().map(|p| p.max_life).fold(0.0f32, f32::max);
+            c.spawned(longest);
         }
 
         let count = new_particles.len() as u32;
@@ -626,5 +651,48 @@ mod tests {
                 );
             }
         });
+    }
+}
+
+/// The elapsed time the particle set was last told, and when the last particle spawned so far
+/// dies. Pure arithmetic, so it is tested without a device.
+#[derive(Debug, Default, Clone, Copy)]
+struct ParticleClock {
+    now: f32,
+    /// `None` until the first spawn: a set nothing was ever put into is idle.
+    quiet_after: Option<f32>,
+}
+
+impl ParticleClock {
+    /// A spawn at the current time whose longest-lived particle lives `max_life` seconds.
+    fn spawned(&mut self, max_life: f32) {
+        // A frame of slack, so the frame a particle dies on is still drawn.
+        let end = self.now + max_life.max(0.0) + 0.1;
+        self.quiet_after = Some(self.quiet_after.map_or(end, |q| q.max(end)));
+    }
+
+    fn idle(&self) -> bool {
+        self.quiet_after.is_none_or(|q| self.now > q)
+    }
+}
+
+#[cfg(test)]
+mod clock_tests {
+    use super::ParticleClock;
+
+    #[test]
+    fn idle_until_the_first_spawn_and_after_the_last_particle_dies() {
+        let mut c = ParticleClock::default();
+        assert!(c.idle(), "nothing spawned yet");
+        c.now = 10.0;
+        c.spawned(2.0);
+        assert!(!c.idle());
+        c.spawned(0.5); // a shorter one later does not cut the longer one short
+        c.now = 12.0;
+        assert!(!c.idle(), "the 2 s particle is still alive");
+        c.now = 12.2;
+        assert!(c.idle(), "everything spawned has died");
+        c.spawned(1.0);
+        assert!(!c.idle(), "a new spawn wakes it");
     }
 }

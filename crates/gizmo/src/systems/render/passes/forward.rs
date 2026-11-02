@@ -237,7 +237,8 @@ pub fn record_forward_and_fluid(
     // FS'te sahne derinliğinden manuel yapılır. Renk hedefi HDR (Load, önceki sonucun üstüne).
     if let Some(particles) = &renderer.gpu_particles {
         let active_parts = (particles.max_particles as f32 * particle_lod) as u32;
-        if active_parts > 0 {
+        // Nothing alive: no draw over the whole ring (see `GpuParticleSystem::is_idle`).
+        if active_parts > 0 && !particles.is_idle() {
             let depth_bg =
                 particles.create_depth_bind_group(&renderer.device, &renderer.depth_texture_view);
             let mut ppass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

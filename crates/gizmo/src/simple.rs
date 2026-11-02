@@ -714,6 +714,15 @@ impl SimpleAppExt for App<SimpleSceneState> {
     {
         self.set_setup(move |world, renderer| {
             let mut asset_manager = AssetManager::new();
+            // The simple scene's defaults, set ONCE, before the game's setup — so a game that
+            // wants one of them back turns it on there. They used to be forced off in the render
+            // closure every frame, which also switched off the GPU particle system and so made
+            // `ParticleEmitter` do nothing in every `SimpleApp` game; the particle system is now
+            // free when idle and stays on.
+            renderer.gpu_physics = None;
+            renderer.gpu_fluid = None;
+            renderer.ssr = None;
+            renderer.ssgi = None;
 
             let mut state = SimpleSceneState {
                 camera_speed: 15.0,
@@ -735,14 +744,6 @@ impl SimpleAppExt for App<SimpleSceneState> {
         })
         .set_update(simple_scene_update)
         .set_render(|world, _state, encoder, view, renderer, _light_time| {
-            // Basit sahnelerde varsayılan olarak gelen GPU compute sistemlerini ve reflection'ları kapatıyoruz
-            // Böylece sadece bizim eklediğimiz küp ve ışık temiz bir şekilde render edilecek.
-            renderer.gpu_physics = None;
-            renderer.gpu_fluid = None;
-            renderer.gpu_particles = None;
-            renderer.ssr = None; // Arkadaki istenmeyen yansımaları (Screen Space Reflections) kapatır
-            renderer.ssgi = None; // SSGI kapatır
-
             systems::default_render_pass(world, encoder, view, renderer);
         })
     }
@@ -1040,6 +1041,17 @@ mod fixed_physics_tests {
         assert_eq!(p.alpha(), 0.0);
         assert_eq!(FixedPhysics::with_step(0.0).step(), 1.0 / 60.0);
         assert_eq!(FixedPhysics::new(0).step(), 1.0);
+    }
+
+    /// The render closure draws and does nothing else: renderer settings forced there every frame
+    /// overrode the game's own (and switched particles off for every game). Source guard — the
+    /// closure needs a window to run.
+    #[test]
+    fn the_simple_scene_does_not_override_the_renderer_every_frame() {
+        let src = include_str!("simple.rs");
+        let render = src.split(".set_render(").nth(1).and_then(|r| r.split("})").next()).unwrap_or("");
+        assert!(!render.contains("= None"), "the render closure switches something off every frame again:\n{render}");
+        assert!(!src.contains(concat!("renderer.gpu_particles", " = None")), "particles are switched off for every simple scene again");
     }
 
     /// A `PhysicsWorld` the game's setup inserted survives; a world without one gets Earth's.
