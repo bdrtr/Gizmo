@@ -883,6 +883,33 @@ on the driven state machine with `DespawnOnExit`. It works on the first build; w
   also had `f64` ranges, and every converted call site failed to compile: two float impls make
   `range(-5.0..5.0)` fall back to `f64`. `f64` ranges were dropped and a test pins the inference.
 
+### C11. The third game: physics at the centre (2026-11-02, `lobut`)
+
+`demo/src/bin/lobut.rs` is a bowling game on real rigid bodies — ten cylinder pins, a CCD ball,
+two rolls a frame, collision events for sound. Its first run had every body in free fall from
+frame one. What it found:
+
+- ~~**A `RigidBody` without a `Velocity` was not simulated, silently.**~~ **Closed 2026-11-02.**
+  The ECS bridge gathered `(RigidBody, Transform, Velocity)`, so a floor written as
+  `RigidBody::new_static()` + a collider — no velocity, a floor does not move — was not in the
+  world, with no warning. A static body now joins the step with zero velocity; a moving one is
+  given a `Velocity` through the command queue and simulated from the next frame. Scenes whose
+  bodies all carry one take neither branch. Tested both ways; removing the branch fails both.
+- ~~**Inertia was a placeholder unless set by hand.**~~ **Closed 2026-11-02.** `RigidBody::new`
+  stores `(1,1,1)` and the documented rule was "call `update_inertia_from_collider`" — 28 of the
+  36 `RigidBody::new` calls in `demo/` did not. A 20 cm ball turned ten times too hard, never
+  rolled, and lost 80 % of its speed to friction in 1.5 s. The ECS step now replaces the
+  placeholder (`RigidBody::UNSET_INERTIA`) with the collider's tensor the first time and writes
+  it back; an inertia set by hand is kept. Measured: the ball settles into rolling at 6.77 m/s,
+  the textbook 5/7 × 9.52 = 6.80. Bodies added to a `PhysicsWorld` directly (the
+  `headless_stress_test` tower) are unchanged.
+- ~~**No cylinder primitive.**~~ **Closed 2026-11-02.** `MeshSource("cylinder")` and `"cone"`,
+  sized like their colliders (radius 1, half-height 1); `AssetManager::PRIMITIVE_MESH_KEYS` is
+  the one list of primitive keys — the studio's missing-asset check kept a second copy of five.
+- **Open: `with_simple_scene` overwrites a `PhysicsWorld` inserted during setup**, so a game
+  cannot set gravity there.
+- *Not a gap:* `EventReader::iter` is Bevy's `read`, with the same one-frame semantics.
+
 ---
 
 ## D. Game-path / editor-path asymmetries

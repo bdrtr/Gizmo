@@ -566,9 +566,20 @@ impl AssetManager {
         }
     }
 
+    /// Every key [`primitive_mesh`](Self::primitive_mesh) builds — the one list, so a host that
+    /// has to tell a generated mesh from a file (the studio's missing-asset check) cannot drift
+    /// from the loader.
+    ///
+    /// Sizes, so that a `Transform::scale` reads as half-extents and radii the way a collider's
+    /// arguments do: `standard_cube` and `inverted_cube` span ±1, `sphere` has radius 1,
+    /// `cylinder` and `cone` radius 1 and half-height 1 about +Y (centred, the cone's apex up),
+    /// `plane` is 200 × 200 in XZ, `sprite_quad` 1 × 1.
+    pub const PRIMITIVE_MESH_KEYS: [&'static str; 7] =
+        ["standard_cube", "inverted_cube", "plane", "sphere", "sprite_quad", "cylinder", "cone"];
+
     /// The built-in primitive a [`MeshSource`](gizmo_core::component::MeshSource) key names —
-    /// `"standard_cube"`, `"inverted_cube"`, `"plane"`, `"sphere"`, `"sprite_quad"` — uploaded
-    /// **once** and shared, or `None` for any other key.
+    /// one of [`PRIMITIVE_MESH_KEYS`](Self::PRIMITIVE_MESH_KEYS) — uploaded **once** and shared,
+    /// or `None` for any other key.
     ///
     /// Before this the loader built a fresh mesh for every entity that asked: a hundred
     /// `MeshSource("sphere")` entities were a hundred identical vertex buffers. The cache key is
@@ -581,6 +592,10 @@ impl AssetManager {
             "plane" => |d| Self::create_plane(d, 200.0),
             "sphere" => |d| Self::create_sphere(d, 1.0, 16, 16),
             "sprite_quad" => |d| Self::create_sprite_quad(d, 1.0, 1.0),
+            // Radius 1, half-height 1 — what `Collider::cylinder(r, h)` takes, so the same
+            // numbers in `Transform::scale` and in the collider draw and collide the same shape.
+            "cylinder" => |d| Self::create_cylinder(d, 1.0, 2.0, 24),
+            "cone" => |d| Self::create_cone(d, 1.0, 2.0, 24),
             _ => return None,
         };
         let cache_key = format!("primitive/{key}");
@@ -1020,6 +1035,9 @@ mod scan_does_not_write_tests {
             let cube = m.primitive_mesh(&device, "standard_cube").expect("standard_cube is a primitive");
             assert!(!std::sync::Arc::ptr_eq(&a.vbuf, &cube.vbuf), "the cube came back as the sphere");
             assert!(m.primitive_mesh(&device, "demo/assets/tree.obj").is_none());
+            for key in AssetManager::PRIMITIVE_MESH_KEYS {
+                assert!(m.primitive_mesh(&device, key).is_some(), "`{key}` is listed and not built");
+            }
 
             let first = std::sync::Arc::downgrade(&a.vbuf);
             drop((a, b, cube));

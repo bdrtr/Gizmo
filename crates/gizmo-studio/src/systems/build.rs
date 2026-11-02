@@ -218,13 +218,10 @@ enum RefKind {
 
 /// The built-in meshes that are generated rather than loaded. A scene naming one references no
 /// file, and reporting it as a missing asset would be crying wolf on every default cube.
-const PROCEDURAL_MESHES: [&str; 5] = [
-    "inverted_cube",
-    "plane",
-    "standard_cube",
-    "sphere",
-    "sprite_quad",
-];
+///
+/// The renderer's own list, not a copy: this was a second list of five names, and a primitive
+/// added to the loader would have been reported here as a missing file.
+const PROCEDURAL_MESHES: [&str; 7] = gizmo::renderer::asset::AssetManager::PRIMITIVE_MESH_KEYS;
 
 /// The file a stored reference names, or `None` when it names no file at all.
 ///

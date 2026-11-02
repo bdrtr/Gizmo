@@ -90,6 +90,21 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   cached under `primitive/<key>` — the prefix `garbage_collect` already kept alive for a cache
   nothing filled. GPU-tested (same buffer twice, survives collection); disabling the cache fails
   it.
+- **`lobut` — a bowling game on real rigid bodies**, and what its first run found (all three
+  closed; `docs/CAPABILITY_GAPS.md` §C11):
+  - **A `RigidBody` without a `Velocity` is simulated.** The ECS bridge gathered
+    `(RigidBody, Transform, Velocity)`, so a static floor written without a velocity was not in
+    the world — silently; every body above it fell. A static body now joins with zero velocity; a
+    moving one is given a `Velocity` via the command queue and simulated from the next frame.
+  - **Inertia comes from the collider.** `RigidBody::new` stores a `(1,1,1)` placeholder
+    (`RigidBody::UNSET_INERTIA`) that the ECS step now replaces with the collider's tensor on the
+    first step and writes back; a hand-set inertia is kept. Before, a 20 cm ball turned ten times
+    too hard, never rolled and lost 80 % of its speed in 1.5 s; now it rolls at 6.77 m/s against
+    the textbook's 6.80. **Behaviour change** for every ECS body that relied on the placeholder;
+    bodies added to a `PhysicsWorld` directly are unchanged, as are the determinism gate's hashes.
+  - **`MeshSource("cylinder")` and `"cone"`**, sized like their colliders, and
+    `AssetManager::PRIMITIVE_MESH_KEYS` as the one list of primitive keys (the studio's
+    missing-asset check now uses it instead of its own copy).
 - **Tuples are system parameters.** `fn f((time, state): (Res<Time>, Res<State<S>>))` — two to
   eight members, nesting freely — the anonymous form of `system_param!` and the way past the
   nine-parameter limit. Members' states are kept per member (a `Local` in a tuple keeps its value)

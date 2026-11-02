@@ -282,7 +282,9 @@ impl std::fmt::Display for EntityName {
 /// pass turns into a GPU `Mesh` component.
 ///
 /// The key is not simply a file path. The loader recognises the built-in primitives
-/// `"standard_cube"`, `"inverted_cube"`, `"plane"`, `"sphere"` and `"sprite_quad"`, the
+/// `"standard_cube"`, `"inverted_cube"`, `"plane"`, `"sphere"`, `"sprite_quad"`, `"cylinder"` and
+/// `"cone"` (sizes and the list itself: `AssetManager::PRIMITIVE_MESH_KEYS` in `gizmo-renderer`;
+/// each is uploaded once and shared by every entity that names it), the
 /// `"gltf_mesh_<file>.glb…"` / `"gltf_mesh_<file>.gltf…"` form for a mesh inside a glTF scene,
 /// and `"obj:<path>"`; anything else is treated as an OBJ path. Nothing validates the key when
 /// the component is attached, and a key that fails to load does not fail the frame: the entity
