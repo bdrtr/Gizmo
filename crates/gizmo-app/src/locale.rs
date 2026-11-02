@@ -143,6 +143,42 @@ impl Locale {
         s
     }
 
+    /// A string that depends on a count: `"{key}.one"` when `n` is 1 and the table has one, else
+    /// `"{key}.other"`, else `key` itself — with `{n}` (and `args`) filled in.
+    ///
+    /// ```text
+    /// "coins": { "one": "{n} coin", "other": "{n} coins" }   // en
+    /// "coins": { "other": "{n} altın" }                       // tr: no plural after a number
+    /// ```
+    ///
+    /// Two forms cover the languages this engine's games ship in so far: English and its kin say
+    /// "1 coin, 2 coins", and Turkish keeps the noun singular after any number, so it writes only
+    /// `other`. Languages with more forms (Russian, Arabic, Polish) need CLDR's full rules, which
+    /// this does not implement — their `other` is used for every count except 1.
+    #[must_use]
+    pub fn format_count(&self, key: &str, n: i64, args: &[(&str, &str)]) -> String {
+        let one = format!("{key}.one");
+        let other = format!("{key}.other");
+        // The forms come from ONE language: the current one if it has either, else the fallback.
+        // Mixing them is how a Turkish `1` would come out as the English "1 coin".
+        let table = [Some(&self.language), self.fallback.as_ref()]
+            .into_iter()
+            .flatten()
+            .filter_map(|l| self.tables.get(l))
+            .find(|t| t.contains_key(&one) || t.contains_key(&other));
+        let pick = match table {
+            Some(t) if n == 1 && t.contains_key(&one) => t[&one].clone(),
+            Some(t) if t.contains_key(&other) => t[&other].clone(),
+            Some(t) => t[&one].clone(),
+            None => self.get(key).to_string(),
+        };
+        let mut s = pick.replace("{n}", &n.to_string());
+        for (name, value) in args {
+            s = s.replace(&format!("{{{name}}}"), value);
+        }
+        s
+    }
+
     /// Every key asked for that no table had, sorted — the list a translator needs.
     #[must_use]
     pub fn missing(&self) -> Vec<String> {
@@ -205,13 +241,15 @@ pub struct LocalizedText {
     pub key: String,
     /// `{name}` placeholders and their values.
     pub args: Vec<(String, String)>,
+    /// A count, which picks the string's form ([`Locale::format_count`]) and fills `{n}`.
+    pub count: Option<i64>,
 }
 
 impl LocalizedText {
     /// The string `key`, with no placeholders.
     #[must_use]
     pub fn new(key: &str) -> Self {
-        Self { key: key.to_string(), args: Vec::new() }
+        Self { key: key.to_string(), args: Vec::new(), count: None }
     }
 
     /// With `{name}` filled by `value`.
@@ -221,11 +259,21 @@ impl LocalizedText {
         self
     }
 
+    /// With a count: the string's one/other form by `n`, and `{n}` filled.
+    #[must_use]
+    pub fn with_count(mut self, n: i64) -> Self {
+        self.count = Some(n);
+        self
+    }
+
     /// What it shows under `locale`.
     #[must_use]
     pub fn resolve(&self, locale: &Locale) -> String {
         let args: Vec<(&str, &str)> = self.args.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
-        locale.format(&self.key, &args)
+        match self.count {
+            Some(n) => locale.format_count(&self.key, n, &args),
+            None => locale.format(&self.key, &args),
+        }
     }
 }
 
@@ -265,6 +313,24 @@ mod tests {
         l.set_language("de");
         assert_eq!(l.get("menu.start"), "Start");
         assert_eq!(l.missing(), vec!["menu.quit".to_string()]);
+    }
+
+    /// English picks one/other by the count; Turkish, writing only `other`, uses it for 1 too;
+    /// a key with neither form is used as it is; the count fills `{n}` beside other arguments.
+    #[test]
+    fn a_count_picks_its_form() {
+        let mut l = Locale::new("en");
+        l.load_json("en", r#"{"coins": {"one": "{n} coin", "other": "{n} coins"}, "left": "{n} left of {total}"}"#).unwrap();
+        l.load_json("tr", r#"{"coins": {"other": "{n} altın"}}"#).unwrap();
+        assert_eq!(l.format_count("coins", 1, &[]), "1 coin");
+        assert_eq!(l.format_count("coins", 3, &[]), "3 coins");
+        assert_eq!(l.format_count("coins", 0, &[]), "0 coins");
+        assert_eq!(l.format_count("left", 2, &[("total", "5")]), "2 left of 5");
+        l.set_language("tr");
+        assert_eq!(l.format_count("coins", 1, &[]), "1 altın");
+        assert_eq!(l.format_count("coins", 4, &[]), "4 altın");
+        assert!(l.missing().is_empty(), "probing the forms reported them missing: {:?}", l.missing());
+        assert_eq!(LocalizedText::new("coins").with_count(2).resolve(&l), "2 altın");
     }
 
     #[test]

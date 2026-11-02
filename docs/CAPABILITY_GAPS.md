@@ -1112,7 +1112,12 @@ mouse, the keyboard and a gamepad. Three of its four buttons were impossible:
   everything on the next frame. Tested on the lookup chain, placeholders, a refused table, tag
   normalisation and the draw-time resolution; a guard fails if the draw loop stops asking. `menu`
   is bilingual with a language button, and opens in the system's language (checked by screenshot
-  under `LANG=en_US` and `tr_TR`). Not yet: plurals, right-to-left text.
+  under `LANG=en_US` and `tr_TR`). Plurals since 2026-11-03: `format_count(key, n, args)` and
+  `LocalizedText::with_count` pick `key.one` for 1 and `key.other` otherwise, the forms always from
+  **one** language (the current one if it has either, else the fallback — mixing them turned a
+  Turkish 1 into the English "1 coin" in the first draft); Turkish writes only `other`, since the
+  noun stays singular after a number. Two forms only — Russian, Arabic and Polish need CLDR's full
+  rules, not implemented. Not yet: right-to-left text.
 
 - ~~**No typed-out text.**~~ **Closed 2026-11-03.** Dialogue and announcements had no way to
   appear a character at a time. `Typewriter` (in the prelude) beside a `Text`: the label draws the

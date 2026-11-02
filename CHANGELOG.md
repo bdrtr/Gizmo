@@ -114,6 +114,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - **`MeshSource("cylinder")` and `"cone"`**, sized like their colliders, and
     `AssetManager::PRIMITIVE_MESH_KEYS` as the one list of primitive keys (the studio's
     missing-asset check now uses it instead of its own copy).
+- **Plurals: `Locale::format_count` and `LocalizedText::with_count`** — `key.one` / `key.other` by
+  the count, the forms from one language only.
 - **`Typewriter`**: a `Text` shown a character at a time (its localized string too), restarting on
   a new string; `skip()`, `just_finished()`. `menu`'s announcements use it.
 - **Touch gestures: `Input::pinch`, `two_finger_pan`, `swipe`.** `kale` zooms with a pinch (or the
