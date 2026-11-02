@@ -80,16 +80,9 @@ pub fn run_asset_loading_system(
     // Eksik Mesh'leri yükle ve world'e ekle
     for (id, mesh_src) in missing_meshes {
         if let Some(entity) = world.get_entity(id) {
-            let mesh = if mesh_src == "inverted_cube" {
-                AssetManager::create_inverted_cube(device)
-            } else if mesh_src == "plane" {
-                AssetManager::create_plane(device, 200.0)
-            } else if mesh_src == "standard_cube" {
-                AssetManager::create_cube(device)
-            } else if mesh_src == "sphere" {
-                AssetManager::create_sphere(device, 1.0, 16, 16)
-            } else if mesh_src == "sprite_quad" {
-                AssetManager::create_sprite_quad(device, 1.0, 1.0)
+            // A built-in primitive is uploaded once and shared by every entity that names it.
+            let mesh = if let Some(primitive) = asset_manager.primitive_mesh(device, &mesh_src) {
+                primitive
             } else if mesh_src.starts_with("gltf_mesh_") {
                 if let Some(cached) = asset_manager.get_cached_mesh(&mesh_src) {
                     cached
@@ -217,6 +210,24 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    /// **Built-in primitives go through the shared cache, not a fresh upload per entity.** A
+    /// source-shape guard for the same reason as the one below — the loader needs a material
+    /// layout to run at all; `AssetManager::primitive_mesh`'s own GPU test covers the sharing.
+    #[test]
+    fn primitive_keys_are_loaded_through_the_shared_cache() {
+        let code: String = code_only(include_str!("asset_loading.rs"))
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap_or("")
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
+        assert!(code.contains("asset_manager.primitive_mesh(device,&mesh_src)"), "the loader no longer asks the primitive cache");
+        for direct in ["AssetManager::create_sphere(", "AssetManager::create_cube(", "AssetManager::create_plane("] {
+            assert!(!code.contains(direct), "the loader builds `{direct}..)` per entity again");
+        }
     }
 
     /// **This system must consult `MaterialDesc` before building a material from a source.**

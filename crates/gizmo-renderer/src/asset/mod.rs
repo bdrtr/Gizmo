@@ -566,6 +566,27 @@ impl AssetManager {
         }
     }
 
+    /// The built-in primitive a [`MeshSource`](gizmo_core::component::MeshSource) key names —
+    /// `"standard_cube"`, `"inverted_cube"`, `"plane"`, `"sphere"`, `"sprite_quad"` — uploaded
+    /// **once** and shared, or `None` for any other key.
+    ///
+    /// Before this the loader built a fresh mesh for every entity that asked: a hundred
+    /// `MeshSource("sphere")` entities were a hundred identical vertex buffers. The cache key is
+    /// `primitive/<key>`, the prefix [`garbage_collect`](Self::garbage_collect) already kept alive
+    /// — it had been written for a primitive cache that nothing filled.
+    pub fn primitive_mesh(&mut self, device: &wgpu::Device, key: &str) -> Option<Mesh> {
+        let build: fn(&wgpu::Device) -> Mesh = match key {
+            "standard_cube" => Self::create_cube,
+            "inverted_cube" => Self::create_inverted_cube,
+            "plane" => |d| Self::create_plane(d, 200.0),
+            "sphere" => |d| Self::create_sphere(d, 1.0, 16, 16),
+            "sprite_quad" => |d| Self::create_sprite_quad(d, 1.0, 1.0),
+            _ => return None,
+        };
+        let cache_key = format!("primitive/{key}");
+        Some(self.mesh_cache.entry(cache_key).or_insert_with(|| build(device)).clone())
+    }
+
     /// Return a cached mesh by its source ID without triggering a load.
     pub fn get_cached_mesh(&self, source_id: &str) -> Option<Mesh> {
         self.mesh_cache.get(source_id).cloned()
@@ -978,6 +999,37 @@ mod scan_does_not_write_tests {
                  (mints), called by whoever actually wants it."
             );
         }
+    }
+
+    /// A primitive key uploads once: the second request is the same vertex buffer, a different
+    /// primitive is a different one, an unknown key is not a primitive, and collection keeps the
+    /// cached one alive with no entity holding it.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_primitive_key_uploads_once_and_survives_collection() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        pollster::block_on(async {
+            let Some((device, _queue)) = crate::test_gpu::headless_device().await else {
+                eprintln!("skipping: no usable GPU adapter");
+                return;
+            };
+            let mut m = AssetManager::new();
+            let a = m.primitive_mesh(&device, "sphere").expect("sphere is a primitive");
+            let b = m.primitive_mesh(&device, "sphere").expect("sphere is a primitive");
+            assert!(std::sync::Arc::ptr_eq(&a.vbuf, &b.vbuf), "two requests uploaded two spheres");
+            let cube = m.primitive_mesh(&device, "standard_cube").expect("standard_cube is a primitive");
+            assert!(!std::sync::Arc::ptr_eq(&a.vbuf, &cube.vbuf), "the cube came back as the sphere");
+            assert!(m.primitive_mesh(&device, "demo/assets/tree.obj").is_none());
+
+            let first = std::sync::Arc::downgrade(&a.vbuf);
+            drop((a, b, cube));
+            m.garbage_collect();
+            let again = m.primitive_mesh(&device, "sphere").expect("sphere is a primitive");
+            assert!(
+                first.upgrade().is_some_and(|f| std::sync::Arc::ptr_eq(&f, &again.vbuf)),
+                "collection dropped the cached primitive, so the next entity uploads it again"
+            );
+        });
     }
 
     /// A freshly constructed manager knows about nothing.
