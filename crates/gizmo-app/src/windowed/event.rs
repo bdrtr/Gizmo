@@ -519,6 +519,14 @@ impl<State: 'static> App<State> {
                                 event: kb_event, ..
                             } => {
                                 let codes_to_press = Self::key_codes_for(kb_event);
+                                // The text the press wrote, as the layout produced it — for name
+                                // fields and the like (`Input::typed_text`). Not while egui owns
+                                // the keyboard, for the same reason as the key presses below.
+                                if kb_event.state == winit::event::ElementState::Pressed && !consumes_input {
+                                    if let Some(text) = kb_event.text.as_ref() {
+                                        self.input.on_text(text);
+                                    }
+                                }
 
                                 for code in codes_to_press {
                                     if kb_event.state == winit::event::ElementState::Pressed {

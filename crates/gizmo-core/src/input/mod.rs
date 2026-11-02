@@ -84,6 +84,11 @@ pub struct Input {
     /// See [`crate::input::rumble`] for the three ways treating it as state would go wrong.
     #[serde(skip)]
     rumble_queue: Vec<RumbleRequest>,
+
+    /// The text typed this frame — characters, in order, as the keyboard layout produced them.
+    /// `#[serde(default)]` so replays recorded before it load (as "nothing typed").
+    #[serde(default)]
+    typed: String,
 }
 
 impl Input {
@@ -108,6 +113,7 @@ impl Input {
             mouse_scroll_delta: 0.0,
             gamepads: Gamepads::new(),
             rumble_queue: Vec::new(),
+            typed: String::new(),
         }
     }
 
@@ -136,11 +142,32 @@ impl Input {
         self.mouse_buttons_just_released.clear();
         self.mouse_delta = (0.0, 0.0);
         self.mouse_scroll_delta = 0.0;
+        self.typed.clear();
         // Gamepad buttons roll the same way; axes additionally keep this frame's values as
         // the "previous" ones, which is what lets a stick report an edge (see
         // `Gamepad::axis_previous`). A pad unplugged during the frame that just ended is
         // dropped here, one frame after its release edges were readable.
         self.gamepads.begin_frame();
+    }
+
+    // ==================== METİN GİRDİSİ ====================
+
+    /// Records text the keyboard produced this frame — what the platform layer calls with each
+    /// key press's text. Control characters (Backspace, Enter, Tab, Escape, Delete…) are dropped:
+    /// they are keys, read through [`is_key_just_pressed`](Self::is_key_just_pressed), not text.
+    pub fn on_text(&mut self, text: &str) {
+        self.typed.extend(text.chars().filter(|c| !c.is_control()));
+    }
+
+    /// The text typed this frame, in order — `"ş"` on a Turkish layout, `"A"` with Shift held,
+    /// one character per key repeat. Empty when nothing was typed.
+    ///
+    /// Key codes say which physical key went down; this says what it **wrote**, which is the
+    /// question a name field, a chat box or a console asks. Before this the engine had no text
+    /// input at all: a game could read `KeyA` but not tell `a` from `A`, and could not read `ş`.
+    #[must_use]
+    pub fn typed_text(&self) -> &str {
+        &self.typed
     }
 
     // ==================== TUŞ GİRDİSİ ====================
@@ -470,6 +497,21 @@ pub use rumble::RumbleRequest;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Typed text accumulates in order within a frame, drops control characters, keeps
+    /// non-ASCII letters, and is gone next frame.
+    #[test]
+    fn typed_text_is_this_frames_characters() {
+        let mut input = Input::new();
+        input.on_text("A");
+        input.on_text("ş");
+        input.on_text("\u{8}"); // Backspace
+        input.on_text("\r"); // Enter
+        input.on_text("1");
+        assert_eq!(input.typed_text(), "Aş1");
+        input.begin_frame();
+        assert_eq!(input.typed_text(), "");
+    }
 
     /// A held key released and re-pressed within the SAME frame must STAY held.
     /// The release defers removal to begin_frame (fast-tap protection); without
