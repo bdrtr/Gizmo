@@ -44,7 +44,9 @@ pub fn execute_render_pipeline(
     //
     // Tweens are advanced first, on the animation clock — the game path does the same — so the
     // transform pass picks up where they put things this frame.
-    gizmo::renderer::tween::tween_system(world, crate::systems::simulation::animation_delta(world));
+    let tween_dt = crate::systems::simulation::animation_delta(world);
+    gizmo::renderer::tween::tween_system(world, tween_dt);
+    gizmo::renderer::components::color_tween_system(world, tween_dt);
     gizmo::systems::render::ensure_global_transforms(world);
 
     // `MaterialDesc` → `Material` and back, the same pair the game path runs and for the same

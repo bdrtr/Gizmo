@@ -15,6 +15,8 @@ pub mod light;
 pub mod material;
 /// Meshes and their per-entity render settings.
 pub mod mesh;
+/// A colour eased to a target — [`ColorTween`](color_tween::ColorTween).
+pub mod color_tween;
 /// Geometry made in code, as data the draw path uploads — [`MeshData`](mesh_data::MeshData).
 pub mod mesh_data;
 /// Everything else an entity can carry: terrain, LOD groups, particle emitters, render targets,
@@ -38,6 +40,7 @@ pub use light::*;
 pub use material::*;
 pub use mesh::*;
 pub use mesh_data::MeshData;
+pub use color_tween::{color_tween_system, ColorTween};
 pub use misc::*;
 pub use post_process::*;
 pub use reflection_probe::*;

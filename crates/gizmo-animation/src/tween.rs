@@ -142,6 +142,31 @@ pub enum Repeat {
     PingPong,
 }
 
+impl Repeat {
+    /// Where along one pass a tween `elapsed` seconds into a `duration`-second run is, `0..=1`
+    /// before easing, and whether a [`Once`](Self::Once) run has reached its end. A zero
+    /// duration is at its end at once.
+    ///
+    /// Shared by every kind of tween (this crate's [`Tween`], the renderer's colour tween), so
+    /// they loop and ping-pong identically.
+    #[must_use]
+    pub fn position(self, elapsed: f32, duration: f32) -> (f32, bool) {
+        if duration <= 0.0 {
+            return (1.0, self == Self::Once);
+        }
+        let pass = elapsed / duration;
+        let t = match self {
+            Self::Once => pass.min(1.0),
+            Self::Loop => pass.fract(),
+            Self::PingPong => {
+                let p = pass % 2.0;
+                if p <= 1.0 { p } else { 2.0 - p }
+            }
+        };
+        (t, self == Self::Once && t >= 1.0)
+    }
+}
+
 /// The parts of a `Transform` a tween drives. A part not set is left alone, so a tween of the
 /// position does not fight an animation of the rotation.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -262,22 +287,8 @@ impl Tween {
         });
         self.elapsed += dt.max(0.0);
         // Where along the path, before easing.
-        let t = if self.duration <= 0.0 {
-            1.0
-        } else {
-            let pass = self.elapsed / self.duration;
-            match self.repeat {
-                Repeat::Once => pass.min(1.0),
-                Repeat::Loop => pass.fract(),
-                Repeat::PingPong => {
-                    let p = pass % 2.0;
-                    if p <= 1.0 { p } else { 2.0 - p }
-                }
-            }
-        };
-        if self.repeat == Repeat::Once && t >= 1.0 {
-            self.finished = true;
-        }
+        let (t, finished) = self.repeat.position(self.elapsed, self.duration);
+        self.finished = finished;
         let e = self.ease.apply(t);
         // At the end of a single pass, land exactly — no float residue from the lerp.
         let exact = self.finished;
