@@ -21,6 +21,9 @@
 //!   times the gains that apply; nothing multiplies into a sink and nothing has to be undone. See
 //!   the module's own docs for the measurement that shape came from.
 //! - [`AudioError`] — the error type returned when loading or playing sounds fails.
+//! - [`synth`] — sound made from numbers: a PCM → WAV encoder and [`synth::Blip`], a one-line
+//!   effect generator, for a game with no audio files. Loaded with
+//!   [`AudioManager::load_samples`] or, for a blip, `load_sound_bytes(name, blip.wav())`.
 //!
 //! Sounds are decoded from in-memory byte buffers (loaded once via
 //! [`AudioManager::load_sound`]) to avoid per-play disk I/O. Spatial playback
@@ -31,6 +34,7 @@
 mod filter;
 mod mixer;
 pub use mixer::Mixer;
+pub mod synth;
 
 use filter::{Muffle, MuffleControl};
 
@@ -365,6 +369,16 @@ impl AudioManager {
     /// audio in the binary.
     pub fn load_sound_bytes(&mut self, name: &str, bytes: impl Into<Arc<[u8]>>) {
         self.sound_buffers.insert(name.to_string(), bytes.into());
+    }
+
+    /// Registers mono `samples` in `[-1, 1]` at `sample_rate` as a sound called `name` — sound
+    /// generated in code rather than read from a file.
+    ///
+    /// Encoded as a WAV ([`synth::wav_from_samples`]) and stored like
+    /// [`load_sound_bytes`](Self::load_sound_bytes) stores a file, so it plays through the same
+    /// decoder and the same sinks as everything else.
+    pub fn load_samples(&mut self, name: &str, samples: &[f32], sample_rate: u32) {
+        self.load_sound_bytes(name, synth::wav_from_samples(samples, sample_rate));
     }
 
     /// Per-frame housekeeping: collects the sounds that have finished, then re-prices every live

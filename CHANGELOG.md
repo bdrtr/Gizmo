@@ -88,6 +88,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   cached under `primitive/<key>` — the prefix `garbage_collect` already kept alive for a cache
   nothing filled. GPU-tested (same buffer twice, survives collection); disabling the cache fails
   it.
+- **Sound without sound files: `gizmo_audio::synth`.** `wav_from_samples(samples, rate)` encodes
+  mono PCM as a 16-bit WAV (clamped, non-finite as silence); `AudioManager::load_samples` registers
+  generated PCM; `Blip::new(wave, hz, seconds).with_slide(end_hz).with_volume(v)` renders a short
+  effect — sine, square, triangle, saw or seeded noise, an exponential pitch slide, an attack and a
+  linear decay to silence, so it neither starts nor ends on a click — and `.wav()` hands it to
+  `load_sound_bytes`. It plays through the same decoder as a file. Tested by decoding the encoder's
+  output with rodio sample for sample, and on length, peak, clicks, the slide's pitch ratio and
+  noise reproducibility; five mutations (no slide, no decay, stuck noise, no clamp, wrong rate in
+  the header) each fail a test. `kristal_avcisi` makes its four effects this way.
 - **`kristal_avcisi` — a complete 3D game.** Top-down arena, emissive additive crystals, chasing
   hunters, lives, a clock, Menu → Playing → Over on `add_state` / `on_enter` / `DespawnOnExit`,
   gameplay as one `.chain()`, rect lights, hand-set fog, a camera clear colour. What it ran into

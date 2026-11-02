@@ -858,6 +858,14 @@ on the driven state machine with `DespawnOnExit`. It works on the first build; w
   only `MeshSource` + `MaterialDesc` + `MeshRenderer`; the game's `Kit` is gone. Procedural meshes
   (a sphere of radius 0.37, an extrusion) still need the device — scale a primitive, or build in
   setup.
+- ~~**No sound without sound files.**~~ **Closed 2026-11-02.** `AudioManager` played files or a
+  file's bytes and nothing else, the repository carries no audio assets, and the only WAV encoder
+  in it was a test helper — so the first version of the game was silent. `gizmo_audio::synth`:
+  `wav_from_samples` (16-bit mono PCM, clamped, NaN as silence), `AudioManager::load_samples` for
+  generated PCM, and `Blip` — one oscillator (sine, square, triangle, saw, seeded noise), an
+  exponential pitch slide, an attack and a linear decay to silence. Generated sound goes through
+  the same decoder as a file; a test decodes the encoder's output with rodio and compares it
+  sample for sample. The game makes its four effects this way.
 - ~~**No RNG.**~~ **Closed 2026-11-02.** The game carried a four-line xorshift, as did
   `spotlight`, `parallel_query`, `change_detection` and the particle emitter; `showcase`,
   `rpg_demo` and `hill_climb` used `rand` directly. `gizmo_math::Rng` (in the prelude) is a seeded

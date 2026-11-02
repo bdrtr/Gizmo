@@ -39,12 +39,19 @@
 //! - **Rastgelelik yoktu.** Oyun dört satırlık bir xorshift taşıyordu — `spotlight`,
 //!   `parallel_query`, `change_detection` ve parçacık yayıcısı gibi. **Kapatıldı:**
 //!   `gizmo_math::Rng` (prelude'da), tohumlu SplitMix64; oyun onu kaynak olarak tutuyor.
+//! - **Ses dosyası yoksa ses yoktu.** `AudioManager` yalnızca dosya ya da dosya baytı
+//!   çalıyordu; repo ses varlığı taşımıyor, ilk sürüm sessizdi. **Kapatıldı:**
+//!   `gizmo::audio::synth` — `Blip::new(Wave::Square, 660.0, 0.12).with_slide(1320.0).wav()` bir
+//!   toplama sesi, `AudioManager::load_samples` kodda üretilmiş PCM için. Dört efekt de burada
+//!   üretiliyor; ses cihazı yoksa oyun sessiz sürüyor.
 //! - **Fontsuz metin.** Repo font taşımıyor; `kule_yikici` gibi sistem yolları deneniyor.
 //!
 //! ## Ortam değişkenleri
 //!   * `GIZMO_FONT=<yol>` — HUD fontu
 //!   * `KRISTAL_OYNA=1` — menüyü atlayıp doğrudan oyunla aç (ekran görüntüsü için)
 
+use gizmo::audio::synth::{Blip, Wave};
+use gizmo::audio::AudioManager;
 use gizmo::core::input::{Input, MoveKeys};
 use gizmo::core::query::{Mut, Query, With};
 use gizmo::core::system::{Phase, Res, ResMut};
@@ -113,6 +120,7 @@ fn main() {
         .on_enter(Screen::Menu, |world| banner(world, "KRİSTAL AVCISI\nEnter ile başla", [0.6, 0.85, 1.0]))
         .on_enter(Screen::Playing, start_round)
         .on_enter(Screen::Over, |world| {
+            play(world.get_resource_mut::<AudioManager>().as_deref_mut(), "bitis");
             let (score, best) = world.get_resource::<Run>().map(|r| (r.score, r.best)).unwrap_or((0, 0));
             banner(world, &format!("Oyun bitti — {score} kristal\nen iyi {best}\nEnter ile menü"), [1.0, 0.75, 0.3]);
         })
@@ -178,6 +186,14 @@ fn main() {
             scene.world.insert_resource(Hud { status, banner: banner_text });
             scene.world.insert_resource(Run { score: 0, lives: 3, time_left: ROUND_SECONDS, grace: 0.0, best: 0 });
             scene.world.insert_resource(Rng::new(0x9E37_79B9));
+            // Sesler dosyadan değil sayılardan. Cihaz yoksa kaynak hiç konmuyor, `play` susuyor.
+            if let Ok(mut audio) = AudioManager::new() {
+                audio.load_sound_bytes("kristal", Blip::new(Wave::Square, 660.0, 0.12).with_slide(1320.0).with_volume(0.25).wav());
+                audio.load_sound_bytes("yakalandi", Blip::new(Wave::Noise, 1800.0, 0.35).with_slide(120.0).with_volume(0.5).wav());
+                audio.load_sound_bytes("basla", Blip::new(Wave::Sine, 440.0, 0.25).with_slide(880.0).with_volume(0.35).wav());
+                audio.load_sound_bytes("bitis", Blip::new(Wave::Saw, 330.0, 0.8).with_slide(80.0).with_volume(0.3).wav());
+                scene.world.insert_resource(audio);
+            }
         })
         // Menü ve bitiş ekranı: Enter.
         .add_update_system(press_enter.in_phase(Phase::Update))
@@ -196,6 +212,7 @@ fn main() {
 /// Oyuna giriş: oyuncuyu, kristalleri ve ilk avcıyı doğur; turu sıfırla. Hepsi
 /// `DespawnOnExit(Playing)` taşıyor — bitişte motor kendisi topluyor.
 fn start_round(world: &mut World) {
+    play(world.get_resource_mut::<AudioManager>().as_deref_mut(), "basla");
     let mut rng = world.get_resource::<Rng>().map(|r| r.clone()).unwrap_or_else(|| Rng::new(1));
     banner(world, "", [1.0; 3]);
     let best = world.get_resource::<Run>().map(|r| r.best).unwrap_or(0);
@@ -260,6 +277,13 @@ fn hunter(at: Vec3) -> impl gizmo::core::component::Bundle + Send + Sync + 'stat
     )
 }
 
+/// Bir efekt çal — ses cihazı yoksa hiçbir şey yapma.
+fn play(audio: Option<&mut AudioManager>, name: &str) {
+    if let Some(audio) = audio {
+        let _ = audio.play(name);
+    }
+}
+
 fn banner(world: &mut World, text: &str, colour: [f32; 3]) {
     let Some(hud) = world.get_resource::<Hud>().map(|h| *h) else { return };
     let mut texts = world.borrow_mut::<Text>();
@@ -322,6 +346,7 @@ fn collect(
     mut commands: gizmo::core::Commands,
     time: Res<Time>,
     state: Res<State<Screen>>,
+    mut audio: Option<ResMut<AudioManager>>,
 ) {
     if !playing(&state) {
         return;
@@ -332,6 +357,7 @@ fn collect(
         tf.rotation = spin * tf.rotation;
         if tf.position.distance(player) < 0.9 {
             run.score += 1;
+            play(audio.as_deref_mut(), "kristal");
             tf.position = arena_point(&mut rng);
             let corner = Vec3::new(if rng.bool() { -1.0 } else { 1.0 }, 0.0, if rng.bool() { -1.0 } else { 1.0 })
                 * (ARENA - 1.5)
@@ -342,7 +368,14 @@ fn collect(
 }
 
 /// Bir avcıya yakalanmak can götürür; ardından kısa bir dokunulmazlık.
-fn get_caught(hunters: Query<(&Transform, With<Hunter>)>, players: Query<(&Transform, With<Player>)>, mut run: ResMut<Run>, mut state: ResMut<State<Screen>>, time: Res<Time>) {
+fn get_caught(
+    hunters: Query<(&Transform, With<Hunter>)>,
+    players: Query<(&Transform, With<Player>)>,
+    mut run: ResMut<Run>,
+    mut state: ResMut<State<Screen>>,
+    time: Res<Time>,
+    mut audio: Option<ResMut<AudioManager>>,
+) {
     if *state.get() != Screen::Playing {
         return;
     }
@@ -352,6 +385,9 @@ fn get_caught(hunters: Query<(&Transform, With<Hunter>)>, players: Query<(&Trans
     if caught && run.grace == 0.0 {
         run.lives = run.lives.saturating_sub(1);
         run.grace = 1.5;
+        if run.lives > 0 {
+            play(audio.as_deref_mut(), "yakalandi");
+        }
         if run.lives == 0 {
             run.best = run.best.max(run.score);
             state.set(Screen::Over);
