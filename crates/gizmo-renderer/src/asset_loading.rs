@@ -27,6 +27,8 @@ pub fn run_asset_loading_system(
     asset_manager: &mut AssetManager,
 ) {
     let mut missing_meshes = Vec::new();
+    // Geometry made in code (`MeshData`) waiting for its upload.
+    let mut missing_data: Vec<(u32, crate::components::MeshData)> = Vec::new();
     let mut missing_materials = Vec::new();
     // Entities whose material a DESCRIPTION will build (see this function's docs) but whose
     // `MeshRenderer` is still this system's to add.
@@ -36,6 +38,7 @@ pub fn run_asset_loading_system(
     {
         let mesh_sources = world.borrow::<MeshSource>();
         let meshes = world.borrow::<Mesh>();
+        let mesh_data = world.borrow::<crate::components::MeshData>();
 
         let material_sources = world.borrow::<MaterialSource>();
         let materials = world.borrow::<Material>();
@@ -44,8 +47,17 @@ pub fn run_asset_loading_system(
         for e in world.iter_alive_entities() {
             let id = e.id();
 
-            // MeshSource var ama GPU Mesh yok mu?
-            if let Some(src) = mesh_sources.get(id) {
+            // Data made in code, not uploaded yet. A `MeshSource` on the same entity loses: the
+            // data is the more specific of the two.
+            let data = mesh_data.get(id);
+            if let Some(data) = data {
+                if meshes.get(id).is_none() {
+                    missing_data.push((id, data.clone()));
+                }
+            }
+
+            // MeshSource var ama GPU Mesh yok mu? (Not when data is supplying the mesh.)
+            if let Some(src) = mesh_sources.get(id).filter(|_| data.is_none()) {
                 if meshes.get(id).is_none() {
                     missing_meshes.push((id, src.0.clone()));
                 }
@@ -72,6 +84,12 @@ pub fn run_asset_loading_system(
             materials = missing_materials.len(),
             "[AssetLoading] uploading missing GPU components"
         );
+    }
+
+    for (id, data) in missing_data {
+        if let (Some(entity), Some(mesh)) = (world.get_entity(id), asset_manager.mesh_from_data(device, &data)) {
+            world.add_component(entity, mesh);
+        }
     }
 
     // Default beyaz doku oluştur (Texture yüklenemezse veya yoksa kullanılır)

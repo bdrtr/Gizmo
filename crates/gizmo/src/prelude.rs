@@ -66,8 +66,8 @@ pub use gizmo_math::Rng;
 pub use crate::renderer::asset::AssetManager;
 #[cfg(feature = "render")]
 pub use crate::renderer::components::{
-    BlendMode, Camera, DirectionalLight, LightRole, Material, MaterialDesc, Mesh, MeshRenderer, PointLight,
-    RectLight, SpotLight,
+    BlendMode, Camera, DirectionalLight, LightRole, Material, MaterialDesc, Mesh, MeshData, MeshRenderer,
+    PointLight, RectLight, SpotLight,
 };
 #[cfg(feature = "render")]
 pub use crate::renderer::RenderContext;

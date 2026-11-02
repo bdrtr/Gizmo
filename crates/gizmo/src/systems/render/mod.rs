@@ -2416,6 +2416,66 @@ mod golden_render_tests {
         });
     }
 
+    /// Geometry made in code — `MeshData`, no device in sight — is drawn once the loader has run,
+    /// like a `MeshSource` primitive is.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn mesh_data_made_without_a_gpu_is_drawn_once_the_loader_has_run() {
+        use crate::renderer::components::{MaterialDesc, MeshData};
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available()) {
+            eprintln!("skipping: no GPU adapter");
+            return;
+        }
+        if pollster::block_on(Renderer::headless_adapter_is_software()) {
+            eprintln!("skipping: software adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            let mut world = World::new();
+            // A square extruded into a slab facing the camera on −X.
+            let square = [
+                crate::math::Vec2::new(-1.0, -1.0),
+                crate::math::Vec2::new(1.0, -1.0),
+                crate::math::Vec2::new(1.0, 1.0),
+                crate::math::Vec2::new(-1.0, 1.0),
+            ];
+            world.spawn_bundle((
+                Transform::new(Vec3::ZERO).with_rotation(crate::math::Quat::from_rotation_y(std::f32::consts::FRAC_PI_2)),
+                GlobalTransform::default(),
+                MeshData::extrude(&square, 0.5).unwrap(),
+                MaterialDesc::new().with_unlit(Vec4::new(0.1, 0.9, 0.1, 1.0)),
+                MeshRenderer::new(),
+            ));
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(-6.0, 0.0, 0.0),
+                yaw: 0.0,
+                pitch: 0.0,
+                primary: true,
+                ..Default::default()
+            });
+            world.spawn_bundle(DirectionalLightBundle::default());
+            let centre_is_green = |frame: &[u8]| {
+                let i = (64 * 128 + 64) * 4;
+                let (r, g, b) = (frame[i] as i32, frame[i + 1] as i32, frame[i + 2] as i32);
+                g > r + 60 && g > b + 60
+            };
+            assert!(!centre_is_green(&render_world(&mut renderer, &mut world).await), "drawn before the upload?");
+            let mut assets = AssetManager::new();
+            crate::renderer::asset_loading::run_asset_loading_system(
+                &mut world,
+                &renderer.device,
+                &renderer.queue,
+                &renderer.scene.texture_bind_group_layout,
+                &mut assets,
+            );
+            let after = render_world(&mut renderer, &mut world).await;
+            let i = (64 * 128 + 64) * 4;
+            assert!(centre_is_green(&after), "the slab is not drawn — centre pixel {:?}", &after[i..i + 4]);
+        });
+    }
+
     /// The cube of [`render_frame_with_mesh`], with the camera inside it, so every visible
     /// triangle is a back face.
     async fn render_from_inside_a_cube(double_sided: bool) -> Vec<u8> {

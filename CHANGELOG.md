@@ -84,6 +84,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   group, so the two cannot drift. Spawned beside `MeshSource` and `MeshRenderer`, the draw path
   builds the mesh and the material the next frame — a GPU test draws such an entity and fails
   when the description is not resolved. `MaterialDesc` and `MeshSource` are in the prelude.
+- **Geometry made in code, without a GPU: `MeshData`.** A triangle list (`MeshData::new`, or
+  `extrude`, `sweep`, `sphere`, `cylinder`, `cone`, `capsule`) the asset loader uploads the first
+  frame its entity has no `Mesh` — so an `on_enter` hook or a scheduled system can spawn an
+  extrusion or a generated chunk, not only a `MeshSource` primitive. Clones share one upload (keyed
+  on the allocation; `AssetManager::mesh_from_data`), and `garbage_collect` drops uploads nobody
+  draws. GPU-tested end to end — not drawn before the loader, drawn after; disabling the upload
+  fails it — and for sharing. In the prelude. `kristal_avcisi`'s crystals are an extruded star.
 - **Built-in primitive meshes are uploaded once: `AssetManager::primitive_mesh`.** The asset
   loader built a fresh mesh for every `MeshSource("sphere")` (or cube, plane, …) entity, so a
   hundred described spheres were a hundred identical vertex buffers. Each primitive key is now

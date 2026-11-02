@@ -234,6 +234,10 @@ pub(crate) struct MaterialDefaults {
 /// buffers rather than a second copy.
 pub struct AssetManager {
     mesh_cache: std::collections::HashMap<String, Mesh>,
+    /// Uploads of [`MeshData`](crate::components::MeshData), keyed by the data's allocation. The
+    /// held clone keeps that allocation alive, so its address cannot be reused by other data
+    /// while the entry exists.
+    data_meshes: std::collections::HashMap<usize, (crate::components::MeshData, Mesh)>,
     texture_cache: std::collections::HashMap<String, Arc<wgpu::BindGroup>>,
     /// Lazily created magenta octahedron used while async loads are in flight.
     placeholder_mesh: Option<Mesh>,
@@ -274,6 +278,7 @@ impl AssetManager {
     pub fn new() -> Self {
         Self {
             mesh_cache: std::collections::HashMap::new(),
+            data_meshes: std::collections::HashMap::new(),
             texture_cache: std::collections::HashMap::new(),
             placeholder_mesh: None,
             material_defaults: None,
@@ -295,6 +300,11 @@ impl AssetManager {
             std::sync::Arc::strong_count(&mesh.vbuf) > 1
         });
         freed += initial_meshes - self.mesh_cache.len();
+
+        // An upload of mesh data nobody draws any more: the entry's own `Mesh` is the last handle.
+        let initial_data = self.data_meshes.len();
+        self.data_meshes.retain(|_, (_, mesh)| std::sync::Arc::strong_count(&mesh.vbuf) > 1);
+        freed += initial_data - self.data_meshes.len();
 
         let initial_textures = self.texture_cache.len();
         self.texture_cache.retain(|key, tex| {
@@ -564,6 +574,22 @@ impl AssetManager {
         } else {
             Ok(Self::normalize_path(source))
         }
+    }
+
+    /// `data` on the GPU — uploaded the first time, shared by every clone after (see
+    /// [`MeshData`](crate::components::MeshData)). `None` for empty data.
+    pub fn mesh_from_data(&mut self, device: &wgpu::Device, data: &crate::components::MeshData) -> Option<Mesh> {
+        if data.vertices().is_empty() {
+            return None;
+        }
+        if let Some((held, mesh)) = self.data_meshes.get(&data.key()) {
+            if held.same_allocation(data) {
+                return Some(mesh.clone());
+            }
+        }
+        let mesh = Mesh::new_indexed(device, data.vertices(), Vec3::ZERO, format!("mesh_data_{}", data.vertices().len()));
+        self.data_meshes.insert(data.key(), (data.clone(), mesh.clone()));
+        Some(mesh)
     }
 
     /// Every key [`primitive_mesh`](Self::primitive_mesh) builds — the one list, so a host that
@@ -1047,6 +1073,30 @@ mod scan_does_not_write_tests {
                 first.upgrade().is_some_and(|f| std::sync::Arc::ptr_eq(&f, &again.vbuf)),
                 "collection dropped the cached primitive, so the next entity uploads it again"
             );
+        });
+    }
+
+    /// Clones of one `MeshData` share one upload; a separate build is its own; collection drops
+    /// an upload nobody draws.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn mesh_data_clones_share_one_upload() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        pollster::block_on(async {
+            let Some((device, _queue)) = crate::test_gpu::headless_device().await else {
+                eprintln!("skipping: no usable GPU adapter");
+                return;
+            };
+            let mut m = AssetManager::new();
+            let data = crate::components::MeshData::cylinder(1.0, 2.0, 12);
+            let a = m.mesh_from_data(&device, &data).unwrap();
+            let b = m.mesh_from_data(&device, &data.clone()).unwrap();
+            assert!(std::sync::Arc::ptr_eq(&a.vbuf, &b.vbuf), "a clone uploaded again");
+            let other = m.mesh_from_data(&device, &crate::components::MeshData::cylinder(1.0, 2.0, 12)).unwrap();
+            assert!(!std::sync::Arc::ptr_eq(&a.vbuf, &other.vbuf));
+            assert!(m.mesh_from_data(&device, &crate::components::MeshData::new(Vec::new())).is_none());
+            drop((a, b, other));
+            assert_eq!(m.garbage_collect(), 2, "two uploads nobody draws");
         });
     }
 

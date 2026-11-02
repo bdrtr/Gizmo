@@ -39,6 +39,10 @@
 //! - **Rastgelelik yoktu.** Oyun dört satırlık bir xorshift taşıyordu — `spotlight`,
 //!   `parallel_query`, `change_detection` ve parçacık yayıcısı gibi. **Kapatıldı:**
 //!   `gizmo_math::Rng` (prelude'da), tohumlu SplitMix64; oyun onu kaynak olarak tutuyor.
+//! - **Kodla üretilmiş geometri hook'ta doğamıyordu.** `MeshSource` yalnızca hazır ilkelleri ve
+//!   dosyaları biliyordu; bir ekstrüzyon `Device` istiyordu. **Kapatıldı:** `MeshData` —
+//!   `MeshData::extrude(&yıldız, 0.5)` hook'ta kuruluyor, yükleyici bir sonraki kare GPU'ya
+//!   taşıyor, kopyalar tek yüklemeyi paylaşıyor. Kristaller artık yıldız.
 //! - **Ses dosyası yoksa ses yoktu.** `AudioManager` yalnızca dosya ya da dosya baytı
 //!   çalıyordu; repo ses varlığı taşımıyor, ilk sürüm sessizdi. **Kapatıldı:**
 //!   `gizmo::audio::synth` — `Blip::new(Wave::Square, 660.0, 0.12).with_slide(1320.0).wav()` bir
@@ -249,11 +253,29 @@ fn block(at: Vec3, half: Vec3, material: MaterialDesc) -> impl gizmo::core::comp
     )
 }
 
+/// Altı köşeli, kalınlaştırılmış bir yıldız — kodla üretilmiş geometri, GPU'suz. Bir kez
+/// kuruluyor; her kristal bir kopyasını taşıyor ve hepsi tek bir yüklemeyi paylaşıyor.
+fn crystal_shape() -> MeshData {
+    static SHAPE: std::sync::OnceLock<MeshData> = std::sync::OnceLock::new();
+    SHAPE
+        .get_or_init(|| {
+            let star: Vec<Vec2> = (0..12)
+                .map(|i| {
+                    let a = i as f32 * std::f32::consts::TAU / 12.0;
+                    let r = if i % 2 == 0 { 1.0 } else { 0.5 };
+                    Vec2::new(a.cos() * r, a.sin() * r)
+                })
+                .collect();
+            MeshData::extrude(&star, 0.5).expect("yıldız üçgenlenir")
+        })
+        .clone()
+}
+
 fn spawn_crystal(world: &mut World, at: Vec3) {
     world.spawn_bundle((
-        Transform::new(at).with_scale(Vec3::splat(0.3)),
+        Transform::new(at).with_scale(Vec3::splat(0.35)),
         GlobalTransform::default(),
-        MeshSource("standard_cube".into()),
+        crystal_shape(),
         MaterialDesc::new()
             .with_unlit(Vec4::new(0.3, 1.0, 0.8, 0.9))
             .with_emissive(Vec3::new(0.5, 2.0, 1.6))

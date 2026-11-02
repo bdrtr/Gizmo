@@ -858,9 +858,11 @@ on the driven state machine with `DespawnOnExit`. It works on the first build; w
   `with_*` builder `Material` has (one macro expanded on both, and `Material::new` is
   `MaterialDesc::default()` over a bind group), `AssetManager::primitive_mesh` uploads each
   primitive key once, and both types are in the prelude. A GPU test draws an entity spawned with
-  only `MeshSource` + `MaterialDesc` + `MeshRenderer`; the game's `Kit` is gone. Procedural meshes
-  (a sphere of radius 0.37, an extrusion) still need the device — scale a primitive, or build in
-  setup.
+  only `MeshSource` + `MaterialDesc` + `MeshRenderer`; the game's `Kit` is gone. **Geometry made in
+  code closed the same day:** `MeshData` — an extrusion, a sweep, a sphere of any radius, a terrain
+  chunk — is a triangle list the loader uploads like a `MeshSource`, clones sharing one upload
+  (GPU-tested: drawn after the loader, not before; clones share a buffer; collection drops
+  unused uploads). The game's crystals are an extruded star built in its enter hook.
 - ~~**A tuple is not a system parameter.**~~ **Closed 2026-11-02.** The game wrote
   `(time, state): (Res<Time>, Res<State<Screen>>)` — what a Bevy user writes first, and the way
   past the nine-parameter limit — and it did not compile; the only grouping was the named
