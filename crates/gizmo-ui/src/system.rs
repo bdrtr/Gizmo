@@ -5,6 +5,33 @@ use gizmo_core::component::{Children, Parent};
 use crate::components::{Style, Node};
 use crate::layout::UiContext;
 
+/// Where a root node goes in the window: the origin, unless it is
+/// [`PositionType::Absolute`](crate::components::PositionType::Absolute) — then its `left`/`top`
+/// (or, when those are `Auto`, its `right`/`bottom` measured from the far edge), in pixels or as a
+/// percentage of the window.
+///
+/// Before this an absolutely-positioned root ignored its `inset` and sat at the top-left like
+/// every other root, so a dialog or a HUD corner panel could not be placed (`ui_layout`'s window,
+/// 2026-11-02).
+fn root_origin(style: &Style, size: gizmo_math::Vec2, window: gizmo_math::Vec2) -> gizmo_math::Vec2 {
+    use crate::components::{PositionType, Val};
+    if style.position_type != PositionType::Absolute {
+        return gizmo_math::Vec2::ZERO;
+    }
+    let resolve = |v: Val, extent: f32| match v {
+        Val::Px(p) => Some(p),
+        Val::Percent(p) => Some(p / 100.0 * extent),
+        _ => None,
+    };
+    let axis = |near: Val, far: Val, extent: f32, own: f32| {
+        resolve(near, extent).or_else(|| resolve(far, extent).map(|f| extent - f - own)).unwrap_or(0.0)
+    };
+    gizmo_math::Vec2::new(
+        axis(style.inset.left, style.inset.right, window.x, size.x),
+        axis(style.inset.top, style.inset.bottom, window.y, size.y),
+    )
+}
+
 /// System that syncs UI entities into the layout tree, computes layout for each
 /// root, and writes the results back into the [`Node`] components.
 ///
@@ -120,8 +147,20 @@ pub fn ui_layout_system(
     //    started pruning: step 3 claims a shared child at PUSH time (shallowest reacher wins)
     //    while this walk dedups at POP time, so on `R.Children = [B, A]` with `A.Children = [B]`
     //    the mirror gives B to R and this walk would give B the origin of A.
-    let mut stack: Vec<(u32, gizmo_math::Vec2)> =
-        roots.iter().map(|&e| (e, gizmo_math::Vec2::ZERO)).collect();
+    // A root sits at the window's top-left — unless it is positioned absolutely, in which case
+    // its `inset` places it in the window (taffy always puts the root it lays out at the origin,
+    // so this is the one place that can).
+    let window_size = ctx.window_size;
+    let mut stack: Vec<(u32, gizmo_math::Vec2)> = roots
+        .iter()
+        .map(|&e| {
+            let origin = match (styles.get(e), ctx.relative_layout(e)) {
+                (Some(style), Some((size, _))) => root_origin(style, size, window_size),
+                _ => gizmo_math::Vec2::ZERO,
+            };
+            (e, origin)
+        })
+        .collect();
     while let Some((entity, parent_origin)) = stack.pop() {
         let Some((size, local)) = ctx.relative_layout(entity) else {
             continue;
@@ -229,6 +268,31 @@ mod tests {
         assert_vec2(n.size, 120.0, 80.0);
         // A root (no Parent) is laid out at the top-left of the available space.
         assert_vec2(n.position, 0.0, 0.0);
+    }
+
+    /// An absolutely-positioned root is placed by its inset — `left`/`top` in pixels or percent,
+    /// or `right`/`bottom` from the far edge — and a static root still sits at the origin.
+    #[test]
+    fn an_absolute_root_is_placed_by_its_inset() {
+        use crate::components::{PositionType, UiRect};
+        let (mut world, mut schedule) = make_world();
+        set_window(&mut world, 800.0, 600.0);
+        let spawn = |world: &mut World, inset: UiRect, position_type: PositionType| {
+            let e = world.spawn();
+            world.add_component(
+                e,
+                Style { position_type, inset, width: Val::Px(100.0), height: Val::Px(50.0), ..Default::default() },
+            );
+            world.add_component(e, Node::default());
+            e
+        };
+        let near = spawn(&mut world, UiRect { left: Val::Px(300.0), top: Val::Percent(10.0), right: Val::Auto, bottom: Val::Auto }, PositionType::Absolute);
+        let far = spawn(&mut world, UiRect { left: Val::Auto, top: Val::Auto, right: Val::Px(20.0), bottom: Val::Px(30.0) }, PositionType::Absolute);
+        let flow = spawn(&mut world, UiRect { left: Val::Px(300.0), top: Val::Px(300.0), right: Val::Auto, bottom: Val::Auto }, PositionType::Relative);
+        schedule.run(&mut world, 0.016);
+        assert_vec2(node_of(&world, near).position, 300.0, 60.0);
+        assert_vec2(node_of(&world, far).position, 800.0 - 20.0 - 100.0, 600.0 - 30.0 - 50.0);
+        assert_vec2(node_of(&world, flow).position, 0.0, 0.0);
     }
 
     #[test]
