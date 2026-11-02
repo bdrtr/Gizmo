@@ -114,6 +114,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - **`MeshSource("cylinder")` and `"cone"`**, sized like their colliders, and
     `AssetManager::PRIMITIVE_MESH_KEYS` as the one list of primitive keys (the studio's
     missing-asset check now uses it instead of its own copy).
+- **`Timer`** (`gizmo::core::Timer`, in the prelude). A once or repeating countdown ticked with
+  the frame's `dt`: `tick` returns how many periods the step crossed and keeps the remainder, so
+  a spawner's pace no longer depends on the frame rate the way the hand-written
+  `t -= dt; if t <= 0 { t = period }` it replaces in `balon` and `kale` did.
 - **UI scrolling: `gizmo::ui::Scroll`.** A node carrying it moves its children by its `offset`,
   clamped by the layout to how far they reach past its box (padding kept at both ends), and
   clips them like `ClipContent`; the mouse wheel scrolls the innermost one under the cursor by

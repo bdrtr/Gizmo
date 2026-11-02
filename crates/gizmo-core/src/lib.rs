@@ -60,6 +60,7 @@ pub mod registry;
 
 pub mod system;
 pub mod time;
+pub mod timer;
 pub mod window;
 pub mod world;
 
@@ -85,6 +86,7 @@ pub use system::{
     SystemParam,
 };
 pub use time::{PhysicsTime, Time};
+pub use timer::{Timer, TimerMode};
 pub use window::WindowInfo;
 pub use world::World;
 
@@ -124,7 +126,7 @@ pub mod prelude {
         IntoSystemConfig, IsHidden, IsDeleted, Local, Mut, Phase, PhysicsTime, PoolManager, Pooled,
         PrefabRequest,
         Query, ReadOnlyQuery, Res, ResMut, Schedule, StorageView, StorageViewMut, System,
-        SystemConfig, SystemParam, Time, WindowInfo, World,
+        SystemConfig, SystemParam, Time, Timer, TimerMode, WindowInfo, World,
     };
     #[cfg(feature = "reflect")]
     pub use bevy_reflect::Reflect;

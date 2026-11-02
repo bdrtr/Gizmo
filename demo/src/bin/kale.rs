@@ -75,7 +75,8 @@ gizmo::core::impl_component!(Enemy);
 
 #[derive(Clone, Copy)]
 struct Tower {
-    cooldown: f32,
+    /// Bitmiş = ateşe hazır. Hedef yokken hazır bekler; ateşleyince `reset`.
+    reload: Timer,
 }
 gizmo::core::impl_component!(Tower);
 
@@ -91,7 +92,7 @@ struct Game {
     wave: u32,
     /// Bu dalgada daha doğacak düşman sayısı ve bir sonrakine kalan süre.
     to_spawn: u32,
-    spawn_timer: f32,
+    spawn: Timer,
     hud: u32,
     banner: u32,
     wave_button: u32,
@@ -195,7 +196,7 @@ fn main() {
                 lives: 10,
                 wave: 0,
                 to_spawn: 0,
-                spawn_timer: 0.0,
+                spawn: Timer::repeating(0.9),
                 hud,
                 banner,
                 wave_button: wave_button.id(),
@@ -261,7 +262,7 @@ fn restart(world: &mut World, game: &mut Game) {
 fn start_wave(game: &mut Game) {
     game.wave += 1;
     game.to_spawn = 4 + game.wave * 2;
-    game.spawn_timer = 0.0;
+    game.spawn = Timer::repeating(0.9);
 }
 
 /// İmlecin altındaki zemin noktası, hücre merkezine oturtulmuş.
@@ -297,7 +298,12 @@ fn place_tower(world: &mut World, game: &mut Game, at: Vec3) {
         MeshRenderer::new(),
         RigidBody::new_static(),
         Collider::cylinder(0.35, 0.6),
-        Tower { cooldown: 0.0 },
+        Tower { reload: {
+            // Kurulduğu an ateşe hazır: süresi dolmuş bir tek-seferlik zamanlayıcı.
+            let mut t = Timer::once(TOWER_COOLDOWN);
+            t.tick(TOWER_COOLDOWN);
+            t
+        } },
     ));
     // Yürüyen ajanlar yeni duvarı kendileri görüyor: `add_obstacle_world` ızgarayı
     // "değişti" diye işaretliyor, navigasyon o kare herkesi yeniden planlıyor.
@@ -308,11 +314,9 @@ fn spawn_enemies(world: &mut World, game: &mut Game, dt: f32) {
     if game.to_spawn == 0 {
         return;
     }
-    game.spawn_timer -= dt;
-    if game.spawn_timer > 0.0 {
+    if game.spawn.tick(dt) == 0 {
         return;
     }
-    game.spawn_timer = 0.9;
     game.to_spawn -= 1;
     let hp = 3.0 + game.wave as f32;
     let jitter = Vec3::new(0.0, 0.0, game.rng.range(-0.3..0.3));
@@ -342,8 +346,8 @@ fn towers_fire(world: &mut World, game: &mut Game, dt: f32) {
     {
         let Some(mut towers) = world.query_mut::<(Mut<Tower>, &Transform)>() else { return };
         for (_, (mut tower, tf)) in towers.iter_mut() {
-            tower.cooldown -= dt;
-            if tower.cooldown > 0.0 {
+            tower.reload.tick(dt);
+            if !tower.reload.finished() {
                 continue;
             }
             let at = tf.position;
@@ -352,7 +356,7 @@ fn towers_fire(world: &mut World, game: &mut Game, dt: f32) {
                 .filter(|(_, p)| p.distance(at) < TOWER_RANGE)
                 .min_by(|a, b| a.1.distance(at).total_cmp(&b.1.distance(at)));
             if let Some(&(enemy, p)) = target {
-                tower.cooldown = TOWER_COOLDOWN;
+                tower.reload.reset();
                 shots.push((at + Vec3::Y * 0.6, p, enemy));
             }
         }

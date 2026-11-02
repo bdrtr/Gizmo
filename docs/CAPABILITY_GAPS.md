@@ -1062,6 +1062,20 @@ mouse, the keyboard and a gamepad. Three of its four buttons were impossible:
   struct, a wrong-typed read, a corrupt file kept twice over, safe names; removing the move-aside
   fails it. The menu remembers its volume and fullscreen, `kristal_avcisi` its best score.
 
+### C16. Every game wrote the same three lines (2026-11-02)
+
+~~**No timer.**~~ **Closed 2026-11-02.** `balon`, `kale` and `yikim_ustasi` each counted down by
+hand — `spawn_timer -= dt; if spawn_timer <= 0.0 { spawn_timer = 0.9; … }`, a `cooldown: f32` on a
+tower — and that shape throws away the time past zero, so a 1 s spawner at 7.5 fps fires every
+8 frames (1.07 s) and a long frame fires once instead of twice. `gizmo::core::Timer` (in the
+prelude): `once` / `repeating`, `tick(dt)` returns how many periods the step crossed and keeps the
+remainder, `just_finished` / `finished` / `fraction` / `remaining`, `reset`, `set_duration`,
+`pause`. A plain value — a resource field, a component, a local — ticked by the game, so it runs
+on game time. Tested: catch-up and remainder, sixty fires a minute at 30/60/144/7.5/45.5 fps,
+once-stays-finished, paused/negative/NaN/zero/infinite inputs; dropping the remainder, firing
+once per tick or ignoring pause each fails them. `balon`'s spawner and `kale`'s spawner and tower
+reload use it.
+
 ---
 
 ## D. Game-path / editor-path asymmetries

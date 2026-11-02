@@ -55,7 +55,7 @@ gizmo::core::impl_component!(Popping);
 struct Game {
     disc: SpriteImageId,
     rng: Rng,
-    spawn_timer: f32,
+    spawn: Timer,
     score: u32,
     lives: u32,
     hud: u32,
@@ -102,7 +102,7 @@ fn main() {
             scene.world.insert_resource(Game {
                 disc,
                 rng: Rng::new(99),
-                spawn_timer: 0.0,
+                spawn: Timer::repeating(1.1),
                 score: 0,
                 lives: 5,
                 hud,
@@ -145,11 +145,12 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
 }
 
 fn spawn_balloons(world: &mut World, game: &mut Game, dt: f32) {
-    game.spawn_timer -= dt;
-    if game.spawn_timer > 0.0 {
+    // `Timer` keeps the time past each period, so the pace does not depend on the frame rate;
+    // the hand-rolled `t -= dt; if t <= 0 { t = …; }` this replaced lost a frame each balloon.
+    if game.spawn.tick(dt) == 0 {
         return;
     }
-    game.spawn_timer = (1.1 - game.score as f32 * 0.02).max(0.35);
+    game.spawn.set_duration((1.1 - game.score as f32 * 0.02).max(0.35));
     const COLOURS: [Vec4; 5] = [
         Vec4::new(0.95, 0.15, 0.2, 1.0),
         Vec4::new(1.0, 0.6, 0.05, 1.0),
