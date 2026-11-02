@@ -117,6 +117,124 @@ fn text_input_display(_world: &World, _entity: u32) -> Option<String> {
     None
 }
 
+/// A `Text` shown a character at a time — dialogue, a tutorial line, a typed-out intro. Put it
+/// beside a `Text`: the label draws the first [`visible`](Self::visible) characters of what it
+/// would otherwise show (its content, a `LocalizedText`'s string, a field's value), and a new
+/// string starts typing from the beginning.
+///
+/// Advanced by both draw paths on the animation clock, so a paused game pauses it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Typewriter {
+    /// How fast it types.
+    pub chars_per_second: f32,
+    shown: f32,
+    total: usize,
+    seen: u64,
+    finished: bool,
+    just_finished: bool,
+}
+
+impl Typewriter {
+    /// Typing `chars_per_second` characters a second, from the beginning.
+    #[must_use]
+    pub fn new(chars_per_second: f32) -> Self {
+        Self { chars_per_second, shown: 0.0, total: 0, seen: 0, finished: false, just_finished: false }
+    }
+
+    /// How many characters it shows now.
+    #[must_use]
+    pub fn visible(&self) -> usize {
+        if self.finished {
+            self.total
+        } else {
+            (self.shown as usize).min(self.total)
+        }
+    }
+
+    /// Shows the rest at once — the "press to skip" of every dialogue box.
+    pub fn skip(&mut self) {
+        self.shown = self.total as f32;
+    }
+
+    /// Types the same string again from the start.
+    pub fn restart(&mut self) {
+        self.shown = 0.0;
+        self.finished = false;
+    }
+
+    /// Everything is shown.
+    #[must_use]
+    pub fn is_finished(&self) -> bool {
+        self.finished
+    }
+
+    /// It finished this frame — typed its last character, or was skipped.
+    #[must_use]
+    pub fn just_finished(&self) -> bool {
+        self.just_finished
+    }
+
+    /// One frame: `text` is what the label would show, `dt` the animation step.
+    fn step(&mut self, text: &str, dt: f32) {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        text.hash(&mut h);
+        let seen = h.finish();
+        if seen != self.seen {
+            // A new line of dialogue: from the top.
+            self.seen = seen;
+            self.total = text.chars().count();
+            self.restart();
+        }
+        self.just_finished = false;
+        if self.finished {
+            return;
+        }
+        if dt > 0.0 && self.chars_per_second > 0.0 {
+            self.shown += self.chars_per_second * dt;
+        }
+        if self.shown >= self.total as f32 {
+            self.finished = true;
+            self.just_finished = true;
+        }
+    }
+}
+
+gizmo_core::impl_component!(Typewriter);
+
+/// Advances every [`Typewriter`] by `dt` against what its label would show. Both draw paths call
+/// it, on the animation clock.
+pub fn typewriter_system(world: &mut World, dt: f32) {
+    let lines: Vec<(u32, String)> = {
+        let typers = world.borrow::<Typewriter>();
+        let texts = world.borrow::<Text>();
+        typers
+            .iter()
+            .filter_map(|(id, _)| {
+                let t = texts.get(id)?;
+                let s = text_input_display(world, id).or_else(|| localized_display(world, id)).unwrap_or_else(|| t.content.clone());
+                Some((id, s))
+            })
+            .collect()
+    };
+    let mut typers = world.borrow_mut::<Typewriter>();
+    for (id, line) in lines {
+        if let Some(mut t) = typers.get_mut(id) {
+            let mut next = *t;
+            next.step(&line, dt);
+            if next != *t {
+                *t = next;
+            }
+        }
+    }
+}
+
+/// `full` cut to what a [`Typewriter`] on `entity` has typed so far, or `None` without one.
+fn typed_display(world: &World, entity: u32, full: &str) -> Option<String> {
+    let t = *world.borrow::<Typewriter>().get(entity)?;
+    Some(full.chars().take(t.visible()).collect())
+}
+
 /// What a [`LocalizedText`](crate::app::locale::LocalizedText) on `entity` shows in the world's
 /// [`Locale`](crate::app::locale::Locale) — or `None` (no label, or no locale) to draw the `Text`
 /// as authored. Resolved at draw time, so a language switch relabels every one on the next frame.
@@ -233,8 +351,11 @@ pub fn record_text(
         text.set_layer(ui_layer(world, id));
         // A text field draws its value where its `Text` holds the placeholder; otherwise a
         // `LocalizedText` draws the current language's string (the placeholder too).
+        // A `Typewriter` then shows only as much of that as it has typed.
         let field;
-        let item = match text_input_display(world, id).or_else(|| localized_display(world, id)) {
+        let shown = text_input_display(world, id).or_else(|| localized_display(world, id));
+        let shown = typed_display(world, id, shown.as_deref().unwrap_or(&item.content)).or(shown);
+        let item = match shown {
             Some(shown) => {
                 field = {
                     let mut t = item.clone();
@@ -376,6 +497,42 @@ mod clip_tests {
         assert_eq!(boxes[1].0, s.id());
         assert_eq!(boxes[1].2, Vec2::splat(35.0));
         assert_eq!(boxes[1].1 + boxes[1].2 * 0.5, Vec2::new(100.0, 50.0));
+    }
+
+    /// A typewriter shows its label a character at a time, finishes once, skips, and starts a new
+    /// string from the top — and the draw loop cuts the label to it.
+    #[test]
+    fn a_typewriter_types_finishes_and_restarts_on_a_new_line() {
+        let mut world = World::new();
+        let font = crate::renderer::text::FontLibrary::default()
+            .load(crate::renderer::text::synthetic::synthetic_face())
+            .expect("the synthetic face parses");
+        let e = world
+            .spawn_bundle((Text::screen("Merhaba", font, 10.0, Vec2::ZERO), Typewriter::new(10.0)))
+            .id();
+        let tw = |w: &World| *w.borrow::<Typewriter>().get(e).unwrap();
+        typewriter_system(&mut world, 0.35);
+        assert_eq!(tw(&world).visible(), 3);
+        assert_eq!(typed_display(&world, e, "Merhaba").as_deref(), Some("Mer"));
+        typewriter_system(&mut world, 1.0);
+        assert!(tw(&world).is_finished() && tw(&world).just_finished());
+        typewriter_system(&mut world, 0.1);
+        assert!(!tw(&world).just_finished(), "finished once");
+        world.borrow_mut::<Text>().get_mut(e).unwrap().content = "Yeni bir satır".into();
+        typewriter_system(&mut world, 0.2);
+        assert_eq!(tw(&world).visible(), 2, "a new line types from the top");
+        world.borrow_mut::<Typewriter>().get_mut(e).unwrap().skip();
+        typewriter_system(&mut world, 0.0);
+        assert!(tw(&world).just_finished() && tw(&world).visible() == 14);
+
+        let code: String = include_str!("text.rs")
+            .split(concat!("mod ", "clip_tests"))
+            .next()
+            .unwrap_or("")
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
+        assert!(code.contains(concat!("typed_display(world,id,", "shown.as_deref()")), "record_text no longer cuts typed labels");
     }
 
     /// A scrolling list clips like a `ClipContent` panel: its rows scroll out of sight.

@@ -526,6 +526,7 @@ fn prepare_frame(world: &mut World, renderer: &mut Renderer) {
     let tween_dt = world.get_resource::<gizmo_core::time::Time>().map(|t| t.dt()).unwrap_or(0.0);
     crate::renderer::tween::tween_system(world, tween_dt);
     crate::renderer::components::color_tween_system(world, tween_dt);
+    typewriter_system(world, tween_dt);
     // The screen fade runs on the REAL frame time: a fade into a pause menu must not stop with
     // the game it is covering.
     let real_dt = world.get_resource::<gizmo_core::time::Time>().map(|t| t.raw_dt()).unwrap_or(0.0);
@@ -1195,7 +1196,7 @@ mod shake;
 pub use shake::{apply_camera_shake, undo_camera_shake, ShakeUndo};
 
 mod text;
-pub use text::record_text;
+pub use text::{record_text, typewriter_system, Typewriter};
 
 mod hidden;
 pub use hidden::collect_hidden;

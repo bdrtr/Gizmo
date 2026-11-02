@@ -48,6 +48,11 @@
 //!   Menünün her etiketi bir anahtar; "Dil" düğmesi hepsini aynı karede çeviriyor, seçim
 //!   kaydediliyor.
 //!
+//! - **Metin harf harf yazılamıyordu.** Diyalog ve duyurular için bir `Text`'i parça parça
+//!   göstermenin yolu yoktu. **Kapatıldı:** `Typewriter` — bir `Text`'in yanında, çizilecek metnin
+//!   (çevrilmiş olsa da) ilk N harfini gösteriyor, yeni bir metin gelince baştan başlıyor,
+//!   `skip()`/`just_finished()`. Alttaki duyuru satırı onunla yazılıyor.
+//!
 //! ## Ortam değişkenleri
 //!   * `GIZMO_FONT=<yol>` — font
 
@@ -248,7 +253,11 @@ fn main() {
 
             let banner = scene
                 .world
-                .spawn_bundle((Text::pinned_at("", font, 32.0, Vec2::new(0.62, 0.85), Vec2::ZERO).with_anchor(TextAnchor::Center).with_align(TextAlign::Center),))
+                .spawn_bundle((
+                    Text::pinned_at("", font, 32.0, Vec2::new(0.62, 0.85), Vec2::ZERO).with_anchor(TextAnchor::Center).with_align(TextAlign::Center),
+                    // Her yeni duyuru harf harf yazılıyor.
+                    Typewriter::new(40.0),
+                ))
                 .id();
             scene.world.spawn_bundle((
                 Text::pinned("", font, 18.0, TextAnchor::BottomRight, Vec2::new(-16.0, -16.0))

@@ -47,6 +47,7 @@ pub fn execute_render_pipeline(
     let tween_dt = crate::systems::simulation::animation_delta(world);
     gizmo::renderer::tween::tween_system(world, tween_dt);
     gizmo::renderer::components::color_tween_system(world, tween_dt);
+    gizmo::systems::render::typewriter_system(world, tween_dt);
     // On the real frame time, as the game path does: a fade must not stop with a paused game.
     let real_dt = world.get_resource::<gizmo::core::time::Time>().map(|t| t.raw_dt()).unwrap_or(0.0);
     gizmo::renderer::screen_fade::screen_fade_system(world, real_dt);

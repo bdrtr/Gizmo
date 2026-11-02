@@ -1114,6 +1114,14 @@ mouse, the keyboard and a gamepad. Three of its four buttons were impossible:
   is bilingual with a language button, and opens in the system's language (checked by screenshot
   under `LANG=en_US` and `tr_TR`). Not yet: plurals, right-to-left text.
 
+- ~~**No typed-out text.**~~ **Closed 2026-11-03.** Dialogue and announcements had no way to
+  appear a character at a time. `Typewriter` (in the prelude) beside a `Text`: the label draws the
+  first `visible()` characters of what it would otherwise show — its content, a `LocalizedText`'s
+  string, a field's value — and a new string types from the top; `skip()`, `just_finished()`.
+  Advanced by both draw paths on the animation clock (`render_parity` lists it). Tested on typing,
+  finishing once, a new line, a skip, and a guard on the draw loop's cut; not restarting on a new
+  line, or holding `just_finished` past its frame, fails it. `menu`'s announcements type out.
+
 ### C16. Every game wrote the same three lines (2026-11-02)
 
 ~~**No timer.**~~ **Closed 2026-11-02.** `balon`, `kale` and `yikim_ustasi` each counted down by

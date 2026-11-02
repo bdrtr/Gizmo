@@ -68,6 +68,9 @@ pub use crate::renderer::tween::{Ease, Tween};
 // === Renderer Bileşenleri ===
 #[cfg(feature = "render")]
 pub use crate::renderer::asset::AssetManager;
+// A label typed out a character at a time.
+#[cfg(feature = "render")]
+pub use crate::systems::render::Typewriter;
 #[cfg(feature = "render")]
 pub use crate::renderer::components::{
     BlendMode, Camera, CameraShake, DirectionalLight, LightRole, Material, MaterialDesc, Mesh, MeshData, MeshRenderer,
