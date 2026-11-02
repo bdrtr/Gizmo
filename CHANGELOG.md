@@ -64,6 +64,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   bytes per sample, so native devices request `max_color_attachment_bytes_per_sample` up to 64.
   Groundwork for object motion blur; nothing reads the target yet.
 
+- **`Query::entity(id)`** — the generation-checked `Entity` for an id a query yielded, so a
+  scheduled system (which never has `&World`) can hand a real handle to `Commands` instead of
+  forging `Entity::new(id, 0)`, which is wrong for every recycled id.
+
 - **`World::get::<T>(entity)`** — one entity's component without building a query, from either
   storage. Checks the entity's generation, so a stale handle reads `None` rather than whatever
   entity now has its id. Read-only; writes still go through `query_mut`, which marks changes.

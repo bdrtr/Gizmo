@@ -431,6 +431,42 @@ mod tests {
         assert_eq!(ERRORS.load(Ordering::SeqCst), 2, "the default handler logs; it does not call ours");
     }
 
+    /// A scheduled system turns a query's raw id into a real handle with `Query::entity` — the
+    /// generation included, which a forged `Entity::new(id, 0)` gets wrong for a recycled id —
+    /// and hands it to `Commands`.
+    #[test]
+    fn a_system_gets_a_handle_from_its_query() {
+        #[derive(Clone)]
+        struct Doomed;
+        crate::impl_component!(Doomed);
+
+        let mut world = World::new();
+        let first = world.spawn();
+        world.despawn(first);
+        let doomed = world.spawn();
+        assert_eq!(doomed.id(), first.id(), "a recycled id, so its generation is not 0");
+        world.add_component(doomed, Doomed);
+        let kept = world.spawn();
+
+        use crate::{Entity, Query};
+        let handles: Arc<Mutex<Vec<Entity>>> = Arc::new(Mutex::new(Vec::new()));
+        let seen = handles.clone();
+        let mut schedule = Schedule::new();
+        schedule.add_di_system(move |q: Query<&Doomed>, mut commands: crate::commands::Commands| {
+            for (id, _) in q.iter() {
+                let handle = q.entity(id).expect("a live id");
+                seen.lock().unwrap().push(handle);
+                commands.entity(handle).despawn();
+            }
+        });
+        schedule.run(&mut world, 0.016);
+        world.apply_commands();
+
+        assert_eq!(*handles.lock().unwrap(), vec![doomed], "the handle carries the right generation");
+        assert!(!world.is_alive(doomed), "and Commands could act on it");
+        assert!(world.is_alive(kept));
+    }
+
     #[test]
     fn test_schedule_access_info_compatibility() {
         let mut info1 = AccessInfo::new();

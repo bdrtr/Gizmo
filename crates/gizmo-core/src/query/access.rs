@@ -400,6 +400,19 @@ impl<'w, Q: ReadOnlyQuery> Query<'w, Q> {
         self.iter_chunks_inner()
     }
 
+    /// The [`Entity`] handle — id **and generation** — for a raw id this query yielded, or `None`
+    /// if the id is not a live entity.
+    ///
+    /// Iteration hands out bare `u32` ids, and a scheduled system cannot reach
+    /// [`World::entity`](crate::world::World::entity) (it is never given the world). This is the
+    /// same lookup through the world the query already holds, so a system can turn an id into a
+    /// handle for `Commands` or for storing, without forging one with `Entity::new(id, 0)` — which
+    /// compiles and is wrong for every recycled id. Reads the allocator under its lock, as
+    /// `Commands` does, so it is safe from systems running in parallel.
+    pub fn entity(&self, entity_id: u32) -> Option<crate::entity::Entity> {
+        self.world.entity(entity_id)
+    }
+
     /// Access by raw `u32` id. **CAUTION: it does NOT check the generation.** If an id is given
     /// that was despawned and whose slot has been reused, the data of the NEW entity in that
     /// slot is returned (a silent use-after-free-like bug). If you hold an [`Entity`] handle,
