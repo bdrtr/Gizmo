@@ -319,12 +319,11 @@ impl MaterialDesc {
     }
 }
 
-impl Material {
-    /// A neutral PBR material over the given bind group: white albedo, mid roughness, no metal,
-    /// and every extra knob at zero.
-    pub fn new(bind_group: Arc<wgpu::BindGroup>) -> Self {
+impl Default for MaterialDesc {
+    /// The neutral PBR material — what [`Material::new`] builds over a bind group. White albedo,
+    /// mid roughness, no metal, every extra knob at zero.
+    fn default() -> Self {
         Self {
-            bind_group,
             albedo: gizmo_math::Vec4::new(1.0, 1.0, 1.0, 1.0),
             roughness: 0.5,
             metallic: 0.0,
@@ -343,7 +342,15 @@ impl Material {
             blend_mode: BlendMode::Alpha,
         }
     }
+}
 
+/// The `with_*` builders, written once and expanded on both [`Material`] and [`MaterialDesc`].
+///
+/// Their bodies touch only the fields the two share, so one text serves both — and a builder
+/// added here is on both, which is what keeps "describe a material without a GPU" from drifting
+/// into a smaller, older dialect of "build one".
+macro_rules! material_builders {
+    () => {
     /// Configures this as a PBR material.
     /// Note: if `albedo.w < 1.0` is given, `is_transparent` is set to `true` automatically.
     /// `roughness` and `metallic` are clamped into [0.0, 1.0].
@@ -440,7 +447,8 @@ impl Material {
     /// Sets [`Material::emissive`] — light the surface emits itself, independent of its albedo
     /// and of the sun's shadow. Negative components are clamped to zero.
     ///
-    /// Only [`MaterialType::BakedLit`] reads it; see the field for the exact expression.
+    /// Added on top of the lit result by the PBR paths (forward and deferred) and by
+    /// [`MaterialType::BakedLit`]; see the field for the exact expression.
     pub fn with_emissive(mut self, emissive: gizmo_math::Vec3) -> Self {
         self.emissive = emissive.max(gizmo_math::Vec3::ZERO);
         self
@@ -513,6 +521,82 @@ impl Material {
     pub fn with_texture_source(mut self, path: String) -> Self {
         self.texture_source = Some(path);
         self
+    }
+    };
+}
+
+impl Material {
+    /// A neutral PBR material over the given bind group: white albedo, mid roughness, no metal,
+    /// and every extra knob at zero — [`MaterialDesc::default`] over `bind_group`.
+    pub fn new(bind_group: Arc<wgpu::BindGroup>) -> Self {
+        MaterialDesc::default().into_material(bind_group)
+    }
+
+    material_builders!();
+}
+
+impl MaterialDesc {
+    /// The neutral PBR material, as a description — no GPU, no bind group.
+    ///
+    /// **This is how a material is made where there is no device**: an `on_enter` hook, a system,
+    /// a level loader. Spawn it beside a [`MeshSource`](gizmo_core::component::MeshSource) and a
+    /// [`MeshRenderer`](crate::components::MeshRenderer), and the draw path builds the
+    /// [`Material`] (`material_sync::resolve_material_descriptions`) and the mesh (the asset
+    /// loader) the next frame. It has every `with_*` builder `Material` has:
+    ///
+    /// ```
+    /// use gizmo_renderer::components::{BlendMode, MaterialDesc};
+    /// use gizmo_math::{Vec3, Vec4};
+    ///
+    /// let crystal = MaterialDesc::new()
+    ///     .with_unlit(Vec4::new(0.3, 1.0, 0.8, 0.9))
+    ///     .with_emissive(Vec3::new(0.5, 2.0, 1.6))
+    ///     .with_blend_mode(BlendMode::Additive);
+    /// assert!(crystal.is_transparent);
+    /// ```
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    material_builders!();
+}
+
+#[cfg(test)]
+mod description_builder_tests {
+    use super::*;
+    use gizmo_math::{Vec3, Vec4};
+
+    /// The builders on a description follow the same rules as on a material — they are the same
+    /// text — and a chain of them lands every value it names. Checked on the description because
+    /// it needs no GPU; `Material`'s copy is the same macro expansion.
+    #[test]
+    fn a_description_built_in_a_chain_has_every_value_it_was_given() {
+        let d = MaterialDesc::new()
+            .with_pbr(Vec4::new(0.2, 0.4, 0.6, 1.0), 1.7, -0.3)
+            .with_emissive(Vec3::new(1.0, -2.0, 3.0))
+            .with_double_sided(true)
+            .with_alpha_cutoff(0.4);
+        assert_eq!(d.albedo, Vec4::new(0.2, 0.4, 0.6, 1.0));
+        assert_eq!((d.roughness, d.metallic), (1.0, 0.0), "with_pbr clamps into [0, 1]");
+        assert_eq!(d.emissive, Vec3::new(1.0, 0.0, 3.0), "negative emission is clamped");
+        assert!(d.is_double_sided && !d.is_transparent);
+        assert_eq!(d.alpha_cutoff, 0.4);
+
+        let crystal = MaterialDesc::new().with_unlit(Vec4::ONE).with_blend_mode(BlendMode::Additive);
+        assert_eq!(crystal.material_type, MaterialType::Unlit);
+        assert!(crystal.is_transparent, "a non-alpha blend mode makes the material transparent");
+        assert!(MaterialDesc::new().with_unlit(Vec4::new(1.0, 1.0, 1.0, 0.5)).is_transparent);
+    }
+
+    /// `new` is the neutral material, and a chain with no builders resolves to it.
+    #[test]
+    fn a_new_description_is_the_neutral_pbr_material() {
+        let d = MaterialDesc::new();
+        assert_eq!(d, MaterialDesc::default());
+        assert_eq!(d.material_type, MaterialType::Pbr);
+        assert_eq!((d.albedo, d.roughness, d.metallic), (Vec4::ONE, 0.5, 0.0));
+        assert!(!d.is_transparent && d.texture_source.is_none() && d.blend_mode == BlendMode::Alpha);
     }
 }
 

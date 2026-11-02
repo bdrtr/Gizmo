@@ -75,6 +75,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   mutation-checked. The private xorshifts in `spotlight`, `parallel_query`, `change_detection`,
   `kristal_avcisi` and the particle emitter are gone — the emitter's sparks draw different (equally
   jittered) values than before, same frame still replays the same.
+- **Materials without a GPU: `MaterialDesc::new()` and every `with_*` builder.** A description
+  had no constructor or builder, so making one where there is no device — an `on_enter` hook, a
+  system — meant writing thirteen fields. The builders are now one macro expanded on both
+  `Material` and `MaterialDesc`, and `Material::new` is `MaterialDesc::default()` over a bind
+  group, so the two cannot drift. Spawned beside `MeshSource` and `MeshRenderer`, the draw path
+  builds the mesh and the material the next frame — a GPU test draws such an entity and fails
+  when the description is not resolved. `MaterialDesc` and `MeshSource` are in the prelude.
+- **Built-in primitive meshes are uploaded once: `AssetManager::primitive_mesh`.** The asset
+  loader built a fresh mesh for every `MeshSource("sphere")` (or cube, plane, …) entity, so a
+  hundred described spheres were a hundred identical vertex buffers. Each primitive key is now
+  cached under `primitive/<key>` — the prefix `garbage_collect` already kept alive for a cache
+  nothing filled. GPU-tested (same buffer twice, survives collection); disabling the cache fails
+  it.
 - **`kristal_avcisi` — a complete 3D game.** Top-down arena, emissive additive crystals, chasing
   hunters, lives, a clock, Menu → Playing → Over on `add_state` / `on_enter` / `DespawnOnExit`,
   gameplay as one `.chain()`, rect lights, hand-set fog, a camera clear colour. What it ran into

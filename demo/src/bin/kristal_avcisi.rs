@@ -28,10 +28,14 @@
 //!   çağrısıydı; `World::spawn_bundle`'ın ertelenmiş karşılığı yoktu. **Kapatıldı:**
 //!   `Commands::spawn_bundle` / `EntityCommands::insert_bundle` — artık giriş hook'u ve toplama
 //!   sistemi aynı `hunter(..)` demetini doğuruyor.
-//! - **`on_enter` hook'unda GPU yok.** Bölüme giriş varlık doğuruyor, varlık mesh ister, mesh
-//!   `device` ister — hook `&mut World` alıyor ve renderer'ı görmüyor. Çözüm: mesh ve malzemeler
-//!   kurulumda **bir kez** üretilip kaynak (`Kit`) olarak saklanıyor, hook ve sistemler onları
-//!   klonluyor (ikisi de `Arc`). Çalışıyor ve ucuz; ama "hook'ta yeni bir mesh üret" yazılamıyor.
+//! - **`on_enter` hook'unda GPU yok — sanılıyordu.** Hook `&mut World` alıyor, renderer'ı görmüyor;
+//!   oyun ilk sürümde mesh ve malzemeleri kurulumda üretip bir `Kit` kaynağında saklıyordu. Oysa
+//!   GPU'suz yol **vardı**: `MeshSource("sphere")` yükleyiciye bir anahtar, `MaterialDesc` çizim
+//!   yoluna bir tarif — ikisi de sonraki karede GPU'ya çevriliyor. Eksik olan ikisinin
+//!   kullanılabilirliğiydi: `MaterialDesc`'in kurucusu ve builder'ı yoktu (13 alan elle), ve
+//!   yükleyici her `"sphere"` varlığına **ayrı** bir mesh yüklüyordu. **Kapatıldı:**
+//!   `MaterialDesc::new()` ve `Material`'ın bütün `with_*`'ları (tek makro, iki tip),
+//!   `AssetManager::primitive_mesh` (ilkel anahtar başına tek yükleme). `Kit` silindi.
 //! - **Rastgelelik yoktu.** Oyun dört satırlık bir xorshift taşıyordu — `spotlight`,
 //!   `parallel_query`, `change_detection` ve parçacık yayıcısı gibi. **Kapatıldı:**
 //!   `gizmo_math::Rng` (prelude'da), tohumlu SplitMix64; oyun onu kaynak olarak tutuyor.
@@ -77,15 +81,6 @@ gizmo::core::impl_component!(Hunter);
 struct Crystal;
 gizmo::core::impl_component!(Crystal);
 
-/// Kurulumda bir kez üretilen mesh ve malzemeler — hook'ların ve sistemlerin GPU'su yok.
-#[derive(Clone)]
-struct Kit {
-    sphere: Mesh,
-    cube: Mesh,
-    player: Material,
-    hunter: Material,
-    crystal: Material,
-}
 
 /// Bir turun durumu.
 #[derive(Clone, Copy)]
@@ -129,36 +124,18 @@ fn main() {
             r.deband_dither = true;
             let font = load_font(r);
 
-            let white = scene.asset_manager.create_white_texture(&r.device, &r.queue, &r.scene.texture_bind_group_layout);
-            let device = &r.device;
-            let kit = Kit {
-                sphere: AssetManager::create_sphere(device, 0.5, 16, 24),
-                cube: AssetManager::create_cube(device),
-                player: Material::new(white.clone()).with_pbr(Vec4::new(0.2, 0.45, 1.0, 1.0), 0.3, 0.2),
-                hunter: Material::new(white.clone())
-                    .with_pbr(Vec4::new(0.9, 0.15, 0.1, 1.0), 0.5, 0.0)
-                    .with_emissive(Vec3::new(0.6, 0.05, 0.0)),
-                crystal: Material::new(white.clone())
-                    .with_unlit(Vec4::new(0.3, 1.0, 0.8, 0.9))
-                    .with_emissive(Vec3::new(0.5, 2.0, 1.6))
-                    .with_blend_mode(BlendMode::Additive),
-            };
-
-            // Kalıcı sahne: zemin, duvarlar, ışıklar. Durumlardan bağımsız.
-            scene.world.spawn_bundle((
-                Transform::new(Vec3::new(0.0, -0.1, 0.0)).with_scale(Vec3::new(ARENA, 0.1, ARENA)),
-                GlobalTransform::default(),
-                kit.cube.clone(),
-                Material::new(white.clone()).with_pbr(Vec4::new(0.35, 0.36, 0.42, 1.0), 0.7, 0.0),
-                MeshRenderer::new(),
+            // Kalıcı sahne: zemin, duvarlar, ışıklar. Durumlardan bağımsız. Kurulumda GPU var ama
+            // gerekmiyor — hook'larla aynı GPU'suz tarif.
+            scene.world.spawn_bundle(block(
+                Vec3::new(0.0, -0.1, 0.0),
+                Vec3::new(ARENA, 0.1, ARENA),
+                MaterialDesc::new().with_pbr(Vec4::new(0.35, 0.36, 0.42, 1.0), 0.7, 0.0),
             ));
             for (x, z, sx, sz) in [(ARENA, 0.0, 0.2, ARENA), (-ARENA, 0.0, 0.2, ARENA), (0.0, ARENA, ARENA, 0.2), (0.0, -ARENA, ARENA, 0.2)] {
-                scene.world.spawn_bundle((
-                    Transform::new(Vec3::new(x, 0.5, z)).with_scale(Vec3::new(sx, 0.5, sz)),
-                    GlobalTransform::default(),
-                    kit.cube.clone(),
-                    Material::new(white.clone()).with_pbr(Vec4::new(0.2, 0.2, 0.26, 1.0), 0.8, 0.0),
-                    MeshRenderer::new(),
+                scene.world.spawn_bundle(block(
+                    Vec3::new(x, 0.5, z),
+                    Vec3::new(sx, 0.5, sz),
+                    MaterialDesc::new().with_pbr(Vec4::new(0.2, 0.2, 0.26, 1.0), 0.8, 0.0),
                 ));
             }
             // Arenanın iki yanında aşağı bakan sıcak panel ışıklar.
@@ -199,7 +176,6 @@ fn main() {
                     .with_align(TextAlign::Center),))
                 .id();
             scene.world.insert_resource(Hud { status, banner: banner_text });
-            scene.world.insert_resource(kit);
             scene.world.insert_resource(Run { score: 0, lives: 3, time_left: ROUND_SECONDS, grace: 0.0, best: 0 });
             scene.world.insert_resource(Rng::new(0x9E37_79B9));
         })
@@ -220,34 +196,48 @@ fn main() {
 /// Oyuna giriş: oyuncuyu, kristalleri ve ilk avcıyı doğur; turu sıfırla. Hepsi
 /// `DespawnOnExit(Playing)` taşıyor — bitişte motor kendisi topluyor.
 fn start_round(world: &mut World) {
-    let Some(kit) = world.get_resource::<Kit>().map(|k| k.clone()) else { return };
     let mut rng = world.get_resource::<Rng>().map(|r| r.clone()).unwrap_or_else(|| Rng::new(1));
     banner(world, "", [1.0; 3]);
     let best = world.get_resource::<Run>().map(|r| r.best).unwrap_or(0);
     world.insert_resource(Run { score: 0, lives: 3, time_left: ROUND_SECONDS, grace: 1.0, best });
 
     world.spawn_bundle((
-        Transform::new(Vec3::new(0.0, 0.5, 0.0)),
+        // `"sphere"`in yarıçapı 1: 0.5'lik bir top için yarım ölçek.
+        Transform::new(Vec3::new(0.0, 0.5, 0.0)).with_scale(Vec3::splat(0.5)),
         GlobalTransform::default(),
-        kit.sphere.clone(),
-        kit.player.clone(),
+        MeshSource("sphere".into()),
+        MaterialDesc::new().with_pbr(Vec4::new(0.2, 0.45, 1.0, 1.0), 0.3, 0.2),
         MeshRenderer::new(),
         Player,
         DespawnOnExit(Screen::Playing),
     ));
     for _ in 0..CRYSTALS {
-        spawn_crystal(world, &kit, arena_point(&mut rng));
+        spawn_crystal(world, arena_point(&mut rng));
     }
-    world.spawn_bundle(hunter(&kit, Vec3::new(ARENA - 1.5, 0.5, ARENA - 1.5)));
+    world.spawn_bundle(hunter(Vec3::new(ARENA - 1.5, 0.5, ARENA - 1.5)));
     world.insert_resource(rng);
 }
 
-fn spawn_crystal(world: &mut World, kit: &Kit, at: Vec3) {
+/// Zemin ve duvarlar: ölçeklenmiş birer küp.
+fn block(at: Vec3, half: Vec3, material: MaterialDesc) -> impl gizmo::core::component::Bundle + Send + Sync + 'static {
+    (
+        Transform::new(at).with_scale(half),
+        GlobalTransform::default(),
+        MeshSource("standard_cube".into()),
+        material,
+        MeshRenderer::new(),
+    )
+}
+
+fn spawn_crystal(world: &mut World, at: Vec3) {
     world.spawn_bundle((
         Transform::new(at).with_scale(Vec3::splat(0.3)),
         GlobalTransform::default(),
-        kit.cube.clone(),
-        kit.crystal.clone(),
+        MeshSource("standard_cube".into()),
+        MaterialDesc::new()
+            .with_unlit(Vec4::new(0.3, 1.0, 0.8, 0.9))
+            .with_emissive(Vec3::new(0.5, 2.0, 1.6))
+            .with_blend_mode(BlendMode::Additive),
         MeshRenderer::new().with_receives_shadows(false),
         Crystal,
         DespawnOnExit(Screen::Playing),
@@ -255,13 +245,15 @@ fn spawn_crystal(world: &mut World, kit: &Kit, at: Vec3) {
 }
 
 /// Bir avcı — `World::spawn_bundle` (giriş hook'u) ve `Commands::spawn_bundle` (toplama
-/// sistemi) aynı demeti alıyor.
-fn hunter(kit: &Kit, at: Vec3) -> impl gizmo::core::component::Bundle + Send + Sync + 'static {
+/// sistemi) aynı demeti alıyor. Hepsi tek bir `"sphere"` yüklemesini paylaşıyor.
+fn hunter(at: Vec3) -> impl gizmo::core::component::Bundle + Send + Sync + 'static {
     (
-        Transform::new(at).with_scale(Vec3::splat(0.8)),
+        Transform::new(at).with_scale(Vec3::splat(0.4)),
         GlobalTransform::default(),
-        kit.sphere.clone(),
-        kit.hunter.clone(),
+        MeshSource("sphere".into()),
+        MaterialDesc::new()
+            .with_pbr(Vec4::new(0.9, 0.15, 0.1, 1.0), 0.5, 0.0)
+            .with_emissive(Vec3::new(0.6, 0.05, 0.0)),
         MeshRenderer::new(),
         Hunter,
         DespawnOnExit(Screen::Playing),
@@ -327,7 +319,6 @@ fn collect(
     players: Query<(&Transform, With<Player>)>,
     mut run: ResMut<Run>,
     mut rng: ResMut<Rng>,
-    kit: Res<Kit>,
     mut commands: gizmo::core::Commands,
     time: Res<Time>,
     state: Res<State<Screen>>,
@@ -345,7 +336,7 @@ fn collect(
             let corner = Vec3::new(if rng.bool() { -1.0 } else { 1.0 }, 0.0, if rng.bool() { -1.0 } else { 1.0 })
                 * (ARENA - 1.5)
                 + Vec3::Y * 0.5;
-            commands.spawn_bundle(hunter(&kit, corner));
+            commands.spawn_bundle(hunter(corner));
         }
     }
 }

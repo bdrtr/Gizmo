@@ -6,7 +6,7 @@
 // === ECS Temelleri ===
 pub use crate::core::{
     asset::{Assets, Handle},
-    component::{Children, Parent},
+    component::{Children, MeshSource, Parent},
     in_state,
     system::{IntoSystemChain, IntoSystemConfig},
     Bundle, BundleExt, Component, DespawnOnExit, Entity, EntityName, EventMutator, EventReader, EventWriter, Events,
@@ -66,8 +66,8 @@ pub use gizmo_math::Rng;
 pub use crate::renderer::asset::AssetManager;
 #[cfg(feature = "render")]
 pub use crate::renderer::components::{
-    BlendMode, Camera, DirectionalLight, LightRole, Material, Mesh, MeshRenderer, PointLight, RectLight,
-    SpotLight,
+    BlendMode, Camera, DirectionalLight, LightRole, Material, MaterialDesc, Mesh, MeshRenderer, PointLight,
+    RectLight, SpotLight,
 };
 #[cfg(feature = "render")]
 pub use crate::renderer::RenderContext;

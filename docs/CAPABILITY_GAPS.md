@@ -844,10 +844,20 @@ on the driven state machine with `DespawnOnExit`. It works on the first build; w
   tuple — and each `insert` moves the entity to another archetype. `Commands::spawn_bundle` and
   `EntityCommands::insert_bundle` queue one command that spawns and fills in one move; the game's
   hook and system now share one `hunter(..)` bundle.
-- **`on_enter` hooks see no GPU.** A hook takes `&mut World`; a mesh needs the `Device`. The game
-  builds its meshes and materials once in setup and keeps them in a `Kit` resource (both are
-  `Arc`s, so cloning is cheap). It works and is the pattern to use; it is recorded because
-  "make a new mesh when the level starts" cannot be written there.
+- ~~**`on_enter` hooks see no GPU.**~~ **Half a discoverability miss, half a real gap — closed
+  2026-11-02.** A hook takes `&mut World` and a mesh needs the `Device`, so the first version
+  built everything in setup and kept it in a `Kit` resource. The GPU-free path already existed:
+  `MeshSource("sphere")` is a key the asset loader uploads, and `MaterialDesc` is a material the
+  draw pass resolves, both the next frame. What made it unusable: `MaterialDesc` had **no
+  constructor and no builders** (thirteen fields by hand), neither was in the prelude, and the
+  loader uploaded a **separate** mesh for every `"sphere"` entity — `garbage_collect` even kept a
+  `primitive/` cache prefix alive that nothing ever filled. Now `MaterialDesc::new()` carries every
+  `with_*` builder `Material` has (one macro expanded on both, and `Material::new` is
+  `MaterialDesc::default()` over a bind group), `AssetManager::primitive_mesh` uploads each
+  primitive key once, and both types are in the prelude. A GPU test draws an entity spawned with
+  only `MeshSource` + `MaterialDesc` + `MeshRenderer`; the game's `Kit` is gone. Procedural meshes
+  (a sphere of radius 0.37, an extrusion) still need the device — scale a primitive, or build in
+  setup.
 - ~~**No RNG.**~~ **Closed 2026-11-02.** The game carried a four-line xorshift, as did
   `spotlight`, `parallel_query`, `change_detection` and the particle emitter; `showcase`,
   `rpg_demo` and `hill_climb` used `rand` directly. `gizmo_math::Rng` (in the prelude) is a seeded

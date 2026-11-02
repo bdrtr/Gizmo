@@ -2349,6 +2349,73 @@ mod golden_render_tests {
         });
     }
 
+    /// An entity **described** rather than built — `MeshSource` + `MaterialDesc` + `MeshRenderer`,
+    /// which is all an `on_enter` hook (no device) can spawn — is drawn once the asset loader has
+    /// run: the loader uploads the mesh, the draw pass resolves the description.
+    ///
+    /// Before the loader the centre of the frame is background; after it, the green the
+    /// description asked for. `kristal_avcisi` built a `Kit` resource of GPU meshes and materials
+    /// in setup because nothing said this worked; this is what says so.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn an_entity_described_without_a_gpu_is_drawn_once_the_loader_has_run() {
+        use crate::core::component::MeshSource;
+        use crate::renderer::components::MaterialDesc;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available()) {
+            eprintln!("skipping: no GPU adapter");
+            return;
+        }
+        if pollster::block_on(Renderer::headless_adapter_is_software()) {
+            eprintln!("skipping: software adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            let mut world = World::new();
+            world.spawn_bundle((
+                Transform::new(Vec3::ZERO),
+                GlobalTransform::default(),
+                MeshSource("standard_cube".to_string()),
+                MaterialDesc::new().with_unlit(Vec4::new(0.1, 0.9, 0.1, 1.0)),
+                MeshRenderer::new(),
+            ));
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(-6.0, 0.0, 0.0),
+                yaw: 0.0,
+                pitch: 0.0,
+                primary: true,
+                ..Default::default()
+            });
+            world.spawn_bundle(DirectionalLightBundle::default());
+
+            // Green in either channel order: G is byte 1 of both RGBA and BGRA.
+            let centre_is_green = |frame: &[u8]| {
+                let i = (64 * 128 + 64) * 4;
+                let (r, g, b) = (frame[i] as i32, frame[i + 1] as i32, frame[i + 2] as i32);
+                g > r + 60 && g > b + 60
+            };
+            let before = render_world(&mut renderer, &mut world).await;
+            assert!(!centre_is_green(&before), "drawn before any mesh was uploaded?");
+
+            let mut assets = AssetManager::new();
+            crate::renderer::asset_loading::run_asset_loading_system(
+                &mut world,
+                &renderer.device,
+                &renderer.queue,
+                &renderer.scene.texture_bind_group_layout,
+                &mut assets,
+            );
+            let after = render_world(&mut renderer, &mut world).await;
+            let i = (64 * 128 + 64) * 4;
+            assert!(
+                centre_is_green(&after),
+                "the described cube is not drawn after the loader ran — centre pixel {:?}",
+                &after[i..i + 4]
+            );
+        });
+    }
+
     /// The cube of [`render_frame_with_mesh`], with the camera inside it, so every visible
     /// triangle is a back face.
     async fn render_from_inside_a_cube(double_sided: bool) -> Vec<u8> {
