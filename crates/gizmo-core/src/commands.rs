@@ -184,6 +184,31 @@ impl<'w> Commands<'w> {
         }
     }
 
+    /// Creates a new entity carrying every component of `bundle` — the deferred twin of
+    /// [`World::spawn_bundle`].
+    ///
+    /// The entity and all of its components arrive in **one** queued command, so a flush never
+    /// shows it half-built, and it lands in its final archetype in one move rather than one
+    /// archetype per component (`spawn().insert(a).insert(b)…` moves it once per `insert`). Until
+    /// this existed a system that spawned a renderable thing wrote seven `insert` calls in a row
+    /// where `setup` wrote one tuple — `kristal_avcisi`'s header records it.
+    pub fn spawn_bundle<B: crate::component::Bundle + Send + Sync + 'static>(
+        &mut self,
+        bundle: B,
+    ) -> EntityCommands<'_, 'w> {
+        let entity = self.entities.reserve_entity();
+
+        self.queue.push(move |world| {
+            world.flush_spawn(entity);
+            world.add_bundle(entity, bundle);
+        });
+
+        EntityCommands {
+            entity,
+            commands: self,
+        }
+    }
+
     /// Gets an `EntityCommands` for performing operations on an existing entity.
     pub fn entity(&mut self, entity: Entity) -> EntityCommands<'_, 'w> {
         EntityCommands {
@@ -224,6 +249,16 @@ impl<'a, 'w> EntityCommands<'a, 'w> {
         let e = self.entity;
         self.commands.queue.push(move |world| {
             world.add_component(e, component);
+        });
+        self
+    }
+
+    /// Adds every component of `bundle` to the entity in one queued command — the deferred twin
+    /// of [`World::add_bundle`]. A dead entity is a silent no-op, like [`insert`](Self::insert).
+    pub fn insert_bundle<B: crate::component::Bundle + Send + Sync + 'static>(&mut self, bundle: B) -> &mut Self {
+        let e = self.entity;
+        self.commands.queue.push(move |world| {
+            world.add_bundle(e, bundle);
         });
         self
     }
@@ -341,6 +376,42 @@ mod tests {
             }
         }
         assert_eq!(count, 1);
+    }
+
+    /// A bundle spawned through `Commands` is the same entity `World::spawn_bundle` makes: both
+    /// components, on the id `spawn_bundle` handed back, and nothing before the flush.
+    #[test]
+    fn spawn_bundle_defers_one_entity_with_every_component() {
+        let mut world = World::new();
+        let e = {
+            let mut commands = Commands::fetch_stateless(&world, 0.0).unwrap();
+            commands.spawn_bundle((ComponentA(7), ComponentB(1.5))).id()
+        };
+        // `entity_count` counts the reserved id already, so the components are what to look at.
+        assert!(world.borrow::<ComponentA>().get(e.id()).is_none(), "nothing is observable before the flush");
+        world.apply_commands();
+        assert!(world.is_alive(e));
+        assert_eq!(world.borrow::<ComponentA>().get(e.id()).cloned(), Some(ComponentA(7)));
+        assert_eq!(world.borrow::<ComponentB>().get(e.id()).cloned(), Some(ComponentB(1.5)));
+    }
+
+    /// `insert_bundle` adds to what is there, and leaves a dead entity alone.
+    #[test]
+    fn insert_bundle_adds_every_component_and_skips_the_dead() {
+        let mut world = World::new();
+        let alive = world.spawn_bundle((ComponentA(1),));
+        let dead = world.spawn();
+        world.despawn(dead);
+        {
+            let mut commands = Commands::fetch_stateless(&world, 0.0).unwrap();
+            commands.entity(alive).insert_bundle((ComponentB(2.0),));
+            commands.entity(dead).insert_bundle((ComponentA(9), ComponentB(9.0)));
+        }
+        world.apply_commands();
+        assert!(!world.is_alive(dead), "the dead entity came back");
+        assert!(world.borrow::<ComponentA>().get(dead.id()).is_none());
+        assert_eq!(world.borrow::<ComponentA>().get(alive.id()).cloned(), Some(ComponentA(1)));
+        assert_eq!(world.borrow::<ComponentB>().get(alive.id()).cloned(), Some(ComponentB(2.0)));
     }
 
     #[test]

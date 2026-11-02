@@ -50,6 +50,24 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Text pinned to the window: `Text::pinned` / `TextSpace::Pinned`.** `TextSpace::Screen` is
+  absolute window pixels, so a title centred for 1280×720 is off screen in a smaller window — the
+  new game `kristal_avcisi` opened at 472×492 under a tiling window manager and its menu had no
+  text. `Text::pinned(content, font, size, anchor, offset)` puts the text's `anchor` on the same
+  point of the window (`Center` centres it, `TopRight` hangs it from that corner) plus `offset`
+  pixels, and follows resizes; `TextSpace::screen_point(anchor, viewport)` is where it lands. A UI
+  `Node` on the same entity still wins. Tested at two window sizes — an absolute reading passes at
+  one and fails at the other (mutation-checked).
+- **Deferred bundles: `Commands::spawn_bundle` and `EntityCommands::insert_bundle`.** The
+  `Commands` twins of `World::spawn_bundle` / `World::add_bundle`: one queued command that spawns
+  and fills the entity in one archetype move, instead of one `insert` (and one move) per
+  component. Tested for "nothing before the flush, everything after" and for a dead entity being
+  left alone; dropping the bundle in the queued command fails the first.
+- **`kristal_avcisi` — a complete 3D game.** Top-down arena, emissive additive crystals, chasing
+  hunters, lives, a clock, Menu → Playing → Over on `add_state` / `on_enter` / `DespawnOnExit`,
+  gameplay as one `.chain()`, rect lights, hand-set fog, a camera clear colour. What it ran into
+  is in its header and in `docs/CAPABILITY_GAPS.md` §C10; the two above came out of it.
+
 - **Object motion blur.** `PostProcess::motion_blur` now blurs moving objects too, not only camera
   motion: the composite reads the G-buffer's velocity (group 4 on native, `VelocityBinding`) for
   geometry, with a neighbour-max search so a moving object's trail reaches the background it just

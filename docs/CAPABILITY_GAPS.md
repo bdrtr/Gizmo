@@ -825,6 +825,31 @@ What it had to build for itself, each recorded in the file's header:
   { width, height }` now shows at least that box in any window shape, and
   `ProjectionMode::view_extent(aspect)` says what is actually visible; the game uses both.
 
+### C10. The second game: a 3D one (2026-11-02, `kristal_avcisi`)
+
+`demo/src/bin/kristal_avcisi.rs` is the 3D counterpart to C9: a top-down arena, a player sphere,
+emissive additive crystals, hunters that chase, three lives and a clock, and Menu → Playing → Over
+on the driven state machine with `DespawnOnExit`. It works on the first build; what it ran into:
+
+- ~~**Screen text is absolute window pixels.**~~ **Closed 2026-11-02.** The menu title was authored
+  at `(640, 240)` — the middle of the 1280×720 the game asks for. A tiling window manager opened it
+  at 472×492 and the title was off screen: the first screenshot had **no text at all**. `text.rs`
+  and `kule_yikici` had both worked around the same thing by rewriting `TextSpace::Screen` from
+  `WindowInfo` every frame. `Text::pinned(.., anchor, offset)` / `TextSpace::Pinned { offset }`
+  pins the text's anchor to the **same** point of the window (centre, a corner, an edge's middle)
+  plus a pixel offset, and follows resizes. A position that is a *fraction* that is not one of the
+  nine anchors (`kule_yikici`'s banner at 30 % of the height) is still a per-frame rewrite.
+- ~~**No deferred bundle spawn.**~~ **Closed 2026-11-02.** `World::spawn_bundle` had no `Commands`
+  twin, so the system that spawns a hunter wrote seven `insert`s where the enter hook wrote one
+  tuple — and each `insert` moves the entity to another archetype. `Commands::spawn_bundle` and
+  `EntityCommands::insert_bundle` queue one command that spawns and fills in one move; the game's
+  hook and system now share one `hunter(..)` bundle.
+- **`on_enter` hooks see no GPU.** A hook takes `&mut World`; a mesh needs the `Device`. The game
+  builds its meshes and materials once in setup and keeps them in a `Kit` resource (both are
+  `Arc`s, so cloning is cheap). It works and is the pattern to use; it is recorded because
+  "make a new mesh when the level starts" cannot be written there.
+- **No RNG resource.** The game carries a four-line xorshift. Open.
+
 ---
 
 ## D. Game-path / editor-path asymmetries
