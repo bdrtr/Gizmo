@@ -1194,7 +1194,14 @@ finger. `demo-web`'s canvas sets `touch-action: none`. Tested in `gizmo-core` wi
 (tap = click, a one-frame tap is not lost, drags, only the first finger is the mouse, focus loss,
 an old recording without touches loads); removing the emulated press, letting every finger take
 the mouse or skipping the per-frame roll each fails them. **Not yet tried on a real touchscreen.**
-Still missing: gestures (pinch, swipe) — a game builds them from `touches()`.
+~~Still missing: gestures (pinch, swipe).~~ **Closed 2026-11-03:** `Input::pinch()` (the distance
+between the first two fingers now over a frame ago), `two_finger_pan()` (their average delta) and
+`swipe(min_px)` (a finger lifting at least that far from where it landed — distance, not speed).
+Tested on spread, close, one finger left, a pan, a swipe, a short one, and a drag that came back;
+measuring the pinch against the current distance, counting a lifting finger as down, or a finger
+still down as a swipe each fails them. `kale` zooms with the wheel or a pinch and pans with two
+fingers, and now places a tower on the **release** — on the press, every two-finger gesture began
+by dropping one, since the first finger is the mouse.
 
 ~~**Two thumbs could not play.**~~ **Closed 2026-11-03.** Only the first finger drives the mouse, so
 nothing built on `Interaction` could follow a second one — and a twin-stick game needs two.

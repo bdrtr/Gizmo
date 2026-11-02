@@ -167,3 +167,67 @@ mod tests {
         assert!(back.touches().is_empty());
     }
 }
+
+#[cfg(test)]
+mod gesture_tests {
+    use super::TouchPhase::*;
+    use crate::input::Input;
+
+    fn two_down() -> Input {
+        let mut input = Input::new();
+        input.on_touch(1, Started, 100.0, 100.0);
+        input.on_touch(2, Started, 200.0, 100.0);
+        input.begin_frame();
+        input
+    }
+
+    /// Fingers spreading from 100 px apart to 150 is a 1.5 pinch; closing to 50 is 0.5; one
+    /// finger, or a frame where nothing moved, is no pinch (or a ratio of 1).
+    #[test]
+    fn spreading_and_closing_two_fingers_is_a_pinch() {
+        let mut input = two_down();
+        assert_eq!(input.pinch(), Some(1.0), "still fingers");
+        input.on_touch(1, Moved, 75.0, 100.0);
+        input.on_touch(2, Moved, 225.0, 100.0);
+        assert!((input.pinch().unwrap() - 1.5).abs() < 1e-5);
+        input.begin_frame();
+        input.on_touch(1, Moved, 125.0, 100.0);
+        input.on_touch(2, Moved, 200.0, 100.0);
+        assert!((input.pinch().unwrap() - 0.5).abs() < 1e-5, "{:?}", input.pinch());
+        input.on_touch(2, Ended, 200.0, 100.0);
+        assert_eq!(input.pinch(), None, "one finger left");
+    }
+
+    /// Both fingers moving the same way is a pan of their average.
+    #[test]
+    fn two_fingers_moving_together_pan() {
+        let mut input = two_down();
+        input.on_touch(1, Moved, 110.0, 120.0);
+        input.on_touch(2, Moved, 210.0, 140.0);
+        assert_eq!(input.two_finger_pan(), Some((10.0, 30.0)));
+        let mut one = Input::new();
+        one.on_touch(1, Started, 0.0, 0.0);
+        assert_eq!(one.two_finger_pan(), None);
+    }
+
+    /// A finger lifting far from where it came down is a swipe of that displacement; a tap, or
+    /// a drag that came back, is not — and a swipe is read on the frame of the lift only.
+    #[test]
+    fn a_lift_far_from_the_start_is_a_swipe() {
+        let mut input = Input::new();
+        input.on_touch(1, Started, 100.0, 300.0);
+        input.begin_frame();
+        input.on_touch(1, Moved, 300.0, 280.0);
+        assert_eq!(input.swipe(50.0), None, "still down");
+        input.on_touch(1, Ended, 300.0, 280.0);
+        assert_eq!(input.swipe(50.0), Some((200.0, -20.0)));
+        assert_eq!(input.swipe(500.0), None, "shorter than asked");
+        input.begin_frame();
+        assert_eq!(input.swipe(50.0), None, "one frame");
+        input.on_touch(2, Started, 10.0, 10.0);
+        input.on_touch(2, Moved, 200.0, 10.0);
+        input.on_touch(2, Moved, 15.0, 10.0);
+        input.on_touch(2, Ended, 15.0, 10.0);
+        assert_eq!(input.swipe(50.0), None, "it came back");
+    }
+}

@@ -220,6 +220,47 @@ impl Input {
         self.touches.fingers.iter().find(|t| t.id == id)
     }
 
+    /// Two fingers moving apart or together this frame: the distance between the first two fingers
+    /// down now over the distance a frame ago — `1.1` is a 10 % spread (zoom in), `0.9` a pinch.
+    /// `None` with fewer than two fingers down, or when they were on top of each other.
+    #[must_use]
+    pub fn pinch(&self) -> Option<f32> {
+        let [a, b] = self.two_fingers()?;
+        let now = distance(a.position, b.position);
+        let before = distance(sub(a.position, a.delta), sub(b.position, b.delta));
+        (before > 1.0 && now > 0.0).then(|| now / before)
+    }
+
+    /// Two fingers moving together this frame: the average of their deltas, window pixels — a
+    /// two-finger pan, while one finger is left to aim or select. `None` with fewer than two down.
+    #[must_use]
+    pub fn two_finger_pan(&self) -> Option<(f32, f32)> {
+        let [a, b] = self.two_fingers()?;
+        Some(((a.delta.0 + b.delta.0) / 2.0, (a.delta.1 + b.delta.1) / 2.0))
+    }
+
+    /// A finger that lifted this frame having travelled at least `min_px` from where it came
+    /// down: its displacement, window pixels (`y` down). One per frame at most — the first such
+    /// finger. A tap, or a drag that came back, is not a swipe.
+    ///
+    /// Distance, not speed: a slow long drag also counts. Games that care about a flick check the
+    /// [`Touch`] themselves.
+    #[must_use]
+    pub fn swipe(&self, min_px: f32) -> Option<(f32, f32)> {
+        self.touches
+            .fingers
+            .iter()
+            .filter(|t| t.just_ended)
+            .map(|t| sub(t.position, t.start))
+            .find(|d| distance((0.0, 0.0), *d) >= min_px)
+    }
+
+    /// The first two fingers that are down (not lifting this frame).
+    fn two_fingers(&self) -> Option<[&touch::Touch; 2]> {
+        let mut down = self.touches.fingers.iter().filter(|t| !t.just_ended);
+        Some([down.next()?, down.next()?])
+    }
+
     /// The finger standing in for the mouse, while it is down.
     #[must_use]
     pub fn primary_touch(&self) -> Option<&touch::Touch> {
@@ -579,6 +620,14 @@ pub use mapping::{ActionMap, InputBinding};
 pub use binding_names::{binding_from_name, binding_to_name, UnknownBinding};
 pub use rumble::RumbleRequest;
 pub use touch::{Touch, TouchPhase};
+
+fn sub(a: (f32, f32), b: (f32, f32)) -> (f32, f32) {
+    (a.0 - b.0, a.1 - b.1)
+}
+
+fn distance(a: (f32, f32), b: (f32, f32)) -> f32 {
+    (a.0 - b.0).hypot(a.1 - b.1)
+}
 
 #[cfg(test)]
 mod tests {

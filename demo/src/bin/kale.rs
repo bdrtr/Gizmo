@@ -9,6 +9,8 @@
 //! | **sol tık** (zeminde) | kule kur (10 altın) |
 //! | **Dalga** düğmesi | sonraki dalgayı başlat |
 //! | **R** | baştan başlat |
+//! | **tekerlek** · iki parmak açıp kapatma | yakınlaş / uzaklaş |
+//! | iki parmak sürükleme | haritayı kaydır |
 //!
 //! ## Neden var
 //!
@@ -40,6 +42,13 @@
 //!   **Kapatıldı:** parçacık sistemi boştayken (canlı parçacık yokken) hesap ve çizimi atlıyor,
 //!   SimpleApp onu artık kapatmıyor ve varsayılanlarını yalnızca kurulumda bir kez koyuyor;
 //!   `ParticleEmitter::one_shot(n)` / `burst(n)`. İsabetlerde kıvılcım, ölümlerde patlama.
+//!
+//! - **Dokunmatik jest yoktu.** Parmaklar `Input::touches` ile okunabiliyordu, ama haritaya iki
+//!   parmakla yakınlaşmak ve onu kaydırmak her oyunun kendi geometrisiydi. **Kapatıldı:**
+//!   `Input::pinch()` (iki parmak arası mesafenin bu karede oranı), `two_finger_pan()` ve
+//!   `swipe(min_px)`. Kule artık basınca değil bırakınca kuruluyor ve basış iki parmaklı bir jeste
+//!   dönmüşse hiç kurulmuyor — ilk parmak fare olduğu için, açılan her jest yoksa bir kule
+//!   bırakıyordu.
 //!
 //! ## Ortam değişkenleri
 //!   * `GIZMO_FONT=<yol>` — HUD fontu
@@ -98,6 +107,8 @@ struct Game {
     wave_button: u32,
     rng: Rng,
     auto: bool,
+    /// Bu basış iki parmaklı bir jeste döndü mü — dönmüşse bırakış kule kurmuyor.
+    gesture: bool,
 }
 
 fn main() {
@@ -202,6 +213,7 @@ fn main() {
                 wave_button: wave_button.id(),
                 rng: Rng::new(7),
                 auto: std::env::var_os("KALE_OTO").is_some(),
+                gesture: false,
             });
         })
         .set_update(update)
@@ -226,11 +238,19 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     if wave_clicked && game.to_spawn == 0 && game.lives > 0 {
         start_wave(&mut game);
     }
-    // Arayüzün üstündeki bir tık — düğme ya da boş şerit — kule kurmasın.
-    if input.is_mouse_button_just_pressed(0) && !pointer_over_ui(world) && game.lives > 0 {
-        if let Some(at) = ground_under_cursor(world) {
-            place_tower(world, &mut game, at);
+    camera_controls(world, input);
+    // Kule bırakışta kuruluyor: basış iki parmaklı bir jeste dönmüşse (yakınlaşma, kaydırma) hiç.
+    // Arayüzün üstündeki bir tık — düğme ya da boş şerit — da kurmuyor.
+    if input.touches().iter().filter(|t| !t.just_ended).count() >= 2 {
+        game.gesture = true;
+    }
+    if input.is_mouse_button_just_released(0) {
+        if !game.gesture && !pointer_over_ui(world) && game.lives > 0 {
+            if let Some(at) = ground_under_cursor(world) {
+                place_tower(world, &mut game, at);
+            }
         }
+        game.gesture = false;
     }
 
     spawn_enemies(world, &mut game, dt);
@@ -263,6 +283,32 @@ fn start_wave(game: &mut Game) {
     game.wave += 1;
     game.to_spawn = 4 + game.wave * 2;
     game.spawn = Timer::repeating(0.9);
+}
+
+/// Yakınlaşma (tekerlek ya da iki parmak) ve iki parmakla kaydırma. Kamera, ekranın ortasının
+/// baktığı zemin noktasına göre yaklaşıp uzaklaşıyor.
+fn camera_controls(world: &mut World, input: &Input) {
+    let wheel = input.mouse_scroll();
+    let zoom = input.pinch().unwrap_or(1.0) * 1.12_f32.powf(wheel);
+    let pan = input.two_finger_pan();
+    if zoom == 1.0 && pan.is_none() {
+        return;
+    }
+    let Some(cam) = world.borrow::<Camera>().iter().next().map(|(id, c)| (id, c.get_front())) else { return };
+    let (id, forward) = cam;
+    let mut transforms = world.borrow_mut::<Transform>();
+    let Some(mut t) = transforms.get_mut(id) else { return };
+    // Bakılan zemin noktası (y = 0) ve ona uzaklık.
+    let along = if forward.y.abs() > 1e-3 { -t.position.y / forward.y } else { 10.0 };
+    let focus = t.position + forward * along;
+    let distance = (along / zoom).clamp(6.0, 30.0);
+    let mut next = focus - forward * distance;
+    if let Some((dx, dy)) = pan {
+        // Parmakların altındaki zemin onlarla gitsin: uzaktayken bir piksel daha çok metre.
+        let k = distance * 0.0016;
+        next -= Vec3::new(dx * k, 0.0, dy * k);
+    }
+    t.position = next;
 }
 
 /// İmlecin altındaki zemin noktası, hücre merkezine oturtulmuş.
