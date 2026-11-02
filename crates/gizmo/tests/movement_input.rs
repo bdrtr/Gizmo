@@ -101,6 +101,12 @@ const EXCEPTIONS: &[(&str, &str)] = &[
          cooldown, not a direction.",
     ),
     (
+        "demo/src/bin/ritim.rs",
+        "a rhythm game's four lanes are D F J K — the home-row keys under both hands' index and \
+         middle fingers, one per lane. D is a lane, pressed on a beat, not a direction; a stick \
+         has nothing to offer four independent one-shot buttons.",
+    ),
+    (
         "demo/src/bin/wind_tunnel.rs",
         "Up/Down are a dial: they raise and lower the wind speed in m/s.",
     ),
