@@ -108,6 +108,15 @@ fn text_input_display(_world: &World, _entity: u32) -> Option<String> {
     None
 }
 
+/// What a [`LocalizedText`](crate::app::locale::LocalizedText) on `entity` shows in the world's
+/// [`Locale`](crate::app::locale::Locale) — or `None` (no label, or no locale) to draw the `Text`
+/// as authored. Resolved at draw time, so a language switch relabels every one on the next frame.
+fn localized_display(world: &World, entity: u32) -> Option<String> {
+    let label = world.borrow::<crate::app::locale::LocalizedText>().get(entity).cloned()?;
+    let locale = world.get_resource::<crate::app::locale::Locale>()?;
+    Some(label.resolve(&locale))
+}
+
 /// The overlay layer `entity` is drawn on — its `ZIndex`, inherited through its parents.
 #[cfg(feature = "ui")]
 fn ui_layer(world: &World, entity: u32) -> i32 {
@@ -213,9 +222,10 @@ pub fn record_text(
         // A clipping UI box above it (or on it) cuts screen text to the box.
         let clip = if item.space.needs_world_position() { None } else { ui_clip(world, id) };
         text.set_layer(ui_layer(world, id));
-        // A text field draws its value where its `Text` holds the placeholder.
+        // A text field draws its value where its `Text` holds the placeholder; otherwise a
+        // `LocalizedText` draws the current language's string (the placeholder too).
         let field;
-        let item = match text_input_display(world, id) {
+        let item = match text_input_display(world, id).or_else(|| localized_display(world, id)) {
             Some(shown) => {
                 field = {
                     let mut t = item.clone();
@@ -314,6 +324,37 @@ mod clip_tests {
         assert_eq!(boxes.len(), 2);
         assert_eq!(boxes[0], (s.id(), Vec2::new(10.0, 20.0), Vec2::new(200.0, 30.0), Some(Vec4::ONE)));
         assert_eq!(boxes[1], (s.id(), Vec2::new(10.0, 20.0), Vec2::new(50.0, 30.0), Some(fill)));
+    }
+
+    /// A `LocalizedText` shows the current language's string, follows a language switch, and
+    /// steps aside (the `Text` as authored) when there is no `Locale` — and the draw loop asks it.
+    #[test]
+    fn a_localized_label_follows_the_language() {
+        use crate::app::locale::{Locale, LocalizedText};
+        let mut world = World::new();
+        let label = world.spawn_bundle((LocalizedText::new("menu.score").with_arg("n", 3),)).id();
+        assert_eq!(localized_display(&world, label), None, "no locale: the Text as authored");
+        let mut locale = Locale::new("tr");
+        locale.insert("tr", "menu.score", "Skor: {n}");
+        locale.insert("en", "menu.score", "Score: {n}");
+        world.insert_resource(locale);
+        assert_eq!(localized_display(&world, label).as_deref(), Some("Skor: 3"));
+        world.get_resource_mut::<Locale>().unwrap().set_language("en");
+        assert_eq!(localized_display(&world, label).as_deref(), Some("Score: 3"));
+        let plain = world.spawn().id();
+        assert_eq!(localized_display(&world, plain), None);
+
+        let code: String = include_str!("text.rs")
+            .split(concat!("mod ", "clip_tests"))
+            .next()
+            .unwrap_or("")
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
+        assert!(
+            code.contains(concat!("text_input_display(world,id)", ".or_else(||localized_display(world,id))")),
+            "record_text no longer draws localized labels"
+        );
     }
 
     /// A scrolling list clips like a `ClipContent` panel: its rows scroll out of sight.

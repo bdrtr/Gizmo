@@ -60,6 +60,8 @@ pub use gizmo_physics_core::components::GlobalTransform;
 pub use gizmo_physics_rigid::components::{RigidBody, Velocity};
 pub use gizmo_math::Aabb;
 pub use gizmo_math::Rng;
+// Strings in several languages, and labels that follow the language.
+pub use crate::app::locale::{Locale, LocalizedText};
 #[cfg(feature = "render")]
 pub use crate::renderer::tween::{Ease, Tween};
 

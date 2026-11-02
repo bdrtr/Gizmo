@@ -114,6 +114,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - **`MeshSource("cylinder")` and `"cone"`**, sized like their colliders, and
     `AssetManager::PRIMITIVE_MESH_KEYS` as the one list of primitive keys (the studio's
     missing-asset check now uses it instead of its own copy).
+- **Localisation: `Locale` and `LocalizedText`** (`gizmo::app::locale`, in the prelude). JSON
+  string tables per language, fallback to the first language then the key, `{name}`
+  placeholders, `missing()`, `system_language()`; a `LocalizedText` beside a `Text` shows the
+  current language's string, resolved at draw time so a switch relabels everything at once.
+  `menu` is bilingual.
 - **UI sliders: `gizmo::ui::Slider`.** On a `ButtonBundle`: dragged (captured) or stepped with
   ←/→ and the d-pad while focused, `just_changed` / `just_released`; the engine paints its fill
   under the label. The menu's volume is one.

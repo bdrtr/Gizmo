@@ -40,6 +40,14 @@
 //!   `fade_to` / `fade_out` / `crossfade`. Menünün bir müziği var; Başla öbür parçaya 1.5 saniyede
 //!   geçiyor, Ses düğmesi çalan müziği o an kısıyor.
 //!
+//! - **Tek dil vardı.** Her demo menüsünü kaynakta Türkçe yazıyor; ikinci bir dile çıkacak bir
+//!   oyunun dizgelerini koyacak yeri, çalışırken dil değiştirmenin yolu yoktu. **Kapatıldı:**
+//!   `Locale` kaynağı (JSON tabloları, iç içe anahtarlar noktayla, `{isim}` yer tutucuları, eksik
+//!   dizge önce yedek dile sonra anahtarın kendisine düşüyor ve listeleniyor, sistemin dili) ve
+//!   `LocalizedText` — bir `Text`'in yanında, çizildiği karede o anki dildeki dizgeyi gösteriyor.
+//!   Menünün her etiketi bir anahtar; "Dil" düğmesi hepsini aynı karede çeviriyor, seçim
+//!   kaydediliyor.
+//!
 //! ## Ortam değişkenleri
 //!   * `GIZMO_FONT=<yol>` — font
 
@@ -63,8 +71,32 @@ enum Action {
     Start,
     Fullscreen,
     Volume,
+    Language,
     Quit,
 }
+
+/// Menünün dizgeleri, iki dilde. Gerçek bir oyunda bunlar dosyada durur (`Locale::load_json`
+/// dosyanın metnini alıyor); demoda kaynakta.
+const STRINGS_TR: &str = r#"{
+  "menu": {
+    "start": "Başla", "quit": "Çıkış", "name": "İsminizi yazın…",
+    "fullscreen_on": "Tam ekran: Açık", "fullscreen_off": "Tam ekran: Kapalı",
+    "volume": "Ses: %{v}", "language": "Dil: Türkçe",
+    "hello": "Merhaba, {name}!", "started": "Oyun burada başlardı — müzik değişti.",
+    "back": "Menüye dönüldü.",
+    "hint": "↑ ↓ / Tab · Enter · ← → ses   |   d-pad · A   |   fare"
+  }
+}"#;
+const STRINGS_EN: &str = r#"{
+  "menu": {
+    "start": "Start", "quit": "Quit", "name": "Type your name…",
+    "fullscreen_on": "Fullscreen: On", "fullscreen_off": "Fullscreen: Off",
+    "volume": "Volume: {v}%", "language": "Language: English",
+    "hello": "Hello, {name}!", "started": "The game would start here — the music changed.",
+    "back": "Back to the menu.",
+    "hint": "↑ ↓ / Tab · Enter · ← → volume   |   d-pad · A   |   mouse"
+  }
+}"#;
 
 #[derive(Clone, Copy)]
 struct MenuButton(Action);
@@ -123,7 +155,6 @@ fn main() {
             ));
             scene.world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 0.5, 6.0), yaw: -std::f32::consts::FRAC_PI_2, primary: true, ..Default::default() });
 
-            scene.world.spawn_bundle((Text::pinned_at("GIZMO", font, 72.0, Vec2::new(0.25, 0.18), Vec2::ZERO).with_anchor(TextAnchor::Center),));
 
             // Sütun: dört düğme.
             let column = scene.world.spawn_bundle(NodeBundle {
@@ -147,6 +178,28 @@ fn main() {
             scene.world.insert_resource(mode);
 
             // İsim alanı: `Text`'in kendi içeriği yer tutucu; yazılınca değer gösteriliyor.
+            // Dil: kayıtlıysa o, değilse sistemin dili, o da yoksa Türkçe.
+            let mut locale = Locale::new("tr");
+            locale.load_json("tr", STRINGS_TR).expect("the Turkish table is valid JSON");
+            locale.load_json("en", STRINGS_EN).expect("the English table is valid JSON");
+            let language = save
+                .get::<String>("language")
+                .or_else(Locale::system_language)
+                .filter(|l| locale.languages().contains(&l.as_str()))
+                .unwrap_or_else(|| "tr".to_string());
+            locale.set_language(&language);
+            scene.world.insert_resource(locale);
+
+            // Başlık sütunun ilk öğesi: pencereye iğnelenmiş bir başlık, kısa bir pencerede
+            // dikeyde ortalanan düğmelerin üstüne biniyordu.
+            let title = scene.world.spawn_bundle(NodeBundle {
+                style: Style { height: Val::Px(90.0), ..Default::default() },
+                background_color: BackgroundColor(Vec4::ZERO),
+                ..Default::default()
+            });
+            scene.world.add_component(title, Text::screen("GIZMO", font, 72.0, Vec2::ZERO).with_anchor(TextAnchor::Center));
+            scene.world.add_child(column, title);
+
             let mut field = TextInput::new(16);
             field.value = save.get::<String>("name").unwrap_or_default();
             let name_field = scene.world.spawn_bundle(ButtonBundle {
@@ -156,21 +209,24 @@ fn main() {
             });
             scene.world.add_component(
                 name_field,
-                Text::screen("İsminizi yazın…", font, 22.0, Vec2::ZERO)
+                Text::screen("", font, 22.0, Vec2::ZERO)
                     .with_anchor(TextAnchor::Center)
                     .with_color(Vec4::new(0.8, 0.82, 0.88, 1.0)),
             );
+            scene.world.add_component(name_field, LocalizedText::new("menu.name"));
             scene.world.add_component(name_field, field);
             scene.world.add_component(name_field, gizmo::ui::ClipContent);
             scene.world.add_child(column, name_field);
 
             let mut first = None;
             let mut slider = None;
+            // Etiketler anahtar: ekranda `Locale`'in o anki dilindeki dizge çiziliyor.
             for (action, label) in [
-                (Action::Start, "Başla".to_string()),
+                (Action::Start, LocalizedText::new("menu.start")),
                 (Action::Fullscreen, fullscreen_label(mode)),
                 (Action::Volume, volume_label(volume)),
-                (Action::Quit, "Çıkış".to_string()),
+                (Action::Language, LocalizedText::new("menu.language")),
+                (Action::Quit, LocalizedText::new("menu.quit")),
             ] {
                 let button = scene.world.spawn_bundle(ButtonBundle {
                     style: Style { height: Val::Px(52.0), ..Default::default() },
@@ -178,7 +234,8 @@ fn main() {
                     ..Default::default()
                 });
                 scene.world.add_component(button, MenuButton(action));
-                scene.world.add_component(button, Text::screen(label, font, 24.0, Vec2::ZERO).with_anchor(TextAnchor::Center));
+                scene.world.add_component(button, Text::screen("", font, 24.0, Vec2::ZERO).with_anchor(TextAnchor::Center));
+                scene.world.add_component(button, label);
                 scene.world.add_child(column, button);
                 if action == Action::Volume {
                     // Sürüklenen ya da odaktayken ←/→ ile adım adım değişen bir kaydırıcı; dolgusunu
@@ -193,8 +250,11 @@ fn main() {
                 .world
                 .spawn_bundle((Text::pinned_at("", font, 32.0, Vec2::new(0.62, 0.85), Vec2::ZERO).with_anchor(TextAnchor::Center).with_align(TextAlign::Center),))
                 .id();
-            scene.world.spawn_bundle((Text::pinned("↑ ↓ / Tab · Enter · ← → ses   |   d-pad · A   |   fare", font, 18.0, TextAnchor::BottomRight, Vec2::new(-16.0, -16.0))
-                .with_color(Vec4::new(0.7, 0.72, 0.78, 1.0)),));
+            scene.world.spawn_bundle((
+                Text::pinned("", font, 18.0, TextAnchor::BottomRight, Vec2::new(-16.0, -16.0))
+                    .with_color(Vec4::new(0.7, 0.72, 0.78, 1.0)),
+                LocalizedText::new("menu.hint"),
+            ));
 
             // Menü açık: klavye ve gamepad gezsin, ilk düğme odakta başlasın.
             if let Some(mut nav) = scene.world.get_resource_mut::<UiNavigation>() {
@@ -219,12 +279,12 @@ fn main() {
         .expect("uygulama çalıştırılamadı");
 }
 
-fn fullscreen_label(mode: WindowMode) -> String {
-    format!("Tam ekran: {}", if mode == WindowMode::Fullscreen { "Açık" } else { "Kapalı" })
+fn fullscreen_label(mode: WindowMode) -> LocalizedText {
+    LocalizedText::new(if mode == WindowMode::Fullscreen { "menu.fullscreen_on" } else { "menu.fullscreen_off" })
 }
 
-fn volume_label(v: u32) -> String {
-    format!("Ses: %{v}")
+fn volume_label(v: u32) -> LocalizedText {
+    LocalizedText::new("menu.volume").with_arg("v", v)
 }
 
 // Esc bir metin alanını bırakıyor; çıkış Çıkış düğmesinde.
@@ -239,7 +299,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, _dt: f32, _input: &I
         .map(|(_, f)| f.value.clone());
     if let Some(name) = submitted {
         remember("name", &name);
-        set_banner(world, menu.banner, &format!("Merhaba, {name}!"));
+        set_banner(world, menu.banner, LocalizedText::new("menu.hello").with_arg("name", name));
     }
 
     // Düğme renkleri: odak `Hovered` olarak geliyor, yani üzerine gelme rengi odak rengi de.
@@ -270,15 +330,11 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, _dt: f32, _input: &I
             Action::Start => {
                 // Öbür parçaya geç: yenisi sessizden açılıyor, eskisi kısılıp duruyor.
                 menu.in_game = !menu.in_game;
-                let (track, text) = if menu.in_game {
-                    ("oyun", "Oyun burada başlardı — müzik değişti.")
-                } else {
-                    ("menu", "Menüye dönüldü.")
-                };
+                let (track, text) = if menu.in_game { ("oyun", "menu.started") } else { ("menu", "menu.back") };
                 if let Some(mut audio) = world.get_resource_mut::<AudioManager>() {
                     menu.music = audio.crossfade(menu.music, track, 1.5).ok().or(menu.music);
                 }
-                set_banner(world, menu.banner, text);
+                set_banner(world, menu.banner, LocalizedText::new(text));
                 None
             }
             Action::Fullscreen => {
@@ -292,14 +348,23 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, _dt: f32, _input: &I
             }
             // Kaydırıcının işi: sürükleme ya da odaktayken ←/→.
             Action::Volume => None,
+            // Dili çevir: her `LocalizedText` bir sonraki karede yeni dilde.
+            Action::Language => {
+                if let Some(mut locale) = world.get_resource_mut::<Locale>() {
+                    let next = if locale.language() == "tr" { "en" } else { "tr" };
+                    locale.set_language(next);
+                    remember("language", &next);
+                }
+                None
+            }
             Action::Quit => {
                 world.insert_resource(AppExit);
                 None
             }
         };
         if let Some(label) = label {
-            if let Some(mut t) = world.borrow_mut::<Text>().get_mut(id) {
-                t.content = label;
+            if let Some(mut t) = world.borrow_mut::<LocalizedText>().get_mut(id) {
+                *t = label;
             }
         }
         if let Some(mut audio) = world.get_resource_mut::<AudioManager>() {
@@ -315,8 +380,8 @@ fn set_volume(world: &mut World, menu: &mut Menu, v: u32) {
     if let Some(mut audio) = world.get_resource_mut::<AudioManager>() {
         audio.mixer_mut().set_master_gain(menu.volume as f32 / 100.0);
     }
-    if let Some(mut t) = world.borrow_mut::<Text>().get_mut(menu.volume_button) {
-        t.content = volume_label(menu.volume);
+    if let Some(mut t) = world.borrow_mut::<LocalizedText>().get_mut(menu.volume_button) {
+        *t = volume_label(menu.volume);
     }
 }
 
@@ -328,9 +393,10 @@ fn remember<T: serde::Serialize>(key: &str, value: &T) {
     }
 }
 
-fn set_banner(world: &mut World, id: u32, text: &str) {
-    if let Some(mut t) = world.borrow_mut::<Text>().get_mut(id) {
-        t.content = text.to_string();
+/// Alttaki duyuruyu değiştirir — bir anahtar, dil değişince o da değişsin diye.
+fn set_banner(world: &mut World, id: u32, text: LocalizedText) {
+    if let Some(e) = world.get_entity(id) {
+        world.add_component(e, text);
     }
 }
 

@@ -1100,6 +1100,20 @@ mouse, the keyboard and a gamepad. Three of its four buttons were impossible:
   Tested on drag, capture, release and both key paths; ignoring the focus move, letting ←/→ move
   the focus, or setting the value only when a drag starts each fails them. `menu`'s volume is one.
 
+- ~~**One language.**~~ **Closed 2026-11-02.** Every demo wrote its strings in Turkish in the
+  source; a game shipping a second language had no table to put them in and no way to switch at
+  run time. `gizmo::app::locale::Locale` (a resource, in the prelude): JSON tables per language
+  (nested objects become dotted keys; a table with a non-string value is refused whole), `get`
+  falling back to the first language loaded and then to the key itself — a missing string shows
+  as its key, where it is noticed — and `missing()` listing every key no table had; `format` fills
+  `{name}` placeholders; `system_language()` reads `LC_ALL`/`LC_MESSAGES`/`LANG` or the browser's
+  `navigator.language`. `LocalizedText` beside a `Text` is resolved **at draw time** (after a
+  `TextInput`'s value, so a field's placeholder is translated too), so `set_language` relabels
+  everything on the next frame. Tested on the lookup chain, placeholders, a refused table, tag
+  normalisation and the draw-time resolution; a guard fails if the draw loop stops asking. `menu`
+  is bilingual with a language button, and opens in the system's language (checked by screenshot
+  under `LANG=en_US` and `tr_TR`). Not yet: plurals, right-to-left text.
+
 ### C16. Every game wrote the same three lines (2026-11-02)
 
 ~~**No timer.**~~ **Closed 2026-11-02.** `balon`, `kale` and `yikim_ustasi` each counted down by

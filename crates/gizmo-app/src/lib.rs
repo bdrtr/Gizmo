@@ -38,6 +38,8 @@
 pub mod asset_identity;
 /// [`save::SaveData`] — a game's settings, scores and progress, kept between runs.
 pub mod save;
+/// [`locale::Locale`] — a game's strings in several languages; [`locale::LocalizedText`].
+pub mod locale;
 /// The in-engine developer console: a `~`-style overlay that reads and writes
 /// [`gizmo_core::cvar`] variables and prints the engine's log buffer. Drawn by the windowed
 /// loop when the `egui` feature is on, over whatever the game is rendering.
