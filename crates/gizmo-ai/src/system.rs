@@ -164,13 +164,16 @@ pub fn ai_navmesh_rebuild_system(world: &World, _dt: f32) {
 /// touches those two component types mutably.
 #[tracing::instrument(skip_all, name = "ai_navigation_system")]
 pub fn ai_navigation_system(world: &World, dt: f32) {
-    let grid = match world.get_resource::<NavGrid>() {
+    let mut grid = match world.get_resource_mut::<NavGrid>() {
         Some(g) => g,
         None => {
             tracing::trace!("[AI] NavGrid resource yok, navigasyon atlanıyor");
             return;
         }
     };
+    // A wall placed or removed since the last frame: every route may be wrong now.
+    let grid_changed = grid.take_change();
+    let grid = &*grid;
 
     let agent_entities: Vec<u32> = world.borrow::<NavAgent>().entities().collect();
     let agent_count = agent_entities.len();
@@ -245,7 +248,7 @@ pub fn ai_navigation_system(world: &World, dt: f32) {
         target_pos.y = t.position.y;
 
         agent.recalc.timer -= dt;
-        let mut needs_recalc = agent.is_done() || agent.recalc.timer <= 0.0;
+        let mut needs_recalc = agent.is_done() || agent.recalc.timer <= 0.0 || grid_changed;
 
         // Hedef çok yer değiştirdiyse yeniden hesapla
         if let Some(last_pos) = agent.recalc.last_target_pos {
@@ -488,6 +491,44 @@ mod frame_tests {
 
         let agents = world.borrow::<NavAgent>();
         assert_eq!(agents.get(e.id()).unwrap().state, NavAgentState::Moving);
+    }
+
+    /// A wall dropped on an agent's route makes it replan at once — not when its timer next runs
+    /// out — and the new route is longer, because it goes round.
+    #[test]
+    fn a_wall_on_the_route_makes_the_agent_replan_at_once() {
+        use gizmo_core::query::Mut;
+        let (mut world, e) = world_with_agent(Vec3::new(0.5, 0.0, 0.5), Some(Vec3::new(8.5, 0.0, 0.5)));
+        world.insert_resource({
+            let mut g = NavGrid::centred_on(1.0, 32, 32, Vec3::ZERO);
+            g.needs_rebuild = false;
+            g
+        });
+        let step = 1.0 / 240.0; // far inside the 0.5 s replan interval
+        ai_navigation_system(&world, step);
+        let straight = world.borrow::<NavAgent>().get(e.id()).unwrap().path_len();
+        assert!(straight > 0, "no first path");
+
+        // A wall across the route, thirteen cells tall: the grid steps diagonally, so going round
+        // a short wall can cost no extra waypoints — this one costs about six.
+        if let Some(mut grid) = world.get_resource_mut::<NavGrid>() {
+            for z in -6..=6 {
+                grid.add_obstacle_world(Vec3::new(4.5, 0.0, z as f32 + 0.5));
+            }
+        }
+        ai_navigation_system(&world, step);
+        let detour = world.borrow::<NavAgent>().get(e.id()).unwrap().path_len();
+        assert!(detour > straight, "still on the old route: {straight} waypoints before, {detour} after");
+
+        // And an unchanged grid does not replan every frame.
+        if let Some(mut agents) = world.query_mut::<Mut<NavAgent>>() {
+            for (_, mut a) in agents.iter_mut() {
+                a.advance();
+            }
+        }
+        let advanced = world.borrow::<NavAgent>().get(e.id()).unwrap().path_index();
+        ai_navigation_system(&world, step);
+        assert_eq!(world.borrow::<NavAgent>().get(e.id()).unwrap().path_index(), advanced, "replanned with nothing changed");
     }
 
     /// An agent with nothing to do is damped, not steered — the same call, the other branch.

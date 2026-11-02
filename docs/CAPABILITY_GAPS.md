@@ -941,8 +941,13 @@ None of the earlier games touched `gizmo-ai`, `gizmo-ui` or picking. What it fou
   the ground underneath. `gizmo::ui::pointer_over_ui(world)` tests every `Node`.
 - ~~**No click event; no optional query component.**~~ Both closed the same day for this game
   (`Clicked`, `Option<&T>`/`Option<Mut<T>>` — §C1).
-- **Open, small:** a grid change does not make agents replan; they pick it up at their next
-  recalculation (0.5 s by default), so the game clears every agent's path when it adds a wall.
+- ~~**A grid change did not make agents replan.**~~ **Closed 2026-11-02.** They picked it up at
+  their next recalculation (0.5 s by default) and walked into the new wall until then, so the
+  game cleared every agent's path by hand. `NavGrid` now keeps a revision —
+  `add_obstacle_world`, `remove_obstacle_world`, a physics rebuild and `mark_changed` (for direct
+  writes to `obstacles`) bump it — and the navigation system replans every agent on the frame it
+  changes. Tested with a wall dropped on an agent's route inside its replan interval; ignoring the
+  revision fails it.
 
 ---
 

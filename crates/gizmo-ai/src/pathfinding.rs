@@ -83,6 +83,12 @@ pub struct NavGrid {
     /// [`NavGrid::update_from_physics_world`]. Nothing in this type acts on it; it is polled
     /// by this crate's `system::ai_navmesh_rebuild_system`, which runs the rebuild when set.
     pub needs_rebuild: bool,
+    /// Bumped by every change to the walkable set made through this type — see
+    /// [`mark_changed`](Self::mark_changed).
+    revision: u64,
+    /// The revision the agents last planned against; the navigation system replans every agent
+    /// when the two differ.
+    planned_for: u64,
 }
 
 impl NavGrid {
@@ -121,7 +127,30 @@ impl NavGrid {
             height,
             obstacles: HashSet::new(),
             needs_rebuild: true,
+            revision: 0,
+            planned_for: 0,
         }
+    }
+
+    /// Tells the agents the walkable set changed, so each replans on the next navigation frame
+    /// instead of walking its old route into the new wall until its timer runs out (0.5 s by
+    /// default).
+    ///
+    /// [`add_obstacle_world`](Self::add_obstacle_world),
+    /// [`remove_obstacle_world`](Self::remove_obstacle_world) and
+    /// [`update_from_physics_world`](Self::update_from_physics_world) call it themselves. Writing
+    /// [`obstacles`](Self::obstacles) directly does not — call this after. Found writing `kale`,
+    /// which cleared every agent's path by hand after placing a tower.
+    pub fn mark_changed(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
+    }
+
+    /// Whether the walkable set changed since the agents last planned — and, as it answers,
+    /// records that they are about to. Called once per frame by the navigation system.
+    pub(crate) fn take_change(&mut self) -> bool {
+        let changed = self.revision != self.planned_for;
+        self.planned_for = self.revision;
+        changed
     }
 
     /// The same grid as [`NavGrid::new`], moved so its X/Z centre lands on `center`.
@@ -232,14 +261,18 @@ impl NavGrid {
     /// anyway. The next [`NavGrid::update_from_physics_world`] discards the entry.
     pub fn add_obstacle_world(&mut self, world_pos: Vec3) {
         let gp = self.world_to_grid(world_pos);
-        self.obstacles.insert(gp);
+        if self.obstacles.insert(gp) {
+            self.mark_changed();
+        }
     }
 
     /// Unblocks the whole cell containing `world_pos` — the position is floored to a cell,
     /// so this clears a cell, not a point. A no-op if that cell was not blocked.
     pub fn remove_obstacle_world(&mut self, world_pos: Vec3) {
         let gp = self.world_to_grid(world_pos);
-        self.obstacles.remove(&gp);
+        if self.obstacles.remove(&gp) {
+            self.mark_changed();
+        }
     }
 
     /// Cell containing a world position (metres), component-wise `floor(pos / cell_size)`.
@@ -410,6 +443,7 @@ impl NavGrid {
 
         self.obstacles = obstacles;
         self.needs_rebuild = false;
+        self.mark_changed();
 
         if clipped > 0 {
             tracing::warn!(

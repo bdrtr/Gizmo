@@ -29,8 +29,11 @@
 //! - **Tıklama olayı yoktu** (`Interaction` her kare yeniden hesaplanan bir durum). **Kapatıldı**
 //!   bu oyundan hemen önce: `ButtonBundle`'daki `Clicked`; "Dalga" düğmesi onu okuyor. Onun için
 //!   de sorguda isteğe bağlı bileşen gerekti: `Option<Mut<Clicked>>`.
-//! - *Açık, küçük:* ızgaraya engel eklenince ajanlar yolu kendileri yenilemiyor (yeniden
-//!   planlama aralığı 0.5 s); oyun her ajanın `clear_path`'ini çağırıyor.
+//! - **Izgaraya duvar eklenince ajanlar eski yolda kalıyordu** — sonraki yeniden planlamaya
+//!   kadar (0.5 s) yeni kulenin içinden yürüyorlardı; oyun her ajanın `clear_path`'ini elle
+//!   çağırıyordu. **Kapatıldı:** `NavGrid` bir revizyon tutuyor (`add_obstacle_world`,
+//!   `remove_obstacle_world`, yeniden kurma ve `mark_changed` artırıyor), navigasyon değiştiği
+//!   kare bütün ajanları yeniden planlatıyor.
 //!
 //! ## Ortam değişkenleri
 //!   * `GIZMO_FONT=<yol>` — HUD fontu
@@ -290,12 +293,8 @@ fn place_tower(world: &mut World, game: &mut Game, at: Vec3) {
         Collider::cylinder(0.35, 0.6),
         Tower { cooldown: 0.0 },
     ));
-    // Yeni duvar: yürüyen herkes yolunu yeniden hesaplasın.
-    if let Some(mut agents) = world.query_mut::<Mut<NavAgent>>() {
-        for (_, mut agent) in agents.iter_mut() {
-            agent.clear_path();
-        }
-    }
+    // Yürüyen ajanlar yeni duvarı kendileri görüyor: `add_obstacle_world` ızgarayı
+    // "değişti" diye işaretliyor, navigasyon o kare herkesi yeniden planlıyor.
     play(world, "kur");
 }
 

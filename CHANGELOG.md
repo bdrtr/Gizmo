@@ -111,6 +111,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   §C12), and what it needed:
   - **`gizmo::pointer::cursor_ray` / `cursor_on_plane`** — the world under the mouse, through the
     camera under the cursor (split screen included), and **`Ray::intersect_plane`**.
+  - **Agents replan when the grid changes.** `NavGrid` keeps a revision that its obstacle
+    methods and a rebuild bump (`mark_changed` for direct writes to `obstacles`); the navigation
+    system replans every agent on the frame it changes, instead of at the next 0.5 s
+    recalculation — until then they walked through the tower just placed.
   - **`gizmo::ui::pointer_over_ui(world)`** — whether the cursor is over any UI node, so a click
     on a panel is not also a click on the world (the game's first version placed towers through
     its own button bar).
