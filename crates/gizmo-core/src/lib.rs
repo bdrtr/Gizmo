@@ -69,7 +69,7 @@ pub use commands::{CommandQueue, Commands, EntityCommands};
 pub use component::{Bundle, BundleExt, Component, EntityName, IsHidden, IsDeleted, PrefabRequest};
 pub use cvar::{CVarRegistry, CVarValue, DevConsoleState};
 pub use entity::Entity;
-pub use event::{EventReader, EventWriter, Events};
+pub use event::{EventMutator, EventReader, EventWriter, Events};
 pub use hierarchy::HierarchyExt;
 pub use input::{ActionMap, Input, InputBinding};
 pub use pool::{PoolManager, Pooled};
@@ -120,7 +120,7 @@ pub mod prelude {
     };
     pub use super::{
         ActionMap, Bundle, Changed, CommandQueue, Commands, Component, Entity, EntityName,
-        EventReader, EventWriter, Events, FrameProfiler, Input, InputBinding, IntoSystem,
+        EventMutator, EventReader, EventWriter, Events, FrameProfiler, Input, InputBinding, IntoSystem,
         IntoSystemConfig, IsHidden, IsDeleted, Local, Mut, Phase, PhysicsTime, PoolManager, Pooled,
         PrefabRequest,
         Query, ReadOnlyQuery, Res, ResMut, Schedule, StorageView, StorageViewMut, System,

@@ -99,6 +99,12 @@ impl<T> Events<T> {
         self.previous.iter()
     }
 
+    /// The readable batch (the previous frame's events), mutably — what [`EventMutator`] hands
+    /// out. Readers that run after see the changed values; nothing is added or removed.
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> {
+        self.previous.iter_mut()
+    }
+
     /// The number of events in the previous frame.
     #[inline]
     pub fn len(&self) -> usize {
@@ -253,9 +259,105 @@ impl<T: 'static> SystemParam for EventWriter<'static, T> {
     }
 }
 
+// ==============================================================
+// EventMutator
+// ==============================================================
+
+/// System parameter for **changing** the readable events of type `T` in place — clamping a
+/// damage number, tagging a collision, cancelling by marking — before the readers that run after
+/// it see them.
+///
+/// It touches the same batch an [`EventReader<T>`] reads (the previous frame's), and declares a
+/// resource *write* of [`Events<T>`], so the scheduler keeps it out of any batch holding a reader
+/// or writer of the same `T`. Which side of it a reader lands on is ordering: put the mutator
+/// before its readers with `.chain()` or `label` / `after`.
+///
+/// Fetching fails, and panics the system, when no `Events<T>` resource was inserted, or when the
+/// same parameter list also asks for a reader, writer or mutator of the same `T`.
+pub struct EventMutator<'w, T: 'static> {
+    events: ResMut<'w, Events<T>>,
+}
+
+impl<'w, T: 'static> EventMutator<'w, T> {
+    /// The readable events, mutably, in the order they were sent.
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> {
+        self.events.iter_mut()
+    }
+
+    /// The readable events, shared.
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
+        self.events.iter()
+    }
+
+    /// Number of readable events.
+    pub fn len(&self) -> usize {
+        self.events.len()
+    }
+
+    /// `true` when there is nothing to change.
+    pub fn is_empty(&self) -> bool {
+        self.events.is_empty()
+    }
+}
+
+impl<T: 'static> crate::system::sealed::Sealed for EventMutator<'static, T> {}
+impl<T: 'static> SystemParam for EventMutator<'static, T> {
+    type Item<'w> = EventMutator<'w, T>;
+    type State = ();
+    fn fetch<'w>(
+        world: &'w World,
+        _dt: f32,
+        _state: &'w mut (),
+    ) -> Result<Self::Item<'w>, SystemParamFetchError> {
+        let events = ResMut::<Events<T>>::fetch_stateless(world, _dt)?;
+        Ok(EventMutator { events })
+    }
+    fn get_access_info(info: &mut AccessInfo) {
+        ResMut::<'static, Events<T>>::get_access_info(info);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A mutator changes the readable batch in place, and a reader ordered after it sees the
+    /// change — the damage clamp this exists for. Its access is a write, so it never shares a
+    /// batch with that reader.
+    #[test]
+    fn a_mutator_changes_what_later_readers_see() {
+        use crate::system::{IntoSystemChain, Schedule};
+        use std::sync::{Arc, Mutex};
+        #[derive(Debug, PartialEq)]
+        struct Damage(u32);
+
+        let mut world = World::new();
+        let mut events = Events::new();
+        events.send(Damage(40));
+        events.send(Damage(250));
+        events.update();
+        world.insert_resource(events);
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let s = seen.clone();
+        let mut schedule = Schedule::new();
+        schedule.add_chain(
+            (
+                |mut hits: EventMutator<Damage>| {
+                    for hit in hits.iter_mut() {
+                        hit.0 = hit.0.min(100);
+                    }
+                },
+                move |hits: EventReader<Damage>| {
+                    s.lock().unwrap().extend(hits.iter().map(|h| h.0));
+                },
+            )
+                .chain(),
+        );
+        schedule.run(&mut world, 0.016);
+        assert_eq!(*seen.lock().unwrap(), [40, 100], "clamped in place, order kept");
+        assert_eq!(schedule.legacy_batches.len(), 2, "a writer and a reader of one type never share a batch");
+    }
 
     #[test]
     fn test_send_and_iter() {

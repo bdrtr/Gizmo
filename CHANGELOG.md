@@ -64,6 +64,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   bytes per sample, so native devices request `max_color_attachment_bytes_per_sample` up to 64.
   Groundwork for object motion blur; nothing reads the target yet.
 
+- **`EventMutator<T>`** — a system parameter that changes the readable events in place (a damage
+  clamp, a tag) before the readers ordered after it see them; `Events::iter_mut` underneath. In
+  the prelude.
+
 - **`Query::entity(id)`** — the generation-checked `Entity` for an id a query yielded, so a
   scheduled system (which never has `&World`) can hand a real handle to `Commands` instead of
   forging `Entity::new(id, 0)`, which is wrong for every recycled id.
