@@ -114,6 +114,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - **`MeshSource("cylinder")` and `"cone"`**, sized like their colliders, and
     `AssetManager::PRIMITIVE_MESH_KEYS` as the one list of primitive keys (the studio's
     missing-asset check now uses it instead of its own copy).
+- **Saving between runs: `gizmo::app::save::SaveData`.** A game's settings, scores and progress
+  as typed key/values (`get::<T>`, `set`, `remove`, `save`), in `<data dir>/<game>/save.json` on
+  the desktop and `localStorage` in the browser. Writes are atomic (temporary file + rename); a
+  save that cannot be read is moved aside to `save.json.bad` instead of being overwritten. The
+  menu demo remembers volume and fullscreen; `kristal_avcisi` remembers its best score.
 - **A menu's three missing buttons** (`menu`, `docs/CAPABILITY_GAPS.md` §C15):
   - **Keyboard and gamepad navigation: `gizmo::ui::UiNavigation`.** A resource, off by default;
     on, the arrows / Tab / d-pad move a focus in reading order (wrapping), Enter / Space / the

@@ -1007,6 +1007,14 @@ mouse, the keyboard and a gamepad. Three of its four buttons were impossible:
   inserts it, through the path closing the window takes (`shut_down`: the input recording is
   written, then the event loop exits). The headless half is tested — `run` returns after the
   third frame when the game asks on its third.
+- ~~**Nothing survived a restart.**~~ **Closed 2026-11-02.** Menu settings and every game's best
+  score were lost on exit; the engine kept scenes and the editor's own preferences, nothing for a
+  game. `gizmo::app::save::SaveData` — `open(game)`, `get::<T>` / `set` / `remove`, `save()` —
+  under the platform data dir (`localStorage` in the browser). A write is atomic (temporary
+  file, then rename), and a save it cannot read is **moved aside** (`save.json.bad`, `.bad.1`, …)
+  rather than overwritten by the next save. Tested: a round trip of numbers, strings and a
+  struct, a wrong-typed read, a corrupt file kept twice over, safe names; removing the move-aside
+  fails it. The menu remembers its volume and fullscreen, `kristal_avcisi` its best score.
 
 ---
 

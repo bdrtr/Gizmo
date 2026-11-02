@@ -24,10 +24,14 @@
 //!   bitmiyordu. **Kapatıldı:** `AppExit` kaynağı; iki döngü de o karenin sonunda pencereyi
 //!   kapatmakla aynı yoldan çıkıyor.
 //!
+//! - **Ayarlar kapanınca kayboluyordu.** **Kapatıldı:** `SaveData` — ses ve tam ekran
+//!   `gizmo_menu/save.json`'da, menü onlarla açılıyor.
+//!
 //! ## Ortam değişkenleri
 //!   * `GIZMO_FONT=<yol>` — font
 
 use gizmo::audio::synth::{Blip, Wave};
+use gizmo::app::save::SaveData;
 use gizmo::audio::AudioManager;
 use gizmo::core::hierarchy::HierarchyExt;
 use gizmo::core::input::Input;
@@ -106,11 +110,17 @@ fn main() {
                 background_color: BackgroundColor(Vec4::new(0.0, 0.0, 0.0, 0.35)),
                 ..Default::default()
             });
+            // Ayarlar bir önceki oturumdan.
+            let save = SaveData::open("gizmo_menu");
+            let volume = save.get::<u32>("volume").unwrap_or(50).min(100);
+            let mode = if save.get::<bool>("fullscreen").unwrap_or(false) { WindowMode::Fullscreen } else { WindowMode::Windowed };
+            scene.world.insert_resource(mode);
+
             let mut first = None;
             for (action, label) in [
                 (Action::Start, "Başla".to_string()),
-                (Action::Fullscreen, fullscreen_label(WindowMode::Windowed)),
-                (Action::Volume, volume_label(50)),
+                (Action::Fullscreen, fullscreen_label(mode)),
+                (Action::Volume, volume_label(volume)),
                 (Action::Quit, "Çıkış".to_string()),
             ] {
                 let button = scene.world.spawn_bundle(ButtonBundle {
@@ -139,10 +149,10 @@ fn main() {
 
             if let Ok(mut audio) = AudioManager::new() {
                 audio.load_sound_bytes("tik", Blip::new(Wave::Sine, 880.0, 0.05).with_volume(0.5).wav());
-                audio.mixer_mut().set_master_gain(0.5);
+                audio.mixer_mut().set_master_gain(volume as f32 / 100.0);
                 scene.world.insert_resource(audio);
             }
-            scene.world.insert_resource(Menu { volume: 50, banner });
+            scene.world.insert_resource(Menu { volume, banner });
         })
         .set_update(update)
         .run()
@@ -188,6 +198,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, _dt: f32, input: &In
                     _ => WindowMode::Windowed,
                 };
                 world.insert_resource(next);
+                remember("fullscreen", &(next == WindowMode::Fullscreen));
                 Some(fullscreen_label(next))
             }
             Action::Volume => {
@@ -195,6 +206,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, _dt: f32, input: &In
                 if let Some(mut audio) = world.get_resource_mut::<AudioManager>() {
                     audio.mixer_mut().set_master_gain(menu.volume as f32 / 100.0);
                 }
+                remember("volume", &menu.volume);
                 Some(volume_label(menu.volume))
             }
             Action::Quit => {
@@ -212,6 +224,14 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, _dt: f32, input: &In
         }
     }
     world.insert_resource(menu);
+}
+
+/// Bir ayarı kalıcı yapar — bir sonraki açılışta menü onunla açılıyor.
+fn remember<T: serde::Serialize>(key: &str, value: &T) {
+    let mut save = SaveData::open("gizmo_menu");
+    if save.set(key, value).and_then(|()| save.save()).is_err() {
+        gizmo::gizmo_log!(Warning, "ayar kaydedilemedi: {key}");
+    }
 }
 
 fn set_banner(world: &mut World, id: u32, text: &str) {

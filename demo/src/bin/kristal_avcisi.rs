@@ -51,6 +51,9 @@
 //! - **Parametre demeti yoktu.** `(time, state): (Res<Time>, Res<State<Screen>>)` derlenmiyordu
 //!   — Bevy'den gelen herkesin ilk yazdığı şey. **Kapatıldı:** 2–8 elemanlı demetler (iç içe de)
 //!   `SystemParam`; `collect` bir tane kullanıyor.
+//! - **En iyi skor kapanınca kayboluyordu.** Oyunun bir oturumdan ötekine bir şey saklama yolu
+//!   yoktu. **Kapatıldı:** `gizmo::app::save::SaveData` — en iyi skor
+//!   `<veri dizini>/kristal_avcisi/save.json`'da (tarayıcıda `localStorage`).
 //! - **Fontsuz metin.** Repo font taşımıyor; `kule_yikici` gibi sistem yolları deneniyor.
 //!
 //! ## Ortam değişkenleri
@@ -58,6 +61,7 @@
 //!   * `KRISTAL_OYNA=1` — menüyü atlayıp doğrudan oyunla aç (ekran görüntüsü için)
 
 use gizmo::audio::synth::{Blip, Wave};
+use gizmo::app::save::SaveData;
 use gizmo::audio::AudioManager;
 use gizmo::core::input::{Input, MoveKeys};
 use gizmo::core::query::{Mut, Query, With};
@@ -129,6 +133,14 @@ fn main() {
         .on_enter(Screen::Over, |world| {
             play(world.get_resource_mut::<AudioManager>().as_deref_mut(), "bitis");
             let (score, best) = world.get_resource::<Run>().map(|r| (r.score, r.best)).unwrap_or((0, 0));
+            // En iyi skor kalıcı: bir sonraki açılışta da orada.
+            let mut save = SaveData::open("kristal_avcisi");
+            if save.get::<u32>("best").unwrap_or(0) < best {
+                let _ = save.set("best", &best);
+                if let Err(e) = save.save() {
+                    gizmo::gizmo_log!(Warning, "en iyi skor kaydedilemedi: {e}");
+                }
+            }
             banner(world, &format!("Oyun bitti — {score} kristal\nen iyi {best}\nEnter ile menü"), [1.0, 0.75, 0.3]);
         })
         .with_simple_scene(|scene, _state| {
@@ -191,7 +203,9 @@ fn main() {
                     .with_align(TextAlign::Center),))
                 .id();
             scene.world.insert_resource(Hud { status, banner: banner_text });
-            scene.world.insert_resource(Run { score: 0, lives: 3, time_left: ROUND_SECONDS, grace: 0.0, best: 0 });
+            // En iyi skor bir önceki oturumdan.
+            let best = SaveData::open("kristal_avcisi").get("best").unwrap_or(0);
+            scene.world.insert_resource(Run { score: 0, lives: 3, time_left: ROUND_SECONDS, grace: 0.0, best });
             scene.world.insert_resource(Rng::new(0x9E37_79B9));
             // Sesler dosyadan değil sayılardan. Cihaz yoksa kaynak hiç konmuyor, `play` susuyor.
             if let Ok(mut audio) = AudioManager::new() {
