@@ -1,6 +1,7 @@
 # Capability gaps — what the engine cannot do yet, measured
 
-**Status:** measured, not estimated. **Last updated:** 2026-08-23.
+**Status:** measured, not estimated. **Written:** 2026-08-23; items closed since are marked in
+place, each with the measurement that closed it. **Last pass:** 2026-11-02.
 
 ## What this is
 
@@ -19,8 +20,14 @@ built on this engine would reach for and not find, ranked by how much each one b
 
 A nine-agent inventory (2026-08-22) over a 412-item reference corpus of 3D and ECS capabilities
 classified them as **73 easy · 112 medium · 132 hard · 94 out of reach** (20 already covered).
-"Out of reach" means the engine has no path at all today, and those 94 are dominated by the four
+"Out of reach" means the engine had no path at all, and those 94 were dominated by the
 capabilities in section A.
+
+**Section A as of 2026-11-02:** sprites (A1), text (A2), extrusion (A4), reflection probes (A5),
+split screen (A5b), area lights / cookies / soft and contact shadows (A7) and motion blur (A7c) are
+closed. Open: user shaders stay forward-only (A3), MSAA is declined by decision (A6), occlusion
+culling waits on the per-object walk (A7b), planar reflections (A7d), and the ECS items of A8. The
+2026-08-22 counts above are that day's inventory and were not re-run.
 
 ---
 
@@ -200,7 +207,7 @@ What it does not do: holes (an annulus is a sweep here, not an extrusion), bevel
 outlines, or smooth normals — every face is flat, matching `create_cube` and the rest of the
 directory.
 
-### A5. Reflection probe — **one probe with box parallax, CLOSED 2026-11-01**; blending open
+### A5. Reflection probes — **up to four, box parallax, blended — CLOSED 2026-11-01**
 
 Measured in `pbr`: a metallic surface has no environment to reflect. SSR covers what is on
 screen (`ssr` measures it working well) and nothing else.
