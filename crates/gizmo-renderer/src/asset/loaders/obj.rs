@@ -47,14 +47,31 @@ impl crate::asset::AssetManager {
         let (vertices, aabb) = match decode_obj_vertices_for_async(&file_path) {
             Ok(v) => v,
             Err(e) => {
-                tracing::error!("[AssetManager] OBJ load failed: {file_path} — {e}");
-                // Return a valid-but-empty mesh so nothing downstream panics.
+                // A name with no extension is far more often a mistyped primitive
+                // (`MeshSource("standard_sphere")`) than a file, and the error said only "OBJ
+                // load failed" — so name the keys that would have worked.
+                let hint = if std::path::Path::new(&file_path).extension().is_none() {
+                    format!(
+                        " — and it is not a built-in primitive either: those are {}",
+                        Self::PRIMITIVE_MESH_KEYS.join(", ")
+                    )
+                } else {
+                    String::new()
+                };
+                tracing::error!("[AssetManager] OBJ load failed: {file_path} — {e}{hint}");
+                // Return a valid-but-empty mesh so nothing downstream panics — and CACHE it.
+                // Uncached, every entity naming the key retried the disk, logged again and
+                // uploaded another empty buffer: a game spawning a mistyped bullet eleven times a
+                // second did all three eleven times a second. Collection drops the entry once no
+                // entity holds it, so a file that appears later is still picked up.
                 let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("Fallback VBuf (not found)"),
                     contents: &[],
                     usage: wgpu::BufferUsages::VERTEX,
                 });
-                return Mesh::empty(Arc::new(vbuf), format!("obj:missing_{file_path}"));
+                let mesh = Mesh::empty(Arc::new(vbuf), format!("obj:missing_{file_path}"));
+                self.mesh_cache.insert(cache_key, mesh.clone());
+                return mesh;
             }
         };
 

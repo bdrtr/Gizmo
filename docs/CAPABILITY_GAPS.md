@@ -1095,6 +1095,21 @@ once-stays-finished, paused/negative/NaN/zero/infinite inputs; dropping the rema
 once per tick or ignoring pause each fails them. `balon`'s spawner and `kale`'s spawner and tower
 reload use it.
 
+### C16b. The seventh game: many things born and killed (2026-11-02, `nisanci`)
+
+`demo/src/bin/nisanci.rs` is a twin-stick arena shooter — WASD or the left stick to move, the
+mouse or the right stick to aim, eleven bullets a second, sparks, waves of enemies. Nearly all of
+it was already there (`move_axis`, `right_stick`, `cursor_on_plane`, `Timer`, `one_shot` +
+`DespawnAfter`, `CameraShake`, `ScreenFade`); one thing was not:
+
+- ~~**A mistyped mesh key failed again for every entity.**~~ **Closed 2026-11-02.**
+  `MeshSource("standard_sphere")` (the key is `"sphere"`) is taken for a file path; the read fails,
+  and the failure was not cached — so every bullet retried the disk, logged another
+  `OBJ load failed` and uploaded another empty buffer, eleven times a second. The empty mesh is now
+  cached under the key (collection drops it once nobody holds it, so a file that appears later
+  still loads), and for a name without an extension the error lists the primitive keys. GPU-tested:
+  two requests share one buffer, collection forgets it; not inserting into the cache fails it.
+
 ### C17. Music that changes (2026-11-02, `menu`)
 
 ~~**No fades, and a game's own `AudioManager` was never ticked.**~~ **Closed 2026-11-02.**

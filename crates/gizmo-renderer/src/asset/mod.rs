@@ -1076,6 +1076,29 @@ mod scan_does_not_write_tests {
         });
     }
 
+    /// A key that is neither a primitive nor a readable file fails once: the second entity naming
+    /// it gets the same empty mesh from the cache, not another disk read, log line and upload —
+    /// and collection forgets it once nobody holds it, so a file that appears later still loads.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_missing_mesh_fails_once_not_per_entity() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        pollster::block_on(async {
+            let Some((device, _queue)) = crate::test_gpu::headless_device().await else {
+                eprintln!("skipping: no usable GPU adapter");
+                return;
+            };
+            let mut m = AssetManager::new();
+            let a = m.load_obj(&device, "standard_sphere");
+            let b = m.load_obj(&device, "standard_sphere");
+            assert!(std::sync::Arc::ptr_eq(&a.vbuf, &b.vbuf), "the second request failed all over again");
+            assert!(m.mesh_cache.contains_key("standard_sphere"));
+            drop((a, b));
+            m.garbage_collect();
+            assert!(!m.mesh_cache.contains_key("standard_sphere"), "the failure outlived every entity naming it");
+        });
+    }
+
     /// Clones of one `MeshData` share one upload; a separate build is its own; collection drops
     /// an upload nobody draws.
     #[test]

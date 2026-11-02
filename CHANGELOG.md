@@ -114,6 +114,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - **`MeshSource("cylinder")` and `"cone"`**, sized like their colliders, and
     `AssetManager::PRIMITIVE_MESH_KEYS` as the one list of primitive keys (the studio's
     missing-asset check now uses it instead of its own copy).
+- **A missing mesh fails once.** An unknown `MeshSource` key (a typo for a primitive, a file that
+  is not there) used to retry the disk, log and upload an empty buffer for every entity naming
+  it; the failure is now cached until nothing holds it, and the error lists the primitive keys.
+  Found by `nisanci`, a twin-stick shooter (new demo).
 - **`ScreenFade`** (`gizmo::renderer::screen_fade`): a colour over the whole frame, above every
   UI layer — `fade_out`/`fade_in` for scene changes, `flash` for hits, `just_finished` to swap a
   level behind black. Advanced on the real frame time by both draw paths.
