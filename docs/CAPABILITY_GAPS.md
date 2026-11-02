@@ -1160,6 +1160,18 @@ mouse, the keyboard and a gamepad. Three of its four buttons were impossible:
   not a click) and on the drawn parts; flipping every frame fails it. `menu`'s fullscreen is a
   `Toggle`; `ritim` shows the song's progress in a `ProgressBar`.
 
+- ~~**No reverb.**~~ **Closed 2026-11-03.** The only effect in the audio path was the underwater
+  low-pass; a gunshot in a hall and one in a field sounded the same. `AudioManager::set_reverb(
+  Option<Reverb>)` — `Reverb::room()` / `hall()` / `cave()` or any `room` / `damping` / `wet` —
+  is Freeverb (eight damped feedback combs and four all-passes per channel, the second channel's
+  delays spread), built as a stage inside every source the way the muffle is, so one store turns
+  it on for every sound already playing. Off is bit-exact and runs no filter; a reverberated
+  sound keeps playing its tail after the input ends, until a frame stays below 1e-4 or three
+  seconds pass; channels reverberate apart; a seek clears the filter memory. Tested device-free:
+  off = input, a click rings and decays and the tail ends, a bigger room rings longer, a silent
+  channel stays silent, switching off is heard on the next sample; cutting the tail with the input
+  or sharing one channel's state fails them. `poligon` plays in a hall, **V** toggles it.
+
 ### C16. Every game wrote the same three lines (2026-11-02)
 
 ~~**No timer.**~~ **Closed 2026-11-02.** `balon`, `kale` and `yikim_ustasi` each counted down by

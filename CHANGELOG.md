@@ -114,6 +114,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - **`MeshSource("cylinder")` and `"cone"`**, sized like their colliders, and
     `AssetManager::PRIMITIVE_MESH_KEYS` as the one list of primitive keys (the studio's
     missing-asset check now uses it instead of its own copy).
+- **Reverb: `AudioManager::set_reverb`** (`gizmo::audio::reverb::Reverb::{room, hall, cave}`) —
+  Freeverb inside every source, live on sounds already playing, bit-exact when off, tails that
+  ring past the sound's end. `poligon` plays in a hall (V toggles).
 - **`ProgressBar` and `Toggle`** (`gizmo::ui`): a bar filled to a value, and an on/off switch
   flipped by every click (mouse, finger, Enter, gamepad), both drawn by the engine.
 - **Drawing many objects is 52 % cheaper on the CPU.** 60 000 drawn cubes: `default_render_pass`

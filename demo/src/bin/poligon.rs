@@ -10,6 +10,7 @@
 //! | **sol tık** | ateş |
 //! | **Esc** | imleci serbest bırak / geri kilitle |
 //! | **R** | baştan başlat |
+//! | **V** | salon yankısını aç / kapat |
 //!
 //! ## Neden var
 //!
@@ -34,6 +35,12 @@
 //!   **Kapatıldı:** `CameraShake` bileşeni (`add(travma)`, travma² kadar yumuşak gürültü, saniyede
 //!   `decay` kadar söner); çizim yolu kamerayı yalnızca o karenin resmi için oynatıp çizimden sonra
 //!   bit bit geri koyuyor. Her atış küçük, her isabet biraz daha büyük bir sarsıntı.
+//!
+//! - **Yankı yoktu.** Kapalı bir atış poligonunda bir silah sesi duvarlardan geri gelir; motorun
+//!   sesinde mekân yoktu (yalnızca su altı boğukluğu). **Kapatıldı:** `AudioManager::set_reverb`
+//!   (`Reverb::room` / `hall` / `cave` ya da kendi biçimin) — Freeverb, her sesin içinde bir aşama,
+//!   çalan seslere de anında; sesin bittiği yerde kesilmiyor, kuyruğu sönene kadar çalıyor. Burada
+//!   salon yankısı açık başlıyor, **V** kapatıp açıyor ki fark duyulsun.
 //!
 //! ## Ortam değişkenleri
 //!   * `GIZMO_FONT=<yol>` — HUD fontu
@@ -149,6 +156,8 @@ fn main() {
             if let Ok(mut audio) = AudioManager::new() {
                 audio.load_sound_bytes("ates", Blip::new(Wave::Noise, 3000.0, 0.12).with_slide(400.0).with_volume(0.35).wav());
                 audio.load_sound_bytes("isabet", Blip::new(Wave::Square, 700.0, 0.06).with_slide(1100.0).with_volume(0.2).wav());
+                // Kapalı bir poligon: atışlar duvarlardan geri geliyor.
+                audio.set_reverb(Some(gizmo::audio::reverb::Reverb::hall()));
                 scene.world.insert_resource(audio);
             }
 
@@ -201,6 +210,12 @@ fn spawn_crate(world: &mut World, at: Vec3, pedestal_top: f32) {
 fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Input) {
     let Some(mut game) = world.remove_resource::<Game>() else { return };
 
+    if input.is_key_just_pressed(KeyCode::KeyV as u32) {
+        if let Some(mut audio) = world.get_resource_mut::<AudioManager>() {
+            let next = if audio.reverb().is_some() { None } else { Some(gizmo::audio::reverb::Reverb::hall()) };
+            audio.set_reverb(next);
+        }
+    }
     if input.is_key_just_pressed(KeyCode::Escape as u32) {
         game.looking = !game.looking;
         world.insert_resource(if game.looking { CursorOptions::mouse_look() } else { CursorOptions::free() });

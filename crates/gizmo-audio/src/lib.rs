@@ -34,6 +34,8 @@
 mod filter;
 mod looping;
 mod mixer;
+/// Reverb — [`Reverb`](reverb::Reverb) and the stage every sound is wrapped in.
+pub mod reverb;
 pub use mixer::Mixer;
 pub mod synth;
 
@@ -223,6 +225,8 @@ pub struct AudioManager {
     // the audio thread. Turning the muffle on is one atomic store here, not a walk over the sinks
     // — the filter is *inside* each source, which is the only place rodio lets it be live.
     muffle: std::sync::Arc<MuffleControl>,
+    // The reverb every source reads, the same way: one store turns a cave on for every sound.
+    reverb: std::sync::Arc<reverb::ReverbControl>,
 
     // Buses, master, environment, and one route per live sink. THE ONLY PLACE a volume or a
     // speed is decided: everything below writes `mixer.volume_for(id)` / `mixer.speed_for(id)`
@@ -352,6 +356,7 @@ impl AudioManager {
                     next_sink_id: 1,
                     all_paused: false,
                     muffle: MuffleControl::new(),
+                    reverb: reverb::ReverbControl::new(),
                     mixer: Mixer::new(),
                 })
             }
@@ -550,6 +555,20 @@ impl AudioManager {
         self.mixer.is_underwater()
     }
 
+    /// Sets the space every sound plays in — [`Reverb::cave`](reverb::Reverb::cave),
+    /// [`hall`](reverb::Reverb::hall), [`room`](reverb::Reverb::room), or any shape — or `None` for
+    /// the open air. Heard by every sound at once, those already playing included, on the next
+    /// buffer: it is one store, read by a stage inside each source. Off is bit-exact.
+    pub fn set_reverb(&mut self, reverb: Option<reverb::Reverb>) {
+        self.reverb.set(reverb.filter(|r| r.wet > 0.0));
+    }
+
+    /// The space set by [`set_reverb`](Self::set_reverb), `None` for the open air.
+    #[must_use]
+    pub fn reverb(&self) -> Option<reverb::Reverb> {
+        Some(self.reverb.get()).filter(|r| r.wet > 0.0)
+    }
+
     /// Plays a normal (Global/Stereo) sound (one-shot)
     ///
     /// # Errors
@@ -584,9 +603,12 @@ impl AudioManager {
         // before `append` and read its own parameter afterwards.
         if looped {
             // Not `repeat_infinite`: its buffer cannot seek (see `looping`).
-            sink.append(Muffle::new(Looping::new(Arc::clone(bytes), decoder), Arc::clone(&self.muffle)));
+            sink.append(Muffle::new(
+                reverb::ReverbStage::new(Looping::new(Arc::clone(bytes), decoder), Arc::clone(&self.reverb)),
+                Arc::clone(&self.muffle),
+            ));
         } else {
-            sink.append(Muffle::new(decoder, Arc::clone(&self.muffle)));
+            sink.append(Muffle::new(reverb::ReverbStage::new(decoder, Arc::clone(&self.reverb)), Arc::clone(&self.muffle)));
         }
         let id = self.next_sink_id;
         self.next_sink_id = self.next_sink_id.wrapping_add(1);
@@ -652,9 +674,12 @@ impl AudioManager {
             SpatialPlayer::connect_new(self.device_sink.mixer(), emitter_pos, left_ear, right_ear);
         if looped {
             // Not `repeat_infinite`: its buffer cannot seek (see `looping`).
-            sink.append(Muffle::new(Looping::new(Arc::clone(bytes), decoder), Arc::clone(&self.muffle)));
+            sink.append(Muffle::new(
+                reverb::ReverbStage::new(Looping::new(Arc::clone(bytes), decoder), Arc::clone(&self.reverb)),
+                Arc::clone(&self.muffle),
+            ));
         } else {
-            sink.append(Muffle::new(decoder, Arc::clone(&self.muffle)));
+            sink.append(Muffle::new(reverb::ReverbStage::new(decoder, Arc::clone(&self.reverb)), Arc::clone(&self.muffle)));
         }
 
         let id = self.next_sink_id;
