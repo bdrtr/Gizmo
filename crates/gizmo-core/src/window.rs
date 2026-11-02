@@ -150,3 +150,45 @@ pub enum CursorGrab {
     /// [`Confined`](Self::Confined) — mouse-look works either way, because it reads raw motion.
     Locked,
 }
+
+/// Whether the window fills the screen — what a settings menu or an Alt+Enter handler asks of it,
+/// as an ECS resource.
+///
+/// Nothing in the engine could switch a running game to fullscreen: the window was created
+/// windowed and stayed so. The windowed app applies this resource whenever it changes, like
+/// [`CursorOptions`]; no resource reads as [`Windowed`](Self::Windowed).
+///
+/// ```
+/// use gizmo_core::window::WindowMode;
+/// # let mut world = gizmo_core::World::new();
+/// let next = match world.get_resource::<WindowMode>().map(|m| *m).unwrap_or_default() {
+///     WindowMode::Windowed => WindowMode::Fullscreen,
+///     _ => WindowMode::Windowed,
+/// };
+/// world.insert_resource(next);
+/// # assert_eq!(world.get_resource::<WindowMode>().map(|m| *m), Some(WindowMode::Fullscreen));
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum WindowMode {
+    /// A normal window.
+    #[default]
+    Windowed,
+    /// Borderless fullscreen on the monitor the window is on — the desktop's resolution, no mode
+    /// switch, so Alt+Tab is instant.
+    Fullscreen,
+}
+
+/// Insert this resource to end the application — the "Quit" button in a menu.
+///
+/// A game could not ask to quit: the windowed loop exited only when the window was closed, and the
+/// headless loop never. Both now check for this after each frame's update and commands, and leave
+/// by the same path closing the window takes (the input recording is written, everything drops in
+/// order).
+///
+/// ```
+/// # let mut world = gizmo_core::World::new();
+/// world.insert_resource(gizmo_core::window::AppExit);
+/// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AppExit;

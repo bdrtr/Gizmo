@@ -162,7 +162,8 @@ impl<State: 'static> App<State> {
     ///
     /// If a custom runner was configured via [`set_runner`](Self::set_runner)
     /// it is invoked and `Ok(())` is returned. Otherwise the default update
-    /// loop is driven (which does not return under normal operation). Returns
+    /// loop is driven, which returns `Ok(())` after the frame in which the game inserts
+    /// [`AppExit`](gizmo_core::window::AppExit), and not otherwise. Returns
     /// [`AppError::MissingSetup`](crate::AppError::MissingSetup) if no setup
     /// hook was assigned.
     pub fn run(mut self) -> Result<(), crate::AppError> {
@@ -238,6 +239,11 @@ impl<State: 'static> App<State> {
             // update hook's spawns/despawns would never take effect.
             self.world.apply_commands();
 
+            if self.world.get_resource::<gizmo_core::window::AppExit>().is_some() {
+                tracing::info!("[App:headless] AppExit requested; leaving the update loop");
+                return Ok(());
+            }
+
             // Simple busy wait or sleep to avoid 100% CPU in headless if not limited
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
@@ -251,5 +257,26 @@ impl<State: 'static> crate::plugin::AppLike for App<State> {
             schedule: &mut self.schedule,
             update_schedule: &mut self.update_schedule,
         }
+    }
+}
+
+#[cfg(test)]
+mod exit_tests {
+    /// A headless app whose game inserts `AppExit` on its third frame returns from `run` — the
+    /// loop used to have no way out at all.
+    #[test]
+    fn app_exit_ends_the_headless_loop() {
+        let frames = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let seen = frames.clone();
+        let result = super::App::<()>::new("exit", 1, 1)
+            .set_setup(|_| ())
+            .set_update(move |world, _, _| {
+                if seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 2 {
+                    world.insert_resource(gizmo_core::window::AppExit);
+                }
+            })
+            .run();
+        assert!(result.is_ok());
+        assert_eq!(frames.load(std::sync::atomic::Ordering::SeqCst), 3, "it ran past the frame that asked to quit");
     }
 }

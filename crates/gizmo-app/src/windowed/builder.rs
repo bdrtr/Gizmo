@@ -40,6 +40,7 @@ impl<State: 'static> App<State> {
             window_attributes: None,
             window: None,
             applied_cursor: gizmo_core::window::CursorOptions::free(),
+            applied_mode: gizmo_core::window::WindowMode::Windowed,
             #[cfg(feature = "egui")]
             editor: None,
             app_state: None,

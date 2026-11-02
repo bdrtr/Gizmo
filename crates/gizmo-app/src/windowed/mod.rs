@@ -141,6 +141,8 @@ pub struct App<State: 'static = ()> {
     window: Option<Arc<winit::window::Window>>,
     /// The cursor behaviour last applied to `window` — see `apply_cursor_options`.
     applied_cursor: gizmo_core::window::CursorOptions,
+    /// The window mode last applied — see `apply_window_mode`.
+    applied_mode: gizmo_core::window::WindowMode,
     #[cfg(feature = "egui")]
     editor: Option<EguiContext>,
     app_state: Option<State>,

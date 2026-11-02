@@ -203,6 +203,25 @@ impl<State: 'static> App<State> {
         }
     }
 
+    /// Leaves the application the one graceful way: write the input recording if one is being
+    /// kept, then signal the event loop to exit, so `run_app` returns and the app, world and
+    /// renderer drop in order (the wgpu device and surface close cleanly). Closing the window and
+    /// [`AppExit`](gizmo_core::window::AppExit) both come here. (A `process::exit(0)` used to cut
+    /// it short without running a destructor.)
+    fn shut_down(&self, event_loop: &ActiveEventLoop) {
+        if let Some(record) = &self.record_data {
+            match record.save("gizmo_record.ron") {
+                Ok(()) => tracing::info!(
+                    path = "gizmo_record.ron",
+                    frames = record.frames.len(),
+                    "[App] input kaydı diske yazıldı"
+                ),
+                Err(e) => tracing::warn!(path = "gizmo_record.ron", error = %e, "[App] input kaydı yazılamadı"),
+            }
+        }
+        event_loop.exit();
+    }
+
     /// Applies the world's [`CursorOptions`](gizmo_core::window::CursorOptions) to the window when
     /// it differs from what was last applied. No resource reads as the default (free, visible).
     ///
@@ -227,6 +246,21 @@ impl<State: 'static> App<State> {
         }
         window.set_cursor_visible(wanted.visible);
         self.applied_cursor = wanted;
+    }
+
+    /// Applies the world's [`WindowMode`](gizmo_core::window::WindowMode) when it differs from what
+    /// was last applied. Fullscreen is borderless, on the window's current monitor.
+    fn apply_window_mode(&mut self, window: &winit::window::Window) {
+        use gizmo_core::window::WindowMode;
+        let wanted = self.world.get_resource::<WindowMode>().map(|m| *m).unwrap_or_default();
+        if wanted == self.applied_mode {
+            return;
+        }
+        window.set_fullscreen(match wanted {
+            WindowMode::Fullscreen => Some(winit::window::Fullscreen::Borderless(None)),
+            _ => None,
+        });
+        self.applied_mode = wanted;
     }
 
     /// Run one pass of the lazy asset loader.
@@ -455,27 +489,7 @@ impl<State: 'static> App<State> {
                         match event {
                             WindowEvent::CloseRequested => {
                                 tracing::info!("[App] close requested; shutting down");
-                                if let Some(record) = &self.record_data {
-                                    match record.save("gizmo_record.ron") {
-                                        Ok(()) => tracing::info!(
-                                            path = "gizmo_record.ron",
-                                            frames = record.frames.len(),
-                                            "[App] input kaydı diske yazıldı"
-                                        ),
-                                        Err(e) => tracing::warn!(
-                                            path = "gizmo_record.ron",
-                                            error = %e,
-                                            "[App] input kaydı yazılamadı"
-                                        ),
-                                    }
-                                }
-                                // DÜZGÜN kapanış: event loop'a çıkışı SİNYALLE (init-hata
-                                // yollarının kullandığı `event_loop.exit()` sözleşmesi) →
-                                // `run_app` döner, App+World+Renderer normal DROP olur → wgpu
-                                // device/surface temiz kapanır (buffer flush, kaynak serbest).
-                                // Eski `process::exit(0)` hiçbir destructor çalıştırmadan aniden
-                                // kesiyordu; graceful exit her iki hedefte de (wasm dahil) aynı yol.
-                                current_window.exit();
+                                self.shut_down(current_window);
                             }
                             WindowEvent::Resized(physical_size) => {
                                 // resize() web'de boyutu 640x360'a caplayabilir; WindowInfo'yu
@@ -721,8 +735,15 @@ impl<State: 'static> App<State> {
                             // Asset Loading System (Lazy Load)
                             self.run_asset_loading();
 
+                            // The game asked to quit: leave the way closing the window does.
+                            if self.world.get_resource::<gizmo_core::window::AppExit>().is_some() {
+                                tracing::info!("[App] AppExit requested; shutting down");
+                                self.shut_down(current_window);
+                            }
+
                             // The cursor behaviour the game asked for this frame.
                             self.apply_cursor_options(&window);
+                            self.apply_window_mode(&window);
 
 
                             if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
