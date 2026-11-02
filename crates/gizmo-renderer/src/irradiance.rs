@@ -108,6 +108,42 @@ impl<'a> ReflectionSet<'a> {
     }
 }
 
+/// A box of irradiance probes the engine bakes from the scene's lights and keeps baked: place it,
+/// size it, and the deferred lighting pass reads it for indirect light — no hand-built
+/// [`ProbeGrid`] and no upload call. Rebaked whenever it or a light changes (the bake projects
+/// each light into the probes' spherical harmonics analytically: direct light, no occlusion, so
+/// it is cheap — a few hundred probes against a few hundred lights is well under a millisecond).
+///
+/// One per scene: the first found is used. A grid uploaded by hand
+/// (`IrradianceState::upload`) is left alone while no volume exists.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub struct IrradianceVolume {
+    /// The box's minimum corner, world space.
+    pub min: gizmo_math::Vec3,
+    /// Its maximum corner.
+    pub max: gizmo_math::Vec3,
+    /// Probes along each axis (each at least 2).
+    pub resolution: [u32; 3],
+    /// A constant light added to every probe — the sky's average, roughly.
+    pub ambient: gizmo_math::Vec3,
+}
+
+impl IrradianceVolume {
+    /// A volume over the box `min`–`max` with `resolution` probes per axis, no ambient.
+    pub fn new(min: gizmo_math::Vec3, max: gizmo_math::Vec3, resolution: [u32; 3]) -> Self {
+        Self { min: min.min(max), max: min.max(max), resolution: resolution.map(|r| r.max(2)), ambient: gizmo_math::Vec3::ZERO }
+    }
+
+    /// The same volume with `ambient` added to every probe.
+    pub fn with_ambient(mut self, ambient: gizmo_math::Vec3) -> Self {
+        self.ambient = ambient.max(gizmo_math::Vec3::ZERO);
+        self
+    }
+}
+
+gizmo_core::impl_component!(IrradianceVolume);
+
 /// The uploaded probe grid and the bind group the lighting pass reads it through.
 pub struct IrradianceState {
     probes_buffer: wgpu::Buffer,
@@ -126,6 +162,10 @@ pub struct IrradianceState {
     pub bind_group_layout: wgpu::BindGroupLayout,
     /// How many probes are currently uploaded. `0` is a valid, neutral state.
     pub probe_count: usize,
+    /// What the uploaded grid was baked from, when it came from an [`IrradianceVolume`] — a hash
+    /// of the volume and the scene's lights. The sync step rebakes only when it changes. `None`
+    /// for a grid uploaded by hand, or none.
+    pub baked_from: Option<u64>,
     /// Capacity in probes, so an upload of the same size does not reallocate.
     capacity: usize,
 }
@@ -256,6 +296,7 @@ impl IrradianceState {
             bind_group,
             bind_group_layout,
             probe_count: 0,
+            baked_from: None,
             capacity: 1,
         }
     }

@@ -52,6 +52,7 @@ pub fn full_scene_registry() -> SceneRegistry {
         reg_or_warn!(DirectionalLight, "DirectionalLight");
         reg_or_warn!(SpotLight, "SpotLight");
         reg_or_warn!(RectLight, "RectLight");
+        reg_or_warn!(gizmo_renderer::irradiance::IrradianceVolume, "IrradianceVolume");
         // These three were addable in the editor and unsaveable: a user could put a particle
         // emitter, a terrain or a bone attachment on an entity, save, reopen, and find it gone —
         // silently, because a component the registry does not know is simply not written. All

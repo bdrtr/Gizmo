@@ -910,6 +910,7 @@ fn draw_camera_view(
     // Cookies a spot names by path are read from disk the first frame they are needed.
     #[cfg(not(target_arch = "wasm32"))]
     renderer.sync_light_cookies(world);
+    shared::sync_irradiance_volume(world, renderer);
     let setup = collect_scene_setup(
         world,
         &SceneSetupInputs {
@@ -1165,8 +1166,8 @@ pub use hidden::collect_hidden;
 
 mod shared;
 pub use shared::{
-    active_camera_grade, collect_scene_lights, collect_scene_setup, SceneLights, SceneSetup,
-    SceneSetupInputs, ShadowCaster,
+    active_camera_grade, collect_scene_lights, collect_scene_setup, sync_irradiance_volume, SceneLights,
+    SceneSetup, SceneSetupInputs, ShadowCaster,
 };
 
 #[cfg(test)]
@@ -3408,6 +3409,83 @@ mod golden_render_tests {
             assert!(plain.0 > 0.7, "a dim gradient is mostly flat runs: {:.3}", plain.0);
             assert!(dithered.0 + 0.1 < plain.0, "the dither breaks them up: {:.3} → {:.3}", plain.0, dithered.0);
             assert!((dithered.1 - plain.1).abs() < 0.5, "without moving the mean: {:.3} → {:.3}", plain.1, dithered.1);
+        });
+    }
+
+    /// An `IrradianceVolume` placed in the world is baked and uploaded by the frame itself: its
+    /// probes reach the lighting pass (a red ambient tints a dim scene red), a still scene does not
+    /// rebake (the fingerprint holds), and moving a light does.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn an_irradiance_volume_bakes_itself_and_rebakes_on_change() {
+        use crate::renderer::components::PointLight;
+        use crate::renderer::irradiance::IrradianceVolume;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let floor = world.spawn();
+            world.add_component(floor, Transform::new(Vec3::new(0.0, -0.2, 0.0)).with_scale(Vec3::new(20.0, 0.2, 20.0)));
+            world.add_component(floor, GlobalTransform::default());
+            world.add_component(floor, AssetManager::create_cube(&renderer.device));
+            world.add_component(floor, Material::new(tex).with_pbr(Vec4::new(0.8, 0.8, 0.8, 1.0), 0.9, 0.0));
+            world.add_component(floor, MeshRenderer::new());
+            let lamp = world.spawn();
+            world.add_component(lamp, Transform::new(Vec3::new(0.0, 2.0, 0.0)));
+            world.add_component(lamp, GlobalTransform::default());
+            world.add_component(lamp, PointLight::new(Vec3::ONE, 0.5, 10.0));
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.0, 3.0, 4.0),
+                yaw: -std::f32::consts::FRAC_PI_2,
+                pitch: -0.6,
+                primary: true,
+                ..Default::default()
+            });
+            let red_minus_blue = |f: &[u8]| -> f32 {
+                let px = f.as_chunks::<4>().0;
+                px.iter().map(|p| p[0] as f32 - p[2] as f32).sum::<f32>() / px.len() as f32
+            };
+
+            let plain = render_world(&mut renderer, &mut world).await;
+            assert_eq!(renderer.deferred.as_ref().unwrap().irradiance.probe_count, 0, "no volume, no grid");
+
+            let volume = world.spawn();
+            world.add_component(
+                volume,
+                IrradianceVolume::new(Vec3::new(-5.0, -1.0, -5.0), Vec3::new(5.0, 4.0, 5.0), [4, 3, 4])
+                    .with_ambient(Vec3::new(1.5, 0.0, 0.0)),
+            );
+            let tinted = render_world(&mut renderer, &mut world).await;
+            let irr = &renderer.deferred.as_ref().unwrap().irradiance;
+            assert_eq!(irr.probe_count, 48, "a 4×3×4 grid uploaded");
+            let first = irr.baked_from.expect("baked from the volume");
+
+            let _ = render_world(&mut renderer, &mut world).await;
+            assert_eq!(renderer.deferred.as_ref().unwrap().irradiance.baked_from, Some(first), "a still scene does not rebake");
+
+            {
+                let mut q = world.query_mut::<crate::core::query::Mut<Transform>>().unwrap();
+                q.get_mut(lamp.id()).unwrap().position.x = 1.0;
+            }
+            let _ = render_world(&mut renderer, &mut world).await;
+            assert_ne!(renderer.deferred.as_ref().unwrap().irradiance.baked_from, Some(first), "a moved light rebakes");
+
+            // Measured: mean red − blue −12.26 without the volume, 30.40 with its red ambient.
+            assert!(
+                red_minus_blue(&tinted) > red_minus_blue(&plain) + 20.0,
+                "the volume's light reaches the frame: {:.2} → {:.2}",
+                red_minus_blue(&plain),
+                red_minus_blue(&tinted)
+            );
         });
     }
 

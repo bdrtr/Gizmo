@@ -360,6 +360,73 @@ pub struct SceneSetup {
     pub clusters: crate::renderer::clustered::ClusterAssignment,
 }
 
+/// Keep the deferred pass's irradiance grid baked from the scene's [`IrradianceVolume`]: the first
+/// volume found, its box and resolution, and every directional and point light (spot lights are
+/// not in the bake). Rebakes and uploads only when a fingerprint of all of that changes, so a
+/// still scene pays one hash a frame. No volume, nothing done — a grid uploaded by hand stays.
+/// Both render paths call it, as they call `sync_light_cookies`.
+///
+/// [`IrradianceVolume`]: crate::renderer::irradiance::IrradianceVolume
+pub fn sync_irradiance_volume(world: &World, renderer: &mut crate::renderer::Renderer) {
+    use std::hash::{Hash, Hasher};
+    let Some(volume) = world
+        .query::<&crate::renderer::irradiance::IrradianceVolume>()
+        .and_then(|q| q.iter().next().map(|(_, v)| *v))
+    else {
+        return;
+    };
+    let globals = world.borrow::<GlobalTransform>();
+    let locals = world.borrow::<Transform>();
+    let world_tf = |e| {
+        globals
+            .get(e)
+            .map(|g| {
+                let (_, rot, pos) = g.matrix.to_scale_rotation_translation();
+                (pos, rot)
+            })
+            .or_else(|| locals.get(e).map(|t| (t.position, t.rotation)))
+    };
+    let mut directional = Vec::new();
+    if let Some(q) = world.query::<&DirectionalLight>() {
+        for (e, light) in q.iter() {
+            if let Some((_, rot)) = world_tf(e) {
+                directional.push((rot.mul_vec3(Vec3::NEG_Z).normalize(), light.color, light.intensity));
+            }
+        }
+    }
+    let mut points = Vec::new();
+    if let Some(q) = world.query::<&PointLight>() {
+        for (e, light) in q.iter() {
+            if let Some((pos, _)) = world_tf(e) {
+                points.push((pos, light.color, light.intensity, light.radius));
+            }
+        }
+    }
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut put = |v: f32| v.to_bits().hash(&mut hasher);
+    for v in [volume.min, volume.max, volume.ambient] {
+        v.to_array().into_iter().for_each(&mut put);
+    }
+    volume.resolution.iter().for_each(|r| put(*r as f32));
+    for (d, c, i) in &directional {
+        d.to_array().into_iter().chain(c.to_array()).chain([*i]).for_each(&mut put);
+    }
+    for (p, c, i, r) in &points {
+        p.to_array().into_iter().chain(c.to_array()).chain([*i, *r]).for_each(&mut put);
+    }
+    let fingerprint = hasher.finish();
+
+    let (device, queue) = (&renderer.device, &renderer.queue);
+    let Some(def) = renderer.deferred.as_mut() else { return };
+    if def.irradiance.baked_from == Some(fingerprint) {
+        return;
+    }
+    let mut grid = crate::renderer::gi::ProbeGrid::new(volume.min, volume.max, volume.resolution);
+    grid.bake_from_lights(&directional, &points, volume.ambient);
+    def.irradiance.upload(device, queue, &grid);
+    def.irradiance.baked_from = Some(fingerprint);
+}
+
 /// The per-frame inputs that are *not* the world: the camera, and the handful of decisions each
 /// render path makes for itself.
 pub struct SceneSetupInputs {

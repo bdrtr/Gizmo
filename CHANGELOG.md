@@ -81,6 +81,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   or by default to a `tracing::error!` naming the system, and the system runs again next frame.
   `SystemOutput` is the trait behind it; `()` systems are unchanged.
 
+- **Irradiance volumes you place: `gizmo_renderer::irradiance::IrradianceVolume`.** A component
+  with a box, a resolution and an ambient; both render paths bake it from the scene's directional
+  and point lights and upload it (`systems::render::sync_irradiance_volume`), and rebake only when
+  the volume or a light changes. Saved in scenes. `IrradianceState` gained `baked_from`.
+
 - **Deband dither: `Renderer::deband_dither`.** Half an 8-bit step of noise before the output,
   against banding in dark gradients. Off by default. `PostProcessUniforms::_tonemap_pad` became
   `deband_dither` + a one-word pad.

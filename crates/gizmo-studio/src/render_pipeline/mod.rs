@@ -138,6 +138,7 @@ pub fn execute_render_pipeline(
     // holds the two argument sets side by side. This block used to be forty lines of light
     // conversion, shadow-direction choice and cascade fallback written out a second time.
     renderer.sync_light_cookies(world);
+    gizmo::systems::render::sync_irradiance_volume(world, renderer);
     let setup = gizmo::systems::render::collect_scene_setup(
         world,
         &gizmo::systems::render::SceneSetupInputs {
@@ -903,6 +904,7 @@ fn record_game_view(
         .and_then(|c| c.clear_color)
         .map(|c| c.to_array());
     renderer.sync_light_cookies(world);
+    gizmo::systems::render::sync_irradiance_volume(world, renderer);
     let setup = gizmo::systems::render::collect_scene_setup(
         world,
         &gizmo::systems::render::SceneSetupInputs {
