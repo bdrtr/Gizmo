@@ -14,7 +14,10 @@
   <style>
     html, body { margin: 0; padding: 0; height: 100%; background: #0d1117; overflow: hidden; }
     /* Motor canvas'ı body'ye kendisi ekler ve %100 boyutlandırır. */
-    canvas { display: block; outline: none; }
+    /* `touch-action: none`: without it the browser takes a finger for a page pan or a pinch-zoom
+       and the engine never hears it — the touch input it reads since 2026-11-02 would be dead
+       on exactly the devices it was added for. */
+    canvas { display: block; outline: none; touch-action: none; }
     #boot {
       position: fixed; inset: 0; display: flex; flex-direction: column; gap: 1.25rem;
       align-items: center; justify-content: center;

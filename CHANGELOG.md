@@ -114,6 +114,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - **`MeshSource("cylinder")` and `"cone"`**, sized like their colliders, and
     `AssetManager::PRIMITIVE_MESH_KEYS` as the one list of primitive keys (the studio's
     missing-asset check now uses it instead of its own copy).
+- **Touch input.** `WindowEvent::Touch` was dropped, so nothing could be pressed on a phone or a
+  touchscreen. `Input::on_touch` / `touches()` / `touch(id)` / `primary_touch()`; the first finger
+  drives the mouse (cursor + left button), so UI clicks and mouse-written games work under a
+  finger unchanged. `demo-web`'s canvas sets `touch-action: none` so the browser does not take the
+  finger for a pan.
 - **Building a renderer is ten times cheaper after the first.** Composing the eighteen shaders
   (naga_oil `#import`/`#ifdef`) was 0.99 s of a 1.1 s headless construction; the result is now
   cached for the process, keyed by source, label and defs (a second renderer: 1.1 s → 0.11 s),

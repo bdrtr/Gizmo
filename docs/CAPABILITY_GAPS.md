@@ -1110,6 +1110,22 @@ it was already there (`move_axis`, `right_stick`, `cursor_on_plane`, `Timer`, `o
   still loads), and for a name without an extension the error lists the primitive keys. GPU-tested:
   two requests share one buffer, collection forgets it; not inserting into the cache fails it.
 
+### C16c. Touch (2026-11-02)
+
+~~**A finger did nothing.**~~ **Closed 2026-11-02.** The windowed loop had no `WindowEvent::Touch`
+arm, so on a phone — the browser build runs on one — or a touchscreen laptop nothing could be
+pressed at all, and `demo-web`'s canvas let the browser take a finger for a pan or a pinch anyway.
+`Input::on_touch` records each finger (`Input::touches`: id, position, start, this frame's delta,
+`just_started` / `just_ended`), and the **first finger down drives the mouse**: it places the cursor
+without a flick in `mouse_delta`, holds the left button, drags the cursor and releases on lift — so
+`Clicked`, `pointer_over_ui`, `gizmo::pointer` and every game written for the mouse work under a
+finger unchanged. A second finger never takes the cursor over mid-gesture; focus loss lifts every
+finger. `demo-web`'s canvas sets `touch-action: none`. Tested in `gizmo-core` without a device
+(tap = click, a one-frame tap is not lost, drags, only the first finger is the mouse, focus loss,
+an old recording without touches loads); removing the emulated press, letting every finger take
+the mouse or skipping the per-frame roll each fails them. **Not yet tried on a real touchscreen.**
+Still missing: gestures (pinch, swipe) — a game builds them from `touches()`.
+
 ### C17. Music that changes (2026-11-02, `menu`)
 
 ~~**No fades, and a game's own `AudioManager` was never ticked.**~~ **Closed 2026-11-02.**

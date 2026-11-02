@@ -89,6 +89,11 @@ pub struct Input {
     /// `#[serde(default)]` so replays recorded before it load (as "nothing typed").
     #[serde(default)]
     typed: String,
+
+    /// The fingers on the screen. `#[serde(default)]` so replays recorded before touch load (as
+    /// "no fingers").
+    #[serde(default)]
+    touches: touch::Touches,
 }
 
 impl Input {
@@ -114,6 +119,7 @@ impl Input {
             gamepads: Gamepads::new(),
             rumble_queue: Vec::new(),
             typed: String::new(),
+            touches: touch::Touches::default(),
         }
     }
 
@@ -143,11 +149,81 @@ impl Input {
         self.mouse_delta = (0.0, 0.0);
         self.mouse_scroll_delta = 0.0;
         self.typed.clear();
+        self.touches.begin_frame();
         // Gamepad buttons roll the same way; axes additionally keep this frame's values as
         // the "previous" ones, which is what lets a stick report an edge (see
         // `Gamepad::axis_previous`). A pad unplugged during the frame that just ended is
         // dropped here, one frame after its release edges were readable.
         self.gamepads.begin_frame();
+    }
+
+    // ==================== DOKUNMA ====================
+
+    /// Records a finger event — what the platform layer calls for each touch. Positions are window
+    /// pixels.
+    ///
+    /// The first finger down while no other is down **drives the mouse**: it moves the cursor
+    /// there (without a jump in `mouse_delta`), presses the left button, drags the cursor as it
+    /// moves (accumulating `mouse_delta`, so a drag looks like a mouse drag) and releases the
+    /// button when it lifts. Fingers after it only appear in [`touches`](Self::touches).
+    pub fn on_touch(&mut self, id: u64, phase: touch::TouchPhase, x: f32, y: f32) {
+        use touch::TouchPhase;
+        let primary = self.touches.primary == Some(id);
+        match phase {
+            TouchPhase::Started => {
+                // An id the platform reuses before the old finger's frame is over replaces it.
+                self.touches.fingers.retain(|t| t.id != id);
+                self.touches.fingers.push(touch::Touch {
+                    id,
+                    position: (x, y),
+                    start: (x, y),
+                    delta: (0.0, 0.0),
+                    just_started: true,
+                    just_ended: false,
+                });
+                if self.touches.primary.is_none() {
+                    self.touches.primary = Some(id);
+                    self.set_mouse_position(x, y);
+                    self.on_mouse_button_pressed(mouse::LEFT);
+                }
+            }
+            TouchPhase::Moved | TouchPhase::Ended | TouchPhase::Cancelled => {
+                if let Some(t) = self.touches.fingers.iter_mut().find(|t| t.id == id && !t.just_ended) {
+                    t.delta.0 += x - t.position.0;
+                    t.delta.1 += y - t.position.1;
+                    t.position = (x, y);
+                    if phase != TouchPhase::Moved {
+                        t.just_ended = true;
+                    }
+                }
+                if primary {
+                    self.on_mouse_moved(x, y);
+                    if phase != TouchPhase::Moved {
+                        self.on_mouse_button_released(mouse::LEFT);
+                        self.touches.primary = None;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Every finger down this frame, plus the ones that lifted during it (`just_ended`), in the
+    /// order they came down.
+    #[must_use]
+    pub fn touches(&self) -> &[touch::Touch] {
+        &self.touches.fingers
+    }
+
+    /// The finger with this id, if it is down (or lifted this frame).
+    #[must_use]
+    pub fn touch(&self, id: u64) -> Option<&touch::Touch> {
+        self.touches.fingers.iter().find(|t| t.id == id)
+    }
+
+    /// The finger standing in for the mouse, while it is down.
+    #[must_use]
+    pub fn primary_touch(&self) -> Option<&touch::Touch> {
+        self.touches.primary.and_then(|id| self.touch(id))
     }
 
     // ==================== METİN GİRDİSİ ====================
@@ -250,6 +326,13 @@ impl Input {
         // `GamepadBackend::resync`) so held controls come back rather than waiting for a
         // release-and-press.
         self.gamepads.release_all();
+        // Fingers too: a lift that happens while the window is not listening never arrives, and
+        // a finger left "down" would hold the emulated mouse button for good.
+        for t in &mut self.touches.fingers {
+            t.just_ended = true;
+            t.just_started = false;
+        }
+        self.touches.primary = None;
         // Rumble travels the other way, so it needs the opposite treatment: pending requests are
         // dropped and a STOP is queued in their place, or an explosion that started a moment
         // before Alt-Tab keeps shaking a pad nobody is holding. See `input::rumble`.
@@ -483,6 +566,8 @@ mod fighter;
 mod gamepad;
 mod mapping;
 pub mod rumble;
+/// Fingers on a touchscreen — [`Touch`](touch::Touch), and the first one as the mouse.
+pub mod touch;
 pub use axis::{blend_move_axis, MoveKeys};
 pub use fighter::{FighterInputBuffer, FrameActions, FrameRecord, PlaybackData};
 pub use gamepad::{
@@ -493,6 +578,7 @@ pub use gamepad::{
 pub use mapping::{ActionMap, InputBinding};
 pub use binding_names::{binding_from_name, binding_to_name, UnknownBinding};
 pub use rumble::RumbleRequest;
+pub use touch::{Touch, TouchPhase};
 
 #[cfg(test)]
 mod tests {

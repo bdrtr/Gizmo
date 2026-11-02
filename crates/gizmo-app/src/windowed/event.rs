@@ -594,6 +594,25 @@ impl<State: 'static> App<State> {
                                 };
                                 self.input.on_mouse_scroll(scroll);
                             }
+                            // Fingers. Dropped until 2026-11-02, so on a phone (the web build
+                            // runs on one) or a touchscreen nothing could be pressed: the first
+                            // finger now drives the mouse (`Input::on_touch`), every finger is in
+                            // `Input::touches`.
+                            WindowEvent::Touch(touch) => {
+                                use gizmo_core::input::TouchPhase;
+                                let phase = match touch.phase {
+                                    winit::event::TouchPhase::Started => TouchPhase::Started,
+                                    winit::event::TouchPhase::Moved => TouchPhase::Moved,
+                                    winit::event::TouchPhase::Ended => TouchPhase::Ended,
+                                    winit::event::TouchPhase::Cancelled => TouchPhase::Cancelled,
+                                };
+                                self.input.on_touch(
+                                    touch.id,
+                                    phase,
+                                    touch.location.x as f32,
+                                    touch.location.y as f32,
+                                );
+                            }
                             // Odak kaybında (Alt-Tab / tarayıcı sekme değişimi) basılı
                             // tuşları bırak — yoksa OS key-up göndermez ve tuşlar
                             // sonsuza dek "basılı" kalıp kamerayı kaydırır.
