@@ -107,6 +107,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - **`MeshSource("cylinder")` and `"cone"`**, sized like their colliders, and
     `AssetManager::PRIMITIVE_MESH_KEYS` as the one list of primitive keys (the studio's
     missing-asset check now uses it instead of its own copy).
+- **Moving platforms carry the character standing on them.** `character_controller_system`
+  moves each grounded character by its floor's `Velocity` at the contact point (`v + ω × r`)
+  before the step, so a sideways platform takes its passenger along and a turntable carries one
+  round. Tested sideways, turning and up/down (the vertical case was already right through the
+  ground snap and is pinned so the carry cannot double it); removing the carry fails the first
+  two.
 - **Tuples are system parameters.** `fn f((time, state): (Res<Time>, Res<State<S>>))` — two to
   eight members, nesting freely — the anonymous form of `system_param!` and the way past the
   nine-parameter limit. Members' states are kept per member (a `Local` in a tuple keeps its value)

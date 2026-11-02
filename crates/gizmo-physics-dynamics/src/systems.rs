@@ -229,6 +229,7 @@ pub fn character_controller_system(world: &World, dt: f32) {
     }
 
     let all_colliders = gather_colliders(world);
+    let carried = platform_carry(world, &all_colliders, dt);
 
     // Yüzme modu için sahnenin PhysicsWorld'ünden fluid-zone batık sorgusu (yoksa hiç su → kara).
     // Copy olmayan bir referans; aşağıdaki unsafe component query'siyle çakışmaz (resource ayrı
@@ -250,6 +251,9 @@ pub fn character_controller_system(world: &World, dt: f32) {
     if let Some(mut query) = query {
         let mut char_count = 0usize;
         for (id, (mut kcc, mut transform, mut vel, collider, _)) in query.iter_mut() {
+            if let Some((_, carry)) = carried.iter().find(|(c, _)| *c == id) {
+                transform.position += *carry;
+            }
             let water_surface_y = phys
                 .as_ref()
                 .and_then(|pw| pw.water_at(transform.position).map(|s| s.surface_y));
@@ -271,6 +275,57 @@ pub fn character_controller_system(world: &World, dt: f32) {
             "[KCC] controller system tick"
         );
     }
+}
+
+/// How far each grounded character's floor carries it this step: `(character id, offset)`.
+///
+/// **A moving platform used to slide out from under the character standing on it.** The
+/// controller saw the scene as a snapshot of transforms and colliders — no velocities — so a
+/// platform moving sideways or turning left its passenger behind (`platformer.rs` lived with it).
+/// Vertical motion was already followed by the step's ground snap, and the carry must not add to
+/// that: the lift test pins both directions to the exact height.
+///
+/// The floor is found the way the step finds it — a ray down from the feet, within the grounded
+/// threshold — and its `Velocity` taken **at the contact point**, `v + ω × r`, so a turntable
+/// carries a character round as well as a lift carries it up. Only bodies that carry a `Velocity`
+/// carry anything: a platform moved by writing its `Transform` alone has no motion to inherit, so
+/// set its `Velocity` to match (a kinematic body does). Run before the step, which then snaps the
+/// feet to the floor where it now is.
+fn platform_carry(world: &World, colliders: &[(BodyHandle, Transform, Collider)], dt: f32) -> Vec<(u32, gizmo_math::Vec3)> {
+    use gizmo_physics_core::raycast::{Ray, Raycast};
+    use gizmo_math::Vec3;
+    let mut out = Vec::new();
+    let Some(characters) = world.query::<(&CharacterController, &Transform, &Collider, Without<IsDeleted>)>() else {
+        return out;
+    };
+    let velocities = world.query::<&Velocity>();
+    for (id, (kcc, transform, collider, _)) in characters.iter() {
+        if !kcc.is_grounded || kcc.is_submerged {
+            continue;
+        }
+        let (height, radius) = crate::character::character_dims(collider);
+        let feet = transform.position - Vec3::new(0.0, height * 0.5 - radius, 0.0);
+        let ray = Ray::new(feet, Vec3::NEG_Y);
+        let mut floor: Option<(f32, BodyHandle, Vec3)> = None;
+        for (handle, t, c) in colliders {
+            if handle.id() == id {
+                continue;
+            }
+            if let Some((d, _)) = Raycast::ray_shape(&ray, &c.shape, t) {
+                if d <= radius + 0.1 && floor.is_none_or(|(best, ..)| d < best) {
+                    floor = Some((d, *handle, t.position));
+                }
+            }
+        }
+        let Some((d, handle, centre)) = floor else { continue };
+        let Some(v) = velocities.as_ref().and_then(|q| q.get(handle.id())) else { continue };
+        let contact = feet - Vec3::Y * d;
+        let at_contact = v.linear + v.angular.cross(contact - centre);
+        if at_contact != Vec3::ZERO {
+            out.push((id, at_contact * dt));
+        }
+    }
+    out
 }
 
 /// Advances every [`FighterController`] in the world by one fixed frame:
@@ -706,6 +761,73 @@ mod tests {
             "vehicle (schedule) should drive forward (-Z): Δz {}",
             start_z - end.position.z
         );
+    }
+
+    /// A 4 × 4 platform top at y = 0, moving with `linear`/`angular` — its `Transform` advanced by
+    /// hand each step, the way a game moves a kinematic body — and a character standing still on
+    /// it at `(x, 0.6, 0)`: a 1.2 m capsule, feet on the top. Returns the character's position
+    /// after `seconds`.
+    fn ride(linear: Vec3, angular: Vec3, with_velocity: bool, x: f32, seconds: f32) -> (Vec3, bool) {
+        let mut world = World::new();
+        let p = world.spawn();
+        world.add_component(p, box_collider(2.0, 0.25, 2.0));
+        world.add_component(p, Transform::new(Vec3::new(0.0, -0.25, 0.0)));
+        if with_velocity {
+            world.add_component(p, Velocity { linear, angular, ..Default::default() });
+        }
+        let e = world.spawn();
+        world.add_component(e, CharacterController { is_grounded: true, ..Default::default() });
+        world.add_component(e, Collider::capsule(0.3, 0.3));
+        world.add_component(e, Transform::new(Vec3::new(x, 0.6, 0.0)));
+        world.add_component(e, Velocity::default());
+        let dt = 1.0 / 60.0;
+        for _ in 0..(seconds / dt).round() as usize {
+            {
+                let mut tfs = world.borrow_mut::<Transform>();
+                let mut t = tfs.get_mut(p.id()).unwrap();
+                t.position += linear * dt;
+                t.rotation = gizmo_math::Quat::from_scaled_axis(angular * dt) * t.rotation;
+            }
+            character_controller_system(&world, dt);
+        }
+        let pos = world.query::<&Transform>().unwrap().get(e.id()).unwrap().position;
+        let grounded = world.borrow::<CharacterController>().get(e.id()).unwrap().is_grounded;
+        (pos, grounded)
+    }
+
+    /// A platform moving sideways takes its passenger with it; one moved without a velocity does
+    /// not — the velocity is what is inherited, so it is what a moving platform has to carry.
+    #[test]
+    fn a_moving_platform_carries_the_character_standing_on_it() {
+        let (pos, grounded) = ride(Vec3::new(1.5, 0.0, 0.0), Vec3::ZERO, true, 0.0, 1.0);
+        assert!((pos.x - 1.5).abs() < 0.05, "carried 1.5 m in a second, got x = {}", pos.x);
+        assert!(grounded, "it fell off on the way");
+        let (still, _) = ride(Vec3::new(1.5, 0.0, 0.0), Vec3::ZERO, false, 0.0, 1.0);
+        assert!(still.x.abs() < 0.05, "no velocity, nothing inherited — got x = {}", still.x);
+    }
+
+    /// A lift keeps its passenger on it, up and down, at exactly the lift's height. The ground snap
+    /// did this before the carry existed (measured: this test passes with the carry removed); it
+    /// is here so the carry cannot add a second vertical move on top of the snap.
+    #[test]
+    fn a_lift_carries_its_passenger_up_and_down() {
+        let (up, grounded) = ride(Vec3::new(0.0, 1.0, 0.0), Vec3::ZERO, true, 0.0, 1.0);
+        assert!((up.y - 1.6).abs() < 0.05, "a 1 m/s lift for 1 s: centre y should be 1.6, got {}", up.y);
+        assert!(grounded);
+        let (down, grounded) = ride(Vec3::new(0.0, -0.8, 0.0), Vec3::ZERO, true, 0.0, 1.0);
+        assert!((down.y + 0.2).abs() < 0.05, "a 0.8 m/s descent: centre y should be -0.2, got {}", down.y);
+        assert!(grounded, "it fell instead of riding down");
+    }
+
+    /// A turntable carries a character standing off-centre round its axis: the velocity is taken
+    /// at the contact point, not at the platform's centre (which is not moving).
+    #[test]
+    fn a_turntable_carries_an_off_centre_character_round() {
+        // A quarter turn about +Y in one second, the character 1 m out on +X.
+        let w = std::f32::consts::FRAC_PI_2;
+        let (pos, _) = ride(Vec3::ZERO, Vec3::new(0.0, w, 0.0), true, 1.0, 1.0);
+        // A quarter turn about +Y takes +X to −Z.
+        assert!(pos.x.abs() < 0.1 && (pos.z + 1.0).abs() < 0.1, "should be near (0, _, -1), got {pos:?}");
     }
 
     /// A KCC with an `+X` target velocity walks forward on flat ground. The KCC

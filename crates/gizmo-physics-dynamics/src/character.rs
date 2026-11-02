@@ -44,6 +44,21 @@ fn blocks(
         && Collider::one_way_keeps(col_trans.rotation * up, n, motion)
 }
 
+/// A character's `(height, radius)` as the controller reads them off its collider — the one place
+/// that decides it, so the ground probe in `character_controller_system` casts from the same
+/// feet the step does.
+pub(crate) fn character_dims(collider: &Collider) -> (f32, f32) {
+    match &collider.shape {
+        ColliderShape::Capsule(c) => (c.half_height * 2.0 + c.radius * 2.0, c.radius),
+        ColliderShape::Box(b) => (b.half_extents.y * 2.0, b.half_extents.x.min(b.half_extents.z)),
+        ColliderShape::Sphere(s) => (s.radius * 2.0, s.radius),
+        ColliderShape::Cylinder(c) => (c.half_height * 2.0, c.radius),
+        // A cone's widest point is its base, which is what a character sweeps with.
+        ColliderShape::Cone(c) => (c.half_height * 2.0, c.radius),
+        _ => (2.0, 0.5), // fallback
+    }
+}
+
 /// Advances a kinematic character controller by one fixed step.
 ///
 /// Resolves ground detection, gravity, slope movement, wall sliding and step
@@ -69,21 +84,7 @@ pub fn update_character(
     water_surface_y: Option<f32>,
     dt: f32,
 ) {
-    // Determine size from collider
-    let (height, radius) = match &collider.shape {
-        ColliderShape::Capsule(c) => {
-            (c.half_height * 2.0 + c.radius * 2.0, c.radius)
-        }
-        ColliderShape::Box(b) => (
-            b.half_extents.y * 2.0,
-            b.half_extents.x.min(b.half_extents.z),
-        ),
-        ColliderShape::Sphere(s) => (s.radius * 2.0, s.radius),
-        ColliderShape::Cylinder(c) => (c.half_height * 2.0, c.radius),
-        // A cone's widest point is its base, which is what a character sweeps with.
-        ColliderShape::Cone(c) => (c.half_height * 2.0, c.radius),
-        _ => (2.0, 0.5), // fallback
-    };
+    let (height, radius) = character_dims(collider);
 
     // NOTE: KCC entities should NOT have a RigidBody component (or they must be kinematic).
     // If they have a dynamic RigidBody, the physics system will apply gravity twice.

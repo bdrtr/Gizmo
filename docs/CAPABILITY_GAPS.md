@@ -910,6 +910,15 @@ frame one. What it found:
   not set gravity there. **Closed 2026-11-02:** the default is inserted only when the setup did
   not insert one; tested with a Moon-gravity world, and an unconditional insert fails it.
 - *Not a gap:* `EventReader::iter` is Bevy's `read`, with the same one-frame semantics.
+- ~~**A moving platform did not carry the character on it.**~~ **Closed 2026-11-02** (found
+  reading `platformer.rs` while choosing the next game). The character controller saw a snapshot
+  of transforms and colliders with no velocities, so a platform moving sideways or turning slid
+  out from under its passenger. `character_controller_system` now finds each grounded
+  character's floor with the step's own ray and moves the character by the floor's `Velocity` at
+  the contact point (`v + ω × r`) before the step. Vertical motion was already followed by the
+  ground snap — measured, the lift test passes without the carry — and the carry is pinned not to
+  add to it. A platform carries only through its `Velocity`; moved by `Transform` alone it has no
+  motion to give.
 
 ---
 
