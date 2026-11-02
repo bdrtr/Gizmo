@@ -693,6 +693,20 @@ pub trait SimpleAppExt {
         F: FnOnce(&mut SceneBuilder, &mut SimpleSceneState) + 'static;
 }
 
+/// What [`SimpleAppExt::with_simple_scene`] adds to the world once the game's setup has run:
+/// the asset manager, and a `PhysicsWorld` with Earth gravity **unless the setup inserted its
+/// own**.
+///
+/// The physics world used to be inserted unconditionally, after the setup, so a game that set
+/// its own gravity there had it silently replaced — found writing `lobut`
+/// (`docs/CAPABILITY_GAPS.md` §C11).
+fn insert_scene_defaults(world: &mut crate::core::World, asset_manager: AssetManager) {
+    if world.get_resource::<PhysicsWorld>().is_none() {
+        world.insert_resource(PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0)));
+    }
+    world.insert_resource(asset_manager);
+}
+
 impl SimpleAppExt for App<SimpleSceneState> {
     fn with_simple_scene<F>(self, setup_fn: F) -> Self
     where
@@ -700,7 +714,6 @@ impl SimpleAppExt for App<SimpleSceneState> {
     {
         self.set_setup(move |world, renderer| {
             let mut asset_manager = AssetManager::new();
-            let phys_world = PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0));
 
             let mut state = SimpleSceneState {
                 camera_speed: 15.0,
@@ -717,8 +730,7 @@ impl SimpleAppExt for App<SimpleSceneState> {
 
             setup_fn(&mut builder, &mut state);
 
-            world.insert_resource(phys_world);
-            world.insert_resource(asset_manager);
+            insert_scene_defaults(world, asset_manager);
             state
         })
         .set_update(simple_scene_update)
@@ -1028,6 +1040,22 @@ mod fixed_physics_tests {
         assert_eq!(p.alpha(), 0.0);
         assert_eq!(FixedPhysics::with_step(0.0).step(), 1.0 / 60.0);
         assert_eq!(FixedPhysics::new(0).step(), 1.0);
+    }
+
+    /// A `PhysicsWorld` the game's setup inserted survives; a world without one gets Earth's.
+    #[test]
+    fn the_setups_own_physics_world_is_kept() {
+        let mut w = crate::core::World::new();
+        w.insert_resource(PhysicsWorld::new().with_gravity(Vec3::new(0.0, -1.62, 0.0)));
+        super::insert_scene_defaults(&mut w, AssetManager::new());
+        let g = w.get_resource::<PhysicsWorld>().map(|p| p.integrator.gravity);
+        assert_eq!(g, Some(Vec3::new(0.0, -1.62, 0.0)), "the setup's Moon gravity was replaced");
+
+        let mut empty = crate::core::World::new();
+        super::insert_scene_defaults(&mut empty, AssetManager::new());
+        let g = empty.get_resource::<PhysicsWorld>().map(|p| p.integrator.gravity);
+        assert_eq!(g, Some(Vec3::new(0.0, -9.81, 0.0)));
+        assert!(empty.get_resource::<AssetManager>().is_some());
     }
 
     /// `advance` actually moves the world: a falling body falls exactly `steps` steps' worth, and

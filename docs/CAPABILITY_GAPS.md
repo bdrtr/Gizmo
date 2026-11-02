@@ -906,8 +906,9 @@ frame one. What it found:
 - ~~**No cylinder primitive.**~~ **Closed 2026-11-02.** `MeshSource("cylinder")` and `"cone"`,
   sized like their colliders (radius 1, half-height 1); `AssetManager::PRIMITIVE_MESH_KEYS` is
   the one list of primitive keys — the studio's missing-asset check kept a second copy of five.
-- **Open: `with_simple_scene` overwrites a `PhysicsWorld` inserted during setup**, so a game
-  cannot set gravity there.
+- ~~**`with_simple_scene` overwrote a `PhysicsWorld` inserted during setup**~~, so a game could
+  not set gravity there. **Closed 2026-11-02:** the default is inserted only when the setup did
+  not insert one; tested with a Moon-gravity world, and an unconditional insert fails it.
 - *Not a gap:* `EventReader::iter` is Bevy's `read`, with the same one-frame semantics.
 
 ---

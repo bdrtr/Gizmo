@@ -34,8 +34,9 @@
 //!   **Kapatıldı:** `"cylinder"` ve `"cone"` (yarıçap 1, yarı yükseklik 1 — çarpıştırıcının
 //!   argümanlarıyla aynı sayılar), ve ilkel adlarının tek listesi
 //!   (`AssetManager::PRIMITIVE_MESH_KEYS`; stüdyo ikinci bir kopya tutuyordu).
-//! - **Açık: SimpleApp kurulumdan sonra kendi `PhysicsWorld`'ünü yazıyor.** Kurulumda yerçekimini
-//!   değiştiren bir oyunun ayarı ezilir; bu oyun varsayılan yerçekimini kullandığı için dokunmadı.
+//! - **SimpleApp kurulumdan sonra kendi `PhysicsWorld`'ünü yazıyordu.** Kurulumda yerçekimini
+//!   değiştiren bir oyunun ayarı sessizce eziliyordu. **Kapatıldı:** kurulum bir tane koyduysa o
+//!   kalıyor.
 //!
 //! ## Ortam değişkenleri
 //!   * `GIZMO_FONT=<yol>` — HUD fontu

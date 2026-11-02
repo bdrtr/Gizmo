@@ -102,6 +102,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     too hard, never rolled and lost 80 % of its speed in 1.5 s; now it rolls at 6.77 m/s against
     the textbook's 6.80. **Behaviour change** for every ECS body that relied on the placeholder;
     bodies added to a `PhysicsWorld` directly are unchanged, as are the determinism gate's hashes.
+  - **`with_simple_scene` keeps a `PhysicsWorld` the setup inserted** — it used to insert its own
+    afterwards, unconditionally, so a game's own gravity was silently replaced.
   - **`MeshSource("cylinder")` and `"cone"`**, sized like their colliders, and
     `AssetManager::PRIMITIVE_MESH_KEYS` as the one list of primitive keys (the studio's
     missing-asset check now uses it instead of its own copy).
