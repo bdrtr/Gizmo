@@ -114,6 +114,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - **`MeshSource("cylinder")` and `"cone"`**, sized like their colliders, and
     `AssetManager::PRIMITIVE_MESH_KEYS` as the one list of primitive keys (the studio's
     missing-asset check now uses it instead of its own copy).
+- **Where a sound is: `AudioManager::position`, `seek`, `duration`** — and sounds can seek at
+  all: the `Muffle` filter now forwards seeks, loops use the engine's own seekable `Looping` source
+  instead of rodio's `repeat_infinite` (whose buffer cannot seek), and decoders are built knowing
+  their length (symphonia refused random access without it). Found by `ritim`, a rhythm game
+  (new demo) that times its notes by the music's position.
 - **On-screen touch controls: `gizmo::ui::VirtualStick` and `VirtualButton`.** Each claims the
   finger that lands on it and follows it until it lifts, so two thumbs play at once; the mouse
   stands in without fingers. `nisanci` is playable on a touchscreen.

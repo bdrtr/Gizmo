@@ -206,6 +206,17 @@ where
     fn total_duration(&self) -> Option<Duration> {
         self.input.total_duration()
     }
+
+    /// Passes the seek to what it wraps — without this every sound the engine plays refused to
+    /// seek, since every one is wrapped in a `Muffle` (found by `AudioManager::seek`'s hardware
+    /// test). The filter's memory is dropped on success: the samples after a jump have nothing to
+    /// do with the ones before it, and filtering them against that history is a click.
+    fn try_seek(&mut self, pos: Duration) -> Result<(), rodio::source::SeekError> {
+        self.input.try_seek(pos)?;
+        self.channels.clear();
+        self.channel = 0;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -246,6 +257,31 @@ mod tests {
         fn total_duration(&self) -> Option<Duration> {
             None
         }
+        fn try_seek(&mut self, pos: Duration) -> Result<(), rodio::source::SeekError> {
+            // Jump to the frame at `pos`.
+            let frame = (pos.as_secs_f64() * f64::from(self.rate)) as usize * usize::from(self.channels);
+            let rest: Vec<Sample> = self.samples.as_slice().get(frame..).unwrap_or(&[]).to_vec();
+            self.samples = rest.into_iter();
+            Ok(())
+        }
+    }
+
+    /// A seek reaches the wrapped source, and the filter starts over there: right after a jump
+    /// from a loud stretch to silence, a muffled sound is silent — not ringing with the history.
+    #[test]
+    fn a_seek_passes_through_and_clears_the_filter() {
+        let control = MuffleControl::new();
+        control.set_cutoff_hz(800);
+        // Half a second of full-scale square wave, then half a second of silence.
+        let mut samples: Vec<Sample> = (0..RATE / 2).map(|i| if (i / 30) % 2 == 0 { 1.0 } else { -1.0 }).collect();
+        samples.extend(std::iter::repeat_n(0.0, (RATE / 2) as usize));
+        let mut m = Muffle::new(Signal::new(samples, RATE, 1), control);
+        for _ in 0..1000 {
+            m.next();
+        }
+        m.try_seek(Duration::from_millis(600)).expect("the signal seeks");
+        let first = m.next().expect("samples after the seek");
+        assert_eq!(first, 0.0, "the filter rang on into the silence it seeked to: {first}");
     }
 
     const RATE: u32 = 48_000;

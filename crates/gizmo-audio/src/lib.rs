@@ -32,17 +32,19 @@
 //! contract internal.
 
 mod filter;
+mod looping;
 mod mixer;
 pub use mixer::Mixer;
 pub mod synth;
 
 use filter::{Muffle, MuffleControl};
+use looping::{decode, Looping};
 
 use rodio::stream::DeviceSinkBuilder;
-use rodio::{Decoder, MixerDeviceSink, Player, Source, SpatialPlayer};
+use rodio::{MixerDeviceSink, Player, SpatialPlayer};
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-use std::io::{Cursor, Read};
+use std::io::Read;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -64,6 +66,9 @@ pub enum AudioError {
     NotLoaded(String),
     /// The in-memory sound bytes could not be decoded into a playable stream.
     Decode(String),
+    /// A playing sound could not be moved to the asked position (its decoder cannot seek, or
+    /// there is no such sound).
+    Seek(String),
 }
 
 impl std::fmt::Display for AudioError {
@@ -72,6 +77,7 @@ impl std::fmt::Display for AudioError {
             AudioError::Io(err) => write!(f, "IO Error: {}", err),
             AudioError::NotFound(path) => write!(f, "File not found: {}", path),
             AudioError::Backend(msg) => write!(f, "Audio backend error: {}", msg),
+            AudioError::Seek(msg) => write!(f, "Seek failed: {}", msg),
             AudioError::NotLoaded(name) => {
                 write!(f, "Sound '{}' is not loaded into memory", name)
             }
@@ -291,6 +297,13 @@ pub fn spatial_gain(distance: f32, max_distance: f32, base_volume: f32) -> f32 {
     // Below one metre rodio's own modifier is clamped to 1, so there is nothing to cancel.
     let rodio_distance_term = distance.max(1.0).powi(2);
     taper * base_volume * rodio_distance_term
+}
+
+/// The length a sound's bytes decode to, if the format states it.
+fn decoded_duration(bytes: &Arc<[u8]>) -> Option<f32> {
+    use rodio::Source;
+    let decoder = decode(bytes).ok()?;
+    decoder.total_duration().map(|d| d.as_secs_f32())
 }
 
 /// Clamp a playback-speed/pitch factor to a value that is safe for rodio's `Speed`
@@ -564,14 +577,14 @@ impl AudioManager {
             log::error!("AudioManager: '{}' adlı ses bellekte yok!", name);
             AudioError::NotLoaded(name.to_string())
         })?;
-        let cursor = Cursor::new(Arc::clone(bytes));
-        let decoder = Decoder::new(cursor).map_err(|e| AudioError::Decode(e.to_string()))?;
+        let decoder = decode(bytes).map_err(|e| AudioError::Decode(e.to_string()))?;
         let sink = Player::connect_new(self.device_sink.mixer());
         // The muffle wraps the source rather than the player: a `Player` hands out no way to reach
         // what it is playing, so a filter that must be switchable later has to be in the chain
         // before `append` and read its own parameter afterwards.
         if looped {
-            sink.append(Muffle::new(decoder.repeat_infinite(), Arc::clone(&self.muffle)));
+            // Not `repeat_infinite`: its buffer cannot seek (see `looping`).
+            sink.append(Muffle::new(Looping::new(Arc::clone(bytes), decoder), Arc::clone(&self.muffle)));
         } else {
             sink.append(Muffle::new(decoder, Arc::clone(&self.muffle)));
         }
@@ -634,12 +647,12 @@ impl AudioManager {
             log::error!("AudioManager: '{}' adlı 3D ses bellekte yok!", name);
             AudioError::NotLoaded(name.to_string())
         })?;
-        let cursor = Cursor::new(Arc::clone(bytes));
-        let decoder = Decoder::new(cursor).map_err(|e| AudioError::Decode(e.to_string()))?;
+        let decoder = decode(bytes).map_err(|e| AudioError::Decode(e.to_string()))?;
         let sink =
             SpatialPlayer::connect_new(self.device_sink.mixer(), emitter_pos, left_ear, right_ear);
         if looped {
-            sink.append(Muffle::new(decoder.repeat_infinite(), Arc::clone(&self.muffle)));
+            // Not `repeat_infinite`: its buffer cannot seek (see `looping`).
+            sink.append(Muffle::new(Looping::new(Arc::clone(bytes), decoder), Arc::clone(&self.muffle)));
         } else {
             sink.append(Muffle::new(decoder, Arc::clone(&self.muffle)));
         }
@@ -705,6 +718,46 @@ impl AudioManager {
     pub fn set_pitch(&mut self, id: u64, pitch: f32) {
         self.mixer.set_sink_pitch(id, pitch);
         self.apply_mix(id);
+    }
+
+    /// Where a playing sound is, in seconds of the sound from its start — the clock a rhythm
+    /// game times its notes against, since the frame clock drifts from what the speaker plays
+    /// (output latency, dropped frames, a stall). `None` for a sound that is not playing.
+    ///
+    /// The position of a sound played with a pitch other than 1 is in the *sound's* seconds, not
+    /// the wall clock's. For a looped sound it keeps counting past the end — take it modulo
+    /// [`duration`](Self::duration). Updated by the audio thread every few milliseconds.
+    #[must_use]
+    pub fn position(&self, id: u64) -> Option<f32> {
+        if let Some(s) = self.active_spatial_sinks.get(&id) {
+            return Some(s.get_pos().as_secs_f32());
+        }
+        self.active_sinks.get(&id).map(|s| s.get_pos().as_secs_f32())
+    }
+
+    /// Moves a playing sound to `secs` from its start — resuming a track where it was, skipping an
+    /// intro, rewinding a practice section.
+    ///
+    /// # Errors
+    ///
+    /// [`AudioError::Seek`] when no such sound is playing, or its format cannot seek.
+    pub fn seek(&mut self, id: u64, secs: f32) -> Result<(), AudioError> {
+        let to = std::time::Duration::from_secs_f32(secs.max(0.0));
+        let result = if let Some(s) = self.active_spatial_sinks.get(&id) {
+            s.try_seek(to)
+        } else if let Some(s) = self.active_sinks.get(&id) {
+            s.try_seek(to)
+        } else {
+            return Err(AudioError::Seek(format!("no playing sound {id}")));
+        };
+        result.map_err(|e| AudioError::Seek(e.to_string()))
+    }
+
+    /// How long a loaded sound is, in seconds — `None` if it was never loaded or its format does
+    /// not say (a WAV always does).
+    #[must_use]
+    pub fn duration(&self, name: &str) -> Option<f32> {
+        self.sound_buffers.get(name).and_then(decoded_duration)
     }
 
     /// Stops the active sink with the given id.
@@ -1192,5 +1245,46 @@ mod spatial_gain_tests {
         assert_eq!(spatial_gain(100.0, 100.0, 1.0), 0.0);
         assert_eq!(spatial_gain(1_000.0, 100.0, 1.0), 0.0);
         assert_eq!(spatial_gain(50.0, 0.0, 0.7), 0.7 * 50.0_f32.powi(2));
+    }
+}
+
+#[cfg(test)]
+mod position_tests {
+    use super::{decoded_duration, synth, AudioManager};
+    use std::sync::Arc;
+
+    /// The length a sound's bytes decode to — what `duration` reports, and a rhythm game's loop
+    /// length.
+    #[test]
+    fn a_wavs_duration_is_read_from_its_bytes() {
+        let wav: Arc<[u8]> = synth::wav_from_samples(&vec![0.0; 66_150], 44_100).into();
+        let d = decoded_duration(&wav).expect("a WAV states its length");
+        assert!((d - 1.5).abs() < 1e-3, "{d}");
+        let junk: Arc<[u8]> = vec![1u8, 2, 3].into();
+        assert_eq!(decoded_duration(&junk), None);
+    }
+
+    /// On real hardware: a playing sound's position advances with what the device has played,
+    /// `seek` moves it — on a looped sound too, which is what a rhythm game's restart does — and
+    /// a sound that is not playing has no position and cannot seek.
+    ///
+    /// `cargo test -p gizmo-audio -- --ignored position`
+    #[test]
+    #[ignore = "needs a real audio output device — run with --ignored"]
+    fn a_playing_sound_reports_and_moves_its_position() {
+        let mut audio = AudioManager::new().expect("an audio output device");
+        audio.load_samples("tone", &vec![0.0; 44_100 * 4], 44_100);
+        assert!((audio.duration("tone").unwrap() - 4.0).abs() < 1e-3);
+        assert_eq!(audio.duration("nothing"), None);
+        let id = audio.play_looped("tone").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let p = audio.position(id).expect("playing");
+        assert!((0.1..1.0).contains(&p), "after 0.3 s the position is {p}");
+        audio.seek(id, 2.5).expect("a looped WAV seeks");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let p = audio.position(id).unwrap();
+        assert!((2.4..3.0).contains(&p), "after seeking to 2.5 s the position is {p}");
+        assert!(audio.position(u64::MAX).is_none());
+        assert!(audio.seek(u64::MAX, 1.0).is_err());
     }
 }

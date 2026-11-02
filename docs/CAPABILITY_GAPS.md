@@ -1143,6 +1143,30 @@ it was already there (`move_axis`, `right_stick`, `cursor_on_plane`, `Timer`, `o
   still loads), and for a name without an extension the error lists the primitive keys. GPU-tested:
   two requests share one buffer, collection forgets it; not inserting into the cache fails it.
 
+### C16e. The ninth game: time from the music (2026-11-03, `ritim`)
+
+`demo/src/bin/ritim.rs` is a four-lane rhythm game: notes fall to a line, press the lane's key (or
+its on-screen `VirtualButton`) as they cross it. The music is synthesised (120 BPM: kick, hi-hat,
+bass) and the notes sit on its beats — so the game has to know where the *music* is, not where the
+frame clock is: notes timed by the frame clock drift from what the speaker plays by the output
+latency, every dropped frame and every stall, and the drift adds up.
+
+- ~~**The playing position of a sound could not be read or moved.**~~ **Closed 2026-11-03.**
+  rodio's players know it; the engine did not expose it. `AudioManager::position(id)` (seconds of
+  the sound), `seek(id, secs)` and `duration(name)`.
+- ~~**No sound in the engine could seek — and nothing said so.**~~ **Closed 2026-11-03.** The
+  hardware test for `seek` went down three layers. The `Muffle` low-pass every sound is wrapped in
+  did not forward `try_seek`; under looped sounds, rodio's `repeat_infinite` buffers its input and
+  the buffer cannot seek; and decoders built with `Decoder::new` on a cursor do not know their
+  length, so symphonia refuses random access. And rodio's `Player::try_seek` returns `Ok` when its
+  feedback channel closes — the first hardware run "passed" with nothing moved. Now `Muffle`
+  forwards the seek and clears its filter memory (no click from the old history), loops are the
+  engine's own `Looping` source (decodes the same `Arc`ed bytes again at the end, wraps a seek into
+  the sound's length), and every decoder is built through one `decode` that states the length and
+  seekability. The proof is device-free — the decoder itself seeking in `Looping`'s test, the
+  filter's memory in `Muffle`'s — because the hardware test cannot tell a real seek from rodio's
+  `Ok`; it stays as the end-to-end check. Dropping the wrap or the memory reset fails them.
+
 ### C16d. The eighth game: animations in sequence (2026-11-03, `mucevher`)
 
 `demo/src/bin/mucevher.rs` is a match-3 puzzle: swap two neighbours (drag, or click then click),
