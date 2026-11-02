@@ -84,6 +84,17 @@ pub(crate) fn ui_clip(_world: &World, _entity: u32) -> Option<[Vec2; 2]> {
     None
 }
 
+/// The overlay layer `entity` is drawn on — its `ZIndex`, inherited through its parents.
+#[cfg(feature = "ui")]
+fn ui_layer(world: &World, entity: u32) -> i32 {
+    crate::ui::ui_layer(world, entity)
+}
+
+#[cfg(not(feature = "ui"))]
+fn ui_layer(_world: &World, _entity: u32) -> i32 {
+    0
+}
+
 /// Lays this frame's [`Text`] out, rasterises any glyph the atlas has not seen, and draws it —
 /// with the UI backgrounds underneath.
 ///
@@ -144,6 +155,7 @@ pub fn record_text(
     // whatever order they arrive in — `TextRenderer::queue_rect` says so.
     for (id, position, size, background) in &boxes {
         if let Some(color) = background {
+            text.set_layer(ui_layer(world, *id));
             text.queue_rect_clipped(*position, *size, *color, screen, ui_clip(world, *id));
         }
     }
@@ -173,6 +185,7 @@ pub fn record_text(
         };
         // A clipping UI box above it (or on it) cuts screen text to the box.
         let clip = if item.space.needs_world_position() { None } else { ui_clip(world, id) };
+        text.set_layer(ui_layer(world, id));
         text.queue_clipped(queue, item, origin, anchor, screen, clip);
     }
     text.upload(device, queue);

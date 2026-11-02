@@ -114,6 +114,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - **`MeshSource("cylinder")` and `"cone"`**, sized like their colliders, and
     `AssetManager::PRIMITIVE_MESH_KEYS` as the one list of primitive keys (the studio's
     missing-asset check now uses it instead of its own copy).
+- **UI layers: `gizmo::ui::ZIndex`.** A node's layer, inherited by its descendants. The overlay
+  paints layer by layer — backgrounds then labels — so a panel in front hides what is behind it;
+  before, every background was under every label. Only the front layer under the cursor is
+  hovered and clicked. Screen sprites keep their place between layer 0's backgrounds and labels,
+  so a UI without `ZIndex` draws exactly as before. GPU-tested with two overlapping boxes in both
+  orders (a first version of the test passed with layers disabled, through archetype order, and
+  was rebuilt to fail then).
+- **Absolutely-positioned UI roots honour their `inset`.** Taffy puts the root it lays out at
+  the origin, so an `Absolute` root ignored `left`/`top`/`right`/`bottom` and every dialog sat in
+  the top-left corner. `left`/`top` (px or % of the window) or, when `Auto`, `right`/`bottom`
+  from the far edge now place it; static roots are unchanged.
 - **UI clipping: `gizmo::ui::ClipContent`.** A node carrying it cuts its own label and every
   descendant's background and label to its box (nested clippers intersect). Glyph quads are
   trimmed on the CPU together with their texture coordinates, so a cut letter is cut, not

@@ -133,13 +133,33 @@ pub(crate) fn record(renderer: &crate::Renderer, encoder: &mut wgpu::CommandEnco
         multiview_mask: None,
     });
     let globals = renderer.scene.view_bind_group();
-    if let Some(t) = text {
-        t.render_overlay_rects(&mut pass, device, format, globals);
+    // Layer by layer, low to high: a layer's backgrounds, then its glyphs. Screen sprites go where
+    // they always went — after layer 0's backgrounds, before its glyphs — so a frame with every
+    // quad on layer 0 is drawn exactly as before layers existed; a layer above 0 covers them.
+    let layers = text.map(|t| t.overlay_layers()).unwrap_or_default();
+    let mut sprites_drawn = false;
+    let draw_sprites = |pass: &mut wgpu::RenderPass<'_>| {
+        if let Some(s) = sprites {
+            s.render_overlay(pass, device, format);
+        }
+    };
+    for layer in layers {
+        if layer > 0 && !sprites_drawn {
+            draw_sprites(&mut pass);
+            sprites_drawn = true;
+        }
+        if let Some(t) = text {
+            t.render_overlay_rects(&mut pass, device, format, globals, layer);
+        }
+        if layer == 0 && !sprites_drawn {
+            draw_sprites(&mut pass);
+            sprites_drawn = true;
+        }
+        if let Some(t) = text {
+            t.render_overlay_glyphs(&mut pass, device, format, globals, layer);
+        }
     }
-    if let Some(s) = sprites {
-        s.render_overlay(&mut pass, device, format);
-    }
-    if let Some(t) = text {
-        t.render_overlay_glyphs(&mut pass, device, format, globals);
+    if !sprites_drawn {
+        draw_sprites(&mut pass);
     }
 }

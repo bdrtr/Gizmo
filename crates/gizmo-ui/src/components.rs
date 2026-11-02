@@ -407,10 +407,21 @@ impl Default for BackgroundColor {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ClipContent;
 
+/// Which layer a UI node — and everything under it that does not set its own — is painted and
+/// hit-tested on. Higher is in front; the default (no component) is `0`.
+///
+/// Every background used to be painted under every label, and every node under the cursor
+/// reported `Hovered`: a menu opened over the HUD showed the HUD's labels through itself and let
+/// clicks reach the buttons beneath. Now layers paint low to high (backgrounds, then labels, per
+/// layer) and only the highest layer under the cursor is hovered. Within one layer the old rule
+/// holds — overlapping nodes on the same layer are the author's to separate.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ZIndex(pub i32);
+
 /// Marker component for the root of a UI tree.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UiRoot;
-gizmo_core::impl_component!(Style, Node, Interaction, Clicked, BackgroundColor, UiRoot, ClipContent);
+gizmo_core::impl_component!(Style, Node, Interaction, Clicked, BackgroundColor, UiRoot, ClipContent, ZIndex);
 
 #[cfg(test)]
 mod tests {

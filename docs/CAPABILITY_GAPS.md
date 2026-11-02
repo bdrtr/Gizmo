@@ -135,9 +135,10 @@ authored position instead is what the outside count catches.
 never loaded draws nothing rather than substituting one. Text is drawn into the HDR target before
 tone mapping, so it is exposed and bloomed with the rest of the frame: right for a world label, and
 the first thing to revisit when there is a post-tonemap pass to hang UI on. **No z-order**: the
-paint order is global — every background, then every glyph — so a label is always above every
-panel, which is right for a button and wrong for two overlapping windows, and `Node` carries no `z`
-to sort by; and no widget beyond "a box with a colour and a label". (Keyboard and gamepad focus
+paint order was global — every background, then every glyph — so a label was always above every
+panel (**closed 2026-11-02:** `ZIndex`, inherited down the tree, paints and hit-tests layer by layer;
+only the front layer under the cursor is hovered; an absolutely-positioned root now honours its
+`inset`, which it silently ignored, so a dialog can be placed at all); and no widget beyond "a box with a colour and a label". (Keyboard and gamepad focus
 exist since 2026-11-02 — `UiNavigation` — and so does clipping: a node with `ClipContent` cuts its
 own label and every descendant's background and label to its box, trimming glyph quads and their
 texture coordinates on the CPU, so it costs no draw call. Tested on the quad arithmetic, on a

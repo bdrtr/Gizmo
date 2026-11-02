@@ -8851,6 +8851,61 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
     /// tested is the *bridge*, and driving taffy here would make a layout regression look like a
     /// text one. `gizmo-ui`'s own 27 tests cover what fills a `Node`.
     #[cfg(feature = "ui")]
+    /// Two overlapping UI boxes, red and blue; `red_z` / `blue_z` are their `ZIndex`es (`None`: no
+    /// component). Returns the overlap's centre pixel, RGBA.
+    async fn overlapping_boxes(red_z: Option<i32>, blue_z: Option<i32>) -> [u8; 4] {
+        let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+        renderer.taa = None;
+        let mut world = World::new();
+        world.spawn_bundle(CameraBundle { primary: true, ..Default::default() });
+        for (pos, colour, z) in [
+            (gizmo_math::Vec2::new(10.0, 10.0), Vec4::new(1.0, 0.0, 0.0, 1.0), red_z),
+            (gizmo_math::Vec2::new(40.0, 40.0), Vec4::new(0.0, 0.0, 1.0, 1.0), blue_z),
+        ] {
+            let e = world.spawn_bundle((
+                crate::ui::Node { position: pos, size: gizmo_math::Vec2::new(60.0, 60.0) },
+                crate::ui::BackgroundColor(colour),
+            ));
+            if let Some(z) = z {
+                world.add_component(e, crate::ui::ZIndex(z));
+            }
+        }
+        let frame = render_world(&mut renderer, &mut world).await;
+        let i = (55 * 128 + 55) * 4; // inside both boxes
+        [frame[i], frame[i + 1], frame[i + 2], frame[i + 3]]
+    }
+
+    /// The box on the higher layer is in front where two overlap — whichever was spawned first,
+    /// so queue order cannot pass this for it.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    #[cfg(feature = "ui")]
+    fn the_higher_layer_box_is_painted_in_front() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            // Channel 0 or 2 is red depending on the target's format; red and blue are compared as
+            // "which of the two is larger", which holds in both.
+            // Both carry a `ZIndex`, so both sit in one archetype and are queued in spawn order —
+            // red first. Queue order alone therefore puts blue in front every time; only layers
+            // can put red there. (A first version gave only one box a `ZIndex`; the archetype it
+            // moved to happened to be iterated last, and the test passed with layers disabled.)
+            let red_front = overlapping_boxes(Some(1), Some(0)).await;
+            let blue_front = overlapping_boxes(Some(0), Some(1)).await;
+            assert!(red_front[0].abs_diff(red_front[2]) > 100, "not a clean colour: {red_front:?}");
+            assert_ne!(
+                red_front[0] > red_front[2],
+                blue_front[0] > blue_front[2],
+                "the same box is in front whichever has the higher ZIndex — layers are ignored ({red_front:?} vs {blue_front:?})"
+            );
+        });
+    }
+
     async fn render_ui_scene(ui_box: bool, label: bool) -> Vec<u8> {
         const W: u32 = 128;
         let mut renderer = crate::test_gpu::headless_renderer(W, W).await;

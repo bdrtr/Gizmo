@@ -21,11 +21,14 @@
 //!
 //! | eksik | demoda nasıl görünüyor |
 //! |-------|------------------------|
-//! | **z-sırası yok** | sıra eleman başına değil GLOBAL: önce bütün dolgular, sonra bütün glifler. Yani bir etiket her zaman her dolgunun üstünde — burada işe yarıyor, ama üst üste binen iki panelde yanlış olur, ve `gizmo-ui`'nin `Node`'unda sıralanacak bir z yok |
 //! | **klavye/odak yok** | hiçbir düğmeye Tab ile gidilemez |
 //!
 //! ## Artık olanlar
 //!
+//! - **Katman sırası** (2026-11-02): `ZIndex` taşıyan bir kutu (ve onu devralan torunları)
+//!   daha alttakilerin hem dolgusunun hem etiketinin üstünde çiziliyor, ve fareyi de o alıyor.
+//!   Düğmelerin üstüne binen "Pencere" `ZIndex(1)`: altındaki etiketler içinden
+//!   görünmüyor, altındaki düğmeye tıklanmıyor. Önceden her etiket her dolgunun üstündeydi.
 //! - **Kırpma** (2026-11-02): `ClipContent` taşıyan bir kutu kendi etiketini ve torunlarınınkini
 //!   kendi sınırına kırpıyor. Dördüncü düğme bilerek dar: etiketi kenarında kesiliyor (önceden
 //!   kutunun dışına taşıyordu).
@@ -146,6 +149,24 @@ fn main() {
                 scene.world.add_component(button, ClipContent);
                 scene.world.add_child(root, button);
             }
+
+            // Düğmelerin bir kısmının üstüne binen bir pencere, bir katman yukarıda.
+            let window = scene.world.spawn_bundle(NodeBundle {
+                style: Style {
+                    position_type: gizmo::ui::PositionType::Absolute,
+                    inset: UiRect { left: Val::Px(300.0), top: Val::Px(40.0), right: Val::Auto, bottom: Val::Auto },
+                    width: Val::Px(260.0),
+                    height: Val::Px(140.0),
+                    ..Default::default()
+                },
+                background_color: BackgroundColor(Vec4::new(0.18, 0.22, 0.3, 1.0)),
+                ..Default::default()
+            });
+            scene.world.add_component(window, gizmo::ui::ZIndex(1));
+            scene.world.add_component(
+                window,
+                Text::screen("Pencere\n(ZIndex 1)", font, 22.0, Vec2::ZERO).with_anchor(TextAnchor::Center),
+            );
 
             scene.spawn_camera(state, Vec3::new(0.0, 1.5, 8.0), Vec3::ZERO);
         })

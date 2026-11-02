@@ -78,10 +78,38 @@ pub struct TextRenderer {
     /// UNDER the glyphs, and the buffer's order is the paint order: nothing here depth-tests.
     rects: Vec<GlyphInstance>,
     screen: Vec<GlyphInstance>,
+    /// The overlay layer of each entry in `rects` / `screen` — see [`set_layer`](Self::set_layer).
+    rect_layers: Vec<i32>,
+    screen_layers: Vec<i32>,
+    /// The layer the next queued quads go to.
+    layer: i32,
     /// How many of each actually reached the buffer, so the draw ranges cannot outrun it.
     uploaded_world: u32,
     uploaded_rects: u32,
     uploaded_screen: u32,
+    /// The uploaded overlay, per layer, low to high: `(layer, rect range, glyph range)` in buffer
+    /// instance indices.
+    overlay_runs: Vec<(i32, std::ops::Range<u32>, std::ops::Range<u32>)>,
+}
+
+/// Where each layer's entries sit in `layers` once it is sorted (stably) low to high:
+/// `(layer, range)`. Pure, so the grouping the overlay draws by is tested without a device.
+fn layer_runs(sorted: &[i32]) -> Vec<(i32, std::ops::Range<usize>)> {
+    let mut out: Vec<(i32, std::ops::Range<usize>)> = Vec::new();
+    for (i, &l) in sorted.iter().enumerate() {
+        match out.last_mut() {
+            Some((last, r)) if *last == l => r.end = i + 1,
+            _ => out.push((l, i..i + 1)),
+        }
+    }
+    out
+}
+
+/// `items` reordered stably by `layers`, and the layers in the same order.
+fn sort_by_layer(items: &[GlyphInstance], layers: &[i32]) -> (Vec<GlyphInstance>, Vec<i32>) {
+    let mut idx: Vec<usize> = (0..items.len()).collect();
+    idx.sort_by_key(|&i| layers.get(i).copied().unwrap_or(0));
+    (idx.iter().map(|&i| items[i]).collect(), idx.iter().map(|&i| layers.get(i).copied().unwrap_or(0)).collect())
 }
 
 impl std::fmt::Debug for TextRenderer {
@@ -139,6 +167,10 @@ impl TextRenderer {
             world: Vec::new(),
             rects: Vec::new(),
             screen: Vec::new(),
+            rect_layers: Vec::new(),
+            screen_layers: Vec::new(),
+            layer: 0,
+            overlay_runs: Vec::new(),
             uploaded_world: 0,
             uploaded_rects: 0,
             uploaded_screen: 0,
@@ -294,9 +326,25 @@ impl TextRenderer {
         self.world.clear();
         self.rects.clear();
         self.screen.clear();
+        self.rect_layers.clear();
+        self.screen_layers.clear();
+        self.layer = 0;
+        self.overlay_runs.clear();
         self.uploaded_world = 0;
         self.uploaded_rects = 0;
         self.uploaded_screen = 0;
+    }
+
+    /// The overlay layer the quads queued from now on go to — a UI node's `ZIndex`.
+    ///
+    /// The overlay paints layer by layer, low to high, and within one layer backgrounds under
+    /// glyphs. Without layers every background was under every glyph, so a panel opened over
+    /// another showed the lower one's labels through it. Screen sprites are painted between
+    /// layer 0's backgrounds and its glyphs, which is where they always were; with every quad on
+    /// layer 0 (the default, and what [`begin_frame`](Self::begin_frame) resets to) the frame is
+    /// exactly what it was before layers existed.
+    pub fn set_layer(&mut self, layer: i32) {
+        self.layer = layer;
     }
 
     /// Whether this frame has anything to draw.
@@ -342,6 +390,7 @@ impl TextRenderer {
         };
         let a = to_ndc(top_left);
         let b = to_ndc(top_left + size);
+        self.rect_layers.push(self.layer);
         self.rects.push(GlyphInstance {
             rect: [a.x, a.y, b.x, b.y],
             uv: self.atlas.solid_uv(),
@@ -397,12 +446,15 @@ impl TextRenderer {
         // arithmetic over glyph entries, and it is where the anchor, the y flip and the pixels →
         // NDC conversion live — i.e. where the bugs are. The closure is what keeps the atlas
         // (which needs a queue and a `&mut self`) out of it.
+        let before = self.screen.len();
         let Self { atlas, library, world, screen, .. } = self;
         let size_px = text.size_px;
         let font = text.font;
         place_clipped(&layout, text, world_origin, screen_anchor, screen_size, clip, world, screen, |glyph| {
             atlas.glyph(queue, library, font, glyph, size_px)
         });
+        let added = self.screen.len() - before;
+        self.screen_layers.extend(std::iter::repeat_n(self.layer, added));
     }
 
     /// Uploads this frame's quads, growing the buffer if it has to.
@@ -428,16 +480,36 @@ impl TextRenderer {
             });
             self.capacity = capacity;
         }
-        // World, then the solid quads, then the glyphs — the order they are drawn in, and the
-        // reason a background never lands on top of its own label.
+        // World, then the solid quads, then the glyphs — each overlay half sorted by layer, so a
+        // layer's backgrounds and its glyphs are each one contiguous range.
+        let (rects, rect_layers) = sort_by_layer(&self.rects, &self.rect_layers);
+        let (screen, screen_layers) = sort_by_layer(&self.screen, &self.screen_layers);
         let mut offset = 0u64;
-        for chunk in [&self.world, &self.rects, &self.screen] {
+        for chunk in [&self.world, &rects, &screen] {
             queue.write_buffer(&self.buffer, offset, bytemuck::cast_slice(chunk));
             offset += std::mem::size_of_val(chunk.as_slice()) as u64;
         }
         self.uploaded_world = self.world.len() as u32;
-        self.uploaded_rects = self.rects.len() as u32;
-        self.uploaded_screen = self.screen.len() as u32;
+        self.uploaded_rects = rects.len() as u32;
+        self.uploaded_screen = screen.len() as u32;
+
+        // Per layer: where its backgrounds and its glyphs are in the buffer.
+        let rect_base = self.uploaded_world as usize;
+        let glyph_base = rect_base + rects.len();
+        let rect_runs = layer_runs(&rect_layers);
+        let glyph_runs = layer_runs(&screen_layers);
+        let mut layers: Vec<i32> = rect_runs.iter().chain(glyph_runs.iter()).map(|(l, _)| *l).collect();
+        layers.sort_unstable();
+        layers.dedup();
+        let find = |runs: &[(i32, std::ops::Range<usize>)], l: i32, base: usize| {
+            runs.iter()
+                .find(|(x, _)| *x == l)
+                .map_or(0..0, |(_, r)| (base + r.start) as u32..(base + r.end) as u32)
+        };
+        self.overlay_runs = layers
+            .into_iter()
+            .map(|l| (l, find(&rect_runs, l, rect_base), find(&glyph_runs, l, glyph_base)))
+            .collect();
     }
 
     /// Draws this frame's **world** labels, depth-tested, into the HDR pass.
@@ -461,28 +533,37 @@ impl TextRenderer {
         self.uploaded_rects + self.uploaded_screen > 0
     }
 
-    /// The overlay's first half: UI backgrounds, under everything else in it.
+    /// The overlay's layers, low to high, as uploaded this frame.
+    pub(crate) fn overlay_layers(&self) -> Vec<i32> {
+        self.overlay_runs.iter().map(|(l, _, _)| *l).collect()
+    }
+
+    /// One layer's UI backgrounds.
     pub(crate) fn render_overlay_rects(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         device: &wgpu::Device,
         format: wgpu::TextureFormat,
         global_bind_group: &wgpu::BindGroup,
+        layer: i32,
     ) {
-        let start = self.uploaded_world;
-        self.draw_overlay(pass, device, format, global_bind_group, start..start + self.uploaded_rects);
+        if let Some((_, r, _)) = self.overlay_runs.iter().find(|(l, _, _)| *l == layer) {
+            self.draw_overlay(pass, device, format, global_bind_group, r.clone());
+        }
     }
 
-    /// The overlay's last half: screen glyphs, over everything else in it.
+    /// One layer's screen glyphs.
     pub(crate) fn render_overlay_glyphs(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         device: &wgpu::Device,
         format: wgpu::TextureFormat,
         global_bind_group: &wgpu::BindGroup,
+        layer: i32,
     ) {
-        let start = self.uploaded_world + self.uploaded_rects;
-        self.draw_overlay(pass, device, format, global_bind_group, start..start + self.uploaded_screen);
+        if let Some((_, _, g)) = self.overlay_runs.iter().find(|(l, _, _)| *l == layer) {
+            self.draw_overlay(pass, device, format, global_bind_group, g.clone());
+        }
     }
 
     fn draw_overlay(
@@ -784,6 +865,19 @@ mod tests {
             let want = size * Vec2::new(0.25, 0.3) + Vec2::new(2.0, -4.0);
             assert!((corner - want).length() < 1e-3, "on {size:?}: {corner:?}, want {want:?}");
         }
+    }
+
+    /// Sorting by layer is stable (queue order kept within a layer), and the runs cover each
+    /// layer's entries exactly once, low to high.
+    #[test]
+    fn layers_sort_stably_and_group_into_runs() {
+        let quad = |x: f32| GlyphInstance { rect: [x, 0.0, 0.0, 0.0], uv: [0.0; 4], color: [0.0; 4], origin: [0.0; 4] };
+        let items = [quad(0.0), quad(1.0), quad(2.0), quad(3.0), quad(4.0)];
+        let (sorted, layers) = sort_by_layer(&items, &[1, 0, 1, -2, 0]);
+        assert_eq!(layers, vec![-2, 0, 0, 1, 1]);
+        assert_eq!(sorted.iter().map(|q| q.rect[0]).collect::<Vec<_>>(), vec![3.0, 1.0, 4.0, 0.0, 2.0], "not stable");
+        assert_eq!(layer_runs(&layers), vec![(-2, 0..1), (0, 1..3), (1, 3..5)]);
+        assert!(layer_runs(&[]).is_empty());
     }
 
     /// A glyph straddling the clip edge keeps the part inside, with its texture cut by the same

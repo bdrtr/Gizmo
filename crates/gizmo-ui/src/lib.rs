@@ -73,12 +73,10 @@
 //! - **No rich text, shaping, bidi or font fallback.** What the engine draws is one
 //!   font per label (wrapping at the `Text`'s own `max_width`); a string longer than
 //!   its box overflows it unless the box — or one above it — carries [`ClipContent`].
-//! - **No z-order or occlusion.** The hit-test is a flat loop over every
-//!   [`Node`], so two overlapping elements both report `Hovered` — and the
-//!   drawing has no per-element order either: every background is painted, then
-//!   every glyph, so a label is always above every panel. Right for a button,
-//!   wrong for two overlapping windows, and there is no `z` on [`Node`] to sort
-//!   by. The hit-test half is noted inline in `interaction.rs`.
+//! - **Layers, but no order within one.** [`ZIndex`] (inherited down the tree) paints and
+//!   hit-tests layer by layer since 2026-11-02 — a panel in front hides the labels behind it and
+//!   takes the pointer from them. Two overlapping nodes on the *same* layer still both report
+//!   `Hovered`, and every background of a layer is painted before its labels.
 //! - **No scrolling and no text input.** Clicks ([`Clicked`]), keyboard and gamepad focus
 //!   ([`UiNavigation`]) and clipping ([`ClipContent`]) exist since 2026-11-02;
 //!   [`Interaction`] itself is still a per-frame state, not an event stream.
@@ -135,7 +133,7 @@ use gizmo_core::world::World;
 pub use components::*;
 pub use bundles::*;
 pub use layout::*;
-pub use interaction::{pointer_over_ui, UiNavigation};
+pub use interaction::{pointer_over_ui, ui_layer, UiNavigation};
 
 /// Registers the UI components + [`UiContext`] resource and schedules the layout
 /// and interaction systems on a [`World`]/[`Schedule`] directly.
@@ -149,6 +147,7 @@ pub fn register(world: &mut World, schedule: &mut Schedule) {
     world.register_component_type::<Interaction>();
     world.register_component_type::<Clicked>();
     world.register_component_type::<ClipContent>();
+    world.register_component_type::<ZIndex>();
     world.register_component_type::<BackgroundColor>();
     world.register_component_type::<UiRoot>();
 
@@ -202,7 +201,7 @@ pub mod prelude {
     pub use crate::{
         components::{
             AlignContent, AlignItems, AlignSelf, BackgroundColor, Display, FlexDirection,
-            Clicked, ClipContent, FlexWrap, Interaction, JustifyContent, Node, PositionType, Style, UiRect, UiRoot, Val,
+            Clicked, ClipContent, FlexWrap, Interaction, JustifyContent, ZIndex, Node, PositionType, Style, UiRect, UiRoot, Val,
         },
         bundles::{NodeBundle, ButtonBundle},
     };

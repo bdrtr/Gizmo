@@ -1,7 +1,31 @@
 use gizmo_core::query::{Query, Mut};
 use gizmo_core::system::{Res, ResMut};
 use gizmo_core::input::{GamepadButton, Input};
-use crate::components::{Clicked, Interaction, Node};
+use crate::components::{Clicked, Interaction, Node, ZIndex};
+use gizmo_core::component::Parent;
+
+/// The layer `entity` is on: its own [`ZIndex`], or the nearest one up its parents, or `0`.
+fn layer_with(entity: u32, z: impl Fn(u32) -> Option<i32>, parent: impl Fn(u32) -> Option<u32>) -> i32 {
+    let mut at = Some(entity);
+    // Bounded: a hierarchy cycle (which the core prevents) must not hang a frame.
+    for _ in 0..256 {
+        let Some(id) = at else { break };
+        if let Some(l) = z(id) {
+            return l;
+        }
+        at = parent(id);
+    }
+    0
+}
+
+/// The layer `entity` is painted and hit-tested on — see [`ZIndex`]. For the facade's draw path,
+/// which lays quads out by it.
+#[must_use]
+pub fn ui_layer(world: &gizmo_core::World, entity: u32) -> i32 {
+    let z = world.borrow::<ZIndex>();
+    let p = world.borrow::<Parent>();
+    layer_with(entity, |id| z.get(id).map(|z| z.0), |id| p.get(id).map(|p| p.0))
+}
 
 /// Keyboard and gamepad navigation of the interactive elements — a resource.
 ///
@@ -79,21 +103,39 @@ pub fn ui_interaction_system(
     input: Res<Input>,
     navigation: Option<ResMut<UiNavigation>>,
     mut interactions: Query<(&Node, Mut<Interaction>, Option<Mut<Clicked>>)>,
+    layers: Query<(Option<&ZIndex>, Option<&Parent>)>,
 ) {
     let mouse_pos = input.mouse_position();
     let is_clicked = input.is_mouse_button_pressed(0); // 0 is left click
 
+    // Only the highest layer under the cursor is hovered — a panel in front takes the pointer
+    // from what is behind it (see `ZIndex`).
+    let layer_of = |id: u32| {
+        layer_with(
+            id,
+            |e| layers.get(e).and_then(|(z, _)| z.map(|z| z.0)),
+            |e| layers.get(e).and_then(|(_, p)| p.map(|p| p.0)),
+        )
+    };
+    let under: Vec<(u32, i32)> = interactions
+        .iter_mut()
+        .filter(|(_, (n, _, _))| point_in_node(mouse_pos, n))
+        .map(|(id, _)| (id, layer_of(id)))
+        .collect();
+    let top = under.iter().map(|(_, l)| *l).max();
+    let front = |id: u32| under.iter().any(|(e, l)| *e == id && Some(*l) == top);
+
     // Keyboard/gamepad focus — decided before the per-element pass so it can mark the focused one.
     let (focused, activate) = match navigation {
-        Some(mut nav) if nav.enabled => navigate(&input, &mut nav, &mut interactions, mouse_pos),
+        Some(mut nav) if nav.enabled => navigate(&input, &mut nav, &mut interactions, &front),
         _ => (None, false),
     };
 
     // Note: This is a simplified check that doesn't account for z-index or hierarchy properly yet.
     // In a real UI system, we would need to walk the tree from front to back.
-    for (id, (node, mut interaction, clicked)) in interactions.iter_mut() {
+    for (id, (_, mut interaction, clicked)) in interactions.iter_mut() {
         let was = *interaction;
-        let is_hovered = point_in_node(mouse_pos, node);
+        let is_hovered = front(id);
 
         let is_focused = focused == Some(id);
         if is_hovered && is_clicked {
@@ -121,13 +163,13 @@ fn navigate(
     input: &Input,
     nav: &mut UiNavigation,
     interactions: &mut Query<(&Node, Mut<Interaction>, Option<Mut<Clicked>>)>,
-    mouse: (f32, f32),
+    hovered: &dyn Fn(u32) -> bool,
 ) -> (Option<u32>, bool) {
     // The focusable elements in reading order. A zero-size node is hidden (or not laid out yet).
     let mut order: Vec<(u32, f32, f32, bool)> = interactions
         .iter_mut()
         .filter(|(_, (n, _, _))| n.size.x > 0.0 && n.size.y > 0.0)
-        .map(|(id, (n, _, _))| (id, n.position.y, n.position.x, point_in_node(mouse, n)))
+        .map(|(id, (n, _, _))| (id, n.position.y, n.position.x, hovered(id)))
         .collect();
     order.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.2.total_cmp(&b.2)).then(a.0.cmp(&b.0)));
     if order.is_empty() {
@@ -350,6 +392,28 @@ mod tests {
         assert_eq!(focused(&world), Some(mid));
         press(&mut world, Some("down"));
         assert_eq!(focused(&world), Some(low));
+    }
+
+    /// Two buttons on top of each other: only the one on the higher layer is hovered and clicked;
+    /// with no `ZIndex` both are, as before. A child without one takes its parent's.
+    #[test]
+    fn only_the_front_layer_under_the_cursor_is_hovered() {
+        use gizmo_core::hierarchy::HierarchyExt;
+        let mut world = gizmo_core::World::new();
+        world.insert_resource(Input::new());
+        let back = world.spawn_bundle(crate::ButtonBundle { node: node((0.0, 0.0), (100.0, 100.0)), ..Default::default() });
+        let panel = world.spawn_bundle((node((0.0, 0.0), (300.0, 300.0)), ZIndex(2)));
+        let front = world.spawn_bundle(crate::ButtonBundle { node: node((50.0, 50.0), (100.0, 100.0)), ..Default::default() });
+        world.add_child(panel, front);
+        frame(&mut world, (75.0, 75.0), false);
+        let state = |id| world.borrow::<Interaction>().get(id).copied();
+        assert_eq!(state(front.id()), Some(Interaction::Hovered), "the front button, layer 2 through its parent");
+        assert_eq!(state(back.id()), Some(Interaction::None), "the button behind took the pointer too");
+        assert_eq!(ui_layer(&world, front.id()), 2);
+        assert_eq!(ui_layer(&world, back.id()), 0);
+        frame(&mut world, (75.0, 75.0), true);
+        frame(&mut world, (75.0, 75.0), false);
+        assert!(clicked(&world, front.id()) && !clicked(&world, back.id()), "the click went through");
     }
 
     /// Pressed on, dragged off, released: cancelled, like a desktop button.
