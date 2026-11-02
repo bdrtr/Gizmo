@@ -93,7 +93,9 @@ pub fn spawn_from_emitters(
         emitter.add_time(dt);
         let interval = 1.0 / emitter.spawn_rate;
         let mut this_frame = 0;
-        let mut rng = Xorshift::seeded(frame, id);
+        // One stream per (frame, emitter): the same frame replays the same sparks, and neighbouring
+        // emitters do not emit in lockstep.
+        let mut rng = gizmo_math::Rng::with_stream(frame, u64::from(id));
         while emitter.get_accumulator() >= interval && this_frame < MAX_SPAWNS_PER_FRAME {
             emitter.consume_time(interval);
             this_frame += 1;
@@ -121,70 +123,5 @@ pub fn spawn_from_emitters(
 
     if !spawned.is_empty() {
         particles.spawn_particles(queue, &spawned);
-    }
-}
-
-/// A four-line xorshift, enough for spawn jitter and nothing else.
-///
-/// Not a general-purpose RNG and not offered as one: it is private, it is used for cosmetic
-/// velocity and lifetime spread, and its only real requirement is that the same frame produces the
-/// same sparks. Anything needing statistical quality should reach for `rand`.
-struct Xorshift(u32);
-
-impl Xorshift {
-    fn seeded(frame: u64, entity: u32) -> Self {
-        // Mix so that neighbouring frames and neighbouring entity ids do not give neighbouring
-        // streams — a raw `frame + entity` seed makes two adjacent emitters emit near-identically.
-        let mixed = (frame as u32)
-            .wrapping_mul(0x9E37_79B9)
-            .wrapping_add(entity.wrapping_mul(0x85EB_CA6B));
-        // Zero is a fixed point of xorshift, so it can never be the state.
-        Self(mixed | 1)
-    }
-
-    fn next_u32(&mut self) -> u32 {
-        self.0 ^= self.0 << 13;
-        self.0 ^= self.0 >> 17;
-        self.0 ^= self.0 << 5;
-        self.0
-    }
-
-    /// Uniform in `[-1, 1]`.
-    fn signed(&mut self) -> f32 {
-        (self.next_u32() as f32 / u32::MAX as f32) * 2.0 - 1.0
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::Xorshift;
-
-    #[test]
-    fn the_jitter_stays_in_range_and_moves() {
-        let mut rng = Xorshift::seeded(7, 3);
-        let mut seen = [0.0f32; 64];
-        for slot in &mut seen {
-            *slot = rng.signed();
-            assert!((-1.0..=1.0).contains(slot), "out of range: {slot}");
-        }
-        // A generator stuck on one value would pass the range check and produce no jitter at all.
-        assert!(
-            seen.windows(2).any(|w| (w[0] - w[1]).abs() > 1e-6),
-            "the sequence never changed"
-        );
-    }
-
-    #[test]
-    fn two_emitters_in_one_frame_do_not_emit_in_lockstep() {
-        let (mut a, mut b) = (Xorshift::seeded(7, 3), Xorshift::seeded(7, 4));
-        assert_ne!(a.signed(), b.signed());
-    }
-
-    #[test]
-    fn the_same_frame_and_entity_replays_identically() {
-        let (mut a, mut b) = (Xorshift::seeded(12, 5), Xorshift::seeded(12, 5));
-        for _ in 0..8 {
-            assert_eq!(a.signed(), b.signed());
-        }
     }
 }

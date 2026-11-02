@@ -110,7 +110,7 @@ fn main() {
             });
 
             scene.world.insert_resource(Counters::default());
-            scene.world.insert_resource(Rng(0x1357_9BDF));
+            scene.world.insert_resource(Rng::new(0x1357_9BDF));
             scene.spawn_camera(state, Vec3::new(0.0, 2.2, 6.5), Vec3::new(0.0, 0.5, 0.0));
         })
         .add_update_system(change_component.in_phase(Phase::Update))
@@ -152,19 +152,6 @@ const COOL: Vec4 = Vec4::new(0.25, 0.45, 0.85, 1.0);
 /// Bu karede değişen küpün rengi.
 const HOT: Vec4 = Vec4::new(1.0, 0.35, 0.15, 1.0);
 
-/// Rastgeleliğin dört satırlık kaynağı — belirleyici olsun diye tohumlu.
-#[derive(Clone, Copy)]
-struct Rng(u32);
-gizmo::core::impl_component!(Rng);
-
-impl Rng {
-    fn next(&mut self) -> f32 {
-        self.0 ^= self.0 << 13;
-        self.0 ^= self.0 >> 17;
-        self.0 ^= self.0 << 5;
-        self.0 as f32 / u32::MAX as f32
-    }
-}
 
 /// 1. sistem: küplerin bir kısmının değerini değiştirir — ama **yalnız gerçekten farklıysa**.
 ///
@@ -178,7 +165,7 @@ fn change_component(
 ) {
     let now = (time.elapsed() as f32 * 2.0).round();
     for (_entity, (mut component, _)) in tracked.iter_mut() {
-        if rng.next() > 0.08 {
+        if !rng.chance(0.08) {
             continue;
         }
         let new = Tracked(now);

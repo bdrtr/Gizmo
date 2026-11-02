@@ -70,6 +70,11 @@ pub mod frustum;
 /// two are deliberately separate and must not be assumed interchangeable.
 pub mod ray;
 
+/// A seeded SplitMix64 generator ([`Rng`]) — the engine's own, so a game no longer carries a
+/// hand-rolled xorshift or puts `rand`'s types in its code. Same seed, same sequence, on every
+/// platform.
+pub mod rng;
+
 /// Plücker (6-D "spatial") vectors, matrices and inertias for Featherstone-style
 /// articulated-body dynamics.
 ///
@@ -89,6 +94,7 @@ pub use aabb::Aabb;
 pub use fixed::{Fp32, FpVec3};
 pub use frustum::{Frustum, Intersection, Plane};
 pub use ray::Ray;
+pub use rng::Rng;
 
 /// Below this magnitude a denominator is treated as zero (degenerate) by [`safe_recip`].
 pub const DEGENERATE_EPS: f32 = 1e-20;

@@ -123,7 +123,7 @@ fn main() {
                 &scene.renderer.scene.texture_bind_group_layout,
             );
             let cube = AssetManager::create_cube(&scene.renderer.device);
-            let mut rng = Xorshift::new(0x9E37_79B9);
+            let mut rng = Rng::new(0x9E37_79B9);
 
             for _ in 0..start_cubes() {
                 spawn_cube(scene.world, &cube, &white, &mut rng);
@@ -284,7 +284,7 @@ fn apply_resize(world: &mut World, direction: i32) {
         let Some(prototype) = world.get_resource::<Prototype>().map(|p| p.clone()) else {
             return;
         };
-        let mut rng = Xorshift::new(target as u32 | 1);
+        let mut rng = Rng::new(target as u64);
         for _ in current..target {
             spawn_cube(world, &prototype.mesh, &prototype.texture, &mut rng);
         }
@@ -314,22 +314,22 @@ fn spawn_cube(
     world: &mut World,
     mesh: &Mesh,
     texture: &std::sync::Arc<gizmo::wgpu::BindGroup>,
-    rng: &mut Xorshift,
+    rng: &mut Rng,
 ) {
     let position = Vec3::new(
-        rng.range(-BOX_HALF, BOX_HALF),
-        rng.range(-BOX_HALF, BOX_HALF),
-        rng.range(-BOX_HALF, BOX_HALF),
+        rng.range(-BOX_HALF..BOX_HALF),
+        rng.range(-BOX_HALF..BOX_HALF),
+        rng.range(-BOX_HALF..BOX_HALF),
     );
     let velocity = Vec3::new(
-        rng.range(-3.0, 3.0),
-        rng.range(-3.0, 3.0),
-        rng.range(-3.0, 3.0),
+        rng.range(-3.0..3.0),
+        rng.range(-3.0..3.0),
+        rng.range(-3.0..3.0),
     );
     let albedo = Vec4::new(
-        rng.range(0.2, 0.9),
-        rng.range(0.3, 0.9),
-        rng.range(0.4, 1.0),
+        rng.range(0.2..0.9),
+        rng.range(0.3..0.9),
+        rng.range(0.4..1.0),
         1.0,
     );
     world.spawn_bundle((
@@ -340,20 +340,4 @@ fn spawn_cube(
         MeshRenderer::new(),
         Velocity(velocity),
     ));
-}
-
-/// Dört satırlık xorshift — dağılımın belirleyici olması yeter.
-struct Xorshift(u32);
-
-impl Xorshift {
-    fn new(seed: u32) -> Self {
-        Self(seed | 1)
-    }
-
-    fn range(&mut self, low: f32, high: f32) -> f32 {
-        self.0 ^= self.0 << 13;
-        self.0 ^= self.0 >> 17;
-        self.0 ^= self.0 << 5;
-        low + (self.0 as f32 / u32::MAX as f32) * (high - low)
-    }
 }

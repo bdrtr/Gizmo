@@ -59,6 +59,7 @@ pub use gizmo_physics_core::components::GlobalTransform;
 #[cfg(feature = "physics")]
 pub use gizmo_physics_rigid::components::{RigidBody, Velocity};
 pub use gizmo_math::Aabb;
+pub use gizmo_math::Rng;
 
 // === Renderer Bileşenleri ===
 #[cfg(feature = "render")]

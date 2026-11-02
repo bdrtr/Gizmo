@@ -32,7 +32,9 @@
 //!   `device` ister — hook `&mut World` alıyor ve renderer'ı görmüyor. Çözüm: mesh ve malzemeler
 //!   kurulumda **bir kez** üretilip kaynak (`Kit`) olarak saklanıyor, hook ve sistemler onları
 //!   klonluyor (ikisi de `Arc`). Çalışıyor ve ucuz; ama "hook'ta yeni bir mesh üret" yazılamıyor.
-//! - **Rastgelelik yok.** Motorun bir RNG kaynağı yok; dört satırlık xorshift oyunun kendisinde.
+//! - **Rastgelelik yoktu.** Oyun dört satırlık bir xorshift taşıyordu — `spotlight`,
+//!   `parallel_query`, `change_detection` ve parçacık yayıcısı gibi. **Kapatıldı:**
+//!   `gizmo_math::Rng` (prelude'da), tohumlu SplitMix64; oyun onu kaynak olarak tutuyor.
 //! - **Fontsuz metin.** Repo font taşımıyor; `kule_yikici` gibi sistem yolları deneniyor.
 //!
 //! ## Ortam değişkenleri
@@ -103,20 +105,10 @@ struct Hud {
     banner: u32,
 }
 
-/// Dört satırlık xorshift — motorda RNG kaynağı yok.
-#[derive(Clone, Copy)]
-struct Rng(u32);
-
-impl Rng {
-    fn next(&mut self) -> f32 {
-        self.0 ^= self.0 << 13;
-        self.0 ^= self.0 >> 17;
-        self.0 ^= self.0 << 5;
-        self.0 as f32 / u32::MAX as f32
-    }
-    fn arena_point(&mut self) -> Vec3 {
-        Vec3::new((self.next() * 2.0 - 1.0) * (ARENA - 1.0), 0.5, (self.next() * 2.0 - 1.0) * (ARENA - 1.0))
-    }
+/// Arenada, duvarlardan bir birim içeride rastgele bir nokta.
+fn arena_point(rng: &mut Rng) -> Vec3 {
+    let half = ARENA - 1.0;
+    Vec3::new(rng.range(-half..half), 0.5, rng.range(-half..half))
 }
 
 fn main() {
@@ -209,7 +201,7 @@ fn main() {
             scene.world.insert_resource(Hud { status, banner: banner_text });
             scene.world.insert_resource(kit);
             scene.world.insert_resource(Run { score: 0, lives: 3, time_left: ROUND_SECONDS, grace: 0.0, best: 0 });
-            scene.world.insert_resource(Rng(0x9E37_79B9));
+            scene.world.insert_resource(Rng::new(0x9E37_79B9));
         })
         // Menü ve bitiş ekranı: Enter.
         .add_update_system(press_enter.in_phase(Phase::Update))
@@ -229,7 +221,7 @@ fn main() {
 /// `DespawnOnExit(Playing)` taşıyor — bitişte motor kendisi topluyor.
 fn start_round(world: &mut World) {
     let Some(kit) = world.get_resource::<Kit>().map(|k| k.clone()) else { return };
-    let mut rng = world.get_resource::<Rng>().map(|r| *r).unwrap_or(Rng(1));
+    let mut rng = world.get_resource::<Rng>().map(|r| r.clone()).unwrap_or_else(|| Rng::new(1));
     banner(world, "", [1.0; 3]);
     let best = world.get_resource::<Run>().map(|r| r.best).unwrap_or(0);
     world.insert_resource(Run { score: 0, lives: 3, time_left: ROUND_SECONDS, grace: 1.0, best });
@@ -244,7 +236,7 @@ fn start_round(world: &mut World) {
         DespawnOnExit(Screen::Playing),
     ));
     for _ in 0..CRYSTALS {
-        spawn_crystal(world, &kit, rng.arena_point());
+        spawn_crystal(world, &kit, arena_point(&mut rng));
     }
     world.spawn_bundle(hunter(&kit, Vec3::new(ARENA - 1.5, 0.5, ARENA - 1.5)));
     world.insert_resource(rng);
@@ -349,8 +341,8 @@ fn collect(
         tf.rotation = spin * tf.rotation;
         if tf.position.distance(player) < 0.9 {
             run.score += 1;
-            tf.position = rng.arena_point();
-            let corner = Vec3::new(if rng.next() < 0.5 { -1.0 } else { 1.0 }, 0.0, if rng.next() < 0.5 { -1.0 } else { 1.0 })
+            tf.position = arena_point(&mut rng);
+            let corner = Vec3::new(if rng.bool() { -1.0 } else { 1.0 }, 0.0, if rng.bool() { -1.0 } else { 1.0 })
                 * (ARENA - 1.5)
                 + Vec3::Y * 0.5;
             commands.spawn_bundle(hunter(&kit, corner));

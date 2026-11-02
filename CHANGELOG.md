@@ -63,6 +63,18 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and fills the entity in one archetype move, instead of one `insert` (and one move) per
   component. Tested for "nothing before the flush, everything after" and for a dead entity being
   left alone; dropping the bundle in the queued command fails the first.
+- **A seeded RNG: `gizmo_math::Rng` (in the prelude).** SplitMix64 — every seed valid, the same
+  sequence on every platform — with `range(a..b | a..=b)` over `f32`, `i32`, `u32`, `i64`, `u64`
+  and `usize` (integer ranges by Lemire's multiply-high with rejection, so no modulo bias),
+  `f32`/`f64` in `[0, 1)`, `signed`, `bool`, `chance(p)`, `pick`, `shuffle` (Fisher–Yates),
+  `unit_vec2`, `unit_vec3` (uniform in area), `in_unit_sphere`, `in_box`, `fork`, and
+  `with_stream(seed, stream)` for one stream per (frame, entity) without the `seed + stream`
+  collisions. No `f64` ranges on purpose: a second float impl makes a literal range fall back to
+  `f64`, which broke all four call sites converted to it. Pinned to the reference SplitMix64
+  outputs for seed 0; uniformity, half-open bounds and sphere uniformity are tested and
+  mutation-checked. The private xorshifts in `spotlight`, `parallel_query`, `change_detection`,
+  `kristal_avcisi` and the particle emitter are gone — the emitter's sparks draw different (equally
+  jittered) values than before, same frame still replays the same.
 - **`kristal_avcisi` — a complete 3D game.** Top-down arena, emissive additive crystals, chasing
   hunters, lives, a clock, Menu → Playing → Over on `add_state` / `on_enter` / `DespawnOnExit`,
   gameplay as one `.chain()`, rect lights, hand-set fog, a camera clear colour. What it ran into

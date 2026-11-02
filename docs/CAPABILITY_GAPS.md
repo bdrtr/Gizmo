@@ -848,7 +848,14 @@ on the driven state machine with `DespawnOnExit`. It works on the first build; w
   builds its meshes and materials once in setup and keeps them in a `Kit` resource (both are
   `Arc`s, so cloning is cheap). It works and is the pattern to use; it is recorded because
   "make a new mesh when the level starts" cannot be written there.
-- **No RNG resource.** The game carries a four-line xorshift. Open.
+- ~~**No RNG.**~~ **Closed 2026-11-02.** The game carried a four-line xorshift, as did
+  `spotlight`, `parallel_query`, `change_detection` and the particle emitter; `showcase`,
+  `rpg_demo` and `hill_climb` used `rand` directly. `gizmo_math::Rng` (in the prelude) is a seeded
+  SplitMix64 — `range(a..b)` over `f32` and the integer types, `bool`, `chance`, `pick`,
+  `shuffle`, `unit_vec2/3`, `in_unit_sphere`, `in_box`, `fork`, `with_stream(seed, stream)` — and
+  an ordinary value, so a game keeps it in a resource. The xorshifts are gone. The first draft
+  also had `f64` ranges, and every converted call site failed to compile: two float impls make
+  `range(-5.0..5.0)` fall back to `f64`. `f64` ranges were dropped and a test pins the inference.
 
 ---
 

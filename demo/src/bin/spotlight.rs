@@ -10,10 +10,9 @@
 //!
 //! ## Üç bilinçli seçim
 //!
-//!   * **Küplerin dağılımı** dört satırlık bir xorshift'ten geliyor — deponun
-//!     `particles.rs`'inde aynı gerekçeyle yapılanın aynısı: dağılımın
-//!     belirleyici olması yeter, kriptografik olması gerekmez, ve demo bir bağımlılık daha
-//!     getirmez.
+//!   * **Küplerin dağılımı** tohumlu `Rng`'den (motorun kendi SplitMix64'ü) geliyor: dağılımın
+//!     belirleyici olması yeter, kriptografik olması gerekmez. (Önceden burada dört satırlık
+//!     bir xorshift vardı; motorun bir RNG'si yoktu.)
 //!   * **Sahneyi gezdiren tuşlar ok tuşları**: basit-sahne kamerası
 //!     zaten WASD'ı kullanıyor, ikisini üst üste bindirmek hem kamerayı hem zemini oynatırdı.
 //!     Ok tuşları da motorun ortak hareket karışımından (`move_axis_with`) geçiyor, elle
@@ -69,11 +68,11 @@ fn main() {
 
             // Kırk küp, belirleyici bir dağılımla.
             let cube = AssetManager::create_cube(&scene.renderer.device);
-            let mut rng = Xorshift::new(0x5EED_1234);
+            let mut rng = Rng::new(0x5EED_1234);
             for _ in 0..CUBE_COUNT {
-                let x = rng.range(-5.0, 5.0);
-                let y = rng.range(0.0, 3.0);
-                let z = rng.range(-5.0, 5.0);
+                let x = rng.range(-5.0..5.0);
+                let y = rng.range(0.0..3.0);
+                let z = rng.range(-5.0..5.0);
                 scene.world.spawn_bundle((
                     Transform::new(Vec3::new(x, y, z)).with_scale(Vec3::splat(0.25)),
                     GlobalTransform::default(),
@@ -171,25 +170,5 @@ fn movement(
     let step = Vec3::new(x, 0.0, -z) * MOVE_SPEED * time.dt();
     for (_entity, (mut transform, _)) in movables.iter_mut() {
         transform.position += step;
-    }
-}
-
-/// Dört satırlık xorshift — dağılımın belirleyici olması yeter.
-///
-/// Dağılımın belirleyici olması yettiği için bu bir bağımlılık gerektirmiyor. Deponun
-/// `render/particles.rs`'i de aynı yolu seçmişti.
-struct Xorshift(u32);
-
-impl Xorshift {
-    fn new(seed: u32) -> Self {
-        Self(seed | 1)
-    }
-
-    /// `[low, high)` aralığında bir sayı.
-    fn range(&mut self, low: f32, high: f32) -> f32 {
-        self.0 ^= self.0 << 13;
-        self.0 ^= self.0 >> 17;
-        self.0 ^= self.0 << 5;
-        low + (self.0 as f32 / u32::MAX as f32) * (high - low)
     }
 }
