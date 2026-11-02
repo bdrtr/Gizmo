@@ -70,18 +70,18 @@
 //!
 //! Concretely still missing:
 //!
-//! - **No rich text, wrapping, shaping, bidi or font fallback.** What the engine
-//!   draws is one font per label, breaking only on `\n`; a string longer than its
-//!   box overflows it, because there is no clipping either (below).
+//! - **No rich text, shaping, bidi or font fallback.** What the engine draws is one
+//!   font per label (wrapping at the `Text`'s own `max_width`); a string longer than
+//!   its box overflows it unless the box — or one above it — carries [`ClipContent`].
 //! - **No z-order or occlusion.** The hit-test is a flat loop over every
 //!   [`Node`], so two overlapping elements both report `Hovered` — and the
 //!   drawing has no per-element order either: every background is painted, then
 //!   every glyph, so a label is always above every panel. Right for a button,
 //!   wrong for two overlapping windows, and there is no `z` on [`Node`] to sort
 //!   by. The hit-test half is noted inline in `interaction.rs`.
-//! - **No click/focus events, no keyboard handling, no scrolling, no clipping,
-//!   no text input.** [`Interaction`] is a per-frame recomputed state, not an
-//!   event stream.
+//! - **No scrolling and no text input.** Clicks ([`Clicked`]), keyboard and gamepad focus
+//!   ([`UiNavigation`]) and clipping ([`ClipContent`]) exist since 2026-11-02;
+//!   [`Interaction`] itself is still a per-frame state, not an event stream.
 //! - **No CSS Grid.** [`Style`] models the flexbox/block surface only; taffy's
 //!   grid algorithm is compiled in but unreachable, because there is no way to
 //!   express `display: grid` or a track template. The full list of taffy
@@ -97,7 +97,7 @@
 //! Under `gizmo-engine`, spawn a [`NodeBundle`] or [`ButtonBundle`], give it a
 //! [`BackgroundColor`] and hang a `Text` on the same entity: the engine paints
 //! both. `demo/src/bin/ui_layout.rs` is a row of buttons doing exactly that,
-//! including one whose label overflows its box on purpose.
+//! including one whose label is cut at its box's edge by [`ClipContent`].
 //!
 //! Standalone — [`register`] on a bare `World` with no engine renderer — use
 //! this crate when you want box geometry and hover/press state solved for you
@@ -148,6 +148,7 @@ pub fn register(world: &mut World, schedule: &mut Schedule) {
     world.register_component_type::<Node>();
     world.register_component_type::<Interaction>();
     world.register_component_type::<Clicked>();
+    world.register_component_type::<ClipContent>();
     world.register_component_type::<BackgroundColor>();
     world.register_component_type::<UiRoot>();
 
@@ -201,7 +202,7 @@ pub mod prelude {
     pub use crate::{
         components::{
             AlignContent, AlignItems, AlignSelf, BackgroundColor, Display, FlexDirection,
-            Clicked, FlexWrap, Interaction, JustifyContent, Node, PositionType, Style, UiRect, UiRoot, Val,
+            Clicked, ClipContent, FlexWrap, Interaction, JustifyContent, Node, PositionType, Style, UiRect, UiRoot, Val,
         },
         bundles::{NodeBundle, ButtonBundle},
     };

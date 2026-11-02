@@ -723,8 +723,8 @@ state instead.
   and does not have: **z-index** — the paint order is global (every background, then every glyph),
   which is right for a button and wrong for two overlapping panels, and `Node` carries no `z` to
   sort by — and **widgets**, of which there is exactly one shape (a box with a colour and a label).
-  Clipping is absent with them; click events (`Clicked`) and keyboard/gamepad focus
-  (`UiNavigation`) exist since 2026-11-02. No default font ships and none
+  Click events (`Clicked`), keyboard/gamepad focus (`UiNavigation`) and clipping
+  (`ClipContent`) exist since 2026-11-02. No default font ships and none
   will without a licensing decision: a `Text` whose face was never loaded draws nothing rather than
   substituting one.
 

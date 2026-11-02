@@ -137,8 +137,12 @@ tone mapping, so it is exposed and bloomed with the rest of the frame: right for
 the first thing to revisit when there is a post-tonemap pass to hang UI on. **No z-order**: the
 paint order is global — every background, then every glyph — so a label is always above every
 panel, which is right for a button and wrong for two overlapping windows, and `Node` carries no `z`
-to sort by. No clipping, so a label longer than its box overflows it; and no widget beyond "a box
-with a colour and a label". (Keyboard and gamepad focus exist since 2026-11-02: `UiNavigation`.) (Click events exist since 2026-11-02:
+to sort by; and no widget beyond "a box with a colour and a label". (Keyboard and gamepad focus
+exist since 2026-11-02 — `UiNavigation` — and so does clipping: a node with `ClipContent` cuts its
+own label and every descendant's background and label to its box, trimming glyph quads and their
+texture coordinates on the CPU, so it costs no draw call. Tested on the quad arithmetic, on a
+three-glyph string cut to one, and on nested clippers intersecting; `ui_layout`'s fourth button is
+cut at its edge.) (Click events exist since 2026-11-02:
 `ButtonBundle`'s `Clicked` is `true` for the one frame a press on the button is released on it.)
 
 ### A3. User-authored shaders — **open since 2026-08-23**, forward-only

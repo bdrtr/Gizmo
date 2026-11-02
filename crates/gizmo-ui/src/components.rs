@@ -211,8 +211,8 @@ pub type JustifyContent = AlignContent;
 /// - **`overflow` and `scrollbar_width`.** This crate does no clipping and no
 ///   scrolling, so a scroll container would compute geometry nothing honours.
 /// - **`box_sizing`.** `taffy`'s default, border-box, is always used.
-/// - **`direction` (LTR/RTL)** and **`text_align`.** There is no text rendering
-///   in this engine at all.
+/// - **`direction` (LTR/RTL)** and **`text_align`.** Text is the engine's `Text` component
+///   (with its own alignment), placed in a node's box by the facade; layout never measures it.
 /// - **`float` / `clear`**, **`item_is_table`**, **`item_is_replaced`**.
 /// - **Intrinsic sizing keywords** (`min-content`, `max-content`,
 ///   `fit-content`) and **`calc()` lengths**: [`Val`] is `Auto`/`Px`/`Percent`
@@ -397,10 +397,20 @@ impl Default for BackgroundColor {
     }
 }
 
+/// Clips what is drawn inside this node to its box: its own label, and every descendant's
+/// background and label (a nested clipper narrows it further — the intersection).
+///
+/// Without it a long label runs out of its button and a scrolled list spills over the panel it
+/// sits in — `gizmo-ui` had no clipping at all, and `ui_layout`'s fourth button overflowed on
+/// purpose to show it. The trimming happens on the CPU per glyph and per background quad, so it
+/// costs no extra draw call.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ClipContent;
+
 /// Marker component for the root of a UI tree.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UiRoot;
-gizmo_core::impl_component!(Style, Node, Interaction, Clicked, BackgroundColor, UiRoot);
+gizmo_core::impl_component!(Style, Node, Interaction, Clicked, BackgroundColor, UiRoot, ClipContent);
 
 #[cfg(test)]
 mod tests {

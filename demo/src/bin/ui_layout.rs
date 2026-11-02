@@ -21,12 +21,14 @@
 //!
 //! | eksik | demoda nasıl görünüyor |
 //! |-------|------------------------|
-//! | **kırpma yok** | dördüncü düğmenin etiketi kutusunun sağından taşıyor, kesilmiyor |
 //! | **z-sırası yok** | sıra eleman başına değil GLOBAL: önce bütün dolgular, sonra bütün glifler. Yani bir etiket her zaman her dolgunun üstünde — burada işe yarıyor, ama üst üste binen iki panelde yanlış olur, ve `gizmo-ui`'nin `Node`'unda sıralanacak bir z yok |
 //! | **klavye/odak yok** | hiçbir düğmeye Tab ile gidilemez |
 //!
 //! ## Artık olanlar
 //!
+//! - **Kırpma** (2026-11-02): `ClipContent` taşıyan bir kutu kendi etiketini ve torunlarınınkini
+//!   kendi sınırına kırpıyor. Dördüncü düğme bilerek dar: etiketi kenarında kesiliyor (önceden
+//!   kutunun dışına taşıyordu).
 //! - **Tıklama** (2026-11-02): `ButtonBundle`'daki `Clicked`, düğmenin üzerinde basılıp üzerinde
 //!   bırakıldığı tek karede `true` — dışarıda bırakmak iptal. Düğmeler tıklandıkça sayıyor.
 //!   Önceden "tıklandı" iki karenin farkından elle çıkarılıyordu.
@@ -40,7 +42,7 @@ use gizmo::prelude::*;
 use gizmo::renderer::components::{Text, TextAnchor};
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
 use gizmo::ui::{
-    AlignItems, BackgroundColor, ButtonBundle, Clicked, Interaction, JustifyContent, NodeBundle,
+    AlignItems, BackgroundColor, ButtonBundle, Clicked, ClipContent, Interaction, JustifyContent, NodeBundle,
     Style, UiPlugin, UiRect, Val,
 };
 
@@ -114,7 +116,8 @@ fn main() {
                 ..Default::default()
             });
 
-            // Üç düğme, artı bilerek dar olan bir dördüncü: etiketi taşacak, çünkü kırpma yok.
+            // Üç düğme, artı bilerek dar olan bir dördüncü: etiketi kutusunun kenarında kesiliyor
+            // (`ClipContent`).
             for (label, width, anchor) in [
                 ("BASLAT", 150.0, TextAnchor::Center),
                 ("AYARLAR", 150.0, TextAnchor::Center),
@@ -140,6 +143,7 @@ fn main() {
                         .with_color(Vec4::new(0.94, 0.95, 0.97, 1.0)),
                 );
                 scene.world.add_component(button, Counter { label, clicks: 0 });
+                scene.world.add_component(button, ClipContent);
                 scene.world.add_child(root, button);
             }
 

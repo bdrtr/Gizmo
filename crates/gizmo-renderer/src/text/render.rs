@@ -316,6 +316,21 @@ impl TextRenderer {
     /// is a glyph quad whose coverage happens to be 1. That is why a background costs no pipeline,
     /// no shader and no second buffer.
     pub fn queue_rect(&mut self, top_left: Vec2, size: Vec2, color: Vec4, screen_size: Vec2) {
+        self.queue_rect_clipped(top_left, size, color, screen_size, None);
+    }
+
+    /// [`queue_rect`](Self::queue_rect), cut to `clip` (`[min, max]` in window pixels) — what a UI
+    /// panel that clips its content does to a child's background. Nothing is queued when the two
+    /// do not overlap.
+    pub fn queue_rect_clipped(&mut self, top_left: Vec2, size: Vec2, color: Vec4, screen_size: Vec2, clip: Option<[Vec2; 2]>) {
+        let (top_left, size) = match clip {
+            Some([lo, hi]) => {
+                let a = top_left.max(lo);
+                let b = (top_left + size).min(hi);
+                (a, b - a)
+            }
+            None => (top_left, size),
+        };
         if size.x <= 0.0 || size.y <= 0.0 || color.w <= 0.0 {
             return;
         }
@@ -357,6 +372,23 @@ impl TextRenderer {
         screen_anchor: Option<Vec2>,
         screen_size: Vec2,
     ) {
+        self.queue_clipped(queue, text, world_origin, screen_anchor, screen_size, None);
+    }
+
+    /// [`queue`](Self::queue), with screen-space glyphs cut to `clip` (`[min, max]` in window
+    /// pixels): a glyph straddling the edge is trimmed — quad and texture coordinates together, so
+    /// what remains is not squashed — and one wholly outside is dropped. World text ignores it.
+    /// This is how a UI box that clips its content keeps a long label inside itself.
+    #[allow(clippy::too_many_arguments)]
+    pub fn queue_clipped(
+        &mut self,
+        queue: &wgpu::Queue,
+        text: &Text,
+        world_origin: Vec3,
+        screen_anchor: Option<Vec2>,
+        screen_size: Vec2,
+        clip: Option<[Vec2; 2]>,
+    ) {
         let Some(mut layout) = self.library.layout_wrapped(text.font, text.size_px, &text.content, text.max_width) else {
             return;
         };
@@ -368,7 +400,7 @@ impl TextRenderer {
         let Self { atlas, library, world, screen, .. } = self;
         let size_px = text.size_px;
         let font = text.font;
-        place(&layout, text, world_origin, screen_anchor, screen_size, world, screen, |glyph| {
+        place_clipped(&layout, text, world_origin, screen_anchor, screen_size, clip, world, screen, |glyph| {
             atlas.glyph(queue, library, font, glyph, size_px)
         });
     }
@@ -488,6 +520,7 @@ impl TextRenderer {
 /// fit, and either way it contributes nothing. Pulled out of [`TextRenderer::queue`] so the
 /// placement can be checked without an adapter — it is the half that decides where a glyph lands,
 /// and a sign error here is a picture that is upside down rather than a compile error.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn place(
     layout: &super::TextLayout,
@@ -495,6 +528,36 @@ fn place(
     world_origin: Vec3,
     screen_anchor: Option<Vec2>,
     screen_size: Vec2,
+    world: &mut Vec<GlyphInstance>,
+    screen: &mut Vec<GlyphInstance>,
+    entry_of: impl FnMut(u16) -> Option<super::GlyphEntry>,
+) {
+    place_clipped(layout, text, world_origin, screen_anchor, screen_size, None, world, screen, entry_of);
+}
+
+/// A screen quad `[min, max]` (window pixels) with texture rectangle `uv`, cut to `clip`: the part
+/// inside, with `uv` cut by the same fractions so the glyph is trimmed rather than squashed.
+/// `None` when nothing of it is inside.
+fn clip_quad(min: Vec2, max: Vec2, uv: [f32; 4], clip: [Vec2; 2]) -> Option<(Vec2, Vec2, [f32; 4])> {
+    let a = min.max(clip[0]);
+    let b = max.min(clip[1]);
+    if b.x <= a.x || b.y <= a.y {
+        return None;
+    }
+    let size = (max - min).max(Vec2::splat(f32::MIN_POSITIVE));
+    let (f0, f1) = ((a - min) / size, (b - min) / size);
+    let (du, dv) = (uv[2] - uv[0], uv[3] - uv[1]);
+    Some((a, b, [uv[0] + du * f0.x, uv[1] + dv * f0.y, uv[0] + du * f1.x, uv[1] + dv * f1.y]))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn place_clipped(
+    layout: &super::TextLayout,
+    text: &Text,
+    world_origin: Vec3,
+    screen_anchor: Option<Vec2>,
+    screen_size: Vec2,
+    clip: Option<[Vec2; 2]>,
     world: &mut Vec<GlyphInstance>,
     screen: &mut Vec<GlyphInstance>,
     mut entry_of: impl FnMut(u16) -> Option<super::GlyphEntry>,
@@ -526,11 +589,18 @@ fn place(
                         1.0 - p.y / screen_size.y.max(1.0) * 2.0,
                     )
                 };
-                let a = to_ndc(position + min);
-                let b = to_ndc(position + max);
+                let (lo, hi, uv) = match clip {
+                    Some(c) => match clip_quad(position + min, position + max, entry.uv, c) {
+                        Some(q) => q,
+                        None => continue,
+                    },
+                    None => (position + min, position + max, entry.uv),
+                };
+                let a = to_ndc(lo);
+                let b = to_ndc(hi);
                 screen.push(GlyphInstance {
                     rect: [a.x, a.y, b.x, b.y],
-                    uv: entry.uv,
+                    uv,
                     color,
                     origin: [0.0, 0.0, 0.0, -1.0],
                 });
@@ -714,6 +784,41 @@ mod tests {
             let want = size * Vec2::new(0.25, 0.3) + Vec2::new(2.0, -4.0);
             assert!((corner - want).length() < 1e-3, "on {size:?}: {corner:?}, want {want:?}");
         }
+    }
+
+    /// A glyph straddling the clip edge keeps the part inside, with its texture cut by the same
+    /// fraction; one wholly outside is gone; one wholly inside is untouched.
+    #[test]
+    fn a_clip_trims_a_glyph_and_its_texture_together() {
+        let uv = [0.2, 0.4, 0.6, 0.8];
+        // A 10×10 glyph at (0,0); the clip ends at x = 5: the left half, the left half of the uv.
+        let (a, b, cut) = clip_quad(Vec2::ZERO, Vec2::splat(10.0), uv, [Vec2::splat(-100.0), Vec2::new(5.0, 100.0)]).unwrap();
+        assert_eq!((a, b), (Vec2::ZERO, Vec2::new(5.0, 10.0)));
+        assert!((cut[0] - 0.2).abs() < 1e-6 && (cut[2] - 0.4).abs() < 1e-6, "u halved: {cut:?}");
+        assert!((cut[1] - 0.4).abs() < 1e-6 && (cut[3] - 0.8).abs() < 1e-6, "v untouched: {cut:?}");
+        assert!(clip_quad(Vec2::ZERO, Vec2::splat(10.0), uv, [Vec2::splat(20.0), Vec2::splat(30.0)]).is_none());
+        assert_eq!(clip_quad(Vec2::ZERO, Vec2::splat(10.0), uv, [Vec2::splat(-1.0), Vec2::splat(11.0)]).unwrap().2, uv);
+    }
+
+    /// Clipping a three-glyph string to the first glyph's box keeps one glyph.
+    #[test]
+    fn a_clipped_text_keeps_only_what_is_inside() {
+        let layout = TextLayout {
+            glyphs: vec![
+                PositionedGlyph { glyph: 1, x: 0.0, y: 0.0, line: 0 },
+                PositionedGlyph { glyph: 2, x: 10.0, y: 0.0, line: 0 },
+                PositionedGlyph { glyph: 3, x: 20.0, y: 0.0, line: 0 },
+            ],
+            width: 30.0,
+            height: 20.0,
+            lines: 1,
+            line_widths: vec![30.0],
+        };
+        let t = text(TextSpace::Screen { position: Vec2::ZERO }, TextAnchor::TopLeft);
+        let (mut w, mut s) = (Vec::new(), Vec::new());
+        let clip = Some([Vec2::ZERO, Vec2::new(10.0, 50.0)]);
+        place_clipped(&layout, &t, Vec3::ZERO, None, Vec2::new(100.0, 100.0), clip, &mut w, &mut s, |_| Some(entry([0.0, 0.0])));
+        assert_eq!(s.len(), 1, "only the first glyph is inside the box");
     }
 
     /// A pinned text under a UI box takes the box's answer, like a `Screen` one.

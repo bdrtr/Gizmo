@@ -114,6 +114,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - **`MeshSource("cylinder")` and `"cone"`**, sized like their colliders, and
     `AssetManager::PRIMITIVE_MESH_KEYS` as the one list of primitive keys (the studio's
     missing-asset check now uses it instead of its own copy).
+- **UI clipping: `gizmo::ui::ClipContent`.** A node carrying it cuts its own label and every
+  descendant's background and label to its box (nested clippers intersect). Glyph quads are
+  trimmed on the CPU together with their texture coordinates, so a cut letter is cut, not
+  squashed, and it costs no draw call. `TextRenderer::queue_clipped` / `queue_rect_clipped` are
+  the renderer half. `ui_layout`'s overflowing fourth button is now cut at its edge.
 - **Colour tweens: `ColorTween`.** `ColorTween::to(colour, s)` and `fade_to(alpha, s)` ease the
   colour of an entity's `Sprite`, `Text` and `Material`, with `Tween`'s curves and repeats (the
   pass arithmetic is now one function, `Repeat::position`). Both draw paths advance it on the

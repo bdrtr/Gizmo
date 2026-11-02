@@ -51,6 +51,39 @@ fn ui_boxes(_world: &World) -> Vec<UiBox> {
     Vec::new()
 }
 
+/// Where `entity`'s drawing is cut: the intersection of the boxes of every
+/// [`ClipContent`](crate::ui::ClipContent) node from it up through its ancestors (`[min, max]`,
+/// window pixels), or `None` when none of them clips. An empty intersection is a zero-size rect,
+/// which clips everything.
+#[cfg(feature = "ui")]
+pub(crate) fn ui_clip(world: &World, entity: u32) -> Option<[Vec2; 2]> {
+    let clips = world.borrow::<crate::ui::ClipContent>();
+    let nodes = world.borrow::<crate::ui::Node>();
+    let parents = world.borrow::<crate::core::component::Parent>();
+    let mut out: Option<[Vec2; 2]> = None;
+    let mut at = Some(entity);
+    // Bounded: a hierarchy cycle (which the core prevents) must not hang a frame.
+    for _ in 0..256 {
+        let Some(id) = at else { break };
+        if clips.get(id).is_some() {
+            if let Some(n) = nodes.get(id) {
+                let r = [n.position, n.position + n.size];
+                out = Some(match out {
+                    Some([lo, hi]) => [lo.max(r[0]), hi.min(r[1])],
+                    None => r,
+                });
+            }
+        }
+        at = parents.get(id).map(|p| p.0);
+    }
+    out
+}
+
+#[cfg(not(feature = "ui"))]
+pub(crate) fn ui_clip(_world: &World, _entity: u32) -> Option<[Vec2; 2]> {
+    None
+}
+
 /// Lays this frame's [`Text`] out, rasterises any glyph the atlas has not seen, and draws it —
 /// with the UI backgrounds underneath.
 ///
@@ -109,9 +142,9 @@ pub fn record_text(
     text.begin_frame();
     // Backgrounds first in the source too, though the renderer keeps them under the glyphs
     // whatever order they arrive in — `TextRenderer::queue_rect` says so.
-    for (_, position, size, background) in &boxes {
+    for (id, position, size, background) in &boxes {
         if let Some(color) = background {
-            text.queue_rect(*position, *size, *color, screen);
+            text.queue_rect_clipped(*position, *size, *color, screen, ui_clip(world, *id));
         }
     }
 
@@ -138,7 +171,9 @@ pub fn record_text(
                 .map(|(_, position, size, _)| *position + *size * item.anchor.factors());
             (Vec3::ZERO, anchor)
         };
-        text.queue(queue, item, origin, anchor, screen);
+        // A clipping UI box above it (or on it) cuts screen text to the box.
+        let clip = if item.space.needs_world_position() { None } else { ui_clip(world, id) };
+        text.queue_clipped(queue, item, origin, anchor, screen, clip);
     }
     text.upload(device, queue);
     // Screen text and UI backgrounds are drawn later, onto the final image, by the overlay in
@@ -173,4 +208,36 @@ pub fn record_text(
         multiview_mask: None,
     });
     text.render(&mut pass, scene.view_bind_group());
+}
+
+#[cfg(all(test, feature = "ui"))]
+mod clip_tests {
+    use super::*;
+    use crate::core::hierarchy::HierarchyExt;
+    use crate::ui::{ClipContent, Node};
+
+    fn node(x: f32, y: f32, w: f32, h: f32) -> Node {
+        Node { position: Vec2::new(x, y), size: Vec2::new(w, h) }
+    }
+
+    /// A clipping panel cuts what is under it to its box; a nested one narrows it to the
+    /// intersection; a node that does not clip passes its parent's clip down; nothing above
+    /// clips, nothing is cut.
+    #[test]
+    fn clips_are_the_intersection_of_the_clipping_ancestors() {
+        let mut world = World::new();
+        let panel = world.spawn_bundle((node(0.0, 0.0, 100.0, 100.0), ClipContent));
+        let inner = world.spawn_bundle((node(50.0, 50.0, 200.0, 200.0), ClipContent));
+        let plain = world.spawn_bundle((node(60.0, 60.0, 10.0, 10.0),));
+        let label = world.spawn();
+        world.add_child(panel, inner);
+        world.add_child(inner, plain);
+        world.add_child(plain, label);
+        let loose = world.spawn_bundle((node(0.0, 0.0, 10.0, 10.0),));
+
+        assert_eq!(ui_clip(&world, panel.id()), Some([Vec2::ZERO, Vec2::splat(100.0)]));
+        assert_eq!(ui_clip(&world, label.id()), Some([Vec2::splat(50.0), Vec2::splat(100.0)]), "the intersection");
+        assert_eq!(ui_clip(&world, plain.id()), Some([Vec2::splat(50.0), Vec2::splat(100.0)]));
+        assert_eq!(ui_clip(&world, loose.id()), None);
+    }
 }
