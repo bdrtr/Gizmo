@@ -809,6 +809,100 @@ macro_rules! system_param {
 }
 
 
+/// A tuple of parameters is a parameter — `(time, state): (Res<Time>, Res<State<Screen>>)` —
+/// two to eight members, and tuples nest. (No one-tuple: `(Res<T>,)` would be `Res<T>` with
+/// extra punctuation.)
+///
+/// # Why
+///
+/// A system takes at most nine parameters. The way past that, and the way to hand a group of them
+/// to a helper, was [`system_param!`](crate::system_param) — a named struct, which is right for a
+/// group several systems share and heavy for a one-off. A tuple is the anonymous version, and it
+/// is what a Bevy user writes first: `kristal_avcisi` wrote one and it did not compile.
+///
+/// It is the same construction as the macro, without the name: the state is the tuple of the
+/// members' states (so a `Local` in a tuple keeps its own value), the fetch is member by member in
+/// order, and the access declaration is **forwarded member by member** — a tuple cannot declare
+/// less than it fetches.
+macro_rules! impl_tuple_system_param {
+    ($($P:ident $s:ident),+) => {
+        impl<$($P: SystemParam),+> sealed::Sealed for ($($P,)+) {}
+        impl<$($P: SystemParam),+> SystemParam for ($($P,)+) {
+            type Item<'w> = ($($P::Item<'w>,)+);
+            type State = ($($P::State,)+);
+            fn fetch<'w>(
+                world: &'w World,
+                dt: f32,
+                state: &'w mut Self::State,
+            ) -> Result<Self::Item<'w>, SystemParamFetchError> {
+                // Destructured so each member gets its own `&mut` of its own state.
+                let ($($s,)+) = state;
+                Ok(($($P::fetch(world, dt, $s)?,)+))
+            }
+            fn get_access_info(info: &mut AccessInfo) {
+                $($P::get_access_info(info);)+
+            }
+        }
+    };
+}
+impl_tuple_system_param!(P1 s1, P2 s2);
+impl_tuple_system_param!(P1 s1, P2 s2, P3 s3);
+impl_tuple_system_param!(P1 s1, P2 s2, P3 s3, P4 s4);
+impl_tuple_system_param!(P1 s1, P2 s2, P3 s3, P4 s4, P5 s5);
+impl_tuple_system_param!(P1 s1, P2 s2, P3 s3, P4 s4, P5 s5, P6 s6);
+impl_tuple_system_param!(P1 s1, P2 s2, P3 s3, P4 s4, P5 s5, P6 s6, P7 s7);
+impl_tuple_system_param!(P1 s1, P2 s2, P3 s3, P4 s4, P5 s5, P6 s6, P7 s7, P8 s8);
+
+#[cfg(test)]
+mod tuple_param_tests {
+    use super::*;
+    use crate::system::{IntoSystemConfig, Schedule};
+
+    #[derive(Default)]
+    struct A(u32);
+    #[derive(Default)]
+    struct B(u32);
+    #[derive(Default)]
+    struct Out(Vec<u32>);
+
+    /// A tuple parameter fetches every member, a nested one too, and a `Local` inside keeps its
+    /// own value between runs.
+    #[test]
+    fn a_tuple_parameter_fetches_its_members_and_keeps_their_state() {
+        #[allow(clippy::type_complexity)]
+        fn sys((a, (b, mut runs)): (Res<A>, (Res<B>, Local<u32>)), mut out: ResMut<Out>) {
+            *runs += 1;
+            out.0.push(a.0 + b.0 + *runs);
+        }
+        let mut w = World::new();
+        w.insert_resource(A(10));
+        w.insert_resource(B(100));
+        w.insert_resource(Out::default());
+        let mut schedule = Schedule::new();
+        schedule.add_di_system(sys.into_config());
+        schedule.build();
+        schedule.run(&mut w, 0.0);
+        schedule.run(&mut w, 0.0);
+        assert_eq!(w.get_resource::<Out>().map(|o| o.0.clone()), Some(vec![111, 112]));
+    }
+
+    /// The tuple declares what its members declare — a write inside a tuple is a write, so the
+    /// scheduler cannot co-run it with a reader of the same resource.
+    #[test]
+    fn a_tuple_declares_every_members_access() {
+        let mut bare = AccessInfo::default();
+        <Res<'static, A> as SystemParam>::get_access_info(&mut bare);
+        <ResMut<'static, B> as SystemParam>::get_access_info(&mut bare);
+        let mut tupled = AccessInfo::default();
+        <(Res<'static, A>, (ResMut<'static, B>, Res<'static, A>)) as SystemParam>::get_access_info(&mut tupled);
+        // The nested tuple reads `A` a second time; the bare list does too, so they still match.
+        <Res<'static, A> as SystemParam>::get_access_info(&mut bare);
+        assert_eq!(tupled.resource_reads, bare.resource_reads);
+        assert_eq!(tupled.resource_writes, bare.resource_writes, "the write inside the tuple was lost");
+        assert_eq!(tupled.resource_writes, vec![TypeId::of::<B>()]);
+    }
+}
+
 #[cfg(test)]
 mod local_tests {
     use super::*;

@@ -858,6 +858,13 @@ on the driven state machine with `DespawnOnExit`. It works on the first build; w
   only `MeshSource` + `MaterialDesc` + `MeshRenderer`; the game's `Kit` is gone. Procedural meshes
   (a sphere of radius 0.37, an extrusion) still need the device — scale a primitive, or build in
   setup.
+- ~~**A tuple is not a system parameter.**~~ **Closed 2026-11-02.** The game wrote
+  `(time, state): (Res<Time>, Res<State<Screen>>)` — what a Bevy user writes first, and the way
+  past the nine-parameter limit — and it did not compile; the only grouping was the named
+  `system_param!` struct. Tuples of two to eight parameters, nested freely, are now parameters:
+  the state is the tuple of the members' states (a `Local` inside keeps its value) and the access
+  declaration is forwarded member by member, so a write inside a tuple still serialises against a
+  reader — tested, and an emptied declaration fails it.
 - ~~**No sound without sound files.**~~ **Closed 2026-11-02.** `AudioManager` played files or a
   file's bytes and nothing else, the repository carries no audio assets, and the only WAV encoder
   in it was a test helper — so the first version of the game was silent. `gizmo_audio::synth`:

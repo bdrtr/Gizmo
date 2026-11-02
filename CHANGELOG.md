@@ -88,6 +88,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   cached under `primitive/<key>` — the prefix `garbage_collect` already kept alive for a cache
   nothing filled. GPU-tested (same buffer twice, survives collection); disabling the cache fails
   it.
+- **Tuples are system parameters.** `fn f((time, state): (Res<Time>, Res<State<S>>))` — two to
+  eight members, nesting freely — the anonymous form of `system_param!` and the way past the
+  nine-parameter limit. Members' states are kept per member (a `Local` in a tuple keeps its value)
+  and their access declarations are forwarded one by one; a test compares a nested tuple's
+  declaration with the flat list's, and dropping the forwarding fails it.
 - **Sound without sound files: `gizmo_audio::synth`.** `wav_from_samples(samples, rate)` encodes
   mono PCM as a 16-bit WAV (clamped, non-finite as silence); `AudioManager::load_samples` registers
   generated PCM; `Blip::new(wave, hz, seconds).with_slide(end_hz).with_volume(v)` renders a short

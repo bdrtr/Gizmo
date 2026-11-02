@@ -44,6 +44,9 @@
 //!   `gizmo::audio::synth` — `Blip::new(Wave::Square, 660.0, 0.12).with_slide(1320.0).wav()` bir
 //!   toplama sesi, `AudioManager::load_samples` kodda üretilmiş PCM için. Dört efekt de burada
 //!   üretiliyor; ses cihazı yoksa oyun sessiz sürüyor.
+//! - **Parametre demeti yoktu.** `(time, state): (Res<Time>, Res<State<Screen>>)` derlenmiyordu
+//!   — Bevy'den gelen herkesin ilk yazdığı şey. **Kapatıldı:** 2–8 elemanlı demetler (iç içe de)
+//!   `SystemParam`; `collect` bir tane kullanıyor.
 //! - **Fontsuz metin.** Repo font taşımıyor; `kule_yikici` gibi sistem yolları deneniyor.
 //!
 //! ## Ortam değişkenleri
@@ -344,8 +347,8 @@ fn collect(
     mut run: ResMut<Run>,
     mut rng: ResMut<Rng>,
     mut commands: gizmo::core::Commands,
-    time: Res<Time>,
-    state: Res<State<Screen>>,
+    // Bir demet de parametre: ilk yazıldığında derlenmiyordu.
+    (time, state): (Res<Time>, Res<State<Screen>>),
     mut audio: Option<ResMut<AudioManager>>,
 ) {
     if !playing(&state) {
