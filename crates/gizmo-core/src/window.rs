@@ -73,3 +73,80 @@ impl Default for WindowInfo {
         }
     }
 }
+
+/// How the mouse cursor behaves over the window — what a game asks of it, as an ECS resource.
+///
+/// A first-person or third-person game turns the camera with the mouse and must keep the cursor
+/// from leaving the window or showing over the scene; nothing in the engine could ask for that.
+/// The windowed app applies this resource to the real window whenever it changes (it compares
+/// with what it last applied, so writing it every frame costs nothing):
+///
+/// ```
+/// use gizmo_core::window::{CursorGrab, CursorOptions};
+/// # let mut world = gizmo_core::World::new();
+/// // Mouse-look on: the cursor is held in place and hidden; motion still arrives as
+/// // `Input::mouse_delta`, which is fed from raw device motion, not the cursor position.
+/// world.insert_resource(CursorOptions::mouse_look());
+/// // A menu opened: give the cursor back.
+/// world.insert_resource(CursorOptions::default());
+/// # assert_eq!(world.get_resource::<CursorOptions>().map(|c| c.grab), Some(CursorGrab::None));
+/// ```
+///
+/// No resource means the default: free and visible. `gizmo-core` has no window, so nothing here
+/// applies it — a headless world simply holds the value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct CursorOptions {
+    /// Whether the cursor is held.
+    pub grab: CursorGrab,
+    /// Whether it is drawn.
+    pub visible: bool,
+}
+
+impl CursorOptions {
+    /// Free and visible — the window's own behaviour.
+    #[must_use]
+    pub const fn free() -> Self {
+        Self { grab: CursorGrab::None, visible: true }
+    }
+
+    /// Held in place and hidden: what mouse-look wants.
+    #[must_use]
+    pub const fn mouse_look() -> Self {
+        Self { grab: CursorGrab::Locked, visible: false }
+    }
+
+    /// Replaces the grab mode.
+    #[must_use]
+    pub const fn with_grab(mut self, grab: CursorGrab) -> Self {
+        self.grab = grab;
+        self
+    }
+
+    /// Replaces the visibility.
+    #[must_use]
+    pub const fn with_visible(mut self, visible: bool) -> Self {
+        self.visible = visible;
+        self
+    }
+}
+
+impl Default for CursorOptions {
+    fn default() -> Self {
+        Self::free()
+    }
+}
+
+/// How far a [`CursorOptions`] holds the cursor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum CursorGrab {
+    /// Free to leave the window.
+    #[default]
+    None,
+    /// Kept inside the window, still moving.
+    Confined,
+    /// Held where it is. Where the platform cannot lock (X11), the window falls back to
+    /// [`Confined`](Self::Confined) — mouse-look works either way, because it reads raw motion.
+    Locked,
+}

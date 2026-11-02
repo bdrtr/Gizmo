@@ -203,6 +203,32 @@ impl<State: 'static> App<State> {
         }
     }
 
+    /// Applies the world's [`CursorOptions`](gizmo_core::window::CursorOptions) to the window when
+    /// it differs from what was last applied. No resource reads as the default (free, visible).
+    ///
+    /// `Locked` falls back to `Confined` where the platform refuses to lock (X11 does); mouse-look
+    /// works with either, because `Input::mouse_delta` comes from raw device motion.
+    fn apply_cursor_options(&mut self, window: &winit::window::Window) {
+        use gizmo_core::window::{CursorGrab, CursorOptions};
+        use winit::window::CursorGrabMode;
+        let wanted = self.world.get_resource::<CursorOptions>().map(|c| *c).unwrap_or_default();
+        if wanted == self.applied_cursor {
+            return;
+        }
+        let grab = match wanted.grab {
+            CursorGrab::Locked => window
+                .set_cursor_grab(CursorGrabMode::Locked)
+                .or_else(|_| window.set_cursor_grab(CursorGrabMode::Confined)),
+            CursorGrab::Confined => window.set_cursor_grab(CursorGrabMode::Confined),
+            _ => window.set_cursor_grab(CursorGrabMode::None),
+        };
+        if let Err(e) = grab {
+            tracing::warn!(error = %e, "[App] the window refused the cursor grab");
+        }
+        window.set_cursor_visible(wanted.visible);
+        self.applied_cursor = wanted;
+    }
+
     /// Run one pass of the lazy asset loader.
     ///
     /// Takes the asset manager and the renderer out of the world and puts them back, which is why
@@ -694,6 +720,9 @@ impl<State: 'static> App<State> {
 
                             // Asset Loading System (Lazy Load)
                             self.run_asset_loading();
+
+                            // The cursor behaviour the game asked for this frame.
+                            self.apply_cursor_options(&window);
 
 
                             if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {

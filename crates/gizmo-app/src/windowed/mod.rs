@@ -139,6 +139,8 @@ pub struct App<State: 'static = ()> {
     // until the first `resumed`.
     window_attributes: Option<WindowAttributes>,
     window: Option<Arc<winit::window::Window>>,
+    /// The cursor behaviour last applied to `window` — see `apply_cursor_options`.
+    applied_cursor: gizmo_core::window::CursorOptions,
     #[cfg(feature = "egui")]
     editor: Option<EguiContext>,
     app_state: Option<State>,
