@@ -98,6 +98,11 @@ pub struct Camera {
     /// order. Ties go by entity order. `#[serde(default)]`.
     #[serde(default)]
     pub order: i32,
+    /// What fills the frame where nothing is drawn — linear RGB. `None` (the default) keeps each
+    /// path's own background: the deferred path's dark grey, the forward path's light blue. A
+    /// skybox or a backdrop still draws over it. `#[serde(default)]`.
+    #[serde(default)]
+    pub clear_color: Option<gizmo_math::Vec3>,
 }
 
 /// A rectangle of the render target, as **fractions** of its size with the origin at the
@@ -214,7 +219,15 @@ impl Camera {
             projection: ProjectionMode::Perspective,
             viewport: None,
             order: 0,
+            clear_color: None,
         }
+    }
+
+    /// This camera with `color` (linear RGB) as its background — see
+    /// [`clear_color`](Self::clear_color).
+    pub fn with_clear_color(mut self, color: gizmo_math::Vec3) -> Self {
+        self.clear_color = Some(color.max(gizmo_math::Vec3::ZERO));
+        self
     }
 
     /// This camera drawn into `viewport` of the target (see [`Camera::viewport`]).

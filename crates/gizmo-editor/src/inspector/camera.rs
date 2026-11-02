@@ -51,6 +51,19 @@ pub fn draw_camera_section(
                         );
                     });
                     ui.checkbox(&mut cam.primary, "Ana Kamera");
+                    // `Camera::clear_color`: off keeps the render path's own background.
+                    ui.horizontal(|ui| {
+                        let mut on = cam.clear_color.is_some();
+                        if ui.checkbox(&mut on, "Arka plan rengi").changed() {
+                            cam.clear_color = on.then_some(gizmo_math::Vec3::new(0.02, 0.02, 0.03));
+                        }
+                        if let Some(c) = cam.clear_color {
+                            let mut rgb = [c.x, c.y, c.z];
+                            if ui.color_edit_button_rgb(&mut rgb).changed() {
+                                cam.clear_color = Some(gizmo_math::Vec3::from_array(rgb));
+                            }
+                        }
+                    });
                 });
             ui.separator();
         }

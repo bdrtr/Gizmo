@@ -232,7 +232,10 @@ pub(super) fn record_studio_main_pass(
     show_colliders: bool,
     draw_chrome: bool,
     ed_shading_mode: u32,
+    // The game camera's `Camera::clear_color` in the game view; `None` keeps the editor's grey.
+    clear_color: Option<[f32; 3]>,
 ) {
+            let [cr, cg, cb] = clear_color.unwrap_or([0.035, 0.035, 0.035]);
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Main Render Pass (HDR)"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -242,9 +245,9 @@ pub(super) fn record_studio_main_pass(
                     ops: wgpu::Operations {
                         // Linear space 0.035 ~= sRGB 0.22 (Blender dark grey) after Gamma Correction / HDR
                         load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.035,
-                            g: 0.035,
-                            b: 0.035,
+                            r: cr as f64,
+                            g: cg as f64,
+                            b: cb as f64,
                             a: 1.0,
                         }),
                         store: wgpu::StoreOp::Store,

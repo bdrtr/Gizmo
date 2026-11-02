@@ -185,6 +185,9 @@ pub struct EnvironmentFrame {
     pub blend_t: f32,
     /// Debug shading mode (0 = normal shading).
     pub shading_mode: u32,
+    /// The rendered camera's background, linear RGB (`Camera::clear_color`); `None` keeps the
+    /// path's own.
+    pub clear_color: Option<[f32; 3]>,
 }
 
 /// One frame's worth of scene state, in the terms the caller has it.
@@ -276,7 +279,7 @@ impl SceneUniforms {
             // regardless, so a shader that starts reading it does not find two different answers.
             exposure: camera.exposure,
             _pre_align_pad: [0; 2],
-            _align_pad: [0; 3],
+            clear_color: environment.clear_color.unwrap_or([-1.0, 0.0, 0.0]),
             environment_blend_t: environment.blend_t,
             environment_preset: environment.preset,
             point_shadows_enabled: u32::from(shadows.point_shadows_enabled),
@@ -451,7 +454,7 @@ mod tests {
     fn the_padding_is_zeroed_and_the_block_is_the_size_the_shaders_expect() {
         let u = SceneUniforms::new(&SceneFrame { camera: a_camera(), ..Default::default() });
         assert_eq!(u._pre_align_pad, [0; 2]);
-        assert_eq!(u._align_pad, [0; 3]);
+        assert_eq!(u.clear_color, [-1.0, 0.0, 0.0], "no background asked for reads as 'none'");
         // Written against MAX_LIGHTS rather than as literals: the light array is the block's only
         // variable-length part, so `FIXED + MAX_LIGHTS * 64` still fails on any *other* field
         // moving — which is what this guards — without needing a hand-recomputed number every time

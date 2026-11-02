@@ -124,6 +124,7 @@ fn scene_layout() -> Vec<(&'static str, u32)> {
         ("cascade_params", offset_of!(SceneUniforms, cascade_params) as u32),
         ("num_lights", offset_of!(SceneUniforms, num_lights) as u32),
         ("exposure", offset_of!(SceneUniforms, exposure) as u32),
+        ("clear_color", offset_of!(SceneUniforms, clear_color) as u32),
         ("environment_blend_t", offset_of!(SceneUniforms, environment_blend_t) as u32),
         ("environment_preset", offset_of!(SceneUniforms, environment_preset) as u32),
         ("point_shadows_enabled", offset_of!(SceneUniforms, point_shadows_enabled) as u32),

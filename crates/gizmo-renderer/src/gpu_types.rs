@@ -347,7 +347,10 @@ pub struct SceneUniforms {
     /// Explicit padding, to keep the fields below at the offsets the shaders declare.
     pub _pre_align_pad: [u32; 2], // offset 1064-1071
     /// Explicit padding, as above.
-    pub _align_pad: [u32; 3], // offset 1072-1083
+    /// The camera's background (`Camera::clear_color`), linear RGB; a negative red channel means
+    /// "none" and the deferred pass keeps its own. Was `_align_pad: [u32; 3]` — same size and
+    /// alignment, so no offset moved.
+    pub clear_color: [f32; 3],
     /// How far between the two environment presets: 0 = fully [`Self::environment_preset`],
     /// 1 = fully [`Self::environment_preset_2`].
     pub environment_blend_t: f32, // offset 1084-1087

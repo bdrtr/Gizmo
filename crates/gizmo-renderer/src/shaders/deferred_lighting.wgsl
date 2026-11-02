@@ -411,7 +411,11 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
 
     // Unwritten pixels (skipped geometry, unlit objects) — a clean dark grey, rather than
     // whatever the G-buffer happened to still hold from the previous frame.
-    if (pos_sample.w < 0.5) { 
+    // `Camera::clear_color` where the camera asked for one (red ≥ 0).
+    if (pos_sample.w < 0.5) {
+        if (scene.clear_color.x >= 0.0) {
+            return vec4<f32>(scene.clear_color, 1.0);
+        }
         return vec4<f32>(0.05, 0.05, 0.05, 1.0);
     }
 

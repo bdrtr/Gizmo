@@ -806,6 +806,10 @@ fn draw_camera_view(
 
     // The active camera, in the one form both uniform blocks are built from. Assembled after the
     // TAA jitter so `view_proj` is the matrix this frame actually rasterises with.
+    // The rendered camera's background, if it asked for one (`Camera::clear_color`).
+    let clear_color = camera
+        .and_then(|c| world.borrow::<Camera>().get(c).and_then(|cam| cam.clear_color))
+        .map(|c| c.to_array());
     let camera = crate::renderer::CameraFrame {
         view_proj,
         position: cam_pos,
@@ -913,6 +917,7 @@ fn draw_camera_view(
                 preset_2: renderer.environment_preset_2,
                 blend_t: renderer.environment_blend_t,
                 shading_mode: renderer.shading_mode,
+                clear_color,
             },
             point_shadows_enabled: renderer.point_shadows_enabled,
             elapsed_time,
@@ -1072,7 +1077,7 @@ fn draw_camera_view(
     let inv_view_proj = unjittered_view_proj.inverse().to_cols_array_2d();
     passes::record_forward_and_fluid(
         encoder, renderer, world, &draw_items, uploaded_instances, particle_lod, fluid_lod,
-        inv_view_proj,
+        inv_view_proj, clear_color,
     );
     passes::record_screen_space_effects(encoder, renderer);
     // Advance SSGI temporal ping-pong / frame counter after its passes have run.
@@ -1499,10 +1504,15 @@ mod golden_render_tests {
     /// clean eight-frame cycle (frames 8 apart come out **byte-identical**) and the residual is
     /// the intended sub-pixel jitter.
     ///
-    /// The bar is 38: between the two measurements, like its sibling's 24, and for the same
-    /// reason — it separates a working resolve from a broken one rather than claiming
-    /// convergence. The 33 it passes at is *not* small, and the open question the sibling
-    /// records (a min/max clamp that cycles instead of settling) is the same one here.
+    /// The bar was 38, between those two. **Re-measured 2026-11-02: 50 working, 131 broken**, so
+    /// the bar is 80. What moved was not the resolve: the G-buffer's position target had been
+    /// cleared with alpha 1, so the sky read as geometry at the camera and this perfectly smooth
+    /// metal cube reflected that darkness. With the sky empty it reflects the environment, comes
+    /// out brighter (an edge pixel swings 154 ↔ 129 where the old worst was 91 ↔ 59 against the
+    /// background), and brighter edges swing further through the same clamp. The bar still does
+    /// its job — it separates a working resolve from a broken one rather than claiming
+    /// convergence — and the open question the sibling records (a min/max clamp that cycles
+    /// instead of settling) is the same one here.
     #[test]
     fn a_still_orthographic_scene_shimmers_no_worse_than_its_own_jitter() {
         let _gpu = crate::test_gpu::gpu_lock();
@@ -1568,7 +1578,7 @@ mod golden_render_tests {
                 prev = cur;
             }
             assert!(
-                worst <= 38,
+                worst <= 80,
                 "an orthographic camera on a still scene swung by {worst}/255 between frames —                  the jitter is being written into a column this projection does not divide away,                  so a sub-pixel offset became a depth-scaled one (see `jitter_projection`)"
             );
         });
@@ -3693,12 +3703,17 @@ mod golden_render_tests {
             assert!(
                 differing >= 1000,
                 "4 steps and 64 steps differ on only {differing} pixels — `steps` is not reaching \
-                 the shader (measured 2755)",
+                 the shader (measured 16276; 2755 before sky rays had length)",
             );
+            // Re-measured 2026-11-02: 16276 pixels differ, by at most 32. It was 2755 by at most
+            // 6, and the change is a fix rather than drift: the G-buffer's position target was
+            // cleared with alpha 1, so every sky pixel read as geometry at the camera and its ray
+            // was zero metres long. Sky rays now march `max_distance`, as the shader always meant,
+            // and a 4-step march over that length samples the lamp's sphere coarsely.
             assert!(
-                largest <= 24,
+                largest <= 48,
                 "4 steps and 64 steps differ by up to {largest} per channel — refining the march \
-                 should not change what it renders this much (measured 6)",
+                 should not change what it renders this much (measured 32)",
             );
         });
     }
@@ -6128,6 +6143,58 @@ mod golden_render_tests {
             assert_eq!(untouched, default, "the defaults are the old literals");
             let (near, wide) = (band(&default), band(&wide));
             assert!(wide > near * 2 + 500, "a 2 m radius spreads the occlusion: band {near} → {wide}");
+        });
+    }
+
+    /// `Camera::clear_color` fills the background; `None` keeps the deferred path's own grey, and
+    /// geometry still draws over the colour. Corner pixel = background, centre = a cube.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn a_camera_sets_the_background() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        // (corner RGB, centre RGB)
+        async fn frame(clear: Option<Vec3>) -> ([u8; 3], [u8; 3]) {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let cube = world.spawn();
+            world.add_component(cube, Transform::new(Vec3::new(0.0, 0.0, -4.0)).with_scale(Vec3::splat(0.5)));
+            world.add_component(cube, GlobalTransform::default());
+            world.add_component(cube, AssetManager::create_cube(&renderer.device));
+            world.add_component(cube, Material::new(tex).with_unlit(Vec4::new(0.0, 0.6, 0.0, 1.0)));
+            world.add_component(cube, MeshRenderer::new());
+            let cam = world.spawn_bundle(CameraBundle {
+                position: Vec3::ZERO,
+                yaw: -std::f32::consts::FRAC_PI_2,
+                pitch: 0.0,
+                primary: true,
+                ..Default::default()
+            });
+            if let Some(c) = clear {
+                let mut q = world.query_mut::<crate::core::query::Mut<crate::renderer::components::Camera>>().unwrap();
+                q.get_mut(cam.id()).unwrap().clear_color = Some(c);
+            }
+            let f = render_world(&mut renderer, &mut world).await;
+            let px = |x: usize, y: usize| { let i = (y * 128 + x) * 4; [f[i], f[i + 1], f[i + 2]] };
+            (px(4, 4), px(64, 64))
+        }
+        pollster::block_on(async {
+            let plain = frame(None).await;
+            let red = frame(Some(Vec3::new(0.6, 0.0, 0.0))).await;
+            // Measured: plain corner (42, 42, 42), red (167, 0, 0); the cube (0, 214, 0) in both.
+            // With the position target cleared to BLACK again the red never shows — no pixel is
+            // "empty" — and the corner reads (41, 43, 46).
+            assert!(plain.0[0].abs_diff(plain.0[2]) <= 2, "no colour asked for: the path's own grey {plain:?}");
+            assert!(red.0[0] > 120 && red.0[1] < 20 && red.0[2] < 20, "the background is the camera's red: {red:?}");
+            assert_eq!(red.1, plain.1, "the cube still draws over it");
         });
     }
 

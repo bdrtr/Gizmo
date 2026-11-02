@@ -41,7 +41,8 @@ struct SceneUniforms {
     num_lights: u32,
     exposure: f32,
     _pre_align_pad: vec2<u32>,
-    _align_pad: vec3<u32>,
+    // `Camera::clear_color`; red < 0 = none (the deferred pass's own dark grey).
+    clear_color: vec3<f32>,
     environment_blend_t: f32,
     environment_preset: u32,
     point_shadows_enabled: u32,

@@ -91,7 +91,11 @@ pub fn record_deferred_geometry(
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        // TRANSPARENT, not BLACK: `.w` is the written flag every reader tests
+                        // (`pos_sample.w < 0.5` = no geometry). BLACK's alpha is 1, so every empty
+                        // pixel read as a surface at the camera — lit as one, and counted as an
+                        // occluder at distance 0 by SSAO.
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                         store: wgpu::StoreOp::Store,
                     },
                 }),

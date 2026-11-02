@@ -25,18 +25,17 @@ pub fn record_forward_and_fluid(
     // Inverse of the (unjittered) camera view-projection — the volumetric smoke raymarch
     // reconstructs rays with this instead of the buggy WGSL inverse_mat4.
     inv_view_proj: [[f32; 4]; 4],
+    // `Camera::clear_color`. Only the forward-only pipeline clears here; with a G-buffer the
+    // lighting pass already wrote the background, and this pass loads it.
+    clear_color: Option<[f32; 3]>,
 ) {
     // ── Forward pass (unlit / skybox / GPU subsystems; PBR skipped if deferred) ──
     {
         let hdr_load = if renderer.deferred.is_some() {
             wgpu::LoadOp::Load
         } else {
-            wgpu::LoadOp::Clear(wgpu::Color {
-                r: 0.4,
-                g: 0.6,
-                b: 0.9,
-                a: 1.0,
-            })
+            let [r, g, b] = clear_color.unwrap_or([0.4, 0.6, 0.9]);
+            wgpu::LoadOp::Clear(wgpu::Color { r: r as f64, g: g as f64, b: b as f64, a: 1.0 })
         };
         let depth_load = if renderer.deferred.is_some() {
             wgpu::LoadOp::Load

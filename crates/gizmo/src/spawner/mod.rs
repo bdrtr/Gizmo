@@ -199,6 +199,7 @@ impl<'a> Commands<'a> {
                 projection: Default::default(),
                 viewport: None,
                 order: 0,
+                clear_color: None,
             },
         );
         EntityBuilder {
@@ -237,6 +238,7 @@ impl<'a> Commands<'a> {
                 projection: Default::default(),
                 viewport: None,
                 order: 0,
+                clear_color: None,
             },
         );
         EntityBuilder {

@@ -758,7 +758,7 @@ pub fn execute_render_pipeline(
             record_studio_shadow_passes(encoder, renderer, flat_batches.as_slice(), &light_view_proj_cascades);
             record_studio_main_pass(
                 encoder, renderer, world, flat_batches.as_slice(), game_view_proj, &debug_aabbs,
-                show_colliders, true, ed_shading_mode,
+                show_colliders, true, ed_shading_mode, None,
             );
             // A `Decal` before the particles: a decal paints a surface, a particle floats in
             // front of one. Both after the main pass, because both sample the depth this frame
@@ -896,6 +896,12 @@ fn record_game_view(
         }
     };
 
+    // The game camera's background, as the game draws it (`Camera::clear_color`).
+    let clear_color = world
+        .borrow::<gizmo::renderer::components::Camera>()
+        .get(game_camera)
+        .and_then(|c| c.clear_color)
+        .map(|c| c.to_array());
     renderer.sync_light_cookies(world);
     let setup = gizmo::systems::render::collect_scene_setup(
         world,
@@ -906,6 +912,7 @@ fn record_game_view(
             shadow_caster: gizmo::systems::render::ShadowCaster::SunOrFirstLight,
             environment: gizmo::renderer::EnvironmentFrame {
                 shading_mode: ed_shading_mode,
+                clear_color,
                 ..Default::default()
             },
             point_shadows_enabled: false,
@@ -931,7 +938,7 @@ fn record_game_view(
         .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Game View") });
     record_studio_shadow_passes(&mut enc, renderer, batches, &cascades);
     // The game view never takes the editor's debug shading: it is the picture the game shows.
-    record_studio_main_pass(&mut enc, renderer, world, batches, None, &[], false, false, 0);
+    record_studio_main_pass(&mut enc, renderer, world, batches, None, &[], false, false, 0, clear_color);
     // No particle pass: the GPU particle compute for this frame is recorded into the caller's
     // encoder, which runs after this one, so drawing them here would show the previous frame's
     // positions. A preview panel is not worth a second compute dispatch.

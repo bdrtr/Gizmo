@@ -81,6 +81,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   or by default to a `tracing::error!` naming the system, and the system runs again next frame.
   `SystemOutput` is the trait behind it; `()` systems are unchanged.
 
+- **Background colour: `Camera::clear_color`** (`with_clear_color`, an inspector colour). Fills
+  the frame where nothing is drawn — the deferred pass's empty pixels, the forward-only
+  pipeline's clear, the editor's game view — per camera. `None` keeps each path's own.
+  `SceneUniforms::_align_pad` became `clear_color` (same size and offset);
+  `EnvironmentFrame` gained `clear_color`.
+
 - **SSAO radius and bias: `SsaoState::set_shape(queue, radius, bias)`.** The sampling radius
   (0.5 m) and depth bias (0.015) were literals in `ssao.wgsl`; they ride the kernel uniform now,
   with the old values as `SSAO_DEFAULT_RADIUS` / `SSAO_DEFAULT_BIAS`.
@@ -1431,6 +1437,18 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   before.
 
 ### Fixed
+
+- **Sky pixels are no longer lit as geometry.** The G-buffer's position target was cleared with
+  `Color::BLACK`, whose alpha is 1 — and that alpha is the "something was drawn here" flag every
+  reader tests. So no pixel was ever empty: the background was a surface at the camera with a
+  zero normal, lit like one (it happened to come out near the intended dark grey), the empty-pixel
+  branch never ran, and the volumetric pass gave every sky ray zero length, so god rays never
+  reached the sky. Cleared to `TRANSPARENT` now. The background is the intended 0.05 grey
+  (corner 41/43/46 → 42/42/42 under the vignette), and sky rays march `max_distance` — the
+  volumetric step-count test re-measured 2755 → 16276 differing pixels, largest 6 → 32. **Visible
+  change:** smooth metal that used to reflect that dark fake surface where it saw sky now
+  reflects the environment and is brighter; the orthographic TAA shimmer probe re-measured
+  33 → 50 working (131 broken) and its bar moved from 38 to 80.
 
 - **A `Grid` material draws a grid in the game**, as it always did in the editor: `route(Grid)` is
   forward, and the game's forward pass binds `grid_pipeline`. It drew as a plain opaque PBR plane.
