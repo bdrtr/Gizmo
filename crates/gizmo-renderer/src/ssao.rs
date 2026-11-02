@@ -12,7 +12,16 @@ const NOISE_SIZE: u32 = 4;
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct SsaoKernel {
     samples: [[f32; 4]; KERNEL_SIZE],
+    /// `x` = sampling radius in metres, `y` = depth bias; `zw` unused. See [`SsaoState::set_shape`].
+    shape: [f32; 4],
 }
+
+/// The sampling radius the AO pass starts with, in metres — how far a crease looks for an
+/// occluder. The value the shader had as a literal.
+pub const SSAO_DEFAULT_RADIUS: f32 = 0.5;
+/// The depth bias it starts with — how far behind a sample an occluder must be to count, so a
+/// flat surface does not occlude itself. The value the shader had as a literal.
+pub const SSAO_DEFAULT_BIAS: f32 = 0.015;
 
 /// The SSAO pass's one dial, in the uniform block it reads.
 #[repr(C)]
@@ -113,7 +122,7 @@ impl SsaoState {
         let kernel_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("ssao_kernel"),
             contents: bytemuck::bytes_of(&build_kernel()),
-            usage: wgpu::BufferUsages::UNIFORM,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
         let (noise_texture, noise_view) = build_noise_texture(device, queue);
@@ -240,6 +249,18 @@ impl SsaoState {
         self.height = height;
     }
 
+    /// Reshape the occlusion: `radius` is how far (metres) each pixel looks for an occluder — small
+    /// for the contact darkening of a crease, large for the broad dimming of a room's corners —
+    /// and `bias` how far behind a sample an occluder must sit to count, against self-occlusion
+    /// on flat surfaces. Starts at [`SSAO_DEFAULT_RADIUS`] / [`SSAO_DEFAULT_BIAS`]. Radius is
+    /// clamped to 0.01–10 m and bias to 0–1.
+    pub fn set_shape(&self, queue: &wgpu::Queue, radius: f32, bias: f32) {
+        let radius = if radius.is_finite() { radius.clamp(0.01, 10.0) } else { SSAO_DEFAULT_RADIUS };
+        let bias = if bias.is_finite() { bias.clamp(0.0, 1.0) } else { SSAO_DEFAULT_BIAS };
+        let offset = std::mem::offset_of!(SsaoKernel, shape) as u64;
+        queue.write_buffer(&self.kernel_buffer, offset, bytemuck::cast_slice(&[radius, bias, 0.0, 0.0]));
+    }
+
     /// Update the AO strength parameter at runtime.
     pub fn set_strength(&self, queue: &wgpu::Queue, strength: f32) {
         queue.write_buffer(
@@ -264,6 +285,7 @@ fn build_kernel() -> SsaoKernel {
 
     let mut kernel = SsaoKernel {
         samples: [[0.0; 4]; KERNEL_SIZE],
+        shape: [SSAO_DEFAULT_RADIUS, SSAO_DEFAULT_BIAS, 0.0, 0.0],
     };
     for i in 0..KERNEL_SIZE {
         // Uniform hemisphere sample (z > 0)

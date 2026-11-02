@@ -8,6 +8,8 @@
 
 struct SsaoKernel {
     samples: array<vec4<f32>, 16>,
+    // x = sampling radius (metres), y = depth bias — `SsaoState::set_shape`.
+    shape: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> scene: SceneUniforms;
@@ -51,8 +53,8 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let B   = cross(N, T);
     let TBN = mat3x3<f32>(T, B, N);
 
-    let radius = 0.5;   // world-space sampling radius (metres)
-    let bias   = 0.015; // prevent self-occlusion
+    let radius = kernel.shape.x; // world-space sampling radius (metres)
+    let bias   = kernel.shape.y; // prevent self-occlusion
 
     var occlusion = 0.0;
     for (var i = 0u; i < 16u; i++) {

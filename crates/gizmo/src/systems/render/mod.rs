@@ -6059,6 +6059,78 @@ mod golden_render_tests {
         });
     }
 
+    /// `SsaoState::set_shape` reshapes the occlusion. A cube on a floor, darkening measured against
+    /// the same frame with SSAO off, summed over a band of floor just below the cube: the default
+    /// 0.5 m radius keeps the occlusion in the crease, 2 m spreads a halo across the band. Setting
+    /// the defaults explicitly changes no byte. (A count of darkened pixels does not separate them:
+    /// the wide radius darkens more ground, each pixel less.)
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn ssao_radius_reshapes_the_occlusion() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        // `shape`: None = SSAO off, Some(None) = untouched, Some(Some((r, b))) = set_shape(r, b).
+        async fn frame(shape: Option<Option<(f32, f32)>>) -> Vec<u8> {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssr = None;
+            renderer.volumetric = None;
+            match shape {
+                None => renderer.ssao = None,
+                Some(Some((r, b))) => {
+                    if let Some(ssao) = renderer.ssao.as_ref() {
+                        ssao.set_shape(&renderer.queue, r, b);
+                    }
+                }
+                Some(None) => {}
+            }
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let floor = world.spawn();
+            world.add_component(floor, Transform::new(Vec3::new(0.0, -0.2, 0.0)).with_scale(Vec3::new(20.0, 0.2, 20.0)));
+            world.add_component(floor, GlobalTransform::default());
+            world.add_component(floor, AssetManager::create_cube(&renderer.device));
+            world.add_component(floor, Material::new(tex.clone()).with_pbr(Vec4::new(0.8, 0.8, 0.8, 1.0), 0.9, 0.0));
+            world.add_component(floor, MeshRenderer::new());
+            let cube = world.spawn();
+            world.add_component(cube, Transform::new(Vec3::new(0.0, 0.5, 0.0)).with_scale(Vec3::splat(0.5)));
+            world.add_component(cube, GlobalTransform::default());
+            world.add_component(cube, AssetManager::create_cube(&renderer.device));
+            world.add_component(cube, Material::new(tex).with_pbr(Vec4::new(0.8, 0.8, 0.8, 1.0), 0.9, 0.0));
+            world.add_component(cube, MeshRenderer::new());
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.0, 3.0, 3.5),
+                yaw: -std::f32::consts::FRAC_PI_2,
+                pitch: -0.65,
+                primary: true,
+                ..Default::default()
+            });
+            render_world(&mut renderer, &mut world).await
+        }
+        let luma = |f: &[u8], i: usize| (f[i * 4] as i32 + f[i * 4 + 1] as i32 + f[i * 4 + 2] as i32) / 3;
+        pollster::block_on(async {
+            let off = frame(None).await;
+            let untouched = frame(Some(None)).await;
+            let default = frame(Some(Some((0.5, 0.015)))).await;
+            let wide = frame(Some(Some((2.0, 0.015)))).await;
+            let band = |f: &[u8]| -> i32 {
+                (84..110).flat_map(|y| (34..94).map(move |x| y * 128 + x)).map(|i| (luma(&off, i) - luma(f, i)).max(0)).sum()
+            };
+            // Measured over rows 84–110: 237 for the default radius, 2584 for 2 m (rows 90–100
+            // alone: 0 against 842 — only the wide radius reaches them).
+            assert_eq!(untouched, default, "the defaults are the old literals");
+            let (near, wide) = (band(&default), band(&wide));
+            assert!(wide > near * 2 + 500, "a 2 m radius spreads the occlusion: band {near} → {wide}");
+        });
+    }
+
     /// `bloom_radius` and `bloom_iterations` widen the halo. A small, very bright cube (about
     /// 12 px across) in a dark scene; the halo is the mean brightness of a ring 8–24 px from its
     /// centre. The default blur's taps are one full-frame texel apart, so its halo barely leaves

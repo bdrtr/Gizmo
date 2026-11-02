@@ -81,6 +81,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   or by default to a `tracing::error!` naming the system, and the system runs again next frame.
   `SystemOutput` is the trait behind it; `()` systems are unchanged.
 
+- **SSAO radius and bias: `SsaoState::set_shape(queue, radius, bias)`.** The sampling radius
+  (0.5 m) and depth bias (0.015) were literals in `ssao.wgsl`; they ride the kernel uniform now,
+  with the old values as `SSAO_DEFAULT_RADIUS` / `SSAO_DEFAULT_BIAS`.
+
 - **Surfaces can refuse shadows: `MeshRenderer::receives_shadows`** (`with_receives_shadows`,
   and an inspector checkbox). `false` keeps the sun's cascades, contact shadows and the
   point-light cube off that surface, in the deferred, forward and baked-lit paths; it rides the
