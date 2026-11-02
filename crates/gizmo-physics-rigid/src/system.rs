@@ -156,9 +156,23 @@ pub fn physics_step_system(world: &World, dt: f32) {
     } {
         for (id, (rb, transform, vel, _, _)) in query.iter_mut() {
             if let Some(final_collider) = compound_shapes_map.remove(&id) {
+                // A moving body whose inertia was never set gets its collider's.
+                //
+                // `RigidBody::new` cannot know the shape, so it stores a 1×1×1-box placeholder,
+                // and the rule was "call `update_inertia_from_collider` yourself" — which 28 of
+                // the 36 `RigidBody::new` calls in `demo/` did not. Measured in `lobut`: a 20 cm
+                // ball, I = 0.4·m·r² = 0.096, spun as if I were ~1 — ten times too hard to turn,
+                // so it never stopped sliding and lost 80 % of its speed to friction in 1.5 s
+                // instead of settling into a roll at 5/7 of it. The derived value is written back
+                // with the body, so this runs once; an inertia set by hand is anything but the
+                // placeholder and is left alone.
+                let mut rb = *rb;
+                if !rb.is_static() && rb.local_inertia == RigidBody::UNSET_INERTIA {
+                    rb.update_inertia_from_collider(&final_collider);
+                }
                 // Bridge: ECS entity id -> opaque physics BodyHandle (generation is
                 // unused by physics; bodies are keyed by id only).
-                rigid_bodies.push((BodyHandle::from_id(id), *rb, *transform, *vel, final_collider));
+                rigid_bodies.push((BodyHandle::from_id(id), rb, *transform, *vel, final_collider));
             }
         }
     } else {

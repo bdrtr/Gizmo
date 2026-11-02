@@ -126,11 +126,15 @@ pub struct RigidBody {
     /// Diagonal of the inertia tensor in the **body-local** frame, kg·m².
     ///
     /// Only the diagonal is stored, i.e. the local axes are assumed to be the principal
-    /// axes and all products of inertia are zero. The default `Vec3::splat(1.0)` is a
-    /// placeholder derived from neither [`mass`](Self::mass) nor any collider, so a body
-    /// built by hand spins wrongly until you call
-    /// [`update_inertia_from_collider`](Self::update_inertia_from_collider) or one of the
-    /// `calculate_*_inertia` helpers.
+    /// axes and all products of inertia are zero. The default is
+    /// [`UNSET_INERTIA`](Self::UNSET_INERTIA), a placeholder derived from neither
+    /// [`mass`](Self::mass) nor any collider. **On an ECS entity it does not stay one:** the
+    /// physics step replaces it with the collider's tensor
+    /// ([`update_inertia_from_collider`](Self::update_inertia_from_collider)) the first time
+    /// the body is simulated, and writes that back. A body added to a
+    /// [`PhysicsWorld`](crate::world::PhysicsWorld) directly keeps whatever it was given, so
+    /// there call `update_inertia_from_collider` or a `calculate_*_inertia` helper yourself.
+    /// Setting this to exactly `UNSET_INERTIA` by hand reads as "not set".
     ///
     /// A zero component means "no rotation about that local axis" rather than a division
     /// by zero, and an infinite component collapses to the same thing — see
@@ -245,7 +249,7 @@ impl Default for RigidBody {
             use_gravity: true,
             is_sleeping: false,
             ccd_enabled: false,
-            local_inertia: Vec3::splat(1.0),
+            local_inertia: Self::UNSET_INERTIA,
             lock_rotation_x: false,
             lock_rotation_y: false,
             lock_rotation_z: false,
@@ -262,6 +266,10 @@ impl Default for RigidBody {
 }
 
 impl RigidBody {
+    /// The placeholder [`local_inertia`](Self::local_inertia) a new body starts with — "not
+    /// set yet". The ECS physics step derives the real tensor from the collider in its place.
+    pub const UNSET_INERTIA: Vec3 = Vec3::ONE;
+
     /// Creates a dynamic body of the given `mass`. Contact **friction** and
     /// **restitution** are NOT stored on the body — they are taken from the
     /// colliders' [`PhysicsMaterial`](gizmo_physics_core::PhysicsMaterial)
