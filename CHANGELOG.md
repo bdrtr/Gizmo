@@ -114,6 +114,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - **`MeshSource("cylinder")` and `"cone"`**, sized like their colliders, and
     `AssetManager::PRIMITIVE_MESH_KEYS` as the one list of primitive keys (the studio's
     missing-asset check now uses it instead of its own copy).
+- **A menu's three missing buttons** (`menu`, `docs/CAPABILITY_GAPS.md` §C15):
+  - **Keyboard and gamepad navigation: `gizmo::ui::UiNavigation`.** A resource, off by default;
+    on, the arrows / Tab / d-pad move a focus in reading order (wrapping), Enter / Space / the
+    south button click the focused element via `Clicked`, the mouse takes the focus with it, and
+    the focused element reads as `Interaction::Hovered`.
+  - **Fullscreen at run time: `gizmo_core::window::WindowMode`** — borderless fullscreen or
+    windowed, applied by the windowed app when the resource changes.
+  - **Quitting: `gizmo_core::window::AppExit`.** Inserting it ends the windowed loop (through the
+    same path as closing the window, now `shut_down`) and the headless loop, which before had no
+    way out at all.
 - **Tweens: `Tween` and `Ease`** (in `gizmo-animation`, re-exported as
   `gizmo::renderer::tween`, in the prelude). `Tween::to_position(p, 0.15).with_ease(Ease::OutCubic)`
   on an entity eases its `Transform` there — position, rotation (slerp) and scale, alone or

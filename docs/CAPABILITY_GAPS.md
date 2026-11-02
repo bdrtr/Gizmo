@@ -137,8 +137,8 @@ tone mapping, so it is exposed and bloomed with the rest of the frame: right for
 the first thing to revisit when there is a post-tonemap pass to hang UI on. **No z-order**: the
 paint order is global — every background, then every glyph — so a label is always above every
 panel, which is right for a button and wrong for two overlapping windows, and `Node` carries no `z`
-to sort by. No clipping, so a label longer than its box overflows it; no keyboard focus; and no
-widget beyond "a box with a colour and a label". (Click events exist since 2026-11-02:
+to sort by. No clipping, so a label longer than its box overflows it; and no widget beyond "a box
+with a colour and a label". (Keyboard and gamepad focus exist since 2026-11-02: `UiNavigation`.) (Click events exist since 2026-11-02:
 `ButtonBundle`'s `Clicked` is `true` for the one frame a press on the button is released on it.)
 
 ### A3. User-authored shaders — **open since 2026-08-23**, forward-only
@@ -985,6 +985,28 @@ slowing down" kept its own start, duration, clock and curve per moving thing.
   propagation, in both draw paths — `render_parity` now lists `tween_system(` among the drivers
   both must run. Tested: curve endpoints and shapes, exact landing, untouched parts, loop and
   ping-pong, zero duration, and a paused clock moving nothing.
+
+### C15. The menu every game has (2026-11-02, `menu`)
+
+`demo/src/bin/menu.rs` is a title menu — Start, Fullscreen, Volume, Quit — usable with the
+mouse, the keyboard and a gamepad. Three of its four buttons were impossible:
+
+- ~~**No keyboard or gamepad navigation.**~~ **Closed 2026-11-02.** `gizmo-ui` had no focus, so
+  every menu was mouse-only. `UiNavigation` (a resource, **off by default** because the keys are a
+  game's too): arrows / Tab / d-pad move the focus in reading order and wrap, Enter / Space / the
+  south button click the focused element through `Clicked`, the mouse moving onto an element
+  takes the focus, and the focused element reads as `Interaction::Hovered` so a game's hover
+  colour is its focus highlight. Tested: reading order over a spawn order that is not it, both
+  wraps, Tab, one-frame activation of the focused element only, off leaves the keys alone, the
+  mouse taking the focus; removing the sort or the activation fails them.
+- ~~**No fullscreen at run time.**~~ **Closed 2026-11-02.** `WindowMode::{Windowed, Fullscreen}`,
+  a resource the windowed app applies when it changes (borderless, current monitor). Not
+  unit-testable — it needs a window.
+- ~~**A game could not quit.**~~ **Closed 2026-11-02.** The windowed loop ended only when the
+  window closed and the headless loop never. `AppExit` (a resource) ends both after the frame that
+  inserts it, through the path closing the window takes (`shut_down`: the input recording is
+  written, then the event loop exits). The headless half is tested — `run` returns after the
+  third frame when the game asks on its third.
 
 ---
 
