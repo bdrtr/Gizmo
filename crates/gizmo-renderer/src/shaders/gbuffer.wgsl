@@ -55,8 +55,9 @@ struct InstanceData {
     model_matrix_3: vec4<f32>,
     albedo_color:   vec4<f32>,
     pbr:            vec4<f32>,  // x=roughness, y=metallic, z=unlit_flag
-    // Mirrors `gpu_types::InstanceRaw`. Only `baked_lit.wgsl` reads these two, but every
-    // shader indexing this buffer must declare them or its element stride is wrong.
+    // Mirrors `gpu_types::InstanceRaw`. `emissive` is read here (RT5); `ambient` only by
+    // `baked_lit.wgsl`, but every shader indexing this buffer must declare both or its element
+    // stride is wrong.
     ambient: vec4<f32>,
     emissive: vec4<f32>,
 };
@@ -82,6 +83,8 @@ struct VertexOutput {
     @location(6) world_tangent:  vec4<f32>,
     @location(7) motion_now:     vec4<f32>,
     @location(8) motion_before:  vec4<f32>,
+    // `Material::emissive`, per instance — what game code sets with `with_emissive`.
+    @location(9) inst_emissive:  vec3<f32>,
 };
 
 @group(0) @binding(0) var<uniform> scene: SceneUniforms;
@@ -149,6 +152,7 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
 
     out.inst_albedo = inst.albedo_color;
     out.inst_pbr    = inst.pbr;
+    out.inst_emissive = inst.emissive.xyz;
     out.clip_position = scene.view_proj * world_pos;
     out.motion_now    = motion.view_proj * world_pos;
     out.motion_before = motion.prev_view_proj * (previous_models[instance_idx] * vec4<f32>(skinned_pos.xyz, 1.0));
@@ -163,6 +167,7 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
 //   RT2  world_position   Rgba16Float  — rgb=pos,     a=written-flag + packed subsurface/anisotropy
 //   RT3  world_tangent    Rgba16Float  — rgb=tangent, a=handedness + packed clear-coat
 //   RT4  velocity         Rg16Float    — screen-UV motion since last frame (`crate::motion`)
+//   RT5  emissive         Rgba16Float  — emitted light, added unlit after lighting (44 bytes in all)
 struct GBufferOut {
     @location(0) albedo_metallic:  vec4<f32>,
     @location(1) normal_roughness: vec4<f32>,
@@ -170,6 +175,8 @@ struct GBufferOut {
     @location(3) world_tangent:    vec4<f32>,
     // RT4: screen-UV distance moved since last frame (x right, y down).
     @location(4) velocity:         vec4<f32>,
+    // RT5: emitted light, linear HDR.
+    @location(5) emissive:         vec4<f32>,
 };
 
 @fragment
@@ -234,18 +241,18 @@ fn fs_main(in: VertexOutput) -> GBufferOut {
     let ao_strength = material.occlusion_uv_rot_offset.x;
     let ao = 1.0 + ao_strength * (textureSample(t_ao, s_diffuse, uv).r - 1.0);
 
-    // ── Emissive (glTF: emissiveFactor × texture) ─────────────────────────
-    // White-default map × zero factor → no emission.
-    let emissive = material.emissive_and_normal_scale.xyz
-                 * textureSample(t_emissive, s_diffuse, uv).rgb;
+    // ── Emissive ──────────────────────────────────────────────────────────
+    // The material's own (`Material::emissive`, per instance) plus glTF's emissiveFactor × its
+    // texture (white-default map × zero factor → nothing). Written to RT5 and added UNLIT, in
+    // HDR, by the lighting pass. It used to be added to the albedo instead — lit, and clamped to
+    // 1 by the 8-bit target — and the per-instance half was read by nobody but `baked_lit.wgsl`:
+    // `with_emissive` on a PBR material changed no pixel of the deferred frame.
+    let emissive = in.inst_emissive
+                 + material.emissive_and_normal_scale.xyz * textureSample(t_emissive, s_diffuse, uv).rgb;
 
-    // Base albedo, modulated by AO, then emissive added.
-    // NOTE (deferred, MRT-budget): the G-buffer has no free channel for AO or
-    // emissive, so AO is folded into albedo and emissive is added to albedo.
-    // Emissive therefore reads as extra diffuse energy (lit + LDR-clamped) rather
-    // than as a true unlit HDR glow — see report for the trade-off.
+    // Base albedo, modulated by AO (the G-buffer has no channel of its own for AO).
     var albedo = in.inst_albedo.rgb * tex_color.rgb;
-    albedo = albedo * ao + emissive;
+    albedo = albedo * ao;
 
     // Unpack anisotropy, clear_coat, and subsurface from in.inst_pbr.w (packed_params)
     // Two digits per field — see `pack_pbr_params`. Three needed nine digits, which an f32
@@ -287,5 +294,6 @@ fn fs_main(in: VertexOutput) -> GBufferOut {
     let now_ndc    = in.motion_now.xy / in.motion_now.w;
     let before_ndc = in.motion_before.xy / in.motion_before.w;
     out.velocity   = vec4<f32>((now_ndc - before_ndc) * vec2<f32>(0.5, -0.5), 0.0, 0.0);
+    out.emissive   = vec4<f32>(max(emissive, vec3<f32>(0.0)), 0.0);
     return out;
 }

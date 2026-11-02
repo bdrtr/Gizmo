@@ -53,6 +53,9 @@ pub const GBUFFER_NORMAL_ROUGHNESS_FORMAT: wgpu::TextureFormat = wgpu::TextureFo
 pub const GBUFFER_WORLD_POSITION_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 /// G-buffer target 3: `rgb` = world tangent, `a` = its handedness.
 pub const GBUFFER_WORLD_TANGENT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+/// RT5: emitted light, linear HDR — added after lighting, never lit itself. Half floats, because
+/// a glow is brighter than 1.
+pub const GBUFFER_EMISSIVE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
 /// G-Buffer textures, pipelines and bind groups for the deferred rendering path.
 pub struct DeferredState {
@@ -78,6 +81,12 @@ pub struct DeferredState {
     pub velocity_tex: wgpu::Texture,
     /// Its view.
     pub velocity_view: wgpu::TextureView,
+    /// RT5: the light each surface emits — `Material::emissive` (per instance) plus a glTF
+    /// material's emissive factor × texture — added unlit by the lighting pass. See
+    /// [`GBUFFER_EMISSIVE_FORMAT`].
+    pub emissive_tex: wgpu::Texture,
+    /// Its view.
+    pub emissive_view: wgpu::TextureView,
     /// Group 5 of the G-buffer pass: last frame's model per instance and both view-projections.
     pub motion: crate::motion::MotionGpu,
 
@@ -151,6 +160,7 @@ impl DeferredState {
         ) = Self::create_gbuffer_textures(device, width, height);
 
         let gbuffer_bind_group_layout = Self::create_gbuffer_layout(device);
+        let (emissive_tex, emissive_view) = Self::create_emissive_texture(device, width, height);
 
         let gbuffer_bind_group = Self::create_gbuffer_bind_group(
             device,
@@ -160,6 +170,7 @@ impl DeferredState {
             &world_position_view,
             &world_tangent_view,
             &gbuf_sampler,
+            &emissive_view,
         );
 
         let motion = crate::motion::MotionGpu::new(device, 1024);
@@ -201,6 +212,8 @@ impl DeferredState {
             world_tangent_view,
             velocity_tex,
             velocity_view,
+            emissive_tex,
+            emissive_view,
             motion,
             gbuffer_pipeline,
             gbuffer_double_sided_pipeline,
@@ -233,6 +246,7 @@ impl DeferredState {
             gbuf_sampler,
         ) = Self::create_gbuffer_textures(device, width, height);
 
+        let (emissive_tex, emissive_view) = Self::create_emissive_texture(device, width, height);
         self.gbuffer_bind_group = Self::create_gbuffer_bind_group(
             device,
             &self.gbuffer_bind_group_layout,
@@ -241,7 +255,10 @@ impl DeferredState {
             &world_position_view,
             &world_tangent_view,
             &gbuf_sampler,
+            &emissive_view,
         );
+        self.emissive_tex = emissive_tex;
+        self.emissive_view = emissive_view;
         let (velocity_tex, velocity_view) = Self::create_velocity_texture(device, width, height);
         self.velocity_tex = velocity_tex;
         self.velocity_view = velocity_view;
@@ -367,6 +384,17 @@ impl DeferredState {
                     },
                     count: None,
                 },
+                // emissive (RT5)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    },
+                    count: None,
+                },
             ],
         })
     }
@@ -379,6 +407,7 @@ impl DeferredState {
         pos_v: &wgpu::TextureView,
         tangent_v: &wgpu::TextureView,
         sampler: &wgpu::Sampler,
+        emissive_v: &wgpu::TextureView,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("gbuffer_bind_group"),
@@ -404,10 +433,28 @@ impl DeferredState {
                     binding: 4,
                     resource: wgpu::BindingResource::TextureView(tangent_v),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(emissive_v),
+                },
             ],
         })
     }
 
+    fn create_emissive_texture(device: &wgpu::Device, width: u32, height: u32) -> (wgpu::Texture, wgpu::TextureView) {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("gbuf_emissive"),
+            size: wgpu::Extent3d { width: width.max(1), height: height.max(1), depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: GBUFFER_EMISSIVE_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        (texture, view)
+    }
     fn create_velocity_texture(device: &wgpu::Device, width: u32, height: u32) -> (wgpu::Texture, wgpu::TextureView) {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("gbuf_velocity"),
@@ -490,9 +537,16 @@ impl DeferredState {
                         blend: None,
                         write_mask: wgpu::ColorWrites::ALL,
                     }),
-                    // RT4: velocity — the last four of the 32 bytes per sample.
+                    // RT4: velocity.
                     Some(wgpu::ColorTargetState {
                         format: crate::motion::VELOCITY_FORMAT,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    }),
+                    // RT5: emissive — 44 bytes per sample in all, inside the 64 native devices
+                    // are asked for (`native_device_limits`).
+                    Some(wgpu::ColorTargetState {
+                        format: GBUFFER_EMISSIVE_FORMAT,
                         blend: None,
                         write_mask: wgpu::ColorWrites::ALL,
                     }),

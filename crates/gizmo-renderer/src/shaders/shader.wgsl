@@ -95,6 +95,8 @@ struct VertexOutput {
     // The cut-out threshold, carried in the instance's `ambient.w` — the same slot
     // `baked_lit.wgsl` reads it from. See the discard in `fs_main`.
     @location(6) inst_cutoff: f32,
+    // `Material::emissive` — added unlit, as the deferred path adds RT5.
+    @location(7) inst_emissive: vec3<f32>,
 };
 
 @vertex
@@ -146,6 +148,7 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
     out.inst_albedo = inst.albedo_color;
     out.inst_pbr = inst.pbr;
     out.inst_cutoff = inst.ambient.w;
+    out.inst_emissive = inst.emissive.xyz;
 
     // Kameraya yansıt
     out.clip_position = scene.view_proj * world_pos;
@@ -380,7 +383,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     if (length(v_color) < 0.0001) {
         v_color = vec3<f32>(1.0, 1.0, 1.0);
     }
-    var final_color = v_color * (ambient + total_lighting + fake_ibl_specular);
+    var final_color = v_color * (ambient + total_lighting + fake_ibl_specular) + in.inst_emissive;
     
     // We render to an Rgba16Float HDR buffer. Tone mapping is handled in post_process.wgsl.
     

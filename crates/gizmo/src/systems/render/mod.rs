@@ -5627,7 +5627,8 @@ mod golden_render_tests {
             let lit_add = centre(Some(BlendMode::Additive), true).await;
             // Measured (R, G, B): wall 148.8 186.4 214.1 · alpha 197.5 201.8 208.1 · additive
             // 236.0 240.1 244.5 · multiply 59.1 90.7 128.0 · premultiplied 238.7 239.6 241.0 ·
-            // lit alpha 142.5 137.9 159.0 · lit additive 191.0 201.8 220.6.
+            // lit alpha 210.9 210.0 214.5 · lit additive 241.5 243.0 246.4 (re-measured after
+            // the forward shader began adding the panel's 0.5 emissive; 142.5 … / 191.0 … before).
             for c in 0..3 {
                 assert!(add[c] > wall[c] + 5.0, "additive brightens every channel: {add:?} over {wall:?}");
                 assert!(mul[c] < wall[c] - 20.0, "multiply darkens every channel: {mul:?} over {wall:?}");
@@ -5637,6 +5638,83 @@ mod golden_render_tests {
             }
             // Alpha is a mix: grey 0.5 lifts the wall's red (0.2) and lowers its blue (0.6).
             assert!(alpha[0] > wall[0] && alpha[2] < wall[2], "alpha mixes: {alpha:?} over {wall:?}");
+        });
+    }
+
+    /// `Material::with_emissive` makes a surface glow, unlit and in HDR, on both draw paths. A
+    /// black-albedo cube in a scene with no light at all, so every bit of its brightness is
+    /// emission: opaque (deferred, RT5) and transparent (forward). Before RT5 the per-instance
+    /// emissive was read by `baked_lit.wgsl` alone — the deferred cube stayed black — and a glTF
+    /// emissive was added to the 8-bit albedo, lit and clamped at 1.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn emissive_glows_on_both_paths_and_is_not_clamped() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        // Mean red of the centre.
+        async fn centre_red(emissive: f32, transparent: bool) -> f32 {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssr = None;
+            renderer.volumetric = None;
+            renderer.bloom_intensity = 0.0;
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(
+                &renderer.device,
+                &renderer.queue,
+                &renderer.scene.texture_bind_group_layout,
+            );
+            let cube = world.spawn();
+            world.add_component(cube, Transform::new(Vec3::new(0.0, 0.0, -4.0)));
+            world.add_component(cube, GlobalTransform::default());
+            world.add_component(cube, AssetManager::create_cube(&renderer.device));
+            let alpha = if transparent { 0.999 } else { 1.0 };
+            let material = Material::new(tex)
+                .with_pbr(Vec4::new(0.0, 0.0, 0.0, alpha), 0.9, 0.0)
+                .with_emissive(Vec3::new(emissive, emissive * 0.25, 0.0));
+            world.add_component(cube, if transparent { material.with_transparent(true) } else { material });
+            world.add_component(cube, MeshRenderer::new());
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::ZERO,
+                yaw: -std::f32::consts::FRAC_PI_2,
+                pitch: 0.0,
+                primary: true,
+                ..Default::default()
+            });
+            let frame = render_world(&mut renderer, &mut world).await;
+            let mut red = 0.0;
+            for y in 60..68 {
+                for x in 60..68 {
+                    red += frame[(y * 128 + x) * 4] as f32 / 64.0;
+                }
+            }
+            red
+        }
+        pollster::block_on(async {
+            let mut found = Vec::new();
+            for transparent in [false, true] {
+                let none = centre_red(0.0, transparent).await;
+                let one = centre_red(1.0, transparent).await;
+                let four = centre_red(4.0, transparent).await;
+                found.push((none, one, four));
+            }
+            // Measured (centre red, emissive 0 / 1 / 4): opaque 6.0 / 231.3 / 251.8, transparent
+            // 0.0 / 231.6 / 251.9 — the two paths agree. Caught: the lighting pass not adding
+            // RT5 (opaque stays at 6), the forward shader not adding it (transparent at 0), and
+            // the emission clamped to 1 (4 reads as 1).
+            for (path, (none, one, four)) in ["opaque", "transparent"].iter().zip(&found) {
+                assert!(*none < 20.0, "{path}: no light, no emission, dark: {none:.1}");
+                assert!(*one > none + 150.0, "{path}: emissive 1 glows: {none:.1} → {one:.1}");
+                assert!(*four > one + 10.0, "{path}: emissive 4 is brighter still — HDR, not clamped: {one:.1} → {four:.1}");
+            }
+            assert!((found[0].1 - found[1].1).abs() < 5.0, "both paths emit alike: {found:?}");
         });
     }
 

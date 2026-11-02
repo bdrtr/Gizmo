@@ -115,6 +115,16 @@ pub fn record_deferred_geometry(
                         store: wgpu::StoreOp::Store,
                     },
                 }),
+                // RT5: emissive — black where nothing glows.
+                Some(wgpu::RenderPassColorAttachment {
+                    view: &def.emissive_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                }),
             ],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                 view: &renderer.depth_texture_view,

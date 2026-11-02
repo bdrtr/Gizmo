@@ -34,6 +34,7 @@ var<storage, read> cluster_light_indices: array<u32>;
 @group(2) @binding(2) var t_position_rel_camera:   texture_2d<f32>;
 @group(2) @binding(3) var s_gbuf: sampler;
 @group(2) @binding(4) var t_world_tangent:    texture_2d<f32>;
+@group(2) @binding(5) var t_emissive_gbuf:    texture_2d<f32>;
 
 // Reflection probes: `gizmo::reflection_probes` (group 3 here, after the irradiance volume's two
 // bindings — `REFLECTION_GROUP` is set to 3 for this shader).
@@ -739,7 +740,9 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     // this shipped. A scene that bakes GI is expected to lower its own ambient.
     let indirect = gi_sample(world_pos, N) * albedo;
 
-    var final_color = ambient + indirect + total_lighting + specular_ibl;
+    // Emitted light: not lit, not clamped, fogged like the surface it leaves.
+    let emitted = textureLoad(t_emissive_gbuf, iuv, 0).rgb;
+    var final_color = ambient + indirect + total_lighting + specular_ibl + emitted;
 
     // Apply volumetric analytical height fog
     let fog = compute_height_fog(world_pos, scene.camera_pos.xyz);

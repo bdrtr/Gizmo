@@ -613,7 +613,7 @@ author it. The middle column is what a full implementation offers.
 | Baked lighting | lightmap texture + second UV set | **vertex colour** via `MaterialType::BakedLit` — resolution is the mesh's tessellation, not a texture's. Still receives the sun's cascades, so mixed lighting works. Measured: the blue-minus-red balance flips sign, `+1.35` under `Pbr` and `−4.74` under `BakedLit`, because `BakedLit` does not see point lights | `lightmaps` |
 | Irradiance volumes | component + GPU voxel sampling | **wired 2026-08-24** — `deferred_lighting.wgsl` imports `gi_sample` from `irradiance.wgsl` and the baked grid reaches the lighting pass; F2 has the correlation against the CPU path. What is still absent is *authoring*: the grid is baked, and there is no component to place or resize one | `irradiance_volumes` |
 | Volumetric / god rays | scattering, steps, phase, distance | **All six, since 2026-08-23** — `VolumetricParams::{phase_g, steps, max_distance, sun_scatter, bulb_scatter, shadow_bias}`, one 32-byte uniform uploaded per frame, and the defaults are pixel-identical to the shader literals they replaced. Plus `enabled`. Measured working: 19.55 % of pixels, max 134 | `volumetric_fog` |
-| Blend modes | alpha / additive / multiply / premultiplied | **All four since 2026-11-02** — `BlendMode::{Alpha, Additive, Multiply, Premultiplied}` via `Material::with_blend_mode` (and the inspector), saved in `MaterialDesc`. Any mode but `Alpha` makes the material transparent. PBR and unlit routes, both draw paths; baked-lit, water, sky and backdrop keep their own blending. `Multiply` ignores alpha (fixed-function blending cannot weigh a product without a premultiplied output) — fade it toward white. Measured, a half-transparent grey unlit panel over a blue-grey wall (R, G, B at the centre): wall 148.8 186.4 214.1, alpha 197.5 201.8 208.1, additive 236.0 240.1 244.5, multiply 59.1 90.7 128.0, premultiplied 238.7 239.6 241.0; lit additive 191.0 201.8 220.6. The mode dropped from the batch, the lit variant never chosen, multiply built as additive, and the editor's old single-pipeline transparent loop all fail a test. Fixed on the way: the editor shaded **unlit** transparent batches with the lit shader; it uses the unlit pipeline now, as the game does | `blend_modes` |
+| Blend modes | alpha / additive / multiply / premultiplied | **All four since 2026-11-02** — `BlendMode::{Alpha, Additive, Multiply, Premultiplied}` via `Material::with_blend_mode` (and the inspector), saved in `MaterialDesc`. Any mode but `Alpha` makes the material transparent. PBR and unlit routes, both draw paths; baked-lit, water, sky and backdrop keep their own blending. `Multiply` ignores alpha (fixed-function blending cannot weigh a product without a premultiplied output) — fade it toward white. Measured, a half-transparent grey unlit panel over a blue-grey wall (R, G, B at the centre): wall 148.8 186.4 214.1, alpha 197.5 201.8 208.1, additive 236.0 240.1 244.5, multiply 59.1 90.7 128.0, premultiplied 238.7 239.6 241.0; lit additive 241.5 243.0 246.4 (191.0 201.8 220.6 before the forward shader honoured the panel's emissive, the same day). The mode dropped from the batch, the lit variant never chosen, multiply built as additive, and the editor's old single-pipeline transparent loop all fail a test. Fixed on the way: the editor shaded **unlit** transparent batches with the lit shader; it uses the unlit pipeline now, as the game does | `blend_modes` |
 | Specular tint | a colour F0 | **0** — F0 is the literal 0.04; the only lever is `metallic`, which kills the diffuse (luminance −24 %) and cannot deliver the colour anyway for want of an environment (measured: red−blue +9.04 → −0.17) | `transmission` |
 | Transmission / thickness / IOR | per-material | **0 fields** | `transmission` |
 
@@ -842,9 +842,17 @@ again as of 2026-08-24. Recording the whole set, because they are one family:
 3. **The grid pipeline is editor-only.** `MaterialType::Grid`, `grid.wgsl` and a compiled
    `grid_pipeline` all exist; only studio ever binds it. In the game path a grid material draws as
    a plain opaque PBR plane — measured in `infinite_grid`.
-4. **`Material::emissive` is dead in the deferred path.** The G-buffer reads emissive from the
-   *material uniform* (which only glTF loading fills), while game code writes the per-instance
-   field. Only `baked_lit.wgsl` reads the instance field. Measured in `bloom_3d`.
+4. ~~**`Material::emissive` is dead in the deferred path.**~~ **CLOSED 2026-11-02.** The
+   G-buffer read emissive from the *material uniform* (which only glTF loading fills) and added it
+   to the 8-bit albedo — lit, and clamped at 1 — while game code writes the per-instance field,
+   which only `baked_lit.wgsl` read; the forward shader read neither. Now the G-buffer has an RT5
+   (`emissive`, `Rgba16Float`, 44 bytes per sample in all) carrying the instance's emissive plus
+   glTF's factor × texture, and the lighting pass adds it unlit, in HDR, before fog; the forward
+   shader adds the instance's too. Measured on a black cube with no light in the scene (centre
+   red, emissive 0 / 1 / 4): opaque 6.0 / 231.3 / 251.8, transparent 0.0 / 231.6 / 251.9 — the two
+   paths agree, and 4 reads brighter than 1. The lighting pass ignoring RT5, the forward shader
+   ignoring the field, and the emission clamped to 1 each fail the test. A glTF emissive is
+   therefore brighter than before (no longer multiplied down by lighting, no longer clamped).
 5. ~~**`vignette` is reachable only through the `PostProcess` component.**~~ **CLOSED 2026-08-23.**
    The `Renderer` fallback struct had no such field, so a camera without the component was stuck
    with `PostProcessUniforms::default()`'s **0.25** — a vignette it never asked for and could not
