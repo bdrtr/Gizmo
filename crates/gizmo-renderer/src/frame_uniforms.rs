@@ -71,7 +71,7 @@ use gizmo_math::{Mat4, Vec3};
 /// many lights are actually in view.
 ///
 /// Why not more: the light array lives in the *uniform* block, so the hard ceiling is
-/// `(65536 - 560) / 64` = 1015 lights, and past a few hundred the honest move is to put the array in
+/// `(65536 - 592) / 64` = 1014 lights, and past a few hundred the honest move is to put the array in
 /// a storage buffer rather than to inch this number toward a cliff. 256 is a round number well
 /// inside the limit that no hand-lit scene is going to reach.
 pub const MAX_LIGHTS: usize = 256;
@@ -191,6 +191,42 @@ pub struct EnvironmentFrame {
     /// The colour a wireframe is drawn in (`WireframeConfig::color`); `None` keeps the lit
     /// colour.
     pub wireframe_color: Option<[f32; 3]>,
+    /// The scene's fog (`Renderer::fog`); `None` keeps the environment preset's.
+    pub fog: Option<Fog>,
+}
+
+/// Height fog, set by hand rather than by the environment preset — `Renderer::fog`.
+///
+/// The deferred pass integrates it along each view ray: `density` is how thick it is at
+/// `base_height`, thinning by `exp(-height_falloff · h)` above it. The presets' numbers, for scale:
+/// density 0.008–0.035, falloff 0.04–0.12, base −5 m. Applies to geometry; the empty background
+/// is `Camera::clear_color` or the path's own.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub struct Fog {
+    /// Linear RGB the fog fades toward.
+    pub color: [f32; 3],
+    /// Thickness at `base_height`, per metre. 0 = no fog at all.
+    pub density: f32,
+    /// How fast it thins with height, per metre. 0 = the same at every height.
+    pub height_falloff: f32,
+    /// The height (metres) `density` is measured at.
+    pub base_height: f32,
+}
+
+impl Fog {
+    /// Fog of `color` and `density`, thinning by 0.05 per metre above −5 m (the default preset's
+    /// shape).
+    pub fn new(color: [f32; 3], density: f32) -> Self {
+        Self { color, density: density.max(0.0), height_falloff: 0.05, base_height: -5.0 }
+    }
+
+    /// The same fog, thinning by `falloff` per metre above `base_height`.
+    pub fn with_height(mut self, falloff: f32, base_height: f32) -> Self {
+        self.height_falloff = falloff.max(0.0);
+        self.base_height = base_height;
+        self
+    }
 }
 
 /// One frame's worth of scene state, in the terms the caller has it.
@@ -277,6 +313,8 @@ impl SceneUniforms {
                 // lighting pass's `contact_shadow`.
                 [scale, bias, sun.contact_shadow_length.max(0.0), 0.0]
             },
+            fog: environment.fog.map_or([0.0, 0.0, 0.0, -1.0], |f| [f.color[0], f.color[1], f.color[2], f.density.max(0.0)]),
+            fog_shape: environment.fog.map_or([0.0; 4], |f| [f.height_falloff.max(0.0), f.base_height, 0.0, 0.0]),
             // Read by nothing today — the post composite owns exposure and `deferred_lighting.wgsl`
             // says as much next to the field it no longer reads. Fed from the camera in both paths
             // regardless, so a shader that starts reading it does not find two different answers.
@@ -469,7 +507,7 @@ mod tests {
         // the light ceiling changes. (It was `1168` / `1104`, correct only at MAX_LIGHTS = 10.)
         const LIGHT_BYTES: usize = std::mem::size_of::<LightData>(); // 4 × vec4 = 64
         assert_eq!(LIGHT_BYTES, 64);
-        assert_eq!(std::mem::size_of::<SceneUniforms>(), 560 + MAX_LIGHTS * LIGHT_BYTES);
+        assert_eq!(std::mem::size_of::<SceneUniforms>(), 592 + MAX_LIGHTS * LIGHT_BYTES);
         assert_eq!(
             std::mem::offset_of!(SceneUniforms, inv_view_proj),
             464 + MAX_LIGHTS * LIGHT_BYTES
@@ -481,7 +519,7 @@ mod tests {
     ///
     /// `maxUniformBufferBindingSize` is **64 KiB** everywhere WebGPU runs — that is the
     /// guaranteed floor, and the number `MAX_LIGHTS` has always been argued against. The argument
-    /// lived in prose: docs/ENGINE.md works out `(65536 − 560) / 64 = 1015` lights as the hard
+    /// lived in prose: docs/ENGINE.md works out `(65536 − 592) / 64 = 1014` lights as the hard
     /// ceiling. Nothing computed it, so raising `MAX_LIGHTS` past it would have compiled, passed
     /// every test, and then failed at **run time** on the first machine that enforces the floor —
     /// as a bind-group validation error, which is the least informative place to learn about an
@@ -508,10 +546,10 @@ mod tests {
 
         // …and the ceiling the documentation argues from is the one this layout actually has.
         let fixed = block - MAX_LIGHTS * std::mem::size_of::<LightData>();
-        assert_eq!(fixed, 560, "the block's fixed part");
+        assert_eq!(fixed, 592, "the block's fixed part (560 before the fog override was appended)");
         assert_eq!(
             (UNIFORM_FLOOR - fixed) / std::mem::size_of::<LightData>(),
-            1015,
+            1014,
             "the light ceiling docs/ENGINE.md quotes"
         );
     }

@@ -221,6 +221,9 @@ pub struct Renderer {
     /// How far the sun's cascaded shadows reach and how the cascades split it — see
     /// [`ShadowSettings`](crate::csm::ShadowSettings). The defaults are the old constants.
     pub shadow_settings: crate::csm::ShadowSettings,
+    /// The scene's height fog, by hand — see [`Fog`](crate::frame_uniforms::Fog). `None` (the
+    /// default) keeps the environment preset's.
+    pub fog: Option<crate::frame_uniforms::Fog>,
 
     // === GIZMO HATA AYIKLAMA (Debug Lines) ===
     /// The debug line renderer — gizmos, wireframes, physics overlays.
@@ -876,11 +879,11 @@ mod tests {
     #[test]
     fn test_gpu_uniform_struct_sizes() {
         // Extremely critical alignment checks to prevent runtime pipeline crashes on GPU
-        let expect_scene = 560 + crate::frame_uniforms::MAX_LIGHTS * 64;
+        let expect_scene = 592 + crate::frame_uniforms::MAX_LIGHTS * 64;
         assert_eq!(
             std::mem::size_of::<crate::gpu_types::SceneUniforms>(),
             expect_scene,
-            "SceneUniforms size shifted from 560 + 64*MAX_LIGHTS bytes!"
+            "SceneUniforms size shifted from 592 + 64*MAX_LIGHTS bytes!"
         );
         assert_eq!(std::mem::size_of::<crate::gpu_types::LightData>(), 64, "LightData size shifted from target 64 bytes!");
         // 80 since 2026-08-24: the tone-mapping pair (curve + white point) is a fifth vec4. It was

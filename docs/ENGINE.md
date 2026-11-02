@@ -1103,21 +1103,23 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
   when `cluster_dims` and `cluster_depth` were appended, and only the ceiling arithmetic below was
   updated — so the same struct had two different sizes in adjacent paragraphs until 2026-08-18.
   Measured, not recomputed: `SceneUniforms` is **16 944 B** at `MAX_LIGHTS` = 256, of which 560 B
-  is fixed.
+  is fixed. **Since 2026-11-02 it is 592 B fixed (16 976 B)**: `fog` and `fog_shape` were appended
+  for `Renderer::fog`, and the ceiling below is 1014 lights.
 
   **Clustered culling landed the same day, and the cap is now 256.** `MAX_LIGHTS` was never a
   hardware limit — it was the per-fragment loop over *every* light in the frame wearing a constant's
   clothing. `gizmo-renderer::clustered` cuts the view volume into 16×9×24 clusters, assigns each
   light to the clusters its sphere touches, and both lighting loops (deferred and forward) now walk
   their own fragment's list, bounded by `MAX_LIGHTS_PER_CLUSTER` = 32 whatever the scene holds. The
-  hard ceiling left is the uniform block: `(65536 − 560) / 64` = 1015 lights, and the honest move
+  hard ceiling left is the uniform block: `(65536 − 592) / 64` = 1014 lights (1015 at the 560 B
+  fixed part this was written against), and the honest move
   past a few hundred is to put the light array in a storage buffer rather than inch toward that
   cliff.
 
   **That ceiling is computed now, not argued.**
   `the_scene_block_fits_the_uniform_binding_floor_every_webgpu_target_guarantees` asserts the block
   is inside the 64 KiB `maxUniformBufferBindingSize` every WebGPU target guarantees, and that the
-  560 / 1015 figures quoted here are this layout's. Before it, raising `MAX_LIGHTS` past the cliff
+  592 / 1014 figures quoted here are this layout's (it said 560 / 1015 until the fog fields). Before it, raising `MAX_LIGHTS` past the cliff
   would have compiled, passed every test, and failed at **run time** on the first machine that
   enforces the floor — as a bind-group validation error, which is the least informative place to
   learn about arithmetic done in a header. Verified red at `MAX_LIGHTS` = 1200: 77 360 B, with the

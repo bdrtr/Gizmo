@@ -61,6 +61,10 @@ struct SceneUniforms {
     // depth = (z_scale, z_bias, 0, 0) for slice = floor(log(view_depth) * z_scale + z_bias).
     cluster_dims:  vec4<u32>,
     cluster_depth: vec4<f32>,
+    // `Renderer::fog`: rgb = colour, a = density (a < 0 = the preset's fog); shape.x = height
+    // falloff, shape.y = base height.
+    fog: vec4<f32>,
+    fog_shape: vec4<f32>,
 };
 
 // ── Clustered light lookup ───────────────────────────────────────────────────

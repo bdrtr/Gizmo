@@ -383,12 +383,22 @@ fn compute_height_fog(world_pos: vec3<f32>, camera_pos: vec3<f32>) -> vec4<f32> 
         fog_height_falloff = mix(fog_height_falloff, fog_height_falloff_2, scene.environment_blend_t);
     }
 
+    // `Renderer::fog` replaces the preset's fog outright (density ≥ 0; < 0 = no override).
+    if (scene.fog.a >= 0.0) {
+        fog_color = scene.fog.rgb;
+        fog_density = scene.fog.a;
+        fog_height_falloff = scene.fog_shape.x;
+        fog_base_height = scene.fog_shape.y;
+    }
+
     // Volumetric analytical scattering (height-decay fog integration)
     let cam_y = camera_pos.y - fog_base_height;
     let dir_y = view_dir.y;
 
     var fog_amount = 0.0;
-    if (abs(dir_y) < 0.0001) {
+    // The linear limit whenever the exponent's rate is ~0: a level ray, or fog that does not thin
+    // with height at all (`Fog::height_falloff == 0`), which the division below would turn to NaN.
+    if (abs(fog_height_falloff * dir_y) < 0.000001) {
         fog_amount = fog_density * exp(-fog_height_falloff * cam_y) * dist;
     } else {
         let falloff_dir_y = fog_height_falloff * dir_y;

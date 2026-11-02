@@ -81,6 +81,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   or by default to a `tracing::error!` naming the system, and the system runs again next frame.
   `SystemOutput` is the trait behind it; `()` systems are unchanged.
 
+- **Hand-set fog: `Renderer::fog`** (`Fog::new(color, density).with_height(falloff, base)`). Replaces
+  the environment preset's height fog outright, so fog can be set without taking a preset's whole
+  look. `SceneUniforms` gained `fog` and `fog_shape` at its tail (fixed part 560 → 592 B; the light
+  ceiling is 1014), `EnvironmentFrame` gained `fog`. Fixed on the way: a fog with zero height
+  falloff divided by zero and vanished.
+
 - **Wireframe colour: `WireframeConfig::color`.** One colour for every wireframe line, readable
   on any material (the lit lines nearly vanished on a pale one). Native only. `WireframeConfig`
   gained the field (a struct literal needs it; it is no longer `Eq`), `SceneUniforms`'

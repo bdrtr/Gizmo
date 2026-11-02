@@ -684,6 +684,7 @@ impl Renderer {
             motion_history: Default::default(),
             light_cookies: Default::default(),
             shadow_settings: Default::default(),
+            fog: None,
             gpu_particles,
             gpu_physics,
             gpu_fluid,

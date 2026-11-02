@@ -923,6 +923,7 @@ fn draw_camera_view(
                 shading_mode: renderer.shading_mode,
                 clear_color,
                 wireframe_color: world.get_resource::<WireframeConfig>().and_then(|w| w.color),
+                fog: renderer.fog,
             },
             point_shadows_enabled: renderer.point_shadows_enabled,
             elapsed_time,
@@ -6247,6 +6248,62 @@ mod golden_render_tests {
             // shader's WIREFRAME branch the coloured run reads 0 too.
             assert!(lit < 20, "lit lines on a pale sphere are not green: {lit}");
             assert!(green > 300, "the asked-for colour draws the lines: {green}");
+        });
+    }
+
+    /// `Renderer::fog` replaces the environment preset's fog. A white wall 40 m away: red fog of
+    /// density 0.1 turns it red; density 0 leaves it unfogged, brighter and neutral; with no override
+    /// it wears the default preset's blue-grey haze; and a fog that does not thin with height
+    /// (`height_falloff` 0) is still a number, not NaN.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn a_hand_set_fog_replaces_the_preset() {
+        use crate::renderer::Fog;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        async fn centre(fog: Option<Fog>) -> [u8; 3] {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.fog = fog;
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let wall = world.spawn();
+            world.add_component(wall, Transform::new(Vec3::new(0.0, 0.0, -40.0)).with_scale(Vec3::new(40.0, 40.0, 0.5)));
+            world.add_component(wall, GlobalTransform::default());
+            world.add_component(wall, AssetManager::create_cube(&renderer.device));
+            world.add_component(wall, Material::new(tex).with_pbr(Vec4::new(0.9, 0.9, 0.9, 1.0), 0.9, 0.0));
+            world.add_component(wall, MeshRenderer::new());
+            world.spawn_bundle(crate::bundles::DirectionalLightBundle::default());
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::ZERO,
+                yaw: -std::f32::consts::FRAC_PI_2,
+                pitch: 0.0,
+                primary: true,
+                ..Default::default()
+            });
+            let f = render_world(&mut renderer, &mut world).await;
+            let i = (64 * 128 + 64) * 4;
+            [f[i], f[i + 1], f[i + 2]]
+        }
+        pollster::block_on(async {
+            let preset = centre(None).await;
+            let red = centre(Some(Fog::new([1.0, 0.0, 0.0], 0.1))).await;
+            let clear = centre(Some(Fog::new([1.0, 0.0, 0.0], 0.0))).await;
+            let flat = centre(Some(Fog::new([0.0, 0.0, 1.0], 0.05).with_height(0.0, -5.0))).await;
+            // Measured (centre RGB): preset 213 214 215, red 232 44 45, density 0 225 225 226,
+            // blue with no falloff 99 100 231.
+            assert!(red[0] > 180 && red[1] < 90 && red[2] < 90, "red fog reddens the wall: {red:?}");
+            assert!(
+                clear[0].abs_diff(clear[2]) <= 3 && clear[0] as i32 > preset[0] as i32 + 5,
+                "density 0 is no fog — neutral and brighter than the preset's haze: {clear:?} vs {preset:?}"
+            );
+            assert!(flat[2] as i32 > flat[0] as i32 + 80, "fog that does not thin with height still renders: {flat:?}");
         });
     }
 

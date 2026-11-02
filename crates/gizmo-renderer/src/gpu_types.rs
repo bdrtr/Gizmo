@@ -389,8 +389,13 @@ pub struct SceneUniforms {
     /// `[z_scale, z_bias, 0, 0]` for `slice = floor(log(view_depth) * z_scale + z_bias)`, from
     /// [`clustered::depth_params`](crate::clustered::depth_params) over the camera's own near/far.
     pub cluster_depth: [f32; 4],
-                           // Total: 560 + 64·MAX_LIGHTS bytes (16 944 at MAX_LIGHTS = 256).
-                           // The 64 KiB uniform floor caps this layout at 1015 lights — checked by
+    /// `Renderer::fog`: rgb = colour, a = density; a < 0 = no override, the environment preset's
+    /// fog. Appended at the tail so no earlier offset moved.
+    pub fog: [f32; 4],
+    /// x = height falloff, y = base height (metres); zw unused.
+    pub fog_shape: [f32; 4],
+                           // Total: 592 + 64·MAX_LIGHTS bytes (16 976 at MAX_LIGHTS = 256).
+                           // The 64 KiB uniform floor caps this layout at 1014 lights — checked by
                            // `frame_uniforms`'s `the_scene_block_fits_the_uniform_binding_floor_…`.
 }
 
@@ -656,12 +661,13 @@ mod tests {
         // wrong offsets for i > 0 — see `every_instance_shader_declares_the_full_struct`.
         assert_eq!(std::mem::size_of::<InstanceRaw>(), 128, "InstanceRaw");
         assert_eq!(std::mem::size_of::<MaterialParams>(), 48, "MaterialParams = 3×vec4");
-        // The fixed part is 560 bytes; the light array is the rest. Expressed against
+        // The fixed part is 592 bytes (560 until `fog` / `fog_shape` were appended, 2026-11-02);
+        // the light array is the rest. Expressed against
         // MAX_LIGHTS so raising the light ceiling does not require editing three literals in
         // three files (and so that forgetting one is not how the layout drifts).
         assert_eq!(
             std::mem::size_of::<SceneUniforms>(),
-            560 + crate::frame_uniforms::MAX_LIGHTS * 64,
+            592 + crate::frame_uniforms::MAX_LIGHTS * 64,
             "SceneUniforms total"
         );
     }
