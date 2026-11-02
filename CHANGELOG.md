@@ -114,8 +114,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - **`MeshSource("cylinder")` and `"cone"`**, sized like their colliders, and
     `AssetManager::PRIMITIVE_MESH_KEYS` as the one list of primitive keys (the studio's
     missing-asset check now uses it instead of its own copy).
-- **Drawing many objects is 44 % cheaper on the CPU.** 60 000 drawn cubes: `default_render_pass`
-  25.0 → 14.1 ms. The per-object motion history (object motion blur) was a `HashMap` swept every
+- **Drawing many objects is 52 % cheaper on the CPU.** 60 000 drawn cubes: `default_render_pass`
+  25.0 → 11.9 ms. The transform sync no longer stamps every `Transform` changed every frame
+  (`Changed<Transform>` now means something), and propagation's visited set is a bitset. The per-object motion history (object motion blur) was a `HashMap` swept every
   frame — now a slot per entity id; the batch map uses FxHash instead of SipHash; the batcher no
   longer clones three `Arc`s per drawn object. Frustum tests skip the n-vertex they discarded.
 - **Plurals: `Locale::format_count` and `LocalizedText::with_count`** — `key.one` / `key.other` by

@@ -497,10 +497,14 @@ at 1 a.m. had started throttling the window to ~48 Hz and flattened every window
 | before | 25.0 |
 | `MotionHistory` a `Vec` indexed by entity id, not a `HashMap` swept with `retain` every frame (added 2026-11-01 with object motion blur) | 16.4 |
 | the batcher stops cloning three `Arc`s per drawn object (only a new batch needs its own) | 15.9 |
-| the batch map hashed with FxHash, not SipHash (keys are engine-made pointers and flags) | **14.1** |
+| the batch map hashed with FxHash, not SipHash (keys are engine-made pointers and flags) | 14.1 |
+| the transform sync rebuilds a `Transform`'s cached matrix only when it moved, without a change mark; propagation's visited set is a bitset, not a `HashSet` | **11.9** |
 
-−44 %, every drawn object, every game. Everything culled is 7.7 ms, most of it the transform
-systems over 60 000 entities. `Frustum::intersects_aabb` also stopped testing the n-vertex it
+−52 %, every drawn object, every game. Everything culled: 7.4 → 5.8 ms, the transform pass alone
+2.69 → 0.86 ms on a static scene. The sync had been writing every `Transform` through the
+change-tracked path every frame — so `Changed<Transform>` matched the whole world, moving or not —
+the same mistake already fixed for `GlobalTransform` (`set_global_matrix`), left standing one
+component over. `Frustum::intersects_aabb` also stopped testing the n-vertex it
 discards (half the plane work, the same decision bit for bit); not a measured win on its own.
 
 ### A7c. Motion blur (camera and object) and auto exposure — **CLOSED 2026-11-01**

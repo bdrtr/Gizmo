@@ -20,9 +20,18 @@ impl gizmo_core::system::System for TransformSyncSystem {
         if let Some(mut transforms) = unsafe {
             world.query_unchecked::<gizmo_core::query::Mut<gizmo_physics_core::Transform>>()
         } {
+            // Rebuilt only where it moved, and written WITHOUT a change mark: `local_matrix` is a
+            // cache derived from the fields, not a change of its own. Writing it through the
+            // change-tracked path marked every `Transform` in the world changed every frame,
+            // moving or not — the same mistake `set_global_matrix` below was written to undo for
+            // `GlobalTransform` — and on a static scene of 60 000 entities it was most of this
+            // pass's cost (measured 2026-11-03).
             for (_, mut trans) in transforms.iter_mut() {
-                trans.update_local_matrix();
-                updated += 1;
+                let next = crate::math::Mat4::from_scale_rotation_translation(trans.scale, trans.rotation, trans.position);
+                if trans.local_matrix != next {
+                    trans.bypass_change_detection().local_matrix = next;
+                    updated += 1;
+                }
             }
         }
         tracing::trace!(updated, "transform_sync: yerel matrisler güncellendi");
@@ -57,6 +66,27 @@ fn set_global_matrix(
 /// movement reaches its children in the same frame it happened.
 pub struct TransformPropagateSystem;
 
+/// Entity ids already placed this pass — a bitset indexed by id (ids are dense slot indices).
+#[derive(Default)]
+struct VisitedIds {
+    bits: Vec<u64>,
+    count: usize,
+}
+
+impl VisitedIds {
+    /// Marks `id`; `true` if it was not marked yet — `HashSet::insert`'s answer.
+    fn insert(&mut self, id: u32) -> bool {
+        let (word, bit) = ((id / 64) as usize, 1u64 << (id % 64));
+        if word >= self.bits.len() {
+            self.bits.resize(word + 1, 0);
+        }
+        let fresh = self.bits[word] & bit == 0;
+        self.bits[word] |= bit;
+        self.count += usize::from(fresh);
+        fresh
+    }
+}
+
 impl gizmo_core::system::System for TransformPropagateSystem {
     fn access_info(&self) -> gizmo_core::system::AccessInfo {
         let mut info = gizmo_core::system::AccessInfo::new();
@@ -82,7 +112,10 @@ impl gizmo_core::system::System for TransformPropagateSystem {
         // frame, so a single cyclic edit hangs the whole app. Track visited ids and
         // never enqueue one twice. For a valid tree this is a no-op (each node has one
         // parent → is enqueued once).
-        let mut visited: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        // A bit per entity id, not a `HashSet`: every root goes in here every frame (the guard
+        // against a `Children` list naming a root), and a SipHash insert per entity was most of
+        // this pass on a big flat scene.
+        let mut visited = VisitedIds::default();
 
         if let Some(mut roots) = root_query {
             let mut children_query = world.query::<&gizmo_core::component::Children>();
@@ -142,7 +175,7 @@ impl gizmo_core::system::System for TransformPropagateSystem {
         }
 
         // Aggregate: bu frame'de dünya-matrisi güncellenen düğüm sayısı (kök + çocuklar).
-        tracing::trace!(nodes = visited.len(), "transform_propagate: hiyerarşi dünya-matrisleri güncellendi");
+        tracing::trace!(nodes = visited.count, "transform_propagate: hiyerarşi dünya-matrisleri güncellendi");
     }
 }
 
@@ -318,6 +351,53 @@ mod tests {
             "an unmoved hierarchy must not stamp GlobalTransform: `Changed` matching 100% of \
              the scene is what makes a change-driven refresh cost the same as no filter at all"
         );
+    }
+
+    /// The same compare-then-write, for the sync: a `Transform` nobody touched is not stamped
+    /// changed by the pass that rebuilds its cached matrix (it was, every frame, for every
+    /// entity) — and one whose fields moved still gets its matrix rebuilt.
+    #[test]
+    fn sync_rebuilds_a_moved_matrix_and_does_not_stamp_an_unmoved_transform() {
+        let mut world = World::new();
+        let still = world.spawn();
+        let moving = world.spawn();
+        world.add_component(still, Transform::new(gizmo_math::Vec3::new(1.0, 2.0, 3.0)));
+        world.add_component(moving, Transform::new(gizmo_math::Vec3::ZERO));
+        let changed = |w: &World| -> Vec<u32> {
+            let mut v: Vec<u32> = w
+                .query::<gizmo_core::query::Changed<Transform>>()
+                .map(|q| q.iter().map(|(id, _)| id).collect())
+                .unwrap_or_default();
+            v.sort_unstable();
+            v
+        };
+        let prev = world.tick;
+        world.begin_change_frame(prev);
+        TransformSyncSystem.run(&world, 0.0);
+        // Frame 2: move one by its fields only — the matrix is stale until the sync.
+        let prev = world.tick;
+        world.begin_change_frame(prev);
+        if let Some(mut q) = world.query_mut::<gizmo_core::query::Mut<Transform>>() {
+            q.get_mut(moving.id()).unwrap().position = gizmo_math::Vec3::new(5.0, 0.0, 0.0);
+        }
+        TransformSyncSystem.run(&world, 0.0);
+        assert_eq!(changed(&world), vec![moving.id()], "the sync stamped a transform nobody moved");
+        let m = world.borrow::<Transform>().get(moving.id()).unwrap().local_matrix;
+        assert_eq!(m.w_axis.truncate(), gizmo_math::Vec3::new(5.0, 0.0, 0.0), "the moved matrix was not rebuilt");
+    }
+
+    /// The visited bitset answers like `HashSet::insert`: fresh once, then not; ids in different
+    /// words and far apart do not disturb each other; the count is of distinct ids.
+    #[test]
+    fn the_visited_bitset_answers_like_a_set() {
+        let mut v = VisitedIds::default();
+        assert!(v.insert(3));
+        assert!(!v.insert(3));
+        assert!(v.insert(64));
+        assert!(v.insert(100_000));
+        assert!(!v.insert(64));
+        assert!(v.insert(63));
+        assert_eq!(v.count, 4);
     }
 
     /// T17 — the other direction: a node that DID move must still be stamped, and its
