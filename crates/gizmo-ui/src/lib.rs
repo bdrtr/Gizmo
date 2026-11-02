@@ -125,6 +125,8 @@ pub mod layout;
 pub mod system;
 /// Pointer hit-testing and the hover/press state a widget reads.
 pub mod interaction;
+/// [`text_input::TextInput`] — a field the player types into.
+pub mod text_input;
 /// Bundles that spawn a complete widget in one call.
 pub mod bundles;
 
@@ -134,6 +136,7 @@ pub use components::*;
 pub use bundles::*;
 pub use layout::*;
 pub use interaction::{pointer_over_ui, ui_layer, UiNavigation};
+pub use text_input::{text_input_system, TextInput};
 
 /// Registers the UI components + [`UiContext`] resource and schedules the layout
 /// and interaction systems on a [`World`]/[`Schedule`] directly.
@@ -148,6 +151,7 @@ pub fn register(world: &mut World, schedule: &mut Schedule) {
     world.register_component_type::<Clicked>();
     world.register_component_type::<ClipContent>();
     world.register_component_type::<ZIndex>();
+    world.register_component_type::<text_input::TextInput>();
     world.register_component_type::<BackgroundColor>();
     world.register_component_type::<UiRoot>();
 
@@ -169,6 +173,12 @@ pub fn register(world: &mut World, schedule: &mut Schedule) {
             .into_config()
             .label("ui_interaction")
             .after("ui_layout"),
+    );
+    schedule.add_di_system(
+        text_input::text_input_system
+            .into_config()
+            .label("ui_text_input")
+            .after("ui_interaction"),
     );
 }
 

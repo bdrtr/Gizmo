@@ -1041,6 +1041,16 @@ mouse, the keyboard and a gamepad. Three of its four buttons were impossible:
   inserts it, through the path closing the window takes (`shut_down`: the input recording is
   written, then the event loop exits). The headless half is tested — `run` returns after the
   third frame when the game asks on its third.
+- ~~**No text input.**~~ **Closed 2026-11-02.** The input layer reported physical keys only — a
+  game could read `KeyA` but not tell `a` from `A`, and could not read `ş` at all — so there was
+  no way to ask for a name. `Input::typed_text()` is this frame's text as the keyboard layout
+  wrote it (winit's `KeyEvent::text`, control characters dropped), and `gizmo::ui::TextInput` is
+  a field: a click focuses it (a click elsewhere, Escape or Enter leaves), it takes the typed
+  text up to `max_chars`, Backspace deletes, Enter marks it submitted for a frame; its `Text`'s
+  own content is the placeholder, and the draw path shows the value, with a caret while focused.
+  While a field has the keyboard, `UiNavigation` leaves the keys to it — otherwise Space and Enter
+  typed into a name would also press the focused button. Tested on the edit rules, focus through
+  clicks, and the navigation hand-off. The menu asks for a name and remembers it.
 - ~~**Nothing survived a restart.**~~ **Closed 2026-11-02.** Menu settings and every game's best
   score were lost on exit; the engine kept scenes and the editor's own preferences, nothing for a
   game. `gizmo::app::save::SaveData` — `open(game)`, `get::<T>` / `set` / `remove`, `save()` —

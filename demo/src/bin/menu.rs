@@ -8,7 +8,7 @@
 //! | **fare** | üzerine gel, tıkla |
 //! | **↑ ↓ / Tab · Enter / Space** | gezin · seç |
 //! | **gamepad d-pad · A (güney)** | gezin · seç |
-//! | **Esc** | çıkış |
+//! | **İsim alanı** | tıkla, yaz, Enter ile kaydet (Esc bırakır) |
 //!
 //! ## Motorda bulunan eksikler (bu menüyü yazarken)
 //!
@@ -27,6 +27,12 @@
 //! - **Ayarlar kapanınca kayboluyordu.** **Kapatıldı:** `SaveData` — ses ve tam ekran
 //!   `gizmo_menu/save.json`'da, menü onlarla açılıyor.
 //!
+//! - **Metin girişi yoktu.** Girdi katmanı yalnızca fiziksel tuş bildiriyordu: `KeyA`, ama
+//!   `a` mı `A` mı bilinmiyordu, `ş` hiç okunamıyordu. **Kapatıldı:** `Input::typed_text()` (bu
+//!   karede yazılan karakterler, klavye düzeninin ürettiği gibi) ve `gizmo::ui::TextInput` —
+//!   tıklanınca odaklanan, Backspace/Enter/Esc bilen, değeri `Text`'in yer tutucusunun yerine
+//!   imleçle çizilen bir alan. Odaktayken `UiNavigation` tuşları ona bırakıyor.
+//!
 //! ## Ortam değişkenleri
 //!   * `GIZMO_FONT=<yol>` — font
 
@@ -42,9 +48,8 @@ use gizmo::renderer::text::FontId;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
 use gizmo::ui::{
     AlignItems, BackgroundColor, ButtonBundle, Clicked, FlexDirection, Interaction, JustifyContent, NodeBundle, Style,
-    UiNavigation, UiPlugin, UiRect, Val,
+    TextInput, UiNavigation, UiPlugin, UiRect, Val,
 };
-use gizmo::winit::keyboard::KeyCode;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Action {
@@ -116,6 +121,24 @@ fn main() {
             let mode = if save.get::<bool>("fullscreen").unwrap_or(false) { WindowMode::Fullscreen } else { WindowMode::Windowed };
             scene.world.insert_resource(mode);
 
+            // İsim alanı: `Text`'in kendi içeriği yer tutucu; yazılınca değer gösteriliyor.
+            let mut field = TextInput::new(16);
+            field.value = save.get::<String>("name").unwrap_or_default();
+            let name_field = scene.world.spawn_bundle(ButtonBundle {
+                style: Style { height: Val::Px(52.0), ..Default::default() },
+                background_color: BackgroundColor(fill(Interaction::None)),
+                ..Default::default()
+            });
+            scene.world.add_component(
+                name_field,
+                Text::screen("İsminizi yazın…", font, 22.0, Vec2::ZERO)
+                    .with_anchor(TextAnchor::Center)
+                    .with_color(Vec4::new(0.8, 0.82, 0.88, 1.0)),
+            );
+            scene.world.add_component(name_field, field);
+            scene.world.add_component(name_field, gizmo::ui::ClipContent);
+            scene.world.add_child(column, name_field);
+
             let mut first = None;
             for (action, label) in [
                 (Action::Start, "Başla".to_string()),
@@ -167,10 +190,19 @@ fn volume_label(v: u32) -> String {
     format!("Ses: %{v}")
 }
 
-fn update(world: &mut World, _state: &mut SimpleSceneState, _dt: f32, input: &Input) {
+// Esc bir metin alanını bırakıyor; çıkış Çıkış düğmesinde.
+fn update(world: &mut World, _state: &mut SimpleSceneState, _dt: f32, _input: &Input) {
     let Some(mut menu) = world.remove_resource::<Menu>() else { return };
-    if input.is_key_just_pressed(KeyCode::Escape as u32) {
-        world.insert_resource(AppExit);
+
+    // İsim alanı: Enter ile gönderildiyse kaydet ve selamla.
+    let submitted: Option<String> = world
+        .borrow::<TextInput>()
+        .iter()
+        .find(|(_, f)| f.is_submitted())
+        .map(|(_, f)| f.value.clone());
+    if let Some(name) = submitted {
+        remember("name", &name);
+        set_banner(world, menu.banner, &format!("Merhaba, {name}!"));
     }
 
     // Düğme renkleri: odak `Hovered` olarak geliyor, yani üzerine gelme rengi odak rengi de.

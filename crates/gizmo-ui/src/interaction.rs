@@ -104,6 +104,7 @@ pub fn ui_interaction_system(
     navigation: Option<ResMut<UiNavigation>>,
     mut interactions: Query<(&Node, Mut<Interaction>, Option<Mut<Clicked>>)>,
     layers: Query<(Option<&ZIndex>, Option<&Parent>)>,
+    fields: Query<&crate::text_input::TextInput>,
 ) {
     let mouse_pos = input.mouse_position();
     let is_clicked = input.is_mouse_button_pressed(0); // 0 is left click
@@ -126,8 +127,12 @@ pub fn ui_interaction_system(
     let front = |id: u32| under.iter().any(|(e, l)| *e == id && Some(*l) == top);
 
     // Keyboard/gamepad focus — decided before the per-element pass so it can mark the focused one.
+    // A text field that has the keyboard keeps it: Space and Enter are typing there, not
+    // clicks, and the arrows are not focus moves.
+    let typing = fields.iter().any(|(_, f)| f.is_focused());
     let (focused, activate) = match navigation {
-        Some(mut nav) if nav.enabled => navigate(&input, &mut nav, &mut interactions, &front),
+        Some(mut nav) if nav.enabled && !typing => navigate(&input, &mut nav, &mut interactions, &front),
+        Some(nav) if nav.enabled => (nav.focused(), false),
         _ => (None, false),
     };
 
@@ -373,6 +378,21 @@ mod tests {
         assert_eq!(focused(&world), None);
         assert!(!clicked(&world, mid));
         assert!(!UiNavigation::default().enabled, "on by default would steal the arrows");
+    }
+
+    /// While a text field has the keyboard, the navigation keys are typing, not navigation.
+    #[test]
+    fn a_focused_text_field_keeps_the_keys_from_navigation() {
+        let (mut world, [top, mid, _]) = menu();
+        press(&mut world, Some("down"));
+        assert_eq!(focused(&world), Some(top));
+        let mut field = crate::text_input::TextInput::new(0);
+        field.set_focused(true);
+        world.spawn_bundle((field,));
+        press(&mut world, Some("down"));
+        assert_eq!(focused(&world), Some(top), "the arrow moved the focus while typing");
+        press(&mut world, Some("enter"));
+        assert!(!clicked(&world, top) && !clicked(&world, mid), "Enter clicked a button while typing");
     }
 
     /// The mouse moving onto a button takes the focus, so the arrows continue from there.

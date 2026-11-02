@@ -114,6 +114,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - **`MeshSource("cylinder")` and `"cone"`**, sized like their colliders, and
     `AssetManager::PRIMITIVE_MESH_KEYS` as the one list of primitive keys (the studio's
     missing-asset check now uses it instead of its own copy).
+- **Text input: `Input::typed_text()` and `gizmo::ui::TextInput`.** The characters typed this
+  frame as the layout wrote them (`ş`, capitals, repeats; control characters dropped), and a text
+  field widget — click to focus, type, Backspace, Enter to submit, Escape or a click elsewhere to
+  leave — whose `Text` content is its placeholder and whose value the draw path shows, with a
+  caret while focused. A focused field keeps the keyboard from `UiNavigation`. The menu demo
+  asks for a name and saves it.
 - **UI layers: `gizmo::ui::ZIndex`.** A node's layer, inherited by its descendants. The overlay
   paints layer by layer — backgrounds then labels — so a panel in front hides what is behind it;
   before, every background was under every label. Only the front layer under the cursor is

@@ -84,6 +84,19 @@ pub(crate) fn ui_clip(_world: &World, _entity: u32) -> Option<[Vec2; 2]> {
     None
 }
 
+/// What a [`TextInput`](crate::ui::TextInput) on `entity` shows instead of its `Text`'s content —
+/// the value (with a caret while focused) — or `None` to draw the `Text` as authored (its
+/// placeholder).
+#[cfg(feature = "ui")]
+fn text_input_display(world: &World, entity: u32) -> Option<String> {
+    world.borrow::<crate::ui::TextInput>().get(entity).and_then(|f| f.display())
+}
+
+#[cfg(not(feature = "ui"))]
+fn text_input_display(_world: &World, _entity: u32) -> Option<String> {
+    None
+}
+
 /// The overlay layer `entity` is drawn on — its `ZIndex`, inherited through its parents.
 #[cfg(feature = "ui")]
 fn ui_layer(world: &World, entity: u32) -> i32 {
@@ -186,6 +199,19 @@ pub fn record_text(
         // A clipping UI box above it (or on it) cuts screen text to the box.
         let clip = if item.space.needs_world_position() { None } else { ui_clip(world, id) };
         text.set_layer(ui_layer(world, id));
+        // A text field draws its value where its `Text` holds the placeholder.
+        let field;
+        let item = match text_input_display(world, id) {
+            Some(shown) => {
+                field = {
+                    let mut t = item.clone();
+                    t.content = shown;
+                    t
+                };
+                &field
+            }
+            None => item,
+        };
         text.queue_clipped(queue, item, origin, anchor, screen, clip);
     }
     text.upload(device, queue);
