@@ -845,9 +845,13 @@ again as of 2026-08-24. Recording the whole set, because they are one family:
    declined this as "stats with no consumer"; the demo is the consumer, and the entry is gone.
    Tested: three cubes sharing a mesh and material read `(1, 3, 36)`, and counting the
    shadow-only fourth fails the test. Under split screen it holds the last view drawn.
-3. **The grid pipeline is editor-only.** `MaterialType::Grid`, `grid.wgsl` and a compiled
-   `grid_pipeline` all exist; only studio ever binds it. In the game path a grid material draws as
-   a plain opaque PBR plane — measured in `infinite_grid`.
+3. ~~**The grid pipeline is editor-only.**~~ **CLOSED 2026-11-02.** `route(Grid)` is forward
+   now (`instance_flag` 1.0, `skips_deferred`), `is_grid` rides the game path's batch key and draw
+   item, and the forward pass binds `grid_pipeline` for it ahead of the unlit branch. Before, a
+   grid material drew in the game as a plain opaque PBR plane — measured in `infinite_grid`.
+   Tested from above: the lower half of the frame has 0 sharp edges for a PBR plane and 166 for
+   the grid; dropping the forward branch sends the grid to the unlit pipeline and back to 0. The
+   editor still hides its grid in play mode; a game that puts one in its world gets it drawn.
 4. ~~**`Material::emissive` is dead in the deferred path.**~~ **CLOSED 2026-11-02.** The
    G-buffer read emissive from the *material uniform* (which only glTF loading fills) and added it
    to the 8-bit albedo — lit, and clamped at 1 — while game code writes the per-instance field,
@@ -918,7 +922,13 @@ again as of 2026-08-24. Recording the whole set, because they are one family:
    `delayed_commands` only because the demo ran the engine's path beside a hand-built one and saw
    the engine side grow 5 → 10 → 15 while the hand-built side drained correctly.
 
-10. **`MaterialType::Skybox` draws nothing in the game path — cause unknown.** Measured in
+10. ~~**`MaterialType::Skybox` draws nothing in the game path — cause unknown.**~~ **No longer
+    reproduces (2026-11-02)**, so it is closed without a named cause: whichever later change fixed
+    it did so without knowing. A sky cube around the camera now repaints every colour byte of a
+    128² frame (`a_skybox_draws_in_the_game_path`, centre (59, 61, 64) → (243, 249, 252)), and
+    `atmosphere` with and without its cube differs in 10066 pixels at frame 90 — all of them sky,
+    the light blue of `sky.wgsl` against the deferred environment's orange. The test pins it.
+    The original record, measured in
     `atmosphere`: removing the skybox entity changes **0 pixels, max 0**. Every sky pixel comes
     from the deferred environment term. Eliminated as causes: scale (400/100/30/12 all identical),
     `GlobalTransform` present or absent, `Skybox` vs `Unlit` material, inverted vs ordinary cube,

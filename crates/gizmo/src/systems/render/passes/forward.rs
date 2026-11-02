@@ -148,6 +148,10 @@ pub fn record_forward_and_fluid(
                     } else {
                         &renderer.scene.water_pipeline
                     }
+                } else if item.is_grid {
+                    // Ahead of `unlit`, which a grid also sets (`skips_deferred`): the grid
+                    // has its own shader, as in the editor.
+                    &renderer.scene.grid_pipeline
                 } else if item.baked_lit {
                     // A baked-lit material that declared itself transparent gets the blended
                     // variant. Every other stage already routes it as transparent (sorted

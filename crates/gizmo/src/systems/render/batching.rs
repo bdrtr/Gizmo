@@ -169,6 +169,8 @@ pub struct DrawItem {
     /// `passes::forward`. Rides `unlit` out of the deferred and shadow passes like every other
     /// forward type, and this flag is what says *which* forward pipeline.
     pub(super) is_water: bool,
+    /// The reference grid (`MaterialType::Grid`): drawn forward through `grid.wgsl`.
+    pub(super) is_grid: bool,
     /// The material asked for both faces (`Material::with_double_sided`). Selects the cull-off
     /// variant of whichever pipeline this item lands in; see `passes::geometry`.
     pub(super) is_double_sided: bool,
@@ -310,6 +312,8 @@ pub(crate) struct BatchKey {
     /// an otherwise **identical** key — and the batch would inherit whichever the ECS iteration
     /// reached first, drawing one of the two with the other's pipeline.
     is_water: bool,
+    /// The grid has its own pipeline, so it must not share a batch with anything that has not.
+    is_grid: bool,
 }
 
 pub(crate) struct BatchData {
@@ -328,6 +332,7 @@ pub(crate) struct BatchData {
     visible_in_camera: bool,
     custom: Option<gizmo_renderer::custom_material::MaterialId>,
     is_water: bool,
+    is_grid: bool,
     skeleton_bind_group: Option<std::sync::Arc<wgpu::BindGroup>>,
     is_transparent: bool,
     blend_mode: crate::renderer::components::BlendMode,
@@ -571,6 +576,7 @@ pub(super) fn collect_draw_items(
                 let unlit = routing.skips_deferred;
                 // Which forward pipeline, once `unlit` has said "not the deferred one".
                 let is_water = routing.is_water;
+                let is_grid = routing.is_grid;
                 let is_transparent = draws_blended($mat.is_transparent, $mat.albedo.w, $mat.alpha_cutoff);
                 // Only a blended draw blends; an opaque one's mode is moot and must not split it
                 // from its opaque neighbours.
@@ -601,6 +607,7 @@ pub(super) fn collect_draw_items(
                     visible_in_camera,
                     custom: routing.custom,
                     is_water,
+                    is_grid,
                 };
 
                 let batch = cache.batches.entry(key).or_insert_with(|| BatchData {
@@ -619,6 +626,7 @@ pub(super) fn collect_draw_items(
                     visible_in_camera,
                     custom: routing.custom,
                     is_water,
+                    is_grid,
                     skeleton_bind_group: skel_bg,
                     is_transparent,
                     blend_mode,
@@ -790,6 +798,7 @@ pub(super) fn collect_draw_items(
                 is_backdrop: batch.is_backdrop,
                 custom: batch.custom,
                 is_water: batch.is_water,
+                is_grid: batch.is_grid,
                 is_double_sided: batch.is_double_sided,
                 casts_shadows: batch.casts_shadows,
                 visible_in_camera: batch.visible_in_camera,
@@ -902,6 +911,7 @@ mod batch_key_tests {
             visible_in_camera: true,
             custom: None,
             is_water: false,
+            is_grid: false,
         };
         let no_cast = BatchKey { casts_shadows: false, ..base.clone() };
         let shadow_only = BatchKey { visible_in_camera: false, ..base.clone() };
@@ -927,6 +937,7 @@ mod batch_key_tests {
             visible_in_camera: true,
             custom: None,
             is_water: false,
+            is_grid: false,
         };
         let transparent = BatchKey {
             is_transparent: true,

@@ -114,9 +114,10 @@ pub fn route(material_type: MaterialType) -> Routing {
             MaterialType::Backdrop | MaterialType::BackdropPlaced => {
                 (1.0, false, false, false, false, true)
             }
-            // The engine path had no arm for this at all and gave it 0.0 through its wildcard;
-            // studio routes it to its own pipeline. 0.0 preserves what the engine path did.
-            MaterialType::Grid => (0.0, false, false, false, true, false),
+            // Forward, through `grid.wgsl`, in both paths since 2026-11-02. It was 0.0 — deferred
+            // PBR — which is how the game drew a grid material as a plain opaque plane while the
+            // editor drew the grid (`CAPABILITY_GAPS` §D3).
+            MaterialType::Grid => (1.0, false, false, false, true, false),
             // A registered material: forward, and nothing else the engine recognises. `1.0` is the
             // "not deferred PBR" flag every other forward type carries, so a loop that only reads
             // the flag routes it correctly even before it learns about the registry.
@@ -133,6 +134,7 @@ pub fn route(material_type: MaterialType) -> Routing {
         is_water,
         custom,
         skips_deferred: is_skybox
+            || is_grid
             || baked_lit
             || is_backdrop
             || unlit_material
@@ -158,12 +160,14 @@ mod tests {
         assert!(!r.unlit_material, "baked-lit casts shadows; unlit does not — not the same flag");
     }
 
-    /// `Grid` was known to studio and invisible to the engine path.
+    /// `Grid` was known to studio and invisible to the engine path; it is forward in both now, so
+    /// the game draws the grid rather than an opaque plane.
     #[test]
     fn grid_is_named_rather_than_defaulted() {
         let r = route(MaterialType::Grid);
         assert!(r.is_grid);
-        assert!(!r.skips_deferred, "the engine path's wildcard put Grid on the deferred side");
+        assert!(r.skips_deferred, "a grid is drawn by grid.wgsl, not through the G-buffer");
+        assert_eq!(r.instance_flag, 1.0, "the shared 'not deferred PBR' flag");
     }
 
     /// Every variant answers, and the answers stay distinguishable.

@@ -17,7 +17,7 @@ hash replays bit-for-bit, which is what rollback netcode and the regression soak
 
 | Area | State | Read |
 |---|---|---|
-| ECS (`gizmo-core`) | Archetype + sparse-set storage, borrow-checked queries, commands, events, observers, hierarchy. Under an ongoing soundness sweep; each round has come back smaller. | ENGINE.md §3 (Phase 6) |
+| ECS (`gizmo-core`) | Archetype + sparse-set storage, borrow-checked queries, commands, events (`EventMutator` too), observers, hierarchy. Driven state machines (`App::add_state` / `on_enter` / `on_exit`, `DespawnOnExit`), system chains (`(a, b).chain()`), systems returning `Result`. Under an ongoing soundness sweep; each round has come back smaller. | ENGINE.md §3 (Phase 6), CAPABILITY_GAPS §C1 |
 | Rigid physics | GJK/EPA + box SAT, TGS-Soft solver, CCD, joints, vehicles, character, axis locks. Deterministic on one platform. A game with its own update hook steps it at a fixed rate with `gizmo::simple::FixedPhysics`. 2D: `RigidBody::planar_xy` + `Collider::{polygon_2d, polyline_2d, circle_2d, rect_2d}`; tile levels: `tilemap_collider`. | ENGINE.md §5, §7 |
 | Soft physics | FEM soft bodies, XPBD cloth and rope, Voronoi fracture. | ENGINE.md §1 |
 | 3D rendering | Deferred PBR, CSM shadows, SSAO, SSGI, SSR, bloom, volumetrics, TAA/FXAA, decals, irradiance volumes, user materials (forward). | CAPABILITY_GAPS §A, §F |

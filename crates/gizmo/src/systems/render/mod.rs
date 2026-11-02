@@ -5884,6 +5884,112 @@ mod golden_render_tests {
         });
     }
 
+    /// A `Skybox` material draws in the game path. `CAPABILITY_GAPS` §D10 recorded it drawing
+    /// nothing ("cause unknown", `atmosphere`: 0 pixels changed) with a long elimination list; on
+    /// 2026-11-02 it no longer reproduces — a sky cube around the camera repaints every pixel of
+    /// this frame, and `atmosphere` differs in 10066 pixels at frame 90, all of them sky. Pinned
+    /// here so it cannot quietly return.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn a_skybox_draws_in_the_game_path() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        async fn frame(sky: bool) -> Vec<u8> {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            if sky {
+                let e = world.spawn();
+                world.add_component(e, Transform::new(Vec3::ZERO).with_scale(Vec3::splat(50.0)));
+                world.add_component(e, GlobalTransform::default());
+                world.add_component(e, AssetManager::create_cube(&renderer.device));
+                world.add_component(e, Material::new(tex).with_skybox());
+                world.add_component(e, MeshRenderer::new());
+            }
+            world.spawn_bundle(crate::bundles::DirectionalLightBundle::default());
+            world.spawn_bundle(CameraBundle { position: Vec3::ZERO, yaw: -std::f32::consts::FRAC_PI_2, pitch: 0.2, primary: true, ..Default::default() });
+            render_world(&mut renderer, &mut world).await
+        }
+        pollster::block_on(async {
+            let a = frame(false).await;
+            let b = frame(true).await;
+            // Measured: 49152 bytes — every RGB byte of the 128² frame; the centre went from
+            // (59, 61, 64) to (243, 249, 252).
+            let diff = a.iter().zip(&b).filter(|(x, y)| x != y).count();
+            assert!(diff > 45_000, "the sky cube repaints the frame: {diff} of 49152 colour bytes changed");
+        });
+    }
+
+    /// A `Grid` material draws as a grid in the game, as in the editor: lines, not a flat plane.
+    /// Seen from above, the lower half of the frame must be full of sharp horizontal edges; the
+    /// same plane routed any other way (deferred PBR, as it was, or the plain unlit pipeline)
+    /// has almost none.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn a_grid_material_draws_a_grid_in_the_game() {
+        use crate::renderer::components::MaterialType;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        async fn edges(grid: bool) -> usize {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let mut material = Material::new(tex).with_pbr(Vec4::new(0.5, 0.5, 0.5, 1.0), 0.9, 0.0);
+            if grid {
+                material.material_type = MaterialType::Grid;
+            }
+            let e = world.spawn();
+            world.add_component(e, Transform::new(Vec3::ZERO));
+            world.add_component(e, GlobalTransform::default());
+            world.add_component(e, AssetManager::create_plane(&renderer.device, 40.0));
+            world.add_component(e, material);
+            world.add_component(e, MeshRenderer::new());
+            world.spawn_bundle(crate::bundles::DirectionalLightBundle::default());
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.0, 3.0, 0.0),
+                yaw: -std::f32::consts::FRAC_PI_2,
+                pitch: -1.2,
+                primary: true,
+                ..Default::default()
+            });
+            let frame = render_world(&mut renderer, &mut world).await;
+            let luma = |x: usize, y: usize| {
+                let p = &frame[(y * 128 + x) * 4..];
+                (p[0] as i32 + p[1] as i32 + p[2] as i32) / 3
+            };
+            let mut n = 0;
+            for y in 64..128 {
+                for x in 0..127 {
+                    if (luma(x, y) - luma(x + 1, y)).abs() > 12 {
+                        n += 1;
+                    }
+                }
+            }
+            n
+        }
+        pollster::block_on(async {
+            let plane = edges(false).await;
+            let grid = edges(true).await;
+            // Measured: 0 edges for the PBR plane, 166 for the grid. Without the forward branch the
+            // grid falls to the unlit pipeline and reads as a plane again.
+            assert!(plane < 20, "a plain plane has no lines: {plane}");
+            assert!(grid > plane + 80, "the grid draws its lines: {plane} → {grid}");
+        });
+    }
+
     /// `bloom_radius` and `bloom_iterations` widen the halo. A small, very bright cube (about
     /// 12 px across) in a dark scene; the halo is the mean brightness of a ring 8–24 px from its
     /// centre. The default blur's taps are one full-frame texel apart, so its halo barely leaves

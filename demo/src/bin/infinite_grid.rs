@@ -2,7 +2,15 @@
 //!
 //! Editör benzeri uygulamaların zemini: ufka kadar giden, ölçek duygusu veren bir ızgara.
 //!
-//! ## Motorda ızgara **var**, ama oyun yolu onu çizmiyor
+//! ## Güncelleme (2026-11-02): oyun yolu ızgarayı artık çiziyor
+//!
+//! `route()` `Grid`'i artık ileri yola, `grid.wgsl`'e yönlendiriyor (`instance_flag: 1.0`,
+//! `skips_deferred`), ve oyunun ileri geçişi onu `grid_pipeline` ile çiziyor — editördeki gibi
+//! çizgiler, düz bir düzlem değil. Test: `a_grid_material_draws_a_grid_in_the_game` (alt yarıda
+//! 0 kenar düz düzlem için, 166 ızgara için). **G** ile motorun ızgarası artık çizgileriyle
+//! görünür; aşağıdaki ölçüm düzeltmeden önceki kayıt.
+//!
+//! ## Ölçüm (düzeltmeden önce): motorda ızgara **var**, ama oyun yolu onu çizmiyordu
 //!
 //! Bu demonun asıl bulduğu şey bu, ve uydurma değil — motorun kendi `routing.rs`'i yazıyor:
 //!
@@ -149,7 +157,7 @@ fn main() {
                         }
                     ));
                     ui.separator();
-                    ui.label("grid_pipeline motorda var — ama onu yalnız editör çağırıyor");
+                    ui.label("grid_pipeline iki yolda da çiziliyor (2026-11-02'den beri)");
                     ui.label("gizleme = IsHidden (tam gizler, kalıtımlı)");
                     ui.separator();
                     ui.label("P — gizle/göster · G — kaynağı değiştir");

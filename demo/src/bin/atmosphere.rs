@@ -3,7 +3,15 @@
 //! Sahnenin üstündeki gökyüzü ve ondan gelen dolaylı ışık. İkisi aynı fiziksel şeyin iki yüzü:
 //! gökyüzü ne renkse, gölgede kalan yüzeylere düşen ortam ışığı da o renk olmalı.
 //!
-//! ## Ölçülen: gökyüzü küpü **hiç çizilmiyor** — ve sebebini bulamadım
+//! ## Güncelleme (2026-11-02): gökyüzü küpü artık çiziliyor
+//!
+//! Aşağıdaki ölçüm bugün **tekrarlanmıyor**: aynı karşılaştırma (kare 90, `GIZMO_ATMO_NOSKY=1`
+//! ile ve onsuz) **10066 farklı piksel** veriyor, hepsi gökyüzü — duvarın kenarlarında
+//! `sky.wgsl`'in açık mavisi, küp yokken ertelenmiş çevre teriminin turuncusu. Sebep yine
+//! adlandırılmadı: arada bir değişiklik bunu bilmeden düzeltmiş. Motor tarafında
+//! `a_skybox_draws_in_the_game_path` testi artık bunu sabitliyor. Kayıt olarak eski hâli:
+//!
+//! ## Ölçülen (2026-08-23): gökyüzü küpü **hiç çizilmiyordu** — ve sebebini bulamadım
 //!
 //! Demo bir gökyüzü küpü kurmakla başladı; kurmayınca kare hiç değişmedi.
 //!
