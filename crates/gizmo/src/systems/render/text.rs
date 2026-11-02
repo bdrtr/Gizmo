@@ -236,7 +236,10 @@ pub fn typewriter_system(world: &mut World, dt: f32) {
             .iter()
             .filter_map(|(id, _)| {
                 let t = texts.get(id)?;
-                let s = text_input_display(world, id).or_else(|| localized_display(world, id)).unwrap_or_else(|| t.content.clone());
+                let s = text_input_display(world, id)
+                    .or_else(|| dropdown_display(world, id))
+                    .or_else(|| localized_display(world, id))
+                    .unwrap_or_else(|| t.content.clone());
                 Some((id, s))
             })
             .collect()
@@ -266,6 +269,55 @@ fn localized_display(world: &World, entity: u32) -> Option<String> {
     let label = world.borrow::<crate::app::locale::LocalizedText>().get(entity).cloned()?;
     let locale = world.get_resource::<crate::app::locale::Locale>()?;
     Some(label.resolve(&locale))
+}
+
+/// What a [`Dropdown`](crate::ui::Dropdown) on `entity` shows on its button: the selected option
+/// and a down-arrow — or `None` without one.
+#[cfg(feature = "ui")]
+fn dropdown_display(world: &World, entity: u32) -> Option<String> {
+    let d = world.borrow::<crate::ui::Dropdown>().get(entity).cloned()?;
+    Some(format!("{}  ▾", d.selected_option().unwrap_or("")))
+}
+
+#[cfg(not(feature = "ui"))]
+fn dropdown_display(_world: &World, _entity: u32) -> Option<String> {
+    None
+}
+
+/// Every open dropdown's rows: `(entity, [(top-left, size, colour, label)])`.
+#[cfg(feature = "ui")]
+fn dropdown_lists(world: &World) -> Vec<(u32, Vec<(Vec2, Vec2, Vec4, String)>)> {
+    let nodes = world.borrow::<crate::ui::Node>();
+    world
+        .borrow::<crate::ui::Dropdown>()
+        .iter()
+        .filter(|(_, d)| d.is_open())
+        .filter_map(|(id, d)| {
+            let node = nodes.get(id)?;
+            let rows = d
+                .options
+                .iter()
+                .enumerate()
+                .map(|(i, label)| {
+                    let (at, size) = d.option_rect(node, i);
+                    let colour = if d.hovered() == Some(i) {
+                        Vec4::new(0.32, 0.38, 0.5, 0.98)
+                    } else if i == d.selected {
+                        Vec4::new(0.2, 0.32, 0.52, 0.98)
+                    } else {
+                        Vec4::new(0.12, 0.13, 0.17, 0.98)
+                    };
+                    (at, size, colour, label.clone())
+                })
+                .collect();
+            Some((id, rows))
+        })
+        .collect()
+}
+
+#[cfg(not(feature = "ui"))]
+fn dropdown_lists(_world: &World) -> Vec<(u32, Vec<(Vec2, Vec2, Vec4, String)>)> {
+    Vec::new()
 }
 
 /// The overlay layer `entity` is drawn on — its `ZIndex`, inherited through its parents.
@@ -377,7 +429,9 @@ pub fn record_text(
         // `LocalizedText` draws the current language's string (the placeholder too).
         // A `Typewriter` then shows only as much of that as it has typed.
         let field;
-        let shown = text_input_display(world, id).or_else(|| localized_display(world, id));
+        let shown = text_input_display(world, id)
+            .or_else(|| dropdown_display(world, id))
+            .or_else(|| localized_display(world, id));
         let shown = typed_display(world, id, shown.as_deref().unwrap_or(&item.content)).or(shown);
         let item = match shown {
             Some(shown) => {
@@ -391,6 +445,21 @@ pub fn record_text(
             None => item,
         };
         text.queue_clipped(queue, item, origin, anchor, screen, clip);
+    }
+    // Open dropdown lists, above every UI layer (under the screen fade): a row per option, the
+    // hovered one lighter and the selected one marked, labelled in the button's own `Text` style.
+    for (id, rows) in dropdown_lists(world) {
+        let Some(style) = texts.get(id) else { continue };
+        text.set_layer(i32::MAX - 1);
+        for (at, size, colour, _) in &rows {
+            text.queue_rect_clipped(*at, *size, *colour, screen, None);
+        }
+        for (at, size, _, label) in rows {
+            let mut item = style.clone();
+            item.content = label;
+            let anchor = at + size * item.anchor.factors();
+            text.queue_clipped(queue, &item, Vec3::ZERO, Some(anchor), screen, None);
+        }
     }
     // The screen fade over everything: one rect the size of the target on the highest layer.
     if let Some(color) = fade {
@@ -506,7 +575,9 @@ mod clip_tests {
             .filter(|c| !c.is_whitespace())
             .collect();
         assert!(
-            code.contains(concat!("text_input_display(world,id)", ".or_else(||localized_display(world,id))")),
+            // `let shown =` is record_text's own line — the typewriter has the same chain, so a
+            // looser match would find that one and pass with the draw loop's removed.
+            code.contains(concat!("letshown=text_input_display(world,id)", ".or_else(||dropdown_display(world,id))", ".or_else(||localized_display(world,id));")),
             "record_text no longer draws localized labels"
         );
     }

@@ -620,6 +620,119 @@ impl Toggle {
     }
 }
 
+/// A select list: a button showing its [`selected`](Self::selected) option, which opens a list of
+/// all of them below itself — resolution, quality, difficulty. Put it on a
+/// [`ButtonBundle`](crate::ButtonBundle) with a `Text` (whose font, size and colour the options
+/// use).
+///
+/// - A click opens it; a press on an option picks it and closes the list; a press anywhere else
+///   closes it. While open, the list takes the pointer: nothing under it is hovered or pressed.
+/// - With the [`UiNavigation`](crate::UiNavigation) focus, ←/→ and the d-pad step through the
+///   options without opening it, as they step a [`Slider`].
+/// - Under `gizmo-engine` the label shows the selected option, and the open list is drawn above
+///   every UI layer.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct Dropdown {
+    /// The options, in order.
+    pub options: Vec<String>,
+    /// Which one is selected (clamped into range when used).
+    pub selected: usize,
+    open: bool,
+    hovered: Option<usize>,
+    changed: bool,
+}
+
+impl Dropdown {
+    /// A list of `options` with `selected` chosen.
+    #[must_use]
+    pub fn new(options: impl IntoIterator<Item = impl Into<String>>, selected: usize) -> Self {
+        Self { options: options.into_iter().map(Into::into).collect(), selected, ..Default::default() }
+    }
+
+    /// The selected option's text, `None` with no options.
+    #[must_use]
+    pub fn selected_option(&self) -> Option<&str> {
+        let i = self.selected.min(self.options.len().checked_sub(1)?);
+        self.options.get(i).map(String::as_str)
+    }
+
+    /// Whether its list is open.
+    #[must_use]
+    pub fn is_open(&self) -> bool {
+        self.open
+    }
+
+    /// Opens or closes its list from code — closing it on Escape, opening it for a tutorial.
+    pub fn set_open(&mut self, open: bool) {
+        self.open = open;
+        if !open {
+            self.hovered = None;
+        }
+    }
+
+    /// The option under the pointer while open.
+    #[must_use]
+    pub fn hovered(&self) -> Option<usize> {
+        self.hovered
+    }
+
+    /// The selection changed this frame.
+    #[must_use]
+    pub fn just_changed(&self) -> bool {
+        self.changed
+    }
+
+    /// Where option `i` is drawn while open: a row the button's size, below it.
+    #[must_use]
+    pub fn option_rect(&self, node: &Node, i: usize) -> (Vec2, Vec2) {
+        (node.position + Vec2::new(0.0, node.size.y * (i + 1) as f32), node.size)
+    }
+
+    /// The option at `point` while open, if any.
+    #[must_use]
+    pub fn option_at(&self, node: &Node, point: Vec2) -> Option<usize> {
+        if !self.open {
+            return None;
+        }
+        (0..self.options.len()).find(|&i| {
+            let (at, size) = self.option_rect(node, i);
+            point.x >= at.x && point.y >= at.y && point.x < at.x + size.x && point.y < at.y + size.y
+        })
+    }
+
+    /// One frame: `clicked` its button's click, `press` a press that began this frame (and where),
+    /// `step` ←/→ while focused (−1, 0, 1).
+    pub(crate) fn step_frame(&mut self, clicked: bool, press: Option<Vec2>, on_button: bool, pointer: Vec2, node: &Node, step: i32) {
+        self.changed = false;
+        let before = self.selected;
+        self.hovered = self.option_at(node, pointer);
+        if self.open {
+            if let Some(p) = press {
+                match self.option_at(node, p) {
+                    Some(i) => {
+                        self.selected = i;
+                        self.open = false;
+                    }
+                    // A press on the button itself is left to its click, which closes the list.
+                    None if !on_button => self.open = false,
+                    None => {}
+                }
+            }
+        }
+        if clicked {
+            self.open = !self.open;
+        }
+        let n = self.options.len();
+        if step != 0 && n > 0 && !self.open {
+            self.selected = (self.selected.min(n - 1) as i32 + step).rem_euclid(n as i32) as usize;
+        }
+        if !self.open {
+            self.hovered = None;
+        }
+        self.changed = self.selected != before;
+    }
+}
+
 /// Fill color of a UI element, stored as a linear RGBA vector with each
 /// channel in the `0.0..=1.0` range.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -767,7 +880,7 @@ impl Scroll {
 /// Marker component for the root of a UI tree.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UiRoot;
-gizmo_core::impl_component!(Style, Node, Interaction, Clicked, BackgroundColor, UiRoot, ClipContent, ZIndex, Scroll, Drag, Slider, ProgressBar, Toggle);
+gizmo_core::impl_component!(Style, Node, Interaction, Clicked, BackgroundColor, UiRoot, ClipContent, ZIndex, Scroll, Drag, Slider, ProgressBar, Toggle, Dropdown);
 
 #[cfg(test)]
 mod tests {

@@ -1181,6 +1181,17 @@ mouse, the keyboard and a gamepad. Three of its four buttons were impossible:
   drag past the box, the clamp, the release and the strip; dropping the strip rule, the grab
   offset or the capture each fails it.
 
+- ~~**No select list.**~~ **Closed 2026-11-03.** A quality or difficulty setting was a button
+  cycling its label. `gizmo::ui::Dropdown { options, selected }` on a `ButtonBundle`: a click opens
+  a list below it, drawn by the engine above every UI layer in the button's own text style; a press
+  on an option picks it and closes the list, a press elsewhere closes it unchanged; **while open
+  the list takes the pointer** — nothing under it is hovered, pressed or clicked, and
+  `pointer_over_ui` counts it; with the navigation focus ←/→ and the d-pad step through the
+  options (they do not move the focus off it). `just_changed`, `set_open`. Tested on open, hover,
+  pick, the button underneath, close-without-change and the keyboard; letting the pointer through
+  the open list, or letting ←/→ move the focus, fails it. `menu` has a difficulty list whose options
+  follow the language.
+
 ### C16. Every game wrote the same three lines (2026-11-02)
 
 ~~**No timer.**~~ **Closed 2026-11-02.** `balon`, `kale` and `yikim_ustasi` each counted down by

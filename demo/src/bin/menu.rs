@@ -76,6 +76,7 @@ enum Action {
     Start,
     Fullscreen,
     Volume,
+    Difficulty,
     Language,
     Quit,
 }
@@ -86,6 +87,7 @@ const STRINGS_TR: &str = r#"{
   "menu": {
     "start": "Başla", "quit": "Çıkış", "name": "İsminizi yazın…",
     "fullscreen": "Tam ekran",
+    "easy": "Zorluk: Kolay", "normal": "Zorluk: Orta", "hard": "Zorluk: Zor",
     "volume": "Ses: %{v}", "language": "Dil: Türkçe",
     "hello": "Merhaba, {name}!", "started": "Oyun burada başlardı — müzik değişti.",
     "back": "Menüye dönüldü.",
@@ -96,6 +98,7 @@ const STRINGS_EN: &str = r#"{
   "menu": {
     "start": "Start", "quit": "Quit", "name": "Type your name…",
     "fullscreen": "Fullscreen",
+    "easy": "Difficulty: Easy", "normal": "Difficulty: Normal", "hard": "Difficulty: Hard",
     "volume": "Volume: {v}%", "language": "Language: English",
     "hello": "Hello, {name}!", "started": "The game would start here — the music changed.",
     "back": "Back to the menu.",
@@ -112,6 +115,8 @@ struct Menu {
     banner: u32,
     /// Ses kaydırıcısı (`Slider` taşıyan düğme).
     volume_button: u32,
+    /// Zorluk listesi (`Dropdown` taşıyan düğme).
+    difficulty: u32,
     /// Çalan müzik ve hangisi olduğu (menü mü, "oyun" mu).
     music: Option<u64>,
     in_game: bool,
@@ -225,11 +230,13 @@ fn main() {
 
             let mut first = None;
             let mut slider = None;
+            let mut difficulty = None;
             // Etiketler anahtar: ekranda `Locale`'in o anki dilindeki dizge çiziliyor.
             for (action, label) in [
                 (Action::Start, LocalizedText::new("menu.start")),
                 (Action::Fullscreen, LocalizedText::new("menu.fullscreen")),
                 (Action::Volume, volume_label(volume)),
+                (Action::Difficulty, LocalizedText::new("menu.normal")),
                 (Action::Language, LocalizedText::new("menu.language")),
                 (Action::Quit, LocalizedText::new("menu.quit")),
             ] {
@@ -246,6 +253,21 @@ fn main() {
                     // Açık mı kapalı mı, solundaki onay kutusu söylüyor (`Toggle`); her tık onu da
                     // çeviriyor, aşağıdaki işleyici pencereyi.
                     scene.world.add_component(button, gizmo::ui::Toggle::new(mode == WindowMode::Fullscreen));
+                }
+                if action == Action::Difficulty {
+                    // Bir açılır liste: tıklayınca altında seçenekler açılıyor; odaktayken ←/→
+                    // seçenekler arasında dönüyor. Seçenekler dilin dizgeleri — dil değişince
+                    // yenileniyor (`difficulty_options`). Etiketi seçili seçenek, `LocalizedText`
+                    // değil.
+                    scene.world.remove_component::<LocalizedText>(button);
+                    let chosen = save.get::<usize>("difficulty").unwrap_or(1).min(2);
+                    let options = difficulty_options(scene.world.get_resource::<Locale>().as_deref());
+                    let mut dropdown = gizmo::ui::Dropdown::new(options, chosen);
+                    if std::env::var_os("MENU_LISTE_ACIK").is_some() {
+                        dropdown.set_open(true); // ekran görüntüsü için
+                    }
+                    scene.world.add_component(button, dropdown);
+                    difficulty = Some(button.id());
                 }
                 if action == Action::Volume {
                     // Sürüklenen ya da odaktayken ←/→ ile adım adım değişen bir kaydırıcı; dolgusunu
@@ -286,7 +308,8 @@ fn main() {
                 scene.world.insert_resource(audio);
             }
             let volume_button = slider.expect("the volume button was built");
-            scene.world.insert_resource(Menu { volume, banner, volume_button, music, in_game: false });
+            let difficulty = difficulty.expect("the difficulty list was built");
+            scene.world.insert_resource(Menu { volume, banner, volume_button, difficulty, music, in_game: false });
         })
         .set_update(update)
         .run()
@@ -330,6 +353,16 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, _dt: f32, _input: &I
         }
     }
 
+    // Zorluk: seçim değiştiyse kaydet.
+    let picked = world
+        .borrow::<gizmo::ui::Dropdown>()
+        .get(menu.difficulty)
+        .filter(|d| d.just_changed())
+        .map(|d| d.selected);
+    if let Some(i) = picked {
+        remember("difficulty", &i);
+    }
+
     let clicked: Vec<(u32, Action)> = {
         let clicks = world.borrow::<Clicked>();
         let buttons = world.borrow::<MenuButton>();
@@ -356,14 +389,21 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, _dt: f32, _input: &I
                 remember("fullscreen", &(next == WindowMode::Fullscreen));
                 None
             }
-            // Kaydırıcının işi: sürükleme ya da odaktayken ←/→.
-            Action::Volume => None,
+            // Kaydırıcının ve listenin işi: sürükleme, açılan liste, ya da odaktayken ←/→.
+            Action::Volume | Action::Difficulty => None,
             // Dili çevir: her `LocalizedText` bir sonraki karede yeni dilde.
             Action::Language => {
-                if let Some(mut locale) = world.get_resource_mut::<Locale>() {
+                let options = world.get_resource_mut::<Locale>().map(|mut locale| {
                     let next = if locale.language() == "tr" { "en" } else { "tr" };
                     locale.set_language(next);
                     remember("language", &next);
+                    difficulty_options(Some(&locale))
+                });
+                // Listenin seçenekleri de yeni dilde.
+                if let Some(options) = options {
+                    if let Some(mut d) = world.borrow_mut::<gizmo::ui::Dropdown>().get_mut(menu.difficulty) {
+                        d.options = options;
+                    }
                 }
                 None
             }
@@ -382,6 +422,14 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, _dt: f32, _input: &I
         }
     }
     world.insert_resource(menu);
+}
+
+/// Zorluğun seçenekleri, o anki dilde.
+fn difficulty_options(locale: Option<&Locale>) -> Vec<String> {
+    ["menu.easy", "menu.normal", "menu.hard"]
+        .iter()
+        .map(|k| locale.map_or_else(|| (*k).to_string(), |l| l.get(k).to_string()))
+        .collect()
 }
 
 /// Sesi uygular: ana kazanç ve etiket.

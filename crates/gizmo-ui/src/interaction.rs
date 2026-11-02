@@ -1,7 +1,7 @@
 use gizmo_core::query::{Query, Mut};
 use gizmo_core::system::{Res, ResMut};
 use gizmo_core::input::{GamepadButton, Input};
-use crate::components::{Clicked, ClipContent, Drag, Interaction, Node, Scroll, Slider, Toggle, ZIndex};
+use crate::components::{Clicked, ClipContent, Drag, Dropdown, Interaction, Node, Scroll, Slider, Toggle, ZIndex};
 use gizmo_core::component::Parent;
 
 /// The layer `entity` is on: its own [`ZIndex`], or the nearest one up its parents, or `0`.
@@ -104,6 +104,14 @@ pub fn pointer_over_ui(world: &gizmo_core::World) -> bool {
     let Some(input) = world.get_resource::<Input>() else { return false };
     let p = input.mouse_position();
     world.borrow::<Node>().iter().any(|(_, n)| point_in_node(p, n))
+        || {
+            let nodes = world.borrow::<Node>();
+            let point = gizmo_math::Vec2::new(p.0, p.1);
+            world
+                .borrow::<Dropdown>()
+                .iter()
+                .any(|(id, d)| nodes.get(id).is_some_and(|n| d.option_at(n, point).is_some()))
+        }
 }
 
 /// System that updates each element's [`Interaction`] state from the current
@@ -116,6 +124,7 @@ pub fn ui_interaction_system(
     fields: Query<&crate::text_input::TextInput>,
     clippers: Query<(&Node, Option<&ClipContent>, Option<&Scroll>)>,
     sliders: Query<&Slider>,
+    dropdowns: Query<(&Node, &Dropdown)>,
 ) {
     let mouse_pos = input.mouse_position();
     let is_clicked = input.is_mouse_button_pressed(0); // 0 is left click
@@ -149,9 +158,12 @@ pub fn ui_interaction_system(
         }
         true
     };
+    // An open dropdown's list takes the pointer: nothing under it is hovered or pressed.
+    let pointer = gizmo_math::Vec2::new(mouse_pos.0, mouse_pos.1);
+    let over_open_list = dropdowns.iter().any(|(_, (n, d))| d.option_at(n, pointer).is_some());
     let under: Vec<(u32, i32)> = interactions
         .iter_mut()
-        .filter(|(id, (n, _, _))| point_in_node(mouse_pos, n) && visible(*id))
+        .filter(|(id, (n, _, _))| !over_open_list && point_in_node(mouse_pos, n) && visible(*id))
         .map(|(id, _)| (id, layer_of(id)))
         .collect();
     let top = under.iter().map(|(_, l)| *l).max();
@@ -163,7 +175,9 @@ pub fn ui_interaction_system(
     let typing = fields.iter().any(|(_, f)| f.is_focused());
     let (focused, activate) = match navigation {
         Some(mut nav) if nav.enabled && !typing => {
-            navigate(&input, &mut nav, &mut interactions, &front, &|id| sliders.get(id).is_some())
+            navigate(&input, &mut nav, &mut interactions, &front, &|id| {
+                sliders.get(id).is_some() || dropdowns.get(id).is_some()
+            })
         }
         Some(mut nav) if nav.enabled => {
             nav.moved_by_keys = false;
@@ -293,6 +307,34 @@ pub fn ui_slider_system(
         next.step_frame(pressed_here, held, pointer, (node.position.x, node.size.x), keys_here);
         if next != *slider {
             *slider = next;
+        }
+    }
+}
+
+/// Opens, closes and picks for every [`Dropdown`] — see its docs. Runs after
+/// `ui_interaction_system`, whose click it reads.
+pub fn ui_dropdown_system(
+    input: Res<Input>,
+    navigation: Option<Res<UiNavigation>>,
+    mut dropdowns: Query<(&Node, &Clicked, Mut<Dropdown>)>,
+) {
+    let (x, y) = input.mouse_position();
+    let pointer = gizmo_math::Vec2::new(x, y);
+    let press = input.is_mouse_button_just_pressed(0).then_some(pointer);
+    let focused = navigation
+        .as_ref()
+        .filter(|n| n.enabled && !n.moved_this_frame())
+        .and_then(|n| n.focused());
+    let pad = input.gamepad();
+    let pad_just = |b: GamepadButton| pad.is_some_and(|p| p.is_just_pressed(b));
+    let keys = i32::from(input.is_key_just_pressed(key("right")) || pad_just(GamepadButton::DPadRight))
+        - i32::from(input.is_key_just_pressed(key("left")) || pad_just(GamepadButton::DPadLeft));
+    for (id, (node, clicked, mut dd)) in dropdowns.iter_mut() {
+        let mut next = dd.clone();
+        let step = if focused == Some(id) { keys } else { 0 };
+        next.step_frame(clicked.0, press, point_in_node((x, y), node), pointer, node, step);
+        if next != *dd {
+            *dd = next;
         }
     }
 }
@@ -810,6 +852,66 @@ mod tests {
         // A press on the item itself, left of the strip, is the item's.
         run(&mut world, (50.0, 10.0), true);
         assert_eq!(world.borrow::<Interaction>().get(item.id()), Some(&Interaction::Pressed));
+    }
+
+    /// A dropdown opens on a click, takes the pointer while open (the button under its list is
+    /// neither hovered nor clicked), picks on a press on an option, closes without a change on a
+    /// press elsewhere, and steps with ←/→ while focused.
+    #[test]
+    fn a_dropdown_opens_picks_and_owns_the_pointer_while_open() {
+        use gizmo_core::system::{IntoSystemConfig, Schedule};
+        let mut world = gizmo_core::World::new();
+        world.insert_resource(Input::new());
+        world.insert_resource(UiNavigation { enabled: true, ..Default::default() });
+        let dd = world.spawn_bundle(crate::ButtonBundle { node: node((0.0, 0.0), (100.0, 30.0)), ..Default::default() });
+        world.add_component(dd, Dropdown::new(["Low", "Medium", "High"], 0));
+        let below = world.spawn_bundle(crate::ButtonBundle { node: node((0.0, 40.0), (100.0, 30.0)), ..Default::default() });
+        let run = |w: &mut gizmo_core::World, at: (f32, f32), down: bool, key_name: Option<&str>| {
+            {
+                let mut input = w.get_resource_mut::<Input>().unwrap();
+                input.begin_frame();
+                input.set_mouse_position(at.0, at.1);
+                if down { input.on_mouse_button_pressed(0) } else { input.on_mouse_button_released(0) }
+                if let Some(k) = key_name { input.on_key_pressed(key(k)) }
+            }
+            let mut s = Schedule::new();
+            s.add_di_system(ui_interaction_system.into_config().label("i"));
+            s.add_di_system(ui_dropdown_system.into_config().after("i"));
+            s.build();
+            s.run(w, 0.0);
+            if let Some(k) = key_name {
+                w.get_resource_mut::<Input>().unwrap().on_key_released(key(k));
+            }
+        };
+        let get = |w: &gizmo_core::World| w.borrow::<Dropdown>().get(dd.id()).unwrap().clone();
+
+        run(&mut world, (50.0, 15.0), true, None);
+        run(&mut world, (50.0, 15.0), false, None);
+        assert!(get(&world).is_open(), "a click opens it");
+        run(&mut world, (50.0, 45.0), false, None);
+        assert_eq!(get(&world).hovered(), Some(0));
+        assert_eq!(world.borrow::<Interaction>().get(below.id()), Some(&Interaction::None), "the list let the pointer through");
+        run(&mut world, (50.0, 75.0), true, None); // on "Medium", over nothing else... and on `below`'s edge row
+        let d = get(&world);
+        assert!(!d.is_open() && d.selected == 1 && d.just_changed() && d.selected_option() == Some("Medium"));
+        run(&mut world, (50.0, 75.0), false, None);
+        assert!(!world.borrow::<Clicked>().get(below.id()).unwrap().0, "picking an option clicked what was under it");
+
+        // Open, then press elsewhere: closed, unchanged.
+        run(&mut world, (50.0, 15.0), true, None);
+        run(&mut world, (50.0, 15.0), false, None);
+        run(&mut world, (500.0, 500.0), true, None);
+        let d = get(&world);
+        assert!(!d.is_open() && d.selected == 1 && !d.just_changed());
+        run(&mut world, (500.0, 500.0), false, None);
+
+        // The keyboard steps it while focused, wrapping.
+        world.get_resource_mut::<UiNavigation>().unwrap().focus(Some(dd.id()));
+        run(&mut world, (500.0, 500.0), false, Some("right"));
+        assert_eq!(get(&world).selected, 2);
+        run(&mut world, (500.0, 500.0), false, Some("right"));
+        assert_eq!(get(&world).selected, 0, "wraps");
+        assert_eq!(world.get_resource::<UiNavigation>().unwrap().focused(), Some(dd.id()), "→ moved the focus off it");
     }
 
     /// Pressed on, dragged off, released: cancelled, like a desktop button.
