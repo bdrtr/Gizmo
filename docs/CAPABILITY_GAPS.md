@@ -893,6 +893,15 @@ on the driven state machine with `DespawnOnExit`. It works on the first build; w
   an ordinary value, so a game keeps it in a resource. The xorshifts are gone. The first draft
   also had `f64` ranges, and every converted call site failed to compile: two float impls make
   `range(-5.0..5.0)` fall back to `f64`. `f64` ranges were dropped and a test pins the inference.
+- ~~**No way to colour the whole screen.**~~ **Closed 2026-11-02.** A hit flash or a fade to black
+  between levels meant a window-sized UI node faded by hand — `ColorTween` drives sprites, text and
+  materials but not a UI background, and a node sits on one layer, not above all of them.
+  `gizmo::renderer::screen_fade::ScreenFade` (a resource): `fade_out` / `fade_in` / `fade_to`,
+  `flash(color, alpha, secs)`, `just_finished` for the frame to swap a level behind black. Both
+  draw paths advance it on the **real** frame time (a fade into a pause menu does not freeze) and
+  paint it as one rect on the highest overlay layer. GPU-tested over a red box on `ZIndex(1000)`:
+  covered at full alpha, unchanged when clear, half-way at half; painting it on layer 0 or not at
+  all fails it. `kristal_avcisi` flashes red when the player is caught.
 
 ### C11. The third game: physics at the centre (2026-11-02, `lobut`)
 

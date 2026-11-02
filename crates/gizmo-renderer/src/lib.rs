@@ -176,6 +176,8 @@ pub mod taa;
 pub mod text;
 /// Sprites: loaded images and the 2D quad pass.
 pub mod sprite;
+/// [`ScreenFade`](screen_fade::ScreenFade): a colour over the whole picture — fades and flashes.
+pub mod screen_fade;
 /// The post-tonemap overlay: screen sprites, UI backgrounds and screen text on the final image.
 mod overlay;
 #[cfg(test)]

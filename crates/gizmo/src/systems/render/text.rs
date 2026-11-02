@@ -147,7 +147,10 @@ pub fn record_text(
 ) {
     let texts = world.borrow::<Text>();
     let boxes = ui_boxes(world);
-    if texts.iter().next().is_none() && boxes.iter().all(|(_, _, _, bg)| bg.is_none()) {
+    let fade = world
+        .get_resource::<crate::renderer::screen_fade::ScreenFade>()
+        .and_then(|f| f.overlay());
+    if texts.iter().next().is_none() && boxes.iter().all(|(_, _, _, bg)| bg.is_none()) && fade.is_none() {
         // Nothing to draw — but the overlay draws from what was last uploaded, so forget it, or
         // a HUD removed this frame would stay on screen.
         if let Some(text) = renderer.text.as_mut() {
@@ -215,6 +218,11 @@ pub fn record_text(
             None => item,
         };
         text.queue_clipped(queue, item, origin, anchor, screen, clip);
+    }
+    // The screen fade over everything: one rect the size of the target on the highest layer.
+    if let Some(color) = fade {
+        text.set_layer(i32::MAX);
+        text.queue_rect_clipped(Vec2::ZERO, screen, color, screen, None);
     }
     text.upload(device, queue);
     // Screen text and UI backgrounds are drawn later, onto the final image, by the overlay in

@@ -54,6 +54,11 @@
 //! - **En iyi skor kapanınca kayboluyordu.** Oyunun bir oturumdan ötekine bir şey saklama yolu
 //!   yoktu. **Kapatıldı:** `gizmo::app::save::SaveData` — en iyi skor
 //!   `<veri dizini>/kristal_avcisi/save.json`'da (tarayıcıda `localStorage`).
+//! - **Ekranı kızartmanın yolu yoktu.** Yakalanınca ekranın kısa bir an kırmızı parlaması için
+//!   pencere boyu bir UI düğümü kurup onu elle soldurmak gerekiyordu — `ColorTween` UI zeminini
+//!   sürmüyor, bir düğüm de her katmanın üstünde değil, bir katmanda duruyor. **Kapatıldı:**
+//!   `ScreenFade` kaynağı (`flash`, `fade_out`/`fade_in`, `just_finished`); iki çizim yolu da gerçek
+//!   kare süresiyle ilerletip her şeyin üstüne çiziyor.
 //! - **Fontsuz metin.** Repo font taşımıyor; `kule_yikici` gibi sistem yolları deneniyor.
 //!
 //! ## Ortam değişkenleri
@@ -206,6 +211,7 @@ fn main() {
             // En iyi skor bir önceki oturumdan.
             let best = SaveData::open("kristal_avcisi").get("best").unwrap_or(0);
             scene.world.insert_resource(Run { score: 0, lives: 3, time_left: ROUND_SECONDS, grace: 0.0, best });
+            scene.world.insert_resource(gizmo::renderer::screen_fade::ScreenFade::default());
             scene.world.insert_resource(Rng::new(0x9E37_79B9));
             // Sesler dosyadan değil sayılardan. Cihaz yoksa kaynak hiç konmuyor, `play` susuyor.
             if let Ok(mut audio) = AudioManager::new() {
@@ -414,6 +420,7 @@ fn get_caught(
     mut state: ResMut<State<Screen>>,
     time: Res<Time>,
     mut audio: Option<ResMut<AudioManager>>,
+    mut fade: Option<ResMut<gizmo::renderer::screen_fade::ScreenFade>>,
 ) {
     if *state.get() != Screen::Playing {
         return;
@@ -424,6 +431,9 @@ fn get_caught(
     if caught && run.grace == 0.0 {
         run.lives = run.lives.saturating_sub(1);
         run.grace = 1.5;
+        if let Some(fade) = fade.as_deref_mut() {
+            fade.flash(Vec3::new(0.9, 0.05, 0.05), 0.45, 0.4);
+        }
         if run.lives > 0 {
             play(audio.as_deref_mut(), "yakalandi");
         }

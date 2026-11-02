@@ -855,6 +855,7 @@ fn both_draw_paths_run_the_same_per_frame_drivers() {
             "tween_system(",
             "color_tween_system(",
             "apply_camera_shake(",
+            "screen_fade_system(",
             "undo_camera_shake(",
         ] {
             assert!(

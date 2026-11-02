@@ -114,6 +114,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - **`MeshSource("cylinder")` and `"cone"`**, sized like their colliders, and
     `AssetManager::PRIMITIVE_MESH_KEYS` as the one list of primitive keys (the studio's
     missing-asset check now uses it instead of its own copy).
+- **`ScreenFade`** (`gizmo::renderer::screen_fade`): a colour over the whole frame, above every
+  UI layer — `fade_out`/`fade_in` for scene changes, `flash` for hits, `just_finished` to swap a
+  level behind black. Advanced on the real frame time by both draw paths.
 - **Screen shake: `CameraShake`.** On a camera, `add(trauma)`; the shake is a smooth noise scaled
   by trauma² and wears off at `decay` per second. The draw path applies it to the frame being
   drawn and puts the camera back exactly afterwards, so game code, aim rays and the audio

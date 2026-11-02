@@ -526,6 +526,10 @@ fn prepare_frame(world: &mut World, renderer: &mut Renderer) {
     let tween_dt = world.get_resource::<gizmo_core::time::Time>().map(|t| t.dt()).unwrap_or(0.0);
     crate::renderer::tween::tween_system(world, tween_dt);
     crate::renderer::components::color_tween_system(world, tween_dt);
+    // The screen fade runs on the REAL frame time: a fade into a pause menu must not stop with
+    // the game it is covering.
+    let real_dt = world.get_resource::<gizmo_core::time::Time>().map(|t| t.raw_dt()).unwrap_or(0.0);
+    crate::renderer::screen_fade::screen_fade_system(world, real_dt);
 
     // Every renderable object needs an up-to-date `GlobalTransform` (the draw query
     // below requires it, and physics/gameplay only write the local `Transform`).
@@ -8926,6 +8930,51 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
                 blue_front[0] > blue_front[2],
                 "the same box is in front whichever has the higher ZIndex — layers are ignored ({red_front:?} vs {blue_front:?})"
             );
+        });
+    }
+
+    /// A `ScreenFade` covers the whole frame — over a UI box on a high layer too — and a clear
+    /// one changes nothing. Black at full alpha, the box's red at none, half-way in between.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    #[cfg(feature = "ui")]
+    fn a_screen_fade_covers_everything_including_the_ui() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        async fn centre(alpha: Option<f32>) -> [u8; 4] {
+            let mut renderer = crate::test_gpu::headless_renderer(64, 64).await;
+            renderer.taa = None;
+            let mut world = World::new();
+            world.spawn_bundle(CameraBundle { primary: true, ..Default::default() });
+            world.spawn_bundle((
+                crate::ui::Node { position: gizmo_math::Vec2::ZERO, size: gizmo_math::Vec2::splat(64.0) },
+                crate::ui::BackgroundColor(Vec4::new(1.0, 0.0, 0.0, 1.0)),
+                crate::ui::ZIndex(1000),
+            ));
+            if let Some(a) = alpha {
+                let mut fade = crate::renderer::screen_fade::ScreenFade::default();
+                fade.fade_to(a, 0.0);
+                world.insert_resource(fade);
+            }
+            let frame = render_world(&mut renderer, &mut world).await;
+            let i = (32 * 64 + 32) * 4;
+            [frame[i], frame[i + 1], frame[i + 2], frame[i + 3]]
+        }
+        pollster::block_on(async {
+            let red = |p: [u8; 4]| p[0].max(p[2]);
+            let none = centre(None).await;
+            let clear = centre(Some(0.0)).await;
+            let half = centre(Some(0.5)).await;
+            let full = centre(Some(1.0)).await;
+            assert!(red(none) > 200, "the box is not there: {none:?}");
+            assert_eq!(none, clear, "a clear fade changed the picture");
+            assert!(red(full) < 10, "a full fade left the box showing: {full:?}");
+            assert!(red(half) > 40 && red(half) < 200, "half a fade is not half: {half:?}");
         });
     }
 
