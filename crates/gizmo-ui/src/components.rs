@@ -373,6 +373,19 @@ pub enum Interaction {
 }
 
 
+/// Whether the element was **clicked** this frame — `Clicked(true)` for exactly the frame the
+/// primary button is released over it after being pressed on it, `false` otherwise.
+///
+/// [`Interaction`] is a state recomputed every frame, so "was it clicked" had to be derived by
+/// each game from the difference between two frames — `ui_layout.rs` said so in its header, and
+/// a build button in a game is the first thing that needs it. The rule is the one desktop buttons
+/// use: the click completes on release, and releasing **off** the element cancels it.
+///
+/// Part of [`ButtonBundle`](crate::ButtonBundle); an element without one simply has no click
+/// signal, and its `Interaction` works as before.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Clicked(pub bool);
+
 /// Fill color of a UI element, stored as a linear RGBA vector with each
 /// channel in the `0.0..=1.0` range.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -387,7 +400,7 @@ impl Default for BackgroundColor {
 /// Marker component for the root of a UI tree.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UiRoot;
-gizmo_core::impl_component!(Style, Node, Interaction, BackgroundColor, UiRoot);
+gizmo_core::impl_component!(Style, Node, Interaction, Clicked, BackgroundColor, UiRoot);
 
 #[cfg(test)]
 mod tests {

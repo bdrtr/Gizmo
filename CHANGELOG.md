@@ -107,6 +107,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - **`MeshSource("cylinder")` and `"cone"`**, sized like their colliders, and
     `AssetManager::PRIMITIVE_MESH_KEYS` as the one list of primitive keys (the studio's
     missing-asset check now uses it instead of its own copy).
+- **Optional components in queries: `Option<&T>` and `Option<Mut<T>>`.** Every entity the rest
+  of the query matches, `Some` where `T` is present. The access is declared regardless (an
+  optional writer serialises like a writer; `(Mut<T>, Option<&T>)` is the aliasing panic); sparse
+  storage is tested per row and refuses chunk iteration. Tested for table and sparse presence,
+  change marking, aliasing and the declared write; Miri-clean under the CI flags.
+- **UI clicks: `gizmo_ui::Clicked`, in `ButtonBundle`.** `true` for exactly the frame the primary
+  button is released over the element it was pressed on; released off it, the click is cancelled.
+  `Interaction` is a per-frame state and every game had to diff two frames to see a click. The
+  interaction system updates it through `Option<Mut<Clicked>>`, so a node without one works as
+  before. `ui_layout` counts clicks on its buttons. **`ButtonBundle` gained a field** — a literal
+  without `..Default::default()` needs `clicked: Clicked::default()`.
 - **Moving platforms carry the character standing on them.** `character_controller_system`
   moves each grounded character by its floor's `Velocity` at the contact point (`v + ω × r`)
   before the step, so a sideways platform takes its passenger along and a turntable carries one

@@ -1,7 +1,7 @@
 use gizmo_core::query::{Query, Mut};
 use gizmo_core::system::Res;
 use gizmo_core::input::Input;
-use crate::components::{Interaction, Node};
+use crate::components::{Clicked, Interaction, Node};
 
 /// Returns whether `point` lies within a node's bounding box.
 ///
@@ -16,17 +16,18 @@ fn point_in_node(point: (f32, f32), node: &Node) -> bool {
 }
 
 /// System that updates each element's [`Interaction`] state from the current
-/// mouse position and button state.
+/// mouse position and button state, and its [`Clicked`] signal where it has one.
 pub fn ui_interaction_system(
     input: Res<Input>,
-    mut interactions: Query<(&Node, Mut<Interaction>)>,
+    mut interactions: Query<(&Node, Mut<Interaction>, Option<Mut<Clicked>>)>,
 ) {
     let mouse_pos = input.mouse_position();
     let is_clicked = input.is_mouse_button_pressed(0); // 0 is left click
 
     // Note: This is a simplified check that doesn't account for z-index or hierarchy properly yet.
     // In a real UI system, we would need to walk the tree from front to back.
-    for (_, (node, mut interaction)) in interactions.iter_mut() {
+    for (_, (node, mut interaction, clicked)) in interactions.iter_mut() {
+        let was = *interaction;
         let is_hovered = point_in_node(mouse_pos, node);
 
         if is_hovered {
@@ -37,6 +38,15 @@ pub fn ui_interaction_system(
             }
         } else {
             *interaction = Interaction::None;
+        }
+
+        if let Some(mut clicked) = clicked {
+            // Released over the element it was pressed on. Released elsewhere, `was` is still
+            // `Pressed` but the new state is `None`: cancelled.
+            let now = was == Interaction::Pressed && *interaction == Interaction::Hovered;
+            if clicked.0 != now {
+                clicked.0 = now;
+            }
         }
     }
 }
@@ -50,6 +60,71 @@ mod tests {
         Node {
             position: Vec2::new(pos.0, pos.1),
             size: Vec2::new(size.0, size.1),
+        }
+    }
+
+    /// One frame of the real system over `world`, with the mouse at `at` and the primary button
+    /// `down` or not.
+    fn frame(world: &mut gizmo_core::World, at: (f32, f32), down: bool) {
+        use gizmo_core::system::{IntoSystemConfig, Schedule};
+        {
+            let mut input = world.get_resource_mut::<Input>().unwrap();
+            input.begin_frame();
+            input.set_mouse_position(at.0, at.1);
+            if down {
+                input.on_mouse_button_pressed(0);
+            } else {
+                input.on_mouse_button_released(0);
+            }
+        }
+        let mut s = Schedule::new();
+        s.add_di_system(ui_interaction_system.into_config());
+        s.build();
+        s.run(world, 0.0);
+    }
+
+    fn button_world() -> (gizmo_core::World, u32, u32) {
+        let mut world = gizmo_core::World::new();
+        world.insert_resource(Input::new());
+        let button = world.spawn_bundle(crate::ButtonBundle {
+            node: node((0.0, 0.0), (100.0, 40.0)),
+            ..Default::default()
+        });
+        // A plain interactive node without a `Clicked`: it must keep working.
+        let plain = world.spawn_bundle((node((200.0, 0.0), (100.0, 40.0)), Interaction::None));
+        (world, button.id(), plain.id())
+    }
+
+    fn clicked(world: &gizmo_core::World, id: u32) -> bool {
+        world.borrow::<Clicked>().get(id).is_some_and(|c| c.0)
+    }
+
+    /// Press on, release on: clicked for exactly that one frame.
+    #[test]
+    fn a_click_completes_on_release_and_lasts_one_frame() {
+        let (mut world, b, plain) = button_world();
+        frame(&mut world, (50.0, 20.0), false);
+        assert!(!clicked(&world, b), "hovering is not clicking");
+        frame(&mut world, (50.0, 20.0), true);
+        assert!(!clicked(&world, b), "pressing is not clicking yet");
+        frame(&mut world, (50.0, 20.0), false);
+        assert!(clicked(&world, b), "released over the button: clicked");
+        frame(&mut world, (50.0, 20.0), false);
+        assert!(!clicked(&world, b), "a click lasts one frame");
+
+        // The node without a `Clicked` still tracks its interaction.
+        frame(&mut world, (250.0, 20.0), true);
+        assert_eq!(world.borrow::<Interaction>().get(plain).copied(), Some(Interaction::Pressed));
+    }
+
+    /// Pressed on, dragged off, released: cancelled, like a desktop button.
+    #[test]
+    fn releasing_off_the_button_cancels_the_click() {
+        let (mut world, b, _) = button_world();
+        // Checked after EVERY frame: a click reported while dragging off is still a click.
+        for (at, down) in [((50.0, 20.0), true), ((150.0, 20.0), true), ((150.0, 20.0), false), ((150.0, 20.0), false)] {
+            frame(&mut world, at, down);
+            assert!(!clicked(&world, b), "clicked at {at:?}, button down = {down}");
         }
     }
 

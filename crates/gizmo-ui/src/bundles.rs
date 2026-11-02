@@ -1,4 +1,4 @@
-use crate::components::{Style, Node, BackgroundColor, Interaction};
+use crate::components::{Style, Node, BackgroundColor, Interaction, Clicked};
 
 /// Bundle for a plain, non-interactive UI element.
 #[derive(Default)]
@@ -49,6 +49,8 @@ pub struct ButtonBundle {
     pub background_color: BackgroundColor,
     /// Current pointer interaction state of the element.
     pub interaction: Interaction,
+    /// Set for the one frame a click completes — see [`Clicked`].
+    pub clicked: Clicked,
 }
 
 impl gizmo_core::component::Bundle for ButtonBundle {
@@ -58,6 +60,7 @@ impl gizmo_core::component::Bundle for ButtonBundle {
             gizmo_core::archetype::ComponentInfo::of::<Node>(),
             gizmo_core::archetype::ComponentInfo::of::<BackgroundColor>(),
             gizmo_core::archetype::ComponentInfo::of::<Interaction>(),
+            gizmo_core::archetype::ComponentInfo::of::<Clicked>(),
         ]
     }
 
@@ -66,6 +69,7 @@ impl gizmo_core::component::Bundle for ButtonBundle {
         world.add_component(entity, self.node);
         world.add_component(entity, self.background_color);
         world.add_component(entity, self.interaction);
+        world.add_component(entity, self.clicked);
     }
 
     unsafe fn write_to_archetype(
@@ -78,6 +82,7 @@ impl gizmo_core::component::Bundle for ButtonBundle {
         self.node.write_to_archetype(arch, row, tick);
         self.background_color.write_to_archetype(arch, row, tick);
         self.interaction.write_to_archetype(arch, row, tick);
+        self.clicked.write_to_archetype(arch, row, tick);
     }
 }
 
@@ -127,8 +132,10 @@ mod tests {
         // would make every button invisible, so this default is a real contract.
         let bg = *world.borrow::<BackgroundColor>().get(e.id()).unwrap();
         assert_eq!(bg.0, Vec4::new(1.0, 1.0, 1.0, 1.0));
-        // Button advertises one more component (Interaction) than a plain node.
-        assert_eq!(ButtonBundle::get_infos().len(), 4);
-        assert_eq!(ButtonBundle::get_infos().len(), NodeBundle::get_infos().len() + 1);
+        // A fresh button has not been clicked.
+        assert_eq!(world.borrow::<Clicked>().get(e.id()).copied(), Some(Clicked(false)));
+        // Button advertises two more components (Interaction, Clicked) than a plain node.
+        assert_eq!(ButtonBundle::get_infos().len(), 5);
+        assert_eq!(ButtonBundle::get_infos().len(), NodeBundle::get_infos().len() + 2);
     }
 }

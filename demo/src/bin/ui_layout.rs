@@ -23,8 +23,13 @@
 //! |-------|------------------------|
 //! | **kırpma yok** | dördüncü düğmenin etiketi kutusunun sağından taşıyor, kesilmiyor |
 //! | **z-sırası yok** | sıra eleman başına değil GLOBAL: önce bütün dolgular, sonra bütün glifler. Yani bir etiket her zaman her dolgunun üstünde — burada işe yarıyor, ama üst üste binen iki panelde yanlış olur, ve `gizmo-ui`'nin `Node`'unda sıralanacak bir z yok |
-//! | **tıklama olayı yok** | `Interaction` kare başına yeniden hesaplanan bir DURUM, olay akışı değil — "tıklandı" ancak iki karenin farkından çıkarılır |
 //! | **klavye/odak yok** | hiçbir düğmeye Tab ile gidilemez |
+//!
+//! ## Artık olanlar
+//!
+//! - **Tıklama** (2026-11-02): `ButtonBundle`'daki `Clicked`, düğmenin üzerinde basılıp üzerinde
+//!   bırakıldığı tek karede `true` — dışarıda bırakmak iptal. Düğmeler tıklandıkça sayıyor.
+//!   Önceden "tıklandı" iki karenin farkından elle çıkarılıyordu.
 //!
 //! ## Kontroller
 //!   * **Fare** — düğmelerin üzerinde gezin, sol tuşla basılı tutun
@@ -35,9 +40,17 @@ use gizmo::prelude::*;
 use gizmo::renderer::components::{Text, TextAnchor};
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
 use gizmo::ui::{
-    AlignItems, BackgroundColor, ButtonBundle, Interaction, JustifyContent, NodeBundle, Style,
-    UiPlugin, UiRect, Val,
+    AlignItems, BackgroundColor, ButtonBundle, Clicked, Interaction, JustifyContent, NodeBundle,
+    Style, UiPlugin, UiRect, Val,
 };
+
+/// Bir düğmenin etiketi ve kaç kez tıklandığı.
+#[derive(Clone)]
+struct Counter {
+    label: &'static str,
+    clicks: u32,
+}
+gizmo::core::impl_component!(Counter);
 
 /// Font aranacak bilinen yollar — `text` demosuyla aynı sıra, aynı sebep (bkz. oradaki başlık).
 const FONT_CANDIDATES: &[&str] = &[
@@ -126,6 +139,7 @@ fn main() {
                         .with_anchor(anchor)
                         .with_color(Vec4::new(0.94, 0.95, 0.97, 1.0)),
                 );
+                scene.world.add_component(button, Counter { label, clicks: 0 });
                 scene.world.add_child(root, button);
             }
 
@@ -136,6 +150,7 @@ fn main() {
         .set_update(|world, state, dt, input| {
             gizmo::simple::simple_scene_update(world, state, dt, input);
             recolor_buttons(world);
+            count_clicks(world);
         })
         .run()
         .expect("uygulama çalıştırılamadı");
@@ -156,6 +171,22 @@ fn recolor_buttons(world: &mut World) {
     for (id, interaction) in states {
         if let Some(mut color) = colors.get_mut(id) {
             color.0 = fill(interaction);
+        }
+    }
+}
+
+/// Tıklanan düğmenin sayacını artırır ve etiketine yazar. `Clicked` tam bir kare `true`.
+fn count_clicks(world: &mut World) {
+    let hits: Vec<u32> = world.borrow::<Clicked>().iter().filter(|(_, c)| c.0).map(|(id, _)| id).collect();
+    for id in hits {
+        let text = {
+            let mut counters = world.borrow_mut::<Counter>();
+            let Some(mut c) = counters.get_mut(id) else { continue };
+            c.clicks += 1;
+            format!("{} ({})", c.label, c.clicks)
+        };
+        if let Some(mut t) = world.borrow_mut::<Text>().get_mut(id) {
+            t.content = text;
         }
     }
 }

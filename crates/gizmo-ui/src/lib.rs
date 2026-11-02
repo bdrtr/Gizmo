@@ -146,6 +146,7 @@ pub fn register(world: &mut World, schedule: &mut Schedule) {
     world.register_component_type::<Style>();
     world.register_component_type::<Node>();
     world.register_component_type::<Interaction>();
+    world.register_component_type::<Clicked>();
     world.register_component_type::<BackgroundColor>();
     world.register_component_type::<UiRoot>();
 
@@ -197,7 +198,7 @@ pub mod prelude {
     pub use crate::{
         components::{
             AlignContent, AlignItems, AlignSelf, BackgroundColor, Display, FlexDirection,
-            FlexWrap, Interaction, JustifyContent, Node, PositionType, Style, UiRect, UiRoot, Val,
+            Clicked, FlexWrap, Interaction, JustifyContent, Node, PositionType, Style, UiRect, UiRoot, Val,
         },
         bundles::{NodeBundle, ButtonBundle},
     };
