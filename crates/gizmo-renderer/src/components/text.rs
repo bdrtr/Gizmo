@@ -84,6 +84,27 @@ impl Text {
         }
     }
 
+    /// White text at `size_px`, pinned to a point of the **window** that follows its size.
+    ///
+    /// `anchor` names both ends: the window's point (its centre, its top-right corner, …) and the
+    /// part of the text's box that sits on it, so `TopRight` hangs the box from the top-right
+    /// corner and `Center` centres it. `offset` is window pixels from there, y down — a HUD in
+    /// the top-right corner 16 px in is `pinned(.., TextAnchor::TopRight, Vec2::new(-16.0, 16.0))`.
+    /// See [`TextSpace::Pinned`] for why this is not a [`screen`](Self::screen) position.
+    #[must_use]
+    pub fn pinned(content: impl Into<String>, font: FontId, size_px: f32, anchor: TextAnchor, offset: Vec2) -> Self {
+        Self {
+            content: content.into(),
+            font,
+            size_px,
+            color: Vec4::ONE,
+            anchor,
+            space: TextSpace::Pinned { offset },
+            max_width: None,
+            align: TextAlign::Left,
+        }
+    }
+
     /// Replaces the colour.
     #[must_use]
     pub fn with_color(mut self, color: Vec4) -> Self {
@@ -149,6 +170,18 @@ pub enum TextSpace {
         /// The anchor point, in window pixels.
         position: Vec2,
     },
+    /// Window pixels measured from a point that moves with the window: the point
+    /// [`Text::anchor`] names (its centre, a corner, an edge's middle), plus `offset`.
+    ///
+    /// [`Screen`](Self::Screen) is absolute, so a title centred at `(640, 240)` for a 1280-wide
+    /// window is off-screen in a 472-wide one — which is where `kristal_avcisi`'s menu went the
+    /// first time it ran under a tiling window manager. Before this existed every HUD that wanted
+    /// a centre or a right-hand corner re-wrote its own `position` from `WindowInfo` each frame
+    /// (`demo/src/bin/text.rs`, `kule_yikici`).
+    Pinned {
+        /// Window pixels from the anchor point, y down.
+        offset: Vec2,
+    },
     /// At the entity's `GlobalTransform`, as a quad turned to face the camera.
     World {
         /// Glyph pixels per world unit. Larger means smaller text.
@@ -168,12 +201,28 @@ impl TextSpace {
     #[must_use]
     pub fn needs_world_position(self) -> bool {
         match self {
-            Self::Screen { .. } => false,
+            Self::Screen { .. } | Self::Pinned { .. } => false,
             Self::World { .. } => true,
         }
     }
 
-    /// The authored window-pixel anchor, or `None` for a text that lives in the world.
+    /// Where on a `viewport`-sized window the text's `anchor` point lands, in window pixels — or
+    /// `None` for a text that lives in the world.
+    ///
+    /// The one place a [`Pinned`](Self::Pinned) offset becomes a pixel, so the renderer and any
+    /// host that wants to know where a label went agree.
+    #[must_use]
+    pub fn screen_point(self, anchor: TextAnchor, viewport: Vec2) -> Option<Vec2> {
+        match self {
+            Self::Screen { position } => Some(position),
+            Self::Pinned { offset } => Some(viewport * anchor.factors() + offset),
+            Self::World { .. } => None,
+        }
+    }
+
+    /// The authored window-pixel anchor, or `None` for a text that lives in the world — or is
+    /// [`Pinned`](Self::Pinned), whose pixel depends on the window
+    /// ([`screen_point`](Self::screen_point) answers that).
     ///
     /// Here for the same reason as [`needs_world_position`](Self::needs_world_position): reading
     /// the position out of the enum is a `match`, and a `match` downstream is a wildcard. A host
@@ -183,7 +232,7 @@ impl TextSpace {
     pub fn screen_position(self) -> Option<Vec2> {
         match self {
             Self::Screen { position } => Some(position),
-            Self::World { .. } => None,
+            Self::Pinned { .. } | Self::World { .. } => None,
         }
     }
 }

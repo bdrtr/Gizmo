@@ -514,9 +514,11 @@ fn place(
         let max = min + Vec2::from(entry.size);
 
         match text.space {
-            TextSpace::Screen { position } => {
+            TextSpace::Screen { .. } | TextSpace::Pinned { .. } => {
                 // The host's answer wins; the component's own is the fallback.
-                let position = screen_anchor.unwrap_or(position);
+                let position = screen_anchor
+                    .or_else(|| text.space.screen_point(text.anchor, screen_size))
+                    .unwrap_or_default();
                 // Window pixels (y down, origin top-left) to NDC (y up, origin centre).
                 let to_ndc = |p: Vec2| {
                     Vec2::new(
@@ -665,6 +667,47 @@ mod tests {
             (bottom_right - Vec2::new(40.0, 80.0)).length() < 1e-3,
             "{bottom_right:?}"
         );
+    }
+
+    /// A pinned text follows the window: centred on a 100×200 target and on a 300×400 one, it
+    /// sits at the middle of each, and a corner pin plus an offset is that corner plus the
+    /// offset.
+    ///
+    /// The second window size is the assertion — a `Pinned` that read an absolute position would
+    /// pass at one size and fail at the other.
+    #[test]
+    fn a_pinned_text_follows_the_window_size() {
+        let centre_on = |anchor, offset, size: Vec2| {
+            let mut t = text(TextSpace::Pinned { offset }, anchor);
+            t.anchor = anchor;
+            let (mut w, mut s) = (Vec::new(), Vec::new());
+            place(&one_glyph(), &t, Vec3::ZERO, None, size, &mut w, &mut s, |_| Some(entry([0.0, 0.0])));
+            assert!(w.is_empty(), "a pinned text is screen text");
+            // The glyph's centre, back in window pixels.
+            let r = s[0].rect;
+            Vec2::new(((r[0] + r[2]) * 0.5 + 1.0) * 0.5 * size.x, (1.0 - (r[1] + r[3]) * 0.5) * 0.5 * size.y)
+        };
+        // The one glyph is 10×10 at the top of a 10×20 box; centring the box puts its centre
+        // 5 px above the window's centre.
+        for size in [Vec2::new(100.0, 200.0), Vec2::new(300.0, 400.0)] {
+            let c = centre_on(TextAnchor::Center, Vec2::ZERO, size);
+            let want = size * 0.5 + Vec2::new(0.0, -5.0);
+            assert!((c - want).length() < 1e-3, "centred on {size:?}: {c:?}, want {want:?}");
+            let corner = centre_on(TextAnchor::TopRight, Vec2::new(-16.0, 16.0), size);
+            let want = Vec2::new(size.x - 16.0 - 5.0, 16.0 + 5.0);
+            assert!((corner - want).length() < 1e-3, "top-right on {size:?}: {corner:?}, want {want:?}");
+        }
+    }
+
+    /// A pinned text under a UI box takes the box's answer, like a `Screen` one.
+    #[test]
+    fn a_supplied_anchor_wins_over_a_pin_too() {
+        let t = text(TextSpace::Pinned { offset: Vec2::ZERO }, TextAnchor::TopLeft);
+        let (mut w, mut s) = (Vec::new(), Vec::new());
+        place(&one_glyph(), &t, Vec3::ZERO, Some(Vec2::new(50.0, 50.0)), Vec2::new(100.0, 100.0), &mut w, &mut s, |_| {
+            Some(entry([0.0, 0.0]))
+        });
+        assert!((s[0].rect[0] - 0.0).abs() < 1e-5, "the host's 50 px is NDC 0, got {}", s[0].rect[0]);
     }
 
     /// The glyph's own bearing moves the box and leaves its size alone.
