@@ -114,6 +114,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - **`MeshSource("cylinder")` and `"cone"`**, sized like their colliders, and
     `AssetManager::PRIMITIVE_MESH_KEYS` as the one list of primitive keys (the studio's
     missing-asset check now uses it instead of its own copy).
+- **Tweens: `Tween` and `Ease`** (in `gizmo-animation`, re-exported as
+  `gizmo::renderer::tween`, in the prelude). `Tween::to_position(p, 0.15).with_ease(Ease::OutCubic)`
+  on an entity eases its `Transform` there — position, rotation (slerp) and scale, alone or
+  combined, once, looping or ping-pong, eleven curves. It starts from wherever the entity is when
+  it first runs, so a new tween replacing a running one does not jump. Both draw paths advance
+  tweens on the animation clock before transform propagation (the render-parity driver list
+  includes it). `kaydirmaca`, a sliding-tile puzzle, is the first user (§C14).
 - **`poligon` — a first-person shooting range** (`docs/CAPABILITY_GAPS.md` §C13), and what it
   needed:
   - **Cursor grab and visibility: `gizmo::core::window::CursorOptions`.** A resource

@@ -970,6 +970,22 @@ their pedestals. What it found:
   id a raycast hit names; tested through the centre (pure linear), off it (spin), on a sleeper
   (woken) and refusing a static body and a missing entity.
 
+### C14. The sixth game: things that move smoothly (2026-11-02, `kaydirmaca`)
+
+`demo/src/bin/kaydirmaca.rs` is a 4 × 4 sliding-tile puzzle: click a tile beside the gap and it
+slides into it. The engine had **no tween and no easing** — a game wanting "there in 0.15 s,
+slowing down" kept its own start, duration, clock and curve per moving thing.
+
+- ~~**No tweens.**~~ **Closed 2026-11-02.** `Tween` (`to_position` / `to_rotation` /
+  `to_scale` / `to_transform`, `and_*` to combine, `Repeat::{Once, Loop, PingPong}`) and `Ease`
+  (eleven curves, every one 0→1, `OutBack`/`OutElastic` overshooting), in `gizmo-animation`,
+  re-exported as `gizmo::renderer::tween` and in the prelude. The start is taken from the entity
+  the first frame, so replacing a running tween starts from where it got to. The frame driver
+  advances them on the animation clock (pause and time scale apply) **before** transform
+  propagation, in both draw paths — `render_parity` now lists `tween_system(` among the drivers
+  both must run. Tested: curve endpoints and shapes, exact landing, untouched parts, loop and
+  ping-pong, zero duration, and a paused clock moving nothing.
+
 ---
 
 ## D. Game-path / editor-path asymmetries
