@@ -113,6 +113,11 @@ pub use gizmo_renderer as renderer;
 #[cfg(feature = "window")]
 pub use gizmo_window as window;
 
+/// The mouse cursor in the world: [`cursor_ray`](pointer::cursor_ray) and
+/// [`cursor_on_plane`](pointer::cursor_on_plane).
+#[cfg(all(feature = "render", feature = "physics"))]
+pub mod pointer;
+
 // Sık kullanılan matematik tiplerini lib.rs'ten doğrudan aç:
 pub use math::{Mat4, Quat, Vec2, Vec3, Vec4};
 

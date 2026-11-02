@@ -131,6 +131,23 @@ impl Ray {
         self.origin + self.direction * t
     }
 
+    /// Distance along the ray to the plane through `point` with normal `normal` (any length), or
+    /// `None` when the ray runs parallel to it or the plane is behind the origin.
+    ///
+    /// The ground under a mouse cursor is `ray.intersect_plane(Vec3::ZERO, Vec3::Y)`; the hit is
+    /// `ray.at(t)`. Both sides of the plane hit — a ray from below meets it as well — because a
+    /// plane has no inside.
+    #[inline]
+    pub fn intersect_plane(self, point: impl Into<Vec3A>, normal: impl Into<Vec3A>) -> Option<f32> {
+        let normal = normal.into();
+        let denom = normal.dot(self.direction);
+        if denom.abs() <= f32::EPSILON * normal.length() {
+            return None;
+        }
+        let t = (point.into() - self.origin).dot(normal) / denom;
+        (t >= 0.0 && t.is_finite()).then_some(t)
+    }
+
     /// Slab-algorithm intersection against an axis-aligned box given as raw corners.
     ///
     /// Returns the distance in world units (see [`Ray::at`]) to the **entry** face when
@@ -326,6 +343,25 @@ impl Ray {
 
 #[cfg(test)]
 mod tests {
+
+    /// A plane is met from either side at the right distance; parallel and behind are misses.
+    #[test]
+    fn intersect_plane_hits_from_both_sides_and_misses_parallel_and_behind() {
+        let down = Ray::new(Vec3A::new(1.0, 5.0, 2.0), Vec3A::new(0.0, -1.0, 0.0));
+        let t = down.intersect_plane(Vec3A::ZERO, Vec3A::Y).unwrap();
+        assert!((t - 5.0).abs() < 1e-6);
+        assert!((down.at(t) - Vec3A::new(1.0, 0.0, 2.0)).length() < 1e-6);
+        // From below, and with an unnormalised normal: same distance.
+        let up = Ray::new(Vec3A::new(0.0, -3.0, 0.0), Vec3A::Y);
+        assert!((up.intersect_plane(Vec3A::ZERO, Vec3A::new(0.0, 4.0, 0.0)).unwrap() - 3.0).abs() < 1e-6);
+        // Parallel to it, and with the plane behind.
+        assert!(Ray::new(Vec3A::new(0.0, 1.0, 0.0), Vec3A::X).intersect_plane(Vec3A::ZERO, Vec3A::Y).is_none());
+        assert!(Ray::new(Vec3A::new(0.0, 1.0, 0.0), Vec3A::Y).intersect_plane(Vec3A::ZERO, Vec3A::Y).is_none());
+        // A tilted plane: x + y = 2 along +X from the origin is at x = 2.
+        let t = Ray::new(Vec3A::ZERO, Vec3A::X).intersect_plane(Vec3A::new(2.0, 0.0, 0.0), Vec3A::new(1.0, 1.0, 0.0)).unwrap();
+        assert!((t - 2.0).abs() < 1e-5, "{t}");
+    }
+
     use super::*;
 
     #[test]
