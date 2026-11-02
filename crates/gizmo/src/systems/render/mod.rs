@@ -5718,6 +5718,95 @@ mod golden_render_tests {
         });
     }
 
+    /// The deferred PBR path reads vertex colour, as the forward shader always has. A triangle with
+    /// a red, a green and a blue corner, white material, lit by a sun; each corner region's
+    /// dominant channel must be its own. Before, the G-buffer ignored the attribute — `vertex_colors`
+    /// measured a channel separation of 0.9 under `Pbr` against 60.6 under `BakedLit`.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn the_deferred_path_reads_vertex_colour() {
+        use crate::renderer::gpu_types::Vertex;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssr = None;
+            renderer.volumetric = None;
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(
+                &renderer.device,
+                &renderer.queue,
+                &renderer.scene.texture_bind_group_layout,
+            );
+            let corners = [
+                ([-1.0f32, -0.9, 0.0], [1.0f32, 0.0, 0.0]),
+                ([1.0, -0.9, 0.0], [0.0, 1.0, 0.0]),
+                ([0.0, 1.0, 0.0], [0.0, 0.0, 1.0]),
+            ];
+            let vertices: Vec<Vertex> = corners
+                .iter()
+                .map(|(p, c)| Vertex {
+                    position: *p,
+                    normal: [0.0, 0.0, 1.0],
+                    color: [c[0], c[1], c[2], 1.0],
+                    tex_coords: [0.5, 0.5],
+                    ..Default::default()
+                })
+                .collect();
+            let tri = world.spawn();
+            world.add_component(tri, Transform::new(Vec3::new(0.0, 0.0, -2.5)));
+            world.add_component(tri, GlobalTransform::default());
+            world.add_component(tri, crate::renderer::components::Mesh::from_vertices(&renderer.device, &vertices, "vertex_colour_test"));
+            world.add_component(tri, Material::new(tex).with_pbr(Vec4::ONE, 0.6, 0.0));
+            world.add_component(tri, MeshRenderer::new());
+            world.spawn_bundle(crate::bundles::DirectionalLightBundle {
+                rotation: gizmo_math::Quat::from_rotation_x(-0.2),
+                intensity: 3.0,
+                ..Default::default()
+            });
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::ZERO,
+                yaw: -std::f32::consts::FRAC_PI_2,
+                pitch: 0.0,
+                primary: true,
+                ..Default::default()
+            });
+            let frame = render_world(&mut renderer, &mut world).await;
+            // Mean RGB of a 6×6 patch at pixel (cx, cy).
+            let patch = |cx: usize, cy: usize| {
+                let mut sum = [0.0f32; 3];
+                for y in cy - 3..cy + 3 {
+                    for x in cx - 3..cx + 3 {
+                        for c in 0..3 {
+                            sum[c] += frame[(y * 128 + x) * 4 + c] as f32 / 36.0;
+                        }
+                    }
+                }
+                sum
+            };
+            // Near each corner, a little inside the triangle (camera 2.5 m away, 90° vertical FOV
+            // ⇒ 1 m ≈ 25.6 px).
+            let red = patch(64 - 20, 64 + 18);
+            let green = patch(64 + 20, 64 + 18);
+            let blue = patch(64, 64 - 18);
+            // Measured (RGB): red corner 216.7 146.7 179.5, green 146.3 217.1 179.6, blue 159.2
+            // 159.6 223.5. Ignoring the vertex colour again gives three identical greys.
+            for (name, rgb, own) in [("red", red, 0), ("green", green, 1), ("blue", blue, 2)] {
+                for other in (0..3).filter(|c| *c != own) {
+                    assert!(rgb[own] > rgb[other] + 25.0, "the {name} corner is {name}: {rgb:?}");
+                }
+            }
+        });
+    }
+
     /// `bloom_radius` and `bloom_iterations` widen the halo. A small, very bright cube (about
     /// 12 px across) in a dark scene; the halo is the mean brightness of a ring 8–24 px from its
     /// centre. The default blur's taps are one full-frame texel apart, so its halo barely leaves

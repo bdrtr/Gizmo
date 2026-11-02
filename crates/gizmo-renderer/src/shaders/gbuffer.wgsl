@@ -250,8 +250,17 @@ fn fs_main(in: VertexOutput) -> GBufferOut {
     let emissive = in.inst_emissive
                  + material.emissive_and_normal_scale.xyz * textureSample(t_emissive, s_diffuse, uv).rgb;
 
+    // Vertex colour, as the forward shader reads it: a mesh that carries none (all zero) counts as
+    // white. Every engine primitive and every uncoloured import is white already; this only
+    // changes meshes that colour their vertices, which the deferred path used to draw as if they
+    // did not — while the editor's forward path showed the colours.
+    var vertex_color = in.color;
+    if (length(vertex_color) < 0.0001) {
+        vertex_color = vec3<f32>(1.0);
+    }
+
     // Base albedo, modulated by AO (the G-buffer has no channel of its own for AO).
-    var albedo = in.inst_albedo.rgb * tex_color.rgb;
+    var albedo = in.inst_albedo.rgb * tex_color.rgb * vertex_color;
     albedo = albedo * ao;
 
     // Unpack anisotropy, clear_coat, and subsurface from in.inst_pbr.w (packed_params)

@@ -862,7 +862,13 @@ again as of 2026-08-24. Recording the whole set, because they are one family:
    Verified in `color_grading`, one capture batch, size-checked: component `vignette = 0`
    gives corner/centre **1.095** and fallback `renderer = 0.0` gives **1.095**; component `0.9`
    gives **0.608** and fallback `0.9` gives **0.608**.
-6. **Vertex colour is read only by `baked_lit.wgsl`.** The attribute is always present — the one
+6. ~~**Vertex colour is read only by `baked_lit.wgsl`.**~~ **CLOSED 2026-11-02:** the G-buffer
+   multiplies albedo by it, with the forward shader's rule that an all-zero colour counts as white.
+   Every engine primitive and uncoloured import is white already, so only meshes that colour their
+   vertices change — and they now look in the game as they did in the editor. Tested on a
+   red/green/blue triangle under a white PBR material (red corner 216.7 146.7 179.5, green 146.3
+   217.1 179.6, blue 159.2 159.6 223.5; ignoring the attribute gives three greys of 244). The
+   original finding: the attribute is always present — the one
    vertex layout carries it and an uncoloured import is normalised to opaque white — but the
    deferred PBR path never reads it. Measured in `vertex_colors`: on a mesh with red/green/blue
    corners and a white material, `BakedLit` shows a channel separation of **60.6** and `Pbr` shows

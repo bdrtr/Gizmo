@@ -28,7 +28,12 @@
 //! köşedeki **kanal ayrımı** (`maks(R,G,B) − min(R,G,B)`) — renk köşeden geliyorsa bu büyük olur,
 //! gelmiyorsa sıfıra iner.
 //!
-//! Ölçüldü (2026-08-23, kare 240):
+//! **Düzeltildi (2026-11-02):** ertelenmiş `Pbr` yolu artık köşe rengini okuyor (G-buffer albedo'su
+//! onunla çarpılıyor, renksiz bir mesh beyaz sayılıyor — ileri shader'ın kuralı). Aşağıdaki tablo
+//! düzeltmeden önceki ölçüm; `Pbr` satırı bugün `BakedLit`'inkine benzer bir ayrım gösterir.
+//! Test: `the_deferred_path_reads_vertex_colour` (kırmızı köşe RGB 216,7 146,7 179,5).
+//!
+//! Ölçüldü (2026-08-23, kare 240, düzeltmeden önce):
 //!
 //! | tür | sol alt | sağ alt | tepe | ortalama |
 //! |-----|---------|---------|------|----------|
