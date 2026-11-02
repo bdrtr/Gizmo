@@ -81,6 +81,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   or by default to a `tracing::error!` naming the system, and the system runs again next frame.
   `SystemOutput` is the trait behind it; `()` systems are unchanged.
 
+- **Gated observers: `World::add_observer_if(condition, system)`.** A lifecycle observer that runs
+  only while a `run_if`-shaped condition holds (`in_state(..)` works as is). The plain
+  `add_observer` closure is never shown the world, so it could not gate itself.
+
 - **Background colour: `Camera::clear_color`** (`with_clear_color`, an inspector colour). Fills
   the frame where nothing is drawn — the deferred pass's empty pixels, the forward-only
   pipeline's clear, the editor's game view — per camera. `None` keeps each path's own.

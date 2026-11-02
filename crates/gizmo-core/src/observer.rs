@@ -1177,4 +1177,37 @@ mod tests {
         world.despawn(e2);
         assert_eq!(*removed_counter.lock().unwrap(), 2);
     }
+
+    /// `add_observer_if` fires only while its condition holds — here the engine's own `in_state`,
+    /// unchanged, which is the point of taking the `run_if` shape.
+    #[test]
+    fn a_gated_observer_fires_only_while_its_condition_holds() {
+        use crate::state::{in_state, State};
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        enum Mode {
+            Menu,
+            Playing,
+        }
+        #[derive(Clone)]
+        struct Hp(#[allow(dead_code)] i32);
+        crate::impl_component!(Hp);
+
+        let mut world = World::new();
+        world.insert_resource(State::new(Mode::Menu));
+        let fired = Arc::new(Mutex::new(0));
+        let f = fired.clone();
+        world.add_observer_if(in_state(Mode::Playing), move |_: On<Insert, Hp>| {
+            *f.lock().unwrap() += 1;
+        });
+
+        let a = world.spawn();
+        world.add_component(a, Hp(1));
+        assert_eq!(*fired.lock().unwrap(), 0, "in the menu the observer stays quiet");
+
+        world.get_resource_mut::<State<Mode>>().unwrap().set(Mode::Playing);
+        world.get_resource_mut::<State<Mode>>().unwrap().apply_transitions();
+        let b = world.spawn();
+        world.add_component(b, Hp(2));
+        assert_eq!(*fired.lock().unwrap(), 1, "while playing it fires");
+    }
 }

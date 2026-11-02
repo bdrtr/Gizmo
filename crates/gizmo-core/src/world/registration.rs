@@ -66,6 +66,40 @@ impl World {
         self
     }
 
+    /// [`add_observer`](Self::add_observer), gated: `system` runs only while `condition` holds —
+    /// the run condition an observer could not have, since its closure is never shown the world.
+    ///
+    /// `condition` is the same shape a system's `run_if` takes, so the engine's own conditions
+    /// plug in unchanged: `world.add_observer_if(in_state(Mode::Playing), |e: On<Insert, Hp>| …)`.
+    /// It is asked at every firing, against the world as the hook sees it — after the write that
+    /// fired it. (`observe` and `observe_global` need no such variant: their listeners are handed
+    /// `&mut World` and can test anything themselves.)
+    pub fn add_observer_if<E: crate::observer::Lifecycle, T: Component, C, F>(
+        &mut self,
+        mut condition: C,
+        mut system: F,
+    ) -> &mut Self
+    where
+        C: FnMut(&World) -> bool + Send + Sync + 'static,
+        F: FnMut(crate::observer::On<E, T>) + Send + Sync + 'static,
+    {
+        let type_id = TypeId::of::<T>();
+        let hooks = self.component_hooks.entry(type_id).or_default();
+
+        E::list(hooks).push(Box::new(move |world, entity| {
+            if !condition(world) {
+                return;
+            }
+            system(crate::observer::On {
+                event: E::witness(),
+                entity,
+                _marker: std::marker::PhantomData,
+            });
+        }));
+
+        self
+    }
+
     /// Attaches a listener for one [`EntityEvent`](crate::observer::EntityEvent) type to one
     /// entity. [`trigger`](Self::trigger) dispatches to it, and on up the `Parent` chain if the
     /// event opts in.
