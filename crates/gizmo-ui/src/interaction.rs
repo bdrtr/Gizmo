@@ -153,6 +153,11 @@ pub fn ui_interaction_system(
                 if s.is_some_and(|s| s.in_bar_strip(n, gizmo_math::Vec2::new(mouse_pos.0, mouse_pos.1))) {
                     return false;
                 }
+                // A list being flicked: the finger is scrolling, not tapping the item under it —
+                // or every scroll would end by clicking whatever it was let go over.
+                if s.is_some_and(|s| s.is_flicking()) {
+                    return false;
+                }
             }
             at = layers.get(a).and_then(|(_, p)| p.map(|p| p.0));
         }
@@ -372,19 +377,37 @@ pub fn ui_drag_system(input: Res<Input>, mut drags: Query<(&Interaction, Mut<Dra
 
 /// The mouse wheel scrolls the innermost [`Scroll`] node under the cursor — by its `speed` a
 /// notch, wheel up showing earlier content. The layout clamps the result.
-pub fn ui_scroll_system(input: Res<Input>, mut scrolls: Query<(&Node, Mut<Scroll>)>) {
+pub fn ui_scroll_system(
+    input: Res<Input>,
+    time: Option<Res<gizmo_core::time::Time>>,
+    mut scrolls: Query<(&Node, Mut<Scroll>)>,
+) {
+    let dt = time.map_or(0.0, |t| t.raw_dt());
     // The scrollbar first: a press in the strip takes the thumb, and it follows the pointer until
     // the release — what a touchpad without a wheel, and a finger, scroll a list with.
     let p = input.mouse_position();
     let pointer = gizmo_math::Vec2::new(p.0, p.1);
     let pressed = input.is_mouse_button_just_pressed(0);
     let held = input.is_mouse_button_pressed(0) && !input.is_mouse_button_just_released(0);
-    for (_, (node, mut scroll)) in scrolls.iter_mut() {
-        if !(pressed || scroll.is_dragging_thumb()) {
-            continue;
-        }
+    // A finger on a list's content scrolls it (and flings it), the way a phone list moves. Only
+    // a finger: a mouse dragging across a list is selecting or dragging, not scrolling.
+    let finger = input.primary_touch().is_some() || !input.touches().is_empty();
+    // The innermost list under a finger that just came down takes it.
+    let flick_target = (pressed && finger)
+        .then(|| {
+            scrolls
+                .iter_mut()
+                .filter(|(_, (n, s))| point_in_node(p, n) && !s.in_bar_strip(n, pointer))
+                .min_by(|a, b| (a.1 .0.size.x * a.1 .0.size.y).total_cmp(&(b.1 .0.size.x * b.1 .0.size.y)))
+                .map(|(id, _)| id)
+        })
+        .flatten();
+    for (id, (node, mut scroll)) in scrolls.iter_mut() {
         let mut next = *scroll;
-        next.drag_thumb(node, pressed, held, pointer);
+        if pressed || scroll.is_dragging_thumb() {
+            next.drag_thumb(node, pressed, held, pointer);
+        }
+        next.flick_frame(flick_target == Some(id), held, pointer.y, dt);
         if next != *scroll {
             *scroll = next;
         }
@@ -912,6 +935,86 @@ mod tests {
         run(&mut world, (500.0, 500.0), false, Some("right"));
         assert_eq!(get(&world).selected, 0, "wraps");
         assert_eq!(world.get_resource::<UiNavigation>().unwrap().focused(), Some(dd.id()), "→ moved the focus off it");
+    }
+
+    /// A finger on a list: a tap still clicks the item; a drag past the slop scrolls the content
+    /// with the finger and cancels the item's click; let go, it slides on and slows to a stop; and
+    /// the same drag with the mouse does not scroll.
+    #[test]
+    fn a_finger_flicks_a_list_and_a_tap_still_taps() {
+        use gizmo_core::hierarchy::HierarchyExt;
+        use gizmo_core::input::TouchPhase::{self, *};
+        use gizmo_core::system::{IntoSystemConfig, Schedule};
+        let mut world = gizmo_core::World::new();
+        world.insert_resource(Input::new());
+        world.insert_resource(gizmo_core::time::Time::new());
+        let mut scroll = Scroll::default();
+        scroll.fit(Vec2::new(0.0, 1000.0));
+        let list = world.spawn_bundle((node((0.0, 0.0), (100.0, 200.0)), scroll));
+        let item = world.spawn_bundle(crate::ButtonBundle { node: node((0.0, 0.0), (80.0, 40.0)), ..Default::default() });
+        world.add_child(list, item);
+        let step = |w: &mut gizmo_core::World, touch: Option<(TouchPhase, f32)>| {
+            {
+                let mut input = w.get_resource_mut::<Input>().unwrap();
+                input.begin_frame();
+                if let Some((phase, y)) = touch {
+                    input.on_touch(1, phase, 40.0, y);
+                }
+            }
+            w.get_resource_mut::<gizmo_core::time::Time>().unwrap().update(1.0 / 60.0);
+            let mut s = Schedule::new();
+            s.add_di_system(ui_scroll_system.into_config().label("s"));
+            s.add_di_system(ui_interaction_system.into_config().after("s"));
+            s.build();
+            s.run(w, 0.0);
+        };
+        let offset = |w: &gizmo_core::World| w.borrow::<Scroll>().get(list.id()).unwrap().offset.y;
+        let clicked = |w: &gizmo_core::World| w.borrow::<Clicked>().get(item.id()).unwrap().0;
+
+        // A tap: down and up in place — the item is clicked, nothing scrolls.
+        step(&mut world, Some((Started, 20.0)));
+        step(&mut world, Some((Ended, 20.0)));
+        assert!(clicked(&world) && offset(&world) == 0.0, "a tap on a list item stopped being a tap");
+        step(&mut world, None);
+
+        // A drag down that ends over the item: past the slop the content follows the finger, and
+        // the release — over the item it started on — clicks nothing.
+        world.borrow_mut::<Scroll>().get_mut(list.id()).unwrap().offset.y = 500.0;
+        step(&mut world, Some((Started, 5.0)));
+        for y in [9.0, 16.0, 25.0, 35.0] {
+            step(&mut world, Some((Moved, y)));
+        }
+        let dragged = offset(&world);
+        assert!(dragged <= 485.0, "the content did not follow the finger: {dragged}");
+        step(&mut world, Some((Ended, 35.0)));
+        assert!(!clicked(&world), "a scroll ended by clicking the item it was let go over");
+        // The fling: it keeps going the same way, slower and slower, then stops.
+        step(&mut world, None);
+        let a = offset(&world);
+        for _ in 0..200 {
+            step(&mut world, None);
+        }
+        let b = offset(&world);
+        step(&mut world, None);
+        assert!(a < dragged && b < a, "no slide after the release: {dragged} {a} {b}");
+        assert_eq!(offset(&world), b, "it never stopped");
+        assert!(b > 0.0, "it slid all the way to the edge — the fling does not slow down: {b}");
+
+        // The mouse dragging across the list does not scroll it.
+        let before = offset(&world);
+        for (y, down) in [(100.0, true), (60.0, true), (20.0, true), (20.0, false)] {
+            {
+                let mut input = world.get_resource_mut::<Input>().unwrap();
+                input.begin_frame();
+                input.set_mouse_position(40.0, y);
+                if down { input.on_mouse_button_pressed(0) } else { input.on_mouse_button_released(0) }
+            }
+            let mut s = Schedule::new();
+            s.add_di_system(ui_scroll_system.into_config());
+            s.build();
+            s.run(&mut world, 0.0);
+        }
+        assert_eq!(offset(&world), before, "a mouse drag scrolled the list");
     }
 
     /// Pressed on, dragged off, released: cancelled, like a desktop button.

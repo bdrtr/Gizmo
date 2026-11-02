@@ -114,6 +114,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - **`MeshSource("cylinder")` and `"cone"`**, sized like their colliders, and
     `AssetManager::PRIMITIVE_MESH_KEYS` as the one list of primitive keys (the studio's
     missing-asset check now uses it instead of its own copy).
+- **Flicking lists**: a finger on a `Scroll`'s content scrolls it past an 8 px slop (cancelling the
+  tap on the item under it) and flings it, decaying; a tap still taps; the mouse is unaffected.
 - **Select lists: `gizmo::ui::Dropdown`** — opens below its button, drawn above every UI layer,
   takes the pointer while open, steps with ←/→ while focused. `menu` has a difficulty list.
 - **`Scroll` has a scrollbar** — drawn while something overflows, its thumb dragged by the mouse

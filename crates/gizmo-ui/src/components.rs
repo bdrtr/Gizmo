@@ -786,11 +786,29 @@ pub struct Scroll {
     max: Vec2,
     /// While the scrollbar's thumb is held: where on the thumb the pointer took it.
     grab: Option<f32>,
+    /// A finger on the content: where it came down, where it was last frame, and whether it has
+    /// travelled far enough to be a scroll rather than a tap.
+    flick: Option<Flick>,
+    /// Pixels per second the content keeps sliding after a flick, decaying.
+    velocity: f32,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Flick {
+    start: f32,
+    last: f32,
+    scrolling: bool,
+}
+
+/// How far a finger travels before a press on a list's content becomes a scroll (and stops being
+/// a tap on the item under it).
+const FLICK_SLOP: f32 = 8.0;
+/// How fast a flick's slide dies away: the velocity is multiplied by this every second.
+const FLICK_DECAY_PER_SECOND: f32 = 0.05;
 
 impl Default for Scroll {
     fn default() -> Self {
-        Self { offset: Vec2::ZERO, speed: 40.0, max: Vec2::ZERO, grab: None }
+        Self { offset: Vec2::ZERO, speed: 40.0, max: Vec2::ZERO, grab: None, flick: None, velocity: 0.0 }
     }
 }
 
@@ -856,6 +874,50 @@ impl Scroll {
                 self.offset.y = share * self.max.y;
             }
         }
+    }
+
+    /// One frame of a finger on the content: `pressed` a finger came down in the box this frame,
+    /// `held` it is still down, `y` where it is, `dt` the frame. Past [`FLICK_SLOP`] the content
+    /// follows the finger; let go, it keeps sliding at the finger's last speed, decaying.
+    pub(crate) fn flick_frame(&mut self, pressed: bool, held: bool, y: f32, dt: f32) {
+        if pressed && self.grab.is_none() {
+            self.flick = Some(Flick { start: y, last: y, scrolling: false });
+            self.velocity = 0.0;
+        }
+        match self.flick.as_mut() {
+            Some(f) if held => {
+                if !f.scrolling && (y - f.start).abs() > FLICK_SLOP {
+                    f.scrolling = true;
+                }
+                if f.scrolling {
+                    let dy = y - f.last;
+                    self.offset.y = (self.offset.y - dy).clamp(0.0, self.max.y.max(0.0));
+                    if dt > 0.0 {
+                        self.velocity = -dy / dt;
+                    }
+                }
+                f.last = y;
+            }
+            Some(_) => {
+                self.flick = None;
+            }
+            None => {
+                // Sliding on after a flick.
+                if self.velocity != 0.0 && dt > 0.0 {
+                    self.offset.y = (self.offset.y + self.velocity * dt).clamp(0.0, self.max.y.max(0.0));
+                    self.velocity *= FLICK_DECAY_PER_SECOND.powf(dt);
+                    if self.velocity.abs() < 5.0 || self.offset.y <= 0.0 || self.offset.y >= self.max.y {
+                        self.velocity = 0.0;
+                    }
+                }
+            }
+        }
+    }
+
+    /// A finger is scrolling the content right now — a press under it is a scroll, not a tap.
+    #[must_use]
+    pub fn is_flicking(&self) -> bool {
+        self.flick.is_some_and(|f| f.scrolling)
     }
 
     /// Whether the thumb is being dragged.

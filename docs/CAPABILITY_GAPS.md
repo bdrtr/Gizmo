@@ -1192,6 +1192,16 @@ mouse, the keyboard and a gamepad. Three of its four buttons were impossible:
   the open list, or letting ←/→ move the focus, fails it. `menu` has a difficulty list whose options
   follow the language.
 
+- ~~**A list could not be flicked.**~~ **Closed 2026-11-03.** On a phone a list moves under the
+  finger and keeps sliding when let go. A finger that comes down on a `Scroll`'s content and
+  travels past an 8 px slop now scrolls it with the finger — and from then on the press is a
+  scroll, not a tap: the item under it is neither pressed nor clicked when the finger lifts, or
+  every scroll would end by selecting whatever it was let go over. Released, it slides on at the
+  finger's last speed, decaying (×0.05 a second), and stops at the edges. A tap in place still
+  clicks the item; a mouse dragging across a list does not scroll it. Tested on all four, a fling
+  that must stop short of the edge; dropping the click cancellation, the slop or the finger-only
+  rule, or the decay, each fails it.
+
 ### C16. Every game wrote the same three lines (2026-11-02)
 
 ~~**No timer.**~~ **Closed 2026-11-02.** `balon`, `kale` and `yikim_ustasi` each counted down by
