@@ -56,6 +56,49 @@ pub struct Mesh {
     pub lod_vertex_counts: Vec<u32>,
 }
 
+/// A mesh draws a simplified LOD1 far away once it has more than this many triangle corners
+/// (flat vertices, or index-list entries — the same count): about 6 700 triangles.
+pub const LOD_MIN_CORNERS: usize = 20_000;
+
+/// Half the triangles of `(unique_vertices, indices)`, simplified by meshopt within a 10 % error,
+/// expanded back to a flat vertex buffer (the form the batcher draws a LOD in). `None` when the
+/// simplifier could not remove anything.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn lod1_vertices(
+    unique_vertices: &[crate::gpu_types::Vertex],
+    indices: &[u32],
+) -> Option<Vec<crate::gpu_types::Vertex>> {
+    let adapter = meshopt::VertexDataAdapter::new(
+        bytemuck::cast_slice(unique_vertices),
+        std::mem::size_of::<crate::gpu_types::Vertex>(),
+        0,
+    )
+    .ok()?;
+    let lod1_indices =
+        meshopt::simplify(indices, &adapter, indices.len() / 2, 0.1, meshopt::SimplifyOptions::empty(), None);
+    if lod1_indices.is_empty() || lod1_indices.len() >= indices.len() {
+        return None;
+    }
+    Some(lod1_indices.iter().map(|&i| unique_vertices[i as usize]).collect())
+}
+
+/// [`lod1_vertices`], uploaded.
+#[cfg(not(target_arch = "wasm32"))]
+fn build_lod1(
+    device: &wgpu::Device,
+    unique_vertices: &[crate::gpu_types::Vertex],
+    indices: &[u32],
+    source: &str,
+) -> Option<(Arc<wgpu::Buffer>, u32)> {
+    let lod_flat = lod1_vertices(unique_vertices, indices)?;
+    let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some(&format!("LOD1 VBuf: {source}")),
+        contents: bytemuck::cast_slice(&lod_flat),
+        usage: wgpu::BufferUsages::VERTEX,
+    });
+    Some((Arc::new(buf), lod_flat.len() as u32))
+}
+
 impl Mesh {
     /// Creates a new `Mesh` component.
     /// `vertex_count` and `bounds` are computed from the `vertices` array automatically.
@@ -69,6 +112,20 @@ impl Mesh {
         vertices: &[crate::gpu_types::Vertex],
         center_offset: Vec3,
         source: String,
+    ) -> Self {
+        Self::from_vertices_with_lod(device, vbuf, vertices, center_offset, source, true)
+    }
+
+    /// [`Mesh::new`], with the triangle-list LOD optional — `new_indexed` passes a *unique*
+    /// vertex array, which is not a triangle list, and builds its LOD from its own indices.
+    #[cfg_attr(target_arch = "wasm32", allow(unused_variables, unused_mut))]
+    fn from_vertices_with_lod(
+        device: &wgpu::Device,
+        vbuf: Arc<wgpu::Buffer>,
+        vertices: &[crate::gpu_types::Vertex],
+        center_offset: Vec3,
+        source: String,
+        generate_lod: bool,
     ) -> Self {
         debug_assert!(
             !vertices.is_empty(),
@@ -85,49 +142,19 @@ impl Mesh {
         let mut lod_vbufs = Vec::new();
         let mut lod_vertex_counts = Vec::new();
 
-        // 1. Un-indexed vertex array üzerinden index array oluştur (meshopt için gereklidir)
+        // A flat triangle list: every three vertices are one triangle, so remapping recovers the
+        // shared corners and the simplifier sees real topology. `new_indexed` does NOT come
+        // through here with LOD on — its vertex array is already unique, not a triangle list.
         #[cfg(not(target_arch = "wasm32"))]
-        if vertex_count > 20000 {
+        if generate_lod && vertex_count as usize > LOD_MIN_CORNERS {
             let (unique_count, indices) = meshopt::generate_vertex_remap(vertices, None);
-
             let mut unique_vertices = vec![crate::gpu_types::Vertex::default(); unique_count];
             for (i, &new_idx) in indices.iter().enumerate() {
                 unique_vertices[new_idx as usize] = vertices[i];
             }
-
-            let adapter = meshopt::VertexDataAdapter::new(
-                bytemuck::cast_slice(&unique_vertices),
-                std::mem::size_of::<crate::gpu_types::Vertex>(),
-                0,
-            )
-            .unwrap();
-
-            let target_count = (indices.len() as f32 * 0.5) as usize; // %50 decimation
-            let lod1_indices = meshopt::simplify(
-                &indices,
-                &adapter,
-                target_count,
-                0.1, // %10 error tolerance
-                meshopt::SimplifyOptions::empty(),
-                None,
-            );
-
-            // Eğer başarıyla decimation yapıldıysa ve gerçekten vertex sayısı düştüyse GPU'ya at
-            if !lod1_indices.is_empty() && lod1_indices.len() < indices.len() {
-                // Flat vertex array'e geri döndür (Gizmo renderer flat bekliyor)
-                let mut lod_flat = Vec::with_capacity(lod1_indices.len());
-                for &idx in &lod1_indices {
-                    lod_flat.push(unique_vertices[idx as usize]);
-                }
-
-                let lod_vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some(&format!("LOD1 VBuf: {}", source)),
-                    contents: bytemuck::cast_slice(&lod_flat),
-                    usage: wgpu::BufferUsages::VERTEX,
-                });
-
-                lod_vbufs.push(Arc::new(lod_vbuf));
-                lod_vertex_counts.push(lod_flat.len() as u32);
+            if let Some((buf, count)) = build_lod1(device, &unique_vertices, &indices, &source) {
+                lod_vbufs.push(buf);
+                lod_vertex_counts.push(count);
             }
         }
 
@@ -224,13 +251,25 @@ impl Mesh {
         // `Mesh::new`'e TEKİLLEŞTİRİLMİŞ diziyi veriyoruz — `vertex_count` ile `vbuf.size()`
         // arasındaki debug_assert ancak böyle tutar, ve `bounds` iki durumda da aynı nokta
         // kümesinden çıkıyor.
-        let mut mesh = Mesh::new(
+        // No triangle-list LOD from `Mesh::new`: `unique_vertices` is not a triangle list, and
+        // feeding it to that path is how a large indexed mesh (every glTF and OBJ import) used to
+        // get a LOD1 of nonsense — each three consecutive unique vertices taken as a triangle.
+        let mut mesh = Mesh::from_vertices_with_lod(
             device,
             Arc::new(vbuf),
             &unique_vertices,
             center_offset,
             source,
+            false,
         );
+        // The LOD from the real topology, under the same gate as the flat path: it counts
+        // corners (index-list entries), which is what a flat mesh's vertex count also is.
+        if indices.len() > LOD_MIN_CORNERS {
+            if let Some((buf, count)) = build_lod1(device, &unique_vertices, &indices, &mesh.source) {
+                mesh.lod_vbufs.push(buf);
+                mesh.lod_vertex_counts.push(count);
+            }
+        }
         mesh.index_count = indices.len() as u32;
         mesh.index_format = index_format;
         mesh.ibuf = Some(Arc::new(ibuf));
@@ -436,5 +475,86 @@ mod lod_bias_tests {
         assert_eq!(effective_lod_distance(100.0, -2.0), 100.0);
         assert_eq!(effective_lod_distance(100.0, f32::NAN), 100.0);
         assert_eq!(effective_lod_distance(100.0, f32::INFINITY), 100.0);
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod lod_tests {
+    use super::*;
+    use crate::gpu_types::Vertex;
+
+    /// A UV sphere of radius 1 as a flat triangle list, its corners shared the way an importer's
+    /// are — and remapped as `new_indexed` remaps it.
+    fn sphere(rings: usize, segments: usize) -> (Vec<Vertex>, Vec<u32>) {
+        let point = |r: usize, s: usize| {
+            let theta = std::f32::consts::PI * r as f32 / rings as f32;
+            let phi = std::f32::consts::TAU * (s % segments) as f32 / segments as f32;
+            Vertex { position: [theta.sin() * phi.cos(), theta.cos(), theta.sin() * phi.sin()], ..Default::default() }
+        };
+        let mut flat = Vec::new();
+        for r in 0..rings {
+            for s in 0..segments {
+                let (a, b, c, d) = (point(r, s), point(r + 1, s), point(r + 1, s + 1), point(r, s + 1));
+                flat.extend([a, b, c, a, c, d]);
+            }
+        }
+        let (unique_count, indices) = meshopt::generate_vertex_remap(&flat, None);
+        let mut unique = vec![Vertex::default(); unique_count];
+        for (i, &u) in indices.iter().enumerate() {
+            unique[u as usize] = flat[i];
+        }
+        (unique, indices)
+    }
+
+    fn area(flat: &[Vertex]) -> f32 {
+        flat.as_chunks::<3>()
+            .0
+            .iter()
+            .map(|t| {
+                let [a, b, c] = [t[0].position, t[1].position, t[2].position].map(Vec3::from);
+                (b - a).cross(c - a).length() * 0.5
+            })
+            .sum()
+    }
+
+    /// The engine's own indexed sphere gets a LOD now: 20 736 corners is past the gate. It used
+    /// to get none — the gate counted its 3 575 unique vertices, a number that measures sharing,
+    /// not detail — while the same sphere built flat got one.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn an_indexed_sphere_past_the_gate_gets_a_lod() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        let Some((device, _queue)) = pollster::block_on(crate::test_gpu::headless_device()) else {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        };
+        let sphere = crate::asset::AssetManager::create_sphere(&device, 1.0, 48, 72);
+        assert!(sphere.ibuf.is_some(), "the primitive is indexed");
+        assert!(sphere.index_count as usize > LOD_MIN_CORNERS, "{} corners", sphere.index_count);
+        assert_eq!(sphere.lod_vbufs.len(), 1, "an indexed mesh past the gate has a LOD1");
+        assert!(
+            sphere.lod_vertex_counts[0] <= sphere.index_count / 2 + 3 && sphere.lod_vertex_counts[0].is_multiple_of(3),
+            "about half the corners, whole triangles: {} of {}",
+            sphere.lod_vertex_counts[0],
+            sphere.index_count
+        );
+        let small = crate::asset::AssetManager::create_sphere(&device, 1.0, 16, 24);
+        assert!(small.lod_vbufs.is_empty(), "under the gate, none");
+    }
+
+    /// LOD1 from the real topology keeps the surface — its triangles still cover a sphere's area
+    /// (4π) — while halving the corners. Taking the unique vertex array as a triangle list, which
+    /// is what an indexed mesh's LOD used to be built from, covers almost nothing.
+    #[test]
+    fn lod1_from_the_indices_keeps_the_surface() {
+        let (unique, indices) = sphere(48, 72);
+        assert!(indices.len() > LOD_MIN_CORNERS, "a mesh this size gets a LOD");
+        let lod = lod1_vertices(&unique, &indices).expect("the simplifier removes something");
+        assert!(lod.len() <= indices.len() / 2 + 3, "about half the corners: {} of {}", lod.len(), indices.len());
+        let full = std::f32::consts::PI * 4.0;
+        let kept = area(&lod);
+        assert!((kept - full).abs() < 0.15 * full, "LOD1 covers the sphere: area {kept:.2} against {full:.2}");
+        let nonsense = area(&unique[..unique.len() / 3 * 3]);
+        assert!(nonsense < 0.2 * full, "the old reading of the unique array covers next to nothing: {nonsense:.2}");
     }
 }

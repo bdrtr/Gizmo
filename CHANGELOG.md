@@ -1442,6 +1442,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Large imported meshes no longer draw a nonsense LOD.** `Mesh::new_indexed` (every glTF and
+  OBJ import, every primitive) passed its de-duplicated vertex array to `Mesh::new`, whose LOD
+  step reads its input as a flat triangle list — so a mesh with more than 20 000 unique vertices
+  got a LOD1 made of every three consecutive vertices, drawn whenever it was far away. LOD1 now
+  comes from the mesh's own indices, and the gate counts triangle corners on both paths
+  (`LOD_MIN_CORNERS`), so indexed meshes past it get a real LOD: `create_sphere(1.0, 48, 72)`
+  has one now (it had none — the gate counted its 3 575 unique vertices). LOD1 keeps 99.8 % of a
+  sphere's surface area; the old reading covered 2 %.
+
 - **Sky pixels are no longer lit as geometry.** The G-buffer's position target was cleared with
   `Color::BLACK`, whose alpha is 1 — and that alpha is the "something was drawn here" flag every
   reader tests. So no pixel was ever empty: the background was a surface at the camera with a

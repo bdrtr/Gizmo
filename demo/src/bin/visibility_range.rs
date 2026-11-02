@@ -18,7 +18,18 @@
 //! önce [`effective_lod_distance`]'tan geçiyor — o da `mesafe / bias`. Yani `lod_bias = 2,0`
 //! "yarı mesafede geç", `0,5` "iki katında geç" demek. 1,0 hiçbir şey yapmıyor.
 //!
-//! ## Asıl bulgu: motorun kendi ilkellerinin hiçbiri LOD alamıyor
+//! ## Düzeltildi (2026-11-02): indeksli mesh'ler LOD'u kendi indekslerinden alıyor
+//!
+//! Kapı artık iki yolda da aynı şeyi sayıyor — üçgen köşesi (indeks listesindeki giriş sayısı,
+//! düz bir mesh'in köşe sayısıyla aynı) — ve `new_indexed` LOD1'i gerçek topolojiden üretiyor:
+//! `create_sphere(1,0, 48, 72)` artık **1** LOD alıyor (20 736 köşeden 10 368). Bunu kurarken
+//! daha kötü bir şey çıktı: `new_indexed` tekil köşe dizisini `Mesh::new`'e üçgen listesiymiş gibi
+//! veriyordu, yani 20 000'den fazla **tekil** köşesi olan bir mesh (her büyük glTF/OBJ) art arda
+//! gelen her üç köşeyi üçgen sayan **anlamsız** bir LOD1 alıyordu — uzaktan çizilen hâli o.
+//! Test: `lod1_from_the_indices_keeps_the_surface` (küre alanının %99,8'i, eski okuma %2'si).
+//! Aşağıdaki ölçüm düzeltmeden önceki kayıt.
+//!
+//! ## Bulgu (düzeltmeden önce): motorun kendi ilkellerinin hiçbiri LOD alamıyordu
 //!
 //! LOD üretimi `Mesh::new` içinde tek bir kapıya bağlı: **`if vertex_count > 20000`**. Altında
 //! kalan hiçbir mesh LOD tamponu almıyor.
