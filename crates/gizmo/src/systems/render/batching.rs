@@ -15,7 +15,10 @@ use super::*;
 /// Held in a thread-local and cleared each frame rather than rebuilt, so a steady scene stops
 /// reallocating after its first frame.
 pub struct RenderCache {
-    pub(crate) batches: std::collections::HashMap<BatchKey, BatchData>,
+    /// FxHash, not SipHash: this map is hashed once per drawn object, and its keys are pointers
+    /// and flags the engine made — nothing an attacker chooses, so SipHash's resistance to flooding
+    /// buys nothing and costs a long hash of a fifteen-field key, every object, every frame.
+    pub(crate) batches: rustc_hash::FxHashMap<BatchKey, BatchData>,
     /// Per-instance data for every batch, in the order the draw items index it.
     pub instances: Vec<crate::renderer::gpu_types::InstanceRaw>,
     /// One entry per batch: the geometry to bind and how many instances of it to draw.
@@ -505,11 +508,9 @@ pub(super) fn collect_draw_items(
                     false
                 };
 
-                let active_vbuf = if use_lod1 {
-                    $mesh.lod_vbufs[0].clone()
-                } else {
-                    $mesh.vbuf.clone()
-                };
+                // Borrowed, not cloned: an `Arc` clone is an atomic increment and decrement per
+                // drawn object, and only a NEW batch needs its own handle (`or_insert_with` below).
+                let active_vbuf = if use_lod1 { &$mesh.lod_vbufs[0] } else { &$mesh.vbuf };
                 let active_vertex_count = if use_lod1 {
                     $mesh.lod_vertex_counts[0]
                 } else {
@@ -522,7 +523,7 @@ pub(super) fn collect_draw_items(
                 let (active_ibuf, active_index_count, active_index_format) = if use_lod1 {
                     (None, 0, wgpu::IndexFormat::Uint32)
                 } else {
-                    ($mesh.ibuf.clone(), $mesh.index_count, $mesh.index_format)
+                    ($mesh.ibuf.as_ref(), $mesh.index_count, $mesh.index_format)
                 };
 
                 // What the shader is handed, which is not always what was authored: a PLACED
@@ -556,7 +557,7 @@ pub(super) fn collect_draw_items(
                 .with_shadow_receiving(renderers.get($e).map(|r| r.receives_shadows).unwrap_or(true));
                 // Where this entity was drawn last frame — the object half of its velocity.
                 let previous_model = renderer.motion_history.previous($e, upload_model.to_cols_array_2d());
-                let skel_bg = $skeleton.map(|s: &crate::renderer::components::Skeleton| s.bind_group.clone());
+                let skel_bg = $skeleton.map(|s: &crate::renderer::components::Skeleton| &s.bind_group);
 
                 // Compute the pass-routing flags up front so they can be part of the
                 // batch key (see BatchKey docs) — not just read from the first material.
@@ -594,9 +595,9 @@ pub(super) fn collect_draw_items(
                 let visible_in_camera = shadows.visible();
 
                 let key = BatchKey {
-                    vbuf_id: std::sync::Arc::as_ptr(&active_vbuf) as usize,
+                    vbuf_id: std::sync::Arc::as_ptr(active_vbuf) as usize,
                     mat_id: std::sync::Arc::as_ptr(&$mat.bind_group) as usize,
-                    skeleton_id: skel_bg.as_ref().map(|bg| std::sync::Arc::as_ptr(bg) as usize),
+                    skeleton_id: skel_bg.map(|bg| std::sync::Arc::as_ptr(bg) as usize),
                     is_transparent,
                     blend_mode,
                     unlit,
@@ -613,7 +614,7 @@ pub(super) fn collect_draw_items(
 
                 let batch = cache.batches.entry(key).or_insert_with(|| BatchData {
                     vbuf: active_vbuf.clone(),
-                    ibuf: active_ibuf.clone(),
+                    ibuf: active_ibuf.cloned(),
                     index_count: active_index_count,
                     index_format: active_index_format,
                     bind_group: $mat.bind_group.clone(),
@@ -628,7 +629,7 @@ pub(super) fn collect_draw_items(
                     custom: routing.custom,
                     is_water,
                     is_grid,
-                    skeleton_bind_group: skel_bg,
+                    skeleton_bind_group: skel_bg.cloned(),
                     is_transparent,
                     blend_mode,
                     instances: Vec::new(),

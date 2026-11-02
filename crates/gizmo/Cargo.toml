@@ -66,6 +66,9 @@ tracing-layer = ["gizmo-core/tracing-layer"]
 
 [dependencies]
 gizmo-core = { path = "../gizmo-core" , version = "0.10.0" }
+# The draw batcher's key map: hashed once per drawn object, its keys are pointers and flags the
+# engine made, so SipHash's flooding resistance buys nothing there. Private: in no signature.
+rustc-hash = "2"
 gizmo-math = { path = "../gizmo-math" , version = "0.10.0" }
 gizmo-renderer = { path = "../gizmo-renderer", version = "0.10.0", optional = true }
 gizmo-window = { path = "../gizmo-window", version = "0.10.0", optional = true }

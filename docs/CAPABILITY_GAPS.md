@@ -482,6 +482,27 @@ the walk is already in the tree.
 
 Measured in `occlusion_culling`.
 
+**Re-measured 2026-11-03, and the walk was not where the time had gone.** The windowed demo now
+read ~31 ms whether the cubes were drawn or culled, against 18.9 in August — a regression. Splitting
+the walk with hard-coded early exits put almost nothing before the visibility decision (lookups and
+the matrix maths: ~1.7 ms for 60 000) and ~19 ms after it — but in that scene the cubes behind the
+camera are inside the sun's cascades, so they are not culled, they are *shadow casters*, and the
+19 ms was the per-drawn-object work. With the sun off and everything culled the walk is ~2.6 ms
+(43 ns per object). A headless probe timing `default_render_pass`'s CPU side (no compositor, which
+at 1 a.m. had started throttling the window to ~48 Hz and flattened every windowed number to
+20.8 ms) gave the split for 60 000 drawn cubes:
+
+| change | CPU ms |
+|---|---|
+| before | 25.0 |
+| `MotionHistory` a `Vec` indexed by entity id, not a `HashMap` swept with `retain` every frame (added 2026-11-01 with object motion blur) | 16.4 |
+| the batcher stops cloning three `Arc`s per drawn object (only a new batch needs its own) | 15.9 |
+| the batch map hashed with FxHash, not SipHash (keys are engine-made pointers and flags) | **14.1** |
+
+−44 %, every drawn object, every game. Everything culled is 7.7 ms, most of it the transform
+systems over 60 000 entities. `Frustum::intersects_aabb` also stopped testing the n-vertex it
+discards (half the plane work, the same decision bit for bit); not a measured win on its own.
+
 ### A7c. Motion blur (camera and object) and auto exposure — **CLOSED 2026-11-01**
 
 **Camera motion blur: `PostProcess::motion_blur`** (shutter fraction, 0 = off, the default). The

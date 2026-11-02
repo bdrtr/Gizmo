@@ -251,9 +251,25 @@ impl Frustum {
     }
 
     /// Returns `true` if the AABB is at least partially visible (not culled).
+    ///
+    /// Only the p-vertex test — the one that can say "outside". It used to go through
+    /// [`test_aabb`](Self::test_aabb), which also tests every plane's n-vertex to tell `Inside`
+    /// from `Partial`, an answer this question throws away: twice the plane work for the same
+    /// bool, for the camera and each of four shadow cascades, per mesh, per frame. Same decision
+    /// bit for bit (NaN included): the p-vertex comparison is unchanged, only the discarded half is
+    /// gone. Not a measured frame-time win on its own — the draw path's cost was elsewhere (see
+    /// `MotionHistory`) — just less work for the same answer.
     #[inline]
     pub fn intersects_aabb(&self, aabb: Aabb) -> bool {
-        self.test_aabb(aabb) != Intersection::Outside
+        if aabb.is_empty() {
+            return false;
+        }
+        // `!any(< 0)`, not `all(>= 0)`: the same predicate `test_aabb` uses, so a NaN distance
+        // decides the same way it did.
+        !self
+            .planes
+            .iter()
+            .any(|plane| plane.signed_distance(plane.positive_vertex(aabb)) < 0.0)
     }
 
     // -----------------------------------------------------------------------

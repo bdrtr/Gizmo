@@ -5,6 +5,13 @@
 //!   * **Görüş alanı dışında mı?** (frustum culling) — motorda **var**.
 //!   * **Önünde bir şey mi duruyor?** (occlusion culling) — motorda **yok**.
 //!
+//! > **2026-11-03 notu:** aşağıdaki "yığınlayıcı yürüyüşü" ayrışması yeniden ölçüldü ve pahalı
+//! > olan yürüyüş değil, **çizilen** nesne başına iş çıktı — bu sahnede kameranın arkasındaki küpler
+//! > güneşin kaskadlarının içinde, yani ayıklanmıyor, gölge düşürüyorlar. 60 000 çizilen küpte
+//! > `default_render_pass`'ın CPU süresi 25,0 → 14,1 ms indi (hareket geçmişi bir `Vec`, batch
+//! > haritası FxHash, nesne başına `Arc` kopyası yok). Ayrıntı: `CAPABILITY_GAPS.md` §A7b. Pencereli
+//! > ölçüm gece bileşik yöneticinin pencereyi ~48 Hz'e kısmasıyla bozulabiliyor; başsız ölç.
+//!
 //! ## Var olan taraf
 //!
 //! [`visible_in_frustum`] bir AABB'yi kameranın frustum'una karşı sınıyor, ve `batching.rs` bunu

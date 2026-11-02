@@ -2704,6 +2704,7 @@ dependencies = [
  "gizmo-window",
  "pollster",
  "rayon",
+ "rustc-hash 2.1.3",
  "serde",
  "tracing",
  "wgpu",

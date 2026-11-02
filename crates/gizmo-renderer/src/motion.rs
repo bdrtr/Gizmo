@@ -11,7 +11,6 @@
 //!   now minus where it was, camera and object motion together. A still object under a still
 //!   camera writes exactly zero.
 
-use std::collections::HashMap;
 use wgpu::util::DeviceExt;
 
 /// The format of the G-buffer's velocity target. Four bytes: the G-buffer already spends 28 of the
@@ -25,25 +24,32 @@ type Cols = [[f32; 4]; 4];
 /// Advanced once per frame ([`begin_frame`](Self::begin_frame)) however many views draw it: a
 /// split screen's second view asks again and gets the same answer instead of a history it just
 /// advanced. Owned by the renderer, so two renderers on one thread (tests do this) never share it.
+///
+/// **A slot per entity id, not a map.** Ids are slot indices — small, dense, reused — so a `Vec`
+/// indexed by them needs no hashing and no per-frame sweep. It was a `HashMap` swept with `retain`
+/// every frame, and measured 2026-11-03 on 60 000 drawn cubes that was 9.5 ms of a 30 ms frame:
+/// a SipHash and a 136-byte entry per drawn object, then a walk over all of them. Staleness is
+/// read from `seen` instead of being swept: an entry not drawn last frame is a newcomer, exactly
+/// as an entry the sweep had removed was.
 #[derive(Debug, Default)]
 pub struct MotionHistory {
     frame: u64,
-    entries: HashMap<u32, Entry>,
+    entries: Vec<Entry>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 struct Entry {
+    /// The frame it was last drawn in; 0 for a slot never used (frames start at 1).
     seen: u64,
     prev: Cols,
     cur: Cols,
 }
 
 impl MotionHistory {
-    /// Starts a frame, and forgets anything not drawn for two.
+    /// Starts a frame. Anything not drawn last frame counts as new when next asked about — no
+    /// sweep needed, see the type's docs.
     pub fn begin_frame(&mut self) {
         self.frame += 1;
-        let frame = self.frame;
-        self.entries.retain(|_, e| e.seen + 2 >= frame);
     }
 
     /// The matrix `entity` was drawn with last frame, given the one it is drawn with now. An entity
@@ -51,18 +57,21 @@ impl MotionHistory {
     /// streak from wherever it last was.
     pub fn previous(&mut self, entity: u32, current: Cols) -> Cols {
         let frame = self.frame;
-        match self.entries.get_mut(&entity) {
-            Some(e) if e.seen == frame => e.prev,
-            Some(e) if e.seen + 1 == frame => {
-                e.prev = e.cur;
-                e.cur = current;
-                e.seen = frame;
-                e.prev
-            }
-            _ => {
-                self.entries.insert(entity, Entry { seen: frame, prev: current, cur: current });
-                current
-            }
+        let slot = entity as usize;
+        if slot >= self.entries.len() {
+            self.entries.resize(slot + 1, Entry::default());
+        }
+        let e = &mut self.entries[slot];
+        if e.seen == frame && frame != 0 {
+            e.prev
+        } else if e.seen != 0 && e.seen + 1 == frame {
+            e.prev = e.cur;
+            e.cur = current;
+            e.seen = frame;
+            e.prev
+        } else {
+            *e = Entry { seen: frame, prev: current, cur: current };
+            current
         }
     }
 }
@@ -194,5 +203,23 @@ mod tests {
         h.begin_frame(); // not drawn this frame
         h.begin_frame();
         assert_eq!(h.previous(7, at(9.0)), at(9.0), "after a gap: no streak from x = 2");
+    }
+
+    /// A slot per id: a large id grows the table without disturbing the others, an id never drawn
+    /// before is a newcomer even though its slot exists (zeroed), and the gap rule holds for a slot
+    /// left behind — a reused id drawn two frames after its last owner gets no streak.
+    #[test]
+    fn slots_are_per_id_and_a_stale_slot_is_a_newcomer() {
+        let mut h = MotionHistory::default();
+        h.begin_frame();
+        h.previous(3, at(1.0));
+        assert_eq!(h.previous(50_000, at(5.0)), at(5.0), "first sight of a large id");
+        h.begin_frame();
+        assert_eq!(h.previous(3, at(2.0)), at(1.0), "growing the table kept id 3's history");
+        assert_eq!(h.previous(40_000, at(4.0)), at(4.0), "a slot that exists but was never drawn");
+        assert_eq!(h.previous(50_000, at(6.0)), at(5.0));
+        h.begin_frame();
+        h.begin_frame();
+        assert_eq!(h.previous(3, at(8.0)), at(8.0), "a stale slot is a newcomer");
     }
 }
