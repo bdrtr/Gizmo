@@ -1,0 +1,324 @@
+//! # Poligon — birinci şahıs atış poligonu
+//!
+//! Fareyle bak, WASD ile yürü, sol tıkla ateş et. Kaidelerin üstündeki kutu yığınlarını
+//! devir; her düşen kutu bir puan. Kırk mermin var.
+//!
+//! | girdi | iş |
+//! |---|---|
+//! | **fare** | bakış (imleç kilitli ve gizli) |
+//! | **WASD** · **Space** | yürü · zıpla |
+//! | **sol tık** | ateş |
+//! | **Esc** | imleci serbest bırak / geri kilitle |
+//! | **R** | baştan başlat |
+//!
+//! ## Neden var
+//!
+//! Önceki dört oyunun hiçbiri fareyle bakmadı. Bu oyun birinci şahıs kameranın ihtiyaç
+//! duyduğu her şeyi kullanıyor: imleci kilitlemek, ham fare hareketi, karakter denetleyicisi,
+//! kameranın ortasından fizik ışını, ışının çarptığı cisme itki. Yazarken karşılaşılan her
+//! eksik aşağıda.
+//!
+//! ## Motorda bulunan eksikler (bu oyunu yazarken)
+//!
+//! - **İmleç kilitlenemiyordu.** Motorda `set_cursor_grab` / `set_cursor_visible` çağrısı hiç
+//!   yoktu: fareyle bakan bir oyunun imleci pencereden çıkıp sahnenin üstünde görünüyordu.
+//!   **Kapatıldı:** `gizmo::core::window::CursorOptions` kaynağı (`mouse_look()` /
+//!   `free()`); pencereli uygulama değiştiği kare pencereye uyguluyor (`Locked` olmayan
+//!   platformda `Confined`). Bakış zaten ham fare hareketinden (`Input::mouse_delta`) geliyordu.
+//! - **Bir ECS varlığına itki uygulamanın yolu yoktu.** Gövde, konum ve hız ayrı bileşenler;
+//!   itkinin formülü `Integrator`'da ve cephe onu dışa açmıyor; uyuyan gövde elle
+//!   uyandırılmalı. **Kapatıldı:** `gizmo::physics::apply_impulse(world, id, itki, nokta)` —
+//!   ışının çarptığı kimlikle doğrudan.
+//!
+//! ## Ortam değişkenleri
+//!   * `GIZMO_FONT=<yol>` — HUD fontu
+//!   * `POLIGON_OTO=1` — kendiliğinden birkaç atış (ekran görüntüsü için)
+
+use gizmo::audio::synth::{Blip, Wave};
+use gizmo::audio::AudioManager;
+use gizmo::core::input::Input;
+use gizmo::core::window::CursorOptions;
+use gizmo::physics::components::CharacterController;
+use gizmo::physics::world::PhysicsWorld;
+use gizmo::physics::{Collider, RigidBody, Velocity};
+use gizmo::prelude::*;
+use gizmo::renderer::components::{Text, TextAlign, TextAnchor};
+use gizmo::renderer::text::FontId;
+use gizmo::simple::{sync_transforms, FixedPhysics, SimpleAppExt, SimpleSceneState};
+use gizmo::winit::keyboard::KeyCode;
+
+const AMMO: u32 = 40;
+const EYE: f32 = 0.6;
+const SHOT_IMPULSE: f32 = 6.0;
+
+#[derive(Clone, Copy)]
+struct Crate {
+    /// Kaidenin üst yüzü — bunun altına düşen kutu devrilmiş sayılır.
+    pedestal_top: f32,
+}
+gizmo::core::impl_component!(Crate);
+
+struct Game {
+    physics: FixedPhysics,
+    player: u32,
+    camera: u32,
+    yaw: f32,
+    pitch: f32,
+    shots: u32,
+    hud: u32,
+    banner: u32,
+    looking: bool,
+    auto_shots: u32,
+}
+
+fn main() {
+    App::<SimpleSceneState>::new("Gizmo Engine - Poligon", 1280, 720)
+        .with_simple_scene(|scene, _state| {
+            let r = &mut *scene.renderer;
+            r.deband_dither = true;
+            let font = load_font(r);
+
+            // Zemin ve arka duvar.
+            spawn_static(scene.world, Vec3::new(0.0, -0.5, -8.0), Vec3::new(12.0, 0.5, 14.0), Vec4::new(0.45, 0.45, 0.42, 1.0));
+            spawn_static(scene.world, Vec3::new(0.0, 3.0, -21.0), Vec3::new(12.0, 3.0, 0.5), Vec4::new(0.55, 0.5, 0.45, 1.0));
+            // Dört kaide, her birinde bir kutu yığını.
+            for (i, x) in [-6.0f32, -2.0, 2.0, 6.0].into_iter().enumerate() {
+                let z = -12.0 - i as f32 * 1.5;
+                let top = 1.0;
+                spawn_static(scene.world, Vec3::new(x, top * 0.5, z), Vec3::new(0.9, top * 0.5, 0.9), Vec4::new(0.3, 0.32, 0.36, 1.0));
+                for level in 0..3 {
+                    for (dx, dz) in [(-0.3, -0.3), (0.3, -0.3), (-0.3, 0.3), (0.3, 0.3)].into_iter().take(4 - level) {
+                        spawn_crate(scene.world, Vec3::new(x + dx, top + 0.25 + level as f32 * 0.5, z + dz), top);
+                    }
+                }
+            }
+
+            scene.world.spawn_bundle((
+                Transform::new(Vec3::ZERO).with_rotation(Quat::from_rotation_y(0.7) * Quat::from_rotation_x(-0.9)),
+                GlobalTransform::default(),
+                DirectionalLight::new(Vec3::new(1.0, 0.95, 0.88), 3.0, LightRole::Sun),
+            ));
+
+            // Oyuncu: bir kapsül karakter. Kamera başında.
+            let player = scene
+                .world
+                .spawn_bundle((
+                    Transform::new(Vec3::new(0.0, 0.9, 0.0)),
+                    GlobalTransform::default(),
+                    CharacterController { speed: 5.0, jump_speed: 5.0, ..Default::default() },
+                    Collider::capsule(0.3, 0.3),
+                    Velocity::default(),
+                ))
+                .id();
+            let camera = scene
+                .world
+                .spawn_bundle(CameraBundle {
+                    position: Vec3::new(0.0, 0.9 + EYE, 0.0),
+                    yaw: -std::f32::consts::FRAC_PI_2,
+                    pitch: 0.0,
+                    primary: true,
+                    ..Default::default()
+                })
+                .id();
+
+            let _crosshair = scene.world.spawn_bundle((Text::pinned("+", font, 28.0, TextAnchor::Center, Vec2::ZERO),));
+            let hud = scene
+                .world
+                .spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),))
+                .id();
+            let banner = scene
+                .world
+                .spawn_bundle((Text::pinned_at("", font, 40.0, Vec2::new(0.5, 0.35), Vec2::ZERO)
+                    .with_anchor(TextAnchor::Center)
+                    .with_align(TextAlign::Center),))
+                .id();
+
+            if let Ok(mut audio) = AudioManager::new() {
+                audio.load_sound_bytes("ates", Blip::new(Wave::Noise, 3000.0, 0.12).with_slide(400.0).with_volume(0.35).wav());
+                audio.load_sound_bytes("isabet", Blip::new(Wave::Square, 700.0, 0.06).with_slide(1100.0).with_volume(0.2).wav());
+                scene.world.insert_resource(audio);
+            }
+
+            // Fareyle bakış: imleç kilitli ve gizli.
+            scene.world.insert_resource(CursorOptions::mouse_look());
+            scene.world.insert_resource(Game {
+                physics: FixedPhysics::new(120),
+                player,
+                camera,
+                yaw: -std::f32::consts::FRAC_PI_2,
+                pitch: 0.0,
+                shots: 0,
+                hud,
+                banner,
+                looking: true,
+                auto_shots: if std::env::var_os("POLIGON_OTO").is_some() { 6 } else { 0 },
+            });
+        })
+        .set_update(update)
+        .run()
+        .expect("uygulama çalıştırılamadı");
+}
+
+fn spawn_static(world: &mut World, at: Vec3, half: Vec3, colour: Vec4) {
+    world.spawn_bundle((
+        Transform::new(at).with_scale(half),
+        GlobalTransform::default(),
+        MeshSource("standard_cube".into()),
+        MaterialDesc::new().with_pbr(colour, 0.8, 0.0),
+        MeshRenderer::new(),
+        RigidBody::new_static(),
+        Collider::box_collider(half),
+    ));
+}
+
+fn spawn_crate(world: &mut World, at: Vec3, pedestal_top: f32) {
+    world.spawn_bundle((
+        Transform::new(at).with_scale(Vec3::splat(0.24)),
+        GlobalTransform::default(),
+        MeshSource("standard_cube".into()),
+        MaterialDesc::new().with_pbr(Vec4::new(0.7, 0.5, 0.25, 1.0), 0.7, 0.0),
+        MeshRenderer::new(),
+        RigidBody::new(2.0, true),
+        Velocity::default(),
+        Collider::box_collider(Vec3::splat(0.24)),
+        Crate { pedestal_top },
+    ));
+}
+
+fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Input) {
+    let Some(mut game) = world.remove_resource::<Game>() else { return };
+
+    if input.is_key_just_pressed(KeyCode::Escape as u32) {
+        game.looking = !game.looking;
+        world.insert_resource(if game.looking { CursorOptions::mouse_look() } else { CursorOptions::free() });
+    }
+
+    // Bakış: ham fare hareketi.
+    if game.looking {
+        let (dx, dy) = input.mouse_delta();
+        game.yaw += dx * 0.0025;
+        game.pitch = (game.pitch - dy * 0.0025).clamp(-1.45, 1.45);
+    }
+    let forward = Camera::forward_from(game.yaw, game.pitch);
+    let flat_forward = Vec3::new(forward.x, 0.0, forward.z).normalize_or_zero();
+    let right = Camera::right_from(game.yaw);
+
+    // Yürüme.
+    {
+        let (mx, my) = input.move_axis();
+        let mut kccs = world.borrow_mut::<CharacterController>();
+        if let Some(mut kcc) = kccs.get_mut(game.player) {
+            kcc.target_velocity = (right * mx + flat_forward * my) * kcc.speed;
+            if input.is_key_just_pressed(KeyCode::Space as u32) {
+                kcc.jump_buffer_timer = kcc.jump_buffer_time;
+            }
+        }
+    }
+
+    // Ateş.
+    let fire = (game.looking && input.is_mouse_button_just_pressed(0)) || game.auto_shots > 0;
+    if fire && game.shots < AMMO {
+        if game.auto_shots > 0 {
+            game.auto_shots -= 1;
+            // Otomatik atış: en yakın kaideye doğru biraz sağa sola.
+            game.yaw = -std::f32::consts::FRAC_PI_2 + (game.auto_shots as f32 - 3.0) * 0.12;
+            game.pitch = -0.02;
+        }
+        game.shots += 1;
+        play(world, "ates");
+        shoot(world, &game, Camera::forward_from(game.yaw, game.pitch));
+    }
+
+    game.physics.advance(world, dt);
+    gizmo::physics::character_controller_system(world, dt);
+    sync_transforms(world);
+
+    // Kamera oyuncunun başında.
+    let head = world.borrow::<Transform>().get(game.player).map(|t| t.position + Vec3::Y * EYE);
+    if let Some(head) = head {
+        if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(game.camera) {
+            t.position = head;
+        }
+    }
+    if let Some(mut cam) = world.borrow_mut::<Camera>().get_mut(game.camera) {
+        cam.yaw = game.yaw;
+        cam.pitch = game.pitch;
+    }
+
+    draw_hud(world, &game);
+    world.insert_resource(game);
+}
+
+/// Kameranın ortasından bir ışın; çarptığı dinamik cisme çarpma noktasında bir itki.
+fn shoot(world: &mut World, game: &Game, dir: Vec3) {
+    let Some(origin) = world.borrow::<Transform>().get(game.camera).map(|t| t.position) else { return };
+    let hit = {
+        let Some(physics) = world.get_resource::<PhysicsWorld>() else { return };
+        let ray = gizmo::physics::raycast::Ray::new(origin, dir);
+        physics.raycast_excluding(&ray, 100.0, gizmo::physics::BodyHandle::from_id(game.player))
+    };
+    let Some(hit) = hit else { return };
+    let id = hit.entity.id();
+    if world.borrow::<Crate>().get(id).is_none() {
+        return;
+    }
+    if gizmo::physics::apply_impulse(world, id, dir * SHOT_IMPULSE, hit.point) {
+        play(world, "isabet");
+    }
+}
+
+fn play(world: &mut World, name: &str) {
+    if let Some(mut audio) = world.get_resource_mut::<AudioManager>() {
+        let _ = audio.play(name);
+    }
+}
+
+fn draw_hud(world: &mut World, game: &Game) {
+    let (down, total) = {
+        let crates = world.borrow::<Crate>();
+        let tfs = world.borrow::<Transform>();
+        let total = crates.iter().count();
+        let down = crates
+            .iter()
+            .filter(|(id, c)| tfs.get(*id).is_some_and(|t| t.position.y < c.pedestal_top - 0.1))
+            .count();
+        (down, total)
+    };
+    let mut texts = world.borrow_mut::<Text>();
+    if let Some(mut t) = texts.get_mut(game.hud) {
+        t.content = format!("Düşen {down}/{total}   Mermi {}", AMMO - game.shots);
+    }
+    if let Some(mut t) = texts.get_mut(game.banner) {
+        t.content = if down == total {
+            "Hepsi düştü!".into()
+        } else if game.shots >= AMMO {
+            format!("Mermi bitti — {down}/{total}")
+        } else if !game.looking {
+            "Duraklatıldı — Esc ile devam".into()
+        } else {
+            String::new()
+        };
+    }
+}
+
+const FONT_CANDIDATES: &[&str] = &[
+    "/usr/share/fonts/TTF/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+    "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    "/System/Library/Fonts/Helvetica.ttc",
+    "C:/Windows/Fonts/arial.ttf",
+];
+
+fn load_font(renderer: &mut gizmo::renderer::Renderer) -> FontId {
+    let env = std::env::var("GIZMO_FONT").ok();
+    for path in env.iter().map(String::as_str).chain(FONT_CANDIDATES.iter().copied()) {
+        if let Ok(id) = renderer.load_font_file(path) {
+            return id;
+        }
+    }
+    renderer
+        .load_font(gizmo::renderer::text::synthetic::synthetic_face())
+        .expect("sentetik yüz her zaman ayrıştırılır")
+}

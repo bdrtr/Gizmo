@@ -951,6 +951,25 @@ None of the earlier games touched `gizmo-ai`, `gizmo-ui` or picking. What it fou
   changes. Tested with a wall dropped on an agent's route inside its replan interval; ignoring the
   revision fails it.
 
+### C13. The fifth game: first person (2026-11-02, `poligon`)
+
+`demo/src/bin/poligon.rs` is a first-person shooting range: mouse-look on a `CharacterController`,
+a physics ray from the centre of the view, an impulse on what it hits, crate stacks to knock off
+their pedestals. What it found:
+
+- ~~**The cursor could not be held.**~~ **Closed 2026-11-02.** Nothing in the engine called
+  `set_cursor_grab` or `set_cursor_visible`, so a mouse-look game's cursor left the window and
+  sat over the scene. `gizmo::core::window::CursorOptions` (`mouse_look()`, `free()`,
+  `with_grab`/`with_visible`) is a resource the windowed app applies to the window on the frame it
+  changes; `Locked` falls back to `Confined` where the platform cannot lock (X11). Look itself
+  already came from raw device motion. *Not covered by a test* — applying it needs a window;
+  checked by hand on Linux the same day (cursor held and hidden, Esc releases and re-locks).
+- ~~**No way to push an ECS body.**~~ **Closed 2026-11-02.** The impulse formula lived in
+  `Integrator`, which the facade does not export, the three components had to be borrowed by hand
+  and a sleeping body woken. `gizmo::physics::apply_impulse(world, id, impulse, point)` takes the
+  id a raycast hit names; tested through the centre (pure linear), off it (spin), on a sleeper
+  (woken) and refusing a static body and a missing entity.
+
 ---
 
 ## D. Game-path / editor-path asymmetries

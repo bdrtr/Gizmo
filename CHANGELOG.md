@@ -114,6 +114,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - **`MeshSource("cylinder")` and `"cone"`**, sized like their colliders, and
     `AssetManager::PRIMITIVE_MESH_KEYS` as the one list of primitive keys (the studio's
     missing-asset check now uses it instead of its own copy).
+- **`poligon` — a first-person shooting range** (`docs/CAPABILITY_GAPS.md` §C13), and what it
+  needed:
+  - **Cursor grab and visibility: `gizmo::core::window::CursorOptions`.** A resource
+    (`mouse_look()` = locked and hidden, `free()`) the windowed app applies to the window when it
+    changes; `Locked` falls back to `Confined` where the platform cannot lock. Before, nothing in
+    the engine could hold or hide the cursor.
+  - **`gizmo::physics::apply_impulse(world, id, impulse, point)`** — push an ECS body at a point
+    (linear and angular, waking it), with the id a raycast hit names. Before, a game borrowed the
+    three components and reached into `Integrator`, which the facade does not export.
 - **`kale` — a tower defence on `gizmo-ai`, `gizmo-ui` and the mouse** (`docs/CAPABILITY_GAPS.md`
   §C12), and what it needed:
   - **`gizmo::pointer::cursor_ray` / `cursor_on_plane`** — the world under the mouse, through the
