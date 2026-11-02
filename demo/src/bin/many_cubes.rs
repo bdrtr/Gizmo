@@ -44,12 +44,13 @@
 //!   * **Tek koşu ölçüm değil.** Aynı ayarın üç koşusu arasındaki yayılım 0,05–0,45 ms; daha
 //!     gürültülü bir turda 0,73 ms'ye kadar çıktı. Bu bandın altındaki hiçbir fark okunmamalı.
 //!
-//! ## Motorun oyun yolu çizim istatistiği yayınlamıyor
+//! ## Çizim istatistiği motordan
 //!
-//! `RenderStats` diye bir tip var (çizim çağrısı, üçgen, örnek sayısı) ama onu **yalnız
-//! `gizmo-studio`'nun çizim hattı dolduruyor**; `default_render_pass` hiçbir şey yazmıyor. Yani
-//! bir oyun kendi çizim çağrısı sayısını okuyamıyor. Demo bu yüzden parti sayısını *kurgudan*
-//! biliyor (K mesh = K parti) ve ölçtüğü şey kare süresi.
+//! `RenderStats` (çizim çağrısı, üçgen, örnek sayısı) 2026-11-02'ye kadar **yalnız
+//! `gizmo-studio`'nun çizim hattında** doluyordu; bir oyun kendi çizim çağrısı sayısını
+//! okuyamıyordu ve bu demo parti sayısını *kurgudan* biliyordu (K mesh = K parti). Artık
+//! `default_render_pass` de yayınlıyor, ve panel motorun kendi sayısını gösteriyor — kurgunun
+//! söylediğiyle yan yana, ki ikisi ayrışırsa görünsün.
 //!
 //! ## Kameranın sabit adımı, ve istatistiğin kaynağı
 //!
@@ -190,6 +191,9 @@ fn main() {
             let stats = world
                 .get_resource::<Analyzer>()
                 .and_then(|a| a.stats(METRIC_FRAME_MS));
+            let drawn = world
+                .get_resource::<gizmo::renderer::components::RenderStats>()
+                .map(|r| *r);
             gizmo::egui::Area::new("cubes".into())
                 .anchor(gizmo::egui::Align2::LEFT_TOP, [12.0, 12.0])
                 .show(ctx, |ui| {
@@ -221,7 +225,13 @@ fn main() {
                     ui.separator();
                     ui.label("renk/pürüz/metaliklik BatchKey'de değil — partiyi bölmez");
                     ui.label("bölen şey: mesh, doku, yönlendirme bayrakları, gölge, görünürlük");
-                    ui.label("oyun yolu çizim çağrısı sayısı yayınlamıyor (RenderStats editörde)");
+                    match drawn {
+                        Some(r) => ui.label(format!(
+                            "motor (RenderStats): {} çizim çağrısı · {} örnek · {} üçgen",
+                            r.draw_calls, r.instances, r.triangles
+                        )),
+                        None => ui.label("RenderStats henüz yayınlanmadı"),
+                    };
                     });
                 });
         })

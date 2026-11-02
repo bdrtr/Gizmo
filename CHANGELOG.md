@@ -81,6 +81,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   or by default to a `tracing::error!` naming the system, and the system runs again next frame.
   `SystemOutput` is the trait behind it; `()` systems are unchanged.
 
+- **The game path publishes `RenderStats`** (draw calls, instances, triangles, sampled GPU
+  memory), counted as the editor counts them, so a game can read its own draw-call count; the
+  `many_cubes` demo shows it. Under split screen it holds the last view drawn.
+
 - **An inert `DespawnAfter` is reported.** With a `DespawnAfter` or `DespawnBelowY` attached and no
   `LifetimePlugin` installed, `default_render_pass` logs one warning per world
   (`lifetime::warn_if_inert`); the plugin inserts `LifetimeActive`, which silences it. A custom

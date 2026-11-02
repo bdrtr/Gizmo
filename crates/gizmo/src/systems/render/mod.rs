@@ -184,12 +184,40 @@ fn jitter_projection(mut proj: crate::math::Mat4, jx: f32, jy: f32) -> crate::ma
     proj
 }
 
+/// What this view costs, as the editor counts it (`gizmo-studio`'s render pipeline): one draw call
+/// per batch with camera-visible instances, triangles counted with their instances. Published as
+/// the world's [`RenderStats`](crate::renderer::components::RenderStats) resource, so a game can
+/// read its own draw-call count — before, only the editor filled it. Under split screen it holds
+/// the last view drawn. GPU memory is sampled about once a second, as the editor does, since the
+/// allocator report walks every live allocation.
+fn publish_render_stats(world: &mut World, renderer: &Renderer, items: &[batching::DrawItem], elapsed: f32) {
+    use crate::renderer::components::RenderStats;
+    let mut stats = RenderStats::default();
+    for item in items.iter().filter(|i| i.visible_in_camera && i.camera_count > 0) {
+        stats.draw_calls += 1;
+        stats.instances += item.camera_count;
+        let indices = if item.ibuf.is_some() { item.index_count } else { item.vertex_count };
+        stats.triangles += (indices / 3) * item.camera_count;
+    }
+    let previous = world
+        .get_resource::<RenderStats>()
+        .map(|r| (r.gpu_allocated_bytes, r.gpu_sampled_at))
+        .unwrap_or((None, f32::NEG_INFINITY));
+    if elapsed - previous.1 >= 1.0 {
+        stats.gpu_allocated_bytes = renderer.device.generate_allocator_report().map(|r| r.total_allocated_bytes);
+        stats.gpu_sampled_at = elapsed;
+    } else {
+        stats.gpu_allocated_bytes = previous.0;
+        stats.gpu_sampled_at = previous.1;
+    }
+    world.insert_resource(stats);
+}
+
 /// A batteries-included render path, serving only to light the models and put them on screen
 /// quickly.
 /// It is used to avoid writing hundreds of lines of code in freshly opened, empty projects
 /// like `tut`.
 #[tracing::instrument(skip_all, name = "render_system")]
-
 pub fn default_render_pass(
     world: &mut World,
     encoder: &mut wgpu::CommandEncoder,
@@ -976,6 +1004,7 @@ fn draw_camera_view(
     // instanced batches and upload the instance buffer. Lives in `batching.rs`.
     let (draw_items, uploaded_instances) =
         batching::collect_draw_items(world, renderer, unjittered_view_proj, setup.cascade_view_projs, cam_pos);
+    publish_render_stats(world, renderer, &draw_items, elapsed_time);
 
     // The GPU-physics cull reads the view's camera, so it is per view; its simulation is not.
     if let Some(physics) = &renderer.gpu_physics {
@@ -5806,6 +5835,52 @@ mod golden_render_tests {
                     assert!(rgb[own] > rgb[other] + 25.0, "the {name} corner is {name}: {rgb:?}");
                 }
             }
+        });
+    }
+
+    /// The game path publishes `RenderStats`, counted as the editor counts them. Three cubes
+    /// sharing a mesh and a material are one batch: 1 draw call, 3 instances, 3 × 12 triangles. A
+    /// fourth that only casts a shadow (`ShadowCasting::Only`) is not drawn and must not count.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn the_game_path_publishes_render_stats() {
+        use crate::renderer::components::{RenderStats, ShadowCasting};
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(
+                &renderer.device,
+                &renderer.queue,
+                &renderer.scene.texture_bind_group_layout,
+            );
+            let mesh = AssetManager::create_cube(&renderer.device);
+            let material = Material::new(tex).with_pbr(Vec4::new(0.7, 0.7, 0.7, 1.0), 0.5, 0.0);
+            for (i, shadows) in [ShadowCasting::On, ShadowCasting::On, ShadowCasting::On, ShadowCasting::Only].into_iter().enumerate() {
+                let e = world.spawn();
+                world.add_component(e, Transform::new(Vec3::new(i as f32 * 1.5 - 2.25, 0.0, -6.0)).with_scale(Vec3::splat(0.5)));
+                world.add_component(e, GlobalTransform::default());
+                world.add_component(e, mesh.clone());
+                world.add_component(e, material.clone());
+                world.add_component(e, MeshRenderer::new().with_shadows(shadows));
+            }
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::ZERO,
+                yaw: -std::f32::consts::FRAC_PI_2,
+                pitch: 0.0,
+                primary: true,
+                ..Default::default()
+            });
+            let _ = render_world(&mut renderer, &mut world).await;
+            let stats = *world.get_resource::<RenderStats>().expect("the game path publishes RenderStats");
+            assert_eq!((stats.draw_calls, stats.instances, stats.triangles), (1, 3, 36), "{stats:?}");
         });
     }
 

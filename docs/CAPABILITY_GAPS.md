@@ -836,9 +836,15 @@ again as of 2026-08-24. Recording the whole set, because they are one family:
    separately is exactly what `gizmo-renderer::routing` exists to prevent. `render_parity`'s
    inventory went green with it, and the workspace suite with it: **244 binaries, 2 470 tests, 0
    failures** — the first fully green run since `05fcbff7` on 2026-08-22.
-2. **`RenderStats` (draw calls / triangles / instances) is filled by `gizmo-studio` only.**
-   `default_render_pass` publishes nothing, so a *game* cannot read its own draw-call count.
-   Measured in `many_cubes`.
+2. ~~**`RenderStats` (draw calls / triangles / instances) is filled by `gizmo-studio` only.**~~
+   **CLOSED 2026-11-02**, with its consumer: `default_render_pass` publishes it per view, counted
+   as the editor counts (one draw call per batch with camera-visible instances, triangles × their
+   instances, shadow-only casters excluded; GPU memory sampled about once a second), and
+   `many_cubes` — which had to infer its batch count from how it built the scene — now shows the
+   engine's: `1 draw call · 7443 instances · 89316 triangles` at frame 120. `render_parity` had
+   declined this as "stats with no consumer"; the demo is the consumer, and the entry is gone.
+   Tested: three cubes sharing a mesh and material read `(1, 3, 36)`, and counting the
+   shadow-only fourth fails the test. Under split screen it holds the last view drawn.
 3. **The grid pipeline is editor-only.** `MaterialType::Grid`, `grid.wgsl` and a compiled
    `grid_pipeline` all exist; only studio ever binds it. In the game path a grid material draws as
    a plain opaque PBR plane — measured in `infinite_grid`.
