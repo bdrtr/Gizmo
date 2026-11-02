@@ -854,6 +854,8 @@ fn both_draw_paths_run_the_same_per_frame_drivers() {
             "sync_material_descriptions(",
             "tween_system(",
             "color_tween_system(",
+            "apply_camera_shake(",
+            "undo_camera_shake(",
         ] {
             assert!(
                 code.contains(driver),

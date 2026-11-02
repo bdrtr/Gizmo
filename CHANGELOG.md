@@ -114,6 +114,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - **`MeshSource("cylinder")` and `"cone"`**, sized like their colliders, and
     `AssetManager::PRIMITIVE_MESH_KEYS` as the one list of primitive keys (the studio's
     missing-asset check now uses it instead of its own copy).
+- **Screen shake: `CameraShake`.** On a camera, `add(trauma)`; the shake is a smooth noise scaled
+  by trauma² and wears off at `decay` per second. The draw path applies it to the frame being
+  drawn and puts the camera back exactly afterwards, so game code, aim rays and the audio
+  listener never see it. `poligon` uses it.
 - **Audio fades, and a game's `AudioManager` is ticked.** `fade_to`, `fade_out` and
   `crossfade` (menu → level music); `AudioManager::tick(dt)` advances them. `gizmo-app`'s frame
   loop now ticks an `AudioManager` resource every frame — before, nothing did unless the opt-in

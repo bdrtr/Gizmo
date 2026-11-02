@@ -29,6 +29,11 @@
 //!   itkinin formülü `Integrator`'da ve cephe onu dışa açmıyor; uyuyan gövde elle
 //!   uyandırılmalı. **Kapatıldı:** `gizmo::physics::apply_impulse(world, id, itki, nokta)` —
 //!   ışının çarptığı kimlikle doğrudan.
+//! - **Ekran sarsıntısı yoktu.** Atışın bir tepkisi olsun diye kamerayı oyun kodunda sarsmak,
+//!   bakış açısını ve nişan ışınını da sarsmak demekti — ve geri alınmazsa kamerayı kaydırmak.
+//!   **Kapatıldı:** `CameraShake` bileşeni (`add(travma)`, travma² kadar yumuşak gürültü, saniyede
+//!   `decay` kadar söner); çizim yolu kamerayı yalnızca o karenin resmi için oynatıp çizimden sonra
+//!   bit bit geri koyuyor. Her atış küçük, her isabet biraz daha büyük bir sarsıntı.
 //!
 //! ## Ortam değişkenleri
 //!   * `GIZMO_FONT=<yol>` — HUD fontu
@@ -120,6 +125,14 @@ fn main() {
                     ..Default::default()
                 })
                 .id();
+            // Sarsıntı yalnızca resimde: nişan ışını ve bakış açısı onu hiç görmüyor.
+            let mut shake = CameraShake::default();
+            shake.max_offset = 0.04;
+            shake.max_angle = 0.012;
+            shake.decay = 3.0;
+            if let Some(e) = scene.world.get_entity(camera) {
+                scene.world.add_component(e, shake);
+            }
 
             let _crosshair = scene.world.spawn_bundle((Text::pinned("+", font, 28.0, TextAnchor::Center, Vec2::ZERO),));
             let hud = scene
@@ -226,6 +239,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
         }
         game.shots += 1;
         play(world, "ates");
+        kick(world, &game, 0.35);
         shoot(world, &game, Camera::forward_from(game.yaw, game.pitch));
     }
 
@@ -264,6 +278,14 @@ fn shoot(world: &mut World, game: &Game, dir: Vec3) {
     }
     if gizmo::physics::apply_impulse(world, id, dir * SHOT_IMPULSE, hit.point) {
         play(world, "isabet");
+        kick(world, game, 0.25);
+    }
+}
+
+/// Kameraya travma ekler.
+fn kick(world: &mut World, game: &Game, trauma: f32) {
+    if let Some(mut shake) = world.borrow_mut::<CameraShake>().get_mut(game.camera) {
+        shake.add(trauma);
     }
 }
 

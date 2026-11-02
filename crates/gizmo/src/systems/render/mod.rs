@@ -234,15 +234,22 @@ pub fn default_render_pass(
     // by `render_viewports`, one view per such camera; every host that already calls this —
     // `SimpleApp`, the editor's game view, a hand-written render loop — gets it without a second
     // entry point to know about.
+    //
+    // A `CameraShake` moves the camera for this frame's picture only: applied before the transform
+    // pass, undone after the draw, on the animation clock.
+    let shake_dt = world.get_resource::<gizmo_core::time::Time>().map(|t| t.dt()).unwrap_or(0.0);
+    let shaken = apply_camera_shake(world, shake_dt);
     if any_camera_has_a_viewport(world) {
-        render_viewports(world, encoder, view, renderer);
-        return;
+        render_viewports_unshaken(world, encoder, view, renderer);
+    } else {
+        prepare_frame(world, renderer);
+        capture_reflection_probes(world, renderer);
+        let camera = crate::renderer::components::active_camera(world);
+        let lods =
+            step_gpu_simulations(world, encoder, renderer, &[camera_world_position(world, camera)]);
+        draw_camera_view(world, encoder, view, renderer, camera, lods, None, true, None);
     }
-    prepare_frame(world, renderer);
-    capture_reflection_probes(world, renderer);
-    let camera = crate::renderer::components::active_camera(world);
-    let lods = step_gpu_simulations(world, encoder, renderer, &[camera_world_position(world, camera)]);
-    draw_camera_view(world, encoder, view, renderer, camera, lods, None, true, None);
+    undo_camera_shake(world, shaken);
 }
 
 /// Whether any camera in `world` asks for a [`Viewport`](crate::renderer::components::Viewport).
@@ -276,6 +283,19 @@ fn any_camera_has_a_viewport(world: &World) -> bool {
 /// fluid and particle simulation (at the level of detail of the nearest camera). Drawn per view,
 /// a split screen would play every animation and emit every particle twice as fast.
 pub fn render_viewports(
+    world: &mut World,
+    encoder: &mut wgpu::CommandEncoder,
+    view: &wgpu::TextureView,
+    renderer: &mut Renderer,
+) {
+    let shake_dt = world.get_resource::<gizmo_core::time::Time>().map(|t| t.dt()).unwrap_or(0.0);
+    let shaken = apply_camera_shake(world, shake_dt);
+    render_viewports_unshaken(world, encoder, view, renderer);
+    undo_camera_shake(world, shaken);
+}
+
+/// [`render_viewports`] without the camera shake, which its callers have already applied.
+fn render_viewports_unshaken(
     world: &mut World,
     encoder: &mut wgpu::CommandEncoder,
     view: &wgpu::TextureView,
@@ -1166,6 +1186,9 @@ pub use particles::{emit, spawn_from_emitters};
 
 mod sprite;
 pub use sprite::record_sprites;
+
+mod shake;
+pub use shake::{apply_camera_shake, undo_camera_shake, ShakeUndo};
 
 mod text;
 pub use text::record_text;

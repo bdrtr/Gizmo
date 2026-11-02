@@ -47,6 +47,9 @@ pub fn execute_render_pipeline(
     let tween_dt = crate::systems::simulation::animation_delta(world);
     gizmo::renderer::tween::tween_system(world, tween_dt);
     gizmo::renderer::components::color_tween_system(world, tween_dt);
+    // A `CameraShake` moves its camera for this picture and is undone at the end of this function,
+    // exactly as the game path does — the shake is in the frame and nowhere else.
+    let shaken = gizmo::systems::render::apply_camera_shake(world, tween_dt);
     gizmo::systems::render::ensure_global_transforms(world);
 
     // `MaterialDesc` → `Material` and back, the same pair the game path runs and for the same
@@ -806,6 +809,7 @@ pub fn execute_render_pipeline(
             renderer.run_post_processing(encoder, &game_view);
         }
     }
+    gizmo::systems::render::undo_camera_shake(world, shaken);
 }
 
 /// Draws the game camera's view of the scene into `output`, returning false if there is no game

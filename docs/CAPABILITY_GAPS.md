@@ -990,6 +990,16 @@ their pedestals. What it found:
   and a sleeping body woken. `gizmo::physics::apply_impulse(world, id, impulse, point)` takes the
   id a raycast hit names; tested through the centre (pure linear), off it (spin), on a sleeper
   (woken) and refusing a static body and a missing entity.
+- ~~**No screen shake.**~~ **Closed 2026-11-02.** A game that shook its own camera shook its aim ray
+  and its look angles with it, and had to undo the offset itself — exactly, or the camera drifted.
+  `CameraShake` (on the camera; in the prelude): `add(trauma)`, a smooth noise scaled by trauma²
+  across the view (right/up offset, yaw, pitch), worn off at `decay` per second on the animation
+  clock. Both draw paths call `apply_camera_shake` before the transform pass and
+  `undo_camera_shake` after drawing, restoring the remembered `Transform`, angles and
+  `GlobalTransform` bit for bit rather than subtracting. Tested: capped trauma and wear-off,
+  trauma² bounded and continuous, the camera exactly back after fifty shaken frames, no motion
+  along the look axis; `render_parity` requires both calls in both paths. `poligon` kicks on every
+  shot and hit.
 
 ### C14. The sixth game: things that move smoothly (2026-11-02, `kaydirmaca`)
 

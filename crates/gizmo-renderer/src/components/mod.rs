@@ -17,6 +17,8 @@ pub mod material;
 pub mod mesh;
 /// A colour eased to a target — [`ColorTween`](color_tween::ColorTween).
 pub mod color_tween;
+/// Trauma that shakes a camera — [`CameraShake`](camera_shake::CameraShake).
+pub mod camera_shake;
 /// Geometry made in code, as data the draw path uploads — [`MeshData`](mesh_data::MeshData).
 pub mod mesh_data;
 /// Everything else an entity can carry: terrain, LOD groups, particle emitters, render targets,
@@ -41,6 +43,7 @@ pub use material::*;
 pub use mesh::*;
 pub use mesh_data::MeshData;
 pub use color_tween::{color_tween_system, ColorTween};
+pub use camera_shake::CameraShake;
 pub use misc::*;
 pub use post_process::*;
 pub use reflection_probe::*;
