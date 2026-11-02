@@ -1143,6 +1143,19 @@ it was already there (`move_axis`, `right_stick`, `cursor_on_plane`, `Timer`, `o
   still loads), and for a name without an extension the error lists the primitive keys. GPU-tested:
   two requests share one buffer, collection forgets it; not inserting into the cache fails it.
 
+### C16d. The eighth game: animations in sequence (2026-11-03, `mucevher`)
+
+`demo/src/bin/mucevher.rs` is a match-3 puzzle: swap two neighbours (drag, or click then click),
+runs of three clear, the rest fall, new gems drop in, cascades chain. Its whole flow is
+animations played one after another — swap, swap back or clear, fall, look again — and that needed
+nothing new: a small state machine waiting on `Tween::is_finished`. One thing was missing:
+
+- ~~**A tween could not wait.**~~ **Closed 2026-11-03.** Gems falling column by column, a moment
+  apart, meant counting the start by hand. `Tween::with_delay` and `ColorTween::with_delay`: they
+  hold, take their start **when they start** (not when added — something may have moved the entity
+  meanwhile), and spend the part of the frame past the delay on themselves. Tested on both; taking
+  the start at once, or dropping the remainder, fails them.
+
 ### C16c. Touch (2026-11-02)
 
 ~~**A finger did nothing.**~~ **Closed 2026-11-02.** The windowed loop had no `WindowEvent::Touch`

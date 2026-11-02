@@ -190,11 +190,21 @@ pub struct Tween {
     ease: Ease,
     repeat: Repeat,
     finished: bool,
+    delay: f32,
 }
 
 impl Tween {
     fn new(to: Pose, seconds: f32) -> Self {
-        Self { from: None, to, duration: seconds.max(0.0), elapsed: 0.0, ease: Ease::Linear, repeat: Repeat::Once, finished: false }
+        Self {
+            from: None,
+            to,
+            duration: seconds.max(0.0),
+            elapsed: 0.0,
+            ease: Ease::Linear,
+            repeat: Repeat::Once,
+            finished: false,
+            delay: 0.0,
+        }
     }
 
     /// To `position` in `seconds`.
@@ -252,6 +262,15 @@ impl Tween {
         self
     }
 
+    /// Waits `seconds` before starting — and takes its start pose when it starts, not when it was
+    /// added, so whatever moved the entity meanwhile is where it starts from. Staggering a row of
+    /// tweens by a delay each is how a board fills column by column rather than all at once.
+    #[must_use]
+    pub fn with_delay(mut self, seconds: f32) -> Self {
+        self.delay = if seconds.is_finite() { seconds.max(0.0) } else { 0.0 };
+        self
+    }
+
     /// Replaces what happens at the end (once by default).
     #[must_use]
     pub fn repeating(mut self, repeat: Repeat) -> Self {
@@ -280,12 +299,23 @@ impl Tween {
         if self.finished {
             return;
         }
+        // The delay first; the part of `dt` past it is spent on the tween itself, so a delay
+        // ending mid-frame does not cost the tween that frame's remainder.
+        let mut dt = dt.max(0.0);
+        if self.delay > 0.0 {
+            if dt < self.delay {
+                self.delay -= dt;
+                return;
+            }
+            dt -= self.delay;
+            self.delay = 0.0;
+        }
         let from = *self.from.get_or_insert(Pose {
             position: self.to.position.map(|_| transform.position),
             rotation: self.to.rotation.map(|_| transform.rotation),
             scale: self.to.scale.map(|_| transform.scale),
         });
-        self.elapsed += dt.max(0.0);
+        self.elapsed += dt;
         // Where along the path, before easing.
         let (t, finished) = self.repeat.position(self.elapsed, self.duration);
         self.finished = finished;
@@ -341,6 +371,23 @@ mod tests {
         assert!((Ease::InOutQuad.apply(0.5) - 0.5).abs() < 1e-6);
         assert!((0..100).any(|i| Ease::OutBack.apply(i as f32 / 100.0) > 1.0), "OutBack never overshot");
         assert!((0..100).all(|i| Ease::OutBounce.apply(i as f32 / 100.0) <= 1.0 + 1e-6), "a bounce never passes the end");
+    }
+
+    /// A delayed tween holds the entity still for the delay, starts from wherever the entity is
+    /// when the delay ends (not where it was when the tween was added), and spends the part of the
+    /// frame past the delay on itself.
+    #[test]
+    fn a_delay_waits_then_starts_from_where_the_entity_is_then() {
+        let mut t = Transform::new(Vec3::ZERO);
+        let mut tw = Tween::to_position(Vec3::new(10.0, 0.0, 0.0), 1.0).with_delay(0.5);
+        tw.advance(0.3, &mut t);
+        assert_eq!(t.position, Vec3::ZERO, "moved during the delay");
+        t.position = Vec3::new(2.0, 0.0, 0.0); // something else moved it meanwhile
+        tw.advance(0.4, &mut t); // 0.2 of delay left, then 0.2 of tween
+        assert!((t.position.x - (2.0 + 8.0 * 0.2)).abs() < 1e-5, "{}", t.position.x);
+        tw.advance(0.8, &mut t);
+        assert!(tw.is_finished() && t.position.x == 10.0);
+        assert!(!Tween::to_scale(Vec3::ONE, 1.0).with_delay(f32::NAN).is_finished());
     }
 
     #[test]

@@ -114,6 +114,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - **`MeshSource("cylinder")` and `"cone"`**, sized like their colliders, and
     `AssetManager::PRIMITIVE_MESH_KEYS` as the one list of primitive keys (the studio's
     missing-asset check now uses it instead of its own copy).
+- **Tween delays.** `Tween::with_delay` / `ColorTween::with_delay`: wait, then start from where
+  the entity is at that moment. Found by `mucevher`, a match-3 puzzle (new demo), whose board fills
+  column by column.
 - **Localisation: `Locale` and `LocalizedText`** (`gizmo::app::locale`, in the prelude). JSON
   string tables per language, fallback to the first language then the key, `{name}`
   placeholders, `missing()`, `system_language()`; a `LocalizedText` beside a `Text` shows the

@@ -35,13 +35,23 @@ pub struct ColorTween {
     ease: Ease,
     repeat: Repeat,
     finished: bool,
+    delay: f32,
 }
 
 impl ColorTween {
     /// To `color` (linear RGBA) in `seconds`.
     #[must_use]
     pub fn to(color: Vec4, seconds: f32) -> Self {
-        Self { from: None, to: color, duration: seconds.max(0.0), elapsed: 0.0, ease: Ease::Linear, repeat: Repeat::Once, finished: false }
+        Self {
+            from: None,
+            to: color,
+            duration: seconds.max(0.0),
+            elapsed: 0.0,
+            ease: Ease::Linear,
+            repeat: Repeat::Once,
+            finished: false,
+            delay: 0.0,
+        }
     }
 
     /// To the current colour with alpha `alpha` — a fade, without naming the colour. The colour
@@ -56,6 +66,14 @@ impl ColorTween {
     #[must_use]
     pub fn with_ease(mut self, ease: Ease) -> Self {
         self.ease = ease;
+        self
+    }
+
+    /// Waits `seconds` before starting, and takes its start colour when it starts — the same rule
+    /// as [`Tween::with_delay`](gizmo_animation::tween::Tween::with_delay).
+    #[must_use]
+    pub fn with_delay(mut self, seconds: f32) -> Self {
+        self.delay = if seconds.is_finite() { seconds.max(0.0) } else { 0.0 };
         self
     }
 
@@ -78,6 +96,15 @@ impl ColorTween {
         if self.finished {
             return current;
         }
+        let mut dt = dt.max(0.0);
+        if self.delay > 0.0 {
+            if dt < self.delay {
+                self.delay -= dt;
+                return current;
+            }
+            dt -= self.delay;
+            self.delay = 0.0;
+        }
         if self.from.is_none() {
             if self.to.x.is_nan() {
                 self.to = Vec4::new(current.x, current.y, current.z, self.to.w);
@@ -85,7 +112,7 @@ impl ColorTween {
             self.from = Some(current);
         }
         let from = self.from.unwrap_or(current);
-        self.elapsed += dt.max(0.0);
+        self.elapsed += dt;
         let (t, finished) = self.repeat.position(self.elapsed, self.duration);
         self.finished = finished;
         if finished {
@@ -145,6 +172,15 @@ mod tests {
     }
 
     /// A fade keeps the colour and moves only alpha.
+    /// Delayed: the colour holds, the start is taken when it starts, the rest of the frame counts.
+    #[test]
+    fn a_delayed_colour_tween_waits_then_starts_from_the_colour_then() {
+        let mut t = ColorTween::to(Vec4::ZERO, 1.0).with_delay(0.5);
+        assert_eq!(t.advance(0.4, Vec4::ONE), Vec4::ONE);
+        let c = t.advance(0.6, Vec4::new(0.5, 0.5, 0.5, 1.0)); // 0.1 left of the delay, 0.5 of the tween
+        assert!((c.x - 0.25).abs() < 1e-5 && (c.w - 0.5).abs() < 1e-5, "{c:?}");
+    }
+
     #[test]
     fn a_fade_moves_only_alpha() {
         let mut t = ColorTween::fade_to(0.0, 1.0);
