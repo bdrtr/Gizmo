@@ -196,6 +196,8 @@ pub fn default_render_pass(
     view: &wgpu::TextureView,
     renderer: &mut Renderer,
 ) {
+    // A `DespawnAfter` with no `LifetimePlugin` used to pile entities up in silence; say so, once.
+    crate::systems::lifetime::warn_if_inert(world);
     // **Split screen is this same call.** A scene with any camera that has a `viewport` is drawn
     // by `render_viewports`, one view per such camera; every host that already calls this —
     // `SimpleApp`, the editor's game view, a hand-written render loop — gets it without a second

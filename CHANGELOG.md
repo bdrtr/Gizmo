@@ -81,6 +81,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   or by default to a `tracing::error!` naming the system, and the system runs again next frame.
   `SystemOutput` is the trait behind it; `()` systems are unchanged.
 
+- **An inert `DespawnAfter` is reported.** With a `DespawnAfter` or `DespawnBelowY` attached and no
+  `LifetimePlugin` installed, `default_render_pass` logs one warning per world
+  (`lifetime::warn_if_inert`); the plugin inserts `LifetimeActive`, which silences it. A custom
+  loop running `LifetimeSystem` itself should insert the marker too.
+
 - **System chains: `(a, b, c).chain()`.** `IntoSystemChain` (in the prelude) turns a tuple of 2–8
   systems, bare or configured, into a `SystemChain` that runs them in the listed order: each gets a
   generated label and an `after` on the one before. `Schedule::add_chain`,

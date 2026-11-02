@@ -904,7 +904,11 @@ again as of 2026-08-24. Recording the whole set, because they are one family:
    second home, and it is the one that could not be measured windowless, since `fly_step` reads
    input.
 9. **`DespawnAfter` is inert without `LifetimePlugin`**, which is not on by default. The component
-   attaches, nothing reads it, the entity never dies, and **nothing warns**. Found in
+   attaches, nothing reads it, the entity never dies, and ~~**nothing warns**~~ — **it warns since
+   2026-11-02:** `default_render_pass` calls `lifetime::warn_if_inert` every frame, which logs once
+   per world when a `DespawnAfter` / `DespawnBelowY` is attached and the plugin's `LifetimeActive`
+   marker is absent. The plugin stays opt-in on purpose: installing it behind a user's back would
+   run the system twice for anyone who also adds it. Found in
    `delayed_commands` only because the demo ran the engine's path beside a hand-built one and saw
    the engine side grow 5 → 10 → 15 while the hand-built side drained correctly.
 

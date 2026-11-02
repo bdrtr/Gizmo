@@ -42,8 +42,9 @@ use gizmo_physics_core::Transform;
 /// # Inert without [`LifetimePlugin`]
 ///
 /// The system that reads this component ships with [`LifetimePlugin`], and that plugin is **not
-/// on by default**. Without it the component attaches, nothing reads it, the entity never dies,
-/// and **nothing warns** — entities simply accumulate.
+/// on by default**. Without it the component attaches, nothing reads it and the entity never
+/// dies. Since 2026-11-02 the engine **warns** once when that happens ([`warn_if_inert`], from
+/// `default_render_pass`); before, nothing did and entities simply accumulated.
 ///
 /// Measured 2026-08-23 while building `demo/src/bin/delayed_commands.rs`: the same scene run
 /// with and without the plugin grew 5 → 10 → 15 live entities in one case and drained correctly
@@ -169,7 +170,42 @@ impl crate::app::Plugin for LifetimePlugin {
         app.schedule.add_di_system(
             gizmo_core::system::SystemConfig::new(Box::new(LifetimeSystem)).label("lifetime"),
         );
+        app.world.insert_resource(LifetimeActive);
     }
+}
+
+/// Marks a world whose lifetime components are read — inserted by [`LifetimePlugin`]. A custom
+/// loop that runs [`LifetimeSystem`] itself should insert it too, or [`warn_if_inert`] will say
+/// the components are inert.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LifetimeActive;
+
+/// Whether `world` holds a [`DespawnAfter`] or [`DespawnBelowY`] that nothing will ever read: one
+/// is attached and [`LifetimeActive`] is absent.
+pub fn lifetime_components_are_inert(world: &World) -> bool {
+    if world.get_resource::<LifetimeActive>().is_some() {
+        return false;
+    }
+    let any = |found: Option<bool>| found.unwrap_or(false);
+    any(world.query::<&DespawnAfter>().map(|q| q.iter().next().is_some()))
+        || any(world.query::<&DespawnBelowY>().map(|q| q.iter().next().is_some()))
+}
+
+/// Logs one warning, once per world, when [`lifetime_components_are_inert`]: entities carrying
+/// `DespawnAfter` / `DespawnBelowY` would otherwise pile up in silence — measured 5 → 10 → 15 in
+/// `delayed_commands`. Called by `default_render_pass` every frame; costs a resource lookup once
+/// it has warned.
+pub fn warn_if_inert(world: &mut World) {
+    #[derive(Clone, Copy)]
+    struct Warned;
+    if world.get_resource::<Warned>().is_some() || !lifetime_components_are_inert(world) {
+        return;
+    }
+    world.insert_resource(Warned);
+    tracing::warn!(
+        "[Lifetime] an entity carries DespawnAfter / DespawnBelowY, but LifetimePlugin is not \
+         installed: nothing will despawn it. Add `.add_plugin(LifetimePlugin)` to the app."
+    );
 }
 
 #[cfg(test)]
@@ -183,6 +219,31 @@ mod tests {
         let mut world = World::new();
         world.insert_resource(CommandQueue::default());
         world
+    }
+
+    /// A lifetime component with nothing to read it is reported; with the plugin's marker, or with
+    /// no such component, it is not.
+    #[test]
+    fn an_unread_lifetime_component_is_reported() {
+        let mut world = world_with_commands();
+        assert!(!lifetime_components_are_inert(&world), "no component, nothing to report");
+        let e = world.spawn();
+        world.add_component(e, DespawnAfter::secs(1.0));
+        assert!(lifetime_components_are_inert(&world), "attached and nothing reads it");
+        world.insert_resource(LifetimeActive);
+        assert!(!lifetime_components_are_inert(&world), "the plugin's marker says it is read");
+        world.remove_resource::<LifetimeActive>();
+        world.despawn(e);
+        let b = world.spawn();
+        world.add_component(b, DespawnBelowY::new(-10.0));
+        assert!(lifetime_components_are_inert(&world), "the kill-plane counts too");
+    }
+
+    /// Installing the plugin is what silences the warning: it must leave its marker behind.
+    #[test]
+    fn the_plugin_marks_the_world() {
+        let app = crate::app::headless::App::<()>::new("lifetime", 1, 1).add_plugin(LifetimePlugin);
+        assert!(app.world.get_resource::<LifetimeActive>().is_some());
     }
 
     #[test]
