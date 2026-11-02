@@ -60,7 +60,7 @@
 //! existing uses keep compiling, and [`routing`](crate::routing) stays exhaustive — the one
 //! property that module exists to have.
 //!
-//! [`MaterialType::Custom`] carries the id, so nothing about `Material` changed and every existing
+//! [`MaterialType::Custom`](crate::components::material::MaterialType::Custom) carries the id, so nothing about `Material` changed and every existing
 //! call site still compiles. `routing.rs` gains one arm and stays exhaustive — a tenth built-in
 //! variant is still a compile error there, which is the property that module exists for.
 

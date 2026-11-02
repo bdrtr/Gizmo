@@ -7,7 +7,7 @@ impl<State: 'static> App<State> {
     /// first `resumed` event, once [`run`](Self::run) has an event loop to build them from. That
     /// is why `new` cannot fail and why a builder method may be called in any order after it.
     ///
-    /// The engine's panic hook is installed here, and [`AssetPlugin`](super::AssetPlugin) is
+    /// The engine's panic hook is installed here, and [`AssetPlugin`] is
     /// added so the renderer's asset collections exist before any setup hook runs.
     pub fn new(title: &str, width: u32, height: u32) -> Self {
         crate::setup_panic_hook();

@@ -315,7 +315,7 @@ pub struct ShadowVsUniform {
 ///
 /// Its byte layout is a contract with the WGSL side, and the padding fields below are load-bearing
 /// rather than decorative. Two tests hold the two halves of that contract: the size assertion in
-/// this file's `tests`, and [`crate::shader_contract`], which parses the shaders and compares
+/// this file's `tests`, and `crate::shader_contract`, which parses the shaders and compares
 /// naga's computed offsets against `offset_of!` here. A field added anywhere but the tail moves
 /// every field after it, in every shader — including the ones that declare only a partial copy of
 /// this struct.
@@ -465,7 +465,7 @@ impl InstanceRaw {
     /// of any test that does not open a GPU adapter.
     ///
     /// The anisotropy/clear-coat/subsurface triple is packed into one f32 slot **here**, by
-    /// [`pack_pbr_params`], rather than by the caller. It was the caller's job until the two
+    /// `pack_pbr_params`, rather than by the caller. It was the caller's job until the two
     /// paths were compared: the engine packed two decimal digits per field and studio still
     /// packed three, which is the layout the engine abandoned because it overflows `f32`'s
     /// exact-integer range. `gbuffer.wgsl` decodes the two-digit layout, so studio's instances

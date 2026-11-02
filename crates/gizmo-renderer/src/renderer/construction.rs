@@ -322,7 +322,7 @@ impl Renderer {
 
     /// Constructs a Renderer with **no window/surface** — every render target is an
     /// offscreen texture. Enables headless GPU servers, CI rendering and
-    /// deterministic render harnesses. Shares [`Renderer::finish_construction`] with
+    /// deterministic render harnesses. Shares `Renderer::finish_construction` with
     /// the windowed [`Renderer::new`], so every GPU subsystem initialises identically.
     ///
     /// `format` defaults to `Rgba8UnormSrgb` when `None`.

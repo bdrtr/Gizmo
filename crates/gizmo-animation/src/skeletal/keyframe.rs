@@ -291,7 +291,7 @@ impl<T: Clone + Copy> Track<T> {
 
     /// True cubic-Hermite sampling for `CubicSpline` tracks (glTF Appendix C).
     ///
-    /// Returns `None` — so the caller can fall back to [`get_interpolated`] — when the track
+    /// Returns `None` — so the caller can fall back to [`get_interpolated`](Self::get_interpolated) — when the track
     /// is not `CubicSpline` or a segment is missing its tangents. `cubic` receives
     /// `(p0, m0, p1, m1, s, dt)`: the segment endpoints, keyframe `k`'s out-tangent and
     /// keyframe `k+1`'s in-tangent (both per-second, scale by `dt`), the normalized position

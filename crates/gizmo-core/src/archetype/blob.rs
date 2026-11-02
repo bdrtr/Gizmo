@@ -36,7 +36,7 @@ use std::ptr::{self, NonNull};
 ///
 /// **Zero-sized elements** are supported and never allocate — not on construction, not on
 /// `reserve`, and nothing is freed on drop. The data pointer stays at
-/// [`dangling_for`]`(item_layout)` — the element's own ALIGNMENT as an address, which is what
+/// `dangling_for(item_layout)` — the element's own ALIGNMENT as an address, which is what
 /// makes a reference built from it well-formed. It used to be `NonNull::<u8>::dangling()`
 /// (address 1) with a note here saying it is never dereferenced; `query::fetch` dereferences it
 /// for every row of a ZST column, so an over-aligned marker component was undefined behaviour.

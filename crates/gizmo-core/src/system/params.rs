@@ -344,7 +344,7 @@ impl<P: SystemParam> SystemParam for Option<P> {
 ///
 /// # One per system, and "system" means the built one
 ///
-/// The value is created with [`Default`] when the system is turned into a [`System`](super::System)
+/// The value is created with [`Default`] when the system is turned into a [`System`]
 /// and belongs to that instance. Registering the same function twice gives **two** independent
 /// values — which is the same rule `distributive_run_if` already documents for a stateful
 /// condition, and the answer to "why did my counter reset" is almost always that the system was

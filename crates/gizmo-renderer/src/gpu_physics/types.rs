@@ -329,6 +329,8 @@ pub struct DebugParams {
 ///
 /// The layout MUST match WGSL std430 exactly, because the shader indexes
 /// `box_contacts[idx]` with the std430 element stride. Walking std430 offsets:
+///
+/// ```text
 ///   count            u32               @0
 ///   (implicit pad to align vec3<u32>)  @4..16
 ///   _pad             vec3<u32>          @16..28
@@ -337,6 +339,8 @@ pub struct DebugParams {
 ///   normals          array<vec4<f32>,8> @64..192
 ///   accum_impulse    array<vec4<f32>,8> @192..320
 ///   is_active        array<u32,8>       @320..352
+/// ```
+///
 /// → stride **352 bytes**, NOT 336. The old hand-computed `336` literal omitted
 /// both alignment gaps, under-allocating the buffer by 16 B/box; boxes past
 /// `floor(size / 352)` then indexed out of bounds and silently received no

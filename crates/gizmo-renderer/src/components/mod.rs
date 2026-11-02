@@ -24,11 +24,11 @@ pub mod misc;
 pub mod post_process;
 /// Where the scene is captured for specular reflections.
 pub mod reflection_probe;
-/// The [`Sprite`](sprite::Sprite) component — an image the engine draws.
+/// The [`Sprite`] component — an image the engine draws.
 pub mod sprite;
-/// The [`Text`](text::Text) component — a string the engine draws.
+/// The [`Text`] component — a string the engine draws.
 pub mod text;
-/// The [`Tilemap`](tilemap::Tilemap) component — a grid of tiles from one tileset image.
+/// The [`Tilemap`] component — a grid of tiles from one tileset image.
 pub mod tilemap;
 
 pub use animation::*;

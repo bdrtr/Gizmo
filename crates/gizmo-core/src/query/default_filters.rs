@@ -87,7 +87,7 @@ use std::any::TypeId;
 /// The component types whose presence hides an entity from every **system** query.
 ///
 /// Empty by default: the feature costs nothing and changes nothing until a game asks for it. See
-/// the [module docs](self) for where it applies and where it deliberately does not.
+/// the `default_filters` module docs for where it applies and where it deliberately does not.
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
 pub struct DefaultQueryFilters {

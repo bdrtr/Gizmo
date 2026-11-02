@@ -16,7 +16,7 @@ use std::collections::HashMap;
 /// shipped prefab were already unloadable relics of earlier formats, which is what that costs in
 /// practice — both are gone from the assets now: the scene is a test fixture
 /// (`tests/fixtures/legacy_reflection.scene`, the file that proves
-/// [`SceneError::LegacyComponentEncoding`](crate::SceneError::LegacyComponentEncoding) fires),
+/// [`SceneError::LegacyComponentEncoding`] fires),
 /// and the binary prefab is deleted.
 ///
 /// | version | meaning |

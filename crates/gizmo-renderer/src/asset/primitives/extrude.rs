@@ -6,7 +6,7 @@
 //! builders and found that **15 of the 20 missing ones were one absent capability** — eight
 //! extrusions and seven ring extrusions. A prism, a pentagonal prism, a rounded slab and a torus of
 //! square section are not four features; they are four *outlines* handed to one machine. So what is
-//! here is the machine ([`extrude`], [`sweep`]) plus the outlines ([`outline`]), and a new shape is
+//! here is the machine ([`extrude`](crate::asset::primitives::extrude::extrude_data), [`sweep`](crate::asset::primitives::extrude::sweep_data)) plus the outlines ([`outline`](crate::asset::primitives::extrude::outline)), and a new shape is
 //! a function returning `Vec<Vec2>` rather than another `create_*`.
 //!
 //! # The caps are the hard half
@@ -14,7 +14,7 @@
 //! Walls are trivial: every edge of the outline becomes a quad. The **caps** need the outline
 //! triangulated, and a triangle fan — the obvious answer, and what the demo's hand-rolled pentagon
 //! used — is only correct for a *convex* outline. A star, an L-shape or an arrow fanned from one
-//! vertex produces triangles outside the shape. [`triangulate`] is ear clipping, so a concave
+//! vertex produces triangles outside the shape. [`triangulate`](crate::asset::primitives::extrude::triangulate) is ear clipping, so a concave
 //! outline comes out right; what it does not do is holes, and it says so rather than producing
 //! something plausible.
 //!
@@ -32,10 +32,10 @@ use crate::renderer::Vertex;
 
 /// Closed outlines in the XY plane, wound **counter-clockwise**.
 ///
-/// Counter-clockwise is not a preference: [`extrude`] gives the front cap a `+Z` normal and relies
+/// Counter-clockwise is not a preference: [`extrude`](extrude_data) gives the front cap a `+Z` normal and relies
 /// on the winding to match, and the whole engine draws with `FrontFace::Ccw` plus back-face
 /// culling. An outline wound the other way extrudes into a shape that is invisible from outside —
-/// not a parse error, which is the worse kind of failure. [`extrude`] therefore *checks* rather
+/// not a parse error, which is the worse kind of failure. [`extrude`](extrude_data) therefore *checks* rather
 /// than assumes; see its docs.
 pub mod outline {
     use super::Vec2;
@@ -146,7 +146,7 @@ pub fn signed_area2(outline: &[Vec2]) -> f32 {
 ///
 /// The result always has `n - 2` triangles, and every one of them is wound counter-clockwise
 /// regardless of how the input was wound: a clockwise outline is reversed first, so the caller does
-/// not have to normalise and the two cap orientations in [`extrude`] stay a property of the
+/// not have to normalise and the two cap orientations in [`extrude`](extrude_data) stay a property of the
 /// extruder rather than of the caller.
 ///
 /// Ear clipping is `O(n²)`. For the outline sizes a shape primitive uses — tens of points, not

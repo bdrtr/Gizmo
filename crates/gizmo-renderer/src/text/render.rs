@@ -14,7 +14,7 @@
 //! there is one shader — but they go to different *places*: a world label is drawn into the HDR
 //! pass against the scene's depth (hidden by the wall in front of it, exposed with the scene it
 //! sits in), and screen text and UI backgrounds are drawn onto the final image after tone mapping
-//! by [`crate::overlay`] — so a HUD keeps the colour it was given. Until 2026-11-01 both went into
+//! by `crate::overlay` — so a HUD keeps the colour it was given. Until 2026-11-01 both went into
 //! the HDR target, and an opaque HUD colour came out tone-mapped.
 //!
 //! # What it does not do
@@ -411,7 +411,7 @@ impl TextRenderer {
     /// Draws this frame's **world** labels, depth-tested, into the HDR pass.
     ///
     /// Screen text and UI backgrounds are not drawn here: they go onto the final image after tone
-    /// mapping, through [`crate::overlay`]. The pass needs a depth attachment, and
+    /// mapping, through `crate::overlay`. The pass needs a depth attachment, and
     /// [`upload`](Self::upload) must have run this frame.
     pub fn render<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, global_bind_group: &'a wgpu::BindGroup) {
         if self.uploaded_world == 0 {

@@ -7,11 +7,11 @@
 //!
 //! Two stages, every frame:
 //!  1. **Apply**: upload the finished decodes accumulated by `asset_server_update_system`
-//!     ([`AssetServer::completed_textures`]) to the GPU and update the entities'
+//!     ([`AssetServer::completed_textures`](crate::asset_server::AssetServer::completed_textures)) to the GPU and update the entities'
 //!     `Material.bind_group`. (Formerly this stage DID NOT EXIST → the decoded texture was
 //!     discarded, streaming was visually a no-op.)
 //!  2. **Request**: request a texture reload for materials near (≤50 m) the primary camera
-//!     (at most [`MAX_REQUESTS_PER_FRAME`] per frame). What stops it asking twice is
+//!     (at most `MAX_REQUESTS_PER_FRAME` per frame). What stops it asking twice is
 //!     [`AssetServer::streaming_requested`](crate::asset_server::AssetServer::streaming_requested)
 //!     — it used to be "clear the material's `texture_source`", which put the request stage in the
 //!     business of deleting the field a scene file saves. See `should_request`.
@@ -27,7 +27,7 @@ const MAX_REQUESTS_PER_FRAME: usize = 3;
 const STREAM_IN_DISTANCE: f32 = 50.0;
 
 /// The system that drives texture streaming every frame (apply + request). Added to the
-/// schedule by [`AssetServerPlugin`]. **exclusive**, because it uses the materials (mut) and
+/// schedule by [`AssetServerPlugin`](crate::asset_server::AssetServerPlugin). **exclusive**, because it uses the materials (mut) and
 /// the `AssetServer`/`Renderer` resources.
 pub struct TextureStreamingSystem;
 

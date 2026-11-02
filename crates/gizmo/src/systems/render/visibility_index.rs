@@ -2,7 +2,7 @@
 //!
 //! # Why this is opt-in
 //!
-//! [`RenderAabbTree`](gizmo_renderer::visibility::RenderAabbTree) has been in the tree, complete
+//! [`RenderAabbTree`] has been in the tree, complete
 //! and tested, with no render path calling it — `CAPABILITY_GAPS.md` §F1 recorded it as unwired,
 //! and the obvious fix was to put it in front of the batcher's per-object walk, which
 //! `occlusion_culling` measures at **+8.46 ms** over 60 000 entities.

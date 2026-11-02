@@ -221,7 +221,7 @@ pub struct FluidZone {
     pub quadratic_drag: f32, // fallback quadratic drag
     /// The underwater fog colour applied while the camera is inside this volume (linear RGB),
     /// so each body of water defines its own underwater look (shallow turquoise vs deep navy).
-    /// Missing in serde → [0;3].
+    /// Missing in serde → `[0;3]`.
     #[serde(default)]
     pub fog_color: [f32; 3],
     /// Underwater fog density (Beer-Lambert; larger = visibility closes in sooner). Missing in

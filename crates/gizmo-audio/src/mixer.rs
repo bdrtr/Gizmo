@@ -102,7 +102,7 @@ fn sanitize_gain(gain: f32) -> f32 {
     }
 }
 
-/// Buses, a master, the environment modifier, and one [`Route`] per live sink.
+/// Buses, a master, the environment modifier, and one `Route` per live sink.
 ///
 /// A game holds this through [`AudioManager::mixer_mut`](crate::AudioManager::mixer_mut) and turns
 /// gains on it; [`AudioManager`](crate::AudioManager) is what writes the resulting numbers to rodio,
@@ -193,7 +193,7 @@ impl Mixer {
 
     /// Sets a bus's gain, creating the bus if this is the first mention of it.
     ///
-    /// The value is clamped by [`sanitize_gain`]: negative and non-finite gains become `0.0`,
+    /// The value is clamped by `sanitize_gain`: negative and non-finite gains become `0.0`,
     /// anything above `1.0` is kept.
     pub fn set_bus_gain(&mut self, bus: &str, gain: f32) {
         self.bus_entry(bus).gain = sanitize_gain(gain);
@@ -317,7 +317,7 @@ impl Mixer {
     /// The playback speed to write to this sink: the pitch the game asked for, sanitised.
     ///
     /// No environment term any more — the underwater effect is a filter, not a pitch shift (see
-    /// [`UNDERWATER_CUTOFF_HZ`]). The clamp stays because `pitch` is scene-authored and reaches
+    /// `UNDERWATER_CUTOFF_HZ`). The clamp stays because `pitch` is scene-authored and reaches
     /// `0.0` from a serialised `AudioSource`, which makes rodio's sample-rate converter compute a
     /// rate of zero and assert on the audio callback thread.
     pub fn speed_for(&self, id: u64) -> f32 {

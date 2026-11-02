@@ -1,7 +1,7 @@
 //! Auto exposure — the loop closed on the GPU.
 //!
 //! The pieces existed separately: the actuator (`Camera::exposure`, applied once in the composite
-//! pass) and, since 2026-08-24, the sensor ([`LuminanceReduce`], the frame's mean luminance in a
+//! pass) and, since 2026-08-24, the sensor ([`LuminanceReduce`](crate::luminance::LuminanceReduce), the frame's mean luminance in a
 //! storage buffer). What was missing was the loop between them, and the one thing it must not do
 //! is read the number back: the `auto_exposure` demo measured a 4-byte readback taking the frame
 //! from **0.19 ms to 0.79 ms**, all of it the stall, while recording the reduction costs 2 µs.
@@ -9,7 +9,7 @@
 //! So every step stays on the GPU. Each frame, after the scene is in the HDR target and before
 //! tone mapping:
 //!
-//! 1. [`LuminanceReduce`] writes the mean luminance;
+//! 1. [`LuminanceReduce`](crate::luminance::LuminanceReduce) writes the mean luminance;
 //! 2. one compute invocation (`shaders/auto_exposure.wgsl`) moves the exposure toward
 //!    `key / mean`, in stops, at a frame-rate-independent rate, and stores it;
 //! 3. the composite pass multiplies by it, after `Camera::exposure` — which therefore becomes

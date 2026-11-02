@@ -42,7 +42,7 @@
 //!   `uv.x ∈ [i/x, (i+1)/x]`, which is exactly where this module puts its corner rays.
 //! * **slice** — `floor(log(d) * z_scale + z_bias)` over the **view depth**
 //!   `d = dot(world_pos - camera_pos, camera_forward)`, with the two constants from
-//!   [`depth_params`]. Exponential rather than linear because a linear slicing spends most of its
+//!   [`depth_params`](crate::clustered::depth_params). Exponential rather than linear because a linear slicing spends most of its
 //!   slices where there is nothing and lumps the whole near field into one.
 //!
 //! Nothing here depends on the projection matrix's depth convention (`0..1` vs `-1..1`, reverse-Z):

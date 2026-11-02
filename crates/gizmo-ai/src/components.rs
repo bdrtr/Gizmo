@@ -250,7 +250,7 @@ impl NavAgent {
     }
 
     /// Stops the agent: clears the destination AND the current path. Clearing only the
-    /// path (see [`clear_path`]) leaves `target` set, so the navigation system just
+    /// path (see [`clear_path`](Self::clear_path)) leaves `target` set, so the navigation system just
     /// recomputes the path and keeps moving — use this to actually halt the agent.
     pub fn clear_target(&mut self) {
         self.target = None;

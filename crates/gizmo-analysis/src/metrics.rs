@@ -234,7 +234,7 @@ impl MetricStore {
     /// is released rather than merely stopping the growth. Raising it keeps what is already there
     /// and lets the rings fill further. `0` is raised to `1`, as in [`MetricStore::new`].
     ///
-    /// This exists because [`AnalysisConfig::metric_history`] is documented as live: it was read
+    /// This exists because [`AnalysisConfig::metric_history`](crate::AnalysisConfig::metric_history) is documented as live: it was read
     /// exactly once, when the store was constructed, so turning it up mid-run did nothing.
     pub fn set_capacity(&mut self, capacity: usize) {
         let capacity = capacity.max(1);

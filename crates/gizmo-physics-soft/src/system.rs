@@ -84,7 +84,7 @@ fn collect_rigid_colliders(world: &World) -> Vec<(BodyHandle, Transform, Collide
 }
 
 /// Reads the mass properties and current velocity of every rigid body that a soft-body node
-/// could actually push, keyed by the same [`BodyHandle`] [`collect_rigid_colliders`] uses.
+/// could actually push, keyed by the same [`BodyHandle`] `collect_rigid_colliders` uses.
 ///
 /// **Static bodies are deliberately omitted.** A missing entry resolves to
 /// [`RigidReaction::IMMOVABLE`], which is both the physically right answer for them and the

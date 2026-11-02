@@ -61,11 +61,11 @@ impl Listener {
 ///
 /// This used to read `Transform.rotation * X`, and that vector **disagreed with the camera the
 /// player was looking through**. A camera's orientation lives on the `Camera` component as
-/// yaw/pitch — that is what [`Camera::get_view`] builds the view matrix from — while
+/// yaw/pitch — that is what [`Camera::get_view`](gizmo_renderer::Camera::get_view) builds the view matrix from — while
 /// `Transform.rotation` is written separately by whatever drives the camera, and the tree
 /// contains at least two different conventions for it:
 ///
-/// | writer | `Transform.rotation * X` | vs [`Camera::get_right`] |
+/// | writer | `Transform.rotation * X` | vs [`Camera::get_right`](gizmo_renderer::Camera::get_right) |
 /// |---|---|---|
 /// | `simple.rs`, `beamng`, `ocean_scene`, … (`rotation_y(-yaw + π/2)`) | `(sin y, 0, -cos y)` | dot **−1** — exactly inverted |
 /// | `fps_look.rs`, `kcc_scene`, … (`rotation_y(-yaw)`) | `(cos y, 0, sin y)` | dot **0** — the *forward* vector |
@@ -75,7 +75,7 @@ impl Listener {
 /// **nearer the left ear**. Stereo panning was mirrored in every game built on that camera, and
 /// separated along the view axis (so barely panned at all) in every game built on `FpsLook`.
 ///
-/// Taking [`Camera::get_right`] instead cannot drift: it is the same function `get_view` uses to
+/// Taking [`Camera::get_right`](gizmo_renderer::Camera::get_right) instead cannot drift: it is the same function `get_view` uses to
 /// build the up vector, so the ears are by construction square to what is on screen.
 pub fn listener(world: &World) -> Listener {
     let mut listener = Listener::default();

@@ -1,4 +1,4 @@
-//! [`SaveData`] — what a game keeps between runs: settings, best scores, progress.
+//! [`SaveData`](crate::save::SaveData) — what a game keeps between runs: settings, best scores, progress.
 //!
 //! Every game in `demo/` lost its best score and its menu settings when it closed; the engine had
 //! a scene format (a level) and the editor's own preferences, and nothing for a *game* to keep.

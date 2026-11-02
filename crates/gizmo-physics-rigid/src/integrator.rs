@@ -58,7 +58,7 @@ impl Integrator {
     /// Apply forces (gravity, accumulated forces) and damping, then update
     /// velocity with semi-implicit Euler.
     ///
-    /// Returns [`GizmoError::NaNVelocity`] when a NaN is detected *before*
+    /// Returns [`GizmoError::NaNVelocity`](gizmo_physics_core::GizmoError::NaNVelocity) when a NaN is detected *before*
     /// any mutation so the caller receives the body in its pre-error state.
     pub fn integrate_velocities(
         &self,
@@ -294,7 +294,7 @@ impl Integrator {
     /// Apply a continuous force at a world-space point over `dt`.
     ///
     /// Internally converts the force to an impulse (`F·dt`) and delegates to
-    /// [`apply_impulse_at_point`].
+    /// [`apply_impulse_at_point`](Self::apply_impulse_at_point).
     pub fn apply_force_at_point(
         rb: &RigidBody,
         transform: &Transform,

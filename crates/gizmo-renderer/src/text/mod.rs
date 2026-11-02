@@ -9,12 +9,12 @@
 //!
 //! Three things live here and nothing else does:
 //!
-//! - [`FontLibrary`] owns the loaded faces and answers metric questions about them.
-//! - [`GlyphAtlas`] rasterises glyphs on demand into one GPU texture and remembers where it put
+//! - [`FontLibrary`](crate::text::FontLibrary) owns the loaded faces and answers metric questions about them.
+//! - [`GlyphAtlas`](crate::text::GlyphAtlas) rasterises glyphs on demand into one GPU texture and remembers where it put
 //!   them.
-//! - [`layout`] turns a string into placed glyphs, in text-local pixels.
+//! - `layout` turns a string into placed glyphs, in text-local pixels.
 //!
-//! The GPU half — pipelines, the instance buffer, the pass — is [`crate::text_render`]. The split
+//! The GPU half — pipelines, the instance buffer, the pass — is [`crate::text::render`]. The split
 //! is deliberate: everything in this file is testable with no adapter, and most of what can go
 //! wrong with text (a baseline off by the ascent, an atlas that reuses a shelf, a UV rect flipped)
 //! is in this half.
@@ -24,7 +24,7 @@
 //! Rasterisation is `ab_glyph`. It is a *rasteriser*: it turns an outline into coverage and
 //! answers metric questions, and it does no shaping, no bidi, no font enumeration and no fallback.
 //! That narrowness is what makes it sealable — no `ab_glyph` type appears on any `pub` signature
-//! here. The surface is [`FontId`], [`LineMetrics`], [`PositionedGlyph`] and [`GlyphEntry`], all
+//! here. The surface is [`FontId`](crate::text::FontId), [`LineMetrics`](crate::text::LineMetrics), [`PositionedGlyph`](crate::text::PositionedGlyph) and [`GlyphEntry`](crate::text::GlyphEntry), all
 //! ours. `gizmo-renderer` is a Stage B crate (`docs/ENGINE.md` §4), so a foreign type on its
 //! surface would be *allowed*; it is sealed anyway because sealing it costs one newtype.
 //!
@@ -32,7 +32,7 @@
 //!
 //! No shaping (so no Arabic joining, no Indic reordering, no ligatures), no bidi, no font
 //! fallback, no rich text. Kerning comes from the font's `kern` table via `ab_glyph` and nothing
-//! more. Lines break on `\n`, and — given a width ([`FontLibrary::layout_wrapped`]) — at spaces,
+//! more. Lines break on `\n`, and — given a width ([`FontLibrary::layout_wrapped`](crate::text::FontLibrary::layout_wrapped)) — at spaces,
 //! which is right for scripts that separate words with spaces and wrong for those that do not
 //! (Chinese, Japanese, Thai wrap only between characters here). These are named here rather
 //! than discovered later: a text system that silently draws the wrong glyphs for a script is worse
@@ -119,7 +119,7 @@ impl LineMetrics {
     }
 }
 
-/// One glyph placed by [`layout`], in text-local pixels.
+/// One glyph placed by `layout`, in text-local pixels.
 ///
 /// The origin is the **first line's baseline at the left edge**, x growing right and y growing
 /// *down* — the direction screen pixels run, so a screen-space caller adds nothing and a
@@ -138,7 +138,7 @@ pub struct PositionedGlyph {
     pub line: u32,
 }
 
-/// What [`layout`] produced: the glyphs, and the box they occupy.
+/// What `layout` produced: the glyphs, and the box they occupy.
 #[derive(Debug, Clone, PartialEq, Default)]
 #[non_exhaustive]
 pub struct TextLayout {

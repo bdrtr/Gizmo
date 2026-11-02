@@ -21,7 +21,7 @@ pub struct GpuFluidSystem {
     pub num_particles: u32,
     /// How many cells the neighbour-search grid has.
     pub total_cells: u32,
-    /// The particles — [`FluidParticle`](crate::gpu_fluid::types::FluidParticle)s.
+    /// The particles — [`FluidParticle`]s.
     pub particles_buffer: wgpu::Buffer,
     /// The solver's parameters.
     pub params_buffer: wgpu::Buffer,

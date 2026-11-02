@@ -11,7 +11,7 @@ use super::types::*;
 pub struct GpuParticleSystem {
     /// The buffer's capacity, and the ring's length.
     pub max_particles: u32,
-    /// The particles themselves — [`GpuParticle`](crate::gpu_particles::types::GpuParticle)s.
+    /// The particles themselves — [`GpuParticle`]s.
     pub particles_buffer: wgpu::Buffer,
     /// The per-frame simulation parameters.
     pub params_buffer: wgpu::Buffer,

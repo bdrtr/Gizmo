@@ -193,7 +193,7 @@ pub fn hit_volumes_overlap(
 /// active window it reads is this frame's.
 ///
 /// A move connects with a given victim **once**: the attacker records who it has hit and the
-/// record is cleared when the move ends or is cancelled ([`FighterController::start_move`]).
+/// record is cleared when the move ends or is cancelled ([`FighterController::start_move`](crate::components::FighterController::start_move)).
 /// Without that a three-frame active window would report three hits.
 #[derive(Debug, Clone)]
 pub struct HitEvent {

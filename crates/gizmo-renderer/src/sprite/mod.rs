@@ -1,14 +1,14 @@
-//! Sprites: loaded images, and the pass that draws [`Sprite`] quads with them.
+//! Sprites: loaded images, and the pass that draws [`Sprite`](crate::components::Sprite) quads with them.
 //!
 //! The engine's first 2D path (`docs/CAPABILITY_GAPS.md` §A1). It is deliberately the same shape
 //! as [`crate::text`]: a library of GPU resources handed out as small ids, a per-frame instance
-//! list a draw loop fills through [`SpriteRenderer::queue`], and one shared host-side pass
+//! list a draw loop fills through [`SpriteRenderer::queue`](crate::sprite::SpriteRenderer::queue), and one shared host-side pass
 //! (`gizmo::systems::render::record_sprites`) that both the game and `gizmo-studio` call.
 //!
 //! # Corners on the CPU
 //!
 //! Each instance carries its four corners **already in clip space**. The caller hands
-//! [`SpriteRenderer::queue`] a view-projection, and the game path hands it the *unjittered* one:
+//! [`SpriteRenderer::queue`](crate::sprite::SpriteRenderer::queue) a view-projection, and the game path hands it the *unjittered* one:
 //! sprites are drawn after TAA, and the scene uniforms' `view_proj` carries TAA's sub-pixel jitter,
 //! so a sprite projected by the shader would shimmer by exactly that much — invisible on a 3D
 //! label, obvious on pixel art. It also means the shader needs no scene uniforms at all.
@@ -25,7 +25,7 @@
 //!   its native size; wrong for a big texture shrunk on a distant card.
 //! - **World sprites are pre-tonemap.** They are drawn into the HDR target with the scene and so
 //!   are exposed and bloomed with it — right for a card standing in a lit level. **Screen**
-//!   sprites are not: they go onto the final image after the post chain ([`crate::overlay`]), so a
+//!   sprites are not: they go onto the final image after the post chain (`crate::overlay`), so a
 //!   HUD colour reaches the screen as authored.
 //! - **No texture atlas packing.** One image is one texture and one bind group; a sheet of frames
 //!   is one image with [`Sprite::uv_rect`](crate::components::Sprite::uv_rect) choosing the cell.
@@ -513,7 +513,7 @@ impl SpriteRenderer {
     /// Draws this frame's **world** sprites, depth-tested, into the HDR pass.
     ///
     /// Screen sprites are not drawn here: they go onto the final image after tone mapping,
-    /// through [`crate::overlay`]. The pass needs a depth attachment, and [`upload`](Self::upload)
+    /// through `crate::overlay`. The pass needs a depth attachment, and [`upload`](Self::upload)
     /// must have run this frame.
     pub fn render<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {
         if self.runs_world.is_empty() {

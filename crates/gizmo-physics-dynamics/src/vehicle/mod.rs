@@ -541,7 +541,7 @@ pub struct VehicleTuning {
     /// This is a clamp, not a limiter — there is no fuel cut and no over-rev damage; the
     /// engine speed simply saturates here while the wheels keep accelerating.
     pub max_rpm: f32,
-    /// [0]=reverse, [1]=neutral, [2..]=forward gears
+    /// `[0]`=reverse, `[1]`=neutral, `[2..]`=forward gears
     pub gear_ratios: Vec<f32>,
     /// Final-drive (differential) ratio, multiplied onto the selected gear ratio.
     ///

@@ -31,7 +31,7 @@ use gizmo_math::{Aabb, Vec3};
 use std::arch::x86_64::*;
 
 /// SIMD: test the target AABB against 4 AABBs at the same time.
-/// In the returned bitmask, bit i indicates whether the target overlaps with others[i].
+/// In the returned bitmask, bit `i` indicates whether the target overlaps with `others[i]`.
 #[cfg(target_arch = "x86_64")]
 #[inline]
 pub fn aabb_overlaps_simd4(target: &Aabb, others: [&Aabb; 4]) -> u8 {

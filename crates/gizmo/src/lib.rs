@@ -9,7 +9,7 @@
 //! `gizmo-engine` is the all-in-one facade crate of the Gizmo game engine. It
 //! re-exports the individual subsystem crates (core ECS, math, app loop,
 //! physics, renderer, windowing, audio, scene, editor, UI, animation and AI)
-//! and adds an ergonomic convenience layer on top: [`Color`],
+//! and adds an ergonomic convenience layer on top: [`Color`](color::Color),
 //! ready-made [`bundles`], a [`spawner`] API and prefabricated scene helpers.
 //!
 //! Note that the published *package* is named `gizmo-engine`, while the *library*
@@ -121,7 +121,7 @@ pub mod pointer;
 // Sık kullanılan matematik tiplerini lib.rs'ten doğrudan aç:
 pub use math::{Mat4, Quat, Vec2, Vec3, Vec4};
 
-/// [`SimpleApp`](simple::SimpleApp) — the batteries-included entry point, for a game that wants
+/// `SimpleApp` — the batteries-included entry point, for a game that wants
 /// a window, physics and a renderer without wiring plugins by hand.
 #[cfg(all(feature = "window", feature = "render", feature = "physics"))]
 pub mod simple;

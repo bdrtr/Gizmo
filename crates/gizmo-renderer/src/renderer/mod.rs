@@ -110,7 +110,7 @@ impl<'a> RenderContext<'a> {
 /// the passes that can be absent: each is `None` until something enables it, and every one of them
 /// is off on the web profile.
 ///
-/// Construction lives in [`construction`](crate::renderer::construction) — [`Renderer::new`] for
+/// Construction lives in `construction` — [`Renderer::new`] for
 /// the windowed path and `new_headless` for a renderer with no surface, which is what the tests
 /// and the screenshot path use.
 pub struct Renderer {
@@ -327,7 +327,7 @@ pub struct Renderer {
 impl Renderer {
     /// OPT-IN: enable the renderer's own GPU rigid-body physics (default OFF). Idempotent —
     /// safe to call every frame. Only games that drive massive body counts / GPU cloth via
-    /// [`GpuPhysicsLink`](gizmo_physics_rigid::components) need this; a normal CPU-physics game
+    /// `GpuPhysicsLink` need this; a normal CPU-physics game
     /// (`PhysicsPlugin`) must NOT enable it — the two sims would fight and blank the scene.
     /// Allocates ~50 000 GPU spheres, so it is off unless explicitly requested.
     #[cfg(not(target_arch = "wasm32"))]
@@ -644,7 +644,7 @@ impl Renderer {
     ///
     /// Then the **overlay** — this frame's screen sprites, UI backgrounds and screen text — is
     /// drawn onto `output_view`, so every output a host post-processes gets the HUD, untouched by
-    /// exposure, bloom, tone mapping, vignette or FXAA. See [`crate::overlay`].
+    /// exposure, bloom, tone mapping, vignette or FXAA. See `crate::overlay`.
     pub fn run_post_processing(
         &self,
         encoder: &mut wgpu::CommandEncoder,

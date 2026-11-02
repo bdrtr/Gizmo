@@ -14,7 +14,7 @@
 //! assert!(!slide.is_finished());
 //! ```
 //!
-//! [`tween_system`] advances them; the engine's frame driver calls it on the animation clock in
+//! [`tween_system`](crate::tween::tween_system) advances them; the engine's frame driver calls it on the animation clock in
 //! both draw paths (so `set_time_scale` and pause apply), before transforms are propagated — a
 //! game does not have to.
 

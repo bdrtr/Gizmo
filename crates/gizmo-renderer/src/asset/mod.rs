@@ -1206,7 +1206,7 @@ mod scan_does_not_write_tests {
 /// Builds a full PBR material bind group, filling in whatever you do not supply.
 ///
 /// The 7-entry layout — base colour, sampler, normal, metallic-roughness, emissive, occlusion,
-/// params — was reachable only through [`AssetManager::assemble_material_bind_group`], which is
+/// params — was reachable only through `AssetManager::assemble_material_bind_group`, which is
 /// `pub(crate)`. So a hand-built scene could bind exactly one texture, through
 /// [`create_white_texture`](AssetManager::create_white_texture) and friends, and the other four
 /// maps were unreachable: the only way to add surface detail was to add geometry.

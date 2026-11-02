@@ -48,7 +48,7 @@
 //!
 //! What the split is actually for is answering "what does this track do", and that *can* be
 //! measured: each row says which axes move (`position · x z`) or that none do (`· const`). See
-//! [`varying_axes`].
+//! `varying_axes`.
 //!
 //! **Auto-key is not missing, it does not apply.** The prototype's auto-key records the selected
 //! object's transform as a keyframe. This timeline plays a *skeletal* clip: its tracks target

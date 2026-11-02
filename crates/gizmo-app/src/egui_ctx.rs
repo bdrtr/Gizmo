@@ -1,6 +1,6 @@
 //! Immediate-mode overlay UI runtime for the windowed app.
 //!
-//! [`EguiContext`] owns the `egui` runtime, the `egui_winit` platform-input
+//! [`EguiContext`](crate::egui_ctx::EguiContext) owns the `egui` runtime, the `egui_winit` platform-input
 //! integration and the `egui_wgpu` renderer used to paint an overlay on top of
 //! the engine's frame. It is a generic egui integration with no editor-specific
 //! knowledge, so it backs both lightweight in-game HUDs (the `set_ui` hook) and
@@ -76,7 +76,7 @@ impl EguiContext {
 
     /// Applies the editor's visual design.
     ///
-    /// The design itself lives in [`crate::editor_theme`], which implements the
+    /// The design itself lives in `gizmo_editor::theme`, which implements the
     /// `Gizmo Editor Prototype` mockup — palette, geometry and type scale, with the reasoning for
     /// each. It used to be forty lines of literals here; a theme spread through a constructor is
     /// one nobody can read as a whole, and this one had drifted into a different look entirely

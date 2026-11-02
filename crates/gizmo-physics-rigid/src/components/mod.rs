@@ -1,6 +1,6 @@
 //! The four components here — [`Breakable`], [`Explosion`], [`RigidBody`] and [`Velocity`] —
 //! are registered with `gizmo_core::impl_component!` and can be inserted on an entity
-//! directly. [`BodyType`] and [`ExplosionFalloff`] are plain enums carried inside them, not
+//! directly. [`BodyType`] and [`ExplosionFalloff`](crate::components::ExplosionFalloff) are plain enums carried inside them, not
 //! components in their own right.
 //!
 //! Which of them a body needs is not uniform: [`RigidBody`], [`Velocity`], a `Transform` and

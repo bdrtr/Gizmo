@@ -58,14 +58,14 @@
 pub mod error;
 /// Which components a scene or snapshot is allowed to (de)serialize.
 ///
-/// [`SceneRegistry`](registry::SceneRegistry) is an alias for `gizmo-core`'s
+/// [`SceneRegistry`] is an alias for `gizmo-core`'s
 /// `ComponentRegistry`; [`default_scene_registry`](registry::default_scene_registry) fills
 /// one with the engine's built-in physics/gameplay components. A component that is *not*
 /// registered is invisible to both save/load and snapshot capture — silently, so a forgotten
 /// registration looks exactly like data loss. Renderer, audio and scripting components are
 /// added a layer up (`gizmo-app`'s `full_scene_registry`).
 pub mod registry;
-/// The on-disk scene and prefab format: [`SceneData`](scene::SceneData) /
+/// The on-disk scene and prefab format: [`SceneData`] /
 /// [`PrefabData`](scene::PrefabData) written as RON, stamped with
 /// [`CURRENT_SCENE_VERSION`](scene::CURRENT_SCENE_VERSION).
 ///
@@ -81,9 +81,9 @@ pub mod snapshot;
 pub use error::{ParseError, SceneError, SerializeError};
 /// Re-export of [`registry::SceneRegistry`].
 pub use registry::SceneRegistry;
-/// Re-exports of the RON scene-file types: [`SceneData`](scene::SceneData) is the file root,
-/// [`EntityData`](scene::EntityData) one of its entity rows, and
-/// [`MaterialData`](scene::MaterialData) the PBR parameters (albedo RGBA, roughness,
+/// Re-exports of the RON scene-file types: [`SceneData`] is the file root,
+/// [`EntityData`] one of its entity rows, and
+/// [`MaterialData`] the PBR parameters (albedo RGBA, roughness,
 /// metallic, unlit, optional texture path) copied out of a row's `MaterialSource` — none of
 /// which the in-memory [`SceneSnapshot`] carries.
 pub use scene::{AssetIdentity, EntityData, MaterialData, NoAssetIdentity, SceneData};

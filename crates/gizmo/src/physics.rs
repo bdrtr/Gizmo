@@ -53,7 +53,7 @@ pub mod ragdoll {
     pub use gizmo_physics_dynamics::ragdoll::*;
 }
 
-/// Just [`ColliderShape`](gizmo_physics_core::ColliderShape), for code that only needs the
+/// Just [`ColliderShape`], for code that only needs the
 /// shape vocabulary.
 pub mod shape {
     pub use gizmo_physics_core::ColliderShape;

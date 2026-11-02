@@ -43,11 +43,11 @@
 //!
 //! # Module map
 //!
-//! - [`components`] — ECS components ([`RigidBody`], [`Velocity`], [`Vehicle`],
+//! - [`components`] — ECS components ([`RigidBody`], [`Velocity`], `Vehicle`,
 //!   [`Breakable`], [`Explosion`]).
 //! - [`integrator`], [`solver`], [`joints`], [`island`] — the solver stack.
 //! - [`destruction`], [`fracture`] — destruction and shattering.
-//! - [`vehicle`], [`system`], [`world`] — vehicle dynamics, ECS systems and the
+//! - `vehicle`, [`system`], [`world`] — vehicle dynamics, ECS systems and the
 //!   world container. (`multibody` is an opt-in experimental module — above.)
 
 // Sequential fallback for rayon on wasm (no OS threads); native uses rayon.

@@ -37,7 +37,7 @@
 //! |---|---|---|
 //! | drawn before the world | the draw-order rank in the batcher (`DrawLayer::Backdrop`) | yes — a comparator |
 //! | locked to the camera | `shaders/backdrop.wgsl` `vs_main`, mirrored by [`backdrop_clip_position`] | yes — glam arithmetic |
-//! | never writes depth | [`backdrop_state`]`().depth_write == false`, plus the far-plane pin | yes — a pure state fn |
+//! | never writes depth | `backdrop_state().depth_write == false`, plus the far-plane pin | yes — a pure state fn |
 //! | samples texture + vertex colour | `shaders/backdrop.wgsl` `fs_main`, mirrored by [`backdrop_rgba`] | yes — arithmetic + a source check |
 //!
 //! What is NOT testable here is whether the resulting frame looks right: this crate can

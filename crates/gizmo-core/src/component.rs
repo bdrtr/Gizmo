@@ -157,8 +157,8 @@ pub struct Parent(pub u32);
 /// (`gizmo-ui`'s mirror into taffy, and two descents in the glTF loader); all are closed, and the
 /// history is in `docs/ENGINE.md` §3. That the count went from six to nine while being closed is
 /// the reason the next sentence is not softened: if you are writing a walk over this field or
-/// over [`Parent`], assume the graph is cyclic. [`HierarchyExt::descendants_inclusive`]
-/// (crate::hierarchy::HierarchyExt::descendants_inclusive) is the guarded one to reach for.
+/// over [`Parent`], assume the graph is cyclic. [`HierarchyExt::descendants_inclusive`](crate::hierarchy::HierarchyExt::descendants_inclusive)
+/// is the guarded one to reach for.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Children(pub Vec<u32>);
 

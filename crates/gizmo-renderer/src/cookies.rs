@@ -1,12 +1,12 @@
 //! Light cookies (gobos): an image a [`SpotLight`](crate::components::SpotLight) projects through
 //! its cone — a window frame, leaves, a stained-glass colour, a flashlight's uneven beam.
 //!
-//! Cookies live in one `Rgba8UnormSrgb` texture array of [`COOKIE_LAYERS`] layers,
-//! [`COOKIE_SIZE`]² each, bound beside the shadow maps (shadow group, bindings 3 and 4), so adding
+//! Cookies live in one `Rgba8UnormSrgb` texture array of [`COOKIE_LAYERS`](crate::cookies::COOKIE_LAYERS) layers,
+//! [`COOKIE_SIZE`](crate::cookies::COOKIE_SIZE)² each, bound beside the shadow maps (shadow group, bindings 3 and 4), so adding
 //! one never rebuilds a bind group. A spot names its cookie by a string
-//! ([`SpotLight::cookie`](crate::components::SpotLight::cookie)); [`LightCookies`] maps names to
-//! layers. A name is either registered from memory ([`LightCookies::insert`]) or, on native, read
-//! from disk the first frame a spot names it ([`LightCookies::sync`]) — the name is then a path,
+//! ([`SpotLight::cookie`](crate::components::SpotLight::cookie)); [`LightCookies`](crate::cookies::LightCookies) maps names to
+//! layers. A name is either registered from memory ([`LightCookies::insert`](crate::cookies::LightCookies::insert)) or, on native, read
+//! from disk the first frame a spot names it ([`LightCookies::sync`](crate::cookies::LightCookies::sync)) — the name is then a path,
 //! the same convention as `MaterialDesc::texture_source`.
 //!
 //! The cookie's **up** is world up as seen down the cone (for a cone pointing straight up or down,

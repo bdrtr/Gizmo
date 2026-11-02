@@ -118,7 +118,7 @@ impl SystemBatch {
     /// global state — is invisible here and will race if it collides.
     ///
     /// Pure query; pass the identical `config_info` to
-    /// [`add_system`](Self::add_system) afterwards, or the answer does not apply.
+    /// `add_system_with_meta` afterwards, or the answer does not apply.
     pub fn is_compatible(&self, system: &dyn System, config_info: &AccessInfo) -> bool {
         let mut sys_info = system.access_info();
         sys_info

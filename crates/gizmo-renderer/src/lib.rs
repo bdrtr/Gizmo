@@ -87,7 +87,7 @@
 //! # assert_eq!(instances, 1, "the box behind the camera is culled, not instanced");
 //! ```
 //!
-//! [`Mesh`](components::Mesh) carries a local-space [`Aabb`](gizmo_math::Aabb) (`bounds`);
+//! [`Mesh`] carries a local-space [`Aabb`](gizmo_math::Aabb) (`bounds`);
 //! [`Aabb::transform`](gizmo_math::Aabb::transform) puts it in world space. This pairs with
 //! batched `draw(vertex_range, instance_start..instance_end)` so culled instances are never
 //! written to the instance buffer.
@@ -114,8 +114,8 @@
 //! Implementation: [`frustum_cull`] re-exports [`Frustum`] and helpers from `gizmo-math`;
 //! [`visibility`] holds the index.
 
-/// Clustered light culling — which lights can reach which part of the frame.
 pub mod material_sync;
+/// Clustered light culling — which lights can reach which part of the frame.
 pub mod clustered;
 /// Loading, decoding and uploading meshes, textures and glTF scenes.
 pub mod asset;

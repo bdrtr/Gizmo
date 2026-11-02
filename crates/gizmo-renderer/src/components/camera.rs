@@ -306,7 +306,7 @@ impl Camera {
         gizmo_math::Mat4::look_at_rh(position, position + front, up)
     }
 
-    /// The world-space forward (aim) vector from yaw/pitch. [`get_front`] AND the first-person
+    /// The world-space forward (aim) vector from yaw/pitch. [`get_front`](Self::get_front) AND the first-person
     /// camera controller (`FpsLook`, gizmo-engine::systems) share it, so the "aim direction"
     /// maths is not re-written BY HAND in every demo and game.
     pub fn forward_from(yaw: f32, pitch: f32) -> Vec3 {

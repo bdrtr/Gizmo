@@ -20,7 +20,7 @@ pub struct GpuPhysicsSystem {
     pub grid_size: u32,
     /// The bodies — [`GpuBox`]es.
     pub boxes_buffer: wgpu::Buffer,
-    /// The per-step [`PhysicsSimParams`](crate::gpu_physics::types::PhysicsSimParams).
+    /// The per-step [`PhysicsSimParams`].
     pub params_buffer: wgpu::Buffer,
     /// One head index per grid cell, into the linked-node list below. Grid + linked list, rather
     /// than a per-cell array, because a cell's occupancy is unbounded.
@@ -28,7 +28,7 @@ pub struct GpuPhysicsSystem {
     /// The linked-list nodes those heads point into.
     pub linked_nodes_buffer: wgpu::Buffer,
     /// Per-body contact manifolds — see
-    /// [`GpuBoxContacts`](crate::gpu_physics::types::GpuBoxContacts), whose stride is the one
+    /// [`GpuBoxContacts`], whose stride is the one
     /// number in this file that has already been got wrong once.
     pub box_contacts_buffer: wgpu::Buffer,
     /// The static colliders.
@@ -78,7 +78,7 @@ pub struct GpuPhysicsSystem {
     /// number.
     pub debug_line_count_buffer: wgpu::Buffer,
     /// What the overlay should draw — see
-    /// [`DebugParams`](crate::gpu_physics::types::DebugParams).
+    /// [`DebugParams`].
     pub debug_params_buffer: wgpu::Buffer,
     /// The overlay's compute bind group.
     pub debug_compute_bind_group: wgpu::BindGroup,

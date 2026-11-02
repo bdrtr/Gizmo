@@ -5,7 +5,7 @@
 //! → [`RagdollInstance`]. A bone is authored as a parent-relative offset in metres plus
 //! a capsule size, a mass and a joint description; spawning turns each bone into one
 //! dynamic capsule body and each non-root bone into one joint pushed into the
-//! [`PhysicsWorld`] resource.
+//! [`PhysicsWorld`](gizmo_physics_rigid::world::PhysicsWorld) resource.
 //!
 //! Scope: this module only *builds* skeletons. There is no animation blending, no
 //! get-up/recovery behaviour and no pose matching here. Bone-vs-bone contacts are

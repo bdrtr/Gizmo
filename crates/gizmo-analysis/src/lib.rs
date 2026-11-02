@@ -54,7 +54,7 @@
 //! assert!(trace.contains("\"name\":\"simulate\""));
 //! ```
 //!
-//! With the `app` feature, [`AnalysisPlugin`] wires all of this into the App/Plugin schedule
+//! With the `app` feature, `AnalysisPlugin` wires all of this into the App/Plugin schedule
 //! automatically.
 
 mod analyzer;

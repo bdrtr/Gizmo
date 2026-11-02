@@ -10,7 +10,7 @@
 //! lighting pass reads. Rendering the six faces is the game path's (`gizmo`'s
 //! `capture_reflection_probes`), because only it knows how to draw the world.
 //!
-//! Up to [`MAX_PROBES`] probes share one cube **array** (six layers per slot), because the
+//! Up to [`MAX_PROBES`](crate::reflection::MAX_PROBES) probes share one cube **array** (six layers per slot), because the
 //! lighting pass has no bind group left to give each its own. The lighting shader blends them by
 //! their influence boxes (see `ReflectionProbe::influence`).
 

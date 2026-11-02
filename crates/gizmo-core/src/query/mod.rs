@@ -511,7 +511,7 @@ impl<T: crate::component::Component> ReadOnlyQuery for &T {}
 /// that manages the filtered entities has to see them, and this is how it says so:
 ///
 /// ```ignore
-/// fn re_enable(mut q: Query<(Mut<Health>, With<Disabled>, IgnoreDefaultFilters)>) { … }
+/// fn re_enable(mut q: Query<(Mut<Health>, With<Disabled>, IgnoreDefaultFilters)>) { /* … */ }
 /// ```
 ///
 /// It is in the **signature**, not in a comment or a builder call, so a reader of the system knows

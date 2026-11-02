@@ -4,8 +4,8 @@
 //! view-projection. Object motion needs each object's last **model** matrix too — nothing kept one
 //! (`InstanceRaw` carries only `model`) — and a per-pixel record of how far the surface moved.
 //!
-//! - [`MotionHistory`] remembers the model matrix every entity was drawn with, frame to frame.
-//! - [`MotionGpu`] uploads the previous matrices in step with the instance buffer, plus this and
+//! - [`MotionHistory`](crate::motion::MotionHistory) remembers the model matrix every entity was drawn with, frame to frame.
+//! - [`MotionGpu`](crate::motion::MotionGpu) uploads the previous matrices in step with the instance buffer, plus this and
 //!   last frame's unjittered view-projections, for the G-buffer pass (group 5).
 //! - The G-buffer pass writes `velocity` (`Rg16Float`, screen-UV units) = where the surface is
 //!   now minus where it was, camera and object motion together. A still object under a still

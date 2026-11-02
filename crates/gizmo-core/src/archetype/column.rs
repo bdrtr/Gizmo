@@ -211,7 +211,7 @@ impl Column {
 
     /// Appends a bytewise duplicate of `row` — data and tick alike — without cloning.
     ///
-    /// See [`BlobVec::push_copy_of_row`]: on return the value exists twice and exactly one of
+    /// See `BlobVec::push_copy_of_row`: on return the value exists twice and exactly one of
     /// the two copies may ever be dropped.
     ///
     /// # Safety

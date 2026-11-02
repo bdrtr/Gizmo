@@ -1,7 +1,7 @@
 //! The bridge between an asset registry and the scene format's identity fallback.
 //!
 //! `gizmo-scene` asks about identity through [`AssetIdentity`](gizmo_scene::AssetIdentity) because
-//! it sits *below* `gizmo-renderer` and cannot reach the [`AssetManager`] that owns the path↔UUID
+//! it sits *below* `gizmo-renderer` and cannot reach the [`AssetManager`](gizmo_renderer::asset::AssetManager) that owns the path↔UUID
 //! registry. This facade has both, so the implementation lives here — one impl, no new dependency
 //! in either direction.
 //!

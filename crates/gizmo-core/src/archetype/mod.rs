@@ -16,7 +16,7 @@ pub mod column;
 /// entity starts there on spawn. Every other archetype id is a position in that vector, and
 /// garbage-collecting an emptied archetype swap-removes it — renumbering the archetype that
 /// was last, and patching the entity locations, the set map and the cached
-/// [`ArchetypeEdge`](crate::archetype::ArchetypeEdge)s to match. An archetype id is therefore
+/// [`ArchetypeEdge`]s to match. An archetype id is therefore
 /// an addressing slot, valid only until the next collection, never a durable identity.
 ///
 /// Nothing here is part of the public API: every item inside is `pub(crate)` or private.

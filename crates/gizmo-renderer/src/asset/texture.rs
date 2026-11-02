@@ -133,7 +133,7 @@ impl super::AssetManager {
     /// access and returning the cached bind group on subsequent calls.
     ///
     /// Supports both filesystem paths and UUID strings registered by the asset
-    /// scanner.  Embedded assets (registered with [`AssetManager::embed_asset`])
+    /// scanner.  Embedded assets (registered with [`AssetManager::embed_asset`](Self::embed_asset))
     /// take priority over filesystem reads.
     pub fn load_material_texture(
         &mut self,

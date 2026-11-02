@@ -219,7 +219,7 @@ impl AsyncAssetLoader {
         }
     }
 
-    /// Queue a texture file decode; when done, [`drain_completed`] yields a row with `entity_ids`.
+    /// Queue a texture file decode; when done, [`drain_completed`](Self::drain_completed) yields a row with `entity_ids`.
     /// Duplicate `request_path` while in-flight only adds more waiters (one disk read).
     pub fn request_texture_reload(&self, request_path: String, handle_id: usize) {
         // Poison-recovery: guarded state is plain (queues/sets) and remains consistent

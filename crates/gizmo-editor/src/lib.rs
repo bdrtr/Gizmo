@@ -8,7 +8,7 @@
 //!
 //! This crate provides the editor UI built on top of `egui`/`egui_dock`,
 //! rendered with `wgpu`. Editor-wide state lives in
-//! [`EditorState`](editor_state::EditorState). The whole UI is drawn each
+//! [`EditorState`]. The whole UI is drawn each
 //! frame by [`draw_editor`]. The window/egui runtime that hosts the editor
 //! overlay (`EguiContext`) lives in the `gizmo-app` crate behind its `egui`
 //! feature, so it can also back non-editor in-game HUDs.
@@ -21,9 +21,9 @@
 //! - **Scene View** — center panel: 3D scene viewport
 //! - **Game View** — runtime/play viewport
 
-/// The editor's visual design (palette, geometry, type scale).
 /// The ANIMATION timeline panel.
 pub mod animation_panel;
+/// The editor's visual design (palette, geometry, type scale).
 pub mod theme;
 pub mod asset_browser;
 /// The log console panel.

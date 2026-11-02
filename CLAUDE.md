@@ -94,6 +94,12 @@ cargo clippy --workspace --all-features --all-targets -- -D warnings \
   -A clippy::too_many_arguments -A clippy::type_complexity
 ```
 
+```bash
+# Rustdoc is a gate too (since 2026-11-02, when 135 warnings had piled up unseen): broken
+# intra-doc links and unbackticked `Vec<f32>` ("unclosed HTML tag") fail CI.
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --exclude demo --exclude demo-web
+```
+
 `-D warnings` is a real gate. The two `-A` exemptions are grandfathered architectural lints (a **ratchet**: new lint kinds break CI; the exempt list only shrinks). `rustfmt` is checked **report-only** in CI — the tree is not yet fully fmt-clean, so a `cargo fmt` diff will not fail CI, but don't reflow unrelated code.
 
 ```bash

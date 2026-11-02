@@ -341,7 +341,7 @@ impl NarrowPhase {
     /// they do not overlap.
     ///
     /// Use this for simple overlap queries or soft-body node tests.  For
-    /// rigid-body simulation prefer [`test_collision_manifold`] which can
+    /// rigid-body simulation prefer [`test_collision_manifold`](Self::test_collision_manifold) which can
     /// return multiple contact points.
     pub fn test_collision(
         shape_a: &ColliderShape,
@@ -570,7 +570,7 @@ impl NarrowPhase {
     /// [`ContactManifold::add_contact`](crate::collision::ContactManifold::add_contact)
     /// to get the manifold's 4-point reduction. That method has no production callers:
     /// this crate's own tests are its only ones, and `gizmo-physics-rigid`'s pipeline
-    /// assigns the returned buffer to [`ContactManifold::contacts`] directly, after which
+    /// assigns the returned buffer to [`ContactManifold::contacts`](crate::collision::ContactManifold::contacts) directly, after which
     /// the solver consumes every point in it. Treat the count as uncapped, and do not size
     /// a fixed-capacity buffer from a 4-point assumption.
     ///

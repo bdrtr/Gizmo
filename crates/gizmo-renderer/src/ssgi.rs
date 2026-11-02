@@ -303,7 +303,7 @@ impl SsgiState {
     }
 
     /// (temporal resolve bind group, output history view) for the current frame.
-    /// Reads history[parity] + raw ssgi, writes history[!parity].
+    /// Reads `history[parity]` + raw ssgi, writes `history[!parity]`.
     pub fn current_temporal_io(&self) -> (&wgpu::BindGroup, &wgpu::TextureView) {
         if !self.frame_parity {
             (&self.temporal_bg_read_a, &self.history_b_view)

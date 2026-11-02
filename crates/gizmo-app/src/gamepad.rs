@@ -17,16 +17,16 @@
 //! ### What the translation has to get right
 //!
 //! - **Names.** gilrs's `Button::LeftTrigger` is the *bumper* (LB/L1) and `LeftTrigger2` is the
-//!   analog trigger (LT/L2). This engine calls those [`GamepadButton::LeftBumper`] and
-//!   [`GamepadButton::LeftTrigger`], because "trigger" meaning the shoulder button is a trap.
+//!   analog trigger (LT/L2). This engine calls those [`GamepadButton::LeftBumper`](gizmo_core::input::GamepadButton::LeftBumper) and
+//!   [`GamepadButton::LeftTrigger`](gizmo_core::input::GamepadButton::LeftTrigger), because "trigger" meaning the shoulder button is a trap.
 //!   The one `match` that crosses the two namings is `translate_button`, and
 //!   `the_bumper_and_the_trigger_do_not_swap` is the test that holds it.
 //! - **Triggers are both.** An analog trigger arrives as a button (crossing gilrs's press
 //!   threshold) *and* as a value; both are forwarded, the first as
-//!   [`GamepadButton::LeftTrigger`], the second as [`GamepadAxis::LeftTrigger`].
+//!   [`GamepadButton::LeftTrigger`](gizmo_core::input::GamepadButton::LeftTrigger), the second as [`GamepadAxis::LeftTrigger`](gizmo_core::input::GamepadAxis::LeftTrigger).
 //! - **Hat d-pads.** Many pads report their d-pad as an axis pair. gilrs's default filters
 //!   normalise that into the four d-pad buttons before we ever see it, which is why
-//!   [`GamepadAxis`] has no d-pad entry.
+//!   [`GamepadAxis`](gizmo_core::input::GamepadAxis) has no d-pad entry.
 
 // ── The browser ──────────────────────────────────────────────────────────────────────────────
 //
@@ -110,7 +110,7 @@ impl GamepadBackend {
     ///
     /// Their *state* is not registered, because it cannot be: a pad that is already plugged in
     /// generates no connection event and gilrs reads nothing from the device at open (see
-    /// [`KnownPad`]), so a control held while the game launches reads as at rest until it moves.
+    /// `KnownPad`), so a control held while the game launches reads as at rest until it moves.
     /// Registering the pads themselves is still worth doing — a game that shows controller hints
     /// when one is connected shows them from the first frame.
     pub fn new(input: &mut Input) -> Self {
@@ -319,7 +319,7 @@ impl GamepadBackend {
     /// and without this they would stay silent until released and pressed again.
     ///
     /// It replays the backend's own mirror rather than asking gilrs, because gilrs has nothing
-    /// to answer with — see [`KnownPad`]. Buttons are pushed as presses only: a release for
+    /// to answer with — see `KnownPad`. Buttons are pushed as presses only: a release for
     /// something that was never pressed would be a spurious `just_released` edge. Axes are all
     /// written, since "at rest" is a value like any other.
     pub fn resync(&mut self, input: &mut Input) {

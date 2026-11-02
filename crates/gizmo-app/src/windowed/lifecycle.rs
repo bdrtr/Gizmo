@@ -5,7 +5,7 @@ impl<State: 'static> App<State> {
     ///
     /// If a custom runner was configured via [`set_runner`](Self::set_runner)
     /// it is invoked and `Ok(())` is returned. Otherwise the default windowed
-    /// event loop is driven. Returns an [`AppError`] if the event loop or
+    /// event loop is driven. Returns an [`AppError`](crate::AppError) if the event loop or
     /// window cannot be created, a required setup hook is missing, or the
     /// event loop terminates with an error.
     pub fn run(mut self) -> Result<(), crate::AppError> {

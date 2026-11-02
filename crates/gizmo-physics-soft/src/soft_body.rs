@@ -412,8 +412,8 @@ impl SoftBodyMesh {
     ///
     /// # Errors
     ///
-    /// Returns [`SoftBodyError::InvalidYoungsModulus`] if `youngs_modulus` is
-    /// not finite and strictly positive, and [`SoftBodyError::InvalidPoissonsRatio`]
+    /// Returns [`SoftBodyError::InvalidYoungsModulus`](crate::SoftBodyError::InvalidYoungsModulus) if `youngs_modulus` is
+    /// not finite and strictly positive, and [`SoftBodyError::InvalidPoissonsRatio`](crate::SoftBodyError::InvalidPoissonsRatio)
     /// if `poissons_ratio` is outside the physically valid range `[0.0, 0.5)`.
     /// `nu >= 0.5` zeroes the Lamé denominator `(1 - 2·nu)` (incompressible
     /// limit → `+inf`), `nu > 0.5` yields a negative (unstable) `lambda`, and
@@ -470,7 +470,7 @@ impl SoftBodyMesh {
     ///
     /// # Errors
     ///
-    /// Returns [`SoftBodyError::NodeIndexOutOfBounds`] if any of the four
+    /// Returns [`SoftBodyError::NodeIndexOutOfBounds`](crate::SoftBodyError::NodeIndexOutOfBounds) if any of the four
     /// indices refers to a node that has not been added yet. On success the
     /// element is appended exactly as before.
     pub fn add_element(

@@ -1,6 +1,6 @@
 //! Joints — constraints tying exactly two rigid bodies together.
 //!
-//! The module is split into a description half ([`data`]) and a runtime half ([`solver`]),
+//! The module is split into a description half ([`data`](crate::joints::data)) and a runtime half ([`solver`](crate::joints::solver)),
 //! both re-exported here: `joints::Joint` and `joints::data::Joint` name the same item.
 //!
 //! Joints act at the VELOCITY level. A solver pass writes velocities only and never touches

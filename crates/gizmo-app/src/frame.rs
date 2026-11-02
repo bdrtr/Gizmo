@@ -2,7 +2,7 @@
 //!
 //! # Why there are two schedules
 //!
-//! Until 0.9 the windowed runtime had exactly one [`Schedule`], and it ran **only** inside
+//! Until 0.9 the windowed runtime had exactly one [`Schedule`](gizmo_core::system::Schedule), and it ran **only** inside
 //! the fixed-timestep loop. That loop executes zero or more times per rendered frame,
 //! depending on how much simulated time has accumulated — so with the renderer's default
 //! `PresentMode::AutoNoVsync` pushing several hundred frames per second against a 60 Hz
@@ -30,9 +30,9 @@
 //!
 //! # Ordering
 //!
-//! [`run_fixed_and_update`] runs the fixed steps first, then computes the interpolation
+//! [`run_fixed_and_update`](crate::frame::run_fixed_and_update) runs the fixed steps first, then computes the interpolation
 //! alpha, then runs update. Update therefore observes the simulation *after* this frame's
-//! physics, and can read [`PhysicsTime::alpha`] — which is the fraction of a step that has
+//! physics, and can read [`PhysicsTime::alpha`](gizmo_core::time::PhysicsTime::alpha) — which is the fraction of a step that has
 //! accumulated but not been simulated.
 //!
 //! **Nothing in the engine spends that alpha**, and the wording above used to imply otherwise
@@ -40,7 +40,7 @@
 //! previous `Transform` anywhere in the workspace, so the renderer draws the pose the last fixed
 //! step left behind and holds it — measured at 144 Hz against a 60 Hz step, for two or three
 //! frames in an irregular pattern. A game that wants interpolation snapshots its own poses each
-//! fixed step and blends them with this alpha; see [`PhysicsTime::alpha`] for the numbers.
+//! fixed step and blends them with this alpha; see [`PhysicsTime::alpha`](gizmo_core::time::PhysicsTime::alpha) for the numbers.
 
 use gizmo_core::system::Schedule;
 use gizmo_core::time::PhysicsTime;
@@ -66,7 +66,7 @@ pub struct FrameSteps {
     pub alpha: f32,
 }
 
-/// Advance the world's [`Time`] by one frame of wall clock and return the **simulated** delta.
+/// Advance the world's [`Time`](gizmo_core::time::Time) by one frame of wall clock and return the **simulated** delta.
 ///
 /// The return value is `Time::dt()` — the raw delta scaled by `time_scale` and then clamped to
 /// `max_dt` — which is what a runtime should feed the fixed-timestep loop, while the update hook

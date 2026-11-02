@@ -79,6 +79,14 @@ jobs:
         run: |
           cargo clippy --locked --workspace --all-features --all-targets -- -D warnings \
             -A clippy::too_many_arguments -A clippy::type_complexity
+      # Rustdoc, as a gate (2026-11-02). docs.rs renders these pages, and a broken intra-doc
+      # link there is a dead link or a `[Foo]` in plain sight; an unbackticked `Vec<f32>` is an
+      # "unclosed HTML tag" that eats the rest of the paragraph. 135 had accumulated with nothing
+      # looking — this keeps it at zero. The demo crates are binaries with no published docs.
+      - name: Rustdoc (-D warnings)
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --locked --workspace --no-deps --exclude demo --exclude demo-web
 
   # ── Optional features: the `reflect` path must build + test (ubuntu only) ──
   features:

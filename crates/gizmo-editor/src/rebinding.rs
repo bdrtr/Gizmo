@@ -1,4 +1,4 @@
-//! The rebinding panel: an [`ActionMap`] shown as rows a player can change.
+//! The rebinding panel: an [`ActionMap`](gizmo_core::input::ActionMap) shown as rows a player can change.
 //!
 //! # What this closes
 //!
@@ -11,11 +11,11 @@
 //! A rebinding panel is a state machine with exactly one interesting state: *listening*. While it
 //! is listening, the next control the player touches becomes a binding — which means the click
 //! that started listening must not be captured, and neither must the key they used to reach the
-//! button. [`RebindState::listening_for`] is that state, and it is deliberately **one at a time**:
+//! button. [`RebindState::listening_for`](crate::rebinding::RebindState::listening_for) is that state, and it is deliberately **one at a time**:
 //! two rows listening at once would both capture the same press, which is not a thing a player can
 //! have meant.
 //!
-//! The panel takes the map and the live [`Input`] and returns whether anything changed, rather
+//! The panel takes the map and the live [`Input`](gizmo_core::input::Input) and returns whether anything changed, rather
 //! than owning either. An editor panel, a game's own settings screen and a test all want the same
 //! rows over their own map; owning one would make it the editor's map and nobody else's.
 
