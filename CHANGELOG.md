@@ -114,6 +114,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - **`MeshSource("cylinder")` and `"cone"`**, sized like their colliders, and
     `AssetManager::PRIMITIVE_MESH_KEYS` as the one list of primitive keys (the studio's
     missing-asset check now uses it instead of its own copy).
+- **Building a renderer is ten times cheaper after the first.** Composing the eighteen shaders
+  (naga_oil `#import`/`#ifdef`) was 0.99 s of a 1.1 s headless construction; the result is now
+  cached for the process, keyed by source, label and defs (a second renderer: 1.1 s → 0.11 s),
+  and `naga_oil` + `regex` build optimised in the dev profile (the first: 2.4 s → 1.8 s). The
+  ignored GPU tests of `gizmo` went 288 s → 100 s, its regular ones 82 s → 35 s, and the whole
+  suite's run 423 s → 312 s. Debug builds of every demo start faster for the same reason.
 - **A missing mesh fails once.** An unknown `MeshSource` key (a typo for a primitive, a file that
   is not there) used to retry the disk, log and upload an empty buffer for every entity naming
   it; the failure is now cached until nothing holds it, and the error lists the primitive keys.

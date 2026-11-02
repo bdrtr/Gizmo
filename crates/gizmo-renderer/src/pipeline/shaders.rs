@@ -133,16 +133,43 @@ pub(crate) fn compose_module(
 /// because wgpu 29 here is built without the `naga-ir` feature. All web/native divergence is
 /// expressed via `shader_defs` on the SOURCE, so nothing depends on how naga's WGSL backend
 /// reformats output.
+///
+/// **Memoised for the life of the process**, keyed by everything the output depends on: the
+/// source text, the label (naga_oil names the module after it) and the defs. Composition is a pure
+/// function of those, and it is nearly all of what building a renderer costs — measured
+/// 2026-11-02, 0.99 s of a 1.1 s headless construction, over 18 shaders. A test binary builds a
+/// renderer per test, often several, so the GPU tests spent most of their time composing the same
+/// eighteen shaders again. A hot-reloaded shader is new source text, so it misses and is composed.
 pub(crate) fn compose_wgsl(
     source: &str,
     label: &str,
     shader_defs: HashMap<String, ShaderDefValue>,
 ) -> String {
+    use std::hash::{Hash, Hasher};
+    use std::sync::{Mutex, OnceLock};
+    static COMPOSED: OnceLock<Mutex<HashMap<u64, (String, String)>>> = OnceLock::new();
+
+    // Defs in a fixed order: a `HashMap`'s iteration order is not one.
+    let mut defs: Vec<(&String, &ShaderDefValue)> = shader_defs.iter().collect();
+    defs.sort_by(|a, b| a.0.cmp(b.0));
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (source, label, &defs).hash(&mut h);
+    let key = h.finish();
+    // The full source is kept beside the output and compared on a hit, so a hash collision
+    // composes afresh instead of handing back another shader.
+    let cache = COMPOSED.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some((src, out)) = cache.lock().unwrap_or_else(|p| p.into_inner()).get(&key) {
+        if src == source {
+            return out.clone();
+        }
+    }
+
     let (module, info) = compose_module(source, label, shader_defs)
         .unwrap_or_else(|e| panic!("{e}"));
-
-    naga::back::wgsl::write_string(&module, &info, naga::back::wgsl::WriterFlags::empty())
-        .unwrap_or_else(|e| panic!("emitting WGSL for '{label}' failed: {e}"))
+    let out = naga::back::wgsl::write_string(&module, &info, naga::back::wgsl::WriterFlags::empty())
+        .unwrap_or_else(|e| panic!("emitting WGSL for '{label}' failed: {e}"));
+    cache.lock().unwrap_or_else(|p| p.into_inner()).insert(key, (source.to_string(), out.clone()));
+    out
 }
 
 /// Compiles a shader, preferring a copy on disk over the compiled-in fallback — the mechanism
@@ -231,6 +258,21 @@ mod tests {
     // existing `core_shaders_compile` needs. Every shader touched by the baked-lit work is
     // checked under BOTH schemas, because the web one drops the shadow group and is where a
     // fade added outside `#ifdef SHADOWS` would come apart.
+    /// The composition cache answers only the question it was asked: the same source under other
+    /// defs, or under another label, is composed again — a cache keyed on the source alone would
+    /// hand the web schema the native shader (shadow group and all) — and a repeat is identical.
+    #[test]
+    fn the_composition_cache_keys_on_defs_and_label_too() {
+        let native = compose_wgsl(SHADER_SRC, "cache_probe", native_render_defs());
+        let web = compose_wgsl(SHADER_SRC, "cache_probe", web_render_defs());
+        assert_ne!(native, web, "the web schema got the native composition");
+        assert_eq!(native, compose_wgsl(SHADER_SRC, "cache_probe", native_render_defs()));
+        let mut one_more = native_render_defs();
+        one_more.insert("CACHE_PROBE_UNUSED".to_string(), ShaderDefValue::Bool(true));
+        // An extra def is an entry of its own; one the shader never reads composes to the same text.
+        assert_eq!(native, compose_wgsl(SHADER_SRC, "cache_probe", one_more));
+    }
+
     #[test]
     fn baked_lit_path_shaders_type_check_under_both_schemas() {
         let web_capable: &[(&str, &str)] = &[

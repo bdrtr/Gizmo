@@ -106,3 +106,17 @@ opt-level = 2
 opt-level = 2
 [profile.dev.package.wgpu-hal]
 opt-level = 2
+# naga_oil ve kullandığı regex de (2026-11-02). Yukarıdaki üçü optimize edildikten sonra kurulumun
+# asıl maliyeti buydu: ölçüldü, headless bir `Renderer`'ın 1.1 s'sinin 0.99 s'si 18 shader'ın
+# naga_oil kompozisyonuydu — `#import`/`#ifdef` çözümü regex ile yapılıyor ve regex dev'de
+# optimizasyonsuzdu. `compose_wgsl` artık sonucu süreç boyunca önbellekte tutuyor (ikinci
+# renderer 1.1 s → 0.11 s); bu satırlar İLK kompozisyonu, yani her test ikilisinin ve her debug
+# demo açılışının ilk renderer'ını hızlandırıyor.
+[profile.dev.package.naga_oil]
+opt-level = 2
+[profile.dev.package.regex]
+opt-level = 2
+[profile.dev.package.regex-automata]
+opt-level = 2
+[profile.dev.package.regex-syntax]
+opt-level = 2
