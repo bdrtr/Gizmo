@@ -37,7 +37,7 @@ struct PostProcessParams {
     fog: vec4<f32>,        // rgb = su-altı sis rengi, a = yoğunluk (offset 48, 16-hizalı)
     // Tone mapping: eğri seçimi ve beyaz noktası. Ayrı bir vec4, çünkü `fog`'dan sonra blok
     // 16-hizalı bir sınırda ve tek bir f32 eklemek onu bozardı.
-    tonemap: vec4<f32>,    // x = eğri (0..3), y = beyaz nokta, zw = pad
+    tonemap: vec4<f32>,    // x = eğri (0..5, `TonemapCurve`), y = beyaz nokta, zw = pad
     // Camera motion blur: x = shutter fraction (0 = off), y = longest smear in screen fractions.
     motion: vec4<f32>,
     // This frame's clip space → the last frame's (both unjittered).
@@ -200,6 +200,56 @@ fn aces_tonemap(x: vec3<f32>) -> vec3<f32> {
     return clamp((x * (a * x + b)) / (x * (c * x + d) + e), vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
+// AgX's sigmoid, as a sixth-order polynomial on the log-encoded value (Wrensch's fit, mean error
+// below 1e-3 against the reference look-up).
+fn agx_contrast(x: vec3<f32>) -> vec3<f32> {
+    let x2 = x * x;
+    let x4 = x2 * x2;
+    return 15.5 * x4 * x2 - 40.14 * x4 * x + 31.96 * x4 - 6.868 * x2 * x + 0.4298 * x2 + 0.1191 * x - 0.00232;
+}
+
+// AgX: inset into its working space, log2-encode over [-12.47, 4.03] EV, apply the sigmoid,
+// outset, and return linear (the swapchain's sRGB encode follows).
+fn agx_tonemap(x: vec3<f32>) -> vec3<f32> {
+    let inset = mat3x3<f32>(
+        vec3<f32>(0.842479062253094, 0.0423282422610123, 0.0423756549057051),
+        vec3<f32>(0.0784335999999992, 0.878468636469772, 0.0784336),
+        vec3<f32>(0.0792237451477643, 0.0791661274605434, 0.879142973793104),
+    );
+    let outset = mat3x3<f32>(
+        vec3<f32>(1.19687900512017, -0.0528968517574562, -0.0529716355144438),
+        vec3<f32>(-0.0980208811401368, 1.15190312990417, -0.0980434501171241),
+        vec3<f32>(-0.0990297440797205, -0.0989611768448433, 1.15107367264116),
+    );
+    let min_ev = -12.47393;
+    let max_ev = 4.026069;
+    var c = inset * max(x, vec3<f32>(1e-10));
+    c = clamp(log2(c), vec3<f32>(min_ev), vec3<f32>(max_ev));
+    c = (c - min_ev) / (max_ev - min_ev);
+    c = agx_contrast(c);
+    c = outset * c;
+    return pow(max(c, vec3<f32>(0.0)), vec3<f32>(2.2));
+}
+
+// Khronos PBR Neutral: identity below the knee (0.76), a hyperbolic shoulder above it, and a
+// little desaturation of what it compresses.
+fn pbr_neutral_tonemap(x: vec3<f32>) -> vec3<f32> {
+    let start = 0.8 - 0.04;
+    let desaturation = 0.15;
+    let lowest = min(x.r, min(x.g, x.b));
+    let offset = select(0.04, lowest - 6.25 * lowest * lowest, lowest < 0.08);
+    var c = x - offset;
+    let peak = max(c.r, max(c.g, c.b));
+    if (peak < start) {
+        return c;
+    }
+    let d = 1.0 - start;
+    let new_peak = 1.0 - d * d / (peak + d - start);
+    c = c * (new_peak / peak);
+    let g = 1.0 - 1.0 / (desaturation * (peak - new_peak) + 1.0);
+    return mix(c, vec3<f32>(new_peak), g);
+}
+
 // The curve `params.tonemap.x` selects. See `TonemapCurve` on the Rust side; the numbering is
 // that enum's, and ACES is 3 because it is the default and changing the default would restyle
 // every scene built on the engine.
@@ -221,7 +271,13 @@ fn apply_tonemap(x: vec3<f32>) -> vec3<f32> {
         // separation instead of asymptoting together.
         return clamp((x * (1.0 + x / (white * white))) / (1.0 + x), vec3<f32>(0.0), vec3<f32>(1.0));
     }
-    return aces_tonemap(x);
+    if (curve < 3.5) {
+        return aces_tonemap(x);
+    }
+    if (curve < 4.5) {
+        return clamp(agx_tonemap(x), vec3<f32>(0.0), vec3<f32>(1.0));
+    }
+    return clamp(pbr_neutral_tonemap(x), vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
 @fragment

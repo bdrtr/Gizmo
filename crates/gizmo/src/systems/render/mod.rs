@@ -3290,12 +3290,16 @@ mod golden_render_tests {
             let none = render_bright_scene(TonemapCurve::None).await;
             let reinhard = render_bright_scene(TonemapCurve::Reinhard).await;
             let extended = render_bright_scene(TonemapCurve::ReinhardExtended).await;
+            let agx = render_bright_scene(TonemapCurve::AgX).await;
+            let neutral = render_bright_scene(TonemapCurve::PbrNeutral).await;
 
             // Every pair must differ, or a curve is selecting nothing.
             for (an, a) in [
                 ("None", &none),
                 ("Reinhard", &reinhard),
                 ("ReinhardExtended", &extended),
+                ("AgX", &agx),
+                ("PbrNeutral", &neutral),
             ] {
                 let (changed, total) = changed_pixels(&aces, a, 128);
                 assert!(
@@ -3321,6 +3325,16 @@ mod golden_render_tests {
                     .sum::<f64>()
                     / (px.len().max(1) * 3) as f64
             };
+            // Measured means: ACES 183.2, None 185.1, Reinhard 164.8, AgX 174.5, PBR Neutral 175.1;
+            // AgX and Neutral differ on 16368 of 16384 pixels.
+            let (agx_vs_neutral, total) = changed_pixels(&agx, &neutral, 128);
+            assert!(agx_vs_neutral >= 200, "AgX and PBR Neutral differ on only {agx_vs_neutral}/{total} pixels");
+            assert!(
+                mean(&neutral) + 3.0 < mean(&none),
+                "PBR Neutral compresses what None clips: {:.1} against {:.1}",
+                mean(&neutral),
+                mean(&none),
+            );
             assert!(
                 mean(&aces) > mean(&reinhard),
                 "ACES ({:.1}) should hold a bright frame above Reinhard ({:.1})",

@@ -262,7 +262,7 @@ pub struct PostProcessUniforms {
 /// Which curve maps HDR to the display range.
 ///
 /// ACES was the only one, hard-coded in `post_process.wgsl`, which is what `CAPABILITY_GAPS.md`
-/// §B recorded as "1 curve + exposure" against a table of seven. These are the four that differ
+/// §B recorded as "1 curve + exposure" against a table of seven. These are the six that differ
 /// from each other in ways a game would choose between; the value is what
 /// [`PostProcessUniforms::tonemap_curve`] carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -282,6 +282,13 @@ pub enum TonemapCurve {
     /// against.
     #[default]
     Aces = 3,
+    /// AgX (Troy Sobotka's, in Benjamin Wrensch's polynomial fit): a log encode, a sigmoid and a
+    /// mild inset, so saturated highlights roll toward white the way film does instead of
+    /// skewing hue the way per-channel curves do. Flatter and less contrasty than ACES.
+    AgX = 4,
+    /// Khronos PBR Neutral: leaves everything below about 0.76 untouched — a material's base colour
+    /// reads as authored — and compresses only the highlights, desaturating them a little.
+    PbrNeutral = 5,
 }
 
 impl TonemapCurve {
