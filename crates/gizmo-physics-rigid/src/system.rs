@@ -169,6 +169,44 @@ pub fn physics_step_system(world: &World, dt: f32) {
         );
     }
 
+    // 3b. Bodies without a `Velocity`.
+    //
+    // The query above needs one, and a body without it used to be left out of the simulation
+    // **silently**: a static floor written as `RigidBody::new_static()` + a collider — no
+    // velocity, because a floor does not move — was not there, and everything above it fell
+    // through (`lobut`, 2026-11-02, measured: ten pins and a ball in free fall from frame one).
+    // A static body's velocity is zero by definition, so it joins this step with one. A body
+    // that moves needs a velocity that persists between steps, which only the component can
+    // hold, so it is given one through the command queue and simulated from the next frame on.
+    // Scenes whose bodies all carry a `Velocity` — every one written before this — take neither
+    // branch, so their bodies, their order and their hashes are unchanged.
+    if let Some(query) = world.query::<(
+        &RigidBody,
+        &Transform,
+        gizmo_core::query::Without<Velocity>,
+        gizmo_core::query::Without<gizmo_core::pool::Pooled>,
+        gizmo_core::query::Without<gizmo_core::component::IsDeleted>,
+    )>() {
+        for (id, (rb, transform, _, _, _)) in query.iter() {
+            if rb.is_static() {
+                if let Some(final_collider) = compound_shapes_map.remove(&id) {
+                    rigid_bodies.push((BodyHandle::from_id(id), *rb, *transform, Velocity::default(), final_collider));
+                }
+            } else if let Ok(queue) = world.try_get_resource::<gizmo_core::commands::CommandQueue>() {
+                tracing::debug!(entity = id, "[Physics] a moving RigidBody has no Velocity — adding one; it is simulated from the next frame");
+                queue.push(move |w: &mut World| {
+                    if w.borrow::<Velocity>().get(id).is_none() {
+                        if let Some(e) = w.get_entity(id) {
+                            w.add_component(e, Velocity::default());
+                        }
+                    }
+                });
+            } else {
+                tracing::warn!(entity = id, "[Physics] a moving RigidBody has no Velocity and there is no CommandQueue to add one — it is not simulated");
+            }
+        }
+    }
+
     // 4. Step Simulation
     physics_world.sync_bodies(rigid_bodies.iter());
 
