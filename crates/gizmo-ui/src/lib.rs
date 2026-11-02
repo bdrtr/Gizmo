@@ -47,7 +47,8 @@
 //! ([`UiNavigation`]), clipping ([`ClipContent`]), layers ([`ZIndex`]), wheel scrolling
 //! ([`Scroll`], driven by [`ui_scroll_system`]), a text field ([`TextInput`]) and drags
 //! ([`Drag`], captured from press to release — inventory items, title bars) and sliders
-//! ([`Slider`], dragged or stepped from the keyboard and gamepad).
+//! ([`Slider`], dragged or stepped from the keyboard and gamepad), progress bars
+//! ([`ProgressBar`]) and on/off switches ([`Toggle`]).
 //!
 //! The unit tests cover those, the layout write-back, node lifecycle, the [`Style`] → taffy
 //! conversion, the hit-test predicate and the interaction state machine. That is the part you
@@ -142,7 +143,9 @@ use gizmo_core::world::World;
 pub use components::*;
 pub use bundles::*;
 pub use layout::*;
-pub use interaction::{pointer_over_ui, ui_drag_system, ui_layer, ui_scroll_system, ui_slider_system, UiNavigation};
+pub use interaction::{
+    pointer_over_ui, ui_drag_system, ui_layer, ui_scroll_system, ui_slider_system, ui_toggle_system, UiNavigation,
+};
 pub use text_input::{text_input_system, TextInput};
 pub use touch_controls::{touch_controls_system, VirtualButton, VirtualStick};
 
@@ -162,6 +165,8 @@ pub fn register(world: &mut World, schedule: &mut Schedule) {
     world.register_component_type::<Scroll>();
     world.register_component_type::<Drag>();
     world.register_component_type::<Slider>();
+    world.register_component_type::<ProgressBar>();
+    world.register_component_type::<Toggle>();
     world.register_component_type::<VirtualStick>();
     world.register_component_type::<VirtualButton>();
     world.register_component_type::<text_input::TextInput>();
@@ -194,6 +199,12 @@ pub fn register(world: &mut World, schedule: &mut Schedule) {
             .into_config()
             .label("ui_touch_controls")
             .after("ui_layout"),
+    );
+    schedule.add_di_system(
+        interaction::ui_toggle_system
+            .into_config()
+            .label("ui_toggle")
+            .after("ui_interaction"),
     );
     schedule.add_di_system(
         interaction::ui_slider_system
@@ -244,7 +255,7 @@ pub mod prelude {
     pub use crate::{
         components::{
             AlignContent, AlignItems, AlignSelf, BackgroundColor, Display, FlexDirection,
-            Clicked, ClipContent, Drag, FlexWrap, Interaction, JustifyContent, Scroll, Slider, ZIndex, Node, PositionType, Style, UiRect, UiRoot, Val,
+            Clicked, ClipContent, Drag, FlexWrap, Interaction, JustifyContent, ProgressBar, Scroll, Slider, Toggle, ZIndex, Node, PositionType, Style, UiRect, UiRoot, Val,
         },
         bundles::{NodeBundle, ButtonBundle},
     };

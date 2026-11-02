@@ -716,14 +716,16 @@ state instead.
 - M7.4 authoritative client-server netcode; M7.7 WASM feature parities, editor panels +
   AssetServer hot-reload.
 
-- **M7.6 — font and text landed 2026-08-24; widgets and z-index have not.** `gizmo-renderer::text`
+- **M7.6 — font and text landed 2026-08-24; z-index and the common widgets on 2026-11-02/03.** `gizmo-renderer::text`
   is fonts, a glyph atlas and layout; `Text` is a component with two spaces and nine anchors, drawn
   by both hosts through one shared pass; and `gizmo-ui`'s `Node` and `BackgroundColor` are painted
   from it, so the crate that computed boxes and drew nothing now draws. What the item still names
-  and does not have: **widgets** beyond a box with a colour and a label, and a text field. Click
-  events (`Clicked`), keyboard/gamepad focus (`UiNavigation`), clipping (`ClipContent`), layers
-  (`ZIndex`, which retired the "z-index" half of this line), text fields (`TextInput`) and
-  wheel scrolling (`Scroll`) exist since 2026-11-02. No default font ships and none
+  and did not have was **widgets** beyond a box with a colour and a label. Since 2026-11-02/03:
+  clicks (`Clicked`), keyboard/gamepad focus (`UiNavigation`), clipping (`ClipContent`), layers
+  (`ZIndex`), text fields (`TextInput`), wheel scrolling (`Scroll`), drags (`Drag`), sliders
+  (`Slider`), progress bars (`ProgressBar`), on/off switches (`Toggle`) and on-screen touch
+  controls (`VirtualStick`, `VirtualButton`). Still missing: a dropdown / select list, and a
+  scrollbar (`Scroll` is wheel-only). No default font ships and none
   will without a licensing decision: a `Text` whose face was never loaded draws nothing rather than
   substituting one.
 

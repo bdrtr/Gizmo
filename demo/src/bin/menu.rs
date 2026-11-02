@@ -85,7 +85,7 @@ enum Action {
 const STRINGS_TR: &str = r#"{
   "menu": {
     "start": "Başla", "quit": "Çıkış", "name": "İsminizi yazın…",
-    "fullscreen_on": "Tam ekran: Açık", "fullscreen_off": "Tam ekran: Kapalı",
+    "fullscreen": "Tam ekran",
     "volume": "Ses: %{v}", "language": "Dil: Türkçe",
     "hello": "Merhaba, {name}!", "started": "Oyun burada başlardı — müzik değişti.",
     "back": "Menüye dönüldü.",
@@ -95,7 +95,7 @@ const STRINGS_TR: &str = r#"{
 const STRINGS_EN: &str = r#"{
   "menu": {
     "start": "Start", "quit": "Quit", "name": "Type your name…",
-    "fullscreen_on": "Fullscreen: On", "fullscreen_off": "Fullscreen: Off",
+    "fullscreen": "Fullscreen",
     "volume": "Volume: {v}%", "language": "Language: English",
     "hello": "Hello, {name}!", "started": "The game would start here — the music changed.",
     "back": "Back to the menu.",
@@ -228,7 +228,7 @@ fn main() {
             // Etiketler anahtar: ekranda `Locale`'in o anki dilindeki dizge çiziliyor.
             for (action, label) in [
                 (Action::Start, LocalizedText::new("menu.start")),
-                (Action::Fullscreen, fullscreen_label(mode)),
+                (Action::Fullscreen, LocalizedText::new("menu.fullscreen")),
                 (Action::Volume, volume_label(volume)),
                 (Action::Language, LocalizedText::new("menu.language")),
                 (Action::Quit, LocalizedText::new("menu.quit")),
@@ -242,6 +242,11 @@ fn main() {
                 scene.world.add_component(button, Text::screen("", font, 24.0, Vec2::ZERO).with_anchor(TextAnchor::Center));
                 scene.world.add_component(button, label);
                 scene.world.add_child(column, button);
+                if action == Action::Fullscreen {
+                    // Açık mı kapalı mı, solundaki onay kutusu söylüyor (`Toggle`); her tık onu da
+                    // çeviriyor, aşağıdaki işleyici pencereyi.
+                    scene.world.add_component(button, gizmo::ui::Toggle::new(mode == WindowMode::Fullscreen));
+                }
                 if action == Action::Volume {
                     // Sürüklenen ya da odaktayken ←/→ ile adım adım değişen bir kaydırıcı; dolgusunu
                     // motor çiziyor, etiketin altında.
@@ -286,10 +291,6 @@ fn main() {
         .set_update(update)
         .run()
         .expect("uygulama çalıştırılamadı");
-}
-
-fn fullscreen_label(mode: WindowMode) -> LocalizedText {
-    LocalizedText::new(if mode == WindowMode::Fullscreen { "menu.fullscreen_on" } else { "menu.fullscreen_off" })
 }
 
 fn volume_label(v: u32) -> LocalizedText {
@@ -353,7 +354,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, _dt: f32, _input: &I
                 };
                 world.insert_resource(next);
                 remember("fullscreen", &(next == WindowMode::Fullscreen));
-                Some(fullscreen_label(next))
+                None
             }
             // Kaydırıcının işi: sürükleme ya da odaktayken ←/→.
             Action::Volume => None,

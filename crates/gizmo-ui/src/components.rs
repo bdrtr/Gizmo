@@ -555,6 +555,71 @@ impl Default for Slider {
     }
 }
 
+/// A bar filled to [`value`](Self::value) (`0.0..=1.0`) of its width — health, loading, a song's
+/// progress. Not interactive: set `value` and it shows it. Under `gizmo-engine` the
+/// [`fill`](Self::fill) is painted over the element's background, under its label, like a
+/// [`Slider`]'s.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ProgressBar {
+    /// How full, `0.0..=1.0` (clamped when drawn).
+    pub value: f32,
+    /// The filled part's colour.
+    pub fill: Vec4,
+}
+
+impl ProgressBar {
+    /// A bar at `value`, filled green.
+    #[must_use]
+    pub fn new(value: f32) -> Self {
+        Self { value, fill: Vec4::new(0.3, 0.8, 0.4, 0.95) }
+    }
+
+    /// With another fill colour.
+    #[must_use]
+    pub fn with_fill(mut self, fill: Vec4) -> Self {
+        self.fill = fill;
+        self
+    }
+}
+
+impl Default for ProgressBar {
+    fn default() -> Self {
+        Self::new(0.0)
+    }
+}
+
+/// An on/off switch: every [`Clicked`] of its element flips [`on`](Self::on) — so the mouse, a
+/// finger, Enter and the gamepad's south button all flip it, through the same click a button
+/// gets. Put it on a [`ButtonBundle`](crate::ButtonBundle). Under `gizmo-engine` a check box is
+/// drawn at the element's left edge, filled while on.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Toggle {
+    /// On or off. Set it to change it without a click (it does not count as a change then).
+    pub on: bool,
+    changed: bool,
+}
+
+impl Toggle {
+    /// A switch starting `on` or off.
+    #[must_use]
+    pub fn new(on: bool) -> Self {
+        Self { on, changed: false }
+    }
+
+    /// It flipped this frame.
+    #[must_use]
+    pub fn just_changed(&self) -> bool {
+        self.changed
+    }
+
+    pub(crate) fn step(&mut self, clicked: bool) {
+        self.changed = clicked;
+        if clicked {
+            self.on = !self.on;
+        }
+    }
+}
+
 /// Fill color of a UI element, stored as a linear RGBA vector with each
 /// channel in the `0.0..=1.0` range.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -638,7 +703,7 @@ impl Scroll {
 /// Marker component for the root of a UI tree.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UiRoot;
-gizmo_core::impl_component!(Style, Node, Interaction, Clicked, BackgroundColor, UiRoot, ClipContent, ZIndex, Scroll, Drag, Slider);
+gizmo_core::impl_component!(Style, Node, Interaction, Clicked, BackgroundColor, UiRoot, ClipContent, ZIndex, Scroll, Drag, Slider, ProgressBar, Toggle);
 
 #[cfg(test)]
 mod tests {

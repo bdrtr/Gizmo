@@ -1,7 +1,7 @@
 use gizmo_core::query::{Query, Mut};
 use gizmo_core::system::{Res, ResMut};
 use gizmo_core::input::{GamepadButton, Input};
-use crate::components::{Clicked, ClipContent, Drag, Interaction, Node, Scroll, Slider, ZIndex};
+use crate::components::{Clicked, ClipContent, Drag, Interaction, Node, Scroll, Slider, Toggle, ZIndex};
 use gizmo_core::component::Parent;
 
 /// The layer `entity` is on: its own [`ZIndex`], or the nearest one up its parents, or `0`.
@@ -288,6 +288,18 @@ pub fn ui_slider_system(
         next.step_frame(pressed_here, held, pointer, (node.position.x, node.size.x), keys_here);
         if next != *slider {
             *slider = next;
+        }
+    }
+}
+
+/// Flips every [`Toggle`] whose element was [`Clicked`] this frame. Runs after
+/// `ui_interaction_system`, which sets the click.
+pub fn ui_toggle_system(mut toggles: Query<(&Clicked, Mut<Toggle>)>) {
+    for (_, (clicked, mut toggle)) in toggles.iter_mut() {
+        let mut next = *toggle;
+        next.step(clicked.0);
+        if next != *toggle {
+            *toggle = next;
         }
     }
 }
@@ -710,6 +722,32 @@ mod tests {
         assert_eq!(focused(&world), Some(top), "up still moves the focus");
         slider_frame(&mut world, (500.0, 500.0), false, Some("right"));
         assert!((value(&world) - 0.4).abs() < 1e-6, "an unfocused slider took the key");
+    }
+
+    /// A toggle flips once per click — the frame the click completes — and reports that frame
+    /// only; Enter on a focused one is a click too.
+    #[test]
+    fn a_toggle_flips_once_per_click() {
+        use gizmo_core::system::{IntoSystemConfig, Schedule};
+        let (mut world, button, _) = button_world();
+        world.add_component(world.get_entity(button).unwrap(), Toggle::new(false));
+        let step = |w: &mut gizmo_core::World, at: (f32, f32), down: bool| {
+            frame(w, at, down);
+            let mut s = Schedule::new();
+            s.add_di_system(ui_toggle_system.into_config());
+            s.build();
+            s.run(w, 0.0);
+        };
+        let t = |w: &gizmo_core::World| *w.borrow::<Toggle>().get(button).unwrap();
+        step(&mut world, (50.0, 20.0), true);
+        assert!(!t(&world).on, "a press is not a click");
+        step(&mut world, (50.0, 20.0), false);
+        assert!(t(&world).on && t(&world).just_changed());
+        step(&mut world, (50.0, 20.0), false);
+        assert!(t(&world).on && !t(&world).just_changed(), "one flip per click");
+        step(&mut world, (50.0, 20.0), true);
+        step(&mut world, (50.0, 20.0), false);
+        assert!(!t(&world).on, "the second click flips it back");
     }
 
     /// Pressed on, dragged off, released: cancelled, like a desktop button.

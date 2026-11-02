@@ -45,12 +45,28 @@ fn ui_boxes(world: &World) -> Vec<UiBox> {
     let backgrounds = world.borrow::<crate::ui::BackgroundColor>();
     let sliders = world.borrow::<crate::ui::Slider>();
     let sticks = world.borrow::<crate::ui::VirtualStick>();
+    let bars = world.borrow::<crate::ui::ProgressBar>();
+    let toggles = world.borrow::<crate::ui::Toggle>();
     let mut out = Vec::new();
     for (id, node) in nodes.iter() {
         out.push((id, node.position, node.size, backgrounds.get(id).map(|c| c.0)));
         if let Some(s) = sliders.get(id) {
             let w = node.size.x * s.value.clamp(0.0, 1.0);
             out.push((id, node.position, Vec2::new(w, node.size.y), Some(s.fill)));
+        }
+        if let Some(b) = bars.get(id) {
+            let w = node.size.x * b.value.clamp(0.0, 1.0);
+            out.push((id, node.position, Vec2::new(w, node.size.y), Some(b.fill)));
+        }
+        // A toggle's check box at the left edge: a frame, and a filled square inside while on.
+        if let Some(t) = toggles.get(id) {
+            let side = node.size.y * 0.5;
+            let at = node.position + Vec2::new(node.size.y * 0.25, node.size.y * 0.25);
+            out.push((id, at, Vec2::splat(side), Some(Vec4::new(1.0, 1.0, 1.0, 0.35))));
+            if t.on {
+                let inner = side * 0.6;
+                out.push((id, at + Vec2::splat((side - inner) * 0.5), Vec2::splat(inner), Some(Vec4::new(0.35, 0.75, 1.0, 1.0))));
+            }
         }
         // A stick's knob: at rest in the middle of its box; held, where the finger came down plus
         // the push (screen `y` is down, the stick's is up).
@@ -485,6 +501,22 @@ mod clip_tests {
             code.contains(concat!("text_input_display(world,id)", ".or_else(||localized_display(world,id))")),
             "record_text no longer draws localized labels"
         );
+    }
+
+    /// A progress bar is its box and then its fill; a toggle adds its check box, filled only while
+    /// on.
+    #[test]
+    fn a_progress_bar_and_a_toggle_draw_their_parts() {
+        let mut world = World::new();
+        let bar = world.spawn_bundle((node(0.0, 0.0, 200.0, 20.0), crate::ui::ProgressBar::new(0.75)));
+        let boxes = ui_boxes(&world);
+        assert_eq!(boxes.len(), 2);
+        assert_eq!((boxes[1].0, boxes[1].2), (bar.id(), Vec2::new(150.0, 20.0)));
+        let off = world.spawn_bundle((node(0.0, 100.0, 200.0, 40.0), crate::ui::Toggle::new(false)));
+        let on = world.spawn_bundle((node(0.0, 200.0, 200.0, 40.0), crate::ui::Toggle::new(true)));
+        let boxes = ui_boxes(&world);
+        let parts = |id: u32| boxes.iter().filter(|b| b.0 == id).count();
+        assert_eq!((parts(off.id()), parts(on.id())), (2, 3), "box + frame, and + mark when on");
     }
 
     /// A stick's knob sits in the middle of its box at rest — and is a box after the stick's own.

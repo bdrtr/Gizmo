@@ -37,7 +37,7 @@ use gizmo::prelude::*;
 use gizmo::renderer::components::{ColorTween, ParticleEmitter, ProjectionMode, Text, TextAlign, TextAnchor};
 use gizmo::renderer::text::FontId;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
-use gizmo::ui::{BackgroundColor, NodeBundle, PositionType, Style, UiPlugin, UiRect, Val, VirtualButton};
+use gizmo::ui::{BackgroundColor, NodeBundle, PositionType, ProgressBar, Style, UiPlugin, UiRect, Val, VirtualButton};
 
 const RATE: u32 = 44_100;
 const BPM: f32 = 120.0;
@@ -94,6 +94,8 @@ struct Game {
     judgement: u32,
     lane_marks: [u32; LANES],
     buttons: Option<[u32; LANES]>,
+    /// Şarkının ilerlemesi, en üstte ince bir çubuk.
+    progress: u32,
     auto: bool,
 }
 
@@ -152,6 +154,20 @@ fn main() {
                     .with_align(TextAlign::Center),))
                 .id();
 
+            let progress = scene.world.spawn_bundle(NodeBundle {
+                style: Style {
+                    position_type: PositionType::Absolute,
+                    inset: UiRect { left: Val::Px(0.0), top: Val::Px(0.0), right: Val::Auto, bottom: Val::Auto },
+                    width: Val::Percent(100.0),
+                    height: Val::Px(6.0),
+                    ..Default::default()
+                },
+                background_color: BackgroundColor(Vec4::new(1.0, 1.0, 1.0, 0.08)),
+                ..Default::default()
+            });
+            scene.world.add_component(progress, ProgressBar::new(0.0).with_fill(Vec4::new(0.9, 0.85, 0.4, 0.9)));
+            let progress = progress.id();
+
             // Müzik: sentezlenmiş bir döngü; notalar onun vuruşlarına göre.
             let (samples, loop_len) = song();
             let mut music = None;
@@ -177,6 +193,7 @@ fn main() {
                 judgement,
                 lane_marks,
                 buttons: None,
+                progress,
                 auto: std::env::var_os("RITIM_OTO").is_some(),
             });
         })
@@ -401,6 +418,10 @@ fn burst(world: &mut World, at: Vec3, colour: Vec4) {
 
 fn draw_hud(world: &mut World, game: &Game, now: f32) {
     let total = game.notes.len();
+    let end = game.notes.last().map_or(1.0, |n| n.t);
+    if let Some(mut bar) = world.borrow_mut::<ProgressBar>().get_mut(game.progress) {
+        bar.value = (now / end).clamp(0.0, 1.0);
+    }
     let done = game.notes.iter().all(|n| n.state != NoteState::Waiting);
     if let Some(mut t) = world.borrow_mut::<Text>().get_mut(game.hud) {
         let lap = if game.loop_len > 0.0 { now / game.loop_len } else { 0.0 };

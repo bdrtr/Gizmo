@@ -1152,6 +1152,14 @@ mouse, the keyboard and a gamepad. Three of its four buttons were impossible:
   finishing once, a new line, a skip, and a guard on the draw loop's cut; not restarting on a new
   line, or holding `just_finished` past its frame, fails it. `menu`'s announcements type out.
 
+- ~~**No progress bar, no switch.**~~ **Closed 2026-11-03.** A health bar was two nested nodes
+  with a percentage width kept in step by hand, and "Fullscreen: Off" a button relabelled on every
+  click. `ProgressBar { value, fill }` (the engine paints the fill, like a `Slider`'s) and
+  `Toggle { on }` on a `ButtonBundle` — every `Clicked` flips it, so mouse, finger, Enter and the
+  gamepad all do — with a check box drawn at its left edge. Tested on one flip per click (a press is
+  not a click) and on the drawn parts; flipping every frame fails it. `menu`'s fullscreen is a
+  `Toggle`; `ritim` shows the song's progress in a `ProgressBar`.
+
 ### C16. Every game wrote the same three lines (2026-11-02)
 
 ~~**No timer.**~~ **Closed 2026-11-02.** `balon`, `kale` and `yikim_ustasi` each counted down by
