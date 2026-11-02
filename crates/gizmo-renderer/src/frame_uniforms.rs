@@ -380,7 +380,8 @@ impl Default for PostProcessUniforms {
             // engine, silently.
             tonemap_curve: crate::gpu_types::TonemapCurve::Aces.as_f32(),
             tonemap_white_point: 4.0,
-            _tonemap_pad: [0.0; 2],
+            deband_dither: 0.0,
+            _tonemap_pad: 0.0,
             // Off: a still frame is the picture every scene was authored against.
             motion_blur: 0.0,
             motion_blur_max: 0.05,

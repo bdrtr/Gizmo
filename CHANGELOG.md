@@ -81,6 +81,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   or by default to a `tracing::error!` naming the system, and the system runs again next frame.
   `SystemOutput` is the trait behind it; `()` systems are unchanged.
 
+- **Deband dither: `Renderer::deband_dither`.** Half an 8-bit step of noise before the output,
+  against banding in dark gradients. Off by default. `PostProcessUniforms::_tonemap_pad` became
+  `deband_dither` + a one-word pad.
+
 - **Two more tone-mapping curves: `TonemapCurve::AgX` and `TonemapCurve::PbrNeutral`.** AgX
   (log encode, sigmoid, inset/outset — highlights roll toward white rather than skewing hue) and
   Khronos PBR Neutral (identity below 0.76, so base colours read as authored; a shoulder above).

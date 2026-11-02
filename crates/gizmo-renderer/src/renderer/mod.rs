@@ -221,6 +221,10 @@ pub struct Renderer {
     /// How far the sun's cascaded shadows reach and how the cascades split it — see
     /// [`ShadowSettings`](crate::csm::ShadowSettings). The defaults are the old constants.
     pub shadow_settings: crate::csm::ShadowSettings,
+    /// Half a step of noise before the 8-bit output, against banding in smooth dark gradients — a
+    /// sky, a vignette, a light's falloff on a wall. Off by default, so frames are byte-identical
+    /// to before unless asked.
+    pub deband_dither: bool,
     /// The scene's height fog, by hand — see [`Fog`](crate::frame_uniforms::Fog). `None` (the
     /// default) keeps the environment preset's.
     pub fog: Option<crate::frame_uniforms::Fog>,

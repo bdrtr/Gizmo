@@ -871,6 +871,7 @@ fn draw_camera_view(
     let post = crate::renderer::PostProcessUniforms {
         tonemap_curve: renderer.tonemap_curve.as_f32(),
         tonemap_white_point: renderer.tonemap_white_point,
+        deband_dither: if renderer.deband_dither { 1.0 } else { 0.0 },
         ..post
     };
     // **Camera motion blur's one input**: where this frame's clip space was last frame. Both
@@ -3341,6 +3342,72 @@ mod golden_render_tests {
                 mean(&aces),
                 mean(&reinhard),
             );
+        });
+    }
+
+    /// `Renderer::deband_dither` breaks a smooth dark gradient's flat runs. A dim floor lit by a
+    /// weak point light: neighbouring pixels in the 8-bit output round to the same code in long
+    /// runs — the bands — and half a step of noise splits them, without moving the mean.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn deband_dither_breaks_up_flat_runs() {
+        use crate::renderer::components::PointLight;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        // (fraction of equal horizontal neighbours, mean luma), over the lower half.
+        async fn runs(dither: bool) -> (f32, f32) {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssao = None;
+            renderer.vignette_intensity = 0.0;
+            renderer.deband_dither = dither;
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let floor = world.spawn();
+            world.add_component(floor, Transform::new(Vec3::new(0.0, -0.2, 0.0)).with_scale(Vec3::new(20.0, 0.2, 20.0)));
+            world.add_component(floor, GlobalTransform::default());
+            world.add_component(floor, AssetManager::create_cube(&renderer.device));
+            world.add_component(floor, Material::new(tex).with_pbr(Vec4::new(0.5, 0.5, 0.5, 1.0), 1.0, 0.0));
+            world.add_component(floor, MeshRenderer::new());
+            let lamp = world.spawn();
+            world.add_component(lamp, Transform::new(Vec3::new(0.0, 1.5, -2.0)));
+            world.add_component(lamp, GlobalTransform::default());
+            world.add_component(lamp, PointLight::new(Vec3::ONE, 0.6, 12.0));
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.0, 2.0, 2.0),
+                yaw: -std::f32::consts::FRAC_PI_2,
+                pitch: -0.5,
+                primary: true,
+                ..Default::default()
+            });
+            let f = render_world(&mut renderer, &mut world).await;
+            let luma = |x: usize, y: usize| { let i = (y * 128 + x) * 4; (f[i] as u32 + f[i + 1] as u32 + f[i + 2] as u32) / 3 };
+            let (mut equal, mut pairs, mut sum) = (0u32, 0u32, 0u32);
+            for y in 64..128 {
+                for x in 0..127 {
+                    pairs += 1;
+                    if luma(x, y) == luma(x + 1, y) {
+                        equal += 1;
+                    }
+                    sum += luma(x, y);
+                }
+            }
+            (equal as f32 / pairs as f32, sum as f32 / pairs as f32)
+        }
+        pollster::block_on(async {
+            let plain = runs(false).await;
+            let dithered = runs(true).await;
+            // Measured: 80.3 % of neighbours equal without the dither, 59.3 % with it; mean luma
+            // 56.143 against 56.145.
+            assert!(plain.0 > 0.7, "a dim gradient is mostly flat runs: {:.3}", plain.0);
+            assert!(dithered.0 + 0.1 < plain.0, "the dither breaks them up: {:.3} → {:.3}", plain.0, dithered.0);
+            assert!((dithered.1 - plain.1).abs() < 0.5, "without moving the mean: {:.3} → {:.3}", plain.1, dithered.1);
         });
     }
 

@@ -37,7 +37,7 @@ struct PostProcessParams {
     fog: vec4<f32>,        // rgb = su-altı sis rengi, a = yoğunluk (offset 48, 16-hizalı)
     // Tone mapping: eğri seçimi ve beyaz noktası. Ayrı bir vec4, çünkü `fog`'dan sonra blok
     // 16-hizalı bir sınırda ve tek bir f32 eklemek onu bozardı.
-    tonemap: vec4<f32>,    // x = eğri (0..5, `TonemapCurve`), y = beyaz nokta, zw = pad
+    tonemap: vec4<f32>,    // x = eğri (0..5, `TonemapCurve`), y = beyaz nokta, z = deband dither (0/1), w = pad
     // Camera motion blur: x = shutter fraction (0 = off), y = longest smear in screen fractions.
     motion: vec4<f32>,
     // This frame's clip space → the last frame's (both unjittered).
@@ -358,6 +358,15 @@ fn fs_composite(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     // 6. Film Grain — piksel-koordinatı tabanlı düzgün hash (statik diagonal bant yok).
     let noise = hash12(in.position.xy) - 0.5;
     final_color += final_color * noise * params.film_grain_intensity;
+
+    // 7. Deband dither (`Renderer::deband_dither`): ±half an 8-bit step, added where the steps are
+    // — in the display encoding, which the target applies after this — so a dark gradient whose
+    // neighbouring pixels would round to the same code no longer shows as flat bands.
+    if (params.tonemap.z > 0.5) {
+        let step_noise = hash12(in.position.xy + vec2<f32>(37.0, 113.0)) - 0.5;
+        let encoded = pow(max(final_color, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2));
+        final_color = pow(max(encoded + vec3<f32>(step_noise / 255.0), vec3<f32>(0.0)), vec3<f32>(2.2));
+    }
     
     return vec4<f32>(final_color, 1.0);
 }

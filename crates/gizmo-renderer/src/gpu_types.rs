@@ -242,8 +242,11 @@ pub struct PostProcessUniforms {
     /// White point for the curves that take one ([`TonemapCurve::ReinhardExtended`]). Ignored by
     /// the others.
     pub tonemap_white_point: f32,
+    /// 1 = add half a step of noise before the 8-bit output (`Renderer::deband_dither`), so smooth
+    /// dark gradients do not show as bands. Was the first word of `_tonemap_pad`.
+    pub deband_dither: f32,
     /// Padding to the next 16-byte boundary. Not a knob.
-    pub _tonemap_pad: [f32; 2],
+    pub _tonemap_pad: f32,
 
     // ── Camera motion blur ──
     /// The shutter fraction, [`PostProcess::motion_blur`](crate::components::PostProcess::motion_blur).
