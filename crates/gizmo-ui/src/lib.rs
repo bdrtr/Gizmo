@@ -43,10 +43,13 @@
 //!   from `Input` against each [`Node`]'s half-open `[pos, pos + size)` box and
 //!   sets [`Interaction`] to `None` / `Hovered` / `Pressed`.
 //!
-//! The crate carries 27 unit tests covering exactly those two things plus the
-//! [`Style`] → taffy conversion: layout write-back, node lifecycle, length
-//! conversion, the hit-test predicate and the interaction state machine. That
-//! is the part you can rely on.
+//! Around them since 2026-11-02: clicks ([`Clicked`]), keyboard and gamepad focus
+//! ([`UiNavigation`]), clipping ([`ClipContent`]), layers ([`ZIndex`]), wheel scrolling
+//! ([`Scroll`], driven by [`ui_scroll_system`]) and a text field ([`TextInput`]).
+//!
+//! The unit tests cover those, the layout write-back, node lifecycle, the [`Style`] → taffy
+//! conversion, the hit-test predicate and the interaction state machine. That is the part you
+//! can rely on.
 //!
 //! # What this crate does not do itself — and what now reads it
 //!
@@ -77,9 +80,9 @@
 //!   hit-tests layer by layer since 2026-11-02 — a panel in front hides the labels behind it and
 //!   takes the pointer from them. Two overlapping nodes on the *same* layer still both report
 //!   `Hovered`, and every background of a layer is painted before its labels.
-//! - **No scrolling and no text input.** Clicks ([`Clicked`]), keyboard and gamepad focus
-//!   ([`UiNavigation`]) and clipping ([`ClipContent`]) exist since 2026-11-02;
-//!   [`Interaction`] itself is still a per-frame state, not an event stream.
+//! - **Scrolling is the wheel's alone.** [`Scroll`] draws no scrollbar, nothing drags it, and
+//!   keyboard focus does not scroll a focused button into view. [`Interaction`] itself is
+//!   still a per-frame state, not an event stream.
 //! - **No CSS Grid.** [`Style`] models the flexbox/block surface only; taffy's
 //!   grid algorithm is compiled in but unreachable, because there is no way to
 //!   express `display: grid` or a track template. The full list of taffy
@@ -135,7 +138,7 @@ use gizmo_core::world::World;
 pub use components::*;
 pub use bundles::*;
 pub use layout::*;
-pub use interaction::{pointer_over_ui, ui_layer, UiNavigation};
+pub use interaction::{pointer_over_ui, ui_layer, ui_scroll_system, UiNavigation};
 pub use text_input::{text_input_system, TextInput};
 
 /// Registers the UI components + [`UiContext`] resource and schedules the layout
@@ -151,6 +154,7 @@ pub fn register(world: &mut World, schedule: &mut Schedule) {
     world.register_component_type::<Clicked>();
     world.register_component_type::<ClipContent>();
     world.register_component_type::<ZIndex>();
+    world.register_component_type::<Scroll>();
     world.register_component_type::<text_input::TextInput>();
     world.register_component_type::<BackgroundColor>();
     world.register_component_type::<UiRoot>();
@@ -163,10 +167,12 @@ pub fn register(world: &mut World, schedule: &mut Schedule) {
     // resize handler keeps this up to date; standalone users can set it directly.
     let _ = world.get_resource_mut_or_default::<gizmo_core::window::WindowInfo>();
 
+    schedule.add_di_system(interaction::ui_scroll_system.into_config().label("ui_scroll"));
     schedule.add_di_system(
         system::ui_layout_system
             .into_config()
-            .label("ui_layout"),
+            .label("ui_layout")
+            .after("ui_scroll"),
     );
     schedule.add_di_system(
         interaction::ui_interaction_system
@@ -211,7 +217,7 @@ pub mod prelude {
     pub use crate::{
         components::{
             AlignContent, AlignItems, AlignSelf, BackgroundColor, Display, FlexDirection,
-            Clicked, ClipContent, FlexWrap, Interaction, JustifyContent, ZIndex, Node, PositionType, Style, UiRect, UiRoot, Val,
+            Clicked, ClipContent, FlexWrap, Interaction, JustifyContent, Scroll, ZIndex, Node, PositionType, Style, UiRect, UiRoot, Val,
         },
         bundles::{NodeBundle, ButtonBundle},
     };

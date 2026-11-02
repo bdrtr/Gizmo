@@ -418,10 +418,58 @@ pub struct ClipContent;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ZIndex(pub i32);
 
+/// Scrolls a node's children: they are laid out as usual, then moved up (and left) by
+/// [`offset`](Self::offset), and clipped to the node's box as if it carried [`ClipContent`]. The
+/// mouse wheel over the node scrolls it by [`speed`](Self::speed) pixels a notch; the layout keeps
+/// the offset between zero and how far the children reach past the box.
+///
+/// Its direct children never shrink to fit it (their `flex_shrink` is taken as zero): CSS's
+/// default `flex-shrink: 1`, which [`Style`] otherwise keeps, would squash a long list into the
+/// box and leave nothing to scroll.
+///
+/// A list longer than its panel could be clipped since `ClipContent`, but not reached; a
+/// leaderboard or an inventory needs this.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Scroll {
+    /// How far the content is scrolled, in pixels: `y` down, `x` right. Set it to jump; the
+    /// layout clamps it.
+    pub offset: Vec2,
+    /// Pixels per mouse-wheel notch.
+    pub speed: f32,
+    max: Vec2,
+}
+
+impl Default for Scroll {
+    fn default() -> Self {
+        Self { offset: Vec2::ZERO, speed: 40.0, max: Vec2::ZERO }
+    }
+}
+
+impl Scroll {
+    /// Pixels per mouse-wheel notch instead of the default 40.
+    #[must_use]
+    pub fn with_speed(mut self, px: f32) -> Self {
+        self.speed = px;
+        self
+    }
+
+    /// How far it can scroll, from the last layout: the children's extent past the box.
+    #[must_use]
+    pub fn max_offset(&self) -> Vec2 {
+        self.max
+    }
+
+    /// Records the extent and clamps the offset into it — the layout's half.
+    pub(crate) fn fit(&mut self, max: Vec2) {
+        self.max = max.max(Vec2::ZERO);
+        self.offset = self.offset.clamp(Vec2::ZERO, self.max);
+    }
+}
+
 /// Marker component for the root of a UI tree.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UiRoot;
-gizmo_core::impl_component!(Style, Node, Interaction, Clicked, BackgroundColor, UiRoot, ClipContent, ZIndex);
+gizmo_core::impl_component!(Style, Node, Interaction, Clicked, BackgroundColor, UiRoot, ClipContent, ZIndex, Scroll);
 
 #[cfg(test)]
 mod tests {

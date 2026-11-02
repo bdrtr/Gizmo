@@ -1,7 +1,7 @@
 use gizmo_core::query::{Query, Mut};
 use gizmo_core::system::{Res, ResMut};
 use gizmo_core::input::{GamepadButton, Input};
-use crate::components::{Clicked, Interaction, Node, ZIndex};
+use crate::components::{Clicked, ClipContent, Interaction, Node, Scroll, ZIndex};
 use gizmo_core::component::Parent;
 
 /// The layer `entity` is on: its own [`ZIndex`], or the nearest one up its parents, or `0`.
@@ -105,6 +105,7 @@ pub fn ui_interaction_system(
     mut interactions: Query<(&Node, Mut<Interaction>, Option<Mut<Clicked>>)>,
     layers: Query<(Option<&ZIndex>, Option<&Parent>)>,
     fields: Query<&crate::text_input::TextInput>,
+    clippers: Query<(&Node, Option<&ClipContent>, Option<&Scroll>)>,
 ) {
     let mouse_pos = input.mouse_position();
     let is_clicked = input.is_mouse_button_pressed(0); // 0 is left click
@@ -118,9 +119,24 @@ pub fn ui_interaction_system(
             |e| layers.get(e).and_then(|(_, p)| p.map(|p| p.0)),
         )
     };
+    // Inside every clipping ancestor too: a list item scrolled out of its panel is not drawn, so it
+    // must not be clickable where it would have been.
+    let visible = |id: u32| {
+        let mut at = layers.get(id).and_then(|(_, p)| p.map(|p| p.0));
+        for _ in 0..256 {
+            let Some(a) = at else { return true };
+            if let Some((n, c, s)) = clippers.get(a) {
+                if (c.is_some() || s.is_some()) && !point_in_node(mouse_pos, n) {
+                    return false;
+                }
+            }
+            at = layers.get(a).and_then(|(_, p)| p.map(|p| p.0));
+        }
+        true
+    };
     let under: Vec<(u32, i32)> = interactions
         .iter_mut()
-        .filter(|(_, (n, _, _))| point_in_node(mouse_pos, n))
+        .filter(|(id, (n, _, _))| point_in_node(mouse_pos, n) && visible(*id))
         .map(|(id, _)| (id, layer_of(id)))
         .collect();
     let top = under.iter().map(|(_, l)| *l).max();
@@ -223,6 +239,27 @@ fn navigate(
             || input.is_key_just_pressed(key("space"))
             || pad_just(GamepadButton::South));
     (nav.focused, activate)
+}
+
+/// The mouse wheel scrolls the innermost [`Scroll`] node under the cursor — by its `speed` a
+/// notch, wheel up showing earlier content. The layout clamps the result.
+pub fn ui_scroll_system(input: Res<Input>, mut scrolls: Query<(&Node, Mut<Scroll>)>) {
+    let wheel = input.mouse_scroll();
+    if wheel == 0.0 {
+        return;
+    }
+    let p = input.mouse_position();
+    let target = scrolls
+        .iter_mut()
+        .filter(|(_, (n, _))| point_in_node(p, n))
+        .min_by(|a, b| (a.1 .0.size.x * a.1 .0.size.y).total_cmp(&(b.1 .0.size.x * b.1 .0.size.y)))
+        .map(|(id, _)| id);
+    if let Some(id) = target {
+        if let Some((_, mut s)) = scrolls.get_mut(id) {
+            let step = s.speed;
+            s.offset.y -= wheel * step;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -434,6 +471,63 @@ mod tests {
         frame(&mut world, (75.0, 75.0), true);
         frame(&mut world, (75.0, 75.0), false);
         assert!(clicked(&world, front.id()) && !clicked(&world, back.id()), "the click went through");
+    }
+
+    /// A button scrolled (or cut) out of its panel is not drawn, so it is not under the pointer
+    /// either — not even where its box would be.
+    #[test]
+    fn a_button_outside_its_clipping_panel_is_not_hovered() {
+        use gizmo_core::hierarchy::HierarchyExt;
+        for clip in [true, false] {
+            let mut world = gizmo_core::World::new();
+            world.insert_resource(Input::new());
+            let panel = world.spawn_bundle((node((0.0, 0.0), (100.0, 100.0)),));
+            if clip {
+                world.add_component(panel, Scroll::default());
+            } else {
+                world.add_component(panel, ClipContent);
+            }
+            let shown = world.spawn_bundle(crate::ButtonBundle { node: node((0.0, 60.0), (100.0, 40.0)), ..Default::default() });
+            let hidden = world.spawn_bundle(crate::ButtonBundle { node: node((0.0, 100.0), (100.0, 40.0)), ..Default::default() });
+            world.add_child(panel, shown);
+            world.add_child(panel, hidden);
+            let state = |w: &gizmo_core::World, id| w.borrow::<Interaction>().get(id).copied();
+            frame(&mut world, (50.0, 120.0), false);
+            assert_eq!(state(&world, hidden.id()), Some(Interaction::None), "clip={clip}: the hidden button took the pointer");
+            frame(&mut world, (50.0, 80.0), false);
+            assert_eq!(state(&world, shown.id()), Some(Interaction::Hovered), "clip={clip}: the visible one did not");
+        }
+    }
+
+    /// The wheel scrolls the innermost scrolling panel under the cursor, and nothing else.
+    #[test]
+    fn the_wheel_scrolls_the_innermost_panel_under_the_cursor() {
+        use gizmo_core::system::{IntoSystemConfig, Schedule};
+        let mut world = gizmo_core::World::new();
+        world.insert_resource(Input::new());
+        let outer = world.spawn_bundle((node((0.0, 0.0), (300.0, 300.0)), Scroll::default()));
+        let inner = world.spawn_bundle((node((0.0, 0.0), (100.0, 100.0)), Scroll::default().with_speed(25.0)));
+        let wheel = |world: &mut gizmo_core::World, at: (f32, f32), notches: f32| {
+            {
+                let mut input = world.get_resource_mut::<Input>().unwrap();
+                input.begin_frame();
+                input.set_mouse_position(at.0, at.1);
+                input.on_mouse_scroll(notches);
+            }
+            let mut s = Schedule::new();
+            s.add_di_system(ui_scroll_system.into_config());
+            s.build();
+            s.run(world, 0.0);
+        };
+        let offset = |w: &gizmo_core::World, e: gizmo_core::Entity| w.borrow::<Scroll>().get(e.id()).unwrap().offset.y;
+        wheel(&mut world, (50.0, 50.0), -2.0);
+        assert_eq!((offset(&world, inner), offset(&world, outer)), (50.0, 0.0), "two notches down, at its own speed");
+        wheel(&mut world, (200.0, 200.0), -1.0);
+        assert_eq!((offset(&world, inner), offset(&world, outer)), (50.0, 40.0));
+        wheel(&mut world, (50.0, 50.0), 1.0);
+        assert_eq!(offset(&world, inner), 25.0, "wheel up goes back");
+        wheel(&mut world, (500.0, 500.0), -1.0);
+        assert_eq!((offset(&world, inner), offset(&world, outer)), (25.0, 40.0), "outside both");
     }
 
     /// Pressed on, dragged off, released: cancelled, like a desktop button.

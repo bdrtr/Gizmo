@@ -114,6 +114,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - **`MeshSource("cylinder")` and `"cone"`**, sized like their colliders, and
     `AssetManager::PRIMITIVE_MESH_KEYS` as the one list of primitive keys (the studio's
     missing-asset check now uses it instead of its own copy).
+- **UI scrolling: `gizmo::ui::Scroll`.** A node carrying it moves its children by its `offset`,
+  clamped by the layout to how far they reach past its box (padding kept at both ends), and
+  clips them like `ClipContent`; the mouse wheel scrolls the innermost one under the cursor by
+  its `speed`. Its direct children do not flex-shrink, so a long list stays long. A button
+  scrolled — or clipped — out of its panel is no longer hovered or clicked where its box would
+  be; that applies to `ClipContent` too. `ui_layout` has a twelve-row list in a six-row box.
 - **Text input: `Input::typed_text()` and `gizmo::ui::TextInput`.** The characters typed this
   frame as the layout wrote them (`ş`, capitals, repeats; control characters dropped), and a text
   field widget — click to focus, type, Backspace, Enter to submit, Escape or a click elsewhere to

@@ -52,12 +52,14 @@ fn ui_boxes(_world: &World) -> Vec<UiBox> {
 }
 
 /// Where `entity`'s drawing is cut: the intersection of the boxes of every
-/// [`ClipContent`](crate::ui::ClipContent) node from it up through its ancestors (`[min, max]`,
+/// [`ClipContent`](crate::ui::ClipContent) or [`Scroll`](crate::ui::Scroll) node from it up
+/// through its ancestors (`[min, max]`,
 /// window pixels), or `None` when none of them clips. An empty intersection is a zero-size rect,
 /// which clips everything.
 #[cfg(feature = "ui")]
 pub(crate) fn ui_clip(world: &World, entity: u32) -> Option<[Vec2; 2]> {
     let clips = world.borrow::<crate::ui::ClipContent>();
+    let scrolls = world.borrow::<crate::ui::Scroll>();
     let nodes = world.borrow::<crate::ui::Node>();
     let parents = world.borrow::<crate::core::component::Parent>();
     let mut out: Option<[Vec2; 2]> = None;
@@ -65,7 +67,7 @@ pub(crate) fn ui_clip(world: &World, entity: u32) -> Option<[Vec2; 2]> {
     // Bounded: a hierarchy cycle (which the core prevents) must not hang a frame.
     for _ in 0..256 {
         let Some(id) = at else { break };
-        if clips.get(id).is_some() {
+        if clips.get(id).is_some() || scrolls.get(id).is_some() {
             if let Some(n) = nodes.get(id) {
                 let r = [n.position, n.position + n.size];
                 out = Some(match out {
@@ -278,5 +280,15 @@ mod clip_tests {
         assert_eq!(ui_clip(&world, label.id()), Some([Vec2::splat(50.0), Vec2::splat(100.0)]), "the intersection");
         assert_eq!(ui_clip(&world, plain.id()), Some([Vec2::splat(50.0), Vec2::splat(100.0)]));
         assert_eq!(ui_clip(&world, loose.id()), None);
+    }
+
+    /// A scrolling list clips like a `ClipContent` panel: its rows scroll out of sight.
+    #[test]
+    fn a_scroll_node_clips_its_children() {
+        let mut world = World::new();
+        let list = world.spawn_bundle((node(10.0, 10.0, 100.0, 50.0), crate::ui::Scroll::default()));
+        let row = world.spawn_bundle((node(10.0, -20.0, 100.0, 40.0),));
+        world.add_child(list, row);
+        assert_eq!(ui_clip(&world, row.id()), Some([Vec2::splat(10.0), Vec2::new(110.0, 60.0)]));
     }
 }

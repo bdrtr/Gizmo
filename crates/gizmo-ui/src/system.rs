@@ -44,6 +44,7 @@ pub fn ui_layout_system(
     parents: Query<&Parent>,
     children: Query<&Children>,
     mut nodes: Query<Mut<Node>>,
+    mut scrolls: Query<Mut<crate::components::Scroll>>,
 ) {
     // Track the real (resized) window size so root layout uses the actual available
     // space instead of the construction-time default (which was never updated).
@@ -51,9 +52,22 @@ pub fn ui_layout_system(
     let mut current_entities = std::collections::HashSet::new();
 
     // 1. Ensure every entity with a Style has a layout node carrying that style.
+    //    A child of a `Scroll` node never shrinks to fit it: overflowing is the point, and with
+    //    flexbox's default `flex_shrink: 1` five 40 px rows in a 100 px list would come out
+    //    20 px tall and there would be nothing to scroll. (CSS has the same trap and makes you
+    //    write `flex-shrink: 0`; a list that has to be told not to squash its rows is no list.)
     for (entity, style) in styles.iter() {
         current_entities.insert(entity);
-        ctx.sync_style(entity, style);
+        // (`get_mut` only to ask: a `Mut` marks a change on write, not on fetch.)
+        let in_scroll = match parents.get(entity) {
+            Some(p) => scrolls.get_mut(p.0).is_some(),
+            None => false,
+        };
+        if in_scroll && style.flex_shrink != 0.0 {
+            ctx.sync_style(entity, &Style { flex_shrink: 0.0, ..*style });
+        } else {
+            ctx.sync_style(entity, style);
+        }
     }
 
     // 2. Reclaim the layout nodes of entities that lost their Style (or died).
@@ -176,8 +190,23 @@ pub fn ui_layout_system(
         // that builds the tree, which is the only place it can also keep taffy's own recursion
         // (inside `compute_root_layout`, thirty lines above) off the back-edge.
         if let Some(kids) = mirrored_children.get(&entity) {
+            // A scrolling node moves its children by its offset, which is first clamped to how
+            // far they reach past its box.
+            let mut origin = abs;
+            if let Some(mut scroll) = scrolls.get_mut(entity) {
+                let reach = kids
+                    .iter()
+                    .filter_map(|&k| ctx.relative_layout(k))
+                    .fold(gizmo_math::Vec2::ZERO, |m, (s, l)| m.max(l + s));
+                let max = (reach + ctx.inner_end(entity) - size).max(gizmo_math::Vec2::ZERO);
+                // Only write when something moves, so `Changed<Scroll>` means a real change.
+                if scroll.max_offset() != max || scroll.offset != scroll.offset.clamp(gizmo_math::Vec2::ZERO, max) {
+                    scroll.fit(max);
+                }
+                origin = abs - scroll.offset;
+            }
             for &child_id in kids {
-                stack.push((child_id, abs));
+                stack.push((child_id, origin));
             }
         }
     }
@@ -405,6 +434,55 @@ mod tests {
             pl.x > loc_leaf.x + 1.0 && pl.y > loc_leaf.y + 1.0,
             "grandchild absolute {pl:?} must exceed its parent-relative {loc_leaf:?}"
         );
+    }
+
+    /// A [`Scroll`](crate::components::Scroll) node moves its children up by its offset, clamped
+    /// to how far they reach past its box — and its own box stays put.
+    #[test]
+    fn a_scroll_node_moves_its_children_by_its_clamped_offset() {
+        use crate::components::Scroll;
+        let (mut world, mut schedule) = make_world();
+        let list = world.spawn();
+        world.add_component(list, column_style(100.0, 100.0));
+        world.add_component(list, Node::default());
+        world.add_component(list, Scroll::default());
+        let rows: Vec<Entity> = (0..5)
+            .map(|_| {
+                let r = world.spawn();
+                world.add_component(r, sized_style(100.0, 40.0));
+                world.add_component(r, Node::default());
+                world.add_component(r, Parent(list.id()));
+                r
+            })
+            .collect();
+        world.add_component(list, Children(rows.iter().map(|r| r.id()).collect()));
+
+        schedule.run(&mut world, 0.016);
+        // Five 40 px rows in a 100 px box: they reach 200, so it can scroll 100.
+        let max = world.borrow::<Scroll>().get(list.id()).unwrap().max_offset();
+        assert_vec2(max, 0.0, 100.0);
+        assert_vec2(node_of(&world, rows[1]).position, 0.0, 40.0);
+
+        world.borrow_mut::<Scroll>().get_mut(list.id()).unwrap().offset.y = 30.0;
+        schedule.run(&mut world, 0.016);
+        assert_vec2(node_of(&world, rows[1]).position, 0.0, 10.0);
+        assert_vec2(node_of(&world, rows[0]).position, 0.0, -30.0);
+        assert_vec2(node_of(&world, list).position, 0.0, 0.0);
+
+        // Past the end is clamped: the last row's bottom meets the box's bottom.
+        world.borrow_mut::<Scroll>().get_mut(list.id()).unwrap().offset.y = 500.0;
+        schedule.run(&mut world, 0.016);
+        assert_eq!(world.borrow::<Scroll>().get(list.id()).unwrap().offset.y, 100.0);
+        assert_vec2(node_of(&world, rows[4]).position, 0.0, 60.0);
+
+        // With padding, the end keeps the bottom padding below the last row, as the start keeps
+        // the top padding above the first: 10 + 200 + 10 in a 100 px box scrolls 120. (And the
+        // 100 px rows now overflow the 80 px inside sideways, by 20.)
+        world.borrow_mut::<Style>().get_mut(list.id()).unwrap().padding = UiRect::all(Val::Px(10.0));
+        world.borrow_mut::<Scroll>().get_mut(list.id()).unwrap().offset.y = 500.0;
+        schedule.run(&mut world, 0.016);
+        assert_vec2(world.borrow::<Scroll>().get(list.id()).unwrap().max_offset(), 20.0, 120.0);
+        assert_vec2(node_of(&world, rows[4]).position, 10.0, 50.0);
     }
 
     /// A `Children` cycle must not reach the layout engine.

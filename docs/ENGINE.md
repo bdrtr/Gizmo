@@ -720,11 +720,10 @@ state instead.
   is fonts, a glyph atlas and layout; `Text` is a component with two spaces and nine anchors, drawn
   by both hosts through one shared pass; and `gizmo-ui`'s `Node` and `BackgroundColor` are painted
   from it, so the crate that computed boxes and drew nothing now draws. What the item still names
-  and does not have: **z-index** — the paint order is global (every background, then every glyph),
-  which is right for a button and wrong for two overlapping panels, and `Node` carries no `z` to
-  sort by — and **widgets**, of which there is exactly one shape (a box with a colour and a label).
-  Click events (`Clicked`), keyboard/gamepad focus (`UiNavigation`) and clipping
-  (`ClipContent`) exist since 2026-11-02. No default font ships and none
+  and does not have: **widgets** beyond a box with a colour and a label, and a text field. Click
+  events (`Clicked`), keyboard/gamepad focus (`UiNavigation`), clipping (`ClipContent`), layers
+  (`ZIndex`, which retired the "z-index" half of this line), text fields (`TextInput`) and
+  wheel scrolling (`Scroll`) exist since 2026-11-02. No default font ships and none
   will without a licensing decision: a `Text` whose face was never loaded draws nothing rather than
   substituting one.
 

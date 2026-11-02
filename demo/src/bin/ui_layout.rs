@@ -17,14 +17,13 @@
 //! değişiyor ve dolgu onunla değişiyor. Etiketler düğmenin kendi kutusunda duruyor: `Text`'in
 //! **çapası** kutunun hangi köşesine oturacağını seçiyor, `Text`'in kendi konumu yok sayılıyor.
 //!
-//! ## Hâlâ olmayanlar — ve demo bunları gizlemiyor
-//!
-//! | eksik | demoda nasıl görünüyor |
-//! |-------|------------------------|
-//! | **klavye/odak yok** | hiçbir düğmeye Tab ile gidilemez |
-//!
 //! ## Artık olanlar
 //!
+//! - **Kaydırma** (2026-11-02): soldaki liste `Scroll` taşıyor — on iki satır, sığdığı kutu
+//!   altısına yetiyor. Fare tekerleği üstündeyken kaydırıyor, kutunun dışına kayan satırlar
+//!   kırpılıyor ve tıklanmıyor (görünmeyen bir düğme basılmaz). Önceden `ClipContent` uzun bir
+//!   listeyi kesebiliyordu ama geri kalanına ulaşmanın yolu yoktu. (Klavyeyle gezinme de var:
+//!   `UiNavigation`, `menu` demosunda.)
 //! - **Katman sırası** (2026-11-02): `ZIndex` taşıyan bir kutu (ve onu devralan torunları)
 //!   daha alttakilerin hem dolgusunun hem etiketinin üstünde çiziliyor, ve fareyi de o alıyor.
 //!   Düğmelerin üstüne binen "Pencere" `ZIndex(1)`: altındaki etiketler içinden
@@ -38,6 +37,7 @@
 //!
 //! ## Kontroller
 //!   * **Fare** — düğmelerin üzerinde gezin, sol tuşla basılı tutun
+//!   * **Tekerlek** — soldaki listeyi kaydır
 //!   * **Sağ-tık + fare / WASDQE** — kamera
 
 use gizmo::core::hierarchy::HierarchyExt;
@@ -45,8 +45,8 @@ use gizmo::prelude::*;
 use gizmo::renderer::components::{Text, TextAnchor};
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
 use gizmo::ui::{
-    AlignItems, BackgroundColor, ButtonBundle, Clicked, ClipContent, Interaction, JustifyContent, NodeBundle,
-    Style, UiPlugin, UiRect, Val,
+    AlignItems, BackgroundColor, ButtonBundle, Clicked, ClipContent, FlexDirection, Interaction, JustifyContent,
+    NodeBundle, Scroll, Style, UiPlugin, UiRect, Val,
 };
 
 /// Bir düğmenin etiketi ve kaç kez tıklandığı.
@@ -56,6 +56,12 @@ struct Counter {
     clicks: u32,
 }
 gizmo::core::impl_component!(Counter);
+
+/// Kaydırılan listenin satırları.
+const ROWS: [&str; 12] = [
+    "Kirmizi kup", "Yesil kup", "Mavi kup", "Isik", "Kamera", "Zemin",
+    "Ses", "Parcacik", "Yazi", "Pencere", "Liste", "Son satir",
+];
 
 /// Font aranacak bilinen yollar — `text` demosuyla aynı sıra, aynı sebep (bkz. oradaki başlık).
 const FONT_CANDIDATES: &[&str] = &[
@@ -167,6 +173,38 @@ fn main() {
                 window,
                 Text::screen("Pencere\n(ZIndex 1)", font, 22.0, Vec2::ZERO).with_anchor(TextAnchor::Center),
             );
+
+            // Kutusundan uzun bir liste: on iki satır, altısı görünüyor, tekerlek gerisini getiriyor.
+            let list = scene.world.spawn_bundle(NodeBundle {
+                style: Style {
+                    position_type: gizmo::ui::PositionType::Absolute,
+                    inset: UiRect { left: Val::Px(16.0), top: Val::Px(120.0), right: Val::Auto, bottom: Val::Auto },
+                    width: Val::Px(220.0),
+                    height: Val::Px(6.0 * 40.0 + 8.0),
+                    flex_direction: FlexDirection::Column,
+                    padding: UiRect::all(Val::Px(4.0)),
+                    row_gap: Val::Px(4.0),
+                    ..Default::default()
+                },
+                background_color: BackgroundColor(Vec4::new(0.08, 0.09, 0.12, 0.85)),
+                ..Default::default()
+            });
+            scene.world.add_component(list, Scroll::default());
+            for (i, label) in ROWS.iter().enumerate() {
+                let row = scene.world.spawn_bundle(ButtonBundle {
+                    style: Style { width: Val::Percent(100.0), height: Val::Px(36.0), ..Default::default() },
+                    background_color: BackgroundColor(fill(Interaction::None)),
+                    ..Default::default()
+                });
+                scene.world.add_component(
+                    row,
+                    Text::screen(format!("{:>2}. {label}", i + 1), font, 18.0, Vec2::ZERO)
+                        .with_anchor(TextAnchor::CenterLeft)
+                        .with_color(Vec4::new(0.94, 0.95, 0.97, 1.0)),
+                );
+                scene.world.add_component(row, Counter { label, clicks: 0 });
+                scene.world.add_child(list, row);
+            }
 
             scene.spawn_camera(state, Vec3::new(0.0, 1.5, 8.0), Vec3::ZERO);
         })

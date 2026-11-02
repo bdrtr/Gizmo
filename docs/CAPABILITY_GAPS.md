@@ -143,7 +143,9 @@ exist since 2026-11-02 — `UiNavigation` — and so does clipping: a node with 
 own label and every descendant's background and label to its box, trimming glyph quads and their
 texture coordinates on the CPU, so it costs no draw call. Tested on the quad arithmetic, on a
 three-glyph string cut to one, and on nested clippers intersecting; `ui_layout`'s fourth button is
-cut at its edge.) (Click events exist since 2026-11-02:
+cut at its edge. Scrolling followed the same day: `Scroll` offsets a node's children, clamps to
+their extent and clips them; the wheel drives it, and a clipped-out button takes no clicks. No
+scrollbar is drawn and nothing drags it.) (Click events exist since 2026-11-02:
 `ButtonBundle`'s `Clicked` is `true` for the one frame a press on the button is released on it.)
 
 ### A3. User-authored shaders — **open since 2026-08-23**, forward-only
