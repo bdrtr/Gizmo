@@ -31,7 +31,10 @@ use crate::renderer::Renderer;
 /// the `ui` feature is on or off, which is what keeps the feature from forking the draw loop.
 type UiBox = (u32, Vec2, Vec2, Option<Vec4>);
 
-/// Every entity `gizmo-ui` has laid out this frame.
+/// Every entity `gizmo-ui` has laid out this frame — and, right after a [`Slider`](crate::ui::Slider)'s
+/// own box, a second box for its fill: from the left edge to `value` of the width. Same entity, so
+/// same layer and clip; queued after the background, so over it; and a background, so under every
+/// label of the layer.
 ///
 /// Empty without the feature — and empty is the honest answer rather than a `cfg` around the loop
 /// below: a build with no UI crate has no UI boxes, which is the same thing a build with an empty
@@ -40,10 +43,16 @@ type UiBox = (u32, Vec2, Vec2, Option<Vec4>);
 fn ui_boxes(world: &World) -> Vec<UiBox> {
     let nodes = world.borrow::<crate::ui::Node>();
     let backgrounds = world.borrow::<crate::ui::BackgroundColor>();
-    nodes
-        .iter()
-        .map(|(id, node)| (id, node.position, node.size, backgrounds.get(id).map(|c| c.0)))
-        .collect()
+    let sliders = world.borrow::<crate::ui::Slider>();
+    let mut out = Vec::new();
+    for (id, node) in nodes.iter() {
+        out.push((id, node.position, node.size, backgrounds.get(id).map(|c| c.0)));
+        if let Some(s) = sliders.get(id) {
+            let w = node.size.x * s.value.clamp(0.0, 1.0);
+            out.push((id, node.position, Vec2::new(w, node.size.y), Some(s.fill)));
+        }
+    }
+    out
 }
 
 #[cfg(not(feature = "ui"))]
@@ -288,6 +297,23 @@ mod clip_tests {
         assert_eq!(ui_clip(&world, label.id()), Some([Vec2::splat(50.0), Vec2::splat(100.0)]), "the intersection");
         assert_eq!(ui_clip(&world, plain.id()), Some([Vec2::splat(50.0), Vec2::splat(100.0)]));
         assert_eq!(ui_clip(&world, loose.id()), None);
+    }
+
+    /// A slider is its box, then its fill: `value` of the width from the left, in its fill colour,
+    /// queued after the background so it paints over it — and the label still finds the box.
+    #[test]
+    fn a_slider_adds_its_fill_after_its_box() {
+        let mut world = World::new();
+        let fill = Vec4::new(0.0, 1.0, 0.0, 1.0);
+        let s = world.spawn_bundle((
+            node(10.0, 20.0, 200.0, 30.0),
+            crate::ui::BackgroundColor(Vec4::ONE),
+            crate::ui::Slider::new(0.25).with_fill(fill),
+        ));
+        let boxes = ui_boxes(&world);
+        assert_eq!(boxes.len(), 2);
+        assert_eq!(boxes[0], (s.id(), Vec2::new(10.0, 20.0), Vec2::new(200.0, 30.0), Some(Vec4::ONE)));
+        assert_eq!(boxes[1], (s.id(), Vec2::new(10.0, 20.0), Vec2::new(50.0, 30.0), Some(fill)));
     }
 
     /// A scrolling list clips like a `ClipContent` panel: its rows scroll out of sight.

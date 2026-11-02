@@ -1,7 +1,7 @@
 use gizmo_core::query::{Query, Mut};
 use gizmo_core::system::{Res, ResMut};
 use gizmo_core::input::{GamepadButton, Input};
-use crate::components::{Clicked, ClipContent, Drag, Interaction, Node, Scroll, ZIndex};
+use crate::components::{Clicked, ClipContent, Drag, Interaction, Node, Scroll, Slider, ZIndex};
 use gizmo_core::component::Parent;
 
 /// The layer `entity` is on: its own [`ZIndex`], or the nearest one up its parents, or `0`.
@@ -53,6 +53,9 @@ pub struct UiNavigation {
     /// Whether the keys above navigate. See the type's docs for why it is off by default.
     pub enabled: bool,
     focused: Option<u32>,
+    /// The keys moved the focus this frame — so a slider the right arrow just reached does not
+    /// also take that press as a step.
+    moved_by_keys: bool,
 }
 
 impl UiNavigation {
@@ -65,6 +68,12 @@ impl UiNavigation {
     /// Moves the focus to `entity` (`None` clears it) — a menu opening on its first button.
     pub fn focus(&mut self, entity: Option<u32>) {
         self.focused = entity;
+    }
+
+    /// Whether this frame's keys moved the focus (rather than acting on what it was on).
+    #[must_use]
+    pub fn moved_this_frame(&self) -> bool {
+        self.moved_by_keys
     }
 }
 
@@ -106,6 +115,7 @@ pub fn ui_interaction_system(
     layers: Query<(Option<&ZIndex>, Option<&Parent>)>,
     fields: Query<&crate::text_input::TextInput>,
     clippers: Query<(&Node, Option<&ClipContent>, Option<&Scroll>)>,
+    sliders: Query<&Slider>,
 ) {
     let mouse_pos = input.mouse_position();
     let is_clicked = input.is_mouse_button_pressed(0); // 0 is left click
@@ -147,8 +157,13 @@ pub fn ui_interaction_system(
     // clicks, and the arrows are not focus moves.
     let typing = fields.iter().any(|(_, f)| f.is_focused());
     let (focused, activate) = match navigation {
-        Some(mut nav) if nav.enabled && !typing => navigate(&input, &mut nav, &mut interactions, &front),
-        Some(nav) if nav.enabled => (nav.focused(), false),
+        Some(mut nav) if nav.enabled && !typing => {
+            navigate(&input, &mut nav, &mut interactions, &front, &|id| sliders.get(id).is_some())
+        }
+        Some(mut nav) if nav.enabled => {
+            nav.moved_by_keys = false;
+            (nav.focused(), false)
+        }
         _ => (None, false),
     };
 
@@ -185,6 +200,7 @@ fn navigate(
     nav: &mut UiNavigation,
     interactions: &mut Query<(&Node, Mut<Interaction>, Option<Mut<Clicked>>)>,
     hovered: &dyn Fn(u32) -> bool,
+    horizontal_taken: &dyn Fn(u32) -> bool,
 ) -> (Option<u32>, bool) {
     // The focusable elements in reading order. A zero-size node is hidden (or not laid out yet).
     let mut order: Vec<(u32, f32, f32, bool)> = interactions
@@ -213,16 +229,19 @@ fn navigate(
     let pad_just = |b: GamepadButton| pad.is_some_and(|p| p.is_just_pressed(b));
     let shift = input.is_key_pressed(key("lshift")) || input.is_key_pressed(key("rshift"));
     let tab = input.is_key_just_pressed(key("tab"));
+    // Left and right belong to a focused slider: they move its value, not the focus.
+    let sideways_free = !nav.focused.is_some_and(horizontal_taken);
     let next = (tab && !shift)
         || input.is_key_just_pressed(key("down"))
-        || input.is_key_just_pressed(key("right"))
+        || (sideways_free && input.is_key_just_pressed(key("right")))
         || pad_just(GamepadButton::DPadDown)
-        || pad_just(GamepadButton::DPadRight);
+        || (sideways_free && pad_just(GamepadButton::DPadRight));
     let prev = (tab && shift)
         || input.is_key_just_pressed(key("up"))
-        || input.is_key_just_pressed(key("left"))
+        || (sideways_free && input.is_key_just_pressed(key("left")))
         || pad_just(GamepadButton::DPadUp)
-        || pad_just(GamepadButton::DPadLeft);
+        || (sideways_free && pad_just(GamepadButton::DPadLeft));
+    nav.moved_by_keys = next || prev;
     if next || prev {
         let n = order.len();
         let at = nav.focused.and_then(|f| order.iter().position(|o| o.0 == f));
@@ -239,6 +258,38 @@ fn navigate(
             || input.is_key_just_pressed(key("space"))
             || pad_just(GamepadButton::South));
     (nav.focused, activate)
+}
+
+/// Advances every [`Slider`]: a drag across it sets the value from where the pointer is on the
+/// track (captured until the release), and the left/right arrows or the d-pad step it while it
+/// has the navigation focus. Runs after `ui_interaction_system`.
+pub fn ui_slider_system(
+    input: Res<Input>,
+    navigation: Option<Res<UiNavigation>>,
+    mut sliders: Query<(&Node, &Interaction, Mut<Slider>)>,
+) {
+    let (x, y) = input.mouse_position();
+    let pointer = gizmo_math::Vec2::new(x, y);
+    let down_now = input.is_mouse_button_just_pressed(0);
+    let held = input.is_mouse_button_pressed(0) && !input.is_mouse_button_just_released(0);
+    // A focus the keys only just moved here is not a press on this slider.
+    let focused = navigation
+        .as_ref()
+        .filter(|n| n.enabled && !n.moved_this_frame())
+        .and_then(|n| n.focused());
+    let pad = input.gamepad();
+    let pad_just = |b: GamepadButton| pad.is_some_and(|p| p.is_just_pressed(b));
+    let keys = i32::from(input.is_key_just_pressed(key("right")) || pad_just(GamepadButton::DPadRight))
+        - i32::from(input.is_key_just_pressed(key("left")) || pad_just(GamepadButton::DPadLeft));
+    for (id, (node, interaction, mut slider)) in sliders.iter_mut() {
+        let pressed_here = down_now && *interaction == Interaction::Pressed;
+        let keys_here = if focused == Some(id) { keys } else { 0 };
+        let mut next = *slider;
+        next.step_frame(pressed_here, held, pointer, (node.position.x, node.size.x), keys_here);
+        if next != *slider {
+            *slider = next;
+        }
+    }
 }
 
 /// Advances every [`Drag`]: a press that begins on the element (it is `Pressed` on the frame the
@@ -362,7 +413,7 @@ mod tests {
     fn menu() -> (gizmo_core::World, [u32; 3]) {
         let mut world = gizmo_core::World::new();
         world.insert_resource(Input::new());
-        world.insert_resource(UiNavigation { enabled: true, focused: None });
+        world.insert_resource(UiNavigation { enabled: true, ..Default::default() });
         let mid = world.spawn_bundle(crate::ButtonBundle { node: node((0.0, 100.0), (100.0, 40.0)), ..Default::default() });
         let top = world.spawn_bundle(crate::ButtonBundle { node: node((0.0, 0.0), (100.0, 40.0)), ..Default::default() });
         let low = world.spawn_bundle(crate::ButtonBundle { node: node((0.0, 200.0), (100.0, 40.0)), ..Default::default() });
@@ -590,6 +641,75 @@ mod tests {
         drag_frame(&mut world, (500.0, 500.0), true);
         drag_frame(&mut world, (50.0, 20.0), true);
         assert!(!drag(&world).is_dragging());
+    }
+
+    /// Interaction then sliders, the order `register` schedules them in, with the mouse at `at`
+    /// and `down` or not, and `key_name` just pressed.
+    fn slider_frame(world: &mut gizmo_core::World, at: (f32, f32), down: bool, key_name: Option<&str>) {
+        use gizmo_core::system::{IntoSystemConfig, Schedule};
+        {
+            let mut input = world.get_resource_mut::<Input>().unwrap();
+            input.begin_frame();
+            input.set_mouse_position(at.0, at.1);
+            if down {
+                input.on_mouse_button_pressed(0);
+            } else {
+                input.on_mouse_button_released(0);
+            }
+            if let Some(k) = key_name {
+                input.on_key_pressed(key(k));
+            }
+        }
+        let mut s = Schedule::new();
+        s.add_di_system(ui_interaction_system.into_config().label("i"));
+        s.add_di_system(ui_slider_system.into_config().after("i"));
+        s.build();
+        s.run(world, 0.0);
+        if let Some(k) = key_name {
+            world.get_resource_mut::<Input>().unwrap().on_key_released(key(k));
+        }
+    }
+
+    /// Dragging sets the value from the pointer's place on the track, keeps it captured past the
+    /// end (clamped), and reports the change and the release.
+    #[test]
+    fn dragging_a_slider_sets_its_value_from_the_pointer() {
+        let mut world = gizmo_core::World::new();
+        world.insert_resource(Input::new());
+        let s = world.spawn_bundle(crate::ButtonBundle { node: node((100.0, 0.0), (200.0, 30.0)), ..Default::default() });
+        world.add_component(s, Slider::new(0.5));
+        let get = |w: &gizmo_core::World| *w.borrow::<Slider>().get(s.id()).unwrap();
+
+        slider_frame(&mut world, (150.0, 15.0), true, None);
+        assert!((get(&world).value - 0.25).abs() < 1e-6 && get(&world).just_changed());
+        slider_frame(&mut world, (900.0, 400.0), true, None);
+        assert_eq!(get(&world).value, 1.0, "captured off the track, and clamped");
+        slider_frame(&mut world, (900.0, 400.0), true, None);
+        assert!(!get(&world).just_changed(), "no move, no change");
+        slider_frame(&mut world, (50.0, 400.0), false, None);
+        assert!(get(&world).just_released() && get(&world).value == 0.0, "the release position counts");
+        slider_frame(&mut world, (250.0, 15.0), false, None);
+        assert_eq!(get(&world).value, 0.0, "hovering is not dragging");
+    }
+
+    /// With the focus, left and right step the slider and do not move the focus; up and down still
+    /// do. Without it, the arrows leave the slider alone.
+    #[test]
+    fn the_arrows_step_a_focused_slider_instead_of_moving_the_focus() {
+        let (mut world, [top, mid, _]) = menu();
+        world.add_component(world.get_entity(mid).unwrap(), Slider::new(0.5).with_step(0.1));
+        world.get_resource_mut::<UiNavigation>().unwrap().focus(Some(mid));
+        let value = |w: &gizmo_core::World| w.borrow::<Slider>().get(mid).unwrap().value;
+        slider_frame(&mut world, (500.0, 500.0), false, Some("right"));
+        assert!((value(&world) - 0.6).abs() < 1e-6);
+        assert_eq!(focused(&world), Some(mid), "right moved the focus off the slider");
+        slider_frame(&mut world, (500.0, 500.0), false, Some("left"));
+        slider_frame(&mut world, (500.0, 500.0), false, Some("left"));
+        assert!((value(&world) - 0.4).abs() < 1e-6);
+        slider_frame(&mut world, (500.0, 500.0), false, Some("up"));
+        assert_eq!(focused(&world), Some(top), "up still moves the focus");
+        slider_frame(&mut world, (500.0, 500.0), false, Some("right"));
+        assert!((value(&world) - 0.4).abs() < 1e-6, "an unfocused slider took the key");
     }
 
     /// Pressed on, dragged off, released: cancelled, like a desktop button.

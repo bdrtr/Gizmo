@@ -462,6 +462,99 @@ impl Drag {
     }
 }
 
+/// A horizontal slider: a value in `0.0..=1.0` set by dragging across the element, or with the
+/// left/right arrows and the d-pad while it has the [`UiNavigation`](crate::UiNavigation) focus.
+/// Put it on a [`ButtonBundle`](crate::ButtonBundle) — it needs the `Interaction` — with a `Text`
+/// for its label if it has one.
+///
+/// Under `gizmo-engine` the [`fill`](Self::fill) is painted over the element's background from its
+/// left edge to `value` of its width, below its label. The drag is captured like a [`Drag`]: it
+/// keeps following the pointer off the track until the release.
+///
+/// Every menu with a volume setting had to build this from a drag, a child node for the fill and
+/// two `ZIndex` layers to keep the fill under the label — about forty lines in `menu`, and none
+/// of it reachable from the keyboard.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Slider {
+    /// The value, `0.0..=1.0`. Set it to move the slider; the system clamps it.
+    pub value: f32,
+    /// How far one arrow or d-pad press moves it (default `0.05`).
+    pub step: f32,
+    /// The colour of the filled part (default a light blue).
+    pub fill: Vec4,
+    drag: Drag,
+    changed: bool,
+}
+
+impl Slider {
+    /// A slider at `value` (clamped into `0.0..=1.0`).
+    #[must_use]
+    pub fn new(value: f32) -> Self {
+        Self {
+            value: if value.is_nan() { 0.0 } else { value.clamp(0.0, 1.0) },
+            step: 0.05,
+            fill: Vec4::new(0.25, 0.5, 0.85, 0.9),
+            drag: Drag::default(),
+            changed: false,
+        }
+    }
+
+    /// With another arrow/d-pad step.
+    #[must_use]
+    pub fn with_step(mut self, step: f32) -> Self {
+        self.step = step;
+        self
+    }
+
+    /// With another fill colour.
+    #[must_use]
+    pub fn with_fill(mut self, fill: Vec4) -> Self {
+        self.fill = fill;
+        self
+    }
+
+    /// The value moved this frame — by a drag or a key.
+    #[must_use]
+    pub fn just_changed(&self) -> bool {
+        self.changed
+    }
+
+    /// Being dragged right now.
+    #[must_use]
+    pub fn is_dragging(&self) -> bool {
+        self.drag.is_dragging()
+    }
+
+    /// A drag ended this frame — the moment to save a setting, rather than on every frame of it.
+    #[must_use]
+    pub fn just_released(&self) -> bool {
+        self.drag.just_ended()
+    }
+
+    /// One frame: the drag (with the track's left edge and width), then a key step.
+    pub(crate) fn step_frame(&mut self, pressed_here: bool, held: bool, pointer: Vec2, track: (f32, f32), keys: i32) {
+        let before = self.value;
+        self.drag.step(pressed_here, held, pointer);
+        if self.drag.is_dragging() || self.drag.just_ended() {
+            self.value = ((pointer.x - track.0) / track.1.max(1.0)).clamp(0.0, 1.0);
+        }
+        if keys != 0 {
+            self.value = (self.value + keys as f32 * self.step).clamp(0.0, 1.0);
+        }
+        if self.value.is_nan() {
+            self.value = 0.0;
+        }
+        self.value = self.value.clamp(0.0, 1.0);
+        self.changed = self.value != before;
+    }
+}
+
+impl Default for Slider {
+    fn default() -> Self {
+        Self::new(0.0)
+    }
+}
+
 /// Fill color of a UI element, stored as a linear RGBA vector with each
 /// channel in the `0.0..=1.0` range.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -545,7 +638,7 @@ impl Scroll {
 /// Marker component for the root of a UI tree.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UiRoot;
-gizmo_core::impl_component!(Style, Node, Interaction, Clicked, BackgroundColor, UiRoot, ClipContent, ZIndex, Scroll, Drag);
+gizmo_core::impl_component!(Style, Node, Interaction, Clicked, BackgroundColor, UiRoot, ClipContent, ZIndex, Scroll, Drag, Slider);
 
 #[cfg(test)]
 mod tests {

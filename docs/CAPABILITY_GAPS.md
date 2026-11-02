@@ -1088,8 +1088,17 @@ mouse, the keyboard and a gamepad. Three of its four buttons were impossible:
   **off** the element until the release (captured), and reports the drop for one frame
   (`just_ended`), with `start`, `position` and `delta`. Under a finger it works the same, the first
   finger being the mouse. Tested on a press-drag-off-release-slide-on sequence; dropping the
-  capture or starting on a slide fails it. The menu's volume is now a slider (drag sets the level,
-  Enter/gamepad still steps it).
+  capture or starting on a slide fails it.
+- ~~**No slider.**~~ **Closed 2026-11-02.** Built from a `Drag` by hand it took the menu about forty
+  lines — a fill child, two `ZIndex` layers to keep it under the label — and was unreachable from
+  the keyboard. `gizmo::ui::Slider` on a `ButtonBundle`: a drag across it sets `value` from the
+  pointer's place on the track (captured, clamped), and while it has the `UiNavigation` focus
+  ←/→ and the d-pad step it instead of moving the focus (↑/↓/Tab still do). `just_changed`,
+  `just_released`. The engine paints its `fill` over the background, under the label. Writing the
+  keyboard test found a real double action: the right arrow that moved the focus onto a slider
+  also stepped it, in the same frame — `UiNavigation::moved_this_frame` now keeps the two apart.
+  Tested on drag, capture, release and both key paths; ignoring the focus move, letting ←/→ move
+  the focus, or setting the value only when a drag starts each fails them. `menu`'s volume is one.
 
 ### C16. Every game wrote the same three lines (2026-11-02)
 

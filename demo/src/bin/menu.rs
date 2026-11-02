@@ -73,10 +73,8 @@ gizmo::core::impl_component!(MenuButton);
 struct Menu {
     volume: u32,
     banner: u32,
-    /// Ses kaydırıcısı: düğmenin kendisi (sürüklenen), içindeki dolgu ve etiket.
+    /// Ses kaydırıcısı (`Slider` taşıyan düğme).
     volume_button: u32,
-    volume_fill: u32,
-    volume_text: u32,
     /// Çalan müzik ve hangisi olduğu (menü mü, "oyun" mu).
     music: Option<u64>,
     in_game: bool,
@@ -180,37 +178,13 @@ fn main() {
                     ..Default::default()
                 });
                 scene.world.add_component(button, MenuButton(action));
+                scene.world.add_component(button, Text::screen(label, font, 24.0, Vec2::ZERO).with_anchor(TextAnchor::Center));
                 scene.world.add_child(column, button);
                 if action == Action::Volume {
-                    // Bir kaydırıcı: düğme sürükleniyor (`Drag`), içinde seviyeyi gösteren bir
-                    // dolgu ve onun üstünde etiket. Katmanlar sırayı belirliyor — dolgu düğmenin
-                    // zemininin, etiket dolgunun üstünde.
-                    scene.world.add_component(button, gizmo::ui::Drag::default());
-                    let full = |left: Val, width: Val| Style {
-                        position_type: gizmo::ui::PositionType::Absolute,
-                        inset: UiRect { left, top: Val::Px(0.0), right: Val::Auto, bottom: Val::Auto },
-                        width,
-                        height: Val::Percent(100.0),
-                        ..Default::default()
-                    };
-                    let level = scene.world.spawn_bundle(NodeBundle {
-                        style: full(Val::Px(0.0), Val::Percent(volume as f32)),
-                        background_color: BackgroundColor(Vec4::new(0.2, 0.42, 0.7, 0.9)),
-                        ..Default::default()
-                    });
-                    scene.world.add_component(level, gizmo::ui::ZIndex(1));
-                    scene.world.add_child(button, level);
-                    let text = scene.world.spawn_bundle(NodeBundle {
-                        style: full(Val::Px(0.0), Val::Percent(100.0)),
-                        background_color: BackgroundColor(Vec4::ZERO),
-                        ..Default::default()
-                    });
-                    scene.world.add_component(text, gizmo::ui::ZIndex(2));
-                    scene.world.add_component(text, Text::screen(label, font, 24.0, Vec2::ZERO).with_anchor(TextAnchor::Center));
-                    scene.world.add_child(button, text);
-                    slider = Some((button.id(), level.id(), text.id()));
-                } else {
-                    scene.world.add_component(button, Text::screen(label, font, 24.0, Vec2::ZERO).with_anchor(TextAnchor::Center));
+                    // Sürüklenen ya da odaktayken ←/→ ile adım adım değişen bir kaydırıcı; dolgusunu
+                    // motor çiziyor, etiketin altında.
+                    scene.world.add_component(button, gizmo::ui::Slider::new(volume as f32 / 100.0));
+                    slider = Some(button.id());
                 }
                 first.get_or_insert(button.id());
             }
@@ -219,7 +193,7 @@ fn main() {
                 .world
                 .spawn_bundle((Text::pinned_at("", font, 32.0, Vec2::new(0.62, 0.85), Vec2::ZERO).with_anchor(TextAnchor::Center).with_align(TextAlign::Center),))
                 .id();
-            scene.world.spawn_bundle((Text::pinned("↑ ↓ / Tab · Enter   |   d-pad · A   |   fare", font, 18.0, TextAnchor::BottomRight, Vec2::new(-16.0, -16.0))
+            scene.world.spawn_bundle((Text::pinned("↑ ↓ / Tab · Enter · ← → ses   |   d-pad · A   |   fare", font, 18.0, TextAnchor::BottomRight, Vec2::new(-16.0, -16.0))
                 .with_color(Vec4::new(0.7, 0.72, 0.78, 1.0)),));
 
             // Menü açık: klavye ve gamepad gezsin, ilk düğme odakta başlasın.
@@ -237,8 +211,8 @@ fn main() {
                 music = audio.crossfade(None, "menu", 2.0).ok();
                 scene.world.insert_resource(audio);
             }
-            let (volume_button, volume_fill, volume_text) = slider.expect("the volume button was built");
-            scene.world.insert_resource(Menu { volume, banner, volume_button, volume_fill, volume_text, music, in_game: false });
+            let volume_button = slider.expect("the volume button was built");
+            scene.world.insert_resource(Menu { volume, banner, volume_button, music, in_game: false });
         })
         .set_update(update)
         .run()
@@ -276,24 +250,13 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, _dt: f32, _input: &I
         }
     }
 
-    // Ses kaydırıcısı: sürüklenirken seviye imlecin düğme üzerindeki yeri; bırakınca kaydediliyor.
-    let (drag, track) = {
-        let drags = world.borrow::<gizmo::ui::Drag>();
-        let nodes = world.borrow::<gizmo::ui::Node>();
-        (drags.get(menu.volume_button).copied(), nodes.get(menu.volume_button).copied())
-    };
-    let mut dropped = false;
-    if let (Some(drag), Some(track)) = (drag, track) {
-        if drag.is_dragging() || drag.just_ended() {
-            let at = ((drag.position().x - track.position.x) / track.size.x.max(1.0)).clamp(0.0, 1.0);
-            let v = (at * 100.0).round() as u32;
-            if v != menu.volume {
-                set_volume(world, &mut menu, v);
-            }
+    // Ses kaydırıcısı: değiştikçe uygula; bir sürükleme bitince ya da klavyeyle bir adımda kaydet.
+    if let Some(slider) = world.borrow::<gizmo::ui::Slider>().get(menu.volume_button).copied() {
+        if slider.just_changed() {
+            set_volume(world, &mut menu, (slider.value * 100.0).round() as u32);
         }
-        if drag.just_ended() {
+        if slider.just_released() || (slider.just_changed() && !slider.is_dragging()) {
             remember("volume", &menu.volume);
-            dropped = true;
         }
     }
 
@@ -327,16 +290,8 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, _dt: f32, _input: &I
                 remember("fullscreen", &(next == WindowMode::Fullscreen));
                 Some(fullscreen_label(next))
             }
-            Action::Volume => {
-                // Fareyle (ya da parmakla) bırakılan tık kaydırıcının işi; klavye ve gamepad
-                // tıkı seviyeyi %25 adımlarla döndürüyor.
-                if !dropped {
-                    let next = (menu.volume / 25 * 25 + 25) % 125;
-                    set_volume(world, &mut menu, next);
-                    remember("volume", &menu.volume);
-                }
-                None
-            }
+            // Kaydırıcının işi: sürükleme ya da odaktayken ←/→.
+            Action::Volume => None,
             Action::Quit => {
                 world.insert_resource(AppExit);
                 None
@@ -354,16 +309,13 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, _dt: f32, _input: &I
     world.insert_resource(menu);
 }
 
-/// Sesi uygular: ana kazanç, dolgunun genişliği, etiket.
+/// Sesi uygular: ana kazanç ve etiket.
 fn set_volume(world: &mut World, menu: &mut Menu, v: u32) {
     menu.volume = v.min(100);
     if let Some(mut audio) = world.get_resource_mut::<AudioManager>() {
         audio.mixer_mut().set_master_gain(menu.volume as f32 / 100.0);
     }
-    if let Some(mut s) = world.borrow_mut::<Style>().get_mut(menu.volume_fill) {
-        s.width = Val::Percent(menu.volume as f32);
-    }
-    if let Some(mut t) = world.borrow_mut::<Text>().get_mut(menu.volume_text) {
+    if let Some(mut t) = world.borrow_mut::<Text>().get_mut(menu.volume_button) {
         t.content = volume_label(menu.volume);
     }
 }
