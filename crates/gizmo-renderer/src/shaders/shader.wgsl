@@ -244,7 +244,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             // Metres, not NDC — see the same conversion in deferred_lighting.wgsl. The third row
             // of the cascade matrix is NDC-z per world metre.
             let sz = length(vec3<f32>(light_vp[0][2], light_vp[1][2], light_vp[2][2]));
-            let bias = max(0.042 * slope, 0.0042) * sz;
+            let bias = max(0.042 * slope, 0.0042) * sz * scene.shadow_bias.x;
             var pcf_visibility = 0.0;
             let texel_size = scene.cascade_params.y;
             for (var x = -1; x <= 1; x++) {

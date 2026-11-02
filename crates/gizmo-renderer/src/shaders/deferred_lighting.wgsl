@@ -523,7 +523,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         let m = scene.light_view_proj[ci];
         let sx = length(vec3<f32>(m[0][0], m[1][0], m[2][0]));
         let world_texel = 2.0 * scene.cascade_params.y / max(sx, 1e-6);
-        let offset_pos = world_pos + N * world_texel * 2.0;
+        let offset_pos = world_pos + N * world_texel * 2.0 * scene.shadow_bias.y;
         let light_clip = m * vec4<f32>(offset_pos, 1.0);
 
         let light_ndc  = light_clip.xyz / light_clip.w;
@@ -541,7 +541,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
             // shadow. The third row of the cascade matrix is NDC-z per world metre, exactly as the
             // first row is used for the normal offset above.
             let sz     = length(vec3<f32>(m[0][2], m[1][2], m[2][2]));
-            let bias   = max(SHADOW_BIAS_METRES * slope, SHADOW_BIAS_METRES_MIN) * sz;
+            let bias   = max(SHADOW_BIAS_METRES * slope, SHADOW_BIAS_METRES_MIN) * sz * scene.shadow_bias.x;
             let texel  = scene.cascade_params.y;
             // Walk the sampled term back to "lit" over the last stretch of the covered range,
             // so the end of the shadow maps is a gradient rather than a line.
@@ -696,7 +696,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
                     let ndc_per_metre =
                         (z_far * z_near) / max(z_val * z_val * (z_far - z_near), 1e-6);
                     let bias = max(SHADOW_BIAS_METRES * slope, SHADOW_BIAS_METRES_MIN)
-                        * ndc_per_metre;
+                        * ndc_per_metre * scene.shadow_bias.x;
                     let shadow_vis = textureSampleCompareLevel(t_point_shadow, s_shadow, dir_from_light, clip_z - bias);
                     atten *= shadow_vis;
                 }

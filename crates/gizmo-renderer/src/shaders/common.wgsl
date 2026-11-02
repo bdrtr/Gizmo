@@ -65,6 +65,8 @@ struct SceneUniforms {
     // falloff, shape.y = base height.
     fog: vec4<f32>,
     fog_shape: vec4<f32>,
+    // `ShadowSettings`: x = depth-bias multiplier, y = normal-offset multiplier.
+    shadow_bias: vec4<f32>,
 };
 
 // ── Clustered light lookup ───────────────────────────────────────────────────

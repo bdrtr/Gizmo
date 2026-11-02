@@ -490,6 +490,7 @@ pub fn collect_scene_setup(world: &World, inputs: &SceneSetupInputs) -> SceneSet
                 // both paths can carry the same index and only the flag decides.
                 point_caster: u32::try_from(lights.shadow_point_index).ok(),
                 point_shadows_enabled: inputs.point_shadows_enabled,
+                bias_scale: [inputs.shadow_settings.depth_bias, inputs.shadow_settings.normal_offset],
             },
             environment: inputs.environment,
             elapsed_time: inputs.elapsed_time,

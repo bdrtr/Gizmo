@@ -138,6 +138,7 @@ fn scene_layout() -> Vec<(&'static str, u32)> {
         ("cluster_depth", offset_of!(SceneUniforms, cluster_depth) as u32),
         ("fog", offset_of!(SceneUniforms, fog) as u32),
         ("fog_shape", offset_of!(SceneUniforms, fog_shape) as u32),
+        ("shadow_bias", offset_of!(SceneUniforms, shadow_bias) as u32),
     ]
 }
 

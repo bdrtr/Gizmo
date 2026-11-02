@@ -81,6 +81,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   or by default to a `tracing::error!` naming the system, and the system runs again next frame.
   `SystemOutput` is the trait behind it; `()` systems are unchanged.
 
+- **Shadow bias multipliers: `ShadowSettings::with_bias(depth, normal)`** (`depth_bias`,
+  `normal_offset`, both 1 by default — the previous bias exactly). They scale each path's own
+  calibrated depth bias and the cascade normal offset; `SceneUniforms` gained `shadow_bias` at its
+  tail (fixed part 608 B) and `ShadowFrame` gained `bias_scale`.
+
 - **Hand-set fog: `Renderer::fog`** (`Fog::new(color, density).with_height(falloff, base)`). Replaces
   the environment preset's height fog outright, so fog can be set without taking a preset's whole
   look. `SceneUniforms` gained `fog` and `fog_shape` at its tail (fixed part 560 → 592 B; the light

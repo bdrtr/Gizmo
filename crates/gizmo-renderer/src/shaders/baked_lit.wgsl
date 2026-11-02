@@ -162,7 +162,7 @@ fn sun_visibility(world_pos: vec3<f32>, world_normal: vec3<f32>, view_depth: f32
     // row of the cascade matrix is NDC-z per world metre; 0.16 is what the old constant was worth
     // at the range it was chosen under, so this restores that behaviour rather than retuning it.
     let sz = length(vec3<f32>(m[0][2], m[1][2], m[2][2]));
-    let bias = 0.16 * sz;
+    let bias = 0.16 * sz * scene.shadow_bias.x;
     var sum = 0.0;
     for (var x = -1; x <= 1; x++) {
         for (var y = -1; y <= 1; y++) {

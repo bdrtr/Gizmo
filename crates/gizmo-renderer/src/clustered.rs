@@ -598,6 +598,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 cascade_splits: [0.0; 4],
                 point_caster: None,
                 point_shadows_enabled: false,
+                bias_scale: [1.0, 1.0],
             },
             environment: EnvironmentFrame::default(),
             elapsed_time: 0.0,

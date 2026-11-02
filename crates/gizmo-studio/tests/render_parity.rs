@@ -167,11 +167,12 @@ fn the_two_paths_agree_on_everything_the_world_decides() {
     assert_eq!(g._pre_align_pad, e._pre_align_pad);
     assert_eq!(g.wireframe_color, e.wireframe_color);
     assert_eq!((g.fog, g.fog_shape), (e.fog, e.fog_shape), "neither input asks for fog");
+    assert_eq!(g.shadow_bias, e.shadow_bias, "both read Renderer::shadow_settings");
     // Both read the rendered camera's `clear_color` (the editor's game view from the game camera).
     assert_eq!(g.clear_color, e.clear_color);
     assert_eq!(
         std::mem::size_of::<SceneUniforms>(),
-        592 + gizmo::renderer::MAX_LIGHTS * 64,
+        608 + gizmo::renderer::MAX_LIGHTS * 64,
         "a field was added to the block — decide here whether the two paths should agree on it \
          (the light array is the block's only variable part, so it is written against MAX_LIGHTS)"
     );

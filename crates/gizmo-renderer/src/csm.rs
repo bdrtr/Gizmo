@@ -137,11 +137,18 @@ pub struct ShadowSettings {
     /// How the four cascades split that range: 0 evenly, 1 logarithmically (fine near the camera,
     /// coarse far away). 0.75 by default.
     pub lambda: f32,
+    /// Scales the depth bias every shadow lookup subtracts — each path keeps its own calibration
+    /// (4.2 cm deferred and forward, 16 cm baked-lit) and this multiplies it. Higher clears
+    /// self-shadowing "acne", too high detaches shadows from their casters. 1 by default.
+    pub depth_bias: f32,
+    /// Scales how far each lookup is pushed off the surface along its normal before it is projected
+    /// into the cascade (2 texels of that cascade by default). 1 by default.
+    pub normal_offset: f32,
 }
 
 impl Default for ShadowSettings {
     fn default() -> Self {
-        Self { distance: SHADOW_DISTANCE, lambda: CASCADE_LAMBDA }
+        Self { distance: SHADOW_DISTANCE, lambda: CASCADE_LAMBDA, depth_bias: 1.0, normal_offset: 1.0 }
     }
 }
 
@@ -155,6 +162,15 @@ impl ShadowSettings {
     /// The split blend, clamped to 0..=1.
     pub fn with_lambda(mut self, lambda: f32) -> Self {
         self.lambda = if lambda.is_finite() { lambda.clamp(0.0, 1.0) } else { CASCADE_LAMBDA };
+        self
+    }
+
+    /// The two bias multipliers (see [`depth_bias`](Self::depth_bias) and
+    /// [`normal_offset`](Self::normal_offset)), each clamped to 0..=50.
+    pub fn with_bias(mut self, depth: f32, normal: f32) -> Self {
+        let clamp = |v: f32| if v.is_finite() { v.clamp(0.0, 50.0) } else { 1.0 };
+        self.depth_bias = clamp(depth);
+        self.normal_offset = clamp(normal);
         self
     }
 }

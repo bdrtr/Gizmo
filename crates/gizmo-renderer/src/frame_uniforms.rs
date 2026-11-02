@@ -71,7 +71,7 @@ use gizmo_math::{Mat4, Vec3};
 /// many lights are actually in view.
 ///
 /// Why not more: the light array lives in the *uniform* block, so the hard ceiling is
-/// `(65536 - 592) / 64` = 1014 lights, and past a few hundred the honest move is to put the array in
+/// `(65536 - 608) / 64` = 1014 lights, and past a few hundred the honest move is to put the array in
 /// a storage buffer rather than to inch this number toward a cliff. 256 is a round number well
 /// inside the limit that no hand-lit scene is going to reach.
 pub const MAX_LIGHTS: usize = 256;
@@ -159,6 +159,8 @@ pub struct ShadowFrame {
     /// Whether the point-shadow cube was rendered this frame. A path that does not record the cube
     /// pass must leave this `false`: the lookup would otherwise sample whatever the cube held last.
     pub point_shadows_enabled: bool,
+    /// `ShadowSettings::depth_bias` and `normal_offset`, the multipliers on every lookup's bias.
+    pub bias_scale: [f32; 2],
 }
 
 impl Default for ShadowFrame {
@@ -170,6 +172,7 @@ impl Default for ShadowFrame {
             cascade_splits: [1.0, 10.0, 50.0, 500.0],
             point_caster: None,
             point_shadows_enabled: false,
+            bias_scale: [1.0, 1.0],
         }
     }
 }
@@ -315,6 +318,7 @@ impl SceneUniforms {
             },
             fog: environment.fog.map_or([0.0, 0.0, 0.0, -1.0], |f| [f.color[0], f.color[1], f.color[2], f.density.max(0.0)]),
             fog_shape: environment.fog.map_or([0.0; 4], |f| [f.height_falloff.max(0.0), f.base_height, 0.0, 0.0]),
+            shadow_bias: [shadows.bias_scale[0], shadows.bias_scale[1], 0.0, 0.0],
             // Read by nothing today — the post composite owns exposure and `deferred_lighting.wgsl`
             // says as much next to the field it no longer reads. Fed from the camera in both paths
             // regardless, so a shader that starts reading it does not find two different answers.
@@ -507,7 +511,7 @@ mod tests {
         // the light ceiling changes. (It was `1168` / `1104`, correct only at MAX_LIGHTS = 10.)
         const LIGHT_BYTES: usize = std::mem::size_of::<LightData>(); // 4 × vec4 = 64
         assert_eq!(LIGHT_BYTES, 64);
-        assert_eq!(std::mem::size_of::<SceneUniforms>(), 592 + MAX_LIGHTS * LIGHT_BYTES);
+        assert_eq!(std::mem::size_of::<SceneUniforms>(), 608 + MAX_LIGHTS * LIGHT_BYTES);
         assert_eq!(
             std::mem::offset_of!(SceneUniforms, inv_view_proj),
             464 + MAX_LIGHTS * LIGHT_BYTES
@@ -519,7 +523,7 @@ mod tests {
     ///
     /// `maxUniformBufferBindingSize` is **64 KiB** everywhere WebGPU runs — that is the
     /// guaranteed floor, and the number `MAX_LIGHTS` has always been argued against. The argument
-    /// lived in prose: docs/ENGINE.md works out `(65536 − 592) / 64 = 1014` lights as the hard
+    /// lived in prose: docs/ENGINE.md works out `(65536 − 608) / 64 = 1014` lights as the hard
     /// ceiling. Nothing computed it, so raising `MAX_LIGHTS` past it would have compiled, passed
     /// every test, and then failed at **run time** on the first machine that enforces the floor —
     /// as a bind-group validation error, which is the least informative place to learn about an
@@ -546,7 +550,7 @@ mod tests {
 
         // …and the ceiling the documentation argues from is the one this layout actually has.
         let fixed = block - MAX_LIGHTS * std::mem::size_of::<LightData>();
-        assert_eq!(fixed, 592, "the block's fixed part (560 before the fog override was appended)");
+        assert_eq!(fixed, 608, "the block's fixed part (560 before the fog override, 592 before the shadow bias)");
         assert_eq!(
             (UNIFORM_FLOOR - fixed) / std::mem::size_of::<LightData>(),
             1014,

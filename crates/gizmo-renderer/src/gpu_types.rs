@@ -394,7 +394,9 @@ pub struct SceneUniforms {
     pub fog: [f32; 4],
     /// x = height falloff, y = base height (metres); zw unused.
     pub fog_shape: [f32; 4],
-                           // Total: 592 + 64·MAX_LIGHTS bytes (16 976 at MAX_LIGHTS = 256).
+    /// `ShadowSettings`: x = depth-bias multiplier, y = normal-offset multiplier; zw unused.
+    pub shadow_bias: [f32; 4],
+                           // Total: 608 + 64·MAX_LIGHTS bytes (16 992 at MAX_LIGHTS = 256).
                            // The 64 KiB uniform floor caps this layout at 1014 lights — checked by
                            // `frame_uniforms`'s `the_scene_block_fits_the_uniform_binding_floor_…`.
 }
@@ -661,13 +663,13 @@ mod tests {
         // wrong offsets for i > 0 — see `every_instance_shader_declares_the_full_struct`.
         assert_eq!(std::mem::size_of::<InstanceRaw>(), 128, "InstanceRaw");
         assert_eq!(std::mem::size_of::<MaterialParams>(), 48, "MaterialParams = 3×vec4");
-        // The fixed part is 592 bytes (560 until `fog` / `fog_shape` were appended, 2026-11-02);
+        // The fixed part is 608 bytes (560 until `fog` / `fog_shape` and `shadow_bias` were appended, 2026-11-02);
         // the light array is the rest. Expressed against
         // MAX_LIGHTS so raising the light ceiling does not require editing three literals in
         // three files (and so that forgetting one is not how the layout drifts).
         assert_eq!(
             std::mem::size_of::<SceneUniforms>(),
-            592 + crate::frame_uniforms::MAX_LIGHTS * 64,
+            608 + crate::frame_uniforms::MAX_LIGHTS * 64,
             "SceneUniforms total"
         );
     }
