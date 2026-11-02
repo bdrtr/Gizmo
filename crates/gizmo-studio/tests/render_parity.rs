@@ -852,6 +852,7 @@ fn both_draw_paths_run_the_same_per_frame_drivers() {
             "record_fluid_surface(",
             "resolve_material_descriptions(",
             "sync_material_descriptions(",
+            "tween_system(",
         ] {
             assert!(
                 code.contains(driver),

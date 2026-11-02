@@ -215,6 +215,9 @@ pub use gizmo_animation::skeletal::{
 pub mod animation_system;
 pub use animation_system::{animation_state_machine_update_system, animation_update_system};
 pub use gizmo_animation::skeletal::decompose_mat4;
+/// Tweens — re-exported because the draw path drives them (`tween::tween_system`), the same way
+/// it drives skeletal animation.
+pub use gizmo_animation::tween;
 pub use asset::{
     decode_obj_vertices_for_async, decode_rgba_image_file, AssetError, AssetManager, GltfNodeData,
     ObjIndexKind,

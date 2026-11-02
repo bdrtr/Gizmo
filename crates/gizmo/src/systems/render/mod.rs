@@ -501,6 +501,13 @@ fn prepare_frame(world: &mut World, renderer: &mut Renderer) {
     #[cfg(feature = "physics")]
     crate::systems::terrain::terrain_mesh_system(world, renderer);
 
+    // **Tweens first**, on the animation clock (so time scale and pause apply), and before the
+    // transform pass below so a tweened `Transform` is drawn where it is this frame.
+    crate::renderer::tween::tween_system(
+        world,
+        world.get_resource::<gizmo_core::time::Time>().map(|t| t.dt()).unwrap_or(0.0),
+    );
+
     // Every renderable object needs an up-to-date `GlobalTransform` (the draw query
     // below requires it, and physics/gameplay only write the local `Transform`).
     // Realize the long-standing "update_transforms right before the pass" TODO here

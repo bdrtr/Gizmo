@@ -41,6 +41,10 @@ pub fn execute_render_pipeline(
     // refreshed — the same call the game path makes, for the same reason. Studio's update loop
     // runs the sync and propagate systems, but neither *adds* the component, so an entity spawned
     // as `Transform + Mesh + Material` drew in the game and silently vanished in the editor.
+    //
+    // Tweens are advanced first, on the animation clock — the game path does the same — so the
+    // transform pass picks up where they put things this frame.
+    gizmo::renderer::tween::tween_system(world, crate::systems::simulation::animation_delta(world));
     gizmo::systems::render::ensure_global_transforms(world);
 
     // `MaterialDesc` → `Material` and back, the same pair the game path runs and for the same

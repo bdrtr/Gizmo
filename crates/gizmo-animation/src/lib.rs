@@ -83,6 +83,8 @@ pub mod skeletal;
 /// Failure is quiet by design: a track naming nothing in the hierarchy resolves to
 /// no entity and animates nothing, rather than erroring.
 pub mod system;
+/// Tweens: a `Transform` eased to a target over a duration — [`tween::Tween`], [`tween::Ease`].
+pub mod tween;
 
 use gizmo_core::system::{IntoSystemConfig, Schedule};
 use gizmo_core::world::World;
