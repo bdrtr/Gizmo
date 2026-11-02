@@ -135,6 +135,7 @@ use gizmo_core::world::World;
 pub use components::*;
 pub use bundles::*;
 pub use layout::*;
+pub use interaction::pointer_over_ui;
 
 /// Registers the UI components + [`UiContext`] resource and schedules the layout
 /// and interaction systems on a [`World`]/[`Schedule`] directly.

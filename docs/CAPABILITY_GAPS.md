@@ -922,6 +922,28 @@ frame one. What it found:
   add to it. A platform carries only through its `Velocity`; moved by `Transform` alone it has no
   motion to give.
 
+### C12. The fourth game: AI, UI and the mouse (2026-11-02, `kale`)
+
+`demo/src/bin/kale.rs` is a tower defence: enemies path-find across a grid (`NavAgent` on a
+`NavGrid` the game builds), towers are placed with the mouse and are walls the enemies re-route
+around (a tower that would close the path is refused), and a `gizmo-ui` button starts each wave.
+None of the earlier games touched `gizmo-ai`, `gizmo-ui` or picking. What it found:
+
+- ~~**No world point under the cursor.**~~ **Closed 2026-11-02.** `Camera::screen_to_ray` wants
+  the window size, the camera's world position and the cursor, each from a different place, and
+  `Ray` had no plane intersection: fifteen lines in the game. `gizmo::pointer::cursor_ray(world)`
+  and `cursor_on_plane(world, point, normal)` — in split screen through the camera whose viewport
+  is under the cursor, at that rectangle's aspect — and `Ray::intersect_plane`. Tested at two
+  window sizes, by direction, above the horizon and in split screen; casting through the whole
+  window instead of the viewport fails the last.
+- ~~**No "is the cursor over the UI".**~~ **Closed 2026-11-02.** The obvious answer — the buttons'
+  `Interaction` — is wrong: a click on the empty part of the game's button bar placed a tower on
+  the ground underneath. `gizmo::ui::pointer_over_ui(world)` tests every `Node`.
+- ~~**No click event; no optional query component.**~~ Both closed the same day for this game
+  (`Clicked`, `Option<&T>`/`Option<Mut<T>>` — §C1).
+- **Open, small:** a grid change does not make agents replan; they pick it up at their next
+  recalculation (0.5 s by default), so the game clears every agent's path when it adds a wall.
+
 ---
 
 ## D. Game-path / editor-path asymmetries

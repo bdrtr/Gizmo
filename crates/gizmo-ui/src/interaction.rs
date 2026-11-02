@@ -15,6 +15,19 @@ fn point_in_node(point: (f32, f32), node: &Node) -> bool {
         && point.1 < node.position.y + node.size.y
 }
 
+/// Whether the mouse cursor is over **any** UI element — every laid-out [`Node`], a plain panel as
+/// much as a button.
+///
+/// The question a game asks before it treats a click as a click on the world: placing a tower,
+/// selecting a unit. Checking only the buttons' [`Interaction`] is the obvious answer and the
+/// wrong one — `kale` did that first, and a click on the empty part of its button bar placed a
+/// tower on the ground underneath. `false` without an [`Input`] resource.
+pub fn pointer_over_ui(world: &gizmo_core::World) -> bool {
+    let Some(input) = world.get_resource::<Input>() else { return false };
+    let p = input.mouse_position();
+    world.borrow::<Node>().iter().any(|(_, n)| point_in_node(p, n))
+}
+
 /// System that updates each element's [`Interaction`] state from the current
 /// mouse position and button state, and its [`Clicked`] signal where it has one.
 pub fn ui_interaction_system(
@@ -97,6 +110,17 @@ mod tests {
 
     fn clicked(world: &gizmo_core::World, id: u32) -> bool {
         world.borrow::<Clicked>().get(id).is_some_and(|c| c.0)
+    }
+
+    /// A plain panel counts as UI, not only a button; outside every node is the world.
+    #[test]
+    fn a_plain_panel_is_ui_too() {
+        let (mut world, _, _) = button_world();
+        world.spawn_bundle((node((0.0, 600.0), (800.0, 64.0)),)); // a bar, no Interaction
+        for (at, over) in [((50.0, 20.0), true), ((400.0, 620.0), true), ((400.0, 300.0), false)] {
+            world.get_resource_mut::<Input>().unwrap().set_mouse_position(at.0, at.1);
+            assert_eq!(pointer_over_ui(&world), over, "at {at:?}");
+        }
     }
 
     /// Press on, release on: clicked for exactly that one frame.
