@@ -81,6 +81,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   or by default to a `tracing::error!` naming the system, and the system runs again next frame.
   `SystemOutput` is the trait behind it; `()` systems are unchanged.
 
+- **Shadow reach: `Renderer::shadow_settings`** (`ShadowSettings::{distance, lambda}`, with
+  `with_distance` / `with_lambda`). How far the sun's cascades reach (100 m by default) and how the
+  four split it (λ 0.75) were constants; both paths read the setting now.
+  `csm::compute_directional_cascades_with` is the parameterised form, and `SceneSetupInputs`
+  gained `shadow_settings`.
+
 - **The game path publishes `RenderStats`** (draw calls, instances, triangles, sampled GPU
   memory), counted as the editor counts them, so a game can read its own draw-call count; the
   `many_cubes` demo shows it. Under split screen it holds the last view drawn.

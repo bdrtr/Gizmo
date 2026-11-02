@@ -158,6 +158,7 @@ pub fn execute_render_pipeline(
             point_shadows_enabled: false,
             elapsed_time,
             light_cookies: renderer.light_cookies.table(),
+            shadow_settings: renderer.shadow_settings,
         },
     );
     let cascade_mats = setup.cascade_view_projs;
@@ -909,6 +910,7 @@ fn record_game_view(
             point_shadows_enabled: false,
             elapsed_time,
             light_cookies: renderer.light_cookies.table(),
+            shadow_settings: renderer.shadow_settings,
         },
     );
     let cascades = setup.cascade_view_projs.map(|m| m.to_cols_array_2d());

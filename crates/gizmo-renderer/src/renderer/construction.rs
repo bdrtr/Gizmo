@@ -683,6 +683,7 @@ impl Renderer {
             reflection_probe: None,
             motion_history: Default::default(),
             light_cookies: Default::default(),
+            shadow_settings: Default::default(),
             gpu_particles,
             gpu_physics,
             gpu_fluid,

@@ -381,6 +381,8 @@ pub struct SceneSetupInputs {
     pub elapsed_time: f32,
     /// Which cookie name is in which layer — `renderer.light_cookies.table()`.
     pub light_cookies: crate::renderer::cookies::CookieTable,
+    /// How far the cascades reach and how they split it — `renderer.shadow_settings`.
+    pub shadow_settings: crate::renderer::ShadowSettings,
 }
 
 /// Build one frame's scene state, for either render path.
@@ -419,7 +421,7 @@ pub fn collect_scene_setup(world: &World, inputs: &SceneSetupInputs) -> SceneSet
         }
     };
 
-    let cascades = crate::renderer::compute_directional_cascades(
+    let cascades = crate::renderer::compute_directional_cascades_with(
         inputs.camera.position,
         inputs.camera.forward,
         inputs.aspect,
@@ -427,6 +429,7 @@ pub fn collect_scene_setup(world: &World, inputs: &SceneSetupInputs) -> SceneSet
         inputs.camera.near,
         inputs.camera.far,
         shadow_dir.unwrap_or(Vec3::new(0.0, -1.0, 0.0)),
+        inputs.shadow_settings,
     );
     // Nothing to cast from → identity, and the splits stay meaningful for the shadow-distance
     // fade. Only the editor's policy can reach this; the game's always has a direction.

@@ -112,8 +112,66 @@ pub fn compute_directional_cascades(
     cam_far: f32,
     light_dir: Vec3,
 ) -> ShadowCascades {
-    let shadow_far = cam_far.min(SHADOW_DISTANCE);
-    let splits = cascade_split_distances(cam_near, shadow_far, CASCADE_LAMBDA);
+    compute_directional_cascades_with(
+        cam_pos,
+        cam_forward,
+        aspect,
+        fov_y,
+        cam_near,
+        cam_far,
+        light_dir,
+        ShadowSettings::default(),
+    )
+}
+
+/// How far the sun's cascaded shadows reach and how the four cascades share that range — the two
+/// numbers that were constants (`SHADOW_DISTANCE`, `CASCADE_LAMBDA`). Set on
+/// `Renderer::shadow_settings`; both render paths read it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub struct ShadowSettings {
+    /// Metres from the camera the shadows cover (capped by the camera's far plane), faded out over
+    /// the last 15 %. 100 m by default: a larger one covers more ground with the same 3072²
+    /// texels, so each one is coarser.
+    pub distance: f32,
+    /// How the four cascades split that range: 0 evenly, 1 logarithmically (fine near the camera,
+    /// coarse far away). 0.75 by default.
+    pub lambda: f32,
+}
+
+impl Default for ShadowSettings {
+    fn default() -> Self {
+        Self { distance: SHADOW_DISTANCE, lambda: CASCADE_LAMBDA }
+    }
+}
+
+impl ShadowSettings {
+    /// Shadows out to `metres` (floored at 1 m), split as by default.
+    pub fn with_distance(mut self, metres: f32) -> Self {
+        self.distance = if metres.is_finite() { metres.max(1.0) } else { SHADOW_DISTANCE };
+        self
+    }
+
+    /// The split blend, clamped to 0..=1.
+    pub fn with_lambda(mut self, lambda: f32) -> Self {
+        self.lambda = if lambda.is_finite() { lambda.clamp(0.0, 1.0) } else { CASCADE_LAMBDA };
+        self
+    }
+}
+
+/// [`compute_directional_cascades`] with the reach and split blend given rather than the defaults.
+pub fn compute_directional_cascades_with(
+    cam_pos: Vec3,
+    cam_forward: Vec3,
+    aspect: f32,
+    fov_y: f32,
+    cam_near: f32,
+    cam_far: f32,
+    light_dir: Vec3,
+    settings: ShadowSettings,
+) -> ShadowCascades {
+    let shadow_far = cam_far.min(settings.distance.max(1.0));
+    let splits = cascade_split_distances(cam_near, shadow_far, settings.lambda.clamp(0.0, 1.0));
     let view_projs = directional_cascade_view_projs(
         cam_pos,
         cam_forward,
@@ -577,6 +635,24 @@ mod tests {
         let r0 = log[1] / log[0];
         let r1 = log[2] / log[1];
         assert!((r0 - r1).abs() < 1e-3, "log splits not geometric: {log:?}");
+    }
+
+    /// `ShadowSettings::default()` is exactly the old constants, so the wrapper and the
+    /// parameterised call agree bit for bit; a shorter distance ends the range there.
+    #[test]
+    fn shadow_settings_default_to_the_old_constants() {
+        let args = (Vec3::ZERO, Vec3::NEG_Z, 1.6, 0.8, 0.1, 1500.0, Vec3::new(0.3, -1.0, 0.2));
+        let a = compute_directional_cascades(args.0, args.1, args.2, args.3, args.4, args.5, args.6);
+        let b = compute_directional_cascades_with(args.0, args.1, args.2, args.3, args.4, args.5, args.6, ShadowSettings::default());
+        assert_eq!(a.splits, b.splits);
+        assert_eq!(a.view_projs, b.view_projs);
+        let short = compute_directional_cascades_with(
+            args.0, args.1, args.2, args.3, args.4, args.5, args.6,
+            ShadowSettings::default().with_distance(40.0),
+        );
+        assert!((short.splits[3] - 40.0).abs() < 1e-4, "{:?}", short.splits);
+        assert_eq!(ShadowSettings::default().with_lambda(7.0).lambda, 1.0, "clamped");
+        assert_eq!(ShadowSettings::default().with_distance(-3.0).distance, 1.0, "floored");
     }
 
     // ── Shadow-distance fade (the cure for the hard brightness step at SHADOW_DISTANCE) ──

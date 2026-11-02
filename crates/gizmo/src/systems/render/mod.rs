@@ -917,6 +917,7 @@ fn draw_camera_view(
             point_shadows_enabled: renderer.point_shadows_enabled,
             elapsed_time,
             light_cookies: renderer.light_cookies.table(),
+            shadow_settings: renderer.shadow_settings,
         },
     );
     let scene_lights = &setup.lights;

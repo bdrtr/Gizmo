@@ -229,7 +229,7 @@ pub use components::{
 };
 pub use csm::{
     cascade_split_distances, compute_directional_cascades, directional_cascade_view_projs,
-    shadow_distance_fade, ShadowCascades, CASCADE_COUNT, CASCADE_LAMBDA, SHADOW_DISTANCE,
+    compute_directional_cascades_with, shadow_distance_fade, ShadowCascades, ShadowSettings, CASCADE_COUNT, CASCADE_LAMBDA, SHADOW_DISTANCE,
     SHADOW_FADE_FRACTION, SHADOW_MAP_RES,
 };
 pub use debug_renderer::{GizmoRendererSystem, Gizmos};

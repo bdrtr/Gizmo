@@ -49,6 +49,7 @@ fn game_inputs() -> SceneSetupInputs {
         point_shadows_enabled: true,
         elapsed_time: 7.5,
         light_cookies: Default::default(),
+        shadow_settings: Default::default(),
     }
 }
 
@@ -65,6 +66,7 @@ fn editor_inputs() -> SceneSetupInputs {
         point_shadows_enabled: false,
         elapsed_time: 7.5,
         light_cookies: Default::default(),
+        shadow_settings: Default::default(),
     }
 }
 
@@ -92,6 +94,33 @@ fn both_ways(world: &World) -> (SceneSetup, SceneSetup) {
 ///
 /// The comparison is on the uploaded block rather than on the Rust struct, because the block is
 /// what the shaders read; a divergence that survives into bytes is one the picture can show.
+/// `Renderer::shadow_settings` reaches the cascades through the shared setup, in both paths: the
+/// covered range ends at the asked-for distance (the camera's far plane is 900 m), and a lower
+/// lambda moves the first split out, toward an even division.
+#[test]
+fn shadow_settings_reach_the_cascades() {
+    use gizmo::renderer::ShadowSettings;
+    let world = sunlit_scene();
+    for inputs in [game_inputs as fn() -> SceneSetupInputs, editor_inputs] {
+        let near = collect_scene_setup(
+            &world,
+            &SceneSetupInputs { shadow_settings: ShadowSettings::default().with_distance(30.0), ..inputs() },
+        );
+        let splits = near.frame.shadows.cascade_splits;
+        assert!((splits[3] - 30.0).abs() < 1e-3, "the range ends at 30 m: {splits:?}");
+        let default = collect_scene_setup(&world, &inputs()).frame.shadows.cascade_splits;
+        assert!((default[3] - 100.0).abs() < 1e-3, "the default is still 100 m: {default:?}");
+        let even = collect_scene_setup(
+            &world,
+            &SceneSetupInputs { shadow_settings: ShadowSettings::default().with_lambda(0.0), ..inputs() },
+        )
+        .frame
+        .shadows
+        .cascade_splits;
+        assert!(even[0] > default[0] + 5.0, "lambda 0 divides evenly: first split {} → {}", default[0], even[0]);
+    }
+}
+
 #[test]
 fn the_two_paths_agree_on_everything_the_world_decides() {
     let world = sunlit_scene();

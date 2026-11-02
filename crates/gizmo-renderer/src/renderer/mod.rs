@@ -218,6 +218,9 @@ pub struct Renderer {
     /// Which cookie image sits in which layer of `scene.cookies`. See [`crate::cookies`] and
     /// [`insert_light_cookie`](Self::insert_light_cookie).
     pub light_cookies: crate::cookies::LightCookies,
+    /// How far the sun's cascaded shadows reach and how the cascades split it — see
+    /// [`ShadowSettings`](crate::csm::ShadowSettings). The defaults are the old constants.
+    pub shadow_settings: crate::csm::ShadowSettings,
 
     // === GIZMO HATA AYIKLAMA (Debug Lines) ===
     /// The debug line renderer — gizmos, wireframes, physics overlays.
