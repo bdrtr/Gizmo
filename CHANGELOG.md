@@ -55,8 +55,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   new game `kristal_avcisi` opened at 472×492 under a tiling window manager and its menu had no
   text. `Text::pinned(content, font, size, anchor, offset)` puts the text's `anchor` on the same
   point of the window (`Center` centres it, `TopRight` hangs it from that corner) plus `offset`
-  pixels, and follows resizes; `TextSpace::screen_point(anchor, viewport)` is where it lands. A UI
-  `Node` on the same entity still wins. Tested at two window sizes — an absolute reading passes at
+  pixels, and follows resizes; `Text::pinned_at(content, font, size, at, offset)` pins to any
+  fraction of the window (`TextSpace::Pinned { at, offset }`), and
+  `TextSpace::screen_point(viewport)` is where it lands. A UI `Node` on the same entity still wins.
+  `text.rs` and `kule_yikici` drop their per-frame repositioning from `WindowInfo`. Tested at two window sizes — an absolute reading passes at
   one and fails at the other (mutation-checked).
 - **Deferred bundles: `Commands::spawn_bundle` and `EntityCommands::insert_bundle`.** The
   `Commands` twins of `World::spawn_bundle` / `World::add_bundle`: one queued command that spawns

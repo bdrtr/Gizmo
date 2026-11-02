@@ -837,8 +837,9 @@ on the driven state machine with `DespawnOnExit`. It works on the first build; w
   and `kule_yikici` had both worked around the same thing by rewriting `TextSpace::Screen` from
   `WindowInfo` every frame. `Text::pinned(.., anchor, offset)` / `TextSpace::Pinned { offset }`
   pins the text's anchor to the **same** point of the window (centre, a corner, an edge's middle)
-  plus a pixel offset, and follows resizes. A position that is a *fraction* that is not one of the
-  nine anchors (`kule_yikici`'s banner at 30 % of the height) is still a per-frame rewrite.
+  plus a pixel offset, and follows resizes. `Text::pinned_at(.., at, offset)` pins to any
+  fraction of the window (`kule_yikici`'s banner at 30 % of the height); `TextSpace::Pinned` is
+  `{ at, offset }`. Both workarounds are gone — `text.rs` lost its `reposition` system entirely.
 - ~~**No deferred bundle spawn.**~~ **Closed 2026-11-02.** `World::spawn_bundle` had no `Commands`
   twin, so the system that spawns a hunter wrote seven `insert`s where the enter hook wrote one
   tuple — and each `insert` moves the entity to another archetype. `Commands::spawn_bundle` and

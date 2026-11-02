@@ -96,11 +96,9 @@ fn main() {
 
             // ── Ekran metni: sekiz çapa, kendi kenarında ─────────────────────────────────
             //
-            // Konumlar burada değil `reposition`'da hesaplanıyor: `TextSpace::Screen` mutlak
-            // pencere pikseli tutuyor, yani pencere boyutunu bilen tek yer güncelleme. Kurulumda
-            // sabitleseydik demo yalnız açılış boyutunda doğru olurdu — ve tam olarak çapaları
-            // gösteren bir demonun yanlış olabileceği en kötü yer bu.
-            let mut layout = ScreenLayout::default();
+            // `Text::pinned_at`: konum pencerenin bir KESRİ, boyutla birlikte geliyor. (Bu demo
+            // eskiden her kare `WindowInfo`'dan mutlak pikseli yeniden yazıyordu — motorun
+            // oransal konumu yoktu.)
             for (anchor, fx, fy, label) in [
                 (TextAnchor::TopLeft, 0.0, 0.0, "sol-ust"),
                 (TextAnchor::TopCenter, 0.5, 0.0, "ust-orta"),
@@ -111,9 +109,9 @@ fn main() {
                 (TextAnchor::BottomCenter, 0.5, 1.0, "alt-orta"),
                 (TextAnchor::BottomRight, 1.0, 1.0, "sag-alt"),
             ] {
-                let e = scene.world.spawn_bundle((Text::screen(label, font, 22.0, Vec2::ZERO)
+                let at = Vec2::new(fx, fy);
+                scene.world.spawn_bundle((Text::pinned_at(label, font, 22.0, at, inset(at, MARGIN))
                     .with_anchor(anchor),));
-                layout.0.push((e.id(), Vec2::new(fx, fy), MARGIN));
             }
 
             // Ortada: çok satırlı, ve fontun gerçek olup olmadığını söyleyen satır.
@@ -122,21 +120,20 @@ fn main() {
             } else {
                 "FONT BULUNAMADI\nsentetik yuz cizliyor (kutular)\nGIZMO_FONT=/yol/font.ttf ile calistirin"
             };
-            let e = scene.world.spawn_bundle((Text::screen(note, font, 26.0, Vec2::ZERO)
+            scene.world.spawn_bundle((Text::pinned_at(note, font, 26.0, Vec2::new(0.5, 0.72), Vec2::ZERO)
                 .with_anchor(TextAnchor::TopCenter)
                 .with_color(Vec4::new(1.0, 0.95, 0.7, 1.0)),));
-            layout.0.push((e.id(), Vec2::new(0.5, 0.72), 0.0));
 
             // Solda: 300 piksellik bir sütuna sarılan, satırları ortalanmış bir paragraf. Satırlar
             // boşluklarda kırılıyor; sığmayan tek bir kelime karakter arasından bölünüyor.
             let paragraph = "Bu paragraf 300 piksel genisliginde bir sutuna sariliyor ve her satiri \
                              ortalaniyor. Cokuzunbirkelimesigmayincakarakterarasindanboluniyor.";
-            let e = scene.world.spawn_bundle((Text::screen(paragraph, font, 20.0, Vec2::ZERO)
+            let at = Vec2::new(0.0, 0.32);
+            scene.world.spawn_bundle((Text::pinned_at(paragraph, font, 20.0, at, inset(at, MARGIN))
                 .with_anchor(TextAnchor::CenterLeft)
                 .with_max_width(300.0)
                 .with_align(TextAlign::Center)
                 .with_color(Vec4::new(0.75, 0.9, 1.0, 1.0)),));
-            layout.0.push((e.id(), Vec2::new(0.0, 0.32), MARGIN));
 
             // ── Boyut taraması ───────────────────────────────────────────────────────────
             // Aynı dize, artan `size_px`. Atlas HER BOYUTU ayrı raster tutuyor (bkz. `GlyphKey`),
@@ -144,26 +141,13 @@ fn main() {
             // piksele yuvarlandığını gösteren şey de bu: yuvarlamasaydı her kare yeni kopyalar.
             let mut y = 0.20_f32;
             for size in [10.0_f32, 14.0, 20.0, 28.0, 40.0] {
-                let e = scene.world.spawn_bundle((Text::screen(
-                    format!("{size:.0} px"),
-                    font,
-                    size,
-                    Vec2::ZERO,
-                )
-                .with_anchor(TextAnchor::TopRight),));
-                layout.0.push((e.id(), Vec2::new(1.0, y), MARGIN));
+                let at = Vec2::new(1.0, y);
+                scene.world.spawn_bundle((Text::pinned_at(format!("{size:.0} px"), font, size, at, inset(at, MARGIN))
+                    .with_anchor(TextAnchor::TopRight),));
                 y += 0.055;
             }
-            scene.world.insert_resource(layout);
 
             scene.spawn_camera(state, Vec3::new(0.0, 1.0, 9.0), Vec3::new(0.0, 0.5, 0.0));
-        })
-        // `with_simple_scene` kendi güncellemesini (uçan kamera) kurar ve `set_update` onu
-        // DEĞİŞTİRİR — bu yüzden kamerayı elle çağırıyoruz. `simple_scene_update` tam olarak
-        // bunun için `pub`.
-        .set_update(|world, state, dt, input| {
-            gizmo::simple::simple_scene_update(world, state, dt, input);
-            reposition(world);
         })
         .run()
         .expect("uygulama çalıştırılamadı");
@@ -172,31 +156,9 @@ fn main() {
 /// Ekran kenarlarından bırakılan boşluk, piksel.
 const MARGIN: f32 = 12.0;
 
-/// Hangi ekran metni pencerenin neresine oturuyor: `(varlık kimliği, 0..1 oran, kenar boşluğu)`.
-#[derive(Default)]
-struct ScreenLayout(Vec<(u32, Vec2, f32)>);
-
-/// Ekran metinlerini pencerenin ŞU ANKİ boyutuna göre yeniden konumlandırır.
-///
-/// `WindowInfo` her yeniden boyutlandırmada tazeleniyor, ve `TextSpace::Screen` mutlak piksel
-/// tuttuğu için çeviriyi birinin yapması gerekiyor. Motorun bir "oransal konum" kavramı yok —
-/// bu demo o boşluğun ne kadar büyük olduğunu da göstersin diye elle yapıyor.
-fn reposition(world: &mut World) {
-    let Some(info) = world.get_resource::<gizmo::core::window::WindowInfo>().map(|i| *i) else {
-        return;
-    };
-    let Some(layout) = world.get_resource::<ScreenLayout>().map(|l| l.0.clone()) else {
-        return;
-    };
-    let mut texts = world.borrow_mut::<Text>();
-    for (entity, frac, margin) in layout {
-        let Some(mut text) = texts.get_mut(entity) else { continue };
-        // Kenar boşluğu çapanın yönüne göre içeri doğru: solda +, sağda −, ortada 0.
-        let inset = Vec2::new((0.5 - frac.x) * 2.0 * margin, (0.5 - frac.y) * 2.0 * margin);
-        text.space = gizmo::renderer::components::TextSpace::Screen {
-            position: Vec2::new(info.width * frac.x, info.height * frac.y) + inset,
-        };
-    }
+/// Kenar boşluğu, çapanın yönüne göre içeri doğru: solda +, sağda −, ortada 0.
+fn inset(at: Vec2, margin: f32) -> Vec2 {
+    Vec2::new((0.5 - at.x) * 2.0 * margin, (0.5 - at.y) * 2.0 * margin)
 }
 
 /// Fontu bulur: `GIZMO_FONT`, sonra bilinen sistem yolları, sonra sentetik yüz.

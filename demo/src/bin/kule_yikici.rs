@@ -161,7 +161,10 @@ fn main() {
                 .id();
             let banner = scene
                 .world
-                .spawn_bundle((Text::screen("", font, 40.0, Vec2::new(640.0, 200.0)).with_anchor(TextAnchor::Center),))
+                // Pencerenin ortası, %30 aşağısı — boyut değişince birlikte geliyor.
+                .spawn_bundle((Text::pinned_at("", font, 40.0, Vec2::new(0.5, 0.3), Vec2::ZERO)
+                    .with_anchor(TextAnchor::Center)
+                    .with_align(gizmo::renderer::components::TextAlign::Center),))
                 .id();
 
             let aim_dots = (0..14)
@@ -406,10 +409,6 @@ fn draw_ui(world: &mut World, game: &Game, down: usize) {
             }
         }
     }
-    let size = world
-        .get_resource::<gizmo::core::window::WindowInfo>()
-        .map(|i| Vec2::new(i.width, i.height))
-        .unwrap_or(Vec2::new(1280.0, 720.0));
     let mut texts = world.borrow_mut::<Text>();
     if let Some(mut t) = texts.get_mut(game.hud_text) {
         t.content = format!("Hedef {down}/{}   Atış {}", game.targets_total, game.shots_left);
@@ -424,7 +423,6 @@ fn draw_ui(world: &mut World, game: &Game, down: usize) {
             Outcome::Won => Vec4::new(1.0, 0.85, 0.2, 1.0),
             _ => Vec4::new(1.0, 1.0, 1.0, 1.0),
         };
-        t.space = gizmo::renderer::components::TextSpace::Screen { position: Vec2::new(size.x * 0.5, size.y * 0.3) };
     }
 }
 

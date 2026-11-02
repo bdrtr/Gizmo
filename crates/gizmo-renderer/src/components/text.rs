@@ -99,7 +99,28 @@ impl Text {
             size_px,
             color: Vec4::ONE,
             anchor,
-            space: TextSpace::Pinned { offset },
+            space: TextSpace::Pinned { at: anchor.factors(), offset },
+            max_width: None,
+            align: TextAlign::Left,
+        }
+    }
+
+    /// White text at `size_px`, pinned to **any** point of the window: `at` is a fraction of its
+    /// size (`(0.5, 0.3)` is centred, 30 % down), `offset` window pixels from there, y down.
+    ///
+    /// The part of the text's box that sits on the point is [`anchor`](Self::anchor), top-left
+    /// by default — a title centred at 30 % is
+    /// `pinned_at(.., Vec2::new(0.5, 0.3), Vec2::ZERO).with_anchor(TextAnchor::Center)`.
+    /// [`pinned`](Self::pinned) is this with `at` taken from the anchor.
+    #[must_use]
+    pub fn pinned_at(content: impl Into<String>, font: FontId, size_px: f32, at: Vec2, offset: Vec2) -> Self {
+        Self {
+            content: content.into(),
+            font,
+            size_px,
+            color: Vec4::ONE,
+            anchor: TextAnchor::TopLeft,
+            space: TextSpace::Pinned { at, offset },
             max_width: None,
             align: TextAlign::Left,
         }
@@ -170,8 +191,8 @@ pub enum TextSpace {
         /// The anchor point, in window pixels.
         position: Vec2,
     },
-    /// Window pixels measured from a point that moves with the window: the point
-    /// [`Text::anchor`] names (its centre, a corner, an edge's middle), plus `offset`.
+    /// Window pixels measured from a point that moves with the window: `at`, a fraction of the
+    /// window's size (`(0, 0)` top-left, `(1, 1)` bottom-right), plus `offset`.
     ///
     /// [`Screen`](Self::Screen) is absolute, so a title centred at `(640, 240)` for a 1280-wide
     /// window is off-screen in a 472-wide one — which is where `kristal_avcisi`'s menu went the
@@ -179,7 +200,9 @@ pub enum TextSpace {
     /// a centre or a right-hand corner re-wrote its own `position` from `WindowInfo` each frame
     /// (`demo/src/bin/text.rs`, `kule_yikici`).
     Pinned {
-        /// Window pixels from the anchor point, y down.
+        /// The point, as a fraction of the window's width and height, y down.
+        at: Vec2,
+        /// Window pixels from that point, y down.
         offset: Vec2,
     },
     /// At the entity's `GlobalTransform`, as a quad turned to face the camera.
@@ -206,16 +229,16 @@ impl TextSpace {
         }
     }
 
-    /// Where on a `viewport`-sized window the text's `anchor` point lands, in window pixels — or
+    /// Where on a `viewport`-sized window the text's anchor point lands, in window pixels — or
     /// `None` for a text that lives in the world.
     ///
-    /// The one place a [`Pinned`](Self::Pinned) offset becomes a pixel, so the renderer and any
+    /// The one place a [`Pinned`](Self::Pinned) fraction becomes a pixel, so the renderer and any
     /// host that wants to know where a label went agree.
     #[must_use]
-    pub fn screen_point(self, anchor: TextAnchor, viewport: Vec2) -> Option<Vec2> {
+    pub fn screen_point(self, viewport: Vec2) -> Option<Vec2> {
         match self {
             Self::Screen { position } => Some(position),
-            Self::Pinned { offset } => Some(viewport * anchor.factors() + offset),
+            Self::Pinned { at, offset } => Some(viewport * at + offset),
             Self::World { .. } => None,
         }
     }
