@@ -1,7 +1,52 @@
 use gizmo_core::query::{Query, Mut};
-use gizmo_core::system::Res;
-use gizmo_core::input::Input;
+use gizmo_core::system::{Res, ResMut};
+use gizmo_core::input::{GamepadButton, Input};
 use crate::components::{Clicked, Interaction, Node};
+
+/// Keyboard and gamepad navigation of the interactive elements — a resource.
+///
+/// A menu played with a gamepad, or by someone who reaches for Tab, needs a **focus**: one
+/// element that the arrows move off and Enter presses. `gizmo-ui` had none ("no keyboard focus",
+/// in its own docs and `ui_layout.rs`'s header), so every menu in a game was mouse-only.
+///
+/// **Off by default**, because the keys it takes — the arrows, Tab, Space, Enter, the d-pad and
+/// the south face button — are a game's keys too. A menu turns it on while it is open:
+/// `world.get_resource_mut::<UiNavigation>().unwrap().enabled = true`.
+///
+/// When on:
+/// - **Down / Right / Tab / d-pad down, right** move the focus to the next element in reading
+///   order (top to bottom, then left to right, by laid-out position); **Up / Left / Shift+Tab /
+///   d-pad up, left** to the previous one. It wraps. The first press with nothing focused focuses
+///   the first element.
+/// - **Enter / Space / the south face button** click the focused element — its
+///   [`Clicked`] is set for that frame, exactly as a mouse click would.
+/// - The mouse moving over an element focuses it, so the two never disagree about which one is
+///   current.
+/// - The focused element reads as [`Interaction::Hovered`] when the mouse is not pressing it, so
+///   the hover colour a game already paints is its focus highlight.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct UiNavigation {
+    /// Whether the keys above navigate. See the type's docs for why it is off by default.
+    pub enabled: bool,
+    focused: Option<u32>,
+}
+
+impl UiNavigation {
+    /// The focused element, if any.
+    #[must_use]
+    pub fn focused(&self) -> Option<u32> {
+        self.focused
+    }
+
+    /// Moves the focus to `entity` (`None` clears it) — a menu opening on its first button.
+    pub fn focus(&mut self, entity: Option<u32>) {
+        self.focused = entity;
+    }
+}
+
+fn key(name: &str) -> u32 {
+    gizmo_core::input::keys::code_from_name(name).unwrap_or(u32::MAX)
+}
 
 /// Returns whether `point` lies within a node's bounding box.
 ///
@@ -32,36 +77,105 @@ pub fn pointer_over_ui(world: &gizmo_core::World) -> bool {
 /// mouse position and button state, and its [`Clicked`] signal where it has one.
 pub fn ui_interaction_system(
     input: Res<Input>,
+    navigation: Option<ResMut<UiNavigation>>,
     mut interactions: Query<(&Node, Mut<Interaction>, Option<Mut<Clicked>>)>,
 ) {
     let mouse_pos = input.mouse_position();
     let is_clicked = input.is_mouse_button_pressed(0); // 0 is left click
 
+    // Keyboard/gamepad focus — decided before the per-element pass so it can mark the focused one.
+    let (focused, activate) = match navigation {
+        Some(mut nav) if nav.enabled => navigate(&input, &mut nav, &mut interactions, mouse_pos),
+        _ => (None, false),
+    };
+
     // Note: This is a simplified check that doesn't account for z-index or hierarchy properly yet.
     // In a real UI system, we would need to walk the tree from front to back.
-    for (_, (node, mut interaction, clicked)) in interactions.iter_mut() {
+    for (id, (node, mut interaction, clicked)) in interactions.iter_mut() {
         let was = *interaction;
         let is_hovered = point_in_node(mouse_pos, node);
 
-        if is_hovered {
-            if is_clicked {
-                *interaction = Interaction::Pressed;
-            } else {
-                *interaction = Interaction::Hovered;
-            }
+        let is_focused = focused == Some(id);
+        if is_hovered && is_clicked {
+            *interaction = Interaction::Pressed;
+        } else if is_hovered || is_focused {
+            *interaction = Interaction::Hovered;
         } else {
             *interaction = Interaction::None;
         }
 
         if let Some(mut clicked) = clicked {
             // Released over the element it was pressed on. Released elsewhere, `was` is still
-            // `Pressed` but the new state is `None`: cancelled.
-            let now = was == Interaction::Pressed && *interaction == Interaction::Hovered;
+            // `Pressed` but the new state is `None`: cancelled. Or activated from the keyboard.
+            let now = (was == Interaction::Pressed && is_hovered && !is_clicked) || (is_focused && activate);
             if clicked.0 != now {
                 clicked.0 = now;
             }
         }
     }
+}
+
+/// Moves the focus for this frame's keys and mouse, and says whether the focused element was
+/// activated. Returns the focus after the move.
+fn navigate(
+    input: &Input,
+    nav: &mut UiNavigation,
+    interactions: &mut Query<(&Node, Mut<Interaction>, Option<Mut<Clicked>>)>,
+    mouse: (f32, f32),
+) -> (Option<u32>, bool) {
+    // The focusable elements in reading order. A zero-size node is hidden (or not laid out yet).
+    let mut order: Vec<(u32, f32, f32, bool)> = interactions
+        .iter_mut()
+        .filter(|(_, (n, _, _))| n.size.x > 0.0 && n.size.y > 0.0)
+        .map(|(id, (n, _, _))| (id, n.position.y, n.position.x, point_in_node(mouse, n)))
+        .collect();
+    order.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.2.total_cmp(&b.2)).then(a.0.cmp(&b.0)));
+    if order.is_empty() {
+        nav.focused = None;
+        return (None, false);
+    }
+    if nav.focused.is_some_and(|f| !order.iter().any(|o| o.0 == f)) {
+        nav.focused = None;
+    }
+
+    // The mouse moving onto an element takes the focus with it.
+    let (dx, dy) = input.mouse_delta();
+    if dx != 0.0 || dy != 0.0 {
+        if let Some(hovered) = order.iter().find(|o| o.3) {
+            nav.focused = Some(hovered.0);
+        }
+    }
+
+    let pad = input.gamepad();
+    let pad_just = |b: GamepadButton| pad.is_some_and(|p| p.is_just_pressed(b));
+    let shift = input.is_key_pressed(key("lshift")) || input.is_key_pressed(key("rshift"));
+    let tab = input.is_key_just_pressed(key("tab"));
+    let next = (tab && !shift)
+        || input.is_key_just_pressed(key("down"))
+        || input.is_key_just_pressed(key("right"))
+        || pad_just(GamepadButton::DPadDown)
+        || pad_just(GamepadButton::DPadRight);
+    let prev = (tab && shift)
+        || input.is_key_just_pressed(key("up"))
+        || input.is_key_just_pressed(key("left"))
+        || pad_just(GamepadButton::DPadUp)
+        || pad_just(GamepadButton::DPadLeft);
+    if next || prev {
+        let n = order.len();
+        let at = nav.focused.and_then(|f| order.iter().position(|o| o.0 == f));
+        let i = match (at, next) {
+            (None, _) => 0,
+            (Some(i), true) => (i + 1) % n,
+            (Some(i), false) => (i + n - 1) % n,
+        };
+        nav.focused = Some(order[i].0);
+    }
+
+    let activate = nav.focused.is_some()
+        && (input.is_key_just_pressed(key("enter"))
+            || input.is_key_just_pressed(key("space"))
+            || pad_just(GamepadButton::South));
+    (nav.focused, activate)
 }
 
 #[cfg(test)]
@@ -139,6 +253,103 @@ mod tests {
         // The node without a `Clicked` still tracks its interaction.
         frame(&mut world, (250.0, 20.0), true);
         assert_eq!(world.borrow::<Interaction>().get(plain).copied(), Some(Interaction::Pressed));
+    }
+
+    /// Three buttons in a column (deliberately spawned out of reading order) and navigation on.
+    fn menu() -> (gizmo_core::World, [u32; 3]) {
+        let mut world = gizmo_core::World::new();
+        world.insert_resource(Input::new());
+        world.insert_resource(UiNavigation { enabled: true, focused: None });
+        let mid = world.spawn_bundle(crate::ButtonBundle { node: node((0.0, 100.0), (100.0, 40.0)), ..Default::default() });
+        let top = world.spawn_bundle(crate::ButtonBundle { node: node((0.0, 0.0), (100.0, 40.0)), ..Default::default() });
+        let low = world.spawn_bundle(crate::ButtonBundle { node: node((0.0, 200.0), (100.0, 40.0)), ..Default::default() });
+        (world, [top.id(), mid.id(), low.id()])
+    }
+
+    /// One frame with `key` just pressed (if any), the mouse parked off every button.
+    fn press(world: &mut gizmo_core::World, key_name: Option<&str>) {
+        use gizmo_core::system::{IntoSystemConfig, Schedule};
+        {
+            let mut input = world.get_resource_mut::<Input>().unwrap();
+            input.begin_frame();
+            input.set_mouse_position(500.0, 500.0);
+            if let Some(k) = key_name {
+                input.on_key_pressed(key(k));
+            }
+        }
+        let mut s = Schedule::new();
+        s.add_di_system(ui_interaction_system.into_config());
+        s.build();
+        s.run(world, 0.0);
+        if let Some(k) = key_name {
+            world.get_resource_mut::<Input>().unwrap().on_key_released(key(k));
+        }
+    }
+
+    fn focused(world: &gizmo_core::World) -> Option<u32> {
+        world.get_resource::<UiNavigation>().unwrap().focused()
+    }
+
+    /// Down walks the buttons in reading order — top to bottom, whatever order they were spawned
+    /// in — and wraps; Up goes back and wraps the other way.
+    #[test]
+    fn the_arrows_walk_the_buttons_in_reading_order_and_wrap() {
+        let (mut world, [top, mid, low]) = menu();
+        let mut seen = Vec::new();
+        for _ in 0..4 {
+            press(&mut world, Some("down"));
+            seen.push(focused(&world));
+        }
+        assert_eq!(seen, vec![Some(top), Some(mid), Some(low), Some(top)]);
+        press(&mut world, Some("up"));
+        assert_eq!(focused(&world), Some(low), "up from the first wraps to the last");
+        press(&mut world, Some("tab"));
+        assert_eq!(focused(&world), Some(top), "tab is next");
+    }
+
+    /// Enter clicks the focused button for one frame and no other; the focused one reads Hovered.
+    #[test]
+    fn enter_clicks_the_focused_button_once() {
+        let (mut world, [top, mid, _]) = menu();
+        press(&mut world, Some("down"));
+        press(&mut world, Some("down"));
+        assert_eq!(world.borrow::<Interaction>().get(mid).copied(), Some(Interaction::Hovered), "focus shows as hover");
+        assert_eq!(world.borrow::<Interaction>().get(top).copied(), Some(Interaction::None));
+        press(&mut world, Some("enter"));
+        assert!(clicked(&world, mid) && !clicked(&world, top));
+        press(&mut world, None);
+        assert!(!clicked(&world, mid), "a click lasts one frame");
+    }
+
+    /// Off (the default), the same keys do nothing — they are the game's.
+    #[test]
+    fn navigation_off_leaves_the_keys_to_the_game() {
+        let (mut world, [_, mid, _]) = menu();
+        world.get_resource_mut::<UiNavigation>().unwrap().enabled = false;
+        press(&mut world, Some("down"));
+        press(&mut world, Some("enter"));
+        assert_eq!(focused(&world), None);
+        assert!(!clicked(&world, mid));
+        assert!(!UiNavigation::default().enabled, "on by default would steal the arrows");
+    }
+
+    /// The mouse moving onto a button takes the focus, so the arrows continue from there.
+    #[test]
+    fn the_mouse_moving_onto_a_button_focuses_it() {
+        let (mut world, [_, mid, low]) = menu();
+        {
+            let mut input = world.get_resource_mut::<Input>().unwrap();
+            input.begin_frame();
+            input.on_mouse_moved(50.0, 120.0);
+        }
+        let mut s = gizmo_core::system::Schedule::new();
+        use gizmo_core::system::IntoSystemConfig;
+        s.add_di_system(ui_interaction_system.into_config());
+        s.build();
+        s.run(&mut world, 0.0);
+        assert_eq!(focused(&world), Some(mid));
+        press(&mut world, Some("down"));
+        assert_eq!(focused(&world), Some(low));
     }
 
     /// Pressed on, dragged off, released: cancelled, like a desktop button.
