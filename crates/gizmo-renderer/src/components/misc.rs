@@ -206,13 +206,16 @@ pub struct ParticleEmitter {
     pub local_offset: Vec3,
     /// The velocity a particle starts with, before randomisation.
     pub initial_velocity: Vec3,
-    /// How far the initial velocity is randomised, as a fraction of itself. 0 = every particle
-    /// launches identically.
+    /// How far the initial velocity is randomised, in m/s: each axis gets up to `±` this much
+    /// added, independently. 0 = every particle launches identically. (Absolute, not a fraction of
+    /// the velocity — this said "a fraction of itself" until 2026-11-02, which `emit` never did:
+    /// with `initial_velocity` zero, a burst flies apart at this speed.)
     pub velocity_randomness: f32,
     /// How long a particle lives, in seconds.
     pub lifespan: f32,
-    /// How far that lifespan is randomised, as a fraction. 0 = every particle lives exactly
-    /// [`Self::lifespan`].
+    /// How far that lifespan is randomised, in seconds: up to `±` this much, never below 0.1 s.
+    /// 0 = every particle lives exactly [`Self::lifespan`]. (Absolute, not a fraction — see
+    /// [`Self::velocity_randomness`].)
     pub lifespan_randomness: f32,
     /// Billboard size at spawn.
     pub size_start: f32,
