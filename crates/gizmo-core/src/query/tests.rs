@@ -713,3 +713,90 @@ fn query_cached_sees_an_archetype_created_after_it_first_ran() {
          `(Position, Velocity)` existed",
     );
 }
+
+// ── Optional components ─────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq)]
+struct OptSparse(i32);
+impl crate::component::Component for OptSparse {
+    fn storage_type() -> crate::component::StorageType {
+        crate::component::StorageType::SparseSet
+    }
+}
+
+/// Two with a velocity, one without, one with only a velocity: `(&Position, Option<&Velocity>)`
+/// yields the three with a position, `Some` for the two that have one and `None` for the third,
+/// and never the velocity-only entity.
+#[test]
+fn an_optional_component_is_some_where_present_and_none_elsewhere() {
+    let mut world = crate::World::new();
+    let a = world.spawn_bundle((Position { x: 1.0, y: 0.0 }, Velocity { x: 5.0, y: 0.0 }));
+    let b = world.spawn_bundle((Position { x: 2.0, y: 0.0 },));
+    let c = world.spawn_bundle((Position { x: 3.0, y: 0.0 }, Velocity { x: 7.0, y: 0.0 }));
+    world.spawn_bundle((Velocity { x: 9.0, y: 0.0 },));
+
+    let q = world.query::<(&Position, Option<&Velocity>)>().unwrap();
+    let mut seen: Vec<(u32, Option<f32>)> = q.iter().map(|(id, (_, v))| (id, v.map(|v| v.x))).collect();
+    seen.sort_by_key(|(id, _)| *id);
+    assert_eq!(seen, vec![(a.id(), Some(5.0)), (b.id(), None), (c.id(), Some(7.0))]);
+    assert_eq!(q.get(b.id()).map(|(_, v)| v.is_none()), Some(true));
+}
+
+/// The same over sparse storage, where presence is per entity rather than per archetype — the
+/// case where reading a slot that is not there would index out of bounds.
+#[test]
+fn an_optional_sparse_component_is_tested_per_entity() {
+    let mut world = crate::World::new();
+    world.register_component_type::<OptSparse>();
+    let a = world.spawn_bundle((Position { x: 1.0, y: 0.0 },));
+    world.add_component(a, OptSparse(10));
+    let b = world.spawn_bundle((Position { x: 2.0, y: 0.0 },));
+    let q = world.query::<(&Position, Option<&OptSparse>)>().unwrap();
+    assert_eq!(q.get(a.id()).and_then(|(_, s)| s.map(|s| s.0)), Some(10));
+    assert_eq!(q.get(b.id()).map(|(_, s)| s.is_none()), Some(true));
+    assert_eq!(q.iter().count(), 2);
+}
+
+/// `Option<Mut<T>>` writes through and marks the change, so `Changed<T>` sees it.
+#[test]
+fn an_optional_mut_writes_and_marks_the_change() {
+    let mut world = crate::World::new();
+    let a = world.spawn_bundle((Position { x: 1.0, y: 0.0 }, Velocity { x: 0.0, y: 0.0 }));
+    world.spawn_bundle((Position { x: 2.0, y: 0.0 },));
+    let prev = world.tick;
+    world.begin_change_frame(prev);
+    {
+        let mut q = world.query_mut::<(&Position, Option<Mut<Velocity>>)>().unwrap();
+        for (_, (p, v)) in q.iter_mut() {
+            if let Some(mut v) = v {
+                v.x = p.x * 10.0;
+            }
+        }
+    }
+    assert_eq!(world.query::<&Velocity>().unwrap().get(a.id()).map(|v| v.x), Some(10.0));
+    assert_eq!(world.query::<Changed<Velocity>>().unwrap().iter().count(), 1);
+}
+
+/// An optional access is still an access: beside a writer of the same type it is the aliasing
+/// panic, and an `Option<Mut<T>>` declares a write the scheduler can see.
+#[test]
+#[should_panic(expected = "Query aliasing UB detected")]
+fn an_optional_read_beside_a_writer_of_the_same_type_is_rejected() {
+    let mut types = Vec::new();
+    <(Mut<Position>, Option<&Position>) as WorldQuery>::check_aliasing(&mut types);
+}
+
+#[test]
+fn an_optional_mut_declares_a_write() {
+    let mut types = Vec::new();
+    <Option<Mut<Velocity>> as WorldQuery>::check_aliasing(&mut types);
+    assert_eq!(types, vec![(TypeId::of::<Velocity>(), true)]);
+}
+
+/// A table column is a whole-archetype slice or nothing; a sparse one is refused, like the sparse
+/// filters, because there is no contiguous slice to hand out.
+#[test]
+fn chunks_over_an_optional_component_are_whole_columns_or_refused() {
+    assert!(!<Option<&Velocity> as WorldQuery>::has_row_filter());
+    assert!(<Option<&OptSparse> as WorldQuery>::has_row_filter());
+}

@@ -431,6 +431,74 @@ impl<T0: FetchComponent> WorldQuery for T0 where T0::Component: crate::component
     }
 }
 
+/// An optional component: `Option<&T>` / `Option<Mut<T>>` matches **every** entity the rest of
+/// the query matches, and yields `Some` for the ones that carry `T` and `None` for the rest.
+///
+/// ```
+/// # use gizmo_core::prelude::*;
+/// # #[derive(Clone)] struct Health(u32);
+/// # gizmo_core::impl_component!(Health);
+/// # #[derive(Clone)] struct Shield(u32);
+/// # gizmo_core::impl_component!(Shield);
+/// let mut world = World::new();
+/// world.spawn_bundle((Health(10),));
+/// world.spawn_bundle((Health(10), Shield(5)));
+/// let q = world.query::<(&Health, Option<&Shield>)>().unwrap();
+/// let shields: Vec<Option<u32>> = q.iter().map(|(_, (_, s))| s.map(|s| s.0)).collect();
+/// assert_eq!(shields.len(), 2);
+/// assert!(shields.contains(&None) && shields.contains(&Some(5)));
+/// ```
+///
+/// Without it, "the bonus if there is one" took two queries and a join by entity id, or a
+/// `borrow::<T>()` beside the query — which a scheduled system cannot do at all, since it holds
+/// only its parameters. `gizmo-ui`'s interaction system is the first engine code that wanted it.
+///
+/// **The access is declared whether or not any entity has `T`**: a row that does is really read
+/// (or written), so the scheduler must treat `Option<Mut<T>>` exactly as a `Mut<T>` writer —
+/// and the aliasing check rejects `(Mut<T>, Option<&T>)` like `(Mut<T>, &T)`. Over `SparseSet`
+/// storage the column is not contiguous per archetype, so chunk iteration refuses it (as it
+/// refuses the sparse filters); over `Table` storage a chunk is the whole column or `None`.
+impl<F: FetchComponent> sealed::SealedQuery for Option<F> where F::Component: crate::component::Component {}
+impl<F: FetchComponent> WorldQuery for Option<F> where F::Component: crate::component::Component {
+    // Not `F::Component`: that key belongs to `&T`, whose archetype predicate is narrower, and
+    // two queries sharing a cache key must share the predicate.
+    type StaticType = Option<F::Component>;
+    type Fetch<'w> = Option<F::Fetch<'w>>;
+    type Item<'w> = Option<F::Item<'w>>;
+    type Slice<'w> = Option<F::Slice<'w>>;
+
+    unsafe fn fetch_raw<'w>(world: &'w World, arch: &Archetype, tick: u32) -> Option<Self::Fetch<'w>> {
+        // Always admitted; the inner `None` is "this archetype has no such column".
+        Some(F::fetch_raw(world, arch, tick))
+    }
+    fn check_aliasing(types: &mut Vec<(TypeId, bool)>) {
+        check(TypeId::of::<F::Component>(), F::IS_MUT, types);
+    }
+    fn matches_archetype(_arch: &Archetype) -> bool {
+        true
+    }
+    unsafe fn get_item<'w>(fetch: Self::Fetch<'w>, row: usize, entity_id: u32) -> Self::Item<'w> {
+        match fetch {
+            // `contains_entity` is the per-row presence test a sparse set needs (a table column
+            // that exists holds every row of its archetype, and answers `true`).
+            Some(f) if F::contains_entity(f, entity_id) => Some(F::get_item(f, row, entity_id)),
+            _ => None,
+        }
+    }
+    unsafe fn filter_row<'w>(_fetch: Self::Fetch<'w>, _row: usize, _entity_id: u32, _tick: u32) -> bool {
+        true
+    }
+    unsafe fn get_slice<'w>(fetch: Self::Fetch<'w>, len: usize) -> Self::Slice<'w> {
+        fetch.map(|f| F::get_slice(f, len))
+    }
+    fn has_row_filter() -> bool {
+        // A sparse column is per entity, not per archetype: there is no slice to hand out.
+        <F::Component as crate::component::Component>::storage_type() == crate::component::StorageType::SparseSet
+    }
+}
+impl<T: crate::component::Component> sealed::SealedReadOnly for Option<&T> {}
+impl<T: crate::component::Component> ReadOnlyQuery for Option<&T> {}
+
 // `&T` yields shared access only → read-only. `Mut<T>` (also a `FetchComponent`) is
 // pointedly excluded: no `SealedReadOnly`/`ReadOnlyQuery` impl exists for it.
 impl<T: crate::component::Component> sealed::SealedReadOnly for &T {}
