@@ -50,6 +50,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`Query::single` / `Query::single_mut`** — the one matching row, or a
+  `QuerySingleError::{NoEntities, MultipleEntities}` saying why there is not exactly one. For *the*
+  player or *the* camera, a `for` loop silently runs no body before the spawn and lets the last of
+  two matches win; this names both cases. Per-row filters apply as in `iter`, at most two rows are
+  walked, and a refused `single_mut` marks neither row changed (tested; dropping the second-row
+  check fails both tests).
 - **Text pinned to the window: `Text::pinned` / `TextSpace::Pinned`.** `TextSpace::Screen` is
   absolute window pixels, so a title centred for 1280×720 is off screen in a smaller window — the
   new game `kristal_avcisi` opened at 472×492 under a tiling window manager and its menu had no

@@ -800,3 +800,77 @@ fn chunks_over_an_optional_component_are_whole_columns_or_refused() {
     assert!(!<Option<&Velocity> as WorldQuery>::has_row_filter());
     assert!(<Option<&OptSparse> as WorldQuery>::has_row_filter());
 }
+
+/// `single` tells "none", "one" and "several" apart — the two edge cases a `for` loop over
+/// *the* player gets silently wrong — and applies per-row filters the way `iter` does.
+#[test]
+fn single_tells_none_one_and_several_apart() {
+    let mut world = crate::World::new();
+    world.register_component_type::<Position>();
+    world.register_component_type::<Velocity>();
+    assert_eq!(
+        world.query::<&Position>().unwrap().single().err(),
+        Some(QuerySingleError::NoEntities)
+    );
+
+    let a = world.spawn();
+    world.add_component(a, Position { x: 1.0, y: 0.0 });
+    {
+        let q = world.query::<&Position>().unwrap();
+        let (id, p) = q.single().expect("one entity matches");
+        assert_eq!((id, p.x), (a.id(), 1.0));
+    }
+
+    let b = world.spawn();
+    world.add_component(b, Position { x: 2.0, y: 0.0 });
+    world.add_component(b, Velocity { x: 0.0, y: 0.0 });
+    assert_eq!(
+        world.query::<&Position>().unwrap().single().err(),
+        Some(QuerySingleError::MultipleEntities)
+    );
+    // A filter narrows it back to one.
+    let q = world.query::<(&Position, With<Velocity>)>().unwrap();
+    assert_eq!(q.single().map(|(id, (p, _))| (id, p.x)), Ok((b.id(), 2.0)));
+
+    // A per-row filter counts too: only `b` changes this frame.
+    drop(q);
+    world.begin_change_frame(world.tick);
+    {
+        let mut q = world.query_mut::<Mut<Position>>().unwrap();
+        q.get_mut(b.id()).unwrap().x = 3.0;
+    }
+    let q = world.query::<(&Position, Changed<Position>)>().unwrap();
+    assert_eq!(q.single().map(|(id, _)| id), Ok(b.id()));
+}
+
+/// `single_mut` writes the one row and marks only that row; when it refuses because there are
+/// two, the second row it looked at is not marked changed either.
+#[test]
+fn single_mut_writes_the_one_row_and_marks_nothing_on_refusal() {
+    let mut world = crate::World::new();
+    world.register_component_type::<Position>();
+    let a = world.spawn();
+    world.add_component(a, Position { x: 1.0, y: 0.0 });
+
+    world.begin_change_frame(world.tick);
+    {
+        let mut q = world.query_mut::<Mut<Position>>().unwrap();
+        let (_, mut p) = q.single_mut().expect("one entity");
+        p.x = 5.0;
+    }
+    assert_eq!(world.query::<&Position>().unwrap().get(a.id()).map(|p| p.x), Some(5.0));
+    assert_eq!(world.query::<Changed<Position>>().unwrap().iter().count(), 1);
+
+    let b = world.spawn();
+    world.add_component(b, Position { x: 2.0, y: 0.0 });
+    world.begin_change_frame(world.tick);
+    {
+        let mut q = world.query_mut::<Mut<Position>>().unwrap();
+        assert_eq!(q.single_mut().err(), Some(QuerySingleError::MultipleEntities));
+    }
+    assert_eq!(
+        world.query::<Changed<Position>>().unwrap().iter().count(),
+        0,
+        "a refused single_mut must not mark either row"
+    );
+}

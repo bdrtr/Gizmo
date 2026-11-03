@@ -267,6 +267,20 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
         }
     }
 
+    /// The one matching row, writable — see [`Query::single`] for the rules, which are the same.
+    ///
+    /// Sound for the same reason [`iter_mut`](Self::iter_mut) is: the result borrows the query
+    /// exclusively. To tell "one" from "several" it has to look at a second row; that second item
+    /// is built and dropped without being written, so it is not marked changed.
+    pub fn single_mut(&mut self) -> Result<(u32, Q::Item<'_>), QuerySingleError> {
+        let mut rows = self.iter_inner();
+        let first = rows.next().ok_or(QuerySingleError::NoEntities)?;
+        if rows.next().is_some() {
+            return Err(QuerySingleError::MultipleEntities);
+        }
+        Ok(first)
+    }
+
     /// Generation-validated mutable access (see [`Query::get_entity`]).
     #[inline]
     pub fn get_mut_entity(&mut self, entity: Entity) -> Option<Q::Item<'_>> {
@@ -398,6 +412,39 @@ impl<'w, Q: ReadOnlyQuery> Query<'w, Q> {
     /// [`Query::iter`]/[`Query::iter_mut`] instead. (Table `With`/`Without` is safe.)
     pub fn iter_chunks<'a>(&'a self) -> QueryChunksIter<'a, 'w, Q> {
         self.iter_chunks_inner()
+    }
+
+    /// The one matching row — `(id, item)` — or why there is not exactly one.
+    ///
+    /// For the query a game writes for *the* player, *the* main camera, *the* score: written as a
+    /// loop it silently does the wrong thing in both edge cases — no body runs when nothing has
+    /// spawned yet, and the last of two matches wins without a word when something spawned twice.
+    /// This says which case it is.
+    ///
+    /// ```
+    /// # use gizmo_core::prelude::*;
+    /// # use gizmo_core::query::QuerySingleError;
+    /// # #[derive(Clone, Debug)] struct Player(u32);
+    /// # gizmo_core::impl_component!(Player);
+    /// let mut world = World::new();
+    /// assert_eq!(world.query::<&Player>().unwrap().single().err(), Some(QuerySingleError::NoEntities));
+    ///
+    /// let e = world.spawn();
+    /// world.add_component(e, Player(7));
+    /// let q = world.query::<&Player>().unwrap();
+    /// let (id, p) = q.single().unwrap();
+    /// assert_eq!((id, p.0), (e.id(), 7));
+    /// ```
+    ///
+    /// It walks at most two rows, and it applies the per-row filters exactly as
+    /// [`iter`](Self::iter) does, so a `Changed<T>` query is "the one that changed this frame".
+    pub fn single(&self) -> Result<(u32, Q::Item<'_>), QuerySingleError> {
+        let mut rows = self.iter_inner();
+        let first = rows.next().ok_or(QuerySingleError::NoEntities)?;
+        if rows.next().is_some() {
+            return Err(QuerySingleError::MultipleEntities);
+        }
+        Ok(first)
     }
 
     /// The [`Entity`] handle — id **and generation** — for a raw id this query yielded, or `None`

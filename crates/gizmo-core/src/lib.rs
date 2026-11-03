@@ -76,7 +76,8 @@ pub use input::{ActionMap, Input, InputBinding};
 pub use pool::{PoolManager, Pooled};
 pub use profiler::FrameProfiler;
 pub use query::{
-    Changed, FetchComponent, Mut, Or, Query, ReadOnlyQuery, With, Without, WorldQuery,
+    Changed, FetchComponent, Mut, Or, Query, QuerySingleError, ReadOnlyQuery, With, Without,
+    WorldQuery,
 };
 pub use registry::{ComponentRegistry, RegistryError};
 pub use state::{in_state, DespawnOnExit, State};

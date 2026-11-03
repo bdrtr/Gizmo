@@ -21,6 +21,31 @@ pub use default_filters::DefaultQueryFilters;
 pub use fetch::{FetchComponent, Mut};
 pub use iter::{QueryChunksIter, QueryIter};
 
+/// Why [`Query::single`] / [`Query::single_mut`] found no one answer.
+///
+/// Both cases are ordinary game states rather than bugs — the player has not spawned yet, or a
+/// second camera was added for split screen — so they come back as a value instead of a panic,
+/// and a system decides what each one means.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuerySingleError {
+    /// Nothing matched.
+    NoEntities,
+    /// More than one entity matched; `single` will not pick one for you.
+    MultipleEntities,
+}
+
+impl std::fmt::Display for QuerySingleError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoEntities => f.write_str("the query matched no entity"),
+            Self::MultipleEntities => f.write_str("the query matched more than one entity"),
+        }
+    }
+}
+
+impl std::error::Error for QuerySingleError {}
+
 // =========================================================================
 // SEALED PATTERN
 // =========================================================================
