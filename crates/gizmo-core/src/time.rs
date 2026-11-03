@@ -1,7 +1,8 @@
 //! Frame timing: [`Time`], the variable render clock, and [`PhysicsTime`], the fixed-step
 //! accumulator that drives the simulation.
 //!
-//! Neither type reads the system clock. Both are *fed* a delta measured by the caller
+//! Neither type reads the system clock — [`unix_time`], the wall clock, is the one function here
+//! that does. Both are *fed* a delta measured by the caller
 //! ([`Time::update`], [`PhysicsTime::accumulate`]), which is what makes a recorded or
 //! replayed frame sequence reproduce the same stepping as the original run.
 //!
@@ -9,6 +10,29 @@
 //! is handed, and whether that is [`Time::dt`] — already multiplied by `time_scale` and
 //! capped at `max_dt` — or an independently measured one is the caller's choice, not
 //! something decided here.
+
+/// Wall-clock time: seconds since the Unix epoch, fractional — for what happens while a game is
+/// closed (crops that grew, energy that refilled), a daily reward, a timestamp in a save.
+///
+/// [`Time`] is the frame clock and starts at zero every run; this is the calendar. On the web it
+/// comes from the browser (`std::time::SystemTime::now` panics on `wasm32-unknown-unknown`, so a
+/// game calling it directly works natively and crashes in the browser). A clock set before 1970
+/// reads 0. Not monotonic — the user can change the system clock — so clamp differences you
+/// compute from it.
+///
+/// ```
+/// let then = gizmo_core::time::unix_time();
+/// let now = gizmo_core::time::unix_time();
+/// assert!(now >= then && then > 1.7e9); // after 2023
+/// ```
+#[must_use]
+pub fn unix_time() -> f64 {
+    #[cfg(target_arch = "wasm32")]
+    let now = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH);
+    #[cfg(not(target_arch = "wasm32"))]
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+    now.map_or(0.0, |d| d.as_secs_f64())
+}
 
 /// Engine-wide time management.
 ///

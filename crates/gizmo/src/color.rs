@@ -49,7 +49,10 @@ impl Color {
         Color(Vec4::new(r, g, b, a))
     }
 
-    /// Construct from RGB integer values between 0-255.
+    /// Construct from RGB integer values between 0-255, taken **literally** — `255 / 255` per
+    /// channel, no sRGB decoding. For a colour picked in a paint program or written as CSS, which
+    /// is sRGB, use [`srgb_u8`](Self::srgb_u8): used as-is in a linear slot (a material's albedo,
+    /// a UI `BackgroundColor`) it reads brighter and greyer than it looked where it was picked.
     #[inline]
     pub fn rgb8(r: u8, g: u8, b: u8) -> Self {
         Color(Vec4::new(
@@ -60,7 +63,9 @@ impl Color {
         ))
     }
 
-    /// Construct from a hex string. Example: `Color::hex("#FF5733")`, `Color::hex("FF5733")` or RGBA `#FF5733AA`.
+    /// Construct from a hex string. Example: `Color::hex("#FF5733")`, `Color::hex("FF5733")` or RGBA
+    /// `#FF5733AA`. Taken **literally**, like [`rgb8`](Self::rgb8) — a hex code from a paint program
+    /// is sRGB; for that, [`srgb_hex`](Self::srgb_hex).
     pub fn hex(s: &str) -> Self {
         let s = s.trim_start_matches('#');
         let bytes = s.as_bytes();
@@ -75,6 +80,39 @@ impl Color {
         } else {
             Color::WHITE
         }
+    }
+
+    /// A colour given in **sRGB** — what a colour picker, a paint program or CSS shows — converted to
+    /// the linear values the engine's colour slots expect (material albedo, light colour, UI
+    /// `BackgroundColor`, text). Alpha is linear already and passes through.
+    ///
+    /// ```
+    /// # use gizmo::color::Color;
+    /// let mid = Color::srgb(0.5, 0.5, 0.5);
+    /// assert!((mid.0.x - 0.214).abs() < 1e-3); // sRGB 50 % grey is 21 % linear
+    /// assert_eq!(Color::srgb_hex("#808080"), Color::srgb_u8(128, 128, 128));
+    /// ```
+    #[must_use]
+    pub fn srgb(r: f32, g: f32, b: f32) -> Self {
+        let decode = |c: f32| {
+            let c = c.clamp(0.0, 1.0);
+            if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+        };
+        Color(Vec4::new(decode(r), decode(g), decode(b), 1.0))
+    }
+
+    /// [`srgb`](Self::srgb) from 0–255 channels — a colour picker's numbers.
+    #[must_use]
+    pub fn srgb_u8(r: u8, g: u8, b: u8) -> Self {
+        Self::srgb(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0)
+    }
+
+    /// [`srgb`](Self::srgb) from a hex code — `#RRGGBB` or `#RRGGBBAA` (alpha taken linear), the `#`
+    /// optional. Anything shorter is white, as in [`hex`](Self::hex).
+    #[must_use]
+    pub fn srgb_hex(s: &str) -> Self {
+        let raw = Self::hex(s);
+        Self::srgb(raw.0.x, raw.0.y, raw.0.z).with_alpha(raw.0.w)
     }
 
     /// Converts the color to Hex format and returns it. Example: "#FF5733"
@@ -137,6 +175,20 @@ impl From<Vec4> for Color {
 
 #[cfg(test)]
 mod tests {
+    /// sRGB decoding at the ends and across the curve's knee, and alpha passing through untouched:
+    /// black and white are fixed points, the linear toe below 0.04045 divides by 12.92, the power
+    /// segment above it gives 21.4 % for 50 %.
+    #[test]
+    fn srgb_constructors_decode_to_linear() {
+        let close = |a: f32, b: f32| (a - b).abs() < 1e-4;
+        assert_eq!(Color::srgb(0.0, 1.0, 0.0), Color::rgb(0.0, 1.0, 0.0), "0 and 1 are fixed points");
+        assert!(close(Color::srgb(0.04, 0.0, 0.0).0.x, 0.04 / 12.92), "the linear toe");
+        assert!(close(Color::srgb(0.5, 0.0, 0.0).0.x, 0.21404), "the power segment");
+        let c = Color::srgb_hex("#80808040");
+        assert!(close(c.0.x, 0.21586) && close(c.0.w, 64.0 / 255.0), "hex decodes the colour, not the alpha: {c:?}");
+        assert_eq!(Color::srgb_hex("FFFFFF"), Color::WHITE);
+    }
+
     use super::*;
 
     fn approx(a: f32, b: f32) {

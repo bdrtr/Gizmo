@@ -91,6 +91,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   steered as some other car — `pist` did). Every car in the tree had written the same four-corner
   loop. Tested driving: straight is −Z, a positive steering input turns left; putting the front
   axle at +Z fails it. `pist` uses it.
+- **`gizmo_core::time::unix_time()`** — wall-clock seconds since the Unix epoch, for what happens
+  while a game is closed (crops that grew, energy that refilled) or a save's timestamp. `Time` is
+  the frame clock and starts at zero every run; `std::time::SystemTime::now()` works natively but
+  panics on `wasm32-unknown-unknown`, so a game calling it directly crashed in the browser. This
+  reads the browser's clock there. Doctest.
+- **`Color::srgb` / `srgb_u8` / `srgb_hex`** — a colour as a picker, a paint program or CSS gives
+  it (sRGB), converted to the linear values the engine's colour slots read. `Color::hex` and
+  `rgb8` take their numbers literally, so a palette's dark green came out grey-green; their docs
+  now say so and point here. Tested at the fixed points, the linear toe, the power segment and
+  the alpha (which passes through).
+- **`bostan`, the eighteenth game** — a garden that grows while the game is closed: plant, wait,
+  harvest, buy dearer seeds and watering; planting times are wall-clock and saved, so the next
+  launch counts what ripened. It found the two items above.
 - **`kopru`, the seventeenth game** — bridge building: click beams between grid nodes, then a
   120 kg ball tries to cross; beams turn red with their joints' `load()` and joints past their
   threshold snap. Its three gaps — the unreadable joint load, point joints breaking at half their

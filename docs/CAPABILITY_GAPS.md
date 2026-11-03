@@ -1262,6 +1262,20 @@ it was already there (`move_axis`, `right_stick`, `cursor_on_plane`, `Timer`, `o
   still loads), and for a name without an extension the error lists the primitive keys. GPU-tested:
   two requests share one buffer, collection forgets it; not inserting into the cache fails it.
 
+### C16n. The eighteenth game: time while closed (2026-11-03, `bostan`)
+
+`demo/src/bin/bostan.rs` is a garden idle game: plant a crop on a plot, wait, harvest, sell, buy
+dearer seeds and a watering upgrade. Planting times are wall-clock and saved, so closing the game
+does not stop the garden and the next launch reports what ripened. Two gaps, both closed:
+
+- ~~**No wall clock.**~~ **Closed.** `gizmo_core::time::unix_time()`; `SystemTime::now` panics on
+  `wasm32-unknown-unknown`, so the obvious code worked natively and crashed in the browser.
+- ~~**Colours from a palette came out washed.**~~ **Closed.** The engine's colour slots are linear;
+  `Color::hex` / `rgb8` take numbers literally. `Color::srgb` / `srgb_u8` / `srgb_hex` decode.
+
+`SaveData` with a `serde` struct holding a vector of enums, `Display::Grid`, `ProgressBar` and
+`Clicked` worked on the first try.
+
 ### C16m. The seventeenth game: a structure of joints (2026-11-03, `kopru`)
 
 `demo/src/bin/kopru.rs` is a bridge builder: beams drawn between grid nodes become bodies, nodes
