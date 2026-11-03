@@ -150,6 +150,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   calls; local-first fails it.
 - **`LoopbackTransport` is `Send + Sync`** (its queues were `Rc<RefCell<_>>`), so a session over it
   can be a `World` resource — a local two-player game over a simulated link.
+- **`karinca`, the twenty-sixth game** — an ant colony of 600 `NavAgent`s; walls the player drops
+  re-route the whole colony on one frame. `karinca --test` runs 40 s headless. It found the two
+  AI items below.
 - **A crowd's routes are searched in parallel, and an unreachable one is not searched for every
   frame.** Every route search ran on one thread inside the steering loop, so a crowd that got a
   target on one frame paid them all at once; and an agent whose target was walled off cleared its

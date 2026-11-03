@@ -1262,6 +1262,20 @@ it was already there (`move_axis`, `right_stick`, `cursor_on_plane`, `Timer`, `o
   still loads), and for a name without an extension the error lists the primitive keys. GPU-tested:
   two requests share one buffer, collection forgets it; not inserting into the cache fails it.
 
+### C16v. The twenty-sixth game: a crowd (2026-11-04, `karinca`)
+
+`demo/src/bin/karinca.rs` is an ant colony: 600 `NavAgent`s walk between a nest and food piles;
+the player drops walls (every agent re-routes on that frame) and new piles. `karinca --test` opens
+no window: 40 s with a wall across the colony from 10 s to 25 s — 748 pieces carried, the longest
+AI frame 1.6 ms. Two gaps, both closed, measured with a 100 × 100 crowd probe before the game was
+written:
+
+- ~~**A crowd's route searches ran on one thread**~~ — 1000 agents given a target on one frame
+  cost 44 ms; in parallel, 8.4 ms.
+- ~~**An unreachable target was searched for every frame**~~ — 4000 agents on a cluttered grid
+  put ~950 searches into every frame. A failed search waits for the schedule now, and
+  `NavAgent::route_failed()` lets the game pick another goal (this one does).
+
 ### C16u. The twenty-fifth game: rules written in Lua (2026-11-04, `yilan`)
 
 `demo/src/bin/yilan.rs` is snake with every rule in `demo/assets/scripts/yilan.lua`; the Rust side
