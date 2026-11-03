@@ -576,6 +576,21 @@ impl AssetManager {
         }
     }
 
+    /// Drops the cached upload of the `MeshData` allocation `key` if nothing draws it any more (the
+    /// cache's own handle is the only one left) — what the loader calls when an entity's data was
+    /// replaced, since the game path never runs [`garbage_collect`](Self::garbage_collect).
+    pub fn release_data_mesh(&mut self, key: usize) {
+        if self.data_meshes.get(&key).is_some_and(|(_, mesh)| std::sync::Arc::strong_count(&mesh.vbuf) == 1) {
+            self.data_meshes.remove(&key);
+        }
+    }
+
+    /// How many `MeshData` uploads the cache holds.
+    #[must_use]
+    pub fn data_mesh_count(&self) -> usize {
+        self.data_meshes.len()
+    }
+
     /// `data` on the GPU — uploaded the first time, shared by every clone after (see
     /// [`MeshData`](crate::components::MeshData)). `None` for empty data.
     pub fn mesh_from_data(&mut self, device: &wgpu::Device, data: &crate::components::MeshData) -> Option<Mesh> {

@@ -6,6 +6,12 @@ use wgpu::Device;
 use wgpu::Queue;
 use wgpu::BindGroupLayout;
 
+/// Which [`MeshData`](crate::components::MeshData) allocation an entity's mesh was uploaded from,
+/// so a replaced `MeshData` is uploaded again. Internal bookkeeping of the asset loader.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct UploadedFrom(usize);
+gizmo_core::impl_component!(UploadedFrom);
+
 /// Continuously scans the scene for newly added `MeshSource` and `MaterialSource` components and
 /// loads the `Mesh` and `Material` GPU components they are missing.
 ///
@@ -27,8 +33,9 @@ pub fn run_asset_loading_system(
     asset_manager: &mut AssetManager,
 ) {
     let mut missing_meshes = Vec::new();
-    // Geometry made in code (`MeshData`) waiting for its upload.
-    let mut missing_data: Vec<(u32, crate::components::MeshData)> = Vec::new();
+    // Geometry made in code (`MeshData`) waiting for its upload — first time, or because the
+    // entity's `MeshData` was replaced since (with the allocation its current mesh came from).
+    let mut missing_data: Vec<(u32, crate::components::MeshData, Option<usize>)> = Vec::new();
     let mut missing_materials = Vec::new();
     // Entities whose material a DESCRIPTION will build (see this function's docs) but whose
     // `MeshRenderer` is still this system's to add.
@@ -39,6 +46,7 @@ pub fn run_asset_loading_system(
         let mesh_sources = world.borrow::<MeshSource>();
         let meshes = world.borrow::<Mesh>();
         let mesh_data = world.borrow::<crate::components::MeshData>();
+        let uploaded = world.borrow::<UploadedFrom>();
 
         let material_sources = world.borrow::<MaterialSource>();
         let materials = world.borrow::<Material>();
@@ -51,8 +59,16 @@ pub fn run_asset_loading_system(
             // data is the more specific of the two.
             let data = mesh_data.get(id);
             if let Some(data) = data {
-                if meshes.get(id).is_none() {
-                    missing_data.push((id, data.clone()));
+                let from = uploaded.get(id).map(|u| u.0);
+                // Not uploaded yet, or uploaded from another allocation: the game replaced the
+                // data (a vision cone rebuilt each frame). It used to be read once — the first
+                // frame the entity had no `Mesh` — so every later change drew nothing new.
+                let stale = match from {
+                    Some(key) => key != data.key(),
+                    None => meshes.get(id).is_none(),
+                };
+                if stale {
+                    missing_data.push((id, data.clone(), from));
                 }
             }
 
@@ -86,9 +102,19 @@ pub fn run_asset_loading_system(
         );
     }
 
-    for (id, data) in missing_data {
-        if let (Some(entity), Some(mesh)) = (world.get_entity(id), asset_manager.mesh_from_data(device, &data)) {
-            world.add_component(entity, mesh);
+    for (id, data, from) in missing_data {
+        let Some(entity) = world.get_entity(id) else { continue };
+        match asset_manager.mesh_from_data(device, &data) {
+            Some(mesh) => world.add_component(entity, mesh),
+            // Emptied: nothing to draw, so no mesh — not the last shape it had.
+            None => world.remove_component::<Mesh>(entity),
+        }
+        world.add_component(entity, UploadedFrom(data.key()));
+        // The upload this entity no longer draws, unless another entity shares it: the game path
+        // never runs `garbage_collect`, so data replaced every frame would otherwise keep every
+        // frame's vertices and GPU buffer.
+        if let Some(old) = from.filter(|&old| old != data.key()) {
+            asset_manager.release_data_mesh(old);
         }
     }
 

@@ -434,6 +434,9 @@ pub struct PhysicsWorld {
     /// speed for stiffer, less stretchy joints. Not serialized.
     #[serde(skip)]
     pub joint_solver: crate::joints::JointSolver,
+    /// How many `RigidBody` entities without a `Collider` the last ECS sync saw — they are not
+    /// simulated, and the sync warns when the count grows. Diagnostic only.
+    pub(crate) bodies_without_collider: usize,
 
     /// Localized gravity overrides; see [`GravityField`] for how overlaps resolve.
     /// Empty (the default) means every body uses `integrator.gravity`.

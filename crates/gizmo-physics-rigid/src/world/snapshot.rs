@@ -54,6 +54,7 @@ impl PhysicsWorld {
             fracture_events: _,
             metrics: _,
             render_alpha: _,
+            bodies_without_collider: _,
 
             // ── Structure. A restore is index-aligned and therefore *requires* these to be
             //    identical already; carrying them would hide a caller error rather than fix it.

@@ -50,6 +50,22 @@ pub fn physics_step_system(world: &World, dt: f32) {
         }
     };
 
+    // A body is synced only with a Collider: a `RigidBody` without one is not simulated at all —
+    // no gravity, no velocity integration — and stands still without a word. A guard driven by
+    // its `NavAgent`'s velocity did exactly that (`gizli`). Say so once, when the count grows.
+    let orphans = world
+        .query::<(&RigidBody, gizmo_core::query::Without<Collider>)>()
+        .map_or(0, |q| q.iter().count());
+    if orphans > physics_world.bodies_without_collider {
+        tracing::warn!(
+            orphans,
+            "[Physics] {orphans} RigidBody entit{} without a Collider — not simulated, so they will not move; \
+             add a Collider (one on a layer with mask 0 if it should touch nothing)",
+            if orphans == 1 { "y" } else { "ies" }
+        );
+    }
+    physics_world.bodies_without_collider = orphans;
+
     // 2. Gather Compound Shapes (Read Locks Only)
     let mut compound_shapes_map = std::collections::HashMap::new();
     {
@@ -928,5 +944,37 @@ mod apply_impulse_tests {
         assert!(!apply_impulse(&mut world, wall, Vec3::X, Vec3::ZERO));
         assert_eq!(world.borrow::<Velocity>().get(wall).unwrap().linear, Vec3::ZERO);
         assert!(!apply_impulse(&mut world, 9999, Vec3::X, Vec3::ZERO));
+    }
+}
+
+#[cfg(test)]
+mod collider_less_body_tests {
+    use super::*;
+    use gizmo_core::world::World;
+    use gizmo_math::Vec3;
+
+    /// A `RigidBody` without a `Collider` is not simulated — it does not fall — and the sync
+    /// counts it so it can warn (once, when the count grows) instead of leaving it standing still
+    /// without a word. With a collider the same body falls.
+    #[test]
+    fn a_body_without_a_collider_is_counted_and_does_not_move() {
+        let mut world = World::new();
+        world.insert_resource(PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0)));
+        let bare = world.spawn();
+        world.add_component(bare, Transform::new(Vec3::new(0.0, 5.0, 0.0)));
+        world.add_component(bare, RigidBody::new(1.0, true));
+        world.add_component(bare, Velocity::default());
+        let full = world.spawn();
+        world.add_component(full, Transform::new(Vec3::new(3.0, 5.0, 0.0)));
+        world.add_component(full, RigidBody::new(1.0, true));
+        world.add_component(full, Velocity::default());
+        world.add_component(full, Collider::sphere(0.5));
+        for _ in 0..30 {
+            physics_step_system(&world, 1.0 / 60.0);
+        }
+        assert_eq!(world.get_resource::<PhysicsWorld>().unwrap().bodies_without_collider, 1);
+        let y = |e: gizmo_core::entity::Entity| world.borrow::<Transform>().get(e.id()).unwrap().position.y;
+        assert_eq!(y(bare), 5.0, "not simulated");
+        assert!(y(full) < 4.0, "the same body with a collider falls");
     }
 }

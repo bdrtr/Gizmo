@@ -1262,6 +1262,18 @@ it was already there (`move_axis`, `right_stick`, `cursor_on_plane`, `Timer`, `o
   still loads), and for a name without an extension the error lists the primitive keys. GPU-tested:
   two requests share one buffer, collection forgets it; not inserting into the cache fails it.
 
+### C16o. The nineteenth game: being seen (2026-11-03, `gizli`)
+
+`demo/src/bin/gizli.rs` is a top-down stealth game: guards patrol a warehouse on `NavGrid`, each
+casting a vision cone that is rebuilt every frame from rays against the walls (a `MeshData`), and
+suspicion fills while the player is inside one with nothing in between. Four gaps, all closed:
+
+- ~~**A replaced `MeshData` was never drawn**~~ — read once, on the first frame without a `Mesh`.
+  Re-uploaded on change now, the old upload released (the game path never garbage-collects).
+- ~~**An agent sent to its own cell never arrived**~~ — an empty route skipped the arrival check.
+- ~~**A `RigidBody` without a `Collider` stood still silently**~~ — not simulated; warned now.
+- ~~**Two `Ray` types, no conversion**~~ — `From` both ways.
+
 ### C16n. The eighteenth game: time while closed (2026-11-03, `bostan`)
 
 `demo/src/bin/bostan.rs` is a garden idle game: plant a crop on a plot, wait, harvest, sell, buy

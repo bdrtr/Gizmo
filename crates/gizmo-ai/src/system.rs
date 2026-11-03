@@ -412,6 +412,17 @@ pub fn ai_navigation_system(world: &World, dt: f32) {
 
             agent.state = crate::components::NavAgentState::Moving;
         } else {
+            // No route: the target is in the agent's own cell (an empty path), or there is none to
+            // it. Steering straight at it is all there is — and arriving has to count here too: an
+            // agent sent to the cell it stands in used to stay `Moving` with its target set forever,
+            // so a patrol whose first point was where the guard started never went on to the next.
+            if (target_pos - t.position).length() < agent.arrival_radius {
+                v.linear = Vec3::ZERO;
+                agent.target = None;
+                agent.state = crate::components::NavAgentState::Reached;
+                reached_count += 1;
+                continue;
+            }
             // Yol yoksa, en azından hedef doğrultusunda doğrudan gitmeyi dene
             steering_force += steering::arrive(
                 t.position,
@@ -709,6 +720,25 @@ mod frame_tests {
         // 300 agents over a 30-frame interval is 10 a frame; the golden-ratio slots are not
         // perfectly even, so allow some bunching — but nothing like 300.
         assert!(worst <= 30, "{worst} agents replanned on one frame");
+    }
+
+    /// An agent sent to the cell it stands in arrives — target cleared, `Reached` — instead of
+    /// staying `Moving` with the target set forever (its route is empty, and only the route-
+    /// following branch used to check for arrival). A patrol whose first point is where the guard
+    /// starts depended on it.
+    #[test]
+    fn an_agent_sent_to_its_own_cell_arrives() {
+        let (mut world, e) = world_with_agent(Vec3::new(3.5, 0.0, 3.5), Some(Vec3::new(3.6, 0.0, 3.4)));
+        world.insert_resource({
+            let mut g = NavGrid::centred_on(1.0, 16, 16, Vec3::ZERO);
+            g.needs_rebuild = false;
+            g
+        });
+        ai_navigation_system(&world, 1.0 / 60.0);
+        let agents = world.borrow::<NavAgent>();
+        let agent = agents.get(e.id()).unwrap();
+        // `Reached` on the step it arrives; the next one, with no target, is `Idle`.
+        assert_eq!((agent.target, agent.state), (None, NavAgentState::Reached));
     }
 
     /// An agent with nothing to do is damped, not steered — the same call, the other branch.

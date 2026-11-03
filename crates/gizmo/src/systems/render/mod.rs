@@ -4283,6 +4283,54 @@ mod golden_render_tests {
         let _ = std::fs::remove_file(path);
     }
 
+    /// A `MeshData` replaced on an entity is uploaded again — the mesh follows the data, not the
+    /// first frame's — and the uploads it no longer draws are released as it goes, so data
+    /// rebuilt every frame (a vision cone) does not pile up. Emptied data removes the mesh.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn a_replaced_mesh_data_is_uploaded_again_and_the_old_one_released() {
+        use crate::renderer::components::{Mesh, MeshData};
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let renderer = crate::test_gpu::headless_renderer(64, 64).await;
+            let mut assets = AssetManager::new();
+            let mut world = World::new();
+            let e = world.spawn();
+            world.add_component(e, MeshData::cylinder(1.0, 2.0, 8));
+            let load = |world: &mut World, assets: &mut AssetManager| {
+                crate::renderer::asset_loading::run_asset_loading_system(
+                    world,
+                    &renderer.device,
+                    &renderer.queue,
+                    &renderer.scene.texture_bind_group_layout,
+                    assets,
+                );
+            };
+            load(&mut world, &mut assets);
+            let first = world.borrow::<Mesh>().get(e.id()).map(|m| m.vertex_count);
+            assert!(first.is_some(), "the first data is uploaded");
+            for segments in 9..60 {
+                world.add_component(e, MeshData::cylinder(1.0, 2.0, segments));
+                load(&mut world, &mut assets);
+            }
+            let last = world.borrow::<Mesh>().get(e.id()).map(|m| m.vertex_count);
+            // Uploads are indexed (shared corners merged), so compare with a fresh upload.
+            let expected = AssetManager::new().mesh_from_data(&renderer.device, &MeshData::cylinder(1.0, 2.0, 59)).map(|m| m.vertex_count);
+            assert_ne!(last, first, "the mesh followed the data");
+            assert_eq!(last, expected, "the mesh is the latest data's");
+            assert!(assets.data_mesh_count() <= 1, "{} uploads kept for one entity", assets.data_mesh_count());
+            world.add_component(e, MeshData::new(Vec::new()));
+            load(&mut world, &mut assets);
+            assert!(world.borrow::<Mesh>().get(e.id()).is_none(), "emptied data draws nothing");
+        });
+    }
+
     /// **Picture in picture:** the primary camera with no viewport is the whole frame, and a
     /// second camera with a viewport and a higher order draws over its corner — a minimap. The
     /// main view used to be skipped (black) as soon as any camera had a viewport.

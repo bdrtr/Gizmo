@@ -101,6 +101,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `rgb8` take their numbers literally, so a palette's dark green came out grey-green; their docs
   now say so and point here. Tested at the fixed points, the linear toe, the power segment and
   the alpha (which passes through).
+- **`From` between `gizmo::math::Ray` and `gizmo::physics::Ray`** — the cursor's ray and the
+  physics query's were two types with no conversion; `world.raycast(&cursor_ray.into(), …)` works.
+- **`gizli`, the nineteenth game** — a stealth game: guards patrol, their vision cones are rebuilt
+  every frame from rays against the walls, suspicion fills while you are seen. It found the four
+  items above.
 - **`bostan`, the eighteenth game** — a garden that grows while the game is closed: plant, wait,
   harvest, buy dearer seeds and watering; planting times are wall-clock and saved, so the next
   launch counts what ripened. It found the two items above.
@@ -1919,6 +1924,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   before.
 
 ### Fixed
+
+- **A replaced `MeshData` was never drawn.** The asset loader read an entity's `MeshData` only on
+  the first frame it had no `Mesh`, so geometry rebuilt in code (a vision cone each frame) stayed
+  as it was first uploaded. It now tracks which allocation each entity's mesh came from and uploads
+  again when the data changes, releasing the upload no entity draws any more (the game path never
+  ran `garbage_collect`, so replacing data every frame would have kept every frame's buffer), and
+  emptied data removes the mesh. GPU-tested over fifty replacements: the mesh is the latest data's
+  and the cache holds one upload; never re-uploading, or not releasing, fails it.
+- **A `NavAgent` sent to the cell it stands in never arrived.** Its route is empty, and only the
+  route-following branch checked for arrival: it stayed `Moving` with its target set, so a patrol
+  whose first point was the guard's own spot never went on. A route-less agent arrives too now.
+- **A `RigidBody` without a `Collider` stood still without a word.** The physics sync gathers bodies
+  with colliders only, so such a body — a guard steered by its `NavAgent`'s velocity — is never
+  simulated. It warns when the count of such bodies grows (once, not every frame).
 
 - **Fixed, hinge and ball-socket joints broke at half their `break_force`.** Their shared point
   constraint skipped its linear rows while the anchors were within 0.1 mm — so a perfectly

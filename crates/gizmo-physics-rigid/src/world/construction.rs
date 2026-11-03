@@ -32,6 +32,7 @@ impl PhysicsWorld {
             fracture_cache: crate::fracture::PreFracturedCache::new(),
             joints: Vec::new(),
             joint_solver: crate::joints::JointSolver::default(),
+            bodies_without_collider: 0,
             gravity_fields: Vec::new(),
             fluid_zones: Vec::new(),
 

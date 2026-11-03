@@ -38,6 +38,24 @@ pub struct Ray {
     pub direction: Vec3, // Should be normalized
 }
 
+/// The math crate's ray — what `gizmo::pointer::cursor_ray` and `Camera::screen_to_ray` return —
+/// as a physics query ray, so a click can be cast into the world: `world.raycast(&ray.into(), …)`.
+/// The two types existed side by side with no conversion between them, and a game that wanted the
+/// body under the cursor copied the fields across by hand. Both keep a unit direction, so nothing
+/// is renormalised here beyond what [`Ray::new`] already does.
+impl From<gizmo_math::Ray> for Ray {
+    fn from(ray: gizmo_math::Ray) -> Self {
+        Ray::new(Vec3::from(ray.origin), Vec3::from(ray.direction))
+    }
+}
+
+/// The other way: a physics ray as the math crate's, for its plane and box intersections.
+impl From<Ray> for gizmo_math::Ray {
+    fn from(ray: Ray) -> Self {
+        gizmo_math::Ray::new(ray.origin, ray.direction)
+    }
+}
+
 impl Ray {
     /// Creates a new ray. `direction` is normalised internally.
     ///
@@ -898,6 +916,20 @@ impl Raycast {
 
 #[cfg(test)]
 mod tests {
+    /// The math crate's ray and the physics ray convert both ways and keep their origin and
+    /// (unit) direction; a cursor ray converted this way hits what it points at.
+    #[test]
+    fn math_and_physics_rays_convert_both_ways() {
+        let m = gizmo_math::Ray::new(Vec3::new(1.0, 2.0, 3.0), Vec3::new(0.0, 0.0, -2.0));
+        let p: Ray = m.into();
+        assert_eq!((p.origin, p.direction), (Vec3::new(1.0, 2.0, 3.0), Vec3::new(0.0, 0.0, -1.0)));
+        let back: gizmo_math::Ray = p.into();
+        assert_eq!(back, m);
+        let ball = crate::components::ColliderShape::Sphere(crate::components::SphereShape { radius: 1.0 });
+        let hit = Raycast::ray_shape(&p, &ball, &crate::components::Transform::new(Vec3::new(1.0, 2.0, -5.0)));
+        assert!(hit.is_some_and(|(d, _)| (d - 7.0).abs() < 1e-4), "{hit:?}");
+    }
+
     use super::*;
     use crate::components::{Collider, CylinderShape};
     use gizmo_math::Quat;
