@@ -124,12 +124,10 @@ fn gather_colliders(world: &World) -> Vec<(BodyHandle, Transform, Collider)> {
 ///   and is then invisible to the wheels as well as to the solver.
 /// * **A wheel sees the collider the *solver* sees**, which is the entity's own shape merged
 ///   with its children into a `Compound`, carrying the entity's material (its `PhysicsMaterial`
-///   component when it has one, else `Collider::material` — `Collider::material_with`) — and,
-///   today, `is_trigger == false` regardless of what the ECS `Collider` says, because
-///   `physics_step_system` drops that flag when it rebuilds the collider. So an ECS trigger
-///   volume that also has a `RigidBody` is now drivable. That is a defect in the ECS→solver
-///   bridge, not in the filter used here (which does exclude triggers); the wheels simply
-///   agree with the solver, for which that volume is already solid.
+///   component when it has one, else `Collider::material` — `Collider::material_with`) — and
+///   its `is_trigger` flag, which the filter used here excludes, so a trigger volume is not
+///   drivable. (This line used to say the ECS→solver bridge dropped that flag and made such a
+///   volume solid; the bridge has since cloned the authored collider, and the flag travels.)
 /// * **Unchanged:** the chassis never hits itself, there is no layer mask (every layer is
 ///   fair game), dynamic bodies are still drivable, the nearest hit wins, and the surface's
 ///   `dynamic_friction` still comes from the collider that was hit.
@@ -356,7 +354,7 @@ fn platform_carry(world: &World, colliders: &[(BodyHandle, Transform, Collider)]
         let ray = Ray::new(feet, Vec3::NEG_Y);
         let mut floor: Option<(f32, BodyHandle, Vec3)> = None;
         for (handle, t, c) in colliders {
-            if handle.id() == id {
+            if handle.id() == id || c.is_trigger {
                 continue;
             }
             if let Some((d, _)) = Raycast::ray_shape(&ray, &c.shape, t) {

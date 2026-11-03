@@ -114,6 +114,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   never touched. A scene file written before the field loads it with the default. Removing the
   push, the speed cap (the crate reaches 3.55 m/s ahead of a 3 m/s walk) or the serde default
   each fails a test.
+- **A character walks through trigger colliders, and says which it is inside
+  (`CharacterController::triggers`).** The controller swept against every collider alike, so a
+  door sensor (`Collider::with_trigger(true)`) stopped a character as a wall would (x 1.20 in
+  front of a sensor at x 2), a sensor slab under its feet was ground, and a character — not in the
+  physics world without a `RigidBody` — was never named by `trigger_events()` (0 events in 2 s).
+  Triggers are now left out of the sweep, the ground probe and the platform carry, and the ones
+  the capsule overlaps after each step are listed: measured, from x 1.20 to 2.80, exactly
+  2 ± (0.5 + 0.3). Removing the filter or the record fails a test.
 - **`gizli`, the nineteenth game** — a stealth game: guards patrol, their vision cones are rebuilt
   every frame from rays against the walls, suspicion fills while you are seen. It found the four
   items above.

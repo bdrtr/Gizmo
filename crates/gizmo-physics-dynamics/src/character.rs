@@ -124,7 +124,10 @@ pub fn update_character_with_hits(
         max: (transform.position + Vec3::splat(height.max(radius) + max_move_dist)).into(),
     };
 
+    // A trigger volume is not something to stand on or walk into: it goes to its own list,
+    // read only to report what the character ends the step inside (`CharacterController::triggers`).
     let mut near_colliders = Vec::new();
+    let mut near_triggers = Vec::new();
     for col_data in colliders {
         if col_data.0 == _entity {
             continue;
@@ -133,7 +136,11 @@ pub fn update_character_with_hits(
             .2
             .compute_aabb(col_data.1.position, col_data.1.rotation);
         if char_aabb.intersects(aabb) {
-            near_colliders.push(col_data);
+            if col_data.2.is_trigger {
+                near_triggers.push(col_data);
+            } else {
+                near_colliders.push(col_data);
+            }
         }
     }
 
@@ -154,6 +161,7 @@ pub fn update_character_with_hits(
         kcc.is_submerged = true;
         kcc.is_grounded = false;
         swim_step(kcc, transform, vel, &near_colliders, height, radius, surface_y, dt);
+        record_triggers(kcc, transform, collider, &near_triggers);
         return;
     }
     if kcc.is_submerged {
@@ -412,6 +420,33 @@ pub fn update_character_with_hits(
     }
 
     transform.position = current_pos;
+    record_triggers(kcc, transform, collider, &near_triggers);
+}
+
+/// Writes [`CharacterController::triggers`]: the trigger colliders the character's collider
+/// overlaps where the step left it.
+fn record_triggers(
+    kcc: &mut CharacterController,
+    transform: &Transform,
+    collider: &Collider,
+    near_triggers: &[&(BodyHandle, Transform, Collider)],
+) {
+    use gizmo_physics_core::narrowphase::NarrowPhase;
+    kcc.triggers.clear();
+    for (handle, t, c) in near_triggers {
+        let inside = NarrowPhase::test_collision(
+            &collider.shape,
+            transform.position,
+            transform.rotation,
+            &c.shape,
+            t.position,
+            t.rotation,
+        )
+        .is_some();
+        if inside {
+            kcc.triggers.push(*handle);
+        }
+    }
 }
 
 /// Buoyant underwater movement plus wall/terrain sliding (NO step-climb). `surface_y` is the

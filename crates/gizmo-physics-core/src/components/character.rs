@@ -12,10 +12,10 @@ use serde::{Deserialize, Serialize};
 /// the step — `speed` and `jump_buffer_time` are values the game reads and acts on (see their
 /// own docs), which is why changing them alone appears to do nothing.
 ///
-/// Five fields are `#[serde(skip)]` (`is_grounded`, `coyote_timer`, `jump_buffer_timer`,
-/// `drop_through_timer`, `is_submerged`), so a scene reload restores a character with no coyote
-/// grace, no buffered jump or drop, and neither grounded nor submerged until its first step
-/// re-derives them; the tuning fields round-trip intact.
+/// Six fields are `#[serde(skip)]` (`is_grounded`, `coyote_timer`, `jump_buffer_timer`,
+/// `drop_through_timer`, `is_submerged`, `triggers`), so a scene reload restores a character
+/// with no coyote grace, no buffered jump or drop, neither grounded nor submerged and inside no
+/// trigger until its first step re-derives them; the tuning fields round-trip intact.
 ///
 /// **One-way platforms** ([`Collider::one_way`](crate::Collider::one_way)) are honoured: the
 /// character jumps up through one, walks through its sides, and lands on its top — but only
@@ -158,6 +158,15 @@ pub struct CharacterController {
     /// Runtime: is the character currently inside a water volume (swim mode active). Not serialised.
     #[serde(skip)]
     pub is_submerged: bool,
+    /// The trigger colliders ([`Collider::is_trigger`](crate::Collider::is_trigger)) the
+    /// character's collider overlapped at the end of the last step — a pressure plate it stands
+    /// on, a door sensor, a goal zone. An **output**, rewritten every step. `#[serde(skip)]`.
+    ///
+    /// A character without a `RigidBody` is not in the physics world, so the world's
+    /// `trigger_events()` never name it; this is where a game finds out. The step walks
+    /// through trigger colliders rather than into them.
+    #[serde(skip)]
+    pub triggers: Vec<crate::BodyHandle>,
 }
 
 impl CharacterController {
@@ -187,6 +196,7 @@ impl Default for CharacterController {
             water_drag: 2.0,
             swim_acceleration: 8.0,
             is_submerged: false,
+            triggers: Vec::new(),
         }
     }
 }
