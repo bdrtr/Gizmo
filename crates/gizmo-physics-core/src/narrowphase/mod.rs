@@ -48,6 +48,71 @@ use gizmo_math::{Quat, Vec3};
 /// no self-pair check here.
 pub struct NarrowPhase;
 
+
+/// The face axis of a box (`rotation` is the box's) closest to `normal`, signed to match it.
+fn face_axis(normal: Vec3, rotation: Quat) -> Vec3 {
+    [Vec3::X, Vec3::Y, Vec3::Z]
+        .iter()
+        .map(|&a| rotation * a)
+        .max_by(|a, b| a.dot(normal).abs().total_cmp(&b.dot(normal).abs()))
+        .map_or(normal, |a| if a.dot(normal) < 0.0 { -a } else { a })
+}
+
+/// Flattens a compound's per-part contacts, dropping the **seam** contacts of its box parts.
+///
+/// A compound of boxes laid edge to edge — a floor of tiles, a maze board — has seams where the
+/// parts meet, and a body resting a hair inside the surface touches the next box's top *edge*
+/// there as well as the face it rests on. That edge contact's normal leans back against the
+/// motion. Measured on a ball with CCD rolling down seventeen tiles (`labirent`, 2026-11-03): 1.01 m
+/// in two seconds against 2.21 m on one slab (the analytic value), and 2.03 m with these contacts
+/// dropped. Without CCD the tiles cost nothing either way (2.22 m) — the speculative contact is
+/// what the stray edge feeds; the last 8 % is that contact's own (its normal falls back to the
+/// approach direction below a 1 mm gap), and is open.
+///
+/// A box part's edge or corner contact (its normal along none of the box's axes) is dropped when
+/// another part holds the body with a **face** contact on the same plane — within 45° of that
+/// face, its point on the face's plane: the parts are one surface there, and a surface has no
+/// edge. A real edge — a step, a ledge, a wall top — is out of the neighbour's plane and keeps its
+/// contact; a part touched alone keeps everything; parts that are not boxes are left alone.
+fn drop_seam_contacts(per_part: Vec<(Option<Quat>, Vec<ContactPoint>)>) -> Vec<ContactPoint> {
+    if per_part.iter().filter(|(_, c)| !c.is_empty()).count() < 2 {
+        return per_part.into_iter().flat_map(|(_, c)| c).collect();
+    }
+    // Every face contact of a box part: its part, point and normal.
+    let faces: Vec<(usize, Vec3, Vec3, f32)> = per_part
+        .iter()
+        .enumerate()
+        .flat_map(|(i, (rot, contacts))| {
+            contacts.iter().filter_map(move |c| {
+                let r = (*rot)?;
+                (face_axis(c.normal, r).dot(c.normal) >= 0.999).then_some((i, c.point, c.normal, c.penetration))
+            })
+        })
+        .collect();
+    let mut out = Vec::new();
+    for (i, (rot, contacts)) in per_part.into_iter().enumerate() {
+        for c in contacts {
+            let seam = rot.is_some_and(|r| {
+                let face = face_axis(c.normal, r);
+                face.dot(c.normal) < 0.999
+                    && faces.iter().any(|&(j, point, normal, pen)| {
+                        j != i
+                            && normal.dot(face) > std::f32::consts::FRAC_1_SQRT_2
+                            && (point - c.point).dot(face).abs()
+                                <= SEAM_PLANE_TOLERANCE + c.penetration.abs().max(pen.abs())
+                    })
+            });
+            if !seam {
+                out.push(c);
+            }
+        }
+    }
+    out
+}
+
+/// How far off a face's plane a neighbour's contact may sit and still count as on it.
+const SEAM_PLANE_TOLERANCE: f32 = 0.01;
+
 impl NarrowPhase {
     // ── Primitive tests ───────────────────────────────────────────────────
 
@@ -599,24 +664,28 @@ impl NarrowPhase {
     ) -> Vec<ContactPoint> {
         // ── Compound shapes — recurse over sub-shapes ─────────────────────
         if let ColliderShape::Compound(parts) = shape_a {
-            return parts
+            let per_part: Vec<(Option<Quat>, Vec<ContactPoint>)> = parts
                 .iter()
-                .flat_map(|(local_t, sub)| {
+                .map(|(local_t, sub)| {
                     let wp = pos_a + rot_a.mul_vec3(local_t.position);
                     let wr = rot_a * local_t.rotation;
-                    Self::test_collision_manifold(sub, wp, wr, shape_b, pos_b, rot_b)
+                    let boxed = matches!(**sub, ColliderShape::Box(_)).then_some(wr);
+                    (boxed, Self::test_collision_manifold(sub, wp, wr, shape_b, pos_b, rot_b))
                 })
                 .collect();
+            return drop_seam_contacts(per_part);
         }
         if let ColliderShape::Compound(parts) = shape_b {
-            return parts
+            let per_part: Vec<(Option<Quat>, Vec<ContactPoint>)> = parts
                 .iter()
-                .flat_map(|(local_t, sub)| {
+                .map(|(local_t, sub)| {
                     let wp = pos_b + rot_b.mul_vec3(local_t.position);
                     let wr = rot_b * local_t.rotation;
-                    Self::test_collision_manifold(shape_a, pos_a, rot_a, sub, wp, wr)
+                    let boxed = matches!(**sub, ColliderShape::Box(_)).then_some(wr);
+                    (boxed, Self::test_collision_manifold(shape_a, pos_a, rot_a, sub, wp, wr))
                 })
                 .collect();
+            return drop_seam_contacts(per_part);
         }
 
         // ── Primitive dispatch ────────────────────────────────────────────

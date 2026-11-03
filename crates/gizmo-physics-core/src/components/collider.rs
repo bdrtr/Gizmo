@@ -340,6 +340,32 @@ impl Collider {
         }
     }
 
+    /// One collider made of several, each placed at a [`Transform`] relative to the body — a
+    /// maze board's floor tiles and walls, a table's top and legs. Only each part's *shape* is
+    /// taken; material, trigger flag and layer are the compound's own (set them on the result).
+    ///
+    /// Writing the `Compound` variant by hand meant boxing every shape; and the other route,
+    /// child entities with colliders, folds them in from their transforms every frame. As with
+    /// [`offset_box`](Self::offset_box), a moving body's centre of mass comes from the parts'
+    /// positions.
+    ///
+    /// ```
+    /// # use gizmo_physics_core::{Collider, Transform};
+    /// # use gizmo_math::Vec3;
+    /// let table = Collider::compound([
+    ///     (Transform::new(Vec3::new(0.0, 1.0, 0.0)), Collider::box_collider(Vec3::new(1.0, 0.05, 0.6))),
+    ///     (Transform::new(Vec3::new(0.9, 0.5, 0.5)), Collider::box_collider(Vec3::new(0.05, 0.5, 0.05))),
+    /// ]);
+    /// let aabb = table.compute_aabb(Vec3::ZERO, gizmo_math::Quat::IDENTITY);
+    /// assert!((aabb.max.y - 1.05).abs() < 1e-5 && aabb.min.y.abs() < 1e-5);
+    /// ```
+    pub fn compound(parts: impl IntoIterator<Item = (Transform, Collider)>) -> Self {
+        Self {
+            shape: ColliderShape::Compound(parts.into_iter().map(|(t, c)| (t, Box::new(c.shape))).collect()),
+            ..Default::default()
+        }
+    }
+
     /// A box whose centre sits `offset` metres from the collider's local origin, built as
     /// a one-part [`ColliderShape::Compound`].
     ///

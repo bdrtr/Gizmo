@@ -237,7 +237,7 @@ fn rects_to_collider(rects: &[[u32; 4]], tile: gizmo_math::Vec2, depth: f32) -> 
         return None;
     }
     let half_z = (depth.abs() * 0.5).max(1e-3);
-    let parts = rects
+    let parts: Vec<_> = rects
         .iter()
         .map(|&[x0, y0, x1, y1]| {
             let centre = Vec3::new(
@@ -246,16 +246,10 @@ fn rects_to_collider(rects: &[[u32; 4]], tile: gizmo_math::Vec2, depth: f32) -> 
                 0.0,
             );
             let half = Vec3::new((x1 - x0) as f32 * 0.5 * tile.x, (y1 - y0) as f32 * 0.5 * tile.y, half_z);
-            (
-                components::Transform::new(centre),
-                Box::new(components::ColliderShape::Box(components::BoxShape { half_extents: half })),
-            )
+            (components::Transform::new(centre), components::Collider::box_collider(half))
         })
         .collect();
-    // `Collider` is `#[non_exhaustive]` and has no compound constructor; `shape` is public.
-    let mut collider = components::Collider::box_collider(Vec3::ONE);
-    collider.shape = components::ColliderShape::Compound(parts);
-    Some(collider)
+    Some(components::Collider::compound(parts))
 }
 
 #[cfg(all(test, feature = "render"))]

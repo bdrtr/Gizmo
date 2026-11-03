@@ -50,6 +50,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`KinematicTarget` — a kinematic body driven to a pose.** A game knows where a tilting board,
+  a door or a lift should be; turning that into a `Velocity` was its job, and with a fixed-step
+  driver it was wrong, because a frame runs zero, one or several steps. Now the physics step sets
+  the velocity that reaches the target *in that step* (so what rests on the body is carried by
+  the motion — the centre-of-mass offset of a turn included), and puts the body on the target
+  exactly afterwards; an unchanged target holds it still. Ignored on a body that is not kinematic.
+  Tested: one step to arrive, held exactly for sixty, the step's velocity being the motion, a
+  dynamic body ignoring it, a tilting board rolling the ball on it downhill and keeping it on;
+  dropping the velocity or the landing each fails a test. Found writing `labirent`, the
+  thirteenth game (a marble maze).
+- **`Collider::compound([(Transform, Collider), …])`** — one collider from several shapes. Writing
+  the `Compound` variant by hand meant boxing every shape (`tilemap_collider` said so in a comment
+  and now uses this).
 - **Font fallback: `Renderer::add_font_fallback(font)`** (`FontLibrary::add_fallback`). A
   character a text's face does not cover was drawn as that face's "missing" glyph — `duello`'s
   shield ⛨ came out as DejaVu's empty box, and the first version wrote "Kalkan" instead. Faces
@@ -1811,6 +1824,21 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   before.
 
 ### Fixed
+
+- **A multi-part compound collider crashed the physics near any CCD body.** The CCD path's
+  speculative contact handed a `Compound` to GJK whole, which violates `support_point`'s contract:
+  a debug panic, and in release a zero support point — a wrong contact — on the first step a CCD
+  body came near it. Every kinematic body turns CCD on, so a kinematic board made of parts
+  (`labirent`) hit it on frame one. `Gjk::speculative_contact` now splits a compound into its parts,
+  as the manifold path always has, and keeps the closest part's contact.
+- **A ball caught on the seams of a tiled floor.** On a compound of boxes laid edge to edge, a body
+  resting a hair inside the surface also touches the next box's top edge, whose normal leans back
+  against the motion. Measured with a CCD ball down seventeen tiles: 1.01 m in two seconds against
+  2.21 m on one slab (the analytic value). The narrowphase now drops a box part's edge contact when
+  another part holds the body with a face contact on the same plane — a real edge (a step) is off
+  that plane and stays: 2.03 m. Without CCD the tiles cost nothing either way (2.22 m); the last 8 %
+  is the speculative contact's own fallback normal, recorded as open. Removing the rule fails the
+  test.
 
 - **UI boxes on one layer were painted in storage (archetype) order, not tree order.** A slot
   (`NodeBundle` + `DropTarget`) and the item inside it (`ButtonBundle` + `Drag`) live in different

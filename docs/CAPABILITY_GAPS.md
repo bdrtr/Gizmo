@@ -1260,6 +1260,29 @@ it was already there (`move_axis`, `right_stick`, `cursor_on_plane`, `Timer`, `o
   still loads), and for a name without an extension the error lists the primitive keys. GPU-tested:
   two requests share one buffer, collection forgets it; not inserting into the cache fails it.
 
+### C16i. The thirteenth game: a board that tilts (2026-11-03, `labirent`)
+
+`demo/src/bin/labirent.rs` is a marble maze: tilt the board (keys or stick) and roll a real
+dynamic ball between the walls, past the holes, to the green square; three levels, best times
+saved. The board is one kinematic body whose collider is all its floor tiles and walls. Four
+things, one of them a crash:
+
+- ~~**A kinematic body could not be driven to a pose.**~~ **Closed 2026-11-03.** A game knows where
+  the board should be, the body moves by its velocity, and under a fixed-step driver a velocity
+  computed from the frame time turns it by the wrong amount (a frame runs 0–N steps).
+  `KinematicTarget::new(position, rotation)`: each step sets the velocity that arrives in that step
+  — what rests on the body is carried — and lands the body on the target exactly.
+- ~~**No multi-part collider constructor.**~~ **Closed.** `Collider::compound([(Transform,
+  Collider), …])`.
+- ~~**A compound crashed the physics next to a CCD body.**~~ **Fixed.** The speculative contact
+  passed it to GJK whole (debug panic; a zero support point in release). Kinematic bodies turn CCD
+  on, so this board hit it on its first step.
+- **A ball on tile seams** — ~~lost half its speed~~ **fixed to 8 %**: a box part's edge contact on
+  a plane another part holds with a face contact is dropped (1.01 → 2.03 m of the slab's 2.21 m,
+  CCD ball, two seconds). Without CCD there is no loss at all. *Open:* the remaining 8 % is the
+  speculative contact taking the approach direction as its normal under a 1 mm gap, which brakes a
+  body sliding along a surface; the game turns CCD off, which its speeds allow.
+
 ### C16h. The twelfth game: things on screen that move (2026-11-03, `duello`)
 
 `demo/src/bin/duello.rs` is a card duel against the computer: mana that grows each turn, a hand

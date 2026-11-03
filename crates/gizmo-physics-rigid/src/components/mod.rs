@@ -17,6 +17,8 @@ pub mod breakable;
 /// [`Explosion`] — a one-shot radial impulse/damage source, with its
 /// [`ExplosionFalloff`] distance curves.
 pub mod explosion;
+/// [`KinematicTarget`] — the pose a kinematic body is driven to, one step at a time.
+pub mod kinematic_target;
 /// [`RigidBody`] and [`BodyType`] — mass, inertia, damping, drag, sleep state and axis
 /// locks.
 pub mod rigid_body;
@@ -25,5 +27,6 @@ pub mod velocity;
 
 pub use breakable::Breakable;
 pub use explosion::{Explosion, ExplosionFalloff};
+pub use kinematic_target::KinematicTarget;
 pub use rigid_body::{BodyType, RigidBody};
 pub use velocity::Velocity;

@@ -485,6 +485,52 @@ impl Gjk {
         inv_mass_b: f32,
         dt: f32,
     ) -> Option<ContactPoint> {
+        // A compound is its parts: the manifold path recurses the same way. Passed whole, it reached
+        // `support_point`, whose contract it violates — a debug panic, and a zero support (a wrong
+        // contact) in release — on the first step any CCD body (every kinematic one: they turn CCD
+        // on) came near a multi-part collider. Of the parts' contacts, the closest is kept: it is
+        // the one this step must not pass.
+        let closest = |found: Option<ContactPoint>, c: Option<ContactPoint>| match (found, c) {
+            (Some(f), Some(c)) => Some(if c.penetration > f.penetration { c } else { f }),
+            (f, c) => f.or(c),
+        };
+        if let ColliderShape::Compound(parts) = shape_a {
+            return parts.iter().fold(None, |found, (local, sub)| {
+                let c = Self::speculative_contact(
+                    sub,
+                    pos_a + rot_a.mul_vec3(local.position),
+                    rot_a * local.rotation,
+                    vel_a,
+                    inv_mass_a,
+                    shape_b,
+                    pos_b,
+                    rot_b,
+                    vel_b,
+                    inv_mass_b,
+                    dt,
+                );
+                closest(found, c)
+            });
+        }
+        if let ColliderShape::Compound(parts) = shape_b {
+            return parts.iter().fold(None, |found, (local, sub)| {
+                let c = Self::speculative_contact(
+                    shape_a,
+                    pos_a,
+                    rot_a,
+                    vel_a,
+                    inv_mass_a,
+                    sub,
+                    pos_b + rot_b.mul_vec3(local.position),
+                    rot_b * local.rotation,
+                    vel_b,
+                    inv_mass_b,
+                    dt,
+                );
+                closest(found, c)
+            });
+        }
+
         /// Resting standoff: the body stops this far short of the surface so the
         /// next frame still has a measurable, GJK-reliable separation.
         const SKIN: f32 = 0.01;

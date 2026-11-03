@@ -165,6 +165,10 @@ pub fn physics_step_system(world: &World, dt: f32) {
 
     // 3. Query Rigid Bodies (Write Locks)
     let mut rigid_bodies = Vec::new();
+    // Kinematic bodies driven to a pose: their index in `rigid_bodies`, and the pose to put them
+    // on after the step.
+    let mut targets: Vec<(usize, crate::components::KinematicTarget)> = Vec::new();
+    let target_query = world.query::<&crate::components::KinematicTarget>();
     // SAFETY: physics_step_system runs as a scheduled system; the scheduler guarantees
     // no other system mutably aliases these components while it runs (see `query_unchecked`).
     if let Some(mut query) = unsafe {
@@ -192,9 +196,22 @@ pub fn physics_step_system(world: &World, dt: f32) {
                 if !rb.is_static() && rb.local_inertia == RigidBody::UNSET_INERTIA {
                     rb.update_inertia_from_collider(&final_collider);
                 }
+                // A kinematic body with a target moves by whatever velocity reaches it this step.
+                let mut vel = *vel;
+                if let Some(target) = rb
+                    .is_kinematic()
+                    .then(|| target_query.as_ref().and_then(|q| q.get(id).copied()))
+                    .flatten()
+                {
+                    let com = transform.rotation * rb.center_of_mass;
+                    let (linear, angular) = target.velocity_from(transform.position, transform.rotation, com, dt);
+                    vel.linear = linear;
+                    vel.angular = angular;
+                    targets.push((rigid_bodies.len(), target));
+                }
                 // Bridge: ECS entity id -> opaque physics BodyHandle (generation is
                 // unused by physics; bodies are keyed by id only).
-                rigid_bodies.push((BodyHandle::from_id(id), rb, *transform, *vel, final_collider));
+                rigid_bodies.push((BodyHandle::from_id(id), rb, *transform, vel, final_collider));
             }
         }
     } else {
@@ -279,6 +296,13 @@ pub fn physics_step_system(world: &World, dt: f32) {
             *trans = physics_world.transforms[i];
             *vel = physics_world.velocities[i];
         }
+    }
+    // Driven bodies land on their targets exactly: the integrator's average of two velocities
+    // would otherwise leave them a little off, and a little off every step is drift.
+    for (idx, target) in targets {
+        let (_, _, trans, _, _) = &mut rigid_bodies[idx];
+        trans.position = target.position;
+        trans.rotation = target.rotation;
     }
 
     // 5. Write back to ECS (Rigid Bodies)
