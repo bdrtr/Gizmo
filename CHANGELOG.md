@@ -1898,6 +1898,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A despawned body's joints tied its id's next owner to the partner.** Removing a body from the
+  physics world left the joints attached to it in place, and joints find their bodies by raw id —
+  so the next body to recycle the id was held by the dead body's joint. Measured: a body spawned
+  15 m from the dead one's partner was pulled 2.5 m toward it in a second (and the partner toward
+  it). Joints naming a removed body are removed with it now. Found sizing up a bridge-building
+  game; a regression test spawns onto the recycled id and fails without the change.
+
 - **The engine's warnings never reached a game.** No game set up a `tracing` subscriber (the full
   one is behind the default-off `tracing-layer` feature), so every `tracing::warn!` and `error!`
   in the engine — a texture that would not load, a navigation grid clipping the level, a route
