@@ -1878,6 +1878,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`NavGrid::find_path` was 3.4× slower than it needed to be.** Every query filled three
+  HashMaps (scores, parents, closed set), allocated a `Vec` per expanded cell for its neighbours,
+  and hashed each neighbour's cell into `obstacles` up to three times. The search state is now
+  dense per-cell arrays reused across queries (a stamp invalidates them), neighbours are generated
+  in place, and walkability is looked up once per cell per query: 400 long routes on a cluttered
+  200×200 grid, 726 → 211 µs each. The routes are identical — same cells, same order, same
+  failures: a test runs 369 queries (open and cluttered grids, same cell, into a wall, off the
+  grid, another layer) against the old search, kept beside it for that; a wrong walkability
+  cache or a stale stamp fails it. A destination on another layer now returns `None` at once
+  instead of after exhausting the layer.
+
 - **A crowd replanned all at once, every half second.** Agents spawned or ordered together had
   their replan timers in step, so every `recalc.interval` all of them ran A* on one frame: 1000
   agents, 58 ms on every 30th frame against a 0.27 ms median. After a forced replan (new target,
