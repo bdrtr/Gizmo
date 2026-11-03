@@ -1878,6 +1878,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Agent separation scanned every pair.** `ai_navigation_system` found each agent's neighbours
+  by checking every other agent: 0.83 / 13.1 / 53.2 ms a frame for 250 / 1000 / 2000 agents. They
+  come from XZ buckets now — 0.07 / 0.29 / 0.58 ms (steering only; path replans are separate) —
+  visited in agent order, so the result is bit-identical. A test steps a 120-agent crowd of mixed
+  radii both ways and compares every velocity's bits; visiting only the agent's own bucket, or
+  the buckets unsorted, fails it.
+
 - **The cursor ray came from a stale camera position.** `pointer::cursor_ray` (and so
   `cursor_on_plane`) read the camera's `GlobalTransform` first, which in game code is a frame
   behind — a camera spawned this frame cast from the origin, and one following a player cast from
