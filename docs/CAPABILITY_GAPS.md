@@ -1262,6 +1262,22 @@ it was already there (`move_axis`, `right_stick`, `cursor_on_plane`, `Timer`, `o
   still loads), and for a name without an extension the error lists the primitive keys. GPU-tested:
   two requests share one buffer, collection forgets it; not inserting into the cache fails it.
 
+### C16s. The twenty-third game: saving what you built (2026-11-03, `atolye`)
+
+`demo/src/bin/atolye.rs` is a building sandbox — click a column to stack a block, F5 writes the
+level, F9 brings it back — and the first game to use the engine's scene format as its save.
+`atolye --test` opens no window: it builds 30 blocks, saves, clears, loads and compares each
+block's place, colour, collider and mesh; all 30 come back. One gap, closed:
+
+- ~~**No way to save part of a world**~~ — `SceneData::save` writes everything, camera and HUD
+  included (each load would add another camera), and the struct is `#[non_exhaustive]`, so a
+  game holding `serialize_entities`' output could not build a `SceneData` from it except by
+  assigning a `default()`'s fields one by one, joints left out. `of_entities` (with the joints
+  inside the set) and `instantiate` (re-pointing them) now.
+
+Observation, not a gap: a block is ~1.7 KB of RON — every component writes every field,
+defaults and `RigidBody`'s force accumulators included.
+
 ### C16r. The twenty-second game: two players over a network (2026-11-03, `itis`)
 
 `demo/src/bin/itis.rs` is a two-player shove match on `RollbackSession`: two pucks on a square

@@ -158,6 +158,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   joints whose two bodies are in the set; `instantiate(world, registry)` spawns it and re-points
   them at the new ids (shared with `load_into`). Tested with four bodies, two joints and a
   three-body part; dropping the filter or the joint re-pointing fails it.
+- **`atolye`, the twenty-third game** — a building sandbox that saves and loads its level as a
+  scene; `atolye --test` round-trips 30 blocks without a window. It found the item above.
 - **`itis`, the twenty-second game** — a two-player shove match over `RollbackSession`: local,
   UDP, or `itis --test`, which plays 1500 ticks over a lossy, laggy link with a late start and
   checks both peers end on the real match. The first game on the netcode; it found the items
