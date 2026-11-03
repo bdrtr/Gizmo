@@ -41,6 +41,11 @@
 //!   (`Reverb::room` / `hall` / `cave` ya da kendi biçimin) — Freeverb, her sesin içinde bir aşama,
 //!   çalan seslere de anında; sesin bittiği yerde kesilmiyor, kuyruğu sönene kadar çalıyor. Burada
 //!   salon yankısı açık başlıyor, **V** kapatıp açıyor ki fark duyulsun.
+//! - **Seri atışta ses patlıyordu.** Her atış 0.35 gürültü artı yankısının kuyruğu; art arda
+//!   atışlarda toplam 1'i geçiyor ve cihaz onu kare dalgaya kırpıyor. Bir sesin seviyesini
+//!   kısmak bunu çözmüyor, toplamın seviyesi kimsenin elinde değildi. **Kapatıldı:**
+//!   `AudioManager::set_limiter(Some(Limiter::default()))` — toplamın üstünde bir limiter, tavan
+//!   −1 dBFS; toplam tavanı geçmedikçe sese dokunmuyor (bit bit aynı).
 //!
 //! ## Ortam değişkenleri
 //!   * `GIZMO_FONT=<yol>` — HUD fontu
@@ -158,6 +163,8 @@ fn main() {
                 audio.load_sound_bytes("isabet", Blip::new(Wave::Square, 700.0, 0.06).with_slide(1100.0).with_volume(0.2).wav());
                 // Kapalı bir poligon: atışlar duvarlardan geri geliyor.
                 audio.set_reverb(Some(gizmo::audio::reverb::Reverb::hall()));
+                // Seri atışta toplam 1'i geçmesin: kırpılmak yerine kısılsın.
+                audio.set_limiter(Some(gizmo::audio::limiter::Limiter::default()));
                 scene.world.insert_resource(audio);
             }
 

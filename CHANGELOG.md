@@ -50,6 +50,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A master limiter: `AudioManager::set_limiter(Some(Limiter::default()))`.** Every sound is
+  summed by one mixer and the sum had no ceiling: eight sounds at 0.6 peak near 4.8, and the device
+  clips it into a crackle. A brick-wall limiter now sits on the sum (instant attack, so no sample
+  passes the ceiling; a release, 100 ms by default, so it does not buzz; one gain per frame, so the
+  stereo image holds). Bit-exact while the mix stays under the ceiling, and off by default.
+  `take_limiter_gain()` reports the deepest reduction since the last call. To get a sum it could
+  sit on, every player now connects to a mixer the manager owns, fed into the device's. **That bus
+  needed a silent infinite input:** an idle rodio mixer reads as a finished source and is dropped
+  for good, so on a real device the first silence unplugged it and every later sound played
+  nowhere (measured: removing the keep-alive fails the device test). Tested offline (eight in-phase
+  voices limited to ≤ 0.89 with L/R balance exact, under-ceiling and off both bit-exact, the bus
+  passing a two-sound sum unchanged after 4 800 idle samples, the release holding then letting go)
+  and on hardware; each of three mutations fails a test. `poligon` turns it on for rapid fire.
 - **`Query::single` / `Query::single_mut`** — the one matching row, or a
   `QuerySingleError::{NoEntities, MultipleEntities}` saying why there is not exactly one. For *the*
   player or *the* camera, a `for` loop silently runs no body before the spawn and lets the last of

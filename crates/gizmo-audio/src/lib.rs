@@ -32,6 +32,8 @@
 //! contract internal.
 
 mod filter;
+/// The master limiter — [`Limiter`](limiter::Limiter), on the summed output.
+pub mod limiter;
 mod looping;
 mod mixer;
 /// Reverb — [`Reverb`](reverb::Reverb) and the stage every sound is wrapped in.
@@ -204,7 +206,13 @@ pub struct AudioManager {
     // the mixer that every player connects to. (rodio 0.22 merged the old `OutputStream` +
     // `OutputStreamHandle` pair into this one value; "sink" in *our* vocabulary still means one
     // playing sound, which rodio now calls a `Player`.)
-    device_sink: MixerDeviceSink,
+    // Held, never read since the bus below took over: dropping it stops the stream.
+    _device_sink: MixerDeviceSink,
+    // What every player connects to: a mixer of our own, whose sum goes through the master
+    // limiter into the device's mixer. The device's mixer cannot be wrapped (it is the stream's
+    // own), so the limiter needs a sum it owns to sit on.
+    bus: rodio::mixer::Mixer,
+    limiter: Arc<limiter::LimiterControl>,
 
     // RAM'e (Memory) yüklenmiş ses dosyaları (Disk I/O darboğazını önler)
     sound_buffers: HashMap<String, Arc<[u8]>>,
@@ -346,9 +354,16 @@ impl AudioManager {
                 // to stderr on drop unless this is off. Here that drop *is* engine shutdown —
                 // the manager owns the device for its whole life — so the warning is noise.
                 device_sink.log_on_drop(false);
+                let config = device_sink.config();
+                let (channels, rate) = (config.channel_count(), config.sample_rate());
+                let limiter = limiter::LimiterControl::new();
+                let (bus, master) = limiter::master_bus(channels, rate, Arc::clone(&limiter));
+                device_sink.mixer().add(master);
                 log::info!("Gizmo Audio: Ses cihazı başlatıldı! 3D Uzamsal (Spatial) Motor Aktif.");
                 Ok(Self {
-                    device_sink,
+                    _device_sink: device_sink,
+                    bus,
+                    limiter,
                     sound_buffers: HashMap::new(),
                     active_spatial_sinks: HashMap::new(),
                     active_sinks: HashMap::new(),
@@ -569,6 +584,28 @@ impl AudioManager {
         Some(self.reverb.get()).filter(|r| r.wet > 0.0)
     }
 
+    /// Puts a limiter on the whole mix — [`Limiter::default`](limiter::Limiter::default) is a
+    /// −1 dBFS ceiling — or `None` to take it off (the default). With it on, any number of sounds
+    /// at once stay under the ceiling instead of clipping at the device; the mix is turned down
+    /// only while it would pass the ceiling, and comes through bit-exact otherwise. Heard from the
+    /// next frame of audio.
+    pub fn set_limiter(&mut self, limiter: Option<limiter::Limiter>) {
+        self.limiter.set(limiter);
+    }
+
+    /// The limiter set by [`set_limiter`](Self::set_limiter), `None` when off.
+    #[must_use]
+    pub fn limiter(&self) -> Option<limiter::Limiter> {
+        self.limiter.get()
+    }
+
+    /// The deepest the limiter has turned the mix down since this was last called, as a gain
+    /// (`1.0` = it has not acted; `0.5` = the mix was halved at some moment). For a meter, or to
+    /// notice a scene that is mixed too hot.
+    pub fn take_limiter_gain(&mut self) -> f32 {
+        self.limiter.take_min_gain()
+    }
+
     /// Plays a normal (Global/Stereo) sound (one-shot)
     ///
     /// # Errors
@@ -597,7 +634,7 @@ impl AudioManager {
             AudioError::NotLoaded(name.to_string())
         })?;
         let decoder = decode(bytes).map_err(|e| AudioError::Decode(e.to_string()))?;
-        let sink = Player::connect_new(self.device_sink.mixer());
+        let sink = Player::connect_new(&self.bus);
         // The muffle wraps the source rather than the player: a `Player` hands out no way to reach
         // what it is playing, so a filter that must be switchable later has to be in the chain
         // before `append` and read its own parameter afterwards.
@@ -671,7 +708,7 @@ impl AudioManager {
         })?;
         let decoder = decode(bytes).map_err(|e| AudioError::Decode(e.to_string()))?;
         let sink =
-            SpatialPlayer::connect_new(self.device_sink.mixer(), emitter_pos, left_ear, right_ear);
+            SpatialPlayer::connect_new(&self.bus, emitter_pos, left_ear, right_ear);
         if looped {
             // Not `repeat_infinite`: its buffer cannot seek (see `looping`).
             sink.append(Muffle::new(
@@ -1311,5 +1348,35 @@ mod position_tests {
         assert!((2.4..3.0).contains(&p), "after seeking to 2.5 s the position is {p}");
         assert!(audio.position(u64::MAX).is_none());
         assert!(audio.seek(u64::MAX, 1.0).is_err());
+    }
+
+    /// On real hardware: the master bus (and its limiter) carries sound played after a stretch
+    /// of silence — an idle rodio mixer reads as finished and would be unplugged — and eight loud
+    /// sounds at once are turned down by the limiter, which reports it.
+    ///
+    /// `cargo test -p gizmo-audio -- --ignored limiter`
+    #[test]
+    #[ignore = "needs a real audio output device — run with --ignored"]
+    fn the_master_limiter_turns_a_hot_mix_down_on_a_device() {
+        let mut audio = AudioManager::new().expect("an audio output device");
+        audio.set_limiter(Some(crate::limiter::Limiter::default()));
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let tone: Vec<f32> = (0..44_100)
+            .map(|i| 0.6 * (std::f32::consts::TAU * 220.0 * i as f32 / 44_100.0).sin())
+            .collect();
+        audio.load_samples("tone", &tone, 44_100);
+        let first = audio.play("tone").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(audio.position(first).unwrap_or(0.0) > 0.05, "sound after silence must play");
+        audio.stop(first);
+        audio.take_limiter_gain();
+        for _ in 0..8 {
+            audio.play("tone").unwrap();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let g = audio.take_limiter_gain();
+        assert!(g < 0.3, "eight voices at 0.6 sum near 4.8; the limiter's gain was {g}");
+        audio.set_limiter(None);
+        assert_eq!(audio.limiter(), None);
     }
 }

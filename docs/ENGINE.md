@@ -730,8 +730,9 @@ state instead.
   substituting one.
 
 - **M7.5 — the mixer landed 2026-08-18; reverb on 2026-11-03 (`AudioManager::set_reverb`, a
-  Freeverb stage inside every source, bit-exact when off, its tail played past the sound's end).
-  EQ and compression have not.** `gizmo_audio::Mixer` holds named
+  Freeverb stage inside every source, bit-exact when off, its tail played past the sound's end);
+  a master limiter on the summed output on 2026-11-03 (`AudioManager::set_limiter`). EQ and a
+  general compressor have not.** `gizmo_audio::Mixer` holds named
   buses (`music`/`sfx`/`ui`/`voice`, created on demand so a game's own names need no engine
   change), a master gain, mute flags that keep their gains, and the environment modifier. Buses
   are the half a game ships: two sliders in a settings menu, applied to sounds that are *already

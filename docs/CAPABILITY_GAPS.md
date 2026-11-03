@@ -1172,6 +1172,16 @@ mouse, the keyboard and a gamepad. Three of its four buttons were impossible:
   channel stays silent, switching off is heard on the next sample; cutting the tail with the input
   or sharing one channel's state fails them. `poligon` plays in a hall, **V** toggles it.
 
+- ~~**Nothing kept the mix under 1.0.**~~ **Closed 2026-11-03.** Every sound was added into the
+  device's mixer and the sum had no ceiling: rapid fire in `poligon` (noise at 0.35 plus its reverb
+  tail, several at once) went past 1.0 and the device clipped it. `AudioManager::set_limiter(
+  Some(Limiter::default()))` puts a brick-wall limiter on the sum — instant attack, a release
+  (100 ms default), one gain per frame — bit-exact under the ceiling, off by default;
+  `take_limiter_gain()` reports how far it went. The players connect to a bus the manager owns now,
+  which needs a silent keep-alive input: without it the first silence unplugged the bus on a real
+  device (measured). `poligon` turns it on. **Still open:** an EQ and a general (ratio/threshold)
+  compressor.
+
 - ~~**A list could only be scrolled with a wheel.**~~ **Closed 2026-11-03.** A touchpad without a
   wheel, or a finger, could not reach the end of a `Scroll` list. Its thumb is drawn now (its
   length the visible share of the content, its place the offset's share of the travel) and can be
