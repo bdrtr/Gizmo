@@ -136,6 +136,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Triggers are now left out of the sweep, the ground probe and the platform carry, and the ones
   the capsule overlaps after each step are listed: measured, from x 1.20 to 2.80, exactly
   2 ± (0.5 + 0.3). Removing the filter or the record fails a test.
+- **A simple scene has `Gizmos`.** `with_simple_scene` inserted no `Gizmos`, so a game's
+  `get_resource_mut::<Gizmos>()` came back empty and every `draw_line` went nowhere without a
+  word. An empty one is inserted now unless the setup brought its own; nothing draws into it on
+  its own, so no picture changes. Tested, and removing the insert fails it.
+- **`vinc`, the twenty-first game** — demolition with a crane: drive the hook, swing a 300 kg
+  ball on a rope into a building of breakable blocks, bring four fifths of it down in 45 s. It
+  found the fracture and `Gizmos` items above.
 - **`kapi`, the twentieth game** — a box puzzle: push crates onto pressure plates and the doors
   of their group sink into the floor; stand on a plate and it opens only while you stay. It found
   the two character items above (pushing, triggers).

@@ -1262,6 +1262,24 @@ it was already there (`move_axis`, `right_stick`, `cursor_on_plane`, `Timer`, `o
   still loads), and for a name without an extension the error lists the primitive keys. GPU-tested:
   two requests share one buffer, collection forgets it; not inserting into the cache fails it.
 
+### C16q. The twenty-first game: breaking things (2026-11-03, `vinc`)
+
+`demo/src/bin/vinc.rs` is a demolition game seen from the side: a crane hook driven left and
+right (`KinematicTarget`), a 300 kg ball on a 6.5 m `Joint::rope`, and a building of 32
+`Breakable` blocks to bring down to a fifth in 45 s. `VINC_OTO=1` pumps the swing unaided and
+wins at about 31 s with 27 of 32 down, 7 of them shattered. Three gaps, all closed:
+
+- ~~**A `Breakable` never broke in a game**~~ — nothing ran `physics_fracture_system`, neither
+  `FixedPhysics` nor `PhysicsPlugin`. The facade's physics step runs it now.
+- ~~**Debris was invisible, immortal and scaled twice**~~ — bare sphere-collider bodies with no
+  geometry, the block's `scale` copied on, `debris_lifetime` read by nothing. Each piece carries
+  `Debris` (its Voronoi cell), is drawn in the broken body's material, has scale one and expires.
+- ~~**`draw_line` went nowhere in a simple scene**~~ — there was no `Gizmos` resource, and no word
+  about it; the rope was not drawn. The simple scene inserts an empty one.
+
+Tuning note, not a gap: the ball's hit on a block is about 160 N·s, so a 250 N·s threshold only
+toppled blocks; the game uses 90.
+
 ### C16p. The twentieth game: pushing things (2026-11-03, `kapi`)
 
 `demo/src/bin/kapi.rs` is a top-down box puzzle: three rooms, each door a kinematic body

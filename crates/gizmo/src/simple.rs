@@ -707,8 +707,13 @@ pub trait SimpleAppExt {
 }
 
 /// What [`SimpleAppExt::with_simple_scene`] adds to the world once the game's setup has run:
-/// the asset manager, and a `PhysicsWorld` with Earth gravity **unless the setup inserted its
-/// own**.
+/// the asset manager, and — **unless the setup inserted its own** — a `PhysicsWorld` with Earth
+/// gravity and an empty [`Gizmos`](crate::renderer::Gizmos) for the frame's debug lines.
+///
+/// Without `Gizmos` a game's `get_resource_mut::<Gizmos>()` found nothing and its
+/// `draw_line` calls went nowhere, with no word said: the crane's rope in `vinc` was simply not
+/// there (`docs/CAPABILITY_GAPS.md` §C16q). Nothing draws into it on its own, so an empty one
+/// changes no picture.
 ///
 /// The physics world used to be inserted unconditionally, after the setup, so a game that set
 /// its own gravity there had it silently replaced — found writing `lobut`
@@ -716,6 +721,9 @@ pub trait SimpleAppExt {
 fn insert_scene_defaults(world: &mut crate::core::World, asset_manager: AssetManager) {
     if world.get_resource::<PhysicsWorld>().is_none() {
         world.insert_resource(PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0)));
+    }
+    if world.get_resource::<crate::renderer::Gizmos>().is_none() {
+        world.insert_resource(crate::renderer::Gizmos::default());
     }
     world.insert_resource(asset_manager);
 }
@@ -1081,6 +1089,22 @@ mod fixed_physics_tests {
         let g = empty.get_resource::<PhysicsWorld>().map(|p| p.integrator.gravity);
         assert_eq!(g, Some(Vec3::new(0.0, -9.81, 0.0)));
         assert!(empty.get_resource::<AssetManager>().is_some());
+    }
+
+    /// A simple scene has somewhere for debug lines to go, and a setup's own `Gizmos` survives.
+    #[test]
+    fn a_simple_scene_has_gizmos_and_keeps_the_setups() {
+        let mut w = crate::core::World::new();
+        super::insert_scene_defaults(&mut w, AssetManager::new());
+        let mut g = w.get_resource_mut::<crate::renderer::Gizmos>().expect("no Gizmos: draw_line goes nowhere");
+        g.draw_line(Vec3::ZERO, Vec3::X, [1.0; 4]);
+        assert_eq!(g.lines.len(), 2);
+        drop(g);
+
+        let mut own = crate::core::World::new();
+        own.insert_resource(crate::renderer::Gizmos { depth_test: true, ..Default::default() });
+        super::insert_scene_defaults(&mut own, AssetManager::new());
+        assert!(own.get_resource::<crate::renderer::Gizmos>().unwrap().depth_test, "the setup's Gizmos was replaced");
     }
 
     /// `advance` actually moves the world: a falling body falls exactly `steps` steps' worth, and
