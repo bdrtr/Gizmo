@@ -411,9 +411,39 @@ pub fn ui_drag_system(input: Res<Input>, mut drags: Query<(&Interaction, Mut<Dra
 pub fn ui_scroll_system(
     input: Res<Input>,
     time: Option<Res<gizmo_core::time::Time>>,
+    navigation: Option<Res<UiNavigation>>,
+    nodes: Query<&Node>,
+    parents: Query<&Parent>,
     mut scrolls: Query<(&Node, Mut<Scroll>)>,
 ) {
     let dt = time.map_or(0.0, |t| t.raw_dt());
+    // The keys moved the focus: bring it into view in the nearest scrolling list around it. A held
+    // ↓ walking down a long menu used to walk the focus out of sight.
+    if let Some(focused) = navigation.as_ref().filter(|n| n.enabled && n.moved_this_frame()).and_then(|n| n.focused()) {
+        if let Some(item) = nodes.get(focused).copied() {
+            let mut at = parents.get(focused).map(|p| p.0);
+            for _ in 0..256 {
+                let Some(a) = at else { break };
+                if let Some((list, mut scroll)) = scrolls.get_mut(a) {
+                    let (top, bottom) = (list.position.y, list.position.y + list.size.y);
+                    let (item_top, item_bottom) = (item.position.y, item.position.y + item.size.y);
+                    let shift = if item_top < top {
+                        item_top - top
+                    } else if item_bottom > bottom {
+                        (item_bottom - bottom).min(item_top - top)
+                    } else {
+                        0.0
+                    };
+                    if shift != 0.0 {
+                        let max = scroll.max_offset().y;
+                        scroll.offset.y = (scroll.offset.y + shift).clamp(0.0, max.max(0.0));
+                    }
+                    break;
+                }
+                at = parents.get(a).map(|p| p.0);
+            }
+        }
+    }
     // The scrollbar first: a press in the strip takes the thumb, and it follows the pointer until
     // the release — what a touchpad without a wheel, and a finger, scroll a list with.
     let p = input.mouse_position();
@@ -1093,6 +1123,50 @@ mod tests {
         frame_with(&mut world, true, false);
         frame_with(&mut world, true, false);
         assert_eq!(focused(&world), Some(low), "the second quick tap was swallowed as a hold");
+    }
+
+    /// Moving the focus with the keys onto an item scrolled out of sight scrolls the list to show
+    /// it — below the box, so its bottom meets the box's; above, so its top does.
+    #[test]
+    fn the_keys_scroll_the_focused_item_into_view() {
+        use gizmo_core::hierarchy::HierarchyExt;
+        use gizmo_core::system::{IntoSystemConfig, Schedule};
+        let mut world = gizmo_core::World::new();
+        world.insert_resource(Input::new());
+        world.insert_resource(UiNavigation { enabled: true, ..Default::default() });
+        let mut scroll = Scroll::default();
+        scroll.fit(Vec2::new(0.0, 300.0));
+        let list = world.spawn_bundle((node((0.0, 0.0), (100.0, 100.0)), scroll));
+        // Laid out as if unscrolled: four 40 px items stacked at 0, 50, 100, 150.
+        let items: Vec<u32> = (0..4)
+            .map(|i| {
+                let e = world.spawn_bundle(crate::ButtonBundle { node: node((0.0, i as f32 * 50.0), (100.0, 40.0)), ..Default::default() });
+                world.add_child(list, e);
+                e.id()
+            })
+            .collect();
+        let offset = |w: &gizmo_core::World| w.borrow::<Scroll>().get(list.id()).unwrap().offset.y;
+        let run = |w: &mut gizmo_core::World, k: Option<&str>| {
+            press(w, k);
+            let mut s = Schedule::new();
+            s.add_di_system(ui_scroll_system.into_config());
+            s.build();
+            s.run(w, 0.0);
+        };
+        world.get_resource_mut::<UiNavigation>().unwrap().focus(Some(items[2]));
+        run(&mut world, Some("down")); // onto the item at 150..190, below the 0..100 box
+        assert_eq!(focused(&world), Some(items[3]));
+        assert_eq!(offset(&world), 90.0, "its bottom (190) should meet the box's (100)");
+        // Scrolled now, the layout would have moved the items; move them as it would.
+        for (i, id) in items.iter().enumerate() {
+            world.borrow_mut::<Node>().get_mut(*id).unwrap().position.y = i as f32 * 50.0 - 90.0;
+        }
+        run(&mut world, Some("down")); // wraps to the first item, at -90, above the box
+        assert_eq!(focused(&world), Some(items[0]));
+        assert_eq!(offset(&world), 0.0, "its top should meet the box's");
+        // A focus moved by the mouse does not scroll.
+        run(&mut world, None);
+        assert_eq!(offset(&world), 0.0);
     }
 
     /// Pressed on, dragged off, released: cancelled, like a desktop button.

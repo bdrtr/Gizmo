@@ -1,6 +1,6 @@
 # Gizmo Engine — where it stands
 
-**Last updated: 2026-11-01.** One page, present tense. History, measurements and the reasons
+**Last updated: 2026-11-03.** One page, present tense. History, measurements and the reasons
 behind decisions live in [`ENGINE.md`](ENGINE.md); this file only says what is true now and where
 to read more. When something here stops being true, fix this page in the same commit.
 

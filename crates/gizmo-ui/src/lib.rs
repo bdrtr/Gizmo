@@ -84,8 +84,8 @@
 //!   takes the pointer from them. Two overlapping nodes on the *same* layer still both report
 //!   `Hovered`, and every background of a layer is painted before its labels.
 //! - **Scrolling is the wheel, a scrollbar and a finger.** [`Scroll`]'s thumb is drawn and can be
-//!   dragged, and a finger on the content scrolls and flings it; keyboard focus does not scroll a
-//!   focused button into view. [`Interaction`] itself is
+//!   dragged, a finger on the content scrolls and flings it, and a focus moved by the keys is
+//!   scrolled into view. [`Interaction`] itself is
 //!   still a per-frame state, not an event stream.
 //! - **No CSS Grid.** [`Style`] models the flexbox/block surface only; taffy's
 //!   grid algorithm is compiled in but unreachable, because there is no way to

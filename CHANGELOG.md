@@ -114,6 +114,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - **`MeshSource("cylinder")` and `"cone"`**, sized like their colliders, and
     `AssetManager::PRIMITIVE_MESH_KEYS` as the one list of primitive keys (the studio's
     missing-asset check now uses it instead of its own copy).
+- **Keyboard focus scrolls into view**: moving the focus with the keys or the d-pad onto an item
+  outside its `Scroll` scrolls the list just enough to show it.
 - **Per-tile tints: `Tilemap::set_tint`** — fog of war without a dimmed copy of every tile. Found
   by `zindan`, a turn-based dungeon crawler (new demo) built on one `Tilemap`.
 - **Held keys repeat in menus: `HoldRepeat`** (`gizmo::core::input`) — fires on the press, then

@@ -1213,6 +1213,13 @@ mouse, the keyboard and a gamepad. Three of its four buttons were impossible:
   restarts it. Tested on the timing in exact steps, release, a held ↓ walking the list, and the
   quick double tap; dropping the restart fails it.
 
+- ~~**The keyboard walked the focus out of sight.**~~ **Closed 2026-11-03.** In a long menu
+  inside a `Scroll`, a held ↓ moved the focus past the bottom of the box and kept going, unseen.
+  When the keys (or the d-pad) move the focus, the nearest `Scroll` around the focused element
+  now scrolls just enough to show it — its bottom meeting the box's when it is below, its top when
+  it is above. A focus moved by the mouse does not scroll anything. Tested both ways and with the
+  mouse; reversing the upward shift fails it.
+
 ### C16. Every game wrote the same three lines (2026-11-02)
 
 ~~**No timer.**~~ **Closed 2026-11-02.** `balon`, `kale` and `yikim_ustasi` each counted down by
