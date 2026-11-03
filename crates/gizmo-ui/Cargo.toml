@@ -48,8 +48,8 @@ gizmo-math = { path = "../gizmo-math", version = "0.10.0" }
 # (`no_length_conversion_produces_a_calc_tagged_value` testi bunu doğrular).
 # Feature'ı yine de kapalı tutuyoruz: derlenmeyen kod yanlışlıkla çağrılamaz.
 #
-# `grid` açık ama `Style` grid'i modellemiyor (bkz. Style dokümanındaki "Not
-# modelled" listesi) — grid'i geri açmak isteyen önce bir track tipi tanımlamalı.
+# `grid`: `Style` onu 2026-11-03'ten beri modelliyor — `Display::Grid`, `GridTracks`,
+# `GridPlacement` (modellenmeyenler Style dokümanındaki "Not modelled" listesinde).
 taffy = { version = "0.13.0", default-features = false, features = [
     "std",
     "taffy_tree",

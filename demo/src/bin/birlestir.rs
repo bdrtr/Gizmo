@@ -32,6 +32,10 @@
 //!   pencereye sığdırıyor (`fixed(k)` sabit bir çarpan); kutular, boşluklar ve kutuların üstündeki
 //!   yazılar birlikte büyüyüp küçülüyor. `Node` pencere pikseli kalıyor, tıklama ve sürükleme
 //!   hiçbir şey bilmeden çalışıyor.
+//! - **Izgara düzeni yoktu.** Altı sütunlu tarla, genişliği altı kare ve beş boşluğun toplamına
+//!   eşitlenmiş, *saran* bir satırdı — sütun sayısı bir genişlik hesabına gömülüydü ve bir kare
+//!   boyu değişince tarla sessizce beş ya da yedi sütuna dönerdi. **Kapatıldı:** `Display::Grid`,
+//!   `grid_template_columns: GridTracks::repeat(6, GridTrack::Px(84.0))`.
 //! - **İpucu (tooltip) yoktu.** İlk sürüm kendisininkini kuruyordu: her kare imlecin yanına
 //!   taşınan, kimse üstünde değilken `Display::None` olan mutlak bir düğüm — ve ölçekle bölmeyi
 //!   unutmamak. **Kapatıldı:** `Tooltip::new(metin)` — üstünde yarım saniye durunca öğenin kendi
@@ -56,7 +60,7 @@ use gizmo::renderer::components::{Text, TextAnchor};
 use gizmo::renderer::text::FontId;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
 use gizmo::ui::{
-    AlignItems, BackgroundColor, ButtonBundle, Clicked, Drag, DropTarget, FlexDirection, FlexWrap, JustifyContent,
+    AlignItems, BackgroundColor, ButtonBundle, Clicked, Display, Drag, DropTarget, FlexDirection, GridTrack, GridTracks, JustifyContent,
     NodeBundle, Style, Tooltip, UiPlugin, UiRect, UiScale, UiTransform, UiTween, Val, ZIndex,
 };
 use gizmo::math::Ease;
@@ -150,13 +154,11 @@ fn main() {
                 ..Default::default()
             });
 
-            // Tarla: sabit genişlikte, saran bir satır — altı sütun.
-            let width = COLS as f32 * CELL + (COLS - 1) as f32 * GAP;
+            // Tarla: altı sütunlu bir ızgara; satırlar kareler geldikçe.
             let field = scene.world.spawn_bundle(NodeBundle {
                 style: Style {
-                    width: Val::Px(width),
-                    flex_direction: FlexDirection::Row,
-                    flex_wrap: FlexWrap::Wrap,
+                    display: Display::Grid,
+                    grid_template_columns: GridTracks::repeat(COLS, GridTrack::Px(CELL)),
                     row_gap: Val::Px(GAP),
                     column_gap: Val::Px(GAP),
                     ..Default::default()

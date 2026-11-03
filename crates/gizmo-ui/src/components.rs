@@ -84,6 +84,100 @@ pub enum Display {
     Block,
     /// The element and its whole subtree generate no boxes and are skipped.
     None,
+    /// CSS grid: children are placed in the tracks of [`Style::grid_template_columns`] and
+    /// [`Style::grid_template_rows`] (implicit ones sized by `grid_auto_*`), in order or where
+    /// their [`Style::grid_column`] / [`Style::grid_row`] put them. The gaps are
+    /// [`Style::column_gap`] and [`Style::row_gap`].
+    Grid,
+}
+
+/// One column's or row's size in a [`Display::Grid`] container.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum GridTrack {
+    /// Exactly this many layout pixels.
+    Px(f32),
+    /// This percentage of the container's inner size.
+    Percent(f32),
+    /// A share of the space the fixed tracks leave: `Fr(1.0)` beside `Fr(2.0)` gets a third.
+    Fr(f32),
+    /// As big as its contents (and stretched into leftover space when nothing is `Fr`).
+    Auto,
+}
+
+/// The tracks of a grid axis — up to [`GridTracks::MAX`] of them, held inline so [`Style`] stays
+/// `Copy`.
+///
+/// ```
+/// use gizmo_ui::components::{GridTrack, GridTracks};
+/// let inventory = GridTracks::repeat(6, GridTrack::Px(64.0));
+/// let sidebar = GridTracks::new(&[GridTrack::Px(200.0), GridTrack::Fr(1.0)]);
+/// assert_eq!(inventory.len(), 6);
+/// assert_eq!(sidebar.as_slice()[1], GridTrack::Fr(1.0));
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GridTracks {
+    tracks: [GridTrack; GridTracks::MAX],
+    len: u8,
+}
+
+impl GridTracks {
+    /// The most tracks one axis holds. Past it a grid is better built from nested ones.
+    pub const MAX: usize = 16;
+    /// No explicit tracks: every column (row) is implicit, sized by `grid_auto_columns` (`_rows`).
+    pub const NONE: GridTracks = GridTracks { tracks: [GridTrack::Auto; GridTracks::MAX], len: 0 };
+
+    /// These tracks, in order. **Panics** past [`MAX`](Self::MAX) — a silently shorter grid would
+    /// put its last items somewhere else.
+    pub fn new(tracks: &[GridTrack]) -> Self {
+        assert!(tracks.len() <= Self::MAX, "{} grid tracks, the most is {}", tracks.len(), Self::MAX);
+        let mut out = Self::NONE;
+        out.tracks[..tracks.len()].copy_from_slice(tracks);
+        out.len = tracks.len() as u8;
+        out
+    }
+
+    /// `count` copies of `track` — CSS `repeat(count, track)`. **Panics** past [`MAX`](Self::MAX).
+    pub fn repeat(count: usize, track: GridTrack) -> Self {
+        Self::new(&vec![track; count])
+    }
+
+    /// The tracks, in order.
+    pub fn as_slice(&self) -> &[GridTrack] {
+        &self.tracks[..self.len as usize]
+    }
+
+    /// How many.
+    pub fn len(&self) -> usize {
+        self.len as usize
+    }
+
+    /// None at all.
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+}
+
+impl Default for GridTracks {
+    fn default() -> Self {
+        Self::NONE
+    }
+}
+
+/// Where a grid item goes along one axis. Lines are numbered from 1, as in CSS; negative lines
+/// count from the end (`-1` is the last line).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum GridPlacement {
+    /// The next free cell, in order — the default.
+    #[default]
+    Auto,
+    /// Starting at this line, one track wide.
+    Line(i16),
+    /// The next free place, `n` tracks wide.
+    Span(u16),
+    /// Starting at `line`, `span` tracks wide.
+    LineSpan(i16, u16),
 }
 
 /// How an element's `inset` is interpreted.
@@ -201,13 +295,12 @@ pub type JustifyContent = AlignContent;
 /// field below is deliberately absent, and setting it is impossible rather than
 /// merely awkward:
 ///
-/// - **CSS Grid.** No `Display::Grid`, no `grid_template_*`, `grid_auto_*`,
-///   `grid_row`/`grid_column` placement, no `fr` units, and no
-///   `justify_items`/`justify_self` (both are `#[cfg(feature = "grid")]` in
-///   `taffy` and ignored by flexbox — `align_items`/`align_self` are the
-///   flexbox cross-axis pair, and they *are* modelled). `taffy`'s grid
-///   algorithm is still compiled in (see `Cargo.toml`) but is unreachable from
-///   here; exposing it needs a grid-track type of its own.
+/// - **Most of CSS Grid's extras.** [`Display::Grid`] with explicit tracks
+///   ([`GridTracks`] of [`GridTrack`]: pixels, percent, `fr`, auto), one size for
+///   implicit tracks, and line/span placement is modelled. Not: named lines and
+///   areas, `minmax()`, `auto-fill`/`auto-fit` repetition, `grid_auto_flow`
+///   (always row), several implicit-track sizes, and `justify_items` /
+///   `justify_self` (`align_items`/`align_self` are modelled and apply).
 /// - **`overflow` and `scrollbar_width`.** This crate does no clipping and no
 ///   scrolling, so a scroll container would compute geometry nothing honours.
 /// - **`box_sizing`.** `taffy`'s default, border-box, is always used.
@@ -289,6 +382,20 @@ pub struct Style {
     pub row_gap: Val,
     /// Gap between columns. `Val::Auto` is treated as zero.
     pub column_gap: Val,
+
+    /// [`Display::Grid`]: the explicit columns, left to right.
+    pub grid_template_columns: GridTracks,
+    /// [`Display::Grid`]: the explicit rows, top to bottom.
+    pub grid_template_rows: GridTracks,
+    /// [`Display::Grid`]: the width of every column past the explicit ones.
+    pub grid_auto_columns: GridTrack,
+    /// [`Display::Grid`]: the height of every row past the explicit ones — an inventory's
+    /// fixed cell height, with only its columns declared.
+    pub grid_auto_rows: GridTrack,
+    /// In a grid parent: which columns this element takes.
+    pub grid_column: GridPlacement,
+    /// In a grid parent: which rows this element takes.
+    pub grid_row: GridPlacement,
 }
 
 impl Style {
@@ -327,6 +434,13 @@ impl Style {
 
         row_gap: Val::ZERO,
         column_gap: Val::ZERO,
+
+        grid_template_columns: GridTracks::NONE,
+        grid_template_rows: GridTracks::NONE,
+        grid_auto_columns: GridTrack::Auto,
+        grid_auto_rows: GridTrack::Auto,
+        grid_column: GridPlacement::Auto,
+        grid_row: GridPlacement::Auto,
     };
 }
 

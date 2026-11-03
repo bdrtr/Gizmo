@@ -1353,6 +1353,11 @@ is saved. Four things:
   in the element's own font, kept in the window; focus alone, a press, leaving or empty text hide
   it. Tested in logic and on the GPU.
 
+- ~~**No grid layout.**~~ **Closed 2026-11-03.** The six-column field was a wrapping row whose
+  width was six cells and five gaps — the column count lived in that arithmetic. `Display::Grid`
+  with `GridTracks::repeat(6, GridTrack::Px(84.0))`; taffy's grid had been compiled in and
+  unreachable. Not modelled: named lines and areas, `minmax()`, auto-fill, `grid_auto_flow`.
+
 ### C16f. The tenth game: a world made of tiles (2026-11-03, `zindan`)
 
 `demo/src/bin/zindan.rs` is a turn-based dungeon crawler: rooms and corridors generated per level,

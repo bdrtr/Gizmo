@@ -9,8 +9,12 @@ use taffy::{AvailableSpace, NodeId, TaffyTree};
 use gizmo_math::Vec2;
 
 use crate::components::{
-    AlignContent, AlignItems, Display, FlexDirection, FlexWrap, PositionType, Style, UiRect, Val,
+    AlignContent, AlignItems, Display, FlexDirection, FlexWrap, GridPlacement, GridTrack, GridTracks,
+    PositionType, Style, UiRect, Val,
 };
+use taffy::geometry::Line as TaffyLine;
+use taffy::style::{GridPlacement as TaffyGridPlacement, GridTemplateComponent, TrackSizingFunction};
+use taffy::style_helpers::{auto, fr, length, line, percent, span};
 
 /// Shared layout state for the UI, stored as a resource.
 ///
@@ -34,8 +38,8 @@ pub struct UiContext {
 // `NodeData`, which embeds `taffy::Style`, which embeds `CompactLength`'s
 // `*const ()` tagged-pointer union. Every `CompactLength` that can ever enter
 // this tree is produced by `UiContext::to_taffy_style` below, and that function
-// calls only `length()`, `percent()` and `auto()` — never `calc()`, the sole
-// constructor of the pointer variant. So the union in this tree only ever holds
+// calls only `length()`, `percent()`, `fr()` and `auto()` — never `calc()`, the sole
+// constructor of the pointer variant (`fr` is a number and a tag, like `length`). So the union in this tree only ever holds
 // an `f32` plus a tag: plain data, no interior mutability, no provenance,
 // nothing to race on.
 //
@@ -57,6 +61,38 @@ unsafe impl Sync for UiContext {}
 impl Default for UiContext {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Converts a [`GridTrack`] to a taffy track size.
+fn to_track(track: GridTrack) -> TrackSizingFunction {
+    match track {
+        GridTrack::Px(px) => length(px),
+        GridTrack::Percent(pct) => percent(pct / 100.0),
+        GridTrack::Fr(share) => fr(share.max(0.0)),
+        GridTrack::Auto => auto(),
+    }
+}
+
+/// The implicit-track size: taffy's empty list *is* auto, so `Auto` stays empty and the default
+/// style still converts to taffy's default.
+fn to_auto_tracks(track: GridTrack) -> Vec<TrackSizingFunction> {
+    if track == GridTrack::Auto { Vec::new() } else { vec![to_track(track)] }
+}
+
+/// Converts [`GridTracks`] to a taffy template, one track each.
+fn to_template(tracks: &GridTracks) -> Vec<GridTemplateComponent<String>> {
+    tracks.as_slice().iter().map(|&t| GridTemplateComponent::Single(to_track(t))).collect()
+}
+
+/// Converts a [`GridPlacement`] to taffy's start/end pair.
+fn to_placement(placement: GridPlacement) -> TaffyLine<TaffyGridPlacement<String>> {
+    let auto = TaffyGridPlacement::Auto;
+    match placement {
+        GridPlacement::Auto => TaffyLine { start: auto.clone(), end: auto },
+        GridPlacement::Line(l) => TaffyLine { start: line(l), end: auto },
+        GridPlacement::Span(n) => TaffyLine { start: span(n.max(1)), end: auto },
+        GridPlacement::LineSpan(l, n) => TaffyLine { start: line(l), end: span(n.max(1)) },
     }
 }
 
@@ -158,6 +194,7 @@ impl UiContext {
                 Display::Flex => TaffyDisplay::Flex,
                 Display::Block => TaffyDisplay::Block,
                 Display::None => TaffyDisplay::None,
+                Display::Grid => TaffyDisplay::Grid,
             },
             position: match style.position_type {
                 PositionType::Relative => TaffyPosition::Relative,
@@ -209,6 +246,13 @@ impl UiContext {
                 width: to_length_percentage(style.column_gap),
                 height: to_length_percentage(style.row_gap),
             },
+
+            grid_template_columns: to_template(&style.grid_template_columns),
+            grid_template_rows: to_template(&style.grid_template_rows),
+            grid_auto_columns: to_auto_tracks(style.grid_auto_columns),
+            grid_auto_rows: to_auto_tracks(style.grid_auto_rows),
+            grid_column: to_placement(style.grid_column),
+            grid_row: to_placement(style.grid_row),
 
             ..TaffyStyle::DEFAULT
         }

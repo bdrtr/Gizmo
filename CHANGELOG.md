@@ -64,6 +64,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   turns them green (31 230 38 / 6 224 7; forward 0 229 0 / 0 251 0), intensity 0 leaves them dark;
   dropping either shader's branch fails the test. Found by `kosucu`, whose gold coins were grey
   under a pale blue sky.
+- **`Display::Grid` in `gizmo-ui`.** Explicit tracks (`GridTracks` of `GridTrack::{Px, Percent,
+  Fr, Auto}`, up to 16 per axis, held inline so `Style` stays `Copy`), one size for implicit rows
+  and columns (`grid_auto_rows` / `grid_auto_columns`), and placement by line, span, or both
+  (`GridPlacement`); the gaps are `row_gap` / `column_gap`. taffy's grid algorithm had been
+  compiled in all along and unreachable. `birlestir`'s six-column field was a *wrapping row* whose
+  width was set to six cells and five gaps — the column count hidden in an arithmetic that a
+  changed cell size would have broken silently; it is a grid now. Tested through the layout
+  system (pixel, `fr` and percentage tracks, gaps, implicit rows, a span, a line, a line with a
+  span, explicit rows); breaking any one of eight conversions fails a test. **Breaking for a
+  `Style { .. }` literal written without `..Default::default()`** — six fields were added.
 - **`world_matrix(world, entity)` / `world_position` — where an entity is now.** In game code
   `GlobalTransform` is a frame behind: propagation runs after the update, so an entity spawned
   this frame still holds the default (the origin) and the child of something that moved this

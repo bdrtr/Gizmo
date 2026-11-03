@@ -304,6 +304,100 @@ mod tests {
         );
     }
 
+    /// `Display::Grid`: tracks in pixels and shares, a gap, implicit rows of a fixed height, an
+    /// item spanning two columns and one placed on a line. A 330 px container, columns
+    /// `100px 1fr 2fr` and a 10 px gap leave 210 px for three shares: 70 and 140.
+    #[test]
+    fn a_grid_places_its_children_in_tracks() {
+        use crate::components::{Display, GridPlacement, GridTrack, GridTracks};
+        let (mut world, mut schedule) = make_world();
+        set_window(&mut world, 800.0, 600.0);
+        let grid = world.spawn();
+        world.add_component(
+            grid,
+            Style {
+                display: Display::Grid,
+                width: Val::Px(330.0),
+                height: Val::Px(300.0),
+                grid_template_columns: GridTracks::new(&[GridTrack::Px(100.0), GridTrack::Fr(1.0), GridTrack::Fr(2.0)]),
+                grid_auto_rows: GridTrack::Px(40.0),
+                column_gap: Val::Px(10.0),
+                row_gap: Val::Px(5.0),
+                ..Default::default()
+            },
+        );
+        world.add_component(grid, Node::default());
+        let mut kids = Vec::new();
+        // Cells 0..=3 auto-placed; 4 spans two columns; 5 sits on column line 3 of the next row.
+        for i in 0..6 {
+            let e = world.spawn();
+            let mut style = Style::default();
+            if i == 4 {
+                style.grid_column = GridPlacement::Span(2);
+            }
+            if i == 5 {
+                style.grid_column = GridPlacement::Line(3);
+                style.grid_row = GridPlacement::Line(4);
+            }
+            world.add_component(e, style);
+            world.add_component(e, Node::default());
+            world.add_component(e, Parent(grid.id()));
+            kids.push(e);
+        }
+        world.add_component(grid, Children(kids.iter().map(|e| e.id()).collect()));
+        schedule.run(&mut world, 0.016);
+
+        let share = (330.0 - 100.0 - 20.0) / 3.0;
+        let col_x = [0.0, 110.0, 120.0 + share];
+        let col_w = [100.0, share, 2.0 * share];
+        let row_y = |r: usize| r as f32 * 45.0;
+        // Row 1: 0 1 2; row 2: 3, then 4 spans columns 2–3.
+        for (i, (c, r)) in [(0, 0), (1, 0), (2, 0), (0, 1)].into_iter().enumerate() {
+            let n = node_of(&world, kids[i]);
+            assert_vec2(n.position, col_x[c], row_y(r));
+            assert_vec2(n.size, col_w[c], 40.0);
+        }
+        let span = node_of(&world, kids[4]);
+        assert_vec2(span.position, col_x[1], row_y(1));
+        assert_vec2(span.size, col_w[1] + 10.0 + col_w[2], 40.0);
+        let placed = node_of(&world, kids[5]);
+        assert_vec2(placed.position, col_x[2], row_y(3));
+    }
+
+    /// Explicit rows (pixels and a percentage of the container) and an item placed on a line and
+    /// spanning from it: 200 px tall, rows `30px 50%` → 30 and 100; columns `25% 25% 50%` of 400.
+    #[test]
+    fn grid_rows_percentages_and_a_line_with_a_span() {
+        use crate::components::{Display, GridPlacement, GridTrack, GridTracks};
+        let (mut world, mut schedule) = make_world();
+        set_window(&mut world, 800.0, 600.0);
+        let grid = world.spawn();
+        world.add_component(
+            grid,
+            Style {
+                display: Display::Grid,
+                width: Val::Px(400.0),
+                height: Val::Px(200.0),
+                grid_template_columns: GridTracks::new(&[GridTrack::Percent(25.0), GridTrack::Percent(25.0), GridTrack::Percent(50.0)]),
+                grid_template_rows: GridTracks::new(&[GridTrack::Px(30.0), GridTrack::Percent(50.0)]),
+                ..Default::default()
+            },
+        );
+        world.add_component(grid, Node::default());
+        let item = world.spawn();
+        world.add_component(
+            item,
+            Style { grid_column: GridPlacement::LineSpan(2, 2), grid_row: GridPlacement::Line(2), ..Default::default() },
+        );
+        world.add_component(item, Node::default());
+        world.add_component(item, Parent(grid.id()));
+        world.add_component(grid, Children(vec![item.id()]));
+        schedule.run(&mut world, 0.016);
+        let n = node_of(&world, item);
+        assert_vec2(n.position, 100.0, 30.0);
+        assert_vec2(n.size, 300.0, 100.0);
+    }
+
     #[test]
     fn root_is_sized_and_placed_at_window_origin() {
         let (mut world, mut schedule) = make_world();
