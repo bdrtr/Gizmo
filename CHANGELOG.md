@@ -136,6 +136,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Triggers are now left out of the sweep, the ground probe and the platform carry, and the ones
   the capsule overlaps after each step are listed: measured, from x 1.20 to 2.80, exactly
   2 ± (0.5 + 0.3). Removing the filter or the record fails a test.
+- **Rollback game state: `RollbackSession::with_state`, `advance_with`, `try_advance_with`.** A
+  session kept only the `PhysicsWorld`, so a game's score lived outside it, and a goal scored on
+  a prediction that a late input then undid stayed counted. `RollbackSession<T, S = ()>` now
+  carries `state: S`, snapshotted with the world each tick and restored with it; `apply` may
+  change it, and a `StepRule` runs after every step, re-simulated ones included. Tested with a
+  push the remote stops after 4 ticks: the prediction crosses the goal line, the real push does
+  not, and the peer ends with no goal; not restoring the state fails it. `new` and `advance` are
+  unchanged.
+- **Rollback inputs are applied in player-id order on both peers.** They were applied local
+  first — opposite orders on the two peers — so any `apply` that depended on order (one player's
+  restart clearing what the other's input reads) came out differently. Tested by logging the
+  calls; local-first fails it.
+- **`LoopbackTransport` is `Send + Sync`** (its queues were `Rc<RefCell<_>>`), so a session over it
+  can be a `World` resource — a local two-player game over a simulated link.
 - **Rollback time sync: `RollbackSession::frames_ahead` / `try_advance` / `poll_remote`.** The
   session never waited for its peer — it predicts — so nothing kept two peers' clocks
   together: one that started 50 frames earlier stayed 50 ticks ahead, every remote input

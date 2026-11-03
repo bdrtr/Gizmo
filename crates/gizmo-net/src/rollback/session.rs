@@ -51,16 +51,27 @@ impl Transport for super::transport::UdpTransport {
     }
 }
 
-/// A single-threaded paired in-memory transport (TEST). `pair(lag, drop_modulo)` returns the two
-/// ends. `lag` is the delivery delay in polls; `drop_modulo` drops every Nth sent packet (0 = no
-/// loss). To survive packet loss, the session re-sends its recent inputs.
+/// A paired in-memory transport. `pair(lag, drop_modulo)` returns the two ends. `lag` is the
+/// delivery delay in polls; `drop_modulo` drops every Nth sent packet (0 = no loss). To survive
+/// packet loss, the session re-sends its recent inputs.
+///
+/// Built for the deterministic tests, and also what a game uses for two players on one machine
+/// over a simulated link (`itis` does). It is `Send + Sync`, so a session over it can be a
+/// `World` resource; until 2026-11-03 its queues were `Rc<RefCell<_>>` and it could not.
 #[derive(Debug)]
 pub struct LoopbackTransport {
-    inbox: std::rc::Rc<std::cell::RefCell<std::collections::VecDeque<(u32, NetworkPacket)>>>,
-    outbox: std::rc::Rc<std::cell::RefCell<std::collections::VecDeque<(u32, NetworkPacket)>>>,
+    inbox: LoopbackQueue,
+    outbox: LoopbackQueue,
     lag: u32,
     drop_modulo: u32,
     sent: u32,
+}
+
+type LoopbackQueue = std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<(u32, NetworkPacket)>>>;
+
+/// The queue, even if a thread panicked holding it — a test transport has nothing to protect.
+fn lock_queue(q: &LoopbackQueue) -> std::sync::MutexGuard<'_, std::collections::VecDeque<(u32, NetworkPacket)>> {
+    q.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 impl LoopbackTransport {
@@ -80,15 +91,13 @@ impl LoopbackTransport {
     ///
     /// Deterministic by construction — no RNG, no wall clock — which is what lets the
     /// convergence test assert exact `state_hash` equality against a ground-truth run
-    /// under lag *and* loss. Single-threaded only: the two queues are shared through
-    /// `Rc<RefCell<_>>`, so both endpoints must be driven from the same thread. This is
-    /// test scaffolding, not a shippable transport.
+    /// under lag *and* loss — as long as both ends are driven in a fixed order. Not a network:
+    /// both ends live in one process.
     pub fn pair(lag: u32, drop_modulo: u32) -> (Self, Self) {
-        use std::cell::RefCell;
         use std::collections::VecDeque;
-        use std::rc::Rc;
-        let a = Rc::new(RefCell::new(VecDeque::new()));
-        let b = Rc::new(RefCell::new(VecDeque::new()));
+        use std::sync::{Arc, Mutex};
+        let a = Arc::new(Mutex::new(VecDeque::new()));
+        let b = Arc::new(Mutex::new(VecDeque::new()));
         (
             Self { inbox: a.clone(), outbox: b.clone(), lag, drop_modulo, sent: 0 },
             Self { inbox: b, outbox: a, lag, drop_modulo, sent: 0 },
@@ -102,11 +111,11 @@ impl Transport for LoopbackTransport {
         if self.drop_modulo != 0 && self.sent.is_multiple_of(self.drop_modulo) {
             return; // paket kaybı simülasyonu
         }
-        self.outbox.borrow_mut().push_back((self.lag, packet.clone()));
+        lock_queue(&self.outbox).push_back((self.lag, packet.clone()));
     }
     fn poll(&mut self) -> Vec<NetworkPacket> {
         let mut ready = Vec::new();
-        let mut q = self.inbox.borrow_mut();
+        let mut q = lock_queue(&self.inbox);
         let mut keep = std::collections::VecDeque::with_capacity(q.len());
         while let Some((d, p)) = q.pop_front() {
             if d == 0 {
@@ -123,8 +132,21 @@ impl Transport for LoopbackTransport {
 /// The game-specific callback type that applies one player's input to the physics.
 pub type ApplyInput = dyn Fn(&mut PhysicsWorld, u32, &PlayerInput);
 
+/// [`ApplyInput`] for a session that carries game state `S` ([`RollbackSession::with_state`]):
+/// it may read and change that state too.
+pub type ApplyInputWith<'a, S> = dyn Fn(&mut PhysicsWorld, &mut S, u32, &PlayerInput) + 'a;
+
+/// A game rule run after every physics step of a session with state `S` — the forward step and
+/// every step of a re-simulation alike — so what it decides (a goal, a round's end) is rolled
+/// back and decided again with everything else.
+pub type StepRule<'a, S> = dyn Fn(&mut PhysicsWorld, &mut S) + 'a;
+
 /// A two-player deterministic rollback session (PhysicsWorld is the authoritative state).
-pub struct RollbackSession<T: Transport> {
+///
+/// `S` is the game's own state — a score, a round, a timer — kept and rolled back with the
+/// physics ([`with_state`](Self::with_state)); it is `()` for a session made with
+/// [`new`](Self::new).
+pub struct RollbackSession<T: Transport, S = ()> {
     /// The authoritative simulation state. Public so gameplay and rendering can read it
     /// (and so it can be seeded before the first tick), but [`RollbackSession::advance`]
     /// may rewind and re-simulate it in place — anything read out of it belongs to a
@@ -136,6 +158,15 @@ pub struct RollbackSession<T: Transport> {
     /// `entities` and `colliders` are untouched, so adding or removing a body mid-session
     /// misaligns the SoA arrays and corrupts every subsequent restore.
     pub world: PhysicsWorld,
+
+    /// The game's own state, snapshotted with the world at the start of every tick and restored
+    /// with it on a rollback. Like [`world`](Self::world) it is the predicted frontier: read it
+    /// to draw, and expect it to change retroactively.
+    ///
+    /// **Why it exists.** The session only kept the `PhysicsWorld`, so a score had to live
+    /// outside it — and a goal scored on a prediction that a late input then undid stayed
+    /// counted: the ball was back in play, the point was still on the board.
+    pub state: S,
 
     /// Ticks simulated so far, and therefore the tick `advance` will simulate next.
     /// Starts at 0 and increments once per `advance`, after the step.
@@ -154,7 +185,7 @@ pub struct RollbackSession<T: Transport> {
     local_buf: InputBuffer,
     remote_buf: InputBuffer,
     /// Per tick, the complete state as it was at the START of that tick (for rollback).
-    snaps: HashMap<u64, WorldSnapshot>,
+    snaps: HashMap<u64, (WorldSnapshot, S)>,
     max_rollback: u64,
     fixed_dt: f32,
     /// Packet-loss resilience: re-send this many of the most recent local inputs on every send.
@@ -168,8 +199,23 @@ pub struct RollbackSession<T: Transport> {
 }
 
 impl<T: Transport> RollbackSession<T> {
-    /// Wraps an already-populated `world` and a transport into a session that starts at
-    /// tick 0.
+    /// A session with no game state of its own — [`with_state`](Self::with_state) with `()`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        world: PhysicsWorld,
+        transport: T,
+        local_id: u32,
+        remote_id: u32,
+        max_rollback: u64,
+        fixed_dt: f32,
+    ) -> Self {
+        Self::with_state(world, (), transport, local_id, remote_id, max_rollback, fixed_dt)
+    }
+}
+
+impl<T: Transport, S: Clone> RollbackSession<T, S> {
+    /// Wraps an already-populated `world`, the game's starting `state` and a transport into a
+    /// session that starts at tick 0. `state` is snapshotted and restored with the world.
     ///
     /// Both peers must start from **bit-identical** worlds (same bodies, added in the
     /// same order, same `fixed_dt`). Nothing here negotiates or verifies that, and a
@@ -195,9 +241,15 @@ impl<T: Transport> RollbackSession<T> {
     /// Input history is sized to `max(max_rollback + 8, 64)` ticks so it always outlives
     /// the snapshot window — an input can never expire while a snapshot that needs it is
     /// still around.
+    ///
+    /// Inputs are applied in **player-id order** on both peers, whichever is local, so a rule
+    /// that depends on order (one player's restart clearing a state the other's input reads)
+    /// comes out the same on both. It used to be local-first, which is opposite orders on the
+    /// two peers.
     #[allow(clippy::too_many_arguments)]
-    pub fn new(
+    pub fn with_state(
         world: PhysicsWorld,
+        state: S,
         transport: T,
         local_id: u32,
         remote_id: u32,
@@ -214,6 +266,7 @@ impl<T: Transport> RollbackSession<T> {
         let cap = (max_rollback as usize + 8).max(64);
         Self {
             world,
+            state,
             tick: 0,
             transport,
             local_id,
@@ -271,12 +324,48 @@ impl<T: Transport> RollbackSession<T> {
     /// link is 3 ticks at 60 Hz) and below `max_rollback`, so a late input can always still be
     /// rolled back to.
     pub fn try_advance(&mut self, local_input: PlayerInput, apply: &ApplyInput, max_lead: u64) -> bool {
+        self.try_advance_with(local_input, &|w, _, p, i| apply(w, p, i), &|_, _| {}, max_lead)
+    }
+
+    /// [`try_advance`](Self::try_advance) for a session with game state: `apply` may change the
+    /// state, and `rule` runs after every step (see [`advance_with`](Self::advance_with)).
+    pub fn try_advance_with(
+        &mut self,
+        local_input: PlayerInput,
+        apply: &ApplyInputWith<'_, S>,
+        rule: &StepRule<'_, S>,
+        max_lead: u64,
+    ) -> bool {
         if self.frames_ahead() > max_lead {
             self.poll_remote();
             return false;
         }
-        self.advance(local_input, apply);
+        self.advance_with(local_input, apply, rule);
         true
+    }
+
+    /// Both players' inputs for one tick, applied in player-id order, then the step and `rule`.
+    fn simulate_tick(
+        &mut self,
+        tick: u64,
+        local: &PlayerInput,
+        remote: &PlayerInput,
+        apply: &ApplyInputWith<'_, S>,
+        rule: &StepRule<'_, S>,
+    ) {
+        let (first, second) = if self.local_id <= self.remote_id {
+            ((self.local_id, local), (self.remote_id, remote))
+        } else {
+            ((self.remote_id, remote), (self.local_id, local))
+        };
+        apply(&mut self.world, &mut self.state, first.0, first.1);
+        apply(&mut self.world, &mut self.state, second.0, second.1);
+        // `.ok()` fizik adımı hatasını (NaN/Inf) sessizce yutuyordu; davranışı koruyup (kareyi
+        // atla, ilerlemeye devam et) artık bağlamlı raporluyoruz.
+        if let Err(e) = self.world.step(self.fixed_dt) {
+            tracing::warn!(tick, error = ?e, "Fizik adımı başarısız");
+        }
+        rule(&mut self.world, &mut self.state);
     }
 
     /// Mevcut durum hash'i (desync tespiti / test).
@@ -286,8 +375,16 @@ impl<T: Transport> RollbackSession<T> {
 
     /// Advance one tick. `local_input` is this tick's local input; `apply` applies an input to
     /// the physics.
+    pub fn advance(&mut self, local_input: PlayerInput, apply: &ApplyInput) {
+        self.advance_with(local_input, &|w, _, p, i| apply(w, p, i), &|_, _| {});
+    }
+
+    /// [`advance`](Self::advance) for a session with game state: `apply` applies one player's
+    /// input and may change the state; `rule` runs after every physics step — this tick's and
+    /// each re-simulated one — and is where a game decides what the step meant (a goal, a
+    /// round's end), so a rollback decides it again.
     #[tracing::instrument(skip_all, name = "rollback_advance")]
-    pub fn advance(&mut self, mut local_input: PlayerInput, apply: &ApplyInput) {
+    pub fn advance_with(&mut self, mut local_input: PlayerInput, apply: &ApplyInputWith<'_, S>, rule: &StepRule<'_, S>) {
         let t = self.tick;
         local_input.tick = t;
         self.local_buf.insert(local_input);
@@ -307,20 +404,15 @@ impl<T: Transport> RollbackSession<T> {
 
         // Rollback: hedefin başına dön, hedef..t arası iki oyuncunun (düzeltilmiş) girdisiyle resim.
         if let Some(target) = rollback_to {
-            if let Some(snap) = self.snaps.get(&target).cloned() {
+            if let Some((snap, state)) = self.snaps.get(&target).cloned() {
                 let resim_frames = t.saturating_sub(target);
                 self.world.restore_snapshot(&snap);
+                self.state = state;
                 for rt in target..t {
-                    self.snaps.insert(rt, self.world.snapshot());
+                    self.snaps.insert(rt, (self.world.snapshot(), self.state.clone()));
                     let li = self.local_buf.get_or_predict(rt);
                     let rr = self.remote_buf.get_or_predict(rt);
-                    apply(&mut self.world, self.local_id, &li);
-                    apply(&mut self.world, self.remote_id, &rr);
-                    // `.ok()` fizik adımı hatasını (NaN/Inf) sessizce yutuyordu; davranışı
-                    // koruyup (kareyi atla, ilerlemeye devam et) artık bağlamlı raporluyoruz.
-                    if let Err(e) = self.world.step(self.fixed_dt) {
-                        tracing::warn!(tick = rt, error = ?e, "Rollback yeniden-simülasyonunda fizik adımı başarısız");
-                    }
+                    self.simulate_tick(rt, &li, &rr, apply, rule);
                 }
                 tracing::debug!(
                     target,
@@ -340,13 +432,9 @@ impl<T: Transport> RollbackSession<T> {
         }
 
         // t'nin başını kaydet, iki oyuncunun girdisini uygula, ilerle.
-        self.snaps.insert(t, self.world.snapshot());
+        self.snaps.insert(t, (self.world.snapshot(), self.state.clone()));
         let ri = self.remote_buf.get_or_predict(t);
-        apply(&mut self.world, self.local_id, &local_input);
-        apply(&mut self.world, self.remote_id, &ri);
-        if let Err(e) = self.world.step(self.fixed_dt) {
-            tracing::warn!(tick = t, error = ?e, "Fizik adımı başarısız (advance ileri adım)");
-        }
+        self.simulate_tick(t, &local_input, &ri, apply, rule);
         self.tick += 1;
 
         // Eski snapshot'ları buda (pencere dışı).
@@ -520,6 +608,89 @@ mod tests {
         a.poll_remote();
         assert_eq!(a.frames_ahead(), 3, "b's tick 1 arrived: 5 - (1 + 1)");
         assert!(a.try_advance(PlayerInput::empty(0), apply_fn, 4));
+    }
+
+    /// Player 0 pushes body 1 for `PUSH` ticks and stops; the peer that has it as remote keeps
+    /// predicting the push until the stop arrives `lag` polls later.
+    const PUSH: u64 = 4;
+    fn shove(w: &mut PhysicsWorld, _goals: &mut Goals, player: u32, input: &PlayerInput) {
+        if player == 0 && input.joystick_x != 0 {
+            w.rigid_bodies[1].wake_up();
+            w.velocities[1].linear.x += input.joystick_x as f32 / 127.0 * 0.6;
+        }
+    }
+    fn shove_input(player: u32, t: u64) -> PlayerInput {
+        PlayerInput { tick: t, buttons: 0, joystick_x: if player == 0 && t < PUSH { 127 } else { 0 }, joystick_y: 0 }
+    }
+    #[derive(Clone, Debug, PartialEq)]
+    struct Goals {
+        count: u32,
+        max_x: f32,
+    }
+    impl Default for Goals {
+        fn default() -> Self {
+            Self { count: 0, max_x: f32::NEG_INFINITY }
+        }
+    }
+    fn goal_line(w: &mut PhysicsWorld, g: &mut Goals) {
+        let x = w.transforms[1].position.x;
+        g.max_x = g.max_x.max(x);
+        if x > GOAL_X && g.count == 0 {
+            g.count = 1;
+        }
+    }
+    const GOAL_X: f32 = -0.27;
+
+    /// A goal scored only on a prediction is taken back by the rollback that undoes the
+    /// prediction: the real push carries body 1 to x −0.39, the predicted one (the push repeated
+    /// until the stop arrives 12 polls late) to −0.15, and the line is at −0.27.
+    #[test]
+    fn game_state_rolls_back_with_the_physics() {
+        let mut gt = build_scene();
+        let mut truth = Goals::default();
+        for t in 0..120u64 {
+            shove(&mut gt, &mut truth, 0, &shove_input(0, t));
+            gt.step(DT).ok();
+            goal_line(&mut gt, &mut truth);
+        }
+        assert_eq!(truth.count, 0, "the real run must not score (it reached {:.2})", truth.max_x);
+        let (ta, tb) = LoopbackTransport::pair(12, 0);
+        let mut a = RollbackSession::with_state(build_scene(), Goals::default(), ta, 1, 0, 32, DT);
+        let mut b = RollbackSession::with_state(build_scene(), Goals::default(), tb, 0, 1, 32, DT);
+        let mut predicted_a_goal = false;
+        for t in 0..120u64 {
+            b.advance_with(shove_input(0, t), &shove, &goal_line);
+            a.advance_with(shove_input(1, t), &shove, &goal_line);
+            predicted_a_goal |= a.state.count == 1;
+        }
+        assert!(predicted_a_goal, "the scenario must score on the prediction, or it tests nothing");
+        assert_eq!(a.state, truth, "a goal scored on a prediction outlived the rollback");
+        assert_eq!(b.state, truth);
+        assert_eq!(a.state_hash(), gt.state_hash());
+    }
+
+    /// Inputs reach `apply` in player-id order on both peers. Each tick's two calls are logged;
+    /// local-first, peer A logged 0,1 and peer B 1,0.
+    #[test]
+    fn inputs_apply_in_player_id_order_on_both_peers() {
+        fn log(_: &mut PhysicsWorld, order: &mut Vec<u32>, player: u32, _: &PlayerInput) {
+            order.push(player);
+        }
+        let (ta, tb) = LoopbackTransport::pair(0, 0);
+        let mut a = RollbackSession::with_state(build_scene(), Vec::new(), ta, 0, 1, 32, DT);
+        let mut b = RollbackSession::with_state(build_scene(), Vec::new(), tb, 1, 0, 32, DT);
+        for t in 0..3 {
+            a.advance_with(PlayerInput::empty(t), &log, &|_, _| {});
+            b.advance_with(PlayerInput::empty(t), &log, &|_, _| {});
+        }
+        assert_eq!(a.state, vec![0, 1, 0, 1, 0, 1]);
+        assert_eq!(b.state, a.state);
+    }
+
+    #[test]
+    fn a_loopback_session_can_be_a_world_resource() {
+        fn send_sync<T: Send + Sync>() {}
+        send_sync::<RollbackSession<LoopbackTransport>>();
     }
 
     // --- LoopbackTransport (deterministik test transport'unun kendisi) ---
