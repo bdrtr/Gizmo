@@ -139,6 +139,9 @@ fn scene_layout() -> Vec<(&'static str, u32)> {
         ("fog", offset_of!(SceneUniforms, fog) as u32),
         ("fog_shape", offset_of!(SceneUniforms, fog_shape) as u32),
         ("shadow_bias", offset_of!(SceneUniforms, shadow_bias) as u32),
+        ("sky_zenith", offset_of!(SceneUniforms, sky_zenith) as u32),
+        ("sky_horizon", offset_of!(SceneUniforms, sky_horizon) as u32),
+        ("sky_ground", offset_of!(SceneUniforms, sky_ground) as u32),
     ]
 }
 

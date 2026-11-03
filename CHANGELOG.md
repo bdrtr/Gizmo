@@ -50,6 +50,23 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`Renderer::sky` — the sky that lights the scene, by hand.** The light a surface gets from its
+  surroundings — ambient and reflections — came from four procedural skies baked into the
+  shaders; `Camera::clear_color` and `Renderer::fog` could make the background and the haze any
+  colour, but a shiny thing still reflected the preset's sunset. `Sky::gradient(zenith, horizon,
+  ground)` (and `Sky::uniform`, `with_intensity`) replaces the preset's sky outright on both
+  shading paths: the gradient around a surface's normal lights it, the one along its mirror ray
+  (softened toward the average as it gets rougher) is what it reflects; reflection probes still win
+  inside their boxes. It is not the background — the docs say to pair it with the clear colour
+  and fog. Three vec4s appended to `SceneUniforms` (fixed part 608 → 656 B, light ceiling
+  1014 → 1013; every size pin and ENGINE.md updated). Measured with a matte and a metal cube under
+  no light at all: the preset leaves them grey (103 106 113 / 83 86 91 deferred), a green sky
+  turns them green (31 230 38 / 6 224 7; forward 0 229 0 / 0 251 0), intensity 0 leaves them dark;
+  dropping either shader's branch fails the test. Found by `kosucu`, whose gold coins were grey
+  under a pale blue sky.
+- **`kosucu`, the fourteenth game** — a three-lane endless runner: the road is spawned ahead and
+  despawned behind in 30 m chunks, the speed climbs, swipes work on a touch screen. Memory held at
+  89 MB over three minutes of the autopilot spawning and despawning ~75 entities a second.
 - **`KinematicTarget` — a kinematic body driven to a pose.** A game knows where a tilting board,
   a door or a lift should be; turning that into a `Velocity` was its job, and with a fixed-step
   driver it was wrong, because a frame runs zero, one or several steps. Now the physics step sets

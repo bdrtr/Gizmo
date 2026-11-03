@@ -685,6 +685,7 @@ impl Renderer {
             light_cookies: Default::default(),
             shadow_settings: Default::default(),
             fog: None,
+            sky: None,
             deband_dither: false,
             gpu_particles,
             gpu_physics,

@@ -406,8 +406,15 @@ pub struct SceneUniforms {
     pub fog_shape: [f32; 4],
     /// `ShadowSettings`: x = depth-bias multiplier, y = normal-offset multiplier; zw unused.
     pub shadow_bias: [f32; 4],
-                           // Total: 608 + 64·MAX_LIGHTS bytes (16 992 at MAX_LIGHTS = 256).
-                           // The 64 KiB uniform floor caps this layout at 1014 lights — checked by
+    /// `Renderer::sky`: rgb = the colour straight up, a = intensity; a < 0 = no override, the
+    /// environment preset's sky lights the scene.
+    pub sky_zenith: [f32; 4],
+    /// rgb = the colour at the horizon; a unused.
+    pub sky_horizon: [f32; 4],
+    /// rgb = the colour straight down; a unused.
+    pub sky_ground: [f32; 4],
+                           // Total: 656 + 64·MAX_LIGHTS bytes (17 040 at MAX_LIGHTS = 256).
+                           // The 64 KiB uniform floor caps this layout at 1013 lights — checked by
                            // `frame_uniforms`'s `the_scene_block_fits_the_uniform_binding_floor_…`.
 }
 
@@ -673,13 +680,14 @@ mod tests {
         // wrong offsets for i > 0 — see `every_instance_shader_declares_the_full_struct`.
         assert_eq!(std::mem::size_of::<InstanceRaw>(), 128, "InstanceRaw");
         assert_eq!(std::mem::size_of::<MaterialParams>(), 48, "MaterialParams = 3×vec4");
-        // The fixed part is 608 bytes (560 until `fog` / `fog_shape` and `shadow_bias` were appended, 2026-11-02);
+        // The fixed part is 656 bytes (560 until `fog` / `fog_shape` and `shadow_bias` were appended, 2026-11-02;
+        // 608 until the three `sky_*` rows, 2026-11-03);
         // the light array is the rest. Expressed against
         // MAX_LIGHTS so raising the light ceiling does not require editing three literals in
         // three files (and so that forgetting one is not how the layout drifts).
         assert_eq!(
             std::mem::size_of::<SceneUniforms>(),
-            608 + crate::frame_uniforms::MAX_LIGHTS * 64,
+            656 + crate::frame_uniforms::MAX_LIGHTS * 64,
             "SceneUniforms total"
         );
     }

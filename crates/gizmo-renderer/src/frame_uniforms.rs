@@ -71,7 +71,7 @@ use gizmo_math::{Mat4, Vec3};
 /// many lights are actually in view.
 ///
 /// Why not more: the light array lives in the *uniform* block, so the hard ceiling is
-/// `(65536 - 608) / 64` = 1014 lights, and past a few hundred the honest move is to put the array in
+/// `(65536 - 656) / 64` = 1013 lights, and past a few hundred the honest move is to put the array in
 /// a storage buffer rather than to inch this number toward a cliff. 256 is a round number well
 /// inside the limit that no hand-lit scene is going to reach.
 pub const MAX_LIGHTS: usize = 256;
@@ -196,6 +196,8 @@ pub struct EnvironmentFrame {
     pub wireframe_color: Option<[f32; 3]>,
     /// The scene's fog (`Renderer::fog`); `None` keeps the environment preset's.
     pub fog: Option<Fog>,
+    /// The sky that lights the scene (`Renderer::sky`); `None` keeps the environment preset's.
+    pub sky: Option<Sky>,
 }
 
 /// Height fog, set by hand rather than by the environment preset — `Renderer::fog`.
@@ -228,6 +230,50 @@ impl Fog {
     pub fn with_height(mut self, falloff: f32, base_height: f32) -> Self {
         self.height_falloff = falloff.max(0.0);
         self.base_height = base_height;
+        self
+    }
+}
+
+/// The sky that lights the scene, set by hand rather than by the environment preset —
+/// `Renderer::sky`.
+///
+/// A gradient over directions: `zenith` straight up, `horizon` level, `ground` straight down,
+/// blended by the square root of the elevation, so most of the sky is near the horizon colour, as
+/// a real one is. It replaces the preset's sky everywhere the scene is lit by its surroundings:
+/// the ambient light every surface gets (from the gradient around its normal) and what a shiny
+/// one reflects (the gradient along its mirror direction, softened toward the average as it gets
+/// rougher) — on both draw paths. Reflection probes, where present, still win inside their boxes.
+/// It is **not** the background: pair it with `Camera::clear_color` (the horizon colour, usually),
+/// and with [`Fog`] of the same colour if far things should fade into it.
+///
+/// The presets, for scale: their skies run 0.05–1.0 per channel at intensity 1.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub struct Sky {
+    /// Linear RGB straight up.
+    pub zenith: [f32; 3],
+    /// Linear RGB at the horizon.
+    pub horizon: [f32; 3],
+    /// Linear RGB straight down — the light bounced off the ground.
+    pub ground: [f32; 3],
+    /// Multiplies all three. 0 = no light from the surroundings at all.
+    pub intensity: f32,
+}
+
+impl Sky {
+    /// A sky of three colours, at intensity 1.
+    pub fn gradient(zenith: [f32; 3], horizon: [f32; 3], ground: [f32; 3]) -> Self {
+        Self { zenith, horizon, ground, intensity: 1.0 }
+    }
+
+    /// The same colour from every direction — flat ambient light.
+    pub fn uniform(color: [f32; 3]) -> Self {
+        Self::gradient(color, color, color)
+    }
+
+    /// The same sky, brighter or dimmer.
+    pub fn with_intensity(mut self, intensity: f32) -> Self {
+        self.intensity = intensity.max(0.0);
         self
     }
 }
@@ -319,6 +365,9 @@ impl SceneUniforms {
             fog: environment.fog.map_or([0.0, 0.0, 0.0, -1.0], |f| [f.color[0], f.color[1], f.color[2], f.density.max(0.0)]),
             fog_shape: environment.fog.map_or([0.0; 4], |f| [f.height_falloff.max(0.0), f.base_height, 0.0, 0.0]),
             shadow_bias: [shadows.bias_scale[0], shadows.bias_scale[1], 0.0, 0.0],
+            sky_zenith: environment.sky.map_or([0.0, 0.0, 0.0, -1.0], |s| [s.zenith[0], s.zenith[1], s.zenith[2], s.intensity.max(0.0)]),
+            sky_horizon: environment.sky.map_or([0.0; 4], |s| [s.horizon[0], s.horizon[1], s.horizon[2], 0.0]),
+            sky_ground: environment.sky.map_or([0.0; 4], |s| [s.ground[0], s.ground[1], s.ground[2], 0.0]),
             // Read by nothing today — the post composite owns exposure and `deferred_lighting.wgsl`
             // says as much next to the field it no longer reads. Fed from the camera in both paths
             // regardless, so a shader that starts reading it does not find two different answers.
@@ -512,7 +561,7 @@ mod tests {
         // the light ceiling changes. (It was `1168` / `1104`, correct only at MAX_LIGHTS = 10.)
         const LIGHT_BYTES: usize = std::mem::size_of::<LightData>(); // 4 × vec4 = 64
         assert_eq!(LIGHT_BYTES, 64);
-        assert_eq!(std::mem::size_of::<SceneUniforms>(), 608 + MAX_LIGHTS * LIGHT_BYTES);
+        assert_eq!(std::mem::size_of::<SceneUniforms>(), 656 + MAX_LIGHTS * LIGHT_BYTES);
         assert_eq!(
             std::mem::offset_of!(SceneUniforms, inv_view_proj),
             464 + MAX_LIGHTS * LIGHT_BYTES
@@ -524,7 +573,7 @@ mod tests {
     ///
     /// `maxUniformBufferBindingSize` is **64 KiB** everywhere WebGPU runs — that is the
     /// guaranteed floor, and the number `MAX_LIGHTS` has always been argued against. The argument
-    /// lived in prose: docs/ENGINE.md works out `(65536 − 608) / 64 = 1014` lights as the hard
+    /// lived in prose: docs/ENGINE.md works out `(65536 − 656) / 64 = 1013` lights as the hard
     /// ceiling. Nothing computed it, so raising `MAX_LIGHTS` past it would have compiled, passed
     /// every test, and then failed at **run time** on the first machine that enforces the floor —
     /// as a bind-group validation error, which is the least informative place to learn about an
@@ -551,10 +600,10 @@ mod tests {
 
         // …and the ceiling the documentation argues from is the one this layout actually has.
         let fixed = block - MAX_LIGHTS * std::mem::size_of::<LightData>();
-        assert_eq!(fixed, 608, "the block's fixed part (560 before the fog override, 592 before the shadow bias)");
+        assert_eq!(fixed, 656, "the block's fixed part (560 before the fog override, 592 before the shadow bias, 608 before the sky)");
         assert_eq!(
             (UNIFORM_FLOOR - fixed) / std::mem::size_of::<LightData>(),
-            1014,
+            1013,
             "the light ceiling docs/ENGINE.md quotes"
         );
     }

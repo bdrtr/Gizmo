@@ -45,7 +45,7 @@ fn game_inputs() -> SceneSetupInputs {
         cam_fov: 0.8,
         shadow_caster: ShadowCaster::SunOnly,
         // Live renderer state in the real call; the values themselves are not the subject here.
-        environment: EnvironmentFrame { preset: 2, preset_2: 3, blend_t: 0.5, shading_mode: 0, clear_color: None, wireframe_color: None, fog: None },
+        environment: EnvironmentFrame { preset: 2, preset_2: 3, blend_t: 0.5, shading_mode: 0, clear_color: None, wireframe_color: None, fog: None, sky: None },
         point_shadows_enabled: true,
         elapsed_time: 7.5,
         light_cookies: Default::default(),
@@ -167,12 +167,17 @@ fn the_two_paths_agree_on_everything_the_world_decides() {
     assert_eq!(g._pre_align_pad, e._pre_align_pad);
     assert_eq!(g.wireframe_color, e.wireframe_color);
     assert_eq!((g.fog, g.fog_shape), (e.fog, e.fog_shape), "neither input asks for fog");
+    assert_eq!(
+        (g.sky_zenith, g.sky_horizon, g.sky_ground),
+        (e.sky_zenith, e.sky_horizon, e.sky_ground),
+        "neither input asks for a sky"
+    );
     assert_eq!(g.shadow_bias, e.shadow_bias, "both read Renderer::shadow_settings");
     // Both read the rendered camera's `clear_color` (the editor's game view from the game camera).
     assert_eq!(g.clear_color, e.clear_color);
     assert_eq!(
         std::mem::size_of::<SceneUniforms>(),
-        608 + gizmo::renderer::MAX_LIGHTS * 64,
+        656 + gizmo::renderer::MAX_LIGHTS * 64,
         "a field was added to the block — decide here whether the two paths should agree on it \
          (the light array is the block's only variable part, so it is written against MAX_LIGHTS)"
     );

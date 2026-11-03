@@ -5,7 +5,7 @@
 // dropped on web. That divergence is expressed at the SOURCE via `#ifdef SHADOWS` (shadow
 // bindings + PCF block) and `@group(#{SKELETON_GROUP})` / `@group(#{INSTANCE_GROUP})`
 // (3/4 native, 2/3 web) — never by grepping naga's reformatted output.
-#import gizmo::common::{SceneUniforms, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, spot_cookie_uv, gizmo_cluster_index}
+#import gizmo::common::{SceneUniforms, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, spot_cookie_uv, gizmo_cluster_index, sky_gradient}
 #ifdef PROBES
 #import gizmo::reflection_probes::{probe_environment}
 #endif
@@ -295,11 +295,18 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let sky_ambient = vec3<f32>(0.8, 0.5, 0.4) * 0.7;
     let ground_ambient = vec3<f32>(0.15, 0.1, 0.15);
     let hemi_mix = N.y * 0.5 + 0.5;
-    let ambient = base_color * mix(ground_ambient, sky_ambient, hemi_mix);
+    var ambient = base_color * mix(ground_ambient, sky_ambient, hemi_mix);
     
     let R = reflect(-view_dir, N);
     let reflect_mix = clamp(R.y * 0.5 + 0.5, 0.0, 1.0);
-    let fake_env_color = mix(ground_ambient, vec3<f32>(1.0, 0.6, 0.4), reflect_mix);
+    var fake_env_color = mix(ground_ambient, vec3<f32>(1.0, 0.6, 0.4), reflect_mix);
+    // `Renderer::sky` replaces the hemispheric stand-in (intensity ≥ 0; < 0 = no override): the
+    // gradient around the normal lights it, the one along the mirror ray is what it reflects.
+    if (scene.sky_zenith.a >= 0.0) {
+        let k = scene.sky_zenith.a;
+        ambient = base_color * sky_gradient(N, scene.sky_zenith.rgb, scene.sky_horizon.rgb, scene.sky_ground.rgb, 1.0) * k;
+        fake_env_color = sky_gradient(R, scene.sky_zenith.rgb, scene.sky_horizon.rgb, scene.sky_ground.rgb, min_roughness) * k;
+    }
     // With reflection probes in the scene the environment is theirs (native: group 5, the
     // irradiance volume's); with none, `probe_environment` hands back the hemispheric stand-in it
     // was given, unchanged.

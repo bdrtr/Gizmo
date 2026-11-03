@@ -960,6 +960,7 @@ fn draw_camera_view(
                 clear_color,
                 wireframe_color: world.get_resource::<WireframeConfig>().and_then(|w| w.color),
                 fog: renderer.fog,
+                sky: renderer.sky,
             },
             point_shadows_enabled: renderer.point_shadows_enabled,
             elapsed_time,
@@ -6627,6 +6628,79 @@ mod golden_render_tests {
                 "density 0 is no fog — neutral and brighter than the preset's haze: {clear:?} vs {preset:?}"
             );
             assert!(flat[2] as i32 > flat[0] as i32 + 80, "fog that does not thin with height still renders: {flat:?}");
+        });
+    }
+
+    /// `Renderer::sky` replaces the preset's sky as what lights the scene, on both shading paths.
+    /// A white matte cube and a mirror-like one under no light at all: what they show is the
+    /// surroundings. A green sky turns both green; the same sky at intensity 0 leaves them dark.
+    /// The forward shader (`shader.wgsl`, the browser's whole pipeline) is reached natively through
+    /// transparency: a transparent material is drawn by it, after the deferred pass.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn a_hand_set_sky_lights_the_scene_on_both_paths() {
+        use crate::renderer::Sky;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        // (matte, mirror) centre-row pixels: the matte cube on the left, the metal one on the right.
+        async fn shot(sky: Option<Sky>, deferred: bool) -> ([u8; 3], [u8; 3]) {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.sky = sky;
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            for (x, roughness, metallic) in [(-1.2f32, 0.9, 0.0), (1.2, 0.2, 1.0)] {
+                let cube = world.spawn();
+                world.add_component(cube, Transform::new(Vec3::new(x, 0.0, -5.0)).with_scale(Vec3::splat(0.9)));
+                world.add_component(cube, GlobalTransform::default());
+                world.add_component(cube, AssetManager::create_cube(&renderer.device));
+                world.add_component(
+                    cube,
+                    Material::new(tex.clone())
+                        .with_pbr(Vec4::new(0.9, 0.9, 0.9, 1.0), roughness, metallic)
+                        .with_transparent(!deferred),
+                );
+                world.add_component(cube, MeshRenderer::new());
+            }
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::ZERO,
+                yaw: -std::f32::consts::FRAC_PI_2,
+                pitch: 0.0,
+                primary: true,
+                ..Default::default()
+            });
+            let f = render_world(&mut renderer, &mut world).await;
+            let px = |x: usize| {
+                let i = (64 * 128 + x) * 4;
+                [f[i], f[i + 1], f[i + 2]]
+            };
+            (px(36), px(92))
+        }
+        pollster::block_on(async {
+            for deferred in [true, false] {
+                let preset = shot(None, deferred).await;
+                let green = shot(Some(Sky::uniform([0.0, 1.0, 0.0])), deferred).await;
+                let dark = shot(Some(Sky::uniform([0.0, 1.0, 0.0]).with_intensity(0.0)), deferred).await;
+                eprintln!("deferred {deferred}: preset {preset:?} green {green:?} dark {dark:?}");
+                for (name, p) in [("matte", green.0), ("mirror", green.1)] {
+                    assert!(
+                        p[1] as i32 > p[0] as i32 + 40 && p[1] as i32 > p[2] as i32 + 40,
+                        "deferred {deferred}: a green sky lights the {name} cube green: {p:?} (preset {preset:?})"
+                    );
+                }
+                for (name, p, g) in [("matte", dark.0, green.0), ("mirror", dark.1, green.1)] {
+                    assert!(
+                        (p[1] as i32) < g[1] as i32 / 2,
+                        "deferred {deferred}: no sky light leaves the {name} cube dark: {p:?} vs {g:?}"
+                    );
+                }
+            }
         });
     }
 

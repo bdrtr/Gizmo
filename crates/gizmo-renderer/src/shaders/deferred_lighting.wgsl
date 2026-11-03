@@ -6,7 +6,7 @@
 // in by load_shader_composed (naga_oil). Only binding-dependent deferred code lives below:
 // the fullscreen pass, procedural environment/IBL and PCSS shadows (they read `scene` and the
 // shadow textures, so per the common.wgsl convention they stay out of the pure modules).
-#import gizmo::common::{SceneUniforms, LightData, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, rotate_by_quat, spot_cookie_uv, gizmo_cluster_index}
+#import gizmo::common::{SceneUniforms, LightData, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, rotate_by_quat, spot_cookie_uv, gizmo_cluster_index, sky_gradient}
 #import gizmo::pbr_ext::{approximate_env_brdf, compute_direct_lighting_anisotropic, compute_clear_coat}
 
 // Irradiance volumes: group 3. See `irradiance.wgsl` and `gizmo_renderer::irradiance`.
@@ -164,6 +164,10 @@ fn get_single_preset_environment(preset: u32, dir: vec3<f32>, roughness: f32, su
 
 // Procedural HDR Environment Presets with interpolation and smooth blending
 fn get_procedural_environment(dir: vec3<f32>, roughness: f32) -> vec3<f32> {
+    // `Renderer::sky` replaces the presets outright (intensity ≥ 0; < 0 = no override).
+    if (scene.sky_zenith.a >= 0.0) {
+        return sky_gradient(dir, scene.sky_zenith.rgb, scene.sky_horizon.rgb, scene.sky_ground.rgb, roughness) * scene.sky_zenith.a;
+    }
     let zenith = dir.y;
     let sun_dir = normalize(-scene.sun_direction.xyz);
     let sun_dot = max(dot(dir, sun_dir), 0.0);

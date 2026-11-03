@@ -67,7 +67,25 @@ struct SceneUniforms {
     fog_shape: vec4<f32>,
     // `ShadowSettings`: x = depth-bias multiplier, y = normal-offset multiplier.
     shadow_bias: vec4<f32>,
+    // `Renderer::sky`: rgb = colour straight up / at the horizon / straight down; zenith.a =
+    // intensity (< 0 = the preset's sky).
+    sky_zenith: vec4<f32>,
+    sky_horizon: vec4<f32>,
+    sky_ground: vec4<f32>,
 };
+
+// `Renderer::sky` along `dir`: the gradient, softened toward the hemisphere's average as
+// `roughness` grows (a rough surface sees a wide cone of it). Pure: the colours come in.
+fn sky_gradient(dir: vec3<f32>, zenith: vec3<f32>, horizon: vec3<f32>, ground: vec3<f32>, roughness: f32) -> vec3<f32> {
+    let y = clamp(dir.y, -1.0, 1.0);
+    let sharp = select(
+        mix(horizon, ground, sqrt(max(-y, 0.0))),
+        mix(horizon, zenith, sqrt(max(y, 0.0))),
+        y >= 0.0,
+    );
+    let soft = mix(mix(ground, horizon, 0.5), mix(horizon, zenith, 0.5), y * 0.5 + 0.5);
+    return mix(sharp, soft, clamp(roughness, 0.0, 1.0));
+}
 
 // ── Clustered light lookup ───────────────────────────────────────────────────
 //
