@@ -26,9 +26,10 @@
 //!
 //! *Açık, ölçülmüş:* kafesin eklem kuvvetleri elle hesabın üstünde. Kendi ağırlığı altında
 //! ~5 kN (üst kuşak için kabaca 2,6 kN beklenir), 1,2 kN'luk top ortaya gelince ~16 kN. Eklem
-//! iterasyonu (10 → 40) ve sönüm değiştirmiyor; iki mafsallı tek kiriş tam 98 N veriyor, yani
-//! ölçüm doğru — fark, aşırı belirli (dört sabit düğümlü) bir kafeste mi, çözücüde mi, henüz
-//! ayrılmadı. Oyun eşiği buna göre ayarlı (30 kN).
+//! iterasyonu (10 → 40) ve sönüm değiştirmiyor. Ayrıldı: statik olarak belirli iki çubuklu bir
+//! konsol, statiğin verdiği kuvvetlerin %3–6 içinde ölçülüyor (bkz. `joint_load.rs`), yani
+//! ölçüm de belirli bir yapının çözümü de doğru; fazlalık bu kafesin dört sabit düğümünden
+//! (aşırı belirli yapı). Oyun eşiği buna göre ayarlı (30 kN).
 //!
 //! ## Ortam değişkenleri
 //!   * `KOPRU_OTO=1` — hazır bir kafes köprüyü kurup dener (ekran görüntüsü için)

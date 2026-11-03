@@ -1277,10 +1277,14 @@ joints' load. Three gaps, all closed:
 
 *Open, measured:* the truss's joint forces run above a hand calculation — ~5 kN under its own
 weight where the top chord should carry roughly 2.6 kN, and ~16 kN with the 1.2 kN ball at
-midspan. Neither more joint iterations (10 → 40) nor beam damping changes it; a single beam on two
-pins reads exactly 98 N each, so the measurement is right, and whether the excess is the
-statically indeterminate supports (four pinned nodes) or the solver is not yet separated. The game
-sets its threshold to the forces it sees (30 kN).
+midspan. Neither more joint iterations (10 → 40) nor beam damping changes it. **Separated:** a
+statically determinate two-bar wall bracket (5 kg bars, 50 kg at the tip) reads within ~3–6 % of
+the member forces statics gives (`joint_load.rs` asserts 8 %), so neither the measurement nor a
+determinate solve is off — the excess belongs to this truss's four pinned supports, which make it
+indeterminate. Two things measured on the way and not asserted: with 0.1 kg bars (500:1 against the
+weight) the bracket reads ~30 % low and never settles, the sequential-impulse mass-ratio limit; and
+at 40 joint iterations its readings swing more (±25 %) than at 10 (±3 %). The game sets its
+threshold to the forces it sees (30 kN).
 
 ### C16l. The sixteenth game: cars (2026-11-03, `pist`)
 
