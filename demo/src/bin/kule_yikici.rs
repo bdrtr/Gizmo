@@ -210,7 +210,7 @@ fn main() {
             build_level(scene.world, &mut game);
             scene.world.insert_resource(game);
         })
-        .set_update(|world, _state, dt, input| {
+        .replace_update(|world, _state, dt, input| {
             update(world, dt.min(0.1), input);
             sync_transforms(world);
         })

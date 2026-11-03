@@ -110,7 +110,7 @@ fn main() {
                 auto: if std::env::var_os("BALON_OTO").is_some() { 4 } else { 0 },
             });
         })
-        .set_update(update)
+        .replace_update(update)
         .run()
         .expect("uygulama çalıştırılamadı");
 }

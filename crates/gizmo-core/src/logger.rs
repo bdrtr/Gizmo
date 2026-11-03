@@ -312,6 +312,93 @@ where
     }
 }
 
+/// The engine's warnings, where a game can see them: a minimal `tracing` subscriber that sends
+/// events at `warn` and `error` (or the level `GIZMO_LOG` / `RUST_LOG` names: `error`, `warn`,
+/// `info`, `debug`, `trace`, `off`) to [`log_message`] — stderr, and the in-memory log the
+/// editor's console reads. Fields other than the message are appended as `key=value`.
+///
+/// Installed by the app runtimes when nothing else is: without it every `tracing::warn!` in the
+/// engine — a texture that would not load, a navigation grid that clips the level, a route that
+/// hit the search cap — went nowhere, because no game set a subscriber up (the full one is behind
+/// the default-off `tracing-layer` feature). Returns whether it was installed: `false` when a
+/// global subscriber already exists or the level is `off`.
+pub fn install_console_subscriber() -> bool {
+    let level = ["GIZMO_LOG", "RUST_LOG"]
+        .iter()
+        .find_map(|var| std::env::var(var).ok())
+        .map(|v| v.trim().to_ascii_lowercase());
+    let max = match level.as_deref() {
+        Some("off") => return false,
+        Some("error") => tracing::Level::ERROR,
+        Some("info") => tracing::Level::INFO,
+        Some("debug") => tracing::Level::DEBUG,
+        Some("trace") => tracing::Level::TRACE,
+        // `warn`, unset, or a filter expression this subscriber does not parse.
+        _ => tracing::Level::WARN,
+    };
+    if tracing::dispatcher::has_been_set() {
+        return false;
+    }
+    tracing::subscriber::set_global_default(ConsoleSubscriber { max, next_span: std::sync::atomic::AtomicU64::new(1) }).is_ok()
+}
+
+struct ConsoleSubscriber {
+    max: tracing::Level,
+    next_span: std::sync::atomic::AtomicU64,
+}
+
+impl tracing::Subscriber for ConsoleSubscriber {
+    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+        // `Level` orders verbose above terse: TRACE > … > ERROR.
+        *metadata.level() <= self.max
+    }
+
+    fn max_level_hint(&self) -> Option<tracing::level_filters::LevelFilter> {
+        Some(tracing::level_filters::LevelFilter::from_level(self.max))
+    }
+
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(self.next_span.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+    }
+
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+
+    fn event(&self, event: &tracing::Event<'_>) {
+        struct Fields(String, String);
+        impl tracing::field::Visit for Fields {
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                if field.name() == "message" {
+                    self.0 = format!("{value:?}");
+                } else {
+                    self.1.push_str(&format!(" {}={value:?}", field.name()));
+                }
+            }
+            fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+                if field.name() == "message" {
+                    self.0 = value.to_string();
+                } else {
+                    self.1.push_str(&format!(" {}={value}", field.name()));
+                }
+            }
+        }
+        let meta = event.metadata();
+        let mut fields = Fields(String::new(), String::new());
+        event.record(&mut fields);
+        let level = match *meta.level() {
+            tracing::Level::ERROR => LogLevel::Error,
+            tracing::Level::WARN => LogLevel::Warning,
+            _ => LogLevel::Info,
+        };
+        log_message(level, format!("{}{}", fields.0, fields.1), meta.file().unwrap_or("unknown"), meta.line().unwrap_or(0));
+    }
+
+    fn enter(&self, _: &tracing::span::Id) {}
+
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
 /// Initializes the global tracing subscriber with the Gizmo UI logger and console output.
 ///
 /// Requires the default-off `tracing-layer` feature — it builds a `tracing_subscriber`

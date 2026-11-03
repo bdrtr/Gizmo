@@ -188,6 +188,9 @@ pub fn setup_panic_hook() {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
+        // The engine's `tracing` warnings to stderr and the editor log, unless the game set up a
+        // subscriber of its own — without one they were dropped (see the function).
+        gizmo_core::logger::install_console_subscriber();
         std::panic::set_hook(Box::new(|panic_info| {
             let message = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
                 *s

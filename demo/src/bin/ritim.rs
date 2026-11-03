@@ -197,7 +197,7 @@ fn main() {
                 auto: std::env::var_os("RITIM_OTO").is_some(),
             });
         })
-        .set_update(update)
+        .replace_update(update)
         .run()
         .expect("uygulama çalıştırılamadı");
 }

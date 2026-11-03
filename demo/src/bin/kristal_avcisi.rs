@@ -231,7 +231,7 @@ fn main() {
                 .in_phase(Phase::Update),
         )
         .add_update_system(draw_hud.in_phase(Phase::PostUpdate))
-        .set_update(|world, _state, _dt, _input| sync_transforms(world))
+        .replace_update(|world, _state, _dt, _input| sync_transforms(world))
         .run()
         .expect("uygulama çalıştırılamadı");
 }

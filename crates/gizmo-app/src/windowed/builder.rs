@@ -251,10 +251,26 @@ impl<State: 'static> App<State> {
                 "set_update replaced an existing update hook — if the previous one came from \
                  `with_simple_scene`, camera control and CPU physics stepping are now gone, and \
                  transform propagation reaches your hook a frame late. Use `add_update_hook` to \
-                 install beside it instead, or call `demo::simple_scene_update` (or equivalent) \
-                 at the top of the new hook."
+                 install beside it instead, call `demo::simple_scene_update` (or equivalent) at \
+                 the top of the new hook, or — a game with its own camera and physics — say so \
+                 with `replace_update`."
             );
         }
+        self.update_fns.clear();
+        self.update_fns.push(Box::new(f));
+        self
+    }
+
+    /// [`set_update`](Self::set_update) **on purpose**: replaces every installed update hook
+    /// without the warning. For a game that runs its own camera and its own physics (a
+    /// `FixedPhysics`, a `PhysicsPlugin`), for which `with_simple_scene`'s fly camera and
+    /// variable-step physics are exactly what it does not want. Every game in the demo crate
+    /// replaced them this way through `set_update` and printed the warning meant for the demos that
+    /// lost their physics by accident — eighteen times, which is how a warning stops being read.
+    pub fn replace_update<F>(mut self, f: F) -> Self
+    where
+        F: FnMut(&mut World, &mut State, f32, &gizmo_core::input::Input) + 'static,
+    {
         self.update_fns.clear();
         self.update_fns.push(Box::new(f));
         self
@@ -450,6 +466,12 @@ mod update_hook_tests {
             .add_update_hook(|_, _, _, _| {})
             .add_update_hook(|_, _, _, _| {})
             .set_update(|_, _, _, _| {});
+        assert_eq!(app.update_fns.len(), 1);
+    }
+
+    #[test]
+    fn replace_update_clears_the_list_as_set_update_does() {
+        let app = app().add_update_hook(|_, _, _, _| {}).add_update_hook(|_, _, _, _| {}).replace_update(|_, _, _, _| {});
         assert_eq!(app.update_fns.len(), 1);
     }
 

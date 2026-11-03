@@ -181,7 +181,7 @@ fn main() {
                 sticks: None,
             });
         })
-        .set_update(update)
+        .replace_update(update)
         .run()
         .expect("uygulama çalıştırılamadı");
 }

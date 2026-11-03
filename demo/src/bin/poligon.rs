@@ -183,7 +183,7 @@ fn main() {
                 auto_shots: if std::env::var_os("POLIGON_OTO").is_some() { 6 } else { 0 },
             });
         })
-        .set_update(update)
+        .replace_update(update)
         .run()
         .expect("uygulama çalıştırılamadı");
 }

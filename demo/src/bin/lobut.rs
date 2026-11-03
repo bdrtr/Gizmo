@@ -178,7 +178,7 @@ fn main() {
             scene.world.insert_resource(game);
         })
         .add_update_system(clatter.in_phase(Phase::Update))
-        .set_update(update)
+        .replace_update(update)
         .run()
         .expect("uygulama çalıştırılamadı");
 }

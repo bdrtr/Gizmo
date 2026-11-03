@@ -216,7 +216,7 @@ fn main() {
                 gesture: false,
             });
         })
-        .set_update(update)
+        .replace_update(update)
         .run()
         .expect("uygulama çalıştırılamadı");
 }

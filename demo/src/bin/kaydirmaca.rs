@@ -145,7 +145,7 @@ fn main() {
             shuffle(scene.world, &mut game);
             scene.world.insert_resource(game);
         })
-        .set_update(update)
+        .replace_update(update)
         .run()
         .expect("uygulama çalıştırılamadı");
 }

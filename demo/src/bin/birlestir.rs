@@ -293,7 +293,7 @@ fn main() {
             let _ = generate;
             scene.world.insert_resource(game);
         })
-        .set_update(update)
+        .replace_update(update)
         .run()
         .expect("uygulama çalıştırılamadı");
 }

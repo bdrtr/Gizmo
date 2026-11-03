@@ -311,7 +311,7 @@ fn main() {
             let difficulty = difficulty.expect("the difficulty list was built");
             scene.world.insert_resource(Menu { volume, banner, volume_button, difficulty, music, in_game: false });
         })
-        .set_update(update)
+        .replace_update(update)
         .run()
         .expect("uygulama çalıştırılamadı");
 }

@@ -1889,6 +1889,21 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The engine's warnings never reached a game.** No game set up a `tracing` subscriber (the full
+  one is behind the default-off `tracing-layer` feature), so every `tracing::warn!` and `error!`
+  in the engine — a texture that would not load, a navigation grid clipping the level, a route
+  that hit the search cap — went nowhere. The windowed and headless runtimes now install
+  `gizmo_core::logger::install_console_subscriber()` when nothing else has: events at `warn` and
+  `error` (or the level `GIZMO_LOG` / `RUST_LOG` names; `off` installs nothing) go to stderr and
+  to the log the editor console reads, with their fields appended. No dependency added — it is a
+  forty-line `tracing::Subscriber`. Tested in its own binary.
+
+  The first thing it showed: all eighteen games printed the same warning, `set_update replaced an
+  existing update hook`, because each replaces `with_simple_scene`'s fly camera and variable-step
+  physics with its own on purpose. `App::replace_update` says so and does not warn; `set_update`
+  still warns (it was added for demos that lost their physics by accident) and its message now
+  names `replace_update`. The games use it, and run 900 frames each with nothing printed.
+
 - **A small viewport blacked out the main view.** As soon as any camera had a `viewport`, the
   frame went down the split-screen path, which drew only cameras with one — the primary camera
   without a viewport was skipped, and a minimap in a corner left the rest of the screen black.

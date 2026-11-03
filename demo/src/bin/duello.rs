@@ -210,7 +210,7 @@ fn main() {
             new_duel(world, &mut game);
             world.insert_resource(game);
         })
-        .set_update(update)
+        .replace_update(update)
         .run()
         .expect("uygulama çalıştırılamadı");
 }
