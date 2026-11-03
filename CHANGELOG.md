@@ -1837,7 +1837,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   2.21 m on one slab (the analytic value). The narrowphase now drops a box part's edge contact when
   another part holds the body with a face contact on the same plane — a real edge (a step) is off
   that plane and stays: 2.03 m. Without CCD the tiles cost nothing either way (2.22 m); the last 8 %
-  is the speculative contact's own fallback normal, recorded as open. Removing the rule fails the
+  is in the speculative contact against the compound — not its below-1 mm normal fallback, which
+  was tried and changed nothing — recorded as open. Removing the rule fails the
   test.
 
 - **UI boxes on one layer were painted in storage (archetype) order, not tree order.** A slot

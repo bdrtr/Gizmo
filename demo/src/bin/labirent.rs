@@ -35,8 +35,8 @@
 //!   değer), on yedi karoda 1,01 m. **Düzeltildi:** bileşik bir şeklin kutu parçasından gelen
 //!   kenar teması, başka bir parça aynı düzlemde yüz temasıyla cismi tutuyorsa atılıyor (bir
 //!   basamağın kenarı o düzlemde değil, kalıyor): 2,03 m. CCD'siz bilye karolarda zaten 2,22 m
-//!   gidiyor — kalan %8 CCD'nin öngörülü temasının kendisinin (1 mm'nin altındaki boşlukta normali
-//!   hareket yönünden alıyor), *açık*. Bu oyun CCD'yi kapatıyor; hızları ona gerek bırakmıyor.
+//!   gidiyor — kalan %8 CCD'nin bileşik şekle karşı öngörülü temasında (dikişte hangi parçayı
+//!   aldığı), *açık*. Bu oyun CCD'yi kapatıyor; hızları ona gerek bırakmıyor.
 //!
 //! ## Ortam değişkenleri
 //!   * `LABIRENT_OTO=1` — tahtayı kendi kendine sağa eğer (ekran görüntüsü için)

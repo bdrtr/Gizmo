@@ -66,8 +66,9 @@ fn face_axis(normal: Vec3, rotation: Quat) -> Vec3 {
 /// motion. Measured on a ball with CCD rolling down seventeen tiles (`labirent`, 2026-11-03): 1.01 m
 /// in two seconds against 2.21 m on one slab (the analytic value), and 2.03 m with these contacts
 /// dropped. Without CCD the tiles cost nothing either way (2.22 m) — the speculative contact is
-/// what the stray edge feeds; the last 8 % is that contact's own (its normal falls back to the
-/// approach direction below a 1 mm gap), and is open.
+/// what the stray edge feeds. The last 8 % is open: it is in the speculative contact against the
+/// compound (which part is taken near a seam), and *not* its below-1 mm normal fallback —
+/// lowering that threshold to 1e-6 changed the result by nothing.
 ///
 /// A box part's edge or corner contact (its normal along none of the box's axes) is dropped when
 /// another part holds the body with a **face** contact on the same plane — within 45° of that

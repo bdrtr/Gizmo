@@ -1279,9 +1279,10 @@ things, one of them a crash:
   on, so this board hit it on its first step.
 - **A ball on tile seams** — ~~lost half its speed~~ **fixed to 8 %**: a box part's edge contact on
   a plane another part holds with a face contact is dropped (1.01 → 2.03 m of the slab's 2.21 m,
-  CCD ball, two seconds). Without CCD there is no loss at all. *Open:* the remaining 8 % is the
-  speculative contact taking the approach direction as its normal under a 1 mm gap, which brakes a
-  body sliding along a surface; the game turns CCD off, which its speeds allow.
+  CCD ball, two seconds). Without CCD there is no loss at all. *Open:* the remaining 8 % is in the
+  speculative contact against the compound (which part it takes near a seam). It is **not** the
+  contact's below-1 mm normal fallback, the first suspect: lowering that threshold to 1e-6 left
+  2.030 m unchanged. The game turns CCD off, which its speeds allow.
 
 ### C16h. The twelfth game: things on screen that move (2026-11-03, `duello`)
 

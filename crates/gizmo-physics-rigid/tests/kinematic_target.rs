@@ -127,7 +127,8 @@ fn a_compound_board_holds_a_ball_on_a_tile_and_drops_one_through_the_gap() {
 /// A ball with CCD rolling down a floor of seventeen box tiles (one compound) goes nearly as far
 /// as on one slab: the tiles' seams do not catch it. Before seam contacts were dropped it covered
 /// 1.01 m in two seconds against the slab's 2.21 m (the analytic value for a rolling sphere on
-/// this slope); 2.03 m after. The last 8 % is the speculative contact's own, and open.
+/// this slope); 2.03 m after. The last 8 % is in the speculative contact against the compound,
+/// and open.
 #[test]
 fn a_ball_rolls_across_tile_seams_as_on_one_slab() {
     let run = |tiles: bool| {
